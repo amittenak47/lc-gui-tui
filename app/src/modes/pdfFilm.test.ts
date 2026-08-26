@@ -13,12 +13,18 @@ import {
   resetPdfFilmPredicted,
   resetPdfPreloadPages,
   resetPdfReadingFrames,
+  resetPdfThumbs,
   savePdfSpreadPref,
   setPdfReadingFrames,
   subscribePdfFilmCurrent,
   subscribePdfFilmPredicted,
   thumbWindow,
   trimThumbCache,
+  rememberPdfThumb,
+  peekPdfThumb,
+  peekPdfThumbs,
+  nextMissingPdfThumb,
+  pdfThumbViewportScale,
 } from "./pdfFilm";
 
 describe("filmStripWheelDelta", () => {
@@ -71,6 +77,56 @@ describe("trimThumbCache", () => {
     expect(next.has(1)).toBe(true);
     expect(next.has(50)).toBe(true);
     expect(next.has(51)).toBe(false);
+  });
+});
+
+describe("session thumbs by document hash", () => {
+  it("keeps every viewed page, isolated per hash", () => {
+    resetPdfThumbs();
+    rememberPdfThumb("doc-a", 1, "url-1");
+    rememberPdfThumb("doc-a", 40, "url-40");
+    rememberPdfThumb("doc-b", 1, "other");
+    expect(peekPdfThumb("doc-a", 1)).toBe("url-1");
+    expect(peekPdfThumb("doc-a", 40)).toBe("url-40");
+    expect(peekPdfThumb("doc-a", 2)).toBe(null);
+    expect(peekPdfThumb("doc-b", 1)).toBe("other");
+    expect([...peekPdfThumbs("doc-a").keys()]).toEqual([1, 40]);
+    resetPdfThumbs();
+    expect(peekPdfThumb("doc-a", 1)).toBe(null);
+  });
+
+  it("ignores empty hash and invalid pages", () => {
+    resetPdfThumbs();
+    rememberPdfThumb("", 1, "x");
+    rememberPdfThumb("doc-a", 0, "x");
+    rememberPdfThumb("doc-a", 1, "");
+    expect(peekPdfThumbs("doc-a").size).toBe(0);
+    expect(peekPdfThumb("", 1)).toBe(null);
+  });
+});
+
+describe("pdfThumbViewportScale", () => {
+  it("sizes the bitmap to the film CSS width, not rest-2", () => {
+    expect(pdfThumbViewportScale(612, 48, 1)).toBeCloseTo(48 / 612, 5);
+    expect(pdfThumbViewportScale(612, 48, 2)).toBeCloseTo(96 / 612, 5);
+  });
+});
+
+describe("nextMissingPdfThumb", () => {
+  it("walks prefer first, then the rest of the file", () => {
+    resetPdfThumbs();
+    rememberPdfThumb("doc-a", 2, "x");
+    expect(nextMissingPdfThumb("doc-a", 4, [2, 3])).toBe(3);
+    expect(nextMissingPdfThumb("doc-a", 4, [])).toBe(1);
+    rememberPdfThumb("doc-a", 1, "x");
+    rememberPdfThumb("doc-a", 3, "x");
+    rememberPdfThumb("doc-a", 4, "x");
+    expect(nextMissingPdfThumb("doc-a", 4, [])).toBe(null);
+  });
+
+  it("skips failed pages so a bad sheet cannot spin the idle pass", () => {
+    resetPdfThumbs();
+    expect(nextMissingPdfThumb("doc-a", 3, [], [1])).toBe(2);
   });
 });
 

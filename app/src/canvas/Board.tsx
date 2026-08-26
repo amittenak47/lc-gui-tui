@@ -161,6 +161,7 @@ import {
   resetPdfFilmPredicted,
   resetPdfPreloadPages,
   resetPdfViewPages,
+  wakePdfPaintPump,
 } from "../modes/pdfFilm";
 import { pdfLandingHoldClear, pdfPreloadPages, pdfRestPages } from "../modes/pdfPaintWindow";
 import { remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
@@ -1715,6 +1716,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const userAdjustedCameraRef = useRef(false);
   /** Last board box we fitted to — skip no-op resize; clear on orientation. */
   const lastFittedBoardBoxRef = useRef({ w: 0, h: 0 });
+  const recentreTimersRef = useRef<number[]>([]);
   const zoomAnimRef = useRef<{
     from: number;
     to: number;
@@ -5858,6 +5860,35 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           },
           captureUpdate: CaptureUpdateAction.NEVER,
         });
+        /*
+         * The pan-ride cache has to follow this camera.
+         *
+         * Rotate / Recentre write the new hole onto Excalidraw, but the next
+         * sample and `scrollToPdfPage` used to prefer `liveCameraRef` — still
+         * the previous orientation — so the file slot stayed on the old zoom
+         * until spread toggle rewrote C. Stamp the fitted camera here.
+         */
+        const prevLive = liveCameraRef.current;
+        const offsets = api.getAppState() as {
+          offsetLeft?: number;
+          offsetTop?: number;
+        };
+        committedPanCameraRef.current = {
+          scrollX: nextScrollX,
+          scrollY: nextScrollY,
+          zoom,
+        };
+        liveCameraRef.current = {
+          scrollX: nextScrollX,
+          scrollY: nextScrollY,
+          zoom,
+          width: viewWidth,
+          height: viewHeight,
+          offsetLeft: prevLive?.offsetLeft ?? offsets.offsetLeft ?? 0,
+          offsetTop: prevLive?.offsetTop ?? offsets.offsetTop ?? 0,
+          live: false,
+        };
+        placeContentSlotAtRef.current(nextScrollX, nextScrollY, zoom);
         requestAnimationFrame(() => {
           fittingCameraRef.current = false;
         });
@@ -5887,25 +5918,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     },
     [runFit],
   );
-
-  /**
-   * The Recentre button.
-   *
-   * A document keeps its reading line — width-fit and centre X, but the line
-   * you were on stays where it is. Someone pressing this on page nine does not
-   * mean "go back to page one", and a full fit used to do exactly that.
-   *
-   * A draw page has no reading line to keep, and that is what left the button
-   * inert: on a tablet the page is locked at fit zoom with X already centred,
-   * so "width-fit and keep Y" described the camera it was already looking at.
-   * Nothing to change, nothing to show for the press. On a page, recentring
-   * means the page — fit it, and go to its top.
-   */
-  const recentreKeepPlace = useCallback(() => {
-    const drawPage = isDrawPageRegion(mobileRegionRef.current);
-    if (drawPage) userAdjustedCameraRef.current = false;
-    runFit(null, drawPage ? "both" : "keepY");
-  }, [runFit]);
 
   const fitView = useCallback(
     (regionId?: string | null) => {
@@ -6274,6 +6286,50 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     applyLiveBoxFit(true);
     requestAnimationFrame(() => applyLiveBoxFit(true));
   }, [applyLiveBoxFit]);
+
+  /**
+   * The Recentre button.
+   *
+   * A document keeps its reading line — width-fit and centre X, but the line
+   * you were on stays where it is. Someone pressing this on page nine does not
+   * mean "go back to page one", and a full fit used to do exactly that.
+   *
+   * After a tablet rotate the Excalidraw hole and the PDF slot often stay on
+   * the previous orientation until something rewrites C (spread toggle did
+   * that). Recentre is that rewrite: live box, keepY, then aim the current
+   * page and wake paint — not a trip back to page 1.
+   *
+   * A draw page has no reading line to keep, and that is what left the button
+   * inert: on a tablet the page is locked at fit zoom with X already centred,
+   * so "width-fit and keep Y" described the camera it was already looking at.
+   * Nothing to change, nothing to show for the press. On a page, recentring
+   * means the page — fit it, and go to its top.
+   */
+  const recentreKeepPlace = useCallback(() => {
+    const drawPage = isDrawPageRegion(mobileRegionRef.current);
+    if (drawPage) userAdjustedCameraRef.current = false;
+    const page = peekPdfFilmCurrent();
+    const pass = () => {
+      lastFittedBoardBoxRef.current = { w: 0, h: 0 };
+      applyLiveBoxFit(true);
+      if (drawPage) runFit(null, "both");
+      reportContentSlot();
+      rasterInkRef.current?.syncCamera();
+      if (!drawPage && page >= 1 && peekPdfReadingFrames().length > 0) {
+        scrollToPdfPageRef.current(page);
+        wakePdfPaintPump();
+      }
+    };
+    for (const id of recentreTimersRef.current) window.clearTimeout(id);
+    recentreTimersRef.current = [];
+    pass();
+    requestAnimationFrame(() => {
+      pass();
+      recentreTimersRef.current = [80, 200, 400].map((ms) =>
+        window.setTimeout(pass, ms),
+      );
+    });
+  }, [applyLiveBoxFit, reportContentSlot, runFit]);
 
   /**
    * OS window resize (Tauri / WebView2) often never reaches `window.resize`
@@ -7545,7 +7601,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       offsetLeft?: number;
       offsetTop?: number;
     };
-    const zoom = state.zoom?.value ?? 1;
+    const boardBox = boardRef.current?.getBoundingClientRect();
+    const { viewWidth, viewHeight } = liveBoardViewSize(boardBox, state);
+    const prevLive = liveCameraRef.current;
+    const riding = Boolean(prevLive?.live);
+    const zoom = riding
+      ? prevLive!.zoom
+      : (state.zoom?.value ?? prevLive?.zoom ?? 1);
     if (!(zoom > 0)) return false;
     const measured = measureChromeInsets(
       boardRef.current,
@@ -7576,10 +7638,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const minY = bounds.minY + (box.top - slotRect.top) / sy;
       nextScrollY = insetTop / zoom - minY;
     }
-    const prevLive = liveCameraRef.current;
-    const scrollX = prevLive?.scrollX ?? state.scrollX ?? 0;
-    const width = prevLive?.width || state.width || 800;
-    const height = prevLive?.height || state.height || 800;
+    const scrollX = riding
+      ? prevLive!.scrollX
+      : (state.scrollX ?? prevLive?.scrollX ?? 0);
+    const width = viewWidth || prevLive?.width || state.width || 800;
+    const height = viewHeight || prevLive?.height || state.height || 800;
     userAdjustedCameraRef.current = true;
     pendingPdfPageRef.current = pageId;
     pendingVisualScrollRef.current = null;
@@ -8779,8 +8842,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   <button
                     type="button"
                     className="lc-lined-toggle lc-tip-target"
-                    aria-label="Recentre the board"
-                    data-tip="Recentre the board"
+                    aria-label="Recentre and refresh the view"
+                    data-tip="Recentre and refresh the view"
                     data-tip-placement="bottom"
                     onClick={() => recentreKeepPlace()}
                   >

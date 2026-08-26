@@ -4,7 +4,8 @@
  * The pages live in scene space and ride the board camera, so a thumbnail
  * strip in the document would scale and pan with the book. This rail is chrome:
  * an iOS-style filmstrip under the header. Click jumps the camera; only
- * neighbouring thumbs hold a bitmap.
+ * neighbouring thumbs copy a live canvas. Viewed pages keep a JPEG in the
+ * session hash map; pages never painted stay blank (no pdf.js of the textbook).
  */
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
@@ -14,10 +15,14 @@ import {
   filmStripWheelDelta,
   grabLivePdfThumb,
   grabLruPdfThumb,
+  peekPdfThumb,
+  peekPdfThumbs,
+  publishPdfFilmThumbWanted,
+  rememberPdfThumb,
   subscribePdfFilmCurrent,
   subscribePdfFilmPredicted,
+  subscribePdfThumbs,
   thumbWindow,
-  trimThumbCache,
   type PdfThumbRenderer,
 } from "./pdfFilm";
 
@@ -26,6 +31,8 @@ export type { PdfThumbRenderer };
 export interface PdfPageRailProps {
   count: number;
   current: number;
+  /** Content hash of the open PDF — session thumbs survive closing the strip. */
+  docHash?: string | null;
   /** width / height per page, 1-indexed via array slot `page - 1`. */
   aspects?: number[];
   onJump: (page: number) => void;
@@ -35,6 +42,7 @@ export interface PdfPageRailProps {
 export function PdfPageRail({
   count,
   current,
+  docHash = null,
   aspects,
   onJump,
   renderThumb,
@@ -43,18 +51,25 @@ export function PdfPageRail({
   const stripRef = useRef<HTMLElement | null>(null);
   const visibleRef = useRef<Set<number>>(new Set());
   const [stripTick, setStripTick] = useState(0);
-  const [thumbs, setThumbs] = useState<Map<number, string>>(() => new Map());
+  const [thumbs, setThumbs] = useState<Map<number, string>>(() => peekPdfThumbs(docHash));
   const thumbsRef = useRef(thumbs);
   thumbsRef.current = thumbs;
   const inflightRef = useRef<Set<number>>(new Set());
   const renderThumbRef = useRef(renderThumb);
   renderThumbRef.current = renderThumb;
+  const docHashRef = useRef(docHash);
+  docHashRef.current = docHash;
   const [railCurrent, setRailCurrent] = useState(current);
   const [railPredicted, setRailPredicted] = useState(0);
   const currentPage = railCurrent;
 
   useEffect(() => subscribePdfFilmCurrent(setRailCurrent), []);
   useEffect(() => subscribePdfFilmPredicted(setRailPredicted), []);
+  useEffect(() => {
+    return subscribePdfThumbs(() => {
+      setThumbs(peekPdfThumbs(docHashRef.current));
+    });
+  }, []);
 
   useEffect(() => {
     const strip = stripRef.current;
@@ -81,10 +96,10 @@ export function PdfPageRail({
   }, [currentPage]);
 
   useEffect(() => {
-    setThumbs(new Map());
+    setThumbs(peekPdfThumbs(docHash));
     inflightRef.current.clear();
     visibleRef.current.clear();
-  }, [count]);
+  }, [count, docHash]);
 
   useEffect(() => {
     const strip = stripRef.current;
@@ -125,10 +140,21 @@ export function PdfPageRail({
     if (count < 2) return;
     let cancelled = false;
     const needed = thumbWindow(currentPage, count, visibleRef.current);
+    publishPdfFilmThumbWanted(needed);
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const px = Math.round(PDF_FILM_THUMB_CSS * dpr);
 
     const fill = async () => {
+      const hash = docHashRef.current ?? "";
+      const keep = (page: number, url: string) => {
+        rememberPdfThumb(hash, page, url);
+        setThumbs((prev) => {
+          if (prev.get(page) === url) return prev;
+          const next = new Map(prev);
+          next.set(page, url);
+          return next;
+        });
+      };
       for (const page of needed) {
         if (cancelled) return;
         const isFocus = page === currentPage;
@@ -143,11 +169,12 @@ export function PdfPageRail({
             stripRef.current?.closest(".lc-canvas-wrap"),
           ) ?? grabLruPdfThumb(page, px);
         if (live) {
-          setThumbs((prev) => {
-            const next = new Map(prev);
-            next.set(page, live);
-            return trimThumbCache(next, currentPage, needed);
-          });
+          keep(page, live);
+          continue;
+        }
+        const cached = peekPdfThumb(hash, page);
+        if (cached && !isFocus) {
+          keep(page, cached);
           continue;
         }
         if (thumbsRef.current.has(page) || inflightRef.current.has(page)) continue;
@@ -157,11 +184,7 @@ export function PdfPageRail({
         const url = await render(page);
         inflightRef.current.delete(page);
         if (cancelled || !url) continue;
-        setThumbs((prev) => {
-          const next = new Map(prev);
-          next.set(page, url);
-          return trimThumbCache(next, currentPage, needed);
-        });
+        keep(page, url);
       }
     };
     void fill();
@@ -180,7 +203,7 @@ export function PdfPageRail({
         const active = page === currentPage;
         const predicted = page === railPredicted && railPredicted > 0 && !active;
         const aspect = aspects?.[page - 1] || PDF_LETTER_ASPECT;
-        const src = thumbs.get(page);
+        const src = thumbs.get(page) ?? peekPdfThumb(docHash, page);
         return (
           <button
             key={page}

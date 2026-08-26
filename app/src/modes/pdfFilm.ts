@@ -5,6 +5,10 @@
  * The strip is chrome, not scene: it must not ask pdf.js for every page in a
  * textbook. Nearby pages copy their live canvas; the rest wait until they
  * scroll into the strip.
+ *
+ * Viewed thumbs are remembered per document content hash for the session.
+ * With the filmstrip open, an idle pump fills the rest of the file at ~48px
+ * on the same pdf.js document — never while rest-2 / 0.25 paint is queued.
  */
 
 import { pageIdFromCamera, type PageFrame } from "../canvas/inkPageIndex";
@@ -294,6 +298,112 @@ export function resetPdfViewPages(): void {
   intersectingPages = [];
   restPages = [];
   for (const listener of viewPageListeners) listener();
+}
+
+/** Session JPEG thumbs keyed by document content hash, then page number. */
+const thumbsByHash = new Map<string, Map<number, string>>();
+
+export function rememberPdfThumb(hash: string, page: number, url: string): void {
+  if (!hash || !(page >= 1) || !url) return;
+  let doc = thumbsByHash.get(hash);
+  if (!doc) {
+    doc = new Map();
+    thumbsByHash.set(hash, doc);
+  }
+  const prev = doc.get(page);
+  if (prev === url) return;
+  doc.set(page, url);
+  for (const listener of thumbListeners) listener();
+}
+
+export function peekPdfThumb(hash: string, page: number): string | null {
+  if (!hash || !(page >= 1)) return null;
+  return thumbsByHash.get(hash)?.get(page) ?? null;
+}
+
+export function peekPdfThumbs(hash: string): Map<number, string> {
+  if (!hash) return new Map();
+  const doc = thumbsByHash.get(hash);
+  return doc ? new Map(doc) : new Map();
+}
+
+export function resetPdfThumbs(): void {
+  if (thumbsByHash.size === 0) return;
+  thumbsByHash.clear();
+  for (const listener of thumbListeners) listener();
+}
+
+const thumbListeners = new Set<() => void>();
+
+export function subscribePdfThumbs(listener: () => void): () => void {
+  thumbListeners.add(listener);
+  listener();
+  return () => {
+    thumbListeners.delete(listener);
+  };
+}
+
+/** Strip cells the idle thumb pass should fill first. */
+let filmThumbWanted: number[] = [];
+
+export function publishPdfFilmThumbWanted(pages: readonly number[]): void {
+  filmThumbWanted = [...pages].filter((n) => n >= 1);
+}
+
+export function peekPdfFilmThumbWanted(): readonly number[] {
+  return filmThumbWanted;
+}
+
+export function resetPdfFilmThumbWanted(): void {
+  filmThumbWanted = [];
+}
+
+/**
+ * pdf.js viewport scale so the bitmap is ~`cssWidth` CSS pixels wide.
+ *
+ * The stored JPEG is tiny. JBIG2 still fully decodes; we just do not paint
+ * rest-2 into the LRU for this.
+ */
+export function pdfThumbViewportScale(
+  naturalWidth: number,
+  cssWidth = PDF_FILM_THUMB_CSS,
+  dpr = 1,
+): number {
+  const targetW = cssWidth * Math.max(0.5, dpr);
+  if (!(naturalWidth > 0) || !(targetW > 0)) return 0.12;
+  return targetW / naturalWidth;
+}
+
+/** First page in `prefer`, then 1…count, that has no session JPEG yet. */
+export function nextMissingPdfThumb(
+  hash: string,
+  count: number,
+  prefer: Iterable<number> = [],
+  skip: Iterable<number> = [],
+): number | null {
+  if (!hash || !(count >= 1)) return null;
+  const have = thumbsByHash.get(hash);
+  const skipped = skip instanceof Set ? skip : new Set(skip);
+  const missing = (n: number) =>
+    n >= 1 && n <= count && !have?.has(n) && !skipped.has(n);
+  for (const n of prefer) {
+    if (missing(n)) return n;
+  }
+  for (let n = 1; n <= count; n += 1) {
+    if (missing(n)) return n;
+  }
+  return null;
+}
+
+/** 48 CSS px JPEG of an LRU sheet, once per page per document. Not a decode. */
+export function capturePdfThumbIfNew(hash: string, page: number): void {
+  if (!hash || !(page >= 1) || peekPdfThumb(hash, page)) return;
+  const dpr =
+    typeof window !== "undefined"
+      ? Math.min(window.devicePixelRatio || 1, 2)
+      : 1;
+  const url = grabLruPdfThumb(page, Math.round(PDF_FILM_THUMB_CSS * dpr));
+  if (url) rememberPdfThumb(hash, page, url);
 }
 
 export function grabLivePdfThumb(
