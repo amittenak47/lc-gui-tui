@@ -59,6 +59,40 @@ export function waitForPdfPageNode(
   });
 }
 
+/** True once pdf.js (or an LRU blit) has pixels on the session page. */
+export function waitForPdfPagePainted(
+  page: number,
+  timeoutMs = 20000,
+  failed?: () => string | null,
+): Promise<boolean> {
+  const want = Math.floor(Number(page));
+  if (!(want >= 1)) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const deadline = performance.now() + timeoutMs;
+    const tick = () => {
+      if (failed?.()) {
+        resolve(false);
+        return;
+      }
+      if (typeof document !== "undefined") {
+        const node = document.querySelector(
+          `.lc-pdf-page[data-pdf-page="${want}"][data-painted]`,
+        );
+        if (node) {
+          resolve(true);
+          return;
+        }
+      }
+      if (performance.now() >= deadline) {
+        resolve(false);
+        return;
+      }
+      globalThis.setTimeout(tick, PDF_PAGE_POLL_MS);
+    };
+    tick();
+  });
+}
+
 /**
  * Wait until AnnotateDocument (or the PDF / EPUB / web reader) has reported a
  * stable height. Used under the loading overlay so reveal runs on a finished page.

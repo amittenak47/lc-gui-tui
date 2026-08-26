@@ -1,7 +1,8 @@
 /**
  * Palindrome preview ring around live C, rest 2 only on the sharp set.
  *
- * Loads follow camera page, never the flick-end HUD guess.
+ * Rest-2 follows camera C. 0.25 preload may walk toward the flick-end guess
+ * (Board publishes that list). Paint must not treat the guess as C.
  */
 
 import { PDF_PREVIEW_RADIUS, PDF_PREVIEW_SCALE, PDF_REST_SCALE } from "../perfPreset";
@@ -96,6 +97,15 @@ export function pdfPaintShouldWaitForLanding(C: number, lastLaidOut: number): bo
 }
 
 /**
+ * True when a landing hold can drop: this camera sample is actually on the
+ * aimed page. A sample still on page 1 after jumpToPdfPage wrote page 47 must
+ * not publish C or move the HTML slot.
+ */
+export function pdfLandingHoldClear(pending: number, cameraPage: number): boolean {
+  return pending >= 1 && cameraPage === pending;
+}
+
+/**
  * Camera hole for the pump. If IO / camera Y still reports the top of the
  * stack while C is the session page, paint C — not page 1.
  */
@@ -113,8 +123,9 @@ export function pdfPaintHole(
 }
 
 /**
- * True only when pdf.js must run. LRU already at target (or higher) is a blit.
- * Demote 2× → 1× is not a render.
+ * True only when pdf.js must run. LRU already at the LOD target is a blit.
+ * Fit changing (spread / column) does not re-raster a rest-2 sheet — the same
+ * bitmap is drawn into the new slots. Re-decoding JBIG2 on toggle froze the pad.
  */
 export function pageNeedsDecode(
   fit: number,
@@ -122,12 +133,34 @@ export function pageNeedsDecode(
   pixelScale: number,
 ): boolean {
   if (!(targetScale > 0) || !(fit > 0)) return false;
-  return !(pixelScale + 1e-6 >= fit * targetScale);
+  return !(pixelScale + 1e-6 >= targetScale);
+}
+
+/** 0.25 stubs from live C toward the flick-end guess. Never rest-2. */
+export function pdfPreloadPages(
+  live: number,
+  pred: number,
+  lastPage: number,
+  cap = 6,
+): number[] {
+  if (!(pred >= 1) || !(live >= 1) || pred === live) return [];
+  const last = Math.max(1, lastPage);
+  const from = Math.round(live);
+  const to = Math.round(pred);
+  const step = to > from ? 1 : -1;
+  const out: number[] = [];
+  for (let n = from + step; n !== to + step; n += step) {
+    if (n < 1 || n > last) break;
+    out.push(n);
+    if (out.length >= cap) break;
+  }
+  return out;
 }
 
 /**
- * One pdf.js slot: kill white, then rest 2 on the sharp set, then ring 0.25.
- * Skip any page whose RAM already meets the target.
+ * One pdf.js slot at a time: 0.25 on every blank in the ring (C, then ±1…),
+ * then rest 2 from C outward. Never rest-2 a cream slot — that is the 5s
+ * white wait. Skip any page whose RAM already meets the target.
  */
 export function pdfDecodeQueue(
   C: number,
@@ -137,23 +170,31 @@ export function pdfDecodeQueue(
   visible: Iterable<number>,
   scaleOf: (n: number) => number,
   fitOf: (n: number) => number,
+  preload: Iterable<number> = [],
 ): { page: number; target: number }[] {
   const out: { page: number; target: number }[] = [];
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const take = (n: number, target: number) => {
-    if (seen.has(n) || !(n >= 1)) return;
+    if (!(n >= 1)) return;
+    const key = `${n}:${target}`;
+    if (seen.has(key)) return;
     const fit = fitOf(n);
     if (!(fit > 0)) return;
     if (!pageNeedsDecode(fit, target, scaleOf(n))) return;
-    seen.add(n);
+    seen.add(key);
     out.push({ page: n, target });
   };
-  for (const n of visible) take(n, PDF_PREVIEW_SCALE);
+  const previewWanted = new Set<number>();
+  for (const n of visible) if (n >= 1) previewWanted.add(n);
+  for (const n of outer) previewWanted.add(n);
+  for (const n of rest) previewWanted.add(n);
+  for (const n of preload) if (n >= 1) previewWanted.add(n);
+  for (const n of pdfExpandOrder(C, last)) {
+    if (previewWanted.has(n)) take(n, PDF_PREVIEW_SCALE);
+  }
+  for (const n of previewWanted) take(n, PDF_PREVIEW_SCALE);
   for (const n of pdfExpandOrder(C, last)) {
     if (rest.has(n)) take(n, PDF_REST_SCALE);
-  }
-  for (const n of pdfExpandOrder(C, last)) {
-    if (outer.has(n) && !rest.has(n)) take(n, PDF_PREVIEW_SCALE);
   }
   return out;
 }
@@ -173,11 +214,13 @@ export function pdfShouldPreempt(
 ): boolean {
   if (flight.page === head.page && head.target > flight.target + 1e-9) return true;
   const rank = (job: { page: number; target: number }) => {
-    if (hole.has(job.page) && job.target <= PDF_PREVIEW_SCALE + 1e-9) return 0;
+    const preview = job.target <= PDF_PREVIEW_SCALE + 1e-9;
+    if (preview && hole.has(job.page)) return 0;
+    if (preview) return 1 + Math.abs(job.page - C);
     if (rest.has(job.page) && job.target >= PDF_REST_SCALE - 1e-9) {
-      return 10 + Math.abs(job.page - C);
+      return 100 + Math.abs(job.page - C);
     }
-    return 100 + Math.abs(job.page - C);
+    return 200 + Math.abs(job.page - C);
   };
   return rank(head) < rank(flight);
 }

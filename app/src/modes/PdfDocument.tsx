@@ -46,14 +46,19 @@ import {
   peekPdfFilmCurrent,
   peekPdfIntersectingPages,
   peekPdfRestPages,
+  peekPdfPreloadPages,
   publishPdfFilmCurrent,
   resetPdfFilmCurrent,
   resetPdfFilmPredicted,
+  resetPdfPreloadPages,
   resetPdfReadingFrames,
   resetPdfViewPages,
   setPdfReadingFrames,
   subscribePdfFilmCurrent,
+  subscribePdfPaintWake,
+  subscribePdfPreloadPages,
   subscribePdfViewPages,
+  wakePdfPaintPump,
   type PdfThumbRenderer,
 } from "./pdfFilm";
 import {
@@ -91,6 +96,7 @@ import {
   PDF_PREVIEW_RADIUS,
   PDF_PREVIEW_SCALE,
   PDF_RENDER_SCALE,
+  PDF_REST_CACHE,
   PDF_REST_SCALE,
 } from "../perfPreset";
 import { dropPdfDocument, lendPdfDocument } from "./pdfOpenDocs";
@@ -461,7 +467,7 @@ export function PdfDocument({
   const paintedRef = useRef<Map<number, { release: () => void; scale: number }>>(
     new Map(),
   );
-  const sheetLruRef = useRef(new PdfSheetLru(PDF_PREVIEW_CACHE));
+  const sheetLruRef = useRef(new PdfSheetLru(PDF_REST_CACHE));
   const sessionRef = useRef(new PdfPageSession());
   const lastSettledPageRef = useRef(Math.max(1, initialPage));
   const pathFillRef = useRef<number[]>([]);
@@ -542,6 +548,7 @@ export function PdfDocument({
     visibleSlotRatioRef.current = new Map();
     onNavRef.current?.(null);
     resetPdfFilmPredicted();
+    resetPdfPreloadPages();
     resetPdfViewPages();
     resetPdfReadingFrames();
     if (initialPageRef.current >= 1) publishPdfFilmCurrent(initialPageRef.current);
@@ -640,6 +647,7 @@ export function PdfDocument({
       resetPdfReadingFrames();
       if (initialPageRef.current < 1) resetPdfFilmCurrent();
       resetPdfFilmPredicted();
+      resetPdfPreloadPages();
       resetPdfViewPages();
       docRef.current = null;
       const task = taskRef.current;
@@ -661,8 +669,15 @@ export function PdfDocument({
   useLayoutEffect(() => {
     const nats = naturalsRef.current;
     if (nats.length === 0 || !docRef.current) return;
+    try {
+      inFlightPaintRef.current?.cancel();
+    } catch {
+      /* already finished */
+    }
+    inFlightPaintRef.current = null;
     setPages(layoutPdfPages(nats, frameWidth, spread));
     setWindowTick((tick) => tick + 1);
+    wakePdfPaintPump();
   }, [frameWidth, spread]);
 
   /**
@@ -784,11 +799,9 @@ export function PdfDocument({
       const lru = sheetLruRef.current;
       const live = isDocCameraLive();
       const hole = peekPdfIntersectingPages();
-      const blitIds = live
-        ? hole.length > 0
-          ? hole
-          : [C]
-        : outer;
+      const blitIds = [
+        ...new Set([...outer, ...hole, ...peekPdfPreloadPages(), C]),
+      ];
       if (live) {
         const now = performance.now();
         if (now - lastBlitLogAt >= 250) {
@@ -830,6 +843,10 @@ export function PdfDocument({
       if (isDocCameraLive()) return;
       setWindowTick((tick) => tick + 1);
     });
+    const unsubPreload = subscribePdfPreloadPages(() => {
+      preemptPaintIfNeededRef.current();
+      if (!pumpRef.current) setWindowTick((tick) => tick + 1);
+    });
     const unsubLive = subscribeDocCameraLive((live) => {
       if (live) {
         if (idlePathTimer) window.clearTimeout(idlePathTimer);
@@ -849,6 +866,7 @@ export function PdfDocument({
       if (idlePathTimer) window.clearTimeout(idlePathTimer);
       unsubFilm();
       unsubView();
+      unsubPreload();
       unsubLive();
       observer.disconnect();
       onNavRef.current?.(null);
@@ -975,6 +993,18 @@ export function PdfDocument({
           ? targetOverride
           : pdfPageTargetScale(n, rest, outer);
       if (!(paintScale > 0)) paintScale = PDF_PREVIEW_SCALE;
+      const placeholder = sheetLruRef.current.peek(n);
+      if (placeholder) {
+        blitCachedSheet(
+          host,
+          n,
+          entry,
+          placeholder,
+          paintScale > PDF_PREVIEW_SCALE + 1e-9
+            ? PDF_PREVIEW_SCALE
+            : paintScale,
+        );
+      }
       const live = isDocCameraLive();
       if (live && paintScale > PDF_PREVIEW_SCALE + 1e-9) {
         const cached = sheetLruRef.current.get(n);
@@ -1176,11 +1206,15 @@ export function PdfDocument({
       const fitOf = (n: number) =>
         pagesRef.current.find((page) => page.pageNumber === n)?.fit ?? 0;
       const scaleOf = (n: number) => sheetLruRef.current.scale(n);
-      let queue = pdfDecodeQueue(C, last, rest, outer, visible, scaleOf, fitOf);
+      const preload = peekPdfPreloadPages();
+      let queue = pdfDecodeQueue(C, last, rest, outer, visible, scaleOf, fitOf, preload);
       if (isDocCameraLive()) {
         const hole = new Set(visible);
+        const ahead = new Set(preload);
         queue = queue.filter(
-          (item) => item.target === PDF_PREVIEW_SCALE && hole.has(item.page),
+          (item) =>
+            item.target === PDF_PREVIEW_SCALE &&
+            (hole.has(item.page) || ahead.has(item.page)),
         );
       }
       return { outerList, rest, queue };
@@ -1229,11 +1263,16 @@ export function PdfDocument({
           if (pdfPaintShouldWaitForLanding(peekPdfFilmCurrent(), lastLaidOut)) return;
 
           const { outerList, rest, queue } = currentQueue();
-          if (isDocCameraLive()) {
-            blitRing(pdfPaintHole(peekPdfFilmCurrent(), peekPdfIntersectingPages()), rest);
-          } else {
-            blitRing(outerList, rest);
-          }
+          blitRing(
+            [
+              ...new Set([
+                ...outerList,
+                ...pdfPaintHole(peekPdfFilmCurrent(), peekPdfIntersectingPages()),
+                ...peekPdfPreloadPages(),
+              ]),
+            ],
+            rest,
+          );
 
           const idle = isCameraIdleForTeardown();
           const overCap = paintedRef.current.size > MAX_LIVE_CANVASES;
@@ -1380,12 +1419,15 @@ function waitForPaintSignal(): Promise<void> {
     let settled = false;
     let skipView = true;
     let skipFilm = true;
+    let skipPreload = true;
     const finish = () => {
       if (settled) return;
       settled = true;
       unsubLive();
       unsubView();
       unsubFilm();
+      unsubPreload();
+      unsubWake();
       resolve();
     };
     const unsubLive = subscribeDocCameraLive(() => finish());
@@ -1397,8 +1439,14 @@ function waitForPaintSignal(): Promise<void> {
       if (skipFilm) return;
       finish();
     });
+    const unsubPreload = subscribePdfPreloadPages(() => {
+      if (skipPreload) return;
+      finish();
+    });
+    const unsubWake = subscribePdfPaintWake(() => finish());
     skipView = false;
     skipFilm = false;
+    skipPreload = false;
   });
 }
 

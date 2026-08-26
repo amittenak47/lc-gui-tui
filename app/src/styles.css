@@ -5703,9 +5703,11 @@ body[data-lc-sash-drag="horizontal"] {
   overflow: visible;
 }
 
-.lc-map-chrome-stack > .lc-lined-toggle:hover,
-.lc-map-chrome-stack > .lc-chrome-eye:hover {
-  background: var(--panel);
+@media (hover: hover) and (pointer: fine) {
+  .lc-map-chrome-stack > .lc-lined-toggle:hover,
+  .lc-map-chrome-stack > .lc-chrome-eye:hover {
+    background: var(--panel);
+  }
 }
 
 .lc-map-chrome-stack > .lc-lined-toggle.is-active {
@@ -5758,10 +5760,13 @@ body[data-lc-sash-drag="horizontal"] {
   touch-action: manipulation;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.lc-lined-toggle:hover {
-  background: var(--panel);
+@media (hover: hover) and (pointer: fine) {
+  .lc-lined-toggle:hover {
+    background: var(--panel);
+  }
 }
 
 .lc-lined-toggle:active {
@@ -5799,10 +5804,13 @@ body[data-lc-sash-drag="horizontal"] {
   touch-action: manipulation;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.lc-scroll-toggle:hover {
-  background: var(--panel);
+@media (hover: hover) and (pointer: fine) {
+  .lc-scroll-toggle:hover {
+    background: var(--panel);
+  }
 }
 
 .lc-scroll-toggle:active {
@@ -5837,10 +5845,13 @@ body[data-lc-sash-drag="horizontal"] {
   touch-action: manipulation;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.lc-chrome-eye:hover {
-  background: var(--panel);
+@media (hover: hover) and (pointer: fine) {
+  .lc-chrome-eye:hover {
+    background: var(--panel);
+  }
 }
 
 .lc-chrome-eye:active {
@@ -6473,8 +6484,10 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 32px;
 }
 
-.lc-explore-chrome-tools .lc-lined-toggle:hover {
-  background: var(--panel);
+@media (hover: hover) and (pointer: fine) {
+  .lc-explore-chrome-tools .lc-lined-toggle:hover {
+    background: var(--panel);
+  }
 }
 
 .lc-explore-chrome-tools .lc-lined-toggle.is-active {

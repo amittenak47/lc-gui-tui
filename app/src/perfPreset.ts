@@ -1,7 +1,7 @@
 /**
  * Quality vs cost for the Android PDF reader.
  *
- * One mixed profile: cheap 0.25 placeholders in a small C±2 ring, rest 2 on
+ * One mixed profile: cheap 0.25 placeholders in a small C±R ring, rest 2 on
  * the camera sharp set, one pdf.js raster at a time. Layout stays the full book.
  */
 
@@ -13,11 +13,14 @@ export const PDF_PREVIEW_SCALE = 0.25;
 export const PDF_RENDER_SCALE = PDF_REST_SCALE;
 
 /**
- * Preview palindrome around live C. 2 → 5 sheets. Not the flick-end guess.
- * A ±12 ring kept 25 GPU canvases in play and hitching the compositor.
+ * Preview palindrome around live C. 3 → 7 sheets of 0.25. Rest-2 stays
+ * {@link PDF_REST_CACHE}. A ±12 ring kept 25 GPU canvases and hitching.
  */
-export const PDF_PREVIEW_RADIUS = 2;
+export const PDF_PREVIEW_RADIUS = 3;
+/** Live 0.25 canvases = C±R. Not the rest-2 RAM cap. */
 export const PDF_PREVIEW_CACHE = 2 * PDF_PREVIEW_RADIUS + 1;
+/** Rest-2 sheets in RAM. Raising the 0.25 ring must not grow lossless. */
+export const PDF_REST_CACHE = 5;
 
 /** PNG pagefile cap for LRU evictions (TOC jump-back). */
 export const PDF_SESSION_CAP = 80;

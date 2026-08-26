@@ -13,6 +13,7 @@ import {
   pageIdFromCamera,
   pageIdsIntersectingView,
   pageIndexForSceneY,
+  pdfPageFromSavedView,
   scrollYForPage,
   type PageFrame,
 } from "./inkPageIndex";
@@ -176,5 +177,19 @@ describe("scrollYForPage", () => {
       { pageId: 1, minY: 118, maxY: 218 },
     ];
     expect(scrollYForPage(spread, 1, 1, 0)).toBe(0);
+  });
+});
+
+describe("pdfPageFromSavedView", () => {
+  it("prefers a tagged session page over a stuck film C of 1", () => {
+    expect(
+      pdfPageFromSavedView({ pdfPage: 47, scrollY: 0, zoom: 1 }, frames(), 80),
+    ).toBe(47);
+  });
+
+  it("recovers a mid-book camera when the saved tag is page 1", () => {
+    expect(
+      pdfPageFromSavedView({ pdfPage: 1, scrollY: -160, zoom: 1 }, frames(), 80),
+    ).toBe(2);
   });
 });

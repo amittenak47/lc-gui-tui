@@ -163,6 +163,29 @@ export function lastPageId(frames: readonly PageFrame[]): number {
 }
 
 /**
+ * Page to restore. A tagged page ≥ 2 wins — that is the session page. Tag 1
+ * is also what a stuck film C writes, so a mid-book scrollY must win over it
+ * when the mapped page is not just the tail of a partial layout.
+ */
+export function pdfPageFromSavedView(
+  saved: { scrollY?: number; zoom?: number; pdfPage?: number },
+  frames: readonly PageFrame[],
+  viewHeight: number,
+): number {
+  const tagged = Math.floor(Number(saved.pdfPage));
+  if (tagged >= 2) return tagged;
+  const zoom = saved.zoom != null && saved.zoom > 0 ? saved.zoom : 1;
+  const scrollY = Number(saved.scrollY);
+  if (frames.length > 0 && Number.isFinite(scrollY) && viewHeight > 0) {
+    const fromY = pageIdFromCamera(frames, scrollY, zoom, viewHeight);
+    const last = lastPageId(frames);
+    if (fromY >= 1 && fromY < last) return fromY;
+    if (!(tagged >= 1) && fromY >= 1) return fromY;
+  }
+  return tagged >= 1 ? tagged : 0;
+}
+
+/**
  * Scene-Y interval the camera hole covers. Shared by current-page and
  * overlap-list so rotate / pan cannot drift apart.
  */

@@ -5,6 +5,7 @@ import {
   annotateHeightIsSettled,
   waitForAnnotateLaidOut,
   waitForPdfPageNode,
+  waitForPdfPagePainted,
 } from "./annotateLaidOut";
 
 describe("annotateHeightIsSettled", () => {
@@ -96,5 +97,29 @@ describe("waitForPdfPageNode", () => {
     first.dataset.pdfPage = "1";
     document.body.append(first);
     expect(await waitForPdfPageNode(47, 80)).toBe(false);
+  });
+});
+
+describe("waitForPdfPagePainted", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("does not treat an empty session page div as painted", async () => {
+    const node = document.createElement("div");
+    node.className = "lc-pdf-page";
+    node.dataset.pdfPage = "47";
+    document.body.append(node);
+    expect(await waitForPdfPagePainted(47, 80)).toBe(false);
+  });
+
+  it("resolves once the session page has pixels", async () => {
+    const pending = waitForPdfPagePainted(47, 400);
+    const node = document.createElement("div");
+    node.className = "lc-pdf-page";
+    node.dataset.pdfPage = "47";
+    node.setAttribute("data-painted", "");
+    document.body.append(node);
+    expect(await pending).toBe(true);
   });
 });
