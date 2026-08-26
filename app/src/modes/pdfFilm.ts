@@ -8,6 +8,7 @@
  */
 
 import { pageIdFromCamera, type PageFrame } from "../canvas/inkPageIndex";
+import { peekActiveSheet } from "./pdfSheetCache";
 import {
   PDF_FILM_CACHE,
   PDF_FILM_RADIUS,
@@ -164,10 +165,87 @@ export function subscribePdfFilmCurrent(
   };
 }
 
+export function peekPdfFilmCurrent(): number {
+  return filmCurrent;
+}
+
 export function resetPdfFilmCurrent(): void {
   if (filmCurrent === 1) return;
   filmCurrent = 1;
   for (const listener of filmCurrentListeners) listener(1);
+}
+
+/** Lift-off landing guess — HUD / filmstrip ghost. Paint must not read this. */
+let pdfFlickPredictPage = 0;
+const filmPredictedListeners = new Set<(page: number) => void>();
+
+export function publishPdfFilmPredicted(page: number): void {
+  if (!(page >= 1) || page === pdfFlickPredictPage) return;
+  pdfFlickPredictPage = page;
+  for (const listener of filmPredictedListeners) listener(page);
+}
+
+export function subscribePdfFilmPredicted(
+  listener: (page: number) => void,
+): () => void {
+  filmPredictedListeners.add(listener);
+  listener(pdfFlickPredictPage);
+  return () => {
+    filmPredictedListeners.delete(listener);
+  };
+}
+
+export function resetPdfFilmPredicted(): void {
+  if (pdfFlickPredictPage === 0) return;
+  pdfFlickPredictPage = 0;
+  for (const listener of filmPredictedListeners) listener(0);
+}
+
+function samePageList(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((n, i) => n === b[i]);
+}
+
+/** Camera-hole pages (overlap) and rest-2 set. Not the flick-end guess. */
+let intersectingPages: number[] = [];
+let restPages: number[] = [];
+const viewPageListeners = new Set<() => void>();
+
+export function publishPdfViewPages(
+  intersecting: readonly number[],
+  rest: readonly number[],
+): void {
+  const nextIntersect = [...intersecting];
+  const nextRest = [...rest];
+  if (samePageList(intersectingPages, nextIntersect) && samePageList(restPages, nextRest)) {
+    return;
+  }
+  intersectingPages = nextIntersect;
+  restPages = nextRest;
+  for (const listener of viewPageListeners) listener();
+}
+
+export function subscribePdfViewPages(listener: () => void): () => void {
+  viewPageListeners.add(listener);
+  listener();
+  return () => {
+    viewPageListeners.delete(listener);
+  };
+}
+
+export function peekPdfIntersectingPages(): readonly number[] {
+  return intersectingPages;
+}
+
+export function peekPdfRestPages(): readonly number[] {
+  return restPages;
+}
+
+export function resetPdfViewPages(): void {
+  if (intersectingPages.length === 0 && restPages.length === 0) return;
+  intersectingPages = [];
+  restPages = [];
+  for (const listener of viewPageListeners) listener();
 }
 
 export function grabLivePdfThumb(page: number, maxWidth: number): string | null {
@@ -176,14 +254,30 @@ export function grabLivePdfThumb(page: number, maxWidth: number): string | null 
   );
   const canvas = slot?.querySelector("canvas");
   if (!canvas || canvas.width < 8 || canvas.height < 8) return null;
+  return snapshotThumb(canvas, canvas.width, canvas.height, maxWidth);
+}
+
+/** Filmstrip copy from the sheet LRU when the live canvas is empty. */
+export function grabLruPdfThumb(page: number, maxWidth: number): string | null {
+  const sheet = peekActiveSheet(page);
+  if (!sheet || sheet.width < 8 || sheet.height < 8) return null;
+  return snapshotThumb(sheet.bitmap, sheet.width, sheet.height, maxWidth);
+}
+
+function snapshotThumb(
+  src: CanvasImageSource,
+  srcW: number,
+  srcH: number,
+  maxWidth: number,
+): string | null {
   const out = document.createElement("canvas");
   const w = Math.max(1, Math.round(maxWidth));
-  const h = Math.max(1, Math.round(w * (canvas.height / canvas.width)));
+  const h = Math.max(1, Math.round(w * (srcH / srcW)));
   out.width = w;
   out.height = h;
   const ctx = out.getContext("2d");
   if (!ctx) return null;
-  ctx.drawImage(canvas, 0, 0, w, h);
+  ctx.drawImage(src, 0, 0, w, h);
   try {
     return out.toDataURL("image/jpeg", 0.7);
   } catch {

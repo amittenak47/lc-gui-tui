@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { PdfPageSession, captureCanvasPng, sessionPathPages } from "./pdfPageSession";
 
 function sheet(n: number) {
-  return { blob: new Blob([String(n)]), width: 10, height: 12 };
+  return { blob: new Blob([String(n)]), width: 10, height: 12, pixelScale: 2 };
 }
 
 describe("PdfPageSession", () => {

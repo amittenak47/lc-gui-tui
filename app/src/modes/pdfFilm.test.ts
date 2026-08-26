@@ -5,11 +5,14 @@ import {
   peekPdfReadingFrames,
   publishPdfFilmCurrent,
   publishPdfFilmFromCamera,
+  publishPdfFilmPredicted,
   resetPdfFilmCurrent,
+  resetPdfFilmPredicted,
   resetPdfReadingFrames,
   savePdfSpreadPref,
   setPdfReadingFrames,
   subscribePdfFilmCurrent,
+  subscribePdfFilmPredicted,
   thumbWindow,
   trimThumbCache,
 } from "./pdfFilm";
@@ -124,6 +127,23 @@ describe("pdf film current", () => {
     publishPdfFilmFromCamera(frames, -472, 1, 80);
     expect(seen).toEqual([1, 2, 3, 4, 5]);
     unsub();
+    resetPdfFilmCurrent();
+  });
+
+  it("keeps the flick-end guess on a separate channel from live current", () => {
+    resetPdfFilmCurrent();
+    resetPdfFilmPredicted();
+    const live: number[] = [];
+    const pred: number[] = [];
+    const unsubLive = subscribePdfFilmCurrent((page) => live.push(page));
+    const unsubPred = subscribePdfFilmPredicted((page) => pred.push(page));
+    publishPdfFilmCurrent(4);
+    publishPdfFilmPredicted(9);
+    expect(live.at(-1)).toBe(4);
+    expect(pred.at(-1)).toBe(9);
+    unsubLive();
+    unsubPred();
+    resetPdfFilmPredicted();
     resetPdfFilmCurrent();
   });
 });

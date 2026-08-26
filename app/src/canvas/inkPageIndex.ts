@@ -53,8 +53,11 @@ export function pageIndexForSceneY(y: number, frames: readonly PageFrame[]): num
 }
 
 /**
- * Page filling most of a viewport band — same rule as `pageAtViewport` for
- * template regions, applied to PDF frames.
+ * Page at the vertical center of a viewport band.
+ *
+ * Max-overlap picked the top sheet on a seam (equal overlap keeps the first
+ * frame). Rest 2 and the filmstrip follow this id, so C must be the sheet in
+ * the middle of the hole, not the one peeking under the header.
  */
 export function pageIdAtViewport(
   frames: readonly PageFrame[],
@@ -62,16 +65,7 @@ export function pageIdAtViewport(
   viewBottom: number,
 ): number {
   if (!(viewBottom > viewTop) || frames.length === 0) return 1;
-  let best = frames[0]!;
-  let bestOverlap = -1;
-  for (const frame of frames) {
-    const overlap = Math.min(viewBottom, frame.maxY) - Math.max(viewTop, frame.minY);
-    if (overlap > bestOverlap) {
-      bestOverlap = overlap;
-      best = frame;
-    }
-  }
-  return best.pageId;
+  return pageIndexForSceneY((viewTop + viewBottom) / 2, frames);
 }
 
 /**
@@ -169,6 +163,20 @@ export function lastPageId(frames: readonly PageFrame[]): number {
 }
 
 /**
+ * Scene-Y interval the camera hole covers. Shared by current-page and
+ * overlap-list so rotate / pan cannot drift apart.
+ */
+export function cameraViewBand(
+  scrollY: number,
+  zoom: number,
+  viewHeight: number,
+): { top: number; bottom: number } | null {
+  if (!(viewHeight > 0) || !(zoom > 0)) return null;
+  const top = scrollY === 0 ? 0 : -scrollY;
+  return { top, bottom: top + viewHeight / zoom };
+}
+
+/**
  * Which PDF page a saved camera was looking at.
  *
  * Reopen fits the column to today's viewport, then jumps here — raw scrollY
@@ -180,9 +188,28 @@ export function pageIdFromCamera(
   zoom: number,
   viewHeight: number,
 ): number {
-  if (!(viewHeight > 0) || !(zoom > 0) || frames.length === 0) return 1;
-  const top = scrollY === 0 ? 0 : -scrollY;
-  return pageIdAtViewport(frames, top, top + viewHeight / zoom);
+  const band = cameraViewBand(scrollY, zoom, viewHeight);
+  if (!band || frames.length === 0) return 1;
+  return pageIdAtViewport(frames, band.top, band.bottom);
+}
+
+/**
+ * Every page whose stack frame crosses the camera hole — not the single
+ * winner `pageIdAtViewport` returns, and not “C+1…C+5”.
+ */
+export function pageIdsIntersectingView(
+  frames: readonly PageFrame[],
+  scrollY: number,
+  zoom: number,
+  viewHeight: number,
+): number[] {
+  const band = cameraViewBand(scrollY, zoom, viewHeight);
+  if (!band || frames.length === 0) return [];
+  const ids = new Set<number>();
+  for (const frame of frames) {
+    if (frame.maxY >= band.top && frame.minY <= band.bottom) ids.add(frame.pageId);
+  }
+  return [...ids].sort((a, b) => a - b);
 }
 
 /**

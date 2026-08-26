@@ -1,52 +1,37 @@
 /**
  * Quality vs cost for the Android PDF reader.
  *
- * `ultra-low` keeps the same features (eager page *divs*, pdf.js text layer
- * for quotes/footnotes, ink, pan) and turns down GPU/CPU knobs so a flick
- * can be felt without 2× canvases, PNG encode, or background JBIG2 fill.
- *
- * This is not a 5-div virtual scroller. Gemini-style DOM ±2 would break
- * stack height (ink clip, pan clamp, `getClientRects`). Layout stays the
- * full book; only *paint* is a small ring.
- *
- * Flip to `"full"` to restore a wider GPU ring and PNG pagefile without
- * reverting 979a673. Rest scale is always 2× on the visible page (LOD).
+ * One mixed profile: cheap 0.25 placeholders in a small C±2 ring, rest 2 on
+ * the camera sharp set, one pdf.js raster at a time. Layout stays the full book.
  */
-export type PerfPreset = "ultra-low" | "full";
 
-export const PERF_PRESET: PerfPreset = "ultra-low";
-
-const ULTRA = PERF_PRESET === "ultra-low";
-
-/**
- * Rest raster for the page on screen. Original full preset (typical tablet DPR).
- * Not a pinch LOD — the board already scales the subtree.
- */
+/** Rest raster for the page on screen. Not a pinch LOD — the board scales the subtree. */
 export const PDF_REST_SCALE = 2;
-/** Neighbour / in-flight preview. 4× fewer pixels than rest. */
-export const PDF_PREVIEW_SCALE = 1;
+/** Neighbour placeholder. Bitmap width ≈ 0.25 × column CSS width. */
+export const PDF_PREVIEW_SCALE = 0.25;
 /** Alias of {@link PDF_REST_SCALE} for callers that mean hires. */
 export const PDF_RENDER_SCALE = PDF_REST_SCALE;
 
-/** Live GPU canvases: current ± this. 1 → three sheets; 3 → seven. */
-export const PDF_HOT_RADIUS = ULTRA ? 1 : 3;
+/**
+ * Preview palindrome around live C. 2 → 5 sheets. Not the flick-end guess.
+ * A ±12 ring kept 25 GPU canvases in play and hitching the compositor.
+ */
+export const PDF_PREVIEW_RADIUS = 2;
+export const PDF_PREVIEW_CACHE = 2 * PDF_PREVIEW_RADIUS + 1;
 
-/** PNG pagefile cap. Unused while {@link PDF_PAGEFILE} is off. */
-export const PDF_SESSION_CAP = ULTRA ? 8 : 80;
+/** PNG pagefile cap for LRU evictions (TOC jump-back). */
+export const PDF_SESSION_CAP = 80;
 
-/** Compress paged-out canvases to PNG. Off = drop GPU, re-render on return. */
-export const PDF_PAGEFILE = !ULTRA;
+/** Compress evicted LRU sheets to PNG. Idle encode only. */
+export const PDF_PAGEFILE = true;
 
-/** Decode pages between settles (TOC jumps). Off = no idle JBIG2. */
-export const PDF_PATH_FILL = !ULTRA;
+/** Decode skipped pages between settles into LRU / pagefile. Frozen while live. */
+export const PDF_PATH_FILL = true;
 
-export const PDF_PAINT_INFLIGHT = ULTRA ? 1 : 2;
+export const PDF_PAINT_INFLIGHT = 1;
 
-/** Filmstrip: extra pdf.js renders. Live canvas copies still run. */
-export const PDF_FILM_DECODE_THUMBS = !ULTRA;
+export const PDF_FILM_RADIUS = 3;
+export const PDF_FILM_CACHE = 16;
 
-export const PDF_FILM_RADIUS = ULTRA ? 2 : 10;
-export const PDF_FILM_CACHE = ULTRA ? 8 : 40;
-
-/** Decoded ink bitmaps around the current page. */
-export const INK_LRU_RADIUS = ULTRA ? 1 : 3;
+/** Decoded ink stroke objects around the current page. Not PDF pixels. */
+export const INK_LRU_RADIUS = 3;
