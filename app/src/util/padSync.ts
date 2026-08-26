@@ -32,6 +32,7 @@ import { bytesMatchDocHash, getDocBytes, putDocBytes } from "./docBytes";
 import type { DocFootnote } from "./docFootnotes";
 import { run, STORE_SYNC_QUEUE } from "./idb";
 import { loadPadHub, loadPadSyncSince, savePadSyncSince } from "./padHub";
+import { loadHubAutosync } from "./hubAutoSyncPref";
 import { syncDocChunks } from "./docChunkSync";
 import { noteInkConflicts } from "./inkConflicts";
 import { syncEdges, syncInkPages, type InkPadKind } from "./inkSync";
@@ -594,6 +595,8 @@ export function scheduleIdlePadSyncPing(
   client: LcClient,
   opts?: { emit?: boolean },
 ): void {
+  // Gate here, not at callers: one missed call site must not leak a kick.
+  if (!loadHubAutosync()) return;
   if (idlePadSyncTimer) clearTimeout(idlePadSyncTimer);
   idlePadSyncTimer = setTimeout(() => {
     idlePadSyncTimer = 0;
@@ -944,6 +947,9 @@ export async function applyPadSyncPing(
   client: LcClient,
   opts?: { emit?: boolean },
 ): Promise<void> {
+  // Same gate as the idle kick; checked before the in-flight latch so an Off
+  // switch wins even when a ping is already mid-flight.
+  if (!loadHubAutosync()) return;
   if (isCameraBusy()) return;
   if (hubBackoffActive()) return;
   if (padSyncPingInFlight) return;

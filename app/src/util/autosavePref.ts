@@ -7,9 +7,10 @@
  * prompted this asked for "autosave in settings so notes don't get accidentally
  * discarded" for a board that was already autosaving every three seconds.
  *
- * So it is a setting, with the old three seconds as the default, and turning it
- * off is allowed: it is the writer's call whether a notebook they are still
- * making up their mind about should be committing itself to the library.
+ * So it is a setting, and turning it off is allowed: it is the writer's call
+ * whether a notebook they are still making up their mind about should be
+ * committing itself to the library. Off is the default — a board the writer has
+ * not asked to save should not save itself until they say so.
  *
  * Note what the autosave is *not*. It survives a crash or a closed lid; it does
  * not decide what the writer meant to keep. Discard still rolls back to the
@@ -21,7 +22,7 @@ const KEY = "whiteboard.autosave.ms";
 /** Off, or how many milliseconds between writes. */
 export type AutosaveInterval = 0 | 3000 | 15000 | 60000;
 
-export const AUTOSAVE_DEFAULT_MS: AutosaveInterval = 3000;
+export const AUTOSAVE_DEFAULT_MS: AutosaveInterval = 0;
 
 export const AUTOSAVE_CHOICES: ReadonlyArray<[AutosaveInterval, string]> = [
   [0, "Off"],

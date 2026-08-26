@@ -47,6 +47,13 @@ import {
   type AutosaveInterval,
 } from "../util/autosavePref";
 import {
+  HUB_AUTOSYNC_CHOICES,
+  HUB_AUTOSYNC_EVENT,
+  loadHubAutosyncPref,
+  saveHubAutosyncPref,
+  type HubAutoSyncPref,
+} from "../util/hubAutoSyncPref";
+import {
   ERASER_PARTIAL_EVENT,
   loadEraserPartial,
   saveEraserPartial,
@@ -402,6 +409,8 @@ interface DevicePrefs {
   autosaveMs: AutosaveInterval;
   /** Whether a successful autosave raises the chrome banner. */
   autosaveBanner: AutosaveBanner;
+  /** Whether this device pushes itself to the hub on its own. */
+  hubAutoSync: HubAutoSyncPref;
   /** ColourHunt tag the ink wheel asks for. */
   paletteTag: PaletteTag;
   /** Show ColorRadial on the drawing island (temporary colour until 1D Save). */
@@ -432,6 +441,7 @@ function loadDevicePrefs(): DevicePrefs {
     eraserPartial: loadEraserPartial(),
     autosaveMs: loadAutosaveInterval(),
     autosaveBanner: loadAutosaveBanner(),
+    hubAutoSync: loadHubAutosyncPref(),
     paletteTag: loadPaletteTag(),
     colorWheelOnToolbar: loadInkToolPresets().colorWheelOnToolbar,
     tapOk: loadInkToolPresets().tapOk,
@@ -458,6 +468,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.eraserPartial === b.eraserPartial &&
     a.autosaveMs === b.autosaveMs &&
     a.autosaveBanner === b.autosaveBanner &&
+    a.hubAutoSync === b.hubAutoSync &&
     a.paletteTag === b.paletteTag &&
     a.colorWheelOnToolbar === b.colorWheelOnToolbar &&
     a.tapOk === b.tapOk &&
@@ -702,6 +713,9 @@ export function SettingsModal({
   const [autosaveBanner, setAutosaveBanner] = useState<AutosaveBanner>(() =>
     loadAutosaveBanner(),
   );
+  const [hubAutoSync, setHubAutoSync] = useState<HubAutoSyncPref>(() =>
+    loadHubAutosyncPref(),
+  );
   /* Draft until Save — dirty detection includes this so Save enables. */
   const [paletteTag, setPaletteTag] = useState<PaletteTag>(() => loadPaletteTag());
   /** Last saved config + device prefs — Cancel restores these; Save advances them. */
@@ -862,6 +876,7 @@ export function SettingsModal({
     setEraserPartial(prefs.eraserPartial);
     setAutosaveMs(prefs.autosaveMs);
     setAutosaveBanner(prefs.autosaveBanner);
+    setHubAutoSync(prefs.hubAutoSync);
     setPaletteTag(prefs.paletteTag);
     setColorWheelOnToolbar(prefs.colorWheelOnToolbar);
     setTapOk(prefs.tapOk);
@@ -954,6 +969,7 @@ export function SettingsModal({
     eraserPartial,
     autosaveMs,
     autosaveBanner,
+    hubAutoSync,
     paletteTag,
     colorWheelOnToolbar,
     tapOk,
@@ -1013,6 +1029,7 @@ export function SettingsModal({
         saveEraserPartial(eraserPartial);
         saveAutosaveInterval(autosaveMs);
         saveAutosaveBanner(autosaveBanner);
+        saveHubAutosyncPref(hubAutoSync);
         savePaletteTag(paletteTag);
         saveInkToolPresets({
           ...loadInkToolPresets(),
@@ -1038,6 +1055,7 @@ export function SettingsModal({
         window.dispatchEvent(new CustomEvent(INK_BOLDNESS_EVENT));
         window.dispatchEvent(new CustomEvent(ERASER_PARTIAL_EVENT));
         window.dispatchEvent(new CustomEvent(AUTOSAVE_EVENT));
+        window.dispatchEvent(new CustomEvent(HUB_AUTOSYNC_EVENT));
         window.dispatchEvent(new CustomEvent(CHROME_WAKE_EVENT));
       }
       const hubDirty =
@@ -1912,6 +1930,38 @@ export function SettingsModal({
                         : "lc-settings-choice-option"
                     }
                     onClick={() => setAutosaveBanner(id)}
+                  >
+                    <strong>{label}</strong>
+                    <span className="lc-muted">{hint}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="lc-settings-subhead">Hub auto-sync</div>
+              <p className="lc-settings-hint">
+                Whether this device pushes itself to the pad hub on its own: the 15s ping,
+                the idle kick after opening a file, pulling and flushing on connect, and
+                the pad copy that rides along with each autosave. Off keeps everything on
+                this device until you sync by hand. Autosave above only controls writing
+                to this device; it does not stop or start hub traffic.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Hub auto-sync"
+              >
+                {HUB_AUTOSYNC_CHOICES.map(([id, label, hint]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="radio"
+                    aria-checked={hubAutoSync === id}
+                    className={
+                      hubAutoSync === id
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setHubAutoSync(id)}
                   >
                     <strong>{label}</strong>
                     <span className="lc-muted">{hint}</span>
