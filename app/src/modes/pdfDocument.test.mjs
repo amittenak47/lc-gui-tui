@@ -18,10 +18,14 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { pageIdFromCamera } from "../canvas/inkPageIndex";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import {
+  layoutPdfPages,
   paintOrder,
+  PAGE_GAP,
+  PDF_DOC_PAD_TOP,
   PDF_HOT_RADIUS,
   PDF_PREVIEW_SCALE,
   PDF_RENDER_SCALE,
@@ -30,6 +34,7 @@ import {
   pdfNavShouldPublish,
   pdfPageFit,
   pdfPagePaintScale,
+  pdfStackFrames,
   pdfStackHeight,
   windowedPages,
 } from "./PdfDocument";
@@ -67,6 +72,12 @@ describe("pdfStackHeight", () => {
     // A scanned plate among typeset pages — the height is a sum, never a
     // multiple of the first page.
     expect(pdfStackHeight([{ height: 792 }, { height: 1000 }], 18)).toBe(1810);
+  });
+
+  it("counts two stacked slots per sheet when spread is on", () => {
+    expect(
+      pdfStackHeight([{ height: 100 }, { height: 100 }, { height: 100 }], 18, true),
+    ).toBe(600 + 18 * 5);
   });
 });
 
@@ -211,6 +222,66 @@ describe("pdfPageFit", () => {
 
   it("fits one half of a two-up sheet to the column when spread is on", () => {
     expect(pdfPageFit(612, 700, true)).toBeCloseTo((2 * 700) / 612, 8);
+  });
+});
+
+describe("layoutPdfPages", () => {
+  const naturals = [
+    { pageNumber: 1, width: 612, height: 792 },
+    { pageNumber: 2, width: 612, height: 792 },
+  ];
+
+  it("width-fits from cached MediaBoxes without another getPage", () => {
+    const laid = layoutPdfPages(naturals, 700, false);
+    expect(laid).toHaveLength(2);
+    expect(laid[0].width).toBe(700);
+    expect(laid[0].sheetWidth).toBe(700);
+    expect(laid[0].height).toBe(Math.round(792 * (700 / 612)));
+  });
+
+  it("relayouts the same naturals for spread — toggle must not reopen", () => {
+    const oneUp = layoutPdfPages(naturals, 700, false);
+    const twoUp = layoutPdfPages(naturals, 700, true);
+    expect(twoUp[0].width).toBe(700);
+    expect(twoUp[0].sheetWidth).toBe(1400);
+    expect(twoUp[0].fit).toBeCloseTo(2 * oneUp[0].fit, 8);
+    expect(twoUp[0].height).toBe(Math.round(792 * twoUp[0].fit));
+  });
+});
+
+describe("pdfStackFrames", () => {
+  const pages = [
+    { pageNumber: 1, height: 100 },
+    { pageNumber: 2, height: 100 },
+    { pageNumber: 3, height: 100 },
+  ];
+
+  it("is one frame per PDF page when spread is off", () => {
+    const frames = pdfStackFrames(pages, false, PAGE_GAP, 0);
+    expect(frames).toEqual([
+      { pageId: 1, minY: 0, maxY: 100 },
+      { pageId: 2, minY: 118, maxY: 218 },
+      { pageId: 3, minY: 236, maxY: 336 },
+    ]);
+  });
+
+  it("stacks two slots per sheet when spread is on, same pageId", () => {
+    const frames = pdfStackFrames(pages, true, PAGE_GAP, 0);
+    expect(frames.map((frame) => frame.pageId)).toEqual([1, 1, 2, 2, 3, 3]);
+    expect(frames[1]).toEqual({ pageId: 1, minY: 118, maxY: 218 });
+    expect(frames[2]).toEqual({ pageId: 2, minY: 236, maxY: 336 });
+  });
+
+  it("starts after the document padding so camera Y matches the stack", () => {
+    const frames = pdfStackFrames(pages, false, PAGE_GAP, PDF_DOC_PAD_TOP);
+    expect(frames[0].minY).toBe(PDF_DOC_PAD_TOP);
+  });
+
+  it("names every PDF page from camera Y without skipping", () => {
+    const frames = pdfStackFrames(pages, false, PAGE_GAP, 0);
+    expect(pageIdFromCamera(frames, 0, 1, 80)).toBe(1);
+    expect(pageIdFromCamera(frames, -118, 1, 80)).toBe(2);
+    expect(pageIdFromCamera(frames, -236, 1, 80)).toBe(3);
   });
 });
 

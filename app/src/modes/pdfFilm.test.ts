@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   loadPdfSpreadPref,
+  peekPdfReadingFrames,
+  publishPdfFilmCurrent,
+  publishPdfFilmFromCamera,
+  resetPdfFilmCurrent,
+  resetPdfReadingFrames,
   savePdfSpreadPref,
+  setPdfReadingFrames,
+  subscribePdfFilmCurrent,
   thumbWindow,
   trimThumbCache,
 } from "./pdfFilm";
@@ -72,5 +79,62 @@ describe("pdf spread pref", () => {
     savePdfSpreadPref("hash-a", false);
     expect(loadPdfSpreadPref("hash-a")).toBe(false);
     vi.unstubAllGlobals();
+  });
+});
+
+describe("pdf film current", () => {
+  it("notifies subscribers when the page under the camera changes", () => {
+    resetPdfFilmCurrent();
+    const seen: number[] = [];
+    const unsub = subscribePdfFilmCurrent((page) => seen.push(page));
+    expect(seen).toEqual([1]);
+    publishPdfFilmCurrent(1);
+    publishPdfFilmCurrent(12);
+    publishPdfFilmCurrent(12);
+    publishPdfFilmCurrent(13);
+    expect(seen).toEqual([1, 12, 13]);
+    unsub();
+    resetPdfFilmCurrent();
+  });
+
+  it("notifies subscribers when a new document resets to page 1", () => {
+    publishPdfFilmCurrent(12);
+    const seen: number[] = [];
+    const unsub = subscribePdfFilmCurrent((page) => seen.push(page));
+    resetPdfFilmCurrent();
+    expect(seen).toEqual([12, 1]);
+    unsub();
+  });
+
+  it("follows camera Y through every page instead of skipping", () => {
+    resetPdfFilmCurrent();
+    const frames = [
+      { pageId: 1, minY: 0, maxY: 100 },
+      { pageId: 2, minY: 118, maxY: 218 },
+      { pageId: 3, minY: 236, maxY: 336 },
+      { pageId: 4, minY: 354, maxY: 454 },
+      { pageId: 5, minY: 472, maxY: 572 },
+    ];
+    const seen: number[] = [];
+    const unsub = subscribePdfFilmCurrent((page) => seen.push(page));
+    publishPdfFilmFromCamera(frames, 0, 1, 80);
+    publishPdfFilmFromCamera(frames, -118, 1, 80);
+    publishPdfFilmFromCamera(frames, -236, 1, 80);
+    publishPdfFilmFromCamera(frames, -354, 1, 80);
+    publishPdfFilmFromCamera(frames, -472, 1, 80);
+    expect(seen).toEqual([1, 2, 3, 4, 5]);
+    unsub();
+    resetPdfFilmCurrent();
+  });
+});
+
+describe("pdf reading frames", () => {
+  it("stores layout frames for the camera without measuring the DOM", () => {
+    resetPdfReadingFrames();
+    expect(peekPdfReadingFrames()).toEqual([]);
+    setPdfReadingFrames([{ pageId: 2, minY: 10, maxY: 20 }]);
+    expect(peekPdfReadingFrames()).toEqual([{ pageId: 2, minY: 10, maxY: 20 }]);
+    resetPdfReadingFrames();
+    expect(peekPdfReadingFrames()).toEqual([]);
   });
 });

@@ -34,15 +34,21 @@
  * pagefile clears the spans (the bitmap is gone, so they would be a lie).
  */
 
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { isDocCameraLive, subscribeDocCameraLive } from "../canvas/docSelectionGesture";
+import type { PageFrame } from "../canvas/inkPageIndex";
 import {
   isCameraIdleForTeardown,
   msUntilCameraIdleTeardown,
   yieldToInput,
 } from "../util/cameraBusy";
-import type { PdfThumbRenderer } from "./pdfFilm";
+import {
+  resetPdfFilmCurrent,
+  resetPdfReadingFrames,
+  setPdfReadingFrames,
+  type PdfThumbRenderer,
+} from "./pdfFilm";
 import {
   captureCanvasPng,
   PDF_HOT_RADIUS,
@@ -72,7 +78,10 @@ import { alignTextLayerToGlyphs } from "../util/pdfTextFit";
 export { PDF_PREVIEW_SCALE, PDF_RENDER_SCALE, PDF_REST_SCALE };
 
 /** Gap between pages in scene units — a page break you can see, not a chasm. */
-const PAGE_GAP = 18;
+export const PAGE_GAP = 18;
+
+/** `.lc-pdf-doc` padding-top — stack frames start here, not at Y 0. */
+export const PDF_DOC_PAD_TOP = 18;
 
 /**
  * A little slack around the viewport when deciding which pages are on screen.
@@ -245,6 +254,13 @@ interface RenderedPage {
   height: number;
 }
 
+/** MediaBox at scale 1 — enough to relayout spread without another getPage storm. */
+export interface PdfPageNatural {
+  pageNumber: number;
+  width: number;
+  height: number;
+}
+
 /** Width-fit the sheet, or fit one half of a two-up scan to the column. */
 export function pdfPageFit(
   naturalWidth: number,
@@ -253,6 +269,57 @@ export function pdfPageFit(
 ): number {
   if (!(naturalWidth > 0) || !(frameWidth > 0)) return 1;
   return spread ? (2 * frameWidth) / naturalWidth : frameWidth / naturalWidth;
+}
+
+/**
+ * Slot sizes from cached MediaBoxes. Spread / column resize must not
+ * `getDocument` again — Kleinberg is hundreds of dictionary round-trips.
+ */
+export function layoutPdfPages(
+  naturals: readonly PdfPageNatural[],
+  frameWidth: number,
+  spread = false,
+): RenderedPage[] {
+  return naturals.map((natural) => {
+    const fit = pdfPageFit(natural.width, frameWidth, spread);
+    const fullW = Math.round(natural.width * fit);
+    const fullH = Math.round(natural.height * fit);
+    return {
+      pageNumber: natural.pageNumber,
+      fit,
+      sheetWidth: fullW,
+      width: spread ? Math.max(1, Math.round(fullW / 2)) : fullW,
+      height: fullH,
+    };
+  });
+}
+
+/**
+ * Scene-local frames for every reading slot (two per sheet when spread).
+ *
+ * Camera Y uses this instead of IntersectionObserver. Same `pageId` on two
+ * stacked halves is correct for the filmstrip (PDF page count, not L/R cells).
+ */
+export function pdfStackFrames(
+  pages: readonly { pageNumber: number; height: number }[],
+  spread = false,
+  gap = PAGE_GAP,
+  originY = 0,
+): PageFrame[] {
+  const frames: PageFrame[] = [];
+  let y = originY;
+  for (const page of pages) {
+    const slots = spread ? 2 : 1;
+    for (let i = 0; i < slots; i += 1) {
+      frames.push({
+        pageId: page.pageNumber,
+        minY: y,
+        maxY: y + page.height,
+      });
+      y += page.height + gap;
+    }
+  }
+  return frames;
 }
 
 export function PdfDocument({
@@ -303,13 +370,24 @@ export function PdfDocument({
   const pumpRef = useRef(false);
   /** Set on unmount / reload, so in-flight paints stop touching dead nodes. */
   const disposedRef = useRef(false);
+  const naturalsRef = useRef<PdfPageNatural[]>([]);
+  const spreadRef = useRef(spread);
+  const frameWidthRef = useRef(frameWidth);
+  spreadRef.current = spread;
+  frameWidthRef.current = frameWidth;
+
+  const dropPaintedSession = () => {
+    for (const entry of paintedRef.current.values()) entry.release();
+    paintedRef.current.clear();
+    sessionRef.current.clear();
+    pathFillRef.current = [];
+  };
 
   /**
-   * Open the document and lay every page out — sizes only, no bitmaps.
-   *
-   * The stack must be its true height before anything is painted: the page
-   * frame grows to it, the pan clamp follows the frame, and ink at the bottom
-   * of the last page is clipped by whatever the frame says.
+   * Open the document once. Spread / column width only relayouts from
+   * cached MediaBoxes — toggling two-up used to destroy the worker task and
+   * `getPage` every sheet again, which froze Kleinberg and left a half stack
+   * if you toggled off mid-open.
    */
   useEffect(() => {
     let cancelled = false;
@@ -331,16 +409,17 @@ export function PdfDocument({
         cancelled = true;
       };
     }
+    naturalsRef.current = [];
     setPages([]);
-    paintedRef.current.clear();
-    sessionRef.current.clear();
-    pathFillRef.current = [];
+    dropPaintedSession();
     lastSettledPageRef.current = 1;
     wantedRef.current = new Set();
     visibleRef.current = new Set();
     visibleRatioRef.current = new Map();
     visibleSlotRatioRef.current = new Map();
     onNavRef.current?.(null);
+    resetPdfFilmCurrent();
+    resetPdfReadingFrames();
 
     void (async () => {
       try {
@@ -374,7 +453,7 @@ export function PdfDocument({
         }
         textLayerRef.current = pdfjs.TextLayer;
 
-        const laid: RenderedPage[] = [];
+        const naturals: PdfPageNatural[] = [];
         for (let from = 1; from <= doc.numPages; from += LAYOUT_BATCH) {
           if (cancelled) return;
           const batch = [];
@@ -388,23 +467,25 @@ export function PdfDocument({
             // Per page, not per document: a scanned plate among typeset pages
             // is a different size, and a book-wide factor would letterbox one
             // or crop the other.
-            const fit = pdfPageFit(natural.width, frameWidth, spread);
-            const viewport = page.getViewport({ scale: fit });
-            const fullW = Math.round(viewport.width);
-            laid.push({
+            naturals.push({
               pageNumber: page.pageNumber,
-              fit,
-              sheetWidth: fullW,
-              width: spread ? Math.max(1, Math.round(fullW / 2)) : fullW,
-              height: Math.round(viewport.height),
+              width: natural.width,
+              height: natural.height,
             });
           }
+          naturalsRef.current = naturals.slice();
           // First batch is enough for the open gate to see a real stack height.
           // Waiting for every getPage used to throw "did not finish opening"
           // while PdfDocument still said Opening… — Kleinberg is 432 dictionary
           // round-trips. Pause so the 250 ms settle can fire before the next
           // batch grows the stack and resets the deadline.
-          setPages(laid.slice());
+          setPages(
+            layoutPdfPages(
+              naturalsRef.current,
+              frameWidthRef.current,
+              spreadRef.current,
+            ),
+          );
           if (from === 1 && doc.numPages > LAYOUT_BATCH) {
             await new Promise<void>((resolve) => {
               window.setTimeout(resolve, 300);
@@ -424,8 +505,10 @@ export function PdfDocument({
       cancelled = true;
       disposedRef.current = true;
       if (lent && docHash) dropPdfDocument(docHash, lent);
-      for (const entry of paintedRef.current.values()) entry.release();
-      paintedRef.current.clear();
+      dropPaintedSession();
+      naturalsRef.current = [];
+      resetPdfReadingFrames();
+      resetPdfFilmCurrent();
       docRef.current = null;
       const task = taskRef.current;
       taskRef.current = null;
@@ -437,7 +520,19 @@ export function PdfDocument({
         }
       }
     };
-  }, [bytes, docHash, frameWidth, spread]);
+  }, [bytes, docHash]);
+
+  /**
+   * Two-up / column width: relayout from MediaBoxes already in memory.
+   * Must not sit on the open effect's deps or toggle kills the document.
+   */
+  useLayoutEffect(() => {
+    const nats = naturalsRef.current;
+    if (nats.length === 0 || !docRef.current) return;
+    dropPaintedSession();
+    setPages(layoutPdfPages(nats, frameWidth, spread));
+    setWindowTick((tick) => tick + 1);
+  }, [frameWidth, spread]);
 
   /**
    * Which pages are near enough to be worth a bitmap.
@@ -481,6 +576,9 @@ export function PdfDocument({
       if (best < 0 && visibleRef.current.size > 0) {
         current = Math.min(...visibleRef.current);
       }
+      // Filmstrip current comes from camera Y in Board, not this observer.
+      // IO on a translate3d stack skipped sheets (3 then 5).
+      if (isDocCameraLive()) return;
       if (!pdfNavShouldPublish(lastPublished, { count: last, current })) return;
       lastPublished.count = last;
       lastPublished.current = current;
@@ -498,7 +596,9 @@ export function PdfDocument({
       // on a textbook, but a working reader beats a blank one.
       wantedRef.current = new Set(pages.map((page) => page.pageNumber));
       setWindowTick((tick) => tick + 1);
-      return () => onNavRef.current?.(null);
+      return () => {
+        onNavRef.current?.(null);
+      };
     }
 
     const notePath = () => {
@@ -541,17 +641,14 @@ export function PdfDocument({
           }
         }
         applySlotVisibility();
+        publishNav();
         /*
          * A live flick already has the compositor moving the whole stack.
-         * Rebuilding the paint window or publishing nav (Workspace setState +
-         * filmstrip scrollIntoView) invalidates that layer mid-coast — the same
-         * ~30fps chop footnote placement used to cause. Keep the sets current;
-         * apply them when the camera settles. Path fill waits for true idle
-         * (see subscribeDocCameraLive below), not this 140ms edge.
+         * Rebuilding the paint window mid-coast is the hitch. Film current
+         * already published above without Workspace setState.
          */
         if (isDocCameraLive()) return;
         rebuild();
-        publishNav();
       },
       { rootMargin: PAGE_VISIBLE_MARGIN },
     );
@@ -580,6 +677,14 @@ export function PdfDocument({
       onNavRef.current?.(null);
     };
   }, [pages]);
+
+  useEffect(() => {
+    setPdfReadingFrames(
+      pages.length === 0
+        ? []
+        : pdfStackFrames(pages, spread, PAGE_GAP, PDF_DOC_PAD_TOP),
+    );
+  }, [pages, spread]);
 
   /**
    * Hand the filmstrip a renderer that uses this document, not a second load.
@@ -1193,9 +1298,11 @@ export function paintOrder(
 export function pdfStackHeight(
   pages: readonly { height: number }[],
   gap = PAGE_GAP,
+  spread = false,
 ): number {
   if (pages.length === 0) return 0;
+  const slots = spread ? pages.flatMap((page) => [page, page]) : pages;
   return (
-    pages.reduce((total, page) => total + page.height, 0) + gap * (pages.length - 1)
+    slots.reduce((total, page) => total + page.height, 0) + gap * (slots.length - 1)
   );
 }

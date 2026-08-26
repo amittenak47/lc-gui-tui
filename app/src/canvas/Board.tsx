@@ -140,7 +140,17 @@ import {
   type ContentSlotPlace,
 } from "./contentSlotPlace";
 import { encodeInkOps } from "./inkCodec";
-import { fallbackPageFrames, pageFramesFromPdfSlot, pageIdFromCamera } from "./inkPageIndex";
+import {
+  fallbackPageFrames,
+  offsetPageFrames,
+  pageFramesFromPdfSlot,
+  pageIdFromCamera,
+} from "./inkPageIndex";
+import {
+  peekPdfReadingFrames,
+  publishPdfFilmCurrent,
+  publishPdfFilmFromCamera,
+} from "../modes/pdfFilm";
 import { eraserScreenRadius } from "./rasterInk";
 import { linedSlotCanSkip } from "./linedSlot";
 import { SPLIT_RESIZE_EVENT, splitResizePhase } from "../util/splitResize";
@@ -1777,7 +1787,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const cameraMotionTimerRef = useRef(0);
   const cameraIdleTeardownTimerRef = useRef(0);
   const cameraMotionActiveRef = useRef(false);
+  const panRidePrimedRef = useRef(false);
+  const cameraLiveClassRafRef = useRef(0);
   const applyVisualScrollNowRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
+  const publishPdfFilmFromScrollRef = useRef<
+    (scrollY: number, zoom: number, height: number) => void
+  >(() => {});
+  publishPdfFilmFromScrollRef.current = (scrollY, zoom, height) => {
+    const local = peekPdfReadingFrames();
+    if (local.length === 0) return;
+    const origin = pageBoundsRef.current?.minY ?? 0;
+    publishPdfFilmFromCamera(
+      offsetPageFrames(local, origin),
+      scrollY,
+      zoom,
+      height,
+    );
+  };
   const scheduleVisualScrollRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
   const flushVisualScrollRef = useRef<() => void>(() => {});
   const commitVisualScrollRef = useRef<() => void>(() => {});
@@ -1849,11 +1875,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     noteCameraIdlePulse();
     if (!cameraMotionActiveRef.current) {
       cameraMotionActiveRef.current = true;
-      // Gesture open: Excalidraw may have remounted canvases since last ride.
-      refreshPanRideNodes();
+      if (!panRidePrimedRef.current) refreshPanRideNodes();
+      panRidePrimedRef.current = false;
       rasterInkRef.current?.setCameraMoving(true);
-      // Footnote ribbons defer DOM place() while this is true — see DocSelectionLayer.
-      setDocCameraLive(true);
+      // First pan frame already wrote translate3d. Hide text next frame so
+      // idle-wakeup is not a style recalc of every pdf.js span.
+      if (cameraLiveClassRafRef.current) {
+        cancelAnimationFrame(cameraLiveClassRafRef.current);
+      }
+      cameraLiveClassRafRef.current = requestAnimationFrame(() => {
+        cameraLiveClassRafRef.current = 0;
+        setDocCameraLive(true);
+      });
     }
     if (cameraMotionTimerRef.current) window.clearTimeout(cameraMotionTimerRef.current);
     if (cameraIdleTeardownTimerRef.current) {
@@ -1862,6 +1895,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     cameraMotionTimerRef.current = window.setTimeout(() => {
       cameraMotionTimerRef.current = 0;
       cameraMotionActiveRef.current = false;
+      if (cameraLiveClassRafRef.current) {
+        cancelAnimationFrame(cameraLiveClassRafRef.current);
+        cameraLiveClassRafRef.current = 0;
+      }
       setDocCameraLive(false);
     }, cameraPulseSettleMs());
     // Commit / ink moving-mode drop wait for a real reading idle, not the
@@ -3344,9 +3381,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   const getPageFrames = useCallback(() => {
-    const fromPdf = pageFramesFromPdfSlot(contentSlotNodeRef.current, pageBoundsRef.current);
+    const bounds = pageBoundsRef.current;
+    const local = peekPdfReadingFrames();
+    if (local.length > 0 && bounds) {
+      return offsetPageFrames(local, bounds.minY);
+    }
+    const fromPdf = pageFramesFromPdfSlot(contentSlotNodeRef.current, bounds);
     if (fromPdf.length > 0) return fromPdf;
-    return fallbackPageFrames(pageBoundsRef.current);
+    return fallbackPageFrames(bounds);
   }, []);
 
   /**
@@ -3419,7 +3461,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // cannot. Drop this write and wheel travel dies on commit: pan translates
     // clear, the slot is still on the fit camera, page jumps to the start.
     placeContentSlotAtRef.current(scrollX, scrollY, zoom);
-    pulseCameraMotionRef.current();
+    publishPdfFilmFromScrollRef.current(scrollY, zoom, height);
     if (stampTrashPosRef.current) syncStampTrashRef.current();
 
     /*
@@ -3448,9 +3490,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const inkRides = rasterInkRef.current?.setPanOffset(liveCam) ?? true;
     if (delta.rebase || !inkRides) {
       if (!committingScrollRef.current) rebaseVisualScrollRef.current();
+      pulseCameraMotionRef.current();
       return;
     }
     setPagePanOffsetRef.current(delta.dx, delta.dy);
+    pulseCameraMotionRef.current();
   }, []);
 
   const flushVisualScroll = useCallback(() => {
@@ -3684,6 +3728,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       heldPointerId = pointerId;
       setDocPointerHeld(true);
       refreshPanRideNodes();
+      panRidePrimedRef.current = true;
+      // Warm ink moving-mode on finger-down so the first pan sample is not a
+      // forced layout after 15s idle commitCamera.
+      rasterInkRef.current?.setCameraMoving(true);
       const prev = liveCameraRef.current;
       if (prev?.live) return;
       const api = apiRef.current;
@@ -7714,6 +7762,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           appState: { scrollY: insetTop / zoom - minY },
           captureUpdate: CaptureUpdateAction.NEVER,
         });
+        publishPdfFilmCurrent(pageId);
         scheduleSlotReports();
       },
       restoreView: (saved) => {
@@ -7755,6 +7804,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   appState: { scrollY: insetTop / liveZoom - minY },
                   captureUpdate: CaptureUpdateAction.NEVER,
                 });
+                publishPdfFilmCurrent(page);
                 scheduleSlotReports();
                 return;
               }

@@ -7,6 +7,7 @@ import {
   fallbackPageFrames,
   lastPageId,
   lruWindow,
+  offsetPageFrames,
   pageIdAtViewport,
   pageIdForOp,
   pageIdFromCamera,
@@ -127,6 +128,17 @@ describe("pageIdFromCamera", () => {
   it("maps a saved camera onto the page that filled the viewport", () => {
     expect(pageIdFromCamera(frames(), 0, 1, 80)).toBe(1);
     expect(pageIdFromCamera(frames(), -160, 1, 80)).toBe(2);
+  });
+});
+
+describe("offsetPageFrames", () => {
+  it("shifts document-local frames into the page-frame origin", () => {
+    expect(offsetPageFrames(frames(), 40)[0]).toEqual({
+      pageId: 1,
+      minY: 40,
+      maxY: 140,
+    });
+    expect(offsetPageFrames([], 40)).toEqual([]);
   });
 });
 
