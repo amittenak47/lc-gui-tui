@@ -9,13 +9,10 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import {
-  isCameraIdleForTeardown,
-  msUntilCameraIdleTeardown,
-} from "../util/cameraBusy";
-import {
   PDF_FILM_THUMB_CSS,
   PDF_LETTER_ASPECT,
   grabLivePdfThumb,
+  subscribePdfFilmCurrent,
   thumbWindow,
   trimThumbCache,
   type PdfThumbRenderer,
@@ -49,29 +46,20 @@ export function PdfPageRail({
   const inflightRef = useRef<Set<number>>(new Set());
   const renderThumbRef = useRef(renderThumb);
   renderThumbRef.current = renderThumb;
+  const [railCurrent, setRailCurrent] = useState(current);
+  const currentPage = railCurrent;
+
+  useEffect(() => subscribePdfFilmCurrent(setRailCurrent), []);
 
   useEffect(() => {
     const node = currentRef.current;
     if (!node) return;
-    let timer = 0;
-    const snap = () => {
-      // Numbers already updated; scrollIntoView during a 1–2s pause rebuilds
-      // compositor layers. Wait for the same idle as canvas pageOut.
-      if (!isCameraIdleForTeardown()) {
-        timer = window.setTimeout(snap, Math.max(16, msUntilCameraIdleTeardown()));
-        return;
-      }
-      node.scrollIntoView({
-        inline: "center",
-        block: "nearest",
-        behavior: "smooth",
-      });
-    };
-    snap();
-    return () => {
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [current]);
+    node.scrollIntoView({
+      inline: "center",
+      block: "nearest",
+      behavior: "auto",
+    });
+  }, [currentPage]);
 
   useEffect(() => {
     setThumbs(new Map());
@@ -117,23 +105,28 @@ export function PdfPageRail({
   useEffect(() => {
     if (count < 2) return;
     let cancelled = false;
-    const needed = thumbWindow(current, count, visibleRef.current, 3);
+    const needed = thumbWindow(currentPage, count, visibleRef.current, 3);
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const px = Math.round(PDF_FILM_THUMB_CSS * dpr);
 
     const fill = async () => {
       for (const page of needed) {
         if (cancelled) return;
-        if (thumbsRef.current.has(page) || inflightRef.current.has(page)) continue;
+        const isFocus = page === currentPage;
+        if (!isFocus && (thumbsRef.current.has(page) || inflightRef.current.has(page))) {
+          continue;
+        }
+        if (isFocus && inflightRef.current.has(page)) continue;
         const live = grabLivePdfThumb(page, px);
         if (live) {
           setThumbs((prev) => {
             const next = new Map(prev);
             next.set(page, live);
-            return trimThumbCache(next, current, needed);
+            return trimThumbCache(next, currentPage, needed);
           });
           continue;
         }
+        if (thumbsRef.current.has(page) || inflightRef.current.has(page)) continue;
         const render = renderThumbRef.current;
         if (!render) continue;
         inflightRef.current.add(page);
@@ -143,7 +136,7 @@ export function PdfPageRail({
         setThumbs((prev) => {
           const next = new Map(prev);
           next.set(page, url);
-          return trimThumbCache(next, current, needed);
+          return trimThumbCache(next, currentPage, needed);
         });
       }
     };
@@ -151,7 +144,7 @@ export function PdfPageRail({
     return () => {
       cancelled = true;
     };
-  }, [count, current, stripTick, renderThumb]);
+  }, [count, currentPage, stripTick, renderThumb]);
 
   if (count < 2) return null;
 
@@ -160,7 +153,7 @@ export function PdfPageRail({
   return (
     <nav ref={stripRef} className="lc-pdf-rail" aria-label="PDF pages">
       {pages.map((page) => {
-        const active = page === current;
+        const active = page === currentPage;
         const aspect = aspects?.[page - 1] || PDF_LETTER_ASPECT;
         const src = thumbs.get(page);
         return (

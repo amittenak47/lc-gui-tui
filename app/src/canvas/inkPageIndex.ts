@@ -185,6 +185,25 @@ export function pageIdFromCamera(
   return pageIdAtViewport(frames, top, top + viewHeight / zoom);
 }
 
+/**
+ * Shift document-local frames into scene Y (page-frame `minY`).
+ *
+ * Layout math starts at the PDF stack origin, not the annotate frame. Ink and
+ * the filmstrip both consume scene coordinates.
+ */
+export function offsetPageFrames(
+  frames: readonly PageFrame[],
+  originY: number,
+): PageFrame[] {
+  if (frames.length === 0) return [];
+  if (originY === 0) return frames.slice();
+  return frames.map((frame) => ({
+    pageId: frame.pageId,
+    minY: frame.minY + originY,
+    maxY: frame.maxY + originY,
+  }));
+}
+
 /** Excalidraw `scrollY` that puts a page's top just under the chrome inset. */
 export function scrollYForPage(
   frames: readonly PageFrame[],

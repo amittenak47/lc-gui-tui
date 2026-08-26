@@ -7,6 +7,7 @@
  * scroll into the strip.
  */
 
+import { pageIdFromCamera, type PageFrame } from "../canvas/inkPageIndex";
 import {
   PDF_FILM_CACHE,
   PDF_FILM_RADIUS,
@@ -110,6 +111,63 @@ export function trimThumbCache(
     if (url) next.set(n, url);
   }
   return next;
+}
+
+let filmCurrent = 1;
+const filmCurrentListeners = new Set<(page: number) => void>();
+
+/** Document-local PDF stack frames — camera Y maps to a page without IO. */
+let readingFrames: PageFrame[] = [];
+
+export function setPdfReadingFrames(frames: readonly PageFrame[]): void {
+  readingFrames = frames.slice();
+}
+
+export function peekPdfReadingFrames(): readonly PageFrame[] {
+  return readingFrames;
+}
+
+export function resetPdfReadingFrames(): void {
+  readingFrames = [];
+}
+
+/** Chrome filmstrip current page — does not go through Workspace setState. */
+export function publishPdfFilmCurrent(page: number): void {
+  if (!(page >= 1) || page === filmCurrent) return;
+  filmCurrent = page;
+  for (const listener of filmCurrentListeners) listener(page);
+}
+
+/**
+ * Film current from camera Y + cached layout frames.
+ *
+ * IntersectionObserver on `.lc-pdf-page` misses sheets while the stack rides
+ * `translate3d` — the strip jumped 3 → 5. Scene Y does not skip.
+ */
+export function publishPdfFilmFromCamera(
+  frames: readonly PageFrame[],
+  scrollY: number,
+  zoom: number,
+  viewHeight: number,
+): void {
+  if (frames.length === 0) return;
+  publishPdfFilmCurrent(pageIdFromCamera(frames, scrollY, zoom, viewHeight));
+}
+
+export function subscribePdfFilmCurrent(
+  listener: (page: number) => void,
+): () => void {
+  filmCurrentListeners.add(listener);
+  listener(filmCurrent);
+  return () => {
+    filmCurrentListeners.delete(listener);
+  };
+}
+
+export function resetPdfFilmCurrent(): void {
+  if (filmCurrent === 1) return;
+  filmCurrent = 1;
+  for (const listener of filmCurrentListeners) listener(1);
 }
 
 export function grabLivePdfThumb(page: number, maxWidth: number): string | null {
