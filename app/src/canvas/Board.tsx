@@ -142,15 +142,23 @@ import {
 import { encodeInkOps } from "./inkCodec";
 import {
   fallbackPageFrames,
+  lastPageId,
   offsetPageFrames,
   pageFramesFromPdfSlot,
   pageIdFromCamera,
+  pageIdsIntersectingView,
 } from "./inkPageIndex";
 import {
   peekPdfReadingFrames,
+  peekPdfFilmCurrent,
   publishPdfFilmCurrent,
   publishPdfFilmFromCamera,
+  publishPdfFilmPredicted,
+  publishPdfViewPages,
+  resetPdfFilmPredicted,
+  resetPdfViewPages,
 } from "../modes/pdfFilm";
+import { pdfRestPages } from "../modes/pdfPaintWindow";
 import { eraserScreenRadius } from "./rasterInk";
 import { linedSlotCanSkip } from "./linedSlot";
 import { SPLIT_RESIZE_EVENT, splitResizePhase } from "../util/splitResize";
@@ -163,6 +171,13 @@ import {
 } from "./ModeIndicator";
 import { PadTitle, type PadTitleHandle } from "./PadTitle";
 import { PageIndicator, type PageIndicatorHandle } from "./PageIndicator";
+import { FlickPredictHud, type FlickPredictHudHandle } from "./FlickPredictHud";
+import {
+  PAN_FLICK_MIN,
+  PAN_FRICTION,
+  PAN_REST_SPEED,
+  predictFlickEndScrollY,
+} from "./flickPredict";
 import { TextPlaceGhost, type TextPlaceGhostHandle } from "./TextPlaceGhost";
 import {
   minTextBox,
@@ -827,18 +842,12 @@ const ZOOM_MAX = 1.75;
 const ZOOM_STEP = 1.15;
 /** Button zoom animation — retargets smoothly on repeat / hold. */
 const ZOOM_ANIM_MS = 220;
-/** Hand-tool pan inertia — exponential friction per ms (coast after flick). */
-const PAN_FRICTION = 0.0045;
 /**
  * Coast after a flick. Flip false to isolate finger-drag scroll in profiles
  * (no `Board.step` inertia rAF). End-state of the scroll-perf pass keeps this
  * true — ride-only mid-gesture makes coast cheap again.
  */
 const PAN_INERTIA_ENABLED = true;
-/** Minimum scroll speed (scene units/ms) to coast after a flick. */
-const PAN_FLICK_MIN = 0.035;
-/** Stop coasting below this scroll speed. */
-const PAN_REST_SPEED = 0.02;
 /** Px before a mouse press-during-glide becomes a new drag (touch arms immediately). */
 const PAN_DRAG_THRESHOLD_PX = 3;
 /** Finger/wheel travel multiplier — 1:1 felt sluggish vs Obsidian. */
@@ -1646,6 +1655,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const modeIndicatorRef = useRef<ModeIndicatorHandle | null>(null);
   const padTitleRef = useRef<PadTitleHandle | null>(null);
   const pageIndicatorRef = useRef<PageIndicatorHandle | null>(null);
+  const flickPredictHudRef = useRef<FlickPredictHudHandle | null>(null);
+  const flickPredFrozenRef = useRef<number | null>(null);
+  const flickSettleErrRef = useRef(0);
+  const pdfCoastRef = useRef(false);
+  const pendingPdfPageRef = useRef(0);
+  const scrollToPdfPageRef = useRef<(pageId: number) => void>(() => {});
   /** Last page named to the reader, so the pill fires on arrival only. */
   const lastNamedPageRef = useRef<RegionId | null>(null);
   /** Camera the page was last read from — skips the scene walk when still. */
@@ -1791,19 +1806,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const cameraLiveClassRafRef = useRef(0);
   const applyVisualScrollNowRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
   const publishPdfFilmFromScrollRef = useRef<
-    (scrollY: number, zoom: number, height: number) => void
+    (scrollX: number, scrollY: number, zoom: number, height: number) => void
   >(() => {});
-  publishPdfFilmFromScrollRef.current = (scrollY, zoom, height) => {
-    const local = peekPdfReadingFrames();
-    if (local.length === 0) return;
-    const origin = pageBoundsRef.current?.minY ?? 0;
-    publishPdfFilmFromCamera(
-      offsetPageFrames(local, origin),
-      scrollY,
-      zoom,
-      height,
-    );
-  };
+  const pdfPanLogRef = useRef({ n: 0, t: 0 });
   const scheduleVisualScrollRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
   const flushVisualScrollRef = useRef<() => void>(() => {});
   const commitVisualScrollRef = useRef<() => void>(() => {});
@@ -2877,8 +2882,67 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     );
   }, []);
 
-  /*
-   * A text selection dragged off the edge asks the page to come to it.
+  publishPdfFilmFromScrollRef.current = (scrollX, scrollY, zoom, height) => {
+    const local = peekPdfReadingFrames();
+    const pending = pendingPdfPageRef.current;
+    if (pending >= 1) {
+      const origin = pageBoundsRef.current?.minY ?? 0;
+      const frames = offsetPageFrames(local, origin);
+      if (frames.some((frame) => frame.pageId === pending)) {
+        pendingPdfPageRef.current = 0;
+        scrollToPdfPageRef.current(pending);
+      } else {
+        publishPdfFilmCurrent(pending);
+      }
+      return;
+    }
+    if (local.length === 0) {
+      flickPredictHudRef.current?.hide();
+      resetPdfFilmPredicted();
+      resetPdfViewPages();
+      return;
+    }
+    const origin = pageBoundsRef.current?.minY ?? 0;
+    const frames = offsetPageFrames(local, origin);
+    publishPdfFilmFromCamera(frames, scrollY, zoom, height);
+    const live = pageIdFromCamera(frames, scrollY, zoom, height);
+    const intersecting = pageIdsIntersectingView(frames, scrollY, zoom, height);
+    publishPdfViewPages(
+      intersecting,
+      pdfRestPages(live, lastPageId(frames), intersecting),
+    );
+    let pred: number;
+    if (pdfCoastRef.current && flickPredFrozenRef.current != null) {
+      pred = flickPredFrozenRef.current;
+    } else {
+      const endY = clampPanScroll(
+        scrollX,
+        predictFlickEndScrollY(scrollY, panVelocityRef.current.y),
+        zoom,
+      ).scrollY;
+      pred = pageIdFromCamera(frames, endY, zoom, height);
+      if (handPanningRef.current) flickPredFrozenRef.current = pred;
+    }
+    // HUD is imperative. Filmstrip predicted is React — do not publish it on
+    // every sample or the full-book rail reconciles mid-flick.
+    const finger = handPanningRef.current || pdfCoastRef.current;
+    if (!finger) publishPdfFilmPredicted(pred);
+    const err = pred - live;
+    flickPredictHudRef.current?.show(live, pred, err);
+    const log = pdfPanLogRef.current;
+    log.n += 1;
+    const now = performance.now();
+    if (now - log.t >= 250) {
+      console.log(
+        `[lc:pdf-pan] handler=applyVisualScrollNow samples=${log.n} ms=${Math.round(now - (log.t || now))} C=${live} pred=${pred} hole=${intersecting.join(",")} finger=${finger ? 1 : 0}`,
+      );
+      log.n = 0;
+      log.t = now;
+    }
+  };
+
+  /**
+   * How far a quote-drag auto-scroll may move the camera.
    *
    * Answered here rather than computed by the selection layer, because
    * everything that makes a scroll correct — the zoom, the chrome insets, where
@@ -3461,7 +3525,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // cannot. Drop this write and wheel travel dies on commit: pan translates
     // clear, the slot is still on the fit camera, page jumps to the start.
     placeContentSlotAtRef.current(scrollX, scrollY, zoom);
-    publishPdfFilmFromScrollRef.current(scrollY, zoom, height);
+    publishPdfFilmFromScrollRef.current(scrollX, scrollY, zoom, height);
     if (stampTrashPosRef.current) syncStampTrashRef.current();
 
     /*
@@ -3797,11 +3861,39 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const zoom = cam.zoom;
       if (scrollModeRef.current) lockedScrollXRef.current = scrollX;
 
+      pdfCoastRef.current = true;
+      if (flickPredFrozenRef.current == null) {
+        const local = peekPdfReadingFrames();
+        if (local.length > 0) {
+          const origin = pageBoundsRef.current?.minY ?? 0;
+          const frames = offsetPageFrames(local, origin);
+          const viewH = liveCameraRef.current?.height ?? 800;
+          const endY = clampPanScroll(
+            scrollX,
+            predictFlickEndScrollY(scrollY, velY),
+            zoom,
+          ).scrollY;
+          flickPredFrozenRef.current = pageIdFromCamera(frames, endY, zoom, viewH);
+        }
+      }
+
       const settle = () => {
         inertiaFrameRef.current = 0;
+        const frozen = flickPredFrozenRef.current;
+        pdfCoastRef.current = false;
         applyVisualScrollNowRef.current(scrollX, scrollY);
-        // Keep moving-mode and the live cache through a 3–5s reading pause.
-        // Idle teardown commits.
+        const local = peekPdfReadingFrames();
+        if (local.length > 0 && frozen != null) {
+          const origin = pageBoundsRef.current?.minY ?? 0;
+          const frames = offsetPageFrames(local, origin);
+          const viewH = liveCameraRef.current?.height ?? 800;
+          const actual = pageIdFromCamera(frames, scrollY, zoom, viewH);
+          const err = frozen - actual;
+          flickSettleErrRef.current = err;
+          flickPredictHudRef.current?.show(actual, frozen, err);
+          publishPdfFilmPredicted(frozen);
+        }
+        flickPredFrozenRef.current = null;
       };
 
       const step = (now: number) => {
@@ -3886,6 +3978,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // snapping between the touch point and the coast's projected stop.
       flushVisualScrollRef.current();
       stopPanInertia();
+      pdfCoastRef.current = false;
+      flickPredFrozenRef.current = null;
+      flickSettleErrRef.current = 0;
 
       // Code dock: defer preventDefault until pan arms — taps must reach Monaco.
       if (!deferred) {
@@ -7381,6 +7476,41 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
   }, [maybeGrowDrawFrame, onChange, scheduleSlotReports]);
 
+  const jumpToPdfPage = useCallback((pageId: number) => {
+    const api = apiRef.current;
+    const slot = contentSlotNodeRef.current;
+    const bounds = pageBoundsRef.current;
+    if (!api || !slot || !bounds || pageId < 1) return false;
+    const node = slot.querySelector<HTMLElement>(`[data-pdf-page="${pageId}"]`);
+    if (!node) return false;
+    const slotRect = slot.getBoundingClientRect();
+    const box = node.getBoundingClientRect();
+    const pageH = bounds.maxY - bounds.minY;
+    if (slotRect.height < 1 || pageH <= 0) return false;
+    const sy = slotRect.height / pageH;
+    const minY = bounds.minY + (box.top - slotRect.top) / sy;
+    const state = api.getAppState() as { zoom?: { value?: number } };
+    const zoom = state.zoom?.value ?? 1;
+    if (!(zoom > 0)) return false;
+    const measured = measureChromeInsets(
+      boardRef.current,
+      toolbarHeightRef.current,
+      mapChromeHiddenRef.current,
+      mobileRef.current,
+    );
+    const insetTop = measured.top + (mobileRef.current ? 0 : safeCssPx("--lc-safe-top"));
+    userAdjustedCameraRef.current = true;
+    pendingPdfPageRef.current = 0;
+    api.updateScene({
+      appState: { scrollY: insetTop / zoom - minY },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    publishPdfFilmCurrent(pageId);
+    scheduleSlotReports();
+    return true;
+  }, [scheduleSlotReports]);
+  scrollToPdfPageRef.current = jumpToPdfPage;
+
   useImperativeHandle(
     ref,
     (): BoardHandle => ({
@@ -7735,35 +7865,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         refitToViewport(regionId);
       },
       scrollToPdfPage: (pageId: number) => {
-        const api = apiRef.current;
-        const slot = contentSlotNodeRef.current;
-        const bounds = pageBoundsRef.current;
-        if (!api || !slot || !bounds || pageId < 1) return;
-        const node = slot.querySelector<HTMLElement>(`[data-pdf-page="${pageId}"]`);
-        if (!node) return;
-        const slotRect = slot.getBoundingClientRect();
-        const box = node.getBoundingClientRect();
-        const pageH = bounds.maxY - bounds.minY;
-        if (slotRect.height < 1 || pageH <= 0) return;
-        const sy = slotRect.height / pageH;
-        const minY = bounds.minY + (box.top - slotRect.top) / sy;
-        const state = api.getAppState() as { zoom?: { value?: number } };
-        const zoom = state.zoom?.value ?? 1;
-        if (!(zoom > 0)) return;
-        const measured = measureChromeInsets(
-          boardRef.current,
-          toolbarHeightRef.current,
-          mapChromeHiddenRef.current,
-          mobileRef.current,
-        );
-        const insetTop = measured.top + (mobileRef.current ? 0 : safeCssPx("--lc-safe-top"));
-        userAdjustedCameraRef.current = true;
-        api.updateScene({
-          appState: { scrollY: insetTop / zoom - minY },
-          captureUpdate: CaptureUpdateAction.NEVER,
-        });
+        jumpToPdfPage(pageId);
+      },
+      aimPdfPage: (pageId: number) => {
+        if (!(pageId >= 1)) {
+          pendingPdfPageRef.current = 0;
+          return;
+        }
+        pendingPdfPageRef.current = pageId;
         publishPdfFilmCurrent(pageId);
-        scheduleSlotReports();
       },
       restoreView: (saved) => {
         const api = apiRef.current;
@@ -7776,40 +7886,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         );
         if (frames.length >= 2) {
           const state = api.getAppState() as { height?: number };
-          const page = pageIdFromCamera(frames, saved.scrollY, zoom, state.height ?? 800);
-          const node = contentSlotNodeRef.current?.querySelector<HTMLElement>(
-            `[data-pdf-page="${page}"]`,
-          );
-          if (node) {
-            const slot = contentSlotNodeRef.current;
-            const bounds = pageBoundsRef.current;
-            if (slot && bounds) {
-              const slotRect = slot.getBoundingClientRect();
-              const box = node.getBoundingClientRect();
-              const pageH = bounds.maxY - bounds.minY;
-              if (slotRect.height >= 1 && pageH > 0) {
-                const sy = slotRect.height / pageH;
-                const minY = bounds.minY + (box.top - slotRect.top) / sy;
-                const liveZoom =
-                  (api.getAppState() as { zoom?: { value?: number } }).zoom?.value ?? zoom;
-                const measured = measureChromeInsets(
-                  boardRef.current,
-                  toolbarHeightRef.current,
-                  mapChromeHiddenRef.current,
-                  mobileRef.current,
-                );
-                const insetTop =
-                  measured.top + (mobileRef.current ? 0 : safeCssPx("--lc-safe-top"));
-                api.updateScene({
-                  appState: { scrollY: insetTop / liveZoom - minY },
-                  captureUpdate: CaptureUpdateAction.NEVER,
-                });
-                publishPdfFilmCurrent(page);
-                scheduleSlotReports();
-                return;
-              }
-            }
-          }
+          const savedPage = Math.floor(Number(saved.pdfPage));
+          const page =
+            savedPage >= 1
+              ? savedPage
+              : pageIdFromCamera(frames, saved.scrollY, zoom, state.height ?? 800);
+          if (jumpToPdfPage(page)) return;
         }
         api.updateScene({
           appState: {
@@ -7887,6 +7969,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             scrollX: state.scrollX ?? 0,
             scrollY: state.scrollY ?? 0,
             zoom: state.zoom?.value ?? 1,
+            pdfPage: peekPdfFilmCurrent(),
           },
           // Encoded, not raw — `ink` stays readable forever but is never
           // written again. See `inkCodec`; read it back with `inkOpsFrom`.
@@ -8635,6 +8718,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       {interactive && <ModeIndicator ref={modeIndicatorRef} />}
       {interactive && <PadTitle ref={padTitleRef} />}
       {interactive && <PageIndicator ref={pageIndicatorRef} />}
+      {interactive && <FlickPredictHud ref={flickPredictHudRef} />}
       {interactive && (
         <ScrollBackHold
           boardRef={boardRef}

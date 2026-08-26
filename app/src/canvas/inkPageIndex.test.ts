@@ -11,6 +11,7 @@ import {
   pageIdAtViewport,
   pageIdForOp,
   pageIdFromCamera,
+  pageIdsIntersectingView,
   pageIndexForSceneY,
   scrollYForPage,
   type PageFrame,
@@ -111,9 +112,11 @@ describe("lruWindow", () => {
 });
 
 describe("pageIdAtViewport", () => {
-  it("names the page filling most of the band", () => {
+  it("names the page at the vertical center of the band, not the top sheet", () => {
     expect(pageIdAtViewport(frames(), 0, 80)).toBe(1);
     expect(pageIdAtViewport(frames(), 160, 240)).toBe(2);
+    // Hole covers the bottom of 1 and most of 2 — center is on 2.
+    expect(pageIdAtViewport(frames(), 90, 170)).toBe(2);
   });
 });
 
@@ -125,9 +128,27 @@ describe("lastPageId", () => {
 });
 
 describe("pageIdFromCamera", () => {
-  it("maps a saved camera onto the page that filled the viewport", () => {
+  it("maps a saved camera onto the page at the hole center", () => {
     expect(pageIdFromCamera(frames(), 0, 1, 80)).toBe(1);
     expect(pageIdFromCamera(frames(), -160, 1, 80)).toBe(2);
+    expect(pageIdFromCamera(frames(), -90, 1, 80)).toBe(2);
+  });
+});
+
+describe("pageIdsIntersectingView", () => {
+  it("is every overlapping page, not C+1 through C+5", () => {
+    expect(pageIdsIntersectingView(frames(), 0, 1, 80)).toEqual([1]);
+    expect(pageIdsIntersectingView(frames(), -160, 1, 40)).toEqual([2]);
+  });
+
+  it("returns two ids when the hole covers a seam", () => {
+    expect(pageIdsIntersectingView(frames(), -90, 1, 80)).toEqual([1, 2]);
+  });
+
+  it("uses the same camera band as pageIdFromCamera", () => {
+    const C = pageIdFromCamera(frames(), -160, 1, 80);
+    const overlap = pageIdsIntersectingView(frames(), -160, 1, 80);
+    expect(overlap).toContain(C);
   });
 });
 

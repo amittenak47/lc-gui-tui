@@ -15422,6 +15422,30 @@ html.lc-doc-camera-live .lc-page-marks-slot {
   box-shadow: 0 2px 10px rgb(0 0 0 / 34%);
 }
 
+.lc-pdf-rail-page.is-predicted .lc-pdf-rail-thumb {
+  outline: 2px dashed var(--muted);
+  outline-offset: 2px;
+}
+
+.lc-flick-predict-hud {
+  position: absolute;
+  left: 50%;
+  top: 2.6rem;
+  transform: translateX(-50%);
+  z-index: 14;
+  pointer-events: none;
+  padding: 0.28rem 0.7rem;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 55%);
+  color: #fff;
+  font-family: var(--lc-sans);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
 .lc-mobile .lc-canvas-wrap.lc-has-pdf-film {
   --lc-pdf-film: 88px;
 }

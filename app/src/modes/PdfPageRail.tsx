@@ -12,7 +12,9 @@ import {
   PDF_FILM_THUMB_CSS,
   PDF_LETTER_ASPECT,
   grabLivePdfThumb,
+  grabLruPdfThumb,
   subscribePdfFilmCurrent,
+  subscribePdfFilmPredicted,
   thumbWindow,
   trimThumbCache,
   type PdfThumbRenderer,
@@ -47,9 +49,11 @@ export function PdfPageRail({
   const renderThumbRef = useRef(renderThumb);
   renderThumbRef.current = renderThumb;
   const [railCurrent, setRailCurrent] = useState(current);
+  const [railPredicted, setRailPredicted] = useState(0);
   const currentPage = railCurrent;
 
   useEffect(() => subscribePdfFilmCurrent(setRailCurrent), []);
+  useEffect(() => subscribePdfFilmPredicted(setRailPredicted), []);
 
   useEffect(() => {
     const node = currentRef.current;
@@ -105,7 +109,7 @@ export function PdfPageRail({
   useEffect(() => {
     if (count < 2) return;
     let cancelled = false;
-    const needed = thumbWindow(currentPage, count, visibleRef.current, 3);
+    const needed = thumbWindow(currentPage, count, visibleRef.current);
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const px = Math.round(PDF_FILM_THUMB_CSS * dpr);
 
@@ -117,7 +121,7 @@ export function PdfPageRail({
           continue;
         }
         if (isFocus && inflightRef.current.has(page)) continue;
-        const live = grabLivePdfThumb(page, px);
+        const live = grabLivePdfThumb(page, px) ?? grabLruPdfThumb(page, px);
         if (live) {
           setThumbs((prev) => {
             const next = new Map(prev);
@@ -154,6 +158,7 @@ export function PdfPageRail({
     <nav ref={stripRef} className="lc-pdf-rail" aria-label="PDF pages">
       {pages.map((page) => {
         const active = page === currentPage;
+        const predicted = page === railPredicted && railPredicted > 0 && !active;
         const aspect = aspects?.[page - 1] || PDF_LETTER_ASPECT;
         const src = thumbs.get(page);
         return (
@@ -161,7 +166,9 @@ export function PdfPageRail({
             key={page}
             ref={active ? currentRef : undefined}
             type="button"
-            className="lc-pdf-rail-page"
+            className={
+              predicted ? "lc-pdf-rail-page is-predicted" : "lc-pdf-rail-page"
+            }
             data-pdf-film-page={page}
             style={{ "--lc-pdf-aspect": String(aspect) } as CSSProperties}
             aria-current={active ? "page" : undefined}

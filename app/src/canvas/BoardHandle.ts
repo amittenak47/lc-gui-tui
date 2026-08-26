@@ -26,7 +26,7 @@ export interface BoardBlob {
    */
   v: 1;
   elements: unknown[];
-  appState: { scrollX: number; scrollY: number; zoom: number };
+  appState: { scrollX: number; scrollY: number; zoom: number; pdfPage?: number };
   /** Raster pen/eraser ops as written before the codec — still read, never written. */
   ink?: InkOp[];
   /**
@@ -229,10 +229,16 @@ export interface BoardHandle {
    */
   scrollToPdfPage(pageId: number): void;
   /**
+   * Remember which PDF page to paint/restore before the stack exists.
+   * Camera jumps once that page's div is laid out. Prevents decoding page 1
+   * on reopen.
+   */
+  aimPdfPage(pageId: number): void;
+  /**
    * Reopen camera: PDF jumps to the saved page at today's fit zoom;
    * single-page docs restore scroll/zoom as written.
    */
-  restoreView(saved: { scrollX: number; scrollY: number; zoom: number }): void;
+  restoreView(saved: { scrollX: number; scrollY: number; zoom: number; pdfPage?: number }): void;
   /** Recolor template scaffolding for the current theme (after restore/seed). */
   applyThemeInk(themeId: string): void;
   /** Drop all coach viz elements — used before re-applying from chat drawings. */

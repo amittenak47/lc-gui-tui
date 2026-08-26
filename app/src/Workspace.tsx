@@ -1017,6 +1017,7 @@ export function Workspace({
   const [pdfNav, setPdfNav] = useState<PdfNav | null>(null);
   const pdfNavRef = useRef<PdfNav | null>(null);
   pdfNavRef.current = pdfNav;
+  const [pdfSessionPage, setPdfSessionPage] = useState(0);
   const pdfThumbRef = useRef<PdfThumbRenderer | null>(null);
   const [pdfThumbReady, setPdfThumbReady] = useState(false);
   const onPdfThumbRenderer = useCallback((render: PdfThumbRenderer | null) => {
@@ -2862,6 +2863,13 @@ export function Workspace({
         setPseudocode("");
         loadedSourceRef.current = "";
         lastSavedHashRef.current = null;
+        const savedPdfPage = Math.floor(
+          Number((existing?.board.appState as { pdfPage?: number } | undefined)?.pdfPage),
+        );
+        const sessionPage =
+          Number.isFinite(savedPdfPage) && savedPdfPage >= 1 ? savedPdfPage : 0;
+        setPdfSessionPage(sessionPage);
+        if (sessionPage >= 1) boardRef.current?.aimPdfPage(sessionPage);
         setAnnotateSource({ name: input.name, text, hash, docType, bytes });
         if (docType === "web") {
           setWebUrl(input.name);
@@ -3158,6 +3166,12 @@ export function Workspace({
         }
         await boardRef.current?.settleFitView();
         if (existing?.board.appState) {
+          const savedPage = Math.floor(
+            Number((existing.board.appState as { pdfPage?: number }).pdfPage),
+          );
+          if (Number.isFinite(savedPage) && savedPage >= 1) {
+            boardRef.current?.aimPdfPage(savedPage);
+          }
           boardRef.current?.restoreView(existing.board.appState);
         }
 
@@ -8583,6 +8597,7 @@ export function Workspace({
                       bytes={annotateSource.bytes}
                       docHash={annotateSource.hash}
                       frameWidth={annotatePageWidth}
+                      initialPage={pdfSessionPage || undefined}
                       onMeasure={onMdInkMeasure}
                       onNav={setPdfNav}
                       onThumbRenderer={onPdfThumbRenderer}

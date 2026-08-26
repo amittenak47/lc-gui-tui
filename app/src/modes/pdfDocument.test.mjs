@@ -23,17 +23,22 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   layoutPdfPages,
+  pageNeedsDecode,
   paintOrder,
   PAGE_GAP,
   PDF_DOC_PAD_TOP,
-  PDF_HOT_RADIUS,
+  PDF_PREVIEW_RADIUS,
   PDF_PREVIEW_SCALE,
   PDF_RENDER_SCALE,
   PDF_REST_SCALE,
+  pdfExpandOrder,
+  pdfInnerPages,
   pdfJsDataUrls,
   pdfNavShouldPublish,
+  pdfOuterPages,
   pdfPageFit,
   pdfPagePaintScale,
+  pdfPageTargetScale,
   pdfStackFrames,
   pdfStackHeight,
   windowedPages,
@@ -174,25 +179,25 @@ describe("the fixture, through pdf.js", () => {
 /**
  * The paint window is what decides a textbook's GPU cost.
  *
- * Live canvases: current page ± {@link PDF_HOT_RADIUS}. The rest of this visit
- * is the session pagefile, not more GPU textures.
+ * Live 1× palindrome around C: {@link PDF_PREVIEW_RADIUS}. The rest of this
+ * visit is the sheet LRU / session pagefile, not more GPU textures.
  */
 describe("windowedPages", () => {
-  it("keeps the hot-radius neighbours either side of the page on screen", () => {
-    expect(windowedPages([50], 200, PDF_HOT_RADIUS)).toHaveLength(1 + 2 * PDF_HOT_RADIUS);
-    expect(windowedPages([50], 200, PDF_HOT_RADIUS)[0]).toBe(50 - PDF_HOT_RADIUS);
-    expect(windowedPages([50], 200, PDF_HOT_RADIUS).at(-1)).toBe(50 + PDF_HOT_RADIUS);
+  it("keeps the 1x-radius neighbours either side of the page on screen", () => {
+    expect(windowedPages([50], 200, PDF_PREVIEW_RADIUS)).toHaveLength(1 + 2 * PDF_PREVIEW_RADIUS);
+    expect(windowedPages([50], 200, PDF_PREVIEW_RADIUS)[0]).toBe(50 - PDF_PREVIEW_RADIUS);
+    expect(windowedPages([50], 200, PDF_PREVIEW_RADIUS).at(-1)).toBe(50 + PDF_PREVIEW_RADIUS);
   });
 
   it("does not run off the front of the book", () => {
-    expect(windowedPages([1], 60, PDF_HOT_RADIUS)).toEqual(
-      Array.from({ length: 1 + PDF_HOT_RADIUS }, (_, i) => i + 1),
+    expect(windowedPages([1], 60, PDF_PREVIEW_RADIUS)).toEqual(
+      Array.from({ length: 1 + PDF_PREVIEW_RADIUS }, (_, i) => i + 1),
     );
   });
 
   it("does not run off the back", () => {
-    expect(windowedPages([60], 60, PDF_HOT_RADIUS)).toEqual(
-      Array.from({ length: 1 + PDF_HOT_RADIUS }, (_, i) => i + (60 - PDF_HOT_RADIUS)),
+    expect(windowedPages([60], 60, PDF_PREVIEW_RADIUS)).toEqual(
+      Array.from({ length: 1 + PDF_PREVIEW_RADIUS }, (_, i) => i + (60 - PDF_PREVIEW_RADIUS)),
     );
   });
 
@@ -200,9 +205,18 @@ describe("windowedPages", () => {
     expect(windowedPages([10, 11], 60, 3)).toEqual([7, 8, 9, 10, 11, 12, 13, 14]);
   });
 
-  it("opens on the first pages before the observer has reported", () => {
+  it("opens around the restored session page before the observer has reported", () => {
+    expect(windowedPages([], 200, PDF_PREVIEW_RADIUS, 50)).toEqual(
+      Array.from(
+        { length: 1 + 2 * PDF_PREVIEW_RADIUS },
+        (_, i) => i + (50 - PDF_PREVIEW_RADIUS),
+      ),
+    );
+  });
+
+  it("opens on the first pages when no session page is known", () => {
     expect(windowedPages([], 200)).toEqual(
-      Array.from({ length: 1 + PDF_HOT_RADIUS }, (_, i) => i + 1),
+      Array.from({ length: 1 + PDF_PREVIEW_RADIUS }, (_, i) => i + 1),
     );
   });
 
@@ -211,7 +225,7 @@ describe("windowedPages", () => {
   });
 
   it("stays a bounded ring however long the book is", () => {
-    expect(windowedPages([900], 1500)).toHaveLength(1 + 2 * PDF_HOT_RADIUS);
+    expect(windowedPages([900], 1500)).toHaveLength(1 + 2 * PDF_PREVIEW_RADIUS);
   });
 });
 
@@ -328,5 +342,53 @@ describe("paintOrder", () => {
 
   it("falls back to ascending when nothing is marked visible yet", () => {
     expect(paintOrder([1, 2], [])).toEqual([1, 2]);
+  });
+});
+
+describe("pdf palindrome 1x ring", () => {
+  it("is C±12 clamped to the book", () => {
+    expect(pdfOuterPages(50, 200, 12)).toHaveLength(25);
+    expect(pdfOuterPages(50, 200, 12)[0]).toBe(38);
+    expect(pdfOuterPages(50, 200, 12).at(-1)).toBe(62);
+    expect(pdfOuterPages(1, 200, 12)).toEqual(
+      Array.from({ length: 13 }, (_, i) => i + 1),
+    );
+    expect(pdfOuterPages(200, 200, 12)[0]).toBe(188);
+    expect(pdfOuterPages(200, 200, 12).at(-1)).toBe(200);
+  });
+
+  it("uses default preview radius of 2", () => {
+    expect(PDF_PREVIEW_RADIUS).toBe(2);
+    expect(pdfOuterPages(40, 80)).toHaveLength(5);
+  });
+
+  it("expands C, then ±1 … ±R", () => {
+    expect(pdfExpandOrder(10, 20, 2)).toEqual([10, 9, 11, 8, 12]);
+    expect(pdfExpandOrder(1, 20, 2)).toEqual([1, 2, 3]);
+  });
+
+  it("marks inner rest 2 and outer preview 0.25", () => {
+    const inner = pdfInnerPages([10]);
+    const outer = pdfOuterPages(10, 40);
+    expect(pdfPageTargetScale(10, inner, outer)).toBe(PDF_REST_SCALE);
+    expect(pdfPageTargetScale(11, inner, outer)).toBe(PDF_PREVIEW_SCALE);
+    expect(pdfPageTargetScale(12, inner, outer)).toBe(PDF_PREVIEW_SCALE);
+    expect(pdfPageTargetScale(13, inner, outer)).toBe(0);
+  });
+
+  it("does not re-decode a 2x sheet when demoting to 1x", () => {
+    expect(pageNeedsDecode(1, 1, 2)).toBe(false);
+    expect(pageNeedsDecode(1, 2, 1)).toBe(true);
+    expect(pageNeedsDecode(1, 1, 1)).toBe(false);
+    expect(pageNeedsDecode(2, 1, 2)).toBe(false);
+  });
+});
+
+describe("paint must not read the flick-end guess", () => {
+  it("does not import the predicted-page channel", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(process.cwd(), "src/modes/PdfDocument.tsx"), "utf8");
+    expect(src).not.toMatch(/publishPdfFilmPredicted|peekPdfFilmPredicted|pdfFlickPredictPage/);
   });
 });
