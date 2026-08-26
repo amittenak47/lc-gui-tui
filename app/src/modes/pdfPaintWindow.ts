@@ -123,9 +123,10 @@ export function pdfPaintHole(
 }
 
 /**
- * True only when pdf.js must run. LRU already at the LOD target is a blit.
- * Fit changing (spread / column) does not re-raster a rest-2 sheet — the same
- * bitmap is drawn into the new slots. Re-decoding JBIG2 on toggle froze the pad.
+ * True only when pdf.js must run. `pixelScale` is LOD (0.25 / 2), not
+ * `fit × LOD` — PdfSheetLru.lod() is the queue source. Fit changing (spread /
+ * column) does not re-raster a rest-2 sheet; the same bitmap is drawn into the
+ * new slots. Re-decoding JBIG2 on toggle froze the pad.
  */
 export function pageNeedsDecode(
   fit: number,
@@ -158,9 +159,11 @@ export function pdfPreloadPages(
 }
 
 /**
- * One pdf.js slot at a time: 0.25 on every blank in the ring (C, then ±1…),
- * then rest 2 from C outward. Never rest-2 a cream slot — that is the 5s
- * white wait. Skip any page whose RAM already meets the target.
+ * One pdf.js slot at a time. Per sheet: 0.25 then rest-2, walking C, ±1, …
+ * Never rest-2 a cream slot — that is the 5s white wait. Do not fill the
+ * whole 0.25 ring before C lossless: spread-off Kleinberg makes each stub a
+ * full JBIG2 sheet, and lossless never arrived. Skip RAM that already meets
+ * the target.
  */
 export function pdfDecodeQueue(
   C: number,
@@ -191,19 +194,18 @@ export function pdfDecodeQueue(
   for (const n of preload) if (n >= 1) previewWanted.add(n);
   for (const n of pdfExpandOrder(C, last)) {
     if (previewWanted.has(n)) take(n, PDF_PREVIEW_SCALE);
-  }
-  for (const n of previewWanted) take(n, PDF_PREVIEW_SCALE);
-  for (const n of pdfExpandOrder(C, last)) {
     if (rest.has(n)) take(n, PDF_REST_SCALE);
   }
+  for (const n of previewWanted) take(n, PDF_PREVIEW_SCALE);
   return out;
 }
 
 /**
  * True when `head` should cancel `flight`.
  *
- * Blank-in-hole 0.25 beats a neighbor decode. Rest 2 on C beats a 0.25 of
- * C+2. Same page at a higher target is an upgrade interrupt.
+ * Cream in the hole beats everything. Rest-2 on C / the hole beats outer
+ * 0.25 — otherwise spread-off cancels C lossless for every ring stub.
+ * Same page at a higher target is an upgrade interrupt.
  */
 export function pdfShouldPreempt(
   flight: { page: number; target: number },
@@ -215,11 +217,14 @@ export function pdfShouldPreempt(
   if (flight.page === head.page && head.target > flight.target + 1e-9) return true;
   const rank = (job: { page: number; target: number }) => {
     const preview = job.target <= PDF_PREVIEW_SCALE + 1e-9;
+    const lossless =
+      rest.has(job.page) && job.target >= PDF_REST_SCALE - 1e-9;
     if (preview && hole.has(job.page)) return 0;
-    if (preview) return 1 + Math.abs(job.page - C);
-    if (rest.has(job.page) && job.target >= PDF_REST_SCALE - 1e-9) {
-      return 100 + Math.abs(job.page - C);
+    if (lossless && (job.page === C || hole.has(job.page))) {
+      return job.page === C ? 1 : 2;
     }
+    if (preview) return 10 + Math.abs(job.page - C);
+    if (lossless) return 100 + Math.abs(job.page - C);
     return 200 + Math.abs(job.page - C);
   };
   return rank(head) < rank(flight);

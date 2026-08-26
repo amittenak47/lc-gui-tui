@@ -191,7 +191,7 @@ import { WorkspaceLinkPicker, groupLabel, type LinkTarget } from "./modes/Worksp
 import { resolveWikiLinks } from "./util/wikiLinks";
 import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
-import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, publishPdfFilmCurrent, peekPdfFilmCurrent, resetPdfFilmPredicted } from "./modes/pdfFilm";
+import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, publishPdfFilmCurrent, peekPdfFilmCurrent, peekPdfReadingFrames, resetPdfFilmPredicted } from "./modes/pdfFilm";
 import { AnnotateDialog, type AnnotateDialogKind } from "./modes/AnnotateDialog";
 import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
@@ -1052,6 +1052,7 @@ export function Workspace({
     const focused = document.activeElement;
     if (focused instanceof HTMLElement) focused.blur();
     const page = peekPdfFilmCurrent();
+    const fromFrames = peekPdfReadingFrames();
     setPdfSpreadByHash((prev) => {
       const on = prev[hash] ?? loadPdfSpreadPref(hash);
       const next = !on;
@@ -1061,6 +1062,7 @@ export function Workspace({
     setPdfFilmOpen(false);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
+        boardRef.current?.remapPdfInkAcrossPdfLayout(fromFrames);
         if (!(page >= 1)) return;
         boardRef.current?.aimPdfPage(page);
         boardRef.current?.scrollToPdfPage(page);
@@ -8426,7 +8428,11 @@ export function Workspace({
             (switchMotion === "busy" || switchMotion === "done") && "lc-switching",
             // Lifts the ink layer over the dock — see the rule in styles.css.
             annotateCode && "lc-annotating-code",
-            pdfFilmOpen && pdfNav && pdfNav.count >= 2 && "lc-has-pdf-film",
+            pdfFilmOpen &&
+              showing &&
+              pdfNav &&
+              pdfNav.count >= 2 &&
+              "lc-has-pdf-film",
             canBrowseLive && webLive && "lc-canvas-live-web",
             liveParked && "lc-canvas-live-parked",
           ]
@@ -8675,6 +8681,7 @@ export function Workspace({
                       docHash={annotateSource.hash}
                       frameWidth={annotatePageWidth}
                       initialPage={pdfSessionPage || undefined}
+                      paused={!showing}
                       onMeasure={onMdInkMeasure}
                       onNav={setPdfNav}
                       onThumbRenderer={onPdfThumbRenderer}
@@ -8762,6 +8769,7 @@ export function Workspace({
                 ? { open: pdfFilmOpen, onToggle: togglePdfFilm }
                 : null
             }
+            pdfFilmPublish={active}
             pageSpread={
               annotateSource?.docType === "pdf"
                 ? { on: pdfSpread, onToggle: togglePdfSpread }
@@ -8769,7 +8777,7 @@ export function Workspace({
             }
           />
           ) : null}
-          {pdfFilmOpen && pdfNav && pdfNav.count >= 2 && (
+          {showing && pdfFilmOpen && pdfNav && pdfNav.count >= 2 && (
             <PdfPageRail
               count={pdfNav.count}
               current={pdfNav.current}

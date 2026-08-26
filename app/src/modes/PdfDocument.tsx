@@ -215,6 +215,11 @@ export interface PdfDocumentProps {
    * the camera restore is still waiting on the layout gate.
    */
   initialPage?: number;
+  /**
+   * Parked tab: keep the worker and LRU, do not decode and do not write the
+   * shared film / LRU pointers. Two open books used to fight over one C.
+   */
+  paused?: boolean;
 }
 
 /** Viewport index plus per-page width/height for filmstrip placeholders. */
@@ -438,6 +443,7 @@ export function PdfDocument({
   selectable = false,
   onError,
   initialPage = 0,
+  paused = false,
 }: PdfDocumentProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [pages, setPages] = useState<RenderedPage[]>([]);
@@ -451,9 +457,12 @@ export function PdfDocument({
   onErrorRef.current = onError;
   const initialPageRef = useRef(initialPage);
   initialPageRef.current = initialPage;
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
   useEffect(() => {
-    if (initialPage >= 1) publishPdfFilmCurrent(initialPage);
-  }, [initialPage]);
+    if (paused || initialPage < 1) return;
+    publishPdfFilmCurrent(initialPage);
+  }, [initialPage, paused]);
   const visibleRatioRef = useRef<Map<number, number>>(new Map());
   /** Per-slot ratios so two-up halves of one sheet do not un-see each other. */
   const visibleSlotRatioRef = useRef<Map<Element, number>>(new Map());
@@ -495,9 +504,10 @@ export function PdfDocument({
   frameWidthRef.current = frameWidth;
 
   useEffect(() => {
+    if (paused) return;
     setActiveSheetLru(sheetLruRef.current);
     return () => setActiveSheetLru(null);
-  }, []);
+  }, [paused]);
 
   const dropSlotGpu = () => {
     for (const entry of paintedRef.current.values()) entry.release();
@@ -689,7 +699,7 @@ export function PdfDocument({
    */
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || pages.length === 0) return;
+    if (paused || !host || pages.length === 0) return;
     const slots = Array.from(host.querySelectorAll<HTMLElement>("[data-pdf-page]"));
     if (slots.length === 0) return;
     const last = pages[pages.length - 1].pageNumber;
@@ -871,15 +881,16 @@ export function PdfDocument({
       observer.disconnect();
       onNavRef.current?.(null);
     };
-  }, [pages]);
+  }, [pages, paused]);
 
   useEffect(() => {
+    if (paused) return;
     setPdfReadingFrames(
       pages.length === 0
         ? []
         : pdfStackFrames(pages, spread, PAGE_GAP, PDF_DOC_PAD_TOP),
     );
-  }, [pages, spread]);
+  }, [pages, spread, paused]);
 
   useEffect(() => {
     onThumbRendererRef.current?.(null);
@@ -905,7 +916,7 @@ export function PdfDocument({
     const host = hostRef.current;
     const doc = docRef.current;
     const TextLayer = textLayerRef.current;
-    if (!host || !doc || !TextLayer || pages.length === 0) return;
+    if (paused || !host || !doc || !TextLayer || pages.length === 0) return;
     const lastLaidOut = pages[pages.length - 1]?.pageNumber ?? 0;
     if (pdfPaintShouldWaitForLanding(peekPdfFilmCurrent(), lastLaidOut)) return;
     if (pumpRef.current) return;
@@ -1106,7 +1117,10 @@ export function PdfDocument({
 
       try {
         const cached = sheetLruRef.current.get(n);
-        if (cached && !pageNeedsDecode(entry.fit, paintScale, cached.pixelScale)) {
+        if (
+          cached &&
+          !pageNeedsDecode(entry.fit, paintScale, sheetLruRef.current.lod(n))
+        ) {
           commitSheet(cached);
           if (isDocCameraLive()) return;
           const firstText = slots[0]?.querySelector(".lc-pdf-text");
@@ -1169,15 +1183,14 @@ export function PdfDocument({
         });
         await paint.promise;
         if (disposedRef.current || aborted) return;
+        const sheet = await rememberScratch(scratch, entry.fit * paintScale);
+        if (disposedRef.current) return;
+        commitSheet(sheet);
         if (!isDocCameraLive()) {
           const content = await pdfPage.getTextContent();
           if (disposedRef.current || isDocCameraLive()) return;
           await fillText(pdfPage, content);
-          if (disposedRef.current) return;
         }
-        const sheet = await rememberScratch(scratch, entry.fit * paintScale);
-        if (disposedRef.current) return;
-        commitSheet(sheet);
       } catch (cause: unknown) {
         if (disposedRef.current) return;
         const message = cause instanceof Error ? cause.message : String(cause);
@@ -1205,7 +1218,7 @@ export function PdfDocument({
       const visible = pdfPaintHole(C, visibleRaw);
       const fitOf = (n: number) =>
         pagesRef.current.find((page) => page.pageNumber === n)?.fit ?? 0;
-      const scaleOf = (n: number) => sheetLruRef.current.scale(n);
+      const scaleOf = (n: number) => sheetLruRef.current.lod(n);
       const preload = peekPdfPreloadPages();
       let queue = pdfDecodeQueue(C, last, rest, outer, visible, scaleOf, fitOf, preload);
       if (isDocCameraLive()) {
@@ -1333,7 +1346,7 @@ export function PdfDocument({
         }
       }
     })();
-  }, [pages, windowTick]);
+  }, [pages, windowTick, paused]);
 
   // Height is reported from the laid-out stack rather than summed from the page
   // sizes: the gaps, and any rounding the browser does, belong in the number the
