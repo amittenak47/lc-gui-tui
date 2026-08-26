@@ -68,6 +68,8 @@ import {
   pdfDecodeQueue,
   pdfOuterPages,
   pdfPageTargetScale,
+  pdfPaintHole,
+  pdfPaintShouldWaitForLanding,
   pdfRestPages,
   pdfShouldPreempt,
 } from "./pdfPaintWindow";
@@ -108,6 +110,8 @@ export {
   pdfInnerPages,
   pdfOuterPages,
   pdfPageTargetScale,
+  pdfPaintHole,
+  pdfPaintShouldWaitForLanding,
   pdfRestPages,
 } from "./pdfPaintWindow";
 export { PDF_PREVIEW_CACHE, PDF_PREVIEW_RADIUS } from "../perfPreset";
@@ -401,6 +405,22 @@ function blitCachedSheet(
   );
 }
 
+function releasePagePixels(
+  host: HTMLElement,
+  n: number,
+  page: RenderedPage | undefined,
+  lru: PdfSheetLru,
+  wanted: Set<number>,
+): void {
+  if (lru.has(n) && wanted.has(n)) return;
+  const stub = lru.peekPreview(n) ?? lru.peekRest(n);
+  if (stub && page) {
+    blitCachedSheet(host, n, page, stub, PDF_PREVIEW_SCALE);
+    return;
+  }
+  zeroPageSlots(host, n);
+}
+
 export function PdfDocument({
   bytes,
   docHash = null,
@@ -425,6 +445,9 @@ export function PdfDocument({
   onErrorRef.current = onError;
   const initialPageRef = useRef(initialPage);
   initialPageRef.current = initialPage;
+  useEffect(() => {
+    if (initialPage >= 1) publishPdfFilmCurrent(initialPage);
+  }, [initialPage]);
   const visibleRatioRef = useRef<Map<number, number>>(new Map());
   /** Per-slot ratios so two-up halves of one sheet do not un-see each other. */
   const visibleSlotRatioRef = useRef<Map<Element, number>>(new Map());
@@ -440,7 +463,7 @@ export function PdfDocument({
   );
   const sheetLruRef = useRef(new PdfSheetLru(PDF_PREVIEW_CACHE));
   const sessionRef = useRef(new PdfPageSession());
-  const lastSettledPageRef = useRef(1);
+  const lastSettledPageRef = useRef(Math.max(1, initialPage));
   const pathFillRef = useRef<number[]>([]);
   /** Pages the viewport can currently see. */
   const visibleRef = useRef<Set<number>>(new Set());
@@ -511,7 +534,8 @@ export function PdfDocument({
     naturalsRef.current = [];
     setPages([]);
     dropPaintedSession();
-    lastSettledPageRef.current = 1;
+    lastSettledPageRef.current =
+      initialPageRef.current >= 1 ? initialPageRef.current : peekPdfFilmCurrent();
     wantedRef.current = new Set();
     visibleRef.current = new Set();
     visibleRatioRef.current = new Map();
@@ -588,7 +612,11 @@ export function PdfDocument({
               spreadRef.current,
             ),
           );
-          if (from === 1 && doc.numPages > LAYOUT_BATCH) {
+          if (
+            from === 1 &&
+            doc.numPages > LAYOUT_BATCH &&
+            (initialPageRef.current < 1 || initialPageRef.current <= LAYOUT_BATCH)
+          ) {
             await new Promise<void>((resolve) => {
               window.setTimeout(resolve, 300);
             });
@@ -610,7 +638,7 @@ export function PdfDocument({
       dropPaintedSession();
       naturalsRef.current = [];
       resetPdfReadingFrames();
-      resetPdfFilmCurrent();
+      if (initialPageRef.current < 1) resetPdfFilmCurrent();
       resetPdfFilmPredicted();
       resetPdfViewPages();
       docRef.current = null;
@@ -779,8 +807,7 @@ export function PdfDocument({
         paintedRef.current.set(n, {
           scale: target,
           release: () => {
-            if (lru.has(n) && wantedRef.current.has(n)) return;
-            zeroPageSlots(host, n);
+            releasePagePixels(host, n, page, lru, wantedRef.current);
           },
         });
       }
@@ -861,6 +888,8 @@ export function PdfDocument({
     const doc = docRef.current;
     const TextLayer = textLayerRef.current;
     if (!host || !doc || !TextLayer || pages.length === 0) return;
+    const lastLaidOut = pages[pages.length - 1]?.pageNumber ?? 0;
+    if (pdfPaintShouldWaitForLanding(peekPdfFilmCurrent(), lastLaidOut)) return;
     if (pumpRef.current) return;
 
     const dropSessionText = (pagesToDrop: number[]) => {
@@ -911,7 +940,11 @@ export function PdfDocument({
 
     const archiveDropped = (dropped: DroppedSheet[]) => {
       for (const item of dropped) {
-        if (!wantedRef.current.has(item.page)) {
+        const stub = sheetLruRef.current.peekPreview(item.page);
+        const entry = pagesRef.current.find((page) => page.pageNumber === item.page);
+        if (stub && entry) {
+          blitCachedSheet(host, item.page, entry, stub, PDF_PREVIEW_SCALE);
+        } else if (!wantedRef.current.has(item.page)) {
           zeroPageSlots(host, item.page);
           paintedRef.current.delete(item.page);
         }
@@ -950,14 +983,12 @@ export function PdfDocument({
           paintedRef.current.set(n, {
             scale: paintScale,
             release: () => {
-              if (sheetLruRef.current.has(n) && wantedRef.current.has(n)) return;
-              zeroPageSlots(host, n);
+              releasePagePixels(host, n, entry, sheetLruRef.current, wantedRef.current);
             },
           });
           return;
         }
-        const holeRaw = peekPdfIntersectingPages();
-        const hole = holeRaw.length > 0 ? holeRaw : [C];
+        const hole = pdfPaintHole(C, peekPdfIntersectingPages());
         if (!hole.includes(n)) return;
         paintScale = PDF_PREVIEW_SCALE;
       }
@@ -998,7 +1029,7 @@ export function PdfDocument({
             } catch {
               /* already finished */
             }
-            zeroPageSlots(host, n);
+            releasePagePixels(host, n, entry, sheetLruRef.current, wantedRef.current);
           },
         });
         done = true;
@@ -1007,7 +1038,7 @@ export function PdfDocument({
         const sheet = await snapshotSheet(src, pixelScale);
         if (disposedRef.current) return sheet;
         sessionRef.current.delete(n);
-        const dropped = sheetLruRef.current.put(n, sheet, C);
+        const dropped = sheetLruRef.current.put(n, sheet, C, paintScale);
         archiveDropped(dropped);
         return sheet;
       };
@@ -1064,7 +1095,14 @@ export function PdfDocument({
           if (disposedRef.current) return;
           if (restored) {
             sessionRef.current.delete(n);
-            const dropped = sheetLruRef.current.put(n, restored, C);
+            const restoredTarget = pageNeedsDecode(
+              entry.fit,
+              PDF_REST_SCALE,
+              restored.pixelScale,
+            )
+              ? PDF_PREVIEW_SCALE
+              : PDF_REST_SCALE;
+            const dropped = sheetLruRef.current.put(n, restored, C, restoredTarget);
             archiveDropped(dropped);
             if (!pageNeedsDecode(entry.fit, paintScale, restored.pixelScale)) {
               commitSheet(restored);
@@ -1134,7 +1172,7 @@ export function PdfDocument({
       wantedRef.current = outer;
       const rest = sharpPages(last);
       const visibleRaw = peekPdfIntersectingPages();
-      const visible = visibleRaw.length > 0 ? visibleRaw : [C];
+      const visible = pdfPaintHole(C, visibleRaw);
       const fitOf = (n: number) =>
         pagesRef.current.find((page) => page.pageNumber === n)?.fit ?? 0;
       const scaleOf = (n: number) => sheetLruRef.current.scale(n);
@@ -1155,8 +1193,7 @@ export function PdfDocument({
       const head = queue[0];
       if (!head) return;
       const C = peekPdfFilmCurrent();
-      const visibleRaw = peekPdfIntersectingPages();
-      const hole = new Set(visibleRaw.length > 0 ? visibleRaw : [C]);
+      const hole = new Set(pdfPaintHole(C, peekPdfIntersectingPages()));
       if (pdfShouldPreempt(flight, head, C, hole, rest)) {
         try {
           flight.cancel();
@@ -1176,8 +1213,7 @@ export function PdfDocument({
         paintedRef.current.set(n, {
           scale: target,
           release: () => {
-            if (sheetLruRef.current.has(n) && wantedRef.current.has(n)) return;
-            zeroPageSlots(host, n);
+            releasePagePixels(host, n, entry, sheetLruRef.current, wantedRef.current);
           },
         });
       }
@@ -1189,10 +1225,12 @@ export function PdfDocument({
         for (;;) {
           if (disposedRef.current) return;
 
+          const lastLaidOut = pagesRef.current.at(-1)?.pageNumber ?? 0;
+          if (pdfPaintShouldWaitForLanding(peekPdfFilmCurrent(), lastLaidOut)) return;
+
           const { outerList, rest, queue } = currentQueue();
           if (isDocCameraLive()) {
-            const hole = peekPdfIntersectingPages();
-            blitRing(hole.length > 0 ? [...hole] : [peekPdfFilmCurrent()], rest);
+            blitRing(pdfPaintHole(peekPdfFilmCurrent(), peekPdfIntersectingPages()), rest);
           } else {
             blitRing(outerList, rest);
           }

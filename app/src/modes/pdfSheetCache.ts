@@ -1,9 +1,16 @@
 /**
  * Full-sheet decoded pixels keyed by PDF page number.
  *
- * Survives Spread remounts and 2× demote. Scroll reuses these; only the
- * new edge of the outer ring that is missing gets pdf.js. No toBlob.
+ * Two maps: cheap 0.25 stubs and rest-2 lossless. O(1) getRest / getPreview.
+ * Putting rest-2 does not close the stub. Evicting rest-2 keeps the stub so
+ * jump-back is not cream. No toBlob on the hot path.
  */
+
+import {
+  PDF_PREVIEW_SCALE,
+  PDF_REST_SCALE,
+  PDF_SESSION_CAP,
+} from "../perfPreset";
 
 export interface SheetBitmap {
   bitmap: ImageBitmap | HTMLCanvasElement;
@@ -20,83 +27,203 @@ export function setActiveSheetLru(lru: PdfSheetLru | null): void {
   activeLru = lru;
 }
 
-/** Read without touching LRU order — filmstrip thumbs. */
+/** Read without touching LRU order — filmstrip thumbs. Prefers rest-2. */
 export function peekActiveSheet(page: number): SheetBitmap | null {
   return activeLru?.peek(page) ?? null;
 }
 
-export class PdfSheetLru {
-  private readonly order: number[] = [];
-  private readonly sheets = new Map<number, SheetBitmap>();
+export function isRestTarget(targetScale: number): boolean {
+  return targetScale + 1e-9 >= PDF_REST_SCALE;
+}
 
-  constructor(readonly cap: number) {}
+export class PdfSheetLru {
+  private readonly preview = new Map<number, SheetBitmap>();
+  private readonly rest = new Map<number, SheetBitmap>();
+  private readonly previewOrder: number[] = [];
+  private readonly restOrder: number[] = [];
+
+  constructor(
+    readonly restCap: number,
+    readonly previewCap = PDF_SESSION_CAP,
+  ) {}
 
   has(page: number): boolean {
-    return this.sheets.has(page);
+    return this.rest.has(page) || this.preview.has(page);
   }
 
-  get(page: number): SheetBitmap | null {
-    const sheet = this.sheets.get(page);
+  hasRest(page: number): boolean {
+    return this.rest.has(page);
+  }
+
+  hasPreview(page: number): boolean {
+    return this.preview.has(page);
+  }
+
+  /** O(1) lossless. */
+  getRest(page: number): SheetBitmap | null {
+    const sheet = this.rest.get(page);
     if (!sheet) return null;
-    this.touch(page);
+    this.touch(this.restOrder, page);
     return sheet;
   }
 
-  peek(page: number): SheetBitmap | null {
-    return this.sheets.get(page) ?? null;
+  getPreview(page: number): SheetBitmap | null {
+    const sheet = this.preview.get(page);
+    if (!sheet) return null;
+    this.touch(this.previewOrder, page);
+    return sheet;
   }
 
+  /** Rest-2 if present, else 0.25. */
+  get(page: number): SheetBitmap | null {
+    return this.getRest(page) ?? this.getPreview(page);
+  }
+
+  peekRest(page: number): SheetBitmap | null {
+    return this.rest.get(page) ?? null;
+  }
+
+  peekPreview(page: number): SheetBitmap | null {
+    return this.preview.get(page) ?? null;
+  }
+
+  peek(page: number): SheetBitmap | null {
+    return this.peekRest(page) ?? this.peekPreview(page);
+  }
+
+  /** Best pixelScale in RAM — rest-2 wins. */
   scale(page: number): number {
-    return this.sheets.get(page)?.pixelScale ?? 0;
+    return this.peekRest(page)?.pixelScale ?? this.peekPreview(page)?.pixelScale ?? 0;
+  }
+
+  previewScale(page: number): number {
+    return this.peekPreview(page)?.pixelScale ?? 0;
+  }
+
+  restScale(page: number): number {
+    return this.peekRest(page)?.pixelScale ?? 0;
   }
 
   keys(): number[] {
-    return [...this.sheets.keys()];
+    return [...new Set([...this.rest.keys(), ...this.preview.keys()])];
   }
 
   size(): number {
-    return this.sheets.size;
+    return this.keys().length;
   }
 
-  put(page: number, sheet: SheetBitmap, focus = 1): DroppedSheet[] {
-    const prev = this.sheets.get(page);
+  restSize(): number {
+    return this.rest.size;
+  }
+
+  previewSize(): number {
+    return this.preview.size;
+  }
+
+  /**
+   * Store by target: rest-2 does not close an existing 0.25.
+   * Returns rest-2 sheets that fell out of the expensive cap.
+   */
+  put(
+    page: number,
+    sheet: SheetBitmap,
+    focus = 1,
+    targetScale = PDF_PREVIEW_SCALE,
+  ): DroppedSheet[] {
+    if (isRestTarget(targetScale)) return this.putRest(page, sheet, focus);
+    this.putPreview(page, sheet, focus);
+    return [];
+  }
+
+  putPreview(page: number, sheet: SheetBitmap, focus = 1): DroppedSheet[] {
+    const prev = this.preview.get(page);
     if (prev && prev !== sheet) closeSheet(prev);
-    this.sheets.set(page, sheet);
-    this.touch(page);
-    return this.evictFarthest(focus);
+    this.preview.set(page, sheet);
+    this.touch(this.previewOrder, page);
+    return this.evictPreviewFarthest(focus);
   }
 
-  evictFarthest(focus: number): DroppedSheet[] {
-    const dropped: DroppedSheet[] = [];
-    while (this.sheets.size > this.cap && this.order.length > 0) {
-      let far = this.order[0]!;
-      let farDist = Math.abs(far - focus);
-      for (const n of this.order) {
-        const dist = Math.abs(n - focus);
-        if (dist > farDist) {
-          far = n;
-          farDist = dist;
-        }
+  putRest(page: number, sheet: SheetBitmap, focus = 1): DroppedSheet[] {
+    const prev = this.rest.get(page);
+    if (prev && prev !== sheet) closeSheet(prev);
+    this.rest.set(page, sheet);
+    this.touch(this.restOrder, page);
+    if (!this.preview.has(page)) {
+      const stub = previewStubFromSheet(sheet);
+      if (stub) {
+        this.preview.set(page, stub);
+        this.touch(this.previewOrder, page);
       }
-      this.order.splice(this.order.indexOf(far), 1);
-      const gone = this.sheets.get(far);
-      this.sheets.delete(far);
-      if (gone) dropped.push({ page: far, sheet: gone });
     }
+    const dropped = this.evictRestFarthest(focus);
+    this.evictPreviewFarthest(focus);
     return dropped;
   }
 
-  clear(): void {
-    for (const sheet of this.sheets.values()) closeSheet(sheet);
-    this.sheets.clear();
-    this.order.length = 0;
+  evictFarthest(focus: number): DroppedSheet[] {
+    const dropped = this.evictRestFarthest(focus);
+    this.evictPreviewFarthest(focus);
+    return dropped;
   }
 
-  private touch(page: number): void {
-    const at = this.order.indexOf(page);
-    if (at >= 0) this.order.splice(at, 1);
-    this.order.push(page);
+  evictRestFarthest(focus: number): DroppedSheet[] {
+    return evictFarthestMap(this.rest, this.restOrder, this.restCap, focus);
   }
+
+  evictPreviewFarthest(focus: number): DroppedSheet[] {
+    const dropped = evictFarthestMap(
+      this.preview,
+      this.previewOrder,
+      this.previewCap,
+      focus,
+      (page) => this.rest.has(page),
+    );
+    for (const item of dropped) closeSheet(item.sheet);
+    return [];
+  }
+
+  clear(): void {
+    for (const sheet of this.preview.values()) closeSheet(sheet);
+    for (const sheet of this.rest.values()) closeSheet(sheet);
+    this.preview.clear();
+    this.rest.clear();
+    this.previewOrder.length = 0;
+    this.restOrder.length = 0;
+  }
+
+  private touch(order: number[], page: number): void {
+    const at = order.indexOf(page);
+    if (at >= 0) order.splice(at, 1);
+    order.push(page);
+  }
+}
+
+function evictFarthestMap(
+  sheets: Map<number, SheetBitmap>,
+  order: number[],
+  cap: number,
+  focus: number,
+  skip?: (page: number) => boolean,
+): DroppedSheet[] {
+  const dropped: DroppedSheet[] = [];
+  while (sheets.size > cap && order.length > 0) {
+    let far: number | null = null;
+    let farDist = -1;
+    for (const n of order) {
+      if (skip?.(n)) continue;
+      const dist = Math.abs(n - focus);
+      if (dist > farDist) {
+        far = n;
+        farDist = dist;
+      }
+    }
+    if (far == null) break;
+    order.splice(order.indexOf(far), 1);
+    const gone = sheets.get(far);
+    sheets.delete(far);
+    if (gone) dropped.push({ page: far, sheet: gone });
+  }
+  return dropped;
 }
 
 export function sheetMeetsScale(sheet: SheetBitmap | null, needed: number): boolean {
@@ -130,6 +257,36 @@ export function destSheetSize(
     width: Math.max(1, Math.round(sheet.width * ratio)),
     height: Math.max(1, Math.round(sheet.height * ratio)),
   };
+}
+
+/**
+ * Cheap 0.25 copy from a rest-2 sheet so evicting lossless still has a stub.
+ * Returns null when the bitmap is not drawable (tests).
+ */
+export function previewStubFromSheet(
+  sheet: SheetBitmap,
+  restScale = PDF_REST_SCALE,
+  previewScale = PDF_PREVIEW_SCALE,
+): SheetBitmap | null {
+  const fit = sheet.pixelScale / Math.max(restScale, 1e-9);
+  if (!(fit > 0) || typeof document === "undefined") return null;
+  const dest = destSheetSize(sheet, fit, previewScale);
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = dest.width;
+    canvas.height = dest.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(sheet.bitmap, 0, 0, dest.width, dest.height);
+    return {
+      bitmap: canvas,
+      width: dest.width,
+      height: dest.height,
+      pixelScale: fit * previewScale,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

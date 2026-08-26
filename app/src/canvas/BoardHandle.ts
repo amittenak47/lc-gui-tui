@@ -227,7 +227,7 @@ export interface BoardHandle {
    * Jump the camera so a 1-based PDF page sits under the chrome.
    * No-op when that page is not in the document slot.
    */
-  scrollToPdfPage(pageId: number): void;
+  scrollToPdfPage(pageId: number): boolean;
   /**
    * Remember which PDF page to paint/restore before the stack exists.
    * Camera jumps once that page's div is laid out. Prevents decoding page 1

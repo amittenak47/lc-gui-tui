@@ -18,6 +18,47 @@ export function annotateHeightIsSettled(
 /** How long one height value must hold before the page is treated as laid out. */
 export const ANNOTATE_LAYOUT_SETTLE_MS = 250;
 
+const PDF_PAGE_POLL_MS = 50;
+
+/**
+ * Wait until the session PDF page exists in the stack.
+ *
+ * Height-only settle fires during the first layout batch's pause, while the
+ * camera is still at page 1. Jumping after reveal is the "paints 1 then
+ * jumps" open. This waits for `[data-pdf-page=N]` so restoreView can land
+ * before the overlay lifts.
+ */
+export function waitForPdfPageNode(
+  page: number,
+  timeoutMs = 25000,
+  failed?: () => string | null,
+): Promise<boolean> {
+  const want = Math.floor(Number(page));
+  if (!(want >= 1)) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const deadline = performance.now() + timeoutMs;
+    const tick = () => {
+      if (failed?.()) {
+        resolve(false);
+        return;
+      }
+      if (typeof document !== "undefined") {
+        const node = document.querySelector(`.lc-pdf-page[data-pdf-page="${want}"]`);
+        if (node) {
+          resolve(true);
+          return;
+        }
+      }
+      if (performance.now() >= deadline) {
+        resolve(false);
+        return;
+      }
+      globalThis.setTimeout(tick, PDF_PAGE_POLL_MS);
+    };
+    tick();
+  });
+}
+
 /**
  * Wait until AnnotateDocument (or the PDF / EPUB / web reader) has reported a
  * stable height. Used under the loading overlay so reveal runs on a finished page.

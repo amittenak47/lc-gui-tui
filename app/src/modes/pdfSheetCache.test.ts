@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { destSheetSize, PdfSheetLru, sheetMeetsScale } from "./pdfSheetCache";
+import { PDF_PREVIEW_SCALE, PDF_REST_SCALE } from "../perfPreset";
+import {
+  destSheetSize,
+  PdfSheetLru,
+  sheetMeetsScale,
+} from "./pdfSheetCache";
 import { pageNeedsDecode } from "./pdfPaintWindow";
 
 function fakeSheet(pixelScale: number, width = 100, height = 200) {
@@ -13,22 +18,50 @@ function fakeSheet(pixelScale: number, width = 100, height = 200) {
 }
 
 describe("PdfSheetLru", () => {
-  it("evicts the page farthest from live C, not the oldest", () => {
+  it("evicts the rest-2 page farthest from live C, not the oldest", () => {
     const lru = new PdfSheetLru(3);
-    lru.put(10, fakeSheet(1), 10);
-    lru.put(11, fakeSheet(1), 11);
-    lru.put(12, fakeSheet(1), 12);
-    const dropped = lru.put(13, fakeSheet(1), 13);
+    lru.put(10, fakeSheet(2), 10, PDF_REST_SCALE);
+    lru.put(11, fakeSheet(2), 11, PDF_REST_SCALE);
+    lru.put(12, fakeSheet(2), 12, PDF_REST_SCALE);
+    const dropped = lru.put(13, fakeSheet(2), 13, PDF_REST_SCALE);
     expect(dropped.map((item) => item.page)).toEqual([10]);
-    expect(lru.has(10)).toBe(false);
-    expect(lru.has(13)).toBe(true);
+    expect(lru.hasRest(10)).toBe(false);
+    expect(lru.hasRest(13)).toBe(true);
   });
 
   it("keeps a 2x sheet that still covers 1x after C moves", () => {
     const lru = new PdfSheetLru(25);
-    lru.put(5, fakeSheet(2), 5);
+    lru.put(5, fakeSheet(2), 5, PDF_REST_SCALE);
     expect(sheetMeetsScale(lru.get(5), 1)).toBe(true);
     expect(pageNeedsDecode(1, 1, 2)).toBe(false);
+  });
+
+  it("put rest-2 does not close an existing 0.25 stub", () => {
+    const lru = new PdfSheetLru(8);
+    const preview = fakeSheet(0.25, 25, 50);
+    lru.put(7, preview, 7, PDF_PREVIEW_SCALE);
+    lru.put(7, fakeSheet(2, 200, 400), 7, PDF_REST_SCALE);
+    expect(lru.getPreview(7)).toBe(preview);
+    expect(lru.getRest(7)?.pixelScale).toBe(2);
+    expect(lru.scale(7)).toBe(2);
+  });
+
+  it("evicting rest-2 keeps the 0.25 so jump-back is not cream", () => {
+    const lru = new PdfSheetLru(1);
+    const preview = fakeSheet(0.25, 25, 50);
+    lru.put(1, preview, 1, PDF_PREVIEW_SCALE);
+    lru.put(1, fakeSheet(2), 1, PDF_REST_SCALE);
+    const dropped = lru.put(9, fakeSheet(2), 9, PDF_REST_SCALE);
+    expect(dropped.map((item) => item.page)).toEqual([1]);
+    expect(lru.hasRest(1)).toBe(false);
+    expect(lru.getPreview(1)).toBe(preview);
+  });
+
+  it("getRest is O(1) and does not need the preview map", () => {
+    const lru = new PdfSheetLru(4);
+    lru.put(3, fakeSheet(2), 3, PDF_REST_SCALE);
+    expect(lru.getRest(3)?.pixelScale).toBe(2);
+    expect(lru.getRest(4)).toBeNull();
   });
 });
 

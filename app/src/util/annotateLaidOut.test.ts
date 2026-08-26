@@ -1,6 +1,11 @@
+/** @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { annotateHeightIsSettled, waitForAnnotateLaidOut } from "./annotateLaidOut";
+import {
+  annotateHeightIsSettled,
+  waitForAnnotateLaidOut,
+  waitForPdfPageNode,
+} from "./annotateLaidOut";
 
 describe("annotateHeightIsSettled", () => {
   it("treats null and negatives as silence", () => {
@@ -67,5 +72,29 @@ describe("waitForAnnotateLaidOut", () => {
       height = 8000;
     }, 160);
     expect(await pending).toBe(true);
+  });
+});
+
+describe("waitForPdfPageNode", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  it("resolves once the session page div exists", async () => {
+    const pending = waitForPdfPageNode(47, 400);
+    const node = document.createElement("div");
+    node.className = "lc-pdf-page";
+    node.dataset.pdfPage = "47";
+    document.body.append(node);
+    expect(await pending).toBe(true);
+  });
+
+  it("does not treat page 1 as the session page", async () => {
+    const first = document.createElement("div");
+    first.className = "lc-pdf-page";
+    first.dataset.pdfPage = "1";
+    document.body.append(first);
+    expect(await waitForPdfPageNode(47, 80)).toBe(false);
   });
 });
