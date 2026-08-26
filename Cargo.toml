@@ -46,6 +46,7 @@ base64 = "0.22"
 # `cargo install --path .` works without --locked.
 malachite-bigint = { version = "=0.9.2", optional = true }
 rustpython = { version = "0.5.0", optional = true, default-features = false, features = ["stdlib", "freeze-stdlib", "importlib", "stdio", "host_env", "threading"] }
+pdf-extract = "0.12.0"
 
 [profile.release]
 lto = true

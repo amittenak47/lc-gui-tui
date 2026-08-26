@@ -198,6 +198,22 @@ async function hubFetch(
   return { json, bytes };
 }
 
+/** Hub-only JSON round trip for the doc routes; throws on any non-2xx. */
+async function hubJson<T>(
+  hub: PadHub,
+  method: string,
+  path: string,
+  json?: unknown,
+): Promise<T> {
+  const { json: body } = await hubFetch(
+    hub,
+    method,
+    path,
+    json !== undefined ? { json } : undefined,
+  );
+  return body as T;
+}
+
 function parseChunkBundle(hash: string, raw: unknown): DocChunkBundle {
   const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const chunks = Array.isArray(row.chunks)
@@ -821,10 +837,16 @@ export class LcClient {
   }
 
   async getDocIndex(hash: string): Promise<DocIndexStatus> {
+    // With a hub, "is this indexed" is a hub question: the tablet no longer
+    // fills its own index, so its local db would answer about the past.
+    const hub = loadPadHub();
+    if (hub) {
+      return hubJson<DocIndexStatus>(hub, "GET", `/docs/${encodeURIComponent(hash)}/index`);
+    }
     return this.cmd("lc_docs_get_index", { hash });
   }
 
-  /**
+    /**
    * Run one budget of the embedding pass.
    *
    * Deliberately not a call that runs to completion: a book is minutes of work,
@@ -832,7 +854,32 @@ export class LcClient {
    * middle of one. Call until `done === total`, and stop on a `reason`.
    */
   async embedDoc(hash: string): Promise<DocEmbedProgress> {
+    // Same reasoning as getDocIndex: embedding budgets run on whichever side
+    // owns docs.db.
+    const hub = loadPadHub();
+    if (hub) {
+      return hubJson<DocEmbedProgress>(hub, "POST", `/docs/${encodeURIComponent(hash)}/embed`);
+    }
     return this.cmd("lc_docs_embed", { hash });
+  }
+
+  /**
+   * Ask the hub to index a document from the bytes it already holds.
+   *
+   * Hub-only by design — locally there is nothing this could do that
+   * `putDocIndex` does not. Markdown and code carry their source text in the
+   * body; PDF is extracted hub-side from the stored blob. A 204 answer means
+   * "already indexed, unchanged", which reads as indexed.
+   */
+  async indexFromBytes(
+    hash: string,
+    body: { name: string; doc_type: string; source_text?: string },
+  ): Promise<{ indexed: boolean }> {
+    const result = await hubJson<
+      { status?: { indexed?: boolean } } | null
+    >(loadPadHub()!, "POST", `/docs/${encodeURIComponent(hash)}/index-from-bytes`, body);
+    if (!result) return { indexed: true };
+    return { indexed: result.status?.indexed === true };
   }
 
   /**
@@ -852,6 +899,20 @@ export class LcClient {
     },
     opts?: { force?: boolean },
   ): Promise<{ indexed: boolean; wrote: boolean }> {
+    // With a hub, extracted pages belong in the hub's docs.db — the tablet
+    // only produces them (this path now serves the one doc kind the hub
+    // cannot read from bytes: epub, whose parsing is plain zip + HTML).
+    const hub = loadPadHub();
+    if (hub) {
+      const forceQuery = opts?.force ? "?force=true" : "";
+      await hubJson<unknown>(
+        hub,
+        "PUT",
+        `/docs/${encodeURIComponent(hash)}/index${forceQuery}`,
+        body,
+      );
+      return { indexed: true, wrote: true };
+    }
     const result = await this.cmd<{
       hash?: string;
       indexed?: boolean;
@@ -877,10 +938,27 @@ export class LcClient {
     k = 4,
   ): Promise<Array<{ page: number; heading?: string; text: string; score: number }>> {
     try {
-      const body = await this.cmd<{
-        chunks?: Array<{ page?: number; heading?: string | null; text?: string; score?: number }>;
-      } | null>("lc_docs_retrieve", { hash, query, k });
-      return (body?.chunks ?? []).flatMap((chunk) =>
+      // Ask owns the hub's docs.db when one is set — same split as getDocIndex.
+      const hub = loadPadHub();
+      const chunks = hub
+        ? (
+            await hubJson<{ chunks?: Array<{ page?: number; heading?: string | null; text?: string; score?: number }> }>(
+              hub,
+              "POST",
+              `/docs/${encodeURIComponent(hash)}/retrieve?q=${encodeURIComponent(query)}&k=${k}`,
+            )
+          ).chunks ?? []
+        : (
+            (await this.cmd<{
+              chunks?: Array<{
+                page?: number;
+                heading?: string | null;
+                text?: string;
+                score?: number;
+              }>;
+            } | null>("lc_docs_retrieve", { hash, query, k }))?.chunks ?? []
+          );
+      return chunks.flatMap((chunk) =>
         typeof chunk?.text === "string" && chunk.text.trim()
           ? [
               {

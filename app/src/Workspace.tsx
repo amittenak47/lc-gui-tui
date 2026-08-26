@@ -23,7 +23,7 @@ import { liveWebviewSupported } from "./util/liveWebviewSupport";
 import { etaLabel, etaMs, newEta, recordBatch } from "./util/embedEta";
 import type { DocWorkProgress } from "./components/DocIndexChip";
 import { fetchDocHubHint, type DocHubHint } from "./util/hubHint";
-import {
+import type { HubSyncWalkHost } from "./components/HubSyncControl";import {
   loadWebRenderMode,
   otherWebRenderMode,
   saveWebRenderMode,
@@ -288,7 +288,6 @@ import {
   PAD_HUB_WINDOW_EVENT,
   PAD_SYNC_PING_MS,
   pushAnnotatePad,
-  pushDocBytes,
   pushRolledSnapshots,
   pushProblemPad,
   pushWhiteboardPad,
@@ -825,6 +824,37 @@ export function Workspace({
       })
     | null
   >(null);
+  /*
+   * What the Sync pill needs to reach the open document and the chip. Held in
+   * a ref so the pill sees the latest doc without re-mounting on every state
+   * change; the setters are React-stable already.
+   */
+  const hubSyncHostRef = useRef<HubSyncWalkHost | null>(null);
+  if (!hubSyncHostRef.current) {
+    hubSyncHostRef.current = {
+      doc: () => {
+        const job = indexInputsRef.current;
+        if (!job) return null;
+        return {
+          hash: job.hash,
+          name: job.name,
+          docType: job.docType,
+          text: job.text,
+          bytes: job.bytes,
+        };
+      },
+      onIndexProgress: (progress) => setDocIndexProgress(progress),
+      onIndexError: (message) => {
+        if (message) {
+          setDocIndexStatus("error");
+          setDocIndexError(message);
+        } else {
+          setDocIndexStatus("idle");
+          setDocIndexError(null);
+        }
+      },
+    };
+  }
   const [chunkSyncIssue, setChunkSyncIssue] = useState<string | null>(null);
   /*
    * Two jobs, two units, two bars.
@@ -2915,12 +2945,10 @@ export function Workspace({
          * IndexedDB — has to stop the open rather than land the reader on a
          * blank page with ink floating over nothing.
          */
-        let hubBytes: { hash: string; bytes: ArrayBuffer } | null = null;
         if (bytes) {
           traceOpen("saving bytes", { hash, bytes: bytes.byteLength, ms: openMs() });
           await putDocBytesVerified(hash, bytes);
           traceOpen("bytes saved", { hash, ms: openMs() });
-          hubBytes = { hash, bytes };
         } else {
           traceOpen("no bytes to save", { hash, docType, ms: openMs() });
         }
@@ -3372,9 +3400,11 @@ export function Workspace({
         relandPdf();
         scheduleIdlePadSyncPing(client, { emit: false });
 
-        if (hubBytes) {
-          void pushDocBytes(client, hubBytes.hash, hubBytes.bytes);
-        }
+        /*
+         * Bytes used to be pushed to the hub here, right after open. The
+         * Sync walk owns that upload now (stage B): opening stays purely
+         * local, and the hub gets the bytes when the reader decides to sync.
+         */
 
         if (stale) {
           setNotice(
@@ -8491,7 +8521,10 @@ export function Workspace({
       {/* The one-tap hub Sync pill lives beside the board's map controls in
           the chrome slot; only the focused workspace mounts its own. */}
       {active && headerSlots.boardChrome ? (
-        createPortal(<HubSyncControl hubHint={hubHint} />, headerSlots.boardChrome)
+        createPortal(
+          <HubSyncControl hubHint={hubHint} client={client} host={hubSyncHostRef.current} />,
+          headerSlots.boardChrome,
+        )
       ) : null}
         <div
           className={[

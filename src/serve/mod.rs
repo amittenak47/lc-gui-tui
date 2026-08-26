@@ -149,6 +149,7 @@ pub fn router(state: Shared) -> Router {
             "/docs/:hash/index",
             get(routes::get_docs_index).put(routes::put_docs_index),
         )
+        .route("/docs/:hash/index-from-bytes", post(routes::index_from_bytes_docs))
         .route("/docs/:hash/embed", post(routes::embed_docs))
         .route("/docs/:hash/retrieve", post(routes::retrieve_docs))
         .route(
