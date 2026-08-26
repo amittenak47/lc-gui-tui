@@ -22,6 +22,7 @@ import { isTauriRuntime } from "./api/nativeHttp";
 import { liveWebviewSupported } from "./util/liveWebviewSupport";
 import { etaLabel, etaMs, newEta, recordBatch } from "./util/embedEta";
 import type { DocWorkProgress } from "./components/DocIndexChip";
+import { fetchDocHubHint, type DocHubHint } from "./util/hubHint";
 import {
   loadWebRenderMode,
   otherWebRenderMode,
@@ -297,6 +298,7 @@ import {
   type PadHubWindowDetail,
 } from "./util/padSync";
 import { isCameraBusy } from "./util/cameraBusy";
+import { loadPadHub } from "./util/padHub";
 import { getParkedDocSource, parkDocSource } from "./util/parkedDocSource";
 import { MAX_SOURCE_CHARS } from "./util/tabPersist";
 import { ensureDevicePrefs } from "./util/devicePrefs";
@@ -810,6 +812,19 @@ export function Workspace({
   >("idle");
   const [docIndexError, setDocIndexError] = useState<string | null>(null);
   const [docIndexMeta, setDocIndexMeta] = useState<DocIndexStatus | null>(null);
+  /**
+   * What the hub already had when this document was opened — read-only, so
+   * it can only relabel the Sync pill, never apply or reload anything. Null
+   * until the probes answer or when there is no hub; the walk re-asks at
+   * tap time, where staleness costs nothing.
+   */
+  const [hubHint, setHubHint] = useState<
+    | (DocHubHint & {
+        /** Hub row is not older than what this device had at open. */
+        padUpToDate?: boolean;
+      })
+    | null
+  >(null);
   const [chunkSyncIssue, setChunkSyncIssue] = useState<string | null>(null);
   /*
    * Two jobs, two units, two bars.
@@ -2806,6 +2821,7 @@ export function Workspace({
       setDocIndexStatus("idle");
       setDocIndexError(null);
       setDocIndexMeta(null);
+      setHubHint(null);
       setTests(null);
       setNudges([]);
       setAgentMessages([]);
@@ -3386,23 +3402,36 @@ export function Workspace({
           delayMs: docType === "pdf" ? 1200 : 0,
         };
         /*
-         * A document you *opened* is one you meant to keep, so it indexes
-         * itself. Two kinds are not that, and both index on request instead.
-         *
-         * A page is a glance. Browsing is a trail of things looked at and left,
-         * and indexing all of it fills the room with the search results you
-         * clicked through on the way to what you wanted.
-         *
-         * A note you own is a draft. There is no moment while it is being
-         * written when it is worth indexing: at the moment it is created it
-         * says `# Untitled` and nothing else, and every autosave after that
-         * used to write a *new* index under a new hash — the old ones are
-         * hash-keyed and never collected, so a minute of typing left a dozen
-         * copies of a half-finished sentence in the room's index forever.
+         * The chip stays idle. Opening used to index here — this device's
+         * pdf.js extract, chunk, embed, straight into the local index — which
+         * fought the paint worker for the same page and made "I opened a file"
+         * mean "I started a background job". Indexing is now the hub's job,
+         * asked for by a Sync tap; the chip wakes only when that walk reports
+         * progress.
          */
-        const drafting = docType === "web" || (existing?.owned === true && docType === "markdown");
-        if (drafting) setDocIndexStatus("idle");
-        else indexOpenDocument();
+        setDocIndexStatus("idle");
+        /*
+         * After first paint, ask the hub what it already has — read-only GETs,
+         * errors ignored. This is a hint for the Sync label only: nothing here
+         * applies hub rows or reloads the board, and the walk re-runs every
+         * question at tap time, where this answer being stale is free.
+         */
+        if (loadPadHub() && hash && docType !== "web") {
+          const hintGen = loadGen;
+          void fetchDocHubHint({ hash, padId: sessionDocId })
+            .then((hint) => {
+              if (workspaceLoadGenRef.current !== hintGen) return;
+              // Compare against what this device had when it opened, not
+              // against now: ink laid down since then belongs to the tap-time
+              // diff, not to the hint.
+              const localAtOpen = existing?.updatedAt ?? Number.NEGATIVE_INFINITY;
+              setHubHint({
+                ...hint,
+                padUpToDate: hint.padUpdatedAt == null ? false : hint.padUpdatedAt >= localAtOpen,
+              });
+            })
+            .catch(() => {});
+        }
       } catch (cause) {
         if (workspaceLoadGenRef.current !== loadGen) return;
         // Declining to open something is an answer, not an error — so the
@@ -8462,7 +8491,7 @@ export function Workspace({
       {/* The one-tap hub Sync pill lives beside the board's map controls in
           the chrome slot; only the focused workspace mounts its own. */}
       {active && headerSlots.boardChrome ? (
-        createPortal(<HubSyncControl />, headerSlots.boardChrome)
+        createPortal(<HubSyncControl hubHint={hubHint} />, headerSlots.boardChrome)
       ) : null}
         <div
           className={[
