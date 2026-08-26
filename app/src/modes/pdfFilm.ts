@@ -296,8 +296,13 @@ export function resetPdfViewPages(): void {
   for (const listener of viewPageListeners) listener();
 }
 
-export function grabLivePdfThumb(page: number, maxWidth: number): string | null {
-  const slot = document.querySelector<HTMLElement>(
+export function grabLivePdfThumb(
+  page: number,
+  maxWidth: number,
+  root: ParentNode | Document | null = typeof document !== "undefined" ? document : null,
+): string | null {
+  if (!root) return null;
+  const slot = root.querySelector<HTMLElement>(
     `.lc-pdf-page[data-pdf-page="${page}"][data-painted]`,
   );
   const canvas = slot?.querySelector("canvas");

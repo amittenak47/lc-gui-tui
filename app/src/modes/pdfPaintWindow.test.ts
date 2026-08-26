@@ -23,7 +23,7 @@ describe("pdfRestPages", () => {
 });
 
 describe("pdfDecodeQueue", () => {
-  it("is 0.25 from C outward, then rest 2 from C — not rest-2 before neighbours", () => {
+  it("is C stub then C rest-2, then neighbours — not the whole 0.25 ring first", () => {
     const C = 50;
     const last = 200;
     const rest = new Set(pdfRestPages(C, last, [50]));
@@ -31,21 +31,29 @@ describe("pdfDecodeQueue", () => {
     const scaleOf = (n: number) => (n === 50 ? 0.25 : 0);
     const fitOf = () => 1;
     const queue = pdfDecodeQueue(C, last, rest, outer, [50], scaleOf, fitOf);
-    const firstRest = queue.find((item) => item.target === PDF_REST_SCALE);
-    const firstBlank = queue.find((item) => item.target === PDF_PREVIEW_SCALE);
-    expect(firstBlank?.page).toBe(49);
-    expect(firstRest).toEqual({ page: 50, target: PDF_REST_SCALE });
-    const restAt = queue.findIndex((item) => item.target === PDF_REST_SCALE);
-    const lastPreview = queue.reduce(
-      (at, item, i) => (item.target === PDF_PREVIEW_SCALE ? i : at),
-      -1,
+    expect(queue[0]).toEqual({ page: 50, target: PDF_REST_SCALE });
+    expect(queue[1]).toEqual({ page: 49, target: PDF_PREVIEW_SCALE });
+    expect(queue.find((item) => item.page === 49 && item.target === PDF_REST_SCALE)).toEqual({
+      page: 49,
+      target: PDF_REST_SCALE,
+    });
+    const rest50 = queue.findIndex(
+      (item) => item.page === 50 && item.target === PDF_REST_SCALE,
     );
-    expect(lastPreview).toBeGreaterThanOrEqual(0);
-    expect(restAt).toBeGreaterThan(lastPreview);
-    expect(queue.some((item) => item.page === 52 && item.target === PDF_PREVIEW_SCALE)).toBe(
-      true,
+    const preview52 = queue.findIndex(
+      (item) => item.page === 52 && item.target === PDF_PREVIEW_SCALE,
     );
+    expect(rest50).toBe(0);
+    expect(preview52).toBeGreaterThan(rest50);
     expect(queue.some((item) => item.page === 55)).toBe(false);
+  });
+
+  it("does not rest-2 a cream C before its 0.25", () => {
+    const rest = new Set(pdfRestPages(50, 200, [50]));
+    const outer = new Set(pdfOuterPages(50, 200));
+    const queue = pdfDecodeQueue(50, 200, rest, outer, [50], () => 0, () => 1);
+    expect(queue[0]).toEqual({ page: 50, target: PDF_PREVIEW_SCALE });
+    expect(queue[1]).toEqual({ page: 50, target: PDF_REST_SCALE });
   });
 
   it("skips pdf.js when RAM already meets the target", () => {
@@ -54,6 +62,33 @@ describe("pdfDecodeQueue", () => {
     const scaleOf = (n: number) => (rest.has(n) ? 2 : 0.25);
     const queue = pdfDecodeQueue(50, 200, rest, outer, [50], scaleOf, () => 1);
     expect(queue.some((item) => item.page === 50)).toBe(false);
+  });
+
+  it("still queues rest-2 when layout fit is below 1 (spread off)", () => {
+    const rest = new Set(pdfRestPages(50, 200, [50]));
+    const outer = new Set(pdfOuterPages(50, 200));
+    const scaleOf = (n: number) => (n === 50 ? PDF_PREVIEW_SCALE : 0);
+    const queue = pdfDecodeQueue(50, 200, rest, outer, [50], scaleOf, () => 0.5);
+    expect(
+      queue.some(
+        (item) => item.page === 50 && item.target === PDF_PREVIEW_SCALE,
+      ),
+    ).toBe(false);
+    expect(queue.find((item) => item.page === 50 && item.target === PDF_REST_SCALE)).toEqual({
+      page: 50,
+      target: PDF_REST_SCALE,
+    });
+  });
+
+  it("keeps repeating 0.25 at the head when scaleOf is fit×0.25", () => {
+    const fit = 0.5;
+    const rest = new Set(pdfRestPages(50, 200, [50]));
+    const outer = new Set(pdfOuterPages(50, 200));
+    const scaleOf = (n: number) => (n === 50 ? fit * PDF_PREVIEW_SCALE : 0);
+    const queue = pdfDecodeQueue(50, 200, rest, outer, [50], scaleOf, () => fit);
+    expect(queue[0]).toEqual({ page: 50, target: PDF_PREVIEW_SCALE });
+    const restAt = queue.findIndex((item) => item.target === PDF_REST_SCALE);
+    expect(restAt).toBeGreaterThan(0);
   });
 
   it("preempts a neighbor 0.25 when the hole is blank, and upgrades C to rest 2", () => {
@@ -85,7 +120,7 @@ describe("pdfDecodeQueue", () => {
         hole,
         rest,
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

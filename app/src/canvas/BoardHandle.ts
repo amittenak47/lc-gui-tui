@@ -12,6 +12,7 @@ import type { RegionId } from "../templates/regions";
 import type { Skeleton } from "../templates/skeleton";
 import type { InkStroke, SceneElementLike } from "./capture";
 import type { EncodedInk } from "./inkCodec";
+import type { PageFrame } from "./inkPageIndex";
 import type { InkOp } from "./rasterInk";
 
 export interface BoardBlob {
@@ -234,6 +235,11 @@ export interface BoardHandle {
    * on reopen.
    */
   aimPdfPage(pageId: number): void;
+  /**
+   * Move ink from one-up sheet space onto stacked two-up slots (or back).
+   * Call after PdfDocument has published the new reading frames.
+   */
+  remapPdfInkAcrossPdfLayout(fromFrames: readonly PageFrame[]): void;
   /**
    * Reopen camera: PDF jumps to the saved page at today's fit zoom;
    * single-page docs restore scroll/zoom as written.

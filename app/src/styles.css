@@ -1664,6 +1664,10 @@ input[type="checkbox"] {
  * the board, its ink layer and any pdf.js workers stay up, so coming back is
  * showing it again instead of reading it out of the store. It also takes no
  * flex space, which is what stops two mounted workspaces splitting the width.
+ *
+ * Must win over `.lc-has-pdf-film { display: flex }`. Same specificity, and
+ * the film class used to come later — toggling previews with two tabs open
+ * un-hid the parked book and looked like a split.
  */
 .lc-canvas-wrap.lc-canvas-parked {
   display: none;
@@ -2355,7 +2359,7 @@ body[data-lc-sash-drag="horizontal"] {
   flex: none;
 }
 
-.lc-canvas-wrap.lc-has-pdf-film {
+.lc-canvas-wrap.lc-has-pdf-film:not(.lc-canvas-parked) {
   --lc-pdf-film: 96px;
   display: flex;
   flex-direction: column;

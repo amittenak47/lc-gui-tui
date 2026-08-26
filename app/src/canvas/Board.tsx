@@ -163,6 +163,7 @@ import {
   resetPdfViewPages,
 } from "../modes/pdfFilm";
 import { pdfLandingHoldClear, pdfPreloadPages, pdfRestPages } from "../modes/pdfPaintWindow";
+import { remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
 import { eraserScreenRadius } from "./rasterInk";
 import { linedSlotCanSkip } from "./linedSlot";
 import { SPLIT_RESIZE_EVENT, splitResizePhase } from "../util/splitResize";
@@ -1219,6 +1220,11 @@ export interface BoardProps {
    */
   pageFilm?: { open: boolean; onToggle: () => void } | null;
   /**
+   * Write the shared film / hole pointers. Parked books must not; two tabs
+   * used to clobber each other's current page.
+   */
+  pdfFilmPublish?: boolean;
+  /**
    * Two-up / spread: each scanned sheet becomes two stacked reading slots.
    * Shown for any PDF, including one page. Off by default.
    */
@@ -1308,6 +1314,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     sheetDragLocked = false,
     onToggleSheetLock,
     pageFilm = null,
+    pdfFilmPublish = true,
     pageSpread = null,
   },
   ref,
@@ -1814,6 +1821,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const publishPdfFilmFromScrollRef = useRef<
     (scrollX: number, scrollY: number, zoom: number, height: number) => void
   >(() => {});
+  const pdfFilmPublishRef = useRef(pdfFilmPublish);
+  pdfFilmPublishRef.current = pdfFilmPublish;
   const pdfPanLogRef = useRef({ n: 0, t: 0 });
   const scheduleVisualScrollRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
   const flushVisualScrollRef = useRef<() => void>(() => {});
@@ -2889,6 +2898,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   publishPdfFilmFromScrollRef.current = (scrollX, scrollY, zoom, height) => {
+    if (!pdfFilmPublishRef.current) return;
     const local = peekPdfReadingFrames();
     const pending = pendingPdfPageRef.current;
     if (pending >= 1) {
@@ -7966,6 +7976,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         userAdjustedCameraRef.current = true;
         pendingPdfPageRef.current = pageId;
         publishPdfFilmCurrent(pageId);
+      },
+      remapPdfInkAcrossPdfLayout: (fromFrames) => {
+        const ink = rasterInkRef.current;
+        const bounds = pageBoundsRef.current;
+        const toLocal = peekPdfReadingFrames();
+        if (!ink || !bounds || fromFrames.length === 0 || toLocal.length === 0) return;
+        const width = bounds.maxX - bounds.minX;
+        if (!(width > 0)) return;
+        const ops = ink.getOps();
+        if (ops.length === 0) return;
+        const origin = bounds.minY;
+        const next = remapInkBetweenPdfLayouts(
+          ops,
+          offsetPageFrames(fromFrames, origin),
+          offsetPageFrames(toLocal, origin),
+          bounds.minX,
+          width,
+        );
+        ink.setOps(next);
       },
       restoreView: (saved) => {
         const api = apiRef.current;

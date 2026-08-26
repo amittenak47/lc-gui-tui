@@ -96,6 +96,17 @@ export class PdfSheetLru {
     return this.peekRest(page)?.pixelScale ?? this.peekPreview(page)?.pixelScale ?? 0;
   }
 
+  /**
+   * Decode LOD for the paint queue: which map holds the sheet, not
+   * `fit × scale`. Spread-off Kleinberg has fit < 1, so a 0.25 stub is
+   * stored as ~0.1px and `scale()` never reaches 0.25 — rest-2 never starts.
+   */
+  lod(page: number): number {
+    if (this.rest.has(page)) return PDF_REST_SCALE;
+    if (this.preview.has(page)) return PDF_PREVIEW_SCALE;
+    return 0;
+  }
+
   previewScale(page: number): number {
     return this.peekPreview(page)?.pixelScale ?? 0;
   }

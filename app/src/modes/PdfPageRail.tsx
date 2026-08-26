@@ -136,7 +136,12 @@ export function PdfPageRail({
           continue;
         }
         if (isFocus && inflightRef.current.has(page)) continue;
-        const live = grabLivePdfThumb(page, px) ?? grabLruPdfThumb(page, px);
+        const live =
+          grabLivePdfThumb(
+            page,
+            px,
+            stripRef.current?.closest(".lc-canvas-wrap"),
+          ) ?? grabLruPdfThumb(page, px);
         if (live) {
           setThumbs((prev) => {
             const next = new Map(prev);

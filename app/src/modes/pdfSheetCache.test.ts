@@ -44,6 +44,18 @@ describe("PdfSheetLru", () => {
     expect(lru.getPreview(7)).toBe(preview);
     expect(lru.getRest(7)?.pixelScale).toBe(2);
     expect(lru.scale(7)).toBe(2);
+    expect(lru.lod(7)).toBe(PDF_REST_SCALE);
+    expect(lru.lod(8)).toBe(0);
+  });
+
+  it("lod is 0.25 after a stub even when stored pixels are fit×0.25", () => {
+    const lru = new PdfSheetLru(8);
+    lru.put(4, fakeSheet(0.12, 40, 30), 4, PDF_PREVIEW_SCALE);
+    expect(lru.scale(4)).toBe(0.12);
+    expect(lru.lod(4)).toBe(PDF_PREVIEW_SCALE);
+    expect(pageNeedsDecode(0.5, PDF_PREVIEW_SCALE, lru.scale(4))).toBe(true);
+    expect(pageNeedsDecode(0.5, PDF_PREVIEW_SCALE, lru.lod(4))).toBe(false);
+    expect(pageNeedsDecode(0.5, PDF_REST_SCALE, lru.lod(4))).toBe(true);
   });
 
   it("evicting rest-2 keeps the 0.25 so jump-back is not cream", () => {
