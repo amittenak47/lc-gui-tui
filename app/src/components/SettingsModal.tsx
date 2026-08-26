@@ -661,6 +661,42 @@ export function SettingsModal({
     },
     [docCacheArmed],
   );
+  /*
+   * The local search index wipe, and its answer.
+   *
+   * Ask builds its index on this device over time; a stale one (old embedding
+   * model, text from files long gone) can only be answered by dropping it all
+   * and letting indexing start over. Deliberately local: when a pad hub is
+   * set, the hub's docs.db is a different file on a different machine, and a
+   * clear button that reaches past this device would be a surprise no label
+   * carries. Armed by a first tap, like Clear all above.
+   */
+  const [indexWipe, setIndexWipe] = useState<
+    { kind: "idle" } | { kind: "busy" } | { kind: "done"; message: string } | { kind: "failed"; message: string }
+  >({ kind: "idle" });
+  const [indexWipeArmed, setIndexWipeArmed] = useState(false);
+  const runIndexWipe = useCallback(async () => {
+    if (!indexWipeArmed) {
+      setIndexWipeArmed(true);
+      setIndexWipe({
+        kind: "done",
+        message:
+          "This drops every indexed page of text on this device — Ask rebuilds by indexing again. Tap again to confirm.",
+      });
+      return;
+    }
+    setIndexWipeArmed(false);
+    setIndexWipe({ kind: "busy" });
+    try {
+      const report = await client.clearLocalDocIndex();
+      setIndexWipe({
+        kind: "done",
+        message: `Cleared ${report.documents} ${report.documents === 1 ? "document" : "documents"} (${report.chunks} chunks). Ask rebuilds the index as documents are opened again.`,
+      });
+    } catch (cause) {
+      setIndexWipe({ kind: "failed", message: cause instanceof Error ? cause.message : String(cause) });
+    }
+  }, [client, indexWipeArmed]);
   const [siblingDevices, setSiblingDevices] = useState<DevicePrefsDto[]>([]);
   const [hubUrl, setHubUrl] = useState("");
   const [hubToken, setHubToken] = useState("");
@@ -2057,6 +2093,32 @@ export function SettingsModal({
               {docCache.kind === "failed" && (
                 <p className="lc-settings-error">{docCache.message}</p>
               )}
+
+              <div className="lc-settings-subhead">Search index</div>
+              <p className="lc-settings-hint">
+                Opening a document also indexes its text so <strong>Ask</strong> can quote it.
+                If answers drift stale — an old model, files that have since moved on — clear
+                that index here. This wipes this device only; drawings, notes and stored copies
+                are untouched, and when a pad hub is set the hub keeps its own index.
+              </p>
+              <div className="lc-pad-hub-check">
+                <button
+                  type="button"
+                  className="lc-secondary"
+                  disabled={indexWipe.kind === "busy"}
+                  onClick={() => {
+                    void runIndexWipe();
+                  }}
+                >
+                  {indexWipe.kind === "busy"
+                    ? "Working…"
+                    : indexWipeArmed
+                      ? "Tap again to clear index"
+                      : "Clear local search index"}
+                </button>
+              </div>
+              {indexWipe.kind === "done" && <p className="lc-muted">{indexWipe.message}</p>}
+              {indexWipe.kind === "failed" && <p className="lc-settings-error">{indexWipe.message}</p>}
               </SettingsFold>
             </div>
           )}

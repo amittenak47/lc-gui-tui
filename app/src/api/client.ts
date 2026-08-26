@@ -846,6 +846,21 @@ export class LcClient {
     return this.cmd("lc_docs_get_index", { hash });
   }
 
+  /**
+   * Wipe this device's whole search index (`docs.db`).
+   *
+   * Deliberately not hub-routed, unlike every other docs call here: the
+   * leftover index a reader clears is the *local* one, and "clear" reaching
+   * past this machine would be a surprise no button label can carry.
+   */
+  async clearLocalDocIndex(): Promise<{ documents: number; chunks: number }> {
+    return this.cmd<{ documents: number; chunks: number }>(
+      "lc_docs_clear_local_index",
+      {},
+      60_000,
+    );
+  }
+
     /**
    * Run one budget of the embedding pass.
    *

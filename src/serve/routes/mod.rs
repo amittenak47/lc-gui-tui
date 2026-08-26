@@ -26,10 +26,10 @@ pub use config::{
     ProviderConfigDto,
 };
 pub use docs::{
-    embed as embed_docs, get_chunks as get_doc_chunks, get_index as get_docs_index,
-    index_from_bytes as index_from_bytes_docs, list_chunk_digests as list_doc_chunk_digests,
-    put_chunks as put_doc_chunks, put_index as put_docs_index, retrieve as retrieve_docs,
-    retrieve_library as retrieve_library_docs,
+    clear_local_index as clear_local_docs, embed as embed_docs, get_chunks as get_doc_chunks,
+    get_index as get_docs_index, index_from_bytes as index_from_bytes_docs,
+    list_chunk_digests as list_doc_chunk_digests, put_chunks as put_doc_chunks,
+    put_index as put_docs_index, retrieve as retrieve_docs, retrieve_library as retrieve_library_docs,
 };
 pub use pads::{
     archive_annotate, archive_whiteboard, clone_device_prefs, get_device_prefs, get_doc_bytes,

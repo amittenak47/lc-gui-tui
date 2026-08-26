@@ -506,6 +506,15 @@ pub async fn lc_docs_get_index(
     go(state, "GET", format!("/docs/{}/index", enc(&hash)), None).await
 }
 
+/// Wipe this device's whole search index (`DELETE /docs/local-index`).
+///
+/// Always local, even when a pad hub is set — the hub's index is a different
+/// file on a different machine, and the reader asked about *this* one.
+#[tauri::command]
+pub async fn lc_docs_clear_local_index(state: State<'_, Shared>) -> Result<LcResponse, String> {
+    go(state, "DELETE", "/docs/local-index".into(), None).await
+}
+
 /// One budget of the embedding pass. Call until `done == total`.
 ///
 /// Short by design: a book is minutes of work, and a call that returns between
