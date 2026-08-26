@@ -79,4 +79,56 @@ describe("HubSyncControl (step-2 stub)", () => {
     expect(button.dataset.stage).toBe("idle");
     expect(activeLabel(button)).toBe("Sync");
   });
+
+  it("rests on Synced when the hint says the hub already has everything", () => {
+    vi.useFakeTimers();
+    const hint = {
+      hash: "h",
+      padUpdatedAt: 500,
+      padUpToDate: true,
+      bytesOnHub: true,
+      indexedOnHub: true,
+    };
+    function Host({ value }: { value: typeof hint | null }) {
+      return <HubSyncControl hubHint={value} />;
+    }
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    act(() => root.render(<Host value={null} />));
+    const button = host.querySelector(".lc-hub-sync") as HTMLButtonElement;
+    expect(activeLabel(button)).toBe("Sync");
+
+    // Hint arriving after first paint flips the idle label to Synced...
+    act(() => root.render(<Host value={hint} />));
+    expect(activeLabel(button)).toBe("Synced");
+
+    // ...and tapping from there still starts the walk at Index.
+    act(() => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(button.dataset.stage).toBe("index");
+  });
+
+  it("stays on Sync when the hub row is older than what opened locally", () => {
+    vi.useFakeTimers();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    act(() => {
+      root.render(
+        <HubSyncControl
+          hubHint={{
+            hash: "h",
+            padUpdatedAt: 100,
+            padUpToDate: false,
+            bytesOnHub: true,
+            indexedOnHub: true,
+          }}
+        />,
+      );
+    });
+    const button = host.querySelector(".lc-hub-sync") as HTMLButtonElement;
+    expect(activeLabel(button)).toBe("Sync");
+  });
 });

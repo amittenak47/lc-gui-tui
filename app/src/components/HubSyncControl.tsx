@@ -10,6 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { MorphBar } from "./MorphBar";
+import type { DocHubHint } from "../util/hubHint";
 
 export type HubSyncStage =
   | "idle"
@@ -36,7 +37,16 @@ const LABEL: Record<HubSyncStage, string> = {
 /** How long each stub stage holds before the label advances. */
 const STAGE_MS = 650;
 
-export function HubSyncControl() {
+export interface HubSyncControlProps {
+  /**
+   * What the hub already had when this document was opened — read-only hint
+   * only. When the hub row exists, is not older than local-at-open, and the
+   * index is done, idle reads Synced; anything else reads Sync.
+   */
+  hubHint?: (DocHubHint & { padUpToDate?: boolean }) | null;
+}
+
+export function HubSyncControl({ hubHint = null }: HubSyncControlProps) {
   const [stage, setStage] = useState<HubSyncStage>("idle");
   const timerRef = useRef<number | null>(null);
 
@@ -72,6 +82,17 @@ export function HubSyncControl() {
 
   const busy = stage !== "idle" && stage !== "synced";
 
+  // Idle label per the open policy: Synced needs pad + index on the hub and
+  // no newer local ink than the hub knows about at open time.
+  const syncedAtRest =
+    stage === "idle" &&
+    hubHint != null &&
+    hubHint.padUpdatedAt != null &&
+    hubHint.padUpToDate !== false &&
+    hubHint.indexedOnHub;
+  const restStage: HubSyncStage = syncedAtRest ? "synced" : "idle";
+  const activeStage = busy || stage === "synced" ? stage : restStage;
+
   return (
     <span className="lc-hub-sync-dock">
       <button
@@ -83,7 +104,7 @@ export function HubSyncControl() {
       >
         <MorphBar
           axis="depth"
-          active={stage}
+          active={activeStage}
           className="lc-hub-sync-morph"
           animateOnMount={false}
         >
