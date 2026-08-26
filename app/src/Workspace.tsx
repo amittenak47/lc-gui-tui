@@ -8682,6 +8682,7 @@ export function Workspace({
                       frameWidth={annotatePageWidth}
                       initialPage={pdfSessionPage || undefined}
                       paused={!showing}
+                      idleThumbs={showing && pdfFilmOpen}
                       onMeasure={onMdInkMeasure}
                       onNav={setPdfNav}
                       onThumbRenderer={onPdfThumbRenderer}
@@ -8781,6 +8782,7 @@ export function Workspace({
             <PdfPageRail
               count={pdfNav.count}
               current={pdfNav.current}
+              docHash={annotateSource?.hash}
               aspects={pdfNav.aspects}
               renderThumb={renderPdfThumb}
               onJump={(page) => {
