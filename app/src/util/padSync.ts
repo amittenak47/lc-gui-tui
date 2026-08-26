@@ -320,7 +320,11 @@ async function applyLivePutFailure(
   return true;
 }
 
-async function applyHubWhiteboard(
+/*
+ * Exported for the Sync walk's conflict resolver: "take the server" writes
+ * the stashed hub row straight into IDB, exactly as a ping apply would have.
+ */
+export async function applyHubWhiteboard(
   raw: unknown,
   opts: { emitReload: boolean },
 ): Promise<boolean> {
@@ -344,7 +348,7 @@ async function applyHubWhiteboard(
   return true;
 }
 
-async function applyHubAnnotate(
+export async function applyHubAnnotate(
   raw: unknown,
   opts: { emitReload: boolean },
 ): Promise<boolean> {
