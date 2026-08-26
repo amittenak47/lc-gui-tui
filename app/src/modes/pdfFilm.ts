@@ -303,7 +303,7 @@ export function resetPdfViewPages(): void {
 /** Session JPEG thumbs keyed by document content hash, then page number. */
 const thumbsByHash = new Map<string, Map<number, string>>();
 
-export function rememberPdfThumb(hash: string, page: number, url: string): void {
+export function rememberPdfThumb(hash: string | null | undefined, page: number, url: string): void {
   if (!hash || !(page >= 1) || !url) return;
   let doc = thumbsByHash.get(hash);
   if (!doc) {
@@ -316,12 +316,12 @@ export function rememberPdfThumb(hash: string, page: number, url: string): void 
   for (const listener of thumbListeners) listener();
 }
 
-export function peekPdfThumb(hash: string, page: number): string | null {
+export function peekPdfThumb(hash: string | null | undefined, page: number): string | null {
   if (!hash || !(page >= 1)) return null;
   return thumbsByHash.get(hash)?.get(page) ?? null;
 }
 
-export function peekPdfThumbs(hash: string): Map<number, string> {
+export function peekPdfThumbs(hash: string | null | undefined): Map<number, string> {
   if (!hash) return new Map();
   const doc = thumbsByHash.get(hash);
   return doc ? new Map(doc) : new Map();
@@ -376,7 +376,7 @@ export function pdfThumbViewportScale(
 
 /** First page in `prefer`, then 1…count, that has no session JPEG yet. */
 export function nextMissingPdfThumb(
-  hash: string,
+  hash: string | null | undefined,
   count: number,
   prefer: Iterable<number> = [],
   skip: Iterable<number> = [],
@@ -396,7 +396,7 @@ export function nextMissingPdfThumb(
 }
 
 /** 48 CSS px JPEG of an LRU sheet, once per page per document. Not a decode. */
-export function capturePdfThumbIfNew(hash: string, page: number): void {
+export function capturePdfThumbIfNew(hash: string | null | undefined, page: number): void {
   if (!hash || !(page >= 1) || peekPdfThumb(hash, page)) return;
   const dpr =
     typeof window !== "undefined"
