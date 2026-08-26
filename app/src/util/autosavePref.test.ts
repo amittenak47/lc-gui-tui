@@ -4,9 +4,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  AUTOSAVE_DEFAULT_MS,
   autosaveBannerAllowed,
   coalesceAutosaveNotice,
   loadAutosaveBanner,
+  loadAutosaveInterval,
   saveAutosaveBanner,
 } from "./autosavePref";
 
@@ -24,6 +26,11 @@ afterEach(() => {
 });
 
 describe("autosave banners", () => {
+  it("defaults to Off: an unopened Settings must not have started the timers", () => {
+    expect(AUTOSAVE_DEFAULT_MS).toBe(0);
+    expect(loadAutosaveInterval()).toBe(0);
+  });
+
   it("defaults to on, and persists Hide", () => {
     expect(loadAutosaveBanner()).toBe("on");
     saveAutosaveBanner("off");

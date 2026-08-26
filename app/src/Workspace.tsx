@@ -52,6 +52,11 @@ import {
   AUTOSAVE_EVENT,
   loadAutosaveInterval,
 } from "./util/autosavePref";
+import {
+  HUB_AUTOSYNC_EVENT,
+  loadHubAutosync,
+  loadHubAutosyncPref,
+} from "./util/hubAutoSyncPref";
 import { Board } from "./canvas/Board";
 import { inkOpsFrom } from "./canvas/inkCodec";
 import { drainDirtyInkArchives } from "./canvas/inkArchiveClient";
@@ -1226,6 +1231,9 @@ export function Workspace({
   }, [whiteboardNotebookId]);
 
   /** In-process daemon is assumed up; this flag still gates pad sync / tests. */
+
+  /** Hub auto-sync re-reads on Save so timers tear down without a remount. */
+  const [hubAutosyncOn, setHubAutosyncOn] = useState(() => loadHubAutosyncPref() === "on");
   /** Something the student should know, but which did not stop the request. */
   /** Boot overlay still waiting for LLM probe → checkmark before dismiss. */
 
@@ -1237,13 +1245,15 @@ export function Workspace({
     let cancelled = false;
     void (async () => {
       try {
-        if (isCameraBusy()) return;
-        await applyPadSyncPing(client).catch(() => {});
-        if (cancelled || isCameraBusy()) return;
-        await pullPads(client);
-        if (cancelled) return;
-        await flushPadSyncQueue(client);
-        if (cancelled) return;
+        if (hubAutosyncOn) {
+          if (isCameraBusy()) return;
+          await applyPadSyncPing(client).catch(() => {});
+          if (cancelled || isCameraBusy()) return;
+          await pullPads(client);
+          if (cancelled) return;
+          await flushPadSyncQueue(client);
+          if (cancelled) return;
+        }
         void ensureDevicePrefs(client).catch(() => {});
       } catch {
         /* daemon missing the new routes — keep the local cache */
@@ -1252,10 +1262,12 @@ export function Workspace({
     return () => {
       cancelled = true;
     };
-  }, [serverLink, client]);
+  }, [serverLink, client, hubAutosyncOn]);
 
   useEffect(() => {
     if (serverLink !== "online") return;
+    // Off means off: no interval exists at all, so nothing can leak a ping.
+    if (!hubAutosyncOn) return;
     let cancelled = false;
     const tick = () => {
       if (cancelled) return;
@@ -1273,7 +1285,7 @@ export function Workspace({
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [serverLink, client]);
+  }, [serverLink, client, hubAutosyncOn]);
 
   /** Coach LLM reachability — separate from the harness router itself. */
 
@@ -1685,8 +1697,13 @@ export function Workspace({
   }, []);
   useEffect(() => {
     const onAutosave = () => setAutosaveMs(loadAutosaveInterval());
+    const onHubAutosync = () => setHubAutosyncOn(loadHubAutosyncPref() === "on");
     window.addEventListener(AUTOSAVE_EVENT, onAutosave);
-    return () => window.removeEventListener(AUTOSAVE_EVENT, onAutosave);
+    window.addEventListener(HUB_AUTOSYNC_EVENT, onHubAutosync);
+    return () => {
+      window.removeEventListener(AUTOSAVE_EVENT, onAutosave);
+      window.removeEventListener(HUB_AUTOSYNC_EVENT, onHubAutosync);
+    };
   }, []);
 
   useEffect(() => {
@@ -1802,17 +1819,21 @@ export function Workspace({
             });
             if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
             announceAutosave(tab.id, saved.name);
-            void pushAnnotatePad(client, saved).then((ok) => {
-              if (!ok) return;
-              void recordPadSnapshotsWithExtras({
-                kind: "annotate",
-                key: saved.id,
-                name: saved.name,
-                board: liveBoard,
-                footnotes: saved.footnotes,
-                agent: saved.agent,
-              }).then((written) => void pushRolledSnapshots(client, written));
-            });
+            // The local write already happened; only the hub PUT waits on
+            // Hub auto-sync. Read live so a mid-session Save takes effect.
+            if (loadHubAutosync()) {
+              void pushAnnotatePad(client, saved).then((ok) => {
+                if (!ok) return;
+                void recordPadSnapshotsWithExtras({
+                  kind: "annotate",
+                  key: saved.id,
+                  name: saved.name,
+                  board: liveBoard,
+                  footnotes: saved.footnotes,
+                  agent: saved.agent,
+                }).then((written) => void pushRolledSnapshots(client, written));
+              });
+            }
           } catch (cause: unknown) {
             noteStorageFull(cause);
           }
@@ -1855,17 +1876,20 @@ export function Workspace({
             if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
             await flushDirtyInk(board, whiteboardDocKey(saved.id));
             announceAutosave(tab.id, saved.title);
-            void pushWhiteboardPad(client, saved).then((ok) => {
-              if (!ok) return;
-              void recordPadSnapshotsWithExtras({
-                kind: "whiteboard",
-                key: saved.id,
-                name: saved.title,
-                board: liveBoard,
-                agent: saved.agent,
-                pageCount: saved.pageCount,
-              }).then((written) => void pushRolledSnapshots(client, written));
-            });
+            // Local write first; hub PUT gated like the annotate autosave.
+            if (loadHubAutosync()) {
+              void pushWhiteboardPad(client, saved).then((ok) => {
+                if (!ok) return;
+                void recordPadSnapshotsWithExtras({
+                  kind: "whiteboard",
+                  key: saved.id,
+                  name: saved.title,
+                  board: liveBoard,
+                  agent: saved.agent,
+                  pageCount: saved.pageCount,
+                }).then((written) => void pushRolledSnapshots(client, written));
+              });
+            }
           } catch (cause: unknown) {
             if (cause instanceof WhiteboardLibraryFullError) {
               whiteboardLibResumeRef.current = null;

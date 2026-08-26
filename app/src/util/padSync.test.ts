@@ -17,6 +17,7 @@ import {
   pushWhiteboardPad,
   resetPadSyncQueueForTests,
   restoreTrashedPad,
+  scheduleIdlePadSyncPing,
   TrashQueueFullError,
 } from "./padSync";
 import { noteCameraBusy, resetCameraBusyForTests } from "./cameraBusy";
@@ -95,6 +96,11 @@ vi.mock("./docBytes", () => ({
   deleteDocBytes: (hash: string) => deleteDocBytes(hash),
 }));
 
+const hubAutosyncState = vi.hoisted(() => ({ on: true }));
+vi.mock("./hubAutoSyncPref", () => ({
+  loadHubAutosync: () => hubAutosyncState.on,
+}));
+
 vi.mock("./padSnapshotStore", () => ({
   PAD_SNAPSHOT_TIERS: [
     { id: "2h", maxAgeMs: 1, label: "2 hours" },
@@ -136,6 +142,7 @@ function fakeClient(overrides: Partial<LcClient> = {}): LcClient {
 beforeEach(() => {
   resetPadSyncQueueForTests();
   resetCameraBusyForTests();
+  hubAutosyncState.on = true;
   restoreWhiteboardNotebook.mockClear();
   restoreAnnotateDoc.mockClear();
   deleteWhiteboardNotebook.mockClear();
@@ -270,6 +277,38 @@ describe("padSync ping", () => {
     }));
     await applyPadSyncPing(fakeClient({ pingPadSync }));
     expect(pingPadSync).not.toHaveBeenCalled();
+  });
+
+  it("never pings when Hub auto-sync is off, even with the hub online", async () => {
+    hubAutosyncState.on = false;
+    const pingPadSync = vi.fn(async () => ({
+      now: 100,
+      whiteboard: [],
+      annotate: [],
+      snapshots: [],
+      gone: [],
+    }));
+    const padHub = await import("./padHub");
+    const hubSpy = vi.spyOn(padHub, "loadPadHub").mockReturnValue({
+      url: "http://127.0.0.1:9",
+      token: "t",
+    });
+    const client = fakeClient({ pingPadSync });
+    await applyPadSyncPing(client);
+    expect(pingPadSync).not.toHaveBeenCalled();
+
+    // The idle kick is gated at creation too.
+    vi.useFakeTimers();
+    scheduleIdlePadSyncPing(client);
+    await vi.advanceTimersByTimeAsync(padSyncIdleKickMs() + 10_000);
+    expect(pingPadSync).not.toHaveBeenCalled();
+    vi.useRealTimers();
+
+    // Turning the pref back on resumes traffic without a remount.
+    hubAutosyncState.on = true;
+    await applyPadSyncPing(client);
+    expect(pingPadSync).toHaveBeenCalledTimes(1);
+    hubSpy.mockRestore();
   });
 
   it("waits longer before the first idle kick on Android", () => {
