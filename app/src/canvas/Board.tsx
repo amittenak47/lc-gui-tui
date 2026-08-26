@@ -147,6 +147,7 @@ import {
   pageFramesFromPdfSlot,
   pageIdFromCamera,
   pageIdsIntersectingView,
+  pdfPageFromSavedView,
   scrollYForPage,
 } from "./inkPageIndex";
 import {
@@ -155,11 +156,13 @@ import {
   publishPdfFilmCurrent,
   publishPdfFilmFromCamera,
   publishPdfFilmPredicted,
+  publishPdfPreloadPages,
   publishPdfViewPages,
   resetPdfFilmPredicted,
+  resetPdfPreloadPages,
   resetPdfViewPages,
 } from "../modes/pdfFilm";
-import { pdfRestPages } from "../modes/pdfPaintWindow";
+import { pdfLandingHoldClear, pdfPreloadPages, pdfRestPages } from "../modes/pdfPaintWindow";
 import { eraserScreenRadius } from "./rasterInk";
 import { linedSlotCanSkip } from "./linedSlot";
 import { SPLIT_RESIZE_EVENT, splitResizePhase } from "../util/splitResize";
@@ -1729,6 +1732,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /** Hand-tool pan: track velocity from scroll deltas for flick inertia. */
   const handPanningRef = useRef(false);
   const panVelocityRef = useRef({ x: 0, y: 0 });
+  /** Peak |velY| this flick — lift-off EMA undershoots after the finger slows. */
+  const panPeakVelYRef = useRef(0);
   const lastPanScrollRef = useRef({ x: 0, y: 0, t: 0 });
   const inertiaFrameRef = useRef(0);
   /**
@@ -2894,16 +2899,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         [pending],
         pdfRestPages(pending, Math.max(pending, lastPageId(frames)), [pending]),
       );
-      if (frames.some((frame) => frame.pageId === pending)) {
-        if (scrollToPdfPageRef.current(pending)) {
-          pendingPdfPageRef.current = 0;
-        }
+      if (!frames.some((frame) => frame.pageId === pending)) return;
+      const at = pageIdFromCamera(frames, scrollY, zoom, height);
+      if (!pdfLandingHoldClear(pending, at)) {
+        scrollToPdfPageRef.current(pending);
+        return;
       }
-      return;
+      pendingPdfPageRef.current = 0;
     }
     if (local.length === 0) {
       flickPredictHudRef.current?.hide();
       resetPdfFilmPredicted();
+      resetPdfPreloadPages();
       resetPdfViewPages();
       return;
     }
@@ -2912,26 +2919,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     publishPdfFilmFromCamera(frames, scrollY, zoom, height);
     const live = pageIdFromCamera(frames, scrollY, zoom, height);
     const intersecting = pageIdsIntersectingView(frames, scrollY, zoom, height);
+    const last = lastPageId(frames);
     publishPdfViewPages(
       intersecting,
-      pdfRestPages(live, lastPageId(frames), intersecting),
+      pdfRestPages(live, last, intersecting),
     );
     let pred: number;
     if (pdfCoastRef.current && flickPredFrozenRef.current != null) {
       pred = flickPredFrozenRef.current;
     } else {
+      const velY =
+        Math.abs(panPeakVelYRef.current) > Math.abs(panVelocityRef.current.y)
+          ? panPeakVelYRef.current
+          : panVelocityRef.current.y;
       const endY = clampPanScroll(
         scrollX,
-        predictFlickEndScrollY(scrollY, panVelocityRef.current.y),
+        predictFlickEndScrollY(scrollY, velY),
         zoom,
       ).scrollY;
       pred = pageIdFromCamera(frames, endY, zoom, height);
       if (handPanningRef.current) flickPredFrozenRef.current = pred;
     }
-    // HUD is imperative. Filmstrip predicted is React — do not publish it on
-    // every sample or the full-book rail reconciles mid-flick.
     const finger = handPanningRef.current || pdfCoastRef.current;
     if (!finger) publishPdfFilmPredicted(pred);
+    publishPdfPreloadPages(finger ? pdfPreloadPages(live, pred, last) : []);
     const err = pred - live;
     flickPredictHudRef.current?.show(live, pred, err);
     const log = pdfPanLogRef.current;
@@ -3474,6 +3485,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const applyVisualScrollNow = useCallback((scrollX: number, scrollY: number) => {
     const api = apiRef.current;
     if (!api) return;
+    const pending = pendingPdfPageRef.current;
+    if (pending >= 1) {
+      const origin = pageBoundsRef.current?.minY ?? 0;
+      const frames = offsetPageFrames(peekPdfReadingFrames(), origin);
+      const prevHold = liveCameraRef.current;
+      const holdZoom = prevHold?.zoom ?? 1;
+      const holdHeight = prevHold?.height && prevHold.height > 0 ? prevHold.height : 800;
+      if (!frames.some((frame) => frame.pageId === pending)) {
+        return;
+      }
+      const at = pageIdFromCamera(frames, scrollY, holdZoom, holdHeight);
+      if (!pdfLandingHoldClear(pending, at)) {
+        scrollToPdfPageRef.current(pending);
+        return;
+      }
+      pendingPdfPageRef.current = 0;
+    }
     const prev = liveCameraRef.current;
     let zoom: number;
     let width: number;
@@ -3788,6 +3816,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       panDragRef.current = null;
       handPanningRef.current = false;
       panVelocityRef.current = { x: 0, y: 0 };
+      panPeakVelYRef.current = 0;
       rasterInkRef.current?.setCameraMoving(false);
     };
     onSelectionGestureClaimed(dropPanForSelection);
@@ -3803,6 +3832,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       rasterInkRef.current?.setCameraMoving(true);
       const prev = liveCameraRef.current;
       if (prev?.live) return;
+      if (pendingPdfPageRef.current >= 1 && prev) return;
       const api = apiRef.current;
       if (!api) return;
       const state = api.getAppState() as {
@@ -3998,6 +4028,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         rasterInkRef.current?.setCameraMoving(true);
       }
       panVelocityRef.current = { x: 0, y: 0 };
+      panPeakVelYRef.current = 0;
       const now = performance.now();
       const cam = readScroll();
       lockedScrollXRef.current = scrollModeRef.current ? cam.scrollX : null;
@@ -4153,6 +4184,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         x: 0,
         y: panVelocityRef.current.y * 0.55 + instantY * 0.45,
       };
+      const vy = panVelocityRef.current.y;
+      const peak = panPeakVelYRef.current;
+      if (
+        peak === 0 ||
+        Math.sign(vy) !== Math.sign(peak) ||
+        Math.abs(vy) > Math.abs(peak)
+      ) {
+        panPeakVelYRef.current = vy;
+      }
       drag.lastClientY = event.clientY;
       drag.lastT = now;
       lastPanScrollRef.current = { x: scrollX, y: scrollY, t: now };
@@ -4216,7 +4256,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       event.preventDefault();
       event.stopPropagation();
 
-      const rawY = panVelocityRef.current.y;
+      const rawY =
+        Math.abs(panPeakVelYRef.current) > Math.abs(panVelocityRef.current.y)
+          ? panPeakVelYRef.current
+          : panVelocityRef.current.y;
       const velY = (() => {
         const cam = readScroll();
         const probe = clampPanScroll(cam.scrollX, cam.scrollY + rawY * 16, cam.zoom);
@@ -7484,7 +7527,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const jumpToPdfPage = useCallback((pageId: number) => {
     const api = apiRef.current;
     if (!api || pageId < 1) return false;
-    const state = api.getAppState() as { zoom?: { value?: number } };
+    const state = api.getAppState() as {
+      zoom?: { value?: number };
+      scrollX?: number;
+      width?: number;
+      height?: number;
+      offsetLeft?: number;
+      offsetTop?: number;
+    };
     const zoom = state.zoom?.value ?? 1;
     if (!(zoom > 0)) return false;
     const measured = measureChromeInsets(
@@ -7516,13 +7566,39 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const minY = bounds.minY + (box.top - slotRect.top) / sy;
       nextScrollY = insetTop / zoom - minY;
     }
+    const prevLive = liveCameraRef.current;
+    const scrollX = prevLive?.scrollX ?? state.scrollX ?? 0;
+    const width = prevLive?.width || state.width || 800;
+    const height = prevLive?.height || state.height || 800;
     userAdjustedCameraRef.current = true;
-    pendingPdfPageRef.current = 0;
+    pendingPdfPageRef.current = pageId;
+    pendingVisualScrollRef.current = null;
+    if (visualScrollRafRef.current) {
+      cancelAnimationFrame(visualScrollRafRef.current);
+      visualScrollRafRef.current = 0;
+    }
+    committedPanCameraRef.current = { scrollX, scrollY: nextScrollY, zoom };
+    liveCameraRef.current = {
+      scrollX,
+      scrollY: nextScrollY,
+      zoom,
+      width,
+      height,
+      offsetLeft: prevLive?.offsetLeft ?? state.offsetLeft ?? 0,
+      offsetTop: prevLive?.offsetTop ?? state.offsetTop ?? 0,
+      live: false,
+    };
+    clearPanOffsetsRef.current();
     api.updateScene({
-      appState: { scrollY: nextScrollY },
+      appState: { scrollX, scrollY: nextScrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
+    placeContentSlotAtRef.current(scrollX, nextScrollY, zoom);
     publishPdfFilmCurrent(pageId);
+    publishPdfViewPages(
+      [pageId],
+      pdfRestPages(pageId, Math.max(pageId, lastPageId(frames)), [pageId]),
+    );
     scheduleSlotReports();
     return true;
   }, [scheduleSlotReports]);
@@ -7903,7 +7979,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           },
           captureUpdate: CaptureUpdateAction.NEVER,
         });
-        const savedPage = Math.floor(Number(saved.pdfPage));
+        const origin = pageBoundsRef.current?.minY ?? 0;
+        const frames = offsetPageFrames(peekPdfReadingFrames(), origin);
+        const viewH = liveCameraRef.current?.height ?? 800;
+        const savedPage = pdfPageFromSavedView(saved, frames, viewH);
         if (savedPage >= 1) {
           if (jumpToPdfPage(savedPage)) return;
           pendingPdfPageRef.current = savedPage;
@@ -7961,6 +8040,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           scrollX?: number;
           scrollY?: number;
           zoom?: { value?: number };
+          height?: number;
         };
         const kept = elements().filter((element) => !isCoachElement(element));
         const assemble = opts?.assembleInk !== false;
@@ -7986,7 +8066,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             scrollX: state.scrollX ?? 0,
             scrollY: state.scrollY ?? 0,
             zoom: state.zoom?.value ?? 1,
-            pdfPage: peekPdfFilmCurrent(),
+            pdfPage: (() => {
+              const origin = pageBoundsRef.current?.minY ?? 0;
+              const frames = offsetPageFrames(peekPdfReadingFrames(), origin);
+              const live = liveCameraRef.current;
+              const y = live?.scrollY ?? state.scrollY ?? 0;
+              const z = live?.zoom ?? state.zoom?.value ?? 1;
+              const h = live?.height ?? state.height ?? 800;
+              if (frames.length > 0) return pageIdFromCamera(frames, y, z, h);
+              return peekPdfFilmCurrent();
+            })(),
           },
           // Encoded, not raw — `ink` stays readable forever but is never
           // written again. See `inkCodec`; read it back with `inkOpsFrom`.

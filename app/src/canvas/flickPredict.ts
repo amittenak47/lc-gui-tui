@@ -3,8 +3,8 @@
  *
  * Board's inertia rAF is `vel *= exp(-PAN_FRICTION * dt)` until
  * `|vel| < PAN_REST_SPEED`. Same exponential, no second physics, no decode.
- * Paint must not read {@link predictFlickEndScrollY} — HUD / filmstrip ghost
- * only (`pdfFlickPredictPage`).
+ * Paint must not read {@link predictFlickEndScrollY} to choose rest-2 / C.
+ * Board may use it for the HUD and for 0.25 preload toward the guess.
  */
 
 /** Hand-tool pan inertia — exponential friction per ms (coast after flick). */

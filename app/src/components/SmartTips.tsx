@@ -146,7 +146,11 @@ export function SmartTips() {
       setCoords(null);
     };
 
+    let lastPointerType = "";
+
     const onPointerOver = (event: PointerEvent) => {
+      lastPointerType = event.pointerType;
+      if (event.pointerType !== "mouse") return;
       const el = (event.target as Element | null)?.closest?.("[data-tip]") as HTMLElement | null;
       if (!el) return;
       if (el === targetRef.current) return;
@@ -159,7 +163,13 @@ export function SmartTips() {
       if (from && from !== to) hide();
     };
 
+    const onPointerUp = (event: PointerEvent) => {
+      lastPointerType = event.pointerType;
+      if (event.pointerType !== "mouse") hide();
+    };
+
     const onFocusIn = (event: FocusEvent) => {
+      if (lastPointerType && lastPointerType !== "mouse") return;
       const el = (event.target as Element | null)?.closest?.("[data-tip]") as HTMLElement | null;
       if (el) show(el);
     };
@@ -191,6 +201,8 @@ export function SmartTips() {
 
     document.addEventListener("pointerover", onPointerOver, true);
     document.addEventListener("pointerout", onPointerOut, true);
+    document.addEventListener("pointerup", onPointerUp, true);
+    document.addEventListener("pointercancel", onPointerUp, true);
     document.addEventListener("focusin", onFocusIn, true);
     document.addEventListener("focusout", onFocusOut, true);
     document.addEventListener("keydown", onKey, true);
@@ -199,6 +211,8 @@ export function SmartTips() {
     return () => {
       document.removeEventListener("pointerover", onPointerOver, true);
       document.removeEventListener("pointerout", onPointerOut, true);
+      document.removeEventListener("pointerup", onPointerUp, true);
+      document.removeEventListener("pointercancel", onPointerUp, true);
       document.removeEventListener("focusin", onFocusIn, true);
       document.removeEventListener("focusout", onFocusOut, true);
       document.removeEventListener("keydown", onKey, true);

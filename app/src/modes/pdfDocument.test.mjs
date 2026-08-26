@@ -357,9 +357,9 @@ describe("pdf palindrome 1x ring", () => {
     expect(pdfOuterPages(200, 200, 12).at(-1)).toBe(200);
   });
 
-  it("uses default preview radius of 2", () => {
-    expect(PDF_PREVIEW_RADIUS).toBe(2);
-    expect(pdfOuterPages(40, 80)).toHaveLength(5);
+  it("uses default preview radius of 3", () => {
+    expect(PDF_PREVIEW_RADIUS).toBe(3);
+    expect(pdfOuterPages(40, 80)).toHaveLength(7);
   });
 
   it("expands C, then ±1 … ±R", () => {
@@ -373,7 +373,8 @@ describe("pdf palindrome 1x ring", () => {
     expect(pdfPageTargetScale(10, inner, outer)).toBe(PDF_REST_SCALE);
     expect(pdfPageTargetScale(11, inner, outer)).toBe(PDF_PREVIEW_SCALE);
     expect(pdfPageTargetScale(12, inner, outer)).toBe(PDF_PREVIEW_SCALE);
-    expect(pdfPageTargetScale(13, inner, outer)).toBe(0);
+    expect(pdfPageTargetScale(13, inner, outer)).toBe(PDF_PREVIEW_SCALE);
+    expect(pdfPageTargetScale(14, inner, outer)).toBe(0);
   });
 
   it("does not re-decode a 2x sheet when demoting to 1x", () => {

@@ -67,6 +67,11 @@ export function savePdfSpreadPref(docHash: string, on: boolean): void {
   }
 }
 
+/** Vertical mouse wheel on a horizontal filmstrip → scrollLeft. */
+export function filmStripWheelDelta(deltaX: number, deltaY: number): number {
+  return Math.abs(deltaY) >= Math.abs(deltaX) ? deltaY : deltaX;
+}
+
 /**
  * Pages whose thumbnails should be filled.
  *
@@ -199,6 +204,49 @@ export function resetPdfFilmPredicted(): void {
   if (pdfFlickPredictPage === 0) return;
   pdfFlickPredictPage = 0;
   for (const listener of filmPredictedListeners) listener(0);
+}
+
+/** 0.25 pages toward the flick-end. Separate from C — rest-2 must not read this. */
+let preloadPages: number[] = [];
+const preloadListeners = new Set<() => void>();
+
+export function publishPdfPreloadPages(pages: readonly number[]): void {
+  const next = [...pages].filter((n) => n >= 1);
+  if (samePageList(preloadPages, next)) return;
+  preloadPages = next;
+  for (const listener of preloadListeners) listener();
+}
+
+export function peekPdfPreloadPages(): readonly number[] {
+  return preloadPages;
+}
+
+export function subscribePdfPreloadPages(listener: () => void): () => void {
+  preloadListeners.add(listener);
+  listener();
+  return () => {
+    preloadListeners.delete(listener);
+  };
+}
+
+export function resetPdfPreloadPages(): void {
+  if (preloadPages.length === 0) return;
+  preloadPages = [];
+  for (const listener of preloadListeners) listener();
+}
+
+/** Wake the paint pump after spread remount when C and the hole did not move. */
+const paintWakeListeners = new Set<() => void>();
+
+export function wakePdfPaintPump(): void {
+  for (const listener of paintWakeListeners) listener();
+}
+
+export function subscribePdfPaintWake(listener: () => void): () => void {
+  paintWakeListeners.add(listener);
+  return () => {
+    paintWakeListeners.delete(listener);
+  };
 }
 
 function samePageList(a: readonly number[], b: readonly number[]): boolean {

@@ -191,7 +191,7 @@ import { WorkspaceLinkPicker, groupLabel, type LinkTarget } from "./modes/Worksp
 import { resolveWikiLinks } from "./util/wikiLinks";
 import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
-import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, publishPdfFilmCurrent } from "./modes/pdfFilm";
+import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, publishPdfFilmCurrent, peekPdfFilmCurrent, resetPdfFilmPredicted } from "./modes/pdfFilm";
 import { AnnotateDialog, type AnnotateDialogKind } from "./modes/AnnotateDialog";
 import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
@@ -221,7 +221,7 @@ import {
   LEGACY_MD_INK_TASK_ID,
 } from "./templates/annotate";
 import { BROWSE_PICK_QUIET_MS, browsePickBlocked } from "./util/browsePickGuard";
-import { waitForAnnotateLaidOut, waitForPdfPageNode } from "./util/annotateLaidOut";
+import { waitForAnnotateLaidOut, waitForPdfPageNode, waitForPdfPagePainted } from "./util/annotateLaidOut";
 import {
   buildAnnotateSidecar,
   CODE_SOURCE_MAX_CHARS,
@@ -1037,6 +1037,7 @@ export function Workspace({
   const [pdfSpreadByHash, setPdfSpreadByHash] = useState<Record<string, boolean>>(
     {},
   );
+  const spreadToggleAtRef = useRef(0);
   const annotatePdfHash =
     annotateSource?.docType === "pdf" ? annotateSource.hash : null;
   const pdfSpread = annotatePdfHash
@@ -1045,11 +1046,25 @@ export function Workspace({
   const togglePdfSpread = useCallback(() => {
     const hash = annotateSourceRef.current?.hash;
     if (!hash) return;
+    const now = performance.now();
+    if (now - spreadToggleAtRef.current < 180) return;
+    spreadToggleAtRef.current = now;
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement) focused.blur();
+    const page = peekPdfFilmCurrent();
     setPdfSpreadByHash((prev) => {
       const on = prev[hash] ?? loadPdfSpreadPref(hash);
       const next = !on;
       savePdfSpreadPref(hash, next);
       return { ...prev, [hash]: next };
+    });
+    setPdfFilmOpen(false);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!(page >= 1)) return;
+        boardRef.current?.aimPdfPage(page);
+        boardRef.current?.scrollToPdfPage(page);
+      });
     });
   }, []);
   /** Scene width of the open markdown page — viewport-sized on fresh opens. */
@@ -3137,40 +3152,59 @@ export function Workspace({
         const allowZero = !bytes && !text.trim();
         const needsHeight = Boolean(bytes) || Boolean(text.trim());
         const pdfFailed = () => annotatePdfErrorRef.current;
-        const restorePdfPage =
+        let landPage =
           docType === "pdf" && sessionPage >= 1 ? sessionPage : 0;
 
-        if (restorePdfPage >= 1) {
+        if (landPage >= 1) {
           const pageReady = await waitForPdfPageNode(
-            restorePdfPage,
+            landPage,
             25000,
             pdfFailed,
           );
           if (pdfFailed()) throw new Error(pdfFailed()!);
           if (!pageReady) {
             traceOpen("session PDF page node never appeared", {
-              page: restorePdfPage,
+              page: landPage,
               ms: openMs(),
             });
           }
-          publishPdfFilmCurrent(restorePdfPage);
-          boardRef.current?.aimPdfPage(restorePdfPage);
+          publishPdfFilmCurrent(landPage);
+          boardRef.current?.aimPdfPage(landPage);
           if (existing?.board.appState) {
             boardRef.current?.restoreView(existing.board.appState);
+            const filmed = peekPdfFilmCurrent();
+            if (filmed >= 2) landPage = filmed;
           }
-          let landed = boardRef.current?.scrollToPdfPage(restorePdfPage) === true;
+          let landed = boardRef.current?.scrollToPdfPage(landPage) === true;
           const jumpDeadline = performance.now() + 8000;
           while (!landed && performance.now() < jumpDeadline) {
             if (pdfFailed()) throw new Error(pdfFailed()!);
             await waitMs(50);
-            landed = boardRef.current?.scrollToPdfPage(restorePdfPage) === true;
+            const filmed = peekPdfFilmCurrent();
+            if (filmed >= 2) landPage = filmed;
+            landed = boardRef.current?.scrollToPdfPage(landPage) === true;
           }
           if (!landed) {
             traceOpen("session PDF camera never jumped", {
-              page: restorePdfPage,
+              page: landPage,
+              ms: openMs(),
+            });
+          } else {
+            traceOpen("session PDF camera jumped", {
+              page: landPage,
               ms: openMs(),
             });
           }
+          const painted = await waitForPdfPagePainted(
+            landPage,
+            20000,
+            pdfFailed,
+          );
+          if (pdfFailed()) throw new Error(pdfFailed()!);
+          traceOpen(
+            painted ? "session PDF page painted" : "session PDF page paint timed out",
+            { page: landPage, ms: openMs() },
+          );
         } else {
           await boardRef.current?.settleFitView();
           let laidOut = await waitForAnnotateLaidOut(
@@ -3250,20 +3284,26 @@ export function Workspace({
           requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
         );
         if (workspaceLoadGenRef.current !== loadGen) return;
-        boardRef.current?.syncDocumentScrollBounds();
-        boardRef.current?.armReadingScroll();
+        const relandPdf = () => {
+          const filmed = peekPdfFilmCurrent();
+          const page = filmed >= 2 ? filmed : landPage;
+          if (page >= 1) {
+            boardRef.current?.aimPdfPage(page);
+            boardRef.current?.scrollToPdfPage(page);
+          }
+          boardRef.current?.syncDocumentScrollBounds();
+          boardRef.current?.armReadingScroll();
+        };
+        relandPdf();
         await waitMs(50);
         if (workspaceLoadGenRef.current !== loadGen) return;
-        boardRef.current?.syncDocumentScrollBounds();
-        boardRef.current?.armReadingScroll();
+        relandPdf();
         await waitMs(200);
         if (workspaceLoadGenRef.current !== loadGen) return;
-        boardRef.current?.syncDocumentScrollBounds();
-        boardRef.current?.armReadingScroll();
+        relandPdf();
         await waitMs(500);
         if (workspaceLoadGenRef.current !== loadGen) return;
-        boardRef.current?.syncDocumentScrollBounds();
-        boardRef.current?.armReadingScroll();
+        relandPdf();
         scheduleIdlePadSyncPing(client, { emit: false });
 
         if (hubBytes) {
@@ -8735,7 +8775,12 @@ export function Workspace({
               current={pdfNav.current}
               aspects={pdfNav.aspects}
               renderThumb={renderPdfThumb}
-              onJump={(page) => boardRef.current?.scrollToPdfPage(page)}
+              onJump={(page) => {
+                resetPdfFilmPredicted();
+                boardRef.current?.aimPdfPage(page);
+                boardRef.current?.scrollToPdfPage(page);
+                setPdfFilmOpen(false);
+              }}
             />
           )}
           {!problem &&

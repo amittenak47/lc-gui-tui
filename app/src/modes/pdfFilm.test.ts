@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  filmStripWheelDelta,
   loadPdfSpreadPref,
   peekPdfReadingFrames,
   publishPdfFilmCurrent,
   publishPdfFilmFromCamera,
+  peekPdfPreloadPages,
   publishPdfFilmPredicted,
+  publishPdfPreloadPages,
   resetPdfFilmCurrent,
   resetPdfFilmPredicted,
+  resetPdfPreloadPages,
   resetPdfReadingFrames,
   savePdfSpreadPref,
   setPdfReadingFrames,
@@ -16,6 +20,13 @@ import {
   thumbWindow,
   trimThumbCache,
 } from "./pdfFilm";
+
+describe("filmStripWheelDelta", () => {
+  it("turns a vertical wheel into horizontal strip travel", () => {
+    expect(filmStripWheelDelta(0, 80)).toBe(80);
+    expect(filmStripWheelDelta(-40, 10)).toBe(-40);
+  });
+});
 
 describe("thumbWindow", () => {
   it("keeps a radius around the current page", () => {
@@ -144,6 +155,18 @@ describe("pdf film current", () => {
     unsubLive();
     unsubPred();
     resetPdfFilmPredicted();
+    resetPdfFilmCurrent();
+  });
+});
+
+describe("pdf preload pages", () => {
+  it("is a separate list from live C", () => {
+    resetPdfPreloadPages();
+    publishPdfFilmCurrent(10);
+    publishPdfPreloadPages([11, 12]);
+    expect(peekPdfPreloadPages()).toEqual([11, 12]);
+    resetPdfPreloadPages();
+    expect(peekPdfPreloadPages()).toEqual([]);
     resetPdfFilmCurrent();
   });
 });

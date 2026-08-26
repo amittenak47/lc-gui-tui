@@ -11,6 +11,7 @@ import {
   PDF_PREVIEW_RADIUS,
   PDF_PREVIEW_SCALE,
   PDF_RENDER_SCALE,
+  PDF_REST_CACHE,
   PDF_REST_SCALE,
   PDF_SESSION_CAP,
 } from "./perfPreset";
@@ -20,8 +21,9 @@ describe("mixed-quality PDF constants", () => {
     expect(PDF_REST_SCALE).toBe(2);
     expect(PDF_PREVIEW_SCALE).toBe(0.25);
     expect(PDF_RENDER_SCALE).toBe(PDF_REST_SCALE);
-    expect(PDF_PREVIEW_RADIUS).toBe(2);
-    expect(PDF_PREVIEW_CACHE).toBe(5);
+    expect(PDF_PREVIEW_RADIUS).toBe(3);
+    expect(PDF_PREVIEW_CACHE).toBe(7);
+    expect(PDF_REST_CACHE).toBe(5);
     expect(PDF_SESSION_CAP).toBe(80);
     expect(PDF_PAGEFILE).toBe(true);
     expect(PDF_PATH_FILL).toBe(true);

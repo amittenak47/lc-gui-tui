@@ -11,6 +11,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   PDF_FILM_THUMB_CSS,
   PDF_LETTER_ASPECT,
+  filmStripWheelDelta,
   grabLivePdfThumb,
   grabLruPdfThumb,
   subscribePdfFilmCurrent,
@@ -54,6 +55,20 @@ export function PdfPageRail({
 
   useEffect(() => subscribePdfFilmCurrent(setRailCurrent), []);
   useEffect(() => subscribePdfFilmPredicted(setRailPredicted), []);
+
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip || count < 2) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey) return;
+      const dx = filmStripWheelDelta(event.deltaX, event.deltaY);
+      if (dx === 0) return;
+      event.preventDefault();
+      strip.scrollLeft += dx;
+    };
+    strip.addEventListener("wheel", onWheel, { passive: false });
+    return () => strip.removeEventListener("wheel", onWheel);
+  }, [count]);
 
   useEffect(() => {
     const node = currentRef.current;
