@@ -1672,7 +1672,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const flickSettleErrRef = useRef(0);
   const pdfCoastRef = useRef(false);
   const pendingPdfPageRef = useRef(0);
-  const scrollToPdfPageRef = useRef<(pageId: number) => boolean>(() => false);
+  const scrollToPdfPageRef = useRef<
+    (pageId: number, opts?: { hold?: boolean }) => boolean
+  >(() => false);
   /** Last page named to the reader, so the pill fires on arrival only. */
   const lastNamedPageRef = useRef<RegionId | null>(null);
   /** Camera the page was last read from — skips the scene walk when still. */
@@ -6050,6 +6052,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         contentSlotNodeRef.current && pageContentRef.current
           ? documentLayerHeight(contentSlotNodeRef.current)
           : 0;
+      if (heightArg != null && heightArg >= 1) {
+        contentRenderedHeightRef.current = Math.max(
+          contentRenderedHeightRef.current,
+          heightArg,
+        );
+      }
       if (fromDom >= 1) {
         contentRenderedHeightRef.current = Math.max(contentRenderedHeightRef.current, fromDom);
       }
@@ -7590,7 +7598,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
   }, [maybeGrowDrawFrame, onChange, scheduleSlotReports]);
 
-  const jumpToPdfPage = useCallback((pageId: number) => {
+  const jumpToPdfPage = useCallback((pageId: number, opts?: { hold?: boolean }) => {
     const api = apiRef.current;
     if (!api || pageId < 1) return false;
     const state = api.getAppState() as {
@@ -7624,6 +7632,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         pageBoundsRef.current,
       );
     }
+    const stackEnd = frames.at(-1)?.maxY;
+    const boundsNow = pageBoundsRef.current;
+    if (stackEnd != null && boundsNow && stackEnd > boundsNow.maxY + 1) {
+      const grown = stackEnd - boundsNow.minY;
+      contentRenderedHeightRef.current = Math.max(
+        contentRenderedHeightRef.current,
+        grown,
+      );
+      pageBoundsRef.current = { ...boundsNow, maxY: stackEnd };
+      applyDocumentFrameHeight(grown);
+    }
     let nextScrollY = scrollYForPage(frames, pageId, zoom, insetTop);
     if (nextScrollY == null) {
       const slot = contentSlotNodeRef.current;
@@ -7644,7 +7663,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const width = viewWidth || prevLive?.width || state.width || 800;
     const height = viewHeight || prevLive?.height || state.height || 800;
     userAdjustedCameraRef.current = true;
-    pendingPdfPageRef.current = pageId;
+    pendingPdfPageRef.current = opts?.hold === false ? 0 : pageId;
     pendingVisualScrollRef.current = null;
     if (visualScrollRafRef.current) {
       cancelAnimationFrame(visualScrollRafRef.current);
@@ -7674,7 +7693,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     );
     scheduleSlotReports();
     return true;
-  }, [scheduleSlotReports]);
+  }, [applyDocumentFrameHeight, scheduleSlotReports]);
   scrollToPdfPageRef.current = jumpToPdfPage;
 
   useImperativeHandle(
@@ -8030,14 +8049,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       fitRegion: (regionId: RegionId | string) => {
         refitToViewport(regionId);
       },
-      scrollToPdfPage: (pageId: number) => jumpToPdfPage(pageId),
-      aimPdfPage: (pageId: number) => {
+      scrollToPdfPage: (pageId: number, opts?: { hold?: boolean }) =>
+        jumpToPdfPage(pageId, opts),
+      aimPdfPage: (pageId: number, opts?: { hold?: boolean }) => {
         if (!(pageId >= 1)) {
           pendingPdfPageRef.current = 0;
           return;
         }
         userAdjustedCameraRef.current = true;
-        pendingPdfPageRef.current = pageId;
+        pendingPdfPageRef.current = opts?.hold === false ? 0 : pageId;
         publishPdfFilmCurrent(pageId);
       },
       remapPdfInkAcrossPdfLayout: (fromFrames) => {
@@ -8812,11 +8832,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     onClick={pageSpread.onToggle}
                   >
                     <SpreadTwoUpIcon />
-                    {pageSpread.busy ? (
-                      <span className="lc-spread-busy" aria-hidden="true">
-                        <span className="lc-spinner" />
-                      </span>
-                    ) : null}
+                    <span className="lc-spread-busy" aria-hidden="true">
+                      <span className="lc-spinner" />
+                    </span>
                   </button>
                 )}
                 {!mapChromeHidden && mobile && onToggleSheetLock && (

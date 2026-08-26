@@ -142,6 +142,11 @@ export function resetPdfReadingFrames(): void {
   readingFrames = [];
 }
 
+/** Spread on/off doubles or halves the slot list. Same count means layout has not published yet. */
+export function pdfSpreadSlotCountChanged(fromCount: number, toCount: number): boolean {
+  return fromCount >= 1 && toCount >= 1 && fromCount !== toCount;
+}
+
 /** Chrome filmstrip current page — does not go through Workspace setState. */
 export function publishPdfFilmCurrent(page: number): void {
   if (!(page >= 1) || page === filmCurrent) return;
@@ -254,14 +259,57 @@ export function subscribePdfPaintWake(listener: () => void): () => void {
   };
 }
 
-/** Spread / column relayout: chrome spinner until page C is on screen again. */
+/**
+ * Spread / column relayout: chrome spinner until the new stack is jumped.
+ *
+ * Clears are deferred at least {@link PDF_LAYOUT_BUSY_MIN_MS} so a same-tick
+ * LRU blit cannot cancel the busy React update before the spinner paints.
+ */
+export const PDF_LAYOUT_BUSY_MIN_MS = 160;
+const PDF_LAYOUT_BUSY_MAX_MS = 5000;
 let layoutBusy = false;
+let layoutBusySince = 0;
+let layoutBusyClearTimer = 0;
+let layoutBusyMaxTimer = 0;
 const layoutBusyListeners = new Set<(busy: boolean) => void>();
 
-export function publishPdfLayoutBusy(busy: boolean): void {
-  if (layoutBusy === busy) return;
+function emitLayoutBusy(busy: boolean): void {
   layoutBusy = busy;
   for (const listener of layoutBusyListeners) listener(layoutBusy);
+}
+
+export function publishPdfLayoutBusy(busy: boolean): void {
+  if (layoutBusyClearTimer) {
+    clearTimeout(layoutBusyClearTimer);
+    layoutBusyClearTimer = 0;
+  }
+  if (busy) {
+    if (layoutBusy) return;
+    layoutBusySince = typeof performance !== "undefined" ? performance.now() : Date.now();
+    emitLayoutBusy(true);
+    if (layoutBusyMaxTimer) clearTimeout(layoutBusyMaxTimer);
+    layoutBusyMaxTimer = setTimeout(() => {
+      layoutBusyMaxTimer = 0;
+      if (layoutBusy) emitLayoutBusy(false);
+    }, PDF_LAYOUT_BUSY_MAX_MS) as unknown as number;
+    return;
+  }
+  if (!layoutBusy) return;
+  const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const wait = Math.max(0, PDF_LAYOUT_BUSY_MIN_MS - (now - layoutBusySince));
+  const finish = () => {
+    layoutBusyClearTimer = 0;
+    if (layoutBusyMaxTimer) {
+      clearTimeout(layoutBusyMaxTimer);
+      layoutBusyMaxTimer = 0;
+    }
+    if (layoutBusy) emitLayoutBusy(false);
+  };
+  if (wait > 0) {
+    layoutBusyClearTimer = setTimeout(finish, wait) as unknown as number;
+  } else {
+    finish();
+  }
 }
 
 export function peekPdfLayoutBusy(): boolean {

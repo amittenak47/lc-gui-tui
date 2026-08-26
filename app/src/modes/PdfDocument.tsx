@@ -395,6 +395,22 @@ export function pdfStackFrames(
   return frames;
 }
 
+/** `.lc-pdf-doc` padding-bottom — stack measure must include it or the frame is short. */
+export const PDF_DOC_PAD_BOTTOM = 48;
+
+/** Scene height of the laid-out stack, including chrome padding. */
+export function pdfStackMeasureHeight(
+  pages: readonly { pageNumber: number; height: number }[],
+  spread = false,
+  gap = PAGE_GAP,
+  padTop = PDF_DOC_PAD_TOP,
+  padBottom = PDF_DOC_PAD_BOTTOM,
+): number {
+  const frames = pdfStackFrames(pages, spread, gap, padTop);
+  const last = frames.at(-1)?.maxY ?? padTop;
+  return last + padBottom;
+}
+
 function queryPageSlots(host: HTMLElement, n: number): HTMLElement[] {
   return [...host.querySelectorAll<HTMLElement>(`[data-pdf-page="${n}"]`)];
 }
@@ -434,7 +450,6 @@ function blitCachedSheet(
     dest.width,
     dest.height,
   );
-  if (n === peekPdfFilmCurrent()) publishPdfLayoutBusy(false);
 }
 
 function releasePagePixels(
@@ -729,8 +744,12 @@ export function PdfDocument({
       /* already finished */
     }
     inFlightPaintRef.current = null;
+    const next = layoutPdfPages(nats, frameWidth, spread);
+    const frames = pdfStackFrames(next, spread, PAGE_GAP, PDF_DOC_PAD_TOP);
+    setPdfReadingFrames(frames);
+    onMeasureRef.current?.(pdfStackMeasureHeight(next, spread));
     if (spreadChanged) publishPdfLayoutBusy(true);
-    setPages(layoutPdfPages(nats, frameWidth, spread));
+    setPages(next);
     setWindowTick((tick) => tick + 1);
     wakePdfPaintPump();
   }, [frameWidth, spread]);

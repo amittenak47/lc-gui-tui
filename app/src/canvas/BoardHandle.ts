@@ -227,14 +227,17 @@ export interface BoardHandle {
   /**
    * Jump the camera so a 1-based PDF page sits under the chrome.
    * No-op when that page is not in the document slot.
+   *
+   * `hold: false` (spread toggle): do not eat pans until the camera matches.
+   * Open-restore keeps the default hold so a rewind to page 1 cannot publish C.
    */
-  scrollToPdfPage(pageId: number): boolean;
+  scrollToPdfPage(pageId: number, opts?: { hold?: boolean }): boolean;
   /**
    * Remember which PDF page to paint/restore before the stack exists.
    * Camera jumps once that page's div is laid out. Prevents decoding page 1
-   * on reopen.
+   * on reopen. `hold: false` publishes C without locking pan.
    */
-  aimPdfPage(pageId: number): void;
+  aimPdfPage(pageId: number, opts?: { hold?: boolean }): void;
   /**
    * Move ink from one-up sheet space onto stacked two-up slots (or back).
    * Call after PdfDocument has published the new reading frames.
