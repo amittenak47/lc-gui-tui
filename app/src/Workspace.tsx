@@ -191,7 +191,7 @@ import { WorkspaceLinkPicker, groupLabel, type LinkTarget } from "./modes/Worksp
 import { resolveWikiLinks } from "./util/wikiLinks";
 import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
-import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, publishPdfFilmCurrent, peekPdfFilmCurrent, peekPdfReadingFrames, resetPdfFilmPredicted } from "./modes/pdfFilm";
+import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, publishPdfFilmCurrent, peekPdfFilmCurrent, peekPdfReadingFrames, resetPdfFilmPredicted, publishPdfLayoutBusy, subscribePdfLayoutBusy } from "./modes/pdfFilm";
 import { AnnotateDialog, type AnnotateDialogKind } from "./modes/AnnotateDialog";
 import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
@@ -1037,6 +1037,8 @@ export function Workspace({
   const [pdfSpreadByHash, setPdfSpreadByHash] = useState<Record<string, boolean>>(
     {},
   );
+  const [pdfLayoutBusy, setPdfLayoutBusy] = useState(false);
+  useEffect(() => subscribePdfLayoutBusy(setPdfLayoutBusy), []);
   const spreadToggleAtRef = useRef(0);
   const annotatePdfHash =
     annotateSource?.docType === "pdf" ? annotateSource.hash : null;
@@ -1049,6 +1051,7 @@ export function Workspace({
     const now = performance.now();
     if (now - spreadToggleAtRef.current < 180) return;
     spreadToggleAtRef.current = now;
+    publishPdfLayoutBusy(true);
     const focused = document.activeElement;
     if (focused instanceof HTMLElement) focused.blur();
     const page = peekPdfFilmCurrent();
@@ -8773,7 +8776,7 @@ export function Workspace({
             pdfFilmPublish={active}
             pageSpread={
               annotateSource?.docType === "pdf"
-                ? { on: pdfSpread, onToggle: togglePdfSpread }
+                ? { on: pdfSpread, onToggle: togglePdfSpread, busy: pdfLayoutBusy }
                 : null
             }
           />

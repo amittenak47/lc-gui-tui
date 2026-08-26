@@ -1229,7 +1229,7 @@ export interface BoardProps {
    * Two-up / spread: each scanned sheet becomes two stacked reading slots.
    * Shown for any PDF, including one page. Off by default.
    */
-  pageSpread?: { on: boolean; onToggle: () => void } | null;
+  pageSpread?: { on: boolean; onToggle: () => void; busy?: boolean } | null;
 }
 
 /** Stable across renders — a fresh object makes Excalidraw thrash its tunnel store. */
@@ -8789,12 +8789,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 {!mapChromeHidden && pageSpread && (
                   <button
                     type="button"
-                    className={
-                      pageSpread.on
-                        ? "lc-lined-toggle lc-tip-target is-active"
-                        : "lc-lined-toggle lc-tip-target"
-                    }
+                    className={[
+                      "lc-lined-toggle lc-tip-target lc-spread-toggle",
+                      pageSpread.on ? "is-active" : "",
+                      pageSpread.busy ? "is-busy" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
                     aria-pressed={pageSpread.on}
+                    aria-busy={pageSpread.busy || undefined}
                     aria-label={
                       pageSpread.on
                         ? "Show whole sheet"
@@ -8809,6 +8812,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     onClick={pageSpread.onToggle}
                   >
                     <SpreadTwoUpIcon />
+                    {pageSpread.busy ? (
+                      <span className="lc-spread-busy" aria-hidden="true">
+                        <span className="lc-spinner" />
+                      </span>
+                    ) : null}
                   </button>
                 )}
                 {!mapChromeHidden && mobile && onToggleSheetLock && (

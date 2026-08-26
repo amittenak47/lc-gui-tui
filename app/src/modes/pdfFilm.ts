@@ -6,13 +6,14 @@
  * textbook. Nearby pages copy their live canvas; the rest wait until they
  * scroll into the strip.
  *
- * Viewed thumbs are remembered per document content hash for the session.
- * With the filmstrip open, an idle pump fills the rest of the file at ~48px
- * on the same pdf.js document — never while rest-2 / 0.25 paint is queued.
+ * JPEGs are remembered per document content hash (session + IndexedDB). A
+ * missing page is decoded at ~48px only after the camera has been idle with
+ * the filmstrip open — never from the reading paint pump.
  */
 
 import { pageIdFromCamera, type PageFrame } from "../canvas/inkPageIndex";
 import { peekActiveSheet } from "./pdfSheetCache";
+import { persistPdfThumb } from "./pdfThumbStore";
 import {
   PDF_FILM_CACHE,
   PDF_FILM_RADIUS,
@@ -253,6 +254,30 @@ export function subscribePdfPaintWake(listener: () => void): () => void {
   };
 }
 
+/** Spread / column relayout: chrome spinner until page C is on screen again. */
+let layoutBusy = false;
+const layoutBusyListeners = new Set<(busy: boolean) => void>();
+
+export function publishPdfLayoutBusy(busy: boolean): void {
+  if (layoutBusy === busy) return;
+  layoutBusy = busy;
+  for (const listener of layoutBusyListeners) listener(layoutBusy);
+}
+
+export function peekPdfLayoutBusy(): boolean {
+  return layoutBusy;
+}
+
+export function subscribePdfLayoutBusy(
+  listener: (busy: boolean) => void,
+): () => void {
+  layoutBusyListeners.add(listener);
+  listener(layoutBusy);
+  return () => {
+    layoutBusyListeners.delete(listener);
+  };
+}
+
 function samePageList(a: readonly number[], b: readonly number[]): boolean {
   if (a.length !== b.length) return false;
   return a.every((n, i) => n === b[i]);
@@ -312,8 +337,30 @@ export function rememberPdfThumb(hash: string | null | undefined, page: number, 
   }
   const prev = doc.get(page);
   if (prev === url) return;
+  const first = !prev;
   doc.set(page, url);
   for (const listener of thumbListeners) listener();
+  if (first) void persistPdfThumb(hash, page, url);
+}
+
+/** Disk thumbs for this hash. Does not write IndexedDB again. */
+export function hydratePdfThumbs(
+  hash: string,
+  thumbs: Map<number, string> | Iterable<readonly [number, string]>,
+): void {
+  if (!hash) return;
+  let doc = thumbsByHash.get(hash);
+  if (!doc) {
+    doc = new Map();
+    thumbsByHash.set(hash, doc);
+  }
+  let added = false;
+  for (const [page, url] of thumbs) {
+    if (!(page >= 1) || !url || doc.has(page)) continue;
+    doc.set(page, url);
+    added = true;
+  }
+  if (added) for (const listener of thumbListeners) listener();
 }
 
 export function peekPdfThumb(hash: string | null | undefined, page: number): string | null {
