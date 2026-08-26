@@ -297,7 +297,8 @@ import {
   type PadHubWindowDetail,
 } from "./util/padSync";
 import { isCameraBusy } from "./util/cameraBusy";
-import { loadPadHub } from "./util/padHub";
+import { loadPadHub, loadPadSyncSince } from "./util/padHub";
+import { annotatePadBody, whiteboardPadBody } from "./util/padSync";
 import { getParkedDocSource, parkDocSource } from "./util/parkedDocSource";
 import { MAX_SOURCE_CHARS } from "./util/tabPersist";
 import { ensureDevicePrefs } from "./util/devicePrefs";
@@ -843,6 +844,46 @@ export function Workspace({
           bytes: job.bytes,
         };
       },
+      /*
+       * The open pad, read live from IDB so the walk pushes what is on the
+       * device right now — not what was there when the pill mounted. Null on
+       * boards that are not a hub pad (home, problem sets for now).
+       */
+      pad: async () => {
+        if (isWhiteboard(problem) && whiteboardNotebookIdRef.current) {
+          const notebook = await getWhiteboardNotebook(whiteboardNotebookIdRef.current);
+          if (!notebook) return null;
+          return {
+            kind: "whiteboard" as const,
+            id: notebook.id,
+            hubAckUpdatedAt: () => notebook.hubAckUpdatedAt ?? 0,
+            buildBody: () => whiteboardPadBody(notebook),
+          };
+        }
+        const docId = annotateDocIdRef.current;
+        if (!docId) return null;
+        const doc = await getAnnotateDoc(docId);
+        if (!doc) return null;
+        return {
+          kind: "annotate" as const,
+          id: doc.id,
+          hubAckUpdatedAt: () => doc.hubAckUpdatedAt ?? 0,
+          buildBody: () => annotatePadBody(doc),
+        };
+      },
+      emitReload: () => {
+        // H's chosen reload: remount the open pad from the row we kept.
+        const id = isWhiteboard(problem)
+          ? whiteboardNotebookIdRef.current
+          : annotateDocIdRef.current;
+        if (!id) return;
+        window.dispatchEvent(
+          new CustomEvent<PadHubWindowDetail>(PAD_HUB_WINDOW_EVENT, {
+            detail: { kind: isWhiteboard(problem) ? "whiteboard" : "annotate", id, op: "reload" },
+          }),
+        );
+      },
+      inkSince: () => loadPadSyncSince(),
       onIndexProgress: (progress) => setDocIndexProgress(progress),
       onIndexError: (message) => {
         if (message) {
