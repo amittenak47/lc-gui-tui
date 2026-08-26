@@ -7,7 +7,8 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use super::{blocking, AppError, Shared};
-use crate::docs_index::{self, IndexBody, IndexStatus, RetrievedChunk};
+use crate::docs_index::{self, IndexBody, IndexPage, IndexStatus, RetrievedChunk};
+use crate::pads;
 
 #[derive(Debug, Serialize)]
 pub struct IndexResponse {
@@ -122,6 +123,112 @@ pub async fn embed(
     })
     .await?;
     Ok(Json(progress))
+}
+
+/// Query for `POST /docs/{hash}/index-from-bytes`.
+#[derive(Debug, Deserialize, Default)]
+pub struct IndexFromBytesBody {
+    /// File name as opened; stored with the index for display.
+    pub name: String,
+    /// `pdf`, `markdown`, `code`. The hub extracts what it can from bytes;
+    /// text kinds arrive as text instead of a blob.
+    #[serde(default)]
+    pub doc_type: Option<String>,
+    /// For markdown/code: the pad's source text. These have no bytes on the
+    /// hub — the text is small enough to ride in the request.
+    #[serde(default)]
+    pub source_text: Option<String>,
+}
+
+/// Extract a stored blob into the index.
+///
+/// The tablet never runs pdf.js `getTextContent` for indexing — extraction
+/// happens here, against the bytes it already uploaded once, so opening a
+/// textbook does not fight the paint worker for its pages. Markdown and code
+/// have no blob: their source text rides in the request instead.
+pub async fn index_from_bytes(
+    State(state): State<Shared>,
+    UrlPath(hash): UrlPath<String>,
+    Json(body): Json<IndexFromBytesBody>,
+) -> Result<Response, AppError> {
+    let hash = hash.trim().to_string();
+    if hash.is_empty() {
+        return Err(AppError::bad_request(anyhow::anyhow!("missing document hash")));
+    }
+    let name = body.name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::bad_request(anyhow::anyhow!("missing document name")));
+    }
+    let doc_type = body.doc_type.as_deref().unwrap_or("pdf").trim().to_string();
+
+    let pages = if doc_type == "markdown" || doc_type == "code" {
+        // Text kinds: no blob exists. One page, the whole text.
+        let text = body.source_text.unwrap_or_default().trim().to_string();
+        if text.is_empty() {
+            return Err(AppError::bad_request(anyhow::anyhow!("no source text to index")));
+        }
+        vec![IndexPage {
+            page: 1,
+            text,
+            heading: None,
+        }]
+    } else if doc_type == "pdf" {
+        let blob_hash = hash.clone();
+        let bytes = blocking(move || {
+            let dir = pads::blobs_dir()?;
+            Ok(pads::get_blob(&dir, &blob_hash)?)
+        })
+        .await?;
+        let Some(bytes) = bytes else {
+            return Err(AppError::not_found(anyhow::anyhow!(
+                "no bytes stored for this document — PUT /docs/:hash/bytes first"
+            )));
+        };
+        blocking(move || {
+            Ok(pdf_extract::extract_text_from_mem_by_pages(&bytes)?)
+        })
+            .await?
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| IndexPage {
+                page: (i + 1) as u32,
+                text,
+                heading: None,
+            })
+            .collect::<Vec<_>>()
+    } else {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "doc type {doc_type} cannot be indexed from hub-side bytes"
+        )));
+    };
+
+    if pages.is_empty() {
+        return Err(AppError::bad_request(anyhow::anyhow!(
+            "no text could be read from this document"
+        )));
+    }
+
+    let cfg = state.cfg_snapshot();
+    let result = blocking(move || {
+        let path = docs_index::db_path()?;
+        let mut conn = docs_index::open(&path)?;
+        let before = docs_index::status(&conn, &hash)?;
+        let body = IndexBody {
+            name: name.clone(),
+            doc_type: doc_type.clone(),
+            pages,
+        };
+        let after = docs_index::upsert(&mut conn, &hash, &body, &cfg, false)?;
+        Ok::<_, anyhow::Error>(IndexResponse {
+            wrote: !before.indexed || before.chunk_count != after.chunk_count,
+            status: after,
+        })
+    })
+    .await?;
+    if !result.wrote {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+    Ok((StatusCode::CREATED, Json(result)).into_response())
 }
 
 /// Query for `PUT /docs/{hash}/index`.
