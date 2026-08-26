@@ -28,6 +28,7 @@ import {
   hydratePdfThumbs,
   peekPdfLayoutBusy,
   publishPdfLayoutBusy,
+  pdfSpreadSlotCountChanged,
   subscribePdfLayoutBusy,
 } from "./pdfFilm";
 
@@ -149,8 +150,18 @@ describe("nextMissingPdfThumb", () => {
   });
 });
 
+describe("pdfSpreadSlotCountChanged", () => {
+  it("is true only once the slot list doubles or halves", () => {
+    expect(pdfSpreadSlotCountChanged(50, 50)).toBe(false);
+    expect(pdfSpreadSlotCountChanged(50, 100)).toBe(true);
+    expect(pdfSpreadSlotCountChanged(100, 50)).toBe(true);
+    expect(pdfSpreadSlotCountChanged(0, 50)).toBe(false);
+  });
+});
+
 describe("pdf layout busy", () => {
   it("notifies subscribers when spread relayout starts and when C is ready", () => {
+    vi.useFakeTimers();
     publishPdfLayoutBusy(false);
     const seen: boolean[] = [];
     const unsub = subscribePdfLayoutBusy((busy) => seen.push(busy));
@@ -158,9 +169,13 @@ describe("pdf layout busy", () => {
     publishPdfLayoutBusy(true);
     publishPdfLayoutBusy(true);
     publishPdfLayoutBusy(false);
+    expect(seen).toEqual([false, true]);
+    expect(peekPdfLayoutBusy()).toBe(true);
+    vi.advanceTimersByTime(200);
     expect(seen).toEqual([false, true, false]);
     expect(peekPdfLayoutBusy()).toBe(false);
     unsub();
+    vi.useRealTimers();
   });
 });
 

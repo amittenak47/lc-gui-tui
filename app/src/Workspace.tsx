@@ -191,7 +191,7 @@ import { WorkspaceLinkPicker, groupLabel, type LinkTarget } from "./modes/Worksp
 import { resolveWikiLinks } from "./util/wikiLinks";
 import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
-import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, publishPdfFilmCurrent, peekPdfFilmCurrent, peekPdfReadingFrames, resetPdfFilmPredicted, publishPdfLayoutBusy, subscribePdfLayoutBusy } from "./modes/pdfFilm";
+import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, publishPdfFilmCurrent, peekPdfFilmCurrent, peekPdfReadingFrames, pdfSpreadSlotCountChanged, resetPdfFilmPredicted, publishPdfLayoutBusy, subscribePdfLayoutBusy } from "./modes/pdfFilm";
 import { AnnotateDialog, type AnnotateDialogKind } from "./modes/AnnotateDialog";
 import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
@@ -1051,6 +1051,7 @@ export function Workspace({
     const now = performance.now();
     if (now - spreadToggleAtRef.current < 180) return;
     spreadToggleAtRef.current = now;
+    setPdfLayoutBusy(true);
     publishPdfLayoutBusy(true);
     const focused = document.activeElement;
     if (focused instanceof HTMLElement) focused.blur();
@@ -1066,9 +1067,28 @@ export function Workspace({
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         boardRef.current?.remapPdfInkAcrossPdfLayout(fromFrames);
-        if (!(page >= 1)) return;
-        boardRef.current?.aimPdfPage(page);
-        boardRef.current?.scrollToPdfPage(page);
+        if (!(page >= 1)) {
+          publishPdfLayoutBusy(false);
+          return;
+        }
+        boardRef.current?.aimPdfPage(page, { hold: false });
+        const started = performance.now();
+        const fromCount = fromFrames.length;
+        const tick = () => {
+          const nowCount = peekPdfReadingFrames().length;
+          const layoutReady =
+            fromCount < 1 || pdfSpreadSlotCountChanged(fromCount, nowCount);
+          const ok =
+            layoutReady &&
+            boardRef.current?.scrollToPdfPage(page, { hold: false }) === true;
+          if (ok || performance.now() - started > 8000) {
+            if (!ok) boardRef.current?.scrollToPdfPage(page, { hold: false });
+            publishPdfLayoutBusy(false);
+            return;
+          }
+          requestAnimationFrame(tick);
+        };
+        tick();
       });
     });
   }, []);

@@ -41,6 +41,7 @@ import {
   pdfPageTargetScale,
   pdfStackFrames,
   pdfStackHeight,
+  pdfStackMeasureHeight,
   windowedPages,
 } from "./PdfDocument";
 
@@ -83,6 +84,17 @@ describe("pdfStackHeight", () => {
     expect(
       pdfStackHeight([{ height: 100 }, { height: 100 }, { height: 100 }], 18, true),
     ).toBe(600 + 18 * 5);
+  });
+});
+
+describe("pdfStackMeasureHeight", () => {
+  it("adds doc padding so the page frame is not short of the stack", () => {
+    const pages = [
+      { pageNumber: 1, height: 100 },
+      { pageNumber: 2, height: 100 },
+    ];
+    expect(pdfStackMeasureHeight(pages, false)).toBe(18 + 200 + 18 + 48);
+    expect(pdfStackMeasureHeight(pages, true)).toBe(18 + 400 + 18 * 3 + 48);
   });
 });
 

@@ -5785,22 +5785,32 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-spread-toggle {
   position: relative;
+  overflow: hidden;
 }
 
-.lc-spread-toggle.is-busy .lc-spread-busy {
+.lc-spread-toggle .lc-spread-busy {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
   border-radius: inherit;
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
   pointer-events: none;
+  opacity: 0;
+  transition: opacity 80ms linear;
+  z-index: 2;
 }
 
-.lc-spread-toggle.is-busy .lc-spread-busy .lc-spinner {
-  width: 14px;
-  height: 14px;
+.lc-spread-toggle.is-busy .lc-spread-busy {
+  opacity: 1;
+}
+
+.lc-spread-toggle .lc-spread-busy .lc-spinner {
+  width: 16px;
+  height: 16px;
   border-width: 2px;
+  border-color: color-mix(in srgb, var(--ink) 22%, transparent);
+  border-top-color: var(--accent);
 }
 
 /*
