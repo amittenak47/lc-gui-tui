@@ -397,16 +397,7 @@ export async function pushWhiteboardPad(
   client: LcClient,
   notebook: WhiteboardNotebook,
 ): Promise<boolean> {
-  const body: WhiteboardPadDto = {
-    id: notebook.id,
-    title: notebook.title,
-    updated_at: notebook.updatedAt,
-    page_count: notebook.pageCount,
-    sync_seq: notebook.syncSeq ?? 0,
-    base_updated_at: notebook.hubAckUpdatedAt ?? 0,
-    board: notebook.board,
-    agent: notebook.agent ?? [],
-  };
+  const body = whiteboardPadBody(notebook);
   try {
     const written = await client.putWhiteboardPad(notebook.id, body);
     markWhiteboardHubAck(notebook.id, written.updated_at ?? notebook.updatedAt);
@@ -418,8 +409,23 @@ export async function pushWhiteboardPad(
   }
 }
 
-export async function pushAnnotatePad(client: LcClient, doc: AnnotateDoc): Promise<boolean> {
-  const body: AnnotatePadDto = {
+/** The wire form of a notebook; shared by autosave and the Sync walk. */
+export function whiteboardPadBody(notebook: WhiteboardNotebook): WhiteboardPadDto {
+  return {
+    id: notebook.id,
+    title: notebook.title,
+    updated_at: notebook.updatedAt,
+    page_count: notebook.pageCount,
+    sync_seq: notebook.syncSeq ?? 0,
+    base_updated_at: notebook.hubAckUpdatedAt ?? 0,
+    board: notebook.board,
+    agent: notebook.agent ?? [],
+  };
+}
+
+/** The wire form of an annotate doc; shared by autosave and the Sync walk. */
+export function annotatePadBody(doc: AnnotateDoc): AnnotatePadDto {
+  return {
     id: doc.id,
     name: doc.name,
     hash: doc.hash,
@@ -432,6 +438,10 @@ export async function pushAnnotatePad(client: LcClient, doc: AnnotateDoc): Promi
     board: doc.board,
     agent: doc.agent ?? [],
   };
+}
+
+export async function pushAnnotatePad(client: LcClient, doc: AnnotateDoc): Promise<boolean> {
+  const body = annotatePadBody(doc);
   try {
     const written = await client.putAnnotatePad(doc.id, body);
     markAnnotateHubAck(doc.id, written.updated_at ?? doc.updatedAt);

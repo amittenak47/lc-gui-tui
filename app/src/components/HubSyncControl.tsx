@@ -9,10 +9,17 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import type { LcClient } from "../api/client";
+import type { AnnotatePadDto, LcClient, WhiteboardPadDto } from "../api/client";
 import type { DocHubHint } from "../util/hubHint";
-import type { DocWorkProgress } from "./DocIndexChip";
 import { pushDocBytes } from "../util/padSync";
+import type { DocWorkProgress } from "./DocIndexChip";
+import {
+  snapshotHub,
+  walkPushPad,
+  walkSyncInk,
+  walkSyncLinks,
+  type HubPadKind,
+} from "../util/hubWalk";
 import { MorphBar } from "./MorphBar";
 
 export type HubSyncStage =
@@ -40,7 +47,16 @@ const LABEL: Record<HubSyncStage, string> = {
 /** How long each stub stage holds before the label advances. */
 const STAGE_MS = 650;
 
-const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** A stage stopped because both sides changed; nothing was applied. */
+class WalkConflict extends Error {
+  constructor(
+    public readonly stageLabel: "pad" | "ink",
+    detail: string,
+  ) {
+    super(detail);
+    this.name = "WalkConflict";
+  }
+}
 
 /**
  * PUT the document bytes exactly once per walk.
@@ -68,6 +84,17 @@ export interface HubSyncWalkHost {
     text: string;
     bytes: ArrayBuffer | null;
   } | null;
+  /** The open pad's id and kind, or null on boards without a hub pad. */
+  pad(): Promise<{
+    kind: HubPadKind;
+    id: string;
+    hubAckUpdatedAt(): number;
+    buildBody(): AnnotatePadDto | WhiteboardPadDto;
+  } | null>;
+  /** H: reload the open pad from what we kept — the chosen reload, not a ping. */
+  emitReload(): void;
+  /** How far back "changed after this" reaches for ink conflicts. */
+  inkSince(): number;
   onIndexProgress(progress: DocWorkProgress | null): void;
   onIndexError(message: string | null): void;
 }
@@ -212,13 +239,54 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
       }
       host?.onIndexProgress(null);
 
-      // — E–H land with their own steps; walk the labels so one tap keeps
-      // meaning "the whole thing".
-      setStage("pad");
-      for (const next of ["ink", "links", "pull", "synced"] as HubSyncStage[]) {
-        await wait(STAGE_MS);
-        setStage(next);
+      /*
+       * — E through H, same tap. E and F can stop everything on a conflict:
+       * the pill parks on that stage's label until the reader resolves.
+       */
+      const padInfo = client && host ? await host.pad() : null;
+      let hubHasNewerRow = false;
+      if (padInfo) {
+        const snapshot = await snapshotHub(client!);
+        const walkPad = {
+          kind: padInfo.kind,
+          id: padInfo.id,
+          hubAckUpdatedAt: () => padInfo.hubAckUpdatedAt(),
+          buildBody: () => padInfo.buildBody(),
+        } as const;
+
+        // — E: push this pad's JSON (CAS). Conflict → park before any apply.
+        setStage("pad");
+        const pushed = await walkPushPad(client!, walkPad, snapshot);
+        if (pushed.outcome === "conflict") {
+          throw new WalkConflict("pad", pushed.detail);
+        }
+
+        // — F: handwriting for this pad only. Dual-write parks at Ink; after
+        // a resolve the walk resumes at G without redoing Index or Pad.
+        setStage("ink");
+        const ink = await walkSyncInk(client!, walkPad, snapshot, host?.inkSince() ?? 0);
+        if (ink.outcome === "conflict") {
+          throw new WalkConflict(
+            "ink",
+            `page ${ink.pageId} has new strokes here and on the hub`,
+          );
+        }
+
+        // — G: links union cleanly; snapshots only fill gaps.
+        setStage("links");
+        await walkSyncLinks(client!, snapshot);
+
+        // — H: if what the hub holds is still newer than the row we kept —
+        // e.g. this conflict was resolved by taking the server — reload the
+        // open pad from it. This is the chosen reload, not a background ping.
+        const row = [...snapshot.annotateRows, ...snapshot.whiteboardRows].find(
+          (r) => r.id === padInfo.id,
+        );
+        hubHasNewerRow = row != null && row.updated_at > padInfo.hubAckUpdatedAt();
       }
+      setStage("pull");
+      if (hubHasNewerRow) host?.emitReload();
+      setStage("synced");
       walkingRef.current = false;
     } catch (cause) {
       walkingRef.current = false;
