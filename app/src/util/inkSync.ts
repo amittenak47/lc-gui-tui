@@ -120,6 +120,57 @@ async function writeInkPage(
 }
 
 /**
+ * Conflict escape hatches for the Sync walk's ink stage (F).
+ *
+ * A dual-write page stops the walk with the split open; whichever whole pane
+ * the reader keeps, these converge the two sides to it so the next walk sees
+ * agreement instead of the same fight again. They are per-pad, not per-page,
+ * because ink stays "whole pane" — nobody has answered for strokes yet.
+ */
+
+/** Take the hub's copies: overwrite this device's pages from what it holds. */
+export async function pullInkPagesOverLocal(
+  client: LcClient,
+  kind: InkPadKind,
+  key: string,
+): Promise<number> {
+  const bytes = await client.getInkPages(kind, key).catch(() => [] as InkPageDto[]);
+  const docKey = inkDocKey(kind, key);
+  let written = 0;
+  for (const full of bytes) {
+    if (!full.gz) continue;
+    await writeInkPage(docKey, full);
+    written++;
+  }
+  return written;
+}
+
+/** Keep this device's copies: restate every local page on the hub. */
+export async function pushInkPagesToHub(
+  client: LcClient,
+  kind: InkPadKind,
+  key: string,
+): Promise<number> {
+  const localRows = await getInkPageRecords(inkDocKey(kind, key));
+  let pushed = 0;
+  for (const row of localRows) {
+    const gz = await gzOf(row);
+    if (!gz) continue;
+    await client
+      .putInkPage({
+        kind,
+        key,
+        page_id: row.pageId,
+        updated_at: row.updatedAt,
+        gz: bytesToB64(gz),
+      })
+      .catch(() => undefined);
+    pushed++;
+  }
+  return pushed;
+}
+
+/**
  * Pull the pages a digest says are newer, and push the ones that are newer here.
  *
  * The digest is on the ping and carries no strokes, so a quiet fifteen seconds

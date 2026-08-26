@@ -1746,6 +1746,161 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   white-space: nowrap;
 }
 
+/*
+ * The conflict split: Local left, Server right, parked over the workspace
+ * until one choice is made. Nothing here invents a colour — the panes are
+ * surface and chrome-edge like the rest of the board, and keep/reject reuse
+ * the quote sheet's confirm buttons (`.lc-doc-confirm-yes` / `-no`), which
+ * already carry the app's answer for yes and no.
+ */
+.lc-hub-conflict {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.lc-hub-conflict-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--chrome-edge);
+}
+
+.lc-hub-conflict-head strong {
+  font-size: 14px;
+}
+
+.lc-hub-conflict-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.lc-hub-conflict-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.lc-hub-conflict-pane[data-verdict="keep"] {
+  background: color-mix(in srgb, var(--ok) 5%, transparent);
+}
+
+.lc-hub-conflict-sash {
+  width: 1px;
+  background: var(--chrome-edge);
+}
+
+.lc-hub-conflict-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--chrome-edge);
+}
+
+.lc-hub-conflict-tab {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.lc-hub-conflict-pane-updated {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.lc-hub-conflict-pane-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+.lc-hub-conflict-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+/* A mark the other pane knows about too — the plan's highlight rule. */
+.lc-hub-conflict-note.is-same-id {
+  border-style: dashed;
+}
+
+.lc-hub-conflict-note.is-differs .lc-hub-conflict-note-excerpt {
+  font-weight: 600;
+}
+
+.lc-hub-conflict-note-kind {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--chrome-edge);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.lc-hub-conflict-note-excerpt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.lc-hub-conflict-note-flag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.lc-hub-conflict-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--chrome-edge);
+}
+
+.lc-hub-conflict-resolve {
+  min-height: 32px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--chrome-edge);
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lc-hub-conflict-resolve:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .lc-main.is-split-horizontal {
   flex-direction: column;
 }

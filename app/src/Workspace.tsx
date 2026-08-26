@@ -23,7 +23,7 @@ import { liveWebviewSupported } from "./util/liveWebviewSupport";
 import { etaLabel, etaMs, newEta, recordBatch } from "./util/embedEta";
 import type { DocWorkProgress } from "./components/DocIndexChip";
 import { fetchDocHubHint, type DocHubHint } from "./util/hubHint";
-import type { HubSyncWalkHost } from "./components/HubSyncControl";import {
+import type { HubSyncWalkHost } from "./components/HubSyncControl";import { HubConflictSplit } from "./components/HubConflictSplit";import {
   loadWebRenderMode,
   otherWebRenderMode,
   saveWebRenderMode,
@@ -260,6 +260,7 @@ import {
   AnnotateLibraryFullError,
   restoreAnnotateDoc,
   saveAnnotateDoc,
+  markAnnotateHubAck,
   uniqueAnnotateName,
   type DocType,
   type AnnotateDoc,
@@ -270,6 +271,7 @@ import {
   getWhiteboardNotebook,
   listWhiteboardNotebooks,
   migrateLegacyWhiteboard,
+  markWhiteboardHubAck,
   renameWhiteboardNotebook,
   restoreWhiteboardNotebook,
   saveWhiteboardNotebook,
@@ -287,6 +289,8 @@ import {
   scheduleIdlePadSyncPing,
   PAD_HUB_WINDOW_EVENT,
   PAD_SYNC_PING_MS,
+  applyHubAnnotate,
+  applyHubWhiteboard,
   pushAnnotatePad,
   pushRolledSnapshots,
   pushProblemPad,
@@ -299,6 +303,10 @@ import {
 import { isCameraBusy } from "./util/cameraBusy";
 import { loadPadHub, loadPadSyncSince } from "./util/padHub";
 import { annotatePadBody, whiteboardPadBody } from "./util/padSync";
+import type {
+  HubConflictResolution,
+  HubPadConflict,
+} from "./util/hubConflictStash";
 import { getParkedDocSource, parkDocSource } from "./util/parkedDocSource";
 import { MAX_SOURCE_CHARS } from "./util/tabPersist";
 import { ensureDevicePrefs } from "./util/devicePrefs";
@@ -830,6 +838,65 @@ export function Workspace({
    * a ref so the pill sees the latest doc without re-mounting on every state
    * change; the setters are React-stable already.
    */
+  /*
+   * A sync conflict parked over this workspace: what stopped, and how to
+   * release the walk once the reader's choice is on this device.
+   */
+  const [hubConflictAsk, setHubConflictAsk] = useState<{
+    conflict: HubPadConflict;
+    resolve(resolution: HubConflictResolution): void;
+  } | null>(null);
+  const hubConflictAskRef = useRef<typeof hubConflictAsk>(null);
+
+  /** Apply a conflict choice locally; the walk does any following PUT. */
+  const handleHubConflictResolve = useCallback(async (resolution: HubConflictResolution) => {
+    const ask = hubConflictAskRef.current;
+    if (!ask) return;
+    const c = ask.conflict;
+    if (c.stage === "pad") {
+      if (resolution.pick === "server" && c.server) {
+        // Take server: one IDB row from the stashed hub body, ack marked,
+        // chosen reload fired by the apply itself. No PUT — the hub has it.
+        if (c.kind === "annotate") {
+          await applyHubAnnotate(c.server, { emitReload: true });
+        } else {
+          await applyHubWhiteboard(c.server, { emitReload: true });
+        }
+      } else {
+        // Keep local / merge: local stays authoritative. A merge writes the
+        // picked footnotes into this device's row; both then re-base on the
+        // row the hub holds so the walk's PUT passes CAS instead of 409ing.
+        if (c.kind === "annotate" && resolution.pick === "merged" && resolution.footnotes) {
+          const doc = await getAnnotateDoc(c.id);
+          if (doc) {
+            await saveAnnotateDoc({
+              id: doc.id,
+              name: doc.name,
+              hash: doc.hash,
+              docType: doc.docType,
+              source: doc.source,
+              board: doc.board,
+              footnotes: resolution.footnotes,
+              agent: doc.agent,
+            });
+          }
+        }
+        if (c.kind === "annotate") {
+          markAnnotateHubAck(c.id, c.server?.updated_at ?? Date.now());
+        } else {
+          markWhiteboardHubAck(c.id, c.server?.updated_at ?? Date.now());
+        }
+        hubSyncHostRef.current?.emitReload();
+      }
+    } else {
+      // Ink stage: the panes are whole-pane context only; the pages converge
+      // over the wire in the walk, so nothing to store here.
+    }
+    hubConflictAskRef.current = null;
+    setHubConflictAsk(null);
+    ask.resolve(resolution);
+  }, []);
+
   const hubSyncHostRef = useRef<HubSyncWalkHost | null>(null);
   if (!hubSyncHostRef.current) {
     hubSyncHostRef.current = {
@@ -884,6 +951,16 @@ export function Workspace({
         );
       },
       inkSince: () => loadPadSyncSince(),
+      /*
+       * A conflict stopped the walk. Park the split over this workspace and
+       * hold the walk until the reader has chosen and the choice is written
+       * into IDB — the pill resumes from there and owns any hub traffic.
+       */
+      onConflict: (conflict) =>
+        new Promise<HubConflictResolution>((resolve) => {
+          hubConflictAskRef.current = { conflict, resolve };
+          setHubConflictAsk({ conflict, resolve });
+        }),
       onIndexProgress: (progress) => setDocIndexProgress(progress),
       onIndexError: (message) => {
         if (message) {
@@ -9098,6 +9175,12 @@ export function Workspace({
             );
           })()}
         </div>
+      {hubConflictAsk ? (
+        <HubConflictSplit
+          conflict={hubConflictAsk.conflict}
+          onResolve={(resolution) => void handleHubConflictResolve(resolution)}
+        />
+      ) : null}
       {active && headerSlots.agentPanel ? createPortal(<>
         {problem && !canvasLoading && (
           <AgentSidePanel

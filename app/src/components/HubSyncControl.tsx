@@ -11,6 +11,12 @@ import { useEffect, useRef, useState } from "react";
 
 import type { AnnotatePadDto, LcClient, WhiteboardPadDto } from "../api/client";
 import type { DocHubHint } from "../util/hubHint";
+import {
+  type HubConflictResolution,
+  type HubPadConflict,
+  clearHubConflict,
+  stashHubConflict,
+} from "../util/hubConflictStash";
 import { pushDocBytes } from "../util/padSync";
 import type { DocWorkProgress } from "./DocIndexChip";
 import {
@@ -95,6 +101,13 @@ export interface HubSyncWalkHost {
   emitReload(): void;
   /** How far back "changed after this" reaches for ink conflicts. */
   inkSince(): number;
+  /**
+   * A conflict stopped the walk before anything was applied. Show the
+   * Local | Server split, let the reader choose, write the choice into this
+   * device's stores, then resolve with what was kept — the walk owns every
+   * bit of hub traffic that follows.
+   */
+  onConflict(conflict: HubPadConflict): Promise<HubConflictResolution>;
   onIndexProgress(progress: DocWorkProgress | null): void;
   onIndexError(message: string | null): void;
 }
@@ -241,10 +254,13 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
 
       /*
        * — E through H, same tap. E and F can stop everything on a conflict:
-       * the pill parks on that stage's label until the reader resolves.
+       * the pill parks until the reader resolves, then the walk resumes
+       * where the plan says (F after a pad resolve, G after an ink one).
        */
       const padInfo = client && host ? await host.pad() : null;
       let hubHasNewerRow = false;
+      // The ack this device holds when H runs — resolutions may have moved it.
+      let padAckForPull: number | null = padInfo ? padInfo.hubAckUpdatedAt() : null;
       if (padInfo) {
         const snapshot = await snapshotHub(client!);
         const walkPad = {
@@ -254,22 +270,91 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
           buildBody: () => padInfo.buildBody(),
         } as const;
 
-        // — E: push this pad's JSON (CAS). Conflict → park before any apply.
+        /** The stashed hub row: fetched once at stop time, never re-read. */
+        const fetchHubBody = async (): Promise<AnnotatePadDto | WhiteboardPadDto | null> => {
+          const rows =
+            padInfo.kind === "annotate"
+              ? await client!.listAnnotatePads().catch(() => [])
+              : await client!.listWhiteboardPads().catch(() => []);
+          return rows.find((row) => row.id === padInfo.id) ?? null;
+        };
+
+        /* Park on the split; resolve when the reader has chosen and the
+         * choice is written into this device's stores. */
+        const raiseConflict = (
+          conflict: HubPadConflict,
+        ): Promise<HubConflictResolution> => {
+          stashHubConflict(conflict);
+          return host!
+            .onConflict(conflict)
+            .then((resolution) => resolution ?? { pick: "local" })
+            .finally(() => clearHubConflict());
+        };
+
+        // — E: push this pad's JSON (CAS). Conflict → stop before any apply.
         setStage("pad");
         const pushed = await walkPushPad(client!, walkPad, snapshot);
         if (pushed.outcome === "conflict") {
-          throw new WalkConflict("pad", pushed.detail);
+          const resolution = await raiseConflict({
+            kind: padInfo.kind,
+            id: padInfo.id,
+            stage: "pad",
+            detail: pushed.detail,
+            local: padInfo.buildBody(),
+            server: await fetchHubBody(),
+          });
+          if (resolution.pick !== "server") {
+            // Local / merged: this device's copy won, so the hub gets it.
+            // The ack now names the row the hub actually holds, so CAS passes.
+            setStage("pad");
+            const fresh = await host!.pad();
+            if (!fresh) throw new Error("this pad closed while resolving the conflict");
+            const freshSnapshot = await snapshotHub(client!);
+            const repush = await walkPushPad(
+              client!,
+              {
+                ...walkPad,
+                hubAckUpdatedAt: () => fresh.hubAckUpdatedAt(),
+                buildBody: fresh.buildBody,
+              },
+              freshSnapshot,
+            );
+            if (repush.outcome === "conflict") {
+              throw new WalkConflict("pad", repush.detail);
+            }
+            padAckForPull = fresh.hubAckUpdatedAt();
+          } else {
+            // Take server: applyHub* already wrote IDB and marked the ack.
+            const fresh = await host!.pad();
+            padAckForPull = fresh?.hubAckUpdatedAt() ?? padAckForPull;
+          }
         }
 
-        // — F: handwriting for this pad only. Dual-write parks at Ink; after
-        // a resolve the walk resumes at G without redoing Index or Pad.
+        // — F: handwriting for this pad only. A dual-write page stops at Ink;
+        // after a resolve the walk converges both sides to what was kept and
+        // resumes at G without redoing Index or Pad.
         setStage("ink");
-        const ink = await walkSyncInk(client!, walkPad, snapshot, host?.inkSince() ?? 0);
+        const ink = await walkSyncInk(client!, walkPad, snapshot, host!.inkSince());
         if (ink.outcome === "conflict") {
-          throw new WalkConflict(
-            "ink",
-            `page ${ink.pageId} has new strokes here and on the hub`,
-          );
+          const resolution = await raiseConflict({
+            kind: padInfo.kind,
+            id: padInfo.id,
+            stage: "ink",
+            detail: `page ${ink.pageId} has new strokes here and on the hub`,
+            local: padInfo.buildBody(),
+            server: await fetchHubBody(),
+            inkPageId: ink.pageId,
+          });
+          // Ink stays whole-pane: converge every page of this pad to the
+          // side that was kept, so the next walk sees agreement. The ordinary
+          // per-page sync is not re-run — there is nothing left to fight over.
+          const { pullInkPagesOverLocal, pushInkPagesToHub } = await import("../util/inkSync");
+          if (resolution.pick === "server") {
+            await pullInkPagesOverLocal(client!, padInfo.kind, padInfo.id);
+          } else {
+            await pushInkPagesToHub(client!, padInfo.kind, padInfo.id);
+          }
+          padAckForPull = (await host!.pad())?.hubAckUpdatedAt() ?? padAckForPull;
         }
 
         // — G: links union cleanly; snapshots only fill gaps.
@@ -282,7 +367,7 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
         const row = [...snapshot.annotateRows, ...snapshot.whiteboardRows].find(
           (r) => r.id === padInfo.id,
         );
-        hubHasNewerRow = row != null && row.updated_at > padInfo.hubAckUpdatedAt();
+        hubHasNewerRow = row != null && row.updated_at > (padAckForPull ?? 0);
       }
       setStage("pull");
       if (hubHasNewerRow) host?.emitReload();

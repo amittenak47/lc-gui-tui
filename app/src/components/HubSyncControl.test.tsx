@@ -154,6 +154,10 @@ describe("HubSyncControl (step-2 stub)", () => {
         putDocIndex: overrides.putDocIndex ?? vi.fn().mockResolvedValue({ indexed: true }),
         embedDoc: overrides.embedDoc ?? vi.fn(),
         putDocBytes: overrides.putDocBytes ?? vi.fn().mockResolvedValue(undefined),
+        listAnnotatePads: overrides.listAnnotatePads ?? vi.fn().mockResolvedValue([]),
+        listWhiteboardPads: overrides.listWhiteboardPads ?? vi.fn().mockResolvedValue([]),
+        putAnnotatePad: overrides.putAnnotatePad ?? vi.fn(),
+        putWhiteboardPad: overrides.putWhiteboardPad ?? vi.fn(),
       };
       return fns as unknown as LcClient & Record<string, ReturnType<typeof vi.fn>>;
     }
@@ -161,12 +165,22 @@ describe("HubSyncControl (step-2 stub)", () => {
     function makeHost(doc: HubSyncWalkHost["doc"] extends () => infer R ? R : never) {
       const progress = vi.fn();
       const errors = vi.fn();
+      const reload = vi.fn();
+      const conflicts: unknown[] = [];
+      const picks: Array<{ pick: "local" | "server" }> = [];
       const host: HubSyncWalkHost = {
         doc: () => doc,
+        pad: async () => null,
+        emitReload: () => reload(),
+        inkSince: () => 0,
+        onConflict: (conflict) => {
+          conflicts.push(conflict);
+          return Promise.resolve(picks.shift() ?? { pick: "server" });
+        },
         onIndexProgress: (p) => progress(p),
         onIndexError: (m) => errors(m),
       };
-      return { host, progress, errors };
+      return { host, progress, errors, reload, conflicts, picks };
     }
 
     async function mountWalk(client: LcClient, host: HubSyncWalkHost) {
@@ -262,6 +276,116 @@ describe("HubSyncControl (step-2 stub)", () => {
       });
       expect(button.dataset.stage).toBe("synced");
       expect(pingPadSync).toHaveBeenCalledTimes(2);
+    });
+
+    it("stops at Pad on a hub row that moved first; resolve with server skips the PUT", async () => {
+      vi.useFakeTimers();
+      const annotateRow = { id: "pad-1", updated_at: 500, deleted_at: null };
+      const client = fakeClient({
+        pingPadSync: vi.fn().mockResolvedValue({ now: 1, annotate: [annotateRow] }),
+        listAnnotatePads: vi.fn().mockResolvedValue([
+          { id: "pad-1", name: "book.pdf", updated_at: 500, footnotes: [], source: "hub copy" },
+        ]),
+        putAnnotatePad: vi.fn(),
+      });
+      const { host, conflicts } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      // The open pad's ack is older than the hub row → E stops before applying.
+      let padCalls = 0;
+      (host as unknown as { pad: () => Promise<unknown> }).pad = async () => {
+        padCalls++;
+        return {
+          kind: "annotate" as const,
+          id: "pad-1",
+          hubAckUpdatedAt: () => 100,
+          buildBody: () => ({ id: "pad-1", name: "book.pdf", updated_at: 900 }),
+        };
+      };
+      const button = await mountWalk(client, host);
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      // The stash held the frozen hub DTO while the split was open.
+      expect(conflicts).toHaveLength(1);
+      const conflict = conflicts[0] as { stage: string; server: { source?: string } | null };
+      expect(conflict.stage).toBe("pad");
+      expect(conflict.server?.source).toBe("hub copy");
+      expect((client as unknown as { putAnnotatePad: ReturnType<typeof vi.fn> }).putAnnotatePad)
+        .not.toHaveBeenCalled();
+      expect(button.dataset.stage).toBe("synced");
+    });
+
+    it("after keep-local resolves, re-bases on the hub row and PUTs the kept copy", async () => {
+      vi.useFakeTimers();
+      const annotateRow = { id: "pad-1", updated_at: 500, deleted_at: null };
+      const client = fakeClient({
+        pingPadSync: vi.fn().mockResolvedValue({ now: 1, annotate: [annotateRow] }),
+        listAnnotatePads: vi.fn().mockResolvedValue([
+          { id: "pad-1", name: "book.pdf", updated_at: 500, footnotes: [], source: "hub copy" },
+        ]),
+        putAnnotatePad: vi.fn().mockResolvedValue({ id: "pad-1", updated_at: Date.now() }),
+      });
+      const { host, conflicts } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      // The reader keeps Local; resolving also re-bases the device's ack on
+      // the row the hub holds — exactly what the Workspace resolver does.
+      let ack = 100;
+      const hostMutable = host as unknown as {
+        pad(): Promise<{
+          kind: "annotate";
+          id: string;
+          hubAckUpdatedAt(): number;
+          buildBody(): unknown;
+        }>;
+        onConflict(c: unknown): Promise<{ pick: "local" }>;
+      };
+      hostMutable.pad = async () => ({
+        kind: "annotate",
+        id: "pad-1",
+        hubAckUpdatedAt: () => ack,
+        buildBody: () => ({
+          id: "pad-1",
+          name: "book.pdf",
+          updated_at: 900,
+          source: "local copy",
+          // Mirrors annotatePadBody: base names the row this device acked.
+          base_updated_at: ack,
+        }),
+      });
+      hostMutable.onConflict = (conflict) => {
+        conflicts.push(conflict);
+        ack = 500; // markAnnotateHubAck(id, server.updated_at)
+        return Promise.resolve({ pick: "local" });
+      };
+      const button = await mountWalk(client, host);
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      const putAnnotatePad = (
+        client as unknown as { putAnnotatePad: ReturnType<typeof vi.fn> }
+      ).putAnnotatePad;
+      expect(putAnnotatePad).toHaveBeenCalledTimes(1);
+      // The PUT carries the kept local body re-based on the hub's row.
+      expect(putAnnotatePad.mock.calls[0]![0]).toBe("pad-1");
+      expect((putAnnotatePad.mock.calls[0]![1] as { base_updated_at?: number }).base_updated_at)
+        .toBe(500);
+      expect(button.dataset.stage).toBe("synced");
     });
   });
 });
