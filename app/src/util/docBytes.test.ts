@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   bytesFromStoredValue,
+  docStoreFacts,
   formatDocStoreReport,
   readBlobBytes,
   type DocStoreReport,
@@ -58,6 +59,17 @@ describe("formatDocStoreReport", () => {
     );
     expect(text).toContain("2 of 3 library documents have no stored copy.");
     expect(text).toContain("a.pdf\nb.pdf");
+  });
+});
+
+describe("docStoreFacts", () => {
+  it("labels the database and puts the missing filename on its own fact", () => {
+    const facts = docStoreFacts(report());
+    expect(facts.find((f) => f.label === "Database")?.value).toBe("whiteboard.docs v7");
+    expect(facts.find((f) => f.label === "Missing copy")?.value).toContain(
+      "Industry-Coding-Skills-Evaluation-Framework",
+    );
+    expect(facts.find((f) => f.label === "Library")?.tone).toBe("warn");
   });
 });
 

@@ -32,6 +32,7 @@ pub fn blobs_dir() -> Result<PathBuf> {
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)
         .with_context(|| format!("cannot open pads database {}", path.display()))?;
+    crate::sqlite::configure(&conn)?;
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS whiteboard (

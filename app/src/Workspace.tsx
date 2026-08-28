@@ -9550,6 +9550,7 @@ export function Workspace({
           conflict={hubConflictAsk.conflict}
           busy={hubConflictBusy}
           otherLabel={otherDeviceLabel()}
+          docHash={annotateSource?.docType === "pdf" ? annotateSource.hash : undefined}
           onResolve={(resolution) => void handleHubConflictResolve(resolution)}
         />
       ) : null}

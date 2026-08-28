@@ -141,11 +141,30 @@ export function footnoteDiffRows(
 }
 
 /**
+ * Whether this entry has a finished choice.
+ *
+ * ✓ on either side is enough (that copy wins). Dropping it takes ✕ on every
+ * side that actually has a copy. Undecided is not a choice.
+ */
+export function entrySettled(
+  hasLocal: boolean,
+  hasServer: boolean,
+  pick: { local?: boolean; server?: boolean } | undefined,
+): boolean {
+  if (pick?.local === true || pick?.server === true) return true;
+  if (hasLocal && hasServer) return pick?.local === false && pick?.server === false;
+  if (hasLocal) return pick?.local === false;
+  if (hasServer) return pick?.server === false;
+  return true;
+}
+
+/**
  * Apply the picks to the footnote set.
  *
- * Per plan: a ✓ keeps that copy, a side with no ✓ drops its copies, and a
- * same-id-different-body row ✓'d on both sides yields two notes. Pane choices
- * are the default for every mark the reader did not pick individually.
+ * A ✓ keeps that copy. Same-id-different-body ✓'d on both sides yields two
+ * notes. Pane flags are the default only when that mark has no explicit pick —
+ * the split now passes an explicit pick for every settled row and false/false
+ * panes so mix-and-match cannot inherit a whole-pane keep.
  *
  * Local order leads and server-only marks append, so a resolve that keeps
  * everything reads back as the local set plus what only the hub had.

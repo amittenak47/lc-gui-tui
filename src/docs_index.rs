@@ -74,6 +74,7 @@ pub fn db_path() -> Result<PathBuf> {
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)
         .with_context(|| format!("cannot open document index {}", path.display()))?;
+    crate::sqlite::configure(&conn)?;
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS documents (
@@ -1647,6 +1648,31 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("lc-docs-test-{nanos}.db"))
+    }
+
+    #[test]
+    fn a_second_connection_can_read_the_index_while_the_first_is_open() {
+        let path = tmp();
+        let mut writer = open(&path).unwrap();
+        let body = IndexBody {
+            name: "n.pdf".into(),
+            doc_type: "pdf".into(),
+            pages: vec![IndexPage {
+                page: 1,
+                text: "shared index".into(),
+                heading: None,
+            }],
+        };
+        upsert(&mut writer, "h", &body, &cfg(), true).unwrap();
+        let reader = open(&path).unwrap();
+        let st = status(&reader, "h").unwrap();
+        assert!(st.indexed);
+        assert_eq!(st.page_count, 1);
+        drop(writer);
+        drop(reader);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
     }
 
     #[test]

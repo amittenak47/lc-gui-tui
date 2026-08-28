@@ -218,6 +218,7 @@ pub fn open_db() -> Result<Connection> {
     }
     let conn = Connection::open(&path)
         .with_context(|| format!("cannot open index db {}", path.display()))?;
+    crate::sqlite::configure(&conn)?;
     conn.execute_batch(SHARED_SCHEMA)?;
     for dataset in &DATASETS {
         conn.execute_batch(&dataset_schema(dataset))?;

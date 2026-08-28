@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { DocFootnote } from "./docFootnotes";
 import {
   clearHubConflict,
+  entrySettled,
   footnoteDiffRows,
   hubConflict,
   inkChoiceOf,
@@ -43,6 +44,23 @@ describe("footnoteDiffRows", () => {
       [note("a", "another wording")],
     );
     expect(rows[0]!.differs).toBe(true);
+  });
+});
+
+describe("entrySettled", () => {
+  it("is settled when either side is kept", () => {
+    expect(entrySettled(true, true, { local: true })).toBe(true);
+    expect(entrySettled(true, true, { server: true })).toBe(true);
+  });
+
+  it("needs ✕ on every side that has a copy before a drop counts", () => {
+    expect(entrySettled(true, true, { local: false })).toBe(false);
+    expect(entrySettled(true, true, { local: false, server: false })).toBe(true);
+    expect(entrySettled(true, false, { local: false })).toBe(true);
+  });
+
+  it("treats an empty entry as already settled", () => {
+    expect(entrySettled(false, false, undefined)).toBe(true);
   });
 });
 
