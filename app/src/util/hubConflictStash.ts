@@ -98,7 +98,8 @@ export function resetHubConflictForTests(): void {
  *
  * A row exists for every id either side knows. `sameId` marks the ones to
  * highlight on both sides; `differs` is a same-id row whose bodies are not —
- * there, ✓ on each side keeps that copy, and ✓ on both keeps two notes.
+ * there, ✓ on each side keeps that copy, and ✓ on both combines them into one
+ * mark (see {@link combineFootnotePair}).
  */
 export interface FootnoteDiffRow {
   id: string;
@@ -158,13 +159,83 @@ export function entrySettled(
   return true;
 }
 
+/** Concat two optional lists and drop repeats, keeping the local one. */
+function unionBy<T>(
+  local: readonly T[] | undefined,
+  incoming: readonly T[] | undefined,
+  keyOf: (item: T) => string,
+): T[] | undefined {
+  if (!local?.length && !incoming?.length) return undefined;
+  const out: T[] = [];
+  const seen = new Set<string>();
+  for (const item of [...(local ?? []), ...(incoming ?? [])]) {
+    const key = keyOf(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+/**
+ * Two copies of the same mark, kept as one.
+ *
+ * ✓ on both sides of a same-id row used to produce two footnotes: the same
+ * quote, ribboned twice, on the same words. Two different marks that happen to
+ * share a page are two marks and stay two — but these are one mark that two
+ * devices both wrote on, and the thing the reader asked for is everything they
+ * wrote, not a duplicate of where they wrote it.
+ *
+ * The shell is local's, deliberately, down to the title: whichever device you
+ * are standing at is the one whose wording you recognise, and a merge that
+ * renamed your mark to the other device's title would be a surprise nobody
+ * asked for. What the other side *added* comes across — its notes, its boards,
+ * its threads, its links.
+ *
+ * `png` is the exception among the shell fields, because a missing crop is not
+ * a choice: a region mark with no picture cannot say what it points at, so the
+ * incoming one is better than none.
+ *
+ * `subMarks` are not merged. They are underlines indexing into `blockText` by
+ * offset, and two devices that both edited the quote have two different sets of
+ * offsets into two different strings — combining them by concatenation would
+ * paint underlines across words nobody underlined. Local's stand.
+ */
+export function combineFootnotePair(local: DocFootnote, incoming: DocFootnote): DocFootnote {
+  const combined: DocFootnote = {
+    ...local,
+    png: local.png ?? incoming.png,
+    notes: unionBy(local.notes, incoming.notes, (note) => note.id),
+    whiteboards: unionBy(local.whiteboards, incoming.whiteboards, (board) => board.id),
+    threads: unionBy(local.threads, incoming.threads, (thread) => thread.rootId),
+    userLinks: unionBy(local.userLinks, incoming.userLinks, (link) => link.url),
+  };
+  /*
+   * Last touched by either device. Absent on both stays absent — a mark that
+   * never recorded an edit time does not gain one by being merged.
+   */
+  const touched = [local.updatedAt, incoming.updatedAt].filter(
+    (at): at is number => typeof at === "number",
+  );
+  if (touched.length > 0) combined.updatedAt = Math.max(...touched);
+  // Keep the shape a single-sided keep would have produced.
+  if (combined.notes === undefined) delete combined.notes;
+  if (combined.whiteboards === undefined) delete combined.whiteboards;
+  if (combined.threads === undefined) delete combined.threads;
+  if (combined.userLinks === undefined) delete combined.userLinks;
+  if (combined.png === undefined) delete combined.png;
+  return combined;
+}
+
 /**
  * Apply the picks to the footnote set.
  *
- * A ✓ keeps that copy. Same-id-different-body ✓'d on both sides yields two
- * notes. Pane flags are the default only when that mark has no explicit pick —
- * the split now passes an explicit pick for every settled row and false/false
- * panes so mix-and-match cannot inherit a whole-pane keep.
+ * A ✓ keeps that copy. ✓ on both sides of the *same* mark combines the two
+ * into one — see {@link combineFootnotePair}; ✓ on both sides of the split
+ * where the ids differ keeps both marks, because those are two marks. Pane
+ * flags are the default only when that mark has no explicit pick — the split
+ * now passes an explicit pick for every settled row and false/false panes so
+ * mix-and-match cannot inherit a whole-pane keep.
  *
  * Local order leads and server-only marks append, so a resolve that keeps
  * everything reads back as the local set plus what only the hub had.
@@ -180,6 +251,10 @@ export function mergeFootnotes(
     const pick = picks[row.id];
     const keepLocal = pick ? pick.local : panes.local;
     const keepServer = pick ? pick.server : panes.server;
+    if (keepLocal && keepServer && row.local && row.server) {
+      out.push(combineFootnotePair(row.local, row.server));
+      continue;
+    }
     if (keepLocal && row.local) out.push(row.local);
     if (keepServer && row.server) out.push(row.server);
   }

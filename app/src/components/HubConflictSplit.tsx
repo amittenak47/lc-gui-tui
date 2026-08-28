@@ -2,10 +2,13 @@
  * The conflict split: Local on the left, the other device on the right.
  *
  * Nothing has been written yet. Each row (handwriting, each note) is its own
- * choice: ✓ that copy, ✓ both (keep both / merge ink), or ✕ both (drop that
- * entry). The file itself always stays. Top ✓ / ✕ fill a whole column without
- * wiping the other side. Keep is enabled once every row is settled, then PUT
- * to the hub so the other device matches on Sync.
+ * choice: ✓ that copy, ✓ both, or ✕ both (drop that entry). What ✓ both means
+ * depends on what the row is: one mark two devices both wrote on becomes one
+ * mark carrying both sides' notes and boards, ink merges its strokes, and two
+ * marks that merely share a page stay two. The file itself always stays. Top
+ * ✓ / ✕ fill a whole column without wiping the other side. Keep is enabled
+ * once every row is settled, then PUT to the hub so the other device matches
+ * on Sync.
  */
 
 import { useMemo, useState } from "react";
@@ -117,7 +120,13 @@ function NoteRow({
           data-action="keep"
           aria-pressed={kept}
           aria-label={`Keep ${sideLabel} copy of note`}
-          title={kept ? "This copy is kept — tap to reconsider" : `✓ keeps the ${sideLabel} copy`}
+          title={
+            kept
+              ? "This copy is kept — tap to reconsider"
+              : sameId
+                ? `✓ keeps the ${sideLabel} copy. ✓ both combines them into one mark.`
+                : `✓ keeps the ${sideLabel} copy`
+          }
           className={kept ? "lc-doc-confirm-btn lc-doc-confirm-yes" : "lc-doc-confirm-btn"}
           onClick={(event) => {
             event.stopPropagation();
@@ -338,7 +347,7 @@ export function HubConflictSplit({
     : serverMissing
       ? "The other copy could not be read, so only this device's copy can be kept. ✓ Local (or each of its changes)."
       : !valid
-        ? "Every change needs a choice — ✓ keep or ✕ drop. ✓ both keeps both copies; ✕ both removes that entry. The file itself always stays."
+        ? "Every change needs a choice — ✓ keep or ✕ drop. ✓ both on the same change combines the two; ✕ both removes that entry. The file itself always stays."
         : "";
 
   const renderInkRow = (side: Side) => {
