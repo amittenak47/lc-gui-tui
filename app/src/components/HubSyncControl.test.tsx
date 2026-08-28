@@ -398,6 +398,7 @@ describe("HubSyncControl (step-2 stub)", () => {
           id: "pad-1",
           hubAckUpdatedAt: () => 100,
           buildBody: () => ({ id: "pad-1", name: "book.pdf", updated_at: 900 }),
+          markHubAck: () => {},
         };
       };
       const button = await mountWalk(client, host);
@@ -425,7 +426,7 @@ describe("HubSyncControl (step-2 stub)", () => {
         listAnnotatePads: vi.fn().mockResolvedValue([
           { id: "pad-1", name: "book.pdf", updated_at: 500, footnotes: [], source: "hub copy" },
         ]),
-        putAnnotatePad: vi.fn().mockResolvedValue({ id: "pad-1", updated_at: Date.now() }),
+        putAnnotatePad: vi.fn().mockResolvedValue({ id: "pad-1", updated_at: 1234 }),
       });
       const { host, conflicts } = makeHost({
         hash: "h",
@@ -437,12 +438,14 @@ describe("HubSyncControl (step-2 stub)", () => {
       // The reader keeps Local; resolving also re-bases the device's ack on
       // the row the hub holds — exactly what the Workspace resolver does.
       let ack = 100;
+      const acked: number[] = [];
       const hostMutable = host as unknown as {
         pad(): Promise<{
           kind: "annotate";
           id: string;
           hubAckUpdatedAt(): number;
           buildBody(): unknown;
+          markHubAck(updatedAt: number): void;
         }>;
         onConflict(c: unknown): Promise<{ pick: "local" }>;
       };
@@ -458,6 +461,10 @@ describe("HubSyncControl (step-2 stub)", () => {
           // Mirrors annotatePadBody: base names the row this device acked.
           base_updated_at: ack,
         }),
+        markHubAck: (updatedAt: number) => {
+          acked.push(updatedAt);
+          ack = updatedAt;
+        },
       });
       hostMutable.onConflict = (conflict) => {
         conflicts.push(conflict);
@@ -480,6 +487,47 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect((putAnnotatePad.mock.calls[0]![1] as { base_updated_at?: number }).base_updated_at)
         .toBe(500);
       expect(button.dataset.stage).toBe("synced");
+      // The row this device just wrote is what it now acknowledges. Without
+      // it the next walk sees the hub's copy — its own upload — as newer than
+      // the stale ack, and raises a conflict with itself.
+      expect(acked).toEqual([1234]);
+      expect(ack).toBe(1234);
+    });
+
+    it("records the hub ack after an ordinary push", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient({
+        pingPadSync: vi.fn().mockResolvedValue({ now: 1, annotate: [] }),
+        putAnnotatePad: vi.fn().mockResolvedValue({ id: "pad-1", updated_at: 777 }),
+      });
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const acked: number[] = [];
+      let ack = 100;
+      (host as unknown as { pad: () => Promise<unknown> }).pad = async () => ({
+        kind: "annotate" as const,
+        id: "pad-1",
+        hubAckUpdatedAt: () => ack,
+        buildBody: () => ({ id: "pad-1", name: "book.pdf", updated_at: 900 }),
+        markHubAck: (updatedAt: number) => {
+          acked.push(updatedAt);
+          ack = updatedAt;
+        },
+      });
+      const button = await mountWalk(client, host);
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(button.dataset.stage).toBe("synced");
+      expect(acked).toEqual([777]);
     });
   });
 });

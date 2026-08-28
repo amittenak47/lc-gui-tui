@@ -19,6 +19,15 @@ export interface WalkPad {
   /** The last hub write this device has actually seen. */
   hubAckUpdatedAt(): number;
   buildBody(): AnnotatePadDto | WhiteboardPadDto;
+  /**
+   * Remember the row this device just wrote.
+   *
+   * Without it a successful push left the ack where it was, so the next walk
+   * compared the hub's copy — the one this device had put there a moment ago —
+   * against a stale acknowledgement, found it newer, and raised a conflict
+   * with the device's own previous upload.
+   */
+  markHubAck?(updatedAt: number): void | Promise<void>;
 }
 
 export type PadStageResult =
@@ -83,7 +92,10 @@ export async function walkPushPad(
       pad.kind === "annotate"
         ? await client.putAnnotatePad(pad.id, pad.buildBody() as AnnotatePadDto)
         : await client.putWhiteboardPad(pad.id, pad.buildBody() as WhiteboardPadDto);
-    return { outcome: "ok", hubUpdatedAt: written.updated_at ?? Date.now() };
+    const hubUpdatedAt = written.updated_at ?? Date.now();
+    // Acked here rather than at the call site, so no path can push and forget.
+    await pad.markHubAck?.(hubUpdatedAt);
+    return { outcome: "ok", hubUpdatedAt };
   } catch (cause) {
     if (cause instanceof LcApiError && cause.status === 409) {
       return {

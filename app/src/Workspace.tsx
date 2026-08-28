@@ -917,6 +917,8 @@ export function Workspace({
             id: notebook.id,
             hubAckUpdatedAt: () => notebook.hubAckUpdatedAt ?? 0,
             buildBody: () => whiteboardPadBody(notebook),
+            markHubAck: (updatedAt: number) =>
+              markWhiteboardHubAck(notebook.id, updatedAt),
           };
         }
         const docId = annotateDocIdRef.current;
@@ -928,6 +930,7 @@ export function Workspace({
           id: doc.id,
           hubAckUpdatedAt: () => doc.hubAckUpdatedAt ?? 0,
           buildBody: () => annotatePadBody(doc),
+          markHubAck: (updatedAt: number) => markAnnotateHubAck(doc.id, updatedAt),
         };
       },
       emitReload: () => {
