@@ -12,10 +12,14 @@ import type { InkPageDto } from "../api/client";
 import { b64ToBytes } from "../api/nativeHttp";
 import { decodeInkOps, unpackEncodedInk } from "../canvas/inkCodec";
 import { paintInkAtScale, type InkOp } from "../canvas/rasterInk";
+import { setDocCameraLive, setDocPointerHeld } from "../canvas/docSelectionGesture";
 import { AnnotateDocument } from "../modes/AnnotateDocument";
 import { DocSelectionLayer } from "../modes/DocSelectionLayer";
 import { PdfDocument } from "../modes/PdfDocument";
+import { publishPdfFilmCurrent, publishPdfViewPages } from "../modes/pdfFilm";
 import { borrowPdfDocument } from "../modes/pdfOpenDocs";
+import { pdfRestPages, pdfVisibleFromSpans } from "../modes/pdfPaintWindow";
+import { cameraPulseSettleMs } from "../util/cameraBusy";
 import { bytesFromMaybeGzip } from "../util/gzip";
 import type { DocFootnote } from "../util/docFootnotes";
 
@@ -92,6 +96,101 @@ export function ConflictPagePreview({
 
   const keptNotes = notes ?? [];
   const inkForPage = (inkPages ?? []).filter((row) => row.page_id >= 1);
+
+  /*
+   * Scrolling this pane has to reach the same paint path the reader uses.
+   *
+   * The pane looked sharp at rest and went to placeholders the moment you
+   * flicked it, which reads as a thumbnail strip but is not one — it is the
+   * paint window. `PdfDocument` decides what to blit and at what scale from
+   * `publishPdfViewPages` plus `isDocCameraLive`, and both of those are
+   * published by `Board` from its camera. A standalone pane has no camera, so
+   * nobody ever published them: the observer only moved C, the rest set stayed
+   * empty, and every slot outside it sat at preview scale.
+   *
+   * So the pane publishes the same two facts from its own boxes. This is not a
+   * second paint loop — nothing here decodes or draws. It says where the
+   * viewport is; `blitOuterFromLru` and the decode pump do the rest, exactly
+   * as they do for the board.
+   */
+  useEffect(() => {
+    const root = scrollRoot;
+    if (!root || !filmScope || !usePdf) return;
+    let frame = 0;
+    let settle = 0;
+
+    const sample = () => {
+      frame = 0;
+      const view = root.getBoundingClientRect();
+      const spans: Array<{ page: number; top: number; bottom: number }> = [];
+      let lastPage = 1;
+      for (const el of root.querySelectorAll<HTMLElement>("[data-pdf-page]")) {
+        const n = Number(el.dataset.pdfPage);
+        if (!Number.isFinite(n) || n < 1) continue;
+        lastPage = Math.max(lastPage, n);
+        const box = el.getBoundingClientRect();
+        spans.push({ page: n, top: box.top, bottom: box.bottom });
+      }
+      if (spans.length === 0) return;
+      const { intersecting, current } = pdfVisibleFromSpans(spans, view.top, view.bottom);
+      if (current < 1) return;
+      publishPdfFilmCurrent(filmScope, current);
+      publishPdfViewPages(
+        filmScope,
+        intersecting,
+        pdfRestPages(current, lastPage, intersecting),
+      );
+    };
+
+    /*
+     * Live while the finger moves, settled a beat after it stops.
+     *
+     * The same pulse the board runs: while live the pump only does
+     * preview-scale hole pages, and rest-2 fills on the settle. Without it the
+     * pane would try to decode at full scale mid-flick and stutter.
+     */
+    const pulse = () => {
+      setDocCameraLive(true);
+      window.clearTimeout(settle);
+      settle = window.setTimeout(() => setDocCameraLive(false), cameraPulseSettleMs());
+    };
+    const onMove = () => {
+      pulse();
+      if (frame) return;
+      frame = requestAnimationFrame(sample);
+    };
+    // Freeze on touch-down, before pan has armed — the pump must not fight the
+    // finger during the gap the board also covers.
+    const onDown = () => setDocPointerHeld(true);
+    const onUp = () => setDocPointerHeld(false);
+
+    root.addEventListener("scroll", onMove, { passive: true });
+    root.addEventListener("wheel", onMove, { passive: true });
+    root.addEventListener("touchmove", onMove, { passive: true });
+    root.addEventListener("pointerdown", onDown);
+    // On `window`: a finger that leaves the pane still ended the gesture.
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+
+    // Publish once for where the pane already is, rather than waiting for a
+    // scroll that may never come — the landing page is the one being read.
+    sample();
+
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      window.clearTimeout(settle);
+      root.removeEventListener("scroll", onMove);
+      root.removeEventListener("wheel", onMove);
+      root.removeEventListener("touchmove", onMove);
+      root.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      setDocPointerHeld(false);
+      setDocCameraLive(false);
+    };
+    // `stackH` re-runs this once the stack has a height, so the first sample
+    // measures real slots rather than an empty host.
+  }, [scrollRoot, filmScope, usePdf, stackH]);
 
   useEffect(() => {
     const canvas = inkRef.current;

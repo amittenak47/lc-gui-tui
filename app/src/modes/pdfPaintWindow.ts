@@ -32,6 +32,52 @@ export function pdfInnerPages(visible: Iterable<number>): number[] {
   return [...new Set([...visible])].filter((n) => n >= 1).sort((a, b) => a - b);
 }
 
+/** One page slot, measured against the same coordinate space as the viewport. */
+export interface PdfSlotSpan {
+  page: number;
+  top: number;
+  bottom: number;
+}
+
+/**
+ * Which pages a scroller is showing, and which one it is showing most of.
+ *
+ * The board answers this from its camera and its own layout frames. A pane
+ * that scrolls with CSS has no camera, only boxes — but the answer feeding the
+ * paint window has to be the same shape, or the pane paints on a different
+ * rule from the reader and looks like it.
+ *
+ * `current` is the page covering the most of the viewport, not the topmost:
+ * a sliver of the previous page hanging into view is not what you are reading.
+ * Zero pages on screen answers `current: 0`, which callers read as "nothing to
+ * publish yet" rather than page one.
+ */
+export function pdfVisibleFromSpans(
+  slots: readonly PdfSlotSpan[],
+  viewTop: number,
+  viewBottom: number,
+): { intersecting: number[]; current: number } {
+  const covered = new Map<number, number>();
+  for (const slot of slots) {
+    if (!(slot.page >= 1)) continue;
+    const overlap = Math.min(slot.bottom, viewBottom) - Math.max(slot.top, viewTop);
+    if (!(overlap > 0)) continue;
+    covered.set(slot.page, Math.max(covered.get(slot.page) ?? 0, overlap));
+  }
+  let current = 0;
+  let best = 0;
+  for (const [page, overlap] of covered) {
+    if (overlap > best) {
+      best = overlap;
+      current = page;
+    }
+  }
+  return {
+    intersecting: [...covered.keys()].sort((a, b) => a - b),
+    current,
+  };
+}
+
 /**
  * Pages that should be rest 2: C±1 plus anyone whose frame is in the hole.
  * Live vs settled does not belong here.

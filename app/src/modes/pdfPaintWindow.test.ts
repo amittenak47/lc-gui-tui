@@ -11,6 +11,7 @@ import {
   pdfPreloadPages,
   pdfRestPages,
   pdfShouldPreempt,
+  pdfVisibleFromSpans,
 } from "./pdfPaintWindow";
 
 describe("pdfRestPages", () => {
@@ -192,5 +193,70 @@ describe("pdfDecodeQueue preload", () => {
     expect(queue.some((item) => item.page === 53 && item.target === PDF_REST_SCALE)).toBe(
       false,
     );
+  });
+});
+
+describe("pdfVisibleFromSpans", () => {
+  /*
+   * What a CSS-scrolled pane has instead of a camera. The conflict panes went
+   * to placeholders mid-flick because nobody published a paint window for
+   * them — the board publishes one every frame from its camera, and a pane
+   * that scrolls with overflow has only boxes to publish from.
+   */
+  const page = (n: number, top: number, height = 100) => ({
+    page: n,
+    top,
+    bottom: top + height,
+  });
+
+  it("reports every page the viewport touches", () => {
+    const spans = [page(1, -40), page(2, 60), page(3, 160), page(4, 260)];
+    expect(pdfVisibleFromSpans(spans, 0, 200).intersecting).toEqual([1, 2, 3]);
+  });
+
+  it("calls the most-covered page current, not the topmost", () => {
+    // A sliver of the previous page hanging into view is not what you read.
+    const spans = [page(1, -95), page(2, 5)];
+    expect(pdfVisibleFromSpans(spans, 0, 200).current).toBe(2);
+  });
+
+  it("switches current as the scroll carries the next page over the fold", () => {
+    const spans = [page(1, -60), page(2, 40)];
+    expect(pdfVisibleFromSpans(spans, 0, 100).current).toBe(2);
+    // Scrolled back up: page one covers more again.
+    expect(pdfVisibleFromSpans([page(1, -20), page(2, 80)], 0, 100).current).toBe(1);
+  });
+
+  it("says nothing rather than page one when the stack is off screen", () => {
+    // The caller reads 0 as "no window to publish yet"; answering 1 would
+    // point the paint window at the wrong end of the book.
+    expect(pdfVisibleFromSpans([page(1, 400)], 0, 200)).toEqual({
+      intersecting: [],
+      current: 0,
+    });
+    expect(pdfVisibleFromSpans([], 0, 200).current).toBe(0);
+  });
+
+  it("ignores a page that only touches the edge", () => {
+    // Exactly abutting is not overlapping, and a zero-height sliver is not a
+    // page being read.
+    expect(pdfVisibleFromSpans([page(1, -100), page(2, 0)], 0, 200).intersecting).toEqual([2]);
+  });
+
+  it("takes the widest slot when a spread puts one page in two", () => {
+    const spans = [
+      { page: 2, top: 0, bottom: 30 },
+      { page: 2, top: 30, bottom: 180 },
+      { page: 3, top: 180, bottom: 220 },
+    ];
+    const seen = pdfVisibleFromSpans(spans, 0, 200);
+    expect(seen.intersecting).toEqual([2, 3]);
+    expect(seen.current).toBe(2);
+  });
+
+  it("feeds the same rest window the board publishes", () => {
+    const spans = [page(9, -50), page(10, 50), page(11, 150)];
+    const { intersecting, current } = pdfVisibleFromSpans(spans, 0, 200);
+    expect(pdfRestPages(current, 40, intersecting)).toEqual([9, 10, 11]);
   });
 });
