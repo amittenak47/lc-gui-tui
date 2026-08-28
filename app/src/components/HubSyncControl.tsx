@@ -343,11 +343,11 @@ export function HubSyncControl({
        * where the plan says (F after a pad resolve, G after an ink one).
        */
       const padInfo = client && host ? await host.pad() : null;
+      const snapshot = snapshotFromPing(ping);
       let hubHasNewerRow = false;
       // The ack this device holds when H runs — resolutions may have moved it.
       let padAckForPull: number | null = padInfo ? padInfo.hubAckUpdatedAt() : null;
       if (padInfo) {
-        const snapshot = snapshotFromPing(ping);
         const walkPad = {
           kind: padInfo.kind,
           id: padInfo.id,
@@ -384,98 +384,124 @@ export function HubSyncControl({
 
         // — E: push this pad's JSON (CAS). Conflict → stop before any apply.
         if (runs("pad")) {
-        setStage("pad");
-        const pushed = await walkPushPad(client!, walkPad, snapshot);
-        if (pushed.outcome === "ok") {
-          // The hub now holds what this device just sent, and the ack above
-          // says so. Stage H must compare against that, not against the older
-          // row this walk's snapshot was taken from.
-          padAckForPull = pushed.hubUpdatedAt;
-        }
-        if (pushed.outcome === "conflict") {
-          const resolution = await raiseConflict({
-            kind: padInfo.kind,
-            id: padInfo.id,
-            stage: "pad",
-            detail: pushed.detail,
-            local: padInfo.buildBody(),
-            server: await fetchHubBody(),
-          });
-          if (resolution.pick !== "server") {
-            // Local / merged: this device's copy won, so the hub gets it.
-            // The ack now names the row the hub actually holds, so CAS passes.
-            setStage("pad");
-            const fresh = await host!.pad();
-            if (!fresh) throw new Error("this pad closed while resolving the conflict");
-            // Deliberately a fresh read: the hub moved, that is why we are here.
-            const freshSnapshot = await snapshotHub(client!);
-            const repush = await walkPushPad(
-              client!,
-              {
-                ...walkPad,
-                hubAckUpdatedAt: () => fresh.hubAckUpdatedAt(),
-                buildBody: fresh.buildBody,
-                markHubAck: (updatedAt: number) => fresh.markHubAck(updatedAt),
-              },
-              freshSnapshot,
-            );
-            if (repush.outcome === "conflict") {
-              throw new WalkConflict("pad", repush.detail);
-            }
-            // What the hub holds *now*. `fresh.hubAckUpdatedAt()` was read
-            // before this write and names the row we were re-basing on.
-            padAckForPull = repush.hubUpdatedAt;
-          } else {
-            // Take server: applyHub* already wrote IDB and marked the ack.
-            const fresh = await host!.pad();
-            padAckForPull = fresh?.hubAckUpdatedAt() ?? padAckForPull;
+          setStage("pad");
+          const pushed = await walkPushPad(client!, walkPad, snapshot);
+          if (pushed.outcome === "ok") {
+            // The hub now holds what this device just sent, and the ack above
+            // says so. Stage H must compare against that, not against the older
+            // row this walk's snapshot was taken from.
+            padAckForPull = pushed.hubUpdatedAt;
           }
-        }
+          if (pushed.outcome === "conflict") {
+            const resolution = await raiseConflict({
+              kind: padInfo.kind,
+              id: padInfo.id,
+              stage: "pad",
+              detail: pushed.detail,
+              local: padInfo.buildBody(),
+              server: await fetchHubBody(),
+            });
+            if (resolution.pick !== "server") {
+              // Local / merged: this device's copy won, so the hub gets it.
+              // The ack now names the row the hub actually holds, so CAS passes.
+              setStage("pad");
+              const fresh = await host!.pad();
+              if (!fresh) throw new Error("this pad closed while resolving the conflict");
+              // Deliberately a fresh read: the hub moved, that is why we are here.
+              const freshSnapshot = await snapshotHub(client!);
+              const repush = await walkPushPad(
+                client!,
+                {
+                  ...walkPad,
+                  hubAckUpdatedAt: () => fresh.hubAckUpdatedAt(),
+                  buildBody: fresh.buildBody,
+                  markHubAck: (updatedAt: number) => fresh.markHubAck(updatedAt),
+                },
+                freshSnapshot,
+              );
+              if (repush.outcome === "conflict") {
+                throw new WalkConflict("pad", repush.detail);
+              }
+              // What the hub holds *now*. `fresh.hubAckUpdatedAt()` was read
+              // before this write and names the row we were re-basing on.
+              padAckForPull = repush.hubUpdatedAt;
+            } else {
+              // Take server: applyHub* already wrote IDB and marked the ack.
+              const fresh = await host!.pad();
+              padAckForPull = fresh?.hubAckUpdatedAt() ?? padAckForPull;
+            }
+          }
         }
 
         // — F: handwriting for this pad only. A dual-write page stops at Ink;
         // after a resolve the walk converges both sides to what was kept and
         // resumes at G without redoing Index or Pad.
         if (runs("ink")) {
-        setStage("ink");
-        const ink = await walkSyncInk(client!, walkPad, snapshot, host!.inkSince());
-        if (ink.outcome === "conflict") {
-          const resolution = await raiseConflict({
-            kind: padInfo.kind,
-            id: padInfo.id,
-            stage: "ink",
-            detail: `page ${ink.pageId} has new strokes here and on the hub`,
-            local: padInfo.buildBody(),
-            server: await fetchHubBody(),
-            inkPageId: ink.pageId,
-          });
-          // Ink stays whole-pane: converge every page of this pad to the
-          // side that was kept, so the next walk sees agreement. The ordinary
-          // per-page sync is not re-run — there is nothing left to fight over.
-          const { pullInkPagesOverLocal, pushInkPagesToHub } = await import("../util/inkSync");
-          if (resolution.pick === "server") {
-            await pullInkPagesOverLocal(client!, padInfo.kind, padInfo.id);
-          } else {
-            await pushInkPagesToHub(client!, padInfo.kind, padInfo.id);
+          setStage("ink");
+          const ink = await walkSyncInk(client!, walkPad, snapshot, host!.inkSince());
+          if (ink.outcome === "conflict") {
+            const resolution = await raiseConflict({
+              kind: padInfo.kind,
+              id: padInfo.id,
+              stage: "ink",
+              detail: `page ${ink.pageId} has new strokes here and on the hub`,
+              local: padInfo.buildBody(),
+              server: await fetchHubBody(),
+              inkPageId: ink.pageId,
+            });
+            // Ink stays whole-pane: converge every page of this pad to the
+            // side that was kept, so the next walk sees agreement. The ordinary
+            // per-page sync is not re-run — there is nothing left to fight over.
+            const { pullInkPagesOverLocal, pushInkPagesToHub } = await import("../util/inkSync");
+            if (resolution.pick === "server") {
+              await pullInkPagesOverLocal(client!, padInfo.kind, padInfo.id);
+            } else {
+              await pushInkPagesToHub(client!, padInfo.kind, padInfo.id);
+            }
+            padAckForPull = (await host!.pad())?.hubAckUpdatedAt() ?? padAckForPull;
           }
-          padAckForPull = (await host!.pad())?.hubAckUpdatedAt() ?? padAckForPull;
-        }
         }
 
-        // — G: links union cleanly; snapshots only fill gaps.
-        if (runs("links")) {
-          setStage("links");
-          await walkSyncLinks(client!, snapshot);
-        }
-
-        // — H: if what the hub holds is still newer than the row we kept —
-        // e.g. this conflict was resolved by taking the server — reload the
-        // open pad from it. This is the chosen reload, not a background ping.
+        // — H, decided here and acted on after Links: is what the hub holds
+        // still newer than the row we kept — e.g. this conflict was resolved
+        // by taking the server? Then the open pad reloads from it. That is the
+        // chosen reload, not a background ping.
         const row = [...snapshot.annotateRows, ...snapshot.whiteboardRows].find(
           (r) => r.id === padInfo.id,
         );
         hubHasNewerRow = row != null && row.updated_at > (padAckForPull ?? 0);
       }
+
+      /*
+       * — G: links union cleanly; snapshots only fill gaps.
+       *
+       * Outside the pad block on purpose. E, F and H are about one row — this
+       * pad's JSON, this pad's ink pages, this pad's reload — but note links
+       * are the device's: `syncEdges` walks every edge here and every edge the
+       * hub reported, whichever document happens to be open. A reader who has
+       * not saved this one still has links worth exchanging.
+       */
+      if (runs("links")) {
+        setStage("links");
+        await walkSyncLinks(client!, snapshot);
+      }
+
+      /*
+       * No library row, so nothing pad-related happened.
+       *
+       * A document opened to read does not mint a pad — the row appears on the
+       * first save — so E, F and H had nothing to send and were skipped. Index
+       * and Links really did run, and `onIndexDone` has already said so. But
+       * "Synced" is a claim about a pad row on the hub, and there is no row, so
+       * the pill goes back to plain Sync rather than saying something true of
+       * nothing.
+       */
+      if (!padInfo) {
+        setStage("idle");
+        walkingRef.current = false;
+        return;
+      }
+
       setStage("pull");
       if (hubHasNewerRow) host?.emitReload();
       // What "Synced" is a claim about: this pad, as it stood just now.
