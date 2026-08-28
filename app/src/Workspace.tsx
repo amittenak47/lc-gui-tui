@@ -840,53 +840,88 @@ export function Workspace({
   } | null>(null);
   const hubConflictAskRef = useRef<typeof hubConflictAsk>(null);
 
+  /** A resolve is writing. Locks the split, and the handler behind it. */
+  const hubConflictBusyRef = useRef(false);
+  const [hubConflictBusy, setHubConflictBusy] = useState(false);
+
   /** Apply a conflict choice locally; the walk does any following PUT. */
   const handleHubConflictResolve = useCallback(async (resolution: HubConflictResolution) => {
     const ask = hubConflictAskRef.current;
     if (!ask) return;
+    /*
+     * One resolve per conflict.
+     *
+     * The split was never told it was working, so a second tap while the IDB
+     * write and the reload were still in flight started both again — two
+     * writers for one row, and two reloads racing to say what it holds.
+     */
+    if (hubConflictBusyRef.current) return;
     const c = ask.conflict;
-    if (c.stage === "pad") {
-      if (resolution.pick === "server" && c.server) {
-        // Take server: one IDB row from the stashed hub body, ack marked,
-        // chosen reload fired by the apply itself. No PUT — the hub has it.
-        if (c.kind === "annotate") {
-          await applyHubAnnotate(c.server, { emitReload: true });
+    /*
+     * Server can only win if there is a server copy.
+     *
+     * `server` is null when the hub body could not be fetched. Choosing it
+     * used to fall through to the local branch, which writes nothing, while
+     * the walk carried on treating `pick === "server"` as though the hub had
+     * won — the local copy quietly losing to a body nobody ever saw.
+     *
+     * Said, and the split left open: the conflict is real and the reader still
+     * has a choice to make, so this refuses the one pick that cannot be
+     * honoured rather than resolving the walk on a lie.
+     */
+    if (c.stage === "pad" && resolution.pick === "server" && !c.server) {
+      setError("The hub's copy could not be read, so it cannot be kept. Keep this device's copy instead.");
+      return;
+    }
+    hubConflictBusyRef.current = true;
+    setHubConflictBusy(true);
+    try {
+      if (c.stage === "pad") {
+        if (resolution.pick === "server" && c.server) {
+          // Take server: one IDB row from the stashed hub body, ack marked,
+          // chosen reload fired by the apply itself. No PUT — the hub has it.
+          if (c.kind === "annotate") {
+            await applyHubAnnotate(c.server, { emitReload: true });
+          } else {
+            await applyHubWhiteboard(c.server, { emitReload: true });
+          }
         } else {
-          await applyHubWhiteboard(c.server, { emitReload: true });
+          // Keep local / merge: local stays authoritative. A merge writes the
+          // picked footnotes into this device's row; both then re-base on the
+          // row the hub holds so the walk's PUT passes CAS instead of 409ing.
+          if (c.kind === "annotate" && resolution.pick === "merged" && resolution.footnotes) {
+            const doc = await getAnnotateDoc(c.id);
+            if (doc) {
+              await saveAnnotateDoc({
+                id: doc.id,
+                name: doc.name,
+                hash: doc.hash,
+                docType: doc.docType,
+                source: doc.source,
+                board: doc.board,
+                footnotes: resolution.footnotes,
+                agent: doc.agent,
+              });
+            }
+          }
+          if (c.kind === "annotate") {
+            markAnnotateHubAck(c.id, c.server?.updated_at ?? Date.now());
+          } else {
+            markWhiteboardHubAck(c.id, c.server?.updated_at ?? Date.now());
+          }
+          hubSyncHostRef.current?.emitReload();
         }
       } else {
-        // Keep local / merge: local stays authoritative. A merge writes the
-        // picked footnotes into this device's row; both then re-base on the
-        // row the hub holds so the walk's PUT passes CAS instead of 409ing.
-        if (c.kind === "annotate" && resolution.pick === "merged" && resolution.footnotes) {
-          const doc = await getAnnotateDoc(c.id);
-          if (doc) {
-            await saveAnnotateDoc({
-              id: doc.id,
-              name: doc.name,
-              hash: doc.hash,
-              docType: doc.docType,
-              source: doc.source,
-              board: doc.board,
-              footnotes: resolution.footnotes,
-              agent: doc.agent,
-            });
-          }
-        }
-        if (c.kind === "annotate") {
-          markAnnotateHubAck(c.id, c.server?.updated_at ?? Date.now());
-        } else {
-          markWhiteboardHubAck(c.id, c.server?.updated_at ?? Date.now());
-        }
-        hubSyncHostRef.current?.emitReload();
+        // Ink stage: the panes are whole-pane context only; the pages converge
+        // over the wire in the walk, so nothing to store here.
       }
-    } else {
-      // Ink stage: the panes are whole-pane context only; the pages converge
-      // over the wire in the walk, so nothing to store here.
+      hubConflictAskRef.current = null;
+      setHubConflictAsk(null);
+      ask.resolve(resolution);
+    } finally {
+      hubConflictBusyRef.current = false;
+      setHubConflictBusy(false);
     }
-    hubConflictAskRef.current = null;
-    setHubConflictAsk(null);
-    ask.resolve(resolution);
   }, []);
 
   const hubSyncHostRef = useRef<HubSyncWalkHost | null>(null);
@@ -9299,6 +9334,7 @@ export function Workspace({
       {hubConflictAsk ? (
         <HubConflictSplit
           conflict={hubConflictAsk.conflict}
+          busy={hubConflictBusy}
           onResolve={(resolution) => void handleHubConflictResolve(resolution)}
         />
       ) : null}

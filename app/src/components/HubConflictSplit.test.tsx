@@ -62,13 +62,28 @@ const CONFLICT: HubPadConflict = {
   ]),
 };
 
-function mount(conflict: HubPadConflict | null = CONFLICT) {
+function mount(conflict: HubPadConflict | null = CONFLICT, busy = false) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   const onResolve = vi.fn();
-  act(() => root.render(<HubConflictSplit conflict={conflict} onResolve={onResolve} />));
+  act(() =>
+    root.render(
+      <HubConflictSplit conflict={conflict} busy={busy} onResolve={onResolve} />,
+    ),
+  );
   return { root, onResolve };
+}
+
+function resolveButton(): HTMLButtonElement {
+  return document.querySelector(".lc-hub-conflict-resolve") as HTMLButtonElement;
+}
+
+function paneButton(side: 0 | 1, label: "✓" | "✕"): HTMLButtonElement {
+  const pane = document.querySelectorAll(".lc-hub-conflict-pane")[side]!;
+  return Array.from(pane.querySelectorAll("button")).find(
+    (b) => b.textContent === label,
+  )!;
 }
 
 describe("HubConflictSplit", () => {
@@ -145,5 +160,41 @@ describe("HubConflictSplit", () => {
     expect(ids).toContain("srv");
     expect(ids).toContain("n1"); // explicitly kept despite Local being dropped
     expect(ids.filter((id: string) => id === "same")).toEqual(["same"]); // server copy only
+  });
+});
+
+describe("HubConflictSplit guards", () => {
+  afterEach(() => {
+    document.body.textContent = "";
+  });
+
+  it("takes no taps while the choice is being written", () => {
+    // Without `busy` a second tap started another IDB write and another
+    // reload over the first — two writers for one row.
+    const { onResolve } = mount(CONFLICT, true);
+    act(() => paneButton(0, "✓").click());
+    expect(resolveButton().disabled).toBe(true);
+    act(() => resolveButton().click());
+    expect(onResolve).not.toHaveBeenCalled();
+  });
+
+  it("will not keep a server copy it could not read", () => {
+    // `server` is null when the hub body did not come back. Choosing it wrote
+    // nothing and let the walk carry on as though the hub had won.
+    const { onResolve } = mount({ ...CONFLICT, server: null });
+
+    act(() => paneButton(1, "✓").click());
+    expect(resolveButton().disabled).toBe(true);
+    act(() => resolveButton().click());
+    expect(onResolve).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("could not be read");
+  });
+
+  it("still lets the local copy be kept when the hub copy is missing", () => {
+    const { onResolve } = mount({ ...CONFLICT, server: null });
+    act(() => paneButton(0, "✓").click());
+    act(() => resolveButton().click());
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    expect(onResolve.mock.calls[0]![0].pick).toBe("local");
   });
 });

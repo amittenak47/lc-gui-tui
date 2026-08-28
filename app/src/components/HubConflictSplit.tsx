@@ -115,6 +115,8 @@ export function HubConflictSplit({ conflict, busy = false, onResolve }: HubConfl
   }, [conflict]);
 
   const setVerdict = (side: "local" | "server", verdict: Verdict) => {
+    // Nothing was fetched for that side, so there is nothing to keep from it.
+    if (side === "server" && verdict === "keep" && conflict?.server == null) return;
     setPicks({}); // A whole-pane verdict resets any per-mark picks.
     setVerdicts((current) => {
       const otherSide = side === "local" ? "server" : "local";
@@ -141,9 +143,19 @@ export function HubConflictSplit({ conflict, busy = false, onResolve }: HubConfl
     }));
   };
 
+  /*
+   * The server pane can be empty.
+   *
+   * `server` is null when the hub copy could not be fetched — the conflict is
+   * real, but there is nothing to keep. Choosing it wrote nothing and then let
+   * the walk carry on as though Server had won, which is the local copy quietly
+   * losing to a body nobody ever saw. Nothing to show is nothing to pick.
+   */
+  const serverMissing = Boolean(conflict) && conflict!.server == null;
+
   const valid =
     Boolean(conflict) &&
-    (verdicts.local === "keep" || verdicts.server === "keep") &&
+    (verdicts.local === "keep" || (verdicts.server === "keep" && !serverMissing)) &&
     rows.every(
       (row) => effectiveKeep(row.id, "local") || effectiveKeep(row.id, "server"),
     );
@@ -252,9 +264,11 @@ export function HubConflictSplit({ conflict, busy = false, onResolve }: HubConfl
         <span className="lc-muted">
           {busy
             ? "Writing your choice…"
-            : valid
-              ? "Ready."
-              : "Mark each pane ✓ or ✕; every note needs a home."}
+            : serverMissing
+              ? "The hub's copy could not be read, so only this device's copy can be kept."
+              : valid
+                ? "Ready."
+                : "Mark each pane ✓ or ✕; every note needs a home."}
         </span>
         <button
           type="button"
