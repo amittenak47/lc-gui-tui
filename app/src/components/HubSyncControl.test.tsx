@@ -75,11 +75,13 @@ describe("HubSyncControl (step-2 stub)", () => {
     }
     expect(button.dataset.stage).toBe("synced");
 
+    // One tap on a finished pill runs the walk again. It used to reset to
+    // Sync and need a second tap for the thing the first one asked for.
     act(() => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(button.dataset.stage).toBe("idle");
-    expect(activeLabel(button)).toBe("Sync");
+    expect(button.dataset.stage).toBe("index");
+    expect(activeLabel(button)).toBe("Index");
   });
 
   it("rests on Synced when the hint says the hub already has everything", () => {
@@ -110,6 +112,26 @@ describe("HubSyncControl (step-2 stub)", () => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(button.dataset.stage).toBe("index");
+  });
+
+  it("stops resting on Synced once the pad has been edited", () => {
+    const hint = {
+      hash: "h",
+      padUpdatedAt: 500,
+      padUpToDate: true,
+      bytesOnHub: true,
+      indexedOnHub: true,
+    };
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    act(() => root.render(<HubSyncControl hubHint={hint} editSeq={0} />));
+    const button = host.querySelector(".lc-hub-sync") as HTMLButtonElement;
+    expect(activeLabel(button)).toBe("Synced");
+
+    act(() => root.render(<HubSyncControl hubHint={hint} editSeq={1} />));
+    expect(activeLabel(button)).toBe("Sync");
+    act(() => root.unmount());
   });
 
   it("stays on Sync when the hub row is older than what opened locally", () => {
@@ -194,6 +216,7 @@ describe("HubSyncControl (step-2 stub)", () => {
     function makeHost(doc: HubSyncWalkHost["doc"] extends () => infer R ? R : never) {
       const progress = vi.fn();
       const errors = vi.fn();
+      const indexDone = vi.fn();
       const reload = vi.fn();
       const conflicts: unknown[] = [];
       const picks: Array<{ pick: "local" | "server" }> = [];
@@ -208,8 +231,9 @@ describe("HubSyncControl (step-2 stub)", () => {
         },
         onIndexProgress: (p) => progress(p),
         onIndexError: (m) => errors(m),
+        onIndexDone: () => indexDone(),
       };
-      return { host, progress, errors, reload, conflicts, picks };
+      return { host, progress, errors, indexDone, reload, conflicts, picks };
     }
 
     async function mountWalk(client: LcClient, host: HubSyncWalkHost) {
@@ -538,6 +562,117 @@ describe("HubSyncControl (step-2 stub)", () => {
 
       expect(button.dataset.stage).toBe("synced");
       expect(pingPadSync).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries from the stage that failed, not from the top", async () => {
+      // `_from` was accepted and ignored, so a failure at Pad re-ran the whole
+      // index — on a book, minutes of work to get back to what actually broke.
+      vi.useFakeTimers();
+      const indexed = {
+        hash: "h",
+        indexed: true,
+        page_count: 7,
+        chunk_count: 2,
+        embedded: false,
+        embed_state: "full",
+      };
+      const getDocIndex = vi.fn().mockResolvedValue(indexed);
+      const putAnnotatePad = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("hub went away"))
+        .mockResolvedValue({ id: "pad-1", updated_at: 777 });
+      const client = fakeClient({
+        getDocIndex,
+        putAnnotatePad,
+        pingPadSync: vi.fn().mockResolvedValue({ now: 1, annotate: [] }),
+      });
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      (host as unknown as { pad: () => Promise<unknown> }).pad = async () => ({
+        kind: "annotate" as const,
+        id: "pad-1",
+        hubAckUpdatedAt: () => 100,
+        buildBody: () => ({ id: "pad-1", name: "book.pdf", updated_at: 900 }),
+        markHubAck: () => {},
+      });
+      const button = await mountWalk(client, host);
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+      expect(button.dataset.stage).toBe("pad");
+      expect(button.dataset.error).toContain("hub went away");
+      const indexCallsAfterFirst = getDocIndex.mock.calls.length;
+      expect(indexCallsAfterFirst).toBeGreaterThan(0);
+
+      // The retry resumes at Pad; the index stage is not walked again.
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+      expect(button.dataset.stage).toBe("synced");
+      expect(getDocIndex.mock.calls.length).toBe(indexCallsAfterFirst);
+      expect(putAnnotatePad).toHaveBeenCalledTimes(2);
+    });
+
+    it("tells the chip the document is indexed", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient();
+      const { host, indexDone } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const button = await mountWalk(client, host);
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+      expect(button.dataset.stage).toBe("synced");
+      expect(indexDone).toHaveBeenCalled();
+    });
+
+    it("stops reading Synced once the pad is edited again", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient();
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const hostEl = document.createElement("div");
+      document.body.append(hostEl);
+      const root = createRoot(hostEl);
+      const render = (editSeq: number) =>
+        act(() =>
+          root.render(<HubSyncControl client={client} host={host} editSeq={editSeq} />),
+        );
+      render(0);
+      const button = hostEl.querySelector(".lc-hub-sync") as HTMLButtonElement;
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+      expect(button.dataset.stage).toBe("synced");
+
+      // The reader writes something. "Synced" was a claim about a moment that
+      // has now passed, and the pill used to keep making it.
+      render(1);
+      expect(button.dataset.stage).toBe("idle");
+      expect(activeLabel(button)).toBe("Sync");
+      act(() => root.unmount());
     });
 
     it("records the hub ack after an ordinary push", async () => {

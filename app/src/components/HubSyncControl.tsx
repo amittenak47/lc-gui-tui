@@ -114,6 +114,14 @@ export interface HubSyncWalkHost {
   onConflict(conflict: HubPadConflict): Promise<HubConflictResolution>;
   onIndexProgress(progress: DocWorkProgress | null): void;
   onIndexError(message: string | null): void;
+  /**
+   * The hub holds an index for this document.
+   *
+   * The walk indexed it, or found it already there. Nothing said so, so a
+   * successful walk left the document-index chip reading whatever it read
+   * before — usually "not indexed", about a document that now is.
+   */
+  onIndexDone(): void;
 }
 
 export interface HubSyncControlProps {
@@ -126,9 +134,23 @@ export interface HubSyncControlProps {
   /** Present only when there is something to sync with; gates the real walk. */
   client?: LcClient | null;
   host?: HubSyncWalkHost | null;
+  /**
+   * Bumped by the workspace every time the open pad is edited.
+   *
+   * "Synced" is a claim about a moment, and the pill had no way to notice the
+   * moment passing: it stayed on Synced while the reader kept writing. This is
+   * the smallest thing that can be compared — the value when the walk landed
+   * against the value now — and it re-renders, which a ref would not.
+   */
+  editSeq?: number;
 }
 
-export function HubSyncControl({ hubHint = null, client = null, host = null }: HubSyncControlProps) {
+export function HubSyncControl({
+  hubHint = null,
+  client = null,
+  host = null,
+  editSeq = 0,
+}: HubSyncControlProps) {
   /*
    * No hub, no pill.
    *
@@ -153,6 +175,10 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
   const [walkError, setWalkError] = useState<string | null>(null);
   const walkingRef = useRef(false);
   const timerRef = useRef<number | null>(null);
+  /** The edit count "Synced" was true at. Zero is "as this pad opened". */
+  const syncedAtSeqRef = useRef(0);
+  const editSeqRef = useRef(editSeq);
+  editSeqRef.current = editSeq;
 
   // Clearing on unmount keeps the stub walk from writing state into a dead
   // tree; the real walk will own its own teardown per stage.
@@ -163,26 +189,23 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
   }, []);
 
   const onTap = () => {
-    if (stage === "idle") {
-      setWalkError(null);
-      if (client && host) {
-        void runWalk("index");
-        return;
-      }
-      // No client wired (tests, or a bare mount): the label walk alone.
-      setStage(WALK[0]);
+    /*
+     * Mid-walk taps do nothing; the walk owns itself until it lands. A parked
+     * failure is the exception — that tap is the retry.
+     */
+    if (busy && !walkError) return;
+    // Where to resume. A failure parks on its own stage and retries from it;
+    // everything else — idle, and a finished walk — starts at the top.
+    const from: HubSyncStage = walkError ? stage : "index";
+    setWalkError(null);
+    if (client && host) {
+      void runWalk(from);
       return;
     }
-    // Mid-walk taps do nothing; the walk owns itself until it lands.
-    if (walkError && client && host) {
-      // Parked on a failed stage: this tap retries from there.
-      setWalkError(null);
-      void runWalk(stage);
-      return;
-    }
-    if (stage !== "synced") return;
-    // A finished walk resets to idle so the next tap runs it again.
-    setStage("idle");
+    // No client wired (tests, or a bare mount): the label walk alone.
+    // One tap, including from Synced: a pill that only resets on the first
+    // tap and runs on the second is two taps for one thing.
+    setStage(WALK[0]);
   };
 
   /*
@@ -191,10 +214,21 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
    * until their steps land; a failure anywhere parks the pill on that stage's
    * label with the error, and the next tap retries from there.
    */
-  const runWalk = async (_from: HubSyncStage) => {
+  const runWalk = async (from: HubSyncStage) => {
     if (walkingRef.current) return;
     walkingRef.current = true;
     host?.onIndexError(null);
+    /*
+     * Resume where it stopped.
+     *
+     * `from` was accepted and ignored: retrying a failure at Pad, Ink or Links
+     * re-ran the whole index from the top, which on a book is minutes of work
+     * to get back to the stage that actually failed. Stage A is always run —
+     * it is both the "is the hub up?" check and the snapshot every later stage
+     * compares against, so it is not a stage to skip past.
+     */
+    const startAt = Math.max(0, WALK.indexOf(from === "idle" ? "index" : from));
+    const runs = (stageId: HubSyncStage) => WALK.indexOf(stageId) >= startAt;
     try {
       // — A: is there a hub, and is it up? Both end the walk before any write,
       // and the first has to be answered here — every stage below assumes one,
@@ -215,7 +249,10 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
        */
       const ping = await client!.pingPadSync(0);
 
-      if (!doc || doc.docType === "web") {
+      if (!runs("index")) {
+        // Already done on the attempt that got as far as the failing stage.
+        host?.onIndexProgress(null);
+      } else if (!doc || doc.docType === "web") {
         // Whiteboard/home have no document to index; web pads deliberately
         // skip indexing and byte upload for now.
         // TODO(web-index): web pads neither upload bytes nor index yet.
@@ -298,6 +335,7 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
         }
       }
       host?.onIndexProgress(null);
+      if (runs("index") && doc && doc.docType !== "web") host?.onIndexDone();
 
       /*
        * — E through H, same tap. E and F can stop everything on a conflict:
@@ -345,6 +383,7 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
         };
 
         // — E: push this pad's JSON (CAS). Conflict → stop before any apply.
+        if (runs("pad")) {
         setStage("pad");
         const pushed = await walkPushPad(client!, walkPad, snapshot);
         if (pushed.outcome === "ok") {
@@ -392,10 +431,12 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
             padAckForPull = fresh?.hubAckUpdatedAt() ?? padAckForPull;
           }
         }
+        }
 
         // — F: handwriting for this pad only. A dual-write page stops at Ink;
         // after a resolve the walk converges both sides to what was kept and
         // resumes at G without redoing Index or Pad.
+        if (runs("ink")) {
         setStage("ink");
         const ink = await walkSyncInk(client!, walkPad, snapshot, host!.inkSince());
         if (ink.outcome === "conflict") {
@@ -419,10 +460,13 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
           }
           padAckForPull = (await host!.pad())?.hubAckUpdatedAt() ?? padAckForPull;
         }
+        }
 
         // — G: links union cleanly; snapshots only fill gaps.
-        setStage("links");
-        await walkSyncLinks(client!, snapshot);
+        if (runs("links")) {
+          setStage("links");
+          await walkSyncLinks(client!, snapshot);
+        }
 
         // — H: if what the hub holds is still newer than the row we kept —
         // e.g. this conflict was resolved by taking the server — reload the
@@ -434,6 +478,8 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
       }
       setStage("pull");
       if (hubHasNewerRow) host?.emitReload();
+      // What "Synced" is a claim about: this pad, as it stood just now.
+      syncedAtSeqRef.current = editSeqRef.current;
       setStage("synced");
       walkingRef.current = false;
     } catch (cause) {
@@ -462,17 +508,27 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
   if (wired && !hub) return null;
 
   const busy = stage !== "idle" && stage !== "synced";
+  /*
+   * Synced, until the reader writes something.
+   *
+   * Both kinds of Synced go stale the same way — the one a finished walk left
+   * behind, and the one the open-time hint reads at rest — and neither noticed.
+   * The pill sat on "Synced" over a pad with unsynced marks on it.
+   */
+  const editedSinceSynced = editSeq !== syncedAtSeqRef.current;
 
   // Idle label per the open policy: Synced needs pad + index on the hub and
   // no newer local ink than the hub knows about at open time.
   const syncedAtRest =
     stage === "idle" &&
+    !editedSinceSynced &&
     hubHint != null &&
     hubHint.padUpdatedAt != null &&
     hubHint.padUpToDate !== false &&
     hubHint.indexedOnHub;
   const restStage: HubSyncStage = syncedAtRest ? "synced" : "idle";
-  const activeStage = busy || stage === "synced" ? stage : restStage;
+  const settled = stage === "synced" && !editedSinceSynced ? "synced" : restStage;
+  const activeStage = busy ? stage : settled;
 
   return (
     <span className="lc-hub-sync-dock">
@@ -481,7 +537,7 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
         className="lc-hub-sync lc-tip-target"
         onClick={onTap}
         aria-label={busy ? `Hub sync: ${LABEL[stage]}` : "Hub sync"}
-        data-stage={stage}
+        data-stage={busy ? stage : activeStage}
         data-error={walkError ?? undefined}
         title={walkError ?? undefined}
       >

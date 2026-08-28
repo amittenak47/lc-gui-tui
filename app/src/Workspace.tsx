@@ -924,6 +924,16 @@ export function Workspace({
     }
   }, []);
 
+  /*
+   * How many times this pad has been edited since it opened.
+   *
+   * The Sync pill needs to know that "Synced" has stopped being true, and a
+   * ref would not re-render it. Bumped from the same place the tab's unsaved
+   * dot is set, so it means exactly what that dot means.
+   */
+  const [padEditSeq, setPadEditSeq] = useState(0);
+  const bumpPadEdit = useCallback(() => setPadEditSeq((n) => n + 1), []);
+
   const hubSyncHostRef = useRef<HubSyncWalkHost | null>(null);
   if (!hubSyncHostRef.current) {
     hubSyncHostRef.current = {
@@ -992,6 +1002,13 @@ export function Workspace({
           setHubConflictAsk({ conflict, resolve });
         }),
       onIndexProgress: (progress) => setDocIndexProgress(progress),
+      // The hub has an index for this document now, whether the walk built it
+      // or found it already there. Nothing used to say so, so the chip kept
+      // reading "not indexed" about a document that was.
+      onIndexDone: () => {
+        setDocIndexStatus("indexed");
+        setDocIndexError(null);
+      },
       onIndexError: (message) => {
         if (message) {
           setDocIndexStatus("error");
@@ -1978,6 +1995,7 @@ export function Workspace({
           lastSavedMarksRef.current = marks;
           return;
         }
+        bumpPadEdit();
         const source = annotateSourceRef.current;
         if (!source) return;
         // Marked attempted before the write rather than after it. The save is
@@ -2058,6 +2076,7 @@ export function Workspace({
           lastSavedHashRef.current = hash;
           return;
         }
+        bumpPadEdit();
       }
 
       dirtyRef.current = true;
@@ -8792,7 +8811,12 @@ export function Workspace({
           the chrome slot; only the focused workspace mounts its own. */}
       {active && headerSlots.boardChrome ? (
         createPortal(
-          <HubSyncControl hubHint={hubHint} client={client} host={hubSyncHostRef.current} />,
+          <HubSyncControl
+            hubHint={hubHint}
+            client={client}
+            host={hubSyncHostRef.current}
+            editSeq={padEditSeq}
+          />,
           headerSlots.boardChrome,
         )
       ) : null}
