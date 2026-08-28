@@ -207,8 +207,14 @@ describe("HubSyncControl (step-2 stub)", () => {
         // One pad, by id — the conflict path no longer lists the library.
         getAnnotatePad: overrides.getAnnotatePad ?? vi.fn().mockResolvedValue(null),
         getWhiteboardPad: overrides.getWhiteboardPad ?? vi.fn().mockResolvedValue(null),
-        putAnnotatePad: overrides.putAnnotatePad ?? vi.fn(),
-        putWhiteboardPad: overrides.putWhiteboardPad ?? vi.fn(),
+        putAnnotatePad:
+          overrides.putAnnotatePad ??
+          vi.fn().mockResolvedValue({ id: "pad-1", updated_at: 900 }),
+        putWhiteboardPad:
+          overrides.putWhiteboardPad ??
+          vi.fn().mockResolvedValue({ id: "w1", updated_at: 900 }),
+        putEdges: overrides.putEdges ?? vi.fn().mockResolvedValue(undefined),
+        tombstoneEdge: overrides.tombstoneEdge ?? vi.fn().mockResolvedValue(undefined),
       };
       return fns as unknown as LcClient & Record<string, ReturnType<typeof vi.fn>>;
     }
@@ -234,6 +240,25 @@ describe("HubSyncControl (step-2 stub)", () => {
         onIndexDone: () => indexDone(),
       };
       return { host, progress, errors, indexDone, reload, conflicts, picks };
+    }
+
+    /**
+     * Give a host a pad row.
+     *
+     * `makeHost` answers `pad: () => null`, which is a document opened to read
+     * and never saved. A walk over that one ends on idle Sync — Pad, Ink and
+     * Pull have no row to act on — so anything asserting "Synced" has to have
+     * something to sync.
+     */
+    function withPad(host: HubSyncWalkHost, ack = 100): HubSyncWalkHost {
+      (host as unknown as { pad: () => Promise<unknown> }).pad = async () => ({
+        kind: "annotate" as const,
+        id: "pad-1",
+        hubAckUpdatedAt: () => ack,
+        buildBody: () => ({ id: "pad-1", name: "book.pdf", updated_at: 900 }),
+        markHubAck: () => {},
+      });
+      return host;
     }
 
     async function mountWalk(client: LcClient, host: HubSyncWalkHost) {
@@ -322,7 +347,7 @@ describe("HubSyncControl (step-2 stub)", () => {
         text: "",
         bytes: null,
       });
-      const button = await mountWalk(client, host);
+      const button = await mountWalk(client, withPad(host));
 
       await act(async () => {
         button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -352,7 +377,7 @@ describe("HubSyncControl (step-2 stub)", () => {
         text: "",
         bytes: null,
       });
-      const button = await mountWalk(client, host);
+      const button = await mountWalk(client, withPad(host));
 
       await act(async () => {
         button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -379,7 +404,7 @@ describe("HubSyncControl (step-2 stub)", () => {
         text: "",
         bytes: null,
       });
-      const button = await mountWalk(client, host);
+      const button = await mountWalk(client, withPad(host));
 
       await act(async () => {
         button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -631,7 +656,7 @@ describe("HubSyncControl (step-2 stub)", () => {
         text: "",
         bytes: null,
       });
-      const button = await mountWalk(client, host);
+      const button = await mountWalk(client, withPad(host));
 
       await act(async () => {
         button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -654,9 +679,10 @@ describe("HubSyncControl (step-2 stub)", () => {
       const hostEl = document.createElement("div");
       document.body.append(hostEl);
       const root = createRoot(hostEl);
+      const padded = withPad(host);
       const render = (editSeq: number) =>
         act(() =>
-          root.render(<HubSyncControl client={client} host={host} editSeq={editSeq} />),
+          root.render(<HubSyncControl client={client} host={padded} editSeq={editSeq} />),
         );
       render(0);
       const button = hostEl.querySelector(".lc-hub-sync") as HTMLButtonElement;
@@ -673,6 +699,87 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect(button.dataset.stage).toBe("idle");
       expect(activeLabel(button)).toBe("Sync");
       act(() => root.unmount());
+    });
+
+    it("ends a pad-less walk on Sync, not Synced", async () => {
+      // A document opened to read has no library row until the first save, so
+      // Pad, Ink and Pull have nothing to act on. The walk still indexed, but
+      // "Synced" is a claim about a pad row that does not exist.
+      vi.useFakeTimers();
+      const client = fakeClient();
+      const { host, indexDone } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const button = await mountWalk(client, host);
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(button.dataset.stage).toBe("idle");
+      expect(activeLabel(button)).toBe("Sync");
+      expect(button.dataset.error).toBeUndefined();
+      // The index half really did happen, and says so.
+      expect(indexDone).toHaveBeenCalled();
+      // And the pad stages were skipped rather than run against nothing.
+      expect(
+        (client as unknown as { putAnnotatePad: ReturnType<typeof vi.fn> }).putAnnotatePad,
+      ).not.toHaveBeenCalled();
+    });
+
+    it("still syncs links when there is no pad", async () => {
+      /*
+       * Links are the device's, not this document's: `syncEdges` walks every
+       * edge here and every edge the ping reported. Returning early on a
+       * pad-less walk would drop the union for every note in the library
+       * because the file in front of you happens to be unsaved.
+       *
+       * Asserted on the calls rather than the labels: the stage attribute is
+       * batched away inside `act`, and what matters is which stages ran.
+       */
+      vi.useFakeTimers();
+      vi.resetModules();
+      const links = vi.fn().mockResolvedValue(undefined);
+      const push = vi.fn();
+      vi.doMock("../util/hubWalk", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("../util/hubWalk")>()),
+        walkSyncLinks: links,
+        walkPushPad: push,
+      }));
+      const { HubSyncControl: Fresh } = await import("./HubSyncControl");
+
+      const client = fakeClient();
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const hostEl = document.createElement("div");
+      document.body.append(hostEl);
+      const root = createRoot(hostEl);
+      act(() => root.render(<Fresh client={client} host={host} />));
+      const button = hostEl.querySelector(".lc-hub-sync") as HTMLButtonElement;
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(links).toHaveBeenCalledTimes(1);
+      // And the pad-scoped stage was skipped rather than run against nothing.
+      expect(push).not.toHaveBeenCalled();
+      expect(button.dataset.stage).toBe("idle");
+
+      act(() => root.unmount());
+      vi.doUnmock("../util/hubWalk");
+      vi.resetModules();
     });
 
     it("records the hub ack after an ordinary push", async () => {
