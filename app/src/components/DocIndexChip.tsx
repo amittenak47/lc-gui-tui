@@ -24,30 +24,41 @@ export interface DocWorkProgress {
  * "0%" or an invented figure would be claiming otherwise.
  */
 function WorkRing({ progress }: { progress: DocWorkProgress | null }) {
+  /*
+   * A working chip never claims 100%.
+   *
+   * Extract hits the last page and then still has to PUT the index; embedding
+   * hits the last budget and then still has to finish the call. Showing 100%
+   * with "indexing…" is the lie that made the bar look stuck.
+   */
+  const finished =
+    progress != null && progress.total > 0 && progress.done >= progress.total;
   const pct =
-    progress && progress.total > 0
-      ? Math.min(100, Math.max(0, Math.round((progress.done / progress.total) * 100)))
+    !finished && progress && progress.total > 0
+      ? Math.min(99, Math.max(0, Math.round((progress.done / progress.total) * 100)))
       : null;
   const radius = 6;
   const circumference = 2 * Math.PI * radius;
   return (
-    <span className="lc-doc-index-ring" aria-hidden>
-      <svg viewBox="0 0 16 16" width="14" height="14">
-        <circle cx="8" cy="8" r={radius} className="lc-doc-index-ring-track" />
-        <circle
-          cx="8"
-          cy="8"
-          r={radius}
-          className={pct == null ? "lc-doc-index-ring-arc is-sweeping" : "lc-doc-index-ring-arc"}
-          strokeDasharray={
-            pct == null
-              ? `${circumference * 0.25} ${circumference}`
-              : `${(circumference * pct) / 100} ${circumference}`
-          }
-        />
-      </svg>
+    <>
+      <span className="lc-doc-index-ring" aria-hidden>
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <circle cx="8" cy="8" r={radius} className="lc-doc-index-ring-track" />
+          <circle
+            cx="8"
+            cy="8"
+            r={radius}
+            className={pct == null ? "lc-doc-index-ring-arc is-sweeping" : "lc-doc-index-ring-arc"}
+            strokeDasharray={
+              pct == null
+                ? `${circumference * 0.25} ${circumference}`
+                : `${(circumference * pct) / 100} ${circumference}`
+            }
+          />
+        </svg>
+      </span>
       {pct != null && <b className="lc-doc-index-ring-pct">{pct}</b>}
-    </span>
+    </>
   );
 }
 
@@ -157,11 +168,12 @@ export function DocIndexChip({
   }, [open]);
 
   /*
-   * The Sync walk, while one is running.
+   * The Sync walk, while one is running or after it has landed.
    *
-   * Ahead of the resting states because it is what is happening now, and
-   * behind nothing else: the walk drives every stage the pill shows, and the
-   * tab is where you read how far the current one has got.
+   * Ahead of the resting index states because it is what is happening now (or
+   * what the last walk finished as). The pill morphs the same words; the tab
+   * is where they sit beside the document name. Landing is `synced`, not a
+   * return to `indexed`.
    */
   const walking =
     walkStage != null && walkStage !== "idle" && walkStage !== "synced";
@@ -271,7 +283,9 @@ export function DocIndexChip({
         ref={buttonRef}
         type="button"
         className={
-          unindexed
+          walkStage === "synced"
+            ? "lc-doc-index-chip is-ok"
+            : unindexed
             ? "lc-doc-index-chip is-offer"
             : wordsOnly
               ? "lc-doc-index-chip is-words"
@@ -285,7 +299,13 @@ export function DocIndexChip({
           setOpen((current) => !current);
         }}
       >
-        {unindexed ? "not indexed" : wordsOnly ? "indexed · words" : "indexed"}
+        {walkStage === "synced"
+          ? "synced"
+          : unindexed
+            ? "not indexed"
+            : wordsOnly
+              ? "indexed · words"
+              : "indexed"}
       </button>
       {typeof document !== "undefined" &&
         createPortal(

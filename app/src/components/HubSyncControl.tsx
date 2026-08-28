@@ -134,7 +134,7 @@ export interface HubSyncWalkHost {
    */
   onConflict(conflict: HubPadConflict): Promise<HubConflictResolution>;
   onIndexProgress(progress: DocWorkProgress | null): void;
-  /** How far the Sync walk has got, for the tab chip. Null when idle. */
+  /** How far the Sync walk has got, for the tab chip. Null when idle (not Synced). */
   onWalkProgress(report: HubWalkReport | null): void;
   onIndexError(message: string | null): void;
   /**
@@ -212,17 +212,19 @@ export function HubSyncControl({
   const goStage = (next: HubSyncStage) => {
     walkStageRef.current = next;
     setStage(next);
+    // Idle (pad-less after Links) clears the tab. Synced is a landing, not a
+    // clear — the tab finishes on that word the same way the pill does.
     hostRef.current?.onWalkProgress(
-      next === "idle" || next === "synced" ? null : { stage: next, progress: null },
+      next === "idle" ? null : { stage: next, progress: null },
     );
   };
 
-  /** Report one job's progress under whatever stage is running. */
-  const goWork = (job: "extract" | "embed", progress: DocWorkProgress | null) => {
+  /** Report one job's progress under whatever stage is running. `job: null` clears. */
+  const goWork = (job: "extract" | "embed" | null, progress: DocWorkProgress | null) => {
     hostRef.current?.onIndexProgress(progress);
     hostRef.current?.onWalkProgress({
       stage: walkStageRef.current,
-      job: progress ? job : null,
+      job,
       progress,
     });
   };
@@ -237,10 +239,20 @@ export function HubSyncControl({
   useEffect(() => {
     return () => {
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-      // Whatever the tab was showing, this walk is no longer running.
-      hostRef.current?.onWalkProgress(null);
+      // Mid-walk unmount: stop claiming work. A landed Synced stays on the tab.
+      const at = walkStageRef.current;
+      if (at !== "idle" && at !== "synced") {
+        hostRef.current?.onWalkProgress(null);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (walkStageRef.current !== "synced") return;
+    if (editSeq === syncedAtSeqRef.current) return;
+    walkStageRef.current = "idle";
+    hostRef.current?.onWalkProgress(null);
+  }, [editSeq]);
 
   const onTap = () => {
     /*
@@ -305,12 +317,12 @@ export function HubSyncControl({
 
       if (!runs("index")) {
         // Already done on the attempt that got as far as the failing stage.
-        goWork("extract", null);
+        goWork(null, null);
       } else if (!doc || doc.docType === "web") {
         // Whiteboard/home have no document to index; web pads deliberately
         // skip indexing and byte upload for now.
         // TODO(web-index): web pads neither upload bytes nor index yet.
-        goWork("extract", null);
+        goWork(null, null);
       } else {
         /*
          * — B: bytes on the hub? If not and we hold them, PUT once.
@@ -329,22 +341,28 @@ export function HubSyncControl({
           bytesOnHub = true;
         }
 
-        // — C: index. Skip when the hub already has pages; otherwise ask the
-        // hub to extract from its own copy of the bytes. EPUB is the one kind
-        // the hub cannot read from bytes: its parsing is plain zip + HTML
-        // (no pdf.js worker), so it extracts here at tap time, never on open.
+        // — C: index. Skip when the hub already has pages; otherwise extract
+        // here when we hold the file (so the tab can count pages) and PUT the
+        // pages. Hub-side extract is only for a PDF this device no longer has.
         if (!(status?.indexed && (status.page_count ?? 0) > 0)) {
-          if (doc.docType === "epub") {
+          const extractHere =
+            Boolean(doc.bytes) &&
+            (doc.docType === "epub" ||
+              doc.docType === "pdf" ||
+              doc.docType === "markdown" ||
+              doc.docType === "code");
+          if (extractHere) {
             const { extractDocumentPages } = await import("../util/docExtract");
             goWork("extract", { done: 0, total: 0 });
             const pages = await extractDocumentPages({
-              docType: "epub",
+              docType: doc.docType as "epub" | "pdf" | "markdown" | "code",
               name: doc.name,
               text: doc.text,
               bytes: doc.bytes,
               hash: doc.hash,
               onProgress: (done, total) => goWork("extract", { done, total }),
             });
+            // Last page is not "done": the hub still has to keep the pages.
             goWork("extract", null);
             if (pages.length === 0) {
               throw new Error("no text could be read from this file");
@@ -369,6 +387,7 @@ export function HubSyncControl({
                 "the hub does not have this file yet, and this device no longer holds it — reopen it here, then sync",
               );
             }
+            goWork("extract", null);
             const result = await client!.indexFromBytes(doc.hash, {
               name: doc.name,
               doc_type: doc.docType,
@@ -409,10 +428,10 @@ export function HubSyncControl({
             if (budget.total > 0 && budget.done >= budget.total) break;
             if (budget.total === 0) break;
           }
-          goWork("embed", null);
+          goWork(null, null);
         }
       }
-      goWork("extract", null);
+      goWork(null, null);
       if (runs("index") && doc && doc.docType !== "web") host?.onIndexDone();
 
       /*

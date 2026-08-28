@@ -71,6 +71,16 @@ describe("the chip while a Sync walk runs", () => {
     expect(counted.host.querySelector(".lc-doc-index-ring-pct")?.textContent).toBe("75");
     act(() => counted.root.unmount());
 
+    const complete = mount({
+      walkStage: "index",
+      walkJob: "extract",
+      walkProgress: { done: 4, total: 4 },
+    });
+    expect(complete.host.querySelector(".lc-doc-index-ring-pct")).toBeNull();
+    expect(complete.host.querySelector(".is-sweeping")).not.toBeNull();
+    expect(chip(complete.host)?.textContent).toContain("indexing…");
+    act(() => complete.root.unmount());
+
     const swept = mount({ walkStage: "links" });
     expect(swept.host.querySelector(".lc-doc-index-ring-pct")).toBeNull();
     expect(swept.host.querySelector(".is-sweeping")).not.toBeNull();
@@ -83,10 +93,10 @@ describe("the chip while a Sync walk runs", () => {
     expect(host.querySelector(".lc-doc-index-ring")).toBeNull();
   });
 
-  it("goes back to resting once the walk lands", () => {
-    // "Synced" belongs on the pill; the tab returns to describing the document.
+  it("finishes on synced, not indexed", () => {
     const { host } = mount({ status: "indexed", walkStage: "synced" });
-    expect(chip(host)?.textContent).toContain("indexed");
+    expect(chip(host)?.textContent).toContain("synced");
+    expect(chip(host)?.textContent).not.toContain("indexed");
     expect(chip(host)?.className).not.toContain("is-working");
   });
 });

@@ -9,6 +9,16 @@ import { HubSyncControl, type HubSyncWalkHost } from "./HubSyncControl";
 import type { LcClient } from "../api/client";
 import { PAD_HUB_KEY } from "../util/padHub";
 
+vi.mock("../util/docExtract", () => ({
+  extractDocumentPages: vi.fn(
+    async (input: { onProgress?: (done: number, total: number) => void }) => {
+      input.onProgress?.(1, 2);
+      input.onProgress?.(2, 2);
+      return [{ page: 1, text: "hello", heading: "h" }];
+    },
+  ),
+}));
+
 function mount() {
   const host = document.createElement("div");
   document.body.append(host);
@@ -447,7 +457,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect(docBytesOnHub).toHaveBeenCalledWith("h");
       expect(putDocBytes).toHaveBeenCalledTimes(1);
       expect(
-        (client as unknown as { indexFromBytes: ReturnType<typeof vi.fn> }).indexFromBytes,
+        (client as unknown as { putDocIndex: ReturnType<typeof vi.fn> }).putDocIndex,
       ).toHaveBeenCalled();
       expect(button.dataset.stage).toBe("synced");
     });
@@ -853,7 +863,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       // "Synced" is a claim about a pad row that does not exist.
       vi.useFakeTimers();
       const client = fakeClient();
-      const { host, indexDone } = makeHost({
+      const { host, indexDone, walkReports } = makeHost({
         hash: "h",
         name: "book.pdf",
         docType: "pdf",
@@ -872,6 +882,8 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect(button.dataset.error).toBeUndefined();
       // The index half really did happen, and says so.
       expect(indexDone).toHaveBeenCalled();
+      // Tab must not land on synced — no pad row, same honesty as the pill.
+      expect(walkReports.at(-1)).toBeNull();
       // And the pad stages were skipped rather than run against nothing.
       expect(
         (client as unknown as { putAnnotatePad: ReturnType<typeof vi.fn> }).putAnnotatePad,
@@ -928,7 +940,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       vi.resetModules();
     });
 
-    it("reports every stage it walks, and nothing once it lands", async () => {
+    it("reports every stage it walks, and lands the tab on synced", async () => {
       // The pill morphs its own labels; the tab beside the document had no way
       // to know a walk was running at all, so it read `indexed` throughout.
       vi.useFakeTimers();
@@ -953,8 +965,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect(stages).toContain("ink");
       expect(stages).toContain("links");
       expect(stages).toContain("pull");
-      // Landing is the end of the report, not another stage to display.
-      expect(walkReports.at(-1)).toBeNull();
+      expect(walkReports.at(-1)).toEqual({ stage: "synced", progress: null });
       expect(button.dataset.stage).toBe("synced");
     });
 
@@ -993,7 +1004,7 @@ describe("HubSyncControl (step-2 stub)", () => {
         name: "book.pdf",
         docType: "pdf",
         text: "",
-        bytes: new ArrayBuffer(8),
+        bytes: null,
       });
       const button = await mountWalk(client, withPad(host));
 
