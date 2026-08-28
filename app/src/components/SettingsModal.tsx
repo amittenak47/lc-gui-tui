@@ -118,7 +118,7 @@ import {
   saveThisDevicePrefs,
 } from "../util/devicePrefs";
 import { FEATURE_LEETCODE } from "../featureFlags";
-import { loadPadHub, savePadHub } from "../util/padHub";
+import { PAD_HUB_EVENT, loadSavedPadHub, savePadHub } from "../util/padHub";
 
 type TabId = "workspace" | "personalise" | "ai" | "llm";
 
@@ -707,6 +707,27 @@ export function SettingsModal({
     }
   }, [client, indexWipeArmed]);
   const [siblingDevices, setSiblingDevices] = useState<DevicePrefsDto[]>([]);
+  /*
+   * Register, then read back — in that order, and from wherever the device
+   * calls now point.
+   *
+   * Pairing changes which database answers, so the roster has to be re-read
+   * after a hub is saved, and this device has to put itself on the new one
+   * first or the PC's list will not know it exists.
+   */
+  const refreshDevices = useCallback(async () => {
+    await ensureDevicePrefs(client);
+    setSiblingDevices(await client.listDevices());
+  }, [client]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onHub = () => {
+      void refreshDevices().catch(() => setSiblingDevices([]));
+    };
+    window.addEventListener(PAD_HUB_EVENT, onHub);
+    return () => window.removeEventListener(PAD_HUB_EVENT, onHub);
+  }, [open, refreshDevices]);
   const [hubUrl, setHubUrl] = useState("");
   const [hubToken, setHubToken] = useState("");
   const [baselineHubUrl, setBaselineHubUrl] = useState("");
@@ -958,7 +979,9 @@ export function SettingsModal({
     setChromeWake(prefs.chromeWake);
     setChromeWakeTint(prefs.chromeWakeTint);
     setBaselinePrefs(prefs);
-    const hub = loadPadHub();
+    // Saved only: the desktop that *is* the hub runs on a loopback it never
+    // typed, and showing that here would read as "connected to some other PC".
+    const hub = loadSavedPadHub();
     setHubUrl(hub?.url ?? "");
     setHubToken(hub?.token ?? "");
     setBaselineHubUrl(hub?.url ?? "");
@@ -995,9 +1018,7 @@ export function SettingsModal({
           if (!cancelled) setDatasets([]);
         }
         try {
-          await ensureDevicePrefs(client);
-          const devices = await client.listDevices();
-          if (!cancelled) setSiblingDevices(devices);
+          await refreshDevices();
         } catch {
           if (!cancelled) setSiblingDevices([]);
         }

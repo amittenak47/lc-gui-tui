@@ -303,6 +303,41 @@ describe("HubSyncControl (step-2 stub)", () => {
       act(() => root.unmount());
     });
 
+    it("mounts on the host, which has a loopback rather than a saved hub", async () => {
+      /*
+       * The desktop that *is* the hub leaves Connect empty on purpose — its
+       * card says "type these into the tablet" — so `loadSavedPadHub` is null
+       * there and the pill never mounted on the machine holding the library.
+       */
+      vi.stubGlobal("localStorage", {
+        length: 0,
+        clear: () => {},
+        getItem: () => null,
+        key: () => null,
+        removeItem: () => {},
+        setItem: () => {},
+      });
+      const { setHostLoopback } = await import("../util/padHub");
+      setHostLoopback({ url: "http://127.0.0.1:7878", token: "t" });
+
+      const client = fakeClient();
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const hostEl = document.createElement("div");
+      document.body.append(hostEl);
+      const root = createRoot(hostEl);
+      act(() => root.render(<HubSyncControl client={client} host={host} />));
+
+      expect(hostEl.querySelector(".lc-hub-sync")).not.toBeNull();
+      act(() => root.unmount());
+      setHostLoopback(null);
+    });
+
     it("refuses to walk if the hub disappears between mount and tap", async () => {
       vi.useFakeTimers();
       const client = fakeClient();
