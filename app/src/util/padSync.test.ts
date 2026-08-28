@@ -12,6 +12,7 @@ import {
   PAD_SYNC_IDLE_KICK_MS_ANDROID,
   PAD_SYNC_IDLE_KICK_MS_DESKTOP,
   padSyncIdleKickMs,
+  pushDocBytes,
   pushPadSnapshot,
   pushProblemPad,
   pushWhiteboardPad,
@@ -462,6 +463,41 @@ describe("live PUT coalesce and 24h compact", () => {
     const queued = peekPadSyncQueueForTests();
     expect(queued).toHaveLength(1);
     expect(queued[0]).toMatchObject({ op: "putWhiteboard", body: { updated_at: 3 } });
+  });
+
+  it("keeps one queued upload per document, not one per failed attempt", async () => {
+    // Byte jobs were the one kind that did not coalesce, and they are the ones
+    // carrying a whole PDF: every failed upload added another full copy to
+    // memory and to IndexedDB, so an unreachable hub filled the device with
+    // duplicates of one book.
+    const bytes = () => new ArrayBuffer(1024);
+    await enqueuePadSync({ op: "putBytes", hash: "h1:1024", bytes: bytes() });
+    await enqueuePadSync({ op: "putBytes", hash: "h1:1024", bytes: bytes() });
+    await enqueuePadSync({ op: "putBytes", hash: "h1:1024", bytes: bytes() });
+
+    const queued = peekPadSyncQueueForTests().filter((job) => job.op === "putBytes");
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ op: "putBytes", hash: "h1:1024" });
+  });
+
+  it("keeps a different document's upload", async () => {
+    await enqueuePadSync({ op: "putBytes", hash: "h1:8", bytes: new ArrayBuffer(8) });
+    await enqueuePadSync({ op: "putBytes", hash: "h2:8", bytes: new ArrayBuffer(8) });
+    expect(peekPadSyncQueueForTests().filter((job) => job.op === "putBytes")).toHaveLength(2);
+  });
+
+  it("refuses a document the hub could never accept, instead of queueing it", async () => {
+    const padHub = await import("./padHub");
+    const hubSpy = vi.spyOn(padHub, "loadPadHub").mockReturnValue({
+      url: "http://hub.test",
+      token: "t",
+    });
+    const client = fakeClient();
+    const tooBig = new ArrayBuffer(padHub.HUB_MAX_BODY_BYTES + 1);
+
+    await expect(pushDocBytes(client, "big:1", tooBig)).rejects.toThrow(/at most/);
+    expect(peekPadSyncQueueForTests().filter((job) => job.op === "putBytes")).toHaveLength(0);
+    hubSpy.mockRestore();
   });
 
   it("drops queued live PUTs at or before a 24h ACK", async () => {

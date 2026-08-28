@@ -31,7 +31,12 @@ import { isCameraBusy, yieldToIdle } from "./cameraBusy";
 import { bytesMatchDocHash, getDocBytes, putDocBytes } from "./docBytes";
 import type { DocFootnote } from "./docFootnotes";
 import { run, STORE_SYNC_QUEUE } from "./idb";
-import { loadPadHub, loadPadSyncSince, savePadSyncSince } from "./padHub";
+import {
+  HUB_MAX_BODY_BYTES,
+  loadPadHub,
+  loadPadSyncSince,
+  savePadSyncSince,
+} from "./padHub";
 import { loadHubAutosync } from "./hubAutoSyncPref";
 import { syncDocChunks } from "./docChunkSync";
 import { noteInkConflicts } from "./inkConflicts";
@@ -187,6 +192,18 @@ export async function enqueuePadSync(job: PadSyncJobInput): Promise<void> {
     await dropMatching(
       (entry) => entry.op === "restorePad" && entry.kind === job.kind && entry.padId === job.padId,
     );
+  }
+  /*
+   * One queued upload per document, like every other job here.
+   *
+   * Byte jobs were the exception, and they are the ones that carry a whole
+   * PDF: every failed upload added another full copy of the same file to
+   * memory *and* to IndexedDB, so a hub that stayed unreachable filled the
+   * device with duplicates of one book. The bytes for a hash are the bytes for
+   * that hash — a second copy is not a second job.
+   */
+  if (job.op === "putBytes") {
+    await dropMatching((entry) => entry.op === "putBytes" && entry.hash === job.hash);
   }
   const full: PadSyncJob = { ...job, id: jobId() };
   memoryQueue.push(full);
@@ -629,6 +646,22 @@ export function scheduleIdlePadSyncPing(
 }
 
 export async function pushDocBytes(client: LcClient, hash: string, bytes: ArrayBuffer): Promise<void> {
+  /*
+   * Refused here, not on the wire.
+   *
+   * The hub caps a request body at {@link HUB_MAX_BODY_BYTES} and the picker
+   * has no matching limit, so a large enough document could never upload — and
+   * every attempt queued another full copy of it to retry with, forever. Say
+   * so once instead. The document is still open and still local; it is the
+   * hub copy that is not happening.
+   */
+  if (loadPadHub() && bytes.byteLength > HUB_MAX_BODY_BYTES) {
+    throw new Error(
+      `this file is ${Math.round(bytes.byteLength / (1024 * 1024))} MB, and the hub ` +
+        `takes at most ${Math.round(HUB_MAX_BODY_BYTES / (1024 * 1024))} MB — ` +
+        `it stays on this device`,
+    );
+  }
   try {
     await client.putDocBytes(hash, bytes);
   } catch {

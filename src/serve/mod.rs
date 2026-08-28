@@ -229,6 +229,10 @@ pub fn router(state: Shared) -> Router {
 
 /// Upper bound on a request body: big enough for a board PNG, small enough that
 /// a stray upload cannot exhaust memory.
+///
+/// Mirrored by `HUB_MAX_BODY_BYTES` in `app/src/util/padHub.ts`, so the client
+/// refuses a document it could never upload instead of finding out on the wire
+/// and then queueing it to fail again. Change both together.
 pub const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 async fn health(State(state): State<Shared>) -> Json<serde_json::Value> {
