@@ -177,6 +177,15 @@ function SettingsFold({
 }
 
 const PROVIDERS = ["local", "ollama", "openai", "groq"] as const;
+
+/**
+ * Fallback poll for DLC status, used only where Tauri events are unavailable.
+ *
+ * Slow on purpose. It is the browser-preview path, nobody is installing a
+ * dataset there, and the fast interval this replaces was running beside a
+ * working listener that already reported every change.
+ */
+const DLC_POLL_MS = 15_000;
 const MODES = ["ambient", "review", "bridge", "viz", "planner"] as const;
 
 /**
@@ -841,10 +850,21 @@ export function SettingsModal({
     }
   }, [client]);
 
+  /*
+   * DLC status: the event bus where there is one, a poll only where there is not.
+   *
+   * This used to do both — a listener *and* a request every 1.5 seconds, for
+   * as long as the page was open, even though the listener was already
+   * reporting every change. The poll is the fallback for browser preview,
+   * where there is no Tauri event bus to subscribe to, so it belongs in the
+   * `catch` and nowhere else.
+   */
   useEffect(() => {
     if (!open || tab !== "workspace") return;
     void refreshDlc();
+    let cancelled = false;
     let stop: (() => void) | undefined;
+    let timer = 0;
     void import("@tauri-apps/api/event")
       .then(({ listen }) =>
         listen<DlcStatus[]>("lc-dlc-status", (event) => {
@@ -859,13 +879,19 @@ export function SettingsModal({
         }),
       )
       .then((unlisten) => {
+        if (cancelled) {
+          unlisten();
+          return;
+        }
         stop = unlisten;
       })
       .catch(() => {
-        /* browser preview has no Tauri event bus */
+        /* browser preview has no Tauri event bus — ask instead */
+        if (cancelled) return;
+        timer = window.setInterval(() => void refreshDlc(), DLC_POLL_MS);
       });
-    const timer = window.setInterval(() => void refreshDlc(), 1500);
     return () => {
+      cancelled = true;
       stop?.();
       window.clearInterval(timer);
     };
