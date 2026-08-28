@@ -11015,7 +11015,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-doc-index-chip.is-working {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
 }
 
 .lc-doc-index-ring {
