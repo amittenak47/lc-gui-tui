@@ -123,3 +123,67 @@ describe("waitForPdfPagePainted", () => {
     expect(await pending).toBe(true);
   });
 });
+
+describe("cancelling an open", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("gives up the page-node wait instead of polling for 25 seconds", async () => {
+    const controller = new AbortController();
+    // Deliberately the real timeout: the point is that abort, not the
+    // deadline, is what ends this.
+    const pending = waitForPdfPageNode(47, 25_000, undefined, controller.signal);
+    controller.abort();
+    expect(await pending).toBe(false);
+  });
+
+  it("gives up the paint wait", async () => {
+    const controller = new AbortController();
+    const pending = waitForPdfPagePainted(47, 20_000, undefined, controller.signal);
+    controller.abort();
+    expect(await pending).toBe(false);
+  });
+
+  it("gives up the layout wait", async () => {
+    const controller = new AbortController();
+    const pending = waitForAnnotateLaidOut(
+      () => null,
+      25_000,
+      false,
+      undefined,
+      controller.signal,
+    );
+    controller.abort();
+    expect(await pending).toBe(false);
+  });
+
+  it("answers immediately when the open was already cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let asked = 0;
+    expect(
+      await waitForAnnotateLaidOut(
+        () => {
+          asked += 1;
+          return 500;
+        },
+        25_000,
+        false,
+        undefined,
+        controller.signal,
+      ),
+    ).toBe(false);
+    expect(asked).toBe(0);
+  });
+
+  it("still resolves normally when nothing cancels it", async () => {
+    const controller = new AbortController();
+    const pending = waitForPdfPageNode(47, 400, undefined, controller.signal);
+    const node = document.createElement("div");
+    node.className = "lc-pdf-page";
+    node.dataset.pdfPage = "47";
+    document.body.append(node);
+    expect(await pending).toBe(true);
+  });
+});
