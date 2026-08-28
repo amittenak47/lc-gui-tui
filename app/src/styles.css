@@ -1878,10 +1878,12 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   pointer-events: none;
 }
 
+/*
+ * One per inked page, placed over that page's slot — the component sets left,
+ * top, width and height, because where a page sits is measured, not styled.
+ */
 .lc-hub-conflict-ink-layer {
   position: absolute;
-  left: 0;
-  top: 0;
   pointer-events: none;
 }
 

@@ -10037,6 +10037,12 @@ export function Workspace({
           bytes={annotateSource?.docType === "pdf" ? annotateSource.bytes ?? undefined : undefined}
           filmScopeBase={`${tab.id}:conflict`}
           sceneWidth={annotatePageWidth}
+          /*
+           * The reader's own page frames, so each pane can place a page's ink
+           * where that page actually is. The board is paused behind the split
+           * and keeps the frames it last published.
+           */
+          pageFrames={peekPdfReadingFrames(tab.id)}
           onResolve={(resolution) => void handleHubConflictResolve(resolution)}
         />
       ) : null}
