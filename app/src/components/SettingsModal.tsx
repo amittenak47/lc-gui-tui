@@ -110,7 +110,7 @@ import {
 } from "../util/offlineMerge";
 import { useIsMobile } from "../util/mobile";
 import { estimateStorage, formatBytes, type StorageUsage } from "../util/storageQuota";
-import { auditDocBytes, clearDocBytes, formatDocStoreReport, inspectDocStore } from "../util/docBytes";
+import { auditDocBytes, clearDocBytes, docStoreFacts, inspectDocStore } from "../util/docBytes";
 import {
   deviceRole,
   ensureDevicePrefs,
@@ -119,6 +119,9 @@ import {
 } from "../util/devicePrefs";
 import { FEATURE_LEETCODE } from "../featureFlags";
 import { PAD_HUB_EVENT, loadSavedPadHub, savePadHub } from "../util/padHub";
+import { compareIndexFacts, indexFacts } from "../util/indexReport";
+import type { SettingsFact } from "../util/settingsFacts";
+import { SettingsFacts, factsFromMessage } from "./SettingsFacts";
 
 type TabId = "workspace" | "personalise" | "ai" | "llm";
 
@@ -561,7 +564,10 @@ export function SettingsModal({
    * this app works the same way.
    */
   const [docCache, setDocCache] = useState<
-    { kind: "idle" } | { kind: "busy" } | { kind: "done"; message: string } | { kind: "failed"; message: string }
+    | { kind: "idle" }
+    | { kind: "busy" }
+    | { kind: "done"; facts: SettingsFact[] }
+    | { kind: "failed"; facts: SettingsFact[] }
   >({ kind: "idle" });
   const [docCacheArmed, setDocCacheArmed] = useState(false);
 
@@ -574,12 +580,14 @@ export function SettingsModal({
           const report = await inspectDocStore();
           setDocCache({
             kind: report.writeFailure ? "failed" : "done",
-            message: formatDocStoreReport(report),
+            facts: docStoreFacts(report),
           });
         } catch (cause) {
           setDocCache({
             kind: "failed",
-            message: `The document store could not be opened: ${cause instanceof Error ? cause.message : String(cause)}`,
+            facts: factsFromMessage(
+              `The document store could not be opened: ${cause instanceof Error ? cause.message : String(cause)}`,
+            ),
           });
         }
         return;
@@ -588,8 +596,9 @@ export function SettingsModal({
         setDocCacheArmed(true);
         setDocCache({
           kind: "done",
-          message:
+          facts: factsFromMessage(
             "This drops every stored copy — each document has to be picked once more. Tap again to confirm.",
+          ),
         });
         return;
       }
@@ -604,30 +613,37 @@ export function SettingsModal({
         if (action === "clear") {
           setDocCache({
             kind: "done",
-            message: `Cleared ${held}, freeing ${formatBytes(audit.freed)}. Pick each document again to bring it back.`,
+            facts: factsFromMessage(
+              `Cleared ${held}, freeing ${formatBytes(audit.freed)}. Pick each document again to bring it back.`,
+            ),
           });
         } else if (audit.rows === 0) {
           // Not the same as healthy. An empty store on a device that has opened
           // documents means saving them is failing, and no repair touches that.
           setDocCache({
             kind: "failed",
-            message:
+            facts: factsFromMessage(
               "No stored copies at all. If you have opened documents on this device, saving them is failing — run Diagnose.",
+            ),
           });
         } else if (audit.bad === 0) {
           setDocCache({
             kind: "done",
-            message: `${held} checked, all of them intact.`,
+            facts: factsFromMessage(`${held} checked, all of them intact.`),
           });
         } else if (action === "repair") {
           setDocCache({
             kind: "done",
-            message: `Dropped ${audit.removed} bad ${audit.removed === 1 ? "copy" : "copies"} of ${held}, freeing ${formatBytes(audit.freed)}. Pick those documents again — the rest are untouched.`,
+            facts: factsFromMessage(
+              `Dropped ${audit.removed} bad ${audit.removed === 1 ? "copy" : "copies"} of ${held}, freeing ${formatBytes(audit.freed)}. Pick those documents again — the rest are untouched.`,
+            ),
           });
         } else {
           setDocCache({
             kind: "done",
-            message: `${audit.bad} of ${held} no longer match the document they are filed under. Repair drops just those.`,
+            facts: factsFromMessage(
+              `${audit.bad} of ${held} no longer match the document they are filed under. Repair drops just those.`,
+            ),
           });
         }
         // The bar above is now stale — re-read it rather than leave a number
@@ -639,7 +655,7 @@ export function SettingsModal({
       } catch (cause) {
         setDocCache({
           kind: "failed",
-          message: cause instanceof Error ? cause.message : String(cause),
+          facts: factsFromMessage(cause instanceof Error ? cause.message : String(cause)),
         });
       }
     },
@@ -656,16 +672,62 @@ export function SettingsModal({
    * carries. Armed by a first tap, like Clear all above.
    */
   const [indexWipe, setIndexWipe] = useState<
-    { kind: "idle" } | { kind: "busy" } | { kind: "done"; message: string } | { kind: "failed"; message: string }
+    | { kind: "idle" }
+    | { kind: "busy" }
+    | { kind: "done"; facts: SettingsFact[] }
+    | { kind: "failed"; facts: SettingsFact[] }
   >({ kind: "idle" });
   const [indexWipeArmed, setIndexWipeArmed] = useState(false);
+  const runIndexInspect = useCallback(
+    async (detail: boolean) => {
+      setIndexWipeArmed(false);
+      setIndexWipe({ kind: "busy" });
+      try {
+        const local = await client.listDocChunkDigestsLocal();
+        if (!detail) {
+          setIndexWipe({
+            kind: "done",
+            facts: indexFacts(local, "this device", { perDocument: false }),
+          });
+          return;
+        }
+        let hub = null as Awaited<ReturnType<typeof client.listDocChunkDigests>> | null;
+        if (loadSavedPadHub()) {
+          try {
+            hub = await client.listDocChunkDigests();
+          } catch (cause) {
+            setIndexWipe({
+              kind: "done",
+              facts: [
+                ...indexFacts(local, "this device"),
+                {
+                  label: "Hub",
+                  value: `could not be read (${cause instanceof Error ? cause.message : String(cause)})`,
+                  tone: "warn",
+                },
+              ],
+            });
+            return;
+          }
+        }
+        setIndexWipe({ kind: "done", facts: compareIndexFacts(local, hub) });
+      } catch (cause) {
+        setIndexWipe({
+          kind: "failed",
+          facts: factsFromMessage(cause instanceof Error ? cause.message : String(cause)),
+        });
+      }
+    },
+    [client],
+  );
   const runIndexWipe = useCallback(async () => {
     if (!indexWipeArmed) {
       setIndexWipeArmed(true);
       setIndexWipe({
         kind: "done",
-        message:
+        facts: factsFromMessage(
           "This drops every indexed page of text on this device — Ask rebuilds by indexing again. Tap again to confirm.",
+        ),
       });
       return;
     }
@@ -675,10 +737,15 @@ export function SettingsModal({
       const report = await client.clearLocalDocIndex();
       setIndexWipe({
         kind: "done",
-        message: `Cleared ${report.documents} ${report.documents === 1 ? "document" : "documents"} (${report.chunks} chunks). Ask rebuilds the index as documents are opened again.`,
+        facts: factsFromMessage(
+          `Cleared ${report.documents} ${report.documents === 1 ? "document" : "documents"} (${report.chunks} chunks). Ask rebuilds the index as documents are opened again.`,
+        ),
       });
     } catch (cause) {
-      setIndexWipe({ kind: "failed", message: cause instanceof Error ? cause.message : String(cause) });
+      setIndexWipe({
+        kind: "failed",
+        facts: factsFromMessage(cause instanceof Error ? cause.message : String(cause)),
+      });
     }
   }, [client, indexWipeArmed]);
   const [siblingDevices, setSiblingDevices] = useState<DevicePrefsDto[]>([]);
@@ -2122,21 +2189,38 @@ export function SettingsModal({
                   {docCacheArmed ? "Tap again to clear all" : "Clear all"}
                 </button>
               </div>
-              {docCache.kind === "done" && (
-                <p className="lc-muted lc-settings-report">{docCache.message}</p>
-              )}
-              {docCache.kind === "failed" && (
-                <p className="lc-settings-error lc-settings-report">{docCache.message}</p>
-              )}
+              {docCache.kind === "done" && <SettingsFacts facts={docCache.facts} />}
+              {docCache.kind === "failed" && <SettingsFacts facts={docCache.facts} error />}
 
               <div className="lc-settings-subhead">Search index</div>
               <p className="lc-settings-hint">
                 Opening a document also indexes its text so <strong>Ask</strong> can quote it.
                 If answers drift stale — an old model, files that have since moved on — clear
-                that index here. This wipes this device only; drawings, notes and stored copies
-                are untouched, and when a pad hub is set the hub keeps its own index.
+                that index here. Check and Diagnose report this device's index; Diagnose also
+                compares to the hub when one is set. Clear wipes this device only; drawings,
+                notes and stored copies are untouched, and the hub keeps its own index.
               </p>
               <div className="lc-pad-hub-check">
+                <button
+                  type="button"
+                  className="lc-secondary"
+                  disabled={indexWipe.kind === "busy"}
+                  onClick={() => {
+                    void runIndexInspect(false);
+                  }}
+                >
+                  {indexWipe.kind === "busy" ? "Working…" : "Check index"}
+                </button>
+                <button
+                  type="button"
+                  className="lc-secondary"
+                  disabled={indexWipe.kind === "busy"}
+                  onClick={() => {
+                    void runIndexInspect(true);
+                  }}
+                >
+                  Diagnose
+                </button>
                 <button
                   type="button"
                   className="lc-secondary"
@@ -2152,8 +2236,8 @@ export function SettingsModal({
                       : "Clear local search index"}
                 </button>
               </div>
-              {indexWipe.kind === "done" && <p className="lc-muted">{indexWipe.message}</p>}
-              {indexWipe.kind === "failed" && <p className="lc-settings-error">{indexWipe.message}</p>}
+              {indexWipe.kind === "done" && <SettingsFacts facts={indexWipe.facts} />}
+              {indexWipe.kind === "failed" && <SettingsFacts facts={indexWipe.facts} error />}
               </SettingsFold>
             </div>
           )}

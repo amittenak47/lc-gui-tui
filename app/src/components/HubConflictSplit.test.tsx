@@ -8,6 +8,7 @@ import { act } from "react";
 import { HubConflictSplit } from "./HubConflictSplit";
 import type { AnnotatePadDto } from "../api/client";
 import type { HubPadConflict } from "../util/hubConflictStash";
+import { rememberPdfThumb, resetPdfThumbs } from "../modes/pdfFilm";
 
 function annotateBody(name: string, updated: number, notes: unknown[]): AnnotatePadDto {
   return {
@@ -32,14 +33,14 @@ const CONFLICT: HubPadConflict = {
     {
       id: "n1",
       kind: "note",
-      anchor: {} as never,
+      anchor: { kind: "text", start: 0, end: 4, scope: "p1" },
       excerpt: "local only mark",
       createdAt: 1,
     },
     {
       id: "same",
       kind: "note",
-      anchor: {} as never,
+      anchor: { kind: "text", start: 0, end: 4, scope: "page-2" },
       excerpt: "kept here with new words",
       createdAt: 2,
     },
@@ -48,28 +49,38 @@ const CONFLICT: HubPadConflict = {
     {
       id: "srv",
       kind: "coach",
-      anchor: {} as never,
+      anchor: { kind: "text", start: 0, end: 4, scope: "p3" },
       excerpt: "hub only mark",
       createdAt: 3,
     },
     {
       id: "same",
       kind: "note",
-      anchor: {} as never,
+      anchor: { kind: "text", start: 0, end: 4, scope: "page-2" },
       excerpt: "kept there too",
       createdAt: 4,
     },
   ]),
 };
 
-function mount(conflict: HubPadConflict | null = CONFLICT, busy = false) {
+function mount(
+  conflict: HubPadConflict | null = CONFLICT,
+  busy = false,
+  extra: { docHash?: string; otherLabel?: string } = {},
+) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   const onResolve = vi.fn();
   act(() =>
     root.render(
-      <HubConflictSplit conflict={conflict} busy={busy} onResolve={onResolve} />,
+      <HubConflictSplit
+        conflict={conflict}
+        busy={busy}
+        otherLabel={extra.otherLabel}
+        docHash={extra.docHash}
+        onResolve={onResolve}
+      />,
     ),
   );
   return { root, onResolve };
@@ -79,16 +90,26 @@ function resolveButton(): HTMLButtonElement {
   return document.querySelector(".lc-hub-conflict-resolve") as HTMLButtonElement;
 }
 
-function paneButton(side: 0 | 1, label: "✓" | "✕"): HTMLButtonElement {
+function paneButton(side: 0 | 1, action: "keep" | "drop"): HTMLButtonElement {
   const pane = document.querySelectorAll(".lc-hub-conflict-pane")[side]!;
-  return Array.from(pane.querySelectorAll("button")).find(
-    (b) => b.textContent === label,
-  )!;
+  return pane.querySelector(`.lc-hub-conflict-pane-head [data-action="${action}"]`) as HTMLButtonElement;
+}
+
+function noteByText(text: string): HTMLElement {
+  return Array.from(document.querySelectorAll(".lc-hub-conflict-note")).find((row) =>
+    row.textContent?.includes(text),
+  ) as HTMLElement;
+}
+
+function inkRow(side: 0 | 1): HTMLElement {
+  const pane = document.querySelectorAll(".lc-hub-conflict-pane")[side]!;
+  return pane.querySelector(".lc-hub-conflict-ink") as HTMLElement;
 }
 
 describe("HubConflictSplit", () => {
   afterEach(() => {
     document.body.textContent = "";
+    resetPdfThumbs();
   });
 
   it("renders Local left and the other device right from the stash", () => {
@@ -99,93 +120,62 @@ describe("HubConflictSplit", () => {
     expect(panes[0]!.querySelector(".lc-hub-conflict-tab")!.textContent).toBe("Local");
     expect(panes[1]!.dataset.side).toBe("server");
     expect(panes[1]!.querySelector(".lc-hub-conflict-tab")!.textContent).toBe("Tablet");
+    expect(document.querySelectorAll(".lc-hub-conflict-preview")).toHaveLength(2);
 
     act(() => {
-      (document.querySelector(".lc-hub-conflict-resolve") as HTMLButtonElement).click();
+      resolveButton().click();
     });
     expect(onResolve).not.toHaveBeenCalled();
+    expect(resolveButton().disabled).toBe(true);
   });
 
-  it("keeps one whole pane on ✓/✕ and reports the choice", () => {
+  it("top ✓ then the other ✕ keeps that whole copy", () => {
     const { onResolve } = mount();
-    const localPane = document.querySelectorAll(".lc-hub-conflict-pane")[0]!;
-    const keep = Array.from(localPane.querySelectorAll("button")).find((b) => b.textContent === "✓")!;
-    const reject = Array.from(localPane.querySelectorAll("button")).find((b) => b.textContent === "✕")!;
+    act(() => paneButton(0, "keep").click());
+    act(() => paneButton(1, "drop").click());
+    act(() => resolveButton().click());
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    expect(onResolve.mock.calls[0]![0]).toEqual({ pick: "local", ink: "local" });
+  });
 
-    // ✕ rejects Local → Server is kept by force.
-    act(() => reject.click());
-    // ✓ on Local brings it back → both kept means a merge of footnotes.
-    act(() => keep.click());
+  it("a per-mark keep adds a hub-only note without requiring the other pane ✓", () => {
+    const { onResolve } = mount();
+    act(() => paneButton(0, "keep").click());
     act(() => {
-      (document.querySelector(".lc-hub-conflict-resolve") as HTMLButtonElement).click();
+      noteByText("hub only mark").querySelector('[data-action="keep"]')!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
     });
+    act(() => resolveButton().click());
     expect(onResolve).toHaveBeenCalledTimes(1);
     const resolution = onResolve.mock.calls[0]![0];
     expect(resolution.pick).toBe("merged");
-    expect(resolution.ink).toBe("merged");
-    // Both copies of the same-id-different-body mark survive (adjacent, per
-    // mark); side-only marks default to their pane's verdict — three notes.
-    expect(resolution.footnotes.map((n: { id: string }) => n.id)).toEqual([
-      "n1",
-      "same",
-      "same",
-      "srv",
-    ]);
-  });
-
-  it("a per-mark pick keeps one extra copy; unkept panes drop their side-only marks", () => {
-    const { onResolve } = mount();
-    const [localPane, serverPane] = document.querySelectorAll(".lc-hub-conflict-pane");
-
-    // Keep Server wholesale; Local stays undecided, so its side-only mark
-    // falls with it.
-    const serverKeep = Array.from(serverPane!.querySelectorAll("button")).find(
-      (b) => b.textContent === "✓",
-    )!;
-    act(() => serverKeep.click());
-
-    // One tap on a Local row's ✓ explicitly keeps that copy too (the plan's
-    // per-mark ✓), which makes the resolve a merge.
-    const localOnlyRow = Array.from(localPane!.querySelectorAll(".lc-hub-conflict-note")).find(
-      (row) => row.textContent?.includes("local only mark"),
-    )!;
-    act(() => localOnlyRow.querySelector("button")!.click());
-
-    act(() => {
-      (document.querySelector(".lc-hub-conflict-resolve") as HTMLButtonElement).click();
-    });
-    expect(onResolve).toHaveBeenCalledTimes(1);
-    const resolution = onResolve.mock.calls[0]![0];
-    expect(resolution.pick).toBe("merged");
-    expect(resolution.ink).toBe("server");
+    expect(resolution.ink).toBe("local");
     const ids = resolution.footnotes.map((n: { id: string }) => n.id);
+    expect(ids).toContain("n1");
     expect(ids).toContain("srv");
-    expect(ids).toContain("n1"); // explicitly kept despite Local being dropped
-    expect(ids.filter((id: string) => id === "same")).toEqual(["same"]); // server copy only
+    expect(ids.filter((id: string) => id === "same")).toEqual(["same"]);
   });
 });
 
 describe("HubConflictSplit guards", () => {
   afterEach(() => {
     document.body.textContent = "";
+    resetPdfThumbs();
   });
 
   it("takes no taps while the choice is being written", () => {
-    // Without `busy` a second tap started another IDB write and another
-    // reload over the first — two writers for one row.
     const { onResolve } = mount(CONFLICT, true);
-    act(() => paneButton(0, "✓").click());
+    act(() => paneButton(0, "keep").click());
     expect(resolveButton().disabled).toBe(true);
     act(() => resolveButton().click());
     expect(onResolve).not.toHaveBeenCalled();
   });
 
   it("will not keep a server copy it could not read", () => {
-    // `server` is null when the hub body did not come back. Choosing it wrote
-    // nothing and let the walk carry on as though the hub had won.
     const { onResolve } = mount({ ...CONFLICT, server: null });
 
-    act(() => paneButton(1, "✓").click());
+    act(() => paneButton(1, "keep").click());
     expect(resolveButton().disabled).toBe(true);
     act(() => resolveButton().click());
     expect(onResolve).not.toHaveBeenCalled();
@@ -194,7 +184,7 @@ describe("HubConflictSplit guards", () => {
 
   it("still lets the local copy be kept when the hub copy is missing", () => {
     const { onResolve } = mount({ ...CONFLICT, server: null });
-    act(() => paneButton(0, "✓").click());
+    act(() => paneButton(0, "keep").click());
     act(() => resolveButton().click());
     expect(onResolve).toHaveBeenCalledTimes(1);
     expect(onResolve.mock.calls[0]![0].pick).toBe("local");
@@ -205,57 +195,67 @@ describe("HubConflictSplit guards", () => {
 describe("HubConflictSplit ink and labels", () => {
   afterEach(() => {
     document.body.textContent = "";
+    resetPdfThumbs();
   });
 
-  it("keeps only this device's copy and its ink on a single Local ✓", () => {
+  it("keeps only this device's copy and its ink on a single Local ✓ plus the other ✕", () => {
     const { onResolve } = mount();
-    act(() => paneButton(0, "✓").click());
+    act(() => paneButton(0, "keep").click());
+    act(() => paneButton(1, "drop").click());
     act(() => resolveButton().click());
     expect(onResolve.mock.calls[0]![0]).toEqual({ pick: "local", ink: "local" });
   });
 
-  it("refuses to reject both copies of the document", () => {
-    mount();
-    act(() => paneButton(0, "✕").click());
-    expect(
-      (document.querySelectorAll(".lc-hub-conflict-pane")[1] as HTMLElement).dataset.verdict,
-    ).toBe("keep");
-    act(() => paneButton(1, "✕").click());
+  it("lets both columns be dropped — the file stays, notes and ink do not", () => {
+    const { onResolve } = mount();
+    act(() => paneButton(0, "drop").click());
+    act(() => paneButton(1, "drop").click());
     expect(
       (document.querySelectorAll(".lc-hub-conflict-pane")[0] as HTMLElement).dataset.verdict,
     ).toBe("reject");
     expect(
       (document.querySelectorAll(".lc-hub-conflict-pane")[1] as HTMLElement).dataset.verdict,
-    ).toBe("keep");
+    ).toBe("reject");
     expect(resolveButton().disabled).toBe(false);
+    act(() => resolveButton().click());
+    expect(onResolve.mock.calls[0]![0].pick).toBe("merged");
+    expect(onResolve.mock.calls[0]![0].ink).toBe("none");
+    expect(onResolve.mock.calls[0]![0].footnotes).toEqual([]);
   });
 
   it("✕ ink on both sides keeps the file with no handwriting", () => {
     const { onResolve } = mount();
-    act(() => paneButton(0, "✓").click());
-    const inkButtons = Array.from(
-      document.querySelectorAll(".lc-hub-conflict-ink button"),
-    ) as HTMLButtonElement[];
-    expect(inkButtons).toHaveLength(2);
-    // Local pane ✓ already keeps Local ink. Two taps: follow → keep → drop.
-    // The other pane is undecided, so its ink is already off.
-    act(() => inkButtons[0]!.click());
-    act(() => inkButtons[0]!.click());
+    act(() => paneButton(0, "keep").click());
+    act(() => paneButton(1, "drop").click());
+    act(() => {
+      inkRow(0).querySelector('[data-action="drop"]')!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
     act(() => resolveButton().click());
     expect(onResolve.mock.calls[0]![0].pick).toBe("local");
     expect(onResolve.mock.calls[0]![0].ink).toBe("none");
   });
 
   it("names the right pane with otherLabel", () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    const root = createRoot(host);
-    act(() =>
-      root.render(
-        <HubConflictSplit conflict={CONFLICT} otherLabel="Desktop" onResolve={() => {}} />,
-      ),
-    );
+    mount(CONFLICT, false, { otherLabel: "Desktop" });
     const panes = document.querySelectorAll(".lc-hub-conflict-pane");
     expect(panes[1]!.querySelector(".lc-hub-conflict-tab")!.textContent).toBe("Desktop");
+  });
+
+  it("clicking a note shows that page in both preview panes", () => {
+    rememberPdfThumb("h", 2, "data:image/gif;base64,R0lGODlhAQABAAAAACw=");
+    mount(CONFLICT, false, { docHash: "h" });
+    expect(
+      (document.querySelector(".lc-hub-conflict-preview") as HTMLElement).dataset.page,
+    ).toBe("1");
+    act(() => {
+      noteByText("kept here with new words").click();
+    });
+    const previews = document.querySelectorAll<HTMLElement>(".lc-hub-conflict-preview");
+    expect(previews).toHaveLength(2);
+    expect(previews[0]!.dataset.page).toBe("2");
+    expect(previews[1]!.dataset.page).toBe("2");
+    expect(previews[0]!.querySelector("img")?.getAttribute("alt")).toBe("Page 2");
   });
 });

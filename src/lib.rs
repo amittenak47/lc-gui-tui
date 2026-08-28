@@ -26,6 +26,7 @@ pub mod gate;
 pub mod llm;
 pub mod practice;
 pub mod pad;
+pub mod sqlite;
 pub mod docs_index;
 pub mod pads;
 pub mod serve;

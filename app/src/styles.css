@@ -1830,6 +1830,33 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   min-height: 0;
   overflow: auto;
   padding: 8px 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lc-hub-conflict-preview {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--surface) 80%, var(--bg));
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.lc-hub-conflict-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.lc-hub-conflict-preview .lc-muted {
+  margin: 0;
+  font-size: 13px;
 }
 
 .lc-hub-conflict-list {
@@ -1839,6 +1866,9 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex: 0 1 auto;
+  max-height: 48%;
+  overflow: auto;
 }
 
 .lc-hub-conflict-pane-head .lc-tip-target {
@@ -1854,6 +1884,25 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   border: 1px solid var(--chrome-edge);
   border-radius: 10px;
   background: var(--surface);
+  cursor: pointer;
+}
+
+.lc-hub-conflict-note.is-focused {
+  border-color: var(--accent, var(--ink));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+.lc-hub-conflict-note-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.lc-hub-conflict-note .lc-doc-confirm-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  font-size: 13px;
 }
 
 /* A mark the other pane knows about too — the plan's highlight rule. */
@@ -10636,6 +10685,47 @@ button.lc-row-selected:hover:not(:disabled) {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.45;
+}
+
+.lc-settings-facts {
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.lc-settings-facts > div {
+  display: grid;
+  grid-template-columns: minmax(6.5em, 30%) 1fr;
+  gap: 2px 12px;
+  align-items: start;
+}
+
+.lc-settings-facts > div:not(:has(dt)) {
+  grid-template-columns: 1fr;
+}
+
+.lc-settings-facts dt {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.lc-settings-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.lc-settings-facts .is-name dd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.lc-settings-facts.is-error dd,
+.lc-settings-facts [data-tone="warn"] dd {
+  color: var(--bad, #b42318);
 }
 
 /*

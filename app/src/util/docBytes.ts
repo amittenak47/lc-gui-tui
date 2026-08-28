@@ -22,6 +22,7 @@ import { openDb, run, STORE_BYTES } from "./idb";
 import { isCameraBusy } from "./cameraBusy";
 import { hashBytesDigest } from "./hashBytesDigest";
 import { traceOpen } from "./messageOf";
+import type { SettingsFact } from "./settingsFacts";
 import { formatBytes } from "./storageQuota";
 import type { HashBytesRequest, HashBytesResponse } from "./hashBytes.worker";
 
@@ -397,41 +398,71 @@ export interface DocStoreReport {
 }
 
 /**
- * Diagnose output for Settings. One fact per line so a long filename cannot
- * glue the rest of the report into a single wrapping paragraph.
+ * Diagnose output for Settings as labeled facts, then the same text as
+ * newlines so a long filename cannot glue the rest into one wrapping paragraph.
  */
-export function formatDocStoreReport(report: DocStoreReport): string {
+export function docStoreFacts(report: DocStoreReport): SettingsFact[] {
   const filled = report.stores
     .filter((row) => row.rows > 0)
     .map((row) => `${row.name} ${row.rows}`)
     .join(", ");
-  const lines: string[] = [
-    `${report.db} v${report.version}`,
-    `Document copies: ${report.rows} (${formatBytes(report.bytes)})`,
-    filled ? `Other stores: ${filled}` : "Every store is empty.",
+  const facts: SettingsFact[] = [
+    { label: "Database", value: `${report.db} v${report.version}` },
+    { label: "Document copies", value: `${report.rows} (${formatBytes(report.bytes)})` },
+    { label: "Other stores", value: filled || "Every store is empty." },
   ];
   if (report.wanted === 0) {
-    lines.push("No PDFs or EPUBs in the library.");
+    facts.push({ label: "Library", value: "No PDFs or EPUBs in the library." });
   } else if (report.missing === 0) {
-    lines.push(`All ${report.wanted} of the library's documents have their bytes.`);
+    facts.push({
+      label: "Library",
+      value: `All ${report.wanted} of the library's documents have their bytes.`,
+      tone: "ok",
+    });
   } else {
     const noun = report.wanted === 1 ? "document" : "documents";
     const verb = report.missing === 1 ? "has" : "have";
-    lines.push(`${report.missing} of ${report.wanted} library ${noun} ${verb} no stored copy.`);
-    for (const name of report.missingNames) lines.push(name);
-    if (report.missing > report.missingNames.length) lines.push("…");
+    facts.push({
+      label: "Library",
+      value: `${report.missing} of ${report.wanted} library ${noun} ${verb} no stored copy.`,
+      tone: "warn",
+    });
+    for (const name of report.missingNames) {
+      facts.push({ label: "Missing copy", value: name, tone: "name" });
+    }
+    if (report.missing > report.missingNames.length) {
+      facts.push({ value: "…", tone: "name" });
+    }
   }
-  lines.push(
-    report.writeFailure
+  facts.push({
+    label: "Save test",
+    value: report.writeFailure
       ? `This device cannot save a document: ${report.writeFailure}`
       : "A 64 KB test write saved and read back correctly, so saving works.",
-  );
+    tone: report.writeFailure ? "warn" : "ok",
+  });
   if (report.missing > 0 && !report.writeFailure) {
-    lines.push(
-      "Saving works, so these arrived by sync without their bytes — pick each one from Files once to restore it.",
-    );
+    facts.push({
+      value:
+        "Saving works, so these arrived by sync without their bytes — pick each one from Files once to restore it.",
+    });
   }
-  return lines.join("\n");
+  return facts;
+}
+
+export function formatDocStoreReport(report: DocStoreReport): string {
+  return docStoreFacts(report)
+    .map((fact) => {
+      if (!fact.label || fact.label === "Library" || fact.label === "Save test") return fact.value;
+      if (fact.label === "Database") return fact.value;
+      if (fact.label === "Missing copy") return fact.value;
+      if (fact.label === "Document copies") return `Document copies: ${fact.value}`;
+      if (fact.label === "Other stores") {
+        return fact.value === "Every store is empty." ? fact.value : `Other stores: ${fact.value}`;
+      }
+      return `${fact.label}: ${fact.value}`;
+    })
+    .join("\n");
 }
 
 /**
