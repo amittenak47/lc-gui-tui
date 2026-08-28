@@ -14,6 +14,7 @@
 import { useMemo, useState } from "react";
 
 import type { AnnotatePadDto, InkPageDto } from "../api/client";
+import type { PageFrame } from "../canvas/inkPageIndex";
 import type { DocFootnote } from "../util/docFootnotes";
 import { conflictFocusPage } from "../util/conflictPage";
 import { Tip } from "./Tip";
@@ -43,6 +44,14 @@ export interface HubConflictSplitProps {
   filmScopeBase?: string;
   /** Board scene width ink was drawn in. */
   sceneWidth?: number;
+  /**
+   * Where each page sits in the scene the ink was drawn in.
+   *
+   * Strokes carry absolute scene Y down the whole stack, so a pane needs the
+   * frames to know where a page starts. Without them page 40's ink would be
+   * drawn as though the book began at page 40.
+   */
+  pageFrames?: readonly PageFrame[];
   onResolve(resolution: HubConflictResolution): void;
 }
 
@@ -168,6 +177,7 @@ export function HubConflictSplit({
   bytes,
   filmScopeBase,
   sceneWidth,
+  pageFrames,
   onResolve,
 }: HubConflictSplitProps) {
   const [picks, setPicks] = useState<Record<string, SidePick>>({});
@@ -511,6 +521,7 @@ export function HubConflictSplit({
                 : undefined
             }
             sceneWidth={sceneWidth}
+            pageFrames={pageFrames}
           />
           <ol className="lc-hub-conflict-list">
             {renderInkRow(side)}

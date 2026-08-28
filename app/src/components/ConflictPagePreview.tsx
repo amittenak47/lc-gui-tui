@@ -6,7 +6,7 @@
  * change list sits on top of this in the parent.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { InkPageDto } from "../api/client";
 import { b64ToBytes } from "../api/nativeHttp";
@@ -21,7 +21,14 @@ import { borrowPdfDocument } from "../modes/pdfOpenDocs";
 import { pdfRestPages, pdfVisibleFromSpans } from "../modes/pdfPaintWindow";
 import { cameraPulseSettleMs } from "../util/cameraBusy";
 import { bytesFromMaybeGzip } from "../util/gzip";
+import type { PageFrame } from "../canvas/inkPageIndex";
 import type { DocFootnote } from "../util/docFootnotes";
+import {
+  conflictInkPlacement,
+  inkSlotsEqual,
+  inkedPageIds,
+  type ConflictInkSlot,
+} from "./conflictInkLayout";
 
 const EMPTY_PDF_BYTES = new ArrayBuffer(0);
 
@@ -45,6 +52,7 @@ export function ConflictPagePreview({
   filmScope,
   sourceText,
   sceneWidth,
+  pageFrames,
 }: {
   hash?: string;
   page: number;
@@ -56,9 +64,18 @@ export function ConflictPagePreview({
   sourceText?: string;
   /** Board scene width the ink was drawn in, so overlay maps onto this pane. */
   sceneWidth?: number;
+  /**
+   * Where each page sits in the scene the ink was drawn in.
+   *
+   * Strokes are stored in board scene coordinates — absolute scene Y down the
+   * whole stack — and bucketed by which page frame contains them. Without the
+   * frames there is no way to know where page 40's ink *starts*, so it would
+   * be painted as though the page began at scene zero.
+   */
+  pageFrames?: readonly PageFrame[];
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const inkRef = useRef<HTMLCanvasElement | null>(null);
+  const docRef = useRef<HTMLDivElement | null>(null);
   const [cssWidth, setCssWidth] = useState(0);
   const [scrollRoot, setScrollRoot] = useState<HTMLElement | null>(null);
   const [stackH, setStackH] = useState(0);
@@ -95,7 +112,6 @@ export function ConflictPagePreview({
   const useMarkdown = !usePdf && Boolean(sourceText);
 
   const keptNotes = notes ?? [];
-  const inkForPage = (inkPages ?? []).filter((row) => row.page_id >= 1);
 
   /*
    * Scrolling this pane has to reach the same paint path the reader uses.
@@ -192,37 +208,89 @@ export function ConflictPagePreview({
     // measures real slots rather than an empty host.
   }, [scrollRoot, filmScope, usePdf, stackH]);
 
+  /*
+   * One canvas per inked page, over that page's slot.
+   *
+   * This was a single canvas sized to the whole stack, which on a textbook is
+   * a few hundred pages of scene height — six figures of pixels. Past the
+   * browser's canvas limit that allocation simply fails, and an absolutely
+   * positioned element that tall also blows out the scroller's extent, so
+   * turning handwriting on blanked the pane instead of drawing on it.
+   *
+   * Ink is stored per page anyway, so there is nothing to gain from one big
+   * surface: each page that carries strokes gets a canvas the size of its own
+   * slot. Bounded by the number of inked pages, not by the length of the book.
+   */
+  const [inkSlots, setInkSlots] = useState<ConflictInkSlot[]>([]);
+  const inkedPages = useMemo(() => inkedPageIds(inkPages), [inkPages]);
+
   useEffect(() => {
-    const canvas = inkRef.current;
-    if (!canvas || !filmScope) return;
-    const width = Math.max(1, Math.round(cssWidth));
-    const height = Math.max(1, Math.round(stackH));
-    canvas.width = width;
-    canvas.height = height;
-    if (!showInk || inkForPage.length === 0) return;
-    let ctx: CanvasRenderingContext2D | null = null;
-    try {
-      ctx = canvas.getContext("2d");
-    } catch {
+    const doc = docRef.current;
+    if (!showInk || !doc || inkedPages.length === 0) {
+      setInkSlots((current) => (current.length === 0 ? current : []));
       return;
     }
-    if (!ctx) return;
-    ctx.clearRect(0, 0, width, height);
-    const paint = ctx;
-    const scale = sceneWidth && sceneWidth > 0 ? width / sceneWidth : 1;
+    const base = doc.getBoundingClientRect();
+    const next: ConflictInkSlot[] = [];
+    for (const pageId of inkedPages) {
+      const slot = doc.querySelector<HTMLElement>(`[data-pdf-page="${pageId}"]`);
+      if (!slot) continue;
+      const box = slot.getBoundingClientRect();
+      if (box.width < 1 || box.height < 1) continue;
+      next.push({
+        page: pageId,
+        left: box.left - base.left,
+        top: box.top - base.top,
+        width: box.width,
+        height: box.height,
+      });
+    }
+    setInkSlots((current) => (inkSlotsEqual(current, next) ? current : next));
+    // `stackH` re-runs this once the stack has laid out, so the slots are
+    // measured against real boxes rather than an empty host.
+  }, [showInk, inkedPages, cssWidth, stackH]);
+
+  useEffect(() => {
+    const doc = docRef.current;
+    if (!showInk || !doc || inkSlots.length === 0) return;
     let gone = false;
-    void Promise.all(
-      inkForPage.map(async (row) => {
-        if (!row.gz) return;
-        const ops = await opsFromGz(row.gz);
-        if (gone || !ops || ops.length === 0) return;
-        paintInkAtScale(paint, ops, { x: 0, y: 0 }, scale);
-      }),
-    );
+    void (async () => {
+      for (const slot of inkSlots) {
+        const canvas = doc.querySelector<HTMLCanvasElement>(
+          `canvas[data-ink-page="${slot.page}"]`,
+        );
+        if (!canvas) continue;
+        const width = Math.max(1, Math.round(slot.width));
+        const height = Math.max(1, Math.round(slot.height));
+        canvas.width = width;
+        canvas.height = height;
+        let ctx: CanvasRenderingContext2D | null = null;
+        try {
+          ctx = canvas.getContext("2d");
+        } catch {
+          continue;
+        }
+        if (!ctx) continue;
+        ctx.clearRect(0, 0, width, height);
+        // Scene → this slot; see `conflictInkPlacement`.
+        const { scale, originY } = conflictInkPlacement(
+          { ...slot, width },
+          pageFrames?.find((row) => row.pageId === slot.page),
+          sceneWidth,
+        );
+        for (const row of (inkPages ?? []).filter((entry) => entry.page_id === slot.page)) {
+          if (!row.gz) continue;
+          const ops = await opsFromGz(row.gz);
+          if (gone) return;
+          if (!ops || ops.length === 0) continue;
+          paintInkAtScale(ctx, ops, { x: 0, y: originY }, scale);
+        }
+      }
+    })();
     return () => {
       gone = true;
     };
-  }, [showInk, inkPages, filmScope, cssWidth, stackH, sceneWidth]);
+  }, [showInk, inkSlots, inkPages, sceneWidth, pageFrames]);
 
   return (
     <div
@@ -234,7 +302,7 @@ export function ConflictPagePreview({
       data-page={String(page)}
     >
       {usePdf && filmScope ? (
-        <div className="lc-hub-conflict-doc">
+        <div className="lc-hub-conflict-doc" ref={docRef}>
           <DocSelectionLayer enabled={false} footnotes={keptNotes}>
             <PdfDocument
               filmScope={filmScope}
@@ -250,9 +318,22 @@ export function ConflictPagePreview({
               onMeasure={setStackH}
             />
           </DocSelectionLayer>
-          {showInk ? (
-            <canvas ref={inkRef} className="lc-hub-conflict-ink-layer" aria-hidden />
-          ) : null}
+          {showInk
+            ? inkSlots.map((slot) => (
+                <canvas
+                  key={slot.page}
+                  data-ink-page={slot.page}
+                  className="lc-hub-conflict-ink-layer"
+                  style={{
+                    left: slot.left,
+                    top: slot.top,
+                    width: slot.width,
+                    height: slot.height,
+                  }}
+                  aria-hidden
+                />
+              ))
+            : null}
         </div>
       ) : useMarkdown && sourceText ? (
         <div className="lc-hub-conflict-doc">
