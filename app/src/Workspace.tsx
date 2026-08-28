@@ -2378,6 +2378,16 @@ export function Workspace({
       fresh?: boolean;
       tabId: string;
       userLoad?: boolean;
+      /**
+       * The notebook row, when the caller has already read it.
+       *
+       * The restore path fetches it to find out whether the notebook still
+       * exists at all, and this used to fetch the same row again a moment
+       * later — two structured clones of a payload that can hold a whole
+       * board's elements and files. `undefined` means "not read"; `null`
+       * means "read, and it is gone".
+       */
+      existing?: WhiteboardNotebook | null;
     }) => {
       if (busy !== null) return;
       beginPadOpen();
@@ -2460,7 +2470,11 @@ export function Workspace({
         // discard baseline, and again for the ink re-apply after the layer
         // mounts. Three reads of the same record would be three trips to the
         // store for a value that cannot have changed in between.
-        const notebook = !opts?.fresh && notebookId ? await getWhiteboardNotebook(notebookId) : null;
+        const notebook = opts?.fresh || !notebookId
+          ? null
+          : opts.existing !== undefined
+            ? opts.existing
+            : await getWhiteboardNotebook(notebookId);
         if (notebookId) {
           if (notebook) {
             const pages = Math.min(
@@ -2878,6 +2892,15 @@ export function Workspace({
       tabId: string;
       /** Already computed by the caller that had to key the record on it. */
       hash?: string;
+      /**
+       * The library entry for `docId`, when the caller has already read it.
+       *
+       * The restore path reads it to decide whether the tab can be opened at
+       * all, and this used to read the same row again — twice through a
+       * structured clone of every annotation on the document. `undefined`
+       * means "not read"; `null` means "read, and there is nothing there".
+       */
+      existingDoc?: AnnotateDoc | null;
       userLoad?: boolean;
     }) => {
       if (busyRef.current !== null) {
@@ -2973,7 +2996,9 @@ export function Workspace({
          * the strip — passes `docId` and is never asked.
          */
         let existing: AnnotateDoc | null = null;
-        if (input.docId) {
+        if (input.existingDoc !== undefined) {
+          existing = input.existingDoc;
+        } else if (input.docId) {
           existing = await getAnnotateDoc(input.docId);
         } else {
           const matches = listAnnotateDocsByHash(hash);
@@ -7271,14 +7296,23 @@ export function Workspace({
            * and silently handing back an empty board would look like the
            * writing had been lost rather than the notebook removed.
            */
-          if (tab.notebookId && !(await getWhiteboardNotebook(tab.notebookId))) {
+          const notebook = tab.notebookId
+            ? await getWhiteboardNotebook(tab.notebookId)
+            : null;
+          if (tab.notebookId && !notebook) {
             reportMissingTab(tab, "The notebook is no longer in the library on this device.");
             return;
           }
           // The loader, not the request wrapper: a blank notebook has no id to
           // be recognised by, so asking to "open" one would grow a second chip
-          // rather than refill the one being focused.
-          await loadWhiteboard({ notebookId: tab.notebookId, tabId: tab.id, userLoad });
+          // rather than refill the one being focused. It gets the row this
+          // just read rather than reading it again.
+          await loadWhiteboard({
+            notebookId: tab.notebookId,
+            existing: tab.notebookId ? notebook : undefined,
+            tabId: tab.id,
+            userLoad,
+          });
           return;
         }
         case "web": {
@@ -7323,9 +7357,8 @@ export function Workspace({
            * never got as far as asking after its bytes, and the tab was declared
            * missing with the file sitting right there under its hash.
            */
-          const entry =
-            (tab.docId ? await getAnnotateDoc(tab.docId) : null) ??
-            (tab.hash ? await findAnnotateDocByHash(tab.hash) : null);
+          const byId = tab.docId ? await getAnnotateDoc(tab.docId) : null;
+          const entry = byId ?? (tab.hash ? await findAnnotateDocByHash(tab.hash) : null);
           /*
            * The record's id outranks the entry's, because it may not have one.
            *
@@ -7336,6 +7369,16 @@ export function Workspace({
            * would be stranded under a key nothing looks up again.
            */
           const restoreDocId = tab.docId ?? entry?.id;
+          /*
+           * Hand the loader the row it would otherwise fetch for itself.
+           *
+           * Exactly the row: with a `docId` on the record that is the id
+           * lookup's answer, `null` included — a set drawn on but never saved
+           * has an id here and nothing behind it, and claiming the hash match
+           * instead would restore a different set's board. Without one the
+           * loader looks the id up from the entry, which is the entry.
+           */
+          const existingDoc = tab.docId ? byId : (entry ?? undefined);
           const docType = entry?.docType ?? tab.docType;
           const name = entry?.name ?? tab.title;
           /*
@@ -7351,7 +7394,15 @@ export function Workspace({
               ? await loadBinaryDocBytesWithRetry(hash, (key) => client.getDocBytes(key))
               : null;
             if (bytes) {
-              await loadAnnotate({ name, docType, bytes, docId: restoreDocId, tabId: tab.id, userLoad });
+              await loadAnnotate({
+                name,
+                docType,
+                bytes,
+                docId: restoreDocId,
+                existingDoc,
+                tabId: tab.id,
+                userLoad,
+              });
               return;
             }
             /*
@@ -7389,7 +7440,15 @@ export function Workspace({
               : null;
           const text = entry?.source ?? tab.source ?? parked;
           if (text !== null && text !== undefined) {
-            await loadAnnotate({ name, docType, text, docId: restoreDocId, tabId: tab.id, userLoad });
+            await loadAnnotate({
+              name,
+              docType,
+              text,
+              docId: restoreDocId,
+              existingDoc,
+              tabId: tab.id,
+              userLoad,
+            });
             return;
           }
           reportMissingTab(tab, "The document is not in the library and its file is not on this device.");
