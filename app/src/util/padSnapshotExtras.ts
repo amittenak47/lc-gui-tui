@@ -8,6 +8,7 @@
 import { gzipBytes } from "./gzip";
 import { packEncodedInk } from "../canvas/inkCodec";
 import { getAnnotateDoc, saveAnnotateDoc } from "./annotateStore";
+import { applyFootnoteBoards, collectFootnoteBoards } from "./footnoteWhiteboardStore";
 import {
   annotateDocKey,
   deleteInkPages,
@@ -34,6 +35,7 @@ export interface PadSnapshotExtras {
   ink?: SnapshotInkPage[];
   edges?: PadSnapshot["edges"];
   source?: string;
+  footnoteBoards?: PadSnapshot["footnoteBoards"];
 }
 
 async function gzForRecord(row: InkPageRecord): Promise<Uint8Array<ArrayBuffer> | null> {
@@ -68,10 +70,13 @@ export async function gatherPadSnapshotExtras(
   const node = padNodeRef(kind, key, docType);
   const edges = await edgesFor(node);
   const source = opts?.source ?? annotate?.source;
+  const footnoteBoards =
+    kind === "annotate" ? await collectFootnoteBoards(key, annotate?.footnotes ?? []) : undefined;
   return {
     ...(ink.length > 0 ? { ink } : {}),
     ...(edges.length > 0 ? { edges } : {}),
     ...(typeof source === "string" && source.length > 0 ? { source } : {}),
+    ...(footnoteBoards && Object.keys(footnoteBoards).length > 0 ? { footnoteBoards } : {}),
   };
 }
 
@@ -97,7 +102,10 @@ export async function recordPadSnapshotsWithExtras(
 export async function applyPadSnapshotExtras(
   kind: PadSnapshotKind,
   key: string,
-  snap: Pick<PadSnapshot, "ink" | "edges" | "source" | "board" | "footnotes" | "agent" | "name">,
+  snap: Pick<
+    PadSnapshot,
+    "ink" | "edges" | "source" | "board" | "footnotes" | "agent" | "name" | "footnoteBoards"
+  >,
 ): Promise<void> {
   const docKey = kind === "whiteboard" ? whiteboardDocKey(key) : annotateDocKey(key);
   /*
@@ -140,6 +148,7 @@ export async function applyPadSnapshotExtras(
     await putEdge(edge);
   }
   if (kind !== "annotate") return;
+  if (snap.footnoteBoards) await applyFootnoteBoards(key, snap.footnoteBoards);
   const source = parseSnapshotSource(snap.source);
   if (source == null) return;
   const existing = await getAnnotateDoc(key);

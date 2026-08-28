@@ -41,6 +41,14 @@ function asIndex(value: unknown): TabIndexState {
   return value === "indexed" ? "indexed" : "idle";
 }
 
+function parseFootnoteBoard(raw: unknown): { docId: string; wbId: string } | undefined {
+  if (!isRecord(raw)) return undefined;
+  const docId = asString(raw.docId);
+  const wbId = asString(raw.wbId);
+  if (!docId || !wbId) return undefined;
+  return { docId, wbId };
+}
+
 function persistable(tab: TabRecord): TabRecord | null {
   switch (tab.kind) {
     case "home":
@@ -48,6 +56,9 @@ function persistable(tab: TabRecord): TabRecord | null {
     case "practice":
       return { ...tab, dirty: false, group: tab.group };
     case "whiteboard":
+      if (tab.footnoteBoard?.docId && tab.footnoteBoard?.wbId) {
+        return { ...tab, dirty: false, notebookId: null };
+      }
       if (!tab.notebookId) return null;
       return { ...tab, dirty: false };
     case "annotate": {
@@ -100,9 +111,19 @@ function parseTab(raw: unknown): TabRecord | null {
     return persistable({ id, kind, title, dirty, lastActive, group, dataset, taskId });
   }
   if (kind === "whiteboard") {
+    const footnoteBoard = parseFootnoteBoard(raw.footnoteBoard);
     const notebookId = asString(raw.notebookId);
-    if (!notebookId) return null;
-    return persistable({ id, kind, title, dirty, lastActive, group, notebookId });
+    if (!footnoteBoard && !notebookId) return null;
+    return persistable({
+      id,
+      kind,
+      title,
+      dirty,
+      lastActive,
+      group,
+      notebookId,
+      ...(footnoteBoard ? { footnoteBoard } : {}),
+    });
   }
   if (kind === "annotate") {
     const docType = raw.docType;

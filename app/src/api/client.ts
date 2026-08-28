@@ -397,6 +397,8 @@ export interface AnnotatePadDto {
   footnotes: unknown;
   board: unknown;
   agent: unknown;
+  /** Footnote-owned scratch boards, keyed by whiteboard id. */
+  footnote_boards?: Record<string, { board: unknown; pageCount: number }>;
 }
 
 export interface PadSnapshotDto {

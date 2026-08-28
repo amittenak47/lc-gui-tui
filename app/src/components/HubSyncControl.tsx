@@ -132,7 +132,7 @@ export interface HubSyncWalkHost {
     kind: HubPadKind;
     id: string;
     hubAckUpdatedAt(): number;
-    buildBody(): AnnotatePadDto | WhiteboardPadDto;
+    buildBody(): AnnotatePadDto | WhiteboardPadDto | Promise<AnnotatePadDto | WhiteboardPadDto>;
     /** Record the row a successful push left on the hub. */
     markHubAck(updatedAt: number): void;
   } | null>;
@@ -482,7 +482,7 @@ export function HubSyncControl({
         };
 
         const freezeCopies = async () => {
-          const [server, localInk, serverInk] = await Promise.all([
+          const [server, localInk, serverInk, local] = await Promise.all([
             fetchHubBody(),
             localInkAsDtos(padInfo.kind, padInfo.id).catch(() => []),
             (async () => {
@@ -492,8 +492,9 @@ export function HubSyncControl({
                 return [];
               }
             })(),
+            Promise.resolve(padInfo.buildBody()),
           ]);
-          return { server, localInk, serverInk };
+          return { server, localInk, serverInk, local };
         };
 
         /* Park on the split; resolve when the reader has chosen and the
@@ -531,7 +532,7 @@ export function HubSyncControl({
               id: padInfo.id,
               stage: "pad",
               detail: pushed.detail,
-              local: padInfo.buildBody(),
+              local: copies.local,
               server: copies.server,
               localInk: copies.localInk,
               serverInk: copies.serverInk,
@@ -575,7 +576,7 @@ export function HubSyncControl({
               id: padInfo.id,
               stage: "ink",
               detail: `page ${ink.pageId} has new strokes here and on the hub`,
-              local: padInfo.buildBody(),
+              local: copies.local,
               server: copies.server,
               localInk: copies.localInk,
               serverInk: copies.serverInk,

@@ -30,6 +30,10 @@ import { isAndroidDevice } from "./androidDevice";
 import { isCameraBusy, yieldToIdle } from "./cameraBusy";
 import { bytesMatchDocHash, getDocBytes, putDocBytes } from "./docBytes";
 import type { DocFootnote } from "./docFootnotes";
+import {
+  applyFootnoteBoards,
+  collectFootnoteBoards,
+} from "./footnoteWhiteboardStore";
 import { run, STORE_SYNC_QUEUE } from "./idb";
 import {
   HUB_MAX_BODY_BYTES,
@@ -388,6 +392,12 @@ export async function applyHubAnnotate(
     ...(local?.locked ? { locked: true } : {}),
   });
   markAnnotateHubAck(row.id, row.updated_at);
+  if (row.footnote_boards && typeof row.footnote_boards === "object") {
+    await applyFootnoteBoards(
+      row.id,
+      row.footnote_boards as Record<string, { board: BoardBlob; pageCount: number }>,
+    );
+  }
   if (opts.emitReload) emitPadHub({ kind: "annotate", id: row.id, op: "reload" });
   return true;
 }
@@ -445,7 +455,7 @@ export function whiteboardPadBody(notebook: WhiteboardNotebook): WhiteboardPadDt
 }
 
 /** The wire form of an annotate doc; shared by autosave and the Sync walk. */
-export function annotatePadBody(doc: AnnotateDoc): AnnotatePadDto {
+export async function annotatePadBody(doc: AnnotateDoc): Promise<AnnotatePadDto> {
   return {
     id: doc.id,
     name: doc.name,
@@ -458,11 +468,12 @@ export function annotatePadBody(doc: AnnotateDoc): AnnotatePadDto {
     footnotes: doc.footnotes ?? [],
     board: doc.board,
     agent: doc.agent ?? [],
+    footnote_boards: await collectFootnoteBoards(doc.id, doc.footnotes ?? []),
   };
 }
 
 export async function pushAnnotatePad(client: LcClient, doc: AnnotateDoc): Promise<boolean> {
-  const body = annotatePadBody(doc);
+  const body = await annotatePadBody(doc);
   try {
     const written = await client.putAnnotatePad(doc.id, body);
     markAnnotateHubAck(doc.id, written.updated_at ?? doc.updatedAt);

@@ -29,7 +29,7 @@
  * writer never finds out either happened.
  */
 
-import { run, STORE_CONTENT } from "./idb";
+import { run, withStore, STORE_CONTENT } from "./idb";
 import { setStorageItem } from "./storageQuota";
 
 /** Per-entry spill key. Per-entry, not per-library, so a fallback save is still small. */
@@ -135,6 +135,40 @@ export async function deleteContent(id: string): Promise<void> {
   }
   try {
     localStorage.removeItem(spillKey(id));
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Drop every content key that starts with `prefix`.
+ *
+ * Used to sweep footnote-owned boards (`fnwb:{docId}:`) when an annotation
+ * set is deleted. Walks IndexedDB by cursor and the spill keys by prefix so
+ * an orphan cannot survive on only one backend.
+ */
+export async function deleteContentByPrefix(prefix: string): Promise<void> {
+  if (!prefix) return;
+  try {
+    await withStore(STORE_CONTENT, "readwrite", (store) => {
+      const request = store.openCursor(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        cursor.delete();
+        cursor.continue();
+      };
+    });
+  } catch {
+    /* private browsing / missing store */
+  }
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(`${SPILL_PREFIX}${prefix}`)) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
   } catch {
     /* best-effort */
   }

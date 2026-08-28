@@ -55,6 +55,19 @@ export interface DocFootnoteNote {
 }
 
 /**
+ * A scratch board this mark owns — pointer only.
+ *
+ * The scene lives under `fnwb:{docId}:{id}` in contentStore, not on
+ * `AnnotateDoc.board` and not in the whiteboard library.
+ */
+export interface DocFootnoteWhiteboard {
+  id: string;
+  title?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
  * A coach conversation this mark has led to.
  *
  * `rootId` is the id of the message the thread hangs off, which is the handle
@@ -124,6 +137,8 @@ export interface DocFootnote {
   url?: string;
   /** Writer notes in the footnote overview card, oldest first. */
   notes?: DocFootnoteNote[];
+  /** Scratch boards attached to this mark, oldest first. */
+  whiteboards?: DocFootnoteWhiteboard[];
   /** Extra links the writer saved on the overview card. */
   userLinks?: DocFootnoteUserLink[];
   /**
@@ -326,6 +341,19 @@ export function freshFootnoteId(existing: readonly DocFootnote[], now = Date.now
 /** Ids are per-footnote, so the same timestamp-with-a-guard shape does. */
 export function freshNoteId(existing: readonly DocFootnoteNote[], now = Date.now()): string {
   const base = `nt-${now.toString(36)}`;
+  if (!existing.some((entry) => entry.id === base)) return base;
+  for (let suffix = 1; ; suffix += 1) {
+    const candidate = `${base}-${suffix.toString(36)}`;
+    if (!existing.some((entry) => entry.id === candidate)) return candidate;
+  }
+}
+
+/** Scratch-board ids on a mark — `wb-` so they never collide with library notebooks. */
+export function freshWhiteboardId(
+  existing: readonly DocFootnoteWhiteboard[],
+  now = Date.now(),
+): string {
+  const base = `wb-${now.toString(36)}`;
   if (!existing.some((entry) => entry.id === base)) return base;
   for (let suffix = 1; ; suffix += 1) {
     const candidate = `${base}-${suffix.toString(36)}`;
@@ -574,6 +602,28 @@ function sanitizeThreads(
   return entries.length > 0 ? entries : undefined;
 }
 
+function sanitizeWhiteboards(value: unknown, now: number): DocFootnoteWhiteboard[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const entries: DocFootnoteWhiteboard[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const candidate = entry as Partial<DocFootnoteWhiteboard>;
+    if (typeof candidate.id !== "string" || !candidate.id) continue;
+    const createdAt = typeof candidate.createdAt === "number" ? candidate.createdAt : now;
+    const title =
+      typeof candidate.title === "string" && candidate.title.trim()
+        ? candidate.title.replace(/\s+/g, " ").trim()
+        : undefined;
+    entries.push({
+      id: candidate.id,
+      ...(title ? { title } : {}),
+      createdAt,
+      updatedAt: typeof candidate.updatedAt === "number" ? candidate.updatedAt : createdAt,
+    });
+  }
+  return entries.length > 0 ? entries : undefined;
+}
+
 /** Drop anything that is not a footnote, for reading untrusted stored JSON. */
 export function sanitizeFootnotes(value: unknown): DocFootnote[] {
   if (!Array.isArray(value)) return [];
@@ -596,6 +646,7 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
         palette: rawPalette,
         color: rawColor,
         updatedAt: rawUpdatedAt,
+        whiteboards: rawWhiteboards,
         ...rest
       } = candidate as DocFootnote & { userNotes?: unknown };
       // Pulled out of the spread so a stored non-number is dropped rather than
@@ -605,6 +656,7 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
           ? rawUpdatedAt
           : undefined;
       const notes = sanitizeNotes(candidate.notes, userNotes, now);
+      const whiteboards = sanitizeWhiteboards(rawWhiteboards, now);
       const excerpt = typeof candidate.excerpt === "string" ? candidate.excerpt : "";
       const threads = sanitizeThreads(candidate.threads, candidate.threadRootId, excerpt, now);
       const userLinks = sanitizeUserLinks(candidate.userLinks);
@@ -627,6 +679,7 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
           ...(rest as DocFootnote),
           anchor,
           notes,
+          whiteboards,
           threads,
           ...(userLinks ? { userLinks } : {}),
           ...(color ? { color } : {}),
@@ -789,6 +842,9 @@ export function footnoteFieldsRevision(entry: DocFootnote): string {
         (entry.palette ?? []).join(","),
         entry.title ?? "",
         (entry.notes ?? []).map((note) => `${note.id}:${note.updatedAt}:${note.text}`).join("\x1f"),
+        (entry.whiteboards ?? [])
+          .map((board) => `${board.id}:${board.updatedAt}:${board.title ?? ""}`)
+          .join("\x1f"),
         entry.threadRootId ?? "",
         (entry.threads ?? []).map((thread) => `${thread.rootId}|${thread.title}`).join("\x1f"),
         (entry.userLinks ?? []).map((link) => `${link.title ?? ""}|${link.url}`).join("\x1f"),

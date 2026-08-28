@@ -8,6 +8,7 @@ const edgeIsGone = vi.fn(async (_id?: string) => false);
 const putEdge = vi.fn(async (_edge?: unknown) => {});
 const getAnnotateDoc = vi.fn(async (_id?: string): Promise<unknown> => null);
 const saveAnnotateDoc = vi.fn(async (_entry?: unknown) => {});
+const applyFootnoteBoards = vi.fn(async (_docId?: string, _boards?: unknown) => {});
 
 vi.mock("./inkPageStore", () => ({
   annotateDocKey: (id: string) => `md:${id}`,
@@ -41,6 +42,10 @@ vi.mock("./annotateStore", () => ({
 
 vi.mock("./gzip", () => ({ gzipBytes: async (bytes: Uint8Array) => bytes }));
 vi.mock("../canvas/inkCodec", () => ({ packEncodedInk: (ink: unknown) => ink }));
+vi.mock("./footnoteWhiteboardStore", () => ({
+  collectFootnoteBoards: async () => ({}),
+  applyFootnoteBoards: (docId: string, boards: unknown) => applyFootnoteBoards(docId, boards),
+}));
 
 const { applyPadSnapshotExtras } = await import("./padSnapshotExtras");
 
@@ -114,5 +119,18 @@ describe("applyPadSnapshotExtras", () => {
     });
     expect(putEdge).toHaveBeenCalledTimes(1);
     expect((putEdge.mock.calls[0]?.[0] as { id: string }).id).toBe("kept-one");
+  });
+
+  it("writes footnote boards even when the snapshot has no source", async () => {
+    const footnoteBoards = {
+      "wb-1": { board, pageCount: 1 },
+    };
+    await applyPadSnapshotExtras("annotate", "a1", {
+      name: "a1",
+      board,
+      footnoteBoards,
+    });
+    expect(applyFootnoteBoards).toHaveBeenCalledWith("a1", footnoteBoards);
+    expect(saveAnnotateDoc).not.toHaveBeenCalled();
   });
 });

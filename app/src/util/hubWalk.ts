@@ -18,7 +18,7 @@ export interface WalkPad {
   id: string;
   /** The last hub write this device has actually seen. */
   hubAckUpdatedAt(): number;
-  buildBody(): AnnotatePadDto | WhiteboardPadDto;
+  buildBody(): AnnotatePadDto | WhiteboardPadDto | Promise<AnnotatePadDto | WhiteboardPadDto>;
   /**
    * Remember the row this device just wrote.
    *
@@ -105,10 +105,11 @@ export async function walkPushPad(
   }
 
   try {
+    const body = await Promise.resolve(pad.buildBody());
     const written =
       pad.kind === "annotate"
-        ? await client.putAnnotatePad(pad.id, pad.buildBody() as AnnotatePadDto)
-        : await client.putWhiteboardPad(pad.id, pad.buildBody() as WhiteboardPadDto);
+        ? await client.putAnnotatePad(pad.id, body as AnnotatePadDto)
+        : await client.putWhiteboardPad(pad.id, body as WhiteboardPadDto);
     const hubUpdatedAt = written.updated_at ?? Date.now();
     // Acked here rather than at the call site, so no path can push and forget.
     await pad.markHubAck?.(hubUpdatedAt);

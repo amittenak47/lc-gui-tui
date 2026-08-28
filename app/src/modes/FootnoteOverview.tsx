@@ -12,6 +12,7 @@ import { AnimatePresence, motion } from "motion/react";
 import type { AgentChatMessage } from "./AgentSidePanel";
 import {
   freshNoteId,
+  freshWhiteboardId,
   type DocFootnote,
   type DocFootnoteNote,
   type DocFootnoteSubMarkKind,
@@ -72,6 +73,10 @@ export interface FootnoteOverviewProps {
   onAddWorkspaceLink?: () => void;
   onOpenWorkspaceLink?: (edgeId: string) => void;
   onRemoveWorkspaceLink?: (edgeId: string) => void;
+  /** Open a footnote-owned scratch board on this annotate tab. */
+  onOpenWhiteboard?: (id: string) => void;
+  /** Drop the KV blob after the pointer is gone. */
+  onDeleteWhiteboard?: (id: string) => void;
 }
 type Task =
   | { kind: "note"; id: string | null }
@@ -306,6 +311,8 @@ export function FootnoteOverview({
   onAddWorkspaceLink,
   onOpenWorkspaceLink,
   onRemoveWorkspaceLink,
+  onOpenWhiteboard,
+  onDeleteWhiteboard,
   anchorRect,
   subMarkMode,
   onSubMarkModeChange,
@@ -327,6 +334,7 @@ export function FootnoteOverview({
   const markColor = footnote.color ?? palette[0] ?? "#0d9488";
   const userLinks = footnote.userLinks ?? [];
   const notes = footnote.notes ?? [];
+  const whiteboards = footnote.whiteboards ?? [];
   const threads = footnote.threads ?? [];
   const subMarks = footnote.subMarks ?? [];
   const isAiTab = footnote.kind === "ai";
@@ -477,7 +485,7 @@ export function FootnoteOverview({
       view?.removeEventListener("scroll", place);
       window.removeEventListener("resize", place);
     };
-  }, [place, task, notes.length, threads.length, userLinks.length, subMarks.length]);
+  }, [place, task, notes.length, whiteboards.length, threads.length, userLinks.length, subMarks.length]);
   const openThreadMessages = useMemo(
     () => (task?.kind === "thread" && task.rootId ? threadMessages(task.rootId) : []),
     [task, threadMessages],
@@ -489,6 +497,19 @@ export function FootnoteOverview({
   }, [openThreadMessages]);
   const updateNotes = (next: DocFootnoteNote[]) => {
     onChange({ ...footnote, notes: next.length > 0 ? next : undefined });
+  };
+  const updateWhiteboards = (next: typeof whiteboards) => {
+    onChange({ ...footnote, whiteboards: next.length > 0 ? next : undefined });
+  };
+  const addWhiteboard = () => {
+    const now = Date.now();
+    const id = freshWhiteboardId(whiteboards, now);
+    updateWhiteboards([...whiteboards, { id, createdAt: now, updatedAt: now }]);
+    onOpenWhiteboard?.(id);
+  };
+  const removeWhiteboard = (id: string) => {
+    updateWhiteboards(whiteboards.filter((entry) => entry.id !== id));
+    onDeleteWhiteboard?.(id);
   };
   const saveNote = (text: string) => {
     if (task?.kind !== "note") return;
@@ -927,6 +948,47 @@ export function FootnoteOverview({
                           }
                         >
                           <strong className="lc-footnote-overview-entry-text">{note.text}</strong>
+                        </HoldButton>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </HubSection>
+              )}
+              {isAiTab ? (
+                whiteboards.length > 0 ? (
+                  <HubSection title="Whiteboards">
+                    <ul className={listClass(whiteboards.length)}>
+                      {whiteboards.map((board) => (
+                        <li key={board.id}>
+                          <span className="lc-agent-scope-option">
+                            <strong className="lc-footnote-overview-entry-text">
+                              {board.title || "Whiteboard"}
+                            </strong>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </HubSection>
+                ) : null
+              ) : (
+              <HubSection title="Whiteboards" onAdd={addWhiteboard}>
+                {whiteboards.length > 0 && (
+                  <ul className={listClass(whiteboards.length)}>
+                    {whiteboards.map((board) => (
+                      <li key={board.id}>
+                        <HoldButton
+                          label={board.title || "Whiteboard"}
+                          className="lc-agent-scope-option lc-footnote-overview-entry-hold lc-hold-danger"
+                          ariaLabel={`${board.title || "Whiteboard"} — tap to open, hold to delete`}
+                          holdMs={HOLD_SENSITIVE_MS}
+                          holdThrough
+                          onTap={() => onOpenWhiteboard?.(board.id)}
+                          onConfirm={() => removeWhiteboard(board.id)}
+                        >
+                          <strong className="lc-footnote-overview-entry-text">
+                            {board.title || "Whiteboard"}
+                          </strong>
                         </HoldButton>
                       </li>
                     ))}

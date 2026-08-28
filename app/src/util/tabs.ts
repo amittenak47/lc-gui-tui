@@ -77,10 +77,21 @@ export interface PracticeTab extends TabBase {
   taskId: string;
 }
 
+/** Footnote-owned scratch board — not a library notebook. */
+export interface FootnoteBoardRef {
+  docId: string;
+  wbId: string;
+}
+
 export interface WhiteboardTab extends TabBase {
   kind: "whiteboard";
   /** Null until the autosave has written the notebook once. */
   notebookId: string | null;
+  /**
+   * When set, this chip is a footnote scratch board on `docId`, stored under
+   * `fnwb:{docId}:{wbId}`. It must not call `saveWhiteboardNotebook`.
+   */
+  footnoteBoard?: FootnoteBoardRef;
 }
 
 export interface AnnotateTab extends TabBase {
@@ -193,6 +204,7 @@ export type TabPatch = Partial<{
   dataset: string;
   taskId: string;
   notebookId: string | null;
+  footnoteBoard: FootnoteBoardRef;
   docId: string | null;
   hash: string | null;
   docType: DocType;
@@ -247,6 +259,19 @@ export function syncGroupSeq(groups: TabGroup[]): void {
 
 export function homeTab(at = 0): HomeTab {
   return { id: HOME_TAB_ID, kind: "home", title: "Home", dirty: false, lastActive: at };
+}
+
+/** A whiteboard chip that is a footnote scratch board, not a library notebook. */
+export function isFootnoteBoardTab(
+  tab: TabRecord,
+): tab is WhiteboardTab & { footnoteBoard: FootnoteBoardRef } {
+  return (
+    tab.kind === "whiteboard" &&
+    typeof tab.footnoteBoard?.docId === "string" &&
+    tab.footnoteBoard.docId.length > 0 &&
+    typeof tab.footnoteBoard.wbId === "string" &&
+    tab.footnoteBoard.wbId.length > 0
+  );
 }
 
 export function initialTabState(at = 0): TabState {
@@ -369,8 +394,17 @@ export function sameEntity(a: TabRecord, b: TabRecord): boolean {
       return true;
     case "practice":
       return a.dataset === (b as PracticeTab).dataset && a.taskId === (b as PracticeTab).taskId;
-    case "whiteboard":
-      return a.notebookId !== null && a.notebookId === (b as WhiteboardTab).notebookId;
+    case "whiteboard": {
+      const other = b as WhiteboardTab;
+      if (a.footnoteBoard && other.footnoteBoard) {
+        return (
+          a.footnoteBoard.docId === other.footnoteBoard.docId &&
+          a.footnoteBoard.wbId === other.footnoteBoard.wbId
+        );
+      }
+      if (a.footnoteBoard || other.footnoteBoard) return false;
+      return a.notebookId !== null && a.notebookId === other.notebookId;
+    }
     case "explore":
       // There is only ever one, so any two explore records are the same one.
       return true;
