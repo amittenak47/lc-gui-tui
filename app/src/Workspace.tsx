@@ -1328,19 +1328,6 @@ export function Workspace({
 
   const pairing = DEFAULT_PAIRING;
 
-  useEffect(() => {
-    if (!isTauriRuntime()) return;
-    let stop: (() => void) | undefined;
-    void import("@tauri-apps/api/event").then(({ listen }) => {
-      void listen("lc-seed-ready", () => {
-        window.dispatchEvent(new Event("lc-seed-ready"));
-      }).then((unlisten) => {
-        stop = unlisten;
-      });
-    });
-    return () => stop?.();
-  }, []);
-
   /**
    * Ask once for storage the browser will not evict under pressure.
    *

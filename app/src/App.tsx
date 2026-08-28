@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { LcClient } from "./api/client";
+import { isTauriRuntime } from "./api/nativeHttp";
 import type { SearchOptions } from "./api/client";
 import type { CoachCapabilities, CoachFlags, SessionSnapshot } from "./api/types";
 import { DEFAULT_COACH_FLAGS } from "./api/types";
@@ -280,6 +281,37 @@ export function App() {
       cancelled = true;
       window.cancelAnimationFrame(frame);
       window.clearTimeout(exitTimer);
+    };
+  }, []);
+
+  /*
+   * Native "the seed finished" → a `window` event, once for the app.
+   *
+   * `ProblemBrowser` listens on `window`, and every mounted Workspace used to
+   * install this bridge, so one native event arrived as two or three window
+   * events. The old cleanup was `stop?.()`, which does nothing while `listen`
+   * is still resolving — unmount during registration left the listener behind
+   * for good.
+   */
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/event").then(({ listen }) => {
+      if (cancelled) return;
+      void listen("lc-seed-ready", () => {
+        window.dispatchEvent(new Event("lc-seed-ready"));
+      }).then((stop) => {
+        if (cancelled) {
+          stop();
+          return;
+        }
+        unlisten = stop;
+      });
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
     };
   }, []);
 
