@@ -97,6 +97,8 @@ export interface HubSyncWalkHost {
     id: string;
     hubAckUpdatedAt(): number;
     buildBody(): AnnotatePadDto | WhiteboardPadDto;
+    /** Record the row a successful push left on the hub. */
+    markHubAck(updatedAt: number): void;
   } | null>;
   /** H: reload the open pad from what we kept — the chosen reload, not a ping. */
   emitReload(): void;
@@ -294,6 +296,7 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
           id: padInfo.id,
           hubAckUpdatedAt: () => padInfo.hubAckUpdatedAt(),
           buildBody: () => padInfo.buildBody(),
+          markHubAck: (updatedAt: number) => padInfo.markHubAck(updatedAt),
         } as const;
 
         /** The stashed hub row: fetched once at stop time, never re-read. */
@@ -320,6 +323,12 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
         // — E: push this pad's JSON (CAS). Conflict → stop before any apply.
         setStage("pad");
         const pushed = await walkPushPad(client!, walkPad, snapshot);
+        if (pushed.outcome === "ok") {
+          // The hub now holds what this device just sent, and the ack above
+          // says so. Stage H must compare against that, not against the older
+          // row this walk's snapshot was taken from.
+          padAckForPull = pushed.hubUpdatedAt;
+        }
         if (pushed.outcome === "conflict") {
           const resolution = await raiseConflict({
             kind: padInfo.kind,
@@ -342,13 +351,16 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
                 ...walkPad,
                 hubAckUpdatedAt: () => fresh.hubAckUpdatedAt(),
                 buildBody: fresh.buildBody,
+                markHubAck: (updatedAt: number) => fresh.markHubAck(updatedAt),
               },
               freshSnapshot,
             );
             if (repush.outcome === "conflict") {
               throw new WalkConflict("pad", repush.detail);
             }
-            padAckForPull = fresh.hubAckUpdatedAt();
+            // What the hub holds *now*. `fresh.hubAckUpdatedAt()` was read
+            // before this write and names the row we were re-basing on.
+            padAckForPull = repush.hubUpdatedAt;
           } else {
             // Take server: applyHub* already wrote IDB and marked the ack.
             const fresh = await host!.pad();
