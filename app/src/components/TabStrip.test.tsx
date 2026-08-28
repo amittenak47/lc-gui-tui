@@ -169,6 +169,21 @@ describe("TabStrip", () => {
     view.unmount();
   });
 
+  it("hides close on a footnote whiteboard tab", () => {
+    const fn: WhiteboardTab = {
+      id: "fn1",
+      kind: "whiteboard",
+      title: "Whiteboard",
+      dirty: false,
+      lastActive: 0,
+      notebookId: null,
+      footnoteBoard: { docId: "doc-1", wbId: "wb-1" },
+    };
+    const view = mount({ tabs: [homeTab(), fn] });
+    expect(view.chips()[0]?.querySelector(".lc-tab-close")).toBeNull();
+    view.unmount();
+  });
+
   it("reports focus and close separately", () => {
     const onFocus = vi.fn();
     const onClose = vi.fn();

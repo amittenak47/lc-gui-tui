@@ -8365,6 +8365,8 @@ export function Workspace({
 
   /* Which header icon is the live workspace, and so wears the pressed form. */
   const webPadLive = tab.kind === "web";
+  /** Scratch board attached to a mark — not a place to open another pad. */
+  const hidePadMenu = isFootnoteBoardTab(tab) || Boolean(footnoteBoardSession);
   /*
    * Browsing or annotating — a web tab is one or the other, never both.
    *
@@ -8898,8 +8900,11 @@ export function Workspace({
             With a workspace already open these no longer disappear — they
             spawn a tab beside it. The one icon matching what is on screen
             keeps its pressed form, where tap is Save and hold is the library.
+
+            A footnote scratch board is not a library notebook: leave it with
+            Back to document, not by opening another pad from this header.
           */}
-          {!webPadLive && (
+          {!hidePadMenu && !webPadLive && (
             <HoldButton
               label="Web"
               ariaLabel="Web pad: tap for a new page, hold for recent pages"
@@ -8939,7 +8944,7 @@ export function Workspace({
             Document icon, left of the scratchpad's paper: tap picks a file to
             annotate, hold opens the library. Same split as its neighbour.
           */}
-          {!docPadLive && (
+          {!hidePadMenu && !docPadLive && (
             <HoldButton
               label="Document"
               ariaLabel="Document pad: tap to open a file, hold for recent documents"
@@ -8973,7 +8978,7 @@ export function Workspace({
               </svg>
             </HoldButton>
           )}
-          {webPadLive && (
+          {!hidePadMenu && webPadLive && (
             <HoldButton
               label="Web"
               ariaLabel="Web documents: tap to save now, hold for save / open menu"
@@ -9010,7 +9015,7 @@ export function Workspace({
               </svg>
             </HoldButton>
           )}
-          {docPadLive && (
+          {!hidePadMenu && docPadLive && (
             /* Tap to save now, hold for the sheet. */
             <HoldButton
               label="Markdown"
@@ -9049,7 +9054,7 @@ export function Workspace({
             Starting to write is the common case by a wide margin, and it was
             behind a dialog whose other option nobody wanted most of the time.
           */}
-          {!boardPadLive && (
+          {!hidePadMenu && !boardPadLive && (
             <HoldButton
               label="Whiteboard"
               ariaLabel="Whiteboard: tap for a new notebook, hold to open the library"
@@ -9079,7 +9084,7 @@ export function Workspace({
               </svg>
             </HoldButton>
           )}
-          {boardPadLive && (
+          {!hidePadMenu && boardPadLive && (
             /*
               Tap to save now, hold for the sheet.
 
@@ -9460,7 +9465,11 @@ export function Workspace({
       {/* The one-tap hub Sync pill lives beside the board's map controls in
           the chrome slot; only a focused document / whiteboard / web pad
           mounts its own. Home used to, and the library cards are not a pad. */}
-      {active && headerSlots.boardChrome && tabOffersHubSync(tab.kind) && !isFootnoteBoardTab(tab) ? (
+      {active &&
+      headerSlots.boardChrome &&
+      tabOffersHubSync(tab.kind) &&
+      !isFootnoteBoardTab(tab) &&
+      !hubConflictAsk ? (
         createPortal(
           <HubSyncControl
             hubHint={hubHint}
@@ -9629,7 +9638,7 @@ export function Workspace({
                 browseMotion !== "exit" &&
                 browseMotion !== "done",
             )}
-            chromeEnabled={active || splitKeepChrome}
+            chromeEnabled={(active || splitKeepChrome) && !hubConflictAsk}
             chromeHost={headerSlots.boardChrome}
             onCodeSlot={onCodeSlot}
             transparentCanvas={Boolean(
@@ -9757,7 +9766,7 @@ export function Workspace({
                       docHash={annotateSource.hash}
                       frameWidth={annotatePageWidth}
                       initialPage={pdfSessionPage || undefined}
-                      paused={!showing}
+                      paused={!showing || Boolean(hubConflictAsk)}
                       idleThumbs={showing && pdfFilmOpen}
                       onMeasure={onMdInkMeasure}
                       onNav={setPdfNav}
@@ -10025,10 +10034,13 @@ export function Workspace({
           busy={hubConflictBusy}
           otherLabel={otherDeviceLabel()}
           docHash={annotateSource?.docType === "pdf" ? annotateSource.hash : undefined}
+          bytes={annotateSource?.docType === "pdf" ? annotateSource.bytes ?? undefined : undefined}
+          filmScopeBase={`${tab.id}:conflict`}
+          sceneWidth={annotatePageWidth}
           onResolve={(resolution) => void handleHubConflictResolve(resolution)}
         />
       ) : null}
-      {active && headerSlots.agentPanel ? createPortal(<>
+      {active && headerSlots.agentPanel && !hubConflictAsk ? createPortal(<>
         {problem && !canvasLoading && (
           <AgentSidePanel
             open={coachOpen}

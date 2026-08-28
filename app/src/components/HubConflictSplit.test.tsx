@@ -256,6 +256,46 @@ describe("HubConflictSplit ink and labels", () => {
     expect(previews).toHaveLength(2);
     expect(previews[0]!.dataset.page).toBe("2");
     expect(previews[1]!.dataset.page).toBe("2");
-    expect(previews[0]!.querySelector("img")?.getAttribute("alt")).toBe("Page 2");
+  });
+
+  it("Keep selection enables after every row is settled without the pane header", () => {
+    const { onResolve } = mount();
+    expect(resolveButton().disabled).toBe(true);
+    act(() => {
+      inkRow(1)
+        .querySelector('[data-action="keep"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      noteByText("local only mark")
+        .querySelector('[data-action="keep"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      noteByText("kept here with new words")
+        .querySelector('[data-action="keep"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      noteByText("hub only mark")
+        .querySelector('[data-action="keep"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(paneButton(0, "keep").getAttribute("aria-pressed")).not.toBe("true");
+    expect(paneButton(1, "keep").getAttribute("aria-pressed")).not.toBe("true");
+    expect(resolveButton().disabled).toBe(false);
+    act(() => resolveButton().click());
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    const resolution = onResolve.mock.calls[0]![0];
+    expect(resolution.pick).toBe("merged");
+    expect(resolution.ink).toBe("server");
+    const ids = resolution.footnotes.map((n: { id: string }) => n.id);
+    expect(ids).toContain("n1");
+    expect(ids).toContain("same");
+    expect(ids).toContain("srv");
+  });
+
+  it("lays the change list over the full-size page preview", () => {
+    mount();
+    const body = document.querySelector(".lc-hub-conflict-pane-body") as HTMLElement;
+    const preview = body.querySelector(".lc-hub-conflict-preview");
+    const list = body.querySelector(".lc-hub-conflict-list");
+    expect(preview).toBeTruthy();
+    expect(list).toBeTruthy();
+    expect(list!.compareDocumentPosition(preview!)).toBe(Node.DOCUMENT_POSITION_PRECEDING);
   });
 });

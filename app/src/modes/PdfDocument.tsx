@@ -109,7 +109,7 @@ import {
   PDF_REST_CACHE,
   PDF_REST_SCALE,
 } from "../perfPreset";
-import { dropPdfDocument, lendPdfDocument } from "./pdfOpenDocs";
+import { dropPdfDocument, lendPdfDocument, borrowPdfDocument } from "./pdfOpenDocs";
 import { alignTextLayerToGlyphs } from "../util/pdfTextFit";
 
 /**
@@ -250,6 +250,15 @@ export interface PdfDocumentProps {
    * shared film / LRU pointers. Two open books used to fight over one C.
    */
   paused?: boolean;
+  /**
+   * Conflict / preview: this stack scrolls in its own overflow parent, not
+   * on the board camera. Borrow the already-open pdf.js document, keep a
+   * private film scope, and drive C from which page is visible in
+   * {@link scrollRoot}.
+   */
+  standalone?: boolean;
+  /** Overflow parent for standalone IntersectionObserver. */
+  scrollRoot?: HTMLElement | null;
 }
 
 /** Viewport index plus per-page width/height for filmstrip placeholders. */
@@ -492,6 +501,8 @@ export function PdfDocument({
   initialPage = 0,
   paused = false,
   idleThumbs = false,
+  standalone = false,
+  scrollRoot = null,
 }: PdfDocumentProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [pages, setPages] = useState<RenderedPage[]>([]);
@@ -509,6 +520,8 @@ export function PdfDocument({
   pausedRef.current = paused;
   const idleThumbsRef = useRef(idleThumbs);
   idleThumbsRef.current = idleThumbs;
+  const standaloneRef = useRef(standalone);
+  standaloneRef.current = standalone;
   const docHashRef = useRef(docHash);
   docHashRef.current = docHash;
   const thumbCancelRef = useRef<() => void>(() => {});
@@ -572,10 +585,10 @@ export function PdfDocument({
   }, [docHash]);
 
   useEffect(() => {
-    if (paused) return;
+    if (paused || standalone) return;
     setActiveSheetLru(sheetLruRef.current);
     return () => setActiveSheetLru(null);
-  }, [paused]);
+  }, [paused, standalone]);
 
   const dropSlotGpu = () => {
     for (const entry of paintedRef.current.values()) entry.release();
@@ -599,6 +612,8 @@ export function PdfDocument({
     let cancelled = false;
     let lent: NonNullable<typeof docRef.current> | null = null;
     disposedRef.current = false;
+    const borrowed =
+      standalone && docHash ? borrowPdfDocument(docHash) : null;
     // pdf.js transfers the buffer it is handed to the worker, and React may run
     // this effect twice in development — a copy keeps the prop reusable either
     // way. Uint8Array, not the raw ArrayBuffer: a transferred buffer reaches
@@ -607,7 +622,7 @@ export function PdfDocument({
     // reports — and the reader needs the same answer for both. Checked by
     // length rather than by attempting a copy, so a textbook is not duplicated
     // in memory just to ask the question.
-    if (bytes.byteLength === 0) {
+    if (!borrowed && bytes.byteLength === 0) {
       onErrorRef.current?.(
         "this PDF's bytes were released before they could be drawn — pick the file again",
       );
@@ -641,27 +656,31 @@ export function PdfDocument({
         // what it recorded, so leaving it to `GlobalWorkerOptions.workerPort`
         // means closing one document tears down the worker every other
         // document is still using.
-        const task = pdfjs.getDocument({
-          data: new Uint8Array(bytes.slice(0)),
-          worker: pdfWorker(pdfjs),
-          ...pdfJsDataUrls(),
-          cMapPacked: true,
-        });
-        const doc = await task.promise;
-        if (cancelled) {
-          try {
-            void task.destroy();
-          } catch {
-            /* already torn down */
+        let doc = borrowed;
+        if (!doc) {
+          const task = pdfjs.getDocument({
+            data: new Uint8Array(bytes.slice(0)),
+            worker: pdfWorker(pdfjs),
+            ...pdfJsDataUrls(),
+            cMapPacked: true,
+          });
+          doc = await task.promise;
+          if (cancelled) {
+            try {
+              void task.destroy();
+            } catch {
+              /* already torn down */
+            }
+            return;
           }
-          return;
+          taskRef.current = task;
+          if (docHash) {
+            lendPdfDocument(docHash, doc);
+            lent = doc;
+          }
         }
-        taskRef.current = task;
+        if (cancelled) return;
         docRef.current = doc;
-        if (docHash) {
-          lendPdfDocument(docHash, doc);
-          lent = doc;
-        }
         textLayerRef.current = pdfjs.TextLayer;
 
         const naturals: PdfPageNatural[] = [];
@@ -738,7 +757,7 @@ export function PdfDocument({
         }
       }
     };
-  }, [bytes, docHash]);
+  }, [bytes, docHash, standalone]);
 
   /**
    * Two-up / column width: relayout from MediaBoxes already in memory.
@@ -775,6 +794,7 @@ export function PdfDocument({
   useEffect(() => {
     const host = hostRef.current;
     if (paused || !host || pages.length === 0) return;
+    if (standalone && !scrollRoot) return;
     const slots = Array.from(host.querySelectorAll<HTMLElement>("[data-pdf-page]"));
     if (slots.length === 0) return;
     const last = pages[pages.length - 1].pageNumber;
@@ -848,6 +868,16 @@ export function PdfDocument({
       }
       visibleRef.current = nextPages;
       visibleRatioRef.current = nextRatios;
+      if (!standaloneRef.current) return;
+      let bestPage = 0;
+      let bestRatio = 0;
+      for (const [n, ratio] of nextRatios) {
+        if (ratio > bestRatio) {
+          bestRatio = ratio;
+          bestPage = n;
+        }
+      }
+      if (bestPage >= 1) publishPdfFilmCurrent(filmScope, bestPage);
     };
 
     const observer = new IntersectionObserver(
@@ -866,10 +896,13 @@ export function PdfDocument({
          * Rebuilding the paint window mid-coast is the hitch. Film current
          * already published above without Workspace setState.
          */
-        if (isDocCameraLive()) return;
+        if (!standaloneRef.current && isDocCameraLive()) return;
         rebuild();
       },
-      { rootMargin: PAGE_VISIBLE_MARGIN },
+      {
+        root: standalone && scrollRoot ? scrollRoot : undefined,
+        rootMargin: PAGE_VISIBLE_MARGIN,
+      },
     );
     for (const slot of slots) observer.observe(slot);
     let idlePathTimer = 0;
@@ -953,7 +986,7 @@ export function PdfDocument({
       unsubLive();
       observer.disconnect();
     };
-  }, [pages, paused]);
+  }, [pages, paused, standalone, scrollRoot, filmScope]);
 
   /*
    * Nav outlives a relayout.
