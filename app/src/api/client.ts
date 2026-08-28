@@ -890,9 +890,22 @@ export class LcClient {
     hash: string,
     body: { name: string; doc_type: string; source_text?: string },
   ): Promise<{ indexed: boolean }> {
+    /*
+     * Hub-only, and said so rather than asserted.
+     *
+     * This used to be `loadPadHub()!`. There is no local route for it — the
+     * whole point is that the hub extracts from its own copy of the bytes —
+     * but force-unwrapping turned "no hub is configured" into a null
+     * dereference inside the fetch, which reached the reader as a stack shape
+     * rather than the one sentence that would have explained it.
+     */
+    const hub = loadPadHub();
+    if (!hub) {
+      throw new Error("no hub is set — add one in Settings before indexing there");
+    }
     const result = await hubJson<
       { status?: { indexed?: boolean } } | null
-    >(loadPadHub()!, "POST", `/docs/${encodeURIComponent(hash)}/index-from-bytes`, body);
+    >(hub, "POST", `/docs/${encodeURIComponent(hash)}/index-from-bytes`, body);
     if (!result) return { indexed: true };
     return { indexed: result.status?.indexed === true };
   }

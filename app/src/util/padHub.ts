@@ -4,6 +4,14 @@
  */
 
 export const PAD_HUB_KEY = "whiteboard.padHub.v1";
+
+/**
+ * The configured hub changed. Same idiom as the autosync preference.
+ *
+ * Anything that only exists when there is a hub — the Sync pill — has to hear
+ * about it, or setting one in Settings does nothing visible until a remount.
+ */
+export const PAD_HUB_EVENT = "lc-pad-hub";
 export const PAD_SYNC_SINCE_KEY = "whiteboard.padSync.since.v1";
 
 export interface PadHub {
@@ -38,6 +46,9 @@ export function savePadHub(hub: PadHub | null): void {
     else localStorage.removeItem(PAD_HUB_KEY);
     const same = prev?.url === next?.url && prev?.token === next?.token;
     if (!same) localStorage.removeItem(PAD_SYNC_SINCE_KEY);
+    if (!same && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(PAD_HUB_EVENT));
+    }
   } catch {
     /* private browsing */
   }

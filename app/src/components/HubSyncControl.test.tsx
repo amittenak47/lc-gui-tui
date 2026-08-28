@@ -1,12 +1,13 @@
 /**
  * @vitest-environment jsdom
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
 import { HubSyncControl, type HubSyncWalkHost } from "./HubSyncControl";
 import type { LcClient } from "../api/client";
+import { PAD_HUB_KEY } from "../util/padHub";
 
 function mount() {
   const host = document.createElement("div");
@@ -134,6 +135,31 @@ describe("HubSyncControl (step-2 stub)", () => {
   });
 
   describe("walk (stages A–D live)", () => {
+    /*
+     * A wired pill only exists where there is a hub — see `HubSyncControl`.
+     * Every stage below talks to one, so the tests say so out loud.
+     */
+    beforeEach(() => {
+      // This harness's jsdom has no `localStorage`, so the hub is stubbed in
+      // rather than written — same read path, no dependency on the shim.
+      const store = new Map<string, string>([
+        [PAD_HUB_KEY, JSON.stringify({ url: "http://hub.test", token: "t" })],
+      ]);
+      vi.stubGlobal("localStorage", {
+        get length() {
+          return store.size;
+        },
+        clear: () => store.clear(),
+        getItem: (key: string) => store.get(key) ?? null,
+        key: (i: number) => [...store.keys()][i] ?? null,
+        removeItem: (key: string) => void store.delete(key),
+        setItem: (key: string, value: string) => void store.set(key, value),
+      });
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
     function fakeClient(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}) {
       const notIndexed = {
         hash: "h",
@@ -190,6 +216,74 @@ describe("HubSyncControl (step-2 stub)", () => {
       act(() => root.render(<HubSyncControl client={client} host={host} />));
       return hostEl.querySelector(".lc-hub-sync") as HTMLButtonElement;
     }
+
+    it("is not offered at all when no hub is configured", async () => {
+      // Every stage talks to a hub. `indexFromBytes` had no local route and
+      // used to force-unwrap the missing one, so tapping this on a device that
+      // syncs with nothing failed on a null dereference at stage C.
+      vi.stubGlobal("localStorage", {
+        length: 0,
+        clear: () => {},
+        getItem: () => null,
+        key: () => null,
+        removeItem: () => {},
+        setItem: () => {},
+      });
+      const client = fakeClient();
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const hostEl = document.createElement("div");
+      document.body.append(hostEl);
+      const root = createRoot(hostEl);
+      act(() => root.render(<HubSyncControl client={client} host={host} />));
+
+      expect(hostEl.querySelector(".lc-hub-sync")).toBeNull();
+      expect(
+        (client as unknown as { pingPadSync: ReturnType<typeof vi.fn> }).pingPadSync,
+      ).not.toHaveBeenCalled();
+      act(() => root.unmount());
+    });
+
+    it("refuses to walk if the hub disappears between mount and tap", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient();
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const button = await mountWalk(client, host);
+
+      // Settings cleared it after this pill mounted; stage A must catch that
+      // rather than letting stage C find out inside the fetch.
+      const empty = {
+        length: 0,
+        clear: () => {},
+        getItem: () => null,
+        key: () => null,
+        removeItem: () => {},
+        setItem: () => {},
+      };
+      vi.stubGlobal("localStorage", empty);
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(button.dataset.stage).toBe("index");
+      expect(button.dataset.error).toContain("no hub");
+      expect(
+        (client as unknown as { indexFromBytes: ReturnType<typeof vi.fn> }).indexFromBytes,
+      ).not.toHaveBeenCalled();
+    });
 
     it("indexes from bytes and lands on Synced after one tap", async () => {
       vi.useFakeTimers();
