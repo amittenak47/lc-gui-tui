@@ -1389,25 +1389,51 @@ export class LcClient {
     );
   }
 
+  /*
+   * Devices live where the pads do.
+   *
+   * These went straight to `invoke`, so every device read and wrote *this
+   * process's* `pads.db` and nothing else. A tablet paired to a PC listed only
+   * itself, the PC listed only whoever had written into it, and neither could
+   * see the other — the roster was per-machine while the library it describes
+   * was shared. Routed like the pads, they land in the same database.
+   *
+   * Not a presence panel: this is who has prefs on the hub, not who is awake.
+   */
   async listDevices(): Promise<DevicePrefsDto[]> {
-    return this.cmd("lc_list_devices");
+    return padInvokeOrHub(() => this.cmd("lc_list_devices"), "GET", "/devices");
   }
 
   async getDevicePrefs(id: string): Promise<DevicePrefsDto | null> {
     try {
-      return await this.cmd("lc_get_device_prefs", { id });
+      return await padInvokeOrHub(
+        () => this.cmd("lc_get_device_prefs", { id }),
+        "GET",
+        `/devices/${encodeURIComponent(id)}/prefs`,
+      );
     } catch (cause) {
+      // Never registered is an answer, not a failure — the caller registers.
       if (cause instanceof LcApiError && cause.status === 404) return null;
       throw cause;
     }
   }
 
   async putDevicePrefs(id: string, body: DevicePrefsDto): Promise<DevicePrefsDto> {
-    return this.cmd("lc_put_device_prefs", { id, body });
+    return padInvokeOrHub(
+      () => this.cmd("lc_put_device_prefs", { id, body }),
+      "PUT",
+      `/devices/${encodeURIComponent(id)}/prefs`,
+      body,
+    );
   }
 
   async cloneDevicePrefs(id: string, role: string): Promise<DevicePrefsDto | null> {
-    return this.cmd("lc_clone_device_prefs", { id, role });
+    return padInvokeOrHub(
+      () => this.cmd("lc_clone_device_prefs", { id, role }),
+      "POST",
+      `/devices/${encodeURIComponent(id)}/clone`,
+      { role },
+    );
   }
 
   private async cmd<T>(

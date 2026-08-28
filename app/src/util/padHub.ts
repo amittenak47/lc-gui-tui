@@ -31,16 +31,61 @@ export interface PadHub {
  */
 export const HUB_MAX_BODY_BYTES = 32 * 1024 * 1024;
 
+/**
+ * A hub address with no scheme is a relative URL, not a host.
+ *
+ * `fetch("192.168.1.10:7878/pads/sync")` resolves against the app's own
+ * origin and quietly asks the tablet about itself, so a walk could sit on Pad
+ * having never reached the PC. Settings shows the PC's address as a bare
+ * `host:port` and that is what people type, so this is the normal case, not a
+ * malformed one.
+ */
+export function normalizeHubUrl(raw: string): string {
+  const url = raw.trim().replace(/\/+$/, "");
+  if (!url) return "";
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : `http://${url}`;
+}
+
 function trimHub(raw: unknown): PadHub | null {
   if (!raw || typeof raw !== "object") return null;
   const row = raw as { url?: unknown; token?: unknown };
-  const url = typeof row.url === "string" ? row.url.trim().replace(/\/+$/, "") : "";
+  const url = typeof row.url === "string" ? normalizeHubUrl(row.url) : "";
   const token = typeof row.token === "string" ? row.token.trim() : "";
   if (!url || !token) return null;
   return { url, token };
 }
 
-export function loadPadHub(): PadHub | null {
+/**
+ * The hub this device is the host of, if it is one.
+ *
+ * Not persisted, and deliberately not the same thing as the hub in Settings.
+ * The desktop that *is* the hub leaves Connect empty on purpose — its card
+ * says "type these into the tablet" — so it had no hub URL, and everything
+ * gated on one was missing there: the Sync pill never mounted, and
+ * `indexFromBytes`, which is hub-HTTP only, had nowhere to go.
+ *
+ * Set at boot from this process's own serve port and token, so the host walks
+ * over loopback against the same `pads.db` the tablet reaches across the LAN.
+ */
+let hostLoopback: PadHub | null = null;
+
+export function setHostLoopback(hub: PadHub | null): void {
+  const next = hub ? trimHub(hub) : null;
+  const same = hostLoopback?.url === next?.url && hostLoopback?.token === next?.token;
+  hostLoopback = next;
+  if (!same && typeof window !== "undefined") {
+    window.dispatchEvent(new Event(PAD_HUB_EVENT));
+  }
+}
+
+/**
+ * The hub someone typed into Settings. Storage only.
+ *
+ * The Connect form reads this rather than {@link loadPadHub} so the host's own
+ * loopback never appears in the fields — filling them in would make the PC
+ * look like it was connecting to some other machine.
+ */
+export function loadSavedPadHub(): PadHub | null {
   try {
     const raw = localStorage.getItem(PAD_HUB_KEY);
     if (!raw) return null;
@@ -50,10 +95,15 @@ export function loadPadHub(): PadHub | null {
   }
 }
 
+/** The hub to talk to: whatever was saved, else this device's own loopback. */
+export function loadPadHub(): PadHub | null {
+  return loadSavedPadHub() ?? hostLoopback;
+}
+
 export function savePadHub(hub: PadHub | null): void {
   try {
     const next = hub ? trimHub(hub) : null;
-    const prev = loadPadHub();
+    const prev = loadSavedPadHub();
     if (next) localStorage.setItem(PAD_HUB_KEY, JSON.stringify(next));
     else localStorage.removeItem(PAD_HUB_KEY);
     const same = prev?.url === next?.url && prev?.token === next?.token;

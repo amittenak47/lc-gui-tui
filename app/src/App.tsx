@@ -76,6 +76,8 @@ import {
   PAD_SYNC_PING_MS,
 } from "./util/padSync";
 import { HUB_AUTOSYNC_EVENT, loadHubAutosyncPref } from "./util/hubAutoSyncPref";
+import { PAD_HUB_EVENT, setHostLoopback } from "./util/padHub";
+import { deviceRole } from "./util/devicePrefs";
 import { singleFlight } from "./util/singleFlight";
 import { bumpRetry, planWorkspaceMounts, workspaceMountKey } from "./util/workspaceMounts";
 import type { WebPadEntry } from "./util/webPadSession";
@@ -191,6 +193,61 @@ export function App() {
     window.addEventListener(HUB_AUTOSYNC_EVENT, onHubAutosync);
     return () => window.removeEventListener(HUB_AUTOSYNC_EVENT, onHubAutosync);
   }, []);
+
+  /*
+   * Put this device on the hub as soon as there is a hub to put it on.
+   *
+   * `ensureDevicePrefs` runs once at boot, against whatever database the
+   * device pointed at then — which for a tablet that had not paired yet was
+   * its own. Pairing in Settings changed where every device call goes and
+   * nothing re-registered, so the PC's roster never learned the tablet existed
+   * and the tablet's list stayed a list of one.
+   */
+  useEffect(() => {
+    if (serverLink !== "online") return;
+    const onHub = () => {
+      void ensureDevicePrefs(client).catch(() => {});
+    };
+    window.addEventListener(PAD_HUB_EVENT, onHub);
+    return () => window.removeEventListener(PAD_HUB_EVENT, onHub);
+  }, [client, serverLink]);
+
+  /*
+   * The desktop that *is* the hub gets a loopback hub of its own.
+   *
+   * Everything hub-shaped is gated on `loadPadHub()`, and the host leaves the
+   * Connect fields empty on purpose — its card says "type these into the
+   * tablet". So on the machine holding the library there was no Sync pill at
+   * all, and `indexFromBytes`, which is hub-HTTP only, had nowhere to send a
+   * document. Pointing the host at its own serve gives it the same walk the
+   * tablet gets, against the very same `pads.db`.
+   *
+   * Desktop only. Android may still carry a serve token in some builds, and a
+   * loopback there would have the tablet syncing with itself instead of the PC.
+   * Never written to storage: this is a fact about the running process, not a
+   * pairing anyone chose.
+   */
+  useEffect(() => {
+    if (serverLink !== "online") return;
+    if (deviceRole() !== "desktop") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const config = await client.getConfig();
+        if (cancelled) return;
+        const token = config.serve_token?.trim();
+        const port = config.serve_port;
+        if (!token || !port) return;
+        setHostLoopback({ url: `http://127.0.0.1:${port}`, token });
+      } catch {
+        /* no serve config — the host simply has no hub of its own */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      setHostLoopback(null);
+    };
+  }, [client, serverLink]);
 
   useEffect(() => {
     if (serverLink !== "online") return;
