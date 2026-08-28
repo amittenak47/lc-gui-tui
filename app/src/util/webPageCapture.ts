@@ -65,7 +65,20 @@ import {
  * views on the same two names for the same reason.
  */
 export const CAPTURE_WEBVIEW_LABEL = "lc-web-capture";
-export const LIVE_WEBVIEW_LABEL = "lc-web-live";
+const LIVE_WEBVIEW_PREFIX = "lc-web-live";
+
+/**
+ * One live view per tab.
+ *
+ * There used to be a single `lc-web-live`, which was survivable only while one
+ * web tab could be open. Two are allowed, and a split shows both at once: every
+ * open closed by label first, so the second pane tore down the first one's page
+ * and then answered questions about navigation and freezing with the wrong
+ * view. The identity is the tab, so the label is too.
+ */
+export function liveWebviewLabel(tabId: string): string {
+  return `${LIVE_WEBVIEW_PREFIX}:${tabId}`;
+}
 const CAPTURE_WIDTH = WEB_PAGE_W;
 const CAPTURE_HEIGHT = 800;
 const LOAD_TIMEOUT_MS = 20_000;
@@ -198,19 +211,19 @@ export interface PaneRect {
  * out "there is no live page" to a caller looking at one. `liveWebviewOpen` is
  * the question that survives both.
  */
-async function liveWebview(): Promise<Webview | null> {
+async function liveWebview(label: string): Promise<Webview | null> {
   if (liveWebviewTransport() !== "wry") return null;
-  return (await Webview.getByLabel(LIVE_WEBVIEW_LABEL)) ?? null;
+  return (await Webview.getByLabel(label)) ?? null;
 }
 
 /** Whether a live page is open, whichever surface is holding it. */
-export async function liveWebviewOpen(): Promise<boolean> {
+export async function liveWebviewOpen(label: string): Promise<boolean> {
   const transport = liveWebviewTransport();
   if (transport === "none") return false;
   if (transport === "android") {
-    return androidWebviewExists(LIVE_WEBVIEW_LABEL);
+    return androidWebviewExists(label);
   }
-  return (await Webview.getByLabel(LIVE_WEBVIEW_LABEL)) != null;
+  return (await Webview.getByLabel(label)) != null;
 }
 
 /**
@@ -221,15 +234,23 @@ export async function liveWebviewOpen(): Promise<boolean> {
  * thing you are about to read once, wrong for one you are looking at, and a
  * plausible reason the old read-once capture was flaky even off-screen.
  */
-export async function openLiveWebview(url: string, rect: PaneRect): Promise<void> {
-  return queued(LIVE_WEBVIEW_LABEL, () => openLiveWebviewNow(url, rect));
+export async function openLiveWebview(
+  label: string,
+  url: string,
+  rect: PaneRect,
+): Promise<void> {
+  return queued(label, () => openLiveWebviewNow(label, url, rect));
 }
 
-async function openLiveWebviewNow(url: string, rect: PaneRect): Promise<void> {
+async function openLiveWebviewNow(
+  label: string,
+  url: string,
+  rect: PaneRect,
+): Promise<void> {
   requireTransport();
-  await closeByLabel(LIVE_WEBVIEW_LABEL);
+  await closeByLabel(label);
   try {
-    await createLiveWebview(url, rect);
+    await createLiveWebview(label, url, rect);
   } catch (cause) {
     /*
      * "Already exists" survives the close above when Tauri's registry and the
@@ -242,19 +263,23 @@ async function openLiveWebviewNow(url: string, rect: PaneRect): Promise<void> {
     if (!/already exists/i.test(cause instanceof Error ? cause.message : String(cause))) {
       throw cause;
     }
-    await closeByLabel(LIVE_WEBVIEW_LABEL);
+    await closeByLabel(label);
     await sleep(120);
-    await createLiveWebview(url, rect);
+    await createLiveWebview(label, url, rect);
   }
 }
 
-async function createLiveWebview(url: string, rect: PaneRect): Promise<void> {
+async function createLiveWebview(
+  label: string,
+  url: string,
+  rect: PaneRect,
+): Promise<void> {
   if (requireTransport() === "android") {
-    await createAndroidWebview(LIVE_WEBVIEW_LABEL, url, rect, { userAgent: CHROME_UA });
+    await createAndroidWebview(label, url, rect, { userAgent: CHROME_UA });
     return;
   }
   const host = getCurrentWindow();
-  const webview = new Webview(host, LIVE_WEBVIEW_LABEL, {
+  const webview = new Webview(host, label, {
     url,
     x: Math.round(rect.x),
     y: Math.round(rect.y),
@@ -274,14 +299,14 @@ async function createLiveWebview(url: string, rect: PaneRect): Promise<void> {
 }
 
 /** Follow the pane. Cheap enough to run from a ResizeObserver. */
-export async function placeLiveWebview(rect: PaneRect): Promise<void> {
+export async function placeLiveWebview(label: string, rect: PaneRect): Promise<void> {
   const transport = liveWebviewTransport();
   if (transport === "none") return;
   if (transport === "android") {
-    await placeAndroidWebview(LIVE_WEBVIEW_LABEL, rect);
+    await placeAndroidWebview(label, rect);
     return;
   }
-  const webview = await liveWebview();
+  const webview = await liveWebview(label);
   if (!webview) return;
   await webview.setPosition(new LogicalPosition(Math.round(rect.x), Math.round(rect.y)));
   await webview.setSize(
@@ -289,14 +314,14 @@ export async function placeLiveWebview(rect: PaneRect): Promise<void> {
   );
 }
 
-export async function showLiveWebview(show: boolean): Promise<void> {
+export async function showLiveWebview(label: string, show: boolean): Promise<void> {
   const transport = liveWebviewTransport();
   if (transport === "none") return;
   if (transport === "android") {
-    await showAndroidWebview(LIVE_WEBVIEW_LABEL, show);
+    await showAndroidWebview(label, show);
     return;
   }
-  const webview = await liveWebview();
+  const webview = await liveWebview(label);
   // Nothing to show or hide is not a failure — a pane can ask before its view
   // has opened, or after the address it was on closed one.
   if (!webview) return;
@@ -304,8 +329,8 @@ export async function showLiveWebview(show: boolean): Promise<void> {
   else await webview.hide();
 }
 
-export async function closeLiveWebview(): Promise<void> {
-  await queued(LIVE_WEBVIEW_LABEL, () => closeByLabel(LIVE_WEBVIEW_LABEL));
+export async function closeLiveWebview(label: string): Promise<void> {
+  await queued(label, () => closeByLabel(label));
 }
 
 /**
@@ -314,21 +339,23 @@ export async function closeLiveWebview(): Promise<void> {
  * The same serialise the read-once capture did, but it leaves the view open —
  * the caller decides whether browsing continues.
  */
-export async function serializeLiveWebview(): Promise<{ url: string; html: string }> {
+export async function serializeLiveWebview(
+  label: string,
+): Promise<{ url: string; html: string }> {
   requireTransport();
   /*
    * Ask whether there is one before talking to it.
    *
-   * The bridge answers "no webview named lc-web-live" when the label is gone,
+   * The bridge answers "no webview named lc-web-live:…" when the label is gone,
    * which is a true statement about the machinery and no use at all to a reader
    * who pressed Freeze. The view can be gone legitimately — a pane unmounting,
    * an address change closing one before the next opens — so this is a race to
    * report plainly rather than a fault to hide.
    */
-  if (!(await liveWebviewOpen())) {
+  if (!(await liveWebviewOpen(label))) {
     throw new Error("the live page has closed — open it again before freezing");
   }
-  return runSerialize(LIVE_WEBVIEW_LABEL, LIVE_SETTLE_MS);
+  return runSerialize(label, LIVE_SETTLE_MS);
 }
 
 /** Wait for load + settle, then serialise. Shared by live and read-once. */
