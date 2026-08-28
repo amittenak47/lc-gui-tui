@@ -147,6 +147,7 @@ import {
 } from "./util/docFootnotes";
 import { footnoteThemeSeed } from "./util/inkPaletteHistory";
 import { hashBytesAsync, loadBinaryDocBytesWithRetry, putDocBytesVerified } from "./util/docBytes";
+import { handOffPickedDoc, takePickedDoc } from "./util/pickedDocHandoff";
 import {
   extractDocumentPages,
   extractedPagesFor,
@@ -2893,6 +2894,14 @@ export function Workspace({
       /** Already computed by the caller that had to key the record on it. */
       hash?: string;
       /**
+       * These bytes are already in the store under `hash`, proved.
+       *
+       * Set by the mount that took them straight from the picker. Writing
+       * them again would copy the whole file for a row that has already been
+       * verified, which is the only thing the second write was ever for.
+       */
+      bytesStored?: boolean;
+      /**
        * The library entry for `docId`, when the caller has already read it.
        *
        * The restore path reads it to decide whether the tab can be opened at
@@ -3033,7 +3042,9 @@ export function Workspace({
          * IndexedDB — has to stop the open rather than land the reader on a
          * blank page with ink floating over nothing.
          */
-        if (bytes) {
+        if (bytes && input.bytesStored) {
+          traceOpen("bytes already stored by the pick", { hash, ms: openMs() });
+        } else if (bytes) {
           traceOpen("saving bytes", { hash, bytes: bytes.byteLength, ms: openMs() });
           await putDocBytesVerified(hash, bytes);
           traceOpen("bytes saved", { hash, ms: openMs() });
@@ -3978,7 +3989,18 @@ export function Workspace({
         await putDocBytesVerified(hash, input.bytes);
         traceOpen("picked bytes saved", { hash });
       }
-      openWorkspace(proposed);
+      /*
+       * Hand the bytes straight on, rather than making the workspace that is
+       * about to mount read the whole file back out of IndexedDB, hash it a
+       * second time and store it a second time. None of those repeats can
+       * learn anything: the bytes have not changed and the row above is
+       * verified — which is the only thing the second write was ever for.
+       *
+       * Keyed on the chip the open actually landed in, not the proposed one:
+       * `openedRecord` may refill an existing tab instead of making this one.
+       */
+      const landed = openWorkspace(proposed);
+      if (input.bytes) handOffPickedDoc(landed.id, hash, input.bytes);
     },
     [askSidecarChoice, openWorkspace],
   );
@@ -7390,14 +7412,27 @@ export function Workspace({
            */
           if (isBinaryDocType(docType)) {
             const hash = entry?.hash ?? tab.hash;
-            const bytes = hash
-              ? await loadBinaryDocBytesWithRetry(hash, (key) => client.getDocBytes(key))
-              : null;
+            /*
+             * Straight from the picker when this mount is that pick.
+             *
+             * Only when the hash agrees: a hand-off for a tab whose record has
+             * since been pointed somewhere else is not this document, and the
+             * store is the thing that remembers.
+             */
+            const handed = takePickedDoc(tab.id);
+            const fresh = handed && hash && handed.hash === hash ? handed : null;
+            const bytes =
+              fresh?.bytes ??
+              (hash
+                ? await loadBinaryDocBytesWithRetry(hash, (key) => client.getDocBytes(key))
+                : null);
             if (bytes) {
               await loadAnnotate({
                 name,
                 docType,
                 bytes,
+                hash: fresh ? fresh.hash : undefined,
+                bytesStored: Boolean(fresh),
                 docId: restoreDocId,
                 existingDoc,
                 tabId: tab.id,
