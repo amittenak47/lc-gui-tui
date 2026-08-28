@@ -19,6 +19,18 @@ export interface PadHub {
   token: string;
 }
 
+/**
+ * The largest request body the hub will accept.
+ *
+ * Must match `MAX_BODY_BYTES` in `src/serve/mod.rs`; the hub sets the same
+ * number as an axum `DefaultBodyLimit` and rejects anything past it. Known
+ * here so a document that can never be uploaded is refused where it is picked
+ * up, rather than failing on the wire and then being queued to fail again.
+ *
+ * Only the hub is capped. A larger PDF still opens locally.
+ */
+export const HUB_MAX_BODY_BYTES = 32 * 1024 * 1024;
+
 function trimHub(raw: unknown): PadHub | null {
   if (!raw || typeof raw !== "object") return null;
   const row = raw as { url?: unknown; token?: unknown };
