@@ -1008,6 +1008,20 @@ export function Workspace({
       onIndexDone: () => {
         setDocIndexStatus("indexed");
         setDocIndexError(null);
+        /*
+         * And the numbers, not only the word.
+         *
+         * The chip's popover reads pages, chunks and embed state off `meta`.
+         * Saying "indexed" without refreshing it left the card describing
+         * whatever was there before the walk — usually nothing at all, for a
+         * document the walk had just indexed.
+         */
+        const hash = indexInputsRef.current?.hash;
+        if (!hash) return;
+        void client
+          .getDocIndex(hash)
+          .then((meta) => setDocIndexMeta(meta))
+          .catch(() => {});
       },
       onIndexError: (message) => {
         if (message) {

@@ -1090,6 +1090,29 @@ export class LcClient {
     });
   }
 
+  /**
+   * Does the hub already hold this document's bytes?
+   *
+   * HEAD, which axum serves off the GET route without a body, so asking costs
+   * a status line rather than a book. The alternative the walk had was to
+   * infer it from the *index* status or from an open-time hint, and neither is
+   * an answer about bytes: a document the hub knows nothing about reads the
+   * same as one whose bytes are there and whose index is not.
+   *
+   * False on any failure, including no hub. The caller's next move is to
+   * upload, and uploading something the hub already has is safe.
+   */
+  async docBytesOnHub(hash: string): Promise<boolean> {
+    const hub = loadPadHub();
+    if (!hub) return false;
+    try {
+      await hubFetch(hub, "HEAD", `/docs/${encodeURIComponent(hash)}/bytes`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async getDocBytes(hash: string): Promise<ArrayBuffer | null> {
     const hub = loadPadHub();
     if (hub) {
