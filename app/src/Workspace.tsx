@@ -1437,6 +1437,23 @@ export function Workspace({
   const padOpenLockRef = useRef(0);
   const browsePickQuietUntilRef = useRef(0);
   const workspaceLoadGenRef = useRef(0);
+  /**
+   * The open in flight, so Cancel can stop the work and not just the answer.
+   *
+   * The generation counter says "ignore whatever comes back". It does not stop
+   * anything: the page-node, paint and layout waits poll for twenty to
+   * twenty-five seconds, holding the document's buffers and the board refs the
+   * whole time, and a reader who pressed Cancel had already moved on. This is
+   * the half that actually ends it.
+   */
+  const workspaceLoadAbortRef = useRef<AbortController | null>(null);
+  /** Start an open. Whatever the last one was still doing, it is over. */
+  const beginWorkspaceLoad = useCallback((): { gen: number; signal: AbortSignal } => {
+    workspaceLoadAbortRef.current?.abort();
+    const controller = new AbortController();
+    workspaceLoadAbortRef.current = controller;
+    return { gen: ++workspaceLoadGenRef.current, signal: controller.signal };
+  }, []);
   /** True while pickProblem / openWhiteboard / openAnnotate is in flight. */
   const [workspaceLoadActive, setWorkspaceLoadActive] = useState(false);
   const beginPadOpen = useCallback(() => {
@@ -2078,7 +2095,7 @@ export function Workspace({
       // `opened` is the honest answer to "did a workspace appear?" — the
       // caller turns a false into the missing-content prompt.
       let opened = false;
-      const loadGen = ++workspaceLoadGenRef.current;
+      const { gen: loadGen } = beginWorkspaceLoad();
       const offline = serverLinkRef.current !== "online";
       const datasetId = bank?.dataset ?? DEFAULT_DATASET;
       const userLoad = opts.userLoad === true;
@@ -2361,6 +2378,7 @@ export function Workspace({
       return opened;
     },
     [
+      beginWorkspaceLoad,
       boardCssWidth,
       client,
       finishLoadingTransition,
@@ -2392,7 +2410,7 @@ export function Workspace({
     }) => {
       if (busy !== null) return;
       beginPadOpen();
-      const loadGen = ++workspaceLoadGenRef.current;
+      const { gen: loadGen } = beginWorkspaceLoad();
       if (opts?.fresh && !opts.notebookId && whiteboardLibraryCount() >= WHITEBOARD_LIBRARY_LIMIT) {
         endPadOpen();
         // Asks again from the top rather than reusing this tab id: the chip is
@@ -2605,7 +2623,7 @@ export function Workspace({
         }
       }
     },
-    [beginPadOpen, busy, client, endPadOpen, finishLoadingTransition, openWorkspace, problem, setShellLoadActive, themeId],
+    [beginPadOpen, beginWorkspaceLoad, busy, client, endPadOpen, finishLoadingTransition, openWorkspace, problem, setShellLoadActive, themeId],
   );
 
   /**
@@ -2925,7 +2943,7 @@ export function Workspace({
         return;
       }
       beginPadOpen();
-      const loadGen = ++workspaceLoadGenRef.current;
+      const { gen: loadGen, signal: loadSignal } = beginWorkspaceLoad();
       annotatePdfErrorRef.current = null;
       traceOpen("start", { name: input.name, docType: input.docType, loadGen, tabId: input.tabId });
       /*
@@ -3353,7 +3371,9 @@ export function Workspace({
             landPage,
             25000,
             pdfFailed,
+            loadSignal,
           );
+          if (workspaceLoadGenRef.current !== loadGen) return;
           if (pdfFailed()) throw new Error(pdfFailed()!);
           if (!pageReady) {
             traceOpen("session PDF page node never appeared", {
@@ -3371,8 +3391,10 @@ export function Workspace({
           let landed = boardRef.current?.scrollToPdfPage(landPage) === true;
           const jumpDeadline = performance.now() + 8000;
           while (!landed && performance.now() < jumpDeadline) {
+            if (loadSignal.aborted || workspaceLoadGenRef.current !== loadGen) return;
             if (pdfFailed()) throw new Error(pdfFailed()!);
             await waitMs(50);
+            if (workspaceLoadGenRef.current !== loadGen) return;
             const filmed = peekPdfFilmCurrent(tab.id);
             if (filmed >= 2) landPage = filmed;
             landed = boardRef.current?.scrollToPdfPage(landPage) === true;
@@ -3392,7 +3414,9 @@ export function Workspace({
             landPage,
             20000,
             pdfFailed,
+            loadSignal,
           );
+          if (workspaceLoadGenRef.current !== loadGen) return;
           if (pdfFailed()) throw new Error(pdfFailed()!);
           traceOpen(
             painted ? "session PDF page painted" : "session PDF page paint timed out",
@@ -3400,12 +3424,15 @@ export function Workspace({
           );
         } else {
           await boardRef.current?.settleFitView();
+          if (workspaceLoadGenRef.current !== loadGen) return;
           let laidOut = await waitForAnnotateLaidOut(
             () => annotateHeightRef.current,
             8000,
             allowZero,
             pdfFailed,
+            loadSignal,
           );
+          if (workspaceLoadGenRef.current !== loadGen) return;
           if (!laidOut && pdfFailed()) {
             throw new Error(pdfFailed()!);
           }
@@ -3416,7 +3443,9 @@ export function Workspace({
               25000,
               allowZero,
               pdfFailed,
+              loadSignal,
             );
+            if (workspaceLoadGenRef.current !== loadGen) return;
           }
           if (!laidOut && pdfFailed() && !(typeof annotateHeightRef.current === "number" && annotateHeightRef.current > 0)) {
             throw new Error(pdfFailed()!);
@@ -3604,6 +3633,7 @@ export function Workspace({
     },
     [
       beginPadOpen,
+      beginWorkspaceLoad,
       client,
       endPadOpen,
       finishLoadingTransition,
@@ -4560,7 +4590,7 @@ export function Workspace({
        * Bumping the gen makes that fetch see a mismatch and bail.
        */
       beginPadOpen();
-      const loadGen = ++workspaceLoadGenRef.current;
+      const { gen: loadGen } = beginWorkspaceLoad();
       const fromBrowse = !problem;
       setShellLoadActive(true);
       setWorkspaceLoadActive(true);
@@ -4644,6 +4674,7 @@ export function Workspace({
     },
     [
       beginPadOpen,
+      beginWorkspaceLoad,
       endPadOpen,
       openWorkspace,
       problem,
@@ -7893,6 +7924,8 @@ export function Workspace({
    */
   const abortLoad = useCallback(async () => {
     workspaceLoadGenRef.current += 1;
+    workspaceLoadAbortRef.current?.abort();
+    workspaceLoadAbortRef.current = null;
     setBusy(null);
     setWorkspaceLoadActive(false);
     const browseOverlay = holdBrowseOverlay || browseMotion !== "idle";

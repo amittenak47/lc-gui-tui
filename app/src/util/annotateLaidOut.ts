@@ -21,6 +21,57 @@ export const ANNOTATE_LAYOUT_SETTLE_MS = 250;
 const PDF_PAGE_POLL_MS = 50;
 
 /**
+ * Poll until `ready`, or until the wait is over for one of the other reasons.
+ *
+ * The `signal` is the one that was missing. Cancel used to bump a generation
+ * counter and tidy the overlay away, which stops the *result* being used but
+ * does not stop the work: these waits run for 20 to 25 seconds, holding the
+ * document's buffers and the board refs the whole time, and the restoration
+ * behind them then carried on against a workspace the reader had already left.
+ */
+function pollUntil(
+  ready: () => boolean,
+  timeoutMs: number,
+  pollMs: number,
+  failed?: () => string | null,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve(false);
+      return;
+    }
+    const deadline = performance.now() + timeoutMs;
+    let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
+    const stop = (answer: boolean) => {
+      if (timer != null) globalThis.clearTimeout(timer);
+      timer = null;
+      signal?.removeEventListener("abort", onAbort);
+      resolve(answer);
+    };
+    const onAbort = () => stop(false);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const tick = () => {
+      timer = null;
+      if (signal?.aborted || failed?.()) {
+        stop(false);
+        return;
+      }
+      if (ready()) {
+        stop(true);
+        return;
+      }
+      if (performance.now() >= deadline) {
+        stop(false);
+        return;
+      }
+      timer = globalThis.setTimeout(tick, pollMs);
+    };
+    tick();
+  });
+}
+
+/**
  * Wait until the session PDF page exists in the stack.
  *
  * Height-only settle fires during the first layout batch's pause, while the
@@ -32,31 +83,19 @@ export function waitForPdfPageNode(
   page: number,
   timeoutMs = 25000,
   failed?: () => string | null,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   const want = Math.floor(Number(page));
   if (!(want >= 1)) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    const deadline = performance.now() + timeoutMs;
-    const tick = () => {
-      if (failed?.()) {
-        resolve(false);
-        return;
-      }
-      if (typeof document !== "undefined") {
-        const node = document.querySelector(`.lc-pdf-page[data-pdf-page="${want}"]`);
-        if (node) {
-          resolve(true);
-          return;
-        }
-      }
-      if (performance.now() >= deadline) {
-        resolve(false);
-        return;
-      }
-      globalThis.setTimeout(tick, PDF_PAGE_POLL_MS);
-    };
-    tick();
-  });
+  return pollUntil(
+    () =>
+      typeof document !== "undefined" &&
+      document.querySelector(`.lc-pdf-page[data-pdf-page="${want}"]`) != null,
+    timeoutMs,
+    PDF_PAGE_POLL_MS,
+    failed,
+    signal,
+  );
 }
 
 /** True once pdf.js (or an LRU blit) has pixels on the session page. */
@@ -64,33 +103,21 @@ export function waitForPdfPagePainted(
   page: number,
   timeoutMs = 20000,
   failed?: () => string | null,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   const want = Math.floor(Number(page));
   if (!(want >= 1)) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    const deadline = performance.now() + timeoutMs;
-    const tick = () => {
-      if (failed?.()) {
-        resolve(false);
-        return;
-      }
-      if (typeof document !== "undefined") {
-        const node = document.querySelector(
-          `.lc-pdf-page[data-pdf-page="${want}"][data-painted]`,
-        );
-        if (node) {
-          resolve(true);
-          return;
-        }
-      }
-      if (performance.now() >= deadline) {
-        resolve(false);
-        return;
-      }
-      globalThis.setTimeout(tick, PDF_PAGE_POLL_MS);
-    };
-    tick();
-  });
+  return pollUntil(
+    () =>
+      typeof document !== "undefined" &&
+      document.querySelector(
+        `.lc-pdf-page[data-pdf-page="${want}"][data-painted]`,
+      ) != null,
+    timeoutMs,
+    PDF_PAGE_POLL_MS,
+    failed,
+    signal,
+  );
 }
 
 /**
@@ -113,14 +140,29 @@ export function waitForAnnotateLaidOut(
   timeoutMs = 8000,
   allowZero = true,
   failed?: () => string | null,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve(false);
+      return;
+    }
     let deadline = performance.now() + timeoutMs;
     let last: number | null = null;
     let since = 0;
+    let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
+    const stop = (answer: boolean) => {
+      if (timer != null) globalThis.clearTimeout(timer);
+      timer = null;
+      signal?.removeEventListener("abort", onAbort);
+      resolve(answer);
+    };
+    const onAbort = () => stop(false);
+    signal?.addEventListener("abort", onAbort, { once: true });
     const tick = () => {
-      if (failed?.()) {
-        resolve(false);
+      timer = null;
+      if (signal?.aborted || failed?.()) {
+        stop(false);
         return;
       }
       const now = performance.now();
@@ -128,7 +170,7 @@ export function waitForAnnotateLaidOut(
       if (annotateHeightIsSettled(height, allowZero)) {
         if (last != null && Math.abs(height! - last) < 1) {
           if (now - since >= ANNOTATE_LAYOUT_SETTLE_MS) {
-            resolve(true);
+            stop(true);
             return;
           }
         } else {
@@ -138,10 +180,10 @@ export function waitForAnnotateLaidOut(
         }
       }
       if (now >= deadline) {
-        resolve(false);
+        stop(false);
         return;
       }
-      globalThis.setTimeout(tick, 50);
+      timer = globalThis.setTimeout(tick, 50);
     };
     tick();
   });
