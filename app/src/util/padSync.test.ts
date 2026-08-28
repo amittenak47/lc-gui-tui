@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LcApiError, type LcClient } from "../api/client";
 import {
+  annotatePadBody,
+  applyHubAnnotate,
   applyPadSyncPing,
   deletePadEverywhere,
   enqueuePadSync,
@@ -102,6 +104,17 @@ vi.mock("./hubAutoSyncPref", () => ({
   loadHubAutosync: () => hubAutosyncState.on,
 }));
 
+const footnoteBoardMocks = vi.hoisted(() => ({
+  applyFootnoteBoards: vi.fn(async (_docId?: string, _boards?: unknown) => {}),
+  collectFootnoteBoards: vi.fn(async (_docId?: string, _footnotes?: unknown) => ({})),
+}));
+vi.mock("./footnoteWhiteboardStore", () => ({
+  applyFootnoteBoards: (docId: string, boards: unknown) =>
+    footnoteBoardMocks.applyFootnoteBoards(docId, boards),
+  collectFootnoteBoards: (docId: string, footnotes: unknown) =>
+    footnoteBoardMocks.collectFootnoteBoards(docId, footnotes),
+}));
+
 vi.mock("./padSnapshotStore", () => ({
   PAD_SNAPSHOT_TIERS: [
     { id: "2h", maxAgeMs: 1, label: "2 hours" },
@@ -144,6 +157,9 @@ beforeEach(() => {
   resetPadSyncQueueForTests();
   resetCameraBusyForTests();
   hubAutosyncState.on = true;
+  footnoteBoardMocks.applyFootnoteBoards.mockClear();
+  footnoteBoardMocks.collectFootnoteBoards.mockClear();
+  footnoteBoardMocks.collectFootnoteBoards.mockResolvedValue({});
   restoreWhiteboardNotebook.mockClear();
   restoreAnnotateDoc.mockClear();
   deleteWhiteboardNotebook.mockClear();
@@ -842,5 +858,62 @@ describe("live PUT CAS and gone", () => {
     });
     await applyPadSyncPing(client);
     expect(peekPadSyncQueueForTests()).toHaveLength(0);
+  });
+});
+
+describe("applyHubAnnotate footnote boards", () => {
+  it("puts collected boards on the annotate PUT body", async () => {
+    const boards = {
+      "wb-1": { board: emptyBoard, pageCount: 1 },
+    };
+    footnoteBoardMocks.collectFootnoteBoards.mockResolvedValue(boards);
+    const body = await annotatePadBody({
+      id: "a1",
+      name: "n.md",
+      hash: "h",
+      docType: "markdown",
+      updatedAt: 40,
+      source: "#",
+      footnotes: [
+        {
+          id: "f1",
+          kind: "note",
+          anchor: { kind: "text", start: 0, end: 1 },
+          excerpt: "x",
+          createdAt: 1,
+          whiteboards: [{ id: "wb-1", createdAt: 1, updatedAt: 1 }],
+        },
+      ],
+      board: emptyBoard,
+      agent: [],
+    });
+    expect(footnoteBoardMocks.collectFootnoteBoards).toHaveBeenCalledWith("a1", expect.any(Array));
+    expect(body.footnote_boards).toEqual(boards);
+  });
+
+  it("writes footnote_boards into the KV store", async () => {
+    const boards = {
+      "wb-1": {
+        board: { v: 1 as const, elements: [{ id: "scratch" }], appState: { scrollX: 0, scrollY: 0, zoom: 1 } },
+        pageCount: 1,
+      },
+    };
+    await applyHubAnnotate(
+      {
+        id: "a1",
+        name: "n.md",
+        hash: "h",
+        doc_type: "markdown",
+        updated_at: 40,
+        source: "#",
+        footnotes: [{ id: "f1", kind: "note", whiteboards: [{ id: "wb-1" }] }],
+        board: emptyBoard,
+        agent: [],
+        footnote_boards: boards,
+      },
+      { emitReload: false },
+    );
+    expect(restoreAnnotateDoc).toHaveBeenCalled();
+    expect(footnoteBoardMocks.applyFootnoteBoards).toHaveBeenCalledWith("a1", boards);
   });
 });

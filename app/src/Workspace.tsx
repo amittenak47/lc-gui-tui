@@ -16,7 +16,7 @@ import { createPortal } from "react-dom";
 
 import { useShell } from "./shellContext";
 
-import { LcApiError, type DocIndexStatus, type ProposedAnnotation, type SearchOptions } from "./api/client";
+import { LcApiError, type AnnotatePadDto, type DocIndexStatus, type ProposedAnnotation, type SearchOptions } from "./api/client";
 import { AmbientCoach, defaultCoachSocketFactory, type AmbientProbe } from "./api/coachSocket";
 import { isTauriRuntime } from "./api/nativeHttp";
 import { liveWebviewSupported } from "./util/liveWebviewSupport";
@@ -62,7 +62,7 @@ import {
 import { loadBoardComponent, peekBoardComponent, type BoardComponent } from "./canvas/boardChunk";
 import { inkOpsFrom } from "./canvas/inkCodec";
 import { drainDirtyInkArchives } from "./canvas/inkArchiveClient";
-import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
+import type { BoardHandle, BoardBlob, ScreenRect } from "./canvas/BoardHandle";
 import { studentAuthoredElements, studentElements } from "./canvas/capture";
 import type { StructureBaseline } from "./canvas/boardDelta";
 import {
@@ -123,6 +123,7 @@ import { RevealDialog } from "./modes/RevealDialog";
 import { buildProblemTemplate } from "./templates/problemBoard";
 import {
   buildWhiteboardTemplate,
+  buildScratchPageSkeletons,
   countWhiteboardPages,
   WHITEBOARD_DATASET,
   WHITEBOARD_TASK_ID,
@@ -177,6 +178,7 @@ import {
 import {
   HOME_TAB_ID,
   activeTab as activeTabOf,
+  isFootnoteBoardTab,
   newTabId,
   webTabTitle,
   type TabRecord,
@@ -298,8 +300,18 @@ import {
   tombstonePad,
   type PadHubWindowDetail,
 } from "./util/padSync";
-import { loadPadHub, loadPadSyncSince } from "./util/padHub";
 import { annotatePadBody, whiteboardPadBody } from "./util/padSync";
+import { loadPadHub, loadPadSyncSince } from "./util/padHub";
+import {
+  applyFootnoteBoards,
+  deleteFootnoteWhiteboard,
+  emitFootnoteWhiteboardSaved,
+  FNWB_SAVED_EVENT,
+  getFootnoteWhiteboard,
+  putFootnoteWhiteboard,
+  forkSharedWhiteboardPointers,
+  type FootnoteWhiteboardContent,
+} from "./util/footnoteWhiteboardStore";
 import type {
   HubConflictResolution,
   HubPadConflict,
@@ -320,6 +332,8 @@ import {
   annotateDocKey,
   putInkPages,
   whiteboardDocKey,
+  deleteInkPages,
+  footnoteWhiteboardDocKey,
 } from "./util/inkPageStore";
 import { getPadSnapshot, type PadSnapshotTier } from "./util/padSnapshotStore";
 import {
@@ -598,6 +612,7 @@ export function Workspace({
     openWorkspace,
     focusTab,
     closeTab,
+    splitTabs,
     patchTab,
     webPush,
     webStep,
@@ -630,6 +645,9 @@ export function Workspace({
   const [whiteboardNotebookId, setWhiteboardNotebookId] = useState<string | null>(null);
   const whiteboardNotebookIdRef = useRef<string | null>(null);
   whiteboardNotebookIdRef.current = whiteboardNotebookId;
+  const footnoteBoardRef = useRef(isFootnoteBoardTab(tab) ? tab.footnoteBoard : undefined);
+  footnoteBoardRef.current = isFootnoteBoardTab(tab) ? tab.footnoteBoard : undefined;
+  const footnoteBoardBaselineRef = useRef<FootnoteWhiteboardContent | null>(null);
   const padHubApplyRef = useRef(false);
   const [whiteboardEntryOpen, setWhiteboardEntryOpen] = useState(false);
   /**
@@ -775,6 +793,13 @@ export function Workspace({
   const [openFootnoteId, setOpenFootnoteId] = useState<string | null>(null);
   const [footnoteOpenThreadId, setFootnoteOpenThreadId] = useState<string | null>(null);
   const [footnoteAnchorRect, setFootnoteAnchorRect] = useState<DOMRect | null>(null);
+  const [footnoteBoardSession, setFootnoteBoardSession] = useState<{
+    footnoteId: string;
+    wbId: string;
+    stashed: BoardBlob;
+  } | null>(null);
+  const footnoteBoardSessionRef = useRef(footnoteBoardSession);
+  footnoteBoardSessionRef.current = footnoteBoardSession;
   const [subMarkMode, setSubMarkMode] = useState<DocFootnoteSubMarkKind | null>(null);
   const [hoveredSubMarkId, setHoveredSubMarkId] = useState<string | null>(null);
   const [activeSubMarkId, setActiveSubMarkId] = useState<string | null>(null);
@@ -894,6 +919,25 @@ export function Workspace({
           if (c.kind === "annotate" && resolution.pick === "merged" && resolution.footnotes) {
             const doc = await getAnnotateDoc(c.id);
             if (doc) {
+              const localBoards = (c.local as AnnotatePadDto | null)?.footnote_boards;
+              const serverBoards = (c.server as AnnotatePadDto | null)?.footnote_boards;
+              if (serverBoards) {
+                await applyFootnoteBoards(
+                  c.id,
+                  serverBoards as Record<string, FootnoteWhiteboardContent>,
+                );
+              }
+              if (localBoards) {
+                await applyFootnoteBoards(
+                  c.id,
+                  localBoards as Record<string, FootnoteWhiteboardContent>,
+                );
+              }
+              const footnotes = await forkSharedWhiteboardPointers(
+                c.id,
+                resolution.footnotes,
+                serverBoards as Record<string, FootnoteWhiteboardContent> | undefined,
+              );
               await saveAnnotateDoc({
                 id: doc.id,
                 name: doc.name,
@@ -901,7 +945,7 @@ export function Workspace({
                 docType: doc.docType,
                 source: doc.source,
                 board: doc.board,
-                footnotes: resolution.footnotes,
+                footnotes,
                 agent: doc.agent,
               });
             }
@@ -978,6 +1022,7 @@ export function Workspace({
        * boards that are not a hub pad (home, problem sets for now).
        */
       pad: async () => {
+        if (footnoteBoardRef.current) return null;
         // Refs, not the first-render `problem`: this host object is created
         // once, and a whiteboard opened later would otherwise look like
         // "no pad" for the rest of the tab's life.
@@ -1459,7 +1504,13 @@ export function Workspace({
       const board = boardRef.current;
       if (!board || board.isInking()) return;
       const source = annotateSourceRef.current;
-      const key = source
+      const session = footnoteBoardSessionRef.current;
+      const fnBind = footnoteBoardRef.current;
+      const key = session && annotateDocIdRef.current
+        ? footnoteWhiteboardDocKey(annotateDocIdRef.current, session.wbId)
+        : fnBind
+        ? footnoteWhiteboardDocKey(fnBind.docId, fnBind.wbId)
+        : source
         ? annotateDocIdRef.current
           ? annotateDocKey(annotateDocIdRef.current)
           : null
@@ -1485,6 +1536,23 @@ export function Workspace({
       document.removeEventListener("visibilitychange", onHidden);
     };
   }, [whiteboardNotebookId]);
+
+  useEffect(() => {
+    const onSaved = (event: Event) => {
+      const detail = (event as CustomEvent<{ docId: string; wbId: string }>).detail;
+      if (!detail || detail.docId !== annotateDocIdRef.current) return;
+      setAnnotateFootnotes((current) =>
+        current.map((entry) => ({
+          ...entry,
+          whiteboards: (entry.whiteboards ?? []).map((row) =>
+            row.id === detail.wbId ? { ...row, updatedAt: Date.now() } : row,
+          ),
+        })),
+      );
+    };
+    window.addEventListener(FNWB_SAVED_EVENT, onSaved);
+    return () => window.removeEventListener(FNWB_SAVED_EVENT, onSaved);
+  }, []);
 
   /** In-process daemon is assumed up; this flag still gates pad sync / tests. */
 
@@ -2129,9 +2197,25 @@ export function Workspace({
         // refused. One attempt per change is the most that can ever help.
         lastSavedHashRef.current = hash;
         lastSavedMarksRef.current = marks;
-        const docKey = annotateDocIdRef.current
-          ? annotateDocKey(annotateDocIdRef.current)
-          : null;
+        const session = footnoteBoardSessionRef.current;
+        const docId = annotateDocIdRef.current;
+        if (session && docId) {
+          const sessionKey = footnoteWhiteboardDocKey(docId, session.wbId);
+          void (async () => {
+            await flushDirtyInk(board, sessionKey);
+            const liveBoard = board.saveBoard({ assembleInk: true });
+            try {
+              await putFootnoteWhiteboard(docId, session.wbId, {
+                board: liveBoard,
+                pageCount: 1,
+              });
+            } catch (cause: unknown) {
+              noteStorageFull(cause);
+            }
+          })();
+          return;
+        }
+        const docKey = docId ? annotateDocKey(docId) : null;
         void (async () => {
           await flushDirtyInk(board, docKey);
           const liveBoard = board.saveBoard({ assembleInk: false });
@@ -2205,6 +2289,29 @@ export function Workspace({
       if (!isLocalPad(problem)) patchTab(tab.id, { dirty: true });
       if (isWhiteboard(problem)) {
         lastSavedHashRef.current = hash;
+        const fnBind = footnoteBoardRef.current;
+        if (fnBind) {
+          void (async () => {
+            const sessionKey = footnoteWhiteboardDocKey(fnBind.docId, fnBind.wbId);
+            await flushDirtyInk(board, sessionKey);
+            const liveBoard = board.saveBoard({ assembleInk: true });
+            try {
+              await putFootnoteWhiteboard(fnBind.docId, fnBind.wbId, {
+                board: liveBoard,
+                pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
+              });
+              footnoteBoardBaselineRef.current = {
+                board: liveBoard,
+                pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
+              };
+              emitFootnoteWhiteboardSaved(fnBind.docId, fnBind.wbId);
+              announceAutosave(tab.id, "Whiteboard");
+            } catch (cause: unknown) {
+              noteStorageFull(cause);
+            }
+          })();
+          return;
+        }
         void (async () => {
           const liveBoard = board.saveBoard({ assembleInk: false });
           try {
@@ -2601,6 +2708,7 @@ export function Workspace({
       fresh?: boolean;
       tabId: string;
       userLoad?: boolean;
+      footnoteBoard?: { docId: string; wbId: string };
       /**
        * The notebook row, when the caller has already read it.
        *
@@ -2614,7 +2722,12 @@ export function Workspace({
     }) => {
       beginPadOpen();
       const { gen: loadGen } = beginWorkspaceLoad();
-      if (opts?.fresh && !opts.notebookId && whiteboardLibraryCount() >= WHITEBOARD_LIBRARY_LIMIT) {
+      if (
+        opts?.fresh &&
+        !opts.notebookId &&
+        !opts.footnoteBoard &&
+        whiteboardLibraryCount() >= WHITEBOARD_LIBRARY_LIMIT
+      ) {
         endPadOpen();
         // Asks again from the top rather than reusing this tab id: the chip is
         // withdrawn when a load bails, so by resume time that id is gone.
@@ -2689,17 +2802,41 @@ export function Workspace({
         const dark = isDarkTheme(themeId);
         let restored = false;
         let notebookId: string | null = opts?.notebookId ?? null;
+        let fnSaved: FootnoteWhiteboardContent | null = null;
 
         // Read once and kept: the entry is used for the restore, for the
         // discard baseline, and again for the ink re-apply after the layer
         // mounts. Three reads of the same record would be three trips to the
         // store for a value that cannot have changed in between.
-        const notebook = opts?.fresh || !notebookId
+        const notebook = opts.footnoteBoard
+          ? null
+          : opts?.fresh || !notebookId
           ? null
           : opts.existing !== undefined
             ? opts.existing
             : await getWhiteboardNotebook(notebookId);
-        if (notebookId) {
+        if (opts.footnoteBoard) {
+          notebookId = null;
+          fnSaved = await getFootnoteWhiteboard(opts.footnoteBoard.docId, opts.footnoteBoard.wbId);
+          footnoteBoardBaselineRef.current = fnSaved;
+          if (fnSaved?.board?.elements) {
+            const pages = Math.min(
+              WHITEBOARD_PAGE_LIMIT,
+              Math.max(1, fnSaved.pageCount, countWhiteboardPages(fnSaved.board.elements)),
+            );
+            const skeletons = buildWhiteboardTemplate(pages, dark);
+            boardRef.current?.restoreBoard(fnSaved.board.elements, fnSaved.board.appState, {
+              skeletons,
+              ink: inkOpsFrom(fnSaved.board),
+              files: fnSaved.board.files,
+              inkPalettes: fnSaved.board.inkPalettes,
+            });
+            setWhiteboardPageCount(pages);
+            setWhiteboardNotebookId(null);
+            patchTab(tabId, { title: "Whiteboard" });
+            restored = true;
+          }
+        } else if (notebookId) {
           if (notebook) {
             const pages = Math.min(
               WHITEBOARD_PAGE_LIMIT,
@@ -2723,7 +2860,9 @@ export function Workspace({
         }
 
         if (!restored) {
-          const skeletons = buildWhiteboardTemplate(1, dark);
+          const skeletons = opts.footnoteBoard
+            ? buildScratchPageSkeletons(0, dark)
+            : buildWhiteboardTemplate(1, dark);
           boardRef.current?.seedTemplate(skeletons);
           setWhiteboardPageCount(1);
           setWhiteboardNotebookId(null);
@@ -2733,8 +2872,8 @@ export function Workspace({
         // A blank notebook has no baseline, and that is the point: discarding
         // one means deleting whatever the autosave went on to create for it.
         whiteboardBaselineRef.current = {
-          id: restored ? notebookId : null,
-          entry: restored ? notebook : null,
+          id: restored && !opts.footnoteBoard ? notebookId : null,
+          entry: restored && !opts.footnoteBoard ? notebook : null,
         };
 
         boardRef.current?.applyThemeInk(themeId);
@@ -2754,6 +2893,15 @@ export function Workspace({
         if (restored && notebook) {
           const handle = boardRef.current;
           if (handle) await restoreInk(handle, whiteboardDocKey(notebook.id), notebook.board);
+        } else if (restored && fnSaved && opts.footnoteBoard) {
+          const handle = boardRef.current;
+          if (handle) {
+            await restoreInk(
+              handle,
+              footnoteWhiteboardDocKey(opts.footnoteBoard.docId, opts.footnoteBoard.wbId),
+              fnSaved.board,
+            );
+          }
         }
         await boardRef.current?.settleFitView();
 
@@ -2814,7 +2962,7 @@ export function Workspace({
         endWorkspaceLoad(loadGen, "whiteboard");
       }
     },
-    [beginPadOpen, beginWorkspaceLoad, client, endPadOpen, endWorkspaceLoad, finishLoadingTransition, openWorkspace, problem, setShellLoadActive, themeId],
+    [beginPadOpen, beginWorkspaceLoad, client, endPadOpen, endWorkspaceLoad, finishLoadingTransition, openWorkspace, patchTab, problem, setShellLoadActive, themeId],
   );
 
   /**
@@ -2912,7 +3060,7 @@ export function Workspace({
       if (open.kind === "home") continue;
       if (open.kind === "practice") {
         add({ type: "practice", id: `${open.dataset}/${open.taskId}`, title: open.title }, "Open tabs");
-      } else if (open.kind === "whiteboard" && open.notebookId) {
+      } else if (open.kind === "whiteboard" && open.notebookId && !isFootnoteBoardTab(open)) {
         add({ type: "whiteboard", id: open.notebookId, title: open.title }, "Open tabs");
       } else if (open.kind === "annotate" && open.docId) {
         add({ type: "annotate", id: open.docId, title: open.title }, "Open tabs");
@@ -4346,6 +4494,7 @@ export function Workspace({
     const source = annotateSource;
     const id = annotateDocIdRef.current;
     if (!source || !id || !annotateOwned) return false;
+    if (footnoteBoardSessionRef.current) return false;
     const next = editBufferRef.current;
     if (next.length > CODE_SOURCE_MAX_CHARS) {
       setError(
@@ -6708,10 +6857,26 @@ export function Workspace({
         return;
       }
       if (isWhiteboard(problem)) {
+        const board = boardRef.current;
+        const fnBind = footnoteBoardRef.current;
+        if (fnBind) {
+          if (!board) return;
+          void (async () => {
+            await flushDirtyInk(board, footnoteWhiteboardDocKey(fnBind.docId, fnBind.wbId));
+            const packed = board.saveBoard({ assembleInk: true });
+            await putFootnoteWhiteboard(fnBind.docId, fnBind.wbId, {
+              board: packed,
+              pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(packed.elements)),
+            });
+            emitFootnoteWhiteboardSaved(fnBind.docId, fnBind.wbId);
+          })().catch((cause: unknown) => {
+            noteStorageFull(cause);
+          });
+          return;
+        }
         // Board autosave only writes when the scene + ink fingerprint moves, so
         // a chat-only exchange would otherwise be lost. Write the notebook with
         // the current board so the thread survives a crash or a closed lid.
-        const board = boardRef.current;
         const blob = board?.saveBoard();
         if (!blob) return;
         void saveWhiteboardNotebook({
@@ -6927,10 +7092,37 @@ export function Workspace({
    * `onFull` is how the caller says what to reopen once a full library has been
    * pruned, since that differs between the sheet and the header.
    */
+  const saveFootnoteBoardNow = useCallback(async (opts?: { quiet?: boolean }) => {
+    const bind = footnoteBoardRef.current;
+    const board = boardRef.current;
+    if (!bind || !board) return;
+    const key = footnoteWhiteboardDocKey(bind.docId, bind.wbId);
+    await flushDirtyInk(board, key);
+    const liveBoard = board.saveBoard({ assembleInk: true });
+    const pageCount = Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements));
+    await putFootnoteWhiteboard(bind.docId, bind.wbId, { board: liveBoard, pageCount });
+    footnoteBoardBaselineRef.current = { board: liveBoard, pageCount };
+    whiteboardPristineHashRef.current = padContentFingerprint(
+      board.getElements(),
+      board.getInkOpCount(),
+    );
+    emitFootnoteWhiteboardSaved(bind.docId, bind.wbId);
+    patchTab(tab.id, { dirty: false });
+    if (!opts?.quiet) setNotice("Whiteboard saved.");
+  }, [patchTab, setNotice, tab.id, whiteboardPageCount]);
+
   const saveWhiteboardNow = useCallback(
     async (onFull?: () => void, opts?: { quiet?: boolean }) => {
       const board = boardRef.current;
       if (!board || !problem || !isWhiteboard(problem)) return;
+      if (footnoteBoardRef.current) {
+        try {
+          await saveFootnoteBoardNow({ quiet: opts?.quiet });
+        } catch (cause) {
+          setError(messageOf(cause));
+        }
+        return;
+      }
       try {
         await flushDirtyInk(board, whiteboardNotebookId ? whiteboardDocKey(whiteboardNotebookId) : null);
         const liveBoard = board.saveBoard({ assembleInk: false });
@@ -6964,10 +7156,22 @@ export function Workspace({
         setError(messageOf(cause));
       }
     },
-    [agentMessages, problem, rebaselineWhiteboardSession, whiteboardNotebookId, whiteboardPageCount, client],
+    [agentMessages, problem, rebaselineWhiteboardSession, saveFootnoteBoardNow, whiteboardNotebookId, whiteboardPageCount, client],
   );
 
   const discardWhiteboardSession = useCallback(() => {
+    const fnBind = footnoteBoardRef.current;
+    if (fnBind) {
+      const baseline = footnoteBoardBaselineRef.current;
+      if (baseline) {
+        void putFootnoteWhiteboard(fnBind.docId, fnBind.wbId, baseline).catch(() => {});
+      } else {
+        void deleteFootnoteWhiteboard(fnBind.docId, fnBind.wbId).catch(() => {});
+      }
+      footnoteBoardBaselineRef.current = null;
+      whiteboardPristineHashRef.current = null;
+      return;
+    }
     const baseline = whiteboardBaselineRef.current;
     // Fire-and-forget, as with the document pad: the session is torn down
     // below regardless, and Discard should not wait on a store write.
@@ -7051,13 +7255,72 @@ export function Workspace({
     footnoteCoachUpgradeRef.current = null;
     setOpenFootnoteId(null);
     setFootnoteAnchorRect(null);
+    const session = footnoteBoardSessionRef.current;
+    if (session && annotateDocId) {
+      void deleteFootnoteWhiteboard(annotateDocId, session.wbId).catch(() => {});
+    }
+    setFootnoteBoardSession(null);
   }, [annotateDocId]);
+
+  const restoreDocumentBoard = useCallback(async (stashed: BoardBlob) => {
+    const handle = boardRef.current;
+    const docId = annotateDocIdRef.current;
+    if (!handle) return;
+    handle.restoreBoard(stashed.elements, stashed.appState, {
+      files: stashed.files,
+      inkPalettes: stashed.inkPalettes,
+      ink: inkOpsFrom(stashed),
+    });
+    await restoreInk(handle, docId ? annotateDocKey(docId) : null, stashed);
+    handle.applyThemeInk(themeId);
+    await handle.settleFitView();
+  }, [themeId]);
+
+  const closeFootnoteBoardSession = useCallback(async (reopenOverview = true) => {
+    const session = footnoteBoardSessionRef.current;
+    const handle = boardRef.current;
+    const docId = annotateDocIdRef.current;
+    if (!session || !handle || !docId) {
+      setFootnoteBoardSession(null);
+      return;
+    }
+    boardSaveSuspendedRef.current = true;
+    const sessionKey = footnoteWhiteboardDocKey(docId, session.wbId);
+    await flushDirtyInk(handle, sessionKey);
+    const live = handle.saveBoard({ assembleInk: true });
+    try {
+      await putFootnoteWhiteboard(docId, session.wbId, { board: live, pageCount: 1 });
+    } catch (cause: unknown) {
+      noteStorageFull(cause);
+    }
+    await deleteInkPages(sessionKey);
+    setAnnotateFootnotes((current) =>
+      current.map((entry) => {
+        if (entry.id !== session.footnoteId) return entry;
+        return {
+          ...entry,
+          whiteboards: (entry.whiteboards ?? []).map((row) =>
+            row.id === session.wbId ? { ...row, updatedAt: Date.now() } : row,
+          ),
+        };
+      }),
+    );
+    await restoreDocumentBoard(session.stashed);
+    setFootnoteBoardSession(null);
+    boardSaveSuspendedRef.current = false;
+    if (reopenOverview) {
+      setOpenFootnoteId(session.footnoteId);
+    }
+  }, [restoreDocumentBoard]);
 
   /** Commit the annotations to the library. Returns the entry, or null on failure. */
   const saveAnnotateSession = useCallback(async (): Promise<AnnotateDoc | null> => {
     const board = boardRef.current;
     const source = annotateSource;
     if (!board || !source) return null;
+    if (footnoteBoardSessionRef.current) {
+      await closeFootnoteBoardSession(false);
+    }
     // Commit the buffer first: the write below sends `source.text`, which is
     // still the pre-edit copy until `saveEditBuffer` has moved it.
     if (annotateOwnedRef.current && editBufferRef.current !== source.text) {
@@ -7105,7 +7368,158 @@ export function Workspace({
       setError(messageOf(cause));
       return null;
     }
-  }, [annotateDocId, annotateFootnotes, annotateSource, agentMessages, client, saveEditBuffer]);
+  }, [annotateDocId, annotateFootnotes, annotateSource, agentMessages, client, saveEditBuffer, closeFootnoteBoardSession]);
+
+  /*
+   * In-place session: stash the PDF overlay and load scratch on this tab.
+   * Kept as a working path. The hub opens a split tab instead
+   * (`openFootnoteBoardSplit`) so the document stays visible and the pen
+   * chrome is the board's.
+   */
+  const openFootnoteBoard = useCallback(
+    async (footnoteId: string, wbId: string) => {
+      const handle = boardRef.current;
+      if (!handle || !isAnnotate(problemRef.current)) return;
+      let docId = annotateDocIdRef.current;
+      if (!docId) {
+        const minted = await saveAnnotateSession();
+        docId = minted?.id ?? annotateDocIdRef.current;
+        if (!docId) return;
+      }
+      boardSaveSuspendedRef.current = true;
+      await flushDirtyInk(handle, annotateDocKey(docId));
+      const stashed = handle.saveBoard({ assembleInk: false });
+      const now = Date.now();
+      const footnotes = annotateFootnotesRef.current.map((entry) => {
+        if (entry.id !== footnoteId) return entry;
+        if ((entry.whiteboards ?? []).some((row) => row.id === wbId)) return entry;
+        return {
+          ...entry,
+          whiteboards: [
+            ...(entry.whiteboards ?? []),
+            { id: wbId, createdAt: now, updatedAt: now },
+          ],
+        };
+      });
+      setAnnotateFootnotes(footnotes);
+      const source = annotateSourceRef.current;
+      if (source) {
+        try {
+          await saveAnnotateDoc({
+            id: docId,
+            name: source.name,
+            hash: source.hash,
+            source: source.text,
+            docType: source.docType,
+            board: stashed,
+            footnotes,
+            agent: persistableAgentMessages(agentMessagesRef.current),
+          });
+        } catch (cause: unknown) {
+          noteStorageFull(cause);
+        }
+      }
+      setOpenFootnoteId(null);
+      setFootnoteAnchorRect(null);
+      setSubMarkMode(null);
+      setHighlighting(false);
+      setLinkMode(false);
+      setEditMarkdown(false);
+      const saved = await getFootnoteWhiteboard(docId, wbId);
+      const dark = isDarkTheme(themeId);
+      const skeletons = buildScratchPageSkeletons(0, dark);
+      if (saved?.board?.elements) {
+        handle.restoreBoard(saved.board.elements, saved.board.appState, {
+          skeletons,
+          ink: inkOpsFrom(saved.board),
+          files: saved.board.files,
+          inkPalettes: saved.board.inkPalettes,
+        });
+        await restoreInk(handle, footnoteWhiteboardDocKey(docId, wbId), saved.board);
+      } else {
+        handle.seedTemplate(skeletons);
+      }
+      handle.applyThemeInk(themeId);
+      handle.showPadTitle("Whiteboard");
+      await handle.settleFitView();
+      setFootnoteBoardSession({ footnoteId, wbId, stashed });
+      boardSaveSuspendedRef.current = false;
+    },
+    [saveAnnotateSession, themeId],
+  );
+
+  const persistFootnoteBoardPointer = useCallback(
+    async (footnoteId: string, wbId: string, docId: string) => {
+      const now = Date.now();
+      const footnotes = annotateFootnotesRef.current.map((entry) => {
+        if (entry.id !== footnoteId) return entry;
+        if ((entry.whiteboards ?? []).some((row) => row.id === wbId)) return entry;
+        return {
+          ...entry,
+          whiteboards: [
+            ...(entry.whiteboards ?? []),
+            { id: wbId, createdAt: now, updatedAt: now },
+          ],
+        };
+      });
+      setAnnotateFootnotes(footnotes);
+      const source = annotateSourceRef.current;
+      const handle = boardRef.current;
+      if (!source || !handle) return;
+      try {
+        await flushDirtyInk(handle, annotateDocKey(docId));
+        await saveAnnotateDoc({
+          id: docId,
+          name: source.name,
+          hash: source.hash,
+          source: source.text,
+          docType: source.docType,
+          board: handle.saveBoard({ assembleInk: false }),
+          footnotes,
+          agent: persistableAgentMessages(agentMessagesRef.current),
+        });
+      } catch (cause: unknown) {
+        noteStorageFull(cause);
+      }
+    },
+    [noteStorageFull],
+  );
+
+  const openFootnoteBoardSplit = useCallback(
+    async (footnoteId: string, wbId: string) => {
+      let docId = annotateDocIdRef.current;
+      if (!docId) {
+        const minted = await saveAnnotateSession();
+        docId = minted?.id ?? annotateDocIdRef.current;
+        if (!docId) return;
+      }
+      await persistFootnoteBoardPointer(footnoteId, wbId, docId);
+      setOpenFootnoteId(null);
+      setFootnoteAnchorRect(null);
+      setSubMarkMode(null);
+      const existing = tabsRef.current.tabs.find(
+        (open) =>
+          isFootnoteBoardTab(open) &&
+          open.footnoteBoard.docId === docId &&
+          open.footnoteBoard.wbId === wbId,
+      );
+      const landed =
+        existing ??
+        openWorkspace({
+          id: newTabId("whiteboard"),
+          kind: "whiteboard",
+          title: "Whiteboard",
+          dirty: false,
+          lastActive: 0,
+          notebookId: null,
+          footnoteBoard: { docId, wbId },
+        });
+      splitTabs(tab.id, landed.id, "right");
+      focusTab(landed.id);
+    },
+    [focusTab, openWorkspace, persistFootnoteBoardPointer, saveAnnotateSession, splitTabs, tab.id],
+  );
+  void openFootnoteBoard;
 
 
   /*
@@ -7241,6 +7655,10 @@ export function Workspace({
   }, []);
 
   const onRemoveFootnote = useCallback((footnote: DocFootnote) => {
+    const docId = annotateDocIdRef.current;
+    for (const board of footnote.whiteboards ?? []) {
+      if (docId) void deleteFootnoteWhiteboard(docId, board.id).catch(() => {});
+    }
     setAnnotateFootnotes((current) => removeFootnote(current, footnote.id));
   }, []);
 
@@ -7270,7 +7688,10 @@ export function Workspace({
         // Leave straight away and take the autosave's placeholder with us.
         if (whiteboardUntouched()) {
           boardSaveSuspendedRef.current = true;
-          discardWhiteboardSession();
+          // Footnote scratch lives on the mark, not the library. Closing the
+          // split must not sweep the KV the way a blank notebook's placeholder
+          // is deleted.
+          if (!footnoteBoardRef.current) discardWhiteboardSession();
           next();
           return;
         }
@@ -7342,6 +7763,10 @@ export function Workspace({
         }
         if (isWhiteboard(problem)) {
           if (save) {
+            if (footnoteBoardRef.current) {
+              await saveFootnoteBoardNow({ quiet: true });
+              setNotice("Whiteboard saved.");
+            } else {
             const handle = boardRef.current;
             if (handle) {
               await flushDirtyInk(
@@ -7387,6 +7812,7 @@ export function Workspace({
               }
             }
             setNotice("Notebook saved.");
+            }
           } else {
             // The autosave has been committing to the library all along, so
             // discarding is real work, not a skipped save.
@@ -7447,6 +7873,7 @@ export function Workspace({
       discardAnnotateSession,
       discardWhiteboardSession,
       saveAnnotateSession,
+      saveFootnoteBoardNow,
       rebaselineWhiteboardSession,
       problem,
       leaving,
@@ -7581,6 +8008,14 @@ export function Workspace({
           return;
         }
         case "whiteboard": {
+          if (isFootnoteBoardTab(tab)) {
+            await loadWhiteboard({
+              footnoteBoard: tab.footnoteBoard,
+              tabId: tab.id,
+              userLoad,
+            });
+            return;
+          }
           /*
            * A blank notebook has no id and reopens blank, which is correct. An
            * id that the library no longer answers for is a deleted notebook,
@@ -7860,8 +8295,9 @@ export function Workspace({
    * later found by, so they are mirrored onto the record as they arrive.
    */
   useEffect(() => {
+    if (isFootnoteBoardTab(tab)) return;
     patchTab(tab.id, { notebookId: whiteboardNotebookId });
-  }, [patchTab, tab.id, whiteboardNotebookId]);
+  }, [patchTab, tab, whiteboardNotebookId]);
 
   /*
    * The text comes off the record only once the library is holding it.
@@ -8430,6 +8866,29 @@ export function Workspace({
               </button>
             </div>
           )}
+          {footnoteBoardSession && (
+            <button
+              type="button"
+              className="lc-secondary"
+              onClick={() => void closeFootnoteBoardSession()}
+            >
+              Back to document
+            </button>
+          )}
+          {isFootnoteBoardTab(tab) && (
+            <button
+              type="button"
+              className="lc-secondary"
+              onClick={() => {
+                void (async () => {
+                  await saveFootnoteBoardNow({ quiet: true }).catch(() => {});
+                  closeTab(tab.id);
+                })();
+              }}
+            >
+              Back to document
+            </button>
+          )}
       </>, headerSlots.center) : null}
       {active && headerSlots.right ? createPortal(<>
           {/*
@@ -8637,7 +9096,9 @@ export function Workspace({
               pressed
               disabled={busy !== null || canvasLoading}
               onTap={() => void saveWhiteboardNow()}
-              onConfirm={() => setWhiteboardEntryOpen(true)}
+              onConfirm={() => {
+                if (!isFootnoteBoardTab(tab)) setWhiteboardEntryOpen(true);
+              }}
             >
               <svg
                 className="lc-icon-svg lc-icon-svg-filled"
@@ -8999,7 +9460,7 @@ export function Workspace({
       {/* The one-tap hub Sync pill lives beside the board's map controls in
           the chrome slot; only a focused document / whiteboard / web pad
           mounts its own. Home used to, and the library cards are not a pad. */}
-      {active && headerSlots.boardChrome && tabOffersHubSync(tab.kind) ? (
+      {active && headerSlots.boardChrome && tabOffersHubSync(tab.kind) && !isFootnoteBoardTab(tab) ? (
         createPortal(
           <HubSyncControl
             hubHint={hubHint}
@@ -9173,7 +9634,7 @@ export function Workspace({
             onCodeSlot={onCodeSlot}
             transparentCanvas={Boolean(
               problem &&
-                (isAnnotate(problem) ||
+                ((isAnnotate(problem) && !footnoteBoardSession) ||
                   (!isLocalPad(problem) && activeRegion === "constraints")),
             )}
             docPaper={Boolean(
@@ -9183,12 +9644,12 @@ export function Workspace({
                   (!isLocalPad(problem) &&
                     (activeRegion === "constraints" || activeRegion === "code"))),
             )}
-            annotateToggle={Boolean(problem)}
-            editToggle={annotateOwned}
-            editing={editMarkdown}
+            annotateToggle={Boolean(problem) && !footnoteBoardSession}
+            editToggle={annotateOwned && !footnoteBoardSession}
+            editing={editMarkdown && !footnoteBoardSession}
             onToggleEdit={toggleEditMarkdown}
             onMdFormat={(kind) => mdEditorRef.current?.format(kind)}
-            linkToggle={Boolean(problem) && !editMarkdown}
+            linkToggle={Boolean(problem) && !editMarkdown && !footnoteBoardSession}
             linking={linkMode}
             onToggleLink={() => {
               // Mutually exclusive with the document highlighter: both take
@@ -9196,16 +9657,28 @@ export function Workspace({
               setHighlighting(false);
               setLinkMode((on) => !on);
             }}
-            onClearDocMarks={() => setAnnotateFootnotes([])}
+            onClearDocMarks={() => {
+              const docId = annotateDocIdRef.current;
+              if (docId) {
+                for (const entry of annotateFootnotesRef.current) {
+                  for (const board of entry.whiteboards ?? []) {
+                    void deleteFootnoteWhiteboard(docId, board.id).catch(() => {});
+                  }
+                }
+              }
+              setAnnotateFootnotes([]);
+            }}
             onAnnotateCodeChange={setAnnotateCode}
             // Ruled lines under somebody else's typography would be noise.
-            linedPaperToggle={Boolean(problem) && !isAnnotate(problem)}
+            linedPaperToggle={Boolean(problem) && (!isAnnotate(problem) || Boolean(footnoteBoardSession))}
             mobileRegion={
               problem
                 ? isWhiteboard(problem)
                   ? whiteboardPageId(whiteboardPageIndex)
                   : isAnnotate(problem)
-                    ? ANNOTATE_REGION
+                    ? footnoteBoardSession
+                      ? whiteboardPageId(0)
+                      : ANNOTATE_REGION
                     : activeRegion
                 : null
             }
@@ -9221,7 +9694,7 @@ export function Workspace({
             }
             pageTitle={null}
             pageContentHeight={
-              problem && isAnnotate(problem)
+              problem && isAnnotate(problem) && !footnoteBoardSession
                 ? annotatePageHeight(annotateHeight)
                 : problem &&
                     !isLocalPad(problem) &&
@@ -9242,14 +9715,15 @@ export function Workspace({
             }
             selectableContent={Boolean(
               problem &&
+                !footnoteBoardSession &&
                 ((isAnnotate(problem) && annotateSource) ||
                   (!isLocalPad(problem) && !isAnnotate(problem))),
             )}
-            textMarkSelecting={Boolean(openFootnote)}
+            textMarkSelecting={Boolean(openFootnote) && !footnoteBoardSession}
             onMarksSlot={setMarksSlot}
             onHighlightingChange={setHighlighting}
             pageContent={
-              problem && isAnnotate(problem) && annotateSource && editMarkdown ? (
+              footnoteBoardSession ? null : problem && isAnnotate(problem) && annotateSource && editMarkdown ? (
                 <AnnotateMarkdownEditor
                   ref={mdEditorRef}
                   value={editBuffer}
@@ -9569,7 +10043,7 @@ export function Workspace({
             messages={agentMessages}
             askOnly={isLocalPad(problem)}
             agentSurface={isLocalPad(problem) ? "pad" : "problem"}
-            allowAnnotations={!isWhiteboard(problem)}
+            allowAnnotations={!isWhiteboard(problem) && !footnoteBoardSession}
             documentPresets={isAnnotate(problem)}
             quoteSeed={coachQuoteSeed}
             focusThread={coachFocusThread}
@@ -9679,6 +10153,22 @@ export function Workspace({
             }}
             openThreadRootId={footnoteOpenThreadId}
             onChange={onFootnoteChange}
+            onOpenWhiteboard={(wbId) => {
+              void openFootnoteBoardSplit(openFootnote.id, wbId);
+            }}
+            onDeleteWhiteboard={(wbId) => {
+              const docId = annotateDocIdRef.current;
+              if (docId) void deleteFootnoteWhiteboard(docId, wbId).catch(() => {});
+              for (const open of tabsRef.current.tabs) {
+                if (
+                  isFootnoteBoardTab(open) &&
+                  open.footnoteBoard.docId === docId &&
+                  open.footnoteBoard.wbId === wbId
+                ) {
+                  closeTab(open.id);
+                }
+              }
+            }}
             onSendCoach={sendCoachFromFootnote}
             onAttachCoach={(id) => {
               setAttachedFootnoteIds((current) =>

@@ -42,9 +42,11 @@ export interface PadSnapshot {
   edges?: Edge[];
   /** Source text; live row has it, snapshots did not. */
   source?: string;
+  /** Footnote-owned scratch boards, keyed by whiteboard id. */
+  footnoteBoards?: Record<string, { board: BoardBlob; pageCount: number }>;
 }
 
-export type PadSnapshotExtras = Pick<PadSnapshot, "ink" | "edges" | "source">;
+export type PadSnapshotExtras = Pick<PadSnapshot, "ink" | "edges" | "source" | "footnoteBoards">;
 
 function boardWithoutInk(board: BoardBlob): BoardBlob {
   return {
@@ -143,7 +145,10 @@ export async function recordRollingSnapshots(input: {
       ...(input.pageCount != null ? { pageCount: input.pageCount } : {}),
       ...(extra.ink && extra.ink.length > 0 ? { ink: extra.ink } : {}),
       ...(extra.edges && extra.edges.length > 0 ? { edges: extra.edges } : {}),
-      ...(typeof extra.source === "string" ? { source: extra.source } : {}),
+        ...(typeof extra.source === "string" ? { source: extra.source } : {}),
+        ...(extra.footnoteBoards && Object.keys(extra.footnoteBoards).length > 0
+          ? { footnoteBoards: extra.footnoteBoards }
+          : {}),
     };
     try {
       await run(STORE_SNAPSHOTS, "readwrite", (store) => store.put(row, id));

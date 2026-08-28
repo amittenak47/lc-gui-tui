@@ -1134,6 +1134,7 @@ export function App() {
       openWorkspace,
       focusTab,
       closeTab,
+      splitTabs,
       patchTab,
       webPush,
       webStep,
@@ -1153,7 +1154,7 @@ export function App() {
       announceAutosave, onMissingContent, openWorkspace, patchTab, pdfFilmOpen, readingSize, recognizer,
       refreshCoachFlags, refreshSession, serverLink, session, setChrome, setWorkspaceApi,
       settingsOpen, setShellLoadActive, sheetDragLocked, shellLoadActive, markUserLoad, takeUserLoad, testForward, themeId,
-      webPush, webStep,
+      splitTabs, webPush, webStep,
     ],
   );
 

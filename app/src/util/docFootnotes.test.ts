@@ -6,6 +6,7 @@ import {
   orderScopes,
   freshFootnoteId,
   freshNoteId,
+  freshWhiteboardId,
   footnoteRevision,
   footnoteChipLabel,
   markChipLeft,
@@ -80,6 +81,18 @@ describe("freshFootnoteId", () => {
   });
 });
 
+describe("freshWhiteboardId", () => {
+  it("does not collide inside one millisecond", () => {
+    const first = freshWhiteboardId([], 1700000000000);
+    const second = freshWhiteboardId(
+      [{ id: first, createdAt: 1, updatedAt: 1 }],
+      1700000000000,
+    );
+    expect(second).not.toBe(first);
+    expect(first.startsWith("wb-")).toBe(true);
+  });
+});
+
 describe("sanitizeFootnotes", () => {
   it("drops anything that is not a footnote", () => {
     const kept = sanitizeFootnotes([
@@ -114,6 +127,23 @@ describe("sanitizeFootnotes", () => {
     expect(kept.bands).toEqual([{ left: 1, top: 2, width: 30, height: 10 }]);
     const [plain] = sanitizeFootnotes([footnote()]);
     expect(plain.bands).toBeUndefined();
+  });
+
+  it("round-trips whiteboard pointers and drops corrupt ones", () => {
+    const [kept] = sanitizeFootnotes([
+      footnote({
+        whiteboards: [
+          { id: "wb-1", title: "  Scratch  ", createdAt: 1, updatedAt: 2 },
+          { id: "", createdAt: 1, updatedAt: 1 },
+          { createdAt: 1, updatedAt: 1 } as unknown as { id: string; createdAt: number; updatedAt: number },
+        ],
+      }),
+    ]);
+    expect(kept.whiteboards).toEqual([
+      { id: "wb-1", title: "Scratch", createdAt: 1, updatedAt: 2 },
+    ]);
+    const [plain] = sanitizeFootnotes([footnote()]);
+    expect(plain.whiteboards).toBeUndefined();
   });
 
   it("round-trips blockText and subMarks", () => {
@@ -486,6 +516,14 @@ describe("footnoteRevision", () => {
   it("changes when a thread is added", () => {
     const withThread = { ...base, threads: [{ rootId: "m-1", title: "t", createdAt: 1 }] };
     expect(footnoteRevision([withThread])).not.toBe(footnoteRevision([base]));
+  });
+
+  it("changes when a whiteboard is attached", () => {
+    const withBoard = {
+      ...base,
+      whiteboards: [{ id: "wb-1", createdAt: 1, updatedAt: 2 }],
+    };
+    expect(footnoteRevision([withBoard])).not.toBe(footnoteRevision([base]));
   });
 
   it("changes when a title or palette is edited", () => {

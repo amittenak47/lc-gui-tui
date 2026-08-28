@@ -271,6 +271,8 @@ export interface ShellValue {
   openWorkspace: (tab: TabRecord) => TabRecord;
   focusTab: (id: string) => void;
   closeTab: (id: string) => void;
+  /** Pair `incoming` with `anchor` as a split. Home cannot be a partner. */
+  splitTabs: (anchor: string, incoming: string, edge: import("./util/tabs").SplitEdge) => void;
   patchTab: (id: string, patch: import("./util/tabs").TabPatch) => void;
   /** A web tab's history is on its record, so stepping it is a record edit. */
   webPush: (id: string, entry: import("./util/webPadSession").WebPadEntry) => void;

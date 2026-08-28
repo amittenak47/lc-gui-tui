@@ -73,6 +73,36 @@ describe("serializeTabState", () => {
     expect(serial.tabs[1]).toMatchObject({ dirty: false, notebookId: "nb-1" });
   });
 
+  it("keeps a footnote scratch board that has no library notebook id", () => {
+    const state: TabState = {
+      tabs: [
+        { id: HOME_TAB_ID, kind: "home", title: "Home", dirty: false, lastActive: 0 },
+        {
+          id: "b-fn",
+          kind: "whiteboard",
+          title: "Whiteboard",
+          dirty: true,
+          lastActive: 2,
+          notebookId: null,
+          footnoteBoard: { docId: "doc-1", wbId: "wb-1" },
+        },
+      ],
+      activeId: "b-fn",
+      groups: [],
+    };
+    const serial = serializeTabState(state);
+    expect(serial.tabs.map((tab) => tab.id)).toEqual([HOME_TAB_ID, "b-fn"]);
+    expect(serial.tabs[1]).toMatchObject({
+      notebookId: null,
+      footnoteBoard: { docId: "doc-1", wbId: "wb-1" },
+    });
+    const parsed = parseTabState({ v: 1, ...serial });
+    expect(parsed?.tabs[1]).toMatchObject({
+      id: "b-fn",
+      footnoteBoard: { docId: "doc-1", wbId: "wb-1" },
+    });
+  });
+
   it("strips captured HTML and clears in-flight index status", () => {
     const state: TabState = {
       tabs: [

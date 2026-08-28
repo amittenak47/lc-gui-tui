@@ -138,6 +138,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     )?;
     ensure_column(&conn, "whiteboard", "sync_seq", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(&conn, "annotate", "sync_seq", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(&conn, "annotate", "footnote_boards_json", "TEXT NOT NULL DEFAULT '{}'")?;
     migrate_tombstones_to_gone(&conn)?;
     Ok(conn)
 }
@@ -246,6 +247,8 @@ pub struct AnnotatePad {
     pub board: serde_json::Value,
     #[serde(default)]
     pub agent: serde_json::Value,
+    #[serde(default = "empty_json_object", skip_serializing_if = "is_empty_json_object")]
+    pub footnote_boards: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -280,6 +283,14 @@ pub struct ApplyAck {
 
 fn is_zero_seq(seq: &i64) -> bool {
     *seq == 0
+}
+
+fn empty_json_object() -> serde_json::Value {
+    serde_json::json!({})
+}
+
+fn is_empty_json_object(value: &serde_json::Value) -> bool {
+    value.as_object().map(|o| o.is_empty()).unwrap_or(true)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -387,29 +398,16 @@ fn read_whiteboard(conn: &Connection, id: &str) -> Result<Option<WhiteboardPad>>
     Ok(row)
 }
 
+const ANNOTATE_SELECT: &str = "id, name, hash, doc_type, updated_at, deleted_at, source_text,
+                footnotes_json, board_json, agent_json, ifnull(sync_seq, 0),
+                ifnull(footnote_boards_json, '{}')";
+
 fn read_annotate(conn: &Connection, id: &str) -> Result<Option<AnnotatePad>> {
     let row = conn
         .query_row(
-            "SELECT id, name, hash, doc_type, updated_at, deleted_at, source_text,
-                    footnotes_json, board_json, agent_json, ifnull(sync_seq, 0)
-             FROM annotate WHERE id = ?1",
+            &format!("SELECT {ANNOTATE_SELECT} FROM annotate WHERE id = ?1"),
             params![id],
-            |row| {
-                Ok(AnnotatePad {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    hash: row.get(2)?,
-                    doc_type: row.get(3)?,
-                    updated_at: row.get(4)?,
-                    deleted_at: row.get(5)?,
-                    source: row.get(6)?,
-                    footnotes: parse_json(&row.get::<_, String>(7)?),
-                    board: parse_json(&row.get::<_, String>(8)?),
-                    agent: parse_json(&row.get::<_, String>(9)?),
-                    sync_seq: row.get(10)?,
-                    base_updated_at: None,
-                })
-            },
+            map_annotate_row,
         )
         .optional()?;
     Ok(row)
@@ -432,15 +430,17 @@ pub fn list_whiteboard(conn: &Connection, archived: bool) -> Result<Vec<Whiteboa
 
 pub fn list_annotate(conn: &Connection, archived: bool) -> Result<Vec<AnnotatePad>> {
     let sql = if archived {
-        "SELECT id, name, hash, doc_type, updated_at, deleted_at, source_text,
-                footnotes_json, board_json, agent_json, ifnull(sync_seq, 0)
+        format!(
+            "SELECT {ANNOTATE_SELECT}
          FROM annotate WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+        )
     } else {
-        "SELECT id, name, hash, doc_type, updated_at, deleted_at, source_text,
-                footnotes_json, board_json, agent_json, ifnull(sync_seq, 0)
+        format!(
+            "SELECT {ANNOTATE_SELECT}
          FROM annotate WHERE deleted_at IS NULL ORDER BY updated_at DESC"
+        )
     };
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], map_annotate_row)?;
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
 }
@@ -472,6 +472,7 @@ fn map_annotate_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnnotatePad> {
         board: parse_json(&row.get::<_, String>(8)?),
         agent: parse_json(&row.get::<_, String>(9)?),
         sync_seq: row.get(10)?,
+        footnote_boards: parse_json(&row.get::<_, String>(11)?),
         base_updated_at: None,
     })
 }
@@ -490,13 +491,12 @@ pub fn list_changed_whiteboard(conn: &Connection, since: i64) -> Result<Vec<Whit
 }
 
 pub fn list_changed_annotate(conn: &Connection, since: i64) -> Result<Vec<AnnotatePad>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, name, hash, doc_type, updated_at, deleted_at, source_text,
-                footnotes_json, board_json, agent_json, ifnull(sync_seq, 0)
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {ANNOTATE_SELECT}
          FROM annotate
          WHERE deleted_at IS NULL AND updated_at > ?1
-         ORDER BY updated_at DESC",
-    )?;
+         ORDER BY updated_at DESC"
+    ))?;
     let rows = stmt.query_map(params![since], map_annotate_row)?;
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
 }
@@ -764,8 +764,8 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
 
     conn.execute(
         "INSERT INTO annotate (id, name, hash, doc_type, updated_at, deleted_at, source_text,
-                               footnotes_json, board_json, agent_json, sync_seq)
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10)
+                               footnotes_json, board_json, agent_json, sync_seq, footnote_boards_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             hash = excluded.hash,
@@ -776,7 +776,8 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
             footnotes_json = excluded.footnotes_json,
             board_json = excluded.board_json,
             agent_json = excluded.agent_json,
-            sync_seq = excluded.sync_seq",
+            sync_seq = excluded.sync_seq,
+            footnote_boards_json = excluded.footnote_boards_json",
         params![
             pad.id,
             pad.name,
@@ -788,6 +789,7 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
             json_text(&pad.board),
             json_text(&pad.agent),
             next_seq,
+            json_text(&pad.footnote_boards),
         ],
     )?;
     Ok(PutOutcome::Written(
@@ -1550,6 +1552,7 @@ mod tests {
             footnotes: json!([{"id": "f1", "kind": "ai"}]),
             board: json!({"v": 1, "elements": []}),
             agent: json!([]),
+            footnote_boards: json!({}),
         }
     }
 
@@ -1586,6 +1589,19 @@ mod tests {
         };
         assert_eq!(ann.footnotes[0]["kind"], "ai");
         assert_eq!(get_annotate(&conn, "a1").unwrap().unwrap().source, "# hi");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn annotate_footnote_boards_round_trip() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        let mut pad = an("a1", 11);
+        pad.footnote_boards = json!({"wb-1": {"board": {"v": 1, "elements": [{"id": "scratch"}]}, "pageCount": 1}});
+        put_annotate(&conn, &pad).unwrap();
+        let got = get_annotate(&conn, "a1").unwrap().unwrap();
+        assert_eq!(got.footnote_boards["wb-1"]["pageCount"], 1);
+        assert_eq!(got.footnote_boards["wb-1"]["board"]["elements"][0]["id"], "scratch");
         let _ = std::fs::remove_file(path);
     }
 

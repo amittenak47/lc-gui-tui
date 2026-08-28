@@ -50,6 +50,11 @@ export function whiteboardDocKey(id: string): string {
   return `wb:${id}`;
 }
 
+/** Session ink for a footnote-owned scratch board — not the PDF's `md:` pages. */
+export function footnoteWhiteboardDocKey(docId: string, wbId: string): string {
+  return `fnwb:${docId}:${wbId}`;
+}
+
 export function inkPageKey(docKey: string, pageId: number): string {
   return `${docKey}${KEY_SEP}${pageId}`;
 }
@@ -187,6 +192,24 @@ export async function deleteInkPages(docKey: string): Promise<void> {
   try {
     await withStore(STORE_INK_PAGES, "readwrite", (store) => {
       const request = store.openCursor(inkPageKeyRange(docKey));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        cursor.delete();
+        cursor.continue();
+      };
+    });
+  } catch {
+    /* private browsing / missing store */
+  }
+}
+
+/** Drop every ink shard whose docKey starts with `prefix` (e.g. `fnwb:{docId}:`). */
+export async function deleteInkPagesByPrefix(prefix: string): Promise<void> {
+  if (!prefix) return;
+  try {
+    await withStore(STORE_INK_PAGES, "readwrite", (store) => {
+      const request = store.openCursor(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor) return;

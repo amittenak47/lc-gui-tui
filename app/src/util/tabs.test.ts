@@ -172,6 +172,23 @@ describe("tabsReducer", () => {
     expect(sameEntity(doc("d1", "h-1"), doc("d2", "h-1"))).toBe(false);
   });
 
+  it("matches footnote scratch boards by doc + whiteboard id, not the library", () => {
+    const a = board("b1", null);
+    const b = board("b2", null);
+    (a as { footnoteBoard?: { docId: string; wbId: string } }).footnoteBoard = {
+      docId: "doc-1",
+      wbId: "wb-1",
+    };
+    (b as { footnoteBoard?: { docId: string; wbId: string } }).footnoteBoard = {
+      docId: "doc-1",
+      wbId: "wb-1",
+    };
+    expect(sameEntity(a, b)).toBe(true);
+    (b as { footnoteBoard: { docId: string; wbId: string } }).footnoteBoard.wbId = "wb-2";
+    expect(sameEntity(a, b)).toBe(false);
+    expect(sameEntity(a, board("b3", "nb-1"))).toBe(false);
+  });
+
   it("caps web tabs and evicts the least recently used one", () => {
     const state = run(
       initialTabState(),

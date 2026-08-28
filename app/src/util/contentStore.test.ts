@@ -67,6 +67,17 @@ describe("with no IndexedDB", () => {
     expect(store.size).toBe(0);
   });
 
+  it("deletes every spill key that starts with a prefix", async () => {
+    const { deleteContentByPrefix } = await import("./contentStore");
+    await putContent("fnwb:doc-1:wb-a", { n: 1 });
+    await putContent("fnwb:doc-1:wb-b", { n: 2 });
+    await putContent("fnwb:doc-2:wb-a", { n: 3 });
+    await deleteContentByPrefix("fnwb:doc-1:");
+    expect(await getContent("fnwb:doc-1:wb-a")).toBeNull();
+    expect(await getContent("fnwb:doc-1:wb-b")).toBeNull();
+    expect(await getContent("fnwb:doc-2:wb-a")).toEqual({ n: 3 });
+  });
+
   it("survives deleting something that is not there", async () => {
     await expect(deleteContent("never-existed")).resolves.toBeUndefined();
   });

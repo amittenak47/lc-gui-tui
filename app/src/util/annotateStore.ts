@@ -28,12 +28,13 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
-import { deleteContent, getContent, putContent } from "./contentStore";
+import { deleteContent, putContent, getContent } from "./contentStore";
 import type { WebCapture, WebPadKind } from "./webCaptures";
 import { deleteDocBytes } from "./docBytes";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
 import { deletePadSnapshots, renamePadSnapshots } from "./padSnapshotStore";
 import { deleteInkPages, annotateDocKey, renameInkPages } from "./inkPageStore";
+import { sweepFootnoteWhiteboards } from "./footnoteWhiteboardStore";
 import { setStorageItem } from "./storageQuota";
 import { hashBytes } from "./docBytes";
 import { webIdentityUrl } from "./webIdentity";
@@ -757,6 +758,7 @@ export async function deleteAnnotateDoc(id: string): Promise<void> {
   if (going) {
     void deletePadSnapshots("annotate", going.id).catch(() => {});
     void deleteInkPages(annotateDocKey(going.id)).catch(() => {});
+    void sweepFootnoteWhiteboards(going.id).catch(() => {});
     /*
      * The graph loses this node's edges with it.
      *
