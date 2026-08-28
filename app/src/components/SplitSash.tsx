@@ -11,6 +11,11 @@
  * 1. A parent `set-ratio` re-render dropped button pointer capture.
  * 2. Bubble-only `window` listeners never saw the move: Excalidraw (and the
  *    Android WebView) stop the event on the canvas under the finger.
+ *
+ * `window` only. The same handler was also bound to `document`, which does not
+ * add reach — capture on `window` runs first, before anything on the page can
+ * stop the event — and did mean every pointermove measured the layout, wrote
+ * the CSS variables and broadcast a board resize twice.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -83,7 +88,24 @@ export function SplitSash({
     delete document.body.dataset.lcSashDrag;
   };
 
-  useEffect(() => () => unbindRef.current?.(), []);
+  /*
+   * Unmount is not "the drag ended", it is "the sash is gone".
+   *
+   * This used to remove only the listeners. `data-lc-sash-drag` on `<body>`
+   * carries `pointer-events: none !important` for every board, so a split
+   * closed mid-drag left the whole canvas dead to the pointer with nothing
+   * left alive to clear it. `setDragging` is left out: the component is on
+   * its way out and does not need the re-render.
+   */
+  useEffect(
+    () => () => {
+      unbindRef.current?.();
+      unbindRef.current = null;
+      dragRef.current = false;
+      delete document.body.dataset.lcSashDrag;
+    },
+    [],
+  );
 
   const bindDrag = () => {
     unbindRef.current?.();
@@ -101,19 +123,13 @@ export function SplitSash({
       announceSettled();
     };
     window.addEventListener("pointermove", onMove, MOVE_OPTS);
-    document.addEventListener("pointermove", onMove, MOVE_OPTS);
     window.addEventListener("pointerup", onUp, true);
-    document.addEventListener("pointerup", onUp, true);
     window.addEventListener("pointercancel", onUp, true);
-    document.addEventListener("pointercancel", onUp, true);
     document.body.dataset.lcSashDrag = axis;
     unbindRef.current = () => {
       window.removeEventListener("pointermove", onMove, MOVE_OPTS);
-      document.removeEventListener("pointermove", onMove, MOVE_OPTS);
       window.removeEventListener("pointerup", onUp, true);
-      document.removeEventListener("pointerup", onUp, true);
       window.removeEventListener("pointercancel", onUp, true);
-      document.removeEventListener("pointercancel", onUp, true);
     };
   };
 
