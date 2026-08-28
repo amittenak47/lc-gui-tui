@@ -1210,7 +1210,9 @@ export function App() {
             onUnsplit={unsplitTab}
             groupedIds={groupedIds}
             activeIndexChip={
-              chrome.docIndex.status === "idle" && !chrome.docIndex.onIndex ? undefined : (
+              chrome.docIndex.status === "idle" &&
+              !chrome.docIndex.onIndex &&
+              !chrome.docIndex.walkStage ? undefined : (
                 <DocIndexChip
                   status={chrome.docIndex.status}
                   meta={chrome.docIndex.meta as never}
@@ -1223,6 +1225,10 @@ export function App() {
                   embedding={chrome.docIndex.embedding}
                   blocked={chrome.docIndex.blocked}
                   syncIssue={chrome.docIndex.syncIssue}
+                  walkStage={chrome.docIndex.walkStage}
+                  walkJob={chrome.docIndex.walkJob}
+                  walkProgress={chrome.docIndex.walkProgress}
+                  walkError={chrome.docIndex.walkError}
                 />
               )
             }

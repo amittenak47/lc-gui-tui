@@ -86,6 +86,27 @@ export interface DocIndexChipProps {
   blocked?: string | null;
   /** Index disagreed with the hub; re-index stays on offer. */
   syncIssue?: string | null;
+  /*
+   * What the Sync walk is doing right now.
+   *
+   * The pill is the thing you tap and morphs its own labels; this chip is the
+   * progress display, and it sits beside the document's name rather than off
+   * in the board chrome. A tap used to walk the pill through Index → Pad →
+   * Ink → Links → Pull while the tab said `indexed` throughout.
+   */
+  walkStage?: string | null;
+  /**
+   * Which half of Index is running.
+   *
+   * The two skip independently: the hub already holding the text index says
+   * nothing about embeddings, and no configured model skips embedding without
+   * touching the index. So the label follows the job, and Index with neither
+   * job running shows nothing rather than flashing a word.
+   */
+  walkJob?: string | null;
+  walkProgress?: { done: number; total: number } | null;
+  /** The walk parked on `walkStage`. */
+  walkError?: string | null;
 }
 
 export function DocIndexChip({
@@ -100,15 +121,21 @@ export function DocIndexChip({
   embedding,
   blocked,
   syncIssue,
+  walkStage,
+  walkJob,
+  walkProgress,
+  walkError,
 }: DocIndexChipProps) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
   const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
 
+  /** The two resting states that have a card behind them. */
+  const canOpen = status === "indexed" || (status === "idle" && Boolean(onIndex));
   useEffect(() => {
-    if (status !== "indexed") setOpen(false);
-  }, [status]);
+    if (!canOpen) setOpen(false);
+  }, [canOpen]);
 
   useEffect(() => {
     if (!open) return;
@@ -129,26 +156,47 @@ export function DocIndexChip({
     };
   }, [open]);
 
-  if (status === "idle") {
-    if (!onIndex) return null;
-    if (blocked) {
+  /*
+   * The Sync walk, while one is running.
+   *
+   * Ahead of the resting states because it is what is happening now, and
+   * behind nothing else: the walk drives every stage the pill shows, and the
+   * tab is where you read how far the current one has got.
+   */
+  const walking =
+    walkStage != null && walkStage !== "idle" && walkStage !== "synced";
+  if (walking && walkError) {
+    return (
+      <span className="lc-doc-index-chip is-bad" title={walkError}>
+        {walkStage} error
+      </span>
+    );
+  }
+  if (walking) {
+    /*
+     * Index is the one stage that names a job rather than itself, because it
+     * holds two that skip independently. With neither running there is nothing
+     * to report, and a bare "index…" between two skips would be a flash saying
+     * nothing — so it falls through to the resting label instead.
+     */
+    const label =
+      walkStage === "index"
+        ? walkJob === "embed"
+          ? "embedding…"
+          : walkJob === "extract"
+            ? "indexing…"
+            : null
+        : `${walkStage}…`;
+    if (label) {
       return (
-        <span className="lc-doc-index-chip is-offer is-blocked" title={blocked}>
-          index
+        <span className="lc-doc-index-chip is-working">
+          <WorkRing progress={walkProgress ?? null} />
+          {label}
         </span>
       );
     }
-    return (
-      <button
-        type="button"
-        className="lc-doc-index-chip is-offer"
-        title="Index this document so the agent can search it"
-        onClick={onIndex}
-      >
-        index
-      </button>
-    );
   }
+
   // `onIndex` is also the re-index action once a document is already in — the
   // work is identical, `upsert` deletes and rewrites.
   if (status === "indexing") {
@@ -170,6 +218,7 @@ export function DocIndexChip({
       </span>
     );
   }
+  if (status === "idle" && !onIndex) return null;
   if (status === "error") {
     return (
       <span className="lc-doc-index-chip is-bad" title={error ?? "index error"}>
@@ -178,6 +227,15 @@ export function DocIndexChip({
     );
   }
 
+  /*
+   * Not a one-click Index any more.
+   *
+   * `idle` with an `onIndex` used to be a button that indexed on the spot,
+   * from the strip, next to the document's name — the one place in the app
+   * where a tab chip did work rather than reporting it. It opens the same card
+   * the indexed chip does, and the work is a button inside it.
+   */
+  const unindexed = status === "idle";
   const chunks = meta?.chunk_count ?? 0;
   const pages = meta?.page_count ?? 0;
   /*
@@ -212,7 +270,13 @@ export function DocIndexChip({
       <button
         ref={buttonRef}
         type="button"
-        className={wordsOnly ? "lc-doc-index-chip is-words" : "lc-doc-index-chip is-ok"}
+        className={
+          unindexed
+            ? "lc-doc-index-chip is-offer"
+            : wordsOnly
+              ? "lc-doc-index-chip is-words"
+              : "lc-doc-index-chip is-ok"
+        }
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={() => {
@@ -221,7 +285,7 @@ export function DocIndexChip({
           setOpen((current) => !current);
         }}
       >
-        {wordsOnly ? "indexed · words" : "indexed"}
+        {unindexed ? "not indexed" : wordsOnly ? "indexed · words" : "indexed"}
       </button>
       {typeof document !== "undefined" &&
         createPortal(
@@ -243,6 +307,31 @@ export function DocIndexChip({
             >
               <div data-morph-id="idle" />
               <aside data-morph-id="card" className="lc-doc-index-card">
+                {unindexed ? (
+                  <>
+                    <p className="lc-doc-index-lead">
+                      This document is not in the index, so Ask cannot retrieve
+                      anything from it yet.
+                    </p>
+                    {blocked ? (
+                      <p className="lc-doc-index-lead lc-muted">{blocked}</p>
+                    ) : (
+                      onIndex && (
+                        <button
+                          type="button"
+                          className="lc-doc-index-redo"
+                          onClick={() => {
+                            setOpen(false);
+                            onIndex();
+                          }}
+                        >
+                          Index this document
+                        </button>
+                      )
+                    )}
+                  </>
+                ) : (
+                  <>
                 <p className="lc-doc-index-lead">
                   This snapshot’s text is in the local doc index. Ask and the
                   agent can retrieve chunks from it — not from the live page.
@@ -328,6 +417,8 @@ export function DocIndexChip({
                         Re-index this document
                       </button>
                     )}
+                  </>
+                )}
                   </>
                 )}
               </aside>
