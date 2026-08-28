@@ -167,7 +167,17 @@ export default defineConfig({
   build: {
     // The Magic Note Pad is Android 14 / Chromium; no legacy targets needed.
     target: "es2022",
-    sourcemap: true,
+    /*
+     * Maps for a debug build, never for a release.
+     *
+     * They were 74.1 MB of the 98.4 MB the build produced. Nothing requests
+     * them at runtime, but they are packaged: every one of those megabytes
+     * ships inside the APK and the desktop bundle and takes up room on the
+     * device. `TAURI_ENV_DEBUG` is set by `tauri dev` and by `tauri build
+     * --debug`, which are the builds anyone would actually be reading a stack
+     * trace in; set it by hand for a release build worth symbolicating.
+     */
+    sourcemap: Boolean(process.env.TAURI_ENV_DEBUG),
     // Monaco is ~4 MB on its own and Excalidraw ~1 MB, so the default 500 kB
     // warning fires on chunks that are already split as far as they usefully
     // can be. Raised past them so the build stays quiet enough that a genuinely
