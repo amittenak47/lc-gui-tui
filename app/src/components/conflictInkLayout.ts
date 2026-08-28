@@ -32,9 +32,16 @@ export interface ConflictInkPlacement {
 /**
  * The transform for one page's strokes.
  *
- * A missing frame falls back to a zero origin, which is what this did before
- * frames were passed at all: wrong for every page but the first, and better
- * than refusing to draw handwriting the reader is being asked to choose about.
+ * The board's own frame is the right answer when there is one: it is the scene
+ * the strokes were actually drawn in. When there is not — the reader's frames
+ * are empty, or they describe a layout this pane does not share — the pane's
+ * own measurement stands in. `slot.top` is where this page sits in the pane,
+ * and dividing by the scale converts that back into scene units.
+ *
+ * What it must never do is fall back to zero. Zero on every page draws the
+ * same window of the stack onto every canvas — the top of the book repeated
+ * down the pane, or nothing at all once the strokes are past it — which is
+ * exactly the "every page shows the same handwriting" this is for.
  */
 export function conflictInkPlacement(
   slot: ConflictInkSlot,
@@ -42,7 +49,8 @@ export function conflictInkPlacement(
   sceneWidth: number | undefined,
 ): ConflictInkPlacement {
   const scale = sceneWidth && sceneWidth > 0 ? slot.width / sceneWidth : 1;
-  return { scale, originY: frame ? frame.minY : 0 };
+  if (frame) return { scale, originY: frame.minY };
+  return { scale, originY: scale > 0 ? slot.top / scale : 0 };
 }
 
 /**

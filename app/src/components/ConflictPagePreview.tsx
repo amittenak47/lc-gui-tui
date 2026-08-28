@@ -248,7 +248,9 @@ export function ConflictPagePreview({
     setInkSlots((current) => (inkSlotsEqual(current, next) ? current : next));
     // `stackH` re-runs this once the stack has laid out, so the slots are
     // measured against real boxes rather than an empty host.
-  }, [showInk, inkedPages, cssWidth, stackH]);
+    // `pageFrames` too: frames arriving after the first measure change where
+    // every page's ink belongs, so the slots have to be re-read with them.
+  }, [showInk, inkedPages, cssWidth, stackH, pageFrames]);
 
   useEffect(() => {
     const doc = docRef.current;
@@ -303,7 +305,7 @@ export function ConflictPagePreview({
     >
       {usePdf && filmScope ? (
         <div className="lc-hub-conflict-doc" ref={docRef}>
-          <DocSelectionLayer enabled={false} footnotes={keptNotes}>
+          <DocSelectionLayer enabled={false} placeExisting footnotes={keptNotes}>
             <PdfDocument
               filmScope={filmScope}
               bytes={bytes && bytes.byteLength > 0 ? bytes : EMPTY_PDF_BYTES}
@@ -337,7 +339,7 @@ export function ConflictPagePreview({
         </div>
       ) : useMarkdown && sourceText ? (
         <div className="lc-hub-conflict-doc">
-          <DocSelectionLayer enabled={false} footnotes={keptNotes}>
+          <DocSelectionLayer enabled={false} placeExisting footnotes={keptNotes}>
             <AnnotateDocument source={sourceText} selectable={false} />
           </DocSelectionLayer>
         </div>

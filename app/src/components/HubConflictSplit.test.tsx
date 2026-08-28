@@ -426,3 +426,85 @@ describe("what the panes are asked to draw", () => {
     act(() => root.unmount());
   });
 });
+
+describe("the mark hub, one per pane", () => {
+  // The hub portals to `document.body`, so a split left mounted keeps its
+  // cards in the next test's count.
+  afterEach(() => {
+    document.body.textContent = "";
+  });
+
+  /**
+   * The same mark on both sides, each carrying its own note.
+   *
+   * That difference is the point: the live hub in the workspace reads *this*
+   * device's footnotes, so it could only ever show one of the two.
+   */
+  const BOTH: HubPadConflict = {
+    ...CONFLICT,
+    local: annotateBody("book", 900, [
+      {
+        id: "same",
+        kind: "note",
+        anchor: { kind: "text", start: 0, end: 4, scope: "page-2" },
+        excerpt: "kept here with new words",
+        createdAt: 2,
+        notes: [{ id: "ln", text: "note from this device", createdAt: 1, updatedAt: 1 }],
+      },
+    ]),
+    server: annotateBody("book", 500, [
+      {
+        id: "same",
+        kind: "note",
+        anchor: { kind: "text", start: 0, end: 4, scope: "page-2" },
+        excerpt: "kept there too",
+        createdAt: 4,
+        notes: [{ id: "sn", text: "note from the other one", createdAt: 2, updatedAt: 2 }],
+      },
+    ]),
+  };
+
+  function hubs() {
+    return document.querySelectorAll(".lc-footnote-overview");
+  }
+
+  it("opens this side's copy on each pane when a mark is tapped", () => {
+    /*
+     * Tapping a row scrolled the pane and nothing else — you had to keep a
+     * mark to find out what was in it.
+     */
+    mount(BOTH);
+    act(() => noteByText("kept here with new words").click());
+
+    expect(hubs()).toHaveLength(2);
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("note from this device");
+    expect(text).toContain("note from the other one");
+  });
+
+  it("closes both hubs when handwriting takes the focus", () => {
+    mount(BOTH);
+    act(() => noteByText("kept here with new words").click());
+    expect(hubs()).toHaveLength(2);
+
+    act(() => inkRow(0).click());
+    expect(hubs()).toHaveLength(0);
+  });
+
+  it("offers no way to write into a copy that may be about to lose", () => {
+    // Keep is the only write in this flow; anything typed into the losing copy
+    // would be thrown away without saying so.
+    mount(BOTH);
+    act(() => noteByText("kept here with new words").click());
+
+    expect(document.querySelectorAll(".lc-footnote-overview-add")).toHaveLength(0);
+    // Still readable, which is the whole reason it is open.
+    expect(document.body.textContent).toContain("note from this device");
+  });
+
+  it("shows one hub when only one side has that mark", () => {
+    mount();
+    act(() => noteByText("local only mark").click());
+    expect(hubs()).toHaveLength(1);
+  });
+});
