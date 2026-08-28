@@ -124,22 +124,106 @@ export function trimThumbCache(
   return next;
 }
 
-let filmCurrent = 1;
-const filmCurrentListeners = new Set<(page: number) => void>();
+/**
+ * Where the reader is, per open document.
+ *
+ * This was a set of module globals, which was fine while one PDF could be
+ * mounted. Two can: a split shows both, and the mount budget keeps a third
+ * parked. Every mounted document wrote the same `filmCurrent`, the same
+ * reading frames and the same visible-page sets, so they reset each other on
+ * mount and the filmstrip, the preload pump and the ink remap all read
+ * whichever document had published last — wrong-page navigation in one pane
+ * because the other one scrolled.
+ *
+ * Scoped by *tab*, not by content hash. Thumbnails are hash-keyed and stay
+ * that way: the same file rendered twice really is the same picture. A page
+ * camera is not — two annotation sets over one PDF share a hash and share
+ * nothing about where you are in it — so the slot that is already unique per
+ * mounted workspace is the one to key on.
+ */
+type FilmNav = {
+  current: number;
+  currentListeners: Set<(page: number) => void>;
+  /** Document-local PDF stack frames — camera Y maps to a page without IO. */
+  readingFrames: PageFrame[];
+  /** Lift-off landing guess — HUD / filmstrip ghost. Paint must not read this. */
+  predicted: number;
+  predictedListeners: Set<(page: number) => void>;
+  /** 0.25 pages toward the flick-end. Separate from C — rest-2 must not read this. */
+  preloadPages: number[];
+  preloadListeners: Set<() => void>;
+  paintWakeListeners: Set<() => void>;
+  layoutBusy: boolean;
+  layoutBusySince: number;
+  layoutBusyClearTimer: number;
+  layoutBusyMaxTimer: number;
+  layoutBusyListeners: Set<(busy: boolean) => void>;
+  /** Camera-hole pages (overlap) and rest-2 set. Not the flick-end guess. */
+  intersectingPages: number[];
+  restPages: number[];
+  viewPageListeners: Set<() => void>;
+  /** Strip cells the idle thumb pass should fill first. */
+  thumbWanted: number[];
+};
 
-/** Document-local PDF stack frames — camera Y maps to a page without IO. */
-let readingFrames: PageFrame[] = [];
+const navByScope = new Map<string, FilmNav>();
 
-export function setPdfReadingFrames(frames: readonly PageFrame[]): void {
-  readingFrames = frames.slice();
+function nav(scope: string): FilmNav {
+  let found = navByScope.get(scope);
+  if (!found) {
+    found = {
+      current: 1,
+      currentListeners: new Set(),
+      readingFrames: [],
+      predicted: 0,
+      predictedListeners: new Set(),
+      preloadPages: [],
+      preloadListeners: new Set(),
+      paintWakeListeners: new Set(),
+      layoutBusy: false,
+      layoutBusySince: 0,
+      layoutBusyClearTimer: 0,
+      layoutBusyMaxTimer: 0,
+      layoutBusyListeners: new Set(),
+      intersectingPages: [],
+      restPages: [],
+      viewPageListeners: new Set(),
+      thumbWanted: [],
+    };
+    navByScope.set(scope, found);
+  }
+  return found;
 }
 
-export function peekPdfReadingFrames(): readonly PageFrame[] {
-  return readingFrames;
+/**
+ * Forget a document's place. Call on unmount, not on park.
+ *
+ * A parked workspace keeps its page: coming back is showing it again, which is
+ * the whole reason it stays mounted.
+ */
+export function clearPdfFilmScope(scope: string): void {
+  const state = navByScope.get(scope);
+  if (!state) return;
+  if (state.layoutBusyClearTimer) clearTimeout(state.layoutBusyClearTimer);
+  if (state.layoutBusyMaxTimer) clearTimeout(state.layoutBusyMaxTimer);
+  navByScope.delete(scope);
 }
 
-export function resetPdfReadingFrames(): void {
-  readingFrames = [];
+/** Drop every scope. Tests only. */
+export function resetPdfFilmScopes(): void {
+  for (const scope of [...navByScope.keys()]) clearPdfFilmScope(scope);
+}
+
+export function setPdfReadingFrames(scope: string, frames: readonly PageFrame[]): void {
+  nav(scope).readingFrames = frames.slice();
+}
+
+export function peekPdfReadingFrames(scope: string): readonly PageFrame[] {
+  return nav(scope).readingFrames;
+}
+
+export function resetPdfReadingFrames(scope: string): void {
+  nav(scope).readingFrames = [];
 }
 
 /** Spread on/off doubles or halves the slot list. Same count means layout has not published yet. */
@@ -148,10 +232,11 @@ export function pdfSpreadSlotCountChanged(fromCount: number, toCount: number): b
 }
 
 /** Chrome filmstrip current page — does not go through Workspace setState. */
-export function publishPdfFilmCurrent(page: number): void {
-  if (!(page >= 1) || page === filmCurrent) return;
-  filmCurrent = page;
-  for (const listener of filmCurrentListeners) listener(page);
+export function publishPdfFilmCurrent(scope: string, page: number): void {
+  const state = nav(scope);
+  if (!(page >= 1) || page === state.current) return;
+  state.current = page;
+  for (const listener of state.currentListeners) listener(page);
 }
 
 /**
@@ -161,101 +246,103 @@ export function publishPdfFilmCurrent(page: number): void {
  * `translate3d` — the strip jumped 3 → 5. Scene Y does not skip.
  */
 export function publishPdfFilmFromCamera(
+  scope: string,
   frames: readonly PageFrame[],
   scrollY: number,
   zoom: number,
   viewHeight: number,
 ): void {
   if (frames.length === 0) return;
-  publishPdfFilmCurrent(pageIdFromCamera(frames, scrollY, zoom, viewHeight));
+  publishPdfFilmCurrent(scope, pageIdFromCamera(frames, scrollY, zoom, viewHeight));
 }
 
 export function subscribePdfFilmCurrent(
+  scope: string,
   listener: (page: number) => void,
 ): () => void {
-  filmCurrentListeners.add(listener);
-  listener(filmCurrent);
+  const state = nav(scope);
+  state.currentListeners.add(listener);
+  listener(state.current);
   return () => {
-    filmCurrentListeners.delete(listener);
+    state.currentListeners.delete(listener);
   };
 }
 
-export function peekPdfFilmCurrent(): number {
-  return filmCurrent;
+export function peekPdfFilmCurrent(scope: string): number {
+  return nav(scope).current;
 }
 
-export function resetPdfFilmCurrent(): void {
-  if (filmCurrent === 1) return;
-  filmCurrent = 1;
-  for (const listener of filmCurrentListeners) listener(1);
+export function resetPdfFilmCurrent(scope: string): void {
+  const state = nav(scope);
+  if (state.current === 1) return;
+  state.current = 1;
+  for (const listener of state.currentListeners) listener(1);
 }
 
-/** Lift-off landing guess — HUD / filmstrip ghost. Paint must not read this. */
-let pdfFlickPredictPage = 0;
-const filmPredictedListeners = new Set<(page: number) => void>();
-
-export function publishPdfFilmPredicted(page: number): void {
-  if (!(page >= 1) || page === pdfFlickPredictPage) return;
-  pdfFlickPredictPage = page;
-  for (const listener of filmPredictedListeners) listener(page);
+export function publishPdfFilmPredicted(scope: string, page: number): void {
+  const state = nav(scope);
+  if (!(page >= 1) || page === state.predicted) return;
+  state.predicted = page;
+  for (const listener of state.predictedListeners) listener(page);
 }
 
 export function subscribePdfFilmPredicted(
+  scope: string,
   listener: (page: number) => void,
 ): () => void {
-  filmPredictedListeners.add(listener);
-  listener(pdfFlickPredictPage);
+  const state = nav(scope);
+  state.predictedListeners.add(listener);
+  listener(state.predicted);
   return () => {
-    filmPredictedListeners.delete(listener);
+    state.predictedListeners.delete(listener);
   };
 }
 
-export function resetPdfFilmPredicted(): void {
-  if (pdfFlickPredictPage === 0) return;
-  pdfFlickPredictPage = 0;
-  for (const listener of filmPredictedListeners) listener(0);
+export function resetPdfFilmPredicted(scope: string): void {
+  const state = nav(scope);
+  if (state.predicted === 0) return;
+  state.predicted = 0;
+  for (const listener of state.predictedListeners) listener(0);
 }
 
-/** 0.25 pages toward the flick-end. Separate from C — rest-2 must not read this. */
-let preloadPages: number[] = [];
-const preloadListeners = new Set<() => void>();
-
-export function publishPdfPreloadPages(pages: readonly number[]): void {
+export function publishPdfPreloadPages(scope: string, pages: readonly number[]): void {
+  const state = nav(scope);
   const next = [...pages].filter((n) => n >= 1);
-  if (samePageList(preloadPages, next)) return;
-  preloadPages = next;
-  for (const listener of preloadListeners) listener();
+  if (samePageList(state.preloadPages, next)) return;
+  state.preloadPages = next;
+  for (const listener of state.preloadListeners) listener();
 }
 
-export function peekPdfPreloadPages(): readonly number[] {
-  return preloadPages;
+export function peekPdfPreloadPages(scope: string): readonly number[] {
+  return nav(scope).preloadPages;
 }
 
-export function subscribePdfPreloadPages(listener: () => void): () => void {
-  preloadListeners.add(listener);
+export function subscribePdfPreloadPages(scope: string, listener: () => void): () => void {
+  const state = nav(scope);
+  state.preloadListeners.add(listener);
   listener();
   return () => {
-    preloadListeners.delete(listener);
+    state.preloadListeners.delete(listener);
   };
 }
 
-export function resetPdfPreloadPages(): void {
-  if (preloadPages.length === 0) return;
-  preloadPages = [];
-  for (const listener of preloadListeners) listener();
+export function resetPdfPreloadPages(scope: string): void {
+  const state = nav(scope);
+  if (state.preloadPages.length === 0) return;
+  state.preloadPages = [];
+  for (const listener of state.preloadListeners) listener();
 }
 
 /** Wake the paint pump after spread remount when C and the hole did not move. */
-const paintWakeListeners = new Set<() => void>();
-
-export function wakePdfPaintPump(): void {
-  for (const listener of paintWakeListeners) listener();
+export function wakePdfPaintPump(scope: string): void {
+  for (const listener of nav(scope).paintWakeListeners) listener();
 }
 
-export function subscribePdfPaintWake(listener: () => void): () => void {
-  paintWakeListeners.add(listener);
+export function subscribePdfPaintWake(scope: string, listener: () => void): () => void {
+  const state = nav(scope);
+  state.paintWakeListeners.add(listener);
   return () => {
-    paintWakeListeners.delete(listener);
+    state.paintWakeListeners.delete(listener);
   };
 }
 
@@ -267,62 +354,61 @@ export function subscribePdfPaintWake(listener: () => void): () => void {
  */
 export const PDF_LAYOUT_BUSY_MIN_MS = 160;
 const PDF_LAYOUT_BUSY_MAX_MS = 5000;
-let layoutBusy = false;
-let layoutBusySince = 0;
-let layoutBusyClearTimer = 0;
-let layoutBusyMaxTimer = 0;
-const layoutBusyListeners = new Set<(busy: boolean) => void>();
 
-function emitLayoutBusy(busy: boolean): void {
-  layoutBusy = busy;
-  for (const listener of layoutBusyListeners) listener(layoutBusy);
+function emitLayoutBusy(state: FilmNav, busy: boolean): void {
+  state.layoutBusy = busy;
+  for (const listener of state.layoutBusyListeners) listener(state.layoutBusy);
 }
 
-export function publishPdfLayoutBusy(busy: boolean): void {
-  if (layoutBusyClearTimer) {
-    clearTimeout(layoutBusyClearTimer);
-    layoutBusyClearTimer = 0;
+export function publishPdfLayoutBusy(scope: string, busy: boolean): void {
+  const state = nav(scope);
+  if (state.layoutBusyClearTimer) {
+    clearTimeout(state.layoutBusyClearTimer);
+    state.layoutBusyClearTimer = 0;
   }
   if (busy) {
-    if (layoutBusy) return;
-    layoutBusySince = typeof performance !== "undefined" ? performance.now() : Date.now();
-    emitLayoutBusy(true);
-    if (layoutBusyMaxTimer) clearTimeout(layoutBusyMaxTimer);
-    layoutBusyMaxTimer = setTimeout(() => {
-      layoutBusyMaxTimer = 0;
-      if (layoutBusy) emitLayoutBusy(false);
+    if (state.layoutBusy) return;
+    state.layoutBusySince =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+    emitLayoutBusy(state, true);
+    if (state.layoutBusyMaxTimer) clearTimeout(state.layoutBusyMaxTimer);
+    state.layoutBusyMaxTimer = setTimeout(() => {
+      state.layoutBusyMaxTimer = 0;
+      if (state.layoutBusy) emitLayoutBusy(state, false);
     }, PDF_LAYOUT_BUSY_MAX_MS) as unknown as number;
     return;
   }
-  if (!layoutBusy) return;
+  if (!state.layoutBusy) return;
   const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-  const wait = Math.max(0, PDF_LAYOUT_BUSY_MIN_MS - (now - layoutBusySince));
+  const wait = Math.max(0, PDF_LAYOUT_BUSY_MIN_MS - (now - state.layoutBusySince));
   const finish = () => {
-    layoutBusyClearTimer = 0;
-    if (layoutBusyMaxTimer) {
-      clearTimeout(layoutBusyMaxTimer);
-      layoutBusyMaxTimer = 0;
+    state.layoutBusyClearTimer = 0;
+    if (state.layoutBusyMaxTimer) {
+      clearTimeout(state.layoutBusyMaxTimer);
+      state.layoutBusyMaxTimer = 0;
     }
-    if (layoutBusy) emitLayoutBusy(false);
+    if (state.layoutBusy) emitLayoutBusy(state, false);
   };
   if (wait > 0) {
-    layoutBusyClearTimer = setTimeout(finish, wait) as unknown as number;
+    state.layoutBusyClearTimer = setTimeout(finish, wait) as unknown as number;
   } else {
     finish();
   }
 }
 
-export function peekPdfLayoutBusy(): boolean {
-  return layoutBusy;
+export function peekPdfLayoutBusy(scope: string): boolean {
+  return nav(scope).layoutBusy;
 }
 
 export function subscribePdfLayoutBusy(
+  scope: string,
   listener: (busy: boolean) => void,
 ): () => void {
-  layoutBusyListeners.add(listener);
-  listener(layoutBusy);
+  const state = nav(scope);
+  state.layoutBusyListeners.add(listener);
+  listener(state.layoutBusy);
   return () => {
-    layoutBusyListeners.delete(listener);
+    state.layoutBusyListeners.delete(listener);
   };
 }
 
@@ -331,46 +417,60 @@ function samePageList(a: readonly number[], b: readonly number[]): boolean {
   return a.every((n, i) => n === b[i]);
 }
 
-/** Camera-hole pages (overlap) and rest-2 set. Not the flick-end guess. */
-let intersectingPages: number[] = [];
-let restPages: number[] = [];
-const viewPageListeners = new Set<() => void>();
-
 export function publishPdfViewPages(
+  scope: string,
   intersecting: readonly number[],
   rest: readonly number[],
 ): void {
+  const state = nav(scope);
   const nextIntersect = [...intersecting];
   const nextRest = [...rest];
-  if (samePageList(intersectingPages, nextIntersect) && samePageList(restPages, nextRest)) {
+  if (
+    samePageList(state.intersectingPages, nextIntersect) &&
+    samePageList(state.restPages, nextRest)
+  ) {
     return;
   }
-  intersectingPages = nextIntersect;
-  restPages = nextRest;
-  for (const listener of viewPageListeners) listener();
+  state.intersectingPages = nextIntersect;
+  state.restPages = nextRest;
+  for (const listener of state.viewPageListeners) listener();
 }
 
-export function subscribePdfViewPages(listener: () => void): () => void {
-  viewPageListeners.add(listener);
+export function subscribePdfViewPages(scope: string, listener: () => void): () => void {
+  const state = nav(scope);
+  state.viewPageListeners.add(listener);
   listener();
   return () => {
-    viewPageListeners.delete(listener);
+    state.viewPageListeners.delete(listener);
   };
 }
 
-export function peekPdfIntersectingPages(): readonly number[] {
-  return intersectingPages;
+export function peekPdfIntersectingPages(scope: string): readonly number[] {
+  return nav(scope).intersectingPages;
 }
 
-export function peekPdfRestPages(): readonly number[] {
-  return restPages;
+export function peekPdfRestPages(scope: string): readonly number[] {
+  return nav(scope).restPages;
 }
 
-export function resetPdfViewPages(): void {
-  if (intersectingPages.length === 0 && restPages.length === 0) return;
-  intersectingPages = [];
-  restPages = [];
-  for (const listener of viewPageListeners) listener();
+export function resetPdfViewPages(scope: string): void {
+  const state = nav(scope);
+  if (state.intersectingPages.length === 0 && state.restPages.length === 0) return;
+  state.intersectingPages = [];
+  state.restPages = [];
+  for (const listener of state.viewPageListeners) listener();
+}
+
+export function publishPdfFilmThumbWanted(scope: string, pages: readonly number[]): void {
+  nav(scope).thumbWanted = [...pages].filter((n) => n >= 1);
+}
+
+export function peekPdfFilmThumbWanted(scope: string): readonly number[] {
+  return nav(scope).thumbWanted;
+}
+
+export function resetPdfFilmThumbWanted(scope: string): void {
+  nav(scope).thumbWanted = [];
 }
 
 /** Session JPEG thumbs keyed by document content hash, then page number. */
@@ -436,21 +536,6 @@ export function subscribePdfThumbs(listener: () => void): () => void {
   return () => {
     thumbListeners.delete(listener);
   };
-}
-
-/** Strip cells the idle thumb pass should fill first. */
-let filmThumbWanted: number[] = [];
-
-export function publishPdfFilmThumbWanted(pages: readonly number[]): void {
-  filmThumbWanted = [...pages].filter((n) => n >= 1);
-}
-
-export function peekPdfFilmThumbWanted(): readonly number[] {
-  return filmThumbWanted;
-}
-
-export function resetPdfFilmThumbWanted(): void {
-  filmThumbWanted = [];
 }
 
 /**

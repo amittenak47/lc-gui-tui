@@ -198,7 +198,7 @@ import { WorkspaceLinkPicker, groupLabel, type LinkTarget } from "./modes/Worksp
 import { resolveWikiLinks } from "./util/wikiLinks";
 import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
 import { PdfPageRail } from "./modes/PdfPageRail";
-import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, publishPdfFilmCurrent, peekPdfFilmCurrent, peekPdfReadingFrames, pdfSpreadSlotCountChanged, resetPdfFilmPredicted, publishPdfLayoutBusy, subscribePdfLayoutBusy } from "./modes/pdfFilm";
+import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, clearPdfFilmScope, publishPdfFilmCurrent, peekPdfFilmCurrent, peekPdfReadingFrames, pdfSpreadSlotCountChanged, resetPdfFilmPredicted, publishPdfLayoutBusy, subscribePdfLayoutBusy } from "./modes/pdfFilm";
 import { AnnotateDialog, type AnnotateDialogKind } from "./modes/AnnotateDialog";
 import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
@@ -1207,7 +1207,17 @@ export function Workspace({
     {},
   );
   const [pdfLayoutBusy, setPdfLayoutBusy] = useState(false);
-  useEffect(() => subscribePdfLayoutBusy(setPdfLayoutBusy), []);
+  useEffect(() => subscribePdfLayoutBusy(tab.id, setPdfLayoutBusy), [tab.id]);
+  /*
+   * Where this tab was in its PDF is this tab's, and dies with it.
+   *
+   * Not on park: a parked workspace stays mounted precisely so that coming
+   * back is showing the page again rather than finding it. Closing the tab is
+   * the only thing that makes the place meaningless — and leaving it behind
+   * would grow the nav map by one record, with its listener sets and layout
+   * timers, for every document ever opened.
+   */
+  useEffect(() => () => clearPdfFilmScope(tab.id), [tab.id]);
   const spreadToggleAtRef = useRef(0);
   const annotatePdfHash =
     annotateSource?.docType === "pdf" ? annotateSource.hash : null;
@@ -1221,11 +1231,11 @@ export function Workspace({
     if (now - spreadToggleAtRef.current < 180) return;
     spreadToggleAtRef.current = now;
     setPdfLayoutBusy(true);
-    publishPdfLayoutBusy(true);
+    publishPdfLayoutBusy(tab.id, true);
     const focused = document.activeElement;
     if (focused instanceof HTMLElement) focused.blur();
-    const page = peekPdfFilmCurrent();
-    const fromFrames = peekPdfReadingFrames();
+    const page = peekPdfFilmCurrent(tab.id);
+    const fromFrames = peekPdfReadingFrames(tab.id);
     setPdfSpreadByHash((prev) => {
       const on = prev[hash] ?? loadPdfSpreadPref(hash);
       const next = !on;
@@ -1237,14 +1247,14 @@ export function Workspace({
       requestAnimationFrame(() => {
         boardRef.current?.remapPdfInkAcrossPdfLayout(fromFrames);
         if (!(page >= 1)) {
-          publishPdfLayoutBusy(false);
+          publishPdfLayoutBusy(tab.id, false);
           return;
         }
         boardRef.current?.aimPdfPage(page, { hold: false });
         const started = performance.now();
         const fromCount = fromFrames.length;
         const tick = () => {
-          const nowCount = peekPdfReadingFrames().length;
+          const nowCount = peekPdfReadingFrames(tab.id).length;
           const layoutReady =
             fromCount < 1 || pdfSpreadSlotCountChanged(fromCount, nowCount);
           const ok =
@@ -1252,7 +1262,7 @@ export function Workspace({
             boardRef.current?.scrollToPdfPage(page, { hold: false }) === true;
           if (ok || performance.now() - started > 8000) {
             if (!ok) boardRef.current?.scrollToPdfPage(page, { hold: false });
-            publishPdfLayoutBusy(false);
+            publishPdfLayoutBusy(tab.id, false);
             return;
           }
           requestAnimationFrame(tick);
@@ -3097,7 +3107,7 @@ export function Workspace({
           Number.isFinite(savedPdfPage) && savedPdfPage >= 1 ? savedPdfPage : 0;
         setPdfSessionPage(sessionPage);
         if (sessionPage >= 1) {
-          publishPdfFilmCurrent(sessionPage);
+          publishPdfFilmCurrent(tab.id, sessionPage);
           boardRef.current?.aimPdfPage(sessionPage);
         }
         setAnnotateSource({ name: input.name, text, hash, docType, bytes });
@@ -3380,11 +3390,11 @@ export function Workspace({
               ms: openMs(),
             });
           }
-          publishPdfFilmCurrent(landPage);
+          publishPdfFilmCurrent(tab.id, landPage);
           boardRef.current?.aimPdfPage(landPage);
           if (existing?.board.appState) {
             boardRef.current?.restoreView(existing.board.appState);
-            const filmed = peekPdfFilmCurrent();
+            const filmed = peekPdfFilmCurrent(tab.id);
             if (filmed >= 2) landPage = filmed;
           }
           let landed = boardRef.current?.scrollToPdfPage(landPage) === true;
@@ -3392,7 +3402,7 @@ export function Workspace({
           while (!landed && performance.now() < jumpDeadline) {
             if (pdfFailed()) throw new Error(pdfFailed()!);
             await waitMs(50);
-            const filmed = peekPdfFilmCurrent();
+            const filmed = peekPdfFilmCurrent(tab.id);
             if (filmed >= 2) landPage = filmed;
             landed = boardRef.current?.scrollToPdfPage(landPage) === true;
           }
@@ -3497,7 +3507,7 @@ export function Workspace({
         );
         if (workspaceLoadGenRef.current !== loadGen) return;
         const relandPdf = () => {
-          const filmed = peekPdfFilmCurrent();
+          const filmed = peekPdfFilmCurrent(tab.id);
           const page = filmed >= 2 ? filmed : landPage;
           if (page >= 1) {
             boardRef.current?.aimPdfPage(page);
@@ -8789,6 +8799,7 @@ export function Workspace({
           )}
           {tab.kind !== "home" && tab.kind !== "explore" ? (
           <Board
+            filmScope={tab.id}
             ref={boardRef}
             themeId={themeId}
             onThemePick={setThemeId}
@@ -8913,6 +8924,7 @@ export function Workspace({
                 >
                   {annotateSource.docType === "pdf" && annotateSource.bytes ? (
                     <PdfDocument
+                      filmScope={tab.id}
                       bytes={annotateSource.bytes}
                       docHash={annotateSource.hash}
                       frameWidth={annotatePageWidth}
@@ -9016,13 +9028,14 @@ export function Workspace({
           ) : null}
           {showing && pdfFilmOpen && pdfNav && pdfNav.count >= 2 && (
             <PdfPageRail
+              filmScope={tab.id}
               count={pdfNav.count}
               current={pdfNav.current}
               docHash={annotateSource?.hash}
               aspects={pdfNav.aspects}
               renderThumb={renderPdfThumb}
               onJump={(page) => {
-                resetPdfFilmPredicted();
+                resetPdfFilmPredicted(tab.id);
                 boardRef.current?.aimPdfPage(page);
                 boardRef.current?.scrollToPdfPage(page);
                 setPdfFilmOpen(false);

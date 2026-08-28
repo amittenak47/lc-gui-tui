@@ -30,6 +30,16 @@ import {
 export type { PdfThumbRenderer };
 
 export interface PdfPageRailProps {
+  /**
+   * Which mounted workspace this is, for PDF navigation state.
+   *
+   * Page camera, reading frames and the visible-page sets live in a module
+   * beside the filmstrip and used to be one set of globals. Two documents can
+   * be mounted at once — a split, or one parked in the mount budget — so they
+   * are keyed, and the tab is the key: the same file opened with two annotation
+   * sets shares a content hash and shares nothing about where you are in it.
+   */
+  filmScope: string;
   count: number;
   current: number;
   /** Content hash of the open PDF — session thumbs survive closing the strip. */
@@ -41,6 +51,7 @@ export interface PdfPageRailProps {
 }
 
 export function PdfPageRail({
+  filmScope,
   count,
   current,
   docHash = null,
@@ -64,8 +75,8 @@ export function PdfPageRail({
   const [railPredicted, setRailPredicted] = useState(0);
   const currentPage = railCurrent;
 
-  useEffect(() => subscribePdfFilmCurrent(setRailCurrent), []);
-  useEffect(() => subscribePdfFilmPredicted(setRailPredicted), []);
+  useEffect(() => subscribePdfFilmCurrent(filmScope, setRailCurrent), []);
+  useEffect(() => subscribePdfFilmPredicted(filmScope, setRailPredicted), []);
   useEffect(() => {
     return subscribePdfThumbs(() => {
       setThumbs(peekPdfThumbs(docHashRef.current));
@@ -141,7 +152,7 @@ export function PdfPageRail({
     if (count < 2) return;
     let cancelled = false;
     const needed = thumbWindow(currentPage, count, visibleRef.current);
-    publishPdfFilmThumbWanted(needed);
+    publishPdfFilmThumbWanted(filmScope, needed);
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const px = Math.round(PDF_FILM_THUMB_CSS * dpr);
 
