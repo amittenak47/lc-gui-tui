@@ -30,7 +30,15 @@ import {
   publishPdfLayoutBusy,
   pdfSpreadSlotCountChanged,
   subscribePdfLayoutBusy,
+  clearPdfFilmScope,
+  resetPdfFilmScopes,
+  peekPdfFilmCurrent,
+  peekPdfIntersectingPages,
+  publishPdfViewPages,
 } from "./pdfFilm";
+
+/** One mounted workspace. Nav state is keyed by tab, so tests need a tab. */
+const SCOPE = "annotate-1";
 
 describe("filmStripWheelDelta", () => {
   it("turns a vertical wheel into horizontal strip travel", () => {
@@ -162,18 +170,18 @@ describe("pdfSpreadSlotCountChanged", () => {
 describe("pdf layout busy", () => {
   it("notifies subscribers when spread relayout starts and when C is ready", () => {
     vi.useFakeTimers();
-    publishPdfLayoutBusy(false);
+    publishPdfLayoutBusy(SCOPE, false);
     const seen: boolean[] = [];
-    const unsub = subscribePdfLayoutBusy((busy) => seen.push(busy));
+    const unsub = subscribePdfLayoutBusy(SCOPE, (busy) => seen.push(busy));
     expect(seen).toEqual([false]);
-    publishPdfLayoutBusy(true);
-    publishPdfLayoutBusy(true);
-    publishPdfLayoutBusy(false);
+    publishPdfLayoutBusy(SCOPE, true);
+    publishPdfLayoutBusy(SCOPE, true);
+    publishPdfLayoutBusy(SCOPE, false);
     expect(seen).toEqual([false, true]);
-    expect(peekPdfLayoutBusy()).toBe(true);
+    expect(peekPdfLayoutBusy(SCOPE)).toBe(true);
     vi.advanceTimersByTime(200);
     expect(seen).toEqual([false, true, false]);
-    expect(peekPdfLayoutBusy()).toBe(false);
+    expect(peekPdfLayoutBusy(SCOPE)).toBe(false);
     unsub();
     vi.useRealTimers();
   });
@@ -203,30 +211,30 @@ describe("pdf spread pref", () => {
 
 describe("pdf film current", () => {
   it("notifies subscribers when the page under the camera changes", () => {
-    resetPdfFilmCurrent();
+    resetPdfFilmCurrent(SCOPE);
     const seen: number[] = [];
-    const unsub = subscribePdfFilmCurrent((page) => seen.push(page));
+    const unsub = subscribePdfFilmCurrent(SCOPE, (page) => seen.push(page));
     expect(seen).toEqual([1]);
-    publishPdfFilmCurrent(1);
-    publishPdfFilmCurrent(12);
-    publishPdfFilmCurrent(12);
-    publishPdfFilmCurrent(13);
+    publishPdfFilmCurrent(SCOPE, 1);
+    publishPdfFilmCurrent(SCOPE, 12);
+    publishPdfFilmCurrent(SCOPE, 12);
+    publishPdfFilmCurrent(SCOPE, 13);
     expect(seen).toEqual([1, 12, 13]);
     unsub();
-    resetPdfFilmCurrent();
+    resetPdfFilmCurrent(SCOPE);
   });
 
   it("notifies subscribers when a new document resets to page 1", () => {
-    publishPdfFilmCurrent(12);
+    publishPdfFilmCurrent(SCOPE, 12);
     const seen: number[] = [];
-    const unsub = subscribePdfFilmCurrent((page) => seen.push(page));
-    resetPdfFilmCurrent();
+    const unsub = subscribePdfFilmCurrent(SCOPE, (page) => seen.push(page));
+    resetPdfFilmCurrent(SCOPE);
     expect(seen).toEqual([12, 1]);
     unsub();
   });
 
   it("follows camera Y through every page instead of skipping", () => {
-    resetPdfFilmCurrent();
+    resetPdfFilmCurrent(SCOPE);
     const frames = [
       { pageId: 1, minY: 0, maxY: 100 },
       { pageId: 2, minY: 118, maxY: 218 },
@@ -235,54 +243,107 @@ describe("pdf film current", () => {
       { pageId: 5, minY: 472, maxY: 572 },
     ];
     const seen: number[] = [];
-    const unsub = subscribePdfFilmCurrent((page) => seen.push(page));
-    publishPdfFilmFromCamera(frames, 0, 1, 80);
-    publishPdfFilmFromCamera(frames, -118, 1, 80);
-    publishPdfFilmFromCamera(frames, -236, 1, 80);
-    publishPdfFilmFromCamera(frames, -354, 1, 80);
-    publishPdfFilmFromCamera(frames, -472, 1, 80);
+    const unsub = subscribePdfFilmCurrent(SCOPE, (page) => seen.push(page));
+    publishPdfFilmFromCamera(SCOPE, frames, 0, 1, 80);
+    publishPdfFilmFromCamera(SCOPE, frames, -118, 1, 80);
+    publishPdfFilmFromCamera(SCOPE, frames, -236, 1, 80);
+    publishPdfFilmFromCamera(SCOPE, frames, -354, 1, 80);
+    publishPdfFilmFromCamera(SCOPE, frames, -472, 1, 80);
     expect(seen).toEqual([1, 2, 3, 4, 5]);
     unsub();
-    resetPdfFilmCurrent();
+    resetPdfFilmCurrent(SCOPE);
   });
 
   it("keeps the flick-end guess on a separate channel from live current", () => {
-    resetPdfFilmCurrent();
-    resetPdfFilmPredicted();
+    resetPdfFilmCurrent(SCOPE);
+    resetPdfFilmPredicted(SCOPE);
     const live: number[] = [];
     const pred: number[] = [];
-    const unsubLive = subscribePdfFilmCurrent((page) => live.push(page));
-    const unsubPred = subscribePdfFilmPredicted((page) => pred.push(page));
-    publishPdfFilmCurrent(4);
-    publishPdfFilmPredicted(9);
+    const unsubLive = subscribePdfFilmCurrent(SCOPE, (page) => live.push(page));
+    const unsubPred = subscribePdfFilmPredicted(SCOPE, (page) => pred.push(page));
+    publishPdfFilmCurrent(SCOPE, 4);
+    publishPdfFilmPredicted(SCOPE, 9);
     expect(live.at(-1)).toBe(4);
     expect(pred.at(-1)).toBe(9);
     unsubLive();
     unsubPred();
-    resetPdfFilmPredicted();
-    resetPdfFilmCurrent();
+    resetPdfFilmPredicted(SCOPE);
+    resetPdfFilmCurrent(SCOPE);
   });
 });
 
 describe("pdf preload pages", () => {
   it("is a separate list from live C", () => {
-    resetPdfPreloadPages();
-    publishPdfFilmCurrent(10);
-    publishPdfPreloadPages([11, 12]);
-    expect(peekPdfPreloadPages()).toEqual([11, 12]);
-    resetPdfPreloadPages();
-    expect(peekPdfPreloadPages()).toEqual([]);
-    resetPdfFilmCurrent();
+    resetPdfPreloadPages(SCOPE);
+    publishPdfFilmCurrent(SCOPE, 10);
+    publishPdfPreloadPages(SCOPE, [11, 12]);
+    expect(peekPdfPreloadPages(SCOPE)).toEqual([11, 12]);
+    resetPdfPreloadPages(SCOPE);
+    expect(peekPdfPreloadPages(SCOPE)).toEqual([]);
+    resetPdfFilmCurrent(SCOPE);
   });
 });
 
 describe("pdf reading frames", () => {
   it("stores layout frames for the camera without measuring the DOM", () => {
-    resetPdfReadingFrames();
-    expect(peekPdfReadingFrames()).toEqual([]);
-    setPdfReadingFrames([{ pageId: 2, minY: 10, maxY: 20 }]);
-    expect(peekPdfReadingFrames()).toEqual([{ pageId: 2, minY: 10, maxY: 20 }]);
-    resetPdfReadingFrames();
-    expect(peekPdfReadingFrames()).toEqual([]);
+    resetPdfReadingFrames(SCOPE);
+    expect(peekPdfReadingFrames(SCOPE)).toEqual([]);
+    setPdfReadingFrames(SCOPE, [{ pageId: 2, minY: 10, maxY: 20 }]);
+    expect(peekPdfReadingFrames(SCOPE)).toEqual([{ pageId: 2, minY: 10, maxY: 20 }]);
+    resetPdfReadingFrames(SCOPE);
+    expect(peekPdfReadingFrames(SCOPE)).toEqual([]);
+  });
+});
+
+describe("nav state is per mounted document", () => {
+  it("does not let one document move another one's page", () => {
+    resetPdfFilmScopes();
+    const a: number[] = [];
+    const b: number[] = [];
+    const unsubA = subscribePdfFilmCurrent("annotate-1", (page: number) => a.push(page));
+    const unsubB = subscribePdfFilmCurrent("annotate-2", (page: number) => b.push(page));
+
+    publishPdfFilmCurrent("annotate-1", 12);
+    expect(peekPdfFilmCurrent("annotate-1")).toBe(12);
+    expect(peekPdfFilmCurrent("annotate-2")).toBe(1);
+
+    // The other pane scrolls, and mounting used to reset both.
+    publishPdfFilmCurrent("annotate-2", 3);
+    resetPdfFilmCurrent("annotate-2");
+    expect(peekPdfFilmCurrent("annotate-1")).toBe(12);
+
+    expect(a).toEqual([1, 12]);
+    expect(b).toEqual([1, 3, 1]);
+    unsubA();
+    unsubB();
+    resetPdfFilmScopes();
+  });
+
+  it("keeps reading frames and visible pages apart", () => {
+    resetPdfFilmScopes();
+    setPdfReadingFrames("annotate-1", [{ pageId: 2, minY: 10, maxY: 20 }]);
+    publishPdfViewPages("annotate-1", [2], [1, 3]);
+    setPdfReadingFrames("annotate-2", [{ pageId: 9, minY: 0, maxY: 5 }]);
+
+    expect(peekPdfReadingFrames("annotate-1")).toEqual([
+      { pageId: 2, minY: 10, maxY: 20 },
+    ]);
+    expect(peekPdfReadingFrames("annotate-2")).toEqual([{ pageId: 9, minY: 0, maxY: 5 }]);
+    expect(peekPdfIntersectingPages("annotate-1")).toEqual([2]);
+    expect(peekPdfIntersectingPages("annotate-2")).toEqual([]);
+    resetPdfFilmScopes();
+  });
+
+  it("forgets a closed tab without touching the one still open", () => {
+    resetPdfFilmScopes();
+    publishPdfFilmCurrent("annotate-1", 7);
+    publishPdfFilmCurrent("annotate-2", 4);
+
+    clearPdfFilmScope("annotate-1");
+
+    // Gone means back to the start, not inherited from the other document.
+    expect(peekPdfFilmCurrent("annotate-1")).toBe(1);
+    expect(peekPdfFilmCurrent("annotate-2")).toBe(4);
+    resetPdfFilmScopes();
   });
 });

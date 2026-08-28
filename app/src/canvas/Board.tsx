@@ -1050,6 +1050,16 @@ function triggerRedo(): void {
 }
 
 export interface BoardProps {
+  /**
+   * Which mounted workspace this is, for PDF navigation state.
+   *
+   * Page camera, reading frames and the visible-page sets live in a module
+   * beside the filmstrip and used to be one set of globals. Two documents can
+   * be mounted at once — a split, or one parked in the mount budget — so they
+   * are keyed, and the tab is the key: the same file opened with two annotation
+   * sets shares a content hash and shares nothing about where you are in it.
+   */
+  filmScope: string;
   /** Called whenever the scene changes, so the ambient loop can sample it. */
   onChange?: () => void;
   themeId: string;
@@ -1279,6 +1289,7 @@ function paintBoardChrome(
 
 export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   {
+    filmScope,
     onChange,
     themeId,
     onThemePick,
@@ -2903,13 +2914,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   publishPdfFilmFromScrollRef.current = (scrollX, scrollY, zoom, height) => {
     if (!pdfFilmPublishRef.current) return;
-    const local = peekPdfReadingFrames();
+    const local = peekPdfReadingFrames(filmScope);
     const pending = pendingPdfPageRef.current;
     if (pending >= 1) {
       const origin = pageBoundsRef.current?.minY ?? 0;
       const frames = offsetPageFrames(local, origin);
-      publishPdfFilmCurrent(pending);
+      publishPdfFilmCurrent(filmScope, pending);
       publishPdfViewPages(
+        filmScope,
         [pending],
         pdfRestPages(pending, Math.max(pending, lastPageId(frames)), [pending]),
       );
@@ -2923,18 +2935,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     if (local.length === 0) {
       flickPredictHudRef.current?.hide();
-      resetPdfFilmPredicted();
-      resetPdfPreloadPages();
-      resetPdfViewPages();
+      resetPdfFilmPredicted(filmScope);
+      resetPdfPreloadPages(filmScope);
+      resetPdfViewPages(filmScope);
       return;
     }
     const origin = pageBoundsRef.current?.minY ?? 0;
     const frames = offsetPageFrames(local, origin);
-    publishPdfFilmFromCamera(frames, scrollY, zoom, height);
+    publishPdfFilmFromCamera(filmScope, frames, scrollY, zoom, height);
     const live = pageIdFromCamera(frames, scrollY, zoom, height);
     const intersecting = pageIdsIntersectingView(frames, scrollY, zoom, height);
     const last = lastPageId(frames);
     publishPdfViewPages(
+      filmScope,
       intersecting,
       pdfRestPages(live, last, intersecting),
     );
@@ -2955,8 +2968,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (handPanningRef.current) flickPredFrozenRef.current = pred;
     }
     const finger = handPanningRef.current || pdfCoastRef.current;
-    if (!finger) publishPdfFilmPredicted(pred);
-    publishPdfPreloadPages(finger ? pdfPreloadPages(live, pred, last) : []);
+    if (!finger) publishPdfFilmPredicted(filmScope, pred);
+    publishPdfPreloadPages(filmScope, finger ? pdfPreloadPages(live, pred, last) : []);
     const err = pred - live;
     flickPredictHudRef.current?.show(live, pred, err);
     const log = pdfPanLogRef.current;
@@ -3476,7 +3489,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const getPageFrames = useCallback(() => {
     const bounds = pageBoundsRef.current;
-    const local = peekPdfReadingFrames();
+    const local = peekPdfReadingFrames(filmScope);
     if (local.length > 0 && bounds) {
       return offsetPageFrames(local, bounds.minY);
     }
@@ -3502,7 +3515,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const pending = pendingPdfPageRef.current;
     if (pending >= 1) {
       const origin = pageBoundsRef.current?.minY ?? 0;
-      const frames = offsetPageFrames(peekPdfReadingFrames(), origin);
+      const frames = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
       const prevHold = liveCameraRef.current;
       const holdZoom = prevHold?.zoom ?? 1;
       const holdHeight = prevHold?.height && prevHold.height > 0 ? prevHold.height : 800;
@@ -3912,7 +3925,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       pdfCoastRef.current = true;
       if (flickPredFrozenRef.current == null) {
-        const local = peekPdfReadingFrames();
+        const local = peekPdfReadingFrames(filmScope);
         if (local.length > 0) {
           const origin = pageBoundsRef.current?.minY ?? 0;
           const frames = offsetPageFrames(local, origin);
@@ -3931,7 +3944,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const frozen = flickPredFrozenRef.current;
         pdfCoastRef.current = false;
         applyVisualScrollNowRef.current(scrollX, scrollY);
-        const local = peekPdfReadingFrames();
+        const local = peekPdfReadingFrames(filmScope);
         if (local.length > 0 && frozen != null) {
           const origin = pageBoundsRef.current?.minY ?? 0;
           const frames = offsetPageFrames(local, origin);
@@ -3940,7 +3953,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           const err = frozen - actual;
           flickSettleErrRef.current = err;
           flickPredictHudRef.current?.show(actual, frozen, err);
-          publishPdfFilmPredicted(frozen);
+          publishPdfFilmPredicted(filmScope, frozen);
         }
         flickPredFrozenRef.current = null;
       };
@@ -6316,16 +6329,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const recentreKeepPlace = useCallback(() => {
     const drawPage = isDrawPageRegion(mobileRegionRef.current);
     if (drawPage) userAdjustedCameraRef.current = false;
-    const page = peekPdfFilmCurrent();
+    const page = peekPdfFilmCurrent(filmScope);
     const pass = () => {
       lastFittedBoardBoxRef.current = { w: 0, h: 0 };
       applyLiveBoxFit(true);
       if (drawPage) runFit(null, "both");
       reportContentSlot();
       rasterInkRef.current?.syncCamera();
-      if (!drawPage && page >= 1 && peekPdfReadingFrames().length > 0) {
+      if (!drawPage && page >= 1 && peekPdfReadingFrames(filmScope).length > 0) {
         scrollToPdfPageRef.current(page);
-        wakePdfPaintPump();
+        wakePdfPaintPump(filmScope);
       }
     };
     for (const id of recentreTimersRef.current) window.clearTimeout(id);
@@ -7625,7 +7638,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     );
     const insetTop = measured.top + (mobileRef.current ? 0 : safeCssPx("--lc-safe-top"));
     const origin = pageBoundsRef.current?.minY ?? 0;
-    let frames = offsetPageFrames(peekPdfReadingFrames(), origin);
+    let frames = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
     if (!frames.some((frame) => frame.pageId === pageId)) {
       frames = pageFramesFromPdfSlot(
         contentSlotNodeRef.current,
@@ -7686,8 +7699,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       captureUpdate: CaptureUpdateAction.NEVER,
     });
     placeContentSlotAtRef.current(scrollX, nextScrollY, zoom);
-    publishPdfFilmCurrent(pageId);
+    publishPdfFilmCurrent(filmScope, pageId);
     publishPdfViewPages(
+      filmScope,
       [pageId],
       pdfRestPages(pageId, Math.max(pageId, lastPageId(frames)), [pageId]),
     );
@@ -8058,12 +8072,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
         userAdjustedCameraRef.current = true;
         pendingPdfPageRef.current = opts?.hold === false ? 0 : pageId;
-        publishPdfFilmCurrent(pageId);
+        publishPdfFilmCurrent(filmScope, pageId);
       },
       remapPdfInkAcrossPdfLayout: (fromFrames) => {
         const ink = rasterInkRef.current;
         const bounds = pageBoundsRef.current;
-        const toLocal = peekPdfReadingFrames();
+        const toLocal = peekPdfReadingFrames(filmScope);
         if (!ink || !bounds || fromFrames.length === 0 || toLocal.length === 0) return;
         const width = bounds.maxX - bounds.minX;
         if (!(width > 0)) return;
@@ -8092,13 +8106,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           captureUpdate: CaptureUpdateAction.NEVER,
         });
         const origin = pageBoundsRef.current?.minY ?? 0;
-        const frames = offsetPageFrames(peekPdfReadingFrames(), origin);
+        const frames = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
         const viewH = liveCameraRef.current?.height ?? 800;
         const savedPage = pdfPageFromSavedView(saved, frames, viewH);
         if (savedPage >= 1) {
           if (jumpToPdfPage(savedPage)) return;
           pendingPdfPageRef.current = savedPage;
-          publishPdfFilmCurrent(savedPage);
+          publishPdfFilmCurrent(filmScope, savedPage);
           return;
         }
         api.updateScene({
@@ -8180,13 +8194,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             zoom: state.zoom?.value ?? 1,
             pdfPage: (() => {
               const origin = pageBoundsRef.current?.minY ?? 0;
-              const frames = offsetPageFrames(peekPdfReadingFrames(), origin);
+              const frames = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
               const live = liveCameraRef.current;
               const y = live?.scrollY ?? state.scrollY ?? 0;
               const z = live?.zoom ?? state.zoom?.value ?? 1;
               const h = live?.height ?? state.height ?? 800;
               if (frames.length > 0) return pageIdFromCamera(frames, y, z, h);
-              return peekPdfFilmCurrent();
+              return peekPdfFilmCurrent(filmScope);
             })(),
           },
           // Encoded, not raw — `ink` stays readable forever but is never
