@@ -419,6 +419,21 @@ export function HubConflictSplit({
     const keptNotes = rows
       .map((row) => (pickOf(picks, row.id, side) === true ? (side === "local" ? row.local : row.server) : null))
       .filter((note): note is DocFootnote => Boolean(note));
+    /*
+     * Tapping a row draws that copy, before any ✓.
+     *
+     * The row tap only scrolled to the page, so the pane you were sent to was
+     * blank where the mark should be — you had to keep it to find out what you
+     * were keeping. Focus is a question, not an answer: this previews the copy
+     * under the cursor and nothing about the choice changes. A dropped row
+     * still previews when you tap it, and is still dropped.
+     */
+    const focusedRow = focusedId === INK_ROW_ID ? null : rows.find((row) => row.id === focusedId);
+    const focusedNote = focusedRow ? (side === "local" ? focusedRow.local : focusedRow.server) : null;
+    const previewNotes =
+      focusedNote && !keptNotes.some((note) => note.id === focusedNote.id)
+        ? [...keptNotes, focusedNote]
+        : keptNotes;
     return (
       <section className="lc-hub-conflict-pane" data-side={side} data-verdict={verdict}>
         <header className="lc-hub-conflict-pane-head">
@@ -474,9 +489,11 @@ export function HubConflictSplit({
           <ConflictPagePreview
             hash={docHash}
             page={focusPage}
-            notes={keptNotes}
+            notes={previewNotes}
             inkPages={side === "local" ? conflict.localInk : conflict.serverInk}
-            showInk={pickOf(picks, INK_ROW_ID, side) === true}
+            showInk={
+              pickOf(picks, INK_ROW_ID, side) === true || focusedId === INK_ROW_ID
+            }
             bytes={bytes}
             filmScope={filmScopeBase ? `${filmScopeBase}-${side}` : undefined}
             sourceText={
