@@ -11,7 +11,7 @@
  * on Sync.
  */
 
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { AnnotatePadDto, InkPageDto } from "../api/client";
 import type { PageFrame } from "../canvas/inkPageIndex";
@@ -19,6 +19,7 @@ import type { DocFootnote } from "../util/docFootnotes";
 import { conflictFocusPage } from "../util/conflictPage";
 import { Tip } from "./Tip";
 import { ConflictPagePreview } from "./ConflictPagePreview";
+import { FootnoteOverview } from "../modes/FootnoteOverview";
 import {
   INK_ROW_ID,
   type FootnoteDiffRow,
@@ -429,6 +430,45 @@ export function HubConflictSplit({
     );
   };
 
+  /*
+   * Where each pane's hub sits.
+   *
+   * The card portals out of the tree and positions itself `fixed`, so the two
+   * of them would otherwise clamp to the same viewport box and land on top of
+   * each other — the one arrangement that makes comparing two copies useless.
+   * Anchored on its own pane, each stays over the copy it describes.
+   *
+   * Measured from a layout effect rather than a ref callback: a callback ref
+   * is a new function every render, so React detaches and reattaches it each
+   * pass, and measuring there wrote state on every one of them.
+   */
+  const paneBodyRefs = useRef<Record<Side, HTMLDivElement | null>>({
+    local: null,
+    server: null,
+  });
+  const setPaneBody = (side: Side) => (node: HTMLDivElement | null) => {
+    paneBodyRefs.current[side] = node;
+  };
+  const [hubAnchors, setHubAnchors] = useState<Record<Side, DOMRect | null>>({
+    local: null,
+    server: null,
+  });
+  const hubOpen = focusedId !== INK_ROW_ID && rows.some((row) => row.id === focusedId);
+  useLayoutEffect(() => {
+    if (!hubOpen) {
+      setHubAnchors((current) =>
+        current.local === null && current.server === null
+          ? current
+          : { local: null, server: null },
+      );
+      return;
+    }
+    setHubAnchors({
+      local: paneBodyRefs.current.local?.getBoundingClientRect() ?? null,
+      server: paneBodyRefs.current.server?.getBoundingClientRect() ?? null,
+    });
+  }, [hubOpen, focusedId]);
+
   const renderPane = (side: Side) => {
     const body = side === "local" ? conflict.local : conflict.server;
     const at = updatedAtOf(body);
@@ -504,7 +544,7 @@ export function HubConflictSplit({
             </button>
           </Tip>
         </header>
-        <div className="lc-hub-conflict-pane-body">
+        <div className="lc-hub-conflict-pane-body" ref={setPaneBody(side)}>
           <ConflictPagePreview
             hash={docHash}
             page={focusPage}
@@ -523,6 +563,35 @@ export function HubConflictSplit({
             sceneWidth={sceneWidth}
             pageFrames={pageFrames}
           />
+          {/*
+            This pane's copy of the focused mark, in the real hub.
+
+            One per pane, on that pane's own footnote — so Local's notes,
+            boards and threads and the other device's sit side by side, which
+            is what "changed on both" is actually asking you to compare. The
+            live hub in the workspace reads this device's set and could only
+            ever show one of them.
+
+            Read-only: the reader is choosing between two copies, and Keep is
+            the only write in this flow. Anything typed into the losing copy
+            would be thrown away without saying so.
+          */}
+          {focusedNote ? (
+            <div className="lc-hub-conflict-hub">
+              <FootnoteOverview
+                footnote={focusedNote}
+                anchorRect={hubAnchors[side]}
+                readOnly
+                onChange={() => {}}
+                onClose={() => setFocusedId(INK_ROW_ID)}
+                threadMessages={() => []}
+                onSendCoach={() => {}}
+                onOpenExternal={() => {}}
+                subMarkMode={null}
+                onSubMarkModeChange={() => {}}
+              />
+            </div>
+          ) : null}
           <ol className="lc-hub-conflict-list">
             {renderInkRow(side)}
             {rows.map((row) => (

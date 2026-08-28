@@ -198,6 +198,20 @@ export interface DocSelectionLayerProps {
    * Highlighter / underline tool — native text selection, not the hold box.
    */
   highlighting?: boolean;
+  /**
+   * Place the marks that are already there, and keep placing them.
+   *
+   * Opt-in, and separate from `enabled` on purpose. Placement needs to watch
+   * the body, because a PDF's text layer lands after mount and the first pass
+   * finds nothing to measure against — but the reader deliberately does *not*
+   * watch, since re-placing ribbons on every window mutation mid-flick starves
+   * ink tile paint until scroll settle.
+   *
+   * The conflict panes are the case this exists for: they need the ribbons to
+   * appear, and must not arm the selection gestures on a surface whose whole
+   * job is to be scrolled.
+   */
+  placeExisting?: boolean;
   footnotes?: readonly DocFootnote[];
   onAnnotate?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
   onCopy?: (
@@ -286,6 +300,7 @@ export function DocSelectionLayer({
   enabled = true,
   marksHost = null,
   highlighting = false,
+  placeExisting = false,
   footnotes = [],
   onAnnotate,
   onCopy,
@@ -1766,7 +1781,7 @@ export function DocSelectionLayer({
      * `place()` alone still left MutationObserver + rAF firing every text-layer
      * paint during a flick (~30fps chop). Pause delivery; reconnect on settle.
      */
-    const watchMutations = enabled || highlighting;
+    const watchMutations = enabled || highlighting || placeExisting;
     let frame: number | null = null;
     if (!watchMutations || footnotes.length === 0 || typeof MutationObserver !== "function") {
       return () => {
@@ -1832,7 +1847,7 @@ export function DocSelectionLayer({
     };
     // Intentionally omit `children`: identity churn on every App render re-bound
     // the observer and re-ran place(), which felt like a constant scroll ping.
-  }, [footnotes, enabled, highlighting]);
+  }, [footnotes, enabled, highlighting, placeExisting]);
 
 
 

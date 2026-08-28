@@ -70,10 +70,34 @@ describe("conflictInkPlacement", () => {
     expect(six.originY).not.toBe(forty.originY);
   });
 
-  it("falls back to the top when the frames are not there", () => {
-    // Wrong for every page but the first, and better than refusing to draw
-    // handwriting the reader is being asked to choose about.
-    expect(conflictInkPlacement(slot(), undefined, 540).originY).toBe(0);
+  it("reads the page's own position when the frames are not there", () => {
+    /*
+     * Zero was the old fallback, and it is the bug: the same window of the
+     * stack drawn onto every canvas — the top of the book repeated down the
+     * pane, or nothing once the strokes are past it. The pane has measured
+     * where this page sits, so that measurement stands in.
+     */
+    const placed = conflictInkPlacement(slot(), undefined, 540);
+    expect(placed.scale).toBe(0.5);
+    expect(placed.originY).toBe(3500);
+  });
+
+  it("gives each page a different origin without any frames at all", () => {
+    // The symptom this fixes: both sides, and every page, painting the same
+    // strokes because they all started from the same place.
+    const six = conflictInkPlacement(slot({ page: 6, top: 1750 }), undefined, 540);
+    const forty = conflictInkPlacement(slot({ page: 40, top: 13650 }), undefined, 540);
+    expect(six.originY).not.toBe(forty.originY);
+    expect(forty.originY).toBe(27300);
+  });
+
+  it("still prefers the board's frame, which is the scene ink was drawn in", () => {
+    const placed = conflictInkPlacement(
+      slot({ top: 1750 }),
+      { pageId: 6, minY: 1800, maxY: 2150 },
+      540,
+    );
+    expect(placed.originY).toBe(1800);
   });
 
   it("does not divide by a scene width it was never given", () => {

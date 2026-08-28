@@ -77,6 +77,17 @@ export interface FootnoteOverviewProps {
   onOpenWhiteboard?: (id: string) => void;
   /** Drop the KV blob after the pointer is gone. */
   onDeleteWhiteboard?: (id: string) => void;
+  /**
+   * Show what this mark holds; change none of it.
+   *
+   * The conflict split mounts one of these per pane, on that pane's copy of
+   * the mark — so Local's hub and the other device's hub can differ, which is
+   * the whole reason a row says "changed on both". Nothing here may write:
+   * the reader is choosing between two copies, and Keep is the only write in
+   * that flow. Adding a note to a copy that is about to lose would be work
+   * thrown away without saying so.
+   */
+  readOnly?: boolean;
 }
 type Task =
   | { kind: "note"; id: string | null }
@@ -96,7 +107,19 @@ function viewport() {
   };
 }
 /** Elements whose box is "the paper", in the order we would rather have one. */
-const PAPER_SELECTORS = [".lc-page-content-slot", ".lc-page-marks-slot"] as const;
+/*
+ * The paper the card is kept over.
+ *
+ * The conflict pane is on this list because two of these cards can be open at
+ * once there — one per side, each on its own copy of the same mark. Without a
+ * pane to narrow to, both clamp to the same viewport box and land on top of
+ * each other, which is the one arrangement that makes comparing them useless.
+ */
+const PAPER_SELECTORS = [
+  ".lc-page-content-slot",
+  ".lc-page-marks-slot",
+  ".lc-hub-conflict-preview",
+] as const;
 
 function boxHolds(box: DOMRect, x: number, y: number): boolean {
   return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
@@ -230,9 +253,12 @@ function applyViewportSize(node: HTMLElement, task: Task | null, compact = false
 function MarkTitle({
   value,
   onCommit,
+  readOnly = false,
 }: {
   value: string | undefined;
   onCommit: (next: string | undefined) => void;
+  /** Show the title; do not offer to rename it. */
+  readOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
@@ -253,7 +279,7 @@ function MarkTitle({
     setEditing(false);
   };
 
-  if (editing) {
+  if (editing && !readOnly) {
     return (
       <input
         ref={inputRef}
@@ -282,13 +308,23 @@ function MarkTitle({
     <button
       type="button"
       className={`lc-footnote-overview-title-display${labeled ? "" : " is-empty"}`}
-      aria-label={labeled ? "Mark title, double-click to edit" : "Add title, double-click to edit"}
-      title="Double-click to edit title"
-      onDoubleClick={(event) => {
-        event.preventDefault();
-        setDraft(value ?? "");
-        setEditing(true);
-      }}
+      aria-label={
+        readOnly
+          ? "Mark title"
+          : labeled
+            ? "Mark title, double-click to edit"
+            : "Add title, double-click to edit"
+      }
+      title={readOnly ? undefined : "Double-click to edit title"}
+      onDoubleClick={
+        readOnly
+          ? undefined
+          : (event) => {
+              event.preventDefault();
+              setDraft(value ?? "");
+              setEditing(true);
+            }
+      }
     >
       {labeled || "Title"}
     </button>
@@ -313,6 +349,7 @@ export function FootnoteOverview({
   onRemoveWorkspaceLink,
   onOpenWhiteboard,
   onDeleteWhiteboard,
+  readOnly = false,
   anchorRect,
   subMarkMode,
   onSubMarkModeChange,
@@ -337,7 +374,15 @@ export function FootnoteOverview({
   const whiteboards = footnote.whiteboards ?? [];
   const threads = footnote.threads ?? [];
   const subMarks = footnote.subMarks ?? [];
+  /*
+   * Rows that only read.
+   *
+   * A coach mark already renders this way — its notes and boards are the
+   * agent's account of the mark, not a list to edit — so read-only reuses that
+   * shape rather than inventing a second one.
+   */
   const isAiTab = footnote.kind === "ai";
+  const rowsAreReadOnly = isAiTab || readOnly;
   const searchLink =
     footnote.kind === "search" && footnote.url
       ? { title: footnote.query || "Search", url: footnote.url }
@@ -745,10 +790,13 @@ export function FootnoteOverview({
             >
               <MarkTitle
                 value={footnote.title}
+                readOnly={readOnly}
                 onCommit={(title) => onChange({ ...footnoteRef.current, title })}
               />
               <header className="lc-footnote-overview-toolbar" aria-label="Mark style">
                 <div className="lc-footnote-submark-modes" role="group" aria-label="Mark actions">
+                  {/* Underline draws on the mark, so it is a write. Copy is not. */}
+                  {readOnly ? null : (
                   <button
                     type="button"
                     className={`lc-footnote-mark-tool${subMarkMode === "underline" ? " is-active" : ""}`}
@@ -761,6 +809,7 @@ export function FootnoteOverview({
                   >
                     <UnderlineIcon size={16} />
                   </button>
+                  )}
                   <button
                     type="button"
                     className={`lc-footnote-mark-tool lc-footnote-copy-tool${copied ? " is-copied" : ""}`}
@@ -772,7 +821,7 @@ export function FootnoteOverview({
                   >
                     <span aria-hidden>{copied ? "✓" : "📋"}</span>
                   </button>
-                  {onAttachCoach && (
+                  {onAttachCoach && !readOnly && (
                     <button
                       type="button"
                       className="lc-footnote-mark-tool"
@@ -784,7 +833,8 @@ export function FootnoteOverview({
                     </button>
                   )}
                 </div>
-                <div className="lc-footnote-overview-color">
+                {/* The wheel retints the mark on this device. Not from here. */}
+                <div className="lc-footnote-overview-color" hidden={readOnly}>
                   <ColorRadial
                     colors={wheelPalette}
                     value={wheelColor}
@@ -858,7 +908,7 @@ export function FootnoteOverview({
               )}
               <HubSection
                 title="Links"
-                onAdd={() => openTask({ kind: "link", index: null })}
+                onAdd={readOnly ? undefined : () => openTask({ kind: "link", index: null })}
               >
                 {(searchLink || userLinks.length > 0) && (
                   <ul className={listClass(userLinks.length + (searchLink ? 1 : 0))}>
@@ -879,7 +929,11 @@ export function FootnoteOverview({
                         <button
                           type="button"
                           className="lc-agent-scope-option"
-                          onClick={() => openTask({ kind: "link", index })}
+                          onClick={() =>
+                            readOnly
+                              ? onOpenExternal(link.url)
+                              : openTask({ kind: "link", index })
+                          }
                         >
                           <strong>{link.title || link.url}</strong>
                           {link.title ? <span className="lc-muted">{link.url}</span> : null}
@@ -889,8 +943,11 @@ export function FootnoteOverview({
                   </ul>
                 )}
               </HubSection>
-              {onAddWorkspaceLink && (
-                <HubSection title="Workspace links" onAdd={onAddWorkspaceLink}>
+              {(onAddWorkspaceLink || (readOnly && workspaceLinks.length > 0)) && (
+                <HubSection
+                  title="Workspace links"
+                  onAdd={readOnly ? undefined : onAddWorkspaceLink}
+                >
                   {workspaceLinks.length > 0 && (
                     <ul className={listClass(workspaceLinks.length)}>
                       {workspaceLinks.map((link) => (
@@ -916,7 +973,7 @@ export function FootnoteOverview({
                   )}
                 </HubSection>
               )}
-              {isAiTab ? (
+              {rowsAreReadOnly ? (
                 notes.length > 0 ? (
                   <HubSection title="Notes">
                     <ul className={listClass(notes.length)}>
@@ -955,7 +1012,7 @@ export function FootnoteOverview({
                 )}
               </HubSection>
               )}
-              {isAiTab ? (
+              {rowsAreReadOnly ? (
                 whiteboards.length > 0 ? (
                   <HubSection title="Whiteboards">
                     <ul className={listClass(whiteboards.length)}>
@@ -1004,6 +1061,7 @@ export function FootnoteOverview({
                         <button
                           type="button"
                           className="lc-agent-scope-option"
+                          disabled={readOnly}
                           onClick={() => openTask({ kind: "thread", rootId: thread.rootId })}
                         >
                           <strong className="lc-footnote-overview-entry-text">{thread.title}</strong>
