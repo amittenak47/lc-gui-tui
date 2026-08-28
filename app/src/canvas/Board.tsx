@@ -2019,14 +2019,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Shift") shiftHeldRef.current = event.type === "keydown";
     };
+    // Named, so unmount can take it off again — an inline arrow cannot be
+    // removed, and this board is one of two that come and go with the tabs.
+    const onBlur = () => {
+      shiftHeldRef.current = false;
+    };
     window.addEventListener("keydown", onKey);
     window.addEventListener("keyup", onKey);
-    window.addEventListener("blur", () => {
-      shiftHeldRef.current = false;
-    });
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKey);
+      window.removeEventListener("blur", onBlur);
     };
   }, []);
 
