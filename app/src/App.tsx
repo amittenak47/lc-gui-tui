@@ -66,6 +66,7 @@ import {
   type TabRecord,
 } from "./util/tabs";
 import { loadTabState, saveTabState } from "./util/tabPersist";
+import { singleFlight } from "./util/singleFlight";
 import { bumpRetry, planWorkspaceMounts, workspaceMountKey } from "./util/workspaceMounts";
 import type { WebPadEntry } from "./util/webPadSession";
 import { Workspace } from "./Workspace";
@@ -142,8 +143,10 @@ export function App() {
   const serverLinkRef = useRef(serverLink);
   serverLinkRef.current = serverLink;
   const [bootPhase, setBootPhase] = useState<"enter" | "show" | "done" | "exit" | "gone">("enter");
-  /** Boot overlay still waiting for LLM probe → checkmark before dismiss. */
+  /** The boot overlay is still on screen, so nothing else may open in front of it. */
   const bootOverlayPendingRef = useRef(true);
+  /** The LLM came back offline while the overlay was still up. Ask once it is gone. */
+  const llmGateWantedRef = useRef(false);
 
   /** Something the reader should know, but which did not stop the request. */
   const [notice, setNotice] = useState<string | null>(null);
@@ -158,15 +161,47 @@ export function App() {
   const client = useMemo(() => new LcClient(), []);
   const [recognizer, setRecognizer] = useState<InkRecognizer>(() => new NoopRecognizer());
 
-  // Overlay is opaque from the first paint (no fade-in). The rAF only
-  // advances the phase machine; CSS must not start this overlay at opacity 0.
+  /*
+   * The boot overlay runs its own beats and leaves.
+   *
+   * It used to hold at "show" until the LLM probe answered — two four-second
+   * races, back to back — so a slow or absent daemon kept a splash over an app
+   * that had finished loading and does not need an LLM to draw anything. The
+   * probe still opens the LLM gate when it comes back offline; it now does that
+   * behind the app rather than in front of it, and if it answers first the gate
+   * waits for the overlay instead of the other way round.
+   *
+   * Overlay is opaque from the first paint (no fade-in). The rAF only advances
+   * the phase machine; CSS must not start this overlay at opacity 0.
+   */
   useEffect(() => {
     let cancelled = false;
-    window.requestAnimationFrame(() => {
-      if (!cancelled) setBootPhase((phase) => (phase === "enter" ? "show" : phase));
+    let exitTimer = 0;
+    const frame = window.requestAnimationFrame(() => {
+      if (cancelled) return;
+      setBootPhase((phase) => (phase === "enter" ? "show" : phase));
+      void (async () => {
+        await waitMs(doneHoldMs());
+        if (cancelled) return;
+        setBootPhase("done");
+        await waitMs(doneHoldMs());
+        if (cancelled) return;
+        setBootPhase("exit");
+        exitTimer = window.setTimeout(() => {
+          if (cancelled) return;
+          setBootPhase("gone");
+          bootOverlayPendingRef.current = false;
+          if (llmGateWantedRef.current && !llmPromptedRef.current) {
+            llmPromptedRef.current = true;
+            openLlmGateRef.current();
+          }
+        }, serverGateExitMs());
+      })();
     });
     return () => {
       cancelled = true;
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(exitTimer);
     };
   }, []);
 
@@ -239,18 +274,32 @@ export function App() {
     });
   }, []);
 
+  /*
+   * The boot effect above runs before this is declared, and must not re-run
+   * when it is: a dependency on `openLlmGate` would restart the overlay beats.
+   */
+  const openLlmGateRef = useRef(openLlmGate);
+  openLlmGateRef.current = openLlmGate;
+
   const closeLlmGate = useCallback(() => {
     setLlmGatePhase("exit");
     window.setTimeout(() => setLlmGateOpen(false), serverGateExitMs());
   }, []);
 
-  // Check whether a model is actually available for Coach.
-  // While the boot overlay is still up, finish with the same spinner → check
-  // beat used when opening a problem — no tap required when the LLM is healthy.
-  //
-  // Poll backs off hard while the LLM is offline so we do not hammer
-  // `/config` + `/llm/status` (and re-render) when the daemon has no model.
-  // Offline grows to two minutes; focus / visibility still probes promptly.
+  /*
+   * Check whether a model is actually available for Coach.
+   *
+   * One probe at a time, one timer. Focus, `visibilitychange` and the poll
+   * timer all want the same answer; each used to start its own request *and*
+   * its own follow-up timer when that request came back, so two events close
+   * together left two polling chains behind a single timer handle. Only the
+   * newest could ever be cleared, and the rest kept asking `/config` and
+   * `/llm/status` — and re-rendering — for the life of the session.
+   *
+   * Poll backs off hard while the LLM is offline so we do not hammer the
+   * daemon when it has no model. Offline grows to two minutes; focus and
+   * visibility still probe promptly.
+   */
   useEffect(() => {
     if (serverLink !== "online") {
       setLlmLink("unknown");
@@ -260,6 +309,9 @@ export function App() {
     let cancelled = false;
     let timer = 0;
     let delayMs = LLM_ONLINE_POLL_MS;
+
+    /** Overlapping callers share one request instead of starting three. */
+    const probeOnce = singleFlight(probeLlm);
 
     const afterProbe = (ok: boolean) => {
       if (ok) {
@@ -272,58 +324,40 @@ export function App() {
           : Math.min(Math.round(delayMs * 1.5), LLM_OFFLINE_POLL_MAX_MS);
     };
 
-    const schedule = () => {
-      timer = window.setTimeout(() => {
-        void (async () => {
-          const ok = await probeLlm();
-          if (cancelled) return;
-          afterProbe(ok);
-          schedule();
-        })();
-      }, delayMs);
-    };
-
-    void (async () => {
-      const ok = await probeLlm();
-      if (cancelled) return;
-
+    /*
+     * Ask about the missing model once, and never over the boot overlay —
+     * the overlay is opaque, so a gate opened under it is a dialog nobody can
+     * answer. The boot effect opens it on the way out instead.
+     */
+    const noteLlm = (ok: boolean) => {
+      if (ok || llmPromptedRef.current) return;
       if (bootOverlayPendingRef.current) {
-        bootOverlayPendingRef.current = false;
-        setBootPhase("done");
-        await waitMs(doneHoldMs());
-        if (cancelled) return;
-        setBootPhase("exit");
-        window.setTimeout(() => {
-          if (cancelled) return;
-          setBootPhase("gone");
-          if (!ok && !llmPromptedRef.current) {
-            llmPromptedRef.current = true;
-            openLlmGate();
-          }
-        }, serverGateExitMs());
-        afterProbe(ok);
-        schedule();
+        llmGateWantedRef.current = true;
         return;
       }
+      llmPromptedRef.current = true;
+      openLlmGate();
+    };
 
-      if (!ok && !llmPromptedRef.current) {
-        llmPromptedRef.current = true;
-        openLlmGate();
-      }
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void tick(), delayMs);
+    };
+
+    const tick = async () => {
+      const ok = await probeOnce();
+      if (cancelled) return;
       afterProbe(ok);
+      noteLlm(ok);
       schedule();
-    })();
+    };
+
+    void tick();
 
     const onFocus = () => {
       if (cancelled) return;
-      window.clearTimeout(timer);
       delayMs = LLM_ONLINE_POLL_MS;
-      void (async () => {
-        const ok = await probeLlm();
-        if (cancelled) return;
-        afterProbe(ok);
-        schedule();
-      })();
+      void tick();
     };
     const onVis = () => {
       if (document.visibilityState === "visible") onFocus();
