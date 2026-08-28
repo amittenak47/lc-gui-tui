@@ -66,6 +66,7 @@ import {
   type TabRecord,
 } from "./util/tabs";
 import { loadTabState, saveTabState } from "./util/tabPersist";
+import { bumpRetry, planWorkspaceMounts, workspaceMountKey } from "./util/workspaceMounts";
 import type { WebPadEntry } from "./util/webPadSession";
 import { Workspace } from "./Workspace";
 import {
@@ -487,8 +488,16 @@ export function App() {
     setMissingTab({ id, title, detail });
   }, []);
 
-  /** Bumped by Try again; it joins the mount key, so the workspace reloads. */
-  const [retryToken, setRetryToken] = useState(0);
+  /*
+   * Retry generations, per tab.
+   *
+   * Bumped by Try again; the generation joins that tab's mount key, so the
+   * workspace reloads. Per tab, not one token for the app: a shared counter
+   * only stayed stable while every key agreed on it, and the keys also folded
+   * in `active` — so after the first retry anywhere, every subsequent tab
+   * switch changed the key of both the tab being left and the one arriving.
+   */
+  const [retryByTab, setRetryByTab] = useState<Record<string, number>>({});
 
   /*
    * A failure belongs to the tab it happened in.
@@ -853,6 +862,19 @@ export function App() {
       }));
   }, [activeRecord.id, browseMotion, holdBrowseOverlay, liveIds, tabState.tabs, visibleIds]);
 
+  /** The one render list: every mounted workspace, with its layout. */
+  const workspaceMounts = useMemo(
+    () =>
+      planWorkspaceMounts({
+        liveTabs,
+        allTabs: tabState.tabs,
+        visibleIds,
+        groupChildren: activeGroup ? activeGroup.children : null,
+        activeId: activeRecord.id,
+      }),
+    [activeGroup, activeRecord.id, liveTabs, tabState.tabs, visibleIds],
+  );
+
   const shell: ShellValue = useMemo(
     () => ({
       client,
@@ -1021,39 +1043,24 @@ export function App() {
             <StatusBanner text={error} variant="error" />
             <StatusBanner text={!error ? notice : null} variant="notice" />
           </div>
-          {liveTabs
-            .filter((item) => {
-              const onScreen = activeGroup
-                ? activeGroup.children.includes(item.tab.id)
-                : visibleIds.includes(item.tab.id);
-              return !item.showing && !onScreen;
-            })
-            .map(({ tab, active, showing }) => (
-              <Workspace
-                key={`${tab.id}:${active ? retryToken : 0}`}
-                tab={tab}
-                active={active}
-                showing={showing}
-              />
-            ))}
-          {(activeGroup ? activeGroup.children : visibleIds).map((id, index) => {
-            const item = liveTabs.find((entry) => entry.tab.id === id);
-            const tab = item?.tab ?? tabState.tabs.find((entry) => entry.id === id);
-            if (!tab) return null;
-            const splitRole = activeGroup ? (index === 0 ? "a" : "b") : null;
-            const active = item ? item.active : tab.id === activeRecord.id;
-            return (
-              <Workspace
-                key={`${tab.id}:${active ? retryToken : 0}`}
-                tab={tab}
-                active={active}
-                showing
-                splitRole={splitRole}
-                splitKeepChrome={Boolean(splitRole && groupHasExplore)}
-                embedInBoardTray={Boolean(splitRole && groupHasBoard)}
-              />
-            );
-          })}
+          {/*
+            One list, one `.map()`: see `planWorkspaceMounts`. Parked, on
+            screen and overlay are *props*, not separate arrays — moving a
+            keyed workspace between arrays remounts it, and a tab switch moves
+            two of them. The sash and the toast are siblings after this list,
+            never between workspaces.
+          */}
+          {workspaceMounts.map(({ tab, active, showing, splitRole }) => (
+            <Workspace
+              key={workspaceMountKey(tab.id, retryByTab)}
+              tab={tab}
+              active={active}
+              showing={showing}
+              splitRole={splitRole}
+              splitKeepChrome={Boolean(splitRole && groupHasExplore)}
+              embedInBoardTray={Boolean(splitRole && groupHasBoard)}
+            />
+          ))}
           {activeGroup ? (
             <>
               <SplitSash
@@ -1074,16 +1081,6 @@ export function App() {
               />
             </>
           ) : null}
-          {liveTabs
-            .filter((item) => item.showing && !visibleIds.includes(item.tab.id))
-            .map(({ tab, active, showing }) => (
-              <Workspace
-                key={`${tab.id}:${active ? retryToken : 0}`}
-                tab={tab}
-                active={active}
-                showing={showing}
-              />
-            ))}
           <span className="lc-board-chrome-slot" ref={setBoardChrome} />
         </main>
 
@@ -1111,7 +1108,7 @@ export function App() {
                   // Remounting is retrying: the workspace loads on mount, so a
                   // fresh key is the whole of "try that again".
                   setMissingTab(null);
-                  setRetryToken((n) => n + 1);
+                  setRetryByTab((map) => bumpRetry(map, missingTab.id));
                 }}
               >
                 Try again
