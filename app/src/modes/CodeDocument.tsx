@@ -8,9 +8,10 @@
  * inside the source. Escaped `<pre><code>` is the paper.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { shouldReportDocumentHeight } from "./AnnotateDocument";
+import { PREPARING_HTML, shouldReportDocumentHeight } from "./AnnotateDocument";
+import { docPreview, parseInline, truncationNoticeHtml } from "./docPreview";
 
 export interface CodeDocumentProps {
   source: string;
@@ -47,7 +48,11 @@ export function escapeHtml(text: string): string {
  */
 export function renderCode(source: string, language = "plaintext"): string {
   const lang = language.replace(/[^a-zA-Z0-9_+#-]/g, "") || "plaintext";
-  return `<pre class="lc-code-doc-pre"><code class="language-${lang}">${escapeHtml(source)}</code></pre>`;
+  const { text, hidden } = docPreview(source);
+  return (
+    `<pre class="lc-code-doc-pre"><code class="language-${lang}">${escapeHtml(text)}</code></pre>` +
+    truncationNoticeHtml(hidden)
+  );
 }
 
 export function CodeDocument({
@@ -57,13 +62,46 @@ export function CodeDocument({
   selectable = false,
 }: CodeDocumentProps) {
   const nodeRef = useRef<HTMLDivElement | null>(null);
-  const html = useMemo(() => renderCode(source, language), [source, language]);
+  /*
+   * Escaped off the render path above a size where that is worth doing.
+   *
+   * Five full-string passes over a source file, inside `useMemo` — which is to
+   * say inside the render — froze the frame that was opening it, and froze it
+   * again on every toggle between Annotate and Scroll.
+   */
+  const inline = useMemo(
+    () =>
+      parseInline(docPreview(source).text) ? renderCode(source, language) : null,
+    [language, source],
+  );
+  const [parsed, setParsed] = useState<string | null>(inline);
+  useEffect(() => {
+    if (inline !== null) {
+      setParsed(inline);
+      return;
+    }
+    setParsed(null);
+    let cancelled = false;
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return;
+      setParsed(renderCode(source, language));
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [inline, language, source]);
+  const html = parsed ?? PREPARING_HTML;
+
   const onMeasureRef = useRef(onMeasure);
   onMeasureRef.current = onMeasure;
 
   useEffect(() => {
     const node = nodeRef.current;
     if (!node) return;
+    // The open gate waits for a stable height; a placeholder has one, and
+    // settling on it would reveal the page at the wrong size.
+    if (parsed === null) return;
 
     const report = () => {
       if (!shouldReportDocumentHeight(node.clientWidth, Boolean(source.trim()))) return;
@@ -82,7 +120,7 @@ export function CodeDocument({
       cancelAnimationFrame(raf);
       observer.disconnect();
     };
-  }, [html, source]);
+  }, [html, parsed, source]);
 
   return (
     <div
