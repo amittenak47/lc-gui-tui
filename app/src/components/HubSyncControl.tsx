@@ -258,11 +258,21 @@ export function HubSyncControl({
         // TODO(web-index): web pads neither upload bytes nor index yet.
         host?.onIndexProgress(null);
       } else {
-        // — B: bytes on the hub? If not and we hold them, PUT once.
+        /*
+         * — B: bytes on the hub? If not and we hold them, PUT once.
+         *
+         * Asked of the hub, every tap. This used to key off the *index* status
+         * and an open-time hint, and neither answers the question: a hub that
+         * replied `{ indexed: false }` — which is not null — with no hint yet
+         * skipped the upload entirely, and then C asked it to extract from
+         * bytes it had never been sent. HEAD is a status line, so asking
+         * outright is cheaper than the guess was wrong.
+         */
         const status = await client!.getDocIndex(doc.hash).catch(() => null);
-        const hintSaysMissing = hubHint != null && !hubHint.bytesOnHub;
-        if ((hintSaysMissing || status === null) && doc.bytes) {
+        let bytesOnHub = await client!.docBytesOnHub(doc.hash);
+        if (!bytesOnHub && doc.bytes) {
           await pushBytesOnce(client!, doc.hash, doc.bytes);
+          bytesOnHub = true;
         }
 
         // — C: index. Skip when the hub already has pages; otherwise ask the
@@ -291,6 +301,20 @@ export function HubSyncControl({
               pages: pages.map((p) => ({ page: p.page, text: p.text, heading: p.heading })),
             });
           } else if (doc.docType === "pdf" || doc.docType === "markdown" || doc.docType === "code") {
+            /*
+             * A PDF is extracted hub-side, from the hub's own copy. Markdown
+             * and code carry their source in the body and need nothing there.
+             *
+             * Said here rather than left to fail on the wire: this device does
+             * not hold the file either, so there is no upload that would fix
+             * it, and the walk should park on Index saying that instead of
+             * walking on as though the document were indexed.
+             */
+            if (doc.docType === "pdf" && !bytesOnHub) {
+              throw new Error(
+                "the hub does not have this file yet, and this device no longer holds it — reopen it here, then sync",
+              );
+            }
             const result = await client!.indexFromBytes(doc.hash, {
               name: doc.name,
               doc_type: doc.docType,

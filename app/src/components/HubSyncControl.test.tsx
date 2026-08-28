@@ -202,6 +202,8 @@ describe("HubSyncControl (step-2 stub)", () => {
         putDocIndex: overrides.putDocIndex ?? vi.fn().mockResolvedValue({ indexed: true }),
         embedDoc: overrides.embedDoc ?? vi.fn(),
         putDocBytes: overrides.putDocBytes ?? vi.fn().mockResolvedValue(undefined),
+        // The hub already holds the file unless a test says otherwise.
+        docBytesOnHub: overrides.docBytesOnHub ?? vi.fn().mockResolvedValue(true),
         listAnnotatePads: overrides.listAnnotatePads ?? vi.fn().mockResolvedValue([]),
         listWhiteboardPads: overrides.listWhiteboardPads ?? vi.fn().mockResolvedValue([]),
         // One pad, by id — the conflict path no longer lists the library.
@@ -357,6 +359,113 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect((client as unknown as typeof client & { indexFromBytes: ReturnType<typeof vi.fn> }).indexFromBytes)
         .toHaveBeenCalledWith("h", { name: "book.pdf", doc_type: "pdf", source_text: undefined });
       expect(button.dataset.stage).toBe("synced");
+    });
+
+    it("uploads the bytes when the hub does not have them yet", async () => {
+      /*
+       * The upload used to be gated on the *index* status being null or an
+       * open-time hint saying the bytes were missing. A hub that answered
+       * `{ indexed: false }` — which is not null — with no hint yet skipped
+       * the upload, and then stage C asked it to extract from a file it had
+       * never been sent.
+       */
+      vi.useFakeTimers();
+      const putDocBytes = vi.fn().mockResolvedValue(undefined);
+      const docBytesOnHub = vi.fn().mockResolvedValue(false);
+      const client = fakeClient({
+        putDocBytes,
+        docBytesOnHub,
+        getDocIndex: vi
+          .fn()
+          .mockResolvedValueOnce({
+            hash: "h",
+            indexed: false,
+            page_count: 0,
+            chunk_count: 0,
+            embedded: false,
+          })
+          .mockResolvedValue({
+            hash: "h",
+            indexed: true,
+            page_count: 3,
+            chunk_count: 1,
+            embedded: true,
+            embed_state: "full",
+          }),
+      });
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: new ArrayBuffer(8),
+      });
+      const button = await mountWalk(client, withPad(host));
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(docBytesOnHub).toHaveBeenCalledWith("h");
+      expect(putDocBytes).toHaveBeenCalledTimes(1);
+      expect(
+        (client as unknown as { indexFromBytes: ReturnType<typeof vi.fn> }).indexFromBytes,
+      ).toHaveBeenCalled();
+      expect(button.dataset.stage).toBe("synced");
+    });
+
+    it("does not re-upload a file the hub already holds", async () => {
+      vi.useFakeTimers();
+      const putDocBytes = vi.fn().mockResolvedValue(undefined);
+      const client = fakeClient({
+        putDocBytes,
+        docBytesOnHub: vi.fn().mockResolvedValue(true),
+      });
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: new ArrayBuffer(8),
+      });
+      const button = await mountWalk(client, withPad(host));
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(putDocBytes).not.toHaveBeenCalled();
+      expect(button.dataset.stage).toBe("synced");
+    });
+
+    it("parks on Index when neither side has the file", async () => {
+      // Nothing to upload and nothing to extract from: walking on to Synced
+      // would report a document as indexed that was never read.
+      vi.useFakeTimers();
+      const client = fakeClient({
+        docBytesOnHub: vi.fn().mockResolvedValue(false),
+      });
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const button = await mountWalk(client, withPad(host));
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(button.dataset.stage).toBe("index");
+      expect(button.dataset.error).toContain("does not have this file");
+      expect(
+        (client as unknown as { indexFromBytes: ReturnType<typeof vi.fn> }).indexFromBytes,
+      ).not.toHaveBeenCalled();
     });
 
     it("skips extraction when the hub index already has pages", async () => {
