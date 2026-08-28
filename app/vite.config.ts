@@ -171,8 +171,9 @@ export default defineConfig({
     // Monaco is ~4 MB on its own and Excalidraw ~1 MB, so the default 500 kB
     // warning fires on chunks that are already split as far as they usefully
     // can be. Raised past them so the build stays quiet enough that a genuinely
-    // new large chunk is worth looking at. Both load lazily; neither is in the
-    // path of first board paint.
+    // new large chunk is worth looking at. Both are fetched on demand —
+    // Monaco by `PseudocodeEditor`, Excalidraw by `boardChunk` — so neither is
+    // on the path to Home's first paint.
     chunkSizeWarningLimit: 4200,
     rollupOptions: {
       input: {
@@ -180,12 +181,23 @@ export default defineConfig({
         hostInkLab: join(rootDir, "host-ink-lab.html"),
       },
       output: {
-        // Excalidraw and Monaco are both large and independent; splitting them
-        // keeps the initial board render from waiting on the code editor.
-        manualChunks: {
-          excalidraw: ["@excalidraw/excalidraw"],
-          monaco: ["monaco-editor", "@monaco-editor/react"],
-        },
+        /*
+         * No manual chunks.
+         *
+         * Excalidraw and Monaco were both named here, to keep them out of the
+         * initial bundle. That is the reason neither split ever worked: a
+         * named manual chunk is emitted whether or not anything reaches it
+         * dynamically, and Rollup files the shared code it happens to pull in
+         * — React, Vite's own preload helper — *inside* it. The entry then
+         * imports those from the canvas chunk, `index.html` module-preloads
+         * 1.1 MB to get them, and Home waits on a board it does not draw.
+         * Naming only one of the two simply moved the problem to the other.
+         *
+         * Both are fetched on demand — Monaco by `PseudocodeEditor`,
+         * Excalidraw by `boardChunk` — so Rollup already gives each a chunk of
+         * its own that nothing static reaches. That is the split these entries
+         * were reaching for, and they were preventing it.
+         */
       },
     },
   },

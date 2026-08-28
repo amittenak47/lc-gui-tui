@@ -57,7 +57,7 @@ import {
 import {
   loadHubAutosync,
 } from "./util/hubAutoSyncPref";
-import { Board } from "./canvas/Board";
+import { loadBoardComponent, peekBoardComponent, type BoardComponent } from "./canvas/boardChunk";
 import { inkOpsFrom } from "./canvas/inkCodec";
 import { drainDirtyInkArchives } from "./canvas/inkArchiveClient";
 import type { BoardHandle, ScreenRect } from "./canvas/BoardHandle";
@@ -1389,6 +1389,41 @@ export function Workspace({
   /** Boot overlay still waiting for LLM probe → checkmark before dismiss. */
 
   const boardRef = useRef<BoardHandle | null>(null);
+
+  /*
+   * The board arrives as its own chunk.
+   *
+   * `Board` is the only door to Excalidraw, and a static import put all
+   * 1.1 MB of it on the App → Workspace graph — module-preloaded by
+   * `index.html`, downloaded and parsed before Home could paint, for a screen
+   * that renders no board at all.
+   *
+   * Loaded as state rather than through `lazy` + `Suspense` on purpose: the
+   * open below drives the board through `boardRef` from its first await, and
+   * the mount effect has to run *after* the board is on screen or it would
+   * find a null ref and time out on a document that was perfectly fine.
+   * Setting state gives an ordinary commit to hang that on — child refs are
+   * attached before the parent's effects run.
+   */
+  const needsBoard = tab.kind !== "home" && tab.kind !== "explore";
+  const [BoardView, setBoardView] = useState<BoardComponent | null>(
+    () => peekBoardComponent(),
+  );
+  useEffect(() => {
+    if (!needsBoard || BoardView) return;
+    let cancelled = false;
+    void loadBoardComponent().then(
+      (loaded) => {
+        if (!cancelled) setBoardView(() => loaded);
+      },
+      (cause: unknown) => {
+        if (!cancelled) setError(messageOf(cause));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [BoardView, needsBoard]);
 
 
   /*
@@ -7907,12 +7942,17 @@ export function Workspace({
   const mountedRef = useRef(false);
   useEffect(() => {
     if (mountedRef.current) return;
+    if (tab.kind === "home") {
+      mountedRef.current = true;
+      return;
+    }
+    // Wait for the board chunk. The open drives it from its first await.
+    if (needsBoard && !BoardView) return;
     mountedRef.current = true;
-    if (tab.kind === "home") return;
     void openTabWorkspace(tab);
-    // Deliberately mount-only: see above.
+    // Deliberately mount-only past that gate: see above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [BoardView, needsBoard]);
 
   /*
    * What the shell can ask of a workspace it is about to unmount.
@@ -8859,8 +8899,8 @@ export function Workspace({
               }}
             />
           )}
-          {tab.kind !== "home" && tab.kind !== "explore" ? (
-          <Board
+          {needsBoard && BoardView ? (
+          <BoardView
             filmScope={tab.id}
             ref={boardRef}
             themeId={themeId}
