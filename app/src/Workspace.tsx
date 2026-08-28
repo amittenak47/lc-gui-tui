@@ -23,7 +23,7 @@ import { liveWebviewSupported } from "./util/liveWebviewSupport";
 import { etaLabel, etaMs, newEta, recordBatch } from "./util/embedEta";
 import type { DocWorkProgress } from "./components/DocIndexChip";
 import { fetchDocHubHint, type DocHubHint } from "./util/hubHint";
-import type { HubSyncWalkHost } from "./components/HubSyncControl";import { HubConflictSplit } from "./components/HubConflictSplit";import {
+import type { HubSyncWalkHost, HubWalkReport } from "./components/HubSyncControl";import { HubConflictSplit } from "./components/HubConflictSplit";import {
   loadWebRenderMode,
   otherWebRenderMode,
   saveWebRenderMode,
@@ -931,6 +931,9 @@ export function Workspace({
    * ref would not re-render it. Bumped from the same place the tab's unsaved
    * dot is set, so it means exactly what that dot means.
    */
+  /** How far the Sync walk has got, for the chip beside the document name. */
+  const [walkReport, setWalkReport] = useState<HubWalkReport | null>(null);
+
   const [padEditSeq, setPadEditSeq] = useState(0);
   const bumpPadEdit = useCallback(() => setPadEditSeq((n) => n + 1), []);
 
@@ -1002,6 +1005,7 @@ export function Workspace({
           setHubConflictAsk({ conflict, resolve });
         }),
       onIndexProgress: (progress) => setDocIndexProgress(progress),
+      onWalkProgress: (report) => setWalkReport(report),
       // The hub has an index for this document now, whether the walk built it
       // or found it already there. Nothing used to say so, so the chip kept
       // reading "not indexed" about a document that was.
@@ -8187,6 +8191,10 @@ export function Workspace({
         embedProgress: docEmbedProgress,
         embedEta: docEmbedEta,
         embedding: docEmbedding,
+        walkStage: walkReport?.stage ?? null,
+        walkJob: walkReport?.job ?? null,
+        walkProgress: walkReport?.progress ?? null,
+        walkError: walkReport?.error ?? null,
         /*
          * Indexing reads the pad's stored text, which is the frozen copy.
          *

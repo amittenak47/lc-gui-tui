@@ -30,6 +30,27 @@ import {
 } from "../util/hubWalk";
 import { MorphBar } from "./MorphBar";
 
+/**
+ * What the walk is doing, for the tab chip beside the document's name.
+ *
+ * The pill morphs its own labels and is the thing you tap; this is the
+ * progress display next to what it is working on. Index is one stage holding
+ * two jobs that skip independently — the hub having the text already says
+ * nothing about embeddings — so the label has to follow the job, not the
+ * stage word.
+ *
+ * `null` means nothing is running.
+ */
+export interface HubWalkReport {
+  stage: HubSyncStage;
+  /** Which half of Index is running. Absent while neither is. */
+  job?: "extract" | "embed" | null;
+  /** Counted where there is a count; a sweep everywhere else. */
+  progress: DocWorkProgress | null;
+  /** The walk parked on this stage. */
+  error?: string | null;
+}
+
 export type HubSyncStage =
   | "idle"
   | "index"
@@ -113,6 +134,8 @@ export interface HubSyncWalkHost {
    */
   onConflict(conflict: HubPadConflict): Promise<HubConflictResolution>;
   onIndexProgress(progress: DocWorkProgress | null): void;
+  /** How far the Sync walk has got, for the tab chip. Null when idle. */
+  onWalkProgress(report: HubWalkReport | null): void;
   onIndexError(message: string | null): void;
   /**
    * The hub holds an index for this document.
@@ -175,6 +198,35 @@ export function HubSyncControl({
   const [walkError, setWalkError] = useState<string | null>(null);
   const walkingRef = useRef(false);
   const timerRef = useRef<number | null>(null);
+  /**
+   * The stage the walk is on, readable from the progress callbacks.
+   *
+   * `setStage` is a React update; the extract and embed callbacks fire between
+   * renders and need to name the stage they belong to.
+   */
+  const walkStageRef = useRef<HubSyncStage>("idle");
+  const hostRef = useRef(host);
+  hostRef.current = host;
+
+  /** Move the pill, and tell the tab what it is now doing. */
+  const goStage = (next: HubSyncStage) => {
+    walkStageRef.current = next;
+    setStage(next);
+    hostRef.current?.onWalkProgress(
+      next === "idle" || next === "synced" ? null : { stage: next, progress: null },
+    );
+  };
+
+  /** Report one job's progress under whatever stage is running. */
+  const goWork = (job: "extract" | "embed", progress: DocWorkProgress | null) => {
+    hostRef.current?.onIndexProgress(progress);
+    hostRef.current?.onWalkProgress({
+      stage: walkStageRef.current,
+      job: progress ? job : null,
+      progress,
+    });
+  };
+
   /** The edit count "Synced" was true at. Zero is "as this pad opened". */
   const syncedAtSeqRef = useRef(0);
   const editSeqRef = useRef(editSeq);
@@ -185,6 +237,8 @@ export function HubSyncControl({
   useEffect(() => {
     return () => {
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+      // Whatever the tab was showing, this walk is no longer running.
+      hostRef.current?.onWalkProgress(null);
     };
   }, []);
 
@@ -233,7 +287,7 @@ export function HubSyncControl({
       // — A: is there a hub, and is it up? Both end the walk before any write,
       // and the first has to be answered here — every stage below assumes one,
       // and stage C used to find out the hard way inside `indexFromBytes`.
-      setStage("index");
+      goStage("index");
       if (!loadPadHub()) {
         throw new Error("no hub is set — add one in Settings");
       }
@@ -251,12 +305,12 @@ export function HubSyncControl({
 
       if (!runs("index")) {
         // Already done on the attempt that got as far as the failing stage.
-        host?.onIndexProgress(null);
+        goWork("extract", null);
       } else if (!doc || doc.docType === "web") {
         // Whiteboard/home have no document to index; web pads deliberately
         // skip indexing and byte upload for now.
         // TODO(web-index): web pads neither upload bytes nor index yet.
-        host?.onIndexProgress(null);
+        goWork("extract", null);
       } else {
         /*
          * — B: bytes on the hub? If not and we hold them, PUT once.
@@ -282,16 +336,16 @@ export function HubSyncControl({
         if (!(status?.indexed && (status.page_count ?? 0) > 0)) {
           if (doc.docType === "epub") {
             const { extractDocumentPages } = await import("../util/docExtract");
-            host?.onIndexProgress({ done: 0, total: 0 });
+            goWork("extract", { done: 0, total: 0 });
             const pages = await extractDocumentPages({
               docType: "epub",
               name: doc.name,
               text: doc.text,
               bytes: doc.bytes,
               hash: doc.hash,
-              onProgress: (done, total) => host?.onIndexProgress({ done, total }),
+              onProgress: (done, total) => goWork("extract", { done, total }),
             });
-            host?.onIndexProgress(null);
+            goWork("extract", null);
             if (pages.length === 0) {
               throw new Error("no text could be read from this file");
             }
@@ -334,7 +388,7 @@ export function HubSyncControl({
         const embedState = (fresh as (typeof fresh & { embed_state?: string }) | null)
           ?.embed_state;
         if (embedState !== "full" && fresh?.indexed) {
-          host?.onIndexProgress({ done: fresh.chunks_embedded ?? 0, total: fresh.chunks_total ?? 0 });
+          goWork("embed", { done: fresh.chunks_embedded ?? 0, total: fresh.chunks_total ?? 0 });
           /*
            * TODO(embed-budget): a book can be up to 500 sequential requests.
            *
@@ -346,7 +400,7 @@ export function HubSyncControl({
            */
           for (let guard = 0; guard < 500; guard++) {
             const budget = await client!.embedDoc(doc.hash);
-            host?.onIndexProgress({ done: budget.done, total: budget.total });
+            goWork("embed", { done: budget.done, total: budget.total });
             if (budget.reason) {
               // A refused/absent model is a skip; anything else is real.
               if (/model/i.test(budget.reason)) break;
@@ -355,10 +409,10 @@ export function HubSyncControl({
             if (budget.total > 0 && budget.done >= budget.total) break;
             if (budget.total === 0) break;
           }
-          host?.onIndexProgress(null);
+          goWork("embed", null);
         }
       }
-      host?.onIndexProgress(null);
+      goWork("extract", null);
       if (runs("index") && doc && doc.docType !== "web") host?.onIndexDone();
 
       /*
@@ -408,7 +462,7 @@ export function HubSyncControl({
 
         // — E: push this pad's JSON (CAS). Conflict → stop before any apply.
         if (runs("pad")) {
-          setStage("pad");
+          goStage("pad");
           const pushed = await walkPushPad(client!, walkPad, snapshot);
           if (pushed.outcome === "ok") {
             // The hub now holds what this device just sent, and the ack above
@@ -428,7 +482,7 @@ export function HubSyncControl({
             if (resolution.pick !== "server") {
               // Local / merged: this device's copy won, so the hub gets it.
               // The ack now names the row the hub actually holds, so CAS passes.
-              setStage("pad");
+              goStage("pad");
               const fresh = await host!.pad();
               if (!fresh) throw new Error("this pad closed while resolving the conflict");
               // Deliberately a fresh read: the hub moved, that is why we are here.
@@ -461,7 +515,7 @@ export function HubSyncControl({
         // after a resolve the walk converges both sides to what was kept and
         // resumes at G without redoing Index or Pad.
         if (runs("ink")) {
-          setStage("ink");
+          goStage("ink");
           const ink = await walkSyncInk(client!, walkPad, snapshot, host!.inkSince());
           if (ink.outcome === "conflict") {
             const resolution = await raiseConflict({
@@ -506,7 +560,7 @@ export function HubSyncControl({
        * not saved this one still has links worth exchanging.
        */
       if (runs("links")) {
-        setStage("links");
+        goStage("links");
         await walkSyncLinks(client!, snapshot);
       }
 
@@ -521,22 +575,28 @@ export function HubSyncControl({
        * nothing.
        */
       if (!padInfo) {
-        setStage("idle");
+        goStage("idle");
         walkingRef.current = false;
         return;
       }
 
-      setStage("pull");
+      goStage("pull");
       if (hubHasNewerRow) host?.emitReload();
       // What "Synced" is a claim about: this pad, as it stood just now.
       syncedAtSeqRef.current = editSeqRef.current;
-      setStage("synced");
+      goStage("synced");
       walkingRef.current = false;
     } catch (cause) {
       walkingRef.current = false;
       const message = cause instanceof Error ? cause.message : String(cause);
       setWalkError(message);
-      // Stay parked on the failing stage; the next tap retries from it.
+      // Stay parked on the failing stage; the next tap retries from it. The
+      // tab says which stage that was, beside the document it happened to.
+      hostRef.current?.onWalkProgress({
+        stage: walkStageRef.current,
+        progress: null,
+        error: message,
+      });
     }
   };
 

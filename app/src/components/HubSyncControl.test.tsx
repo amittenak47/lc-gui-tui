@@ -225,6 +225,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       const progress = vi.fn();
       const errors = vi.fn();
       const indexDone = vi.fn();
+      const walkReports: Array<{ stage: string; job?: string | null } | null> = [];
       const reload = vi.fn();
       const conflicts: unknown[] = [];
       const picks: Array<{ pick: "local" | "server" }> = [];
@@ -238,10 +239,11 @@ describe("HubSyncControl (step-2 stub)", () => {
           return Promise.resolve(picks.shift() ?? { pick: "server" });
         },
         onIndexProgress: (p) => progress(p),
+        onWalkProgress: (report) => walkReports.push(report),
         onIndexError: (m) => errors(m),
         onIndexDone: () => indexDone(),
       };
-      return { host, progress, errors, indexDone, reload, conflicts, picks };
+      return { host, progress, errors, indexDone, walkReports, reload, conflicts, picks };
     }
 
     /**
@@ -924,6 +926,112 @@ describe("HubSyncControl (step-2 stub)", () => {
       act(() => root.unmount());
       vi.doUnmock("../util/hubWalk");
       vi.resetModules();
+    });
+
+    it("reports every stage it walks, and nothing once it lands", async () => {
+      // The pill morphs its own labels; the tab beside the document had no way
+      // to know a walk was running at all, so it read `indexed` throughout.
+      vi.useFakeTimers();
+      const client = fakeClient();
+      const { host, walkReports } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const button = await mountWalk(client, withPad(host));
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      const stages = walkReports.map((r) => r?.stage ?? null);
+      expect(stages).toContain("index");
+      expect(stages).toContain("pad");
+      expect(stages).toContain("ink");
+      expect(stages).toContain("links");
+      expect(stages).toContain("pull");
+      // Landing is the end of the report, not another stage to display.
+      expect(walkReports.at(-1)).toBeNull();
+      expect(button.dataset.stage).toBe("synced");
+    });
+
+    it("names which half of Index is running", async () => {
+      /*
+       * Index is one stage holding two jobs that skip independently, so the
+       * tab's label has to follow the job. Here the hub has no index, so the
+       * extract runs; embedding then reports its own budgets.
+       */
+      vi.useFakeTimers();
+      const client = fakeClient({
+        docBytesOnHub: vi.fn().mockResolvedValue(true),
+        getDocIndex: vi
+          .fn()
+          .mockResolvedValueOnce({
+            hash: "h",
+            indexed: false,
+            page_count: 0,
+            chunk_count: 0,
+            embedded: false,
+          })
+          .mockResolvedValue({
+            hash: "h",
+            indexed: true,
+            page_count: 3,
+            chunk_count: 4,
+            chunks_total: 4,
+            chunks_embedded: 0,
+            embedded: false,
+            embed_state: "partial",
+          }),
+        embedDoc: vi.fn().mockResolvedValue({ done: 4, total: 4 }),
+      });
+      const { host, walkReports } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: new ArrayBuffer(8),
+      });
+      const button = await mountWalk(client, withPad(host));
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      const jobs = walkReports
+        .filter((r) => r?.stage === "index")
+        .map((r) => r?.job ?? null);
+      expect(jobs).toContain("embed");
+      expect(button.dataset.stage).toBe("synced");
+    });
+
+    it("reports the stage it parked on", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient({
+        pingPadSync: vi.fn().mockRejectedValue(new Error("hub unreachable")),
+      });
+      const { host, walkReports } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const button = await mountWalk(client, withPad(host));
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      const last = walkReports.at(-1) as { stage: string; error?: string } | null;
+      expect(last?.stage).toBe("index");
+      expect(last?.error).toContain("unreachable");
+      expect(button.dataset.stage).toBe("index");
     });
 
     it("records the hub ack after an ordinary push", async () => {

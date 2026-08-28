@@ -105,6 +105,19 @@ export interface WorkspaceChrome {
     blocked?: string | null;
     /** A sync refusal that still wants a re-index, not a disabled chip. */
     syncIssue?: string | null;
+    /*
+     * What the Sync walk is doing, for the chip beside the document's name.
+     *
+     * The pill morphs its own labels and is the thing you tap. These say how
+     * far the current stage has got, which is the half you want to read while
+     * looking at the document rather than at the pill.
+     */
+    walkStage?: string | null;
+    /** Which half of Index is running — the two skip independently. */
+    walkJob?: string | null;
+    walkProgress?: { done: number; total: number } | null;
+    /** The walk parked on `walkStage`. */
+    walkError?: string | null;
   };
 }
 
@@ -145,6 +158,10 @@ export function chromeLooksSame(current: WorkspaceChrome, next: WorkspaceChrome)
     current.docIndex.onEmbed === next.docIndex.onEmbed &&
     current.docIndex.embedding === next.docIndex.embedding &&
     current.docIndex.embedEta === next.docIndex.embedEta &&
+    current.docIndex.walkStage === next.docIndex.walkStage &&
+    current.docIndex.walkJob === next.docIndex.walkJob &&
+    current.docIndex.walkError === next.docIndex.walkError &&
+    progressEqual(current.docIndex.walkProgress, next.docIndex.walkProgress) &&
     progressEqual(current.docIndex.indexProgress, next.docIndex.indexProgress) &&
     progressEqual(current.docIndex.embedProgress, next.docIndex.embedProgress)
   );
