@@ -10853,6 +10853,19 @@ button.lc-row-selected:hover:not(:disabled) {
   visibility: hidden;
 }
 
+/*
+ * The one line on the boot overlay that is ever words: the storage migration.
+ * Placed above the spinner rather than over it — the overlay is a grid with
+ * one centred cell, so both children need somewhere to be.
+ */
+.lc-boot-note {
+  position: relative;
+  z-index: 2;
+  margin: 0 0 4.5rem;
+  font-size: 0.95rem;
+  color: color-mix(in srgb, var(--ink) 70%, transparent);
+}
+
 .lc-loading-doodle {
   position: absolute;
   inset: 0;

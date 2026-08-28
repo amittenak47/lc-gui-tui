@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { LEGACY_THEME_KEY, MIGRATED_MARKER, THEME_KEY, remapLcKey } from "./storageKeys";
-import { migrateLocalStorageKeys, remapCoachStorageKeys } from "./storageMigration";
+import {
+  migrateLocalStorageKeys,
+  migrationBatchIsFull,
+  migrationRowSize,
+  remapCoachStorageKeys,
+} from "./storageMigration";
 
 function memoryStorage(): Storage {
   const map = new Map<string, string>();
@@ -68,5 +73,35 @@ describe("remapCoachStorageKeys", () => {
     expect(storage.getItem("whiteboard.agent.forwardFailures.v1")).toBe("kept");
     expect(storage.getItem("whiteboard.agent.sheetLock.v1")).toBe("0");
     expect(storage.getItem("whiteboard.coach.forwardFailures.v1")).toBe("1");
+  });
+});
+
+describe("IndexedDB copy batching", () => {
+  it("measures a document by its bytes, not by being one row", () => {
+    // The store this matters for holds whole PDFs. `getAll()` read every one
+    // of them into memory at once, which is the peak that killed the launch.
+    expect(migrationRowSize(new ArrayBuffer(4096))).toBe(4096);
+    expect(migrationRowSize(new Uint8Array(2048))).toBe(2048);
+    expect(migrationRowSize("ab")).toBe(4);
+  });
+
+  it("gives a size to rows it cannot measure, so they still bound a batch", () => {
+    // Ink pages and board blobs are structured objects with no byteLength.
+    // Zero would let an unbounded number of them into one batch.
+    expect(migrationRowSize({ kind: "annotate", ops: [] })).toBeGreaterThan(0);
+    expect(migrationRowSize(null)).toBeGreaterThan(0);
+  });
+
+  it("stops on whichever limit is reached first", () => {
+    // Small and numerous: the row count is what ends the batch.
+    expect(migrationBatchIsFull(63, 1024)).toBe(false);
+    expect(migrationBatchIsFull(64, 1024)).toBe(true);
+    // Large and few: the byte budget is.
+    expect(migrationBatchIsFull(2, 8 * 1024 * 1024)).toBe(true);
+    expect(migrationBatchIsFull(2, 4 * 1024 * 1024)).toBe(false);
+  });
+
+  it("does not stop an empty batch, so the copy can finish", () => {
+    expect(migrationBatchIsFull(0, 0)).toBe(false);
   });
 });

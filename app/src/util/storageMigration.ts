@@ -5,6 +5,16 @@
  * `whiteboard.docs`. The marker is written only after both succeed so a
  * crashed textbook copy retries instead of leaving the writer with an empty
  * library. Failures leave the old database in place.
+ *
+ * The IndexedDB copy goes a batch at a time, through a cursor. It used to be
+ * `getAllKeys()` + `getAll()` per store, which reads every document's bytes
+ * and every ink page into memory at once — a whole library, on the launch of
+ * an upgrade, on a tablet. That is a peak the device may simply refuse, and
+ * refusing it looked like the app dying on startup. Yielding between batches
+ * also lets the shell paint, which is the other half of the fix (`main.tsx`).
+ *
+ * Stores are checkpointed as they finish, so a copy that is killed halfway
+ * resumes rather than starting the whole library again on every launch.
  */
 
 import {
@@ -19,6 +29,68 @@ import {
 import { MIGRATED_MARKER, remapLcKey } from "./storageKeys";
 
 const STORES = [STORE_BYTES, STORE_CONTENT, STORE_SNAPSHOTS, STORE_INK_PAGES] as const;
+
+/** Stores already copied, so a killed migration does not start over. */
+const STORES_DONE_KEY = `${MIGRATED_MARKER}.stores`;
+
+/**
+ * How much one batch may carry.
+ *
+ * Whichever comes first: `STORE_BYTES` rows are whole PDFs, so a handful can
+ * be tens of megabytes, while ink pages are small and numerous and would spend
+ * the whole migration yielding if the only limit were bytes.
+ */
+const BATCH_ROWS = 64;
+const BATCH_BYTES = 8 * 1024 * 1024;
+
+/** Whether the batch just filled. Exported so the limits can be checked. */
+export function migrationBatchIsFull(rows: number, bytes: number): boolean {
+  return rows >= BATCH_ROWS || bytes >= BATCH_BYTES;
+}
+
+/** Enough to bound a batch. Not an accounting of the heap. */
+export function migrationRowSize(value: unknown): number {
+  if (value instanceof ArrayBuffer) return value.byteLength;
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+  if (typeof Blob !== "undefined" && value instanceof Blob) return value.size;
+  if (typeof value === "string") return value.length * 2;
+  return 4096;
+}
+
+/** Let the browser paint, and let the transaction that just committed go. */
+function yieldToPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+function doneStores(): Set<string> {
+  try {
+    const raw = localStorage.getItem(STORES_DONE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return new Set(Array.isArray(parsed) ? parsed.filter((n) => typeof n === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function markStoreDone(name: string): void {
+  try {
+    const done = doneStores();
+    done.add(name);
+    localStorage.setItem(STORES_DONE_KEY, JSON.stringify([...done]));
+  } catch {
+    /* private browsing — the copy is idempotent, it just repeats */
+  }
+}
+
+function clearStoreProgress(): void {
+  try {
+    localStorage.removeItem(STORES_DONE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 export function migrateLocalStorageKeys(storage: Storage = localStorage): void {
   const keys: string[] = [];
@@ -100,13 +172,6 @@ function openVersionedDb(name: string, version: number): Promise<IDBDatabase> {
   });
 }
 
-function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("indexedDB request failed"));
-  });
-}
-
 function waitTx(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
@@ -137,6 +202,67 @@ async function databaseExists(name: string): Promise<boolean> {
   }
 }
 
+type Row = { key: IDBValidKey; value: unknown };
+
+/**
+ * One batch of rows, from just past `after`.
+ *
+ * A fresh read transaction per batch on purpose: an IndexedDB transaction
+ * commits as soon as the task queue drains without a live request against it,
+ * so it cannot be held across the yield between batches.
+ */
+async function readBatch(
+  src: IDBDatabase,
+  storeName: string,
+  after: IDBValidKey | undefined,
+): Promise<Row[]> {
+  const tx = src.transaction(storeName, "readonly");
+  const store = tx.objectStore(storeName);
+  const rows: Row[] = [];
+  let bytes = 0;
+  await new Promise<void>((resolve, reject) => {
+    const request =
+      after === undefined
+        ? store.openCursor()
+        : store.openCursor(IDBKeyRange.lowerBound(after, true));
+    request.onerror = () =>
+      reject(request.error ?? new Error(`could not read ${storeName}`));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve();
+        return;
+      }
+      rows.push({ key: cursor.key, value: cursor.value });
+      bytes += migrationRowSize(cursor.value);
+      if (migrationBatchIsFull(rows.length, bytes)) {
+        resolve();
+        return;
+      }
+      cursor.continue();
+    };
+  });
+  return rows;
+}
+
+async function writeBatch(
+  dst: IDBDatabase,
+  storeName: string,
+  rows: readonly Row[],
+): Promise<void> {
+  const tx = dst.transaction(storeName, "readwrite");
+  const store = tx.objectStore(storeName);
+  for (const row of rows) {
+    const value = storeName === STORE_SNAPSHOTS ? rewriteSnapshotRecord(row.value) : row.value;
+    const destKey =
+      storeName === STORE_SNAPSHOTS && typeof row.key === "string"
+        ? rewriteSnapshotKey(row.key)
+        : row.key;
+    store.put(value, destKey);
+  }
+  await waitTx(tx);
+}
+
 async function migrateDocsDatabase(): Promise<void> {
   if (typeof indexedDB === "undefined") return;
   if (!(await databaseExists(LEGACY_DB_NAME))) return;
@@ -145,27 +271,21 @@ async function migrateDocsDatabase(): Promise<void> {
   let dst: IDBDatabase | null = null;
   try {
     dst = await openVersionedDb(DB_NAME, DB_VERSION);
+    const done = doneStores();
     for (const storeName of STORES) {
+      if (done.has(storeName)) continue;
       if (!src.objectStoreNames.contains(storeName)) continue;
       if (!dst.objectStoreNames.contains(storeName)) continue;
-      const readTx = src.transaction(storeName, "readonly");
-      const readStore = readTx.objectStore(storeName);
-      const keys = (await requestToPromise(readStore.getAllKeys())) as IDBValidKey[];
-      const values = await requestToPromise(readStore.getAll());
-      await waitTx(readTx);
-      if (keys.length === 0) continue;
-      const writeTx = dst.transaction(storeName, "readwrite");
-      const writeStore = writeTx.objectStore(storeName);
-      for (let i = 0; i < keys.length; i += 1) {
-        const rawKey = keys[i];
-        const value = storeName === STORE_SNAPSHOTS ? rewriteSnapshotRecord(values[i]) : values[i];
-        const destKey =
-          storeName === STORE_SNAPSHOTS && typeof rawKey === "string"
-            ? rewriteSnapshotKey(rawKey)
-            : rawKey;
-        writeStore.put(value, destKey);
+      let after: IDBValidKey | undefined;
+      for (;;) {
+        const rows = await readBatch(src, storeName, after);
+        if (rows.length === 0) break;
+        await writeBatch(dst, storeName, rows);
+        after = rows[rows.length - 1]!.key;
+        // Hand the frame back: this is running while the shell is on screen.
+        await yieldToPaint();
       }
-      await waitTx(writeTx);
+      markStoreDone(storeName);
     }
   } finally {
     src.close();
@@ -210,5 +330,23 @@ export async function migrateWhiteboardStorage(): Promise<void> {
     localStorage.setItem(MIGRATED_MARKER, "2");
   } catch {
     /* private browsing — copy already happened this session */
+  }
+  clearStoreProgress();
+}
+
+/**
+ * Is there anything to do?
+ *
+ * Read synchronously so the boot path can tell, before it renders anything,
+ * whether this launch is an ordinary one or an upgrade — an upgrade gets a
+ * splash saying what is happening, and everybody else must not see one flash
+ * past for a migration that returns immediately.
+ */
+export function storageMigrationPending(): boolean {
+  if (typeof localStorage === "undefined") return false;
+  try {
+    return localStorage.getItem(MIGRATED_MARKER) !== "2";
+  } catch {
+    return false;
   }
 }
