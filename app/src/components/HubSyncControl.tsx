@@ -17,6 +17,7 @@ import {
   clearHubConflict,
   stashHubConflict,
 } from "../util/hubConflictStash";
+import { PAD_HUB_EVENT, loadPadHub } from "../util/padHub";
 import { pushDocBytes } from "../util/padSync";
 import type { DocWorkProgress } from "./DocIndexChip";
 import {
@@ -125,6 +126,26 @@ export interface HubSyncControlProps {
 }
 
 export function HubSyncControl({ hubHint = null, client = null, host = null }: HubSyncControlProps) {
+  /*
+   * No hub, no pill.
+   *
+   * This mounted unconditionally, and every stage of the walk talks to a hub —
+   * stage C reached `indexFromBytes`, which had no hub to send to and failed
+   * on a null dereference. There is nothing for this control to do on a device
+   * that syncs with nothing, so it is not offered.
+   *
+   * Read as state, not once: a reader who sets a hub in Settings should get
+   * the pill without reopening the tab.
+   */
+  const [hub, setHub] = useState(() => loadPadHub());
+  useEffect(() => {
+    const onHub = () => setHub(loadPadHub());
+    window.addEventListener(PAD_HUB_EVENT, onHub);
+    return () => window.removeEventListener(PAD_HUB_EVENT, onHub);
+  }, []);
+  /** Wired for the real walk. Without both, this is the label-only stub. */
+  const wired = Boolean(client && host);
+
   const [stage, setStage] = useState<HubSyncStage>("idle");
   const [walkError, setWalkError] = useState<string | null>(null);
   const walkingRef = useRef(false);
@@ -172,8 +193,13 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
     walkingRef.current = true;
     host?.onIndexError(null);
     try {
-      // — A: is the hub even up? A dead hub ends the walk before any write.
+      // — A: is there a hub, and is it up? Both end the walk before any write,
+      // and the first has to be answered here — every stage below assumes one,
+      // and stage C used to find out the hard way inside `indexFromBytes`.
       setStage("index");
+      if (!loadPadHub()) {
+        throw new Error("no hub is set — add one in Settings");
+      }
       const doc = host?.doc() ?? null;
       await client!.pingPadSync(0);
 
@@ -395,6 +421,8 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     };
   }, [stage, client, host]);
+
+  if (wired && !hub) return null;
 
   const busy = stage !== "idle" && stage !== "synced";
 
