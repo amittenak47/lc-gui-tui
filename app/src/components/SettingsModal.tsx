@@ -772,15 +772,28 @@ export function SettingsModal({
    * model list and reports what the server says about images, but the vision
    * flag stays the reader's to tick — a name is not a capability.
    */
+  const catalogGenRef = useRef(0);
   const refreshCatalog = useCallback(
     async (provider: string) => {
+      /*
+       * Only the newest request may answer.
+       *
+       * Every result used to be committed unconditionally, so switching
+       * providers faster than the slower one replied let the *old* provider's
+       * models land in the list — and stay there, under the new provider's
+       * name, until something else refreshed it.
+       */
+      const gen = ++catalogGenRef.current;
       setCatalogBusy(true);
       try {
-        setCatalog(await client.listModels(provider));
+        const models = await client.listModels(provider);
+        if (gen !== catalogGenRef.current) return;
+        setCatalog(models);
       } catch {
+        if (gen !== catalogGenRef.current) return;
         setCatalog(null);
       } finally {
-        setCatalogBusy(false);
+        if (gen === catalogGenRef.current) setCatalogBusy(false);
       }
     },
     [client],
