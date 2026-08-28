@@ -83,18 +83,23 @@ afterEach(() => {
 
 describe("the live pane on Android", () => {
   it("opens through the plugin, never through wry", async () => {
-    const { openLiveWebview } = await import("./webPageCapture");
+    const { liveWebviewLabel, openLiveWebview } = await import("./webPageCapture");
     const { resetLabelQueues } = await import("./labelQueue");
     resetLabelQueues();
 
-    await openLiveWebview("https://example.com/", { x: 12, y: 40, width: 800, height: 600 });
+    await openLiveWebview(liveWebviewLabel("web-1"), "https://example.com/", {
+      x: 12,
+      y: 40,
+      width: 800,
+      height: 600,
+    });
 
     expect(constructed).not.toHaveBeenCalled();
     expect(getByLabel).not.toHaveBeenCalled();
     // Closed by label first, exactly as the wry path does: one view per name.
     expect(commands()).toEqual(["live_webview_close", "live_webview_create"]);
     expect(argsOf("live_webview_create")).toMatchObject({
-      label: "lc-web-live",
+      label: "lc-web-live:web-1",
       url: "https://example.com/",
       rect: { x: 12, y: 40, width: 800, height: 600 },
       behind: false,
@@ -104,24 +109,74 @@ describe("the live pane on Android", () => {
   it("sends the rectangle in CSS pixels and the scale beside it", async () => {
     // The conversion belongs to Kotlin, which also knows the view's screen
     // origin. Doing it here would mean the layout code knew about device px.
-    const { placeLiveWebview } = await import("./webPageCapture");
+    const { liveWebviewLabel, placeLiveWebview } = await import("./webPageCapture");
 
-    await placeLiveWebview({ x: 10.4, y: 20.6, width: 300.2, height: 0 });
+    await placeLiveWebview(liveWebviewLabel("web-1"), {
+      x: 10.4,
+      y: 20.6,
+      width: 300.2,
+      height: 0,
+    });
 
     expect(argsOf("live_webview_place")).toEqual({
-      label: "lc-web-live",
+      label: "lc-web-live:web-1",
       rect: { x: 10, y: 21, width: 300, height: 1 },
       density: 2,
     });
   });
 
   it("parks the view rather than closing it", async () => {
-    const { showLiveWebview } = await import("./webPageCapture");
+    const { liveWebviewLabel, showLiveWebview } = await import("./webPageCapture");
 
-    await showLiveWebview(false);
+    await showLiveWebview(liveWebviewLabel("web-1"), false);
 
-    expect(argsOf("live_webview_show")).toEqual({ label: "lc-web-live", visible: false });
+    expect(argsOf("live_webview_show")).toEqual({
+      label: "lc-web-live:web-1",
+      visible: false,
+    });
     expect(constructed).not.toHaveBeenCalled();
+  });
+
+  it("gives each web tab its own view", async () => {
+    // Two web tabs are allowed and a split shows both. On one label the second
+    // open closed the first one's page — `openLiveWebviewNow` closes by label
+    // before it creates — and then answered for it as well.
+    const { liveWebviewLabel, openLiveWebview, showLiveWebview } = await import(
+      "./webPageCapture"
+    );
+    const { resetLabelQueues } = await import("./labelQueue");
+    resetLabelQueues();
+
+    await openLiveWebview(liveWebviewLabel("web-1"), "https://one.example/", {
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 10,
+    });
+    await openLiveWebview(liveWebviewLabel("web-2"), "https://two.example/", {
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 10,
+    });
+
+    const created = invoke.mock.calls
+      .filter(([cmd]) => cmd === "live_webview_create")
+      .map(([, args]) => (args as { label: string }).label);
+    expect(created).toEqual(["lc-web-live:web-1", "lc-web-live:web-2"]);
+
+    // The second open must not have closed the first one's view.
+    const closed = invoke.mock.calls
+      .filter(([cmd]) => cmd === "live_webview_close")
+      .map(([, args]) => (args as { label: string }).label);
+    expect(closed).toEqual(["lc-web-live:web-1", "lc-web-live:web-2"]);
+
+    // Parking one leaves the other alone.
+    await showLiveWebview(liveWebviewLabel("web-1"), false);
+    expect(argsOf("live_webview_show")).toEqual({
+      label: "lc-web-live:web-1",
+      visible: false,
+    });
   });
 });
 
@@ -139,9 +194,9 @@ describe("freezing a live page on Android", () => {
 
     // Rejects on the eval, which is as far as a test without a page can go —
     // the point is that it got past the existence check at all.
-    await expect(serializeLiveWebview()).rejects.toThrow(/no page here/);
+    await expect(serializeLiveWebview("lc-web-live:web-1")).rejects.toThrow(/no page here/);
     expect(getByLabel).not.toHaveBeenCalled();
-    expect(argsOf("live_webview_exists")).toEqual({ label: "lc-web-live" });
+    expect(argsOf("live_webview_exists")).toEqual({ label: "lc-web-live:web-1" });
   });
 
   it("says the page has closed when the plugin has no view", async () => {
@@ -151,7 +206,9 @@ describe("freezing a live page on Android", () => {
       return Promise.resolve(undefined);
     });
 
-    await expect(serializeLiveWebview()).rejects.toThrow(/the live page has closed/);
+    await expect(serializeLiveWebview("lc-web-live:web-1")).rejects.toThrow(
+      /the live page has closed/,
+    );
     expect(commands()).not.toContain("webview_eval_json");
   });
 });
@@ -195,7 +252,12 @@ describe("a plain browser tab", () => {
 
     await expect(captureRenderedPage("https://example.com/")).rejects.toThrow(/Tauri shell/);
     await expect(
-      openLiveWebview("https://example.com/", { x: 0, y: 0, width: 10, height: 10 }),
+      openLiveWebview("lc-web-live:web-1", "https://example.com/", {
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+      }),
     ).rejects.toThrow(/Tauri shell/);
     expect(constructed).not.toHaveBeenCalled();
     expect(getByLabel).not.toHaveBeenCalled();

@@ -28,15 +28,24 @@ import {
 import { watchScreenOverlay } from "../util/screenOverlay";
 import {
   closeLiveWebview,
+  liveWebviewLabel,
   openLiveWebview,
   placeLiveWebview,
   showLiveWebview,
-  LIVE_WEBVIEW_LABEL,
   type PaneRect,
 } from "../util/webPageCapture";
 
 export interface LiveWebPaneProps {
   /** The address to open. Changing it navigates the live view. */
+  /**
+   * The tab this pane belongs to.
+   *
+   * It names the native view. Two web tabs are allowed and a split shows both,
+   * so a shared name meant the second pane opened over the first one's page and
+   * every later question — place, hide, freeze, where did it navigate — was
+   * answered by whichever view had been created last.
+   */
+  tabId: string;
   url: string;
   /**
    * Showing on screen. A parked tab hides the view rather than closing it —
@@ -71,12 +80,14 @@ function rectOf(node: HTMLElement): PaneRect {
 }
 
 export function LiveWebPane({
+  tabId,
   url,
   visible,
   onError,
   onBack,
   onNavigate,
 }: LiveWebPaneProps) {
+  const label = liveWebviewLabel(tabId);
   const holeRef = useRef<HTMLDivElement | null>(null);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
@@ -92,12 +103,8 @@ export function LiveWebPane({
    * the addresses this component was never told about.
    */
   useEffect(
-    () =>
-      onLiveWebviewNavigated(
-        (next) => onNavigateRef.current?.(next),
-        LIVE_WEBVIEW_LABEL,
-      ),
-    [],
+    () => onLiveWebviewNavigated((next) => onNavigateRef.current?.(next), label),
+    [label],
   );
 
   /*
@@ -108,7 +115,7 @@ export function LiveWebPane({
    * once for the life of the pane rather than per address: history survives a
    * navigation, and so should the way out of it.
    */
-  useEffect(() => onLiveWebviewBack(() => onBackRef.current?.()), []);
+  useEffect(() => onLiveWebviewBack(() => onBackRef.current?.(), label), [label]);
 
   /**
    * Bumped when a view finishes opening, so the visibility effect re-runs.
@@ -135,7 +142,7 @@ export function LiveWebPane({
     const node = holeRef.current;
     if (!node) return;
     let cancelled = false;
-    void openLiveWebview(url, rectOf(node)).then(
+    void openLiveWebview(label, url, rectOf(node)).then(
       () => {
         if (!cancelled) setOpened((n) => n + 1);
       },
@@ -146,9 +153,9 @@ export function LiveWebPane({
     );
     return () => {
       cancelled = true;
-      void closeLiveWebview();
+      void closeLiveWebview(label);
     };
-  }, [url]);
+  }, [label, url]);
 
   /*
    * Follow the hole — once per frame, and only when it has moved.
@@ -184,7 +191,7 @@ export function LiveWebPane({
       const rect = rectOf(hole);
       if (placed && same(placed, rect)) return;
       placed = rect;
-      void placeLiveWebview(rect);
+      void placeLiveWebview(label, rect);
     };
     const place = () => {
       if (frame != null) return;
@@ -205,7 +212,7 @@ export function LiveWebPane({
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [url]);
+  }, [label, url]);
 
   /*
    * Step aside for anything that takes the whole screen.
@@ -223,8 +230,8 @@ export function LiveWebPane({
   useEffect(() => watchScreenOverlay(setOverlay), []);
 
   useEffect(() => {
-    void showLiveWebview(visible && !overlay);
-  }, [visible, overlay, opened]);
+    void showLiveWebview(label, visible && !overlay);
+  }, [label, visible, overlay, opened]);
 
   return <div ref={holeRef} className="lc-live-web-pane" aria-hidden />;
 }

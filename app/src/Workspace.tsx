@@ -4466,8 +4466,10 @@ export function Workspace({
     if (!isTauriRuntime()) return;
     setBusy("Freezing this page…");
     try {
-      const { serializeLiveWebview } = await import("./util/webPageCapture");
-      const live = await serializeLiveWebview();
+      const { liveWebviewLabel, serializeLiveWebview } = await import(
+        "./util/webPageCapture"
+      );
+      const live = await serializeLiveWebview(liveWebviewLabel(tab.id));
       const { pageFromCapturedHtml } = await import("./util/webPage");
       const page = await pageFromCapturedHtml(live.html, live.url || webUrlRef.current, {
         mode: webRenderModeRef.current,
@@ -8714,6 +8716,7 @@ export function Workspace({
           )}
           {canBrowseLive && webLive && annotateSource?.docType === "web" && (
             <LiveWebPane
+              tabId={tab.id}
               url={annotateSource.name}
               /*
                * Showing, not focused.

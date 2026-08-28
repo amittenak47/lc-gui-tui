@@ -466,16 +466,17 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
     private fun onBack(label: String) {
         val view = views[label] ?: return
         if (view.visibility != View.VISIBLE) return
-        notifyBackPressed()
+        notifyBackPressed(label)
     }
 
     /**
      * Tell the app that Back was pressed over the live pane.
      *
-     * A DOM event on the app's own WebView rather than a plugin channel: there
-     * is one listener, one live label, and nothing to say beyond the fact —
-     * a channel would be the same nothing through three more layers. It is
-     * also the only direction this plugin ever speaks in.
+     * A DOM event on the app's own WebView rather than a plugin channel: it
+     * goes one way and a channel would be the same fact through three more
+     * layers. The label rides along for the same reason it does on
+     * [notifyNavigated] — a reader in a split has two live views, and Back
+     * belongs to the one that was touched.
      */
     /**
      * Tell the app the live view has moved.
@@ -499,10 +500,12 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    private fun notifyBackPressed() {
+    private fun notifyBackPressed(label: String) {
         val app = appWebView ?: return
         val script =
-            "window.dispatchEvent(new Event(" + JSONObject.quote(BACK_EVENT) + "))"
+            "window.dispatchEvent(new CustomEvent(" +
+                JSONObject.quote(BACK_EVENT) +
+                ",{detail:{label:" + JSONObject.quote(label) + "}}))"
         try {
             app.evaluateJavascript(script, null)
         } catch (_: Throwable) {

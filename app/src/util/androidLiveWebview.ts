@@ -138,14 +138,23 @@ export async function androidWebviewExists(label: string): Promise<boolean> {
  * Listen for Back over the live pane. Returns an unsubscribe.
  *
  * A DOM event rather than a plugin channel: the sender is Kotlin evaluating one
- * line in the app's own WebView, there is exactly one listener, and the event
- * carries nothing because there is one live label and nothing else to say. A
- * no-op where `window` does not exist, so the pane can call it unconditionally.
+ * line in the app's own WebView, and it goes one way. Filtered by label like
+ * the navigation event beside it — a split has two live views, and one gesture
+ * over one of them used to walk both tabs back a page.
+ *
+ * A no-op where `window` does not exist, so the pane can call it
+ * unconditionally.
  */
-export function onLiveWebviewBack(onBack: () => void): () => void {
+export function onLiveWebviewBack(onBack: () => void, label?: string): () => void {
   if (typeof window === "undefined") return () => {};
-  window.addEventListener(BACK_EVENT, onBack);
-  return () => window.removeEventListener(BACK_EVENT, onBack);
+  const handler = (event: Event) => {
+    const detail = (event as CustomEvent<unknown>).detail;
+    const row = detail && typeof detail === "object" ? (detail as { label?: unknown }) : null;
+    if (label && row && typeof row.label === "string" && row.label !== label) return;
+    onBack();
+  };
+  window.addEventListener(BACK_EVENT, handler);
+  return () => window.removeEventListener(BACK_EVENT, handler);
 }
 
 /**
