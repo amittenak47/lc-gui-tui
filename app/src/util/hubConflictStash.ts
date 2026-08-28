@@ -9,7 +9,7 @@
  * workspace until the reader resolves.
  */
 
-import type { AnnotatePadDto, WhiteboardPadDto } from "../api/client";
+import type { AnnotatePadDto, InkPageDto, WhiteboardPadDto } from "../api/client";
 import type { DocFootnote } from "./docFootnotes";
 
 export type HubPadKind = "annotate" | "whiteboard";
@@ -27,12 +27,21 @@ export interface HubPadConflict {
   server: AnnotatePadDto | WhiteboardPadDto | null;
   /** Ink conflicts only: the page both sides drew on since `since`. */
   inkPageId?: number;
+  /** This device's pages, frozen at stop time. */
+  localInk?: InkPageDto[];
+  /** Hub pages at stop time. Missing means the GET failed. */
+  serverInk?: InkPageDto[];
 }
+
+/** Synthetic row id for the handwriting choice on the split. */
+export const INK_ROW_ID = "__ink__";
+
+export type HubInkChoice = "local" | "server" | "merged" | "none";
 
 /** What the reader chose; the caller applies it to stores and the hub. */
 export type HubConflictResolution =
-  | { pick: "local" }
-  | { pick: "server" }
+  | { pick: "local"; ink?: HubInkChoice }
+  | { pick: "server"; ink?: HubInkChoice }
   | {
       pick: "merged";
       /**
@@ -40,7 +49,15 @@ export type HubConflictResolution =
        * the base pane — those are whole-pane until someone answers for them.
        */
       footnotes?: DocFootnote[];
+      ink?: HubInkChoice;
     };
+
+/** Ink follows the pane when the split did not say. Merged notes still merge ink. */
+export function inkChoiceOf(resolution: HubConflictResolution): HubInkChoice {
+  if (resolution.ink) return resolution.ink;
+  if (resolution.pick === "merged") return "merged";
+  return resolution.pick;
+}
 
 let current: HubPadConflict | null = null;
 const listeners = new Set<() => void>();

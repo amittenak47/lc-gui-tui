@@ -110,7 +110,7 @@ import {
 } from "../util/offlineMerge";
 import { useIsMobile } from "../util/mobile";
 import { estimateStorage, formatBytes, type StorageUsage } from "../util/storageQuota";
-import { auditDocBytes, clearDocBytes, inspectDocStore } from "../util/docBytes";
+import { auditDocBytes, clearDocBytes, formatDocStoreReport, inspectDocStore } from "../util/docBytes";
 import {
   deviceRole,
   ensureDevicePrefs,
@@ -572,34 +572,9 @@ export function SettingsModal({
         setDocCache({ kind: "busy" });
         try {
           const report = await inspectDocStore();
-          const filled = report.stores
-            .filter((row) => row.rows > 0)
-            .map((row) => `${row.name} ${row.rows}`)
-            .join(", ");
           setDocCache({
             kind: report.writeFailure ? "failed" : "done",
-            message: [
-              `${report.db} v${report.version}.`,
-              `Document copies: ${report.rows} (${formatBytes(report.bytes)}).`,
-              filled ? `Other stores: ${filled}.` : "Every store is empty.",
-              report.wanted === 0
-                ? "No PDFs or EPUBs in the library."
-                : report.missing === 0
-                  ? `All ${report.wanted} of the library's documents have their bytes.`
-                  : `${report.missing} of ${report.wanted} library documents have no stored copy${
-                      report.missingNames.length
-                        ? ` (${report.missingNames.join(", ")}${report.missing > report.missingNames.length ? ", …" : ""})`
-                        : ""
-                    }.`,
-              report.writeFailure
-                ? `This device cannot save a document: ${report.writeFailure}`
-                : "A 64 KB test write saved and read back correctly, so saving works.",
-              report.missing > 0 && !report.writeFailure
-                ? "Saving works, so these arrived by sync without their bytes — pick each one from Files once to restore it."
-                : "",
-            ]
-              .filter(Boolean)
-              .join(" "),
+            message: formatDocStoreReport(report),
           });
         } catch (cause) {
           setDocCache({
@@ -2148,10 +2123,10 @@ export function SettingsModal({
                 </button>
               </div>
               {docCache.kind === "done" && (
-                <p className="lc-muted">{docCache.message}</p>
+                <p className="lc-muted lc-settings-report">{docCache.message}</p>
               )}
               {docCache.kind === "failed" && (
-                <p className="lc-settings-error">{docCache.message}</p>
+                <p className="lc-settings-error lc-settings-report">{docCache.message}</p>
               )}
 
               <div className="lc-settings-subhead">Search index</div>

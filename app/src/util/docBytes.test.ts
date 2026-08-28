@@ -1,7 +1,65 @@
 /** @vitest-environment jsdom */
 import { describe, expect, it } from "vitest";
 
-import { bytesFromStoredValue, readBlobBytes } from "./docBytes";
+import {
+  bytesFromStoredValue,
+  formatDocStoreReport,
+  readBlobBytes,
+  type DocStoreReport,
+} from "./docBytes";
+
+function report(over: Partial<DocStoreReport> = {}): DocStoreReport {
+  return {
+    db: "whiteboard.docs",
+    version: 7,
+    stores: [
+      { name: "bytes", rows: 0 },
+      { name: "content", rows: 5 },
+      { name: "ink_pages", rows: 2 },
+      { name: "note_links", rows: 3 },
+      { name: "pad_sync_queue", rows: 9 },
+      { name: "snapshots", rows: 9 },
+    ],
+    writeFailure: null,
+    rows: 0,
+    bytes: 0,
+    wanted: 1,
+    missing: 1,
+    missingNames: [
+      "Industry-Coding-Skills-Evaluation-Framework-CodeSignal-Skills-Evaluation-Lab-Short.pdf",
+    ],
+    ...over,
+  };
+}
+
+describe("formatDocStoreReport", () => {
+  it("puts the filename on its own line instead of inside the paragraph", () => {
+    const text = formatDocStoreReport(report());
+    expect(text).toBe(
+      [
+        "whiteboard.docs v7",
+        "Document copies: 0 (0 MB)",
+        "Other stores: content 5, ink_pages 2, note_links 3, pad_sync_queue 9, snapshots 9",
+        "1 of 1 library document has no stored copy.",
+        "Industry-Coding-Skills-Evaluation-Framework-CodeSignal-Skills-Evaluation-Lab-Short.pdf",
+        "A 64 KB test write saved and read back correctly, so saving works.",
+        "Saving works, so these arrived by sync without their bytes — pick each one from Files once to restore it.",
+      ].join("\n"),
+    );
+  });
+
+  it("says have when more than one copy is missing", () => {
+    const text = formatDocStoreReport(
+      report({
+        wanted: 3,
+        missing: 2,
+        missingNames: ["a.pdf", "b.pdf"],
+      }),
+    );
+    expect(text).toContain("2 of 3 library documents have no stored copy.");
+    expect(text).toContain("a.pdf\nb.pdf");
+  });
+});
 
 describe("bytesFromStoredValue", () => {
   it("returns a non-empty ArrayBuffer as-is", async () => {

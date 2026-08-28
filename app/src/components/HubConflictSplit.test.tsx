@@ -91,15 +91,15 @@ describe("HubConflictSplit", () => {
     document.body.textContent = "";
   });
 
-  it("renders Local left and Server right from the stash", () => {
+  it("renders Local left and the other device right from the stash", () => {
     const { onResolve } = mount();
     const panes = document.querySelectorAll<HTMLElement>(".lc-hub-conflict-pane");
     expect(panes).toHaveLength(2);
     expect(panes[0]!.dataset.side).toBe("local");
     expect(panes[0]!.querySelector(".lc-hub-conflict-tab")!.textContent).toBe("Local");
     expect(panes[1]!.dataset.side).toBe("server");
+    expect(panes[1]!.querySelector(".lc-hub-conflict-tab")!.textContent).toBe("Tablet");
 
-    // Nothing resolves until both sides have a verdict.
     act(() => {
       (document.querySelector(".lc-hub-conflict-resolve") as HTMLButtonElement).click();
     });
@@ -122,6 +122,7 @@ describe("HubConflictSplit", () => {
     expect(onResolve).toHaveBeenCalledTimes(1);
     const resolution = onResolve.mock.calls[0]![0];
     expect(resolution.pick).toBe("merged");
+    expect(resolution.ink).toBe("merged");
     // Both copies of the same-id-different-body mark survive (adjacent, per
     // mark); side-only marks default to their pane's verdict — three notes.
     expect(resolution.footnotes.map((n: { id: string }) => n.id)).toEqual([
@@ -156,6 +157,7 @@ describe("HubConflictSplit", () => {
     expect(onResolve).toHaveBeenCalledTimes(1);
     const resolution = onResolve.mock.calls[0]![0];
     expect(resolution.pick).toBe("merged");
+    expect(resolution.ink).toBe("server");
     const ids = resolution.footnotes.map((n: { id: string }) => n.id);
     expect(ids).toContain("srv");
     expect(ids).toContain("n1"); // explicitly kept despite Local being dropped
@@ -196,5 +198,64 @@ describe("HubConflictSplit guards", () => {
     act(() => resolveButton().click());
     expect(onResolve).toHaveBeenCalledTimes(1);
     expect(onResolve.mock.calls[0]![0].pick).toBe("local");
+    expect(onResolve.mock.calls[0]![0].ink).toBe("local");
+  });
+});
+
+describe("HubConflictSplit ink and labels", () => {
+  afterEach(() => {
+    document.body.textContent = "";
+  });
+
+  it("keeps only this device's copy and its ink on a single Local ✓", () => {
+    const { onResolve } = mount();
+    act(() => paneButton(0, "✓").click());
+    act(() => resolveButton().click());
+    expect(onResolve.mock.calls[0]![0]).toEqual({ pick: "local", ink: "local" });
+  });
+
+  it("refuses to reject both copies of the document", () => {
+    mount();
+    act(() => paneButton(0, "✕").click());
+    expect(
+      (document.querySelectorAll(".lc-hub-conflict-pane")[1] as HTMLElement).dataset.verdict,
+    ).toBe("keep");
+    act(() => paneButton(1, "✕").click());
+    expect(
+      (document.querySelectorAll(".lc-hub-conflict-pane")[0] as HTMLElement).dataset.verdict,
+    ).toBe("reject");
+    expect(
+      (document.querySelectorAll(".lc-hub-conflict-pane")[1] as HTMLElement).dataset.verdict,
+    ).toBe("keep");
+    expect(resolveButton().disabled).toBe(false);
+  });
+
+  it("✕ ink on both sides keeps the file with no handwriting", () => {
+    const { onResolve } = mount();
+    act(() => paneButton(0, "✓").click());
+    const inkButtons = Array.from(
+      document.querySelectorAll(".lc-hub-conflict-ink button"),
+    ) as HTMLButtonElement[];
+    expect(inkButtons).toHaveLength(2);
+    // Local pane ✓ already keeps Local ink. Two taps: follow → keep → drop.
+    // The other pane is undecided, so its ink is already off.
+    act(() => inkButtons[0]!.click());
+    act(() => inkButtons[0]!.click());
+    act(() => resolveButton().click());
+    expect(onResolve.mock.calls[0]![0].pick).toBe("local");
+    expect(onResolve.mock.calls[0]![0].ink).toBe("none");
+  });
+
+  it("names the right pane with otherLabel", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    act(() =>
+      root.render(
+        <HubConflictSplit conflict={CONFLICT} otherLabel="Desktop" onResolve={() => {}} />,
+      ),
+    );
+    const panes = document.querySelectorAll(".lc-hub-conflict-pane");
+    expect(panes[1]!.querySelector(".lc-hub-conflict-tab")!.textContent).toBe("Desktop");
   });
 });

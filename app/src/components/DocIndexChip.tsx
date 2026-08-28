@@ -109,15 +109,16 @@ export interface DocIndexChipProps {
   /**
    * Which half of Index is running.
    *
-   * The two skip independently: the hub already holding the text index says
-   * nothing about embeddings, and no configured model skips embedding without
-   * touching the index. So the label follows the job, and Index with neither
-   * job running shows nothing rather than flashing a word.
+   * Extract vs embed skip independently. Absent while the pill is on Index
+   * but neither job has started yet (the ping) or both have finished (the
+   * PUT). The chip still says `indexing…` in those gaps.
    */
   walkJob?: string | null;
   walkProgress?: { done: number; total: number } | null;
   /** The walk parked on `walkStage`. */
   walkError?: string | null;
+  /** Asking which copy to keep — not a spinning stage. */
+  walkWaiting?: "conflict" | null;
 }
 
 export function DocIndexChip({
@@ -136,6 +137,7 @@ export function DocIndexChip({
   walkJob,
   walkProgress,
   walkError,
+  walkWaiting,
 }: DocIndexChipProps) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -180,24 +182,31 @@ export function DocIndexChip({
   if (walking && walkError) {
     return (
       <span className="lc-doc-index-chip is-bad" title={walkError}>
-        {walkStage} error
+        {walkError}
+      </span>
+    );
+  }
+  if (walking && walkWaiting === "conflict") {
+    return (
+      <span
+        className="lc-doc-index-chip"
+        title="Both copies changed — pick which stays."
+      >
+        choose copy
       </span>
     );
   }
   if (walking) {
     /*
-     * Index is the one stage that names a job rather than itself, because it
-     * holds two that skip independently. With neither running there is nothing
-     * to report, and a bare "index…" between two skips would be a flash saying
-     * nothing — so it falls through to the resting label instead.
+     * Index names the job when one is running (extract vs embed). With neither
+     * yet, the pill is still on Index — ping, or the PUT after the last page —
+     * and the tab has to keep that word rather than fall through to `indexed`.
      */
     const label =
       walkStage === "index"
         ? walkJob === "embed"
           ? "embedding…"
-          : walkJob === "extract"
-            ? "indexing…"
-            : null
+          : "indexing…"
         : `${walkStage}…`;
     if (label) {
       return (
@@ -234,7 +243,7 @@ export function DocIndexChip({
   if (status === "error") {
     return (
       <span className="lc-doc-index-chip is-bad" title={error ?? "index error"}>
-        index error
+        {error ?? "index error"}
       </span>
     );
   }

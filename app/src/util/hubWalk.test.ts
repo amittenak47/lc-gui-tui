@@ -102,14 +102,18 @@ describe("walkSyncInk (stage F)", () => {
    * fail, so the store is stubbed to hold one dirty page and nothing else.
    */
   function stubStores(local: Array<{ pageId: number; updatedAt: number }>) {
+    const keys: string[] = [];
     vi.doMock("./inkPageStore", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./inkPageStore")>()),
-      getInkPageRecords: () =>
-        Promise.resolve(
+      getInkPageRecords: (docKey: string) => {
+        keys.push(docKey);
+        return Promise.resolve(
           local.map((row) => ({ ...row, gz: new Uint8Array([1, 2, 3]) })),
-        ),
+        );
+      },
       writeInkPage: () => Promise.resolve(),
     }));
+    return keys;
   }
 
   it("fails the walk when the hub will not take the strokes", async () => {
@@ -186,6 +190,37 @@ describe("walkSyncInk (stage F)", () => {
         0,
       ),
     ).rejects.toThrow(/missing from the hub download/);
+    vi.doUnmock("./inkPageStore");
+    vi.doUnmock("./padHub");
+    vi.resetModules();
+  });
+
+  it("looks up local pages under md:id, not annotate:id", async () => {
+    vi.resetModules();
+    const keys = stubStores([]);
+    vi.doMock("./padHub", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./padHub")>()),
+      loadPadHub: () => ({ url: "http://hub.test", token: "t" }),
+    }));
+    const { walkSyncInk: walk } = await import("./hubWalk");
+    const client = {
+      getInkPages: vi.fn().mockResolvedValue([]),
+      putInkPage: vi.fn(),
+    } as unknown as LcClient;
+
+    await expect(
+      walk(
+        client,
+        pad(),
+        {
+          ...emptySnapshot,
+          inkDigests: [{ kind: "annotate", key: "p1", page_id: 2, updated_at: 50 }],
+        },
+        0,
+      ),
+    ).rejects.toThrow(/missing from the hub download/);
+    expect(keys.some((key) => key === "md:p1")).toBe(true);
+    expect(keys.some((key) => key === "annotate:p1")).toBe(false);
     vi.doUnmock("./inkPageStore");
     vi.doUnmock("./padHub");
     vi.resetModules();

@@ -17,6 +17,7 @@ import {
   clearHubConflict,
   stashHubConflict,
 } from "../util/hubConflictStash";
+import { localInkAsDtos } from "../util/inkSync";
 import { PAD_HUB_EVENT, loadPadHub } from "../util/padHub";
 import { pushDocBytes } from "../util/padSync";
 import type { DocWorkProgress } from "./DocIndexChip";
@@ -49,6 +50,8 @@ export interface HubWalkReport {
   progress: DocWorkProgress | null;
   /** The walk parked on this stage. */
   error?: string | null;
+  /** The walk is asking the reader to pick a copy, not doing work. */
+  waiting?: "conflict";
 }
 
 export type HubSyncStage =
@@ -62,6 +65,17 @@ export type HubSyncStage =
 
 /** Walk order after a tap; `idle` sits outside it. */
 const WALK: HubSyncStage[] = ["index", "pad", "ink", "links", "pull", "synced"];
+
+/**
+ * The pill belongs on a pad you can sync, not on Home / Explore / practice.
+ *
+ * Home is a workspace too, and it used to portal this control into the shared
+ * board-chrome slot — so the library cards wore a Sync button that indexed
+ * nothing (no document) and claimed nothing (no pad).
+ */
+export function tabOffersHubSync(kind: string): boolean {
+  return kind === "annotate" || kind === "whiteboard" || kind === "web";
+}
 
 const LABEL: Record<HubSyncStage, string> = {
   idle: "Sync",
@@ -122,8 +136,14 @@ export interface HubSyncWalkHost {
     /** Record the row a successful push left on the hub. */
     markHubAck(updatedAt: number): void;
   } | null>;
-  /** H: reload the open pad from what we kept — the chosen reload, not a ping. */
-  emitReload(): void;
+  /**
+   * H: show the open pad as this walk left it.
+   *
+   * Ink and pad JSON land in IDB first; this is what puts them on the board
+   * that is already on screen. May be async — the walk waits so Pull runs
+   * after Ink, not over a reload that started too early.
+   */
+  emitReload(): void | Promise<void>;
   /** How far back "changed after this" reaches for ink conflicts. */
   inkSince(): number;
   /**
@@ -341,17 +361,32 @@ export function HubSyncControl({
           bytesOnHub = true;
         }
 
-        // — C: index. Skip when the hub already has pages; otherwise extract
-        // here when we hold the file (so the tab can count pages) and PUT the
-        // pages. Hub-side extract is only for a PDF this device no longer has.
-        if (!(status?.indexed && (status.page_count ?? 0) > 0)) {
+        // — C: index. Skip when the hub already has pages.
+        //
+        // A PDF the hub already holds is extracted *there*, from that copy.
+        // Shipping the tablet's page JSON back over the LAN was the textbook
+        // that sat on 100% and then died — the file was already on the hub from
+        // stage B. EPUB is the leftover: the hub cannot read it from bytes.
+        const neededIndex = !(status?.indexed && (status.page_count ?? 0) > 0);
+        if (neededIndex) {
+          const hubCanExtract =
+            doc.docType === "markdown" ||
+            doc.docType === "code" ||
+            (bytesOnHub && doc.docType === "pdf");
           const extractHere =
             Boolean(doc.bytes) &&
-            (doc.docType === "epub" ||
-              doc.docType === "pdf" ||
-              doc.docType === "markdown" ||
-              doc.docType === "code");
-          if (extractHere) {
+            (doc.docType === "epub" || (doc.docType === "pdf" && !bytesOnHub));
+          if (hubCanExtract) {
+            goWork("extract", null);
+            const result = await client!.indexFromBytes(doc.hash, {
+              name: doc.name,
+              doc_type: doc.docType,
+              source_text: doc.docType === "pdf" ? undefined : doc.text,
+            });
+            if (!result.indexed) {
+              throw new Error("the hub did not keep the index");
+            }
+          } else if (extractHere) {
             const { extractDocumentPages } = await import("../util/docExtract");
             goWork("extract", { done: 0, total: 0 });
             const pages = await extractDocumentPages({
@@ -362,7 +397,6 @@ export function HubSyncControl({
               hash: doc.hash,
               onProgress: (done, total) => goWork("extract", { done, total }),
             });
-            // Last page is not "done": the hub still has to keep the pages.
             goWork("extract", null);
             if (pages.length === 0) {
               throw new Error("no text could be read from this file");
@@ -372,38 +406,21 @@ export function HubSyncControl({
               doc_type: doc.docType,
               pages: pages.map((p) => ({ page: p.page, text: p.text, heading: p.heading })),
             });
-          } else if (doc.docType === "pdf" || doc.docType === "markdown" || doc.docType === "code") {
-            /*
-             * A PDF is extracted hub-side, from the hub's own copy. Markdown
-             * and code carry their source in the body and need nothing there.
-             *
-             * Said here rather than left to fail on the wire: this device does
-             * not hold the file either, so there is no upload that would fix
-             * it, and the walk should park on Index saying that instead of
-             * walking on as though the document were indexed.
-             */
-            if (doc.docType === "pdf" && !bytesOnHub) {
-              throw new Error(
-                "the hub does not have this file yet, and this device no longer holds it — reopen it here, then sync",
-              );
-            }
-            goWork("extract", null);
-            const result = await client!.indexFromBytes(doc.hash, {
-              name: doc.name,
-              doc_type: doc.docType,
-              source_text:
-                doc.docType === "pdf" ? undefined : doc.text,
-            });
-            if (!result.indexed) {
-              throw new Error("the harness did not keep the index");
-            }
+          } else if (doc.docType === "pdf" && !bytesOnHub) {
+            throw new Error(
+              "the hub does not have this file yet, and this device no longer holds it — reopen it here, then sync",
+            );
           }
-          // Any other kind has nothing to do here.
         }
 
-        // — D: embed to full, one budget at a time. No model configured reads
-        // as a skip, not a failure — Ask just stays word-only.
+        // — D: embed to full, one budget at a time. A missing model, a
+        // refused endpoint, or a timeout is a skip — the text index is
+        // already on the hub, and parking the whole walk on Index made a
+        // textbook look unindexed after the pages were in. Ask stays word-only.
         const fresh = await client!.getDocIndex(doc.hash).catch(() => null);
+        if (neededIndex && !(fresh?.indexed && (fresh.page_count ?? 0) > 0)) {
+          throw new Error("the hub did not keep the index");
+        }
         const embedState = (fresh as (typeof fresh & { embed_state?: string }) | null)
           ?.embed_state;
         if (embedState !== "full" && fresh?.indexed) {
@@ -417,16 +434,16 @@ export function HubSyncControl({
            * of them. Fixing it means the hub returning larger budgets or a
            * streaming route, which is a protocol change and not this pass.
            */
-          for (let guard = 0; guard < 500; guard++) {
-            const budget = await client!.embedDoc(doc.hash);
-            goWork("embed", { done: budget.done, total: budget.total });
-            if (budget.reason) {
-              // A refused/absent model is a skip; anything else is real.
-              if (/model/i.test(budget.reason)) break;
-              throw new Error(budget.reason);
+          try {
+            for (let guard = 0; guard < 500; guard++) {
+              const budget = await client!.embedDoc(doc.hash);
+              goWork("embed", { done: budget.done, total: budget.total });
+              if (budget.reason) break;
+              if (budget.total > 0 && budget.done >= budget.total) break;
+              if (budget.total === 0) break;
             }
-            if (budget.total > 0 && budget.done >= budget.total) break;
-            if (budget.total === 0) break;
+          } catch {
+            /* vectors can wait */
           }
           goWork(null, null);
         }
@@ -441,9 +458,6 @@ export function HubSyncControl({
        */
       const padInfo = client && host ? await host.pad() : null;
       const snapshot = snapshotFromPing(ping);
-      let hubHasNewerRow = false;
-      // The ack this device holds when H runs — resolutions may have moved it.
-      let padAckForPull: number | null = padInfo ? padInfo.hubAckUpdatedAt() : null;
       if (padInfo) {
         const walkPad = {
           kind: padInfo.kind,
@@ -467,37 +481,63 @@ export function HubSyncControl({
           return got;
         };
 
+        const freezeCopies = async () => {
+          const [server, localInk, serverInk] = await Promise.all([
+            fetchHubBody(),
+            localInkAsDtos(padInfo.kind, padInfo.id).catch(() => []),
+            (async () => {
+              try {
+                return await client!.getInkPages(padInfo.kind, padInfo.id);
+              } catch {
+                return [];
+              }
+            })(),
+          ]);
+          return { server, localInk, serverInk };
+        };
+
         /* Park on the split; resolve when the reader has chosen and the
          * choice is written into this device's stores. */
         const raiseConflict = (
           conflict: HubPadConflict,
         ): Promise<HubConflictResolution> => {
           stashHubConflict(conflict);
+          hostRef.current?.onWalkProgress({
+            stage: walkStageRef.current,
+            progress: null,
+            waiting: "conflict",
+          });
           return host!
             .onConflict(conflict)
             .then((resolution) => resolution ?? { pick: "local" })
-            .finally(() => clearHubConflict());
+            .finally(() => {
+              clearHubConflict();
+              hostRef.current?.onWalkProgress({
+                stage: walkStageRef.current,
+                progress: null,
+              });
+            });
         };
 
         // — E: push this pad's JSON (CAS). Conflict → stop before any apply.
+        let inkSettled = false;
         if (runs("pad")) {
           goStage("pad");
           const pushed = await walkPushPad(client!, walkPad, snapshot);
-          if (pushed.outcome === "ok") {
-            // The hub now holds what this device just sent, and the ack above
-            // says so. Stage H must compare against that, not against the older
-            // row this walk's snapshot was taken from.
-            padAckForPull = pushed.hubUpdatedAt;
-          }
           if (pushed.outcome === "conflict") {
+            const copies = await freezeCopies();
             const resolution = await raiseConflict({
               kind: padInfo.kind,
               id: padInfo.id,
               stage: "pad",
               detail: pushed.detail,
               local: padInfo.buildBody(),
-              server: await fetchHubBody(),
+              server: copies.server,
+              localInk: copies.localInk,
+              serverInk: copies.serverInk,
             });
+            // Workspace already wrote pad JSON + the chosen ink.
+            inkSettled = true;
             if (resolution.pick !== "server") {
               // Local / merged: this device's copy won, so the hub gets it.
               // The ack now names the row the hub actually holds, so CAS passes.
@@ -519,54 +559,30 @@ export function HubSyncControl({
               if (repush.outcome === "conflict") {
                 throw new WalkConflict("pad", repush.detail);
               }
-              // What the hub holds *now*. `fresh.hubAckUpdatedAt()` was read
-              // before this write and names the row we were re-basing on.
-              padAckForPull = repush.hubUpdatedAt;
-            } else {
-              // Take server: applyHub* already wrote IDB and marked the ack.
-              const fresh = await host!.pad();
-              padAckForPull = fresh?.hubAckUpdatedAt() ?? padAckForPull;
             }
           }
         }
 
-        // — F: handwriting for this pad only. A dual-write page stops at Ink;
-        // after a resolve the walk converges both sides to what was kept and
-        // resumes at G without redoing Index or Pad.
-        if (runs("ink")) {
+        // — F: handwriting for this pad only. Skipped when the pad split
+        // already settled ink — newest-wins here would throw away Keep Local.
+        if (runs("ink") && !inkSettled) {
           goStage("ink");
           const ink = await walkSyncInk(client!, walkPad, snapshot, host!.inkSince());
           if (ink.outcome === "conflict") {
-            const resolution = await raiseConflict({
+            const copies = await freezeCopies();
+            await raiseConflict({
               kind: padInfo.kind,
               id: padInfo.id,
               stage: "ink",
               detail: `page ${ink.pageId} has new strokes here and on the hub`,
               local: padInfo.buildBody(),
-              server: await fetchHubBody(),
+              server: copies.server,
+              localInk: copies.localInk,
+              serverInk: copies.serverInk,
               inkPageId: ink.pageId,
             });
-            // Ink stays whole-pane: converge every page of this pad to the
-            // side that was kept, so the next walk sees agreement. The ordinary
-            // per-page sync is not re-run — there is nothing left to fight over.
-            const { pullInkPagesOverLocal, pushInkPagesToHub } = await import("../util/inkSync");
-            if (resolution.pick === "server") {
-              await pullInkPagesOverLocal(client!, padInfo.kind, padInfo.id);
-            } else {
-              await pushInkPagesToHub(client!, padInfo.kind, padInfo.id);
-            }
-            padAckForPull = (await host!.pad())?.hubAckUpdatedAt() ?? padAckForPull;
           }
         }
-
-        // — H, decided here and acted on after Links: is what the hub holds
-        // still newer than the row we kept — e.g. this conflict was resolved
-        // by taking the server? Then the open pad reloads from it. That is the
-        // chosen reload, not a background ping.
-        const row = [...snapshot.annotateRows, ...snapshot.whiteboardRows].find(
-          (r) => r.id === padInfo.id,
-        );
-        hubHasNewerRow = row != null && row.updated_at > (padAckForPull ?? 0);
       }
 
       /*
@@ -600,8 +616,16 @@ export function HubSyncControl({
       }
 
       goStage("pull");
-      if (hubHasNewerRow) host?.emitReload();
-      // What "Synced" is a claim about: this pad, as it stood just now.
+      // Always. Pull used to fire only when the pad *row* was newer than the
+      // ack, which skipped the common case: the tablet sent ink, the walk
+      // wrote those pages into IDB, and the open PDF kept showing yesterday's
+      // strokes until someone closed and reopened the file.
+      try {
+        await host?.emitReload();
+      } catch {
+        // The stores already hold the walk. A failed remount must not park
+        // the pill on Pull after a sync that actually landed.
+      }
       syncedAtSeqRef.current = editSeqRef.current;
       goStage("synced");
       walkingRef.current = false;
@@ -610,7 +634,8 @@ export function HubSyncControl({
       const message = cause instanceof Error ? cause.message : String(cause);
       setWalkError(message);
       // Stay parked on the failing stage; the next tap retries from it. The
-      // tab says which stage that was, beside the document it happened to.
+      // tab says the real reason, beside the document it happened to.
+      hostRef.current?.onIndexError(message);
       hostRef.current?.onWalkProgress({
         stage: walkStageRef.current,
         progress: null,

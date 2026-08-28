@@ -127,7 +127,14 @@ async function extractPdfPages(
   hash?: string,
 ): Promise<ExtractedPage[]> {
   const borrowed = hash ? borrowPdfDocument(hash) : null;
-  if (borrowed) return readPdfPages(borrowed, onProgress);
+  if (borrowed) {
+    try {
+      return await readPdfPages(borrowed, onProgress);
+    } catch {
+      // The viewer is often still laying the same document out, or has
+      // dropped it. A second getDocument shares the worker, not the proxy.
+    }
+  }
 
   const pdfjs = await loadPdfJs();
   // Share the viewer's worker — a second workerPort hangs getDocument — so

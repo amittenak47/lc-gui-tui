@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { isInkConflict, remoteWins } from "./inkSync";
+import { decodeInkOps, encodeInkOps } from "../canvas/inkCodec";
+import { isInkConflict, mergeEncodedPages, remoteWins } from "./inkSync";
 import {
   clearInkConflicts,
   inkConflictMessage,
@@ -95,6 +96,43 @@ describe("ink conflict banner", () => {
 
   it("says nothing when nothing collided", () => {
     expect(inkConflictMessage([])).toBeNull();
+  });
+});
+
+describe("mergeEncodedPages", () => {
+  it("puts both stroke sets on a shared page, this device first", () => {
+    const localOp = {
+      kind: "draw" as const,
+      color: "#111",
+      baseWidth: 2,
+      maxFullness: 0.8,
+      pressureClip: 0.6,
+      pressureSensitive: false,
+      points: [{ x: 1, y: 1, pressure: 0.5, slowness: 0.5 }],
+    };
+    const serverOp = {
+      kind: "draw" as const,
+      color: "#222",
+      baseWidth: 2,
+      maxFullness: 0.8,
+      pressureClip: 0.6,
+      pressureSensitive: false,
+      points: [{ x: 9, y: 9, pressure: 0.5, slowness: 0.5 }],
+    };
+    const merged = mergeEncodedPages(
+      new Map([[1, encodeInkOps([localOp])]]),
+      new Map([[1, encodeInkOps([serverOp])]]),
+    );
+    const ops = decodeInkOps(merged.get(1)!);
+    expect(ops).toHaveLength(2);
+    expect(ops[0]).toMatchObject({ color: "#111" });
+    expect(ops[1]).toMatchObject({ color: "#222" });
+  });
+
+  it("keeps a page that only one side has", () => {
+    const only = encodeInkOps([]);
+    const merged = mergeEncodedPages(new Map([[2, only]]), new Map());
+    expect(merged.get(2)).toBe(only);
   });
 });
 

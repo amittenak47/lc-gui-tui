@@ -247,6 +247,23 @@ export function docIdentityHash(input: {
   return hashMarkdown(input.text ?? "");
 }
 
+/**
+ * A PDF/EPUB open with no bytes must keep the library hash.
+ *
+ * Hashing an empty buffer (or the file name) invents a new identity, and a
+ * later save can delete the real copy under the old hash. Reload-without-bytes
+ * is the path that used to blank the paper after Keep server.
+ */
+export function existingHashIfEmptyBinary(
+  docType: DocType,
+  bytes: ArrayBuffer | null | undefined,
+  existingHash: string | undefined,
+): string | null {
+  if (!isBinaryDocType(docType)) return null;
+  if (bytes && bytes.byteLength > 0) return null;
+  return existingHash?.trim() ? existingHash : null;
+}
+
 
 /**
  * Bring a library written by the old build across, once.

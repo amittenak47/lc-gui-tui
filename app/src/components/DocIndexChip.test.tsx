@@ -50,16 +50,15 @@ describe("the chip while a Sync walk runs", () => {
     act(() => embed.root.unmount());
   });
 
-  it("shows nothing extra for an Index stage that skipped both jobs", () => {
+  it("keeps saying indexing while the pill is on Index, even with no job", () => {
     /*
-     * The hub already holding the text index says nothing about embeddings,
-     * and a configured-model skip ends embedding without touching the index.
-     * With neither running there is nothing to report, and a bare "index…"
-     * between two skips would be a flash saying nothing.
+     * The ping before extract, and the PUT after the last page, both report
+     * Index with no job. Falling through to `indexed` made the tab look done
+     * while the button was still on Index.
      */
     const { host } = mount({ status: "indexed", walkStage: "index", walkJob: null });
-    expect(chip(host)?.textContent).toContain("indexed");
-    expect(chip(host)?.className).not.toContain("is-working");
+    expect(chip(host)?.textContent).toContain("indexing…");
+    expect(chip(host)?.className).toContain("is-working");
   });
 
   it("counts where there is a count and sweeps where there is not", () => {
@@ -86,12 +85,19 @@ describe("the chip while a Sync walk runs", () => {
     expect(swept.host.querySelector(".is-sweeping")).not.toBeNull();
   });
 
-  it("says where a walk parked, without a ring", () => {
-    const { host } = mount({ walkStage: "pad", walkError: "hub unreachable" });
-    expect(chip(host)?.textContent).toContain("pad error");
-    expect(chip(host)?.className).toContain("is-bad");
-    expect(host.querySelector(".lc-doc-index-ring")).toBeNull();
-  });
+    it("says choose copy with no sweep while the walk waits on a conflict", () => {
+      const { host } = mount({ walkStage: "pad", walkWaiting: "conflict" });
+      expect(chip(host)?.textContent).toContain("choose copy");
+      expect(chip(host)?.className).not.toContain("is-working");
+      expect(host.querySelector(".lc-doc-index-ring")).toBeNull();
+    });
+
+    it("says why a walk parked, not only the stage", () => {
+      const { host } = mount({ walkStage: "index", walkError: "hub unreachable" });
+      expect(chip(host)?.textContent).toContain("hub unreachable");
+      expect(chip(host)?.className).toContain("is-bad");
+      expect(host.querySelector(".lc-doc-index-ring")).toBeNull();
+    });
 
   it("finishes on synced, not indexed", () => {
     const { host } = mount({ status: "indexed", walkStage: "synced" });
