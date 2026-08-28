@@ -1588,6 +1588,35 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// What `GET /pads/{kind}/{id}` answers.
+    ///
+    /// The route serves one pad instead of making a client download the whole
+    /// library to find a row, and answers 404 for anything not live. Deleting
+    /// a pad removes the row, so "deleted" and "never existed" are the same
+    /// answer to a caller — which is what lets the hint probe read a 404 as
+    /// "the hub has no row for this pad" without asking a second question.
+    #[test]
+    fn get_pad_answers_for_live_rows_and_nothing_else() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 10)).unwrap();
+        put_annotate(&conn, &an("a1", 11)).unwrap();
+
+        let live = get_whiteboard(&conn, "w1").unwrap().unwrap();
+        assert_eq!(live.updated_at, 10);
+        assert!(live.deleted_at.is_none());
+        assert!(get_annotate(&conn, "a1").unwrap().unwrap().deleted_at.is_none());
+
+        delete_pad(&conn, PadKind::Whiteboard, "w1", 1).unwrap();
+        delete_pad(&conn, PadKind::Annotate, "a1", 1).unwrap();
+        assert!(get_whiteboard(&conn, "w1").unwrap().is_none());
+        assert!(get_annotate(&conn, "a1").unwrap().is_none());
+
+        assert!(get_whiteboard(&conn, "nope").unwrap().is_none());
+        assert!(get_annotate(&conn, "nope").unwrap().is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn older_put_is_conflict_and_keeps_a_revision() {
         let path = tmp();

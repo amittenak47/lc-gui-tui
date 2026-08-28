@@ -1199,6 +1199,49 @@ export class LcClient {
     );
   }
 
+  /**
+   * One pad, by id — `null` when the hub has no live row for it.
+   *
+   * The listings answer the same question, and callers were using them to:
+   * finding one row meant pulling every board with its elements, files and ink
+   * palettes, or every annotated document with its footnotes, and throwing all
+   * but one away.
+   *
+   * Without a hub there is nothing to save — the local list is an in-process
+   * call — so that path still filters the listing.
+   */
+  async getWhiteboardPad(id: string): Promise<WhiteboardPadDto | null> {
+    const hub = loadPadHub();
+    if (!hub) {
+      const rows = await this.listWhiteboardPads();
+      return rows.find((row) => row.id === id) ?? null;
+    }
+    try {
+      const { json } = await hubFetch(hub, "GET", `/pads/whiteboard/${encodeURIComponent(id)}`);
+      return (json as WhiteboardPadDto | null) ?? null;
+    } catch (cause) {
+      // Absent is an answer, not a failure. Anything else is the hub's.
+      if (cause instanceof LcApiError && cause.status === 404) return null;
+      throw cause;
+    }
+  }
+
+  /** One annotate pad, by id. See {@link getWhiteboardPad}. */
+  async getAnnotatePad(id: string): Promise<AnnotatePadDto | null> {
+    const hub = loadPadHub();
+    if (!hub) {
+      const rows = await this.listAnnotatePads();
+      return rows.find((row) => row.id === id) ?? null;
+    }
+    try {
+      const { json } = await hubFetch(hub, "GET", `/pads/annotate/${encodeURIComponent(id)}`);
+      return (json as AnnotatePadDto | null) ?? null;
+    } catch (cause) {
+      if (cause instanceof LcApiError && cause.status === 404) return null;
+      throw cause;
+    }
+  }
+
   async listWhiteboardArchive(): Promise<WhiteboardPadDto[]> {
     return padInvokeOrHub(
       () => this.cmd("lc_archive_whiteboard"),

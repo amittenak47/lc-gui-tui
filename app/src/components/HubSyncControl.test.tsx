@@ -182,6 +182,9 @@ describe("HubSyncControl (step-2 stub)", () => {
         putDocBytes: overrides.putDocBytes ?? vi.fn().mockResolvedValue(undefined),
         listAnnotatePads: overrides.listAnnotatePads ?? vi.fn().mockResolvedValue([]),
         listWhiteboardPads: overrides.listWhiteboardPads ?? vi.fn().mockResolvedValue([]),
+        // One pad, by id — the conflict path no longer lists the library.
+        getAnnotatePad: overrides.getAnnotatePad ?? vi.fn().mockResolvedValue(null),
+        getWhiteboardPad: overrides.getWhiteboardPad ?? vi.fn().mockResolvedValue(null),
         putAnnotatePad: overrides.putAnnotatePad ?? vi.fn(),
         putWhiteboardPad: overrides.putWhiteboardPad ?? vi.fn(),
       };
@@ -377,9 +380,13 @@ describe("HubSyncControl (step-2 stub)", () => {
       const annotateRow = { id: "pad-1", updated_at: 500, deleted_at: null };
       const client = fakeClient({
         pingPadSync: vi.fn().mockResolvedValue({ now: 1, annotate: [annotateRow] }),
-        listAnnotatePads: vi.fn().mockResolvedValue([
-          { id: "pad-1", name: "book.pdf", updated_at: 500, footnotes: [], source: "hub copy" },
-        ]),
+        getAnnotatePad: vi.fn().mockResolvedValue({
+          id: "pad-1",
+          name: "book.pdf",
+          updated_at: 500,
+          footnotes: [],
+          source: "hub copy",
+        }),
         putAnnotatePad: vi.fn(),
       });
       const { host, conflicts } = makeHost({
@@ -423,9 +430,13 @@ describe("HubSyncControl (step-2 stub)", () => {
       const annotateRow = { id: "pad-1", updated_at: 500, deleted_at: null };
       const client = fakeClient({
         pingPadSync: vi.fn().mockResolvedValue({ now: 1, annotate: [annotateRow] }),
-        listAnnotatePads: vi.fn().mockResolvedValue([
-          { id: "pad-1", name: "book.pdf", updated_at: 500, footnotes: [], source: "hub copy" },
-        ]),
+        getAnnotatePad: vi.fn().mockResolvedValue({
+          id: "pad-1",
+          name: "book.pdf",
+          updated_at: 500,
+          footnotes: [],
+          source: "hub copy",
+        }),
         putAnnotatePad: vi.fn().mockResolvedValue({ id: "pad-1", updated_at: 1234 }),
       });
       const { host, conflicts } = makeHost({
@@ -492,6 +503,41 @@ describe("HubSyncControl (step-2 stub)", () => {
       // the stale ack, and raises a conflict with itself.
       expect(acked).toEqual([1234]);
       expect(ack).toBe(1234);
+    });
+
+    it("pings the hub once per walk", async () => {
+      // Stage A asked "is the hub up?" and `snapshotHub` asked the same full
+      // `pads/sync` question again — the same listing downloaded twice per
+      // tap, and two stages of one walk looking at two different worlds.
+      vi.useFakeTimers();
+      const pingPadSync = vi.fn().mockResolvedValue({ now: 1, annotate: [] });
+      const client = fakeClient({
+        pingPadSync,
+        putAnnotatePad: vi.fn().mockResolvedValue({ id: "pad-1", updated_at: 777 }),
+      });
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      (host as unknown as { pad: () => Promise<unknown> }).pad = async () => ({
+        kind: "annotate" as const,
+        id: "pad-1",
+        hubAckUpdatedAt: () => 100,
+        buildBody: () => ({ id: "pad-1", name: "book.pdf", updated_at: 900 }),
+        markHubAck: () => {},
+      });
+      const button = await mountWalk(client, host);
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(button.dataset.stage).toBe("synced");
+      expect(pingPadSync).toHaveBeenCalledTimes(1);
     });
 
     it("records the hub ack after an ordinary push", async () => {

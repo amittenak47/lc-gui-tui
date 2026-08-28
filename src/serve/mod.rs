@@ -163,7 +163,10 @@ pub fn router(state: Shared) -> Router {
         )
         .route("/pads/whiteboard", get(routes::list_whiteboard))
         .route("/pads/whiteboard/archive", get(routes::archive_whiteboard))
-        .route("/pads/whiteboard/:id", put(routes::put_whiteboard))
+        .route(
+            "/pads/whiteboard/:id",
+            get(routes::get_whiteboard).put(routes::put_whiteboard),
+        )
         .route(
             "/pads/whiteboard/:id/tombstone",
             post(routes::tombstone_whiteboard),
@@ -174,7 +177,10 @@ pub fn router(state: Shared) -> Router {
         )
         .route("/pads/annotate", get(routes::list_annotate))
         .route("/pads/annotate/archive", get(routes::archive_annotate))
-        .route("/pads/annotate/:id", put(routes::put_annotate))
+        .route(
+            "/pads/annotate/:id",
+            get(routes::get_annotate).put(routes::put_annotate),
+        )
         .route(
             "/pads/annotate/:id/tombstone",
             post(routes::tombstone_annotate),
