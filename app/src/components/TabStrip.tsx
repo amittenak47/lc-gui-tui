@@ -19,6 +19,7 @@ import { useReducedMotion } from "motion/react";
 
 import {
   HOME_TAB_ID,
+  isFootnoteBoardTab,
   type SplitEdge,
   type TabGroup,
   type TabIndexState,
@@ -524,7 +525,7 @@ export function TabStrip({
             ) : indexState === "indexing" ? (
               <span className="lc-doc-index-chip">indexing…</span>
             ) : null}
-            {tab.id === HOME_TAB_ID ? null : (
+            {tab.id === HOME_TAB_ID || isFootnoteBoardTab(tab) ? null : (
               <button
                 type="button"
                 className="lc-tab-close"
@@ -606,16 +607,18 @@ export function TabStrip({
                     </button>
                   </>
                 )}
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    onClose(menu.id);
-                    setMenu(null);
-                  }}
-                >
-                  Close
-                </button>
+                {tabs.some((tab) => tab.id === menu.id && !isFootnoteBoardTab(tab)) ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      onClose(menu.id);
+                      setMenu(null);
+                    }}
+                  >
+                    Close
+                  </button>
+                ) : null}
               </div>
             </>,
             document.body,

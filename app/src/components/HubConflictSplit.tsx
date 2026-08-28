@@ -34,6 +34,12 @@ export interface HubConflictSplitProps {
   otherLabel?: string;
   /** Open PDF content hash, so both panes can show the focused page. */
   docHash?: string;
+  /** Live file bytes so each pane can borrow the same pdf.js document. */
+  bytes?: ArrayBuffer;
+  /** Unique film prefix per workspace — each pane appends -local / -server. */
+  filmScopeBase?: string;
+  /** Board scene width ink was drawn in. */
+  sceneWidth?: number;
   onResolve(resolution: HubConflictResolution): void;
 }
 
@@ -150,6 +156,9 @@ export function HubConflictSplit({
   busy = false,
   otherLabel = "Tablet",
   docHash,
+  bytes,
+  filmScopeBase,
+  sceneWidth,
   onResolve,
 }: HubConflictSplitProps) {
   const [picks, setPicks] = useState<Record<string, SidePick>>({});
@@ -407,6 +416,9 @@ export function HubConflictSplit({
     const verdict = paneVerdict(side);
     const label = sideLabel(side);
     const keepBlocked = side === "server" && serverMissing;
+    const keptNotes = rows
+      .map((row) => (pickOf(picks, row.id, side) === true ? (side === "local" ? row.local : row.server) : null))
+      .filter((note): note is DocFootnote => Boolean(note));
     return (
       <section className="lc-hub-conflict-pane" data-side={side} data-verdict={verdict}>
         <header className="lc-hub-conflict-pane-head">
@@ -459,7 +471,21 @@ export function HubConflictSplit({
           </Tip>
         </header>
         <div className="lc-hub-conflict-pane-body">
-          <ConflictPagePreview hash={docHash} page={focusPage} />
+          <ConflictPagePreview
+            hash={docHash}
+            page={focusPage}
+            notes={keptNotes}
+            inkPages={side === "local" ? conflict.localInk : conflict.serverInk}
+            showInk={pickOf(picks, INK_ROW_ID, side) === true}
+            bytes={bytes}
+            filmScope={filmScopeBase ? `${filmScopeBase}-${side}` : undefined}
+            sourceText={
+              typeof (body as AnnotatePadDto | null)?.source === "string"
+                ? (body as AnnotatePadDto).source
+                : undefined
+            }
+            sceneWidth={sceneWidth}
+          />
           <ol className="lc-hub-conflict-list">
             {renderInkRow(side)}
             {rows.map((row) => (
