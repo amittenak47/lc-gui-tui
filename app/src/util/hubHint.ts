@@ -32,10 +32,6 @@ interface SyncListRow {
   deleted_at?: unknown;
 }
 
-function asRows(value: unknown): SyncListRow[] {
-  return Array.isArray(value) ? (value as SyncListRow[]) : [];
-}
-
 function rowUpdatedAt(row: SyncListRow): number | null {
   return typeof row.updated_at === "number" ? row.updated_at : null;
 }
@@ -67,18 +63,21 @@ export async function fetchDocHubHint(opts: {
     const padId = opts.padId;
     probes.push(
       (async () => {
-        const res = await fetch(`${base}pads/sync?since=0`, { headers });
+        /*
+         * One pad, not the library.
+         *
+         * This used to ask `pads/sync?since=0`, which answers with every
+         * changed pad *body* and every snapshot, so opening one document
+         * pulled the whole hub through the room to read a single timestamp
+         * off it. The route serves tombstoned rows as 404, so an absent or
+         * deleted pad reads as "the hub has no row", same as before.
+         */
+        const res = await fetch(`${base}pads/annotate/${encodeURIComponent(padId)}`, {
+          headers,
+        });
         if (!res.ok) return;
-        const json = (await res.json().catch(() => null)) as {
-          annotate?: unknown;
-          whiteboard?: unknown;
-        } | null;
-        if (!json) return;
-        // Deleted rows do not count: tombstoned on the hub means gone.
-        const rows = [...asRows(json.annotate), ...asRows(json.whiteboard)].filter(
-          (row) => row.id === padId && row.deleted_at == null,
-        );
-        if (rows.length > 0) hint.padUpdatedAt = rowUpdatedAt(rows[0]!);
+        const row = (await res.json().catch(() => null)) as SyncListRow | null;
+        if (row) hint.padUpdatedAt = rowUpdatedAt(row);
       })(),
     );
   }

@@ -21,6 +21,7 @@ import { PAD_HUB_EVENT, loadPadHub } from "../util/padHub";
 import { pushDocBytes } from "../util/padSync";
 import type { DocWorkProgress } from "./DocIndexChip";
 import {
+  snapshotFromPing,
   snapshotHub,
   walkPushPad,
   walkSyncInk,
@@ -203,7 +204,16 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
         throw new Error("no hub is set — add one in Settings");
       }
       const doc = host?.doc() ?? null;
-      await client!.pingPadSync(0);
+      /*
+       * One ping for the whole walk.
+       *
+       * This answers "is the hub up?" *and* is the snapshot stages E to H
+       * compare against — the same full listing was being fetched twice per
+       * tap, once here and once inside `snapshotHub`. One ping is also the
+       * more correct of the two: every stage of a walk should be looking at
+       * the same world.
+       */
+      const ping = await client!.pingPadSync(0);
 
       if (!doc || doc.docType === "web") {
         // Whiteboard/home have no document to index; web pads deliberately
@@ -264,6 +274,15 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
           ?.embed_state;
         if (embedState !== "full" && fresh?.indexed) {
           host?.onIndexProgress({ done: fresh.chunks_embedded ?? 0, total: fresh.chunks_total ?? 0 });
+          /*
+           * TODO(embed-budget): a book can be up to 500 sequential requests.
+           *
+           * The budget-at-a-time shape is deliberate — it is what lets the
+           * reader close the app in the middle of embedding — but the *size*
+           * of a budget is the hub's, and one round trip per budget is a lot
+           * of them. Fixing it means the hub returning larger budgets or a
+           * streaming route, which is a protocol change and not this pass.
+           */
           for (let guard = 0; guard < 500; guard++) {
             const budget = await client!.embedDoc(doc.hash);
             host?.onIndexProgress({ done: budget.done, total: budget.total });
@@ -290,7 +309,7 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
       // The ack this device holds when H runs — resolutions may have moved it.
       let padAckForPull: number | null = padInfo ? padInfo.hubAckUpdatedAt() : null;
       if (padInfo) {
-        const snapshot = await snapshotHub(client!);
+        const snapshot = snapshotFromPing(ping);
         const walkPad = {
           kind: padInfo.kind,
           id: padInfo.id,
@@ -301,11 +320,16 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
 
         /** The stashed hub row: fetched once at stop time, never re-read. */
         const fetchHubBody = async (): Promise<AnnotatePadDto | WhiteboardPadDto | null> => {
-          const rows =
+          /*
+           * One pad. This used to list the whole annotate or whiteboard
+           * library to find the row already named by `padInfo.id`, which on a
+           * conflict is the worst possible moment to download everything.
+           */
+          const got =
             padInfo.kind === "annotate"
-              ? await client!.listAnnotatePads().catch(() => [])
-              : await client!.listWhiteboardPads().catch(() => []);
-          return rows.find((row) => row.id === padInfo.id) ?? null;
+              ? await client!.getAnnotatePad(padInfo.id).catch(() => null)
+              : await client!.getWhiteboardPad(padInfo.id).catch(() => null);
+          return got;
         };
 
         /* Park on the split; resolve when the reader has chosen and the
@@ -344,6 +368,7 @@ export function HubSyncControl({ hubHint = null, client = null, host = null }: H
             setStage("pad");
             const fresh = await host!.pad();
             if (!fresh) throw new Error("this pad closed while resolving the conflict");
+            // Deliberately a fresh read: the hub moved, that is why we are here.
             const freshSnapshot = await snapshotHub(client!);
             const repush = await walkPushPad(
               client!,

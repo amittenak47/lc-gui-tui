@@ -40,6 +40,31 @@ pub async fn list_whiteboard() -> Result<Json<Vec<WhiteboardPad>>, AppError> {
     Ok(Json(rows))
 }
 
+/// One pad, by id.
+///
+/// The library listings answer the same question, and the client was using
+/// them to: finding one row meant pulling every board — elements, files, ink
+/// palettes — or every annotated document and its footnotes, and then throwing
+/// all but one away. `pads::get_*` was already here; only the route was
+/// missing.
+///
+/// 404 for a row that is absent or tombstoned, so a caller can tell "the hub
+/// does not have this" from "the hub is unreachable".
+pub async fn get_whiteboard(UrlPath(id): UrlPath<String>) -> Result<Json<WhiteboardPad>, AppError> {
+    let row = blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        pads::get_whiteboard(&conn, &id)
+    })
+    .await?;
+    match row {
+        Some(pad) if pad.deleted_at.is_none() => Ok(Json(pad)),
+        _ => Err(AppError::status(
+            StatusCode::NOT_FOUND,
+            anyhow::anyhow!("no such whiteboard pad"),
+        )),
+    }
+}
+
 pub async fn archive_whiteboard() -> Result<Json<Vec<WhiteboardPad>>, AppError> {
     let rows = blocking(|| {
         let conn = pads::open(&pads::db_path()?)?;
@@ -86,6 +111,22 @@ pub async fn list_annotate() -> Result<Json<Vec<AnnotatePad>>, AppError> {
     })
     .await?;
     Ok(Json(rows))
+}
+
+/// One annotate pad, by id. See [`get_whiteboard`].
+pub async fn get_annotate(UrlPath(id): UrlPath<String>) -> Result<Json<AnnotatePad>, AppError> {
+    let row = blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        pads::get_annotate(&conn, &id)
+    })
+    .await?;
+    match row {
+        Some(pad) if pad.deleted_at.is_none() => Ok(Json(pad)),
+        _ => Err(AppError::status(
+            StatusCode::NOT_FOUND,
+            anyhow::anyhow!("no such annotate pad"),
+        )),
+    }
 }
 
 pub async fn archive_annotate() -> Result<Json<Vec<AnnotatePad>>, AppError> {

@@ -48,8 +48,21 @@ export interface WalkSnapshot {
   goneEdges: string[];
 }
 
-export async function snapshotHub(client: LcClient): Promise<WalkSnapshot> {
-  const ping = await client.pingPadSync(0);
+/**
+ * The snapshot every stage of one walk compares against.
+ *
+ * Split from the request because the walk already pings once, at stage A, to
+ * find out whether the hub is up — and that answer *is* this. Fetching it
+ * twice per tap downloaded the same full listing again and, worse, let two
+ * stages of one walk look at two different worlds.
+ */
+export function snapshotFromPing(ping: {
+  annotate?: WalkSnapshot["annotateRows"];
+  whiteboard?: WalkSnapshot["whiteboardRows"];
+  ink?: InkPageDigestDto[];
+  edges?: EdgeRowDto[];
+  gone_edges?: string[];
+}): WalkSnapshot {
   return {
     annotateRows: ping.annotate ?? [],
     whiteboardRows: ping.whiteboard ?? [],
@@ -57,6 +70,10 @@ export async function snapshotHub(client: LcClient): Promise<WalkSnapshot> {
     edges: ping.edges ?? [],
     goneEdges: ping.gone_edges ?? [],
   };
+}
+
+export async function snapshotHub(client: LcClient): Promise<WalkSnapshot> {
+  return snapshotFromPing(await client.pingPadSync(0));
 }
 
 function rowFor(snapshot: WalkSnapshot, pad: WalkPad) {

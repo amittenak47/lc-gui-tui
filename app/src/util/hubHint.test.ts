@@ -55,11 +55,9 @@ describe("fetchDocHubHint", () => {
     stubLocalStorage();
     useHub();
     serve({
-      "http://hub.test/pads/sync?since=0": {
-        json: {
-          annotate: [{ id: "pad-1", updated_at: 500 }],
-          whiteboard: [],
-        },
+      // One pad, by id — not the whole library through `pads/sync`.
+      "http://hub.test/pads/annotate/pad-1": {
+        json: { id: "pad-1", updated_at: 500 },
       },
       "http://hub.test/docs/h%40sh/bytes": { json: {} },
       "http://hub.test/docs/h%40sh/index": { json: { indexed: true, page_count: 12 } },
@@ -74,17 +72,10 @@ describe("fetchDocHubHint", () => {
   it("reads absence, deletion, and an empty index as not-there", async () => {
     stubLocalStorage();
     useHub();
+    // The pad route serves a tombstoned row as 404, so absent and deleted are
+    // the same answer here: the hub has no row for this pad.
     serve({
-      "http://hub.test/pads/sync?since=0": {
-        json: {
-          annotate: [
-            { id: "other", updated_at: 900 },
-            { id: "pad-1", updated_at: 400, deleted_at: 450 },
-          ],
-          whiteboard: [],
-        },
-      },
-      // bytes and index missing → 404s
+      // pad, bytes and index all missing → 404s
     });
 
     const hint = await fetchDocHubHint({ hash: "abc", padId: "pad-1" });
