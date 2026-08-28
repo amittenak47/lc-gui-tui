@@ -817,9 +817,7 @@ export function PdfDocument({
       // on a textbook, but a working reader beats a blank one.
       wantedRef.current = new Set(pages.map((page) => page.pageNumber));
       setWindowTick((tick) => tick + 1);
-      return () => {
-        onNavRef.current?.(null);
-      };
+      return;
     }
 
     const notePath = () => {
@@ -954,9 +952,30 @@ export function PdfDocument({
       unsubPreload();
       unsubLive();
       observer.disconnect();
-      onNavRef.current?.(null);
     };
   }, [pages, paused]);
+
+  /*
+   * Nav outlives a relayout.
+   *
+   * The teardown above used to report `onNav(null)`, and `pages` is one of its
+   * dependencies — so toggling spread, which rebuilds the slot list, said "this
+   * document has no pages" for the frame between the old observer going and the
+   * new one publishing. The header's page-preview button is mounted on exactly
+   * that value, so it vanished and came back on every toggle. The spread button
+   * next to it has a busy state and merely spins; this one had nothing to show
+   * but its own absence.
+   *
+   * Nav is a fact about the document, not about the observer watching it, so it
+   * is cleared where the document actually goes: paused, and unmount. The open
+   * path clears it too, before it republishes.
+   */
+  useEffect(() => {
+    if (!paused) return;
+    onNavRef.current?.(null);
+  }, [paused]);
+
+  useEffect(() => () => onNavRef.current?.(null), []);
 
   useEffect(() => {
     if (paused) return;
