@@ -55,9 +55,7 @@ import {
   loadAutosaveInterval,
 } from "./util/autosavePref";
 import {
-  HUB_AUTOSYNC_EVENT,
   loadHubAutosync,
-  loadHubAutosyncPref,
 } from "./util/hubAutoSyncPref";
 import { Board } from "./canvas/Board";
 import { inkOpsFrom } from "./canvas/inkCodec";
@@ -283,12 +281,8 @@ import {
 } from "./util/whiteboardStore";
 import {
   deletePadEverywhere,
-  pullPads,
-  flushPadSyncQueue,
-  applyPadSyncPing,
   scheduleIdlePadSyncPing,
   PAD_HUB_WINDOW_EVENT,
-  PAD_SYNC_PING_MS,
   applyHubAnnotate,
   applyHubWhiteboard,
   pushAnnotatePad,
@@ -300,7 +294,6 @@ import {
   tombstonePad,
   type PadHubWindowDetail,
 } from "./util/padSync";
-import { isCameraBusy } from "./util/cameraBusy";
 import { loadPadHub, loadPadSyncSince } from "./util/padHub";
 import { annotatePadBody, whiteboardPadBody } from "./util/padSync";
 import type {
@@ -309,7 +302,6 @@ import type {
 } from "./util/hubConflictStash";
 import { getParkedDocSource, parkDocSource } from "./util/parkedDocSource";
 import { MAX_SOURCE_CHARS } from "./util/tabPersist";
-import { ensureDevicePrefs } from "./util/devicePrefs";
 import { requestPersistentStorage, StorageFullError } from "./util/storageQuota";
 import {
   deleteProblemBoard,
@@ -563,7 +555,6 @@ export function Workspace({
   const {
     client,
     mobile,
-    serverLink,
     serverLinkRef,
     themeId,
     setThemeId,
@@ -1406,60 +1397,20 @@ export function Workspace({
 
   /** In-process daemon is assumed up; this flag still gates pad sync / tests. */
 
-  /** Hub auto-sync re-reads on Save so timers tear down without a remount. */
-  const [hubAutosyncOn, setHubAutosyncOn] = useState(() => loadHubAutosyncPref() === "on");
   /** Something the student should know, but which did not stop the request. */
   /** Boot overlay still waiting for LLM probe → checkmark before dismiss. */
 
   const boardRef = useRef<BoardHandle | null>(null);
 
 
-  useEffect(() => {
-    if (serverLink !== "online") return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        if (hubAutosyncOn) {
-          if (isCameraBusy()) return;
-          await applyPadSyncPing(client).catch(() => {});
-          if (cancelled || isCameraBusy()) return;
-          await pullPads(client);
-          if (cancelled) return;
-          await flushPadSyncQueue(client);
-          if (cancelled) return;
-        }
-        void ensureDevicePrefs(client).catch(() => {});
-      } catch {
-        /* daemon missing the new routes — keep the local cache */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [serverLink, client, hubAutosyncOn]);
-
-  useEffect(() => {
-    if (serverLink !== "online") return;
-    // Off means off: no interval exists at all, so nothing can leak a ping.
-    if (!hubAutosyncOn) return;
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled) return;
-      if (document.visibilityState === "hidden") return;
-      if (isCameraBusy()) return;
-      void applyPadSyncPing(client).catch(() => {});
-    };
-    const timer = window.setInterval(tick, PAD_SYNC_PING_MS);
-    const onVis = () => {
-      if (document.visibilityState === "visible") tick();
-    };
-    document.addEventListener("visibilitychange", onVis);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVis);
-    };
-  }, [serverLink, client, hubAutosyncOn]);
+  /*
+   * Pad auto-sync is the app's, not this workspace's — see `App`.
+   *
+   * A full pull walks every pad, snapshot, document chunk and IndexedDB record;
+   * running it once per mounted workspace meant doing all of that twice with a
+   * split open, and starting a second fifteen-second ping timer beside the
+   * first. There is one library and one hub, so there is one sync.
+   */
 
   /** Coach LLM reachability — separate from the harness router itself. */
 
@@ -1871,12 +1822,9 @@ export function Workspace({
   }, []);
   useEffect(() => {
     const onAutosave = () => setAutosaveMs(loadAutosaveInterval());
-    const onHubAutosync = () => setHubAutosyncOn(loadHubAutosyncPref() === "on");
     window.addEventListener(AUTOSAVE_EVENT, onAutosave);
-    window.addEventListener(HUB_AUTOSYNC_EVENT, onHubAutosync);
     return () => {
       window.removeEventListener(AUTOSAVE_EVENT, onAutosave);
-      window.removeEventListener(HUB_AUTOSYNC_EVENT, onHubAutosync);
     };
   }, []);
 

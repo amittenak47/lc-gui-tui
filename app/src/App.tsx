@@ -66,6 +66,15 @@ import {
   type TabRecord,
 } from "./util/tabs";
 import { loadTabState, saveTabState } from "./util/tabPersist";
+import { isCameraBusy } from "./util/cameraBusy";
+import { ensureDevicePrefs } from "./util/devicePrefs";
+import {
+  applyPadSyncPing,
+  flushPadSyncQueue,
+  pullPads,
+  PAD_SYNC_PING_MS,
+} from "./util/padSync";
+import { HUB_AUTOSYNC_EVENT, loadHubAutosyncPref } from "./util/hubAutoSyncPref";
 import { singleFlight } from "./util/singleFlight";
 import { bumpRetry, planWorkspaceMounts, workspaceMountKey } from "./util/workspaceMounts";
 import type { WebPadEntry } from "./util/webPadSession";
@@ -159,6 +168,75 @@ export function App() {
   }, [notice]);
 
   const client = useMemo(() => new LcClient(), []);
+
+  /*
+   * Pad auto-sync, once for the app.
+   *
+   * This used to run per workspace. `pullPads` lists and walks every pad,
+   * snapshot, document chunk and IndexedDB record, so a split did all of it
+   * twice on open and kept two fifteen-second ping timers alive afterwards —
+   * and every remount paid for the whole bootstrap again. There is one library
+   * and one hub behind all of it.
+   *
+   * Separate from the Sync pill, which is a manual walk with its own
+   * conflict rules. This is the background last-writer-wins path.
+   */
+  const [hubAutosyncOn, setHubAutosyncOn] = useState(
+    () => loadHubAutosyncPref() === "on",
+  );
+  /** Re-read on Save, so turning it off tears the timer down without a remount. */
+  useEffect(() => {
+    const onHubAutosync = () => setHubAutosyncOn(loadHubAutosyncPref() === "on");
+    window.addEventListener(HUB_AUTOSYNC_EVENT, onHubAutosync);
+    return () => window.removeEventListener(HUB_AUTOSYNC_EVENT, onHubAutosync);
+  }, []);
+
+  useEffect(() => {
+    if (serverLink !== "online") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        if (hubAutosyncOn) {
+          if (isCameraBusy()) return;
+          await applyPadSyncPing(client).catch(() => {});
+          if (cancelled || isCameraBusy()) return;
+          await pullPads(client);
+          if (cancelled) return;
+          await flushPadSyncQueue(client);
+          if (cancelled) return;
+        }
+        void ensureDevicePrefs(client).catch(() => {});
+      } catch {
+        /* daemon missing the new routes — keep the local cache */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [serverLink, client, hubAutosyncOn]);
+
+  useEffect(() => {
+    if (serverLink !== "online") return;
+    // Off means off: no interval exists at all, so nothing can leak a ping.
+    if (!hubAutosyncOn) return;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      if (document.visibilityState === "hidden") return;
+      if (isCameraBusy()) return;
+      void applyPadSyncPing(client).catch(() => {});
+    };
+    const timer = window.setInterval(tick, PAD_SYNC_PING_MS);
+    const onVis = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [serverLink, client, hubAutosyncOn]);
   const [recognizer, setRecognizer] = useState<InkRecognizer>(() => new NoopRecognizer());
 
   /*
