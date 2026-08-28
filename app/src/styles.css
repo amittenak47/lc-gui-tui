@@ -10858,6 +10858,27 @@ button.lc-row-selected:hover:not(:disabled) {
  * Placed above the spinner rather than over it — the overlay is a grid with
  * one centred cell, so both children need somewhere to be.
  */
+/*
+ * The foot of a page that is only showing the beginning of its file, and the
+ * stand-in while a large one is being parsed. Both are ours, not the
+ * document's — see `docPreview`.
+ */
+.lc-doc-truncated,
+.lc-doc-preparing {
+  margin: 2rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px dashed color-mix(in srgb, var(--ink) 25%, transparent);
+  color: color-mix(in srgb, var(--ink) 60%, transparent);
+  font-size: 0.9rem;
+  font-style: italic;
+}
+
+.lc-doc-preparing {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
 .lc-boot-note {
   position: relative;
   z-index: 2;

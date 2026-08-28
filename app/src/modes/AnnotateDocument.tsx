@@ -15,7 +15,9 @@
 
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import { docPreview, parseInline, truncationNoticeHtml } from "./docPreview";
 
 export interface AnnotateDocumentProps {
   source: string;
@@ -48,13 +50,16 @@ export interface AnnotateDocumentProps {
  * of notes actually uses stays.
  */
 export function renderMarkdown(source: string): string {
-  const html = marked.parse(source, { async: false, gfm: true, breaks: false });
-  return DOMPurify.sanitize(html, {
+  const { text, hidden } = docPreview(source);
+  const html = marked.parse(text, { async: false, gfm: true, breaks: false });
+  const clean = DOMPurify.sanitize(html, {
     // No `target`/`rel` juggling needed: links are inert here anyway, since
     // the surface never receives a pointer event.
     FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form", "input"],
     FORBID_ATTR: ["style", "onerror", "onload", "onclick"],
   });
+  // Appended after sanitising because it is ours, not the document's.
+  return clean + truncationNoticeHtml(hidden);
 }
 
 /**
@@ -79,6 +84,9 @@ export function columnIsMeasurable(clientWidth: number): boolean {
 }
 
 /** Whether `onMeasure` should fire for this layout. */
+/** What stands in for the page while a large file is being parsed. */
+export const PREPARING_HTML = '<p class="lc-doc-preparing">Preparing the page…</p>';
+
 export function shouldReportDocumentHeight(clientWidth: number, hasText: boolean): boolean {
   if (!Number.isFinite(clientWidth) || clientWidth <= 0) return false;
   if (hasText) return true;
@@ -87,13 +95,53 @@ export function shouldReportDocumentHeight(clientWidth: number, hasText: boolean
 
 export function AnnotateDocument({ source, onMeasure, selectable = false }: AnnotateDocumentProps) {
   const nodeRef = useRef<HTMLDivElement | null>(null);
-  const html = useMemo(() => renderMarkdown(source), [source]);
+  /*
+   * Parsed off the render path, above a size where that is worth doing.
+   *
+   * `marked` + DOMPurify ran inside `useMemo`, which is to say inside the
+   * render — so a large file froze the frame that was opening it, and froze it
+   * again on every toggle between Annotate and Scroll. Small notes still parse
+   * inline: the work is a few milliseconds and doing it there keeps their open
+   * exactly as it was, with no placeholder frame in between.
+   */
+  const inline = useMemo(
+    () => (parseInline(docPreview(source).text) ? renderMarkdown(source) : null),
+    [source],
+  );
+  const [parsed, setParsed] = useState<string | null>(inline);
+  useEffect(() => {
+    if (inline !== null) {
+      setParsed(inline);
+      return;
+    }
+    setParsed(null);
+    let cancelled = false;
+    // A frame, so the placeholder is on screen before the main thread goes.
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return;
+      setParsed(renderMarkdown(source));
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [inline, source]);
+  const html = parsed ?? PREPARING_HTML;
+
   const onMeasureRef = useRef(onMeasure);
   onMeasureRef.current = onMeasure;
 
   useEffect(() => {
     const node = nodeRef.current;
     if (!node) return;
+    /*
+     * Nothing is reported until there is real content.
+     *
+     * The open gate waits for a stable height, and a placeholder has one. Let
+     * it settle on that and the page reveals at the wrong size, then reflows
+     * when the document arrives. Waiting is what the gate is for.
+     */
+    if (parsed === null) return;
 
     /*
      * Fonts land after first layout and change the height under us, so measure
@@ -123,7 +171,7 @@ export function AnnotateDocument({ source, onMeasure, selectable = false }: Anno
       cancelAnimationFrame(raf);
       observer.disconnect();
     };
-  }, [html, source]);
+  }, [html, parsed, source]);
 
   return (
     <div
