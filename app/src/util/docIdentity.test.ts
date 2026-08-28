@@ -4,7 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { docIdentityHash, hashMarkdown } from "./annotateStore";
+import { docIdentityHash, existingHashIfEmptyBinary, hashMarkdown } from "./annotateStore";
 
 beforeEach(() => {
   const store = new Map<string, string>();
@@ -61,5 +61,19 @@ describe("docIdentityHash", () => {
   it("falls back to the text when a web name is not an address", () => {
     const hash = docIdentityHash({ docType: "web", name: "not a url", text: "<p>hi</p>" });
     expect(hash).toBe(hashMarkdown("<p>hi</p>"));
+  });
+});
+
+describe("existingHashIfEmptyBinary", () => {
+  it("keeps the library hash when a PDF open has no bytes", () => {
+    expect(existingHashIfEmptyBinary("pdf", null, "real-hash")).toBe("real-hash");
+    expect(existingHashIfEmptyBinary("pdf", new ArrayBuffer(0), "real-hash")).toBe(
+      "real-hash",
+    );
+  });
+
+  it("does not rewrite a file that actually has bytes", () => {
+    expect(existingHashIfEmptyBinary("pdf", new ArrayBuffer(8), "real-hash")).toBe(null);
+    expect(existingHashIfEmptyBinary("markdown", null, "real-hash")).toBe(null);
   });
 });

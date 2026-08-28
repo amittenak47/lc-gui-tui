@@ -41,6 +41,7 @@ import {
   type ShapeStamp,
 } from "../templates/shapes";
 import { healBoardLayout } from "./healBoardLayout";
+import { waitForFontsReady } from "./fontsReady";
 import { trackDockStrip } from "./liveDockStrip";
 import {
   healScratchpadGeometry,
@@ -7005,10 +7006,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const waitForTemplate = useCallback((): Promise<void> => {
     const waitFrame = () =>
       new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    const fontsReady =
-      typeof document !== "undefined" && "fonts" in document
-        ? document.fonts.ready.then(() => undefined).catch(() => undefined)
-        : Promise.resolve();
+    const fontsReady = waitForFontsReady();
 
     return (async () => {
       await fontsReady;

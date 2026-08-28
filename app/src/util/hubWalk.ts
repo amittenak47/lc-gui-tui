@@ -9,7 +9,7 @@
 
 import type { AnnotatePadDto, EdgeRowDto, InkPageDigestDto, LcClient, WhiteboardPadDto } from "../api/client";
 import { LcApiError } from "../api/client";
-import { isInkConflict, syncEdges, syncInkPages } from "./inkSync";
+import { isInkConflict, inkDocKey, syncEdges, syncInkPages } from "./inkSync";
 
 export type HubPadKind = "annotate" | "whiteboard";
 
@@ -141,7 +141,7 @@ export async function walkSyncInk(
   const digests = snapshot.inkDigests.filter((row) => row.kind === pad.kind && row.key === pad.id);
   if (digests.length > 0) {
     const { getInkPageRecords } = await import("./inkPageStore");
-    const docKey = `${pad.kind}:${pad.id}`;
+    const docKey = inkDocKey(pad.kind, pad.id);
     const localRows = await getInkPageRecords(docKey);
     const localBy = new Map(localRows.map((row) => [row.pageId, row]));
     for (const digest of digests) {

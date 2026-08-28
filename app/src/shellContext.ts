@@ -118,6 +118,8 @@ export interface WorkspaceChrome {
     walkProgress?: { done: number; total: number } | null;
     /** The walk parked on `walkStage`. */
     walkError?: string | null;
+    /** The walk is asking which copy to keep, not spinning. */
+    walkWaiting?: "conflict" | null;
   };
 }
 
@@ -161,6 +163,7 @@ export function chromeLooksSame(current: WorkspaceChrome, next: WorkspaceChrome)
     current.docIndex.walkStage === next.docIndex.walkStage &&
     current.docIndex.walkJob === next.docIndex.walkJob &&
     current.docIndex.walkError === next.docIndex.walkError &&
+    current.docIndex.walkWaiting === next.docIndex.walkWaiting &&
     progressEqual(current.docIndex.walkProgress, next.docIndex.walkProgress) &&
     progressEqual(current.docIndex.indexProgress, next.docIndex.indexProgress) &&
     progressEqual(current.docIndex.embedProgress, next.docIndex.embedProgress)

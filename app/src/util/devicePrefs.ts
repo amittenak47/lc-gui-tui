@@ -77,6 +77,11 @@ export function deviceRole(): DeviceRole {
   return "browser";
 }
 
+/** The other pane on a two-device split — never "Server". */
+export function otherDeviceLabel(): string {
+  return deviceRole() === "android" ? "Desktop" : "Tablet";
+}
+
 export function collectDevicePrefsBlob(): Record<string, unknown> {
   const tools = loadInkToolPresets();
   return {

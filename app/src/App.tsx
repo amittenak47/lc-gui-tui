@@ -875,9 +875,16 @@ export function App() {
     if (id === HOME_TAB_ID) return;
     const state = tabsRef.current;
     const drop = (clearMissing: boolean) => {
+      const next = tabsReducer(tabsRef.current, { type: "close", id });
       dispatchTabs({ type: "close", id });
       setLiveIds((current) => current.filter((x) => x !== id));
       if (clearMissing) setMissingTab(null);
+      // Closing a document does not go through focusTab, so Home never got
+      // showHomeChooser — the Document picker on the parked Home instance
+      // stayed up. Same reset the brand/chip uses.
+      if (next.activeId === HOME_TAB_ID) {
+        apisRef.current.get(HOME_TAB_ID)?.showHomeChooser?.();
+      }
     };
     if (id !== state.activeId) {
       // Not on screen — but it may still be mounted behind this one, so it is
@@ -1229,6 +1236,7 @@ export function App() {
                   walkJob={chrome.docIndex.walkJob}
                   walkProgress={chrome.docIndex.walkProgress}
                   walkError={chrome.docIndex.walkError}
+                  walkWaiting={chrome.docIndex.walkWaiting}
                 />
               )
             }

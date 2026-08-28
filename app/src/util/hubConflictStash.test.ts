@@ -5,6 +5,7 @@ import {
   clearHubConflict,
   footnoteDiffRows,
   hubConflict,
+  inkChoiceOf,
   mergeFootnotes,
   stashHubConflict,
   subscribeHubConflict,
@@ -96,5 +97,18 @@ describe("stash store", () => {
     clearHubConflict();
     expect(seen).toBeNull();
     stop();
+  });
+});
+
+describe("inkChoiceOf", () => {
+  it("follows an explicit ink field", () => {
+    expect(inkChoiceOf({ pick: "local", ink: "none" })).toBe("none");
+    expect(inkChoiceOf({ pick: "server", ink: "merged" })).toBe("merged");
+  });
+
+  it("follows the pane when ink was not named", () => {
+    expect(inkChoiceOf({ pick: "local" })).toBe("local");
+    expect(inkChoiceOf({ pick: "server" })).toBe("server");
+    expect(inkChoiceOf({ pick: "merged" })).toBe("merged");
   });
 });

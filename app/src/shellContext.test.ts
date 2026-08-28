@@ -20,4 +20,18 @@ describe("chromeLooksSame", () => {
     const b = chrome({ status: "indexed", embedding: true, embedProgress: { done: 4, total: 10 } });
     expect(chromeLooksSame(a, b)).toBe(false);
   });
+
+  it("treats a walk-stage change as a visible change", () => {
+    // Workspace publishes walk reports through chrome. If this compared equal,
+    // the tab would keep the last Index frame while the pill moved on to Pad.
+    const indexing = chrome({ walkStage: "index", walkJob: "extract" });
+    expect(chromeLooksSame(indexing, chrome({ walkStage: "pad" }))).toBe(false);
+    expect(chromeLooksSame(indexing, chrome({ walkStage: "index", walkJob: null }))).toBe(false);
+    expect(
+      chromeLooksSame(
+        chrome({ walkStage: "pad" }),
+        chrome({ walkStage: "pad", walkWaiting: "conflict" }),
+      ),
+    ).toBe(false);
+  });
 });

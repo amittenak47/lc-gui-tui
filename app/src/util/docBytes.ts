@@ -22,6 +22,7 @@ import { openDb, run, STORE_BYTES } from "./idb";
 import { isCameraBusy } from "./cameraBusy";
 import { hashBytesDigest } from "./hashBytesDigest";
 import { traceOpen } from "./messageOf";
+import { formatBytes } from "./storageQuota";
 import type { HashBytesRequest, HashBytesResponse } from "./hashBytes.worker";
 
 const STORE = STORE_BYTES;
@@ -393,6 +394,44 @@ export interface DocStoreReport {
   missing: number;
   /** Names of the first few documents with no stored copy. */
   missingNames: string[];
+}
+
+/**
+ * Diagnose output for Settings. One fact per line so a long filename cannot
+ * glue the rest of the report into a single wrapping paragraph.
+ */
+export function formatDocStoreReport(report: DocStoreReport): string {
+  const filled = report.stores
+    .filter((row) => row.rows > 0)
+    .map((row) => `${row.name} ${row.rows}`)
+    .join(", ");
+  const lines: string[] = [
+    `${report.db} v${report.version}`,
+    `Document copies: ${report.rows} (${formatBytes(report.bytes)})`,
+    filled ? `Other stores: ${filled}` : "Every store is empty.",
+  ];
+  if (report.wanted === 0) {
+    lines.push("No PDFs or EPUBs in the library.");
+  } else if (report.missing === 0) {
+    lines.push(`All ${report.wanted} of the library's documents have their bytes.`);
+  } else {
+    const noun = report.wanted === 1 ? "document" : "documents";
+    const verb = report.missing === 1 ? "has" : "have";
+    lines.push(`${report.missing} of ${report.wanted} library ${noun} ${verb} no stored copy.`);
+    for (const name of report.missingNames) lines.push(name);
+    if (report.missing > report.missingNames.length) lines.push("…");
+  }
+  lines.push(
+    report.writeFailure
+      ? `This device cannot save a document: ${report.writeFailure}`
+      : "A 64 KB test write saved and read back correctly, so saving works.",
+  );
+  if (report.missing > 0 && !report.writeFailure) {
+    lines.push(
+      "Saving works, so these arrived by sync without their bytes — pick each one from Files once to restore it.",
+    );
+  }
+  return lines.join("\n");
 }
 
 /**

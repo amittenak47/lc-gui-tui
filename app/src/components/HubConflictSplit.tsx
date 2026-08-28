@@ -1,26 +1,23 @@
 /**
- * The conflict split: Local on the left, Server on the right, one choice.
+ * The conflict split: Local on the left, the other device on the right.
  *
  * The walk stopped before applying anything, so both panes read from the
- * stash — the pad bodies frozen at stop time — not from IDB or the hub,
- * which either side could outdate mid-choice. Pane ✓ keeps that entire pane;
- * pane ✕ rejects it, which keeps the other by force (rejecting both would
- * leave nothing). An annotate pad also offers the footnote rules: same id on
- * both sides is highlighted, ✓ keeps that copy, a side with no ✓ drops its
- * copy, and a same-id-different-body mark ✓'d on both sides resolves to two
- * notes.
- *
- * The buttons are `.lc-doc-confirm-yes` / `-no` on purpose: conflict keeps
- * and rejects mean exactly what the quote sheet's keep and throw-away mean.
+ * stash — pad bodies and ink frozen at stop time. Pane ✓ keeps that copy of
+ * the document; pane ✕ rejects it and keeps the other (rejecting both copies
+ * of the file is impossible). Handwriting is a separate row: ✓ one side, ✓
+ * both (merge), or ✕ both (no ink).
  */
 
 import { useMemo, useState } from "react";
 
-import type { AnnotatePadDto } from "../api/client";
+import type { AnnotatePadDto, InkPageDto } from "../api/client";
 import type { DocFootnote } from "../util/docFootnotes";
+import { Tip } from "./Tip";
 import {
+  INK_ROW_ID,
   type FootnoteDiffRow,
   type HubConflictResolution,
+  type HubInkChoice,
   type HubPadConflict,
   footnoteDiffRows,
   mergeFootnotes,
@@ -30,6 +27,8 @@ export interface HubConflictSplitProps {
   conflict: HubPadConflict | null;
   /** True while the resolve itself (IDB write + hub PUT) is running. */
   busy?: boolean;
+  /** Right-pane name: Tablet when this device is the desktop, Desktop on the tablet. */
+  otherLabel?: string;
   onResolve(resolution: HubConflictResolution): void;
 }
 
@@ -47,6 +46,10 @@ function nameOf(conflict: HubPadConflict): string {
   return body?.name ?? body?.title ?? "this pad";
 }
 
+function inkCount(pages: readonly InkPageDto[] | undefined): number {
+  return pages?.length ?? 0;
+}
+
 /** One footnote row inside one pane; ✓ here keeps this pane's copy. */
 function NoteRow({
   note,
@@ -54,6 +57,7 @@ function NoteRow({
   sameId,
   differs,
   kept,
+  sideLabel,
   onToggle,
 }: {
   note: DocFootnote | null;
@@ -61,6 +65,7 @@ function NoteRow({
   sameId: boolean;
   differs: boolean;
   kept: boolean;
+  sideLabel: string;
   onToggle(side: "local" | "server", id: string): void;
 }) {
   if (!note) return null;
@@ -80,8 +85,8 @@ function NoteRow({
       <button
         type="button"
         aria-pressed={kept}
-        aria-label={`Keep ${side} copy of note`}
-        title={kept ? "This copy is kept — tap to drop it" : "✓ keeps this copy"}
+        aria-label={`Keep ${sideLabel} copy of note`}
+        title={kept ? "This copy is kept — tap to drop it" : `✓ keeps the ${sideLabel} copy`}
         className={kept ? "lc-doc-confirm-btn lc-doc-confirm-yes" : "lc-doc-confirm-btn"}
         onClick={() => onToggle(side, note.id)}
       >
@@ -97,13 +102,20 @@ function nextPick(cur: boolean | undefined): boolean | undefined {
   return cur === true ? false : undefined;
 }
 
-export function HubConflictSplit({ conflict, busy = false, onResolve }: HubConflictSplitProps) {
+export function HubConflictSplit({
+  conflict,
+  busy = false,
+  otherLabel = "Tablet",
+  onResolve,
+}: HubConflictSplitProps) {
   const [verdicts, setVerdicts] = useState<{ local: Verdict; server: Verdict }>({
     local: "undecided",
     server: "undecided",
   });
   /** Per-mark overrides: true keeps, false drops, absent follows the pane. */
   const [picks, setPicks] = useState<Record<string, { local?: boolean; server?: boolean }>>({});
+
+  const sideLabel = (side: "local" | "server") => (side === "local" ? "Local" : otherLabel);
 
   const rows = useMemo<FootnoteDiffRow[]>(() => {
     if (!conflict || conflict.kind !== "annotate") return [];
@@ -115,27 +127,24 @@ export function HubConflictSplit({ conflict, busy = false, onResolve }: HubConfl
   }, [conflict]);
 
   const setVerdict = (side: "local" | "server", verdict: Verdict) => {
-    // Nothing was fetched for that side, so there is nothing to keep from it.
     if (side === "server" && verdict === "keep" && conflict?.server == null) return;
-    setPicks({}); // A whole-pane verdict resets any per-mark picks.
+    setPicks({});
     setVerdicts((current) => {
       const otherSide = side === "local" ? "server" : "local";
       if (verdict === "reject") {
-        // Rejecting one side keeps the other outright; rejecting both would
-        // leave nothing, so that combination cannot be reached.
+        // Cannot throw away both copies of the file. A second ✕ is a no-op.
+        if (current[otherSide] === "reject") return current;
         return { ...current, [side]: "reject", [otherSide]: "keep" } as typeof current;
       }
       return { ...current, [side]: verdict } as typeof current;
     });
   };
 
-  /** A pane's marks survive by default only when that pane was kept. */
   const defaultKeep = (side: "local" | "server"): boolean => verdicts[side] === "keep";
 
   const effectiveKeep = (id: string, side: "local" | "server"): boolean =>
     picks[id]?.[side] ?? defaultKeep(side);
 
-  /** Tap cycle per mark: follow the pane → keep it → drop it → pane again. */
   const toggleNote = (side: "local" | "server", id: string) => {
     setPicks((current) => ({
       ...current,
@@ -143,38 +152,41 @@ export function HubConflictSplit({ conflict, busy = false, onResolve }: HubConfl
     }));
   };
 
-  /*
-   * The server pane can be empty.
-   *
-   * `server` is null when the hub copy could not be fetched — the conflict is
-   * real, but there is nothing to keep. Choosing it wrote nothing and then let
-   * the walk carry on as though Server had won, which is the local copy quietly
-   * losing to a body nobody ever saw. Nothing to show is nothing to pick.
-   */
   const serverMissing = Boolean(conflict) && conflict!.server == null;
 
+  const notesHomed = rows.every((row) => {
+    if (effectiveKeep(row.id, "local") || effectiveKeep(row.id, "server")) return true;
+    const stranded =
+      (Boolean(row.local) && verdicts.local === "keep") ||
+      (Boolean(row.server) && verdicts.server === "keep");
+    return !stranded;
+  });
   const valid =
     Boolean(conflict) &&
     (verdicts.local === "keep" || (verdicts.server === "keep" && !serverMissing)) &&
-    rows.every(
-      (row) => effectiveKeep(row.id, "local") || effectiveKeep(row.id, "server"),
-    );
+    notesHomed;
+
+  const inkChoice = (): HubInkChoice => {
+    const localInk = effectiveKeep(INK_ROW_ID, "local");
+    const serverInk = effectiveKeep(INK_ROW_ID, "server");
+    if (localInk && serverInk) return "merged";
+    if (localInk) return "local";
+    if (serverInk) return "server";
+    return "none";
+  };
 
   const onResolveTap = () => {
     if (!conflict || !valid) return;
-    // Any explicit per-mark pick — or both panes kept — makes this a merge;
-    // otherwise it is whichever whole pane was kept.
-    const explicit = Object.values(picks).some(
-      (pick) => pick.local !== undefined || pick.server !== undefined,
+    const ink = inkChoice();
+    const explicitNotes = Object.entries(picks).some(
+      ([id, pick]) =>
+        id !== INK_ROW_ID && (pick.local !== undefined || pick.server !== undefined),
     );
-    if (explicit || (verdicts.local === "keep" && verdicts.server === "keep")) {
+    if (explicitNotes || (verdicts.local === "keep" && verdicts.server === "keep")) {
       if (conflict.kind !== "annotate") {
-        // Whiteboards have no footnotes to merge; left pane wins the fields.
-        onResolve({ pick: "local" });
+        onResolve({ pick: "local", ink });
         return;
       }
-      // Feed the merge the fully-resolved choice for every mark so the
-      // outcome does not depend on how the defaults were derived.
       const resolved: Record<string, { local: boolean; server: boolean }> = {};
       for (const row of rows) {
         resolved[row.id] = {
@@ -188,62 +200,141 @@ export function HubConflictSplit({ conflict, busy = false, onResolve }: HubConfl
         { local: true, server: true },
         resolved,
       );
-      onResolve({ pick: "merged", footnotes: merged });
+      onResolve({ pick: "merged", footnotes: merged, ink });
       return;
     }
-    onResolve({ pick: verdicts.server === "keep" ? "server" : "local" });
+    onResolve({
+      pick: verdicts.server === "keep" ? "server" : "local",
+      ink,
+    });
   };
 
   if (!conflict) return null;
+
+  const rejectBlocked = (side: "local" | "server") => {
+    const otherSide = side === "local" ? "server" : "local";
+    return verdicts[otherSide] === "reject";
+  };
+
+  const whyDisabled = !conflict
+    ? ""
+    : serverMissing && verdicts.local !== "keep"
+      ? "The other copy could not be read, so only this device's copy can be kept."
+      : verdicts.local !== "keep" && verdicts.server !== "keep"
+        ? `✓ Local, ✓ ${otherLabel}, or ✓ both. ✕ one side keeps the other. You cannot throw away both copies of the file.`
+        : !notesHomed
+          ? "Every highlight on a kept copy needs a home — ✓ that note on at least one side."
+          : "";
+
+  const renderInkRow = (side: "local" | "server") => {
+    const pages = side === "local" ? conflict.localInk : conflict.serverInk;
+    const n = inkCount(pages);
+    const kept = effectiveKeep(INK_ROW_ID, side);
+    const pageHint =
+      conflict.inkPageId != null ? `page ${conflict.inkPageId}` : n === 1 ? "1 page" : `${n} pages`;
+    return (
+      <li className="lc-hub-conflict-note lc-hub-conflict-ink">
+        <span className="lc-hub-conflict-note-kind">ink</span>
+        <span className="lc-hub-conflict-note-excerpt">
+          {n > 0 ? `Handwriting (${pageHint})` : "No handwriting"}
+        </span>
+        <button
+          type="button"
+          aria-pressed={kept}
+          aria-label={`Keep ${sideLabel(side)} handwriting`}
+          title={
+            kept
+              ? "This handwriting is kept — tap to drop it. ✕ both sides keeps the file with no ink."
+              : `✓ keeps ${sideLabel(side)} handwriting. ✓ both merges both stroke sets.`
+          }
+          className={kept ? "lc-doc-confirm-btn lc-doc-confirm-yes" : "lc-doc-confirm-btn"}
+          onClick={() => toggleNote(side, INK_ROW_ID)}
+        >
+          ✓
+        </button>
+      </li>
+    );
+  };
 
   const renderPane = (side: "local" | "server") => {
     const body = side === "local" ? conflict.local : conflict.server;
     const at = updatedAtOf(body);
     const verdict = verdicts[side];
+    const blocked = rejectBlocked(side);
+    const label = sideLabel(side);
     return (
       <section className="lc-hub-conflict-pane" data-side={side} data-verdict={verdict}>
         <header className="lc-hub-conflict-pane-head">
-          <span className="lc-hub-conflict-tab">{side === "local" ? "Local" : "Server"}</span>
+          <span className="lc-hub-conflict-tab">{label}</span>
           <span className="lc-hub-conflict-pane-updated">
             {at != null ? new Date(at).toLocaleString() : ""}
           </span>
-          <button
-            type="button"
-            aria-pressed={verdict === "keep"}
-            aria-label={`Keep the ${side} copy entirely`}
-            title={verdict === "keep" ? "This whole copy is kept" : "✓ keeps this entire pane"}
-            className={
+          <Tip
+            tip={
               verdict === "keep"
-                ? "lc-doc-confirm-btn lc-doc-confirm-yes"
-                : "lc-doc-confirm-btn"
+                ? `This whole ${label} copy is kept`
+                : `✓ keeps this device's entire ${label} copy — notes and the default for ink`
             }
-            onClick={() => setVerdict(side, verdict === "keep" ? "undecided" : "keep")}
           >
-            ✓
-          </button>
-          <button
-            type="button"
-            aria-pressed={verdict === "reject"}
-            aria-label={`Reject the ${side} copy`}
-            title={verdict === "reject" ? "Rejected — tap to reconsider" : "✕ throws this copy away"}
-            className={verdict === "reject" ? "lc-doc-confirm-btn lc-doc-confirm-no" : "lc-doc-confirm-btn"}
-            onClick={() => setVerdict(side, verdict === "reject" ? "undecided" : "reject")}
+            <button
+              type="button"
+              aria-pressed={verdict === "keep"}
+              aria-label={`Keep the ${label} copy entirely`}
+              className={
+                verdict === "keep"
+                  ? "lc-doc-confirm-btn lc-doc-confirm-yes"
+                  : "lc-doc-confirm-btn"
+              }
+              onClick={() => setVerdict(side, verdict === "keep" ? "undecided" : "keep")}
+            >
+              ✓
+            </button>
+          </Tip>
+          <Tip
+            tip={
+              blocked
+                ? `Need one copy of the file. To drop only handwriting, ✕ Ink on both sides.`
+                : verdict === "reject"
+                  ? `Rejected — tap to reconsider`
+                  : `✕ throws the ${label} copy away and keeps ${side === "local" ? otherLabel : "Local"}`
+            }
           >
-            ✕
-          </button>
+            <button
+              type="button"
+              aria-pressed={verdict === "reject"}
+              aria-label={
+                blocked
+                  ? `Cannot reject both copies of the document`
+                  : `Reject the ${label} copy`
+              }
+              className={
+                verdict === "reject" ? "lc-doc-confirm-btn lc-doc-confirm-no" : "lc-doc-confirm-btn"
+              }
+              onClick={() => {
+                if (blocked) return;
+                setVerdict(side, verdict === "reject" ? "undecided" : "reject");
+              }}
+            >
+              ✕
+            </button>
+          </Tip>
         </header>
         <div className="lc-hub-conflict-pane-body">
-          {rows.map((row) => (
-            <NoteRow
-              key={`${side}:${row.id}`}
-              note={side === "local" ? row.local : row.server}
-              side={side}
-              sameId={row.sameId}
-              differs={row.differs}
-              kept={effectiveKeep(row.id, side)}
-              onToggle={toggleNote}
-            />
-          ))}
+          <ol className="lc-hub-conflict-list">
+            {renderInkRow(side)}
+            {rows.map((row) => (
+              <NoteRow
+                key={`${side}:${row.id}`}
+                note={side === "local" ? row.local : row.server}
+                side={side}
+                sameId={row.sameId}
+                differs={row.differs}
+                kept={effectiveKeep(row.id, side)}
+                sideLabel={label}
+                onToggle={toggleNote}
+              />
+            ))}
+          </ol>
         </div>
       </section>
     );
@@ -253,7 +344,10 @@ export function HubConflictSplit({ conflict, busy = false, onResolve }: HubConfl
     <div className="lc-hub-conflict" role="dialog" aria-modal="true" aria-label="Sync conflict">
       <header className="lc-hub-conflict-head">
         <strong>Both copies changed — {nameOf(conflict)}</strong>
-        <span>{conflict.detail}. Choose what stays; nothing has been written yet.</span>
+        <span>
+          {conflict.detail}. Local is this device; {otherLabel} is the other. Nothing has been
+          written yet.
+        </span>
       </header>
       <div className="lc-hub-conflict-split">
         {renderPane("local")}
@@ -264,16 +358,23 @@ export function HubConflictSplit({ conflict, busy = false, onResolve }: HubConfl
         <span className="lc-muted">
           {busy
             ? "Writing your choice…"
-            : serverMissing
-              ? "The hub's copy could not be read, so only this device's copy can be kept."
-              : valid
-                ? "Ready."
-                : "Mark each pane ✓ or ✕; every note needs a home."}
+            : valid
+              ? inkChoice() === "none"
+                ? "Ready — the file stays, with no handwriting."
+                : inkChoice() === "merged"
+                  ? "Ready — highlights and handwriting from both sides."
+                  : "Ready."
+              : whyDisabled}
         </span>
         <button
           type="button"
           disabled={!valid || busy}
           className="lc-hub-conflict-resolve"
+          title={
+            valid
+              ? "Write this choice here and on the hub"
+              : whyDisabled || "Choose a copy first"
+          }
           onClick={onResolveTap}
         >
           Keep selection

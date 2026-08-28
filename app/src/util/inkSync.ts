@@ -20,14 +20,23 @@ import type { EdgeRowDto, InkPageDigestDto, InkPageDto, LcClient } from "../api/
 import { b64ToBytes, bytesToB64 } from "../api/nativeHttp";
 import {
   annotateDocKey,
+  deleteInkPages,
+  encodedFromRecord,
   getInkPageRecords,
   inkPageKey,
   type InkPageRecord,
   whiteboardDocKey,
 } from "./inkPageStore";
 import { STORE_INK_PAGES, withStore } from "./idb";
-import { gzipBytes } from "./gzip";
-import { packEncodedInk } from "../canvas/inkCodec";
+import { bytesFromMaybeGzip, gzipBytes } from "./gzip";
+import {
+  decodeInkOps,
+  encodeInkOps,
+  packEncodedInk,
+  unpackEncodedInk,
+  type EncodedInk,
+} from "../canvas/inkCodec";
+import type { HubInkChoice } from "./hubConflictStash";
 import {
   deleteEdge,
   edgeIsGone,
@@ -42,6 +51,134 @@ export type InkPadKind = "annotate" | "whiteboard";
 
 export function inkDocKey(kind: InkPadKind, key: string): string {
   return kind === "whiteboard" ? whiteboardDocKey(key) : annotateDocKey(key);
+}
+
+/**
+ * Both stroke sets on one page, this device first then the other.
+ *
+ * Seq numbers are not a shared clock across devices, so concatenating encoded
+ * shards and sorting by `s` would interleave two independent sequences.
+ * Decoding and re-encoding puts the other copy on top of this one.
+ */
+export function mergeEncodedPages(
+  local: Map<number, EncodedInk>,
+  server: Map<number, EncodedInk>,
+): Map<number, EncodedInk> {
+  const ids = new Set<number>([...local.keys(), ...server.keys()]);
+  const out = new Map<number, EncodedInk>();
+  for (const pageId of ids) {
+    const here = local.get(pageId);
+    const there = server.get(pageId);
+    if (here && there) {
+      out.set(pageId, encodeInkOps([...decodeInkOps(here), ...decodeInkOps(there)]));
+    } else if (here) {
+      out.set(pageId, here);
+    } else if (there) {
+      out.set(pageId, there);
+    }
+  }
+  return out;
+}
+
+async function encodedFromGzB64(gz: string): Promise<EncodedInk | null> {
+  try {
+    return unpackEncodedInk(await bytesFromMaybeGzip(b64ToBytes(gz)));
+  } catch {
+    return null;
+  }
+}
+
+async function encodedPagesFromDtos(
+  pages: readonly InkPageDto[],
+): Promise<Map<number, EncodedInk>> {
+  const out = new Map<number, EncodedInk>();
+  for (const page of pages) {
+    if (!page.gz) continue;
+    const encoded = await encodedFromGzB64(page.gz);
+    if (encoded) out.set(page.page_id, encoded);
+  }
+  return out;
+}
+
+/** This device's pages as hub DTOs, for the conflict stash. */
+export async function localInkAsDtos(
+  kind: InkPadKind,
+  key: string,
+): Promise<InkPageDto[]> {
+  const rows = await getInkPageRecords(inkDocKey(kind, key));
+  const out: InkPageDto[] = [];
+  for (const row of rows) {
+    const gz = await gzOf(row);
+    if (!gz) continue;
+    out.push({
+      kind,
+      key,
+      page_id: row.pageId,
+      updated_at: row.updatedAt,
+      gz: bytesToB64(gz),
+    });
+  }
+  return out;
+}
+
+/**
+ * Write the reader's ink choice into IDB and onto the hub.
+ *
+ * Keep local / merge / none must PUT, or the hub still holds the copy they
+ * threw away and the next walk brings it back. Keep server only writes IDB
+ * (those bytes already came from the hub).
+ */
+export async function applyInkChoice(
+  client: LcClient,
+  kind: InkPadKind,
+  key: string,
+  choice: HubInkChoice,
+  serverInk: readonly InkPageDto[],
+): Promise<void> {
+  const docKey = inkDocKey(kind, key);
+  const now = Date.now();
+  if (choice === "local") {
+    await pushInkPagesToHub(client, kind, key);
+    return;
+  }
+  if (choice === "server") {
+    for (const page of serverInk) {
+      if (!page.gz) continue;
+      await writeInkPage(docKey, page);
+    }
+    if (serverInk.length === 0) await deleteInkPages(docKey);
+    return;
+  }
+  if (choice === "none") {
+    const local = await getInkPageRecords(docKey);
+    const ids = new Set<number>([
+      ...local.map((row) => row.pageId),
+      ...serverInk.map((page) => page.page_id),
+    ]);
+    await deleteInkPages(docKey);
+    const emptyGz = bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps([]))));
+    for (const pageId of ids) {
+      const body = { page_id: pageId, updated_at: now, gz: emptyGz };
+      await writeInkPage(docKey, body);
+      await client.putInkPage({ kind, key, page_id: pageId, updated_at: now, gz: emptyGz });
+    }
+    return;
+  }
+  const localMap = new Map<number, EncodedInk>();
+  for (const row of await getInkPageRecords(docKey)) {
+    const encoded = await encodedFromRecord(row);
+    if (encoded) localMap.set(row.pageId, encoded);
+  }
+  const merged = mergeEncodedPages(localMap, await encodedPagesFromDtos(serverInk));
+  const gzByPage = new Map<number, string>();
+  for (const [pageId, encoded] of merged) {
+    const gz = bytesToB64(await gzipBytes(packEncodedInk(encoded)));
+    gzByPage.set(pageId, gz);
+    await writeInkPage(docKey, { page_id: pageId, updated_at: now, gz });
+  }
+  for (const [pageId, gz] of gzByPage) {
+    await client.putInkPage({ kind, key, page_id: pageId, updated_at: now, gz });
+  }
 }
 
 /**

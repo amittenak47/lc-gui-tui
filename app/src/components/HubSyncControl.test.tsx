@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
-import { HubSyncControl, type HubSyncWalkHost } from "./HubSyncControl";
+import { HubSyncControl, tabOffersHubSync, type HubSyncWalkHost } from "./HubSyncControl";
 import type { LcClient } from "../api/client";
 import { PAD_HUB_KEY } from "../util/padHub";
 
@@ -33,6 +33,17 @@ function mount() {
 function activeLabel(button: HTMLButtonElement): string | null | undefined {
   return button.querySelector(".lc-morph-panel.is-active")?.textContent;
 }
+
+describe("tabOffersHubSync", () => {
+  it("is a document or a whiteboard, not Home", () => {
+    expect(tabOffersHubSync("annotate")).toBe(true);
+    expect(tabOffersHubSync("whiteboard")).toBe(true);
+    expect(tabOffersHubSync("web")).toBe(true);
+    expect(tabOffersHubSync("home")).toBe(false);
+    expect(tabOffersHubSync("explore")).toBe(false);
+    expect(tabOffersHubSync("practice")).toBe(false);
+  });
+});
 
 describe("HubSyncControl (step-2 stub)", () => {
   afterEach(() => {
@@ -227,6 +238,8 @@ describe("HubSyncControl (step-2 stub)", () => {
           vi.fn().mockResolvedValue({ id: "w1", updated_at: 900 }),
         putEdges: overrides.putEdges ?? vi.fn().mockResolvedValue(undefined),
         tombstoneEdge: overrides.tombstoneEdge ?? vi.fn().mockResolvedValue(undefined),
+        getInkPages: overrides.getInkPages ?? vi.fn().mockResolvedValue([]),
+        putInkPage: overrides.putInkPage ?? vi.fn().mockResolvedValue(undefined),
       };
       return fns as unknown as LcClient & Record<string, ReturnType<typeof vi.fn>>;
     }
@@ -457,8 +470,57 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect(docBytesOnHub).toHaveBeenCalledWith("h");
       expect(putDocBytes).toHaveBeenCalledTimes(1);
       expect(
-        (client as unknown as { putDocIndex: ReturnType<typeof vi.fn> }).putDocIndex,
+        (client as unknown as { indexFromBytes: ReturnType<typeof vi.fn> }).indexFromBytes,
       ).toHaveBeenCalled();
+      expect(
+        (client as unknown as { putDocIndex: ReturnType<typeof vi.fn> }).putDocIndex,
+      ).not.toHaveBeenCalled();
+      expect(button.dataset.stage).toBe("synced");
+    });
+
+    it("indexes the hub's copy when this device also holds the file", async () => {
+      // Local extract + PUT of every page was how a textbook sat at 100%
+      // and then died: the PDF was already on the hub from stage B.
+      vi.useFakeTimers();
+      const client = fakeClient({
+        docBytesOnHub: vi.fn().mockResolvedValue(true),
+        getDocIndex: vi
+          .fn()
+          .mockResolvedValueOnce({
+            hash: "h",
+            indexed: false,
+            page_count: 0,
+            chunk_count: 0,
+            embedded: false,
+          })
+          .mockResolvedValue({
+            hash: "h",
+            indexed: true,
+            page_count: 12,
+            chunk_count: 40,
+            embed_state: "full",
+          }),
+      });
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: new ArrayBuffer(8),
+      });
+      const button = await mountWalk(client, withPad(host));
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      const wired = client as unknown as {
+        putDocIndex: ReturnType<typeof vi.fn>;
+        indexFromBytes: ReturnType<typeof vi.fn>;
+      };
+      expect(wired.indexFromBytes).toHaveBeenCalled();
+      expect(wired.putDocIndex).not.toHaveBeenCalled();
       expect(button.dataset.stage).toBe("synced");
     });
 
@@ -484,6 +546,12 @@ describe("HubSyncControl (step-2 stub)", () => {
       });
 
       expect(putDocBytes).not.toHaveBeenCalled();
+      expect(
+        (client as unknown as { putDocIndex: ReturnType<typeof vi.fn> }).putDocIndex,
+      ).not.toHaveBeenCalled();
+      expect(
+        (client as unknown as { indexFromBytes: ReturnType<typeof vi.fn> }).indexFromBytes,
+      ).toHaveBeenCalled();
       expect(button.dataset.stage).toBe("synced");
     });
 
@@ -594,7 +662,7 @@ describe("HubSyncControl (step-2 stub)", () => {
         }),
         putAnnotatePad: vi.fn(),
       });
-      const { host, conflicts } = makeHost({
+      const { host, conflicts, walkReports } = makeHost({
         hash: "h",
         name: "book.pdf",
         docType: "pdf",
@@ -625,6 +693,9 @@ describe("HubSyncControl (step-2 stub)", () => {
       const conflict = conflicts[0] as { stage: string; server: { source?: string } | null };
       expect(conflict.stage).toBe("pad");
       expect(conflict.server?.source).toBe("hub copy");
+      expect(
+        walkReports.some((r) => r && (r as { waiting?: string }).waiting === "conflict"),
+      ).toBe(true);
       expect((client as unknown as { putAnnotatePad: ReturnType<typeof vi.fn> }).putAnnotatePad)
         .not.toHaveBeenCalled();
       expect(button.dataset.stage).toBe("synced");
@@ -863,7 +934,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       // "Synced" is a claim about a pad row that does not exist.
       vi.useFakeTimers();
       const client = fakeClient();
-      const { host, indexDone, walkReports } = makeHost({
+      const { host, indexDone, walkReports, reload } = makeHost({
         hash: "h",
         name: "book.pdf",
         docType: "pdf",
@@ -882,6 +953,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect(button.dataset.error).toBeUndefined();
       // The index half really did happen, and says so.
       expect(indexDone).toHaveBeenCalled();
+      expect(reload).not.toHaveBeenCalled();
       // Tab must not land on synced — no pad row, same honesty as the pill.
       expect(walkReports.at(-1)).toBeNull();
       // And the pad stages were skipped rather than run against nothing.
@@ -945,7 +1017,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       // to know a walk was running at all, so it read `indexed` throughout.
       vi.useFakeTimers();
       const client = fakeClient();
-      const { host, walkReports } = makeHost({
+      const { host, walkReports, reload } = makeHost({
         hash: "h",
         name: "book.pdf",
         docType: "pdf",
@@ -967,6 +1039,9 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect(stages).toContain("pull");
       expect(walkReports.at(-1)).toEqual({ stage: "synced", progress: null });
       expect(button.dataset.stage).toBe("synced");
+      // Pull used to skip this unless the pad row was newer than the ack.
+      // Ink-only updates never tripped that, so the open file stayed stale.
+      expect(reload).toHaveBeenCalledTimes(1);
     });
 
     it("names which half of Index is running", async () => {
@@ -1018,6 +1093,48 @@ describe("HubSyncControl (step-2 stub)", () => {
         .map((r) => r?.job ?? null);
       expect(jobs).toContain("embed");
       expect(button.dataset.stage).toBe("synced");
+    });
+
+    it("does not park Index when embedding fails", async () => {
+      // A textbook's pages were already on the hub. Embedding then timed out
+      // and the tab said `index error` — as if the text had never gone in.
+      vi.useFakeTimers();
+      const client = fakeClient({
+        getDocIndex: vi
+          .fn()
+          .mockResolvedValueOnce({
+            hash: "h",
+            indexed: false,
+            page_count: 0,
+            chunk_count: 0,
+            embedded: false,
+          })
+          .mockResolvedValue({
+            hash: "h",
+            indexed: true,
+            page_count: 3,
+            chunks_total: 4,
+            chunks_embedded: 0,
+            embed_state: "partial",
+          }),
+        embedDoc: vi.fn().mockRejectedValue(new Error("the endpoint timed out")),
+      });
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const button = await mountWalk(client, withPad(host));
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(button.dataset.stage).toBe("synced");
+      expect(button.dataset.error).toBeUndefined();
     });
 
     it("reports the stage it parked on", async () => {

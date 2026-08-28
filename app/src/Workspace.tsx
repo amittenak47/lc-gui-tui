@@ -23,7 +23,9 @@ import { liveWebviewSupported } from "./util/liveWebviewSupport";
 import { etaLabel, etaMs, newEta, recordBatch } from "./util/embedEta";
 import type { DocWorkProgress } from "./components/DocIndexChip";
 import { fetchDocHubHint, type DocHubHint } from "./util/hubHint";
-import type { HubSyncWalkHost, HubWalkReport } from "./components/HubSyncControl";import { HubConflictSplit } from "./components/HubConflictSplit";import {
+import type { HubSyncWalkHost, HubWalkReport } from "./components/HubSyncControl";
+import { HubConflictSplit } from "./components/HubConflictSplit";
+import {
   loadWebRenderMode,
   otherWebRenderMode,
   saveWebRenderMode,
@@ -47,7 +49,7 @@ import type {
 import { DEFAULT_DATASET } from "./api/types";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { HoldButton } from "./components/HoldButton";
-import { HubSyncControl } from "./components/HubSyncControl";
+import { HubSyncControl, tabOffersHubSync } from "./components/HubSyncControl";
 import { LoadingDoodle } from "./components/LoadingDoodle";
 import { waitForTopBannersIdle } from "./components/StatusBanner";
 import {
@@ -254,6 +256,7 @@ import {
   migrateAnnotateKeysToId,
   getAnnotateDoc,
   docIdentityHash,
+  existingHashIfEmptyBinary,
   hashMarkdown,
   isBinaryDocType,
   AnnotateLibraryFullError,
@@ -301,6 +304,8 @@ import type {
   HubConflictResolution,
   HubPadConflict,
 } from "./util/hubConflictStash";
+import { inkChoiceOf } from "./util/hubConflictStash";
+import { otherDeviceLabel } from "./util/devicePrefs";
 import { getParkedDocSource, parkDocSource } from "./util/parkedDocSource";
 import { MAX_SOURCE_CHARS } from "./util/tabPersist";
 import { requestPersistentStorage, StorageFullError } from "./util/storageQuota";
@@ -332,6 +337,7 @@ import {
   inkConflictsFor,
   subscribeInkConflicts,
 } from "./util/inkConflicts";
+import { applyInkChoice } from "./util/inkSync";
 import { resolveSolutionSource } from "./util/solutionTemplate";
 import { titleFromSlug } from "./util/text";
 import { ensureCodingRoom } from "./util/solutionPad";
@@ -355,6 +361,7 @@ import { renderAnnotation } from "./viz/render/annotation";
 import { renderHighlight } from "./viz/render/highlight";
 import { parseVizProgram, type VizProgram } from "./viz/schema";
 import { messageOf, traceOpen } from "./util/messageOf";
+import { loadChromeFate } from "./util/workspaceLoad";
 
 type Mode = "review" | "ambient";
 
@@ -878,17 +885,12 @@ export function Workspace({
     try {
       if (c.stage === "pad") {
         if (resolution.pick === "server" && c.server) {
-          // Take server: one IDB row from the stashed hub body, ack marked,
-          // chosen reload fired by the apply itself. No PUT — the hub has it.
           if (c.kind === "annotate") {
-            await applyHubAnnotate(c.server, { emitReload: true });
+            await applyHubAnnotate(c.server, { emitReload: false });
           } else {
-            await applyHubWhiteboard(c.server, { emitReload: true });
+            await applyHubWhiteboard(c.server, { emitReload: false });
           }
         } else {
-          // Keep local / merge: local stays authoritative. A merge writes the
-          // picked footnotes into this device's row; both then re-base on the
-          // row the hub holds so the walk's PUT passes CAS instead of 409ing.
           if (c.kind === "annotate" && resolution.pick === "merged" && resolution.footnotes) {
             const doc = await getAnnotateDoc(c.id);
             if (doc) {
@@ -909,20 +911,30 @@ export function Workspace({
           } else {
             markWhiteboardHubAck(c.id, c.server?.updated_at ?? Date.now());
           }
-          hubSyncHostRef.current?.emitReload();
         }
-      } else {
-        // Ink stage: the panes are whole-pane context only; the pages converge
-        // over the wire in the walk, so nothing to store here.
       }
+      await applyInkChoice(
+        client,
+        c.kind,
+        c.id,
+        inkChoiceOf(resolution),
+        c.serverInk ?? [],
+      );
+      await applyHubReloadRef.current({
+        kind: c.kind,
+        id: c.id,
+        op: "reload",
+      });
       hubConflictAskRef.current = null;
       setHubConflictAsk(null);
       ask.resolve(resolution);
+    } catch (cause) {
+      setError(messageOf(cause));
     } finally {
       hubConflictBusyRef.current = false;
       setHubConflictBusy(false);
     }
-  }, []);
+  }, [client, setError]);
 
   /*
    * How many times this pad has been edited since it opened.
@@ -938,6 +950,15 @@ export function Workspace({
   const bumpPadEdit = useCallback(() => setPadEditSeq((n) => n + 1), []);
 
   const hubSyncHostRef = useRef<HubSyncWalkHost | null>(null);
+  /**
+   * Live rehydrate after a walk (and after auto-sync apply).
+   *
+   * Held in a ref because the host object is created once, on first render,
+   * and must call whatever this is *now* — not the empty stub from mount.
+   */
+  const applyHubReloadRef = useRef<(detail: PadHubWindowDetail) => Promise<void>>(
+    async () => {},
+  );
   if (!hubSyncHostRef.current) {
     hubSyncHostRef.current = {
       doc: () => {
@@ -957,8 +978,12 @@ export function Workspace({
        * boards that are not a hub pad (home, problem sets for now).
        */
       pad: async () => {
-        if (isWhiteboard(problem) && whiteboardNotebookIdRef.current) {
-          const notebook = await getWhiteboardNotebook(whiteboardNotebookIdRef.current);
+        // Refs, not the first-render `problem`: this host object is created
+        // once, and a whiteboard opened later would otherwise look like
+        // "no pad" for the rest of the tab's life.
+        const notebookId = whiteboardNotebookIdRef.current;
+        if (notebookId) {
+          const notebook = await getWhiteboardNotebook(notebookId);
           if (!notebook) return null;
           return {
             kind: "whiteboard" as const,
@@ -982,16 +1007,21 @@ export function Workspace({
         };
       },
       emitReload: () => {
-        // H's chosen reload: remount the open pad from the row we kept.
-        const id = isWhiteboard(problem)
-          ? whiteboardNotebookIdRef.current
-          : annotateDocIdRef.current;
-        if (!id) return;
-        window.dispatchEvent(
-          new CustomEvent<PadHubWindowDetail>(PAD_HUB_WINDOW_EVENT, {
-            detail: { kind: isWhiteboard(problem) ? "whiteboard" : "annotate", id, op: "reload" },
-          }),
-        );
+        const notebookId = whiteboardNotebookIdRef.current;
+        if (notebookId) {
+          return applyHubReloadRef.current({
+            kind: "whiteboard",
+            id: notebookId,
+            op: "reload",
+          });
+        }
+        const docId = annotateDocIdRef.current;
+        if (!docId) return;
+        return applyHubReloadRef.current({
+          kind: "annotate",
+          id: docId,
+          op: "reload",
+        });
       },
       inkSince: () => loadPadSyncSince(),
       /*
@@ -1546,6 +1576,13 @@ export function Workspace({
   const browsePickQuietUntilRef = useRef(0);
   const workspaceLoadGenRef = useRef(0);
   /**
+   * The `beginWorkspaceLoad` gen that currently owns the overlay.
+   *
+   * Unmount bumps `workspaceLoadGenRef` without calling begin — so a bailed
+   * load can tell "a newer open took over" from "nobody did, release Home".
+   */
+  const loadInFlightGenRef = useRef<number | null>(null);
+  /**
    * The open in flight, so Cancel can stop the work and not just the answer.
    *
    * The generation counter says "ignore whatever comes back". It does not stop
@@ -1560,8 +1597,51 @@ export function Workspace({
     workspaceLoadAbortRef.current?.abort();
     const controller = new AbortController();
     workspaceLoadAbortRef.current = controller;
-    return { gen: ++workspaceLoadGenRef.current, signal: controller.signal };
+    const gen = ++workspaceLoadGenRef.current;
+    loadInFlightGenRef.current = gen;
+    return { gen, signal: controller.signal };
   }, []);
+  /**
+   * End an open: clear busy if we still own it, or release Home if gen moved
+   * and no successor claimed the overlay (Strict Mode unmount, Cancel).
+   */
+  const endWorkspaceLoad = useCallback(
+    (loadGen: number, label: string) => {
+      const fate = loadChromeFate(
+        loadGen,
+        workspaceLoadGenRef.current,
+        loadInFlightGenRef.current,
+      );
+      if (fate === "finish") {
+        if (loadInFlightGenRef.current === loadGen) loadInFlightGenRef.current = null;
+        traceOpen(`${label}: done, clearing busy`, { loadGen });
+        setBusy(null);
+        setWorkspaceLoadActive(false);
+        setShellLoadActive(false);
+        return;
+      }
+      if (fate === "abandon") {
+        loadInFlightGenRef.current = null;
+        traceOpen(`${label}: LEFT BUSY SET for a newer load — releasing, no successor`, {
+          loadGen,
+          currentGen: workspaceLoadGenRef.current,
+        });
+        setBusy(null);
+        setWorkspaceLoadActive(false);
+        setShellLoadActive(false);
+        setHoldBrowseOverlay(false);
+        setBrowseMotion("idle");
+        setSwitchMotion("idle");
+        setBoardPreparing(false);
+        return;
+      }
+      traceOpen(`${label}: LEFT BUSY SET for a newer load`, {
+        loadGen,
+        currentGen: workspaceLoadGenRef.current,
+      });
+    },
+    [setBrowseMotion, setHoldBrowseOverlay, setShellLoadActive],
+  );
   /** True while pickProblem / openWhiteboard / openAnnotate is in flight. */
   const [workspaceLoadActive, setWorkspaceLoadActive] = useState(false);
   const workspaceLoadActiveRef = useRef(false);
@@ -2496,26 +2576,13 @@ export function Workspace({
         if (fromBrowse) setBrowseMotion("idle");
         setSwitchMotion("idle");
       } finally {
-        if (workspaceLoadGenRef.current === loadGen) {
-          traceOpen("workspace: done, clearing busy", { loadGen });
-          setBusy(null);
-          setWorkspaceLoadActive(false);
-          setShellLoadActive(false);
-        } else {
-          // A newer load is assumed to own the flag. That only holds if it
-          // reached its own finally — one that returned at the busy guard did
-          // not, and then nothing ever clears it.
-          traceOpen("workspace: LEFT BUSY SET for a newer load", {
-            loadGen,
-            currentGen: workspaceLoadGenRef.current,
-            busy: busyRef.current,
-          });
-        }
+        endWorkspaceLoad(loadGen, "workspace");
       }
       return opened;
     },
     [
       beginWorkspaceLoad,
+      endWorkspaceLoad,
       boardCssWidth,
       client,
       finishLoadingTransition,
@@ -2545,7 +2612,6 @@ export function Workspace({
        */
       existing?: WhiteboardNotebook | null;
     }) => {
-      if (busy !== null) return;
       beginPadOpen();
       const { gen: loadGen } = beginWorkspaceLoad();
       if (opts?.fresh && !opts.notebookId && whiteboardLibraryCount() >= WHITEBOARD_LIBRARY_LIMIT) {
@@ -2556,7 +2622,7 @@ export function Workspace({
           void openWhiteboardRef.current({ fresh: true });
         };
         setWhiteboardLibOpen(true);
-        setShellLoadActive(false);
+        endWorkspaceLoad(loadGen, "whiteboard");
         return;
       }
       /*
@@ -2745,24 +2811,10 @@ export function Workspace({
         setSwitchMotion("idle");
       } finally {
         endPadOpen();
-        if (workspaceLoadGenRef.current === loadGen) {
-          traceOpen("done: clearing busy", { loadGen });
-          setBusy(null);
-          setWorkspaceLoadActive(false);
-          setShellLoadActive(false);
-        } else {
-          // Deliberate: a newer load is assumed to own the flag now. It is only
-          // safe if that load actually reached its own finally — a load that
-          // returned at the busy guard never did, and then nothing clears it.
-          traceOpen("LEFT BUSY SET for a newer load", {
-            loadGen,
-            currentGen: workspaceLoadGenRef.current,
-            busy: busyRef.current,
-          });
-        }
+        endWorkspaceLoad(loadGen, "whiteboard");
       }
     },
-    [beginPadOpen, beginWorkspaceLoad, busy, client, endPadOpen, finishLoadingTransition, openWorkspace, problem, setShellLoadActive, themeId],
+    [beginPadOpen, beginWorkspaceLoad, client, endPadOpen, endWorkspaceLoad, finishLoadingTransition, openWorkspace, problem, setShellLoadActive, themeId],
   );
 
   /**
@@ -3141,7 +3193,7 @@ export function Workspace({
               `${Math.round(CODE_SOURCE_MAX_CHARS / 1000)}k).`,
           );
         }
-        const hash = input.hash
+        let hash = input.hash
           ? input.hash
           : bytes && docType !== "web"
             ? await hashBytesAsync(bytes)
@@ -3180,6 +3232,9 @@ export function Workspace({
             if (choice.kind === "open") existing = await getAnnotateDoc(choice.id);
           }
         }
+
+        const keptHash = existingHashIfEmptyBinary(docType, bytes, existing?.hash);
+        if (keptHash) hash = keptHash;
 
         /*
          * The id this session writes under, settled before the board mounts.
@@ -3647,6 +3702,13 @@ export function Workspace({
           requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
         );
         if (workspaceLoadGenRef.current !== loadGen) return;
+        if (existing) {
+          // Again, now that the raster layer is interactive. The first restore
+          // ran while preparing (canvas unmounted); Sync's reload works because
+          // it paints on a live board. Same moment as the reading-hand arm.
+          const handle = boardRef.current;
+          if (handle) await restoreInk(handle, annotateDocKey(existing.id), existing.board);
+        }
         const relandPdf = () => {
           const filmed = peekPdfFilmCurrent(tab.id);
           const page = filmed >= 2 ? filmed : landPage;
@@ -3755,21 +3817,7 @@ export function Workspace({
         setSwitchMotion("idle");
       } finally {
         endPadOpen();
-        if (workspaceLoadGenRef.current === loadGen) {
-          traceOpen("annotate: done, clearing busy", { loadGen });
-          setBusy(null);
-          setWorkspaceLoadActive(false);
-          setShellLoadActive(false);
-        } else {
-          // A newer load is assumed to own the flag. That only holds if it
-          // reached its own finally — one that returned at the busy guard did
-          // not, and then nothing ever clears it.
-          traceOpen("annotate: LEFT BUSY SET for a newer load", {
-            loadGen,
-            currentGen: workspaceLoadGenRef.current,
-            busy: busyRef.current,
-          });
-        }
+        endWorkspaceLoad(loadGen, "annotate");
       }
     },
     [
@@ -3777,6 +3825,7 @@ export function Workspace({
       beginWorkspaceLoad,
       client,
       endPadOpen,
+      endWorkspaceLoad,
       finishLoadingTransition,
       openWorkspace,
       problem,
@@ -3784,6 +3833,74 @@ export function Workspace({
       themeId,
     ],
   );
+
+  /*
+   * Put the walk's result on the board that is already open.
+   *
+   * A full loadAnnotate remounts the PDF (and used to do it without the bytes,
+   * so the paper went blank). This keeps the document, the camera, and the
+   * search-index chip, and only replaces ink, marks, and board elements from
+   * the row the walk just wrote. Auto-sync still fires the window event;
+   * the pill calls this directly so Pull can await it.
+   */
+  applyHubReloadRef.current = async (detail) => {
+    if (detail.op !== "reload") return;
+    const board = boardRef.current;
+    if (!board) return;
+    if (detail.kind === "whiteboard") {
+      if (whiteboardNotebookIdRef.current !== detail.id) return;
+      const notebook = await getWhiteboardNotebook(detail.id);
+      if (!notebook) return;
+      padHubApplyRef.current = true;
+      boardSaveSuspendedRef.current = true;
+      try {
+        const live = board.saveBoard({ assembleInk: false });
+        const pages = Math.min(
+          WHITEBOARD_PAGE_LIMIT,
+          Math.max(1, notebook.pageCount, countWhiteboardPages(notebook.board.elements)),
+        );
+        board.restoreBoard(notebook.board.elements, live.appState, {
+          skeletons: buildWhiteboardTemplate(pages, isDarkTheme(themeId)),
+          files: notebook.board.files,
+          inkPalettes: notebook.board.inkPalettes,
+          skipFit: true,
+        });
+        setWhiteboardPageCount(pages);
+        await restoreInk(board, whiteboardDocKey(notebook.id), notebook.board);
+        if (notebook.agent.length > 0) {
+          setAgentMessages(restoreAgentMessages(notebook.agent));
+        }
+      } finally {
+        padHubApplyRef.current = false;
+        boardSaveSuspendedRef.current = false;
+      }
+      return;
+    }
+    if (detail.kind !== "annotate") return;
+    if (annotateDocIdRef.current !== detail.id) return;
+    const doc = await getAnnotateDoc(detail.id);
+    if (!doc) return;
+    padHubApplyRef.current = true;
+    boardSaveSuspendedRef.current = true;
+    try {
+      const live = board.saveBoard({ assembleInk: false });
+      board.restoreBoard(doc.board.elements, live.appState, {
+        skipFit: true,
+        files: doc.board.files,
+        inkPalettes: doc.board.inkPalettes,
+      });
+      await restoreInk(board, annotateDocKey(doc.id), doc.board);
+      setAnnotateFootnotesRaw(doc.footnotes ?? []);
+      annotateFootnotesRef.current = doc.footnotes ?? [];
+      const source = annotateSourceRef.current;
+      if (source && !isBinaryDocType(doc.docType) && doc.source !== source.text) {
+        setAnnotateSource({ ...source, text: doc.source });
+      }
+    } finally {
+      padHubApplyRef.current = false;
+      boardSaveSuspendedRef.current = false;
+    }
+  };
 
   useEffect(() => {
     const onHub = (event: Event) => {
@@ -3817,33 +3934,11 @@ export function Workspace({
         });
         return;
       }
-      if (detail.kind === "whiteboard" && whiteboardNotebookIdRef.current !== detail.id) return;
-      if (detail.kind === "annotate" && annotateDocIdRef.current !== detail.id) return;
-      padHubApplyRef.current = true;
-      void (async () => {
-        try {
-          if (detail.kind === "whiteboard") {
-            await loadWhiteboard({ notebookId: detail.id, tabId: tab.id, userLoad: false });
-            return;
-          }
-          const doc = await getAnnotateDoc(detail.id);
-          if (!doc) return;
-          await loadAnnotate({
-            name: doc.name,
-            docType: doc.docType,
-            text: doc.source,
-            docId: doc.id,
-            tabId: tab.id,
-            userLoad: false,
-          });
-        } finally {
-          padHubApplyRef.current = false;
-        }
-      })();
+      void applyHubReloadRef.current(detail);
     };
     window.addEventListener(PAD_HUB_WINDOW_EVENT, onHub);
     return () => window.removeEventListener(PAD_HUB_WINDOW_EVENT, onHub);
-  }, [closeTab, loadAnnotate, loadProblem, loadWhiteboard, tab.id]);
+  }, [closeTab, loadProblem, tab.id]);
 
   /**
    * Write the annotation set out as a file the writer can keep.
@@ -8052,7 +8147,6 @@ export function Workspace({
    */
   const mountedRef = useRef(false);
   useEffect(() => {
-    if (mountedRef.current) return;
     if (tab.kind === "home") {
       mountedRef.current = true;
       return;
@@ -8061,6 +8155,12 @@ export function Workspace({
     if (needsBoard && !BoardView) return;
     mountedRef.current = true;
     void openTabWorkspace(tab);
+    return () => {
+      // Strict Mode runs this cleanup then the effect again. Leaving
+      // mountedRef true skipped the second open, so a bailed gen-1 whiteboard
+      // never remounted and Home stayed over the tab.
+      mountedRef.current = false;
+    };
     // Deliberately mount-only past that gate: see above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [BoardView, needsBoard]);
@@ -8075,6 +8175,7 @@ export function Workspace({
    */
   const abortLoad = useCallback(async () => {
     workspaceLoadGenRef.current += 1;
+    loadInFlightGenRef.current = null;
     workspaceLoadAbortRef.current?.abort();
     workspaceLoadAbortRef.current = null;
     setBusy(null);
@@ -8121,6 +8222,13 @@ export function Workspace({
     setWhiteboardEntryOpen(false);
     setAnnotateEntryOpen(false);
   }, []);
+
+  const wasHomeActiveRef = useRef(false);
+  useEffect(() => {
+    const homeActive = active && tab.kind === "home";
+    if (homeActive && !wasHomeActiveRef.current) showHomeChooser();
+    wasHomeActiveRef.current = homeActive;
+  }, [active, showHomeChooser, tab.kind]);
 
   useEffect(() => {
     setWorkspaceApi(tab.id, {
@@ -8185,7 +8293,13 @@ export function Workspace({
         status: docIndexStatus,
         meta: docIndexMeta,
         error: docIndexError,
-        onIndex: indexInputsRef.current ? indexOpenDocumentByHand : null,
+        /*
+         * A PDF / EPUB / note indexes from the Sync walk, not from this chip.
+         * Web is the leftover: the walk skips it, so the card behind the
+         * chip is still how a frozen page gets in.
+         */
+        onIndex:
+          indexInputsRef.current?.docType === "web" ? indexOpenDocumentByHand : null,
         onEmbed: indexInputsRef.current ? embedOpenDocument : null,
         indexProgress: docIndexProgress,
         embedProgress: docEmbedProgress,
@@ -8195,6 +8309,7 @@ export function Workspace({
         walkJob: walkReport?.job ?? null,
         walkProgress: walkReport?.progress ?? null,
         walkError: walkReport?.error ?? null,
+        walkWaiting: walkReport?.waiting ?? null,
         /*
          * Indexing reads the pad's stored text, which is the frozen copy.
          *
@@ -8227,6 +8342,7 @@ export function Workspace({
     webLive,
     problem,
     setChrome,
+    walkReport,
     workspaceLoadActive,
   ]);
 
@@ -8881,8 +8997,9 @@ export function Workspace({
       )}
       </>, headerSlots.chrome) : null}
       {/* The one-tap hub Sync pill lives beside the board's map controls in
-          the chrome slot; only the focused workspace mounts its own. */}
-      {active && headerSlots.boardChrome ? (
+          the chrome slot; only a focused document / whiteboard / web pad
+          mounts its own. Home used to, and the library cards are not a pad. */}
+      {active && headerSlots.boardChrome && tabOffersHubSync(tab.kind) ? (
         createPortal(
           <HubSyncControl
             hubHint={hubHint}
@@ -9432,6 +9549,7 @@ export function Workspace({
         <HubConflictSplit
           conflict={hubConflictAsk.conflict}
           busy={hubConflictBusy}
+          otherLabel={otherDeviceLabel()}
           onResolve={(resolution) => void handleHubConflictResolve(resolution)}
         />
       ) : null}
@@ -9777,6 +9895,7 @@ export function Workspace({
               return;
             }
             if (choice === "recent" && docId) {
+              setAnnotateEntryOpen(false);
               beginPadOpen();
               void (async () => {
                 try {
@@ -9820,6 +9939,7 @@ export function Workspace({
               })();
               return;
             }
+            setAnnotateEntryOpen(false);
             void pickAndOpenAnnotate();
           }}
           onCancel={() => setAnnotateEntryOpen(false)}
@@ -9844,6 +9964,7 @@ export function Workspace({
               return;
             }
             if (choice === "load" && notebookId) {
+              setWhiteboardEntryOpen(false);
               void openWhiteboard({ notebookId });
               return;
             }
