@@ -299,3 +299,130 @@ describe("HubConflictSplit ink and labels", () => {
     expect(list!.compareDocumentPosition(preview!)).toBe(Node.DOCUMENT_POSITION_PRECEDING);
   });
 });
+
+/*
+ * What actually reached each pane's document.
+ *
+ * The preview renders marks through `DocSelectionLayer`, which places them
+ * from measured scope roots — there is no layout in jsdom, so nothing paints
+ * and there is nothing to count. The question here is not how a ribbon looks
+ * but which copies were handed over, so the preview is stood in for by
+ * something that records its props. `ConflictPagePreview` keeps its own
+ * behaviour under test next to `pdfVisibleFromSpans`.
+ */
+describe("what the panes are asked to draw", () => {
+  afterEach(() => {
+    document.body.textContent = "";
+    vi.doUnmock("./ConflictPagePreview");
+    vi.resetModules();
+  });
+
+  async function mountSpied(conflict: HubPadConflict = CONFLICT) {
+    vi.resetModules();
+    vi.doMock("./ConflictPagePreview", () => ({
+      ConflictPagePreview: (props: {
+        page: number;
+        notes?: readonly { id: string }[];
+        showInk?: boolean;
+      }) => (
+        <div
+          className="lc-hub-conflict-preview"
+          data-page={String(props.page)}
+          data-notes={(props.notes ?? []).map((note) => note.id).join(",")}
+          data-ink={props.showInk ? "on" : "off"}
+        />
+      ),
+    }));
+    const { HubConflictSplit: Split } = await import("./HubConflictSplit");
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    act(() => root.render(<Split conflict={conflict} onResolve={vi.fn()} />));
+    return { root };
+  }
+
+  const panes = () =>
+    Array.from(document.querySelectorAll<HTMLElement>(".lc-hub-conflict-preview"));
+  const notesOn = (side: 0 | 1) =>
+    (panes()[side]!.dataset.notes ?? "").split(",").filter(Boolean);
+
+  it("draws a mark on both panes as soon as its row is tapped", async () => {
+    /*
+     * The row tap only scrolled to the page, so the pane you were sent to was
+     * blank exactly where the mark should be — you had to keep a copy to find
+     * out what you were keeping.
+     */
+    const { root } = await mountSpied();
+    expect(notesOn(0)).toEqual([]);
+
+    act(() => noteByText("kept here with new words").click());
+    expect(notesOn(0)).toEqual(["same"]);
+    expect(notesOn(1)).toEqual(["same"]);
+    act(() => root.unmount());
+  });
+
+  it("shows a side-only mark on the side that has it", async () => {
+    const { root } = await mountSpied();
+    act(() => noteByText("hub only mark").click());
+    expect(notesOn(0)).toEqual([]);
+    expect(notesOn(1)).toEqual(["srv"]);
+    act(() => root.unmount());
+  });
+
+  it("previewing is not keeping", async () => {
+    // Focus is a question. A tapped row is drawn and still unsettled, and a
+    // dropped row is still drawn when you go back to look at it.
+    const { root } = await mountSpied();
+    act(() => noteByText("local only mark").click());
+    expect(notesOn(0)).toEqual(["n1"]);
+    expect(resolveButton().disabled).toBe(true);
+
+    act(() =>
+      noteByText("local only mark")
+        .querySelector('[data-action="drop"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    );
+    expect(notesOn(0)).toEqual(["n1"]);
+    act(() => root.unmount());
+  });
+
+  it("keeps a kept mark drawn after focus moves on", async () => {
+    const { root } = await mountSpied();
+    act(() =>
+      noteByText("local only mark")
+        .querySelector('[data-action="keep"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    );
+    act(() => noteByText("hub only mark").click());
+    // n1 because it was kept, srv because it is focused — and no duplicate.
+    expect(notesOn(0)).toEqual(["n1"]);
+    expect(notesOn(1)).toEqual(["srv"]);
+    act(() => root.unmount());
+  });
+
+  it("draws the handwriting when the ink row is focused, before any ✓", async () => {
+    const { root } = await mountSpied();
+    // The ink row is focused on open, so it is already showing.
+    expect(panes()[0]!.dataset.ink).toBe("on");
+
+    act(() => noteByText("local only mark").click());
+    expect(panes()[0]!.dataset.ink).toBe("off");
+
+    act(() => inkRow(0).click());
+    expect(panes()[0]!.dataset.ink).toBe("on");
+    act(() => root.unmount());
+  });
+
+  it("keeps kept ink drawn once focus has moved to a mark", async () => {
+    const { root } = await mountSpied();
+    act(() =>
+      inkRow(0)
+        .querySelector('[data-action="keep"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    );
+    act(() => noteByText("local only mark").click());
+    expect(panes()[0]!.dataset.ink).toBe("on");
+    expect(panes()[1]!.dataset.ink).toBe("off");
+    act(() => root.unmount());
+  });
+});
