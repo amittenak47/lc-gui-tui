@@ -817,15 +817,22 @@ export function App() {
   const closeTab = useCallback((id: string) => {
     if (id === HOME_TAB_ID) return;
     const state = tabsRef.current;
+    const drop = (clearMissing: boolean) => {
+      dispatchTabs({ type: "close", id });
+      setLiveIds((current) => current.filter((x) => x !== id));
+      if (clearMissing) setMissingTab(null);
+    };
     if (id !== state.activeId) {
       // Not on screen — but it may still be mounted behind this one, so it is
       // asked the same question rather than dropped out from under itself.
       const parked = apisRef.current.get(id);
+      if (parked?.isLoadActive()) {
+        // Still opening: there is nothing to save. Abort, then drop the chip.
+        void parked.abortLoad().then(() => drop(false)).catch(() => drop(false));
+        return;
+      }
       if (parked) {
-        void parked.leave().then(() => {
-          dispatchTabs({ type: "close", id });
-          setLiveIds((current) => current.filter((x) => x !== id));
-        });
+        void parked.leave().then(() => drop(false));
         return;
       }
       // A record and nothing else; dropping it is the whole of closing it, and
@@ -835,17 +842,16 @@ export function App() {
     }
     const live = apisRef.current.get(id);
     if (!live) {
-      dispatchTabs({ type: "close", id });
-      setLiveIds((current) => current.filter((x) => x !== id));
-      setMissingTab(null);
+      drop(true);
+      return;
+    }
+    if (live.isLoadActive()) {
+      // Same as overlay Cancel: stop the open, then drop the unfinished chip.
+      void live.abortLoad().then(() => drop(true)).catch(() => drop(true));
       return;
     }
     // Closing really is leaving, so it asks. A cancel simply never resolves.
-    void live.leave().then(() => {
-      dispatchTabs({ type: "close", id });
-      setLiveIds((current) => current.filter((x) => x !== id));
-      setMissingTab(null);
-    });
+    void live.leave().then(() => drop(true));
   }, []);
 
   /**

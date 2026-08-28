@@ -12,6 +12,7 @@ import {
 } from "./docPreview";
 import { renderMarkdown } from "./AnnotateDocument";
 import { renderCode } from "./CodeDocument";
+import { CODE_SOURCE_MAX_CHARS } from "../util/codeLanguages";
 
 describe("docPreview", () => {
   it("leaves an ordinary document entirely alone", () => {
@@ -89,5 +90,39 @@ describe("rendering a document that is too long to draw", () => {
 
   it("code: an ordinary file gets no notice", () => {
     expect(renderCode("const a = 1;\n", "ts")).not.toContain("lc-doc-truncated");
+  });
+});
+
+describe("80k draw cap against real-shaped files", () => {
+  const sentence =
+    "The pad writes locally first, then the hub takes a copy of what landed. ";
+
+  it("draws a long notes file in full (under the cap)", () => {
+    // ~11k words, typical lecture notes / a long working file — not a book.
+    const source = `# Lecture notes\n\n${sentence.repeat(800)}`;
+    expect(source.length).toBeLessThan(DOC_PREVIEW_MAX_CHARS);
+    const preview = docPreview(source);
+    expect(preview.hidden).toBe(0);
+    expect(preview.text).toBe(source);
+    expect(renderMarkdown(source)).not.toContain("lc-doc-truncated");
+  });
+
+  it("draws only the beginning of a book-length markdown file", () => {
+    const chapters: string[] = [];
+    let length = 0;
+    let n = 1;
+    while (length < CODE_SOURCE_MAX_CHARS) {
+      const chapter = `# Chapter ${n}\n\n${sentence.repeat(80)}\n`;
+      chapters.push(chapter);
+      length += chapter.length;
+      n += 1;
+    }
+    const source = chapters.join("").slice(0, CODE_SOURCE_MAX_CHARS);
+    const preview = docPreview(source);
+    expect(preview.text.length).toBeLessThanOrEqual(DOC_PREVIEW_MAX_CHARS);
+    expect(preview.hidden).toBeGreaterThan(source.length * 0.9);
+    const html = renderMarkdown(source);
+    expect(html).toContain("lc-doc-truncated");
+    expect(html).toContain("<h1>Chapter 1</h1>");
   });
 });

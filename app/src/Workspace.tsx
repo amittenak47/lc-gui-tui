@@ -1546,6 +1546,8 @@ export function Workspace({
   }, []);
   /** True while pickProblem / openWhiteboard / openAnnotate is in flight. */
   const [workspaceLoadActive, setWorkspaceLoadActive] = useState(false);
+  const workspaceLoadActiveRef = useRef(false);
+  workspaceLoadActiveRef.current = workspaceLoadActive;
   const beginPadOpen = useCallback(() => {
     padOpenLockRef.current += 1;
     browsePickQuietUntilRef.current = Date.now() + BROWSE_PICK_QUIET_MS;
@@ -1767,6 +1769,18 @@ export function Workspace({
    * skips the save-or-discard dialog entirely.
    */
   const dirtyRef = useRef(false);
+  /**
+   * Unsaved-dot + Sync-pill: a pad edit that is not a board fingerprint.
+   *
+   * Agent turns and the rest of the leave-dialog paths never go through the
+   * autosave interval, so they used to leave the pill on Synced. Ink still
+   * uses the interval (including when autosave is Off) because strokes do
+   * not hit `dirtyRef` until a tick sees them.
+   */
+  const markPadDirty = useCallback(() => {
+    dirtyRef.current = true;
+    if (isLocalPad(problemRef.current)) bumpPadEdit();
+  }, [bumpPadEdit]);
   /** The code as loaded, so an untouched editor does not count as work. */
   const loadedSourceRef = useRef("");
   /**
@@ -1810,8 +1824,8 @@ export function Workspace({
   useEffect(() => {
     if (!problem) return;
     boardRef.current?.fitCodeToSource(pseudocode);
-    if (pseudocode !== loadedSourceRef.current) dirtyRef.current = true;
-  }, [problem, pseudocode]);
+    if (pseudocode !== loadedSourceRef.current) markPadDirty();
+  }, [problem, pseudocode, markPadDirty]);
 
 
   const sceneApi = useCallback((): SceneApi | null => {
@@ -1897,6 +1911,14 @@ export function Workspace({
    * footnote — a note, a link, a colour — is still a reason to write.
    */
   const lastSavedMarksRef = useRef<string>("");
+  /**
+   * Last scene the Sync pill already counted.
+   *
+   * Separate from `lastSavedHashRef`: when autosave is Off nothing is written,
+   * but we still need to bump `editSeq` once per change rather than every tick.
+   */
+  const lastEditSeqHashRef = useRef<number | null>(null);
+  const lastEditSeqMarksRef = useRef<string>("");
   /** Has the "out of space" banner already been shown this session? */
   const storageFullShownRef = useRef(false);
   /**
@@ -1925,8 +1947,9 @@ export function Workspace({
 
   useEffect(() => {
     if (!problem) return;
-    // Off means off: no interval at all rather than one that ticks and returns.
-    if (autosaveMs <= 0) return;
+    // Off still watches the board: the unsaved dot and the Sync pill need to
+    // know the pad moved, even when nothing is being written.
+    const period = autosaveMs > 0 ? autosaveMs : 1000;
     const timer = window.setInterval(() => {
       const board = boardRef.current;
       if (!board || boardSaveSuspendedRef.current || padHubApplyRef.current) return;
@@ -1944,33 +1967,36 @@ export function Workspace({
        * count as work.
        */
       const marks = isAnnotate(problem) ? footnoteRevision(annotateFootnotesRef.current) : "";
-      if (lastSavedHashRef.current === hash && lastSavedMarksRef.current === marks) {
-        lastTickInkOpsRef.current = inkOps;
-        return;
-      }
-
-      /*
-       * Not while the tip is on the paper.
-       *
-       * This used to be a much bigger deferral, and the reason it could shrink
-       * is that the cost it was hiding from is mostly gone. Saving meant
-       * walking every element and every ink point and handing the lot to
-       * `JSON.stringify` on the main thread — blocking, and landing wherever
-       * the timer put it, which every so often was under the nib: the stroke
-       * stopped dead partway through a letter. So the tick also waited out the
-       * gaps *between* letters, with a ceiling so a long burst still got saved.
-       *
-       * Now the library write is one entry rather than thirty, it goes to
-       * IndexedDB rather than through a blocking string store, and the ink is
-       * encoded into typed arrays in a single pass instead of stringified. What
-       * is left on the main thread is small enough that the between-letters
-       * deferral was costing more in unsaved work than it was buying in
-       * smoothness. The tip being down is still worth waiting out: it is free
-       * to check, and there is nothing to gain from saving a stroke that is
-       * halfway drawn.
-       */
       lastTickInkOpsRef.current = inkOps;
       if (board.isInking()) return;
+
+      if (isLocalPad(problem)) {
+        const contentHash = padContentFingerprint(elements, inkOps);
+        const untouched = isAnnotate(problem)
+          ? annotatePristineHashRef.current === contentHash &&
+            footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current
+          : whiteboardPristineHashRef.current === contentHash;
+        // The tab's dot rides on the comparison the autosave is already making;
+        // fingerprinting the scene a second time for a 5px dot would not be.
+        patchTab(tab.id, { dirty: !untouched });
+        if (
+          !untouched &&
+          (lastEditSeqHashRef.current !== hash || lastEditSeqMarksRef.current !== marks)
+        ) {
+          bumpPadEdit();
+          lastEditSeqHashRef.current = hash;
+          lastEditSeqMarksRef.current = marks;
+        } else if (untouched) {
+          lastEditSeqHashRef.current = hash;
+          lastEditSeqMarksRef.current = marks;
+        }
+      }
+
+      if (autosaveMs <= 0) return;
+
+      if (lastSavedHashRef.current === hash && lastSavedMarksRef.current === marks) {
+        return;
+      }
 
       if (isAnnotate(problem)) {
         /*
@@ -1995,7 +2021,6 @@ export function Workspace({
           lastSavedMarksRef.current = marks;
           return;
         }
-        bumpPadEdit();
         const source = annotateSourceRef.current;
         if (!source) return;
         // Marked attempted before the write rather than after it. The save is
@@ -2076,7 +2101,6 @@ export function Workspace({
           lastSavedHashRef.current = hash;
           return;
         }
-        bumpPadEdit();
       }
 
       dirtyRef.current = true;
@@ -2138,11 +2162,12 @@ export function Workspace({
         lastSavedHashRef.current = hash;
         await pushProblemPad(client, row);
       })().catch(() => {});
-    }, autosaveMs);
+    }, period);
     return () => window.clearInterval(timer);
   }, [
     announceAutosave,
     autosaveMs,
+    bumpPadEdit,
     client,
     patchTab,
     problem,
@@ -2375,6 +2400,8 @@ export function Workspace({
         // the template alone. Persisted boards can carry old region geometry,
         // so `restoreBoard` heals them against the current skeletons.
         lastSavedHashRef.current = null;
+        lastEditSeqHashRef.current = null;
+        lastEditSeqMarksRef.current = "";
         // Decoded once, here, and handed to both restore paths below. Never per
         // frame: the renderer's caches are `WeakMap`s keyed on the op object,
         // so fresh objects each frame would defeat them.
@@ -2567,6 +2594,8 @@ export function Workspace({
         setPseudocode("");
         loadedSourceRef.current = "";
         lastSavedHashRef.current = null;
+        lastEditSeqHashRef.current = null;
+        lastEditSeqMarksRef.current = "";
         // The record already exists — `openWhiteboard` wrote it before calling
         // here. The title and the notebook id land below, once the entry has
         // been read or the autosave has written one.
@@ -3181,6 +3210,8 @@ export function Workspace({
         setPseudocode("");
         loadedSourceRef.current = "";
         lastSavedHashRef.current = null;
+        lastEditSeqHashRef.current = null;
+        lastEditSeqMarksRef.current = "";
         const savedPdfPage = Math.floor(
           Number((existing?.board.appState as { pdfPage?: number } | undefined)?.pdfPage),
         );
@@ -3939,6 +3970,8 @@ export function Workspace({
       }
       await restoreInk(board, docKey, snap.board);
       lastSavedHashRef.current = null;
+      lastEditSeqHashRef.current = null;
+      lastEditSeqMarksRef.current = "";
       const when = new Date(snap.writtenAt).toLocaleString();
       setNotice(`Restored the ${tier} snapshot from ${when}.`);
     },
@@ -4941,7 +4974,7 @@ export function Workspace({
     (replyTo?: CoachReplyRef, pendingAck?: CoachPendingAck): string => {
     const id = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     activeCoachTurnIdRef.current = id;
-    dirtyRef.current = true;
+    markPadDirty();
     setAgentMessages((current) => [
       ...current,
       {
@@ -4957,7 +4990,7 @@ export function Workspace({
     ]);
     return id;
   },
-  []);
+  [markPadDirty]);
 
   const appendProcessEvent = useCallback((messageId: string, event: CoachProcessEvent) => {
     setAgentMessages((current) =>
@@ -5080,7 +5113,7 @@ export function Workspace({
         | "queued"
       >,
     ) => {
-      dirtyRef.current = true;
+      markPadDirty();
       // Minted here rather than inside the updater: callers need the id to
       // hang things off the turn (a document footnote, for one), and an
       // updater can be re-run by React without meaning a second message.
@@ -5103,7 +5136,7 @@ export function Workspace({
       });
       return id;
     },
-    [],
+    [markPadDirty],
   );
 
   const submitForReview = useCallback(async (
@@ -5393,7 +5426,7 @@ export function Workspace({
         .slice(0, MAX_VISIBLE_DRAWINGS);
 
       if (drawables.length > 0) {
-        dirtyRef.current = true;
+        markPadDirty();
         // Coach ink lives on the agent page — jump there on mobile so drawings
         // aren't parked invisible on Walkthrough / Scratch.
         if (mobile) setActiveRegion("agent");
@@ -5491,6 +5524,7 @@ export function Workspace({
     runCoachJob,
     pushCoachMessage,
     reviewDrawings,
+    markPadDirty,
   ]);
 
   const applyFilledCode = useCallback(
@@ -5508,7 +5542,7 @@ export function Workspace({
       if (!next) return;
       setPseudocode(next);
       pseudocodeRef.current = next;
-      dirtyRef.current = true;
+      markPadDirty();
       try {
         await client.putSolution(problem.task_id, next, problem.dataset);
         setNotice(note.trim() || "Lazy fill applied to solution.py");
@@ -5521,7 +5555,7 @@ export function Workspace({
         setError(messageOf(cause));
       }
     },
-    [client, problem, pushCoachMessage],
+    [client, problem, pushCoachMessage, markPadDirty],
   );
 
   const applyProposedAnnotations = useCallback((proposed: ProposedAnnotation[]) => {
@@ -6404,7 +6438,6 @@ export function Workspace({
         const report = formatTestReport(result, kind);
         lastTestReportRef.current = report;
         pushCoachMessage("app", report);
-        dirtyRef.current = true;
         /*
          * Hand a red run straight to the coach, when asked to.
          *
@@ -6604,7 +6637,7 @@ export function Workspace({
     setRevealOpen(false);
     setRevealPending(false);
     setRevealError(null);
-    dirtyRef.current = true;
+    markPadDirty();
     setAgentMessages((current) => {
       const attachTo =
         (targetId && current.find((message) => message.id === targetId)) ||
@@ -6663,14 +6696,14 @@ export function Workspace({
         );
       });
     }
-  }, [client, problem, applyFilledCode]);
+  }, [client, problem, applyFilledCode, markPadDirty]);
 
   const showDrawingFrame = useCallback(
     (programId: string, frameIndex: number) => {
       const board = boardRef.current;
       const api = sceneApi();
       if (!board || !api) return;
-      dirtyRef.current = true;
+      markPadDirty();
       if (mobile) setActiveRegion("agent");
       setAgentMessages((current) => {
         const next = current.map((message) => {
@@ -6692,12 +6725,12 @@ export function Workspace({
         return next;
       });
     },
-    [sceneApi, mobile],
+    [sceneApi, mobile, markPadDirty],
   );
 
   const toggleDrawing = useCallback(
     (messageId: string, expanded: boolean) => {
-      dirtyRef.current = true;
+      markPadDirty();
       if (expanded && mobile) setActiveRegion("agent");
       setAgentMessages((current) => {
         const next = setDrawingExpanded(current, messageId, expanded);
@@ -6705,7 +6738,7 @@ export function Workspace({
         return next;
       });
     },
-    [syncDrawingsToBoard, mobile],
+    [syncDrawingsToBoard, mobile, markPadDirty],
   );
 
 
@@ -7554,7 +7587,10 @@ export function Workspace({
                 name,
                 docType,
                 bytes,
-                hash: fresh ? fresh.hash : undefined,
+                // Reopen already knows this hash (`tab` / library). Passing it
+                // skips hashing the file again. `bytesStored` is only the
+                // pick hand-off — IDB already holds a verified copy.
+                hash: hash || undefined,
                 bytesStored: Boolean(fresh),
                 docId: restoreDocId,
                 existingDoc,
@@ -8048,6 +8084,20 @@ export function Workspace({
     switchMotion,
   ]);
 
+  /*
+   * Switching tabs can unmount this instance while an open is still in flight
+   * (eviction past the live budget). Overlay Cancel and chip close go through
+   * `abortLoad`; unmount has to stop the waiters itself or pdf.js / the hash
+   * worker keep running after the board is gone.
+   */
+  useEffect(() => {
+    return () => {
+      workspaceLoadGenRef.current += 1;
+      workspaceLoadAbortRef.current?.abort();
+      workspaceLoadAbortRef.current = null;
+    };
+  }, []);
+
   const showHomeChooser = useCallback(() => {
     setPracticeOpen(false);
     setWhiteboardEntryOpen(false);
@@ -8059,6 +8109,7 @@ export function Workspace({
       park: () => new Promise<void>((resolve) => parkWorkspace(() => resolve())),
       leave: () => new Promise<boolean>((resolve) => leaveProblem(() => resolve(true))),
       abortLoad,
+      isLoadActive: () => workspaceLoadActiveRef.current,
       showHomeChooser: tab.kind === "home" ? showHomeChooser : undefined,
     });
     return () => setWorkspaceApi(tab.id, null);

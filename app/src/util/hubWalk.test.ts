@@ -158,4 +158,36 @@ describe("walkSyncInk (stage F)", () => {
     vi.doUnmock("./padHub");
     vi.resetModules();
   });
+
+  it("fails the walk when a digest page is missing from the GET body", async () => {
+    // Strict pull used to `continue` on a named page with no payload, so the
+    // walk could still reach Synced with strokes that never landed here.
+    vi.resetModules();
+    stubStores([]);
+    vi.doMock("./padHub", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./padHub")>()),
+      loadPadHub: () => ({ url: "http://hub.test", token: "t" }),
+    }));
+    const { walkSyncInk: walk } = await import("./hubWalk");
+
+    const client = {
+      getInkPages: vi.fn().mockResolvedValue([]),
+      putInkPage: vi.fn(),
+    } as unknown as LcClient;
+
+    await expect(
+      walk(
+        client,
+        pad(),
+        {
+          ...emptySnapshot,
+          inkDigests: [{ kind: "annotate", key: "p1", page_id: 2, updated_at: 50 }],
+        },
+        0,
+      ),
+    ).rejects.toThrow(/missing from the hub download/);
+    vi.doUnmock("./inkPageStore");
+    vi.doUnmock("./padHub");
+    vi.resetModules();
+  });
 });

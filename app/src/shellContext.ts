@@ -162,6 +162,14 @@ export interface WorkspaceApi {
    */
   abortLoad: () => Promise<void>;
   /**
+   * True while this workspace's open is still in flight.
+   *
+   * Chip close must abort rather than ask to save a document that never
+   * landed. Overlay Cancel already goes through `abortLoad`; this is how
+   * the × on the chip does the same.
+   */
+  isLoadActive: () => boolean;
+  /**
    * Home chip while Practice (or an entry dialog) is up: back to the cards.
    * Other workspaces omit this.
    */

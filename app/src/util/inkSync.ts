@@ -244,7 +244,16 @@ export async function syncInkPages(
       const bytesBy = new Map(bytes.map((row) => [row.page_id, row]));
       for (const digest of toPull) {
         const full = bytesBy.get(digest.page_id);
-        if (!full?.gz) continue;
+        if (!full?.gz) {
+          // A truncated GET used to `continue` here, so the walk could still
+          // reach Synced with strokes named by the digest but never written.
+          if (strict) {
+            throw new Error(
+              `Ink page ${digest.page_id} was missing from the hub download`,
+            );
+          }
+          continue;
+        }
         await writeInkPage(docKey, full);
       }
     }

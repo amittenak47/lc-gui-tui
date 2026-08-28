@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { isInkConflict, remoteWins } from "./inkSync";
 import {
@@ -95,5 +95,59 @@ describe("ink conflict banner", () => {
 
   it("says nothing when nothing collided", () => {
     expect(inkConflictMessage([])).toBeNull();
+  });
+});
+
+describe("syncInkPages strict pull", () => {
+  afterEach(() => {
+    vi.doUnmock("./inkPageStore");
+    vi.doUnmock("./padHub");
+    vi.resetModules();
+  });
+
+  async function loadSync(opts: { hub: boolean }) {
+    vi.resetModules();
+    vi.doMock("./padHub", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./padHub")>()),
+      loadPadHub: () => (opts.hub ? { url: "http://hub.test", token: "t" } : null),
+    }));
+    vi.doMock("./inkPageStore", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./inkPageStore")>()),
+      getInkPageRecords: () => Promise.resolve([]),
+    }));
+    return import("./inkSync");
+  }
+
+  it("throws in strict mode when a digest page has no payload", async () => {
+    const { syncInkPages } = await loadSync({ hub: true });
+    const client = {
+      getInkPages: vi.fn().mockResolvedValue([]),
+      putInkPage: vi.fn(),
+    };
+    await expect(
+      syncInkPages(
+        client as never,
+        [{ kind: "annotate", key: "p1", page_id: 2, updated_at: 50 }],
+        [{ kind: "annotate", key: "p1" }],
+        0,
+        { strict: true },
+      ),
+    ).rejects.toThrow(/missing from the hub download/);
+  });
+
+  it("swallows a missing page when the background ping is not strict", async () => {
+    const { syncInkPages } = await loadSync({ hub: true });
+    const client = {
+      getInkPages: vi.fn().mockResolvedValue([]),
+      putInkPage: vi.fn(),
+    };
+    await expect(
+      syncInkPages(
+        client as never,
+        [{ kind: "annotate", key: "p1", page_id: 2, updated_at: 50 }],
+        [{ kind: "annotate", key: "p1" }],
+        0,
+      ),
+    ).resolves.toEqual([]);
   });
 });
