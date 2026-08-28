@@ -133,7 +133,16 @@ export async function walkSyncInk(
       }
     }
   }
-  await syncInkPages(client, digests, [{ kind: pad.kind, key: pad.id }], since);
+  /*
+   * Strict: a transfer that failed must fail the walk.
+   *
+   * This used to swallow both directions and return "ok" regardless, so a
+   * hub that went away mid-stage still ended the walk on "Synced" with the
+   * strokes still only on one device.
+   */
+  await syncInkPages(client, digests, [{ kind: pad.kind, key: pad.id }], since, {
+    strict: true,
+  });
   return { outcome: "ok" };
 }
 

@@ -126,6 +126,11 @@ async function writeInkPage(
  * the reader keeps, these converge the two sides to it so the next walk sees
  * agreement instead of the same fight again. They are per-pad, not per-page,
  * because ink stays "whole pane" — nobody has answered for strokes yet.
+ *
+ * These throw. Both used to swallow their transfers — a failed download became
+ * an empty list of pages and a failed upload was counted as one anyway — so a
+ * reader who resolved a conflict over their handwriting, and moved nothing,
+ * was told "Synced". A walk that cannot move the strokes has to say so.
  */
 
 /** Take the hub's copies: overwrite this device's pages from what it holds. */
@@ -134,7 +139,7 @@ export async function pullInkPagesOverLocal(
   kind: InkPadKind,
   key: string,
 ): Promise<number> {
-  const bytes = await client.getInkPages(kind, key).catch(() => [] as InkPageDto[]);
+  const bytes = await client.getInkPages(kind, key);
   const docKey = inkDocKey(kind, key);
   let written = 0;
   for (const full of bytes) {
@@ -156,15 +161,14 @@ export async function pushInkPagesToHub(
   for (const row of localRows) {
     const gz = await gzOf(row);
     if (!gz) continue;
-    await client
-      .putInkPage({
-        kind,
-        key,
-        page_id: row.pageId,
-        updated_at: row.updatedAt,
-        gz: bytesToB64(gz),
-      })
-      .catch(() => undefined);
+    await client.putInkPage({
+      kind,
+      key,
+      page_id: row.pageId,
+      updated_at: row.updatedAt,
+      gz: bytesToB64(gz),
+    });
+    // Counted after the write, not before it.
     pushed++;
   }
   return pushed;
@@ -176,13 +180,21 @@ export async function pushInkPagesToHub(
  * The digest is on the ping and carries no strokes, so a quiet fifteen seconds
  * costs one request and moves nothing. Bytes are fetched per pad, and only for
  * pads that actually have a page to move.
+ *
+ * `strict` decides what a failed transfer means. The background ping runs every
+ * fifteen seconds and swallows them: a page that did not move this time moves
+ * next time, and there is nobody to tell. The Sync walk is a decision someone
+ * made, once, and reports an outcome — so there it throws, and the pill parks
+ * on Ink instead of walking on to "Synced" over strokes that never left.
  */
 export async function syncInkPages(
   client: LcClient,
   digests: InkPageDigestDto[],
   pads: Array<{ kind: InkPadKind; key: string }>,
   since: number,
+  opts: { strict?: boolean } = {},
 ): Promise<InkConflict[]> {
+  const strict = opts.strict === true;
   if (!loadPadHub()) return [];
   const conflicts: InkConflict[] = [];
   const byPad = new Map<string, InkPageDigestDto[]>();
@@ -226,7 +238,9 @@ export async function syncInkPages(
     });
 
     if (toPull.length > 0) {
-      const bytes = await client.getInkPages(pad.kind, pad.key).catch(() => [] as InkPageDto[]);
+      const bytes = strict
+        ? await client.getInkPages(pad.kind, pad.key)
+        : await client.getInkPages(pad.kind, pad.key).catch(() => [] as InkPageDto[]);
       const bytesBy = new Map(bytes.map((row) => [row.page_id, row]));
       for (const digest of toPull) {
         const full = bytesBy.get(digest.page_id);
@@ -240,15 +254,15 @@ export async function syncInkPages(
       if (remote && remote.updated_at >= row.updatedAt) continue;
       const gz = await gzOf(row);
       if (!gz) continue;
-      await client
-        .putInkPage({
-          kind: pad.kind,
-          key: pad.key,
-          page_id: row.pageId,
-          updated_at: row.updatedAt,
-          gz: bytesToB64(gz),
-        })
-        .catch(() => undefined);
+      const put = client.putInkPage({
+        kind: pad.kind,
+        key: pad.key,
+        page_id: row.pageId,
+        updated_at: row.updatedAt,
+        gz: bytesToB64(gz),
+      });
+      if (strict) await put;
+      else await put.catch(() => undefined);
     }
   }
   return conflicts;

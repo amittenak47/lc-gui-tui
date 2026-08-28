@@ -95,3 +95,67 @@ describe("snapshotHub", () => {
     expect(snap.goneEdges).toEqual(["e2"]);
   });
 });
+
+describe("walkSyncInk (stage F)", () => {
+  /*
+   * The ink page store is IndexedDB; these tests only need the *transfer* to
+   * fail, so the store is stubbed to hold one dirty page and nothing else.
+   */
+  function stubStores(local: Array<{ pageId: number; updatedAt: number }>) {
+    vi.doMock("./inkPageStore", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./inkPageStore")>()),
+      getInkPageRecords: () =>
+        Promise.resolve(
+          local.map((row) => ({ ...row, gz: new Uint8Array([1, 2, 3]) })),
+        ),
+      writeInkPage: () => Promise.resolve(),
+    }));
+  }
+
+  it("fails the walk when the hub will not take the strokes", async () => {
+    // Both directions used to be swallowed, and the stage returned "ok"
+    // regardless — so a hub that went away mid-stage still ended the walk on
+    // "Synced" with the handwriting still only on this device.
+    vi.resetModules();
+    stubStores([{ pageId: 1, updatedAt: 900 }]);
+    vi.doMock("./padHub", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./padHub")>()),
+      loadPadHub: () => ({ url: "http://hub.test", token: "t" }),
+    }));
+    const { walkSyncInk: walk } = await import("./hubWalk");
+
+    const client = {
+      getInkPages: vi.fn().mockResolvedValue([]),
+      putInkPage: vi.fn().mockRejectedValue(new Error("hub went away")),
+    } as unknown as LcClient;
+
+    await expect(
+      walk(client, pad(), emptySnapshot, 0),
+    ).rejects.toThrow("hub went away");
+    vi.doUnmock("./inkPageStore");
+    vi.doUnmock("./padHub");
+    vi.resetModules();
+  });
+
+  it("reports ok when every page moved", async () => {
+    vi.resetModules();
+    stubStores([{ pageId: 1, updatedAt: 900 }]);
+    vi.doMock("./padHub", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./padHub")>()),
+      loadPadHub: () => ({ url: "http://hub.test", token: "t" }),
+    }));
+    const { walkSyncInk: walk } = await import("./hubWalk");
+
+    const client = {
+      getInkPages: vi.fn().mockResolvedValue([]),
+      putInkPage: vi.fn().mockResolvedValue(undefined),
+    } as unknown as LcClient;
+
+    await expect(walk(client, pad(), emptySnapshot, 0)).resolves.toEqual({
+      outcome: "ok",
+    });
+    vi.doUnmock("./inkPageStore");
+    vi.doUnmock("./padHub");
+    vi.resetModules();
+  });
+});
