@@ -6,6 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — the pen wheel and the preset editor make room in a split
+
+- **Both draw a quarter smaller while a split is open.** They are sized for a
+  pane that is the whole window; split one tab against another and the canvas
+  halves while the 192px dial and the 640px editor sheet do not, so on a tablet
+  they cover most of the half you are drawing in.
+- **Scaled, not reflowed.** Everything in both surfaces is proportioned against
+  everything else — wedge angles, the hub, the spec card's columns, the
+  editor's sliders — so a narrower layout would be a second design to keep
+  working. It is the same picture, smaller.
+- The wheel takes a `transform`, because it is placed by hand in viewport
+  pixels and a scale about its own centre leaves that centre where it was put;
+  its pointer maths already normalises by the dial's rendered width, so wedges
+  are hit where they are drawn. The editor takes `zoom`, because its transform
+  is already carrying the centring and the morph origin. Its viewport clamps
+  divide by the scale, so "no wider than the window" still means the window.
+
+
 ### Fixed — Copy and Google come back to the selection sheet on a PDF
 
 - **A hold-drag over a PDF page offered only Annotate.** Copy and Google are

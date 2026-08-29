@@ -33,6 +33,7 @@ import { StatusBanner } from "./components/StatusBanner";
 import { SmartTips } from "./components/SmartTips";
 import { SplitFocusToast } from "./components/SplitFocusToast";
 import { SplitSash } from "./components/SplitSash";
+import { applyInkChromeScale } from "./util/chromeScale";
 import { TabStrip } from "./components/TabStrip";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
 import { saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
@@ -777,6 +778,13 @@ export function App() {
   useLayoutEffect(() => {
     const main = mainRef.current;
     if (!main) return;
+    /*
+     * The pen's floating chrome is not in the pane — it portals to the body —
+     * so it rides the document element rather than `<main>`. Outside the sash
+     * guard: which layout we are in does not change while a sash is dragged,
+     * and re-scaling the wheel mid-drag would be a strange thing to watch.
+     */
+    applyInkChromeScale(document.documentElement, Boolean(activeGroup));
     if (document.body.dataset.lcSashDrag) return;
     if (!activeGroup) {
       main.style.removeProperty("--lc-split-a");

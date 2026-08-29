@@ -98,6 +98,20 @@ function localFromSvgPointer(event: React.PointerEvent<SVGElement>): { lx: numbe
   };
 }
 
+/**
+ * Where the editor morphs out of when no wedge rect was captured: the hub.
+ *
+ * Measured rather than derived from {@link WHEEL_R}, because the dial is drawn
+ * at `--lc-chrome-scale` and the rendered box is the only one that agrees with
+ * the viewport coordinates a morph origin is in.
+ */
+function hubRectFallback(root: HTMLElement | null): DOMRect {
+  const box = root?.getBoundingClientRect();
+  const cx = (box?.left ?? 0) + (box?.width ?? WHEEL_R * 2) / 2;
+  const cy = (box?.top ?? 0) + (box?.height ?? WHEEL_R * 2) / 2;
+  return new DOMRect(cx - 16, cy - 16, 32, 32);
+}
+
 function wedgeFill(kind: InkPresetKind, snap: InkWedgeSnapshot | null): string {
   if (!snap) return "transparent";
   if (kind === "eraser" && isEraserWedge(snap)) return eraserWedgeFill(snap.eraserWidth);
@@ -264,15 +278,7 @@ export function InkToolWheel({
     holdIndexRef.current = null;
     if (opts.confirm && index != null && !confirmedHoldRef.current) {
       confirmedHoldRef.current = true;
-      const from =
-        opts.from ??
-        holdFromRef.current ??
-        new DOMRect(
-          (rootRef.current?.getBoundingClientRect().left ?? 0) + WHEEL_R - 16,
-          (rootRef.current?.getBoundingClientRect().top ?? 0) + WHEEL_R - 16,
-          32,
-          32,
-        );
+      const from = opts.from ?? holdFromRef.current ?? hubRectFallback(rootRef.current);
       onEditRef.current(kindRef.current, index, from);
     }
     holdFromRef.current = null;
