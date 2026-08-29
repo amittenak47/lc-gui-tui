@@ -10818,9 +10818,35 @@ button.lc-row-selected:hover:not(:disabled) {
   margin-top: 8px;
 }
 
+/*
+ * Above every panel, because it is the one thing you have to answer.
+ *
+ * This sat at 140, under the doc sheets (231) and the mark cards the conflict
+ * split opens (233) and the menus at 240 — so a card opened before the probe
+ * came back was drawn over a modal that blocks the whole app, and the buttons
+ * under it could not be reached. Below the lightbox and the tips, which are
+ * their own global layers.
+ */
 .lc-server-gate {
-  z-index: 140;
+  z-index: 250;
   /* Doodle sits behind the compact card; card keeps pointer events. */
+}
+
+/*
+ * This one blurs on a touch device, unlike the panels above.
+ *
+ * The rule that turns `backdrop-filter` off there is about Settings: it opens
+ * over a live board, stays open while you work in it, and re-filtering
+ * Excalidraw's canvases every frame costs the whole frame budget. None of that
+ * is true here. The gate is a boot-time modal with nothing animating behind it
+ * and nothing to do but answer it, so it pays for the blur once.
+ */
+@media (pointer: coarse) {
+  .lc-server-gate {
+    background: rgb(0 0 0 / 35%);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
 }
 
 .lc-server-gate-enter {
