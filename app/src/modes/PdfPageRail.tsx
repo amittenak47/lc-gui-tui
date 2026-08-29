@@ -93,8 +93,8 @@ export function PdfPageRail({
   useEffect(() => {
     return subscribeDocCameraLive((live) => {
       if (!live) setIdleTick((tick) => tick + 1);
-    });
-  }, []);
+    }, filmScope);
+  }, [filmScope]);
 
   useEffect(() => {
     const strip = stripRef.current;
@@ -189,7 +189,7 @@ export function PdfPageRail({
     let cancelled = false;
     const needed = thumbWindow(currentPage, count, visibleRef.current);
     publishPdfFilmThumbWanted(filmScope, needed);
-    if (isDocCameraLive()) {
+    if (isDocCameraLive(filmScope)) {
       return () => {
         cancelled = true;
       };
@@ -209,7 +209,7 @@ export function PdfPageRail({
         });
       };
       for (const page of needed) {
-        if (cancelled || isDocCameraLive()) return;
+        if (cancelled || isDocCameraLive(filmScope)) return;
         const isFocus = page === currentPage;
         if (!isFocus && (thumbsRef.current.has(page) || inflightRef.current.has(page))) {
           continue;

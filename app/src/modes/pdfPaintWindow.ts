@@ -143,6 +143,16 @@ export function pdfPaintShouldWaitForLanding(C: number, lastLaidOut: number): bo
 }
 
 /**
+ * Who may call `page.render` on the shared pdf.js worker.
+ *
+ * Parked (`paused`) tears the observer down. Unfocused-but-visible
+ * (`holdDecode`) keeps bitmaps and only yields the worker to the focused tab.
+ */
+export function pdfMayTakeWorker(paused: boolean, holdDecode: boolean): boolean {
+  return !paused && !holdDecode;
+}
+
+/**
  * True when a landing hold can drop: this camera sample is actually on the
  * aimed page. A sample still on page 1 after jumpToPdfPage wrote page 47 must
  * not publish C or move the HTML slot.

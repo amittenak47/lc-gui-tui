@@ -1844,7 +1844,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * tool-change effect below releases the finger whether or not one was down.
    */
   const docFlagsRef = useRef<DocFlagHolds | null>(null);
-  if (!docFlagsRef.current) docFlagsRef.current = makeDocFlagHolds();
+  if (!docFlagsRef.current) docFlagsRef.current = makeDocFlagHolds(filmScope || undefined);
   const docFlags = docFlagsRef.current;
   const applyVisualScrollNowRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
   const publishPdfFilmFromScrollRef = useRef<
@@ -1958,14 +1958,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (
         handPanningRef.current ||
         inertiaFrameRef.current ||
-        isDocCameraLive()
+        isDocCameraLive(filmScope)
       ) {
         return;
       }
       rasterInkRef.current?.setCameraMoving(false);
       commitVisualScrollRef.current();
     }, CAMERA_IDLE_TEARDOWN_MS);
-  }, []);
+  }, [filmScope]);
   const pulseCameraMotionRef = useRef(pulseCameraMotion);
   const readScrollRef = useRef<() => { scrollX: number; scrollY: number; zoom: number }>(
     () => ({ scrollX: 0, scrollY: 0, zoom: 1 }),

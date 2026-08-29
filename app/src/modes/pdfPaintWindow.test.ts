@@ -6,6 +6,7 @@ import {
   pageNeedsDecode,
   pdfDecodeQueue,
   pdfLandingHoldClear,
+  pdfMayTakeWorker,
   pdfOuterPages,
   pdfPaintHole,
   pdfPaintShouldWaitForLanding,
@@ -123,6 +124,15 @@ describe("pdfDecodeQueue", () => {
         rest,
       ),
     ).toBe(false);
+  });
+});
+
+describe("pdfMayTakeWorker", () => {
+  it("yields the worker on a visible unfocused split pane, not only when parked", () => {
+    expect(pdfMayTakeWorker(false, false)).toBe(true);
+    expect(pdfMayTakeWorker(true, false)).toBe(false);
+    expect(pdfMayTakeWorker(false, true)).toBe(false);
+    expect(pdfMayTakeWorker(true, true)).toBe(false);
   });
 });
 

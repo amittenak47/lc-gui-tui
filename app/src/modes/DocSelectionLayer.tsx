@@ -338,6 +338,7 @@ export function DocSelectionLayer({
   onSubMarkLiveStart,
   paletteScope = "",
 }: DocSelectionLayerProps) {
+  const cameraScope = paletteScope || undefined;
   const hostRef = useRef<HTMLDivElement | null>(null);
   /**
    * The document body, and nothing else.
@@ -1779,7 +1780,7 @@ export function DocSelectionLayer({
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
       if (!horizontalScrollHost(target)) return;
-      if (isDocCameraLive()) {
+      if (isDocCameraLive(cameraScope)) {
         placementDeferred = true;
         return;
       }
@@ -1793,7 +1794,7 @@ export function DocSelectionLayer({
     };
     body.addEventListener("scroll", onHostScroll, { capture: true, passive: true });
     const onViewResize = () => {
-      if (isDocCameraLive()) {
+      if (isDocCameraLive(cameraScope)) {
         placementDeferred = true;
         return;
       }
@@ -1833,14 +1834,14 @@ export function DocSelectionLayer({
 
     let observing = false;
     const observer = new MutationObserver(() => {
-      if (isDocCameraLive()) {
+      if (isDocCameraLive(cameraScope)) {
         placementDeferred = true;
         return;
       }
       if (frame != null) return;
       frame = requestAnimationFrame(() => {
         frame = null;
-        if (isDocCameraLive()) {
+        if (isDocCameraLive(cameraScope)) {
           placementDeferred = true;
           return;
         }
@@ -1861,7 +1862,7 @@ export function DocSelectionLayer({
         frame = null;
       }
     };
-    if (!isDocCameraLive()) startObserver();
+    if (!isDocCameraLive(cameraScope)) startObserver();
     else placementDeferred = true;
 
     const unsubCamera = subscribeDocCameraLive((live) => {
@@ -1874,7 +1875,7 @@ export function DocSelectionLayer({
       if (!placementDeferred) return;
       placementDeferred = false;
       place();
-    });
+    }, cameraScope);
     return () => {
       stopObserver();
       unsubCamera();
@@ -1886,7 +1887,7 @@ export function DocSelectionLayer({
     };
     // Intentionally omit `children`: identity churn on every App render re-bound
     // the observer and re-ran place(), which felt like a constant scroll ping.
-  }, [footnotes, enabled, highlighting, placeExisting, markScale]);
+  }, [footnotes, enabled, highlighting, placeExisting, markScale, cameraScope]);
 
 
 
