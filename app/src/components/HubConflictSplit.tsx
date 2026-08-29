@@ -454,7 +454,17 @@ export function HubConflictSplit({
     local: null,
     server: null,
   });
-  const hubOpen = focusedId !== INK_ROW_ID && rows.some((row) => row.id === focusedId);
+  /*
+   * Which panes are showing a card, on the same rule the marks follow: the
+   * focused row, on a side that has been kept.
+   */
+  const hubSides: Side[] = (["local", "server"] as const).filter(
+    (side) =>
+      focusedId !== INK_ROW_ID &&
+      rows.some((row) => row.id === focusedId) &&
+      pickOf(picks, focusedId, side) === true,
+  );
+  const hubOpen = hubSides.length > 0;
   useLayoutEffect(() => {
     if (!hubOpen) {
       setHubAnchors((current) =>
@@ -520,7 +530,8 @@ export function HubConflictSplit({
     let stop = 0;
     const settle = () => {
       setHubAnchors({ local: rectFor("local"), server: rectFor("server") });
-      return onMark("local") && onMark("server");
+      // Only the sides actually showing a card have a mark to wait for.
+      return hubSides.every(onMark);
     };
     if (settle()) return;
     const tick = () => {
@@ -535,7 +546,8 @@ export function HubConflictSplit({
       cancelAnimationFrame(frame);
       window.clearTimeout(stop);
     };
-  }, [hubOpen, focusedId]);
+    // `picks` too: keeping a side is what puts its card on screen.
+  }, [hubOpen, focusedId, picks]);
 
   const renderPane = (side: Side) => {
     const body = side === "local" ? conflict.local : conflict.server;
@@ -560,8 +572,24 @@ export function HubConflictSplit({
     const keptNotes = rows
       .map((row) => (pickOf(picks, row.id, side) === true ? (side === "local" ? row.local : row.server) : null))
       .filter((note): note is DocFootnote => Boolean(note));
+    /*
+     * The card follows the tick too.
+     *
+     * It is the same change as the mark on the page, described in full, so it
+     * answers to the same decision: a side that has not been kept shows
+     * neither. Opening both cards for a row nobody had answered for put two
+     * panels over two pages that were deliberately blank, and — since there
+     * was no mark to sit under — left them floating in the middle of their
+     * columns as well.
+     *
+     * Focus still chooses *which* row's card, so there is one per pane rather
+     * than one per kept mark.
+     */
     const focusedRow = focusedId === INK_ROW_ID ? null : rows.find((row) => row.id === focusedId);
-    const focusedNote = focusedRow ? (side === "local" ? focusedRow.local : focusedRow.server) : null;
+    const focusedNote =
+      focusedRow && pickOf(picks, focusedRow.id, side) === true
+        ? (side === "local" ? focusedRow.local : focusedRow.server)
+        : null;
     return (
       <section className="lc-hub-conflict-pane" data-side={side} data-verdict={verdict}>
         <header className="lc-hub-conflict-pane-head">
