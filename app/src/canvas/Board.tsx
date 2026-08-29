@@ -63,6 +63,7 @@ import {
   noteCameraBusy,
   noteCameraIdlePulse,
 } from "../util/cameraBusy";
+import { noteReadingPointerDown } from "../util/inputLatency";
 import { traceOpen } from "../util/messageOf";
 import { ANNOTATE_PAGE_W, ANNOTATE_REGION, MD_INK_MIN_PAGE_H, MD_INK_TAIL_PAD, buildAnnotateTemplate, isAnnotatePageFrame, stampAnnotateFrameMeta } from "../templates/annotate";
 import {
@@ -3995,6 +3996,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!canOwnScroll()) return;
       if (event.button !== 0) return;
       if (!isScrollSurface(event.target)) return;
+      /*
+       * First thing, before any work of our own: everything between the
+       * platform's timestamp and this line is delay the reader felt as the
+       * page not moving, and freezing the PDF pump below cannot give any of
+       * it back. See `util/inputLatency`.
+       */
+      noteReadingPointerDown(event);
       /*
        * Live underline/highlight drag owns this finger. The panel being open
        * must not freeze the page — a mark taller than the viewport needs pan.
