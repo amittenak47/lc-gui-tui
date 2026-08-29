@@ -7,9 +7,12 @@ import {
   pdfDecodeQueue,
   pdfLandingHoldClear,
   pdfMayTakeWorker,
+  pdfLiveCanvasCap,
   pdfOuterPages,
   pdfPaintHole,
   pdfPaintShouldWaitForLanding,
+  pdfQueueForHoldDecode,
+  pdfWantedPages,
   pdfPreloadPages,
   pdfRestPages,
   pdfShouldPreempt,
@@ -128,11 +131,41 @@ describe("pdfDecodeQueue", () => {
 });
 
 describe("pdfMayTakeWorker", () => {
-  it("yields the worker on a visible unfocused split pane, not only when parked", () => {
+  it("only parks drop the worker; a visible unfocused pane may still decode 0.25", () => {
     expect(pdfMayTakeWorker(false, false)).toBe(true);
     expect(pdfMayTakeWorker(true, false)).toBe(false);
-    expect(pdfMayTakeWorker(false, true)).toBe(false);
+    expect(pdfMayTakeWorker(false, true)).toBe(true);
     expect(pdfMayTakeWorker(true, true)).toBe(false);
+  });
+});
+
+describe("pdfWantedPages", () => {
+  it("keeps every sheet in the hole, not only C±3", () => {
+    expect(pdfWantedPages(17, 200, [12, 13, 14, 15, 16, 17, 18, 19, 20])).toEqual([
+      12, 13, 14, 15, 16, 17, 18, 19, 20,
+    ]);
+    expect(pdfWantedPages(50, 200, [50])).toEqual([47, 48, 49, 50, 51, 52, 53]);
+  });
+});
+
+describe("pdfLiveCanvasCap", () => {
+  it("is the ring at reading zoom and the hole when zoomed out, capped at 12", () => {
+    expect(pdfLiveCanvasCap(1)).toBe(7);
+    expect(pdfLiveCanvasCap(12)).toBe(12);
+    expect(pdfLiveCanvasCap(20)).toBe(12);
+  });
+});
+
+describe("pdfQueueForHoldDecode", () => {
+  it("drops rest-2 and pages outside the hole", () => {
+    const queue = [
+      { page: 50, target: PDF_REST_SCALE },
+      { page: 50, target: PDF_PREVIEW_SCALE },
+      { page: 60, target: PDF_PREVIEW_SCALE },
+    ];
+    expect(pdfQueueForHoldDecode(queue, [50, 51])).toEqual([
+      { page: 50, target: PDF_PREVIEW_SCALE },
+    ]);
   });
 });
 
