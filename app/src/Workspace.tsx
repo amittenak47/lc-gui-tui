@@ -2224,15 +2224,25 @@ export function Workspace({
     const marks = isAnnotate(problem) ? footnoteRevision(annotateFootnotesRef.current) : "";
     lastTickInkOpsRef.current = inkMix;
 
+    const persisted =
+      lastSavedHashRef.current === hash && lastSavedMarksRef.current === marks;
+
     if (isLocalPad(problem)) {
       const contentHash = padContentFingerprint(elements, inkMix);
       const untouched = isAnnotate(problem)
         ? annotatePristineHashRef.current === contentHash &&
           footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current
         : whiteboardPristineHashRef.current === contentHash;
-      // The tab's dot rides on the comparison the autosave is already making;
-      // fingerprinting the scene a second time for a 5px dot would not be.
-      patchTab(tab.id, { dirty: !untouched });
+      /*
+       * The chip says "Unsaved changes". That is last-write, not session open.
+       *
+       * Discard still uses the session baseline (`annotateUntouched` /
+       * `whiteboardUntouched`). Mixing those here left the tab dirty after
+       * every successful autosave, for the whole session.
+       */
+      patchTab(tab.id, {
+        dirty: !untouched && (autosaveMs <= 0 || !persisted),
+      });
       if (
         !untouched &&
         (lastEditSeqHashRef.current !== hash || lastEditSeqMarksRef.current !== marks)
@@ -2248,7 +2258,7 @@ export function Workspace({
 
     if (autosaveMs <= 0) return;
 
-    if (lastSavedHashRef.current === hash && lastSavedMarksRef.current === marks) {
+    if (persisted) {
       return;
     }
 
@@ -2267,9 +2277,6 @@ export function Workspace({
       const untouched =
         annotatePristineHashRef.current === padContentFingerprint(elements, inkMix) &&
         footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current;
-      // The tab's dot rides on the comparison the autosave is already making;
-      // fingerprinting the scene a second time for a 5px dot would not be.
-      patchTab(tab.id, { dirty: !untouched });
       if (untouched) {
         lastSavedHashRef.current = hash;
         lastSavedMarksRef.current = marks;
@@ -2285,6 +2292,7 @@ export function Workspace({
       // refused. One attempt per change is the most that can ever help.
       lastSavedHashRef.current = hash;
       lastSavedMarksRef.current = marks;
+      patchTab(tab.id, { dirty: false });
       const session = footnoteBoardSessionRef.current;
       const docId = annotateDocIdRef.current;
       if (session && docId) {
@@ -2372,7 +2380,6 @@ export function Workspace({
        */
       const untouched =
         whiteboardPristineHashRef.current === padContentFingerprint(elements, inkMix);
-      patchTab(tab.id, { dirty: !untouched });
       if (untouched) {
         lastSavedHashRef.current = hash;
         return;
@@ -2383,6 +2390,7 @@ export function Workspace({
     if (!isLocalPad(problem)) patchTab(tab.id, { dirty: true });
     if (isWhiteboard(problem)) {
       lastSavedHashRef.current = hash;
+      patchTab(tab.id, { dirty: false });
       const fnBind = footnoteBoardRef.current;
       if (fnBind) {
         void (async () => {
@@ -9628,6 +9636,7 @@ export function Workspace({
             annotateCode && "lc-annotating-code",
             pdfFilmOpen &&
               showing &&
+              active &&
               pdfNav &&
               pdfNav.count >= 2 &&
               "lc-has-pdf-film",
@@ -9897,7 +9906,7 @@ export function Workspace({
                       frameWidth={annotatePageWidth}
                       initialPage={pdfSessionPage || undefined}
                       paused={!showing || Boolean(hubConflictAsk)}
-                      idleThumbs={showing && pdfFilmOpen}
+                      idleThumbs={showing && active && pdfFilmOpen}
                       onMeasure={onMdInkMeasure}
                       onNav={setPdfNav}
                       onThumbRenderer={onPdfThumbRenderer}
@@ -9983,7 +9992,7 @@ export function Workspace({
             onToggleSheetLock={mobile ? onToggleSheetLock : undefined}
             pageFilm={
               pdfNav && pdfNav.count >= 2
-                ? { open: pdfFilmOpen, onToggle: togglePdfFilm }
+                ? { open: pdfFilmOpen && active, onToggle: togglePdfFilm }
                 : null
             }
             pdfFilmPublish={active}
@@ -9994,7 +10003,7 @@ export function Workspace({
             }
           />
           ) : null}
-          {showing && pdfFilmOpen && pdfNav && pdfNav.count >= 2 && (
+          {showing && active && pdfFilmOpen && pdfNav && pdfNav.count >= 2 && (
             <PdfPageRail
               filmScope={tab.id}
               count={pdfNav.count}

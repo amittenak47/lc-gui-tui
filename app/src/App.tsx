@@ -851,6 +851,12 @@ export function App() {
       // selected, so a no-op here left the problem list up instead of the cards.
       if (id === HOME_TAB_ID) apisRef.current.get(HOME_TAB_ID)?.showHomeChooser?.();
       if (id === state.activeId) return;
+      // The strip is chrome for the focused book only. Leaving it open as a
+      // global meant both split PDFs filled thumbs at once — a 44 MB file
+      // next to a short one. Clicking the other tab (or its pane) closes it;
+      // "Show page previews" on the newly focused book turns it back on.
+      // Unpersisted, so the next launch still follows the last explicit toggle.
+      setPdfFilmOpen(false);
       setMissingTab(null);
       setError(null);
       promote(id);
