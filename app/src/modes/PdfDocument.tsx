@@ -92,6 +92,9 @@ import {
   pdfPaintHole,
   pdfPaintShouldWaitForLanding,
   pdfMayTakeWorker,
+  pdfLiveCanvasCap,
+  pdfQueueForHoldDecode,
+  pdfWantedPages,
   pdfRestPages,
   pdfShouldPreempt,
 } from "./pdfPaintWindow";
@@ -110,7 +113,6 @@ import {
   PDF_PAGEFILE,
   PDF_PAINT_INFLIGHT,
   PDF_PATH_FILL,
-  PDF_PREVIEW_CACHE,
   PDF_PREVIEW_RADIUS,
   PDF_PREVIEW_SCALE,
   PDF_RENDER_SCALE,
@@ -141,6 +143,8 @@ export {
   pdfPaintHole,
   pdfPaintShouldWaitForLanding,
   pdfMayTakeWorker,
+  pdfLiveCanvasCap,
+  pdfWantedPages,
   pdfRestPages,
 } from "./pdfPaintWindow";
 export { PDF_PREVIEW_CACHE, PDF_PREVIEW_RADIUS } from "../perfPreset";
@@ -173,12 +177,6 @@ const PAGE_VISIBLE_MARGIN = "20% 0px";
 export { PDF_SESSION_CAP } from "./pdfPageSession";
 
 const PAGE_WINDOW_RADIUS = PDF_PREVIEW_RADIUS;
-
-/**
- * Hard cap on GPU page slots. Matches the 1× ring so extras are the
- * far edge that just left C±R, not the whole book.
- */
-const MAX_LIVE_CANVASES = PDF_PREVIEW_CACHE;
 
 /**
  * How many page bitmaps the pump may decode at once.
@@ -626,10 +624,13 @@ export function PdfDocument({
     const was = wasHoldDecodeRef.current;
     wasHoldDecodeRef.current = holdDecode;
     if (holdDecode) {
-      try {
-        inFlightPaintRef.current?.cancel();
-      } catch {
-        /* already finished */
+      const flight = inFlightPaintRef.current;
+      if (flight && flight.target > PDF_PREVIEW_SCALE + 1e-9) {
+        try {
+          flight.cancel();
+        } catch {
+          /* already finished */
+        }
       }
       return;
     }
@@ -874,10 +875,15 @@ export function PdfDocument({
     visibleRef.current = new Set();
     visibleRatioRef.current = new Map();
 
-    /** Sliding 1× ring around live C — not the flick-end guess. */
+    /** Sliding ring plus whatever the viewport can actually see. */
     const rebuild = () => {
       const wanted = new Set(
-        pdfOuterPages(peekPdfFilmCurrent(filmScope), last, paintRadiusRef.current),
+        pdfWantedPages(
+          peekPdfFilmCurrent(filmScope),
+          last,
+          peekPdfIntersectingPages(filmScope),
+          paintRadiusRef.current,
+        ),
       );
       const before = wantedRef.current;
       const same =
@@ -981,21 +987,21 @@ export function PdfDocument({
     let lastBlitLogAt = 0;
     const blitOuterFromLru = () => {
       const C = peekPdfFilmCurrent(filmScope);
-      const outer = pdfOuterPages(C, last, paintRadiusRef.current);
-      wantedRef.current = new Set(outer);
+      const hole = peekPdfIntersectingPages(filmScope);
+      const wantedList = pdfWantedPages(C, last, hole, paintRadiusRef.current);
+      wantedRef.current = new Set(wantedList);
       const rest = sharpPages(filmScope, last);
       const lru = sheetLruRef.current;
       const live = isDocCameraLive(filmScope);
-      const hole = peekPdfIntersectingPages(filmScope);
       const blitIds = [
-        ...new Set([...outer, ...hole, ...peekPdfPreloadPages(filmScope), C]),
+        ...new Set([...wantedList, ...hole, ...peekPdfPreloadPages(filmScope), C]),
       ];
       if (live) {
         const now = performance.now();
         if (now - lastBlitLogAt >= 250) {
           lastBlitLogAt = now;
           console.log(
-            `[lc:pdf-blit] C=${C} live=1 blit=${blitIds.length} outer=${outer.length}`,
+            `[lc:pdf-blit] C=${C} live=1 blit=${blitIds.length} wanted=${wantedList.length}`,
           );
         }
       }
@@ -1486,18 +1492,20 @@ export function PdfDocument({
     const currentQueue = () => {
       const last = pagesRef.current.at(-1)?.pageNumber ?? 1;
       const C = peekPdfFilmCurrent(filmScope);
-      const outerList = pdfOuterPages(C, last, paintRadiusRef.current);
-      const outer = new Set(outerList);
-      wantedRef.current = outer;
-      const rest = sharpPages(filmScope, last);
       const visibleRaw = peekPdfIntersectingPages(filmScope);
       const visible = pdfPaintHole(C, visibleRaw);
+      const wantedList = pdfWantedPages(C, last, visibleRaw, paintRadiusRef.current);
+      const outer = new Set(wantedList);
+      wantedRef.current = outer;
+      const rest = holdDecodeRef.current ? new Set<number>() : sharpPages(filmScope, last);
       const fitOf = (n: number) =>
         pagesRef.current.find((page) => page.pageNumber === n)?.fit ?? 0;
       const scaleOf = (n: number) => sheetLruRef.current.lod(n);
-      const preload = peekPdfPreloadPages(filmScope);
+      const preload = holdDecodeRef.current ? [] : peekPdfPreloadPages(filmScope);
       let queue = pdfDecodeQueue(C, last, rest, outer, visible, scaleOf, fitOf, preload);
-      if (isDocCameraLive(filmScope)) {
+      if (holdDecodeRef.current) {
+        queue = pdfQueueForHoldDecode(queue, visible);
+      } else if (isDocCameraLive(filmScope)) {
         const hole = new Set(visible);
         const ahead = new Set(preload);
         queue = queue.filter(
@@ -1506,21 +1514,12 @@ export function PdfDocument({
             (hole.has(item.page) || ahead.has(item.page)),
         );
       }
-      return { outerList, rest, queue };
+      return { outerList: wantedList, rest, queue };
     };
 
     preemptPaintIfNeededRef.current = () => {
       thumbCancelRef.current();
       const flight = inFlightPaintRef.current;
-      if (holdDecodeRef.current) {
-        if (!flight) return;
-        try {
-          flight.cancel();
-        } catch {
-          /* already finished */
-        }
-        return;
-      }
       if (!flight) return;
       const { queue, rest } = currentQueue();
       const head = queue[0];
@@ -1577,11 +1576,13 @@ export function PdfDocument({
           if (disposedRef.current || pausedRef.current) return;
           if (!pdfMayTakeWorker(pausedRef.current, holdDecodeRef.current)) return;
 
+          const holeCount = peekPdfIntersectingPages(filmScope).length;
+          const canvasCap = pdfLiveCanvasCap(Math.max(holeCount, wantedRef.current.size));
           const idle = isCameraIdleForTeardown();
-          const overCap = paintedRef.current.size > MAX_LIVE_CANVASES;
+          const overCap = paintedRef.current.size > canvasCap;
           if (idle || overCap) {
             for (const n of extrasFarthestFirst()) {
-              if (!idle && paintedRef.current.size <= MAX_LIVE_CANVASES) break;
+              if (!idle && paintedRef.current.size <= canvasCap) break;
               if (isDocCameraLive(filmScope)) break;
               if (disposedRef.current) return;
               if (wantedRef.current.has(n)) continue;
@@ -1597,6 +1598,8 @@ export function PdfDocument({
             await Promise.all(batch.map((item) => paintOne(item.page, item.target)));
             continue;
           }
+
+          if (holdDecodeRef.current) return;
 
           if (isDocCameraLive(filmScope)) {
             await waitForPaintSignal(filmScope);

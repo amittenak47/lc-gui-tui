@@ -5,7 +5,12 @@
  * (Board publishes that list). Paint must not treat the guess as C.
  */
 
-import { PDF_PREVIEW_RADIUS, PDF_PREVIEW_SCALE, PDF_REST_SCALE } from "../perfPreset";
+import {
+  PDF_PREVIEW_CACHE,
+  PDF_PREVIEW_RADIUS,
+  PDF_PREVIEW_SCALE,
+  PDF_REST_SCALE,
+} from "../perfPreset";
 
 export { PDF_PREVIEW_CACHE, PDF_PREVIEW_RADIUS, PDF_PREVIEW_SCALE, PDF_REST_SCALE } from "../perfPreset";
 
@@ -145,11 +150,47 @@ export function pdfPaintShouldWaitForLanding(C: number, lastLaidOut: number): bo
 /**
  * Who may call `page.render` on the shared pdf.js worker.
  *
- * Parked (`paused`) tears the observer down. Unfocused-but-visible
- * (`holdDecode`) keeps bitmaps and only yields the worker to the focused tab.
+ * Parked (`paused`) tears the observer down. Unfocused-but-visible still
+ * decodes 0.25 for the hole — those sheets are on screen. `holdDecode` only
+ * strips rest-2 / path-fill so the focused tab keeps lossless.
  */
-export function pdfMayTakeWorker(paused: boolean, holdDecode: boolean): boolean {
-  return !paused && !holdDecode;
+export function pdfMayTakeWorker(paused: boolean, _holdDecode = false): boolean {
+  return !paused;
+}
+
+/** Keep GPU slots for C±R and every sheet actually in the viewport. */
+export function pdfWantedPages(
+  C: number,
+  lastPage: number,
+  intersecting: Iterable<number>,
+  R = PDF_PREVIEW_RADIUS,
+): number[] {
+  const wanted = new Set(pdfOuterPages(C, lastPage, R));
+  for (const n of pdfPaintHole(C, intersecting, R)) wanted.add(n);
+  return [...wanted].sort((a, b) => a - b);
+}
+
+/**
+ * Live canvases: at least the C±R ring, up to the hole, never the old ±12
+ * hitch (25 mixed-quality canvases).
+ */
+export const PDF_HOLE_CANVAS_CAP = 12;
+
+export function pdfLiveCanvasCap(holeCount: number): number {
+  const hole = Math.max(0, Math.floor(holeCount));
+  return Math.max(PDF_PREVIEW_CACHE, Math.min(PDF_HOLE_CANVAS_CAP, hole));
+}
+
+/** Unfocused split: 0.25 for the hole only — no rest-2, no path fill. */
+export function pdfQueueForHoldDecode(
+  queue: readonly { page: number; target: number }[],
+  hole: Iterable<number>,
+): { page: number; target: number }[] {
+  const on = hole instanceof Set ? hole : new Set(hole);
+  return queue.filter(
+    (item) =>
+      item.target <= PDF_PREVIEW_SCALE + 1e-9 && on.has(item.page),
+  );
 }
 
 /**
