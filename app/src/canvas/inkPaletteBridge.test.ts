@@ -82,4 +82,12 @@ describe("inkPaletteBridge", () => {
     expect(back).not.toHaveBeenCalled();
     expect(currentInkPalette(inkPaletteNow())).not.toEqual(["#111111"]);
   });
+
+  it("does not let one pane's unmount wipe the other's wheel", () => {
+    publishInkPalette(palette("#111111"), "local");
+    publishInkPalette(palette("#222222"), "server");
+    resetInkPaletteBridge("local");
+    expect(currentInkPalette(inkPaletteNow("server"))).toEqual(["#222222"]);
+    expect(currentInkPalette(inkPaletteNow("local"))).not.toEqual(["#111111"]);
+  });
 });

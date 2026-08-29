@@ -475,9 +475,26 @@ export function resetPdfFilmThumbWanted(scope: string): void {
 
 /** Session JPEG thumbs keyed by document content hash, then page number. */
 const thumbsByHash = new Map<string, Map<number, string>>();
+/** Hashes opened this session — IDB prune must not drop these. */
+const openedThumbHashes = new Set<string>();
+const thumbListenersByHash = new Map<string, Set<() => void>>();
+const thumbListenersAll = new Set<() => void>();
+
+function notifyThumbListeners(hash: string): void {
+  for (const listener of thumbListenersByHash.get(hash) ?? []) listener();
+  for (const listener of thumbListenersAll) listener();
+}
+
+function capDocThumbs(hash: string, doc: Map<number, string>, around: number): Map<number, string> {
+  if (doc.size <= PDF_FILM_CACHE) return doc;
+  const next = trimThumbCache(doc, around, [around], PDF_FILM_CACHE);
+  thumbsByHash.set(hash, next);
+  return next;
+}
 
 export function rememberPdfThumb(hash: string | null | undefined, page: number, url: string): void {
   if (!hash || !(page >= 1) || !url) return;
+  openedThumbHashes.add(hash);
   let doc = thumbsByHash.get(hash);
   if (!doc) {
     doc = new Map();
@@ -487,7 +504,8 @@ export function rememberPdfThumb(hash: string | null | undefined, page: number, 
   if (prev === url) return;
   const first = !prev;
   doc.set(page, url);
-  for (const listener of thumbListeners) listener();
+  capDocThumbs(hash, doc, page);
+  notifyThumbListeners(hash);
   if (first) void persistPdfThumb(hash, page, url);
 }
 
@@ -495,8 +513,10 @@ export function rememberPdfThumb(hash: string | null | undefined, page: number, 
 export function hydratePdfThumbs(
   hash: string,
   thumbs: Map<number, string> | Iterable<readonly [number, string]>,
+  around = 1,
 ): void {
   if (!hash) return;
+  openedThumbHashes.add(hash);
   let doc = thumbsByHash.get(hash);
   if (!doc) {
     doc = new Map();
@@ -508,7 +528,10 @@ export function hydratePdfThumbs(
     doc.set(page, url);
     added = true;
   }
-  if (added) for (const listener of thumbListeners) listener();
+  if (added) {
+    capDocThumbs(hash, doc, around >= 1 ? around : 1);
+    notifyThumbListeners(hash);
+  }
 }
 
 export function peekPdfThumb(hash: string | null | undefined, page: number): string | null {
@@ -523,19 +546,39 @@ export function peekPdfThumbs(hash: string | null | undefined): Map<number, stri
 }
 
 export function resetPdfThumbs(): void {
-  if (thumbsByHash.size === 0) return;
+  if (thumbsByHash.size === 0 && openedThumbHashes.size === 0) return;
   thumbsByHash.clear();
-  for (const listener of thumbListeners) listener();
+  openedThumbHashes.clear();
+  for (const listeners of thumbListenersByHash.values()) {
+    for (const listener of listeners) listener();
+  }
+  for (const listener of thumbListenersAll) listener();
 }
 
-const thumbListeners = new Set<() => void>();
-
-export function subscribePdfThumbs(listener: () => void): () => void {
-  thumbListeners.add(listener);
+export function subscribePdfThumbs(listener: () => void, hash?: string | null): () => void {
+  if (hash) {
+    let set = thumbListenersByHash.get(hash);
+    if (!set) {
+      set = new Set();
+      thumbListenersByHash.set(hash, set);
+    }
+    set.add(listener);
+    listener();
+    return () => {
+      set!.delete(listener);
+      if (set!.size === 0) thumbListenersByHash.delete(hash);
+    };
+  }
+  thumbListenersAll.add(listener);
   listener();
   return () => {
-    thumbListeners.delete(listener);
+    thumbListenersAll.delete(listener);
   };
+}
+
+/** Hashes whose thumbs must stay on disk this session. */
+export function openedPdfThumbHashes(): ReadonlySet<string> {
+  return openedThumbHashes;
 }
 
 /**
@@ -566,8 +609,8 @@ export function pdfThumbViewportScale(
  * page at a time, forever, from the moment the reader stopped scrolling: a
  * full `page.render` per page, a synchronous `toDataURL` per page, an
  * IndexedDB write and a listener broadcast per page, and a base64 JPEG per
- * page held in {@link thumbsByHash} — which has no cap — for a strip that
- * only ever shows {@link PDF_FILM_CACHE} of them. What the reader could feel
+ * page held in {@link thumbsByHash} — capped at {@link PDF_FILM_CACHE} — for a
+ * strip that only ever shows that many of them. What the reader could feel
  * was the thread going away for a few hundred milliseconds at a time, on and
  * off, for as long as the book was open, and a `pointerdown` waiting for
  * whichever of those steps was on the stack when the finger landed.
@@ -605,7 +648,7 @@ export function capturePdfThumbIfNew(hash: string | null | undefined, page: numb
     typeof window !== "undefined"
       ? Math.min(window.devicePixelRatio || 1, 2)
       : 1;
-  const url = grabLruPdfThumb(page, Math.round(PDF_FILM_THUMB_CSS * dpr));
+  const url = grabLruPdfThumb(hash, page, Math.round(PDF_FILM_THUMB_CSS * dpr));
   if (url) rememberPdfThumb(hash, page, url);
 }
 
@@ -624,8 +667,8 @@ export function grabLivePdfThumb(
 }
 
 /** Filmstrip copy from the sheet LRU when the live canvas is empty. */
-export function grabLruPdfThumb(page: number, maxWidth: number): string | null {
-  const sheet = peekActiveSheet(page);
+export function grabLruPdfThumb(hash: string, page: number, maxWidth: number): string | null {
+  const sheet = peekActiveSheet(hash, page);
   if (!sheet || sheet.width < 8 || sheet.height < 8) return null;
   return snapshotThumb(sheet.bitmap, sheet.width, sheet.height, maxWidth);
 }

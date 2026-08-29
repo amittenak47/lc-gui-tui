@@ -29,6 +29,11 @@ import {
 
 export type { PdfThumbRenderer };
 
+const RAIL_THUMB_W = 48;
+const RAIL_GAP = 10;
+/** Thumb width plus the strip gap — one cell in scrollLeft math. */
+const RAIL_CELL = RAIL_THUMB_W + RAIL_GAP;
+
 export interface PdfPageRailProps {
   /**
    * Which mounted workspace this is, for PDF navigation state.
@@ -74,14 +79,38 @@ export function PdfPageRail({
   const [railCurrent, setRailCurrent] = useState(current);
   const [railPredicted, setRailPredicted] = useState(0);
   const currentPage = railCurrent;
+  const [railRange, setRailRange] = useState({ start: 1, end: Math.min(count, 24) });
 
-  useEffect(() => subscribePdfFilmCurrent(filmScope, setRailCurrent), []);
-  useEffect(() => subscribePdfFilmPredicted(filmScope, setRailPredicted), []);
+  useEffect(() => subscribePdfFilmCurrent(filmScope, setRailCurrent), [filmScope]);
+  useEffect(() => subscribePdfFilmPredicted(filmScope, setRailPredicted), [filmScope]);
   useEffect(() => {
     return subscribePdfThumbs(() => {
       setThumbs(peekPdfThumbs(docHashRef.current));
-    });
-  }, []);
+    }, docHash);
+  }, [docHash]);
+
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip || count < 2) return;
+    const cellW = RAIL_CELL;
+    const overscan = 8;
+    const update = () => {
+      const first = Math.max(1, Math.floor(strip.scrollLeft / cellW) + 1);
+      const visible = Math.max(1, Math.ceil(strip.clientWidth / cellW));
+      let start = Math.max(1, first - overscan);
+      let end = Math.min(count, first + visible + overscan);
+      if (currentPage >= 1) {
+        start = Math.min(start, currentPage);
+        end = Math.max(end, currentPage);
+      }
+      setRailRange((prev) =>
+        prev.start === start && prev.end === end ? prev : { start, end },
+      );
+    };
+    update();
+    strip.addEventListener("scroll", update, { passive: true });
+    return () => strip.removeEventListener("scroll", update);
+  }, [count, currentPage]);
 
   useEffect(() => {
     const strip = stripRef.current;
@@ -146,7 +175,7 @@ export function PdfPageRail({
       observer.observe(node);
     }
     return () => observer.disconnect();
-  }, [count]);
+  }, [count, railRange.start, railRange.end]);
 
   useEffect(() => {
     if (count < 2) return;
@@ -179,7 +208,7 @@ export function PdfPageRail({
             page,
             px,
             stripRef.current?.closest(".lc-canvas-wrap"),
-          ) ?? grabLruPdfThumb(page, px);
+          ) ?? grabLruPdfThumb(hash, page, px);
         if (live) {
           keep(page, live);
           continue;
@@ -207,36 +236,55 @@ export function PdfPageRail({
 
   if (count < 2) return null;
 
-  const pages = Array.from({ length: count }, (_, i) => i + 1);
+  const pages: number[] = [];
+  for (let page = railRange.start; page <= railRange.end; page += 1) pages.push(page);
+  const trackW = count * RAIL_THUMB_W + Math.max(0, count - 1) * RAIL_GAP;
 
   return (
     <nav ref={stripRef} className="lc-pdf-rail" aria-label="PDF pages">
-      {pages.map((page) => {
-        const active = page === currentPage;
-        const predicted = page === railPredicted && railPredicted > 0 && !active;
-        const aspect = aspects?.[page - 1] || PDF_LETTER_ASPECT;
-        const src = thumbs.get(page) ?? peekPdfThumb(docHash, page);
-        return (
-          <button
-            key={page}
-            ref={active ? currentRef : undefined}
-            type="button"
-            className={
-              predicted ? "lc-pdf-rail-page is-predicted" : "lc-pdf-rail-page"
-            }
-            data-pdf-film-page={page}
-            style={{ "--lc-pdf-aspect": String(aspect) } as CSSProperties}
-            aria-current={active ? "page" : undefined}
-            aria-label={`Page ${page}`}
-            onClick={() => onJump(page)}
-          >
-            <span className="lc-pdf-rail-thumb">
-              {src ? <img src={src} alt="" draggable={false} /> : null}
-            </span>
-            <span className="lc-pdf-rail-num">{page}</span>
-          </button>
-        );
-      })}
+      <div
+        className="lc-pdf-rail-track"
+        style={{
+          position: "relative",
+          flex: `0 0 ${trackW}px`,
+          width: trackW,
+          height: "100%",
+        }}
+      >
+        {pages.map((page) => {
+          const active = page === currentPage;
+          const predicted = page === railPredicted && railPredicted > 0 && !active;
+          const aspect = aspects?.[page - 1] || PDF_LETTER_ASPECT;
+          const src = thumbs.get(page) ?? peekPdfThumb(docHash, page);
+          return (
+            <button
+              key={page}
+              ref={active ? currentRef : undefined}
+              type="button"
+              className={
+                predicted ? "lc-pdf-rail-page is-predicted" : "lc-pdf-rail-page"
+              }
+              data-pdf-film-page={page}
+              style={
+                {
+                  "--lc-pdf-aspect": String(aspect),
+                  position: "absolute",
+                  left: (page - 1) * RAIL_CELL,
+                  bottom: 0,
+                } as CSSProperties
+              }
+              aria-current={active ? "page" : undefined}
+              aria-label={`Page ${page}`}
+              onClick={() => onJump(page)}
+            >
+              <span className="lc-pdf-rail-thumb">
+                {src ? <img src={src} alt="" draggable={false} /> : null}
+              </span>
+              <span className="lc-pdf-rail-num">{page}</span>
+            </button>
+          );
+        })}
+      </div>
     </nav>
   );
 }

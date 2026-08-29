@@ -601,9 +601,29 @@ export function hashBytes(bytes: ArrayBuffer): string {
 /** Skip the worker for small bodies — tests and notes are not the 44 MB case. */
 const HASH_WORKER_MIN = 256 * 1024;
 
+type HashJob = {
+  resolve: (hash: string) => void;
+  reject: (cause: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+  bytes: ArrayBuffer;
+};
+
 let hashWorker: Worker | null | undefined;
 let hashJobId = 1;
-const hashPending = new Map<number, (hash: string) => void>();
+const hashPending = new Map<number, HashJob>();
+
+function failPendingHashJobs(message: string): void {
+  const jobs = [...hashPending.values()];
+  hashPending.clear();
+  for (const job of jobs) {
+    globalThis.clearTimeout(job.timer);
+    try {
+      job.resolve(hashBytes(job.bytes));
+    } catch (cause) {
+      job.reject(cause instanceof Error ? cause : new Error(message));
+    }
+  }
+}
 
 async function hashBytesWorker(): Promise<Worker | null> {
   if (hashWorker !== undefined) return hashWorker;
@@ -615,21 +635,41 @@ async function hashBytesWorker(): Promise<Worker | null> {
     const { default: HashBytesWorker } = await import("./hashBytes.worker.ts?worker");
     hashWorker = new HashBytesWorker();
     hashWorker.onmessage = (event: MessageEvent<HashBytesResponse>) => {
-      const done = hashPending.get(event.data.id);
-      if (!done) return;
+      const job = hashPending.get(event.data.id);
+      if (!job) return;
       hashPending.delete(event.data.id);
-      done(event.data.hash);
+      globalThis.clearTimeout(job.timer);
+      job.resolve(event.data.hash);
     };
     hashWorker.onerror = () => {
       hashWorker?.terminate();
-      hashWorker = null;
-      hashPending.clear();
+      hashWorker = undefined;
+      failPendingHashJobs("hash worker crashed");
     };
     return hashWorker;
   } catch {
     hashWorker = null;
     return null;
   }
+}
+
+/** Test seam: run the worker-crash path against leftover jobs. */
+export function hashWorkerCrashedForTests(): void {
+  hashWorker?.terminate();
+  hashWorker = undefined;
+  failPendingHashJobs("hash worker crashed");
+}
+
+/** Test seam: a job waiting on the worker, the same map `onerror` drains. */
+export function enqueueHashJobForTests(bytes: ArrayBuffer): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const id = hashJobId++;
+    const timer = globalThis.setTimeout(() => {
+      hashPending.delete(id);
+      reject(new Error("hashing the file took too long"));
+    }, 120_000);
+    hashPending.set(id, { resolve, reject, timer, bytes });
+  });
 }
 
 /**
@@ -648,9 +688,11 @@ export async function hashBytesAsync(bytes: ArrayBuffer): Promise<string> {
       hashPending.delete(id);
       reject(new Error("hashing the file took too long"));
     }, 120_000);
-    hashPending.set(id, (hash) => {
-      globalThis.clearTimeout(timer);
-      resolve(hash);
+    hashPending.set(id, {
+      resolve,
+      reject,
+      timer,
+      bytes,
     });
     try {
       const copy = bytes.slice(0);

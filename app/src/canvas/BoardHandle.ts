@@ -119,6 +119,13 @@ export interface BoardHandle {
   /** Committed raster ink ops — for ambient/review fingerprints. */
   getInkOpCount(): number;
   /**
+   * Monotonic ink mutation clock (undo/redo/clear included).
+   *
+   * Op count alone cannot see undo-then-redraw: one stroke out, one stroke
+   * in, same length, dirty pages never flush.
+   */
+  getInkRevision(): number;
+  /**
    * The pen or eraser tip is on the paper right now.
    *
    * For callers that do expensive work on a timer: serialising the board means

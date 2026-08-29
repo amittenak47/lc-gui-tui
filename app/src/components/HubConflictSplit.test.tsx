@@ -317,19 +317,29 @@ describe("what the panes are asked to draw", () => {
     vi.resetModules();
   });
 
-  async function mountSpied(conflict: HubPadConflict = CONFLICT) {
+  async function mountSpied(
+    conflict: HubPadConflict = CONFLICT,
+    extra: {
+      fetchPreviewInk?: (pageId: number) => Promise<{
+        local: { kind: "annotate"; key: string; page_id: number; updated_at: number; gz: string } | null;
+        server: { kind: "annotate"; key: string; page_id: number; updated_at: number; gz: string } | null;
+      }>;
+    } = {},
+  ) {
     vi.resetModules();
     vi.doMock("./ConflictPagePreview", () => ({
       ConflictPagePreview: (props: {
         page: number;
         notes?: readonly { id: string }[];
         showInk?: boolean;
+        inkPages?: readonly { page_id: number }[];
       }) => (
         <div
           className="lc-hub-conflict-preview"
           data-page={String(props.page)}
           data-notes={(props.notes ?? []).map((note) => note.id).join(",")}
           data-ink={props.showInk ? "on" : "off"}
+          data-ink-pages={(props.inkPages ?? []).map((row) => row.page_id).join(",")}
         />
       ),
     }));
@@ -337,7 +347,11 @@ describe("what the panes are asked to draw", () => {
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
-    act(() => root.render(<Split conflict={conflict} onResolve={vi.fn()} />));
+    act(() =>
+      root.render(
+        <Split conflict={conflict} onResolve={vi.fn()} fetchPreviewInk={extra.fetchPreviewInk} />,
+      ),
+    );
     return { root };
   }
 
@@ -466,6 +480,64 @@ describe("what the panes are asked to draw", () => {
     expect(inkOn(0)).toBe(true);
     expect(notesOn(1)).toEqual([]);
     expect(inkOn(1)).toBe(false);
+  });
+
+  const FAR: HubPadConflict = {
+    ...CONFLICT,
+    inkPageId: 12,
+    localInk: [
+      { kind: "annotate", key: "pad-1", page_id: 12, updated_at: 1, gz: "local-12" },
+    ],
+    serverInk: [
+      { kind: "annotate", key: "pad-1", page_id: 12, updated_at: 1, gz: "hub-12" },
+    ],
+    local: annotateBody("book", 900, [
+      ...((CONFLICT.local as AnnotatePadDto).footnotes as unknown[]),
+      {
+        id: "far",
+        kind: "note",
+        anchor: { kind: "text", start: 0, end: 4, scope: "p40" },
+        excerpt: "page forty mark",
+        createdAt: 9,
+      },
+    ]),
+  };
+
+  it("jumps both panes to the focused change's page", async () => {
+    await mountSpied(FAR);
+    expect(panes().map((pane) => pane.dataset.page)).toEqual(["12", "12"]);
+    act(() => noteByText("page forty mark").click());
+    expect(panes().map((pane) => pane.dataset.page)).toEqual(["40", "40"]);
+  });
+
+  it("fetches that page's ink for the overlay, not the rest of the pad", async () => {
+    const fetchPreviewInk = vi.fn(async (pageId: number) => ({
+      local: {
+        kind: "annotate" as const,
+        key: "pad-1",
+        page_id: pageId,
+        updated_at: 1,
+        gz: "local-extra",
+      },
+      server: {
+        kind: "annotate" as const,
+        key: "pad-1",
+        page_id: pageId,
+        updated_at: 1,
+        gz: "hub-extra",
+      },
+    }));
+    await mountSpied(FAR, { fetchPreviewInk });
+    expect(fetchPreviewInk).not.toHaveBeenCalled();
+    await act(async () => {
+      noteByText("page forty mark").click();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fetchPreviewInk.mock.calls.map((call) => call[0])).toEqual([40]);
+    expect(panes()[0]!.dataset.inkPages).toBe("12,40");
+    expect(panes()[1]!.dataset.inkPages).toBe("12,40");
   });
 });
 

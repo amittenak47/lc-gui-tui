@@ -11,13 +11,13 @@
  * on Sync.
  */
 
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import type { AnnotatePadDto, InkPageDto } from "../api/client";
+import type { AnnotatePadDto, InkPageDto, LcClient } from "../api/client";
 import type { PageFrame } from "../canvas/inkPageIndex";
 import type { DocFootnote } from "../util/docFootnotes";
-import { conflictFocusPage } from "../util/conflictPage";
-import type { FootnoteInkBoard } from "../util/inkSync";
+import { conflictFocusPage, inkDtosHavePage, mergeInkDtos } from "../util/conflictPage";
+import { loadConflictPreviewInkPage, type FootnoteInkBoard } from "../util/inkSync";
 import { Tip } from "./Tip";
 import { ConflictPagePreview } from "./ConflictPagePreview";
 import { FootnoteOverview } from "../modes/FootnoteOverview";
@@ -55,6 +55,14 @@ export interface HubConflictSplitProps {
    */
   pageFrames?: readonly PageFrame[];
   onResolve(resolution: HubConflictResolution): void;
+  /** Hub client — used to GET one more ink page when a row is off the freeze preview. */
+  client?: LcClient | null;
+  /**
+   * Test seam: one page of overlay ink. Production uses {@link loadConflictPreviewInkPage}.
+   */
+  fetchPreviewInk?: (
+    pageId: number,
+  ) => Promise<{ local: InkPageDto | null; server: InkPageDto | null }>;
 }
 
 type Side = "local" | "server";
@@ -205,9 +213,18 @@ export function HubConflictSplit({
   sceneWidth,
   pageFrames,
   onResolve,
+  client = null,
+  fetchPreviewInk,
 }: HubConflictSplitProps) {
   const [picks, setPicks] = useState<Record<string, SidePick>>({});
   const [focusedId, setFocusedId] = useState<string>(INK_ROW_ID);
+  const [overlayInk, setOverlayInk] = useState<{
+    local: InkPageDto[];
+    server: InkPageDto[];
+  }>({ local: [], server: [] });
+  const overlayInkRef = useRef(overlayInk);
+  overlayInkRef.current = overlayInk;
+  const overlayTriedRef = useRef<Set<number>>(new Set());
 
   const sideLabel = (side: Side) => (side === "local" ? "Local" : otherLabel);
 
@@ -389,6 +406,52 @@ export function HubConflictSplit({
       ink: conflict.localInk,
     });
   }, [conflict, focusedId, rows]);
+
+  useEffect(() => {
+    setOverlayInk({ local: [], server: [] });
+    overlayTriedRef.current = new Set();
+  }, [conflict?.id]);
+
+  useEffect(() => {
+    if (!conflict || focusPage < 1) return;
+    if (!fetchPreviewInk && !client) return;
+    const localPages = mergeInkDtos(conflict.localInk, overlayInkRef.current.local);
+    const serverPages = mergeInkDtos(conflict.serverInk, overlayInkRef.current.server);
+    if (inkDtosHavePage(localPages, focusPage) && inkDtosHavePage(serverPages, focusPage)) {
+      return;
+    }
+    if (overlayTriedRef.current.has(focusPage)) return;
+    overlayTriedRef.current.add(focusPage);
+    let gone = false;
+    let finished = false;
+    const load =
+      fetchPreviewInk ??
+      ((pageId: number) =>
+        loadConflictPreviewInkPage(client, conflict.kind, conflict.id, pageId));
+    void load(focusPage)
+      .then((got) => {
+        finished = true;
+        if (gone) return;
+        setOverlayInk((current) => ({
+          local:
+            got.local && !inkDtosHavePage(current.local, got.local.page_id)
+              ? [...current.local, got.local]
+              : current.local,
+          server:
+            got.server && !inkDtosHavePage(current.server, got.server.page_id)
+              ? [...current.server, got.server]
+              : current.server,
+        }));
+      })
+      .catch(() => {
+        finished = true;
+        overlayTriedRef.current.delete(focusPage);
+      });
+    return () => {
+      gone = true;
+      if (!finished) overlayTriedRef.current.delete(focusPage);
+    };
+  }, [client, conflict, fetchPreviewInk, focusPage]);
 
   if (!conflict) return null;
 
@@ -707,7 +770,9 @@ export function HubConflictSplit({
             page={focusPage}
             notes={keptNotes}
             inkPages={
-              side === "local" ? conflict.localInk : (conflict.serverInk ?? undefined)
+              side === "local"
+                ? mergeInkDtos(conflict.localInk, overlayInk.local)
+                : mergeInkDtos(conflict.serverInk, overlayInk.server)
             }
             showInk={pickOf(picks, INK_ROW_ID, side) === true}
             bytes={bytes}

@@ -23,7 +23,19 @@
 import { noteCameraBusy } from "../util/cameraBusy";
 
 let claimed = false;
-let onClaimed: (() => void) | null = null;
+const claimedHandlers = new Set<() => void>();
+
+export type DocScrollShare = {
+  /** True when this surface owns the selection that is asking. */
+  owns: (origin: Node | null) => boolean;
+  move: (dy: number) => number;
+};
+
+const scrollShares = new Set<DocScrollShare>();
+
+type SubMarkPointerHit = (clientX: number, clientY: number) => boolean;
+
+const subMarkHits = new Set<SubMarkPointerHit>();
 
 /*
  * Counted, not set.
@@ -71,16 +83,23 @@ function publishPaintFrozen(): void {
 /**
  * Board registers here so a mid-gesture claim can drop a deferred pan /
  * side-scroll that armed from the same finger before the hold landed.
+ *
+ * A set, not a slot: two Boards both register, and unmount of one must not
+ * drop the other's handler.
  */
-export function onSelectionGestureClaimed(handler: (() => void) | null): void {
-  onClaimed = handler;
+export function onSelectionGestureClaimed(handler: (() => void) | null): () => void {
+  if (!handler) return () => {};
+  claimedHandlers.add(handler);
+  return () => {
+    claimedHandlers.delete(handler);
+  };
 }
 
 /** The selection has taken this gesture — Board must not pan on it. */
 export function claimSelectionGesture(): void {
   claimed = true;
   noteCameraBusy();
-  onClaimed?.();
+  for (const handler of claimedHandlers) handler();
 }
 
 /** Hand the pointer back, on lift or when the hold is abandoned. */
@@ -176,6 +195,9 @@ export function resetDocCameraForTests(): void {
     syncCameraLiveClass();
   }
   pointerHeld = false;
+  claimedHandlers.clear();
+  scrollShares.clear();
+  subMarkHits.clear();
   publishPaintFrozen();
 }
 
@@ -205,29 +227,39 @@ export function onDocCameraLiveChange(handler: ((live: boolean) => void) | null)
 
 /* ----------------------------------------------------- edge auto-scroll --- */
 
-let onScrollRequest: ((dy: number) => number) | null = null;
-
 /**
  * Board offers the reading camera a nudge, for a selection dragged off the edge.
  *
- * The same seam as the claim flag above, and for the same reason: the camera's
- * clamping, its inertia and its idea of where the page ends all live in Board,
- * and a selection layer that computed a scroll position itself would be a
- * second implementation of that arithmetic — one that would go wrong at exactly
- * the top and bottom of the document, which is where a drag off the edge always
- * ends up.
- *
- * The handler returns how far it *actually* moved. At the end of the document
- * that is zero, which is what tells the caller to stop asking rather than spin
- * a frame loop against a wall.
+ * A set, not a slot: two panes both register, and unmount of one must not
+ * drop the other's camera. {@link requestDocScroll} asks the surface that
+ * owns the origin first.
  */
-export function onDocScrollRequest(handler: ((dy: number) => number) | null): void {
-  onScrollRequest = handler;
+export function onDocScrollRequest(
+  handler: DocScrollShare | ((dy: number) => number) | null,
+): () => void {
+  if (!handler) return () => {};
+  const share: DocScrollShare =
+    typeof handler === "function" ? { owns: () => true, move: handler } : handler;
+  scrollShares.add(share);
+  return () => {
+    scrollShares.delete(share);
+  };
 }
 
 /** Ask for `dy` pixels of page scroll. Returns what was granted. */
-export function requestDocScroll(dy: number): number {
-  return onScrollRequest?.(dy) ?? 0;
+export function requestDocScroll(dy: number, origin?: Node | null): number {
+  if (origin) {
+    for (const share of scrollShares) {
+      if (!share.owns(origin)) continue;
+      const moved = share.move(dy);
+      if (moved !== 0) return moved;
+    }
+  }
+  for (const share of scrollShares) {
+    const moved = share.move(dy);
+    if (moved !== 0) return moved;
+  }
+  return 0;
 }
 
 /* ------------------------------------------------ overlay chrome hits --- */
@@ -257,17 +289,20 @@ export function isDocChromeTarget(target: EventTarget | null): boolean {
  * Overview card uses this so a tap inside the open mark does not close the
  * panel. Board pan ignores it — only {@link isSubMarkDragLive} steals the finger.
  */
-type SubMarkPointerHit = (clientX: number, clientY: number) => boolean;
-
-let subMarkPointerHit: SubMarkPointerHit | null = null;
-
-export function setSubMarkPointerHit(handler: SubMarkPointerHit | null): void {
-  subMarkPointerHit = handler;
+export function setSubMarkPointerHit(handler: SubMarkPointerHit | null): () => void {
+  if (!handler) return () => {};
+  subMarkHits.add(handler);
+  return () => {
+    subMarkHits.delete(handler);
+  };
 }
 
 /** True when the pointer is inside the armed sub-mark (bands / grips / pad). */
 export function pointerInSubMark(clientX: number, clientY: number): boolean {
-  return subMarkPointerHit?.(clientX, clientY) ?? false;
+  for (const hit of subMarkHits) {
+    if (hit(clientX, clientY)) return true;
+  }
+  return false;
 }
 
 let subMarkDragLive = false;

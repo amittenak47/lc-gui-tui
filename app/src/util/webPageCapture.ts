@@ -298,20 +298,28 @@ async function createLiveWebview(
   });
 }
 
+const latestPlaceRect = new Map<string, PaneRect>();
+
 /** Follow the pane. Cheap enough to run from a ResizeObserver. */
 export async function placeLiveWebview(label: string, rect: PaneRect): Promise<void> {
-  const transport = liveWebviewTransport();
-  if (transport === "none") return;
-  if (transport === "android") {
-    await placeAndroidWebview(label, rect);
-    return;
-  }
-  const webview = await liveWebview(label);
-  if (!webview) return;
-  await webview.setPosition(new LogicalPosition(Math.round(rect.x), Math.round(rect.y)));
-  await webview.setSize(
-    new LogicalSize(Math.max(1, Math.round(rect.width)), Math.max(1, Math.round(rect.height))),
-  );
+  latestPlaceRect.set(label, rect);
+  return queued(label, async () => {
+    const next = latestPlaceRect.get(label);
+    if (!next) return;
+    latestPlaceRect.delete(label);
+    const transport = liveWebviewTransport();
+    if (transport === "none") return;
+    if (transport === "android") {
+      await placeAndroidWebview(label, next);
+      return;
+    }
+    const webview = await liveWebview(label);
+    if (!webview) return;
+    await webview.setPosition(new LogicalPosition(Math.round(next.x), Math.round(next.y)));
+    await webview.setSize(
+      new LogicalSize(Math.max(1, Math.round(next.width)), Math.max(1, Math.round(next.height))),
+    );
+  });
 }
 
 export async function showLiveWebview(label: string, show: boolean): Promise<void> {

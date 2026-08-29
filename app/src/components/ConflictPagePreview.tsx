@@ -120,10 +120,25 @@ export function ConflictPagePreview({
   useEffect(() => {
     const root = hostRef.current;
     if (!root || page < 1) return;
-    const node = root.querySelector<HTMLElement>(`[data-pdf-page="${page}"]`);
-    if (!node) return;
-    const top = node.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop;
-    root.scrollTo({ top });
+    let gone = false;
+    const jump = () => {
+      if (gone) return true;
+      const node = root.querySelector<HTMLElement>(`[data-pdf-page="${page}"]`);
+      if (!node) return false;
+      const top =
+        node.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop;
+      root.scrollTo({ top });
+      return true;
+    };
+    if (jump()) return;
+    const observer = new MutationObserver(() => {
+      if (jump()) observer.disconnect();
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    return () => {
+      gone = true;
+      observer.disconnect();
+    };
   }, [page, stackH]);
 
   const borrowed = hash ? borrowPdfDocument(hash) : null;
@@ -331,6 +346,7 @@ export function ConflictPagePreview({
           <DocSelectionLayer
             enabled={false}
             placeExisting
+            paletteScope={filmScope}
             /*
              * The same page, narrower. A region anchor is a box against its
              * own page, so it comes across in proportion — this is that
@@ -373,7 +389,7 @@ export function ConflictPagePreview({
         </div>
       ) : useMarkdown && sourceText ? (
         <div className="lc-hub-conflict-doc">
-          <DocSelectionLayer enabled={false} placeExisting footnotes={keptNotes}>
+          <DocSelectionLayer enabled={false} placeExisting paletteScope={filmScope} footnotes={keptNotes}>
             <AnnotateDocument source={sourceText} selectable={false} />
           </DocSelectionLayer>
         </div>

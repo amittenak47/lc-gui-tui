@@ -59,6 +59,8 @@ export class InkPageBook {
   private nextSeq = 1;
   private lru: number[] = [];
   private opTotal = 0;
+  /** Bumps on every mutation, including undo/redo that keep the same op count. */
+  private generation = 0;
 
   undo: InkUndoEntry[] = [];
   redo: InkUndoEntry[] = [];
@@ -72,6 +74,10 @@ export class InkPageBook {
 
   opCount(): number {
     return this.opTotal;
+  }
+
+  revision(): number {
+    return this.generation;
   }
 
   hasInk(): boolean {
@@ -206,6 +212,7 @@ export class InkPageBook {
     }
     this.usedFallback = this.frames.length <= 1;
     this.setVisiblePage(this.visiblePage);
+    this.bump();
   }
 
   /** Cold fill from IDB without marking dirty. */
@@ -246,6 +253,7 @@ export class InkPageBook {
       this.hot.set(SPANNING_PAGE_ID, bins.get(SPANNING_PAGE_ID)!);
     }
     this.trimCold();
+    this.bump();
   }
 
   commit(op: InkOp): InkOp {
@@ -257,6 +265,7 @@ export class InkPageBook {
     this.opTotal += 1;
     this.markDirty(pageId);
     this.touchLru(pageId);
+    this.bump();
     return stamped;
   }
 
@@ -287,6 +296,7 @@ export class InkPageBook {
     this.opTotal -= removed.length;
     this.pushUndo({ kind: "removeMany", items: removed });
     this.redo = [];
+    this.bump();
     return this.paintOps();
   }
 
@@ -304,6 +314,7 @@ export class InkPageBook {
     this.dirty.clear();
     for (const pageId of pages.keys()) this.dirty.add(pageId);
     this.opTotal = 0;
+    this.bump();
   }
 
   undoOnce(): boolean {
@@ -311,6 +322,7 @@ export class InkPageBook {
     if (!entry) return false;
     this.applyInverse(entry);
     this.redo.push(entry);
+    this.bump();
     return true;
   }
 
@@ -319,6 +331,7 @@ export class InkPageBook {
     if (!entry) return false;
     this.applyForward(entry);
     this.undo.push(entry);
+    this.bump();
     return true;
   }
 
@@ -426,6 +439,10 @@ export class InkPageBook {
     if (pageId === SPANNING_PAGE_ID) return;
     this.lru = this.lru.filter((id) => id !== pageId);
     this.lru.push(pageId);
+  }
+
+  private bump(): void {
+    this.generation += 1;
   }
 
   private markDirty(pageId: number): void {

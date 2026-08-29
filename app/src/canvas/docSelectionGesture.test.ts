@@ -14,6 +14,8 @@ import {
   setSubMarkDragLive,
   setSubMarkPointerHit,
   subscribeDocCameraLive,
+  onDocScrollRequest,
+  requestDocScroll,
 } from "./docSelectionGesture";
 
 afterEach(() => {
@@ -42,15 +44,23 @@ describe("isDocChromeTarget", () => {
 
 describe("pointerInSubMark", () => {
   it("is false when no hit-test is registered", () => {
-    setSubMarkPointerHit(null);
     expect(pointerInSubMark(10, 10)).toBe(false);
   });
 
   it("delegates to the registered hit-test", () => {
-    setSubMarkPointerHit((x, y) => x >= 0 && x <= 50 && y >= 0 && y <= 20);
+    const unsub = setSubMarkPointerHit((x, y) => x >= 0 && x <= 50 && y >= 0 && y <= 20);
     expect(pointerInSubMark(10, 10)).toBe(true);
     expect(pointerInSubMark(80, 10)).toBe(false);
-    setSubMarkPointerHit(null);
+    unsub();
+  });
+
+  it("keeps the other pane's hit-test when one unmounts", () => {
+    const unsubA = setSubMarkPointerHit((x) => x < 50);
+    const unsubB = setSubMarkPointerHit((x) => x >= 50);
+    unsubA();
+    expect(pointerInSubMark(10, 0)).toBe(false);
+    expect(pointerInSubMark(80, 0)).toBe(true);
+    unsubB();
   });
 });
 
@@ -228,5 +238,33 @@ describe("makeDocFlagHolds", () => {
     expect(document.documentElement.classList.contains(DOC_CAMERA_LIVE_CLASS)).toBe(
       false,
     );
+  });
+});
+
+describe("requestDocScroll", () => {
+  it("asks the surface that owns the origin, not the other pane", () => {
+    const local = document.createElement("div");
+    const server = document.createElement("div");
+    const moved: string[] = [];
+    const unsubA = onDocScrollRequest({
+      owns: (origin) => Boolean(origin && local.contains(origin)),
+      move: (dy) => {
+        moved.push(`local:${dy}`);
+        return dy;
+      },
+    });
+    const unsubB = onDocScrollRequest({
+      owns: (origin) => Boolean(origin && server.contains(origin)),
+      move: (dy) => {
+        moved.push(`server:${dy}`);
+        return dy;
+      },
+    });
+    const finger = document.createElement("span");
+    server.append(finger);
+    expect(requestDocScroll(12, finger)).toBe(12);
+    expect(moved).toEqual(["server:12"]);
+    unsubA();
+    unsubB();
   });
 });

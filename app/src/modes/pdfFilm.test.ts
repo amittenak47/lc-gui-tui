@@ -26,6 +26,9 @@ import {
   nextMissingPdfThumb,
   pdfThumbViewportScale,
   hydratePdfThumbs,
+  subscribePdfThumbs,
+  openedPdfThumbHashes,
+  PDF_FILM_CACHE,
   peekPdfLayoutBusy,
   publishPdfLayoutBusy,
   pdfSpreadSlotCountChanged,
@@ -129,6 +132,54 @@ describe("session thumbs by document hash", () => {
     );
     expect(peekPdfThumb("doc-a", 1)).toBe("live");
     expect(peekPdfThumb("doc-a", 2)).toBe("disk-2");
+    resetPdfThumbs();
+  });
+
+  it("drops session thumbs farthest from the page being remembered once the cap is full", () => {
+    resetPdfThumbs();
+    for (let page = 1; page <= PDF_FILM_CACHE + 4; page += 1) {
+      rememberPdfThumb("doc-a", page, `url-${page}`);
+    }
+    const have = peekPdfThumbs("doc-a");
+    expect(have.size).toBe(PDF_FILM_CACHE);
+    expect(have.has(PDF_FILM_CACHE + 4)).toBe(true);
+    expect(have.has(1)).toBe(false);
+    resetPdfThumbs();
+  });
+
+  it("notifies only the hash a rail subscribed to", () => {
+    resetPdfThumbs();
+    const a: number[] = [];
+    const b: number[] = [];
+    const unsubA = subscribePdfThumbs(() => a.push(peekPdfThumbs("doc-a").size), "doc-a");
+    const unsubB = subscribePdfThumbs(() => b.push(peekPdfThumbs("doc-b").size), "doc-b");
+    rememberPdfThumb("doc-b", 1, "b1");
+    rememberPdfThumb("doc-a", 2, "a2");
+    expect(a).toEqual([0, 1]);
+    expect(b).toEqual([0, 1]);
+    unsubA();
+    unsubB();
+    resetPdfThumbs();
+  });
+
+  it("remembers which hashes were opened this session so IDB prune can keep them", () => {
+    resetPdfThumbs();
+    rememberPdfThumb("open-a", 1, "x");
+    hydratePdfThumbs("open-b", new Map());
+    expect([...openedPdfThumbHashes()].sort()).toEqual(["open-a", "open-b"]);
+    resetPdfThumbs();
+    expect(openedPdfThumbHashes().size).toBe(0);
+  });
+
+  it("hydrates only a window around the page in view", () => {
+    resetPdfThumbs();
+    const stored = new Map<number, string>();
+    for (let page = 1; page <= 40; page += 1) stored.set(page, `u${page}`);
+    hydratePdfThumbs("doc-a", stored, 40);
+    const have = peekPdfThumbs("doc-a");
+    expect(have.size).toBe(PDF_FILM_CACHE);
+    expect(have.has(40)).toBe(true);
+    expect(have.has(1)).toBe(false);
     resetPdfThumbs();
   });
 });

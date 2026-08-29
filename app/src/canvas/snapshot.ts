@@ -87,7 +87,7 @@ export async function buildSnapshot(
   const structure = captureStructure(elements);
   const versions = captureVersions(elements);
   const inkOpsLen = board.getInkOpCount();
-  const hash = sceneFingerprint(elements, inkOpsLen);
+  const hash = sceneFingerprint(elements, boardInkMix(board));
 
   const snapshot: BoardSnapshot = {
     recognized_text: mergeRecognized(handwriting, typed),
@@ -158,11 +158,11 @@ export async function buildSnapshot(
 /** Mix element and raster-ink changes into one fingerprint. */
 export function sceneFingerprint(
   elements: Parameters<typeof sceneHash>[0],
-  inkOpsLen: number,
+  inkMix: number,
 ): number {
   const base = sceneHash(elements);
-  if (inkOpsLen === 0) return base;
-  return (base ^ (inkOpsLen * 0x9e3779b1)) >>> 0;
+  if (inkMix === 0) return base;
+  return (base ^ (inkMix * 0x9e3779b1)) >>> 0;
 }
 
 /**
@@ -203,11 +203,25 @@ export function padContentHash(elements: readonly SceneElementLike[]): number {
 /** Mix student-authored content and raster-ink into one pristine fingerprint. */
 export function padContentFingerprint(
   elements: readonly SceneElementLike[],
-  inkOpsLen: number,
+  inkMix: number,
 ): number {
   const base = padContentHash(elements);
-  if (inkOpsLen === 0) return base;
-  return (base ^ (inkOpsLen * 0x9e3779b1)) >>> 0;
+  if (inkMix === 0) return base;
+  return (base ^ (inkMix * 0x9e3779b1)) >>> 0;
+}
+
+/**
+ * What fingerprints mix for ink: empty is 0, otherwise the monotonic revision.
+ *
+ * Op *count* used to stand in, so undo-one then draw-one hashed the same and
+ * never flushed. Revision moves on every mutation. Count 0 still wins so
+ * undo-to-empty matches a board that was never drawn on.
+ */
+export function boardInkMix(board: {
+  getInkOpCount(): number;
+  getInkRevision(): number;
+}): number {
+  return board.getInkOpCount() === 0 ? 0 : board.getInkRevision();
 }
 
 /** Baseline to store after a successful review ack. */

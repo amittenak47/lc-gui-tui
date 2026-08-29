@@ -1535,17 +1535,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * colours. See `inkPaletteBridge`.
    */
   useEffect(() => {
-    publishInkPalette(inkPaletteHistory);
-  }, [inkPaletteHistory]);
+    publishInkPalette(inkPaletteHistory, filmScope);
+  }, [inkPaletteHistory, filmScope]);
   useEffect(() => {
-    provideInkPaletteAdvance(cycleInkPaletteForward);
-    return () => provideInkPaletteAdvance(null);
-  }, [cycleInkPaletteForward]);
+    provideInkPaletteAdvance(cycleInkPaletteForward, filmScope);
+    return () => provideInkPaletteAdvance(null, filmScope);
+  }, [cycleInkPaletteForward, filmScope]);
   useEffect(() => {
-    provideInkPaletteRetreat(cycleInkPaletteBackward);
-    return () => provideInkPaletteRetreat(null);
-  }, [cycleInkPaletteBackward]);
-  useEffect(() => resetInkPaletteBridge, []);
+    provideInkPaletteRetreat(cycleInkPaletteBackward, filmScope);
+    return () => provideInkPaletteRetreat(null, filmScope);
+  }, [cycleInkPaletteBackward, filmScope]);
+  useEffect(() => () => resetInkPaletteBridge(filmScope), [filmScope]);
   const [linedPaperMode, setLinedPaperMode] = useState<LinedPaperMode>(loadLinedPaperMode);
   const linedPaperRef = useRef(linedPaperMode);
   linedPaperRef.current = linedPaperMode;
@@ -3015,19 +3015,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * the caller stops asking instead of running a frame loop into a wall.
    */
   useEffect(() => {
-    onDocScrollRequest((dy) => {
-      if (annotateCodeRef.current) return 0;
-      const cam = readScrollRef.current();
-      // `dy > 0` is "show me what comes next", and Excalidraw's scrollY grows
-      // as the content moves *down* — so going forward means subtracting.
-      const next = clampPanScroll(cam.scrollX, cam.scrollY - dy, cam.zoom);
-      const moved = cam.scrollY - next.scrollY;
-      if (Math.abs(moved) < 0.5) return 0;
-      pulseCameraMotionRef.current();
-      applyVisualScrollNowRef.current(next.scrollX, next.scrollY);
-      return moved;
+    return onDocScrollRequest({
+      owns: (origin) => Boolean(origin && boardRef.current?.contains(origin)),
+      move: (dy) => {
+        if (annotateCodeRef.current) return 0;
+        const cam = readScrollRef.current();
+        // `dy > 0` is "show me what comes next", and Excalidraw's scrollY grows
+        // as the content moves *down* — so going forward means subtracting.
+        const next = clampPanScroll(cam.scrollX, cam.scrollY - dy, cam.zoom);
+        const moved = cam.scrollY - next.scrollY;
+        if (Math.abs(moved) < 0.5) return 0;
+        pulseCameraMotionRef.current();
+        applyVisualScrollNowRef.current(next.scrollX, next.scrollY);
+        return moved;
+      },
     });
-    return () => onDocScrollRequest(null);
   }, [clampPanScroll]);
 
   const stopPanInertia = useCallback(() => {
@@ -3864,7 +3866,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       panPeakVelYRef.current = 0;
       rasterInkRef.current?.setCameraMoving(false);
     };
-    onSelectionGestureClaimed(dropPanForSelection);
+    const unclaim = onSelectionGestureClaimed(dropPanForSelection);
 
     let heldPointerId: number | null = null;
     const holdPointer = (pointerId: number) => {
@@ -4329,7 +4331,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     root.addEventListener("pointerup", onPointerUp, true);
     root.addEventListener("pointercancel", onPointerUp, true);
     return () => {
-      onSelectionGestureClaimed(null);
+      unclaim();
       if (heldPointerId != null) {
         heldPointerId = null;
         docFlags.pointer(false);
@@ -8035,6 +8037,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         };
       },
       getInkOpCount: () => rasterInkRef.current?.getOpCount() ?? 0,
+      getInkRevision: () => rasterInkRef.current?.getRevision() ?? 0,
       isInking: () => rasterInkRef.current?.isDrawing() ?? false,
       dirtyInkPageCount: () => rasterInkRef.current?.dirtyInkPageCount() ?? 0,
       takeDirtyInkPages: () => rasterInkRef.current?.takeDirtyInkPages() ?? new Map(),
