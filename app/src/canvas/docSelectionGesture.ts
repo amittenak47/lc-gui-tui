@@ -38,20 +38,17 @@ type SubMarkPointerHit = (clientX: number, clientY: number) => boolean;
 const subMarkHits = new Set<SubMarkPointerHit>();
 
 /*
- * Counted, not set.
+ * Counted, not set — and paint is per surface.
  *
- * "The camera is live" was one boolean for the whole process, which was true
- * while exactly one surface could be scrolled. The conflict split mounts two
- * `ConflictPagePreview`s side by side over a reader that is still subscribed,
- * and there `setDocCameraLive(false)` does not mean "this pane settled" — it
- * means "nothing anywhere is moving", which is a claim one pane cannot make.
- * Flicking Local froze the Server pane's paint pump, and a pointer-up on
- * either one released the other's finger.
+ * The global sum still answers "is anything moving?" (CSS class, hub ping).
+ * A paint pump that reads that sum waits on the other split pane's leftover
+ * flick. Each hold is also keyed by film scope so `isDocCameraLive(scope)`
+ * is only that surface.
  *
- * So each surface takes a share and the flag is the sum. Still module scope
- * rather than a React context: the gatekeeper runs inside a native listener
- * installed once, and a context value read at render time would be a frame
- * stale exactly when it matters.
+ * The conflict split used to freeze Server when Local flicked because
+ * `setDocCameraLive(false)` meant "nothing anywhere is moving". Shares stop
+ * one pane's pointer-up from releasing the other; the scope key stops one
+ * pane's coast from cancelling the other's `page.render`.
  */
 let cameraLiveCount = 0;
 let pointerHeldCount = 0;
@@ -59,6 +56,8 @@ let cameraLive = false;
 let pointerHeld = false;
 let publishedFrozen = false;
 const cameraLiveListeners = new Set<(live: boolean) => void>();
+const scopeHolds = new Map<string, { camera: boolean; pointer: boolean }>();
+const scopeListeners = new Map<string, Set<(live: boolean) => void>>();
 let legacyCameraLiveUnsub: (() => void) | null = null;
 
 /** `document.documentElement` while the reading camera is mid-gesture. */
@@ -157,6 +156,32 @@ export type DocFlagHolds = {
   pointer(held: boolean): void;
 };
 
+function scopePaintFrozen(scope: string): boolean {
+  const row = scopeHolds.get(scope);
+  return Boolean(row?.camera || row?.pointer);
+}
+
+function publishScopeFrozen(scope: string, live: boolean): void {
+  const listeners = scopeListeners.get(scope);
+  if (!listeners) return;
+  for (const handler of [...listeners]) handler(live);
+}
+
+function setScopeHold(
+  scope: string | undefined,
+  key: "camera" | "pointer",
+  live: boolean,
+): void {
+  if (!scope) return;
+  const prev = scopeHolds.get(scope) ?? { camera: false, pointer: false };
+  const was = prev.camera || prev.pointer;
+  const next = { ...prev, [key]: live };
+  if (!next.camera && !next.pointer) scopeHolds.delete(scope);
+  else scopeHolds.set(scope, next);
+  const now = next.camera || next.pointer;
+  if (was !== now) publishScopeFrozen(scope, now);
+}
+
 /**
  * A latched share of the module flags, for one surface.
  *
@@ -167,9 +192,11 @@ export type DocFlagHolds = {
  * raise is still one share, and a release from a surface holding nothing is
  * nothing at all.
  *
- * One per Board and one per conflict pane, kept for the life of the surface.
+ * Pass the tab / film scope so this surface's paint pump can freeze without
+ * the sibling waiting. One per Board and one per conflict pane, kept for
+ * the life of the surface.
  */
-export function makeDocFlagHolds(): DocFlagHolds {
+export function makeDocFlagHolds(scope?: string): DocFlagHolds {
   let camera = false;
   let pointer = false;
   return {
@@ -177,11 +204,13 @@ export function makeDocFlagHolds(): DocFlagHolds {
       if (camera === live) return;
       camera = live;
       setDocCameraLive(live);
+      setScopeHold(scope, "camera", live);
     },
     pointer(held: boolean): void {
       if (pointer === held) return;
       pointer = held;
       setDocPointerHeld(held);
+      setScopeHold(scope, "pointer", held);
     },
   };
 }
@@ -198,20 +227,42 @@ export function resetDocCameraForTests(): void {
   claimedHandlers.clear();
   scrollShares.clear();
   subMarkHits.clear();
+  scopeHolds.clear();
+  scopeListeners.clear();
   publishPaintFrozen();
 }
 
-export function isDocCameraLive(): boolean {
+/**
+ * `scope` is that surface only. Omit it for "anything in the process is moving".
+ */
+export function isDocCameraLive(scope?: string): boolean {
+  if (scope) return scopePaintFrozen(scope);
   return paintFrozen();
 }
 
 /**
  * Subscribe to camera live edges.
  *
- * More than one listener: footnote ribbons *and* the PDF paint pump both have
- * to freeze for the same flick, and a single-slot setter would drop the other.
+ * Pass `scope` for one surface's freeze. Omit it for the process-wide sum
+ * (hub ping, CSS class). A paint pump must pass its film scope or a leftover
+ * flick on the other split pane cancels its decode.
  */
-export function subscribeDocCameraLive(handler: (live: boolean) => void): () => void {
+export function subscribeDocCameraLive(
+  handler: (live: boolean) => void,
+  scope?: string,
+): () => void {
+  if (scope) {
+    let listeners = scopeListeners.get(scope);
+    if (!listeners) {
+      listeners = new Set();
+      scopeListeners.set(scope, listeners);
+    }
+    listeners.add(handler);
+    return () => {
+      listeners.delete(handler);
+      if (listeners.size === 0) scopeListeners.delete(scope);
+    };
+  }
   cameraLiveListeners.add(handler);
   return () => {
     cameraLiveListeners.delete(handler);

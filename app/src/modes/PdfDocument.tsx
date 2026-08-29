@@ -91,6 +91,7 @@ import {
   pdfPageTargetScale,
   pdfPaintHole,
   pdfPaintShouldWaitForLanding,
+  pdfMayTakeWorker,
   pdfRestPages,
   pdfShouldPreempt,
 } from "./pdfPaintWindow";
@@ -139,6 +140,7 @@ export {
   pdfPageTargetScale,
   pdfPaintHole,
   pdfPaintShouldWaitForLanding,
+  pdfMayTakeWorker,
   pdfRestPages,
 } from "./pdfPaintWindow";
 export { PDF_PREVIEW_CACHE, PDF_PREVIEW_RADIUS } from "../perfPreset";
@@ -261,6 +263,12 @@ export interface PdfDocumentProps {
    * shared film / LRU pointers. Two open books used to fight over one C.
    */
   paused?: boolean;
+  /**
+   * Split partner still on screen: keep the observer and bitmaps, do not
+   * take the shared pdf.js worker. `paused` is the off-screen case and
+   * tears the observer down — a tab tap must not do that.
+   */
+  holdDecode?: boolean;
   /**
    * Conflict / preview: this stack scrolls in its own overflow parent, not
    * on the board camera. Borrow the already-open pdf.js document, keep a
@@ -523,6 +531,7 @@ export function PdfDocument({
   onError,
   initialPage = 0,
   paused = false,
+  holdDecode = false,
   idleThumbs = false,
   standalone = false,
   paintRadius = PDF_PREVIEW_RADIUS,
@@ -542,6 +551,8 @@ export function PdfDocument({
   initialPageRef.current = initialPage;
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const holdDecodeRef = useRef(holdDecode);
+  holdDecodeRef.current = holdDecode;
   const idleThumbsRef = useRef(idleThumbs);
   idleThumbsRef.current = idleThumbs;
   const standaloneRef = useRef(standalone);
@@ -609,6 +620,23 @@ export function PdfDocument({
   spreadRef.current = spread;
   frameWidthRef.current = frameWidth;
   const lastSpreadForBusyRef = useRef(spread);
+  const wasHoldDecodeRef = useRef(holdDecode);
+
+  useEffect(() => {
+    const was = wasHoldDecodeRef.current;
+    wasHoldDecodeRef.current = holdDecode;
+    if (holdDecode) {
+      try {
+        inFlightPaintRef.current?.cancel();
+      } catch {
+        /* already finished */
+      }
+      return;
+    }
+    if (!was) return;
+    wakePdfPaintPump(filmScope);
+    setWindowTick((tick) => tick + 1);
+  }, [holdDecode, filmScope]);
 
   useEffect(() => {
     if (!docHash) return;
@@ -620,7 +648,7 @@ export function PdfDocument({
       // work used to run the moment the disk thumbs arrived — often while the
       // reader was already touching the page.
       await yieldToIdle();
-      if (cancelled || isCameraBusy() || isDocCameraLive()) return;
+      if (cancelled || isCameraBusy() || isDocCameraLive(filmScope)) return;
       const keep = new Set(openedPdfThumbHashes());
       for (const entry of listAnnotateDocs()) {
         if (entry.hash) keep.add(entry.hash);
@@ -863,7 +891,7 @@ export function PdfDocument({
     const publishNav = () => {
       const current = peekPdfFilmCurrent(filmScope);
       // Filmstrip / rest expand from camera C (hole center), not IO's top sheet.
-      if (isDocCameraLive()) return;
+      if (isDocCameraLive(filmScope)) return;
       if (!pdfNavShouldPublish(lastPublished, { count: last, current })) return;
       lastPublished.count = last;
       lastPublished.current = current;
@@ -940,7 +968,7 @@ export function PdfDocument({
          * Rebuilding the paint window mid-coast is the hitch. Film current
          * already published above without Workspace setState.
          */
-        if (!standaloneRef.current && isDocCameraLive()) return;
+        if (!standaloneRef.current && isDocCameraLive(filmScope)) return;
         rebuild();
       },
       {
@@ -957,7 +985,7 @@ export function PdfDocument({
       wantedRef.current = new Set(outer);
       const rest = sharpPages(filmScope, last);
       const lru = sheetLruRef.current;
-      const live = isDocCameraLive();
+      const live = isDocCameraLive(filmScope);
       const hole = peekPdfIntersectingPages(filmScope);
       const blitIds = [
         ...new Set([...outer, ...hole, ...peekPdfPreloadPages(filmScope), C]),
@@ -992,15 +1020,15 @@ export function PdfDocument({
     };
     blitOuterFromLru();
     const unsubFilm = subscribePdfFilmCurrent(filmScope, () => {
-      if (!isDocCameraLive()) blitOuterFromLru();
+      if (!isDocCameraLive(filmScope)) blitOuterFromLru();
       preemptPaintIfNeededRef.current();
-      if (isDocCameraLive()) return;
+      if (isDocCameraLive(filmScope)) return;
       rebuild();
     });
     const unsubView = subscribePdfViewPages(filmScope, () => {
       blitOuterFromLru();
       preemptPaintIfNeededRef.current();
-      if (isDocCameraLive()) return;
+      if (isDocCameraLive(filmScope)) return;
       setWindowTick((tick) => tick + 1);
     });
     const unsubPreload = subscribePdfPreloadPages(filmScope, () => {
@@ -1018,10 +1046,10 @@ export function PdfDocument({
       flushAfterCoast();
       idlePathTimer = window.setTimeout(() => {
         idlePathTimer = 0;
-        if (isDocCameraLive()) return;
+        if (isDocCameraLive(filmScope)) return;
         notePath();
       }, msUntilCameraIdleTeardown());
-    });
+    }, filmScope);
     return () => {
       if (idlePathTimer) window.clearTimeout(idlePathTimer);
       unsubFilm();
@@ -1122,9 +1150,9 @@ export function PdfDocument({
       content: PdfTextContent,
     ): Promise<boolean> => {
       for (const slot of queryPageSlots(host, n)) {
-        if (disposedRef.current || isDocCameraLive()) return false;
+        if (disposedRef.current || isDocCameraLive(filmScope)) return false;
         await yieldToInput();
-        if (disposedRef.current || isDocCameraLive()) return false;
+        if (disposedRef.current || isDocCameraLive(filmScope)) return false;
         const textHost = slot.querySelector<HTMLElement>(".lc-pdf-text");
         const spreadHost =
           slot.querySelector<HTMLElement>(".lc-pdf-spread") ?? slot;
@@ -1139,9 +1167,9 @@ export function PdfDocument({
           viewport: pdfPage.getViewport({ scale: entry.fit }),
         });
         await yieldToInput();
-        if (disposedRef.current || isDocCameraLive()) return false;
+        if (disposedRef.current || isDocCameraLive(filmScope)) return false;
         await layer.render();
-        if (disposedRef.current || isDocCameraLive()) return false;
+        if (disposedRef.current || isDocCameraLive(filmScope)) return false;
         alignTextLayerToGlyphs(
           spreadHost,
           layer.textDivs,
@@ -1175,21 +1203,21 @@ export function PdfDocument({
 
     const fillMissingText = async (n: number): Promise<void> => {
       const entry = pagesRef.current.find((page) => page.pageNumber === n);
-      if (!entry || disposedRef.current || isDocCameraLive()) return;
+      if (!entry || disposedRef.current || isDocCameraLive(filmScope)) return;
       // Claimed before the work, not after: a page whose text content throws
       // must not send the pump straight back to it.
       textFilledRef.current.add(n);
       const closeJob = openBackgroundJob(`pdf-text:${n}`);
       try {
         await yieldToInput();
-        if (disposedRef.current || isDocCameraLive()) {
+        if (disposedRef.current || isDocCameraLive(filmScope)) {
           textFilledRef.current.delete(n);
           return;
         }
         const pdfPage = await doc.getPage(n);
-        if (disposedRef.current || isDocCameraLive()) return;
+        if (disposedRef.current || isDocCameraLive(filmScope)) return;
         const content = await pdfPage.getTextContent();
-        if (disposedRef.current || isDocCameraLive()) return;
+        if (disposedRef.current || isDocCameraLive(filmScope)) return;
         // A gesture mid-fill gives the page back, so the next settle retries.
         if (!(await fillPageText(n, entry, pdfPage, content))) {
           textFilledRef.current.delete(n);
@@ -1206,7 +1234,7 @@ export function PdfDocument({
       keepText = true,
       forceCap = false,
     ): Promise<boolean> => {
-      if (isDocCameraLive()) return false;
+      if (isDocCameraLive(filmScope)) return false;
       if (!forceCap && !isCameraIdleForTeardown()) return false;
       const slots = [
         ...host.querySelectorAll<HTMLElement>(`[data-pdf-page="${n}"]`),
@@ -1248,13 +1276,13 @@ export function PdfDocument({
           paintedRef.current.delete(item.page);
         }
         void (async () => {
-          if (!PDF_PAGEFILE || isDocCameraLive()) {
+          if (!PDF_PAGEFILE || isDocCameraLive(filmScope)) {
             releaseSheet(item.sheet);
             return;
           }
           const closeJob = openBackgroundJob(`pdf-pagefile:${item.page}`);
           try {
-            const png = await captureSheetPng(item.sheet, () => isDocCameraLive());
+            const png = await captureSheetPng(item.sheet, () => isDocCameraLive(filmScope));
             releaseSheet(item.sheet);
             if (!png || disposedRef.current) return;
             dropSessionText(sessionRef.current.put(item.page, png));
@@ -1291,7 +1319,7 @@ export function PdfDocument({
             : paintScale,
         );
       }
-      const live = isDocCameraLive();
+      const live = isDocCameraLive(filmScope);
       if (live && paintScale > PDF_PREVIEW_SCALE + 1e-9) {
         const cached = sheetLruRef.current.get(n);
         if (cached) {
@@ -1334,7 +1362,7 @@ export function PdfDocument({
         } catch {
           /* already finished */
         }
-      });
+      }, filmScope);
       const commitSheet = (sheet: SheetBitmap, target = paintScale) => {
         const blitScale = target > 0 ? target : PDF_PREVIEW_SCALE;
         blitCachedSheet(host, n, entry, sheet, blitScale);
@@ -1369,19 +1397,19 @@ export function PdfDocument({
           !pageNeedsDecode(entry.fit, paintScale, sheetLruRef.current.lod(n))
         ) {
           commitSheet(cached);
-          if (isDocCameraLive()) return;
+          if (isDocCameraLive(filmScope)) return;
           const firstText = slots[0]?.querySelector(".lc-pdf-text");
           if (firstText && firstText.childNodes.length > 0) return;
           const pdfPage = await doc.getPage(n);
-          if (disposedRef.current || isDocCameraLive()) return;
+          if (disposedRef.current || isDocCameraLive(filmScope)) return;
           const content = await pdfPage.getTextContent();
-          if (disposedRef.current || isDocCameraLive()) return;
+          if (disposedRef.current || isDocCameraLive(filmScope)) return;
           await fillText(pdfPage, content);
           return;
         }
 
         const paged = sessionRef.current.get(n);
-        if (paged && !isDocCameraLive()) {
+        if (paged && !isDocCameraLive(filmScope)) {
           const restored = await restoreSheetPng(paged);
           if (disposedRef.current) return;
           if (restored) {
@@ -1400,20 +1428,20 @@ export function PdfDocument({
               const firstText = slots[0]?.querySelector(".lc-pdf-text");
               if (firstText && firstText.childNodes.length > 0) return;
               const pdfPage = await doc.getPage(n);
-              if (disposedRef.current || isDocCameraLive()) return;
+              if (disposedRef.current || isDocCameraLive(filmScope)) return;
               const content = await pdfPage.getTextContent();
-              if (disposedRef.current || isDocCameraLive()) return;
+              if (disposedRef.current || isDocCameraLive(filmScope)) return;
               await fillText(pdfPage, content);
               return;
             }
           }
         }
 
-        if (isDocCameraLive() && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
+        if (isDocCameraLive(filmScope) && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
         if (aborted) return;
         const pdfPage = await doc.getPage(n);
         if (disposedRef.current || aborted) return;
-        if (isDocCameraLive() && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
+        if (isDocCameraLive(filmScope) && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
         const viewport = pdfPage.getViewport({ scale: entry.fit * paintScale });
         const scratch = document.createElement("canvas");
         scratch.width = Math.round(viewport.width);
@@ -1422,7 +1450,7 @@ export function PdfDocument({
         if (!scratchCtx) return;
         await yieldToInput();
         if (disposedRef.current || aborted) return;
-        if (isDocCameraLive() && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
+        if (isDocCameraLive(filmScope) && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
         paint = pdfPage.render({
           canvas: scratch,
           canvasContext: scratchCtx,
@@ -1433,9 +1461,9 @@ export function PdfDocument({
         const sheet = await rememberScratch(scratch, entry.fit * paintScale);
         if (disposedRef.current) return;
         commitSheet(sheet);
-        if (!isDocCameraLive()) {
+        if (!isDocCameraLive(filmScope)) {
           const content = await pdfPage.getTextContent();
-          if (disposedRef.current || isDocCameraLive()) return;
+          if (disposedRef.current || isDocCameraLive(filmScope)) return;
           await fillText(pdfPage, content);
         }
       } catch (cause: unknown) {
@@ -1469,7 +1497,7 @@ export function PdfDocument({
       const scaleOf = (n: number) => sheetLruRef.current.lod(n);
       const preload = peekPdfPreloadPages(filmScope);
       let queue = pdfDecodeQueue(C, last, rest, outer, visible, scaleOf, fitOf, preload);
-      if (isDocCameraLive()) {
+      if (isDocCameraLive(filmScope)) {
         const hole = new Set(visible);
         const ahead = new Set(preload);
         queue = queue.filter(
@@ -1484,6 +1512,15 @@ export function PdfDocument({
     preemptPaintIfNeededRef.current = () => {
       thumbCancelRef.current();
       const flight = inFlightPaintRef.current;
+      if (holdDecodeRef.current) {
+        if (!flight) return;
+        try {
+          flight.cancel();
+        } catch {
+          /* already finished */
+        }
+        return;
+      }
       if (!flight) return;
       const { queue, rest } = currentQueue();
       const head = queue[0];
@@ -1538,13 +1575,14 @@ export function PdfDocument({
           );
           await yieldToInput();
           if (disposedRef.current || pausedRef.current) return;
+          if (!pdfMayTakeWorker(pausedRef.current, holdDecodeRef.current)) return;
 
           const idle = isCameraIdleForTeardown();
           const overCap = paintedRef.current.size > MAX_LIVE_CANVASES;
           if (idle || overCap) {
             for (const n of extrasFarthestFirst()) {
               if (!idle && paintedRef.current.size <= MAX_LIVE_CANVASES) break;
-              if (isDocCameraLive()) break;
+              if (isDocCameraLive(filmScope)) break;
               if (disposedRef.current) return;
               if (wantedRef.current.has(n)) continue;
               if (await pageOut(n, true, overCap && !idle)) {
@@ -1560,7 +1598,7 @@ export function PdfDocument({
             continue;
           }
 
-          if (isDocCameraLive()) {
+          if (isDocCameraLive(filmScope)) {
             await waitForPaintSignal(filmScope);
             continue;
           }
@@ -1592,7 +1630,7 @@ export function PdfDocument({
             pathFillRef.current = [];
             return;
           }
-          if (isDocCameraLive()) continue;
+          if (isDocCameraLive(filmScope)) continue;
           if (disposedRef.current) return;
           await paintOne(next, PDF_PREVIEW_SCALE);
           if (disposedRef.current) return;
@@ -1641,7 +1679,7 @@ export function PdfDocument({
     const busy = () =>
       disposedRef.current ||
       pausedRef.current ||
-      isDocCameraLive() ||
+      isDocCameraLive(filmScope) ||
       pumpRef.current ||
       Boolean(inFlightPaintRef.current);
 
@@ -1717,7 +1755,7 @@ export function PdfDocument({
       } catch {
         thumbTask = null;
         if (mine !== gen) return;
-        if (!disposedRef.current && !isDocCameraLive()) thumbFailed.add(pageNumber);
+        if (!disposedRef.current && !isDocCameraLive(filmScope)) thumbFailed.add(pageNumber);
         if (!busy()) {
           timer = window.setTimeout(() => {
             void fillOne();
@@ -1733,7 +1771,7 @@ export function PdfDocument({
     const unsubLive = subscribeDocCameraLive((live) => {
       if (live) abortFill();
       else armIdleTimer();
-    });
+    }, filmScope);
     armIdleTimer();
     return () => {
       thumbCancelRef.current = () => {};
@@ -1838,7 +1876,7 @@ function waitForPaintSignal(filmScope: string): Promise<void> {
       unsubWake();
       resolve();
     };
-    const unsubLive = subscribeDocCameraLive(() => finish());
+    const unsubLive = subscribeDocCameraLive(() => finish(), filmScope);
     const unsubView = subscribePdfViewPages(filmScope, () => {
       if (skipView) return;
       finish();

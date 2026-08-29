@@ -239,6 +239,35 @@ describe("makeDocFlagHolds", () => {
       false,
     );
   });
+
+  it("one pane's flick does not freeze the other pane's paint flag", () => {
+    const local = makeDocFlagHolds("local");
+    const server = makeDocFlagHolds("server");
+    local.camera(true);
+    expect(isDocCameraLive("local")).toBe(true);
+    expect(isDocCameraLive("server")).toBe(false);
+    expect(isDocCameraLive()).toBe(true);
+    local.camera(false);
+    expect(isDocCameraLive()).toBe(false);
+    server.pointer(true);
+    expect(isDocCameraLive("server")).toBe(true);
+    expect(isDocCameraLive("local")).toBe(false);
+    server.pointer(false);
+  });
+
+  it("a scoped subscribe does not fire for the other pane", () => {
+    const local = makeDocFlagHolds("local");
+    const server = makeDocFlagHolds("server");
+    const seen: boolean[] = [];
+    const unsub = subscribeDocCameraLive((live) => seen.push(live), "server");
+    local.camera(true);
+    expect(seen).toEqual([]);
+    server.camera(true);
+    expect(seen).toEqual([true]);
+    server.camera(false);
+    expect(seen).toEqual([true, false]);
+    unsub();
+  });
 });
 
 describe("requestDocScroll", () => {

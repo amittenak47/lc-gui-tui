@@ -9920,6 +9920,7 @@ export function Workspace({
                       frameWidth={annotatePageWidth}
                       initialPage={pdfSessionPage || undefined}
                       paused={!showing || Boolean(hubConflictAsk)}
+                      holdDecode={showing && !active}
                       idleThumbs={showing && active && pdfFilmOpen}
                       onMeasure={onMdInkMeasure}
                       onNav={setPdfNav}

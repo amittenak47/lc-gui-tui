@@ -90,14 +90,11 @@ export function ConflictPagePreview({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const docRef = useRef<HTMLDivElement | null>(null);
   /*
-   * This pane's own share of the module camera flags.
-   *
-   * The split mounts two of these. Setting the process-wide flag directly
-   * meant flicking Local froze Server's paint pump, and a pointer-up on
-   * either released the other's finger.
+   * This pane's own share of the module camera flags, keyed by filmScope so
+   * Local's leftover flick does not cancel Server's page.render.
    */
   const holdsRef = useRef<DocFlagHolds | null>(null);
-  if (!holdsRef.current) holdsRef.current = makeDocFlagHolds();
+  if (!holdsRef.current) holdsRef.current = makeDocFlagHolds(filmScope);
   const holds = holdsRef.current;
   const [cssWidth, setCssWidth] = useState(0);
   const [scrollRoot, setScrollRoot] = useState<HTMLElement | null>(null);
