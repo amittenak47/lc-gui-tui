@@ -6,6 +6,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — Copy and Google come back to the selection sheet on a PDF
+
+- **A hold-drag over a PDF page offered only Annotate.** Copy and Google are
+  there whenever the selection has words in it, and on these pages it did not:
+  the quote sweep reads the DOM, and those pages had a picture with an empty
+  text layer under it.
+- **A page painted while the camera was live never got its spans.** `paintOne`
+  skips the text fill mid-gesture — laying out a few thousand positioned divs
+  under a moving finger is exactly what the freeze exists to prevent — and it
+  is the decode queue that would bring the page back, which it never does: the
+  pixels are already at the level of detail the window wants, so the page is
+  dropped from the queue and nothing fills the layer, ever. Flick to a page and
+  stop, and you get one you can read and cannot quote. Land on one gently and
+  it was fine, which is why this looked arbitrary.
+- **The pump now fills them once the camera is idle**, ahead of the path fill,
+  for the pages actually on screen. A page with no strings on it is asked once
+  and remembered, so an empty layer cannot send the pump round forever; a fill
+  a gesture interrupts is given back and retried at the next settle.
+
+
 ### Fixed — a PDF hears the finger straight away after a reading pause
 
 - **Touching the page to scroll after sitting on it could take 300–700ms to

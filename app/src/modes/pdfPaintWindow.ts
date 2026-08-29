@@ -275,3 +275,46 @@ export function pdfShouldPreempt(
   };
   return rank(head) < rank(flight);
 }
+
+/** What the pump can tell about one page's text layer. */
+export interface PdfPageTextState {
+  /** The page has a slot in the stack. */
+  laidOut: boolean;
+  /** The slot carries a picture. */
+  painted: boolean;
+  /** The text layer already holds spans. */
+  hasSpans: boolean;
+  /** The pump has laid this page's text out and does not owe it another go. */
+  filled: boolean;
+}
+
+/**
+ * The first page on screen whose words are a picture and nothing else.
+ *
+ * A page painted while the camera was live never got a text layer — the paint
+ * skips the fill mid-gesture, and the decode queue will not come back for the
+ * page, because its pixels are already at the level of detail the window
+ * wants. Nothing else would ever fill it. What the reader gets is a page they
+ * can read and cannot quote: a hold-drag over it finds no text, so the
+ * selection sheet has nothing to offer but Annotate.
+ *
+ * `filled` rather than `!hasSpans` is what stops the pump coming back: a page
+ * with no strings on it lays out to an empty layer, and "no spans" would send
+ * it round forever. `laidOut` is not a formality either — a page the caller
+ * would decline is a page it would be handed again on the next turn.
+ */
+export function nextPdfPageMissingText(
+  onScreen: Iterable<number>,
+  stateOf: (page: number) => PdfPageTextState,
+): number | null {
+  for (const n of onScreen) {
+    if (!(n >= 1)) continue;
+    const state = stateOf(n);
+    if (state.filled || !state.laidOut) continue;
+    // Spans over a sheet with no picture would be a lie — the layer only ever
+    // describes pixels that are actually there.
+    if (!state.painted || state.hasSpans) continue;
+    return n;
+  }
+  return null;
+}
