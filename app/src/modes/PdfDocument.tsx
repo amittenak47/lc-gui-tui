@@ -80,6 +80,7 @@ import {
   sessionPathPages,
 } from "./pdfPageSession";
 import {
+  nextPdfPageMissingText,
   pageNeedsDecode,
   pdfDecodeQueue,
   pdfOuterPages,
@@ -550,6 +551,15 @@ export function PdfDocument({
   const sessionRef = useRef(new PdfPageSession());
   const lastSettledPageRef = useRef(Math.max(1, initialPage));
   const pathFillRef = useRef<number[]>([]);
+  /**
+   * Pages whose text layer has been laid out over the picture.
+   *
+   * Not derivable from the DOM: a page with no strings in it fills to an
+   * empty layer, and "no spans" would send the pump back to it forever.
+   * Cleared wherever the spans are, so a page that comes back gets asked
+   * again.
+   */
+  const textFilledRef = useRef<Set<number>>(new Set());
   /** Pages the viewport can currently see. */
   const visibleRef = useRef<Set<number>>(new Set());
   /** Pages the window wants painted — the visible ones, plus their neighbours. */
@@ -603,6 +613,7 @@ export function PdfDocument({
     sheetLruRef.current.clear();
     sessionRef.current.clear();
     pathFillRef.current = [];
+    textFilledRef.current.clear();
   };
 
   /**
@@ -1054,6 +1065,7 @@ export function PdfDocument({
 
     const dropSessionText = (pagesToDrop: number[]) => {
       for (const gone of pagesToDrop) {
+        textFilledRef.current.delete(gone);
         for (const node of host.querySelectorAll<HTMLElement>(
           `[data-pdf-page="${gone}"]`,
         )) {
@@ -1061,6 +1073,92 @@ export function PdfDocument({
           if (text) text.textContent = "";
           node.removeAttribute("data-painted");
         }
+      }
+    };
+
+    type PdfPageProxy = Awaited<ReturnType<typeof doc.getPage>>;
+    type PdfTextContent = Awaited<ReturnType<PdfPageProxy["getTextContent"]>>;
+
+    /**
+     * Lay pdf.js's spans over a page's picture.
+     *
+     * `false` means a gesture cut it short, so the layer is empty or half
+     * built and the caller must not remember the page as done.
+     */
+    const fillPageText = async (
+      n: number,
+      entry: RenderedPage,
+      pdfPage: PdfPageProxy,
+      content: PdfTextContent,
+    ): Promise<boolean> => {
+      for (const slot of queryPageSlots(host, n)) {
+        if (disposedRef.current || isDocCameraLive()) return false;
+        const textHost = slot.querySelector<HTMLElement>(".lc-pdf-text");
+        const spreadHost =
+          slot.querySelector<HTMLElement>(".lc-pdf-spread") ?? slot;
+        if (!textHost) continue;
+        textHost.textContent = "";
+        const layer = new TextLayer({
+          textContentSource: {
+            ...content,
+            items: content.items.slice(),
+          },
+          container: textHost,
+          viewport: pdfPage.getViewport({ scale: entry.fit }),
+        });
+        await layer.render();
+        if (disposedRef.current || isDocCameraLive()) return false;
+        alignTextLayerToGlyphs(
+          spreadHost,
+          layer.textDivs,
+          content.items,
+          entry.fit,
+        );
+      }
+      textFilledRef.current.add(n);
+      return true;
+    };
+
+    /** See {@link nextPdfPageMissingText} for what this is for. */
+    const nextPageMissingText = (): number | null => {
+      const last = pagesRef.current.at(-1)?.pageNumber ?? 1;
+      const C = peekPdfFilmCurrent(filmScope);
+      const onScreen = new Set([
+        ...pdfPaintHole(C, peekPdfIntersectingPages(filmScope)),
+        ...sharpPages(filmScope, last),
+      ]);
+      return nextPdfPageMissingText(onScreen, (n) => {
+        const first = queryPageSlots(host, n)[0];
+        const textHost = first?.querySelector(".lc-pdf-text");
+        return {
+          laidOut: pagesRef.current.some((page) => page.pageNumber === n),
+          painted: Boolean(first?.hasAttribute("data-painted")),
+          hasSpans: (textHost?.childNodes.length ?? 0) > 0,
+          filled: textFilledRef.current.has(n),
+        };
+      });
+    };
+
+    const fillMissingText = async (n: number): Promise<void> => {
+      const entry = pagesRef.current.find((page) => page.pageNumber === n);
+      if (!entry || disposedRef.current || isDocCameraLive()) return;
+      // Claimed before the work, not after: a page whose text content throws
+      // must not send the pump straight back to it.
+      textFilledRef.current.add(n);
+      const closeJob = openBackgroundJob(`pdf-text:${n}`);
+      try {
+        const pdfPage = await doc.getPage(n);
+        if (disposedRef.current || isDocCameraLive()) return;
+        const content = await pdfPage.getTextContent();
+        if (disposedRef.current || isDocCameraLive()) return;
+        // A gesture mid-fill gives the page back, so the next settle retries.
+        if (!(await fillPageText(n, entry, pdfPage, content))) {
+          textFilledRef.current.delete(n);
+        }
+      } catch {
+        /* torn-down worker; a text drop on this page is what asks again */
+      } finally {
+        closeJob();
       }
     };
 
@@ -1084,6 +1182,7 @@ export function PdfDocument({
         }
         slot.removeAttribute("data-painted");
         if (!keepText) {
+          textFilledRef.current.delete(n);
           const text = slot.querySelector<HTMLElement>(".lc-pdf-text");
           if (text) text.textContent = "";
         }
@@ -1221,37 +1320,8 @@ export function PdfDocument({
         archiveDropped(dropped);
         return sheet;
       };
-      const fillText = async (
-        pdfPage: Awaited<ReturnType<typeof doc.getPage>>,
-        content: Awaited<
-          ReturnType<Awaited<ReturnType<typeof doc.getPage>>["getTextContent"]>
-        >,
-      ) => {
-        for (const slot of slots) {
-          if (disposedRef.current || isDocCameraLive()) return;
-          const textHost = slot.querySelector<HTMLElement>(".lc-pdf-text");
-          const spreadHost =
-            slot.querySelector<HTMLElement>(".lc-pdf-spread") ?? slot;
-          if (!textHost) continue;
-          textHost.textContent = "";
-          const layer = new TextLayer({
-            textContentSource: {
-              ...content,
-              items: content.items.slice(),
-            },
-            container: textHost,
-            viewport: pdfPage.getViewport({ scale: entry.fit }),
-          });
-          await layer.render();
-          if (disposedRef.current || isDocCameraLive()) return;
-          alignTextLayerToGlyphs(
-            spreadHost,
-            layer.textDivs,
-            content.items,
-            entry.fit,
-          );
-        }
-      };
+      const fillText = (pdfPage: PdfPageProxy, content: PdfTextContent) =>
+        fillPageText(n, entry, pdfPage, content);
 
       try {
         const cached = sheetLruRef.current.get(n);
@@ -1451,6 +1521,19 @@ export function PdfDocument({
 
           if (isDocCameraLive()) {
             await waitForPaintSignal(filmScope);
+            continue;
+          }
+
+          /*
+           * Words on screen before pages the reader has not reached.
+           *
+           * A page can be quotable or merely legible, and the difference is
+           * this layer. It goes ahead of the path fill because the reader is
+           * looking at these pages now.
+           */
+          const textless = nextPageMissingText();
+          if (textless != null) {
+            await fillMissingText(textless);
             continue;
           }
 

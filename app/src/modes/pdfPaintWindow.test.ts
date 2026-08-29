@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { PDF_PREVIEW_SCALE, PDF_REST_SCALE } from "../perfPreset";
 import {
+  nextPdfPageMissingText,
   pageNeedsDecode,
   pdfDecodeQueue,
   pdfLandingHoldClear,
@@ -258,5 +259,60 @@ describe("pdfVisibleFromSpans", () => {
     const spans = [page(9, -50), page(10, 50), page(11, 150)];
     const { intersecting, current } = pdfVisibleFromSpans(spans, 0, 200);
     expect(pdfRestPages(current, 40, intersecting)).toEqual([9, 10, 11]);
+  });
+});
+
+describe("nextPdfPageMissingText", () => {
+  /** A page with a picture, a text layer and no reason to be revisited. */
+  const quotable = {
+    laidOut: true,
+    painted: true,
+    hasSpans: true,
+    filled: true,
+  };
+  const from = (states: Record<number, Partial<typeof quotable>>) =>
+    (page: number) => ({ ...quotable, ...(states[page] ?? {}) });
+
+  it("finds a page painted under a live camera that never got its spans", () => {
+    // The reader can read it and cannot quote it: the decode queue is done
+    // with the page, so nothing but this would ever fill the layer.
+    const stateOf = from({ 12: { hasSpans: false, filled: false } });
+    expect(nextPdfPageMissingText([11, 12, 13], stateOf)).toBe(12);
+  });
+
+  it("leaves a page whose spans are already there", () => {
+    const stateOf = from({ 12: { filled: false } });
+    expect(nextPdfPageMissingText([11, 12, 13], stateOf)).toBeNull();
+  });
+
+  it("does not put spans over a sheet with no picture", () => {
+    const stateOf = from({ 12: { painted: false, hasSpans: false, filled: false } });
+    expect(nextPdfPageMissingText([12], stateOf)).toBeNull();
+  });
+
+  it("stops asking for a page with no text on it", () => {
+    // A scanned plate lays out to an empty layer. Keyed on `hasSpans` the
+    // pump would be handed it again every turn, forever.
+    const stateOf = from({ 12: { hasSpans: false, filled: true } });
+    expect(nextPdfPageMissingText([12], stateOf)).toBeNull();
+  });
+
+  it("skips a page with no slot, which the caller would decline anyway", () => {
+    const stateOf = from({ 12: { laidOut: false, hasSpans: false, filled: false } });
+    expect(nextPdfPageMissingText([12], stateOf)).toBeNull();
+  });
+
+  it("takes them in the order the caller asked", () => {
+    const stateOf = from({
+      9: { hasSpans: false, filled: false },
+      12: { hasSpans: false, filled: false },
+    });
+    expect(nextPdfPageMissingText([12, 9], stateOf)).toBe(12);
+    expect(nextPdfPageMissingText([9, 12], stateOf)).toBe(9);
+  });
+
+  it("ignores a page number that is not one", () => {
+    const stateOf = from({ 0: { hasSpans: false, filled: false } });
+    expect(nextPdfPageMissingText([0, -3], stateOf)).toBeNull();
   });
 });
