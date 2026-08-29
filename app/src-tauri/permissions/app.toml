@@ -58,6 +58,7 @@ commands.allow = [
   "lc_docs_get_bytes",
   "lc_docs_put_bytes",
   "lc_get_ink_pages",
+  "lc_get_ink_page",
   "lc_put_ink_page",
   "lc_put_edges",
   "lc_tombstone_edge",

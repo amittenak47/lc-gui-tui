@@ -243,6 +243,26 @@ describe("remintFootnoteInk", () => {
     expect(getInkPage).not.toHaveBeenCalled();
   });
 
+  it("copies local shards when the hub has never seen the board", async () => {
+    const copyInkPages = vi.fn(async () => 1);
+    vi.resetModules();
+    vi.doMock("./inkPageStore", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./inkPageStore")>()),
+      copyInkPages,
+      getInkPageRecords: async () => [],
+      listInkDocKeys: async () => [],
+    }));
+    const { remintFootnoteInk } = await import("./inkSync");
+    await remintFootnoteInk(
+      { getInkPage: async () => null, putInkPage: vi.fn() } as never,
+      "pad-1",
+      "wb7",
+      "wbFresh",
+      [],
+    );
+    expect(copyInkPages).toHaveBeenCalledWith("fnwb:pad-1:wb7", "fnwb:pad-1:wbFresh");
+  });
+
   it("writes nothing when the board it came from could not be read", async () => {
     const { remintFootnoteInk } = await loadInkSync();
     const putInkPage = vi.fn();
