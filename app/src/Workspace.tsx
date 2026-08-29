@@ -234,6 +234,8 @@ import {
 import { BROWSE_PICK_QUIET_MS, browsePickBlocked } from "./util/browsePickGuard";
 import { waitForAnnotateLaidOut, waitForPdfPageNode, waitForPdfPagePainted } from "./util/annotateLaidOut";
 import { planAutosaveTick } from "./util/autosaveSchedule";
+import { isCameraBusy, yieldToInput } from "./util/cameraBusy";
+import { isDocCameraLive } from "./canvas/docSelectionGesture";
 import {
   buildAnnotateSidecar,
   CODE_SOURCE_MAX_CHARS,
@@ -2208,6 +2210,14 @@ export function Workspace({
     if (!board || boardSaveSuspendedRef.current || padHubApplyRef.current) return;
     // Serialising the scene under the nib is felt as the stroke stopping.
     if (board.isInking()) return;
+    /*
+     * Same quiet window the hub ping already honours. The conflict-perf
+     * follow-up stopped parked tabs hashing, but the visible textbook still
+     * walked `getElements` every second — and a pointerdown is not dispatched
+     * until that walk returns. Sitting on a page, then touching it, paid
+     * whatever fingerprint was on the stack.
+     */
+    if (isDocCameraLive() || isCameraBusy()) return;
     const inkMix = boardInkMix(board);
     const elements = board.getElements();
     const hash = sceneFingerprint(elements, inkMix);
@@ -2503,7 +2513,11 @@ export function Workspace({
     autosaveScheduledRef.current = plan.periodMs !== null;
     if (plan.finalPass) autosaveTickRef.current();
     if (plan.periodMs === null) return;
-    const timer = window.setInterval(() => autosaveTickRef.current(), plan.periodMs);
+    const timer = window.setInterval(() => {
+      // Yield first so a queued pointerdown can freeze the PDF pump before
+      // `getElements` — see `yieldToInput`. Parking's final pass stays sync.
+      void yieldToInput().then(() => autosaveTickRef.current());
+    }, plan.periodMs);
     return () => window.clearInterval(timer);
   }, [autosaveMs, problem, showing]);
 

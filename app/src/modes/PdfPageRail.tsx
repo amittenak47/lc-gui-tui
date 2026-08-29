@@ -10,6 +10,7 @@
  */
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
+import { isDocCameraLive, subscribeDocCameraLive } from "../canvas/docSelectionGesture";
 import {
   PDF_FILM_THUMB_CSS,
   PDF_LETTER_ASPECT,
@@ -80,6 +81,7 @@ export function PdfPageRail({
   const [railPredicted, setRailPredicted] = useState(0);
   const currentPage = railCurrent;
   const [railRange, setRailRange] = useState({ start: 1, end: Math.min(count, 24) });
+  const [idleTick, setIdleTick] = useState(0);
 
   useEffect(() => subscribePdfFilmCurrent(filmScope, setRailCurrent), [filmScope]);
   useEffect(() => subscribePdfFilmPredicted(filmScope, setRailPredicted), [filmScope]);
@@ -88,6 +90,11 @@ export function PdfPageRail({
       setThumbs(peekPdfThumbs(docHashRef.current));
     }, docHash);
   }, [docHash]);
+  useEffect(() => {
+    return subscribeDocCameraLive((live) => {
+      if (!live) setIdleTick((tick) => tick + 1);
+    });
+  }, []);
 
   useEffect(() => {
     const strip = stripRef.current;
@@ -182,6 +189,11 @@ export function PdfPageRail({
     let cancelled = false;
     const needed = thumbWindow(currentPage, count, visibleRef.current);
     publishPdfFilmThumbWanted(filmScope, needed);
+    if (isDocCameraLive()) {
+      return () => {
+        cancelled = true;
+      };
+    }
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const px = Math.round(PDF_FILM_THUMB_CSS * dpr);
 
@@ -197,7 +209,7 @@ export function PdfPageRail({
         });
       };
       for (const page of needed) {
-        if (cancelled) return;
+        if (cancelled || isDocCameraLive()) return;
         const isFocus = page === currentPage;
         if (!isFocus && (thumbsRef.current.has(page) || inflightRef.current.has(page))) {
           continue;
@@ -232,7 +244,7 @@ export function PdfPageRail({
     return () => {
       cancelled = true;
     };
-  }, [count, currentPage, stripTick, renderThumb]);
+  }, [count, currentPage, stripTick, renderThumb, idleTick]);
 
   if (count < 2) return null;
 

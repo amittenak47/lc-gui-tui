@@ -38,8 +38,10 @@ import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from
 import { isDocCameraLive, subscribeDocCameraLive } from "../canvas/docSelectionGesture";
 import type { PageFrame } from "../canvas/inkPageIndex";
 import {
+  isCameraBusy,
   isCameraIdleForTeardown,
   msUntilCameraIdleTeardown,
+  yieldToIdle,
   yieldToInput,
 } from "../util/cameraBusy";
 import { openBackgroundJob } from "../util/inputLatency";
@@ -611,9 +613,14 @@ export function PdfDocument({
   useEffect(() => {
     if (!docHash) return;
     let cancelled = false;
-    void loadStoredPdfThumbs(docHash).then((stored) => {
+    void loadStoredPdfThumbs(docHash).then(async (stored) => {
       if (cancelled) return;
       hydratePdfThumbs(docHash, stored, peekPdfFilmCurrent(filmScope));
+      // Hydrate is cheap; walking the library and pruning IDB is not. That
+      // work used to run the moment the disk thumbs arrived — often while the
+      // reader was already touching the page.
+      await yieldToIdle();
+      if (cancelled || isCameraBusy() || isDocCameraLive()) return;
       const keep = new Set(openedPdfThumbHashes());
       for (const entry of listAnnotateDocs()) {
         if (entry.hash) keep.add(entry.hash);
@@ -1116,6 +1123,8 @@ export function PdfDocument({
     ): Promise<boolean> => {
       for (const slot of queryPageSlots(host, n)) {
         if (disposedRef.current || isDocCameraLive()) return false;
+        await yieldToInput();
+        if (disposedRef.current || isDocCameraLive()) return false;
         const textHost = slot.querySelector<HTMLElement>(".lc-pdf-text");
         const spreadHost =
           slot.querySelector<HTMLElement>(".lc-pdf-spread") ?? slot;
@@ -1129,6 +1138,8 @@ export function PdfDocument({
           container: textHost,
           viewport: pdfPage.getViewport({ scale: entry.fit }),
         });
+        await yieldToInput();
+        if (disposedRef.current || isDocCameraLive()) return false;
         await layer.render();
         if (disposedRef.current || isDocCameraLive()) return false;
         alignTextLayerToGlyphs(
@@ -1170,6 +1181,11 @@ export function PdfDocument({
       textFilledRef.current.add(n);
       const closeJob = openBackgroundJob(`pdf-text:${n}`);
       try {
+        await yieldToInput();
+        if (disposedRef.current || isDocCameraLive()) {
+          textFilledRef.current.delete(n);
+          return;
+        }
         const pdfPage = await doc.getPage(n);
         if (disposedRef.current || isDocCameraLive()) return;
         const content = await pdfPage.getTextContent();
@@ -1520,6 +1536,8 @@ export function PdfDocument({
             ],
             rest,
           );
+          await yieldToInput();
+          if (disposedRef.current || pausedRef.current) return;
 
           const idle = isCameraIdleForTeardown();
           const overCap = paintedRef.current.size > MAX_LIVE_CANVASES;

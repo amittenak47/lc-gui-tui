@@ -13,6 +13,11 @@
  * see. Gate on `showing`, not `active`: the inactive half of a split is on
  * screen, and its dot still has to move.
  *
+ * The visible pane still must not hash during a flick. The tick body skips
+ * `getElements` while `isDocCameraLive` / `isCameraBusy` — the same quiet
+ * window the hub ping already uses — because a pointerdown waits for that
+ * walk to return.
+ *
  * Stopping the interval on the way out would drop whatever the last few
  * seconds wrote, though, so parking owes one final pass — hence `finalPass`,
  * which is true exactly on the showing → parked edge and never on a workspace
