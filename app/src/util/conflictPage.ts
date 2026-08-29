@@ -43,3 +43,25 @@ export function conflictFocusPage(opts: {
   if (fromNote) return fromNote;
   return firstInkPage(opts.ink, opts.inkPageId);
 }
+
+/** Overlay lists: freeze preview plus pages fetched after a row click. */
+export function mergeInkDtos(
+  base: readonly InkPageDto[] | null | undefined,
+  extra: readonly InkPageDto[],
+): InkPageDto[] {
+  const byId = new Map<number, InkPageDto>();
+  for (const row of base ?? []) {
+    if (row.page_id >= 0) byId.set(row.page_id, row);
+  }
+  for (const row of extra) {
+    if (row.page_id >= 0 && !byId.has(row.page_id)) byId.set(row.page_id, row);
+  }
+  return [...byId.values()];
+}
+
+export function inkDtosHavePage(
+  pages: readonly InkPageDto[] | null | undefined,
+  pageId: number,
+): boolean {
+  return (pages ?? []).some((row) => row.page_id === pageId);
+}

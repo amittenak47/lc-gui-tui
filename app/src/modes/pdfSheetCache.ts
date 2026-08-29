@@ -21,15 +21,36 @@ export interface SheetBitmap {
 
 export type DroppedSheet = { page: number; sheet: SheetBitmap };
 
-let activeLru: PdfSheetLru | null = null;
+const activeByScope = new Map<string, { hash: string; lru: PdfSheetLru }>();
 
-export function setActiveSheetLru(lru: PdfSheetLru | null): void {
-  activeLru = lru;
+/**
+ * Register this surface's sheet LRU for filmstrip thumbs.
+ *
+ * One process-global pointer meant two open books stole each other's pages:
+ * peek by page number, and unmount of either nulled the only slot.
+ */
+export function setActiveSheetLru(
+  scope: string,
+  hash: string,
+  lru: PdfSheetLru | null,
+): void {
+  if (!scope) return;
+  if (!lru || !hash) {
+    activeByScope.delete(scope);
+    return;
+  }
+  activeByScope.set(scope, { hash, lru });
 }
 
 /** Read without touching LRU order — filmstrip thumbs. Prefers rest-2. */
-export function peekActiveSheet(page: number): SheetBitmap | null {
-  return activeLru?.peek(page) ?? null;
+export function peekActiveSheet(hash: string, page: number): SheetBitmap | null {
+  if (!hash) return null;
+  for (const row of activeByScope.values()) {
+    if (row.hash !== hash) continue;
+    const sheet = row.lru.peek(page);
+    if (sheet) return sheet;
+  }
+  return null;
 }
 
 export function isRestTarget(targetScale: number): boolean {

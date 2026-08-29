@@ -7,6 +7,7 @@ import {
   buildSnapshot,
   padContentFingerprint,
   sceneFingerprint,
+  boardInkMix,
   structureBaselineFromBoard,
 } from "./snapshot";
 import { sha256Hex } from "../util/codeHash";
@@ -23,6 +24,7 @@ function board(parts: {
     getStrokes: () => parts.strokes ?? [],
     getInkStrokes: () => parts.inkStrokes ?? [],
     getInkOpCount: () => (parts.inkStrokes ?? []).length,
+    getInkRevision: () => (parts.inkStrokes ?? []).length,
     exportPng: async () => parts.png ?? "",
   } as unknown as BoardHandle;
 }
@@ -79,6 +81,21 @@ describe("padContentFingerprint", () => {
       ...student,
     ];
     expect(padContentFingerprint(withTemplate, 0)).toBe(padContentFingerprint(student, 0));
+  });
+
+  it("sees undo-then-redraw as a different mix, not the same op count", () => {
+    const el = [element({ id: "a" })];
+    const drawn = 1;
+    const undoneThenRedrawn = 3;
+    expect(padContentFingerprint(el, drawn)).not.toBe(
+      padContentFingerprint(el, undoneThenRedrawn),
+    );
+    expect(sceneFingerprint(el, drawn)).not.toBe(sceneFingerprint(el, undoneThenRedrawn));
+  });
+
+  it("treats empty ink as mix 0 even after a revision clock has moved", () => {
+    expect(boardInkMix({ getInkOpCount: () => 0, getInkRevision: () => 4 })).toBe(0);
+    expect(boardInkMix({ getInkOpCount: () => 1, getInkRevision: () => 4 })).toBe(4);
   });
 });
 

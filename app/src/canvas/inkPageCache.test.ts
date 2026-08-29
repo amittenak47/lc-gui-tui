@@ -135,4 +135,15 @@ describe("InkPageBook", () => {
     book.undoOnce();
     expect(book.assembleOps().some((op) => op.id === a.id)).toBe(true);
   });
+
+  it("bumps revision on undo-then-redraw so the same op count is not the same mix", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(2));
+    book.commit(stroke(20));
+    const afterDraw = book.revision();
+    book.undoOnce();
+    book.commit(stroke(20));
+    expect(book.opCount()).toBe(1);
+    expect(book.revision()).toBeGreaterThan(afterDraw);
+  });
 });

@@ -69,6 +69,7 @@ import {
   buildSnapshot,
   padContentFingerprint,
   sceneFingerprint,
+  boardInkMix,
   structureBaselineFromBoard,
 } from "./canvas/snapshot";
 import { hasCodeAnnotations, renderAnnotatedCode } from "./canvas/codeAnnotation";
@@ -2100,7 +2101,7 @@ export function Workspace({
       if (!lastIdsRef.current.has(element.id)) added += 1;
     }
     return {
-      sceneHash: sceneFingerprint(elements, inkOps),
+      sceneHash: sceneFingerprint(elements, boardInkMix(board)),
       newElements: added,
       hasContent: mine.length > 0 || inkOps > 0,
     };
@@ -2124,7 +2125,7 @@ export function Workspace({
 
   // Debounced board persistence — skip when scene + ink fingerprint is unchanged.
   const lastSavedHashRef = useRef<number | null>(null);
-  /** Ink op count at the previous tick, for "is the hand still moving?". */
+  /** Ink mix at the previous tick. Empty is 0; otherwise the mutation clock. */
   const lastTickInkOpsRef = useRef(-1);
   /**
    * What the marks looked like at the last save.
@@ -2205,9 +2206,11 @@ export function Workspace({
     if (!problem) return;
     const board = boardRef.current;
     if (!board || boardSaveSuspendedRef.current || padHubApplyRef.current) return;
+    // Serialising the scene under the nib is felt as the stroke stopping.
+    if (board.isInking()) return;
+    const inkMix = boardInkMix(board);
     const elements = board.getElements();
-    const inkOps = board.getInkOpCount();
-    const hash = sceneFingerprint(elements, inkOps);
+    const hash = sceneFingerprint(elements, inkMix);
     /*
      * The board is not the only thing that changes.
      *
@@ -2219,11 +2222,10 @@ export function Workspace({
      * count as work.
      */
     const marks = isAnnotate(problem) ? footnoteRevision(annotateFootnotesRef.current) : "";
-    lastTickInkOpsRef.current = inkOps;
-    if (board.isInking()) return;
+    lastTickInkOpsRef.current = inkMix;
 
     if (isLocalPad(problem)) {
-      const contentHash = padContentFingerprint(elements, inkOps);
+      const contentHash = padContentFingerprint(elements, inkMix);
       const untouched = isAnnotate(problem)
         ? annotatePristineHashRef.current === contentHash &&
           footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current
@@ -2263,7 +2265,7 @@ export function Workspace({
       // can leave footnotes without ever putting the pen down, and those are
       // exactly as worth keeping as ink.
       const untouched =
-        annotatePristineHashRef.current === padContentFingerprint(elements, inkOps) &&
+        annotatePristineHashRef.current === padContentFingerprint(elements, inkMix) &&
         footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current;
       // The tab's dot rides on the comparison the autosave is already making;
       // fingerprinting the scene a second time for a 5px dot would not be.
@@ -2369,7 +2371,7 @@ export function Workspace({
        * also nothing to protect: a crash here loses a blank page.
        */
       const untouched =
-        whiteboardPristineHashRef.current === padContentFingerprint(elements, inkOps);
+        whiteboardPristineHashRef.current === padContentFingerprint(elements, inkMix);
       patchTab(tab.id, { dirty: !untouched });
       if (untouched) {
         lastSavedHashRef.current = hash;
@@ -3025,7 +3027,7 @@ export function Workspace({
         {
           const board = boardRef.current;
           whiteboardPristineHashRef.current = board
-            ? padContentFingerprint(board.getElements(), board.getInkOpCount())
+            ? padContentFingerprint(board.getElements(), boardInkMix(board))
             : null;
         }
 
@@ -3929,7 +3931,7 @@ export function Workspace({
         {
           const board = boardRef.current;
           annotatePristineHashRef.current = board
-            ? padContentFingerprint(board.getElements(), board.getInkOpCount())
+            ? padContentFingerprint(board.getElements(), boardInkMix(board))
             : null;
           annotatePristineMarksRef.current = footnoteRevision(annotateFootnotesRef.current);
           annotatePristineAgentRef.current = JSON.stringify(persistableAgentMessages(resumed));
@@ -7161,7 +7163,7 @@ export function Workspace({
     // Open race: pristine not snapshotted yet. Only claim untouched when the
     // board still looks blank (no ink) — never show Discard for a mid-open board.
     if (pristine === null) return board.getInkOpCount() === 0;
-    return padContentFingerprint(board.getElements(), board.getInkOpCount()) === pristine;
+    return padContentFingerprint(board.getElements(), boardInkMix(board)) === pristine;
   }, []);
 
   /**
@@ -7194,7 +7196,7 @@ export function Workspace({
      */
     const board = boardRef.current;
     whiteboardPristineHashRef.current = board
-      ? padContentFingerprint(board.getElements(), board.getInkOpCount())
+      ? padContentFingerprint(board.getElements(), boardInkMix(board))
       : null;
   }, []);
 
@@ -7222,7 +7224,7 @@ export function Workspace({
     footnoteBoardBaselineRef.current = { board: liveBoard, pageCount };
     whiteboardPristineHashRef.current = padContentFingerprint(
       board.getElements(),
-      board.getInkOpCount(),
+      boardInkMix(board),
     );
     emitFootnoteWhiteboardSaved(bind.docId, bind.wbId);
     patchTab(tab.id, { dirty: false });
@@ -7339,7 +7341,7 @@ export function Workspace({
     ) {
       return false;
     }
-    return padContentFingerprint(board.getElements(), board.getInkOpCount()) === pristine;
+    return padContentFingerprint(board.getElements(), boardInkMix(board)) === pristine;
   }, []);
 
   /**
@@ -7469,7 +7471,7 @@ export function Workspace({
       annotateBaselineRef.current = { id: saved.id, entry: saved };
       annotatePristineHashRef.current = padContentFingerprint(
         board.getElements(),
-        board.getInkOpCount(),
+        boardInkMix(board),
       );
       annotatePristineMarksRef.current = footnoteRevision(annotateFootnotes);
       annotatePristineAgentRef.current = JSON.stringify(persistableAgentMessages(agentMessages));
@@ -9869,6 +9871,7 @@ export function Workspace({
                 />
               ) : problem && isAnnotate(problem) && annotateSource ? (
                 <DocSelectionLayer
+                  paletteScope={tab.id}
                   enabled={!annotateCode || Boolean(openFootnote) || highlighting}
                   highlighting={highlighting}
                   marksHost={marksSlot}
@@ -9945,6 +9948,7 @@ export function Workspace({
                 !isAnnotate(problem) &&
                 activeRegion === "constraints" ? (
                 <DocSelectionLayer
+                  paletteScope={tab.id}
                   enabled={!annotateCode || Boolean(openFootnote) || highlighting}
                   highlighting={highlighting}
                   marksHost={marksSlot}
@@ -10170,6 +10174,7 @@ export function Workspace({
            * and keeps the frames it last published.
            */
           pageFrames={peekPdfReadingFrames(tab.id)}
+          client={client}
           onResolve={(resolution) => void handleHubConflictResolve(resolution)}
         />
       ) : null}

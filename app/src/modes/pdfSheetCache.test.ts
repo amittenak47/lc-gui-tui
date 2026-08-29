@@ -4,6 +4,8 @@ import { PDF_PREVIEW_SCALE, PDF_REST_SCALE } from "../perfPreset";
 import {
   destSheetSize,
   PdfSheetLru,
+  peekActiveSheet,
+  setActiveSheetLru,
   sheetMeetsScale,
 } from "./pdfSheetCache";
 import { pageNeedsDecode } from "./pdfPaintWindow";
@@ -86,5 +88,22 @@ describe("destSheetSize", () => {
   it("does not invent pixels when the cache is only 1x", () => {
     const dest = destSheetSize(fakeSheet(1, 100, 200), 1, 2);
     expect(dest).toEqual({ width: 100, height: 200 });
+  });
+});
+
+describe("active sheet LRU registry", () => {
+  it("peeks by document hash, not a process-global page number", () => {
+    const a = new PdfSheetLru(4);
+    const b = new PdfSheetLru(4);
+    a.put(7, fakeSheet(2, 10, 20), 7, PDF_REST_SCALE);
+    b.put(7, fakeSheet(2, 99, 40), 7, PDF_REST_SCALE);
+    setActiveSheetLru("pane-a", "hash-a", a);
+    setActiveSheetLru("pane-b", "hash-b", b);
+    expect(peekActiveSheet("hash-a", 7)?.width).toBe(10);
+    expect(peekActiveSheet("hash-b", 7)?.width).toBe(99);
+    setActiveSheetLru("pane-a", "hash-a", null);
+    expect(peekActiveSheet("hash-a", 7)).toBeNull();
+    expect(peekActiveSheet("hash-b", 7)?.width).toBe(99);
+    setActiveSheetLru("pane-b", "hash-b", null);
   });
 });

@@ -12,6 +12,11 @@ export const PDF_THUMB_STORE = "thumbs";
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
+/** Tests that stub `indexedDB` must drop the cached open. */
+export function resetPdfThumbStoreForTests(): void {
+  dbPromise = null;
+}
+
 function thumbKey(hash: string, page: number): string {
   return `${hash}\x1f${page}`;
 }
@@ -63,6 +68,35 @@ export async function persistPdfThumb(
     });
   } catch {
     /* private mode / quota */
+  }
+}
+
+export async function pruneStoredPdfThumbs(keepHashes: Iterable<string>): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+  const keep = new Set([...keepHashes].filter(Boolean));
+  try {
+    const db = await openThumbDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(PDF_THUMB_STORE, "readwrite");
+      const store = tx.objectStore(PDF_THUMB_STORE);
+      const req = store.openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        const key = String(cursor.key);
+        const sep = key.indexOf("\x1f");
+        const hash = sep >= 0 ? key.slice(0, sep) : key;
+        if (!keep.has(hash)) cursor.delete();
+        cursor.continue();
+      };
+      req.onerror = () =>
+        reject(req.error ?? new Error("PDF thumb prune failed"));
+      tx.oncomplete = () => resolve();
+      tx.onabort = () =>
+        reject(tx.error ?? new Error("PDF thumb prune aborted"));
+    });
+  } catch {
+    /* private mode */
   }
 }
 

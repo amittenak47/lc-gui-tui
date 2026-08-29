@@ -68,10 +68,12 @@ import {
   pdfThumbViewportScale,
   publishPdfLayoutBusy,
   rememberPdfThumb,
+  openedPdfThumbHashes,
   PDF_FILM_THUMB_CSS,
   type PdfThumbRenderer,
 } from "./pdfFilm";
-import { loadStoredPdfThumbs } from "./pdfThumbStore";
+import { loadStoredPdfThumbs, pruneStoredPdfThumbs } from "./pdfThumbStore";
+import { listAnnotateDocs } from "../util/annotateStore";
 import {
   captureSheetPng,
   PDF_SESSION_CAP,
@@ -610,20 +612,26 @@ export function PdfDocument({
     if (!docHash) return;
     let cancelled = false;
     void loadStoredPdfThumbs(docHash).then((stored) => {
-      if (cancelled || stored.size === 0) return;
-      hydratePdfThumbs(docHash, stored);
+      if (cancelled) return;
+      hydratePdfThumbs(docHash, stored, peekPdfFilmCurrent(filmScope));
+      const keep = new Set(openedPdfThumbHashes());
+      for (const entry of listAnnotateDocs()) {
+        if (entry.hash) keep.add(entry.hash);
+      }
+      keep.add(docHash);
+      void pruneStoredPdfThumbs(keep);
     });
     return () => {
       cancelled = true;
       publishPdfLayoutBusy(filmScope, false);
     };
-  }, [docHash]);
+  }, [docHash, filmScope]);
 
   useEffect(() => {
-    if (paused || standalone) return;
-    setActiveSheetLru(sheetLruRef.current);
-    return () => setActiveSheetLru(null);
-  }, [paused, standalone]);
+    if (paused || !docHash) return;
+    setActiveSheetLru(filmScope, docHash, sheetLruRef.current);
+    return () => setActiveSheetLru(filmScope, docHash, null);
+  }, [paused, docHash, filmScope]);
 
   const dropSlotGpu = () => {
     for (const entry of paintedRef.current.values()) entry.release();
@@ -752,6 +760,7 @@ export function PdfDocument({
           );
           if (
             from === 1 &&
+            !standalone &&
             doc.numPages > LAYOUT_BATCH &&
             (initialPageRef.current < 1 || initialPageRef.current <= LAYOUT_BATCH)
           ) {

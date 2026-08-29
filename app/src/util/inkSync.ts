@@ -244,6 +244,32 @@ export async function fetchHubInkPages(
 }
 
 /**
+ * One more page of overlay ink for the conflict split, after freeze.
+ *
+ * Freeze only gzips the page the split opened on. Clicking a later change
+ * still has to draw that page's strokes — one GET each side, not the pad.
+ * A failed hub transfer stays `null` so the overlay does not pretend the
+ * page is empty.
+ */
+export async function loadConflictPreviewInkPage(
+  client: LcClient | null | undefined,
+  kind: InkPadKind,
+  key: string,
+  pageId: number,
+): Promise<{ local: InkPageDto | null; server: InkPageDto | null }> {
+  if (!(pageId >= 0)) return { local: null, server: null };
+  const localRows = await localInkAsDtos(kind, key, [pageId]).catch(() => []);
+  const local = localRows.find((row) => row.page_id === pageId) ?? null;
+  if (!client) return { local, server: null };
+  const hub = await fetchHubInkPages(client, kind, key, [pageId]);
+  if (hub == null) return { local, server: null };
+  return {
+    local,
+    server: hub.find((row) => row.page_id === pageId) ?? null,
+  };
+}
+
+/**
  * This device's pages as hub DTOs, for the conflict stash.
  *
  * `pageIds` narrows the work to the pages that will actually be looked at.

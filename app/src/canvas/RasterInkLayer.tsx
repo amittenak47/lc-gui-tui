@@ -127,6 +127,8 @@ export interface RasterInkHandle {
   /** Replace committed ink (notebook restore). Clears undo/redo. */
   setOps(ops: readonly InkOp[]): void;
   getOpCount(): number;
+  /** Monotonic mutation clock — undo/redo included. */
+  getRevision(): number;
   dirtyInkPageCount(): number;
   takeDirtyInkPages(): Map<number, import("./inkCodec").EncodedInk>;
   markInkPagesFlushed(pageIds: Iterable<number>): void;
@@ -1201,6 +1203,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         },
         getOpCount() {
           return bookRef.current.opCount();
+        },
+        getRevision() {
+          return bookRef.current.revision();
         },
         dirtyInkPageCount() {
           return bookRef.current.dirtyCount();

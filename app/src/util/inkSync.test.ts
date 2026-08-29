@@ -337,6 +337,49 @@ describe("fetchHubInkPages", () => {
   });
 });
 
+describe("loadConflictPreviewInkPage", () => {
+  afterEach(() => {
+    vi.doUnmock("./inkPageStore");
+    vi.resetModules();
+  });
+
+  it("asks for that page on the hub and nothing else", async () => {
+    vi.resetModules();
+    vi.doMock("./inkPageStore", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./inkPageStore")>()),
+      getInkPageRecords: () =>
+        Promise.resolve([
+          {
+            v: 1 as const,
+            docKey: "md:p1",
+            pageId: 40,
+            gz: new Uint8Array([1, 2, 3]),
+            dirty: false,
+            updatedAt: 4,
+          },
+        ]),
+    }));
+    const { loadConflictPreviewInkPage } = await import("./inkSync");
+    const getInkPage = vi.fn(async (_k: string, _key: string, id: number) => ({
+      kind: "annotate" as const,
+      key: "p1",
+      page_id: id,
+      updated_at: 20,
+      gz: "YQ==",
+    }));
+    const got = await loadConflictPreviewInkPage(
+      { getInkPage } as never,
+      "annotate",
+      "p1",
+      40,
+    );
+    expect(getInkPage).toHaveBeenCalledTimes(1);
+    expect(getInkPage).toHaveBeenCalledWith("annotate", "p1", 40);
+    expect(got.server?.page_id).toBe(40);
+    expect(got.local?.page_id).toBe(40);
+  });
+});
+
 describe("applyInkChoice fetches what a choice writes", () => {
   afterEach(() => {
     vi.doUnmock("./inkPageStore");

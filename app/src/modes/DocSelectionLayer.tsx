@@ -243,8 +243,10 @@ export interface DocSelectionLayerProps {
   hoveredSubMarkId?: string | null;
   /** Live / next underline colour while the tool is armed. */
   subMarkPaintTheme?: { color: string; palette: string[] } | null;
-  /** New live drag — stop retinting the last committed underline. */
+  /** A live sub-mark range appeared — the hub should drop its hover wash. */
   onSubMarkLiveStart?: () => void;
+  /** Which board's pen wheel this layer reads. Unmount of one pane must not wipe the other's. */
+  paletteScope?: string;
 }
 
 /**
@@ -334,6 +336,7 @@ export function DocSelectionLayer({
   hoveredSubMarkId = null,
   subMarkPaintTheme = null,
   onSubMarkLiveStart,
+  paletteScope = "",
 }: DocSelectionLayerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   /**
@@ -493,7 +496,12 @@ export function DocSelectionLayer({
   }, []);
 
   const subMarkArmed = Boolean(subMarkMode && subMarkParent);
-  const inkHistory = useSyncExternalStore(onInkPaletteChange, inkPaletteNow, inkPaletteNow);
+  const subscribePalette = useCallback(
+    (listener: () => void) => onInkPaletteChange(listener, paletteScope),
+    [paletteScope],
+  );
+  const paletteNow = useCallback(() => inkPaletteNow(paletteScope), [paletteScope]);
+  const inkHistory = useSyncExternalStore(subscribePalette, paletteNow, paletteNow);
   const inkPalette = currentInkPalette(inkHistory);
 
   const paintMarquee = useCallback((rect: LocalRect, _root: HTMLElement) => {
@@ -774,8 +782,7 @@ export function DocSelectionLayer({
       if (bands.length === 0) return false;
       return pointInLocalBands(body, bands, clientX, clientY, SUBMARK_HIT_PAD);
     };
-    setSubMarkPointerHit(hit);
-    return () => setSubMarkPointerHit(null);
+    return setSubMarkPointerHit(hit);
   }, [subMarkParent, subMarkArmed]);
 
   // Reading mode (and Ask-area 🔍): hold still to arm annotate marquee.
@@ -827,7 +834,7 @@ export function DocSelectionLayer({
           : y < top + SELECT_EDGE_PX
             ? y - (top + SELECT_EDGE_PX)
             : 0;
-      if (overY !== 0 && requestDocScroll(Math.sign(overY) * edgeStep(overY)) !== 0) {
+      if (overY !== 0 && requestDocScroll(Math.sign(overY) * edgeStep(overY), host) !== 0) {
         moved = true;
       }
 
@@ -1165,7 +1172,7 @@ export function DocSelectionLayer({
       );
     };
 
-    setSubMarkPointerHit(pointerHitsParentMark);
+    const unsubHit = setSubMarkPointerHit(pointerHitsParentMark);
     killNativeSelection();
 
     const tickSubMarkFinger = (clientX: number, clientY: number) => {
@@ -1261,7 +1268,7 @@ export function DocSelectionLayer({
           : y < top + SELECT_EDGE_PX
             ? y - (top + SELECT_EDGE_PX)
             : 0;
-      if (overY !== 0 && requestDocScroll(Math.sign(overY) * edgeStep(overY)) !== 0) {
+      if (overY !== 0 && requestDocScroll(Math.sign(overY) * edgeStep(overY), host) !== 0) {
         moved = true;
       }
       if (moved) tickSubMarkFinger(x, y);
@@ -1634,7 +1641,7 @@ export function DocSelectionLayer({
     window.addEventListener("pointercancel", onPointerUp, true);
     return () => {
       clearPendingHold();
-      setSubMarkPointerHit(null);
+      unsubHit();
       host.removeEventListener("selectstart", onSelectStart);
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("pointermove", onPointerMove, true);
