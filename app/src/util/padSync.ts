@@ -17,6 +17,7 @@ import {
   deleteAnnotateDoc,
   getAnnotateDoc,
   listAnnotateDocs,
+  localFootnoteBoardIds,
   listAnnotateTrash,
   markAnnotateDeleteAcked,
   restoreAnnotateDoc,
@@ -44,7 +45,12 @@ import {
 import { loadHubAutosync } from "./hubAutoSyncPref";
 import { syncDocChunks } from "./docChunkSync";
 import { noteInkConflicts } from "./inkConflicts";
-import { syncEdges, syncInkPages, type InkPadKind } from "./inkSync";
+import {
+  footnoteInkKeys,
+  syncEdges,
+  syncInkPages,
+  type InkPadKind,
+} from "./inkSync";
 import {
   getPadSnapshot,
   PAD_SNAPSHOT_TIERS,
@@ -490,7 +496,17 @@ export async function annotatePadBody(doc: AnnotateDoc): Promise<AnnotatePadDto>
     footnotes: doc.footnotes ?? [],
     board: doc.board,
     agent: doc.agent ?? [],
-    footnote_boards: await collectFootnoteBoards(doc.id, doc.footnotes ?? []),
+    /*
+     * Structure, not strokes.
+     *
+     * Elements, page count and appState travel with the pad; the handwriting
+     * on each scratch board rides `putInkPage` under `{padId}/fn/{wbId}` like
+     * every other page of ink in the app. Sending both was the main way a
+     * textbook pad reached the hub's 32 MB cap.
+     */
+    footnote_boards: await collectFootnoteBoards(doc.id, doc.footnotes ?? [], {
+      slim: true,
+    }),
   };
 }
 
@@ -1162,6 +1178,22 @@ async function applyPadSyncPingBody(
       ...listWhiteboardNotebooks().map((row) => ({ kind: "whiteboard" as const, key: row.id })),
       ...listAnnotateDocs().map((row) => ({ kind: "annotate" as const, key: row.id })),
     ];
+    /*
+     * Footnote scratch boards are ink keys too.
+     *
+     * `{padId}/fn/{wbId}`. The digest already names the ones the hub has, and
+     * `syncInkPages` would pick those up on its own — but a board that only
+     * exists here has no digest row, so nothing would ever push it. The pad
+     * rows above are applied earlier in this ping, so a board another device
+     * just made already has its pointer by now.
+     */
+    for (const row of listAnnotateDocs()) {
+      for (const key of await footnoteInkKeys(row.id, ping.ink ?? [], () =>
+        localFootnoteBoardIds(row.id),
+      )) {
+        pads.push({ kind: "annotate", key });
+      }
+    }
     const conflicts = await syncInkPages(client, ping.ink ?? [], pads, since).catch(() => []);
     if (conflicts.length > 0) noteInkConflicts(conflicts);
     await syncEdges(client, ping.edges ?? [], ping.gone_edges ?? []).catch(() => {});

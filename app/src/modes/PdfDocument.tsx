@@ -112,7 +112,11 @@ import {
   PDF_REST_CACHE,
   PDF_REST_SCALE,
 } from "../perfPreset";
-import { dropPdfDocument, lendPdfDocument, borrowPdfDocument } from "./pdfOpenDocs";
+import {
+  acquirePdfDocument,
+  pdfDocumentOpenFor,
+  type PdfDocumentLease,
+} from "./pdfOpenDocs";
 import { alignTextLayerToGlyphs } from "../util/pdfTextFit";
 
 /**
@@ -560,7 +564,6 @@ export function PdfDocument({
   const docRef = useRef<Awaited<
     ReturnType<typeof import("pdfjs-dist").getDocument>["promise"]
   > | null>(null);
-  const taskRef = useRef<ReturnType<typeof import("pdfjs-dist").getDocument> | null>(null);
   const textLayerRef = useRef<typeof import("pdfjs-dist").TextLayer | null>(null);
   /** Pages holding a bitmap right now, and how to give it back. */
   const paintedRef = useRef<Map<number, { release: () => void; scale: number }>>(
@@ -643,10 +646,17 @@ export function PdfDocument({
    */
   useEffect(() => {
     let cancelled = false;
-    let lent: NonNullable<typeof docRef.current> | null = null;
+    /*
+     * This stack's share of the open for `docHash`.
+     *
+     * Held whether we started the open or joined one already in flight — see
+     * `acquirePdfDocument`. Released in teardown, and the last release is what
+     * destroys the loading task, so a conflict pane that unmounts first cannot
+     * pull the document out from under the pane beside it.
+     */
+    let lease: PdfDocumentLease | null = null;
     disposedRef.current = false;
-    const borrowed =
-      standalone && docHash ? borrowPdfDocument(docHash) : null;
+    const alreadyOpen = pdfDocumentOpenFor(docHash);
     // pdf.js transfers the buffer it is handed to the worker, and React may run
     // this effect twice in development — a copy keeps the prop reusable either
     // way. Uint8Array, not the raw ArrayBuffer: a transferred buffer reaches
@@ -655,7 +665,7 @@ export function PdfDocument({
     // reports — and the reader needs the same answer for both. Checked by
     // length rather than by attempting a copy, so a textbook is not duplicated
     // in memory just to ask the question.
-    if (!borrowed && bytes.byteLength === 0) {
+    if (!alreadyOpen && bytes.byteLength === 0) {
       onErrorRef.current?.(
         "this PDF's bytes were released before they could be drawn — pick the file again",
       );
@@ -683,35 +693,26 @@ export function PdfDocument({
     void (async () => {
       try {
         const pdfjs = await loadPdfJs();
-        // Teardown lives on the loading task, not the document — keep it. The
-        // worker is passed in rather than found: `getDocument` only records
-        // `task._worker` when it had to create one, and `destroy()` destroys
-        // what it recorded, so leaving it to `GlobalWorkerOptions.workerPort`
-        // means closing one document tears down the worker every other
-        // document is still using.
-        let doc = borrowed;
-        if (!doc) {
+        /*
+         * One open per file, joined rather than repeated.
+         *
+         * Teardown lives on the loading task, not the document, so the
+         * registry holds it — see `acquirePdfDocument`. The worker is passed
+         * in rather than found: `getDocument` only records `task._worker` when
+         * it had to create one, and `destroy()` destroys what it recorded, so
+         * leaving it to `GlobalWorkerOptions.workerPort` means closing one
+         * document tears down the worker every other document is still using.
+         */
+        lease = acquirePdfDocument(docHash, () => {
           const task = pdfjs.getDocument({
             data: new Uint8Array(bytes.slice(0)),
             worker: pdfWorker(pdfjs),
             ...pdfJsDataUrls(),
             cMapPacked: true,
           });
-          doc = await task.promise;
-          if (cancelled) {
-            try {
-              void task.destroy();
-            } catch {
-              /* already torn down */
-            }
-            return;
-          }
-          taskRef.current = task;
-          if (docHash) {
-            lendPdfDocument(docHash, doc);
-            lent = doc;
-          }
-        }
+          return { promise: task.promise, task };
+        });
+        const doc = await lease.promise;
         if (cancelled) return;
         docRef.current = doc;
         textLayerRef.current = pdfjs.TextLayer;
@@ -771,7 +772,6 @@ export function PdfDocument({
     return () => {
       cancelled = true;
       disposedRef.current = true;
-      if (lent && docHash) dropPdfDocument(docHash, lent);
       dropPaintedSession();
       naturalsRef.current = [];
       resetPdfReadingFrames(filmScope);
@@ -780,15 +780,10 @@ export function PdfDocument({
       resetPdfPreloadPages(filmScope);
       resetPdfViewPages(filmScope);
       docRef.current = null;
-      const task = taskRef.current;
-      taskRef.current = null;
-      if (task) {
-        try {
-          void task.destroy();
-        } catch {
-          /* already torn down */
-        }
-      }
+      // Refcounted: this only tears the document down when nothing else is
+      // still reading it.
+      lease?.release();
+      lease = null;
     };
   }, [bytes, docHash, standalone]);
 

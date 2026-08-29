@@ -18,6 +18,7 @@ import type { DocFootnote } from "./docFootnotes";
 import {
   applyFootnoteBoards,
   collectFootnoteBoards,
+  slimFootnoteBoard,
   deleteFootnoteWhiteboard,
   footnoteWhiteboardKey,
   forkSharedWhiteboardPointers,
@@ -149,5 +150,50 @@ describe("footnoteWhiteboardStore", () => {
     );
     expect(await getFootnoteWhiteboard("doc-1", "wb-1")).toEqual(local);
     expect(await getFootnoteWhiteboard("doc-1", "wb-hub")).toEqual(server);
+  });
+});
+
+describe("scratch board ink stays out of the pad JSON", () => {
+  function fatBoard(): BoardBlob {
+    return { ...board("a"), inkC: { v: 1, ops: [] } } as unknown as BoardBlob;
+  }
+
+  it("strips the strokes for the wire and leaves the structure", () => {
+    const slim = slimFootnoteBoard({ board: fatBoard(), pageCount: 1 });
+    expect((slim.board as { inkC?: unknown }).inkC).toBeUndefined();
+    expect(slim.board.elements).toEqual([{ id: "a" }]);
+    expect(slim.pageCount).toBe(1);
+  });
+
+  it("leaves a board that never had strokes in it alone", () => {
+    const content = { board: board("a"), pageCount: 2 };
+    expect(slimFootnoteBoard(content)).toBe(content);
+  });
+
+  it("collects slim boards for the wire and fat ones for local use", async () => {
+    await putFootnoteWhiteboard("d1", "wb1", { board: fatBoard(), pageCount: 1 });
+    const notes = [mark("m1", ["wb1"])];
+    const wire = await collectFootnoteBoards("d1", notes, { slim: true });
+    expect((wire.wb1!.board as { inkC?: unknown }).inkC).toBeUndefined();
+    const local = await collectFootnoteBoards("d1", notes);
+    expect((local.wb1!.board as { inkC?: unknown }).inkC).toBeDefined();
+  });
+
+  it("a slim board from the hub does not erase a pre-split local copy", async () => {
+    // The only copy of those strokes is inside the local blob. The hub's body
+    // carries none, and the ink pages have not landed yet.
+    await putFootnoteWhiteboard("d1", "wb1", { board: fatBoard(), pageCount: 1 });
+    await applyFootnoteBoards("d1", {
+      wb1: { board: board("b"), pageCount: 1 },
+    });
+    const after = await getFootnoteWhiteboard("d1", "wb1");
+    expect(after?.board.elements).toEqual([{ id: "b" }]);
+    expect((after?.board as { inkC?: unknown }).inkC).toBeDefined();
+  });
+
+  it("a fat board from an old hub still brings its strokes", async () => {
+    await applyFootnoteBoards("d1", { wb2: { board: fatBoard(), pageCount: 1 } });
+    const after = await getFootnoteWhiteboard("d1", "wb2");
+    expect((after?.board as { inkC?: unknown }).inkC).toBeDefined();
   });
 });

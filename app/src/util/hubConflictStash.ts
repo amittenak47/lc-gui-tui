@@ -10,6 +10,7 @@
  */
 
 import type { AnnotatePadDto, InkPageDto, WhiteboardPadDto } from "../api/client";
+import type { FootnoteInkBoard } from "./inkSync";
 import type { DocFootnote, DocFootnoteWhiteboard } from "./docFootnotes";
 import { freshWhiteboardId } from "./docFootnotes";
 
@@ -46,6 +47,25 @@ export interface HubPadConflict {
    * preview downloaded.
    */
   hubInkPageIds?: number[];
+  /**
+   * Every page id this device holds for this pad. Also ids, also cheap.
+   *
+   * The split says how much handwriting each side has. Counting the preview
+   * lists would now answer "one page" about a whole read-through, so the row
+   * counts these instead and draws from the preview.
+   */
+  localInkPageIds?: number[];
+  /**
+   * Footnote scratch boards with handwriting, on either side.
+   *
+   * Their strokes used to travel inside the pad's JSON, so a pane choice
+   * carried them along whether or not anyone meant it to. They are hub ink
+   * keys of their own now (`{padId}/fn/{wbId}`), which means the ink row has
+   * to name them or a Keep would resolve the pad and leave the boards
+   * disagreeing. Ids only — nothing paints a scratch board in the split, so
+   * there is nothing to preview.
+   */
+  footnoteInk?: FootnoteInkBoard[];
   /**
    * Hub pages at stop time.
    *

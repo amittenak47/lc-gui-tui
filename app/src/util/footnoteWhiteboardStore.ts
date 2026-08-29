@@ -10,6 +10,7 @@ import { deleteContent, deleteContentByPrefix, getContent, putContent } from "./
 import type { DocFootnote, DocFootnoteWhiteboard } from "./docFootnotes";
 import { freshWhiteboardId } from "./docFootnotes";
 import {
+  copyInkPages,
   deleteInkPages,
   deleteInkPagesByPrefix,
   footnoteWhiteboardDocKey,
@@ -86,16 +87,64 @@ export function whiteboardIdsOn(footnotes: readonly DocFootnote[]): string[] {
   return ids;
 }
 
+/**
+ * A board without its strokes.
+ *
+ * `inkC` is the whole of a scratch board's handwriting, encoded into the blob.
+ * It has no business on the wire: the strokes ride `putInkPage` per page,
+ * gzipped, under this board's own hub key — the same split the notebook
+ * library and a document's own pages have always used. Left in, every annotate
+ * PUT sent a reader's scratch handwriting twice, uncompressed, inside a body
+ * the hub caps at 32 MB.
+ *
+ * Local blobs written before the split still carry it, which is why this
+ * strips rather than assumes. Reading it back is a different question — see
+ * `restoreInk`, which prefers shards and falls through to `inkC`.
+ */
+export function slimFootnoteBoard(
+  content: FootnoteWhiteboardContent,
+): FootnoteWhiteboardContent {
+  const board = content.board as BoardBlob & { inkC?: unknown };
+  if (board?.inkC === undefined) return content;
+  const { inkC: _dropped, ...rest } = board;
+  return { ...content, board: rest as BoardBlob };
+}
+
 export async function collectFootnoteBoards(
   docId: string,
   footnotes: readonly DocFootnote[],
+  opts: { slim?: boolean } = {},
 ): Promise<Record<string, FootnoteWhiteboardContent>> {
   const out: Record<string, FootnoteWhiteboardContent> = {};
   for (const wbId of whiteboardIdsOn(footnotes)) {
     const row = await getFootnoteWhiteboard(docId, wbId);
-    if (row) out[wbId] = row;
+    if (row) out[wbId] = opts.slim ? slimFootnoteBoard(row) : row;
   }
   return out;
+}
+
+/**
+ * Apply a board from the hub without throwing away strokes only we have.
+ *
+ * The wire form is slim now — structure, no `inkC` — and the handwriting
+ * arrives separately as ink pages. A device that still holds a pre-split blob
+ * has its only copy of those strokes inside `inkC`, so overwriting with the
+ * slim body would erase them between the pad landing and the ink landing, and
+ * for good if the ink never came. Carrying the local strokes across costs one
+ * field and is dropped by the next ordinary save.
+ *
+ * Shards win over both on open — see `restoreInk` — so this cannot resurrect
+ * ink another device erased.
+ */
+function keepLocalInk(
+  incoming: FootnoteWhiteboardContent,
+  local: FootnoteWhiteboardContent | null,
+): FootnoteWhiteboardContent {
+  const board = incoming.board as BoardBlob & { inkC?: unknown };
+  if (board?.inkC !== undefined) return incoming;
+  const mine = local?.board as (BoardBlob & { inkC?: unknown }) | undefined;
+  if (mine?.inkC === undefined) return incoming;
+  return { ...incoming, board: { ...board, inkC: mine.inkC } as BoardBlob };
 }
 
 export async function applyFootnoteBoards(
@@ -105,7 +154,8 @@ export async function applyFootnoteBoards(
   if (!boards || typeof boards !== "object") return;
   for (const [wbId, content] of Object.entries(boards)) {
     if (!wbId || !isContent(content)) continue;
-    await putFootnoteWhiteboard(docId, wbId, content);
+    const local = await getFootnoteWhiteboard(docId, wbId);
+    await putFootnoteWhiteboard(docId, wbId, keepLocalInk(content, local));
   }
 }
 
@@ -163,6 +213,12 @@ export async function forkSharedWhiteboardPointers(
       seen.add(fresh);
       const blob = duplicateSource?.[board.id] ?? (await getFootnoteWhiteboard(docId, board.id));
       if (blob) await putFootnoteWhiteboard(docId, fresh, blob);
+      // The strokes live in shards now, not in the blob, so copying the blob
+      // alone would hand the forked board a blank page.
+      await copyInkPages(
+        footnoteWhiteboardDocKey(docId, board.id),
+        footnoteWhiteboardDocKey(docId, fresh),
+      );
       whiteboards.push({ ...board, id: fresh, updatedAt: Date.now() });
     }
     next.push(changed ? { ...entry, whiteboards } : entry);

@@ -44,9 +44,21 @@ export interface PadSnapshot {
   source?: string;
   /** Footnote-owned scratch boards, keyed by whiteboard id. */
   footnoteBoards?: Record<string, { board: BoardBlob; pageCount: number }>;
+  /**
+   * Per-page gzip ink for each scratch board, keyed by whiteboard id.
+   *
+   * Their blobs stopped carrying `inkC` when scratch handwriting moved onto
+   * its own hub key, so a snapshot that only kept `footnoteBoards` would
+   * restore the boards as blank paper. Same shape as `ink` above, once per
+   * board — a restore is a replace, and this is what it replaces them with.
+   */
+  footnoteInk?: Record<string, SnapshotInkPage[]>;
 }
 
-export type PadSnapshotExtras = Pick<PadSnapshot, "ink" | "edges" | "source" | "footnoteBoards">;
+export type PadSnapshotExtras = Pick<
+  PadSnapshot,
+  "ink" | "edges" | "source" | "footnoteBoards" | "footnoteInk"
+>;
 
 function boardWithoutInk(board: BoardBlob): BoardBlob {
   return {
@@ -148,6 +160,9 @@ export async function recordRollingSnapshots(input: {
         ...(typeof extra.source === "string" ? { source: extra.source } : {}),
         ...(extra.footnoteBoards && Object.keys(extra.footnoteBoards).length > 0
           ? { footnoteBoards: extra.footnoteBoards }
+          : {}),
+        ...(extra.footnoteInk && Object.keys(extra.footnoteInk).length > 0
+          ? { footnoteInk: extra.footnoteInk }
           : {}),
     };
     try {

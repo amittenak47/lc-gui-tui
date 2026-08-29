@@ -9,7 +9,15 @@
 
 import type { AnnotatePadDto, EdgeRowDto, InkPageDigestDto, LcClient, WhiteboardPadDto } from "../api/client";
 import { LcApiError } from "../api/client";
-import { isInkConflict, inkDocKey, syncEdges, syncInkPages } from "./inkSync";
+import {
+  footnoteInkKeys,
+  isInkConflict,
+  inkDocKey,
+  splitFootnoteInkHubKey,
+  syncEdges,
+  syncInkPages,
+} from "./inkSync";
+import { localFootnoteBoardIds } from "./annotateStore";
 
 export type HubPadKind = "annotate" | "whiteboard";
 
@@ -138,16 +146,46 @@ export async function walkSyncInk(
   pad: WalkPad,
   snapshot: WalkSnapshot,
   since: number,
-): Promise<{ outcome: "ok" } | { outcome: "conflict"; pageId: number }> {
-  const digests = snapshot.inkDigests.filter((row) => row.kind === pad.kind && row.key === pad.id);
+): Promise<
+  | { outcome: "ok" }
+  | { outcome: "conflict"; pageId: number; inkKey: string; wbId?: string }
+> {
+  /*
+   * A document's own pages, and every scratch board hanging off its marks.
+   *
+   * The boards are their own hub keys — `{padId}/fn/{wbId}` — so they conflict,
+   * push and pull per page like everything else, instead of riding inside the
+   * pad's JSON. See `footnoteInkKeys` for which boards are worth naming.
+   */
+  const inkKeys = [
+    pad.id,
+    ...(pad.kind === "annotate"
+      ? await footnoteInkKeys(pad.id, snapshot.inkDigests, () =>
+          localFootnoteBoardIds(pad.id),
+        )
+      : []),
+  ];
+  const digests = snapshot.inkDigests.filter(
+    (row) => row.kind === pad.kind && inkKeys.includes(row.key),
+  );
   if (digests.length > 0) {
     const { getInkPageRecords } = await import("./inkPageStore");
-    const docKey = inkDocKey(pad.kind, pad.id);
-    const localRows = await getInkPageRecords(docKey);
-    const localBy = new Map(localRows.map((row) => [row.pageId, row]));
+    const localByKey = new Map<string, Map<number, { updatedAt: number }>>();
+    for (const key of inkKeys) {
+      const rows = await getInkPageRecords(inkDocKey(pad.kind, key));
+      localByKey.set(key, new Map(rows.map((row) => [row.pageId, row])));
+    }
     for (const digest of digests) {
-      if (isInkConflict(localBy.get(digest.page_id), digest, since)) {
-        return { outcome: "conflict", pageId: digest.page_id };
+      const local = localByKey.get(digest.key)?.get(digest.page_id);
+      if (isInkConflict(local, digest, since)) {
+        return {
+          outcome: "conflict",
+          pageId: digest.page_id,
+          inkKey: digest.key,
+          ...(splitFootnoteInkHubKey(digest.key)?.wbId
+            ? { wbId: splitFootnoteInkHubKey(digest.key)!.wbId }
+            : {}),
+        };
       }
     }
   }
@@ -158,9 +196,13 @@ export async function walkSyncInk(
    * hub that went away mid-stage still ended the walk on "Synced" with the
    * strokes still only on one device.
    */
-  await syncInkPages(client, digests, [{ kind: pad.kind, key: pad.id }], since, {
-    strict: true,
-  });
+  await syncInkPages(
+    client,
+    digests,
+    inkKeys.map((key) => ({ kind: pad.kind, key })),
+    since,
+    { strict: true },
+  );
   return { outcome: "ok" };
 }
 

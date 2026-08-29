@@ -223,6 +223,58 @@ export async function deleteInkPagesByPrefix(prefix: string): Promise<void> {
 }
 
 /**
+ * Every doc key under `prefix` that holds at least one page.
+ *
+ * "Which of this document's scratch boards has handwriting on it?" — asked
+ * once per sync, and answerable from the key alone, so it walks keys rather
+ * than reading records.
+ */
+export async function listInkDocKeys(prefix: string): Promise<string[]> {
+  if (!prefix) return [];
+  const found = new Set<string>();
+  try {
+    await withStore(STORE_INK_PAGES, "readonly", (store) => {
+      const request = store.openKeyCursor(IDBKeyRange.bound(prefix, `${prefix}￿`));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        const key = String(cursor.key);
+        const at = key.lastIndexOf(KEY_SEP);
+        if (at > 0) found.add(key.slice(0, at));
+        cursor.continue();
+      };
+    });
+  } catch {
+    /* private browsing / missing store */
+  }
+  return [...found].sort();
+}
+
+/**
+ * Copy every page of ink from one doc key to another, leaving the original.
+ *
+ * For a board that has been forked: a conflict that keeps two copies of one
+ * mark, or a remint that gives the incoming board a key of its own. Copying
+ * the blob without the shards used to hand the new board an empty page, since
+ * the strokes are no longer inside the blob to be copied with it.
+ */
+export async function copyInkPages(fromKey: string, toKey: string): Promise<number> {
+  if (!fromKey || !toKey || fromKey === toKey) return 0;
+  const rows = await getInkPageRecords(fromKey);
+  if (rows.length === 0) return 0;
+  try {
+    await withStore(STORE_INK_PAGES, "readwrite", (store) => {
+      for (const row of rows) {
+        store.put({ ...row, docKey: toKey }, inkPageKey(toKey, row.pageId));
+      }
+    });
+  } catch {
+    return 0;
+  }
+  return rows.length;
+}
+
+/**
  * Move every page of ink from one doc key to another.
  *
  * Only used by the hash-to-id migration. Copy-then-delete rather than a cursor
