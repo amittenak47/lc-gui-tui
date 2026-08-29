@@ -6,7 +6,9 @@ import {
   isDocChromeTarget,
   isDocCameraLive,
   isSubMarkDragLive,
+  makeDocFlagHolds,
   pointerInSubMark,
+  resetDocCameraForTests,
   setDocCameraLive,
   setDocPointerHeld,
   setSubMarkDragLive,
@@ -15,8 +17,7 @@ import {
 } from "./docSelectionGesture";
 
 afterEach(() => {
-  setDocPointerHeld(false);
-  setDocCameraLive(false);
+  resetDocCameraForTests();
 });
 
 describe("isDocChromeTarget", () => {
@@ -122,5 +123,110 @@ describe("sub-mark drag live", () => {
     expect(isSubMarkDragLive()).toBe(true);
     setSubMarkDragLive(false);
     expect(isSubMarkDragLive()).toBe(false);
+  });
+});
+
+describe("two surfaces share the flags", () => {
+  it("stays live until the second camera lets go", () => {
+    setDocCameraLive(true);
+    setDocCameraLive(true);
+    setDocCameraLive(false);
+    // The Local pane settled; Server is still flicking.
+    expect(isDocCameraLive()).toBe(true);
+    setDocCameraLive(false);
+    expect(isDocCameraLive()).toBe(false);
+  });
+
+  it("keeps the finger down until the second pointer lifts", () => {
+    setDocPointerHeld(true);
+    setDocPointerHeld(true);
+    setDocPointerHeld(false);
+    expect(isDocCameraLive()).toBe(true);
+    setDocPointerHeld(false);
+    expect(isDocCameraLive()).toBe(false);
+  });
+
+  it("keeps the overlay-text class up while any camera is live", () => {
+    setDocCameraLive(true);
+    setDocCameraLive(true);
+    setDocCameraLive(false);
+    expect(document.documentElement.classList.contains(DOC_CAMERA_LIVE_CLASS)).toBe(
+      true,
+    );
+    setDocCameraLive(false);
+    expect(document.documentElement.classList.contains(DOC_CAMERA_LIVE_CLASS)).toBe(
+      false,
+    );
+  });
+
+  it("publishes one edge per transition, not one per share", () => {
+    const seen: boolean[] = [];
+    const unsub = subscribeDocCameraLive((live) => seen.push(live));
+    setDocCameraLive(true);
+    setDocCameraLive(true);
+    setDocCameraLive(false);
+    setDocCameraLive(false);
+    expect(seen).toEqual([true, false]);
+    unsub();
+  });
+
+  it("a stray release cannot go negative and strand the next gesture", () => {
+    setDocPointerHeld(false);
+    setDocPointerHeld(false);
+    setDocPointerHeld(true);
+    expect(isDocCameraLive()).toBe(true);
+    setDocPointerHeld(false);
+    expect(isDocCameraLive()).toBe(false);
+  });
+});
+
+describe("makeDocFlagHolds", () => {
+  it("counts one share however many times a surface pulses", () => {
+    const local = makeDocFlagHolds();
+    const server = makeDocFlagHolds();
+    // Local flicks: every scroll event pulses.
+    local.camera(true);
+    local.camera(true);
+    local.camera(true);
+    server.camera(true);
+    local.camera(false);
+    expect(isDocCameraLive()).toBe(true);
+    server.camera(false);
+    expect(isDocCameraLive()).toBe(false);
+  });
+
+  it("ignores a teardown from a surface that was never holding", () => {
+    const local = makeDocFlagHolds();
+    const server = makeDocFlagHolds();
+    local.pointer(true);
+    // Server unmounts without ever having had a finger on it.
+    server.pointer(false);
+    server.camera(false);
+    expect(isDocCameraLive()).toBe(true);
+    local.pointer(false);
+    expect(isDocCameraLive()).toBe(false);
+  });
+
+  it("does not let one pane's unmount drop the other's finger", () => {
+    const local = makeDocFlagHolds();
+    const server = makeDocFlagHolds();
+    local.pointer(true);
+    server.pointer(true);
+    server.pointer(false);
+    server.camera(false);
+    expect(isDocCameraLive()).toBe(true);
+    local.pointer(false);
+    expect(isDocCameraLive()).toBe(false);
+  });
+
+  it("resetDocCameraForTests drops every share", () => {
+    const local = makeDocFlagHolds();
+    local.camera(true);
+    local.pointer(true);
+    resetDocCameraForTests();
+    expect(isDocCameraLive()).toBe(false);
+    expect(document.documentElement.classList.contains(DOC_CAMERA_LIVE_CLASS)).toBe(
+      false,
+    );
   });
 });

@@ -206,8 +206,8 @@ import {
   selectionOwnsGesture,
   onDocScrollRequest,
   isDocCameraLive,
-  setDocCameraLive,
-  setDocPointerHeld,
+  makeDocFlagHolds,
+  type DocFlagHolds,
   isSubMarkDragLive,
 } from "./docSelectionGesture";
 import {
@@ -1834,6 +1834,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const cameraMotionActiveRef = useRef(false);
   const panRidePrimedRef = useRef(false);
   const cameraLiveClassRafRef = useRef(0);
+  /*
+   * This board's own share of the module camera / pointer flags.
+   *
+   * They are counted now, because a conflict split puts two more scrollable
+   * surfaces on screen over a board that is still subscribed. A share also
+   * makes this board's own raise and release pair up on their own: the pulse
+   * raises from a rAF the settle timer may cancel before it ever ran, and the
+   * tool-change effect below releases the finger whether or not one was down.
+   */
+  const docFlagsRef = useRef<DocFlagHolds | null>(null);
+  if (!docFlagsRef.current) docFlagsRef.current = makeDocFlagHolds();
+  const docFlags = docFlagsRef.current;
   const applyVisualScrollNowRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
   const publishPdfFilmFromScrollRef = useRef<
     (scrollX: number, scrollY: number, zoom: number, height: number) => void
@@ -1922,7 +1934,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       cameraLiveClassRafRef.current = requestAnimationFrame(() => {
         cameraLiveClassRafRef.current = 0;
-        setDocCameraLive(true);
+        docFlags.camera(true);
       });
     }
     if (cameraMotionTimerRef.current) window.clearTimeout(cameraMotionTimerRef.current);
@@ -1936,7 +1948,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         cancelAnimationFrame(cameraLiveClassRafRef.current);
         cameraLiveClassRafRef.current = 0;
       }
-      setDocCameraLive(false);
+      docFlags.camera(false);
     }, cameraPulseSettleMs());
     // Commit / ink moving-mode drop wait for a real reading idle, not the
     // pulse settle. A 3–5s pause then a same-direction burst must still be
@@ -3857,7 +3869,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     let heldPointerId: number | null = null;
     const holdPointer = (pointerId: number) => {
       heldPointerId = pointerId;
-      setDocPointerHeld(true);
+      docFlags.pointer(true);
       refreshPanRideNodes();
       panRidePrimedRef.current = true;
       // Warm ink moving-mode on finger-down so the first pan sample is not a
@@ -3896,7 +3908,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const releaseHeldPointer = (pointerId: number) => {
       if (heldPointerId !== pointerId) return;
       heldPointerId = null;
-      setDocPointerHeld(false);
+      docFlags.pointer(false);
     };
 
     // Published so the edge auto-scroll above can read the same camera the pan
@@ -4320,7 +4332,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       onSelectionGestureClaimed(null);
       if (heldPointerId != null) {
         heldPointerId = null;
-        setDocPointerHeld(false);
+        docFlags.pointer(false);
       }
       root.removeEventListener("pointerdown", onPointerDown, true);
       root.removeEventListener("pointermove", onPointerMove, true);
@@ -4626,7 +4638,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     handPanningRef.current = false;
     panDragRef.current = null;
     rasterInkRef.current?.setCameraMoving(false);
-    setDocPointerHeld(false);
+    docFlags.pointer(false);
     commitVisualScrollRef.current();
   }, [activeTool, stopPanInertia]);
 

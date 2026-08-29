@@ -28,8 +28,24 @@ export interface HubPadConflict {
   server: AnnotatePadDto | WhiteboardPadDto | null;
   /** Ink conflicts only: the page both sides drew on since `since`. */
   inkPageId?: number;
-  /** This device's pages, frozen at stop time. */
+  /**
+   * This device's pages, frozen at stop time.
+   *
+   * A *preview* list, for the split's ink row and its overlay. An ink stop
+   * narrows it to the colliding page rather than gzipping the whole pad, so
+   * nothing may read it as "every page this device has" — the resolve path
+   * takes {@link hubInkPageIds} for that.
+   */
   localInk?: InkPageDto[];
+  /**
+   * Every page id the hub holds for this pad, off the ping digest.
+   *
+   * Ids, not bytes, and free: they ride on the ping the walk already made.
+   * Keep Local and Drop Both empty-PUT the hub pages this device is
+   * discarding, and that set has to be the whole one however little of it the
+   * preview downloaded.
+   */
+  hubInkPageIds?: number[];
   /**
    * Hub pages at stop time.
    *

@@ -500,10 +500,34 @@ export function HubSyncControl({
           return got;
         };
 
-        const freezeCopies = async () => {
+        /**
+         * Every page id the hub holds for this pad, from the ping digest.
+         *
+         * Free — the walk already made that ping — and the honest answer to
+         * "what is on the hub" for a resolve that only has to name pages.
+         */
+        const hubInkPageIds = snapshot.inkDigests
+          .filter((row) => row.kind === padInfo.kind && row.key === padInfo.id)
+          .map((row) => row.page_id);
+
+        /**
+         * Both copies as they stood when the walk stopped.
+         *
+         * `previewPages` scopes this device's gzip to the pages the split will
+         * actually show. An ink stop is about one page, and gzipping a whole
+         * read-through textbook to preview it was the most expensive thing the
+         * pill did — at the moment it is already parked in front of someone.
+         * A pad stop names no page, so it still freezes the lot.
+         *
+         * The hub GET stays whole: Keep Server and Merge write those bytes,
+         * and there is no per-page route to fetch a subset from.
+         * TODO(hub): `GET /pads/ink/:kind/:key/:page_id`, then fetch the set
+         * the chosen resolution needs instead of the pad.
+         */
+        const freezeCopies = async (previewPages?: readonly number[]) => {
           const [server, localInk, serverInk, local] = await Promise.all([
             fetchHubBody(),
-            localInkAsDtos(padInfo.kind, padInfo.id).catch(() => []),
+            localInkAsDtos(padInfo.kind, padInfo.id, previewPages).catch(() => []),
             (async () => {
               try {
                 return await client!.getInkPages(padInfo.kind, padInfo.id);
@@ -514,7 +538,7 @@ export function HubSyncControl({
             })(),
             Promise.resolve(padInfo.buildBody()),
           ]);
-          return { server, localInk, serverInk, local };
+          return { server, localInk, serverInk, local, hubInkPageIds };
         };
 
         /* Park on the split; resolve when the reader has chosen and the
@@ -573,6 +597,7 @@ export function HubSyncControl({
               server: copies.server,
               localInk: copies.localInk,
               serverInk: copies.serverInk,
+              hubInkPageIds: copies.hubInkPageIds,
             });
             // Workspace already wrote pad JSON + the chosen ink.
             inkSettled = true;
@@ -607,7 +632,8 @@ export function HubSyncControl({
           goStage("ink");
           const ink = await walkSyncInk(client!, walkPad, snapshot, host!.inkSince());
           if (ink.outcome === "conflict") {
-            const copies = await freezeCopies();
+            // The walk already named the page both sides drew on.
+            const copies = await freezeCopies([ink.pageId]);
             await raiseConflict({
               kind: padInfo.kind,
               id: padInfo.id,
@@ -617,6 +643,7 @@ export function HubSyncControl({
               server: copies.server,
               localInk: copies.localInk,
               serverInk: copies.serverInk,
+              hubInkPageIds: copies.hubInkPageIds,
               inkPageId: ink.pageId,
             });
           }

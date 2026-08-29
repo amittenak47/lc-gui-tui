@@ -225,6 +225,97 @@ describe("applyInkChoice", () => {
     expect(deleteInkPages).toHaveBeenCalledTimes(1);
     expect(putInkPage).not.toHaveBeenCalled();
   });
+
+  it("empty-PUTs a hub page the preview list never downloaded", async () => {
+    const { applyInkChoice } = await loadApply([{ pageId: 40 }]);
+    const putInkPage = vi.fn().mockResolvedValue(undefined);
+    await applyInkChoice(
+      { putInkPage } as never,
+      "annotate",
+      "p1",
+      "local",
+      // The stash froze only the colliding page…
+      [page(40)],
+      // …but the digest names every page the hub holds.
+      { hubPageIds: [40, 7, 12] },
+    );
+    const cleared = putInkPage.mock.calls
+      .map((call) => call[0]?.page_id as number)
+      .filter((id) => id !== 40)
+      .sort((a, b) => a - b);
+    expect(cleared).toEqual([7, 12]);
+  });
+
+  it("clears hub-only pages on keep-local even when the download failed", async () => {
+    const { applyInkChoice } = await loadApply([{ pageId: 1 }]);
+    const putInkPage = vi.fn().mockResolvedValue(undefined);
+    await applyInkChoice({ putInkPage } as never, "annotate", "p1", "local", null, {
+      hubPageIds: [1, 2],
+    });
+    const hubOnly = putInkPage.mock.calls.filter((call) => call[0]?.page_id === 2);
+    expect(hubOnly).toHaveLength(1);
+  });
+
+  it("drop-both clears every hub page the digest names, not just the frozen one", async () => {
+    const { applyInkChoice, deleteInkPages } = await loadApply([{ pageId: 40 }]);
+    const putInkPage = vi.fn().mockResolvedValue(undefined);
+    await applyInkChoice(
+      { putInkPage } as never,
+      "annotate",
+      "p1",
+      "none",
+      [page(40)],
+      { hubPageIds: [40, 7] },
+    );
+    expect(deleteInkPages).toHaveBeenCalledTimes(1);
+    const cleared = putInkPage.mock.calls
+      .map((call) => call[0]?.page_id as number)
+      .sort((a, b) => a - b);
+    expect(cleared).toEqual([7, 40]);
+  });
+});
+
+describe("localInkAsDtos", () => {
+  afterEach(() => {
+    vi.doUnmock("./inkPageStore");
+    vi.resetModules();
+  });
+
+  async function loadLocal(pageIds: number[]) {
+    vi.resetModules();
+    vi.doMock("./inkPageStore", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./inkPageStore")>()),
+      getInkPageRecords: () =>
+        Promise.resolve(
+          pageIds.map((pageId) => ({
+            v: 1 as const,
+            docKey: "md:p1",
+            pageId,
+            gz: new Uint8Array([1, 2, 3]),
+            dirty: true,
+            updatedAt: 10,
+          })),
+        ),
+    }));
+    return (await import("./inkSync")).localInkAsDtos;
+  }
+
+  it("freezes only the colliding page out of a whole read-through", async () => {
+    const localInkAsDtos = await loadLocal([1, 7, 12, 40, 41, 88]);
+    const pages = await localInkAsDtos("annotate", "p1", [40]);
+    expect(pages.map((row) => row.page_id)).toEqual([40]);
+  });
+
+  it("still takes the lot when no page is named — a pad stop names none", async () => {
+    const localInkAsDtos = await loadLocal([1, 7, 40]);
+    const pages = await localInkAsDtos("annotate", "p1");
+    expect(pages.map((row) => row.page_id)).toEqual([1, 7, 40]);
+  });
+
+  it("asks for a page this device does not have and gets nothing", async () => {
+    const localInkAsDtos = await loadLocal([1]);
+    expect(await localInkAsDtos("annotate", "p1", [40])).toEqual([]);
+  });
 });
 
 describe("syncInkPages strict pull", () => {

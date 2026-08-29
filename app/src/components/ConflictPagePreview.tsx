@@ -12,7 +12,7 @@ import type { InkPageDto } from "../api/client";
 import { b64ToBytes } from "../api/nativeHttp";
 import { decodeInkOps, unpackEncodedInk } from "../canvas/inkCodec";
 import { paintInkAtScale, type InkOp } from "../canvas/rasterInk";
-import { setDocCameraLive, setDocPointerHeld } from "../canvas/docSelectionGesture";
+import { makeDocFlagHolds, type DocFlagHolds } from "../canvas/docSelectionGesture";
 import { AnnotateDocument } from "../modes/AnnotateDocument";
 import { DocSelectionLayer } from "../modes/DocSelectionLayer";
 import { PdfDocument } from "../modes/PdfDocument";
@@ -31,6 +31,19 @@ import {
 } from "./conflictInkLayout";
 
 const EMPTY_PDF_BYTES = new ArrayBuffer(0);
+
+/**
+ * Pages either side of the focused one this pane keeps a bitmap for.
+ *
+ * The reader's ring is `PDF_PREVIEW_RADIUS`, because a flick has to land on
+ * something already decoded. The split mounts two of these over a reader that
+ * is often still mounted, so the full ring would be three decode rings and
+ * three text-layer fills of a textbook — for a question about a single page,
+ * which is the page each pane opens on and the one it scrolls back to when the
+ * focus moves. One either side is enough to scroll off without a white slot,
+ * and it is what the pane actually needs.
+ */
+export const CONFLICT_PAINT_RADIUS = 1;
 
 async function opsFromGz(gz: string): Promise<InkOp[] | null> {
   try {
@@ -76,6 +89,16 @@ export function ConflictPagePreview({
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const docRef = useRef<HTMLDivElement | null>(null);
+  /*
+   * This pane's own share of the module camera flags.
+   *
+   * The split mounts two of these. Setting the process-wide flag directly
+   * meant flicking Local froze Server's paint pump, and a pointer-up on
+   * either released the other's finger.
+   */
+  const holdsRef = useRef<DocFlagHolds | null>(null);
+  if (!holdsRef.current) holdsRef.current = makeDocFlagHolds();
+  const holds = holdsRef.current;
   const [cssWidth, setCssWidth] = useState(0);
   const [scrollRoot, setScrollRoot] = useState<HTMLElement | null>(null);
   const [stackH, setStackH] = useState(0);
@@ -166,9 +189,9 @@ export function ConflictPagePreview({
      * pane would try to decode at full scale mid-flick and stutter.
      */
     const pulse = () => {
-      setDocCameraLive(true);
+      holds.camera(true);
       window.clearTimeout(settle);
-      settle = window.setTimeout(() => setDocCameraLive(false), cameraPulseSettleMs());
+      settle = window.setTimeout(() => holds.camera(false), cameraPulseSettleMs());
     };
     const onMove = () => {
       pulse();
@@ -177,8 +200,8 @@ export function ConflictPagePreview({
     };
     // Freeze on touch-down, before pan has armed — the pump must not fight the
     // finger during the gap the board also covers.
-    const onDown = () => setDocPointerHeld(true);
-    const onUp = () => setDocPointerHeld(false);
+    const onDown = () => holds.pointer(true);
+    const onUp = () => holds.pointer(false);
 
     root.addEventListener("scroll", onMove, { passive: true });
     root.addEventListener("wheel", onMove, { passive: true });
@@ -201,8 +224,8 @@ export function ConflictPagePreview({
       root.removeEventListener("pointerdown", onDown);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
-      setDocPointerHeld(false);
-      setDocCameraLive(false);
+      holds.pointer(false);
+      holds.camera(false);
     };
     // `stackH` re-runs this once the stack has a height, so the first sample
     // measures real slots rather than an empty host.
@@ -324,6 +347,7 @@ export function ConflictPagePreview({
               initialPage={page}
               standalone
               scrollRoot={scrollRoot}
+              paintRadius={CONFLICT_PAINT_RADIUS}
               idleThumbs={false}
               selectable={false}
               spread={false}

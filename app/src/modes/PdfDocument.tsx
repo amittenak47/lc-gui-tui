@@ -262,6 +262,17 @@ export interface PdfDocumentProps {
   standalone?: boolean;
   /** Overflow parent for standalone IntersectionObserver. */
   scrollRoot?: HTMLElement | null;
+  /**
+   * How many pages either side of C this stack keeps a bitmap for.
+   *
+   * The reader wants the full {@link PDF_PREVIEW_RADIUS}: a flick has to land
+   * on something already decoded. A conflict split does not — it mounts two of
+   * these at once, over a reader that may still be mounted, and each one is
+   * showing a page someone was pointed at rather than reading through. Three
+   * stacks each holding C±3 is three decode rings and three text-layer fills
+   * for a question about one page, so the panes ask for a thin one.
+   */
+  paintRadius?: number;
 }
 
 /** Viewport index plus per-page width/height for filmstrip placeholders. */
@@ -506,6 +517,7 @@ export function PdfDocument({
   paused = false,
   idleThumbs = false,
   standalone = false,
+  paintRadius = PDF_PREVIEW_RADIUS,
   scrollRoot = null,
 }: PdfDocumentProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -526,6 +538,13 @@ export function PdfDocument({
   idleThumbsRef.current = idleThumbs;
   const standaloneRef = useRef(standalone);
   standaloneRef.current = standalone;
+  /*
+   * Read through a ref: the paint effects below install native listeners and
+   * an IntersectionObserver once, and a radius captured at effect time would
+   * be the one from whichever render happened to set them up.
+   */
+  const paintRadiusRef = useRef(paintRadius);
+  paintRadiusRef.current = paintRadius;
   const docHashRef = useRef(docHash);
   docHashRef.current = docHash;
   const thumbCancelRef = useRef<() => void>(() => {});
@@ -819,7 +838,7 @@ export function PdfDocument({
     /** Sliding 1× ring around live C — not the flick-end guess. */
     const rebuild = () => {
       const wanted = new Set(
-        pdfOuterPages(peekPdfFilmCurrent(filmScope), last, PDF_PREVIEW_RADIUS),
+        pdfOuterPages(peekPdfFilmCurrent(filmScope), last, paintRadiusRef.current),
       );
       const before = wantedRef.current;
       const same =
@@ -923,7 +942,7 @@ export function PdfDocument({
     let lastBlitLogAt = 0;
     const blitOuterFromLru = () => {
       const C = peekPdfFilmCurrent(filmScope);
-      const outer = pdfOuterPages(C, last, PDF_PREVIEW_RADIUS);
+      const outer = pdfOuterPages(C, last, paintRadiusRef.current);
       wantedRef.current = new Set(outer);
       const rest = sharpPages(filmScope, last);
       const lru = sheetLruRef.current;
@@ -1233,7 +1252,7 @@ export function PdfDocument({
 
       const last = pagesRef.current.at(-1)?.pageNumber ?? 1;
       const C = peekPdfFilmCurrent(filmScope);
-      const outer = new Set(pdfOuterPages(C, last, PDF_PREVIEW_RADIUS));
+      const outer = new Set(pdfOuterPages(C, last, paintRadiusRef.current));
       const rest = sharpPages(filmScope, last);
       let paintScale =
         targetOverride != null
@@ -1419,7 +1438,7 @@ export function PdfDocument({
     const currentQueue = () => {
       const last = pagesRef.current.at(-1)?.pageNumber ?? 1;
       const C = peekPdfFilmCurrent(filmScope);
-      const outerList = pdfOuterPages(C, last, PDF_PREVIEW_RADIUS);
+      const outerList = pdfOuterPages(C, last, paintRadiusRef.current);
       const outer = new Set(outerList);
       wantedRef.current = outer;
       const rest = sharpPages(filmScope, last);
@@ -1627,7 +1646,7 @@ export function PdfDocument({
       const last = pagesRef.current.at(-1)?.pageNumber ?? 0;
       const prefer = [
         ...peekPdfFilmThumbWanted(filmScope),
-        ...pdfOuterPages(peekPdfFilmCurrent(filmScope), last, PDF_PREVIEW_RADIUS),
+        ...pdfOuterPages(peekPdfFilmCurrent(filmScope), last, paintRadiusRef.current),
       ];
       // Bounded to `prefer`: the strip's own window plus the reading ring.
       // The unbounded sweep decoded the whole book in the background of every
