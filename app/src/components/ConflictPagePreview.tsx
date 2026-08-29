@@ -305,7 +305,17 @@ export function ConflictPagePreview({
     >
       {usePdf && filmScope ? (
         <div className="lc-hub-conflict-doc" ref={docRef}>
-          <DocSelectionLayer enabled={false} placeExisting footnotes={keptNotes}>
+          <DocSelectionLayer
+            enabled={false}
+            placeExisting
+            /*
+             * The same page, narrower. A region anchor is a box against its
+             * own page, so it comes across in proportion — this is that
+             * proportion, and it is the transform the ink already uses.
+             */
+            markScale={sceneWidth && sceneWidth > 0 ? cssWidth / sceneWidth : 1}
+            footnotes={keptNotes}
+          >
             <PdfDocument
               filmScope={filmScope}
               bytes={bytes && bytes.byteLength > 0 ? bytes : EMPTY_PDF_BYTES}

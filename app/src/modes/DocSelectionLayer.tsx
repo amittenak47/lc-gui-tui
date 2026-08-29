@@ -212,6 +212,17 @@ export interface DocSelectionLayerProps {
    * job is to be scrolled.
    */
   placeExisting?: boolean;
+  /**
+   * How much narrower this document is than the one the marks were made on.
+   *
+   * Only the conflict panes pass it, and only region anchors need it: a text
+   * anchor re-resolves against this layout's own text and lands wherever the
+   * words are. Recorded band rects are *not* rescued by it — they are
+   * body-local, and page gaps are a constant number of pixels rather than a
+   * share of the page, so the error compounds down the stack. Where this is
+   * set, the anchor is re-resolved instead of trusting them.
+   */
+  markScale?: number;
   footnotes?: readonly DocFootnote[];
   onAnnotate?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
   onCopy?: (
@@ -276,6 +287,14 @@ function rectForAnchor(
   body: HTMLElement,
   root: HTMLElement,
   anchor: DocAnchor,
+  /**
+   * Page px this document is laid out at, over the px the mark was drawn at.
+   *
+   * A region anchor is x/y/w/h against its own page, which makes it portable
+   * between layouts — but only in proportion. One is the reader's width, and
+   * anything showing the same page narrower has to bring the box with it.
+   */
+  markScale = 1,
 ): LocalRect | null {
   if (isRegionAnchor(anchor)) {
     const scale = scaleOf(body) || 1;
@@ -284,10 +303,10 @@ function rectForAnchor(
     const offsetX = (rootBox.left - bodyBox.left) / scale;
     const offsetY = (rootBox.top - bodyBox.top) / scale;
     return {
-      left: anchor.x + offsetX,
-      top: anchor.y + offsetY,
-      width: anchor.w,
-      height: anchor.h,
+      left: anchor.x * markScale + offsetX,
+      top: anchor.y * markScale + offsetY,
+      width: anchor.w * markScale,
+      height: anchor.h * markScale,
     };
   }
   const range = rangeFromAnchor(root, anchor);
@@ -301,6 +320,7 @@ export function DocSelectionLayer({
   marksHost = null,
   highlighting = false,
   placeExisting = false,
+  markScale = 1,
   footnotes = [],
   onAnnotate,
   onCopy,
@@ -1689,13 +1709,25 @@ export function DocSelectionLayer({
                 return range ? tightLocalRects(body, localRects(body, range)) : [];
               })()
             : [];
+        /*
+         * Recorded bands are this document's own, or they are nobody's.
+         *
+         * They are body-local: a distance down the whole stack. Re-used in a
+         * pane that lays the same book out narrower, they are wrong twice over
+         * — the page is a different size, and the gaps between pages are a
+         * fixed number of pixels rather than a share of the page, so the error
+         * grows with every page above. On this book that put a mark four pages
+         * below the words it belongs to. The anchor still knows the answer.
+         */
+        const foreignLayout = placeExisting;
+        const usableStored = foreignLayout ? [] : storedBands;
         const bands =
           live.length > 0
             ? live
-            : storedBands.length > 0
-              ? storedBands
+            : usableStored.length > 0
+              ? usableStored
               : (() => {
-                  const at = rectForAnchor(body, root, footnote.anchor);
+                  const at = rectForAnchor(body, root, footnote.anchor, markScale);
                   return at && !localRectCoversHost(body, at) ? [at] : [];
                 })();
         if (bands.length === 0) continue;
@@ -1705,7 +1737,7 @@ export function DocSelectionLayer({
           footnote,
           at,
           bands,
-          useBands: live.length > 0 || storedBands.length > 0,
+          useBands: live.length > 0 || usableStored.length > 0,
           number: numbers.get(footnote.id) ?? 0,
         });
       }
@@ -1847,7 +1879,7 @@ export function DocSelectionLayer({
     };
     // Intentionally omit `children`: identity churn on every App render re-bound
     // the observer and re-ran place(), which felt like a constant scroll ping.
-  }, [footnotes, enabled, highlighting, placeExisting]);
+  }, [footnotes, enabled, highlighting, placeExisting, markScale]);
 
 
 
@@ -2226,7 +2258,14 @@ export function DocSelectionLayer({
             };
             const caption = footnote.title?.replace(/\s+/g, " ").trim() ?? "";
             return (
-              <span key={footnote.id} className="lc-doc-footnote-pack" style={tint}>
+              <span
+                key={footnote.id}
+                className="lc-doc-footnote-pack"
+                // So a card can be anchored to the mark it is about — the
+                // conflict panes open one per side and need to find theirs.
+                data-footnote-id={footnote.id}
+                style={tint}
+              >
                 {paintBands.map((bandRect, bandIndex) => {
                   const box = padQuoteRect(bandRect);
                   return (

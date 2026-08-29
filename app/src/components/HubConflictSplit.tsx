@@ -463,10 +463,77 @@ export function HubConflictSplit({
       );
       return;
     }
-    setHubAnchors({
-      local: paneBodyRefs.current.local?.getBoundingClientRect() ?? null,
-      server: paneBodyRefs.current.server?.getBoundingClientRect() ?? null,
-    });
+    /*
+     * Anchored to the mark, the way the card sits in the reader.
+     *
+     * The pane is the fallback and not the answer: a card floating in the
+     * middle of a column is not obviously *about* anything, and there are two
+     * of them here. The mark may not be placed yet — a PDF's text layer lands
+     * after mount — so this keeps looking until it is, and stops as soon as
+     * both sides have one.
+     */
+    /*
+     * The band, not the pack around it.
+     *
+     * A pack is a bare `<span>` whose bands are absolutely positioned, so its
+     * own box is zero-sized and sits wherever the first band's offset parent
+     * puts it — anchoring to that clamped both cards into the top corner.
+     *
+     * Scanned rather than selected: a mark id is not guaranteed to be a legal
+     * CSS identifier, and `CSS.escape` is not everywhere this runs.
+     */
+    const markIn = (side: Side): HTMLElement | null => {
+      const body = paneBodyRefs.current[side];
+      if (!body) return null;
+      for (const pack of body.querySelectorAll<HTMLElement>(".lc-doc-footnote-pack")) {
+        if (pack.dataset.footnoteId !== focusedId) continue;
+        const band = pack.querySelector<HTMLElement>(".lc-doc-footnote-band");
+        return band ?? pack;
+      }
+      return null;
+    };
+    /**
+     * On screen, not merely in the tree.
+     *
+     * The pane is still scrolling to the mark when it first places, and a card
+     * anchored to a box a thousand pixels above the viewport is a card in the
+     * corner. Waiting for the mark to arrive is waiting for the scroll.
+     */
+    const settledOn = (side: Side): boolean => {
+      const body = paneBodyRefs.current[side];
+      const mark = markIn(side);
+      if (!body || !mark) return false;
+      const box = mark.getBoundingClientRect();
+      if (box.width < 1 || box.height < 1) return false;
+      const view = body.getBoundingClientRect();
+      return box.bottom > view.top && box.top < view.bottom;
+    };
+    const rectFor = (side: Side): DOMRect | null => {
+      const body = paneBodyRefs.current[side];
+      if (!body) return null;
+      return (settledOn(side) ? markIn(side)! : body).getBoundingClientRect();
+    };
+    const onMark = settledOn;
+
+    let frame = 0;
+    let stop = 0;
+    const settle = () => {
+      setHubAnchors({ local: rectFor("local"), server: rectFor("server") });
+      return onMark("local") && onMark("server");
+    };
+    if (settle()) return;
+    const tick = () => {
+      if (settle()) return;
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    // A mark that never places would otherwise keep this running for the life
+    // of the split; the pane rect it already has is the answer by then.
+    stop = window.setTimeout(() => cancelAnimationFrame(frame), 2000);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(stop);
+    };
   }, [hubOpen, focusedId]);
 
   const renderPane = (side: Side) => {
