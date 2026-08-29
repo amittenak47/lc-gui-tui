@@ -303,7 +303,7 @@ import {
 import { annotatePadBody, whiteboardPadBody } from "./util/padSync";
 import { loadPadHub, loadPadSyncSince } from "./util/padHub";
 import {
-  applyFootnoteBoards,
+  applyConflictFootnoteBoards,
   deleteFootnoteWhiteboard,
   emitFootnoteWhiteboardSaved,
   FNWB_SAVED_EVENT,
@@ -921,18 +921,12 @@ export function Workspace({
             if (doc) {
               const localBoards = (c.local as AnnotatePadDto | null)?.footnote_boards;
               const serverBoards = (c.server as AnnotatePadDto | null)?.footnote_boards;
-              if (serverBoards) {
-                await applyFootnoteBoards(
-                  c.id,
-                  serverBoards as Record<string, FootnoteWhiteboardContent>,
-                );
-              }
-              if (localBoards) {
-                await applyFootnoteBoards(
-                  c.id,
-                  localBoards as Record<string, FootnoteWhiteboardContent>,
-                );
-              }
+              await applyConflictFootnoteBoards(
+                c.id,
+                localBoards as Record<string, FootnoteWhiteboardContent> | undefined,
+                serverBoards as Record<string, FootnoteWhiteboardContent> | undefined,
+                resolution.boardRemints ?? {},
+              );
               const footnotes = await forkSharedWhiteboardPointers(
                 c.id,
                 resolution.footnotes,
@@ -962,7 +956,7 @@ export function Workspace({
         c.kind,
         c.id,
         inkChoiceOf(resolution),
-        c.serverInk ?? [],
+        c.serverInk ?? null,
       );
       await applyHubReloadRef.current({
         kind: c.kind,
@@ -2247,17 +2241,19 @@ export function Workspace({
             // The local write already happened; only the hub PUT waits on
             // Hub auto-sync. Read live so a mid-session Save takes effect.
             if (loadHubAutosync()) {
-              void pushAnnotatePad(client, saved).then((ok) => {
-                if (!ok) return;
-                void recordPadSnapshotsWithExtras({
-                  kind: "annotate",
-                  key: saved.id,
-                  name: saved.name,
-                  board: liveBoard,
-                  footnotes: saved.footnotes,
-                  agent: saved.agent,
-                }).then((written) => void pushRolledSnapshots(client, written));
-              });
+              void pushAnnotatePad(client, saved)
+                .then((ok) => {
+                  if (!ok) return;
+                  void recordPadSnapshotsWithExtras({
+                    kind: "annotate",
+                    key: saved.id,
+                    name: saved.name,
+                    board: liveBoard,
+                    footnotes: saved.footnotes,
+                    agent: saved.agent,
+                  }).then((written) => void pushRolledSnapshots(client, written));
+                })
+                .catch((cause: unknown) => setError(messageOf(cause)));
             }
           } catch (cause: unknown) {
             noteStorageFull(cause);
@@ -4522,7 +4518,9 @@ export function Workspace({
         agent: persistableAgentMessages(agentMessages),
       });
       setAnnotateSource({ ...source, text: next, hash });
-      void pushAnnotatePad(client, saved);
+      void pushAnnotatePad(client, saved).catch((cause: unknown) =>
+        setError(messageOf(cause)),
+      );
       /*
        * Re-index under the new hash so Ask answers about what the note says
        * now. The old hash's chunks are left where they are: `docs.db` is
@@ -6845,7 +6843,9 @@ export function Workspace({
               agent,
             });
             if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
-            void pushAnnotatePad(client, saved);
+            void pushAnnotatePad(client, saved).catch((cause: unknown) =>
+              setError(messageOf(cause)),
+            );
           } catch (cause: unknown) {
             if (cause instanceof AnnotateLibraryFullError) {
               setError(cause.message);
@@ -7348,17 +7348,19 @@ export function Workspace({
       );
       annotatePristineMarksRef.current = footnoteRevision(annotateFootnotes);
       annotatePristineAgentRef.current = JSON.stringify(persistableAgentMessages(agentMessages));
-      void pushAnnotatePad(client, saved).then((ok) => {
-        if (!ok) return;
-        void recordPadSnapshotsWithExtras({
-          kind: "annotate",
-          key: saved.id,
-          name: saved.name,
-          board: blob,
-          footnotes: saved.footnotes,
-          agent: saved.agent,
-        }).then((written) => void pushRolledSnapshots(client, written));
-      });
+      void pushAnnotatePad(client, saved)
+        .then((ok) => {
+          if (!ok) return;
+          void recordPadSnapshotsWithExtras({
+            kind: "annotate",
+            key: saved.id,
+            name: saved.name,
+            board: blob,
+            footnotes: saved.footnotes,
+            agent: saved.agent,
+          }).then((written) => void pushRolledSnapshots(client, written));
+        })
+        .catch((cause: unknown) => setError(messageOf(cause)));
       return saved;
     } catch (cause) {
       if (cause instanceof AnnotateLibraryFullError) {

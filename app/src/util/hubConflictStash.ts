@@ -10,7 +10,8 @@
  */
 
 import type { AnnotatePadDto, InkPageDto, WhiteboardPadDto } from "../api/client";
-import type { DocFootnote } from "./docFootnotes";
+import type { DocFootnote, DocFootnoteWhiteboard } from "./docFootnotes";
+import { freshWhiteboardId } from "./docFootnotes";
 
 export type HubPadKind = "annotate" | "whiteboard";
 
@@ -29,8 +30,14 @@ export interface HubPadConflict {
   inkPageId?: number;
   /** This device's pages, frozen at stop time. */
   localInk?: InkPageDto[];
-  /** Hub pages at stop time. Missing means the GET failed. */
-  serverInk?: InkPageDto[];
+  /**
+   * Hub pages at stop time.
+   *
+   * `null` means the GET failed — not the same as `[]`, which is a successful
+   * read of a pad with no handwriting. Treating a failed download as empty
+   * made Keep Server wipe every local page.
+   */
+  serverInk?: InkPageDto[] | null;
 }
 
 /** Synthetic row id for the handwriting choice on the split. */
@@ -50,6 +57,12 @@ export type HubConflictResolution =
        */
       footnotes?: DocFootnote[];
       ink?: HubInkChoice;
+      /**
+       * Incoming (hub) whiteboard ids reminted while combining a same-id mark.
+       * The resolver copies the hub blob under the new id before local KV
+       * overwrite, so both boards survive.
+       */
+      boardRemints?: Record<string, string>;
     };
 
 /** Ink follows the pane when the split did not say. Merged notes still merge ink. */
@@ -178,6 +191,33 @@ function unionBy<T>(
 }
 
 /**
+ * Same pointer on both copies of one mark: remint the incoming id so both
+ * blobs keep a `fnwb:` key. Notes/threads/links still collapse by id.
+ */
+function unionWhiteboards(
+  local: readonly DocFootnoteWhiteboard[] | undefined,
+  incoming: readonly DocFootnoteWhiteboard[] | undefined,
+  remints: Record<string, string>,
+): DocFootnoteWhiteboard[] | undefined {
+  if (!local?.length && !incoming?.length) return undefined;
+  const out: DocFootnoteWhiteboard[] = [...(local ?? [])];
+  const seen = new Set(out.map((board) => board.id));
+  for (const board of incoming ?? []) {
+    if (!seen.has(board.id)) {
+      seen.add(board.id);
+      out.push(board);
+      continue;
+    }
+    const used = out.map((row) => ({ id: row.id, createdAt: 0, updatedAt: 0 }));
+    const fresh = freshWhiteboardId(used);
+    remints[board.id] = fresh;
+    seen.add(fresh);
+    out.push({ ...board, id: fresh });
+  }
+  return out;
+}
+
+/**
  * Two copies of the same mark, kept as one.
  *
  * ✓ on both sides of a same-id row used to produce two footnotes: the same
@@ -201,12 +241,16 @@ function unionBy<T>(
  * offsets into two different strings — combining them by concatenation would
  * paint underlines across words nobody underlined. Local's stand.
  */
-export function combineFootnotePair(local: DocFootnote, incoming: DocFootnote): DocFootnote {
+export function combineFootnotePair(
+  local: DocFootnote,
+  incoming: DocFootnote,
+  remints: Record<string, string> = {},
+): DocFootnote {
   const combined: DocFootnote = {
     ...local,
     png: local.png ?? incoming.png,
     notes: unionBy(local.notes, incoming.notes, (note) => note.id),
-    whiteboards: unionBy(local.whiteboards, incoming.whiteboards, (board) => board.id),
+    whiteboards: unionWhiteboards(local.whiteboards, incoming.whiteboards, remints),
     threads: unionBy(local.threads, incoming.threads, (thread) => thread.rootId),
     userLinks: unionBy(local.userLinks, incoming.userLinks, (link) => link.url),
   };
@@ -245,6 +289,7 @@ export function mergeFootnotes(
   serverNotes: readonly DocFootnote[],
   panes: { local: boolean; server: boolean },
   picks: Record<string, { local: boolean; server: boolean }> = {},
+  remints: Record<string, string> = {},
 ): DocFootnote[] {
   const out: DocFootnote[] = [];
   for (const row of footnoteDiffRows(localNotes, serverNotes)) {
@@ -252,7 +297,7 @@ export function mergeFootnotes(
     const keepLocal = pick ? pick.local : panes.local;
     const keepServer = pick ? pick.server : panes.server;
     if (keepLocal && keepServer && row.local && row.server) {
-      out.push(combineFootnotePair(row.local, row.server));
+      out.push(combineFootnotePair(row.local, row.server, remints));
       continue;
     }
     if (keepLocal && row.local) out.push(row.local);

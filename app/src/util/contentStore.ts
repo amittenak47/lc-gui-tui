@@ -96,6 +96,11 @@ async function promoteSpilled(): Promise<void> {
 export async function putContent(id: string, content: unknown): Promise<void> {
   try {
     await run(STORE_CONTENT, "readwrite", (store) => store.put(content, id));
+    try {
+      localStorage.removeItem(spillKey(id));
+    } catch {
+      /* spill may already be gone */
+    }
     // The database is open and writing, so anything stranded can come across.
     if (spilled) await promoteSpilled();
     return;
@@ -111,19 +116,26 @@ export async function putContent(id: string, content: unknown): Promise<void> {
 /** Read one entry's content back, from wherever it ended up. */
 export async function getContent<T>(id: string): Promise<T | null> {
   try {
+    const raw = localStorage.getItem(spillKey(id));
+    if (raw != null) {
+      try {
+        return JSON.parse(raw) as T;
+      } catch {
+        /* corrupt spill — fall through to IndexedDB */
+      }
+    }
+  } catch {
+    /* localStorage missing */
+  }
+  try {
     const value = await run<T | undefined>(STORE_CONTENT, "readonly", (store) =>
       store.get(id),
     );
     if (value !== undefined) return value;
   } catch {
-    /* fall through — a spilled entry is still readable */
+    /* nothing in IndexedDB either */
   }
-  try {
-    const raw = localStorage.getItem(spillKey(id));
-    return raw == null ? null : (JSON.parse(raw) as T);
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 /** Remove an entry's content from both backends — either may hold it. */

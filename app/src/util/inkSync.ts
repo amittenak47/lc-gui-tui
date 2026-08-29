@@ -128,35 +128,64 @@ export async function localInkAsDtos(
  * threw away and the next walk brings it back. Keep server only writes IDB
  * (those bytes already came from the hub).
  */
+async function emptyInkGz(): Promise<string> {
+  return bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps([]))));
+}
+
 export async function applyInkChoice(
   client: LcClient,
   kind: InkPadKind,
   key: string,
   choice: HubInkChoice,
-  serverInk: readonly InkPageDto[],
+  serverInk: readonly InkPageDto[] | null,
 ): Promise<void> {
   const docKey = inkDocKey(kind, key);
   const now = Date.now();
+  const hubPages = serverInk ?? [];
   if (choice === "local") {
     await pushInkPagesToHub(client, kind, key);
+    // Hub-only page ids stay on the hub unless we empty-PUT them. Keep Local
+    // used to upload this device's pages and leave the rest, so discarded
+    // handwriting came back on the next walk.
+    if (serverInk) {
+      const localIds = new Set(
+        (await getInkPageRecords(docKey)).map((row) => row.pageId),
+      );
+      const emptyGz = await emptyInkGz();
+      for (const page of serverInk) {
+        if (localIds.has(page.page_id)) continue;
+        await client.putInkPage({
+          kind,
+          key,
+          page_id: page.page_id,
+          updated_at: now,
+          gz: emptyGz,
+        });
+      }
+    }
     return;
   }
   if (choice === "server") {
+    /*
+     * A failed GET is `null`, not `[]`. Empty is a real "the hub has no ink"
+     * and clears this device. A failed download must not.
+     */
+    if (serverInk == null) return;
+    await deleteInkPages(docKey);
     for (const page of serverInk) {
       if (!page.gz) continue;
       await writeInkPage(docKey, page);
     }
-    if (serverInk.length === 0) await deleteInkPages(docKey);
     return;
   }
   if (choice === "none") {
     const local = await getInkPageRecords(docKey);
     const ids = new Set<number>([
       ...local.map((row) => row.pageId),
-      ...serverInk.map((page) => page.page_id),
+      ...hubPages.map((page) => page.page_id),
     ]);
     await deleteInkPages(docKey);
-    const emptyGz = bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps([]))));
+    const emptyGz = await emptyInkGz();
     for (const pageId of ids) {
       const body = { page_id: pageId, updated_at: now, gz: emptyGz };
       await writeInkPage(docKey, body);
@@ -169,7 +198,7 @@ export async function applyInkChoice(
     const encoded = await encodedFromRecord(row);
     if (encoded) localMap.set(row.pageId, encoded);
   }
-  const merged = mergeEncodedPages(localMap, await encodedPagesFromDtos(serverInk));
+  const merged = mergeEncodedPages(localMap, await encodedPagesFromDtos(hubPages));
   const gzByPage = new Map<number, string>();
   for (const [pageId, encoded] of merged) {
     const gz = bytesToB64(await gzipBytes(packEncodedInk(encoded)));

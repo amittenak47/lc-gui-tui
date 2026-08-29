@@ -1197,5 +1197,82 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect(button.dataset.stage).toBe("synced");
       expect(acked).toEqual([777]);
     });
+
+    it("stashes a failed ink download as null, not an empty pad", async () => {
+      vi.useFakeTimers();
+      const annotateRow = { id: "pad-1", updated_at: 500, deleted_at: null };
+      const client = fakeClient({
+        pingPadSync: vi.fn().mockResolvedValue({ now: 1, annotate: [annotateRow] }),
+        getAnnotatePad: vi.fn().mockResolvedValue({
+          id: "pad-1",
+          name: "book.pdf",
+          updated_at: 500,
+          footnotes: [],
+          source: "hub copy",
+        }),
+        getInkPages: vi.fn().mockRejectedValue(new Error("hub timeout")),
+        putAnnotatePad: vi.fn(),
+      });
+      const { host, conflicts } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      (host as unknown as { pad: () => Promise<unknown> }).pad = async () => ({
+        kind: "annotate" as const,
+        id: "pad-1",
+        hubAckUpdatedAt: () => 100,
+        buildBody: () => ({ id: "pad-1", name: "book.pdf", updated_at: 900 }),
+        markHubAck: () => {},
+      });
+      const button = await mountWalk(client, host);
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(conflicts).toHaveLength(1);
+      expect((conflicts[0] as { serverInk: unknown }).serverInk).toBeNull();
+    });
+
+    it("does not PUT the pad after the workspace unmounts", async () => {
+      vi.useFakeTimers();
+      let releasePing: ((value: { now: number }) => void) | undefined;
+      const pingPadSync = vi.fn(
+        () =>
+          new Promise<{ now: number }>((resolve) => {
+            releasePing = resolve;
+          }),
+      );
+      const putAnnotatePad = vi.fn().mockResolvedValue({ id: "pad-1", updated_at: 900 });
+      const client = fakeClient({ pingPadSync, putAnnotatePad });
+      const { host } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      const hostEl = document.createElement("div");
+      document.body.append(hostEl);
+      const root = createRoot(hostEl);
+      act(() => root.render(<HubSyncControl client={client} host={withPad(host)} />));
+      const button = hostEl.querySelector(".lc-hub-sync") as HTMLButtonElement;
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      expect(pingPadSync).toHaveBeenCalled();
+      act(() => root.unmount());
+      await act(async () => {
+        releasePing?.({ now: 1 });
+        await Promise.resolve();
+        await vi.runAllTimersAsync();
+      });
+      expect(putAnnotatePad).not.toHaveBeenCalled();
+    });
   });
 });

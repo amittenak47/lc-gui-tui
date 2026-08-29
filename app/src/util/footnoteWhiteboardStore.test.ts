@@ -136,4 +136,18 @@ describe("footnoteWhiteboardStore", () => {
       pageCount: 1,
     });
   });
+
+  it("keeps both blobs when a merge remints a shared pointer", async () => {
+    const { applyConflictFootnoteBoards } = await import("./footnoteWhiteboardStore");
+    const local = { board: board("local"), pageCount: 1 };
+    const server = { board: board("hub"), pageCount: 1 };
+    await applyConflictFootnoteBoards(
+      "doc-1",
+      { "wb-1": local },
+      { "wb-1": server },
+      { "wb-1": "wb-hub" },
+    );
+    expect(await getFootnoteWhiteboard("doc-1", "wb-1")).toEqual(local);
+    expect(await getFootnoteWhiteboard("doc-1", "wb-hub")).toEqual(server);
+  });
 });

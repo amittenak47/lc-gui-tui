@@ -90,6 +90,13 @@ const LABEL: Record<HubSyncStage, string> = {
 /** How long each stub stage holds before the label advances. */
 const STAGE_MS = 650;
 
+class WalkAborted extends Error {
+  constructor() {
+    super("walk aborted");
+    this.name = "WalkAborted";
+  }
+}
+
 /** A stage stopped because both sides changed; nothing was applied. */
 class WalkConflict extends Error {
   constructor(
@@ -218,6 +225,7 @@ export function HubSyncControl({
   const [walkError, setWalkError] = useState<string | null>(null);
   const walkingRef = useRef(false);
   const timerRef = useRef<number | null>(null);
+  const walkAbortRef = useRef<AbortController | null>(null);
   /**
    * The stage the walk is on, readable from the progress callbacks.
    *
@@ -230,6 +238,7 @@ export function HubSyncControl({
 
   /** Move the pill, and tell the tab what it is now doing. */
   const goStage = (next: HubSyncStage) => {
+    if (walkAbortRef.current?.signal.aborted) throw new WalkAborted();
     walkStageRef.current = next;
     setStage(next);
     // Idle (pad-less after Links) clears the tab. Synced is a landing, not a
@@ -241,6 +250,7 @@ export function HubSyncControl({
 
   /** Report one job's progress under whatever stage is running. `job: null` clears. */
   const goWork = (job: "extract" | "embed" | null, progress: DocWorkProgress | null) => {
+    if (walkAbortRef.current?.signal.aborted) throw new WalkAborted();
     hostRef.current?.onIndexProgress(progress);
     hostRef.current?.onWalkProgress({
       stage: walkStageRef.current,
@@ -255,10 +265,12 @@ export function HubSyncControl({
   editSeqRef.current = editSeq;
 
   // Clearing on unmount keeps the stub walk from writing state into a dead
-  // tree; the real walk will own its own teardown per stage.
+  // tree; the real walk aborts so it cannot PUT or raise a conflict after the
+  // workspace is gone.
   useEffect(() => {
     return () => {
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+      walkAbortRef.current?.abort();
       // Mid-walk unmount: stop claiming work. A landed Synced stays on the tab.
       const at = walkStageRef.current;
       if (at !== "idle" && at !== "synced") {
@@ -303,6 +315,11 @@ export function HubSyncControl({
   const runWalk = async (from: HubSyncStage) => {
     if (walkingRef.current) return;
     walkingRef.current = true;
+    const abort = new AbortController();
+    walkAbortRef.current = abort;
+    const throwIfAborted = () => {
+      if (abort.signal.aborted) throw new WalkAborted();
+    };
     host?.onIndexError(null);
     /*
      * Resume where it stopped.
@@ -334,6 +351,7 @@ export function HubSyncControl({
        * the same world.
        */
       const ping = await client!.pingPadSync(0);
+      throwIfAborted();
 
       if (!runs("index")) {
         // Already done on the attempt that got as far as the failing stage.
@@ -457,6 +475,7 @@ export function HubSyncControl({
        * where the plan says (F after a pad resolve, G after an ink one).
        */
       const padInfo = client && host ? await host.pad() : null;
+      throwIfAborted();
       const snapshot = snapshotFromPing(ping);
       if (padInfo) {
         const walkPad = {
@@ -489,7 +508,8 @@ export function HubSyncControl({
               try {
                 return await client!.getInkPages(padInfo.kind, padInfo.id);
               } catch {
-                return [];
+                // Failed download, not an empty pad — see HubPadConflict.serverInk.
+                return null;
               }
             })(),
             Promise.resolve(padInfo.buildBody()),
@@ -502,22 +522,37 @@ export function HubSyncControl({
         const raiseConflict = (
           conflict: HubPadConflict,
         ): Promise<HubConflictResolution> => {
+          if (abort.signal.aborted) return Promise.reject(new WalkAborted());
           stashHubConflict(conflict);
           hostRef.current?.onWalkProgress({
             stage: walkStageRef.current,
             progress: null,
             waiting: "conflict",
           });
-          return host!
-            .onConflict(conflict)
-            .then((resolution) => resolution ?? { pick: "local" })
-            .finally(() => {
-              clearHubConflict();
-              hostRef.current?.onWalkProgress({
-                stage: walkStageRef.current,
-                progress: null,
+          return new Promise<HubConflictResolution>((resolve, reject) => {
+            const onAbort = () => reject(new WalkAborted());
+            abort.signal.addEventListener("abort", onAbort, { once: true });
+            host!
+              .onConflict(conflict)
+              .then((resolution) => {
+                abort.signal.removeEventListener("abort", onAbort);
+                if (abort.signal.aborted) {
+                  reject(new WalkAborted());
+                  return;
+                }
+                resolve(resolution ?? { pick: "local" });
+              }, (cause) => {
+                abort.signal.removeEventListener("abort", onAbort);
+                reject(cause);
               });
+          }).finally(() => {
+            clearHubConflict();
+            if (abort.signal.aborted) return;
+            hostRef.current?.onWalkProgress({
+              stage: walkStageRef.current,
+              progress: null,
             });
+          });
         };
 
         // — E: push this pad's JSON (CAS). Conflict → stop before any apply.
@@ -525,8 +560,10 @@ export function HubSyncControl({
         if (runs("pad")) {
           goStage("pad");
           const pushed = await walkPushPad(client!, walkPad, snapshot);
+          throwIfAborted();
           if (pushed.outcome === "conflict") {
             const copies = await freezeCopies();
+            throwIfAborted();
             const resolution = await raiseConflict({
               kind: padInfo.kind,
               id: padInfo.id,
@@ -632,6 +669,7 @@ export function HubSyncControl({
       walkingRef.current = false;
     } catch (cause) {
       walkingRef.current = false;
+      if (cause instanceof WalkAborted) return;
       const message = cause instanceof Error ? cause.message : String(cause);
       setWalkError(message);
       // Stay parked on the failing stage; the next tap retries from it. The

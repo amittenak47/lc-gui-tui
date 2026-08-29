@@ -110,6 +110,27 @@ export async function applyFootnoteBoards(
 }
 
 /**
+ * Conflict merge: copy reminted hub boards, then write hub then local.
+ *
+ * Local overwrite used to clobber the hub blob at a shared id. Remints are
+ * applied first so the incoming copy lives under a new `fnwb:` key.
+ */
+export async function applyConflictFootnoteBoards(
+  docId: string,
+  localBoards: Record<string, FootnoteWhiteboardContent> | null | undefined,
+  serverBoards: Record<string, FootnoteWhiteboardContent> | null | undefined,
+  remints: Record<string, string> = {},
+): Promise<void> {
+  for (const [from, to] of Object.entries(remints)) {
+    if (!to || to === from) continue;
+    const blob = serverBoards?.[from];
+    if (blob && isContent(blob)) await putFootnoteWhiteboard(docId, to, blob);
+  }
+  await applyFootnoteBoards(docId, serverBoards);
+  await applyFootnoteBoards(docId, localBoards);
+}
+
+/**
  * Same-id-different-body marks kept as two notes share pointer ids.
  *
  * Mint a fresh whiteboard id on the duplicate and copy the blob so the two

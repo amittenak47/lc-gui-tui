@@ -136,6 +136,97 @@ describe("mergeEncodedPages", () => {
   });
 });
 
+describe("applyInkChoice", () => {
+  afterEach(() => {
+    vi.doUnmock("./inkPageStore");
+    vi.doUnmock("./idb");
+    vi.resetModules();
+  });
+
+  async function loadApply(localRows: Array<{ pageId: number }>) {
+    const deleteInkPages = vi.fn(async () => {});
+    vi.resetModules();
+    vi.doMock("./idb", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./idb")>()),
+      withStore: async (
+        _store: string,
+        _mode: string,
+        fn: (store: { put: (row: unknown, key: string) => void }) => void,
+      ) => {
+        fn({ put: () => {} });
+      },
+    }));
+    vi.doMock("./inkPageStore", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./inkPageStore")>()),
+      getInkPageRecords: () =>
+        Promise.resolve(
+          localRows.map((row) => ({
+            v: 1 as const,
+            docKey: "md:p1",
+            pageId: row.pageId,
+            gz: new Uint8Array([1, 2, 3]),
+            dirty: true,
+            updatedAt: 10,
+          })),
+        ),
+      deleteInkPages,
+    }));
+    const mod = await import("./inkSync");
+    return { applyInkChoice: mod.applyInkChoice, deleteInkPages };
+  }
+
+  const page = (pageId: number) => ({
+    kind: "annotate" as const,
+    key: "p1",
+    page_id: pageId,
+    updated_at: 20,
+    gz: "YQ==",
+  });
+
+  it("does not wipe local pages when the hub download failed", async () => {
+    const { applyInkChoice, deleteInkPages } = await loadApply([{ pageId: 1 }]);
+    const putInkPage = vi.fn();
+    await applyInkChoice(
+      { putInkPage } as never,
+      "annotate",
+      "p1",
+      "server",
+      null,
+    );
+    expect(deleteInkPages).not.toHaveBeenCalled();
+    expect(putInkPage).not.toHaveBeenCalled();
+  });
+
+  it("empty-PUTs hub-only page ids after keep-local", async () => {
+    const { applyInkChoice, deleteInkPages } = await loadApply([{ pageId: 1 }]);
+    const putInkPage = vi.fn().mockResolvedValue(undefined);
+    await applyInkChoice(
+      { putInkPage } as never,
+      "annotate",
+      "p1",
+      "local",
+      [page(1), page(2)],
+    );
+    expect(deleteInkPages).not.toHaveBeenCalled();
+    const hubOnly = putInkPage.mock.calls.filter((call) => call[0]?.page_id === 2);
+    expect(hubOnly).toHaveLength(1);
+  });
+
+  it("replaces local pages with the hub set on keep-server", async () => {
+    const { applyInkChoice, deleteInkPages } = await loadApply([{ pageId: 1 }]);
+    const putInkPage = vi.fn();
+    await applyInkChoice(
+      { putInkPage } as never,
+      "annotate",
+      "p1",
+      "server",
+      [page(2)],
+    );
+    expect(deleteInkPages).toHaveBeenCalledTimes(1);
+    expect(putInkPage).not.toHaveBeenCalled();
+  });
+});
+
 describe("syncInkPages strict pull", () => {
   afterEach(() => {
     vi.doUnmock("./inkPageStore");
