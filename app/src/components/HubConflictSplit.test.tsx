@@ -510,15 +510,58 @@ describe("the mark hub, one per pane", () => {
     return document.querySelectorAll(".lc-footnote-overview");
   }
 
-  it("opens this side's copy on each pane when a mark is tapped", () => {
+  /** The ✓ / ✕ on one row, in one pane. */
+  const tickRow = (side: 0 | 1, id: string, action: "keep" | "drop") => {
+    const pane = document.querySelectorAll(".lc-hub-conflict-pane")[side]!;
+    const row = pane.querySelector<HTMLElement>(`[data-note-id="${id}"]`)!;
+    act(() => {
+      (row.querySelector(`[data-action="${action}"]`) as HTMLButtonElement).click();
+    });
+  };
+
+  it("shows no card for a row nobody has answered for", () => {
     /*
-     * Tapping a row scrolled the pane and nothing else — you had to keep a
-     * mark to find out what was in it.
+     * The card is the same change as the mark, described in full, so it waits
+     * for the same decision. Two cards over two deliberately blank pages said
+     * the opposite of the ticks beside them.
      */
     mount(BOTH);
     act(() => noteByText("kept here with new words").click());
+    expect(hubs()).toHaveLength(0);
+  });
 
+  it("opens the card on the side that was kept, and only that side", () => {
+    mount(BOTH);
+    act(() => noteByText("kept here with new words").click());
+
+    tickRow(0, "same", "keep");
+    expect(hubs()).toHaveLength(1);
+    expect(document.body.textContent).toContain("note from this device");
+    expect(document.body.textContent).not.toContain("note from the other one");
+
+    tickRow(1, "same", "keep");
     expect(hubs()).toHaveLength(2);
+    expect(document.body.textContent).toContain("note from the other one");
+  });
+
+  it("takes the card away again when the ✓ is taken back", () => {
+    mount(BOTH);
+    act(() => noteByText("kept here with new words").click());
+    tickRow(0, "same", "keep");
+    expect(hubs()).toHaveLength(1);
+
+    tickRow(0, "same", "keep");
+    expect(hubs()).toHaveLength(0);
+  });
+
+  it("shows each side its own copy, which is the point of two cards", () => {
+    // The live hub in the workspace reads this device's footnotes, so it could
+    // only ever have shown one of the two.
+    mount(BOTH);
+    act(() => noteByText("kept here with new words").click());
+    tickRow(0, "same", "keep");
+    tickRow(1, "same", "keep");
+
     const text = document.body.textContent ?? "";
     expect(text).toContain("note from this device");
     expect(text).toContain("note from the other one");
@@ -527,6 +570,8 @@ describe("the mark hub, one per pane", () => {
   it("closes both hubs when handwriting takes the focus", () => {
     mount(BOTH);
     act(() => noteByText("kept here with new words").click());
+    tickRow(0, "same", "keep");
+    tickRow(1, "same", "keep");
     expect(hubs()).toHaveLength(2);
 
     act(() => inkRow(0).click());
@@ -538,6 +583,7 @@ describe("the mark hub, one per pane", () => {
     // would be thrown away without saying so.
     mount(BOTH);
     act(() => noteByText("kept here with new words").click());
+    tickRow(0, "same", "keep");
 
     expect(document.querySelectorAll(".lc-footnote-overview-add")).toHaveLength(0);
     // Still readable, which is the whole reason it is open.
@@ -547,6 +593,7 @@ describe("the mark hub, one per pane", () => {
   it("shows one hub when only one side has that mark", () => {
     mount();
     act(() => noteByText("local only mark").click());
+    tickRow(0, "n1", "keep");
     expect(hubs()).toHaveLength(1);
   });
 });
