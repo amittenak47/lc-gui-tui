@@ -100,14 +100,30 @@ async function encodedPagesFromDtos(
   return out;
 }
 
-/** This device's pages as hub DTOs, for the conflict stash. */
+/**
+ * This device's pages as hub DTOs, for the conflict stash.
+ *
+ * `pageIds` narrows the work to the pages that will actually be looked at.
+ * Freezing a conflict used to gzip every page of the pad, which on a textbook
+ * someone has read through is the whole of their handwriting compressed at the
+ * moment the pill is already parked — to render a preview of one page. An ink
+ * conflict names its page, so pass that; a pad conflict does not, so it still
+ * takes the lot.
+ *
+ * This is a *preview* list. It is not the set of pages that will be written on
+ * resolve — see {@link applyInkChoice}, which takes the hub's page ids
+ * separately for exactly that reason.
+ */
 export async function localInkAsDtos(
   kind: InkPadKind,
   key: string,
+  pageIds?: readonly number[],
 ): Promise<InkPageDto[]> {
+  const wanted = pageIds ? new Set(pageIds) : null;
   const rows = await getInkPageRecords(inkDocKey(kind, key));
   const out: InkPageDto[] = [];
   for (const row of rows) {
+    if (wanted && !wanted.has(row.pageId)) continue;
     const gz = await gzOf(row);
     if (!gz) continue;
     out.push({
@@ -138,26 +154,41 @@ export async function applyInkChoice(
   key: string,
   choice: HubInkChoice,
   serverInk: readonly InkPageDto[] | null,
+  opts: {
+    /**
+     * Every page id the hub holds for this pad, from the ping digest.
+     *
+     * Keep Local and Drop Both only need to *name* the hub's pages, to empty-
+     * PUT the ones this device does not have — and the digest already carries
+     * those ids, so neither has any business reading the stash's preview list.
+     * That list is now scoped to the colliding page, and treating it as the
+     * whole hub set would leave discarded handwriting on the hub to come back
+     * on the next walk. Absent, the served bytes stand in as before.
+     */
+    hubPageIds?: readonly number[];
+  } = {},
 ): Promise<void> {
   const docKey = inkDocKey(kind, key);
   const now = Date.now();
   const hubPages = serverInk ?? [];
+  /** Hub ids from the digest when we have it, else whatever we downloaded. */
+  const hubIds = opts.hubPageIds ?? (serverInk ? serverInk.map((page) => page.page_id) : null);
   if (choice === "local") {
     await pushInkPagesToHub(client, kind, key);
     // Hub-only page ids stay on the hub unless we empty-PUT them. Keep Local
     // used to upload this device's pages and leave the rest, so discarded
     // handwriting came back on the next walk.
-    if (serverInk) {
+    if (hubIds) {
       const localIds = new Set(
         (await getInkPageRecords(docKey)).map((row) => row.pageId),
       );
       const emptyGz = await emptyInkGz();
-      for (const page of serverInk) {
-        if (localIds.has(page.page_id)) continue;
+      for (const pageId of new Set(hubIds)) {
+        if (localIds.has(pageId)) continue;
         await client.putInkPage({
           kind,
           key,
-          page_id: page.page_id,
+          page_id: pageId,
           updated_at: now,
           gz: emptyGz,
         });
@@ -182,7 +213,9 @@ export async function applyInkChoice(
     const local = await getInkPageRecords(docKey);
     const ids = new Set<number>([
       ...local.map((row) => row.pageId),
-      ...hubPages.map((page) => page.page_id),
+      // Same as Keep Local: naming the hub's pages is enough to clear them,
+      // and the digest names them all where the preview list does not.
+      ...(hubIds ?? []),
     ]);
     await deleteInkPages(docKey);
     const emptyGz = await emptyInkGz();

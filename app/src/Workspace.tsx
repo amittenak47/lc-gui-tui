@@ -232,6 +232,7 @@ import {
 } from "./templates/annotate";
 import { BROWSE_PICK_QUIET_MS, browsePickBlocked } from "./util/browsePickGuard";
 import { waitForAnnotateLaidOut, waitForPdfPageNode, waitForPdfPagePainted } from "./util/annotateLaidOut";
+import { planAutosaveTick } from "./util/autosaveSchedule";
 import {
   buildAnnotateSidecar,
   CODE_SOURCE_MAX_CHARS,
@@ -957,6 +958,10 @@ export function Workspace({
         c.id,
         inkChoiceOf(resolution),
         c.serverInk ?? null,
+        // Ids off the ping digest, not the stash's preview list: that list is
+        // scoped to the colliding page, and a discard has to name every hub
+        // page or the rest comes back on the next walk.
+        { ...(c.hubInkPageIds ? { hubPageIds: c.hubInkPageIds } : {}) },
       );
       await applyHubReloadRef.current({
         kind: c.kind,
@@ -2105,266 +2110,267 @@ export function Workspace({
     };
   }, []);
 
-  useEffect(() => {
+  /**
+   * One autosave pass: the unsaved dot, the Sync pill, and the write itself.
+   *
+   * Lifted out of the interval and held in a ref so the pane can run a final
+   * pass on the way out — see the interval below, which only exists while the
+   * pane is on screen.
+   */
+  const autosaveTick = useCallback(() => {
     if (!problem) return;
-    // Off still watches the board: the unsaved dot and the Sync pill need to
-    // know the pad moved, even when nothing is being written.
-    const period = autosaveMs > 0 ? autosaveMs : 1000;
-    const timer = window.setInterval(() => {
-      const board = boardRef.current;
-      if (!board || boardSaveSuspendedRef.current || padHubApplyRef.current) return;
-      const elements = board.getElements();
-      const inkOps = board.getInkOpCount();
-      const hash = sceneFingerprint(elements, inkOps);
+    const board = boardRef.current;
+    if (!board || boardSaveSuspendedRef.current || padHubApplyRef.current) return;
+    const elements = board.getElements();
+    const inkOps = board.getInkOpCount();
+    const hash = sceneFingerprint(elements, inkOps);
+    /*
+     * The board is not the only thing that changes.
+     *
+     * A reading session can edit a footnote's notes, save a link on it or
+     * colour its ribbon without ever touching the canvas — and the scene
+     * fingerprint cannot see any of that, so the tick returned here and none
+     * of it was ever written. Typing a note and closing the document lost the
+     * note. Mixing the marks into the same comparison is what makes them
+     * count as work.
+     */
+    const marks = isAnnotate(problem) ? footnoteRevision(annotateFootnotesRef.current) : "";
+    lastTickInkOpsRef.current = inkOps;
+    if (board.isInking()) return;
+
+    if (isLocalPad(problem)) {
+      const contentHash = padContentFingerprint(elements, inkOps);
+      const untouched = isAnnotate(problem)
+        ? annotatePristineHashRef.current === contentHash &&
+          footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current
+        : whiteboardPristineHashRef.current === contentHash;
+      // The tab's dot rides on the comparison the autosave is already making;
+      // fingerprinting the scene a second time for a 5px dot would not be.
+      patchTab(tab.id, { dirty: !untouched });
+      if (
+        !untouched &&
+        (lastEditSeqHashRef.current !== hash || lastEditSeqMarksRef.current !== marks)
+      ) {
+        bumpPadEdit();
+        lastEditSeqHashRef.current = hash;
+        lastEditSeqMarksRef.current = marks;
+      } else if (untouched) {
+        lastEditSeqHashRef.current = hash;
+        lastEditSeqMarksRef.current = marks;
+      }
+    }
+
+    if (autosaveMs <= 0) return;
+
+    if (lastSavedHashRef.current === hash && lastSavedMarksRef.current === marks) {
+      return;
+    }
+
+    if (isAnnotate(problem)) {
       /*
-       * The board is not the only thing that changes.
+       * Annotations autosave, the document does not.
        *
-       * A reading session can edit a footnote's notes, save a link on it or
-       * colour its ribbon without ever touching the canvas — and the scene
-       * fingerprint cannot see any of that, so the tick returned here and none
-       * of it was ever written. Typing a note and closing the document lost the
-       * note. Mixing the marks into the same comparison is what makes them
-       * count as work.
+       * Same crash-insurance the scratchpad gets, and the same restraint:
+       * nothing is written until something has actually been drawn, so
+       * opening a document to read it never creates a library entry. Discard
+       * on the way out undoes whatever these ticks committed.
        */
-      const marks = isAnnotate(problem) ? footnoteRevision(annotateFootnotesRef.current) : "";
-      lastTickInkOpsRef.current = inkOps;
-      if (board.isInking()) return;
-
-      if (isLocalPad(problem)) {
-        const contentHash = padContentFingerprint(elements, inkOps);
-        const untouched = isAnnotate(problem)
-          ? annotatePristineHashRef.current === contentHash &&
-            footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current
-          : whiteboardPristineHashRef.current === contentHash;
-        // The tab's dot rides on the comparison the autosave is already making;
-        // fingerprinting the scene a second time for a 5px dot would not be.
-        patchTab(tab.id, { dirty: !untouched });
-        if (
-          !untouched &&
-          (lastEditSeqHashRef.current !== hash || lastEditSeqMarksRef.current !== marks)
-        ) {
-          bumpPadEdit();
-          lastEditSeqHashRef.current = hash;
-          lastEditSeqMarksRef.current = marks;
-        } else if (untouched) {
-          lastEditSeqHashRef.current = hash;
-          lastEditSeqMarksRef.current = marks;
-        }
-      }
-
-      if (autosaveMs <= 0) return;
-
-      if (lastSavedHashRef.current === hash && lastSavedMarksRef.current === marks) {
-        return;
-      }
-
-      if (isAnnotate(problem)) {
-        /*
-         * Annotations autosave, the document does not.
-         *
-         * Same crash-insurance the scratchpad gets, and the same restraint:
-         * nothing is written until something has actually been drawn, so
-         * opening a document to read it never creates a library entry. Discard
-         * on the way out undoes whatever these ticks committed.
-         */
-        // An untouched board is not an untouched document: a reading session
-        // can leave footnotes without ever putting the pen down, and those are
-        // exactly as worth keeping as ink.
-        const untouched =
-          annotatePristineHashRef.current === padContentFingerprint(elements, inkOps) &&
-          footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current;
-        // The tab's dot rides on the comparison the autosave is already making;
-        // fingerprinting the scene a second time for a 5px dot would not be.
-        patchTab(tab.id, { dirty: !untouched });
-        if (untouched) {
-          lastSavedHashRef.current = hash;
-          lastSavedMarksRef.current = marks;
-          return;
-        }
-        const source = annotateSourceRef.current;
-        if (!source) return;
-        // Marked attempted before the write rather than after it. The save is
-        // async now, so a tick three seconds later would otherwise start a
-        // second write of the same scene while the first was still in flight —
-        // and on failure, `lastSavedHashRef` staying behind used to mean every
-        // subsequent tick re-serialised a library the store had already
-        // refused. One attempt per change is the most that can ever help.
+      // An untouched board is not an untouched document: a reading session
+      // can leave footnotes without ever putting the pen down, and those are
+      // exactly as worth keeping as ink.
+      const untouched =
+        annotatePristineHashRef.current === padContentFingerprint(elements, inkOps) &&
+        footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current;
+      // The tab's dot rides on the comparison the autosave is already making;
+      // fingerprinting the scene a second time for a 5px dot would not be.
+      patchTab(tab.id, { dirty: !untouched });
+      if (untouched) {
         lastSavedHashRef.current = hash;
         lastSavedMarksRef.current = marks;
-        const session = footnoteBoardSessionRef.current;
-        const docId = annotateDocIdRef.current;
-        if (session && docId) {
-          const sessionKey = footnoteWhiteboardDocKey(docId, session.wbId);
-          void (async () => {
-            await flushDirtyInk(board, sessionKey);
-            const liveBoard = board.saveBoard({ assembleInk: true });
-            try {
-              await putFootnoteWhiteboard(docId, session.wbId, {
-                board: liveBoard,
-                pageCount: 1,
-              });
-            } catch (cause: unknown) {
-              noteStorageFull(cause);
-            }
-          })();
-          return;
-        }
-        const docKey = docId ? annotateDocKey(docId) : null;
+        return;
+      }
+      const source = annotateSourceRef.current;
+      if (!source) return;
+      // Marked attempted before the write rather than after it. The save is
+      // async now, so a tick three seconds later would otherwise start a
+      // second write of the same scene while the first was still in flight —
+      // and on failure, `lastSavedHashRef` staying behind used to mean every
+      // subsequent tick re-serialised a library the store had already
+      // refused. One attempt per change is the most that can ever help.
+      lastSavedHashRef.current = hash;
+      lastSavedMarksRef.current = marks;
+      const session = footnoteBoardSessionRef.current;
+      const docId = annotateDocIdRef.current;
+      if (session && docId) {
+        const sessionKey = footnoteWhiteboardDocKey(docId, session.wbId);
         void (async () => {
-          await flushDirtyInk(board, docKey);
-          const liveBoard = board.saveBoard({ assembleInk: false });
+          await flushDirtyInk(board, sessionKey);
+          const liveBoard = board.saveBoard({ assembleInk: true });
           try {
-            /*
-             * A freeze's capture list travels on the next save, not its own.
-             *
-             * `saveAnnotateDoc` treats an absent `captures` as "this caller
-             * does not track them", the same contract footnotes use, so an
-             * ordinary autosave cannot drop the older page a stranded mark is
-             * standing on.
-             */
-            const pendingWrite = pendingCaptureWriteRef.current;
-            pendingCaptureWriteRef.current = null;
-            const saved = await saveAnnotateDoc({
-              id: annotateDocIdRef.current ?? undefined,
-              name: source.name,
-              hash: source.hash,
-              source: source.text,
-              docType: source.docType,
+            await putFootnoteWhiteboard(docId, session.wbId, {
               board: liveBoard,
-              footnotes: annotateFootnotesRef.current,
-              agent: persistableAgentMessages(agentMessages),
-              ...(pendingWrite?.captures ? { captures: pendingWrite.captures } : {}),
-              ...(pendingWrite?.kind ? { padKind: pendingWrite.kind } : {}),
+              pageCount: 1,
             });
-            if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
-            announceAutosave(tab.id, saved.name);
-            // The local write already happened; only the hub PUT waits on
-            // Hub auto-sync. Read live so a mid-session Save takes effect.
-            if (loadHubAutosync()) {
-              void pushAnnotatePad(client, saved)
-                .then((ok) => {
-                  if (!ok) return;
-                  void recordPadSnapshotsWithExtras({
-                    kind: "annotate",
-                    key: saved.id,
-                    name: saved.name,
-                    board: liveBoard,
-                    footnotes: saved.footnotes,
-                    agent: saved.agent,
-                  }).then((written) => void pushRolledSnapshots(client, written));
-                })
-                .catch((cause: unknown) => setError(messageOf(cause)));
-            }
           } catch (cause: unknown) {
             noteStorageFull(cause);
           }
         })();
         return;
       }
-
-      if (isWhiteboard(problem)) {
-        /*
-         * Don't put an untouched notebook in the library.
-         *
-         * The first tick of a fresh scratchpad has nothing to save but the
-         * blank template, and saving it anyway was how the library filled up
-         * with empty notebooks nobody asked for — open the scratchpad, change
-         * your mind, and three seconds later it is a permanent entry. There is
-         * also nothing to protect: a crash here loses a blank page.
-         */
-        const untouched =
-          whiteboardPristineHashRef.current === padContentFingerprint(elements, inkOps);
-        patchTab(tab.id, { dirty: !untouched });
-        if (untouched) {
-          lastSavedHashRef.current = hash;
-          return;
-        }
-      }
-
-      dirtyRef.current = true;
-      if (!isLocalPad(problem)) patchTab(tab.id, { dirty: true });
-      if (isWhiteboard(problem)) {
-        lastSavedHashRef.current = hash;
-        const fnBind = footnoteBoardRef.current;
-        if (fnBind) {
-          void (async () => {
-            const sessionKey = footnoteWhiteboardDocKey(fnBind.docId, fnBind.wbId);
-            await flushDirtyInk(board, sessionKey);
-            const liveBoard = board.saveBoard({ assembleInk: true });
-            try {
-              await putFootnoteWhiteboard(fnBind.docId, fnBind.wbId, {
-                board: liveBoard,
-                pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
-              });
-              footnoteBoardBaselineRef.current = {
-                board: liveBoard,
-                pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
-              };
-              emitFootnoteWhiteboardSaved(fnBind.docId, fnBind.wbId);
-              announceAutosave(tab.id, "Whiteboard");
-            } catch (cause: unknown) {
-              noteStorageFull(cause);
-            }
-          })();
-          return;
-        }
-        void (async () => {
-          const liveBoard = board.saveBoard({ assembleInk: false });
-          try {
-            const saved = await saveWhiteboardNotebook({
-              id: whiteboardNotebookId ?? undefined,
-              board: liveBoard,
-              agent: persistableAgentMessages(agentMessages),
-              pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
-            });
-            if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
-            await flushDirtyInk(board, whiteboardDocKey(saved.id));
-            announceAutosave(tab.id, saved.title);
-            // Local write first; hub PUT gated like the annotate autosave.
-            if (loadHubAutosync()) {
-              void pushWhiteboardPad(client, saved).then((ok) => {
+      const docKey = docId ? annotateDocKey(docId) : null;
+      void (async () => {
+        await flushDirtyInk(board, docKey);
+        const liveBoard = board.saveBoard({ assembleInk: false });
+        try {
+          /*
+           * A freeze's capture list travels on the next save, not its own.
+           *
+           * `saveAnnotateDoc` treats an absent `captures` as "this caller
+           * does not track them", the same contract footnotes use, so an
+           * ordinary autosave cannot drop the older page a stranded mark is
+           * standing on.
+           */
+          const pendingWrite = pendingCaptureWriteRef.current;
+          pendingCaptureWriteRef.current = null;
+          const saved = await saveAnnotateDoc({
+            id: annotateDocIdRef.current ?? undefined,
+            name: source.name,
+            hash: source.hash,
+            source: source.text,
+            docType: source.docType,
+            board: liveBoard,
+            footnotes: annotateFootnotesRef.current,
+            agent: persistableAgentMessages(agentMessages),
+            ...(pendingWrite?.captures ? { captures: pendingWrite.captures } : {}),
+            ...(pendingWrite?.kind ? { padKind: pendingWrite.kind } : {}),
+          });
+          if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
+          announceAutosave(tab.id, saved.name);
+          // The local write already happened; only the hub PUT waits on
+          // Hub auto-sync. Read live so a mid-session Save takes effect.
+          if (loadHubAutosync()) {
+            void pushAnnotatePad(client, saved)
+              .then((ok) => {
                 if (!ok) return;
                 void recordPadSnapshotsWithExtras({
-                  kind: "whiteboard",
+                  kind: "annotate",
                   key: saved.id,
-                  name: saved.title,
+                  name: saved.name,
                   board: liveBoard,
+                  footnotes: saved.footnotes,
                   agent: saved.agent,
-                  pageCount: saved.pageCount,
                 }).then((written) => void pushRolledSnapshots(client, written));
-              });
-            }
+              })
+              .catch((cause: unknown) => setError(messageOf(cause)));
+          }
+        } catch (cause: unknown) {
+          noteStorageFull(cause);
+        }
+      })();
+      return;
+    }
+
+    if (isWhiteboard(problem)) {
+      /*
+       * Don't put an untouched notebook in the library.
+       *
+       * The first tick of a fresh scratchpad has nothing to save but the
+       * blank template, and saving it anyway was how the library filled up
+       * with empty notebooks nobody asked for — open the scratchpad, change
+       * your mind, and three seconds later it is a permanent entry. There is
+       * also nothing to protect: a crash here loses a blank page.
+       */
+      const untouched =
+        whiteboardPristineHashRef.current === padContentFingerprint(elements, inkOps);
+      patchTab(tab.id, { dirty: !untouched });
+      if (untouched) {
+        lastSavedHashRef.current = hash;
+        return;
+      }
+    }
+
+    dirtyRef.current = true;
+    if (!isLocalPad(problem)) patchTab(tab.id, { dirty: true });
+    if (isWhiteboard(problem)) {
+      lastSavedHashRef.current = hash;
+      const fnBind = footnoteBoardRef.current;
+      if (fnBind) {
+        void (async () => {
+          const sessionKey = footnoteWhiteboardDocKey(fnBind.docId, fnBind.wbId);
+          await flushDirtyInk(board, sessionKey);
+          const liveBoard = board.saveBoard({ assembleInk: true });
+          try {
+            await putFootnoteWhiteboard(fnBind.docId, fnBind.wbId, {
+              board: liveBoard,
+              pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
+            });
+            footnoteBoardBaselineRef.current = {
+              board: liveBoard,
+              pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
+            };
+            emitFootnoteWhiteboardSaved(fnBind.docId, fnBind.wbId);
+            announceAutosave(tab.id, "Whiteboard");
           } catch (cause: unknown) {
-            if (cause instanceof WhiteboardLibraryFullError) {
-              whiteboardLibResumeRef.current = null;
-              setWhiteboardLibOpen(true);
-            } else {
-              noteStorageFull(cause);
-            }
+            noteStorageFull(cause);
           }
         })();
         return;
       }
-      const blob = board.saveBoard();
       void (async () => {
-        const padId = problemPadId(problem.dataset, problem.task_id);
-        const prev = await getProblemBoard(padId);
-        const row = {
-          id: padId,
-          dataset: problem.dataset,
-          taskId: problem.task_id,
-          updatedAt: Date.now(),
-          syncSeq: prev?.syncSeq ?? 0,
-          hubAckUpdatedAt: prev?.hubAckUpdatedAt,
-          board: blob,
-          agent: persistableAgentMessages(agentMessages),
-        };
-        await putProblemBoard(row);
-        lastSavedHashRef.current = hash;
-        await pushProblemPad(client, row);
-      })().catch(() => {});
-    }, period);
-    return () => window.clearInterval(timer);
+        const liveBoard = board.saveBoard({ assembleInk: false });
+        try {
+          const saved = await saveWhiteboardNotebook({
+            id: whiteboardNotebookId ?? undefined,
+            board: liveBoard,
+            agent: persistableAgentMessages(agentMessages),
+            pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
+          });
+          if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
+          await flushDirtyInk(board, whiteboardDocKey(saved.id));
+          announceAutosave(tab.id, saved.title);
+          // Local write first; hub PUT gated like the annotate autosave.
+          if (loadHubAutosync()) {
+            void pushWhiteboardPad(client, saved).then((ok) => {
+              if (!ok) return;
+              void recordPadSnapshotsWithExtras({
+                kind: "whiteboard",
+                key: saved.id,
+                name: saved.title,
+                board: liveBoard,
+                agent: saved.agent,
+                pageCount: saved.pageCount,
+              }).then((written) => void pushRolledSnapshots(client, written));
+            });
+          }
+        } catch (cause: unknown) {
+          if (cause instanceof WhiteboardLibraryFullError) {
+            whiteboardLibResumeRef.current = null;
+            setWhiteboardLibOpen(true);
+          } else {
+            noteStorageFull(cause);
+          }
+        }
+      })();
+      return;
+    }
+    const blob = board.saveBoard();
+    void (async () => {
+      const padId = problemPadId(problem.dataset, problem.task_id);
+      const prev = await getProblemBoard(padId);
+      const row = {
+        id: padId,
+        dataset: problem.dataset,
+        taskId: problem.task_id,
+        updatedAt: Date.now(),
+        syncSeq: prev?.syncSeq ?? 0,
+        hubAckUpdatedAt: prev?.hubAckUpdatedAt,
+        board: blob,
+        agent: persistableAgentMessages(agentMessages),
+      };
+      await putProblemBoard(row);
+      lastSavedHashRef.current = hash;
+      await pushProblemPad(client, row);
+    })().catch(() => {});
   }, [
     announceAutosave,
     autosaveMs,
@@ -2378,6 +2384,29 @@ export function Workspace({
     agentMessages,
     noteStorageFull,
   ]);
+  const autosaveTickRef = useRef(autosaveTick);
+  autosaveTickRef.current = autosaveTick;
+
+  /** Was an autosave interval scheduled the last time this ran? */
+  const autosaveScheduledRef = useRef(false);
+
+  /*
+   * A workspace nobody can see is not fingerprinting itself. See
+   * `planAutosaveTick` for why, and for what parking still owes.
+   */
+  useEffect(() => {
+    const plan = planAutosaveTick({
+      hasProblem: Boolean(problem),
+      showing,
+      autosaveMs,
+      wasScheduled: autosaveScheduledRef.current,
+    });
+    autosaveScheduledRef.current = plan.periodMs !== null;
+    if (plan.finalPass) autosaveTickRef.current();
+    if (plan.periodMs === null) return;
+    const timer = window.setInterval(() => autosaveTickRef.current(), plan.periodMs);
+    return () => window.clearInterval(timer);
+  }, [autosaveMs, problem, showing]);
 
 
 

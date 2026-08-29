@@ -25,6 +25,24 @@ import { noteCameraBusy } from "../util/cameraBusy";
 let claimed = false;
 let onClaimed: (() => void) | null = null;
 
+/*
+ * Counted, not set.
+ *
+ * "The camera is live" was one boolean for the whole process, which was true
+ * while exactly one surface could be scrolled. The conflict split mounts two
+ * `ConflictPagePreview`s side by side over a reader that is still subscribed,
+ * and there `setDocCameraLive(false)` does not mean "this pane settled" — it
+ * means "nothing anywhere is moving", which is a claim one pane cannot make.
+ * Flicking Local froze the Server pane's paint pump, and a pointer-up on
+ * either one released the other's finger.
+ *
+ * So each surface takes a share and the flag is the sum. Still module scope
+ * rather than a React context: the gatekeeper runs inside a native listener
+ * installed once, and a context value read at render time would be a frame
+ * stale exactly when it matters.
+ */
+let cameraLiveCount = 0;
+let pointerHeldCount = 0;
 let cameraLive = false;
 let pointerHeld = false;
 let publishedFrozen = false;
@@ -74,10 +92,20 @@ export function selectionOwnsGesture(): boolean {
   return claimed;
 }
 
-/** Board's reading camera is mid-gesture (pulse / coast). */
+/**
+ * Take or drop one share of "a reading camera is mid-gesture (pulse / coast)".
+ *
+ * Clamped at zero so a stray release — a teardown that lowers a flag it never
+ * raised — cannot push the count negative and leave the next real gesture
+ * unable to reach one. Prefer {@link makeDocFlagHolds} over calling this
+ * directly: a share has to be paired to be counted, and the call sites that
+ * pulse on every scroll event are not naturally paired.
+ */
 export function setDocCameraLive(live: boolean): void {
-  if (cameraLive === live) return;
-  cameraLive = live;
+  cameraLiveCount = Math.max(0, cameraLiveCount + (live ? 1 : -1));
+  const next = cameraLiveCount > 0;
+  if (cameraLive === next) return;
+  cameraLive = next;
   syncCameraLiveClass();
   publishPaintFrozen();
 }
@@ -89,10 +117,65 @@ export function setDocCameraLive(live: boolean): void {
  * `toBlob` / `page.render` used that gap (and the time until
  * `pulseCameraMotion`) to keep the main thread busy — the gesture registered,
  * the page did not move. Freeze the paint pump at pointerdown instead.
+ *
+ * Counted and clamped like {@link setDocCameraLive}, and for the same reason:
+ * two fingers on two panes are two holds, and the first one up is not the end
+ * of the gesture.
  */
 export function setDocPointerHeld(held: boolean): void {
-  if (pointerHeld === held) return;
-  pointerHeld = held;
+  pointerHeldCount = Math.max(0, pointerHeldCount + (held ? 1 : -1));
+  const next = pointerHeldCount > 0;
+  if (pointerHeld === next) return;
+  pointerHeld = next;
+  publishPaintFrozen();
+}
+
+/** One caller's share of the two flags above — see {@link makeDocFlagHolds}. */
+export type DocFlagHolds = {
+  /** This surface's camera is pulsing / coasting. */
+  camera(live: boolean): void;
+  /** A finger is down on this surface. */
+  pointer(held: boolean): void;
+};
+
+/**
+ * A latched share of the module flags, for one surface.
+ *
+ * The counts above are only honest if every caller pairs its own raise with
+ * its own release, and the call sites do not: a scroll pulse raises `camera`
+ * on every event it sees, and a teardown lowers `pointer` whether or not that
+ * surface ever had a finger on it. Latching makes both harmless — a repeated
+ * raise is still one share, and a release from a surface holding nothing is
+ * nothing at all.
+ *
+ * One per Board and one per conflict pane, kept for the life of the surface.
+ */
+export function makeDocFlagHolds(): DocFlagHolds {
+  let camera = false;
+  let pointer = false;
+  return {
+    camera(live: boolean): void {
+      if (camera === live) return;
+      camera = live;
+      setDocCameraLive(live);
+    },
+    pointer(held: boolean): void {
+      if (pointer === held) return;
+      pointer = held;
+      setDocPointerHeld(held);
+    },
+  };
+}
+
+/** Drop every share, for tests that do not tear their surfaces down. */
+export function resetDocCameraForTests(): void {
+  cameraLiveCount = 0;
+  pointerHeldCount = 0;
+  if (cameraLive) {
+    cameraLive = false;
+    syncCameraLiveClass();
+  }
+  pointerHeld = false;
   publishPaintFrozen();
 }
 
