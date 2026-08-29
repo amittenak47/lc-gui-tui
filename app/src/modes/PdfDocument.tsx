@@ -42,6 +42,7 @@ import {
   msUntilCameraIdleTeardown,
   yieldToInput,
 } from "../util/cameraBusy";
+import { openBackgroundJob } from "../util/inputLatency";
 import {
   peekPdfFilmCurrent,
   peekPdfIntersectingPages,
@@ -91,6 +92,7 @@ import {
 import {
   blitSheetToSlots,
   destSheetSize,
+  forgetSlotBlit,
   PdfSheetLru,
   releaseSheet,
   setActiveSheetLru,
@@ -440,6 +442,7 @@ function zeroPageSlots(host: HTMLElement, n: number): void {
     if (canvas) {
       canvas.width = 0;
       canvas.height = 0;
+      forgetSlotBlit(canvas);
     }
     slot.removeAttribute("data-painted");
   }
@@ -1077,6 +1080,7 @@ export function PdfDocument({
         if (canvas) {
           canvas.width = 0;
           canvas.height = 0;
+          forgetSlotBlit(canvas);
         }
         slot.removeAttribute("data-painted");
         if (!keepText) {
@@ -1110,10 +1114,15 @@ export function PdfDocument({
             releaseSheet(item.sheet);
             return;
           }
-          const png = await captureSheetPng(item.sheet, () => isDocCameraLive());
-          releaseSheet(item.sheet);
-          if (!png || disposedRef.current) return;
-          dropSessionText(sessionRef.current.put(item.page, png));
+          const closeJob = openBackgroundJob(`pdf-pagefile:${item.page}`);
+          try {
+            const png = await captureSheetPng(item.sheet, () => isDocCameraLive());
+            releaseSheet(item.sheet);
+            if (!png || disposedRef.current) return;
+            dropSessionText(sessionRef.current.put(item.page, png));
+          } finally {
+            closeJob();
+          }
         })();
       }
     };
@@ -1177,6 +1186,7 @@ export function PdfDocument({
           }
         },
       };
+      const closeJob = openBackgroundJob(`pdf-paint:${n}@${paintScale}`);
       const stopLive = subscribeDocCameraLive((nowLive) => {
         if (!nowLive) return;
         if (paintScale <= PDF_PREVIEW_SCALE + 1e-9) return;
@@ -1326,6 +1336,7 @@ export function PdfDocument({
           onErrorRef.current?.(message);
         }
       } finally {
+        closeJob();
         stopLive();
         if (inFlightPaintRef.current?.page === n) inFlightPaintRef.current = null;
         if (!done) {
@@ -1535,7 +1546,11 @@ export function PdfDocument({
         ...peekPdfFilmThumbWanted(filmScope),
         ...pdfOuterPages(peekPdfFilmCurrent(filmScope), last, PDF_PREVIEW_RADIUS),
       ];
-      const pageNumber = nextMissingPdfThumb(hash, last, prefer, thumbFailed);
+      // Bounded to `prefer`: the strip's own window plus the reading ring.
+      // The unbounded sweep decoded the whole book in the background of every
+      // reading pause — see `nextMissingPdfThumb`. `armIdleTimer` runs again
+      // on every camera settle, so a reader who moves gets the new window.
+      const pageNumber = nextMissingPdfThumb(hash, last, prefer, thumbFailed, false);
       if (pageNumber == null) return;
       capturePdfThumbIfNew(hash, pageNumber);
       if (peekPdfThumb(hash, pageNumber)) {
@@ -1544,6 +1559,7 @@ export function PdfDocument({
         }, PDF_IDLE_THUMB_GAP_MS);
         return;
       }
+      const closeJob = openBackgroundJob(`pdf-thumb:${pageNumber}`);
       try {
         const page = await doc.getPage(pageNumber);
         if (mine !== gen || busy()) return;
@@ -1583,6 +1599,8 @@ export function PdfDocument({
             void fillOne();
           }, PDF_IDLE_THUMB_GAP_MS);
         }
+      } finally {
+        closeJob();
       }
     };
 

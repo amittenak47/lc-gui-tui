@@ -301,8 +301,53 @@ export function previewStubFromSheet(
 }
 
 /**
+ * Identity of a blit source, for {@link blitSheetToSlots}.
+ *
+ * Sheets are write-once — `snapshotSheet`, `previewStubFromSheet` and
+ * `restoreSheetPng` each hand back a freshly created bitmap and nothing draws
+ * into one afterwards — so the object is a sound stand-in for its pixels. A
+ * source that were mutated in place would need its own invalidation, and does
+ * not exist here.
+ */
+const blitKeys = new WeakMap<object, string>();
+let nextBlitKey = 1;
+
+function blitKey(src: CanvasImageSource): string {
+  const object = src as unknown as object;
+  let key = blitKeys.get(object);
+  if (!key) {
+    key = `s${nextBlitKey}`;
+    nextBlitKey += 1;
+    blitKeys.set(object, key);
+  }
+  return key;
+}
+
+/** What a slot canvas already holds, stamped by the blit that put it there. */
+const BLIT_STAMP = "pdfBlit";
+
+/**
+ * Forget what a slot canvas holds, so the next blit repaints it.
+ *
+ * Zeroing a canvas already invalidates the stamp — the size check below can
+ * never match a 0×0 backing store — so this is belt to that brace, and the
+ * place to hang any future path that repaints a slot behind our back.
+ */
+export function forgetSlotBlit(canvas: HTMLCanvasElement): void {
+  delete canvas.dataset[BLIT_STAMP];
+}
+
+/**
  * Draw a full-sheet bitmap onto one or two reading slots.
  * Spread splits at the midpoint. dest smaller than src is a 2×→1× demote.
+ *
+ * A slot already carrying these exact pixels at this exact size is left
+ * alone. That is not a micro-optimisation: the paint pump re-blits the whole
+ * preview ring at the top of every turn, and assigning `canvas.width` — even
+ * the width it already has — is specified to throw away the backing store, so
+ * the unconditional version reallocated and re-uploaded a dozen full sheets
+ * per turn. Under a path fill that is a dozen textures per skipped page, for
+ * eighty pages, on the thread the next `pointerdown` has to be dispatched on.
  */
 export function blitSheetToSlots(
   src: CanvasImageSource,
@@ -314,22 +359,36 @@ export function blitSheetToSlots(
 ): void {
   const halves = slots.length > 1;
   const mid = Math.max(1, Math.round(destW / 2));
+  const key = blitKey(src);
   for (const slot of slots) {
     const canvas = slot.querySelector("canvas");
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) continue;
+    if (!canvas) continue;
     const half = slot.dataset.pdfHalf === "right" ? "right" : "left";
+    const width = halves ? (half === "right" ? destW - mid : mid) : destW;
+    // `destW` rather than `width`: it is what the halved source rect is
+    // derived from, so two demotes that happen to give the same half width
+    // still read as different blits.
+    const stamp = `${key}:${srcW}x${srcH}:${half}:${destW}`;
+    if (
+      canvas.width === width &&
+      canvas.height === destH &&
+      canvas.dataset[BLIT_STAMP] === stamp
+    ) {
+      slot.setAttribute("data-painted", "");
+      continue;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) continue;
+    canvas.width = width;
+    canvas.height = destH;
     if (halves) {
-      canvas.width = half === "right" ? destW - mid : mid;
-      canvas.height = destH;
       const sx = half === "right" ? (srcW * mid) / destW : 0;
-      const sw = (srcW * canvas.width) / destW;
-      ctx.drawImage(src, sx, 0, sw, srcH, 0, 0, canvas.width, destH);
+      const sw = (srcW * width) / destW;
+      ctx.drawImage(src, sx, 0, sw, srcH, 0, 0, width, destH);
     } else {
-      canvas.width = destW;
-      canvas.height = destH;
       ctx.drawImage(src, 0, 0, srcW, srcH, 0, 0, destW, destH);
     }
+    canvas.dataset[BLIT_STAMP] = stamp;
     slot.setAttribute("data-painted", "");
   }
 }

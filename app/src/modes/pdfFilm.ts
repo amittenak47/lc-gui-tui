@@ -554,12 +554,34 @@ export function pdfThumbViewportScale(
   return targetW / naturalWidth;
 }
 
-/** First page in `prefer`, then 1…count, that has no session JPEG yet. */
+/**
+ * First page in `prefer`, then 1…count, that has no session JPEG yet.
+ *
+ * `sweepAll` is what decides whether the fallback happens at all, and the
+ * reading pump passes `false`.
+ *
+ * The sweep is the right behaviour for a caller that wants the strip warm and
+ * is paying for it out of its own budget. It is the wrong one for the idle
+ * decoder in the reader, which used it to walk a nine-hundred-page textbook a
+ * page at a time, forever, from the moment the reader stopped scrolling: a
+ * full `page.render` per page, a synchronous `toDataURL` per page, an
+ * IndexedDB write and a listener broadcast per page, and a base64 JPEG per
+ * page held in {@link thumbsByHash} — which has no cap — for a strip that
+ * only ever shows {@link PDF_FILM_CACHE} of them. What the reader could feel
+ * was the thread going away for a few hundred milliseconds at a time, on and
+ * off, for as long as the book was open, and a `pointerdown` waiting for
+ * whichever of those steps was on the stack when the finger landed.
+ *
+ * Bounded, the decoder fills what the strip and the reading ring actually
+ * ask for and then stops. Pages outside that get their thumb for free when
+ * the reader arrives at them, from a sheet already in the LRU.
+ */
 export function nextMissingPdfThumb(
   hash: string | null | undefined,
   count: number,
   prefer: Iterable<number> = [],
   skip: Iterable<number> = [],
+  sweepAll = true,
 ): number | null {
   if (!hash || !(count >= 1)) return null;
   const have = thumbsByHash.get(hash);
@@ -569,6 +591,7 @@ export function nextMissingPdfThumb(
   for (const n of prefer) {
     if (missing(n)) return n;
   }
+  if (!sweepAll) return null;
   for (let n = 1; n <= count; n += 1) {
     if (missing(n)) return n;
   }

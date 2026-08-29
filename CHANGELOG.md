@@ -6,6 +6,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — a PDF hears the finger straight away after a reading pause
+
+- **Touching the page to scroll after sitting on it could take 300–700ms to
+  register.** Nothing in the gesture path was slow. The reader was busy: every
+  guard that freezes the paint pump for a gesture (`isDocCameraLive`,
+  `setDocPointerHeld`) is read *between* `await`s, so it can stop the next step
+  and can do nothing about the step already on the stack — and a `pointerdown`
+  is not dispatched until that step returns. Freezing at finger-down is the
+  wrong lever for this; the only thing that shortens the wait is making each
+  background step small.
+- **The idle filmstrip decoder no longer walks the whole book.** After 1.5s of
+  stillness it took the first page with no thumb — falling back to a 1…count
+  sweep — and kept going every 80ms until every page of a nine-hundred-page
+  textbook had one: a `page.render`, a synchronous `toDataURL`, an IndexedDB
+  write and a listener broadcast each, into a module cache with no cap, for a
+  strip that shows sixteen. It now fills what the strip and the reading ring
+  ask for and stops. Pages outside that still get a thumb for free from a sheet
+  already decoded.
+- **The paint pump stops repainting sheets that are already on screen.** It
+  re-blits the whole preview ring at the top of every turn, and assigning
+  `canvas.width` is specified to throw the backing store away even when the
+  width does not change — so a dozen full-size textures were reallocated and
+  re-uploaded per turn, and a path fill after a table-of-contents jump did that
+  for eighty pages in a row. A slot already carrying the same sheet at the same
+  size is now left alone.
+- **`util/inputLatency` measures what is left.** `pointerdown` on the reading
+  surface records finger-down → handler-entered, always on and free; set
+  `__LC_SCROLL_DEBUG__ = true` in devtools (no rebuild) and each background job
+  brackets itself, so a slow one names what was open and how long the browser
+  says it ran. Read it with `__lcScrollLatency.summary()`.
+
+
 ### Fixed — tablet rotate black bar; Recentre keeps the page
 
 - Portrait→landscape sometimes fitted against a stale board box (`Math.max` of `appState` and the DOM kept the old larger side) or skipped the camera after a pan (`fitFrame` only), leaving a black gutter. Rotate now retries keep-Y at 0/80/200/400/700ms, prefers the live box, and listens to `visualViewport` plus `screen.orientation`. Recentre does the same keep-Y fit instead of jumping to page 1 / the top of the pad.

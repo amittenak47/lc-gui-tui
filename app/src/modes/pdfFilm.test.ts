@@ -156,6 +156,23 @@ describe("nextMissingPdfThumb", () => {
     resetPdfThumbs();
     expect(nextMissingPdfThumb("doc-a", 3, [], [1])).toBe(2);
   });
+
+  it("stops at prefer when the sweep is off, rather than walking the book", () => {
+    // What the reader's idle decoder asks for. Unbounded, it decoded every
+    // page of a textbook in the background of every reading pause.
+    resetPdfThumbs();
+    rememberPdfThumb("doc-a", 40, "x");
+    expect(nextMissingPdfThumb("doc-a", 900, [40, 41], [], false)).toBe(41);
+    rememberPdfThumb("doc-a", 41, "x");
+    expect(nextMissingPdfThumb("doc-a", 900, [40, 41], [], false)).toBe(null);
+    // The same state, swept, would still have 898 pages to grind through.
+    expect(nextMissingPdfThumb("doc-a", 900, [40, 41], [], true)).toBe(1);
+  });
+
+  it("still honours skip when the sweep is off", () => {
+    resetPdfThumbs();
+    expect(nextMissingPdfThumb("doc-a", 900, [7, 8], [7], false)).toBe(8);
+  });
 });
 
 describe("pdfSpreadSlotCountChanged", () => {
