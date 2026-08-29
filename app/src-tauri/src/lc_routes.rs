@@ -604,6 +604,23 @@ pub async fn lc_get_ink_pages(
     .await
 }
 
+/// One page, so a conflict over page 40 does not download the book.
+#[tauri::command]
+pub async fn lc_get_ink_page(
+    state: State<'_, Shared>,
+    kind: String,
+    key: String,
+    page_id: i64,
+) -> Result<LcResponse, String> {
+    go(
+        state,
+        "GET",
+        format!("/pads/ink/{}/{}/{}", enc(&kind), enc(&key), page_id),
+        None,
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn lc_put_ink_page(
     state: State<'_, Shared>,

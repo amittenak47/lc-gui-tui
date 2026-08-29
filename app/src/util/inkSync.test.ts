@@ -275,6 +275,192 @@ describe("applyInkChoice", () => {
   });
 });
 
+describe("previewInkPages", () => {
+  it("opens on the first page this device has ink for", async () => {
+    const { previewInkPages } = await import("./inkSync");
+    expect(previewInkPages([7, 12, 40], [1, 7])).toEqual([7]);
+  });
+
+  it("falls back to the hub's first page when this device has none", async () => {
+    const { previewInkPages } = await import("./inkSync");
+    expect(previewInkPages([], [12, 40])).toEqual([12]);
+  });
+
+  it("asks for nothing when neither side has ink", async () => {
+    const { previewInkPages } = await import("./inkSync");
+    expect(previewInkPages([], [])).toEqual([]);
+  });
+});
+
+describe("fetchHubInkPages", () => {
+  const page = (pageId: number) => ({
+    kind: "annotate" as const,
+    key: "p1",
+    page_id: pageId,
+    updated_at: 20,
+    gz: "YQ==",
+  });
+
+  it("asks for the pages it names and nothing else", async () => {
+    const { fetchHubInkPages } = await import("./inkSync");
+    const getInkPage = vi.fn(async (_k: string, _key: string, id: number) => page(id));
+    const rows = await fetchHubInkPages({ getInkPage } as never, "annotate", "p1", [40, 41]);
+    expect(getInkPage).toHaveBeenCalledTimes(2);
+    expect(rows?.map((row) => row.page_id).sort()).toEqual([40, 41]);
+  });
+
+  it("drops a page the hub does not have, without calling that a failure", async () => {
+    const { fetchHubInkPages } = await import("./inkSync");
+    const getInkPage = vi.fn(async (_k: string, _key: string, id: number) =>
+      id === 40 ? page(40) : null,
+    );
+    const rows = await fetchHubInkPages({ getInkPage } as never, "annotate", "p1", [40, 41]);
+    expect(rows).toHaveLength(1);
+    expect(rows?.[0]?.page_id).toBe(40);
+  });
+
+  it("is null when a transfer failed — not a short list", async () => {
+    const { fetchHubInkPages } = await import("./inkSync");
+    const getInkPage = vi.fn(async () => {
+      throw new Error("offline");
+    });
+    expect(
+      await fetchHubInkPages({ getInkPage } as never, "annotate", "p1", [40]),
+    ).toBeNull();
+  });
+
+  it("asks for nothing when nothing is named", async () => {
+    const { fetchHubInkPages } = await import("./inkSync");
+    const getInkPage = vi.fn();
+    expect(await fetchHubInkPages({ getInkPage } as never, "annotate", "p1", [])).toEqual([]);
+    expect(getInkPage).not.toHaveBeenCalled();
+  });
+});
+
+describe("applyInkChoice fetches what a choice writes", () => {
+  afterEach(() => {
+    vi.doUnmock("./inkPageStore");
+    vi.doUnmock("./idb");
+    vi.resetModules();
+  });
+
+  async function loadApply(localRows: Array<{ pageId: number }>) {
+    const written: Array<{ pageId: number }> = [];
+    const deleteInkPages = vi.fn(async () => {});
+    vi.resetModules();
+    vi.doMock("./idb", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./idb")>()),
+      withStore: async (
+        _store: string,
+        _mode: string,
+        fn: (store: { put: (row: unknown, key: string) => void }) => void,
+      ) => {
+        fn({
+          put: (row: unknown) => {
+            written.push({ pageId: (row as { pageId: number }).pageId });
+          },
+        });
+      },
+    }));
+    vi.doMock("./inkPageStore", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./inkPageStore")>()),
+      getInkPageRecords: () =>
+        Promise.resolve(
+          localRows.map((row) => ({
+            v: 1 as const,
+            docKey: "md:p1",
+            pageId: row.pageId,
+            gz: new Uint8Array([1, 2, 3]),
+            dirty: true,
+            updatedAt: 10,
+          })),
+        ),
+      deleteInkPages,
+    }));
+    const mod = await import("./inkSync");
+    return { applyInkChoice: mod.applyInkChoice, deleteInkPages, written };
+  }
+
+  const page = (pageId: number) => ({
+    kind: "annotate" as const,
+    key: "p1",
+    page_id: pageId,
+    updated_at: 20,
+    gz: "YQ==",
+  });
+
+  it("keep-server writes every hub page, not just the one the split drew", async () => {
+    const { applyInkChoice, written } = await loadApply([{ pageId: 40 }]);
+    const fetchHubPages = vi.fn(async (ids: readonly number[]) => ids.map(page));
+    await applyInkChoice(
+      { putInkPage: vi.fn() } as never,
+      "annotate",
+      "p1",
+      "server",
+      // The stash holds the previewed page only.
+      [page(40)],
+      { hubPageIds: [7, 40, 41], fetchHubPages },
+    );
+    expect(fetchHubPages).toHaveBeenCalledWith([7, 40, 41]);
+    expect(written.map((row) => row.pageId).sort((a, b) => a - b)).toEqual([7, 40, 41]);
+  });
+
+  it("keep-server says so when the hub's handwriting could not be read", async () => {
+    const { applyInkChoice, deleteInkPages } = await loadApply([{ pageId: 40 }]);
+    await expect(
+      applyInkChoice(
+        { putInkPage: vi.fn() } as never,
+        "annotate",
+        "p1",
+        "server",
+        [page(40)],
+        { hubPageIds: [40], fetchHubPages: async () => null },
+      ),
+    ).rejects.toThrow(/could not be read/);
+    // Nothing cleared — silence here reads exactly like "the hub had no ink".
+    expect(deleteInkPages).not.toHaveBeenCalled();
+  });
+
+  it("merge refuses to call a half-read hub a merge", async () => {
+    const { applyInkChoice } = await loadApply([{ pageId: 40 }]);
+    const putInkPage = vi.fn();
+    await expect(
+      applyInkChoice(
+        { putInkPage } as never,
+        "annotate",
+        "p1",
+        "merged",
+        [page(40)],
+        { hubPageIds: [40, 41], fetchHubPages: async () => null },
+      ),
+    ).rejects.toThrow(/could not be read/);
+    expect(putInkPage).not.toHaveBeenCalled();
+  });
+
+  it("keep-local and drop-both never ask for bytes at all", async () => {
+    const { applyInkChoice } = await loadApply([{ pageId: 40 }]);
+    const fetchHubPages = vi.fn(async () => [] as never[]);
+    const putInkPage = vi.fn().mockResolvedValue(undefined);
+    await applyInkChoice(
+      { putInkPage } as never,
+      "annotate",
+      "p1",
+      "local",
+      null,
+      { hubPageIds: [7, 40], fetchHubPages },
+    );
+    await applyInkChoice(
+      { putInkPage } as never,
+      "annotate",
+      "p1",
+      "none",
+      null,
+      { hubPageIds: [7, 40], fetchHubPages },
+    );
+    expect(fetchHubPages).not.toHaveBeenCalled();
+  });
+});
+
 describe("localInkAsDtos", () => {
   afterEach(() => {
     vi.doUnmock("./inkPageStore");

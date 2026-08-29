@@ -34,7 +34,7 @@ import { deleteDocBytes } from "./docBytes";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
 import { deletePadSnapshots, renamePadSnapshots } from "./padSnapshotStore";
 import { deleteInkPages, annotateDocKey, renameInkPages } from "./inkPageStore";
-import { sweepFootnoteWhiteboards } from "./footnoteWhiteboardStore";
+import { sweepFootnoteWhiteboards, whiteboardIdsOn } from "./footnoteWhiteboardStore";
 import { setStorageItem } from "./storageQuota";
 import { hashBytes } from "./docBytes";
 import { webIdentityUrl } from "./webIdentity";
@@ -439,6 +439,23 @@ async function readContent(meta: AnnotateDocMeta): Promise<AnnotateDoc | null> {
 export async function getAnnotateDoc(id: string): Promise<AnnotateDoc | null> {
   const meta = getAnnotateDocMeta(id);
   return meta ? readContent(meta) : null;
+}
+
+/**
+ * The scratch boards this set's marks point at.
+ *
+ * The pointer list, not the ink store: a board with strokes but no mark
+ * pointing at it is a board somebody deleted, and syncing it is how a deleted
+ * scratch board comes home from the other device. `null` when the set cannot
+ * be read at all — the caller decides whether "unknown" should mean "sync it
+ * anyway", and for handwriting it does.
+ */
+export async function localFootnoteBoardIds(
+  docId: string,
+): Promise<ReadonlySet<string> | null> {
+  const doc = await getAnnotateDoc(docId).catch(() => null);
+  if (!doc) return null;
+  return new Set(whiteboardIdsOn(doc.footnotes ?? []));
 }
 
 /**

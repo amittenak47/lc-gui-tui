@@ -346,6 +346,25 @@ pub async fn get_ink_pages(
     Ok(Json(rows))
 }
 
+/// The bytes for one page, so a conflict over page 40 costs page 40.
+///
+/// 404 rather than an empty body when the hub has no such page: the caller has
+/// to be able to tell "nothing drawn here" from "the request failed", because
+/// only one of those is a reason to clear the page on this device.
+pub async fn get_ink_page(
+    UrlPath((kind, key, page_id)): UrlPath<(String, String, i64)>,
+) -> Result<Json<pads::InkPageRow>, AppError> {
+    let row = blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        pads::get_ink_page(&conn, &kind, &key, page_id)
+    })
+    .await?;
+    match row {
+        Some(row) => Ok(Json(row)),
+        None => Err(AppError::not_found(anyhow::anyhow!("no such ink page"))),
+    }
+}
+
 /// One page at a time, so a refused page never holds up the rest of a pad.
 pub async fn put_ink_page(Json(body): Json<pads::InkPageRow>) -> Result<Json<pads::ApplyAck>, AppError> {
     let ack = blocking(move || {

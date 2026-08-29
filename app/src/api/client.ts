@@ -1184,6 +1184,39 @@ export class LcClient {
     return Array.isArray(rows) ? rows : [];
   }
 
+  /**
+   * The bytes for one page of handwriting.
+   *
+   * The whole-pad GET above is the wrong shape for a conflict. Parking the
+   * pill over page 40 of a textbook downloaded every page of that pad's ink to
+   * draw one of them — at the moment a reader is already waiting on a
+   * decision. Callers that know which page they want ask for it.
+   *
+   * `null` is "the hub has no such page", which is not the same as a failed
+   * request: one is a reason to clear the page here, the other is not. A
+   * failure still throws.
+   */
+  async getInkPage(
+    kind: "annotate" | "whiteboard",
+    key: string,
+    pageId: number,
+  ): Promise<InkPageDto | null> {
+    try {
+      const row = await padInvokeOrHub<InkPageDto | null>(
+        () => this.cmd("lc_get_ink_page", { kind, key, pageId }),
+        "GET",
+        `/pads/ink/${encodeURIComponent(kind)}/${encodeURIComponent(key)}/${Math.max(
+          0,
+          Math.floor(pageId),
+        )}`,
+      );
+      return row && typeof row === "object" && typeof row.gz === "string" ? row : null;
+    } catch (cause) {
+      if (cause instanceof LcApiError && cause.status === 404) return null;
+      throw cause;
+    }
+  }
+
   /** One page per call, so a refused page never holds up the rest of a pad. */
   async putInkPage(body: InkPageDto): Promise<ApplyAckDto> {
     const ack = await padInvokeOrHub<ApplyAckDto>(

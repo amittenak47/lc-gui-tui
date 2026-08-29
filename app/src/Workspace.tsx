@@ -323,6 +323,11 @@ import { getParkedDocSource, parkDocSource } from "./util/parkedDocSource";
 import { MAX_SOURCE_CHARS } from "./util/tabPersist";
 import { requestPersistentStorage, StorageFullError } from "./util/storageQuota";
 import {
+  SPILL_STATE_EVENT,
+  contentSpillOnly,
+  repairContentStore,
+} from "./util/contentStore";
+import {
   deleteProblemBoard,
   getProblemBoard,
   problemPadId,
@@ -333,7 +338,6 @@ import {
   annotateDocKey,
   putInkPages,
   whiteboardDocKey,
-  deleteInkPages,
   footnoteWhiteboardDocKey,
 } from "./util/inkPageStore";
 import { getPadSnapshot, type PadSnapshotTier } from "./util/padSnapshotStore";
@@ -352,7 +356,12 @@ import {
   inkConflictsFor,
   subscribeInkConflicts,
 } from "./util/inkConflicts";
-import { applyInkChoice } from "./util/inkSync";
+import {
+  applyFootnoteInkChoice,
+  applyInkChoice,
+  fetchHubInkPages,
+  remintFootnoteInk,
+} from "./util/inkSync";
 import { resolveSolutionSource } from "./util/solutionTemplate";
 import { titleFromSlug } from "./util/text";
 import { ensureCodingRoom } from "./util/solutionPad";
@@ -952,17 +961,49 @@ export function Workspace({
           }
         }
       }
+      const inkChoice = inkChoiceOf(resolution);
       await applyInkChoice(
         client,
         c.kind,
         c.id,
-        inkChoiceOf(resolution),
+        inkChoice,
         c.serverInk ?? null,
-        // Ids off the ping digest, not the stash's preview list: that list is
-        // scoped to the colliding page, and a discard has to name every hub
-        // page or the rest comes back on the next walk.
-        { ...(c.hubInkPageIds ? { hubPageIds: c.hubInkPageIds } : {}) },
+        {
+          // Ids off the ping digest, not the stash's preview list: that list
+          // is scoped to the page the split drew, and a discard has to name
+          // every hub page or the rest comes back on the next walk.
+          ...(c.hubInkPageIds ? { hubPageIds: c.hubInkPageIds } : {}),
+          // And the bytes, now that a choice has been made and we know which
+          // pages it writes. The freeze took one page; this takes the set.
+          fetchHubPages: (pageIds) => fetchHubInkPages(client, c.kind, c.id, pageIds),
+        },
       );
+      /*
+       * The scratch boards' handwriting, under the same choice.
+       *
+       * It used to travel inside the pad's JSON, so whichever pane won carried
+       * it along. Now it is ink like any other ink, on keys of its own, and it
+       * has to be resolved or the document settles while the boards go on
+       * disagreeing.
+       */
+      if (c.footnoteInk?.length) {
+        await applyFootnoteInkChoice(client, c.id, c.footnoteInk, inkChoice, {
+          fetchHubPages: (key, pageIds) =>
+            fetchHubInkPages(client, "annotate", key, pageIds),
+        });
+      }
+      /*
+       * A reminted board is a copy, and a copy with no strokes is a blank page.
+       *
+       * `applyConflictFootnoteBoards` above put the hub's *structure* under the
+       * fresh id. The strokes are not in that structure any more.
+       */
+      const remints = resolution.pick === "merged" ? (resolution.boardRemints ?? {}) : {};
+      for (const [from, to] of Object.entries(remints)) {
+        const hubPageIds =
+          c.footnoteInk?.find((board) => board.wbId === from)?.hubPageIds ?? [];
+        await remintFootnoteInk(client, c.id, from, to, hubPageIds);
+      }
       await applyHubReloadRef.current({
         kind: c.kind,
         id: c.id,
@@ -1487,6 +1528,22 @@ export function Workspace({
    */
   useEffect(() => {
     void requestPersistentStorage();
+    /*
+     * Bring anything that spilled back into the real store, once per launch.
+     *
+     * Promoting only after a successful write left a long outage's worth of
+     * entries in `localStorage` until the reader happened to save the exact
+     * one that had spilled — and against a ~5 MB origin quota shared by every
+     * spill, "until somebody edits it again" is not a plan. The sweep is
+     * self-flagging, so the extra runs this effect makes cost one enumeration.
+     */
+    void repairContentStore()
+      .then(({ promoted, remaining }) => {
+        if (promoted > 0 && remaining === 0) {
+          setNotice("Storage recovered — everything is back in full storage.");
+        }
+      })
+      .catch(() => {});
     void sweepPadTrash().catch(() => {});
     void drainDirtyInkArchives();
     /*
@@ -2102,6 +2159,33 @@ export function Workspace({
     }
     return true;
   }, []);
+  /*
+   * One quiet word when the fallback store is carrying the reader's work.
+   *
+   * `noteStorageFull`'s sibling, and deliberately softer: nothing has been
+   * lost, saves are landing, and the only thing to say is that they are
+   * landing somewhere much smaller than usual. Once per session — the
+   * condition persists, and repeating it would be a banner nobody can act on
+   * twice. It comes down on its own when a repair finds nothing left to move.
+   */
+  const spillNoticeShownRef = useRef(false);
+  useEffect(() => {
+    const tell = () => {
+      if (!contentSpillOnly()) {
+        spillNoticeShownRef.current = false;
+        return;
+      }
+      if (spillNoticeShownRef.current) return;
+      spillNoticeShownRef.current = true;
+      setNotice(
+        "Saving to fallback storage — free some space, or restart to move back to full storage.",
+      );
+    };
+    tell();
+    window.addEventListener(SPILL_STATE_EVENT, tell);
+    return () => window.removeEventListener(SPILL_STATE_EVENT, tell);
+  }, [setNotice]);
+
   useEffect(() => {
     const onAutosave = () => setAutosaveMs(loadAutosaveInterval());
     window.addEventListener(AUTOSAVE_EVENT, onAutosave);
@@ -2205,7 +2289,11 @@ export function Workspace({
         const sessionKey = footnoteWhiteboardDocKey(docId, session.wbId);
         void (async () => {
           await flushDirtyInk(board, sessionKey);
-          const liveBoard = board.saveBoard({ assembleInk: true });
+          // Strokes stay in the `fnwb:` shards and ride `putInkPage` gzipped,
+          // the way the notebook library and this document's own pages do.
+          // Baking them back into the blob was what put a scratch board's
+          // handwriting inside the annotate pad's 32 MB JSON, twice over.
+          const liveBoard = board.saveBoard({ assembleInk: false });
           try {
             await putFootnoteWhiteboard(docId, session.wbId, {
               board: liveBoard,
@@ -2298,7 +2386,8 @@ export function Workspace({
         void (async () => {
           const sessionKey = footnoteWhiteboardDocKey(fnBind.docId, fnBind.wbId);
           await flushDirtyInk(board, sessionKey);
-          const liveBoard = board.saveBoard({ assembleInk: true });
+          // Ink lives in the shards; see the annotate-side save above.
+          const liveBoard = board.saveBoard({ assembleInk: false });
           try {
             await putFootnoteWhiteboard(fnBind.docId, fnBind.wbId, {
               board: liveBoard,
@@ -6892,7 +6981,7 @@ export function Workspace({
           if (!board) return;
           void (async () => {
             await flushDirtyInk(board, footnoteWhiteboardDocKey(fnBind.docId, fnBind.wbId));
-            const packed = board.saveBoard({ assembleInk: true });
+            const packed = board.saveBoard({ assembleInk: false });
             await putFootnoteWhiteboard(fnBind.docId, fnBind.wbId, {
               board: packed,
               pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(packed.elements)),
@@ -7127,7 +7216,7 @@ export function Workspace({
     if (!bind || !board) return;
     const key = footnoteWhiteboardDocKey(bind.docId, bind.wbId);
     await flushDirtyInk(board, key);
-    const liveBoard = board.saveBoard({ assembleInk: true });
+    const liveBoard = board.saveBoard({ assembleInk: false });
     const pageCount = Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements));
     await putFootnoteWhiteboard(bind.docId, bind.wbId, { board: liveBoard, pageCount });
     footnoteBoardBaselineRef.current = { board: liveBoard, pageCount };
@@ -7316,13 +7405,20 @@ export function Workspace({
     boardSaveSuspendedRef.current = true;
     const sessionKey = footnoteWhiteboardDocKey(docId, session.wbId);
     await flushDirtyInk(handle, sessionKey);
-    const live = handle.saveBoard({ assembleInk: true });
+    const live = handle.saveBoard({ assembleInk: false });
     try {
       await putFootnoteWhiteboard(docId, session.wbId, { board: live, pageCount: 1 });
     } catch (cause: unknown) {
       noteStorageFull(cause);
     }
-    await deleteInkPages(sessionKey);
+    /*
+     * The shards stay.
+     *
+     * Deleting them was right while the blob carried the strokes — closing the
+     * session baked `inkC` in and the WAL had done its job. It is not right
+     * now: the shards *are* the handwriting, and clearing them here would wipe
+     * every stroke on the board the moment the reader closed it.
+     */
     setAnnotateFootnotes((current) =>
       current.map((entry) => {
         if (entry.id !== session.footnoteId) return entry;

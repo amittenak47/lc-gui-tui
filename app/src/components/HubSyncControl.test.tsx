@@ -239,6 +239,7 @@ describe("HubSyncControl (step-2 stub)", () => {
         putEdges: overrides.putEdges ?? vi.fn().mockResolvedValue(undefined),
         tombstoneEdge: overrides.tombstoneEdge ?? vi.fn().mockResolvedValue(undefined),
         getInkPages: overrides.getInkPages ?? vi.fn().mockResolvedValue([]),
+        getInkPage: overrides.getInkPage ?? vi.fn().mockResolvedValue(null),
         putInkPage: overrides.putInkPage ?? vi.fn().mockResolvedValue(undefined),
       };
       return fns as unknown as LcClient & Record<string, ReturnType<typeof vi.fn>>;
@@ -1202,7 +1203,13 @@ describe("HubSyncControl (step-2 stub)", () => {
       vi.useFakeTimers();
       const annotateRow = { id: "pad-1", updated_at: 500, deleted_at: null };
       const client = fakeClient({
-        pingPadSync: vi.fn().mockResolvedValue({ now: 1, annotate: [annotateRow] }),
+        // The digest names a page, so the freeze actually asks for one — an
+        // empty ask cannot tell a failure from a pad with no handwriting.
+        pingPadSync: vi.fn().mockResolvedValue({
+          now: 1,
+          annotate: [annotateRow],
+          ink: [{ kind: "annotate", key: "pad-1", page_id: 3, updated_at: 400 }],
+        }),
         getAnnotatePad: vi.fn().mockResolvedValue({
           id: "pad-1",
           name: "book.pdf",
@@ -1210,7 +1217,7 @@ describe("HubSyncControl (step-2 stub)", () => {
           footnotes: [],
           source: "hub copy",
         }),
-        getInkPages: vi.fn().mockRejectedValue(new Error("hub timeout")),
+        getInkPage: vi.fn().mockRejectedValue(new Error("hub timeout")),
         putAnnotatePad: vi.fn(),
       });
       const { host, conflicts } = makeHost({

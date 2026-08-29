@@ -17,6 +17,7 @@ import type { AnnotatePadDto, InkPageDto } from "../api/client";
 import type { PageFrame } from "../canvas/inkPageIndex";
 import type { DocFootnote } from "../util/docFootnotes";
 import { conflictFocusPage } from "../util/conflictPage";
+import type { FootnoteInkBoard } from "../util/inkSync";
 import { Tip } from "./Tip";
 import { ConflictPagePreview } from "./ConflictPagePreview";
 import { FootnoteOverview } from "../modes/FootnoteOverview";
@@ -70,8 +71,31 @@ function nameOf(conflict: HubPadConflict): string {
   return body?.name ?? body?.title ?? "this pad";
 }
 
-function inkCount(pages: readonly InkPageDto[] | null | undefined): number {
-  return pages?.length ?? 0;
+/**
+ * How many pages of handwriting a side has.
+ *
+ * The id lists, not the frozen DTOs: freezing gzips only the page the split is
+ * about, so counting the preview would tell a reader with a whole read-through
+ * of margin notes that they have one page. Ids ride on the ping digest and a
+ * cheap local read — see `hubInkPageIds` / `localInkPageIds`. Older stashes
+ * carry no ids, so the preview list still stands in.
+ */
+function inkCount(
+  ids: readonly number[] | null | undefined,
+  pages: readonly InkPageDto[] | null | undefined,
+): number {
+  return ids?.length ?? pages?.length ?? 0;
+}
+
+/** Scratch boards this side has handwriting on. */
+function scratchBoardCount(
+  boards: readonly FootnoteInkBoard[] | undefined,
+  side: Side,
+): number {
+  if (!boards) return 0;
+  return boards.filter((board) =>
+    side === "local" ? board.localPageIds.length > 0 : board.hubPageIds.length > 0,
+  ).length;
 }
 
 function pickOf(
@@ -201,11 +225,12 @@ export function HubConflictSplit({
 
   const inkHas = (side: Side): boolean => {
     if (!conflict) return false;
+    if (scratchBoardCount(conflict.footnoteInk, side) > 0) return true;
     if (side === "local") {
-      return Boolean(conflict.local) || inkCount(conflict.localInk) > 0;
+      return Boolean(conflict.local) || inkCount(conflict.localInkPageIds, conflict.localInk) > 0;
     }
     if (conflict.serverInk === null) return true;
-    return Boolean(conflict.server) || inkCount(conflict.serverInk) > 0;
+    return Boolean(conflict.server) || inkCount(conflict.hubInkPageIds, conflict.serverInk) > 0;
   };
 
   const toggleKeep = (side: Side, id: string) => {
@@ -378,12 +403,28 @@ export function HubConflictSplit({
         : "";
 
   const renderInkRow = (side: Side) => {
-    const pages = side === "local" ? conflict.localInk : conflict.serverInk;
-    const n = inkCount(pages);
+    const n =
+      side === "local"
+        ? inkCount(conflict.localInkPageIds, conflict.localInk)
+        : inkCount(conflict.hubInkPageIds, conflict.serverInk);
     const kept = pickOf(picks, INK_ROW_ID, side) === true;
     const dropped = pickOf(picks, INK_ROW_ID, side) === false;
+    /*
+     * Scratch boards are handwriting too, and this row decides them.
+     *
+     * Their strokes ride their own hub keys now rather than the pad's JSON, so
+     * a ✓ or ✕ here settles them along with the document's pages. Saying how
+     * many there are is the difference between a choice and a surprise.
+     */
+    const boards = scratchBoardCount(conflict.footnoteInk, side);
+    const boardHint =
+      boards === 0 ? "" : boards === 1 ? " · 1 board" : ` · ${boards} boards`;
     const pageHint =
-      conflict.inkPageId != null ? `page ${conflict.inkPageId}` : n === 1 ? "1 page" : `${n} pages`;
+      (conflict.inkPageId != null
+        ? `page ${conflict.inkPageId}`
+        : n === 1
+          ? "1 page"
+          : `${n} pages`) + boardHint;
     const label = sideLabel(side);
     return (
       <li

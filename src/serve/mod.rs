@@ -199,6 +199,10 @@ pub fn router(state: Shared) -> Router {
         .route("/pads/sync", get(routes::sync_pads))
         .route("/pads/ink", put(routes::put_ink_page))
         .route("/pads/ink/:kind/:key", get(routes::get_ink_pages))
+        .route(
+            "/pads/ink/:kind/:key/:page_id",
+            get(routes::get_ink_page),
+        )
         .route("/pads/edges", put(routes::put_edges))
         .route("/pads/edges/:id/tombstone", post(routes::tombstone_edge))
         .route("/devices", get(routes::list_devices))

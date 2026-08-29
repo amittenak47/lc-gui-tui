@@ -17,7 +17,26 @@ import {
   clearHubConflict,
   stashHubConflict,
 } from "../util/hubConflictStash";
-import { localInkAsDtos } from "../util/inkSync";
+import {
+  fetchHubInkPages,
+  footnoteInkKeys,
+  localInkAsDtos,
+  localInkPageIds,
+  previewInkPages,
+  splitFootnoteInkHubKey,
+  type FootnoteInkBoard,
+} from "../util/inkSync";
+import { localFootnoteBoardIds } from "../util/annotateStore";
+import { whiteboardIdsOn } from "../util/footnoteWhiteboardStore";
+import type { DocFootnote } from "../util/docFootnotes";
+
+/** Marks on a pad body, whichever kind of pad it turned out to be. */
+function footnotesOf(
+  body: AnnotatePadDto | WhiteboardPadDto | null | undefined,
+): DocFootnote[] {
+  const notes = (body as AnnotatePadDto | null | undefined)?.footnotes;
+  return Array.isArray(notes) ? (notes as DocFootnote[]) : [];
+}
 import { PAD_HUB_EVENT, loadPadHub } from "../util/padHub";
 import { pushDocBytes } from "../util/padSync";
 import type { DocWorkProgress } from "./DocIndexChip";
@@ -513,32 +532,71 @@ export function HubSyncControl({
         /**
          * Both copies as they stood when the walk stopped.
          *
-         * `previewPages` scopes this device's gzip to the pages the split will
-         * actually show. An ink stop is about one page, and gzipping a whole
-         * read-through textbook to preview it was the most expensive thing the
-         * pill did — at the moment it is already parked in front of someone.
-         * A pad stop names no page, so it still freezes the lot.
+         * Scoped to the one page the split is going to draw, on both sides. An
+         * ink stop names its page; a pad stop opens on the first page either
+         * side has ink for, which is what `previewInkPages` works out from the
+         * two id lists. Freezing the pad meant gzipping a whole read-through
+         * *and* downloading the hub's copy of it — the most expensive thing
+         * the pill did, at the moment it is already parked in front of someone
+         * waiting to answer a question about one page.
          *
-         * The hub GET stays whole: Keep Server and Merge write those bytes,
-         * and there is no per-page route to fetch a subset from.
-         * TODO(hub): `GET /pads/ink/:kind/:key/:page_id`, then fetch the set
-         * the chosen resolution needs instead of the pad.
+         * What a resolve writes is a different set, and is fetched then: see
+         * `fetchHubPages` on {@link applyInkChoice}. The ids for it ride on the
+         * ping digest and cost nothing.
          */
         const freezeCopies = async (previewPages?: readonly number[]) => {
+          const localInkPages = await localInkPageIds(padInfo.kind, padInfo.id).catch(
+            () => [] as number[],
+          );
+          const preview = previewPages ?? previewInkPages(localInkPages, hubInkPageIds);
           const [server, localInk, serverInk, local] = await Promise.all([
             fetchHubBody(),
-            localInkAsDtos(padInfo.kind, padInfo.id, previewPages).catch(() => []),
-            (async () => {
-              try {
-                return await client!.getInkPages(padInfo.kind, padInfo.id);
-              } catch {
-                // Failed download, not an empty pad — see HubPadConflict.serverInk.
-                return null;
-              }
-            })(),
+            localInkAsDtos(padInfo.kind, padInfo.id, preview).catch(() => []),
+            fetchHubInkPages(client!, padInfo.kind, padInfo.id, preview),
             Promise.resolve(padInfo.buildBody()),
           ]);
-          return { server, localInk, serverInk, local, hubInkPageIds };
+          /*
+           * Scratch boards belong to the handwriting row too.
+           *
+           * Their strokes used to ride inside the pad's JSON, so freezing the
+           * pad froze them. They are hub ink keys now, and a resolve that did
+           * not name them would settle the document and leave the boards still
+           * disagreeing. Pointers from *both* copies: a board the other device
+           * has just made is not in this one's footnotes yet.
+           */
+          const knownBoards = new Set<string>([
+            ...((await localFootnoteBoardIds(padInfo.id)) ?? []),
+            ...whiteboardIdsOn(footnotesOf(server)),
+            ...whiteboardIdsOn(footnotesOf(local)),
+          ]);
+          const footnoteInk: FootnoteInkBoard[] = [];
+          if (padInfo.kind === "annotate") {
+            const keys = await footnoteInkKeys(
+              padInfo.id,
+              snapshot.inkDigests,
+              async () => knownBoards,
+            );
+            for (const key of keys) {
+              footnoteInk.push({
+                wbId: splitFootnoteInkHubKey(key)!.wbId,
+                hubPageIds: snapshot.inkDigests
+                  .filter((row) => row.kind === "annotate" && row.key === key)
+                  .map((row) => row.page_id),
+                localPageIds: await localInkPageIds("annotate", key).catch(
+                  () => [] as number[],
+                ),
+              });
+            }
+          }
+          return {
+            server,
+            localInk,
+            serverInk,
+            local,
+            hubInkPageIds,
+            localInkPageIds: localInkPages,
+            footnoteInk,
+          };
         };
 
         /* Park on the split; resolve when the reader has chosen and the
@@ -598,6 +656,8 @@ export function HubSyncControl({
               localInk: copies.localInk,
               serverInk: copies.serverInk,
               hubInkPageIds: copies.hubInkPageIds,
+              localInkPageIds: copies.localInkPageIds,
+              footnoteInk: copies.footnoteInk,
             });
             // Workspace already wrote pad JSON + the chosen ink.
             inkSettled = true;
@@ -644,6 +704,8 @@ export function HubSyncControl({
               localInk: copies.localInk,
               serverInk: copies.serverInk,
               hubInkPageIds: copies.hubInkPageIds,
+              localInkPageIds: copies.localInkPageIds,
+              footnoteInk: copies.footnoteInk,
               inkPageId: ink.pageId,
             });
           }

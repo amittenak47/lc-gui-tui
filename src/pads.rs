@@ -605,8 +605,9 @@ pub fn delete_pad(conn: &Connection, kind: PadKind, id: &str, seq: i64) -> Resul
         }
         drop_snapshots_and_revisions(conn, kind, id)?;
         // Handwriting is pad content, so it goes with the pad. Left behind it
-        // would be resurrected by the next device to push a page of it.
-        delete_ink_pages(conn, kind.as_str(), id)?;
+        // would be resurrected by the next device to push a page of it — and
+        // that includes the scratch boards hanging off its marks.
+        delete_pad_ink(conn, kind.as_str(), id)?;
         let table = kind.as_str();
         conn.execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![id])?;
         conn.execute(
@@ -974,14 +975,41 @@ pub fn restore(conn: &Connection, kind: PadKind, id: &str) -> Result<PutOutcome<
     Ok(PutOutcome::Written(()))
 }
 
+/// Separates an annotate pad's id from one of its scratch boards.
+///
+/// `{padId}/fn/{whiteboardId}`. A footnote's scratch board is handwriting that
+/// belongs to an annotate pad but is not one of that document's pages, so it
+/// needs a name of its own — and it cannot be a page number, because whiteboard
+/// ids are strings and any encoding of them into `page_id` would sooner or
+/// later collide with page 47 of the PDF.
+///
+/// A slash cannot appear in either id, so the split is unambiguous.
+pub const INK_FOOTNOTE_SEP: &str = "/fn/";
+
+/// The pad an ink key belongs to.
+///
+/// Ink is tied to a live pad — the row is refused when that pad is gone, and
+/// deleting the pad takes its handwriting with it. A scratch board's pages
+/// hang off the annotate pad that owns the mark, so they answer to its id.
+pub fn ink_pad_id<'a>(kind: &str, key: &'a str) -> &'a str {
+    if kind != "annotate" {
+        return key;
+    }
+    match key.split_once(INK_FOOTNOTE_SEP) {
+        Some((pad_id, board)) if !pad_id.is_empty() && !board.is_empty() => pad_id,
+        _ => key,
+    }
+}
+
 fn pad_is_live(conn: &Connection, kind: &str, key: &str) -> Result<bool> {
     let table = kind;
     if table != "whiteboard" && table != "annotate" {
         return Ok(false);
     }
+    let pad_id = ink_pad_id(table, key);
     let n: i64 = conn.query_row(
         &format!("SELECT COUNT(*) FROM {table} WHERE id = ?1 AND deleted_at IS NULL"),
-        params![key],
+        params![pad_id],
         |row| row.get(0),
     )?;
     Ok(n > 0)
@@ -1189,6 +1217,48 @@ pub fn get_ink_pages(conn: &Connection, kind: &str, key: &str) -> Result<Vec<Ink
     Ok(out)
 }
 
+/// One page of one pad's handwriting.
+///
+/// The whole-pad GET above is the wrong shape for a conflict: parking the sync
+/// pill over page 40 of a textbook someone has read through downloaded every
+/// page of their handwriting to draw one of them. A reader stopped in front of
+/// a decision is the worst moment to spend a book's worth of transfer, and the
+/// caller has always known which page it wanted.
+///
+/// `None` is "the hub does not have this page", which callers must not confuse
+/// with a failed request — one clears a page, the other must change nothing.
+pub fn get_ink_page(
+    conn: &Connection,
+    kind: &str,
+    key: &str,
+    page_id: i64,
+) -> Result<Option<InkPageRow>> {
+    ink_kind(kind)?;
+    let row = conn
+        .query_row(
+            "SELECT kind, key, page_id, updated_at, gz FROM ink_pages
+             WHERE kind = ?1 AND key = ?2 AND page_id = ?3",
+            params![kind, key, page_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    Ok(row.map(|(kind, key, page_id, updated_at, gz)| InkPageRow {
+        kind,
+        key,
+        page_id,
+        updated_at,
+        gz: BASE64.encode(&gz),
+    }))
+}
+
 /// Newest page wins, and a page of a deleted pad is refused.
 ///
 /// Per page rather than per pad, so two devices writing on two pages of one
@@ -1197,7 +1267,11 @@ pub fn get_ink_pages(conn: &Connection, kind: &str, key: &str) -> Result<Vec<Ink
 /// would make the result depend on which happened to ping last.
 pub fn put_ink_page(conn: &Connection, row: &InkPageRow) -> Result<ApplyAck> {
     let kind = ink_kind(&row.kind)?;
-    let gone = gone_seq(conn, kind, &row.key)?;
+    // Seqs belong to the pad, not to the ink key — a scratch board's pages are
+    // named after the mark they hang on, and there is no `{id}/fn/{wb}` row in
+    // the annotate table to read a seq from.
+    let pad_id = ink_pad_id(kind.as_str(), &row.key).to_string();
+    let gone = gone_seq(conn, kind, &pad_id)?;
     if !pad_is_live(conn, kind.as_str(), &row.key)? {
         return Ok(ApplyAck {
             applied: false,
@@ -1221,7 +1295,7 @@ pub fn put_ink_page(conn: &Connection, row: &InkPageRow) -> Result<ApplyAck> {
         if current >= row.updated_at {
             return Ok(ApplyAck {
                 applied: false,
-                seq: stored_seq(conn, kind, &row.key)?,
+                seq: stored_seq(conn, kind, &pad_id)?,
             });
         }
     }
@@ -1235,7 +1309,7 @@ pub fn put_ink_page(conn: &Connection, row: &InkPageRow) -> Result<ApplyAck> {
     )?;
     Ok(ApplyAck {
         applied: true,
-        seq: stored_seq(conn, kind, &row.key)?,
+        seq: stored_seq(conn, kind, &pad_id)?,
     })
 }
 
@@ -1244,6 +1318,26 @@ pub fn delete_ink_pages(conn: &Connection, kind: &str, key: &str) -> Result<()> 
         "DELETE FROM ink_pages WHERE kind = ?1 AND key = ?2",
         params![kind, key],
     )?;
+    Ok(())
+}
+
+/// Every ink key a pad owns, including its footnote scratch boards.
+///
+/// Deleting an annotate pad used to leave `{id}/fn/{wbId}` rows behind, and a
+/// left-behind page is not inert: the next device to walk finds handwriting on
+/// the hub for a document that is gone, and pushes it back.
+///
+/// `substr` rather than `LIKE`: pad ids are not escaped for a LIKE pattern, and
+/// an id carrying `_` would quietly match its neighbours.
+pub fn delete_pad_ink(conn: &Connection, kind: &str, pad_id: &str) -> Result<()> {
+    delete_ink_pages(conn, kind, pad_id)?;
+    if kind == "annotate" {
+        let prefix = format!("{pad_id}{INK_FOOTNOTE_SEP}");
+        conn.execute(
+            "DELETE FROM ink_pages WHERE kind = ?1 AND substr(key, 1, ?2) = ?3",
+            params![kind, prefix.len() as i64, prefix],
+        )?;
+    }
     Ok(())
 }
 
@@ -2182,6 +2276,144 @@ mod tests {
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[0].page_id, 1);
         assert_eq!(pages[1].page_id, 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn annotate_pad(id: &str, at: i64) -> AnnotatePad {
+        AnnotatePad {
+            id: id.into(),
+            name: format!("{id}.pdf"),
+            hash: "binabc".into(),
+            doc_type: "pdf".into(),
+            updated_at: at,
+            deleted_at: None,
+            sync_seq: 0,
+            base_updated_at: None,
+            source: String::new(),
+            footnotes: json!([]),
+            board: json!({ "elements": [] }),
+            agent: json!([]),
+            footnote_boards: json!({}),
+        }
+    }
+
+    #[test]
+    fn a_scratch_board_keeps_its_ink_under_the_pad_that_owns_the_mark() {
+        // Footnote scratch ink used to reach the hub only by being baked into
+        // the pad's JSON. It rides the ink route now, under a key that names
+        // the board — and the pad it belongs to is what decides it is allowed.
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_annotate(&conn, &annotate_pad("a1", 1)).unwrap();
+        let key = "a1/fn/wb7";
+        assert!(put_ink_page(&conn, &ink("annotate", key, 1, 10, "scratch"))
+            .unwrap()
+            .applied);
+        let pages = get_ink_pages(&conn, "annotate", key).unwrap();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(BASE64.decode(pages[0].gz.as_bytes()).unwrap(), b"scratch");
+        // And it is its own key: the document's own page ink is untouched.
+        assert!(get_ink_pages(&conn, "annotate", "a1").unwrap().is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scratch_ink_for_a_pad_that_is_not_there_is_refused() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        let ack = put_ink_page(&conn, &ink("annotate", "ghost/fn/wb1", 1, 10, "scratch")).unwrap();
+        assert!(!ack.applied, "no pad, no scratch ink");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn deleting_an_annotate_pad_takes_its_scratch_boards_with_it() {
+        // Left behind, those pages are not inert: the next device to walk finds
+        // handwriting on the hub for a document that is gone and pushes it back.
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_annotate(&conn, &annotate_pad("a1", 1)).unwrap();
+        put_annotate(&conn, &annotate_pad("a1b", 1)).unwrap();
+        put_ink_page(&conn, &ink("annotate", "a1", 3, 10, "margin")).unwrap();
+        put_ink_page(&conn, &ink("annotate", "a1/fn/wb7", 1, 10, "scratch")).unwrap();
+        put_ink_page(&conn, &ink("annotate", "a1/fn/wb8", 1, 10, "more")).unwrap();
+        // A neighbour whose id merely starts the same way must survive.
+        put_ink_page(&conn, &ink("annotate", "a1b/fn/wb1", 1, 10, "other pad")).unwrap();
+        delete_pad(&conn, PadKind::Annotate, "a1", 1).unwrap();
+        assert!(get_ink_pages(&conn, "annotate", "a1").unwrap().is_empty());
+        assert!(get_ink_pages(&conn, "annotate", "a1/fn/wb7").unwrap().is_empty());
+        assert!(get_ink_pages(&conn, "annotate", "a1/fn/wb8").unwrap().is_empty());
+        assert_eq!(get_ink_pages(&conn, "annotate", "a1b/fn/wb1").unwrap().len(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_key_that_is_not_a_scratch_board_still_means_itself() {
+        // Only a well-formed `{pad}/fn/{board}` splits. Half of one is a key.
+        assert_eq!(ink_pad_id("annotate", "a1/fn/wb7"), "a1");
+        assert_eq!(ink_pad_id("annotate", "a1"), "a1");
+        assert_eq!(ink_pad_id("annotate", "a1/fn/"), "a1/fn/");
+        assert_eq!(ink_pad_id("annotate", "/fn/wb7"), "/fn/wb7");
+        // Whiteboards have no marks, so nothing hangs off them.
+        assert_eq!(ink_pad_id("whiteboard", "w1/fn/wb7"), "w1/fn/wb7");
+    }
+
+    #[test]
+    fn a_scratch_page_shows_up_on_the_ping_digest_as_its_own_key() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_annotate(&conn, &annotate_pad("a1", 1)).unwrap();
+        put_ink_page(&conn, &ink("annotate", "a1", 3, 10, "margin")).unwrap();
+        put_ink_page(&conn, &ink("annotate", "a1/fn/wb7", 1, 11, "scratch")).unwrap();
+        let digests = list_ink_digests(&conn, 0).unwrap();
+        let keys: Vec<&str> = digests.iter().map(|row| row.key.as_str()).collect();
+        assert!(keys.contains(&"a1"));
+        assert!(keys.contains(&"a1/fn/wb7"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn one_page_comes_back_without_the_rest_of_the_book() {
+        // The whole point of the per-page route: a conflict over page 40 of a
+        // read-through must not cost every page of it.
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 1)).unwrap();
+        for page in 1..=40 {
+            put_ink_page(&conn, &ink("whiteboard", "w1", page, 10, "strokes")).unwrap();
+        }
+        let row = get_ink_page(&conn, "whiteboard", "w1", 40)
+            .unwrap()
+            .expect("page 40 is there");
+        assert_eq!(row.page_id, 40);
+        assert_eq!(BASE64.decode(row.gz.as_bytes()).unwrap(), b"strokes");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_page_the_hub_does_not_have_is_none_not_an_error() {
+        // None is "nothing drawn here" and the caller may clear that page. A
+        // failed request is a different answer and must not look like this one.
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 1)).unwrap();
+        put_ink_page(&conn, &ink("whiteboard", "w1", 1, 10, "pc")).unwrap();
+        assert!(get_ink_page(&conn, "whiteboard", "w1", 2).unwrap().is_none());
+        assert!(get_ink_page(&conn, "whiteboard", "gone", 1).unwrap().is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn one_page_reads_the_same_bytes_as_the_whole_pad_does() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 1)).unwrap();
+        put_ink_page(&conn, &ink("whiteboard", "w1", 3, 10, "page three")).unwrap();
+        let whole = get_ink_pages(&conn, "whiteboard", "w1").unwrap();
+        let one = get_ink_page(&conn, "whiteboard", "w1", 3).unwrap().unwrap();
+        assert_eq!(whole.len(), 1);
+        assert_eq!(whole[0].gz, one.gz);
+        assert_eq!(whole[0].updated_at, one.updated_at);
         let _ = std::fs::remove_file(path);
     }
 
