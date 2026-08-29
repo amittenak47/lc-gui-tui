@@ -20,6 +20,7 @@ import type { EdgeRowDto, InkPageDigestDto, InkPageDto, LcClient } from "../api/
 import { b64ToBytes, bytesToB64 } from "../api/nativeHttp";
 import {
   annotateDocKey,
+  copyInkPages,
   deleteInkPages,
   encodedFromRecord,
   footnoteWhiteboardDocKey,
@@ -340,6 +341,11 @@ export async function applyInkChoice(
     if (wanted.length === 0) return serverInk ?? [];
     const fetched = await opts.fetchHubPages(wanted);
     if (fetched == null) return null;
+    // Digest named these pages. A 404 for one of them is not "the hub has
+    // no such page" — Keep Server would then delete local ink and write the
+    // short remainder. A page the hub genuinely lacks was never in `wanted`.
+    const got = new Set(fetched.map((page) => page.page_id));
+    if (wanted.some((id) => !got.has(id))) return null;
     return fetched;
   };
   if (choice === "local") {
@@ -490,29 +496,35 @@ export async function remintFootnoteInk(
   hubPageIds: readonly number[],
 ): Promise<void> {
   if (!fromWbId || !toWbId || fromWbId === toWbId) return;
-  const pages = await fetchHubInkPages(
-    client,
-    "annotate",
-    footnoteInkHubKey(docId, fromWbId),
-    hubPageIds,
-  );
-  if (!pages || pages.length === 0) return;
+  const fromKey = footnoteInkHubKey(docId, fromWbId);
   const toKey = footnoteInkHubKey(docId, toWbId);
-  const docKey = inkDocKey("annotate", toKey);
-  const now = Date.now();
-  for (const page of pages) {
-    if (!page.gz) continue;
-    await writeInkPage(docKey, { page_id: page.page_id, updated_at: now, gz: page.gz });
-    await client
-      .putInkPage({
-        kind: "annotate",
-        key: toKey,
-        page_id: page.page_id,
-        updated_at: now,
-        gz: page.gz,
-      })
-      .catch(() => undefined);
+  const fromDoc = inkDocKey("annotate", fromKey);
+  const toDoc = inkDocKey("annotate", toKey);
+  // Local shards first. A board that never reached the hub still has to land
+  // under the reminted id — the same copy forkSharedWhiteboardPointers already
+  // does — or a local-only scratch board remints as a blank page.
+  await copyInkPages(fromDoc, toDoc);
+  const pages = hubPageIds.length
+    ? await fetchHubInkPages(client, "annotate", fromKey, hubPageIds)
+    : [];
+  if (pages && pages.length > 0) {
+    const now = Date.now();
+    for (const page of pages) {
+      if (!page.gz) continue;
+      await writeInkPage(toDoc, { page_id: page.page_id, updated_at: now, gz: page.gz });
+      await client
+        .putInkPage({
+          kind: "annotate",
+          key: toKey,
+          page_id: page.page_id,
+          updated_at: now,
+          gz: page.gz,
+        })
+        .catch(() => undefined);
+    }
+    return;
   }
+  await pushInkPagesToHub(client, "annotate", toKey).catch(() => undefined);
 }
 
 /**

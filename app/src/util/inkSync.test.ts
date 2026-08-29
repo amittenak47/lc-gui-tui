@@ -405,6 +405,24 @@ describe("applyInkChoice fetches what a choice writes", () => {
     expect(written.map((row) => row.pageId).sort((a, b) => a - b)).toEqual([7, 40, 41]);
   });
 
+  it("keep-server says so when a digest page 404'd — not a short list", async () => {
+    const { applyInkChoice, deleteInkPages } = await loadApply([{ pageId: 40 }]);
+    await expect(
+      applyInkChoice(
+        { putInkPage: vi.fn() } as never,
+        "annotate",
+        "p1",
+        "server",
+        [page(40)],
+        {
+          hubPageIds: [40, 41],
+          fetchHubPages: async () => [page(40)],
+        },
+      ),
+    ).rejects.toThrow(/could not be read/);
+    expect(deleteInkPages).not.toHaveBeenCalled();
+  });
+
   it("keep-server says so when the hub's handwriting could not be read", async () => {
     const { applyInkChoice, deleteInkPages } = await loadApply([{ pageId: 40 }]);
     await expect(
