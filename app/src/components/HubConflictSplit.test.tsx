@@ -346,84 +346,126 @@ describe("what the panes are asked to draw", () => {
   const notesOn = (side: 0 | 1) =>
     (panes()[side]!.dataset.notes ?? "").split(",").filter(Boolean);
 
-  it("draws a mark on both panes as soon as its row is tapped", async () => {
-    /*
-     * The row tap only scrolled to the page, so the pane you were sent to was
-     * blank exactly where the mark should be — you had to keep a copy to find
-     * out what you were keeping.
-     */
-    const { root } = await mountSpied();
-    expect(notesOn(0)).toEqual([]);
+  /*
+   * The ✓ / ✕ on one row, in one pane.
+   *
+   * By mark id, not by position or text: a row only renders on the side that
+   * has that copy, so the two panes hold different rows in different orders,
+   * and each shows its own excerpt where the words differ.
+   */
+  const tick = (side: 0 | 1, id: string, action: "keep" | "drop") => {
+    const pane = document.querySelectorAll(".lc-hub-conflict-pane")[side]!;
+    const row = pane.querySelector<HTMLElement>(`[data-note-id="${id}"]`)!;
+    act(() => {
+      (row.querySelector(`[data-action="${action}"]`) as HTMLButtonElement).click();
+    });
+  };
+  const tickInk = (side: 0 | 1, action: "keep" | "drop") => {
+    act(() => {
+      (inkRow(side).querySelector(`[data-action="${action}"]`) as HTMLButtonElement).click();
+    });
+  };
+  /** The mark both sides changed, and the one only the hub has. */
+  const SAME = "same";
+  const HUB_ONLY = "srv";
+  const inkOn = (side: 0 | 1) => panes()[side]!.dataset.ink === "on";
 
+  it("draws nothing for a change nobody has answered for", async () => {
+    /*
+     * Both sides start untoggled, and that is the honest picture: a change
+     * with no decision yet is not something either pane is showing you.
+     */
+    await mountSpied();
+    expect(notesOn(0)).toEqual([]);
+    expect(notesOn(1)).toEqual([]);
+    expect(inkOn(0)).toBe(false);
+    expect(inkOn(1)).toBe(false);
+  });
+
+  it("does not draw a mark merely because its row was tapped", async () => {
+    // Tapping is asking to see the row, not answering for it. A page that
+    // disagrees with the ticks beside it is the one thing this must not do.
+    await mountSpied();
     act(() => noteByText("kept here with new words").click());
+    expect(notesOn(0)).toEqual([]);
+    expect(notesOn(1)).toEqual([]);
+  });
+
+  it("draws the side you kept, and only that side", async () => {
+    await mountSpied();
+
+    tick(0, SAME, "keep");
+    expect(notesOn(0)).toEqual(["same"]);
+    expect(notesOn(1)).toEqual([]);
+
+    tick(1, SAME, "keep");
     expect(notesOn(0)).toEqual(["same"]);
     expect(notesOn(1)).toEqual(["same"]);
-    act(() => root.unmount());
   });
 
-  it("shows a side-only mark on the side that has it", async () => {
-    const { root } = await mountSpied();
-    act(() => noteByText("hub only mark").click());
+  it("stops drawing a side once its ✓ is taken back", async () => {
+    await mountSpied();
+    tick(0, SAME, "keep");
+    tick(1, SAME, "keep");
+    expect(notesOn(0)).toEqual(["same"]);
+
+    // Tapping ✓ again clears it; ✕ drops the other outright.
+    tick(0, SAME, "keep");
+    tick(1, SAME, "drop");
     expect(notesOn(0)).toEqual([]);
+    expect(notesOn(1)).toEqual([]);
+  });
+
+  it("draws a side-only mark on the side that has it", async () => {
+    await mountSpied();
+    tick(1, HUB_ONLY, "keep");
     expect(notesOn(1)).toEqual(["srv"]);
-    act(() => root.unmount());
+    expect(notesOn(0)).toEqual([]);
   });
 
-  it("previewing is not keeping", async () => {
-    // Focus is a question. A tapped row is drawn and still unsettled, and a
-    // dropped row is still drawn when you go back to look at it.
-    const { root } = await mountSpied();
-    act(() => noteByText("local only mark").click());
-    expect(notesOn(0)).toEqual(["n1"]);
-    expect(resolveButton().disabled).toBe(true);
+  it("answers for handwriting the same way", async () => {
+    await mountSpied();
+    // Focus alone draws nothing.
+    act(() => inkRow(0).click());
+    expect(inkOn(0)).toBe(false);
+    expect(inkOn(1)).toBe(false);
 
-    act(() =>
-      noteByText("local only mark")
-        .querySelector('[data-action="drop"]')!
-        .dispatchEvent(new MouseEvent("click", { bubbles: true })),
-    );
-    expect(notesOn(0)).toEqual(["n1"]);
-    act(() => root.unmount());
+    tickInk(0, "keep");
+    expect(inkOn(0)).toBe(true);
+    expect(inkOn(1)).toBe(false);
+
+    tickInk(1, "keep");
+    expect(inkOn(0)).toBe(true);
+    expect(inkOn(1)).toBe(true);
+
+    tickInk(0, "keep");
+    expect(inkOn(0)).toBe(false);
+    expect(inkOn(1)).toBe(true);
   });
 
-  it("keeps a kept mark drawn after focus moves on", async () => {
-    const { root } = await mountSpied();
-    act(() =>
-      noteByText("local only mark")
-        .querySelector('[data-action="keep"]')!
-        .dispatchEvent(new MouseEvent("click", { bubbles: true })),
-    );
-    act(() => noteByText("hub only mark").click());
-    // n1 because it was kept, srv because it is focused — and no duplicate.
-    expect(notesOn(0)).toEqual(["n1"]);
-    expect(notesOn(1)).toEqual(["srv"]);
-    act(() => root.unmount());
-  });
-
-  it("draws the handwriting when the ink row is focused, before any ✓", async () => {
-    const { root } = await mountSpied();
-    // The ink row is focused on open, so it is already showing.
-    expect(panes()[0]!.dataset.ink).toBe("on");
-
-    act(() => noteByText("local only mark").click());
-    expect(panes()[0]!.dataset.ink).toBe("off");
+  it("leaves earlier decisions drawn while you answer the next row", async () => {
+    // Deciding the ink does not un-draw the mark you already kept.
+    await mountSpied();
+    tick(0, SAME, "keep");
+    expect(notesOn(0)).toEqual(["same"]);
 
     act(() => inkRow(0).click());
-    expect(panes()[0]!.dataset.ink).toBe("on");
-    act(() => root.unmount());
+    tickInk(0, "keep");
+    expect(notesOn(0)).toEqual(["same"]);
+    expect(inkOn(0)).toBe(true);
   });
 
-  it("keeps kept ink drawn once focus has moved to a mark", async () => {
-    const { root } = await mountSpied();
-    act(() =>
-      inkRow(0)
-        .querySelector('[data-action="keep"]')!
-        .dispatchEvent(new MouseEvent("click", { bubbles: true })),
-    );
-    act(() => noteByText("local only mark").click());
-    expect(panes()[0]!.dataset.ink).toBe("on");
-    expect(panes()[1]!.dataset.ink).toBe("off");
-    act(() => root.unmount());
+  it("a column ✓ is the same rule applied to every row", async () => {
+    /*
+     * Keeping the whole Local column draws every Local change and leaves the
+     * other pane alone — the same answer as ticking each row by hand.
+     */
+    await mountSpied();
+    act(() => paneButton(0, "keep").click());
+    expect(notesOn(0)).toEqual(["n1", "same"]);
+    expect(inkOn(0)).toBe(true);
+    expect(notesOn(1)).toEqual([]);
+    expect(inkOn(1)).toBe(false);
   });
 });
 
