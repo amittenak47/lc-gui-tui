@@ -14,6 +14,7 @@ import {
   PAD_SYNC_IDLE_KICK_MS_ANDROID,
   PAD_SYNC_IDLE_KICK_MS_DESKTOP,
   padSyncIdleKickMs,
+  pushAnnotatePad,
   pushDocBytes,
   pushPadSnapshot,
   pushProblemPad,
@@ -21,6 +22,7 @@ import {
   resetPadSyncQueueForTests,
   restoreTrashedPad,
   scheduleIdlePadSyncPing,
+  setPadSyncBodyCapForTests,
   TrashQueueFullError,
 } from "./padSync";
 import { noteCameraBusy, resetCameraBusyForTests } from "./cameraBusy";
@@ -514,6 +516,58 @@ describe("live PUT coalesce and 24h compact", () => {
     await expect(pushDocBytes(client, "big:1", tooBig)).rejects.toThrow(/at most/);
     expect(peekPadSyncQueueForTests().filter((job) => job.op === "putBytes")).toHaveLength(0);
     hubSpy.mockRestore();
+  });
+
+  it("refuses an oversize annotate PUT instead of queueing it", async () => {
+    setPadSyncBodyCapForTests(80);
+    const client = fakeClient();
+    await expect(
+      pushAnnotatePad(client, {
+        id: "a1",
+        name: "book.pdf",
+        hash: "h",
+        docType: "pdf",
+        updatedAt: 1,
+        source: "x".repeat(400),
+        board: emptyBoard,
+      }),
+    ).rejects.toThrow(/at most/);
+    expect(client.putAnnotatePad).not.toHaveBeenCalled();
+    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+  });
+
+  it("drops an oversized annotate job so a later whiteboard PUT still flushes", async () => {
+    setPadSyncBodyCapForTests(80);
+    const client = fakeClient();
+    await enqueuePadSync({
+      op: "putAnnotate",
+      body: {
+        id: "a1",
+        name: "book.pdf",
+        hash: "h",
+        doc_type: "pdf",
+        updated_at: 1,
+        source: "x".repeat(400),
+        footnotes: [],
+        board: emptyBoard,
+        agent: [],
+      },
+    });
+    await enqueuePadSync({
+      op: "putWhiteboard",
+      body: {
+        id: "w1",
+        title: "One",
+        updated_at: 1,
+        page_count: 1,
+        board: { v: 1, elements: [] },
+        agent: [],
+      },
+    });
+    await flushPadSyncQueue(client);
+    expect(client.putAnnotatePad).not.toHaveBeenCalled();
+    expect(client.putWhiteboardPad).toHaveBeenCalledTimes(1);
+    expect(peekPadSyncQueueForTests()).toHaveLength(0);
   });
 
   it("drops queued live PUTs at or before a 24h ACK", async () => {

@@ -125,3 +125,22 @@ describe("getManyContent", () => {
     expect(found.has("a")).toBe(false);
   });
 });
+
+describe("spill wins over stale IndexedDB", () => {
+  afterEach(() => {
+    vi.doUnmock("./idb");
+    vi.resetModules();
+  });
+
+  it("returns the spill when both backends have the id", async () => {
+    vi.resetModules();
+    vi.doMock("./idb", () => ({
+      run: async () => "old-from-idb",
+      withStore: async () => {},
+      STORE_CONTENT: "content",
+    }));
+    const { getContent } = await import("./contentStore");
+    store.set("whiteboard.content.v1.entry-1", JSON.stringify({ n: "spill-new" }));
+    expect(await getContent("entry-1")).toEqual({ n: "spill-new" });
+  });
+});

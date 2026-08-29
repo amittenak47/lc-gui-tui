@@ -70,7 +70,7 @@ function nameOf(conflict: HubPadConflict): string {
   return body?.name ?? body?.title ?? "this pad";
 }
 
-function inkCount(pages: readonly InkPageDto[] | undefined): number {
+function inkCount(pages: readonly InkPageDto[] | null | undefined): number {
   return pages?.length ?? 0;
 }
 
@@ -197,17 +197,20 @@ export function HubConflictSplit({
   }, [conflict]);
 
   const serverMissing = Boolean(conflict) && conflict!.server == null;
+  const serverInkUnread = Boolean(conflict) && conflict!.serverInk === null;
 
   const inkHas = (side: Side): boolean => {
     if (!conflict) return false;
     if (side === "local") {
       return Boolean(conflict.local) || inkCount(conflict.localInk) > 0;
     }
+    if (conflict.serverInk === null) return true;
     return Boolean(conflict.server) || inkCount(conflict.serverInk) > 0;
   };
 
   const toggleKeep = (side: Side, id: string) => {
     if (side === "server" && serverMissing) return;
+    if (side === "server" && id === INK_ROW_ID && serverInkUnread) return;
     setPicks((current) => {
       const now = current[id]?.[side];
       return { ...current, [id]: { ...current[id], [side]: now === true ? undefined : true } };
@@ -243,6 +246,9 @@ export function HubConflictSplit({
     setPicks((current) => {
       const next = { ...current };
       for (const id of ids) {
+        if (side === "server" && id === INK_ROW_ID && serverInkUnread && value === true) {
+          continue;
+        }
         next[id] = { ...next[id], [side]: value };
       }
       return next;
@@ -327,13 +333,20 @@ export function HubConflictSplit({
         server: pickOf(picks, row.id, "server") === true,
       };
     }
+    const boardRemints: Record<string, string> = {};
     const merged = mergeFootnotes(
       rows.map((row) => row.local).filter(Boolean) as DocFootnote[],
       rows.map((row) => row.server).filter(Boolean) as DocFootnote[],
       { local: false, server: false },
       resolved,
+      boardRemints,
     );
-    onResolve({ pick: "merged", footnotes: merged, ink });
+    onResolve({
+      pick: "merged",
+      footnotes: merged,
+      ink,
+      ...(Object.keys(boardRemints).length > 0 ? { boardRemints } : {}),
+    });
   };
 
   const focusPage = useMemo(() => {
@@ -358,6 +371,8 @@ export function HubConflictSplit({
     ? ""
     : serverMissing
       ? "The other copy could not be read, so only this device's copy can be kept. ✓ Local (or each of its changes)."
+      : serverInkUnread && !valid
+        ? "The other device's handwriting could not be read, so it cannot be kept. ✓ Local handwriting, or ✕ both."
       : !valid
         ? "Every change needs a choice — ✓ keep or ✕ drop. ✓ both on the same change combines the two; ✕ both removes that entry. The file itself always stays."
         : "";
@@ -384,14 +399,18 @@ export function HubConflictSplit({
       >
         <span className="lc-hub-conflict-note-kind">ink</span>
         <span className="lc-hub-conflict-note-excerpt">
-          {n > 0 ? `Handwriting (${pageHint})` : "No handwriting"}
+          {side === "server" && serverInkUnread
+            ? "Could not read handwriting"
+            : n > 0
+              ? `Handwriting (${pageHint})`
+              : "No handwriting"}
         </span>
         <span className="lc-hub-conflict-note-actions">
           <button
             type="button"
             data-action="keep"
             aria-pressed={kept}
-            disabled={side === "server" && serverMissing}
+            disabled={side === "server" && (serverMissing || serverInkUnread)}
             aria-label={`Keep ${label} handwriting`}
             title={
               kept
@@ -646,7 +665,9 @@ export function HubConflictSplit({
             hash={docHash}
             page={focusPage}
             notes={keptNotes}
-            inkPages={side === "local" ? conflict.localInk : conflict.serverInk}
+            inkPages={
+              side === "local" ? conflict.localInk : (conflict.serverInk ?? undefined)
+            }
             showInk={pickOf(picks, INK_ROW_ID, side) === true}
             bytes={bytes}
             filmScope={filmScopeBase ? `${filmScopeBase}-${side}` : undefined}

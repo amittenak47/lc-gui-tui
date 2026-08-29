@@ -596,4 +596,12 @@ describe("the mark hub, one per pane", () => {
     tickRow(0, "n1", "keep");
     expect(hubs()).toHaveLength(1);
   });
+
+  it("does not offer Keep Server for handwriting that could not be read", () => {
+    mount({ ...CONFLICT, localInk: [], serverInk: null });
+    const serverInk = inkRow(1);
+    expect(serverInk.textContent).toContain("Could not read handwriting");
+    const keep = serverInk.querySelector('[data-action="keep"]') as HTMLButtonElement;
+    expect(keep.disabled).toBe(true);
+  });
 });

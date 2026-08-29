@@ -130,10 +130,32 @@ export type PadSyncJob = PadSyncJobInput & { id: string };
 
 const memoryQueue: PadSyncJob[] = [];
 
+let hubBodyCapOverride: number | null = null;
+
+export function setPadSyncBodyCapForTests(bytes: number | null): void {
+  hubBodyCapOverride = bytes;
+}
+
+function hubBodyCap(): number {
+  return hubBodyCapOverride ?? HUB_MAX_BODY_BYTES;
+}
+
+export function hubBodyBytes(body: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(body)).byteLength;
+}
+
+export function exceedsHubBodyCap(
+  body: unknown,
+  cap: number = hubBodyCap(),
+): boolean {
+  return hubBodyBytes(body) > cap;
+}
+
 export function resetPadSyncQueueForTests(): void {
   memoryQueue.length = 0;
   hubBackoffUntil = 0;
   hubBackoffMs = HUB_BACKOFF_MIN_MS;
+  hubBodyCapOverride = null;
 }
 
 export function peekPadSyncQueueForTests(): PadSyncJob[] {
@@ -474,6 +496,13 @@ export async function annotatePadBody(doc: AnnotateDoc): Promise<AnnotatePadDto>
 
 export async function pushAnnotatePad(client: LcClient, doc: AnnotateDoc): Promise<boolean> {
   const body = await annotatePadBody(doc);
+  if (exceedsHubBodyCap(body)) {
+    throw new Error(
+      `this pad is ${Math.round(hubBodyBytes(body) / (1024 * 1024))} MB, and the hub ` +
+        `takes at most ${Math.round(hubBodyCap() / (1024 * 1024))} MB — ` +
+        `it stays on this device`,
+    );
+  }
   try {
     const written = await client.putAnnotatePad(doc.id, body);
     markAnnotateHubAck(doc.id, written.updated_at ?? doc.updatedAt);
@@ -796,6 +825,10 @@ export async function flushPadSyncQueue(client: LcClient): Promise<void> {
         const written = await client.putWhiteboardPad(job.body.id, job.body);
         markWhiteboardHubAck(job.body.id, written.updated_at ?? job.body.updated_at);
       } else if (job.op === "putAnnotate") {
+        if (exceedsHubBodyCap(job.body)) {
+          await dropJob(job.id);
+          continue;
+        }
         const written = await client.putAnnotatePad(job.body.id, job.body);
         markAnnotateHubAck(job.body.id, written.updated_at ?? job.body.updated_at);
       } else if (job.op === "putProblem") {

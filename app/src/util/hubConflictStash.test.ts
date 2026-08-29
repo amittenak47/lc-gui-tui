@@ -166,9 +166,26 @@ describe("combineFootnotePair", () => {
     );
     expect(combined.notes).toHaveLength(1);
     expect(combined.notes?.[0]!.text).toBe("mine");
-    expect(combined.whiteboards).toHaveLength(1);
+    expect(combined.whiteboards).toHaveLength(2);
+    expect(combined.whiteboards?.map((row) => row.id)).toContain("wb1");
+    expect(combined.whiteboards?.map((row) => row.id).filter((id) => id !== "wb1")).toHaveLength(1);
     expect(combined.threads).toHaveLength(1);
     expect(combined.userLinks).toHaveLength(1);
+  });
+
+  it("remints a shared whiteboard pointer so both blobs can stay", () => {
+    const remints: Record<string, string> = {};
+    const combined = combineFootnotePair(
+      note("a", "here", { whiteboards: [board("wb1")] }),
+      note("a", "there", { whiteboards: [board("wb1")] }),
+      remints,
+    );
+    expect(combined.whiteboards).toHaveLength(2);
+    expect(combined.whiteboards?.[0]!.id).toBe("wb1");
+    const fresh = combined.whiteboards?.[1]!.id;
+    expect(fresh).toBeTruthy();
+    expect(fresh).not.toBe("wb1");
+    expect(remints.wb1).toBe(fresh);
   });
 
   it("takes the later edit time, and invents one for neither", () => {
