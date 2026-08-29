@@ -118,6 +118,7 @@ function NoteRow({
       ]
         .filter(Boolean)
         .join(" ")}
+      data-note-id={note.id}
       data-pick={kept ? "keep" : dropped ? "drop" : "undecided"}
       onClick={() => onFocus(note.id)}
     >
@@ -542,24 +543,25 @@ export function HubConflictSplit({
     const verdict = paneVerdict(side);
     const label = sideLabel(side);
     const keepBlocked = side === "server" && serverMissing;
+    /*
+     * The page shows what you have kept, and only that.
+     *
+     * ✓ on a side draws that side's copy in that side's pane; ✕ and undecided
+     * draw nothing. So a row starts with neither pane showing anything, which
+     * is the honest picture of a change nobody has answered for yet, and the
+     * page fills in as you decide — one side, the other, or both. A column ✓
+     * at the top is the same rule applied to every row at once.
+     *
+     * Deliberately not driven by focus. Tapping a row is asking to *see* it —
+     * it scrolls that page in and opens the row's hub — and a tap that also
+     * drew the mark made the page disagree with the ticks beside it, which is
+     * the one thing this view has to get right.
+     */
     const keptNotes = rows
       .map((row) => (pickOf(picks, row.id, side) === true ? (side === "local" ? row.local : row.server) : null))
       .filter((note): note is DocFootnote => Boolean(note));
-    /*
-     * Tapping a row draws that copy, before any ✓.
-     *
-     * The row tap only scrolled to the page, so the pane you were sent to was
-     * blank where the mark should be — you had to keep it to find out what you
-     * were keeping. Focus is a question, not an answer: this previews the copy
-     * under the cursor and nothing about the choice changes. A dropped row
-     * still previews when you tap it, and is still dropped.
-     */
     const focusedRow = focusedId === INK_ROW_ID ? null : rows.find((row) => row.id === focusedId);
     const focusedNote = focusedRow ? (side === "local" ? focusedRow.local : focusedRow.server) : null;
-    const previewNotes =
-      focusedNote && !keptNotes.some((note) => note.id === focusedNote.id)
-        ? [...keptNotes, focusedNote]
-        : keptNotes;
     return (
       <section className="lc-hub-conflict-pane" data-side={side} data-verdict={verdict}>
         <header className="lc-hub-conflict-pane-head">
@@ -615,11 +617,9 @@ export function HubConflictSplit({
           <ConflictPagePreview
             hash={docHash}
             page={focusPage}
-            notes={previewNotes}
+            notes={keptNotes}
             inkPages={side === "local" ? conflict.localInk : conflict.serverInk}
-            showInk={
-              pickOf(picks, INK_ROW_ID, side) === true || focusedId === INK_ROW_ID
-            }
+            showInk={pickOf(picks, INK_ROW_ID, side) === true}
             bytes={bytes}
             filmScope={filmScopeBase ? `${filmScopeBase}-${side}` : undefined}
             sourceText={
