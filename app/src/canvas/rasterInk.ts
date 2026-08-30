@@ -1702,7 +1702,7 @@ function drawRibbonStrokeFrom(
   addHardExtras(ctx);
   ctx.fill();
 
-  stampBlotDiscs(ctx, prepared, pixelScale, blotBlend, maxAlpha);
+  stampBlotDiscs(ctx, prepared, pixelScale, blotBlend, maxAlpha, color);
   ctx.globalAlpha = 1;
 }
 
@@ -1734,6 +1734,7 @@ function stampBlotDiscs(
   pixelScale: number,
   blend: number,
   alpha: number,
+  color?: string,
 ): void {
   if (blend <= 1e-3) return;
   const amount = clamp01(blend);
@@ -1744,6 +1745,20 @@ function stampBlotDiscs(
     BLOT_STAMP_SPACING_SPARSE -
     (BLOT_STAMP_SPACING_SPARSE - BLOT_STAMP_SPACING_DENSE) * amount;
 
+  /*
+   * Each stamp is a soft-rimmed disc, not a hard dot.
+   *
+   * A hard circle at the ribbon's own width reads as a bead threaded on the
+   * line -- you see a row of spots rather than grain, because its edge lands
+   * exactly where nothing else is changing. Fading the outer part of the disc
+   * out means neighbouring stamps cross-fade into one another and into the
+   * ribbon, so what builds up is density rather than an outline. `rimFrac` is
+   * the rim the blot dial has always described and no call site ever drew:
+   * a firmer core low on the dial, a wider, softer edge high on it.
+   */
+  const { r, g, b } = inkColorRgb(color ?? String(ctx.fillStyle));
+  const rimFrac = 0.28 + 0.42 * amount;
+  const prevFill = ctx.fillStyle;
   ctx.globalAlpha = alpha;
   let carried = Infinity;
   let stamped = 0;
@@ -1759,10 +1774,23 @@ function stampBlotDiscs(
     if (carried < half * spacingFrac) continue;
     carried = 0;
     stamped++;
+    const core = Math.max(0, half * (1 - rimFrac));
+    const gradient = ctx.createRadialGradient(
+      points[index].x,
+      points[index].y,
+      core,
+      points[index].x,
+      points[index].y,
+      half,
+    );
+    gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 1)`);
+    gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+    ctx.fillStyle = gradient;
     ctx.beginPath();
     ctx.arc(points[index].x, points[index].y, half, 0, Math.PI * 2);
     ctx.fill();
   }
+  ctx.fillStyle = prevFill;
 }
 
 /** Split a stroke into paintable runs, starting at `fromIndex`. */

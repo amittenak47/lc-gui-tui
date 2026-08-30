@@ -1786,17 +1786,34 @@ describe("speed-ink ribbon coalesce / densify / tip split", () => {
     expect(start).toBeLessThan(pts.length);
   });
 
-  it("speed-ink stroke paints without soft radial boundary discs", () => {
-    // Long enough to leave disc-primary; wiggly tip would previously soft-fade.
-    const pts = points(
-      [0, 0],
-      [15, 2],
-      [30, -1],
-      [45, 3],
-      [60, 0],
-      [75, 2],
-      [90, 0],
-    );
+  /*
+   * Blot Off is flat ink: one path, no soft edges anywhere. Blot On is the
+   * opposite by design -- each stamp fades at its rim so neighbouring stamps
+   * cross-fade into one another and into the ribbon, which is what makes the
+   * build-up read as grain instead of a row of beads threaded on the line.
+   */
+  it("paints no soft radial edges when blot is off", () => {
+    const pts = points([0, 0], [15, 2], [30, -1], [45, 3], [60, 0], [75, 2], [90, 0]);
+    const op: InkOp = {
+      kind: "draw",
+      color: "#112233",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      points: pts,
+    };
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    expect(drawCtx.radialGradients).toBe(0);
+    expect(drawCtx.fillCount).toBe(1);
+  });
+
+  it("gives every blot stamp a soft rim so they blend rather than bead", () => {
+    const pts = points([0, 0], [15, 2], [30, -1], [45, 3], [60, 0], [75, 2], [90, 0]);
     const op: InkOp = {
       kind: "draw",
       color: "#112233",
@@ -1806,13 +1823,15 @@ describe("speed-ink ribbon coalesce / densify / tip split", () => {
       pressureSensitive: false,
       speedInk: 1,
       speedBlotBlend: 1,
+      speedFade: 0,
       points: pts,
     };
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
-    // Soft boundary discs used createRadialGradient; hard silhouette path does not.
-    expect(drawCtx.radialGradients).toBe(0);
-    expect(drawCtx.fillCount).toBeGreaterThan(0);
+    expect(drawCtx.radialGradients).toBeGreaterThan(0);
+    // Solid at the core, gone at the rim.
+    expect(drawCtx.colorStops).toContain("rgba(17, 34, 51, 1)");
+    expect(drawCtx.colorStops).toContain("rgba(17, 34, 51, 0)");
   });
 });
 
