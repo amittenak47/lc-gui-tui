@@ -94,4 +94,16 @@ describe("collectDevicePrefsBlob", () => {
   it("includes themeId", () => {
     expect(collectDevicePrefsBlob()).toEqual(expect.objectContaining({ themeId: expect.any(String) }));
   });
+
+  it("includes inkSpeedFade", () => {
+    expect(collectDevicePrefsBlob()).toEqual(
+      expect.objectContaining({ inkSpeedFade: expect.any(Number) }),
+    );
+  });
+
+  it("includes inkSpeedBodyAccent", () => {
+    expect(collectDevicePrefsBlob()).toEqual(
+      expect.objectContaining({ inkSpeedBodyAccent: expect.any(Number) }),
+    );
+  });
 });

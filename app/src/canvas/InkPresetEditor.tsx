@@ -39,6 +39,10 @@ import {
 import {
   speedBlotBlendFromPercent,
   speedBlotBlendToPercent,
+  speedBodyAccentFromPercent,
+  speedBodyAccentToPercent,
+  speedFadeFromPercent,
+  speedFadeToPercent,
   speedInkFromPercent,
   speedInkToPercent,
 } from "../util/inkSpeedPref";
@@ -368,11 +372,22 @@ function DrawKnobs({
     <SettingsBlock
       title="Stroke"
       hint={
-        <>
-          Nib width, how full the ink sits, whether the stylus can thin the line, and a
-          straight-stroke lock. Fullness only applies when pressure is on. Saved on this
-          device only.
-        </>
+        snap.pressureSensitive ? (
+          <>
+            Pressure is on: how hard you press changes how dark the ink is, not
+            how wide. A light touch is paler, a firm press is solid. Ink fullness
+            is a flat decay over how far you have written — 100% stays wet,
+            0% dries out along the stroke, which is why 100% looks bolder.
+            Pressure clip (below) is how hard a press counts as solid. Saved on
+            this device only.
+          </>
+        ) : (
+          <>
+            Nib width and a straight-stroke lock. The starburst turns on stylus
+            pressure: how hard you press then changes darkness, not width. Saved
+            on this device only.
+          </>
+        )
       }
     >
       <div className="lc-preset-sheet-draw">
@@ -428,36 +443,39 @@ function PhysicsKnobs({
   const clipPct = pressureClipToPercent(snap.pressureClip);
   return (
     <>
-      <SettingsBlock
-        title="Pressure clip"
-        hint={
-          <>
-            How hard you press before the pen reads as &ldquo;full&rdquo; pressure. Lower
-            values make light strokes reach max ink sooner — useful on a stiff nib or a tablet
-            that reports low pressure. Saved on this device only.
-          </>
-        }
-      >
-        <SettingsRange
-          label="Pressure clip"
-          min={30}
-          max={100}
-          step={1}
-          value={clipPct}
-          onChange={(n) =>
-            onChange({ ...snap, pressureClip: pressureClipFromPercent(n) })
+      {snap.pressureSensitive && (
+        <SettingsBlock
+          title="Pressure clip"
+          hint={
+            <>
+              How hard a press counts as solid ink — a threshold on darkness,
+              not width. 100% means you have to press fully for full opacity;
+              30% lets a lighter press look just as dark. Saved on this device
+              only.
+            </>
           }
-        />
-      </SettingsBlock>
+        >
+          <SettingsRange
+            label="Pressure clip"
+            min={30}
+            max={100}
+            step={1}
+            value={clipPct}
+            onChange={(n) =>
+              onChange({ ...snap, pressureClip: pressureClipFromPercent(n) })
+            }
+          />
+        </SettingsBlock>
+      )}
 
       <SettingsBlock
         title="Speed ink"
         hint={
           <>
-            Let the pace of your hand change what the nib leaves behind — ink pools
-            where you dwell and thins out where you run, the way it does on paper.
-            Off leaves the stroke the same weight however fast you write. Saved on
-            this device only.
+            Same pen as Off at a normal writing pace: slow down and the line
+            fattens, speed up and it thins. Body accent (below) is a modifier
+            of this dial. Speed blot and Speed fade are separate and work even
+            when this is Off. Saved on this device only.
           </>
         }
       >
@@ -474,26 +492,76 @@ function PhysicsKnobs({
 
       {speedPct > 0 && (
         <SettingsBlock
-          title="Speed blot blend"
+          title="Body accent"
           hint={
             <>
-              Soft rim on the dwell pool and how fast it spreads from a small
-              core out to the tip — not a halo past the stroke. 0% keeps a hard
-              expanding disc; 100% softens the rim and grows faster. Saved on
+              Strength of the mid-stroke width wiggle while Speed ink is on: a
+              bit slow fattens, a bit fast thins. A full stop and a sprint stay
+              on the Speed ink line, so this does not blob the endpoints. Off
+              leaves Speed ink as the linear rest-to-sprint line. Saved on
               this device only.
             </>
           }
         >
           <SettingsRange
-            label="Speed blot blend"
+            label="Body accent"
             min={0}
             max={100}
             step={5}
-            value={speedBlotBlendToPercent(snap.blot)}
-            onChange={(n) => onChange({ ...snap, blot: speedBlotBlendFromPercent(n) })}
+            value={speedBodyAccentToPercent(snap.body ?? 0)}
+            display={
+              speedBodyAccentToPercent(snap.body ?? 0) === 0
+                ? "Off"
+                : `${speedBodyAccentToPercent(snap.body ?? 0)}%`
+            }
+            onChange={(n) =>
+              onChange({ ...snap, body: speedBodyAccentFromPercent(n) })
+            }
           />
         </SettingsBlock>
       )}
+
+      <SettingsBlock
+        title="Speed blot"
+        hint={
+          <>
+            Graphite pencil: overlapping interleaved discs instead of a flat
+            stroke. Off keeps a solid ribbon. 100% is the full pencil pool.
+            Saved on this device only.
+          </>
+        }
+      >
+        <SettingsRange
+          label="Speed blot"
+          min={0}
+          max={100}
+          step={5}
+          value={speedBlotBlendToPercent(snap.blot)}
+          display={speedBlotBlendToPercent(snap.blot) === 0 ? "Off" : `${speedBlotBlendToPercent(snap.blot)}%`}
+          onChange={(n) => onChange({ ...snap, blot: speedBlotBlendFromPercent(n) })}
+        />
+      </SettingsBlock>
+      <SettingsBlock
+        title="Speed fade"
+        hint={
+          <>
+            A pace gradient: ink pools when you write slowly and goes faint when
+            you write fast. Not the same as Ink fullness, which dries by how far
+            you have travelled, not how fast. Off keeps full ink. Saved on this
+            device only.
+          </>
+        }
+      >
+        <SettingsRange
+          label="Speed fade"
+          min={0}
+          max={100}
+          step={5}
+          value={speedFadeToPercent(snap.fade)}
+          display={speedFadeToPercent(snap.fade) === 0 ? "Off" : `${speedFadeToPercent(snap.fade)}%`}
+          onChange={(n) => onChange({ ...snap, fade: speedFadeFromPercent(n) })}
+        />
+      </SettingsBlock>
 
       <SettingsBlock
         title="Ink boldness"
@@ -521,8 +589,9 @@ function PhysicsKnobs({
         hint={
           <>
             How much of the shake to take out of a pen stroke. Higher steadies a
-            shaky hand; lower keeps every kink you actually drew. Saved on this
-            device only.
+            shaky hand; lower keeps every kink you actually drew. With speed ink
+            on, width still tapers along the stroke instead of stepping into
+            blocks. Saved on this device only.
           </>
         }
       >

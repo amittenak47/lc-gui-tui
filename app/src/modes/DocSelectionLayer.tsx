@@ -70,6 +70,7 @@ import {
   isPageCoverRect,
   finalizeMarquee,
   padQuoteRect,
+  pdfPageNumberOf,
   localRectCoversHost,
   localRects,
   scaleOf,
@@ -90,6 +91,7 @@ import {
 import { currentInkPalette } from "../util/inkPaletteHistory";
 import { footnoteThemeVars } from "../util/footnoteTheme";
 import { isAndroidDevice } from "../util/androidDevice";
+import { fillPdfQuoteText } from "./pdfQuoteText";
 
 /** How far into the edge a drag has to reach before the page starts moving. */
 const SELECT_EDGE_PX = 36;
@@ -979,7 +981,20 @@ export function DocSelectionLayer({
         setHitRects([]);
         return;
       }
-      confirmMarquee(done, rect);
+      if (done.text.trim()) {
+        confirmMarquee(done, rect);
+        return;
+      }
+      const page = pdfPageNumberOf(root);
+      if (page == null || !paletteScope) {
+        confirmMarquee(done, rect);
+        return;
+      }
+      void fillPdfQuoteText(paletteScope, page).then((ok) => {
+        if (!body.isConnected) return;
+        const retry = ok ? finalizeMarquee(body, rect, root, scope) : null;
+        confirmMarquee(retry ?? done, rect);
+      });
     };
 
     const onPointerUp = (event: PointerEvent) => finishHold(event, true);
@@ -1009,7 +1024,7 @@ export function DocSelectionLayer({
       window.removeEventListener("pointercancel", onPointerCancel, true);
       clearGesture();
     };
-  }, [enabled, highlighting, subMarkArmed, subMarkParent, clearGesture, dismiss, paintMarquee, confirmMarquee]);
+  }, [enabled, highlighting, subMarkArmed, subMarkParent, clearGesture, dismiss, paintMarquee, confirmMarquee, paletteScope]);
 
   useEffect(() => {
     const onDown = (event: PointerEvent) => {

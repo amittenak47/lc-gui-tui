@@ -334,12 +334,19 @@ describe("speed ink", () => {
     expect(inkSlowness(1e-6)).toBeLessThanOrEqual(1);
   });
 
-  it("does nothing at all when the dial is off", () => {
+    it("does nothing at all when the dial is off", () => {
     for (const slowness of [0, 0.25, 0.5, 0.75, 1]) {
       expect(inkSpeedWidthGain(slowness, 0)).toBe(1);
       expect(inkSpeedAlphaGain(slowness, 0)).toBe(1);
+      expect(inkSpeedAlphaGain(slowness, 1, 0)).toBe(1);
     }
     expect(inkLineWidth(2, 0, false, 1, 0)).toBeCloseTo(inkLineWidth(2, 0, false));
+  });
+
+  it("keeps ordinary writing pace the same width as speed-off, even at 5%", () => {
+    expect(inkLineWidth(2, 0, false, INK_SLOWNESS_NEUTRAL, 0.05)).toBeCloseTo(
+      inkLineWidth(2, 0, false),
+    );
   });
 
   it("swells a dawdling nib and starves a flicking one", () => {
@@ -361,29 +368,67 @@ describe("speed ink", () => {
     expect(half).toBeLessThan(full);
   });
 
+  it("does nothing when Speed ink is off, even if body accent is 100%", () => {
+    for (const slowness of [0, 0.25, 0.5, 0.75, 1]) {
+      expect(inkSpeedWidthGain(slowness, 0, 1)).toBe(1);
+    }
+  });
+
+  it("fattens a bit-slow mid-stroke without bloating a full stop past Speed ink", () => {
+    const rest = inkSpeedWidthGain(1, 0.05, 1);
+    const midSlow = inkSpeedWidthGain(0.75, 0.05, 1);
+    const midFast = inkSpeedWidthGain(0.25, 0.05, 1);
+    expect(rest).toBeCloseTo(inkSpeedWidthGain(1, 0.05, 0));
+    expect(midSlow).toBeGreaterThan(inkSpeedWidthGain(0.75, 0.05, 0));
+    expect(midFast).toBeLessThan(inkSpeedWidthGain(0.25, 0.05, 0));
+    expect(midSlow).toBeGreaterThan(rest);
+  });
+
+  it("scales body accent only while Speed ink is on", () => {
+    const half = inkSpeedWidthGain(0.75, 0.05, 0.5);
+    const full = inkSpeedWidthGain(0.75, 0.05, 1);
+    expect(full).toBeGreaterThan(half);
+    expect(inkSpeedWidthGain(1, 0.05, 1)).toBeCloseTo(inkSpeedWidthGain(1, 0.05, 0));
+  });
+
   it("never asks for more than opaque ink on a full dial", () => {
-    const maxSlow = inkStrokeAlpha(1, 0, false, 0, 1, 1);
+    const maxSlow = inkStrokeAlpha(1, 0, false, 0, 1, 1, 1, 1);
     expect(maxSlow).toBeLessThanOrEqual(1);
     // BASE * (1 + RANGE) leaves headroom under the clip.
     expect(maxSlow).toBeCloseTo(INK_SPEED_ALPHA_BASE * (1 + 0.5), 2);
   });
 
-  it("reads neutral pace as the speed-alpha base when speed ink is on", () => {
-    expect(inkStrokeAlpha(1, 0, false, 0, INK_SLOWNESS_NEUTRAL, 1)).toBeCloseTo(
+  it("reads neutral pace as the speed-alpha base when fade is full", () => {
+    expect(inkStrokeAlpha(1, 0, false, 0, INK_SLOWNESS_NEUTRAL, 1, 1, 1)).toBeCloseTo(
       INK_SPEED_ALPHA_BASE,
     );
   });
 
+  it("keeps full ink at 5% speed when fade is off", () => {
+    expect(inkStrokeAlpha(1, 0, false, 0, INK_SLOWNESS_NEUTRAL, 0.05, 1, 0)).toBe(1);
+    expect(inkSpeedAlphaGain(INK_SLOWNESS_NEUTRAL, 0.05, 0)).toBe(1);
+  });
+
+  it("washes at fade 100% even when speed ink is off", () => {
+    expect(inkSpeedAlphaGain(INK_SLOWNESS_NEUTRAL, 0, 1)).toBeCloseTo(INK_SPEED_ALPHA_BASE);
+  });
+
+  it("interpolates the old wash when fade is partial", () => {
+    expect(inkSpeedAlphaGain(INK_SLOWNESS_NEUTRAL, 1, 0.5)).toBeCloseTo(
+      1 + (INK_SPEED_ALPHA_BASE - 1) * 0.5,
+    );
+  });
+
   it("darkens slow strokes more than fast ones at the same alpha gain", () => {
-    const slowGain = inkSpeedAlphaGain(0.78, 1);
-    const fastGain = inkSpeedAlphaGain(0.22, 1);
+    const slowGain = inkSpeedAlphaGain(0.78, 1, 1);
+    const fastGain = inkSpeedAlphaGain(0.22, 1, 1);
     expect(slowGain / fastGain).toBeGreaterThan(1.25);
   });
 
   it("darkens a slow stroke once the nib has drained a little", () => {
     const drained = 200;
-    const slow = inkStrokeAlpha(0.4, 0, false, drained, 1, 1);
-    const fast = inkStrokeAlpha(0.4, 0, false, drained, 0, 1);
+    const slow = inkStrokeAlpha(0.4, 0, false, drained, 1, 1, 1, 1);
+    const fast = inkStrokeAlpha(0.4, 0, false, drained, 0, 1, 1, 1);
     expect(slow).toBeGreaterThan(fast);
   });
 
@@ -1112,6 +1157,8 @@ function inkDrawContext() {
   let strokeCount = 0;
   let radialGradients = 0;
   const arcRadii: number[] = [];
+  const fillAlphas: number[] = [];
+  const colorStops: string[] = [];
   let pen = { x: 0, y: 0 };
 
   const map = (x: number, y: number) => ({
@@ -1159,12 +1206,15 @@ function inkDrawContext() {
     },
     fill() {
       fillCount++;
+      fillAlphas.push(alpha);
     },
     createRadialGradient(_x0: number, _y0: number, _r0: number, _x1: number, _y1: number, r1: number) {
       radialGradients++;
       arcRadii.push(r1);
       return {
-        addColorStop() {},
+        addColorStop(_t: number, color: string) {
+          colorStops.push(color);
+        },
       };
     },
     save() {},
@@ -1180,6 +1230,8 @@ function inkDrawContext() {
     strokes,
     caps,
     arcRadii,
+    fillAlphas,
+    colorStops,
     get strokeCount() {
       return strokeCount;
     },
@@ -1229,11 +1281,15 @@ describe("inkDiscRadii / dwell growth", () => {
     const manyPts: Array<[number, number]> = [];
     for (let i = 0; i < 50; i++) manyPts.push([0.01 * (i % 3), 0.01 * ((i + 1) % 3)]);
     const many = dwellBlotGrowT(points(...manyPts), tipR, 0.5);
-    expect(one).toBe(0);
-    expect(few).toBeGreaterThan(one);
-    expect(few).toBeLessThan(0.35);
+    expect(one).toBe(1);
+    expect(few).toBeGreaterThanOrEqual(0.85);
+    expect(few).toBeLessThanOrEqual(1);
     expect(many).toBeGreaterThan(few);
     expect(many).toBeGreaterThan(0.7);
+  });
+
+  it("keeps a moving stroke at full tip", () => {
+    expect(dwellBlotGrowT(points([0, 0], [40, 0], [80, 0]), 4, 0.5)).toBe(1);
   });
 });
 
@@ -1270,7 +1326,37 @@ describe("paintInkDisc tip vs join", () => {
     expect(Math.max(...drawCtx.arcRadii)).toBeCloseTo(4);
   });
 
-  it("short-path / tip-down stroke paints hard with high blot blend", () => {
+  it("does not cut disc centre alpha when blot blend is 1", () => {
+    const drawCtx = inkDrawContext();
+    paintInkDisc(drawCtx.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 1, "#112233", true);
+    expect(drawCtx.colorStops[0]).toBe("rgba(17, 34, 51, 0.8)");
+  });
+
+  it("short-path / tip-down stroke paints a full tip, not a 4% core", () => {
+    const op: InkOp = {
+      kind: "draw",
+      color: "#112233",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 1,
+      speedFade: 0,
+      points: points([10, 10]),
+    };
+    const tipR = inkLineWidth(8, 0, false, INK_SLOWNESS_NEUTRAL, 1) / 2;
+    const hairline = inkDiscRadii(tipR, 1, 0).outerR;
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    expect(drawCtx.radialGradients).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(1);
+    expect(drawCtx.arcRadii[0]).toBeCloseTo(tipR);
+    expect(drawCtx.arcRadii[0]).toBeGreaterThan(hairline * 4);
+    expect(drawCtx.fillAlphas[0]).toBe(1);
+  });
+
+  it("keeps the old 0.55 wash on speed-ink strokes that never stamped fade", () => {
     const op: InkOp = {
       kind: "draw",
       color: "#112233",
@@ -1284,9 +1370,30 @@ describe("paintInkDisc tip vs join", () => {
     };
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
+    expect(drawCtx.fillAlphas[0]).toBeCloseTo(INK_SPEED_ALPHA_BASE);
+  });
+
+  it("tapers speed-ink width with blot off instead of earthworm runs", () => {
+    const op: InkOp = {
+      kind: "draw",
+      color: "#112233",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      points: [
+        { x: 0, y: 0, pressure: NO_PRESSURE, slowness: 1 },
+        { x: 0, y: 80, pressure: NO_PRESSURE, slowness: 0 },
+      ],
+    };
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
     expect(drawCtx.radialGradients).toBe(0);
-    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(1);
-    expect(drawCtx.arcRadii[0]).toBeLessThan(2);
+    expect(drawCtx.strokeCount).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThan(1);
   });
 });
 
@@ -1541,6 +1648,7 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
         pressureClip: 1,
         pressureSensitive: false,
         speedInk: 0.5,
+        speedBlotBlend: 0.55,
         points: stylusPoints(0.5, [0, 0], [50, 0], [50, 50]).map((p) => ({
           ...p,
           slowness: INK_SLOWNESS_NEUTRAL,

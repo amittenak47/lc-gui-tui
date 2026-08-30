@@ -327,6 +327,26 @@ export function pdfShouldPreempt(
   return rank(head) < rank(flight);
 }
 
+/**
+ * Claim a text fill so the pump will not pick the same page again until the
+ * work finishes. `settle(false)` on abort / throw so the next idle turn retries;
+ * `settle(true)` keeps the claim (including a successful empty layer).
+ */
+export function startPdfTextFillClaim(
+  filled: Set<number>,
+  page: number,
+): { settle: (ok: boolean) => void } {
+  filled.add(page);
+  let settled = false;
+  return {
+    settle(ok: boolean) {
+      if (settled) return;
+      settled = true;
+      if (!ok) filled.delete(page);
+    },
+  };
+}
+
 /** What the pump can tell about one page's text layer. */
 export interface PdfPageTextState {
   /** The page has a slot in the stack. */

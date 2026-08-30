@@ -407,6 +407,14 @@ export function bandFromLocalPoints(
   return { left, top, width, height };
 }
 
+/** 1-based PDF page on a scope root, or null when this is not a PDF slot. */
+export function pdfPageNumberOf(root: HTMLElement): number | null {
+  const slot = root.closest("[data-pdf-page]");
+  if (!(slot instanceof HTMLElement)) return null;
+  const n = Number(slot.getAttribute("data-pdf-page"));
+  return n >= 1 ? n : null;
+}
+
 /** Scope root under a viewport point, or the body. */
 export function scopeRootAtPoint(
   body: HTMLElement,

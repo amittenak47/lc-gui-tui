@@ -31,7 +31,7 @@ export function InkFullnessSlider({
       min={0}
       max={100}
       step={5}
-      label="Ink"
+      label="Fullness"
       format={(v) => `${v}%`}
       enabled={enabled}
     />

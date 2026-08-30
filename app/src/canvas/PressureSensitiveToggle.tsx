@@ -13,7 +13,16 @@ export function PressureSensitiveToggle({ enabled, onChange }: PressureSensitive
           ? "lc-tool lc-tool-mini lc-tool-active lc-pressure-toggle"
           : "lc-tool lc-tool-mini lc-pressure-toggle"
       }
-      aria-label="Pressure sensitive pen"
+      aria-label={
+        enabled
+          ? "Pressure sensitive on: stylus changes ink darkness, not width"
+          : "Pressure sensitive off"
+      }
+      title={
+        enabled
+          ? "Harder press = darker ink, not a fatter line"
+          : "Turn on stylus pressure (darkness, not width)"
+      }
       aria-pressed={enabled}
       onClick={() => onChange(!enabled)}
     >

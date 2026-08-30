@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ERASER_WIDTH_MAX } from "../canvas/rasterInk";
 import { selectHoldYieldsToScroll } from "./gesture";
+import { loadInkSpeedBodyAccent, loadInkSpeedFade } from "./inkSpeedPref";
 import { loadInkToolPrefs } from "./inkToolPrefs";
 import { TEST_STRIP_POINTS, testStripDrawOp } from "./inkPresetStrip";
 import {
@@ -43,6 +44,8 @@ const draw: InkDrawSnapshot = {
   smoothingMode: "lift",
   speed: 0,
   blot: 0.55,
+  fade: 0,
+  body: 0,
   boldness: 1,
 };
 
@@ -72,6 +75,48 @@ describe("inkToolPresets", () => {
     expect(loadInkToolPrefs().inkColor).toBe("#6d7eae");
     expect(loadInkToolPresets().globalDraw.width).toBe(globalWidth);
     expect(loadInkToolPresets().lastWedge.pen).toBe(2);
+  });
+
+  it("treats an old stored wedge without fade as 0", () => {
+    const store = loadInkToolPresets();
+    const { fade: _omit, ...old } = draw;
+    localStorage.setItem(
+      "whiteboard.inkToolPresets.v2",
+      JSON.stringify({
+        ...store,
+        custom: { ...store.custom, pen: [old, null, null, null, null] },
+      }),
+    );
+    const loaded = loadInkToolPresets();
+    expect((loaded.custom.pen[0] as InkDrawSnapshot).fade).toBe(0);
+  });
+
+  it("treats an old stored wedge without body accent as 0", () => {
+    const store = loadInkToolPresets();
+    const { body: _omit, ...old } = draw;
+    localStorage.setItem(
+      "whiteboard.inkToolPresets.v2",
+      JSON.stringify({
+        ...store,
+        custom: { ...store.custom, pen: [old, null, null, null, null] },
+      }),
+    );
+    const loaded = loadInkToolPresets();
+    expect((loaded.custom.pen[0] as InkDrawSnapshot).body).toBe(0);
+  });
+
+  it("applying a wedge writes speed fade onto the live key", () => {
+    let store = loadInkToolPresets();
+    store = saveWedge(store, "pen", 1, { ...draw, speed: 0.2, fade: 0.4 });
+    store = applyWedge(store, "pen", 1);
+    expect(loadInkSpeedFade()).toBe(0.4);
+  });
+
+  it("applying a wedge writes body accent onto the live key", () => {
+    let store = loadInkToolPresets();
+    store = saveWedge(store, "pen", 1, { ...draw, speed: 0.05, body: 0.8 });
+    store = applyWedge(store, "pen", 1);
+    expect(loadInkSpeedBodyAccent()).toBe(0.8);
   });
 
   it("applying Global restores stored defaults after a custom wedge", () => {
@@ -248,6 +293,9 @@ describe("test strip", () => {
     expect(a?.points).toHaveLength(TEST_STRIP_POINTS.length);
     expect(wider?.points).toHaveLength(a?.points.length ?? 0);
     expect(wider?.baseWidth).toBe(9);
+    expect(a?.speedFade).toBe(0);
+    expect(testStripDrawOp("pen", { ...draw, fade: 0.4 })?.speedFade).toBe(0.4);
+    expect(testStripDrawOp("pen", { ...draw, body: 0.7 })?.speedBodyAccent).toBe(0.7);
     expect(testStripDrawOp("eraser", eraser)).toBeNull();
   });
 });
