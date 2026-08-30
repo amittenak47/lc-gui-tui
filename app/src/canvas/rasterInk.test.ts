@@ -21,6 +21,7 @@ import {
   inkSlowness,
   inkSpeedAlphaGain,
   inkSpeedWidthGain,
+  inkSpeedBodyShape,
   inkStrokesFromOps,
   hostScrollDx,
   isHostBoundOp,
@@ -1348,6 +1349,34 @@ describe("inkDiscRadii / dwell growth", () => {
    */
   it("does not credit a travelling stroke with a finished pool", () => {
     expect(dwellBlotGrowT(points([0, 0], [40, 0], [80, 0]), 4, 0.5)).toBe(0);
+  });
+});
+
+describe("Body accent, bipolar and rest-only", () => {
+  /*
+   * The dial exists because Speed ink swells the nib wherever the hand is
+   * slow, and pen-down and lift are the slowest samples in any stroke -- so
+   * its loudest effect is round ends nobody asked for. Body scales that rest
+   * weight, in both directions.
+   */
+  it("is rest weight: full at a stop, nothing at ordinary pace or a sprint", () => {
+    expect(inkSpeedBodyShape(1)).toBeCloseTo(1);
+    expect(inkSpeedBodyShape(INK_SLOWNESS_NEUTRAL)).toBeCloseTo(0);
+    expect(inkSpeedBodyShape(0)).toBeCloseTo(0);
+  });
+
+  it("cancels the rest blob at -100 and fattens it at +100", () => {
+    const plain = inkSpeedWidthGain(1, 1, 0);
+    expect(inkSpeedWidthGain(1, 1, -1)).toBeLessThan(plain);
+    expect(inkSpeedWidthGain(1, 1, 1)).toBeGreaterThan(plain);
+    // -1 at a full stop exactly undoes Speed ink's own rest term: 1 + R(1-1).
+    expect(inkSpeedWidthGain(1, 1, -1)).toBeCloseTo(1);
+  });
+
+  it("does nothing at all while Speed ink is off", () => {
+    for (const body of [-1, -0.5, 0, 0.5, 1]) {
+      expect(inkSpeedWidthGain(1, 0, body)).toBe(1);
+    }
   });
 });
 

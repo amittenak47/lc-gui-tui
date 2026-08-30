@@ -45,6 +45,7 @@ const draw: InkDrawSnapshot = {
   speed: 0,
   blot: 0.55,
   fade: 0,
+  body: 0,
   boldness: 1,
 };
 

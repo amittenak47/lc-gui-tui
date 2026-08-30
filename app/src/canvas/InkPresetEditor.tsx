@@ -43,6 +43,9 @@ import {
   speedBlotBlendToPercent,
   speedFadeFromPercent,
   speedFadeToPercent,
+  speedBodyAccentFromPercent,
+  speedBodyAccentLabel,
+  speedBodyAccentToPercent,
   speedInkFromPercent,
   speedInkToPercent,
 } from "../util/inkSpeedPref";
@@ -532,6 +535,33 @@ function PhysicsKnobs({
           onChange={(n) => onChange({ ...snap, speed: speedInkFromPercent(n) })}
         />
       </SettingsBlock>
+
+      {snap.speed > 0 && (
+        <SettingsBlock
+          title="Body"
+          hint={
+            <>
+              Tunes Speed ink at the endpoints. Pen-down and lift are the
+              slowest samples in a stroke, so Speed ink swells the nib there:
+              left (negative) cancels that and lands the ends flat, 0 leaves
+              Speed ink as it is, right leans in and fattens them. Hidden when
+              Speed ink is Off. Saved on this device only.
+            </>
+          }
+        >
+          <SettingsRange
+            label="Body"
+            min={-100}
+            max={100}
+            step={5}
+            value={speedBodyAccentToPercent(snap.body ?? 0)}
+            display={speedBodyAccentLabel(snap.body ?? 0)}
+            onChange={(n) =>
+              onChange({ ...snap, body: speedBodyAccentFromPercent(n) })
+            }
+          />
+        </SettingsBlock>
+      )}
 
       <SettingsBlock
         title="Speed blot"

@@ -32,6 +32,7 @@ export function testStripDrawOp(
     speedInk: snap.speed,
     speedBlotBlend: snap.blot,
     speedFade: snap.fade,
+    speedBodyAccent: snap.body ?? 0,
     boldness: snap.boldness,
     highlight: kind === "highlighter",
     points: TEST_STRIP_POINTS,

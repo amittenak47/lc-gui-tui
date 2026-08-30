@@ -52,12 +52,18 @@ import {
   INK_SPEED_BLOT_BLEND_EVENT,
   INK_SPEED_DEFAULT,
   INK_SPEED_FADE_DEFAULT,
+  INK_SPEED_BODY_ACCENT_DEFAULT,
+  INK_SPEED_BODY_ACCENT_EVENT,
+  INK_SPEED_BODY_MAX,
+  INK_SPEED_BODY_MIN,
   INK_SPEED_FADE_EVENT,
   loadInkSpeed,
   loadInkSpeedBlotBlend,
   loadInkSpeedFade,
   saveInkSpeed,
   saveInkSpeedBlotBlend,
+  loadInkSpeedBodyAccent,
+  saveInkSpeedBodyAccent,
   saveInkSpeedFade,
 } from "./inkSpeedPref";
 import {
@@ -86,6 +92,8 @@ export interface InkDrawSnapshot {
   speed: number;
   blot: number;
   fade: number;
+  /** Endpoint tuner, bipolar −1…+1. Only bites while Speed ink is on. */
+  body: number;
   boldness: number;
 }
 
@@ -137,6 +145,7 @@ export function liveDrawSnapshot(name = "Global"): InkDrawSnapshot {
     speed: loadInkSpeed(),
     blot: loadInkSpeedBlotBlend(),
     fade: loadInkSpeedFade(),
+    body: loadInkSpeedBodyAccent(),
     boldness: loadInkBoldness(),
   };
 }
@@ -162,6 +171,7 @@ export function defaultDrawSnapshot(name = "Preset"): InkDrawSnapshot {
     speed: INK_SPEED_DEFAULT,
     blot: INK_SPEED_BLOT_BLEND_DEFAULT,
     fade: INK_SPEED_FADE_DEFAULT,
+    body: INK_SPEED_BODY_ACCENT_DEFAULT,
     boldness: INK_BOLDNESS_DEFAULT,
   };
 }
@@ -219,6 +229,8 @@ function clampDraw(snap: InkDrawSnapshot): InkDrawSnapshot {
     smoothingMode: snap.smoothingMode === "live" ? "live" : "lift",
     speed: clamp(snap.speed, 0, 1),
     blot: clamp(snap.blot, 0, 1),
+    // The one knob that may go negative, so it does not share the 0..1 clamp.
+    body: clamp(snap.body ?? 0, INK_SPEED_BODY_MIN, INK_SPEED_BODY_MAX),
     fade: clamp(snap.fade, 0, 1),
     boldness: clamp(snap.boldness, INK_BOLDNESS_MIN, INK_BOLDNESS_MAX),
   };
@@ -346,12 +358,14 @@ export function writeLiveFromDraw(snap: InkDrawSnapshot, prefs: InkToolPrefs): I
   saveInkSpeed(snap.speed);
   saveInkSpeedBlotBlend(snap.blot);
   saveInkSpeedFade(snap.fade);
+  saveInkSpeedBodyAccent(snap.body ?? 0);
   saveInkBoldness(snap.boldness);
   emit("lc-ink-pressure-clip");
   emit("lc-ink-smoothing");
   emit("lc-ink-speed");
   emit(INK_SPEED_BLOT_BLEND_EVENT);
   emit(INK_SPEED_FADE_EVENT);
+  emit(INK_SPEED_BODY_ACCENT_EVENT);
   emit(INK_BOLDNESS_EVENT);
   return next;
 }
@@ -589,6 +603,7 @@ export const INK_PRESET_DEFAULTS = {
   speed: INK_SPEED_DEFAULT,
   blot: INK_SPEED_BLOT_BLEND_DEFAULT,
   fade: INK_SPEED_FADE_DEFAULT,
+  body: INK_SPEED_BODY_ACCENT_DEFAULT,
   boldness: INK_BOLDNESS_DEFAULT,
   pressureClip: PRESSURE_CLIP_DEFAULT,
   smoothing: INK_SMOOTHING_DEFAULT,
