@@ -1118,20 +1118,58 @@ export function trailingTipClusterStart(
   return start;
 }
 
+/**
+ * Fill the whole ribbon as one path, not a segment at a time.
+ *
+ * A `fill()` per segment antialiases the edge each pair of them shares twice:
+ * a boundary pixel takes coverage `a` from one and `1 - a` from the other and
+ * composites to `1 - a + a²`, 0.75 at the worst pixel. Every densified point
+ * therefore ruled a lighter hairline across the stroke, roughly every half
+ * nib, and a ribbon cross-hatched that often reads as pencil rather than ink.
+ * Painting opaque into the scratch never addressed this — that fixed alpha
+ * *stacking*, a different artefact. Measured on a straight ribbon: 66 of 375
+ * centre-row pixels short of full ink per-segment, 0 as one path.
+ *
+ * One path rasterises once, so shared edges are interior and never sampled —
+ * and it is one `fill()` for the stroke instead of one per segment. Segments
+ * go in as two triangles rather than a quad, each wound the same direction: a
+ * nonzero fill unions same-wound subpaths, but a subpath that flipped
+ * orientation would cancel against its neighbour and punch a hole, and a quad
+ * that crosses itself has no orientation to normalise — its signed area is
+ * zero. A triangle cannot cross itself, so it always has one.
+ */
 function fillInkRibbonQuads(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   left: readonly { x: number; y: number }[],
   right: readonly { x: number; y: number }[],
 ): void {
+  if (left.length < 2) return;
+  ctx.beginPath();
   for (let index = 0; index < left.length - 1; index++) {
-    ctx.beginPath();
-    ctx.moveTo(left[index].x, left[index].y);
-    ctx.lineTo(left[index + 1].x, left[index + 1].y);
-    ctx.lineTo(right[index + 1].x, right[index + 1].y);
-    ctx.lineTo(right[index].x, right[index].y);
-    ctx.closePath();
-    ctx.fill();
+    addWoundTriangle(ctx, left[index], left[index + 1], right[index + 1]);
+    addWoundTriangle(ctx, left[index], right[index + 1], right[index]);
   }
+  ctx.fill();
+}
+
+/** Add one closed triangle subpath, always wound the same direction. */
+function addWoundTriangle(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  c: { x: number; y: number },
+): void {
+  const twiceArea =
+    (b.x - a.x) * (b.y + a.y) + (c.x - b.x) * (c.y + b.y) + (a.x - c.x) * (a.y + c.y);
+  ctx.moveTo(a.x, a.y);
+  if (twiceArea >= 0) {
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(c.x, c.y);
+  } else {
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(b.x, b.y);
+  }
+  ctx.closePath();
 }
 
 function ribbonSideBounds(
@@ -1249,7 +1287,27 @@ function paintOpaqueRibbonThenAlpha(
   const height = maxY - minY + pad * 2;
   if (width < 1e-6 || height < 1e-6) return false;
 
-  const scratch = acquireRibbonScratch(width, height);
+  /*
+   * Rasterise at the resolution this will actually be seen at.
+   *
+   * The sides are scene units — `paintedWidth` floors at a device minimum by
+   * dividing it back down — and the scratch was sized in those units and
+   * filled under an identity transform, one pixel per scene unit. The blit
+   * then handed that bitmap to a context scaled by `zoom * dpr`, so every
+   * ribbon was drawn at 1/(zoom·dpr) of final resolution and enlarged: a 5.5×
+   * upscale on a document at 2× zoom on a dpr-2.75 tablet. Only the ribbon
+   * path paid it, which is why the flat pen stayed crisp while Speed ink went
+   * soft and grainy on the same page.
+   *
+   * Not a new cost: the direct fill this stands in for always rasterised at
+   * device resolution, and live painting only ever hands us the unpainted tail
+   * of a stroke, so the scratch stays small under the hand.
+   */
+  const scale = ribbonScratchScale(ctx, width, height);
+  const deviceW = Math.max(1, Math.ceil(width * scale));
+  const deviceH = Math.max(1, Math.ceil(height * scale));
+
+  const scratch = acquireRibbonScratch(deviceW, deviceH);
   if (!scratch) return false;
   const sctx = scratch.getContext("2d");
   if (!sctx) return false;
@@ -1257,10 +1315,12 @@ function paintOpaqueRibbonThenAlpha(
   const originX = minX - pad;
   const originY = minY - pad;
   sctx.setTransform(1, 0, 0, 1, 0, 0);
-  sctx.clearRect(0, 0, Math.ceil(width), Math.ceil(height));
+  sctx.clearRect(0, 0, deviceW, deviceH);
   sctx.globalAlpha = 1;
   sctx.fillStyle = ctx.fillStyle;
-  sctx.translate(-originX, -originY);
+  // Scene units in, device pixels out — the sides and the join stamps stay in
+  // the one space the rest of this file speaks.
+  sctx.setTransform(scale, 0, 0, scale, -originX * scale, -originY * scale);
   fillInkRibbonQuads(sctx, left, right);
   if (stampJoins) stampJoins(sctx);
 
@@ -1270,15 +1330,47 @@ function paintOpaqueRibbonThenAlpha(
     scratch as CanvasImageSource,
     0,
     0,
-    Math.ceil(width),
-    Math.ceil(height),
+    deviceW,
+    deviceH,
     originX,
     originY,
-    Math.ceil(width),
-    Math.ceil(height),
+    width,
+    height,
   );
   ctx.globalAlpha = prevAlpha;
   return true;
+}
+
+/** Longest scratch edge before we accept softness rather than a huge canvas. */
+const RIBBON_SCRATCH_MAX_PX = 4096;
+
+/**
+ * Device pixels per scene unit for the ribbon scratch, read off the live
+ * transform so callers that never took a `pixelScale` still get it right.
+ * Clamped so one enormous stroke cannot ask for a canvas the browser refuses,
+ * and so the scratch — which only ever grows — has a ceiling.
+ */
+function ribbonScratchScale(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+): number {
+  let scale = 1;
+  try {
+    const getTransform = (ctx as { getTransform?: () => DOMMatrix }).getTransform;
+    if (typeof getTransform === "function") {
+      const m = getTransform.call(ctx);
+      const sx = Math.hypot(m.a, m.b);
+      if (Number.isFinite(sx) && sx > 1e-6) scale = sx;
+    }
+  } catch {
+    /* jsdom / restricted contexts keep 1 */
+  }
+  const longest = Math.max(width, height) * scale;
+  if (longest > RIBBON_SCRATCH_MAX_PX) {
+    scale *= RIBBON_SCRATCH_MAX_PX / longest;
+  }
+  return Math.max(1e-6, scale);
 }
 
 function strokePathLength(points: readonly ScenePoint[], fromIndex = 0): number {

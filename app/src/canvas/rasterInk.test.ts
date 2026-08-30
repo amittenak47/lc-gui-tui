@@ -1374,8 +1374,41 @@ describe("paintInkDisc tip vs join", () => {
   });
 });
 
-describe("fillInkRibbon per-quad", () => {
-  it("fills one quad per segment instead of one closed polygon", () => {
+describe("fillInkRibbon seams and winding", () => {
+  /** Rebuild each triangle subpath from the recorded moveTo/lineTo pen path. */
+  function trianglesFrom(drawCtx: ReturnType<typeof inkDrawContext>) {
+    const out: Array<Array<{ x: number; y: number }>> = [];
+    // A triangle is a moveTo plus two lineTo; only lineTo is recorded.
+    for (let i = 0; i + 1 < drawCtx.strokes.length; i += 2) {
+      out.push([
+        drawCtx.strokes[i].from,
+        drawCtx.strokes[i].to,
+        drawCtx.strokes[i + 1].to,
+      ]);
+    }
+    return out;
+  }
+
+  function twiceArea(poly: Array<{ x: number; y: number }>): number {
+    let sum = 0;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      sum += (b.x - a.x) * (b.y + a.y);
+    }
+    return sum;
+  }
+
+  /*
+   * One rasterisation, two triangles per segment.
+   *
+   * A `fill()` per segment antialiases the edge each pair of them shares
+   * twice, which composites to about 0.75 coverage and rules the stroke with a
+   * lighter hairline every densified point. Measured on a straight ribbon: 66
+   * of 375 centre-row pixels short of full ink that way, 0 as one path. That
+   * cross-hatching is what made a Speed-ink ribbon read as graphite.
+   */
+  it("fills the whole ribbon in one rasterisation", () => {
     const drawCtx = inkDrawContext();
     const left = [
       { x: 0, y: 0 },
@@ -1388,12 +1421,18 @@ describe("fillInkRibbon per-quad", () => {
       { x: 20, y: 4 },
     ];
     fillInkRibbon(drawCtx.ctx, left, right, 1);
-    expect(drawCtx.fillCount).toBe(2);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(trianglesFrom(drawCtx)).toHaveLength(4);
   });
 
-  it("still fills self-crossing side polylines (no single winding cancel)", () => {
+  it("winds every subpath the same way, so nothing cancels where a stroke doubles back", () => {
     const drawCtx = inkDrawContext();
-    // Bow-tie-ish left/right: two quads still each fill once.
+    /*
+     * Bow-tie sides: the raw vertex order flips orientation across these
+     * segments, and one nonzero fill would subtract the flipped subpath and
+     * punch a hole. Quads could not be normalised here — this pair has a
+     * signed area of exactly zero, so it has no orientation to correct.
+     */
     const left = [
       { x: 0, y: 0 },
       { x: 10, y: 10 },
@@ -1405,7 +1444,10 @@ describe("fillInkRibbon per-quad", () => {
       { x: 4, y: 14 },
     ];
     fillInkRibbon(drawCtx.ctx, left, right, 1);
-    expect(drawCtx.fillCount).toBe(2);
+    const tris = trianglesFrom(drawCtx);
+    expect(tris).toHaveLength(4);
+    const signs = tris.map((t) => Math.sign(twiceArea(t)));
+    expect(signs.every((sign) => sign > 0)).toBe(true);
   });
 });
 
