@@ -1253,8 +1253,20 @@ function createRibbonScratch(width: number, height: number): RibbonScratch | nul
 }
 
 function acquireRibbonScratch(width: number, height: number): RibbonScratch | null {
-  const w = Math.max(1, Math.ceil(width));
-  const h = Math.max(1, Math.ceil(height));
+  /*
+   * Bucketed, because this only ever grows and every growth allocates a new
+   * canvas. At device resolution the requested size varies with zoom and
+   * stroke length, so an unbucketed cache reallocates constantly -- and a
+   * large canvas allocation mid-stroke is exactly the stall you feel as the
+   * pen skipping.
+   */
+  const bucket = (value: number) =>
+    Math.max(
+      RIBBON_SCRATCH_BUCKET_PX,
+      Math.ceil(value / RIBBON_SCRATCH_BUCKET_PX) * RIBBON_SCRATCH_BUCKET_PX,
+    );
+  const w = bucket(Math.max(1, Math.ceil(width)));
+  const h = bucket(Math.max(1, Math.ceil(height)));
   if (
     ribbonScratch &&
     ribbonScratch.width >= w &&
@@ -1319,6 +1331,19 @@ function paintOpaqueRibbonThenAlpha(
   pad = 4,
 ): boolean {
   if (typeof ctx.drawImage !== "function") return false;
+  /*
+   * Opaque ink needs no scratch at all.
+   *
+   * The scratch exists for one reason: at alpha < 1 a ribbon that crosses
+   * itself would stack into darker facets, so it is painted opaque once and
+   * blitted at alpha. At full opacity there is nothing to stack -- overlap is
+   * the same colour -- and the caller's direct fill is both correct and free.
+   * That matters now the scratch rasterises at device resolution: it is the
+   * same pixel count a direct fill would cover, but it also costs a clear, a
+   * blit, and sometimes a fresh canvas allocation. Skipping it for the common
+   * case is what keeps writing responsive.
+   */
+  if (alpha >= 0.999) return false;
   const { minX, minY, maxX, maxY } = ribbonSideBounds(left, right);
   if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return false;
   const width = maxX - minX + pad * 2;
@@ -1380,7 +1405,9 @@ function paintOpaqueRibbonThenAlpha(
 }
 
 /** Longest scratch edge before we accept softness rather than a huge canvas. */
-const RIBBON_SCRATCH_MAX_PX = 4096;
+const RIBBON_SCRATCH_MAX_PX = 2048;
+/** Scratch sizes round up to this, so growth reallocates rarely. */
+const RIBBON_SCRATCH_BUCKET_PX = 256;
 
 /**
  * Device pixels per scene unit for the ribbon scratch, read off the live
