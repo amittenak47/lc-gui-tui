@@ -1297,7 +1297,16 @@ function usesSpeedRibbon(op: InkDrawOp): boolean {
 
 function resolveSpeedFade(op: InkDrawOp): number {
   if (op.speedFade !== undefined) return clamp01(op.speedFade);
-  return (op.speedInk ?? 0) > 0 ? 1 : 0;
+  /*
+   * Absent means off, not "full wash".
+   *
+   * This returned 1 whenever Speed ink was on, so a stroke that never asked
+   * for fade was multiplied by `INK_SPEED_ALPHA_BASE` (0.55) anyway -- which is
+   * why switching Speed ink on quietly turned the pen grey instead of leaving
+   * it the colour the wheel says. Fade is a knob of its own; Speed ink is
+   * shape only, and may not spend the alpha budget on the writer's behalf.
+   */
+  return 0;
 }
 
 function resolveSpeedBodyAccent(op: InkDrawOp): number {
@@ -1353,7 +1362,6 @@ export function dwellBlotGrowT(
   if (points.length === 0) return 0;
   if (tipRadius < 1e-6) return 1;
   if (points.length <= 1) return 1;
-  if (!isDiscPrimaryPath(points, tipRadius * 2)) return 1;
   const tip = points[points.length - 1];
   const eps = Math.max(tipRadius * 0.25, 0.5);
   let cluster = 0;
@@ -1363,9 +1371,18 @@ export function dwellBlotGrowT(
   }
   // ~55 dwell ticks (~1.8s at 32ms) to full; blend may shorten mildly (floor 40).
   const ticksToFull = Math.max(40, 55 - 15 * clamp01(blotBlend));
-  const grown = clamp01((cluster - 1) / Math.max(1, ticksToFull));
-  // First contact is a full tip. Rest still blooms, but never from a hairline.
-  return Math.max(grown, 0.85);
+  /*
+   * The pool is however far it actually spread, and no further.
+   *
+   * Two guards used to defeat this. `!isDiscPrimaryPath(...) return 1` fired
+   * the moment the samples spread wider than the nib -- that is, the instant
+   * the pen moved -- so a pool that had crept out to a third of the nib was
+   * discarded and redrawn at full radius: the ink "assumes it was at the
+   * maximum pooling size". And flooring at 0.85 put first contact at 97.8% of
+   * full width (`1 - 0.15^2`), so a plain tap landed as a finished blot with
+   * no spread to watch. Both are gone; growth is the dwell it earned.
+   */
+  return clamp01((cluster - 1) / Math.max(1, ticksToFull));
 }
 
 function strokeClusterExtent(points: readonly ScenePoint[]): number {
@@ -1607,13 +1624,31 @@ function drawRibbonStrokeFrom(
     }
     if (capEnd && tipClusterAt >= slice.length) {
       const last = prepared.points.length - 1;
-      const radius = paintedWidth(prepared.styles[last].lineWidth, pixelScale) / 2;
-      const prev = prepared.points[last - 1];
-      const tailAngle = Math.atan2(
-        prepared.points[last].y - prev.y,
-        prepared.points[last].x - prev.x,
-      );
-      addTerminalCapSubpath(target, prepared.points[last], tailAngle, radius);
+      const half = paintedWidth(prepared.styles[last].lineWidth, pixelScale) / 2;
+      /*
+       * A pool that has started spreading keeps its size, and stays a circle.
+       *
+       * `trailingTipClusterStart` needs a few clustered samples before it will
+       * call the tail a dwell. While the pen rests, arriving samples push it
+       * back and forth across that threshold, so the terminal alternated
+       * between the grown pool and this cap -- a half-disc at the ribbon's own
+       * width. That swap, several times a second, is the flicker, and the half
+       * is why it flashes a semicircle. Measuring the dwell here too means the
+       * two agree on the radius, and the terminal is drawn round either way,
+       * so crossing the threshold changes nothing on screen.
+       */
+      const dwelt = dwellBlotGrowT(prepared.points, half, blotBlend);
+      const pooled = inkDiscRadii(half, blotBlend, dwelt).outerR;
+      if (pooled > half + 1e-6) {
+        addDiscSubpath(target, prepared.points[last], pooled);
+      } else {
+        const prev = prepared.points[last - 1];
+        const tailAngle = Math.atan2(
+          prepared.points[last].y - prev.y,
+          prepared.points[last].x - prev.x,
+        );
+        addTerminalCapSubpath(target, prepared.points[last], tailAngle, half);
+      }
     }
     if (tipClusterAt < slice.length && prepared.points.length >= 2) {
       const last = prepared.points.length - 1;
@@ -1642,7 +1677,68 @@ function drawRibbonStrokeFrom(
   addRibbonSubpaths(ctx, left, right);
   addHardExtras(ctx);
   ctx.fill();
+
+  stampBlotDiscs(ctx, prepared, pixelScale, blotBlend, maxAlpha);
   ctx.globalAlpha = 1;
+}
+
+/** Nib stamps per unit at Speed blot 0+ and at 100%, as multiples of half-width. */
+const BLOT_STAMP_SPACING_SPARSE = 3.2;
+const BLOT_STAMP_SPACING_DENSE = 0.6;
+/** Ceiling on stamps for one paint, so a long stroke cannot stall the pen. */
+const BLOT_STAMP_MAX = 400;
+
+/**
+ * Speed blot: interleaved nib stamps along the stroke, one fill each.
+ *
+ * This is the graphite. A pencil is not a flat ribbon, it is the same nib laid
+ * down over and over, and where those stamps overlap the ink builds up denser
+ * than where they do not -- the cross-hatched, grainy look. That build-up is
+ * why they are stamped individually instead of joining the ribbon's path: one
+ * path resolves overlap by winding and paints a single flat coverage, which is
+ * right for ink and wrong for pencil. It follows that the texture only shows
+ * once the stroke is not already opaque, which is why blot reads as a pencil
+ * in company with Speed fade or pressure and as a slight thickening on its own.
+ *
+ * The dial is the stamp spacing, so 5% is a sparse trail and 100% is a
+ * continuous pool. Nothing here consults Speed ink: blot is a standalone
+ * texture that any pen may switch on.
+ */
+function stampBlotDiscs(
+  ctx: CanvasRenderingContext2D,
+  prepared: { points: ScenePoint[]; styles: InkStrokeStyle[] },
+  pixelScale: number,
+  blend: number,
+  alpha: number,
+): void {
+  if (blend <= 1e-3) return;
+  const amount = clamp01(blend);
+  const points = prepared.points;
+  if (points.length < 2) return;
+
+  const spacingFrac =
+    BLOT_STAMP_SPACING_SPARSE -
+    (BLOT_STAMP_SPACING_SPARSE - BLOT_STAMP_SPACING_DENSE) * amount;
+
+  ctx.globalAlpha = alpha;
+  let carried = Infinity;
+  let stamped = 0;
+  for (let index = 0; index < points.length && stamped < BLOT_STAMP_MAX; index++) {
+    if (index > 0) {
+      carried += Math.hypot(
+        points[index].x - points[index - 1].x,
+        points[index].y - points[index - 1].y,
+      );
+    }
+    const half = paintedWidth(prepared.styles[index].lineWidth, pixelScale) / 2;
+    if (half < 1e-6) continue;
+    if (carried < half * spacingFrac) continue;
+    carried = 0;
+    stamped++;
+    ctx.beginPath();
+    ctx.arc(points[index].x, points[index].y, half, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 /** Split a stroke into paintable runs, starting at `fromIndex`. */

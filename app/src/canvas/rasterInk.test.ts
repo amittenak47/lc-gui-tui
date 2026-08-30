@@ -1323,15 +1323,85 @@ describe("inkDiscRadii / dwell growth", () => {
     const manyPts: Array<[number, number]> = [];
     for (let i = 0; i < 50; i++) manyPts.push([0.01 * (i % 3), 0.01 * ((i + 1) % 3)]);
     const many = dwellBlotGrowT(points(...manyPts), tipR, 0.5);
+    /*
+     * A short dwell is a small pool, not an almost-finished one. This asserted
+     * a 0.85 floor, which put a brief touch at 97.8% of full radius once
+     * `inkDiscRadii` eased it -- there was no spread left to watch, which is
+     * the "it thinks the first downpress was a full circle" complaint.
+     */
     expect(one).toBe(1);
-    expect(few).toBeGreaterThanOrEqual(0.85);
+    expect(few).toBeGreaterThan(0);
+    expect(few).toBeLessThan(0.5);
     expect(few).toBeLessThanOrEqual(1);
     expect(many).toBeGreaterThan(few);
     expect(many).toBeGreaterThan(0.7);
   });
 
-  it("keeps a moving stroke at full tip", () => {
-    expect(dwellBlotGrowT(points([0, 0], [40, 0], [80, 0]), 4, 0.5)).toBe(1);
+  /*
+   * Moving does not finish the pool.
+   *
+   * `dwellBlotGrowT` used to open with `if (!isDiscPrimaryPath(...)) return 1`,
+   * so the instant the samples spread past the nib -- the instant the pen
+   * moved -- a pool that had crept out to a third of the nib was thrown away
+   * and redrawn at full radius. Travelling samples have dwelled nowhere, so
+   * they have grown nothing.
+   */
+  it("does not credit a travelling stroke with a finished pool", () => {
+    expect(dwellBlotGrowT(points([0, 0], [40, 0], [80, 0]), 4, 0.5)).toBe(0);
+  });
+});
+
+describe("Speed blot stamp frequency", () => {
+  function blotOp(blot: number, speedInk = 0.5): InkOp {
+    const pts: ScenePoint[] = [];
+    for (let i = 0; i <= 60; i++) {
+      pts.push({ x: i * 6, y: 40 + Math.sin(i / 6) * 10, pressure: NO_PRESSURE });
+    }
+    return {
+      kind: "draw",
+      color: "#112233",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk,
+      speedBlotBlend: blot,
+      speedFade: 0,
+      points: pts,
+    };
+  }
+  /** Fills beyond the single ribbon path are blot stamps. */
+  function stamps(blot: number): number {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, blotOp(blot), 1);
+    return Math.max(0, drawCtx.fillCount - 1);
+  }
+
+  /*
+   * The dial is the stamp spacing, and it has to be legible across its travel.
+   * Blot used to reach the paint only as a dwell-speed tweak and a rim that no
+   * call site ever drew, so 5% and 100% laid down identical pixels and the
+   * control read as a switch.
+   */
+  it("stamps more often as the dial rises", () => {
+    const faint = stamps(0.05);
+    const mid = stamps(0.5);
+    const full = stamps(1);
+    expect(faint).toBeGreaterThan(0);
+    expect(mid).toBeGreaterThan(faint);
+    expect(full).toBeGreaterThan(mid);
+  });
+
+  /* Blot off is a plain ribbon: the one path fill, and nothing stamped on it. */
+  it("stamps nothing at all when blot is off", () => {
+    expect(stamps(0)).toBe(0);
+  });
+
+  /* Blot is standalone: it is a texture, not a mode of Speed ink. */
+  it("stamps with Speed ink off", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, blotOp(1, 0), 1);
+    expect(drawCtx.fillCount).toBeGreaterThan(1);
   });
 });
 
@@ -1398,7 +1468,17 @@ describe("paintInkDisc tip vs join", () => {
     expect(drawCtx.fillAlphas[0]).toBe(1);
   });
 
-  it("keeps the old 0.55 wash on speed-ink strokes that never stamped fade", () => {
+  /*
+   * Speed ink is shape only; it may not spend the alpha budget.
+   *
+   * `resolveSpeedFade` returned 1 whenever Speed ink was on and the stroke
+   * carried no fade of its own, so every such stroke was multiplied by
+   * `INK_SPEED_ALPHA_BASE` -- switching Speed ink on quietly turned the pen
+   * grey instead of leaving it the colour the wheel shows. Strokes written
+   * before the field existed now render at full colour rather than washed;
+   * that is the intended repair, not a side effect.
+   */
+  it("leaves a speed-ink stroke that never stamped fade at full colour", () => {
     const op: InkOp = {
       kind: "draw",
       color: "#112233",
@@ -1412,7 +1492,7 @@ describe("paintInkDisc tip vs join", () => {
     };
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
-    expect(drawCtx.fillAlphas[0]).toBeCloseTo(INK_SPEED_ALPHA_BASE);
+    expect(drawCtx.fillAlphas[0]).toBeCloseTo(1);
   });
 
   it("tapers speed-ink width with blot off instead of earthworm runs", () => {
