@@ -13,6 +13,7 @@ import {
   localRectCoversHost,
   padQuoteRect,
   scaleOf,
+  pdfPageNumberOf,
   tightClientRects,
   tightLocalRects,
   unionLocalRects,
@@ -795,5 +796,14 @@ describe("unionRectsIntoLines / unionRectsIntoBlocks", () => {
       { left: 10, top: 120, width: 80, height: 16 },
     ]);
     expect(blocks).toHaveLength(2);
+  });
+
+  it("reads the PDF page number from a scoped slot", () => {
+    const slot = document.createElement("div");
+    slot.setAttribute("data-pdf-page", "12");
+    const inner = document.createElement("div");
+    slot.append(inner);
+    expect(pdfPageNumberOf(inner)).toBe(12);
+    expect(pdfPageNumberOf(document.createElement("div"))).toBeNull();
   });
 });

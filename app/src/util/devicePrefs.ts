@@ -34,8 +34,12 @@ import {
 import {
   loadInkSpeed,
   loadInkSpeedBlotBlend,
+  loadInkSpeedFade,
+  loadInkSpeedBodyAccent,
   saveInkSpeed,
   saveInkSpeedBlotBlend,
+  saveInkSpeedFade,
+  saveInkSpeedBodyAccent,
 } from "./inkSpeedPref";
 import { loadInkToolPresets, saveInkToolPresets } from "./inkToolPresets";
 import { loadOfflineMergePolicy, saveOfflineMergePolicy } from "./offlineMerge";
@@ -97,6 +101,8 @@ export function collectDevicePrefsBlob(): Record<string, unknown> {
     inkSmoothingMode: loadInkSmoothingMode(),
     inkSpeed: loadInkSpeed(),
     inkSpeedBlotBlend: loadInkSpeedBlotBlend(),
+    inkSpeedFade: loadInkSpeedFade(),
+    inkSpeedBodyAccent: loadInkSpeedBodyAccent(),
     inkBoldness: loadInkBoldness(),
     eraserPartial: loadEraserPartial(),
     autosaveMs: loadAutosaveInterval(),
@@ -131,6 +137,10 @@ export function applyDevicePrefsBlob(prefs: Record<string, unknown>): void {
   }
   if (typeof prefs.inkSpeed === "number") saveInkSpeed(prefs.inkSpeed);
   if (typeof prefs.inkSpeedBlotBlend === "number") saveInkSpeedBlotBlend(prefs.inkSpeedBlotBlend);
+  if (typeof prefs.inkSpeedFade === "number") saveInkSpeedFade(prefs.inkSpeedFade);
+  if (typeof prefs.inkSpeedBodyAccent === "number") {
+    saveInkSpeedBodyAccent(prefs.inkSpeedBodyAccent);
+  }
   if (typeof prefs.inkBoldness === "number") saveInkBoldness(prefs.inkBoldness);
   if (typeof prefs.eraserPartial === "boolean") saveEraserPartial(prefs.eraserPartial);
   if (typeof prefs.autosaveMs === "number") saveAutosaveInterval(prefs.autosaveMs as never);

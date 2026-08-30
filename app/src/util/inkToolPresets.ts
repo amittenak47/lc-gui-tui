@@ -49,10 +49,18 @@ import {
   INK_SPEED_BLOT_BLEND_DEFAULT,
   INK_SPEED_BLOT_BLEND_EVENT,
   INK_SPEED_DEFAULT,
+  INK_SPEED_FADE_DEFAULT,
+  INK_SPEED_FADE_EVENT,
+  INK_SPEED_BODY_ACCENT_DEFAULT,
+  INK_SPEED_BODY_ACCENT_EVENT,
   loadInkSpeed,
   loadInkSpeedBlotBlend,
+  loadInkSpeedFade,
+  loadInkSpeedBodyAccent,
   saveInkSpeed,
   saveInkSpeedBlotBlend,
+  saveInkSpeedFade,
+  saveInkSpeedBodyAccent,
 } from "./inkSpeedPref";
 import {
   INK_FULLNESS_DEFAULT,
@@ -79,6 +87,8 @@ export interface InkDrawSnapshot {
   smoothingMode: InkSmoothingMode;
   speed: number;
   blot: number;
+  fade: number;
+  body: number;
   boldness: number;
 }
 
@@ -129,6 +139,8 @@ export function liveDrawSnapshot(name = "Global"): InkDrawSnapshot {
     smoothingMode: loadInkSmoothingMode(),
     speed: loadInkSpeed(),
     blot: loadInkSpeedBlotBlend(),
+    fade: loadInkSpeedFade(),
+    body: loadInkSpeedBodyAccent(),
     boldness: loadInkBoldness(),
   };
 }
@@ -181,6 +193,8 @@ function clampDraw(snap: InkDrawSnapshot): InkDrawSnapshot {
     smoothingMode: snap.smoothingMode === "live" ? "live" : "lift",
     speed: clamp(snap.speed, 0, 1),
     blot: clamp(snap.blot, 0, 1),
+    fade: clamp(snap.fade, 0, 1),
+    body: clamp(snap.body, 0, 1),
     boldness: clamp(snap.boldness, 0, 3),
   };
 }
@@ -306,11 +320,15 @@ export function writeLiveFromDraw(snap: InkDrawSnapshot, prefs: InkToolPrefs): I
   saveInkSmoothingMode(snap.smoothingMode);
   saveInkSpeed(snap.speed);
   saveInkSpeedBlotBlend(snap.blot);
+  saveInkSpeedFade(snap.fade);
+  saveInkSpeedBodyAccent(snap.body);
   saveInkBoldness(snap.boldness);
   emit("lc-ink-pressure-clip");
   emit("lc-ink-smoothing");
   emit("lc-ink-speed");
   emit(INK_SPEED_BLOT_BLEND_EVENT);
+  emit(INK_SPEED_FADE_EVENT);
+  emit(INK_SPEED_BODY_ACCENT_EVENT);
   emit(INK_BOLDNESS_EVENT);
   return next;
 }
@@ -547,6 +565,8 @@ export const INK_PRESET_DEFAULTS = {
   fullness: INK_FULLNESS_DEFAULT,
   speed: INK_SPEED_DEFAULT,
   blot: INK_SPEED_BLOT_BLEND_DEFAULT,
+  fade: INK_SPEED_FADE_DEFAULT,
+  body: INK_SPEED_BODY_ACCENT_DEFAULT,
   boldness: INK_BOLDNESS_DEFAULT,
   pressureClip: PRESSURE_CLIP_DEFAULT,
   smoothing: INK_SMOOTHING_DEFAULT,

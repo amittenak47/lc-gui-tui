@@ -8,10 +8,13 @@ import { isEraserWedge, type InkPresetKind, type InkWedgeSnapshot } from "./inkT
 
 export const TEST_STRIP_POINTS: ScenePoint[] = Array.from({ length: 48 }, (_, i) => {
   const t = i / 47;
+  const wave = Math.sin(t * Math.PI * 2.2);
   return {
     x: 24 + t * 420,
-    y: 44 + Math.sin(t * Math.PI * 2.2) * 18,
+    y: 44 + wave * 18,
     pressure: 0.7,
+    // Writing-pace wiggle, not rest — so Speed ink and Body accent show on the strip.
+    slowness: 0.5 + 0.35 * wave,
   };
 });
 
@@ -29,6 +32,8 @@ export function testStripDrawOp(
     pressureSensitive: snap.pressureSensitive,
     speedInk: snap.speed,
     speedBlotBlend: snap.blot,
+    speedFade: snap.fade,
+    speedBodyAccent: snap.body ?? 0,
     boldness: snap.boldness,
     highlight: kind === "highlighter",
     points: TEST_STRIP_POINTS,

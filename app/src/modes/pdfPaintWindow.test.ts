@@ -17,6 +17,7 @@ import {
   pdfRestPages,
   pdfShouldPreempt,
   pdfVisibleFromSpans,
+  startPdfTextFillClaim,
 } from "./pdfPaintWindow";
 
 describe("pdfRestPages", () => {
@@ -357,5 +358,24 @@ describe("nextPdfPageMissingText", () => {
   it("ignores a page number that is not one", () => {
     const stateOf = from({ 0: { hasSpans: false, filled: false } });
     expect(nextPdfPageMissingText([0, -3], stateOf)).toBeNull();
+  });
+});
+
+describe("startPdfTextFillClaim", () => {
+  it("releases the claim when the fill aborts", () => {
+    const filled = new Set<number>();
+    const claim = startPdfTextFillClaim(filled, 12);
+    expect(filled.has(12)).toBe(true);
+    claim.settle(false);
+    expect(filled.has(12)).toBe(false);
+  });
+
+  it("keeps the claim after a successful fill, including empty strings", () => {
+    const filled = new Set<number>();
+    const claim = startPdfTextFillClaim(filled, 12);
+    claim.settle(true);
+    expect(filled.has(12)).toBe(true);
+    claim.settle(false);
+    expect(filled.has(12)).toBe(true);
   });
 });

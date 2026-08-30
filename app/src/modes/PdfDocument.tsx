@@ -97,7 +97,9 @@ import {
   pdfWantedPages,
   pdfRestPages,
   pdfShouldPreempt,
+  startPdfTextFillClaim,
 } from "./pdfPaintWindow";
+import { registerPdfQuoteTextFill } from "./pdfQuoteText";
 import {
   blitSheetToSlots,
   destSheetSize,
@@ -595,6 +597,7 @@ export function PdfDocument({
    * again.
    */
   const textFilledRef = useRef<Set<number>>(new Set());
+  const quoteFillRef = useRef<(page: number) => Promise<boolean>>(async () => false);
   /** Pages the viewport can currently see. */
   const visibleRef = useRef<Set<number>>(new Set());
   /** Pages the window wants painted — the visible ones, plus their neighbours. */
@@ -668,6 +671,10 @@ export function PdfDocument({
     setActiveSheetLru(filmScope, docHash, sheetLruRef.current);
     return () => setActiveSheetLru(filmScope, docHash, null);
   }, [paused, docHash, filmScope]);
+
+  useEffect(() => {
+    return registerPdfQuoteTextFill(filmScope, (page) => quoteFillRef.current(page));
+  }, [filmScope]);
 
   const dropSlotGpu = () => {
     for (const entry of paintedRef.current.values()) entry.release();
@@ -1154,11 +1161,14 @@ export function PdfDocument({
       entry: RenderedPage,
       pdfPage: PdfPageProxy,
       content: PdfTextContent,
+      ignoreLive = false,
     ): Promise<boolean> => {
+      const blocked = () =>
+        disposedRef.current || (!ignoreLive && isDocCameraLive(filmScope));
       for (const slot of queryPageSlots(host, n)) {
-        if (disposedRef.current || isDocCameraLive(filmScope)) return false;
+        if (blocked()) return false;
         await yieldToInput();
-        if (disposedRef.current || isDocCameraLive(filmScope)) return false;
+        if (blocked()) return false;
         const textHost = slot.querySelector<HTMLElement>(".lc-pdf-text");
         const spreadHost =
           slot.querySelector<HTMLElement>(".lc-pdf-spread") ?? slot;
@@ -1173,9 +1183,9 @@ export function PdfDocument({
           viewport: pdfPage.getViewport({ scale: entry.fit }),
         });
         await yieldToInput();
-        if (disposedRef.current || isDocCameraLive(filmScope)) return false;
+        if (blocked()) return false;
         await layer.render();
-        if (disposedRef.current || isDocCameraLive(filmScope)) return false;
+        if (blocked()) return false;
         alignTextLayerToGlyphs(
           spreadHost,
           layer.textDivs,
@@ -1207,33 +1217,43 @@ export function PdfDocument({
       });
     };
 
-    const fillMissingText = async (n: number): Promise<void> => {
+    const fillMissingText = async (
+      n: number,
+      ignoreLive = false,
+    ): Promise<boolean> => {
       const entry = pagesRef.current.find((page) => page.pageNumber === n);
-      if (!entry || disposedRef.current || isDocCameraLive(filmScope)) return;
-      // Claimed before the work, not after: a page whose text content throws
-      // must not send the pump straight back to it.
-      textFilledRef.current.add(n);
+      if (!entry || disposedRef.current) return false;
+      if (!ignoreLive && isDocCameraLive(filmScope)) return false;
+      const claim = startPdfTextFillClaim(textFilledRef.current, n);
       const closeJob = openBackgroundJob(`pdf-text:${n}`);
       try {
         await yieldToInput();
-        if (disposedRef.current || isDocCameraLive(filmScope)) {
-          textFilledRef.current.delete(n);
-          return;
+        if (disposedRef.current || (!ignoreLive && isDocCameraLive(filmScope))) {
+          claim.settle(false);
+          return false;
         }
         const pdfPage = await doc.getPage(n);
-        if (disposedRef.current || isDocCameraLive(filmScope)) return;
-        const content = await pdfPage.getTextContent();
-        if (disposedRef.current || isDocCameraLive(filmScope)) return;
-        // A gesture mid-fill gives the page back, so the next settle retries.
-        if (!(await fillPageText(n, entry, pdfPage, content))) {
-          textFilledRef.current.delete(n);
+        if (disposedRef.current || (!ignoreLive && isDocCameraLive(filmScope))) {
+          claim.settle(false);
+          return false;
         }
+        const content = await pdfPage.getTextContent();
+        if (disposedRef.current || (!ignoreLive && isDocCameraLive(filmScope))) {
+          claim.settle(false);
+          return false;
+        }
+        const ok = await fillPageText(n, entry, pdfPage, content, ignoreLive);
+        claim.settle(ok);
+        return ok;
       } catch {
-        /* torn-down worker; a text drop on this page is what asks again */
+        claim.settle(false);
+        return false;
       } finally {
         closeJob();
       }
     };
+
+    quoteFillRef.current = (page) => fillMissingText(page, true);
 
     const pageOut = async (
       n: number,
@@ -1393,8 +1413,23 @@ export function PdfDocument({
         archiveDropped(dropped);
         return sheet;
       };
-      const fillText = (pdfPage: PdfPageProxy, content: PdfTextContent) =>
-        fillPageText(n, entry, pdfPage, content);
+      const fillTextFromPage = async (pdfPage: PdfPageProxy) => {
+        const claim = startPdfTextFillClaim(textFilledRef.current, n);
+        try {
+          if (disposedRef.current || isDocCameraLive(filmScope)) {
+            claim.settle(false);
+            return;
+          }
+          const content = await pdfPage.getTextContent();
+          if (disposedRef.current || isDocCameraLive(filmScope)) {
+            claim.settle(false);
+            return;
+          }
+          claim.settle(await fillPageText(n, entry, pdfPage, content));
+        } catch {
+          claim.settle(false);
+        }
+      };
 
       try {
         const cached = sheetLruRef.current.get(n);
@@ -1408,9 +1443,7 @@ export function PdfDocument({
           if (firstText && firstText.childNodes.length > 0) return;
           const pdfPage = await doc.getPage(n);
           if (disposedRef.current || isDocCameraLive(filmScope)) return;
-          const content = await pdfPage.getTextContent();
-          if (disposedRef.current || isDocCameraLive(filmScope)) return;
-          await fillText(pdfPage, content);
+          await fillTextFromPage(pdfPage);
           return;
         }
 
@@ -1435,9 +1468,7 @@ export function PdfDocument({
               if (firstText && firstText.childNodes.length > 0) return;
               const pdfPage = await doc.getPage(n);
               if (disposedRef.current || isDocCameraLive(filmScope)) return;
-              const content = await pdfPage.getTextContent();
-              if (disposedRef.current || isDocCameraLive(filmScope)) return;
-              await fillText(pdfPage, content);
+              await fillTextFromPage(pdfPage);
               return;
             }
           }
@@ -1468,9 +1499,7 @@ export function PdfDocument({
         if (disposedRef.current) return;
         commitSheet(sheet);
         if (!isDocCameraLive(filmScope)) {
-          const content = await pdfPage.getTextContent();
-          if (disposedRef.current || isDocCameraLive(filmScope)) return;
-          await fillText(pdfPage, content);
+          await fillTextFromPage(pdfPage);
         }
       } catch (cause: unknown) {
         if (disposedRef.current) return;

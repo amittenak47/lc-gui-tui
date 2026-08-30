@@ -72,9 +72,15 @@ import {
 import {
   loadInkSpeed,
   loadInkSpeedBlotBlend,
+  loadInkSpeedFade,
+  loadInkSpeedBodyAccent,
   saveInkSpeed,
   saveInkSpeedBlotBlend,
+  saveInkSpeedFade,
+  saveInkSpeedBodyAccent,
   INK_SPEED_BLOT_BLEND_EVENT,
+  INK_SPEED_FADE_EVENT,
+  INK_SPEED_BODY_ACCENT_EVENT,
 } from "../util/inkSpeedPref";
 import {
   loadInkBoldness,
@@ -413,6 +419,10 @@ interface DevicePrefs {
   inkSpeed: number;
   /** Soften speed-ink dwell/join discs into the ribbon (0–1). */
   inkSpeedBlotBlend: number;
+  /** Pace wash toward pencil (0–1). */
+  inkSpeedFade: number;
+  /** Mid-stroke width modifier amplitude (0–1). */
+  inkSpeedBodyAccent: number;
   /** Boost stroke opacity to compensate for soft speed blot blend (0–3). */
   inkBoldness: number;
   /** Eraser rubs pixels out, rather than taking whole strokes. */
@@ -449,6 +459,8 @@ function loadDevicePrefs(): DevicePrefs {
     inkSmoothingMode: loadInkSmoothingMode(),
     inkSpeed: loadInkSpeed(),
     inkSpeedBlotBlend: loadInkSpeedBlotBlend(),
+    inkSpeedFade: loadInkSpeedFade(),
+    inkSpeedBodyAccent: loadInkSpeedBodyAccent(),
     inkBoldness: loadInkBoldness(),
     eraserPartial: loadEraserPartial(),
     autosaveMs: loadAutosaveInterval(),
@@ -476,6 +488,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.inkSmoothingMode === b.inkSmoothingMode &&
     a.inkSpeed === b.inkSpeed &&
     a.inkSpeedBlotBlend === b.inkSpeedBlotBlend &&
+    a.inkSpeedFade === b.inkSpeedFade &&
+    a.inkSpeedBodyAccent === b.inkSpeedBodyAccent &&
     a.inkBoldness === b.inkBoldness &&
     a.eraserPartial === b.eraserPartial &&
     a.autosaveMs === b.autosaveMs &&
@@ -813,6 +827,10 @@ export function SettingsModal({
   );
   const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
   const [inkSpeedBlotBlend, setInkSpeedBlotBlend] = useState(() => loadInkSpeedBlotBlend());
+  const [inkSpeedFade, setInkSpeedFade] = useState(() => loadInkSpeedFade());
+  const [inkSpeedBodyAccent, setInkSpeedBodyAccent] = useState(() =>
+    loadInkSpeedBodyAccent(),
+  );
   const [inkBoldness, setInkBoldness] = useState(() => loadInkBoldness());
   const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
   const [autosaveMs, setAutosaveMs] = useState<AutosaveInterval>(() =>
@@ -1010,6 +1028,8 @@ export function SettingsModal({
     setInkSmoothingMode(prefs.inkSmoothingMode);
     setInkSpeed(prefs.inkSpeed);
     setInkSpeedBlotBlend(prefs.inkSpeedBlotBlend);
+    setInkSpeedFade(prefs.inkSpeedFade);
+    setInkSpeedBodyAccent(prefs.inkSpeedBodyAccent);
     setInkBoldness(prefs.inkBoldness);
     setEraserPartial(prefs.eraserPartial);
     setAutosaveMs(prefs.autosaveMs);
@@ -1103,6 +1123,8 @@ export function SettingsModal({
     inkSmoothingMode,
     inkSpeed,
     inkSpeedBlotBlend,
+    inkSpeedFade,
+    inkSpeedBodyAccent,
     inkBoldness,
     eraserPartial,
     autosaveMs,
@@ -1163,6 +1185,8 @@ export function SettingsModal({
         saveInkSmoothingMode(inkSmoothingMode);
         saveInkSpeed(inkSpeed);
         saveInkSpeedBlotBlend(inkSpeedBlotBlend);
+        saveInkSpeedFade(inkSpeedFade);
+        saveInkSpeedBodyAccent(inkSpeedBodyAccent);
         saveInkBoldness(inkBoldness);
         saveEraserPartial(eraserPartial);
         saveAutosaveInterval(autosaveMs);
@@ -1190,6 +1214,8 @@ export function SettingsModal({
         window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
         window.dispatchEvent(new CustomEvent("lc-ink-speed"));
         window.dispatchEvent(new CustomEvent(INK_SPEED_BLOT_BLEND_EVENT));
+        window.dispatchEvent(new CustomEvent(INK_SPEED_FADE_EVENT));
+        window.dispatchEvent(new CustomEvent(INK_SPEED_BODY_ACCENT_EVENT));
         window.dispatchEvent(new CustomEvent(INK_BOLDNESS_EVENT));
         window.dispatchEvent(new CustomEvent(ERASER_PARTIAL_EVENT));
         window.dispatchEvent(new CustomEvent(AUTOSAVE_EVENT));

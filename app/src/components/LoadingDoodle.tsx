@@ -34,8 +34,12 @@ import { loadInkPressureClip } from "../util/inkPressureClip";
 import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref";
 import {
   INK_SPEED_BLOT_BLEND_EVENT,
+  INK_SPEED_FADE_EVENT,
+  INK_SPEED_BODY_ACCENT_EVENT,
   loadInkSpeed,
   loadInkSpeedBlotBlend,
+  loadInkSpeedFade,
+  loadInkSpeedBodyAccent,
 } from "../util/inkSpeedPref";
 import { loadInkToolPrefs } from "../util/inkToolPrefs";
 
@@ -57,6 +61,8 @@ interface InkLive {
   boldness: number;
   speedInk: number;
   speedBlotBlend: number;
+  speedFade: number;
+  speedBodyAccent: number;
   smoothing: number;
   smoothingMode: "lift" | "live";
 }
@@ -74,6 +80,8 @@ function loadLiveInk(themeId: string): InkLive {
     boldness: loadInkBoldness(),
     speedInk: loadInkSpeed(),
     speedBlotBlend: loadInkSpeedBlotBlend(),
+    speedFade: loadInkSpeedFade(),
+    speedBodyAccent: loadInkSpeedBodyAccent(),
     smoothing: loadInkSmoothing(),
     smoothingMode: loadInkSmoothingMode(),
   };
@@ -89,7 +97,13 @@ function makeDrawOp(live: InkLive, points: ScenePoint[]): InkDrawOp {
     pressureClip: live.pressureClip,
     pressureSensitive: live.pressureSensitive,
     speedInk: speed,
-    ...(speed > 0 ? { speedBlotBlend: live.speedBlotBlend } : {}),
+    ...(speed > 0 || live.speedBlotBlend > 0 || live.speedFade > 0
+      ? {
+          speedBlotBlend: live.speedBlotBlend,
+          speedFade: live.speedFade,
+          ...(speed > 0 ? { speedBodyAccent: live.speedBodyAccent } : {}),
+        }
+      : {}),
     boldness: live.boldness,
     points,
   };
@@ -130,6 +144,8 @@ export function LoadingDoodle({
     window.addEventListener("lc-ink-pressure-clip", reloadInk);
     window.addEventListener("lc-ink-speed", reloadInk);
     window.addEventListener(INK_SPEED_BLOT_BLEND_EVENT, reloadInk);
+    window.addEventListener(INK_SPEED_FADE_EVENT, reloadInk);
+    window.addEventListener(INK_SPEED_BODY_ACCENT_EVENT, reloadInk);
     window.addEventListener(INK_BOLDNESS_EVENT, reloadInk);
 
     const resize = () => {
@@ -204,7 +220,11 @@ export function LoadingDoodle({
       if (raw >= 0) pressureEmaRef.current = pressure;
 
       let slowness: number | undefined;
-      if (inkRef.current.speedInk > 0) {
+      if (
+        inkRef.current.speedInk > 0 ||
+        inkRef.current.speedFade > 0 ||
+        inkRef.current.speedBlotBlend > 0
+      ) {
         const last = lastSampleRef.current;
         if (last && t > last.t) {
           const dist = Math.hypot(x - last.x, y - last.y);
@@ -284,6 +304,8 @@ export function LoadingDoodle({
       window.removeEventListener("lc-ink-pressure-clip", reloadInk);
       window.removeEventListener("lc-ink-speed", reloadInk);
       window.removeEventListener(INK_SPEED_BLOT_BLEND_EVENT, reloadInk);
+      window.removeEventListener(INK_SPEED_FADE_EVENT, reloadInk);
+      window.removeEventListener(INK_SPEED_BODY_ACCENT_EVENT, reloadInk);
       window.removeEventListener(INK_BOLDNESS_EVENT, reloadInk);
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);

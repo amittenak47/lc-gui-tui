@@ -80,7 +80,7 @@ import {
 import { WHEEL_OPEN_MS } from "../util/gesture";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { DEBUG_INK, inkMetrics } from "./inkMetrics";
-import { INK_SPEED_BLOT_BLEND_DEFAULT } from "../util/inkSpeedPref";
+import { INK_SPEED_BLOT_BLEND_DEFAULT, INK_SPEED_FADE_DEFAULT, INK_SPEED_BODY_ACCENT_DEFAULT } from "../util/inkSpeedPref";
 import { INK_BOLDNESS_DEFAULT } from "../util/inkBoldnessPref";
 
 export interface RasterInkHandle {
@@ -160,6 +160,10 @@ export interface RasterInkLayerProps {
   speedInk?: number;
   /** Soften speed-ink join/dwell discs (0–1). Stamped onto new pen strokes. */
   speedBlotBlend?: number;
+  /** Pace wash toward pencil (0–1). Stamped onto new pen strokes. */
+  speedFade?: number;
+  /** Mid-stroke width modifier amplitude (0–1). Stamped onto new pen strokes. */
+  speedBodyAccent?: number;
   /** Opacity boost (0–3). Stamped onto new pen strokes. */
   inkBoldness?: number;
   /**
@@ -213,6 +217,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       straightInk = false,
       speedInk = 0,
       speedBlotBlend = INK_SPEED_BLOT_BLEND_DEFAULT,
+      speedFade = INK_SPEED_FADE_DEFAULT,
+      speedBodyAccent = INK_SPEED_BODY_ACCENT_DEFAULT,
       inkBoldness = INK_BOLDNESS_DEFAULT,
       partialErase = true,
       getViewport,
@@ -433,6 +439,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     speedInkRef.current = speedInk;
     const speedBlotBlendRef = useRef(speedBlotBlend);
     speedBlotBlendRef.current = speedBlotBlend;
+    const speedFadeRef = useRef(speedFade);
+    speedFadeRef.current = speedFade;
+    const speedBodyAccentRef = useRef(speedBodyAccent);
+    speedBodyAccentRef.current = speedBodyAccent;
     const inkBoldnessRef = useRef(inkBoldness);
     inkBoldnessRef.current = inkBoldness;
     const partialEraseRef = useRef(partialErase);
@@ -1459,6 +1469,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             speedInk,
             false,
             boldness,
+            live.speedFade ?? 0,
+            live.speedBodyAccent ?? 0,
           );
           const dense =
             speedInk > 0 ||
@@ -1506,6 +1518,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           live.speedInk ?? 0,
           false,
           live.boldness ?? inkBoldnessRef.current,
+          live.speedFade ?? 0,
+          live.speedBodyAccent ?? 0,
         );
         const step = Math.max(style.lineWidth * INK_STEP_FACTOR_PRESSURE, 0.5);
         live.points.push(...stampAlongSegment(last, raw, step));
@@ -1742,14 +1756,18 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         );
         const speed = speedInkRef.current;
         const blotBlend = speedBlotBlendRef.current;
+        const fade = speedFadeRef.current;
+        const bodyAccent = speedBodyAccentRef.current;
         const boldness = inkBoldnessRef.current;
         // Start at the neutral pace rather than at rest: the nib has no history
         // yet, and seeding it "stopped" would open every stroke with a blob.
-        if (speed > 0) point.slowness = INK_SLOWNESS_NEUTRAL;
+        if (speed > 0 || blotBlend > 0 || fade > 0)
+          point.slowness = INK_SLOWNESS_NEUTRAL;
         lastPointRef.current = point;
         rawPointRef.current = point;
         smoothedPressureRef.current = hasStylusPressure(point.pressure) ? point.pressure : 0;
-        smoothedSpeedRef.current = speed > 0 ? INK_SPEED_NEUTRAL_PX_MS : 0;
+        smoothedSpeedRef.current =
+          speed > 0 || blotBlend > 0 || fade > 0 ? INK_SPEED_NEUTRAL_PX_MS : 0;
         lastSampleTimeRef.current = event.timeStamp;
         lastMoveWallRef.current = performance.now();
         dwellCountRef.current = 0;
@@ -1811,7 +1829,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               pressureClip: pressureClipRef.current,
               pressureSensitive,
               speedInk: speed,
-              ...(speed > 0 ? { speedBlotBlend: blotBlend } : {}),
+              ...(speed > 0 || blotBlend > 0 || fade > 0
+                ? {
+                    speedBlotBlend: blotBlend,
+                    speedFade: fade,
+                    ...(speed > 0 ? { speedBodyAccent: bodyAccent } : {}),
+                  }
+                : {}),
               boldness,
               points: [],
             };
@@ -1831,7 +1855,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               pressureClip: pressureClipRef.current,
               pressureSensitive,
               speedInk: speed,
-              ...(speed > 0 ? { speedBlotBlend: blotBlend } : {}),
+              ...(speed > 0 || blotBlend > 0 || fade > 0
+                ? {
+                    speedBlotBlend: blotBlend,
+                    speedFade: fade,
+                    ...(speed > 0 ? { speedBodyAccent: bodyAccent } : {}),
+                  }
+                : {}),
               boldness,
               points: [point],
             };
@@ -1889,12 +1919,17 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         ) {
           paintLiveAfterChangeRef.current(true);
         }
-        if (activeTool === "pen" && speed > 0) {
+        if (activeTool === "pen" && (speed > 0 || fade > 0 || blotBlend > 0)) {
           dwellTimerRef.current = setInterval(() => {
             if (!drawingRef.current) return;
             if (attackBufferRef.current) return;
             const liveOp = liveRef.current;
-            if (!liveOp || liveOp.kind !== "draw" || (liveOp.speedInk ?? 0) <= 0) return;
+            if (!liveOp || liveOp.kind !== "draw") return;
+            const paceOn =
+              (liveOp.speedInk ?? 0) > 0 ||
+              (liveOp.speedBlotBlend ?? 0) > 0 ||
+              (liveOp.speedFade ?? 0) > 0;
+            if (!paceOn) return;
             if (liveOp.points.length === 0) return;
             if (performance.now() - lastMoveWallRef.current < 60) return;
             if (dwellCountRef.current >= 40) return;
@@ -1921,6 +1956,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               liveOp.speedInk ?? 0,
               false,
               liveOp.boldness ?? inkBoldnessRef.current,
+              liveOp.speedFade ?? 0,
+              liveOp.speedBodyAccent ?? 0,
             );
             const dwellDense =
               (liveOp.speedInk ?? 0) > 0 ||
@@ -2055,6 +2092,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const maxFullness = live.kind === "draw" ? live.maxFullness : 1;
         const pressureClip = live.kind === "draw" ? live.pressureClip : 1;
         const speedInk = live.kind === "draw" ? (live.speedInk ?? 0) : 0;
+        const speedFade = live.kind === "draw" ? (live.speedFade ?? 0) : 0;
+        const speedBlot = live.kind === "draw" ? (live.speedBlotBlend ?? 0) : 0;
+        const trackPace = speedInk > 0 || speedFade > 0 || speedBlot > 0;
         const reshapeLive =
           live.kind === "draw" && liveReshapeActiveRef.current();
         const zoom = strokeView.zoom || 1;
@@ -2089,7 +2129,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               raw.pressure = NO_PRESSURE;
             }
 
-            if (speedInk > 0) {
+            if (trackPace) {
               const travelled =
                 Math.hypot(raw.x - rawLast.x, raw.y - rawLast.y) * zoom;
               if (dt > 0) {
@@ -2142,7 +2182,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             raw.pressure = NO_PRESSURE;
           }
 
-          if (speedInk > 0) {
+          if (trackPace) {
             // Screen distance over wall time. Scene units would make the same
             // hand read as "slow" simply because the board is zoomed in.
             const travelled =
@@ -2204,6 +2244,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                     speedInk,
                     live.kind === "draw" && live.highlight === true,
                     live.kind === "draw" ? (live.boldness ?? inkBoldnessRef.current) : 1,
+                    live.kind === "draw" ? (live.speedFade ?? 0) : 0,
+                    live.kind === "draw" ? (live.speedBodyAccent ?? 0) : 0,
                   );
                   // Speed ink moves the width too, so it stamps as finely as a
                   // pressure stroke does — the taper is the whole point.
