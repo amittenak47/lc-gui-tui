@@ -7,14 +7,26 @@ import { createPortal } from "react-dom";
 
 import { HoldButton } from "../components/HoldButton";
 import { MorphBar } from "../components/MorphBar";
-import { StraightIcon } from "../components/MarkToolIcons";
+import { PinkEraserIcon, StraightIcon } from "../components/MarkToolIcons";
 import { ColorRadial } from "./ColorRadial";
 import { InkFullnessSlider } from "./InkFullnessSlider";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
-import { applyInkOp, ERASER_WIDTH_MAX } from "./rasterInk";
+import {
+  applyInkOp,
+  ERASER_WIDTH_MAX,
+  inkLineWidth,
+  inkSlowness,
+  INK_SPEED_NEUTRAL_PX_MS,
+  pointerPressure,
+  smoothPressure,
+  smoothSpeed,
+  type InkDrawOp,
+  type ScenePoint,
+} from "./rasterInk";
+import { smoothInkPoints } from "./inkSmoothing";
 import type { InkHandedness } from "../util/inkHandedness";
-import { testStripDrawOp } from "../util/inkPresetStrip";
+import { drawOpFromSnap, testStripDrawOp } from "../util/inkPresetStrip";
 import {
   defaultDrawSnapshot,
   defaultEraserSnapshot,
@@ -158,6 +170,8 @@ export function InkPresetEditor({
   const [draft, setDraft] = useState<InkWedgeSnapshot>(seed);
   const [name, setName] = useState(seed.name);
   const [closing, setClosing] = useState(false);
+  const [livePreview, setLivePreview] = useState(false);
+  const [livePadGen, setLivePadGen] = useState(0);
   const closeReasonRef = useRef<"back" | "dismiss">("dismiss");
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -273,12 +287,54 @@ export function InkPresetEditor({
           <MorphBar active="body" axis="height" className="lc-preset-sheet-morph">
           <div data-morph-id="body">
             <section className="lc-preset-sheet-strip">
-              <SettingsBlock
-                title="Preview"
-                hint="How this preset draws. Updates as you change the knobs."
-              >
-                <TestStrip kind={kind} snap={named} />
-              </SettingsBlock>
+              <div className="lc-preset-sheet-field">
+                <div
+                  className="lc-preset-preview-toggle"
+                  role="radiogroup"
+                  aria-label="Preview mode"
+                >
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={!livePreview}
+                    className={!livePreview ? "is-active" : undefined}
+                    onClick={() => setLivePreview(false)}
+                  >
+                    Preview
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={livePreview}
+                    className={livePreview ? "is-active" : undefined}
+                    onClick={() => setLivePreview(true)}
+                  >
+                    Live
+                  </button>
+                </div>
+                <p className="lc-settings-hint">
+                  {livePreview
+                    ? "Draw here with this preset before you Save. Switching Live off, or Erase, clears the pad."
+                    : "How this preset draws. Updates as you change the knobs."}
+                </p>
+                <div className="lc-preset-preview-stage">
+                  {livePreview ? (
+                    <>
+                      <LivePad key={livePadGen} kind={kind} snap={named} />
+                      <button
+                        type="button"
+                        className="lc-preset-preview-erase"
+                        aria-label="Erase preview"
+                        onClick={() => setLivePadGen((n) => n + 1)}
+                      >
+                        <PinkEraserIcon size={16} />
+                      </button>
+                    </>
+                  ) : (
+                    <TestStrip kind={kind} snap={named} />
+                  )}
+                </div>
+              </div>
             </section>
 
             <div className={draw ? "lc-preset-sheet-cols" : "lc-preset-sheet-cols is-single"}>
@@ -401,6 +457,223 @@ function TestStrip({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot
       height={88}
       ref={canvasRef}
       aria-hidden
+    />
+  );
+}
+
+
+function fillPreviewPaper(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  cssW: number,
+  cssH: number,
+): void {
+  ctx.fillStyle = getComputedStyle(canvas).getPropertyValue("--paper") || "#fdf6e3";
+  ctx.fillRect(0, 0, cssW, cssH);
+}
+
+function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const kindRef = useRef(kind);
+  const snapRef = useRef(snap);
+  kindRef.current = kind;
+  snapRef.current = snap;
+  const strokesRef = useRef<InkDrawOp[]>([]);
+  const livePtsRef = useRef<ScenePoint[] | null>(null);
+  const eraserTipRef = useRef<{ x: number; y: number } | null>(null);
+  const pressureEmaRef = useRef(0);
+  const speedEmaRef = useRef(0);
+  const lastSampleRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  const dprRef = useRef(1);
+  const paintFnRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const size = () => {
+      const cssW = Math.max(1, canvas.clientWidth || 468);
+      const cssH = Math.max(1, canvas.clientHeight || 88);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      dprRef.current = dpr;
+      const bw = Math.round(cssW * dpr);
+      const bh = Math.round(cssH * dpr);
+      if (canvas.width !== bw || canvas.height !== bh) {
+        canvas.width = bw;
+        canvas.height = bh;
+      }
+      return { cssW, cssH, dpr };
+    };
+
+    const paint = () => {
+      const { cssW, cssH, dpr } = size();
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+      fillPreviewPaper(canvas, ctx, cssW, cssH);
+      const current = snapRef.current;
+      if (kindRef.current === "eraser" && isEraserWedge(current)) {
+        const tip = eraserTipRef.current ?? { x: cssW / 2, y: cssH / 2 };
+        const maxD = Math.max(8, cssH - 16);
+        const t = Math.min(1, Math.max(0, current.eraserWidth / ERASER_WIDTH_MAX));
+        const r = Math.max(3, (t * maxD) / 2);
+        ctx.beginPath();
+        ctx.arc(tip.x, tip.y, maxD / 2, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(190, 24, 93, 0.28)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(tip.x, tip.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = "#f9a8d4";
+        ctx.strokeStyle = "#be185d";
+        ctx.lineWidth = 1.35;
+        ctx.fill();
+        ctx.stroke();
+        return;
+      }
+      for (const op of strokesRef.current) {
+        applyInkOp(ctx, op, dpr);
+      }
+      const livePts = livePtsRef.current;
+      if (!livePts || livePts.length === 0) return;
+      const liveSnap = snapRef.current;
+      if (isEraserWedge(liveSnap)) return;
+      const smoothing = liveSnap.smoothing;
+      const smoothingMode = liveSnap.smoothingMode;
+      const points =
+        smoothingMode === "live" && smoothing > 0
+          ? smoothInkPoints(livePts, smoothing, inkLineWidth(liveSnap.width, 0, false))
+          : livePts;
+      const op = drawOpFromSnap(kindRef.current, liveSnap, points);
+      if (op) applyInkOp(ctx, op, dpr);
+    };
+    paintFnRef.current = paint;
+
+    const pointFrom = (event: PointerEvent): ScenePoint => {
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      const t = event.timeStamp || performance.now();
+      const raw = pointerPressure(event.pressure, event.pointerType);
+      const prev = pressureEmaRef.current;
+      const pressure = raw < 0 ? raw : smoothPressure(prev || raw, raw);
+      if (raw >= 0) pressureEmaRef.current = pressure;
+
+      const current = snapRef.current;
+      const paced =
+        !isEraserWedge(current) &&
+        (current.speed > 0 || current.blot > 0 || current.fade > 0);
+      let slowness: number | undefined;
+      if (paced) {
+        const last = lastSampleRef.current;
+        if (last && t > last.t) {
+          const dist = Math.hypot(x - last.x, y - last.y);
+          speedEmaRef.current = smoothSpeed(speedEmaRef.current, dist / (t - last.t));
+        }
+        slowness = inkSlowness(speedEmaRef.current);
+      }
+      lastSampleRef.current = { x, y, t };
+      return { x, y, pressure, ...(slowness != null ? { slowness } : {}) };
+    };
+
+    const onDown = (event: PointerEvent) => {
+      if (event.button !== 0 && event.pointerType !== "pen") return;
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        /* capture is best-effort */
+      }
+      const current = snapRef.current;
+      pressureEmaRef.current = 0;
+      speedEmaRef.current =
+        !isEraserWedge(current) &&
+        (current.speed > 0 || current.blot > 0 || current.fade > 0)
+          ? INK_SPEED_NEUTRAL_PX_MS
+          : 0;
+      lastSampleRef.current = null;
+      const pt = pointFrom(event);
+      if (kindRef.current === "eraser") {
+        eraserTipRef.current = { x: pt.x, y: pt.y };
+        livePtsRef.current = null;
+      } else {
+        livePtsRef.current = [pt];
+      }
+      paint();
+    };
+    const onMove = (event: PointerEvent) => {
+      if (kindRef.current === "eraser") {
+        if (eraserTipRef.current == null && (event.buttons & 1) === 0) return;
+        const pt = pointFrom(event);
+        eraserTipRef.current = { x: pt.x, y: pt.y };
+        paint();
+        return;
+      }
+      if (!livePtsRef.current) return;
+      livePtsRef.current.push(pointFrom(event));
+      paint();
+    };
+    const onUp = (event: PointerEvent) => {
+      try {
+        canvas.releasePointerCapture(event.pointerId);
+      } catch {
+        /* already released */
+      }
+      if (kindRef.current === "eraser") {
+        paint();
+        lastSampleRef.current = null;
+        return;
+      }
+      const livePts = livePtsRef.current;
+      if (!livePts) return;
+      const liveSnap = snapRef.current;
+      let points = livePts;
+      if (!isEraserWedge(liveSnap) && points.length > 1 && liveSnap.smoothing > 0) {
+        points = smoothInkPoints(
+          points,
+          liveSnap.smoothing,
+          inkLineWidth(liveSnap.width, 0, false),
+        );
+      }
+      const op = drawOpFromSnap(kindRef.current, liveSnap, points);
+      if (op && points.length > 0) strokesRef.current.push(op);
+      livePtsRef.current = null;
+      lastSampleRef.current = null;
+      paint();
+    };
+
+    size();
+    paint();
+    const ro = new ResizeObserver(() => paint());
+    ro.observe(canvas);
+    canvas.addEventListener("pointerdown", onDown);
+    canvas.addEventListener("pointermove", onMove);
+    canvas.addEventListener("pointerup", onUp);
+    canvas.addEventListener("pointercancel", onUp);
+    return () => {
+      ro.disconnect();
+      canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerup", onUp);
+      canvas.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    paintFnRef.current();
+  }, [snap]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="lc-preset-strip-canvas is-live"
+      width={468}
+      height={88}
+      aria-label="Live preset preview"
     />
   );
 }
