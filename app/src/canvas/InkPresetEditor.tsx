@@ -587,10 +587,10 @@ function PhysicsKnobs({
         title="Speed fade"
         hint={
           <>
-            A pace gradient: ink pools when you write slowly and goes faint when
-            you write fast. Not the same as Ink fullness, which dries by how far
-            you have travelled, not how fast. Off keeps full ink. Saved on this
-            device only.
+            Ink drying over a long stroke: the further the line travels, the
+            more it fades. How fast you write does not wash it — that is Speed
+            ink, and it changes width, not darkness. Off keeps full ink the
+            whole way. Saved on this device only.
           </>
         }
       >

@@ -29,7 +29,6 @@ import {
   ribbonSides,
   INK_DRY_FLOOR,
   INK_SLOWNESS_NEUTRAL,
-  INK_SPEED_ALPHA_BASE,
   INK_SPEED_NEUTRAL_PX_MS,
   INK_SPEED_WIDTH_RANGE,
   INK_SPEED_MIN_WIDTH_GAIN,
@@ -434,45 +433,26 @@ describe("speed ink", () => {
     }
   });
 
-  it("never asks for more than opaque ink on a full dial", () => {
-    const maxSlow = inkStrokeAlpha(1, 0, false, 0, 1, 1, 1, 1);
-    expect(maxSlow).toBeLessThanOrEqual(1);
-    // BASE * (1 + RANGE) leaves headroom under the clip.
-    expect(maxSlow).toBeCloseTo(INK_SPEED_ALPHA_BASE * (1 + 0.5), 2);
-  });
 
-  it("reads neutral pace as the speed-alpha base when fade is full", () => {
-    expect(inkStrokeAlpha(1, 0, false, 0, INK_SLOWNESS_NEUTRAL, 1, 1, 1)).toBeCloseTo(
-      INK_SPEED_ALPHA_BASE,
-    );
-  });
 
   it("keeps full ink at 5% speed when fade is off", () => {
     expect(inkStrokeAlpha(1, 0, false, 0, INK_SLOWNESS_NEUTRAL, 0.05, 1, 0)).toBe(1);
     expect(inkSpeedAlphaGain(INK_SLOWNESS_NEUTRAL, 0.05, 0)).toBe(1);
   });
 
-  it("washes at fade 100% even when speed ink is off", () => {
-    expect(inkSpeedAlphaGain(INK_SLOWNESS_NEUTRAL, 0, 1)).toBeCloseTo(INK_SPEED_ALPHA_BASE);
-  });
 
-  it("interpolates the old wash when fade is partial", () => {
-    expect(inkSpeedAlphaGain(INK_SLOWNESS_NEUTRAL, 1, 0.5)).toBeCloseTo(
-      1 + (INK_SPEED_ALPHA_BASE - 1) * 0.5,
-    );
-  });
 
-  it("darkens slow strokes more than fast ones at the same alpha gain", () => {
-    const slowGain = inkSpeedAlphaGain(0.78, 1, 1);
-    const fastGain = inkSpeedAlphaGain(0.22, 1, 1);
-    expect(slowGain / fastGain).toBeGreaterThan(1.25);
-  });
 
-  it("darkens a slow stroke once the nib has drained a little", () => {
+  /*
+   * Pace is out of the alpha entirely now. It asserted that a drained nib went
+   * darker when moving slowly, which was the pace wash reading the same signal
+   * Speed ink already owns; the reservoir answers to distance alone.
+   */
+  it("drains the same at a given distance however fast the nib got there", () => {
     const drained = 200;
     const slow = inkStrokeAlpha(0.4, 0, false, drained, 1, 1, 1, 1);
     const fast = inkStrokeAlpha(0.4, 0, false, drained, 0, 1, 1, 1);
-    expect(slow).toBeGreaterThan(fast);
+    expect(slow).toBeCloseTo(fast);
   });
 
   it("carries slowness through interpolated stamps", () => {
@@ -1349,6 +1329,36 @@ describe("inkDiscRadii / dwell growth", () => {
    */
   it("does not credit a travelling stroke with a finished pool", () => {
     expect(dwellBlotGrowT(points([0, 0], [40, 0], [80, 0]), 4, 0.5)).toBe(0);
+  });
+});
+
+describe("Speed fade dries with travel, not pace", () => {
+  const alphaAt = (consumed: number, fade: number, slowness = INK_SLOWNESS_NEUTRAL) =>
+    inkStrokeAlpha(1, 0, false, consumed, slowness, 1, 1, fade);
+
+  /*
+   * Fade used to multiply opacity by pace -- slow dark, fast faint -- which is
+   * a second reading of the signal Speed ink already owns, and not what a line
+   * running out of ink does. It spends the reservoir against distance now.
+   */
+  it("keeps full ink at the head of a stroke however high the dial", () => {
+    expect(alphaAt(0, 1)).toBeCloseTo(1);
+    expect(alphaAt(0, 0.4)).toBeCloseTo(1);
+  });
+
+  it("dries further along the stroke, and further still at a higher dial", () => {
+    expect(alphaAt(6, 1)).toBeLessThan(alphaAt(2, 1));
+    expect(alphaAt(6, 1)).toBeLessThan(alphaAt(6, 0.4));
+  });
+
+  it("dries the same at the same travel whether the nib is slow or fast", () => {
+    expect(alphaAt(5, 1, 1)).toBeCloseTo(alphaAt(5, 1, 0));
+  });
+
+  it("is full ink the whole way when fade is off", () => {
+    for (const consumed of [0, 3, 12, 40]) {
+      expect(alphaAt(consumed, 0)).toBeCloseTo(1);
+    }
   });
 });
 

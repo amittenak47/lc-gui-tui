@@ -224,12 +224,6 @@ export function inkSpeedBodyShape(slowness: number): number {
   return Math.max(0, inkSpeedPaceUnit(slowness));
 }
 
-/** Multiplier either side of 1: above when the nib drags, below when it flicks. */
-function speedGain(slowness: number, strength: number, range: number): number {
-  const amount = Math.max(0, Math.min(1, strength));
-  if (amount <= 0) return 1;
-  return 1 + range * amount * inkSpeedPaceUnit(slowness);
-}
 
 export function inkSpeedWidthGain(
   slowness: number,
@@ -251,11 +245,16 @@ export function inkSpeedWidthGain(
   );
 }
 
-export function inkSpeedAlphaGain(slowness: number, _strength: number, fade = 0): number {
-  const fadeAmt = Math.max(0, Math.min(1, fade));
-  if (fadeAmt <= 0) return 1;
-  const paced = INK_SPEED_ALPHA_BASE * speedGain(slowness, 1, INK_SPEED_ALPHA_RANGE);
-  return 1 + (paced - 1) * fadeAmt;
+/**
+ * Pace no longer washes opacity. Speed fade dries by travel; see
+ * {@link inkStrokeAlpha}. Kept as a 1 so callers threading it stay honest.
+ */
+export function inkSpeedAlphaGain(
+  _slowness: number,
+  _strength: number,
+  _fade = 0,
+): number {
+  return 1;
 }
 
 export interface ScenePoint {
@@ -524,13 +523,27 @@ export function inkStrokeAlpha(
   pNorm: number,
   pressureSensitive: boolean,
   consumed = 0,
-  slowness = INK_SLOWNESS_NEUTRAL,
-  speedInk = 0,
+  _slowness = INK_SLOWNESS_NEUTRAL,
+  _speedInk = 0,
   boldness = 1,
   fade = 0,
 ): number {
   const charge = inkReservoirAlpha(consumed, maxFullness);
-  const paced = charge * inkSpeedAlphaGain(slowness, speedInk, fade);
+  /*
+   * Fade dries along the stroke, not with the hand.
+   *
+   * It used to multiply opacity by pace -- slow dark, fast faint -- so it was
+   * a second reading of the same signal Speed ink already owns, and a writer
+   * who wanted a line to run out of ink got one that tracked how fast they
+   * happened to be moving. It now spends the same reservoir Ink fullness does,
+   * against `consumed` (distance in nib widths): full ink at the head, drier
+   * the further the stroke travels, identical at the same distance whether the
+   * nib got there quickly or slowly.
+   */
+  const fadeAmt = Math.max(0, Math.min(1, fade));
+  const travel =
+    fadeAmt <= 0 ? 1 : inkReservoirAlpha(consumed, 1 - fadeAmt * (1 - 1e-6));
+  const paced = charge * travel;
   // A dawdling nib on a full dial would otherwise ask for more than opaque.
   const deposit = Math.min(1, paced * boldness);
   if (!pressureSensitive) return deposit;
