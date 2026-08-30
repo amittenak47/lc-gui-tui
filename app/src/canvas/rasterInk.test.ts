@@ -31,6 +31,8 @@ import {
   INK_SPEED_ALPHA_BASE,
   INK_SPEED_NEUTRAL_PX_MS,
   INK_SPEED_WIDTH_RANGE,
+  INK_SPEED_MIN_WIDTH_GAIN,
+  inkSpeedPaceUnit,
   INK_PRESSURE_FLOOR,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
@@ -366,6 +368,69 @@ describe("speed ink", () => {
     const full = inkLineWidth(2, 0, false, 1, 1);
     expect(half).toBeGreaterThan(base);
     expect(half).toBeLessThan(full);
+  });
+
+  it("does nothing when Speed ink is off, even if body accent is 100%", () => {
+    for (const slowness of [0, 0.25, 0.5, 0.75, 1]) {
+      expect(inkSpeedWidthGain(slowness, 0, 1)).toBe(1);
+    }
+  });
+
+  /*
+   * Body is the endpoint tuner, and it is bipolar.
+   *
+   * It used to scale `sin(pi * paceUnit)`, which peaks halfway between
+   * ordinary pace and a stop and is exactly zero *at* the stop — so the dial
+   * could not touch the rest blob at all, which is the one thing the control
+   * is labelled as doing ("left kills the round rest blob, right fattens the
+   * ends"). Pen-down and lift are the slowest samples on the curve, so the
+   * shape it scales is rest weight.
+   */
+  /*
+   * The guarantee that lets Body coexist with the one-curve pen: at 0 the body
+   * term vanishes and the gain is exactly `1 + RANGE * strength * paceUnit`,
+   * the single pace curve, to the bit. Restoring the dial cannot move the pen
+   * unless someone deliberately turns it.
+   */
+  it("is the single pace curve exactly when Body is 0", () => {
+    for (const slowness of [0, 0.25, INK_SLOWNESS_NEUTRAL, 0.75, 1]) {
+      for (const strength of [0, 0.05, 0.45, 1]) {
+        const oneCurve =
+          strength <= 0
+            ? 1
+            : Math.max(
+                INK_SPEED_MIN_WIDTH_GAIN,
+                1 + INK_SPEED_WIDTH_RANGE * strength * inkSpeedPaceUnit(slowness),
+              );
+        expect(inkSpeedWidthGain(slowness, strength, 0)).toBeCloseTo(oneCurve, 12);
+      }
+    }
+  });
+
+  it("tunes the rest blob at the endpoints, in both directions", () => {
+    const plain = inkSpeedWidthGain(1, 0.05, 0);
+    expect(inkSpeedWidthGain(1, 0.05, 1)).toBeGreaterThan(plain);
+    expect(inkSpeedWidthGain(1, 0.05, -1)).toBeLessThan(plain);
+  });
+
+  it("leaves ordinary pace and a sprint alone whichever way Body is set", () => {
+    for (const body of [-1, -0.4, 0, 0.4, 1]) {
+      expect(inkSpeedWidthGain(INK_SLOWNESS_NEUTRAL, 0.05, body)).toBeCloseTo(
+        inkSpeedWidthGain(INK_SLOWNESS_NEUTRAL, 0.05, 0),
+      );
+      expect(inkSpeedWidthGain(0, 0.05, body)).toBeCloseTo(
+        inkSpeedWidthGain(0, 0.05, 0),
+      );
+    }
+  });
+
+  it("scales body accent only while Speed ink is on", () => {
+    const half = inkSpeedWidthGain(1, 0.05, 0.5);
+    const full = inkSpeedWidthGain(1, 0.05, 1);
+    expect(full).toBeGreaterThan(half);
+    for (const body of [-1, 0, 1]) {
+      expect(inkSpeedWidthGain(1, 0, body)).toBe(1);
+    }
   });
 
   it("never asks for more than opaque ink on a full dial", () => {
@@ -1369,13 +1434,49 @@ describe("paintInkDisc tip vs join", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
     expect(drawCtx.radialGradients).toBe(0);
+    // Runs stroke; a ribbon fills. The ribbon is now one path, so the tell is
+    // many segment subpaths inside a single rasterisation, not many fills.
     expect(drawCtx.strokeCount).toBe(0);
-    expect(drawCtx.fillCount).toBeGreaterThan(1);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.strokes.length).toBeGreaterThan(6);
   });
 });
 
-describe("fillInkRibbon per-quad", () => {
-  it("fills one quad per segment instead of one closed polygon", () => {
+describe("fillInkRibbon seams and winding", () => {
+  /** Rebuild each triangle subpath from the recorded moveTo/lineTo pen path. */
+  function trianglesFrom(drawCtx: ReturnType<typeof inkDrawContext>) {
+    const out: Array<Array<{ x: number; y: number }>> = [];
+    // A triangle is a moveTo plus two lineTo; only lineTo is recorded.
+    for (let i = 0; i + 1 < drawCtx.strokes.length; i += 2) {
+      out.push([
+        drawCtx.strokes[i].from,
+        drawCtx.strokes[i].to,
+        drawCtx.strokes[i + 1].to,
+      ]);
+    }
+    return out;
+  }
+
+  function twiceArea(poly: Array<{ x: number; y: number }>): number {
+    let sum = 0;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      sum += (b.x - a.x) * (b.y + a.y);
+    }
+    return sum;
+  }
+
+  /*
+   * One rasterisation, two triangles per segment.
+   *
+   * A `fill()` per segment antialiases the edge each pair of them shares
+   * twice, which composites to about 0.75 coverage and rules the stroke with a
+   * lighter hairline every densified point. Measured on a straight ribbon: 66
+   * of 375 centre-row pixels short of full ink that way, 0 as one path. That
+   * cross-hatching is what made a Speed-ink ribbon read as graphite.
+   */
+  it("fills the whole ribbon in one rasterisation", () => {
     const drawCtx = inkDrawContext();
     const left = [
       { x: 0, y: 0 },
@@ -1388,12 +1489,18 @@ describe("fillInkRibbon per-quad", () => {
       { x: 20, y: 4 },
     ];
     fillInkRibbon(drawCtx.ctx, left, right, 1);
-    expect(drawCtx.fillCount).toBe(2);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(trianglesFrom(drawCtx)).toHaveLength(4);
   });
 
-  it("still fills self-crossing side polylines (no single winding cancel)", () => {
+  it("winds every subpath the same way, so nothing cancels where a stroke doubles back", () => {
     const drawCtx = inkDrawContext();
-    // Bow-tie-ish left/right: two quads still each fill once.
+    /*
+     * Bow-tie sides: the raw vertex order flips orientation across these
+     * segments, and one nonzero fill would subtract the flipped subpath and
+     * punch a hole. Quads could not be normalised here — this pair has a
+     * signed area of exactly zero, so it has no orientation to correct.
+     */
     const left = [
       { x: 0, y: 0 },
       { x: 10, y: 10 },
@@ -1405,7 +1512,16 @@ describe("fillInkRibbon per-quad", () => {
       { x: 4, y: 14 },
     ];
     fillInkRibbon(drawCtx.ctx, left, right, 1);
-    expect(drawCtx.fillCount).toBe(2);
+    const tris = trianglesFrom(drawCtx);
+    expect(tris).toHaveLength(4);
+    /*
+     * Negative, matching `ctx.arc(...)` with the default sweep. Join discs and
+     * caps are subpaths of this same path, so a ribbon triangle wound the
+     * other way would cancel against a disc under nonzero fill and punch a
+     * hole where the stroke turns.
+     */
+    const signs = tris.map((t) => Math.sign(twiceArea(t)));
+    expect(signs.every((sign) => sign < 0)).toBe(true);
   });
 });
 

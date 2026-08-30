@@ -208,6 +208,22 @@ export function inkSpeedPaceUnit(slowness: number): number {
   return (Math.max(0, Math.min(1, slowness)) - INK_SLOWNESS_NEUTRAL) * 2;
 }
 
+/**
+ * Mid-stroke width modifier: 0 at a full stop and a sprint, ±1 when the nib
+ * is a bit slow / a bit fast. Body accent is this times a 0–1 amplitude.
+ */
+/**
+ * Rest weight: 0 at ordinary pace and at a sprint, 1 at a full stop.
+ *
+ * Body is the endpoint tuner, and pen-down and lift are the slowest samples on
+ * the curve — so the shape it scales is rest, not a bump either side of
+ * ordinary pace. Positive fattens the ends; negative cancels Speed ink's rest
+ * swell so a lift does not land as a round blob.
+ */
+export function inkSpeedBodyShape(slowness: number): number {
+  return Math.max(0, inkSpeedPaceUnit(slowness));
+}
+
 /** Multiplier either side of 1: above when the nib drags, below when it flicks. */
 function speedGain(slowness: number, strength: number, range: number): number {
   const amount = Math.max(0, Math.min(1, strength));
@@ -215,10 +231,23 @@ function speedGain(slowness: number, strength: number, range: number): number {
   return 1 + range * amount * inkSpeedPaceUnit(slowness);
 }
 
-export function inkSpeedWidthGain(slowness: number, strength: number): number {
+export function inkSpeedWidthGain(
+  slowness: number,
+  strength: number,
+  bodyAccent = 0,
+): number {
+  const amount = Math.max(0, Math.min(1, strength));
+  const linear = amount * inkSpeedPaceUnit(slowness);
+  // Bipolar: the dial reads -100..+100 and the negative half has to reach the
+  // paint, or the left of the slider is a no-op. At 0 this term vanishes and
+  // the gain is exactly the single pace curve.
+  const body =
+    amount > 0
+      ? Math.max(-1, Math.min(1, bodyAccent)) * inkSpeedBodyShape(slowness)
+      : 0;
   return Math.max(
     INK_SPEED_MIN_WIDTH_GAIN,
-    speedGain(slowness, strength, INK_SPEED_WIDTH_RANGE),
+    1 + INK_SPEED_WIDTH_RANGE * (linear + body),
   );
 }
 
@@ -273,6 +302,11 @@ export interface InkDrawOp {
   pressureSensitive: boolean;
   /** Speed-ink strength the stroke was written with (0–1); absent means off. */
   speedInk?: number;
+  /**
+   * Amplitude of the mid-stroke width modifier (0–1). Stamped at draw time.
+   * Absent on older strokes → 0 (Speed ink line only).
+   */
+  speedBodyAccent?: number;
   /**
    * Rim softness / dwell growth feel for speed-ink discs (0–1).
    * 0 = hard expanding core; 1 = wider soft rim + faster growth. Absent → device pref.
@@ -452,9 +486,10 @@ export function inkLineWidth(
   _pressureSensitive = false,
   slowness = INK_SLOWNESS_NEUTRAL,
   speedInk = 0,
+  bodyAccent = 0,
 ): number {
   const base = Math.max(INK_TIP_FLOOR, INK_TIP_MIN + (baseWidth - 1) * INK_TIP_STEP);
-  return base * inkSpeedWidthGain(slowness, speedInk);
+  return base * inkSpeedWidthGain(slowness, speedInk, bodyAccent);
 }
 
 /**
@@ -520,6 +555,7 @@ export function inkStrokeStyle(
   highlight = false,
   boldness = 1,
   fade = 0,
+  bodyAccent = 0,
 ): InkStrokeStyle {
   // A chisel has one width and one wetness — no reservoir, no pressure, no pace.
   if (highlight) {
@@ -531,7 +567,7 @@ export function inkStrokeStyle(
   const stylus = pressureSensitive && hasStylusPressure(pressure);
   const pNorm = stylus ? normalizePressure(pressure, pressureClip) : 0;
   return {
-    lineWidth: inkLineWidth(baseWidth, pNorm, stylus, slowness, speedInk),
+    lineWidth: inkLineWidth(baseWidth, pNorm, stylus, slowness, speedInk, bodyAccent),
     alpha: inkStrokeAlpha(
       maxFullness,
       pNorm,
@@ -855,6 +891,7 @@ export function inkStrokePointStyles(
   const maxFullness = op.maxFullness ?? 1;
   const pressureClip = op.pressureClip ?? 1;
   const speedInk = op.speedInk ?? 0;
+  const bodyAccent = resolveSpeedBodyAccent(op);
   const boldness = op.highlight ? 1 : resolveInkBoldness(op);
   const slowness = speedInk > 0 ? slopedSlowness(op) : null;
 
@@ -874,6 +911,7 @@ export function inkStrokePointStyles(
         op.highlight === true,
         boldness,
         resolveSpeedFade(op),
+        bodyAccent,
       ),
     );
   }
@@ -1118,81 +1156,65 @@ export function trailingTipClusterStart(
   return start;
 }
 
-function fillInkRibbonQuads(
+/**
+ * Fill the whole ribbon as one path, not a segment at a time.
+ *
+ * A `fill()` per segment antialiases the edge each pair of them shares twice:
+ * a boundary pixel takes coverage `a` from one and `1 - a` from the other and
+ * composites to `1 - a + a²`, 0.75 at the worst pixel. Every densified point
+ * therefore ruled a lighter hairline across the stroke, roughly every half
+ * nib, and a ribbon cross-hatched that often reads as pencil rather than ink.
+ * Painting opaque into the scratch never addressed this — that fixed alpha
+ * *stacking*, a different artefact. Measured on a straight ribbon: 66 of 375
+ * centre-row pixels short of full ink per-segment, 0 as one path.
+ *
+ * One path rasterises once, so shared edges are interior and never sampled —
+ * and it is one `fill()` for the stroke instead of one per segment. Segments
+ * go in as two triangles rather than a quad, each wound the same direction: a
+ * nonzero fill unions same-wound subpaths, but a subpath that flipped
+ * orientation would cancel against its neighbour and punch a hole, and a quad
+ * that crosses itself has no orientation to normalise — its signed area is
+ * zero. A triangle cannot cross itself, so it always has one.
+ */
+function addRibbonSubpaths(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   left: readonly { x: number; y: number }[],
   right: readonly { x: number; y: number }[],
 ): void {
+  if (left.length < 2) return;
   for (let index = 0; index < left.length - 1; index++) {
-    ctx.beginPath();
-    ctx.moveTo(left[index].x, left[index].y);
-    ctx.lineTo(left[index + 1].x, left[index + 1].y);
-    ctx.lineTo(right[index + 1].x, right[index + 1].y);
-    ctx.lineTo(right[index].x, right[index].y);
-    ctx.closePath();
-    ctx.fill();
+    addWoundTriangle(ctx, left[index], left[index + 1], right[index + 1]);
+    addWoundTriangle(ctx, left[index], right[index + 1], right[index]);
   }
 }
 
-function ribbonSideBounds(
-  left: readonly { x: number; y: number }[],
-  right: readonly { x: number; y: number }[],
-): { minX: number; minY: number; maxX: number; maxY: number } {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  const absorb = (p: { x: number; y: number }) => {
-    if (p.x < minX) minX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y > maxY) maxY = p.y;
-  };
-  for (const p of left) absorb(p);
-  for (const p of right) absorb(p);
-  return { minX, minY, maxX, maxY };
-}
-
-type RibbonScratch = HTMLCanvasElement | OffscreenCanvas;
-
-let ribbonScratch: RibbonScratch | null = null;
-
-function createRibbonScratch(width: number, height: number): RibbonScratch | null {
-  const w = Math.max(1, Math.ceil(width));
-  const h = Math.max(1, Math.ceil(height));
-  try {
-    if (typeof OffscreenCanvas !== "undefined") {
-      return new OffscreenCanvas(w, h);
-    }
-    if (typeof document !== "undefined" && document.createElement) {
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      return canvas;
-    }
-  } catch {
-    /* jsdom / restricted contexts */
+/** Add one closed triangle subpath, always wound the same direction. */
+function addWoundTriangle(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  c: { x: number; y: number },
+): void {
+  const twiceArea =
+    (b.x - a.x) * (b.y + a.y) + (c.x - b.x) * (c.y + b.y) + (a.x - c.x) * (a.y + c.y);
+  ctx.moveTo(a.x, a.y);
+  // Negative, to match `ctx.arc(...)` with the default sweep: join discs and
+  // caps go into this same path, and a subpath of opposite winding would
+  // cancel against the ribbon under a nonzero fill and punch a hole.
+  if (twiceArea <= 0) {
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(c.x, c.y);
+  } else {
+    ctx.lineTo(c.x, c.y);
+    ctx.lineTo(b.x, b.y);
   }
-  return null;
+  ctx.closePath();
 }
 
-function acquireRibbonScratch(width: number, height: number): RibbonScratch | null {
-  const w = Math.max(1, Math.ceil(width));
-  const h = Math.max(1, Math.ceil(height));
-  if (
-    ribbonScratch &&
-    ribbonScratch.width >= w &&
-    ribbonScratch.height >= h
-  ) {
-    return ribbonScratch;
-  }
-  const nextW = Math.max(w, ribbonScratch?.width ?? 0);
-  const nextH = Math.max(h, ribbonScratch?.height ?? 0);
-  const created = createRibbonScratch(nextW, nextH);
-  if (!created) return null;
-  ribbonScratch = created;
-  return ribbonScratch;
-}
+
+
+
+
 
 /**
  * Fill a variable-width ribbon as per-segment quads.
@@ -1221,65 +1243,14 @@ export function fillInkRibbon(
     return;
   }
 
-  const painted = paintOpaqueRibbonThenAlpha(ctx, left, right, alpha);
-  if (painted) return;
-
   ctx.globalAlpha = alpha;
-  fillInkRibbonQuads(ctx, left, right);
+  ctx.beginPath();
+  addRibbonSubpaths(ctx, left, right);
+  ctx.fill();
 }
 
-/**
- * Opaque ribbon (+ optional join stamps in scene space) then one alpha blit.
- * Returns false when scratch/drawImage is unavailable (tests / odd hosts).
- */
-function paintOpaqueRibbonThenAlpha(
-  ctx: CanvasRenderingContext2D,
-  left: readonly { x: number; y: number }[],
-  right: readonly { x: number; y: number }[],
-  alpha: number,
-  stampJoins?: (
-    scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  ) => void,
-  pad = 4,
-): boolean {
-  if (typeof ctx.drawImage !== "function") return false;
-  const { minX, minY, maxX, maxY } = ribbonSideBounds(left, right);
-  if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return false;
-  const width = maxX - minX + pad * 2;
-  const height = maxY - minY + pad * 2;
-  if (width < 1e-6 || height < 1e-6) return false;
 
-  const scratch = acquireRibbonScratch(width, height);
-  if (!scratch) return false;
-  const sctx = scratch.getContext("2d");
-  if (!sctx) return false;
 
-  const originX = minX - pad;
-  const originY = minY - pad;
-  sctx.setTransform(1, 0, 0, 1, 0, 0);
-  sctx.clearRect(0, 0, Math.ceil(width), Math.ceil(height));
-  sctx.globalAlpha = 1;
-  sctx.fillStyle = ctx.fillStyle;
-  sctx.translate(-originX, -originY);
-  fillInkRibbonQuads(sctx, left, right);
-  if (stampJoins) stampJoins(sctx);
-
-  const prevAlpha = ctx.globalAlpha;
-  ctx.globalAlpha = alpha;
-  ctx.drawImage(
-    scratch as CanvasImageSource,
-    0,
-    0,
-    Math.ceil(width),
-    Math.ceil(height),
-    originX,
-    originY,
-    Math.ceil(width),
-    Math.ceil(height),
-  );
-  ctx.globalAlpha = prevAlpha;
-  return true;
-}
 
 function strokePathLength(points: readonly ScenePoint[], fromIndex = 0): number {
   let len = 0;
@@ -1327,6 +1298,14 @@ function usesSpeedRibbon(op: InkDrawOp): boolean {
 function resolveSpeedFade(op: InkDrawOp): number {
   if (op.speedFade !== undefined) return clamp01(op.speedFade);
   return (op.speedInk ?? 0) > 0 ? 1 : 0;
+}
+
+function resolveSpeedBodyAccent(op: InkDrawOp): number {
+  if ((op.speedInk ?? 0) <= 0) return 0;
+  if (op.speedBodyAccent !== undefined) {
+    return Math.max(-1, Math.min(1, op.speedBodyAccent));
+  }
+  return 0;
 }
 
 function resolveInkBoldness(op: InkDrawOp): number {
@@ -1592,29 +1571,28 @@ function drawRibbonStrokeFrom(
   }
 
   const { left, right } = ribbonSides(prepared.points, prepared.styles, pixelScale);
-  const pad = Math.max(4, Math.ceil(maxHalf) + 2);
 
-  const stampHardExtras = (
-    scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  /*
+   * Join discs and caps, added to the caller's path rather than filled.
+   *
+   * They used to be stamped into a scratch canvas so that, at alpha below 1,
+   * a disc overlapping the ribbon would not composite twice and darken. Inside
+   * one path that cannot happen: overlap is resolved by the winding rule
+   * during a single rasterisation, so one fill paints the union at exactly the
+   * alpha asked for.
+   */
+  const addHardExtras = (
+    target: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   ) => {
-    const scratchCtx = scratch as CanvasRenderingContext2D;
-    scratchCtx.fillStyle = color ?? String(ctx.fillStyle);
-    scratchCtx.globalAlpha = 1;
     for (let i = 1; i < prepared.points.length - 1; i++) {
       const t0 = strokeTangentAt(prepared.points, i - 1);
       const t1 = strokeTangentAt(prepared.points, i);
       const cross = Math.abs(t0.x * t1.y - t0.y * t1.x);
       if (cross > RIBBON_CURVATURE_JOIN) {
-        paintInkDisc(
-          scratchCtx,
+        addDiscSubpath(
+          target,
           prepared.points[i],
-          prepared.styles[i].lineWidth,
-          1,
-          pixelScale,
-          0,
-          color,
-          false,
-          1,
+          paintedWidth(prepared.styles[i].lineWidth, pixelScale) / 2,
         );
       }
     }
@@ -1625,7 +1603,7 @@ function drawRibbonStrokeFrom(
         prepared.points[0].y - next.y,
         prepared.points[0].x - next.x,
       );
-      inkTerminalCap(scratchCtx, prepared.points[0], headAngle, radius);
+      addTerminalCapSubpath(target, prepared.points[0], headAngle, radius);
     }
     if (capEnd && tipClusterAt >= slice.length) {
       const last = prepared.points.length - 1;
@@ -1635,38 +1613,35 @@ function drawRibbonStrokeFrom(
         prepared.points[last].y - prev.y,
         prepared.points[last].x - prev.x,
       );
-      inkTerminalCap(scratchCtx, prepared.points[last], tailAngle, radius);
+      addTerminalCapSubpath(target, prepared.points[last], tailAngle, radius);
     }
     if (tipClusterAt < slice.length && prepared.points.length >= 2) {
       const last = prepared.points.length - 1;
-      paintInkDisc(
-        scratchCtx,
+      addDiscSubpath(
+        target,
         prepared.points[last],
-        prepared.styles[last].lineWidth,
-        1,
-        pixelScale,
-        0,
-        color,
-        false,
-        1,
+        paintedWidth(prepared.styles[last].lineWidth, pixelScale) / 2,
       );
     }
   };
 
-  const stamped = paintOpaqueRibbonThenAlpha(
-    ctx,
-    left,
-    right,
-    maxAlpha,
-    stampHardExtras,
-    pad,
-  );
-
-  if (!stamped) {
-    fillInkRibbon(ctx, left, right, maxAlpha);
-    stampHardExtras(ctx);
-  }
-
+  /*
+   * One path, one fill, straight onto the target at its own resolution.
+   *
+   * This used to paint into a scratch canvas at one pixel per *scene* unit and
+   * blit it at `zoom * dpr`, which enlarged every ribbon -- four fifths of a
+   * 3px nib dissolving into grey at 5x zoom -- and cost a clear, a blit and,
+   * whenever the bounds grew, a fresh canvas allocation mid-stroke. The scratch
+   * only ever existed to stop self-overlap stacking at alpha below 1, and a
+   * single path cannot stack against itself: the rasteriser resolves overlap by
+   * winding before any compositing happens. So it is both sharper and cheaper
+   * than either the scratch or the per-segment fills it replaced.
+   */
+  ctx.globalAlpha = maxAlpha;
+  ctx.beginPath();
+  addRibbonSubpaths(ctx, left, right);
+  addHardExtras(ctx);
+  ctx.fill();
   ctx.globalAlpha = 1;
 }
 
@@ -1680,6 +1655,7 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
   const maxFullness = op.maxFullness ?? 1;
   const pressureClip = op.pressureClip ?? 1;
   const speedInk = op.speedInk ?? 0;
+  const bodyAccent = resolveSpeedBodyAccent(op);
   const boldness = op.highlight ? 1 : resolveInkBoldness(op);
   const widthQuantum = nibWidth(op) * RUN_WIDTH_QUANTUM;
   // Only paid for when the stroke actually carries speed: without it every
@@ -1699,6 +1675,7 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
       op.highlight === true,
       boldness,
       resolveSpeedFade(op),
+      bodyAccent,
     );
 
   let start = Math.max(0, Math.min(fromIndex, points.length - 2));
@@ -1748,6 +1725,31 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
 function paintedWidth(lineWidth: number, pixelScale: number): number {
   if (pixelScale <= 0) return lineWidth;
   return Math.max(lineWidth, INK_MIN_DEVICE_PX / pixelScale);
+}
+
+/** Add a full disc as one subpath — no fill, same winding as the ribbon. */
+function addDiscSubpath(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  center: { x: number; y: number },
+  radius: number,
+): void {
+  if (radius < 1e-6) return;
+  ctx.moveTo(center.x + radius, center.y);
+  ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+  ctx.closePath();
+}
+
+/** Add a half-disc terminal cap as one subpath — no fill. */
+function addTerminalCapSubpath(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  at: { x: number; y: number },
+  outwardAngle: number,
+  radius: number,
+): void {
+  if (radius < 1e-6) return;
+  ctx.moveTo(at.x, at.y);
+  ctx.arc(at.x, at.y, radius, outwardAngle - Math.PI / 2, outwardAngle + Math.PI / 2);
+  ctx.closePath();
 }
 
 /** Half-disc terminal cap — `outwardAngle` points out of the stroke body. */
@@ -1806,6 +1808,7 @@ function drawStrokeFrom(
       op.highlight === true,
       boldness,
       resolveSpeedFade(op),
+      resolveSpeedBodyAccent(op),
     );
     if (usesSpeedRibbon(op) && resolveSpeedBlotBlend(op) > 1e-3) {
       const blotBlend = resolveSpeedBlotBlend(op);
@@ -2146,7 +2149,8 @@ export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
     const maxFullness = op.maxFullness ?? 1;
     const pressureClip = op.pressureClip ?? 1;
     const boldness = op.highlight ? 1 : resolveInkBoldness(op);
-    const style = inkStrokeStyle(
+    const bodyAccent = resolveSpeedBodyAccent(op);
+    const rest = inkStrokeStyle(
       op.baseWidth,
       maxFullness,
       1,
@@ -2157,8 +2161,24 @@ export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
       op.speedInk ?? 0,
       op.highlight === true,
       boldness,
+      0,
+      bodyAccent,
     );
-    const half = style.lineWidth / 2;
+    const midSlow = inkStrokeStyle(
+      op.baseWidth,
+      maxFullness,
+      1,
+      pressureClip,
+      op.pressureSensitive,
+      0,
+      0.75,
+      op.speedInk ?? 0,
+      op.highlight === true,
+      boldness,
+      0,
+      bodyAccent,
+    );
+    const half = Math.max(rest.lineWidth, midSlow.lineWidth) / 2;
     for (const point of op.points) {
       bounds = unionSceneBounds(bounds, {
         minX: point.x - half,
