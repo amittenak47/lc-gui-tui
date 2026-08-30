@@ -16,6 +16,8 @@ import { applyInkOp, ERASER_WIDTH_MAX } from "./rasterInk";
 import type { InkHandedness } from "../util/inkHandedness";
 import { testStripDrawOp } from "../util/inkPresetStrip";
 import {
+  defaultDrawSnapshot,
+  defaultEraserSnapshot,
   isEraserWedge,
   liveDrawSnapshot,
   liveEraserSnapshot,
@@ -243,6 +245,17 @@ export function InkPresetEditor({
             {kind.toUpperCase()} WHEEL · SLOT {index + 1}
           </span>
           <div className="lc-preset-sheet-actions">
+            <HoldButton
+              label="Reset"
+              ariaLabel="Reset this preset to the stock pen"
+              onConfirm={() =>
+                setDraft(
+                  kind === "eraser"
+                    ? defaultEraserSnapshot(name.trim() || seed.name)
+                    : defaultDrawSnapshot(name.trim() || seed.name),
+                )
+              }
+            />
             <HoldButton
               label="Duplicate"
               ariaLabel="Copy this preset into an empty slot"

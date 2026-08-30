@@ -29,6 +29,8 @@ import {
 import {
   INK_BOLDNESS_DEFAULT,
   INK_BOLDNESS_EVENT,
+  INK_BOLDNESS_MAX,
+  INK_BOLDNESS_MIN,
   loadInkBoldness,
   saveInkBoldness,
 } from "./inkBoldnessPref";
@@ -139,6 +141,36 @@ export function liveDrawSnapshot(name = "Global"): InkDrawSnapshot {
   };
 }
 
+/**
+ * Stock defaults, ignoring what this device has saved.
+ *
+ * Reset has to be a way *out* of a preset that cannot draw, so it deliberately
+ * does not read device prefs: if the same unusable value had reached them,
+ * seeding from them would hand the pen straight back its problem.
+ */
+export function defaultDrawSnapshot(name = "Preset"): InkDrawSnapshot {
+  return {
+    name,
+    width: STROKE_WIDTH_DEFAULT,
+    colour: "#3d3d3d",
+    fullness: INK_FULLNESS_DEFAULT,
+    pressureSensitive: true,
+    straightInk: false,
+    pressureClip: PRESSURE_CLIP_DEFAULT,
+    smoothing: INK_SMOOTHING_DEFAULT,
+    smoothingMode: INK_SMOOTHING_MODE_DEFAULT,
+    speed: INK_SPEED_DEFAULT,
+    blot: INK_SPEED_BLOT_BLEND_DEFAULT,
+    fade: INK_SPEED_FADE_DEFAULT,
+    boldness: INK_BOLDNESS_DEFAULT,
+  };
+}
+
+/** Stock eraser, same contract as {@link defaultDrawSnapshot}. */
+export function defaultEraserSnapshot(name = "Preset"): InkEraserSnapshot {
+  return { name, eraserWidth: STROKE_WIDTH_DEFAULT, partialErase: true };
+}
+
 export function liveEraserSnapshot(name = "Global"): InkEraserSnapshot {
   const prefs = loadInkToolPrefs();
   return {
@@ -188,7 +220,7 @@ function clampDraw(snap: InkDrawSnapshot): InkDrawSnapshot {
     speed: clamp(snap.speed, 0, 1),
     blot: clamp(snap.blot, 0, 1),
     fade: clamp(snap.fade, 0, 1),
-    boldness: clamp(snap.boldness, 0, 3),
+    boldness: clamp(snap.boldness, INK_BOLDNESS_MIN, INK_BOLDNESS_MAX),
   };
 }
 
