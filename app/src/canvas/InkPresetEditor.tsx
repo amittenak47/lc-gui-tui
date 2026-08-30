@@ -361,12 +361,45 @@ export function InkPresetEditor({
 }
 
 function TestStrip({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const frameRef = useRef(0);
+  const latest = useRef({ kind, snap });
+  latest.current = { kind, snap };
+
+  /*
+   * One repaint per frame, from an effect.
+   *
+   * This used to paint from an inline `ref` callback. React allocates a new
+   * function every render, so it detaches and reattaches the ref each time and
+   * the strike repainted *inside the commit phase* on every render — which
+   * means a whole ribbon rebuild (coalesce, densify, sides, path) for 48
+   * points on every pointermove of a slider. That is why the knobs and the
+   * sheet's own scrolling stuttered: the work was on the input path.
+   *
+   * A drag now coalesces into a single frame, and the frame reads the newest
+   * draft rather than the one it was scheduled with.
+   */
+  useEffect(() => {
+    if (frameRef.current !== 0) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = 0;
+      paintStrip(canvasRef.current, latest.current.kind, latest.current.snap);
+    });
+  }, [kind, snap]);
+
+  useEffect(
+    () => () => {
+      if (frameRef.current !== 0) cancelAnimationFrame(frameRef.current);
+    },
+    [],
+  );
+
   return (
     <canvas
       className="lc-preset-strip-canvas"
       width={468}
       height={88}
-      ref={(node) => paintStrip(node, kind, snap)}
+      ref={canvasRef}
       aria-hidden
     />
   );
