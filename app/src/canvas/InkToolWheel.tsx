@@ -139,14 +139,6 @@ function specRows(
     { label: "Pressure", value: snap.pressureSensitive ? "On" : "Off" },
     { label: "Straight line", value: snap.straightInk ? "On" : "Off" },
     { label: "Speed ink", value: snap.speed === 0 ? "Off" : `${Math.round(snap.speed * 100)}%` },
-    ...(snap.speed > 0
-      ? [
-          {
-            label: "Body accent",
-            value: (snap.body ?? 0) === 0 ? "Off" : `${Math.round((snap.body ?? 0) * 100)}%`,
-          },
-        ]
-      : []),
     { label: "Speed fade", value: snap.fade === 0 ? "Off" : `${Math.round(snap.fade * 100)}%` },
     { label: "Speed blot", value: snap.blot === 0 ? "Off" : `${Math.round(snap.blot * 100)}%` },
     { label: "Ink boost", value: `${Math.round(snap.boldness * 100)}%` },

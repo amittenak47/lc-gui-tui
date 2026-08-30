@@ -100,10 +100,4 @@ describe("collectDevicePrefsBlob", () => {
       expect.objectContaining({ inkSpeedFade: expect.any(Number) }),
     );
   });
-
-  it("includes inkSpeedBodyAccent", () => {
-    expect(collectDevicePrefsBlob()).toEqual(
-      expect.objectContaining({ inkSpeedBodyAccent: expect.any(Number) }),
-    );
-  });
 });

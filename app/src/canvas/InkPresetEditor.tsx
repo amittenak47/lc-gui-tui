@@ -39,8 +39,6 @@ import {
 import {
   speedBlotBlendFromPercent,
   speedBlotBlendToPercent,
-  speedBodyAccentFromPercent,
-  speedBodyAccentToPercent,
   speedFadeFromPercent,
   speedFadeToPercent,
   speedInkFromPercent,
@@ -473,9 +471,8 @@ function PhysicsKnobs({
         hint={
           <>
             Same pen as Off at a normal writing pace: slow down and the line
-            fattens, speed up and it thins. Body accent (below) is a modifier
-            of this dial. Speed blot and Speed fade are separate and work even
-            when this is Off. Saved on this device only.
+            fattens, speed up and it thins. Speed blot and Speed fade are
+            separate and work even when this is Off. Saved on this device only.
           </>
         }
       >
@@ -489,37 +486,6 @@ function PhysicsKnobs({
           onChange={(n) => onChange({ ...snap, speed: speedInkFromPercent(n) })}
         />
       </SettingsBlock>
-
-      {speedPct > 0 && (
-        <SettingsBlock
-          title="Body accent"
-          hint={
-            <>
-              Strength of the mid-stroke width wiggle while Speed ink is on: a
-              bit slow fattens, a bit fast thins. A full stop and a sprint stay
-              on the Speed ink line, so this does not blob the endpoints. Off
-              leaves Speed ink as the linear rest-to-sprint line. Saved on
-              this device only.
-            </>
-          }
-        >
-          <SettingsRange
-            label="Body accent"
-            min={0}
-            max={100}
-            step={5}
-            value={speedBodyAccentToPercent(snap.body ?? 0)}
-            display={
-              speedBodyAccentToPercent(snap.body ?? 0) === 0
-                ? "Off"
-                : `${speedBodyAccentToPercent(snap.body ?? 0)}%`
-            }
-            onChange={(n) =>
-              onChange({ ...snap, body: speedBodyAccentFromPercent(n) })
-            }
-          />
-        </SettingsBlock>
-      )}
 
       <SettingsBlock
         title="Speed blot"

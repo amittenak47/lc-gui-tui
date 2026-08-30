@@ -368,29 +368,6 @@ describe("speed ink", () => {
     expect(half).toBeLessThan(full);
   });
 
-  it("does nothing when Speed ink is off, even if body accent is 100%", () => {
-    for (const slowness of [0, 0.25, 0.5, 0.75, 1]) {
-      expect(inkSpeedWidthGain(slowness, 0, 1)).toBe(1);
-    }
-  });
-
-  it("fattens a bit-slow mid-stroke without bloating a full stop past Speed ink", () => {
-    const rest = inkSpeedWidthGain(1, 0.05, 1);
-    const midSlow = inkSpeedWidthGain(0.75, 0.05, 1);
-    const midFast = inkSpeedWidthGain(0.25, 0.05, 1);
-    expect(rest).toBeCloseTo(inkSpeedWidthGain(1, 0.05, 0));
-    expect(midSlow).toBeGreaterThan(inkSpeedWidthGain(0.75, 0.05, 0));
-    expect(midFast).toBeLessThan(inkSpeedWidthGain(0.25, 0.05, 0));
-    expect(midSlow).toBeGreaterThan(rest);
-  });
-
-  it("scales body accent only while Speed ink is on", () => {
-    const half = inkSpeedWidthGain(0.75, 0.05, 0.5);
-    const full = inkSpeedWidthGain(0.75, 0.05, 1);
-    expect(full).toBeGreaterThan(half);
-    expect(inkSpeedWidthGain(1, 0.05, 1)).toBeCloseTo(inkSpeedWidthGain(1, 0.05, 0));
-  });
-
   it("never asks for more than opaque ink on a full dial", () => {
     const maxSlow = inkStrokeAlpha(1, 0, false, 0, 1, 1, 1, 1);
     expect(maxSlow).toBeLessThanOrEqual(1);
