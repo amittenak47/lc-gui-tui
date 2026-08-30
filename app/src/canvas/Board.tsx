@@ -266,11 +266,9 @@ import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref
 import {
   INK_SPEED_BLOT_BLEND_EVENT,
   INK_SPEED_FADE_EVENT,
-  INK_SPEED_BODY_ACCENT_EVENT,
   loadInkSpeed,
   loadInkSpeedBlotBlend,
   loadInkSpeedFade,
-  loadInkSpeedBodyAccent,
 } from "../util/inkSpeedPref";
 import {
   INK_BOLDNESS_EVENT,
@@ -1384,9 +1382,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     loadInkSpeedBlotBlend(),
   );
   const [inkSpeedFade, setInkSpeedFade] = useState(() => loadInkSpeedFade());
-  const [inkSpeedBodyAccent, setInkSpeedBodyAccent] = useState(() =>
-    loadInkSpeedBodyAccent(),
-  );
   const [inkBoldness, setInkBoldness] = useState(() => loadInkBoldness());
   const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
   const [stampTrash, setStampTrash] = useState<{
@@ -3406,12 +3401,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const onFade = () => setInkSpeedFade(loadInkSpeedFade());
     window.addEventListener(INK_SPEED_FADE_EVENT, onFade);
     return () => window.removeEventListener(INK_SPEED_FADE_EVENT, onFade);
-  }, []);
-
-  useEffect(() => {
-    const onBody = () => setInkSpeedBodyAccent(loadInkSpeedBodyAccent());
-    window.addEventListener(INK_SPEED_BODY_ACCENT_EVENT, onBody);
-    return () => window.removeEventListener(INK_SPEED_BODY_ACCENT_EVENT, onBody);
   }, []);
 
   useEffect(() => {
@@ -9030,7 +9019,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         speedInk={inkSpeed}
         speedBlotBlend={inkSpeedBlotBlend}
         speedFade={inkSpeedFade}
-        speedBodyAccent={inkSpeedBodyAccent}
         inkBoldness={inkBoldness}
         partialErase={eraserPartial}
         pressureSensitive={pressureSensitive}

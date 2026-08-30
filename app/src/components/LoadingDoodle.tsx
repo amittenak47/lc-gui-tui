@@ -35,11 +35,9 @@ import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref
 import {
   INK_SPEED_BLOT_BLEND_EVENT,
   INK_SPEED_FADE_EVENT,
-  INK_SPEED_BODY_ACCENT_EVENT,
   loadInkSpeed,
   loadInkSpeedBlotBlend,
   loadInkSpeedFade,
-  loadInkSpeedBodyAccent,
 } from "../util/inkSpeedPref";
 import { loadInkToolPrefs } from "../util/inkToolPrefs";
 
@@ -62,7 +60,6 @@ interface InkLive {
   speedInk: number;
   speedBlotBlend: number;
   speedFade: number;
-  speedBodyAccent: number;
   smoothing: number;
   smoothingMode: "lift" | "live";
 }
@@ -81,7 +78,6 @@ function loadLiveInk(themeId: string): InkLive {
     speedInk: loadInkSpeed(),
     speedBlotBlend: loadInkSpeedBlotBlend(),
     speedFade: loadInkSpeedFade(),
-    speedBodyAccent: loadInkSpeedBodyAccent(),
     smoothing: loadInkSmoothing(),
     smoothingMode: loadInkSmoothingMode(),
   };
@@ -101,7 +97,6 @@ function makeDrawOp(live: InkLive, points: ScenePoint[]): InkDrawOp {
       ? {
           speedBlotBlend: live.speedBlotBlend,
           speedFade: live.speedFade,
-          ...(speed > 0 ? { speedBodyAccent: live.speedBodyAccent } : {}),
         }
       : {}),
     boldness: live.boldness,
@@ -145,7 +140,6 @@ export function LoadingDoodle({
     window.addEventListener("lc-ink-speed", reloadInk);
     window.addEventListener(INK_SPEED_BLOT_BLEND_EVENT, reloadInk);
     window.addEventListener(INK_SPEED_FADE_EVENT, reloadInk);
-    window.addEventListener(INK_SPEED_BODY_ACCENT_EVENT, reloadInk);
     window.addEventListener(INK_BOLDNESS_EVENT, reloadInk);
 
     const resize = () => {
@@ -305,7 +299,6 @@ export function LoadingDoodle({
       window.removeEventListener("lc-ink-speed", reloadInk);
       window.removeEventListener(INK_SPEED_BLOT_BLEND_EVENT, reloadInk);
       window.removeEventListener(INK_SPEED_FADE_EVENT, reloadInk);
-      window.removeEventListener(INK_SPEED_BODY_ACCENT_EVENT, reloadInk);
       window.removeEventListener(INK_BOLDNESS_EVENT, reloadInk);
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);

@@ -80,7 +80,7 @@ import {
 import { WHEEL_OPEN_MS } from "../util/gesture";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { DEBUG_INK, inkMetrics } from "./inkMetrics";
-import { INK_SPEED_BLOT_BLEND_DEFAULT, INK_SPEED_FADE_DEFAULT, INK_SPEED_BODY_ACCENT_DEFAULT } from "../util/inkSpeedPref";
+import { INK_SPEED_BLOT_BLEND_DEFAULT, INK_SPEED_FADE_DEFAULT } from "../util/inkSpeedPref";
 import { INK_BOLDNESS_DEFAULT } from "../util/inkBoldnessPref";
 
 export interface RasterInkHandle {
@@ -162,8 +162,6 @@ export interface RasterInkLayerProps {
   speedBlotBlend?: number;
   /** Pace wash toward pencil (0–1). Stamped onto new pen strokes. */
   speedFade?: number;
-  /** Mid-stroke width modifier amplitude (0–1). Stamped onto new pen strokes. */
-  speedBodyAccent?: number;
   /** Opacity boost (0–3). Stamped onto new pen strokes. */
   inkBoldness?: number;
   /**
@@ -218,7 +216,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       speedInk = 0,
       speedBlotBlend = INK_SPEED_BLOT_BLEND_DEFAULT,
       speedFade = INK_SPEED_FADE_DEFAULT,
-      speedBodyAccent = INK_SPEED_BODY_ACCENT_DEFAULT,
       inkBoldness = INK_BOLDNESS_DEFAULT,
       partialErase = true,
       getViewport,
@@ -441,8 +438,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     speedBlotBlendRef.current = speedBlotBlend;
     const speedFadeRef = useRef(speedFade);
     speedFadeRef.current = speedFade;
-    const speedBodyAccentRef = useRef(speedBodyAccent);
-    speedBodyAccentRef.current = speedBodyAccent;
     const inkBoldnessRef = useRef(inkBoldness);
     inkBoldnessRef.current = inkBoldness;
     const partialEraseRef = useRef(partialErase);
@@ -1470,7 +1465,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             false,
             boldness,
             live.speedFade ?? 0,
-            live.speedBodyAccent ?? 0,
           );
           const dense =
             speedInk > 0 ||
@@ -1519,7 +1513,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           false,
           live.boldness ?? inkBoldnessRef.current,
           live.speedFade ?? 0,
-          live.speedBodyAccent ?? 0,
         );
         const step = Math.max(style.lineWidth * INK_STEP_FACTOR_PRESSURE, 0.5);
         live.points.push(...stampAlongSegment(last, raw, step));
@@ -1757,7 +1750,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const speed = speedInkRef.current;
         const blotBlend = speedBlotBlendRef.current;
         const fade = speedFadeRef.current;
-        const bodyAccent = speedBodyAccentRef.current;
         const boldness = inkBoldnessRef.current;
         // Start at the neutral pace rather than at rest: the nib has no history
         // yet, and seeding it "stopped" would open every stroke with a blob.
@@ -1833,7 +1825,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                 ? {
                     speedBlotBlend: blotBlend,
                     speedFade: fade,
-                    ...(speed > 0 ? { speedBodyAccent: bodyAccent } : {}),
                   }
                 : {}),
               boldness,
@@ -1859,7 +1850,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                 ? {
                     speedBlotBlend: blotBlend,
                     speedFade: fade,
-                    ...(speed > 0 ? { speedBodyAccent: bodyAccent } : {}),
                   }
                 : {}),
               boldness,
@@ -1957,7 +1947,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               false,
               liveOp.boldness ?? inkBoldnessRef.current,
               liveOp.speedFade ?? 0,
-              liveOp.speedBodyAccent ?? 0,
             );
             const dwellDense =
               (liveOp.speedInk ?? 0) > 0 ||
@@ -2245,7 +2234,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                     live.kind === "draw" && live.highlight === true,
                     live.kind === "draw" ? (live.boldness ?? inkBoldnessRef.current) : 1,
                     live.kind === "draw" ? (live.speedFade ?? 0) : 0,
-                    live.kind === "draw" ? (live.speedBodyAccent ?? 0) : 0,
                   );
                   // Speed ink moves the width too, so it stamps as finely as a
                   // pressure stroke does — the taper is the whole point.
