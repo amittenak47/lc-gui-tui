@@ -208,6 +208,22 @@ export function inkSpeedPaceUnit(slowness: number): number {
   return (Math.max(0, Math.min(1, slowness)) - INK_SLOWNESS_NEUTRAL) * 2;
 }
 
+/**
+ * Mid-stroke width modifier: 0 at a full stop and a sprint, ±1 when the nib
+ * is a bit slow / a bit fast. Body accent is this times a 0–1 amplitude.
+ */
+/**
+ * Rest weight: 0 at ordinary pace and at a sprint, 1 at a full stop.
+ *
+ * Body is the endpoint tuner, and pen-down and lift are the slowest samples on
+ * the curve — so the shape it scales is rest, not a bump either side of
+ * ordinary pace. Positive fattens the ends; negative cancels Speed ink's rest
+ * swell so a lift does not land as a round blob.
+ */
+export function inkSpeedBodyShape(slowness: number): number {
+  return Math.max(0, inkSpeedPaceUnit(slowness));
+}
+
 /** Multiplier either side of 1: above when the nib drags, below when it flicks. */
 function speedGain(slowness: number, strength: number, range: number): number {
   const amount = Math.max(0, Math.min(1, strength));
@@ -215,10 +231,23 @@ function speedGain(slowness: number, strength: number, range: number): number {
   return 1 + range * amount * inkSpeedPaceUnit(slowness);
 }
 
-export function inkSpeedWidthGain(slowness: number, strength: number): number {
+export function inkSpeedWidthGain(
+  slowness: number,
+  strength: number,
+  bodyAccent = 0,
+): number {
+  const amount = Math.max(0, Math.min(1, strength));
+  const linear = amount * inkSpeedPaceUnit(slowness);
+  // Bipolar: the dial reads -100..+100 and the negative half has to reach the
+  // paint, or the left of the slider is a no-op. At 0 this term vanishes and
+  // the gain is exactly the single pace curve.
+  const body =
+    amount > 0
+      ? Math.max(-1, Math.min(1, bodyAccent)) * inkSpeedBodyShape(slowness)
+      : 0;
   return Math.max(
     INK_SPEED_MIN_WIDTH_GAIN,
-    speedGain(slowness, strength, INK_SPEED_WIDTH_RANGE),
+    1 + INK_SPEED_WIDTH_RANGE * (linear + body),
   );
 }
 
@@ -273,6 +302,11 @@ export interface InkDrawOp {
   pressureSensitive: boolean;
   /** Speed-ink strength the stroke was written with (0–1); absent means off. */
   speedInk?: number;
+  /**
+   * Amplitude of the mid-stroke width modifier (0–1). Stamped at draw time.
+   * Absent on older strokes → 0 (Speed ink line only).
+   */
+  speedBodyAccent?: number;
   /**
    * Rim softness / dwell growth feel for speed-ink discs (0–1).
    * 0 = hard expanding core; 1 = wider soft rim + faster growth. Absent → device pref.
@@ -452,9 +486,10 @@ export function inkLineWidth(
   _pressureSensitive = false,
   slowness = INK_SLOWNESS_NEUTRAL,
   speedInk = 0,
+  bodyAccent = 0,
 ): number {
   const base = Math.max(INK_TIP_FLOOR, INK_TIP_MIN + (baseWidth - 1) * INK_TIP_STEP);
-  return base * inkSpeedWidthGain(slowness, speedInk);
+  return base * inkSpeedWidthGain(slowness, speedInk, bodyAccent);
 }
 
 /**
@@ -520,6 +555,7 @@ export function inkStrokeStyle(
   highlight = false,
   boldness = 1,
   fade = 0,
+  bodyAccent = 0,
 ): InkStrokeStyle {
   // A chisel has one width and one wetness — no reservoir, no pressure, no pace.
   if (highlight) {
@@ -531,7 +567,7 @@ export function inkStrokeStyle(
   const stylus = pressureSensitive && hasStylusPressure(pressure);
   const pNorm = stylus ? normalizePressure(pressure, pressureClip) : 0;
   return {
-    lineWidth: inkLineWidth(baseWidth, pNorm, stylus, slowness, speedInk),
+    lineWidth: inkLineWidth(baseWidth, pNorm, stylus, slowness, speedInk, bodyAccent),
     alpha: inkStrokeAlpha(
       maxFullness,
       pNorm,
@@ -855,6 +891,7 @@ export function inkStrokePointStyles(
   const maxFullness = op.maxFullness ?? 1;
   const pressureClip = op.pressureClip ?? 1;
   const speedInk = op.speedInk ?? 0;
+  const bodyAccent = resolveSpeedBodyAccent(op);
   const boldness = op.highlight ? 1 : resolveInkBoldness(op);
   const slowness = speedInk > 0 ? slopedSlowness(op) : null;
 
@@ -874,6 +911,7 @@ export function inkStrokePointStyles(
         op.highlight === true,
         boldness,
         resolveSpeedFade(op),
+        bodyAccent,
       ),
     );
   }
@@ -1421,6 +1459,14 @@ function resolveSpeedFade(op: InkDrawOp): number {
   return (op.speedInk ?? 0) > 0 ? 1 : 0;
 }
 
+function resolveSpeedBodyAccent(op: InkDrawOp): number {
+  if ((op.speedInk ?? 0) <= 0) return 0;
+  if (op.speedBodyAccent !== undefined) {
+    return Math.max(-1, Math.min(1, op.speedBodyAccent));
+  }
+  return 0;
+}
+
 function resolveInkBoldness(op: InkDrawOp): number {
   if (op.boldness !== undefined) {
     return Math.min(INK_BOLDNESS_MAX, Math.max(INK_BOLDNESS_MIN, op.boldness));
@@ -1772,6 +1818,7 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
   const maxFullness = op.maxFullness ?? 1;
   const pressureClip = op.pressureClip ?? 1;
   const speedInk = op.speedInk ?? 0;
+  const bodyAccent = resolveSpeedBodyAccent(op);
   const boldness = op.highlight ? 1 : resolveInkBoldness(op);
   const widthQuantum = nibWidth(op) * RUN_WIDTH_QUANTUM;
   // Only paid for when the stroke actually carries speed: without it every
@@ -1791,6 +1838,7 @@ export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
       op.highlight === true,
       boldness,
       resolveSpeedFade(op),
+      bodyAccent,
     );
 
   let start = Math.max(0, Math.min(fromIndex, points.length - 2));
@@ -1898,6 +1946,7 @@ function drawStrokeFrom(
       op.highlight === true,
       boldness,
       resolveSpeedFade(op),
+      resolveSpeedBodyAccent(op),
     );
     if (usesSpeedRibbon(op) && resolveSpeedBlotBlend(op) > 1e-3) {
       const blotBlend = resolveSpeedBlotBlend(op);
@@ -2238,7 +2287,8 @@ export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
     const maxFullness = op.maxFullness ?? 1;
     const pressureClip = op.pressureClip ?? 1;
     const boldness = op.highlight ? 1 : resolveInkBoldness(op);
-    const style = inkStrokeStyle(
+    const bodyAccent = resolveSpeedBodyAccent(op);
+    const rest = inkStrokeStyle(
       op.baseWidth,
       maxFullness,
       1,
@@ -2249,8 +2299,24 @@ export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
       op.speedInk ?? 0,
       op.highlight === true,
       boldness,
+      0,
+      bodyAccent,
     );
-    const half = style.lineWidth / 2;
+    const midSlow = inkStrokeStyle(
+      op.baseWidth,
+      maxFullness,
+      1,
+      pressureClip,
+      op.pressureSensitive,
+      0,
+      0.75,
+      op.speedInk ?? 0,
+      op.highlight === true,
+      boldness,
+      0,
+      bodyAccent,
+    );
+    const half = Math.max(rest.lineWidth, midSlow.lineWidth) / 2;
     for (const point of op.points) {
       bounds = unionSceneBounds(bounds, {
         minX: point.x - half,

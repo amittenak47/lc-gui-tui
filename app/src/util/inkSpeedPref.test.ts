@@ -2,10 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   INK_SPEED_FADE_DEFAULT,
+  INK_SPEED_BODY_ACCENT_DEFAULT,
   loadInkSpeedFade,
+  loadInkSpeedBodyAccent,
   saveInkSpeedFade,
+  saveInkSpeedBodyAccent,
   speedFadeFromPercent,
   speedFadeToPercent,
+  speedBodyAccentFromPercent,
+  speedBodyAccentLabel,
+  speedBodyAccentToPercent,
 } from "./inkSpeedPref";
 
 beforeEach(() => {
@@ -28,5 +34,22 @@ describe("inkSpeedFade", () => {
   it("round-trips a percent dial", () => {
     saveInkSpeedFade(speedFadeFromPercent(40));
     expect(speedFadeToPercent(loadInkSpeedFade())).toBe(40);
+  });
+});
+
+describe("inkSpeedBodyAccent", () => {
+  it("defaults to 0 so Speed ink rest blobs are untouched until tuned", () => {
+    expect(loadInkSpeedBodyAccent()).toBe(INK_SPEED_BODY_ACCENT_DEFAULT);
+    expect(INK_SPEED_BODY_ACCENT_DEFAULT).toBe(0);
+  });
+
+  it("round-trips a percent dial including negative", () => {
+    saveInkSpeedBodyAccent(speedBodyAccentFromPercent(70));
+    expect(speedBodyAccentToPercent(loadInkSpeedBodyAccent())).toBe(70);
+    saveInkSpeedBodyAccent(speedBodyAccentFromPercent(-40));
+    expect(speedBodyAccentToPercent(loadInkSpeedBodyAccent())).toBe(-40);
+    expect(speedBodyAccentLabel(speedBodyAccentFromPercent(-40))).toBe("-40%");
+    expect(speedBodyAccentLabel(speedBodyAccentFromPercent(70))).toBe("+70%");
+    expect(speedBodyAccentLabel(0)).toBe("Off");
   });
 });

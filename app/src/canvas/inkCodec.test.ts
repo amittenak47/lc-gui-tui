@@ -186,6 +186,22 @@ describe("encodeInkOps / decodeInkOps", () => {
     expect(back.speedFade).toBeUndefined();
   });
 
+  it("carries speedBodyAccent across", () => {
+    const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], {
+      speedInk: 0.05,
+      speedBodyAccent: 0.7,
+    });
+    const [back] = roundTrip([original]) as [InkDrawOp];
+    expect(back.speedBodyAccent).toBe(0.7);
+  });
+
+  it("leaves speedBodyAccent absent when the stroke had none", () => {
+    const [back] = roundTrip([
+      stroke([{ x: 1, y: 2, pressure: 0.5 }], { speedInk: 0.5 }),
+    ]) as [InkDrawOp];
+    expect(back.speedBodyAccent).toBeUndefined();
+  });
+
   it("carries boldness across", () => {
     const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], {
       boldness: 2.5,

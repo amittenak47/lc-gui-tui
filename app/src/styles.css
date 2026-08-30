@@ -4594,11 +4594,105 @@ body[data-lc-sash-drag="horizontal"] {
   margin-top: 0;
 }
 
+/*
+ * One track, one filled pill. The active cell used to be a 16% tint plus a
+ * thin accent ring, which on the dark sheet read as an outline around half a
+ * box rather than a pressed cell — two faint chips, not a segmented control.
+ */
+.lc-preset-preview-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: min(184px, 100%);
+  padding: 3px;
+  border: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+/*
+ * `min-height` is the whole story on size here: the global `button` rule sets
+ * it to `--touch` (44px), so a two-cell control was ~100px tall before the
+ * chrome zoom multiplied it. Width and padding never got a vote.
+ */
+.lc-preset-preview-toggle > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  min-height: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  text-align: center;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.lc-preset-preview-toggle > button.is-active {
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.lc-preset-preview-stage {
+  position: relative;
+}
+
+/* Icon only — the eraser reads on its own, and the label doubled the chip. */
+.lc-preset-preview-erase {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgb(28 25 23 / 16%);
+  border-radius: 8px;
+  background: #fff;
+  color: #1c1917;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgb(28 25 23 / 12%);
+  cursor: pointer;
+}
+
+.lc-preset-preview-erase svg {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.lc-preset-preview-erase:hover,
+.lc-preset-preview-erase:focus-visible {
+  border-color: var(--accent);
+}
+
 .lc-preset-strip-canvas {
   width: 100%;
   height: 88px;
   border-radius: 8px;
   background: var(--paper, #fdf6e3);
+}
+
+.lc-preset-strip-canvas.is-live {
+  touch-action: none;
+  cursor: crosshair;
 }
 
 .lc-preset-sheet-cols {
@@ -13334,7 +13428,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-settings-slider-value {
   flex: 0 0 auto;
-  min-width: 3.2em;
+  min-width: 4.2em;
   text-align: right;
   font-size: 13px;
   font-weight: 600;

@@ -13,13 +13,16 @@ export const TEST_STRIP_POINTS: ScenePoint[] = Array.from({ length: 48 }, (_, i)
     x: 24 + t * 420,
     y: 44 + wave * 18,
     pressure: 0.7,
-    slowness: 0.5 + 0.35 * wave,
+    // Rest at the ends (Body) and a writing-pace wiggle through the middle.
+    slowness: i < 3 || i > 44 ? 1 : 0.5 + 0.35 * wave,
   };
 });
 
-export function testStripDrawOp(
+/** Paint op for the static strip or a live preview stroke. Uses the draft snap, not live keys. */
+export function drawOpFromSnap(
   kind: InkPresetKind,
   snap: InkWedgeSnapshot,
+  points: readonly ScenePoint[],
 ): InkDrawOp | null {
   if (kind === "eraser" || isEraserWedge(snap)) return null;
   return {
@@ -32,8 +35,16 @@ export function testStripDrawOp(
     speedInk: snap.speed,
     speedBlotBlend: snap.blot,
     speedFade: snap.fade,
+    speedBodyAccent: snap.body ?? 0,
     boldness: snap.boldness,
     highlight: kind === "highlighter",
-    points: TEST_STRIP_POINTS,
+    points: points.slice(),
   };
+}
+
+export function testStripDrawOp(
+  kind: InkPresetKind,
+  snap: InkWedgeSnapshot,
+): InkDrawOp | null {
+  return drawOpFromSnap(kind, snap, TEST_STRIP_POINTS);
 }

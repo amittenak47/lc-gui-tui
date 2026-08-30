@@ -203,12 +203,23 @@ export function inkOpBounds(op: InkOp): SceneBounds {
         // after clear+append (reset-board invisible band).
         (op.highlight
           ? inkLineWidth(op.baseWidth, 0, false) * HIGHLIGHT_WIDTH_SCALE
-          : inkLineWidth(
-              op.baseWidth,
-              1,
-              op.pressureSensitive,
-              1,
-              op.speedInk ?? 0,
+          : Math.max(
+              inkLineWidth(
+                op.baseWidth,
+                1,
+                op.pressureSensitive,
+                1,
+                op.speedInk ?? 0,
+                op.speedBodyAccent ?? 0,
+              ),
+              inkLineWidth(
+                op.baseWidth,
+                1,
+                op.pressureSensitive,
+                0.75,
+                op.speedInk ?? 0,
+                op.speedBodyAccent ?? 0,
+              ),
             )) /
           2 +
         INK_TIP_STEP;

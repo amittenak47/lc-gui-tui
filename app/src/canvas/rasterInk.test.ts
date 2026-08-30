@@ -31,6 +31,8 @@ import {
   INK_SPEED_ALPHA_BASE,
   INK_SPEED_NEUTRAL_PX_MS,
   INK_SPEED_WIDTH_RANGE,
+  INK_SPEED_MIN_WIDTH_GAIN,
+  inkSpeedPaceUnit,
   INK_PRESSURE_FLOOR,
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
@@ -366,6 +368,69 @@ describe("speed ink", () => {
     const full = inkLineWidth(2, 0, false, 1, 1);
     expect(half).toBeGreaterThan(base);
     expect(half).toBeLessThan(full);
+  });
+
+  it("does nothing when Speed ink is off, even if body accent is 100%", () => {
+    for (const slowness of [0, 0.25, 0.5, 0.75, 1]) {
+      expect(inkSpeedWidthGain(slowness, 0, 1)).toBe(1);
+    }
+  });
+
+  /*
+   * Body is the endpoint tuner, and it is bipolar.
+   *
+   * It used to scale `sin(pi * paceUnit)`, which peaks halfway between
+   * ordinary pace and a stop and is exactly zero *at* the stop — so the dial
+   * could not touch the rest blob at all, which is the one thing the control
+   * is labelled as doing ("left kills the round rest blob, right fattens the
+   * ends"). Pen-down and lift are the slowest samples on the curve, so the
+   * shape it scales is rest weight.
+   */
+  /*
+   * The guarantee that lets Body coexist with the one-curve pen: at 0 the body
+   * term vanishes and the gain is exactly `1 + RANGE * strength * paceUnit`,
+   * the single pace curve, to the bit. Restoring the dial cannot move the pen
+   * unless someone deliberately turns it.
+   */
+  it("is the single pace curve exactly when Body is 0", () => {
+    for (const slowness of [0, 0.25, INK_SLOWNESS_NEUTRAL, 0.75, 1]) {
+      for (const strength of [0, 0.05, 0.45, 1]) {
+        const oneCurve =
+          strength <= 0
+            ? 1
+            : Math.max(
+                INK_SPEED_MIN_WIDTH_GAIN,
+                1 + INK_SPEED_WIDTH_RANGE * strength * inkSpeedPaceUnit(slowness),
+              );
+        expect(inkSpeedWidthGain(slowness, strength, 0)).toBeCloseTo(oneCurve, 12);
+      }
+    }
+  });
+
+  it("tunes the rest blob at the endpoints, in both directions", () => {
+    const plain = inkSpeedWidthGain(1, 0.05, 0);
+    expect(inkSpeedWidthGain(1, 0.05, 1)).toBeGreaterThan(plain);
+    expect(inkSpeedWidthGain(1, 0.05, -1)).toBeLessThan(plain);
+  });
+
+  it("leaves ordinary pace and a sprint alone whichever way Body is set", () => {
+    for (const body of [-1, -0.4, 0, 0.4, 1]) {
+      expect(inkSpeedWidthGain(INK_SLOWNESS_NEUTRAL, 0.05, body)).toBeCloseTo(
+        inkSpeedWidthGain(INK_SLOWNESS_NEUTRAL, 0.05, 0),
+      );
+      expect(inkSpeedWidthGain(0, 0.05, body)).toBeCloseTo(
+        inkSpeedWidthGain(0, 0.05, 0),
+      );
+    }
+  });
+
+  it("scales body accent only while Speed ink is on", () => {
+    const half = inkSpeedWidthGain(1, 0.05, 0.5);
+    const full = inkSpeedWidthGain(1, 0.05, 1);
+    expect(full).toBeGreaterThan(half);
+    for (const body of [-1, 0, 1]) {
+      expect(inkSpeedWidthGain(1, 0, body)).toBe(1);
+    }
   });
 
   it("never asks for more than opaque ink on a full dial", () => {

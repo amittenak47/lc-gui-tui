@@ -20,6 +20,7 @@ import {
   type InkToolPresetStore,
   type InkWedgeSnapshot,
 } from "../util/inkToolPresets";
+import { speedBodyAccentLabel } from "../util/inkSpeedPref";
 import { clampWheelAnchor } from "./ColorRadial";
 
 const WHEEL_R = 96;
@@ -139,6 +140,14 @@ function specRows(
     { label: "Pressure", value: snap.pressureSensitive ? "On" : "Off" },
     { label: "Straight line", value: snap.straightInk ? "On" : "Off" },
     { label: "Speed ink", value: snap.speed === 0 ? "Off" : `${Math.round(snap.speed * 100)}%` },
+    ...(snap.speed > 0
+      ? [
+          {
+            label: "Body",
+            value: speedBodyAccentLabel(snap.body ?? 0),
+          },
+        ]
+      : []),
     { label: "Speed fade", value: snap.fade === 0 ? "Off" : `${Math.round(snap.fade * 100)}%` },
     { label: "Speed blot", value: snap.blot === 0 ? "Off" : `${Math.round(snap.blot * 100)}%` },
     { label: "Ink boost", value: `${Math.round(snap.boldness * 100)}%` },
