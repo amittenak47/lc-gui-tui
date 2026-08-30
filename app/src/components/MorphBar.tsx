@@ -109,7 +109,20 @@ export function MorphBar({
     const observer = new ResizeObserver(read);
     observer.observe(measure);
     return () => observer.disconnect();
-  }, [active, animateOnMount, axis, children]);
+    /*
+     * `children` is deliberately not a dependency.
+     *
+     * JSX allocates a fresh children object on every render, so listing it
+     * re-ran this layout effect every time the parent re-rendered: tear down
+     * the ResizeObserver, build a new one, and call `scrollHeight`, which
+     * forces a synchronous full-layout reflow. On the preset sheet that landed
+     * on the input path — a reflow of the whole sheet per pointermove of a
+     * slider — and it is what made the knobs stutter and the sheet impossible
+     * to flick-scroll. Content that actually changes size still re-measures:
+     * that is the ResizeObserver's job, and it is already watching.
+     */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, animateOnMount, axis]);
 
   const shellStyle: CSSProperties = {
     ...(typeof shellProps.style === "object" && shellProps.style
