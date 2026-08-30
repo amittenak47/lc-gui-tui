@@ -1541,7 +1541,16 @@ function drawRibbonStrokeFrom(
 
   let ribbonPoints = slice;
   let ribbonStyles = styles;
-  const tipClusterAt = trailingTipClusterStart(slice, nib);
+  /*
+   * Discs are Speed blot's, and only Speed blot's.
+   *
+   * This ran unconditionally, so a Speed-ink stroke with blot Off still broke
+   * its tail off into a pool at every lift and pause — graphite from a knob
+   * that is supposed to be shape only. Blot Off is a solid ribbon the whole
+   * way; a pause under it changes nothing.
+   */
+  const tipClusterAt =
+    blotBlend > 1e-3 ? trailingTipClusterStart(slice, nib) : slice.length;
   if (tipClusterAt < slice.length) {
     const tipPts = slice.slice(tipClusterAt);
     const tipStyles = styles.slice(tipClusterAt);
@@ -1601,7 +1610,9 @@ function drawRibbonStrokeFrom(
   const addHardExtras = (
     target: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   ) => {
-    for (let i = 1; i < prepared.points.length - 1; i++) {
+    // Join discs are graphite too: the same round stamp, laid where the stroke
+    // turns. With blot Off the ribbon's own mitre carries the corner.
+    for (let i = 1; blotBlend > 1e-3 && i < prepared.points.length - 1; i++) {
       const t0 = strokeTangentAt(prepared.points, i - 1);
       const t1 = strokeTangentAt(prepared.points, i);
       const cross = Math.abs(t0.x * t1.y - t0.y * t1.x);

@@ -1351,6 +1351,51 @@ describe("inkDiscRadii / dwell growth", () => {
   });
 });
 
+describe("Speed ink is shape only", () => {
+  function inkOp(extra: Partial<InkOp>): InkOp {
+    const pts: ScenePoint[] = [];
+    // A corner sharp enough to trip the join filter, then a dwell at the tail.
+    for (let i = 0; i <= 20; i++) pts.push({ x: i * 5, y: 0, pressure: NO_PRESSURE });
+    for (let i = 1; i <= 20; i++) pts.push({ x: 100, y: i * 5, pressure: NO_PRESSURE });
+    for (let i = 0; i < 12; i++) {
+      pts.push({ x: 100 + (i % 2) * 0.2, y: 100, pressure: NO_PRESSURE, slowness: 1 });
+    }
+    return {
+      kind: "draw",
+      color: "#112233",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedFade: 0,
+      points: pts,
+      ...extra,
+    } as InkOp;
+  }
+
+  /*
+   * The graphite belongs to Speed blot alone.
+   *
+   * The tip-cluster pool and the curvature join discs both ran unconditionally,
+   * so a Speed-ink stroke with blot Off still broke its tail into a pool at
+   * every lift and stamped a disc at every corner — a shape knob painting
+   * pencil. Round ends on a Speed-ink stroke are rest-fatten plus the round
+   * cap, which is a different thing and stays.
+   */
+  it("stamps no discs at joins or at lift when blot is off", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, inkOp({ speedInk: 1, speedBlotBlend: 0 }), 1);
+    // One path for the ribbon; nothing stamped separately on top of it.
+    expect(drawCtx.fillCount).toBe(1);
+  });
+
+  it("still stamps them when blot is on", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, inkOp({ speedInk: 1, speedBlotBlend: 1 }), 1);
+    expect(drawCtx.fillCount).toBeGreaterThan(1);
+  });
+});
+
 describe("Speed blot stamp frequency", () => {
   function blotOp(blot: number, speedInk = 0.5): InkOp {
     const pts: ScenePoint[] = [];
