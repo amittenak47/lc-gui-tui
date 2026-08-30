@@ -2,12 +2,21 @@
  * Device-local preference: boost stroke opacity to compensate for alpha blandness
  * when speed blot blend softens dwell/join discs.
  *
- * 100% = current alpha; 0% = transparent; 300% = 3× alpha (clamped to opaque at paint).
+ * 100% = current alpha, 300% = 3x alpha (clamped to opaque at paint).
+ *
+ * The floor is deliberately not zero. Boldness is the last multiply in
+ * `inkStrokeAlpha` (`deposit = min(1, paced * boldness)`), so 0 does not mean
+ * "faint", it means every stroke paints at alpha 0 -- a pen that cannot draw,
+ * savable into a wheel slot and indistinguishable from the app being broken.
+ * A slot stored that way cost an evening of hunting the renderer. The bottom
+ * of the dial is the faintest usable ink instead, and because this clamp is
+ * shared with `resolveInkBoldness`, presets and already-drawn strokes that
+ * recorded 0 come back at the floor rather than staying invisible.
  */
 
 const KEY = "whiteboard.inkBoldness";
 
-export const INK_BOLDNESS_MIN = 0;
+export const INK_BOLDNESS_MIN = 0.1;
 export const INK_BOLDNESS_MAX = 3;
 export const INK_BOLDNESS_DEFAULT = 1;
 
