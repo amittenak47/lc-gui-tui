@@ -1453,7 +1453,7 @@ describe("Speed ink is shape only", () => {
 });
 
 describe("fade falloff has no threshold to cross", () => {
-  function fadedOp(points: ScenePoint[]): InkOp {
+  function fadedOp(points: ScenePoint[], speedFade = 1): InkOp {
     return {
       kind: "draw",
       color: "#112233",
@@ -1463,7 +1463,7 @@ describe("fade falloff has no threshold to cross", () => {
       pressureSensitive: false,
       speedInk: 0.5,
       speedBlotBlend: 0,
-      speedFade: 1,
+      speedFade,
       points,
     };
   }
@@ -1501,7 +1501,7 @@ describe("fade falloff has no threshold to cross", () => {
 
   it("is flat when fade is off, whatever the shape", () => {
     const drawCtx = inkDrawContext();
-    applyInkOp(drawCtx.ctx, { ...fadedOp(coiled()), speedFade: 0 }, 1);
+    applyInkOp(drawCtx.ctx, fadedOp(coiled(), 0), 1);
     const used = drawCtx.fillAlphas.filter((a) => a > 0);
     expect(Math.max(...used) - Math.min(...used)).toBeCloseTo(0);
   });
