@@ -1,10 +1,10 @@
 /**
  * The one-tap hub Sync pill, parked in the board chrome slot.
  *
- * Step-2 stub: tapping walks the stage labels (Index → Pad → Ink → Links →
- * Pull → Synced) so the depth morph and the chrome placement can be judged,
- * but every stage is a no-op — no hub traffic yet. Later steps replace the
- * timer walk with the real Index→Pad→Ink→Links→Pull pipeline.
+ * Step-2 stub: tapping walks the stage labels so the depth morph and the
+ * chrome placement can be judged, but every stage is a no-op. A document
+ * starts at Index; a pad with nothing to index starts at Pad. The wired walk
+ * uses the same order.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -82,8 +82,16 @@ export type HubSyncStage =
   | "pull"
   | "synced";
 
-/** Walk order after a tap; `idle` sits outside it. */
+/** Full walk after a tap; `idle` sits outside it. Index is dropped when there is no document. */
 const WALK: HubSyncStage[] = ["index", "pad", "ink", "links", "pull", "synced"];
+
+function walkHasDocument(host: HubSyncWalkHost | null | undefined): boolean {
+  return Boolean(host?.doc());
+}
+
+function walkStages(hasDocument: boolean): HubSyncStage[] {
+  return hasDocument ? WALK : WALK.filter((stage) => stage !== "index");
+}
 
 /**
  * The pill belongs on a pad you can sync, not on Home / Explore / practice.
@@ -196,8 +204,8 @@ export interface HubSyncWalkHost {
 export interface HubSyncControlProps {
   /**
    * What the hub already had when this document was opened — read-only hint
-   * only. When the hub row exists, is not older than local-at-open, and the
-   * index is done, idle reads Synced; anything else reads Sync.
+   * only. When the hub row exists and is not older than local-at-open, idle
+   * reads Synced; a tab with a document also needs the index done.
    */
   hubHint?: (DocHubHint & { padUpToDate?: boolean }) | null;
   /** Present only when there is something to sync with; gates the real walk. */
@@ -312,8 +320,9 @@ export function HubSyncControl({
      */
     if (busy && !walkError) return;
     // Where to resume. A failure parks on its own stage and retries from it;
-    // everything else — idle, and a finished walk — starts at the top.
-    const from: HubSyncStage = walkError ? stage : "index";
+    // everything else — idle, and a finished walk — starts at the top of
+    // this tab's walk (Index when there is a document, Pad when there is not).
+    const from: HubSyncStage = walkError ? stage : walkStages(walkHasDocument(host))[0];
     setWalkError(null);
     if (client && host) {
       void runWalk(from);
@@ -322,7 +331,7 @@ export function HubSyncControl({
     // No client wired (tests, or a bare mount): the label walk alone.
     // One tap, including from Synced: a pill that only resets on the first
     // tap and runs on the second is two taps for one thing.
-    setStage(WALK[0]);
+    setStage(from);
   };
 
   /*
@@ -343,23 +352,30 @@ export function HubSyncControl({
     /*
      * Resume where it stopped.
      *
-     * `from` was accepted and ignored: retrying a failure at Pad, Ink or Links
-     * re-ran the whole index from the top, which on a book is minutes of work
-     * to get back to the stage that actually failed. Stage A is always run —
-     * it is both the "is the hub up?" check and the snapshot every later stage
-     * compares against, so it is not a stage to skip past.
+     * Hub ping always runs — it is both "is the hub up?" and the snapshot
+     * later stages compare against — but it is not the Index job. The pill
+     * sits on the first stage this walk will actually run: Index when there
+     * is a document, Pad when there is not. Retrying Pad used to flash Index
+     * during that ping.
      */
-    const startAt = Math.max(0, WALK.indexOf(from === "idle" ? "index" : from));
-    const runs = (stageId: HubSyncStage) => WALK.indexOf(stageId) >= startAt;
+    const doc = host?.doc() ?? null;
+    const hasDocument = Boolean(doc);
+    const stages = walkStages(hasDocument);
+    const fromStage =
+      from === "idle" ? stages[0] : !hasDocument && from === "index" ? "pad" : from;
+    const startAt = Math.max(0, stages.indexOf(fromStage));
+    const runs = (stageId: HubSyncStage) => {
+      const at = stages.indexOf(stageId);
+      return at !== -1 && at >= startAt;
+    };
     try {
       // — A: is there a hub, and is it up? Both end the walk before any write,
       // and the first has to be answered here — every stage below assumes one,
       // and stage C used to find out the hard way inside `indexFromBytes`.
-      goStage("index");
+      goStage(stages.find((stageId) => runs(stageId)) ?? stages[0]);
       if (!loadPadHub()) {
         throw new Error("no hub is set — add one in Settings");
       }
-      const doc = host?.doc() ?? null;
       /*
        * One ping for the whole walk.
        *
@@ -372,15 +388,13 @@ export function HubSyncControl({
       const ping = await client!.pingPadSync(0);
       throwIfAborted();
 
-      if (!runs("index")) {
-        // Already done on the attempt that got as far as the failing stage.
-        goWork(null, null);
-      } else if (!doc || doc.docType === "web") {
-        // Whiteboard/home have no document to index; web pads deliberately
-        // skip indexing and byte upload for now.
-        // TODO(web-index): web pads neither upload bytes nor index yet.
-        goWork(null, null);
-      } else {
+      if (runs("index")) {
+        if (!doc || doc.docType === "web") {
+          // Web pads skip extract/embed for now but still name Index.
+          // A whiteboard never reaches here — Index is not in its walk.
+          // TODO(web-index): web pads neither upload bytes nor index yet.
+          goWork(null, null);
+        } else {
         /*
          * — B: bytes on the hub? If not and we hold them, PUT once.
          *
@@ -484,9 +498,10 @@ export function HubSyncControl({
           }
           goWork(null, null);
         }
+        }
+        goWork(null, null);
+        if (doc && doc.docType !== "web") host?.onIndexDone();
       }
-      goWork(null, null);
-      if (runs("index") && doc && doc.docType !== "web") host?.onIndexDone();
 
       /*
        * — E through H, same tap. E and F can stop everything on a conflict:
@@ -777,10 +792,11 @@ export function HubSyncControl({
     // walk drives the labels — a background timer would drag a parked
     // stage forward past its own failure.
     if (client && host) return;
-    const at = WALK.indexOf(stage);
-    if (at === -1 || at === WALK.length - 1) return;
+    const stages = walkStages(walkHasDocument(host));
+    const at = stages.indexOf(stage);
+    if (at === -1 || at === stages.length - 1) return;
     timerRef.current = window.setTimeout(() => {
-      setStage(WALK[at + 1]);
+      setStage(stages[at + 1]);
     }, STAGE_MS);
     return () => {
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
@@ -799,15 +815,18 @@ export function HubSyncControl({
    */
   const editedSinceSynced = editSeq !== syncedAtSeqRef.current;
 
-  // Idle label per the open policy: Synced needs pad + index on the hub and
-  // no newer local ink than the hub knows about at open time.
+  // Idle label per the open policy: Synced needs a pad on the hub and no
+  // newer local ink than the hub knew about at open. Index only counts when
+  // this tab has a document to index. Stub mounts have no host, so they still
+  // require the hint's index bit — that is how the annotate-shaped tests talk.
+  const needsIndex = host ? walkHasDocument(host) : true;
   const syncedAtRest =
     stage === "idle" &&
     !editedSinceSynced &&
     hubHint != null &&
     hubHint.padUpdatedAt != null &&
     hubHint.padUpToDate !== false &&
-    hubHint.indexedOnHub;
+    (needsIndex ? hubHint.indexedOnHub : true);
   const restStage: HubSyncStage = syncedAtRest ? "synced" : "idle";
   const settled = stage === "synced" && !editedSinceSynced ? "synced" : restStage;
   const activeStage = busy ? stage : settled;
