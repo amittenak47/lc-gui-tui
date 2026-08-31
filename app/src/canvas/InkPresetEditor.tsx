@@ -779,9 +779,10 @@ function PhysicsKnobs({
         title="Grain"
         hint={
           <>
-            Nib material. Off is a hard felt-tip. Turn it up for a seeded
-            pencil edge at the same size. Speed blot can still pool that disc
-            if you hold. Saved on this device only.
+            Nib material. Off is a hard felt-tip. Turn it up for clear fibre
+            scratches placed at random through the stroke — not a line down
+            the middle. Speed blot can still pool that disc if you hold. Saved
+            on this device only.
           </>
         }
       >
@@ -800,9 +801,11 @@ function PhysicsKnobs({
         title="Speed blot"
         hint={
           <>
-            Hold to pool past the nib. Off stays nib-sized. 100% pools faster
-            and larger. Grain can texture the same disc. Saved on this device
-            only.
+            Hold to pool as a wash of the same colour. Size follows the
+            speed-ink stroke — it does not balloon past what actually paints.
+            Off stays nib-sized. 100% pools the wash faster. A large nib gets
+            a 1px seal into the stroke; a thin nib uses blot and fade instead.
+            Saved on this device only.
           </>
         }
       >
