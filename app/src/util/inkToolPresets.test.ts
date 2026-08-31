@@ -1,13 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ERASER_WIDTH_MAX } from "../canvas/rasterInk";
+import { ERASER_WIDTH_MAX, STROKE_WIDTH_DEFAULT } from "../canvas/rasterInk";
 import { selectHoldYieldsToScroll } from "./gesture";
+import { INK_BOLDNESS_DEFAULT, loadInkBoldness, saveInkBoldness } from "./inkBoldnessPref";
 import { loadInkSpeedFade } from "./inkSpeedPref";
-import { loadInkToolPrefs } from "./inkToolPrefs";
-import { TEST_STRIP_POINTS, testStripDrawOp } from "./inkPresetStrip";
+import { loadInkToolPrefs, saveInkToolPrefs } from "./inkToolPrefs";
+import { drawOpFromSnap, TEST_STRIP_POINTS, testStripDrawOp } from "./inkPresetStrip";
 import {
   applyWedge,
+  defaultDrawSnapshot,
+  defaultEraserSnapshot,
   eraserWedgeFill,
+  liveDrawSnapshot,
+  liveEraserSnapshot,
   loadInkToolPresets,
   saveWedge,
   specCardSide,
@@ -17,6 +22,7 @@ import {
   wheelHoldIsDrawingHop,
   wheelHoldOutcome,
   wheelHoldTurn,
+  writeLiveFromDraw,
   type InkDrawSnapshot,
   type InkEraserSnapshot,
 } from "./inkToolPresets";
@@ -274,5 +280,56 @@ describe("test strip", () => {
     expect(a?.speedFade).toBe(0);
     expect(testStripDrawOp("pen", { ...draw, fade: 0.4 })?.speedFade).toBe(0.4);
     expect(testStripDrawOp("eraser", eraser)).toBeNull();
+  });
+
+  it("builds a live-pad op from the draft points, not the strip polyline", () => {
+    const pts = [{ x: 1, y: 2, pressure: 0.5 }];
+    const op = drawOpFromSnap("pen", draw, pts);
+    expect(op?.points).toEqual(pts);
+    expect(op?.points).not.toBe(TEST_STRIP_POINTS);
+    expect(drawOpFromSnap("eraser", eraser, pts)).toBeNull();
+  });
+});
+
+describe("Reset stock snapshots", () => {
+  it("ignores live device prefs so Reset can escape an invisible pen", () => {
+    saveInkBoldness(0);
+    saveInkToolPrefs({
+      ...loadInkToolPrefs(),
+      penWidth: 32,
+      straightInk: true,
+      pressureSensitive: false,
+    });
+    const stock = defaultDrawSnapshot("Preset");
+    expect(stock.boldness).toBe(INK_BOLDNESS_DEFAULT);
+    expect(stock.width).toBe(STROKE_WIDTH_DEFAULT);
+    expect(stock.straightInk).toBe(false);
+    expect(stock.pressureSensitive).toBe(true);
+    expect(stock.speed).toBe(0);
+    expect(stock.blot).toBe(0);
+    expect("body" in stock).toBe(false);
+    expect(liveDrawSnapshot().boldness).toBe(0);
+    expect(liveDrawSnapshot().width).toBe(32);
+  });
+
+  it("stock eraser ignores live eraser width", () => {
+    saveInkToolPrefs({ ...loadInkToolPrefs(), eraserWidth: 96 });
+    expect(defaultEraserSnapshot("E").eraserWidth).toBe(STROKE_WIDTH_DEFAULT);
+    expect(liveEraserSnapshot().eraserWidth).toBe(96);
+  });
+
+  it("saving a reset snapshot writes stock onto live keys", () => {
+    const stock = defaultDrawSnapshot("Heading");
+    writeLiveFromDraw(stock, loadInkToolPrefs());
+    expect(loadInkToolPrefs().penWidth).toBe(STROKE_WIDTH_DEFAULT);
+    expect(loadInkBoldness()).toBe(INK_BOLDNESS_DEFAULT);
+    let store = loadInkToolPresets();
+    store = saveWedge(store, "pen", 1, stock);
+    store = applyWedge(store, "pen", 1);
+    expect(loadInkToolPrefs().penWidth).toBe(STROKE_WIDTH_DEFAULT);
+    expect(wedgeAt(store, "pen", 1)).toMatchObject({
+      width: STROKE_WIDTH_DEFAULT,
+      boldness: INK_BOLDNESS_DEFAULT,
+    });
   });
 });
