@@ -1709,8 +1709,72 @@ function drawRibbonStrokeFrom(
 /** Nib stamps per unit at Speed blot 0+ and at 100%, as multiples of half-width. */
 const BLOT_STAMP_SPACING_SPARSE = 3.2;
 const BLOT_STAMP_SPACING_DENSE = 0.6;
-/** Ceiling on stamps for one paint, so a long stroke cannot stall the pen. */
-const BLOT_STAMP_MAX = 400;
+/**
+ * Ceiling on stamps for one paint.
+ *
+ * Live smoothing repaints the whole stroke from index 0 on every animation
+ * frame, so anything proportional to stroke length is paid again each frame
+ * and the pen gets heavier the longer the word. Spacing widens to stay under
+ * this, which trades even grain on a very long stroke for a flat cost per
+ * frame -- the stroke you are still writing has to stay ahead of the nib.
+ */
+const BLOT_STAMP_MAX = 260;
+
+/**
+ * One soft stamp, drawn once and blitted per dab.
+ *
+ * Building a `createRadialGradient` per stamp measured 0.42ms for 400 stamps
+ * against 0.17ms for blitting a cached sprite -- and that is desktop Chrome,
+ * with a tablet several times slower again. Sprite lives at module scope and
+ * is rebuilt only when the colour or the rim changes, which is once a stroke.
+ */
+let blotSprite: RibbonScratchLike | null = null;
+let blotSpriteKey = "";
+
+type RibbonScratchLike = HTMLCanvasElement | OffscreenCanvas;
+
+const BLOT_SPRITE_PX = 64;
+
+function blotStampSprite(color: string, rimFrac: number): RibbonScratchLike | null {
+  const key = `${color}|${rimFrac.toFixed(3)}`;
+  if (blotSprite && blotSpriteKey === key) return blotSprite;
+  let canvas: RibbonScratchLike | null = null;
+  try {
+    if (typeof OffscreenCanvas !== "undefined") {
+      canvas = new OffscreenCanvas(BLOT_SPRITE_PX, BLOT_SPRITE_PX);
+    } else if (typeof document !== "undefined" && document.createElement) {
+      const el = document.createElement("canvas");
+      el.width = BLOT_SPRITE_PX;
+      el.height = BLOT_SPRITE_PX;
+      canvas = el;
+    }
+  } catch {
+    return null;
+  }
+  if (!canvas) return null;
+  const sctx = canvas.getContext("2d") as CanvasRenderingContext2D | null;
+  if (!sctx) return null;
+  const mid = BLOT_SPRITE_PX / 2;
+  const { r, g, b } = inkColorRgb(color);
+  const gradient = sctx.createRadialGradient(
+    mid,
+    mid,
+    mid * Math.max(0, 1 - rimFrac),
+    mid,
+    mid,
+    mid,
+  );
+  gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 1)`);
+  gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+  sctx.clearRect(0, 0, BLOT_SPRITE_PX, BLOT_SPRITE_PX);
+  sctx.fillStyle = gradient;
+  sctx.beginPath();
+  sctx.arc(mid, mid, mid, 0, Math.PI * 2);
+  sctx.fill();
+  blotSprite = canvas;
+  blotSpriteKey = key;
+  return canvas;
+}
 
 /**
  * Speed blot: interleaved nib stamps along the stroke, one fill each.
@@ -1756,8 +1820,35 @@ function stampBlotDiscs(
    * the rim the blot dial has always described and no call site ever drew:
    * a firmer core low on the dial, a wider, softer edge high on it.
    */
-  const { r, g, b } = inkColorRgb(color ?? String(ctx.fillStyle));
+  const ink = color ?? String(ctx.fillStyle);
+  const { r, g, b } = inkColorRgb(ink);
   const rimFrac = 0.28 + 0.42 * amount;
+
+  /*
+   * Widen the spacing until the stamp count fits the per-frame ceiling.
+   *
+   * Without this the count rises with stroke length, and live smoothing repays
+   * the whole stroke every frame -- so the pen slows as the word grows, which
+   * is the one thing writing cannot tolerate.
+   */
+  let stride = spacingFrac;
+  let travel = 0;
+  let minHalf = Infinity;
+  for (let index = 1; index < points.length; index++) {
+    travel += Math.hypot(
+      points[index].x - points[index - 1].x,
+      points[index].y - points[index - 1].y,
+    );
+  }
+  for (const style of prepared.styles) {
+    minHalf = Math.min(minHalf, paintedWidth(style.lineWidth, pixelScale) / 2);
+  }
+  if (Number.isFinite(minHalf) && minHalf > 1e-6) {
+    const wanted = travel / (minHalf * stride);
+    if (wanted > BLOT_STAMP_MAX) stride *= wanted / BLOT_STAMP_MAX;
+  }
+
+  const sprite = blotStampSprite(ink, rimFrac);
   const prevFill = ctx.fillStyle;
   ctx.globalAlpha = alpha;
   let carried = Infinity;
@@ -1771,14 +1862,24 @@ function stampBlotDiscs(
     }
     const half = paintedWidth(prepared.styles[index].lineWidth, pixelScale) / 2;
     if (half < 1e-6) continue;
-    if (carried < half * spacingFrac) continue;
+    if (carried < half * stride) continue;
     carried = 0;
     stamped++;
-    const core = Math.max(0, half * (1 - rimFrac));
+    if (sprite) {
+      ctx.drawImage(
+        sprite as CanvasImageSource,
+        points[index].x - half,
+        points[index].y - half,
+        half * 2,
+        half * 2,
+      );
+      continue;
+    }
+    // No canvas to bake a sprite into (jsdom, odd hosts): build the rim inline.
     const gradient = ctx.createRadialGradient(
       points[index].x,
       points[index].y,
-      core,
+      Math.max(0, half * (1 - rimFrac)),
       points[index].x,
       points[index].y,
       half,

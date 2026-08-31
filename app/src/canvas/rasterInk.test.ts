@@ -1477,6 +1477,32 @@ describe("Speed blot stamp frequency", () => {
   });
 
   /* Blot off is a plain ribbon: the one path fill, and nothing stamped on it. */
+  /*
+   * Live smoothing repaints the whole stroke every animation frame, so a stamp
+   * count that rises with length is repaid each frame and the pen slows as the
+   * word grows. Spacing widens to hold the count flat instead.
+   */
+  it("holds the stamp count flat as a stroke gets longer", () => {
+    function longOp(segments: number): InkOp {
+      const pts: ScenePoint[] = [];
+      for (let i = 0; i <= segments; i++) {
+        pts.push({ x: i * 6, y: 40 + Math.sin(i / 6) * 10, pressure: NO_PRESSURE });
+      }
+      return { ...blotOp(1), points: pts };
+    }
+    const shortRun = (() => {
+      const c = inkDrawContext();
+      applyInkOp(c.ctx, longOp(60), 1);
+      return c.fillCount;
+    })();
+    const longRun = (() => {
+      const c = inkDrawContext();
+      applyInkOp(c.ctx, longOp(1200), 1);
+      return c.fillCount;
+    })();
+    expect(longRun).toBeLessThanOrEqual(shortRun * 3);
+  });
+
   it("stamps nothing at all when blot is off", () => {
     expect(stamps(0)).toBe(0);
   });
