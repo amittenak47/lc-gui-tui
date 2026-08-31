@@ -230,11 +230,13 @@ export function inkSpeedAlphaGain(slowness: number, _strength: number, fade = 0)
 }
 
 /**
- * Pooling is a wash of the same ink: richer chroma, lower coverage.
- * Darkening toward black read as mud on mint and mauve.
+ * Pooling is a richer deposit of the same ink: more chroma, more coverage.
+ * The blot disc must read denser than the trail, not as a pale halo.
  */
-export const INK_BLOT_ALPHA_DROP = 0.42;
-export const INK_BLOT_SATURATE = 0.38;
+export const INK_BLOT_ALPHA_LIFT = 0.55;
+export const INK_BLOT_SATURATE = 0.42;
+/** How far a full pool may grow past the nib. Independent of speed ink. */
+export const INK_BLOT_SIZE_RANGE = 0.32;
 
 export function inkBlotPoolT(growT: number, blotBlend: number): number {
   return clamp01(blotBlend) * clamp01(growT);
@@ -249,7 +251,7 @@ export function mixBlotAlpha(alpha: number, poolT: number): number {
   const a = Math.max(0, Math.min(1, alpha));
   const t = clamp01(poolT);
   if (t <= 0) return a;
-  return a * (1 - INK_BLOT_ALPHA_DROP * t);
+  return a + (1 - a) * INK_BLOT_ALPHA_LIFT * t;
 }
 
 export function blotPoolRgb(
@@ -556,7 +558,7 @@ export function inkStrokeAlpha(
 export interface InkStrokeStyle {
   lineWidth: number;
   alpha: number;
-  /** 0–1 blot pooling at this sample. Saturates fill; lowers coverage. */
+  /** 0–1 blot pooling at this sample. Saturates fill; raises coverage. */
   blotPool?: number;
 }
 
@@ -1464,36 +1466,41 @@ function resolveInkBoldness(op: InkDrawOp): number {
   return loadInkBoldness();
 }
 
-/** Tip-down dwell starts as the nib. Size follows the speed-ink trail. */
+/** Tip-down dwell starts as the nib. Blot may grow a slow pool past it. */
 const GRAIN_SALT = 47;
-/** Same 1 device-px overlap as tile/cap seal. Large nibs only — a hairline extra on a thin tip reads as a halo. */
+/** 1 device-px rim pad so a disc covers the ribbon AA fringe. */
 const INK_DISC_SEAL_DEVICE_PX = 1;
-const INK_DISC_SEAL_MIN_DEVICE_R = 8;
+/** Pull the disc this fraction of its radius into the stroke so the butt does not show paper. */
+const INK_DISC_SEAL_INSET_FRAC = 0.12;
 
 /**
- * Outer radius for a speed-ink / blot disc.
+ * Outer radius for a speed-blot disc.
  *
- * Matches the current trail half-width (`tipRadius` already includes speed-ink
- * gain). `growT` / blot still drive the wash (chroma + coverage), not size —
- * extra radius used to outrun the stroke and never commit.
+ * `growT` 0 is the nib. `growT` 1 with blot on grows by
+ * {@link INK_BLOT_SIZE_RANGE} × blot × pressure — independent of speed ink,
+ * and much slower than the speed-ink swell (see {@link blotTicksToFull}).
  */
 export function inkDiscRadii(
   tipRadius: number,
-  _blotBlend = 0,
-  _growT = 1,
-  _pressureAmt = 1,
+  blotBlend = 0,
+  growT = 1,
+  pressureAmt = 1,
 ): { outerR: number; innerR: number } {
-  void _blotBlend;
-  void _growT;
-  void _pressureAmt;
   const tip = Math.max(0, tipRadius);
-  return { outerR: tip, innerR: tip };
+  const extra =
+    tip *
+    INK_BLOT_SIZE_RANGE *
+    clamp01(blotBlend) *
+    clamp01(growT) *
+    clamp01(pressureAmt);
+  const outerR = tip + extra;
+  return { outerR, innerR: outerR };
 }
 
-/** 1 device-px radius pad so a large disc overlaps the ribbon like an endcap. */
+/** 1 device-px radius pad so the disc rim seals to the ribbon. */
 export function discSealPad(tipRadius: number, pixelScale: number): number {
+  void tipRadius;
   if (pixelScale <= 0) return 0;
-  if (tipRadius * pixelScale < INK_DISC_SEAL_MIN_DEVICE_R) return 0;
   return INK_DISC_SEAL_DEVICE_PX / pixelScale;
 }
 
@@ -1505,17 +1512,21 @@ function inkDiscPaintRadius(
   pixelScale: number,
 ): number {
   const { outerR } = inkDiscRadii(tipRadius, blotBlend, growT, pressureAmt);
-  return outerR + discSealPad(outerR, pixelScale);
+  const pad =
+    clamp01(blotBlend) > 1e-3 && clamp01(growT) > 1e-3
+      ? discSealPad(outerR, pixelScale)
+      : 0;
+  return outerR + pad;
 }
 
-/** Pull a tip disc 1 device-px into the stroke so it seals the butt. */
+/** Pull a tip disc into the stroke so paper does not show at the butt. */
 function sealDiscCenter<T extends { x: number; y: number }>(
   at: T,
   toward: { x: number; y: number } | undefined,
   radius: number,
   pixelScale: number,
 ): T {
-  const pad = discSealPad(radius, pixelScale);
+  const pad = Math.max(discSealPad(radius, pixelScale), radius * INK_DISC_SEAL_INSET_FRAC);
   if (pad <= 0 || !toward) return at;
   const dx = toward.x - at.x;
   const dy = toward.y - at.y;
@@ -1524,15 +1535,15 @@ function sealDiscCenter<T extends { x: number; y: number }>(
   return { ...at, x: at.x + (dx / dist) * pad, y: at.y + (dy / dist) * pad };
 }
 
-/** Samples to reach full blot pool. Slow at 5%, faster at 100%, still slower than the ~100ms speed-ink swell. */
+/** Samples to reach full blot pool. Seconds, not the ~100ms speed-ink swell. */
 export function blotTicksToFull(blotBlend: number): number {
-  return Math.max(12, Math.round(90 - 78 * clamp01(blotBlend)));
+  return Math.max(120, Math.round(480 - 300 * clamp01(blotBlend)));
 }
 
 /**
- * How far a near-stationary cluster has pooled as a wash.
- * First contact is 0. Size follows the trail; growT only changes coverage.
- * Moving paths do not keep a leftover pool.
+ * How far a near-stationary cluster has pooled past the nib.
+ * First contact is 0 (nib-sized). Moving paths do not keep a leftover pool.
+ * Runs with blot on even when speed ink is off.
  */
 export function dwellBlotGrowT(
   points: readonly ScenePoint[],
@@ -1541,6 +1552,7 @@ export function dwellBlotGrowT(
 ): number {
   if (points.length <= 1) return 0;
   if (tipRadius < 1e-6) return 0;
+  if (clamp01(blotBlend) < 1e-3) return 0;
   if (!isDiscPrimaryPath(points, tipRadius * 2)) return 0;
   const ticksToFull = blotTicksToFull(blotBlend);
   return clamp01((points.length - 1) / Math.max(1, ticksToFull));
