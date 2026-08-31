@@ -1594,29 +1594,36 @@ describe("Speed blot stamp frequency", () => {
 
   /* Blot off is a plain ribbon: the one path fill, and nothing stamped on it. */
   /*
-   * Live smoothing repaints the whole stroke every animation frame, so a stamp
-   * count that rises with length is repaid each frame and the pen slows as the
-   * word grows. Spacing widens to hold the count flat instead.
+   * A dab belongs to the place it sits, not to the stroke's current length.
+   *
+   * Spacing used to widen with total travel to hold the count under a ceiling.
+   * Live smoothing repaints the whole stroke every frame, so each time the
+   * stroke grew the spacing changed and every stamp landed somewhere new --
+   * beads visibly crawling along a line still being drawn.
    */
-  it("holds the stamp count flat as a stroke gets longer", () => {
-    function longOp(segments: number): InkOp {
+  it("leaves earlier stamps where they were as the stroke grows", () => {
+    function run(segments: number) {
       const pts: ScenePoint[] = [];
       for (let i = 0; i <= segments; i++) {
-        pts.push({ x: i * 6, y: 40 + Math.sin(i / 6) * 10, pressure: NO_PRESSURE });
+        pts.push({ x: i * 6, y: 40, pressure: NO_PRESSURE });
       }
-      return { ...blotOp(1), points: pts };
+      const drawCtx = inkDrawContext();
+      applyInkOp(drawCtx.ctx, { ...blotOp(1), points: pts }, 1);
+      // Stamp centres, in order along the stroke.
+      return drawCtx.caps.map((cap) => cap.x).sort((a, b) => a - b);
     }
-    const shortRun = (() => {
-      const c = inkDrawContext();
-      applyInkOp(c.ctx, longOp(60), 1);
-      return c.radialGradients;
-    })();
-    const longRun = (() => {
-      const c = inkDrawContext();
-      applyInkOp(c.ctx, longOp(1200), 1);
-      return c.radialGradients;
-    })();
-    expect(longRun).toBeLessThanOrEqual(shortRun * 3);
+    const shortRun = run(40);
+    const longRun = run(400);
+    expect(shortRun.length).toBeGreaterThan(3);
+    expect(longRun.length).toBeGreaterThan(3);
+    /*
+     * A long stroke may thin its grid, so the survivors are a subset of the
+     * finer one -- never a shifted copy of it. Every dab the long stroke keeps
+     * sits where the short stroke already had one.
+     */
+    for (const at of longRun.filter((v) => v <= Math.max(...shortRun))) {
+      expect(shortRun.some((v) => Math.abs(v - at) < 2)).toBe(true);
+    }
   });
 
   it("stamps nothing at all when blot is off", () => {

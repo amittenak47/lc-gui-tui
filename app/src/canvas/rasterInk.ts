@@ -1617,15 +1617,25 @@ function drawRibbonStrokeFrom(
     }
     const tipR = paintedWidth(tipWidth, pixelScale) / 2;
     const growT = dwellBlotGrowT(tipPts, tipR, blotBlend);
+    /*
+     * The pool joins the ink it sits in rather than sitting on top of it.
+     *
+     * `tipAlpha` was the maximum over the cluster, so on a stroke that had
+     * faded the blot came back at full strength -- a bright disc with a hard
+     * edge dropped onto dim ink, and the line resuming at the faded value on
+     * the far side. Taking the alpha where the pool actually is, and asking
+     * for the soft rim `blotBlend` has always described, lets it sit in the
+     * stroke instead of interrupting it.
+     */
     paintInkDisc(
       ctx,
       tipPts[tipPts.length - 1],
       tipWidth,
-      tipAlpha,
+      tipStyles[tipStyles.length - 1]?.alpha ?? tipAlpha,
       pixelScale,
       blotBlend,
       color,
-      false,
+      blotBlend > 1e-3,
       growT,
     );
     // Ribbon the prefix only (include the cluster start as the tip join vertex).
@@ -1761,7 +1771,15 @@ function drawRibbonStrokeFrom(
   paintRibbonWithFalloff(ctx, left, right, prepared.styles, maxAlpha, addHardExtras);
 
   // Dabs carry their own point's alpha, so the scale passed in is just 1.
-  stampBlotDiscs(ctx, prepared, pixelScale, blotBlend, 1, color);
+  stampBlotDiscs(
+    ctx,
+    prepared,
+    pixelScale,
+    blotBlend,
+    1,
+    paintedWidth(nib, pixelScale) / 2,
+    color,
+  );
   ctx.globalAlpha = 1;
 }
 
@@ -1863,7 +1881,7 @@ export function blotStampSwell(blend: number): number {
  * this, which trades even grain on a very long stroke for a flat cost per
  * frame -- the stroke you are still writing has to stay ahead of the nib.
  */
-const BLOT_STAMP_MAX = 260;
+const BLOT_STAMP_MAX = 600;
 
 /**
  * One soft stamp, drawn once and blitted per dab.
@@ -1943,6 +1961,7 @@ function stampBlotDiscs(
   pixelScale: number,
   blend: number,
   alpha: number,
+  nibHalf: number,
   color?: string,
 ): void {
   if (blend <= 1e-3) return;
@@ -1976,39 +1995,52 @@ function stampBlotDiscs(
    * the whole stroke every frame -- so the pen slows as the word grows, which
    * is the one thing writing cannot tolerate.
    */
-  let stride = spacingFrac;
+  /*
+   * Dabs sit on a fixed grid of arc length, and the grid may only ever halve.
+   *
+   * Spacing used to widen smoothly with total travel to hold the count under a
+   * ceiling, and live smoothing repaints the whole stroke every frame -- so
+   * each time the stroke grew, every dab landed somewhere new. That is the
+   * beads crawling along a line still being drawn.
+   *
+   * Two things fix it together. The interval is measured against the stroke's
+   * own nib rather than the local half-width, so it is one constant for the
+   * whole stroke and a dab's position depends only on how far along it is.
+   * And when a stroke is long enough to need fewer dabs, the interval doubles
+   * rather than stretching: the coarser grid is an exact subset of the finer
+   * one, so survivors stay exactly where they were. Thinning is visible on a
+   * very long stroke; drifting is visible on every stroke.
+   */
   let travel = 0;
-  let minHalf = Infinity;
   for (let index = 1; index < points.length; index++) {
     travel += Math.hypot(
       points[index].x - points[index - 1].x,
       points[index].y - points[index - 1].y,
     );
   }
-  for (const style of prepared.styles) {
-    minHalf = Math.min(minHalf, paintedWidth(style.lineWidth, pixelScale) / 2);
-  }
-  if (Number.isFinite(minHalf) && minHalf > 1e-6) {
-    const wanted = travel / (minHalf * stride);
-    if (wanted > BLOT_STAMP_MAX) stride *= wanted / BLOT_STAMP_MAX;
-  }
+  let interval = Math.max(1e-3, nibHalf * spacingFrac);
+  while (travel / interval > BLOT_STAMP_MAX) interval *= 2;
 
   const swell = blotStampSwell(amount);
   const sprite = blotStampSprite(ink, rimFrac);
   const prevFill = ctx.fillStyle;
-  let carried = Infinity;
+  // Absolute arc length against the grid, not a counter reset at each dab --
+  // resetting drops the remainder, and then a doubled interval no longer lands
+  // on a subset of the finer one.
+  let arc = 0;
+  let nextAt = 0;
   let stamped = 0;
   for (let index = 0; index < points.length && stamped < BLOT_STAMP_MAX; index++) {
     if (index > 0) {
-      carried += Math.hypot(
+      arc += Math.hypot(
         points[index].x - points[index - 1].x,
         points[index].y - points[index - 1].y,
       );
     }
     const half = paintedWidth(prepared.styles[index].lineWidth, pixelScale) / 2;
     if (half < 1e-6) continue;
-    if (carried < half * stride) continue;
-    carried = 0;
+    if (arc < nextAt) continue;
+    nextAt = (Math.floor(arc / interval) + 1) * interval;
     stamped++;
     /*
      * Each dab takes the alpha of the point it sits on, not the stroke's
