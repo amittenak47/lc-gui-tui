@@ -53,6 +53,8 @@ import {
 import {
   speedBlotBlendFromPercent,
   speedBlotBlendToPercent,
+  grainFromPercent,
+  grainToPercent,
   speedFadeFromPercent,
   speedFadeToPercent,
   speedInkFromPercent,
@@ -774,12 +776,33 @@ function PhysicsKnobs({
       </SettingsBlock>
 
       <SettingsBlock
+        title="Grain"
+        hint={
+          <>
+            Nib material. Off is a hard felt-tip. Turn it up for a seeded
+            pencil edge at the same size. Speed blot can still pool that disc
+            if you hold. Saved on this device only.
+          </>
+        }
+      >
+        <SettingsRange
+          label="Grain"
+          min={0}
+          max={100}
+          step={5}
+          value={grainToPercent(snap.grain ?? 0)}
+          display={grainToPercent(snap.grain ?? 0) === 0 ? "Off" : `${grainToPercent(snap.grain ?? 0)}%`}
+          onChange={(n) => onChange({ ...snap, grain: grainFromPercent(n) })}
+        />
+      </SettingsBlock>
+
+      <SettingsBlock
         title="Speed blot"
         hint={
           <>
-            Graphite pencil: overlapping interleaved discs instead of a flat
-            stroke. Off keeps a solid ribbon. 100% is the full pencil pool.
-            Saved on this device only.
+            Hold to pool past the nib. Off stays nib-sized. 100% pools faster
+            and larger. Grain can texture the same disc. Saved on this device
+            only.
           </>
         }
       >

@@ -33,8 +33,10 @@ import { INK_BOLDNESS_EVENT, loadInkBoldness } from "../util/inkBoldnessPref";
 import { loadInkPressureClip } from "../util/inkPressureClip";
 import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref";
 import {
+  INK_GRAIN_EVENT,
   INK_SPEED_BLOT_BLEND_EVENT,
   INK_SPEED_FADE_EVENT,
+  loadInkGrain,
   loadInkSpeed,
   loadInkSpeedBlotBlend,
   loadInkSpeedFade,
@@ -59,6 +61,7 @@ interface InkLive {
   boldness: number;
   speedInk: number;
   speedBlotBlend: number;
+  grain: number;
   speedFade: number;
   smoothing: number;
   smoothingMode: "lift" | "live";
@@ -77,6 +80,7 @@ function loadLiveInk(themeId: string): InkLive {
     boldness: loadInkBoldness(),
     speedInk: loadInkSpeed(),
     speedBlotBlend: loadInkSpeedBlotBlend(),
+    grain: loadInkGrain(),
     speedFade: loadInkSpeedFade(),
     smoothing: loadInkSmoothing(),
     smoothingMode: loadInkSmoothingMode(),
@@ -99,6 +103,7 @@ function makeDrawOp(live: InkLive, points: ScenePoint[]): InkDrawOp {
           speedFade: live.speedFade,
         }
       : {}),
+    ...(live.grain > 0 ? { grain: live.grain } : {}),
     boldness: live.boldness,
     points,
   };
@@ -139,6 +144,7 @@ export function LoadingDoodle({
     window.addEventListener("lc-ink-pressure-clip", reloadInk);
     window.addEventListener("lc-ink-speed", reloadInk);
     window.addEventListener(INK_SPEED_BLOT_BLEND_EVENT, reloadInk);
+    window.addEventListener(INK_GRAIN_EVENT, reloadInk);
     window.addEventListener(INK_SPEED_FADE_EVENT, reloadInk);
     window.addEventListener(INK_BOLDNESS_EVENT, reloadInk);
 
@@ -298,6 +304,7 @@ export function LoadingDoodle({
       window.removeEventListener("lc-ink-pressure-clip", reloadInk);
       window.removeEventListener("lc-ink-speed", reloadInk);
       window.removeEventListener(INK_SPEED_BLOT_BLEND_EVENT, reloadInk);
+      window.removeEventListener(INK_GRAIN_EVENT, reloadInk);
       window.removeEventListener(INK_SPEED_FADE_EVENT, reloadInk);
       window.removeEventListener(INK_BOLDNESS_EVENT, reloadInk);
       canvas.removeEventListener("pointerdown", onDown);

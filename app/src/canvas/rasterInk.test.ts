@@ -47,6 +47,9 @@ import {
   isDiscPrimaryPath,
   paintInkAtScale,
   paintInkDisc,
+  paintGrainDisc,
+  paintInkTerminalCap,
+  inkCapRoundness,
   trailingTipClusterStart,
   pointerPressure,
   scenePointFromCanvasPixel,
@@ -843,6 +846,7 @@ function recordingContext() {
   const strokes: Array<{ from: { x: number; y: number }; to: { x: number; y: number }; alpha: number }> = [];
   const erased: Array<{ x: number; y: number; r: number; composite: string }> = [];
   let pen = { x: 0, y: 0 };
+  const path: Array<{ x: number; y: number }> = [];
 
   const map = (x: number, y: number) => ({
     x: transform[0] * x + transform[2] * y + transform[4],
@@ -870,17 +874,26 @@ function recordingContext() {
     setTransform(a: number, b: number, c: number, d: number, e: number, f: number) {
       transform = [a, b, c, d, e, f];
     },
-    beginPath() {},
+    beginPath() {
+      path.length = 0;
+    },
     moveTo(x: number, y: number) {
       pen = map(x, y);
+      path.length = 0;
+      path.push(pen);
     },
     lineTo(x: number, y: number) {
-      strokes.push({ from: pen, to: map(x, y), alpha });
       pen = map(x, y);
+      path.push(pen);
     },
-    stroke() {},
+    stroke() {
+      for (let i = 1; i < path.length; i++) {
+        strokes.push({ from: path[i - 1], to: path[i], alpha });
+      }
+    },
+    closePath() {},
     arc(x: number, y: number, r: number) {
-      // Draw terminal caps also use arc+fill; only erases are destination-out.
+      // Draw terminal caps fill (circle or superellipse); only erases are destination-out.
       if (composite !== "destination-out") return;
       erased.push({ ...map(x, y), r: r * transform[0], composite });
     },
@@ -985,6 +998,7 @@ describe("host-bound ink", () => {
       stroke() {},
       fill() {},
       arc() {},
+      closePath() {},
       globalCompositeOperation: "source-over",
       globalAlpha: 1,
       strokeStyle: "",
@@ -1025,6 +1039,7 @@ describe("host-bound ink", () => {
       stroke() {},
       fill() {},
       arc() {},
+      closePath() {},
       globalCompositeOperation: "source-over",
       globalAlpha: 1,
       strokeStyle: "",
@@ -1058,6 +1073,7 @@ describe("host-bound ink", () => {
       },
       fill() {},
       arc() {},
+      closePath() {},
       globalCompositeOperation: "source-over",
       globalAlpha: 1,
       strokeStyle: "",
@@ -1102,6 +1118,7 @@ describe("host-bound ink", () => {
       stroke() {},
       fill() {},
       arc() {},
+      closePath() {},
       globalCompositeOperation: "source-over",
       globalAlpha: 1,
       strokeStyle: "",
@@ -1225,29 +1242,29 @@ function inkDrawContext() {
 }
 
 describe("inkDiscRadii / dwell growth", () => {
-  it("starts smaller than tip radius and grows to tip without overshoot", () => {
+  it("starts at the nib and overshoots only when blot and growT are on", () => {
     const tip = 10;
-    const early = inkDiscRadii(tip, 0.55, 0);
+    const contact = inkDiscRadii(tip, 0.55, 0);
     const mid = inkDiscRadii(tip, 0.55, 0.4);
-    const full = inkDiscRadii(tip, 0.55, 1);
-    expect(early.outerR).toBeCloseTo(tip * 0.04);
-    expect(early.outerR).toBeLessThan(tip * 0.1);
-    expect(mid.outerR).toBeGreaterThan(early.outerR);
-    expect(mid.outerR).toBeLessThan(tip);
-    expect(full.outerR).toBeCloseTo(tip);
-    expect(full.outerR).toBeLessThanOrEqual(tip);
+    const full = inkDiscRadii(tip, 1, 1);
+    const blotOff = inkDiscRadii(tip, 0, 1);
+    expect(contact.outerR).toBeCloseTo(tip);
+    expect(mid.outerR).toBeGreaterThan(contact.outerR);
+    expect(mid.outerR).toBeLessThan(full.outerR);
+    expect(full.outerR).toBeCloseTo(tip * (1 + INK_SPEED_WIDTH_RANGE));
+    expect(blotOff.outerR).toBeCloseTo(tip);
   });
 
-  it("keeps a solid core with soft rim only outside innerR", () => {
+  it("keeps a hard silhouette (innerR equals outerR)", () => {
     const { outerR, innerR } = inkDiscRadii(10, 1, 1);
-    expect(innerR).toBeGreaterThan(0);
-    expect(innerR).toBeLessThan(outerR);
-    expect(outerR).toBeLessThanOrEqual(10);
+    expect(innerR).toBeCloseTo(outerR);
+    expect(outerR).toBeGreaterThan(10);
   });
 
   it("uses a hard rim when blot blend is 0", () => {
     const { outerR, innerR } = inkDiscRadii(10, 0, 1);
     expect(innerR).toBeCloseTo(outerR);
+    expect(outerR).toBeCloseTo(10);
   });
 
   it("raises growT slowly as a dwell cluster lengthens", () => {
@@ -1261,15 +1278,14 @@ describe("inkDiscRadii / dwell growth", () => {
     const manyPts: Array<[number, number]> = [];
     for (let i = 0; i < 50; i++) manyPts.push([0.01 * (i % 3), 0.01 * ((i + 1) % 3)]);
     const many = dwellBlotGrowT(points(...manyPts), tipR, 0.5);
-    expect(one).toBe(1);
-    expect(few).toBeGreaterThanOrEqual(0.85);
-    expect(few).toBeLessThanOrEqual(1);
+    expect(one).toBe(0);
+    expect(few).toBeGreaterThan(0);
+    expect(few).toBeLessThan(0.5);
     expect(many).toBeGreaterThan(few);
-    expect(many).toBeGreaterThan(0.7);
   });
 
-  it("keeps a moving stroke at full tip", () => {
-    expect(dwellBlotGrowT(points([0, 0], [40, 0], [80, 0]), 4, 0.5)).toBe(1);
+  it("does not pool a moving stroke", () => {
+    expect(dwellBlotGrowT(points([0, 0], [40, 0], [80, 0]), 4, 0.5)).toBe(0);
   });
 });
 
@@ -1288,14 +1304,14 @@ describe("paintInkDisc tip vs join", () => {
     paintInkDisc(drawCtx.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 1, "#112233", false, 1);
     expect(drawCtx.radialGradients).toBe(0);
     expect(drawCtx.fillCount).toBe(1);
-    expect(drawCtx.arcRadii[0]).toBeCloseTo(4);
+    expect(drawCtx.arcRadii[0]).toBeCloseTo(4 * (1 + INK_SPEED_WIDTH_RANGE));
   });
 
-  it("tip mode grows from a tiny hard core", () => {
+  it("tip mode at growT 0 stays the nib", () => {
     const drawCtx = inkDrawContext();
     paintInkDisc(drawCtx.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 1, "#112233", false, 0);
     expect(drawCtx.radialGradients).toBe(0);
-    expect(drawCtx.arcRadii[0]).toBeCloseTo(4 * 0.04);
+    expect(drawCtx.arcRadii[0]).toBeCloseTo(4);
   });
 
   it("join mode uses radial fade clamped to nib radius", () => {
@@ -1312,7 +1328,7 @@ describe("paintInkDisc tip vs join", () => {
     expect(drawCtx.colorStops[0]).toBe("rgba(17, 34, 51, 0.8)");
   });
 
-  it("short-path / tip-down stroke paints a full tip, not a 4% core", () => {
+  it("short-path / tip-down stroke paints the nib, not a pooled blob", () => {
     const op: InkOp = {
       kind: "draw",
       color: "#112233",
@@ -1326,13 +1342,13 @@ describe("paintInkDisc tip vs join", () => {
       points: points([10, 10]),
     };
     const tipR = inkLineWidth(8, 0, false, INK_SLOWNESS_NEUTRAL, 1) / 2;
-    const hairline = inkDiscRadii(tipR, 1, 0).outerR;
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
     expect(drawCtx.radialGradients).toBe(0);
     expect(drawCtx.fillCount).toBeGreaterThanOrEqual(1);
     expect(drawCtx.arcRadii[0]).toBeCloseTo(tipR);
-    expect(drawCtx.arcRadii[0]).toBeGreaterThan(hairline * 4);
+    expect(inkDiscRadii(tipR, 1, 0).outerR).toBeCloseTo(tipR);
+    expect(inkDiscRadii(tipR, 1, 1).outerR).toBeGreaterThan(tipR);
     expect(drawCtx.fillAlphas[0]).toBe(1);
   });
 
@@ -1465,14 +1481,14 @@ describe("disc-primary dwell path", () => {
 });
 
 describe("contact stamp (Phase 1)", () => {
-  it("paints a single point as a full circle, not a semicircle", () => {
+  it("paints a single point as a filled cap, not a semicircle", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, draw([10, 10]), 1);
     expect(drawCtx.fillCount).toBe(1);
-    expect(drawCtx.arcSweeps[0]).toBeCloseTo(Math.PI * 2);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
   });
 
-  it("paints a pressure-on cluster of 8 samples inside 0.2× nib as one disc", () => {
+  it("paints a pressure-on cluster of 8 samples inside 0.2× nib as one stamp", () => {
     const cluster = stylusPoints(
       0.75,
       [0, 0],
@@ -1497,7 +1513,7 @@ describe("contact stamp (Phase 1)", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
     expect(drawCtx.fillCount).toBe(1);
-    expect(drawCtx.caps).toHaveLength(1);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
   });
 
   it("does not emit two heading-flipped terminal caps at the origin", () => {
@@ -1517,9 +1533,8 @@ describe("contact stamp (Phase 1)", () => {
     };
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
-    const atOrigin = drawCtx.caps.filter((c) => Math.hypot(c.x, c.y) < 2);
-    expect(atOrigin).toHaveLength(1);
-    expect(drawCtx.arcSweeps[0]).toBeCloseTo(Math.PI * 2);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
   });
 
   it("does not collapse a real two-point line into a single disc", () => {
@@ -1663,13 +1678,14 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
   });
 
   it("skips head caps when capHead is false", () => {
-    const { ctx, caps } = inkDrawContext();
-    applyInkOp(ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: true });
-    expect(caps).toHaveLength(1);
-    applyInkOp(ctx, draw([0, 0], [50, 0]), 1, { capHead: true, capEnd: true });
-    expect(caps).toHaveLength(3);
-    applyInkOp(ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: false });
-    expect(caps).toHaveLength(3);
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: true });
+    const afterTail = drawCtx.fillCount;
+    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1, { capHead: true, capEnd: true });
+    expect(drawCtx.fillCount).toBeGreaterThan(afterTail);
+    const afterBoth = drawCtx.fillCount;
+    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: false });
+    expect(drawCtx.fillCount).toBe(afterBoth);
   });
 
   it("paints constant-width and speed-ink strokes without incremental tail paint", () => {
@@ -1705,12 +1721,11 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
     expect(speed.fillCount).toBeGreaterThan(0);
   });
 
-  it("seals run ends with full discs, not half-caps", () => {
+  it("seals run ends without half-disc hairline caps", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
     expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
-    const full = drawCtx.arcSweeps.filter((s) => Math.abs(s - Math.PI * 2) < 1e-6);
-    expect(full.length).toBeGreaterThanOrEqual(2);
   });
 
   it("paintLiveOp rounds both ends of a long open stroke", () => {
@@ -1725,7 +1740,7 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
     };
     const drawCtx = inkDrawContext();
     paintLiveOp(drawCtx.ctx, draw([0, 0], [50, 0], [100, 0]), viewport, 1, null);
-    expect(drawCtx.caps.length).toBeGreaterThanOrEqual(2);
+    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(2);
     expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
   });
 
@@ -1739,8 +1754,109 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
       width: 100,
       height: 100,
     };
-    const { ctx, caps, fillCount } = inkDrawContext();
-    paintLiveOp(ctx, draw([0, 0], [5, 0]), viewport, 1, null);
-    expect(caps.length + fillCount).toBeGreaterThan(0);
+    const drawCtx = inkDrawContext();
+    paintLiveOp(drawCtx.ctx, draw([0, 0], [5, 0]), viewport, 1, null);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
+  });
+});
+
+describe("stochastic endcaps", () => {
+  it("is stable for the same origin and salt", () => {
+    const origin = { x: 12.3, y: 45.6 };
+    expect(inkCapRoundness(origin, 1)).toBe(inkCapRoundness(origin, 1));
+    expect(inkCapRoundness(origin, 1)).not.toBe(inkCapRoundness(origin, 2));
+  });
+
+  it("spreads from nearly rectangular to round across origins", () => {
+    const values = Array.from({ length: 48 }, (_, i) =>
+      inkCapRoundness({ x: i * 17, y: i * 11 }, 1),
+    );
+    expect(Math.min(...values)).toBeLessThan(0.35);
+    expect(Math.max(...values)).toBeGreaterThan(0.85);
+  });
+
+  it("pulls toward square under hard stylus pressure", () => {
+    const origin = { x: 100, y: 200 };
+    const light = inkCapRoundness(origin, 1, 0.1, true);
+    const hard = inkCapRoundness(origin, 1, 0.95, true);
+    expect(hard).toBeLessThan(light);
+    expect(hard).toBeLessThan(0.45);
+  });
+
+  it("paints a full circle at roundness 1 and a superellipse below the circle threshold", () => {
+    const round = inkDrawContext();
+    paintInkTerminalCap(round.ctx, { x: 0, y: 0 }, 5, 0, 1);
+    expect(round.fillCount).toBe(1);
+    expect(round.arcSweeps[0]).toBeCloseTo(Math.PI * 2);
+
+    const square = inkDrawContext();
+    paintInkTerminalCap(square.ctx, { x: 0, y: 0 }, 5, 0, 0.2);
+    expect(square.fillCount).toBe(1);
+    expect(square.arcSweeps).toHaveLength(0);
+    expect(square.strokes.length).toBeGreaterThan(8);
+  });
+});
+
+describe("grain and blot pooling (Phase 2)", () => {
+  it("paints grain 0 as one hard arc", () => {
+    const drawCtx = inkDrawContext();
+    paintGrainDisc(drawCtx.ctx, { x: 10, y: 10 }, 5, 0, 1, "#000");
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.arcSweeps[0]).toBeCloseTo(Math.PI * 2);
+    expect(drawCtx.arcRadii[0]).toBeCloseTo(5);
+  });
+
+  it("keeps a grain 0.5 silhouette within about 1.1× tip", () => {
+    const drawCtx = inkDrawContext();
+    const tip = 8;
+    const at = { x: 20, y: 30 };
+    paintGrainDisc(drawCtx.ctx, at, tip, 0.5, 1, "#000");
+    expect(drawCtx.fillCount).toBeGreaterThan(1);
+    const extent = Math.max(
+      ...drawCtx.caps.map((c) => Math.hypot(c.x - at.x, c.y - at.y) + c.r),
+    );
+    expect(extent).toBeLessThanOrEqual(tip * 1.1 + 1e-6);
+  });
+
+  it("does not overshoot the nib when blot is 0", () => {
+    const tip = 6;
+    expect(inkDiscRadii(tip, 0, 0).outerR).toBeCloseTo(tip);
+    expect(inkDiscRadii(tip, 0, 1).outerR).toBeCloseTo(tip);
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#000",
+        baseWidth: 12,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedBlotBlend: 0,
+        points: points([0, 0]),
+      },
+      1,
+    );
+    for (const cap of drawCtx.caps) {
+      expect(cap.r).toBeLessThanOrEqual(6 + 1e-6);
+    }
+  });
+
+  it("overshoots the nib at blot 100% and growT 1, with or without grain", () => {
+    const tip = 10;
+    const grown = inkDiscRadii(tip, 1, 1).outerR;
+    expect(grown).toBeCloseTo(tip * (1 + INK_SPEED_WIDTH_RANGE));
+    const hard = inkDrawContext();
+    paintGrainDisc(hard.ctx, { x: 0, y: 0 }, tip, 0, 1, "#000", 1, 1);
+    expect(hard.arcRadii[0]).toBeCloseTo(grown);
+    const textured = inkDrawContext();
+    paintGrainDisc(textured.ctx, { x: 0, y: 0 }, tip, 0.5, 1, "#000", 1, 1);
+    expect(Math.max(...textured.arcRadii)).toBeGreaterThan(tip);
+  });
+
+  it("does not read a missing grain field as the live dial", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, draw([4, 4]), 1);
+    expect(drawCtx.fillCount).toBe(1);
   });
 });

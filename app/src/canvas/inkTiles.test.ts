@@ -158,6 +158,7 @@ function fakeCanvasFactory() {
       moveTo: () => {},
       lineTo: () => {},
       arc: () => {},
+      closePath: () => {},
       rect: () => {},
       clip: () => {},
       stroke: () => record.ops.push("stroke"),
