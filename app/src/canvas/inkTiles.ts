@@ -38,6 +38,13 @@ import {
 
 /** Tile edge in device pixels. */
 export const TILE_PX = 384;
+/**
+ * Extra pixels past each tile edge, baked into the canvas and the blit.
+ *
+ * Adjacent tiles meet on an AA fringe. Drawing them flush leaves a hairline of
+ * parchment through committed ink — the coarse "grid" on a zoomed-out pad.
+ */
+export const TILE_OVERLAP_PX = 1;
 
 /**
  * Zoom levels tiles are rasterised at, as steps of the exponent of two.
@@ -424,7 +431,8 @@ export class InkTileCache {
     const bounds = inkOpBounds(op);
     for (const tile of [...this.tiles.values()]) {
       const box = this.tileBounds(tile.level, tile.tx, tile.ty);
-      if (!boundsOverlap(bounds, box)) continue;
+      const scale = levelScale(tile.level);
+      if (!boundsOverlap(bounds, this.paddedTileBounds(box, scale))) continue;
       this.paintOpIntoTile(tile, op, box);
     }
   }
@@ -441,7 +449,7 @@ export class InkTileCache {
     const paintable = this.clip ? intersectBounds(bounds, this.clip) : bounds;
     if (!paintable) return;
     const scale = levelScale(tile.level);
-    ctx.setTransform(scale, 0, 0, scale, -bounds.minX * scale, -bounds.minY * scale);
+    this.setTileTransform(ctx, bounds, scale);
     if (this.clip) {
       ctx.save();
       ctx.beginPath();
@@ -507,12 +515,44 @@ export class InkTileCache {
     };
   }
 
+  private tileCanvasPx(): number {
+    return this.tilePx + 2 * TILE_OVERLAP_PX;
+  }
+
+  /** Scene → tile pixels, origin at the padded top-left. */
+  private setTileTransform(
+    ctx: CanvasRenderingContext2D,
+    bounds: SceneBounds,
+    scale: number,
+  ): void {
+    ctx.setTransform(
+      scale,
+      0,
+      0,
+      scale,
+      TILE_OVERLAP_PX - bounds.minX * scale,
+      TILE_OVERLAP_PX - bounds.minY * scale,
+    );
+  }
+
+  /** Core tile plus the 1px overdraw in scene units. */
+  private paddedTileBounds(bounds: SceneBounds, scale: number): SceneBounds {
+    const pad = TILE_OVERLAP_PX / scale;
+    return {
+      minX: bounds.minX - pad,
+      minY: bounds.minY - pad,
+      maxX: bounds.maxX + pad,
+      maxY: bounds.maxY + pad,
+    };
+  }
+
   private renderTile(level: number, tx: number, ty: number): Tile | null {
     const key = tileKey(level, tx, ty);
     const existing = this.tiles.get(key);
     if (existing) return existing;
 
-    const canvas = this.createCanvas(this.tilePx, this.tilePx);
+    const canvasPx = this.tileCanvasPx();
+    const canvas = this.createCanvas(canvasPx, canvasPx);
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
 
@@ -531,9 +571,9 @@ export class InkTileCache {
     const paintable = this.clip ? intersectBounds(bounds, this.clip) : bounds;
     if (paintable) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, this.tilePx, this.tilePx);
-      // Scene → tile pixels: the tile's top-left is the origin.
-      ctx.setTransform(scale, 0, 0, scale, -bounds.minX * scale, -bounds.minY * scale);
+      ctx.clearRect(0, 0, canvasPx, canvasPx);
+      // Scene → tile pixels: the padded top-left is the origin.
+      this.setTileTransform(ctx, bounds, scale);
       if (this.clip) {
         ctx.save();
         ctx.beginPath();
@@ -549,7 +589,7 @@ export class InkTileCache {
       // miss the tile are skipped: an erase outside it cannot reach in.
       for (const op of this.ops) {
         if (isHostBoundOp(op)) continue;
-        if (!boundsOverlap(inkOpBounds(op), bounds)) continue;
+        if (!boundsOverlap(inkOpBounds(op), this.paddedTileBounds(bounds, scale))) continue;
         applyInkOp(ctx, op, scale);
       }
       if (this.clip) ctx.restore();
@@ -666,7 +706,14 @@ export class InkTileCache {
       const dx = toDeviceX(bounds.minX);
       const dy = toDeviceY(bounds.minY);
       const size = tileScene * pixelScale;
-      ctx.drawImage(tile.canvas, dx, dy, size, size);
+      const overlapDest = TILE_OVERLAP_PX * (pixelScale / levelScale(level));
+      ctx.drawImage(
+        tile.canvas,
+        dx - overlapDest,
+        dy - overlapDest,
+        size + 2 * overlapDest,
+        size + 2 * overlapDest,
+      );
     }
 
     this.pending = missed;
@@ -759,16 +806,21 @@ export class InkTileCache {
         const box = intersectBounds(src, bounds);
         if (!box) continue;
         const srcScale = this.tilePx / size;
+        const destW = toDeviceX(box.maxX) - toDeviceX(box.minX);
+        const destH = toDeviceY(box.maxY) - toDeviceY(box.minY);
+        const destPerScene =
+          box.maxX - box.minX > 1e-9 ? destW / (box.maxX - box.minX) : srcScale;
+        const overlapDest = TILE_OVERLAP_PX * destPerScene / srcScale;
         ctx.drawImage(
           tile.canvas,
           (box.minX - src.minX) * srcScale,
           (box.minY - src.minY) * srcScale,
-          (box.maxX - box.minX) * srcScale,
-          (box.maxY - box.minY) * srcScale,
-          toDeviceX(box.minX),
-          toDeviceY(box.minY),
-          toDeviceX(box.maxX) - toDeviceX(box.minX),
-          toDeviceY(box.maxY) - toDeviceY(box.minY),
+          (box.maxX - box.minX) * srcScale + 2 * TILE_OVERLAP_PX,
+          (box.maxY - box.minY) * srcScale + 2 * TILE_OVERLAP_PX,
+          toDeviceX(box.minX) - overlapDest,
+          toDeviceY(box.minY) - overlapDest,
+          destW + 2 * overlapDest,
+          destH + 2 * overlapDest,
         );
         drew = true;
       }
@@ -782,17 +834,12 @@ export class InkTileCache {
  *
  * Live ink never goes through a tile: the stroke is still growing and the
  * pointer is waiting on it. Tiles only ever hold committed history.
+ *
+ * Caps are the same overlapping discs the committed stroke uses. Live used to
+ * omit them (`capEnd: false`, head only when short) so a long stroke was a
+ * butt-ended rectangle until lift glued half-discs on — and those half-discs
+ * left a paper hairline on the butt.
  */
-function liveStrokePathLength(points: readonly { x: number; y: number }[]): number {
-  let len = 0;
-  for (let index = 1; index < points.length; index++) {
-    const prev = points[index - 1];
-    const next = points[index];
-    len += Math.hypot(next.x - prev.x, next.y - prev.y);
-  }
-  return len;
-}
-
 export function paintLiveOp(
   ctx: CanvasRenderingContext2D,
   op: InkOp,
@@ -803,11 +850,7 @@ export function paintLiveOp(
 ): void {
   setInkSceneTransform(ctx, viewport, dpr);
   const pixelScale = viewport.zoom * dpr;
-  const short =
-    op.kind === "draw" &&
-    (op.points.length < 3 ||
-      liveStrokePathLength(op.points) < inkLineWidth(op.baseWidth, 0, false) * 2);
-  const capOptions = { capEnd: false, capHead: short };
+  const capOptions = { capEnd: true, capHead: true };
   const paint = () => {
     if (isHostBoundOp(op)) {
       const host = hosts.get(op.hostKey!);

@@ -8396,6 +8396,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           currentItemFontSize: DEFAULT_FONT_SIZE,
           // Paint-like: single tap opens the editor (not drag-to-size).
           currentItemAutoResize: true,
+          gridModeEnabled: false,
         },
         // We call settleFitView ourselves — Excalidraw's default fits the entire
         // board and lands the problem as a postage stamp in the corner.

@@ -1705,7 +1705,15 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
     expect(speed.fillCount).toBeGreaterThan(0);
   });
 
-  it("paintLiveOp passes capHead false for long open strokes", () => {
+  it("seals run ends with full discs, not half-caps", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
+    const full = drawCtx.arcSweeps.filter((s) => Math.abs(s - Math.PI * 2) < 1e-6);
+    expect(full.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("paintLiveOp rounds both ends of a long open stroke", () => {
     const viewport = {
       zoom: 1,
       scrollX: 0,
@@ -1715,9 +1723,10 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
       width: 100,
       height: 100,
     };
-    const { ctx, caps } = inkDrawContext();
-    paintLiveOp(ctx, draw([0, 0], [50, 0], [100, 0]), viewport, 1, null);
-    expect(caps).toHaveLength(0);
+    const drawCtx = inkDrawContext();
+    paintLiveOp(drawCtx.ctx, draw([0, 0], [50, 0], [100, 0]), viewport, 1, null);
+    expect(drawCtx.caps.length).toBeGreaterThanOrEqual(2);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
   });
 
   it("paintLiveOp gives short strokes a round head", () => {
