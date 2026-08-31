@@ -26,6 +26,7 @@ import {
   HIGHLIGHT_WIDTH_SCALE,
   hostScrollDx,
   inkLineWidth,
+  INK_SPEED_WIDTH_RANGE,
   INK_TIP_STEP,
   isHostBoundOp,
   paintHostBoundOps,
@@ -207,7 +208,8 @@ export function inkOpBounds(op: InkOp): SceneBounds {
       : // Full press at a standstill spreads the nib as far as it goes; with
         // pressure and speed ink both off this is the same number it always was.
         // Extra tip-step pad so a borderline tile is never left blank forever
-        // after clear+append (reset-board invisible band).
+        // after clear+append (reset-board invisible band). Blot can overshoot
+        // past that standstill width, so the pad has to cover the pool too.
         (op.highlight
           ? inkLineWidth(op.baseWidth, 0, false) * HIGHLIGHT_WIDTH_SCALE
           : inkLineWidth(
@@ -216,7 +218,8 @@ export function inkOpBounds(op: InkOp): SceneBounds {
               op.pressureSensitive,
               1,
               op.speedInk ?? 0,
-            )) /
+            ) *
+            (1 + INK_SPEED_WIDTH_RANGE * (op.speedBlotBlend ?? 0))) /
           2 +
         INK_TIP_STEP;
   let minX = Infinity;

@@ -15,9 +15,9 @@ import {
   TILE_OVERLAP_PX,
   TILE_PX,
 } from "./inkTiles";
-import { NO_PRESSURE, type InkOp, type ViewportTransform } from "./rasterInk";
+import { NO_PRESSURE, type InkDrawOp, type InkOp, type ViewportTransform } from "./rasterInk";
 
-function draw(...pairs: Array<[number, number]>): InkOp {
+function draw(...pairs: Array<[number, number]>): InkDrawOp {
   return {
     kind: "draw",
     color: "#000",
@@ -108,6 +108,13 @@ describe("op bounds", () => {
     expect(bounds.minX).toBeLessThan(10);
     expect(bounds.maxX).toBeGreaterThan(30);
     expect(bounds.maxY).toBeGreaterThan(20);
+  });
+
+  it("pads blot overshoot past standstill width", () => {
+    const plain = inkOpBounds(draw([0, 0]));
+    const pooled = inkOpBounds({ ...draw([0, 0]), speedBlotBlend: 1 });
+    expect(pooled.minX).toBeLessThan(plain.minX);
+    expect(pooled.maxX).toBeGreaterThan(plain.maxX);
   });
 
   it("pads an erase by its radius", () => {

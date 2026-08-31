@@ -40,6 +40,9 @@ import {
   NO_PRESSURE,
   normalizePressure,
   dwellBlotGrowT,
+  blotDarkenRgb,
+  mixBlotAlpha,
+  INK_BLOT_DARKEN,
   coalesceRibbonPoints,
   densifyRibbonPoints,
   fillInkRibbon,
@@ -1153,6 +1156,7 @@ function inkDrawContext() {
   const arcRadii: number[] = [];
   const arcSweeps: number[] = [];
   const fillAlphas: number[] = [];
+  const fillStyles: string[] = [];
   const colorStops: string[] = [];
   let pen = { x: 0, y: 0 };
 
@@ -1203,6 +1207,7 @@ function inkDrawContext() {
     fill() {
       fillCount++;
       fillAlphas.push(alpha);
+      fillStyles.push(String(this.fillStyle));
     },
     createRadialGradient(_x0: number, _y0: number, _r0: number, _x1: number, _y1: number, r1: number) {
       radialGradients++;
@@ -1228,6 +1233,7 @@ function inkDrawContext() {
     arcRadii,
     arcSweeps,
     fillAlphas,
+    fillStyles,
     colorStops,
     get strokeCount() {
       return strokeCount;
@@ -1858,5 +1864,73 @@ describe("grain and blot pooling (Phase 2)", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, draw([4, 4]), 1);
     expect(drawCtx.fillCount).toBe(1);
+  });
+
+  it("darkens pooled ink instead of only growing it", () => {
+    const plain = blotDarkenRgb("#808080", 0);
+    const pooled = blotDarkenRgb("#808080", 1);
+    expect(pooled.r).toBeLessThan(plain.r);
+    expect(pooled.r).toBeCloseTo(plain.r * (1 - INK_BLOT_DARKEN));
+    expect(mixBlotAlpha(1, 1)).toBe(1);
+    expect(mixBlotAlpha(0.5, 1)).toBeGreaterThan(0.5);
+
+    const tip = 8;
+    const rest = inkDrawContext();
+    paintInkDisc(rest.ctx, { x: 0, y: 0 }, tip * 2, 1, 1, 1, "#808080", false, 1, 1);
+    const grown = inkDrawContext();
+    paintInkDisc(grown.ctx, { x: 0, y: 0 }, tip * 2, 1, 1, 0, "#808080", false, 1, 1);
+    expect(rest.arcRadii[0]).toBeGreaterThan(grown.arcRadii[0]);
+    const restFill = rest.fillStyles[0];
+    const grownFill = grown.fillStyles[0];
+    expect(restFill).not.toBe(grownFill);
+    expect(restFill).toMatch(/rgb\(/);
+  });
+
+  it("keeps trail width when speed ink is off, even with blot pooling", () => {
+    const rest = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 1, 0, false, 1, 0, 1);
+    const moving = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 0.5, 0, false, 1, 0, 1);
+    expect(rest.lineWidth).toBeCloseTo(moving.lineWidth);
+    expect(rest.blotPool ?? 0).toBeGreaterThan(moving.blotPool ?? 0);
+  });
+
+  it("widens the trail at rest when speed ink and blot are both on", () => {
+    const rest = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 1, 1, false, 1, 0, 1);
+    const moving = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 0.5, 1, false, 1, 0, 1);
+    expect(rest.lineWidth).toBeGreaterThan(moving.lineWidth);
+    expect(rest.blotPool ?? 0).toBeGreaterThan(moving.blotPool ?? 0);
+  });
+
+  it("textures a moving stroke when grain is on", () => {
+    const hard = inkDrawContext();
+    applyInkOp(
+      hard.ctx,
+      {
+        kind: "draw",
+        color: "#808080",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        grain: 0,
+        points: points([0, 0], [40, 0]),
+      },
+      1,
+    );
+    const textured = inkDrawContext();
+    applyInkOp(
+      textured.ctx,
+      {
+        kind: "draw",
+        color: "#808080",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        grain: 0.8,
+        points: points([0, 0], [40, 0]),
+      },
+      1,
+    );
+    expect(textured.fillCount).toBeGreaterThan(hard.fillCount);
   });
 });
