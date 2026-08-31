@@ -448,7 +448,16 @@ function TestStrip({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot
 
   useEffect(
     () => () => {
+      /*
+       * Clearing the handle is the whole point of this cleanup, not just
+       * cancelling it. `frameRef` doubles as "a paint is already queued", so
+       * leaving a cancelled id in it says a frame is coming that never will --
+       * and StrictMode runs mount, cleanup, mount on the same instance, so the
+       * second mount saw a pending frame, returned early, and the strip stayed
+       * blank for the life of the sheet.
+       */
       if (frameRef.current !== 0) cancelAnimationFrame(frameRef.current);
+      frameRef.current = 0;
     },
     [],
   );
