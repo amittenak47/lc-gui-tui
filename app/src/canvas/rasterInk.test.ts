@@ -1452,6 +1452,61 @@ describe("Speed ink is shape only", () => {
   });
 });
 
+describe("fade falloff has no threshold to cross", () => {
+  function fadedOp(points: ScenePoint[]): InkOp {
+    return {
+      kind: "draw",
+      color: "#112233",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0.5,
+      speedBlotBlend: 0,
+      speedFade: 1,
+      points,
+    };
+  }
+  const straight = () =>
+    Array.from({ length: 300 }, (_, i) => ({
+      x: i * 4,
+      y: 40,
+      pressure: NO_PRESSURE,
+    })) as ScenePoint[];
+  // Doubles back on itself: chord is short, travel is long.
+  const coiled = () =>
+    Array.from({ length: 300 }, (_, i) => {
+      const t = (i / 300) * Math.PI * 6;
+      return { x: 200 + Math.cos(t) * 60, y: 200 + Math.sin(t) * 60, pressure: NO_PRESSURE };
+    }) as ScenePoint[];
+
+  function alphaSpread(points: ScenePoint[]): number {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, fadedOp(points), 1);
+    const used = drawCtx.fillAlphas.filter((a) => a > 0);
+    return Math.max(...used) - Math.min(...used);
+  }
+
+  /*
+   * A chord-projected gradient needed a "too coiled for a chord to mean
+   * anything" test, and a boolean that flips as a stroke grows makes the whole
+   * stroke swap between ramped and flat between frames -- which is a flash,
+   * and the longer the stroke the likelier it is to cross. Alpha rides the
+   * chunks now, so a coiled stroke ramps exactly like a straight one.
+   */
+  it("ramps a coiled stroke as it ramps a straight one", () => {
+    expect(alphaSpread(straight())).toBeGreaterThan(0.05);
+    expect(alphaSpread(coiled())).toBeGreaterThan(0.05);
+  });
+
+  it("is flat when fade is off, whatever the shape", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, { ...fadedOp(coiled()), speedFade: 0 }, 1);
+    const used = drawCtx.fillAlphas.filter((a) => a > 0);
+    expect(Math.max(...used) - Math.min(...used)).toBeCloseTo(0);
+  });
+});
+
 describe("Speed blot stamp frequency", () => {
   function blotOp(blot: number, speedInk = 0.5): InkOp {
     const pts: ScenePoint[] = [];

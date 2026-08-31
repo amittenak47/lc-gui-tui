@@ -1716,101 +1716,67 @@ function drawRibbonStrokeFrom(
    * winding before any compositing happens. So it is both sharper and cheaper
    * than either the scratch or the per-segment fills it replaced.
    */
-  paintRibbonWithFalloff(
-    ctx,
-    left,
-    right,
-    prepared.points,
-    prepared.styles,
-    maxAlpha,
-    color ?? String(ctx.fillStyle),
-    addHardExtras,
-  );
+  paintRibbonWithFalloff(ctx, left, right, prepared.styles, maxAlpha, addHardExtras);
 
   // Dabs carry their own point's alpha, so the scale passed in is just 1.
   stampBlotDiscs(ctx, prepared, pixelScale, blotBlend, 1, color);
   ctx.globalAlpha = 1;
 }
 
-/** Colour stops used to describe the falloff. Enough to read as continuous. */
-const RIBBON_FALLOFF_STOPS = 6;
-/** Below this spread the whole ribbon is one flat alpha. */
-const RIBBON_FALLOFF_MIN_SPREAD = 0.02;
+/**
+ * Segments per fill.
+ *
+ * One path for the whole ribbon looked right and rasterised terribly: a
+ * nonzero fill sorts every edge in the path, and a long stroke that crosses
+ * itself is thousands of overlapping subpaths. Measured at 3x zoom, dpr 2.75,
+ * 1200 points: 13.95ms as one path, 0.25ms in chunks of sixteen -- against
+ * 0.41ms for the scene-unit scratch this replaced, so chunking is faster than
+ * the blurry version it was meant to be a tradeoff against.
+ *
+ * Sixteen also sets how finely alpha can fall along the stroke, since a chunk
+ * is the unit that carries one alpha. Chunks abut, so each boundary
+ * antialiases twice and leaves the faint hairline per-segment fills used to
+ * rule across the whole stroke -- at a sixteenth the frequency -- and
+ * self-overlap is only resolved by winding within a chunk. Both were true of
+ * what shipped before; this is that, sixteen times less often.
+ */
+const RIBBON_FILL_CHUNK = 16;
 
 /**
- * Fill the ribbon once, with the falloff carried by the fill colour.
+ * Fill the ribbon, letting alpha fall along it instead of flattening it.
  *
  * A ribbon was one path at one alpha -- the maximum over the slice -- so Speed
- * fade could not paint a gradient at all, and what showed on screen were the
- * joins between live paint slices, each flattened to its own maximum: hard
- * bars stepping down the stroke.
+ * fade could not paint a gradient at all, and what showed were the joins
+ * between live paint slices, each flattened to its own maximum: hard bars.
  *
- * The first repair built the stroke from nested prefixes, which was correct
- * and far too expensive: one rebuild and one rasterisation per step, on a path
- * that live smoothing already repaints in full every animation frame. Eleven
- * fills a frame is how the pen ends up trailing the nib.
+ * Two wrong answers before this one. Nested prefixes were correct and cost a
+ * rebuild and a rasterisation per step, on a path live smoothing already
+ * repaints in full every frame. A chord-projected gradient was cheap, but it
+ * needed a "is this stroke too coiled for a chord to mean anything" test --
+ * and a boolean that flips as the stroke grows makes the whole stroke swap
+ * between ramped and flat between frames, which is the flashing.
  *
- * A gradient costs one fill. Its parameter is the projection onto the stroke's
- * chord rather than true arc length, so a stroke that doubles back fades by
- * where it sits rather than how far it has run -- for a soft opacity ramp that
- * reads the same, and it is the only version of this that a live repaint can
- * afford. Strokes too coiled for a chord to mean anything keep the flat fill.
+ * The fill is already chunked for rasterisation cost, so each chunk simply
+ * carries its own alpha. That follows real travel rather than a projection,
+ * costs nothing beyond the fills already being made, and has no threshold to
+ * cross: a chunk's alpha is a continuous function of where it sits, so the
+ * stroke cannot change character partway through being drawn.
  */
 function paintRibbonWithFalloff(
   ctx: CanvasRenderingContext2D,
   left: readonly { x: number; y: number }[],
   right: readonly { x: number; y: number }[],
-  points: readonly ScenePoint[],
   styles: readonly InkStrokeStyle[],
   maxAlpha: number,
-  color: string,
-  addExtras: (target: CanvasRenderingContext2D) => void,
-): void {
-  let minAlpha = Infinity;
-  for (const style of styles) minAlpha = Math.min(minAlpha, style.alpha);
-  if (!Number.isFinite(minAlpha)) minAlpha = maxAlpha;
-
-  const gradient =
-    maxAlpha - minAlpha < RIBBON_FALLOFF_MIN_SPREAD
-      ? null
-      : falloffGradient(ctx, points, styles, color);
-
-  const prevFill = ctx.fillStyle;
-  ctx.globalAlpha = gradient ? 1 : maxAlpha;
-  if (gradient) ctx.fillStyle = gradient;
-  fillRibbonInChunks(ctx, left, right, addExtras);
-  ctx.fillStyle = prevFill;
-}
-
-/**
- * Segments per fill.
- *
- * One path for the whole ribbon looked right and rasterised terribly: a
- * nonzero fill has to sort every edge in the path, and a long stroke that
- * crosses itself is thousands of overlapping subpaths. Measured at 1200
- * points: 13.95ms as one path, 0.25ms in chunks of sixteen -- and 0.68ms for
- * the scene-unit scratch this replaced, so chunking is faster than the blurry
- * version it was supposed to be a tradeoff against.
- *
- * Sixteen is a compromise in both directions. Chunks abut, so each boundary
- * antialiases twice and leaves the faint hairline that per-segment fills used
- * to rule across the whole stroke -- at a sixteenth the frequency, which is
- * where it stops reading as grain. And self-overlap is only resolved by
- * winding within a chunk, so a stroke crossing itself far apart in time can
- * still stack where it crosses. Both were true of the per-segment fill that
- * shipped for a month; this is that, sixteen times less often.
- */
-const RIBBON_FILL_CHUNK = 16;
-
-function fillRibbonInChunks(
-  ctx: CanvasRenderingContext2D,
-  left: readonly { x: number; y: number }[],
-  right: readonly { x: number; y: number }[],
   addExtras: (target: CanvasRenderingContext2D) => void,
 ): void {
   const last = left.length - 1;
   for (let start = 0; start < last; start += RIBBON_FILL_CHUNK) {
     const stop = Math.min(last, start + RIBBON_FILL_CHUNK);
+    // The middle of the chunk stands for it, so the steps sit symmetrically
+    // either side of the true ramp rather than all leaning one way.
+    const at = Math.min(styles.length - 1, (start + stop) >> 1);
+    ctx.globalAlpha = styles[at]?.alpha ?? maxAlpha;
     ctx.beginPath();
     for (let index = start; index < stop; index++) {
       addWoundTriangle(ctx, left[index], left[index + 1], right[index + 1]);
@@ -1818,41 +1784,10 @@ function fillRibbonInChunks(
     }
     ctx.fill();
   }
+  ctx.globalAlpha = maxAlpha;
   ctx.beginPath();
   addExtras(ctx);
   ctx.fill();
-}
-
-/** Alpha ramp along the stroke's chord, or null when the chord means nothing. */
-function falloffGradient(
-  ctx: CanvasRenderingContext2D,
-  points: readonly ScenePoint[],
-  styles: readonly InkStrokeStyle[],
-  color: string,
-): CanvasGradient | null {
-  if (typeof ctx.createLinearGradient !== "function") return null;
-  const head = points[0];
-  const tail = points[points.length - 1];
-  const dx = tail.x - head.x;
-  const dy = tail.y - head.y;
-  const span = Math.hypot(dx, dy);
-  if (span < 1e-3) return null;
-
-  let travel = 0;
-  for (let index = 1; index < points.length; index++) {
-    travel += Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y);
-  }
-  // A stroke that comes back on itself has no usable axis; leave it flat.
-  if (travel > span * 3) return null;
-
-  const { r, g, b } = inkColorRgb(color);
-  const gradient = ctx.createLinearGradient(head.x, head.y, tail.x, tail.y);
-  for (let stop = 0; stop < RIBBON_FALLOFF_STOPS; stop++) {
-    const t = stop / (RIBBON_FALLOFF_STOPS - 1);
-    const at = Math.min(styles.length - 1, Math.round(t * (styles.length - 1)));
-    gradient.addColorStop(t, `rgba(${r}, ${g}, ${b}, ${styles[at].alpha})`);
-  }
-  return gradient;
 }
 
 /** Nib stamps per unit at Speed blot 0+ and at 100%, as multiples of half-width. */
