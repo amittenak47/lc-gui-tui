@@ -1196,6 +1196,7 @@ function inkDrawContext() {
   let fillCount = 0;
   let strokeCount = 0;
   let radialGradients = 0;
+  let linearGradients = 0;
   const arcRadii: number[] = [];
   const fillAlphas: number[] = [];
   const colorStops: string[] = [];
@@ -1257,6 +1258,14 @@ function inkDrawContext() {
         },
       };
     },
+    createLinearGradient() {
+      linearGradients++;
+      return {
+        addColorStop(_t: number, color: string) {
+          colorStops.push(color);
+        },
+      };
+    },
     save() {},
     restore() {},
     rect() {},
@@ -1280,6 +1289,9 @@ function inkDrawContext() {
     },
     get radialGradients() {
       return radialGradients;
+    },
+    get linearGradients() {
+      return linearGradients;
     },
   };
 }
@@ -1521,11 +1533,15 @@ describe("fade falloff has no threshold to cross", () => {
       return { x: 200 + Math.cos(t) * 60, y: 200 + Math.sin(t) * 60, pressure: NO_PRESSURE };
     }) as ScenePoint[];
 
+  /** The ramp lives in the gradient stops, not in globalAlpha. */
   function alphaSpread(points: ScenePoint[]): number {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, fadedOp(points), 1);
-    const used = drawCtx.fillAlphas.filter((a) => a > 0);
-    return Math.max(...used) - Math.min(...used);
+    const alphas = drawCtx.colorStops
+      .map((stop) => Number(/,\s*([0-9.]+)\)$/.exec(stop)?.[1] ?? NaN))
+      .filter((a) => Number.isFinite(a));
+    if (alphas.length === 0) return 0;
+    return Math.max(...alphas) - Math.min(...alphas);
   }
 
   /*
@@ -1540,19 +1556,23 @@ describe("fade falloff has no threshold to cross", () => {
     expect(alphaSpread(coiled())).toBeGreaterThan(0.05);
   });
 
-  it("is flat when fade is off, whatever the shape", () => {
+  it("builds no ramp at all when fade is off", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, fadedOp(coiled(), 0), 1);
-    const used = drawCtx.fillAlphas.filter((a) => a > 0);
-    expect(Math.max(...used) - Math.min(...used)).toBeCloseTo(0);
+    expect(drawCtx.colorStops).toHaveLength(0);
   });
 });
 
-describe("Speed blot stamp frequency", () => {
-  function blotOp(blot: number, speedInk = 0.5): InkOp {
+describe("Speed blot pools at a pause, not along a stroke", () => {
+  function stroke(tail: "moving" | "resting", blot: number): InkOp {
     const pts: ScenePoint[] = [];
     for (let i = 0; i <= 60; i++) {
       pts.push({ x: i * 6, y: 40 + Math.sin(i / 6) * 10, pressure: NO_PRESSURE });
+    }
+    if (tail === "resting") {
+      for (let i = 0; i < 14; i++) {
+        pts.push({ x: 360 + (i % 2) * 0.2, y: 40, pressure: NO_PRESSURE, slowness: 1 });
+      }
     }
     return {
       kind: "draw",
@@ -1561,80 +1581,35 @@ describe("Speed blot stamp frequency", () => {
       maxFullness: 1,
       pressureClip: 1,
       pressureSensitive: false,
-      speedInk,
-      speedBlotBlend: blot,
+      speedInk: 0.5,
       speedFade: 0,
+      speedBlotBlend: blot,
       points: pts,
     };
   }
-  /*
-   * The ribbon fills in chunks, so a fill count no longer isolates stamps.
-   * Each stamp builds its own radial rim, which the harness counts exactly.
-   */
-  function stamps(blot: number): number {
+  const discs = (op: InkOp) => {
     const drawCtx = inkDrawContext();
-    applyInkOp(drawCtx.ctx, blotOp(blot), 1);
-    return drawCtx.radialGradients;
-  }
+    applyInkOp(drawCtx.ctx, op, 1);
+    return drawCtx.caps.length;
+  };
 
   /*
-   * The dial is the stamp spacing, and it has to be legible across its travel.
-   * Blot used to reach the paint only as a dwell-speed tweak and a rim that no
-   * call site ever drew, so 5% and 100% laid down identical pixels and the
-   * control read as a switch.
+   * Blot is a pooling behaviour, not a pattern. One continuous motion has
+   * nowhere to pool, so it must come out as clean ink at any setting -- an
+   * earlier version stamped a disc every so many nib widths and left a row of
+   * beads threaded along the line, which is the opposite of the texture this
+   * is for.
    */
-  it("stamps more often as the dial rises", () => {
-    const faint = stamps(0.05);
-    const mid = stamps(0.5);
-    const full = stamps(1);
-    expect(faint).toBeGreaterThan(0);
-    expect(mid).toBeGreaterThan(faint);
-    expect(full).toBeGreaterThan(mid);
+  it("adds nothing to a stroke drawn in one continuous motion", () => {
+    expect(discs(stroke("moving", 1))).toBe(discs(stroke("moving", 0)));
   });
 
-  /* Blot off is a plain ribbon: the one path fill, and nothing stamped on it. */
-  /*
-   * A dab belongs to the place it sits, not to the stroke's current length.
-   *
-   * Spacing used to widen with total travel to hold the count under a ceiling.
-   * Live smoothing repaints the whole stroke every frame, so each time the
-   * stroke grew the spacing changed and every stamp landed somewhere new --
-   * beads visibly crawling along a line still being drawn.
-   */
-  it("leaves earlier stamps where they were as the stroke grows", () => {
-    function run(segments: number) {
-      const pts: ScenePoint[] = [];
-      for (let i = 0; i <= segments; i++) {
-        pts.push({ x: i * 6, y: 40, pressure: NO_PRESSURE });
-      }
-      const drawCtx = inkDrawContext();
-      applyInkOp(drawCtx.ctx, { ...blotOp(1), points: pts }, 1);
-      // Stamp centres, in order along the stroke.
-      return drawCtx.caps.map((cap) => cap.x).sort((a, b) => a - b);
-    }
-    const shortRun = run(40);
-    const longRun = run(400);
-    expect(shortRun.length).toBeGreaterThan(3);
-    expect(longRun.length).toBeGreaterThan(3);
-    /*
-     * A long stroke may thin its grid, so the survivors are a subset of the
-     * finer one -- never a shifted copy of it. Every dab the long stroke keeps
-     * sits where the short stroke already had one.
-     */
-    for (const at of longRun.filter((v) => v <= Math.max(...shortRun))) {
-      expect(shortRun.some((v) => Math.abs(v - at) < 2)).toBe(true);
-    }
+  it("pools where the pen actually stops", () => {
+    expect(discs(stroke("resting", 1))).toBeGreaterThan(discs(stroke("moving", 1)));
   });
 
-  it("stamps nothing at all when blot is off", () => {
-    expect(stamps(0)).toBe(0);
-  });
-
-  /* Blot is standalone: it is a texture, not a mode of Speed ink. */
-  it("stamps with Speed ink off", () => {
-    const drawCtx = inkDrawContext();
-    applyInkOp(drawCtx.ctx, blotOp(1, 0), 1);
-    expect(drawCtx.radialGradients).toBeGreaterThan(0);
+  it("does not pool at a pause when blot is off", () => {
+    expect(discs(stroke("resting", 0))).toBe(discs(stroke("moving", 0)));
   });
 });
 
@@ -1961,27 +1936,6 @@ describe("speed-ink ribbon coalesce / densify / tip split", () => {
     expect(drawCtx.fillCount).toBeGreaterThan(0);
   });
 
-  it("gives every blot stamp a soft rim so they blend rather than bead", () => {
-    const pts = points([0, 0], [15, 2], [30, -1], [45, 3], [60, 0], [75, 2], [90, 0]);
-    const op: InkOp = {
-      kind: "draw",
-      color: "#112233",
-      baseWidth: 8,
-      maxFullness: 1,
-      pressureClip: 1,
-      pressureSensitive: false,
-      speedInk: 1,
-      speedBlotBlend: 1,
-      speedFade: 0,
-      points: pts,
-    };
-    const drawCtx = inkDrawContext();
-    applyInkOp(drawCtx.ctx, op, 1);
-    expect(drawCtx.radialGradients).toBeGreaterThan(0);
-    // Solid at the core, gone at the rim.
-    expect(drawCtx.colorStops).toContain("rgba(17, 34, 51, 1)");
-    expect(drawCtx.colorStops).toContain("rgba(17, 34, 51, 0)");
-  });
 });
 
 describe("ribbon normal stability", () => {

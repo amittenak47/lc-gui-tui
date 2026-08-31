@@ -1672,6 +1672,24 @@ function drawRibbonStrokeFrom(
    * during a single rasterisation, so one fill paints the union at exactly the
    * alpha asked for.
    */
+
+  /*
+   * Blot adds no geometry along the stroke at present.
+   *
+   * Dabs were stamped as separate fills, and overlapping fills composite
+   * darker than the single-coverage ribbon beneath them -- beads on a faded
+   * line. Folding them into each chunk's path fixed that and broke something
+   * else: a dab is wider than the segment it sits on, so one straddling a
+   * chunk boundary gets drawn by both chunks at their two different alphas and
+   * comes out as an isolated dark disc.
+   *
+   * Both are the same constraint. The stroke is painted in pieces with
+   * per-piece alpha, so any mark spanning a boundary is either double-covered
+   * or discontinuous. Texture along the stroke needs the stroke to be one
+   * coverage, which needs placed ink to stop being repainted. Until then blot
+   * is the dwell pool only -- what it was originally for -- and leaves clean
+   * ink behind.
+   */
   const addHardExtras = (
     target: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   ) => {
@@ -1768,18 +1786,17 @@ function drawRibbonStrokeFrom(
    * winding before any compositing happens. So it is both sharper and cheaper
    * than either the scratch or the per-segment fills it replaced.
    */
-  paintRibbonWithFalloff(ctx, left, right, prepared.styles, maxAlpha, addHardExtras);
-
-  // Dabs carry their own point's alpha, so the scale passed in is just 1.
-  stampBlotDiscs(
+  paintRibbonWithFalloff(
     ctx,
-    prepared,
-    pixelScale,
-    blotBlend,
-    1,
-    paintedWidth(nib, pixelScale) / 2,
-    color,
+    left,
+    right,
+    prepared.points,
+    prepared.styles,
+    maxAlpha,
+    color ?? String(ctx.fillStyle),
+    addHardExtras,
   );
+
   ctx.globalAlpha = 1;
 }
 
@@ -1802,41 +1819,69 @@ function drawRibbonStrokeFrom(
  */
 const RIBBON_FILL_CHUNK = 16;
 
+/** Below this spread a chunk is one flat alpha; a ramp would not be visible. */
+const RIBBON_FALLOFF_MIN_SPREAD = 0.004;
+
 /**
  * Fill the ribbon, letting alpha fall along it instead of flattening it.
  *
- * A ribbon was one path at one alpha -- the maximum over the slice -- so Speed
- * fade could not paint a gradient at all, and what showed were the joins
- * between live paint slices, each flattened to its own maximum: hard bars.
+ * Every previous attempt failed the same way: a global property drove a local
+ * value, so drawing more of a stroke changed the part already drawn.
  *
- * Two wrong answers before this one. Nested prefixes were correct and cost a
- * rebuild and a rasterisation per step, on a path live smoothing already
- * repaints in full every frame. A chord-projected gradient was cheap, but it
- * needed a "is this stroke too coiled for a chord to mean anything" test --
- * and a boolean that flips as the stroke grows makes the whole stroke swap
- * between ramped and flat between frames, which is the flashing.
+ * - One alpha for the whole ribbon (`maxAlpha`) meant fade painted no ramp at
+ *   all, and every pressure wobble moved the entire stroke at once.
+ * - Nested prefixes were right and cost a rebuild and a rasterisation per step.
+ * - A head-to-tail gradient was cheap, but its axis is the stroke's endpoints:
+ *   draw a circle and the axis rotates, so the whole stroke's opacity turns
+ *   with the pen.
+ * - A "too coiled for an axis" test flipped as the stroke grew, swapping the
+ *   whole stroke between ramped and flat between frames.
+ * - One alpha per fill chunk was finally local, but made the chunks
+ *   themselves visible: sixteen-segment blocks with a step at each boundary.
  *
- * The fill is already chunked for rasterisation cost, so each chunk simply
- * carries its own alpha. That follows real travel rather than a projection,
- * costs nothing beyond the fills already being made, and has no threshold to
- * cross: a chunk's alpha is a continuous function of where it sits, so the
- * stroke cannot change character partway through being drawn.
+ * A gradient per chunk, along that chunk's own two points, is local and
+ * continuous at once. Neighbouring chunks meet at a shared point and read the
+ * same alpha there, so no boundary shows; nothing outside a chunk can move it,
+ * so a stroke cannot repaint its own past. Cost is one gradient per sixteen
+ * segments, which is nothing beside the fills already being made.
  */
 function paintRibbonWithFalloff(
   ctx: CanvasRenderingContext2D,
   left: readonly { x: number; y: number }[],
   right: readonly { x: number; y: number }[],
+  points: readonly ScenePoint[],
   styles: readonly InkStrokeStyle[],
   maxAlpha: number,
+  color: string,
   addExtras: (target: CanvasRenderingContext2D) => void,
 ): void {
+  const prevFill = ctx.fillStyle;
+  const rgb = inkColorRgb(color);
+  const canRamp = typeof ctx.createLinearGradient === "function";
   const last = left.length - 1;
+
   for (let start = 0; start < last; start += RIBBON_FILL_CHUNK) {
     const stop = Math.min(last, start + RIBBON_FILL_CHUNK);
-    // The middle of the chunk stands for it, so the steps sit symmetrically
-    // either side of the true ramp rather than all leaning one way.
-    const at = Math.min(styles.length - 1, (start + stop) >> 1);
-    ctx.globalAlpha = styles[at]?.alpha ?? maxAlpha;
+    const headAlpha = styles[Math.min(start, styles.length - 1)]?.alpha ?? maxAlpha;
+    const tailAlpha = styles[Math.min(stop, styles.length - 1)]?.alpha ?? maxAlpha;
+    const head = points[Math.min(start, points.length - 1)];
+    const tail = points[Math.min(stop, points.length - 1)];
+    const ramp =
+      canRamp &&
+      Math.abs(tailAlpha - headAlpha) >= RIBBON_FALLOFF_MIN_SPREAD &&
+      Math.hypot(tail.x - head.x, tail.y - head.y) > 1e-3;
+
+    if (ramp) {
+      const gradient = ctx.createLinearGradient(head.x, head.y, tail.x, tail.y);
+      gradient.addColorStop(0, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${headAlpha})`);
+      gradient.addColorStop(1, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${tailAlpha})`);
+      ctx.fillStyle = gradient;
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = color;
+      ctx.globalAlpha = (headAlpha + tailAlpha) / 2;
+    }
+
     ctx.beginPath();
     for (let index = start; index < stop; index++) {
       addWoundTriangle(ctx, left[index], left[index + 1], right[index + 1]);
@@ -1844,15 +1889,20 @@ function paintRibbonWithFalloff(
     }
     ctx.fill();
   }
-  ctx.globalAlpha = maxAlpha;
+
+  /*
+   * Caps and joins take the alpha of the end they sit on, not the stroke's
+   * maximum. Painting them at the maximum left dark blobs at every terminal of
+   * a stroke that had faded, with a ghost of a line between them.
+   */
+  ctx.fillStyle = color;
+  ctx.globalAlpha = styles[styles.length - 1]?.alpha ?? maxAlpha;
   ctx.beginPath();
   addExtras(ctx);
   ctx.fill();
+  ctx.fillStyle = prevFill;
 }
 
-/** Nib stamps per unit at Speed blot 0+ and at 100%, as multiples of half-width. */
-const BLOT_STAMP_SPACING_SPARSE = 3.2;
-const BLOT_STAMP_SPACING_DENSE = 0.6;
 /**
  * How far a stamp swells past the ribbon's own half-width.
  *
@@ -1863,8 +1913,8 @@ const BLOT_STAMP_SPACING_DENSE = 0.6;
  * pooled silhouette of graphite rather than a flat band -- visible at any
  * opacity, not just where stamps can stack.
  */
-const BLOT_STAMP_SWELL_MIN = 1.12;
-const BLOT_STAMP_SWELL_MAX = 1.45;
+const BLOT_STAMP_SWELL_MIN = 1.04;
+const BLOT_STAMP_SWELL_MAX = 1.16;
 
 /** Widest a blot stamp gets, for bounds that must cover the paint. */
 export function blotStampSwell(blend: number): number {
@@ -1872,212 +1922,8 @@ export function blotStampSwell(blend: number): number {
   if (b <= 1e-3) return 1;
   return BLOT_STAMP_SWELL_MIN + (BLOT_STAMP_SWELL_MAX - BLOT_STAMP_SWELL_MIN) * b;
 }
-/**
- * Ceiling on stamps for one paint.
- *
- * Live smoothing repaints the whole stroke from index 0 on every animation
- * frame, so anything proportional to stroke length is paid again each frame
- * and the pen gets heavier the longer the word. Spacing widens to stay under
- * this, which trades even grain on a very long stroke for a flat cost per
- * frame -- the stroke you are still writing has to stay ahead of the nib.
- */
-const BLOT_STAMP_MAX = 600;
 
-/**
- * One soft stamp, drawn once and blitted per dab.
- *
- * Building a `createRadialGradient` per stamp measured 0.42ms for 400 stamps
- * against 0.17ms for blitting a cached sprite -- and that is desktop Chrome,
- * with a tablet several times slower again. Sprite lives at module scope and
- * is rebuilt only when the colour or the rim changes, which is once a stroke.
- */
-let blotSprite: RibbonScratchLike | null = null;
-let blotSpriteKey = "";
 
-type RibbonScratchLike = HTMLCanvasElement | OffscreenCanvas;
-
-const BLOT_SPRITE_PX = 64;
-
-function blotStampSprite(color: string, rimFrac: number): RibbonScratchLike | null {
-  const key = `${color}|${rimFrac.toFixed(3)}`;
-  if (blotSprite && blotSpriteKey === key) return blotSprite;
-  let canvas: RibbonScratchLike | null = null;
-  try {
-    if (typeof OffscreenCanvas !== "undefined") {
-      canvas = new OffscreenCanvas(BLOT_SPRITE_PX, BLOT_SPRITE_PX);
-    } else if (typeof document !== "undefined" && document.createElement) {
-      const el = document.createElement("canvas");
-      el.width = BLOT_SPRITE_PX;
-      el.height = BLOT_SPRITE_PX;
-      canvas = el;
-    }
-  } catch {
-    return null;
-  }
-  if (!canvas) return null;
-  const sctx = canvas.getContext("2d") as CanvasRenderingContext2D | null;
-  if (!sctx) return null;
-  const mid = BLOT_SPRITE_PX / 2;
-  const { r, g, b } = inkColorRgb(color);
-  const gradient = sctx.createRadialGradient(
-    mid,
-    mid,
-    mid * Math.max(0, 1 - rimFrac),
-    mid,
-    mid,
-    mid,
-  );
-  gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 1)`);
-  gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-  sctx.clearRect(0, 0, BLOT_SPRITE_PX, BLOT_SPRITE_PX);
-  sctx.fillStyle = gradient;
-  sctx.beginPath();
-  sctx.arc(mid, mid, mid, 0, Math.PI * 2);
-  sctx.fill();
-  blotSprite = canvas;
-  blotSpriteKey = key;
-  return canvas;
-}
-
-/**
- * Speed blot: interleaved nib stamps along the stroke, one fill each.
- *
- * This is the graphite. A pencil is not a flat ribbon, it is the same nib laid
- * down over and over, and where those stamps overlap the ink builds up denser
- * than where they do not -- the cross-hatched, grainy look. That build-up is
- * why they are stamped individually instead of joining the ribbon's path: one
- * path resolves overlap by winding and paints a single flat coverage, which is
- * right for ink and wrong for pencil. It follows that the texture only shows
- * once the stroke is not already opaque, which is why blot reads as a pencil
- * in company with Speed fade or pressure and as a slight thickening on its own.
- *
- * The dial is the stamp spacing, so 5% is a sparse trail and 100% is a
- * continuous pool. Nothing here consults Speed ink: blot is a standalone
- * texture that any pen may switch on.
- */
-function stampBlotDiscs(
-  ctx: CanvasRenderingContext2D,
-  prepared: { points: ScenePoint[]; styles: InkStrokeStyle[] },
-  pixelScale: number,
-  blend: number,
-  alpha: number,
-  nibHalf: number,
-  color?: string,
-): void {
-  if (blend <= 1e-3) return;
-  const amount = clamp01(blend);
-  const points = prepared.points;
-  if (points.length < 2) return;
-
-  const spacingFrac =
-    BLOT_STAMP_SPACING_SPARSE -
-    (BLOT_STAMP_SPACING_SPARSE - BLOT_STAMP_SPACING_DENSE) * amount;
-
-  /*
-   * Each stamp is a soft-rimmed disc, not a hard dot.
-   *
-   * A hard circle at the ribbon's own width reads as a bead threaded on the
-   * line -- you see a row of spots rather than grain, because its edge lands
-   * exactly where nothing else is changing. Fading the outer part of the disc
-   * out means neighbouring stamps cross-fade into one another and into the
-   * ribbon, so what builds up is density rather than an outline. `rimFrac` is
-   * the rim the blot dial has always described and no call site ever drew:
-   * a firmer core low on the dial, a wider, softer edge high on it.
-   */
-  const ink = color ?? String(ctx.fillStyle);
-  const { r, g, b } = inkColorRgb(ink);
-  const rimFrac = 0.28 + 0.42 * amount;
-
-  /*
-   * Widen the spacing until the stamp count fits the per-frame ceiling.
-   *
-   * Without this the count rises with stroke length, and live smoothing repays
-   * the whole stroke every frame -- so the pen slows as the word grows, which
-   * is the one thing writing cannot tolerate.
-   */
-  /*
-   * Dabs sit on a fixed grid of arc length, and the grid may only ever halve.
-   *
-   * Spacing used to widen smoothly with total travel to hold the count under a
-   * ceiling, and live smoothing repaints the whole stroke every frame -- so
-   * each time the stroke grew, every dab landed somewhere new. That is the
-   * beads crawling along a line still being drawn.
-   *
-   * Two things fix it together. The interval is measured against the stroke's
-   * own nib rather than the local half-width, so it is one constant for the
-   * whole stroke and a dab's position depends only on how far along it is.
-   * And when a stroke is long enough to need fewer dabs, the interval doubles
-   * rather than stretching: the coarser grid is an exact subset of the finer
-   * one, so survivors stay exactly where they were. Thinning is visible on a
-   * very long stroke; drifting is visible on every stroke.
-   */
-  let travel = 0;
-  for (let index = 1; index < points.length; index++) {
-    travel += Math.hypot(
-      points[index].x - points[index - 1].x,
-      points[index].y - points[index - 1].y,
-    );
-  }
-  let interval = Math.max(1e-3, nibHalf * spacingFrac);
-  while (travel / interval > BLOT_STAMP_MAX) interval *= 2;
-
-  const swell = blotStampSwell(amount);
-  const sprite = blotStampSprite(ink, rimFrac);
-  const prevFill = ctx.fillStyle;
-  // Absolute arc length against the grid, not a counter reset at each dab --
-  // resetting drops the remainder, and then a doubled interval no longer lands
-  // on a subset of the finer one.
-  let arc = 0;
-  let nextAt = 0;
-  let stamped = 0;
-  for (let index = 0; index < points.length && stamped < BLOT_STAMP_MAX; index++) {
-    if (index > 0) {
-      arc += Math.hypot(
-        points[index].x - points[index - 1].x,
-        points[index].y - points[index - 1].y,
-      );
-    }
-    const half = paintedWidth(prepared.styles[index].lineWidth, pixelScale) / 2;
-    if (half < 1e-6) continue;
-    if (arc < nextAt) continue;
-    nextAt = (Math.floor(arc / interval) + 1) * interval;
-    stamped++;
-    /*
-     * Each dab takes the alpha of the point it sits on, not the stroke's
-     * maximum. Stamping at the maximum over a faded tail made the dabs pop as
-     * hard beads exactly where the ink is meant to be running out -- the grain
-     * has to dry with the stroke it belongs to.
-     */
-    ctx.globalAlpha = Math.min(1, alpha * prepared.styles[index].alpha);
-    const dab = half * swell;
-    if (sprite) {
-      ctx.drawImage(
-        sprite as CanvasImageSource,
-        points[index].x - dab,
-        points[index].y - dab,
-        dab * 2,
-        dab * 2,
-      );
-      continue;
-    }
-    // No canvas to bake a sprite into (jsdom, odd hosts): build the rim inline.
-    const gradient = ctx.createRadialGradient(
-      points[index].x,
-      points[index].y,
-      Math.max(0, half * swell * (1 - rimFrac)),
-      points[index].x,
-      points[index].y,
-      half * swell,
-    );
-    gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 1)`);
-    gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(points[index].x, points[index].y, half * swell, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.fillStyle = prevFill;
-}
 
 /** Split a stroke into paintable runs, starting at `fromIndex`. */
 export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
