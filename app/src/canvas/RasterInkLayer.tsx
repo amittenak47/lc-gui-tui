@@ -28,6 +28,7 @@ import {
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
   HIGHLIGHT_WIDTH_SCALE,
+  blotTicksToFull,
   isDiscPrimaryPath,
   isHostBoundOp,
   NO_PRESSURE,
@@ -81,7 +82,7 @@ import {
 import { WHEEL_OPEN_MS } from "../util/gesture";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { DEBUG_INK, inkMetrics } from "./inkMetrics";
-import { INK_SPEED_BLOT_BLEND_DEFAULT, INK_SPEED_FADE_DEFAULT } from "../util/inkSpeedPref";
+import { INK_GRAIN_DEFAULT, INK_SPEED_BLOT_BLEND_DEFAULT, INK_SPEED_FADE_DEFAULT } from "../util/inkSpeedPref";
 import { INK_BOLDNESS_DEFAULT } from "../util/inkBoldnessPref";
 
 export interface RasterInkHandle {
@@ -159,8 +160,10 @@ export interface RasterInkLayerProps {
   straightInk?: boolean;
   /** Speed-ink strength (0–1): a slow nib lays down more than a fast one. */
   speedInk?: number;
-  /** Soften speed-ink join/dwell discs (0–1). Stamped onto new pen strokes. */
+  /** Soften / pool speed-ink dwell discs (0–1). Stamped onto new pen strokes. */
   speedBlotBlend?: number;
+  /** Nib material (0–1). Stamped onto new pen strokes. Absent on a stroke means hard. */
+  grain?: number;
   /** Pace wash toward pencil (0–1). Stamped onto new pen strokes. */
   speedFade?: number;
   /** Opacity boost (0–3). Stamped onto new pen strokes. */
@@ -216,6 +219,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       straightInk = false,
       speedInk = 0,
       speedBlotBlend = INK_SPEED_BLOT_BLEND_DEFAULT,
+      grain = INK_GRAIN_DEFAULT,
       speedFade = INK_SPEED_FADE_DEFAULT,
       inkBoldness = INK_BOLDNESS_DEFAULT,
       partialErase = true,
@@ -437,6 +441,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     speedInkRef.current = speedInk;
     const speedBlotBlendRef = useRef(speedBlotBlend);
     speedBlotBlendRef.current = speedBlotBlend;
+    const grainRef = useRef(grain);
+    grainRef.current = grain;
     const speedFadeRef = useRef(speedFade);
     speedFadeRef.current = speedFade;
     const inkBoldnessRef = useRef(inkBoldness);
@@ -1766,6 +1772,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         );
         const speed = speedInkRef.current;
         const blotBlend = speedBlotBlendRef.current;
+        const grainAmt = grainRef.current;
         const fade = speedFadeRef.current;
         const boldness = inkBoldnessRef.current;
         // Start at the neutral pace rather than at rest: the nib has no history
@@ -1844,6 +1851,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                     speedFade: fade,
                   }
                 : {}),
+              ...(grainAmt > 0 ? { grain: grainAmt } : {}),
               boldness,
               points: [point],
             };
@@ -1869,6 +1877,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                     speedFade: fade,
                   }
                 : {}),
+              ...(grainAmt > 0 ? { grain: grainAmt } : {}),
               boldness,
               points: [point],
             };
@@ -1939,7 +1948,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             if (!paceOn) return;
             if (liveOp.points.length === 0) return;
             if (performance.now() - lastMoveWallRef.current < 60) return;
-            if (dwellCountRef.current >= 40) return;
+            if (dwellCountRef.current >= blotTicksToFull(0)) return;
             dwellCountRef.current++;
             smoothedSpeedRef.current = smoothSpeed(smoothedSpeedRef.current, 0);
             const last = lastPointRef.current;
@@ -1959,6 +1968,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                 if (hasStylusPressure(dwellPoint.pressure)) {
                   contact.pressure = Math.max(contact.pressure, dwellPoint.pressure);
                 }
+              }
+              if ((liveOp.speedBlotBlend ?? 0) > 1e-3 && contact) {
+                liveOp.points.push({
+                  x: contact.x,
+                  y: contact.y,
+                  pressure: contact.pressure,
+                  slowness: dwellPoint.slowness,
+                });
               }
               lastPointRef.current = contact ?? last;
               paintLiveAfterChangeRef.current();

@@ -264,8 +264,10 @@ import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
 import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref";
 import {
+  INK_GRAIN_EVENT,
   INK_SPEED_BLOT_BLEND_EVENT,
   INK_SPEED_FADE_EVENT,
+  loadInkGrain,
   loadInkSpeed,
   loadInkSpeedBlotBlend,
   loadInkSpeedFade,
@@ -1381,6 +1383,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkSpeedBlotBlend, setInkSpeedBlotBlend] = useState(() =>
     loadInkSpeedBlotBlend(),
   );
+  const [inkGrain, setInkGrain] = useState(() => loadInkGrain());
   const [inkSpeedFade, setInkSpeedFade] = useState(() => loadInkSpeedFade());
   const [inkBoldness, setInkBoldness] = useState(() => loadInkBoldness());
   const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
@@ -3395,6 +3398,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     window.addEventListener(INK_SPEED_BLOT_BLEND_EVENT, onBlotBlend);
     return () =>
       window.removeEventListener(INK_SPEED_BLOT_BLEND_EVENT, onBlotBlend);
+  }, []);
+
+  useEffect(() => {
+    const onGrain = () => setInkGrain(loadInkGrain());
+    window.addEventListener(INK_GRAIN_EVENT, onGrain);
+    return () => window.removeEventListener(INK_GRAIN_EVENT, onGrain);
   }, []);
 
   useEffect(() => {
@@ -9019,6 +9028,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         straightInk={straightInk}
         speedInk={inkSpeed}
         speedBlotBlend={inkSpeedBlotBlend}
+        grain={inkGrain}
         speedFade={inkSpeedFade}
         inkBoldness={inkBoldness}
         partialErase={eraserPartial}

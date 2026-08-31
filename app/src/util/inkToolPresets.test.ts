@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ERASER_WIDTH_MAX, STROKE_WIDTH_DEFAULT } from "../canvas/rasterInk";
 import { selectHoldYieldsToScroll } from "./gesture";
 import { INK_BOLDNESS_DEFAULT, loadInkBoldness, saveInkBoldness } from "./inkBoldnessPref";
-import { loadInkSpeedFade } from "./inkSpeedPref";
+import { loadInkGrain, loadInkSpeedFade } from "./inkSpeedPref";
 import { loadInkToolPrefs, saveInkToolPrefs } from "./inkToolPrefs";
 import { drawOpFromSnap, TEST_STRIP_POINTS, testStripDrawOp } from "./inkPresetStrip";
 import {
@@ -50,6 +50,7 @@ const draw: InkDrawSnapshot = {
   smoothingMode: "lift",
   speed: 0,
   blot: 0.55,
+  grain: 0,
   fade: 0,
   boldness: 1,
 };
@@ -96,11 +97,32 @@ describe("inkToolPresets", () => {
     expect((loaded.custom.pen[0] as InkDrawSnapshot).fade).toBe(0);
   });
 
+  it("treats an old stored wedge without grain as 0", () => {
+    const store = loadInkToolPresets();
+    const { grain: _omit, ...old } = draw;
+    localStorage.setItem(
+      "whiteboard.inkToolPresets.v2",
+      JSON.stringify({
+        ...store,
+        custom: { ...store.custom, pen: [old, null, null, null, null] },
+      }),
+    );
+    const loaded = loadInkToolPresets();
+    expect((loaded.custom.pen[0] as InkDrawSnapshot).grain).toBe(0);
+  });
+
   it("applying a wedge writes speed fade onto the live key", () => {
     let store = loadInkToolPresets();
     store = saveWedge(store, "pen", 1, { ...draw, speed: 0.2, fade: 0.4 });
     store = applyWedge(store, "pen", 1);
     expect(loadInkSpeedFade()).toBe(0.4);
+  });
+
+  it("applying a wedge writes grain onto the live key", () => {
+    let store = loadInkToolPresets();
+    store = saveWedge(store, "pen", 1, { ...draw, grain: 0.45 });
+    store = applyWedge(store, "pen", 1);
+    expect(loadInkGrain()).toBe(0.45);
   });
 
   it("applying Global restores stored defaults after a custom wedge", () => {
@@ -307,6 +329,7 @@ describe("Reset stock snapshots", () => {
     expect(stock.pressureSensitive).toBe(true);
     expect(stock.speed).toBe(0);
     expect(stock.blot).toBe(0);
+    expect(stock.grain).toBe(0);
     expect("body" in stock).toBe(false);
     expect(liveDrawSnapshot().boldness).toBe(0);
     expect(liveDrawSnapshot().width).toBe(32);

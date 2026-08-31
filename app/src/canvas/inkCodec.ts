@@ -79,6 +79,8 @@ export interface EncodedOp {
   sbb?: number;
   /** Pace wash toward pencil (0–1); absent on older speed-ink → full wash. */
   sf?: number;
+  /** Nib material (0–1); absent → hard disc. */
+  gr?: number;
   /** Opacity boost (0–3); absent → paint uses device pref. */
   ib?: number;
   /** Highlighter stroke — absent means an ordinary pen one. */
@@ -211,6 +213,7 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
       if (op.speedInk !== undefined) record.si = op.speedInk;
       if (op.speedBlotBlend !== undefined) record.sbb = op.speedBlotBlend;
       if (op.speedFade !== undefined) record.sf = op.speedFade;
+      if (op.grain !== undefined) record.gr = op.grain;
       if (op.boldness !== undefined) record.ib = op.boldness;
       if (op.highlight) record.hl = 1;
       if (op.hostKey !== undefined) record.hk = op.hostKey;
@@ -385,6 +388,7 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
       if (record.si !== undefined) op.speedInk = record.si;
       if (record.sbb !== undefined) op.speedBlotBlend = record.sbb;
       if (record.sf !== undefined) op.speedFade = record.sf;
+      if (record.gr !== undefined) op.grain = record.gr;
       if (record.ib !== undefined) op.boldness = record.ib;
       if (record.hl === 1) op.highlight = true;
       if (record.hk !== undefined) op.hostKey = record.hk;
@@ -525,6 +529,7 @@ interface PackedOpMeta {
   si?: number;
   sbb?: number;
   sf?: number;
+  gr?: number;
   ib?: number;
   hl?: 1;
   hk?: number;
@@ -557,6 +562,7 @@ export function packEncodedInk(encoded: EncodedInk): Uint8Array<ArrayBuffer> {
     ...(op.si != null ? { si: op.si } : {}),
     ...(op.sbb != null ? { sbb: op.sbb } : {}),
     ...(op.sf != null ? { sf: op.sf } : {}),
+    ...(op.gr != null ? { gr: op.gr } : {}),
     ...(op.ib != null ? { ib: op.ib } : {}),
     ...(op.hl != null ? { hl: op.hl } : {}),
     ...(op.hk != null ? { hk: op.hk } : {}),
@@ -640,6 +646,7 @@ export function unpackEncodedInk(bytes: Uint8Array): EncodedInk | null {
     if (item.si != null) record.si = item.si;
     if (item.sbb != null) record.sbb = item.sbb;
     if (item.sf != null) record.sf = item.sf;
+    if (item.gr != null) record.gr = item.gr;
     if (item.ib != null) record.ib = item.ib;
     if (item.hl != null) record.hl = item.hl;
     if (item.hk != null) record.hk = item.hk;
