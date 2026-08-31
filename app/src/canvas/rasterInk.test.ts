@@ -1134,6 +1134,7 @@ function inkDrawContext() {
   let strokeCount = 0;
   let radialGradients = 0;
   const arcRadii: number[] = [];
+  const arcSweeps: number[] = [];
   const fillAlphas: number[] = [];
   const colorStops: string[] = [];
   let pen = { x: 0, y: 0 };
@@ -1175,8 +1176,9 @@ function inkDrawContext() {
     stroke() {
       strokeCount++;
     },
-    arc(x: number, y: number, r: number) {
+    arc(x: number, y: number, r: number, start = 0, end = Math.PI * 2) {
       arcRadii.push(r);
+      arcSweeps.push(end - start);
       if (composite !== "destination-out") {
         caps.push({ ...map(x, y), r: r * transform[0] });
       }
@@ -1207,6 +1209,7 @@ function inkDrawContext() {
     strokes,
     caps,
     arcRadii,
+    arcSweeps,
     fillAlphas,
     colorStops,
     get strokeCount() {
@@ -1458,6 +1461,71 @@ describe("disc-primary dwell path", () => {
     applyInkOp(drawCtx.ctx, op, 1);
     // One growing disc stamp — not one fill per ribbon segment.
     expect(drawCtx.fillCount).toBe(1);
+  });
+});
+
+describe("contact stamp (Phase 1)", () => {
+  it("paints a single point as a full circle, not a semicircle", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, draw([10, 10]), 1);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.arcSweeps[0]).toBeCloseTo(Math.PI * 2);
+  });
+
+  it("paints a pressure-on cluster of 8 samples inside 0.2× nib as one disc", () => {
+    const cluster = stylusPoints(
+      0.75,
+      [0, 0],
+      [0.4, 0.2],
+      [-0.3, 0.1],
+      [0.2, -0.4],
+      [0.1, 0.3],
+      [-0.2, -0.2],
+      [0.35, 0],
+      [0, -0.15],
+    );
+    const op: InkOp = {
+      kind: "draw",
+      color: "#000",
+      baseWidth: 8,
+      maxFullness: 0.999,
+      pressureClip: 1,
+      pressureSensitive: true,
+      speedInk: 0,
+      points: cluster,
+    };
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.caps).toHaveLength(1);
+  });
+
+  it("does not emit two heading-flipped terminal caps at the origin", () => {
+    const op: InkOp = {
+      kind: "draw",
+      color: "#000",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 0,
+      points: stylusPoints(0.5, [0, 0], [1.2, 0], [-1.1, 0.2]).map((p) => ({
+        ...p,
+        slowness: INK_SLOWNESS_NEUTRAL,
+      })),
+    };
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    const atOrigin = drawCtx.caps.filter((c) => Math.hypot(c.x, c.y) < 2);
+    expect(atOrigin).toHaveLength(1);
+    expect(drawCtx.arcSweeps[0]).toBeCloseTo(Math.PI * 2);
+  });
+
+  it("does not collapse a real two-point line into a single disc", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1);
+    expect(drawCtx.strokeCount).toBeGreaterThan(0);
   });
 });
 

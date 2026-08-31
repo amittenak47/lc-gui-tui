@@ -1474,6 +1474,57 @@ export function paintInkDisc(
   ctx.fillStyle = prevFill;
 }
 
+/**
+ * One heading-independent disc at the original contact.
+ *
+ * Used for a tap and for the contact cluster (jitter still inside about one
+ * nib). Speed blot may grow that same disc; Grain is Phase 2 and is not
+ * applied here.
+ */
+function paintContactDisc(
+  ctx: CanvasRenderingContext2D,
+  op: InkDrawOp,
+  points: readonly ScenePoint[],
+  pixelScale: number,
+): void {
+  const blotBlend = resolveSpeedBlotBlend(op);
+  const styles = inkStrokePointStyles(op, 0);
+  let maxWidth = 0;
+  let maxAlpha = 0;
+  for (const style of styles) {
+    maxWidth = Math.max(maxWidth, style.lineWidth);
+    maxAlpha = Math.max(maxAlpha, style.alpha);
+  }
+  const contact = points[0];
+  if (blotBlend > 1e-3) {
+    const tipR = paintedWidth(maxWidth, pixelScale) / 2;
+    const growT = dwellBlotGrowT(points, tipR, blotBlend);
+    paintInkDisc(
+      ctx,
+      contact,
+      maxWidth,
+      maxAlpha,
+      pixelScale,
+      blotBlend,
+      op.color,
+      false,
+      growT,
+    );
+  } else {
+    ctx.globalAlpha = maxAlpha;
+    ctx.beginPath();
+    ctx.arc(
+      contact.x,
+      contact.y,
+      paintedWidth(maxWidth, pixelScale) / 2,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
 /** |cross(t0, t1)| above this gets a round join disc at interior samples. */
 const RIBBON_CURVATURE_JOIN = 0.7;
 
@@ -1600,32 +1651,39 @@ function drawRibbonStrokeFrom(
     const scratchCtx = scratch as CanvasRenderingContext2D;
     scratchCtx.fillStyle = color ?? String(ctx.fillStyle);
     scratchCtx.globalAlpha = 1;
-    for (let i = 1; i < prepared.points.length - 1; i++) {
-      const t0 = strokeTangentAt(prepared.points, i - 1);
-      const t1 = strokeTangentAt(prepared.points, i);
-      const cross = Math.abs(t0.x * t1.y - t0.y * t1.x);
-      if (cross > RIBBON_CURVATURE_JOIN) {
-        paintInkDisc(
-          scratchCtx,
-          prepared.points[i],
-          prepared.styles[i].lineWidth,
-          1,
-          pixelScale,
-          0,
-          color,
-          false,
-          1,
-        );
+    // Extra overlapping discs are Grain (Phase 2) / blot texture, not Speed
+    // ink. Blot-off speed ink is a full disc then a ribbon, no join stamps.
+    if (blotBlend > 1e-3) {
+      for (let i = 1; i < prepared.points.length - 1; i++) {
+        const t0 = strokeTangentAt(prepared.points, i - 1);
+        const t1 = strokeTangentAt(prepared.points, i);
+        const cross = Math.abs(t0.x * t1.y - t0.y * t1.x);
+        if (cross > RIBBON_CURVATURE_JOIN) {
+          paintInkDisc(
+            scratchCtx,
+            prepared.points[i],
+            prepared.styles[i].lineWidth,
+            1,
+            pixelScale,
+            0,
+            color,
+            false,
+            1,
+          );
+        }
       }
     }
     if (capHead && fromIndex === 0 && tipClusterAt >= slice.length) {
       const radius = paintedWidth(prepared.styles[0].lineWidth, pixelScale) / 2;
-      const next = prepared.points[1];
-      const headAngle = Math.atan2(
-        prepared.points[0].y - next.y,
-        prepared.points[0].x - next.x,
+      scratchCtx.beginPath();
+      scratchCtx.arc(
+        prepared.points[0].x,
+        prepared.points[0].y,
+        radius,
+        0,
+        Math.PI * 2,
       );
-      inkTerminalCap(scratchCtx, prepared.points[0], headAngle, radius);
+      scratchCtx.fill();
     }
     if (capEnd && tipClusterAt >= slice.length) {
       const last = prepared.points.length - 1;
@@ -1838,6 +1896,12 @@ function drawStrokeFrom(
   const nib = nibWidth(op);
   const slice = points.slice(start);
   const blotBlend = resolveSpeedBlotBlend(op);
+  // Contact cluster: one disc at the original point, including pressure-on
+  // flat ink. Do not fan jitter into spokes or heading-flipped half-caps.
+  if (!op.highlight && fromIndex === 0 && isDiscPrimaryPath(points, nib)) {
+    paintContactDisc(ctx, op, points, pixelScale);
+    return;
+  }
   if (blotBlend > 1e-3 && isDiscPrimaryPath(slice, nib)) {
     const tip = points[points.length - 1];
     const styles = inkStrokePointStyles(op, start);

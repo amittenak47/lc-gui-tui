@@ -28,6 +28,7 @@ import {
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
   HIGHLIGHT_WIDTH_SCALE,
+  isDiscPrimaryPath,
   isHostBoundOp,
   NO_PRESSURE,
   scenePointFromPointer,
@@ -1446,13 +1447,30 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const speedInk = live.speedInk ?? 0;
         const boldness = live.boldness ?? inkBoldnessRef.current;
 
-        const stamps: ScenePoint[] = [buf[0]];
-        let last = buf[0];
-        lastPointRef.current = last;
+        const origin = buf[0];
         rawPointRef.current = buf[buf.length - 1];
+        const nib = Math.max(inkLineWidth(live.baseWidth, 0, false), 1e-6);
+        // Jitter still inside the nib is one disc at contact, not a stamp star.
+        if (isDiscPrimaryPath(buf, nib)) {
+          lastPointRef.current = origin;
+          if (liveReshapeActiveRef.current()) {
+            liveRawPointsRef.current = [origin];
+            live.points = [origin];
+          } else {
+            liveRawPointsRef.current = null;
+            live.points = [origin];
+          }
+          paintLiveAfterChangeRef.current();
+          return;
+        }
+
+        const stamps: ScenePoint[] = [origin];
+        let last = origin;
+        lastPointRef.current = last;
 
         for (let i = 1; i < buf.length; i++) {
           const point = buf[i];
+          if (isDiscPrimaryPath([...stamps, point], nib)) continue;
           const style = inkStrokeStyle(
             width,
             maxFullness,
@@ -1828,9 +1846,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                   }
                 : {}),
               boldness,
-              points: [],
+              points: [point],
             };
-            liveRawPointsRef.current = liveReshapeActiveRef.current() ? [] : null;
+            liveRawPointsRef.current = liveReshapeActiveRef.current() ? [point] : null;
           } else {
             attackBufferRef.current = null;
             liveRawPointsRef.current = liveReshapeActiveRef.current()
@@ -1933,6 +1951,19 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             };
             if (liveOp.pressureSensitive && hasStylusPressure(last.pressure)) {
               dwellPoint.pressure = smoothedPressureRef.current;
+            }
+            const dwellNib = Math.max(inkLineWidth(liveOp.baseWidth, 0, false), 1e-6);
+            if (isDiscPrimaryPath([...liveOp.points, dwellPoint], dwellNib)) {
+              const contact = liveOp.points[0];
+              if (contact) {
+                contact.slowness = dwellPoint.slowness;
+                if (hasStylusPressure(dwellPoint.pressure)) {
+                  contact.pressure = Math.max(contact.pressure, dwellPoint.pressure);
+                }
+              }
+              lastPointRef.current = contact ?? last;
+              paintLiveAfterChangeRef.current();
+              return;
             }
             const dwellWidth = strokeWidthRef.current;
             const dwellStyle = inkStrokeStyle(
@@ -2134,11 +2165,16 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             attackCountRef.current++;
           }
 
+          const contact = live.points[0];
+          if (contact && hasStylusPressure(attackPeakRef.current)) {
+            contact.pressure = attackPeakRef.current;
+          }
+
           const shouldFlush =
             event.timeStamp - attackStartRef.current >= INK_ATTACK_MS ||
             attackCountRef.current >= 3;
           if (shouldFlush) flushAttackBuffer();
-          if (attackBufferRef.current) return;
+          else paintLiveAfterChangeRef.current();
           return;
         }
 
@@ -2202,6 +2238,31 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             }
             lastPointRef.current = point;
             continue;
+          }
+
+          if (
+            live.kind === "draw" &&
+            live.highlight !== true &&
+            live.points[0]
+          ) {
+            const nib = Math.max(inkLineWidth(live.baseWidth, 0, false), 1e-6);
+            const trail = reshapeLive
+              ? [...(liveRawPointsRef.current ?? live.points), point]
+              : [...live.points, point];
+            if (isDiscPrimaryPath(trail, nib)) {
+              const origin = live.points[0];
+              if (
+                hasStylusPressure(point.pressure) &&
+                point.pressure > origin.pressure
+              ) {
+                origin.pressure = point.pressure;
+              }
+              if (point.slowness !== undefined) origin.slowness = point.slowness;
+              lastPointRef.current = origin;
+              live.points = [origin];
+              if (reshapeLive) liveRawPointsRef.current = [origin];
+              continue;
+            }
           }
 
           if (live.kind === "draw" && live.highlight === true) {
