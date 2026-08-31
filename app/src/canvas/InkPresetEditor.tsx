@@ -801,11 +801,10 @@ function PhysicsKnobs({
         title="Speed blot"
         hint={
           <>
-            Hold to pool as a wash of the same colour. Size follows the
-            speed-ink stroke — it does not balloon past what actually paints.
-            Off stays nib-sized. 100% pools the wash faster. A large nib gets
-            a 1px seal into the stroke; a thin nib uses blot and fade instead.
-            Saved on this device only.
+            Hold to pool a richer, slower blot at the nib — even with Speed
+            ink off. Off stays nib-sized. 100% still takes about a second of
+            holding to reach a modest pool past the stroke, denser than the
+            trail not paler. Saved on this device only.
           </>
         }
       >

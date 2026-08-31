@@ -42,8 +42,10 @@ import {
   dwellBlotGrowT,
   blotPoolRgb,
   mixBlotAlpha,
-  INK_BLOT_ALPHA_DROP,
+  INK_BLOT_ALPHA_LIFT,
   INK_BLOT_SATURATE,
+  INK_BLOT_SIZE_RANGE,
+  blotTicksToFull,
   coalesceRibbonPoints,
   densifyRibbonPoints,
   fillInkRibbon,
@@ -1256,26 +1258,27 @@ function inkDrawContext() {
 }
 
 describe("inkDiscRadii / dwell growth", () => {
-  it("matches the trail half-width even when blot and growT are on", () => {
+  it("starts at the nib and grows slowly only when blot and growT are on", () => {
     const tip = 10;
     const contact = inkDiscRadii(tip, 0.55, 0);
     const mid = inkDiscRadii(tip, 0.55, 0.4);
     const full = inkDiscRadii(tip, 1, 1);
     const blotOff = inkDiscRadii(tip, 0, 1);
     expect(contact.outerR).toBeCloseTo(tip);
-    expect(mid.outerR).toBeCloseTo(tip);
-    expect(full.outerR).toBeCloseTo(tip);
+    expect(mid.outerR).toBeGreaterThan(contact.outerR);
+    expect(mid.outerR).toBeLessThan(full.outerR);
+    expect(full.outerR).toBeCloseTo(tip * (1 + INK_BLOT_SIZE_RANGE));
     expect(blotOff.outerR).toBeCloseTo(tip);
   });
 
-  it("keeps a hard silhouette (innerR equals outerR) at the nib", () => {
+  it("keeps a hard silhouette (innerR equals outerR)", () => {
     const { outerR, innerR } = inkDiscRadii(10, 1, 1);
     expect(innerR).toBeCloseTo(outerR);
-    expect(outerR).toBeCloseTo(10);
+    expect(outerR).toBeGreaterThan(10);
   });
 
-  it("seals a large disc by 1 device pixel and leaves a thin nib alone", () => {
-    expect(discSealPad(4, 1)).toBe(0);
+  it("seals a disc by 1 device pixel at any nib", () => {
+    expect(discSealPad(4, 1)).toBe(1);
     expect(discSealPad(10, 1)).toBe(1);
     expect(discSealPad(10, 2)).toBe(0.5);
     expect(discSealPad(10, 0)).toBe(0);
@@ -1302,6 +1305,9 @@ describe("inkDiscRadii / dwell growth", () => {
     expect(few).toBeGreaterThan(0);
     expect(few).toBeLessThan(0.5);
     expect(many).toBeGreaterThan(few);
+    expect(many).toBeLessThan(0.35);
+    expect(blotTicksToFull(1)).toBeGreaterThanOrEqual(120);
+    expect(dwellBlotGrowT(points([0, 0], [0.01, 0]), 4, 0)).toBe(0);
   });
 
   it("does not pool a moving stroke", () => {
@@ -1324,7 +1330,7 @@ describe("paintInkDisc tip vs join", () => {
     paintInkDisc(drawCtx.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 1, "#112233", false, 1);
     expect(drawCtx.radialGradients).toBe(0);
     expect(drawCtx.fillCount).toBe(1);
-    expect(drawCtx.arcRadii[0]).toBeCloseTo(4);
+    expect(drawCtx.arcRadii[0]).toBeCloseTo(4 * (1 + INK_BLOT_SIZE_RANGE) + 1);
   });
 
   it("tip mode at growT 0 stays the nib", () => {
@@ -1334,13 +1340,16 @@ describe("paintInkDisc tip vs join", () => {
     expect(drawCtx.arcRadii[0]).toBeCloseTo(4);
   });
 
-  it("adds a 1px seal on a large nib and not on a thin one", () => {
+  it("adds a 1px seal when blot is pooling", () => {
     const thin = inkDrawContext();
-    paintInkDisc(thin.ctx, { x: 0, y: 0 }, 8, 1, 1, 0, "#112233", false, 1);
-    expect(thin.arcRadii[0]).toBeCloseTo(4);
+    paintInkDisc(thin.ctx, { x: 0, y: 0 }, 8, 1, 1, 1, "#112233", false, 1);
+    expect(thin.arcRadii[0]).toBeCloseTo(4 * (1 + INK_BLOT_SIZE_RANGE) + 1);
     const fat = inkDrawContext();
-    paintInkDisc(fat.ctx, { x: 0, y: 0 }, 32, 1, 1, 0, "#112233", false, 1);
-    expect(fat.arcRadii[0]).toBeCloseTo(16 + 1);
+    paintInkDisc(fat.ctx, { x: 0, y: 0 }, 32, 1, 1, 1, "#112233", false, 1);
+    expect(fat.arcRadii[0]).toBeCloseTo(16 * (1 + INK_BLOT_SIZE_RANGE) + 1);
+    const noBlot = inkDrawContext();
+    paintInkDisc(noBlot.ctx, { x: 0, y: 0 }, 32, 1, 1, 0, "#112233", false, 1);
+    expect(noBlot.arcRadii[0]).toBeCloseTo(16);
   });
 
   it("join mode uses radial fade clamped to nib radius", () => {
@@ -1377,7 +1386,7 @@ describe("paintInkDisc tip vs join", () => {
     expect(drawCtx.fillCount).toBeGreaterThanOrEqual(1);
     expect(drawCtx.arcRadii[0]).toBeCloseTo(tipR);
     expect(inkDiscRadii(tipR, 1, 0).outerR).toBeCloseTo(tipR);
-    expect(inkDiscRadii(tipR, 1, 1).outerR).toBeCloseTo(tipR);
+    expect(inkDiscRadii(tipR, 1, 1).outerR).toBeGreaterThan(tipR);
     expect(drawCtx.fillAlphas[0]).toBe(1);
   });
 
@@ -1918,16 +1927,16 @@ describe("grain and blot pooling (Phase 2)", () => {
     }
   });
 
-  it("matches the trail at blot 100% and growT 1, with or without grain", () => {
+  it("grows past the nib at blot 100% and growT 1, with or without grain", () => {
     const tip = 10;
     const grown = inkDiscRadii(tip, 1, 1).outerR;
-    expect(grown).toBeCloseTo(tip);
+    expect(grown).toBeCloseTo(tip * (1 + INK_BLOT_SIZE_RANGE));
     const hard = inkDrawContext();
     paintGrainDisc(hard.ctx, { x: 0, y: 0 }, tip, 0, 1, "#000", 1, 1);
     expect(hard.arcRadii[0]).toBeCloseTo(grown);
     const textured = inkDrawContext();
     paintGrainDisc(textured.ctx, { x: 0, y: 0 }, tip, 0.5, 1, "#000", 1, 1);
-    expect(Math.max(...textured.arcRadii)).toBeCloseTo(tip);
+    expect(Math.max(...textured.arcRadii)).toBeGreaterThan(tip);
     expect(textured.strokeCount).toBeGreaterThan(0);
   });
 
@@ -1937,7 +1946,7 @@ describe("grain and blot pooling (Phase 2)", () => {
     expect(drawCtx.fillCount).toBe(1);
   });
 
-  it("pools as a more transparent wash of the same colour", () => {
+  it("pools as a richer, less transparent deposit of the same colour", () => {
     const grey = blotPoolRgb("#808080", 1);
     expect(grey.r).toBeCloseTo(128);
     expect(grey.g).toBeCloseTo(128);
@@ -1945,17 +1954,18 @@ describe("grain and blot pooling (Phase 2)", () => {
     const plain = blotPoolRgb("#40c0a0", 0);
     expect(mint.g).toBeGreaterThan(plain.g);
     expect(mint.r).toBeLessThan(plain.r);
-    expect(mixBlotAlpha(1, 1)).toBeCloseTo(1 - INK_BLOT_ALPHA_DROP);
-    expect(mixBlotAlpha(0.5, 1)).toBeLessThan(0.5);
+    expect(mixBlotAlpha(1, 1)).toBeCloseTo(1);
+    expect(mixBlotAlpha(0.5, 1)).toBeGreaterThan(0.5);
+    expect(mixBlotAlpha(0.5, 1)).toBeCloseTo(0.5 + 0.5 * INK_BLOT_ALPHA_LIFT);
     expect(INK_BLOT_SATURATE).toBeGreaterThan(0);
 
     const tip = 8;
     const rest = inkDrawContext();
-    paintInkDisc(rest.ctx, { x: 0, y: 0 }, tip * 2, 1, 1, 1, "#40c0a0", false, 1, 1);
+    paintInkDisc(rest.ctx, { x: 0, y: 0 }, tip * 2, 0.6, 1, 1, "#40c0a0", false, 1, 1);
     const grown = inkDrawContext();
-    paintInkDisc(grown.ctx, { x: 0, y: 0 }, tip * 2, 1, 1, 0, "#40c0a0", false, 1, 1);
-    expect(rest.arcRadii[0]).toBeCloseTo(grown.arcRadii[0]);
-    expect(rest.fillAlphas[0]).toBeLessThan(grown.fillAlphas[0]);
+    paintInkDisc(grown.ctx, { x: 0, y: 0 }, tip * 2, 0.6, 1, 0, "#40c0a0", false, 1, 1);
+    expect(rest.arcRadii[0]).toBeGreaterThan(grown.arcRadii[0]);
+    expect(rest.fillAlphas[0]).toBeGreaterThan(grown.fillAlphas[0]);
   });
 
   it("keeps trail width when speed ink is off, even with blot pooling", () => {
