@@ -77,6 +77,8 @@ export interface EncodedOp {
   si?: number;
   /** Soften speed-ink join/dwell discs (0–1); absent → paint uses device pref. */
   sbb?: number;
+  /** Hold-pool amount at the tip (0–1); absent → derive from dwell samples. */
+  btg?: number;
   /** Pace wash toward pencil (0–1); absent on older speed-ink → full wash. */
   sf?: number;
   /** Nib material (0–1); absent → hard disc. */
@@ -212,6 +214,7 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
       record.ps = op.pressureSensitive ? 1 : 0;
       if (op.speedInk !== undefined) record.si = op.speedInk;
       if (op.speedBlotBlend !== undefined) record.sbb = op.speedBlotBlend;
+      if (op.blotTipGrow !== undefined) record.btg = op.blotTipGrow;
       if (op.speedFade !== undefined) record.sf = op.speedFade;
       if (op.grain !== undefined) record.gr = op.grain;
       if (op.boldness !== undefined) record.ib = op.boldness;
@@ -387,6 +390,7 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
       };
       if (record.si !== undefined) op.speedInk = record.si;
       if (record.sbb !== undefined) op.speedBlotBlend = record.sbb;
+      if (record.btg !== undefined) op.blotTipGrow = record.btg;
       if (record.sf !== undefined) op.speedFade = record.sf;
       if (record.gr !== undefined) op.grain = record.gr;
       if (record.ib !== undefined) op.boldness = record.ib;

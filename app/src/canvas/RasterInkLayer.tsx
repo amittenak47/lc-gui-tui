@@ -29,6 +29,8 @@ import {
   INK_STEP_FACTOR_PRESSURE,
   HIGHLIGHT_WIDTH_SCALE,
   blotTicksToFull,
+  blotGrowTFromTicks,
+  INK_HOLD_STILL_PX,
   isDiscPrimaryPath,
   isHostBoundOp,
   NO_PRESSURE,
@@ -1595,6 +1597,20 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         }, WHEEL_OPEN_MS);
       };
 
+      const noteInkTravel = (
+        dx: number,
+        dy: number,
+        zoom: number,
+        live: InkOp | null,
+      ): boolean => {
+        const px = Math.hypot(dx, dy) * zoom;
+        if (px <= INK_HOLD_STILL_PX) return false;
+        lastMoveWallRef.current = performance.now();
+        dwellCountRef.current = 0;
+        if (live && live.kind === "draw") live.blotTipGrow = 0;
+        return true;
+      };
+
       const begin = (event: PointerEvent) => {
         if (!toolRef.current) {
           if (DEBUG_INK) inkMetrics.note("no-tool");
@@ -1948,8 +1964,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             if (!paceOn) return;
             if (liveOp.points.length === 0) return;
             if (performance.now() - lastMoveWallRef.current < 60) return;
-            if (dwellCountRef.current >= blotTicksToFull(0)) return;
+            if (dwellCountRef.current >= blotTicksToFull(liveOp.speedBlotBlend ?? 0)) return;
             dwellCountRef.current++;
+            liveOp.blotTipGrow = blotGrowTFromTicks(
+              dwellCountRef.current,
+              liveOp.speedBlotBlend ?? 0,
+            );
             smoothedSpeedRef.current = smoothSpeed(smoothedSpeedRef.current, 0);
             const last = lastPointRef.current;
             if (!last) return;
@@ -1957,6 +1977,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               ...last,
               slowness: inkSlowness(smoothedSpeedRef.current),
             };
+            last.slowness = dwellPoint.slowness;
+            const tip = liveOp.points[liveOp.points.length - 1];
+            if (tip) tip.slowness = dwellPoint.slowness;
             if (liveOp.pressureSensitive && hasStylusPressure(last.pressure)) {
               dwellPoint.pressure = smoothedPressureRef.current;
             }
@@ -2149,8 +2172,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             );
             const dt = sample.timeStamp - lastSampleTimeRef.current;
             lastSampleTimeRef.current = sample.timeStamp;
-            lastMoveWallRef.current = performance.now();
-            dwellCountRef.current = 0;
+            noteInkTravel(
+              raw.x - rawLast.x,
+              raw.y - rawLast.y,
+              zoom,
+              live,
+            );
 
             if (pressureSensitive && hasStylusPressure(raw.pressure)) {
               if (raw.pressure > attackPeakRef.current) {
@@ -2208,8 +2235,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           );
           const dt = sample.timeStamp - lastSampleTimeRef.current;
           lastSampleTimeRef.current = sample.timeStamp;
-          lastMoveWallRef.current = performance.now();
-          dwellCountRef.current = 0;
+          noteInkTravel(
+            raw.x - rawLast.x,
+            raw.y - rawLast.y,
+            zoom,
+            live,
+          );
 
           if (pressureSensitive && hasStylusPressure(raw.pressure)) {
             // Filter pressure, not position: smoothing the path would lag the

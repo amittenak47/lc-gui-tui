@@ -44,8 +44,12 @@ import {
   mixBlotAlpha,
   INK_BLOT_ALPHA_LIFT,
   INK_BLOT_SATURATE,
+  INK_BLOT_DARKEN,
+  INK_BLOT_END_FLOOR,
   INK_BLOT_SIZE_RANGE,
   blotTicksToFull,
+  blotGrowTFromTicks,
+  blotDiscPoolT,
   coalesceRibbonPoints,
   densifyRibbonPoints,
   fillInkRibbon,
@@ -1305,9 +1309,12 @@ describe("inkDiscRadii / dwell growth", () => {
     expect(few).toBeGreaterThan(0);
     expect(few).toBeLessThan(0.5);
     expect(many).toBeGreaterThan(few);
-    expect(many).toBeLessThan(0.35);
-    expect(blotTicksToFull(1)).toBeGreaterThanOrEqual(120);
+    expect(many).toBeLessThan(1);
+    expect(blotTicksToFull(1)).toBeGreaterThanOrEqual(48);
+    expect(blotTicksToFull(1)).toBeLessThan(120);
     expect(dwellBlotGrowT(points([0, 0], [0.01, 0]), 4, 0)).toBe(0);
+    expect(blotGrowTFromTicks(0, 1)).toBe(0);
+    expect(blotGrowTFromTicks(blotTicksToFull(1), 1)).toBeCloseTo(1);
   });
 
   it("does not pool a moving stroke", () => {
@@ -1404,7 +1411,9 @@ describe("paintInkDisc tip vs join", () => {
     };
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
-    expect(drawCtx.fillAlphas[0]).toBeCloseTo(INK_SPEED_ALPHA_BASE);
+    expect(drawCtx.fillAlphas[0]).toBeCloseTo(
+      mixBlotAlpha(INK_SPEED_ALPHA_BASE, INK_BLOT_END_FLOOR),
+    );
   });
 
   it("tapers speed-ink width with blot off instead of earthworm runs", () => {
@@ -1432,7 +1441,7 @@ describe("paintInkDisc tip vs join", () => {
 });
 
 describe("fillInkRibbon per-quad", () => {
-  it("fills one quad per segment instead of one closed polygon", () => {
+  it("fills a silhouette plus one quad per segment", () => {
     const drawCtx = inkDrawContext();
     const left = [
       { x: 0, y: 0 },
@@ -1445,12 +1454,12 @@ describe("fillInkRibbon per-quad", () => {
       { x: 20, y: 4 },
     ];
     fillInkRibbon(drawCtx.ctx, left, right, 1);
-    expect(drawCtx.fillCount).toBe(2);
+    expect(drawCtx.fillCount).toBe(3);
   });
 
   it("still fills self-crossing side polylines (no single winding cancel)", () => {
     const drawCtx = inkDrawContext();
-    // Bow-tie-ish left/right: two quads still each fill once.
+    // Silhouette plus two overlapping quads — quads keep the bow-tie covered.
     const left = [
       { x: 0, y: 0 },
       { x: 10, y: 10 },
@@ -1462,7 +1471,7 @@ describe("fillInkRibbon per-quad", () => {
       { x: 4, y: 14 },
     ];
     fillInkRibbon(drawCtx.ctx, left, right, 1);
-    expect(drawCtx.fillCount).toBe(2);
+    expect(drawCtx.fillCount).toBe(3);
   });
 });
 
@@ -1857,13 +1866,17 @@ describe("grain and blot pooling (Phase 2)", () => {
     expect(extent).toBeLessThanOrEqual(tip * 1.1 + 1e-6);
   });
 
-  it("punches grain fully clear and off the disc centre", () => {
+  it("etches a fine paper tooth with varied transparency, off the disc centre", () => {
     const at = { x: 20, y: 30 };
     const tip = 8;
     const drawCtx = inkDrawContext();
     paintGrainDisc(drawCtx.ctx, at, tip, 0.8, 1, "#000");
     expect(drawCtx.strokeComposites.every((c) => c === "destination-out")).toBe(true);
-    expect(Math.min(...drawCtx.strokeAlphas)).toBe(1);
+    expect(Math.min(...drawCtx.strokeAlphas)).toBeGreaterThan(0);
+    expect(Math.max(...drawCtx.strokeAlphas)).toBeLessThan(0.5);
+    expect(Math.max(...drawCtx.strokeAlphas)).toBeGreaterThan(
+      Math.min(...drawCtx.strokeAlphas),
+    );
     const distToLine = (
       p: { x: number; y: number },
       a: { x: number; y: number },
@@ -1879,6 +1892,10 @@ describe("grain and blot pooling (Phase 2)", () => {
       ...drawCtx.strokes.map((s) => distToLine(at, s.from, s.to)),
     );
     expect(farthest).toBeGreaterThan(tip * 0.2);
+    const longest = Math.max(
+      ...drawCtx.strokes.map((s) => Math.hypot(s.to.x - s.from.x, s.to.y - s.from.y)),
+    );
+    expect(longest).toBeLessThan(tip * 0.22);
   });
 
   it("scatters grain across a stroke instead of the centerline", () => {
@@ -1948,16 +1965,18 @@ describe("grain and blot pooling (Phase 2)", () => {
 
   it("pools as a richer, less transparent deposit of the same colour", () => {
     const grey = blotPoolRgb("#808080", 1);
-    expect(grey.r).toBeCloseTo(128);
-    expect(grey.g).toBeCloseTo(128);
+    const greyPlain = blotPoolRgb("#808080", 0);
+    expect(grey.r + grey.g + grey.b).toBeLessThan(greyPlain.r + greyPlain.g + greyPlain.b);
     const mint = blotPoolRgb("#40c0a0", 1);
     const plain = blotPoolRgb("#40c0a0", 0);
-    expect(mint.g).toBeGreaterThan(plain.g);
-    expect(mint.r).toBeLessThan(plain.r);
+    expect(mint.r + mint.g + mint.b).toBeLessThan(plain.r + plain.g + plain.b);
+    expect(mint.g - mint.r).toBeGreaterThan(plain.g - plain.r);
     expect(mixBlotAlpha(1, 1)).toBeCloseTo(1);
     expect(mixBlotAlpha(0.5, 1)).toBeGreaterThan(0.5);
     expect(mixBlotAlpha(0.5, 1)).toBeCloseTo(0.5 + 0.5 * INK_BLOT_ALPHA_LIFT);
     expect(INK_BLOT_SATURATE).toBeGreaterThan(0);
+    expect(INK_BLOT_DARKEN).toBeGreaterThan(0);
+    expect(blotDiscPoolT(0, 1, INK_SLOWNESS_NEUTRAL)).toBeCloseTo(INK_BLOT_END_FLOOR);
 
     const tip = 8;
     const rest = inkDrawContext();
@@ -2015,5 +2034,45 @@ describe("grain and blot pooling (Phase 2)", () => {
     );
     expect(textured.strokeCount).toBeGreaterThan(hard.strokeCount);
     expect(textured.fillCount).toBe(hard.fillCount);
+  });
+
+  it("keeps blot-only strokes as a solid run, not ribbon quads", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#112233",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 0,
+        speedBlotBlend: 1,
+        points: points([0, 0], [80, 0]),
+      },
+      1,
+    );
+    expect(drawCtx.strokeCount).toBeGreaterThan(0);
+    expect(drawCtx.fillCount).toBeLessThan(8);
+  });
+
+  it("grows the tip disc from blotTipGrow even on a moving stroke", () => {
+    const nib = inkDrawContext();
+    const grown = inkDrawContext();
+    const base = {
+      kind: "draw" as const,
+      color: "#112233",
+      baseWidth: 12,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      points: points([0, 0], [40, 0]),
+    };
+    applyInkOp(nib.ctx, { ...base, blotTipGrow: 0 }, 1);
+    applyInkOp(grown.ctx, { ...base, blotTipGrow: 1 }, 1);
+    expect(Math.max(...grown.arcRadii)).toBeGreaterThan(Math.max(...nib.arcRadii));
   });
 });
