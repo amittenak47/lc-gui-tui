@@ -1675,25 +1675,12 @@ function drawRibbonStrokeFrom(
     }
     if (capHead && fromIndex === 0 && tipClusterAt >= slice.length) {
       const radius = paintedWidth(prepared.styles[0].lineWidth, pixelScale) / 2;
-      scratchCtx.beginPath();
-      scratchCtx.arc(
-        prepared.points[0].x,
-        prepared.points[0].y,
-        radius,
-        0,
-        Math.PI * 2,
-      );
-      scratchCtx.fill();
+      inkTerminalCap(scratchCtx, prepared.points[0], radius);
     }
     if (capEnd && tipClusterAt >= slice.length) {
       const last = prepared.points.length - 1;
       const radius = paintedWidth(prepared.styles[last].lineWidth, pixelScale) / 2;
-      const prev = prepared.points[last - 1];
-      const tailAngle = Math.atan2(
-        prepared.points[last].y - prev.y,
-        prepared.points[last].x - prev.x,
-      );
-      inkTerminalCap(scratchCtx, prepared.points[last], tailAngle, radius);
+      inkTerminalCap(scratchCtx, prepared.points[last], radius);
     }
     if (tipClusterAt < slice.length && prepared.points.length >= 2) {
       const last = prepared.points.length - 1;
@@ -1808,16 +1795,14 @@ function paintedWidth(lineWidth: number, pixelScale: number): number {
   return Math.max(lineWidth, INK_MIN_DEVICE_PX / pixelScale);
 }
 
-/** Half-disc terminal cap — `outwardAngle` points out of the stroke body. */
+/** Full disc at a run/ribbon end — a half-disc on the butt left a paper hairline. */
 function inkTerminalCap(
   ctx: CanvasRenderingContext2D,
   at: { x: number; y: number },
-  outwardAngle: number,
   radius: number,
 ): void {
   ctx.beginPath();
-  ctx.moveTo(at.x, at.y);
-  ctx.arc(at.x, at.y, radius, outwardAngle - Math.PI / 2, outwardAngle + Math.PI / 2);
+  ctx.arc(at.x, at.y, radius, 0, Math.PI * 2);
   ctx.fill();
 }
 
@@ -1964,23 +1949,11 @@ function drawStrokeFrom(
     ctx.stroke();
 
     if (capHead && fromIndex === 0 && ri === 0) {
-      const nextIdx = Math.floor(run.start) + 1;
-      const nextPt =
-        nextIdx < run.end && nextIdx < points.length
-          ? points[nextIdx]
-          : strokePointAt(points, Math.min(run.start + 0.001, run.end));
-      const headAngle = Math.atan2(pStart.y - nextPt.y, pStart.x - nextPt.x);
-      inkTerminalCap(ctx, pStart, headAngle, radius);
+      inkTerminalCap(ctx, pStart, radius);
     }
 
     if (capEnd && ri === runs.length - 1) {
-      const prevIdx = Math.ceil(run.end) - 1;
-      const prevPt =
-        prevIdx > run.start && prevIdx >= 0
-          ? points[prevIdx]
-          : strokePointAt(points, Math.max(run.end - 0.001, run.start));
-      const tailAngle = Math.atan2(pEnd.y - prevPt.y, pEnd.x - prevPt.x);
-      inkTerminalCap(ctx, pEnd, tailAngle, radius);
+      inkTerminalCap(ctx, pEnd, radius);
     }
   }
   ctx.globalAlpha = 1;

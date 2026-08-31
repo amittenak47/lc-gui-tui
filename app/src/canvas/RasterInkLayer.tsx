@@ -1077,10 +1077,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       /*
        * Smooth the pen stroke now that it is finished (lift mode).
        *
-       * Live mode already reshaped the open stroke under the nib; re-running
-       * here would jump ink the writer has already watched settle. The eraser
-       * is left alone — its stamps are a coverage mask, not a line, and
-       * rounding them would leave crumbs behind.
+       * Off means off: the stamps under the nib stay. A nib-scaled storage
+       * thin at zero used to round a 32-wide stroke on lift even with the
+       * dial at 0. Live mode already reshaped while writing, so it is not
+       * run again. The eraser is left alone — its stamps are a coverage
+       * mask, not a line, and rounding them would leave crumbs behind.
        */
       const isLive = smoothingModeRef.current === "live";
       const strength = smoothingRef.current;
@@ -1107,15 +1108,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                 pts = [...pts];
               } else if (straight && pts.length >= 2) {
                 pts = [pts[0]!, pts[pts.length - 1]!];
-              } else if (!isLive && !live.pressureSensitive) {
+              } else if (strength > 0 && !isLive && !live.pressureSensitive) {
                 const nib = inkLineWidth(live.baseWidth, 0, false);
                 pts = smoothInkPoints(pts, strength, nib);
-              } else if (!isLive && live.pressureSensitive) {
+              } else if (strength > 0 && !isLive && live.pressureSensitive) {
                 const nib = inkLineWidth(live.baseWidth, 0, false);
-                const shaped =
-                  strength <= 0 ? pts : smoothInkPoints(pts, strength, nib, 0);
                 pts = simplifyModulatedInkPoints(
-                  shaped,
+                  smoothInkPoints(pts, strength, nib, 0),
                   nib * SIMPLIFY_MODULATED_FRACTION,
                 );
               }
