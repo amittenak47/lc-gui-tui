@@ -1383,6 +1383,28 @@ export function inkDiscRadii(
   return { outerR, innerR };
 }
 
+/** Longest run of leading samples worth checking for a pen-down dwell. */
+const LEADING_DWELL_WINDOW = 64;
+
+/**
+ * `dwellBlotGrowT` for the *start* of a stroke.
+ *
+ * The dwell measure walks back from the last sample, which is the right end
+ * for a pause before a lift and the wrong one for the pool laid down on first
+ * contact. Reversing a bounded prefix asks the same question of the head
+ * without making the cost grow with the stroke.
+ */
+function leadingDwellGrowT(
+  points: readonly ScenePoint[],
+  tipRadius: number,
+  blotBlend: number,
+): number {
+  if (points.length === 0) return 0;
+  const window = points.slice(0, Math.min(points.length, LEADING_DWELL_WINDOW));
+  window.reverse();
+  return dwellBlotGrowT(window, tipRadius, blotBlend);
+}
+
 /**
  * How far a near-stationary tip cluster has grown toward full tip radius.
  * More clustered samples → higher `growT`; higher blot blend reaches full sooner.
@@ -1657,14 +1679,34 @@ function drawRibbonStrokeFrom(
         );
       }
     }
-    if (capHead && fromIndex === 0 && tipClusterAt >= slice.length) {
-      const radius = paintedWidth(prepared.styles[0].lineWidth, pixelScale) / 2;
+    /*
+     * The head is capped on its own terms.
+     *
+     * This was gated on `tipClusterAt`, which describes the cluster at the
+     * *other* end -- so pausing where a stroke finished silently removed the
+     * round cap from where it started, and the stroke began on a flat cut.
+     * The two ends have nothing to say about each other.
+     *
+     * It also carries the pen-down pool. A stroke under a nib wide paints as
+     * one grown disc and hands off to the ribbon once it outgrows that; if the
+     * ribbon then begins at its own half-width, the disc visibly shrinks at the
+     * handover, which is the flash on first contact. Taking the larger of the
+     * two makes the switch invisible.
+     */
+    if (capHead && fromIndex === 0) {
+      const half = paintedWidth(prepared.styles[0].lineWidth, pixelScale) / 2;
+      const dwelt = leadingDwellGrowT(prepared.points, half, blotBlend);
+      const radius = Math.max(half, inkDiscRadii(half, blotBlend, dwelt).outerR);
       const next = prepared.points[1];
       const headAngle = Math.atan2(
         prepared.points[0].y - next.y,
         prepared.points[0].x - next.x,
       );
-      addTerminalCapSubpath(target, prepared.points[0], headAngle, radius);
+      if (radius > half + 1e-6) {
+        addDiscSubpath(target, prepared.points[0], radius);
+      } else {
+        addTerminalCapSubpath(target, prepared.points[0], headAngle, radius);
+      }
     }
     if (capEnd && tipClusterAt >= slice.length) {
       const last = prepared.points.length - 1;

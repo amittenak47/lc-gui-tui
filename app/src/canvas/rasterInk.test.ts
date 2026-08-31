@@ -1407,6 +1407,47 @@ describe("Body accent, bipolar and rest-only", () => {
   });
 });
 
+describe("stroke head is capped on its own terms", () => {
+  function op(extra: Partial<InkOp>): InkOp {
+    // Travels, then rests at the far end: a trailing dwell cluster.
+    const pts: ScenePoint[] = [];
+    for (let i = 0; i <= 30; i++) pts.push({ x: i * 6, y: 0, pressure: NO_PRESSURE });
+    for (let i = 0; i < 10; i++) {
+      pts.push({ x: 180 + (i % 2) * 0.2, y: 0, pressure: NO_PRESSURE, slowness: 1 });
+    }
+    return {
+      kind: "draw",
+      color: "#112233",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedFade: 0,
+      points: pts,
+      ...extra,
+    } as InkOp;
+  }
+
+  /*
+   * The head cap used to be gated on `tipClusterAt`, which describes the
+   * cluster at the far end -- so pausing where a stroke finished removed the
+   * round cap from where it started and left a flat cut. The two ends have
+   * nothing to say about each other.
+   */
+  it("caps the head whether or not the tail dwelled", () => {
+    const resting = inkDrawContext();
+    applyInkOp(resting.ctx, op({ speedBlotBlend: 1 }), 1);
+    const travelling = inkDrawContext();
+    applyInkOp(travelling.ctx, op({ speedBlotBlend: 0 }), 1);
+    // An arc at the first point is the cap; the head is at x = 0.
+    const headArc = (c: ReturnType<typeof inkDrawContext>) =>
+      c.caps.some((cap) => Math.abs(cap.x) < 1 && Math.abs(cap.y) < 1);
+    expect(headArc(travelling)).toBe(true);
+    expect(headArc(resting)).toBe(true);
+  });
+});
+
 describe("Speed ink is shape only", () => {
   function inkOp(extra: Partial<InkOp>): InkOp {
     const pts: ScenePoint[] = [];
