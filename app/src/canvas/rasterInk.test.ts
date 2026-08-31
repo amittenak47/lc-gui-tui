@@ -413,15 +413,32 @@ describe("speed ink", () => {
     expect(inkSpeedWidthGain(1, 0.05, -1)).toBeLessThan(plain);
   });
 
-  it("leaves ordinary pace and a sprint alone whichever way Body is set", () => {
-    for (const body of [-1, -0.4, 0, 0.4, 1]) {
-      expect(inkSpeedWidthGain(INK_SLOWNESS_NEUTRAL, 0.05, body)).toBeCloseTo(
-        inkSpeedWidthGain(INK_SLOWNESS_NEUTRAL, 0.05, 0),
-      );
-      expect(inkSpeedWidthGain(0, 0.05, body)).toBeCloseTo(
-        inkSpeedWidthGain(0, 0.05, 0),
+  /*
+   * Body is an axis, not a scale: right piles weight onto the terminals, left
+   * takes it off them and puts it into the body of the letter. Rest weight
+   * alone could only ever reach the ends, which is the thing the dial is
+   * named for and could not touch.
+   */
+  it("moves weight to the middle on the left and to the ends on the right", () => {
+    const mid = INK_SLOWNESS_NEUTRAL;
+    const plainMid = inkSpeedWidthGain(mid, 0.5, 0);
+    const plainEnd = inkSpeedWidthGain(1, 0.5, 0);
+    expect(inkSpeedWidthGain(mid, 0.5, -1)).toBeGreaterThan(plainMid);
+    expect(inkSpeedWidthGain(1, 0.5, -1)).toBeLessThan(plainEnd);
+    expect(inkSpeedWidthGain(1, 0.5, 1)).toBeGreaterThan(plainEnd);
+    // A sprint is neither end nor middle, so nothing there moves.
+    for (const body of [-1, 0, 1]) {
+      expect(inkSpeedWidthGain(0, 0.5, body)).toBeCloseTo(
+        inkSpeedWidthGain(0, 0.5, 0),
       );
     }
+  });
+
+  it("leaves the middle alone on the right of centre", () => {
+    const mid = INK_SLOWNESS_NEUTRAL;
+    expect(inkSpeedWidthGain(mid, 0.5, 1)).toBeCloseTo(
+      inkSpeedWidthGain(mid, 0.5, 0),
+    );
   });
 
   it("scales body accent only while Speed ink is on", () => {

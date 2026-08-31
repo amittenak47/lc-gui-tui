@@ -224,6 +224,18 @@ export function inkSpeedBodyShape(slowness: number): number {
   return Math.max(0, inkSpeedPaceUnit(slowness));
 }
 
+/**
+ * Middle weight: 1 at an ordinary writing pace, 0 at a full stop and a sprint.
+ *
+ * The other half of Body. Rest weight can only reach the ends, because the
+ * ends are where the hand is slow — so a dial built on it alone could fatten
+ * or flatten the terminals and never touch the body of the letter, which is
+ * the thing the control is named for.
+ */
+export function inkSpeedMidShape(slowness: number): number {
+  return Math.max(0, 1 - Math.abs(inkSpeedPaceUnit(slowness)));
+}
+
 
 export function inkSpeedWidthGain(
   slowness: number,
@@ -235,10 +247,18 @@ export function inkSpeedWidthGain(
   // Bipolar: the dial reads -100..+100 and the negative half has to reach the
   // paint, or the left of the slider is a no-op. At 0 this term vanishes and
   // the gain is exactly the single pace curve.
+  /*
+   * Body moves weight between the ends and the middle rather than only
+   * scaling the ends. Right of centre piles it onto the terminals, where
+   * Speed ink already swells. Left of centre takes it off them and puts it
+   * into the body of the letter instead, so the same dial both kills the rest
+   * blob and thickens the middle — one gesture, one axis.
+   */
+  const accent = amount > 0 ? Math.max(-1, Math.min(1, bodyAccent)) : 0;
   const body =
-    amount > 0
-      ? Math.max(-1, Math.min(1, bodyAccent)) * inkSpeedBodyShape(slowness)
-      : 0;
+    accent >= 0
+      ? accent * inkSpeedBodyShape(slowness)
+      : accent * inkSpeedBodyShape(slowness) - accent * inkSpeedMidShape(slowness);
   return Math.max(
     INK_SPEED_MIN_WIDTH_GAIN,
     1 + INK_SPEED_WIDTH_RANGE * (linear + body),
@@ -1696,19 +1716,95 @@ function drawRibbonStrokeFrom(
    * winding before any compositing happens. So it is both sharper and cheaper
    * than either the scratch or the per-segment fills it replaced.
    */
-  ctx.globalAlpha = maxAlpha;
+  paintRibbonWithFalloff(ctx, left, right, prepared.styles, maxAlpha, addHardExtras);
+
+  // Dabs carry their own point's alpha, so the scale passed in is just 1.
+  stampBlotDiscs(ctx, prepared, pixelScale, blotBlend, 1, color);
+  ctx.globalAlpha = 1;
+}
+
+/** Steps a fading ribbon is built from. Enough that no boundary is legible. */
+const RIBBON_FALLOFF_STEPS = 10;
+/** Below this spread the whole ribbon is one flat alpha, as before. */
+const RIBBON_FALLOFF_MIN_SPREAD = 0.02;
+
+/**
+ * Fill the ribbon, letting alpha fall along it instead of flattening it.
+ *
+ * A ribbon was one path at one alpha -- the maximum over the whole slice --
+ * so Speed fade could not actually paint a gradient. What showed on screen
+ * were the boundaries between live paint slices, each flattened to its own
+ * maximum: hard bars stepping down the stroke, which is exactly what fade must
+ * not look like.
+ *
+ * The stroke is built from nested prefixes instead. The whole ribbon goes down
+ * at the lowest alpha, then each shorter prefix adds the increment that lifts
+ * it to the next level -- `(target - base) / (1 - base)`, the alpha that
+ * composites onto what is already there and lands on target. Nesting is the
+ * point: the overlaps are deliberate and the arithmetic accounts for them, so
+ * unlike abutting spans there is no shared edge to antialias twice and no
+ * seam. Ten steps costs ten path fills, which is nothing beside a stall, and
+ * only when fade is actually working.
+ */
+function paintRibbonWithFalloff(
+  ctx: CanvasRenderingContext2D,
+  left: readonly { x: number; y: number }[],
+  right: readonly { x: number; y: number }[],
+  styles: readonly InkStrokeStyle[],
+  maxAlpha: number,
+  addExtras: (target: CanvasRenderingContext2D) => void,
+): void {
+  let minAlpha = Infinity;
+  for (const style of styles) minAlpha = Math.min(minAlpha, style.alpha);
+  if (!Number.isFinite(minAlpha)) minAlpha = maxAlpha;
+
+  const flat = maxAlpha - minAlpha < RIBBON_FALLOFF_MIN_SPREAD;
+  ctx.globalAlpha = flat ? maxAlpha : minAlpha;
   ctx.beginPath();
   addRibbonSubpaths(ctx, left, right);
-  addHardExtras(ctx);
+  addExtras(ctx);
   ctx.fill();
+  if (flat) return;
 
-  stampBlotDiscs(ctx, prepared, pixelScale, blotBlend, maxAlpha, color);
-  ctx.globalAlpha = 1;
+  // Alpha falls with travel, so each level covers a prefix of the stroke.
+  let base = minAlpha;
+  for (let step = 1; step <= RIBBON_FALLOFF_STEPS; step++) {
+    const target = minAlpha + ((maxAlpha - minAlpha) * step) / RIBBON_FALLOFF_STEPS;
+    let last = 0;
+    while (last + 1 < styles.length && styles[last + 1].alpha >= target) last++;
+    if (last < 1) continue;
+    const increment = base >= 1 ? 0 : (target - base) / (1 - base);
+    if (increment <= 1e-4) continue;
+    ctx.globalAlpha = Math.min(1, increment);
+    ctx.beginPath();
+    addRibbonSubpaths(ctx, left.slice(0, last + 1), right.slice(0, last + 1));
+    ctx.fill();
+    base = target;
+  }
 }
 
 /** Nib stamps per unit at Speed blot 0+ and at 100%, as multiples of half-width. */
 const BLOT_STAMP_SPACING_SPARSE = 3.2;
 const BLOT_STAMP_SPACING_DENSE = 0.6;
+/**
+ * How far a stamp swells past the ribbon's own half-width.
+ *
+ * A stamp drawn at exactly the ribbon width is inscribed in it: over opaque
+ * ink it changes nothing at all, and a soft rim only makes it blend in harder.
+ * That is why the dial looked like it did nothing. Swelling the dab past the
+ * edge is what puts the discs on the outline, so the stroke gains the lumpy,
+ * pooled silhouette of graphite rather than a flat band -- visible at any
+ * opacity, not just where stamps can stack.
+ */
+const BLOT_STAMP_SWELL_MIN = 1.12;
+const BLOT_STAMP_SWELL_MAX = 1.45;
+
+/** Widest a blot stamp gets, for bounds that must cover the paint. */
+export function blotStampSwell(blend: number): number {
+  const b = clamp01(blend);
+  if (b <= 1e-3) return 1;
+  return BLOT_STAMP_SWELL_MIN + (BLOT_STAMP_SWELL_MAX - BLOT_STAMP_SWELL_MIN) * b;
+}
 /**
  * Ceiling on stamps for one paint.
  *
@@ -1848,9 +1944,9 @@ function stampBlotDiscs(
     if (wanted > BLOT_STAMP_MAX) stride *= wanted / BLOT_STAMP_MAX;
   }
 
+  const swell = blotStampSwell(amount);
   const sprite = blotStampSprite(ink, rimFrac);
   const prevFill = ctx.fillStyle;
-  ctx.globalAlpha = alpha;
   let carried = Infinity;
   let stamped = 0;
   for (let index = 0; index < points.length && stamped < BLOT_STAMP_MAX; index++) {
@@ -1865,13 +1961,21 @@ function stampBlotDiscs(
     if (carried < half * stride) continue;
     carried = 0;
     stamped++;
+    /*
+     * Each dab takes the alpha of the point it sits on, not the stroke's
+     * maximum. Stamping at the maximum over a faded tail made the dabs pop as
+     * hard beads exactly where the ink is meant to be running out -- the grain
+     * has to dry with the stroke it belongs to.
+     */
+    ctx.globalAlpha = Math.min(1, alpha * prepared.styles[index].alpha);
+    const dab = half * swell;
     if (sprite) {
       ctx.drawImage(
         sprite as CanvasImageSource,
-        points[index].x - half,
-        points[index].y - half,
-        half * 2,
-        half * 2,
+        points[index].x - dab,
+        points[index].y - dab,
+        dab * 2,
+        dab * 2,
       );
       continue;
     }
@@ -1879,16 +1983,16 @@ function stampBlotDiscs(
     const gradient = ctx.createRadialGradient(
       points[index].x,
       points[index].y,
-      Math.max(0, half * (1 - rimFrac)),
+      Math.max(0, half * swell * (1 - rimFrac)),
       points[index].x,
       points[index].y,
-      half,
+      half * swell,
     );
     gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 1)`);
     gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
     ctx.fillStyle = gradient;
     ctx.beginPath();
-    ctx.arc(points[index].x, points[index].y, half, 0, Math.PI * 2);
+    ctx.arc(points[index].x, points[index].y, half * swell, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.fillStyle = prevFill;
@@ -2427,7 +2531,11 @@ export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
       0,
       bodyAccent,
     );
-    const half = Math.max(rest.lineWidth, midSlow.lineWidth) / 2;
+    // Blot stamps swell past the ribbon, so the recorded bounds must cover
+    // them or a stroke clips at the tile edge it happens to straddle.
+    const half =
+      (Math.max(rest.lineWidth, midSlow.lineWidth) / 2) *
+      blotStampSwell(resolveSpeedBlotBlend(op));
     for (const point of op.points) {
       bounds = unionSceneBounds(bounds, {
         minX: point.x - half,
