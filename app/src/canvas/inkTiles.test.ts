@@ -242,7 +242,7 @@ describe("InkTileCache", () => {
   }
 
   describe("tile overlap", () => {
-    it("rasterises each tile with a 1px pad so AA can meet", () => {
+    it("rasterises each tile with a pad so AA can meet", () => {
       const { cache, canvases } = makeCache();
       cache.setOps([draw([0, 0], [40, 0])]);
       const { ctx } = destinationContext();

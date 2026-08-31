@@ -18,7 +18,10 @@ import {
   ERASER_WIDTH_MAX,
   inkLineWidth,
   inkSlowness,
+  INK_HOLD_STILL_PX,
   INK_SPEED_NEUTRAL_PX_MS,
+  blotGrowTFromTicks,
+  blotTicksToFull,
   pointerPressure,
   smoothPressure,
   smoothSpeed,
@@ -455,6 +458,12 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
   const lastSampleRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const dprRef = useRef(1);
   const paintFnRef = useRef<() => void>(() => {});
+  const drawingRef = useRef(false);
+  const dwellCountRef = useRef(0);
+  const blotTipGrowRef = useRef(0);
+  const lastMoveWallRef = useRef(0);
+  const dwellTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastPosRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -517,7 +526,10 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
           ? smoothInkPoints(livePts, smoothing, inkLineWidth(liveSnap.width, 0, false))
           : livePts;
       const op = drawOpFromSnap(kindRef.current, liveSnap, points);
-      if (op) applyInkOp(ctx, op, dpr);
+      if (op) {
+        if (blotTipGrowRef.current > 0) op.blotTipGrow = blotTipGrowRef.current;
+        applyInkOp(ctx, op, dpr);
+      }
     };
     paintFnRef.current = paint;
 
@@ -548,6 +560,13 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
       return { x, y, pressure, ...(slowness != null ? { slowness } : {}) };
     };
 
+    const clearDwell = () => {
+      if (dwellTimerRef.current !== null) {
+        clearInterval(dwellTimerRef.current);
+        dwellTimerRef.current = null;
+      }
+    };
+
     const onDown = (event: PointerEvent) => {
       if (event.button !== 0 && event.pointerType !== "pen") return;
       event.preventDefault();
@@ -565,12 +584,35 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
           ? INK_SPEED_NEUTRAL_PX_MS
           : 0;
       lastSampleRef.current = null;
+      dwellCountRef.current = 0;
+      blotTipGrowRef.current = 0;
+      lastMoveWallRef.current = performance.now();
+      drawingRef.current = true;
       const pt = pointFrom(event);
+      lastPosRef.current = { x: pt.x, y: pt.y };
       if (kindRef.current === "eraser") {
         eraserTipRef.current = { x: pt.x, y: pt.y };
         livePtsRef.current = null;
       } else {
         livePtsRef.current = [pt];
+        if (!isEraserWedge(current) && (current.speed > 0 || current.blot > 0 || current.fade > 0)) {
+          clearDwell();
+          dwellTimerRef.current = setInterval(() => {
+            if (!drawingRef.current) return;
+            const live = livePtsRef.current;
+            if (!live || live.length === 0) return;
+            const snap = snapRef.current;
+            if (isEraserWedge(snap) || snap.blot <= 0) return;
+            if (performance.now() - lastMoveWallRef.current < 60) return;
+            if (dwellCountRef.current >= blotTicksToFull(snap.blot)) return;
+            dwellCountRef.current++;
+            blotTipGrowRef.current = blotGrowTFromTicks(dwellCountRef.current, snap.blot);
+            speedEmaRef.current = smoothSpeed(speedEmaRef.current, 0);
+            const tip = live[live.length - 1];
+            if (tip) tip.slowness = inkSlowness(speedEmaRef.current);
+            paint();
+          }, 32);
+        }
       }
       paint();
     };
@@ -583,10 +625,20 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
         return;
       }
       if (!livePtsRef.current) return;
-      livePtsRef.current.push(pointFrom(event));
+      const pt = pointFrom(event);
+      const prev = lastPosRef.current;
+      if (prev && Math.hypot(pt.x - prev.x, pt.y - prev.y) > INK_HOLD_STILL_PX) {
+        lastMoveWallRef.current = performance.now();
+        dwellCountRef.current = 0;
+        blotTipGrowRef.current = 0;
+      }
+      lastPosRef.current = { x: pt.x, y: pt.y };
+      livePtsRef.current.push(pt);
       paint();
     };
     const onUp = (event: PointerEvent) => {
+      drawingRef.current = false;
+      clearDwell();
       try {
         canvas.releasePointerCapture(event.pointerId);
       } catch {
@@ -609,9 +661,14 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
         );
       }
       const op = drawOpFromSnap(kindRef.current, liveSnap, points);
-      if (op && points.length > 0) strokesRef.current.push(op);
+      if (op && points.length > 0) {
+        if (blotTipGrowRef.current > 0) op.blotTipGrow = blotTipGrowRef.current;
+        strokesRef.current.push(op);
+      }
       livePtsRef.current = null;
       lastSampleRef.current = null;
+      lastPosRef.current = null;
+      blotTipGrowRef.current = 0;
       paint();
     };
 
@@ -624,6 +681,8 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
     canvas.addEventListener("pointerup", onUp);
     canvas.addEventListener("pointercancel", onUp);
     return () => {
+      drawingRef.current = false;
+      clearDwell();
       ro.disconnect();
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);
@@ -779,10 +838,10 @@ function PhysicsKnobs({
         title="Grain"
         hint={
           <>
-            Nib material. Off is a hard felt-tip. Turn it up for clear fibre
-            scratches placed at random through the stroke — not a line down
-            the middle. Speed blot can still pool that disc if you hold. Saved
-            on this device only.
+            Nib material. Off is a hard felt-tip. Turn it up for a fine paper
+            tooth — short fibres, varied transparency, one consistent heading.
+            Speed blot can still pool that disc if you hold. Saved on this
+            device only.
           </>
         }
       >

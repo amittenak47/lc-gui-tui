@@ -230,13 +230,19 @@ export function inkSpeedAlphaGain(slowness: number, _strength: number, fade = 0)
 }
 
 /**
- * Pooling is a richer deposit of the same ink: more chroma, more coverage.
- * The blot disc must read denser than the trail, not as a pale halo.
+ * Pooling is a richer deposit of the same ink: more chroma, more coverage,
+ * and lower luminance. Alpha lift alone is a no-op on an already-opaque trail,
+ * so the disc has to actually paint darker RGB or the ends read as a pale halo.
  */
 export const INK_BLOT_ALPHA_LIFT = 0.55;
 export const INK_BLOT_SATURATE = 0.42;
+export const INK_BLOT_DARKEN = 0.28;
+/** Caps read richer than the trail even before a hold grows them. */
+export const INK_BLOT_END_FLOOR = 0.45;
 /** How far a full pool may grow past the nib. Independent of speed ink. */
-export const INK_BLOT_SIZE_RANGE = 0.32;
+export const INK_BLOT_SIZE_RANGE = 0.55;
+/** Screen pixels of travel that still counts as a hold (stylus jitter). */
+export const INK_HOLD_STILL_PX = 2.25;
 
 export function inkBlotPoolT(growT: number, blotBlend: number): number {
   return clamp01(blotBlend) * clamp01(growT);
@@ -245,6 +251,24 @@ export function inkBlotPoolT(growT: number, blotBlend: number): number {
 /** Rest half of pace: 0 at ordinary/fast, 1 stopped. */
 export function inkBlotRestPoolT(slowness: number, blotBlend: number): number {
   return clamp01(blotBlend) * Math.max(0, inkSpeedPaceUnit(slowness));
+}
+
+/**
+ * Coverage + rest-pace + a floor so endpoints are a denser deposit, not a
+ * paler disc hanging off the butt.
+ */
+export function blotDiscPoolT(
+  growT: number,
+  blotBlend: number,
+  slowness = INK_SLOWNESS_NEUTRAL,
+): number {
+  const blend = clamp01(blotBlend);
+  if (blend < 1e-3) return 0;
+  return Math.max(
+    inkBlotPoolT(growT, blend),
+    inkBlotRestPoolT(slowness, blend),
+    blend * INK_BLOT_END_FLOOR,
+  );
 }
 
 export function mixBlotAlpha(alpha: number, poolT: number): number {
@@ -263,10 +287,11 @@ export function blotPoolRgb(
   if (t <= 0) return rgb;
   const mean = (rgb.r + rgb.g + rgb.b) / 3;
   const k = INK_BLOT_SATURATE * t;
+  const dark = 1 - INK_BLOT_DARKEN * t;
   return {
-    r: Math.max(0, Math.min(255, rgb.r + (rgb.r - mean) * k)),
-    g: Math.max(0, Math.min(255, rgb.g + (rgb.g - mean) * k)),
-    b: Math.max(0, Math.min(255, rgb.b + (rgb.b - mean) * k)),
+    r: Math.max(0, Math.min(255, (rgb.r + (rgb.r - mean) * k) * dark)),
+    g: Math.max(0, Math.min(255, (rgb.g + (rgb.g - mean) * k) * dark)),
+    b: Math.max(0, Math.min(255, (rgb.b + (rgb.b - mean) * k) * dark)),
   };
 }
 
@@ -324,6 +349,11 @@ export interface InkDrawOp {
    * 0 = stay nib-sized. Absent on older strokes → paint uses device pref.
    */
   speedBlotBlend?: number;
+  /**
+   * How far the tip pooled during a hold (0–1). Stamped at lift so smoothing
+   * can drop the extra dwell samples without losing the pool size.
+   */
+  blotTipGrow?: number;
   /**
    * How much pace washes opacity toward pencil (0–1). Stamped at draw time.
    * Absent on older speed-ink strokes → full wash (today's 0.55 base).
@@ -1183,20 +1213,51 @@ export function trailingTipClusterStart(
   return start;
 }
 
+/** Pull adjacent quads over their shared edge so aliased fills do not show paper. */
+const RIBBON_QUAD_OVERLAP = 1.25;
+
+function offsetAlong(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  pad: number,
+): { x: number; y: number } {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6) return { x: 0, y: 0 };
+  return { x: (dx / len) * pad, y: (dy / len) * pad };
+}
+
 function fillInkRibbonQuads(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   left: readonly { x: number; y: number }[],
   right: readonly { x: number; y: number }[],
   fills?: readonly string[],
 ): void {
+  if (left.length < 2 || left.length !== right.length) return;
   const prevFill = ctx.fillStyle;
+  // Closed silhouette first: per-quad shared edges otherwise leave parchment
+  // hairlines, especially after the scratch blit is scaled by zoom × dpr.
+  ctx.beginPath();
+  ctx.moveTo(left[0].x, left[0].y);
+  for (let index = 1; index < left.length; index++) {
+    ctx.lineTo(left[index].x, left[index].y);
+  }
+  for (let index = right.length - 1; index >= 0; index--) {
+    ctx.lineTo(right[index].x, right[index].y);
+  }
+  ctx.closePath();
+  ctx.fill();
+
   for (let index = 0; index < left.length - 1; index++) {
     if (fills) ctx.fillStyle = fills[index] ?? fills[fills.length - 1];
+    const dL = offsetAlong(left[index], left[index + 1], RIBBON_QUAD_OVERLAP);
+    const dR = offsetAlong(right[index], right[index + 1], RIBBON_QUAD_OVERLAP);
     ctx.beginPath();
-    ctx.moveTo(left[index].x, left[index].y);
-    ctx.lineTo(left[index + 1].x, left[index + 1].y);
-    ctx.lineTo(right[index + 1].x, right[index + 1].y);
-    ctx.lineTo(right[index].x, right[index].y);
+    ctx.moveTo(left[index].x - dL.x, left[index].y - dL.y);
+    ctx.lineTo(left[index + 1].x + dL.x, left[index + 1].y + dL.y);
+    ctx.lineTo(right[index + 1].x + dR.x, right[index + 1].y + dR.y);
+    ctx.lineTo(right[index].x - dR.x, right[index].y - dR.y);
     ctx.closePath();
     ctx.fill();
   }
@@ -1448,10 +1509,10 @@ function blotPressureAmt(op: InkDrawOp, point: { pressure: number }): number {
   return clamp01(point.pressure);
 }
 
-/** Variable-width ribbon when speed ink and/or blot is on. Runs are the flat pen. */
+/** Variable-width ribbon when speed ink is on. Blot-only stays a solid run. */
 function usesSpeedRibbon(op: InkDrawOp): boolean {
   if (op.highlight) return false;
-  return (op.speedInk ?? 0) > 0 || resolveSpeedBlotBlend(op) > 1e-3;
+  return (op.speedInk ?? 0) > 0;
 }
 
 function resolveSpeedFade(op: InkDrawOp): number {
@@ -1535,9 +1596,20 @@ function sealDiscCenter<T extends { x: number; y: number }>(
   return { ...at, x: at.x + (dx / dist) * pad, y: at.y + (dy / dist) * pad };
 }
 
-/** Samples to reach full blot pool. Seconds, not the ~100ms speed-ink swell. */
+/** Samples to reach full blot pool. ~1.5–3s at a 32ms tick — slower than speed ink. */
 export function blotTicksToFull(blotBlend: number): number {
-  return Math.max(120, Math.round(480 - 300 * clamp01(blotBlend)));
+  return Math.max(48, Math.round(96 - 48 * clamp01(blotBlend)));
+}
+
+function easeOutBlotT(ticks: number, blotBlend: number): number {
+  if (clamp01(blotBlend) < 1e-3) return 0;
+  const t = clamp01(Math.max(0, ticks) / Math.max(1, blotTicksToFull(blotBlend)));
+  return 1 - (1 - t) * (1 - t);
+}
+
+/** Hold-tick growth. Independent of how many points smoothing kept. */
+export function blotGrowTFromTicks(ticks: number, blotBlend: number): number {
+  return easeOutBlotT(ticks, blotBlend);
 }
 
 /**
@@ -1554,8 +1626,17 @@ export function dwellBlotGrowT(
   if (tipRadius < 1e-6) return 0;
   if (clamp01(blotBlend) < 1e-3) return 0;
   if (!isDiscPrimaryPath(points, tipRadius * 2)) return 0;
-  const ticksToFull = blotTicksToFull(blotBlend);
-  return clamp01((points.length - 1) / Math.max(1, ticksToFull));
+  return easeOutBlotT(points.length - 1, blotBlend);
+}
+
+function resolveBlotTipGrow(
+  op: InkDrawOp,
+  cluster: readonly ScenePoint[],
+  tipRadius: number,
+): number {
+  const blend = resolveSpeedBlotBlend(op);
+  const stamped = op.blotTipGrow !== undefined ? clamp01(op.blotTipGrow) : 0;
+  return Math.max(stamped, dwellBlotGrowT(cluster, tipRadius, blend));
 }
 
 function strokeClusterExtent(points: readonly ScenePoint[]): number {
@@ -1619,7 +1700,11 @@ export function paintInkDisc(
       pixelScale,
     );
     if (outerR < 1e-6) return;
-    const poolT = softFade ? 0 : inkBlotPoolT(growT, blend);
+    const slow =
+      "slowness" in center && typeof (center as ScenePoint).slowness === "number"
+        ? (center as ScenePoint).slowness ?? INK_SLOWNESS_NEUTRAL
+        : INK_SLOWNESS_NEUTRAL;
+    const poolT = softFade ? 0 : blotDiscPoolT(growT, blend, slow);
     const prevFill = ctx.fillStyle;
     const prevSmooth = ctx.imageSmoothingEnabled;
     if (poolT > 1e-3) {
@@ -1659,10 +1744,37 @@ export function paintInkDisc(
 }
 
 /**
- * Hashed fibre scratches. `destination-out` at full punch so the streaks are
- * clear parchment, not a grey veil. Placement is random in the disc face —
- * not a starburst through the centre.
+ * Fine paper-tooth fibres. `destination-out` at partial alpha so they read as
+ * texture, not punched holes. Lengths stay short; heading stays near one
+ * hashed direction so the field looks like laid paper, not a starburst.
  */
+function paperFibreHeading(origin: { x: number; y: number }): number {
+  return hash01(origin.x, origin.y, GRAIN_SALT + 11) * Math.PI;
+}
+
+function strokePaperFibre(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  u: number,
+  v: number,
+  w: number,
+  q: number,
+  fibreHeading: number,
+): void {
+  const ang = fibreHeading + (w - 0.5) * 0.48;
+  const half = radius * (0.025 + 0.05 * q);
+  const dx = Math.cos(ang) * half;
+  const dy = Math.sin(ang) * half;
+  ctx.globalAlpha = 0.07 + 0.30 * v;
+  ctx.lineWidth = Math.max(0.2, radius * (0.008 + 0.016 * u));
+  ctx.beginPath();
+  ctx.moveTo(cx - dx, cy - dy);
+  ctx.lineTo(cx + dx, cy + dy);
+  ctx.stroke();
+}
+
 function scratchGrainInDisc(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
@@ -1671,7 +1783,8 @@ function scratchGrainInDisc(
 ): void {
   const g = clamp01(grain);
   if (g < 1e-3 || radius < 1e-6) return;
-  const n = 3 + Math.round(9 * g);
+  const n = 10 + Math.round(28 * g);
+  const fibreHeading = paperFibreHeading(center);
   const prevComp = ctx.globalCompositeOperation;
   const prevAlpha = ctx.globalAlpha;
   const prevStroke = ctx.strokeStyle;
@@ -1680,25 +1793,24 @@ function scratchGrainInDisc(
   ctx.globalCompositeOperation = "destination-out";
   ctx.strokeStyle = "#000";
   ctx.lineCap = "butt";
-  ctx.globalAlpha = 1;
   for (let i = 0; i < n; i++) {
     const u = hash01(center.x, center.y, GRAIN_SALT + i);
     const v = hash01(center.x, center.y, GRAIN_SALT + 19 + i);
     const w = hash01(center.x, center.y, GRAIN_SALT + 37 + i);
     const q = hash01(center.x, center.y, GRAIN_SALT + 53 + i);
-    const rad = radius * 0.85 * Math.sqrt(u);
+    const rad = radius * 0.88 * Math.sqrt(u);
     const theta = v * Math.PI * 2;
-    const cx = center.x + Math.cos(theta) * rad;
-    const cy = center.y + Math.sin(theta) * rad;
-    const ang = w * Math.PI * 2;
-    const half = radius * (0.08 + 0.42 * q);
-    const dx = Math.cos(ang) * half;
-    const dy = Math.sin(ang) * half;
-    ctx.lineWidth = Math.max(radius * (0.03 + 0.09 * u), 0.22);
-    ctx.beginPath();
-    ctx.moveTo(cx - dx, cy - dy);
-    ctx.lineTo(cx + dx, cy + dy);
-    ctx.stroke();
+    strokePaperFibre(
+      ctx,
+      center.x + Math.cos(theta) * rad,
+      center.y + Math.sin(theta) * rad,
+      radius,
+      u,
+      hash01(center.x, center.y, GRAIN_SALT + 71 + i),
+      w,
+      q,
+      fibreHeading,
+    );
   }
   ctx.globalCompositeOperation = prevComp;
   ctx.globalAlpha = prevAlpha;
@@ -1724,7 +1836,7 @@ export function paintGrainDisc(
 ): void {
   const { outerR } = inkDiscRadii(tipRadius, blotBlend, growT, pressureAmt);
   if (outerR < 1e-6) return;
-  const poolT = inkBlotPoolT(growT, blotBlend);
+  const poolT = blotDiscPoolT(growT, blotBlend, INK_SLOWNESS_NEUTRAL);
   const prevFill = ctx.fillStyle;
   if (poolT > 1e-3) {
     ctx.fillStyle = blotFillCss(color ?? String(prevFill), poolT);
@@ -1785,25 +1897,66 @@ function prefixContactCluster(
   return cluster;
 }
 
-function paintFrozenContactPool(
+/**
+ * Darker, optionally larger discs at both ends when blot is on.
+ * Size comes from a hold (`blotTipGrow` / dwell cluster). Richness is always
+ * on so the butt is not a pale halo over parchment.
+ */
+function paintBlotCaps(
   ctx: CanvasRenderingContext2D,
   op: InkDrawOp,
   points: readonly ScenePoint[],
   pixelScale: number,
+  fromIndex: number,
 ): void {
   if (op.highlight || points.length === 0) return;
   const blotBlend = resolveSpeedBlotBlend(op);
   if (blotBlend < 1e-3) return;
-  const nibR = paintedWidth(nibWidth(op), pixelScale) / 2;
-  const cluster = prefixContactCluster(points, nibR);
-  if (cluster.length === 0) return;
-  const styles = inkStrokePointStyles(op, 0).slice(0, cluster.length);
+  const styles = inkStrokePointStyles(op, 0);
+  if (styles.length === 0) return;
+
+  const paintAt = (
+    at: ScenePoint,
+    toward: ScenePoint | undefined,
+    style: InkStrokeStyle,
+    growT: number,
+  ) => {
+    const tipR = paintedWidth(style.lineWidth, pixelScale) / 2;
+    paintTexturedDisc(
+      ctx,
+      op,
+      sealDiscCenter(at, toward, tipR, pixelScale),
+      style.lineWidth,
+      style.alpha,
+      pixelScale,
+      growT,
+    );
+  };
+
   const last = styles[styles.length - 1];
-  if (!last) return;
-  const tipR = paintedWidth(last.lineWidth, pixelScale) / 2;
-  const growT = dwellBlotGrowT(cluster, tipR, blotBlend);
-  if (growT < 1e-3) return;
-  paintTexturedDisc(ctx, op, cluster[0], last.lineWidth, last.alpha, pixelScale, growT);
+  const tip = points[points.length - 1];
+  if (last && tip) {
+    const tipR = paintedWidth(last.lineWidth, pixelScale) / 2;
+    const tipStart = trailingTipClusterStart(points, nibWidth(op));
+    const tipPts = tipStart < points.length ? points.slice(tipStart) : [tip];
+    const prev = points.length > 1 ? points[points.length - 2] : undefined;
+    paintAt(tip, prev, last, resolveBlotTipGrow(op, tipPts, tipR));
+  }
+
+  if (fromIndex === 0 && points.length >= 2) {
+    const first = styles[0];
+    const origin = points[0];
+    if (first && origin) {
+      const headR = paintedWidth(first.lineWidth, pixelScale) / 2;
+      const cluster = prefixContactCluster(points, headR);
+      paintAt(
+        origin,
+        points[1],
+        first,
+        dwellBlotGrowT(cluster.length > 0 ? cluster : [origin], headR, blotBlend),
+      );
+    }
+  }
 }
 
 /**
@@ -1825,7 +1978,7 @@ function paintContactDisc(
   if (!last) return;
   const contact = points[0];
   const radius = paintedWidth(last.lineWidth, pixelScale) / 2;
-  const growT = dwellBlotGrowT(points, radius, blotBlend);
+  const growT = resolveBlotTipGrow(op, points, radius);
   if (blotBlend > 1e-3 || grain > 1e-3) {
     paintTexturedDisc(ctx, op, contact, last.lineWidth, last.alpha, pixelScale, growT);
   } else {
@@ -1897,10 +2050,11 @@ function scratchGrainAlongStroke(
   }
   const avgR = counted > 0 ? sumR / counted : paintedWidth(nibWidth(op), pixelScale) / 2;
   const n = Math.max(
-    3,
-    Math.min(48, Math.round(3 + grain * (6 + pathLen / Math.max(avgR, 0.5)))),
+    12,
+    Math.min(140, Math.round(12 + grain * (28 + pathLen / Math.max(avgR * 0.18, 0.22)))),
   );
   const origin = points[0];
+  const fibreHeading = paperFibreHeading(origin);
   const prevComp = ctx.globalCompositeOperation;
   const prevAlpha = ctx.globalAlpha;
   const prevStroke = ctx.strokeStyle;
@@ -1909,7 +2063,6 @@ function scratchGrainAlongStroke(
   ctx.globalCompositeOperation = "destination-out";
   ctx.strokeStyle = "#000";
   ctx.lineCap = "butt";
-  ctx.globalAlpha = 1;
   for (let i = 0; i < n; i++) {
     const u = hash01(origin.x, origin.y, GRAIN_SALT + i);
     const v = hash01(origin.x, origin.y, GRAIN_SALT + 19 + i);
@@ -1917,16 +2070,18 @@ function scratchGrainAlongStroke(
     const q = hash01(origin.x, origin.y, GRAIN_SALT + 53 + i);
     const at = sampleStrokeAt(points, styles, u * pathLen, pixelScale, nibWidth(op));
     if (!at || at.r < 1e-6) continue;
-    const across = (v * 2 - 1) * at.r * 0.88;
-    const cx = at.x + at.nx * across;
-    const cy = at.y + at.ny * across;
-    const ang = w * Math.PI * 2;
-    const half = at.r * (0.1 + 0.55 * q);
-    ctx.lineWidth = Math.max(at.r * (0.03 + 0.09 * u), 0.22);
-    ctx.beginPath();
-    ctx.moveTo(cx - Math.cos(ang) * half, cy - Math.sin(ang) * half);
-    ctx.lineTo(cx + Math.cos(ang) * half, cy + Math.sin(ang) * half);
-    ctx.stroke();
+    const across = (v * 2 - 1) * at.r * 0.9;
+    strokePaperFibre(
+      ctx,
+      at.x + at.nx * across,
+      at.y + at.ny * across,
+      at.r,
+      u,
+      hash01(origin.x, origin.y, GRAIN_SALT + 71 + i),
+      w,
+      q,
+      fibreHeading,
+    );
   }
   ctx.globalCompositeOperation = prevComp;
   ctx.globalAlpha = prevAlpha;
@@ -1967,7 +2122,7 @@ function drawRibbonStrokeFrom(
     const last = styles[styles.length - 1];
     if (!last) return;
     const tipR = paintedWidth(last.lineWidth, pixelScale) / 2;
-    const growT = dwellBlotGrowT(slice, tipR, blotBlend);
+    const growT = resolveBlotTipGrow(op, slice, tipR);
     const at = slice[slice.length - 1];
     const prev = slice.length > 1 ? slice[slice.length - 2] : undefined;
     paintTexturedDisc(
@@ -1986,12 +2141,6 @@ function drawRibbonStrokeFrom(
   let ribbonPoints = slice;
   let ribbonStyles = styles;
   const tipClusterAt = trailingTipClusterStart(slice, nib);
-  let tipDisc: {
-    pts: ScenePoint[];
-    width: number;
-    alpha: number;
-    growT: number;
-  } | null = null;
   if (tipClusterAt < slice.length) {
     const tipPts = slice.slice(tipClusterAt);
     const tipStyles = styles.slice(tipClusterAt);
@@ -1999,12 +2148,6 @@ function drawRibbonStrokeFrom(
     const tipWidth = tipLast?.lineWidth ?? 0;
     const tipAlpha = tipLast?.alpha ?? 1;
     const tipR = paintedWidth(tipWidth, pixelScale) / 2;
-    tipDisc = {
-      pts: tipPts,
-      width: tipWidth,
-      alpha: tipAlpha,
-      growT: dwellBlotGrowT(tipPts, tipR, blotBlend),
-    };
     ribbonPoints = slice.slice(0, tipClusterAt + 1);
     ribbonStyles = styles.slice(0, tipClusterAt + 1);
     if (ribbonPoints.length < 2) {
@@ -2017,9 +2160,9 @@ function drawRibbonStrokeFrom(
         tipWidth,
         tipAlpha,
         pixelScale,
-        tipDisc.growT,
+        resolveBlotTipGrow(op, tipPts, tipR),
       );
-      if (fromIndex === 0 && !capHead) paintFrozenContactPool(ctx, op, points, pixelScale);
+      paintBlotCaps(ctx, op, points, pixelScale, fromIndex);
       ctx.globalAlpha = 1;
       return;
     }
@@ -2126,26 +2269,7 @@ function drawRibbonStrokeFrom(
     stampHardExtras(ctx);
   }
 
-  // A headed cap and a contact disc at the same point flicker round vs square.
-  // Cap owns the start while drawing; the disc is the dwell/tap path.
-  if (fromIndex === 0 && !capHead) paintFrozenContactPool(ctx, op, points, pixelScale);
-  if (tipDisc) {
-    const tipAt = tipDisc.pts[tipDisc.pts.length - 1];
-    const tipPrev =
-      tipDisc.pts.length > 1
-        ? tipDisc.pts[tipDisc.pts.length - 2]
-        : ribbonPoints[ribbonPoints.length - 1];
-    const tipR = paintedWidth(tipDisc.width, pixelScale) / 2;
-    paintTexturedDisc(
-      ctx,
-      op,
-      sealDiscCenter(tipAt, tipPrev, tipR, pixelScale),
-      tipDisc.width,
-      tipDisc.alpha,
-      pixelScale,
-      tipDisc.growT,
-    );
-  }
+  paintBlotCaps(ctx, op, points, pixelScale, fromIndex);
 
   ctx.globalAlpha = 1;
 }
@@ -2410,7 +2534,7 @@ function drawStrokeFrom(
     const last = styles[styles.length - 1];
     if (!last) return;
     const tipR = paintedWidth(last.lineWidth, pixelScale) / 2;
-    const growT = dwellBlotGrowT(slice, tipR, blotBlend);
+    const growT = resolveBlotTipGrow(op, slice, tipR);
     const prev = slice.length > 1 ? slice[slice.length - 2] : undefined;
     paintTexturedDisc(
       ctx,
@@ -2503,9 +2627,7 @@ function drawStrokeFrom(
       pixelScale,
     );
   }
-  if (!op.highlight && fromIndex === 0 && !capHead) {
-    paintFrozenContactPool(ctx, op, points, pixelScale);
-  }
+  paintBlotCaps(ctx, op, points, pixelScale, fromIndex);
   ctx.globalAlpha = 1;
 }
 

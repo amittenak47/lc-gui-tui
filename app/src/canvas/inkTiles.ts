@@ -42,10 +42,11 @@ export const TILE_PX = 384;
 /**
  * Extra pixels past each tile edge, baked into the canvas and the blit.
  *
- * Adjacent tiles meet on an AA fringe. Drawing them flush leaves a hairline of
- * parchment through committed ink — the coarse "grid" on a zoomed-out pad.
+ * Adjacent tiles meet on an AA fringe. 1px only covered the fringe itself and
+ * still showed a parchment lattice at non-integer device coords. 3px overlaps
+ * opaque interiors so committed ink does not read as a page grid.
  */
-export const TILE_OVERLAP_PX = 1;
+export const TILE_OVERLAP_PX = 3;
 
 /**
  * Zoom levels tiles are rasterised at, as steps of the exponent of two.
@@ -538,7 +539,7 @@ export class InkTileCache {
     );
   }
 
-  /** Core tile plus the 1px overdraw in scene units. */
+  /** Core tile plus the overlap pad in scene units. */
   private paddedTileBounds(bounds: SceneBounds, scale: number): SceneBounds {
     const pad = TILE_OVERLAP_PX / scale;
     return {

@@ -170,6 +170,15 @@ describe("encodeInkOps / decodeInkOps", () => {
     expect(back.speedBlotBlend).toBeUndefined();
   });
 
+  it("carries blotTipGrow across", () => {
+    const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], {
+      speedBlotBlend: 0.8,
+      blotTipGrow: 0.6,
+    });
+    const [back] = roundTrip([original]) as [InkDrawOp];
+    expect(back.blotTipGrow).toBe(0.6);
+  });
+
   it("carries grain across", () => {
     const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], { grain: 0.6 });
     const [back] = roundTrip([original]) as [InkDrawOp];
