@@ -1778,11 +1778,49 @@ function paintRibbonWithFalloff(
   const prevFill = ctx.fillStyle;
   ctx.globalAlpha = gradient ? 1 : maxAlpha;
   if (gradient) ctx.fillStyle = gradient;
+  fillRibbonInChunks(ctx, left, right, addExtras);
+  ctx.fillStyle = prevFill;
+}
+
+/**
+ * Segments per fill.
+ *
+ * One path for the whole ribbon looked right and rasterised terribly: a
+ * nonzero fill has to sort every edge in the path, and a long stroke that
+ * crosses itself is thousands of overlapping subpaths. Measured at 1200
+ * points: 13.95ms as one path, 0.25ms in chunks of sixteen -- and 0.68ms for
+ * the scene-unit scratch this replaced, so chunking is faster than the blurry
+ * version it was supposed to be a tradeoff against.
+ *
+ * Sixteen is a compromise in both directions. Chunks abut, so each boundary
+ * antialiases twice and leaves the faint hairline that per-segment fills used
+ * to rule across the whole stroke -- at a sixteenth the frequency, which is
+ * where it stops reading as grain. And self-overlap is only resolved by
+ * winding within a chunk, so a stroke crossing itself far apart in time can
+ * still stack where it crosses. Both were true of the per-segment fill that
+ * shipped for a month; this is that, sixteen times less often.
+ */
+const RIBBON_FILL_CHUNK = 16;
+
+function fillRibbonInChunks(
+  ctx: CanvasRenderingContext2D,
+  left: readonly { x: number; y: number }[],
+  right: readonly { x: number; y: number }[],
+  addExtras: (target: CanvasRenderingContext2D) => void,
+): void {
+  const last = left.length - 1;
+  for (let start = 0; start < last; start += RIBBON_FILL_CHUNK) {
+    const stop = Math.min(last, start + RIBBON_FILL_CHUNK);
+    ctx.beginPath();
+    for (let index = start; index < stop; index++) {
+      addWoundTriangle(ctx, left[index], left[index + 1], right[index + 1]);
+      addWoundTriangle(ctx, left[index], right[index + 1], right[index]);
+    }
+    ctx.fill();
+  }
   ctx.beginPath();
-  addRibbonSubpaths(ctx, left, right);
   addExtras(ctx);
   ctx.fill();
-  ctx.fillStyle = prevFill;
 }
 
 /** Alpha ramp along the stroke's chord, or null when the chord means nothing. */

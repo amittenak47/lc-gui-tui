@@ -1441,14 +1441,14 @@ describe("Speed ink is shape only", () => {
   it("stamps no discs at joins or at lift when blot is off", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, inkOp({ speedInk: 1, speedBlotBlend: 0 }), 1);
-    // One path for the ribbon; nothing stamped separately on top of it.
-    expect(drawCtx.fillCount).toBe(1);
+    // The ribbon fills in chunks; a stamp is what builds a radial rim.
+    expect(drawCtx.radialGradients).toBe(0);
   });
 
   it("still stamps them when blot is on", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, inkOp({ speedInk: 1, speedBlotBlend: 1 }), 1);
-    expect(drawCtx.fillCount).toBeGreaterThan(1);
+    expect(drawCtx.radialGradients).toBeGreaterThan(0);
   });
 });
 
@@ -1471,11 +1471,14 @@ describe("Speed blot stamp frequency", () => {
       points: pts,
     };
   }
-  /** Fills beyond the single ribbon path are blot stamps. */
+  /*
+   * The ribbon fills in chunks, so a fill count no longer isolates stamps.
+   * Each stamp builds its own radial rim, which the harness counts exactly.
+   */
   function stamps(blot: number): number {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, blotOp(blot), 1);
-    return Math.max(0, drawCtx.fillCount - 1);
+    return drawCtx.radialGradients;
   }
 
   /*
@@ -1510,12 +1513,12 @@ describe("Speed blot stamp frequency", () => {
     const shortRun = (() => {
       const c = inkDrawContext();
       applyInkOp(c.ctx, longOp(60), 1);
-      return c.fillCount;
+      return c.radialGradients;
     })();
     const longRun = (() => {
       const c = inkDrawContext();
       applyInkOp(c.ctx, longOp(1200), 1);
-      return c.fillCount;
+      return c.radialGradients;
     })();
     expect(longRun).toBeLessThanOrEqual(shortRun * 3);
   });
@@ -1528,7 +1531,7 @@ describe("Speed blot stamp frequency", () => {
   it("stamps with Speed ink off", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, blotOp(1, 0), 1);
-    expect(drawCtx.fillCount).toBeGreaterThan(1);
+    expect(drawCtx.radialGradients).toBeGreaterThan(0);
   });
 });
 
@@ -1644,7 +1647,7 @@ describe("paintInkDisc tip vs join", () => {
     // Runs stroke; a ribbon fills. The ribbon is now one path, so the tell is
     // many segment subpaths inside a single rasterisation, not many fills.
     expect(drawCtx.strokeCount).toBe(0);
-    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
     expect(drawCtx.strokes.length).toBeGreaterThan(6);
   });
 });
@@ -1852,7 +1855,7 @@ describe("speed-ink ribbon coalesce / densify / tip split", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
     expect(drawCtx.radialGradients).toBe(0);
-    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
   });
 
   it("gives every blot stamp a soft rim so they blend rather than bead", () => {
