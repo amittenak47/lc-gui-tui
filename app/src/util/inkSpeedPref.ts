@@ -10,7 +10,7 @@
 const KEY = "whiteboard.inkSpeed";
 /** Soft rim + dwell growth feel (0 = hard expanding disc, 1 = soft rim / faster grow). */
 const BLOT_BLEND_KEY = "whiteboard.inkSpeedBlotBlend";
-/** Pace wash toward pencil (0 = width only, 1 = old 0.55 alpha floor). */
+/** Pace wash toward paper (0 = width only, 1 = full drying curve). */
 const FADE_KEY = "whiteboard.inkSpeedFade";
 /** Nib material: 0 = hard felt-tip, 1 = seeded overlapping discs. */
 const GRAIN_KEY = "whiteboard.inkGrain";

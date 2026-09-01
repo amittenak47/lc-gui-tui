@@ -396,6 +396,7 @@ describe("speed ink", () => {
     expect(inkSpeedAlphaGain(1, 1, 1)).toBeCloseTo(1);
     expect(inkSpeedAlphaGain(INK_SLOWNESS_NEUTRAL, 1, 1)).toBeCloseTo(INK_SPEED_ALPHA_BASE);
     expect(inkSpeedAlphaGain(0, 1, 1)).toBeLessThan(INK_SPEED_ALPHA_BASE);
+    expect(inkSpeedAlphaGain(0, 1, 1)).toBeGreaterThan(0.45);
   });
 
   it("reads neutral pace as the speed-alpha base when fade is full", () => {
@@ -1418,7 +1419,7 @@ describe("paintInkDisc tip vs join", () => {
     expect(drawCtx.fillAlphas[0]).toBe(1);
   });
 
-  it("keeps the old 0.55 wash on speed-ink strokes that never stamped fade", () => {
+  it("washes legacy speed-ink strokes that never stamped fade", () => {
     const op: InkOp = {
       kind: "draw",
       color: "#112233",
@@ -2237,6 +2238,56 @@ describe("grain and blot pooling (Phase 2)", () => {
     expect(pooled[mid].lineWidth).toBeCloseTo(styles[mid].lineWidth);
   });
 
+  it("keeps endpoints richer than the trail without a hold or extra width", () => {
+    const pts = points([0, 0], [40, 0], [80, 0]);
+    const op = {
+      kind: "draw" as const,
+      color: "#c41e3a",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 0,
+      points: pts,
+    };
+    const styles = inkStrokePointStyles(op, 0);
+    const pooled = applyInkPoolingAtEnds(styles, op, pts, 0);
+    expect(pooled[0].blotPool ?? 0).toBeGreaterThanOrEqual(INK_BLOT_END_FLOOR - 1e-6);
+    expect(pooled[pooled.length - 1].blotPool ?? 0).toBeGreaterThanOrEqual(
+      INK_BLOT_END_FLOOR - 1e-6,
+    );
+    expect(pooled[1].blotPool ?? 0).toBeLessThan(pooled[0].blotPool ?? 0);
+    expect(pooled[0].lineWidth).toBeCloseTo(styles[0].lineWidth);
+    expect(pooled[pooled.length - 1].lineWidth).toBeCloseTo(styles[styles.length - 1].lineWidth);
+  });
+
+  it("keeps a start hold on the ribbon when the nib moves away", () => {
+    const pts = points([0, 0], [40, 0], [80, 0]);
+    const base = {
+      kind: "draw" as const,
+      color: "#112233",
+      baseWidth: 12,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 0,
+      points: pts,
+    };
+    const styles = inkStrokePointStyles(base, 0);
+    const pooled = applyInkPoolingAtEnds(
+      styles,
+      { ...base, blotHalts: [{ x: 0, y: 0, grow: 1, pressure: NO_PRESSURE }] },
+      pts,
+      0,
+    );
+    expect(pooled[0].lineWidth).toBeGreaterThan(styles[0].lineWidth);
+    expect(pooled[pooled.length - 1].lineWidth).toBeCloseTo(styles[styles.length - 1].lineWidth);
+  });
+
   it("applies pressure to pooling richness at a halted tip", () => {
     const lightPts = [
       { x: 0, y: 0, pressure: 0.25, slowness: 1 },
@@ -2319,5 +2370,30 @@ describe("grain and blot pooling (Phase 2)", () => {
       1,
     );
     expect(halted.fillCount).toBe(plain.fillCount);
+  });
+
+  it("caps a pooled moving stroke at the flared ribbon width, not a second disc", () => {
+    const pts = points([0, 0], [80, 0]);
+    const op = {
+      kind: "draw" as const,
+      color: "#112233",
+      baseWidth: 12,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 1,
+      points: pts,
+    };
+    const densified = densifyRibbonPoints(pts, inkStrokePointStyles(op, 0), 1);
+    const pooled = applyInkPoolingAtEnds(densified.styles, op, densified.points, 0);
+    const tipHalf = pooled[pooled.length - 1].lineWidth / 2;
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    const plain = inkDrawContext();
+    applyInkOp(plain.ctx, { ...op, blotTipGrow: 0 }, 1);
+    expect(drawCtx.arcRadii.length).toBe(plain.arcRadii.length);
+    expect(drawCtx.arcRadii.every((r) => r <= tipHalf + 1e-6)).toBe(true);
   });
 });
