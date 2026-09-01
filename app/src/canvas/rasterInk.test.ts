@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyInkOp,
+  applyInkOpFrom,
   applyInkPoolingAtEnds,
   clampExportScale,
   eraserSceneRadius,
@@ -57,7 +58,9 @@ import {
   densifyRibbonPoints,
   fillInkRibbon,
   livePaintQueueStart,
+  livePaintEvictEnd,
   LIVE_PAINT_QUEUE_NIBS,
+  LIVE_PAINT_EVICT_NIBS,
   inkDiscRadii,
   discSealPad,
   isDiscPrimaryPath,
@@ -1788,10 +1791,14 @@ describe("livePaintQueueStart", () => {
     expect(livePaintQueueStart(points([0, 0], [1, 0]), 8)).toBe(0);
   });
 
-  it("evicts behind about four nibs of the tip", () => {
+  it("marks the queue start about 32 nibs behind the tip", () => {
     const nib = 2;
-    const pts = points([0, 0], [10, 0], [20, 0], [30, 0], [40, 0]);
-    const start = livePaintQueueStart(pts, nib, LIVE_PAINT_QUEUE_NIBS);
+    const pts = Array.from({ length: 80 }, (_, i) => ({
+      x: i * 2,
+      y: 0,
+      pressure: NO_PRESSURE,
+    }));
+    const start = livePaintQueueStart(pts, nib);
     expect(start).toBeGreaterThan(0);
     expect(start).toBeLessThan(pts.length - 1);
     let tail = 0;
@@ -1799,6 +1806,39 @@ describe("livePaintQueueStart", () => {
       tail += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
     }
     expect(tail).toBeGreaterThanOrEqual(nib * LIVE_PAINT_QUEUE_NIBS - 1e-6);
+  });
+
+  it("does not evict until a chunk has fallen off", () => {
+    const nib = 2;
+    const pts = Array.from({ length: 80 }, (_, i) => ({
+      x: i * 2,
+      y: 0,
+      pressure: NO_PRESSURE,
+    }));
+    const keep = livePaintQueueStart(pts, nib);
+    expect(livePaintEvictEnd(pts, nib, keep - 1)).toBe(keep - 1);
+    expect(LIVE_PAINT_EVICT_NIBS).toBe(16);
+    expect(livePaintEvictEnd(pts, nib, 0)).toBe(keep);
+  });
+});
+
+describe("live paint range join", () => {
+  it("paints a corner split as a ribbon, not a tap disc", () => {
+    const op: InkOp = {
+      kind: "draw",
+      color: "#00f",
+      baseWidth: 12,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedFade: 1,
+      points: points([0, 0], [40, 0], [40, 40], [80, 40], [80, 80]),
+    };
+    const split = inkDrawContext();
+    applyInkOpFrom(split.ctx, op, 0, 1, { capHead: true, capEnd: false, toIndex: 2 });
+    applyInkOpFrom(split.ctx, op, 2, 1, { capHead: false, capEnd: true });
+    expect(split.fillCount).toBeGreaterThan(1);
   });
 });
 
@@ -1990,6 +2030,21 @@ describe("ribbon normal stability", () => {
       const v1y = left[i].y - right[i].y;
       expect(v0x * v1x + v0y * v1y).toBeGreaterThan(0);
     }
+  });
+
+  it("needs a neighbor past the cut to match the full-stroke corner section", () => {
+    const pts = points([0, 0], [40, 0], [40, 40], [80, 40]);
+    const style = inkStrokeStyle(12, 1, NO_PRESSURE, 1, false, 0, INK_SLOWNESS_NEUTRAL, 1);
+    const styles = pts.map(() => style);
+    const full = ribbonSides(pts, styles, 1);
+    const cut = 1;
+    const noHalo = ribbonSides(pts.slice(0, cut + 1), styles.slice(0, cut + 1), 1);
+    const withHalo = ribbonSides(pts.slice(0, cut + 2), styles.slice(0, cut + 2), 1);
+    expect(Math.abs(noHalo.left[cut].x - full.left[cut].x)).toBeGreaterThan(0.5);
+    expect(withHalo.left[cut].x).toBeCloseTo(full.left[cut].x, 5);
+    expect(withHalo.left[cut].y).toBeCloseTo(full.left[cut].y, 5);
+    expect(withHalo.right[cut].x).toBeCloseTo(full.right[cut].x, 5);
+    expect(withHalo.right[cut].y).toBeCloseTo(full.right[cut].y, 5);
   });
 
   it("does not bow-tie on a reverse / retrace path", () => {

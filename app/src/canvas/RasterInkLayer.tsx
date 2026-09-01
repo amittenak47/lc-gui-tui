@@ -34,7 +34,7 @@ import {
   INK_HOLD_STILL_PX,
   isDiscPrimaryPath,
   isHostBoundOp,
-  livePaintQueueStart,
+  livePaintEvictEnd,
   NO_PRESSURE,
   scenePointFromPointer,
   smoothPressure,
@@ -933,10 +933,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     /**
      * Hot path: blit the stroke-start committed snapshot, then the live op.
      *
-     * The open stroke's point list still grows; the paint queue does not. Points
-     * behind a 4-nib tip window are dequeued onto a live bitmap once. Each frame
-     * only re-paints that window. Continuation chunks skip the tap-disc path.
-     * While Writing still full-paints; RDP would stale the bake.
+     * The open stroke's point list still grows; live paint does not. After the
+     * tip queue exceeds ~32 nibs, a chunk at the oldest end is baked with the
+     * same painter as commit and dropped from the live list. Until then this is
+     * the same full `paintLiveOp` as a short stroke. While Writing still
+     * full-paints; RDP would stale the bake.
      */
     const paintLiveIncremental = useCallback(() => {
       const canvas = canvasRef.current;
@@ -986,9 +987,16 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           smoothingModeRef.current === "live" && smoothingRef.current > 0;
         const hosts = scrollHostLookup();
         if (!reshapeLive && live.kind === "draw") {
+          // Bake oldest travel, then paint the remaining queue. Pass the full
+          // live op (not a sliced mini-stroke) so the cut vertex keeps both
+          // neighbors and the ribbon does not leave a paper wedge on a curve.
           const nib = inkLineWidth(live.baseWidth, 0, false);
-          const queueStart = livePaintQueueStart(live.points, nib);
-          if (queueStart > 0) {
+          const evictTo = livePaintEvictEnd(
+            live.points,
+            nib,
+            liveQueueBakedRef.current,
+          );
+          if (evictTo > 0) {
             let baked = liveQueueSnapRef.current;
             if (!baked) {
               baked = document.createElement("canvas");
@@ -1000,28 +1008,24 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               liveQueueBakedRef.current = 0;
             }
             const from = liveQueueBakedRef.current;
-            if (queueStart > from) {
+            if (evictTo > from) {
               const pctx = baked.getContext("2d");
               if (pctx) {
-                const evicted: InkOp = {
-                  ...live,
-                  points: live.points.slice(from, queueStart + 1),
-                };
-                paintLiveOp(pctx, evicted, drawView, dpr, clipRef.current, hosts, {
+                paintLiveOp(pctx, live, drawView, dpr, clipRef.current, hosts, {
+                  fromIndex: from,
+                  toIndex: evictTo,
                   capEnd: false,
                   capHead: from === 0,
                 });
-                liveQueueBakedRef.current = queueStart;
+                liveQueueBakedRef.current = evictTo;
               }
             }
+            const paintFrom = liveQueueBakedRef.current;
             ctx.drawImage(baked, 0, 0);
-            const queue: InkOp = {
-              ...live,
-              points: live.points.slice(queueStart),
-            };
-            paintLiveOp(ctx, queue, drawView, dpr, clipRef.current, hosts, {
+            paintLiveOp(ctx, live, drawView, dpr, clipRef.current, hosts, {
+              fromIndex: paintFrom,
               capEnd: true,
-              capHead: false,
+              capHead: paintFrom === 0,
             });
             liveDrawnIndexRef.current = Math.max(0, live.points.length - 1);
             ctx.setTransform(1, 0, 0, 1, 0, 0);
