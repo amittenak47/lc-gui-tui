@@ -1509,10 +1509,10 @@ function blotPressureAmt(op: InkDrawOp, point: { pressure: number }): number {
   return clamp01(point.pressure);
 }
 
-/** Variable-width ribbon when speed ink is on. Blot-only stays a solid run. */
+/** Variable-width ribbon when Speed ink or Ink Pooling is on. Flat pen stays runs. */
 function usesSpeedRibbon(op: InkDrawOp): boolean {
   if (op.highlight) return false;
-  return (op.speedInk ?? 0) > 0;
+  return (op.speedInk ?? 0) > 0 || resolveSpeedBlotBlend(op) > 1e-3;
 }
 
 function resolveSpeedFade(op: InkDrawOp): number {
@@ -1897,73 +1897,66 @@ function prefixContactCluster(
   return cluster;
 }
 
-/**
- * Darker, optionally larger discs at both ends when blot is on.
- * Size comes from a hold (`blotTipGrow` / dwell cluster). Richness is always
- * on so the butt is not a pale halo over parchment.
- */
-function paintBlotCaps(
-  ctx: CanvasRenderingContext2D,
+/** Width swell at a hold/endpoint from ink pooling (`growT` only — not rest-pace). */
+export function inkPoolingWidthGain(
+  growT: number,
+  blotBlend: number,
+  pressureAmt = 1,
+): number {
+  return 1 + INK_BLOT_SIZE_RANGE * clamp01(blotBlend) * clamp01(growT) * clamp01(pressureAmt);
+}
+
+/** Widen + enrich ribbon vertices at holds/ends. Mid-stroke width is unchanged. */
+export function applyInkPoolingAtEnds(
+  styles: InkStrokeStyle[],
   op: InkDrawOp,
   points: readonly ScenePoint[],
-  pixelScale: number,
   fromIndex: number,
-): void {
-  if (op.highlight || points.length === 0) return;
+): InkStrokeStyle[] {
+  if (op.highlight) return styles;
   const blotBlend = resolveSpeedBlotBlend(op);
-  if (blotBlend < 1e-3) return;
-  const styles = inkStrokePointStyles(op, 0);
-  if (styles.length === 0) return;
+  if (blotBlend < 1e-3 || styles.length === 0 || points.length === 0) return styles;
 
-  const paintAt = (
-    at: ScenePoint,
-    toward: ScenePoint | undefined,
-    style: InkStrokeStyle,
-    growT: number,
-  ) => {
-    const tipR = paintedWidth(style.lineWidth, pixelScale) / 2;
-    paintTexturedDisc(
-      ctx,
-      op,
-      sealDiscCenter(at, toward, tipR, pixelScale),
-      style.lineWidth,
-      style.alpha,
-      pixelScale,
-      growT,
-    );
+  const out = styles.map((style) => ({ ...style }));
+  const strokePts = op.points;
+  const nib = nibWidth(op);
+
+  const enrichEnd = (index: number, growT: number, at: ScenePoint) => {
+    const slowness = at.slowness ?? INK_SLOWNESS_NEUTRAL;
+    const poolT = blotDiscPoolT(growT, blotBlend, slowness);
+    out[index].blotPool = Math.max(out[index].blotPool ?? 0, poolT);
+    if (growT > 1e-6) {
+      const pressureAmt = blotPressureAmt(op, at);
+      out[index].lineWidth *= inkPoolingWidthGain(growT, blotBlend, pressureAmt);
+    }
   };
 
-  const last = styles[styles.length - 1];
-  const tip = points[points.length - 1];
-  if (last && tip) {
-    const tipR = paintedWidth(last.lineWidth, pixelScale) / 2;
-    const tipStart = trailingTipClusterStart(points, nibWidth(op));
-    const tipPts = tipStart < points.length ? points.slice(tipStart) : [tip];
-    const prev = points.length > 1 ? points[points.length - 2] : undefined;
-    paintAt(tip, prev, last, resolveBlotTipGrow(op, tipPts, tipR));
-  }
+  const lastIdx = out.length - 1;
+  const tip = points[lastIdx];
+  const tipR = out[lastIdx].lineWidth / 2;
+  const tipStart = trailingTipClusterStart(strokePts, nib);
+  const tipPts =
+    tipStart < strokePts.length ? strokePts.slice(tipStart) : [strokePts[strokePts.length - 1]];
+  enrichEnd(lastIdx, resolveBlotTipGrow(op, tipPts, tipR), tip);
 
   if (fromIndex === 0 && points.length >= 2) {
-    const first = styles[0];
-    const origin = points[0];
-    if (first && origin) {
-      const headR = paintedWidth(first.lineWidth, pixelScale) / 2;
-      const cluster = prefixContactCluster(points, headR);
-      paintAt(
-        origin,
-        points[1],
-        first,
-        dwellBlotGrowT(cluster.length > 0 ? cluster : [origin], headR, blotBlend),
-      );
-    }
+    const headR = out[0].lineWidth / 2;
+    const cluster = prefixContactCluster(strokePts, headR);
+    enrichEnd(
+      0,
+      dwellBlotGrowT(cluster.length > 0 ? cluster : [strokePts[0]], headR, blotBlend),
+      points[0],
+    );
   }
+
+  return out;
 }
 
 /**
  * One heading-independent disc at the original contact.
  *
  * Used for a tap and for the contact cluster (jitter still inside about one
- * nib). Speed blot may grow that same disc; Grain textures it.
+ * nib). Ink pooling may grow that same disc; Grain textures it.
  */
 function paintContactDisc(
   ctx: CanvasRenderingContext2D,
@@ -2162,18 +2155,25 @@ function drawRibbonStrokeFrom(
         pixelScale,
         resolveBlotTipGrow(op, tipPts, tipR),
       );
-      paintBlotCaps(ctx, op, points, pixelScale, fromIndex);
       ctx.globalAlpha = 1;
       return;
     }
   }
 
   const coalesced = coalesceRibbonPoints(ribbonPoints, ribbonStyles, pixelScale);
-  const prepared = densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale);
-  if (prepared.points.length < 2) {
+  const densified = densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale);
+  if (densified.points.length < 2) {
     ctx.globalAlpha = 1;
     return;
   }
+
+  const pooledStyles = applyInkPoolingAtEnds(
+    densified.styles,
+    op,
+    densified.points,
+    fromIndex,
+  );
+  const prepared = { points: densified.points, styles: pooledStyles };
 
   let maxAlpha = 0;
   let maxHalf = 0;
@@ -2268,8 +2268,6 @@ function drawRibbonStrokeFrom(
     fillInkRibbon(ctx, left, right, maxAlpha, fills);
     stampHardExtras(ctx);
   }
-
-  paintBlotCaps(ctx, op, points, pixelScale, fromIndex);
 
   ctx.globalAlpha = 1;
 }
@@ -2627,7 +2625,6 @@ function drawStrokeFrom(
       pixelScale,
     );
   }
-  paintBlotCaps(ctx, op, points, pixelScale, fromIndex);
   ctx.globalAlpha = 1;
 }
 

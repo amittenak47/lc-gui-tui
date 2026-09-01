@@ -139,8 +139,8 @@ function specRows(
     { label: "Pressure", value: snap.pressureSensitive ? "On" : "Off" },
     { label: "Straight line", value: snap.straightInk ? "On" : "Off" },
     { label: "Speed ink", value: snap.speed === 0 ? "Off" : `${Math.round(snap.speed * 100)}%` },
-    { label: "Speed fade", value: snap.fade === 0 ? "Off" : `${Math.round(snap.fade * 100)}%` },
-    { label: "Speed blot", value: snap.blot === 0 ? "Off" : `${Math.round(snap.blot * 100)}%` },
+    { label: "Ink Drying", value: snap.fade === 0 ? "Off" : `${Math.round(snap.fade * 100)}%` },
+    { label: "Ink Pooling", value: snap.blot === 0 ? "Off" : `${Math.round(snap.blot * 100)}%` },
     { label: "Ink boost", value: `${Math.round(snap.boldness * 100)}%` },
     {
       label: "Smoothing",

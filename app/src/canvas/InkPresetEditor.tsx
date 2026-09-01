@@ -818,8 +818,8 @@ function PhysicsKnobs({
         hint={
           <>
             Same pen as Off at a normal writing pace: slow down and the line
-            fattens, speed up and it thins. Speed blot and Speed fade are
-            separate and work even when this is Off. Saved on this device only.
+            fattens, speed up and it thins. Ink pooling and Ink drying are
+            separate and work when this is Off. Saved on this device only.
           </>
         }
       >
@@ -840,7 +840,7 @@ function PhysicsKnobs({
           <>
             Nib material. Off is a hard felt-tip. Turn it up for a fine paper
             tooth — short fibres, varied transparency, one consistent heading.
-            Speed blot can still pool that disc if you hold. Saved on this
+            Ink pooling can still gather at a hold. Saved on this
             device only.
           </>
         }
@@ -857,18 +857,20 @@ function PhysicsKnobs({
       </SettingsBlock>
 
       <SettingsBlock
-        title="Speed blot"
+        title="Ink Pooling"
         hint={
           <>
-            Hold to pool a richer, slower blot at the nib — even with Speed
-            ink off. Off stays nib-sized. 100% still takes about a second of
-            holding to reach a modest pool past the stroke, denser than the
-            trail not paler. Saved on this device only.
+            Hold at a stop to slowly grow a richer pool at the nib. Does not
+            taper the moving trail. Slow writing lays a richer colour; fast
+            writing does not wash it paler. Works with Speed ink off. Off stays
+            nib-sized. 100% still takes about a second+ of holding to reach a
+            modest pool past the stroke, denser than the trail not paler. Saved
+            on this device only.
           </>
         }
       >
         <SettingsRange
-          label="Speed blot"
+          label="Ink Pooling"
           min={0}
           max={100}
           step={5}
@@ -878,18 +880,18 @@ function PhysicsKnobs({
         />
       </SettingsBlock>
       <SettingsBlock
-        title="Speed fade"
+        title="Ink Drying"
         hint={
           <>
-            A pace gradient: ink pools when you write slowly and goes faint when
-            you write fast. Not the same as Ink fullness, which dries by how far
-            you have travelled, not how fast. Off keeps full ink. Saved on this
-            device only.
+            A pace wash: slow writing stays full, fast writing goes faint. Not
+            the same as Ink Pooling, which darkens colour rather than thinning
+            opacity, and not the same as Ink fullness, which dries by how far
+            you have travelled. Off keeps full ink. Saved on this device only.
           </>
         }
       >
         <SettingsRange
-          label="Speed fade"
+          label="Ink Drying"
           min={0}
           max={100}
           step={5}
@@ -903,7 +905,7 @@ function PhysicsKnobs({
         title="Ink boldness"
         hint={
           <>
-            Boost stroke opacity to compensate for softer speed blot blend —
+            Boost stroke opacity to compensate for softer ink pooling —
             100% is the current alpha, 0% is transparent, 300% is three
             times as dark (clamped to opaque at paint). Saved on this device
             only.
@@ -925,9 +927,9 @@ function PhysicsKnobs({
         hint={
           <>
             How much of the shake to take out of a pen stroke. Higher steadies a
-            shaky hand; lower keeps every kink you actually drew. With speed ink
-            on, width still tapers along the stroke instead of stepping into
-            blocks. Saved on this device only.
+            shaky hand; lower keeps every kink you actually drew. With Speed
+            ink on, width still tapers along the stroke instead of stepping
+            into blocks. Saved on this device only.
           </>
         }
       >

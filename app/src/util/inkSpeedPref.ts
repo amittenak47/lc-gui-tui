@@ -85,7 +85,7 @@ export function speedBlotBlendToPercent(value: number): number {
   return Math.round(clamp(value, INK_SPEED_BLOT_BLEND_DEFAULT) * 100);
 }
 
-/** Fired when Speed blot blend is saved so the board can re-read it. */
+/** Fired when Ink Pooling blend is saved so the board can re-read it. */
 export const INK_SPEED_BLOT_BLEND_EVENT = "lc-ink-speed-blot-blend";
 
 export function loadInkSpeedFade(): number {
@@ -114,7 +114,7 @@ export function speedFadeToPercent(value: number): number {
   return Math.round(clamp(value, INK_SPEED_FADE_DEFAULT) * 100);
 }
 
-/** Fired when Speed fade is saved so the board can re-read it. */
+/** Fired when Ink Drying (pace wash) is saved so the board can re-read it. */
 export const INK_SPEED_FADE_EVENT = "lc-ink-speed-fade";
 
 export function loadInkGrain(): number {
