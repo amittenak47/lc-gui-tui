@@ -417,13 +417,13 @@ interface DevicePrefs {
   inkSmoothing: number;
   inkSmoothingMode: InkSmoothingMode;
   inkSpeed: number;
-  /** Soften / pool speed-ink dwell discs (0–1). */
+  /** Ink Pooling strength: hold-to-grow and richer deposit (0–1). */
   inkSpeedBlotBlend: number;
   /** Nib material (0–1). */
   inkGrain: number;
   /** Pace wash toward pencil (0–1). */
   inkSpeedFade: number;
-  /** Boost stroke opacity to compensate for soft speed blot blend (0–3). */
+  /** Boost stroke opacity to compensate for Ink Pooling / fade (0–3). */
   inkBoldness: number;
   /** Eraser rubs pixels out, rather than taking whole strokes. */
   eraserPartial: boolean;

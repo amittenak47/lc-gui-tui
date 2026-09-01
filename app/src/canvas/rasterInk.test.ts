@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyInkOp,
+  applyInkPoolingAtEnds,
   clampExportScale,
   eraserSceneRadius,
   eraserScreenRadius,
@@ -2036,7 +2037,7 @@ describe("grain and blot pooling (Phase 2)", () => {
     expect(textured.fillCount).toBe(hard.fillCount);
   });
 
-  it("keeps blot-only strokes as a solid run, not ribbon quads", () => {
+  it("paints pooling-only moving strokes as a ribbon, not earthworm runs", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(
       drawCtx.ctx,
@@ -2053,13 +2054,12 @@ describe("grain and blot pooling (Phase 2)", () => {
       },
       1,
     );
-    expect(drawCtx.strokeCount).toBeGreaterThan(0);
-    expect(drawCtx.fillCount).toBeLessThan(8);
+    expect(drawCtx.strokeCount).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(3);
   });
 
-  it("grows the tip disc from blotTipGrow even on a moving stroke", () => {
-    const nib = inkDrawContext();
-    const grown = inkDrawContext();
+  it("grows ribbon tip width from blotTipGrow on a moving stroke", () => {
+    const pts = points([0, 0], [40, 0], [80, 0]);
     const base = {
       kind: "draw" as const,
       color: "#112233",
@@ -2069,10 +2069,52 @@ describe("grain and blot pooling (Phase 2)", () => {
       pressureSensitive: false,
       speedInk: 0,
       speedBlotBlend: 1,
-      points: points([0, 0], [40, 0]),
+      points: pts,
     };
-    applyInkOp(nib.ctx, { ...base, blotTipGrow: 0 }, 1);
-    applyInkOp(grown.ctx, { ...base, blotTipGrow: 1 }, 1);
-    expect(Math.max(...grown.arcRadii)).toBeGreaterThan(Math.max(...nib.arcRadii));
+    const styles = inkStrokePointStyles({ ...base, blotTipGrow: 0 }, 0);
+    const nibStyles = applyInkPoolingAtEnds(styles, { ...base, blotTipGrow: 0 }, pts, 0);
+    const grownStyles = applyInkPoolingAtEnds(styles, { ...base, blotTipGrow: 1 }, pts, 0);
+    expect(nibStyles[1].lineWidth).toBeCloseTo(grownStyles[1].lineWidth);
+    expect(grownStyles[grownStyles.length - 1].lineWidth).toBeGreaterThan(
+      nibStyles[nibStyles.length - 1].lineWidth,
+    );
+
+    const ribNib = ribbonSides(pts, nibStyles, 1);
+    const ribGrown = ribbonSides(pts, grownStyles, 1);
+    const last = pts.length - 1;
+    const halfNib =
+      Math.hypot(
+        ribNib.left[last].x - ribNib.right[last].x,
+        ribNib.left[last].y - ribNib.right[last].y,
+      ) / 2;
+    const halfGrown =
+      Math.hypot(
+        ribGrown.left[last].x - ribGrown.right[last].x,
+        ribGrown.left[last].y - ribGrown.right[last].y,
+      ) / 2;
+    expect(halfGrown).toBeGreaterThan(halfNib);
+  });
+
+  it("applyInkPoolingAtEnds widens only head and tip when grow is full", () => {
+    const dwell = points([0, 0], [0.1, 0], [0.05, 0.08], [0.08, 0.02], [40, 0], [80, 0]);
+    const op = {
+      kind: "draw" as const,
+      color: "#112233",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 1,
+      points: dwell,
+    };
+    const styles = inkStrokePointStyles(op, 0);
+    const pooled = applyInkPoolingAtEnds(styles, op, dwell, 0);
+    expect(pooled[0].lineWidth).toBeGreaterThan(styles[0].lineWidth);
+    expect(pooled[pooled.length - 1].lineWidth).toBeGreaterThan(
+      styles[styles.length - 1].lineWidth,
+    );
+    expect(pooled[3].lineWidth).toBeCloseTo(styles[3].lineWidth);
   });
 });
