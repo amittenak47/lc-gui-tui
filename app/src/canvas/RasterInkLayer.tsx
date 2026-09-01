@@ -30,6 +30,7 @@ import {
   HIGHLIGHT_WIDTH_SCALE,
   blotTicksToFull,
   blotGrowTFromTicks,
+  stampInkBlotHalt,
   INK_HOLD_STILL_PX,
   isDiscPrimaryPath,
   isHostBoundOp,
@@ -1605,6 +1606,16 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       ): boolean => {
         const px = Math.hypot(dx, dy) * zoom;
         if (px <= INK_HOLD_STILL_PX) return false;
+        if (live && live.kind === "draw" && (live.blotTipGrow ?? 0) > 1e-3) {
+          const at = lastPointRef.current ?? live.points[live.points.length - 1];
+          const origin = live.points[0];
+          const nib = inkLineWidth(live.baseWidth, 0, false);
+          const nearHead =
+            !!at &&
+            !!origin &&
+            Math.hypot(at.x - origin.x, at.y - origin.y) < Math.max(0.75, nib * 0.5);
+          if (at && !nearHead) stampInkBlotHalt(live, at, live.blotTipGrow ?? 0);
+        }
         lastMoveWallRef.current = performance.now();
         dwellCountRef.current = 0;
         if (live && live.kind === "draw") live.blotTipGrow = 0;

@@ -79,6 +79,8 @@ export interface EncodedOp {
   sbb?: number;
   /** Hold-pool amount at the tip (0–1); absent → derive from dwell samples. */
   btg?: number;
+  /** Mid-stroke pooling stamps: x, y, grow, optional pressure, optional slowness. */
+  bh?: { x: number; y: number; g: number; p?: number; s?: number }[];
   /** Pace wash toward pencil (0–1); absent on older speed-ink → full wash. */
   sf?: number;
   /** Nib material (0–1); absent → hard disc. */
@@ -215,6 +217,15 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
       if (op.speedInk !== undefined) record.si = op.speedInk;
       if (op.speedBlotBlend !== undefined) record.sbb = op.speedBlotBlend;
       if (op.blotTipGrow !== undefined) record.btg = op.blotTipGrow;
+      if (op.blotHalts && op.blotHalts.length > 0) {
+        record.bh = op.blotHalts.map((halt) => ({
+          x: halt.x,
+          y: halt.y,
+          g: halt.grow,
+          ...(halt.pressure != null ? { p: halt.pressure } : {}),
+          ...(halt.slowness != null ? { s: halt.slowness } : {}),
+        }));
+      }
       if (op.speedFade !== undefined) record.sf = op.speedFade;
       if (op.grain !== undefined) record.gr = op.grain;
       if (op.boldness !== undefined) record.ib = op.boldness;
@@ -391,6 +402,15 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
       if (record.si !== undefined) op.speedInk = record.si;
       if (record.sbb !== undefined) op.speedBlotBlend = record.sbb;
       if (record.btg !== undefined) op.blotTipGrow = record.btg;
+      if (record.bh && record.bh.length > 0) {
+        op.blotHalts = record.bh.map((halt) => ({
+          x: halt.x,
+          y: halt.y,
+          grow: halt.g,
+          ...(halt.p != null ? { pressure: halt.p } : {}),
+          ...(halt.s != null ? { slowness: halt.s } : {}),
+        }));
+      }
       if (record.sf !== undefined) op.speedFade = record.sf;
       if (record.gr !== undefined) op.grain = record.gr;
       if (record.ib !== undefined) op.boldness = record.ib;
@@ -532,6 +552,8 @@ interface PackedOpMeta {
   ps?: 0 | 1;
   si?: number;
   sbb?: number;
+  btg?: number;
+  bh?: EncodedOp["bh"];
   sf?: number;
   gr?: number;
   ib?: number;
@@ -565,6 +587,8 @@ export function packEncodedInk(encoded: EncodedInk): Uint8Array<ArrayBuffer> {
     ...(op.ps != null ? { ps: op.ps } : {}),
     ...(op.si != null ? { si: op.si } : {}),
     ...(op.sbb != null ? { sbb: op.sbb } : {}),
+    ...(op.btg != null ? { btg: op.btg } : {}),
+    ...(op.bh != null ? { bh: op.bh } : {}),
     ...(op.sf != null ? { sf: op.sf } : {}),
     ...(op.gr != null ? { gr: op.gr } : {}),
     ...(op.ib != null ? { ib: op.ib } : {}),
@@ -649,6 +673,8 @@ export function unpackEncodedInk(bytes: Uint8Array): EncodedInk | null {
     if (item.ps != null) record.ps = item.ps;
     if (item.si != null) record.si = item.si;
     if (item.sbb != null) record.sbb = item.sbb;
+    if (item.btg != null) record.btg = item.btg;
+    if (item.bh != null) record.bh = item.bh;
     if (item.sf != null) record.sf = item.sf;
     if (item.gr != null) record.gr = item.gr;
     if (item.ib != null) record.ib = item.ib;
