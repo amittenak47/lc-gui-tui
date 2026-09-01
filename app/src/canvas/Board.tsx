@@ -1638,13 +1638,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const mountStackTools = chromeShown.chrome || chromeMode === "fade";
   const mountEye = chromeShown.eye || chromeTraySleeps;
   /*
-   * Visible → fade/hidden starts with the tray already open. `has-wake` would
-   * wrap that tray in morph chrome (border + checkerboard sliding as one unit)
-   * unless we skip until the first idle hide.
+   * Fade/hidden keeps the wake mounted while the tray is still up, so the first
+   * idle hide can run the same close sequence as tapping Hide controls. Adding
+   * `has-wake` on an already-open tray would play the *open* morph (border +
+   * checkerboard sliding in). `is-snap` skips that one paint.
    */
-  const [chromeMorphReady, setChromeMorphReady] = useState(
-    () => loadChromeMode() !== "visible",
-  );
+  const [chromeWakeSnap, setChromeWakeSnap] = useState(false);
+  const chromeTraySleepsRef = useRef(chromeTraySleeps);
 
   /*
    * The idle timer, and the tap that restarts it.
@@ -1746,13 +1746,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // you were using.
     setChromeAwake(true);
     setChromeWakeGen((n) => n + 1);
-    if (chromeMode === "visible") setChromeMorphReady(false);
   }, [chromeMode]);
-  useEffect(() => {
-    if (!chromeTraySleeps) return;
-    if (chromeShown.chrome) return;
-    setChromeMorphReady(true);
-  }, [chromeTraySleeps, chromeShown.chrome]);
+  useLayoutEffect(() => {
+    const wasSleeping = chromeTraySleepsRef.current;
+    chromeTraySleepsRef.current = chromeTraySleeps;
+    if (chromeTraySleeps && !wasSleeping) setChromeWakeSnap(true);
+    else if (!chromeTraySleeps) setChromeWakeSnap(false);
+  }, [chromeTraySleeps]);
+  useLayoutEffect(() => {
+    if (!chromeWakeSnap) return;
+    let inner = 0;
+    const outer = window.requestAnimationFrame(() => {
+      inner = window.requestAnimationFrame(() => setChromeWakeSnap(false));
+    });
+    return () => {
+      window.cancelAnimationFrame(outer);
+      if (inner) window.cancelAnimationFrame(inner);
+    };
+  }, [chromeWakeSnap]);
   const [pressureSensitive, setPressureSensitiveState] = useState(
     () => inkPrefsRef.current.pressureSensitive,
   );
@@ -8606,14 +8617,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             <div
               className={[
                 "lc-map-chrome-left",
-                chromeTraySleeps && annotateToggle && chromeMorphReady
-                  ? "has-wake"
-                  : "",
-                chromeTraySleeps &&
-                annotateToggle &&
-                chromeMorphReady &&
-                leftChromeOpen
+                chromeTraySleeps && annotateToggle ? "has-wake" : "",
+                chromeTraySleeps && annotateToggle && leftChromeOpen
                   ? "is-open"
+                  : "",
+                chromeTraySleeps && annotateToggle && chromeWakeSnap
+                  ? "is-snap"
                   : "",
               ]
                 .filter(Boolean)
@@ -8668,7 +8677,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 </div>
               )}
               </div>
-              {annotateToggle && chromeTraySleeps && chromeMorphReady && (
+              {annotateToggle && chromeTraySleeps && (
                 <button
                   type="button"
                   className={`${chromeWakeClass} lc-chrome-wake-annotate`}
@@ -8868,10 +8877,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               <div
                 className={[
                   "lc-map-chrome-stack",
-                  chromeTraySleeps && chromeMorphReady ? "has-wake" : "",
-                  chromeTraySleeps && chromeMorphReady && chromeStackOpen
-                    ? "is-open"
-                    : "",
+                  chromeTraySleeps ? "has-wake" : "",
+                  chromeTraySleeps && chromeStackOpen ? "is-open" : "",
+                  chromeTraySleeps && chromeWakeSnap ? "is-snap" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
@@ -9066,7 +9074,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   </button>
                 )}
                 </div>
-                {chromeTraySleeps && chromeMorphReady && (
+                {chromeTraySleeps && (
                   <button
                     type="button"
                     className={chromeWakeClass}
