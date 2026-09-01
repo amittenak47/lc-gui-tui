@@ -51,6 +51,7 @@ import {
   blotTicksToFull,
   blotGrowTFromTicks,
   blotDiscPoolT,
+  blotRichnessT,
   coalesceRibbonPoints,
   densifyRibbonPoints,
   fillInkRibbon,
@@ -1975,9 +1976,15 @@ describe("grain and blot pooling (Phase 2)", () => {
     expect(mixBlotAlpha(1, 1)).toBeCloseTo(1);
     expect(mixBlotAlpha(0.5, 1)).toBeGreaterThan(0.5);
     expect(mixBlotAlpha(0.5, 1)).toBeCloseTo(0.5 + 0.5 * INK_BLOT_ALPHA_LIFT);
-    expect(INK_BLOT_SATURATE).toBeGreaterThan(0);
-    expect(INK_BLOT_DARKEN).toBeGreaterThan(0);
+    expect(INK_BLOT_SATURATE).toBeGreaterThan(0.48);
+    expect(INK_BLOT_DARKEN).toBeGreaterThan(0.28);
     expect(blotDiscPoolT(0, 1, INK_SLOWNESS_NEUTRAL)).toBeCloseTo(INK_BLOT_END_FLOOR);
+    expect(blotRichnessT(1, 1, 1, 1)).toBeGreaterThan(blotRichnessT(1, 1, 1, 0.3));
+    const lightStop = blotPoolRgb("#40c0a0", blotRichnessT(1, 1, 1, 0.3));
+    const firmStop = blotPoolRgb("#40c0a0", blotRichnessT(1, 1, 1, 1));
+    expect(firmStop.r + firmStop.g + firmStop.b).toBeLessThan(
+      lightStop.r + lightStop.g + lightStop.b,
+    );
 
     const tip = 8;
     const rest = inkDrawContext();
@@ -2116,5 +2123,42 @@ describe("grain and blot pooling (Phase 2)", () => {
       styles[styles.length - 1].lineWidth,
     );
     expect(pooled[3].lineWidth).toBeCloseTo(styles[3].lineWidth);
+  });
+
+  it("applies pressure to pooling richness at a halted tip", () => {
+    const lightPts = [
+      { x: 0, y: 0, pressure: 0.25, slowness: 1 },
+      { x: 40, y: 0, pressure: 0.25, slowness: 1 },
+    ];
+    const firmPts = [
+      { x: 0, y: 0, pressure: 0.95, slowness: 1 },
+      { x: 40, y: 0, pressure: 0.95, slowness: 1 },
+    ];
+    const base = {
+      kind: "draw" as const,
+      color: "#40c0a0",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: true,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 1,
+    };
+    const light = applyInkPoolingAtEnds(
+      inkStrokePointStyles({ ...base, points: lightPts }, 0),
+      { ...base, points: lightPts },
+      lightPts,
+      0,
+    );
+    const firm = applyInkPoolingAtEnds(
+      inkStrokePointStyles({ ...base, points: firmPts }, 0),
+      { ...base, points: firmPts },
+      firmPts,
+      0,
+    );
+    expect(firm[firm.length - 1].blotPool ?? 0).toBeGreaterThan(
+      light[light.length - 1].blotPool ?? 0,
+    );
   });
 });
