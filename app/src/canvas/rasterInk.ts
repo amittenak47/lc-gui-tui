@@ -1305,6 +1305,13 @@ export function trailingTipClusterStart(
 
 /** Pull adjacent quads over their shared edge so aliased fills do not show paper. */
 const RIBBON_QUAD_OVERLAP = 1.25;
+/**
+ * Extra along-chord overlap for a wash, as a fraction of the current chord.
+ * Only applied when the next/previous chord points the same way: a long pad at
+ * a corner sticks out of the ribbon instead of covering the next slab.
+ */
+const RIBBON_WASH_OVERLAP_FRAC = 0.5;
+const RIBBON_WASH_OVERLAP_MAX_PX = 40;
 
 function offsetAlong(
   a: { x: number; y: number },
@@ -1316,6 +1323,49 @@ function offsetAlong(
   const len = Math.hypot(dx, dy);
   if (len < 1e-6) return { x: 0, y: 0 };
   return { x: (dx / len) * pad, y: (dy / len) * pad };
+}
+
+function ribbonMid(
+  left: readonly { x: number; y: number }[],
+  right: readonly { x: number; y: number }[],
+  i: number,
+): { x: number; y: number } {
+  return {
+    x: (left[i].x + right[i].x) / 2,
+    y: (left[i].y + right[i].y) / 2,
+  };
+}
+
+function unitDelta(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): { x: number; y: number; len: number } {
+  const x = bx - ax;
+  const y = by - ay;
+  const len = Math.hypot(x, y);
+  if (len < 1e-6) return { x: 0, y: 0, len: 0 };
+  return { x: x / len, y: y / len, len };
+}
+
+function washPad(chord: number, align: number): number {
+  if (chord < 1e-6 || align <= 0) return RIBBON_QUAD_OVERLAP;
+  const extra = Math.min(chord * RIBBON_WASH_OVERLAP_FRAC, RIBBON_WASH_OVERLAP_MAX_PX);
+  return RIBBON_QUAD_OVERLAP + align * Math.max(0, extra - RIBBON_QUAD_OVERLAP);
+}
+
+function addGradientStops(
+  g: CanvasGradient,
+  stops: readonly (readonly [number, string])[],
+): void {
+  let last = -1;
+  for (const [t, color] of stops) {
+    const clamped = Math.min(1, Math.max(0, t));
+    if (last >= 0 && clamped <= last + 1e-6) continue;
+    g.addColorStop(clamped, color);
+    last = clamped;
+  }
 }
 
 function fillInkRibbonQuads(
@@ -1345,31 +1395,79 @@ function fillInkRibbonQuads(
 
   const canGrad =
     typeof (ctx as CanvasRenderingContext2D).createLinearGradient === "function";
+  const wash = Boolean(fills) && canGrad;
   for (let index = 0; index < left.length - 1; index++) {
     const a = fills?.[index];
     const b = fills?.[index + 1] ?? a;
+    const mid0 = ribbonMid(left, right, index);
+    const mid1 = ribbonMid(left, right, index + 1);
+    const along = unitDelta(mid0.x, mid0.y, mid1.x, mid1.y);
+    const chord = along.len;
+    let backAlign = 0;
+    let fwdAlign = 0;
+    if (wash && chord > 1e-6) {
+      if (index > 0) {
+        const midPrev = ribbonMid(left, right, index - 1);
+        const prevDir = unitDelta(midPrev.x, midPrev.y, mid0.x, mid0.y);
+        if (prevDir.len > 1e-6) {
+          backAlign = Math.max(0, prevDir.x * along.x + prevDir.y * along.y);
+        }
+      }
+      if (index + 2 < left.length) {
+        const midNext = ribbonMid(left, right, index + 2);
+        const nextDir = unitDelta(mid1.x, mid1.y, midNext.x, midNext.y);
+        if (nextDir.len > 1e-6) {
+          fwdAlign = Math.max(0, along.x * nextDir.x + along.y * nextDir.y);
+        }
+      }
+    }
+    const backPad = wash ? washPad(chord, backAlign) : RIBBON_QUAD_OVERLAP;
+    const fwdPad = wash ? washPad(chord, fwdAlign) : RIBBON_QUAD_OVERLAP;
     // Adjacent vertices almost always differ once RGB is unrounded. A solid
     // fill here is what turns the wash into trapezoid facets.
-    if (a && b && canGrad && a !== b) {
-      const g = (ctx as CanvasRenderingContext2D).createLinearGradient(
-        (left[index].x + right[index].x) / 2,
-        (left[index].y + right[index].y) / 2,
-        (left[index + 1].x + right[index + 1].x) / 2,
-        (left[index + 1].y + right[index + 1].y) / 2,
-      );
-      g.addColorStop(0, a);
-      g.addColorStop(1, b);
-      ctx.fillStyle = g;
+    if (a && b && canGrad && chord > 1e-6) {
+      const prev = (index > 0 ? fills?.[index - 1] : undefined) ?? a;
+      const next = fills?.[index + 2] ?? b;
+      if (wash && (prev !== a || a !== b || next !== b)) {
+        const span = backPad + chord + fwdPad;
+        const g = (ctx as CanvasRenderingContext2D).createLinearGradient(
+          mid0.x - along.x * backPad,
+          mid0.y - along.y * backPad,
+          mid1.x + along.x * fwdPad,
+          mid1.y + along.y * fwdPad,
+        );
+        addGradientStops(g, [
+          [0, prev],
+          [backPad / span, a],
+          [(backPad + chord) / span, b],
+          [1, next],
+        ]);
+        ctx.fillStyle = g;
+      } else if (a !== b) {
+        const g = (ctx as CanvasRenderingContext2D).createLinearGradient(
+          mid0.x,
+          mid0.y,
+          mid1.x,
+          mid1.y,
+        );
+        g.addColorStop(0, a);
+        g.addColorStop(1, b);
+        ctx.fillStyle = g;
+      } else {
+        ctx.fillStyle = a;
+      }
     } else if (a) {
       ctx.fillStyle = a;
     }
-    const dL = offsetAlong(left[index], left[index + 1], RIBBON_QUAD_OVERLAP);
-    const dR = offsetAlong(right[index], right[index + 1], RIBBON_QUAD_OVERLAP);
+    const dL0 = offsetAlong(left[index], left[index + 1], backPad);
+    const dL1 = offsetAlong(left[index], left[index + 1], fwdPad);
+    const dR0 = offsetAlong(right[index], right[index + 1], backPad);
+    const dR1 = offsetAlong(right[index], right[index + 1], fwdPad);
     ctx.beginPath();
-    ctx.moveTo(left[index].x - dL.x, left[index].y - dL.y);
-    ctx.lineTo(left[index + 1].x + dL.x, left[index + 1].y + dL.y);
-    ctx.lineTo(right[index + 1].x + dR.x, right[index + 1].y + dR.y);
-    ctx.lineTo(right[index].x - dR.x, right[index].y - dR.y);
+    ctx.moveTo(left[index].x - dL0.x, left[index].y - dL0.y);
+    ctx.lineTo(left[index + 1].x + dL1.x, left[index + 1].y + dL1.y);
+    ctx.lineTo(right[index + 1].x + dR1.x, right[index + 1].y + dR1.y);
+    ctx.lineTo(right[index].x - dR0.x, right[index].y - dR0.y);
     ctx.closePath();
     ctx.fill();
   }
