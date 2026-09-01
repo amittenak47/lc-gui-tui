@@ -1457,8 +1457,7 @@ describe("paintInkDisc tip vs join", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
     expect(drawCtx.radialGradients).toBe(0);
-    expect(drawCtx.strokeCount).toBe(0);
-    expect(drawCtx.fillCount).toBeGreaterThan(1);
+    expect(drawCtx.strokeCount).toBeGreaterThan(0);
   });
 
   it("paints hairline speed ink with stroke() like the normal pen", () => {
@@ -1526,7 +1525,7 @@ describe("paintInkDisc tip vs join", () => {
     expect(drawCtx.strokeComposites.every((c) => c !== "destination-out")).toBe(true);
   });
 
-  it("keeps a wide speed-ink stroke on the ribbon", () => {
+  it("does not grain-punch wide speed ink either", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(
       drawCtx.ctx,
@@ -1540,6 +1539,52 @@ describe("paintInkDisc tip vs join", () => {
         speedInk: 1,
         speedBlotBlend: 0,
         speedFade: 0,
+        grain: 1,
+        points: points([0, 0], [40, 0], [80, 0]),
+      },
+      1,
+      { capHead: false, capEnd: false },
+    );
+    expect(drawCtx.strokeCount).toBeGreaterThan(0);
+    expect(drawCtx.strokeComposites.every((c) => c !== "destination-out")).toBe(true);
+  });
+
+  it("paints wide speed ink with stroke() like the size-1 pen", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#112233",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 1,
+        speedBlotBlend: 0,
+        speedFade: 0,
+        points: points([0, 0], [40, 0], [80, 0]),
+      },
+      1,
+      { capHead: false, capEnd: false },
+    );
+    expect(drawCtx.strokeCount).toBeGreaterThan(0);
+  });
+
+  it("keeps a wide drying stroke on the ribbon", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#112233",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 0,
+        speedBlotBlend: 0,
+        speedFade: 1,
         points: points([0, 0], [40, 0], [80, 0]),
       },
       1,
