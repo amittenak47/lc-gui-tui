@@ -1941,6 +1941,31 @@ describe("grain and blot pooling (Phase 2)", () => {
     expect(offAxis.length).toBeGreaterThan(0);
   });
 
+  it("etches grain through the trail, not only the caps", () => {
+    const textured = inkDrawContext();
+    applyInkOp(
+      textured.ctx,
+      {
+        kind: "draw",
+        color: "#808080",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        grain: 0.8,
+        points: points([0, 0], [80, 0]),
+      },
+      1,
+    );
+    const mid = textured.strokes.filter((s) => {
+      const x = (s.from.x + s.to.x) / 2;
+      return x > 20 && x < 60;
+    });
+    expect(mid.length).toBeGreaterThan(30);
+    const offAxis = mid.filter((s) => Math.abs((s.from.y + s.to.y) / 2) > 0.8);
+    expect(offAxis.length).toBeGreaterThan(0);
+  });
+
   it("does not overshoot the nib when blot is 0", () => {
     const tip = 6;
     expect(inkDiscRadii(tip, 0, 0).outerR).toBeCloseTo(tip);
