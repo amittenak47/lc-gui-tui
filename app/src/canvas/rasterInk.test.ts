@@ -56,8 +56,6 @@ import {
   coalesceRibbonPoints,
   densifyRibbonPoints,
   fillInkRibbon,
-  livePaintQueueStart,
-  LIVE_PAINT_QUEUE_NIBS,
   inkDiscRadii,
   discSealPad,
   isDiscPrimaryPath,
@@ -1756,49 +1754,6 @@ describe("disc-primary dwell path", () => {
     applyInkOp(drawCtx.ctx, op, 1);
     // One growing disc stamp — not one fill per ribbon segment.
     expect(drawCtx.fillCount).toBe(1);
-  });
-
-  it("does not paint a continuation chunk as a tap disc", () => {
-    const wiggle = points([0, 0], [5, 1], [7, 0], [6, -1], [3, 0], [4, 1]);
-    expect(isDiscPrimaryPath(wiggle, 8)).toBe(true);
-    const op: InkOp = {
-      kind: "draw",
-      color: "#000",
-      baseWidth: 8,
-      maxFullness: 1,
-      pressureClip: 1,
-      pressureSensitive: false,
-      speedInk: 1,
-      speedBlotBlend: 0.55,
-      points: wiggle,
-    };
-    const asTap = inkDrawContext();
-    applyInkOp(asTap.ctx, op, 1);
-    expect(asTap.fillCount).toBe(1);
-
-    const cont = inkDrawContext();
-    applyInkOp(cont.ctx, op, 1, { capHead: false, capEnd: false });
-    expect(cont.fillCount).not.toBe(1);
-    expect(cont.linearGradients).toBeGreaterThan(0);
-  });
-});
-
-describe("livePaintQueueStart", () => {
-  it("keeps a short stroke in the live queue", () => {
-    expect(livePaintQueueStart(points([0, 0], [1, 0]), 8)).toBe(0);
-  });
-
-  it("evicts behind about four nibs of the tip", () => {
-    const nib = 2;
-    const pts = points([0, 0], [10, 0], [20, 0], [30, 0], [40, 0]);
-    const start = livePaintQueueStart(pts, nib, LIVE_PAINT_QUEUE_NIBS);
-    expect(start).toBeGreaterThan(0);
-    expect(start).toBeLessThan(pts.length - 1);
-    let tail = 0;
-    for (let i = start; i < pts.length - 1; i++) {
-      tail += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
-    }
-    expect(tail).toBeGreaterThanOrEqual(nib * LIVE_PAINT_QUEUE_NIBS - 1e-6);
   });
 });
 

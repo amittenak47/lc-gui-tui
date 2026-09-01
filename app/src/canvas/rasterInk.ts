@@ -2534,7 +2534,7 @@ function drawRibbonStrokeFrom(
   if (slice.length < 2 || styles.length < 2) return;
 
   const nib = nibWidth(op);
-  if (blotBlend > 1e-3 && fromIndex === 0 && capHead && isDiscPrimaryPath(slice, nib)) {
+  if (blotBlend > 1e-3 && isDiscPrimaryPath(slice, nib)) {
     const last = styles[styles.length - 1];
     if (!last) return;
     const tipR = paintedWidth(last.lineWidth, pixelScale) / 2;
@@ -2975,11 +2975,11 @@ function drawStrokeFrom(
   const blotBlend = resolveSpeedBlotBlend(op);
   // Contact cluster: one disc at the original point, including pressure-on
   // flat ink. Do not fan jitter into spokes or heading-flipped half-caps.
-  if (!op.highlight && fromIndex === 0 && capHead && isDiscPrimaryPath(points, nib)) {
+  if (!op.highlight && fromIndex === 0 && isDiscPrimaryPath(points, nib)) {
     paintContactDisc(ctx, op, points, pixelScale);
     return;
   }
-  if (blotBlend > 1e-3 && fromIndex === 0 && capHead && isDiscPrimaryPath(slice, nib)) {
+  if (blotBlend > 1e-3 && isDiscPrimaryPath(slice, nib)) {
     const tip = points[points.length - 1];
     const styles = inkStrokePointStyles(op, start);
     const last = styles[styles.length - 1];
@@ -3107,31 +3107,6 @@ function eraseStampsFrom(
   ctx.fill();
 }
 
-/**
- * Live overlay keeps a bounded paint queue at the tip. Older points are baked
- * once, so each frame re-derives a constant tail rather than the whole stroke.
- */
-export const LIVE_PAINT_QUEUE_NIBS = 4;
-
-/**
- * Oldest index still in the live paint queue (inclusive). `0` means the whole
- * stroke still fits in the queue.
- */
-export function livePaintQueueStart(
-  points: readonly ScenePoint[],
-  nib: number,
-  queueNibs = LIVE_PAINT_QUEUE_NIBS,
-): number {
-  if (points.length < 3) return 0;
-  const minTravel = Math.max(nib, 1e-6) * queueNibs;
-  let acc = 0;
-  for (let i = points.length - 1; i > 0; i--) {
-    acc += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
-    if (acc >= minTravel) return i - 1;
-  }
-  return 0;
-}
-
 /** Apply one committed or live op in scene space (caller sets the transform). */
 export type ApplyInkOptions = { capEnd?: boolean; capHead?: boolean };
 
@@ -3225,17 +3200,9 @@ export function applyInkOpFrom(
   op: InkOp,
   fromIndex: number,
   pixelScale = 0,
-  options?: ApplyInkOptions,
 ): number {
   if (op.kind === "draw") {
-    drawStrokeFrom(
-      ctx,
-      op,
-      fromIndex,
-      pixelScale,
-      options?.capEnd ?? false,
-      options?.capHead ?? false,
-    );
+    drawStrokeFrom(ctx, op, fromIndex, pixelScale, false);
     ctx.globalCompositeOperation = "source-over";
     return Math.max(fromIndex, op.points.length - 1);
   }

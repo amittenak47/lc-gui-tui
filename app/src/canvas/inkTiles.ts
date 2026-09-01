@@ -22,7 +22,6 @@
 
 import {
   applyInkOp,
-  applyInkOpFrom,
   applyInkOpInHost,
   HIGHLIGHT_WIDTH_SCALE,
   hostScrollDx,
@@ -849,12 +848,6 @@ export class InkTileCache {
  * butt-ended rectangle until lift glued half-discs on — and those half-discs
  * left a paper hairline on the butt.
  */
-export type PaintLiveOpOptions = {
-  fromIndex?: number;
-  capEnd?: boolean;
-  capHead?: boolean;
-};
-
 export function paintLiveOp(
   ctx: CanvasRenderingContext2D,
   op: InkOp,
@@ -862,15 +855,10 @@ export function paintLiveOp(
   dpr: number,
   clip: SceneBounds | null,
   hosts: ScrollHostLookup = new Map(),
-  options?: PaintLiveOpOptions,
 ): void {
   setInkSceneTransform(ctx, viewport, dpr);
   const pixelScale = viewport.zoom * dpr;
-  const fromIndex = options?.fromIndex ?? 0;
-  const capOptions = {
-    capEnd: options?.capEnd ?? true,
-    capHead: options?.capHead ?? fromIndex === 0,
-  };
+  const capOptions = { capEnd: true, capHead: true };
   const paint = () => {
     if (isHostBoundOp(op)) {
       const host = hosts.get(op.hostKey!);
@@ -886,10 +874,6 @@ export function paintLiveOp(
       } else {
         applyInkOp(ctx, op, pixelScale, capOptions);
       }
-      return;
-    }
-    if (fromIndex > 0 && op.kind === "draw") {
-      applyInkOpFrom(ctx, op, fromIndex, pixelScale, capOptions);
       return;
     }
     applyInkOp(ctx, op, pixelScale, capOptions);
