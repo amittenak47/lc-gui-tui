@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   applyInkOp,
   applyInkPoolingAtEnds,
+  buildPolylineGrid,
+  nearestPolylineIndex,
+  nearestPolylineIndexIn,
   clampExportScale,
   eraserSceneRadius,
   eraserScreenRadius,
@@ -2696,5 +2699,111 @@ describe("grain and blot pooling (Phase 2)", () => {
     applyInkOp(plain.ctx, { ...op, blotTipGrow: 0 }, 1);
     expect(drawCtx.arcRadii.length).toBe(plain.arcRadii.length);
     expect(drawCtx.arcRadii.every((r) => r <= tipHalf + 1e-6)).toBe(true);
+  });
+});
+
+/* ------------------------------------------------- pooling cost --- */
+
+/**
+ * Pooling used to walk the whole polyline once per halt, and a halt is minted
+ * at every hold — so cursive turned a frame into O(points x halts) and the pen
+ * fell further behind the hand the longer the line got. These pin the two
+ * properties that fix rests on: the envelope is local, and the grid that finds
+ * a halt's place on the stroke gives the same answer the full scan did.
+ */
+describe("ink pooling stays local to its envelope", () => {
+  const strokePoints = (n: number, len: number): ScenePoint[] =>
+    Array.from({ length: n }, (_, i) => ({
+      x: (i / (n - 1)) * len,
+      y: 100,
+      pressure: 0.5,
+      slowness: INK_SLOWNESS_NEUTRAL,
+    }));
+
+  const pooledFor = (points: ScenePoint[], halts: { x: number; y: number }[]) => {
+    const op: InkOp = {
+      kind: "draw",
+      color: "#101014",
+      baseWidth: 6,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedBlotBlend: 1,
+      points,
+      blotHalts: halts.map((h) => ({ ...h, grow: 1 })),
+    };
+    const styles = inkStrokePointStyles(op, 0);
+    return { styles, pooled: applyInkPoolingAtEnds(styles, op, points, 0) };
+  };
+
+  it("leaves vertices far from every hold exactly as they were", () => {
+    const points = strokePoints(900, 3000);
+    // One hold near the start; the far end is many nib widths away.
+    const { styles, pooled } = pooledFor(points, [{ x: 120, y: 100 }]);
+    const nib = inkLineWidth(6, 0, false);
+    for (let i = 0; i < points.length; i++) {
+      const farFromHold = Math.abs(points[i].x - 120) > nib * 6;
+      const farFromEnds =
+        points[i].x > nib * 6 && points[i].x < 3000 - nib * 6;
+      if (!farFromHold || !farFromEnds) continue;
+      expect(pooled[i].lineWidth).toBe(styles[i].lineWidth);
+      expect(pooled[i].blotPool).toBeUndefined();
+    }
+  });
+
+  it("still widens the ribbon at the hold", () => {
+    const points = strokePoints(900, 3000);
+    const { styles, pooled } = pooledFor(points, [{ x: 1500, y: 100 }]);
+    let at = 0;
+    for (let i = 1; i < points.length; i++) {
+      if (Math.abs(points[i].x - 1500) < Math.abs(points[at].x - 1500)) at = i;
+    }
+    expect(pooled[at].lineWidth).toBeGreaterThan(styles[at].lineWidth);
+    expect(pooled[at].blotPool ?? 0).toBeGreaterThan(0);
+  });
+
+  it("adding far-apart holds does not disturb each other's vertices", () => {
+    const points = strokePoints(900, 3000);
+    const one = pooledFor(points, [{ x: 400, y: 100 }]).pooled;
+    const many = pooledFor(points, [
+      { x: 400, y: 100 },
+      { x: 1400, y: 100 },
+      { x: 2400, y: 100 },
+    ]).pooled;
+    for (let i = 0; i < points.length; i++) {
+      if (Math.abs(points[i].x - 400) > inkLineWidth(6, 0, false) * 6) continue;
+      expect(many[i].lineWidth).toBeCloseTo(one[i].lineWidth, 12);
+    }
+  });
+});
+
+describe("polyline grid finds the same vertex as a full scan", () => {
+  it("agrees on random clouds, exact ties included", () => {
+    let seed = 987654321;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    for (let trial = 0; trial < 40; trial++) {
+      const n = 64 + Math.floor(rnd() * 700);
+      // Quantise on some trials so two vertices really do tie for nearest; the
+      // scan keeps the first of them and the grid has to agree.
+      const step = trial % 3 === 0 ? 5 : 0;
+      const pts = Array.from({ length: n }, () => {
+        const x = rnd() * 400;
+        const y = rnd() * 400;
+        return step
+          ? { x: Math.round(x / step) * step, y: Math.round(y / step) * step }
+          : { x, y };
+      });
+      const grid = buildPolylineGrid(pts);
+      expect(grid).not.toBeNull();
+      for (let k = 0; k < 20; k++) {
+        const at =
+          k % 4 === 0 ? pts[Math.floor(rnd() * n)] : { x: rnd() * 460 - 30, y: rnd() * 460 - 30 };
+        expect(nearestPolylineIndexIn(grid!, pts, at)).toBe(nearestPolylineIndex(pts, at));
+      }
+    }
+  });
+
+  it("declines to build for a stroke too short to be worth it", () => {
+    expect(buildPolylineGrid([{ x: 0, y: 0 }, { x: 1, y: 1 }])).toBeNull();
   });
 });

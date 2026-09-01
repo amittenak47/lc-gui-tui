@@ -2253,7 +2253,7 @@ function polylineArcLengths(points: readonly { x: number; y: number }[]): Float6
   return s;
 }
 
-function nearestPolylineIndex(
+export function nearestPolylineIndex(
   points: readonly { x: number; y: number }[],
   at: { x: number; y: number },
 ): number {
@@ -2267,6 +2267,126 @@ function nearestPolylineIndex(
     }
   }
   return best;
+}
+
+/**
+ * Uniform bucket grid over a polyline, for repeated nearest-vertex queries.
+ *
+ * {@link applyInkPoolingAtEnds} asks "where on the stroke is this?" once per
+ * halt per frame, and a halt is minted at every hold — so cursive turned that
+ * into a full polyline scan per letter join, every frame, which is half of what
+ * made a long stroke crawl. One O(points) build answers them all in O(1) each.
+ *
+ * Cells are stored CSR-style (`starts` + `items`) rather than as arrays of
+ * arrays: it is built on every ribbon paint, and thousands of small arrays per
+ * frame is the allocation churn this is trying to avoid in the first place.
+ */
+export interface PolylineGrid {
+  cell: number;
+  minX: number;
+  minY: number;
+  cols: number;
+  rows: number;
+  starts: Int32Array;
+  items: Int32Array;
+}
+
+export function buildPolylineGrid(
+  points: readonly { x: number; y: number }[],
+): PolylineGrid | null {
+  const n = points.length;
+  if (n < 64) return null; // a linear scan is cheaper than the build
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const p = points[i];
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+  const spanX = maxX - minX;
+  const spanY = maxY - minY;
+  // Aim at a handful of points per cell; a degenerate span still gets one cell.
+  const area = Math.max(spanX * spanY, 1e-9);
+  const cell = Math.max(Math.sqrt((area * 4) / n), 1e-6);
+  const cols = Math.max(1, Math.min(4096, Math.floor(spanX / cell) + 1));
+  const rows = Math.max(1, Math.min(4096, Math.floor(spanY / cell) + 1));
+
+  const counts = new Int32Array(cols * rows + 1);
+  const cellOf = (p: { x: number; y: number }) => {
+    const cx = Math.max(0, Math.min(cols - 1, Math.floor((p.x - minX) / cell)));
+    const cy = Math.max(0, Math.min(rows - 1, Math.floor((p.y - minY) / cell)));
+    return cy * cols + cx;
+  };
+  for (let i = 0; i < n; i++) counts[cellOf(points[i]) + 1]++;
+  for (let c = 0; c < cols * rows; c++) counts[c + 1] += counts[c];
+  const starts = counts;
+  const items = new Int32Array(n);
+  const cursor = new Int32Array(cols * rows);
+  for (let i = 0; i < n; i++) {
+    const c = cellOf(points[i]);
+    items[starts[c] + cursor[c]++] = i;
+  }
+  return { cell, minX, minY, cols, rows, starts, items };
+}
+
+/**
+ * Same answer as {@link nearestPolylineIndex}, including its tie-break.
+ *
+ * The linear scan keeps the *first* index at the minimum (it advances only on
+ * a strictly smaller distance), and a stroke really can hold ties — a dwell
+ * stamps the same coordinate many times over. Visiting cells in a different
+ * order than the scan would otherwise pick a different one of those, move the
+ * pool by a vertex, and stop this from being a no-op on screen.
+ */
+export function nearestPolylineIndexIn(
+  grid: PolylineGrid,
+  points: readonly { x: number; y: number }[],
+  at: { x: number; y: number },
+): number {
+  const { cell, minX, minY, cols, rows, starts, items } = grid;
+  const qx = Math.max(0, Math.min(cols - 1, Math.floor((at.x - minX) / cell)));
+  const qy = Math.max(0, Math.min(rows - 1, Math.floor((at.y - minY) / cell)));
+  let best = -1;
+  let bestD2 = Infinity;
+  const maxRing = Math.max(cols, rows);
+  for (let ring = 0; ring <= maxRing; ring++) {
+    // Anything beyond this ring is at least `(ring - 1) * cell` away, so once a
+    // candidate beats that the search is provably done.
+    if (best >= 0) {
+      const floorDist = (ring - 1) * cell;
+      if (floorDist > 0 && floorDist * floorDist > bestD2) break;
+    }
+    const x0 = qx - ring;
+    const x1 = qx + ring;
+    const y0 = qy - ring;
+    const y1 = qy + ring;
+    for (let cy = y0; cy <= y1; cy++) {
+      if (cy < 0 || cy >= rows) continue;
+      const edgeRow = cy === y0 || cy === y1;
+      for (let cx = x0; cx <= x1; cx++) {
+        if (cx < 0 || cx >= cols) continue;
+        // Interior cells were covered by an earlier ring.
+        if (!edgeRow && cx !== x0 && cx !== x1) continue;
+        const c = cy * cols + cx;
+        for (let k = starts[c]; k < starts[c + 1]; k++) {
+          const i = items[k];
+          const dx = points[i].x - at.x;
+          const dy = points[i].y - at.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < bestD2 || (d2 === bestD2 && i < best)) {
+            bestD2 = d2;
+            best = i;
+          }
+        }
+      }
+    }
+  }
+  return best < 0 ? 0 : best;
 }
 
 /**
@@ -2289,6 +2409,8 @@ export function applyInkPoolingAtEnds(
   const growAt = new Float64Array(out.length);
   const richAt = new Float64Array(out.length);
   const arc = polylineArcLengths(points);
+  // Built once, then reused by the tip, the head and every halt.
+  const grid = buildPolylineGrid(points);
 
   const paintAlong = (
     at: { x: number; y: number },
@@ -2299,9 +2421,35 @@ export function applyInkPoolingAtEnds(
   ) => {
     const g = clamp01(amount);
     if (g < 1e-6) return;
-    const origin = nearestPolylineIndex(points, at);
-    for (let index = 0; index < points.length; index++) {
-      const dist = Math.abs(arc[index] - arc[origin]);
+    const origin = grid
+      ? nearestPolylineIndexIn(grid, points, at)
+      : nearestPolylineIndex(points, at);
+    /*
+     * Walk out from the origin rather than over the whole polyline.
+     *
+     * `arc` is non-decreasing and `poolingFalloff` is zero at and past
+     * `radius`, so the vertices a pool can touch are one contiguous run around
+     * `origin`. Every index past the first miss on either side used to compute
+     * a weight of exactly zero and leave `target` alone — same array out, work
+     * proportional to the envelope instead of to the stroke.
+     *
+     * This is what made a held stroke cost O(points x halts) every frame.
+     * A hold mints a halt (see {@link stampInkBlotHalt}) and cursive mints one
+     * at every letter join, so both factors grew as the writer wrote and the
+     * pen fell further behind the hand the longer the line got.
+     */
+    const from = arc[origin];
+    // A degenerate envelope still marks its own vertex, as the full scan did.
+    const cutoff = radius < 1e-6 ? 1e-6 : radius;
+    for (let index = origin; index < points.length; index++) {
+      const dist = arc[index] - from;
+      if (dist >= cutoff) break;
+      const w = poolingFalloff(dist, radius, plateau) * g;
+      if (w > target[index]) target[index] = w;
+    }
+    for (let index = origin - 1; index >= 0; index--) {
+      const dist = from - arc[index];
+      if (dist >= cutoff) break;
       const w = poolingFalloff(dist, radius, plateau) * g;
       if (w > target[index]) target[index] = w;
     }
