@@ -6739,6 +6739,13 @@ body[data-lc-sash-drag="horizontal"] {
   transition: opacity 220ms ease;
 }
 
+.lc-map-chrome-stack.has-wake.is-snap .lc-chrome-stack-tray,
+.lc-map-chrome-left.has-wake.is-snap .lc-chrome-stack-tray,
+.lc-map-chrome-stack.has-wake.is-snap > .lc-chrome-wake,
+.lc-map-chrome-left.has-wake.is-snap > .lc-chrome-wake {
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lc-map-chrome-stack > .lc-chrome-eye,
   .lc-map-chrome-stack > .lc-lined-toggle,
