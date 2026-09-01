@@ -161,9 +161,10 @@ export const INK_SPEED_NEUTRAL_PX_MS = 1.2;
  * anyway.
  */
 export const INK_SPEED_WIDTH_RANGE = 1.35;
-export const INK_SPEED_ALPHA_BASE = 0.55;
-/** Headroom under opaque at full slow: BASE * (1 + RANGE) ≈ 0.94. */
-export const INK_SPEED_ALPHA_RANGE = 0.5;
+/** Wash at ordinary writing pace when Ink Drying is 100%. Higher = stays wetter. */
+export const INK_SPEED_ALPHA_BASE = 0.7;
+/** How far a flick may pull the wash below {@link INK_SPEED_ALPHA_BASE}. */
+export const INK_SPEED_ALPHA_RANGE = 0.28;
 /** Log-span for mapping hand speed to slowness — tighter so writing hits extremes. */
 export const INK_SPEED_SPAN = 2.0;
 
@@ -415,8 +416,8 @@ export interface InkDrawOp {
    */
   blotHalts?: InkBlotHalt[];
   /**
-   * How much pace washes opacity toward pencil (0–1). Stamped at draw time.
-   * Absent on older speed-ink strokes → full wash (today's 0.55 base).
+   * How much pace washes color toward paper (0–1). Stamped at draw time.
+   * Absent on older speed-ink strokes → full wash ({@link INK_SPEED_ALPHA_BASE}).
    */
   speedFade?: number;
   /**
@@ -2041,15 +2042,53 @@ export function inkPoolingWidthGain(
   return 1 + INK_BLOT_SIZE_RANGE * clamp01(blotBlend) * clamp01(growT) * clamp01(pressureAmt);
 }
 
-/** How far a pool flares along the stroke, so the ribbon swells instead of a bead. */
-function poolingFlareRadius(nib: number): number {
-  return nib * (1.35 + INK_BLOT_SIZE_RANGE);
+/**
+ * Hold the full pooled width under the round cap, then taper. A falloff that
+ * starts shrinking immediately leaves the cap sitting on a thinner trail.
+ */
+function poolingEnvelope(
+  nib: number,
+  growT: number,
+  blotBlend: number,
+): { plateau: number; radius: number } {
+  const plateau = (nib / 2) * inkPoolingWidthGain(growT, blotBlend, 1);
+  return { plateau, radius: plateau + nib * (1.15 + INK_BLOT_SIZE_RANGE) };
 }
 
-function poolingFalloff(dist: number, radius: number): number {
+function poolingFalloff(dist: number, radius: number, plateau: number): number {
   if (radius < 1e-6) return dist < 1e-6 ? 1 : 0;
-  const t = clamp01(1 - dist / radius);
+  if (dist <= plateau) return 1;
+  if (dist >= radius) return 0;
+  const span = radius - plateau;
+  if (span < 1e-6) return 1;
+  const t = clamp01(1 - (dist - plateau) / span);
   return t * t;
+}
+
+function polylineArcLengths(points: readonly { x: number; y: number }[]): Float64Array {
+  const s = new Float64Array(points.length);
+  for (let i = 1; i < points.length; i++) {
+    s[i] =
+      s[i - 1] +
+      Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  }
+  return s;
+}
+
+function nearestPolylineIndex(
+  points: readonly { x: number; y: number }[],
+  at: { x: number; y: number },
+): number {
+  let best = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < points.length; i++) {
+    const d = Math.hypot(points[i].x - at.x, points[i].y - at.y);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
 }
 
 /**
@@ -2069,17 +2108,32 @@ export function applyInkPoolingAtEnds(
   const out = styles.map((style) => ({ ...style }));
   const strokePts = op.points;
   const nib = nibWidth(op);
-  const flareR = poolingFlareRadius(nib);
   const growAt = new Float64Array(out.length);
+  const richAt = new Float64Array(out.length);
+  const arc = polylineArcLengths(points);
 
-  const mark = (at: { x: number; y: number }, growT: number) => {
+  const paintAlong = (
+    at: { x: number; y: number },
+    amount: number,
+    target: Float64Array,
+    plateau: number,
+    radius: number,
+  ) => {
+    const g = clamp01(amount);
+    if (g < 1e-6) return;
+    const origin = nearestPolylineIndex(points, at);
+    for (let index = 0; index < points.length; index++) {
+      const dist = Math.abs(arc[index] - arc[origin]);
+      const w = poolingFalloff(dist, radius, plateau) * g;
+      if (w > target[index]) target[index] = w;
+    }
+  };
+
+  const markGrow = (at: { x: number; y: number }, growT: number) => {
     const g = clamp01(growT);
     if (g < 1e-6) return;
-    for (let index = 0; index < points.length; index++) {
-      const dist = Math.hypot(points[index].x - at.x, points[index].y - at.y);
-      const w = poolingFalloff(dist, flareR) * g;
-      if (w > growAt[index]) growAt[index] = w;
-    }
+    const { plateau, radius } = poolingEnvelope(nib, g, blotBlend);
+    paintAlong(at, g, growAt, plateau, radius);
   };
 
   const lastIdx = out.length - 1;
@@ -2088,31 +2142,42 @@ export function applyInkPoolingAtEnds(
   const tipStart = trailingTipClusterStart(strokePts, nib);
   const tipPts =
     tipStart < strokePts.length ? strokePts.slice(tipStart) : [strokePts[strokePts.length - 1]];
-  mark(tip, resolveBlotTipGrow(op, tipPts, tipR));
+  markGrow(tip, resolveBlotTipGrow(op, tipPts, tipR));
+  // Ends stay a richer deposit than the trail even without a hold. Width does not
+  // grow from this floor — only blotTipGrow / halts fatten the ribbon.
+  const endFloor = blotBlend * INK_BLOT_END_FLOOR;
+  paintAlong(tip, endFloor, richAt, nib * 0.45, nib * 1.35);
 
   if (fromIndex === 0 && points.length >= 2) {
     const headR = out[0].lineWidth / 2;
     const cluster = prefixContactCluster(strokePts, headR);
-    mark(
-      points[0],
-      dwellBlotGrowT(cluster.length > 0 ? cluster : [strokePts[0]], headR, blotBlend),
-    );
+    const headCluster = cluster.length > 0 ? cluster : [strokePts[0]];
+    let headGrow = dwellBlotGrowT(headCluster, headR, blotBlend);
+    const tipStillAtHead =
+      Math.hypot(tip.x - points[0].x, tip.y - points[0].y) < Math.max(headR * 2, nib * 0.5);
+    if (tipStillAtHead) {
+      headGrow = Math.max(headGrow, resolveBlotTipGrow(op, headCluster, headR));
+    }
+    markGrow(points[0], headGrow);
+    paintAlong(points[0], endFloor, richAt, nib * 0.45, nib * 1.35);
   }
 
   if (op.blotHalts) {
     for (const halt of op.blotHalts) {
       if (halt.grow < 1e-6) continue;
-      mark(halt, halt.grow);
+      markGrow(halt, halt.grow);
     }
   }
 
   for (let index = 0; index < out.length; index++) {
     const growT = growAt[index];
-    if (growT < 1e-6) continue;
     const at = points[index];
     const slowness = at.slowness ?? INK_SLOWNESS_NEUTRAL;
     const pressureAmt = blotPressureAmt(op, at);
-    out[index].blotPool = blotRichnessT(growT, blotBlend, slowness, pressureAmt);
+    let poolT = growT > 1e-6 ? blotRichnessT(growT, blotBlend, slowness, pressureAmt) : 0;
+    if (richAt[index] > poolT) poolT = richAt[index] * clamp01(pressureAmt);
+    if (poolT > 1e-6) out[index].blotPool = poolT;
+    if (growT < 1e-6) continue;
     out[index].lineWidth *= inkPoolingWidthGain(growT, blotBlend, 1);
     delete out[index].dryGain;
   }
@@ -2216,9 +2281,9 @@ function scratchGrainAlongStroke(
    * Sampling `u * pathLen` from the origin moved every fibre as the stroke
    * grew, so grain crawled to the tip and the already-written ink went smooth.
    *
-   * One hairline per ~0.16 nib was too sparse to read on the ribbon (the pool
-   * disc packs ~50 fibres in one nib). Stamp a short across-ribbon cloud at
-   * each station, thick enough to mark a scratch pixel, still dest-out.
+   * One hairline per ~0.16 nib was too sparse to read on the ribbon (a compact
+   * disc stamp packs ~50 fibres in one nib). Stamp a short across-ribbon cloud
+   * at each station, thick enough to mark a scratch pixel, still dest-out.
    */
   const spacing = Math.max(nib * (0.10 + 0.05 * (1 - grain)), 0.32);
   const fibresAt = Math.max(2, Math.round(3 + 7 * grain));
@@ -2413,46 +2478,26 @@ function drawRibbonStrokeFrom(
       );
     }
     if (capEnd && tipClusterAt >= slice.length) {
+      // Same round cap as speed ink, at the already-flared half-width. Do not
+      // stamp a second pooling disc; the ribbon is the pool.
       const last = prepared.points.length - 1;
-      const tipGrow =
-        blotBlend > 1e-3
-          ? resolveBlotTipGrow(
-              op,
-              [prepared.points[last]],
-              prepared.styles[last].lineWidth / 2,
-            )
-          : 0;
-      if (tipGrow > 1e-3) {
-        const gain = inkPoolingWidthGain(tipGrow, blotBlend, 1);
-        paintTexturedDisc(
-          scratchCtx,
-          op,
-          prepared.points[last],
-          prepared.styles[last].lineWidth / Math.max(gain, 1e-6),
-          1,
-          pixelScale,
-          tipGrow,
-          1,
-        );
-      } else {
-        const radius = paintedWidth(prepared.styles[last].lineWidth, pixelScale) / 2;
-        const origin = points[0];
-        const heading =
-          segmentOutward(prepared.points[last], prepared.points[last - 1]) ??
-          hashedHeading(origin, CAP_SALT_TAIL);
-        if (fills?.[last]) scratchCtx.fillStyle = fills[last];
-        paintOpCap(
-          scratchCtx,
-          op,
-          prepared.points[last],
-          radius,
-          heading,
-          origin,
-          CAP_SALT_TAIL,
-          prepared.points[last].pressure,
-          1,
-        );
-      }
+      const radius = paintedWidth(prepared.styles[last].lineWidth, pixelScale) / 2;
+      const origin = points[0];
+      const heading =
+        segmentOutward(prepared.points[last], prepared.points[last - 1]) ??
+        hashedHeading(origin, CAP_SALT_TAIL);
+      if (fills?.[last]) scratchCtx.fillStyle = fills[last];
+      paintOpCap(
+        scratchCtx,
+        op,
+        prepared.points[last],
+        radius,
+        heading,
+        origin,
+        CAP_SALT_TAIL,
+        prepared.points[last].pressure,
+        1,
+      );
     }
     if (tipClusterAt < slice.length && prepared.points.length >= 2) {
       const last = prepared.points.length - 1;

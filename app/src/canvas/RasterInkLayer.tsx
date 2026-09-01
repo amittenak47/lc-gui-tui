@@ -1614,7 +1614,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             !!at &&
             !!origin &&
             Math.hypot(at.x - origin.x, at.y - origin.y) < Math.max(0.75, nib * 0.5);
-          if (at && !nearHead) stampInkBlotHalt(live, at, live.blotTipGrow ?? 0);
+          if (at) {
+            const haltAt =
+              nearHead && origin ? { ...at, x: origin.x, y: origin.y } : at;
+            stampInkBlotHalt(live, haltAt, live.blotTipGrow ?? 0);
+          }
         }
         lastMoveWallRef.current = performance.now();
         dwellCountRef.current = 0;
