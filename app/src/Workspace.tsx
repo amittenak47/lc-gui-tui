@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 
 import { useShell } from "./shellContext";
 
@@ -129,7 +129,9 @@ import {
   WHITEBOARD_DATASET,
   WHITEBOARD_TASK_ID,
   LEGACY_SCRATCHPAD_TASK_ID,
+  whiteboardPageFromView,
   whiteboardPageId,
+  whiteboardSavedCamera,
 } from "./templates/whiteboard";
 import { MOBILE_REGION_ORDER, REGION_BLURB, REGIONS, type RegionId } from "./templates/regions";
 import { splitProblemKey } from "./util/datasetKey";
@@ -2941,6 +2943,8 @@ export function Workspace({
         let restored = false;
         let notebookId: string | null = opts?.notebookId ?? null;
         let fnSaved: FootnoteWhiteboardContent | null = null;
+        let savedView: { scrollX: number; scrollY: number; zoom: number } | null =
+          null;
 
         // Read once and kept: the entry is used for the restore, for the
         // discard baseline, and again for the ink re-apply after the layer
@@ -2962,12 +2966,14 @@ export function Workspace({
               WHITEBOARD_PAGE_LIMIT,
               Math.max(1, fnSaved.pageCount, countWhiteboardPages(fnSaved.board.elements)),
             );
+            savedView = whiteboardSavedCamera(fnSaved.board.appState);
             const skeletons = buildWhiteboardTemplate(pages, dark);
             boardRef.current?.restoreBoard(fnSaved.board.elements, fnSaved.board.appState, {
               skeletons,
               ink: inkOpsFrom(fnSaved.board),
               files: fnSaved.board.files,
               inkPalettes: fnSaved.board.inkPalettes,
+              skipFit: Boolean(savedView),
             });
             setWhiteboardPageCount(pages);
             setWhiteboardNotebookId(null);
@@ -2980,12 +2986,23 @@ export function Workspace({
               WHITEBOARD_PAGE_LIMIT,
               Math.max(1, notebook.pageCount, countWhiteboardPages(notebook.board.elements)),
             );
+            savedView = whiteboardSavedCamera(notebook.board.appState);
+            const page = savedView
+              ? whiteboardPageFromView(savedView.scrollY, pages)
+              : 0;
+            // Board reads mobileRegion from this index. Restore and the later
+            // interactive flip must already be on the saved page, or the page
+            // change will width-fit and wipe the camera.
+            flushSync(() => {
+              setWhiteboardPageIndex(page);
+            });
             const skeletons = buildWhiteboardTemplate(pages, dark);
             boardRef.current?.restoreBoard(notebook.board.elements, notebook.board.appState, {
               skeletons,
               ink: inkOpsFrom(notebook.board),
               files: notebook.board.files,
               inkPalettes: notebook.board.inkPalettes,
+              skipFit: Boolean(savedView),
             });
             setWhiteboardPageCount(pages);
             setWhiteboardNotebookId(notebook.id);
@@ -3041,7 +3058,19 @@ export function Workspace({
             );
           }
         }
-        await boardRef.current?.settleFitView();
+        /*
+         * Saved camera, not a PDF-style width-fit.
+         *
+         * restoreBoard drops zoom/scroll and used to scheduleFitView, which
+         * width-fits pad-0. A notebook that was looking at a stroke in the
+         * middle of the page came back tight to the frame. Fresh pads still
+         * settleFitView.
+         */
+        if (savedView) {
+          boardRef.current?.restoreView(savedView);
+        } else {
+          await boardRef.current?.settleFitView();
+        }
 
         // Taken after the template and any restored ink have landed, so it is
         // the notebook as the writer first sees it. Anything that moves this

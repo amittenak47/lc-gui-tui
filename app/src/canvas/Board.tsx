@@ -7257,6 +7257,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (keepCamera) {
       if (!annotateCodeRef.current) armReadingScroll();
       /*
+       * A notebook camera is the view. Width-fitting here is what made a
+       * reopened whiteboard look like a PDF page filling the hole.
+       *
+       * Documents still keepY: a saved zoom from a different pane size has
+       * to be re-derived or the page spills out of a split.
+       */
+      if (isDrawPageRegion(next)) {
+        syncDocumentScrollBounds();
+        rasterInkRef.current?.syncCamera();
+        return;
+      }
+      /*
        * Keep where you were. Re-derive how big it should be.
        *
        * A saved camera carries a zoom that fitted the pane it was saved in, and

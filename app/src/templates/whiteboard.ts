@@ -45,6 +45,59 @@ export function scratchPageOrigin(index: number): { x: number; y: number } {
   };
 }
 
+function zoomFromAppState(raw: unknown): number {
+  if (typeof raw === "number") return raw;
+  if (!raw || typeof raw !== "object" || !("value" in raw)) return NaN;
+  const value = raw.value;
+  return typeof value === "number" ? value : NaN;
+}
+
+/**
+ * Camera to put back on reopen. Missing or non-positive zoom means fit the
+ * page (a brand-new pad, or a blob that never saved a view).
+ *
+ * Do not pass `pdfPage` into `restoreView` from here: a leftover film page
+ * would jump the PDF stack and skip scrollY.
+ */
+export function whiteboardSavedCamera(
+  appState:
+    | {
+        scrollX?: unknown;
+        scrollY?: unknown;
+        zoom?: unknown;
+      }
+    | null
+    | undefined,
+): { scrollX: number; scrollY: number; zoom: number } | null {
+  if (!appState) return null;
+  const zoom = zoomFromAppState(appState.zoom);
+  if (!(zoom > 0) || !Number.isFinite(zoom)) return null;
+  const scrollX =
+    typeof appState.scrollX === "number" && Number.isFinite(appState.scrollX)
+      ? appState.scrollX
+      : 0;
+  const scrollY =
+    typeof appState.scrollY === "number" && Number.isFinite(appState.scrollY)
+      ? appState.scrollY
+      : 0;
+  return { scrollX, scrollY, zoom };
+}
+
+/**
+ * Notebook page whose frame contains the top of the camera hole.
+ *
+ * Page 0 sits at y=0; page n at n × (height + gutter). Excalidraw's view top
+ * is `-scrollY` (or 0 when scrollY is 0).
+ */
+export function whiteboardPageFromView(scrollY: number, pageCount: number): number {
+  const count = Math.max(1, Math.floor(pageCount) || 1);
+  const pitch = SCRATCH_PAGE_H + SCRATCH_PAGE_GUTTER;
+  const sceneTop = scrollY === 0 ? 0 : -scrollY;
+  const index = Math.floor(sceneTop / pitch);
+  if (!Number.isFinite(index)) return 0;
+  return Math.max(0, Math.min(count - 1, index));
+}
+
 /**
  * One blank page frame. Nothing else — see the note where the title used to be.
  */
