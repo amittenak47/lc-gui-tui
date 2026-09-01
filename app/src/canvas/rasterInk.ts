@@ -162,9 +162,9 @@ export const INK_SPEED_NEUTRAL_PX_MS = 1.2;
  */
 export const INK_SPEED_WIDTH_RANGE = 1.35;
 /** Wash at ordinary writing pace when Ink Drying is 100%. Higher = stays wetter. */
-export const INK_SPEED_ALPHA_BASE = 0.7;
+export const INK_SPEED_ALPHA_BASE = 0.78;
 /** How far a flick may pull the wash below {@link INK_SPEED_ALPHA_BASE}. */
-export const INK_SPEED_ALPHA_RANGE = 0.28;
+export const INK_SPEED_ALPHA_RANGE = 0.22;
 /** Log-span for mapping hand speed to slowness — tighter so writing hits extremes. */
 export const INK_SPEED_SPAN = 2.0;
 
@@ -316,9 +316,13 @@ export function blotPoolRgb(
   };
 }
 
+function rgbCss(r: number, g: number, b: number): string {
+  return `rgb(${r.toFixed(2)}, ${g.toFixed(2)}, ${b.toFixed(2)})`;
+}
+
 function blotFillCss(color: string, poolT: number): string {
   const { r, g, b } = blotPoolRgb(color, poolT);
-  return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+  return rgbCss(r, g, b);
 }
 
 /** Mix ink toward paper so a wash reads as fading without a second alpha blit. */
@@ -339,7 +343,7 @@ export function dryWashRgb(
 
 function ribbonVertexFillCss(color: string, style: InkStrokeStyle): string {
   const washed = dryWashRgb(color, style.dryGain ?? 1);
-  const washedCss = `rgb(${Math.round(washed.r)}, ${Math.round(washed.g)}, ${Math.round(washed.b)})`;
+  const washedCss = rgbCss(washed.r, washed.g, washed.b);
   const poolT = style.blotPool ?? 0;
   if (poolT < 1e-3) return washedCss;
   return blotFillCss(washedCss, poolT);
@@ -1145,6 +1149,13 @@ function lerpInkStyle(a: InkStrokeStyle, b: InkStrokeStyle, t: number): InkStrok
   };
 }
 
+function ribbonWashJump(a: InkStrokeStyle, b: InkStrokeStyle): number {
+  return (
+    Math.abs((a.dryGain ?? 1) - (b.dryGain ?? 1)) +
+    Math.abs((a.blotPool ?? 0) - (b.blotPool ?? 0))
+  );
+}
+
 function mergeRibbonVertex(
   kept: ScenePoint,
   keptStyle: InkStrokeStyle,
@@ -1157,10 +1168,12 @@ function mergeRibbonVertex(
   );
   // Stay on the first sample of a near-duplicate cluster; absorb pace/style only.
   const point: ScenePoint = { ...kept, slowness: slow };
-  const style =
-    nextStyle.lineWidth > keptStyle.lineWidth || nextStyle.alpha > keptStyle.alpha
-      ? nextStyle
-      : keptStyle;
+  const mixed = lerpInkStyle(keptStyle, nextStyle, 0.5);
+  const style: InkStrokeStyle = {
+    ...mixed,
+    lineWidth: Math.max(keptStyle.lineWidth, nextStyle.lineWidth),
+    alpha: Math.max(keptStyle.alpha, nextStyle.alpha),
+  };
   return { point, style };
 }
 
@@ -1189,7 +1202,10 @@ export function coalesceRibbonPoints(
     const curStyle = styles[index];
     const half = paintedWidth(curStyle.lineWidth, pixelScale) / 2;
     const minDist = Math.max(0.5, half * RIBBON_COALESCE_HALF_FRAC);
-    if (Math.hypot(cur.x - prev.x, cur.y - prev.y) < minDist) {
+    if (
+      Math.hypot(cur.x - prev.x, cur.y - prev.y) < minDist &&
+      ribbonWashJump(prevStyle, curStyle) < 0.03
+    ) {
       const merged = mergeRibbonVertex(prev, prevStyle, cur, curStyle);
       outPts[outPts.length - 1] = merged.point;
       outStyles[outStyles.length - 1] = merged.style;
@@ -1205,16 +1221,13 @@ export function coalesceRibbonPoints(
   const prevStyle = outStyles[outStyles.length - 1];
   const half = paintedWidth(lastStyle.lineWidth, pixelScale) / 2;
   const minDist = Math.max(0.5, half * RIBBON_COALESCE_HALF_FRAC);
-  if (Math.hypot(last.x - prev.x, last.y - prev.y) < minDist) {
-    const slow = Math.max(
-      prev.slowness ?? INK_SLOWNESS_NEUTRAL,
-      last.slowness ?? INK_SLOWNESS_NEUTRAL,
-    );
-    outPts[outPts.length - 1] = { ...last, slowness: slow };
-    outStyles[outStyles.length - 1] =
-      lastStyle.lineWidth > prevStyle.lineWidth || lastStyle.alpha > prevStyle.alpha
-        ? lastStyle
-        : prevStyle;
+  if (
+    Math.hypot(last.x - prev.x, last.y - prev.y) < minDist &&
+    ribbonWashJump(prevStyle, lastStyle) < 0.03
+  ) {
+    const merged = mergeRibbonVertex(prev, prevStyle, last, lastStyle);
+    outPts[outPts.length - 1] = { ...last, slowness: merged.point.slowness };
+    outStyles[outStyles.length - 1] = merged.style;
   } else {
     outPts.push(last);
     outStyles.push(lastStyle);
@@ -1223,7 +1236,8 @@ export function coalesceRibbonPoints(
 }
 
 /**
- * Insert midpoints on long chords so thick ribbons do not show one-facet spokes.
+ * Insert midpoints on long chords so thick ribbons do not show one-facet spokes,
+ * and on large dryGain / blotPool jumps so the wash can lerp instead of banding.
  */
 export function densifyRibbonPoints(
   points: readonly ScenePoint[],
@@ -1244,8 +1258,10 @@ export function densifyRibbonPoints(
     const halfB = paintedWidth(bStyle.lineWidth, pixelScale) / 2;
     const maxStep = Math.max(0.75, ((halfA + halfB) / 2) * RIBBON_DENSIFY_HALF_FRAC);
     const dist = Math.hypot(b.x - a.x, b.y - a.y);
-    if (dist > maxStep) {
-      const count = Math.ceil(dist / maxStep);
+    const geomCount = dist > maxStep ? Math.ceil(dist / maxStep) : 1;
+    const washCount = Math.max(1, Math.ceil(ribbonWashJump(aStyle, bStyle) / 0.04));
+    const count = Math.max(geomCount, washCount);
+    if (count > 1) {
       for (let step = 1; step < count; step++) {
         const t = step / count;
         outPts.push(lerpScenePoint(a, b, t));
@@ -1323,7 +1339,9 @@ function fillInkRibbonQuads(
   for (let index = 0; index < left.length - 1; index++) {
     const a = fills?.[index];
     const b = fills?.[index + 1] ?? a;
-    if (a && b && a !== b && canGrad) {
+    // Adjacent vertices almost always differ once RGB is unrounded. A solid
+    // fill here is what turns the wash into trapezoid facets.
+    if (a && b && canGrad && a !== b) {
       const g = (ctx as CanvasRenderingContext2D).createLinearGradient(
         (left[index].x + right[index].x) / 2,
         (left[index].y + right[index].y) / 2,
@@ -1420,6 +1438,7 @@ export function fillInkRibbon(
   right: readonly { x: number; y: number }[],
   alpha: number,
   fills?: readonly string[],
+  pixelScale = 0,
 ): void {
   if (left.length === 0 || left.length !== right.length) return;
   if (left.length === 1) {
@@ -1440,7 +1459,16 @@ export function fillInkRibbon(
     return;
   }
 
-  const painted = paintOpaqueRibbonThenAlpha(ctx, left, right, alpha, undefined, 4, fills);
+  const painted = paintOpaqueRibbonThenAlpha(
+    ctx,
+    left,
+    right,
+    alpha,
+    undefined,
+    4,
+    fills,
+    pixelScale,
+  );
   if (painted) return;
 
   ctx.globalAlpha = alpha;
@@ -1451,6 +1479,9 @@ export function fillInkRibbon(
  * Opaque ribbon (+ optional join stamps in scene space) then one alpha blit.
  * Returns false when scratch/drawImage is unavailable (tests / odd hosts).
  */
+/** Cap a hi-res wash scratch so a page-sized doodle cannot allocate a 16k canvas. */
+const RIBBON_SCRATCH_MAX_PX = 8192;
+
 function paintOpaqueRibbonThenAlpha(
   ctx: CanvasRenderingContext2D,
   left: readonly { x: number; y: number }[],
@@ -1461,6 +1492,7 @@ function paintOpaqueRibbonThenAlpha(
   ) => void,
   pad = 4,
   fills?: readonly string[],
+  pixelScale = 0,
 ): boolean {
   if (typeof ctx.drawImage !== "function") return false;
   const { minX, minY, maxX, maxY } = ribbonSideBounds(left, right);
@@ -1471,7 +1503,20 @@ function paintOpaqueRibbonThenAlpha(
   const height = Math.ceil(maxY + pad) - originY;
   if (width < 1 || height < 1) return false;
 
-  const scratch = acquireRibbonScratch(width, height);
+  // Gradients are rasterized on this scratch. One scene pixel per unit plus a
+  // nearest-neighbour blit (zoom × dpr) turns a wash into trapezoid facets.
+  const wantScale = fills && fills.length > 0 ? Math.max(1, pixelScale || 1) : 1;
+  const scale = Math.min(
+    wantScale,
+    RIBBON_SCRATCH_MAX_PX / Math.max(width, 1),
+    RIBBON_SCRATCH_MAX_PX / Math.max(height, 1),
+  );
+  const sw = Math.max(1, Math.ceil(width * scale));
+  const sh = Math.max(1, Math.ceil(height * scale));
+  const sx = sw / width;
+  const sy = sh / height;
+
+  const scratch = acquireRibbonScratch(sw, sh);
   if (!scratch) return false;
   const sctx = scratch.getContext("2d");
   if (!sctx) return false;
@@ -1483,20 +1528,21 @@ function paintOpaqueRibbonThenAlpha(
   sctx.imageSmoothingEnabled = false;
   sctx.globalAlpha = 1;
   sctx.fillStyle = ctx.fillStyle;
-  sctx.translate(-originX, -originY);
+  sctx.setTransform(sx, 0, 0, sy, -originX * sx, -originY * sy);
   fillInkRibbonQuads(sctx, left, right, fills);
   if (stampJoins) stampJoins(sctx);
 
   const prevAlpha = ctx.globalAlpha;
   const prevSmooth = ctx.imageSmoothingEnabled;
-  ctx.imageSmoothingEnabled = false;
+  const destDevice = width * Math.max(pixelScale, 1);
+  ctx.imageSmoothingEnabled = sw + 1e-3 < destDevice;
   ctx.globalAlpha = alpha;
   ctx.drawImage(
     scratch as CanvasImageSource,
     0,
     0,
-    width,
-    height,
+    sw,
+    sh,
     originX,
     originY,
     width,
@@ -2218,19 +2264,7 @@ function paintContactDisc(
     );
   } else {
     ctx.globalAlpha = last.alpha;
-    const heading = hashedHeading(contact, CAP_SALT_HEAD);
-    paintInkTerminalCap(
-      ctx,
-      contact,
-      radius,
-      heading,
-      inkCapRoundness(
-        contact,
-        CAP_SALT_HEAD,
-        contact.pressure,
-        op.pressureSensitive,
-      ),
-    );
+    paintInkTerminalCap(ctx, contact, radius, 0, 1);
   }
   ctx.globalAlpha = 1;
 }
@@ -2429,7 +2463,7 @@ function drawRibbonStrokeFrom(
     densified.points,
     fromIndex,
   );
-  const prepared = { points: densified.points, styles: pooledStyles };
+  const prepared = densifyRibbonPoints(densified.points, pooledStyles, pixelScale);
 
   let maxAlpha = 0;
   let maxHalf = 0;
@@ -2463,14 +2497,15 @@ function drawRibbonStrokeFrom(
       const radius = paintedWidth(prepared.styles[0].lineWidth, pixelScale) / 2;
       const origin = points[0];
       if (fills?.[0]) scratchCtx.fillStyle = fills[0];
-      // Frozen heading: live segmentOutward spins the start cap against the
-      // contact disc. Seed once from the origin so replay matches.
+      const heading =
+        firstStrokeOutward(prepared.points, radius) ??
+        hashedHeading(origin, CAP_SALT_HEAD);
       paintOpCap(
         scratchCtx,
         op,
         prepared.points[0],
         radius,
-        hashedHeading(origin, CAP_SALT_HEAD),
+        heading,
         origin,
         CAP_SALT_HEAD,
         origin.pressure,
@@ -2523,10 +2558,11 @@ function drawRibbonStrokeFrom(
     stampHardExtras,
     pad,
     fills,
+    pixelScale,
   );
 
   if (!stamped) {
-    fillInkRibbon(ctx, left, right, maxAlpha, fills);
+    fillInkRibbon(ctx, left, right, maxAlpha, fills, pixelScale);
     stampHardExtras(ctx);
   }
 
@@ -2675,6 +2711,22 @@ function segmentOutward(
   const dy = at.y - inner.y;
   if (Math.hypot(dx, dy) < 1e-6) return null;
   return Math.atan2(dy, dx);
+}
+
+/** Outward along the first real step, not a hashed angle or a 1px jitter. */
+function firstStrokeOutward(
+  points: readonly { x: number; y: number }[],
+  minDist: number,
+): number | null {
+  if (points.length < 2) return null;
+  const origin = points[0];
+  const min = Math.max(minDist, 1e-6);
+  for (let i = 1; i < points.length; i++) {
+    if (Math.hypot(points[i].x - origin.x, points[i].y - origin.y) >= min) {
+      return segmentOutward(origin, points[i]);
+    }
+  }
+  return segmentOutward(origin, points[1]);
 }
 
 /**
@@ -2848,12 +2900,14 @@ function drawStrokeFrom(
 
     if (capHead && fromIndex === 0 && ri === 0) {
       const origin = points[0];
+      const heading =
+        firstStrokeOutward(points, radius) ?? hashedHeading(origin, CAP_SALT_HEAD);
       paintOpCap(
         ctx,
         op,
         pStart,
         radius,
-        hashedHeading(origin, CAP_SALT_HEAD),
+        heading,
         origin,
         CAP_SALT_HEAD,
         origin.pressure,
