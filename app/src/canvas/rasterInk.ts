@@ -1893,13 +1893,15 @@ function strokePaperFibre(
   w: number,
   q: number,
   fibreHeading: number,
+  minWidth = 0.2,
+  lengthScale = 1,
 ): void {
   const ang = fibreHeading + (w - 0.5) * 0.48;
-  const half = radius * (0.025 + 0.05 * q);
+  const half = radius * (0.025 + 0.05 * q) * lengthScale;
   const dx = Math.cos(ang) * half;
   const dy = Math.sin(ang) * half;
   ctx.globalAlpha = 0.07 + 0.42 * v;
-  ctx.lineWidth = Math.max(0.2, radius * (0.008 + 0.016 * u));
+  ctx.lineWidth = Math.max(minWidth, radius * (0.008 + 0.016 * u));
   ctx.beginPath();
   ctx.moveTo(cx - dx, cy - dy);
   ctx.lineTo(cx + dx, cy + dy);
@@ -2213,9 +2215,14 @@ function scratchGrainAlongStroke(
    * Place fibres at a fixed spacing along the stroke, seeded by origin + index.
    * Sampling `u * pathLen` from the origin moved every fibre as the stroke
    * grew, so grain crawled to the tip and the already-written ink went smooth.
+   *
+   * One hairline per ~0.16 nib was too sparse to read on the ribbon (the pool
+   * disc packs ~50 fibres in one nib). Stamp a short across-ribbon cloud at
+   * each station, thick enough to mark a scratch pixel, still dest-out.
    */
-  const spacing = Math.max(nib * (0.16 + 0.1 * (1 - grain)), 0.28);
-  const n = Math.min(480, Math.max(1, Math.ceil(pathLen / spacing)));
+  const spacing = Math.max(nib * (0.10 + 0.05 * (1 - grain)), 0.32);
+  const fibresAt = Math.max(2, Math.round(3 + 7 * grain));
+  const n = Math.min(720, Math.max(1, Math.ceil(pathLen / spacing)));
   const origin = points[0];
   const fibreHeading = paperFibreHeading(origin);
   const prevComp = ctx.globalCompositeOperation;
@@ -2226,28 +2233,34 @@ function scratchGrainAlongStroke(
   ctx.globalCompositeOperation = "destination-out";
   ctx.strokeStyle = "#000";
   ctx.lineCap = "butt";
+  const minWidth = Math.max(0.7, pixelScale > 0 ? 0.9 / pixelScale : 0.7);
   for (let i = 0; i < n; i++) {
     const jitter = hash01(origin.x, origin.y, GRAIN_SALT + i);
-    const dist = (i + jitter) * spacing;
+    const dist = (i + jitter * 0.35) * spacing;
     if (dist > pathLen) continue;
     const at = sampleStrokeAt(points, styles, dist, pixelScale, nib);
     if (!at || at.r < 1e-6) continue;
-    const u = hash01(origin.x, origin.y, GRAIN_SALT + 19 + i);
-    const v = hash01(origin.x, origin.y, GRAIN_SALT + 37 + i);
-    const w = hash01(origin.x, origin.y, GRAIN_SALT + 53 + i);
-    const q = hash01(origin.x, origin.y, GRAIN_SALT + 71 + i);
-    const across = (v * 2 - 1) * at.r * (0.15 + 0.75 * grain);
-    strokePaperFibre(
-      ctx,
-      at.x + at.nx * across,
-      at.y + at.ny * across,
-      at.r,
-      u,
-      hash01(origin.x, origin.y, GRAIN_SALT + 89 + i),
-      w,
-      q,
-      fibreHeading,
-    );
+    for (let j = 0; j < fibresAt; j++) {
+      const salt = GRAIN_SALT + i * 31 + j;
+      const u = hash01(origin.x, origin.y, salt + 19);
+      const v = hash01(origin.x, origin.y, salt + 37);
+      const w = hash01(origin.x, origin.y, salt + 53);
+      const q = hash01(origin.x, origin.y, salt + 71);
+      const across = (v * 2 - 1) * at.r * 0.88;
+      strokePaperFibre(
+        ctx,
+        at.x + at.nx * across,
+        at.y + at.ny * across,
+        at.r,
+        u,
+        hash01(origin.x, origin.y, salt + 89),
+        w,
+        q,
+        fibreHeading,
+        minWidth,
+        1.55,
+      );
+    }
   }
   ctx.globalCompositeOperation = prevComp;
   ctx.globalAlpha = prevAlpha;
