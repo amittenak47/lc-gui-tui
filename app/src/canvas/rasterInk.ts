@@ -77,6 +77,12 @@ export const INK_PRESSURE_FLOOR = 0.45;
  * the geometry up to a hairline instead and let it stay black.
  */
 export const INK_MIN_DEVICE_PX = 1.15;
+/**
+ * Below this, a Speed ink / drying / pooling stroke is a hairline: use the
+ * same `stroke()` path as the normal pen. A filled ribbon in the tile cache
+ * is a tiny bitmap that upsamples into mush.
+ */
+export const INK_RIBBON_MIN_DEVICE_PX = 2.5;
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
@@ -1650,6 +1656,18 @@ function usesSpeedRibbon(op: InkDrawOp): boolean {
   );
 }
 
+/**
+ * Painted nib in device pixels. Unknown scale keeps the ribbon (Infinity).
+ */
+function ribbonDeviceWidth(op: InkDrawOp, pixelScale: number): number {
+  if (pixelScale <= 0) return Infinity;
+  return paintedWidth(nibWidth(op), pixelScale) * pixelScale;
+}
+
+function isHairlineRibbon(op: InkDrawOp, pixelScale: number): boolean {
+  return ribbonDeviceWidth(op, pixelScale) < INK_RIBBON_MIN_DEVICE_PX;
+}
+
 function resolveSpeedFade(op: InkDrawOp): number {
   if (op.speedFade !== undefined) return clamp01(op.speedFade);
   return (op.speedInk ?? 0) > 0 ? 1 : 0;
@@ -2863,7 +2881,8 @@ function drawStrokeFrom(
     return;
   }
 
-  if (usesSpeedRibbon(op)) {
+  const hairlineRibbon = usesSpeedRibbon(op) && isHairlineRibbon(op, pixelScale);
+  if (usesSpeedRibbon(op) && !hairlineRibbon) {
     drawRibbonStrokeFrom(ctx, op, start, pixelScale, capEnd, capHead);
     return;
   }
@@ -2934,7 +2953,7 @@ function drawStrokeFrom(
       );
     }
   }
-  if (resolveGrain(op) > 1e-3) {
+  if (!hairlineRibbon && resolveGrain(op) > 1e-3) {
     scratchGrainAlongStroke(
       ctx,
       op,

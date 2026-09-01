@@ -1460,6 +1460,94 @@ describe("paintInkDisc tip vs join", () => {
     expect(drawCtx.strokeCount).toBe(0);
     expect(drawCtx.fillCount).toBeGreaterThan(1);
   });
+
+  it("paints hairline speed ink with stroke() like the normal pen", () => {
+    const pts = points([0, 0], [40, 0], [80, 0]);
+    const speed = inkDrawContext();
+    applyInkOp(
+      speed.ctx,
+      {
+        kind: "draw",
+        color: "#112233",
+        baseWidth: STROKE_WIDTH_MIN,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 1,
+        speedBlotBlend: 0,
+        speedFade: 0,
+        points: pts,
+      },
+      1,
+      { capHead: false, capEnd: false },
+    );
+    expect(speed.strokeCount).toBeGreaterThan(0);
+
+    const pen = inkDrawContext();
+    applyInkOp(
+      pen.ctx,
+      {
+        kind: "draw",
+        color: "#112233",
+        baseWidth: STROKE_WIDTH_MIN,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 0,
+        points: pts,
+      },
+      1,
+      { capHead: false, capEnd: false },
+    );
+    expect(pen.strokeCount).toBeGreaterThan(0);
+  });
+
+  it("does not grain-punch a hairline speed-ink stroke", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#112233",
+        baseWidth: STROKE_WIDTH_MIN,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 1,
+        speedBlotBlend: 0,
+        speedFade: 0,
+        grain: 1,
+        points: points([0, 0], [40, 0], [80, 0]),
+      },
+      1,
+      { capHead: false, capEnd: false },
+    );
+    expect(drawCtx.strokeCount).toBeGreaterThan(0);
+    expect(drawCtx.strokeComposites.every((c) => c !== "destination-out")).toBe(true);
+  });
+
+  it("keeps a wide speed-ink stroke on the ribbon", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#112233",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 1,
+        speedBlotBlend: 0,
+        speedFade: 0,
+        points: points([0, 0], [40, 0], [80, 0]),
+      },
+      1,
+      { capHead: false, capEnd: false },
+    );
+    expect(drawCtx.strokeCount).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
+  });
 });
 
 describe("fillInkRibbon per-quad", () => {

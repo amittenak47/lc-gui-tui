@@ -502,7 +502,6 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
   const lastSampleRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const dprRef = useRef(1);
   const paintFnRef = useRef<() => void>(() => {});
-  const paintFnRef = useRef<() => void>(() => {});
   const drawingRef = useRef(false);
   const dwellCountRef = useRef(0);
   const blotTipGrowRef = useRef(0);
