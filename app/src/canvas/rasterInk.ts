@@ -410,8 +410,8 @@ export interface InkDrawOp {
    */
   blotTipGrow?: number;
   /**
-   * Pooling discs left behind when a hold ends and the nib keeps moving.
-   * Independent of the polyline so smoothing cannot peel them off.
+   * Holds left behind when the nib pools, then moves on. Painted as a ribbon
+   * width flare, not a separate disc, so the pool stays continuous with the stroke.
    */
   blotHalts?: InkBlotHalt[];
   /**
@@ -1727,12 +1727,12 @@ function resolveBlotTipGrow(
   return Math.max(stamped, dwellBlotGrowT(cluster, tipRadius, blend));
 }
 
-/** Nearby holds of the same pause collapse into one disc. Scene units. */
+/** Nearby holds of the same pause collapse into one. Scene units. */
 const BLOT_HALT_MERGE_SCENE = 0.75;
 
 /**
- * Leave a pooling disc at `at` so a later move can zero {@link InkDrawOp.blotTipGrow}
- * without erasing the hold.
+ * Leave a pooling flare at `at` so a later move can zero {@link InkDrawOp.blotTipGrow}
+ * without erasing the hold. Width is applied on the ribbon, not as a disc.
  */
 export function stampInkBlotHalt(
   dest: { blotHalts?: InkBlotHalt[] },
@@ -2015,54 +2015,6 @@ function paintTexturedDisc(
   scratchGrainInDisc(ctx, center, outerR, grain);
 }
 
-function paintInkBlotHalts(
-  ctx: CanvasRenderingContext2D,
-  op: InkDrawOp,
-  pixelScale: number,
-): void {
-  if (op.highlight) return;
-  const halts = op.blotHalts;
-  if (!halts || halts.length === 0) return;
-  const blotBlend = resolveSpeedBlotBlend(op);
-  if (blotBlend < 1e-3) return;
-  const boldness = resolveInkBoldness(op);
-  const fade = resolveSpeedFade(op);
-  for (const halt of halts) {
-    if (halt.grow < 1e-3) continue;
-    const pressure = halt.pressure ?? NO_PRESSURE;
-    const style = inkStrokeStyle(
-      op.baseWidth,
-      op.maxFullness ?? 1,
-      pressure,
-      op.pressureClip ?? 1,
-      op.pressureSensitive,
-      0,
-      halt.slowness ?? INK_SLOWNESS_NEUTRAL,
-      op.speedInk ?? 0,
-      false,
-      boldness,
-      fade,
-      blotBlend,
-    );
-    paintTexturedDisc(
-      ctx,
-      op,
-      {
-        x: halt.x,
-        y: halt.y,
-        pressure,
-        slowness: halt.slowness,
-      },
-      style.lineWidth,
-      1,
-      pixelScale,
-      halt.grow,
-      1,
-    );
-  }
-  ctx.globalAlpha = 1;
-}
-
 function prefixContactCluster(
   points: readonly ScenePoint[],
   tipRadius: number,
@@ -2087,7 +2039,21 @@ export function inkPoolingWidthGain(
   return 1 + INK_BLOT_SIZE_RANGE * clamp01(blotBlend) * clamp01(growT) * clamp01(pressureAmt);
 }
 
-/** Widen + enrich ribbon vertices at holds/ends. Mid-stroke width is unchanged. */
+/** How far a pool flares along the stroke, so the ribbon swells instead of a bead. */
+function poolingFlareRadius(nib: number): number {
+  return nib * (1.35 + INK_BLOT_SIZE_RANGE);
+}
+
+function poolingFalloff(dist: number, radius: number): number {
+  if (radius < 1e-6) return dist < 1e-6 ? 1 : 0;
+  const t = clamp01(1 - dist / radius);
+  return t * t;
+}
+
+/**
+ * Widen + enrich ribbon vertices at holds and ends, with a falloff so the pool
+ * is the stroke swelling, not a disc sitting on it.
+ */
 export function applyInkPoolingAtEnds(
   styles: InkStrokeStyle[],
   op: InkDrawOp,
@@ -2101,17 +2067,16 @@ export function applyInkPoolingAtEnds(
   const out = styles.map((style) => ({ ...style }));
   const strokePts = op.points;
   const nib = nibWidth(op);
+  const flareR = poolingFlareRadius(nib);
+  const growAt = new Float64Array(out.length);
 
-  const enrichEnd = (index: number, growT: number, at: ScenePoint) => {
-    const slowness = at.slowness ?? INK_SLOWNESS_NEUTRAL;
-    const pressureAmt = blotPressureAmt(op, at);
-    const poolT = blotRichnessT(growT, blotBlend, slowness, pressureAmt);
-    out[index].blotPool = poolT;
-    if (growT > 1e-6) {
-      // Size follows the hold, not stylus pressure. Pressure already scaled richness.
-      out[index].lineWidth *= inkPoolingWidthGain(growT, blotBlend, 1);
-      // Halt is wet; drying only washes a moving nib.
-      delete out[index].dryGain;
+  const mark = (at: { x: number; y: number }, growT: number) => {
+    const g = clamp01(growT);
+    if (g < 1e-6) return;
+    for (let index = 0; index < points.length; index++) {
+      const dist = Math.hypot(points[index].x - at.x, points[index].y - at.y);
+      const w = poolingFalloff(dist, flareR) * g;
+      if (w > growAt[index]) growAt[index] = w;
     }
   };
 
@@ -2121,16 +2086,33 @@ export function applyInkPoolingAtEnds(
   const tipStart = trailingTipClusterStart(strokePts, nib);
   const tipPts =
     tipStart < strokePts.length ? strokePts.slice(tipStart) : [strokePts[strokePts.length - 1]];
-  enrichEnd(lastIdx, resolveBlotTipGrow(op, tipPts, tipR), tip);
+  mark(tip, resolveBlotTipGrow(op, tipPts, tipR));
 
   if (fromIndex === 0 && points.length >= 2) {
     const headR = out[0].lineWidth / 2;
     const cluster = prefixContactCluster(strokePts, headR);
-    enrichEnd(
-      0,
-      dwellBlotGrowT(cluster.length > 0 ? cluster : [strokePts[0]], headR, blotBlend),
+    mark(
       points[0],
+      dwellBlotGrowT(cluster.length > 0 ? cluster : [strokePts[0]], headR, blotBlend),
     );
+  }
+
+  if (op.blotHalts) {
+    for (const halt of op.blotHalts) {
+      if (halt.grow < 1e-6) continue;
+      mark(halt, halt.grow);
+    }
+  }
+
+  for (let index = 0; index < out.length; index++) {
+    const growT = growAt[index];
+    if (growT < 1e-6) continue;
+    const at = points[index];
+    const slowness = at.slowness ?? INK_SLOWNESS_NEUTRAL;
+    const pressureAmt = blotPressureAmt(op, at);
+    out[index].blotPool = blotRichnessT(growT, blotBlend, slowness, pressureAmt);
+    out[index].lineWidth *= inkPoolingWidthGain(growT, blotBlend, 1);
+    delete out[index].dryGain;
   }
 
   return out;
@@ -2221,27 +2203,19 @@ function scratchGrainAlongStroke(
   const grain = resolveGrain(op);
   if (grain < 1e-3 || points.length === 0) return;
   const pathLen = strokePathLength(points);
+  const nib = nibWidth(op);
   if (pathLen < 1e-6) {
-    const r = paintedWidth(styles[0]?.lineWidth ?? nibWidth(op), pixelScale) / 2;
+    const r = paintedWidth(styles[0]?.lineWidth ?? nib, pixelScale) / 2;
     scratchGrainInDisc(ctx, points[0], r, grain);
     return;
   }
-  let sumR = 0;
-  let counted = 0;
-  for (let i = 0; i < points.length; i++) {
-    const r = paintedWidth(styles[i]?.lineWidth ?? nibWidth(op), pixelScale) / 2;
-    if (r < 1e-6) continue;
-    sumR += r;
-    counted += 1;
-  }
-  const avgR = counted > 0 ? sumR / counted : paintedWidth(nibWidth(op), pixelScale) / 2;
-  const n = Math.max(
-    12,
-    Math.min(
-      196,
-      Math.round(1.4 * (12 + grain * (28 + pathLen / Math.max(avgR * 0.18, 0.22)))),
-    ),
-  );
+  /*
+   * Place fibres at a fixed spacing along the stroke, seeded by origin + index.
+   * Sampling `u * pathLen` from the origin moved every fibre as the stroke
+   * grew, so grain crawled to the tip and the already-written ink went smooth.
+   */
+  const spacing = Math.max(nib * (0.16 + 0.1 * (1 - grain)), 0.28);
+  const n = Math.min(480, Math.max(1, Math.ceil(pathLen / spacing)));
   const origin = points[0];
   const fibreHeading = paperFibreHeading(origin);
   const prevComp = ctx.globalCompositeOperation;
@@ -2253,20 +2227,23 @@ function scratchGrainAlongStroke(
   ctx.strokeStyle = "#000";
   ctx.lineCap = "butt";
   for (let i = 0; i < n; i++) {
-    const u = hash01(origin.x, origin.y, GRAIN_SALT + i);
-    const v = hash01(origin.x, origin.y, GRAIN_SALT + 19 + i);
-    const w = hash01(origin.x, origin.y, GRAIN_SALT + 37 + i);
-    const q = hash01(origin.x, origin.y, GRAIN_SALT + 53 + i);
-    const at = sampleStrokeAt(points, styles, u * pathLen, pixelScale, nibWidth(op));
+    const jitter = hash01(origin.x, origin.y, GRAIN_SALT + i);
+    const dist = (i + jitter) * spacing;
+    if (dist > pathLen) continue;
+    const at = sampleStrokeAt(points, styles, dist, pixelScale, nib);
     if (!at || at.r < 1e-6) continue;
-    const across = (v * 2 - 1) * at.r * 0.9;
+    const u = hash01(origin.x, origin.y, GRAIN_SALT + 19 + i);
+    const v = hash01(origin.x, origin.y, GRAIN_SALT + 37 + i);
+    const w = hash01(origin.x, origin.y, GRAIN_SALT + 53 + i);
+    const q = hash01(origin.x, origin.y, GRAIN_SALT + 71 + i);
+    const across = (v * 2 - 1) * at.r * (0.15 + 0.75 * grain);
     strokePaperFibre(
       ctx,
       at.x + at.nx * across,
       at.y + at.ny * across,
       at.r,
       u,
-      hash01(origin.x, origin.y, GRAIN_SALT + 71 + i),
+      hash01(origin.x, origin.y, GRAIN_SALT + 89 + i),
       w,
       q,
       fibreHeading,
@@ -2890,10 +2867,8 @@ export function applyInkOp(
 ): void {
   const capEnd = options?.capEnd ?? true;
   const capHead = options?.capHead ?? true;
-  if (op.kind === "draw") {
-    drawStrokeFrom(ctx, op, 0, pixelScale, capEnd, capHead);
-    paintInkBlotHalts(ctx, op, pixelScale);
-  } else eraseStampsFrom(ctx, op, 0);
+  if (op.kind === "draw") drawStrokeFrom(ctx, op, 0, pixelScale, capEnd, capHead);
+  else eraseStampsFrom(ctx, op, 0);
   ctx.globalCompositeOperation = "source-over";
 }
 
