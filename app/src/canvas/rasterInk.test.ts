@@ -1172,6 +1172,7 @@ function inkDrawContext() {
   let strokeCount = 0;
   let radialGradients = 0;
   let linearGradients = 0;
+  const linearGradientArgs: Array<{ x0: number; y0: number; x1: number; y1: number }> = [];
   const arcRadii: number[] = [];
   const arcSweeps: number[] = [];
   const fillAlphas: number[] = [];
@@ -1241,8 +1242,9 @@ function inkDrawContext() {
         },
       };
     },
-    createLinearGradient() {
+    createLinearGradient(x0 = 0, y0 = 0, x1 = 0, y1 = 0) {
       linearGradients++;
+      linearGradientArgs.push({ x0, y0, x1, y1 });
       return {
         addColorStop(_t: number, color: string) {
           colorStops.push(color);
@@ -1266,6 +1268,7 @@ function inkDrawContext() {
     fillAlphas,
     fillStyles,
     colorStops,
+    linearGradientArgs,
     strokeAlphas,
     strokeComposites,
     get strokeCount() {
@@ -1649,6 +1652,56 @@ describe("fillInkRibbon per-quad", () => {
     // Two gradient quads. A fills[0] silhouette would be a third fill.
     expect(drawCtx.fillCount).toBe(2);
     expect(drawCtx.linearGradients).toBe(2);
+  });
+
+  it("extends collinear wash gradients into the next chord", () => {
+    const drawCtx = inkDrawContext();
+    const left = [
+      { x: 0, y: 0 },
+      { x: 20, y: 0 },
+      { x: 40, y: 0 },
+    ];
+    const right = [
+      { x: 0, y: 4 },
+      { x: 20, y: 4 },
+      { x: 40, y: 4 },
+    ];
+    fillInkRibbon(drawCtx.ctx, left, right, 1, [
+      "rgb(1, 0, 0)",
+      "rgb(2, 0, 0)",
+      "rgb(3, 0, 0)",
+    ]);
+    expect(drawCtx.linearGradients).toBe(2);
+    const first = drawCtx.linearGradientArgs[0];
+    const second = drawCtx.linearGradientArgs[1];
+    // Midpoints sit at x=0 and x=20; AA-only overlap would stop near 21.25.
+    expect(first.x1).toBeGreaterThan(28);
+    expect(second.x0).toBeLessThan(12);
+    expect(drawCtx.colorStops).toContain("rgb(3, 0, 0)");
+    expect(drawCtx.colorStops).toContain("rgb(1, 0, 0)");
+  });
+
+  it("keeps wash overlap tiny at a right-angle corner", () => {
+    const drawCtx = inkDrawContext();
+    const left = [
+      { x: 0, y: -2 },
+      { x: 20, y: -2 },
+      { x: 22, y: 20 },
+    ];
+    const right = [
+      { x: 0, y: 2 },
+      { x: 20, y: 2 },
+      { x: 18, y: 20 },
+    ];
+    fillInkRibbon(drawCtx.ctx, left, right, 1, [
+      "rgb(1, 0, 0)",
+      "rgb(2, 0, 0)",
+      "rgb(3, 0, 0)",
+    ]);
+    const first = drawCtx.linearGradientArgs[0];
+    // Mids at (0,0) and (20,0). A collinear half-chord pad would reach ~30.
+    expect(first.x1).toBeLessThan(23);
+    expect(first.x1).toBeGreaterThan(20);
   });
 });
 
