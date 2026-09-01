@@ -4,6 +4,8 @@ import {
   applyInkOp,
   applyInkPoolingAtEnds,
   buildPolylineGrid,
+  paintInkRibbonOpaque,
+  LIVE_REWIND_NIBS,
   nearestPolylineIndex,
   nearestPolylineIndexIn,
   clampExportScale,
@@ -2805,5 +2807,116 @@ describe("polyline grid finds the same vertex as a full scan", () => {
 
   it("declines to build for a stroke too short to be worth it", () => {
     expect(buildPolylineGrid([{ x: 0, y: 0 }, { x: 1, y: 1 }])).toBeNull();
+  });
+});
+
+/* ----------------------------------------------- bounded live paint --- */
+
+/**
+ * A live stroke is repainted from a moving window rather than from vertex 0.
+ * Two things have to hold or the ribbon stops looking like one stroke: the
+ * geometry must not depend on where the window starts, and consecutive windows
+ * must *partition* the quads. Overlapping them is not harmless even at full
+ * alpha — an antialiased edge composited twice lands at 0.75 coverage instead
+ * of 0.5, which draws a fine seam down the ribbon at every boundary.
+ */
+describe("windowed ribbon paint tiles the stroke exactly once", () => {
+  function quadRecorder() {
+    const starts: string[] = [];
+    let pending: string | null = null;
+    const ctx = {
+      globalAlpha: 1, globalCompositeOperation: "source-over",
+      fillStyle: "", strokeStyle: "", lineCap: "", lineJoin: "", lineWidth: 0,
+      setTransform() {}, closePath() {}, stroke() {}, save() {}, restore() {},
+      rect() {}, clip() {}, translate() {}, arc() { pending = null; },
+      beginPath() { pending = null; },
+      moveTo(x: number, y: number) { pending = `${x.toFixed(6)},${y.toFixed(6)}`; },
+      lineTo() {},
+      fill() { if (pending) starts.push(pending); pending = null; },
+      createLinearGradient() { return { addColorStop() {} }; },
+      createRadialGradient() { return { addColorStop() {} }; },
+    };
+    return { ctx: ctx as unknown as CanvasRenderingContext2D, starts };
+  }
+
+  const op: InkOp = {
+    kind: "draw", color: "#101014", baseWidth: 6, maxFullness: 0.999,
+    pressureClip: 1, pressureSensitive: true,
+    speedInk: 0.8, speedBlotBlend: 0.7, speedFade: 0.8,
+    points: Array.from({ length: 700 }, (_, i) => {
+      const t = (i / 700) * Math.PI * 2 * 9;
+      return {
+        x: (i / 700) * 620,
+        y: 120 + Math.sin(t) * 30,
+        pressure: 0.45 + 0.2 * Math.sin(t * 0.7),
+        slowness: 0.5 + 0.4 * Math.sin(t * 0.5),
+      };
+    }),
+  };
+
+  it("splits into the same quads the whole-stroke pass draws", () => {
+    const whole = quadRecorder();
+    const alphaWhole = paintInkRibbonOpaque(whole.ctx, op, 0, 2);
+    expect(alphaWhole).not.toBeNull();
+    expect(whole.starts.length).toBeGreaterThan(50);
+
+    // Three consecutive windows, partitioned on op-point boundaries.
+    const cuts = [0, 240, 480, op.points.length - 1];
+    const parts: string[] = [];
+    let alphaLast = 0;
+    for (let k = 0; k + 1 < cuts.length; k++) {
+      const rec = quadRecorder();
+      const a = paintInkRibbonOpaque(
+        rec.ctx, op, cuts[k], 2,
+        { capEnd: k === cuts.length - 2, capHead: k === 0 },
+        cuts[k + 1],
+      );
+      expect(a).not.toBeNull();
+      alphaLast = Math.max(alphaLast, a!);
+      parts.push(...rec.starts);
+    }
+
+    // Every quad drawn once, in the same place, by the same geometry. Compared
+    // as a multiset: each pass stamps its own caps after its quads, so the two
+    // runs interleave the caps differently even though the ink is the same.
+    expect(parts.length).toBe(whole.starts.length);
+    expect([...parts].sort()).toEqual([...whole.starts].sort());
+    // And composited at the same alpha, which is a whole-stroke property.
+    expect(alphaLast).toBeCloseTo(alphaWhole!, 12);
+  });
+
+  it("keeps a window of a moving stroke off the disc path", () => {
+    // A stationary tail: as a whole stroke this is a dwell disc, but as a
+    // window of a longer stroke it must stay a ribbon.
+    const still: InkOp = {
+      ...op,
+      points: [
+        ...op.points.slice(0, 300),
+        ...Array.from({ length: 30 }, () => ({
+          x: op.points[299].x, y: op.points[299].y, pressure: 0.5, slowness: 1,
+        })),
+      ],
+    };
+    const rec = quadRecorder();
+    const a = paintInkRibbonOpaque(rec.ctx, still, 280, 2, { capEnd: true, capHead: false });
+    expect(a).not.toBeNull();
+    expect(rec.starts.length).toBeGreaterThan(0);
+  });
+
+  it("declines strokes it cannot paint opaquely", () => {
+    const rec = quadRecorder();
+    // A highlighter multiplies; it has no opaque form.
+    expect(paintInkRibbonOpaque(rec.ctx, { ...op, highlight: true }, 0, 2)).toBeNull();
+    // Grain erases along the whole trail, so it has no bounded form yet.
+    expect(paintInkRibbonOpaque(rec.ctx, { ...op, grain: 0.5 }, 0, 2)).toBeNull();
+    // Width-only speed ink paints with stroke(), not a ribbon.
+    expect(
+      paintInkRibbonOpaque(rec.ctx, { ...op, speedBlotBlend: 0, speedFade: 0 }, 0, 2),
+    ).toBeNull();
+  });
+
+  it("keeps the rewind window clear of what pooling can still revise", () => {
+    // Pooling reaches at most 0.775*nib + 1.7*nib of arc behind the tip.
+    expect(LIVE_REWIND_NIBS).toBeGreaterThan(0.775 + 1.7);
   });
 });
