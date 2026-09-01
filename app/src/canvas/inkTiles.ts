@@ -851,7 +851,6 @@ export class InkTileCache {
  */
 export type PaintLiveOpOptions = {
   fromIndex?: number;
-  toIndex?: number;
   capEnd?: boolean;
   capHead?: boolean;
 };
@@ -871,8 +870,6 @@ export function paintLiveOp(
   const capOptions = {
     capEnd: options?.capEnd ?? true,
     capHead: options?.capHead ?? fromIndex === 0,
-    fromIndex,
-    toIndex: options?.toIndex,
   };
   const paint = () => {
     if (isHostBoundOp(op)) {
@@ -886,14 +883,12 @@ export function paintLiveOp(
           pixelScale,
           capOptions,
         );
-      } else if (op.kind === "draw" && (fromIndex > 0 || options?.toIndex !== undefined)) {
-        applyInkOpFrom(ctx, op, fromIndex, pixelScale, capOptions);
       } else {
         applyInkOp(ctx, op, pixelScale, capOptions);
       }
       return;
     }
-    if (op.kind === "draw" && (fromIndex > 0 || options?.toIndex !== undefined)) {
+    if (fromIndex > 0 && op.kind === "draw") {
       applyInkOpFrom(ctx, op, fromIndex, pixelScale, capOptions);
       return;
     }
