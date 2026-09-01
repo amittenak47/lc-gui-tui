@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyInkOp,
+  applyInkPoolingAtEnds,
   clampExportScale,
   eraserSceneRadius,
   eraserScreenRadius,
@@ -40,14 +41,31 @@ import {
   NO_PRESSURE,
   normalizePressure,
   dwellBlotGrowT,
+  blotPoolRgb,
+  mixBlotAlpha,
+  dryWashRgb,
+  INK_BLOT_ALPHA_LIFT,
+  INK_BLOT_SATURATE,
+  INK_BLOT_DARKEN,
+  INK_BLOT_END_FLOOR,
+  INK_BLOT_SIZE_RANGE,
+  blotTicksToFull,
+  blotGrowTFromTicks,
+  blotDiscPoolT,
+  blotRichnessT,
   coalesceRibbonPoints,
   densifyRibbonPoints,
   fillInkRibbon,
   inkDiscRadii,
+  discSealPad,
   isDiscPrimaryPath,
   paintInkAtScale,
   paintInkDisc,
+  paintGrainDisc,
+  paintInkTerminalCap,
+  inkCapRoundness,
   trailingTipClusterStart,
+  stampInkBlotHalt,
   pointerPressure,
   scenePointFromCanvasPixel,
   scenePointFromPointer,
@@ -371,8 +389,14 @@ describe("speed ink", () => {
   it("never asks for more than opaque ink on a full dial", () => {
     const maxSlow = inkStrokeAlpha(1, 0, false, 0, 1, 1, 1, 1);
     expect(maxSlow).toBeLessThanOrEqual(1);
-    // BASE * (1 + RANGE) leaves headroom under the clip.
-    expect(maxSlow).toBeCloseTo(INK_SPEED_ALPHA_BASE * (1 + 0.5), 2);
+    expect(maxSlow).toBeCloseTo(1);
+  });
+
+  it("leaves a standstill wet so pooling can darken, and washes only while moving", () => {
+    expect(inkSpeedAlphaGain(1, 1, 1)).toBeCloseTo(1);
+    expect(inkSpeedAlphaGain(INK_SLOWNESS_NEUTRAL, 1, 1)).toBeCloseTo(INK_SPEED_ALPHA_BASE);
+    expect(inkSpeedAlphaGain(0, 1, 1)).toBeLessThan(INK_SPEED_ALPHA_BASE);
+    expect(inkSpeedAlphaGain(0, 1, 1)).toBeGreaterThan(0.55);
   });
 
   it("reads neutral pace as the speed-alpha base when fade is full", () => {
@@ -843,6 +867,7 @@ function recordingContext() {
   const strokes: Array<{ from: { x: number; y: number }; to: { x: number; y: number }; alpha: number }> = [];
   const erased: Array<{ x: number; y: number; r: number; composite: string }> = [];
   let pen = { x: 0, y: 0 };
+  const path: Array<{ x: number; y: number }> = [];
 
   const map = (x: number, y: number) => ({
     x: transform[0] * x + transform[2] * y + transform[4],
@@ -870,17 +895,26 @@ function recordingContext() {
     setTransform(a: number, b: number, c: number, d: number, e: number, f: number) {
       transform = [a, b, c, d, e, f];
     },
-    beginPath() {},
+    beginPath() {
+      path.length = 0;
+    },
     moveTo(x: number, y: number) {
       pen = map(x, y);
+      path.length = 0;
+      path.push(pen);
     },
     lineTo(x: number, y: number) {
-      strokes.push({ from: pen, to: map(x, y), alpha });
       pen = map(x, y);
+      path.push(pen);
     },
-    stroke() {},
+    stroke() {
+      for (let i = 1; i < path.length; i++) {
+        strokes.push({ from: path[i - 1], to: path[i], alpha });
+      }
+    },
+    closePath() {},
     arc(x: number, y: number, r: number) {
-      // Draw terminal caps also use arc+fill; only erases are destination-out.
+      // Draw terminal caps fill (circle or superellipse); only erases are destination-out.
       if (composite !== "destination-out") return;
       erased.push({ ...map(x, y), r: r * transform[0], composite });
     },
@@ -985,6 +1019,7 @@ describe("host-bound ink", () => {
       stroke() {},
       fill() {},
       arc() {},
+      closePath() {},
       globalCompositeOperation: "source-over",
       globalAlpha: 1,
       strokeStyle: "",
@@ -1025,6 +1060,7 @@ describe("host-bound ink", () => {
       stroke() {},
       fill() {},
       arc() {},
+      closePath() {},
       globalCompositeOperation: "source-over",
       globalAlpha: 1,
       strokeStyle: "",
@@ -1058,6 +1094,7 @@ describe("host-bound ink", () => {
       },
       fill() {},
       arc() {},
+      closePath() {},
       globalCompositeOperation: "source-over",
       globalAlpha: 1,
       strokeStyle: "",
@@ -1102,6 +1139,7 @@ describe("host-bound ink", () => {
       stroke() {},
       fill() {},
       arc() {},
+      closePath() {},
       globalCompositeOperation: "source-over",
       globalAlpha: 1,
       strokeStyle: "",
@@ -1133,9 +1171,14 @@ function inkDrawContext() {
   let fillCount = 0;
   let strokeCount = 0;
   let radialGradients = 0;
+  let linearGradients = 0;
   const arcRadii: number[] = [];
+  const arcSweeps: number[] = [];
   const fillAlphas: number[] = [];
+  const fillStyles: string[] = [];
   const colorStops: string[] = [];
+  const strokeAlphas: number[] = [];
+  const strokeComposites: string[] = [];
   let pen = { x: 0, y: 0 };
 
   const map = (x: number, y: number) => ({
@@ -1174,9 +1217,12 @@ function inkDrawContext() {
     },
     stroke() {
       strokeCount++;
+      strokeAlphas.push(alpha);
+      strokeComposites.push(composite);
     },
-    arc(x: number, y: number, r: number) {
+    arc(x: number, y: number, r: number, start = 0, end = Math.PI * 2) {
       arcRadii.push(r);
+      arcSweeps.push(end - start);
       if (composite !== "destination-out") {
         caps.push({ ...map(x, y), r: r * transform[0] });
       }
@@ -1184,10 +1230,19 @@ function inkDrawContext() {
     fill() {
       fillCount++;
       fillAlphas.push(alpha);
+      fillStyles.push(String(this.fillStyle));
     },
     createRadialGradient(_x0: number, _y0: number, _r0: number, _x1: number, _y1: number, r1: number) {
       radialGradients++;
       arcRadii.push(r1);
+      return {
+        addColorStop(_t: number, color: string) {
+          colorStops.push(color);
+        },
+      };
+    },
+    createLinearGradient() {
+      linearGradients++;
       return {
         addColorStop(_t: number, color: string) {
           colorStops.push(color);
@@ -1207,8 +1262,12 @@ function inkDrawContext() {
     strokes,
     caps,
     arcRadii,
+    arcSweeps,
     fillAlphas,
+    fillStyles,
     colorStops,
+    strokeAlphas,
+    strokeComposites,
     get strokeCount() {
       return strokeCount;
     },
@@ -1218,33 +1277,43 @@ function inkDrawContext() {
     get radialGradients() {
       return radialGradients;
     },
+    get linearGradients() {
+      return linearGradients;
+    },
   };
 }
 
 describe("inkDiscRadii / dwell growth", () => {
-  it("starts smaller than tip radius and grows to tip without overshoot", () => {
+  it("starts at the nib and grows slowly only when blot and growT are on", () => {
     const tip = 10;
-    const early = inkDiscRadii(tip, 0.55, 0);
+    const contact = inkDiscRadii(tip, 0.55, 0);
     const mid = inkDiscRadii(tip, 0.55, 0.4);
-    const full = inkDiscRadii(tip, 0.55, 1);
-    expect(early.outerR).toBeCloseTo(tip * 0.04);
-    expect(early.outerR).toBeLessThan(tip * 0.1);
-    expect(mid.outerR).toBeGreaterThan(early.outerR);
-    expect(mid.outerR).toBeLessThan(tip);
-    expect(full.outerR).toBeCloseTo(tip);
-    expect(full.outerR).toBeLessThanOrEqual(tip);
+    const full = inkDiscRadii(tip, 1, 1);
+    const blotOff = inkDiscRadii(tip, 0, 1);
+    expect(contact.outerR).toBeCloseTo(tip);
+    expect(mid.outerR).toBeGreaterThan(contact.outerR);
+    expect(mid.outerR).toBeLessThan(full.outerR);
+    expect(full.outerR).toBeCloseTo(tip * (1 + INK_BLOT_SIZE_RANGE));
+    expect(blotOff.outerR).toBeCloseTo(tip);
   });
 
-  it("keeps a solid core with soft rim only outside innerR", () => {
+  it("keeps a hard silhouette (innerR equals outerR)", () => {
     const { outerR, innerR } = inkDiscRadii(10, 1, 1);
-    expect(innerR).toBeGreaterThan(0);
-    expect(innerR).toBeLessThan(outerR);
-    expect(outerR).toBeLessThanOrEqual(10);
+    expect(innerR).toBeCloseTo(outerR);
+    expect(outerR).toBeGreaterThan(10);
+  });
+
+  it("seals a disc by 1 device pixel at any nib", () => {
+    expect(discSealPad(4, 1)).toBe(1);
+    expect(discSealPad(10, 1)).toBe(1);
+    expect(discSealPad(10, 2)).toBe(0.5);
+    expect(discSealPad(10, 0)).toBe(0);
   });
 
   it("uses a hard rim when blot blend is 0", () => {
     const { outerR, innerR } = inkDiscRadii(10, 0, 1);
     expect(innerR).toBeCloseTo(outerR);
+    expect(outerR).toBeCloseTo(10);
   });
 
   it("raises growT slowly as a dwell cluster lengthens", () => {
@@ -1258,15 +1327,20 @@ describe("inkDiscRadii / dwell growth", () => {
     const manyPts: Array<[number, number]> = [];
     for (let i = 0; i < 50; i++) manyPts.push([0.01 * (i % 3), 0.01 * ((i + 1) % 3)]);
     const many = dwellBlotGrowT(points(...manyPts), tipR, 0.5);
-    expect(one).toBe(1);
-    expect(few).toBeGreaterThanOrEqual(0.85);
-    expect(few).toBeLessThanOrEqual(1);
+    expect(one).toBe(0);
+    expect(few).toBeGreaterThan(0);
+    expect(few).toBeLessThan(0.5);
     expect(many).toBeGreaterThan(few);
-    expect(many).toBeGreaterThan(0.7);
+    expect(many).toBeLessThan(1);
+    expect(blotTicksToFull(1)).toBeGreaterThanOrEqual(48);
+    expect(blotTicksToFull(1)).toBeLessThan(120);
+    expect(dwellBlotGrowT(points([0, 0], [0.01, 0]), 4, 0)).toBe(0);
+    expect(blotGrowTFromTicks(0, 1)).toBe(0);
+    expect(blotGrowTFromTicks(blotTicksToFull(1), 1)).toBeCloseTo(1);
   });
 
-  it("keeps a moving stroke at full tip", () => {
-    expect(dwellBlotGrowT(points([0, 0], [40, 0], [80, 0]), 4, 0.5)).toBe(1);
+  it("does not pool a moving stroke", () => {
+    expect(dwellBlotGrowT(points([0, 0], [40, 0], [80, 0]), 4, 0.5)).toBe(0);
   });
 });
 
@@ -1285,14 +1359,26 @@ describe("paintInkDisc tip vs join", () => {
     paintInkDisc(drawCtx.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 1, "#112233", false, 1);
     expect(drawCtx.radialGradients).toBe(0);
     expect(drawCtx.fillCount).toBe(1);
-    expect(drawCtx.arcRadii[0]).toBeCloseTo(4);
+    expect(drawCtx.arcRadii[0]).toBeCloseTo(4 * (1 + INK_BLOT_SIZE_RANGE) + 1);
   });
 
-  it("tip mode grows from a tiny hard core", () => {
+  it("tip mode at growT 0 stays the nib", () => {
     const drawCtx = inkDrawContext();
     paintInkDisc(drawCtx.ctx, { x: 10, y: 10 }, 8, 0.8, 1, 1, "#112233", false, 0);
     expect(drawCtx.radialGradients).toBe(0);
-    expect(drawCtx.arcRadii[0]).toBeCloseTo(4 * 0.04);
+    expect(drawCtx.arcRadii[0]).toBeCloseTo(4);
+  });
+
+  it("adds a 1px seal when blot is pooling", () => {
+    const thin = inkDrawContext();
+    paintInkDisc(thin.ctx, { x: 0, y: 0 }, 8, 1, 1, 1, "#112233", false, 1);
+    expect(thin.arcRadii[0]).toBeCloseTo(4 * (1 + INK_BLOT_SIZE_RANGE) + 1);
+    const fat = inkDrawContext();
+    paintInkDisc(fat.ctx, { x: 0, y: 0 }, 32, 1, 1, 1, "#112233", false, 1);
+    expect(fat.arcRadii[0]).toBeCloseTo(16 * (1 + INK_BLOT_SIZE_RANGE) + 1);
+    const noBlot = inkDrawContext();
+    paintInkDisc(noBlot.ctx, { x: 0, y: 0 }, 32, 1, 1, 0, "#112233", false, 1);
+    expect(noBlot.arcRadii[0]).toBeCloseTo(16);
   });
 
   it("join mode uses radial fade clamped to nib radius", () => {
@@ -1309,7 +1395,7 @@ describe("paintInkDisc tip vs join", () => {
     expect(drawCtx.colorStops[0]).toBe("rgba(17, 34, 51, 0.8)");
   });
 
-  it("short-path / tip-down stroke paints a full tip, not a 4% core", () => {
+  it("short-path / tip-down stroke paints the nib, not a pooled blob", () => {
     const op: InkOp = {
       kind: "draw",
       color: "#112233",
@@ -1323,17 +1409,17 @@ describe("paintInkDisc tip vs join", () => {
       points: points([10, 10]),
     };
     const tipR = inkLineWidth(8, 0, false, INK_SLOWNESS_NEUTRAL, 1) / 2;
-    const hairline = inkDiscRadii(tipR, 1, 0).outerR;
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
     expect(drawCtx.radialGradients).toBe(0);
     expect(drawCtx.fillCount).toBeGreaterThanOrEqual(1);
     expect(drawCtx.arcRadii[0]).toBeCloseTo(tipR);
-    expect(drawCtx.arcRadii[0]).toBeGreaterThan(hairline * 4);
+    expect(inkDiscRadii(tipR, 1, 0).outerR).toBeCloseTo(tipR);
+    expect(inkDiscRadii(tipR, 1, 1).outerR).toBeGreaterThan(tipR);
     expect(drawCtx.fillAlphas[0]).toBe(1);
   });
 
-  it("keeps the old 0.55 wash on speed-ink strokes that never stamped fade", () => {
+  it("washes legacy speed-ink strokes that never stamped fade", () => {
     const op: InkOp = {
       kind: "draw",
       color: "#112233",
@@ -1345,9 +1431,11 @@ describe("paintInkDisc tip vs join", () => {
       speedBlotBlend: 1,
       points: points([10, 10]),
     };
+    const style = inkStrokePointStyles(op, 0)[0];
+    expect(style.dryGain).toBeCloseTo(INK_SPEED_ALPHA_BASE);
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
-    expect(drawCtx.fillAlphas[0]).toBeCloseTo(INK_SPEED_ALPHA_BASE);
+    expect(drawCtx.fillAlphas[0]).toBe(1);
   });
 
   it("tapers speed-ink width with blot off instead of earthworm runs", () => {
@@ -1375,7 +1463,7 @@ describe("paintInkDisc tip vs join", () => {
 });
 
 describe("fillInkRibbon per-quad", () => {
-  it("fills one quad per segment instead of one closed polygon", () => {
+  it("fills a silhouette plus one quad per segment", () => {
     const drawCtx = inkDrawContext();
     const left = [
       { x: 0, y: 0 },
@@ -1388,12 +1476,12 @@ describe("fillInkRibbon per-quad", () => {
       { x: 20, y: 4 },
     ];
     fillInkRibbon(drawCtx.ctx, left, right, 1);
-    expect(drawCtx.fillCount).toBe(2);
+    expect(drawCtx.fillCount).toBe(3);
   });
 
   it("still fills self-crossing side polylines (no single winding cancel)", () => {
     const drawCtx = inkDrawContext();
-    // Bow-tie-ish left/right: two quads still each fill once.
+    // Silhouette plus two overlapping quads — quads keep the bow-tie covered.
     const left = [
       { x: 0, y: 0 },
       { x: 10, y: 10 },
@@ -1405,7 +1493,7 @@ describe("fillInkRibbon per-quad", () => {
       { x: 4, y: 14 },
     ];
     fillInkRibbon(drawCtx.ctx, left, right, 1);
-    expect(drawCtx.fillCount).toBe(2);
+    expect(drawCtx.fillCount).toBe(3);
   });
 });
 
@@ -1461,6 +1549,70 @@ describe("disc-primary dwell path", () => {
   });
 });
 
+describe("contact stamp (Phase 1)", () => {
+  it("paints a single point as a filled cap, not a semicircle", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, draw([10, 10]), 1);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
+  });
+
+  it("paints a pressure-on cluster of 8 samples inside 0.2× nib as one stamp", () => {
+    const cluster = stylusPoints(
+      0.75,
+      [0, 0],
+      [0.4, 0.2],
+      [-0.3, 0.1],
+      [0.2, -0.4],
+      [0.1, 0.3],
+      [-0.2, -0.2],
+      [0.35, 0],
+      [0, -0.15],
+    );
+    const op: InkOp = {
+      kind: "draw",
+      color: "#000",
+      baseWidth: 8,
+      maxFullness: 0.999,
+      pressureClip: 1,
+      pressureSensitive: true,
+      speedInk: 0,
+      points: cluster,
+    };
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
+  });
+
+  it("does not emit two heading-flipped terminal caps at the origin", () => {
+    const op: InkOp = {
+      kind: "draw",
+      color: "#000",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 0,
+      points: stylusPoints(0.5, [0, 0], [1.2, 0], [-1.1, 0.2]).map((p) => ({
+        ...p,
+        slowness: INK_SLOWNESS_NEUTRAL,
+      })),
+    };
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
+  });
+
+  it("does not collapse a real two-point line into a single disc", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1);
+    expect(drawCtx.strokeCount).toBeGreaterThan(0);
+  });
+});
+
 describe("speed-ink ribbon coalesce / densify / tip split", () => {
   const style = () => inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, INK_SLOWNESS_NEUTRAL, 1);
 
@@ -1488,6 +1640,32 @@ describe("speed-ink ribbon coalesce / densify / tip split", () => {
     expect(out.points.length).toBeGreaterThan(2);
     expect(out.points[0].x).toBeCloseTo(0);
     expect(out.points[out.points.length - 1].x).toBeCloseTo(40);
+  });
+
+  it("inserts midpoints when dryGain jumps on a short chord", () => {
+    const pts = points([0, 0], [2, 0]);
+    const styles: ReturnType<typeof style>[] = [
+      { ...style(), dryGain: 1 },
+      { ...style(), dryGain: 0.5 },
+    ];
+    const out = densifyRibbonPoints(pts, styles, 1);
+    expect(out.points.length).toBeGreaterThan(2);
+    const mid = out.styles[Math.floor(out.styles.length / 2)];
+    expect(mid.dryGain ?? 1).toBeGreaterThan(0.5);
+    expect(mid.dryGain ?? 1).toBeLessThan(1);
+  });
+
+  it("does not coalesce vertices across a dryGain jump", () => {
+    const pts = points([0, 0], [0.3, 0], [40, 0]);
+    const styles: ReturnType<typeof style>[] = [
+      { ...style(), dryGain: 1 },
+      { ...style(), dryGain: 0.5 },
+      { ...style(), dryGain: 0.5 },
+    ];
+    const out = coalesceRibbonPoints(pts, styles, 1);
+    expect(out.points.length).toBe(3);
+    expect(out.styles[0].dryGain ?? 1).toBeCloseTo(1);
+    expect(out.styles[1].dryGain ?? 1).toBeCloseTo(0.5);
   });
 
   it("finds a trailing tip cluster after a real stroke prefix", () => {
@@ -1595,13 +1773,14 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
   });
 
   it("skips head caps when capHead is false", () => {
-    const { ctx, caps } = inkDrawContext();
-    applyInkOp(ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: true });
-    expect(caps).toHaveLength(1);
-    applyInkOp(ctx, draw([0, 0], [50, 0]), 1, { capHead: true, capEnd: true });
-    expect(caps).toHaveLength(3);
-    applyInkOp(ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: false });
-    expect(caps).toHaveLength(3);
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: true });
+    const afterTail = drawCtx.fillCount;
+    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1, { capHead: true, capEnd: true });
+    expect(drawCtx.fillCount).toBeGreaterThan(afterTail);
+    const afterBoth = drawCtx.fillCount;
+    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: false });
+    expect(drawCtx.fillCount).toBe(afterBoth);
   });
 
   it("paints constant-width and speed-ink strokes without incremental tail paint", () => {
@@ -1637,7 +1816,14 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
     expect(speed.fillCount).toBeGreaterThan(0);
   });
 
-  it("paintLiveOp passes capHead false for long open strokes", () => {
+  it("seals run ends without half-disc hairline caps", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
+  });
+
+  it("paintLiveOp rounds both ends of a long open stroke", () => {
     const viewport = {
       zoom: 1,
       scrollX: 0,
@@ -1647,9 +1833,10 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
       width: 100,
       height: 100,
     };
-    const { ctx, caps } = inkDrawContext();
-    paintLiveOp(ctx, draw([0, 0], [50, 0], [100, 0]), viewport, 1, null);
-    expect(caps).toHaveLength(0);
+    const drawCtx = inkDrawContext();
+    paintLiveOp(drawCtx.ctx, draw([0, 0], [50, 0], [100, 0]), viewport, 1, null);
+    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(2);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
   });
 
   it("paintLiveOp gives short strokes a round head", () => {
@@ -1662,8 +1849,619 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
       width: 100,
       height: 100,
     };
-    const { ctx, caps, fillCount } = inkDrawContext();
-    paintLiveOp(ctx, draw([0, 0], [5, 0]), viewport, 1, null);
-    expect(caps.length + fillCount).toBeGreaterThan(0);
+    const drawCtx = inkDrawContext();
+    paintLiveOp(drawCtx.ctx, draw([0, 0], [5, 0]), viewport, 1, null);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
+  });
+});
+
+describe("stochastic endcaps", () => {
+  it("is stable for the same origin and salt", () => {
+    const origin = { x: 12.3, y: 45.6 };
+    expect(inkCapRoundness(origin, 1)).toBe(inkCapRoundness(origin, 1));
+    expect(inkCapRoundness(origin, 1)).not.toBe(inkCapRoundness(origin, 2));
+  });
+
+  it("spreads from nearly rectangular to round across origins", () => {
+    const values = Array.from({ length: 48 }, (_, i) =>
+      inkCapRoundness({ x: i * 17, y: i * 11 }, 1),
+    );
+    expect(Math.min(...values)).toBeLessThan(0.35);
+    expect(Math.max(...values)).toBeGreaterThan(0.85);
+  });
+
+  it("pulls toward square under hard stylus pressure", () => {
+    const origin = { x: 100, y: 200 };
+    const light = inkCapRoundness(origin, 1, 0.1, true);
+    const hard = inkCapRoundness(origin, 1, 0.95, true);
+    expect(hard).toBeLessThan(light);
+    expect(hard).toBeLessThan(0.45);
+  });
+
+  it("paints a full circle at roundness 1 and a superellipse below the circle threshold", () => {
+    const round = inkDrawContext();
+    paintInkTerminalCap(round.ctx, { x: 0, y: 0 }, 5, 0, 1);
+    expect(round.fillCount).toBe(1);
+    expect(round.arcSweeps[0]).toBeCloseTo(Math.PI * 2);
+
+    const square = inkDrawContext();
+    paintInkTerminalCap(square.ctx, { x: 0, y: 0 }, 5, 0, 0.2);
+    expect(square.fillCount).toBe(1);
+    expect(square.arcSweeps).toHaveLength(0);
+    expect(square.strokes.length).toBeGreaterThan(8);
+  });
+});
+
+describe("stroke start cap", () => {
+  it("keeps a square start cap on the stroke heading at the nib width", () => {
+    let origin = { x: 0, y: 0 };
+    let found = false;
+    for (let i = 0; i < 80; i++) {
+      const o = { x: i * 19, y: i * 5 };
+      if (inkCapRoundness(o, 1) < 0.82) {
+        origin = o;
+        found = true;
+        break;
+      }
+    }
+    expect(found).toBe(true);
+    const half = inkLineWidth(8, 0, false) / 2;
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#000",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 1,
+        speedBlotBlend: 0,
+        boldness: 1,
+        points: points([origin.x, origin.y], [origin.x + 40, origin.y]),
+      },
+      1,
+    );
+    const ys = drawCtx.strokes.flatMap((s) => [s.from.y, s.to.y]);
+    expect(ys.length).toBeGreaterThan(0);
+    const maxAcross = Math.max(...ys.map((y) => Math.abs(y - origin.y)));
+    expect(maxAcross).toBeLessThanOrEqual(half * 1.2);
+  });
+});
+
+describe("grain and blot pooling (Phase 2)", () => {
+  it("paints grain 0 as one hard arc", () => {
+    const drawCtx = inkDrawContext();
+    paintGrainDisc(drawCtx.ctx, { x: 10, y: 10 }, 5, 0, 1, "#000");
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.arcSweeps[0]).toBeCloseTo(Math.PI * 2);
+    expect(drawCtx.arcRadii[0]).toBeCloseTo(5);
+  });
+
+  it("keeps a grain 0.5 silhouette within about 1.1× tip", () => {
+    const drawCtx = inkDrawContext();
+    const tip = 8;
+    const at = { x: 20, y: 30 };
+    paintGrainDisc(drawCtx.ctx, at, tip, 0.5, 1, "#000");
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.strokeCount).toBeGreaterThan(0);
+    const extent = Math.max(
+      ...drawCtx.caps.map((c) => Math.hypot(c.x - at.x, c.y - at.y) + c.r),
+    );
+    expect(extent).toBeLessThanOrEqual(tip * 1.1 + 1e-6);
+  });
+
+  it("etches a fine paper tooth with varied transparency, off the disc centre", () => {
+    const at = { x: 20, y: 30 };
+    const tip = 8;
+    const drawCtx = inkDrawContext();
+    paintGrainDisc(drawCtx.ctx, at, tip, 0.8, 1, "#000");
+    expect(drawCtx.strokeComposites.every((c) => c === "destination-out")).toBe(true);
+    expect(Math.min(...drawCtx.strokeAlphas)).toBeGreaterThan(0);
+    expect(Math.max(...drawCtx.strokeAlphas)).toBeLessThan(0.5);
+    expect(Math.max(...drawCtx.strokeAlphas)).toBeGreaterThan(
+      Math.min(...drawCtx.strokeAlphas),
+    );
+    const distToLine = (
+      p: { x: number; y: number },
+      a: { x: number; y: number },
+      b: { x: number; y: number },
+    ) => {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-9) return Math.hypot(p.x - a.x, p.y - a.y);
+      return Math.abs(dy * p.x - dx * p.y + b.x * a.y - b.y * a.x) / len;
+    };
+    const farthest = Math.max(
+      ...drawCtx.strokes.map((s) => distToLine(at, s.from, s.to)),
+    );
+    expect(farthest).toBeGreaterThan(tip * 0.2);
+    const longest = Math.max(
+      ...drawCtx.strokes.map((s) => Math.hypot(s.to.x - s.from.x, s.to.y - s.from.y)),
+    );
+    expect(longest).toBeLessThan(tip * 0.22);
+  });
+
+  it("scatters grain across a stroke instead of the centerline", () => {
+    const textured = inkDrawContext();
+    applyInkOp(
+      textured.ctx,
+      {
+        kind: "draw",
+        color: "#808080",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        grain: 0.8,
+        points: points([0, 0], [40, 0]),
+      },
+      1,
+    );
+    const offAxis = textured.strokes.filter(
+      (s) => Math.abs((s.from.y + s.to.y) / 2) > 0.8,
+    );
+    expect(offAxis.length).toBeGreaterThan(0);
+  });
+
+  it("etches grain through the trail, not only the caps", () => {
+    const textured = inkDrawContext();
+    applyInkOp(
+      textured.ctx,
+      {
+        kind: "draw",
+        color: "#808080",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        grain: 0.8,
+        points: points([0, 0], [80, 0]),
+      },
+      1,
+    );
+    const mid = textured.strokes.filter((s) => {
+      const x = (s.from.x + s.to.x) / 2;
+      return x > 20 && x < 60;
+    });
+    expect(mid.length).toBeGreaterThan(30);
+    const offAxis = mid.filter((s) => Math.abs((s.from.y + s.to.y) / 2) > 0.8);
+    expect(offAxis.length).toBeGreaterThan(0);
+  });
+
+  it("does not overshoot the nib when blot is 0", () => {
+    const tip = 6;
+    expect(inkDiscRadii(tip, 0, 0).outerR).toBeCloseTo(tip);
+    expect(inkDiscRadii(tip, 0, 1).outerR).toBeCloseTo(tip);
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#000",
+        baseWidth: 12,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedBlotBlend: 0,
+        boldness: 1,
+        points: points([0, 0]),
+      },
+      1,
+    );
+    const half = inkLineWidth(12, 0, false) / 2;
+    for (const cap of drawCtx.caps) {
+      expect(cap.r).toBeLessThanOrEqual(half + 1e-6);
+    }
+  });
+
+  it("grows past the nib at blot 100% and growT 1, with or without grain", () => {
+    const tip = 10;
+    const grown = inkDiscRadii(tip, 1, 1).outerR;
+    expect(grown).toBeCloseTo(tip * (1 + INK_BLOT_SIZE_RANGE));
+    const hard = inkDrawContext();
+    paintGrainDisc(hard.ctx, { x: 0, y: 0 }, tip, 0, 1, "#000", 1, 1);
+    expect(hard.arcRadii[0]).toBeCloseTo(grown);
+    const textured = inkDrawContext();
+    paintGrainDisc(textured.ctx, { x: 0, y: 0 }, tip, 0.5, 1, "#000", 1, 1);
+    expect(Math.max(...textured.arcRadii)).toBeGreaterThan(tip);
+    expect(textured.strokeCount).toBeGreaterThan(0);
+  });
+
+  it("does not read a missing grain field as the live dial", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, draw([4, 4]), 1);
+    expect(drawCtx.fillCount).toBe(1);
+  });
+
+  it("pools as a richer, less transparent deposit of the same colour", () => {
+    const grey = blotPoolRgb("#808080", 1);
+    const greyPlain = blotPoolRgb("#808080", 0);
+    expect(grey.r + grey.g + grey.b).toBeLessThan(greyPlain.r + greyPlain.g + greyPlain.b);
+    const mint = blotPoolRgb("#40c0a0", 1);
+    const plain = blotPoolRgb("#40c0a0", 0);
+    expect(mint.r + mint.g + mint.b).toBeLessThan(plain.r + plain.g + plain.b);
+    expect(mint.g - mint.r).toBeGreaterThan(plain.g - plain.r);
+    expect(mixBlotAlpha(1, 1)).toBeCloseTo(1);
+    expect(mixBlotAlpha(0.5, 1)).toBeGreaterThan(0.5);
+    expect(mixBlotAlpha(0.5, 1)).toBeCloseTo(0.5 + 0.5 * INK_BLOT_ALPHA_LIFT);
+    expect(INK_BLOT_SATURATE).toBeGreaterThan(0.48);
+    expect(INK_BLOT_DARKEN).toBeGreaterThan(0.28);
+    expect(blotDiscPoolT(0, 1, INK_SLOWNESS_NEUTRAL)).toBeCloseTo(INK_BLOT_END_FLOOR);
+    expect(blotRichnessT(1, 1, 1, 1)).toBeGreaterThan(blotRichnessT(1, 1, 1, 0.3));
+    const lightStop = blotPoolRgb("#40c0a0", blotRichnessT(1, 1, 1, 0.3));
+    const firmStop = blotPoolRgb("#40c0a0", blotRichnessT(1, 1, 1, 1));
+    expect(firmStop.r + firmStop.g + firmStop.b).toBeLessThan(
+      lightStop.r + lightStop.g + lightStop.b,
+    );
+
+    const tip = 8;
+    const rest = inkDrawContext();
+    paintInkDisc(rest.ctx, { x: 0, y: 0 }, tip * 2, 0.6, 1, 1, "#40c0a0", false, 1, 1);
+    const grown = inkDrawContext();
+    paintInkDisc(grown.ctx, { x: 0, y: 0 }, tip * 2, 0.6, 1, 0, "#40c0a0", false, 1, 1);
+    expect(rest.arcRadii[0]).toBeGreaterThan(grown.arcRadii[0]);
+    expect(rest.fillAlphas[0]).toBeGreaterThan(grown.fillAlphas[0]);
+  });
+
+  it("keeps trail width when speed ink is off, even with blot pooling", () => {
+    const rest = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 1, 0, false, 1, 0, 1);
+    const moving = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 0.5, 0, false, 1, 0, 1);
+    expect(rest.lineWidth).toBeCloseTo(moving.lineWidth);
+    expect(rest.blotPool ?? 0).toBe(0);
+    expect(moving.blotPool ?? 0).toBe(0);
+  });
+
+  it("widens the trail at rest when speed ink and blot are both on", () => {
+    const rest = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 1, 1, false, 1, 0, 1);
+    const moving = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 0.5, 1, false, 1, 0, 1);
+    expect(rest.lineWidth).toBeGreaterThan(moving.lineWidth);
+    expect(rest.blotPool ?? 0).toBe(0);
+    expect(moving.blotPool ?? 0).toBe(0);
+  });
+
+  it("textures a moving stroke when grain is on", () => {
+    const hard = inkDrawContext();
+    applyInkOp(
+      hard.ctx,
+      {
+        kind: "draw",
+        color: "#808080",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        grain: 0,
+        points: points([0, 0], [40, 0]),
+      },
+      1,
+    );
+    const textured = inkDrawContext();
+    applyInkOp(
+      textured.ctx,
+      {
+        kind: "draw",
+        color: "#808080",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        grain: 0.8,
+        points: points([0, 0], [40, 0]),
+      },
+      1,
+    );
+    expect(textured.strokeCount).toBeGreaterThan(hard.strokeCount);
+    expect(textured.fillCount).toBe(hard.fillCount);
+  });
+
+  it("paints pooling-only moving strokes as a ribbon, not earthworm runs", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#112233",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 0,
+        speedBlotBlend: 1,
+        points: points([0, 0], [80, 0]),
+      },
+      1,
+    );
+    expect(drawCtx.strokeCount).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(3);
+  });
+
+  it("paints drying-only strokes as a washed ribbon with a vertex gradient", () => {
+    const rest = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 1, 0, false, 1, 1);
+    const moving = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 0.2, 0, false, 1, 1);
+    expect(rest.dryGain ?? 1).toBeCloseTo(1);
+    expect(moving.dryGain ?? 1).toBeLessThan(0.85);
+    expect(rest.blotPool ?? 0).toBe(0);
+
+    const washed = dryWashRgb("#c41e3a", 0.5);
+    const wet = dryWashRgb("#c41e3a", 1);
+    expect(washed.r).toBeGreaterThan(wet.r);
+    expect(washed.g).toBeGreaterThan(wet.g);
+
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#c41e3a",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 0,
+        speedBlotBlend: 0,
+        speedFade: 1,
+        points: [
+          { x: 0, y: 0, pressure: NO_PRESSURE, slowness: 1 },
+          { x: 40, y: 0, pressure: NO_PRESSURE, slowness: 0.5 },
+          { x: 80, y: 0, pressure: NO_PRESSURE, slowness: 0 },
+        ],
+      },
+      1,
+    );
+    expect(drawCtx.strokeCount).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(3);
+    expect(drawCtx.linearGradients).toBeGreaterThan(0);
+  });
+
+  it("grows ribbon tip width from blotTipGrow on a moving stroke", () => {
+    const pts = points([0, 0], [40, 0], [80, 0]);
+    const base = {
+      kind: "draw" as const,
+      color: "#112233",
+      baseWidth: 12,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      points: pts,
+    };
+    const styles = inkStrokePointStyles({ ...base, blotTipGrow: 0 }, 0);
+    expect(styles[1].blotPool ?? 0).toBe(0);
+    const nibStyles = applyInkPoolingAtEnds(styles, { ...base, blotTipGrow: 0 }, pts, 0);
+    const grownStyles = applyInkPoolingAtEnds(styles, { ...base, blotTipGrow: 1 }, pts, 0);
+    expect(nibStyles[1].lineWidth).toBeCloseTo(grownStyles[1].lineWidth);
+    expect(grownStyles[grownStyles.length - 1].lineWidth).toBeGreaterThan(
+      nibStyles[nibStyles.length - 1].lineWidth,
+    );
+
+    const ribNib = ribbonSides(pts, nibStyles, 1);
+    const ribGrown = ribbonSides(pts, grownStyles, 1);
+    const last = pts.length - 1;
+    const halfNib =
+      Math.hypot(
+        ribNib.left[last].x - ribNib.right[last].x,
+        ribNib.left[last].y - ribNib.right[last].y,
+      ) / 2;
+    const halfGrown =
+      Math.hypot(
+        ribGrown.left[last].x - ribGrown.right[last].x,
+        ribGrown.left[last].y - ribGrown.right[last].y,
+      ) / 2;
+    expect(halfGrown).toBeGreaterThan(halfNib);
+  });
+
+  it("grows a halted pooling tip past the nib with Speed ink off", () => {
+    const pts = points([0, 0], [40, 0], [80, 0], [80.05, 0], [80, 0.08], [80.04, 0.02]);
+    const op = {
+      kind: "draw" as const,
+      color: "#112233",
+      baseWidth: 12,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 1,
+      points: pts,
+    };
+    const styles = inkStrokePointStyles(op, 0);
+    const pooled = applyInkPoolingAtEnds(styles, op, pts, 0);
+    expect(pooled[pooled.length - 1].lineWidth).toBeGreaterThan(pooled[1].lineWidth);
+    expect(pooled[1].lineWidth).toBeCloseTo(styles[1].lineWidth);
+
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    expect(drawCtx.strokeCount).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(3);
+  });
+
+  it("applyInkPoolingAtEnds widens only head and tip when grow is full", () => {
+    const dwell = points([0, 0], [0.1, 0], [0.05, 0.08], [0.08, 0.02], [40, 0], [80, 0]);
+    const op = {
+      kind: "draw" as const,
+      color: "#112233",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 1,
+      points: dwell,
+    };
+    const styles = inkStrokePointStyles(op, 0);
+    const pooled = applyInkPoolingAtEnds(styles, op, dwell, 0);
+    expect(pooled[0].lineWidth).toBeGreaterThan(styles[0].lineWidth);
+    expect(pooled[pooled.length - 1].lineWidth).toBeGreaterThan(
+      styles[styles.length - 1].lineWidth,
+    );
+    const mid = pooled.findIndex((_, i) => dwell[i].x === 40);
+    expect(mid).toBeGreaterThan(0);
+    expect(pooled[mid].lineWidth).toBeCloseTo(styles[mid].lineWidth);
+  });
+
+  it("keeps endpoints richer than the trail without a hold or extra width", () => {
+    const pts = points([0, 0], [40, 0], [80, 0]);
+    const op = {
+      kind: "draw" as const,
+      color: "#c41e3a",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 0,
+      points: pts,
+    };
+    const styles = inkStrokePointStyles(op, 0);
+    const pooled = applyInkPoolingAtEnds(styles, op, pts, 0);
+    expect(pooled[0].blotPool ?? 0).toBeGreaterThanOrEqual(INK_BLOT_END_FLOOR - 1e-6);
+    expect(pooled[pooled.length - 1].blotPool ?? 0).toBeGreaterThanOrEqual(
+      INK_BLOT_END_FLOOR - 1e-6,
+    );
+    expect(pooled[1].blotPool ?? 0).toBeLessThan(pooled[0].blotPool ?? 0);
+    expect(pooled[0].lineWidth).toBeCloseTo(styles[0].lineWidth);
+    expect(pooled[pooled.length - 1].lineWidth).toBeCloseTo(styles[styles.length - 1].lineWidth);
+  });
+
+  it("keeps a start hold on the ribbon when the nib moves away", () => {
+    const pts = points([0, 0], [40, 0], [80, 0]);
+    const base = {
+      kind: "draw" as const,
+      color: "#112233",
+      baseWidth: 12,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 0,
+      points: pts,
+    };
+    const styles = inkStrokePointStyles(base, 0);
+    const pooled = applyInkPoolingAtEnds(
+      styles,
+      { ...base, blotHalts: [{ x: 0, y: 0, grow: 1, pressure: NO_PRESSURE }] },
+      pts,
+      0,
+    );
+    expect(pooled[0].lineWidth).toBeGreaterThan(styles[0].lineWidth);
+    expect(pooled[pooled.length - 1].lineWidth).toBeCloseTo(styles[styles.length - 1].lineWidth);
+  });
+
+  it("applies pressure to pooling richness at a halted tip", () => {
+    const lightPts = [
+      { x: 0, y: 0, pressure: 0.25, slowness: 1 },
+      { x: 40, y: 0, pressure: 0.25, slowness: 1 },
+    ];
+    const firmPts = [
+      { x: 0, y: 0, pressure: 0.95, slowness: 1 },
+      { x: 40, y: 0, pressure: 0.95, slowness: 1 },
+    ];
+    const base = {
+      kind: "draw" as const,
+      color: "#40c0a0",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: true,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 1,
+    };
+    const light = applyInkPoolingAtEnds(
+      inkStrokePointStyles({ ...base, points: lightPts }, 0),
+      { ...base, points: lightPts },
+      lightPts,
+      0,
+    );
+    const firm = applyInkPoolingAtEnds(
+      inkStrokePointStyles({ ...base, points: firmPts }, 0),
+      { ...base, points: firmPts },
+      firmPts,
+      0,
+    );
+    expect(firm[firm.length - 1].blotPool ?? 0).toBeGreaterThan(
+      light[light.length - 1].blotPool ?? 0,
+    );
+  });
+
+  it("stampInkBlotHalt merges a second hold at the same spot", () => {
+    const dest: { blotHalts?: { x: number; y: number; grow: number }[] } = {};
+    stampInkBlotHalt(dest, { x: 40, y: 10, pressure: NO_PRESSURE }, 0.4);
+    stampInkBlotHalt(dest, { x: 40.2, y: 10.1, pressure: NO_PRESSURE }, 0.7);
+    expect(dest.blotHalts).toHaveLength(1);
+    expect(dest.blotHalts![0].grow).toBeCloseTo(0.7);
+  });
+
+  it("flares ribbon width at a mid-stroke halt instead of a separate disc", () => {
+    const pts = points([0, 0], [40, 0], [80, 0]);
+    const base = {
+      kind: "draw" as const,
+      color: "#112233",
+      baseWidth: 12,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 0,
+      points: pts,
+    };
+    const styles = inkStrokePointStyles(base, 0);
+    const pooled = applyInkPoolingAtEnds(
+      styles,
+      { ...base, blotHalts: [{ x: 40, y: 0, grow: 1, pressure: NO_PRESSURE }] },
+      pts,
+      0,
+    );
+    expect(pooled[1].lineWidth).toBeGreaterThan(pooled[0].lineWidth);
+    expect(pooled[1].lineWidth).toBeGreaterThan(styles[1].lineWidth);
+    expect(pooled[0].lineWidth).toBeCloseTo(styles[0].lineWidth);
+
+    const plain = inkDrawContext();
+    applyInkOp(plain.ctx, base, 1);
+    const halted = inkDrawContext();
+    applyInkOp(
+      halted.ctx,
+      {
+        ...base,
+        blotHalts: [{ x: 40, y: 0, grow: 1, pressure: NO_PRESSURE }],
+      },
+      1,
+    );
+    expect(halted.radialGradients).toBe(0);
+    expect(halted.strokeCount).toBe(plain.strokeCount);
+    expect(halted.fillCount).toBeGreaterThanOrEqual(plain.fillCount);
+  });
+
+  it("caps a pooled moving stroke at the flared ribbon width, not a second disc", () => {
+    const pts = points([0, 0], [80, 0]);
+    const op = {
+      kind: "draw" as const,
+      color: "#112233",
+      baseWidth: 12,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 1,
+      points: pts,
+    };
+    const densified = densifyRibbonPoints(pts, inkStrokePointStyles(op, 0), 1);
+    const pooled = applyInkPoolingAtEnds(densified.styles, op, densified.points, 0);
+    const tipHalf = pooled[pooled.length - 1].lineWidth / 2;
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    const plain = inkDrawContext();
+    applyInkOp(plain.ctx, { ...op, blotTipGrow: 0 }, 1);
+    expect(drawCtx.arcRadii.length).toBe(plain.arcRadii.length);
+    expect(drawCtx.arcRadii.every((r) => r <= tipHalf + 1e-6)).toBe(true);
   });
 });

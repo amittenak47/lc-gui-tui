@@ -28,6 +28,11 @@ import {
   INK_STEP_FACTOR,
   INK_STEP_FACTOR_PRESSURE,
   HIGHLIGHT_WIDTH_SCALE,
+  blotTicksToFull,
+  blotGrowTFromTicks,
+  stampInkBlotHalt,
+  INK_HOLD_STILL_PX,
+  isDiscPrimaryPath,
   isHostBoundOp,
   NO_PRESSURE,
   scenePointFromPointer,
@@ -80,7 +85,7 @@ import {
 import { WHEEL_OPEN_MS } from "../util/gesture";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { DEBUG_INK, inkMetrics } from "./inkMetrics";
-import { INK_SPEED_BLOT_BLEND_DEFAULT, INK_SPEED_FADE_DEFAULT } from "../util/inkSpeedPref";
+import { INK_GRAIN_DEFAULT, INK_SPEED_BLOT_BLEND_DEFAULT, INK_SPEED_FADE_DEFAULT } from "../util/inkSpeedPref";
 import { INK_BOLDNESS_DEFAULT } from "../util/inkBoldnessPref";
 
 export interface RasterInkHandle {
@@ -158,8 +163,10 @@ export interface RasterInkLayerProps {
   straightInk?: boolean;
   /** Speed-ink strength (0–1): a slow nib lays down more than a fast one. */
   speedInk?: number;
-  /** Soften speed-ink join/dwell discs (0–1). Stamped onto new pen strokes. */
+  /** Soften / pool speed-ink dwell discs (0–1). Stamped onto new pen strokes. */
   speedBlotBlend?: number;
+  /** Nib material (0–1). Stamped onto new pen strokes. Absent on a stroke means hard. */
+  grain?: number;
   /** Pace wash toward pencil (0–1). Stamped onto new pen strokes. */
   speedFade?: number;
   /** Opacity boost (0–3). Stamped onto new pen strokes. */
@@ -215,6 +222,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       straightInk = false,
       speedInk = 0,
       speedBlotBlend = INK_SPEED_BLOT_BLEND_DEFAULT,
+      grain = INK_GRAIN_DEFAULT,
       speedFade = INK_SPEED_FADE_DEFAULT,
       inkBoldness = INK_BOLDNESS_DEFAULT,
       partialErase = true,
@@ -436,6 +444,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     speedInkRef.current = speedInk;
     const speedBlotBlendRef = useRef(speedBlotBlend);
     speedBlotBlendRef.current = speedBlotBlend;
+    const grainRef = useRef(grain);
+    grainRef.current = grain;
     const speedFadeRef = useRef(speedFade);
     speedFadeRef.current = speedFade;
     const inkBoldnessRef = useRef(inkBoldness);
@@ -1076,10 +1086,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       /*
        * Smooth the pen stroke now that it is finished (lift mode).
        *
-       * Live mode already reshaped the open stroke under the nib; re-running
-       * here would jump ink the writer has already watched settle. The eraser
-       * is left alone — its stamps are a coverage mask, not a line, and
-       * rounding them would leave crumbs behind.
+       * Off means off: the stamps under the nib stay. A nib-scaled storage
+       * thin at zero used to round a 32-wide stroke on lift even with the
+       * dial at 0. Live mode already reshaped while writing, so it is not
+       * run again. The eraser is left alone — its stamps are a coverage
+       * mask, not a line, and rounding them would leave crumbs behind.
        */
       const isLive = smoothingModeRef.current === "live";
       const strength = smoothingRef.current;
@@ -1106,15 +1117,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                 pts = [...pts];
               } else if (straight && pts.length >= 2) {
                 pts = [pts[0]!, pts[pts.length - 1]!];
-              } else if (!isLive && !live.pressureSensitive) {
+              } else if (strength > 0 && !isLive && !live.pressureSensitive) {
                 const nib = inkLineWidth(live.baseWidth, 0, false);
                 pts = smoothInkPoints(pts, strength, nib);
-              } else if (!isLive && live.pressureSensitive) {
+              } else if (strength > 0 && !isLive && live.pressureSensitive) {
                 const nib = inkLineWidth(live.baseWidth, 0, false);
-                const shaped =
-                  strength <= 0 ? pts : smoothInkPoints(pts, strength, nib, 0);
                 pts = simplifyModulatedInkPoints(
-                  shaped,
+                  smoothInkPoints(pts, strength, nib, 0),
                   nib * SIMPLIFY_MODULATED_FRACTION,
                 );
               }
@@ -1446,13 +1455,30 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const speedInk = live.speedInk ?? 0;
         const boldness = live.boldness ?? inkBoldnessRef.current;
 
-        const stamps: ScenePoint[] = [buf[0]];
-        let last = buf[0];
-        lastPointRef.current = last;
+        const origin = buf[0];
         rawPointRef.current = buf[buf.length - 1];
+        const nib = Math.max(inkLineWidth(live.baseWidth, 0, false), 1e-6);
+        // Jitter still inside the nib is one disc at contact, not a stamp star.
+        if (isDiscPrimaryPath(buf, nib)) {
+          lastPointRef.current = origin;
+          if (liveReshapeActiveRef.current()) {
+            liveRawPointsRef.current = [origin];
+            live.points = [origin];
+          } else {
+            liveRawPointsRef.current = null;
+            live.points = [origin];
+          }
+          paintLiveAfterChangeRef.current();
+          return;
+        }
+
+        const stamps: ScenePoint[] = [origin];
+        let last = origin;
+        lastPointRef.current = last;
 
         for (let i = 1; i < buf.length; i++) {
           const point = buf[i];
+          if (isDiscPrimaryPath([...stamps, point], nib)) continue;
           const style = inkStrokeStyle(
             width,
             maxFullness,
@@ -1570,6 +1596,34 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           holdTimerRef.current = null;
           openWheelFromPending();
         }, WHEEL_OPEN_MS);
+      };
+
+      const noteInkTravel = (
+        dx: number,
+        dy: number,
+        zoom: number,
+        live: InkOp | null,
+      ): boolean => {
+        const px = Math.hypot(dx, dy) * zoom;
+        if (px <= INK_HOLD_STILL_PX) return false;
+        if (live && live.kind === "draw" && (live.blotTipGrow ?? 0) > 1e-3) {
+          const at = lastPointRef.current ?? live.points[live.points.length - 1];
+          const origin = live.points[0];
+          const nib = inkLineWidth(live.baseWidth, 0, false);
+          const nearHead =
+            !!at &&
+            !!origin &&
+            Math.hypot(at.x - origin.x, at.y - origin.y) < Math.max(0.75, nib * 0.5);
+          if (at) {
+            const haltAt =
+              nearHead && origin ? { ...at, x: origin.x, y: origin.y } : at;
+            stampInkBlotHalt(live, haltAt, live.blotTipGrow ?? 0);
+          }
+        }
+        lastMoveWallRef.current = performance.now();
+        dwellCountRef.current = 0;
+        if (live && live.kind === "draw") live.blotTipGrow = 0;
+        return true;
       };
 
       const begin = (event: PointerEvent) => {
@@ -1749,6 +1803,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         );
         const speed = speedInkRef.current;
         const blotBlend = speedBlotBlendRef.current;
+        const grainAmt = grainRef.current;
         const fade = speedFadeRef.current;
         const boldness = inkBoldnessRef.current;
         // Start at the neutral pace rather than at rest: the nib has no history
@@ -1827,10 +1882,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                     speedFade: fade,
                   }
                 : {}),
+              ...(grainAmt > 0 ? { grain: grainAmt } : {}),
               boldness,
-              points: [],
+              points: [point],
             };
-            liveRawPointsRef.current = liveReshapeActiveRef.current() ? [] : null;
+            liveRawPointsRef.current = liveReshapeActiveRef.current() ? [point] : null;
           } else {
             attackBufferRef.current = null;
             liveRawPointsRef.current = liveReshapeActiveRef.current()
@@ -1852,6 +1908,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                     speedFade: fade,
                   }
                 : {}),
+              ...(grainAmt > 0 ? { grain: grainAmt } : {}),
               boldness,
               points: [point],
             };
@@ -1922,8 +1979,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             if (!paceOn) return;
             if (liveOp.points.length === 0) return;
             if (performance.now() - lastMoveWallRef.current < 60) return;
-            if (dwellCountRef.current >= 40) return;
+            if (dwellCountRef.current >= blotTicksToFull(liveOp.speedBlotBlend ?? 0)) return;
             dwellCountRef.current++;
+            liveOp.blotTipGrow = blotGrowTFromTicks(
+              dwellCountRef.current,
+              liveOp.speedBlotBlend ?? 0,
+            );
             smoothedSpeedRef.current = smoothSpeed(smoothedSpeedRef.current, 0);
             const last = lastPointRef.current;
             if (!last) return;
@@ -1931,37 +1992,38 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               ...last,
               slowness: inkSlowness(smoothedSpeedRef.current),
             };
+            last.slowness = dwellPoint.slowness;
+            const tip = liveOp.points[liveOp.points.length - 1];
+            if (tip) tip.slowness = dwellPoint.slowness;
             if (liveOp.pressureSensitive && hasStylusPressure(last.pressure)) {
               dwellPoint.pressure = smoothedPressureRef.current;
             }
-            const dwellWidth = strokeWidthRef.current;
-            const dwellStyle = inkStrokeStyle(
-              dwellWidth,
-              liveOp.maxFullness,
-              dwellPoint.pressure,
-              liveOp.pressureClip,
-              liveOp.pressureSensitive,
-              0,
-              dwellPoint.slowness ?? INK_SLOWNESS_NEUTRAL,
-              liveOp.speedInk ?? 0,
-              false,
-              liveOp.boldness ?? inkBoldnessRef.current,
-              liveOp.speedFade ?? 0,
-            );
-            const dwellDense =
-              (liveOp.speedInk ?? 0) > 0 ||
-              (liveOp.pressureSensitive && hasStylusPressure(dwellPoint.pressure));
-            const dwellStep = Math.max(
-              dwellStyle.lineWidth *
-                (dwellDense ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
-              0.5,
-            );
-            const dwellStamps = stampAlongSegment(last, dwellPoint, dwellStep);
-            if (liveReshapeActiveRef.current()) {
-              const raw = liveRawPointsRef.current ?? (liveRawPointsRef.current = []);
-              raw.push(...dwellStamps);
-            } else {
-              liveOp.points.push(...dwellStamps);
+            const dwellNib = Math.max(inkLineWidth(liveOp.baseWidth, 0, false), 1e-6);
+            if (isDiscPrimaryPath([...liveOp.points, dwellPoint], dwellNib)) {
+              const contact = liveOp.points[0];
+              if (contact) {
+                contact.slowness = dwellPoint.slowness;
+                if (hasStylusPressure(dwellPoint.pressure)) {
+                  contact.pressure = Math.max(contact.pressure, dwellPoint.pressure);
+                }
+              }
+              if ((liveOp.speedBlotBlend ?? 0) > 1e-3 && contact) {
+                liveOp.points.push({
+                  x: contact.x,
+                  y: contact.y,
+                  pressure: contact.pressure,
+                  slowness: dwellPoint.slowness,
+                });
+              }
+              lastPointRef.current = contact ?? last;
+              paintLiveAfterChangeRef.current();
+              return;
+            }
+            // Halted on a moving stroke: swell the existing tip. Extra stamps
+            // at the same point become a tip cluster that the ribbon peels off,
+            // leaving the pool capped at the nib.
+            if (tip && hasStylusPressure(dwellPoint.pressure)) {
+              tip.pressure = dwellPoint.pressure;
             }
             lastPointRef.current = dwellPoint;
             paintLiveAfterChangeRef.current();
@@ -2102,8 +2164,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             );
             const dt = sample.timeStamp - lastSampleTimeRef.current;
             lastSampleTimeRef.current = sample.timeStamp;
-            lastMoveWallRef.current = performance.now();
-            dwellCountRef.current = 0;
+            noteInkTravel(
+              raw.x - rawLast.x,
+              raw.y - rawLast.y,
+              zoom,
+              live,
+            );
 
             if (pressureSensitive && hasStylusPressure(raw.pressure)) {
               if (raw.pressure > attackPeakRef.current) {
@@ -2134,11 +2200,16 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             attackCountRef.current++;
           }
 
+          const contact = live.points[0];
+          if (contact && hasStylusPressure(attackPeakRef.current)) {
+            contact.pressure = attackPeakRef.current;
+          }
+
           const shouldFlush =
             event.timeStamp - attackStartRef.current >= INK_ATTACK_MS ||
             attackCountRef.current >= 3;
           if (shouldFlush) flushAttackBuffer();
-          if (attackBufferRef.current) return;
+          else paintLiveAfterChangeRef.current();
           return;
         }
 
@@ -2156,8 +2227,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           );
           const dt = sample.timeStamp - lastSampleTimeRef.current;
           lastSampleTimeRef.current = sample.timeStamp;
-          lastMoveWallRef.current = performance.now();
-          dwellCountRef.current = 0;
+          noteInkTravel(
+            raw.x - rawLast.x,
+            raw.y - rawLast.y,
+            zoom,
+            live,
+          );
 
           if (pressureSensitive && hasStylusPressure(raw.pressure)) {
             // Filter pressure, not position: smoothing the path would lag the
@@ -2202,6 +2277,31 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             }
             lastPointRef.current = point;
             continue;
+          }
+
+          if (
+            live.kind === "draw" &&
+            live.highlight !== true &&
+            live.points[0]
+          ) {
+            const nib = Math.max(inkLineWidth(live.baseWidth, 0, false), 1e-6);
+            const trail = reshapeLive
+              ? [...(liveRawPointsRef.current ?? live.points), point]
+              : [...live.points, point];
+            if (isDiscPrimaryPath(trail, nib)) {
+              const origin = live.points[0];
+              if (
+                hasStylusPressure(point.pressure) &&
+                point.pressure > origin.pressure
+              ) {
+                origin.pressure = point.pressure;
+              }
+              if (point.slowness !== undefined) origin.slowness = point.slowness;
+              lastPointRef.current = origin;
+              live.points = [origin];
+              if (reshapeLive) liveRawPointsRef.current = [origin];
+              continue;
+            }
           }
 
           if (live.kind === "draw" && live.highlight === true) {

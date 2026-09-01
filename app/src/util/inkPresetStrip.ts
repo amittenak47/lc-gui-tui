@@ -38,6 +38,7 @@ export function drawOpFromSnap(
     pressureSensitive: snap.pressureSensitive,
     speedInk: snap.speed,
     speedBlotBlend: snap.blot,
+    ...(kind !== "highlighter" && (snap.grain ?? 0) > 0 ? { grain: snap.grain } : {}),
     speedFade: snap.fade,
     boldness: snap.boldness,
     highlight: kind === "highlighter",

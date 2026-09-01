@@ -119,10 +119,9 @@ export const SIMPLIFY_MAX_FRACTION = 0.5;
  * linear in points. Thinning at commit is paid once and refunded on every
  * rasterisation for the life of the page.
  *
- * Deliberately far under {@link SIMPLIFY_MAX_FRACTION}. That one is a
- * *smoothing* tolerance the writer asked for and can see; this one is a storage
- * tolerance they must not be able to see, which is why it survives a smoothing
- * setting of zero.
+ * This floor only applies when the writer asked for smoothing. At zero the
+ * stroke stays the stamps they drew — a fifteenth of a 32-wide nib is a
+ * visible reshape on lift, which is not "off".
  */
 export const SIMPLIFY_STORAGE_FRACTION = 1 / 15;
 
@@ -440,7 +439,7 @@ export function smoothInkPoints(
   minFraction?: number,
 ): ScenePoint[] {
   const dial = Math.max(0, Math.min(1, strength));
-  if (points.length < 3) return [...points];
+  if (points.length < 3 || dial <= 0) return [...points];
 
   const width = Math.max(nibWidth, 1e-6);
   const floorFrac = minFraction ?? SIMPLIFY_STORAGE_FRACTION;

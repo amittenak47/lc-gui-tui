@@ -8,15 +8,19 @@
  * session hash map (and on disk after the first capture). Missing pages fill
  * only while the camera is idle with the strip open — not from the paint pump.
  */
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 import { isDocCameraLive, subscribeDocCameraLive } from "../canvas/docSelectionGesture";
 import {
+  PDF_FILM_RAIL_CELL,
+  PDF_FILM_RAIL_GAP,
   PDF_FILM_THUMB_CSS,
   PDF_LETTER_ASPECT,
   filmStripWheelDelta,
   grabLivePdfThumb,
   grabLruPdfThumb,
+  pdfFilmRailScrollLeft,
+  pdfFilmRailWindow,
   peekPdfThumb,
   peekPdfThumbs,
   publishPdfFilmThumbWanted,
@@ -29,11 +33,6 @@ import {
 } from "./pdfFilm";
 
 export type { PdfThumbRenderer };
-
-const RAIL_THUMB_W = 48;
-const RAIL_GAP = 10;
-/** Thumb width plus the strip gap — one cell in scrollLeft math. */
-const RAIL_CELL = RAIL_THUMB_W + RAIL_GAP;
 
 export interface PdfPageRailProps {
   /**
@@ -80,7 +79,14 @@ export function PdfPageRail({
   const [railCurrent, setRailCurrent] = useState(current);
   const [railPredicted, setRailPredicted] = useState(0);
   const currentPage = railCurrent;
-  const [railRange, setRailRange] = useState({ start: 1, end: Math.min(count, 24) });
+  const [railRange, setRailRange] = useState(() =>
+    pdfFilmRailWindow(
+      current,
+      count,
+      pdfFilmRailScrollLeft(current, 24 * PDF_FILM_RAIL_CELL),
+      24 * PDF_FILM_RAIL_CELL,
+    ),
+  );
   const [idleTick, setIdleTick] = useState(0);
 
   useEffect(() => subscribePdfFilmCurrent(filmScope, setRailCurrent), [filmScope]);
@@ -99,25 +105,32 @@ export function PdfPageRail({
   useEffect(() => {
     const strip = stripRef.current;
     if (!strip || count < 2) return;
-    const cellW = RAIL_CELL;
-    const overscan = 8;
     const update = () => {
-      const first = Math.max(1, Math.floor(strip.scrollLeft / cellW) + 1);
-      const visible = Math.max(1, Math.ceil(strip.clientWidth / cellW));
-      let start = Math.max(1, first - overscan);
-      let end = Math.min(count, first + visible + overscan);
-      if (currentPage >= 1) {
-        start = Math.min(start, currentPage);
-        end = Math.max(end, currentPage);
-      }
+      const next = pdfFilmRailWindow(
+        currentPage,
+        count,
+        strip.scrollLeft,
+        strip.clientWidth,
+      );
       setRailRange((prev) =>
-        prev.start === start && prev.end === end ? prev : { start, end },
+        prev.start === next.start && prev.end === next.end ? prev : next,
       );
     };
     update();
     strip.addEventListener("scroll", update, { passive: true });
     return () => strip.removeEventListener("scroll", update);
   }, [count, currentPage]);
+
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
+    if (!strip || count < 2) return;
+    const width = strip.clientWidth || 24 * PDF_FILM_RAIL_CELL;
+    strip.scrollLeft = pdfFilmRailScrollLeft(currentPage, width);
+    const next = pdfFilmRailWindow(currentPage, count, strip.scrollLeft, width);
+    setRailRange((prev) =>
+      prev.start === next.start && prev.end === next.end ? prev : next,
+    );
+  }, [currentPage, count]);
 
   useEffect(() => {
     const strip = stripRef.current;
@@ -132,16 +145,6 @@ export function PdfPageRail({
     strip.addEventListener("wheel", onWheel, { passive: false });
     return () => strip.removeEventListener("wheel", onWheel);
   }, [count]);
-
-  useEffect(() => {
-    const node = currentRef.current;
-    if (!node) return;
-    node.scrollIntoView({
-      inline: "center",
-      block: "nearest",
-      behavior: "auto",
-    });
-  }, [currentPage]);
 
   useEffect(() => {
     setThumbs(peekPdfThumbs(docHash));
@@ -250,7 +253,7 @@ export function PdfPageRail({
 
   const pages: number[] = [];
   for (let page = railRange.start; page <= railRange.end; page += 1) pages.push(page);
-  const trackW = count * RAIL_THUMB_W + Math.max(0, count - 1) * RAIL_GAP;
+  const trackW = count * PDF_FILM_THUMB_CSS + Math.max(0, count - 1) * PDF_FILM_RAIL_GAP;
 
   return (
     <nav ref={stripRef} className="lc-pdf-rail" aria-label="PDF pages">
@@ -281,7 +284,7 @@ export function PdfPageRail({
                 {
                   "--lc-pdf-aspect": String(aspect),
                   position: "absolute",
-                  left: (page - 1) * RAIL_CELL,
+                  left: (page - 1) * PDF_FILM_RAIL_CELL,
                   bottom: 0,
                 } as CSSProperties
               }

@@ -29,6 +29,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import type { MdFormatKind } from "../modes/AnnotateMarkdownEditor";
@@ -238,6 +239,7 @@ import {
 } from "./selectionTrash";
 import {
   CHROME_IDLE_MS,
+  CHROME_MORPH_MS,
   chromeModeLabel,
   chromeVisibility,
   loadChromeMode,
@@ -264,8 +266,10 @@ import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
 import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref";
 import {
+  INK_GRAIN_EVENT,
   INK_SPEED_BLOT_BLEND_EVENT,
   INK_SPEED_FADE_EVENT,
+  loadInkGrain,
   loadInkSpeed,
   loadInkSpeedBlotBlend,
   loadInkSpeedFade,
@@ -1381,6 +1385,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkSpeedBlotBlend, setInkSpeedBlotBlend] = useState(() =>
     loadInkSpeedBlotBlend(),
   );
+  const [inkGrain, setInkGrain] = useState(() => loadInkGrain());
   const [inkSpeedFade, setInkSpeedFade] = useState(() => loadInkSpeedFade());
   const [inkBoldness, setInkBoldness] = useState(() => loadInkBoldness());
   const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
@@ -1628,6 +1633,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   ]
     .filter(Boolean)
     .join(" ");
+  const chromeTraySleeps = chromeMode === "fade" || chromeMode === "hidden";
+  const chromeStackOpen = chromeShown.eye;
+  const mountStackTools = chromeShown.chrome || chromeMode === "fade";
+  const mountEye = chromeShown.eye || chromeTraySleeps;
+  /*
+   * Fade/hidden keeps the wake mounted while the tray is still up, so the first
+   * idle hide can run the same close sequence as tapping Hide controls. Adding
+   * `has-wake` on an already-open tray would play the *open* morph (border +
+   * checkerboard sliding in). `is-snap` skips that one paint.
+   */
+  const [chromeWakeSnap, setChromeWakeSnap] = useState(false);
+  const chromeTraySleepsRef = useRef(chromeTraySleeps);
 
   /*
    * The idle timer, and the tap that restarts it.
@@ -1640,6 +1657,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const wakeChrome = useCallback(() => {
     setChromeAwake(true);
     setChromeWakeGen((n) => n + 1);
+  }, []);
+  const sleepChrome = useCallback(() => {
+    setChromeAwake(false);
   }, []);
   // Read from a native listener installed once — see the tap-to-wake guard.
   const wakeChromeRef = useRef(wakeChrome);
@@ -1655,6 +1675,57 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     setAnnotatePeek(true);
     setAnnotatePeekGen((n) => n + 1);
   }, []);
+  const leftChromeOpen = chromeShown.chrome || annotatePeek;
+  const rightWakePointerRef = useRef<number | null>(null);
+  const leftWakePointerRef = useRef<number | null>(null);
+  const rightWakeGestureRef = useRef<"open" | "close" | null>(null);
+  const leftWakeGestureRef = useRef<"open" | "close" | null>(null);
+  const rightWakeQuietUntilRef = useRef(0);
+  const leftWakeQuietUntilRef = useRef(0);
+  const beginWakeGesture = (
+    slot: "left" | "right",
+    event: ReactPointerEvent,
+    open: boolean,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.isPrimary) return;
+    const pointerRef = slot === "right" ? rightWakePointerRef : leftWakePointerRef;
+    const gestureRef = slot === "right" ? rightWakeGestureRef : leftWakeGestureRef;
+    const quietRef = slot === "right" ? rightWakeQuietUntilRef : leftWakeQuietUntilRef;
+    if (open && performance.now() < quietRef.current) return;
+    pointerRef.current = event.pointerId;
+    if (!open) {
+      gestureRef.current = "open";
+      quietRef.current = performance.now() + CHROME_MORPH_MS * 2 + 120;
+      if (slot === "right") wakeChrome();
+      else peekAnnotate();
+      return;
+    }
+    gestureRef.current = "close";
+  };
+  const endWakeGesture = (
+    slot: "left" | "right",
+    event: ReactPointerEvent,
+    close: () => void,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const pointerRef = slot === "right" ? rightWakePointerRef : leftWakePointerRef;
+    const gestureRef = slot === "right" ? rightWakeGestureRef : leftWakeGestureRef;
+    if (pointerRef.current !== event.pointerId) return;
+    const gesture = gestureRef.current;
+    pointerRef.current = null;
+    gestureRef.current = null;
+    if (gesture === "close") close();
+  };
+  const cancelWakeGesture = (slot: "left" | "right", pointerId: number) => {
+    const pointerRef = slot === "right" ? rightWakePointerRef : leftWakePointerRef;
+    const gestureRef = slot === "right" ? rightWakeGestureRef : leftWakeGestureRef;
+    if (pointerRef.current !== pointerId) return;
+    pointerRef.current = null;
+    gestureRef.current = null;
+  };
   useEffect(() => {
     if (!annotatePeek) return;
     const timer = window.setTimeout(() => setAnnotatePeek(false), CHROME_IDLE_MS);
@@ -1676,6 +1747,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     setChromeAwake(true);
     setChromeWakeGen((n) => n + 1);
   }, [chromeMode]);
+  useLayoutEffect(() => {
+    const wasSleeping = chromeTraySleepsRef.current;
+    chromeTraySleepsRef.current = chromeTraySleeps;
+    if (chromeTraySleeps && !wasSleeping) setChromeWakeSnap(true);
+    else if (!chromeTraySleeps) setChromeWakeSnap(false);
+  }, [chromeTraySleeps]);
+  useLayoutEffect(() => {
+    if (!chromeWakeSnap) return;
+    let inner = 0;
+    const outer = window.requestAnimationFrame(() => {
+      inner = window.requestAnimationFrame(() => setChromeWakeSnap(false));
+    });
+    return () => {
+      window.cancelAnimationFrame(outer);
+      if (inner) window.cancelAnimationFrame(inner);
+    };
+  }, [chromeWakeSnap]);
   const [pressureSensitive, setPressureSensitiveState] = useState(
     () => inkPrefsRef.current.pressureSensitive,
   );
@@ -3395,6 +3483,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     window.addEventListener(INK_SPEED_BLOT_BLEND_EVENT, onBlotBlend);
     return () =>
       window.removeEventListener(INK_SPEED_BLOT_BLEND_EVENT, onBlotBlend);
+  }, []);
+
+  useEffect(() => {
+    const onGrain = () => setInkGrain(loadInkGrain());
+    window.addEventListener(INK_GRAIN_EVENT, onGrain);
+    return () => window.removeEventListener(INK_GRAIN_EVENT, onGrain);
   }, []);
 
   useEffect(() => {
@@ -8396,6 +8490,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           currentItemFontSize: DEFAULT_FONT_SIZE,
           // Paint-like: single tap opens the editor (not drag-to-size).
           currentItemAutoResize: true,
+          gridModeEnabled: false,
         },
         // We call settleFitView ourselves — Excalidraw's default fits the entire
         // board and lands the problem as a postage stamp in the corner.
@@ -8519,8 +8614,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               .filter(Boolean)
               .join(" ")}
           >
-            <div className="lc-map-chrome-left">
-              {annotateToggle && (chromeShown.chrome || annotatePeek) && (
+            <div
+              className={[
+                "lc-map-chrome-left",
+                chromeTraySleeps && annotateToggle ? "has-wake" : "",
+                chromeTraySleeps && annotateToggle && leftChromeOpen
+                  ? "is-open"
+                  : "",
+                chromeTraySleeps && annotateToggle && chromeWakeSnap
+                  ? "is-snap"
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
+              <div className="lc-chrome-stack-tray">
+              {annotateToggle && (leftChromeOpen || chromeTraySleeps) && (
                 <div className="lc-map-chrome-row">
                   <button
                     type="button"
@@ -8567,21 +8676,38 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   )}
                 </div>
               )}
-              {annotateToggle && !chromeShown.chrome && !annotatePeek && (
+              </div>
+              {annotateToggle && chromeTraySleeps && (
                 <button
                   type="button"
                   className={`${chromeWakeClass} lc-chrome-wake-annotate`}
-                  aria-label="Show annotate mode"
+                  aria-label={
+                    leftChromeOpen ? "Hide annotate mode" : "Show annotate mode"
+                  }
                   data-tip={
-                    chromeWakeMarker === "off" ? undefined : "Show annotate / scroll"
+                    chromeWakeMarker === "off"
+                      ? undefined
+                      : leftChromeOpen
+                        ? "Hide annotate / scroll"
+                        : "Show annotate / scroll"
                   }
                   data-tip-placement="bottom"
                   onPointerDown={(event) => {
+                    beginWakeGesture("left", event, leftChromeOpen);
+                  }}
+                  onPointerUp={(event) => {
+                    endWakeGesture("left", event, () => {
+                      if (chromeShown.chrome) sleepChrome();
+                      else setAnnotatePeek(false);
+                    });
+                  }}
+                  onPointerCancel={(event) => {
+                    cancelWakeGesture("left", event.pointerId);
+                  }}
+                  onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    peekAnnotate();
                   }}
-                  onClick={peekAnnotate}
                 >
                   <span className="lc-chrome-wake-ghost" aria-hidden>
                     <AnnotateIcon on={annotateCode} />
@@ -8749,19 +8875,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 stays when chrome collapses; wake-dot is un-carded.
               */}
               <div
-                className="lc-map-chrome-stack"
+                className={[
+                  "lc-map-chrome-stack",
+                  chromeTraySleeps ? "has-wake" : "",
+                  chromeTraySleeps && chromeStackOpen ? "is-open" : "",
+                  chromeTraySleeps && chromeWakeSnap ? "is-snap" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 role="toolbar"
                 aria-label="Board view"
-                onPointerDownCapture={
-                  !chromeShown.eye
-                    ? (event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        wakeChrome();
-                      }
-                    : undefined
-                }
               >
+                <div className="lc-chrome-stack-tray">
                 {/*
                   Explore portals search / filter / cluster into this slot so
                   the tray grows in place instead of painting a second island.
@@ -8775,7 +8900,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   the note is a view of the document, and views live in this
                   stack — same rail as paper, page previews and the eye.
                 */}
-                {!mapChromeHidden && editToggle && (
+                {mountStackTools && editToggle && (
                   <button
                     type="button"
                     className={
@@ -8807,7 +8932,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   PDF used to shove the theme swatch up a notch, and a reader
                   aims at where the swatch was last time.
                 */}
-                {!mapChromeHidden &&
+                {mountStackTools &&
                   linedPaperToggle &&
                   isDrawPageRegion(mobileRegion ?? null) && (
                     <button
@@ -8833,7 +8958,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       <span aria-hidden>🗒️</span>
                     </button>
                   )}
-                {!mapChromeHidden && pageFilm && (
+                {mountStackTools && pageFilm && (
                   <button
                     type="button"
                     className={
@@ -8854,7 +8979,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     <PagesFilmIcon />
                   </button>
                 )}
-                {!mapChromeHidden && pageSpread && (
+                {mountStackTools && pageSpread && (
                   <button
                     type="button"
                     className={[
@@ -8885,7 +9010,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     </span>
                   </button>
                 )}
-                {!mapChromeHidden && mobile && onToggleSheetLock && (
+                {mountStackTools && mobile && onToggleSheetLock && (
                   <button
                     type="button"
                     className={[
@@ -8912,7 +9037,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   </button>
                 )}
                 {/* Recentre — see `recentreKeepPlace` for why it is two rules. */}
-                {!mapChromeHidden && (
+                {mountStackTools && (
                   <button
                     type="button"
                     className="lc-lined-toggle lc-tip-target"
@@ -8924,10 +9049,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     <RecentreIcon />
                   </button>
                 )}
-                {!mapChromeHidden && onThemePick && (
+                {mountStackTools && onThemePick && (
                   <BackgroundPalette variant="map" themeId={themeId} onPick={onThemePick} />
                 )}
-                {chromeShown.eye && (
+                {mountEye && (
                   <button
                     type="button"
                     className={
@@ -8948,29 +9073,35 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     <EyeIcon closed={chromeMode === "hidden"} half={chromeMode === "fade"} />
                   </button>
                 )}
-                {/*
-                  The column that brings it back.
-
-                  Only mounted when there is nothing else there to tap, so it
-                  never sits over a live control. Hit target is the whole
-                  stack, not just the eye's square — with a pen up, a miss
-                  used to stamp dots on the page.
-                */}
-                {!chromeShown.eye && (
+                </div>
+                {chromeTraySleeps && (
                   <button
                     type="button"
                     className={chromeWakeClass}
-                    aria-label="Show board controls"
+                    aria-label={
+                      chromeStackOpen ? "Hide board controls" : "Show board controls"
+                    }
                     data-tip={
-                      chromeWakeMarker === "off" ? undefined : "Show controls"
+                      chromeWakeMarker === "off"
+                        ? undefined
+                        : chromeStackOpen
+                          ? "Hide controls"
+                          : "Show controls"
                     }
                     data-tip-placement="bottom"
                     onPointerDown={(event) => {
+                      beginWakeGesture("right", event, chromeStackOpen);
+                    }}
+                    onPointerUp={(event) => {
+                      endWakeGesture("right", event, sleepChrome);
+                    }}
+                    onPointerCancel={(event) => {
+                      cancelWakeGesture("right", event.pointerId);
+                    }}
+                    onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
-                      wakeChrome();
                     }}
-                    onClick={wakeChrome}
                   >
                     <span className="lc-chrome-wake-ghost" aria-hidden>
                       <EyeIcon closed />
@@ -9018,6 +9149,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         straightInk={straightInk}
         speedInk={inkSpeed}
         speedBlotBlend={inkSpeedBlotBlend}
+        grain={inkGrain}
         speedFade={inkSpeedFade}
         inkBoldness={inkBoldness}
         partialErase={eraserPartial}
