@@ -242,7 +242,7 @@ describe("InkTileCache", () => {
   }
 
   describe("tile overlap", () => {
-    it("rasterises each tile with a pad so AA can meet", () => {
+    it("rasterises each tile with a pad so edge coverage is complete", () => {
       const { cache, canvases } = makeCache();
       cache.setOps([draw([0, 0], [40, 0])]);
       const { ctx } = destinationContext();
@@ -252,16 +252,16 @@ describe("InkTileCache", () => {
       expect(canvases.created[0].height).toBe(TILE_PX + 2 * TILE_OVERLAP_PX);
     });
 
-    it("blits each tile larger than its scene square", () => {
+    it("blits each tile's core, not the raster pad", () => {
       const { cache } = makeCache();
       cache.setOps([draw([0, 0], [40, 0])]);
       const { ctx, blits } = destinationContext();
       cache.draw(ctx, screen(1), 1);
       expect(blits.length).toBeGreaterThan(0);
-      const dest = TILE_PX + 2 * TILE_OVERLAP_PX;
       for (const blit of blits) {
-        expect(blit.dw).toBeCloseTo(dest);
-        expect(blit.dh).toBeCloseTo(dest);
+        expect(blit.args).toBe(9);
+        expect(blit.dw).toBeCloseTo(TILE_PX);
+        expect(blit.dh).toBeCloseTo(TILE_PX);
       }
     });
   });

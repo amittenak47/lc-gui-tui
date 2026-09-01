@@ -27,6 +27,46 @@ export const PDF_FILM_DEFAULT = true;
 export const PDF_FILM_THUMB_CSS = 48;
 export { PDF_FILM_CACHE, PDF_FILM_RADIUS };
 export const PDF_LETTER_ASPECT = 612 / 792;
+/** Gap between filmstrip thumbs — matches `.lc-pdf-rail` layout. */
+export const PDF_FILM_RAIL_GAP = 10;
+export const PDF_FILM_RAIL_CELL = PDF_FILM_THUMB_CSS + PDF_FILM_RAIL_GAP;
+
+/**
+ * scrollLeft that puts `current` in the middle of the strip.
+ * Used on open so remounting the rail does not jump back to page 1.
+ */
+export function pdfFilmRailScrollLeft(
+  current: number,
+  clientWidth: number,
+  cell = PDF_FILM_RAIL_CELL,
+  thumbW = PDF_FILM_THUMB_CSS,
+): number {
+  const focus = Math.max(1, current);
+  const width = Math.max(0, clientWidth);
+  return Math.max(0, (focus - 1) * cell - (width - thumbW) / 2);
+}
+
+/**
+ * Which thumbs to mount: the strip's own viewport plus a window around the
+ * page in view. Do not grow start to 1 just to include current. That mounted
+ * every cell from the beginning and left the strip at scrollLeft 0 on reopen.
+ */
+export function pdfFilmRailWindow(
+  current: number,
+  count: number,
+  scrollLeft: number,
+  clientWidth: number,
+  overscan = 8,
+): { start: number; end: number } {
+  const last = Math.max(1, count);
+  const cell = PDF_FILM_RAIL_CELL;
+  const first = Math.max(1, Math.floor(Math.max(0, scrollLeft) / cell) + 1);
+  const visible = Math.max(1, Math.ceil(Math.max(cell, clientWidth) / cell));
+  const focus = Math.max(1, Math.min(last, current || 1));
+  const start = Math.max(1, Math.min(first - overscan, focus - overscan));
+  const end = Math.min(last, Math.max(first + visible + overscan, focus + overscan));
+  return { start, end };
+}
 
 /** Per-document two-up. Keyed by content hash so Kleinberg can stay on. */
 export const PDF_SPREAD_PREF_PREFIX = "whiteboard.pdfSpread.";
