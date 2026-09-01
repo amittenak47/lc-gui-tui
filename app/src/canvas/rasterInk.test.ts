@@ -2207,7 +2207,9 @@ describe("grain and blot pooling (Phase 2)", () => {
     expect(pooled[pooled.length - 1].lineWidth).toBeGreaterThan(
       styles[styles.length - 1].lineWidth,
     );
-    expect(pooled[3].lineWidth).toBeCloseTo(styles[3].lineWidth);
+    const mid = pooled.findIndex((_, i) => dwell[i].x === 40);
+    expect(mid).toBeGreaterThan(0);
+    expect(pooled[mid].lineWidth).toBeCloseTo(styles[mid].lineWidth);
   });
 
   it("applies pressure to pooling richness at a halted tip", () => {
@@ -2255,7 +2257,7 @@ describe("grain and blot pooling (Phase 2)", () => {
     expect(dest.blotHalts![0].grow).toBeCloseTo(0.7);
   });
 
-  it("paints mid-stroke halt discs after the nib has moved on", () => {
+  it("flares ribbon width at a mid-stroke halt instead of a separate disc", () => {
     const pts = points([0, 0], [40, 0], [80, 0]);
     const base = {
       kind: "draw" as const,
@@ -2269,6 +2271,17 @@ describe("grain and blot pooling (Phase 2)", () => {
       blotTipGrow: 0,
       points: pts,
     };
+    const styles = inkStrokePointStyles(base, 0);
+    const pooled = applyInkPoolingAtEnds(
+      styles,
+      { ...base, blotHalts: [{ x: 40, y: 0, grow: 1, pressure: NO_PRESSURE }] },
+      pts,
+      0,
+    );
+    expect(pooled[1].lineWidth).toBeGreaterThan(pooled[0].lineWidth);
+    expect(pooled[1].lineWidth).toBeGreaterThan(styles[1].lineWidth);
+    expect(pooled[0].lineWidth).toBeCloseTo(styles[0].lineWidth);
+
     const plain = inkDrawContext();
     applyInkOp(plain.ctx, base, 1);
     const halted = inkDrawContext();
@@ -2280,6 +2293,6 @@ describe("grain and blot pooling (Phase 2)", () => {
       },
       1,
     );
-    expect(halted.fillCount).toBeGreaterThan(plain.fillCount);
+    expect(halted.fillCount).toBe(plain.fillCount);
   });
 });
