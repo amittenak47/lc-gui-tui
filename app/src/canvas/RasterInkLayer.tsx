@@ -34,6 +34,7 @@ import {
   INK_HOLD_STILL_PX,
   isDiscPrimaryPath,
   isHostBoundOp,
+  livePaintQueueStart,
   NO_PRESSURE,
   scenePointFromPointer,
   smoothPressure,
@@ -330,6 +331,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * the two from feeling like different pens.
      */
     const committedSnapRef = useRef<HTMLCanvasElement | null>(null);
+    /** Live ink behind the constant-size tip queue (On Lift). */
+    const liveQueueSnapRef = useRef<HTMLCanvasElement | null>(null);
+    /** Oldest live index already baked into {@link liveQueueSnapRef}. */
+    const liveQueueBakedRef = useRef(0);
     /** One live paint per animation frame while stamps keep arriving. */
     const livePaintRafRef = useRef<number | null>(null);
     /**
@@ -928,10 +933,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     /**
      * Hot path: blit the stroke-start committed snapshot, then the live op.
      *
-     * Incremental tail paint stacked overlapping butt-cap segments into spoke
-     * artifacts on thick pens; clearing and repainting the whole live op avoids
-     * that. Re-tiling the page on every sample was the remaining cost — Chrome
-     * hides it by coalescing moves; Cursor's browser often does not.
+     * The open stroke's point list still grows; the paint queue does not. Points
+     * behind a 4-nib tip window are dequeued onto a live bitmap once. Each frame
+     * only re-paints that window. Continuation chunks skip the tap-disc path.
+     * While Writing still full-paints; RDP would stale the bake.
      */
     const paintLiveIncremental = useCallback(() => {
       const canvas = canvasRef.current;
@@ -947,6 +952,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         canvas.height !== Math.round(box.height * dpr)
       ) {
         committedSnapRef.current = null;
+        liveQueueSnapRef.current = null;
+        liveQueueBakedRef.current = 0;
         repaint();
         return;
       }
@@ -955,6 +962,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       // Host-bound live ink needs clip+translate — fall back to a full frame.
       if (isHostBoundOp(live)) {
         committedSnapRef.current = null;
+        liveQueueSnapRef.current = null;
+        liveQueueBakedRef.current = 0;
         repaint();
         return;
       }
@@ -973,7 +982,55 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(snap, 0, 0);
-        paintLiveOp(ctx, live, drawView, dpr, clipRef.current, scrollHostLookup());
+        const reshapeLive =
+          smoothingModeRef.current === "live" && smoothingRef.current > 0;
+        const hosts = scrollHostLookup();
+        if (!reshapeLive && live.kind === "draw") {
+          const nib = inkLineWidth(live.baseWidth, 0, false);
+          const queueStart = livePaintQueueStart(live.points, nib);
+          if (queueStart > 0) {
+            let baked = liveQueueSnapRef.current;
+            if (!baked) {
+              baked = document.createElement("canvas");
+              liveQueueSnapRef.current = baked;
+            }
+            if (baked.width !== canvas.width || baked.height !== canvas.height) {
+              baked.width = canvas.width;
+              baked.height = canvas.height;
+              liveQueueBakedRef.current = 0;
+            }
+            const from = liveQueueBakedRef.current;
+            if (queueStart > from) {
+              const pctx = baked.getContext("2d");
+              if (pctx) {
+                const evicted: InkOp = {
+                  ...live,
+                  points: live.points.slice(from, queueStart + 1),
+                };
+                paintLiveOp(pctx, evicted, drawView, dpr, clipRef.current, hosts, {
+                  capEnd: false,
+                  capHead: from === 0,
+                });
+                liveQueueBakedRef.current = queueStart;
+              }
+            }
+            ctx.drawImage(baked, 0, 0);
+            const queue: InkOp = {
+              ...live,
+              points: live.points.slice(queueStart),
+            };
+            paintLiveOp(ctx, queue, drawView, dpr, clipRef.current, hosts, {
+              capEnd: true,
+              capHead: false,
+            });
+            liveDrawnIndexRef.current = Math.max(0, live.points.length - 1);
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            return;
+          }
+          liveQueueSnapRef.current = null;
+          liveQueueBakedRef.current = 0;
+        }
+        paintLiveOp(ctx, live, drawView, dpr, clipRef.current, hosts);
         liveDrawnIndexRef.current =
           live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -2398,6 +2455,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         strokeBoxRef.current = null;
         strokeRectRef.current = null;
         committedSnapRef.current = null;
+        liveQueueSnapRef.current = null;
+        liveQueueBakedRef.current = 0;
         detachWindowFallback();
         try {
           canvas.releasePointerCapture(event.pointerId);
@@ -2461,6 +2520,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         strokeBoxRef.current = null;
         strokeRectRef.current = null;
         committedSnapRef.current = null;
+        liveQueueSnapRef.current = null;
+        liveQueueBakedRef.current = 0;
         lastPointRef.current = null;
         rawPointRef.current = null;
         detachWindowFallback();
