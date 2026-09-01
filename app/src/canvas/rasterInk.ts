@@ -377,6 +377,16 @@ export interface InkHostBinding {
   scrollLeftAtDraw: number;
 }
 
+/** A pooling stamp left where the nib halted, then moved on. */
+export interface InkBlotHalt {
+  x: number;
+  y: number;
+  /** 0–1, same units as {@link InkDrawOp.blotTipGrow}. */
+  grow: number;
+  pressure?: number;
+  slowness?: number;
+}
+
 export interface InkDrawOp {
   kind: "draw";
   color: string;
@@ -394,10 +404,16 @@ export interface InkDrawOp {
    */
   speedBlotBlend?: number;
   /**
-   * How far the tip pooled during a hold (0–1). Stamped at lift so smoothing
-   * can drop the extra dwell samples without losing the pool size.
+   * How far the current tip pooled during a hold (0–1). Stamped at lift so
+   * smoothing can drop extra dwell samples without losing the pool size.
+   * Mid-stroke holds that you leave without lifting go in {@link blotHalts}.
    */
   blotTipGrow?: number;
+  /**
+   * Pooling discs left behind when a hold ends and the nib keeps moving.
+   * Independent of the polyline so smoothing cannot peel them off.
+   */
+  blotHalts?: InkBlotHalt[];
   /**
    * How much pace washes opacity toward pencil (0–1). Stamped at draw time.
    * Absent on older speed-ink strokes → full wash (today's 0.55 base).
@@ -1711,6 +1727,40 @@ function resolveBlotTipGrow(
   return Math.max(stamped, dwellBlotGrowT(cluster, tipRadius, blend));
 }
 
+/** Nearby holds of the same pause collapse into one disc. Scene units. */
+const BLOT_HALT_MERGE_SCENE = 0.75;
+
+/**
+ * Leave a pooling disc at `at` so a later move can zero {@link InkDrawOp.blotTipGrow}
+ * without erasing the hold.
+ */
+export function stampInkBlotHalt(
+  dest: { blotHalts?: InkBlotHalt[] },
+  at: Pick<ScenePoint, "x" | "y"> & Partial<Pick<ScenePoint, "pressure" | "slowness">>,
+  grow: number,
+): void {
+  const g = clamp01(grow);
+  if (g < 1e-3) return;
+  const list = dest.blotHalts ?? [];
+  const last = list[list.length - 1];
+  if (last && Math.hypot(last.x - at.x, last.y - at.y) < BLOT_HALT_MERGE_SCENE) {
+    last.grow = Math.max(last.grow, g);
+    if (typeof at.pressure === "number" && at.pressure > (last.pressure ?? -1)) {
+      last.pressure = at.pressure;
+    }
+    if (at.slowness != null) last.slowness = at.slowness;
+  } else {
+    list.push({
+      x: at.x,
+      y: at.y,
+      grow: g,
+      ...(typeof at.pressure === "number" ? { pressure: at.pressure } : {}),
+      ...(at.slowness != null ? { slowness: at.slowness } : {}),
+    });
+  }
+  dest.blotHalts = list;
+}
+
 function strokeClusterExtent(points: readonly ScenePoint[]): number {
   if (points.length === 0) return 0;
   let minX = points[0].x;
@@ -1963,6 +2013,54 @@ function paintTexturedDisc(
   const tipR = paintedWidth(lineWidth, pixelScale) / 2;
   const outerR = inkDiscPaintRadius(tipR, blotBlend, growT, pressureAmt, pixelScale);
   scratchGrainInDisc(ctx, center, outerR, grain);
+}
+
+function paintInkBlotHalts(
+  ctx: CanvasRenderingContext2D,
+  op: InkDrawOp,
+  pixelScale: number,
+): void {
+  if (op.highlight) return;
+  const halts = op.blotHalts;
+  if (!halts || halts.length === 0) return;
+  const blotBlend = resolveSpeedBlotBlend(op);
+  if (blotBlend < 1e-3) return;
+  const boldness = resolveInkBoldness(op);
+  const fade = resolveSpeedFade(op);
+  for (const halt of halts) {
+    if (halt.grow < 1e-3) continue;
+    const pressure = halt.pressure ?? NO_PRESSURE;
+    const style = inkStrokeStyle(
+      op.baseWidth,
+      op.maxFullness ?? 1,
+      pressure,
+      op.pressureClip ?? 1,
+      op.pressureSensitive,
+      0,
+      halt.slowness ?? INK_SLOWNESS_NEUTRAL,
+      op.speedInk ?? 0,
+      false,
+      boldness,
+      fade,
+      blotBlend,
+    );
+    paintTexturedDisc(
+      ctx,
+      op,
+      {
+        x: halt.x,
+        y: halt.y,
+        pressure,
+        slowness: halt.slowness,
+      },
+      style.lineWidth,
+      1,
+      pixelScale,
+      halt.grow,
+      1,
+    );
+  }
+  ctx.globalAlpha = 1;
 }
 
 function prefixContactCluster(
@@ -2792,8 +2890,10 @@ export function applyInkOp(
 ): void {
   const capEnd = options?.capEnd ?? true;
   const capHead = options?.capHead ?? true;
-  if (op.kind === "draw") drawStrokeFrom(ctx, op, 0, pixelScale, capEnd, capHead);
-  else eraseStampsFrom(ctx, op, 0);
+  if (op.kind === "draw") {
+    drawStrokeFrom(ctx, op, 0, pixelScale, capEnd, capHead);
+    paintInkBlotHalts(ctx, op, pixelScale);
+  } else eraseStampsFrom(ctx, op, 0);
   ctx.globalCompositeOperation = "source-over";
 }
 

@@ -65,6 +65,7 @@ import {
   paintInkTerminalCap,
   inkCapRoundness,
   trailingTipClusterStart,
+  stampInkBlotHalt,
   pointerPressure,
   scenePointFromCanvasPixel,
   scenePointFromPointer,
@@ -2244,5 +2245,41 @@ describe("grain and blot pooling (Phase 2)", () => {
     expect(firm[firm.length - 1].blotPool ?? 0).toBeGreaterThan(
       light[light.length - 1].blotPool ?? 0,
     );
+  });
+
+  it("stampInkBlotHalt merges a second hold at the same spot", () => {
+    const dest: { blotHalts?: { x: number; y: number; grow: number }[] } = {};
+    stampInkBlotHalt(dest, { x: 40, y: 10, pressure: NO_PRESSURE }, 0.4);
+    stampInkBlotHalt(dest, { x: 40.2, y: 10.1, pressure: NO_PRESSURE }, 0.7);
+    expect(dest.blotHalts).toHaveLength(1);
+    expect(dest.blotHalts![0].grow).toBeCloseTo(0.7);
+  });
+
+  it("paints mid-stroke halt discs after the nib has moved on", () => {
+    const pts = points([0, 0], [40, 0], [80, 0]);
+    const base = {
+      kind: "draw" as const,
+      color: "#112233",
+      baseWidth: 12,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 0,
+      points: pts,
+    };
+    const plain = inkDrawContext();
+    applyInkOp(plain.ctx, base, 1);
+    const halted = inkDrawContext();
+    applyInkOp(
+      halted.ctx,
+      {
+        ...base,
+        blotHalts: [{ x: 40, y: 0, grow: 1, pressure: NO_PRESSURE }],
+      },
+      1,
+    );
+    expect(halted.fillCount).toBeGreaterThan(plain.fillCount);
   });
 });

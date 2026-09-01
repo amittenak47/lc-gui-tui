@@ -179,6 +179,24 @@ describe("encodeInkOps / decodeInkOps", () => {
     expect(back.blotTipGrow).toBe(0.6);
   });
 
+  it("carries mid-stroke blotHalts across", () => {
+    const original = stroke(
+      [
+        { x: 1, y: 2, pressure: 0.5 },
+        { x: 20, y: 2, pressure: 0.5 },
+        { x: 40, y: 2, pressure: 0.5 },
+      ],
+      {
+        speedBlotBlend: 1,
+        blotHalts: [{ x: 20, y: 2, grow: 0.55, pressure: 0.5, slowness: 1 }],
+      },
+    );
+    const [back] = roundTrip([original]) as [InkDrawOp];
+    expect(back.blotHalts).toEqual([
+      { x: 20, y: 2, grow: 0.55, pressure: 0.5, slowness: 1 },
+    ]);
+  });
+
   it("carries grain across", () => {
     const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], { grain: 0.6 });
     const [back] = roundTrip([original]) as [InkDrawOp];

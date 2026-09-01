@@ -22,10 +22,12 @@ import {
   INK_SPEED_NEUTRAL_PX_MS,
   blotGrowTFromTicks,
   blotTicksToFull,
+  stampInkBlotHalt,
   pointerPressure,
   smoothPressure,
   smoothSpeed,
   type InkDrawOp,
+  type InkBlotHalt,
   type ScenePoint,
 } from "./rasterInk";
 import type { InkHandedness } from "../util/inkHandedness";
@@ -461,6 +463,7 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
   const drawingRef = useRef(false);
   const dwellCountRef = useRef(0);
   const blotTipGrowRef = useRef(0);
+  const blotHaltDestRef = useRef<{ blotHalts?: InkBlotHalt[] }>({});
   const lastMoveWallRef = useRef(0);
   const dwellTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -528,6 +531,8 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
       const op = drawOpFromSnap(kindRef.current, liveSnap, points);
       if (op) {
         if (blotTipGrowRef.current > 0) op.blotTipGrow = blotTipGrowRef.current;
+        if (blotHaltDestRef.current.blotHalts?.length)
+          op.blotHalts = blotHaltDestRef.current.blotHalts;
         applyInkOp(ctx, op, dpr);
       }
     };
@@ -586,6 +591,7 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
       lastSampleRef.current = null;
       dwellCountRef.current = 0;
       blotTipGrowRef.current = 0;
+      blotHaltDestRef.current = {};
       lastMoveWallRef.current = performance.now();
       drawingRef.current = true;
       const pt = pointFrom(event);
@@ -628,6 +634,10 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
       const pt = pointFrom(event);
       const prev = lastPosRef.current;
       if (prev && Math.hypot(pt.x - prev.x, pt.y - prev.y) > INK_HOLD_STILL_PX) {
+        if (blotTipGrowRef.current > 1e-3) {
+          const haltAt = livePtsRef.current[livePtsRef.current.length - 1] ?? prev;
+          stampInkBlotHalt(blotHaltDestRef.current, haltAt, blotTipGrowRef.current);
+        }
         lastMoveWallRef.current = performance.now();
         dwellCountRef.current = 0;
         blotTipGrowRef.current = 0;
@@ -663,12 +673,15 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
       const op = drawOpFromSnap(kindRef.current, liveSnap, points);
       if (op && points.length > 0) {
         if (blotTipGrowRef.current > 0) op.blotTipGrow = blotTipGrowRef.current;
+        if (blotHaltDestRef.current.blotHalts?.length)
+          op.blotHalts = blotHaltDestRef.current.blotHalts;
         strokesRef.current.push(op);
       }
       livePtsRef.current = null;
       lastSampleRef.current = null;
       lastPosRef.current = null;
       blotTipGrowRef.current = 0;
+      blotHaltDestRef.current = {};
       paint();
     };
 
