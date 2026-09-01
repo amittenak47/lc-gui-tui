@@ -1326,19 +1326,22 @@ function fillInkRibbonQuads(
 ): void {
   if (left.length < 2 || left.length !== right.length) return;
   const prevFill = ctx.fillStyle;
-  // Closed silhouette first: per-quad shared edges otherwise leave parchment
-  // hairlines, especially after the scratch blit is scaled by zoom × dpr.
-  ctx.beginPath();
-  ctx.moveTo(left[0].x, left[0].y);
-  for (let index = 1; index < left.length; index++) {
-    ctx.lineTo(left[index].x, left[index].y);
+  // A wash must not underlay the whole ribbon in fills[0]. Mid-tile clips
+  // then show the stroke-start color against the local gradient: a hard cut
+  // on the tile grid. Solid ribbons still get the silhouette so shared quad
+  // edges do not leave parchment hairlines.
+  if (!fills) {
+    ctx.beginPath();
+    ctx.moveTo(left[0].x, left[0].y);
+    for (let index = 1; index < left.length; index++) {
+      ctx.lineTo(left[index].x, left[index].y);
+    }
+    for (let index = right.length - 1; index >= 0; index--) {
+      ctx.lineTo(right[index].x, right[index].y);
+    }
+    ctx.closePath();
+    ctx.fill();
   }
-  for (let index = right.length - 1; index >= 0; index--) {
-    ctx.lineTo(right[index].x, right[index].y);
-  }
-  ctx.closePath();
-  if (fills?.[0]) ctx.fillStyle = fills[0];
-  ctx.fill();
 
   const canGrad =
     typeof (ctx as CanvasRenderingContext2D).createLinearGradient === "function";

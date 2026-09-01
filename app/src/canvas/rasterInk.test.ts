@@ -1583,6 +1583,28 @@ describe("fillInkRibbon per-quad", () => {
     fillInkRibbon(drawCtx.ctx, left, right, 1);
     expect(drawCtx.fillCount).toBe(3);
   });
+
+  it("does not underlay a wash in the stroke-start color", () => {
+    const drawCtx = inkDrawContext();
+    const left = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 20, y: 0 },
+    ];
+    const right = [
+      { x: 0, y: 4 },
+      { x: 10, y: 4 },
+      { x: 20, y: 4 },
+    ];
+    fillInkRibbon(drawCtx.ctx, left, right, 1, [
+      "rgb(1, 0, 0)",
+      "rgb(2, 0, 0)",
+      "rgb(3, 0, 0)",
+    ]);
+    // Two gradient quads. A fills[0] silhouette would be a third fill.
+    expect(drawCtx.fillCount).toBe(2);
+    expect(drawCtx.linearGradients).toBe(2);
+  });
 });
 
 describe("disc-primary dwell path", () => {

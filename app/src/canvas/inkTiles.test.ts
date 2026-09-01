@@ -264,6 +264,10 @@ describe("InkTileCache", () => {
         expect(blit.dh).toBeCloseTo(TILE_PX);
       }
     });
+
+    it("pads by a nib, not an AA sliver", () => {
+      expect(TILE_OVERLAP_PX).toBeGreaterThanOrEqual(16);
+    });
   });
 
   /*
