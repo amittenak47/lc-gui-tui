@@ -1189,6 +1189,7 @@ export function coalesceRibbonPoints(
   points: readonly ScenePoint[],
   styles: readonly InkStrokeStyle[],
   pixelScale: number,
+  pinned?: ReadonlySet<number>,
 ): { points: ScenePoint[]; styles: InkStrokeStyle[] } {
   if (points.length === 0) return { points: [], styles: [] };
   if (points.length !== styles.length) {
@@ -1208,6 +1209,7 @@ export function coalesceRibbonPoints(
     const half = paintedWidth(curStyle.lineWidth, pixelScale) / 2;
     const minDist = Math.max(0.5, half * RIBBON_COALESCE_HALF_FRAC);
     if (
+      !pinned?.has(index) &&
       Math.hypot(cur.x - prev.x, cur.y - prev.y) < minDist &&
       ribbonWashJump(prevStyle, curStyle) < 0.03
     ) {
@@ -1227,6 +1229,7 @@ export function coalesceRibbonPoints(
   const half = paintedWidth(lastStyle.lineWidth, pixelScale) / 2;
   const minDist = Math.max(0.5, half * RIBBON_COALESCE_HALF_FRAC);
   if (
+    !pinned?.has(points.length - 1) &&
     Math.hypot(last.x - prev.x, last.y - prev.y) < minDist &&
     ribbonWashJump(prevStyle, lastStyle) < 0.03
   ) {
@@ -1373,14 +1376,18 @@ function fillInkRibbonQuads(
   left: readonly { x: number; y: number }[],
   right: readonly { x: number; y: number }[],
   fills?: readonly string[],
+  fromSegment = 0,
+  toSegment = left.length - 2,
 ): void {
   if (left.length < 2 || left.length !== right.length) return;
+  const firstSegment = Math.max(0, Math.min(fromSegment, left.length - 2));
+  const lastSegment = Math.max(firstSegment, Math.min(toSegment, left.length - 2));
   const prevFill = ctx.fillStyle;
   // A wash must not underlay the whole ribbon in fills[0]. Mid-tile clips
   // then show the stroke-start color against the local gradient: a hard cut
   // on the tile grid. Solid ribbons still get the silhouette so shared quad
   // edges do not leave parchment hairlines.
-  if (!fills) {
+  if (!fills && firstSegment === 0 && lastSegment === left.length - 2) {
     ctx.beginPath();
     ctx.moveTo(left[0].x, left[0].y);
     for (let index = 1; index < left.length; index++) {
@@ -1396,7 +1403,7 @@ function fillInkRibbonQuads(
   const canGrad =
     typeof (ctx as CanvasRenderingContext2D).createLinearGradient === "function";
   const wash = Boolean(fills) && canGrad;
-  for (let index = 0; index < left.length - 1; index++) {
+  for (let index = firstSegment; index <= lastSegment; index++) {
     const a = fills?.[index];
     const b = fills?.[index + 1] ?? a;
     const mid0 = ribbonMid(left, right, index);
@@ -2278,6 +2285,7 @@ export function applyInkPoolingAtEnds(
   op: InkDrawOp,
   points: readonly ScenePoint[],
   fromIndex: number,
+  includeTip = true,
 ): InkStrokeStyle[] {
   if (op.highlight) return styles;
   const blotBlend = resolveSpeedBlotBlend(op);
@@ -2316,15 +2324,17 @@ export function applyInkPoolingAtEnds(
 
   const lastIdx = out.length - 1;
   const tip = points[lastIdx];
-  const tipR = out[lastIdx].lineWidth / 2;
-  const tipStart = trailingTipClusterStart(strokePts, nib);
-  const tipPts =
-    tipStart < strokePts.length ? strokePts.slice(tipStart) : [strokePts[strokePts.length - 1]];
-  markGrow(tip, resolveBlotTipGrow(op, tipPts, tipR));
+  if (includeTip) {
+    const tipR = out[lastIdx].lineWidth / 2;
+    const tipStart = trailingTipClusterStart(strokePts, nib);
+    const tipPts =
+      tipStart < strokePts.length ? strokePts.slice(tipStart) : [strokePts[strokePts.length - 1]];
+    markGrow(tip, resolveBlotTipGrow(op, tipPts, tipR));
+  }
   // Ends stay a richer deposit than the trail even without a hold. Width does not
   // grow from this floor — only blotTipGrow / halts fatten the ribbon.
   const endFloor = blotBlend * INK_BLOT_END_FLOOR;
-  paintAlong(tip, endFloor, richAt, nib * 0.45, nib * 1.35);
+  if (includeTip) paintAlong(tip, endFloor, richAt, nib * 0.45, nib * 1.35);
 
   if (fromIndex === 0 && points.length >= 2) {
     const headR = out[0].lineWidth / 2;
@@ -2332,6 +2342,7 @@ export function applyInkPoolingAtEnds(
     const headCluster = cluster.length > 0 ? cluster : [strokePts[0]];
     let headGrow = dwellBlotGrowT(headCluster, headR, blotBlend);
     const tipStillAtHead =
+      includeTip &&
       Math.hypot(tip.x - points[0].x, tip.y - points[0].y) < Math.max(headR * 2, nib * 0.5);
     if (tipStillAtHead) {
       headGrow = Math.max(headGrow, resolveBlotTipGrow(op, headCluster, headR));
@@ -2438,6 +2449,7 @@ function scratchGrainAlongStroke(
   points: readonly ScenePoint[],
   styles: readonly InkStrokeStyle[],
   pixelScale: number,
+  distanceOffset = 0,
 ): void {
   const grain = resolveGrain(op);
   if (grain < 1e-3 || points.length === 0) return;
@@ -2459,8 +2471,12 @@ function scratchGrainAlongStroke(
    */
   const spacing = Math.max(nib * (0.10 + 0.05 * (1 - grain)), 0.32);
   const fibresAt = Math.max(2, Math.round(3 + 7 * grain));
-  const n = Math.min(720, Math.max(1, Math.ceil(pathLen / spacing)));
-  const origin = points[0];
+  const firstStation = Math.max(0, Math.floor(distanceOffset / spacing));
+  const lastStation = Math.min(
+    720,
+    Math.max(firstStation + 1, Math.ceil((distanceOffset + pathLen) / spacing)),
+  );
+  const origin = op.points[0] ?? points[0];
   const fibreHeading = paperFibreHeading(origin);
   const prevComp = ctx.globalCompositeOperation;
   const prevAlpha = ctx.globalAlpha;
@@ -2471,9 +2487,10 @@ function scratchGrainAlongStroke(
   ctx.strokeStyle = "#000";
   ctx.lineCap = "butt";
   const minWidth = Math.max(0.7, pixelScale > 0 ? 0.9 / pixelScale : 0.7);
-  for (let i = 0; i < n; i++) {
+  for (let i = firstStation; i < lastStation; i++) {
     const jitter = hash01(origin.x, origin.y, GRAIN_SALT + i);
-    const dist = (i + jitter * 0.35) * spacing;
+    const dist = (i + jitter * 0.35) * spacing - distanceOffset;
+    if (dist < 0) continue;
     if (dist > pathLen) continue;
     const at = sampleStrokeAt(points, styles, dist, pixelScale, nib);
     if (!at || at.r < 1e-6) continue;
@@ -2705,6 +2722,206 @@ function drawRibbonStrokeFrom(
   }
 
   ctx.globalAlpha = 1;
+}
+
+export interface LiveInkMaskPaintResult {
+  alpha: number;
+  composite: "source-over" | "multiply";
+}
+
+/** Causal point styles used only by the bounded live preview. */
+function liveMaskPointStyles(
+  op: InkDrawOp,
+  fromIndex: number,
+  toIndex: number,
+): InkStrokeStyle[] {
+  const consumed = consumedFor(op);
+  const maxFullness = op.maxFullness ?? 1;
+  const pressureClip = op.pressureClip ?? 1;
+  const speedInk = op.speedInk ?? 0;
+  const boldness = op.highlight ? 1 : resolveInkBoldness(op);
+  const blotBlend = op.highlight ? 0 : resolveSpeedBlotBlend(op);
+  const out: InkStrokeStyle[] = [];
+  const first = Math.max(0, fromIndex);
+  const last = Math.min(toIndex, op.points.length - 1);
+  for (let index = first; index <= last; index += 1) {
+    const point = op.points[index];
+    out.push(
+      inkStrokeStyle(
+        op.baseWidth,
+        maxFullness,
+        point.pressure,
+        pressureClip,
+        op.pressureSensitive,
+        consumed[index] ?? 0,
+        point.slowness ?? INK_SLOWNESS_NEUTRAL,
+        speedInk,
+        op.highlight === true,
+        boldness,
+        resolveSpeedFade(op),
+        blotBlend,
+      ),
+    );
+  }
+  return out;
+}
+
+function preparedPointIndex(
+  points: readonly ScenePoint[],
+  target: ScenePoint,
+  from = 0,
+): number {
+  let nearest = Math.max(0, Math.min(from, points.length - 1));
+  let distance = Infinity;
+  for (let index = nearest; index < points.length; index += 1) {
+    const point = points[index];
+    if (point === target) return index;
+    const d = Math.hypot(point.x - target.x, point.y - target.y);
+    if (d < distance) {
+      distance = d;
+      nearest = index;
+    }
+  }
+  return nearest;
+}
+
+function rangePoolingOp(op: InkDrawOp, points: readonly ScenePoint[]): InkDrawOp {
+  if (!op.blotHalts || op.blotHalts.length === 0 || points.length === 0) return op;
+  const reach = nibWidth(op) * (3 + INK_BLOT_SIZE_RANGE);
+  const halts = op.blotHalts.filter((halt) =>
+    points.some((point) => Math.hypot(point.x - halt.x, point.y - halt.y) <= reach),
+  );
+  return halts.length === op.blotHalts.length ? op : { ...op, blotHalts: halts };
+}
+
+/**
+ * Paint one settled/tail range into a stroke-local mask.
+ *
+ * Neighbors outside the requested range participate in normal calculation,
+ * but their segments are not filled. Adjacent ranges therefore share exactly
+ * one cross-section and never receive separate translucent caps.
+ */
+export function paintLiveDrawMaskRange(
+  ctx: CanvasRenderingContext2D,
+  op: InkDrawOp,
+  fromIndex: number,
+  toIndex: number,
+  pixelScale = 0,
+  capHead = false,
+  capEnd = false,
+): LiveInkMaskPaintResult {
+  const lastPoint = op.points.length - 1;
+  const composite = op.highlight ? "multiply" : "source-over";
+  if (lastPoint < 0) return { alpha: 1, composite };
+  const start = Math.max(0, Math.min(fromIndex, lastPoint));
+  const end = Math.max(start, Math.min(toIndex, lastPoint));
+  const haloStart = Math.max(0, start - 1);
+  const haloEnd = Math.min(lastPoint, end + 1);
+  const haloPoints = op.points.slice(haloStart, haloEnd + 1);
+  let haloStyles = liveMaskPointStyles(op, haloStart, haloEnd);
+
+  if (haloPoints.length === 1) {
+    const style = haloStyles[0];
+    const radius = paintedWidth(style.lineWidth, pixelScale) / 2;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = op.color;
+    ctx.beginPath();
+    ctx.arc(haloPoints[0].x, haloPoints[0].y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    return { alpha: style.alpha, composite };
+  }
+
+  const pinned = new Set<number>([
+    0,
+    haloPoints.length - 1,
+    start - haloStart,
+    end - haloStart,
+  ]);
+  const coalesced = coalesceRibbonPoints(haloPoints, haloStyles, pixelScale, pinned);
+  const densified = densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale);
+  haloStyles = applyInkPoolingAtEnds(
+    densified.styles,
+    rangePoolingOp(op, haloPoints),
+    densified.points,
+    start,
+    capEnd && end === lastPoint,
+  );
+  const prepared = densifyRibbonPoints(densified.points, haloStyles, pixelScale);
+  if (prepared.points.length < 2) return { alpha: 1, composite };
+  const paintStart = preparedPointIndex(prepared.points, op.points[start]);
+  const paintEnd = preparedPointIndex(prepared.points, op.points[end], paintStart);
+  if (paintEnd <= paintStart) return { alpha: 1, composite };
+
+  const sides = ribbonSides(prepared.points, prepared.styles, pixelScale);
+  const rangePoints = prepared.points.slice(paintStart, paintEnd + 1);
+  const rangeStyles = prepared.styles.slice(paintStart, paintEnd + 1);
+  let alpha = 0;
+  for (const style of rangeStyles) alpha = Math.max(alpha, style.alpha);
+  if (op.highlight) alpha = HIGHLIGHT_ALPHA;
+
+  const ribbonPreview = usesSpeedRibbon(op) && !usesSpeedPenStroke(op, pixelScale);
+  const fills = ribbonPreview
+    ? prepared.styles.map((style) => ribbonVertexFillCss(op.color, style))
+    : prepared.styles.map(() => op.color);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = op.color;
+  fillInkRibbonQuads(ctx, sides.left, sides.right, fills, paintStart, paintEnd - 1);
+
+  const origin = op.points[0];
+  if (capHead && start === 0) {
+    const style = rangeStyles[0];
+    const radius = paintedWidth(style.lineWidth, pixelScale) / 2;
+    if (fills[paintStart]) ctx.fillStyle = fills[paintStart];
+    const heading =
+      firstStrokeOutward(rangePoints, radius) ?? hashedHeading(origin, CAP_SALT_HEAD);
+    paintOpCap(
+      ctx,
+      op,
+      rangePoints[0],
+      radius,
+      heading,
+      origin,
+      CAP_SALT_HEAD,
+      origin.pressure,
+      1,
+    );
+  }
+  if (capEnd && end === lastPoint) {
+    const last = rangePoints.length - 1;
+    const style = rangeStyles[last];
+    const radius = paintedWidth(style.lineWidth, pixelScale) / 2;
+    if (fills[paintEnd]) ctx.fillStyle = fills[paintEnd];
+    const heading =
+      segmentOutward(rangePoints[last], rangePoints[Math.max(0, last - 1)]) ??
+      hashedHeading(origin, CAP_SALT_TAIL);
+    paintOpCap(
+      ctx,
+      op,
+      rangePoints[last],
+      radius,
+      heading,
+      origin,
+      CAP_SALT_TAIL,
+      rangePoints[last].pressure,
+      1,
+    );
+  }
+  if (resolveGrain(op) > 1e-3) {
+    const distanceOffset = (consumedFor(op)[start] ?? 0) * nibWidth(op);
+    scratchGrainAlongStroke(
+      ctx,
+      op,
+      rangePoints,
+      rangeStyles,
+      pixelScale,
+      distanceOffset,
+    );
+  }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  return { alpha: Math.max(0, Math.min(1, alpha > 0 ? alpha : 1)), composite };
 }
 
 /** Split a stroke into paintable runs, starting at `fromIndex`. */

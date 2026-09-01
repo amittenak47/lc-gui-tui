@@ -63,6 +63,7 @@ import {
   paintInkDisc,
   paintGrainDisc,
   paintInkTerminalCap,
+  paintLiveDrawMaskRange,
   inkCapRoundness,
   trailingTipClusterStart,
   stampInkBlotHalt,
@@ -1971,6 +1972,37 @@ describe("ribbon normal stability", () => {
 });
 
 describe("drawStrokeFrom / applyInkOp live options", () => {
+  it("keeps internal live-mask cuts capless and preserves true endpoints", () => {
+    const op = {
+      ...draw([0, 0], [40, 0], [40, 40], [80, 40], [80, 80]),
+      baseWidth: 12,
+      speedInk: 1,
+      speedBlotBlend: 0.55,
+      speedFade: 1,
+    } as Extract<InkOp, { kind: "draw" }>;
+    const split = inkDrawContext();
+    const prefix = paintLiveDrawMaskRange(split.ctx, op, 0, 2, 1, true, false);
+    const afterPrefix = split.fillCount;
+    const tail = paintLiveDrawMaskRange(split.ctx, op, 2, 4, 1, false, true);
+    expect(split.fillCount).toBeGreaterThan(afterPrefix);
+    expect(prefix.composite).toBe("source-over");
+    expect(tail.composite).toBe("source-over");
+    expect(prefix.alpha).toBeGreaterThan(0);
+    expect(tail.alpha).toBeGreaterThan(0);
+  });
+
+  it("keeps highlighter blending on the one completed live mask", () => {
+    const op = {
+      ...draw([0, 0], [40, 0], [80, 20]),
+      highlight: true,
+    } as Extract<InkOp, { kind: "draw" }>;
+    const drawCtx = inkDrawContext();
+    const result = paintLiveDrawMaskRange(drawCtx.ctx, op, 0, 2, 1, true, true);
+    expect(result.composite).toBe("multiply");
+    expect(result.alpha).toBeGreaterThan(0);
+    expect(result.alpha).toBeLessThan(1);
+  });
+
   it("uses bevel joins on the run path", () => {
     const { ctx } = inkDrawContext();
     applyInkOp(ctx, draw([0, 0], [50, 0], [50, 50]), 1);

@@ -6,6 +6,7 @@ import {
   roundInkCorners,
   simplifyInkPoints,
   smoothInkPoints,
+  smoothLiveInkWindow,
   liveSmoothingTau,
   liveSmoothingWeight,
   INK_SMOOTHING_DEFAULT,
@@ -271,6 +272,28 @@ function distanceToSegment(p: ScenePoint, a: ScenePoint, b: ScenePoint): number 
 }
 
 describe("live smoothing", () => {
+  it("curves only a bounded recent window and keeps the pointer tip exact", () => {
+    const raw = Array.from({ length: 200 }, (_, index) => ({
+      x: index,
+      y: index % 2 === 0 ? 0 : 2,
+      pressure: 0.2 + index / 1000,
+      slowness: 0.3 + index / 2000,
+    }));
+    const preview = smoothLiveInkWindow(raw, 1, 2);
+    expect(preview.fromIndex).toBeGreaterThan(100);
+    expect(preview.points).toHaveLength(raw.length - preview.fromIndex);
+    expect(preview.points.at(-1)).toEqual(raw.at(-1));
+    expect(preview.points[5]!.pressure).toBe(raw[preview.fromIndex + 5]!.pressure);
+    expect(preview.points[5]!.slowness).toBe(raw[preview.fromIndex + 5]!.slowness);
+    expect(preview.points[5]!.y).not.toBe(raw[preview.fromIndex + 5]!.y);
+  });
+
+  it("does not move the join into the immutable prefix", () => {
+    const raw = path([0, 0], [1, 2], [2, 0], [3, 2], [4, 0], [5, 2]);
+    const preview = smoothLiveInkWindow(raw, 1, 1, 2);
+    expect(preview.points[0]).toEqual(raw[preview.fromIndex]);
+  });
+
   it("goes straight to the pen when the dial is off", () => {
     expect(liveSmoothingTau(0)).toBe(0);
     expect(liveSmoothingWeight(8, liveSmoothingTau(0))).toBe(1);

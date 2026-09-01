@@ -33,7 +33,6 @@ import {
   stampInkBlotHalt,
   INK_HOLD_STILL_PX,
   isDiscPrimaryPath,
-  isHostBoundOp,
   NO_PRESSURE,
   scenePointFromPointer,
   smoothPressure,
@@ -55,7 +54,14 @@ import {
   hostSceneBounds,
   scrollHostAtPoint,
 } from "./scrollHost";
-import { InkTileCache, paintHostBoundPass, paintLiveOp } from "./inkTiles";
+import {
+  InkTileCache,
+  paintHostBoundPass,
+  paintLiveEraseFrom,
+  paintLiveMaskRange,
+  paintLiveOp,
+} from "./inkTiles";
+import { LiveStrokeSurface } from "./liveStrokeSurface";
 import { InkPageBook } from "./inkPageCache";
 import {
   shiftAnchorAt,
@@ -79,6 +85,7 @@ import {
 import {
   simplifyModulatedInkPoints,
   SIMPLIFY_MODULATED_FRACTION,
+  smoothLiveInkWindow,
   smoothInkPoints,
   type InkSmoothingMode,
 } from "./inkSmoothing";
@@ -261,24 +268,21 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      */
     const abandonStrokeRef = useRef<() => void>(() => {});
     const lastPointRef = useRef<ScenePoint | null>(null);
-    /**
-     * Where the pen actually was, before live smoothing pulled the nib off it.
-     * Speed is measured against this, and the lift settles onto it.
-     */
+    /** Where the pen actually was. Speed and the exact lift pass use this. */
     const rawPointRef = useRef<ScenePoint | null>(null);
     /**
      * Raw stamps for the open pen stroke when **While Writing** is on.
      *
-     * Display points are a reshape of this buffer (`smoothInkPoints`) every
-     * paint, so earlier bends can tidy while the tip still tracks the pen.
-     * Lift mode leaves this null and stamps straight into `live.points`.
+     * A bounded tail of the one-to-one display list is reshaped every paint,
+     * so recent bends can tidy while the tip still tracks the pen. Lift mode
+     * leaves this null and stamps straight into `live.points`.
      */
     const liveRawPointsRef = useRef<ScenePoint[] | null>(null);
     /** Running EMA of raw stylus pressure for the live stroke — see smoothPressure. */
     const smoothedPressureRef = useRef(0);
     /** Running EMA of hand speed in CSS px/ms — see smoothSpeed. */
     const smoothedSpeedRef = useRef(0);
-    /** `event.timeStamp` of the last sample consumed, for speed and live smoothing. */
+    /** `event.timeStamp` of the last sample consumed, for speed measurement. */
     const lastSampleTimeRef = useRef(0);
     /** Wall-clock time of the last real move/begin — dwell gate uses this, not DOMHighRes. */
     const lastMoveWallRef = useRef(0);
@@ -330,6 +334,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * the two from feeling like different pens.
      */
     const committedSnapRef = useRef<HTMLCanvasElement | null>(null);
+    /** Stable prefix + bounded mutable tail for a long open draw gesture. */
+    const liveSurfaceRef = useRef(new LiveStrokeSurface());
     /** One live paint per animation frame while stamps keep arriving. */
     const livePaintRafRef = useRef<number | null>(null);
     /**
@@ -719,6 +725,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const live = liveRef.current;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         if (live) {
+          // A full frame supersedes every pixel held by the streaming preview.
+          liveSurfaceRef.current.reset();
           syncLiveHostBinding(live);
           paintLiveOp(ctx, live, drawView, dpr, clipRef.current, hosts);
           liveDrawnIndexRef.current =
@@ -947,18 +955,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         canvas.height !== Math.round(box.height * dpr)
       ) {
         committedSnapRef.current = null;
+        liveSurfaceRef.current.reset();
         repaint();
         return;
       }
 
       syncLiveHostBinding(live);
-      // Host-bound live ink needs clip+translate — fall back to a full frame.
-      if (isHostBoundOp(live)) {
-        committedSnapRef.current = null;
-        repaint();
-        return;
-      }
-
+      // Range painters apply the same host clip and translation as full replay.
       const snap = committedSnapRef.current;
       if (snap && snap.width === canvas.width && snap.height === canvas.height) {
         const ctx = canvas.getContext("2d");
@@ -970,12 +973,55 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           height: view.height - 2 * marginY,
         };
         const drawView = overdrawnViewport(baseView, marginY);
+        const hosts = scrollHostLookup();
+        if (live.kind === "erase") {
+          liveDrawnIndexRef.current = paintLiveEraseFrom(
+            ctx,
+            live,
+            drawView,
+            dpr,
+            clipRef.current,
+            hosts,
+            liveDrawnIndexRef.current,
+          );
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          return;
+        }
+
+        const nib = inkLineWidth(live.baseWidth, 0, false);
+        const frame = liveSurfaceRef.current.paint(
+          live,
+          nib,
+          canvas.width,
+          canvas.height,
+          (maskCtx, fromIndex, toIndex, capHead, capEnd) =>
+            paintLiveMaskRange(
+              maskCtx,
+              live,
+              drawView,
+              dpr,
+              clipRef.current,
+              hosts,
+              fromIndex,
+              toIndex,
+              capHead,
+              capEnd,
+            ),
+        );
+
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(snap, 0, 0);
-        paintLiveOp(ctx, live, drawView, dpr, clipRef.current, scrollHostLookup());
-        liveDrawnIndexRef.current =
-          live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
+        if (frame) {
+          ctx.globalAlpha = frame.alpha;
+          ctx.globalCompositeOperation = frame.composite;
+          ctx.drawImage(frame.canvas, 0, 0);
+          ctx.globalAlpha = 1;
+          ctx.globalCompositeOperation = "source-over";
+        } else {
+          paintLiveOp(ctx, live, drawView, dpr, clipRef.current, hosts);
+        }
+        liveDrawnIndexRef.current = Math.max(0, live.points.length - 1);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         return;
       }
@@ -1001,18 +1047,21 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       );
     }, []);
 
-    /** Rebuild display points from the raw buffer; returns whether reshape ran. */
+    /** Rebuild only the smoothing horizon; the raster prefix stays immutable. */
     const reshapeLiveStroke = useCallback(() => {
       const live = liveRef.current;
       const raw = liveRawPointsRef.current;
-      if (!live || live.kind !== "draw" || !raw || !liveReshapeActive()) return false;
-      live.points = smoothInkPoints(
+      if (!live || live.kind !== "draw" || !raw || !liveReshapeActive()) return;
+      const windowed = smoothLiveInkWindow(
         raw,
         smoothingRef.current,
         inkLineWidth(live.baseWidth, 0, false),
-        0,
       );
-      return true;
+      // Raw and display lists remain one-to-one, so stable raster indices do
+      // not move when this mutable tail is revised.
+      for (let offset = 0; offset < windowed.points.length; offset += 1) {
+        live.points[windowed.fromIndex + offset] = windowed.points[offset]!;
+      }
     }, [liveReshapeActive]);
 
     const paintLiveIncrementalRef = useRef(paintLiveIncremental);
@@ -1021,19 +1070,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     reshapeLiveStrokeRef.current = reshapeLiveStroke;
     const liveReshapeActiveRef = useRef(liveReshapeActive);
     liveReshapeActiveRef.current = liveReshapeActive;
-    const repaintLiveRef = useRef(repaint);
-    repaintLiveRef.current = repaint;
-
     const flushLivePaint = useCallback(() => {
-      if (reshapeLiveStrokeRef.current()) {
-        liveDrawnIndexRef.current = 0;
-        repaintLiveRef.current();
-        return;
-      }
+      reshapeLiveStrokeRef.current();
       paintLiveIncrementalRef.current();
     }, []);
 
-    /** After appending stamps: reshape+paint, at most once per animation frame. */
+    /** After appending stamps: paint the bounded preview at most once per frame. */
     const paintLiveAfterChange = useCallback((immediate = false) => {
       if (immediate) {
         if (livePaintRafRef.current != null) {
@@ -1088,9 +1130,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
        *
        * Off means off: the stamps under the nib stay. A nib-scaled storage
        * thin at zero used to round a 32-wide stroke on lift even with the
-       * dial at 0. Live mode already reshaped while writing, so it is not
-       * run again. The eraser is left alone — its stamps are a coverage
-       * mask, not a line, and rounding them would leave crumbs behind.
+       * dial at 0. Live mode uses a bounded windowed preview, then runs this
+       * exact settled pass once on lift. The eraser is left alone — its stamps
+       * are a coverage mask, not a line, and rounding them would leave crumbs
+       * behind.
        */
       const isLive = smoothingModeRef.current === "live";
       const strength = smoothingRef.current;
@@ -1098,7 +1141,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const committed =
         live.kind === "draw"
           ? (() => {
-              let pts = live.points;
+              const rawLive = isLive ? liveRawPointsRef.current : null;
+              let pts = rawLive && rawLive.length > 0 ? rawLive : live.points;
               if (live.highlight) {
                 const chisel =
                   inkLineWidth(live.baseWidth, 0, false) * HIGHLIGHT_WIDTH_SCALE;
@@ -1114,13 +1158,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                  * freehand exactly as drawn; that is the honest trade for being
                  * able to straighten half of it.
                  */
-                pts = [...pts];
+                pts = [...live.points];
               } else if (straight && pts.length >= 2) {
                 pts = [pts[0]!, pts[pts.length - 1]!];
-              } else if (strength > 0 && !isLive && !live.pressureSensitive) {
+              } else if (strength > 0 && !live.pressureSensitive) {
                 const nib = inkLineWidth(live.baseWidth, 0, false);
                 pts = smoothInkPoints(pts, strength, nib);
-              } else if (strength > 0 && !isLive && live.pressureSensitive) {
+              } else if (strength > 0 && live.pressureSensitive) {
                 const nib = inkLineWidth(live.baseWidth, 0, false);
                 pts = simplifyModulatedInkPoints(
                   smoothInkPoints(pts, strength, nib, 0),
@@ -1832,6 +1876,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         // Per stroke, not per app: whether the last one was straightened says
         // nothing about this one.
         straightTouchedRef.current = false;
+        liveSurfaceRef.current.reset();
         const activeTool = toolRef.current;
         const pressureSensitive = pressureSensitiveRef.current;
         const attackApplies =
@@ -2261,8 +2306,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           }
           rawPointRef.current = raw;
 
-          // Tip tracks the pen. Live reshape tidies earlier points on paint;
-          // lift mode keeps raw stamps until commit.
+          // The pointer tip remains raw. A bounded recent window is curved on
+          // the next paint while this complete raw chain is retained for lift.
           const point = raw;
 
           const anchor = straightAnchorFor(
@@ -2345,13 +2390,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                     0.5,
                   );
                 })();
-          const stamps = stampAlongSegment(last, point, step);
           if (reshapeLive) {
             const rawBuf =
               liveRawPointsRef.current ?? (liveRawPointsRef.current = []);
-            rawBuf.push(...stamps);
+            const rawStamps = stampAlongSegment(rawLast, raw, step);
+            rawBuf.push(...rawStamps);
+            live.points.push(...rawStamps.map((stamp) => ({ ...stamp })));
           } else {
-            live.points.push(...stamps);
+            live.points.push(...stampAlongSegment(last, point, step));
           }
           lastPointRef.current = point;
         }

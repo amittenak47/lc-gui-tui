@@ -9,9 +9,9 @@
  * **On Lift:** run once at commit. Ink stays under the nib while writing;
  * the settle is barely visible at default strength.
  *
- * **While Writing:** re-run on the open stroke's raw stamps every paint so
- * earlier bends tidy before the pen lifts. Endpoints stay fixed, so the tip
- * still tracks the pen — only the path behind it moves.
+ * **While Writing:** smooth only a short window behind the nib every paint.
+ * Endpoints stay fixed, so the tip still tracks the pen while recent bends
+ * settle into a continuous curve.
  *
  * Both passes keep the first and last point exactly where they were, so a
  * stroke never shortens or drifts off what it was written against.
@@ -32,8 +32,8 @@ export const INK_SMOOTHING_MODE_DEFAULT: InkSmoothingMode = "lift";
  * Causal tip-lag helpers (time-constant EMA + spatial clamp).
  *
  * Kept for tests and experiments. The board's **While Writing** mode does
- * not use these — it reshapes the open stroke with {@link smoothInkPoints}
- * instead, so earlier letters tidy without the ink trailing the hand.
+ * not use these — it reshapes only a recent window with
+ * {@link smoothLiveInkWindow} instead, so ink never trails the hand.
  */
 export const LIVE_SMOOTHING_MAX_TAU_MS = 55;
 /** Minimum tau once smoothing is on — below this the live trail is invisible. */
@@ -389,6 +389,89 @@ export function roundInkCorners(
   }
   out.push(points[points.length - 1]);
   return out;
+}
+
+/** Recent travel kept mutable by the while-writing preview. */
+export const LIVE_SMOOTHING_WINDOW_NIBS = 16;
+
+export interface LiveInkSmoothingWindow {
+  fromIndex: number;
+  points: ScenePoint[];
+}
+
+function liveCornerPass(
+  points: readonly ScenePoint[],
+  ratio: number,
+): ScenePoint[] {
+  if (points.length < 3 || ratio <= 0) return [...points];
+  const r = Math.max(0, Math.min(CHAIKIN_RATIO, ratio));
+  return points.map((point, index) => {
+    if (index === 0 || index === points.length - 1) return { ...point };
+    const before = points[index - 1]!;
+    const after = points[index + 1]!;
+    return {
+      ...point,
+      x: point.x * (1 - 2 * r) + (before.x + after.x) * r,
+      y: point.y * (1 - 2 * r) + (before.y + after.y) * r,
+    };
+  });
+}
+
+/**
+ * One-to-one, bounded curve preview for **While Writing** smoothing.
+ *
+ * Unlike committed Chaikin smoothing this deliberately keeps the same number
+ * of points. That lets the live renderer revise only the tail without changing
+ * stable point indices. Pressure/slowness remain the raw samples, the true tip
+ * remains under the pointer, and a short blend-in prevents a kink where the
+ * mutable window meets the already-rasterized prefix.
+ */
+export function smoothLiveInkWindow(
+  points: readonly ScenePoint[],
+  strength: number,
+  nibWidth: number,
+  windowNibs = LIVE_SMOOTHING_WINDOW_NIBS,
+): LiveInkSmoothingWindow {
+  const dial = Math.max(0, Math.min(1, strength));
+  if (points.length < 3 || dial <= 0) {
+    return { fromIndex: Math.max(0, points.length - 1), points: points.slice(-1) };
+  }
+
+  const keepTravel = Math.max(nibWidth, 1e-6) * Math.max(1, windowNibs);
+  let fromIndex = points.length - 1;
+  let travelled = 0;
+  while (fromIndex > 0 && travelled < keepTravel) {
+    travelled += Math.hypot(
+      points[fromIndex]!.x - points[fromIndex - 1]!.x,
+      points[fromIndex]!.y - points[fromIndex - 1]!.y,
+    );
+    fromIndex -= 1;
+  }
+  // Two raw neighbors make the blend into the immutable prefix tangent-stable.
+  fromIndex = Math.max(0, fromIndex - 2);
+  const raw = points.slice(fromIndex);
+  let out = raw.map((point) => ({ ...point }));
+  const passes = roundingPasses(dial);
+  const full = Math.floor(passes);
+  for (let pass = 0; pass < full; pass += 1) {
+    out = liveCornerPass(out, CHAIKIN_RATIO);
+  }
+  const partial = (passes - full) * CHAIKIN_RATIO;
+  if (partial > MIN_ROUNDING_RATIO) out = liveCornerPass(out, partial);
+
+  // Ease into the revised geometry; never introduce a new boundary corner.
+  const blendCount = Math.min(4, Math.max(1, out.length - 1));
+  for (let index = 0; index < blendCount; index += 1) {
+    const t = index / blendCount;
+    out[index] = {
+      ...out[index]!,
+      x: raw[index]!.x + (out[index]!.x - raw[index]!.x) * t,
+      y: raw[index]!.y + (out[index]!.y - raw[index]!.y) * t,
+    };
+  }
+  // The ink tip must stay exactly under the physical pointer.
+  out[out.length - 1] = { ...raw[raw.length - 1]! };
+  return { fromIndex, points: out };
 }
 
 /**

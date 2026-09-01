@@ -22,6 +22,7 @@
 
 import {
   applyInkOp,
+  applyInkOpFrom,
   applyInkOpInHost,
   HIGHLIGHT_WIDTH_SCALE,
   hostScrollDx,
@@ -29,9 +30,12 @@ import {
   INK_SPEED_WIDTH_RANGE,
   INK_TIP_STEP,
   isHostBoundOp,
+  paintLiveDrawMaskRange,
   paintHostBoundOps,
   setInkSceneTransform,
+  type InkDrawOp,
   type InkOp,
+  type LiveInkMaskPaintResult,
   type SceneBounds,
   type ScrollHostLookup,
   type ViewportTransform,
@@ -888,6 +892,118 @@ export function paintLiveOp(
   } else {
     paint();
   }
+}
+
+/** Paint a bounded draw range into the stroke-local mask. */
+export function paintLiveMaskRange(
+  ctx: CanvasRenderingContext2D,
+  op: InkDrawOp,
+  viewport: ViewportTransform,
+  dpr: number,
+  clip: SceneBounds | null,
+  hosts: ScrollHostLookup,
+  fromIndex: number,
+  toIndex: number,
+  capHead: boolean,
+  capEnd: boolean,
+): LiveInkMaskPaintResult {
+  setInkSceneTransform(ctx, viewport, dpr);
+  const pixelScale = viewport.zoom * dpr;
+  const paint = () => {
+    if (!isHostBoundOp(op)) {
+      return paintLiveDrawMaskRange(
+        ctx,
+        op,
+        fromIndex,
+        toIndex,
+        pixelScale,
+        capHead,
+        capEnd,
+      );
+    }
+    const host = hosts.get(op.hostKey!);
+    if (!host) {
+      return paintLiveDrawMaskRange(
+        ctx,
+        op,
+        fromIndex,
+        toIndex,
+        pixelScale,
+        capHead,
+        capEnd,
+      );
+    }
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(
+      host.bounds.minX,
+      host.bounds.minY,
+      host.bounds.maxX - host.bounds.minX,
+      host.bounds.maxY - host.bounds.minY,
+    );
+    ctx.clip();
+    const dx = hostScrollDx(op, host.scrollLeft, viewport.zoom);
+    if (dx !== 0) ctx.translate(dx, 0);
+    const result = paintLiveDrawMaskRange(
+      ctx,
+      op,
+      fromIndex,
+      toIndex,
+      pixelScale,
+      capHead,
+      capEnd,
+    );
+    ctx.restore();
+    return result;
+  };
+  if (!clip) return paint();
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
+  ctx.clip();
+  const result = paint();
+  ctx.restore();
+  return result;
+}
+
+/** Incremental eraser preview: only stamps not already applied to the bitmap. */
+export function paintLiveEraseFrom(
+  ctx: CanvasRenderingContext2D,
+  op: Extract<InkOp, { kind: "erase" }>,
+  viewport: ViewportTransform,
+  dpr: number,
+  clip: SceneBounds | null,
+  hosts: ScrollHostLookup,
+  fromIndex: number,
+): number {
+  setInkSceneTransform(ctx, viewport, dpr);
+  const paint = () => {
+    if (!isHostBoundOp(op)) return applyInkOpFrom(ctx, op, fromIndex, viewport.zoom * dpr);
+    const host = hosts.get(op.hostKey!);
+    if (!host) return applyInkOpFrom(ctx, op, fromIndex, viewport.zoom * dpr);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(
+      host.bounds.minX,
+      host.bounds.minY,
+      host.bounds.maxX - host.bounds.minX,
+      host.bounds.maxY - host.bounds.minY,
+    );
+    ctx.clip();
+    const dx = hostScrollDx(op, host.scrollLeft, viewport.zoom);
+    if (dx !== 0) ctx.translate(dx, 0);
+    const next = applyInkOpFrom(ctx, op, fromIndex, viewport.zoom * dpr);
+    ctx.restore();
+    return next;
+  };
+  if (!clip) return paint();
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
+  ctx.clip();
+  const next = paint();
+  ctx.restore();
+  return next;
 }
 
 /**
