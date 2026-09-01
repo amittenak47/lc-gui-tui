@@ -29,6 +29,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import type { MdFormatKind } from "../modes/AnnotateMarkdownEditor";
@@ -238,6 +239,7 @@ import {
 } from "./selectionTrash";
 import {
   CHROME_IDLE_MS,
+  CHROME_MORPH_MS,
   chromeModeLabel,
   chromeVisibility,
   loadChromeMode,
@@ -1635,6 +1637,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const chromeStackOpen = chromeShown.eye;
   const mountStackTools = chromeShown.chrome || chromeMode === "fade";
   const mountEye = chromeShown.eye || chromeTraySleeps;
+  /*
+   * Visible → fade/hidden starts with the tray already open. `has-wake` would
+   * wrap that tray in morph chrome (border + checkerboard sliding as one unit)
+   * unless we skip until the first idle hide.
+   */
+  const [chromeMorphReady, setChromeMorphReady] = useState(
+    () => loadChromeMode() !== "visible",
+  );
 
   /*
    * The idle timer, and the tap that restarts it.
@@ -1665,6 +1675,57 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     setAnnotatePeek(true);
     setAnnotatePeekGen((n) => n + 1);
   }, []);
+  const leftChromeOpen = chromeShown.chrome || annotatePeek;
+  const rightWakePointerRef = useRef<number | null>(null);
+  const leftWakePointerRef = useRef<number | null>(null);
+  const rightWakeGestureRef = useRef<"open" | "close" | null>(null);
+  const leftWakeGestureRef = useRef<"open" | "close" | null>(null);
+  const rightWakeQuietUntilRef = useRef(0);
+  const leftWakeQuietUntilRef = useRef(0);
+  const beginWakeGesture = (
+    slot: "left" | "right",
+    event: ReactPointerEvent,
+    open: boolean,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.isPrimary) return;
+    const pointerRef = slot === "right" ? rightWakePointerRef : leftWakePointerRef;
+    const gestureRef = slot === "right" ? rightWakeGestureRef : leftWakeGestureRef;
+    const quietRef = slot === "right" ? rightWakeQuietUntilRef : leftWakeQuietUntilRef;
+    if (open && performance.now() < quietRef.current) return;
+    pointerRef.current = event.pointerId;
+    if (!open) {
+      gestureRef.current = "open";
+      quietRef.current = performance.now() + CHROME_MORPH_MS * 2 + 120;
+      if (slot === "right") wakeChrome();
+      else peekAnnotate();
+      return;
+    }
+    gestureRef.current = "close";
+  };
+  const endWakeGesture = (
+    slot: "left" | "right",
+    event: ReactPointerEvent,
+    close: () => void,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const pointerRef = slot === "right" ? rightWakePointerRef : leftWakePointerRef;
+    const gestureRef = slot === "right" ? rightWakeGestureRef : leftWakeGestureRef;
+    if (pointerRef.current !== event.pointerId) return;
+    const gesture = gestureRef.current;
+    pointerRef.current = null;
+    gestureRef.current = null;
+    if (gesture === "close") close();
+  };
+  const cancelWakeGesture = (slot: "left" | "right", pointerId: number) => {
+    const pointerRef = slot === "right" ? rightWakePointerRef : leftWakePointerRef;
+    const gestureRef = slot === "right" ? rightWakeGestureRef : leftWakeGestureRef;
+    if (pointerRef.current !== pointerId) return;
+    pointerRef.current = null;
+    gestureRef.current = null;
+  };
   useEffect(() => {
     if (!annotatePeek) return;
     const timer = window.setTimeout(() => setAnnotatePeek(false), CHROME_IDLE_MS);
@@ -1685,7 +1746,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // you were using.
     setChromeAwake(true);
     setChromeWakeGen((n) => n + 1);
+    if (chromeMode === "visible") setChromeMorphReady(false);
   }, [chromeMode]);
+  useEffect(() => {
+    if (!chromeTraySleeps) return;
+    if (chromeShown.chrome) return;
+    setChromeMorphReady(true);
+  }, [chromeTraySleeps, chromeShown.chrome]);
   const [pressureSensitive, setPressureSensitiveState] = useState(
     () => inkPrefsRef.current.pressureSensitive,
   );
@@ -8536,8 +8603,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               .filter(Boolean)
               .join(" ")}
           >
-            <div className="lc-map-chrome-left">
-              {annotateToggle && (chromeShown.chrome || annotatePeek) && (
+            <div
+              className={[
+                "lc-map-chrome-left",
+                chromeTraySleeps && annotateToggle && chromeMorphReady
+                  ? "has-wake"
+                  : "",
+                chromeTraySleeps &&
+                annotateToggle &&
+                chromeMorphReady &&
+                leftChromeOpen
+                  ? "is-open"
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
+              <div className="lc-chrome-stack-tray">
+              {annotateToggle && (leftChromeOpen || chromeTraySleeps) && (
                 <div className="lc-map-chrome-row">
                   <button
                     type="button"
@@ -8584,21 +8667,38 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   )}
                 </div>
               )}
-              {annotateToggle && !chromeShown.chrome && !annotatePeek && (
+              </div>
+              {annotateToggle && chromeTraySleeps && chromeMorphReady && (
                 <button
                   type="button"
                   className={`${chromeWakeClass} lc-chrome-wake-annotate`}
-                  aria-label="Show annotate mode"
+                  aria-label={
+                    leftChromeOpen ? "Hide annotate mode" : "Show annotate mode"
+                  }
                   data-tip={
-                    chromeWakeMarker === "off" ? undefined : "Show annotate / scroll"
+                    chromeWakeMarker === "off"
+                      ? undefined
+                      : leftChromeOpen
+                        ? "Hide annotate / scroll"
+                        : "Show annotate / scroll"
                   }
                   data-tip-placement="bottom"
                   onPointerDown={(event) => {
+                    beginWakeGesture("left", event, leftChromeOpen);
+                  }}
+                  onPointerUp={(event) => {
+                    endWakeGesture("left", event, () => {
+                      if (chromeShown.chrome) sleepChrome();
+                      else setAnnotatePeek(false);
+                    });
+                  }}
+                  onPointerCancel={(event) => {
+                    cancelWakeGesture("left", event.pointerId);
+                  }}
+                  onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    peekAnnotate();
                   }}
-                  onClick={peekAnnotate}
                 >
                   <span className="lc-chrome-wake-ghost" aria-hidden>
                     <AnnotateIcon on={annotateCode} />
@@ -8768,8 +8868,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               <div
                 className={[
                   "lc-map-chrome-stack",
-                  chromeTraySleeps ? "has-wake" : "",
-                  chromeTraySleeps && chromeStackOpen ? "is-open" : "",
+                  chromeTraySleeps && chromeMorphReady ? "has-wake" : "",
+                  chromeTraySleeps && chromeMorphReady && chromeStackOpen
+                    ? "is-open"
+                    : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
@@ -8964,7 +9066,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   </button>
                 )}
                 </div>
-                {chromeTraySleeps && (
+                {chromeTraySleeps && chromeMorphReady && (
                   <button
                     type="button"
                     className={chromeWakeClass}
@@ -8980,14 +9082,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     }
                     data-tip-placement="bottom"
                     onPointerDown={(event) => {
+                      beginWakeGesture("right", event, chromeStackOpen);
+                    }}
+                    onPointerUp={(event) => {
+                      endWakeGesture("right", event, sleepChrome);
+                    }}
+                    onPointerCancel={(event) => {
+                      cancelWakeGesture("right", event.pointerId);
+                    }}
+                    onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
-                      if (chromeStackOpen) sleepChrome();
-                      else wakeChrome();
-                    }}
-                    onClick={() => {
-                      if (chromeStackOpen) sleepChrome();
-                      else wakeChrome();
                     }}
                   >
                     <span className="lc-chrome-wake-ghost" aria-hidden>
