@@ -40,11 +40,12 @@ import {
 /** Tile edge in device pixels. */
 export const TILE_PX = 384;
 /**
- * Extra pixels past each tile edge, baked into the canvas and the blit.
+ * Extra pixels past each tile edge, baked into the canvas only.
  *
- * Adjacent tiles meet on an AA fringe. 1px only covered the fringe itself and
- * still showed a parchment lattice at non-integer device coords. 3px overlaps
- * opaque interiors so committed ink does not read as a page grid.
+ * A stroke that meets the square is rasterised with neighbour context so the
+ * core-edge pixels are fully covered. The dest blit copies the core, not this
+ * pad: overlapping dest copies of translucent ink stacked into a lattice the
+ * colour of the stroke.
  */
 export const TILE_OVERLAP_PX = 3;
 
@@ -710,13 +711,16 @@ export class InkTileCache {
       const dx = toDeviceX(bounds.minX);
       const dy = toDeviceY(bounds.minY);
       const size = tileScene * pixelScale;
-      const overlapDest = TILE_OVERLAP_PX * (pixelScale / levelScale(level));
       ctx.drawImage(
         tile.canvas,
-        dx - overlapDest,
-        dy - overlapDest,
-        size + 2 * overlapDest,
-        size + 2 * overlapDest,
+        TILE_OVERLAP_PX,
+        TILE_OVERLAP_PX,
+        this.tilePx,
+        this.tilePx,
+        dx,
+        dy,
+        size,
+        size,
       );
     }
 
@@ -812,19 +816,16 @@ export class InkTileCache {
         const srcScale = this.tilePx / size;
         const destW = toDeviceX(box.maxX) - toDeviceX(box.minX);
         const destH = toDeviceY(box.maxY) - toDeviceY(box.minY);
-        const destPerScene =
-          box.maxX - box.minX > 1e-9 ? destW / (box.maxX - box.minX) : srcScale;
-        const overlapDest = TILE_OVERLAP_PX * destPerScene / srcScale;
         ctx.drawImage(
           tile.canvas,
-          (box.minX - src.minX) * srcScale,
-          (box.minY - src.minY) * srcScale,
-          (box.maxX - box.minX) * srcScale + 2 * TILE_OVERLAP_PX,
-          (box.maxY - box.minY) * srcScale + 2 * TILE_OVERLAP_PX,
-          toDeviceX(box.minX) - overlapDest,
-          toDeviceY(box.minY) - overlapDest,
-          destW + 2 * overlapDest,
-          destH + 2 * overlapDest,
+          TILE_OVERLAP_PX + (box.minX - src.minX) * srcScale,
+          TILE_OVERLAP_PX + (box.minY - src.minY) * srcScale,
+          (box.maxX - box.minX) * srcScale,
+          (box.maxY - box.minY) * srcScale,
+          toDeviceX(box.minX),
+          toDeviceY(box.minY),
+          destW,
+          destH,
         );
         drew = true;
       }
