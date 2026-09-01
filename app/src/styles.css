@@ -6153,22 +6153,72 @@ body[data-lc-sash-drag="horizontal"] {
   transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.lc-map-chrome-stack:has(> .lc-chrome-wake) {
+.lc-map-chrome-stack.has-wake {
   position: relative;
   gap: 0;
   padding: 0;
   border: none;
   background: transparent;
   box-shadow: none;
+  min-width: 48px;
+}
+
+.lc-map-chrome-stack.has-wake:not(.is-open) {
   /* Same footprint as the 4-icon card. Idle used to shrink to a 56px
    * wake-dot; a pen tap where Recentre / paper / theme sat inked a
    * dot instead of bringing the stack back. */
-  min-width: 48px;
   min-height: 148px;
 }
 
+.lc-map-chrome-stack:not(.has-wake) > .lc-chrome-stack-tray {
+  display: contents;
+}
+
+.lc-chrome-stack-tray {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 3px;
+  overflow: hidden;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 16%);
+  transform-origin: bottom center;
+}
+
+.lc-map-chrome-stack.has-wake .lc-chrome-stack-tray {
+  transition:
+    opacity 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    max-height 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    padding 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-width 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-map-chrome-stack.has-wake:not(.is-open) .lc-chrome-stack-tray {
+  opacity: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  transform: translateY(10px) scale(0.96);
+  pointer-events: none;
+  box-shadow: none;
+}
+
+.lc-map-chrome-stack.has-wake.is-open .lc-chrome-stack-tray {
+  opacity: 1;
+  max-height: 280px;
+  transform: none;
+  pointer-events: auto;
+}
+
 .lc-map-chrome-stack > .lc-lined-toggle,
-.lc-map-chrome-stack > .lc-chrome-eye {
+.lc-map-chrome-stack > .lc-chrome-eye,
+.lc-chrome-stack-tray > .lc-lined-toggle,
+.lc-chrome-stack-tray > .lc-chrome-eye {
   border: none;
   box-shadow: none;
   background: transparent;
@@ -6176,7 +6226,8 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 32px;
 }
 
-.lc-map-chrome-stack > .lc-palette-compact {
+.lc-map-chrome-stack > .lc-palette-compact,
+.lc-chrome-stack-tray > .lc-palette-compact {
   border: none;
   box-shadow: none;
   background: transparent;
@@ -6185,12 +6236,15 @@ body[data-lc-sash-drag="horizontal"] {
 
 @media (hover: hover) and (pointer: fine) {
   .lc-map-chrome-stack > .lc-lined-toggle:hover,
-  .lc-map-chrome-stack > .lc-chrome-eye:hover {
+  .lc-map-chrome-stack > .lc-chrome-eye:hover,
+  .lc-chrome-stack-tray > .lc-lined-toggle:hover,
+  .lc-chrome-stack-tray > .lc-chrome-eye:hover {
     background: var(--panel);
   }
 }
 
-.lc-map-chrome-stack > .lc-lined-toggle.is-active {
+.lc-map-chrome-stack > .lc-lined-toggle.is-active,
+.lc-chrome-stack-tray > .lc-lined-toggle.is-active {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
@@ -6396,6 +6450,24 @@ body[data-lc-sash-drag="horizontal"] {
   -webkit-tap-highlight-color: transparent;
 }
 
+.lc-map-chrome-stack.has-wake.is-open > .lc-chrome-wake {
+  position: relative;
+  inset: auto;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.lc-map-chrome-stack.has-wake.is-open > .lc-chrome-wake .lc-chrome-wake-ghost {
+  left: 50%;
+  bottom: auto;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
 .lc-chrome-wake-ghost {
   position: absolute;
   left: 50%;
@@ -6556,12 +6628,13 @@ body[data-lc-sash-drag="horizontal"] {
 /*
  * Chrome that is going quiet, rather than blinking out.
  *
- * The fade is the mode's whole character — "still there, just not in the way" —
- * and a control that vanishes between frames reads as a bug. Mounting is not
- * animated: it should be back the instant the corner is touched.
+ * Fade / hidden slide the checkerboard down and morph the tray open above it
+ * so the wake control stays tappable under the menu.
  */
 .lc-map-chrome-stack > .lc-chrome-eye,
 .lc-map-chrome-stack > .lc-lined-toggle,
+.lc-chrome-stack-tray > .lc-chrome-eye,
+.lc-chrome-stack-tray > .lc-lined-toggle,
 .lc-map-chrome-row > .lc-lined-toggle {
   transition: opacity 220ms ease;
 }
@@ -6569,8 +6642,15 @@ body[data-lc-sash-drag="horizontal"] {
 @media (prefers-reduced-motion: reduce) {
   .lc-map-chrome-stack > .lc-chrome-eye,
   .lc-map-chrome-stack > .lc-lined-toggle,
-  .lc-map-chrome-row > .lc-lined-toggle {
+  .lc-chrome-stack-tray > .lc-chrome-eye,
+  .lc-chrome-stack-tray > .lc-lined-toggle,
+  .lc-map-chrome-row > .lc-lined-toggle,
+  .lc-map-chrome-stack.has-wake .lc-chrome-stack-tray {
     transition: none;
+  }
+
+  .lc-map-chrome-stack.has-wake:not(.is-open) .lc-chrome-stack-tray {
+    transform: none;
   }
 }
 
@@ -12465,13 +12545,15 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 4px;
 }
 
-.lc-mobile .lc-map-chrome-stack:not(:has(> .lc-chrome-wake)) {
+.lc-mobile .lc-map-chrome-stack:not(.has-wake) {
   flex-direction: column;
   align-items: stretch;
 }
 
 .lc-mobile .lc-map-chrome-stack > .lc-lined-toggle,
 .lc-mobile .lc-map-chrome-stack > .lc-chrome-eye,
+.lc-mobile .lc-chrome-stack-tray > .lc-lined-toggle,
+.lc-mobile .lc-chrome-stack-tray > .lc-chrome-eye,
 .lc-mobile .lc-map-chrome-stack .lc-palette-trigger-map.lc-map-btn {
   min-height: 36px;
   width: 36px;

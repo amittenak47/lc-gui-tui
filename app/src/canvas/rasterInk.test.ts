@@ -43,6 +43,7 @@ import {
   dwellBlotGrowT,
   blotPoolRgb,
   mixBlotAlpha,
+  dryWashRgb,
   INK_BLOT_ALPHA_LIFT,
   INK_BLOT_SATURATE,
   INK_BLOT_DARKEN,
@@ -387,8 +388,13 @@ describe("speed ink", () => {
   it("never asks for more than opaque ink on a full dial", () => {
     const maxSlow = inkStrokeAlpha(1, 0, false, 0, 1, 1, 1, 1);
     expect(maxSlow).toBeLessThanOrEqual(1);
-    // BASE * (1 + RANGE) leaves headroom under the clip.
-    expect(maxSlow).toBeCloseTo(INK_SPEED_ALPHA_BASE * (1 + 0.5), 2);
+    expect(maxSlow).toBeCloseTo(1);
+  });
+
+  it("leaves a standstill wet so pooling can darken, and washes only while moving", () => {
+    expect(inkSpeedAlphaGain(1, 1, 1)).toBeCloseTo(1);
+    expect(inkSpeedAlphaGain(INK_SLOWNESS_NEUTRAL, 1, 1)).toBeCloseTo(INK_SPEED_ALPHA_BASE);
+    expect(inkSpeedAlphaGain(0, 1, 1)).toBeLessThan(INK_SPEED_ALPHA_BASE);
   });
 
   it("reads neutral pace as the speed-alpha base when fade is full", () => {
@@ -1163,6 +1169,7 @@ function inkDrawContext() {
   let fillCount = 0;
   let strokeCount = 0;
   let radialGradients = 0;
+  let linearGradients = 0;
   const arcRadii: number[] = [];
   const arcSweeps: number[] = [];
   const fillAlphas: number[] = [];
@@ -1232,6 +1239,14 @@ function inkDrawContext() {
         },
       };
     },
+    createLinearGradient() {
+      linearGradients++;
+      return {
+        addColorStop(_t: number, color: string) {
+          colorStops.push(color);
+        },
+      };
+    },
     save() {},
     restore() {},
     rect() {},
@@ -1259,6 +1274,9 @@ function inkDrawContext() {
     },
     get radialGradients() {
       return radialGradients;
+    },
+    get linearGradients() {
+      return linearGradients;
     },
   };
 }
@@ -1411,11 +1429,11 @@ describe("paintInkDisc tip vs join", () => {
       speedBlotBlend: 1,
       points: points([10, 10]),
     };
+    const style = inkStrokePointStyles(op, 0)[0];
+    expect(style.dryGain).toBeCloseTo(INK_SPEED_ALPHA_BASE);
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
-    expect(drawCtx.fillAlphas[0]).toBeCloseTo(
-      mixBlotAlpha(INK_SPEED_ALPHA_BASE, INK_BLOT_END_FLOOR),
-    );
+    expect(drawCtx.fillAlphas[0]).toBe(1);
   });
 
   it("tapers speed-ink width with blot off instead of earthworm runs", () => {
@@ -1999,14 +2017,16 @@ describe("grain and blot pooling (Phase 2)", () => {
     const rest = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 1, 0, false, 1, 0, 1);
     const moving = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 0.5, 0, false, 1, 0, 1);
     expect(rest.lineWidth).toBeCloseTo(moving.lineWidth);
-    expect(rest.blotPool ?? 0).toBeGreaterThan(moving.blotPool ?? 0);
+    expect(rest.blotPool ?? 0).toBe(0);
+    expect(moving.blotPool ?? 0).toBe(0);
   });
 
   it("widens the trail at rest when speed ink and blot are both on", () => {
     const rest = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 1, 1, false, 1, 0, 1);
     const moving = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 0.5, 1, false, 1, 0, 1);
     expect(rest.lineWidth).toBeGreaterThan(moving.lineWidth);
-    expect(rest.blotPool ?? 0).toBeGreaterThan(moving.blotPool ?? 0);
+    expect(rest.blotPool ?? 0).toBe(0);
+    expect(moving.blotPool ?? 0).toBe(0);
   });
 
   it("textures a moving stroke when grain is on", () => {
@@ -2065,6 +2085,44 @@ describe("grain and blot pooling (Phase 2)", () => {
     expect(drawCtx.fillCount).toBeGreaterThanOrEqual(3);
   });
 
+  it("paints drying-only strokes as a washed ribbon with a vertex gradient", () => {
+    const rest = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 1, 0, false, 1, 1);
+    const moving = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 0.2, 0, false, 1, 1);
+    expect(rest.dryGain ?? 1).toBeCloseTo(1);
+    expect(moving.dryGain ?? 1).toBeLessThan(0.85);
+    expect(rest.blotPool ?? 0).toBe(0);
+
+    const washed = dryWashRgb("#c41e3a", 0.5);
+    const wet = dryWashRgb("#c41e3a", 1);
+    expect(washed.r).toBeGreaterThan(wet.r);
+    expect(washed.g).toBeGreaterThan(wet.g);
+
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#c41e3a",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 0,
+        speedBlotBlend: 0,
+        speedFade: 1,
+        points: [
+          { x: 0, y: 0, pressure: NO_PRESSURE, slowness: 1 },
+          { x: 40, y: 0, pressure: NO_PRESSURE, slowness: 0.5 },
+          { x: 80, y: 0, pressure: NO_PRESSURE, slowness: 0 },
+        ],
+      },
+      1,
+    );
+    expect(drawCtx.strokeCount).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(3);
+    expect(drawCtx.linearGradients).toBeGreaterThan(0);
+  });
+
   it("grows ribbon tip width from blotTipGrow on a moving stroke", () => {
     const pts = points([0, 0], [40, 0], [80, 0]);
     const base = {
@@ -2079,6 +2137,7 @@ describe("grain and blot pooling (Phase 2)", () => {
       points: pts,
     };
     const styles = inkStrokePointStyles({ ...base, blotTipGrow: 0 }, 0);
+    expect(styles[1].blotPool ?? 0).toBe(0);
     const nibStyles = applyInkPoolingAtEnds(styles, { ...base, blotTipGrow: 0 }, pts, 0);
     const grownStyles = applyInkPoolingAtEnds(styles, { ...base, blotTipGrow: 1 }, pts, 0);
     expect(nibStyles[1].lineWidth).toBeCloseTo(grownStyles[1].lineWidth);
@@ -2100,6 +2159,31 @@ describe("grain and blot pooling (Phase 2)", () => {
         ribGrown.left[last].y - ribGrown.right[last].y,
       ) / 2;
     expect(halfGrown).toBeGreaterThan(halfNib);
+  });
+
+  it("grows a halted pooling tip past the nib with Speed ink off", () => {
+    const pts = points([0, 0], [40, 0], [80, 0], [80.05, 0], [80, 0.08], [80.04, 0.02]);
+    const op = {
+      kind: "draw" as const,
+      color: "#112233",
+      baseWidth: 12,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      blotTipGrow: 1,
+      points: pts,
+    };
+    const styles = inkStrokePointStyles(op, 0);
+    const pooled = applyInkPoolingAtEnds(styles, op, pts, 0);
+    expect(pooled[pooled.length - 1].lineWidth).toBeGreaterThan(pooled[1].lineWidth);
+    expect(pooled[1].lineWidth).toBeCloseTo(styles[1].lineWidth);
+
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, op, 1);
+    expect(drawCtx.strokeCount).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(3);
   });
 
   it("applyInkPoolingAtEnds widens only head and tip when grow is full", () => {

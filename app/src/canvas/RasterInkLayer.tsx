@@ -2004,34 +2004,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               paintLiveAfterChangeRef.current();
               return;
             }
-            const dwellWidth = strokeWidthRef.current;
-            const dwellStyle = inkStrokeStyle(
-              dwellWidth,
-              liveOp.maxFullness,
-              dwellPoint.pressure,
-              liveOp.pressureClip,
-              liveOp.pressureSensitive,
-              0,
-              dwellPoint.slowness ?? INK_SLOWNESS_NEUTRAL,
-              liveOp.speedInk ?? 0,
-              false,
-              liveOp.boldness ?? inkBoldnessRef.current,
-              liveOp.speedFade ?? 0,
-            );
-            const dwellDense =
-              (liveOp.speedInk ?? 0) > 0 ||
-              (liveOp.pressureSensitive && hasStylusPressure(dwellPoint.pressure));
-            const dwellStep = Math.max(
-              dwellStyle.lineWidth *
-                (dwellDense ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
-              0.5,
-            );
-            const dwellStamps = stampAlongSegment(last, dwellPoint, dwellStep);
-            if (liveReshapeActiveRef.current()) {
-              const raw = liveRawPointsRef.current ?? (liveRawPointsRef.current = []);
-              raw.push(...dwellStamps);
-            } else {
-              liveOp.points.push(...dwellStamps);
+            // Halted on a moving stroke: swell the existing tip. Extra stamps
+            // at the same point become a tip cluster that the ribbon peels off,
+            // leaving the pool capped at the nib.
+            if (tip && hasStylusPressure(dwellPoint.pressure)) {
+              tip.pressure = dwellPoint.pressure;
             }
             lastPointRef.current = dwellPoint;
             paintLiveAfterChangeRef.current();
