@@ -46,8 +46,11 @@ export const TILE_PX = 384;
  * core-edge pixels are fully covered. The dest blit copies the core, not this
  * pad: overlapping dest copies of translucent ink stacked into a lattice the
  * colour of the stroke.
+ *
+ * 3px was enough for solid-ink AA. A drying wash that clips there still
+ * showed a grid-aligned color cut, so the pad is on the order of a nib.
  */
-export const TILE_OVERLAP_PX = 3;
+export const TILE_OVERLAP_PX = 16;
 
 /**
  * Zoom levels tiles are rasterised at, as steps of the exponent of two.
