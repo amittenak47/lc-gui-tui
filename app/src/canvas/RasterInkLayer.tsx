@@ -34,7 +34,10 @@ import {
   INK_HOLD_STILL_PX,
   isDiscPrimaryPath,
   isHostBoundOp,
+  LIVE_REWIND_NIBS,
   NO_PRESSURE,
+  paintInkRibbonOpaque,
+  setInkSceneTransform,
   scenePointFromPointer,
   smoothPressure,
   smoothSpeed,
@@ -330,6 +333,18 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
      * the two from feeling like different pens.
      */
     const committedSnapRef = useRef<HTMLCanvasElement | null>(null);
+    /**
+     * Open-stroke ink, painted **opaque** and composited once at the stroke's
+     * alpha. Opaque is what lets a frame repaint only the tip: a second alpha
+     * blit over ground that already has ink is a darker bead at the seam, which
+     * is how a sliced live paint used to look.
+     */
+    const liveLayerRef = useRef<HTMLCanvasElement | null>(null);
+    /** Ink far enough behind the tip that nothing can revise it. */
+    const bakedLayerRef = useRef<HTMLCanvasElement | null>(null);
+    /** Last point baked into {@link bakedLayerRef}; everything before is final. */
+    const bakedIndexRef = useRef(0);
+
     /** One live paint per animation frame while stamps keep arriving. */
     const livePaintRafRef = useRef<number | null>(null);
     /**
@@ -720,6 +735,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         if (live) {
           syncLiveHostBinding(live);
+          // Painted whole here, so the bake no longer describes what is on
+          // screen. Drop it and let the next incremental frame rebuild.
+          resetLiveLayersRef.current();
           paintLiveOp(ctx, live, drawView, dpr, clipRef.current, hosts);
           liveDrawnIndexRef.current =
             live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
@@ -907,8 +925,24 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       ensureTiles().setOps(opsRef.current);
     }, [ensureTiles]);
 
+    /** Drop the open-stroke layers. The next frame paints the whole stroke again. */
+    const resetLiveLayers = useCallback(() => {
+      bakedIndexRef.current = 0;
+      for (const ref of [liveLayerRef, bakedLayerRef]) {
+        const c = ref.current;
+        if (!c) continue;
+        const cx = c.getContext("2d");
+        if (!cx) continue;
+        cx.setTransform(1, 0, 0, 1, 0, 0);
+        cx.clearRect(0, 0, c.width, c.height);
+      }
+    }, []);
+    const resetLiveLayersRef = useRef(resetLiveLayers);
+    resetLiveLayersRef.current = resetLiveLayers;
+
     const captureCommittedSnap = useCallback((canvas: HTMLCanvasElement) => {
       if (canvas.width < 1 || canvas.height < 1) return;
+      resetLiveLayersRef.current();
       let snap = committedSnapRef.current;
       if (!snap) {
         snap = document.createElement("canvas");
@@ -924,6 +958,122 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       sctx.clearRect(0, 0, snap.width, snap.height);
       sctx.drawImage(canvas, 0, 0);
     }, []);
+
+    /**
+     * Repaint only the tip of the open stroke, onto an opaque layer.
+     *
+     * Ink more than {@link LIVE_REWIND_NIBS} nib widths behind the tip is
+     * final — pooling is the only thing that reaches backwards and its envelope
+     * is a fraction of that — so it is baked once and the frame redraws just
+     * the window in front of it. The op is handed over whole every time; only
+     * the painted range moves, because the drying reservoir and the pace filter
+     * are keyed on the points array and a slice would restart both.
+     *
+     * Returns false when this stroke has no opaque form (a tap, a dwell disc, a
+     * highlighter, Grain, a hairline nib) and the caller should paint it the
+     * ordinary way.
+     */
+    const paintLiveBounded = useCallback(
+      (
+        ctx: CanvasRenderingContext2D,
+        canvas: HTMLCanvasElement,
+        live: InkOp,
+        drawView: ViewportTransform,
+        dpr: number,
+      ): boolean => {
+        if (live.kind !== "draw" || live.points.length < 2) return false;
+        const pixelScale = drawView.zoom * dpr;
+
+        const surface = (ref: typeof liveLayerRef) => {
+          let c = ref.current;
+          if (!c) {
+            c = document.createElement("canvas");
+            ref.current = c;
+          }
+          if (c.width !== canvas.width || c.height !== canvas.height) {
+            c.width = canvas.width;
+            c.height = canvas.height;
+            // A resized layer has lost its ink; the bake has to start over.
+            bakedIndexRef.current = 0;
+          }
+          return c;
+        };
+        const baked = surface(bakedLayerRef);
+        const layer = surface(liveLayerRef);
+        const bakedCtx = baked.getContext("2d");
+        const layerCtx = layer.getContext("2d");
+        if (!bakedCtx || !layerCtx) return false;
+
+        // How far back the window reaches, in scene units of travel.
+        const nib = inkLineWidth(live.baseWidth, 0, false);
+        const rewind = LIVE_REWIND_NIBS * nib;
+        const points = live.points;
+        const tip = points.length - 1;
+        let next = bakedIndexRef.current;
+        let travel = 0;
+        for (let i = tip; i > 0; i--) {
+          travel += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+          if (travel >= rewind) {
+            next = Math.max(next, i - 1);
+            break;
+          }
+        }
+
+        if (next > bakedIndexRef.current) {
+          // Bake stops short of the tip, so it takes no terminal cap and no
+          // end-of-stroke pool — either at a boundary is a blob on the trail.
+          setInkSceneTransform(bakedCtx, drawView, dpr);
+          const done = paintInkRibbonOpaque(
+            bakedCtx,
+            live,
+            bakedIndexRef.current,
+            pixelScale,
+            { capEnd: false, capHead: bakedIndexRef.current === 0 },
+            next,
+          );
+          bakedCtx.setTransform(1, 0, 0, 1, 0, 0);
+          if (done == null) return false;
+          bakedIndexRef.current = next;
+        }
+
+        layerCtx.setTransform(1, 0, 0, 1, 0, 0);
+        layerCtx.clearRect(0, 0, layer.width, layer.height);
+        layerCtx.drawImage(baked, 0, 0);
+        setInkSceneTransform(layerCtx, drawView, dpr);
+        // The window starts exactly where the bake stopped: consecutive passes
+        // partition the quads rather than overlapping them, because an
+        // antialiased edge composited twice is a seam even at full alpha.
+        const alpha = paintInkRibbonOpaque(
+          layerCtx,
+          live,
+          bakedIndexRef.current,
+          pixelScale,
+          { capEnd: true, capHead: bakedIndexRef.current === 0 },
+        );
+        layerCtx.setTransform(1, 0, 0, 1, 0, 0);
+        if (alpha == null) return false;
+
+        const clip = clipRef.current;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        if (clip) {
+          ctx.save();
+          setInkSceneTransform(ctx, drawView, dpr);
+          ctx.beginPath();
+          ctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
+          ctx.clip();
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+        }
+        ctx.globalAlpha = alpha;
+        ctx.drawImage(layer, 0, 0);
+        ctx.globalAlpha = 1;
+        if (clip) ctx.restore();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        return true;
+      },
+      [],
+    );
+    const paintLiveBoundedRef = useRef(paintLiveBounded);
+    paintLiveBoundedRef.current = paintLiveBounded;
 
     /**
      * Hot path: blit the stroke-start committed snapshot, then the live op.
@@ -947,6 +1097,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         canvas.height !== Math.round(box.height * dpr)
       ) {
         committedSnapRef.current = null;
+        resetLiveLayersRef.current();
         repaint();
         return;
       }
@@ -955,6 +1106,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       // Host-bound live ink needs clip+translate — fall back to a full frame.
       if (isHostBoundOp(live)) {
         committedSnapRef.current = null;
+        resetLiveLayersRef.current();
         repaint();
         return;
       }
@@ -973,7 +1125,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(snap, 0, 0);
-        paintLiveOp(ctx, live, drawView, dpr, clipRef.current, scrollHostLookup());
+        if (!paintLiveBoundedRef.current(ctx, canvas, live, drawView, dpr)) {
+          // No opaque form for this stroke — paint it whole, as before.
+          bakedIndexRef.current = 0;
+          paintLiveOp(ctx, live, drawView, dpr, clipRef.current, scrollHostLookup());
+        }
         liveDrawnIndexRef.current =
           live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1027,6 +1183,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const flushLivePaint = useCallback(() => {
       if (reshapeLiveStrokeRef.current()) {
         liveDrawnIndexRef.current = 0;
+        // Smoothing under the nib rebuilds `points`, so what is baked is a
+        // different line. Start the layers over.
+        resetLiveLayersRef.current();
         repaintLiveRef.current();
         return;
       }
@@ -2398,6 +2557,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         strokeBoxRef.current = null;
         strokeRectRef.current = null;
         committedSnapRef.current = null;
+        resetLiveLayersRef.current();
         detachWindowFallback();
         try {
           canvas.releasePointerCapture(event.pointerId);
@@ -2461,6 +2621,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         strokeBoxRef.current = null;
         strokeRectRef.current = null;
         committedSnapRef.current = null;
+        resetLiveLayersRef.current();
         lastPointRef.current = null;
         rawPointRef.current = null;
         detachWindowFallback();
