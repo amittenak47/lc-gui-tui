@@ -10,8 +10,10 @@
 const KEY = "whiteboard.inkSpeed";
 /** Soft rim + dwell growth feel (0 = hard expanding disc, 1 = soft rim / faster grow). */
 const BLOT_BLEND_KEY = "whiteboard.inkSpeedBlotBlend";
-/** Pace wash toward pencil (0 = width only, 1 = old 0.55 alpha floor). */
+/** Pace wash toward paper (0 = width only, 1 = full drying curve). */
 const FADE_KEY = "whiteboard.inkSpeedFade";
+/** Nib material: 0 = hard felt-tip, 1 = seeded overlapping discs. */
+const GRAIN_KEY = "whiteboard.inkGrain";
 
 export const INK_SPEED_MIN = 0;
 export const INK_SPEED_MAX = 1;
@@ -21,6 +23,8 @@ export const INK_SPEED_DEFAULT = 0;
 export const INK_SPEED_BLOT_BLEND_DEFAULT = 0;
 /** Width-only until the writer turns the wash up. */
 export const INK_SPEED_FADE_DEFAULT = 0;
+/** Off: hard marker disc. Texture is opt-in so old notes stay a felt-tip. */
+export const INK_GRAIN_DEFAULT = 0;
 
 function clamp(value: number, fallback = INK_SPEED_DEFAULT): number {
   if (!Number.isFinite(value)) return fallback;
@@ -81,7 +85,7 @@ export function speedBlotBlendToPercent(value: number): number {
   return Math.round(clamp(value, INK_SPEED_BLOT_BLEND_DEFAULT) * 100);
 }
 
-/** Fired when Speed blot blend is saved so the board can re-read it. */
+/** Fired when Ink Pooling blend is saved so the board can re-read it. */
 export const INK_SPEED_BLOT_BLEND_EVENT = "lc-ink-speed-blot-blend";
 
 export function loadInkSpeedFade(): number {
@@ -110,5 +114,34 @@ export function speedFadeToPercent(value: number): number {
   return Math.round(clamp(value, INK_SPEED_FADE_DEFAULT) * 100);
 }
 
-/** Fired when Speed fade is saved so the board can re-read it. */
+/** Fired when Ink Drying (pace wash) is saved so the board can re-read it. */
 export const INK_SPEED_FADE_EVENT = "lc-ink-speed-fade";
+
+export function loadInkGrain(): number {
+  try {
+    const raw = localStorage.getItem(GRAIN_KEY);
+    if (raw == null) return INK_GRAIN_DEFAULT;
+    return clamp(Number(raw), INK_GRAIN_DEFAULT);
+  } catch {
+    return INK_GRAIN_DEFAULT;
+  }
+}
+
+export function saveInkGrain(value: number): void {
+  try {
+    localStorage.setItem(GRAIN_KEY, String(clamp(value, INK_GRAIN_DEFAULT)));
+  } catch {
+    /* private browsing */
+  }
+}
+
+export function grainFromPercent(percent: number): number {
+  return clamp(percent / 100, INK_GRAIN_DEFAULT);
+}
+
+export function grainToPercent(value: number): number {
+  return Math.round(clamp(value, INK_GRAIN_DEFAULT) * 100);
+}
+
+/** Fired when Grain is saved so the board can re-read it. */
+export const INK_GRAIN_EVENT = "lc-ink-grain";

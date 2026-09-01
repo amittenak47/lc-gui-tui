@@ -70,12 +70,15 @@ import {
   type ChromeWakeTint,
 } from "../util/chromeWakePref";
 import {
+  loadInkGrain,
   loadInkSpeed,
   loadInkSpeedBlotBlend,
   loadInkSpeedFade,
+  saveInkGrain,
   saveInkSpeed,
   saveInkSpeedBlotBlend,
   saveInkSpeedFade,
+  INK_GRAIN_EVENT,
   INK_SPEED_BLOT_BLEND_EVENT,
   INK_SPEED_FADE_EVENT,
 } from "../util/inkSpeedPref";
@@ -414,11 +417,13 @@ interface DevicePrefs {
   inkSmoothing: number;
   inkSmoothingMode: InkSmoothingMode;
   inkSpeed: number;
-  /** Soften speed-ink dwell/join discs into the ribbon (0–1). */
+  /** Ink Pooling strength: hold-to-grow and richer deposit (0–1). */
   inkSpeedBlotBlend: number;
+  /** Nib material (0–1). */
+  inkGrain: number;
   /** Pace wash toward pencil (0–1). */
   inkSpeedFade: number;
-  /** Boost stroke opacity to compensate for soft speed blot blend (0–3). */
+  /** Boost stroke opacity to compensate for Ink Pooling / fade (0–3). */
   inkBoldness: number;
   /** Eraser rubs pixels out, rather than taking whole strokes. */
   eraserPartial: boolean;
@@ -454,6 +459,7 @@ function loadDevicePrefs(): DevicePrefs {
     inkSmoothingMode: loadInkSmoothingMode(),
     inkSpeed: loadInkSpeed(),
     inkSpeedBlotBlend: loadInkSpeedBlotBlend(),
+    inkGrain: loadInkGrain(),
     inkSpeedFade: loadInkSpeedFade(),
     inkBoldness: loadInkBoldness(),
     eraserPartial: loadEraserPartial(),
@@ -482,6 +488,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.inkSmoothingMode === b.inkSmoothingMode &&
     a.inkSpeed === b.inkSpeed &&
     a.inkSpeedBlotBlend === b.inkSpeedBlotBlend &&
+    a.inkGrain === b.inkGrain &&
     a.inkSpeedFade === b.inkSpeedFade &&
     a.inkBoldness === b.inkBoldness &&
     a.eraserPartial === b.eraserPartial &&
@@ -820,6 +827,7 @@ export function SettingsModal({
   );
   const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
   const [inkSpeedBlotBlend, setInkSpeedBlotBlend] = useState(() => loadInkSpeedBlotBlend());
+  const [inkGrain, setInkGrain] = useState(() => loadInkGrain());
   const [inkSpeedFade, setInkSpeedFade] = useState(() => loadInkSpeedFade());
   const [inkBoldness, setInkBoldness] = useState(() => loadInkBoldness());
   const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
@@ -1018,6 +1026,7 @@ export function SettingsModal({
     setInkSmoothingMode(prefs.inkSmoothingMode);
     setInkSpeed(prefs.inkSpeed);
     setInkSpeedBlotBlend(prefs.inkSpeedBlotBlend);
+    setInkGrain(prefs.inkGrain ?? 0);
     setInkSpeedFade(prefs.inkSpeedFade);
     setInkBoldness(prefs.inkBoldness);
     setEraserPartial(prefs.eraserPartial);
@@ -1112,6 +1121,7 @@ export function SettingsModal({
     inkSmoothingMode,
     inkSpeed,
     inkSpeedBlotBlend,
+    inkGrain,
     inkSpeedFade,
     inkBoldness,
     eraserPartial,
@@ -1173,6 +1183,7 @@ export function SettingsModal({
         saveInkSmoothingMode(inkSmoothingMode);
         saveInkSpeed(inkSpeed);
         saveInkSpeedBlotBlend(inkSpeedBlotBlend);
+        saveInkGrain(inkGrain);
         saveInkSpeedFade(inkSpeedFade);
         saveInkBoldness(inkBoldness);
         saveEraserPartial(eraserPartial);
@@ -1201,6 +1212,7 @@ export function SettingsModal({
         window.dispatchEvent(new CustomEvent("lc-ink-smoothing"));
         window.dispatchEvent(new CustomEvent("lc-ink-speed"));
         window.dispatchEvent(new CustomEvent(INK_SPEED_BLOT_BLEND_EVENT));
+        window.dispatchEvent(new CustomEvent(INK_GRAIN_EVENT));
         window.dispatchEvent(new CustomEvent(INK_SPEED_FADE_EVENT));
         window.dispatchEvent(new CustomEvent(INK_BOLDNESS_EVENT));
         window.dispatchEvent(new CustomEvent(ERASER_PARTIAL_EVENT));

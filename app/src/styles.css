@@ -4023,6 +4023,30 @@ body[data-lc-sash-drag="horizontal"] {
   border-radius: 8px;
 }
 
+[data-lc-chrome-narrow] .lc-map-controls .lc-map-chrome-stack.has-wake {
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  gap: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-map-chrome-stack.has-wake:not(.is-open) {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  max-height: 36px;
+}
+
+[data-lc-chrome-narrow] .lc-map-controls .lc-map-chrome-stack.has-wake .lc-chrome-stack-tray {
+  padding: 2px;
+  gap: 1px;
+  border-radius: 8px;
+}
+
 /*
  * Only the stack shrinks, not every toggle in the strip.
  *
@@ -4594,6 +4618,11 @@ body[data-lc-sash-drag="horizontal"] {
   margin-top: 0;
 }
 
+/*
+ * One track, one filled pill. The active cell used to be a 16% tint plus a
+ * thin accent ring, which on the dark sheet read as an outline around half a
+ * box rather than a pressed cell — two faint chips, not a segmented control.
+ */
 .lc-preset-preview-toggle {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -6086,6 +6115,7 @@ body[data-lc-sash-drag="horizontal"] {
   align-items: flex-end;
   gap: 6px;
   pointer-events: none;
+  overflow: visible;
 }
 
 .lc-map-controls > * {
@@ -6113,6 +6143,23 @@ body[data-lc-sash-drag="horizontal"] {
   gap: 6px;
   opacity: calc(1 - var(--lc-agent-open, 0));
   transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-map-chrome-left.has-wake {
+  position: relative;
+  overflow: visible;
+  --lc-chrome-morph: 220ms;
+}
+
+.lc-map-chrome-left.has-wake:not(.is-open) {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  max-height: 36px;
+}
+
+.lc-map-chrome-left.has-wake.is-open {
+  min-width: 36px;
 }
 
 .lc-map-chrome-right {
@@ -6148,22 +6195,96 @@ body[data-lc-sash-drag="horizontal"] {
   transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.lc-map-chrome-stack:has(> .lc-chrome-wake) {
+.lc-map-chrome-stack.has-wake {
   position: relative;
+  overflow: visible;
+  --lc-chrome-morph: 220ms;
   gap: 0;
   padding: 0;
   border: none;
   background: transparent;
   box-shadow: none;
-  /* Same footprint as the 4-icon card. Idle used to shrink to a 56px
-   * wake-dot; a pen tap where Recentre / paper / theme sat inked a
-   * dot instead of bringing the stack back. */
-  min-width: 48px;
-  min-height: 148px;
+}
+
+.lc-map-chrome-stack.has-wake:not(.is-open) {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  max-height: 36px;
+}
+
+.lc-map-chrome-stack:not(.has-wake) > .lc-chrome-stack-tray,
+.lc-map-chrome-left:not(.has-wake) > .lc-chrome-stack-tray {
+  display: contents;
+}
+
+/*
+ * Grouping only. Closed: no reserved hole (flex min-size is zeroed). Open and
+ * close run in sequence — wake slides first on open, tray morphs first on close.
+ * Right-stack card chrome lives on the tray so an empty card cannot flash.
+ */
+.lc-chrome-stack-tray {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  position: relative;
+  z-index: 2;
+  transform-origin: bottom center;
+}
+
+.lc-map-chrome-stack.has-wake .lc-chrome-stack-tray {
+  padding: 3px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 16%);
+}
+
+.lc-map-chrome-stack.has-wake .lc-chrome-stack-tray,
+.lc-map-chrome-left.has-wake .lc-chrome-stack-tray {
+  transition:
+    opacity var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
+    transform var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
+    max-height var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
+    padding var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
+    border-color var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: 0ms;
+}
+
+.lc-map-chrome-stack.has-wake:not(.is-open) .lc-chrome-stack-tray,
+.lc-map-chrome-left.has-wake:not(.is-open) .lc-chrome-stack-tray {
+  opacity: 0;
+  max-height: 0;
+  height: 0;
+  min-height: 0;
+  min-width: 0;
+  flex: 0 0 0;
+  padding: 0;
+  border-color: transparent;
+  box-shadow: none;
+  transform: scaleY(0);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.lc-map-chrome-stack.has-wake.is-open .lc-chrome-stack-tray,
+.lc-map-chrome-left.has-wake.is-open .lc-chrome-stack-tray {
+  opacity: 1;
+  max-height: 32rem;
+  height: auto;
+  flex: 0 1 auto;
+  transform: none;
+  pointer-events: auto;
+  overflow: visible;
+  transition-delay: var(--lc-chrome-morph);
 }
 
 .lc-map-chrome-stack > .lc-lined-toggle,
-.lc-map-chrome-stack > .lc-chrome-eye {
+.lc-map-chrome-stack > .lc-chrome-eye,
+.lc-chrome-stack-tray > .lc-lined-toggle,
+.lc-chrome-stack-tray > .lc-chrome-eye {
   border: none;
   box-shadow: none;
   background: transparent;
@@ -6171,7 +6292,8 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 32px;
 }
 
-.lc-map-chrome-stack > .lc-palette-compact {
+.lc-map-chrome-stack > .lc-palette-compact,
+.lc-chrome-stack-tray > .lc-palette-compact {
   border: none;
   box-shadow: none;
   background: transparent;
@@ -6180,12 +6302,15 @@ body[data-lc-sash-drag="horizontal"] {
 
 @media (hover: hover) and (pointer: fine) {
   .lc-map-chrome-stack > .lc-lined-toggle:hover,
-  .lc-map-chrome-stack > .lc-chrome-eye:hover {
+  .lc-map-chrome-stack > .lc-chrome-eye:hover,
+  .lc-chrome-stack-tray > .lc-lined-toggle:hover,
+  .lc-chrome-stack-tray > .lc-chrome-eye:hover {
     background: var(--panel);
   }
 }
 
-.lc-map-chrome-stack > .lc-lined-toggle.is-active {
+.lc-map-chrome-stack > .lc-lined-toggle.is-active,
+.lc-chrome-stack-tray > .lc-lined-toggle.is-active {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
@@ -6369,11 +6494,9 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 /*
- * Idle wake: the whole right stack, not a 56px square on the eye.
- *
- * A blurred ghost of the visibility icon sits where the eye was. The button
- * fills the card footprint so a pen looking for the toggle cannot miss and
- * stamp dots.
+ * Idle wake: a 36px checkerboard over the eye slot, not a reserved card hole.
+ * Open: it slides down, then the tray morphs. Close: tray morphs away, then
+ * the checkerboard slides back up.
  */
 .lc-chrome-wake {
   position: absolute;
@@ -6389,6 +6512,56 @@ body[data-lc-sash-drag="horizontal"] {
   cursor: pointer;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+}
+
+.lc-map-chrome-stack.has-wake > .lc-chrome-wake {
+  position: absolute;
+  inset: auto;
+  z-index: 1;
+  left: 50%;
+  bottom: 0;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  transform: translateX(-50%);
+  transition: transform var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: var(--lc-chrome-morph);
+}
+
+.lc-map-chrome-left.has-wake > .lc-chrome-wake {
+  position: absolute;
+  inset: auto;
+  z-index: 1;
+  left: 0;
+  bottom: 0;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  transform: none;
+  transition: transform var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: var(--lc-chrome-morph);
+}
+
+.lc-map-chrome-stack.has-wake.is-open > .lc-chrome-wake {
+  z-index: 3;
+  transform: translateX(-50%) translateY(calc(100% + 4px));
+  transition-delay: 0ms;
+}
+
+.lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake {
+  z-index: 3;
+  transform: translateY(calc(100% + 4px));
+  transition-delay: 0ms;
+}
+
+.lc-map-chrome-stack.has-wake > .lc-chrome-wake .lc-chrome-wake-ghost,
+.lc-map-chrome-left.has-wake > .lc-chrome-wake .lc-chrome-wake-ghost {
+  left: 50%;
+  bottom: auto;
+  top: 50%;
+  transform: translate(-50%, -50%);
 }
 
 .lc-chrome-wake-ghost {
@@ -6461,6 +6634,10 @@ body[data-lc-sash-drag="horizontal"] {
   height: 36px;
   min-width: 36px;
   min-height: 36px;
+}
+
+.lc-map-chrome-left.has-wake > .lc-chrome-wake-annotate {
+  position: absolute;
 }
 
 .lc-chrome-wake-annotate .lc-chrome-wake-ghost {
@@ -6551,20 +6728,34 @@ body[data-lc-sash-drag="horizontal"] {
 /*
  * Chrome that is going quiet, rather than blinking out.
  *
- * The fade is the mode's whole character — "still there, just not in the way" —
- * and a control that vanishes between frames reads as a bug. Mounting is not
- * animated: it should be back the instant the corner is touched.
+ * Fade / hidden: the checkerboard slides down, then the tray morphs open.
+ * Close is the reverse. Tap the checkerboard to reverse.
  */
 .lc-map-chrome-stack > .lc-chrome-eye,
 .lc-map-chrome-stack > .lc-lined-toggle,
+.lc-chrome-stack-tray > .lc-chrome-eye,
+.lc-chrome-stack-tray > .lc-lined-toggle,
 .lc-map-chrome-row > .lc-lined-toggle {
   transition: opacity 220ms ease;
+}
+
+.lc-map-chrome-stack.has-wake.is-snap .lc-chrome-stack-tray,
+.lc-map-chrome-left.has-wake.is-snap .lc-chrome-stack-tray,
+.lc-map-chrome-stack.has-wake.is-snap > .lc-chrome-wake,
+.lc-map-chrome-left.has-wake.is-snap > .lc-chrome-wake {
+  transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .lc-map-chrome-stack > .lc-chrome-eye,
   .lc-map-chrome-stack > .lc-lined-toggle,
-  .lc-map-chrome-row > .lc-lined-toggle {
+  .lc-chrome-stack-tray > .lc-chrome-eye,
+  .lc-chrome-stack-tray > .lc-lined-toggle,
+  .lc-map-chrome-row > .lc-lined-toggle,
+  .lc-map-chrome-stack.has-wake .lc-chrome-stack-tray,
+  .lc-map-chrome-left.has-wake .lc-chrome-stack-tray,
+  .lc-map-chrome-stack.has-wake > .lc-chrome-wake,
+  .lc-map-chrome-left.has-wake > .lc-chrome-wake {
     transition: none;
   }
 }
@@ -12460,13 +12651,15 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 4px;
 }
 
-.lc-mobile .lc-map-chrome-stack:not(:has(> .lc-chrome-wake)) {
+.lc-mobile .lc-map-chrome-stack:not(.has-wake) {
   flex-direction: column;
   align-items: stretch;
 }
 
 .lc-mobile .lc-map-chrome-stack > .lc-lined-toggle,
 .lc-mobile .lc-map-chrome-stack > .lc-chrome-eye,
+.lc-mobile .lc-chrome-stack-tray > .lc-lined-toggle,
+.lc-mobile .lc-chrome-stack-tray > .lc-chrome-eye,
 .lc-mobile .lc-map-chrome-stack .lc-palette-trigger-map.lc-map-btn {
   min-height: 36px;
   width: 36px;
@@ -13085,6 +13278,7 @@ button.lc-row-selected:hover:not(:disabled) {
   position: absolute;
   bottom: 0;
   z-index: 21;
+  overflow: visible;
 }
 
 .lc-map-controls-paged .lc-map-chrome-left {

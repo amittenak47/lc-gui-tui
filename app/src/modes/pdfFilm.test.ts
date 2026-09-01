@@ -4,6 +4,10 @@ import {
   filmStripWheelDelta,
   loadPdfSpreadPref,
   peekPdfReadingFrames,
+  pdfFilmRailScrollLeft,
+  pdfFilmRailWindow,
+  PDF_FILM_RAIL_CELL,
+  PDF_FILM_THUMB_CSS,
   publishPdfFilmCurrent,
   publishPdfFilmFromCamera,
   peekPdfPreloadPages,
@@ -69,6 +73,26 @@ describe("thumbWindow", () => {
 
   it("ignores pages outside the document", () => {
     expect(thumbWindow(2, 3, [0, 99], 1)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("pdfFilmRailScrollLeft / pdfFilmRailWindow", () => {
+  it("scrolls the strip so the current page is not at the start", () => {
+    const left = pdfFilmRailScrollLeft(40, 400);
+    expect(left).toBeGreaterThan(0);
+    expect(left).toBe((40 - 1) * PDF_FILM_RAIL_CELL - (400 - PDF_FILM_THUMB_CSS) / 2);
+  });
+
+  it("keeps page 1 at scrollLeft 0", () => {
+    expect(pdfFilmRailScrollLeft(1, 400)).toBe(0);
+  });
+
+  it("does not mount from page 1 just to include a late current page", () => {
+    const left = pdfFilmRailScrollLeft(40, 400);
+    const win = pdfFilmRailWindow(40, 80, left, 400);
+    expect(win.start).toBeGreaterThan(1);
+    expect(win.start).toBeLessThanOrEqual(40);
+    expect(win.end).toBeGreaterThanOrEqual(40);
   });
 });
 

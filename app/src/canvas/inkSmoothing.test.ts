@@ -12,7 +12,6 @@ import {
   LIVE_MAX_LAG_NIBS,
   LIVE_SMOOTHING_MAX_TAU_MS,
   SIMPLIFY_MAX_FRACTION,
-  SIMPLIFY_STORAGE_FRACTION,
 } from "./inkSmoothing";
 import { NO_PRESSURE, type ScenePoint } from "./rasterInk";
 
@@ -156,33 +155,18 @@ describe("roundInkCorners", () => {
 });
 
 describe("smoothInkPoints", () => {
-  it("leaves the shape alone at zero strength", () => {
+  it("leaves the stamps untouched at zero strength", () => {
     const points = jitteryLine();
-    const out = smoothInkPoints(points, 0, 3);
-    // Every wobble the writer put there is still there — the storage floor is
-    // under the line, not a smoothing setting nobody asked for.
-    const budget = 3 * SIMPLIFY_STORAGE_FRACTION + 1e-6;
-    for (const point of points) {
-      let best = Infinity;
-      for (let i = 1; i < out.length; i++) {
-        best = Math.min(best, distanceToSegment(point, out[i - 1], out[i]));
-      }
-      expect(best).toBeLessThanOrEqual(budget);
-    }
+    expect(smoothInkPoints(points, 0, 3)).toEqual([...points]);
   });
 
-  it("still thins a stamp chain at zero strength", () => {
-    // What the move path actually commits: points a fraction of a nib apart,
-    // dense for stamping and pure overhead once the stroke is a polyline.
+  it("does not thin a stamp chain at zero strength", () => {
     const stamps = Array.from({ length: 200 }, (_, i) => ({
       x: i * 0.3,
       y: 0,
       pressure: NO_PRESSURE,
     }));
-    const out = smoothInkPoints(stamps, 0, 3);
-    expect(out.length).toBeLessThan(stamps.length / 10);
-    expect(out[0]).toEqual(stamps[0]);
-    expect(out[out.length - 1]).toEqual(stamps[stamps.length - 1]);
+    expect(smoothInkPoints(stamps, 0, 3)).toEqual(stamps);
   });
 
   it("takes the wobble out at the default strength", () => {

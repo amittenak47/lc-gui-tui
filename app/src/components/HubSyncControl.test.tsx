@@ -60,10 +60,10 @@ describe("HubSyncControl (step-2 stub)", () => {
     act(() => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(button.dataset.stage).toBe("index");
+    expect(button.dataset.stage).toBe("pad");
 
     // One tap walks the whole pipeline; no further clicks needed.
-    for (const next of ["pad", "ink", "links", "pull", "synced"]) {
+    for (const next of ["ink", "links", "pull", "synced"]) {
       act(() => {
         vi.advanceTimersByTime(650);
       });
@@ -80,16 +80,16 @@ describe("HubSyncControl (step-2 stub)", () => {
     act(() => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(button.dataset.stage).toBe("index");
+    expect(button.dataset.stage).toBe("pad");
 
     act(() => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(button.dataset.stage).toBe("index");
+    expect(button.dataset.stage).toBe("pad");
 
     // Chained timers reschedule on the effect flush after each step, so
     // walk one stage per act.
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 4; i++) {
       act(() => {
         vi.advanceTimersByTime(650);
       });
@@ -101,8 +101,8 @@ describe("HubSyncControl (step-2 stub)", () => {
     act(() => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(button.dataset.stage).toBe("index");
-    expect(activeLabel(button)).toBe("Index");
+    expect(button.dataset.stage).toBe("pad");
+    expect(activeLabel(button)).toBe("Pad");
   });
 
   it("rests on Synced when the hint says the hub already has everything", () => {
@@ -128,11 +128,12 @@ describe("HubSyncControl (step-2 stub)", () => {
     act(() => root.render(<Host value={hint} />));
     expect(activeLabel(button)).toBe("Synced");
 
-    // ...and tapping from there still starts the walk at Index.
+    // ...and tapping from there still starts the walk at Pad — stub mounts
+    // have no document, so Index is not a stage.
     act(() => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(button.dataset.stage).toBe("index");
+    expect(button.dataset.stage).toBe("pad");
   });
 
   it("stops resting on Synced once the pad has been edited", () => {
@@ -289,6 +290,20 @@ describe("HubSyncControl (step-2 stub)", () => {
       return host;
     }
 
+    /**
+     * A whiteboard pad row. Same job as `withPad`, for a board with no document.
+     */
+    function withWhiteboardPad(host: HubSyncWalkHost, ack = 100): HubSyncWalkHost {
+      (host as unknown as { pad: () => Promise<unknown> }).pad = async () => ({
+        kind: "whiteboard" as const,
+        id: "w1",
+        hubAckUpdatedAt: () => ack,
+        buildBody: () => ({ id: "w1", name: "board", updated_at: 900 }),
+        markHubAck: () => {},
+      });
+      return host;
+    }
+
     async function mountWalk(client: LcClient, host: HubSyncWalkHost) {
       const hostEl = document.createElement("div");
       document.body.append(hostEl);
@@ -420,6 +435,97 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect((client as unknown as typeof client & { indexFromBytes: ReturnType<typeof vi.fn> }).indexFromBytes)
         .toHaveBeenCalledWith("h", { name: "book.pdf", doc_type: "pdf", source_text: undefined });
       expect(button.dataset.stage).toBe("synced");
+    });
+
+    it("skips Index when there is no document to index", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient();
+      const { host, indexDone, walkReports } = makeHost(null);
+      const button = await mountWalk(client, withWhiteboardPad(host));
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(button.dataset.stage).toBe("synced");
+      expect(client.getDocIndex).not.toHaveBeenCalled();
+      expect(client.indexFromBytes).not.toHaveBeenCalled();
+      expect(client.embedDoc).not.toHaveBeenCalled();
+      expect(client.putDocIndex).not.toHaveBeenCalled();
+      expect(indexDone).not.toHaveBeenCalled();
+      expect(walkReports.some((r) => r?.stage === "index")).toBe(false);
+      expect(walkReports.some((r) => r?.stage === "pad")).toBe(true);
+      expect(client.putWhiteboardPad).toHaveBeenCalled();
+    });
+
+    it("parks a hub-down whiteboard on Pad, not Index", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient({
+        pingPadSync: vi.fn().mockRejectedValue(new Error("hub unreachable")),
+      });
+      const { host, walkReports } = makeHost(null);
+      const button = await mountWalk(client, withWhiteboardPad(host));
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(button.dataset.stage).toBe("pad");
+      expect(button.dataset.error).toContain("unreachable");
+      expect(activeLabel(button)).toBe("Pad");
+      expect(walkReports.at(-1)?.stage).toBe("pad");
+      expect(client.getDocIndex).not.toHaveBeenCalled();
+    });
+
+    it("still names Index for a web document, without extracting", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient();
+      const { host, indexDone, walkReports } = makeHost({
+        hash: "h",
+        name: "page",
+        docType: "web",
+        text: "",
+        bytes: null,
+      });
+      const button = await mountWalk(client, withPad(host));
+
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+
+      expect(button.dataset.stage).toBe("synced");
+      expect(walkReports.some((r) => r?.stage === "index")).toBe(true);
+      expect(client.getDocIndex).not.toHaveBeenCalled();
+      expect(client.indexFromBytes).not.toHaveBeenCalled();
+      expect(indexDone).not.toHaveBeenCalled();
+    });
+
+    it("rests on Synced for a whiteboard even when the hub has no index", async () => {
+      const { host } = makeHost(null);
+      const hostEl = document.createElement("div");
+      document.body.append(hostEl);
+      const root = createRoot(hostEl);
+      act(() =>
+        root.render(
+          <HubSyncControl
+            client={fakeClient()}
+            host={withWhiteboardPad(host)}
+            hubHint={{
+              hash: "",
+              padUpdatedAt: 500,
+              padUpToDate: true,
+              bytesOnHub: false,
+              indexedOnHub: false,
+            }}
+          />,
+        ),
+      );
+      const button = hostEl.querySelector(".lc-hub-sync") as HTMLButtonElement;
+      expect(activeLabel(button)).toBe("Synced");
+      act(() => root.unmount());
     });
 
     it("uploads the bytes when the hub does not have them yet", async () => {

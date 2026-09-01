@@ -170,6 +170,44 @@ describe("encodeInkOps / decodeInkOps", () => {
     expect(back.speedBlotBlend).toBeUndefined();
   });
 
+  it("carries blotTipGrow across", () => {
+    const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], {
+      speedBlotBlend: 0.8,
+      blotTipGrow: 0.6,
+    });
+    const [back] = roundTrip([original]) as [InkDrawOp];
+    expect(back.blotTipGrow).toBe(0.6);
+  });
+
+  it("carries mid-stroke blotHalts across", () => {
+    const original = stroke(
+      [
+        { x: 1, y: 2, pressure: 0.5 },
+        { x: 20, y: 2, pressure: 0.5 },
+        { x: 40, y: 2, pressure: 0.5 },
+      ],
+      {
+        speedBlotBlend: 1,
+        blotHalts: [{ x: 20, y: 2, grow: 0.55, pressure: 0.5, slowness: 1 }],
+      },
+    );
+    const [back] = roundTrip([original]) as [InkDrawOp];
+    expect(back.blotHalts).toEqual([
+      { x: 20, y: 2, grow: 0.55, pressure: 0.5, slowness: 1 },
+    ]);
+  });
+
+  it("carries grain across", () => {
+    const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], { grain: 0.6 });
+    const [back] = roundTrip([original]) as [InkDrawOp];
+    expect(back.grain).toBe(0.6);
+  });
+
+  it("leaves grain absent when the stroke had none", () => {
+    const [back] = roundTrip([stroke([{ x: 1, y: 2, pressure: 0.5 }])]) as [InkDrawOp];
+    expect(back.grain).toBeUndefined();
+  });
+
   it("carries speedFade across", () => {
     const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], {
       speedInk: 0.6,

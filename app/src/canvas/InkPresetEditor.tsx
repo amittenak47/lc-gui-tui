@@ -12,19 +12,24 @@ import { ColorRadial } from "./ColorRadial";
 import { InkFullnessSlider } from "./InkFullnessSlider";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
+import { smoothInkPoints } from "./inkSmoothing";
 import {
   applyInkOp,
   ERASER_WIDTH_MAX,
   inkLineWidth,
   inkSlowness,
+  INK_HOLD_STILL_PX,
   INK_SPEED_NEUTRAL_PX_MS,
+  blotGrowTFromTicks,
+  blotTicksToFull,
+  stampInkBlotHalt,
   pointerPressure,
   smoothPressure,
   smoothSpeed,
   type InkDrawOp,
+  type InkBlotHalt,
   type ScenePoint,
 } from "./rasterInk";
-import { smoothInkPoints } from "./inkSmoothing";
 import type { InkHandedness } from "../util/inkHandedness";
 import { drawOpFromSnap, testStripDrawOp } from "../util/inkPresetStrip";
 import {
@@ -53,6 +58,8 @@ import {
 import {
   speedBlotBlendFromPercent,
   speedBlotBlendToPercent,
+  grainFromPercent,
+  grainToPercent,
   speedFadeFromPercent,
   speedFadeToPercent,
   speedInkFromPercent,
@@ -169,9 +176,9 @@ export function InkPresetEditor({
   }, [fallback, initial, kind]);
   const [draft, setDraft] = useState<InkWedgeSnapshot>(seed);
   const [name, setName] = useState(seed.name);
-  const [closing, setClosing] = useState(false);
   const [livePreview, setLivePreview] = useState(false);
   const [livePadGen, setLivePadGen] = useState(0);
+  const [closing, setClosing] = useState(false);
   const closeReasonRef = useRef<"back" | "dismiss">("dismiss");
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -262,13 +269,14 @@ export function InkPresetEditor({
             <HoldButton
               label="Reset"
               ariaLabel="Reset this preset to the stock pen"
-              onConfirm={() =>
+              onConfirm={() => {
                 setDraft(
                   kind === "eraser"
                     ? defaultEraserSnapshot(name.trim() || seed.name)
                     : defaultDrawSnapshot(name.trim() || seed.name),
-                )
-              }
+                );
+                setLivePadGen((n) => n + 1);
+              }}
             />
             <HoldButton
               label="Duplicate"
@@ -470,7 +478,6 @@ function TestStrip({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot
   );
 }
 
-
 function fillPreviewPaper(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
@@ -495,6 +502,14 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
   const lastSampleRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const dprRef = useRef(1);
   const paintFnRef = useRef<() => void>(() => {});
+  const paintFnRef = useRef<() => void>(() => {});
+  const drawingRef = useRef(false);
+  const dwellCountRef = useRef(0);
+  const blotTipGrowRef = useRef(0);
+  const blotHaltDestRef = useRef<{ blotHalts?: InkBlotHalt[] }>({});
+  const lastMoveWallRef = useRef(0);
+  const dwellTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastPosRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -557,7 +572,12 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
           ? smoothInkPoints(livePts, smoothing, inkLineWidth(liveSnap.width, 0, false))
           : livePts;
       const op = drawOpFromSnap(kindRef.current, liveSnap, points);
-      if (op) applyInkOp(ctx, op, dpr);
+      if (op) {
+        if (blotTipGrowRef.current > 0) op.blotTipGrow = blotTipGrowRef.current;
+        if (blotHaltDestRef.current.blotHalts?.length)
+          op.blotHalts = blotHaltDestRef.current.blotHalts;
+        applyInkOp(ctx, op, dpr);
+      }
     };
     paintFnRef.current = paint;
 
@@ -588,6 +608,13 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
       return { x, y, pressure, ...(slowness != null ? { slowness } : {}) };
     };
 
+    const clearDwell = () => {
+      if (dwellTimerRef.current !== null) {
+        clearInterval(dwellTimerRef.current);
+        dwellTimerRef.current = null;
+      }
+    };
+
     const onDown = (event: PointerEvent) => {
       if (event.button !== 0 && event.pointerType !== "pen") return;
       event.preventDefault();
@@ -605,12 +632,36 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
           ? INK_SPEED_NEUTRAL_PX_MS
           : 0;
       lastSampleRef.current = null;
+      dwellCountRef.current = 0;
+      blotTipGrowRef.current = 0;
+      blotHaltDestRef.current = {};
+      lastMoveWallRef.current = performance.now();
+      drawingRef.current = true;
       const pt = pointFrom(event);
+      lastPosRef.current = { x: pt.x, y: pt.y };
       if (kindRef.current === "eraser") {
         eraserTipRef.current = { x: pt.x, y: pt.y };
         livePtsRef.current = null;
       } else {
         livePtsRef.current = [pt];
+        if (!isEraserWedge(current) && (current.speed > 0 || current.blot > 0 || current.fade > 0)) {
+          clearDwell();
+          dwellTimerRef.current = setInterval(() => {
+            if (!drawingRef.current) return;
+            const live = livePtsRef.current;
+            if (!live || live.length === 0) return;
+            const snap = snapRef.current;
+            if (isEraserWedge(snap) || snap.blot <= 0) return;
+            if (performance.now() - lastMoveWallRef.current < 60) return;
+            if (dwellCountRef.current >= blotTicksToFull(snap.blot)) return;
+            dwellCountRef.current++;
+            blotTipGrowRef.current = blotGrowTFromTicks(dwellCountRef.current, snap.blot);
+            speedEmaRef.current = smoothSpeed(speedEmaRef.current, 0);
+            const tip = live[live.length - 1];
+            if (tip) tip.slowness = inkSlowness(speedEmaRef.current);
+            paint();
+          }, 32);
+        }
       }
       paint();
     };
@@ -623,10 +674,24 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
         return;
       }
       if (!livePtsRef.current) return;
-      livePtsRef.current.push(pointFrom(event));
+      const pt = pointFrom(event);
+      const prev = lastPosRef.current;
+      if (prev && Math.hypot(pt.x - prev.x, pt.y - prev.y) > INK_HOLD_STILL_PX) {
+        if (blotTipGrowRef.current > 1e-3) {
+          const haltAt = livePtsRef.current[livePtsRef.current.length - 1] ?? prev;
+          stampInkBlotHalt(blotHaltDestRef.current, haltAt, blotTipGrowRef.current);
+        }
+        lastMoveWallRef.current = performance.now();
+        dwellCountRef.current = 0;
+        blotTipGrowRef.current = 0;
+      }
+      lastPosRef.current = { x: pt.x, y: pt.y };
+      livePtsRef.current.push(pt);
       paint();
     };
     const onUp = (event: PointerEvent) => {
+      drawingRef.current = false;
+      clearDwell();
       try {
         canvas.releasePointerCapture(event.pointerId);
       } catch {
@@ -649,9 +714,17 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
         );
       }
       const op = drawOpFromSnap(kindRef.current, liveSnap, points);
-      if (op && points.length > 0) strokesRef.current.push(op);
+      if (op && points.length > 0) {
+        if (blotTipGrowRef.current > 0) op.blotTipGrow = blotTipGrowRef.current;
+        if (blotHaltDestRef.current.blotHalts?.length)
+          op.blotHalts = blotHaltDestRef.current.blotHalts;
+        strokesRef.current.push(op);
+      }
       livePtsRef.current = null;
       lastSampleRef.current = null;
+      lastPosRef.current = null;
+      blotTipGrowRef.current = 0;
+      blotHaltDestRef.current = {};
       paint();
     };
 
@@ -664,6 +737,8 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
     canvas.addEventListener("pointerup", onUp);
     canvas.addEventListener("pointercancel", onUp);
     return () => {
+      drawingRef.current = false;
+      clearDwell();
       ro.disconnect();
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);
@@ -799,8 +874,8 @@ function PhysicsKnobs({
         hint={
           <>
             Same pen as Off at a normal writing pace: slow down and the line
-            fattens, speed up and it thins. Speed blot and Speed fade are
-            separate and work even when this is Off. Saved on this device only.
+            fattens, speed up and it thins. Ink pooling and Ink drying are
+            separate and work when this is Off. Saved on this device only.
           </>
         }
       >
@@ -816,17 +891,42 @@ function PhysicsKnobs({
       </SettingsBlock>
 
       <SettingsBlock
-        title="Speed blot"
+        title="Grain"
         hint={
           <>
-            Graphite pencil: overlapping interleaved discs instead of a flat
-            stroke. Off keeps a solid ribbon. 100% is the full pencil pool.
-            Saved on this device only.
+            Nib material. Off is a hard felt-tip. Turn it up for a fine paper
+            tooth — short fibres, varied transparency, one consistent heading.
+            Ink pooling can still gather at a hold. Saved on this
+            device only.
           </>
         }
       >
         <SettingsRange
-          label="Speed blot"
+          label="Grain"
+          min={0}
+          max={100}
+          step={5}
+          value={grainToPercent(snap.grain ?? 0)}
+          display={grainToPercent(snap.grain ?? 0) === 0 ? "Off" : `${grainToPercent(snap.grain ?? 0)}%`}
+          onChange={(n) => onChange({ ...snap, grain: grainFromPercent(n) })}
+        />
+      </SettingsBlock>
+
+      <SettingsBlock
+        title="Ink Pooling"
+        hint={
+          <>
+            Hold at a stop to slowly grow a richer pool at the nib. Does not
+            taper the moving trail. Slow writing lays a richer colour; fast
+            writing does not wash it paler. Works with Speed ink off. Off stays
+            nib-sized. 100% still takes about a second+ of holding to reach a
+            modest pool past the stroke, denser than the trail not paler. Saved
+            on this device only.
+          </>
+        }
+      >
+        <SettingsRange
+          label="Ink Pooling"
           min={0}
           max={100}
           step={5}
@@ -836,18 +936,18 @@ function PhysicsKnobs({
         />
       </SettingsBlock>
       <SettingsBlock
-        title="Speed fade"
+        title="Ink Drying"
         hint={
           <>
-            A pace gradient: ink pools when you write slowly and goes faint when
-            you write fast. Not the same as Ink fullness, which dries by how far
-            you have travelled, not how fast. Off keeps full ink. Saved on this
-            device only.
+            A pace wash: slow writing stays full, fast writing goes faint. Not
+            the same as Ink Pooling, which darkens colour rather than thinning
+            opacity, and not the same as Ink fullness, which dries by how far
+            you have travelled. Off keeps full ink. Saved on this device only.
           </>
         }
       >
         <SettingsRange
-          label="Speed fade"
+          label="Ink Drying"
           min={0}
           max={100}
           step={5}
@@ -861,7 +961,7 @@ function PhysicsKnobs({
         title="Ink boldness"
         hint={
           <>
-            Boost stroke opacity to compensate for softer speed blot blend —
+            Boost stroke opacity to compensate for softer ink pooling —
             100% is the current alpha, 0% is transparent, 300% is three
             times as dark (clamped to opaque at paint). Saved on this device
             only.
@@ -883,9 +983,9 @@ function PhysicsKnobs({
         hint={
           <>
             How much of the shake to take out of a pen stroke. Higher steadies a
-            shaky hand; lower keeps every kink you actually drew. With speed ink
-            on, width still tapers along the stroke instead of stepping into
-            blocks. Saved on this device only.
+            shaky hand; lower keeps every kink you actually drew. With Speed
+            ink on, width still tapers along the stroke instead of stepping
+            into blocks. Saved on this device only.
           </>
         }
       >

@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  INK_GRAIN_DEFAULT,
   INK_SPEED_FADE_DEFAULT,
+  grainFromPercent,
+  grainToPercent,
+  loadInkGrain,
   loadInkSpeedFade,
+  saveInkGrain,
   saveInkSpeedFade,
   speedFadeFromPercent,
   speedFadeToPercent,
@@ -28,5 +33,17 @@ describe("inkSpeedFade", () => {
   it("round-trips a percent dial", () => {
     saveInkSpeedFade(speedFadeFromPercent(40));
     expect(speedFadeToPercent(loadInkSpeedFade())).toBe(40);
+  });
+});
+
+describe("inkGrain", () => {
+  it("defaults to 0 so old notes stay a hard disc", () => {
+    expect(loadInkGrain()).toBe(INK_GRAIN_DEFAULT);
+    expect(INK_GRAIN_DEFAULT).toBe(0);
+  });
+
+  it("round-trips a percent dial", () => {
+    saveInkGrain(grainFromPercent(35));
+    expect(grainToPercent(loadInkGrain())).toBe(35);
   });
 });

@@ -12,11 +12,12 @@ import {
   tileVisitOrder,
   viewportSceneBounds,
   LEVEL_STEP,
+  TILE_OVERLAP_PX,
   TILE_PX,
 } from "./inkTiles";
-import { NO_PRESSURE, type InkOp, type ViewportTransform } from "./rasterInk";
+import { NO_PRESSURE, type InkDrawOp, type InkOp, type ViewportTransform } from "./rasterInk";
 
-function draw(...pairs: Array<[number, number]>): InkOp {
+function draw(...pairs: Array<[number, number]>): InkDrawOp {
   return {
     kind: "draw",
     color: "#000",
@@ -109,6 +110,13 @@ describe("op bounds", () => {
     expect(bounds.maxY).toBeGreaterThan(20);
   });
 
+  it("pads blot overshoot past standstill width", () => {
+    const plain = inkOpBounds(draw([0, 0]));
+    const pooled = inkOpBounds({ ...draw([0, 0]), speedBlotBlend: 1 });
+    expect(pooled.minX).toBeLessThan(plain.minX);
+    expect(pooled.maxX).toBeGreaterThan(plain.maxX);
+  });
+
   it("pads an erase by its radius", () => {
     expect(inkOpBounds(erase(8, [0, 0]))).toEqual({
       minX: -8,
@@ -157,6 +165,7 @@ function fakeCanvasFactory() {
       moveTo: () => {},
       lineTo: () => {},
       arc: () => {},
+      closePath: () => {},
       rect: () => {},
       clip: () => {},
       stroke: () => record.ops.push("stroke"),
@@ -180,9 +189,27 @@ function fakeCanvasFactory() {
 
 /** A destination context that records the blits. */
 function destinationContext() {
-  const blits: Array<{ args: number }> = [];
+  const blits: Array<{ args: number; dx?: number; dy?: number; dw?: number; dh?: number }> = [];
   const ctx = {
-    drawImage: (...args: unknown[]) => blits.push({ args: args.length }),
+    drawImage: (...args: unknown[]) => {
+      if (args.length === 5) {
+        blits.push({
+          args: 5,
+          dx: args[1] as number,
+          dy: args[2] as number,
+          dw: args[3] as number,
+          dh: args[4] as number,
+        });
+        return;
+      }
+      blits.push({
+        args: args.length,
+        dx: args[5] as number,
+        dy: args[6] as number,
+        dw: args[7] as number,
+        dh: args[8] as number,
+      });
+    },
     setTransform: () => {},
     clearRect: () => {},
     globalAlpha: 1,
@@ -213,6 +240,31 @@ describe("InkTileCache", () => {
     });
     return { cache, canvases, scheduled };
   }
+
+  describe("tile overlap", () => {
+    it("rasterises each tile with a pad so edge coverage is complete", () => {
+      const { cache, canvases } = makeCache();
+      cache.setOps([draw([0, 0], [40, 0])]);
+      const { ctx } = destinationContext();
+      cache.draw(ctx, screen(1), 1);
+      expect(canvases.created.length).toBeGreaterThan(0);
+      expect(canvases.created[0].width).toBe(TILE_PX + 2 * TILE_OVERLAP_PX);
+      expect(canvases.created[0].height).toBe(TILE_PX + 2 * TILE_OVERLAP_PX);
+    });
+
+    it("blits each tile's core, not the raster pad", () => {
+      const { cache } = makeCache();
+      cache.setOps([draw([0, 0], [40, 0])]);
+      const { ctx, blits } = destinationContext();
+      cache.draw(ctx, screen(1), 1);
+      expect(blits.length).toBeGreaterThan(0);
+      for (const blit of blits) {
+        expect(blit.args).toBe(9);
+        expect(blit.dw).toBeCloseTo(TILE_PX);
+        expect(blit.dh).toBeCloseTo(TILE_PX);
+      }
+    });
+  });
 
   /*
    * Undo used to drop every tile, and `draw` stands a coarser *cached* tile in

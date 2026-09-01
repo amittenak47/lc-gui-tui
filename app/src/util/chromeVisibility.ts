@@ -32,6 +32,9 @@ export const CHROME_MODES: readonly ChromeMode[] = ["visible", "fade", "hidden"]
  */
 export const CHROME_IDLE_MS = 4000;
 
+/** Slide / morph duration for fade and hidden chrome. */
+export const CHROME_MORPH_MS = 220;
+
 export function isChromeMode(value: unknown): value is ChromeMode {
   return value === "visible" || value === "fade" || value === "hidden";
 }

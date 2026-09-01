@@ -32,9 +32,11 @@ import {
   saveInkSmoothingMode,
 } from "./inkSmoothingPref";
 import {
+  loadInkGrain,
   loadInkSpeed,
   loadInkSpeedBlotBlend,
   loadInkSpeedFade,
+  saveInkGrain,
   saveInkSpeed,
   saveInkSpeedBlotBlend,
   saveInkSpeedFade,
@@ -99,6 +101,7 @@ export function collectDevicePrefsBlob(): Record<string, unknown> {
     inkSmoothingMode: loadInkSmoothingMode(),
     inkSpeed: loadInkSpeed(),
     inkSpeedBlotBlend: loadInkSpeedBlotBlend(),
+    inkGrain: loadInkGrain(),
     inkSpeedFade: loadInkSpeedFade(),
     inkBoldness: loadInkBoldness(),
     eraserPartial: loadEraserPartial(),
@@ -134,6 +137,7 @@ export function applyDevicePrefsBlob(prefs: Record<string, unknown>): void {
   }
   if (typeof prefs.inkSpeed === "number") saveInkSpeed(prefs.inkSpeed);
   if (typeof prefs.inkSpeedBlotBlend === "number") saveInkSpeedBlotBlend(prefs.inkSpeedBlotBlend);
+  if (typeof prefs.inkGrain === "number") saveInkGrain(prefs.inkGrain);
   if (typeof prefs.inkSpeedFade === "number") saveInkSpeedFade(prefs.inkSpeedFade);
   if (typeof prefs.inkBoldness === "number") saveInkBoldness(prefs.inkBoldness);
   if (typeof prefs.eraserPartial === "boolean") saveEraserPartial(prefs.eraserPartial);
