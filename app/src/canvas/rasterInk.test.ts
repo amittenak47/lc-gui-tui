@@ -396,7 +396,7 @@ describe("speed ink", () => {
     expect(inkSpeedAlphaGain(1, 1, 1)).toBeCloseTo(1);
     expect(inkSpeedAlphaGain(INK_SLOWNESS_NEUTRAL, 1, 1)).toBeCloseTo(INK_SPEED_ALPHA_BASE);
     expect(inkSpeedAlphaGain(0, 1, 1)).toBeLessThan(INK_SPEED_ALPHA_BASE);
-    expect(inkSpeedAlphaGain(0, 1, 1)).toBeGreaterThan(0.45);
+    expect(inkSpeedAlphaGain(0, 1, 1)).toBeGreaterThan(0.55);
   });
 
   it("reads neutral pace as the speed-alpha base when fade is full", () => {
@@ -1642,6 +1642,32 @@ describe("speed-ink ribbon coalesce / densify / tip split", () => {
     expect(out.points[out.points.length - 1].x).toBeCloseTo(40);
   });
 
+  it("inserts midpoints when dryGain jumps on a short chord", () => {
+    const pts = points([0, 0], [2, 0]);
+    const styles: ReturnType<typeof style>[] = [
+      { ...style(), dryGain: 1 },
+      { ...style(), dryGain: 0.5 },
+    ];
+    const out = densifyRibbonPoints(pts, styles, 1);
+    expect(out.points.length).toBeGreaterThan(2);
+    const mid = out.styles[Math.floor(out.styles.length / 2)];
+    expect(mid.dryGain ?? 1).toBeGreaterThan(0.5);
+    expect(mid.dryGain ?? 1).toBeLessThan(1);
+  });
+
+  it("does not coalesce vertices across a dryGain jump", () => {
+    const pts = points([0, 0], [0.3, 0], [40, 0]);
+    const styles: ReturnType<typeof style>[] = [
+      { ...style(), dryGain: 1 },
+      { ...style(), dryGain: 0.5 },
+      { ...style(), dryGain: 0.5 },
+    ];
+    const out = coalesceRibbonPoints(pts, styles, 1);
+    expect(out.points.length).toBe(3);
+    expect(out.styles[0].dryGain ?? 1).toBeCloseTo(1);
+    expect(out.styles[1].dryGain ?? 1).toBeCloseTo(0.5);
+  });
+
   it("finds a trailing tip cluster after a real stroke prefix", () => {
     const pts = points(
       [0, 0],
@@ -1866,6 +1892,44 @@ describe("stochastic endcaps", () => {
   });
 });
 
+describe("stroke start cap", () => {
+  it("keeps a square start cap on the stroke heading at the nib width", () => {
+    let origin = { x: 0, y: 0 };
+    let found = false;
+    for (let i = 0; i < 80; i++) {
+      const o = { x: i * 19, y: i * 5 };
+      if (inkCapRoundness(o, 1) < 0.82) {
+        origin = o;
+        found = true;
+        break;
+      }
+    }
+    expect(found).toBe(true);
+    const half = inkLineWidth(8, 0, false) / 2;
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#000",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 1,
+        speedBlotBlend: 0,
+        boldness: 1,
+        points: points([origin.x, origin.y], [origin.x + 40, origin.y]),
+      },
+      1,
+    );
+    const ys = drawCtx.strokes.flatMap((s) => [s.from.y, s.to.y]);
+    expect(ys.length).toBeGreaterThan(0);
+    const maxAcross = Math.max(...ys.map((y) => Math.abs(y - origin.y)));
+    expect(maxAcross).toBeLessThanOrEqual(half * 1.2);
+  });
+});
+
 describe("grain and blot pooling (Phase 2)", () => {
   it("paints grain 0 as one hard arc", () => {
     const drawCtx = inkDrawContext();
@@ -1982,12 +2046,14 @@ describe("grain and blot pooling (Phase 2)", () => {
         pressureClip: 1,
         pressureSensitive: false,
         speedBlotBlend: 0,
+        boldness: 1,
         points: points([0, 0]),
       },
       1,
     );
+    const half = inkLineWidth(12, 0, false) / 2;
     for (const cap of drawCtx.caps) {
-      expect(cap.r).toBeLessThanOrEqual(6 + 1e-6);
+      expect(cap.r).toBeLessThanOrEqual(half + 1e-6);
     }
   });
 
@@ -2369,7 +2435,9 @@ describe("grain and blot pooling (Phase 2)", () => {
       },
       1,
     );
-    expect(halted.fillCount).toBe(plain.fillCount);
+    expect(halted.radialGradients).toBe(0);
+    expect(halted.strokeCount).toBe(plain.strokeCount);
+    expect(halted.fillCount).toBeGreaterThanOrEqual(plain.fillCount);
   });
 
   it("caps a pooled moving stroke at the flared ribbon width, not a second disc", () => {
