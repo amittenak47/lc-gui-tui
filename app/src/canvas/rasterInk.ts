@@ -1241,8 +1241,11 @@ export function coalesceRibbonPoints(
 }
 
 /**
- * Insert midpoints on long chords so thick ribbons do not show one-facet spokes,
- * and on large dryGain / blotPool jumps so the wash can lerp instead of banding.
+ * Insert midpoints on long chords so thick ribbons do not show one-facet spokes.
+ *
+ * Colour is not densified here. `fillInkRibbonQuads` already paints a linear
+ * gradient between adjacent vertex fills at draw time. Inserting wash samples
+ * rebuilt the whole polyline on every 32ms dwell tick and the stroke jigged.
  */
 export function densifyRibbonPoints(
   points: readonly ScenePoint[],
@@ -1263,9 +1266,7 @@ export function densifyRibbonPoints(
     const halfB = paintedWidth(bStyle.lineWidth, pixelScale) / 2;
     const maxStep = Math.max(0.75, ((halfA + halfB) / 2) * RIBBON_DENSIFY_HALF_FRAC);
     const dist = Math.hypot(b.x - a.x, b.y - a.y);
-    const geomCount = dist > maxStep ? Math.ceil(dist / maxStep) : 1;
-    const washCount = Math.max(1, Math.ceil(ribbonWashJump(aStyle, bStyle) / 0.04));
-    const count = Math.max(geomCount, washCount);
+    const count = dist > maxStep ? Math.ceil(dist / maxStep) : 1;
     if (count > 1) {
       for (let step = 1; step < count; step++) {
         const t = step / count;
@@ -2258,7 +2259,13 @@ export function applyInkPoolingAtEnds(
     if (poolT > 1e-6) out[index].blotPool = poolT;
     if (growT < 1e-6) continue;
     out[index].lineWidth *= inkPoolingWidthGain(growT, blotBlend, 1);
-    delete out[index].dryGain;
+    // A hold is wet. Snapping dryGain off for every vertex in the envelope
+    // left a washed trail next to a fully-wet plateau: discrete red blocks
+    // when drying is also on. Lerp with growT so the falloff blends.
+    const dry = out[index].dryGain ?? 1;
+    const wet = dry + (1 - dry) * growT;
+    if (wet < 1 - 1e-3) out[index].dryGain = wet;
+    else delete out[index].dryGain;
   }
 
   return out;
