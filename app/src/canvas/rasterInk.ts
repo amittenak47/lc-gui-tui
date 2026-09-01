@@ -235,8 +235,9 @@ export function inkSpeedAlphaGain(slowness: number, _strength: number, fade = 0)
  * so the disc has to actually paint darker RGB or the ends read as a pale halo.
  */
 export const INK_BLOT_ALPHA_LIFT = 0.55;
-export const INK_BLOT_SATURATE = 0.42;
-export const INK_BLOT_DARKEN = 0.28;
+/** Pushed ~20% on chroma so a full pool is richer; unpooled colour is unchanged. */
+export const INK_BLOT_SATURATE = 0.504;
+export const INK_BLOT_DARKEN = 0.31;
 /** Caps read richer than the trail even before a hold grows them. */
 export const INK_BLOT_END_FLOOR = 0.45;
 /** How far a full pool may grow past the nib. Independent of speed ink. */
@@ -269,6 +270,20 @@ export function blotDiscPoolT(
     inkBlotRestPoolT(slowness, blend),
     blend * INK_BLOT_END_FLOOR,
   );
+}
+
+/**
+ * Pooling richness including stylus pressure. A dead stop uses the same
+ * pressure scale as a moving stroke's opacity: light touch stays closer to
+ * the trail colour, a firm press reaches the full saturate/darken.
+ */
+export function blotRichnessT(
+  growT: number,
+  blotBlend: number,
+  slowness = INK_SLOWNESS_NEUTRAL,
+  pressureAmt = 1,
+): number {
+  return blotDiscPoolT(growT, blotBlend, slowness) * clamp01(pressureAmt);
 }
 
 export function mixBlotAlpha(alpha: number, poolT: number): number {
@@ -1704,7 +1719,7 @@ export function paintInkDisc(
       "slowness" in center && typeof (center as ScenePoint).slowness === "number"
         ? (center as ScenePoint).slowness ?? INK_SLOWNESS_NEUTRAL
         : INK_SLOWNESS_NEUTRAL;
-    const poolT = softFade ? 0 : blotDiscPoolT(growT, blend, slow);
+    const poolT = softFade ? 0 : blotRichnessT(growT, blend, slow, pressureAmt);
     const prevFill = ctx.fillStyle;
     const prevSmooth = ctx.imageSmoothingEnabled;
     if (poolT > 1e-3) {
@@ -1767,7 +1782,7 @@ function strokePaperFibre(
   const half = radius * (0.025 + 0.05 * q);
   const dx = Math.cos(ang) * half;
   const dy = Math.sin(ang) * half;
-  ctx.globalAlpha = 0.07 + 0.30 * v;
+  ctx.globalAlpha = 0.07 + 0.42 * v;
   ctx.lineWidth = Math.max(0.2, radius * (0.008 + 0.016 * u));
   ctx.beginPath();
   ctx.moveTo(cx - dx, cy - dy);
@@ -1783,7 +1798,7 @@ function scratchGrainInDisc(
 ): void {
   const g = clamp01(grain);
   if (g < 1e-3 || radius < 1e-6) return;
-  const n = 10 + Math.round(28 * g);
+  const n = Math.round(1.4 * (10 + 28 * g));
   const fibreHeading = paperFibreHeading(center);
   const prevComp = ctx.globalCompositeOperation;
   const prevAlpha = ctx.globalAlpha;
@@ -1836,7 +1851,7 @@ export function paintGrainDisc(
 ): void {
   const { outerR } = inkDiscRadii(tipRadius, blotBlend, growT, pressureAmt);
   if (outerR < 1e-6) return;
-  const poolT = blotDiscPoolT(growT, blotBlend, INK_SLOWNESS_NEUTRAL);
+  const poolT = blotRichnessT(growT, blotBlend, INK_SLOWNESS_NEUTRAL, pressureAmt);
   const prevFill = ctx.fillStyle;
   if (poolT > 1e-3) {
     ctx.fillStyle = blotFillCss(color ?? String(prevFill), poolT);
@@ -1923,10 +1938,10 @@ export function applyInkPoolingAtEnds(
 
   const enrichEnd = (index: number, growT: number, at: ScenePoint) => {
     const slowness = at.slowness ?? INK_SLOWNESS_NEUTRAL;
-    const poolT = blotDiscPoolT(growT, blotBlend, slowness);
-    out[index].blotPool = Math.max(out[index].blotPool ?? 0, poolT);
+    const pressureAmt = blotPressureAmt(op, at);
+    const poolT = blotRichnessT(growT, blotBlend, slowness, pressureAmt);
+    out[index].blotPool = poolT;
     if (growT > 1e-6) {
-      const pressureAmt = blotPressureAmt(op, at);
       out[index].lineWidth *= inkPoolingWidthGain(growT, blotBlend, pressureAmt);
     }
   };
@@ -2044,7 +2059,10 @@ function scratchGrainAlongStroke(
   const avgR = counted > 0 ? sumR / counted : paintedWidth(nibWidth(op), pixelScale) / 2;
   const n = Math.max(
     12,
-    Math.min(140, Math.round(12 + grain * (28 + pathLen / Math.max(avgR * 0.18, 0.22)))),
+    Math.min(
+      196,
+      Math.round(1.4 * (12 + grain * (28 + pathLen / Math.max(avgR * 0.18, 0.22)))),
+    ),
   );
   const origin = points[0];
   const fibreHeading = paperFibreHeading(origin);
