@@ -1009,7 +1009,6 @@ export function strokePointAt(points: ScenePoint[], pos: number): ScenePoint {
 export function inkStrokePointStyles(
   op: InkDrawOp,
   fromIndex = 0,
-  toIndex?: number,
 ): InkStrokeStyle[] {
   const points = op.points;
   if (points.length === 0) return [];
@@ -1025,12 +1024,8 @@ export function inkStrokePointStyles(
     speedInk > 0 || blotBlend > 1e-3 || fadeAmt > 1e-3 ? slopedSlowness(op) : null;
 
   const start = Math.max(0, Math.min(fromIndex, points.length - 1));
-  const end =
-    toIndex === undefined
-      ? points.length - 1
-      : Math.max(start, Math.min(toIndex, points.length - 1));
   const styles: InkStrokeStyle[] = [];
-  for (let index = start; index <= end; index++) {
+  for (let index = start; index < points.length; index++) {
     styles.push(
       inkStrokeStyle(
         op.baseWidth,
@@ -1194,7 +1189,6 @@ export function coalesceRibbonPoints(
   points: readonly ScenePoint[],
   styles: readonly InkStrokeStyle[],
   pixelScale: number,
-  pinned?: ReadonlySet<number>,
 ): { points: ScenePoint[]; styles: InkStrokeStyle[] } {
   if (points.length === 0) return { points: [], styles: [] };
   if (points.length !== styles.length) {
@@ -1214,7 +1208,6 @@ export function coalesceRibbonPoints(
     const half = paintedWidth(curStyle.lineWidth, pixelScale) / 2;
     const minDist = Math.max(0.5, half * RIBBON_COALESCE_HALF_FRAC);
     if (
-      !pinned?.has(index) &&
       Math.hypot(cur.x - prev.x, cur.y - prev.y) < minDist &&
       ribbonWashJump(prevStyle, curStyle) < 0.03
     ) {
@@ -1234,7 +1227,6 @@ export function coalesceRibbonPoints(
   const half = paintedWidth(lastStyle.lineWidth, pixelScale) / 2;
   const minDist = Math.max(0.5, half * RIBBON_COALESCE_HALF_FRAC);
   if (
-    !pinned?.has(points.length - 1) &&
     Math.hypot(last.x - prev.x, last.y - prev.y) < minDist &&
     ribbonWashJump(prevStyle, lastStyle) < 0.03
   ) {
@@ -1246,22 +1238,6 @@ export function coalesceRibbonPoints(
     outStyles.push(lastStyle);
   }
   return { points: outPts, styles: outStyles };
-}
-
-function scenePointIndex(
-  points: readonly ScenePoint[],
-  target: ScenePoint,
-  from = 0,
-): number {
-  for (let index = from; index < points.length; index++) {
-    if (
-      Math.abs(points[index].x - target.x) < 1e-7 &&
-      Math.abs(points[index].y - target.y) < 1e-7
-    ) {
-      return index;
-    }
-  }
-  return -1;
 }
 
 /**
@@ -2302,7 +2278,6 @@ export function applyInkPoolingAtEnds(
   op: InkDrawOp,
   points: readonly ScenePoint[],
   fromIndex: number,
-  includeTip = true,
 ): InkStrokeStyle[] {
   if (op.highlight) return styles;
   const blotBlend = resolveSpeedBlotBlend(op);
@@ -2341,17 +2316,15 @@ export function applyInkPoolingAtEnds(
 
   const lastIdx = out.length - 1;
   const tip = points[lastIdx];
+  const tipR = out[lastIdx].lineWidth / 2;
+  const tipStart = trailingTipClusterStart(strokePts, nib);
+  const tipPts =
+    tipStart < strokePts.length ? strokePts.slice(tipStart) : [strokePts[strokePts.length - 1]];
+  markGrow(tip, resolveBlotTipGrow(op, tipPts, tipR));
+  // Ends stay a richer deposit than the trail even without a hold. Width does not
+  // grow from this floor — only blotTipGrow / halts fatten the ribbon.
   const endFloor = blotBlend * INK_BLOT_END_FLOOR;
-  if (includeTip) {
-    const tipR = out[lastIdx].lineWidth / 2;
-    const tipStart = trailingTipClusterStart(strokePts, nib);
-    const tipPts =
-      tipStart < strokePts.length ? strokePts.slice(tipStart) : [strokePts[strokePts.length - 1]];
-    markGrow(tip, resolveBlotTipGrow(op, tipPts, tipR));
-    // Ends stay a richer deposit than the trail even without a hold. Width does not
-    // grow from this floor — only blotTipGrow / halts fatten the ribbon.
-    paintAlong(tip, endFloor, richAt, nib * 0.45, nib * 1.35);
-  }
+  paintAlong(tip, endFloor, richAt, nib * 0.45, nib * 1.35);
 
   if (fromIndex === 0 && points.length >= 2) {
     const headR = out[0].lineWidth / 2;
@@ -2541,7 +2514,6 @@ function drawRibbonStrokeFrom(
   pixelScale: number,
   capEnd: boolean,
   capHead = true,
-  toIndex?: number,
 ): void {
   const points = op.points;
   if (points.length === 0) return;
@@ -2554,16 +2526,11 @@ function drawRibbonStrokeFrom(
     return;
   }
 
-  const lastPaint = Math.min(
-    toIndex === undefined ? points.length - 1 : toIndex,
-    points.length - 1,
-  );
   const start = Math.max(0, Math.min(fromIndex, points.length - 2));
-  if (start >= lastPaint) return;
+  if (start >= points.length - 1) return;
 
-  const paintToEnd = lastPaint >= points.length - 1;
-  const slice = points.slice(start, lastPaint + 1);
-  const styles = inkStrokePointStyles(op, start, lastPaint);
+  const slice = points.slice(start);
+  const styles = inkStrokePointStyles(op, start);
   if (slice.length < 2 || styles.length < 2) return;
 
   const nib = nibWidth(op);
@@ -2593,7 +2560,7 @@ function drawRibbonStrokeFrom(
   // Pooling needs the halted tip on the ribbon. Peeling a dwell cluster left
   // the pool as a nib-sized seal disc while Speed ink was off.
   const tipClusterAt =
-    !paintToEnd || blotBlend > 1e-3 ? slice.length : trailingTipClusterStart(slice, nib);
+    blotBlend > 1e-3 ? slice.length : trailingTipClusterStart(slice, nib);
   if (tipClusterAt < slice.length) {
     const tipPts = slice.slice(tipClusterAt);
     const tipStyles = styles.slice(tipClusterAt);
@@ -2621,29 +2588,7 @@ function drawRibbonStrokeFrom(
     }
   }
 
-  // One neighbor past each painted end so the seam vertex is interior: a
-  // sliced polyline uses a one-sided normal there and leaves a paper wedge
-  // on a curve.
-  if (start > 0) {
-    ribbonPoints = [points[start - 1], ...ribbonPoints];
-    ribbonStyles = [inkStrokePointStyles(op, start - 1, start - 1)[0], ...ribbonStyles];
-  }
-  if (!paintToEnd && lastPaint + 1 < points.length) {
-    ribbonPoints = [...ribbonPoints, points[lastPaint + 1]];
-    ribbonStyles = [
-      ...ribbonStyles,
-      inkStrokePointStyles(op, lastPaint + 1, lastPaint + 1)[0],
-    ];
-  }
-  const paintStartAt = ribbonPoints[start > 0 ? 1 : 0];
-  const paintEndAt = ribbonPoints[ribbonPoints.length - 1 - (!paintToEnd ? 1 : 0)];
-  const pinned = new Set<number>();
-  pinned.add(0);
-  pinned.add(ribbonPoints.length - 1);
-  if (start > 0) pinned.add(1);
-  if (!paintToEnd) pinned.add(ribbonPoints.length - 2);
-
-  const coalesced = coalesceRibbonPoints(ribbonPoints, ribbonStyles, pixelScale, pinned);
+  const coalesced = coalesceRibbonPoints(ribbonPoints, ribbonStyles, pixelScale);
   const densified = densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale);
   if (densified.points.length < 2) {
     ctx.globalAlpha = 1;
@@ -2655,36 +2600,23 @@ function drawRibbonStrokeFrom(
     op,
     densified.points,
     fromIndex,
-    paintToEnd,
   );
   const prepared = densifyRibbonPoints(densified.points, pooledStyles, pixelScale);
-  const paintFrom = Math.max(0, scenePointIndex(prepared.points, paintStartAt));
-  let paintTo = scenePointIndex(prepared.points, paintEndAt, paintFrom);
-  if (paintTo < paintFrom) paintTo = prepared.points.length - 1;
-  if (paintTo <= paintFrom) {
-    ctx.globalAlpha = 1;
-    return;
-  }
 
   let maxAlpha = 0;
   let maxHalf = 0;
-  for (let index = paintFrom; index <= paintTo; index++) {
-    const style = prepared.styles[index];
+  for (const style of prepared.styles) {
     maxAlpha = Math.max(maxAlpha, style.alpha);
     maxHalf = Math.max(maxHalf, paintedWidth(style.lineWidth, pixelScale) / 2);
   }
 
-  const sides = ribbonSides(prepared.points, prepared.styles, pixelScale);
-  const left = sides.left.slice(paintFrom, paintTo + 1);
-  const right = sides.right.slice(paintFrom, paintTo + 1);
+  const { left, right } = ribbonSides(prepared.points, prepared.styles, pixelScale);
   const pad = Math.max(4, Math.ceil(maxHalf) + 2);
   const fadeAmt = resolveSpeedFade(op);
-  const rangeStyles = prepared.styles.slice(paintFrom, paintTo + 1);
   const fills =
     blotBlend > 1e-3 || fadeAmt > 1e-3
-      ? rangeStyles.map((style) => ribbonVertexFillCss(color, style))
+      ? prepared.styles.map((style) => ribbonVertexFillCss(color, style))
       : undefined;
-  const rangePoints = prepared.points.slice(paintFrom, paintTo + 1);
 
   const stampHardExtras = (
     scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -2695,21 +2627,21 @@ function drawRibbonStrokeFrom(
     scratchGrainAlongStroke(
       scratchCtx,
       op,
-      rangePoints,
-      rangeStyles,
+      prepared.points,
+      prepared.styles,
       pixelScale,
     );
     if (capHead && fromIndex === 0 && tipClusterAt >= slice.length) {
-      const radius = paintedWidth(rangeStyles[0].lineWidth, pixelScale) / 2;
+      const radius = paintedWidth(prepared.styles[0].lineWidth, pixelScale) / 2;
       const origin = points[0];
       if (fills?.[0]) scratchCtx.fillStyle = fills[0];
       const heading =
-        firstStrokeOutward(rangePoints, radius) ??
+        firstStrokeOutward(prepared.points, radius) ??
         hashedHeading(origin, CAP_SALT_HEAD);
       paintOpCap(
         scratchCtx,
         op,
-        rangePoints[0],
+        prepared.points[0],
         radius,
         heading,
         origin,
@@ -2718,34 +2650,34 @@ function drawRibbonStrokeFrom(
         1,
       );
     }
-    if (capEnd && paintToEnd && tipClusterAt >= slice.length) {
+    if (capEnd && tipClusterAt >= slice.length) {
       // Same round cap as speed ink, at the already-flared half-width. Do not
       // stamp a second pooling disc; the ribbon is the pool.
-      const last = rangePoints.length - 1;
-      const radius = paintedWidth(rangeStyles[last].lineWidth, pixelScale) / 2;
+      const last = prepared.points.length - 1;
+      const radius = paintedWidth(prepared.styles[last].lineWidth, pixelScale) / 2;
       const origin = points[0];
       const heading =
-        segmentOutward(rangePoints[last], rangePoints[last - 1]) ??
+        segmentOutward(prepared.points[last], prepared.points[last - 1]) ??
         hashedHeading(origin, CAP_SALT_TAIL);
       if (fills?.[last]) scratchCtx.fillStyle = fills[last];
       paintOpCap(
         scratchCtx,
         op,
-        rangePoints[last],
+        prepared.points[last],
         radius,
         heading,
         origin,
         CAP_SALT_TAIL,
-        rangePoints[last].pressure,
+        prepared.points[last].pressure,
         1,
       );
     }
-    if (tipClusterAt < slice.length && rangePoints.length >= 2) {
-      const last = rangePoints.length - 1;
+    if (tipClusterAt < slice.length && prepared.points.length >= 2) {
+      const last = prepared.points.length - 1;
       paintInkDisc(
         scratchCtx,
-        rangePoints[last],
-        rangeStyles[last].lineWidth,
+        prepared.points[last],
+        prepared.styles[last].lineWidth,
         1,
         pixelScale,
         0,
@@ -2776,11 +2708,7 @@ function drawRibbonStrokeFrom(
 }
 
 /** Split a stroke into paintable runs, starting at `fromIndex`. */
-export function inkStrokeRuns(
-  op: InkDrawOp,
-  fromIndex = 0,
-  toIndex?: number,
-): InkStrokeRun[] {
+export function inkStrokeRuns(op: InkDrawOp, fromIndex = 0): InkStrokeRun[] {
   const points = op.points;
   const runs: InkStrokeRun[] = [];
   if (points.length < 2) return runs;
@@ -2815,10 +2743,6 @@ export function inkStrokeRuns(
     );
 
   let start = Math.max(0, Math.min(fromIndex, points.length - 2));
-  const last =
-    toIndex === undefined
-      ? points.length - 1
-      : Math.max(start + 1, Math.min(toIndex, points.length - 1));
   let style = styleAt(start);
   let bucketW = Math.round(style.lineWidth / widthQuantum);
   let bucketA = Math.round(style.alpha / RUN_ALPHA_QUANTUM);
@@ -2826,7 +2750,7 @@ export function inkStrokeRuns(
   let sumAlpha = style.alpha;
   let count = 1;
 
-  for (let index = start + 1; index <= last; index++) {
+  for (let index = start + 1; index < points.length; index++) {
     const next = styleAt(index);
     const nextW = Math.round(next.lineWidth / widthQuantum);
     const nextA = Math.round(next.alpha / RUN_ALPHA_QUANTUM);
@@ -2845,10 +2769,10 @@ export function inkStrokeRuns(
     sumAlpha += next.alpha;
     count += 1;
   }
-  if (start < last) {
+  if (start < points.length - 1) {
     runs.push({
       start,
-      end: last,
+      end: points.length - 1,
       lineWidth: sumWidth / count,
       alpha: sumAlpha / count,
     });
@@ -2994,7 +2918,6 @@ function drawStrokeFrom(
   pixelScale: number,
   capEnd = true,
   capHead = true,
-  toIndex?: number,
 ): void {
   const points = op.points;
   if (points.length === 0) return;
@@ -3044,16 +2967,11 @@ function drawStrokeFrom(
     return;
   }
 
-  const lastPaint = Math.min(
-    toIndex === undefined ? points.length - 1 : toIndex,
-    points.length - 1,
-  );
   const start = Math.max(0, fromIndex);
-  if (start >= lastPaint) return;
-  const paintToEnd = lastPaint >= points.length - 1;
+  if (start >= points.length - 1) return;
 
   const nib = nibWidth(op);
-  const slice = points.slice(start, lastPaint + 1);
+  const slice = points.slice(start);
   const blotBlend = resolveSpeedBlotBlend(op);
   // Contact cluster: one disc at the original point, including pressure-on
   // flat ink. Do not fan jitter into spokes or heading-flipped half-caps.
@@ -3062,8 +2980,8 @@ function drawStrokeFrom(
     return;
   }
   if (blotBlend > 1e-3 && fromIndex === 0 && capHead && isDiscPrimaryPath(slice, nib)) {
-    const tip = points[lastPaint];
-    const styles = inkStrokePointStyles(op, start, lastPaint);
+    const tip = points[points.length - 1];
+    const styles = inkStrokePointStyles(op, start);
     const last = styles[styles.length - 1];
     if (!last) return;
     const tipR = paintedWidth(last.lineWidth, pixelScale) / 2;
@@ -3085,11 +3003,11 @@ function drawStrokeFrom(
 
   const speedPenStroke = usesSpeedPenStroke(op, pixelScale);
   if (usesSpeedRibbon(op) && !speedPenStroke) {
-    drawRibbonStrokeFrom(ctx, op, start, pixelScale, capEnd, capHead, toIndex);
+    drawRibbonStrokeFrom(ctx, op, start, pixelScale, capEnd, capHead);
     return;
   }
 
-  const runs = inkStrokeRuns(op, start, lastPaint);
+  const runs = inkStrokeRuns(op, start);
   if (runs.length === 0) return;
 
   // Butt caps + bevel joins — round joins fan into spokes on thick curves.
@@ -3112,13 +3030,7 @@ function drawStrokeFrom(
     }
 
     ctx.beginPath();
-    if (start > 0 && ri === 0) {
-      const halo = points[start - 1];
-      ctx.moveTo(halo.x, halo.y);
-      ctx.lineTo(pStart.x, pStart.y);
-    } else {
-      ctx.moveTo(pStart.x, pStart.y);
-    }
+    ctx.moveTo(pStart.x, pStart.y);
     for (let i = Math.floor(run.start) + 1; i < run.end; i++) {
       ctx.lineTo(points[i].x, points[i].y);
     }
@@ -3142,7 +3054,7 @@ function drawStrokeFrom(
       );
     }
 
-    if (capEnd && paintToEnd && ri === runs.length - 1) {
+    if (capEnd && ri === runs.length - 1) {
       const origin = points[0];
       const prevIdx = Math.max(0, Math.ceil(run.end) - 1);
       const inner = points[prevIdx] ?? pStart;
@@ -3165,8 +3077,8 @@ function drawStrokeFrom(
     scratchGrainAlongStroke(
       ctx,
       op,
-      slice,
-      inkStrokePointStyles(op, start, lastPaint),
+      points.slice(start),
+      inkStrokePointStyles(op, start),
       pixelScale,
     );
   }
@@ -3196,14 +3108,10 @@ function eraseStampsFrom(
 }
 
 /**
- * Live overlay paints like commit, on a bounded queue at the tip. When the
- * stroke grows past {@link LIVE_PAINT_QUEUE_NIBS}, a chunk at the oldest end is
- * baked once and dropped from the paint list. The point buffer for commit is
- * unchanged.
+ * Live overlay keeps a bounded paint queue at the tip. Older points are baked
+ * once, so each frame re-derives a constant tail rather than the whole stroke.
  */
-export const LIVE_PAINT_QUEUE_NIBS = 32;
-/** Do not bake until at least this much travel has fallen off the queue. */
-export const LIVE_PAINT_EVICT_NIBS = 16;
+export const LIVE_PAINT_QUEUE_NIBS = 4;
 
 /**
  * Oldest index still in the live paint queue (inclusive). `0` means the whole
@@ -3224,45 +3132,8 @@ export function livePaintQueueStart(
   return 0;
 }
 
-function polylineTravel(
-  points: readonly ScenePoint[],
-  from: number,
-  to: number,
-): number {
-  let acc = 0;
-  const start = Math.max(1, from + 1);
-  const end = Math.min(to, points.length - 1);
-  for (let i = start; i <= end; i++) {
-    acc += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
-  }
-  return acc;
-}
-
-/**
- * New bake end, or `baked` if the fallen-off span is still too short to evict.
- */
-export function livePaintEvictEnd(
-  points: readonly ScenePoint[],
-  nib: number,
-  baked: number,
-  queueNibs = LIVE_PAINT_QUEUE_NIBS,
-  evictNibs = LIVE_PAINT_EVICT_NIBS,
-): number {
-  const keep = livePaintQueueStart(points, nib, queueNibs);
-  if (keep <= baked) return baked;
-  const width = Math.max(nib, 1e-6);
-  if (baked <= 0) return keep;
-  if (polylineTravel(points, baked, keep) < width * evictNibs) return baked;
-  return keep;
-}
-
 /** Apply one committed or live op in scene space (caller sets the transform). */
-export type ApplyInkOptions = {
-  capEnd?: boolean;
-  capHead?: boolean;
-  fromIndex?: number;
-  toIndex?: number;
-};
+export type ApplyInkOptions = { capEnd?: boolean; capHead?: boolean };
 
 export function applyInkOp(
   ctx: CanvasRenderingContext2D,
@@ -3301,15 +3172,7 @@ export function applyInkOpInHost(
   );
   ctx.clip();
   if (scrollDx !== 0) ctx.translate(scrollDx, 0);
-  const fromIndex = options?.fromIndex ?? 0;
-  if (
-    op.kind === "draw" &&
-    (fromIndex > 0 || options?.toIndex !== undefined)
-  ) {
-    applyInkOpFrom(ctx, op, fromIndex, pixelScale, options);
-  } else {
-    applyInkOp(ctx, op, pixelScale, options);
-  }
+  applyInkOp(ctx, op, pixelScale, options);
   ctx.restore();
 }
 
@@ -3372,7 +3235,6 @@ export function applyInkOpFrom(
       pixelScale,
       options?.capEnd ?? false,
       options?.capHead ?? false,
-      options?.toIndex,
     );
     ctx.globalCompositeOperation = "source-over";
     return Math.max(fromIndex, op.points.length - 1);
