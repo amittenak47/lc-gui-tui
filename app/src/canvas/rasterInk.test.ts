@@ -1797,17 +1797,14 @@ describe("speed-ink ribbon coalesce / densify / tip split", () => {
     expect(out.points[out.points.length - 1].x).toBeCloseTo(40);
   });
 
-  it("inserts midpoints when dryGain jumps on a short chord", () => {
-    const pts = points([0, 0], [2, 0]);
+  it("leaves wash jumps to the paint-time vertex gradient", () => {
+    const pts = points([0, 0], [0.4, 0]);
     const styles: ReturnType<typeof style>[] = [
       { ...style(), dryGain: 1 },
       { ...style(), dryGain: 0.5 },
     ];
     const out = densifyRibbonPoints(pts, styles, 1);
-    expect(out.points.length).toBeGreaterThan(2);
-    const mid = out.styles[Math.floor(out.styles.length / 2)];
-    expect(mid.dryGain ?? 1).toBeGreaterThan(0.5);
-    expect(mid.dryGain ?? 1).toBeLessThan(1);
+    expect(out.points.length).toBe(2);
   });
 
   it("does not coalesce vertices across a dryGain jump", () => {
@@ -2507,6 +2504,34 @@ describe("grain and blot pooling (Phase 2)", () => {
     );
     expect(pooled[0].lineWidth).toBeGreaterThan(styles[0].lineWidth);
     expect(pooled[pooled.length - 1].lineWidth).toBeCloseTo(styles[styles.length - 1].lineWidth);
+  });
+
+  it("lerps drying wash through a pool falloff instead of snapping it off", () => {
+    const pts = [
+      { x: 0, y: 0, pressure: NO_PRESSURE, slowness: 0.2 },
+      { x: 40, y: 0, pressure: NO_PRESSURE, slowness: 0.2 },
+      { x: 80, y: 0, pressure: NO_PRESSURE, slowness: 0.2 },
+      { x: 120, y: 0, pressure: NO_PRESSURE, slowness: 1 },
+    ];
+    const op = {
+      kind: "draw" as const,
+      color: "#c41e3a",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      speedFade: 1,
+      blotTipGrow: 1,
+      points: pts,
+    };
+    const styles = inkStrokePointStyles(op, 0);
+    const trailDry = styles[0].dryGain ?? 1;
+    expect(trailDry).toBeLessThan(0.9);
+    const pooled = applyInkPoolingAtEnds(styles, op, pts, 0);
+    expect(pooled[0].dryGain ?? 1).toBeCloseTo(trailDry, 2);
+    expect(pooled[pooled.length - 1].dryGain ?? 1).toBeCloseTo(1);
   });
 
   it("applies pressure to pooling richness at a halted tip", () => {
