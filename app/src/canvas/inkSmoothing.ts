@@ -477,3 +477,167 @@ export function smoothInkPoints(
   if (partial > MIN_ROUNDING_RATIO) out = roundInkCorners(out, partial);
   return out;
 }
+
+/** Raw samples behind the pen that stay live and are re-smoothed every paint. */
+const LIVE_SMOOTH_TAIL = 160;
+/** The frozen anchor only advances in steps this big. */
+const LIVE_SMOOTH_STEP = 80;
+/**
+ * A join segment must be at least this fraction of the following step.
+ *
+ * Below it the segment is shorter than its neighbours and its direction is
+ * noise, which is what put a corner at every span boundary.
+ */
+const LIVE_SMOOTH_MIN_JOIN_STEP = 1.0;
+/** Context carried past each cut so neither side is smoothed against a pinned end. */
+const LIVE_SMOOTH_OVERLAP = 48;
+
+export interface LiveSmoothCache {
+  /**
+   * The raw buffer this prefix was taken from.
+   *
+   * Every stroke gets a fresh raw array and appends to it in place, so identity
+   * is stable for one stroke and changes the moment another starts. Checking it
+   * here means the cache invalidates itself instead of depending on twenty call
+   * sites remembering to clear it.
+   */
+  source: readonly ScenePoint[];
+  anchor: number;
+  prefix: ScenePoint[];
+}
+
+/** Cumulative distance along a polyline. */
+function arcLengths(points: readonly ScenePoint[]): Float64Array {
+  const out = new Float64Array(points.length);
+  for (let i = 1; i < points.length; i++) {
+    out[i] =
+      out[i - 1] +
+      Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  }
+  return out;
+}
+
+/** First index at or past `target` along `arc`. */
+function indexAtArc(arc: Float64Array, target: number): number {
+  for (let i = 0; i < arc.length; i++) if (arc[i] >= target) return i;
+  return arc.length;
+}
+
+/**
+ * Where in `span` the raw window's `[from, to]` stretch ended up.
+ *
+ * Cut by arc position rather than by nearest sample. Nearest-sample looks
+ * equivalent and is not: simplification can collapse a span until both ends
+ * match the same output point, and then the cut is empty or inverted and the
+ * spliced path jumps. Arc position is monotonic by construction, so the two
+ * cuts keep their order however hard the span was thinned.
+ */
+function spanCuts(
+  span: readonly ScenePoint[],
+  window: readonly ScenePoint[],
+  from: number,
+  to: number,
+): { a: number; b: number } {
+  const rawArc = arcLengths(window);
+  const rawTotal = rawArc[rawArc.length - 1];
+  const spanArc = arcLengths(span);
+  const spanTotal = spanArc[spanArc.length - 1];
+  if (rawTotal < 1e-9 || spanTotal < 1e-9) {
+    return { a: 0, b: span.length };
+  }
+  const at = (i: number) => (rawArc[i] / rawTotal) * spanTotal;
+  const a = indexAtArc(spanArc, at(from));
+  const b = indexAtArc(spanArc, at(to));
+  return { a: Math.min(a, span.length), b: Math.min(Math.max(b, a), span.length) };
+}
+
+/**
+ * Live reshape that only tidies near the pen.
+ *
+ * Re-smoothing the whole raw buffer every paint is what this module's header
+ * describes, and the path behind the pen genuinely does move -- measured at
+ * full strength, settled ink shifted by better than a third of a nib width per
+ * frame, all the way back to the start. Tidying a bend a moment after it was
+ * drawn is the point; the finished stroke shimmering while you write is not.
+ *
+ * The prefix is *extended*, never rebuilt. Freezing its input alone is not
+ * enough: each time the anchor advances, a longer slice re-runs the simplifier,
+ * it re-picks which samples survive, and the settled path lurches. Appending
+ * only the newly frozen span means a point, once written, is never touched
+ * again.
+ */
+export function smoothLiveInkPoints(
+  raw: readonly ScenePoint[],
+  strength: number,
+  nibWidth: number,
+  cache: LiveSmoothCache | null,
+): { points: ScenePoint[]; cache: LiveSmoothCache | null } {
+  const dial = Math.max(0, Math.min(1, strength));
+  if (dial <= 0 || raw.length <= LIVE_SMOOTH_TAIL + LIVE_SMOOTH_OVERLAP) {
+    return { points: smoothInkPoints(raw, strength, nibWidth, 0), cache: null };
+  }
+
+  const anchor = Math.max(
+    LIVE_SMOOTH_STEP,
+    Math.floor((raw.length - LIVE_SMOOTH_TAIL) / LIVE_SMOOTH_STEP) * LIVE_SMOOTH_STEP,
+  );
+
+  let next = cache;
+  if (!next || next.source !== raw || next.anchor > anchor) {
+    next = { source: raw, anchor: 0, prefix: [] };
+  }
+
+  while (next.anchor < anchor) {
+    const from = next.anchor;
+    const to = Math.min(anchor, from + LIVE_SMOOTH_STEP);
+    const lo = Math.max(0, from - LIVE_SMOOTH_OVERLAP);
+    const hi = Math.min(raw.length, to + LIVE_SMOOTH_OVERLAP);
+    const window = raw.slice(lo, hi);
+    const span = smoothInkPoints(window, strength, nibWidth, 0);
+    const { a, b } = spanCuts(span, window, from - lo, to - lo);
+    let k = from === 0 ? 0 : a;
+    // Same degenerate-join guard as the tail below: spans are simplified
+    // independently, so the first point of one can land almost on top of the
+    // last point of the previous, and that near-zero segment's direction is
+    // noise. Every span boundary is a potential corner without this.
+    const last = next.prefix[next.prefix.length - 1];
+    while (last && k + 1 < b) {
+      const gap = Math.hypot(span[k].x - last.x, span[k].y - last.y);
+      const step = Math.hypot(span[k + 1].x - span[k].x, span[k + 1].y - span[k].y);
+      if (gap >= step * LIVE_SMOOTH_MIN_JOIN_STEP) break;
+      k++;
+    }
+    for (; k < b; k++) next.prefix.push(span[k]);
+    next.anchor = to;
+  }
+
+  const tailLo = anchor - LIVE_SMOOTH_OVERLAP;
+  const tailWindow = raw.slice(tailLo);
+  const tail = smoothInkPoints(tailWindow, strength, nibWidth, 0);
+  const cut = spanCuts(tail, tailWindow, anchor - tailLo, tailWindow.length - 1).a;
+  /*
+   * Do not start the tail on top of where the prefix ended.
+   *
+   * The two sides simplify the same stretch independently, so their estimates
+   * of the join sit close together but not together. Emitting both leaves a
+   * segment far shorter than its neighbours, and a short segment's direction
+   * is noise -- which showed up as a corner at the join, sharpest at full
+   * smoothing where the surviving points are furthest apart. Skipping tail
+   * points that fall within half a step of the prefix's end keeps every
+   * segment a real one.
+   */
+  const points = next.prefix.slice();
+  const joinAt = points[points.length - 1];
+  let start = cut;
+  while (start + 1 < tail.length) {
+    const gap = Math.hypot(tail[start].x - joinAt.x, tail[start].y - joinAt.y);
+    const step = Math.hypot(
+      tail[start + 1].x - tail[start].x,
+      tail[start + 1].y - tail[start].y,
+    );
+    if (gap >= step * LIVE_SMOOTH_MIN_JOIN_STEP) break;
+    start++;
+  }
+  for (let k = start; k < tail.length; k++) points.push(tail[k]);
+  return { points, cache: next };
+}
