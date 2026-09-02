@@ -50,3 +50,39 @@ describe("lift-mode: hold at the head, then draw away", () => {
     });
   }
 });
+
+const growAt = (op: Parameters<typeof applyInkPoolingAtEnds>[1], pts: ScenePoint[], i: number) =>
+  applyInkPoolingAtEnds(inkStrokePointStyles(op, 0), op, pts, 0)[i].blotGrow ?? 0;
+
+describe("terminals know whether they are pooled", () => {
+  const travel: ScenePoint[] = [];
+  for (let i = 1; i <= 80; i++) travel.push(P(i * 3, i * 0.4));
+
+  it("records growth at a held head", () => {
+    const dwell: ScenePoint[] = [];
+    for (let i = 0; i < 40; i++) dwell.push(P(Math.sin(i) * 0.08, Math.cos(i) * 0.08));
+    const pts = [...dwell, ...travel];
+    const op = { ...base, blotTipGrow: 0, points: pts,
+      blotHalts: [{ x: 0, y: 0, grow: 0.9, pressure: 0.6 }] };
+    expect(growAt(op, pts, 0)).toBeGreaterThan(0.12);
+  });
+
+  it("records none on a head that was never held", () => {
+    const pts = [P(0, 0), ...travel];
+    const op = { ...base, blotTipGrow: 0, points: pts };
+    expect(growAt(op, pts, 0)).toBeLessThanOrEqual(0.12);
+  });
+
+  it("leaves width and growth consistent", () => {
+    const dwell: ScenePoint[] = [];
+    for (let i = 0; i < 40; i++) dwell.push(P(Math.sin(i) * 0.08, Math.cos(i) * 0.08));
+    const pts = [...dwell, ...travel];
+    const op = { ...base, blotTipGrow: 0, points: pts,
+      blotHalts: [{ x: 0, y: 0, grow: 0.9, pressure: 0.6 }] };
+    const raw = inkStrokePointStyles(op, 0);
+    const pooled = applyInkPoolingAtEnds(raw, op, pts, 0);
+    // Growth recorded must be the growth actually applied to the width.
+    const g = pooled[0].blotGrow ?? 0;
+    expect(pooled[0].lineWidth / raw[0].lineWidth).toBeCloseTo(1 + 0.55 * 0.9 * g, 6);
+  });
+});
