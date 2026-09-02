@@ -2374,19 +2374,57 @@ function polylineArcLengths(points: readonly { x: number; y: number }[]): Float6
  * polyline: `bestD` collapses to about zero as soon as the scan reaches it,
  * after which the rest of the stroke is rejected on two compares each.
  */
+/**
+ * Stride between seed probes. The list is densified, so neighbours sit a small
+ * fraction of a nib apart and every 32nd point still lands near enough to make
+ * the prune bite immediately.
+ */
+const NEAREST_SEED_STRIDE = 32;
+
+/**
+ * First index of the polyline point closest to `at`.
+ *
+ * The axis tests are a pruning bound, not an approximation: neither |dx| nor
+ * |dy| can exceed the distance, so a point failing one of them cannot beat the
+ * incumbent and the `Math.hypot` that would have proved it is dead work.
+ *
+ * The bound is only worth anything once `bestD` is small, and scanning in index
+ * order it stays large across the whole prefix before the query point — so a
+ * halt in the middle of a stroke still paid a full hypot for half the points.
+ * That is the shape of the fast-circles-with-pauses lag: cost per halt is
+ * proportional to how far into the stroke the halt sits, and pausing adds
+ * halts. The seed pass fixes the order problem by probing every 32nd point
+ * first, which drops `bestD` to roughly the true minimum before the real scan
+ * starts, after which nearly every point dies on two compares.
+ *
+ * Seeding changes which index holds `best` when the scan begins, so the update
+ * carries an explicit tie-break: strictly closer wins, and an equal distance
+ * wins only from a lower index. Scanning ascending under that rule yields the
+ * lowest index attaining the minimum — exactly what the plain `d < bestD` walk
+ * returned, ties included.
+ */
 function nearestPolylineIndex(
   points: readonly { x: number; y: number }[],
   at: { x: number; y: number },
 ): number {
+  const n = points.length;
   let best = 0;
   let bestD = Infinity;
-  for (let i = 0; i < points.length; i++) {
+  // Seed pass: cheap probes so the real scan starts with a tight bound.
+  for (let i = 0; i < n; i += NEAREST_SEED_STRIDE) {
+    const d = Math.hypot(points[i].x - at.x, points[i].y - at.y);
+    if (d < bestD || (d === bestD && i < best)) {
+      bestD = d;
+      best = i;
+    }
+  }
+  for (let i = 0; i < n; i++) {
     const dx = points[i].x - at.x;
-    if (dx >= bestD || dx <= -bestD) continue;
+    if (dx > bestD || dx < -bestD) continue;
     const dy = points[i].y - at.y;
-    if (dy >= bestD || dy <= -bestD) continue;
+    if (dy > bestD || dy < -bestD) continue;
     const d = Math.hypot(dx, dy);
-    if (d < bestD) {
+    if (d < bestD || (d === bestD && i < best)) {
       bestD = d;
       best = i;
     }
@@ -2670,6 +2708,65 @@ function scratchGrainAlongStroke(
   ctx.lineCap = prevCap;
 }
 
+/**
+ * Scratch memo for work that depends only on the op, shared across one burst of
+ * draws of that same op.
+ *
+ * Committing a stroke paints it into every tile it touches, and each of those
+ * repaints re-derived the whole ribbon from scratch: point styles, coalescing,
+ * densifying, pooling, ribbon sides, vertex fills. None of that depends on
+ * which tile is being filled — only the rasterisation at the end does — so a
+ * stroke crossing twenty tiles paid for twenty identical pipelines. That is
+ * most of the freeze on pen-up after a long stroke.
+ *
+ * Entries are matched by argument *identity*, never by value, and only while a
+ * batch is open. A batch is opened around a synchronous loop over tiles, during
+ * which the op cannot change, so a hit means the inputs are the same objects
+ * and the recomputation would have produced the same output. Outside a batch
+ * this is a straight pass-through, so nothing else in the app can hold a stale
+ * ribbon.
+ *
+ * The batch stays small — a handful of stages times the levels in play — so a
+ * linear scan beats hashing, and identity comparison needs no key building.
+ */
+interface InkBatchEntry {
+  tag: string;
+  args: readonly unknown[];
+  value: unknown;
+}
+
+let inkOpBatch: InkBatchEntry[] | null = null;
+
+/** Open a reuse window around repeated draws of one unchanging op. */
+export function beginInkOpBatch(): void {
+  inkOpBatch = [];
+}
+
+/** Close it. Always pair from a `finally` so a throw cannot leak the window. */
+export function endInkOpBatch(): void {
+  inkOpBatch = null;
+}
+
+function batched<T>(tag: string, args: readonly unknown[], compute: () => T): T {
+  const batch = inkOpBatch;
+  if (!batch) return compute();
+  for (let i = 0; i < batch.length; i++) {
+    const entry = batch[i];
+    if (entry.tag !== tag || entry.args.length !== args.length) continue;
+    let same = true;
+    for (let a = 0; a < args.length; a++) {
+      if (!Object.is(entry.args[a], args[a])) {
+        same = false;
+        break;
+      }
+    }
+    if (same) return entry.value as T;
+  }
+  const value = compute();
+  batch.push({ tag, args: args.slice(), value });
+  return value;
+}
+
 /** Variable-width ribbon fill for speed ink — one opaque silhouette, then one alpha blit. */
 function drawRibbonStrokeFrom(
   ctx: CanvasRenderingContext2D,
@@ -2693,8 +2790,10 @@ function drawRibbonStrokeFrom(
   const start = Math.max(0, Math.min(fromIndex, points.length - 2));
   if (start >= points.length - 1) return;
 
-  const slice = points.slice(start);
-  const styles = inkStrokePointStyles(op, start);
+  // Memoised because it heads the chain: a fresh array here would make every
+  // downstream identity key miss and the batch would reuse nothing.
+  const slice = batched("slice", [points, start], () => points.slice(start));
+  const styles = batched("styles", [op, start], () => inkStrokePointStyles(op, start));
   if (slice.length < 2 || styles.length < 2) return;
 
   const nib = nibWidth(op);
@@ -2732,8 +2831,12 @@ function drawRibbonStrokeFrom(
     const tipWidth = tipLast?.lineWidth ?? 0;
     const tipAlpha = tipLast?.alpha ?? 1;
     const tipR = paintedWidth(tipWidth, pixelScale) / 2;
-    ribbonPoints = slice.slice(0, tipClusterAt + 1);
-    ribbonStyles = styles.slice(0, tipClusterAt + 1);
+    ribbonPoints = batched("tipPts", [slice, tipClusterAt], () =>
+      slice.slice(0, tipClusterAt + 1),
+    );
+    ribbonStyles = batched("tipStyles", [styles, tipClusterAt], () =>
+      styles.slice(0, tipClusterAt + 1),
+    );
     if (ribbonPoints.length < 2) {
       const tipAt = tipPts[tipPts.length - 1];
       const tipPrev = tipPts.length > 1 ? tipPts[tipPts.length - 2] : undefined;
@@ -2752,20 +2855,23 @@ function drawRibbonStrokeFrom(
     }
   }
 
-  const coalesced = coalesceRibbonPoints(ribbonPoints, ribbonStyles, pixelScale);
-  const densified = densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale);
+  const coalesced = batched("coalesce", [ribbonPoints, ribbonStyles, pixelScale], () =>
+    coalesceRibbonPoints(ribbonPoints, ribbonStyles, pixelScale),
+  );
+  const densified = batched("densify", [coalesced.points, coalesced.styles, pixelScale], () =>
+    densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale),
+  );
   if (densified.points.length < 2) {
     ctx.globalAlpha = 1;
     return;
   }
 
-  const pooledStyles = applyInkPoolingAtEnds(
-    densified.styles,
-    op,
-    densified.points,
-    fromIndex,
+  const pooledStyles = batched("pool", [densified.styles, op, densified.points, fromIndex], () =>
+    applyInkPoolingAtEnds(densified.styles, op, densified.points, fromIndex),
   );
-  const prepared = densifyRibbonPoints(densified.points, pooledStyles, pixelScale);
+  const prepared = batched("densify2", [densified.points, pooledStyles, pixelScale], () =>
+    densifyRibbonPoints(densified.points, pooledStyles, pixelScale),
+  );
 
   let maxAlpha = 0;
   let maxHalf = 0;
@@ -2774,12 +2880,16 @@ function drawRibbonStrokeFrom(
     maxHalf = Math.max(maxHalf, paintedWidth(style.lineWidth, pixelScale) / 2);
   }
 
-  const { left, right } = ribbonSides(prepared.points, prepared.styles, pixelScale);
+  const { left, right } = batched("sides", [prepared.points, prepared.styles, pixelScale], () =>
+    ribbonSides(prepared.points, prepared.styles, pixelScale),
+  );
   const pad = Math.max(4, Math.ceil(maxHalf) + 2);
   const fadeAmt = resolveSpeedFade(op);
   const fills =
     blotBlend > 1e-3 || fadeAmt > 1e-3
-      ? prepared.styles.map((style) => ribbonVertexFillCss(color, style))
+      ? batched("fills", [color, prepared.styles], () =>
+          prepared.styles.map((style) => ribbonVertexFillCss(color, style)),
+        )
       : undefined;
 
   const stampHardExtras = (

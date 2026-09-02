@@ -23,6 +23,8 @@
 import {
   applyInkOp,
   applyInkOpInHost,
+  beginInkOpBatch,
+  endInkOpBatch,
   HIGHLIGHT_WIDTH_SCALE,
   hostScrollDx,
   inkLineWidth,
@@ -437,11 +439,26 @@ export class InkTileCache {
     this.ops.push(op);
     if (isHostBoundOp(op)) return;
     const bounds = inkOpBounds(op);
-    for (const tile of [...this.tiles.values()]) {
-      const box = this.tileBounds(tile.level, tile.tx, tile.ty);
-      const scale = levelScale(tile.level);
-      if (!boundsOverlap(bounds, this.paddedTileBounds(box, scale))) continue;
-      this.paintOpIntoTile(tile, op, box);
+    /*
+     * Every tile below repaints the same op, and deriving that op's ribbon is
+     * the expensive half of the work: styles, coalescing, densifying, pooling,
+     * sides, fills. Only the rasterisation differs between tiles, so the batch
+     * lets the derivation happen once and be reused for the rest.
+     *
+     * The window is exactly this synchronous loop — the op cannot change while
+     * it runs, and `finally` closes the window even if a tile throws, so no
+     * later draw can inherit a stale ribbon.
+     */
+    beginInkOpBatch();
+    try {
+      for (const tile of [...this.tiles.values()]) {
+        const box = this.tileBounds(tile.level, tile.tx, tile.ty);
+        const scale = levelScale(tile.level);
+        if (!boundsOverlap(bounds, this.paddedTileBounds(box, scale))) continue;
+        this.paintOpIntoTile(tile, op, box);
+      }
+    } finally {
+      endInkOpBatch();
     }
   }
 
