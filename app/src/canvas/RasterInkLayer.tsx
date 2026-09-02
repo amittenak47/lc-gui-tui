@@ -81,6 +81,8 @@ import {
   simplifyModulatedInkPoints,
   SIMPLIFY_MODULATED_FRACTION,
   smoothInkPoints,
+  smoothLiveInkPoints,
+  type LiveSmoothCache,
   type InkSmoothingMode,
 } from "./inkSmoothing";
 import { WHEEL_OPEN_MS } from "../util/gesture";
@@ -244,6 +246,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const liveRef = useRef<InkOp | null>(null);
     /** Last live point count painted — bookkeeping for callers, not a paint-from index. */
     const liveDrawnIndexRef = useRef(0);
+    const liveSmoothCacheRef = useRef<LiveSmoothCache | null>(null);
     const drawingRef = useRef(false);
     /**
      * The one pointer the open stroke belongs to.
@@ -1007,12 +1010,18 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const live = liveRef.current;
       const raw = liveRawPointsRef.current;
       if (!live || live.kind !== "draw" || !raw || !liveReshapeActive()) return false;
-      live.points = smoothInkPoints(
+      // Tidy near the pen only. Re-smoothing the whole buffer every paint moved
+      // settled ink by better than a third of a nib per frame at full strength,
+      // so the finished part of the stroke shimmered while you wrote. The cache
+      // is a speed-up; it invalidates itself on the raw buffer's identity.
+      const reshaped = smoothLiveInkPoints(
         raw,
         smoothingRef.current,
         inkLineWidth(live.baseWidth, 0, false),
-        0,
+        liveSmoothCacheRef.current,
       );
+      live.points = reshaped.points;
+      liveSmoothCacheRef.current = reshaped.cache;
       return true;
     }, [liveReshapeActive]);
 
