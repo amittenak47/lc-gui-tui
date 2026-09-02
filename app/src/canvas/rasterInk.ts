@@ -2358,6 +2358,22 @@ function polylineArcLengths(points: readonly { x: number; y: number }[]): Float6
   return s;
 }
 
+/**
+ * First index of the polyline point closest to `at`.
+ *
+ * The axis tests are a pruning bound, not an approximation: neither |dx| nor
+ * |dy| can exceed the distance, so a point failing one of them cannot beat the
+ * incumbent and the `Math.hypot` that would have proved it is dead work. The
+ * surviving comparison is still the exact hypot, in the original scan order,
+ * under the original strict `<` — so the index returned is the one the plain
+ * walk returned, ties and all.
+ *
+ * This matters because pooling calls it once per blot halt per paint, and a
+ * writer who keeps pausing keeps adding halts. The bound bites hard here
+ * because the query point is a recorded pen sample and so lies *on* the
+ * polyline: `bestD` collapses to about zero as soon as the scan reaches it,
+ * after which the rest of the stroke is rejected on two compares each.
+ */
 function nearestPolylineIndex(
   points: readonly { x: number; y: number }[],
   at: { x: number; y: number },
@@ -2365,13 +2381,41 @@ function nearestPolylineIndex(
   let best = 0;
   let bestD = Infinity;
   for (let i = 0; i < points.length; i++) {
-    const d = Math.hypot(points[i].x - at.x, points[i].y - at.y);
+    const dx = points[i].x - at.x;
+    if (dx >= bestD || dx <= -bestD) continue;
+    const dy = points[i].y - at.y;
+    if (dy >= bestD || dy <= -bestD) continue;
+    const d = Math.hypot(dx, dy);
     if (d < bestD) {
       bestD = d;
       best = i;
     }
   }
   return best;
+}
+
+/** First index with `arc[i] >= v`; `arc` is non-decreasing by construction. */
+function lowerBoundArc(arc: Float64Array, v: number): number {
+  let lo = 0;
+  let hi = arc.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arc[mid] < v) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** First index with `arc[i] > v`. */
+function upperBoundArc(arc: Float64Array, v: number): number {
+  let lo = 0;
+  let hi = arc.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (arc[mid] <= v) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 /**
@@ -2395,6 +2439,18 @@ export function applyInkPoolingAtEnds(
   const richAt = new Float64Array(out.length);
   const arc = polylineArcLengths(points);
 
+  /*
+   * The falloff is exactly zero past `radius`, and the distance it measures is
+   * along the arc, which only increases. So the vertices this can actually
+   * write to are a contiguous band around the origin, and the walk outside it
+   * was computing `w = 0` to fail `w > target[index]` against a target that is
+   * never negative. Seeking the band's edges instead leaves the writes, their
+   * order, and their values identical.
+   *
+   * Searching on `max(radius, 1e-6)` keeps the degenerate radius branch of
+   * poolingFalloff inside the band — a slightly wider search is still exact,
+   * a narrower one would not be.
+   */
   const paintAlong = (
     at: { x: number; y: number },
     amount: number,
@@ -2405,7 +2461,10 @@ export function applyInkPoolingAtEnds(
     const g = clamp01(amount);
     if (g < 1e-6) return;
     const origin = nearestPolylineIndex(points, at);
-    for (let index = 0; index < points.length; index++) {
+    const span = Math.max(radius, 1e-6);
+    const from = lowerBoundArc(arc, arc[origin] - span);
+    const to = Math.min(upperBoundArc(arc, arc[origin] + span), target.length);
+    for (let index = from; index < to; index++) {
       const dist = Math.abs(arc[index] - arc[origin]);
       const w = poolingFalloff(dist, radius, plateau) * g;
       if (w > target[index]) target[index] = w;
