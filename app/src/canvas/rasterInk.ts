@@ -2695,7 +2695,24 @@ export function applyInkPoolingAtEnds(
   const blotBlend = resolveSpeedBlotBlend(op);
   if (blotBlend < 1e-3 || styles.length === 0 || points.length === 0) return styles;
 
-  const out = styles.map((style) => ({ ...style }));
+  /*
+   * Share every style the pooling does not touch.
+   *
+   * Pooling writes only inside the bands around the halts and the two ends, so
+   * on a long stroke the overwhelming majority of vertices come out exactly as
+   * they went in -- and densifying can put tens of thousands of vertices in
+   * here. Copying all of them to modify a few hundred was the single largest
+   * cost in a live frame. The array is still a copy, so callers cannot write
+   * through to the input; only the entries that change are cloned.
+   */
+  const out = styles.slice();
+  const own = (index: number): InkStrokeStyle => {
+    const cur = out[index];
+    if (cur !== styles[index]) return cur;
+    const copy = { ...cur };
+    out[index] = copy;
+    return copy;
+  };
   const strokePts = op.points;
   const nib = nibWidth(op);
   const growAt = new Float64Array(out.length);
@@ -2776,22 +2793,31 @@ export function applyInkPoolingAtEnds(
 
   for (let index = 0; index < out.length; index++) {
     const growT = growAt[index];
+    /*
+     * Nothing was painted here, so nothing can come of it: with no growth and
+     * no end floor the pool is zero, the width gain is one, and the vertex
+     * leaves exactly as it arrived. Densifying can put tens of thousands of
+     * vertices through this loop for the sake of the few hundred inside the
+     * bands, and the per-point pressure lookup below is not free.
+     */
+    if (growT < 1e-6 && richAt[index] < 1e-6) continue;
     const at = points[index];
     const slowness = at.slowness ?? INK_SLOWNESS_NEUTRAL;
     const pressureAmt = blotPressureAmt(op, at);
     let poolT = growT > 1e-6 ? blotRichnessT(growT, blotBlend, slowness, pressureAmt) : 0;
     if (richAt[index] > poolT) poolT = richAt[index] * clamp01(pressureAmt);
-    if (poolT > 1e-6) out[index].blotPool = poolT;
+    if (poolT > 1e-6) own(index).blotPool = poolT;
     if (growT < 1e-6) continue;
-    out[index].blotGrow = growT;
-    out[index].lineWidth *= inkPoolingWidthGain(growT, blotBlend, 1);
+    const style = own(index);
+    style.blotGrow = growT;
+    style.lineWidth *= inkPoolingWidthGain(growT, blotBlend, 1);
     // A hold is wet. Snapping dryGain off for every vertex in the envelope
     // left a washed trail next to a fully-wet plateau: discrete red blocks
     // when drying is also on. Lerp with growT so the falloff blends.
-    const dry = out[index].dryGain ?? 1;
+    const dry = style.dryGain ?? 1;
     const wet = dry + (1 - dry) * growT;
-    if (wet < 1 - 1e-3) out[index].dryGain = wet;
-    else delete out[index].dryGain;
+    if (wet < 1 - 1e-3) style.dryGain = wet;
+    else delete style.dryGain;
   }
 
   return out;
