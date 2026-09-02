@@ -1618,6 +1618,9 @@ export function fillInkRibbon(
 /** Cap a hi-res wash scratch so a page-sized doodle cannot allocate a 16k canvas. */
 const RIBBON_SCRATCH_MAX_PX = 8192;
 
+/** What the shared ribbon scratch currently holds, for reuse inside a batch. */
+let ribbonScratchKey: readonly unknown[] | null = null;
+
 function paintOpaqueRibbonThenAlpha(
   ctx: CanvasRenderingContext2D,
   left: readonly { x: number; y: number }[],
@@ -1629,6 +1632,7 @@ function paintOpaqueRibbonThenAlpha(
   pad = 4,
   fills?: readonly string[],
   pixelScale = 0,
+  contentKey?: readonly unknown[],
 ): boolean {
   if (typeof ctx.drawImage !== "function") return false;
   const { minX, minY, maxX, maxY } = ribbonSideBounds(left, right);
@@ -1657,16 +1661,43 @@ function paintOpaqueRibbonThenAlpha(
   const sctx = scratch.getContext("2d");
   if (!sctx) return false;
 
-  sctx.setTransform(1, 0, 0, 1, 0, 0);
-  // Full clear: a reused larger scratch leaves neighbour pixels, and a smoothed
-  // blit samples them as a faint AABB around the stroke.
-  sctx.clearRect(0, 0, scratch.width, scratch.height);
-  sctx.imageSmoothingEnabled = false;
-  sctx.globalAlpha = 1;
-  sctx.fillStyle = ctx.fillStyle;
-  sctx.setTransform(sx, 0, 0, sy, -originX * sx, -originY * sy);
-  fillInkRibbonQuads(sctx, left, right, fills);
-  if (stampJoins) stampJoins(sctx);
+  /*
+   * The scratch holds the ribbon, and the ribbon does not depend on where it is
+   * being blitted — only the drawImage below does. Committing a stroke re-ran
+   * this whole render once per tile to produce byte-identical pixels every
+   * time, which is the other half of the pen-up freeze.
+   *
+   * `contentKey` is supplied by callers whose inputs are identity-stable across
+   * a batch. Reuse needs an open batch *and* a matching key, and the key
+   * carries the scratch itself along with every value written into it, so a
+   * reallocation or an interleaved ribbon invalidates it. One slot, not a list:
+   * anything else rendering into the shared scratch overwrites the entry, which
+   * is exactly the staleness that has to be caught.
+   */
+  const scratchKey =
+    inkOpBatch && contentKey
+      ? [scratch, sw, sh, sx, sy, originX, originY, left, right, fills, ctx.fillStyle,
+         Boolean(stampJoins), ...contentKey]
+      : null;
+  const reusable =
+    scratchKey !== null &&
+    ribbonScratchKey !== null &&
+    ribbonScratchKey.length === scratchKey.length &&
+    ribbonScratchKey.every((v, i) => Object.is(v, scratchKey[i]));
+
+  if (!reusable) {
+    sctx.setTransform(1, 0, 0, 1, 0, 0);
+    // Full clear: a reused larger scratch leaves neighbour pixels, and a smoothed
+    // blit samples them as a faint AABB around the stroke.
+    sctx.clearRect(0, 0, scratch.width, scratch.height);
+    sctx.imageSmoothingEnabled = false;
+    sctx.globalAlpha = 1;
+    sctx.fillStyle = ctx.fillStyle;
+    sctx.setTransform(sx, 0, 0, sy, -originX * sx, -originY * sy);
+    fillInkRibbonQuads(sctx, left, right, fills);
+    if (stampJoins) stampJoins(sctx);
+    ribbonScratchKey = scratchKey;
+  }
 
   const prevAlpha = ctx.globalAlpha;
   const prevSmooth = ctx.imageSmoothingEnabled;
@@ -2740,11 +2771,13 @@ let inkOpBatch: InkBatchEntry[] | null = null;
 /** Open a reuse window around repeated draws of one unchanging op. */
 export function beginInkOpBatch(): void {
   inkOpBatch = [];
+  ribbonScratchKey = null;
 }
 
 /** Close it. Always pair from a `finally` so a throw cannot leak the window. */
 export function endInkOpBatch(): void {
   inkOpBatch = null;
+  ribbonScratchKey = null;
 }
 
 function batched<T>(tag: string, args: readonly unknown[], compute: () => T): T {
@@ -2971,6 +3004,10 @@ function drawRibbonStrokeFrom(
     pad,
     fills,
     pixelScale,
+    // Everything `stampHardExtras` reads. All identity-stable within a batch,
+    // so a hit means the closure would have drawn the same marks.
+    [op, prepared.points, prepared.styles, pixelScale, capHead, fromIndex,
+     tipClusterAt, slice, points, color, maxAlpha, pad],
   );
 
   if (!stamped) {
