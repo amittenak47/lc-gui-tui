@@ -2793,7 +2793,14 @@ function paintContactDisc(
     );
   } else {
     ctx.globalAlpha = last.alpha;
-    paintInkTerminalCap(ctx, contact, radius, 0, 1);
+    const heading = firstStrokeOutward(points, radius) ?? hashedHeading(contact, CAP_SALT_HEAD);
+    paintInkTerminalCap(
+      ctx,
+      contact,
+      radius,
+      heading,
+      headCapRoundness(op, points, contact, contact.pressure),
+    );
   }
   ctx.globalAlpha = 1;
 }
@@ -2808,6 +2815,7 @@ function paintOpCap(
   salt: number,
   pressure: number,
   alpha: number,
+  roundness?: number,
 ): void {
   const prevAlpha = ctx.globalAlpha;
   ctx.globalAlpha = alpha;
@@ -2816,7 +2824,7 @@ function paintOpCap(
     at,
     radius,
     outward,
-    inkCapRoundness(origin, salt, pressure, op.pressureSensitive),
+    roundness ?? inkCapRoundness(origin, salt, pressure, op.pressureSensitive),
   );
   ctx.globalAlpha = prevAlpha;
   const grain = resolveGrain(op);
@@ -3114,12 +3122,14 @@ function drawRibbonStrokeFrom(
         CAP_SALT_HEAD,
         origin.pressure,
         1,
+        // Same blend the contact disc uses, so the two agree where they meet.
+        headCapRoundness(op, points, origin, origin.pressure),
       );
       /*
        * A hold at the start leaves a blot, and the stroke should look like it
        * ran out of that blot rather than starting cleanly. The terminal cap
        * alone is a nib mark -- heading aligned, and below
-       * `CAP_CIRCLE_ROUNDNESS` frankly chisel shaped -- so a pool the writer
+       * at a low roundness frankly chisel shaped -- so a pool the writer
        * just watched settle was replaced by the mark of a stroke that never
        * paused.
        *
@@ -3295,10 +3305,49 @@ function paintedWidth(lineWidth: number, pixelScale: number): number {
   return Math.max(lineWidth, INK_MIN_DEVICE_PX / pixelScale);
 }
 
+/**
+ * Roundness for the mark at a stroke's head.
+ *
+ * A stroke short enough to be disc-primary is drawn by `paintContactDisc` as a
+ * round contact; once it grows past that test the ribbon draws a terminal cap
+ * at the nib's own hashed roundness, which reaches only `radius x roundness`
+ * past the head. Switching between them contracted the mark by about a quarter
+ * of a nib in one frame -- the flash -- and it showed on some strokes and not
+ * others because a nib whose hashed roundness is already near 1 was drawing a
+ * circle either way.
+ *
+ * Blending from round to the nib's own shape over the first couple of nib
+ * widths means both branches agree wherever they meet, and the nib's character
+ * arrives as the stroke becomes long enough to have a direction at all.
+ */
+function headCapRoundness(
+  op: InkDrawOp,
+  points: readonly ScenePoint[],
+  origin: { x: number; y: number },
+  pressure: number,
+): number {
+  const nib = nibWidth(op);
+  const hashed = inkCapRoundness(origin, CAP_SALT_HEAD, pressure, op.pressureSensitive);
+  if (points.length < 2 || nib < 1e-6) return 1;
+  const t = clamp01(strokeClusterExtentApprox(points) / (nib * 2));
+  return 1 + (hashed - 1) * t;
+}
+
+/** Diagonal of the stroke's bounding box. */
+function strokeClusterExtentApprox(points: readonly ScenePoint[]): number {
+  let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y;
+  for (let i = 1; i < points.length; i++) {
+    const q = points[i];
+    if (q.x < minX) minX = q.x;
+    if (q.x > maxX) maxX = q.x;
+    if (q.y < minY) minY = q.y;
+    if (q.y > maxY) maxY = q.y;
+  }
+  return Math.hypot(maxX - minX, maxY - minY);
+}
+
 const CAP_SALT_HEAD = 1;
 const CAP_SALT_TAIL = 2;
-/** Above this the cap is a circle; below it is a heading-aligned superellipse. */
-const CAP_CIRCLE_ROUNDNESS = 0.82;
 
 function hash01(x: number, y: number, salt: number): number {
   const qx = Math.round(x * 4);
@@ -3385,7 +3434,15 @@ export function paintInkTerminalCap(
 ): void {
   if (radius < 1e-6) return;
   const t = clamp01(roundness);
-  if (t >= CAP_CIRCLE_ROUNDNESS) {
+  /*
+   * The superellipse below converges on a circle as t approaches 1 -- n goes to
+   * 2 and the outward extent to the full radius -- so the early-out only needs
+   * to catch the exact circle. Taking it at 0.82, as it used to, made
+   * the shape jump: at t just under it the cap reached 0.82 of a radius past
+   * the tip, and at t just over it reached a full one. Any code that moves
+   * roundness across that value saw the terminal pop.
+   */
+  if (t >= 0.999) {
     ctx.beginPath();
     ctx.arc(at.x, at.y, radius, 0, Math.PI * 2);
     ctx.fill();
