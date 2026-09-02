@@ -192,8 +192,26 @@ export function inkSlowness(pxPerMs: number): number {
   return 0.5 - 0.5 * t;
 }
 
+/**
+ * How fast the speed estimate may fall, as against how fast it may rise.
+ *
+ * Speed ink reads a slower nib as a wider mark, so the estimate falling is the
+ * mark growing. Symmetric smoothing let one stationary sample carry the
+ * estimate most of the way down, and a pen resting for a few samples before it
+ * sets off -- which is what the start of a stroke looks like -- painted a mark
+ * four times its settled width for a frame or two before collapsing back. That
+ * is the flash at the start of a stroke.
+ *
+ * Deposition is not instant: a nib pausing puts ink down over time, while a nib
+ * setting off leaves the old wet patch behind at once. Letting the estimate
+ * fall slowly and rise quickly matches that, and a genuine hold still reaches
+ * full width -- it just takes holding rather than hesitating.
+ */
+const SPEED_SMOOTHING_SLOWING = 0.12;
+
 export function smoothSpeed(previous: number, sample: number): number {
-  return previous + (sample - previous) * SPEED_SMOOTHING;
+  const rate = sample < previous ? SPEED_SMOOTHING_SLOWING : SPEED_SMOOTHING;
+  return previous + (sample - previous) * rate;
 }
 
 /**
