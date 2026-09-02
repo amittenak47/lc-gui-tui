@@ -1151,6 +1151,64 @@ export function ribbonSides(
 
 /** Drop consecutive samples closer than ~0.2× local half-width; keep tip and max slowness. */
 const RIBBON_COALESCE_HALF_FRAC = 0.2;
+
+/**
+ * Furthest a dropped sample may pull the ribbon's spine off course, in device
+ * pixels.
+ *
+ * Distance alone is the wrong test for whether a vertex is redundant. On a
+ * straight run a close sample carries nothing and should go; on a bend the
+ * same sample *is* the bend. Because the distance threshold scales with the
+ * stroke's half-width, the old test discarded most aggressively exactly where
+ * strokes are widest and their corners most visible -- which is why a thick
+ * curve came out as a chain of flat plates rather than a curve.
+ *
+ * Sub-pixel, so a merge that survives this test cannot be seen. Densifying
+ * afterwards cannot undo a bad merge here: it interpolates along the chord, so
+ * every vertex it adds back is collinear with its neighbours and restores
+ * width detail only, never angle.
+ */
+const RIBBON_COALESCE_SAG_PX = 0.35;
+
+/** Perpendicular distance from `cur` to the chord `from`->`to`. */
+function ribbonSag(
+  from: { x: number; y: number },
+  cur: { x: number; y: number },
+  to: { x: number; y: number },
+): number {
+  const ax = to.x - from.x;
+  const ay = to.y - from.y;
+  const len = Math.hypot(ax, ay);
+  if (len < 1e-9) return Math.hypot(cur.x - from.x, cur.y - from.y);
+  return Math.abs((cur.x - from.x) * ay - (cur.y - from.y) * ax) / len;
+}
+
+/** Longest run of samples that may collapse into one vertex. */
+const RIBBON_COALESCE_RUN_MAX = 12;
+
+/**
+ * Would dropping everything in `(anchor, next)` keep the spine within `limit`?
+ *
+ * Measured from the run's *original* anchor rather than from the previous kept
+ * vertex, because merging moves that vertex: check each step against where the
+ * spine currently is and the small errors compound, so a long run of
+ * individually-invisible merges walks the curve off course. Anchoring the test
+ * makes the bound hold for the run as a whole.
+ */
+function ribbonRunWithin(
+  points: readonly ScenePoint[],
+  anchor: number,
+  through: number,
+  next: { x: number; y: number },
+  limit: number,
+): boolean {
+  if (through - anchor >= RIBBON_COALESCE_RUN_MAX) return false;
+  const from = points[anchor];
+  for (let i = anchor + 1; i <= through; i++) {
+    if (ribbonSag(from, points[i], next) > limit) return false;
+  }
+  return true;
+}
 /** Insert midpoints when a chord exceeds ~0.28× average half-width. */
 const RIBBON_DENSIFY_HALF_FRAC = 0.28;
 /** Trailing tip cluster within this × nib stays a disc, not a ribbon knot. */
@@ -1229,6 +1287,10 @@ export function coalesceRibbonPoints(
 
   const outPts: ScenePoint[] = [points[0]];
   const outStyles: InkStrokeStyle[] = [styles[0]];
+  // Original index the current output vertex started from, so the sag test
+  // below can measure against where the run began rather than where merging
+  // has since dragged it.
+  let runStart = 0;
   for (let index = 1; index < points.length - 1; index++) {
     const prev = outPts[outPts.length - 1];
     const prevStyle = outStyles[outStyles.length - 1];
@@ -1236,9 +1298,12 @@ export function coalesceRibbonPoints(
     const curStyle = styles[index];
     const half = paintedWidth(curStyle.lineWidth, pixelScale) / 2;
     const minDist = Math.max(0.5, half * RIBBON_COALESCE_HALF_FRAC);
+    const sagLimit =
+      pixelScale > 0 ? RIBBON_COALESCE_SAG_PX / pixelScale : RIBBON_COALESCE_SAG_PX;
     if (
       Math.hypot(cur.x - prev.x, cur.y - prev.y) < minDist &&
-      ribbonWashJump(prevStyle, curStyle) < 0.03
+      ribbonWashJump(prevStyle, curStyle) < 0.03 &&
+      ribbonRunWithin(points, runStart, index, points[index + 1], sagLimit)
     ) {
       const merged = mergeRibbonVertex(prev, prevStyle, cur, curStyle);
       outPts[outPts.length - 1] = merged.point;
@@ -1247,6 +1312,7 @@ export function coalesceRibbonPoints(
     }
     outPts.push(cur);
     outStyles.push(curStyle);
+    runStart = index;
   }
 
   const last = points[points.length - 1];
@@ -1955,15 +2021,28 @@ export function blotTicksToFull(blotBlend: number): number {
   return Math.max(48, Math.round(96 - 48 * clamp01(blotBlend)));
 }
 
-function easeOutBlotT(ticks: number, blotBlend: number): number {
+/**
+ * How far into its growth a hold of `ticks` is.
+ *
+ * This was ease-*out*, `1 - (1-t)^2`, which is the most front-loaded curve
+ * there is: at 32ms a tick and a 53 tick budget, three quarters of the pool
+ * landed inside the first 0.85s of a 1.7s hold. A pause read as the ink
+ * lunging rather than settling.
+ *
+ * A nib does the opposite. It wets paper slowly while the fibres take up ink,
+ * then saturates and stops. Smoothstep has that shape at both ends, and it
+ * spans the same tick budget, so nothing about `blotTicksToFull` or the timer
+ * changes -- only how the growth is distributed across it.
+ */
+function blotGrowthT(ticks: number, blotBlend: number): number {
   if (clamp01(blotBlend) < 1e-3) return 0;
   const t = clamp01(Math.max(0, ticks) / Math.max(1, blotTicksToFull(blotBlend)));
-  return 1 - (1 - t) * (1 - t);
+  return t * t * (3 - 2 * t);
 }
 
 /** Hold-tick growth. Independent of how many points smoothing kept. */
 export function blotGrowTFromTicks(ticks: number, blotBlend: number): number {
-  return easeOutBlotT(ticks, blotBlend);
+  return blotGrowthT(ticks, blotBlend);
 }
 
 /**
@@ -1980,7 +2059,7 @@ export function dwellBlotGrowT(
   if (tipRadius < 1e-6) return 0;
   if (clamp01(blotBlend) < 1e-3) return 0;
   if (!isDiscPrimaryPath(points, tipRadius * 2)) return 0;
-  return easeOutBlotT(points.length - 1, blotBlend);
+  return blotGrowthT(points.length - 1, blotBlend);
 }
 
 function resolveBlotTipGrow(
