@@ -2628,6 +2628,117 @@ const NEAREST_SEED_STRIDE = 32;
  * lowest index attaining the minimum — exactly what the plain `d < bestD` walk
  * returned, ties included.
  */
+/** Below this many samples a linear scan beats building a grid. */
+const NEAREST_GRID_MIN_POINTS = 96;
+
+/**
+ * Uniform grid over a polyline so several nearest-point queries share one
+ * pass over it.
+ *
+ * Pooling asks for the nearest sample to every blot halt, once per paint, and
+ * even the seeded scan is a full walk per halt. A signature has dozens of
+ * halts and a densified stroke tens of thousands of samples, so that product
+ * was the single largest item in a late frame. Bucketing the samples once is
+ * linear; each query then examines a handful of cells.
+ *
+ * Built as a counting sort into flat typed arrays rather than a map of
+ * arrays: no per-cell allocation, and because samples are placed in index
+ * order every bucket is already ascending, which the tie-break relies on.
+ */
+export interface PointGrid {
+  minX: number;
+  minY: number;
+  cell: number;
+  cols: number;
+  rows: number;
+  starts: Int32Array;
+  order: Int32Array;
+}
+
+export function buildPointGrid(points: readonly { x: number; y: number }[]): PointGrid | null {
+  const n = points.length;
+  if (n < NEAREST_GRID_MIN_POINTS) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const q = points[i];
+    if (q.x < minX) minX = q.x;
+    if (q.x > maxX) maxX = q.x;
+    if (q.y < minY) minY = q.y;
+    if (q.y > maxY) maxY = q.y;
+  }
+  if (!Number.isFinite(minX + minY + maxX + maxY)) return null;
+  const w = Math.max(maxX - minX, 1e-6);
+  const h = Math.max(maxY - minY, 1e-6);
+  // About two samples per occupied cell along a path; the sqrt keeps the
+  // grid square-ish however the stroke is proportioned.
+  const cell = Math.max(Math.sqrt((w * h) / n) * 1.5, Math.max(w, h) / 512, 1e-6);
+  const cols = Math.max(1, Math.ceil(w / cell) + 1);
+  const rows = Math.max(1, Math.ceil(h / cell) + 1);
+  const cellOf = (q: { x: number; y: number }) =>
+    Math.min(rows - 1, Math.floor((q.y - minY) / cell)) * cols +
+    Math.min(cols - 1, Math.floor((q.x - minX) / cell));
+  const counts = new Int32Array(cols * rows + 1);
+  for (let i = 0; i < n; i++) counts[cellOf(points[i]) + 1]++;
+  for (let c = 0; c < cols * rows; c++) counts[c + 1] += counts[c];
+  const starts = counts;
+  const fill = starts.slice();
+  const order = new Int32Array(n);
+  for (let i = 0; i < n; i++) order[fill[cellOf(points[i])]++] = i;
+  return { minX, minY, cell, cols, rows, starts, order };
+}
+
+/**
+ * Same answer as {@link nearestPolylineIndex} -- the lowest index attaining
+ * the minimum distance -- found by expanding rings of cells outward from the
+ * query. Ring r is at least (r-1) cells away from any point of the query's own
+ * cell, so once r*cell exceeds the best distance no unexamined sample can tie
+ * it, let alone beat it, and the walk stops.
+ */
+export function nearestOnGrid(
+  points: readonly { x: number; y: number }[],
+  grid: PointGrid,
+  at: { x: number; y: number },
+): number {
+  const gx = Math.floor((at.x - grid.minX) / grid.cell);
+  const gy = Math.floor((at.y - grid.minY) / grid.cell);
+  if (gx < -1 || gy < -1 || gx > grid.cols || gy > grid.rows) {
+    return nearestPolylineIndex(points, at);
+  }
+  const cx = Math.min(grid.cols - 1, Math.max(0, gx));
+  const cy = Math.min(grid.rows - 1, Math.max(0, gy));
+  let best = 0;
+  let bestD = Infinity;
+  const maxRing = Math.max(grid.cols, grid.rows);
+  for (let r = 0; r <= maxRing; r++) {
+    if (r > 0 && (r - 1) * grid.cell > bestD) break;
+    const y0 = cy - r;
+    const y1 = cy + r;
+    const x0 = cx - r;
+    const x1 = cx + r;
+    for (let y = y0; y <= y1; y++) {
+      if (y < 0 || y >= grid.rows) continue;
+      const onEdgeRow = y === y0 || y === y1;
+      for (let x = x0; x <= x1; x++) {
+        if (x < 0 || x >= grid.cols) continue;
+        if (!onEdgeRow && x !== x0 && x !== x1) continue;
+        const c = y * grid.cols + x;
+        for (let k = grid.starts[c]; k < grid.starts[c + 1]; k++) {
+          const i = grid.order[k];
+          const d = Math.hypot(points[i].x - at.x, points[i].y - at.y);
+          if (d < bestD || (d === bestD && i < best)) {
+            bestD = d;
+            best = i;
+          }
+        }
+      }
+    }
+  }
+  return best;
+}
+
 function nearestPolylineIndex(
   points: readonly { x: number; y: number }[],
   at: { x: number; y: number },
@@ -2718,6 +2829,9 @@ export function applyInkPoolingAtEnds(
   const growAt = new Float64Array(out.length);
   const richAt = new Float64Array(out.length);
   const arc = polylineArcLengths(points);
+  const grid = buildPointGrid(points);
+  const nearest = (at: { x: number; y: number }) =>
+    grid ? nearestOnGrid(points, grid, at) : nearestPolylineIndex(points, at);
 
   /*
    * The falloff is exactly zero past `radius`, and the distance it measures is
@@ -2740,7 +2854,7 @@ export function applyInkPoolingAtEnds(
   ) => {
     const g = clamp01(amount);
     if (g < 1e-6) return;
-    const origin = nearestPolylineIndex(points, at);
+    const origin = nearest(at);
     const span = Math.max(radius, 1e-6);
     const from = lowerBoundArc(arc, arc[origin] - span);
     const to = Math.min(upperBoundArc(arc, arc[origin] + span), target.length);
