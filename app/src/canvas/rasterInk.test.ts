@@ -1335,8 +1335,11 @@ describe("inkDiscRadii / dwell growth", () => {
     expect(few).toBeLessThan(0.5);
     expect(many).toBeGreaterThan(few);
     expect(many).toBeLessThan(1);
-    expect(blotTicksToFull(1)).toBeGreaterThanOrEqual(48);
-    expect(blotTicksToFull(1)).toBeLessThan(120);
+    // Bounds on the fill budget. Raised deliberately: at the old ceiling a
+    // pool filled in 1.5s, which read as ink jumping rather than soaking in.
+    expect(blotTicksToFull(1)).toBeGreaterThanOrEqual(120);
+    expect(blotTicksToFull(1)).toBeLessThanOrEqual(blotTicksToFull(0));
+    expect(blotTicksToFull(0)).toBeLessThanOrEqual(240);
     expect(dwellBlotGrowT(points([0, 0], [0.01, 0]), 4, 0)).toBe(0);
     expect(blotGrowTFromTicks(0, 1)).toBe(0);
     expect(blotGrowTFromTicks(blotTicksToFull(1), 1)).toBeCloseTo(1);

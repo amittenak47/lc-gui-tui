@@ -691,6 +691,13 @@ export interface InkStrokeStyle {
   blotPool?: number;
   /** 1 = wet, lower = Ink Drying wash. Baked into ribbon RGB so the blit can stay opaque. */
   dryGain?: number;
+  /**
+   * 0-1 pooling growth applied at this vertex.
+   *
+   * The widening is already folded into `lineWidth`; this records how much, so
+   * a terminal can tell a pooled end from a plain one and mark it accordingly.
+   */
+  blotGrow?: number;
 }
 
 /** Width + alpha for one sample along a stroke. */
@@ -2739,6 +2746,7 @@ export function applyInkPoolingAtEnds(
     if (richAt[index] > poolT) poolT = richAt[index] * clamp01(pressureAmt);
     if (poolT > 1e-6) out[index].blotPool = poolT;
     if (growT < 1e-6) continue;
+    out[index].blotGrow = growT;
     out[index].lineWidth *= inkPoolingWidthGain(growT, blotBlend, 1);
     // A hold is wet. Snapping dryGain off for every vertex in the envelope
     // left a washed trail next to a fully-wet plateau: discrete red blocks
@@ -3092,20 +3100,47 @@ function drawRibbonStrokeFrom(
       const radius = paintedWidth(prepared.styles[0].lineWidth, pixelScale) / 2;
       const origin = points[0];
       if (fills?.[0]) scratchCtx.fillStyle = fills[0];
-      const heading =
-        firstStrokeOutward(prepared.points, radius) ??
-        hashedHeading(origin, CAP_SALT_HEAD);
-      paintOpCap(
-        scratchCtx,
-        op,
-        prepared.points[0],
-        radius,
-        heading,
-        origin,
-        CAP_SALT_HEAD,
-        origin.pressure,
-        1,
-      );
+      const headGrow = prepared.styles[0].blotGrow ?? 0;
+      if (headGrow > INK_HEAD_BLOT_MIN_GROW) {
+        /*
+         * A hold at the start leaves a blot, and the stroke should look like it
+         * ran out of that blot. The terminal cap is a nib mark -- heading
+         * aligned, and below `CAP_CIRCLE_ROUNDNESS` frankly chisel shaped --
+         * so stamping one over a pool replaced the blot the writer had just
+         * watched form with the mark of a stroke that started cleanly.
+         *
+         * A disc at the same pooled radius is a superset of that cap, and the
+         * silhouette is opaque and blitted once, so it unions with the ribbon
+         * rather than compositing over it: no seam, no darkened overlap, and
+         * the trail reads as leaving the blot.
+         */
+        paintInkDisc(
+          scratchCtx,
+          prepared.points[0],
+          prepared.styles[0].lineWidth,
+          1,
+          pixelScale,
+          0,
+          color,
+          false,
+          1,
+        );
+      } else {
+        const heading =
+          firstStrokeOutward(prepared.points, radius) ??
+          hashedHeading(origin, CAP_SALT_HEAD);
+        paintOpCap(
+          scratchCtx,
+          op,
+          prepared.points[0],
+          radius,
+          heading,
+          origin,
+          CAP_SALT_HEAD,
+          origin.pressure,
+          1,
+        );
+      }
     }
     if (capEnd && tipClusterAt >= slice.length) {
       // Same round cap as speed ink, at the already-flared half-width. Do not
@@ -3251,6 +3286,9 @@ function paintedWidth(lineWidth: number, pixelScale: number): number {
   if (pixelScale <= 0) return lineWidth;
   return Math.max(lineWidth, INK_MIN_DEVICE_PX / pixelScale);
 }
+
+/** Pooling growth at a terminal above which it is drawn as a blot, not a nib mark. */
+const INK_HEAD_BLOT_MIN_GROW = 0.12;
 
 const CAP_SALT_HEAD = 1;
 const CAP_SALT_TAIL = 2;
