@@ -2039,8 +2039,21 @@ function sealDiscCenter<T extends { x: number; y: number }>(
 }
 
 /** Samples to reach full blot pool. ~1.5–3s at a 32ms tick — slower than speed ink. */
+/**
+ * Ticks of holding that fill a pool, at 32ms a tick.
+ *
+ * A stronger blend still fills sooner -- that is what the dial means -- but the
+ * whole range was too quick. At the top it filled in 1.5s, which reads as the
+ * ink jumping rather than soaking in, and that is before the growth curve is
+ * applied. Two and a half times the budget puts a full pool at just under four
+ * seconds of deliberate holding, which is about how long you would have to rest
+ * a real nib to get one.
+ *
+ * This is the timing dial. The curve in {@link blotGrowthT} decides how the
+ * growth is spread across it; this decides how long it lasts.
+ */
 export function blotTicksToFull(blotBlend: number): number {
-  return Math.max(48, Math.round(96 - 48 * clamp01(blotBlend)));
+  return Math.max(120, Math.round(240 - 120 * clamp01(blotBlend)));
 }
 
 /**
