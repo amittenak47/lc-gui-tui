@@ -2488,23 +2488,42 @@ function paintTexturedDisc(
   const grain = resolveGrain(op);
   const blotBlend = resolveSpeedBlotBlend(op);
   const pressureAmt = blotPressureAmt(op, center);
-  paintInkDisc(
-    ctx,
-    center,
-    lineWidth,
-    alpha,
-    pixelScale,
-    blotBlend,
-    op.color,
-    false,
-    growT,
-    pressureAmt,
-    dryGain,
-  );
-  if (grain < 1e-3) return;
   const tipR = paintedWidth(lineWidth, pixelScale) / 2;
   const outerR = inkDiscPaintRadius(tipR, blotBlend, growT, pressureAmt, pixelScale);
-  scratchGrainInDisc(ctx, center, outerR, grain);
+  const mark = (target: CanvasRenderingContext2D, markAlpha: number) => {
+    paintInkDisc(
+      target,
+      center,
+      lineWidth,
+      markAlpha,
+      pixelScale,
+      blotBlend,
+      op.color,
+      false,
+      growT,
+      pressureAmt,
+      dryGain,
+    );
+    if (grain < 1e-3) return;
+    scratchGrainInDisc(target, center, outerR, grain);
+  };
+  /*
+   * Settle the disc and the grain scratched into it against each other before
+   * either touches the page, the way the ribbon already does. Painted straight
+   * onto the destination they composited against whatever was underneath: the
+   * overlap darkened where the ribbon in the same stroke would not, and the
+   * grain, which is `destination-out`, ate holes in ink that was already there
+   * instead of only in the disc it belongs to.
+   */
+  const bounds = {
+    minX: center.x - outerR,
+    minY: center.y - outerR,
+    maxX: center.x + outerR,
+    maxY: center.y + outerR,
+  };
+  if (paintOpaqueMarkThenAlpha(ctx, bounds, alpha, pixelScale, (sctx) => mark(sctx, 1))) return;
+  // No offscreen to be had; fall back to painting where it lands.
+  mark(ctx, alpha);
 }
 
 function prefixContactCluster(
@@ -2982,6 +3001,69 @@ function batched<T>(tag: string, args: readonly unknown[], compute: () => T): T 
   const value = compute();
   batch.push({ tag, args: args.slice(), value });
   return value;
+}
+
+/**
+ * Draw a mark into the shared scratch opaquely, then lay it down with one blit.
+ *
+ * The ribbon has always worked this way, and the disc marks did not: they
+ * painted straight onto the destination at their own alpha. Two consequences,
+ * both visible. A mark that overlaps itself -- a textured disc and the grain
+ * scratched into it, a cap meeting the trail it caps -- darkened where the
+ * ribbon in the same stroke would not, so which of the two paths drew a mark
+ * changed how it composited. And the grain is `destination-out`: on the
+ * destination it ate holes in whatever ink was already on the page underneath,
+ * rather than only in the mark it belongs to.
+ *
+ * Compositing between *different* strokes is unchanged -- the blit still lands
+ * at the mark's alpha over whatever is beneath it. What changes is that a
+ * single mark now settles its own overlaps before it touches the page.
+ */
+function paintOpaqueMarkThenAlpha(
+  ctx: CanvasRenderingContext2D,
+  bounds: SceneBounds,
+  alpha: number,
+  pixelScale: number,
+  draw: (scratch: CanvasRenderingContext2D) => void,
+): boolean {
+  if (typeof ctx.drawImage !== "function") return false;
+  const pad = 4;
+  const originX = Math.floor(bounds.minX - pad);
+  const originY = Math.floor(bounds.minY - pad);
+  const width = Math.ceil(bounds.maxX + pad) - originX;
+  const height = Math.ceil(bounds.maxY + pad) - originY;
+  if (width < 1 || height < 1) return false;
+  const scale = Math.min(
+    Math.max(1, pixelScale || 1),
+    RIBBON_SCRATCH_MAX_PX / Math.max(width, 1),
+    RIBBON_SCRATCH_MAX_PX / Math.max(height, 1),
+  );
+  const sw = Math.max(1, Math.ceil(width * scale));
+  const sh = Math.max(1, Math.ceil(height * scale));
+  const scratch = acquireRibbonScratch(sw, sh);
+  if (!scratch) return false;
+  const sctx = scratch.getContext("2d") as CanvasRenderingContext2D | null;
+  if (!sctx) return false;
+  const sx = sw / width;
+  const sy = sh / height;
+  sctx.setTransform(1, 0, 0, 1, 0, 0);
+  sctx.clearRect(0, 0, scratch.width, scratch.height);
+  sctx.imageSmoothingEnabled = false;
+  sctx.globalAlpha = 1;
+  sctx.fillStyle = ctx.fillStyle;
+  sctx.setTransform(sx, 0, 0, sy, -originX * sx, -originY * sy);
+  draw(sctx);
+  sctx.setTransform(1, 0, 0, 1, 0, 0);
+  // The scratch no longer holds the ribbon the batch memo thinks it does.
+  ribbonScratchKey = null;
+  const prevAlpha = ctx.globalAlpha;
+  const prevSmooth = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = sw + 1e-3 < width * Math.max(pixelScale, 1);
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(scratch as CanvasImageSource, 0, 0, sw, sh, originX, originY, width, height);
+  ctx.globalAlpha = prevAlpha;
+  ctx.imageSmoothingEnabled = prevSmooth;
+  return true;
 }
 
 /** Variable-width ribbon fill for speed ink — one opaque silhouette, then one alpha blit. */
