@@ -1993,6 +1993,42 @@ function resolveBlotTipGrow(
   return Math.max(stamped, dwellBlotGrowT(cluster, tipRadius, blend));
 }
 
+/**
+ * The pooling growth an open stroke is *currently showing*.
+ *
+ * There are two growth terms and they do not survive the same things.
+ * `blotTipGrow` counts hold *ticks*, so it is independent of resampling;
+ * `dwellBlotGrowT` counts surviving *points*, and live smoothing rebuilds the
+ * point list every frame and collapses a dwell cluster. The live render takes
+ * the max of the two, so a short dense hold can be shown entirely on the
+ * strength of the point term.
+ *
+ * Whatever is carried out of the gesture has to be that same max. Recording
+ * only the tick term loses every pool the point term was holding up, and the
+ * writer watches a pool they formed collapse to a bare trail the moment they
+ * move — which is the bug this exists to close.
+ *
+ * The radius here is derived from the nib rather than from the painted style,
+ * so it can be called without a viewport. It only feeds the dwell test's
+ * disc-vs-ribbon gate, which a modest difference in radius does not flip.
+ */
+export function liveInkBlotGrow(op: InkDrawOp): number {
+  const points = op.points;
+  if (points.length === 0) return 0;
+  const nib = nibWidth(op);
+  const start = trailingTipClusterStart(points, nib);
+  /*
+   * `points.length` back means there is no trailing cluster *distinct from the
+   * stroke* -- which is exactly what a hold at the very start looks like, since
+   * the cluster reaches index 0. The whole stroke is then the hold, and the
+   * disc branch of the renderer measures it that way too. Falling back to the
+   * final point instead would report no growth for the one case that has the
+   * most.
+   */
+  const cluster = start < points.length ? points.slice(start) : points;
+  return resolveBlotTipGrow(op, cluster, nib / 2);
+}
+
 /** Nearby holds of the same pause collapse into one. Scene units. */
 const BLOT_HALT_MERGE_SCENE = 0.75;
 

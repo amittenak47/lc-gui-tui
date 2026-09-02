@@ -30,6 +30,7 @@ import {
   HIGHLIGHT_WIDTH_SCALE,
   blotTicksToFull,
   blotGrowTFromTicks,
+  liveInkBlotGrow,
   stampInkBlotHalt,
   INK_HOLD_STILL_PX,
   isDiscPrimaryPath,
@@ -1606,18 +1607,32 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       ): boolean => {
         const px = Math.hypot(dx, dy) * zoom;
         if (px <= INK_HOLD_STILL_PX) return false;
-        if (live && live.kind === "draw" && (live.blotTipGrow ?? 0) > 1e-3) {
-          const at = lastPointRef.current ?? live.points[live.points.length - 1];
-          const origin = live.points[0];
-          const nib = inkLineWidth(live.baseWidth, 0, false);
-          const nearHead =
-            !!at &&
-            !!origin &&
-            Math.hypot(at.x - origin.x, at.y - origin.y) < Math.max(0.75, nib * 0.5);
-          if (at) {
-            const haltAt =
-              nearHead && origin ? { ...at, x: origin.x, y: origin.y } : at;
-            stampInkBlotHalt(live, haltAt, live.blotTipGrow ?? 0);
+        /*
+         * Carry out the pool the writer is actually looking at, not half of it.
+         *
+         * The live render sizes its pool from the larger of two growth terms,
+         * and this used to record only `blotTipGrow` — the tick-counted one.
+         * A short dense hold is shown on the strength of the *point*-counted
+         * term instead, so nothing was stamped for it, and the reset below
+         * fired anyway: the pool vanished the instant the pen moved. Reading
+         * the same value the renderer read makes what commits match what was
+         * on screen.
+         */
+        if (live && live.kind === "draw") {
+          const grow = liveInkBlotGrow(live);
+          if (grow > 1e-3) {
+            const at = lastPointRef.current ?? live.points[live.points.length - 1];
+            const origin = live.points[0];
+            const nib = inkLineWidth(live.baseWidth, 0, false);
+            const nearHead =
+              !!at &&
+              !!origin &&
+              Math.hypot(at.x - origin.x, at.y - origin.y) < Math.max(0.75, nib * 0.5);
+            if (at) {
+              const haltAt =
+                nearHead && origin ? { ...at, x: origin.x, y: origin.y } : at;
+              stampInkBlotHalt(live, haltAt, grow);
+            }
           }
         }
         lastMoveWallRef.current = performance.now();
