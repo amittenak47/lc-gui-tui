@@ -728,19 +728,35 @@ export class InkTileCache {
         continue;
       }
       tile.usedAt = this.drawCount;
-      const dx = toDeviceX(bounds.minX);
-      const dy = toDeviceY(bounds.minY);
-      const size = tileScene * pixelScale;
+      /*
+       * Snap each square to whole device pixels, taking both edges from the
+       * tile's own bounds.
+       *
+       * The destination used to be a fractional origin plus a fractional size,
+       * so neighbouring squares met partway through a pixel. The blit samples a
+       * tile's edge texels against the transparency outside it, and the result
+       * is a faint grid over the page wherever ink crosses a tile line -- the
+       * seams visible in a filled area.
+       *
+       * Rounding both edges rather than the origin and a width is what makes it
+       * exact: one square's `maxX` is the next one's `minX`, so they round to
+       * the same integer and share an edge with nothing between them and
+       * nothing doubled.
+       */
+      const x0 = Math.round(toDeviceX(bounds.minX));
+      const y0 = Math.round(toDeviceY(bounds.minY));
+      const x1 = Math.round(toDeviceX(bounds.maxX));
+      const y1 = Math.round(toDeviceY(bounds.maxY));
       ctx.drawImage(
         tile.canvas,
         TILE_OVERLAP_PX,
         TILE_OVERLAP_PX,
         this.tilePx,
         this.tilePx,
-        dx,
-        dy,
-        size,
-        size,
+        x0,
+        y0,
+        Math.max(1, x1 - x0),
+        Math.max(1, y1 - y0),
       );
     }
 
