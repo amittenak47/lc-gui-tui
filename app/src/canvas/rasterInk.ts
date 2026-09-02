@@ -346,12 +346,41 @@ export function dryWashRgb(
   };
 }
 
+/**
+ * Vertex fill colour, memoised on the values that produce it.
+ *
+ * This runs once per ribbon vertex per paint, and every call rebuilt the same
+ * few strings from scratch: parse the colour, wash it, format three
+ * `toFixed(2)` numbers, then parse and format again for the pool tint. On a
+ * long live stroke that is thousands of throwaway strings a frame, which is
+ * most of the allocation behind a heap that climbs while the pen is down.
+ *
+ * Consecutive vertices share a dry gain and a pool far more often than not —
+ * width is already quantised into runs by {@link RUN_WIDTH_QUANTUM} — so the
+ * cache hits along a run and misses only where the ribbon actually changes
+ * colour.
+ *
+ * Keyed on the exact floats rather than on a quantised bucket. This is the
+ * colour that lands on the page: rounding it here would be a visible change
+ * wearing a cache as a disguise. The bound exists only so a pathological op
+ * cannot grow the map without limit; clearing wholesale is fine because a
+ * refill costs exactly what the old code paid unconditionally.
+ */
+const RIBBON_FILL_CACHE = new Map<string, string>();
+const RIBBON_FILL_CACHE_MAX = 1024;
+
 function ribbonVertexFillCss(color: string, style: InkStrokeStyle): string {
-  const washed = dryWashRgb(color, style.dryGain ?? 1);
-  const washedCss = rgbCss(washed.r, washed.g, washed.b);
+  const dryGain = style.dryGain ?? 1;
   const poolT = style.blotPool ?? 0;
-  if (poolT < 1e-3) return washedCss;
-  return blotFillCss(washedCss, poolT);
+  const key = `${color}|${dryGain}|${poolT}`;
+  const hit = RIBBON_FILL_CACHE.get(key);
+  if (hit !== undefined) return hit;
+  const washed = dryWashRgb(color, dryGain);
+  const washedCss = rgbCss(washed.r, washed.g, washed.b);
+  const css = poolT < 1e-3 ? washedCss : blotFillCss(washedCss, poolT);
+  if (RIBBON_FILL_CACHE.size >= RIBBON_FILL_CACHE_MAX) RIBBON_FILL_CACHE.clear();
+  RIBBON_FILL_CACHE.set(key, css);
+  return css;
 }
 
 export interface ScenePoint {
@@ -1713,7 +1742,7 @@ function sampleStrokeAt(
  * Parse `#rgb` / `#rrggbb` / `rgb()` / `rgba()` into RGB; fall back to black.
  * Used so radial disc fades can share the stroke colour at varying alpha.
  */
-export function inkColorRgb(color: string): { r: number; g: number; b: number } {
+function parseInkColorRgb(color: string): { r: number; g: number; b: number } {
   const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
   if (hex) {
     let h = hex[1];
@@ -1729,6 +1758,33 @@ export function inkColorRgb(color: string): { r: number; g: number; b: number } 
     return { r: Number(rgb[1]), g: Number(rgb[2]), b: Number(rgb[3]) };
   }
   return { r: 0, g: 0, b: 0 };
+}
+
+const INK_RGB_CACHE = new Map<string, { r: number; g: number; b: number }>();
+const INK_RGB_CACHE_MAX = 256;
+
+/**
+ * Parse an ink colour at most once per distinct string.
+ *
+ * The ribbon reaches this per *vertex*, and twice per vertex while pooling, so
+ * a regex and three `parseInt`s were re-deriving the same handful of pen
+ * colours thousands of times a frame. A page uses a few colours; the cache is
+ * correspondingly tiny, and the bound is only there in case a caller feeds it
+ * generated strings.
+ *
+ * Callers get a copy rather than the cached object. {@link dryWashRgb} and
+ * {@link blotPoolRgb} both hand their input straight back on the no-op path,
+ * and a shared object escaping through them would let one caller's write reach
+ * every later reader — a cache is not licence to alias.
+ */
+export function inkColorRgb(color: string): { r: number; g: number; b: number } {
+  let hit = INK_RGB_CACHE.get(color);
+  if (hit === undefined) {
+    hit = parseInkColorRgb(color);
+    if (INK_RGB_CACHE.size >= INK_RGB_CACHE_MAX) INK_RGB_CACHE.clear();
+    INK_RGB_CACHE.set(color, hit);
+  }
+  return { r: hit.r, g: hit.g, b: hit.b };
 }
 
 function resolveSpeedBlotBlend(op: InkDrawOp): number {
@@ -1940,8 +1996,22 @@ export function stampInkBlotHalt(
   dest.blotHalts = list;
 }
 
-function strokeClusterExtent(points: readonly ScenePoint[]): number {
-  if (points.length === 0) return 0;
+/**
+ * Does the polyline's bounding box reach `limit` across its diagonal?
+ *
+ * The box only ever grows, so the first prefix that clears the bar settles the
+ * answer for the whole stroke — which is the entire point. This replaces a
+ * `strokeClusterExtent` that measured the full extent and then threw the number
+ * away against a threshold, on every paint, from a caller that only ever wanted
+ * the boolean.
+ *
+ * Widening either side alone past `limit` is enough to stop early, because the
+ * diagonal is never shorter than its longest side. The exact `Math.hypot` still
+ * decides the walk that runs to the end, so the boolean is identical to what the
+ * full measurement returned rather than merely close to it.
+ */
+function clusterExtentReaches(points: readonly ScenePoint[], limit: number): boolean {
+  if (points.length === 0) return limit <= 0;
   let minX = points[0].x;
   let maxX = points[0].x;
   let minY = points[0].y;
@@ -1952,8 +2022,28 @@ function strokeClusterExtent(points: readonly ScenePoint[]): number {
     if (p.x > maxX) maxX = p.x;
     if (p.y < minY) minY = p.y;
     if (p.y > maxY) maxY = p.y;
+    if (maxX - minX >= limit || maxY - minY >= limit) return true;
   }
-  return Math.hypot(maxX - minX, maxY - minY);
+  return Math.hypot(maxX - minX, maxY - minY) >= limit;
+}
+
+/**
+ * Does the polyline travel at least `limit`?
+ *
+ * The same running sum as {@link strokePathLength}, accumulated in the same
+ * order so the floating-point result is the same, abandoned once it can no
+ * longer change the comparison: segment lengths are non-negative, so a prefix
+ * that has cleared `limit` stays cleared.
+ */
+function pathLengthReaches(points: readonly ScenePoint[], limit: number): boolean {
+  let len = 0;
+  for (let index = 1; index < points.length; index++) {
+    const prev = points[index - 1];
+    const next = points[index];
+    len += Math.hypot(next.x - prev.x, next.y - prev.y);
+    if (len >= limit) return true;
+  }
+  return len >= limit;
 }
 
 /** Near-stationary / dwell paths paint a growing disc instead of a self-winding ribbon. */
@@ -1962,11 +2052,26 @@ export function isDiscPrimaryPath(
   nib: number,
 ): boolean {
   if (points.length <= 1) return true;
-  const pathLen = strokePathLength(points);
-  if (pathLen < 1e-3) return true;
-  if (points.length === 2 && pathLen < nib * 0.25) return true;
+  /*
+   * Both tests below are thresholds, not measurements: neither needs the
+   * quantity it compares, only whether it has been passed. Measuring in full
+   * made this the most expensive thing in a live frame — the open stroke is
+   * asked twice per paint, and on a long one a third of the frame budget went
+   * to proving that a thousand-point line is not a dot.
+   *
+   * A dwell blot is the case that still walks every point, and it should: it is
+   * a stroke that genuinely stayed inside a nib width, so there is no prefix
+   * that settles it early. Those strokes are short.
+   */
+  if (points.length === 2) {
+    const pathLen = strokePathLength(points);
+    if (pathLen < 1e-3) return true;
+    if (pathLen < nib * 0.25) return true;
+  } else if (!pathLengthReaches(points, 1e-3)) {
+    return true;
+  }
   // Slight pen wiggles stay disc-only (~1× nib bbox) so ribbons do not shard.
-  return strokeClusterExtent(points) < nib * 1.0;
+  return !clusterExtentReaches(points, nib * 1.0);
 }
 
 /**
