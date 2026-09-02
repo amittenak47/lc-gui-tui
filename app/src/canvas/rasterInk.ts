@@ -1515,6 +1515,8 @@ function fillInkRibbonQuads(
   left: readonly { x: number; y: number }[],
   right: readonly { x: number; y: number }[],
   fills?: readonly string[],
+  from = 0,
+  to = left.length - 1,
 ): void {
   if (left.length < 2 || left.length !== right.length) return;
   const prevFill = ctx.fillStyle;
@@ -1538,7 +1540,9 @@ function fillInkRibbonQuads(
   const canGrad =
     typeof (ctx as CanvasRenderingContext2D).createLinearGradient === "function";
   const wash = Boolean(fills) && canGrad;
-  for (let index = 0; index < left.length - 1; index++) {
+  // `[from, to)` in quads. A quad reads its neighbours' vertices and fills for
+  // the wash pads, so the full arrays are always passed; only the loop narrows.
+  for (let index = from; index < to; index++) {
     const a = fills?.[index];
     const b = fills?.[index + 1] ?? a;
     const mid0 = ribbonMid(left, right, index);
@@ -1734,6 +1738,236 @@ const RIBBON_SCRATCH_MAX_PX = 8192;
 /** What the shared ribbon scratch currently holds, for reuse inside a batch. */
 let ribbonScratchKey: readonly unknown[] | null = null;
 
+/** Vertices kept live behind the pen; everything before them is baked. */
+const LIVE_SETTLE_TAIL = 192;
+/** Room the settled frame keeps around the stroke so growth rarely re-frames it. */
+const LIVE_SETTLE_FRAME_PAD = 0.5;
+
+/**
+ * The opaque silhouette of a live stroke's settled prefix.
+ *
+ * A live paint redraws the whole ribbon every frame, and each quad is a
+ * gradient fill, so a frame costs the length of the stroke however little of
+ * it moved. This keeps quads `[0, count)` rendered in a canvas of its own and
+ * copies it into the scratch 1:1 at an integer offset, then draws only the
+ * tail on top. Quads land in the same order as a full draw, just split across
+ * frames, so the pixels are the same.
+ *
+ * The frame is the whole reason this is a separate canvas rather than the
+ * scratch itself. The scratch is sized to the ribbon's bounding box, which a
+ * growing stroke enlarges nearly every frame; a cache keyed to that frame
+ * rebuilt constantly and never paid for itself. This one is padded well past
+ * the stroke and only re-framed when growth actually leaves it.
+ *
+ * A 1:1 copy is exact only when both canvases share a scale and the offset
+ * between their origins is whole pixels. Origins are integers, so that holds
+ * whenever the scale is -- which is the case at any zoom where the scratch is
+ * not stretched. Where it is not the case the cache simply fails to validate
+ * and the ribbon is drawn whole, as before.
+ *
+ * It does not assume the prefix is stable -- it checks. Every frame the
+ * vertices and fills the baked quads read are compared against what they were
+ * when baked (each quad reaches two vertices past itself for the wash pads),
+ * and any difference rebuilds. Pooling bands near the tip, a slowness pass
+ * propagating backward, a merge shifting indices: all of them cost a rebuild,
+ * none of them cost a pixel.
+ *
+ * The caps, blots and grain are never baked. They must sit above every quad,
+ * including a later loop of the stroke crossing back over the prefix, so they
+ * are stamped fresh onto the composite each frame.
+ */
+interface SettledRibbon {
+  source: readonly unknown[];
+  canvas: RibbonScratch;
+  /** Scene origin of the settled canvas; integer, like the scratch's. */
+  originX: number;
+  originY: number;
+  sx: number;
+  sy: number;
+  fillStyle: string | CanvasGradient | CanvasPattern;
+  count: number;
+  lx: Float64Array;
+  ly: Float64Array;
+  rx: Float64Array;
+  ry: Float64Array;
+  fills: string[];
+}
+
+let settledRibbon: SettledRibbon | null = null;
+
+/** Test-only counters for the settled prefix. */
+export const settledRibbonStats = { hits: 0, extends: 0, rebuilds: 0, bails: 0, firstBad: -1, tailAtBad: -1 };
+
+function snapshotSettled(
+  s: SettledRibbon,
+  left: readonly { x: number; y: number }[],
+  right: readonly { x: number; y: number }[],
+  fills: readonly string[],
+): void {
+  const m = Math.min(left.length, s.count + 2);
+  s.lx = new Float64Array(m);
+  s.ly = new Float64Array(m);
+  s.rx = new Float64Array(m);
+  s.ry = new Float64Array(m);
+  s.fills = new Array(m);
+  for (let i = 0; i < m; i++) {
+    s.lx[i] = left[i].x;
+    s.ly[i] = left[i].y;
+    s.rx[i] = right[i].x;
+    s.ry[i] = right[i].y;
+    s.fills[i] = fills[i];
+  }
+}
+
+/** Do vertices `[from, to]` of both sides lie inside the settled canvas, with pad? */
+function settledHolds(
+  s: SettledRibbon,
+  left: readonly { x: number; y: number }[],
+  right: readonly { x: number; y: number }[],
+  from: number,
+  to: number,
+  pad: number,
+): boolean {
+  const maxX = s.originX + s.canvas.width / s.sx;
+  const maxY = s.originY + s.canvas.height / s.sy;
+  for (let i = from; i <= to; i++) {
+    for (const q of [left[i], right[i]]) {
+      if (q.x - pad < s.originX || q.x + pad > maxX || q.y - pad < s.originY || q.y + pad > maxY) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/** Draw the ribbon into `sctx` using the settled prefix. False if it cannot. */
+function composeSettledRibbon(
+  sctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  scratch: RibbonScratch,
+  left: readonly { x: number; y: number }[],
+  right: readonly { x: number; y: number }[],
+  fills: readonly string[],
+  stampJoins: ((c: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D) => void) | undefined,
+  fillStyle: string | CanvasGradient | CanvasPattern,
+  sx: number,
+  sy: number,
+  originX: number,
+  originY: number,
+  width: number,
+  height: number,
+  pad: number,
+  source: readonly unknown[],
+): boolean {
+  const n = left.length;
+  if (fills.length !== n || n <= LIVE_SETTLE_TAIL * 2) {
+    settledRibbonStats.bails++;
+    return false;
+  }
+  const target = n - LIVE_SETTLE_TAIL;
+
+  /*
+   * The settled canvas must share the scratch's *origin*, not its size. The
+   * transform every quad is rasterised under is a function of origin and scale
+   * alone, and a gradient sampled under a translated matrix differs at the last
+   * bit -- measured: one pixel, one level -- so a bake can only be reused under
+   * the very same matrix. Size is free: the canvas is padded past the current
+   * scratch so growth to the right and down changes nothing, and only growth
+   * that moves the origin (up or left of anything drawn so far) re-frames.
+   */
+  let s = settledRibbon;
+  let valid =
+    s !== null &&
+    s.source === source &&
+    s.originX === originX &&
+    s.originY === originY &&
+    s.sx === sx &&
+    s.sy === sy &&
+    s.fillStyle === fillStyle &&
+    s.count <= target &&
+    n >= s.count + 2;
+  if (valid && s) {
+    const m = s.lx.length;
+    for (let i = 0; i < m; i++) {
+      if (
+        left[i].x !== s.lx[i] ||
+        left[i].y !== s.ly[i] ||
+        right[i].x !== s.rx[i] ||
+        right[i].y !== s.ry[i] ||
+        fills[i] !== s.fills[i]
+      ) {
+        valid = false;
+        settledRibbonStats.firstBad = i;
+        settledRibbonStats.tailAtBad = n - i;
+        break;
+      }
+    }
+  }
+  // Growth past the frame re-frames rather than silently clipping new quads.
+  if (valid && s && target > s.count && !settledHolds(s, left, right, s.count, Math.min(n - 1, target + 1), pad)) {
+    valid = false;
+  }
+
+  const paintInto = (canvas: RibbonScratch, ox: number, oy: number, from: number, to: number, clear: boolean) => {
+    const c = canvas.getContext("2d") as CanvasRenderingContext2D | null;
+    if (!c) return false;
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    if (clear) c.clearRect(0, 0, canvas.width, canvas.height);
+    c.imageSmoothingEnabled = false;
+    c.globalAlpha = 1;
+    c.fillStyle = fillStyle;
+    c.setTransform(sx, 0, 0, sy, -ox * sx, -oy * sy);
+    fillInkRibbonQuads(c, left, right, fills, from, to);
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    return true;
+  };
+
+  if (!valid || !s) {
+    // Same origin as the scratch; room to grow to the right and down.
+    const fOriginX = originX;
+    const fOriginY = originY;
+    const fw = Math.ceil(width * (1 + LIVE_SETTLE_FRAME_PAD) * sx);
+    const fh = Math.ceil(height * (1 + LIVE_SETTLE_FRAME_PAD) * sy);
+    if (fw > RIBBON_SCRATCH_MAX_PX || fh > RIBBON_SCRATCH_MAX_PX) {
+      settledRibbonStats.bails++;
+      return false;
+    }
+    // Reuse the canvas when it is already big enough; it is cleared anyway.
+    const canvas =
+      s && s.canvas.width >= fw && s.canvas.height >= fh ? s.canvas : createRibbonScratch(fw, fh);
+    if (!canvas || canvas.width < fw || canvas.height < fh) {
+      settledRibbonStats.bails++;
+      return false;
+    }
+    if (!paintInto(canvas, fOriginX, fOriginY, 0, target, true)) return false;
+    s = {
+      source, canvas, originX: fOriginX, originY: fOriginY, sx, sy, fillStyle, count: target,
+      lx: new Float64Array(0), ly: new Float64Array(0), rx: new Float64Array(0),
+      ry: new Float64Array(0), fills: [],
+    };
+    snapshotSettled(s, left, right, fills);
+    settledRibbon = s;
+    settledRibbonStats.rebuilds++;
+  } else if (target > s.count) {
+    if (!paintInto(s.canvas, s.originX, s.originY, s.count, target, false)) return false;
+    s.count = target;
+    snapshotSettled(s, left, right, fills);
+    settledRibbonStats.extends++;
+  } else {
+    settledRibbonStats.hits++;
+  }
+
+  sctx.setTransform(1, 0, 0, 1, 0, 0);
+  sctx.clearRect(0, 0, scratch.width, scratch.height);
+  sctx.imageSmoothingEnabled = false;
+  sctx.globalAlpha = 1;
+  sctx.drawImage(s.canvas as CanvasImageSource, 0, 0);
+  sctx.fillStyle = fillStyle;
+  sctx.setTransform(sx, 0, 0, sy, -originX * sx, -originY * sy);
+  fillInkRibbonQuads(sctx, left, right, fills, s.count, n - 1);
+  if (stampJoins) stampJoins(sctx);
+  return true;
+}
+
 function paintOpaqueRibbonThenAlpha(
   ctx: CanvasRenderingContext2D,
   left: readonly { x: number; y: number }[],
@@ -1746,6 +1980,7 @@ function paintOpaqueRibbonThenAlpha(
   fills?: readonly string[],
   pixelScale = 0,
   contentKey?: readonly unknown[],
+  settle?: { source: readonly unknown[] },
 ): boolean {
   if (typeof ctx.drawImage !== "function") return false;
   const { minX, minY, maxX, maxY } = ribbonSideBounds(left, right);
@@ -1798,7 +2033,13 @@ function paintOpaqueRibbonThenAlpha(
     ribbonScratchKey.length === scratchKey.length &&
     ribbonScratchKey.every((v, i) => Object.is(v, scratchKey[i]));
 
-  if (!reusable) {
+  const settled =
+    !reusable && settle && fills
+      ? composeSettledRibbon(sctx, scratch, left, right, fills, stampJoins, ctx.fillStyle,
+          sx, sy, originX, originY, width, height, pad, settle.source)
+      : false;
+  if (settled) ribbonScratchKey = null;
+  if (!reusable && !settled) {
     sctx.setTransform(1, 0, 0, 1, 0, 0);
     // Full clear: a reused larger scratch leaves neighbour pixels, and a smoothed
     // blit samples them as a faint AABB around the stroke.
@@ -3451,6 +3692,9 @@ function drawRibbonStrokeFrom(
     // so a hit means the closure would have drawn the same marks.
     [op, prepared.points, prepared.styles, pixelScale, capHead, fromIndex,
      tipClusterAt, slice, points, color, maxAlpha, pad],
+    // Live paint only: inside a batch the ribbon is reused whole, and a
+    // partial draw would never be asked for.
+    inkOpBatch === null && fromIndex === 0 && fills ? { source: points } : undefined,
   );
 
   if (!stamped) {
