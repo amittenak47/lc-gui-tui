@@ -3101,43 +3101,51 @@ function drawRibbonStrokeFrom(
       const origin = points[0];
       if (fills?.[0]) scratchCtx.fillStyle = fills[0];
       const headGrow = prepared.styles[0].blotGrow ?? 0;
-      if (headGrow > INK_HEAD_BLOT_MIN_GROW) {
-        /*
-         * A hold at the start leaves a blot, and the stroke should look like it
-         * ran out of that blot. The terminal cap is a nib mark -- heading
-         * aligned, and below `CAP_CIRCLE_ROUNDNESS` frankly chisel shaped --
-         * so stamping one over a pool replaced the blot the writer had just
-         * watched form with the mark of a stroke that started cleanly.
-         *
-         * A disc at the same pooled radius is a superset of that cap, and the
-         * silhouette is opaque and blitted once, so it unions with the ribbon
-         * rather than compositing over it: no seam, no darkened overlap, and
-         * the trail reads as leaving the blot.
-         */
+      const heading =
+        firstStrokeOutward(prepared.points, radius) ??
+        hashedHeading(origin, CAP_SALT_HEAD);
+      paintOpCap(
+        scratchCtx,
+        op,
+        prepared.points[0],
+        radius,
+        heading,
+        origin,
+        CAP_SALT_HEAD,
+        origin.pressure,
+        1,
+      );
+      /*
+       * A hold at the start leaves a blot, and the stroke should look like it
+       * ran out of that blot rather than starting cleanly. The terminal cap
+       * alone is a nib mark -- heading aligned, and below
+       * `CAP_CIRCLE_ROUNDNESS` frankly chisel shaped -- so a pool the writer
+       * just watched settle was replaced by the mark of a stroke that never
+       * paused.
+       *
+       * The blot grows *out of* the cap rather than replacing it past a
+       * threshold. Choosing between the two marks meant a hold of middling
+       * length sat on the boundary and the head flickered between them --
+       * the same fault as the tip stamp, a discrete choice between two
+       * different-looking marks re-made every frame. A radius that scales
+       * with the growth has no boundary to sit on: at no growth it
+       * contributes nothing and the cap is exactly what it always was, and
+       * the blot emerges continuously from there.
+       *
+       * The silhouette is opaque and blitted once, so this unions with the
+       * cap and the ribbon rather than compositing over them: no seam, and
+       * no darkened overlap where they meet.
+       */
+      if (headGrow > 1e-3) {
         paintInkDisc(
           scratchCtx,
           prepared.points[0],
-          prepared.styles[0].lineWidth,
+          prepared.styles[0].lineWidth * headGrow,
           1,
           pixelScale,
           0,
           color,
           false,
-          1,
-        );
-      } else {
-        const heading =
-          firstStrokeOutward(prepared.points, radius) ??
-          hashedHeading(origin, CAP_SALT_HEAD);
-        paintOpCap(
-          scratchCtx,
-          op,
-          prepared.points[0],
-          radius,
-          heading,
-          origin,
-          CAP_SALT_HEAD,
-          origin.pressure,
           1,
         );
       }
@@ -3286,9 +3294,6 @@ function paintedWidth(lineWidth: number, pixelScale: number): number {
   if (pixelScale <= 0) return lineWidth;
   return Math.max(lineWidth, INK_MIN_DEVICE_PX / pixelScale);
 }
-
-/** Pooling growth at a terminal above which it is drawn as a blot, not a nib mark. */
-const INK_HEAD_BLOT_MIN_GROW = 0.12;
 
 const CAP_SALT_HEAD = 1;
 const CAP_SALT_TAIL = 2;
