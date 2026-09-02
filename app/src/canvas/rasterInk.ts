@@ -1214,6 +1214,28 @@ const RIBBON_DENSIFY_HALF_FRAC = 0.28;
 /** Trailing tip cluster within this × nib stays a disc, not a ribbon knot. */
 const TIP_CLUSTER_NIB_FRAC = 0.35;
 
+/**
+ * Samples that must pile up at the tip before it is peeled off the ribbon.
+ *
+ * Peeling swaps the end of the stroke between two visibly different marks: a
+ * plain disc when a cluster is found, a heading-aligned cap when it is not.
+ * The test was "two or more samples inside 0.35 nib", and at pen rates that is
+ * satisfied by any movement slower than a few hundred units a second -- most
+ * careful drawing. So the count hovered on the boundary and the mark swapped
+ * frame to frame, which is the flickering stamp.
+ *
+ * A cluster is meant to mean the pen *stopped*, and a stop buries this
+ * threshold within a frame or two while slow travel never reaches it. Raising
+ * it moves the unstable band away from ordinary drawing rather than trying to
+ * damp it.
+ *
+ * Deliberately a fixed count and not hysteresis: committed strokes are
+ * re-rasterised whenever a tile is rebuilt, so the decision has to follow from
+ * the op alone. A latch would make a stroke's appearance depend on the history
+ * of the gesture that drew it, and it would not survive a reload.
+ */
+const TIP_CLUSTER_MIN_SAMPLES = 4;
+
 function lerpScenePoint(a: ScenePoint, b: ScenePoint, t: number): ScenePoint {
   const point: ScenePoint = {
     x: a.x + (b.x - a.x) * t,
@@ -1392,7 +1414,7 @@ export function trailingTipClusterStart(
     start = index;
   }
   const clusterLen = points.length - start;
-  if (clusterLen < 2) return points.length;
+  if (clusterLen < TIP_CLUSTER_MIN_SAMPLES) return points.length;
   // Need ≥2 points before the cluster for a ribbon prefix (prefix = [0..start]).
   if (start < 2) return points.length;
   return start;
