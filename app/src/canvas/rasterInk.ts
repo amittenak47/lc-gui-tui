@@ -973,11 +973,23 @@ const SLOWNESS_MAX_SLOPE = 0.35;
  * asked for again by every tile the stroke crosses, on every repaint.
  */
 const slownessCache = new WeakMap<readonly ScenePoint[], Float32Array>();
+/** Last raw slowness on `points`; length-only cache misses in-place tip edits. */
+const slownessTailRaw = new WeakMap<readonly ScenePoint[], number>();
 
 function slopedSlowness(op: InkDrawOp): Float32Array {
   const points = op.points;
   const cached = slownessCache.get(points);
-  if (cached && cached.length === points.length) return cached;
+  const lastRaw =
+    points.length > 0
+      ? (points[points.length - 1]!.slowness ?? INK_SLOWNESS_NEUTRAL)
+      : INK_SLOWNESS_NEUTRAL;
+  if (
+    cached &&
+    cached.length === points.length &&
+    slownessTailRaw.get(points) === lastRaw
+  ) {
+    return cached;
+  }
 
   const raw = new Float32Array(points.length);
   for (let i = 0; i < points.length; i++) {
@@ -1032,7 +1044,27 @@ function slopedSlowness(op: InkDrawOp): Float32Array {
   limit(forward.slice().reverse());
 
   slownessCache.set(points, out);
+  slownessTailRaw.set(points, lastRaw);
   return out;
+}
+
+/**
+ * First index at which a new slowness track disagrees with the previous one.
+ *
+ * The reverse slope + box filter can walk a few nibs back from the tip; it
+ * should not rewrite the whole polyline. A shorter `next` is a collapse.
+ */
+export function slownessDirtyFrom(
+  prev: Float32Array | null,
+  next: Float32Array,
+): number {
+  if (!prev || prev.length === 0) return 0;
+  if (next.length < prev.length) return 0;
+  const n = prev.length;
+  for (let i = 0; i < n; i++) {
+    if (prev[i] !== next[i]) return i;
+  }
+  return n;
 }
 const RUN_ALPHA_QUANTUM = 1 / 48;
 /** Alpha at or above this uses the opaque round-cap fast path. */
@@ -1749,6 +1781,14 @@ let ribbonScratchKey: readonly unknown[] | null = null;
 
 /** Vertices kept live behind the pen; everything before them is baked. */
 const LIVE_SETTLE_TAIL = 192;
+/**
+ * Prepared-ribbon length at which the pixel prefix may engage.
+ *
+ * Was `LIVE_SETTLE_TAIL * 2` (384). A long letter never reached that in the
+ * first second; 256 still leaves a 192-vertex live tail (≫ the ~3.4 nib
+ * slowness reverse-pass bound).
+ */
+const LIVE_SETTLE_BAIL = 256;
 /** Room the settled frame keeps around the stroke so growth rarely re-frames it. */
 const LIVE_SETTLE_FRAME_PAD = 0.5;
 
@@ -1868,7 +1908,7 @@ function composeSettledRibbon(
   source: readonly unknown[],
 ): boolean {
   const n = left.length;
-  if (fills.length !== n || n <= LIVE_SETTLE_TAIL * 2) {
+  if (fills.length !== n || n <= LIVE_SETTLE_BAIL) {
     settledRibbonStats.bails++;
     return false;
   }
@@ -3195,6 +3235,143 @@ export function applyInkPoolingAtEnds(
   return out;
 }
 
+/** Prior pooling envelope, so a moving tip can dirty vertices leaving the band. */
+export interface PoolingDirtyPrev {
+  n: number;
+  tipBandStart: number;
+  headGrow: number;
+  haltCount: number;
+  lastHaltGrow: number;
+  lastHaltX: number;
+  lastHaltY: number;
+}
+
+/**
+ * Earliest spine index whose pooling envelope can change this frame.
+ *
+ * Tip band moves with the nib. Head band only dirties when grow changes.
+ * A loop can `nearest()` onto an old sample, which pulls this back.
+ */
+export function poolingDirtyFrom(
+  op: InkDrawOp,
+  prev: PoolingDirtyPrev | null,
+): { dirtyFrom: number; next: PoolingDirtyPrev } {
+  const points = op.points;
+  const n = points.length;
+  const empty: PoolingDirtyPrev = {
+    n,
+    tipBandStart: n,
+    headGrow: 0,
+    haltCount: 0,
+    lastHaltGrow: 0,
+    lastHaltX: 0,
+    lastHaltY: 0,
+  };
+  if (op.highlight || n === 0) return { dirtyFrom: n, next: empty };
+  const blotBlend = resolveSpeedBlotBlend(op);
+  if (blotBlend < 1e-3) return { dirtyFrom: n, next: empty };
+
+  const nib = nibWidth(op);
+  const arc = polylineArcLengths(points);
+  const grid = buildPointGrid(points);
+  const nearest = (at: { x: number; y: number }) =>
+    grid ? nearestOnGrid(points, grid, at) : nearestPolylineIndex(points, at);
+
+  const bandStart = (at: { x: number; y: number }, growT: number) => {
+    const g = Math.max(clamp01(growT), blotBlend * INK_BLOT_END_FLOOR);
+    const { radius } = poolingEnvelope(nib, g, blotBlend);
+    const origin = nearest(at);
+    const span = Math.max(radius, 1e-6);
+    return lowerBoundArc(arc, arc[origin]! - span);
+  };
+
+  let dirty = n;
+  const tip = points[n - 1]!;
+  const tipGrow = liveInkBlotGrow(op);
+  const tipBandStart = bandStart(tip, tipGrow);
+  dirty = Math.min(dirty, tipBandStart);
+  if (prev) dirty = Math.min(dirty, prev.tipBandStart);
+
+  let headGrow = 0;
+  if (n >= 2) {
+    const headR = nib / 2;
+    const cluster = prefixContactCluster(points, headR);
+    const headCluster = cluster.length > 0 ? cluster : [points[0]!];
+    headGrow = dwellBlotGrowT(headCluster, headR, blotBlend);
+    const tipStillAtHead =
+      Math.hypot(tip.x - points[0]!.x, tip.y - points[0]!.y) <
+      Math.max(headR * 2, nib * 0.5);
+    if (tipStillAtHead) headGrow = Math.max(headGrow, tipGrow);
+    if (!prev || Math.abs(headGrow - prev.headGrow) > 1e-6) {
+      dirty = Math.min(dirty, bandStart(points[0]!, headGrow));
+    }
+  }
+
+  const halts = op.blotHalts;
+  const haltCount = halts?.length ?? 0;
+  const lastHalt = haltCount > 0 ? halts![haltCount - 1]! : null;
+  const lastHaltGrow = lastHalt?.grow ?? 0;
+  const lastHaltX = lastHalt?.x ?? 0;
+  const lastHaltY = lastHalt?.y ?? 0;
+  const haltsChanged =
+    !prev ||
+    prev.haltCount !== haltCount ||
+    prev.lastHaltGrow !== lastHaltGrow ||
+    prev.lastHaltX !== lastHaltX ||
+    prev.lastHaltY !== lastHaltY;
+  if (haltsChanged && halts) {
+    for (const halt of halts) {
+      if (halt.grow < 1e-6) continue;
+      dirty = Math.min(dirty, bandStart(halt, halt.grow));
+    }
+  }
+
+  return {
+    dirtyFrom: Math.max(0, dirty),
+    next: {
+      n,
+      tipBandStart,
+      headGrow,
+      haltCount,
+      lastHaltGrow,
+      lastHaltX,
+      lastHaltY,
+    },
+  };
+}
+
+export interface RibbonGeomDirtyPrev {
+  slowness: Float32Array | null;
+  pooling: PoolingDirtyPrev;
+}
+
+/**
+ * Spine index from which live ribbon geometry must be rebuilt.
+ *
+ * `min(n - live tail, slowness mismatch, pooling bands)`. No previous
+ * snapshot means a full rebuild.
+ */
+export function ribbonGeomDirtyFrom(
+  op: InkDrawOp,
+  prev: RibbonGeomDirtyPrev | null,
+): { dirtyFrom: number; next: RibbonGeomDirtyPrev } {
+  const n = op.points.length;
+  const speedInk = op.speedInk ?? 0;
+  const blotBlend = op.highlight ? 0 : resolveSpeedBlotBlend(op);
+  const fadeAmt = resolveSpeedFade(op);
+  const slowness =
+    speedInk > 0 || blotBlend > 1e-3 || fadeAmt > 1e-3 ? slopedSlowness(op) : null;
+  const slowDirty = slowness
+    ? slownessDirtyFrom(prev?.slowness ?? null, slowness)
+    : n;
+  const pool = poolingDirtyFrom(op, prev?.pooling ?? null);
+  const next: RibbonGeomDirtyPrev = { slowness, pooling: pool.next };
+  if (!prev) return { dirtyFrom: 0, next };
+  let dirtyFrom = Math.max(0, n - LIVE_SETTLE_TAIL);
+  dirtyFrom = Math.min(dirtyFrom, slowDirty, pool.dirtyFrom);
+  return { dirtyFrom, next };
+}
+
 /**
  * One heading-independent disc at the original contact.
  *
@@ -3464,6 +3641,127 @@ function paintOpaqueMarkThenAlpha(
   return true;
 }
 
+interface PreparedRibbon {
+  prepared: { points: ScenePoint[]; styles: InkStrokeStyle[] };
+  tipClusterAt: number;
+  start: number;
+  sliceLen: number;
+  shortTip?: {
+    at: ScenePoint;
+    prev: ScenePoint | undefined;
+    lineWidth: number;
+    alpha: number;
+    growT: number;
+    dryGain: number;
+  };
+}
+
+function tessellateRibbonPrepared(
+  op: InkDrawOp,
+  start: number,
+  pixelScale: number,
+): PreparedRibbon | null {
+  const points = op.points;
+  const blotBlend = resolveSpeedBlotBlend(op);
+  const slice = batched("slice", [points, start], () => points.slice(start));
+  const styles = ribbonStage("styles", () =>
+    batched("styles", [op, start], () => inkStrokePointStyles(op, start)),
+  );
+  if (slice.length < 2 || styles.length < 2) return null;
+
+  const nib = nibWidth(op);
+  let ribbonPoints = slice;
+  let ribbonStyles = styles;
+  const tipClusterAt =
+    blotBlend > 1e-3 ? slice.length : trailingTipClusterStart(slice, nib);
+  if (tipClusterAt < slice.length) {
+    const tipPts = slice.slice(tipClusterAt);
+    const tipStyles = styles.slice(tipClusterAt);
+    const tipLast = tipStyles[tipStyles.length - 1];
+    const tipWidth = tipLast?.lineWidth ?? 0;
+    const tipAlpha = tipLast?.alpha ?? 1;
+    const tipR = paintedWidth(tipWidth, pixelScale) / 2;
+    ribbonPoints = batched("tipPts", [slice, tipClusterAt], () =>
+      slice.slice(0, tipClusterAt + 1),
+    );
+    ribbonStyles = batched("tipStyles", [styles, tipClusterAt], () =>
+      styles.slice(0, tipClusterAt + 1),
+    );
+    if (ribbonPoints.length < 2) {
+      const tipAt = tipPts[tipPts.length - 1];
+      const tipPrev = tipPts.length > 1 ? tipPts[tipPts.length - 2] : undefined;
+      if (!tipAt) return null;
+      return {
+        prepared: { points: [], styles: [] },
+        tipClusterAt,
+        start,
+        sliceLen: slice.length,
+        shortTip: {
+          at: tipAt,
+          prev: tipPrev,
+          lineWidth: tipWidth,
+          alpha: tipAlpha,
+          growT: resolveBlotTipGrow(op, tipPts, tipR),
+          dryGain: tipLast?.dryGain ?? 1,
+        },
+      };
+    }
+  }
+
+  const coalesced = ribbonStage("coalesce", () =>
+    batched("coalesce", [ribbonPoints, ribbonStyles, pixelScale], () =>
+      coalesceRibbonPoints(ribbonPoints, ribbonStyles, pixelScale),
+    ),
+  );
+  const densified = ribbonStage("densify", () =>
+    batched("densify", [coalesced.points, coalesced.styles, pixelScale], () =>
+      densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale),
+    ),
+  );
+  if (densified.points.length < 2) return null;
+
+  const pooledStyles = ribbonStage("pool", () =>
+    batched("pool", [densified.styles, op, densified.points, start], () =>
+      applyInkPoolingAtEnds(densified.styles, op, densified.points, start),
+    ),
+  );
+  const prepared = ribbonStage("densify", () =>
+    batched("densify2", [densified.points, pooledStyles, pixelScale], () =>
+      densifyRibbonPoints(densified.points, pooledStyles, pixelScale),
+    ),
+  );
+  if (prepared.points.length < 2) return null;
+  return {
+    prepared,
+    tipClusterAt,
+    start,
+    sliceLen: slice.length,
+  };
+}
+
+let liveRibbonDirty: { source: readonly ScenePoint[]; prev: RibbonGeomDirtyPrev } | null =
+  null;
+
+function liveRibbonPrepared(
+  op: InkDrawOp,
+  pixelScale: number,
+): PreparedRibbon | null {
+  // dirtyFrom is recorded for metrics and for the pixel-bake gate. Rebuilding
+  // only the suffix is not pixel-identical to a whole tessellation (coalesce
+  // and pooling see different neighbours), so this still tessellates from 0.
+  const prev =
+    liveRibbonDirty && liveRibbonDirty.source === op.points
+      ? liveRibbonDirty.prev
+      : null;
+  const dirty = ribbonGeomDirtyFrom(op, prev);
+  if (DEBUG_INK || inkMetrics.enabled) {
+    inkMetrics.live({ ringSamples: 0, spineN: 0, dirtyFrom: dirty.dirtyFrom });
+  }
+  const full = tessellateRibbonPrepared(op, 0, pixelScale);
+  liveRibbonDirty = { source: op.points, prev: dirty.next };
+  return full;
+}
+
 /** Variable-width ribbon fill for speed ink — one opaque silhouette, then one alpha blit. */
 function drawRibbonStrokeFrom(
   ctx: CanvasRenderingContext2D,
@@ -3490,13 +3788,13 @@ function drawRibbonStrokeFrom(
   // Memoised because it heads the chain: a fresh array here would make every
   // downstream identity key miss and the batch would reuse nothing.
   const slice = batched("slice", [points, start], () => points.slice(start));
-  const styles = ribbonStage("styles", () =>
-    batched("styles", [op, start], () => inkStrokePointStyles(op, start)),
-  );
-  if (slice.length < 2 || styles.length < 2) return;
+  if (slice.length < 2) return;
 
   const nib = nibWidth(op);
   if (blotBlend > 1e-3 && isDiscPrimaryPath(slice, nib)) {
+    const styles = ribbonStage("styles", () =>
+      batched("styles", [op, start], () => inkStrokePointStyles(op, start)),
+    );
     const last = styles[styles.length - 1];
     if (!last) return;
     const tipR = paintedWidth(last.lineWidth, pixelScale) / 2;
@@ -3517,68 +3815,40 @@ function drawRibbonStrokeFrom(
     return;
   }
 
-  let ribbonPoints = slice;
-  let ribbonStyles = styles;
-  // Pooling needs the halted tip on the ribbon. Peeling a dwell cluster left
-  // the pool as a nib-sized seal disc while Speed ink was off.
-  const tipClusterAt =
-    blotBlend > 1e-3 ? slice.length : trailingTipClusterStart(slice, nib);
-  if (tipClusterAt < slice.length) {
-    const tipPts = slice.slice(tipClusterAt);
-    const tipStyles = styles.slice(tipClusterAt);
-    const tipLast = tipStyles[tipStyles.length - 1];
-    const tipWidth = tipLast?.lineWidth ?? 0;
-    const tipAlpha = tipLast?.alpha ?? 1;
-    const tipR = paintedWidth(tipWidth, pixelScale) / 2;
-    ribbonPoints = batched("tipPts", [slice, tipClusterAt], () =>
-      slice.slice(0, tipClusterAt + 1),
-    );
-    ribbonStyles = batched("tipStyles", [styles, tipClusterAt], () =>
-      styles.slice(0, tipClusterAt + 1),
-    );
-    if (ribbonPoints.length < 2) {
-      const tipAt = tipPts[tipPts.length - 1];
-      const tipPrev = tipPts.length > 1 ? tipPts[tipPts.length - 2] : undefined;
-      paintTexturedDisc(
-        ctx,
-        op,
-        sealDiscCenter(tipAt, tipPrev, tipR, pixelScale),
-        tipWidth,
-        tipAlpha,
-        pixelScale,
-        resolveBlotTipGrow(op, tipPts, tipR),
-        tipLast?.dryGain ?? 1,
-      );
-      ctx.globalAlpha = 1;
-      return;
-    }
+  const packed = inkOpBatch
+    ? batched("ribbonPrep", [op, start, pixelScale], () =>
+        tessellateRibbonPrepared(op, start, pixelScale),
+      )
+    : start === 0
+      ? liveRibbonPrepared(op, pixelScale)
+      : tessellateRibbonPrepared(op, start, pixelScale);
+  if (!packed) {
+    ctx.globalAlpha = 1;
+    return;
   }
-
-  const coalesced = ribbonStage("coalesce", () =>
-    batched("coalesce", [ribbonPoints, ribbonStyles, pixelScale], () =>
-      coalesceRibbonPoints(ribbonPoints, ribbonStyles, pixelScale),
-    ),
-  );
-  const densified = ribbonStage("densify", () =>
-    batched("densify", [coalesced.points, coalesced.styles, pixelScale], () =>
-      densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale),
-    ),
-  );
-  if (densified.points.length < 2) {
+  if (packed.shortTip) {
+    const tip = packed.shortTip;
+    paintTexturedDisc(
+      ctx,
+      op,
+      sealDiscCenter(tip.at, tip.prev, paintedWidth(tip.lineWidth, pixelScale) / 2, pixelScale),
+      tip.lineWidth,
+      tip.alpha,
+      pixelScale,
+      tip.growT,
+      tip.dryGain,
+    );
     ctx.globalAlpha = 1;
     return;
   }
 
-  const pooledStyles = ribbonStage("pool", () =>
-    batched("pool", [densified.styles, op, densified.points, fromIndex], () =>
-      applyInkPoolingAtEnds(densified.styles, op, densified.points, fromIndex),
-    ),
-  );
-  const prepared = ribbonStage("densify", () =>
-    batched("densify2", [densified.points, pooledStyles, pixelScale], () =>
-      densifyRibbonPoints(densified.points, pooledStyles, pixelScale),
-    ),
-  );
+  const prepared = packed.prepared;
+  const tipClusterAt =
+    packed.start === start
+      ? packed.tipClusterAt
+      : packed.tipClusterAt >= packed.sliceLen
+        ? slice.length
+        : packed.start + packed.tipClusterAt - start;
 
   let maxAlpha = 0;
   let maxHalf = 0;
