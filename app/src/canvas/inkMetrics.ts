@@ -48,6 +48,20 @@
  * Between them a stalled stroke names its own culprit.
  */
 
+/** Which overlay path submitted the last live paint. */
+export type InkPathTag = "incremental" | "paintFrame" | "reshape" | "hostBound";
+
+/** Timed stages inside a live ribbon / overlay frame. */
+export type InkStageName =
+  | "tick"
+  | "styles"
+  | "coalesce"
+  | "densify"
+  | "pool"
+  | "sides"
+  | "tessPaint"
+  | "overlayBlit";
+
 export interface InkStrokeMetrics {
   /** `pointermove` events the layer handled. */
   moves: number;
@@ -74,6 +88,31 @@ export interface InkStrokeMetrics {
   blockedMs: number;
   /** Duration of the worst of them, ms — the whole task, not just the overlap. */
   maxLongTaskMs: number;
+  /** Incoming digitizer samples queued on the live ring (max over the stroke). */
+  ringSamples: number;
+  /** Retained spine points the tessellator saw (max over the stroke). */
+  spineN: number;
+  /** Last live frame had a transient (uncommitted) tip. */
+  transientTip: boolean;
+  /** Geometry dirty frontier; 0 means a full rebuild. */
+  dirtyFrom: number;
+  /** Vertices in the settled-prefix pixel bake. */
+  bakedVerts: number;
+  /** Worst stage times this stroke, ms. */
+  stages: Record<InkStageName, number>;
+  /** Ribbon scratch used size vs allocated backing, last frame. */
+  scratchSw: number;
+  scratchSh: number;
+  scratchBackingW: number;
+  scratchBackingH: number;
+  /** Overlay backing store, device pixels. */
+  overlayW: number;
+  overlayH: number;
+  dpr: number;
+  /** Worst rAF period while the stroke was open, ms. */
+  maxRafMs: number;
+  /** Last live paint path. */
+  path: InkPathTag | "";
 }
 
 interface Totals {
@@ -130,6 +169,30 @@ const totals: Totals = {
   notes: new Map<string, number>(),
 };
 
+const STAGE_NAMES: readonly InkStageName[] = [
+  "tick",
+  "styles",
+  "coalesce",
+  "densify",
+  "pool",
+  "sides",
+  "tessPaint",
+  "overlayBlit",
+];
+
+function emptyStages(): Record<InkStageName, number> {
+  return {
+    tick: 0,
+    styles: 0,
+    coalesce: 0,
+    densify: 0,
+    pool: 0,
+    sides: 0,
+    tessPaint: 0,
+    overlayBlit: 0,
+  };
+}
+
 let startedAt = 0;
 let moves = 0;
 let samples = 0;
@@ -139,6 +202,21 @@ let maxLatency = 0;
 let maxSampleAge = 0;
 let maxGap = 0;
 let maxFrame = 0;
+let ringSamples = 0;
+let spineN = 0;
+let transientTip = false;
+let dirtyFrom = 0;
+let bakedVerts = 0;
+let stages = emptyStages();
+let scratchSw = 0;
+let scratchSh = 0;
+let scratchBackingW = 0;
+let scratchBackingH = 0;
+let overlayW = 0;
+let overlayH = 0;
+let overlayDpr = 0;
+let maxRafMs = 0;
+let pathTag: InkPathTag | "" = "";
 /** When the last move was handled, for {@link maxGap}. Seeded by `begin`. */
 let lastMoveAt = 0;
 /** One frame probe in flight at a time — the rest of the stroke's are the same frame. */
@@ -195,6 +273,21 @@ export const inkMetrics = {
     maxSampleAge = 0;
     maxGap = 0;
     maxFrame = 0;
+    ringSamples = 0;
+    spineN = 0;
+    transientTip = false;
+    dirtyFrom = 0;
+    bakedVerts = 0;
+    stages = emptyStages();
+    scratchSw = 0;
+    scratchSh = 0;
+    scratchBackingW = 0;
+    scratchBackingH = 0;
+    overlayW = 0;
+    overlayH = 0;
+    overlayDpr = 0;
+    maxRafMs = 0;
+    pathTag = "";
     // Anything that finished before the pen touched down belongs to the last
     // stroke, or to no stroke at all. Entries arrive in end order, so the
     // expired ones are a prefix.
@@ -259,6 +352,57 @@ export const inkMetrics = {
    * call only queues work: without it there is no way to tell ink that was
    * drawn late from ink that was drawn on time and presented late.
    */
+  /**
+   * Live-session counters for the current frame. Only the peak spine / ring
+   * lengths are kept for the stroke summary.
+   */
+  live(state: {
+    ringSamples: number;
+    spineN: number;
+    transientTip?: boolean;
+    dirtyFrom?: number;
+    bakedVerts?: number;
+  }): void {
+    if (!metricsActive()) return;
+    if (state.ringSamples > ringSamples) ringSamples = state.ringSamples;
+    if (state.spineN > spineN) spineN = state.spineN;
+    if (state.transientTip) transientTip = true;
+    if (state.dirtyFrom !== undefined) dirtyFrom = state.dirtyFrom;
+    if (state.bakedVerts !== undefined && state.bakedVerts > bakedVerts) {
+      bakedVerts = state.bakedVerts;
+    }
+  },
+
+  addStage(name: InkStageName, ms: number): void {
+    if (!metricsActive() || !Number.isFinite(ms) || ms < 0) return;
+    if (ms > stages[name]) stages[name] = ms;
+  },
+
+  scratch(usedW: number, usedH: number, backingW: number, backingH: number): void {
+    if (!metricsActive()) return;
+    scratchSw = usedW;
+    scratchSh = usedH;
+    scratchBackingW = backingW;
+    scratchBackingH = backingH;
+  },
+
+  overlay(width: number, height: number, dpr: number): void {
+    if (!metricsActive()) return;
+    overlayW = width;
+    overlayH = height;
+    overlayDpr = dpr;
+  },
+
+  rafPeriod(ms: number): void {
+    if (!metricsActive() || !Number.isFinite(ms) || ms < 0) return;
+    if (ms > maxRafMs) maxRafMs = ms;
+  },
+
+  path(tag: InkPathTag): void {
+    if (!metricsActive()) return;
+    pathTag = tag;
+  },
+
   painted(eventTimeMs: number): void {
     if (!metricsActive()) return;
     const paintedAt = performance.now();
@@ -299,6 +443,10 @@ export const inkMetrics = {
       maxLongTaskMs = Math.max(maxLongTaskMs, task.end - task.start);
     }
     startedAt = 0;
+    const roundStages = emptyStages();
+    for (const name of STAGE_NAMES) {
+      roundStages[name] = Math.round(stages[name] * 100) / 100;
+    }
     const metrics: InkStrokeMetrics = {
       moves,
       samples,
@@ -315,6 +463,21 @@ export const inkMetrics = {
       longTasks,
       blockedMs: Math.round(blockedMs * 100) / 100,
       maxLongTaskMs: Math.round(maxLongTaskMs * 100) / 100,
+      ringSamples,
+      spineN,
+      transientTip,
+      dirtyFrom,
+      bakedVerts,
+      stages: roundStages,
+      scratchSw,
+      scratchSh,
+      scratchBackingW,
+      scratchBackingH,
+      overlayW,
+      overlayH,
+      dpr: overlayDpr,
+      maxRafMs: Math.round(maxRafMs * 100) / 100,
+      path: pathTag,
     };
 
     totals.strokes += 1;
@@ -341,13 +504,22 @@ export const inkMetrics = {
           ? ` · blocked ${metrics.blockedMs}ms in ${longTasks} ` +
             `task${longTasks === 1 ? "" : "s"} (${metrics.maxLongTaskMs}ms worst)`
           : "";
+      const pipeline =
+        metrics.path || metrics.spineN > 0
+          ? ` · ${metrics.path || "live"} spine ${metrics.spineN}/${metrics.ringSamples}` +
+            ` · overlay ${metrics.overlayW}×${metrics.overlayH}@${metrics.dpr}` +
+            ` · scratch ${metrics.scratchSw}×${metrics.scratchSh}` +
+            ` (backing ${metrics.scratchBackingW}×${metrics.scratchBackingH})` +
+            ` · tick ${metrics.stages.tick}ms tess ${metrics.stages.tessPaint}ms` +
+            ` blit ${metrics.stages.overlayBlit}ms`
+          : "";
       // eslint-disable-next-line no-console
       console.info(
         `[ink] ${metrics.moveHz} moves/s · ${metrics.sampleHz} samples/s ` +
           `(+${metrics.recovered} coalesced) · paint ${metrics.meanLatencyMs}ms mean, ` +
           `${metrics.maxLatencyMs}ms max · stale ${metrics.maxSampleAgeMs}ms max · ` +
           `gap ${metrics.maxGapMs}ms max · frame ${metrics.maxFrameMs}ms max` +
-          `${blocked} · ${metrics.durationMs}ms stroke`,
+          `${blocked}${pipeline} · ${metrics.durationMs}ms stroke`,
       );
     }
     return metrics;
