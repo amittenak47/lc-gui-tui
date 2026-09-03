@@ -40,8 +40,9 @@ import {
   type ScenePoint,
   type ScrollHostLookup,
   type ViewportTransform,
+  releaseLiveRibbonBuffers,
 } from "./rasterInk";
-import { paintLiveOp } from "./inkTiles";
+import { paintLiveOp, strokeAabb } from "./inkTiles";
 import {
   smoothLiveInkPoints,
   type InkSmoothingMode,
@@ -210,6 +211,7 @@ export class LiveStroke {
   private closed = false;
   private readonly disc = new DiscExtentTracker();
   private hasTransientTip = false;
+  private prevOverlayDirty: PixelRect | null = null;
 
   constructor(init: BeginLiveStroke) {
     this.view = init.view;
@@ -363,11 +365,13 @@ export class LiveStroke {
     if (this.reshapeLive()) {
       this.markPath("reshape");
       this.lastPaintFallback = true;
+      this.prevOverlayDirty = null;
       return "fallback";
     }
     if (isHostBoundOp(this.op)) {
       this.markPath("hostBound");
       this.lastPaintFallback = true;
+      this.prevOverlayDirty = null;
       return "fallback";
     }
     if (
@@ -376,11 +380,13 @@ export class LiveStroke {
     ) {
       this.markPath("paintFrame");
       this.lastPaintFallback = true;
+      this.prevOverlayDirty = null;
       return "fallback";
     }
     if (!snap || snap.width !== canvas.width || snap.height !== canvas.height) {
       this.markPath("paintFrame");
       this.lastPaintFallback = true;
+      this.prevOverlayDirty = null;
       return "fallback";
     }
 
@@ -391,11 +397,31 @@ export class LiveStroke {
       height: this.view.height - 2 * marginY,
     };
     const drawView = overdrawnViewport(baseView, marginY);
+    const dirty = this.overlayDirtyPx(this.prevOverlayDirty, drawView, dpr);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(snap, 0, 0);
+    const prevSmooth = ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(dirty.x, dirty.y, dirty.w, dirty.h);
+    ctx.drawImage(
+      snap,
+      dirty.x,
+      dirty.y,
+      dirty.w,
+      dirty.h,
+      dirty.x,
+      dirty.y,
+      dirty.w,
+      dirty.h,
+    );
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(dirty.x, dirty.y, dirty.w, dirty.h);
+    ctx.clip();
     paintLiveOp(ctx, this.op, drawView, dpr, clip, hosts);
+    ctx.restore();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = prevSmooth;
+    this.prevOverlayDirty = dirty;
     this.markPath("incremental");
     this.lastPaintFallback = false;
     if (DEBUG_INK || inkMetrics.enabled) {
@@ -408,6 +434,8 @@ export class LiveStroke {
     this.tick(performance.now());
     this.settleTip();
     this.stopDwell();
+    this.prevOverlayDirty = null;
+    releaseLiveRibbonBuffers();
     return this.op;
   }
 
@@ -420,15 +448,35 @@ export class LiveStroke {
     this.lastPoint = null;
     this.rawPoint = null;
     this.hasTransientTip = false;
+    this.prevOverlayDirty = null;
+    releaseLiveRibbonBuffers();
   }
 
-  overlayDirtyPx(_prev: PixelRect | null, _view: ViewportTransform, dpr: number): PixelRect {
-    return {
-      x: 0,
-      y: 0,
-      w: Math.max(1, Math.round(this.box.width * dpr)),
-      h: Math.max(1, Math.round(this.box.height * dpr)),
-    };
+  overlayDirtyPx(prev: PixelRect | null, view: ViewportTransform, dpr: number): PixelRect {
+    const aabb = strokeAabb(this.op);
+    const z = view.zoom * dpr;
+    const pad = 2;
+    let x0 = Math.floor((aabb.minX + view.scrollX) * z) - pad;
+    let y0 = Math.floor((aabb.minY + view.scrollY) * z) - pad;
+    let x1 = Math.ceil((aabb.maxX + view.scrollX) * z) + pad;
+    let y1 = Math.ceil((aabb.maxY + view.scrollY) * z) + pad;
+    if (prev) {
+      x0 = Math.min(x0, prev.x);
+      y0 = Math.min(y0, prev.y);
+      x1 = Math.max(x1, prev.x + prev.w);
+      y1 = Math.max(y1, prev.y + prev.h);
+    }
+    const maxW = Math.max(1, Math.round(this.box.width * dpr));
+    const maxH = Math.max(1, Math.round(this.box.height * dpr));
+    x0 = Math.max(0, x0);
+    y0 = Math.max(0, y0);
+    x1 = Math.min(maxW, x1);
+    y1 = Math.min(maxH, y1);
+    if (x1 <= x0 || y1 <= y0) return { x: 0, y: 0, w: maxW, h: maxH };
+    const w = x1 - x0;
+    const h = y1 - y0;
+    if (w * h > maxW * maxH * 0.7) return { x: 0, y: 0, w: maxW, h: maxH };
+    return { x: x0, y: y0, w, h };
   }
 
   private reshapeActive(): boolean {

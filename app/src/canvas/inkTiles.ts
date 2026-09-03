@@ -206,9 +206,13 @@ export function intersectBounds(a: SceneBounds, b: SceneBounds): SceneBounds | n
  */
 const opBoundsCache = new WeakMap<InkOp, SceneBounds>();
 
-export function inkOpBounds(op: InkOp): SceneBounds {
-  const cached = opBoundsCache.get(op);
-  if (cached) return cached;
+/**
+ * Scene box one op touches, padded by half the widest line it can carry.
+ *
+ * Not cached: a live stroke mutates `points` every frame, and a WeakMap keyed
+ * on the op would freeze the first AABB.
+ */
+export function strokeAabb(op: InkOp): SceneBounds {
   const pad =
     op.kind === "erase"
       ? op.radius
@@ -239,10 +243,15 @@ export function inkOpBounds(op: InkOp): SceneBounds {
     if (point.x > maxX) maxX = point.x;
     if (point.y > maxY) maxY = point.y;
   }
-  const bounds: SceneBounds =
-    minX === Infinity
-      ? { minX: 0, minY: 0, maxX: 0, maxY: 0 }
-      : { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+  return minX === Infinity
+    ? { minX: 0, minY: 0, maxX: 0, maxY: 0 }
+    : { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+}
+
+export function inkOpBounds(op: InkOp): SceneBounds {
+  const cached = opBoundsCache.get(op);
+  if (cached) return cached;
+  const bounds = strokeAabb(op);
   opBoundsCache.set(op, bounds);
   return bounds;
 }

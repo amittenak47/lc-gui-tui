@@ -180,4 +180,28 @@ describe("LiveStroke ingest", () => {
     stroke.tick(1200);
     expect(stroke.live).toBeNull();
   });
+
+  it("overlay dirty rect is a letter-sized box, not the full overlay", () => {
+    const stroke = beginPen();
+    stroke.ingest([sample(40, 12, 1100), sample(80, 14, 1120)]);
+    stroke.tick(1120);
+    const dirty = stroke.overlayDirtyPx(null, view(), 1);
+    expect(dirty.w * dirty.h).toBeLessThan(200 * 200 * 0.5);
+    expect(dirty.x + dirty.w).toBeLessThanOrEqual(200);
+    expect(dirty.y + dirty.h).toBeLessThanOrEqual(200);
+  });
+
+  it("overlay dirty rect unions the previous box so leftover ink is restored", () => {
+    const stroke = beginPen();
+    stroke.ingest([sample(30, 10, 1100)]);
+    stroke.tick(1100);
+    const first = stroke.overlayDirtyPx(null, view(), 1);
+    stroke.ingest([sample(120, 80, 1200)]);
+    stroke.tick(1200);
+    const next = stroke.overlayDirtyPx(first, view(), 1);
+    expect(next.x).toBeLessThanOrEqual(first.x);
+    expect(next.y).toBeLessThanOrEqual(first.y);
+    expect(next.x + next.w).toBeGreaterThanOrEqual(first.x + first.w);
+    expect(next.y + next.h).toBeGreaterThanOrEqual(first.y + first.h);
+  });
 });

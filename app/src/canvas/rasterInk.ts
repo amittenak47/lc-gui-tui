@@ -1721,6 +1721,32 @@ function acquireRibbonScratch(width: number, height: number): RibbonScratch | nu
   return ribbonScratch;
 }
 
+/** Drop live scratch / settled prefix so the next stroke does not inherit a page. */
+export function releaseLiveRibbonBuffers(): void {
+  ribbonScratch = null;
+  ribbonScratchKey = null;
+  settledRibbon = null;
+}
+
+/** Test helper: backing size of the shared ribbon scratch, or null. */
+export function debugRibbonScratchSize(): { width: number; height: number } | null {
+  return ribbonScratch
+    ? { width: ribbonScratch.width, height: ribbonScratch.height }
+    : null;
+}
+
+function clearScratchUsed(
+  sctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  scratch: RibbonScratch,
+  sw: number,
+  sh: number,
+): void {
+  // +2 so a smoothed blit cannot sample uncleared neighbour pixels (faint AABB).
+  const cw = Math.min(scratch.width, Math.max(1, sw + 2));
+  const ch = Math.min(scratch.height, Math.max(1, sh + 2));
+  sctx.clearRect(0, 0, cw, ch);
+}
+
 /**
  * Fill a variable-width ribbon as per-segment quads.
  * When a scratch canvas is available, quads paint opaque then blit once at
@@ -2006,7 +2032,7 @@ function composeSettledRibbon(
   }
 
   sctx.setTransform(1, 0, 0, 1, 0, 0);
-  sctx.clearRect(0, 0, scratch.width, scratch.height);
+  clearScratchUsed(sctx, scratch, Math.ceil(width * sx), Math.ceil(height * sy));
   sctx.imageSmoothingEnabled = false;
   sctx.globalAlpha = 1;
   sctx.drawImage(s.canvas as CanvasImageSource, 0, 0);
@@ -2090,9 +2116,9 @@ function paintOpaqueRibbonThenAlpha(
   if (settled) ribbonScratchKey = null;
   if (!reusable && !settled) {
     sctx.setTransform(1, 0, 0, 1, 0, 0);
-    // Full clear: a reused larger scratch leaves neighbour pixels, and a smoothed
-    // blit samples them as a faint AABB around the stroke.
-    sctx.clearRect(0, 0, scratch.width, scratch.height);
+    // Used AABB plus 2px: a reused larger scratch leaves neighbour pixels, and
+    // a smoothed blit samples them as a faint AABB around the stroke.
+    clearScratchUsed(sctx, scratch, sw, sh);
     sctx.imageSmoothingEnabled = false;
     sctx.globalAlpha = 1;
     sctx.fillStyle = ctx.fillStyle;
@@ -3622,7 +3648,7 @@ function paintOpaqueMarkThenAlpha(
   const sx = sw / width;
   const sy = sh / height;
   sctx.setTransform(1, 0, 0, 1, 0, 0);
-  sctx.clearRect(0, 0, scratch.width, scratch.height);
+  clearScratchUsed(sctx, scratch, sw, sh);
   sctx.imageSmoothingEnabled = false;
   sctx.globalAlpha = 1;
   sctx.fillStyle = ctx.fillStyle;
