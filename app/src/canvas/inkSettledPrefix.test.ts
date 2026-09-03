@@ -60,4 +60,47 @@ describe("settled prefix", () => {
     expect(s.extends + s.hits).toBeGreaterThan(200);
     expect(s.rebuilds).toBeLessThan(s.extends);
   });
+
+  it("rebuilds the baked prefix when a blotHalt lands in it", () => {
+    const path: ScenePoint[] = [];
+    for (let i = 0; i < 360; i++) {
+      path.push({
+        x: 40 + i * 1.4,
+        y: 250,
+        pressure: 0.5,
+        slowness: 1,
+      });
+    }
+    const live: ScenePoint[] = [];
+    const halts: { x: number; y: number; grow: number; pressure: number }[] = [];
+    const op = {
+      kind: "draw" as const,
+      color: "#c41e3a",
+      baseWidth: 5,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: true,
+      speedInk: 0.6,
+      speedBlotBlend: 0.9,
+      speedFade: 0.4,
+      blotTipGrow: 0,
+      points: live,
+      blotHalts: halts,
+    };
+    Object.assign(settledRibbonStats, { hits: 0, extends: 0, rebuilds: 0, bails: 0, firstBad: -1 });
+    for (let i = 0; i < 300; i++) {
+      live.push(path[i]!);
+      pixels(op, false);
+    }
+    expect(settledRibbonStats.extends + settledRibbonStats.hits).toBeGreaterThan(0);
+    const rebuildsBefore = settledRibbonStats.rebuilds;
+    halts.push({ x: path[40]!.x, y: path[40]!.y, grow: 1, pressure: 0.6 });
+    pixels(op, false);
+    expect(settledRibbonStats.rebuilds).toBeGreaterThan(rebuildsBefore);
+    const a = pixels(op, false);
+    const b = pixels(op, true);
+    let bad = 0;
+    for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) bad++;
+    expect(bad).toBe(0);
+  });
 });
