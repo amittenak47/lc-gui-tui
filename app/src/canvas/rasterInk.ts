@@ -16,6 +16,15 @@ import {
   loadInkBoldness,
 } from "../util/inkBoldnessPref";
 import { loadInkSpeedBlotBlend } from "../util/inkSpeedPref";
+import { DEBUG_INK, inkMetrics, type InkStageName } from "./inkMetrics";
+
+function ribbonStage<T>(name: InkStageName, fn: () => T): T {
+  if (!DEBUG_INK && !inkMetrics.enabled) return fn();
+  const t0 = performance.now();
+  const value = fn();
+  inkMetrics.addStage(name, performance.now() - t0);
+  return value;
+}
 
 export const STROKE_WIDTH_MIN = 1;
 export const STROKE_WIDTH_MAX = 32;
@@ -2071,6 +2080,14 @@ function paintOpaqueRibbonThenAlpha(
   );
   ctx.globalAlpha = prevAlpha;
   ctx.imageSmoothingEnabled = prevSmooth;
+  if (DEBUG_INK || inkMetrics.enabled) {
+    inkMetrics.scratch(sw, sh, scratch.width, scratch.height);
+    inkMetrics.live({
+      ringSamples: 0,
+      spineN: 0,
+      bakedVerts: settledRibbon?.count ?? 0,
+    });
+  }
   return true;
 }
 
@@ -3473,7 +3490,9 @@ function drawRibbonStrokeFrom(
   // Memoised because it heads the chain: a fresh array here would make every
   // downstream identity key miss and the batch would reuse nothing.
   const slice = batched("slice", [points, start], () => points.slice(start));
-  const styles = batched("styles", [op, start], () => inkStrokePointStyles(op, start));
+  const styles = ribbonStage("styles", () =>
+    batched("styles", [op, start], () => inkStrokePointStyles(op, start)),
+  );
   if (slice.length < 2 || styles.length < 2) return;
 
   const nib = nibWidth(op);
@@ -3535,22 +3554,30 @@ function drawRibbonStrokeFrom(
     }
   }
 
-  const coalesced = batched("coalesce", [ribbonPoints, ribbonStyles, pixelScale], () =>
-    coalesceRibbonPoints(ribbonPoints, ribbonStyles, pixelScale),
+  const coalesced = ribbonStage("coalesce", () =>
+    batched("coalesce", [ribbonPoints, ribbonStyles, pixelScale], () =>
+      coalesceRibbonPoints(ribbonPoints, ribbonStyles, pixelScale),
+    ),
   );
-  const densified = batched("densify", [coalesced.points, coalesced.styles, pixelScale], () =>
-    densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale),
+  const densified = ribbonStage("densify", () =>
+    batched("densify", [coalesced.points, coalesced.styles, pixelScale], () =>
+      densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale),
+    ),
   );
   if (densified.points.length < 2) {
     ctx.globalAlpha = 1;
     return;
   }
 
-  const pooledStyles = batched("pool", [densified.styles, op, densified.points, fromIndex], () =>
-    applyInkPoolingAtEnds(densified.styles, op, densified.points, fromIndex),
+  const pooledStyles = ribbonStage("pool", () =>
+    batched("pool", [densified.styles, op, densified.points, fromIndex], () =>
+      applyInkPoolingAtEnds(densified.styles, op, densified.points, fromIndex),
+    ),
   );
-  const prepared = batched("densify2", [densified.points, pooledStyles, pixelScale], () =>
-    densifyRibbonPoints(densified.points, pooledStyles, pixelScale),
+  const prepared = ribbonStage("densify", () =>
+    batched("densify2", [densified.points, pooledStyles, pixelScale], () =>
+      densifyRibbonPoints(densified.points, pooledStyles, pixelScale),
+    ),
   );
 
   let maxAlpha = 0;
@@ -3560,8 +3587,10 @@ function drawRibbonStrokeFrom(
     maxHalf = Math.max(maxHalf, paintedWidth(style.lineWidth, pixelScale) / 2);
   }
 
-  const { left, right } = batched("sides", [prepared.points, prepared.styles, pixelScale], () =>
-    ribbonSides(prepared.points, prepared.styles, pixelScale),
+  const { left, right } = ribbonStage("sides", () =>
+    batched("sides", [prepared.points, prepared.styles, pixelScale], () =>
+      ribbonSides(prepared.points, prepared.styles, pixelScale),
+    ),
   );
   const pad = Math.max(4, Math.ceil(maxHalf) + 2);
   const fadeAmt = resolveSpeedFade(op);
@@ -3679,7 +3708,8 @@ function drawRibbonStrokeFrom(
     }
   };
 
-  const stamped = paintOpaqueRibbonThenAlpha(
+  const stamped = ribbonStage("tessPaint", () =>
+    paintOpaqueRibbonThenAlpha(
     ctx,
     left,
     right,
@@ -3695,6 +3725,7 @@ function drawRibbonStrokeFrom(
     // Live paint only: inside a batch the ribbon is reused whole, and a
     // partial draw would never be asked for.
     inkOpBatch === null && fromIndex === 0 && fills ? { source: points } : undefined,
+  ),
   );
 
   if (!stamped) {
