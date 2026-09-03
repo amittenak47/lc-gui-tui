@@ -3,8 +3,8 @@
  *
  * RasterInkLayer owns capture, the overlay, the stroke-start snapshot, and rAF.
  * This session owns ingest, attack/dwell/stamp, reshape, and live overlay paint.
- * Step 2 keeps today's append rule: every `dist < step` sample still becomes a
- * point. Later steps change how the ring is drained, not this public surface.
+ * Ingest writes a preallocated ring; tick drains it. Dense hops stay off the
+ * spine and ride a transient tip so tessellation does not grow with digitizer Hz.
  */
 
 import { overdrawnViewport } from "./panOffset";
@@ -48,6 +48,80 @@ import {
   type LiveSmoothCache,
 } from "./inkSmoothing";
 import { straightenFromAnchor } from "./straightAnchor";
+
+const RING_START = 1024;
+
+/**
+ * Running disc-vs-ribbon decision for the live trail.
+ *
+ * Matches {@link isDiscPrimaryPath} without cloning `[...points, candidate]`.
+ * Once the path leaves disc-primary, that decision sticks.
+ */
+export class DiscExtentTracker {
+  private stickyRibbon = false;
+  private n = 0;
+  private pathLen = 0;
+  private minX = 0;
+  private maxX = 0;
+  private minY = 0;
+  private maxY = 0;
+  private lastX = 0;
+  private lastY = 0;
+
+  reset(origin: ScenePoint): void {
+    this.stickyRibbon = false;
+    this.n = 1;
+    this.pathLen = 0;
+    this.minX = this.maxX = origin.x;
+    this.minY = this.maxY = origin.y;
+    this.lastX = origin.x;
+    this.lastY = origin.y;
+  }
+
+  wouldStayDisc(candidate: ScenePoint, nib: number): boolean {
+    if (this.stickyRibbon) return false;
+    const stay = this.previewStay(candidate, nib);
+    if (!stay) this.stickyRibbon = true;
+    return stay;
+  }
+
+  commit(point: ScenePoint): void {
+    if (this.n >= 1) {
+      this.pathLen += Math.hypot(point.x - this.lastX, point.y - this.lastY);
+    }
+    if (this.n === 0) {
+      this.minX = this.maxX = point.x;
+      this.minY = this.maxY = point.y;
+    } else {
+      if (point.x < this.minX) this.minX = point.x;
+      if (point.x > this.maxX) this.maxX = point.x;
+      if (point.y < this.minY) this.minY = point.y;
+      if (point.y > this.maxY) this.maxY = point.y;
+    }
+    this.lastX = point.x;
+    this.lastY = point.y;
+    this.n += 1;
+  }
+
+  private previewStay(candidate: ScenePoint, nib: number): boolean {
+    const nextN = this.n + 1;
+    if (nextN <= 1) return true;
+    const nextLen =
+      this.pathLen + Math.hypot(candidate.x - this.lastX, candidate.y - this.lastY);
+    const minX = Math.min(this.minX, candidate.x);
+    const maxX = Math.max(this.maxX, candidate.x);
+    const minY = Math.min(this.minY, candidate.y);
+    const maxY = Math.max(this.maxY, candidate.y);
+    const extent = Math.hypot(maxX - minX, maxY - minY);
+    if (nextN === 2) {
+      if (nextLen < 1e-3) return true;
+      if (nextLen < nib * 0.25) return true;
+      return extent < nib;
+    }
+    if (nextLen < 1e-3) return true;
+    return extent < nib;
+  }
+}
 
 export type LivePaintResult = "ok" | "fallback";
 
@@ -105,13 +179,17 @@ export class LiveStroke {
 
   private op: InkOp;
   private readonly rect: DOMRectReadOnly;
-  private readonly uiWidth: number;
   private readonly boldness: number;
   private readonly smoothing: number;
   private readonly smoothingMode: InkSmoothingMode;
   private readonly getStraightAnchor: () => number | null;
   private readonly onNeedPaint: () => void;
-  private pending: LivePointerSample[] = [];
+  private readonly pointerType: string;
+  private ringX = new Float64Array(RING_START);
+  private ringY = new Float64Array(RING_START);
+  private ringP = new Float64Array(RING_START);
+  private ringT = new Float64Array(RING_START);
+  private ringN = 0;
   private ingested = 0;
   private lastPoint: ScenePoint | null = null;
   private rawPoint: ScenePoint | null = null;
@@ -130,17 +208,19 @@ export class LiveStroke {
   private attackCount = 0;
   private lastPaintFallback = false;
   private closed = false;
+  private readonly disc = new DiscExtentTracker();
+  private hasTransientTip = false;
 
   constructor(init: BeginLiveStroke) {
     this.view = init.view;
     this.box = init.box;
     this.rect = init.rect;
-    this.uiWidth = init.uiWidth;
     this.boldness = init.boldness;
     this.smoothing = init.smoothing;
     this.smoothingMode = init.smoothingMode;
     this.getStraightAnchor = init.getStraightAnchor;
     this.onNeedPaint = init.onNeedPaint;
+    this.pointerType = init.first.pointerType;
     this.lastEventTimeMs = init.first.timeStamp;
     this.lastSampleTime = init.first.timeStamp;
     this.lastMoveWall = performance.now();
@@ -159,6 +239,7 @@ export class LiveStroke {
     if (speed > 0 || blotBlend > 0 || fade > 0) point.slowness = INK_SLOWNESS_NEUTRAL;
     this.lastPoint = point;
     this.rawPoint = point;
+    this.disc.reset(point);
     this.smoothedPressure = hasStylusPressure(point.pressure) ? point.pressure : 0;
     this.smoothedSpeed =
       speed > 0 || blotBlend > 0 || fade > 0 ? INK_SPEED_NEUTRAL_PX_MS : 0;
@@ -238,22 +319,32 @@ export class LiveStroke {
 
   ingest(batch: readonly LivePointerSample[]): void {
     if (this.closed || batch.length === 0) return;
-    for (const sample of batch) this.pending.push(sample);
+    this.ensureRing(batch.length);
+    for (const sample of batch) {
+      const i = this.ringN;
+      this.ringX[i] = sample.clientX;
+      this.ringY[i] = sample.clientY;
+      this.ringP[i] = sample.pressure;
+      this.ringT[i] = sample.timeStamp;
+      this.ringN += 1;
+    }
     this.lastEventTimeMs = batch[batch.length - 1]!.timeStamp;
     this.ingested += batch.length;
   }
 
   tick(nowMs: number): void {
     if (this.closed) return;
-    const batch = this.pending;
-    this.pending = [];
-    if (batch.length > 0) this.drainBatch(batch, nowMs);
+    const n = this.ringN;
+    if (n > 0) {
+      this.drainRing(n);
+      this.ringN = 0;
+    }
     this.tickDwell(nowMs);
     if (DEBUG_INK || inkMetrics.enabled) {
       inkMetrics.live({
         ringSamples: this.ingested,
-        spineN: this.op.points.length,
-        transientTip: false,
+        spineN: this.spineCount(),
+        transientTip: this.hasTransientTip,
         dirtyFrom: 0,
       });
     }
@@ -323,11 +414,12 @@ export class LiveStroke {
   abandon(): void {
     this.closed = true;
     this.stopDwell();
-    this.pending.length = 0;
+    this.ringN = 0;
     this.attackBuffer = null;
     this.liveRaw = null;
     this.lastPoint = null;
     this.rawPoint = null;
+    this.hasTransientTip = false;
   }
 
   overlayDirtyPx(_prev: PixelRect | null, _view: ViewportTransform, dpr: number): PixelRect {
@@ -357,84 +449,141 @@ export class LiveStroke {
     // Host is frozen at pointerdown; nothing to refresh besides keeping tags.
   }
 
-  private drainBatch(batch: readonly LivePointerSample[], _nowMs: number): void {
+  private spineCount(): number {
+    const n = this.op.points.length;
+    return this.hasTransientTip ? Math.max(0, n - 1) : n;
+  }
+
+  private ensureRing(more: number): void {
+    const need = this.ringN + more;
+    if (need <= this.ringX.length) return;
+    let cap = this.ringX.length;
+    while (cap < need) cap *= 2;
+    const nx = new Float64Array(cap);
+    const ny = new Float64Array(cap);
+    const np = new Float64Array(cap);
+    const nt = new Float64Array(cap);
+    nx.set(this.ringX.subarray(0, this.ringN));
+    ny.set(this.ringY.subarray(0, this.ringN));
+    np.set(this.ringP.subarray(0, this.ringN));
+    nt.set(this.ringT.subarray(0, this.ringN));
+    this.ringX = nx;
+    this.ringY = ny;
+    this.ringP = np;
+    this.ringT = nt;
+  }
+
+  private stampStep(point: ScenePoint): number {
+    const live = this.op;
+    if (live.kind === "erase") return Math.max(live.radius * 0.45, 0.5);
+    const speedInk = live.speedInk ?? 0;
+    const style = inkStrokeStyle(
+      live.baseWidth,
+      live.maxFullness,
+      point.pressure,
+      live.pressureClip,
+      live.pressureSensitive,
+      0,
+      point.slowness ?? INK_SLOWNESS_NEUTRAL,
+      speedInk,
+      live.highlight === true,
+      live.boldness ?? this.boldness,
+      live.speedFade ?? 0,
+    );
+    const dense =
+      speedInk > 0 ||
+      (live.pressureSensitive && hasStylusPressure(point.pressure));
+    return Math.max(
+      style.lineWidth * (dense ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
+      0.5,
+    );
+  }
+
+  private setTransientTip(tip: ScenePoint): void {
+    const pts = this.op.points;
+    if (this.hasTransientTip) {
+      pts[pts.length - 1] = tip;
+    } else {
+      pts.push(tip);
+      this.hasTransientTip = true;
+    }
+  }
+
+  private dropTransientTip(): void {
+    if (!this.hasTransientTip) return;
+    this.op.points.pop();
+    this.hasTransientTip = false;
+  }
+
+  private collapseToOrigin(origin: ScenePoint): void {
+    this.dropTransientTip();
+    this.op.points = [origin];
+    this.disc.reset(origin);
+    this.lastPoint = origin;
+    if (this.reshapeActive()) this.liveRaw = [origin];
+  }
+
+  private appendSpine(from: ScenePoint, to: ScenePoint, step: number): void {
+    const dist = Math.hypot(to.x - from.x, to.y - from.y);
+    if (dist < step) {
+      this.setTransientTip(to);
+      return;
+    }
+    this.dropTransientTip();
+    const stamps = stampAlongSegment(from, to, step);
+    this.op.points.push(...stamps);
+    for (const s of stamps) this.disc.commit(s);
+    this.lastPoint = stamps[stamps.length - 1] ?? from;
+  }
+
+  private appendRaw(to: ScenePoint, step: number): void {
+    const rawBuf = this.liveRaw ?? (this.liveRaw = []);
+    const prev = rawBuf[rawBuf.length - 1];
+    if (!prev) {
+      rawBuf.push(to);
+      return;
+    }
+    const dist = Math.hypot(to.x - prev.x, to.y - prev.y);
+    if (dist < step) {
+      rawBuf.push(to);
+      return;
+    }
+    rawBuf.push(...stampAlongSegment(prev, to, step));
+  }
+
+  private drainRing(n: number): void {
     const live = this.op;
     const zoom = this.view.zoom || 1;
     const pressureSensitive = live.kind === "draw" && live.pressureSensitive;
-    const maxFullness = live.kind === "draw" ? live.maxFullness : 1;
-    const pressureClip = live.kind === "draw" ? live.pressureClip : 1;
     const speedInk = live.kind === "draw" ? (live.speedInk ?? 0) : 0;
     const speedFade = live.kind === "draw" ? (live.speedFade ?? 0) : 0;
     const speedBlot = live.kind === "draw" ? (live.speedBlotBlend ?? 0) : 0;
     const trackPace = speedInk > 0 || speedFade > 0 || speedBlot > 0;
     const reshapeLive = live.kind === "draw" && this.reshapeActive();
+    const nib =
+      live.kind === "draw"
+        ? Math.max(inkLineWidth(live.baseWidth, 0, false), 1e-6)
+        : 0;
 
-    if (this.attackBuffer && live.kind === "draw") {
-      for (const sample of batch) {
-        const rawLast = this.rawPoint;
-        if (!rawLast) break;
-        const raw = scenePointFromPointer(
-          sample.clientX,
-          sample.clientY,
-          this.rect,
-          this.view,
-          sample.pressure,
-          sample.pointerType,
-        );
-        const dt = sample.timeStamp - this.lastSampleTime;
-        this.lastSampleTime = sample.timeStamp;
-        this.noteInkTravel(raw.x - rawLast.x, raw.y - rawLast.y, zoom, live);
-
-        if (pressureSensitive && hasStylusPressure(raw.pressure)) {
-          if (raw.pressure > this.attackPeak) this.attackPeak = raw.pressure;
-          this.smoothedPressure = smoothPressure(this.smoothedPressure, raw.pressure);
-          raw.pressure = this.smoothedPressure;
-        } else {
-          raw.pressure = NO_PRESSURE;
-        }
-
-        if (trackPace) {
-          const travelled = Math.hypot(raw.x - rawLast.x, raw.y - rawLast.y) * zoom;
-          if (dt > 0) {
-            this.smoothedSpeed = smoothSpeed(this.smoothedSpeed, travelled / dt);
-          }
-          raw.slowness = inkSlowness(this.smoothedSpeed);
-        }
-        this.rawPoint = raw;
-        this.attackBuffer.push(raw);
-        this.attackCount += 1;
-      }
-
-      const contact = live.points[0];
-      if (contact && hasStylusPressure(this.attackPeak)) {
-        contact.pressure = this.attackPeak;
-      }
-
-      const last = batch[batch.length - 1];
-      const shouldFlush =
-        !!last &&
-        (last.timeStamp - this.attackStart >= INK_ATTACK_MS || this.attackCount >= 3);
-      if (shouldFlush) this.flushAttackBuffer();
-      return;
-    }
-
-    for (const sample of batch) {
-      const last = this.lastPoint;
+    for (let i = 0; i < n; i++) {
       const rawLast = this.rawPoint;
-      if (!last || !rawLast) break;
+      if (!rawLast) break;
       const raw = scenePointFromPointer(
-        sample.clientX,
-        sample.clientY,
+        this.ringX[i]!,
+        this.ringY[i]!,
         this.rect,
         this.view,
-        sample.pressure,
-        sample.pointerType,
+        this.ringP[i]!,
+        this.pointerType,
       );
-      const dt = sample.timeStamp - this.lastSampleTime;
-      this.lastSampleTime = sample.timeStamp;
+      const dt = this.ringT[i]! - this.lastSampleTime;
+      this.lastSampleTime = this.ringT[i]!;
       this.noteInkTravel(raw.x - rawLast.x, raw.y - rawLast.y, zoom, live);
 
       if (pressureSensitive && hasStylusPressure(raw.pressure)) {
+        if (this.attackBuffer && raw.pressure > this.attackPeak) {
+          this.attackPeak = raw.pressure;
+        }
         this.smoothedPressure = smoothPressure(this.smoothedPressure, raw.pressure);
         raw.pressure = this.smoothedPressure;
       } else {
@@ -449,83 +598,78 @@ export class LiveStroke {
         raw.slowness = inkSlowness(this.smoothedSpeed);
       }
       this.rawPoint = raw;
-      const point = raw;
 
-      const anchor = this.getStraightAnchor();
-      if (live.kind === "draw" && anchor != null) {
-        this.straightTouched = true;
-        live.points = straightenFromAnchor(live.points, anchor, point);
-        if (reshapeLive) this.liveRaw = [...live.points];
-        this.lastPoint = point;
+      if (this.attackBuffer && live.kind === "draw") {
+        this.attackBuffer.push(raw);
+        this.attackCount += 1;
         continue;
       }
 
-      if (live.kind === "draw" && live.highlight !== true && live.points[0]) {
-        const nib = Math.max(inkLineWidth(live.baseWidth, 0, false), 1e-6);
-        const trail = reshapeLive
-          ? [...(this.liveRaw ?? live.points), point]
-          : [...live.points, point];
-        if (isDiscPrimaryPath(trail, nib)) {
-          const origin = live.points[0];
-          if (
-            hasStylusPressure(point.pressure) &&
-            point.pressure > origin.pressure
-          ) {
-            origin.pressure = point.pressure;
-          }
-          if (point.slowness !== undefined) origin.slowness = point.slowness;
-          this.lastPoint = origin;
-          live.points = [origin];
-          if (reshapeLive) this.liveRaw = [origin];
-          continue;
-        }
-      }
-
-      if (live.kind === "draw" && live.highlight === true) {
-        const chisel =
-          inkLineWidth(live.baseWidth, 0, false) * HIGHLIGHT_WIDTH_SCALE;
-        const next = [...live.points, point];
-        const trimmed = trimHighlightLiftHook(next, chisel);
-        const lastKept = trimmed[trimmed.length - 1];
-        if (lastKept && (lastKept.x !== point.x || lastKept.y !== point.y)) {
-          continue;
-        }
-      }
-
-      const step =
-        live.kind === "erase"
-          ? Math.max(live.radius * 0.45, 0.5)
-          : (() => {
-              const style = inkStrokeStyle(
-                this.uiWidth,
-                maxFullness,
-                point.pressure,
-                pressureClip,
-                pressureSensitive,
-                0,
-                point.slowness ?? INK_SLOWNESS_NEUTRAL,
-                speedInk,
-                live.kind === "draw" && live.highlight === true,
-                live.kind === "draw" ? (live.boldness ?? this.boldness) : 1,
-                live.kind === "draw" ? (live.speedFade ?? 0) : 0,
-              );
-              const dense =
-                speedInk > 0 ||
-                (pressureSensitive && hasStylusPressure(point.pressure));
-              return Math.max(
-                style.lineWidth * (dense ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
-                0.5,
-              );
-            })();
-      const stamps = stampAlongSegment(last, point, step);
-      if (reshapeLive) {
-        const rawBuf = this.liveRaw ?? (this.liveRaw = []);
-        rawBuf.push(...stamps);
-      } else {
-        live.points.push(...stamps);
-      }
-      this.lastPoint = point;
+      this.stampSample(raw, reshapeLive, nib);
     }
+
+    if (this.attackBuffer && live.kind === "draw") {
+      const contact = live.points[0];
+      if (contact && hasStylusPressure(this.attackPeak)) {
+        contact.pressure = this.attackPeak;
+      }
+      const lastT = n > 0 ? this.ringT[n - 1]! : this.attackStart;
+      const shouldFlush =
+        lastT - this.attackStart >= INK_ATTACK_MS || this.attackCount >= 3;
+      if (shouldFlush) this.flushAttackBuffer();
+    }
+  }
+
+  private stampSample(point: ScenePoint, reshapeLive: boolean, nib: number): void {
+    const live = this.op;
+    const last = this.lastPoint;
+    if (!last) return;
+
+    const anchor = this.getStraightAnchor();
+    if (live.kind === "draw" && anchor != null) {
+      this.straightTouched = true;
+      this.dropTransientTip();
+      live.points = straightenFromAnchor(live.points, anchor, point);
+      if (reshapeLive) this.liveRaw = [...live.points];
+      this.lastPoint = point;
+      this.disc.reset(live.points[0]!);
+      for (let i = 1; i < live.points.length; i++) this.disc.commit(live.points[i]!);
+      return;
+    }
+
+    if (live.kind === "draw" && live.highlight !== true && live.points[0]) {
+      if (this.disc.wouldStayDisc(point, nib)) {
+        const origin = live.points[0];
+        if (
+          hasStylusPressure(point.pressure) &&
+          point.pressure > origin.pressure
+        ) {
+          origin.pressure = point.pressure;
+        }
+        if (point.slowness !== undefined) origin.slowness = point.slowness;
+        this.collapseToOrigin(origin);
+        return;
+      }
+    }
+
+    if (live.kind === "draw" && live.highlight === true) {
+      const chisel =
+        inkLineWidth(live.baseWidth, 0, false) * HIGHLIGHT_WIDTH_SCALE;
+      const next = [...live.points, point];
+      const trimmed = trimHighlightLiftHook(next, chisel);
+      const lastKept = trimmed[trimmed.length - 1];
+      if (lastKept && (lastKept.x !== point.x || lastKept.y !== point.y)) {
+        return;
+      }
+    }
+
+    const step = this.stampStep(point);
+    if (reshapeLive) {
+      this.appendRaw(point, step);
+      this.lastPoint = point;
+      return;
+    }
+    this.appendSpine(last, point, step);
   }
 
   private flushAttackBuffer(): void {
@@ -539,58 +683,27 @@ export class LiveStroke {
     this.smoothedPressure = peak;
     this.attackBuffer = null;
 
-    const width = this.uiWidth;
     const origin = buf[0];
     this.rawPoint = buf[buf.length - 1] ?? origin;
     const nib = Math.max(inkLineWidth(live.baseWidth, 0, false), 1e-6);
     if (isDiscPrimaryPath(buf, nib)) {
-      this.lastPoint = origin;
-      if (this.reshapeActive()) {
-        this.liveRaw = [origin];
-        live.points = [origin];
-      } else {
-        this.liveRaw = null;
-        live.points = [origin];
-      }
+      this.collapseToOrigin(origin);
       return;
     }
 
-    const stamps: ScenePoint[] = [origin];
-    let last = origin;
-    this.lastPoint = last;
+    this.dropTransientTip();
+    live.points = [origin];
+    this.disc.reset(origin);
+    this.lastPoint = origin;
     for (let i = 1; i < buf.length; i++) {
       const point = buf[i]!;
-      if (isDiscPrimaryPath([...stamps, point], nib)) continue;
-      const style = inkStrokeStyle(
-        width,
-        live.maxFullness,
-        point.pressure,
-        live.pressureClip,
-        live.pressureSensitive,
-        0,
-        point.slowness ?? INK_SLOWNESS_NEUTRAL,
-        live.speedInk ?? 0,
-        false,
-        live.boldness ?? this.boldness,
-        live.speedFade ?? 0,
-      );
-      const dense =
-        (live.speedInk ?? 0) > 0 ||
-        (live.pressureSensitive && hasStylusPressure(point.pressure));
-      const step = Math.max(
-        style.lineWidth * (dense ? INK_STEP_FACTOR_PRESSURE : INK_STEP_FACTOR),
-        0.5,
-      );
-      stamps.push(...stampAlongSegment(last, point, step));
-      last = point;
+      if (this.disc.wouldStayDisc(point, nib)) continue;
+      this.appendSpine(this.lastPoint ?? origin, point, this.stampStep(point));
     }
-    this.lastPoint = last;
     if (this.reshapeActive()) {
-      this.liveRaw = stamps;
-      live.points = stamps;
+      this.liveRaw = live.points.slice();
     } else {
       this.liveRaw = null;
-      live.points = stamps;
     }
   }
 
@@ -600,23 +713,19 @@ export class LiveStroke {
     const last = this.lastPoint;
     const raw = this.rawPoint;
     if (live.kind !== "draw" || !last || !raw) return;
+    if (this.hasTransientTip) {
+      this.lastPoint = raw;
+      this.hasTransientTip = false;
+      this.disc.commit(raw);
+      return;
+    }
     if (Math.hypot(raw.x - last.x, raw.y - last.y) < 1e-3) return;
-    const style = inkStrokeStyle(
-      live.baseWidth,
-      live.maxFullness,
-      raw.pressure,
-      live.pressureClip,
-      live.pressureSensitive,
-      0,
-      raw.slowness ?? INK_SLOWNESS_NEUTRAL,
-      live.speedInk ?? 0,
-      false,
-      live.boldness ?? this.boldness,
-      live.speedFade ?? 0,
-    );
-    const step = Math.max(style.lineWidth * INK_STEP_FACTOR_PRESSURE, 0.5);
-    live.points.push(...stampAlongSegment(last, raw, step));
-    this.lastPoint = raw;
+    this.appendSpine(last, raw, this.stampStep(raw));
+    if (this.hasTransientTip) {
+      this.hasTransientTip = false;
+      this.disc.commit(raw);
+    }
+    this.lastPoint = this.op.points[this.op.points.length - 1] ?? raw;
   }
 
   private tickDwell(nowMs: number): void {
@@ -649,7 +758,7 @@ export class LiveStroke {
       dwellPoint.pressure = this.smoothedPressure;
     }
     const dwellNib = Math.max(inkLineWidth(live.baseWidth, 0, false), 1e-6);
-    if (isDiscPrimaryPath([...live.points, dwellPoint], dwellNib)) {
+    if (this.disc.wouldStayDisc(dwellPoint, dwellNib)) {
       const contact = live.points[0];
       if (contact) {
         contact.slowness = dwellPoint.slowness;
