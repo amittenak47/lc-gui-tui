@@ -10,6 +10,7 @@ import {
   hasStylusPressure,
   HIGHLIGHT_WIDTH_SCALE,
   trimHighlightLiftHook,
+  highlightLiftKeepsTip,
   inkBaseWidthForZoom,
   inkLineWidth,
   inkOpsBounds,
@@ -239,6 +240,26 @@ describe("rasterInk sizing", () => {
       ];
       const kept = trimHighlightLiftHook(pts, 8);
       expect(kept).toHaveLength(3);
+    });
+
+    it("highlightLiftKeepsTip matches trimHighlightLiftHook on the candidate tip", () => {
+      const prefix = [
+        { x: 0, y: 0, pressure: 0.5 },
+        { x: 40, y: 0, pressure: 0.5 },
+        { x: 80, y: 0, pressure: 0.5 },
+        { x: 76, y: 0.5, pressure: 0.2 },
+      ];
+      const tip = { x: 72, y: 0, pressure: 0.05 };
+      const kept = trimHighlightLiftHook([...prefix, tip], 20);
+      expect(highlightLiftKeepsTip(prefix, tip, 20)).toBe(
+        kept[kept.length - 1]?.x === tip.x && kept[kept.length - 1]?.y === tip.y,
+      );
+      const uturn = [
+        { x: 0, y: 0, pressure: 0.5 },
+        { x: 40, y: 0, pressure: 0.5 },
+      ];
+      const back = { x: 0, y: 0, pressure: 0.5 };
+      expect(highlightLiftKeepsTip(uturn, back, 8)).toBe(true);
     });
   });
 
@@ -1940,12 +1961,12 @@ describe("ribbon normal stability", () => {
     const pts = points([0, 0], [40, 0], [40, 40]);
     const style = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, INK_SLOWNESS_NEUTRAL, 0);
     const styles = pts.map(() => style);
-    const { left, right } = ribbonSides(pts, styles, 1);
-    for (let i = 1; i < left.length; i++) {
-      const v0x = left[i - 1].x - right[i - 1].x;
-      const v0y = left[i - 1].y - right[i - 1].y;
-      const v1x = left[i].x - right[i].x;
-      const v1y = left[i].y - right[i].y;
+    const sides = ribbonSides(pts, styles, 1);
+    for (let i = 1; i < sides.n; i++) {
+      const v0x = sides.lx[i - 1]! - sides.rx[i - 1]!;
+      const v0y = sides.ly[i - 1]! - sides.ry[i - 1]!;
+      const v1x = sides.lx[i]! - sides.rx[i]!;
+      const v1y = sides.ly[i]! - sides.ry[i]!;
       expect(v0x * v1x + v0y * v1y).toBeGreaterThan(0);
     }
   });
@@ -1954,11 +1975,13 @@ describe("ribbon normal stability", () => {
     const pts = points([0, 0], [100, 0], [50, 0]);
     const style = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, INK_SLOWNESS_NEUTRAL, 0);
     const styles = pts.map(() => style);
-    const { left, right } = ribbonSides(pts, styles, 1);
+    const sides = ribbonSides(pts, styles, 1);
+    const left = Array.from({ length: sides.n }, (_, i) => ({ x: sides.lx[i]!, y: sides.ly[i]! }));
+    const right = Array.from({ length: sides.n }, (_, i) => ({ x: sides.rx[i]!, y: sides.ry[i]! }));
 
     for (let i = 0; i < pts.length; i++) {
-      const midX = (left[i].x + right[i].x) / 2;
-      const midY = (left[i].y + right[i].y) / 2;
+      const midX = (sides.lx[i]! + sides.rx[i]!) / 2;
+      const midY = (sides.ly[i]! + sides.ry[i]!) / 2;
       expect(midX).toBeCloseTo(pts[i].x);
       expect(midY).toBeCloseTo(pts[i].y);
     }
@@ -2451,13 +2474,13 @@ describe("grain and blot pooling (Phase 2)", () => {
     const last = pts.length - 1;
     const halfNib =
       Math.hypot(
-        ribNib.left[last].x - ribNib.right[last].x,
-        ribNib.left[last].y - ribNib.right[last].y,
+        ribNib.lx[last]! - ribNib.rx[last]!,
+        ribNib.ly[last]! - ribNib.ry[last]!,
       ) / 2;
     const halfGrown =
       Math.hypot(
-        ribGrown.left[last].x - ribGrown.right[last].x,
-        ribGrown.left[last].y - ribGrown.right[last].y,
+        ribGrown.lx[last]! - ribGrown.rx[last]!,
+        ribGrown.ly[last]! - ribGrown.ry[last]!,
       ) / 2;
     expect(halfGrown).toBeGreaterThan(halfNib);
   });

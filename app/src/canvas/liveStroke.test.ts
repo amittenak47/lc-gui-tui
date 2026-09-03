@@ -123,10 +123,14 @@ describe("LiveStroke ingest", () => {
     if (live?.kind !== "draw") return;
     expect(live.points.length).toBeLessThan(hops / 4);
     expect(live.points[live.points.length - 1]?.x).toBeCloseTo(10 + hops * 0.2, 5);
+    const livePts = live.points;
+    const liveFirst = live.points[0];
     const op = stroke.commit();
     if (op.kind !== "draw") return;
     expect(op.points[op.points.length - 1]?.x).toBeCloseTo(10 + hops * 0.2, 5);
     expect(op.points.length).toBeLessThan(hops / 4);
+    expect(op.points).not.toBe(livePts);
+    expect(op.points[0]).not.toBe(liveFirst);
   });
 
   it("commits samples that were ingested after the last tick", () => {
