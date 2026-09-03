@@ -410,6 +410,25 @@ function ribbonVertexFillCss(color: string, style: InkStrokeStyle): string {
   return css;
 }
 
+/** Live paint reuses one fills array; tile batches need a fresh identity. */
+let liveFillsScratch: string[] = [];
+
+function ribbonVertexFills(
+  color: string,
+  styles: readonly InkStrokeStyle[],
+): string[] {
+  const n = styles.length;
+  if (inkOpBatch !== null) {
+    const out = new Array<string>(n);
+    for (let i = 0; i < n; i++) out[i] = ribbonVertexFillCss(color, styles[i]!);
+    return out;
+  }
+  if (liveFillsScratch.length < n) liveFillsScratch.length = n;
+  for (let i = 0; i < n; i++) liveFillsScratch[i] = ribbonVertexFillCss(color, styles[i]!);
+  liveFillsScratch.length = n;
+  return liveFillsScratch;
+}
+
 export interface ScenePoint {
   x: number;
   y: number;
@@ -621,6 +640,46 @@ export function trimHighlightLiftHook(
     end -= 1;
   }
   return end + 1 === points.length ? points.slice() : points.slice(0, end + 1);
+}
+
+/**
+ * Whether appending `tip` would survive {@link trimHighlightLiftHook}.
+ * Same decision as cloning `[...points, tip]` without allocating.
+ */
+export function highlightLiftKeepsTip(
+  points: readonly ScenePoint[],
+  tip: ScenePoint,
+  chiselWidth: number,
+): boolean {
+  const n = points.length + 1;
+  if (n < 3) return true;
+  const at = (i: number) => (i < points.length ? points[i]! : tip);
+  const maxHook = Math.max(chiselWidth * 1.25, 6);
+  const hi = Math.max(1, Math.min(n - 2, Math.floor((n - 1) * 0.7)));
+  const origin = at(0);
+  const hx = at(hi).x - origin.x;
+  const hy = at(hi).y - origin.y;
+  const hLen = Math.hypot(hx, hy);
+  if (hLen < 1e-6) return true;
+  let end = n - 1;
+  let trimmed = 0;
+  while (end >= 2) {
+    const b = at(end - 1);
+    const c = at(end);
+    const wx = c.x - b.x;
+    const wy = c.y - b.y;
+    const wLen = Math.hypot(wx, wy);
+    if (wLen < 1e-6) {
+      end -= 1;
+      continue;
+    }
+    const cos = (hx * wx + hy * wy) / (hLen * wLen);
+    if (cos >= -0.15) break;
+    if (trimmed + wLen > maxHook) break;
+    trimmed += wLen;
+    end -= 1;
+  }
+  return end === n - 1;
 }
 
 /**
@@ -873,26 +932,36 @@ export function stampAlongSegment(
  * reshape misses it, which is exactly the distinction that matters.
  */
 const consumedCache = new WeakMap<readonly ScenePoint[], number[]>();
+/** Live tessellator prefix lengths; WeakMap still covers committed identity-stable ops. */
+let tessConsumed: { points: readonly ScenePoint[]; acc: number[] } | null = null;
 
 function nibWidth(op: InkDrawOp): number {
   return Math.max(inkLineWidth(op.baseWidth, 0, false), 1e-6);
 }
 
-function consumedFor(op: InkDrawOp): number[] {
-  const points = op.points;
-  let acc = consumedCache.get(points);
-  if (!acc) {
-    acc = [0];
-    consumedCache.set(points, acc);
-  }
-  // Undo hands back a different array; a shortened stroke invalidates the tail.
+function extendConsumed(acc: number[], points: readonly ScenePoint[], nib: number): number[] {
   if (acc.length > points.length) acc.length = Math.max(1, points.length);
-  const nib = nibWidth(op);
   for (let index = acc.length; index < points.length; index++) {
     const prev = points[index - 1];
     const next = points[index];
     acc.push(acc[index - 1] + Math.hypot(next.x - prev.x, next.y - prev.y) / nib);
   }
+  return acc;
+}
+
+function consumedFor(op: InkDrawOp): number[] {
+  const points = op.points;
+  const nib = nibWidth(op);
+  if (tessConsumed && tessConsumed.points === points) {
+    return extendConsumed(tessConsumed.acc, points, nib);
+  }
+  let acc = consumedCache.get(points);
+  if (!acc) {
+    acc = [0];
+    consumedCache.set(points, acc);
+  }
+  extendConsumed(acc, points, nib);
+  tessConsumed = { points, acc };
   return acc;
 }
 
@@ -1184,16 +1253,78 @@ function strokeNormalAt(points: readonly ScenePoint[], index: number): { x: numb
 }
 
 /** Left and right offset polylines for a variable-width ribbon. */
-export function ribbonSides(
+/** Parallel ribbon outlines. Live paint reuses backing arrays; batches copy. */
+export interface RibbonSideSoA {
+  n: number;
+  lx: Float64Array;
+  ly: Float64Array;
+  rx: Float64Array;
+  ry: Float64Array;
+}
+
+let liveSideCap = 0;
+let liveLx = new Float64Array(0);
+let liveLy = new Float64Array(0);
+let liveRx = new Float64Array(0);
+let liveRy = new Float64Array(0);
+
+function allocRibbonSides(n: number, reuse: boolean): RibbonSideSoA {
+  if (!reuse) {
+    return {
+      n,
+      lx: new Float64Array(n),
+      ly: new Float64Array(n),
+      rx: new Float64Array(n),
+      ry: new Float64Array(n),
+    };
+  }
+  if (n > liveSideCap) {
+    liveSideCap = Math.max(64, n * 2);
+    liveLx = new Float64Array(liveSideCap);
+    liveLy = new Float64Array(liveSideCap);
+    liveRx = new Float64Array(liveSideCap);
+    liveRy = new Float64Array(liveSideCap);
+  }
+  return {
+    n,
+    lx: liveLx.subarray(0, n),
+    ly: liveLy.subarray(0, n),
+    rx: liveRx.subarray(0, n),
+    ry: liveRy.subarray(0, n),
+  };
+}
+
+function ribbonSidesFromPolylines(
+  left: readonly { x: number; y: number }[],
+  right: readonly { x: number; y: number }[],
+): RibbonSideSoA {
+  const n = left.length;
+  const sides: RibbonSideSoA = {
+    n,
+    lx: new Float64Array(n),
+    ly: new Float64Array(n),
+    rx: new Float64Array(n),
+    ry: new Float64Array(n),
+  };
+  for (let i = 0; i < n; i++) {
+    sides.lx[i] = left[i]!.x;
+    sides.ly[i] = left[i]!.y;
+    sides.rx[i] = right[i]!.x;
+    sides.ry[i] = right[i]!.y;
+  }
+  return sides;
+}
+
+function fillRibbonSides(
+  sides: RibbonSideSoA,
   points: readonly ScenePoint[],
   styles: readonly InkStrokeStyle[],
   pixelScale: number,
-): { left: Array<{ x: number; y: number }>; right: Array<{ x: number; y: number }> } {
-  const left: Array<{ x: number; y: number }> = [];
-  const right: Array<{ x: number; y: number }> = [];
+): RibbonSideSoA {
+  const n = sides.n;
   let prevNx = 0;
   let prevNy = 1;
-  for (let index = 0; index < points.length; index++) {
+  for (let index = 0; index < n; index++) {
     let { x: nx, y: ny } = strokeNormalAt(points, index);
     if (index > 0) {
       const prevT = strokeTangentAt(points, index - 1);
@@ -1209,10 +1340,38 @@ export function ribbonSides(
     prevNy = ny;
     const half = paintedWidth(styles[index].lineWidth, pixelScale) / 2;
     const center = points[index];
-    left.push({ x: center.x + nx * half, y: center.y + ny * half });
-    right.push({ x: center.x - nx * half, y: center.y - ny * half });
+    sides.lx[index] = center.x + nx * half;
+    sides.ly[index] = center.y + ny * half;
+    sides.rx[index] = center.x - nx * half;
+    sides.ry[index] = center.y - ny * half;
   }
-  return { left, right };
+  return sides;
+}
+
+export function ribbonSides(
+  points: readonly ScenePoint[],
+  styles: readonly InkStrokeStyle[],
+  pixelScale: number,
+): RibbonSideSoA {
+  return fillRibbonSides(
+    allocRibbonSides(points.length, false),
+    points,
+    styles,
+    pixelScale,
+  );
+}
+
+function ribbonSidesForPaint(
+  points: readonly ScenePoint[],
+  styles: readonly InkStrokeStyle[],
+  pixelScale: number,
+): RibbonSideSoA {
+  return fillRibbonSides(
+    allocRibbonSides(points.length, inkOpBatch === null),
+    points,
+    styles,
+    pixelScale,
+  );
 }
 
 /** Drop consecutive samples closer than ~0.2× local half-width; keep tip and max slowness. */
@@ -1496,29 +1655,6 @@ const RIBBON_QUAD_OVERLAP = 1.25;
 const RIBBON_WASH_OVERLAP_FRAC = 0.5;
 const RIBBON_WASH_OVERLAP_MAX_PX = 40;
 
-function offsetAlong(
-  a: { x: number; y: number },
-  b: { x: number; y: number },
-  pad: number,
-): { x: number; y: number } {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const len = Math.hypot(dx, dy);
-  if (len < 1e-6) return { x: 0, y: 0 };
-  return { x: (dx / len) * pad, y: (dy / len) * pad };
-}
-
-function ribbonMid(
-  left: readonly { x: number; y: number }[],
-  right: readonly { x: number; y: number }[],
-  i: number,
-): { x: number; y: number } {
-  return {
-    x: (left[i].x + right[i].x) / 2,
-    y: (left[i].y + right[i].y) / 2,
-  };
-}
-
 function unitDelta(
   ax: number,
   ay: number,
@@ -1553,13 +1689,17 @@ function addGradientStops(
 
 function fillInkRibbonQuads(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
-  left: readonly { x: number; y: number }[],
-  right: readonly { x: number; y: number }[],
+  sides: RibbonSideSoA,
   fills?: readonly string[],
   from = 0,
-  to = left.length - 1,
+  to = sides.n - 1,
 ): void {
-  if (left.length < 2 || left.length !== right.length) return;
+  const n = sides.n;
+  const lx = sides.lx;
+  const ly = sides.ly;
+  const rx = sides.rx;
+  const ry = sides.ry;
+  if (n < 2) return;
   const prevFill = ctx.fillStyle;
   // A wash must not underlay the whole ribbon in fills[0]. Mid-tile clips
   // then show the stroke-start color against the local gradient: a hard cut
@@ -1567,12 +1707,12 @@ function fillInkRibbonQuads(
   // edges do not leave parchment hairlines.
   if (!fills) {
     ctx.beginPath();
-    ctx.moveTo(left[0].x, left[0].y);
-    for (let index = 1; index < left.length; index++) {
-      ctx.lineTo(left[index].x, left[index].y);
+    ctx.moveTo(lx[0]!, ly[0]!);
+    for (let index = 1; index < n; index++) {
+      ctx.lineTo(lx[index]!, ly[index]!);
     }
-    for (let index = right.length - 1; index >= 0; index--) {
-      ctx.lineTo(right[index].x, right[index].y);
+    for (let index = n - 1; index >= 0; index--) {
+      ctx.lineTo(rx[index]!, ry[index]!);
     }
     ctx.closePath();
     ctx.fill();
@@ -1586,23 +1726,27 @@ function fillInkRibbonQuads(
   for (let index = from; index < to; index++) {
     const a = fills?.[index];
     const b = fills?.[index + 1] ?? a;
-    const mid0 = ribbonMid(left, right, index);
-    const mid1 = ribbonMid(left, right, index + 1);
-    const along = unitDelta(mid0.x, mid0.y, mid1.x, mid1.y);
+    const mid0x = (lx[index]! + rx[index]!) / 2;
+    const mid0y = (ly[index]! + ry[index]!) / 2;
+    const mid1x = (lx[index + 1]! + rx[index + 1]!) / 2;
+    const mid1y = (ly[index + 1]! + ry[index + 1]!) / 2;
+    const along = unitDelta(mid0x, mid0y, mid1x, mid1y);
     const chord = along.len;
     let backAlign = 0;
     let fwdAlign = 0;
     if (wash && chord > 1e-6) {
       if (index > 0) {
-        const midPrev = ribbonMid(left, right, index - 1);
-        const prevDir = unitDelta(midPrev.x, midPrev.y, mid0.x, mid0.y);
+        const midPrevX = (lx[index - 1]! + rx[index - 1]!) / 2;
+        const midPrevY = (ly[index - 1]! + ry[index - 1]!) / 2;
+        const prevDir = unitDelta(midPrevX, midPrevY, mid0x, mid0y);
         if (prevDir.len > 1e-6) {
           backAlign = Math.max(0, prevDir.x * along.x + prevDir.y * along.y);
         }
       }
-      if (index + 2 < left.length) {
-        const midNext = ribbonMid(left, right, index + 2);
-        const nextDir = unitDelta(mid1.x, mid1.y, midNext.x, midNext.y);
+      if (index + 2 < n) {
+        const midNextX = (lx[index + 2]! + rx[index + 2]!) / 2;
+        const midNextY = (ly[index + 2]! + ry[index + 2]!) / 2;
+        const nextDir = unitDelta(mid1x, mid1y, midNextX, midNextY);
         if (nextDir.len > 1e-6) {
           fwdAlign = Math.max(0, along.x * nextDir.x + along.y * nextDir.y);
         }
@@ -1618,10 +1762,10 @@ function fillInkRibbonQuads(
       if (wash && (prev !== a || a !== b || next !== b)) {
         const span = backPad + chord + fwdPad;
         const g = (ctx as CanvasRenderingContext2D).createLinearGradient(
-          mid0.x - along.x * backPad,
-          mid0.y - along.y * backPad,
-          mid1.x + along.x * fwdPad,
-          mid1.y + along.y * fwdPad,
+          mid0x - along.x * backPad,
+          mid0y - along.y * backPad,
+          mid1x + along.x * fwdPad,
+          mid1y + along.y * fwdPad,
         );
         addGradientStops(g, [
           [0, prev],
@@ -1632,10 +1776,10 @@ function fillInkRibbonQuads(
         ctx.fillStyle = g;
       } else if (a !== b) {
         const g = (ctx as CanvasRenderingContext2D).createLinearGradient(
-          mid0.x,
-          mid0.y,
-          mid1.x,
-          mid1.y,
+          mid0x,
+          mid0y,
+          mid1x,
+          mid1y,
         );
         g.addColorStop(0, a);
         g.addColorStop(1, b);
@@ -1646,15 +1790,33 @@ function fillInkRibbonQuads(
     } else if (a) {
       ctx.fillStyle = a;
     }
-    const dL0 = offsetAlong(left[index], left[index + 1], backPad);
-    const dL1 = offsetAlong(left[index], left[index + 1], fwdPad);
-    const dR0 = offsetAlong(right[index], right[index + 1], backPad);
-    const dR1 = offsetAlong(right[index], right[index + 1], fwdPad);
+    const l0x = lx[index]!;
+    const l0y = ly[index]!;
+    const l1x = lx[index + 1]!;
+    const l1y = ly[index + 1]!;
+    const r0x = rx[index]!;
+    const r0y = ry[index]!;
+    const r1x = rx[index + 1]!;
+    const r1y = ry[index + 1]!;
+    const ldx = l1x - l0x;
+    const ldy = l1y - l0y;
+    const llen = Math.hypot(ldx, ldy);
+    const rdx = r1x - r0x;
+    const rdy = r1y - r0y;
+    const rlen = Math.hypot(rdx, rdy);
+    const dL0x = llen < 1e-6 ? 0 : (ldx / llen) * backPad;
+    const dL0y = llen < 1e-6 ? 0 : (ldy / llen) * backPad;
+    const dL1x = llen < 1e-6 ? 0 : (ldx / llen) * fwdPad;
+    const dL1y = llen < 1e-6 ? 0 : (ldy / llen) * fwdPad;
+    const dR0x = rlen < 1e-6 ? 0 : (rdx / rlen) * backPad;
+    const dR0y = rlen < 1e-6 ? 0 : (rdy / rlen) * backPad;
+    const dR1x = rlen < 1e-6 ? 0 : (rdx / rlen) * fwdPad;
+    const dR1y = rlen < 1e-6 ? 0 : (rdy / rlen) * fwdPad;
     ctx.beginPath();
-    ctx.moveTo(left[index].x - dL0.x, left[index].y - dL0.y);
-    ctx.lineTo(left[index + 1].x + dL1.x, left[index + 1].y + dL1.y);
-    ctx.lineTo(right[index + 1].x + dR1.x, right[index + 1].y + dR1.y);
-    ctx.lineTo(right[index].x - dR0.x, right[index].y - dR0.y);
+    ctx.moveTo(l0x - dL0x, l0y - dL0y);
+    ctx.lineTo(l1x + dL1x, l1y + dL1y);
+    ctx.lineTo(r1x + dR1x, r1y + dR1y);
+    ctx.lineTo(r0x - dR0x, r0y - dR0y);
     ctx.closePath();
     ctx.fill();
   }
@@ -1662,21 +1824,27 @@ function fillInkRibbonQuads(
 }
 
 function ribbonSideBounds(
-  left: readonly { x: number; y: number }[],
-  right: readonly { x: number; y: number }[],
+  sides: RibbonSideSoA,
 ): { minX: number; minY: number; maxX: number; maxY: number } {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  const absorb = (p: { x: number; y: number }) => {
-    if (p.x < minX) minX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y > maxY) maxY = p.y;
-  };
-  for (const p of left) absorb(p);
-  for (const p of right) absorb(p);
+  const n = sides.n;
+  for (let i = 0; i < n; i++) {
+    const lx = sides.lx[i]!;
+    const ly = sides.ly[i]!;
+    const rx = sides.rx[i]!;
+    const ry = sides.ry[i]!;
+    if (lx < minX) minX = lx;
+    if (ly < minY) minY = ly;
+    if (lx > maxX) maxX = lx;
+    if (ly > maxY) maxY = ly;
+    if (rx < minX) minX = rx;
+    if (ry < minY) minY = ry;
+    if (rx > maxX) maxX = rx;
+    if (ry > maxY) maxY = ry;
+  }
   return { minX, minY, maxX, maxY };
 }
 
@@ -1761,15 +1929,27 @@ export function fillInkRibbon(
   pixelScale = 0,
 ): void {
   if (left.length === 0 || left.length !== right.length) return;
-  if (left.length === 1) {
-    const radius = Math.hypot(left[0].x - right[0].x, left[0].y - right[0].y) / 2;
+  fillInkRibbonSides(ctx, ribbonSidesFromPolylines(left, right), alpha, fills, pixelScale);
+}
+
+function fillInkRibbonSides(
+  ctx: CanvasRenderingContext2D,
+  sides: RibbonSideSoA,
+  alpha: number,
+  fills?: readonly string[],
+  pixelScale = 0,
+): void {
+  if (sides.n === 0) return;
+  if (sides.n === 1) {
+    const radius =
+      Math.hypot(sides.lx[0]! - sides.rx[0]!, sides.ly[0]! - sides.ry[0]!) / 2;
     const prevFill = ctx.fillStyle;
     if (fills?.[0]) ctx.fillStyle = fills[0];
     ctx.globalAlpha = alpha;
     ctx.beginPath();
     ctx.arc(
-      (left[0].x + right[0].x) / 2,
-      (left[0].y + right[0].y) / 2,
+      (sides.lx[0]! + sides.rx[0]!) / 2,
+      (sides.ly[0]! + sides.ry[0]!) / 2,
       radius,
       0,
       Math.PI * 2,
@@ -1781,8 +1961,7 @@ export function fillInkRibbon(
 
   const painted = paintOpaqueRibbonThenAlpha(
     ctx,
-    left,
-    right,
+    sides,
     alpha,
     undefined,
     4,
@@ -1792,7 +1971,7 @@ export function fillInkRibbon(
   if (painted) return;
 
   ctx.globalAlpha = alpha;
-  fillInkRibbonQuads(ctx, left, right, fills);
+  fillInkRibbonQuads(ctx, sides, fills);
 }
 
 /**
@@ -1875,21 +2054,20 @@ export const settledRibbonStats = { hits: 0, extends: 0, rebuilds: 0, bails: 0, 
 
 function snapshotSettled(
   s: SettledRibbon,
-  left: readonly { x: number; y: number }[],
-  right: readonly { x: number; y: number }[],
+  sides: RibbonSideSoA,
   fills: readonly string[],
 ): void {
-  const m = Math.min(left.length, s.count + 2);
+  const m = Math.min(sides.n, s.count + 2);
   s.lx = new Float64Array(m);
   s.ly = new Float64Array(m);
   s.rx = new Float64Array(m);
   s.ry = new Float64Array(m);
   s.fills = new Array(m);
+  s.lx.set(sides.lx.subarray(0, m));
+  s.ly.set(sides.ly.subarray(0, m));
+  s.rx.set(sides.rx.subarray(0, m));
+  s.ry.set(sides.ry.subarray(0, m));
   for (let i = 0; i < m; i++) {
-    s.lx[i] = left[i].x;
-    s.ly[i] = left[i].y;
-    s.rx[i] = right[i].x;
-    s.ry[i] = right[i].y;
     s.fills[i] = fills[i];
   }
 }
@@ -1897,8 +2075,7 @@ function snapshotSettled(
 /** Do vertices `[from, to]` of both sides lie inside the settled canvas, with pad? */
 function settledHolds(
   s: SettledRibbon,
-  left: readonly { x: number; y: number }[],
-  right: readonly { x: number; y: number }[],
+  sides: RibbonSideSoA,
   from: number,
   to: number,
   pad: number,
@@ -1906,10 +2083,15 @@ function settledHolds(
   const maxX = s.originX + s.canvas.width / s.sx;
   const maxY = s.originY + s.canvas.height / s.sy;
   for (let i = from; i <= to; i++) {
-    for (const q of [left[i], right[i]]) {
-      if (q.x - pad < s.originX || q.x + pad > maxX || q.y - pad < s.originY || q.y + pad > maxY) {
-        return false;
-      }
+    const lx = sides.lx[i]!;
+    const ly = sides.ly[i]!;
+    const rx = sides.rx[i]!;
+    const ry = sides.ry[i]!;
+    if (lx - pad < s.originX || lx + pad > maxX || ly - pad < s.originY || ly + pad > maxY) {
+      return false;
+    }
+    if (rx - pad < s.originX || rx + pad > maxX || ry - pad < s.originY || ry + pad > maxY) {
+      return false;
     }
   }
   return true;
@@ -1919,8 +2101,7 @@ function settledHolds(
 function composeSettledRibbon(
   sctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   scratch: RibbonScratch,
-  left: readonly { x: number; y: number }[],
-  right: readonly { x: number; y: number }[],
+  sides: RibbonSideSoA,
   fills: readonly string[],
   stampJoins: ((c: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D) => void) | undefined,
   fillStyle: string | CanvasGradient | CanvasPattern,
@@ -1933,7 +2114,7 @@ function composeSettledRibbon(
   pad: number,
   source: readonly unknown[],
 ): boolean {
-  const n = left.length;
+  const n = sides.n;
   if (fills.length !== n || n <= LIVE_SETTLE_BAIL) {
     settledRibbonStats.bails++;
     return false;
@@ -1964,10 +2145,10 @@ function composeSettledRibbon(
     const m = s.lx.length;
     for (let i = 0; i < m; i++) {
       if (
-        left[i].x !== s.lx[i] ||
-        left[i].y !== s.ly[i] ||
-        right[i].x !== s.rx[i] ||
-        right[i].y !== s.ry[i] ||
+        sides.lx[i] !== s.lx[i] ||
+        sides.ly[i] !== s.ly[i] ||
+        sides.rx[i] !== s.rx[i] ||
+        sides.ry[i] !== s.ry[i] ||
         fills[i] !== s.fills[i]
       ) {
         valid = false;
@@ -1978,7 +2159,7 @@ function composeSettledRibbon(
     }
   }
   // Growth past the frame re-frames rather than silently clipping new quads.
-  if (valid && s && target > s.count && !settledHolds(s, left, right, s.count, Math.min(n - 1, target + 1), pad)) {
+  if (valid && s && target > s.count && !settledHolds(s, sides, s.count, Math.min(n - 1, target + 1), pad)) {
     valid = false;
   }
 
@@ -1991,7 +2172,7 @@ function composeSettledRibbon(
     c.globalAlpha = 1;
     c.fillStyle = fillStyle;
     c.setTransform(sx, 0, 0, sy, -ox * sx, -oy * sy);
-    fillInkRibbonQuads(c, left, right, fills, from, to);
+    fillInkRibbonQuads(c, sides, fills, from, to);
     c.setTransform(1, 0, 0, 1, 0, 0);
     return true;
   };
@@ -2019,13 +2200,13 @@ function composeSettledRibbon(
       lx: new Float64Array(0), ly: new Float64Array(0), rx: new Float64Array(0),
       ry: new Float64Array(0), fills: [],
     };
-    snapshotSettled(s, left, right, fills);
+    snapshotSettled(s, sides, fills);
     settledRibbon = s;
     settledRibbonStats.rebuilds++;
   } else if (target > s.count) {
     if (!paintInto(s.canvas, s.originX, s.originY, s.count, target, false)) return false;
     s.count = target;
-    snapshotSettled(s, left, right, fills);
+    snapshotSettled(s, sides, fills);
     settledRibbonStats.extends++;
   } else {
     settledRibbonStats.hits++;
@@ -2038,15 +2219,14 @@ function composeSettledRibbon(
   sctx.drawImage(s.canvas as CanvasImageSource, 0, 0);
   sctx.fillStyle = fillStyle;
   sctx.setTransform(sx, 0, 0, sy, -originX * sx, -originY * sy);
-  fillInkRibbonQuads(sctx, left, right, fills, s.count, n - 1);
+  fillInkRibbonQuads(sctx, sides, fills, s.count, n - 1);
   if (stampJoins) stampJoins(sctx);
   return true;
 }
 
 function paintOpaqueRibbonThenAlpha(
   ctx: CanvasRenderingContext2D,
-  left: readonly { x: number; y: number }[],
-  right: readonly { x: number; y: number }[],
+  sides: RibbonSideSoA,
   alpha: number,
   stampJoins?: (
     scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -2058,7 +2238,7 @@ function paintOpaqueRibbonThenAlpha(
   settle?: { source: readonly unknown[] },
 ): boolean {
   if (typeof ctx.drawImage !== "function") return false;
-  const { minX, minY, maxX, maxY } = ribbonSideBounds(left, right);
+  const { minX, minY, maxX, maxY } = ribbonSideBounds(sides);
   if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return false;
   const originX = Math.floor(minX - pad);
   const originY = Math.floor(minY - pad);
@@ -2099,7 +2279,7 @@ function paintOpaqueRibbonThenAlpha(
    */
   const scratchKey =
     inkOpBatch && contentKey
-      ? [scratch, sw, sh, sx, sy, originX, originY, left, right, fills, ctx.fillStyle,
+      ? [scratch, sw, sh, sx, sy, originX, originY, sides, fills, ctx.fillStyle,
          Boolean(stampJoins), ...contentKey]
       : null;
   const reusable =
@@ -2110,7 +2290,7 @@ function paintOpaqueRibbonThenAlpha(
 
   const settled =
     !reusable && settle && fills
-      ? composeSettledRibbon(sctx, scratch, left, right, fills, stampJoins, ctx.fillStyle,
+      ? composeSettledRibbon(sctx, scratch, sides, fills, stampJoins, ctx.fillStyle,
           sx, sy, originX, originY, width, height, pad, settle.source)
       : false;
   if (settled) ribbonScratchKey = null;
@@ -2123,7 +2303,7 @@ function paintOpaqueRibbonThenAlpha(
     sctx.globalAlpha = 1;
     sctx.fillStyle = ctx.fillStyle;
     sctx.setTransform(sx, 0, 0, sy, -originX * sx, -originY * sy);
-    fillInkRibbonQuads(sctx, left, right, fills);
+    fillInkRibbonQuads(sctx, sides, fills);
     if (stampJoins) stampJoins(sctx);
     ribbonScratchKey = scratchKey;
   }
@@ -2173,25 +2353,42 @@ function sampleStrokeAt(
   dist: number,
   pixelScale: number,
   fallbackWidth: number,
+  cursor?: { seg: number; walked: number },
 ): { x: number; y: number; r: number; nx: number; ny: number } | null {
   if (points.length === 0) return null;
   const radiusAt = (index: number) =>
     paintedWidth(styles[index]?.lineWidth ?? fallbackWidth, pixelScale) / 2;
   if (points.length === 1 || dist <= 0) {
+    if (cursor) {
+      cursor.seg = 1;
+      cursor.walked = 0;
+    }
     return { x: points[0].x, y: points[0].y, r: radiusAt(0), nx: 0, ny: 1 };
   }
-  let walked = 0;
-  for (let i = 1; i < points.length; i++) {
+  let i = cursor ? Math.max(1, cursor.seg) : 1;
+  let walked = cursor ? cursor.walked : 0;
+  if (i >= points.length) {
+    i = 1;
+    walked = 0;
+  }
+  while (i < points.length) {
     const a = points[i - 1];
     const b = points[i];
     const seg = Math.hypot(b.x - a.x, b.y - a.y);
-    if (seg < 1e-8) continue;
+    if (seg < 1e-8) {
+      i += 1;
+      continue;
+    }
     if (walked + seg >= dist || i === points.length - 1) {
       const t = Math.max(0, Math.min(1, (dist - walked) / seg));
       const tx = (b.x - a.x) / seg;
       const ty = (b.y - a.y) / seg;
       const ra = radiusAt(i - 1);
       const rb = radiusAt(i);
+      if (cursor) {
+        cursor.seg = i;
+        cursor.walked = walked;
+      }
       return {
         x: a.x + (b.x - a.x) * t,
         y: a.y + (b.y - a.y) * t,
@@ -2201,6 +2398,11 @@ function sampleStrokeAt(
       };
     }
     walked += seg;
+    i += 1;
+  }
+  if (cursor) {
+    cursor.seg = Math.max(1, points.length - 1);
+    cursor.walked = walked;
   }
   const last = points[points.length - 1];
   return { x: last.x, y: last.y, r: radiusAt(points.length - 1), nx: 0, ny: 1 };
@@ -3508,11 +3710,12 @@ function scratchGrainAlongStroke(
   ctx.strokeStyle = "#000";
   ctx.lineCap = "butt";
   const minWidth = Math.max(0.7, pixelScale > 0 ? 0.9 / pixelScale : 0.7);
+  const grainAt = { seg: 1, walked: 0 };
   for (let i = 0; i < n; i++) {
     const jitter = hash01(origin.x, origin.y, GRAIN_SALT + i);
     const dist = (i + jitter * 0.35) * spacing;
     if (dist > pathLen) continue;
-    const at = sampleStrokeAt(points, styles, dist, pixelScale, nib);
+    const at = sampleStrokeAt(points, styles, dist, pixelScale, nib, grainAt);
     if (!at || at.r < 1e-6) continue;
     for (let j = 0; j < fibresAt; j++) {
       const salt = GRAIN_SALT + i * 31 + j;
@@ -3746,11 +3949,14 @@ function tessellateRibbonPrepared(
   );
   if (densified.points.length < 2) return null;
 
-  const pooledStyles = ribbonStage("pool", () =>
-    batched("pool", [densified.styles, op, densified.points, start], () =>
-      applyInkPoolingAtEnds(densified.styles, op, densified.points, start),
-    ),
-  );
+  const skipPool = Boolean(op.highlight) || blotBlend < 1e-3;
+  const pooledStyles = skipPool
+    ? densified.styles
+    : ribbonStage("pool", () =>
+        batched("pool", [densified.styles, op, densified.points, start], () =>
+          applyInkPoolingAtEnds(densified.styles, op, densified.points, start),
+        ),
+      );
   const prepared = ribbonStage("densify", () =>
     batched("densify2", [densified.points, pooledStyles, pixelScale], () =>
       densifyRibbonPoints(densified.points, pooledStyles, pixelScale),
@@ -3883,9 +4089,9 @@ function drawRibbonStrokeFrom(
     maxHalf = Math.max(maxHalf, paintedWidth(style.lineWidth, pixelScale) / 2);
   }
 
-  const { left, right } = ribbonStage("sides", () =>
+  const sides = ribbonStage("sides", () =>
     batched("sides", [prepared.points, prepared.styles, pixelScale], () =>
-      ribbonSides(prepared.points, prepared.styles, pixelScale),
+      ribbonSidesForPaint(prepared.points, prepared.styles, pixelScale),
     ),
   );
   const pad = Math.max(4, Math.ceil(maxHalf) + 2);
@@ -3893,7 +4099,7 @@ function drawRibbonStrokeFrom(
   const fills =
     blotBlend > 1e-3 || fadeAmt > 1e-3
       ? batched("fills", [color, prepared.styles], () =>
-          prepared.styles.map((style) => ribbonVertexFillCss(color, style)),
+          ribbonVertexFills(color, prepared.styles),
         )
       : undefined;
 
@@ -4007,8 +4213,7 @@ function drawRibbonStrokeFrom(
   const stamped = ribbonStage("tessPaint", () =>
     paintOpaqueRibbonThenAlpha(
     ctx,
-    left,
-    right,
+    sides,
     maxAlpha,
     stampHardExtras,
     pad,
@@ -4025,7 +4230,7 @@ function drawRibbonStrokeFrom(
   );
 
   if (!stamped) {
-    fillInkRibbon(ctx, left, right, maxAlpha, fills, pixelScale);
+    fillInkRibbonSides(ctx, sides, maxAlpha, fills, pixelScale);
     stampHardExtras(ctx);
   }
 
