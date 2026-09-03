@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { beginLiveStroke } from "./liveStroke";
+import { beginLiveStroke, DiscExtentTracker } from "./liveStroke";
 import { INK_SMOOTHING_MODE_DEFAULT } from "./inkSmoothing";
+import { isDiscPrimaryPath, type ScenePoint } from "./rasterInk";
 
 function rect(width = 200, height = 200): DOMRectReadOnly {
   return {
@@ -19,9 +20,9 @@ function rect(width = 200, height = 200): DOMRectReadOnly {
   };
 }
 
-function view() {
+function view(zoom = 1) {
   return {
-    zoom: 1,
+    zoom,
     scrollX: 0,
     scrollY: 0,
     offsetLeft: 0,
@@ -46,10 +47,17 @@ function sample(
   return { clientX: x, clientY: y, pressure, timeStamp, pointerType: "pen" };
 }
 
-function beginPen(onNeedPaint = () => {}) {
+function beginPen(
+  extras: {
+    pressureSensitive?: boolean;
+    speedInk?: number;
+    zoom?: number;
+    onNeedPaint?: () => void;
+  } = {},
+) {
   return beginLiveStroke({
     tool: "pen",
-    view: view(),
+    view: view(extras.zoom ?? 1),
     rect: rect(),
     box: { width: 200, height: 200, marginY: 0 },
     first: sample(10, 10, 1000, 0.4),
@@ -57,17 +65,17 @@ function beginPen(onNeedPaint = () => {}) {
     uiWidth: 4,
     inkFullness: 0.8,
     pressureClip: 1,
-    pressureSensitive: false,
-    speedInk: 0,
-    speedBlotBlend: 0,
-    speedFade: 0,
+    pressureSensitive: extras.pressureSensitive ?? false,
+    speedInk: extras.speedInk ?? 0,
+    speedBlotBlend: extras.speedInk ? 1 : 0,
+    speedFade: extras.speedInk ? 1 : 0,
     grain: 0,
     boldness: 1,
     smoothing: 0,
     smoothingMode: INK_SMOOTHING_MODE_DEFAULT,
     getStraightAnchor: () => null,
     host: null,
-    onNeedPaint,
+    onNeedPaint: extras.onNeedPaint ?? (() => {}),
   });
 }
 
@@ -75,27 +83,50 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("LiveStroke scaffold", () => {
-  it("keeps every dense sample on the spine (step-2 1:1 drain)", () => {
+describe("DiscExtentTracker", () => {
+  it("matches isDiscPrimaryPath without cloning the trail", () => {
+    const origin: ScenePoint = { x: 0, y: 0, pressure: 0.5 };
+    const nib = 4;
+    const trail: ScenePoint[] = [origin];
+    const disc = new DiscExtentTracker();
+    disc.reset(origin);
+    const hops: Array<[number, number]> = [
+      [0.2, 0],
+      [0.4, 0.1],
+      [8, 0],
+      [20, 1],
+    ];
+    for (const [x, y] of hops) {
+      const next: ScenePoint = { x, y, pressure: 0.5 };
+      const cloned = [...trail, next];
+      expect(disc.wouldStayDisc(next, nib)).toBe(isDiscPrimaryPath(cloned, nib));
+      if (!isDiscPrimaryPath(cloned, nib)) {
+        trail.push(next);
+        disc.commit(next);
+      }
+    }
+  });
+});
+
+describe("LiveStroke ingest", () => {
+  it("does not grow the spine with dense samples; the tip still tracks", () => {
     const stroke = beginPen();
-    const hops = 20;
+    const hops = 80;
     const points = [];
     for (let i = 1; i <= hops; i += 1) {
-      // Far enough to leave the contact disc, still closer than a stamp step.
-      points.push(sample(10 + i * 2, 10, 1000 + i * 2));
+      points.push(sample(10 + i * 0.2, 10, 1000 + i));
     }
     stroke.ingest(points);
-    stroke.tick(1040);
+    stroke.tick(1080);
+    const live = stroke.live;
+    expect(live?.kind).toBe("draw");
+    if (live?.kind !== "draw") return;
+    expect(live.points.length).toBeLessThan(hops / 4);
+    expect(live.points[live.points.length - 1]?.x).toBeCloseTo(10 + hops * 0.2, 5);
     const op = stroke.commit();
-    expect(op.kind).toBe("draw");
     if (op.kind !== "draw") return;
-    // stampAlongSegment returns [to] when dist < step, so the spine grows
-    // with the digitizer, not with travel.
-    expect(op.points[op.points.length - 1]?.x).toBeCloseTo(10 + hops * 2, 5);
-    // Contact-disc collapse can eat the first hop; after that each dense
-    // sample is kept (stampAlongSegment returns [to] when dist < step).
-    expect(op.points.length).toBeGreaterThanOrEqual(hops);
-    expect(op.points.length).toBeLessThanOrEqual(1 + hops);
+    expect(op.points[op.points.length - 1]?.x).toBeCloseTo(10 + hops * 0.2, 5);
+    expect(op.points.length).toBeLessThan(hops / 4);
   });
 
   it("commits samples that were ingested after the last tick", () => {
@@ -108,30 +139,41 @@ describe("LiveStroke scaffold", () => {
     expect(op.points[op.points.length - 1]?.x).toBeCloseTo(40, 5);
   });
 
+  it("attack flush of a planted nib stays a contact disc", () => {
+    const stroke = beginPen({ pressureSensitive: true });
+    stroke.ingest([
+      sample(10.2, 10.1, 1004, 0.6),
+      sample(10.1, 10.2, 1008, 0.7),
+    ]);
+    const op = stroke.commit();
+    expect(op.kind).toBe("draw");
+    if (op.kind !== "draw") return;
+    const origin = op.points[0];
+    expect(origin?.x).toBeCloseTo(10, 5);
+    expect(origin?.y).toBeCloseTo(10, 5);
+    for (const p of op.points) {
+      expect(Math.hypot(p.x - 10, p.y - 10)).toBeLessThan(1);
+    }
+  });
+
+  it("leaving the disc does not collapse the trail back to the origin", () => {
+    const stroke = beginPen({ pressureSensitive: true });
+    stroke.ingest([
+      sample(10.1, 10, 1004, 0.5),
+      sample(10.2, 10, 1008, 0.5),
+      sample(80, 10, 1020, 0.5),
+    ]);
+    const op = stroke.commit();
+    expect(op.kind).toBe("draw");
+    if (op.kind !== "draw") return;
+    expect(op.points.length).toBeGreaterThan(1);
+    expect(op.points[op.points.length - 1]?.x).toBeCloseTo(80, 5);
+    expect(op.points[0]?.x).toBeCloseTo(10, 5);
+  });
+
   it("abandon stops dwell and drops the live op", () => {
     const onNeedPaint = vi.fn();
-    const stroke = beginLiveStroke({
-      tool: "pen",
-      view: view(),
-      rect: rect(),
-      box: { width: 200, height: 200, marginY: 0 },
-      first: sample(10, 10, 1000),
-      color: "#111111",
-      uiWidth: 4,
-      inkFullness: 0.8,
-      pressureClip: 1,
-      pressureSensitive: false,
-      speedInk: 1,
-      speedBlotBlend: 1,
-      speedFade: 1,
-      grain: 0,
-      boldness: 1,
-      smoothing: 0,
-      smoothingMode: INK_SMOOTHING_MODE_DEFAULT,
-      getStraightAnchor: () => null,
-      host: null,
-      onNeedPaint,
-    });
+    const stroke = beginPen({ speedInk: 1, onNeedPaint });
     stroke.abandon();
     expect(stroke.live).toBeNull();
     stroke.ingest([sample(20, 10, 1100)]);
