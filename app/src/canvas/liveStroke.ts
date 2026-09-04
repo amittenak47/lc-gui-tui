@@ -35,6 +35,8 @@ import {
   stampAlongSegment,
   stampInkBlotHalt,
   highlightLiftKeepsTip,
+  liveRibbonDirtySpine,
+  prepareLiveRibbon,
   type InkOp,
   type SceneBounds,
   type ScenePoint,
@@ -517,6 +519,9 @@ export class LiveStroke {
       height: this.view.height - 2 * marginY,
     };
     const drawView = overdrawnViewport(baseView, marginY);
+    if (this.op.kind === "draw") {
+      prepareLiveRibbon(this.op, drawView.zoom * dpr);
+    }
     const dirty = this.overlayDirtyPx(this.prevOverlayDirty, drawView, dpr);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const prevSmooth = ctx.imageSmoothingEnabled;
@@ -575,7 +580,10 @@ export class LiveStroke {
   }
 
   overlayDirtyPx(prev: PixelRect | null, view: ViewportTransform, dpr: number): PixelRect {
-    const aabb = strokeAabb(this.op);
+    const liveDirty = this.op.kind === "draw" ? liveRibbonDirtySpine() : null;
+    const from =
+      liveDirty && liveDirty.dirtyFrom > 0 ? liveDirty.dirtyFrom : 0;
+    const aabb = strokeAabb(this.op, from);
     const z = view.zoom * dpr;
     const pad = 2;
     let x0 = Math.floor((aabb.minX + view.scrollX) * z) - pad;

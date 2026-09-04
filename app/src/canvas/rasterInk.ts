@@ -1093,24 +1093,26 @@ function slopedSlowness(op: InkDrawOp): Float32Array {
    *
    * One pass alone is causal and would ramp *into* a change while still
    * stepping out of it — a bead with one soft edge, which reads as a comma. The
-   * reverse pass makes it symmetric, and taking the value nearer neutral of the
-   * two keeps the pair from arguing: neither direction may push the track
-   * further from an ordinary pace than the unlimited one already was.
+   * reverse pass makes it symmetric. Walked in place so a live frame does not
+   * allocate two index arrays the length of the stroke.
    */
-  const limit = (order: readonly number[]) => {
-    for (let n = 1; n < order.length; n++) {
-      const i = order[n];
-      const prev = order[n - 1];
-      const span = Math.abs(at[i] - at[prev]);
-      const room = SLOWNESS_MAX_SLOPE * span;
-      const delta = out[i] - out[prev];
-      if (delta > room) out[i] = out[prev] + room;
-      else if (delta < -room) out[i] = out[prev] - room;
-    }
-  };
-  const forward = Array.from(out, (_, i) => i);
-  limit(forward);
-  limit(forward.slice().reverse());
+  const n = points.length;
+  for (let i = 1; i < n; i++) {
+    const prev = i - 1;
+    const span = Math.abs(at[i]! - at[prev]!);
+    const room = SLOWNESS_MAX_SLOPE * span;
+    const delta = out[i]! - out[prev]!;
+    if (delta > room) out[i] = out[prev]! + room;
+    else if (delta < -room) out[i] = out[prev]! - room;
+  }
+  for (let i = n - 2; i >= 0; i--) {
+    const prev = i + 1;
+    const span = Math.abs(at[i]! - at[prev]!);
+    const room = SLOWNESS_MAX_SLOPE * span;
+    const delta = out[i]! - out[prev]!;
+    if (delta > room) out[i] = out[prev]! + room;
+    else if (delta < -room) out[i] = out[prev]! - room;
+  }
 
   slownessCache.set(points, out);
   slownessTailRaw.set(points, lastRaw);
@@ -1894,6 +1896,7 @@ export function releaseLiveRibbonBuffers(): void {
   ribbonScratch = null;
   ribbonScratchKey = null;
   settledRibbon = null;
+  liveRibbonDirty = null;
 }
 
 /** Test helper: backing size of the shared ribbon scratch, or null. */
@@ -2050,7 +2053,18 @@ interface SettledRibbon {
 let settledRibbon: SettledRibbon | null = null;
 
 /** Test-only counters for the settled prefix. */
-export const settledRibbonStats = { hits: 0, extends: 0, rebuilds: 0, bails: 0, firstBad: -1, tailAtBad: -1 };
+export const settledRibbonStats = {
+  hits: 0,
+  extends: 0,
+  rebuilds: 0,
+  bails: 0,
+  copies: 0,
+  firstBad: -1,
+  tailAtBad: -1,
+};
+
+/** Test-only counters for live suffix tessellation. */
+export const liveRibbonStats = { suffixHits: 0, suffixMisses: 0, suffixRewinds: 0 };
 
 function snapshotSettled(
   s: SettledRibbon,
@@ -2070,6 +2084,78 @@ function snapshotSettled(
   for (let i = 0; i < m; i++) {
     s.fills[i] = fills[i];
   }
+}
+
+/**
+ * Pixel offset of a scene origin change under `scale`.
+ *
+ * A 1:1 `drawImage` of the bake is exact only on a whole-pixel offset. Non-integer
+ * scale × delta would resample prefix gradients; refuse and rebuild instead.
+ */
+function integerPixelOffset(
+  fromOrigin: number,
+  toOrigin: number,
+  scale: number,
+): number | null {
+  const px = (fromOrigin - toOrigin) * scale;
+  const rounded = Math.round(px);
+  if (Math.abs(px - rounded) > 1e-6) return null;
+  return rounded;
+}
+
+/**
+ * Keep baked prefix pixels when the stroke AABB grows up or left.
+ *
+ * Re-rasterising those quads under a new origin is the 1-pixel gradient mismatch.
+ * Copying the bitmap onto a larger canvas at an integer offset does not run
+ * prefix shaders. Growing-stroke AABBs only move the origin up/left, so the
+ * copy offset is never negative.
+ */
+function copySettledRibbon(
+  s: SettledRibbon,
+  originX: number,
+  originY: number,
+  width: number,
+  height: number,
+): SettledRibbon | null {
+  const dx = integerPixelOffset(s.originX, originX, s.sx);
+  const dy = integerPixelOffset(s.originY, originY, s.sy);
+  if (dx === null || dy === null || dx < 0 || dy < 0) return null;
+  const fw = Math.ceil(width * (1 + LIVE_SETTLE_FRAME_PAD) * s.sx);
+  const fh = Math.ceil(height * (1 + LIVE_SETTLE_FRAME_PAD) * s.sy);
+  const needW = Math.max(fw, dx + s.canvas.width);
+  const needH = Math.max(fh, dy + s.canvas.height);
+  if (needW > RIBBON_SCRATCH_MAX_PX || needH > RIBBON_SCRATCH_MAX_PX) return null;
+  const canvas = createRibbonScratch(needW, needH);
+  if (!canvas) return null;
+  const c = canvas.getContext("2d") as CanvasRenderingContext2D | null;
+  if (!c) return null;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.imageSmoothingEnabled = false;
+  c.clearRect(0, 0, canvas.width, canvas.height);
+  c.drawImage(s.canvas as CanvasImageSource, dx, dy);
+  return { ...s, canvas, originX, originY };
+}
+
+/** Same-origin growth past the padded frame: copy pixels onto a larger canvas. */
+function expandSettledCanvas(
+  s: SettledRibbon,
+  width: number,
+  height: number,
+): SettledRibbon | null {
+  const fw = Math.ceil(width * (1 + LIVE_SETTLE_FRAME_PAD) * s.sx);
+  const fh = Math.ceil(height * (1 + LIVE_SETTLE_FRAME_PAD) * s.sy);
+  if (s.canvas.width >= fw && s.canvas.height >= fh) return s;
+  if (fw > RIBBON_SCRATCH_MAX_PX || fh > RIBBON_SCRATCH_MAX_PX) return null;
+  const canvas = createRibbonScratch(fw, fh);
+  if (!canvas) return null;
+  const c = canvas.getContext("2d") as CanvasRenderingContext2D | null;
+  if (!c) return null;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.imageSmoothingEnabled = false;
+  c.clearRect(0, 0, canvas.width, canvas.height);
+  c.drawImage(s.canvas as CanvasImageSource, 0, 0);
+  return { ...s, canvas };
 }
 
 /** Do vertices `[from, to]` of both sides lie inside the settled canvas, with pad? */
@@ -2122,26 +2208,26 @@ function composeSettledRibbon(
   const target = n - LIVE_SETTLE_TAIL;
 
   /*
-   * The settled canvas must share the scratch's *origin*, not its size. The
-   * transform every quad is rasterised under is a function of origin and scale
-   * alone, and a gradient sampled under a translated matrix differs at the last
-   * bit -- measured: one pixel, one level -- so a bake can only be reused under
-   * the very same matrix. Size is free: the canvas is padded past the current
-   * scratch so growth to the right and down changes nothing, and only growth
-   * that moves the origin (up or left of anything drawn so far) re-frames.
+   * The settled canvas must share the scratch's *scale*. Prefix quads were
+   * rasterised under (origin, scale); sampling those gradients again under a
+   * translated origin differs by a pixel. Growing up or left used to throw the
+   * bake away for that reason. Copying the bitmap onto a larger canvas at an
+   * integer offset keeps the prefix pixels and does not re-run those shaders.
+   * Size is still free: growth to the right and down stays on the same origin.
    */
   let s = settledRibbon;
-  let valid =
+  const sameSource =
     s !== null &&
     s.source === source &&
-    s.originX === originX &&
-    s.originY === originY &&
     s.sx === sx &&
     s.sy === sy &&
     s.fillStyle === fillStyle &&
     s.count <= target &&
     n >= s.count + 2;
-  if (valid && s) {
+
+  let verticesOk = false;
+  if (sameSource && s) {
+    verticesOk = true;
     const m = s.lx.length;
     for (let i = 0; i < m; i++) {
       if (
@@ -2151,16 +2237,36 @@ function composeSettledRibbon(
         sides.ry[i] !== s.ry[i] ||
         fills[i] !== s.fills[i]
       ) {
-        valid = false;
+        verticesOk = false;
         settledRibbonStats.firstBad = i;
         settledRibbonStats.tailAtBad = n - i;
         break;
       }
     }
   }
+
+  if (verticesOk && s && (s.originX !== originX || s.originY !== originY)) {
+    const copied = copySettledRibbon(s, originX, originY, width, height);
+    if (copied) {
+      s = copied;
+      settledRibbon = s;
+      settledRibbonStats.copies++;
+    }
+  }
+
+  let valid = Boolean(
+    verticesOk && s && s.originX === originX && s.originY === originY,
+  );
   // Growth past the frame re-frames rather than silently clipping new quads.
   if (valid && s && target > s.count && !settledHolds(s, sides, s.count, Math.min(n - 1, target + 1), pad)) {
-    valid = false;
+    const expanded = expandSettledCanvas(s, width, height);
+    if (expanded && settledHolds(expanded, sides, s.count, Math.min(n - 1, target + 1), pad)) {
+      if (expanded !== s) settledRibbonStats.copies++;
+      s = expanded;
+      settledRibbon = s;
+    } else {
+      valid = false;
+    }
   }
 
   const paintInto = (canvas: RibbonScratch, ox: number, oy: number, from: number, to: number, clear: boolean) => {
@@ -3427,6 +3533,13 @@ export function applyInkPoolingAtEnds(
   if (op.blotHalts) {
     for (const halt of op.blotHalts) {
       if (halt.grow < 1e-6) continue;
+      // A suffix tessellation's `points` are only the tail. nearest() on that
+      // slice would snap a prefix halt to the join and pool there. Skip halts
+      // whose spine sample sits behind `fromIndex`.
+      if (fromIndex > 0) {
+        const onSpine = nearestPolylineIndex(strokePts, halt);
+        if (onSpine < fromIndex) continue;
+      }
       markGrow(halt, halt.grow);
     }
   }
@@ -3971,27 +4084,208 @@ function tessellateRibbonPrepared(
   };
 }
 
-let liveRibbonDirty: { source: readonly ScenePoint[]; prev: RibbonGeomDirtyPrev } | null =
-  null;
+let liveRibbonDirty: {
+  source: readonly ScenePoint[];
+  prev: RibbonGeomDirtyPrev;
+  prepared: { points: ScenePoint[]; styles: InkStrokeStyle[] };
+  pixelScale: number;
+  dirtyFrom: number;
+  suffixHit: boolean;
+  packed: PreparedRibbon | null;
+  spineN: number;
+  tailX: number;
+  tailY: number;
+  tailSlow: number;
+  tipGrow: number;
+  haltCount: number;
+} | null = null;
+
+/** Last live tessellation's spine frontier. Overlay dirty-rects use this. */
+export function liveRibbonDirtySpine(): { dirtyFrom: number; suffixHit: boolean } | null {
+  if (!liveRibbonDirty) return null;
+  return { dirtyFrom: liveRibbonDirty.dirtyFrom, suffixHit: liveRibbonDirty.suffixHit };
+}
+
+/** Run live tessellation before overlay dirty so the rect matches this frame. */
+export function prepareLiveRibbon(op: InkDrawOp, pixelScale: number): void {
+  liveRibbonPrepared(op, pixelScale);
+}
+
+/** Spine samples kept extra so coalesce/densify see the same neighbours as a full tessellation. */
+const LIVE_SUFFIX_OVERLAP = 48;
+/** Suffix tessellation is not worth it if it would rebuild almost the whole spine. */
+const LIVE_SUFFIX_MIN_START = 32;
+
+/**
+ * Index in the cached prepared ribbon where `suffix` attaches.
+ *
+ * The suffix is tessellated from a spine index with overlap, not as a new stroke:
+ * its first vertices must already exist in the prefix mesh. No match means
+ * coalesce/pooling saw different neighbours — caller tessellates from 0.
+ */
+function preparedJoinIndex(
+  prefix: { points: ScenePoint[]; styles: InkStrokeStyle[] },
+  suffix: { points: ScenePoint[]; styles: InkStrokeStyle[] },
+): number {
+  const a = suffix.points[0];
+  const aStyle = suffix.styles[0];
+  if (!a || !aStyle || prefix.points.length < 2) return -1;
+  const searchFrom = Math.max(0, prefix.points.length - LIVE_SETTLE_TAIL - LIVE_SUFFIX_OVERLAP * 3);
+  for (let j = prefix.points.length - 1; j >= searchFrom; j--) {
+    const p = prefix.points[j];
+    const s = prefix.styles[j];
+    if (!p || !s) continue;
+    if (p.x !== a.x || p.y !== a.y) continue;
+    if (
+      s.lineWidth !== aStyle.lineWidth ||
+      s.alpha !== aStyle.alpha ||
+      (s.dryGain ?? 1) !== (aStyle.dryGain ?? 1) ||
+      (s.blotPool ?? 0) !== (aStyle.blotPool ?? 0) ||
+      (s.blotGrow ?? 0) !== (aStyle.blotGrow ?? 0)
+    ) {
+      continue;
+    }
+    const b = suffix.points[1];
+    const q = prefix.points[j + 1];
+    if (b && q && (q.x !== b.x || q.y !== b.y)) continue;
+    return j;
+  }
+  return -1;
+}
+
+/**
+ * Rebuild only the dirty tail and stitch it onto the cached prefix mesh.
+ *
+ * Head pooling is skipped because tessellateRibbonPrepared passes start > 0.
+ * Caps are not in this mesh — drawRibbonStrokeFrom still stamps them on the
+ * composite. If the join vertices disagree, return null and tessellate from 0.
+ */
+function tessellateLiveSuffix(
+  op: InkDrawOp,
+  pixelScale: number,
+  dirtyFrom: number,
+  cache: NonNullable<typeof liveRibbonDirty>,
+): PreparedRibbon | null {
+  if (cache.pixelScale !== pixelScale || cache.prepared.points.length < 2) return null;
+  if (dirtyFrom <= 0) return null;
+  let start = Math.max(LIVE_SUFFIX_MIN_START, dirtyFrom - LIVE_SUFFIX_OVERLAP);
+  if (start < LIVE_SUFFIX_MIN_START) return null;
+
+  for (let attempt = 0; attempt < 3 && start >= LIVE_SUFFIX_MIN_START; attempt++) {
+    if (attempt > 0) liveRibbonStats.suffixRewinds++;
+    const slicePacked = tessellateRibbonPrepared(op, start, pixelScale);
+    if (!slicePacked || slicePacked.shortTip || slicePacked.prepared.points.length < 2) {
+      start -= LIVE_SUFFIX_OVERLAP;
+      continue;
+    }
+    const join = preparedJoinIndex(cache.prepared, slicePacked.prepared);
+    if (join < 0) {
+      start -= LIVE_SUFFIX_OVERLAP;
+      continue;
+    }
+    const points = cache.prepared.points.slice(0, join).concat(slicePacked.prepared.points);
+    const styles = cache.prepared.styles.slice(0, join).concat(slicePacked.prepared.styles);
+    if (points.length < 2 || points.length !== styles.length) {
+      start -= LIVE_SUFFIX_OVERLAP;
+      continue;
+    }
+    liveRibbonStats.suffixHits++;
+    const tipClusterAt =
+      slicePacked.tipClusterAt >= slicePacked.sliceLen
+        ? op.points.length
+        : start + slicePacked.tipClusterAt;
+    return {
+      prepared: { points, styles },
+      tipClusterAt,
+      start: 0,
+      sliceLen: op.points.length,
+    };
+  }
+  return null;
+}
 
 function liveRibbonPrepared(
   op: InkDrawOp,
   pixelScale: number,
 ): PreparedRibbon | null {
-  // dirtyFrom is recorded for metrics and for the pixel-bake gate. Rebuilding
-  // only the suffix is not pixel-identical to a whole tessellation (coalesce
-  // and pooling see different neighbours), so this still tessellates from 0.
+  const last = op.points[op.points.length - 1];
+  const tailSlow = last?.slowness ?? INK_SLOWNESS_NEUTRAL;
+  const tipGrow = op.blotTipGrow ?? 0;
+  const haltCount = op.blotHalts?.length ?? 0;
+  if (
+    liveRibbonDirty &&
+    liveRibbonDirty.packed &&
+    liveRibbonDirty.source === op.points &&
+    liveRibbonDirty.pixelScale === pixelScale &&
+    liveRibbonDirty.spineN === op.points.length &&
+    last &&
+    liveRibbonDirty.tailX === last.x &&
+    liveRibbonDirty.tailY === last.y &&
+    liveRibbonDirty.tailSlow === tailSlow &&
+    liveRibbonDirty.tipGrow === tipGrow &&
+    liveRibbonDirty.haltCount === haltCount
+  ) {
+    return liveRibbonDirty.packed;
+  }
+
   const prev =
     liveRibbonDirty && liveRibbonDirty.source === op.points
       ? liveRibbonDirty.prev
+      : null;
+  const cache =
+    liveRibbonDirty &&
+    liveRibbonDirty.source === op.points &&
+    liveRibbonDirty.pixelScale === pixelScale
+      ? liveRibbonDirty
       : null;
   const dirty = ribbonGeomDirtyFrom(op, prev);
   if (DEBUG_INK || inkMetrics.enabled) {
     inkMetrics.live({ ringSamples: 0, spineN: 0, dirtyFrom: dirty.dirtyFrom });
   }
-  const full = tessellateRibbonPrepared(op, 0, pixelScale);
-  liveRibbonDirty = { source: op.points, prev: dirty.next };
-  return full;
+
+  let packed: PreparedRibbon | null = null;
+  let suffixHit = false;
+  if (cache && dirty.dirtyFrom > 0) {
+    packed = tessellateLiveSuffix(op, pixelScale, dirty.dirtyFrom, cache);
+    suffixHit = packed !== null;
+    if (!packed) liveRibbonStats.suffixMisses++;
+  }
+  if (!packed) {
+    packed = tessellateRibbonPrepared(op, 0, pixelScale);
+  }
+
+  liveRibbonDirty = packed
+    ? {
+        source: op.points,
+        prev: dirty.next,
+        prepared: packed.prepared,
+        pixelScale,
+        dirtyFrom: dirty.dirtyFrom,
+        suffixHit,
+        packed,
+        spineN: op.points.length,
+        tailX: last?.x ?? 0,
+        tailY: last?.y ?? 0,
+        tailSlow,
+        tipGrow,
+        haltCount,
+      }
+    : {
+        source: op.points,
+        prev: dirty.next,
+        prepared: { points: [], styles: [] },
+        pixelScale,
+        dirtyFrom: 0,
+        suffixHit: false,
+        packed: null,
+        spineN: op.points.length,
+        tailX: last?.x ?? 0,
+        tailY: last?.y ?? 0,
+        tailSlow,
+        tipGrow,
+        haltCount,
+      };
+  return packed;
 }
 
 /** Variable-width ribbon fill for speed ink — one opaque silhouette, then one alpha blit. */

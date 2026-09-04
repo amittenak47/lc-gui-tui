@@ -4,6 +4,7 @@ import { createCanvas } from "@napi-rs/canvas";
 import {
   applyInkOp,
   debugRibbonScratchSize,
+  liveRibbonDirtySpine,
   releaseLiveRibbonBuffers,
   type ScenePoint,
 } from "./rasterInk";
@@ -112,6 +113,100 @@ describe("live overlay dirty restore", () => {
       snapFar[2],
       snapFar[3],
     ]);
+    stroke.abandon();
+  });
+
+  it("keeps the overlay dirty rect on the live tail of a long stroke", () => {
+    releaseLiveRibbonBuffers();
+    const overlay = createCanvas(800, 200);
+    const snap = createCanvas(800, 200);
+    const octx = overlay.getContext("2d");
+    const sctx = snap.getContext("2d");
+    octx.fillStyle = "#e8e4d4";
+    octx.fillRect(0, 0, 800, 200);
+    sctx.drawImage(overlay, 0, 0);
+
+    const stroke = beginLiveStroke({
+      tool: "pen",
+      view: {
+        zoom: 1,
+        scrollX: 0,
+        scrollY: 0,
+        offsetLeft: 0,
+        offsetTop: 0,
+        width: 800,
+        height: 200,
+      },
+      rect: {
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 800,
+        bottom: 200,
+        width: 800,
+        height: 200,
+        toJSON() {
+          return {};
+        },
+      },
+      box: { width: 800, height: 200, marginY: 0 },
+      first: {
+        clientX: 20,
+        clientY: 100,
+        pressure: 0.5,
+        timeStamp: 1000,
+        pointerType: "pen",
+      },
+      color: "#1a4fd8",
+      uiWidth: 2,
+      inkFullness: 0.8,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0.6,
+      speedBlotBlend: 0.9,
+      speedFade: 0.4,
+      grain: 0,
+      boldness: 1,
+      smoothing: 0,
+      smoothingMode: INK_SMOOTHING_MODE_DEFAULT,
+      getStraightAnchor: () => null,
+      host: null,
+      onNeedPaint: () => {},
+    });
+    for (let i = 1; i < 280; i++) {
+      stroke.ingest([
+        {
+          clientX: 20 + i * 2.6,
+          clientY: 100,
+          pressure: 0.5,
+          timeStamp: 1000 + i * 8,
+          pointerType: "pen",
+        },
+      ]);
+      stroke.tick(1000 + i * 8);
+      stroke.paint(
+        octx as unknown as CanvasRenderingContext2D,
+        overlay as unknown as HTMLCanvasElement,
+        1,
+        null,
+        new Map(),
+        snap as unknown as HTMLCanvasElement,
+      );
+    }
+    const dirty = stroke.overlayDirtyPx(null, {
+      zoom: 1,
+      scrollX: 0,
+      scrollY: 0,
+      offsetLeft: 0,
+      offsetTop: 0,
+      width: 800,
+      height: 200,
+    }, 1);
+    const liveDirty = liveRibbonDirtySpine();
+    expect(liveDirty?.dirtyFrom ?? 0).toBeGreaterThan(50);
+    expect(dirty.w).toBeLessThan(600);
+    expect(dirty.x).toBeGreaterThan(120);
     stroke.abandon();
   });
 });

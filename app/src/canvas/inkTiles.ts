@@ -212,7 +212,7 @@ const opBoundsCache = new WeakMap<InkOp, SceneBounds>();
  * Not cached: a live stroke mutates `points` every frame, and a WeakMap keyed
  * on the op would freeze the first AABB.
  */
-export function strokeAabb(op: InkOp): SceneBounds {
+export function strokeAabb(op: InkOp, fromIndex = 0): SceneBounds {
   const pad =
     op.kind === "erase"
       ? op.radius
@@ -237,7 +237,10 @@ export function strokeAabb(op: InkOp): SceneBounds {
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (const point of op.points) {
+  const points = op.points;
+  const start = Math.max(0, Math.min(fromIndex, points.length));
+  for (let i = start; i < points.length; i++) {
+    const point = points[i]!;
     if (point.x < minX) minX = point.x;
     if (point.y < minY) minY = point.y;
     if (point.x > maxX) maxX = point.x;

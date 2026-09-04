@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { createCanvas } from "@napi-rs/canvas";
-import { applyInkOp, beginInkOpBatch, endInkOpBatch, settledRibbonStats, type ScenePoint } from "./rasterInk";
+import { applyInkOp, beginInkOpBatch, endInkOpBatch, liveRibbonStats, releaseLiveRibbonBuffers, settledRibbonStats, type ScenePoint } from "./rasterInk";
 
 beforeAll(() => {
   // The ribbon scratch asks for an OffscreenCanvas; hand it a real one.
@@ -39,7 +39,8 @@ describe("settled prefix", () => {
     const halts: { x: number; y: number; grow: number; pressure: number }[] = [];
     const op = { kind: "draw" as const, color: "#c41e3a", baseWidth: 5, maxFullness: 1, pressureClip: 1,
       pressureSensitive: true, speedInk: 0.6, speedBlotBlend: 0.9, speedFade: 0.4, blotTipGrow: 0, points: live, blotHalts: halts };
-    Object.assign(settledRibbonStats, { hits: 0, extends: 0, rebuilds: 0, bails: 0 });
+    Object.assign(settledRibbonStats, { hits: 0, extends: 0, rebuilds: 0, bails: 0, copies: 0 });
+    Object.assign(liveRibbonStats, { suffixHits: 0, suffixMisses: 0, suffixRewinds: 0 });
     let checked = 0;
     for (let i = 0; i < path.length; i++) {
       live.push(path[i]);
@@ -87,7 +88,7 @@ describe("settled prefix", () => {
       points: live,
       blotHalts: halts,
     };
-    Object.assign(settledRibbonStats, { hits: 0, extends: 0, rebuilds: 0, bails: 0, firstBad: -1 });
+    Object.assign(settledRibbonStats, { hits: 0, extends: 0, rebuilds: 0, bails: 0, copies: 0, firstBad: -1 });
     for (let i = 0; i < 300; i++) {
       live.push(path[i]!);
       pixels(op, false);
@@ -97,6 +98,72 @@ describe("settled prefix", () => {
     halts.push({ x: path[40]!.x, y: path[40]!.y, grow: 1, pressure: 0.6 });
     pixels(op, false);
     expect(settledRibbonStats.rebuilds).toBeGreaterThan(rebuildsBefore);
+    const a = pixels(op, false);
+    const b = pixels(op, true);
+    let bad = 0;
+    for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) bad++;
+    expect(bad).toBe(0);
+  });
+
+  it("copies the baked prefix when the stroke grows up, without restyling it", () => {
+    releaseLiveRibbonBuffers();
+    const live: ScenePoint[] = [];
+    const op = {
+      kind: "draw" as const,
+      color: "#c41e3a",
+      baseWidth: 5,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: true,
+      speedInk: 0.6,
+      speedBlotBlend: 0.9,
+      speedFade: 0.4,
+      blotTipGrow: 0,
+      points: live,
+    };
+    Object.assign(settledRibbonStats, { hits: 0, extends: 0, rebuilds: 0, bails: 0, copies: 0 });
+    // Rightward until the bake engages, then up — the origin must move.
+    for (let i = 0; i < 300; i++) {
+      live.push({ x: 40 + i * 1.4, y: 400, pressure: 0.5, slowness: 1 });
+      pixels(op, false);
+    }
+    expect(settledRibbonStats.extends + settledRibbonStats.hits).toBeGreaterThan(0);
+    const rebuildsBefore = settledRibbonStats.rebuilds;
+    for (let i = 0; i < 80; i++) {
+      live.push({ x: 40 + 299 * 1.4, y: 400 - i * 1.6, pressure: 0.5, slowness: 1 });
+      const a = pixels(op, false);
+      const b = pixels(op, true);
+      let bad = 0;
+      for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) bad++;
+      expect(bad).toBe(0);
+    }
+    expect(settledRibbonStats.copies).toBeGreaterThan(0);
+    expect(settledRibbonStats.rebuilds).toBe(rebuildsBefore);
+  });
+
+  it("tessellates only the live suffix on a long growing stroke", () => {
+    releaseLiveRibbonBuffers();
+    const live: ScenePoint[] = [];
+    const op = {
+      kind: "draw" as const,
+      color: "#111111",
+      baseWidth: 5,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 0.9,
+      speedFade: 1,
+      blotTipGrow: 0,
+      points: live,
+    };
+    Object.assign(liveRibbonStats, { suffixHits: 0, suffixMisses: 0, suffixRewinds: 0 });
+    Object.assign(settledRibbonStats, { hits: 0, extends: 0, rebuilds: 0, bails: 0, copies: 0 });
+    for (let i = 0; i < 420; i++) {
+      live.push({ x: 40 + i * 1.2, y: 250, pressure: 0.5, slowness: 1 });
+      pixels(op, false);
+    }
+    expect(liveRibbonStats.suffixHits).toBeGreaterThan(20);
     const a = pixels(op, false);
     const b = pixels(op, true);
     let bad = 0;
