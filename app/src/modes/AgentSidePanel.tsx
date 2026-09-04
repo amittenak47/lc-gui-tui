@@ -7,7 +7,7 @@
  * as assistant turns.
  */
 
-import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/types";
@@ -921,7 +921,7 @@ export function AgentSidePanel({
   }, [allowAnnotations, attachedCount]);
 
   const endSheetDrag = useCallback(
-    (event: PointerEvent<HTMLElement>) => {
+    (event: ReactPointerEvent<HTMLElement>) => {
       const drag = sheetDragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
       sheetDragRef.current = null;
@@ -959,7 +959,7 @@ export function AgentSidePanel({
   );
 
   const onSheetHandlePointerDown = useCallback(
-    (event: PointerEvent<HTMLElement>) => {
+    (event: ReactPointerEvent<HTMLElement>) => {
       // Lock blocks peek-up open, not drag-down close.
       if (!mobile || (sheetDragLocked && !open)) return;
       if (event.button !== 0) return;
@@ -981,7 +981,7 @@ export function AgentSidePanel({
   );
 
   const onSheetHandlePointerMove = useCallback(
-    (event: PointerEvent<HTMLElement>) => {
+    (event: ReactPointerEvent<HTMLElement>) => {
       const drag = sheetDragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
       const now = performance.now();
@@ -1023,7 +1023,7 @@ export function AgentSidePanel({
   }, []);
 
   const trackLongPressMove = useCallback(
-    (event: PointerEvent<HTMLDivElement>) => {
+    (event: ReactPointerEvent<HTMLDivElement>) => {
       const state = longPressRef.current;
       if (state.timer == null || state.moved) return;
       if (state.pointerId != null && event.pointerId !== state.pointerId) return;
@@ -1091,7 +1091,7 @@ export function AgentSidePanel({
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeMarkMenu();
     };
-    const onPointerDown = (event: PointerEvent) => {
+    const onPointerDown = (event: globalThis.PointerEvent) => {
       if (markMenuClickShouldKeepOpen(event.target)) return;
       closeMarkMenu();
     };
@@ -1281,7 +1281,7 @@ export function AgentSidePanel({
     : undefined;
   const menuHasText = Boolean(menuMessage?.content.trim());
 
-  const beginLongPress = (messageId: string, event: PointerEvent<HTMLDivElement>) => {
+  const beginLongPress = (messageId: string, event: ReactPointerEvent<HTMLDivElement>) => {
     if (isLongPressBlocked(event.target)) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     clearLongPress();
