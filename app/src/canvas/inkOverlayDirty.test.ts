@@ -54,7 +54,7 @@ describe("live overlay dirty restore", () => {
     const sctx = snap.getContext("2d");
     octx.fillStyle = "#e8e4d4";
     octx.fillRect(0, 0, 200, 200);
-    sctx.drawImage(overlay as unknown as CanvasImageSource, 0, 0);
+    sctx.drawImage(overlay, 0, 0);
 
     const stroke = beginLiveStroke({
       tool: "pen",
