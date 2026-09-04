@@ -468,12 +468,6 @@ a,
  * chips then scroll inside the strip rather than pushing the icons.
  */
 .lc-tab-strip {
-  /*
-   * How wide one chip is allowed to get. The strip still spans the header —
-   * chips grow to share it — but they stop at a tab-sized tab, so a lone Home
-   * is a chip and not a banner across the whole row.
-   */
-  --lc-tab-max: 300px;
   display: flex;
   flex: 1 1 0;
   align-items: stretch;
@@ -487,6 +481,8 @@ a,
   border: 1px solid var(--chrome-edge);
   border-radius: 7px 7px 0 0;
   background: var(--panel, var(--bg));
+  container-type: inline-size;
+  container-name: lc-tabs;
 }
 
 .lc-tab-strip::-webkit-scrollbar {
@@ -498,7 +494,6 @@ a,
   flex: 1 1 0;
   align-items: center;
   min-width: 44px;
-  max-width: var(--lc-tab-max, none);
   overflow: hidden;
   border: 0;
   border-radius: 0;
@@ -555,9 +550,33 @@ a,
   opacity: 1;
 }
 
+.lc-tab[data-tab-kind="practice"] {
+  --lc-tab-mode: var(--lc-mode-practice);
+}
+
+.lc-tab[data-tab-kind="whiteboard"] {
+  --lc-tab-mode: var(--lc-mode-whiteboard);
+}
+
+.lc-tab[data-tab-kind="annotate"] {
+  --lc-tab-mode: var(--lc-mode-annotate);
+}
+
+.lc-tab[data-tab-kind="web"] {
+  --lc-tab-mode: var(--lc-mode-browse);
+}
+
+.lc-tab[data-tab-kind="explore"] {
+  --lc-tab-mode: var(--lc-mode-explore);
+}
+
+.lc-tab[data-tab-kind="home"] {
+  --lc-tab-mode: var(--lc-mode-whiteboard);
+}
+
 .lc-tab.is-active {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  box-shadow: inset 0 -2px 0 var(--accent);
+  background: color-mix(in srgb, var(--lc-tab-mode, var(--accent)) 18%, transparent);
+  box-shadow: inset 0 -2px 0 var(--lc-tab-mode, var(--accent));
 }
 
 /* Home wearing Cancel for the length of a load. Same chip, same slot, so the
@@ -640,7 +659,8 @@ a,
 
 .lc-tab-glyph {
   flex-shrink: 0;
-  opacity: 0.75;
+  color: var(--lc-tab-mode, currentColor);
+  opacity: 0.82;
 }
 
 .lc-tab.is-active .lc-tab-glyph {
@@ -653,6 +673,7 @@ a,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 600;
 }
 
 .lc-tab-title-input {
@@ -676,7 +697,7 @@ a,
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--lc-tab-mode, var(--accent));
 }
 
 .lc-tab /*
@@ -1474,8 +1495,8 @@ html[data-theme="dark"] .lc-web-doc {
   fill: currentColor;
   font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-size: 8.2px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-weight: 900;
+  letter-spacing: 0.02em;
 }
 
 .lc-brand-home:hover .lc-brand-house,
@@ -2477,8 +2498,8 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-tab.is-drop-target {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  background: color-mix(in srgb, var(--lc-tab-mode, var(--accent)) 22%, transparent);
+  box-shadow: inset 0 0 0 1px var(--lc-tab-mode, var(--accent));
 }
 
 /*
@@ -2667,9 +2688,6 @@ body[data-lc-sash-drag="horizontal"] {
   align-items: center;
   gap: 0;
   min-width: 0;
-  /* One chip's worth per member, so a split pair is capped like the two
-     chips it holds rather than at one chip's width. */
-  max-width: var(--lc-tab-max, none);
 }
 
 /*
@@ -2686,7 +2704,7 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-tab-row.is-group {
-  max-width: calc(var(--lc-tab-max, 300px) * 2);
+  flex: 2 1 0;
 }
 
 .lc-tab-row .lc-tab:last-child {
@@ -5793,6 +5811,7 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-home-card {
+  position: relative;
   overflow: visible;
   min-width: 0;
   display: flex;
@@ -5840,6 +5859,7 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-home-card-icon {
+  position: relative;
   display: grid;
   place-items: center;
   flex: none;
@@ -5848,17 +5868,36 @@ body[data-lc-sash-drag="horizontal"] {
   border-radius: 14px;
   background: color-mix(in srgb, var(--lc-home-mode, var(--ink)) 14%, transparent);
   color: var(--lc-home-mode, color-mix(in srgb, var(--ink) 78%, transparent));
-  overflow: visible;
+  overflow: hidden;
+  isolation: isolate;
   transition:
     background 140ms ease,
     color 140ms ease;
 }
 
-.lc-home-card-icon svg {
+.lc-home-card-icon > svg {
+  position: relative;
+  z-index: 1;
   width: 60%;
   height: 60%;
   overflow: visible;
   transform-origin: 50% 50%;
+}
+
+.lc-home-live {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.lc-home-live-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
 .lc-home-card:hover:not(:disabled) .lc-home-card-icon {
@@ -5872,6 +5911,17 @@ body[data-lc-sash-drag="horizontal"] {
   gap: 4px;
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.lc-home-wip {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  color: color-mix(in srgb, var(--ink) 42%, transparent);
+  pointer-events: none;
 }
 
 .lc-home-card-kicker {
@@ -5916,158 +5966,466 @@ body[data-lc-sash-drag="horizontal"] {
   --lc-home-mode: var(--lc-mode-explore);
 }
 
+/*
+ * Home icon scenes — always looping, never a hover one-shot.
+ *
+ * Each mark draws, sits, then wipes. The old CSS-mask wallpapers painted every
+ * stroke at once; these keyframes are the sequence.
+ */
+
 .lc-home-bra-l,
 .lc-home-bra-r,
 .lc-home-slash {
   transform-box: fill-box;
   transform-origin: center;
-  transition:
-    transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 180ms ease;
 }
 
-.lc-home-code-ipsum {
+.lc-home-card[data-mode="practice"] .lc-home-bra-l {
+  animation: lc-home-bra-l 16s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.lc-home-card[data-mode="practice"] .lc-home-bra-r {
+  animation: lc-home-bra-r 16s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.lc-home-card[data-mode="practice"] .lc-home-slash {
+  animation: lc-home-slash 16s ease infinite;
+}
+
+@keyframes lc-home-bra-l {
+  0%, 2% { transform: none; }
+  6%, 46% { transform: translateX(-4.2px); }
+  50%, 52% { transform: none; }
+  56%, 96% { transform: translateX(-4.2px); }
+  100% { transform: none; }
+}
+
+@keyframes lc-home-bra-r {
+  0%, 2% { transform: none; }
+  6%, 46% { transform: translateX(4.2px); }
+  50%, 52% { transform: none; }
+  56%, 96% { transform: translateX(4.2px); }
+  100% { transform: none; }
+}
+
+@keyframes lc-home-slash {
+  0%, 3% { opacity: 1; }
+  6%, 46% { opacity: 0; }
+  50%, 53% { opacity: 1; }
+  56%, 96% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.lc-home-card[data-mode="practice"] .lc-home-card-icon > svg {
+  width: 92%;
+  height: 92%;
+}
+
+.lc-home-live-code {
+  inset: 6px;
+  z-index: 1;
+  display: grid;
+  align-content: center;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 4.15px;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.03em;
+  color: currentColor;
+}
+
+.lc-home-fn {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.lc-home-fn-a {
+  animation: lc-home-fn-swap-a 16s linear infinite;
+}
+
+.lc-home-fn-b {
+  animation: lc-home-fn-swap-b 16s linear infinite;
+}
+
+@keyframes lc-home-fn-swap-a {
+  0%, 49.9% { opacity: 1; visibility: visible; }
+  50%, 100% { opacity: 0; visibility: hidden; }
+}
+
+@keyframes lc-home-fn-swap-b {
+  0%, 49.9% { opacity: 0; visibility: hidden; }
+  50%, 100% { opacity: 1; visibility: visible; }
+}
+
+.lc-home-fn-line {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  width: 0;
+  border-right: 0.7px solid transparent;
+  box-sizing: content-box;
+}
+
+.lc-home-fn-a .lc-home-fn-line:nth-child(1),
+.lc-home-fn-b .lc-home-fn-line:nth-child(1) {
+  animation: lc-home-type-l1 8s steps(18, end) infinite;
+}
+
+.lc-home-fn-a .lc-home-fn-line:nth-child(2),
+.lc-home-fn-b .lc-home-fn-line:nth-child(2) {
+  animation: lc-home-type-l2 8s steps(18, end) infinite;
+}
+
+.lc-home-fn-a .lc-home-fn-line:nth-child(3),
+.lc-home-fn-b .lc-home-fn-line:nth-child(3) {
+  animation: lc-home-type-l3 8s steps(18, end) infinite;
+}
+
+.lc-home-fn-a .lc-home-fn-line:nth-child(4),
+.lc-home-fn-b .lc-home-fn-line:nth-child(4) {
+  animation: lc-home-type-l4 8s steps(18, end) infinite;
+}
+
+@keyframes lc-home-type-l1 {
+  0% { width: 0; border-right-color: currentColor; }
+  12% { width: var(--lc-ch, 12ch); border-right-color: currentColor; }
+  13%, 67% { width: var(--lc-ch, 12ch); border-right-color: transparent; }
+  68% { width: var(--lc-ch, 12ch); border-right-color: currentColor; }
+  82%, 100% { width: 0; border-right-color: transparent; }
+}
+
+@keyframes lc-home-type-l2 {
+  0%, 12% { width: 0; border-right-color: transparent; }
+  12.1% { width: 0; border-right-color: currentColor; }
+  24% { width: var(--lc-ch, 12ch); border-right-color: currentColor; }
+  25%, 67% { width: var(--lc-ch, 12ch); border-right-color: transparent; }
+  68% { width: var(--lc-ch, 12ch); border-right-color: currentColor; }
+  82%, 100% { width: 0; border-right-color: transparent; }
+}
+
+@keyframes lc-home-type-l3 {
+  0%, 24% { width: 0; border-right-color: transparent; }
+  24.1% { width: 0; border-right-color: currentColor; }
+  36% { width: var(--lc-ch, 12ch); border-right-color: currentColor; }
+  37%, 67% { width: var(--lc-ch, 12ch); border-right-color: transparent; }
+  68% { width: var(--lc-ch, 12ch); border-right-color: currentColor; }
+  82%, 100% { width: 0; border-right-color: transparent; }
+}
+
+@keyframes lc-home-type-l4 {
+  0%, 36% { width: 0; border-right-color: transparent; }
+  36.1% { width: 0; border-right-color: currentColor; }
+  48% { width: var(--lc-ch, 12ch); border-right-color: currentColor; }
+  49%, 67% { width: var(--lc-ch, 12ch); border-right-color: transparent; }
+  68% { width: var(--lc-ch, 12ch); border-right-color: currentColor; }
+  82%, 100% { width: 0; border-right-color: transparent; }
+}
+
+.lc-home-stick path,
+.lc-home-stick-head,
+.lc-home-scribble,
+.lc-home-note {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
   opacity: 0;
-  pointer-events: none;
 }
 
-.lc-home-code-ipsum text {
-  fill: currentColor;
+.lc-home-stick-head {
+  animation: lc-home-stick 10s ease-in-out infinite;
 }
 
-.lc-home-card[data-mode="practice"]:hover:not(:disabled) .lc-home-bra-l {
-  transform: translateX(-4.2px);
+.lc-home-stick path:nth-of-type(1) {
+  animation: lc-home-stick 10s ease-in-out 0.08s infinite;
 }
 
-.lc-home-card[data-mode="practice"]:hover:not(:disabled) .lc-home-bra-r {
-  transform: translateX(4.2px);
+.lc-home-stick path:nth-of-type(2),
+.lc-home-stick path:nth-of-type(3) {
+  animation: lc-home-stick 10s ease-in-out 0.18s infinite;
 }
 
-.lc-home-card[data-mode="practice"]:hover:not(:disabled) .lc-home-slash {
-  opacity: 0;
+.lc-home-stick path:nth-of-type(4),
+.lc-home-stick path:nth-of-type(5) {
+  animation: lc-home-stick 10s ease-in-out 0.28s infinite;
 }
 
-.lc-home-card[data-mode="practice"]:hover:not(:disabled) .lc-home-code-ipsum {
-  animation: lc-home-code-in 420ms ease-out 80ms forwards;
+.lc-home-scribble {
+  animation: lc-home-scribble 10s ease-in-out infinite;
 }
 
-@keyframes lc-home-code-in {
-  from {
-    opacity: 0;
-    transform: translateY(1.5px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-.lc-home-ink-1,
-.lc-home-ink-2,
-.lc-home-ink-3 {
-  stroke-dasharray: 12;
-  stroke-dashoffset: 12;
-  opacity: 0;
+.lc-home-note {
+  animation: lc-home-note 10s ease-in-out infinite;
 }
 
 .lc-home-nib {
   transform-box: fill-box;
   transform-origin: 12% 88%;
+  animation: lc-home-nib-loop 10s cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
 
-.lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-ink-1 {
-  animation: lc-home-ink-draw 280ms ease-out 40ms forwards;
+@keyframes lc-home-stick {
+  0% { stroke-dashoffset: 1; opacity: 1; }
+  12% { stroke-dashoffset: 0; opacity: 1; }
+  68% { stroke-dashoffset: 0; opacity: 1; }
+  80% { stroke-dashoffset: 1; opacity: 1; }
+  81%, 100% { stroke-dashoffset: 1; opacity: 0; }
 }
 
-.lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-ink-2 {
-  animation: lc-home-ink-draw 280ms ease-out 220ms forwards;
+@keyframes lc-home-scribble {
+  0%, 14% { stroke-dashoffset: 1; opacity: 0; }
+  15% { stroke-dashoffset: 1; opacity: 1; }
+  26% { stroke-dashoffset: 0; opacity: 1; }
+  34% { stroke-dashoffset: 0; opacity: 1; }
+  44% { stroke-dashoffset: 1; opacity: 1; }
+  45%, 100% { stroke-dashoffset: 1; opacity: 0; }
 }
 
-.lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-ink-3 {
-  animation: lc-home-ink-draw 280ms ease-out 400ms forwards;
+@keyframes lc-home-note {
+  0%, 44% { stroke-dashoffset: 1; opacity: 0; }
+  45% { stroke-dashoffset: 1; opacity: 1; }
+  56% { stroke-dashoffset: 0; opacity: 1; }
+  68% { stroke-dashoffset: 0; opacity: 1; }
+  80% { stroke-dashoffset: 1; opacity: 1; }
+  81%, 100% { stroke-dashoffset: 1; opacity: 0; }
 }
 
-.lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-nib {
-  animation: lc-home-nib-draw 1.05s cubic-bezier(0.22, 1, 0.36, 1);
+@keyframes lc-home-nib-loop {
+  0%, 4% { transform: translate(0, 0) rotate(0deg); }
+  12% { transform: translate(-11.2px, 5.4px) rotate(-42deg); }
+  22% { transform: translate(-1.4px, -5.2px) rotate(-8deg); }
+  34% { transform: translate(1.2px, -4.4px) rotate(12deg); }
+  48% { transform: translate(-2.2px, 4.6px) rotate(-22deg); }
+  72% { transform: translate(-10.4px, 5.8px) rotate(-36deg); }
+  88%, 100% { transform: translate(0, 0) rotate(0deg); }
 }
 
-@keyframes lc-home-ink-draw {
-  from {
-    stroke-dashoffset: 12;
-    opacity: 1;
-  }
-  to {
-    stroke-dashoffset: 0;
-    opacity: 1;
-  }
-}
-
-@keyframes lc-home-nib-draw {
-  0% { transform: translate(0, 0) rotate(0deg); }
-  22% { transform: translate(-8.5px, -7px) rotate(-28deg); }
-  48% { transform: translate(-7px, -3.5px) rotate(-18deg); }
-  74% { transform: translate(-8px, 0.5px) rotate(-24deg); }
-  100% { transform: translate(0, 0) rotate(0deg); }
-}
-
+.lc-home-bt-top,
+.lc-home-bt-mid,
+.lc-home-bt-bot,
 .lc-home-rule-1,
 .lc-home-rule-2,
-.lc-home-rule-3,
-.lc-home-rule-4 {
-  stroke-dasharray: 10;
-  stroke-dashoffset: 10;
+.lc-home-rule-3 {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
   opacity: 0;
 }
 
-.lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-1 {
-  animation: lc-home-rule-draw 260ms ease-out 40ms forwards;
+.lc-home-bt-top {
+  stroke-width: 2;
+  animation: lc-home-rule-in 12s ease-in-out infinite;
 }
 
-.lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-2 {
-  animation: lc-home-rule-draw 260ms ease-out 180ms forwards;
+.lc-home-bt-mid {
+  stroke-width: 1.15;
+  animation: lc-home-rule-in 12s ease-in-out 0.12s infinite;
 }
 
-.lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-3 {
-  animation: lc-home-rule-draw 260ms ease-out 320ms forwards;
+.lc-home-rule-1 {
+  animation: lc-home-rule-in 12s ease-in-out 0.22s infinite;
 }
 
-.lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-4 {
-  animation: lc-home-rule-draw 260ms ease-out 460ms forwards;
+.lc-home-rule-2 {
+  animation: lc-home-rule-in 12s ease-in-out 0.32s infinite;
 }
 
-@keyframes lc-home-rule-draw {
-  from {
-    stroke-dashoffset: 10;
-    opacity: 1;
-  }
-  to {
-    stroke-dashoffset: 0;
-    opacity: 1;
-  }
+.lc-home-rule-3 {
+  animation: lc-home-rule-in 12s ease-in-out 0.42s infinite;
 }
 
-.lc-home-card[data-mode="browse"]:hover:not(:disabled) .lc-home-card-icon svg {
-  animation: lc-home-globe 900ms ease-in-out;
+.lc-home-bt-bot {
+  stroke-width: 2;
+  animation: lc-home-rule-in 12s ease-in-out 0.52s infinite;
+}
+
+@keyframes lc-home-rule-in {
+  0% { stroke-dashoffset: 1; opacity: 1; }
+  8%, 88% { stroke-dashoffset: 0; opacity: 1; }
+  94%, 100% { stroke-dashoffset: 1; opacity: 0; }
+}
+
+.lc-home-mark-hl-a,
+.lc-home-mark-hl-b {
+  transform-box: fill-box;
+  transform-origin: left center;
+  transform: scaleX(0);
+  opacity: 0.82;
+}
+
+.lc-home-mark-hl-a {
+  animation: lc-home-hl-a 12s ease-in-out infinite;
+}
+
+.lc-home-mark-hl-b {
+  animation: lc-home-hl-b 12s ease-in-out infinite;
+}
+
+.lc-home-mark-ul,
+.lc-home-mark-brace,
+.lc-home-mark-strike,
+.lc-home-mark-fn {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  opacity: 0;
+}
+
+.lc-home-mark-ul {
+  animation: lc-home-mark-ul 12s ease-in-out infinite;
+}
+
+.lc-home-mark-brace {
+  animation: lc-home-mark-brace 12s ease-in-out infinite;
+}
+
+.lc-home-mark-strike {
+  animation: lc-home-mark-strike 12s ease-in-out infinite;
+}
+
+.lc-home-mark-fn {
+  animation: lc-home-mark-fn 12s ease-in-out infinite;
+}
+
+@keyframes lc-home-hl-a {
+  0%, 10% { transform: scaleX(0); }
+  16%, 42% { transform: scaleX(1); }
+  48%, 100% { transform: scaleX(0); }
+}
+
+@keyframes lc-home-hl-b {
+  0%, 62% { transform: scaleX(0); }
+  68%, 84% { transform: scaleX(1); }
+  90%, 100% { transform: scaleX(0); }
+}
+
+@keyframes lc-home-mark-ul {
+  0%, 18% { stroke-dashoffset: 1; opacity: 0; }
+  19% { stroke-dashoffset: 1; opacity: 1; }
+  26%, 54% { stroke-dashoffset: 0; opacity: 1; }
+  60% { stroke-dashoffset: 1; opacity: 1; }
+  61%, 100% { stroke-dashoffset: 1; opacity: 0; }
+}
+
+@keyframes lc-home-mark-brace {
+  0%, 24% { stroke-dashoffset: 1; opacity: 0; }
+  25% { stroke-dashoffset: 1; opacity: 1; }
+  32%, 78% { stroke-dashoffset: 0; opacity: 1; }
+  84% { stroke-dashoffset: 1; opacity: 1; }
+  85%, 100% { stroke-dashoffset: 1; opacity: 0; }
+}
+
+@keyframes lc-home-mark-strike {
+  0%, 32% { stroke-dashoffset: 1; opacity: 0; }
+  33% { stroke-dashoffset: 1; opacity: 1; }
+  40%, 48% { stroke-dashoffset: 0; opacity: 1; }
+  54% { stroke-dashoffset: 1; opacity: 1; }
+  55%, 100% { stroke-dashoffset: 1; opacity: 0; }
+}
+
+@keyframes lc-home-mark-fn {
+  0%, 52% { stroke-dashoffset: 1; opacity: 0; }
+  53% { stroke-dashoffset: 1; opacity: 1; }
+  60%, 84% { stroke-dashoffset: 0; opacity: 1; }
+  90% { stroke-dashoffset: 1; opacity: 1; }
+  91%, 100% { stroke-dashoffset: 1; opacity: 0; }
+}
+
+.lc-home-meteor {
+  opacity: 0;
+}
+
+.lc-home-meteor-1 {
+  animation: lc-home-meteor-a 3.2s linear infinite;
+}
+
+.lc-home-meteor-2 {
+  animation: lc-home-meteor-b 3.2s linear infinite;
+  animation-delay: -0.8s;
+}
+
+.lc-home-meteor-3 {
+  animation: lc-home-meteor-c 3.2s linear infinite;
+  animation-delay: -1.6s;
+}
+
+.lc-home-meteor-4 {
+  animation: lc-home-meteor-d 3.2s linear infinite;
+  animation-delay: -2.4s;
+}
+
+@keyframes lc-home-meteor-a {
+  0% { transform: translate(-10px, 8px) rotate(34deg); opacity: 0; }
+  8% { opacity: 1; }
+  78% { opacity: 1; }
+  100% { transform: translate(58px, 42px) rotate(34deg); opacity: 0; }
+}
+
+@keyframes lc-home-meteor-b {
+  0% { transform: translate(46px, -8px) rotate(128deg); opacity: 0; }
+  10% { opacity: 1; }
+  76% { opacity: 1; }
+  100% { transform: translate(-14px, 48px) rotate(128deg); opacity: 0; }
+}
+
+@keyframes lc-home-meteor-c {
+  0% { transform: translate(-8px, 44px) rotate(-28deg); opacity: 0; }
+  8% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translate(56px, 10px) rotate(-28deg); opacity: 0; }
+}
+
+@keyframes lc-home-meteor-d {
+  0% { transform: translate(18px, -10px) rotate(48deg); opacity: 0; }
+  10% { opacity: 1; }
+  74% { opacity: 1; }
+  100% { transform: translate(60px, 32px) rotate(48deg); opacity: 0; }
+}
+
+.lc-home-card[data-mode="browse"] .lc-home-card-icon > svg {
+  animation: lc-home-globe 18s linear infinite;
 }
 
 @keyframes lc-home-globe {
-  0% { transform: rotate(0deg); }
-  40% { transform: rotate(-18deg); }
-  100% { transform: rotate(360deg); }
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
-.lc-home-card[data-mode="explore"] .lc-home-card-icon svg circle {
+.lc-home-spark {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lc-home-twinkle 4.8s ease-in-out infinite;
+}
+
+.lc-home-spark:nth-child(1) { animation-delay: 0s; }
+.lc-home-spark:nth-child(2) { animation-delay: -0.6s; }
+.lc-home-spark:nth-child(3) { animation-delay: -1.2s; }
+.lc-home-spark:nth-child(4) { animation-delay: -1.8s; }
+.lc-home-spark:nth-child(5) { animation-delay: -2.4s; }
+.lc-home-spark:nth-child(6) { animation-delay: -3s; }
+.lc-home-spark:nth-child(7) { animation-delay: -3.6s; }
+.lc-home-spark:nth-child(8) { animation-delay: -4.2s; }
+
+@keyframes lc-home-twinkle {
+  0%, 8%, 100% { opacity: 0; transform: scale(0.35); }
+  16%, 28% { opacity: 0.9; transform: scale(1); }
+  40% { opacity: 0; transform: scale(0.35); }
+}
+
+.lc-home-card[data-mode="explore"] .lc-home-card-icon > svg circle {
   transform-box: fill-box;
   transform-origin: center;
 }
 
-.lc-home-card[data-mode="explore"]:hover:not(:disabled) .lc-home-card-icon svg circle:first-child {
-  animation: lc-home-hub 900ms ease-in-out infinite;
+.lc-home-card[data-mode="explore"] .lc-home-card-icon > svg circle:first-child {
+  animation: lc-home-hub 2.4s ease-in-out infinite;
 }
 
-.lc-home-card[data-mode="explore"]:hover:not(:disabled) .lc-home-card-icon svg circle:not(:first-child) {
-  animation: lc-home-node 900ms ease-in-out infinite;
+.lc-home-card[data-mode="explore"] .lc-home-card-icon > svg circle:not(:first-child) {
+  animation: lc-home-node 2.4s ease-in-out infinite;
 }
+
+.lc-home-card[data-mode="explore"] .lc-home-card-icon > svg circle:nth-child(2) { animation-delay: 0.15s; }
+.lc-home-card[data-mode="explore"] .lc-home-card-icon > svg circle:nth-child(3) { animation-delay: 0.3s; }
+.lc-home-card[data-mode="explore"] .lc-home-card-icon > svg circle:nth-child(4) { animation-delay: 0.45s; }
+.lc-home-card[data-mode="explore"] .lc-home-card-icon > svg circle:nth-child(5) { animation-delay: 0.6s; }
 
 @keyframes lc-home-hub {
   0%, 100% { transform: scale(1); }
@@ -6089,37 +6447,47 @@ body[data-lc-sash-drag="horizontal"] {
   .lc-home-bra-l,
   .lc-home-bra-r,
   .lc-home-slash,
-  .lc-home-code-ipsum,
+  .lc-home-fn,
+  .lc-home-fn-line,
   .lc-home-nib,
-  .lc-home-ink-1,
-  .lc-home-ink-2,
-  .lc-home-ink-3,
+  .lc-home-stick path,
+  .lc-home-stick-head,
+  .lc-home-scribble,
+  .lc-home-note,
+  .lc-home-bt-top,
+  .lc-home-bt-mid,
+  .lc-home-bt-bot,
   .lc-home-rule-1,
   .lc-home-rule-2,
   .lc-home-rule-3,
-  .lc-home-rule-4 {
-    transition: none;
-    animation: none;
+  .lc-home-mark,
+  .lc-home-meteor,
+  .lc-home-spark,
+  .lc-home-card[data-mode="browse"] .lc-home-card-icon > svg,
+  .lc-home-card[data-mode="explore"] .lc-home-card-icon > svg circle {
+    animation: none !important;
   }
 
-  .lc-home-card[data-mode="practice"]:hover:not(:disabled) .lc-home-code-ipsum {
-    opacity: 1;
+  .lc-home-live {
+    display: none;
   }
 
-  .lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-ink-1,
-  .lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-ink-2,
-  .lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-ink-3,
-  .lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-1,
-  .lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-2,
-  .lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-3,
-  .lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-4 {
+  .lc-home-stick path,
+  .lc-home-stick-head,
+  .lc-home-scribble,
+  .lc-home-note,
+  .lc-home-mark {
+    opacity: 0;
+  }
+
+  .lc-home-bt-top,
+  .lc-home-bt-mid,
+  .lc-home-bt-bot,
+  .lc-home-rule-1,
+  .lc-home-rule-2,
+  .lc-home-rule-3 {
     opacity: 1;
     stroke-dashoffset: 0;
-  }
-
-  .lc-home-card[data-mode="browse"]:hover:not(:disabled) .lc-home-card-icon svg,
-  .lc-home-card[data-mode="explore"]:hover:not(:disabled) .lc-home-card-icon svg circle {
-    animation: none;
   }
 }
 
@@ -7973,43 +8341,6 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-node-btn:disabled {
   opacity: 0.42;
   cursor: default;
-}
-
-/*
- * The Explore glyph's star field.
- *
- * Same 420ms steps(4) clock as the ink-wheel hub so the app has one pulse
- * rather than two that nearly agree — but a sparse star field rather than the
- * hub's checkerboard, and mono rather than tinted.
- */
-.lc-home-card-stars {
-  position: relative;
-}
-
-.lc-home-card-stars::after {
-  content: "";
-  position: absolute;
-  inset: -4px;
-  border-radius: inherit;
-  pointer-events: none;
-  opacity: 0.55;
-  background-image:
-    radial-gradient(currentColor 0.7px, transparent 0.8px),
-    radial-gradient(currentColor 0.55px, transparent 0.65px);
-  background-size: 6px 6px, 11px 11px;
-  background-position: 0 0, 3px 4px;
-  animation: lc-hub-pixel 420ms steps(4) infinite;
-}
-
-.lc-home-card:hover .lc-home-card-stars::after,
-.lc-home-card:focus-visible .lc-home-card-stars::after {
-  opacity: 0.95;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .lc-home-card-stars::after {
-    animation: none;
-  }
 }
 
 .lc-page-content-slot {
@@ -11782,12 +12113,13 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * The chip with nothing to talk to: still in the row, still the same width,
- * just not there. Unmounting it resized every tab in the strip.
+ * Home has no coach, so the Agent chip is gone — not an invisible spacer.
+ * Keeping its width parked the globe/file/gear cluster off the trailing edge.
+ * Tabs already flex in the 1fr track, so showing Agent on a problem only
+ * shrinks that track; it does not jump the pad icons.
  */
 .lc-agent-toggle.is-vacant {
-  visibility: hidden;
-  pointer-events: none;
+  display: none;
 }
 
 .lc-agent-toggle .lc-agent-live-dot {
