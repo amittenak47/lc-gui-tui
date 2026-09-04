@@ -81,6 +81,7 @@ vi.mock("./annotateStore", () => ({
   trashAnnotateDoc: (id: string) => trashAnnotateDoc(id),
   markAnnotateDeleteAcked: (id: string, acked: boolean) => markAnnotateDeleteAcked(id, acked),
   markAnnotateHubAck: () => {},
+  annotateDocLabel: (doc: { label?: string; name?: string }) => doc.label?.trim() || doc.name || "",
 }));
 
 const deleteProblemBoard = vi.fn(async (_id?: string) => {});
@@ -737,7 +738,8 @@ describe("delete/restore queue", () => {
       name: "One",
       board: { v: 1, elements: [] },
     }));
-    await restoreTrashedPad(client, "whiteboard", "w1");
+    const result = await restoreTrashedPad(client, "whiteboard", "w1");
+    expect(result).toEqual({ ok: true, title: "One" });
     expect(client.putWhiteboardPad).toHaveBeenCalledWith(
       "w1",
       expect.objectContaining({ sync_seq: 6 }),
@@ -943,6 +945,23 @@ describe("applyHubAnnotate footnote boards", () => {
     });
     expect(footnoteBoardMocks.collectFootnoteBoards).toHaveBeenCalledWith("a1", expect.any(Array));
     expect(body.footnote_boards).toEqual(boards);
+  });
+
+  it("puts a display label on the annotate PUT body without changing the URL name", async () => {
+    const body = await annotatePadBody({
+      id: "a1",
+      name: "https://example.com/page",
+      label: "Reading list",
+      hash: "h",
+      docType: "web",
+      updatedAt: 40,
+      source: "<html></html>",
+      footnotes: [],
+      board: emptyBoard,
+      agent: [],
+    });
+    expect(body.label).toBe("Reading list");
+    expect(body.name).toBe("https://example.com/page");
   });
 
   it("writes footnote_boards into the KV store", async () => {

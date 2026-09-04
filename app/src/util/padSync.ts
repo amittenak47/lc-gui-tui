@@ -24,6 +24,7 @@ import {
   restoreAnnotateFromTrash,
   trashAnnotateDoc,
   markAnnotateHubAck,
+  annotateDocLabel,
   type AnnotateDoc,
   type DocType,
 } from "./annotateStore";
@@ -417,7 +418,13 @@ export async function applyHubAnnotate(
     agent: Array.isArray(row.agent) ? row.agent : [],
     syncSeq: row.sync_seq,
     hubAckUpdatedAt: row.updated_at,
+    ...(typeof row.label === "string" && row.label.trim()
+      ? { label: row.label.trim() }
+      : local?.label
+        ? { label: local.label }
+        : {}),
     ...(local?.locked ? { locked: true } : {}),
+    ...(local?.owned ? { owned: true } : {}),
   });
   markAnnotateHubAck(row.id, row.updated_at);
   if (row.footnote_boards && typeof row.footnote_boards === "object") {
@@ -487,6 +494,7 @@ export async function annotatePadBody(doc: AnnotateDoc): Promise<AnnotatePadDto>
   return {
     id: doc.id,
     name: doc.name,
+    ...(doc.label?.trim() ? { label: doc.label.trim() } : {}),
     hash: doc.hash,
     doc_type: doc.docType,
     updated_at: doc.updatedAt,
@@ -746,25 +754,35 @@ export async function deletePadEverywhere(
   await sendDeletePad(client, kind, padId, seq);
 }
 
+export type RestoreTrashedPadResult =
+  | { ok: true; title: string }
+  | { ok: false };
+
 export async function restoreTrashedPad(
   client: LcClient,
   kind: PadKindSync,
   padId: string,
-): Promise<void> {
-  if (kind === "problem") return;
+): Promise<RestoreTrashedPadResult> {
+  if (kind === "problem") return { ok: false };
   await dropMatching(
     (job) => job.op === "deletePad" && job.kind === kind && job.padId === padId,
   );
   await dropPadPayloadJobs(kind, padId);
   await ensureTrashQueueRoom({ kind, padId });
-  const restored =
-    kind === "whiteboard"
-      ? await restoreWhiteboardFromTrash(padId)
-      : await restoreAnnotateFromTrash(padId);
-  if (!restored) return;
+  if (kind === "whiteboard") {
+    const restored = await restoreWhiteboardFromTrash(padId);
+    if (!restored) return { ok: false };
+    const seq = restored.syncSeq ?? 0;
+    await enqueuePadSync({ op: "restorePad", kind, padId, seq });
+    await flushPadSyncQueue(client);
+    return { ok: true, title: restored.title };
+  }
+  const restored = await restoreAnnotateFromTrash(padId);
+  if (!restored) return { ok: false };
   const seq = restored.syncSeq ?? 0;
   await enqueuePadSync({ op: "restorePad", kind, padId, seq });
   await flushPadSyncQueue(client);
+  return { ok: true, title: annotateDocLabel(restored) };
 }
 
 async function sendDeletePad(
@@ -930,6 +948,7 @@ async function pushRestoreAllFour(
     await client.putAnnotatePad(padId, {
       id: doc.id,
       name: doc.name,
+      ...(doc.label?.trim() ? { label: doc.label.trim() } : {}),
       hash: doc.hash,
       doc_type: doc.docType,
       updated_at: doc.updatedAt,

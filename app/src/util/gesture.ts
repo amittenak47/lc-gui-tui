@@ -17,6 +17,14 @@ export const HOLD_MS = 333;
  */
 export const HOLD_TAP_FILL_DELAY_MS = 140;
 
+/**
+ * Second-tap window for rename (tab chips and library rows).
+ *
+ * Android WebView is unreliable for `dblclick`, so callers time two `onTap`s
+ * against this instead.
+ */
+export const DOUBLE_TAP_MS = 320;
+
 /** Longer hold for offline / reveal-solution consent. */
 export const HOLD_SENSITIVE_MS = 666;
 

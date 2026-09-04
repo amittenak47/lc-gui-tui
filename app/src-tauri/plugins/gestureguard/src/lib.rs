@@ -63,6 +63,20 @@ struct ImmersiveResponse {
     ok: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct InsetsArgs {
+    density: f64,
+}
+
+/// How far the WebView is covered by system bars, in CSS pixels.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SystemInsets {
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub left: f64,
+}
+
 pub struct GestureGuard<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> GestureGuard<R> {
@@ -85,6 +99,16 @@ impl<R: Runtime> GestureGuard<R> {
             .0
             .run_mobile_plugin::<ImmersiveResponse>("set_immersive", ImmersiveArgs { enabled })?;
         Ok(response.ok)
+    }
+
+    /// Status / caption / nav overlap on the WebView, in CSS pixels.
+    ///
+    /// CSS `env(safe-area-inset-top)` is often 0 in Android WebView even when
+    /// the clock is drawn on top of the in-app header. This is the number the
+    /// layout should pad by — already 0 if the view is laid out below the bars.
+    pub fn get_insets(&self, density: f64) -> Result<SystemInsets> {
+        self.0
+            .run_mobile_plugin::<SystemInsets>("get_insets", InsetsArgs { density })
     }
 }
 

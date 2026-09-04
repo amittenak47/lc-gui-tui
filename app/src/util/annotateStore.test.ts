@@ -410,7 +410,7 @@ describe("setAnnotateDocLabel", () => {
   });
 
   it("does nothing for an id that is not in the library", () => {
-    expect(() => setAnnotateDocLabel("mdink-nope", "x")).not.toThrow();
+    expect(setAnnotateDocLabel("mdink-nope", "x")).toBe(false);
   });
 });
 

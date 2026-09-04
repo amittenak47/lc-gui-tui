@@ -5,14 +5,9 @@
  * header already says `choose a mode to start`, and the question was asking
  * something the four cards answer by existing.
  *
- * The grid is symmetric at every size rather than reflowing into an orphan
- * row: an even count halves cleanly, an odd one keeps its full width and skips
- * the middle tier — `homeModeColumns` is what keeps that tier from leaving one
- * card hanging on its own line. With LeetCode compiled in that is five modes
- * (odd, so 5-across then the rail); without it, four (4, then 2×2).
- *
- * Sizing is driven by a container query on the chooser itself, not the
- * viewport, so the same collapse happens when something else takes the width.
+ * Cards stack in one column so the icon, title and full blurb stay on every
+ * device instead of collapsing into a cramped row of tiles. `homeModeColumns`
+ * is kept for the older multi-column layout tests.
  */
 
 import type { ReactNode } from "react";
@@ -87,9 +82,51 @@ export function HomeChooser({
             blurb: "Browse problems and run tests in this app.",
             icon: (
               <Glyph>
-                <path d="m9 8-3.5 4L9 16" />
-                <path d="m15 8 3.5 4L15 16" />
-                <path d="M13.4 5.5 10.6 18.5" />
+                <path className="lc-home-bra-l" d="m9 8-3.5 4L9 16" />
+                <path className="lc-home-bra-r" d="m15 8 3.5 4L15 16" />
+                <path className="lc-home-slash" d="M13.4 5.5 10.6 18.5" />
+                <g
+                  className="lc-home-code-ipsum"
+                  fill="currentColor"
+                  stroke="none"
+                >
+                  <text
+                    x="12"
+                    y="8.6"
+                    textAnchor="middle"
+                    fontSize="3.05"
+                    fontFamily='ui-monospace, "SF Mono", Menlo, Consolas, monospace'
+                  >
+                    fn ipsum() {"{"}
+                  </text>
+                  <text
+                    x="12"
+                    y="12.4"
+                    textAnchor="middle"
+                    fontSize="3.05"
+                    fontFamily='ui-monospace, "SF Mono", Menlo, Consolas, monospace'
+                  >
+                    let dolor=0;
+                  </text>
+                  <text
+                    x="12"
+                    y="16.2"
+                    textAnchor="middle"
+                    fontSize="3.05"
+                    fontFamily='ui-monospace, "SF Mono", Menlo, Consolas, monospace'
+                  >
+                    sit(amet);
+                  </text>
+                  <text
+                    x="12"
+                    y="20"
+                    textAnchor="middle"
+                    fontSize="3.05"
+                    fontFamily='ui-monospace, "SF Mono", Menlo, Consolas, monospace'
+                  >
+                    {"}"}
+                  </text>
+                </g>
               </Glyph>
             ),
             onOpen: onPractice,
@@ -107,7 +144,10 @@ export function HomeChooser({
         <Glyph>
           <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h9" />
           <path d="M13 2v6h6V9" />
-          <path d="m20.2 11.3-6.6 6.6-2.8.8.8-2.8 6.6-6.6z" />
+          <path className="lc-home-ink-1" d="M6.8 8.2c1.6.8 3.2.2 4.8.6" />
+          <path className="lc-home-ink-2" d="M6.8 11.4c2.2-.7 3.4 1 5.2.4" />
+          <path className="lc-home-ink-3" d="M6.8 14.6c1.4.9 2.8-.3 4.4.5" />
+          <path className="lc-home-nib" d="m20.2 11.3-6.6 6.6-2.8.8.8-2.8 6.6-6.6z" />
         </Glyph>
       ),
       onOpen: onWhiteboard,
@@ -121,8 +161,10 @@ export function HomeChooser({
         <Glyph>
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
           <path d="M14 2v6h6" />
-          <path d="M8 13h8" />
-          <path d="M8 17h5" />
+          <path className="lc-home-rule-1" d="M8 11h8" />
+          <path className="lc-home-rule-2" d="M8 14h7" />
+          <path className="lc-home-rule-3" d="M8 17h8" />
+          <path className="lc-home-rule-4" d="M8 20h5" />
         </Glyph>
       ),
       onOpen: onAnnotate,
@@ -167,14 +209,7 @@ export function HomeChooser({
   ];
 
   return (
-    <nav
-      className="lc-home-chooser"
-      aria-label="Choose a workspace"
-      style={{
-        ["--lc-home-cols" as string]: String(modes.length),
-        ["--lc-home-cols-mid" as string]: String(homeModeColumns(modes.length)),
-      }}
-    >
+    <nav className="lc-home-chooser" aria-label="Choose a workspace">
       <div className="lc-home-chooser-grid">
         {modes.map((mode) => (
           /*

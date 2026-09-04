@@ -164,7 +164,6 @@ import type { DocAnchor } from "./util/docAnchors";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { openExternalUrl } from "./util/openExternal";
 import { WEB_HOME, fetchWebPage, hostLabelFromUrl, webPageWidthForViewport, type WebHtmlSource } from "./util/webPage";
-import { installSafeAreaInsets } from "./util/safeArea";
 import { CodeDocument } from "./modes/CodeDocument";
 import { DocSelectionLayer, type DocSelectionResult } from "./modes/DocSelectionLayer";
 import { FootnoteOverview } from "./modes/FootnoteOverview";
@@ -254,7 +253,7 @@ import {
 import {
   deleteAnnotateDoc,
   annotateDocLabel,
-  setAnnotateDocLabel,
+  annotateIsNamed,
   findAnnotateDocByHash,
   findStaleAnnotateDoc,
   getAnnotateDocMeta,
@@ -282,9 +281,10 @@ import {
   listWhiteboardNotebooks,
   migrateLegacyWhiteboard,
   markWhiteboardHubAck,
-  renameWhiteboardNotebook,
   restoreWhiteboardNotebook,
   saveWhiteboardNotebook,
+  whiteboardIsNamed,
+  defaultWhiteboardTitle,
   WhiteboardLibraryFullError,
   WHITEBOARD_PAGE_LIMIT,
   whiteboardLibraryCount,
@@ -307,6 +307,7 @@ import {
   type PadHubWindowDetail,
 } from "./util/padSync";
 import { annotatePadBody, whiteboardPadBody } from "./util/padSync";
+import { renameLibraryPad } from "./util/libraryPadRename";
 import { loadPadHub, loadPadSyncSince } from "./util/padHub";
 import {
   applyConflictFootnoteBoards,
@@ -641,11 +642,6 @@ export function Workspace({
     onMissingContent,
   } = useShell();
 
-  useEffect(() => {
-    if (!mobile) return;
-    return installSafeAreaInsets();
-  }, [mobile]);
-
   // Writing hand mirrors the chrome across the Y-axis — see inkHandedness.
   useEffect(() => installHandednessAttr(), []);
 
@@ -806,7 +802,6 @@ export function Workspace({
   const attachedFootnoteIdsRef = useRef<string[]>([]);
   attachedFootnoteIdsRef.current = attachedFootnoteIds;
   const [openFootnoteId, setOpenFootnoteId] = useState<string | null>(null);
-  const [footnoteOpenThreadId, setFootnoteOpenThreadId] = useState<string | null>(null);
   const [footnoteAnchorRect, setFootnoteAnchorRect] = useState<DOMRect | null>(null);
   const [footnoteBoardSession, setFootnoteBoardSession] = useState<{
     footnoteId: string;
@@ -1847,6 +1842,18 @@ export function Workspace({
   /** Distinguishes header Run tests vs Submit for the results panel. */
   const [lastRunKind, setLastRunKind] = useState<"run" | "submit">("run");
   const [coachOpen, setCoachOpen] = useState(false);
+  const dismissFootnoteOverview = useCallback(() => {
+    setOpenFootnoteId(null);
+    setFootnoteAnchorRect(null);
+    setSubMarkMode(null);
+    setHoveredSubMarkId(null);
+    setActiveSubMarkId(null);
+    setSubMarkPaintTheme(null);
+  }, []);
+  const openCoachPanel = useCallback(() => {
+    dismissFootnoteOverview();
+    setCoachOpen(true);
+  }, [dismissFootnoteOverview]);
   const [codeSlot, setCodeSlot] = useState<ScreenRect | null>(null);
   const deepLinkHandled = useRef(false);
   const lastCodeSlotRef = useRef<ScreenRect | null>(null);
@@ -2579,7 +2586,6 @@ export function Workspace({
       footnoteCoachUpgradeRef.current = null;
       setOpenFootnoteId(null);
       setFootnoteAnchorRect(null);
-      setFootnoteOpenThreadId(null);
       revealForMessageIdRef.current = null;
       lastReviewIdsRef.current = new Set();
       reviewTurnRef.current = 0;
@@ -3369,14 +3375,30 @@ export function Workspace({
    * not own, so they decline rather than pretend.
    */
   const renameGraphNode = useCallback((node: NodeRef, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
     if (node.type === "annotate" || node.type === "web") {
-      setAnnotateDocLabel(node.id, title);
+      void renameLibraryPad(client, "annotate", node.id, trimmed).then((ok) => {
+        if (!ok) return;
+        for (const open of tabsRef.current.tabs) {
+          if ((open.kind === "annotate" || open.kind === "web") && open.docId === node.id) {
+            patchTab(open.id, { title: trimmed });
+          }
+        }
+      });
       return;
     }
     if (node.type === "whiteboard") {
-      renameWhiteboardNotebook(node.id, title);
+      void renameLibraryPad(client, "whiteboard", node.id, trimmed).then((ok) => {
+        if (!ok) return;
+        for (const open of tabsRef.current.tabs) {
+          if (open.kind === "whiteboard" && open.notebookId === node.id) {
+            patchTab(open.id, { title: trimmed });
+          }
+        }
+      });
     }
-  }, []);
+  }, [client, patchTab, tabsRef]);
 
   const addWorkspaceLink = useCallback(
     (to: NodeRef) => {
@@ -4429,6 +4451,7 @@ export function Workspace({
       indexed: "idle",
       entries: [entry],
       index: 0,
+      docId: null,
     }),
     [],
   );
@@ -5357,7 +5380,7 @@ export function Workspace({
               at: Date.now(),
             },
           ]);
-          setCoachOpen(true);
+          openCoachPanel();
           break;
         case "skipped":
           setThinking(false);
@@ -5392,7 +5415,7 @@ export function Workspace({
       setConnected(false);
       setThinking(false);
     };
-  }, [mode, problem, pairing, probe, capture, coachFlags.ws_runs]);
+  }, [mode, problem, pairing, probe, capture, coachFlags.ws_runs, openCoachPanel]);
 
   /**
    * Open an assistant turn to fill in while the coach works.
@@ -5585,7 +5608,7 @@ export function Workspace({
     setBusy("asking the agent…");
     setError(null);
     setNotice(null);
-    if (!suppressCoachPanelOpenRef.current) setCoachOpen(true);
+    if (!suppressCoachPanelOpenRef.current) openCoachPanel();
 
     const note = studentNote?.trim() ?? "";
     const topic =
@@ -5761,6 +5784,7 @@ export function Workspace({
     beginCoachTurn,
     finishCoachTurn,
     runCoachJob,
+    openCoachPanel,
   ]);
 
   /**
@@ -5826,7 +5850,7 @@ export function Workspace({
     const genAtStart = coachRunGenRef.current;
     setBusy("drawing…");
     setError(null);
-    if (!suppressCoachPanelOpenRef.current) setCoachOpen(true);
+    if (!suppressCoachPanelOpenRef.current) openCoachPanel();
     const turnId = beginCoachTurn(threadAnchor ?? undefined, {
       flags: ["Draw"],
       hasQuestion: Boolean(ask.trim()),
@@ -5956,6 +5980,7 @@ export function Workspace({
     pushCoachMessage,
     reviewDrawings,
     markPadDirty,
+    openCoachPanel,
   ]);
 
   const applyFilledCode = useCallback(
@@ -6068,7 +6093,7 @@ export function Workspace({
       setBusy("asking…");
       setError(null);
       setNotice(null);
-      if (!suppressCoachPanelOpenRef.current) setCoachOpen(true);
+      if (!suppressCoachPanelOpenRef.current) openCoachPanel();
       setCoachPhase("Thinking…");
       const turnId = beginCoachTurn(threadAnchor ?? undefined, pendingAck);
       let finished = false;
@@ -6204,7 +6229,7 @@ export function Workspace({
         if (coachSendDepthRef.current === 0) drainCoachSendQueueRef.current();
       }
     },
-    [applyProposedAnnotations, client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob, appendProcessEvent, appendReasoning],
+    [applyProposedAnnotations, client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob, appendProcessEvent, appendReasoning, openCoachPanel],
   );
 
   /** `runTests` fires this and is defined above it — see the auto-forward. */
@@ -7283,7 +7308,7 @@ export function Workspace({
   }, [patchTab, setNotice, tab.id, whiteboardPageCount]);
 
   const saveWhiteboardNow = useCallback(
-    async (onFull?: () => void, opts?: { quiet?: boolean }) => {
+    async (onFull?: () => void, opts?: { quiet?: boolean; title?: string }) => {
       const board = boardRef.current;
       if (!board || !problem || !isWhiteboard(problem)) return;
       if (footnoteBoardRef.current) {
@@ -7297,13 +7322,16 @@ export function Workspace({
       try {
         await flushDirtyInk(board, whiteboardNotebookId ? whiteboardDocKey(whiteboardNotebookId) : null);
         const liveBoard = board.saveBoard({ assembleInk: false });
+        const namedTitle = opts?.title?.trim();
         const saved = await saveWhiteboardNotebook({
           id: whiteboardNotebookId ?? undefined,
+          ...(namedTitle ? { title: namedTitle } : {}),
           board: liveBoard,
           agent: persistableAgentMessages(agentMessages),
           pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
         });
         setWhiteboardNotebookId(saved.id);
+        patchTab(tab.id, { title: saved.title, notebookId: saved.id });
         await flushDirtyInk(board, whiteboardDocKey(saved.id));
         await rebaselineWhiteboardSession(saved.id);
         if (!opts?.quiet) setNotice(`Saved “${saved.title}”.`);
@@ -7327,7 +7355,7 @@ export function Workspace({
         setError(messageOf(cause));
       }
     },
-    [agentMessages, problem, rebaselineWhiteboardSession, saveFootnoteBoardNow, whiteboardNotebookId, whiteboardPageCount, client],
+    [agentMessages, patchTab, problem, rebaselineWhiteboardSession, saveFootnoteBoardNow, tab.id, whiteboardNotebookId, whiteboardPageCount, client],
   );
 
   const discardWhiteboardSession = useCallback(() => {
@@ -7492,7 +7520,7 @@ export function Workspace({
   }, [restoreDocumentBoard]);
 
   /** Commit the annotations to the library. Returns the entry, or null on failure. */
-  const saveAnnotateSession = useCallback(async (): Promise<AnnotateDoc | null> => {
+  const saveAnnotateSession = useCallback(async (opts?: { label?: string }): Promise<AnnotateDoc | null> => {
     const board = boardRef.current;
     const source = annotateSource;
     if (!board || !source) return null;
@@ -7508,17 +7536,31 @@ export function Workspace({
     const blob = board.saveBoard({ assembleInk: false });
     if (!blob) return null;
     try {
+      const namedLabel = opts?.label?.trim();
       const saved = await saveAnnotateDoc({
         id: annotateDocId ?? undefined,
         name: source.name,
         hash: source.hash,
         source: source.text,
         docType: source.docType,
+        ...(namedLabel ? { label: namedLabel } : {}),
         board: blob,
         footnotes: annotateFootnotes,
         agent: persistableAgentMessages(agentMessages),
       });
       setAnnotateDocId(saved.id);
+      const tabTitle = saved.label?.trim()
+        ? saved.label.trim()
+        : tab.kind === "web"
+          ? undefined
+          : (() => {
+              const siblings = listAnnotateDocsByHash(saved.hash);
+              return siblings.length > 1 ? annotateDocLabel(saved) : saved.name;
+            })();
+      patchTab(tab.id, {
+        docId: saved.id,
+        ...(tabTitle ? { title: tabTitle } : {}),
+      });
       annotateBaselineRef.current = { id: saved.id, entry: saved };
       annotatePristineHashRef.current = padContentFingerprint(
         board.getElements(),
@@ -7548,7 +7590,7 @@ export function Workspace({
       setError(messageOf(cause));
       return null;
     }
-  }, [annotateDocId, annotateFootnotes, annotateSource, agentMessages, client, saveEditBuffer, closeFootnoteBoardSession]);
+  }, [annotateDocId, annotateFootnotes, annotateSource, agentMessages, client, patchTab, saveEditBuffer, closeFootnoteBoardSession, tab.id, tab.kind]);
 
   /*
    * In-place session: stash the PDF overlay and load scratch on this tab.
@@ -7906,7 +7948,7 @@ export function Workspace({
   );
 
   const resolveLeave = useCallback(
-    async (save: boolean) => {
+    async (save: boolean, name?: string) => {
       const pending = leaving;
       if (!problem || !pending || leavingPending) return;
       setLeavingPending(true);
@@ -7931,8 +7973,10 @@ export function Workspace({
       try {
         if (isAnnotate(problem)) {
           if (save) {
-            const saved = await saveAnnotateSession();
-            if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
+            const saved = await saveAnnotateSession(
+              name?.trim() ? { label: name.trim() } : undefined,
+            );
+            if (saved) setNotice(`Annotations saved for “${annotateDocLabel(saved)}”.`);
           } else {
             discardAnnotateSession();
           }
@@ -7957,11 +8001,13 @@ export function Workspace({
               try {
                 const saved = await saveWhiteboardNotebook({
                   id: whiteboardNotebookId ?? undefined,
+                  ...(name?.trim() ? { title: name.trim() } : {}),
                   board: blob,
                   agent: persistableAgentMessages(agentMessages),
                   pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(blob.elements)),
                 });
                 setWhiteboardNotebookId(saved.id);
+                patchTab(tab.id, { title: saved.title, notebookId: saved.id });
                 await flushDirtyInk(handle, whiteboardDocKey(saved.id));
                 await rebaselineWhiteboardSession(saved.id);
                 void pushWhiteboardPad(client, saved).then((ok) => {
@@ -7975,6 +8021,7 @@ export function Workspace({
                     pageCount: saved.pageCount,
                   }).then((written) => void pushRolledSnapshots(client, written));
                 });
+                setNotice(`Saved “${saved.title}”.`);
               } catch (cause) {
                 if (cause instanceof WhiteboardLibraryFullError) {
                   await dismissDialog();
@@ -7983,7 +8030,7 @@ export function Workspace({
                   // Re-open leave flow after the library dialog frees a slot.
                   setLeaving({ run: pending.run });
                   whiteboardLibResumeRef.current = () => {
-                    void resolveLeave(true);
+                    void resolveLeave(true, name);
                   };
                   setWhiteboardLibOpen(true);
                   return;
@@ -7991,7 +8038,6 @@ export function Workspace({
                 throw cause;
               }
             }
-            setNotice("Notebook saved.");
             }
           } else {
             // The autosave has been committing to the library all along, so
@@ -8063,10 +8109,79 @@ export function Workspace({
       tests,
       whiteboardNotebookId,
       whiteboardPageCount,
+      patchTab,
+      tab.id,
     ],
   );
 
 
+
+  const annotateDialogKind: AnnotateDialogKind =
+    tab.kind === "web" || annotateSource?.docType === "web" ? "web" : "document";
+  const padNeedsName = footnoteBoardRef.current
+    ? false
+    : isWhiteboard(problem)
+      ? !whiteboardIsNamed(whiteboardNotebookId)
+      : isAnnotate(problem)
+        ? !annotateOwned && !annotateIsNamed(annotateDocId ? getAnnotateDocMeta(annotateDocId) : null)
+        : false;
+  const padDefaultName = (() => {
+    if (isWhiteboard(problem)) {
+      if (whiteboardNotebookId) {
+        const meta = listWhiteboardNotebooks().find((row) => row.id === whiteboardNotebookId);
+        if (meta?.title) return meta.title;
+      }
+      if (tab.title.trim() && tab.title !== "Whiteboard") return tab.title;
+      return defaultWhiteboardTitle();
+    }
+    if (isAnnotate(problem)) {
+      const meta = annotateDocId ? getAnnotateDocMeta(annotateDocId) : null;
+      if (meta?.label?.trim()) return meta.label.trim();
+      if (annotateDialogKind === "web") {
+        return tab.title.trim() || hostLabelFromUrl(webUrl) || "Page";
+      }
+      return tab.title.trim() || annotateSource?.name || "Untitled";
+    }
+    return "";
+  })();
+
+  const handleRestoreTrash = async (kind: "whiteboard" | "annotate", id: string) => {
+    try {
+      const result = await restoreTrashedPad(client, kind, id);
+      if (result.ok) {
+        setNotice(`Restored “${result.title}”.`);
+        return;
+      }
+      setError(
+        kind === "whiteboard"
+          ? "Could not restore that notebook."
+          : "Could not restore that document.",
+      );
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  };
+
+  const handleLibraryRename = async (
+    kind: "whiteboard" | "annotate",
+    id: string,
+    title: string,
+  ) => {
+    const ok = await renameLibraryPad(client, kind, id, title);
+    if (!ok) return;
+    for (const open of tabsRef.current.tabs) {
+      if (kind === "whiteboard" && open.kind === "whiteboard" && open.notebookId === id) {
+        patchTab(open.id, { title });
+      }
+      if (
+        kind === "annotate" &&
+        (open.kind === "annotate" || open.kind === "web") &&
+        open.docId === id
+      ) {
+        patchTab(open.id, { title });
+      }
+    }
+  };
 
   /**
    * The tab opened; what it pointed at did not.
@@ -8526,9 +8641,14 @@ export function Workspace({
     if (!annotateDocId) return;
     const meta = getAnnotateDocMeta(annotateDocId);
     if (!meta) return;
+    if (meta.label?.trim()) {
+      patchTab(tab.id, { title: meta.label.trim() });
+      return;
+    }
+    if (tab.kind === "web") return;
     const siblings = listAnnotateDocsByHash(meta.hash);
     patchTab(tab.id, { title: siblings.length > 1 ? annotateDocLabel(meta) : meta.name });
-  }, [annotateDocId, patchTab, tab.id]);
+  }, [annotateDocId, patchTab, tab.id, tab.kind]);
 
   useEffect(() => {
     patchTab(tab.id, { indexed: docIndexStatus });
@@ -8670,31 +8790,13 @@ export function Workspace({
     [agentMessages, groupedCoachThreads],
   );
   const footnoteNumbers = useMemo(() => numberFootnotes(annotateFootnotes), [annotateFootnotes]);
-  const footnoteThreadRoots = useMemo(() => {
-    const roots = new Set<string>();
-    for (const entry of annotateFootnotes) {
-      if (entry.threadRootId) roots.add(entry.threadRootId);
-      for (const thread of entry.threads ?? []) roots.add(thread.rootId);
-    }
-    return roots;
-  }, [annotateFootnotes]);
 
   const openCoachFootnoteThread = useCallback(
     (rootId: string) => {
-      const footnote =
-        annotateFootnotes.find(
-          (entry) =>
-            entry.threadRootId === rootId ||
-            (entry.threads ?? []).some((thread) => thread.rootId === rootId),
-        ) ?? null;
-      if (footnote) {
-        setFootnoteOpenThreadId(rootId);
-        openFootnoteOverview(footnote.id, null);
-        return;
-      }
+      openCoachPanel();
       setCoachFocusThread({ token: Date.now(), rootId });
     },
-    [annotateFootnotes, openFootnoteOverview],
+    [openCoachPanel],
   );
 
   /*
@@ -9169,7 +9271,7 @@ export function Workspace({
               disabled={busy !== null || canvasLoading}
               onTap={() => {
                 void saveAnnotateSession().then((saved) => {
-                  if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
+                  if (saved) setNotice(`Annotations saved for “${annotateDocLabel(saved)}”.`);
                 });
               }}
               onConfirm={() => {
@@ -9207,7 +9309,7 @@ export function Workspace({
               disabled={busy !== null || canvasLoading}
               onTap={() => {
                 void saveAnnotateSession().then((saved) => {
-                  if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
+                  if (saved) setNotice(`Annotations saved for “${annotateDocLabel(saved)}”.`);
                 });
               }}
               onConfirm={() => setAnnotateEntryOpen(true)}
@@ -9361,7 +9463,10 @@ export function Workspace({
                     : "Agent"
             }
             data-tip-placement="bottom"
-            onClick={() => setCoachOpen((current) => !current)}
+            onClick={() => {
+              if (coachOpen) setCoachOpen(false);
+              else openCoachPanel();
+            }}
           >
             <span className="lc-agent-live-dot" aria-hidden />
             Agent
@@ -10237,7 +10342,10 @@ export function Workspace({
             open={coachOpen}
             mode={mode}
             onModeChange={setMode}
-            onOpenChange={setCoachOpen}
+            onOpenChange={(open) => {
+              if (open) openCoachPanel();
+              else setCoachOpen(false);
+            }}
             sheetDragLocked={sheetDragLocked}
             busy={busy !== null}
             error={error}
@@ -10285,8 +10393,6 @@ export function Workspace({
                   : [...current, id],
               )
             }
-            footnoteThreadRoots={footnoteThreadRoots}
-            onOpenFootnoteThread={openCoachFootnoteThread}
             onThreadChange={(rootId) => {
               threadRootIdRef.current = rootId;
             }}
@@ -10345,16 +10451,7 @@ export function Workspace({
             onSubMarkPaintTheme={setSubMarkPaintTheme}
             activeSubMarkId={activeSubMarkId}
             onActiveSubMarkIdChange={setActiveSubMarkId}
-            onClose={() => {
-              setOpenFootnoteId(null);
-              setFootnoteAnchorRect(null);
-              setSubMarkMode(null);
-              setHoveredSubMarkId(null);
-              setActiveSubMarkId(null);
-              setSubMarkPaintTheme(null);
-              setFootnoteOpenThreadId(null);
-            }}
-            openThreadRootId={footnoteOpenThreadId}
+            onClose={dismissFootnoteOverview}
             onChange={onFootnoteChange}
             onOpenWhiteboard={(wbId) => {
               void openFootnoteBoardSplit(openFootnote.id, wbId);
@@ -10377,8 +10474,9 @@ export function Workspace({
               setAttachedFootnoteIds((current) =>
                 current.includes(id) ? current : [...current, id],
               );
-              setCoachOpen(true);
+              openCoachPanel();
             }}
+            onOpenCoachThread={openCoachFootnoteThread}
             onOpenExternal={(url) => {
               void openExternalUrl(url).catch(() => {
                 setError("could not hand the link to a browser on this device");
@@ -10525,15 +10623,18 @@ export function Workspace({
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isAnnotate(problem))}
           snapshotKey={annotateDocId}
-          onRestoreTrash={(id) => restoreTrashedPad(client, "annotate", id)}
+          needsName={padNeedsName}
+          defaultName={padDefaultName}
+          onRestoreTrash={(id) => handleRestoreTrash("annotate", id)}
+          onRename={(id, title) => handleLibraryRename("annotate", id, title)}
           onDelete={(id) =>
             deletePadEverywhere(client, "annotate", id)
           }
           onChoose={(choice, docId) => {
             if (choice === "save") {
               setAnnotateEntryOpen(false);
-              void saveAnnotateSession().then((saved) => {
-                if (saved) setNotice(`Annotations saved for “${saved.name}”.`);
+              void saveAnnotateSession(docId?.trim() ? { label: docId.trim() } : undefined).then((saved) => {
+                if (saved) setNotice(`Annotations saved for “${annotateDocLabel(saved)}”.`);
               });
               return;
             }
@@ -10647,14 +10748,20 @@ export function Workspace({
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isWhiteboard(problem))}
           snapshotKey={whiteboardNotebookId}
-          onRestoreTrash={(id) => restoreTrashedPad(client, "whiteboard", id)}
+          needsName={padNeedsName}
+          defaultName={padDefaultName}
+          onRestoreTrash={(id) => handleRestoreTrash("whiteboard", id)}
+          onRename={(id, title) => handleLibraryRename("whiteboard", id, title)}
           onDelete={(id) =>
             deletePadEverywhere(client, "whiteboard", id)
           }
           onChoose={(choice, notebookId) => {
             if (choice === "save") {
               setWhiteboardEntryOpen(false);
-              void saveWhiteboardNow(() => setWhiteboardEntryOpen(true));
+              void saveWhiteboardNow(
+                () => setWhiteboardEntryOpen(true),
+                notebookId?.trim() ? { title: notebookId.trim() } : undefined,
+              );
               return;
             }
             if (choice === "load" && notebookId) {
@@ -10715,6 +10822,8 @@ export function Workspace({
           pending={leavingPending}
           exiting={leavingPhase === "exit"}
           error={leavingError}
+          needsName={padNeedsName}
+          defaultName={padDefaultName}
           onDelete={(id) =>
             deletePadEverywhere(client, "whiteboard", id)
           }
@@ -10725,7 +10834,7 @@ export function Workspace({
               void openWhiteboard({ notebookId });
               return;
             }
-            void resolveLeave(choice === "save");
+            void resolveLeave(choice === "save", choice === "save" ? notebookId : undefined);
           }}
           onCancel={() => {
             if (leavingPending || leavingPhase === "exit") return;
@@ -10738,15 +10847,18 @@ export function Workspace({
       {leaving && problem && isAnnotate(problem) && (
         <AnnotateDialog
           mode="leave"
+          kind={annotateDialogKind}
           dirty={!annotateUntouched()}
           docName={annotateSource?.name ?? "this document"}
           pending={leavingPending}
           exiting={leavingPhase === "exit"}
           error={leavingError}
+          needsName={padNeedsName}
+          defaultName={padDefaultName}
           onDelete={(id) =>
             deletePadEverywhere(client, "annotate", id)
           }
-          onChoose={(choice) => void resolveLeave(choice === "save")}
+          onChoose={(choice, name) => void resolveLeave(choice === "save", name)}
           onCancel={() => {
             if (leavingPending || leavingPhase === "exit") return;
             setLeaving(null);
@@ -10955,6 +11067,10 @@ function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
     const processEvents = Array.isArray(message.processEvents)
       ? message.processEvents
       : undefined;
+    const reasoning =
+      typeof message.reasoning === "string" && message.reasoning.trim()
+        ? message.reasoning
+        : undefined;
     const flags = Array.isArray(message.flags)
       ? message.flags.filter((flag): flag is string => typeof flag === "string" && flag.length > 0)
       : undefined;
@@ -10977,7 +11093,8 @@ function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
       !message.bridge &&
       !message.attachments?.length &&
       !drawing &&
-      !processEvents?.length
+      !processEvents?.length &&
+      !reasoning
     ) {
       return [];
     }
@@ -10992,6 +11109,7 @@ function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
         attachments: message.attachments,
         ...(flags && flags.length > 0 ? { flags } : {}),
         ...(processEvents ? { processEvents } : {}),
+        ...(reasoning ? { reasoning } : {}),
         ...(drawing ? { drawing } : {}),
         ...(replyTo ? { replyTo } : {}),
       },

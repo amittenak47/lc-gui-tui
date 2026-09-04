@@ -17,6 +17,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useReducedMotion } from "motion/react";
 
+import { DOUBLE_TAP_MS } from "../util/gesture";
+import { tabAllowsRename } from "../util/libraryPadRename";
 import {
   HOME_TAB_ID,
   isFootnoteBoardTab,
@@ -71,6 +73,11 @@ export interface TabStripProps {
   onUnsplit?: (id: string) => void;
   /** Which tabs are currently half of a split, so the menu can say `Unsplit`. */
   groupedIds?: string[];
+  /**
+   * Double-tap a chip to rename it. Home, Practice, Explore, and footnote
+   * boards are not offered — {@link tabAllowsRename}.
+   */
+  onRename?: (id: string, title: string) => void;
 }
 
 function Glyph({ children }: { children: ReactNode }) {
@@ -227,10 +234,14 @@ export function TabStrip({
   onSplitWithActive,
   onUnsplit,
   groupedIds = [],
+  onRename,
 }: TabStripProps) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ id: string; x: number; y: number; moved: boolean } | null>(null);
   const skipClickRef = useRef(false);
+  const lastTapRef = useRef({ id: "", at: 0 });
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
 
   /*
    * The chip that is currently being carried, and where.
@@ -341,6 +352,15 @@ export function TabStrip({
 
   const still = useReducedMotion();
 
+  const commitRename = (id: string, value: string) => {
+    setRenamingId(null);
+    const next = value.trim();
+    if (!next) return;
+    const current = tabs.find((tab) => tab.id === id)?.title;
+    if (current === next) return;
+    onRename?.(id, next);
+  };
+
   /*
    * Would dropping here take the chip out of its split?
    *
@@ -433,6 +453,16 @@ export function TabStrip({
                 }
                 if (homeAborts) onCancelLoadRef.current?.();
                 if (!cancelling) {
+                  if (onRename && tabAllowsRename(tab)) {
+                    const now = Date.now();
+                    if (lastTapRef.current.id === tab.id && now - lastTapRef.current.at < DOUBLE_TAP_MS) {
+                      lastTapRef.current = { id: "", at: 0 };
+                      setRenamingId(tab.id);
+                      setRenameDraft(tab.title);
+                      return;
+                    }
+                    lastTapRef.current = { id: tab.id, at: now };
+                  }
                   onFocus(tab.id);
                   return;
                 }
@@ -466,6 +496,7 @@ export function TabStrip({
               */
               onPointerDown={(event) => {
                 lastPointerTypeRef.current = event.pointerType;
+                if (renamingId === tab.id) return;
                 if (cancelling || tab.id === HOME_TAB_ID || busy) return;
                 if (event.button !== 0) return;
                 dragRef.current = { id: tab.id, x: event.clientX, y: event.clientY, moved: false };
@@ -513,7 +544,29 @@ export function TabStrip({
               }}
             >
               <TabIcon kind={cancelling ? "cancel" : tab.kind} />
-              <span className="lc-tab-title">{label}</span>
+              {renamingId === tab.id ? (
+                <input
+                  className="lc-tab-title-input"
+                  value={renameDraft}
+                  aria-label={`Rename ${tab.title}`}
+                  autoFocus
+                  onClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onChange={(event) => setRenameDraft(event.target.value)}
+                  onBlur={(event) => commitRename(tab.id, event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      commitRename(tab.id, (event.target as HTMLInputElement).value);
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      setRenamingId(null);
+                    }
+                  }}
+                />
+              ) : (
+                <span className="lc-tab-title">{label}</span>
+              )}
               {tab.dirty ? (
                 <span className="lc-tab-dot" aria-label="Unsaved changes" title="Unsaved changes" />
               ) : null}

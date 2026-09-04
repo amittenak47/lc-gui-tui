@@ -9,6 +9,8 @@ import {
   restoreWhiteboardNotebook,
   saveWhiteboardNotebook,
   setWhiteboardNotebookLocked,
+  renameWhiteboardNotebook,
+  whiteboardIsNamed,
   sweepWhiteboardTrash,
   trashWhiteboardNotebook,
   WhiteboardLibraryFullError,
@@ -202,5 +204,24 @@ describe("whiteboard trash", () => {
     expect(await sweepWhiteboardTrash(1 + PAD_TRASH_TTL_MS)).toEqual([row.id]);
     expect(listWhiteboardTrash()).toHaveLength(0);
     expect(await getWhiteboardNotebook(row.id)).toBeNull();
+  });
+});
+
+describe("renameWhiteboardNotebook", () => {
+  it("renames without freshening Recent and marks the notebook named", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_700_000_000_000));
+    const saved = await saveWhiteboardNotebook({ board: board("a"), pageCount: 1 });
+    expect(whiteboardIsNamed(saved.id)).toBe(false);
+
+    vi.setSystemTime(new Date(1_700_000_900_000));
+    expect(renameWhiteboardNotebook(saved.id, "Sketchbook")).toBe(true);
+
+    const meta = listWhiteboardNotebooks()[0]!;
+    expect(meta.title).toBe("Sketchbook");
+    expect(meta.named).toBe(true);
+    expect(meta.updatedAt).toBe(1_700_000_000_000);
+    expect(whiteboardIsNamed(saved.id)).toBe(true);
+    vi.useRealTimers();
   });
 });

@@ -169,6 +169,7 @@ pub fn run() {
         lan_base_url,
         set_gesture_exclusions,
         set_drawing_immersive,
+        get_system_insets,
         live_webview_create,
         live_webview_place,
         live_webview_show,
@@ -279,6 +280,43 @@ fn set_drawing_immersive(
     #[cfg(not(target_os = "android"))]
     {
         Ok(false)
+    }
+}
+
+#[cfg(target_os = "android")]
+use tauri_plugin_gestureguard::SystemInsets;
+#[cfg(not(target_os = "android"))]
+#[derive(serde::Serialize)]
+struct SystemInsets {
+    top: f64,
+    right: f64,
+    bottom: f64,
+    left: f64,
+}
+
+/// How far the WebView is covered by the Android status / caption / nav bars.
+///
+/// CSS `env(safe-area-inset-top)` is often 0 here even when the clock is drawn
+/// on the in-app header. A no-op with zeros off Android.
+#[tauri::command]
+fn get_system_insets(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    #[allow(unused_variables)] density: f64,
+) -> std::result::Result<SystemInsets, String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_gestureguard::GestureGuardExt;
+        let guard = app.gesture_guard().ok_or("gesture guard unavailable")?;
+        return guard.get_insets(density).map_err(|e| e.to_string());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(SystemInsets {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        })
     }
 }
 

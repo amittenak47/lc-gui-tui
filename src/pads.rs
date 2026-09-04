@@ -139,6 +139,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     ensure_column(&conn, "whiteboard", "sync_seq", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(&conn, "annotate", "sync_seq", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(&conn, "annotate", "footnote_boards_json", "TEXT NOT NULL DEFAULT '{}'")?;
+    ensure_column(&conn, "annotate", "label", "TEXT NOT NULL DEFAULT ''")?;
     migrate_tombstones_to_gone(&conn)?;
     Ok(conn)
 }
@@ -230,6 +231,10 @@ pub struct AnnotatePad {
     #[serde(default)]
     pub id: String,
     pub name: String,
+    /// Display name for this annotation set. Empty means show `name` instead.
+    /// Does not change the file on disk or a web pad's identity URL.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
     pub hash: String,
     #[serde(default = "default_doc_type")]
     pub doc_type: String,
@@ -400,7 +405,7 @@ fn read_whiteboard(conn: &Connection, id: &str) -> Result<Option<WhiteboardPad>>
 
 const ANNOTATE_SELECT: &str = "id, name, hash, doc_type, updated_at, deleted_at, source_text,
                 footnotes_json, board_json, agent_json, ifnull(sync_seq, 0),
-                ifnull(footnote_boards_json, '{}')";
+                ifnull(footnote_boards_json, '{}'), ifnull(label, '')";
 
 fn read_annotate(conn: &Connection, id: &str) -> Result<Option<AnnotatePad>> {
     let row = conn
@@ -473,6 +478,7 @@ fn map_annotate_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnnotatePad> {
         agent: parse_json(&row.get::<_, String>(9)?),
         sync_seq: row.get(10)?,
         footnote_boards: parse_json(&row.get::<_, String>(11)?),
+        label: row.get(12)?,
         base_updated_at: None,
     })
 }
@@ -765,8 +771,8 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
 
     conn.execute(
         "INSERT INTO annotate (id, name, hash, doc_type, updated_at, deleted_at, source_text,
-                               footnotes_json, board_json, agent_json, sync_seq, footnote_boards_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11)
+                               footnotes_json, board_json, agent_json, sync_seq, footnote_boards_json, label)
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             hash = excluded.hash,
@@ -778,7 +784,8 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
             board_json = excluded.board_json,
             agent_json = excluded.agent_json,
             sync_seq = excluded.sync_seq,
-            footnote_boards_json = excluded.footnote_boards_json",
+            footnote_boards_json = excluded.footnote_boards_json,
+            label = excluded.label",
         params![
             pad.id,
             pad.name,
@@ -791,6 +798,7 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
             json_text(&pad.agent),
             next_seq,
             json_text(&pad.footnote_boards),
+            pad.label.trim(),
         ],
     )?;
     Ok(PutOutcome::Written(
@@ -1636,6 +1644,7 @@ mod tests {
         AnnotatePad {
             id: id.into(),
             name: "notes.md".into(),
+            label: String::new(),
             hash: "h1".into(),
             doc_type: "markdown".into(),
             updated_at,
@@ -1683,6 +1692,26 @@ mod tests {
         };
         assert_eq!(ann.footnotes[0]["kind"], "ai");
         assert_eq!(get_annotate(&conn, "a1").unwrap().unwrap().source, "# hi");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn annotate_label_round_trips() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        let mut pad = an("a1", 11);
+        pad.label = "Second pass".into();
+        match put_annotate(&conn, &pad).unwrap() {
+            PutOutcome::Written(row) => assert_eq!(row.label, "Second pass"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(get_annotate(&conn, "a1").unwrap().unwrap().label, "Second pass");
+        pad.label = "  ".into();
+        put_annotate(&conn, &pad).unwrap();
+        let got = get_annotate(&conn, "a1").unwrap().unwrap();
+        assert!(got.label.is_empty(), "whitespace label stores as empty");
+        let json = serde_json::to_value(&got).unwrap();
+        assert!(json.get("label").is_none(), "empty label is omitted on the wire");
         let _ = std::fs::remove_file(path);
     }
 
@@ -2283,6 +2312,7 @@ mod tests {
         AnnotatePad {
             id: id.into(),
             name: format!("{id}.pdf"),
+            label: String::new(),
             hash: "binabc".into(),
             doc_type: "pdf".into(),
             updated_at: at,

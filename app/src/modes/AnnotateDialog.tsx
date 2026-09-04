@@ -8,13 +8,22 @@
  * rather than notebooks, and Open rather than New.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useLibraryDeleteArm } from "../util/armedDelete";
-import { deleteAnnotateDoc, listAnnotateDocs, listAnnotateTrash, setAnnotateDocLocked, type AnnotateDocMeta } from "../util/annotateStore";
+import { DOUBLE_TAP_MS } from "../util/gesture";
+import {
+  annotateDocLabel,
+  deleteAnnotateDoc,
+  listAnnotateDocs,
+  listAnnotateTrash,
+  setAnnotateDocLocked,
+  type AnnotateDocMeta,
+} from "../util/annotateStore";
 import { LibraryPadlock } from "./LibraryPadlock";
+import { PadNameField } from "./PadNameField";
 import { TOMBSTONE_COPY } from "../util/padSync";
 import {
   listPadSnapshots,
@@ -61,9 +70,13 @@ interface LeaveProps {
   pending: boolean;
   exiting?: boolean;
   error: string | null;
-  onChoose: (choice: MdInkLeaveChoice) => void;
+  needsName?: boolean;
+  defaultName?: string;
+  onChoose: (choice: MdInkLeaveChoice, name?: string) => void;
   onCancel: () => void;
   onDelete?: (id: string) => void | Promise<void>;
+  /** Same as the entry dialog — web leave still offers the first-Save name step. */
+  kind?: AnnotateDialogKind;
 }
 
 interface EntryProps {
@@ -77,10 +90,13 @@ interface EntryProps {
   allowSave?: boolean;
   /** Pad id of the open document — used to list rolling snapshots. */
   snapshotKey?: string | null;
+  needsName?: boolean;
+  defaultName?: string;
   onChoose: (choice: MdInkEntryChoice, docId?: string) => void;
   onCancel: () => void;
   onDelete?: (id: string) => void | Promise<void>;
   onRestoreTrash?: (id: string) => void | Promise<void>;
+  onRename?: (id: string, title: string) => void | Promise<void>;
 }
 
 export type AnnotateDialogProps = LeaveProps | EntryProps;
@@ -92,8 +108,12 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
   /** Naming a new note. Null when the dialog is not on that step. */
   const [newTitle, setNewTitle] = useState<string | null>(null);
+  const [saveTitle, setSaveTitle] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const lastTapRef = useRef({ id: "", at: 0 });
   const { tapArmed, arm } = useLibraryDeleteArm();
 
   useEffect(() => {
@@ -101,6 +121,8 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
     setTrash(listAnnotateTrash());
     setPickingRecent(false);
     setPickingSnapshots(false);
+    setSaveTitle(null);
+    setRenamingId(null);
   }, [props.mode]);
 
   const snapshotKey = props.mode === "entry" ? props.snapshotKey ?? null : null;
@@ -131,8 +153,55 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   // decision about the ink in hand, not a moment to go opening another.
   const entry = props.mode === "entry" ? props : null;
   const allowSave = Boolean(entry?.allowSave);
-  const isWeb = entry?.kind === "web";
+  const isWeb = props.kind === "web";
   const locked = pending || exiting;
+  const needsName = Boolean(props.needsName);
+  const defaultName = props.defaultName?.trim() || "";
+  const onRename = entry?.onRename;
+
+  const visibleDocs = docs.filter((doc) =>
+    isWeb ? doc.docType === "web" : doc.docType !== "web",
+  );
+  const visibleTrash = (props.mode === "entry" ? trash : []).filter((doc) =>
+    isWeb ? doc.docType === "web" : doc.docType !== "web",
+  );
+
+  const refreshList = () => {
+    setDocs(listAnnotateDocs());
+    setTrash(listAnnotateTrash());
+  };
+
+  const beginSave = () => {
+    if (needsName && saveTitle === null) {
+      setSaveTitle(defaultName);
+      return;
+    }
+    if (!needsName) {
+      props.onChoose("save");
+      return;
+    }
+    const title = (saveTitle ?? defaultName).trim() || defaultName;
+    props.onChoose("save", title || undefined);
+  };
+
+  const commitRename = async (id: string) => {
+    const next = renameDraft.trim();
+    setRenamingId(null);
+    if (!next) return;
+    await onRename?.(id, next);
+    refreshList();
+  };
+
+  const tapLoadRow = (id: string, currentTitle: string) => {
+    const now = Date.now();
+    if (lastTapRef.current.id === id && now - lastTapRef.current.at < DOUBLE_TAP_MS) {
+      lastTapRef.current = { id: "", at: 0 };
+      setRenamingId(id);
+      setRenameDraft(currentTitle);
+      return;
+    }
+    lastTapRef.current = { id, at: now };
+  };
 
   const removeDoc = (id: string) => setPendingId(id);
 
@@ -145,11 +214,10 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
       /* ignore */
     }
     setPendingId(null);
-    setDocs(listAnnotateDocs());
-    setTrash(listAnnotateTrash());
+    refreshList();
   };
 
-  const archived = props.mode === "entry" ? trash : [];
+  const archived = visibleTrash;
 
   return (
     <div
@@ -170,7 +238,9 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
         <div className="lc-settings-head">
           <h2>{isLeave ? "Leave document?" : isWeb ? "Pages" : "Document"}</h2>
           <p className="lc-muted">
-            {newTitle !== null
+            {saveTitle !== null
+              ? "Name this pad. Hold Save to keep the suggested name."
+              : newTitle !== null
               ? "Name the note. It lives in this app — there is no file on disk until you export it."
               : pickingSnapshots
               ? "Hold a snapshot to roll this file back. Latest autosave is the live library entry."
@@ -195,24 +265,39 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
         <div className="lc-settings-body">
           {error && <div className="lc-warning">{error}</div>}
 
-          {newTitle !== null && entry ? (
+          {saveTitle !== null ? (
             <div className="lc-settings-choice">
-              <label className="lc-md-new-title">
-                <span className="lc-muted">Title</span>
-                <input
-                  type="text"
-                  value={newTitle}
-                  autoFocus
-                  placeholder="Untitled"
-                  disabled={locked}
-                  onChange={(event) => setNewTitle(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" || locked) return;
-                    event.preventDefault();
-                    entry.onChoose("new", newTitle.trim() || "Untitled");
-                  }}
-                />
-              </label>
+              <PadNameField
+                value={saveTitle}
+                placeholder={defaultName || "Untitled"}
+                disabled={locked}
+                autoFocus
+                onChange={setSaveTitle}
+                onSubmit={beginSave}
+              />
+              <HoldButton
+                label="Save"
+                className="lc-hold-choice"
+                disabled={locked}
+                onConfirm={beginSave}
+                resetKey={error}
+              >
+                <strong>Save</strong>
+                <span className="lc-muted">
+                  {isWeb ? "Keep these marks." : "Keep these annotations."}
+                </span>
+              </HoldButton>
+            </div>
+          ) : newTitle !== null && entry ? (
+            <div className="lc-settings-choice">
+              <PadNameField
+                value={newTitle}
+                placeholder="Untitled"
+                disabled={locked}
+                autoFocus
+                onChange={setNewTitle}
+                onSubmit={() => entry.onChoose("new", newTitle.trim() || "Untitled")}
+              />
               <HoldButton
                 label="Create note"
                 className="lc-hold-choice"
@@ -251,40 +336,57 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
             </div>
           ) : pickingRecent && entry ? (
             <div className="lc-settings-choice">
-              {docs.length === 0 && <p className="lc-muted">Nothing annotated yet.</p>}
-              {docs.map((doc) => (
+              {visibleDocs.length === 0 && (
+                <p className="lc-muted">{isWeb ? "No saved pages yet." : "Nothing annotated yet."}</p>
+              )}
+              {visibleDocs.map((doc) => {
+                const title = annotateDocLabel(doc);
+                return (
                 <div key={doc.id} className="lc-scratch-load-entry">
+                  {renamingId === doc.id ? (
+                    <PadNameField
+                      value={renameDraft}
+                      disabled={locked}
+                      autoFocus
+                      onChange={setRenameDraft}
+                      onSubmit={() => void commitRename(doc.id)}
+                      onBlur={() => void commitRename(doc.id)}
+                    />
+                  ) : (
                   <HoldButton
-                    label={`Open ${doc.name}`}
+                    label={`Open ${title}`}
                     className="lc-scratch-load-hold"
                     disabled={locked}
+                    onTap={onRename ? () => tapLoadRow(doc.id, title) : undefined}
                     onConfirm={() => entry.onChoose("recent", doc.id)}
                     resetKey={error}
                   >
-                    <strong>{doc.name}</strong>
+                    <strong>{title}</strong>
                     <span className="lc-muted">
                       Annotated {new Date(doc.updatedAt).toLocaleString()}
                     </span>
                   </HoldButton>
+                  )}
+                  {renamingId !== doc.id && (
+                  <>
                   <LibraryPadlock
-                    name={doc.name}
+                    name={title}
                     locked={Boolean(doc.locked)}
                     disabled={locked}
                     onToggle={() => {
                       setAnnotateDocLocked(doc.id, !doc.locked);
-                      setDocs(listAnnotateDocs());
-    setTrash(listAnnotateTrash());
+                      refreshList();
                     }}
                   />
                   {!doc.locked && (
                   <HoldButton
-                    label={`Delete annotations for ${doc.name}`}
+                    label={`Delete annotations for ${title}`}
                     className="lc-scratch-load-trash"
                     disabled={locked}
                     ariaLabel={
                       tapArmed
-                        ? `Delete annotations for ${doc.name} — tap to delete`
-                        : `Delete annotations for ${doc.name} — hold to delete`
+                        ? `Delete annotations for ${title} — tap to delete`
+                        : `Delete annotations for ${title} — hold to delete`
                     }
                     onTap={tapArmed ? () => void confirmRemove(doc.id) : undefined}
                     onConfirm={() => {
@@ -311,23 +413,30 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                     </svg>
                   </HoldButton>
                   )}
+                  </>
+                  )}
                 </div>
-              ))}
+              );
+              })}
               {archived.length > 0 && (
                 <>
                   <p className="lc-muted">Trash on this device — three days, then gone.</p>
                   {archived.map((doc) => (
                     <HoldButton
                       key={`arch-${doc.id}`}
-                      label={`Restore ${doc.name}`}
+                      label={`Restore ${annotateDocLabel(doc)}`}
                       className="lc-hold-choice"
                       disabled={locked}
                       onConfirm={() => {
-                        if (props.mode === "entry") void props.onRestoreTrash?.(doc.id);
+                        if (props.mode !== "entry") return;
+                        void (async () => {
+                          await props.onRestoreTrash?.(doc.id);
+                          refreshList();
+                        })();
                       }}
                       resetKey={error}
                     >
-                      <strong>Restore · {doc.name}</strong>
+                      <strong>Restore · {annotateDocLabel(doc)}</strong>
                       <span className="lc-muted">{new Date(doc.updatedAt).toLocaleString()}</span>
                     </HoldButton>
                   ))}
@@ -342,7 +451,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                     label="Save"
                     className="lc-hold-choice"
                     disabled={locked}
-                    onConfirm={() => props.onChoose("save")}
+                    onConfirm={beginSave}
                     resetKey={error}
                   >
                     <strong>Save annotations</strong>
@@ -372,7 +481,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                       label="Save"
                       className="lc-hold-choice"
                       disabled={locked}
-                      onConfirm={() => props.onChoose("save")}
+                      onConfirm={beginSave}
                     >
                       <strong>Save</strong>
                       <span className="lc-muted">Keep these annotations.</span>
@@ -432,7 +541,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                   <HoldButton
                     label="Recent"
                     className="lc-hold-choice"
-                    disabled={locked || docs.length === 0}
+                    disabled={locked || (visibleDocs.length === 0 && archived.length === 0)}
                     onConfirm={() => setPickingRecent(true)}
                   >
                     <strong>Recent…</strong>
@@ -485,7 +594,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
         </div>
 
         <div className="lc-settings-foot">
-          {(pickingRecent || pickingSnapshots || newTitle !== null) && (
+          {(pickingRecent || pickingSnapshots || newTitle !== null || saveTitle !== null) && (
             <button
               type="button"
               className="lc-secondary"
@@ -494,6 +603,8 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                 setPickingRecent(false);
                 setPickingSnapshots(false);
                 setNewTitle(null);
+                setSaveTitle(null);
+                setRenamingId(null);
               }}
             >
               Back

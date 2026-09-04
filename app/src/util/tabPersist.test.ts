@@ -54,6 +54,7 @@ function web(id: string): WebTab {
     indexed: "indexed",
     entries: [{ url: "https://example.com/", title: "Example", html: "<html>big</html>" }],
     index: 0,
+    docId: null,
   };
 }
 

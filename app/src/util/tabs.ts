@@ -116,6 +116,8 @@ export interface AnnotateTab extends TabBase {
 export interface WebTab extends TabBase, WebHistory {
   kind: "web";
   indexed: TabIndexState;
+  /** Annotate-library id once this page has been saved. */
+  docId: string | null;
 }
 
 export type TabRecord =

@@ -2,11 +2,12 @@
  * Scratchpad leave / entry menus — save, discard, load, or start blank.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useLibraryDeleteArm } from "../util/armedDelete";
+import { DOUBLE_TAP_MS } from "../util/gesture";
 import {
   deleteWhiteboardNotebook,
   listWhiteboardNotebooks,
@@ -15,6 +16,7 @@ import {
   type WhiteboardNotebookMeta,
 } from "../util/whiteboardStore";
 import { LibraryPadlock } from "./LibraryPadlock";
+import { PadNameField } from "./PadNameField";
 import { TOMBSTONE_COPY } from "../util/padSync";
 import {
   listPadSnapshots,
@@ -36,6 +38,9 @@ interface LeaveProps {
   pending: boolean;
   exiting?: boolean;
   error: string | null;
+  /** First explicit Save still needs a title. */
+  needsName?: boolean;
+  defaultName?: string;
   onChoose: (choice: ScratchLeaveChoice, notebookId?: string) => void;
   onCancel: () => void;
   onDelete?: (id: string) => void | Promise<void>;
@@ -50,10 +55,15 @@ interface EntryProps {
   allowSave?: boolean;
   /** Notebook id — used to list rolling snapshots. */
   snapshotKey?: string | null;
+  /** First explicit Save still needs a title. */
+  needsName?: boolean;
+  /** Prefill / placeholder for that first Save. */
+  defaultName?: string;
   onChoose: (choice: ScratchEntryChoice, notebookId?: string) => void;
   onCancel: () => void;
   onDelete?: (id: string) => void | Promise<void>;
   onRestoreTrash?: (id: string) => void | Promise<void>;
+  onRename?: (id: string, title: string) => void | Promise<void>;
 }
 
 export type WhiteboardDialogProps = LeaveProps | EntryProps;
@@ -67,6 +77,10 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [saveTitle, setSaveTitle] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const lastTapRef = useRef({ id: "", at: 0 });
   const { tapArmed, arm } = useLibraryDeleteArm();
 
   useEffect(() => {
@@ -74,6 +88,8 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
     setTrash(listWhiteboardTrash());
     setPickingLoad(false);
     setPickingSnapshots(false);
+    setSaveTitle(null);
+    setRenamingId(null);
   }, [props.mode]);
 
   useEffect(() => {
@@ -92,10 +108,45 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const snapshotKey = props.mode === "entry" ? props.snapshotKey ?? null : null;
   const dirty = props.mode !== "leave" || props.dirty !== false;
   const locked = pending || exiting;
+  const needsName = Boolean(props.needsName);
+  const defaultName = props.defaultName?.trim() || "";
+  const onRename = props.mode === "entry" ? props.onRename : undefined;
 
   const refreshList = () => {
     setNotebooks(listWhiteboardNotebooks());
     setTrash(listWhiteboardTrash());
+  };
+
+  const beginSave = () => {
+    if (needsName && saveTitle === null) {
+      setSaveTitle(defaultName);
+      return;
+    }
+    if (!needsName) {
+      props.onChoose("save");
+      return;
+    }
+    const title = (saveTitle ?? defaultName).trim() || defaultName;
+    props.onChoose("save", title || undefined);
+  };
+
+  const commitRename = async (id: string) => {
+    const next = renameDraft.trim();
+    setRenamingId(null);
+    if (!next) return;
+    await onRename?.(id, next);
+    refreshList();
+  };
+
+  const tapLoadRow = (id: string, currentTitle: string) => {
+    const now = Date.now();
+    if (lastTapRef.current.id === id && now - lastTapRef.current.at < DOUBLE_TAP_MS) {
+      lastTapRef.current = { id: "", at: 0 };
+      setRenamingId(id);
+      setRenameDraft(currentTitle);
+      return;
+    }
+    lastTapRef.current = { id, at: now };
   };
 
   const openSnapshots = () => {
@@ -144,7 +195,9 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
         <div className="lc-settings-head">
           <h2>{isLeave ? "Leave whiteboard?" : "Whiteboard"}</h2>
           <p className="lc-muted">
-            {pickingSnapshots
+            {saveTitle !== null
+              ? "Name this notebook. Hold Save to keep the suggested name."
+              : pickingSnapshots
               ? "Hold a snapshot to roll this notebook back. Latest autosave is the live library entry."
               : pickingLoad
               ? tapArmed
@@ -163,7 +216,28 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
         <div className="lc-settings-body">
           {error && <div className="lc-warning">{error}</div>}
 
-          {pickingSnapshots ? (
+          {saveTitle !== null ? (
+            <div className="lc-settings-choice">
+              <PadNameField
+                value={saveTitle}
+                placeholder={defaultName || "Untitled"}
+                disabled={locked}
+                autoFocus
+                onChange={setSaveTitle}
+                onSubmit={beginSave}
+              />
+              <HoldButton
+                label="Save"
+                className="lc-hold-choice"
+                disabled={locked}
+                onConfirm={beginSave}
+                resetKey={error}
+              >
+                <strong>Save</strong>
+                <span className="lc-muted">Keep this notebook in the library.</span>
+              </HoldButton>
+            </div>
+          ) : pickingSnapshots ? (
             <div className="lc-settings-choice">
               {PAD_SNAPSHOT_TIERS.map((tier) => {
                 const row = snapshots.find((snap) => snap.tier === tier.id);
@@ -205,10 +279,21 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
               */}
               {notebooks.map((entry) => (
                 <div key={entry.id} className="lc-scratch-load-entry">
+                  {renamingId === entry.id ? (
+                    <PadNameField
+                      value={renameDraft}
+                      disabled={locked}
+                      autoFocus
+                      onChange={setRenameDraft}
+                      onSubmit={() => void commitRename(entry.id)}
+                      onBlur={() => void commitRename(entry.id)}
+                    />
+                  ) : (
                   <HoldButton
                     label={`Load ${entry.title}`}
                     className="lc-scratch-load-hold"
                     disabled={locked}
+                    onTap={onRename ? () => tapLoadRow(entry.id, entry.title) : undefined}
                     onConfirm={() => props.onChoose("load", entry.id)}
                     resetKey={error}
                   >
@@ -218,6 +303,9 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                       {new Date(entry.updatedAt).toLocaleString()}
                     </span>
                   </HoldButton>
+                  )}
+                  {renamingId !== entry.id && (
+                  <>
                   <LibraryPadlock
                     name={entry.title}
                     locked={Boolean(entry.locked)}
@@ -262,6 +350,8 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                     </svg>
                   </HoldButton>
                   )}
+                  </>
+                  )}
                 </div>
               ))}
               {archived.length > 0 && (
@@ -274,7 +364,11 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                       className="lc-hold-choice"
                       disabled={locked || !props.mode || props.mode !== "entry"}
                       onConfirm={() => {
-                        if (props.mode === "entry") void props.onRestoreTrash?.(entry.id);
+                        if (props.mode !== "entry") return;
+                        void (async () => {
+                          await props.onRestoreTrash?.(entry.id);
+                          refreshList();
+                        })();
                       }}
                       resetKey={error}
                     >
@@ -294,7 +388,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                   <HoldButton
                     label="Load"
                     className="lc-hold-choice"
-                    disabled={locked || notebooks.length === 0}
+                    disabled={locked || (notebooks.length === 0 && archived.length === 0)}
                     onConfirm={() => setPickingLoad(true)}
                     resetKey={error}
                   >
@@ -304,7 +398,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                     label="Save"
                     className="lc-hold-choice"
                     disabled={locked}
-                    onConfirm={() => props.onChoose("save")}
+                    onConfirm={beginSave}
                     resetKey={error}
                   >
                     Save
@@ -338,7 +432,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                       label="Save"
                       className="lc-hold-choice"
                       disabled={locked}
-                      onConfirm={() => props.onChoose("save")}
+                      onConfirm={beginSave}
                     >
                       <strong>Save</strong>
                       <span className="lc-muted">Keep this notebook in the library.</span>
@@ -356,7 +450,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                   <HoldButton
                     label="Load"
                     className="lc-hold-choice"
-                    disabled={locked || notebooks.length === 0}
+                    disabled={locked || (notebooks.length === 0 && archived.length === 0)}
                     onConfirm={() => setPickingLoad(true)}
                   >
                     <strong>Load…</strong>
@@ -382,7 +476,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
         </div>
 
         <div className="lc-settings-foot">
-          {(pickingLoad || pickingSnapshots) && (
+          {(pickingLoad || pickingSnapshots || saveTitle !== null) && (
             <button
               type="button"
               className="lc-secondary"
@@ -390,6 +484,8 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
               onClick={() => {
                 setPickingLoad(false);
                 setPickingSnapshots(false);
+                setSaveTitle(null);
+                setRenamingId(null);
               }}
             >
               Back

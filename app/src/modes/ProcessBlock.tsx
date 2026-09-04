@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-import { MorphBar } from "../components/MorphBar";
 import { STAGE_LABELS, type CoachProcessEvent } from "../api/types";
 
 export const DOC_TOOL_LABELS: Record<string, string> = {
@@ -18,8 +17,37 @@ export function reasonTitle(detail: string | undefined): string {
   const line = (detail ?? "").split("\n")[0]?.trim() ?? "";
   const stripped = line.replace(/^#+\s*/, "").replace(/^\d+[.)]\s*/, "").trim();
   const clause = stripped.split(/[.!?:]/)[0]?.trim() || stripped;
-  if (!clause) return "Thought";
+  if (!clause) return "Thinking";
   return clause.length > 72 ? `${clause.slice(0, 71)}…` : clause;
+}
+
+/** CoT chunks — full fold text, not the process step list. */
+export function isReasoningEvent(event: CoachProcessEvent): boolean {
+  return event.kind === "reasoning" || event.label === "reasoning";
+}
+
+/**
+ * Full chain-of-thought from process events, for turns that never stored
+ * `message.reasoning` (older pads, or a daemon that only emitted `reason` stages).
+ *
+ * Prefer the uncut `reasoning` event when both exist — the chopped `reason`
+ * steps are the same text again.
+ */
+export function reasoningTextFromEvents(events: readonly CoachProcessEvent[]): string {
+  return (
+    events.find((event) => event.kind === "reasoning" || event.label === "reasoning")
+      ?.detail?.trim() ?? ""
+  );
+}
+
+/** Prefer the stored fold; fall back to CoT that only arrived as process events. */
+export function reasoningBodyForTurn(
+  stored: string | undefined,
+  events: readonly CoachProcessEvent[] | undefined,
+): string {
+  const fromStore = stored?.trim() ?? "";
+  if (fromStore) return fromStore;
+  return events?.length ? reasoningTextFromEvents(events) : "";
 }
 
 /** One process line. Unknown stage names fall back to the daemon's own text. */
@@ -52,8 +80,8 @@ function eventKey(event: CoachProcessEvent, index: number): string {
 /**
  * What the coach did, one line per stage or tool call.
  *
- * Each step is tappable: MorphBar opens that step's `detail` (reasoning or
- * tool snippet). New rows morph the shell taller.
+ * Each step is tappable: the step's `detail` opens inline. `reason` stages
+ * stay here as Thinking. The uncut chain-of-thought is the Reasoning fold.
  */
 export function ProcessBlock({
   events,
@@ -65,10 +93,10 @@ export function ProcessBlock({
   const [open, setOpen] = useState(false);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [shownCount, setShownCount] = useState(0);
-  const expanded = running || open;
   const shown = events.filter(
-    (event) => event.label !== "done" && event.kind !== "reasoning" && event.label !== "reasoning",
+    (event) => event.label !== "done" && !isReasoningEvent(event),
   );
+  const expanded = open;
   useEffect(() => {
     if (running) {
       setShownCount(shown.length);
@@ -100,13 +128,11 @@ export function ProcessBlock({
         <span className="lc-agent-process-label">
           {running
             ? processLine(latest)
-            : `Thought · ${shown.length} step${shown.length === 1 ? "" : "s"}`}
+            : `Thinking · ${shown.length} step${shown.length === 1 ? "" : "s"}`}
         </span>
       </button>
       {expanded && (
-        <MorphBar active="steps" axis="height" className="lc-agent-process-morph">
-          <div data-morph-id="steps">
-            <ol className="lc-agent-process-steps">
+        <ol className="lc-agent-process-steps">
             {visible.map((event, index) => {
               const key = eventKey(event, index);
               const body = event.detail?.trim() ?? "";
@@ -132,24 +158,13 @@ export function ProcessBlock({
                   >
                     {processLine(event)}
                   </button>
-                  {canOpen && (
-                    <MorphBar
-                      active={openKey === key ? "body" : "idle"}
-                      axis="height"
-                      className="lc-agent-process-step-morph"
-                    >
-                      <div data-morph-id="idle" />
-                      <div data-morph-id="body">
-                        <div className="lc-agent-process-step-body">{body}</div>
-                      </div>
-                    </MorphBar>
-                  )}
+                  {canOpen && openKey === key ? (
+                    <div className="lc-agent-process-step-body">{body}</div>
+                  ) : null}
                 </li>
               );
             })}
-            </ol>
-          </div>
-        </MorphBar>
+        </ol>
       )}
     </div>
   );
