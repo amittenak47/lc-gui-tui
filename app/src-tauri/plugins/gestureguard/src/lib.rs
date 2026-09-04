@@ -107,8 +107,9 @@ impl<R: Runtime> GestureGuard<R> {
     /// the clock is drawn on top of the in-app header. This is the number the
     /// layout should pad by — already 0 if the view is laid out below the bars.
     pub fn get_insets(&self, density: f64) -> Result<SystemInsets> {
-        self.0
-            .run_mobile_plugin::<SystemInsets>("get_insets", InsetsArgs { density })
+        Ok(self
+            .0
+            .run_mobile_plugin::<SystemInsets>("get_insets", InsetsArgs { density })?)
     }
 }
 
