@@ -922,20 +922,21 @@ export class LiveStroke {
     this.smoothedSpeed = smoothSpeed(this.smoothedSpeed, 0);
     const last = this.lastPoint;
     if (!last) return;
+    const slowness = inkSlowness(this.smoothedSpeed);
     const dwellPoint: ScenePoint = {
       ...last,
-      slowness: inkSlowness(this.smoothedSpeed),
+      slowness,
     };
-    last.slowness = dwellPoint.slowness;
+    last.slowness = slowness;
     const lastIdx = this.spine.n - 1;
-    if (lastIdx >= 0) this.spine.setSlowness(lastIdx, dwellPoint.slowness);
+    if (lastIdx >= 0) this.spine.setSlowness(lastIdx, slowness);
     if (live.pressureSensitive && hasStylusPressure(last.pressure)) {
       dwellPoint.pressure = this.smoothedPressure;
     }
     const dwellNib = Math.max(inkLineWidth(live.baseWidth, 0, false), 1e-6);
     if (this.disc.wouldStayDisc(dwellPoint, dwellNib)) {
       if (this.spine.n > 0) {
-        this.spine.setSlowness(0, dwellPoint.slowness);
+        this.spine.setSlowness(0, slowness);
         if (hasStylusPressure(dwellPoint.pressure)) {
           const contact = this.spine.view[0]!;
           this.spine.setPressure(0, Math.max(contact.pressure, dwellPoint.pressure));
@@ -947,7 +948,7 @@ export class LiveStroke {
           x: contact.x,
           y: contact.y,
           pressure: contact.pressure,
-          slowness: dwellPoint.slowness,
+          slowness,
         });
         this.bindSpine();
       }
