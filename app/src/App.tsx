@@ -24,6 +24,7 @@ import { isTauriRuntime } from "./api/nativeHttp";
 import type { SearchOptions } from "./api/client";
 import type { CoachCapabilities, CoachFlags, SessionSnapshot } from "./api/types";
 import { DEFAULT_COACH_FLAGS } from "./api/types";
+import { BrandHome } from "./components/BrandHome";
 import { Tip } from "./components/Tip";
 import { DocIndexChip } from "./components/DocIndexChip";
 import { LoadingDoodle } from "./components/LoadingDoodle";
@@ -35,6 +36,7 @@ import { SplitFocusToast } from "./components/SplitFocusToast";
 import { SplitSash } from "./components/SplitSash";
 import { applyInkChromeScale } from "./util/chromeScale";
 import { TabStrip } from "./components/TabStrip";
+import { renameTabPad } from "./util/libraryPadRename";
 import { MlKitRecognizer, NoopRecognizer, pickRecognizer, type InkRecognizer } from "./canvas/ink";
 import { saveBoardReadingSize, type BoardReadingSize } from "./modes/codeFontSize";
 import { loadPdfFilmPref } from "./modes/pdfFilm";
@@ -143,10 +145,7 @@ export function App() {
   const mobile = useIsMobile();
   const android = isAndroidDevice();
 
-  useEffect(() => {
-    if (!mobile) return;
-    return installSafeAreaInsets();
-  }, [mobile]);
+  useEffect(() => installSafeAreaInsets(), []);
 
   // Writing hand mirrors the chrome across the Y-axis — see inkHandedness.
   useEffect(() => installHandednessAttr(), []);
@@ -1195,11 +1194,11 @@ export function App() {
             
             It was a tab, which made it compete for width with the documents you
             actually have open and left a gap in the strip when it was shrunk to
-            fit. A wordmark that always sits in the same corner is the thing
-            every application already uses to mean "back to the start", so there
-            is no reason to spend a tab slot saying it twice.
+            fit. A house that always sits in the same corner is the thing every
+            application already uses to mean "back to the start", so there is no
+            reason to spend a tab slot saying it twice.
           */}
-          <Tip tip="lc whiteboard — back to Home">
+          <Tip tip="Home">
             <button
               type="button"
               className="lc-brand lc-brand-home"
@@ -1211,7 +1210,7 @@ export function App() {
                 focusTab(HOME_TAB_ID);
               }}
             >
-              lc <strong>whiteboard</strong>
+              <BrandHome />
             </button>
           </Tip>
           {/*
@@ -1231,6 +1230,12 @@ export function App() {
             onSplitWithActive={splitWithActive}
             onUnsplit={unsplitTab}
             groupedIds={groupedIds}
+            onRename={(id, title) => {
+              const record = tabState.tabs.find((entry) => entry.id === id);
+              if (!record) return;
+              patchTab(id, { title });
+              void renameTabPad(client, record, title);
+            }}
             activeIndexChip={
               chrome.docIndex.status === "idle" &&
               !chrome.docIndex.onIndex &&

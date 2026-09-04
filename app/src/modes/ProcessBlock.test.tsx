@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
-import { ProcessBlock, processLine, reasonTitle } from "./ProcessBlock";
+import { ProcessBlock, isReasoningEvent, processLine, reasonTitle, reasoningBodyForTurn } from "./ProcessBlock";
 import type { CoachProcessEvent } from "../api/types";
 
 describe("reasonTitle", () => {
@@ -68,6 +68,37 @@ describe("ProcessBlock", () => {
     const body = host.querySelector(".lc-agent-process-step-body");
     expect(body?.textContent).toContain("Extra prose");
     expect(body?.closest("[data-active='true']") || body).toBeTruthy();
+    root.unmount();
+    host.remove();
+  });
+
+  it("keeps reason stages in Thinking and leaves the CoT blob for Reasoning", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const events: CoachProcessEvent[] = [
+      {
+        kind: "stage",
+        label: "reason",
+        detail: "Compare the two rows first.",
+        ts: 1,
+      },
+      {
+        kind: "reasoning",
+        label: "reasoning",
+        detail: "Full chain of thought that must not become a Thinking step.",
+        ts: 2,
+      },
+    ];
+    expect(isReasoningEvent(events[0]!)).toBe(false);
+    expect(isReasoningEvent(events[1]!)).toBe(true);
+    expect(reasoningBodyForTurn(undefined, events)).toContain("Full chain");
+    await act(async () => {
+      root.render(<ProcessBlock events={events} running={false} />);
+    });
+    const toggle = host.querySelector(".lc-agent-process-toggle") as HTMLButtonElement;
+    expect(toggle.textContent).toContain("Thinking");
+    expect(toggle.textContent).toContain("1 step");
     root.unmount();
     host.remove();
   });

@@ -88,6 +88,7 @@ function persistable(tab: TabRecord): TabRecord | null {
         indexed: asIndex(tab.indexed),
         entries,
         index,
+        docId: tab.docId ?? null,
       };
       return next;
     }
@@ -173,6 +174,7 @@ function parseTab(raw: unknown): TabRecord | null {
       indexed: asIndex(raw.indexed),
       entries,
       index,
+      docId: asString(raw.docId),
     });
   }
   return null;

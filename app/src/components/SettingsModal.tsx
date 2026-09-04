@@ -114,6 +114,13 @@ import {
   saveOfflineMergePolicy,
   type OfflineMergePolicy,
 } from "../util/offlineMerge";
+import {
+  loadPdfFlickHud,
+  loadPdfFlickMomentum,
+  savePdfFlickHud,
+  savePdfFlickMomentum,
+  PDF_READING_EVENT,
+} from "../util/pdfReadingPref";
 import { useIsMobile } from "../util/mobile";
 import { estimateStorage, formatBytes, type StorageUsage } from "../util/storageQuota";
 import { auditDocBytes, clearDocBytes, docStoreFacts, inspectDocStore } from "../util/docBytes";
@@ -142,6 +149,7 @@ const SETTINGS_PAGE_TITLES: Record<string, string> = {
   paths: "Paths",
   datasets: "Datasets",
   writing: "Writing settings",
+  reading: "Reading",
   storage: "Storage Settings",
   tests: "Test Cases",
   llm: "LLM",
@@ -443,6 +451,10 @@ interface DevicePrefs {
   chromeWake: ChromeWakeMarker;
   /** Recolor smear + checkerboard with a cycling gradient, or leave them mono. */
   chromeWakeTint: ChromeWakeTint;
+  /** Show the live/pred/err pill while a PDF is flicked. */
+  pdfFlickHud: boolean;
+  /** 0–100; 50 is the shipping coast length. */
+  pdfFlickMomentum: number;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -471,6 +483,8 @@ function loadDevicePrefs(): DevicePrefs {
     tapOk: loadInkToolPresets().tapOk,
     chromeWake: loadChromeWakeMarker(),
     chromeWakeTint: loadChromeWakeTint(),
+    pdfFlickHud: loadPdfFlickHud(),
+    pdfFlickMomentum: loadPdfFlickMomentum(),
   };
 }
 
@@ -499,7 +513,9 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.colorWheelOnToolbar === b.colorWheelOnToolbar &&
     a.tapOk === b.tapOk &&
     a.chromeWake === b.chromeWake &&
-    a.chromeWakeTint === b.chromeWakeTint
+    a.chromeWakeTint === b.chromeWakeTint &&
+    a.pdfFlickHud === b.pdfFlickHud &&
+    a.pdfFlickMomentum === b.pdfFlickMomentum
   );
 }
 
@@ -808,6 +824,8 @@ export function SettingsModal({
   const [chromeWakeTint, setChromeWakeTint] = useState<ChromeWakeTint>(() =>
     loadChromeWakeTint(),
   );
+  const [pdfFlickHud, setPdfFlickHud] = useState(() => loadPdfFlickHud());
+  const [pdfFlickMomentum, setPdfFlickMomentum] = useState(() => loadPdfFlickMomentum());
   const [testForward, setTestForward] = useState<TestForwardMode>(() =>
     loadTestForwardMode(),
   );
@@ -1038,6 +1056,8 @@ export function SettingsModal({
     setTapOk(prefs.tapOk);
     setChromeWake(prefs.chromeWake);
     setChromeWakeTint(prefs.chromeWakeTint);
+    setPdfFlickHud(prefs.pdfFlickHud);
+    setPdfFlickMomentum(prefs.pdfFlickMomentum);
     setBaselinePrefs(prefs);
     // Saved only: the desktop that *is* the hub runs on a loopback it never
     // typed, and showing that here would read as "connected to some other PC".
@@ -1133,6 +1153,8 @@ export function SettingsModal({
     tapOk,
     chromeWake,
     chromeWakeTint,
+    pdfFlickHud,
+    pdfFlickMomentum,
   };
   const keysDirty =
     openaiKeyDraft.trim() !== "" ||
@@ -1198,6 +1220,8 @@ export function SettingsModal({
         });
         saveChromeWakeMarker(chromeWake);
         saveChromeWakeTint(chromeWakeTint);
+        savePdfFlickHud(pdfFlickHud);
+        savePdfFlickMomentum(pdfFlickMomentum);
         setBaselinePrefs(draftPrefs);
         void saveThisDevicePrefs(client).catch(() => {});
         window.dispatchEvent(
@@ -1219,6 +1243,7 @@ export function SettingsModal({
         window.dispatchEvent(new CustomEvent(AUTOSAVE_EVENT));
         window.dispatchEvent(new CustomEvent(HUB_AUTOSYNC_EVENT));
         window.dispatchEvent(new CustomEvent(CHROME_WAKE_EVENT));
+        window.dispatchEvent(new CustomEvent(PDF_READING_EVENT));
       }
       const hubDirty =
         hubUrl.trim() !== baselineHubUrl || hubToken.trim() !== baselineHubToken;
@@ -1925,6 +1950,67 @@ export function SettingsModal({
                     <strong>{paletteTagLabel(tag)}</strong>
                   </button>
                 ))}
+              </div>
+              </SettingsFold>
+
+              <SettingsFold id="reading" title="Reading">
+              <div className="lc-settings-subhead">Flick-end pill</div>
+              <p className="lc-settings-hint">
+                While a PDF is flicked, a small overlay can show the live page, the
+                predicted landing page, and how many pages apart they are. Off hides
+                it. Prediction itself still runs. Saved on this device only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Flick-end pill"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!pdfFlickHud}
+                  className={
+                    pdfFlickHud
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() => setPdfFlickHud(false)}
+                >
+                  <strong>Off</strong>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={pdfFlickHud}
+                  className={
+                    pdfFlickHud
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setPdfFlickHud(true)}
+                >
+                  <strong>On</strong>
+                </button>
+              </div>
+
+              <div className="lc-settings-subhead">Flick momentum</div>
+              <p className="lc-settings-hint">
+                How far a document keeps coasting after you lift. Middle is the
+                current feel. Lower stops sooner; higher glides further. Saved on
+                this device only.
+              </p>
+              <div className="lc-settings-slider">
+                <input
+                  className="lc-settings-slider-input"
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={pdfFlickMomentum}
+                  aria-label="Flick momentum"
+                  onChange={(event) => setPdfFlickMomentum(Number(event.target.value))}
+                />
+                <span className="lc-settings-slider-value">{pdfFlickMomentum}</span>
               </div>
               </SettingsFold>
 

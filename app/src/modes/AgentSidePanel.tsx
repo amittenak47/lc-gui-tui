@@ -16,7 +16,7 @@ import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
 import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
-import { ProcessBlock } from "./ProcessBlock";
+import { ProcessBlock, reasoningBodyForTurn } from "./ProcessBlock";
 import { ReasoningBlock } from "./ReasoningBlock";
 import {
   cycleAgentReasoning,
@@ -199,6 +199,99 @@ export const ASK_PRESETS = [
 ] as const;
 
 export type AskPresetId = (typeof ASK_PRESETS)[number]["id"];
+
+/**
+ * Which slice of the coach sheet fills the panel.
+ *
+ * Landscape on a tablet stacks the document, the thread, and the composer
+ * into three thin layers. These are viewing modes, not `<details>` folds:
+ * the other slice stays mounted and comes back in one tap.
+ */
+export type ChatPaneFocus = "split" | "messages" | "composer";
+
+export function nextChatPaneFocus(
+  current: ChatPaneFocus,
+  pane: "messages" | "composer",
+): ChatPaneFocus {
+  return current === pane ? "split" : pane;
+}
+
+/** Page tags, composer chips, and the picker itself stay live while it is open. */
+export function markMenuClickShouldKeepOpen(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      [
+        ".lc-agent-mark-menu",
+        ".lc-agent-annotate-wrap",
+        ".lc-agent-mark-chips",
+        ".lc-doc-footnote",
+        ".lc-fn-badge",
+        ".lc-page-marks-slot",
+      ].join(", "),
+    ),
+  );
+}
+
+function PaneExpandButton({
+  pane,
+  focus,
+  overlay,
+  onToggle,
+}: {
+  pane: "messages" | "composer";
+  focus: ChatPaneFocus;
+  overlay?: boolean;
+  onToggle: (pane: "messages" | "composer") => void;
+}) {
+  const expanded = focus === pane;
+  const label = expanded
+    ? pane === "messages"
+      ? "Show the chat box"
+      : "Show the conversation"
+    : pane === "messages"
+      ? "Expand conversation"
+      : "Expand chat box";
+  return (
+    <button
+      type="button"
+      className={[
+        "lc-flag",
+        "lc-agent-pane-expand",
+        expanded ? "lc-flag-active is-expanded" : "",
+        overlay ? "is-overlay" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      aria-pressed={expanded}
+      aria-label={label}
+      title={label}
+      onClick={() => onToggle(pane)}
+    >
+      <svg className="lc-agent-pane-expand-icon" viewBox="0 0 16 16" aria-hidden>
+        {expanded ? (
+          <path
+            d="M6 3.5H3.5V6M10 12.5h2.5V10M3.5 3.5l4 4M12.5 12.5l-4-4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.35"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ) : (
+          <path
+            d="M12.5 6.5V3.5H9.5M3.5 9.5v3h3M12.5 3.5l-4 4M3.5 12.5l4-4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.35"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        )}
+      </svg>
+    </button>
+  );
+}
 
 interface MessageMenuState {
   messageId: string;
@@ -399,9 +492,6 @@ export interface AgentSidePanelProps {
    * {@link quoteSeed}; `null` id returns to the room.
    */
   focusThread?: { token: number; rootId: string | null } | null;
-  /** Thread roots started from a page footnote — open the mark card, not the dock. */
-  footnoteThreadRoots?: ReadonlySet<string>;
-  onOpenFootnoteThread?: (rootId: string) => void;
   /** Mark panels queued onto this send. */
   attachedMarks?: Array<{
     id: string;
@@ -456,12 +546,12 @@ export function AgentSidePanel({
   documentPresets = false,
   quoteSeed = null,
   focusThread = null,
-  footnoteThreadRoots,
-  onOpenFootnoteThread,
   attachedMarks = [],
   attachedFootnotes = [],
   askClipChars = PROBLEM_ASK_CLIP_CHARS,
   onRemoveAttached,
+  annotationChoices = [],
+  onToggleAttached,
   onSend,
   onThreadChange,
   onRequestBridge,
@@ -479,6 +569,10 @@ export function AgentSidePanel({
     [onClose, onOpenChange],
   );
   const [draft, setDraft] = useState("");
+  const [chatFocus, setChatFocus] = useState<ChatPaneFocus>("split");
+  const toggleChatFocus = useCallback((pane: "messages" | "composer") => {
+    setChatFocus((current) => nextChatPaneFocus(current, pane));
+  }, []);
   /**
    * Pads keep Ask and Handwriting; document pads also keep Annotations. The
    * pipeline flags and the cadence toggles are gone rather than greyed. See
@@ -526,6 +620,11 @@ export function AgentSidePanel({
   const [lightbox, setLightbox] = useState<CoachAttachment | null>(null);
   const [lightboxClosing, setLightboxClosing] = useState(false);
   const [messageMenu, setMessageMenu] = useState<MessageMenuState | null>(null);
+  const [markMenuOpen, setMarkMenuOpen] = useState(false);
+  const [markMenuPos, setMarkMenuPos] = useState<{ left: number; bottom: number } | null>(
+    null,
+  );
+  const annotateBtnRef = useRef<HTMLButtonElement>(null);
   const [copyFlash, setCopyFlash] = useState(false);
   /** Swallow the click that follows a successful long-press (process toggle etc.). */
   const suppressClickRef = useRef(false);
@@ -983,6 +1082,42 @@ export function AgentSidePanel({
     clearLongPress();
   }, [clearLongPress]);
 
+  const closeMarkMenu = useCallback(() => {
+    setMarkMenuOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!markMenuOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMarkMenu();
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (markMenuClickShouldKeepOpen(event.target)) return;
+      closeMarkMenu();
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [markMenuOpen, closeMarkMenu]);
+
+  const toggleMarkMenu = useCallback(() => {
+    setMarkMenuOpen((open) => {
+      if (open) return false;
+      const node = annotateBtnRef.current;
+      if (node) {
+        const rect = node.getBoundingClientRect();
+        setMarkMenuPos({
+          left: Math.max(12, Math.min(rect.left, window.innerWidth - 212)),
+          bottom: window.innerHeight - rect.top + 6,
+        });
+      }
+      return true;
+    });
+  }, []);
+
   /**
    * Scroll a quoted turn back into view and flash it.
    *
@@ -1216,6 +1351,7 @@ export function AgentSidePanel({
     setPhotos([]);
     setPhotoError(null);
     closeMessageMenu();
+    closeMarkMenu();
   };
 
   const closeLightbox = () => {
@@ -1291,12 +1427,20 @@ export function AgentSidePanel({
         className={[
           "lc-agent-chat",
           openThreadId ? "is-threaded" : "",
+          chatFocus === "split" ? "" : `is-focus-${chatFocus}`,
           threadMotion === "idle" ? "" : `lc-thread-motion-${threadMotion}`,
         ]
           .filter(Boolean)
           .join(" ")}
       >
-        {openThreadId && (
+        <div className="lc-agent-pane-expand-row">
+          <PaneExpandButton
+            pane="messages"
+            focus={chatFocus}
+            onToggle={toggleChatFocus}
+          />
+        </div>
+        {openThreadId ? (
           <div className="lc-agent-thread-bar">
             <button
               type="button"
@@ -1310,7 +1454,8 @@ export function AgentSidePanel({
               {(threadReplies.get(openThreadId)?.length ?? 0) === 1 ? "reply" : "replies"}
             </span>
           </div>
-        )}
+        ) : null}
+        <div className="lc-agent-messages-host">
         <div
           className="lc-agent-messages lc-scroll-pane"
           ref={listRef}
@@ -1400,12 +1545,30 @@ export function AgentSidePanel({
               {message.queued && (
                 <span className="lc-agent-queued" aria-label="Queued message">Queued</span>
               )}
-              {message.processEvents && message.processEvents.length > 0 && (
-                <ProcessBlock events={message.processEvents} running={Boolean(message.pending)} />
-              )}
-              {message.reasoning?.trim() ? (
-                <ReasoningBlock text={message.reasoning} running={Boolean(message.pending)} />
-              ) : null}
+              {(() => {
+                const reasoningText = reasoningBodyForTurn(
+                  message.reasoning,
+                  message.processEvents,
+                );
+                const hasProcess = Boolean(message.processEvents?.length);
+                if (!hasProcess && !reasoningText) return null;
+                return (
+                <div className="lc-agent-think-stack">
+                  {message.processEvents && message.processEvents.length > 0 && (
+                    <ProcessBlock
+                      events={message.processEvents}
+                      running={Boolean(message.pending)}
+                    />
+                  )}
+                  {reasoningText ? (
+                    <ReasoningBlock
+                      text={reasoningText}
+                      running={Boolean(message.pending)}
+                    />
+                  ) : null}
+                </div>
+                );
+              })()}
               {showsReplyStub(message, openThreadId) && (
                 /*
                  * The quoted turn, above the reply that answers it.
@@ -1449,10 +1612,6 @@ export function AgentSidePanel({
                   className="lc-agent-thread-open"
                   onClick={(event) => {
                     event.stopPropagation();
-                    if (footnoteThreadRoots?.has(message.id) && onOpenFootnoteThread) {
-                      onOpenFootnoteThread(message.id);
-                      return;
-                    }
                     enterThread(message.id);
                   }}
                 >
@@ -1563,6 +1722,7 @@ export function AgentSidePanel({
             </div>
           )}
         </div>
+        </div>
 
         {error?.trim() ? (
           <p className="lc-agent-panel-error" role="alert">
@@ -1571,6 +1731,14 @@ export function AgentSidePanel({
         ) : null}
 
         <form className="lc-agent-composer" onSubmit={(event) => submit("queue", event)}>
+          <div className="lc-agent-pane-expand-row">
+            <PaneExpandButton
+              pane="composer"
+              focus={chatFocus}
+              onToggle={toggleChatFocus}
+            />
+          </div>
+          <div className="lc-agent-composer-body">
           {documentPresets && (
             <div className="lc-agent-presets" role="group" aria-label="Ask presets">
               {ASK_PRESETS.map((preset) => (
@@ -1594,37 +1762,30 @@ export function AgentSidePanel({
             <div className="lc-agent-mark-chips" aria-label="Attached annotations">
               {attachedMarks.map((mark) => {
                 const overflow = Boolean(askPackPreview?.omittedMarkIds.includes(mark.id));
+                const chipLabel = footnoteChipLabel(mark.number, mark.title);
                 return (
-                <span
-                  className={`lc-footnote-chip${overflow ? " is-overflow" : ""}`}
+                <HoldButton
                   key={mark.id}
+                  className={`lc-footnote-chip lc-hold-danger${overflow ? " is-overflow" : ""}`}
+                  label={chipLabel}
+                  ariaLabel={`Hold to remove ${chipLabel}`}
                   style={footnoteThemeVars(mark.color, mark.palette ?? [])}
-                  title={
+                  dataTip={
                     overflow
-                      ? "Will not be sent — this Ask is full"
-                      : footnoteChipLabel(mark.number, mark.title)
+                      ? "Will not be sent — this Ask is full. Hold to remove."
+                      : "Hold to remove"
                   }
+                  dataTipPlacement="top"
+                  disabled={!onRemoveAttached}
+                  onConfirm={() => onRemoveAttached?.(mark.id)}
                 >
-                  <span
-                    className="lc-fn-badge"
-                    title={footnoteChipLabel(mark.number, mark.title)}
-                  >
+                  <span className="lc-fn-badge" aria-hidden>
                     {mark.number ?? ""}
                   </span>
                   {mark.title?.trim() ? (
                     <span className="lc-footnote-chip-label">{mark.title.trim()}</span>
                   ) : null}
-                  {onRemoveAttached && (
-                    <button
-                      type="button"
-                      className="lc-agent-reply-chip-clear"
-                      aria-label="Remove annotation"
-                      onClick={() => onRemoveAttached(mark.id)}
-                    >
-                      ×
-                    </button>
-                  )}
-                </span>
+                </HoldButton>
                 );
               })}
             </div>
@@ -1713,7 +1874,7 @@ export function AgentSidePanel({
           <textarea
             ref={composerRef}
             value={draft}
-            rows={6}
+            rows={2}
             placeholder="Ask the agent about your board or code…"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -1724,6 +1885,7 @@ export function AgentSidePanel({
               else submit("queue");
             }}
           />
+          </div>
           <div className="lc-agent-composer-bar">
             {/* Ambient stays greyed until AMBIENT_ENABLED is flipped. The
                 socket + 120s loop are already wired in App / coachSocket. */}
@@ -1799,22 +1961,32 @@ export function AgentSidePanel({
                 </button>
               </Tip>
               {allowAnnotations && (
+                <span className="lc-agent-annotate-wrap">
                 <Tip
                   tip={
                     annotateUnavailable
                       ? NOT_ON_SCRATCHPAD
-                      : "Send attached marks with this ask"
+                      : "Choose which marks to send with this ask"
                   }
                   placement="top"
                 >
                   <button
+                    ref={annotateBtnRef}
                     type="button"
                     className={`lc-flag lc-agent-annotate${
                       annotations ? " lc-flag-active" : ""
                     }${annotationsUnavailable ? " lc-flag-unavailable" : ""}`}
                     aria-pressed={annotations}
+                    aria-expanded={markMenuOpen}
+                    aria-haspopup="menu"
                     disabled={busy || annotationsUnavailable}
-                    onClick={() => setAnnotations((current) => !current)}
+                    onClick={() => {
+                      if (annotationChoices.length === 0 && !markMenuOpen) {
+                        setAnnotations((current) => !current);
+                        return;
+                      }
+                      toggleMarkMenu();
+                    }}
                     aria-label="Annotations"
                   >
                     <span className="lc-label-long">Annotations</span>
@@ -1823,6 +1995,7 @@ export function AgentSidePanel({
                     </span>
                   </button>
                 </Tip>
+                </span>
               )}
               <Tip
                 tip="Click to cycle off, low, medium, high. Low 1k tokens, medium 4k, high unlimited. Full text folds under the answer."
@@ -1967,6 +2140,46 @@ export function AgentSidePanel({
               </button>
             </div>
           </>,
+          document.body,
+        )}
+
+      {markMenuOpen &&
+        markMenuPos &&
+        createPortal(
+            <div
+              className="lc-agent-scope-menu lc-agent-mark-menu"
+              role="menu"
+              aria-label="Annotations on this page"
+              style={{ left: markMenuPos.left, bottom: markMenuPos.bottom }}
+            >
+              {annotationChoices.length === 0 ? (
+                <p className="lc-agent-mark-menu-empty">No marks on this page</p>
+              ) : (
+                annotationChoices.map((mark) => {
+                  const picked = attachedMarks.some((entry) => entry.id === mark.id);
+                  const chipLabel = footnoteChipLabel(mark.number, mark.title);
+                  return (
+                    <button
+                      key={mark.id}
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={picked}
+                      aria-label={chipLabel}
+                      className={`lc-footnote-chip${picked ? " is-picked" : ""}`}
+                      style={footnoteThemeVars(mark.color, mark.palette ?? [])}
+                      onClick={() => onToggleAttached?.(mark.id)}
+                    >
+                      <span className="lc-fn-badge" aria-hidden>
+                        {mark.number ?? ""}
+                      </span>
+                      {mark.title?.trim() ? (
+                        <span className="lc-footnote-chip-label">{mark.title.trim()}</span>
+                      ) : null}
+                    </button>
+                  );
+                })
+              )}
+            </div>,
           document.body,
         )}
 

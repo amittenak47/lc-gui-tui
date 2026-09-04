@@ -29,6 +29,13 @@ export interface WhiteboardNotebookMeta {
   pageCount: number;
   /** Blocks trash. Local-only — not part of pads.db. */
   locked?: boolean;
+  /**
+   * The reader has confirmed a title (first Save, or a rename).
+   *
+   * Autosave writes a dated default without this, so the first explicit Save
+   * can still offer a name. Local-only — the hub already stores `title`.
+   */
+  named?: boolean;
   deletedAt?: number;
   syncSeq?: number;
   deleteAcked?: boolean;
@@ -130,20 +137,42 @@ function liveCount(): number {
   return readIndex().filter((entry) => !entry.deletedAt).length;
 }
 
+export function defaultWhiteboardTitle(now = Date.now()): string {
+  return `Notebook ${new Date(now).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })}`;
+}
+
 /**
  * Rename one notebook, without touching its pages.
  *
  * Not a `saveWhiteboardNotebook` call: renaming is not drawing, and going
  * through the save path would freshen `updatedAt` and push the notebook to the
  * top of Recent for something nobody sketched. Same reasoning as
- * `setAnnotateDocLabel`.
+ * `setAnnotateDocLabel`. Marks the notebook as user-named so the first-Save
+ * prompt does not fire again.
  */
-export function renameWhiteboardNotebook(id: string, title: string): void {
+export function renameWhiteboardNotebook(id: string, title: string): boolean {
   const index = readIndex();
   const meta = index.find((entry) => entry.id === id);
   const trimmed = title.trim();
-  if (!meta || !trimmed || meta.title === trimmed) return;
-  writeIndex(index.map((entry) => (entry.id === id ? { ...entry, title: trimmed } : entry)));
+  if (!meta || !trimmed) return false;
+  if (meta.title === trimmed && meta.named) return false;
+  writeIndex(
+    index.map((entry) =>
+      entry.id === id ? { ...entry, title: trimmed, named: true } : entry,
+    ),
+  );
+  return true;
+}
+
+/** True once the reader has confirmed a title (or renamed). */
+export function whiteboardIsNamed(id: string | null | undefined): boolean {
+  if (!id) return false;
+  return Boolean(readIndex().find((entry) => entry.id === id && !entry.deletedAt)?.named);
 }
 
 export function whiteboardLibraryCount(): number {
@@ -196,15 +225,8 @@ export async function saveWhiteboardNotebook(input: {
       `At most ${WHITEBOARD_LIBRARY_LIMIT} whiteboard notebooks — delete one to save another.`,
     );
   }
-  const title =
-    input.title?.trim() ||
-    existing?.title ||
-    `Notebook ${new Date(now).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    })}`;
+  const title = input.title?.trim() || existing?.title || defaultWhiteboardTitle(now);
+  const named = Boolean(existing?.named) || Boolean(input.title?.trim());
   // An absent `agent` means "this caller has no opinion", not "the thread is
   // empty" — the board autosave saves without one and must not wipe the chat.
   const agent = Array.isArray(input.agent)
@@ -216,6 +238,7 @@ export async function saveWhiteboardNotebook(input: {
     updatedAt: now,
     pageCount: Math.min(WHITEBOARD_PAGE_LIMIT, Math.max(1, input.pageCount)),
     ...(existing?.locked ? { locked: true } : {}),
+    ...(named ? { named: true } : {}),
     syncSeq: existing?.syncSeq ?? 0,
     lastTouch: now,
     ...(existing?.hubAckUpdatedAt != null ? { hubAckUpdatedAt: existing.hubAckUpdatedAt } : {}),
@@ -286,15 +309,9 @@ export async function restoreWhiteboardFromTrash(id: string): Promise<Whiteboard
     );
   }
   const seq = (existing.syncSeq ?? 0) + 1;
-  const next: WhiteboardNotebookMeta = {
-    id: existing.id,
-    title: existing.title,
-    updatedAt: existing.updatedAt,
-    pageCount: existing.pageCount,
-    ...(existing.locked ? { locked: true } : {}),
-    syncSeq: seq,
-    lastTouch: Date.now(),
-  };
+  const next: WhiteboardNotebookMeta = { ...existing, syncSeq: seq, lastTouch: Date.now() };
+  delete next.deletedAt;
+  delete next.deleteAcked;
   writeIndex([next, ...readIndex().filter((entry) => entry.id !== id)]);
   const content = await getContent<WhiteboardContent>(id);
   if (!content) return null;

@@ -35,6 +35,7 @@ function web(id: string, url: string, lastActive = 0): WebTab {
     indexed: "idle",
     entries: [entry(url)],
     index: 0,
+    docId: null,
   };
 }
 

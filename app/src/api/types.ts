@@ -494,7 +494,7 @@ export const STAGE_LABELS: Record<string, string> = {
   retrace: "Re-tracing the cited case",
   ask: "Thinking…",
   prefetch: "Looking up earlier pages",
-  reason: "Thought",
+  reason: "Thinking",
   lazy: "Writing the earned code",
   draw_tools: "Choosing what to draw",
   validate: "Checking the diagram schema",

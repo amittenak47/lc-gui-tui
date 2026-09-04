@@ -5,7 +5,7 @@
  *
  * Viewport `.lc-mobile` is the wrong key for quote-select: a narrow desktop
  * window would lose native drag-select, and a wide tablet in landscape can
- * miss `(pointer: coarse) and (max-width: 1280px)`.
+ * miss a width-only query. Handled devices always take the sheet (see `mobile.ts`).
  */
 
 export function isAndroidDevice(userAgent?: string): boolean {

@@ -10,6 +10,7 @@ import {
   HOME_TAB_ID,
   homeTab,
   type AnnotateTab,
+  type PracticeTab,
   type TabGroup,
   type TabRecord,
   type WhiteboardTab,
@@ -56,6 +57,16 @@ function grab(view: ReturnType<typeof mount>, title: string) {
 
 function board(id: string, title: string, dirty = false): WhiteboardTab {
   return { id, kind: "whiteboard", title, dirty, lastActive: 0, notebookId: "nb-1" };
+}
+
+function practice(id: string, title: string): PracticeTab {
+  return { id, kind: "practice", title, dirty: false, lastActive: 0, dataset: "lc", taskId: "two-sum" };
+}
+
+function fill(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function doc(id: string, title: string, indexed: AnnotateTab["indexed"] = "idle"): AnnotateTab {
@@ -147,12 +158,12 @@ describe("TabStrip", () => {
     view.unmount();
   });
 
-  it("does not draw Home — the wordmark is the way back", () => {
+  it("does not draw Home — the house in the corner is the way back", () => {
     /*
      * Home used to be a chip, which made a fixed landmark compete for width
      * with the documents actually open; shrinking it to an icon left a gap in
-     * the strip instead. The `lc whiteboard` wordmark already sits in the corner
-     * every application uses to mean "back to the start".
+     * the strip instead. The house already sits in the corner every application
+     * uses to mean "back to the start".
      *
      * The tab still exists in state — focusing and closing back to it are
      * unchanged — it is simply not drawn here.
@@ -629,5 +640,72 @@ describe("TabStrip", () => {
       ]);
       view.unmount();
     });
+  });
+
+  it("enters rename on a second tap and commits on blur", async () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const onRename = vi.fn();
+    const view = mount({
+      tabs: [homeTab(), board("b1", "doodle")],
+      activeId: "b1",
+      onRename,
+    });
+    const hit = grab(view, "doodle");
+    act(() => {
+      hit.click();
+    });
+    act(() => {
+      vi.advanceTimersByTime(100);
+      hit.click();
+    });
+    const input = view.host.querySelector<HTMLInputElement>(".lc-tab-title-input");
+    expect(input).not.toBeNull();
+    await act(async () => {
+      fill(input!, "Sketchbook");
+    });
+    await act(async () => {
+      input!.blur();
+    });
+    expect(onRename).toHaveBeenCalledWith("b1", "Sketchbook");
+    view.unmount();
+  });
+
+  it("does not rename Practice or footnote-board chips", () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const onRename = vi.fn();
+    const fnBoard: WhiteboardTab = {
+      id: "fn1",
+      kind: "whiteboard",
+      title: "Scratch",
+      dirty: false,
+      lastActive: 0,
+      notebookId: null,
+      footnoteBoard: { docId: "doc", wbId: "wb" },
+    };
+    const view = mount({
+      tabs: [homeTab(), practice("p1", "Two Sum"), fnBoard],
+      activeId: "p1",
+      onRename,
+    });
+    const problem = grab(view, "Two Sum");
+    act(() => {
+      problem.click();
+    });
+    act(() => {
+      vi.advanceTimersByTime(100);
+      problem.click();
+    });
+    expect(view.host.querySelector(".lc-tab-title-input")).toBeNull();
+    const scratch = grab(view, "Scratch");
+    act(() => {
+      scratch.click();
+    });
+    act(() => {
+      vi.advanceTimersByTime(100);
+      scratch.click();
+    });
+    expect(view.host.querySelector(".lc-tab-title-input")).toBeNull();
+    expect(onRename).not.toHaveBeenCalled();
+    view.unmount();
   });
 });

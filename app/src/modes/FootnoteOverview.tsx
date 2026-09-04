@@ -45,6 +45,12 @@ export interface FootnoteOverviewProps {
   onSendCoach: (text: string, threadRootId: string | null) => void;
   /** Queue this mark onto the main coach composer. */
   onAttachCoach?: (footnoteId: string) => void;
+  /**
+   * Open a saved thread in the agent sheet, not the mark's mini chat.
+   *
+   * Absent on the conflict split, which still uses the in-card thread.
+   */
+  onOpenCoachThread?: (rootId: string) => void;
   onOpenExternal: (url: string) => void;
   anchorRect?: DOMRect | null;
   subMarkMode: DocFootnoteSubMarkKind | null;
@@ -331,8 +337,10 @@ function MarkTitle({
   );
 }
 /**
- * Footnote overview — doc-sheet chrome, user links only, mini coach thread.
- * Does not open the docked coach panel.
+ * Footnote overview — doc-sheet chrome, user links only.
+ *
+ * Chat lives on the agent sheet. The 💬 control and a thread row hand off to
+ * {@link onOpenCoachThread} / {@link onAttachCoach} and this card closes.
  */
 export function FootnoteOverview({
   footnote,
@@ -342,6 +350,7 @@ export function FootnoteOverview({
   onChange,
   onSendCoach,
   onAttachCoach,
+  onOpenCoachThread,
   onOpenExternal,
   workspaceLinks = [],
   onAddWorkspaceLink,
@@ -1062,7 +1071,13 @@ export function FootnoteOverview({
                           type="button"
                           className="lc-agent-scope-option"
                           disabled={readOnly}
-                          onClick={() => openTask({ kind: "thread", rootId: thread.rootId })}
+                          onClick={() => {
+                            if (onOpenCoachThread) {
+                              onOpenCoachThread(thread.rootId);
+                              return;
+                            }
+                            openTask({ kind: "thread", rootId: thread.rootId });
+                          }}
                         >
                           <strong className="lc-footnote-overview-entry-text">{thread.title}</strong>
                         </button>

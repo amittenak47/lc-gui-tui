@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import android.webkit.WebView
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -68,6 +69,12 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
     @InvokeArg
     class ImmersiveArgs {
         var enabled: Boolean = false
+    }
+
+    @InvokeArg
+    class InsetsArgs {
+        /** CSS px → device px (`window.devicePixelRatio`). */
+        var density: Double = 1.0
     }
 
     @Command
@@ -155,6 +162,75 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /**
+     * How far the WebView is actually covered by system bars, in CSS pixels.
+     *
+     * Window insets alone are the wrong number: if the WebView is already laid
+     * out below the status bar, padding by `statusBars().top` would double-count.
+     * If it draws edge-to-edge (Tauri's usual case), CSS `env(safe-area-inset-*)`
+     * is often 0 and the clock sits on the in-app header. Subtracting the view's
+     * screen origin from the bar's screen edge is the overlap either way.
+     *
+     * `systemBars` includes the caption bar on large-screen / freeform Android —
+     * the strip that shows the app name above the page on a Magic Note Pad.
+     */
+    @Command
+    fun get_insets(invoke: Invoke) {
+        val args = invoke.parseArgs(InsetsArgs::class.java)
+        activity.runOnUiThread {
+            val window = activity.window
+            val decor = window?.decorView
+            if (window == null || decor == null) {
+                invoke.reject("no window")
+                return@runOnUiThread
+            }
+            val content: View = decor.findViewById(android.R.id.content) ?: decor
+            val view = findWebView(content) ?: content
+            val density = if (args.density > 0) args.density else 1.0
+
+            val insets = ViewCompat.getRootWindowInsets(view)
+                ?: ViewCompat.getRootWindowInsets(decor)
+            val sys = insets?.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
+
+            val viewLoc = IntArray(2)
+            val windowLoc = IntArray(2)
+            view.getLocationOnScreen(viewLoc)
+            decor.getLocationOnScreen(windowLoc)
+
+            val insetLeft = sys?.left ?: 0
+            val insetTop = sys?.top ?: 0
+            val insetRight = sys?.right ?: 0
+            val insetBottom = sys?.bottom ?: 0
+
+            val css = overlapCss(
+                viewLoc[0],
+                viewLoc[1],
+                view.width,
+                view.height,
+                windowLoc[0],
+                windowLoc[1],
+                decor.width,
+                decor.height,
+                insetLeft,
+                insetTop,
+                insetRight,
+                insetBottom,
+                density,
+            )
+
+            invoke.resolve(
+                JSObject().apply {
+                    put("left", css[0])
+                    put("top", css[1])
+                    put("right", css[2])
+                    put("bottom", css[3])
+                },
+            )
+        }
+    }
+
     private fun registerBackSink() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         if (backCallback != null) return
@@ -225,6 +301,39 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
     companion object {
         /** Android's own per-edge cap, in dp. Asking past it is silently trimmed. */
         const val MAX_EXCLUSION_DP = 200
+
+        /**
+         * Device-px view vs window vs system-bar insets → CSS-px overlap per edge.
+         *
+         * A view already below the status bar reports 0 on top. A view at y=0
+         * under a 24px bar reports 24 / density.
+         */
+        fun overlapCss(
+            viewX: Int,
+            viewY: Int,
+            viewW: Int,
+            viewH: Int,
+            windowX: Int,
+            windowY: Int,
+            windowW: Int,
+            windowH: Int,
+            insetLeft: Int,
+            insetTop: Int,
+            insetRight: Int,
+            insetBottom: Int,
+            density: Double,
+        ): DoubleArray {
+            val d = if (density > 0) density else 1.0
+            val sysLeft = windowX + insetLeft
+            val sysTop = windowY + insetTop
+            val sysRight = windowX + windowW - insetRight
+            val sysBottom = windowY + windowH - insetBottom
+            val left = maxOf(0, sysLeft - viewX)
+            val top = maxOf(0, sysTop - viewY)
+            val right = if (viewW <= 0) 0 else maxOf(0, viewX + viewW - sysRight)
+            val bottom = if (viewH <= 0) 0 else maxOf(0, viewY + viewH - sysBottom)
+            return doubleArrayOf(left / d, top / d, right / d, bottom / d)
+        }
 
         /**
          * Keep the rects that fit in the budget, tallest-first.

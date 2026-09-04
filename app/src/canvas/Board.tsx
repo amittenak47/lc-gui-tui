@@ -183,7 +183,6 @@ import { PageIndicator, type PageIndicatorHandle } from "./PageIndicator";
 import { FlickPredictHud, type FlickPredictHudHandle } from "./FlickPredictHud";
 import {
   PAN_FLICK_MIN,
-  PAN_FRICTION,
   PAN_REST_SPEED,
   predictFlickEndScrollY,
 } from "./flickPredict";
@@ -254,6 +253,11 @@ import {
   type ChromeWakeMarker,
   type ChromeWakeTint,
 } from "../util/chromeWakePref";
+import {
+  loadPdfFlickHud,
+  pdfFlickFriction,
+  PDF_READING_EVENT,
+} from "../util/pdfReadingPref";
 import {
   linedPaperLabel,
   linedPaperScreenPx,
@@ -1772,6 +1776,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const padTitleRef = useRef<PadTitleHandle | null>(null);
   const pageIndicatorRef = useRef<PageIndicatorHandle | null>(null);
   const flickPredictHudRef = useRef<FlickPredictHudHandle | null>(null);
+  const panFrictionRef = useRef(pdfFlickFriction());
+  const pdfFlickHudOnRef = useRef(loadPdfFlickHud());
   const flickPredFrozenRef = useRef<number | null>(null);
   const flickSettleErrRef = useRef(0);
   const pdfCoastRef = useRef(false);
@@ -3070,7 +3076,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           : panVelocityRef.current.y;
       const endY = clampPanScroll(
         scrollX,
-        predictFlickEndScrollY(scrollY, velY),
+        predictFlickEndScrollY(scrollY, velY, panFrictionRef.current),
         zoom,
       ).scrollY;
       pred = pageIdFromCamera(frames, endY, zoom, height);
@@ -3080,7 +3086,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!finger) publishPdfFilmPredicted(filmScope, pred);
     publishPdfPreloadPages(filmScope, finger ? pdfPreloadPages(live, pred, last) : []);
     const err = pred - live;
-    flickPredictHudRef.current?.show(live, pred, err);
+    if (pdfFlickHudOnRef.current) flickPredictHudRef.current?.show(live, pred, err);
     const log = pdfPanLogRef.current;
     log.n += 1;
     const now = performance.now();
@@ -3516,6 +3522,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
     window.addEventListener(CHROME_WAKE_EVENT, onWake);
     return () => window.removeEventListener(CHROME_WAKE_EVENT, onWake);
+  }, []);
+
+  useEffect(() => {
+    const apply = () => {
+      panFrictionRef.current = pdfFlickFriction();
+      pdfFlickHudOnRef.current = loadPdfFlickHud();
+      if (!pdfFlickHudOnRef.current) flickPredictHudRef.current?.hide();
+    };
+    apply();
+    window.addEventListener(PDF_READING_EVENT, apply);
+    return () => window.removeEventListener(PDF_READING_EVENT, apply);
   }, []);
 
   const deleteSelection = useCallback(() => {
@@ -4055,7 +4072,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           const viewH = liveCameraRef.current?.height ?? 800;
           const endY = clampPanScroll(
             scrollX,
-            predictFlickEndScrollY(scrollY, velY),
+            predictFlickEndScrollY(scrollY, velY, panFrictionRef.current),
             zoom,
           ).scrollY;
           flickPredFrozenRef.current = pageIdFromCamera(frames, endY, zoom, viewH);
@@ -4075,7 +4092,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           const actual = pageIdFromCamera(frames, scrollY, zoom, viewH);
           const err = frozen - actual;
           flickSettleErrRef.current = err;
-          flickPredictHudRef.current?.show(actual, frozen, err);
+          if (pdfFlickHudOnRef.current) {
+            flickPredictHudRef.current?.show(actual, frozen, err);
+          }
           publishPdfFilmPredicted(filmScope, frozen);
         }
         flickPredFrozenRef.current = null;
@@ -4097,7 +4116,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         } else {
           scrollX = clamped.scrollX;
         }
-        velY *= Math.exp(-PAN_FRICTION * dt);
+        velY *= Math.exp(-panFrictionRef.current * dt);
         if (Math.abs(velY) < PAN_REST_SPEED) {
           settle();
           return;

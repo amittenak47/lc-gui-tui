@@ -387,6 +387,8 @@ export interface WhiteboardPadDto {
 export interface AnnotatePadDto {
   id: string;
   name: string;
+  /** Display name for this set. Absent means show {@link name}. */
+  label?: string;
   hash: string;
   doc_type: string;
   updated_at: number;

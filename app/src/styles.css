@@ -25,7 +25,7 @@
 }
 
 :root {
-  --lc-sans: "DINish", "DIN Alternate", ui-sans-serif, system-ui, sans-serif;
+  --lc-sans: "Helvetica Neue", Helvetica, Arial, "DINish", ui-sans-serif, system-ui, sans-serif;
   /* GTA IV subtitle recipe: fill changes, black edge stays opaque. */
   --lc-sub-edge: #000;
   --lc-sub-stroke: 0.07em;
@@ -119,6 +119,13 @@ body {
 
 html {
   -webkit-tap-highlight-color: transparent;
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
 }
 
 button,
@@ -373,6 +380,12 @@ a,
 .lc-header .lc-icon {
   width: 28px;
   min-width: 28px;
+  padding: 0;
+}
+
+.lc-header .lc-brand-home {
+  width: 34px;
+  min-width: 34px;
   padding: 0;
 }
 
@@ -642,6 +655,21 @@ a,
   white-space: nowrap;
 }
 
+.lc-tab-title-input {
+  flex: 1 1 0;
+  min-width: 4ch;
+  max-width: 18ch;
+  margin: 0;
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--surface, var(--bg));
+  color: var(--ink);
+  font: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
 /* The dirty mark rides with the title so a collapsed tab still shows it. */
 .lc-tab-dot {
   flex-shrink: 0;
@@ -758,7 +786,6 @@ a,
 }
 
 @container lc-header-left (max-width: 220px) {
-  .lc-brand,
   .lc-browse-hint {
     display: none;
   }
@@ -1381,45 +1408,113 @@ html[data-theme="dark"] .lc-web-doc {
   letter-spacing: 0.02em;
   line-height: 1;
   white-space: nowrap;
-  color: var(--lc-sub-muted);
-  -webkit-text-stroke: var(--lc-sub-stroke) var(--lc-sub-edge);
-  paint-order: stroke fill;
-  text-shadow: 1px 1px 0 var(--lc-sub-edge);
-}
-
-.lc-brand strong {
   color: var(--lc-mode-whiteboard);
-  font-weight: 700;
-  -webkit-text-stroke: var(--lc-sub-stroke) var(--lc-sub-edge);
-  paint-order: stroke fill;
-  text-shadow: 1px 1px 0 var(--lc-sub-edge);
 }
 
 /*
- * The wordmark is the Home button, so it needs a button's affordances without a
- * button's chrome — the look was already right, and only the fact that it is
- * pressable was missing.
- *
- * After `.lc-brand`, not before: `font: inherit` is what strips the user-agent
- * button font, and it takes the size and weight with it.
+ * The house is the Home button, so it needs a button's affordances without a
+ * button's chrome — and it has to beat `.lc-header button { padding: 0 10px }`.
  */
 .lc-brand-home {
-  padding: 2px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  min-width: 34px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
   cursor: pointer;
   font: inherit;
-  transition: background-color 120ms ease-out;
+  color: var(--lc-mode-whiteboard);
+  transition: background-color 120ms ease-out, color 160ms ease-out;
 }
 
 .lc-brand-home:hover {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: color-mix(in srgb, var(--lc-mode-whiteboard) 16%, transparent);
+  color: color-mix(in srgb, var(--lc-mode-whiteboard) 70%, #fff);
 }
 
 .lc-brand-home:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.lc-brand-mark {
+  display: block;
+  width: 26px;
+  height: 24px;
+}
+
+.lc-brand-house {
+  display: block;
+  width: 26px;
+  height: 24px;
+  overflow: visible;
+  transform-origin: 50% 80%;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-brand-roof,
+.lc-brand-chimney,
+.lc-brand-puff,
+.lc-brand-body {
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease;
+}
+
+.lc-brand-puff {
+  opacity: 0;
+  transform-origin: 27px 4px;
+}
+
+.lc-brand-letters {
+  fill: currentColor;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 8.2px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.lc-brand-home:hover .lc-brand-house,
+.lc-brand-home:focus-visible .lc-brand-house {
+  transform: translateY(-1px) rotate(-4deg);
+}
+
+.lc-brand-home:hover .lc-brand-roof,
+.lc-brand-home:focus-visible .lc-brand-roof {
+  transform: translateY(-1.5px) rotate(-3deg);
+  transform-origin: 18px 10px;
+}
+
+.lc-brand-home:hover .lc-brand-puff,
+.lc-brand-home:focus-visible .lc-brand-puff {
+  opacity: 1;
+  animation: lc-brand-puff 900ms ease-out infinite;
+}
+
+@keyframes lc-brand-puff {
+  0% { opacity: 0.15; transform: translateY(0) scale(0.8); }
+  45% { opacity: 1; transform: translateY(-2px) scale(1); }
+  100% { opacity: 0; transform: translateY(-5px) scale(1.15); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-brand-house,
+  .lc-brand-roof,
+  .lc-brand-puff {
+    transition: none;
+    animation: none;
+  }
+
+  .lc-brand-home:hover .lc-brand-house,
+  .lc-brand-home:focus-visible .lc-brand-house,
+  .lc-brand-home:hover .lc-brand-roof,
+  .lc-brand-home:focus-visible .lc-brand-roof {
+    transform: none;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1718,7 +1813,7 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
  */
 .lc-hub-sync-dock {
   position: absolute;
-  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  top: calc(var(--lc-safe-top, 0px) + 10px);
   right: 10px;
   z-index: 50;
   display: flex;
@@ -5666,47 +5761,28 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 /* ---------------------------------------------------------------------------
- * Home chooser — the four mode cards.
+ * Home chooser — one stacked column of modes.
  *
- * The chooser is its own query container, so the cards collapse on the width
- * they actually get rather than the window's. Three tiers: full cards
- * `--lc-home-cols` across, full cards `--lc-home-cols-mid` across (set to a
- * clean half by `homeModeColumns`, or left alone for an odd count that would
- * orphan a card), then a rail of icon tiles with the prose dropped.
- *
- * Card width is a fraction of the row and height follows the cell, so one
- * grid scales from a phone to a desk monitor without a size per device.
+ * A horizontal row of five cards squeezed the blurb off any phone and most
+ * tablets. A column keeps the icon, title and full desktop description at
+ * every width; the card itself is a wide row so the glyph has room to move.
  * ------------------------------------------------------------------------- */
 
 .lc-home-chooser {
-  /* `margin: auto` inside the flex column centres it on both axes. */
-  width: min(1040px, 100%);
+  width: min(560px, 100%);
   margin: auto;
-  padding: 8px 0 16px;
-  container-type: inline-size;
-  container-name: lc-home;
+  padding: 12px 16px 24px;
+  max-height: 100%;
+  overflow: auto;
 }
 
 .lc-home-chooser-grid {
-  display: grid;
-  grid-template-columns: repeat(var(--lc-home-cols, 4), minmax(0, 1fr));
-  gap: clamp(10px, 1.6cqi, 18px);
-  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-/*
- * One cell per mode, and the cell is what the card measures itself against.
- *
- * The grid alone could not answer "does this card still fit prose": five modes
- * across a 600px chooser is a 110px card, and the chooser-level tiers happily
- * left a full card there — the title then ran out past its own border and over
- * its neighbour. Now a card reads the width it was actually handed, so the
- * same rules hold however many modes are compiled in and however the row is
- * divided.
- */
 .lc-home-cell {
-  container-type: inline-size;
-  container-name: lc-card;
   display: flex;
   min-width: 0;
 }
@@ -5717,23 +5793,14 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-home-card {
-  overflow: hidden;
+  overflow: visible;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  /* `cqi` is the cell's width from here down — the card, and everything in
-     it, scales with the space it got rather than with the whole chooser. */
-  gap: clamp(8px, 7cqi, 18px);
-  /*
-   * Height comes from the row, width from the column — every card fills its
-   * cell, so the block stays symmetric however many modes are compiled in. An
-   * aspect ratio was tried here and it is the wrong tool: capping the height
-   * of a square shrinks its width too, and the cards pull away from the
-   * right-hand edge of a grid that is supposed to be centred.
-   */
-  min-height: clamp(120px, 85cqi, 210px);
-  padding: clamp(12px, 8cqi, 22px);
+  flex-direction: row;
+  align-items: center;
+  gap: 16px;
+  min-height: 96px;
+  padding: 16px 18px;
   border: 1px solid color-mix(in srgb, var(--lc-home-mode, var(--ink)) 28%, transparent);
   border-radius: 16px;
   background: color-mix(in srgb, var(--paper) 92%, var(--ink) 8%);
@@ -5772,16 +5839,16 @@ body[data-lc-sash-drag="horizontal"] {
   opacity: 0.55;
 }
 
-/* `cqi` is the card's own width down here — the tile is a quarter of it. */
 .lc-home-card-icon {
   display: grid;
   place-items: center;
   flex: none;
-  width: clamp(34px, 24cqi, 46px);
-  height: clamp(34px, 24cqi, 46px);
-  border-radius: 12px;
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
   background: color-mix(in srgb, var(--lc-home-mode, var(--ink)) 14%, transparent);
   color: var(--lc-home-mode, color-mix(in srgb, var(--ink) 78%, transparent));
+  overflow: visible;
   transition:
     background 140ms ease,
     color 140ms ease;
@@ -5790,6 +5857,8 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-home-card-icon svg {
   width: 60%;
   height: 60%;
+  overflow: visible;
+  transform-origin: 50% 50%;
 }
 
 .lc-home-card:hover:not(:disabled) .lc-home-card-icon {
@@ -5802,10 +5871,11 @@ body[data-lc-sash-drag="horizontal"] {
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .lc-home-card-kicker {
-  font-size: clamp(0.66rem, 6cqi, 0.75rem);
+  font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -5813,87 +5883,19 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-home-card-title {
-  font-size: clamp(1.05rem, 11cqi, 1.35rem);
+  font-size: 1.28rem;
   font-weight: 650;
   line-height: 1.15;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .lc-home-card-blurb {
-  font-size: clamp(0.82rem, 7.5cqi, 0.95rem);
+  font-size: 0.92rem;
   line-height: 1.4;
   color: color-mix(in srgb, var(--ink) 68%, transparent);
+  white-space: normal;
 }
 
-/* Middle tier: same cards, folded onto two rows so nothing sits alone. */
-@container lc-home (max-width: 780px) {
-  .lc-home-chooser-grid {
-    grid-template-columns: repeat(var(--lc-home-cols-mid, 2), minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  .lc-home-card {
-    min-height: 118px;
-  }
-}
-
-/*
- * Rail tier: labels go, icons stay. Every mode keeps a column so the row is
- * still symmetric, and the accessible name is on the button, not the prose.
- */
-@container lc-home (max-width: 440px) {
-  .lc-home-chooser-grid {
-    grid-template-columns: repeat(var(--lc-home-cols, 4), minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .lc-home-card {
-    align-items: center;
-    justify-content: center;
-    aspect-ratio: 1 / 1;
-    min-height: 0;
-    padding: 8px;
-    gap: 0;
-    border-color: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 40%, transparent);
-  }
-
-  .lc-home-card-icon {
-    width: min(44px, 62%);
-    height: min(44px, 62%);
-    background: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 18%, transparent);
-    color: var(--lc-home-mode, var(--ink));
-  }
-
-  .lc-home-card-text {
-    display: none;
-  }
-}
-
-/* Not enough height for prose — keep the icon and the name, drop the rest. */
-@media (max-height: 560px) {
-  .lc-home-card {
-    min-height: 0;
-    flex-direction: row;
-    align-items: center;
-  }
-
-  .lc-home-card-kicker,
-  .lc-home-card-blurb {
-    display: none;
-  }
-}
-
-/* -------------------------------------------------------- card tiers ---
- * Measured on the cell each card was handed, so they hold at any column
- * count. Last in the file on purpose: a card that has run out of width
- * outranks a chooser that still thinks it has some, and outranks the
- * short-window rule above.
- */
-
-/* One mode, one colour — glyph, kicker, hover, and the squeezed tiles. */
 .lc-home-card[data-mode="practice"] {
   --lc-home-mode: var(--lc-mode-practice);
 }
@@ -5914,69 +5916,167 @@ body[data-lc-sash-drag="horizontal"] {
   --lc-home-mode: var(--lc-mode-explore);
 }
 
-/* Squeezed: the blurb goes, the name stays beside the glyph. */
-@container lc-card (max-width: 156px) {
-  .lc-home-card {
-    flex-direction: row;
-    align-items: center;
-    justify-content: flex-start;
-    aspect-ratio: auto;
-    min-height: 0;
-    gap: 8px;
-    padding: 10px;
-  }
+.lc-home-bra-l,
+.lc-home-bra-r,
+.lc-home-slash {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition:
+    transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 180ms ease;
+}
 
-  .lc-home-card-icon {
-    width: 30px;
-    height: 30px;
-    color: var(--lc-home-mode, currentColor);
-  }
+.lc-home-code-ipsum {
+  opacity: 0;
+  pointer-events: none;
+}
 
-  .lc-home-card-text {
-    min-width: 0;
-  }
+.lc-home-code-ipsum text {
+  fill: currentColor;
+}
 
-  .lc-home-card-kicker,
-  .lc-home-card-blurb {
-    display: none;
-  }
+.lc-home-card[data-mode="practice"]:hover:not(:disabled) .lc-home-bra-l {
+  transform: translateX(-4.2px);
+}
 
-  .lc-home-card-title {
-    font-size: 0.92rem;
+.lc-home-card[data-mode="practice"]:hover:not(:disabled) .lc-home-bra-r {
+  transform: translateX(4.2px);
+}
+
+.lc-home-card[data-mode="practice"]:hover:not(:disabled) .lc-home-slash {
+  opacity: 0;
+}
+
+.lc-home-card[data-mode="practice"]:hover:not(:disabled) .lc-home-code-ipsum {
+  animation: lc-home-code-in 420ms ease-out 80ms forwards;
+}
+
+@keyframes lc-home-code-in {
+  from {
+    opacity: 0;
+    transform: translateY(1.5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 
-/* Rail: only the glyph fits, so the glyph has to carry the mode. */
-@container lc-card (max-width: 128px) {
-  .lc-home-card {
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    /* Not `aspect-ratio`: the grid stretches its cells, which wins, and the
-       card came out a letterbox with a pill inside it. */
-    aspect-ratio: auto;
-    min-height: 62px;
-    gap: 0;
-    padding: 8px;
-    border-color: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 40%, transparent);
-  }
+.lc-home-ink-1,
+.lc-home-ink-2,
+.lc-home-ink-3 {
+  stroke-dasharray: 12;
+  stroke-dashoffset: 12;
+  opacity: 0;
+}
 
-  .lc-home-card-text {
-    display: none;
-  }
+.lc-home-nib {
+  transform-box: fill-box;
+  transform-origin: 12% 88%;
+}
 
-  .lc-home-card-icon {
-    width: min(42px, 62%);
-    height: auto;
-    aspect-ratio: 1 / 1;
-    background: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 18%, transparent);
-    color: var(--lc-home-mode, var(--ink));
-  }
+.lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-ink-1 {
+  animation: lc-home-ink-draw 280ms ease-out 40ms forwards;
+}
 
-  .lc-home-card:hover:not(:disabled) .lc-home-card-icon {
-    background: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 30%, transparent);
-    color: var(--lc-home-mode, var(--ink));
+.lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-ink-2 {
+  animation: lc-home-ink-draw 280ms ease-out 220ms forwards;
+}
+
+.lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-ink-3 {
+  animation: lc-home-ink-draw 280ms ease-out 400ms forwards;
+}
+
+.lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-nib {
+  animation: lc-home-nib-draw 1.05s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes lc-home-ink-draw {
+  from {
+    stroke-dashoffset: 12;
+    opacity: 1;
   }
+  to {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+@keyframes lc-home-nib-draw {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  22% { transform: translate(-8.5px, -7px) rotate(-28deg); }
+  48% { transform: translate(-7px, -3.5px) rotate(-18deg); }
+  74% { transform: translate(-8px, 0.5px) rotate(-24deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+
+.lc-home-rule-1,
+.lc-home-rule-2,
+.lc-home-rule-3,
+.lc-home-rule-4 {
+  stroke-dasharray: 10;
+  stroke-dashoffset: 10;
+  opacity: 0;
+}
+
+.lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-1 {
+  animation: lc-home-rule-draw 260ms ease-out 40ms forwards;
+}
+
+.lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-2 {
+  animation: lc-home-rule-draw 260ms ease-out 180ms forwards;
+}
+
+.lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-3 {
+  animation: lc-home-rule-draw 260ms ease-out 320ms forwards;
+}
+
+.lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-4 {
+  animation: lc-home-rule-draw 260ms ease-out 460ms forwards;
+}
+
+@keyframes lc-home-rule-draw {
+  from {
+    stroke-dashoffset: 10;
+    opacity: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+.lc-home-card[data-mode="browse"]:hover:not(:disabled) .lc-home-card-icon svg {
+  animation: lc-home-globe 900ms ease-in-out;
+}
+
+@keyframes lc-home-globe {
+  0% { transform: rotate(0deg); }
+  40% { transform: rotate(-18deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.lc-home-card[data-mode="explore"] .lc-home-card-icon svg circle {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.lc-home-card[data-mode="explore"]:hover:not(:disabled) .lc-home-card-icon svg circle:first-child {
+  animation: lc-home-hub 900ms ease-in-out infinite;
+}
+
+.lc-home-card[data-mode="explore"]:hover:not(:disabled) .lc-home-card-icon svg circle:not(:first-child) {
+  animation: lc-home-node 900ms ease-in-out infinite;
+}
+
+@keyframes lc-home-hub {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
+
+@keyframes lc-home-node {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(1.2px, -1.2px); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -5984,6 +6084,42 @@ body[data-lc-sash-drag="horizontal"] {
   .lc-home-card:hover:not(:disabled) {
     transition: none;
     transform: none;
+  }
+
+  .lc-home-bra-l,
+  .lc-home-bra-r,
+  .lc-home-slash,
+  .lc-home-code-ipsum,
+  .lc-home-nib,
+  .lc-home-ink-1,
+  .lc-home-ink-2,
+  .lc-home-ink-3,
+  .lc-home-rule-1,
+  .lc-home-rule-2,
+  .lc-home-rule-3,
+  .lc-home-rule-4 {
+    transition: none;
+    animation: none;
+  }
+
+  .lc-home-card[data-mode="practice"]:hover:not(:disabled) .lc-home-code-ipsum {
+    opacity: 1;
+  }
+
+  .lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-ink-1,
+  .lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-ink-2,
+  .lc-home-card[data-mode="whiteboard"]:hover:not(:disabled) .lc-home-ink-3,
+  .lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-1,
+  .lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-2,
+  .lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-3,
+  .lc-home-card[data-mode="annotate"]:hover:not(:disabled) .lc-home-rule-4 {
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
+
+  .lc-home-card[data-mode="browse"]:hover:not(:disabled) .lc-home-card-icon svg,
+  .lc-home-card[data-mode="explore"]:hover:not(:disabled) .lc-home-card-icon svg circle {
+    animation: none;
   }
 }
 
@@ -7853,13 +7989,13 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-home-card-stars::after {
   content: "";
   position: absolute;
-  inset: 0;
+  inset: -4px;
   border-radius: inherit;
   pointer-events: none;
-  opacity: 0.22;
+  opacity: 0.55;
   background-image:
-    radial-gradient(currentColor 0.6px, transparent 0.7px),
-    radial-gradient(currentColor 0.5px, transparent 0.6px);
+    radial-gradient(currentColor 0.7px, transparent 0.8px),
+    radial-gradient(currentColor 0.55px, transparent 0.65px);
   background-size: 6px 6px, 11px 11px;
   background-position: 0 0, 3px 4px;
   animation: lc-hub-pixel 420ms steps(4) infinite;
@@ -7867,7 +8003,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-home-card:hover .lc-home-card-stars::after,
 .lc-home-card:focus-visible .lc-home-card-stars::after {
-  opacity: 0.72;
+  opacity: 0.95;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -8204,6 +8340,10 @@ body[data-lc-sash-drag="horizontal"] {
   cursor: grabbing;
 }
 
+.lc-app:not(.lc-mobile) .lc-agent-sheet-handle {
+  display: none;
+}
+
 .lc-agent-fold-open {
   position: absolute;
   top: 0;
@@ -8534,6 +8674,14 @@ body[data-lc-sash-drag="horizontal"] {
   flex: 1 1 auto;
 }
 
+.lc-agent-messages-host {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .lc-agent-messages {
   flex: 1;
   min-height: 0;
@@ -8746,7 +8894,7 @@ body[data-lc-sash-drag="horizontal"] {
 /* What the agent did on the way to an answer. Quiet by default — it is
    context for the answer, not the answer. Timeline, not a prose dump. */
 .lc-agent-process {
-  margin: 0 0 6px;
+  margin: 0;
   min-width: 0;
   font-size: 11px;
   line-height: 1.35;
@@ -8758,6 +8906,8 @@ body[data-lc-sash-drag="horizontal"] {
   align-items: center;
   gap: 6px;
   width: 100%;
+  min-height: 0;
+  height: auto;
   border: 0;
   background: transparent;
   color: inherit;
@@ -8798,10 +8948,12 @@ body[data-lc-sash-drag="horizontal"] {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin: 6px 0 0 7px;
-  padding: 0 0 0 10px;
+  margin: 2px 0 0;
+  padding: 4px 8px 4px 18px;
   list-style: none;
-  border-left: 1px solid color-mix(in srgb, var(--chrome-edge) 85%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ink) 5.5%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--ink) 8%, var(--chrome-edge));
 }
 
 .lc-agent-process-step {
@@ -8830,10 +8982,28 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-agent-process-step-body {
-  margin: 4px 0 6px;
+  margin: 2px 0 0;
+  padding: 2px 0 4px;
   white-space: pre-wrap;
   opacity: 0.92;
   color: var(--ink);
+}
+
+.lc-agent-think-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+}
+
+.lc-agent-process + .lc-agent-reasoning {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+.lc-agent-think-stack + .lc-agent-turn-body {
+  margin-top: 8px;
 }
 
 .lc-agent-process-morph,
@@ -8861,7 +9031,7 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-agent-process-step::before {
   content: "";
   position: absolute;
-  left: -13px;
+  left: -12px;
   top: 0.45em;
   width: 5px;
   height: 5px;
@@ -8885,24 +9055,34 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-agent-reasoning {
-  margin: 0 0 6px;
+  margin: 0;
   min-width: 0;
   font-size: 11px;
   line-height: 1.35;
-  color: var(--muted-ink, var(--muted));
+  color: var(--ink);
+}
+
+.lc-agent-reasoning-toggle {
+  opacity: 1;
+  color: color-mix(in srgb, var(--accent) 45%, var(--ink));
+  font-weight: 600;
 }
 
 .lc-agent-reasoning-body {
-  margin: 6px 0 0 7px;
-  padding: 0 0 0 10px;
-  border-left: 1px solid color-mix(in srgb, var(--chrome-edge) 85%, transparent);
+  margin: 4px 0 0;
+  padding: 8px 10px 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--chrome-edge));
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--ink));
   max-height: min(40vh, 280px);
   overflow: auto;
   white-space: pre-wrap;
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.5;
   color: var(--ink);
-  opacity: 0.88;
+  opacity: 1;
+  box-sizing: border-box;
 }
 
 .lc-agent-drawing {
@@ -9141,21 +9321,153 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-agent-composer {
+  position: relative;
   flex-shrink: 0;
   border-top: 1px solid var(--chrome-edge);
-  padding: 10px 12px 12px;
+  padding: 4px 10px 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   background: var(--panel);
   container-type: inline-size;
   container-name: lc-composer;
 }
 
-.lc-agent-presets {
+.lc-agent-composer-body {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.lc-agent-presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.lc-agent-presets .lc-flag {
+  min-height: 26px;
+  height: 26px;
+  width: 100%;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  border-radius: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lc-flag.lc-agent-pane-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0;
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: color-mix(in srgb, var(--accent) 55%, var(--ink));
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.lc-flag.lc-agent-pane-expand:hover,
+.lc-flag.lc-agent-pane-expand:focus-visible {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  color: var(--accent);
+}
+
+.lc-flag.lc-agent-pane-expand.is-expanded,
+.lc-flag.lc-agent-pane-expand.lc-flag-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel));
+  color: var(--accent);
+}
+
+.lc-agent-pane-expand-icon {
+  width: 11px;
+  height: 11px;
+  display: block;
+}
+
+.lc-agent-messages-host > .lc-agent-pane-expand.is-overlay {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+}
+
+.lc-agent-pane-expand-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  height: 22px;
+  min-height: 22px;
+  max-height: 22px;
+  padding: 0 4px;
+}
+
+.lc-agent-composer > .lc-agent-pane-expand-row {
+  margin: 0 -2px 0;
+}
+
+.lc-agent-chat > .lc-agent-pane-expand-row {
+  padding: 2px 8px 0;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  border-bottom: 1px solid color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+.lc-agent-chat.is-focus-messages .lc-agent-composer-body {
+  display: none;
+}
+
+.lc-agent-chat.is-focus-messages .lc-agent-composer {
+  min-height: 0;
+  padding: 2px 8px 4px;
+}
+
+.lc-agent-chat.is-focus-messages .lc-agent-composer-bar {
+  display: none;
+}
+
+.lc-agent-chat.is-focus-composer .lc-agent-messages-host {
+  flex: 0 0 0;
+  min-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lc-agent-messages.lc-scroll-pane,
+.lc-agent-reasoning-body {
+  scrollbar-width: thin;
+  scrollbar-color: auto;
+}
+
+.lc-agent-messages.lc-scroll-pane::-webkit-scrollbar,
+.lc-agent-reasoning-body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.lc-agent-messages.lc-scroll-pane::-webkit-scrollbar-thumb,
+.lc-agent-reasoning-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 0;
+  background-clip: padding-box;
+  background: color-mix(in srgb, var(--ink) 28%, transparent);
 }
 
 .lc-agent-panel-error {
@@ -9172,7 +9484,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-agent-composer textarea {
   width: 100%;
-  min-height: 72px;
+  min-height: 40px;
   resize: none;
   border-radius: 8px;
   border: 1px solid var(--chrome-edge);
@@ -9180,8 +9492,7 @@ body[data-lc-sash-drag="horizontal"] {
   color: var(--ink);
   font: inherit;
   font-size: 13px;
-  padding: 8px 10px;
-  min-height: 72px;
+  padding: 6px 8px;
 }
 
 .lc-agent-composer-bar {
@@ -12217,11 +12528,8 @@ button.lc-row-selected:hover:not(:disabled) {
  * Coach as a bottom sheet.
  *
  * Keyed on `.lc-mobile` rather than a media query, because the two disagreed:
- * the class is set for a coarse pointer up to 1280px, so an iPad in landscape
- * got the *phone* class and the *desktop* panel rules. The result was a
- * full-width panel still obeying `.lc-app-problem .lc-side { top: header }` —
- * it covered the canvas from the header down while the board was pushed into
- * the strip underneath it.
+ * a coarse pointer up to 1280px used to put a desktop window on the phone
+ * sheet. `useIsMobile()` is phones, tablets, or a phone-narrow desktop window.
  *
  * One height variable drives both the sheet and the room the canvas gives up,
  * so they can never drift apart again.
@@ -12229,9 +12537,14 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile {
   --lc-agent-sheet: min(58vh, 520px);
-  /* Lift the sheet clear of Android's home-swipe / gesture nav band. */
-  --lc-agent-sheet-lift: 32px;
-  /* Peek tall enough that the grab bar sits above that band when parked. */
+  /*
+   * Was a second inset so the parked peek sat above Android's home-swipe.
+   * That floated the whole sheet off the page. The sheet docks to the
+   * bottom; `--lc-safe-bottom` pads the composer so Send is not in the
+   * gesture band. Keep the variable at 0 so sash / map math still compiles.
+   */
+  --lc-agent-sheet-lift: 0px;
+  /* Visible grab when parked — flush with the screen bottom. */
   --lc-agent-peek: 52px;
   /* Gap between map chrome and the parked coach peek strip. */
   --lc-map-above-coach: 10px;
@@ -12281,6 +12594,10 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile.lc-app-agent-open .lc-side,
 .lc-mobile .lc-side-sheet-dragging {
   bottom: var(--lc-keyboard-inset, 0px);
+  /* Above board chrome (95–98). Those controls fade as the sheet opens but
+     used to keep pointer-events, so a tap on the composer hit the toolbar
+     underneath. Modals stay at 100+. */
+  z-index: 99;
 }
 
 .lc-mobile .lc-agent-chat {
@@ -12337,6 +12654,16 @@ button.lc-row-selected:hover:not(:disabled) {
   box-shadow: 0 -6px 18px rgb(0 0 0 / 18%);
 }
 
+/*
+ * Board chrome paints in a higher stacking context than the sheet used to, and
+ * `--lc-agent-open` only fades it. Invisible buttons still received the tap
+ * that was meant for expand / Send.
+ */
+.lc-mobile.lc-app-agent-open .lc-board-chrome-slot,
+.lc-mobile.lc-app-agent-open .lc-board-chrome-slot * {
+  pointer-events: none !important;
+}
+
 .lc-mobile .lc-agent-toggle-open {
   border-radius: 6px;
   border-color: var(--accent);
@@ -12358,15 +12685,14 @@ button.lc-row-selected:hover:not(:disabled) {
 /* The composer is the reason to open the sheet — keep it compact so the thread
    above it is still worth reading on a tablet. */
 .lc-mobile .lc-agent-composer textarea {
-  min-height: 54px;
+  min-height: 36px;
 }
 
 /* ------------------------------------------------------------ mobile UI --- */
 
 /*
- * `lc-mobile` is set from `useIsMobile()` (app/src/util/mobile.ts), which uses
- * the same query as the media rules below — narrow, or coarse-pointered and not
- * very wide. A desktop window keeps every rule in this file untouched.
+ * `lc-mobile` is set from `useIsMobile()` (app/src/util/mobile.ts): a handheld,
+ * or a desktop window under 900px. A wide desktop window keeps the side panel.
  */
 
 .lc-label-short {
@@ -12452,6 +12778,22 @@ button.lc-row-selected:hover:not(:disabled) {
   height: calc(var(--lc-header-height) + var(--lc-safe-top, 0px));
   min-height: calc(var(--lc-header-height) + var(--lc-safe-top, 0px));
   max-height: calc(var(--lc-header-height) + var(--lc-safe-top, 0px));
+}
+
+/*
+ * Wide Android tablets used to miss `.lc-mobile` (coarse pointer but > 1280px).
+ * Handhelds always get that class now; this remains for a desktop-class
+ * Android window that still draws under the status / caption bar.
+ */
+.lc-android:not(.lc-mobile) .lc-header {
+  padding-top: calc(5px + var(--lc-safe-top));
+  height: calc(var(--lc-header-height) + var(--lc-safe-top, 0px));
+  min-height: calc(var(--lc-header-height) + var(--lc-safe-top, 0px));
+  max-height: calc(var(--lc-header-height) + var(--lc-safe-top, 0px));
+}
+
+.lc-android:not(.lc-mobile).lc-app-problem .lc-side {
+  top: calc(var(--lc-header-height) + var(--lc-safe-top, 0px));
 }
 
 .lc-mobile .lc-header-left,
@@ -14042,9 +14384,8 @@ button.lc-row-selected:hover:not(:disabled) {
   color: var(--ink);
 }
 
-/* A question to a coach is usually a paragraph, not a search box. */
+/* Composer height is owned above; do not grow it into a paragraph field. */
 .lc-agent-composer textarea {
-  min-height: 8.5rem;
   resize: none;
 }
 
@@ -14106,13 +14447,16 @@ button.lc-row-selected:hover:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 10px;
+  padding: 4px 8px 4px 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
   background: color-mix(in srgb, var(--accent) 7%, transparent);
+  flex-shrink: 0;
 }
 
 .lc-agent-thread-back {
   padding: 3px 8px;
+  min-height: 28px;
+  height: 28px;
   border: none;
   border-radius: 6px;
   background: transparent;
@@ -14128,6 +14472,8 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-agent-thread-title {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 12px;
   color: color-mix(in srgb, var(--ink) 62%, transparent);
 }
@@ -15215,23 +15561,52 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-agent-mark-chips {
   display: flex;
   flex-wrap: wrap;
+  width: 100%;
   gap: 6px;
-  padding: 0 10px 6px;
+  padding: 0;
   align-items: center;
+  align-content: flex-start;
 }
 
+.lc-agent-mark-chips .lc-footnote-chip {
+  flex: 0 0 auto;
+}
+
+.lc-hold-reveal.lc-footnote-chip,
 .lc-agent-mark-chips .lc-footnote-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   max-width: 100%;
-  min-height: 24px;
-  height: 24px;
-  padding: 0 6px 0 4px;
+  min-width: 0;
+  min-height: 20px;
+  height: 20px;
+  padding: 0 4px 0 3px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: transparent;
   color: var(--ink);
+}
+
+.lc-agent-mark-chips .lc-footnote-chip::after,
+.lc-agent-mark-menu .lc-footnote-chip::after {
+  content: none;
+}
+
+.lc-agent-mark-chips .lc-hold-reveal-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.lc-agent-mark-chips .lc-footnote-chip .lc-hold-reveal-fill,
+.lc-agent-mark-chips .lc-hold-danger .lc-hold-reveal-fill {
+  inset: 0 auto 0 0;
+  width: calc(var(--lc-hold, 0) * 100%);
+  height: 100%;
+  transform: none;
+  clip-path: none;
+  -webkit-clip-path: none;
 }
 
 .lc-agent-mark-chips .lc-footnote-chip.is-overflow {
@@ -16648,6 +17023,13 @@ html.lc-doc-camera-live .lc-page-marks-slot {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 22%, var(--panel));
   color: var(--accent);
+}
+
+.lc-agent-mark-menu-empty {
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--muted, #6b7280);
 }
 
 

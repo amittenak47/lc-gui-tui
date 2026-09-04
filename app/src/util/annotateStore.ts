@@ -396,14 +396,24 @@ function liveAnnotateCount(): number {
  * going through the save path would freshen `updatedAt` and move the set to
  * the top of Recent for something the reader did not draw.
  */
-export function setAnnotateDocLabel(id: string, label: string): void {
+export function setAnnotateDocLabel(id: string, label: string): boolean {
   const index = readIndex();
   const meta = index.find((entry) => entry.id === id);
-  if (!meta) return;
+  if (!meta) return false;
   const trimmed = label.trim();
+  const current = meta.label?.trim() ?? "";
+  if (trimmed === current) return false;
   const next: AnnotateDocMeta = trimmed ? { ...meta, label: trimmed } : { ...meta };
   if (!trimmed) delete next.label;
   writeIndex(index.map((entry) => (entry.id === id ? next : entry)));
+  return true;
+}
+
+/** True once the reader has named this set (owned notes count as named). */
+export function annotateIsNamed(meta: AnnotateDocMeta | null | undefined): boolean {
+  if (!meta) return false;
+  if (meta.owned) return true;
+  return Boolean(meta.label?.trim());
 }
 
 /** Meta for one entry, without touching its content. */
