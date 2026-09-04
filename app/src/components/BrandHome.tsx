@@ -1,9 +1,9 @@
 /**
- * Header Home control — a small house with the "lc" mark inside.
+ * Header Home control — a small house with the "wb" mark inside.
  *
  * The old wordmark spent a lot of header on a name the window title already
- * says. A house is the same landmark every app uses for "back to the start",
- * and the letters stay Helvetica Neue so it still reads as ours.
+ * says. A house is the same landmark every app uses for "back to the start";
+ * the letters are "wb" (welcome back) in Helvetica Neue.
  */
 
 export function BrandHome() {
@@ -41,7 +41,7 @@ export function BrandHome() {
           strokeLinejoin="round"
         />
         <text className="lc-brand-letters" x="18" y="25.2" textAnchor="middle">
-          lc
+          wb
         </text>
       </svg>
     </span>
