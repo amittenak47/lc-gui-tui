@@ -1855,18 +1855,23 @@ function fillInkRibbonQuads(
   // A wash must not underlay the whole ribbon in fills[0]. Mid-tile clips
   // then show the stroke-start color against the local gradient: a hard cut
   // on the tile grid. Solid ribbons still get the silhouette so shared quad
-  // edges do not leave parchment hairlines.
-  if (!fills && from <= 0 && to >= n - 1) {
-    ctx.beginPath();
-    ctx.moveTo(lx[0]!, ly[0]!);
-    for (let index = 1; index < n; index++) {
-      ctx.lineTo(lx[index]!, ly[index]!);
+  // edges do not leave parchment hairlines. The live tail paints `[count, n)`
+  // quads; without a local silhouette those rectangles gap at a turn.
+  if (!fills) {
+    const i0 = Math.max(0, from > 0 ? from - 1 : 0);
+    const i1 = Math.min(n - 1, to);
+    if (i1 > i0) {
+      ctx.beginPath();
+      ctx.moveTo(lx[i0]!, ly[i0]!);
+      for (let index = i0 + 1; index <= i1; index++) {
+        ctx.lineTo(lx[index]!, ly[index]!);
+      }
+      for (let index = i1; index >= i0; index--) {
+        ctx.lineTo(rx[index]!, ry[index]!);
+      }
+      ctx.closePath();
+      ctx.fill();
     }
-    for (let index = n - 1; index >= 0; index--) {
-      ctx.lineTo(rx[index]!, ry[index]!);
-    }
-    ctx.closePath();
-    ctx.fill();
   }
 
   const canGrad =
@@ -2790,14 +2795,13 @@ function isHairlineRibbon(op: InkDrawOp, pixelScale: number): boolean {
 /**
  * Paint with the pen's `stroke()` instead of a filled ribbon.
  *
- * Width-only Speed ink is a min-to-nib envelope. `stroke()` is that envelope
- * in the ink colour. A ribbon is a bitmap blit that reads gray next to it.
- * Drying and pooling still need the ribbon, except when the nib is a hairline.
+ * Hairline speed ink matches the ordinary pen. Width-only used to take this
+ * path too — bevel runs, one width per bucket — which is the rectangles that
+ * gap at a turn and step instead of taper. The solid ribbon (no wash fills)
+ * is the same opaque blit pooling already uses.
  */
 function usesSpeedPenStroke(op: InkDrawOp, pixelScale: number): boolean {
-  if (!usesSpeedRibbon(op)) return false;
-  if (isHairlineRibbon(op, pixelScale)) return true;
-  return resolveSpeedFade(op) <= 1e-3 && resolveSpeedBlotBlend(op) <= 1e-3;
+  return usesSpeedRibbon(op) && isHairlineRibbon(op, pixelScale);
 }
 
 function resolveSpeedFade(op: InkDrawOp): number {
@@ -3096,6 +3100,51 @@ export function isDiscPrimaryPath(
   }
   // Slight pen wiggles stay disc-only (~1× nib bbox) so ribbons do not shard.
   return !clusterExtentReaches(points, nib * 1.0);
+}
+
+/** ~cos(20°): flatter stays covered by the ribbon quads. */
+const RIBBON_JOIN_DOT = 0.94;
+
+/**
+ * Round-nib disc at a turn so adjacent quads do not leave a paper wedge.
+ *
+ * Chord densify closed those wedges by making the angle change tiny. Stamping
+ * only where the spine actually turns is O(corners), not O(length).
+ */
+function stampRibbonTurnJoins(
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  points: readonly ScenePoint[],
+  styles: readonly InkStrokeStyle[],
+  pixelScale: number,
+  color: string,
+  fills?: readonly string[],
+): void {
+  const last = points.length - 1;
+  if (last < 2 || points.length !== styles.length) return;
+  for (let i = 1; i < last; i++) {
+    const prev = points[i - 1]!;
+    const cur = points[i]!;
+    const next = points[i + 1]!;
+    const ax = cur.x - prev.x;
+    const ay = cur.y - prev.y;
+    const bx = next.x - cur.x;
+    const by = next.y - cur.y;
+    const al = Math.hypot(ax, ay);
+    const bl = Math.hypot(bx, by);
+    if (al < 1e-6 || bl < 1e-6) continue;
+    if ((ax * bx + ay * by) / (al * bl) >= RIBBON_JOIN_DOT) continue;
+    paintInkDisc(
+      ctx as CanvasRenderingContext2D,
+      cur,
+      styles[i]!.lineWidth,
+      1,
+      pixelScale,
+      0,
+      fills?.[i] ?? color,
+      false,
+      1,
+    );
+  }
 }
 
 /**
@@ -4605,6 +4654,14 @@ function drawRibbonStrokeFrom(
     const scratchCtx = scratch as CanvasRenderingContext2D;
     scratchCtx.fillStyle = color ?? String(ctx.fillStyle);
     scratchCtx.globalAlpha = 1;
+    stampRibbonTurnJoins(
+      scratchCtx,
+      prepared.points,
+      prepared.styles,
+      pixelScale,
+      color,
+      fills,
+    );
     if (!(inkOpBatch === null && fromIndex === 0 && liveTailSilhouette)) {
       scratchGrainAlongStroke(
         scratchCtx,
