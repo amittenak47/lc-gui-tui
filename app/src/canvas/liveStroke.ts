@@ -845,10 +845,19 @@ export class LiveStroke {
         ) {
           origin.pressure = point.pressure;
         }
-        if (point.slowness !== undefined) origin.slowness = point.slowness;
+        if (point.slowness !== undefined) {
+          // Speed ink reads slowness as width. A wiggle inside the disc is
+          // still the hold; copying a faster sample onto the origin collapsed
+          // the pool to the flick floor in one frame.
+          origin.slowness =
+            origin.slowness === undefined
+              ? point.slowness
+              : Math.max(origin.slowness, point.slowness);
+        }
         this.collapseToOrigin(origin);
         return;
       }
+      this.commitHeadPool(live);
     }
 
     if (live.kind === "draw" && live.highlight === true) {
@@ -885,6 +894,7 @@ export class LiveStroke {
       return;
     }
 
+    this.commitHeadPool(live);
     this.dropTransientTip();
     this.spine.replace([origin]);
     this.bindSpine();
@@ -938,7 +948,10 @@ export class LiveStroke {
     this.lastDwellTickWall = nowMs;
     if (this.dwellCount >= blotTicksToFull(live.speedBlotBlend ?? 0)) return;
     this.dwellCount += 1;
-    live.blotTipGrow = blotGrowTFromTicks(this.dwellCount, live.speedBlotBlend ?? 0);
+    live.blotTipGrow = Math.max(
+      live.blotTipGrow ?? 0,
+      blotGrowTFromTicks(this.dwellCount, live.speedBlotBlend ?? 0),
+    );
     this.smoothedSpeed = smoothSpeed(this.smoothedSpeed, 0);
     const last = this.lastPoint;
     if (!last) return;
@@ -947,34 +960,38 @@ export class LiveStroke {
       ...last,
       slowness,
     };
-    last.slowness = slowness;
-    const lastIdx = this.spine.n - 1;
-    if (lastIdx >= 0) this.spine.setSlowness(lastIdx, slowness);
     if (live.pressureSensitive && hasStylusPressure(last.pressure)) {
       dwellPoint.pressure = this.smoothedPressure;
     }
     const dwellNib = Math.max(inkLineWidth(live.baseWidth, 0, false), 1e-6);
+    const lastIdx = this.spine.n - 1;
     if (this.disc.wouldStayDisc(dwellPoint, dwellNib)) {
+      const hold =
+        last.slowness === undefined ? slowness : Math.max(last.slowness, slowness);
+      last.slowness = hold;
       if (this.spine.n > 0) {
-        this.spine.setSlowness(0, slowness);
+        this.spine.setSlowness(0, hold);
         if (hasStylusPressure(dwellPoint.pressure)) {
           const contact = this.spine.view[0]!;
           this.spine.setPressure(0, Math.max(contact.pressure, dwellPoint.pressure));
         }
       }
+      if (lastIdx > 0) this.spine.setSlowness(lastIdx, hold);
       const contact = this.spine.view[0];
       if ((live.speedBlotBlend ?? 0) > 1e-3 && contact) {
         this.spine.push({
           x: contact.x,
           y: contact.y,
           pressure: contact.pressure,
-          slowness,
+          slowness: hold,
         });
         this.bindSpine();
       }
       this.lastPoint = contact ?? last;
       return;
     }
+    last.slowness = slowness;
+    if (lastIdx >= 0) this.spine.setSlowness(lastIdx, slowness);
     if (lastIdx >= 0 && hasStylusPressure(dwellPoint.pressure)) {
       this.spine.setPressure(lastIdx, dwellPoint.pressure);
     }
@@ -1002,8 +1019,32 @@ export class LiveStroke {
     }
     this.lastMoveWall = performance.now();
     this.dwellCount = 0;
-    if (live.kind === "draw") live.blotTipGrow = 0;
     return true;
+  }
+
+  /**
+   * Freeze the hold's last grow onto a halt and drop the live timer.
+   *
+   * Called only when the stroke leaves the contact disc. Zeroing `blotTipGrow`
+   * while still disc-primary made the pool snap to the nib — the halt lives on
+   * the ribbon, and the disc did not read it — so a wiggle inside one nib
+   * cancelled the circle, then a later hop drew a new mark. The ribbon still
+   * must not inherit that grow at the moving tip, so it is cleared here, after
+   * the halt has the value.
+   */
+  private commitHeadPool(live: InkOp): void {
+    if (live.kind !== "draw") return;
+    const grow = liveInkBlotGrow(live);
+    const origin = live.points[0];
+    if (grow > 1e-3 && origin) stampInkBlotHalt(live, origin, grow);
+    // Halt merge keeps the slower (fatter) pace. Put that back on the origin
+    // so the ribbon starts at the hold width, not the first flick.
+    const halt = live.blotHalts?.[live.blotHalts.length - 1];
+    if (origin && halt?.slowness != null) {
+      origin.slowness =
+        origin.slowness == null ? halt.slowness : Math.max(origin.slowness, halt.slowness);
+    }
+    live.blotTipGrow = 0;
   }
 
   private reshapeLive(): boolean {

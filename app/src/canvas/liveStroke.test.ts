@@ -51,10 +51,12 @@ function beginPen(
   extras: {
     pressureSensitive?: boolean;
     speedInk?: number;
+    speedBlotBlend?: number;
     zoom?: number;
     onNeedPaint?: () => void;
   } = {},
 ) {
+  const blot = extras.speedBlotBlend ?? (extras.speedInk ? 1 : 0);
   return beginLiveStroke({
     tool: "pen",
     view: view(extras.zoom ?? 1),
@@ -67,7 +69,7 @@ function beginPen(
     pressureClip: 1,
     pressureSensitive: extras.pressureSensitive ?? false,
     speedInk: extras.speedInk ?? 0,
-    speedBlotBlend: extras.speedInk ? 1 : 0,
+    speedBlotBlend: blot,
     speedFade: extras.speedInk ? 1 : 0,
     grain: 0,
     boldness: 1,
@@ -243,5 +245,56 @@ describe("LiveStroke ingest", () => {
     expect(next.y).toBeLessThanOrEqual(first.y);
     expect(next.x + next.w).toBeGreaterThanOrEqual(first.x + first.w);
     expect(next.y + next.h).toBeGreaterThanOrEqual(first.y + first.h);
+  });
+
+  it("keeps the pool while a wiggle stays on the contact disc", () => {
+    const stroke = beginPen({ speedBlotBlend: 0.9 });
+    const t0 = performance.now();
+    for (let i = 0; i < 50; i++) stroke.tick(t0 + 80 + i * 32);
+    const heldOp = stroke.live;
+    expect(heldOp?.kind).toBe("draw");
+    if (heldOp?.kind !== "draw") return;
+    const held = heldOp.blotTipGrow ?? 0;
+    expect(held).toBeGreaterThan(0.15);
+
+    stroke.ingest([sample(12.5, 10, 4000)]);
+    stroke.tick(t0 + 80 + 50 * 32 + 16);
+    const still = stroke.live;
+    expect(still?.kind).toBe("draw");
+    if (still?.kind !== "draw") return;
+    const origin = still.points[0]!;
+    expect(
+      still.points.every((p) => Math.hypot(p.x - origin.x, p.y - origin.y) < 4),
+    ).toBe(true);
+    expect(still.blotTipGrow ?? 0).toBeGreaterThanOrEqual(held - 1e-6);
+
+    stroke.ingest([sample(90, 10, 4100)]);
+    stroke.tick(t0 + 80 + 50 * 32 + 32);
+    const gone = stroke.live;
+    expect(gone?.kind).toBe("draw");
+    if (gone?.kind !== "draw") return;
+    expect(gone.blotTipGrow ?? 0).toBe(0);
+    expect(gone.blotHalts?.[0]?.grow).toBeGreaterThanOrEqual(held - 1e-3);
+    stroke.abandon();
+  });
+
+  it("does not thin the origin with speed ink while the contact disc still holds", () => {
+    const stroke = beginPen({ speedInk: 1, speedBlotBlend: 0.9 });
+    const t0 = performance.now();
+    for (let i = 0; i < 50; i++) stroke.tick(t0 + 80 + i * 32);
+    const heldOp = stroke.live;
+    expect(heldOp?.kind).toBe("draw");
+    if (heldOp?.kind !== "draw") return;
+    const heldSlow = heldOp.points[0]?.slowness ?? 0;
+    expect(heldSlow).toBeGreaterThan(0.7);
+
+    // dt ≈ 1ms over 2.5px is a flick, still inside one nib.
+    stroke.ingest([sample(12.5, 10, 1001)]);
+    stroke.tick(t0 + 80 + 50 * 32 + 16);
+    const still = stroke.live;
+    expect(still?.kind).toBe("draw");
+    if (still?.kind !== "draw") return;
+    expect(still.points[0]?.slowness ?? 0).toBeGreaterThanOrEqual(heldSlow - 1e-6);
+    stroke.abandon();
   });
 });

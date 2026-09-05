@@ -13,6 +13,7 @@ import {
   highlightLiftKeepsTip,
   inkBaseWidthForZoom,
   inkLineWidth,
+  inkPoolingWidthGain,
   inkOpsBounds,
   inkPressureAlpha,
   inkReservoirAlpha,
@@ -1565,6 +1566,34 @@ describe("paintInkDisc tip vs join", () => {
     expect(half0).toBeGreaterThan(halfN * 1.3);
   });
 
+  it("a pooled speed-ink start keeps standstill width at the origin", () => {
+    const originSlow = 1;
+    const pts = [
+      { x: 0, y: 0, pressure: NO_PRESSURE, slowness: originSlow },
+      { x: 8, y: 0, pressure: NO_PRESSURE, slowness: 0 },
+    ];
+    const op: InkOp = {
+      kind: "draw",
+      color: "#112233",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 0.9,
+      blotTipGrow: 0,
+      blotHalts: [{ x: 0, y: 0, grow: 0.7, pressure: NO_PRESSURE, slowness: originSlow }],
+      points: pts,
+    };
+    const styles = applyInkPoolingAtEnds(inkStrokePointStyles(op, 0), op, pts, 0);
+    const standstill = inkLineWidth(8, 0, false, originSlow, 1);
+    expect(styles[0]!.lineWidth).toBeCloseTo(
+      standstill * inkPoolingWidthGain(0.7, 0.9),
+      5,
+    );
+    expect(styles[0]!.lineWidth).toBeGreaterThan(inkLineWidth(8, 0, false, 0, 1) * 1.5);
+  });
+
   it("paints hairline speed ink with stroke() like the normal pen", () => {
     const pts = points([0, 0], [40, 0], [80, 0]);
     const speed = inkDrawContext();
@@ -2273,6 +2302,44 @@ describe("stroke start cap", () => {
     const maxAcross = Math.max(...ys.map((y) => Math.abs(y - origin.y)));
     expect(maxAcross).toBeLessThanOrEqual(half * 1.2);
   });
+
+  it("keeps a pooled start as a circle after the stroke leaves the contact disc", () => {
+    let origin = { x: 0, y: 0 };
+    let found = false;
+    for (let i = 0; i < 80; i++) {
+      const o = { x: i * 19, y: i * 5 };
+      if (inkCapRoundness(o, 1) < 0.35) {
+        origin = o;
+        found = true;
+        break;
+      }
+    }
+    expect(found).toBe(true);
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#000",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 0,
+        speedBlotBlend: 0.9,
+        blotHalts: [{ x: origin.x, y: origin.y, grow: 0.55, pressure: 0.6 }],
+        points: points([origin.x, origin.y], [origin.x + 40, origin.y]),
+      },
+      1,
+    );
+    const head = drawCtx.caps.filter(
+      (c) => Math.hypot(c.x - origin.x, c.y - origin.y) < 1,
+    );
+    expect(head.length).toBeGreaterThan(0);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI * 2) < 1e-6)).toBe(true);
+    const radii = head.map((c) => c.r);
+    expect(Math.max(...radii) - Math.min(...radii)).toBeLessThan(0.05);
+  });
 });
 
 describe("grain and blot pooling (Phase 2)", () => {
@@ -2327,6 +2394,21 @@ describe("grain and blot pooling (Phase 2)", () => {
       ...drawCtx.strokes.map((s) => Math.hypot(s.to.x - s.from.x, s.to.y - s.from.y)),
     );
     expect(longest).toBeLessThan(tip * 0.22);
+  });
+
+  it("keeps 5% grain a light tooth, not a fraction of full grit", () => {
+    const at = { x: 0, y: 0 };
+    const light = inkDrawContext();
+    paintGrainDisc(light.ctx, at, 8, 0.05, 1, "#000");
+    const heavy = inkDrawContext();
+    paintGrainDisc(heavy.ctx, at, 8, 1, 1, "#000");
+    expect(light.strokeCount).toBeGreaterThan(0);
+    expect(heavy.strokeCount).toBeGreaterThan(light.strokeCount * 4);
+    expect(Math.max(...light.strokeAlphas)).toBeLessThan(0.16);
+    expect(Math.max(...heavy.strokeAlphas)).toBeLessThan(0.32);
+    expect(Math.max(...light.strokeAlphas)).toBeLessThan(
+      Math.max(...heavy.strokeAlphas) * 0.55,
+    );
   });
 
   it("scatters grain across a stroke instead of the centerline", () => {

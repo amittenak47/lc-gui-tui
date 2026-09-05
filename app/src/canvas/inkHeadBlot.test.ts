@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { applyInkOp, type ScenePoint } from "./rasterInk";
+import { applyInkOp, inkCapRoundness, type ScenePoint } from "./rasterInk";
 
 const logs: string[][] = [];
 beforeAll(() => {
@@ -70,5 +70,64 @@ describe("the head blot has no threshold to flicker across", () => {
     expect(span).toBeGreaterThan(1);
     // No step may carry a large share of the range: that is what a switch looks like.
     expect(biggestJump).toBeLessThan(span * 0.15);
+  });
+});
+
+function squareHashOrigin(): { x: number; y: number } {
+  for (let i = 0; i < 80; i++) {
+    const o = { x: i * 19, y: i * 5 };
+    if (inkCapRoundness(o, 1) < 0.35) return o;
+  }
+  throw new Error("no square-hash origin");
+}
+
+/** Distinct disc radii stamped within a nib of `at`. */
+function headArcRadii(op: Parameters<typeof applyInkOp>[1], at: { x: number; y: number }) {
+  const mark = logs.map((l) => l.length);
+  const ctx = new Proxy(
+    { drawImage: () => {}, createLinearGradient: () => ({ addColorStop: () => {} }) } as Record<string, unknown>,
+    { get(o, p: string) { return p in o ? o[p] : () => {}; }, set() { return true; } },
+  );
+  applyInkOp(ctx as unknown as CanvasRenderingContext2D, op, 1);
+  const radii: number[] = [];
+  for (let li = 0; li < logs.length; li++) {
+    const log = logs[li];
+    for (const line of log.slice(mark[li] ?? 0)) {
+      const m = /^arc\((-?[\d.]+),(-?[\d.]+),([\d.]+)/.exec(line);
+      if (!m) continue;
+      if (Math.hypot(Number(m[1]) - at.x, Number(m[2]) - at.y) > 20) continue;
+      radii.push(Number(m[3]));
+    }
+  }
+  return radii;
+}
+
+describe("the pooled head leaves the contact disc as one round cap", () => {
+  it("does not plot a second disc of a different radius on a square-hash origin", () => {
+    const origin = squareHashOrigin();
+    const pts: ScenePoint[] = [
+      { x: origin.x, y: origin.y, pressure: 0.6, slowness: 1.9 },
+      { x: origin.x + 48, y: origin.y, pressure: 0.6, slowness: 0.4 },
+    ];
+    const base = {
+      kind: "draw" as const,
+      color: "#c41e3a",
+      baseWidth: 10,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedBlotBlend: 0.9,
+      blotTipGrow: 0,
+      blotHalts: [{ x: origin.x, y: origin.y, grow: 0.55, pressure: 0.6 }],
+      points: pts,
+    };
+    for (const speedInk of [0, 0.6]) {
+      const radii = headArcRadii({ ...base, speedInk }, origin);
+      expect(radii.length).toBeGreaterThan(0);
+      const min = Math.min(...radii);
+      const max = Math.max(...radii);
+      // One pooled circle, not a tiny blot plus a nib cap.
+      expect(max - min).toBeLessThan(0.05);
+    }
   });
 });

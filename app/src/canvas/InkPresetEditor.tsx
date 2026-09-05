@@ -23,6 +23,7 @@ import {
   blotGrowTFromTicks,
   blotTicksToFull,
   stampInkBlotHalt,
+  isDiscPrimaryPath,
   pointerPressure,
   smoothPressure,
   smoothSpeed,
@@ -654,7 +655,10 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
             if (performance.now() - lastMoveWallRef.current < 60) return;
             if (dwellCountRef.current >= blotTicksToFull(snap.blot)) return;
             dwellCountRef.current++;
-            blotTipGrowRef.current = blotGrowTFromTicks(dwellCountRef.current, snap.blot);
+            blotTipGrowRef.current = Math.max(
+              blotTipGrowRef.current,
+              blotGrowTFromTicks(dwellCountRef.current, snap.blot),
+            );
             speedEmaRef.current = smoothSpeed(speedEmaRef.current, 0);
             const tip = live[live.length - 1];
             if (tip) tip.slowness = inkSlowness(speedEmaRef.current);
@@ -677,12 +681,21 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
       const prev = lastPosRef.current;
       if (prev && Math.hypot(pt.x - prev.x, pt.y - prev.y) > INK_HOLD_STILL_PX) {
         if (blotTipGrowRef.current > 1e-3) {
-          const haltAt = livePtsRef.current[livePtsRef.current.length - 1] ?? prev;
+          const haltAt = livePtsRef.current[0] ?? livePtsRef.current[livePtsRef.current.length - 1] ?? prev;
           stampInkBlotHalt(blotHaltDestRef.current, haltAt, blotTipGrowRef.current);
         }
         lastMoveWallRef.current = performance.now();
         dwellCountRef.current = 0;
-        blotTipGrowRef.current = 0;
+        const snap = snapRef.current;
+        if (
+          !isEraserWedge(snap) &&
+          !isDiscPrimaryPath(
+            livePtsRef.current,
+            Math.max(inkLineWidth(snap.width, 0, false), 1e-6),
+          )
+        ) {
+          blotTipGrowRef.current = 0;
+        }
       }
       lastPosRef.current = { x: pt.x, y: pt.y };
       livePtsRef.current.push(pt);

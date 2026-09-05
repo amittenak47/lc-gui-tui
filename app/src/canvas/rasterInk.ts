@@ -1223,6 +1223,16 @@ function slopedSlowness(op: InkDrawOp): Float32Array {
     else if (delta < -room) out[i] = out[prev]! - room;
   }
 
+  // A pooled head is a standstill disc. The reverse slope would drag vertex 0
+  // toward the first moving sample and shrink that disc in one frame.
+  if (n > 0) {
+    const origin = points[0];
+    const pooled =
+      (op.blotTipGrow ?? 0) > 1e-3 ||
+      (origin != null && haltGrowNear(op, origin) > 1e-3);
+    if (pooled) out[0] = raw[0]!;
+  }
+
   slownessCache.set(points, out);
   slownessTailRaw.set(points, lastRaw);
   return out;
@@ -2971,6 +2981,19 @@ export function dwellBlotGrowT(
   return blotGrowthT(points.length - 1, blotBlend);
 }
 
+function haltGrowNear(op: InkDrawOp, at: { x: number; y: number }): number {
+  const list = op.blotHalts;
+  if (!list || list.length === 0) return 0;
+  let best = 0;
+  for (const halt of list) {
+    if (halt.grow < 1e-6) continue;
+    if (Math.hypot(halt.x - at.x, halt.y - at.y) < BLOT_HALT_MERGE_SCENE) {
+      best = Math.max(best, halt.grow);
+    }
+  }
+  return best;
+}
+
 function resolveBlotTipGrow(
   op: InkDrawOp,
   cluster: readonly ScenePoint[],
@@ -2978,7 +3001,10 @@ function resolveBlotTipGrow(
 ): number {
   const blend = resolveSpeedBlotBlend(op);
   const stamped = op.blotTipGrow !== undefined ? clamp01(op.blotTipGrow) : 0;
-  return Math.max(stamped, dwellBlotGrowT(cluster, tipRadius, blend));
+  const dwell = dwellBlotGrowT(cluster, tipRadius, blend);
+  const at = cluster[cluster.length - 1] ?? cluster[0];
+  const halt = at ? haltGrowNear(op, at) : 0;
+  return Math.max(stamped, dwell, halt);
 }
 
 /**
@@ -3038,7 +3064,10 @@ export function stampInkBlotHalt(
     if (typeof at.pressure === "number" && at.pressure > (last.pressure ?? -1)) {
       last.pressure = at.pressure;
     }
-    if (at.slowness != null) last.slowness = at.slowness;
+    if (at.slowness != null) {
+      last.slowness =
+        last.slowness != null ? Math.max(last.slowness, at.slowness) : at.slowness;
+    }
   } else {
     list.push({
       x: at.x,
@@ -3267,6 +3296,15 @@ function paperFibreHeading(origin: { x: number; y: number }): number {
   return hash01(origin.x, origin.y, GRAIN_SALT + 11) * Math.PI;
 }
 
+/**
+ * Density along the dial. Linear 0–1 put ~30% of full grit at 5% because
+ * fibre count had a large floor and dest-out alpha ignored the slider.
+ */
+function grainVisual(grain: number): number {
+  const t = clamp01(grain);
+  return t ** 1.35;
+}
+
 function strokePaperFibre(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -3279,12 +3317,13 @@ function strokePaperFibre(
   fibreHeading: number,
   minWidth = 0.2,
   lengthScale = 1,
+  alphaScale = 1,
 ): void {
   const ang = fibreHeading + (w - 0.5) * 0.48;
   const half = radius * (0.025 + 0.05 * q) * lengthScale;
   const dx = Math.cos(ang) * half;
   const dy = Math.sin(ang) * half;
-  ctx.globalAlpha = 0.07 + 0.42 * v;
+  ctx.globalAlpha = (0.035 + 0.18 * v) * alphaScale;
   ctx.lineWidth = Math.max(minWidth, radius * (0.008 + 0.016 * u));
   ctx.beginPath();
   ctx.moveTo(cx - dx, cy - dy);
@@ -3300,7 +3339,9 @@ function scratchGrainInDisc(
 ): void {
   const g = clamp01(grain);
   if (g < 1e-3 || radius < 1e-6) return;
-  const n = Math.round(1.4 * (10 + 28 * g));
+  const visual = grainVisual(g);
+  const n = Math.max(1, Math.round(4 + 38 * visual));
+  const alphaScale = 0.22 + 0.78 * g;
   const fibreHeading = paperFibreHeading(center);
   const prevComp = ctx.globalCompositeOperation;
   const prevAlpha = ctx.globalAlpha;
@@ -3327,6 +3368,9 @@ function scratchGrainInDisc(
       w,
       q,
       fibreHeading,
+      0.2,
+      1,
+      alphaScale,
     );
   }
   ctx.globalCompositeOperation = prevComp;
@@ -4067,6 +4111,8 @@ function scratchGrainAlongStroke(
 ): void {
   const grain = resolveGrain(op);
   if (grain < 1e-3 || points.length === 0) return;
+  const visual = grainVisual(grain);
+  const alphaScale = 0.22 + 0.78 * grain;
   const pathLen = strokePathLength(points);
   const nib = nibWidth(op);
   if (pathLen < 1e-6) {
@@ -4080,12 +4126,12 @@ function scratchGrainAlongStroke(
    * Sampling `u * pathLen` from the origin moved every fibre as the stroke
    * grew, so grain crawled to the tip and the already-written ink went smooth.
    *
-   * One hairline per ~0.16 nib was too sparse to read on the ribbon (a compact
-   * disc stamp packs ~50 fibres in one nib). Stamp a short across-ribbon cloud
-   * at each station, thick enough to mark a scratch pixel, still dest-out.
+   * Low dials stay a light tooth: spacing opens up and the cloud thins. Full
+   * grain is still an across-ribbon scratch, dest-out, just quieter than the
+   * old floor of ~16 fibres at 5%.
    */
-  const spacing = Math.max(nib * (0.10 + 0.05 * (1 - grain)), 0.32);
-  const fibresAt = Math.max(2, Math.round(3 + 7 * grain));
+  const spacing = Math.max(nib * (0.20 - 0.08 * visual), 0.36);
+  const fibresAt = Math.max(1, Math.round(1 + 7 * visual));
   const n = Math.min(720, Math.max(1, Math.ceil(pathLen / spacing)));
   const origin = points[0];
   const fibreHeading = paperFibreHeading(origin);
@@ -4139,6 +4185,7 @@ function scratchGrainAlongStroke(
         fibreHeading,
         minWidth,
         1.55,
+        alphaScale,
       );
     }
   }
@@ -4740,10 +4787,15 @@ function drawRibbonStrokeFrom(
       const radius = paintedWidth(prepared.styles[0].lineWidth, pixelScale) / 2;
       const origin = points[0];
       if (fills?.[0]) scratchCtx.fillStyle = fills[0];
-      const headGrow = prepared.styles[0].blotGrow ?? 0;
       const heading =
         firstStrokeOutward(prepared.points, radius) ??
         hashedHeading(origin, CAP_SALT_HEAD);
+      /*
+       * Pooling already flared styles[0] to the contact-disc radius, so this
+       * round cap *is* the pool the ribbon grows out of. A second disc at
+       * `lineWidth * grow` was a different radius: a tiny circle next to a
+       * heading-aligned square, or both stacked, depending on the hold.
+       */
       paintOpCap(
         scratchCtx,
         op,
@@ -4754,43 +4806,8 @@ function drawRibbonStrokeFrom(
         CAP_SALT_HEAD,
         origin.pressure,
         1,
-        // Same blend the contact disc uses, so the two agree where they meet.
         headCapRoundness(op, points, origin, origin.pressure),
       );
-      /*
-       * A hold at the start leaves a blot, and the stroke should look like it
-       * ran out of that blot rather than starting cleanly. The terminal cap
-       * alone is a nib mark -- heading aligned, and below
-       * at a low roundness frankly chisel shaped -- so a pool the writer
-       * just watched settle was replaced by the mark of a stroke that never
-       * paused.
-       *
-       * The blot grows *out of* the cap rather than replacing it past a
-       * threshold. Choosing between the two marks meant a hold of middling
-       * length sat on the boundary and the head flickered between them --
-       * the same fault as the tip stamp, a discrete choice between two
-       * different-looking marks re-made every frame. A radius that scales
-       * with the growth has no boundary to sit on: at no growth it
-       * contributes nothing and the cap is exactly what it always was, and
-       * the blot emerges continuously from there.
-       *
-       * The silhouette is opaque and blitted once, so this unions with the
-       * cap and the ribbon rather than compositing over them: no seam, and
-       * no darkened overlap where they meet.
-       */
-      if (headGrow > 1e-3) {
-        paintInkDisc(
-          scratchCtx,
-          prepared.points[0],
-          prepared.styles[0].lineWidth * headGrow,
-          1,
-          pixelScale,
-          0,
-          color,
-          false,
-          1,
-        );
-      }
     }
     if (capEnd && tipClusterAt >= slice.length) {
       // Same round cap as speed ink, at the already-flared half-width. Do not
@@ -4948,17 +4965,15 @@ function paintedWidth(lineWidth: number, pixelScale: number): number {
 /**
  * Roundness for the mark at a stroke's head.
  *
- * A stroke short enough to be disc-primary is drawn by `paintContactDisc` as a
- * round contact; once it grows past that test the ribbon draws a terminal cap
- * at the nib's own hashed roundness, which reaches only `radius x roundness`
- * past the head. Switching between them contracted the mark by about a quarter
- * of a nib in one frame -- the flash -- and it showed on some strokes and not
- * others because a nib whose hashed roundness is already near 1 was drawing a
- * circle either way.
+ * Disc-primary strokes are a circle. The ribbon cap used to blend toward the
+ * nib's hashed shape over the first two nibs of bbox extent so the branches
+ * met. A first hop longer than that — `appendSpine` plants the whole movement
+ * at once — snaps `t` to 1 in one frame. Origins that already hash round look
+ * like a morph; origins that hash square replace the pool with a rect.
  *
- * Blending from round to the nib's own shape over the first couple of nib
- * widths means both branches agree wherever they meet, and the nib's character
- * arrives as the stroke becomes long enough to have a direction at all.
+ * Ink pooling is a circle. Keep the head round whenever the blot dial is on
+ * so the ribbon grows out of the pool as a stadium. Without pooling, still
+ * blend toward the hashed nib over the first couple of nib widths.
  */
 function headCapRoundness(
   op: InkDrawOp,
@@ -4969,6 +4984,7 @@ function headCapRoundness(
   const nib = nibWidth(op);
   const hashed = inkCapRoundness(origin, CAP_SALT_HEAD, pressure, op.pressureSensitive);
   if (points.length < 2 || nib < 1e-6) return 1;
+  if (resolveSpeedBlotBlend(op) > 1e-3) return 1;
   const t = clamp01(strokeClusterExtentApprox(points) / (nib * 2));
   return 1 + (hashed - 1) * t;
 }
@@ -5252,6 +5268,7 @@ function drawStrokeFrom(
         CAP_SALT_HEAD,
         origin.pressure,
         run.alpha,
+        headCapRoundness(op, points, origin, origin.pressure),
       );
     }
 
