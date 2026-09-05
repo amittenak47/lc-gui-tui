@@ -1553,7 +1553,16 @@ describe("paintInkDisc tip vs join", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
     expect(drawCtx.radialGradients).toBe(0);
-    expect(drawCtx.strokeCount).toBeGreaterThan(0);
+    expect(drawCtx.strokeCount).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
+    const styles = inkStrokePointStyles(op, 0);
+    const sides = ribbonSides(op.points, styles, 1);
+    const half0 = Math.hypot(sides.lx[0]! - sides.rx[0]!, sides.ly[0]! - sides.ry[0]!) / 2;
+    const halfN = Math.hypot(
+      sides.lx[sides.n - 1]! - sides.rx[sides.n - 1]!,
+      sides.ly[sides.n - 1]! - sides.ry[sides.n - 1]!,
+    ) / 2;
+    expect(half0).toBeGreaterThan(halfN * 1.3);
   });
 
   it("paints hairline speed ink with stroke() like the normal pen", () => {
@@ -1641,11 +1650,11 @@ describe("paintInkDisc tip vs join", () => {
       1,
       { capHead: false, capEnd: false },
     );
-    expect(drawCtx.strokeCount).toBeGreaterThan(0);
     expect(drawCtx.strokeComposites.every((c) => c !== "destination-out")).toBe(true);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
   });
 
-  it("paints wide speed ink with stroke() like the size-1 pen", () => {
+  it("paints wide speed ink as a ribbon, not bevel runs", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(
       drawCtx.ctx,
@@ -1664,7 +1673,31 @@ describe("paintInkDisc tip vs join", () => {
       1,
       { capHead: false, capEnd: false },
     );
-    expect(drawCtx.strokeCount).toBeGreaterThan(0);
+    expect(drawCtx.strokeCount).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
+  });
+
+  it("stamps a round join at a right-angle instead of leaving a bevel gap", () => {
+    const drawCtx = inkDrawContext();
+    applyInkOp(
+      drawCtx.ctx,
+      {
+        kind: "draw",
+        color: "#112233",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 1,
+        speedBlotBlend: 0,
+        speedFade: 0,
+        points: points([0, 0], [40, 0], [40, 40]),
+      },
+      1,
+      { capHead: false, capEnd: false },
+    );
+    expect(drawCtx.strokeCount).toBe(0);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI * 2) < 1e-6)).toBe(true);
   });
 
   it("keeps a wide drying stroke on the ribbon", () => {
@@ -2228,7 +2261,7 @@ describe("stroke start cap", () => {
         maxFullness: 1,
         pressureClip: 1,
         pressureSensitive: false,
-        speedInk: 1,
+        speedInk: 0,
         speedBlotBlend: 0,
         boldness: 1,
         points: points([origin.x, origin.y], [origin.x + 40, origin.y]),
