@@ -1747,7 +1747,7 @@ function fillInkRibbonQuads(
   // then show the stroke-start color against the local gradient: a hard cut
   // on the tile grid. Solid ribbons still get the silhouette so shared quad
   // edges do not leave parchment hairlines.
-  if (!fills) {
+  if (!fills && from <= 0 && to >= n - 1) {
     ctx.beginPath();
     ctx.moveTo(lx[0]!, ly[0]!);
     for (let index = 1; index < n; index++) {
@@ -2028,17 +2028,17 @@ const RIBBON_SCRATCH_MAX_PX = 8192;
 let ribbonScratchKey: readonly unknown[] | null = null;
 
 /** Vertices kept live behind the pen; everything before them is baked. */
-const LIVE_SETTLE_TAIL = 192;
+const LIVE_SETTLE_TAIL = 48;
 /** Spine samples always remeshed at the nib, even if slowness/pool did not move. */
 const LIVE_TIP_REBUILD = 24;
 /**
  * Prepared-ribbon length at which the pixel prefix may engage.
  *
- * Was `LIVE_SETTLE_TAIL * 2` (384). A long letter never reached that in the
- * first second; 256 still leaves a 192-vertex live tail (≫ the ~3.4 nib
- * slowness reverse-pass bound).
+ * Was `LIVE_SETTLE_TAIL * 2` with a 192-vertex tail (384). A long letter
+ * never reached that in the first second. 96 with a 48-vertex tail still
+ * leaves room past the ~3.4 nib slowness reverse-pass bound.
  */
-const LIVE_SETTLE_BAIL = 256;
+const LIVE_SETTLE_BAIL = 96;
 /** Room the settled frame keeps around the stroke so growth rarely re-frames it. */
 const LIVE_SETTLE_FRAME_PAD = 0.5;
 
@@ -2116,6 +2116,8 @@ export const liveRibbonStats = { suffixHits: 0, suffixMisses: 0, suffixRewinds: 
 let liveSuffixEnabled = true;
 /** Coarser densify on the live path; commit/export stay at 0.75. */
 let liveCoarseDensify = true;
+/** Live tail is a solid silhouette; wash/grain wait until those quads bake. */
+let liveTailSilhouette = true;
 
 export function setLiveRibbonSuffix(enabled: boolean): void {
   liveSuffixEnabled = enabled;
@@ -2123,6 +2125,10 @@ export function setLiveRibbonSuffix(enabled: boolean): void {
 
 export function setLiveRibbonCoarseDensify(enabled: boolean): void {
   liveCoarseDensify = enabled;
+}
+
+export function setLiveRibbonTailSilhouette(enabled: boolean): void {
+  liveTailSilhouette = enabled;
 }
 
 function liveRibbonMinStep(pixelScale: number): number | undefined {
@@ -2388,7 +2394,15 @@ function composeSettledRibbon(
   sctx.drawImage(s.canvas as CanvasImageSource, 0, 0);
   sctx.fillStyle = fillStyle;
   sctx.setTransform(sx, 0, 0, sy, -originX * sx, -originY * sy);
-  fillInkRibbonQuads(sctx, sides, fills, s.count, n - 1);
+  // Wash is already in the bake. The live tail is a solid fill so this frame
+  // does not createLinearGradient per remaining quad.
+  fillInkRibbonQuads(
+    sctx,
+    sides,
+    liveTailSilhouette ? undefined : fills,
+    s.count,
+    n - 1,
+  );
   if (stampJoins) stampJoins(sctx);
   return true;
 }
@@ -4482,13 +4496,15 @@ function drawRibbonStrokeFrom(
     const scratchCtx = scratch as CanvasRenderingContext2D;
     scratchCtx.fillStyle = color ?? String(ctx.fillStyle);
     scratchCtx.globalAlpha = 1;
-    scratchGrainAlongStroke(
-      scratchCtx,
-      op,
-      prepared.points,
-      prepared.styles,
-      pixelScale,
-    );
+    if (!(inkOpBatch === null && fromIndex === 0 && liveTailSilhouette)) {
+      scratchGrainAlongStroke(
+        scratchCtx,
+        op,
+        prepared.points,
+        prepared.styles,
+        pixelScale,
+      );
+    }
     if (capHead && fromIndex === 0 && tipClusterAt >= slice.length) {
       const radius = paintedWidth(prepared.styles[0].lineWidth, pixelScale) / 2;
       const origin = points[0];
