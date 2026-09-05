@@ -2376,6 +2376,31 @@ describe("grain and blot pooling (Phase 2)", () => {
     expect(offAxis.length).toBeGreaterThan(0);
   });
 
+  it("etches grain along width-only speed ink on the ribbon, not only the start cap", () => {
+    const textured = inkDrawContext();
+    applyInkOp(
+      textured.ctx,
+      {
+        kind: "draw",
+        color: "#808080",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 1,
+        speedBlotBlend: 0,
+        speedFade: 0,
+        grain: 0.8,
+        points: points([0, 0], [40, 0], [80, 0], [120, 0]),
+      },
+      1,
+      { capHead: false, capEnd: false },
+    );
+    expect(textured.strokeCount).toBe(0);
+    expect(textured.fillCount).toBeGreaterThan(0);
+    expect(textured.strokeComposites.every((c) => c !== "destination-out")).toBe(true);
+  });
+
   it("does not overshoot the nib when blot is 0", () => {
     const tip = 6;
     expect(inkDiscRadii(tip, 0, 0).outerR).toBeCloseTo(tip);

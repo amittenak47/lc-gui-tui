@@ -2371,7 +2371,7 @@ function composeSettledRibbon(
   sctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   scratch: RibbonScratch,
   sides: RibbonSideSoA,
-  fills: readonly string[],
+  fills: readonly string[] | undefined,
   stampJoins: ((c: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D) => void) | undefined,
   fillStyle: string | CanvasGradient | CanvasPattern,
   sx: number,
@@ -2382,9 +2382,19 @@ function composeSettledRibbon(
   height: number,
   pad: number,
   source: readonly unknown[],
+  grainSpan?: (
+    c: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    from: number,
+    to: number,
+  ) => void,
+  onPrefix?: (count: number) => void,
 ): boolean {
   const n = sides.n;
-  if (fills.length !== n || n <= LIVE_SETTLE_BAIL) {
+  if (n <= LIVE_SETTLE_BAIL) {
+    settledRibbonStats.bails++;
+    return false;
+  }
+  if (fills && fills.length !== n) {
     settledRibbonStats.bails++;
     return false;
   }
@@ -2418,7 +2428,7 @@ function composeSettledRibbon(
         sides.ly[i] !== s.ly[i] ||
         sides.rx[i] !== s.rx[i] ||
         sides.ry[i] !== s.ry[i] ||
-        fills[i] !== s.fills[i]
+        (fills ? fills[i] !== s.fills[i] : false)
       ) {
         verticesOk = false;
         settledRibbonStats.firstBad = i;
@@ -2462,6 +2472,7 @@ function composeSettledRibbon(
     c.fillStyle = fillStyle;
     c.setTransform(sx, 0, 0, sy, -ox * sx, -oy * sy);
     fillInkRibbonQuads(c, sides, fills, from, to);
+    grainSpan?.(c, from, to);
     c.setTransform(1, 0, 0, 1, 0, 0);
     return true;
   };
@@ -2489,13 +2500,13 @@ function composeSettledRibbon(
       lx: new Float64Array(0), ly: new Float64Array(0), rx: new Float64Array(0),
       ry: new Float64Array(0), fills: [],
     };
-    snapshotSettled(s, sides, fills);
+    snapshotSettled(s, sides, fills ?? []);
     settledRibbon = s;
     settledRibbonStats.rebuilds++;
   } else if (target > s.count) {
     if (!paintInto(s.canvas, s.originX, s.originY, s.count, target, false)) return false;
     s.count = target;
-    snapshotSettled(s, sides, fills);
+    snapshotSettled(s, sides, fills ?? []);
     settledRibbonStats.extends++;
   } else {
     settledRibbonStats.hits++;
@@ -2517,6 +2528,7 @@ function composeSettledRibbon(
     s.count,
     n - 1,
   );
+  onPrefix?.(s.count);
   if (stampJoins) stampJoins(sctx);
   return true;
 }
@@ -2533,6 +2545,12 @@ function paintOpaqueRibbonThenAlpha(
   pixelScale = 0,
   contentKey?: readonly unknown[],
   settle?: { source: readonly unknown[] },
+  grainSpan?: (
+    c: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    from: number,
+    to: number,
+  ) => void,
+  onPrefix?: (count: number) => void,
 ): boolean {
   if (typeof ctx.drawImage !== "function") return false;
   const { minX, minY, maxX, maxY } = ribbonSideBounds(sides);
@@ -2586,9 +2604,9 @@ function paintOpaqueRibbonThenAlpha(
     ribbonScratchKey.every((v, i) => Object.is(v, scratchKey[i]));
 
   const settled =
-    !reusable && settle && fills
+    !reusable && settle
       ? composeSettledRibbon(sctx, scratch, sides, fills, stampJoins, ctx.fillStyle,
-          sx, sy, originX, originY, width, height, pad, settle.source)
+          sx, sy, originX, originY, width, height, pad, settle.source, grainSpan, onPrefix)
       : false;
   if (settled) ribbonScratchKey = null;
   if (!reusable && !settled) {
@@ -2632,6 +2650,15 @@ function paintOpaqueRibbonThenAlpha(
     });
   }
   return true;
+}
+
+function spineLengthAt(points: readonly ScenePoint[], index: number): number {
+  const end = Math.max(0, Math.min(index, points.length - 1));
+  let len = 0;
+  for (let i = 1; i <= end; i++) {
+    len += Math.hypot(points[i]!.x - points[i - 1]!.x, points[i]!.y - points[i - 1]!.y);
+  }
+  return len;
 }
 
 function strokePathLength(points: readonly ScenePoint[], fromIndex = 0): number {
@@ -4035,12 +4062,15 @@ function scratchGrainAlongStroke(
   points: readonly ScenePoint[],
   styles: readonly InkStrokeStyle[],
   pixelScale: number,
+  fromDist = 0,
+  toDist = Infinity,
 ): void {
   const grain = resolveGrain(op);
   if (grain < 1e-3 || points.length === 0) return;
   const pathLen = strokePathLength(points);
   const nib = nibWidth(op);
   if (pathLen < 1e-6) {
+    if (fromDist > 0) return;
     const r = paintedWidth(styles[0]?.lineWidth ?? nib, pixelScale) / 2;
     scratchGrainInDisc(ctx, points[0], r, grain);
     return;
@@ -4068,11 +4098,26 @@ function scratchGrainAlongStroke(
   ctx.strokeStyle = "#000";
   ctx.lineCap = "butt";
   const minWidth = Math.max(0.7, pixelScale > 0 ? 0.9 / pixelScale : 0.7);
+  const startDist = Math.max(0, fromDist);
+  const endDist = Math.min(pathLen, toDist);
+  if (endDist <= startDist) {
+    ctx.globalCompositeOperation = prevComp;
+    ctx.globalAlpha = prevAlpha;
+    ctx.strokeStyle = prevStroke;
+    ctx.lineWidth = prevWidth;
+    ctx.lineCap = prevCap;
+    return;
+  }
   const grainAt = { seg: 1, walked: 0 };
-  for (let i = 0; i < n; i++) {
+  if (startDist > 0) {
+    sampleStrokeAt(points, styles, startDist, pixelScale, nib, grainAt);
+  }
+  const i0 = Math.floor(startDist / spacing);
+  const i1 = Math.min(n, Math.ceil(endDist / spacing) + 1);
+  for (let i = i0; i < i1; i++) {
     const jitter = hash01(origin.x, origin.y, GRAIN_SALT + i);
     const dist = (i + jitter * 0.35) * spacing;
-    if (dist > pathLen) continue;
+    if (dist < startDist || dist > endDist) continue;
     const at = sampleStrokeAt(points, styles, dist, pixelScale, nib, grainAt);
     if (!at || at.r < 1e-6) continue;
     for (let j = 0; j < fibresAt; j++) {
@@ -4648,8 +4693,27 @@ function drawRibbonStrokeFrom(
         )
       : undefined;
 
+  let grainFromDist = 0;
+  const grainSpan = (
+    c: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    from: number,
+    to: number,
+  ) => {
+    if (resolveGrain(op) < 1e-3) return;
+    scratchGrainAlongStroke(
+      c as CanvasRenderingContext2D,
+      op,
+      prepared.points,
+      prepared.styles,
+      pixelScale,
+      spineLengthAt(prepared.points, from),
+      spineLengthAt(prepared.points, to),
+    );
+  };
+
   const stampHardExtras = (
     scratch: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+    etchGrain = true,
   ) => {
     const scratchCtx = scratch as CanvasRenderingContext2D;
     scratchCtx.fillStyle = color ?? String(ctx.fillStyle);
@@ -4662,13 +4726,14 @@ function drawRibbonStrokeFrom(
       color,
       fills,
     );
-    if (!(inkOpBatch === null && fromIndex === 0 && liveTailSilhouette)) {
+    if (etchGrain && resolveGrain(op) > 1e-3) {
       scratchGrainAlongStroke(
         scratchCtx,
         op,
         prepared.points,
         prepared.styles,
         pixelScale,
+        grainFromDist,
       );
     }
     if (capHead && fromIndex === 0 && tipClusterAt >= slice.length) {
@@ -4780,13 +4845,17 @@ function drawRibbonStrokeFrom(
      tipClusterAt, slice, points, color, maxAlpha, pad],
     // Live paint only: inside a batch the ribbon is reused whole, and a
     // partial draw would never be asked for.
-    inkOpBatch === null && fromIndex === 0 && fills ? { source: points } : undefined,
+    inkOpBatch === null && fromIndex === 0 ? { source: points } : undefined,
+    grainSpan,
+    (count) => {
+      grainFromDist = spineLengthAt(prepared.points, count);
+    },
   ),
   );
 
   if (!stamped) {
     fillInkRibbonSides(ctx, sides, maxAlpha, fills, pixelScale);
-    stampHardExtras(ctx);
+    stampHardExtras(ctx, false);
   }
 
   ctx.globalAlpha = 1;
