@@ -187,6 +187,30 @@ describe("LiveStroke ingest", () => {
     stroke.abandon();
   });
 
+  it("a turning hop plants spine samples off the chord", () => {
+    const stroke = beginPen({ speedInk: 1 });
+    stroke.ingest([sample(80, 10, 1020, 0.5)]);
+    stroke.tick(1020);
+    stroke.ingest([sample(80, 80, 1040, 0.5)]);
+    stroke.tick(1040);
+    const live = stroke.live;
+    expect(live?.kind).toBe("draw");
+    if (live?.kind !== "draw") return;
+    expect(live.points.length).toBeGreaterThan(3);
+    const onLastHop = live.points.filter((p) => p.y > 12 && p.y < 78);
+    expect(onLastHop.length).toBeGreaterThan(0);
+    let off = 0;
+    for (const p of onLastHop) off = Math.max(off, Math.abs(p.x - 80));
+    expect(off).toBeGreaterThan(0.2);
+    expect(live.points[live.points.length - 1]?.x).toBeCloseTo(80, 5);
+    expect(live.points[live.points.length - 1]?.y).toBeCloseTo(80, 5);
+    const liveLen = live.points.length;
+    const committed = stroke.commit();
+    if (committed.kind !== "draw") return;
+    expect(committed.points.length).toBeGreaterThanOrEqual(liveLen);
+    expect(committed.points[committed.points.length - 1]?.y).toBeCloseTo(80, 5);
+  });
+
   it("abandon stops dwell and drops the live op", () => {
     const onNeedPaint = vi.fn();
     const stroke = beginPen({ speedInk: 1, onNeedPaint });
