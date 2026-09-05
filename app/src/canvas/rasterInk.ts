@@ -1438,6 +1438,19 @@ function ribbonRunWithin(
 }
 /** Insert midpoints when a chord exceeds ~0.28× average half-width. */
 const RIBBON_DENSIFY_HALF_FRAC = 0.28;
+/** Commit/export floor. Thin speed-ink strokes hit this and densify hardest. */
+const RIBBON_DENSIFY_MIN_SCENE = 0.75;
+/**
+ * Live floor in CSS pixels. Fast thin strokes would otherwise densify every
+ * 0.75 scene units — the most quads per millimetre, at the highest speed.
+ * Commit still uses {@link RIBBON_DENSIFY_MIN_SCENE}.
+ */
+const LIVE_DENSIFY_SCREEN_PX = 2;
+
+export function liveDensifyMinStep(pixelScale: number): number {
+  const scene = LIVE_DENSIFY_SCREEN_PX / Math.max(pixelScale, 1e-6);
+  return Math.max(RIBBON_DENSIFY_MIN_SCENE, scene);
+}
 /** Trailing tip cluster within this × nib stays a disc, not a ribbon knot. */
 const TIP_CLUSTER_NIB_FRAC = 0.35;
 
@@ -1612,8 +1625,10 @@ export function densifyRibbonPoints(
   styles: readonly InkStrokeStyle[],
   pixelScale: number,
   src?: readonly number[],
+  minStep = RIBBON_DENSIFY_MIN_SCENE,
 ): { points: ScenePoint[]; styles: InkStrokeStyle[]; src: number[] } {
   const srcAt = (i: number) => src?.[i] ?? i;
+  const floor = Math.max(minStep, RIBBON_DENSIFY_MIN_SCENE);
   if (points.length < 2 || points.length !== styles.length) {
     const outSrc: number[] = [];
     for (let i = 0; i < points.length; i++) outSrc.push(srcAt(i));
@@ -1631,7 +1646,7 @@ export function densifyRibbonPoints(
     const bSrc = srcAt(index);
     const halfA = paintedWidth(aStyle.lineWidth, pixelScale) / 2;
     const halfB = paintedWidth(bStyle.lineWidth, pixelScale) / 2;
-    const maxStep = Math.max(0.75, ((halfA + halfB) / 2) * RIBBON_DENSIFY_HALF_FRAC);
+    const maxStep = Math.max(floor, ((halfA + halfB) / 2) * RIBBON_DENSIFY_HALF_FRAC);
     const dist = Math.hypot(b.x - a.x, b.y - a.y);
     const count = dist > maxStep ? Math.ceil(dist / maxStep) : 1;
     if (count > 1) {
@@ -2099,9 +2114,19 @@ export const liveRibbonStats = { suffixHits: 0, suffixMisses: 0, suffixRewinds: 
  * turn this off; production live writing leaves it on.
  */
 let liveSuffixEnabled = true;
+/** Coarser densify on the live path; commit/export stay at 0.75. */
+let liveCoarseDensify = true;
 
 export function setLiveRibbonSuffix(enabled: boolean): void {
   liveSuffixEnabled = enabled;
+}
+
+export function setLiveRibbonCoarseDensify(enabled: boolean): void {
+  liveCoarseDensify = enabled;
+}
+
+function liveRibbonMinStep(pixelScale: number): number | undefined {
+  return liveCoarseDensify ? liveDensifyMinStep(pixelScale) : undefined;
 }
 
 function snapshotSettled(
@@ -4055,6 +4080,7 @@ function tessellateRibbonPrepared(
   start: number,
   pixelScale: number,
   pinHead?: RibbonPinHead,
+  minStep?: number,
 ): PreparedRibbon | null {
   const points = op.points;
   const blotBlend = resolveSpeedBlotBlend(op);
@@ -4112,7 +4138,7 @@ function tessellateRibbonPrepared(
     }),
   );
   const densified = ribbonStage("densify", () =>
-    densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale, coalesced.src),
+    densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale, coalesced.src, minStep),
   );
   if (densified.points.length < 2) return null;
 
@@ -4127,7 +4153,7 @@ function tessellateRibbonPrepared(
     pooledStyles[0] = pinHead.style;
   }
   const prepared = ribbonStage("densify", () =>
-    densifyRibbonPoints(densified.points, pooledStyles, pixelScale, densified.src),
+    densifyRibbonPoints(densified.points, pooledStyles, pixelScale, densified.src, minStep),
   );
   if (prepared.points.length < 2) return null;
   if (pinHead) {
@@ -4204,6 +4230,7 @@ function tessellateLiveSuffix(
   pixelScale: number,
   dirtyFrom: number,
   cache: NonNullable<typeof liveRibbonDirty>,
+  minStep?: number,
 ): PreparedRibbon | null {
   if (cache.pixelScale !== pixelScale || cache.prepared.points.length < 2) return null;
   if (dirtyFrom <= 0) return null;
@@ -4223,7 +4250,7 @@ function tessellateLiveSuffix(
       point: pinPoint,
       style: pinStyle,
       src: cache.spineSrc[join]!,
-    });
+    }, minStep);
     if (!slicePacked || slicePacked.shortTip || slicePacked.prepared.points.length < 2) {
       start -= LIVE_SUFFIX_OVERLAP;
       continue;
@@ -4293,13 +4320,14 @@ function liveRibbonPrepared(
   let suffixHit = false;
   const n = op.points.length;
   const prefixStillSettled = dirty.dirtyFrom >= Math.max(LIVE_SUFFIX_MIN_START, n - LIVE_SETTLE_TAIL);
+  const minStep = liveRibbonMinStep(pixelScale);
   if (liveSuffixEnabled && cache && prefixStillSettled && dirty.dirtyFrom > 0) {
-    packed = tessellateLiveSuffix(op, pixelScale, dirty.dirtyFrom, cache);
+    packed = tessellateLiveSuffix(op, pixelScale, dirty.dirtyFrom, cache, minStep);
     suffixHit = packed !== null;
     if (!packed) liveRibbonStats.suffixMisses++;
   }
   if (!packed) {
-    packed = tessellateRibbonPrepared(op, 0, pixelScale);
+    packed = tessellateRibbonPrepared(op, 0, pixelScale, undefined, minStep);
   }
 
   liveRibbonDirty = packed

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterEach } from "vitest";
 import { createCanvas } from "@napi-rs/canvas";
-import { applyInkOp, beginInkOpBatch, endInkOpBatch, liveRibbonStats, releaseLiveRibbonBuffers, setLiveRibbonSuffix, settledRibbonStats, type ScenePoint } from "./rasterInk";
+import { applyInkOp, beginInkOpBatch, endInkOpBatch, liveRibbonStats, releaseLiveRibbonBuffers, setLiveRibbonCoarseDensify, setLiveRibbonSuffix, settledRibbonStats, type ScenePoint } from "./rasterInk";
 
 beforeAll(() => {
   // The ribbon scratch asks for an OffscreenCanvas; hand it a real one.
@@ -24,6 +24,7 @@ function pixels(op: Parameters<typeof applyInkOp>[1], whole: boolean) {
 describe("settled prefix", () => {
   afterEach(() => {
     setLiveRibbonSuffix(true);
+    setLiveRibbonCoarseDensify(true);
     releaseLiveRibbonBuffers();
   });
 
@@ -38,6 +39,7 @@ describe("settled prefix", () => {
    */
   it("renders a growing signature byte-identical to a whole draw, and actually engages", () => {
     setLiveRibbonSuffix(false);
+    setLiveRibbonCoarseDensify(false);
     const path: ScenePoint[] = [];
     for (let i = 0; i < 520; i++) {
       const t = i / 60;
@@ -73,6 +75,7 @@ describe("settled prefix", () => {
 
   it("rebuilds the baked prefix when a blotHalt lands in it", () => {
     setLiveRibbonSuffix(false);
+    setLiveRibbonCoarseDensify(false);
     const path: ScenePoint[] = [];
     for (let i = 0; i < 360; i++) {
       path.push({
@@ -117,6 +120,7 @@ describe("settled prefix", () => {
 
   it("copies the baked prefix when the stroke grows up, without restyling it", () => {
     setLiveRibbonSuffix(false);
+    setLiveRibbonCoarseDensify(false);
     releaseLiveRibbonBuffers();
     const live: ScenePoint[] = [];
     const op = {
