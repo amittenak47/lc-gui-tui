@@ -4,8 +4,9 @@
  * RasterInkLayer owns capture, the overlay, the stroke-start snapshot, and rAF.
  * This session owns ingest, attack/dwell/stamp, reshape, and live overlay paint.
  * Ingest writes a preallocated ring; tick drains it. Dense hops stay off the
- * spine and ride a transient tip. A turning hop seeds a centripetal curve;
- * a straight hop stays one sample. Densify still fills leftover chords.
+ * spine and ride a transient tip. A turning hop seeds a centripetal curve
+ * (even a short or mild one); a collinear hop stays one sample. Densify still
+ * fills leftover chords.
  */
 
 import { overdrawnViewport } from "./panOffset";
@@ -35,7 +36,6 @@ import {
   smoothSpeed,
   stampInkBlotHalt,
   highlightLiftKeepsTip,
-  liveDensifyMinStep,
   liveRibbonDirtySpine,
   prepareLiveRibbon,
   curveAlongHop,
@@ -55,6 +55,8 @@ import {
 import { straightenFromAnchor } from "./straightAnchor";
 
 const RING_START = 1024;
+/** Tip-cluster floor — extra coincident hold samples do not make a rounder disc. */
+const HOLD_DISC_SAMPLES = 4;
 
 /**
  * Running disc-vs-ribbon decision for the live trail.
@@ -346,6 +348,8 @@ export class LiveStroke {
   /** Spine samples added by the last {@link appendSpine} hop (always includes `to`). */
   private lastHopSpine = 1;
   private prevOverlayDirty: PixelRect | null = null;
+  /** Head halt is stamped once, when the path leaves the contact disc. */
+  private headPoolCommitted = false;
 
   constructor(init: BeginLiveStroke) {
     this.view = init.view;
@@ -360,6 +364,7 @@ export class LiveStroke {
     this.lastEventTimeMs = init.first.timeStamp;
     this.lastSampleTime = init.first.timeStamp;
     this.lastMoveWall = performance.now();
+    releaseLiveRibbonBuffers();
 
     const point = scenePointFromPointer(
       init.first.clientX,
@@ -438,16 +443,17 @@ export class LiveStroke {
     this.bindHost(init.host);
 
     if (init.tool === "pen" && (speed > 0 || fade > 0 || blotBlend > 0)) {
-      this.dwellTimer = setInterval(() => {
-        if (this.closed) return;
-        this.tick(performance.now());
-        this.onNeedPaint();
-      }, 32);
+      this.startDwell();
     }
   }
 
   get live(): InkOp | null {
     return this.closed ? null : this.op;
+  }
+
+  /** Pointer samples waiting on the ring, before {@link tick} drains them. */
+  queuedSamples(): number {
+    return this.ringN;
   }
 
   get fallback(): boolean {
@@ -469,14 +475,18 @@ export class LiveStroke {
     this.ingested += batch.length;
   }
 
-  tick(nowMs: number): void {
-    if (this.closed) return;
+  tick(nowMs: number): boolean {
+    if (this.closed) return false;
+    let dirty = false;
     const n = this.ringN;
     if (n > 0) {
       this.drainRing(n);
       this.ringN = 0;
+      dirty = true;
     }
-    this.tickDwell(nowMs);
+    const dwell = this.tickDwell(nowMs);
+    if (dwell.dirty) dirty = true;
+    if (dwell.settled) this.stopDwell();
     if (DEBUG_INK || inkMetrics.enabled) {
       inkMetrics.live({
         ringSamples: this.ingested,
@@ -485,6 +495,7 @@ export class LiveStroke {
         dirtyFrom: 0,
       });
     }
+    return dirty;
   }
 
   paint(
@@ -604,8 +615,12 @@ export class LiveStroke {
     // many samples; n-2 would be the last 2px, not the hop. Prefix remesh
     // (dirtyFrom 0) keeps the full AABB.
     const hop = Math.max(2, this.lastHopSpine + 1);
-    const from =
-      liveDirty && liveDirty.dirtyFrom > 0 ? Math.max(0, n - hop) : 0;
+    const rawFrom = !liveDirty
+      ? 0
+      : liveDirty.suffixHit
+        ? Math.max(0, n - hop)
+        : liveDirty.dirtyFrom;
+    const from = Math.max(0, Math.min(rawFrom, n));
     const aabb = strokeAabb(this.op, from);
     const z = view.zoom * dpr;
     const pad = 2;
@@ -720,6 +735,7 @@ export class LiveStroke {
     this.spine.replace([origin]);
     this.bindSpine();
     this.disc.reset(origin);
+    this.headPoolCommitted = false;
     this.lastPoint = this.spine.view[0] ?? origin;
     if (this.reshapeActive()) this.liveRaw = [origin];
   }
@@ -734,8 +750,7 @@ export class LiveStroke {
     const n = this.spine.n;
     const start = n >= 1 ? this.spine.view[n - 1]! : from;
     const prev = n >= 2 ? this.spine.view[n - 2]! : null;
-    const spacing = Math.max(step, liveDensifyMinStep(this.view.zoom || 1));
-    const seeds = curveAlongHop(prev, start, to, spacing);
+    const seeds = curveAlongHop(prev, start, to, step);
     this.lastHopSpine = seeds.length;
     for (const seed of seeds) {
       this.spine.push(seed);
@@ -933,28 +948,30 @@ export class LiveStroke {
     this.lastPoint = this.op.points[this.op.points.length - 1] ?? raw;
   }
 
-  private tickDwell(nowMs: number): void {
-    if (this.attackBuffer) return;
+  private tickDwell(nowMs: number): { dirty: boolean; settled: boolean } {
+    const idle = { dirty: false, settled: false };
+    if (this.attackBuffer) return idle;
     const live = this.op;
-    if (live.kind !== "draw") return;
+    if (live.kind !== "draw") return { dirty: false, settled: true };
+    const blotBlend = live.speedBlotBlend ?? 0;
     const paceOn =
-      (live.speedInk ?? 0) > 0 ||
-      (live.speedBlotBlend ?? 0) > 0 ||
-      (live.speedFade ?? 0) > 0;
-    if (!paceOn) return;
-    if (live.points.length === 0) return;
-    if (nowMs - this.lastMoveWall < 60) return;
-    if (nowMs - this.lastDwellTickWall < 32 && this.lastDwellTickWall > 0) return;
+      (live.speedInk ?? 0) > 0 || blotBlend > 0 || (live.speedFade ?? 0) > 0;
+    if (!paceOn) return { dirty: false, settled: true };
+    if (live.points.length === 0) return idle;
+    if (nowMs - this.lastMoveWall < 60) return idle;
+    if (nowMs - this.lastDwellTickWall < 32 && this.lastDwellTickWall > 0) {
+      return idle;
+    }
     this.lastDwellTickWall = nowMs;
-    if (this.dwellCount >= blotTicksToFull(live.speedBlotBlend ?? 0)) return;
+    const full = blotTicksToFull(blotBlend);
+    if (this.dwellCount >= full) return { dirty: false, settled: true };
     this.dwellCount += 1;
-    live.blotTipGrow = Math.max(
-      live.blotTipGrow ?? 0,
-      blotGrowTFromTicks(this.dwellCount, live.speedBlotBlend ?? 0),
-    );
+    const prevGrow = live.blotTipGrow ?? 0;
+    const nextGrow = Math.max(prevGrow, blotGrowTFromTicks(this.dwellCount, blotBlend));
+    live.blotTipGrow = nextGrow;
     this.smoothedSpeed = smoothSpeed(this.smoothedSpeed, 0);
     const last = this.lastPoint;
-    if (!last) return;
+    if (!last) return { dirty: nextGrow - prevGrow > 1e-4, settled: this.dwellCount >= full };
     const slowness = inkSlowness(this.smoothedSpeed);
     const dwellPoint: ScenePoint = {
       ...last,
@@ -965,7 +982,9 @@ export class LiveStroke {
     }
     const dwellNib = Math.max(inkLineWidth(live.baseWidth, 0, false), 1e-6);
     const lastIdx = this.spine.n - 1;
+    let piled = false;
     if (this.disc.wouldStayDisc(dwellPoint, dwellNib)) {
+      const prevSlow = this.spine.view[0]?.slowness ?? last.slowness ?? slowness;
       const hold =
         last.slowness === undefined ? slowness : Math.max(last.slowness, slowness);
       last.slowness = hold;
@@ -978,7 +997,7 @@ export class LiveStroke {
       }
       if (lastIdx > 0) this.spine.setSlowness(lastIdx, hold);
       const contact = this.spine.view[0];
-      if ((live.speedBlotBlend ?? 0) > 1e-3 && contact) {
+      if (blotBlend > 1e-3 && contact && this.spine.n < HOLD_DISC_SAMPLES) {
         this.spine.push({
           x: contact.x,
           y: contact.y,
@@ -986,16 +1005,33 @@ export class LiveStroke {
           slowness: hold,
         });
         this.bindSpine();
+        piled = true;
       }
       this.lastPoint = contact ?? last;
-      return;
+      const dirty =
+        piled || nextGrow - prevGrow > 1e-4 || Math.abs(hold - prevSlow) > 1e-4;
+      const settled = this.dwellCount >= full || (nextGrow >= 1 - 1e-3 && !dirty);
+      return { dirty, settled };
     }
+    const prevSlow = last.slowness ?? slowness;
     last.slowness = slowness;
     if (lastIdx >= 0) this.spine.setSlowness(lastIdx, slowness);
     if (lastIdx >= 0 && hasStylusPressure(dwellPoint.pressure)) {
       this.spine.setPressure(lastIdx, dwellPoint.pressure);
     }
     this.lastPoint = dwellPoint;
+    const dirty =
+      nextGrow - prevGrow > 1e-4 || Math.abs(slowness - prevSlow) > 1e-4;
+    const settled = this.dwellCount >= full || (nextGrow >= 1 - 1e-3 && !dirty);
+    return { dirty, settled };
+  }
+
+  private startDwell(): void {
+    if (this.dwellTimer !== null || this.closed) return;
+    this.dwellTimer = setInterval(() => {
+      if (this.closed) return;
+      if (this.tick(performance.now())) this.onNeedPaint();
+    }, 32);
   }
 
   private noteInkTravel(dx: number, dy: number, zoom: number, live: InkOp): boolean {
@@ -1008,6 +1044,7 @@ export class LiveStroke {
         const origin = live.points[0];
         const nib = inkLineWidth(live.baseWidth, 0, false);
         const nearHead =
+          !this.headPoolCommitted &&
           !!at &&
           !!origin &&
           Math.hypot(at.x - origin.x, at.y - origin.y) < Math.max(0.75, nib * 0.5);
@@ -1019,6 +1056,7 @@ export class LiveStroke {
     }
     this.lastMoveWall = performance.now();
     this.dwellCount = 0;
+    this.startDwell();
     return true;
   }
 
@@ -1034,6 +1072,8 @@ export class LiveStroke {
    */
   private commitHeadPool(live: InkOp): void {
     if (live.kind !== "draw") return;
+    if (this.headPoolCommitted) return;
+    this.headPoolCommitted = true;
     const grow = liveInkBlotGrow(live);
     const origin = live.points[0];
     if (grow > 1e-3 && origin) stampInkBlotHalt(live, origin, grow);

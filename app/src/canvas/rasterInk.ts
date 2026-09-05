@@ -908,11 +908,16 @@ export function stampAlongSegment(
   return out;
 }
 
-/** ~cos(5°): flatter than this stays a chord. */
-const HOP_STRAIGHT_DOT = 0.996;
+/** ~cos(1.8°): large fast loops stay chords at 5°. */
+const HOP_STRAIGHT_DOT = 0.9995;
 /** Cap so a stalled frame cannot dump a dense spline into one hop. */
 const HOP_CURVE_MAX = 32;
 const HOP_CURVE_ALPHA = 0.5;
+/**
+ * CR sample spacing. Live ribbon densify is coarser (~2px); using that here
+ * left short turning hops as a single `to`.
+ */
+const HOP_CURVE_STEP = 0.75;
 
 function hopChordStraight(
   prev: ScenePoint,
@@ -987,9 +992,10 @@ export function curveAlongHop(
   const dist = Math.hypot(to.x - from.x, to.y - from.y);
   if (dist < 1e-6) return [to];
   if (!prev || hopChordStraight(prev, from, to)) return [to];
-  const step = Math.max(spacing, 1e-6);
-  const count = Math.min(HOP_CURVE_MAX, Math.max(1, Math.ceil(dist / step)));
-  if (count <= 1) return [to];
+  // Stamp/live densify spacing is often 2px+; that skipped short turns. Cap
+  // the CR step at HOP_CURVE_STEP so a turning hop still gets midpoints.
+  const step = Math.max(1e-6, Math.min(spacing, HOP_CURVE_STEP));
+  const count = Math.min(HOP_CURVE_MAX, Math.max(2, Math.ceil(dist / step)));
   const p3: ScenePoint = {
     x: to.x + (to.x - from.x),
     y: to.y + (to.y - from.y),
@@ -1154,30 +1160,37 @@ const slownessCache = new WeakMap<readonly ScenePoint[], Float32Array>();
 /** Last raw slowness on `points`; length-only cache misses in-place tip edits. */
 const slownessTailRaw = new WeakMap<readonly ScenePoint[], number>();
 
+let liveGeomFence = 0;
+
 function slopedSlowness(op: InkDrawOp): Float32Array {
   const points = op.points;
+  const n = points.length;
   const cached = slownessCache.get(points);
   const lastRaw =
-    points.length > 0
-      ? (points[points.length - 1]!.slowness ?? INK_SLOWNESS_NEUTRAL)
+    n > 0
+      ? (points[n - 1]!.slowness ?? INK_SLOWNESS_NEUTRAL)
       : INK_SLOWNESS_NEUTRAL;
   if (
     cached &&
-    cached.length === points.length &&
+    cached.length === n &&
     slownessTailRaw.get(points) === lastRaw
   ) {
     return cached;
   }
 
-  const raw = new Float32Array(points.length);
-  for (let i = 0; i < points.length; i++) {
+  const raw = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
     raw[i] = points[i].slowness ?? INK_SLOWNESS_NEUTRAL;
   }
 
   // Cumulative travel in nib widths — the same measure the reservoir uses, so
   // the window and the slope cap below are both in units the nib understands.
   const at = consumedFor(op);
-  const out = new Float32Array(points.length);
+  const out = new Float32Array(n);
+  const fence = Math.max(0, Math.min(liveGeomFence, n));
+  if (cached && fence > 0 && cached.length >= fence) {
+    out.set(cached.subarray(0, fence));
+  }
 
   /*
    * Box filter over a window of *travel*, walked with two indices rather than
@@ -1185,15 +1198,26 @@ function slopedSlowness(op: InkDrawOp): Float32Array {
    * The window is clamped at the ends rather than shortened: one that narrowed
    * toward the tip would leave the last stamps noisier than the rest, which is
    * exactly where a terminal bead shows.
+   *
+   * Behind {@link liveGeomFence} the prefix is frozen; the reverse slope used
+   * to walk back to 0 and force a full remesh every frame.
    */
   let lo = 0;
   let hi = 0;
   let sum = 0;
-  for (let i = 0; i < points.length; i++) {
-    const from = at[i] - SLOWNESS_WINDOW_NIBS;
-    const to = at[i] + SLOWNESS_WINDOW_NIBS;
-    while (hi < points.length && at[hi] <= to) sum += raw[hi++];
-    while (lo < hi - 1 && at[lo] < from) sum -= raw[lo++];
+  const fromI = fence > 0 && cached && cached.length >= fence ? fence : 0;
+  if (fromI > 0) {
+    const from = at[fromI]! - SLOWNESS_WINDOW_NIBS;
+    const to = at[fromI]! + SLOWNESS_WINDOW_NIBS;
+    while (hi < n && at[hi]! <= to) sum += raw[hi++];
+    while (lo < hi - 1 && at[lo]! < from) sum -= raw[lo++];
+    out[fromI] = sum / (hi - lo);
+  }
+  for (let i = fromI > 0 ? fromI + 1 : 0; i < n; i++) {
+    const from = at[i]! - SLOWNESS_WINDOW_NIBS;
+    const to = at[i]! + SLOWNESS_WINDOW_NIBS;
+    while (hi < n && at[hi]! <= to) sum += raw[hi++];
+    while (lo < hi - 1 && at[lo]! < from) sum -= raw[lo++];
     out[i] = sum / (hi - lo);
   }
 
@@ -1205,8 +1229,8 @@ function slopedSlowness(op: InkDrawOp): Float32Array {
    * reverse pass makes it symmetric. Walked in place so a live frame does not
    * allocate two index arrays the length of the stroke.
    */
-  const n = points.length;
-  for (let i = 1; i < n; i++) {
+  const slopeFrom = Math.max(1, fromI);
+  for (let i = slopeFrom; i < n; i++) {
     const prev = i - 1;
     const span = Math.abs(at[i]! - at[prev]!);
     const room = SLOWNESS_MAX_SLOPE * span;
@@ -1214,7 +1238,7 @@ function slopedSlowness(op: InkDrawOp): Float32Array {
     if (delta > room) out[i] = out[prev]! + room;
     else if (delta < -room) out[i] = out[prev]! - room;
   }
-  for (let i = n - 2; i >= 0; i--) {
+  for (let i = n - 2; i >= fromI; i--) {
     const prev = i + 1;
     const span = Math.abs(at[i]! - at[prev]!);
     const room = SLOWNESS_MAX_SLOPE * span;
@@ -1225,7 +1249,7 @@ function slopedSlowness(op: InkDrawOp): Float32Array {
 
   // A pooled head is a standstill disc. The reverse slope would drag vertex 0
   // toward the first moving sample and shrink that disc in one frame.
-  if (n > 0) {
+  if (n > 0 && fromI === 0) {
     const origin = points[0];
     const pooled =
       (op.blotTipGrow ?? 0) > 1e-3 ||
@@ -1248,10 +1272,11 @@ export function slownessDirtyFrom(
   prev: Float32Array | null,
   next: Float32Array,
 ): number {
-  if (!prev || prev.length === 0) return 0;
-  if (next.length < prev.length) return 0;
+  if (!prev || prev.length === 0) return Math.min(liveGeomFence, next.length);
+  if (next.length < prev.length) return Math.min(liveGeomFence, next.length);
   const n = prev.length;
-  for (let i = 0; i < n; i++) {
+  const begin = Math.min(liveGeomFence, n);
+  for (let i = begin; i < n; i++) {
     if (prev[i] !== next[i]) return i;
   }
   return n;
@@ -1294,6 +1319,7 @@ export function strokePointAt(points: ScenePoint[], pos: number): ScenePoint {
 export function inkStrokePointStyles(
   op: InkDrawOp,
   fromIndex = 0,
+  until?: number,
 ): InkStrokeStyle[] {
   const points = op.points;
   if (points.length === 0) return [];
@@ -1309,8 +1335,12 @@ export function inkStrokePointStyles(
     speedInk > 0 || blotBlend > 1e-3 || fadeAmt > 1e-3 ? slopedSlowness(op) : null;
 
   const start = Math.max(0, Math.min(fromIndex, points.length - 1));
+  const stop =
+    until == null
+      ? points.length
+      : Math.max(start, Math.min(until, points.length));
   const styles: InkStrokeStyle[] = [];
-  for (let index = start; index < points.length; index++) {
+  for (let index = start; index < stop; index++) {
     styles.push(
       inkStrokeStyle(
         op.baseWidth,
@@ -2061,6 +2091,7 @@ export function releaseLiveRibbonBuffers(): void {
   ribbonScratchKey = null;
   settledRibbon = null;
   liveRibbonDirty = null;
+  liveGeomFence = 0;
 }
 
 /** Test helper: backing size of the shared ribbon scratch, or null. */
@@ -2230,7 +2261,28 @@ export const settledRibbonStats = {
 };
 
 /** Test-only counters for live suffix tessellation. */
-export const liveRibbonStats = { suffixHits: 0, suffixMisses: 0, suffixRewinds: 0 };
+export const liveRibbonStats = {
+  suffixHits: 0,
+  suffixMisses: 0,
+  suffixRewinds: 0,
+};
+
+
+/**
+ * Slowness and pooling must not rewrite samples older than this many behind
+ * the nib. Suffix tessellation then stays on the tail instead of remeshing
+ * 0 to N. The prefix stays in last frame's mesh; it is not a separate bitmap.
+ */
+export const LIVE_GEOM_WINDOW = 480;
+
+function pinLiveGeomFence(n: number): number {
+  liveGeomFence = Math.max(0, n - LIVE_GEOM_WINDOW);
+  return liveGeomFence;
+}
+
+export function liveRibbonFence(): number {
+  return liveGeomFence;
+}
 
 /**
  * Suffix tessellation freezes last frame's prefix mesh, so it is not
@@ -3739,6 +3791,7 @@ export function applyInkPoolingAtEnds(
   op: InkDrawOp,
   points: readonly ScenePoint[],
   fromIndex: number,
+  ends?: { head?: boolean; tip?: boolean },
 ): InkStrokeStyle[] {
   if (op.highlight) return styles;
   const blotBlend = resolveSpeedBlotBlend(op);
@@ -3813,16 +3866,20 @@ export function applyInkPoolingAtEnds(
   const lastIdx = out.length - 1;
   const tip = points[lastIdx];
   const tipR = out[lastIdx].lineWidth / 2;
-  const tipStart = trailingTipClusterStart(strokePts, nib);
-  const tipPts =
-    tipStart < strokePts.length ? strokePts.slice(tipStart) : [strokePts[strokePts.length - 1]];
-  markGrow(tip, resolveBlotTipGrow(op, tipPts, tipR));
-  // Ends stay a richer deposit than the trail even without a hold. Width does not
-  // grow from this floor — only blotTipGrow / halts fatten the ribbon.
+  const poolTip = ends?.tip !== false;
+  const poolHead = ends?.head !== false;
   const endFloor = blotBlend * INK_BLOT_END_FLOOR;
-  paintAlong(tip, endFloor, richAt, nib * 0.45, nib * 1.35);
+  if (poolTip) {
+    const tipStart = trailingTipClusterStart(strokePts, nib);
+    const tipPts =
+      tipStart < strokePts.length ? strokePts.slice(tipStart) : [strokePts[strokePts.length - 1]];
+    markGrow(tip, resolveBlotTipGrow(op, tipPts, tipR));
+    // Ends stay a richer deposit than the trail even without a hold. Width does not
+    // grow from this floor — only blotTipGrow / halts fatten the ribbon.
+    paintAlong(tip, endFloor, richAt, nib * 0.45, nib * 1.35);
+  }
 
-  if (fromIndex === 0 && points.length >= 2) {
+  if (poolHead && fromIndex === 0 && points.length >= 2) {
     const headR = out[0].lineWidth / 2;
     const cluster = prefixContactCluster(strokePts, headR);
     const headCluster = cluster.length > 0 ? cluster : [strokePts[0]];
@@ -4025,7 +4082,10 @@ export function ribbonGeomDirtyFrom(
   // samples that actually changed — forcing n-192 here made every looping
   // stroke remesh a page of spine and miss the suffix join.
   const tipRebuild = Math.max(0, n - LIVE_TIP_REBUILD);
-  const dirtyFrom = Math.min(slowDirty, pool.dirtyFrom, tipRebuild);
+  const dirtyFrom = Math.max(
+    liveGeomFence,
+    Math.min(slowDirty, pool.dirtyFrom, tipRebuild),
+  );
   return { dirtyFrom, next };
 }
 
@@ -4345,12 +4405,15 @@ function tessellateRibbonPrepared(
   pixelScale: number,
   pinHead?: RibbonPinHead,
   minStep?: number,
+  until?: number,
 ): PreparedRibbon | null {
   const points = op.points;
   const blotBlend = resolveSpeedBlotBlend(op);
-  const slice = batched("slice", [points, start], () => points.slice(start));
+  const end =
+    until == null ? points.length : Math.max(start, Math.min(until, points.length));
+  const slice = batched("slice", [points, start, end], () => points.slice(start, end));
   const styles = ribbonStage("styles", () =>
-    batched("styles", [op, start], () => inkStrokePointStyles(op, start)),
+    batched("styles", [op, start, end], () => inkStrokePointStyles(op, start, end)),
   );
   if (slice.length < 2 || styles.length < 2) return null;
 
@@ -4360,8 +4423,11 @@ function tessellateRibbonPrepared(
   let ribbonSrc: number[] = pinHead
     ? [pinHead.src, ...slice.map((_, i) => start + i)]
     : slice.map((_, i) => start + i);
+  const atStrokeTip = end >= points.length;
   const tipClusterAt =
-    blotBlend > 1e-3 ? slice.length : trailingTipClusterStart(slice, nib);
+    !atStrokeTip || blotBlend > 1e-3
+      ? slice.length
+      : trailingTipClusterStart(slice, nib);
   if (tipClusterAt < slice.length) {
     const tipPts = slice.slice(tipClusterAt);
     const tipStyles = styles.slice(tipClusterAt);
@@ -4410,7 +4476,10 @@ function tessellateRibbonPrepared(
   const pooledStyles = skipPool
     ? densified.styles
     : ribbonStage("pool", () =>
-        applyInkPoolingAtEnds(densified.styles, op, densified.points, start),
+        applyInkPoolingAtEnds(densified.styles, op, densified.points, start, {
+          head: start === 0 && !pinHead,
+          tip: atStrokeTip,
+        }),
       );
   if (pinHead) {
     densified.points[0] = pinHead.point;
@@ -4459,6 +4528,7 @@ export function liveRibbonDirtySpine(): { dirtyFrom: number; suffixHit: boolean 
 
 /** Run live tessellation before overlay dirty so the rect matches this frame. */
 export function prepareLiveRibbon(op: InkDrawOp, pixelScale: number): void {
+  pinLiveGeomFence(op.points.length);
   liveRibbonPrepared(op, pixelScale);
 }
 
@@ -4545,10 +4615,12 @@ function liveRibbonPrepared(
   op: InkDrawOp,
   pixelScale: number,
 ): PreparedRibbon | null {
-  const last = op.points[op.points.length - 1];
+  const n = op.points.length;
+  const last = op.points[n - 1];
   const tailSlow = last?.slowness ?? INK_SLOWNESS_NEUTRAL;
   const tipGrow = op.blotTipGrow ?? 0;
   const haltCount = op.blotHalts?.length ?? 0;
+  pinLiveGeomFence(n);
   if (
     liveRibbonDirty &&
     liveRibbonDirty.packed &&
@@ -4582,9 +4654,10 @@ function liveRibbonPrepared(
 
   let packed: PreparedRibbon | null = null;
   let suffixHit = false;
-  const n = op.points.length;
-  const prefixStillSettled = dirty.dirtyFrom >= Math.max(LIVE_SUFFIX_MIN_START, n - LIVE_SETTLE_TAIL);
   const minStep = liveRibbonMinStep(pixelScale);
+  const prefixStillSettled =
+    dirty.dirtyFrom >= LIVE_SUFFIX_MIN_START &&
+    dirty.dirtyFrom >= Math.max(0, n - LIVE_GEOM_WINDOW);
   if (liveSuffixEnabled && cache && prefixStillSettled && dirty.dirtyFrom > 0) {
     packed = tessellateLiveSuffix(op, pixelScale, dirty.dirtyFrom, cache, minStep);
     suffixHit = packed !== null;
@@ -4601,7 +4674,6 @@ function liveRibbonPrepared(
         prepared: packed.prepared,
         spineSrc: packed.spineSrc,
         pixelScale,
-        // A miss remeshes 0–N; overlay must restore the whole stroke, not the tip.
         dirtyFrom: suffixHit ? dirty.dirtyFrom : 0,
         suffixHit,
         packed,
@@ -4783,7 +4855,7 @@ function drawRibbonStrokeFrom(
         grainFromDist,
       );
     }
-    if (capHead && fromIndex === 0 && tipClusterAt >= slice.length) {
+    if (capHead && fromIndex === 0 && packed.start === 0 && tipClusterAt >= slice.length) {
       const radius = paintedWidth(prepared.styles[0].lineWidth, pixelScale) / 2;
       const origin = points[0];
       if (fills?.[0]) scratchCtx.fillStyle = fills[0];

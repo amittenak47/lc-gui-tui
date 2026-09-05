@@ -916,12 +916,12 @@ export function paintLiveOp(
           pixelScale,
           capOptions,
         );
-      } else {
-        applyInkOp(ctx, op, pixelScale, capOptions);
+        } else {
+          applyInkOp(ctx, op, pixelScale, capOptions);
+        }
+        return;
       }
-      return;
-    }
-    applyInkOp(ctx, op, pixelScale, capOptions);
+      applyInkOp(ctx, op, pixelScale, capOptions);
   };
   if (clip) {
     ctx.save();

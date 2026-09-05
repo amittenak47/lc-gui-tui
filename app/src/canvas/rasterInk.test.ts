@@ -519,6 +519,46 @@ describe("curveAlongHop", () => {
     expect(off).toBeGreaterThan(0.2);
   });
 
+  it("plants an off-chord midpoint on a short turning hop", () => {
+    const prev = pt(0, 0);
+    const from = pt(2, 0);
+    const to = pt(3, 1.2);
+    const seeds = curveAlongHop(prev, from, to, 2);
+    expect(seeds.length).toBeGreaterThan(1);
+    expect(seeds[seeds.length - 1]).toBe(to);
+    const chordLen = Math.hypot(to.x - from.x, to.y - from.y);
+    let off = 0;
+    for (const s of seeds.slice(0, -1)) {
+      const t =
+        ((s.x - from.x) * (to.x - from.x) + (s.y - from.y) * (to.y - from.y)) /
+        (chordLen * chordLen);
+      const cx = from.x + (to.x - from.x) * t;
+      const cy = from.y + (to.y - from.y) * t;
+      off = Math.max(off, Math.hypot(s.x - cx, s.y - cy));
+    }
+    expect(off).toBeGreaterThan(0.05);
+  });
+
+  it("curves a mild heading change instead of keeping the chord", () => {
+    const prev = pt(0, 0);
+    const from = pt(12, 0);
+    const to = pt(24, 0.7);
+    const seeds = curveAlongHop(prev, from, to, 2);
+    expect(seeds.length).toBeGreaterThan(1);
+    const chordLen = Math.hypot(to.x - from.x, to.y - from.y);
+    let off = 0;
+    for (const s of seeds.slice(0, -1)) {
+      const t =
+        ((s.x - from.x) * (to.x - from.x) + (s.y - from.y) * (to.y - from.y)) /
+        (chordLen * chordLen);
+      const cx = from.x + (to.x - from.x) * t;
+      const cy = from.y + (to.y - from.y) * t;
+      off = Math.max(off, Math.hypot(s.x - cx, s.y - cy));
+    }
+    expect(off).toBeGreaterThan(0.04);
+    expect(seeds[seeds.length - 1]).toBe(to);
+  });
+
   it("keeps a collinear hop as a single to", () => {
     const seeds = curveAlongHop(pt(0, 0), pt(10, 0), pt(40, 0), 2);
     expect(seeds).toEqual([pt(40, 0)]);

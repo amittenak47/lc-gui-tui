@@ -3112,6 +3112,95 @@ body[data-lc-sash-drag="horizontal"] {
   cursor: none;
 }
 
+/*
+ * Live-stroke load, pinned to the ink canvas so a split tab does not share one
+ * bar across both panes. 5px track; the fill is compositor-only (scaleX).
+ */
+.lc-ink-load-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  z-index: 16;
+  pointer-events: none;
+  overflow: visible;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.lc-ink-load-bar.is-open {
+  opacity: 1;
+}
+
+.lc-ink-load-bar-track {
+  height: 5px;
+  background: color-mix(in srgb, var(--text, #111) 14%, transparent);
+}
+
+.lc-ink-load-bar-fill {
+  height: 5px;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  will-change: transform;
+  background: hsl(120 78% 42%);
+}
+
+.lc-ink-load-bar.is-lift .lc-ink-load-bar-fill {
+  animation: lc-ink-load-pulse 0.65s ease-in-out infinite;
+}
+
+.lc-ink-load-bar-hint {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  left: auto;
+  transform: none;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 58%);
+  color: #fff;
+  font-family: var(--lc-sans);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.lc-ink-load-bar-debug {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  margin: 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 62%);
+  color: #fff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  white-space: pre;
+  pointer-events: none;
+}
+
+@keyframes lc-ink-load-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.28;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-ink-load-bar.is-lift .lc-ink-load-bar-fill {
+    animation: none;
+  }
+}
+
 .lc-stroke-controls {
   display: flex;
   flex-direction: row;
