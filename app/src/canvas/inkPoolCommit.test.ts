@@ -85,4 +85,14 @@ describe("terminals know whether they are pooled", () => {
     const g = pooled[0].blotGrow ?? 0;
     expect(pooled[0].lineWidth / raw[0].lineWidth).toBeCloseTo(1 + 0.55 * 0.9 * g, 6);
   });
+
+  it("a halt at the origin still grows a one-point contact disc", () => {
+    const op = {
+      ...base,
+      blotTipGrow: 0,
+      points: [P(0, 0)],
+      blotHalts: [{ x: 0, y: 0, grow: 0.7, pressure: 0.6 }],
+    };
+    expect(liveInkBlotGrow(op)).toBeCloseTo(0.7);
+  });
 });
