@@ -18,6 +18,7 @@ import {
 import {
   HIGHLIGHT_WIDTH_SCALE,
   inkLineWidth,
+  liveRibbonDirtySpine,
   trimHighlightLiftHook,
   type InkOp,
   type SceneBounds,
@@ -62,6 +63,8 @@ import {
 import { WHEEL_OPEN_MS } from "../util/gesture";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { inkMetrics } from "./inkMetrics";
+import { createInkLoadMeter } from "./inkLoadMeter";
+import { InkLoadBar, type InkLoadBarHandle } from "./InkLoadBar";
 import { beginLiveStroke, type LivePointerSample, type LiveStroke } from "./liveStroke";
 import { INK_GRAIN_DEFAULT, INK_SPEED_BLOT_BLEND_DEFAULT, INK_SPEED_FADE_DEFAULT } from "../util/inkSpeedPref";
 import { INK_BOLDNESS_DEFAULT } from "../util/inkBoldnessPref";
@@ -222,6 +225,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const liveStrokeRef = useRef<LiveStroke | null>(null);
     /** Last live paint flush, for rAF-period metrics. */
     const lastLivePaintAtRef = useRef(0);
+    const loadMeterRef = useRef(createInkLoadMeter());
+    const loadBarRef = useRef<InkLoadBarHandle>(null);
     /** Last live point count painted — bookkeeping for callers, not a paint-from index. */
     const liveDrawnIndexRef = useRef(0);
     const drawingRef = useRef(false);
@@ -890,7 +895,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       lastLivePaintAtRef.current = now;
       const timed = inkMetrics.enabled;
       if (timed && prevAt > 0) inkMetrics.rafPeriod(now - prevAt);
-      const tick0 = timed ? performance.now() : 0;
+      const queued = stroke.queuedSamples();
+      const tick0 = performance.now();
       stroke.tick(now);
       if (timed) inkMetrics.addStage("tick", performance.now() - tick0);
 
@@ -923,6 +929,16 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         repaintLiveRef.current();
       }
       if (timed) inkMetrics.painted(stroke.lastEventTimeMs);
+      const dirty = result === "ok" ? liveRibbonDirtySpine() : null;
+      const load = loadMeterRef.current.frame({
+        frameMs: performance.now() - tick0,
+        rafMs: prevAt > 0 ? now - prevAt : 0,
+        spineN: live?.points.length ?? 0,
+        dirtyFrom: dirty?.dirtyFrom ?? 0,
+        suffixHit: dirty?.suffixHit ?? false,
+        queued,
+      });
+      loadBarRef.current?.show(load);
     }, []);
 
     /** After appending stamps: reshape+paint, at most once per animation frame. */
@@ -1009,10 +1025,18 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                 pts = [...pts];
               } else if (straight && pts.length >= 2) {
                 pts = [pts[0]!, pts[pts.length - 1]!];
-              } else if (strength > 0 && !isLive && !live.pressureSensitive) {
+              } else if (
+                strength > 0 &&
+                !isLive &&
+                !live.pressureSensitive
+              ) {
                 const nib = inkLineWidth(live.baseWidth, 0, false);
                 pts = smoothInkPoints(pts, strength, nib);
-              } else if (strength > 0 && !isLive && live.pressureSensitive) {
+              } else if (
+                strength > 0 &&
+                !isLive &&
+                live.pressureSensitive
+              ) {
                 const nib = inkLineWidth(live.baseWidth, 0, false);
                 pts = simplifyModulatedInkPoints(
                   smoothInkPoints(pts, strength, nib, 0),
@@ -1043,8 +1067,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       liveRef.current = null;
       liveDrawnIndexRef.current = 0;
 
-      // Only the tiles the stroke landed on are dropped, so committing on a
-      // full page costs the same as committing on an empty one.
       ensureTiles().appendOp(stamped);
       strokeHostRef.current = null;
       repaint();
@@ -1427,6 +1449,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         }
         forceInkRef.current = false;
 
+        if (liveRef.current && !drawingRef.current) {
+          commitLiveRef.current();
+        }
+
         if (drawingRef.current) {
           /*
            * A second pointer while the pen is still down.
@@ -1460,10 +1486,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           activePointerRef.current = null;
           const orphan = liveStrokeRef.current;
           if (orphan) liveRef.current = orphan.commit();
-          strokeViewRef.current = null;
-          strokeBoxRef.current = null;
-          strokeRectRef.current = null;
-          detachWindowFallback();
           commitLiveRef.current();
         }
         try {
@@ -1604,6 +1626,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         drawingRef.current = true;
         activePointerRef.current = event.pointerId;
         strokeRecaptured = false;
+        loadMeterRef.current.begin();
         const liveAfterBegin = liveRef.current;
         if (
           liveAfterBegin &&
@@ -1764,9 +1787,6 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         drawingRef.current = false;
         activePointerRef.current = null;
         strokeRecaptured = false;
-        strokeViewRef.current = null;
-        strokeBoxRef.current = null;
-        strokeRectRef.current = null;
         committedSnapRef.current = null;
         detachWindowFallback();
         try {
@@ -1776,6 +1796,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         }
         commitLiveRef.current();
         if (inkMetrics.enabled) inkMetrics.end();
+        loadMeterRef.current.end();
+        loadBarRef.current?.freeze();
       };
 
       /*
@@ -1832,6 +1854,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         strokeRectRef.current = null;
         committedSnapRef.current = null;
         detachWindowFallback();
+        loadMeterRef.current.end();
+        loadBarRef.current?.freeze();
       };
 
       canvas.addEventListener("pointerdown", begin, true);
@@ -1913,6 +1937,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           style={{ pointerEvents: tool ? "auto" : "none" }}
           aria-hidden
         />
+        <InkLoadBar ref={loadBarRef} />
       </div>
     );
   },

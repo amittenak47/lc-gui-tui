@@ -111,6 +111,15 @@ describe("DiscExtentTracker", () => {
 });
 
 describe("LiveStroke ingest", () => {
+  it("reports queued ring samples until tick drains them", () => {
+    const stroke = beginPen();
+    expect(stroke.queuedSamples()).toBe(0);
+    stroke.ingest([sample(20, 10, 1100), sample(40, 10, 1110)]);
+    expect(stroke.queuedSamples()).toBe(2);
+    stroke.tick(1120);
+    expect(stroke.queuedSamples()).toBe(0);
+  });
+
   it("does not grow the spine with dense samples; the tip still tracks", () => {
     const stroke = beginPen();
     const hops = 80;
@@ -213,6 +222,38 @@ describe("LiveStroke ingest", () => {
     expect(committed.points[committed.points.length - 1]?.y).toBeCloseTo(80, 5);
   });
 
+  it("dense samples along a curve plant the arc, not a chord to the tip", () => {
+    const stroke = beginPen();
+    stroke.ingest([sample(50, 10, 2000)]);
+    stroke.tick(2000);
+    const cx = 50;
+    const cy = 70;
+    const r = 60;
+    for (let i = 1; i <= 90; i++) {
+      const a = -Math.PI / 2 + (i / 90) * (Math.PI / 2);
+      stroke.ingest([sample(cx + r * Math.cos(a), cy + r * Math.sin(a), 2000 + i * 8)]);
+      stroke.tick(2000 + i * 8);
+    }
+    const live = stroke.live;
+    expect(live?.kind).toBe("draw");
+    if (live?.kind !== "draw") return;
+    const pts = live.points.filter((p) => p.x > 45);
+    expect(pts.length).toBeGreaterThan(6);
+    const start = pts[0]!;
+    const end = pts[pts.length - 1]!;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const len = Math.hypot(dx, dy);
+    expect(len).toBeGreaterThan(50);
+    let maxDev = 0;
+    for (const p of pts) {
+      maxDev = Math.max(maxDev, Math.abs((p.x - start.x) * dy - (p.y - start.y) * dx) / len);
+    }
+    expect(maxDev).toBeGreaterThan(10);
+    expect(end.y).toBeCloseTo(70, 0);
+    stroke.abandon();
+  });
+
   it("abandon stops dwell and drops the live op", () => {
     const onNeedPaint = vi.fn();
     const stroke = beginPen({ speedInk: 1, onNeedPaint });
@@ -278,6 +319,29 @@ describe("LiveStroke ingest", () => {
     stroke.abandon();
   });
 
+  it("does not grow the start halt after the stroke has left the contact disc", () => {
+    const stroke = beginPen({ speedBlotBlend: 0.9 });
+    const t0 = performance.now();
+    for (let i = 0; i < 50; i++) stroke.tick(t0 + 80 + i * 32);
+    stroke.ingest([sample(90, 10, 4100)]);
+    stroke.tick(t0 + 80 + 50 * 32 + 32);
+    const left = stroke.live;
+    expect(left?.kind).toBe("draw");
+    if (left?.kind !== "draw") return;
+    const haltGrow = left.blotHalts?.[0]?.grow ?? 0;
+    expect(haltGrow).toBeGreaterThan(0.15);
+
+    for (let i = 1; i <= 40; i++) {
+      stroke.ingest([sample(90 + i * 4, 10 + Math.sin(i) * 8, 4200 + i * 80)]);
+      stroke.tick(t0 + 2000 + i * 80);
+    }
+    const moved = stroke.live;
+    expect(moved?.kind).toBe("draw");
+    if (moved?.kind !== "draw") return;
+    expect(moved.blotHalts?.[0]?.grow ?? 0).toBeCloseTo(haltGrow, 5);
+    stroke.abandon();
+  });
+
   it("does not thin the origin with speed ink while the contact disc still holds", () => {
     const stroke = beginPen({ speedInk: 1, speedBlotBlend: 0.9 });
     const t0 = performance.now();
@@ -295,6 +359,21 @@ describe("LiveStroke ingest", () => {
     expect(still?.kind).toBe("draw");
     if (still?.kind !== "draw") return;
     expect(still.points[0]?.slowness ?? 0).toBeGreaterThanOrEqual(heldSlow - 1e-6);
+    stroke.abandon();
+  });
+
+  it("does not pile coincident spine samples or keep ticking a settled hold", () => {
+    const stroke = beginPen({ speedBlotBlend: 0.9 });
+    const t0 = performance.now();
+    let dirty = true;
+    for (let i = 0; i < 200; i++) dirty = stroke.tick(t0 + 80 + i * 32);
+    const live = stroke.live;
+    expect(live?.kind).toBe("draw");
+    if (live?.kind !== "draw") return;
+    expect(live.points.length).toBeLessThan(8);
+    expect(live.blotTipGrow ?? 0).toBeGreaterThan(0.5);
+    expect(dirty).toBe(false);
+    expect(stroke.tick(t0 + 80 + 201 * 32)).toBe(false);
     stroke.abandon();
   });
 });
