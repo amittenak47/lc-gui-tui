@@ -56,6 +56,7 @@ import {
   blotRichnessT,
   coalesceRibbonPoints,
   densifyRibbonPoints,
+  liveDensifyMinStep,
   fillInkRibbon,
   inkDiscRadii,
   discSealPad,
@@ -1872,6 +1873,18 @@ describe("speed-ink ribbon coalesce / densify / tip split", () => {
     expect(out.points.length).toBeGreaterThan(2);
     expect(out.points[0].x).toBeCloseTo(0);
     expect(out.points[out.points.length - 1].x).toBeCloseTo(40);
+  });
+
+  it("live densify uses a coarser floor than commit on a long thin chord", () => {
+    const pts = points([0, 0], [80, 0]);
+    const thin = () => inkStrokeStyle(2, 1, NO_PRESSURE, 1, false, 0, INK_SLOWNESS_NEUTRAL, 1);
+    const styles = pts.map(() => thin());
+    const commit = densifyRibbonPoints(pts, styles, 1);
+    const live = densifyRibbonPoints(pts, styles, 1, undefined, liveDensifyMinStep(1));
+    expect(live.points.length).toBeLessThan(commit.points.length);
+    expect(live.points.length).toBeGreaterThan(2);
+    expect(liveDensifyMinStep(1)).toBeGreaterThan(0.75);
+    expect(liveDensifyMinStep(4)).toBe(0.75);
   });
 
   it("leaves wash jumps to the paint-time vertex gradient", () => {
