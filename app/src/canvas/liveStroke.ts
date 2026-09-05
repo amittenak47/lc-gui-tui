@@ -595,8 +595,11 @@ export class LiveStroke {
 
   private overlayLocalPx(view: ViewportTransform, dpr: number): PixelRect {
     const liveDirty = this.op.kind === "draw" ? liveRibbonDirtySpine() : null;
+    const n = this.op.kind === "draw" ? this.op.points.length : 0;
+    // Suffix-hit: only the last hop. 24 looping spine points still span a page
+    // at speed. Prefix remesh (dirtyFrom 0) keeps the full AABB.
     const from =
-      liveDirty && liveDirty.dirtyFrom > 0 ? liveDirty.dirtyFrom : 0;
+      liveDirty && liveDirty.dirtyFrom > 0 ? Math.max(0, n - 2) : 0;
     const aabb = strokeAabb(this.op, from);
     const z = view.zoom * dpr;
     const pad = 2;
