@@ -4,7 +4,8 @@
  * RasterInkLayer owns capture, the overlay, the stroke-start snapshot, and rAF.
  * This session owns ingest, attack/dwell/stamp, reshape, and live overlay paint.
  * Ingest writes a preallocated ring; tick drains it. Dense hops stay off the
- * spine and ride a transient tip so tessellation does not grow with digitizer Hz.
+ * spine and ride a transient tip. A long hop is one spine sample — densify
+ * fills the chord — so tessellation does not grow with distance / nib-step.
  */
 
 import { overdrawnViewport } from "./panOffset";
@@ -32,7 +33,6 @@ import {
   scenePointFromPointer,
   smoothPressure,
   smoothSpeed,
-  stampAlongSegment,
   stampInkBlotHalt,
   highlightLiftKeepsTip,
   liveRibbonDirtySpine,
@@ -722,28 +722,15 @@ export class LiveStroke {
       return;
     }
     this.dropTransientTip();
-    const stamps = stampAlongSegment(from, to, step);
-    for (const s of stamps) {
-      this.spine.push(s);
-      this.disc.commit(s);
-    }
+    this.spine.push(to);
+    this.disc.commit(to);
     this.bindSpine();
     this.lastPoint = this.spine.view[this.spine.n - 1] ?? from;
   }
 
-  private appendRaw(to: ScenePoint, step: number): void {
+  private appendRaw(to: ScenePoint): void {
     const rawBuf = this.liveRaw ?? (this.liveRaw = []);
-    const prev = rawBuf[rawBuf.length - 1];
-    if (!prev) {
-      rawBuf.push(to);
-      return;
-    }
-    const dist = Math.hypot(to.x - prev.x, to.y - prev.y);
-    if (dist < step) {
-      rawBuf.push(to);
-      return;
-    }
-    rawBuf.push(...stampAlongSegment(prev, to, step));
+    rawBuf.push(to);
   }
 
   private drainRing(n: number): void {
@@ -855,7 +842,7 @@ export class LiveStroke {
 
     const step = this.stampStep(point);
     if (reshapeLive) {
-      this.appendRaw(point, step);
+      this.appendRaw(point);
       this.lastPoint = point;
       return;
     }
