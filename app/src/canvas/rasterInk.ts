@@ -908,6 +908,115 @@ export function stampAlongSegment(
   return out;
 }
 
+/** ~cos(5°): flatter than this stays a chord. */
+const HOP_STRAIGHT_DOT = 0.996;
+/** Cap so a stalled frame cannot dump a dense spline into one hop. */
+const HOP_CURVE_MAX = 32;
+const HOP_CURVE_ALPHA = 0.5;
+
+function hopChordStraight(
+  prev: ScenePoint,
+  from: ScenePoint,
+  to: ScenePoint,
+): boolean {
+  const ax = from.x - prev.x;
+  const ay = from.y - prev.y;
+  const bx = to.x - from.x;
+  const by = to.y - from.y;
+  const al = Math.hypot(ax, ay);
+  const bl = Math.hypot(bx, by);
+  if (al < 1e-6 || bl < 1e-6) return true;
+  return (ax * bx + ay * by) / (al * bl) >= HOP_STRAIGHT_DOT;
+}
+
+function catmullT(ti: number, a: ScenePoint, b: ScenePoint): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  return ti + Math.pow(Math.max(dx * dx + dy * dy, 1e-12), HOP_CURVE_ALPHA * 0.5);
+}
+
+function lerp2(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  t0: number,
+  t1: number,
+  t: number,
+): { x: number; y: number } {
+  if (Math.abs(t1 - t0) < 1e-12) return { x: ax, y: ay };
+  const u = (t - t0) / (t1 - t0);
+  return { x: ax + (bx - ax) * u, y: ay + (by - ay) * u };
+}
+
+function centripetalCatmull(
+  p0: ScenePoint,
+  p1: ScenePoint,
+  p2: ScenePoint,
+  p3: ScenePoint,
+  t: number,
+): { x: number; y: number } {
+  const t0 = 0;
+  const t1 = catmullT(t0, p0, p1);
+  const t2 = catmullT(t1, p1, p2);
+  const t3 = catmullT(t2, p2, p3);
+  const tt = t1 + (t2 - t1) * t;
+  const a1 = lerp2(p0.x, p0.y, p1.x, p1.y, t0, t1, tt);
+  const a2 = lerp2(p1.x, p1.y, p2.x, p2.y, t1, t2, tt);
+  const a3 = lerp2(p2.x, p2.y, p3.x, p3.y, t2, t3, tt);
+  const b1 = lerp2(a1.x, a1.y, a2.x, a2.y, t0, t2, tt);
+  const b2 = lerp2(a2.x, a2.y, a3.x, a3.y, t1, t3, tt);
+  return lerp2(b1.x, b1.y, b2.x, b2.y, t1, t2, tt);
+}
+
+/**
+ * Points from after `from` through `to` along a centripetal Catmull-Rom.
+ *
+ * Linear densify only subdivides the chord, so a thin loop stays a polygon of
+ * pointer samples. This plants samples *off the chord* using `prev` as the
+ * incoming tangent. Collinear hops stay a single `to`. No `next` — the newest
+ * sample is always the tip. Centripetal (α=0.5) instead of uniform, so a sharp
+ * corner does not loop past the controls.
+ */
+export function curveAlongHop(
+  prev: ScenePoint | null,
+  from: ScenePoint,
+  to: ScenePoint,
+  spacing: number,
+): ScenePoint[] {
+  const dist = Math.hypot(to.x - from.x, to.y - from.y);
+  if (dist < 1e-6) return [to];
+  if (!prev || hopChordStraight(prev, from, to)) return [to];
+  const step = Math.max(spacing, 1e-6);
+  const count = Math.min(HOP_CURVE_MAX, Math.max(1, Math.ceil(dist / step)));
+  if (count <= 1) return [to];
+  const p3: ScenePoint = {
+    x: to.x + (to.x - from.x),
+    y: to.y + (to.y - from.y),
+    pressure: to.pressure,
+  };
+  const paced = from.slowness !== undefined || to.slowness !== undefined;
+  const slowA = from.slowness ?? INK_SLOWNESS_NEUTRAL;
+  const slowB = to.slowness ?? INK_SLOWNESS_NEUTRAL;
+  const out: ScenePoint[] = [];
+  for (let i = 1; i <= count; i++) {
+    if (i === count) {
+      out.push(to);
+      break;
+    }
+    const t = i / count;
+    const xy = centripetalCatmull(prev, from, to, p3, t);
+    const point: ScenePoint = {
+      x: xy.x,
+      y: xy.y,
+      pressure: from.pressure + (to.pressure - from.pressure) * t,
+    };
+    if (paced) point.slowness = slowA + (slowB - slowA) * t;
+    out.push(point);
+  }
+  return out;
+}
+
 /* --------------------------------------------------------------- runs --- */
 
 /**

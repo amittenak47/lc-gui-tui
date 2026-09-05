@@ -73,6 +73,7 @@ import {
   scenePointFromPointer,
   smoothPressure,
   stampAlongSegment,
+  curveAlongHop,
   STROKE_WIDTH_MAX,
   STROKE_WIDTH_MIN,
   unionSceneBounds,
@@ -491,6 +492,73 @@ describe("speed ink", () => {
       { kind: "draw", color: "#000", baseWidth: 2, maxFullness: 1, pressureClip: 1, pressureSensitive: false, speedInk: 1, points },
     ])!;
     expect(paced.maxY).toBeGreaterThan(plain.maxY);
+  });
+});
+
+describe("curveAlongHop", () => {
+  const pt = (x: number, y: number, extra: Partial<ScenePoint> = {}): ScenePoint => ({
+    x,
+    y,
+    pressure: NO_PRESSURE,
+    ...extra,
+  });
+
+  it("puts midpoints off the hop chord on a right-angle turn", () => {
+    const prev = pt(0, 0);
+    const from = pt(10, 0);
+    const to = pt(10, 10);
+    const seeds = curveAlongHop(prev, from, to, 2);
+    expect(seeds[seeds.length - 1]).toBe(to);
+    expect(seeds.length).toBeGreaterThan(1);
+    const chordX = from.x;
+    let off = 0;
+    for (const s of seeds.slice(0, -1)) {
+      off = Math.max(off, Math.abs(s.x - chordX));
+    }
+    expect(off).toBeGreaterThan(0.2);
+  });
+
+  it("keeps a collinear hop as a single to", () => {
+    const seeds = curveAlongHop(pt(0, 0), pt(10, 0), pt(40, 0), 2);
+    expect(seeds).toEqual([pt(40, 0)]);
+  });
+
+  it("returns only to when there is no previous sample", () => {
+    expect(curveAlongHop(null, pt(0, 0), pt(30, 10), 2)).toEqual([pt(30, 10)]);
+  });
+
+  it("lerps pressure and slowness along the hop", () => {
+    const seeds = curveAlongHop(
+      pt(0, 0, { pressure: 0.2, slowness: 0 }),
+      pt(10, 0, { pressure: 0.2, slowness: 0 }),
+      pt(10, 20, { pressure: 0.8, slowness: 1 }),
+      2,
+    );
+    expect(seeds.length).toBeGreaterThan(1);
+    expect(seeds[seeds.length - 1].pressure).toBeCloseTo(0.8);
+    expect(seeds[seeds.length - 1].slowness).toBeCloseTo(1);
+    for (let i = 1; i < seeds.length; i++) {
+      expect(seeds[i].pressure).toBeGreaterThan(seeds[i - 1].pressure);
+      expect(seeds[i].slowness!).toBeGreaterThan(seeds[i - 1].slowness!);
+    }
+  });
+
+  it("does not overshoot a sharp hairpin past the controls", () => {
+    const prev = pt(0, 0);
+    const from = pt(20, 0);
+    const to = pt(0, 1);
+    const seeds = curveAlongHop(prev, from, to, 2);
+    for (const s of seeds) {
+      expect(s.y).toBeGreaterThan(-1);
+      expect(s.x).toBeGreaterThan(-2);
+      expect(s.x).toBeLessThan(22);
+    }
+  });
+
+  it("caps samples on a huge hop", () => {
+    const seeds = curveAlongHop(pt(0, 0), pt(10, 0), pt(10, 400), 2);
+    expect(seeds.length).toBeLessThanOrEqual(32);
+    expect(seeds[seeds.length - 1].y).toBe(400);
   });
 });
 
