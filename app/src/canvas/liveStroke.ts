@@ -4,8 +4,8 @@
  * RasterInkLayer owns capture, the overlay, the stroke-start snapshot, and rAF.
  * This session owns ingest, attack/dwell/stamp, reshape, and live overlay paint.
  * Ingest writes a preallocated ring; tick drains it. Dense hops stay off the
- * spine and ride a transient tip. A long hop is one spine sample — densify
- * fills the chord — so tessellation does not grow with distance / nib-step.
+ * spine and ride a transient tip. A turning hop seeds a centripetal curve;
+ * a straight hop stays one sample. Densify still fills leftover chords.
  */
 
 import { overdrawnViewport } from "./panOffset";
@@ -35,8 +35,10 @@ import {
   smoothSpeed,
   stampInkBlotHalt,
   highlightLiftKeepsTip,
+  liveDensifyMinStep,
   liveRibbonDirtySpine,
   prepareLiveRibbon,
+  curveAlongHop,
   type InkOp,
   type SceneBounds,
   type ScenePoint,
@@ -341,6 +343,8 @@ export class LiveStroke {
   private readonly disc = new DiscExtentTracker();
   private readonly spine = new SpineTape();
   private hasTransientTip = false;
+  /** Spine samples added by the last {@link appendSpine} hop (always includes `to`). */
+  private lastHopSpine = 1;
   private prevOverlayDirty: PixelRect | null = null;
 
   constructor(init: BeginLiveStroke) {
@@ -596,10 +600,12 @@ export class LiveStroke {
   private overlayLocalPx(view: ViewportTransform, dpr: number): PixelRect {
     const liveDirty = this.op.kind === "draw" ? liveRibbonDirtySpine() : null;
     const n = this.op.kind === "draw" ? this.op.points.length : 0;
-    // Suffix-hit: only the last hop. 24 looping spine points still span a page
-    // at speed. Prefix remesh (dirtyFrom 0) keeps the full AABB.
+    // Suffix-hit: only the last hop (join + seeds). A turning hop can plant
+    // many samples; n-2 would be the last 2px, not the hop. Prefix remesh
+    // (dirtyFrom 0) keeps the full AABB.
+    const hop = Math.max(2, this.lastHopSpine + 1);
     const from =
-      liveDirty && liveDirty.dirtyFrom > 0 ? Math.max(0, n - 2) : 0;
+      liveDirty && liveDirty.dirtyFrom > 0 ? Math.max(0, n - hop) : 0;
     const aabb = strokeAabb(this.op, from);
     const z = view.zoom * dpr;
     const pad = 2;
@@ -725,8 +731,16 @@ export class LiveStroke {
       return;
     }
     this.dropTransientTip();
-    this.spine.push(to);
-    this.disc.commit(to);
+    const n = this.spine.n;
+    const start = n >= 1 ? this.spine.view[n - 1]! : from;
+    const prev = n >= 2 ? this.spine.view[n - 2]! : null;
+    const spacing = Math.max(step, liveDensifyMinStep(this.view.zoom || 1));
+    const seeds = curveAlongHop(prev, start, to, spacing);
+    this.lastHopSpine = seeds.length;
+    for (const seed of seeds) {
+      this.spine.push(seed);
+      this.disc.commit(seed);
+    }
     this.bindSpine();
     this.lastPoint = this.spine.view[this.spine.n - 1] ?? from;
   }
