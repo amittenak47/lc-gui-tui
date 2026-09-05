@@ -175,6 +175,18 @@ describe("LiveStroke ingest", () => {
     expect(op.points[0]?.x).toBeCloseTo(10, 5);
   });
 
+  it("a long hop is one spine sample, not nib-step interpolation", () => {
+    const stroke = beginPen({ speedInk: 1 });
+    stroke.ingest([sample(120, 10, 1020, 0.5)]);
+    stroke.tick(1020);
+    const live = stroke.live;
+    expect(live?.kind).toBe("draw");
+    if (live?.kind !== "draw") return;
+    expect(live.points.length).toBeLessThan(8);
+    expect(live.points[live.points.length - 1]?.x).toBeCloseTo(120, 5);
+    stroke.abandon();
+  });
+
   it("abandon stops dwell and drops the live op", () => {
     const onNeedPaint = vi.fn();
     const stroke = beginPen({ speedInk: 1, onNeedPaint });

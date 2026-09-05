@@ -1711,8 +1711,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
          * and the rest of its samples inside `getCoalescedEvents()`. Reading
          * only the move throws the others away, which is what turns a fast
          * curve into a chain of straight chords — and the faster you write, the
-         * more of the stroke is chord. Consuming the batch costs one extra
-         * `stampAlongSegment` per sample and still paints once per frame.
+         * more of the stroke is chord. The live spine keeps those samples;
+         * densify fills the chords. Still one paint per frame.
          */
         const coalesced = event.getCoalescedEvents?.();
         const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
