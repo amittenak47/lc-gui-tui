@@ -1525,17 +1525,27 @@ export function coalesceRibbonPoints(
   points: readonly ScenePoint[],
   styles: readonly InkStrokeStyle[],
   pixelScale: number,
-): { points: ScenePoint[]; styles: InkStrokeStyle[] } {
-  if (points.length === 0) return { points: [], styles: [] };
+  opts?: { freezeHead?: boolean; src?: readonly number[] },
+): { points: ScenePoint[]; styles: InkStrokeStyle[]; src: number[] } {
+  const identitySrc = () => {
+    const src = new Array<number>(points.length);
+    for (let i = 0; i < points.length; i++) src[i] = opts?.src?.[i] ?? i;
+    return src;
+  };
+  if (points.length === 0) return { points: [], styles: [], src: [] };
   if (points.length !== styles.length) {
-    return { points: points.slice(), styles: styles.slice() };
+    return { points: points.slice(), styles: styles.slice(), src: identitySrc() };
   }
   if (points.length <= 2) {
-    return { points: points.slice(), styles: styles.slice() };
+    return { points: points.slice(), styles: styles.slice(), src: identitySrc() };
   }
 
+  const inSrc = opts?.src;
+  const freezeHead = Boolean(opts?.freezeHead);
+  const srcAt = (i: number) => inSrc?.[i] ?? i;
   const outPts: ScenePoint[] = [points[0]];
   const outStyles: InkStrokeStyle[] = [styles[0]];
+  const outSrc: number[] = [srcAt(0)];
   // Original index the current output vertex started from, so the sag test
   // below can measure against where the run began rather than where merging
   // has since dragged it.
@@ -1549,7 +1559,9 @@ export function coalesceRibbonPoints(
     const minDist = Math.max(0.5, half * RIBBON_COALESCE_HALF_FRAC);
     const sagLimit =
       pixelScale > 0 ? RIBBON_COALESCE_SAG_PX / pixelScale : RIBBON_COALESCE_SAG_PX;
+    const ontoHead = freezeHead && outPts.length === 1;
     if (
+      !ontoHead &&
       Math.hypot(cur.x - prev.x, cur.y - prev.y) < minDist &&
       ribbonWashJump(prevStyle, curStyle) < 0.03 &&
       ribbonRunWithin(points, runStart, index, points[index + 1], sagLimit)
@@ -1561,6 +1573,7 @@ export function coalesceRibbonPoints(
     }
     outPts.push(cur);
     outStyles.push(curStyle);
+    outSrc.push(srcAt(index));
     runStart = index;
   }
 
@@ -1570,7 +1583,9 @@ export function coalesceRibbonPoints(
   const prevStyle = outStyles[outStyles.length - 1];
   const half = paintedWidth(lastStyle.lineWidth, pixelScale) / 2;
   const minDist = Math.max(0.5, half * RIBBON_COALESCE_HALF_FRAC);
+  const ontoHead = freezeHead && outPts.length === 1;
   if (
+    !ontoHead &&
     Math.hypot(last.x - prev.x, last.y - prev.y) < minDist &&
     ribbonWashJump(prevStyle, lastStyle) < 0.03
   ) {
@@ -1580,8 +1595,9 @@ export function coalesceRibbonPoints(
   } else {
     outPts.push(last);
     outStyles.push(lastStyle);
+    outSrc.push(srcAt(points.length - 1));
   }
-  return { points: outPts, styles: outStyles };
+  return { points: outPts, styles: outStyles, src: outSrc };
 }
 
 /**
@@ -1595,17 +1611,24 @@ export function densifyRibbonPoints(
   points: readonly ScenePoint[],
   styles: readonly InkStrokeStyle[],
   pixelScale: number,
-): { points: ScenePoint[]; styles: InkStrokeStyle[] } {
+  src?: readonly number[],
+): { points: ScenePoint[]; styles: InkStrokeStyle[]; src: number[] } {
+  const srcAt = (i: number) => src?.[i] ?? i;
   if (points.length < 2 || points.length !== styles.length) {
-    return { points: points.slice(), styles: styles.slice() };
+    const outSrc: number[] = [];
+    for (let i = 0; i < points.length; i++) outSrc.push(srcAt(i));
+    return { points: points.slice(), styles: styles.slice(), src: outSrc };
   }
   const outPts: ScenePoint[] = [points[0]];
   const outStyles: InkStrokeStyle[] = [styles[0]];
+  const outSrc: number[] = [srcAt(0)];
   for (let index = 1; index < points.length; index++) {
     const a = outPts[outPts.length - 1];
     const aStyle = outStyles[outStyles.length - 1];
+    const aSrc = outSrc[outSrc.length - 1]!;
     const b = points[index];
     const bStyle = styles[index];
+    const bSrc = srcAt(index);
     const halfA = paintedWidth(aStyle.lineWidth, pixelScale) / 2;
     const halfB = paintedWidth(bStyle.lineWidth, pixelScale) / 2;
     const maxStep = Math.max(0.75, ((halfA + halfB) / 2) * RIBBON_DENSIFY_HALF_FRAC);
@@ -1616,12 +1639,14 @@ export function densifyRibbonPoints(
         const t = step / count;
         outPts.push(lerpScenePoint(a, b, t));
         outStyles.push(lerpInkStyle(aStyle, bStyle, t));
+        outSrc.push(aSrc + (bSrc - aSrc) * t);
       }
     }
     outPts.push(b);
     outStyles.push(bStyle);
+    outSrc.push(bSrc);
   }
-  return { points: outPts, styles: outStyles };
+  return { points: outPts, styles: outStyles, src: outSrc };
 }
 
 /**
@@ -1989,6 +2014,8 @@ let ribbonScratchKey: readonly unknown[] | null = null;
 
 /** Vertices kept live behind the pen; everything before them is baked. */
 const LIVE_SETTLE_TAIL = 192;
+/** Spine samples always remeshed at the nib, even if slowness/pool did not move. */
+const LIVE_TIP_REBUILD = 24;
 /**
  * Prepared-ribbon length at which the pixel prefix may engage.
  *
@@ -2065,6 +2092,17 @@ export const settledRibbonStats = {
 
 /** Test-only counters for live suffix tessellation. */
 export const liveRibbonStats = { suffixHits: 0, suffixMisses: 0, suffixRewinds: 0 };
+
+/**
+ * Suffix tessellation freezes last frame's prefix mesh, so it is not
+ * byte-identical to tessellating from 0. Tests that compare those two paths
+ * turn this off; production live writing leaves it on.
+ */
+let liveSuffixEnabled = true;
+
+export function setLiveRibbonSuffix(enabled: boolean): void {
+  liveSuffixEnabled = enabled;
+}
 
 function snapshotSettled(
   s: SettledRibbon,
@@ -3629,7 +3667,13 @@ export function poolingDirtyFrom(
   let dirty = n;
   const tip = points[n - 1]!;
   const tipGrow = liveInkBlotGrow(op);
-  const tipBandStart = bandStart(tip, tipGrow);
+  // Walk back along the spine, not spatial nearest. A loop that passes near
+  // old ink would otherwise pull dirtyFrom to that old sample every frame.
+  const tipBandStart = (() => {
+    const g = Math.max(clamp01(tipGrow), blotBlend * INK_BLOT_END_FLOOR);
+    const { radius } = poolingEnvelope(nib, g, blotBlend);
+    return lowerBoundArc(arc, arc[n - 1]! - Math.max(radius, 1e-6));
+  })();
   dirty = Math.min(dirty, tipBandStart);
   if (prev) dirty = Math.min(dirty, prev.tipBandStart);
 
@@ -3689,8 +3733,9 @@ export interface RibbonGeomDirtyPrev {
 /**
  * Spine index from which live ribbon geometry must be rebuilt.
  *
- * `min(n - live tail, slowness mismatch, pooling bands)`. No previous
- * snapshot means a full rebuild.
+ * `min(slowness mismatch, pooling bands, n - tip rebuild)`. No previous
+ * snapshot means a full rebuild. The pixel bake still keeps `LIVE_SETTLE_TAIL`
+ * quads live; that is not this frontier.
  */
 export function ribbonGeomDirtyFrom(
   op: InkDrawOp,
@@ -3708,8 +3753,11 @@ export function ribbonGeomDirtyFrom(
   const pool = poolingDirtyFrom(op, prev?.pooling ?? null);
   const next: RibbonGeomDirtyPrev = { slowness, pooling: pool.next };
   if (!prev) return { dirtyFrom: 0, next };
-  let dirtyFrom = Math.max(0, n - LIVE_SETTLE_TAIL);
-  dirtyFrom = Math.min(dirtyFrom, slowDirty, pool.dirtyFrom);
+  // Last-N mesh verts stay unbaked (LIVE_SETTLE_TAIL). Geometry dirty is the
+  // samples that actually changed — forcing n-192 here made every looping
+  // stroke remesh a page of spine and miss the suffix join.
+  const tipRebuild = Math.max(0, n - LIVE_TIP_REBUILD);
+  const dirtyFrom = Math.min(slowDirty, pool.dirtyFrom, tipRebuild);
   return { dirtyFrom, next };
 }
 
@@ -3985,6 +4033,8 @@ function paintOpaqueMarkThenAlpha(
 
 interface PreparedRibbon {
   prepared: { points: ScenePoint[]; styles: InkStrokeStyle[] };
+  /** Spine index (or densify-lerp) each prepared vertex came from. */
+  spineSrc: Float64Array;
   tipClusterAt: number;
   start: number;
   sliceLen: number;
@@ -3998,10 +4048,13 @@ interface PreparedRibbon {
   };
 }
 
+type RibbonPinHead = { point: ScenePoint; style: InkStrokeStyle; src: number };
+
 function tessellateRibbonPrepared(
   op: InkDrawOp,
   start: number,
   pixelScale: number,
+  pinHead?: RibbonPinHead,
 ): PreparedRibbon | null {
   const points = op.points;
   const blotBlend = resolveSpeedBlotBlend(op);
@@ -4012,8 +4065,11 @@ function tessellateRibbonPrepared(
   if (slice.length < 2 || styles.length < 2) return null;
 
   const nib = nibWidth(op);
-  let ribbonPoints = slice;
-  let ribbonStyles = styles;
+  let ribbonPoints = pinHead ? [pinHead.point, ...slice] : slice;
+  let ribbonStyles = pinHead ? [pinHead.style, ...styles] : styles;
+  let ribbonSrc: number[] = pinHead
+    ? [pinHead.src, ...slice.map((_, i) => start + i)]
+    : slice.map((_, i) => start + i);
   const tipClusterAt =
     blotBlend > 1e-3 ? slice.length : trailingTipClusterStart(slice, nib);
   if (tipClusterAt < slice.length) {
@@ -4023,18 +4079,17 @@ function tessellateRibbonPrepared(
     const tipWidth = tipLast?.lineWidth ?? 0;
     const tipAlpha = tipLast?.alpha ?? 1;
     const tipR = paintedWidth(tipWidth, pixelScale) / 2;
-    ribbonPoints = batched("tipPts", [slice, tipClusterAt], () =>
-      slice.slice(0, tipClusterAt + 1),
-    );
-    ribbonStyles = batched("tipStyles", [styles, tipClusterAt], () =>
-      styles.slice(0, tipClusterAt + 1),
-    );
+    const cut = pinHead ? tipClusterAt + 1 : tipClusterAt;
+    ribbonPoints = ribbonPoints.slice(0, cut + 1);
+    ribbonStyles = ribbonStyles.slice(0, cut + 1);
+    ribbonSrc = ribbonSrc.slice(0, cut + 1);
     if (ribbonPoints.length < 2) {
       const tipAt = tipPts[tipPts.length - 1];
       const tipPrev = tipPts.length > 1 ? tipPts[tipPts.length - 2] : undefined;
       if (!tipAt) return null;
       return {
         prepared: { points: [], styles: [] },
+        spineSrc: new Float64Array(0),
         tipClusterAt,
         start,
         sliceLen: slice.length,
@@ -4051,14 +4106,13 @@ function tessellateRibbonPrepared(
   }
 
   const coalesced = ribbonStage("coalesce", () =>
-    batched("coalesce", [ribbonPoints, ribbonStyles, pixelScale], () =>
-      coalesceRibbonPoints(ribbonPoints, ribbonStyles, pixelScale),
-    ),
+    coalesceRibbonPoints(ribbonPoints, ribbonStyles, pixelScale, {
+      freezeHead: Boolean(pinHead),
+      src: ribbonSrc,
+    }),
   );
   const densified = ribbonStage("densify", () =>
-    batched("densify", [coalesced.points, coalesced.styles, pixelScale], () =>
-      densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale),
-    ),
+    densifyRibbonPoints(coalesced.points, coalesced.styles, pixelScale, coalesced.src),
   );
   if (densified.points.length < 2) return null;
 
@@ -4066,18 +4120,24 @@ function tessellateRibbonPrepared(
   const pooledStyles = skipPool
     ? densified.styles
     : ribbonStage("pool", () =>
-        batched("pool", [densified.styles, op, densified.points, start], () =>
-          applyInkPoolingAtEnds(densified.styles, op, densified.points, start),
-        ),
+        applyInkPoolingAtEnds(densified.styles, op, densified.points, start),
       );
+  if (pinHead) {
+    densified.points[0] = pinHead.point;
+    pooledStyles[0] = pinHead.style;
+  }
   const prepared = ribbonStage("densify", () =>
-    batched("densify2", [densified.points, pooledStyles, pixelScale], () =>
-      densifyRibbonPoints(densified.points, pooledStyles, pixelScale),
-    ),
+    densifyRibbonPoints(densified.points, pooledStyles, pixelScale, densified.src),
   );
   if (prepared.points.length < 2) return null;
+  if (pinHead) {
+    prepared.points[0] = pinHead.point;
+    prepared.styles[0] = pinHead.style;
+    prepared.src[0] = pinHead.src;
+  }
   return {
-    prepared,
+    prepared: { points: prepared.points, styles: prepared.styles },
+    spineSrc: Float64Array.from(prepared.src),
     tipClusterAt,
     start,
     sliceLen: slice.length,
@@ -4088,6 +4148,7 @@ let liveRibbonDirty: {
   source: readonly ScenePoint[];
   prev: RibbonGeomDirtyPrev;
   prepared: { points: ScenePoint[]; styles: InkStrokeStyle[] };
+  spineSrc: Float64Array;
   pixelScale: number;
   dirtyFrom: number;
   suffixHit: boolean;
@@ -4111,54 +4172,32 @@ export function prepareLiveRibbon(op: InkDrawOp, pixelScale: number): void {
   liveRibbonPrepared(op, pixelScale);
 }
 
-/** Spine samples kept extra so coalesce/densify see the same neighbours as a full tessellation. */
-const LIVE_SUFFIX_OVERLAP = 48;
+/** Spine samples kept extra so coalesce/densify see the pinned join as a neighbour. */
+const LIVE_SUFFIX_OVERLAP = 24;
 /** Suffix tessellation is not worth it if it would rebuild almost the whole spine. */
 const LIVE_SUFFIX_MIN_START = 32;
 
-/**
- * Index in the cached prepared ribbon where `suffix` attaches.
- *
- * The suffix is tessellated from a spine index with overlap, not as a new stroke:
- * its first vertices must already exist in the prefix mesh. No match means
- * coalesce/pooling saw different neighbours — caller tessellates from 0.
- */
-function preparedJoinIndex(
-  prefix: { points: ScenePoint[]; styles: InkStrokeStyle[] },
-  suffix: { points: ScenePoint[]; styles: InkStrokeStyle[] },
-): number {
-  const a = suffix.points[0];
-  const aStyle = suffix.styles[0];
-  if (!a || !aStyle || prefix.points.length < 2) return -1;
-  const searchFrom = Math.max(0, prefix.points.length - LIVE_SETTLE_TAIL - LIVE_SUFFIX_OVERLAP * 3);
-  for (let j = prefix.points.length - 1; j >= searchFrom; j--) {
-    const p = prefix.points[j];
-    const s = prefix.styles[j];
-    if (!p || !s) continue;
-    if (p.x !== a.x || p.y !== a.y) continue;
-    if (
-      s.lineWidth !== aStyle.lineWidth ||
-      s.alpha !== aStyle.alpha ||
-      (s.dryGain ?? 1) !== (aStyle.dryGain ?? 1) ||
-      (s.blotPool ?? 0) !== (aStyle.blotPool ?? 0) ||
-      (s.blotGrow ?? 0) !== (aStyle.blotGrow ?? 0)
-    ) {
-      continue;
-    }
-    const b = suffix.points[1];
-    const q = prefix.points[j + 1];
-    if (b && q && (q.x !== b.x || q.y !== b.y)) continue;
-    return j;
+/** Last prepared vertex whose spine source is strictly before `start`. */
+function pinnedJoinMeshIndex(spineSrc: ArrayLike<number>, start: number): number {
+  for (let i = spineSrc.length - 1; i >= 0; i--) {
+    if (spineSrc[i]! < start) return i;
   }
   return -1;
+}
+
+function concatSpineSrc(prefix: ArrayLike<number>, prefixLen: number, suffix: Float64Array): Float64Array {
+  const out = new Float64Array(prefixLen + suffix.length);
+  for (let i = 0; i < prefixLen; i++) out[i] = prefix[i]!;
+  out.set(suffix, prefixLen);
+  return out;
 }
 
 /**
  * Rebuild only the dirty tail and stitch it onto the cached prefix mesh.
  *
- * Head pooling is skipped because tessellateRibbonPrepared passes start > 0.
- * Caps are not in this mesh — drawRibbonStrokeFrom still stamps them on the
- * composite. If the join vertices disagree, return null and tessellate from 0.
+ * The join is pinned: suffix tessellation starts with the frozen prefix vertex
+ * as an unmergeable head, then the raw tail. A truncated coalesce will not
+ * reproduce last frame's vertex — searching for it was the miss path.
  */
 function tessellateLiveSuffix(
   op: InkDrawOp,
@@ -4171,15 +4210,21 @@ function tessellateLiveSuffix(
   let start = Math.max(LIVE_SUFFIX_MIN_START, dirtyFrom - LIVE_SUFFIX_OVERLAP);
   if (start < LIVE_SUFFIX_MIN_START) return null;
 
-  for (let attempt = 0; attempt < 3 && start >= LIVE_SUFFIX_MIN_START; attempt++) {
+  for (let attempt = 0; attempt < 2 && start >= LIVE_SUFFIX_MIN_START; attempt++) {
     if (attempt > 0) liveRibbonStats.suffixRewinds++;
-    const slicePacked = tessellateRibbonPrepared(op, start, pixelScale);
-    if (!slicePacked || slicePacked.shortTip || slicePacked.prepared.points.length < 2) {
+    const join = pinnedJoinMeshIndex(cache.spineSrc, start);
+    const pinPoint = join >= 1 ? cache.prepared.points[join] : undefined;
+    const pinStyle = join >= 1 ? cache.prepared.styles[join] : undefined;
+    if (join < 1 || !pinPoint || !pinStyle) {
       start -= LIVE_SUFFIX_OVERLAP;
       continue;
     }
-    const join = preparedJoinIndex(cache.prepared, slicePacked.prepared);
-    if (join < 0) {
+    const slicePacked = tessellateRibbonPrepared(op, start, pixelScale, {
+      point: pinPoint,
+      style: pinStyle,
+      src: cache.spineSrc[join]!,
+    });
+    if (!slicePacked || slicePacked.shortTip || slicePacked.prepared.points.length < 2) {
       start -= LIVE_SUFFIX_OVERLAP;
       continue;
     }
@@ -4196,6 +4241,7 @@ function tessellateLiveSuffix(
         : start + slicePacked.tipClusterAt;
     return {
       prepared: { points, styles },
+      spineSrc: concatSpineSrc(cache.spineSrc, join, slicePacked.spineSrc),
       tipClusterAt,
       start: 0,
       sliceLen: op.points.length,
@@ -4245,7 +4291,9 @@ function liveRibbonPrepared(
 
   let packed: PreparedRibbon | null = null;
   let suffixHit = false;
-  if (cache && dirty.dirtyFrom > 0) {
+  const n = op.points.length;
+  const prefixStillSettled = dirty.dirtyFrom >= Math.max(LIVE_SUFFIX_MIN_START, n - LIVE_SETTLE_TAIL);
+  if (liveSuffixEnabled && cache && prefixStillSettled && dirty.dirtyFrom > 0) {
     packed = tessellateLiveSuffix(op, pixelScale, dirty.dirtyFrom, cache);
     suffixHit = packed !== null;
     if (!packed) liveRibbonStats.suffixMisses++;
@@ -4259,8 +4307,10 @@ function liveRibbonPrepared(
         source: op.points,
         prev: dirty.next,
         prepared: packed.prepared,
+        spineSrc: packed.spineSrc,
         pixelScale,
-        dirtyFrom: dirty.dirtyFrom,
+        // A miss remeshes 0–N; overlay must restore the whole stroke, not the tip.
+        dirtyFrom: suffixHit ? dirty.dirtyFrom : 0,
         suffixHit,
         packed,
         spineN: op.points.length,
@@ -4274,6 +4324,7 @@ function liveRibbonPrepared(
         source: op.points,
         prev: dirty.next,
         prepared: { points: [], styles: [] },
+        spineSrc: new Float64Array(0),
         pixelScale,
         dirtyFrom: 0,
         suffixHit: false,

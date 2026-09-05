@@ -64,6 +64,44 @@ describe("ribbonGeomDirtyFrom", () => {
     const halted = ribbonGeomDirtyFrom(op, growing.next);
     expect(halted.dirtyFrom).toBeLessThan(80);
   });
+
+  it("keeps the frontier near the tip on a looping scribble", () => {
+    const points: ScenePoint[] = [];
+    for (let i = 0; i < 50; i++) {
+      points.push({
+        x: 200 + Math.cos(i / 8) * 60,
+        y: 200 + Math.sin(i / 8) * 40,
+        pressure: 0.5,
+        slowness: 1,
+      });
+    }
+    const op: InkDrawOp = {
+      kind: "draw",
+      color: "#111111",
+      baseWidth: 5,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 0.9,
+      speedFade: 1,
+      points,
+    };
+    let prev = ribbonGeomDirtyFrom(op, null).next;
+    for (let i = 50; i < 400; i++) {
+      points.push({
+        x: 200 + Math.cos(i / 8) * 60,
+        y: 200 + Math.sin(i / 8) * 40,
+        pressure: 0.5,
+        slowness: 1,
+      });
+      const next = ribbonGeomDirtyFrom(op, prev);
+      prev = next.next;
+      if (i === 399) {
+        expect(next.dirtyFrom).toBeGreaterThan(points.length - 80);
+      }
+    }
+  });
 });
 
 describe("poolingDirtyFrom", () => {

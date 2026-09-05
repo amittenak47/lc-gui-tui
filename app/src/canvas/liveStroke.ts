@@ -248,6 +248,15 @@ export type LivePaintResult = "ok" | "fallback";
 
 export type PixelRect = { x: number; y: number; w: number; h: number };
 
+function unionPixelRects(a: PixelRect, b: PixelRect | null): PixelRect {
+  if (!b) return a;
+  const x0 = Math.min(a.x, b.x);
+  const y0 = Math.min(a.y, b.y);
+  const x1 = Math.max(a.x + a.w, b.x + b.w);
+  const y1 = Math.max(a.y + a.h, b.y + b.h);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
 export interface LivePointerSample {
   clientX: number;
   clientY: number;
@@ -522,7 +531,8 @@ export class LiveStroke {
     if (this.op.kind === "draw") {
       prepareLiveRibbon(this.op, drawView.zoom * dpr);
     }
-    const dirty = this.overlayDirtyPx(this.prevOverlayDirty, drawView, dpr);
+    const local = this.overlayLocalPx(drawView, dpr);
+    const dirty = unionPixelRects(local, this.prevOverlayDirty);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const prevSmooth = ctx.imageSmoothingEnabled;
     ctx.imageSmoothingEnabled = false;
@@ -546,7 +556,7 @@ export class LiveStroke {
     ctx.restore();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = prevSmooth;
-    this.prevOverlayDirty = dirty;
+    this.prevOverlayDirty = local;
     this.markPath("incremental");
     this.lastPaintFallback = false;
     if (DEBUG_INK || inkMetrics.enabled) {
@@ -580,6 +590,10 @@ export class LiveStroke {
   }
 
   overlayDirtyPx(prev: PixelRect | null, view: ViewportTransform, dpr: number): PixelRect {
+    return unionPixelRects(this.overlayLocalPx(view, dpr), prev);
+  }
+
+  private overlayLocalPx(view: ViewportTransform, dpr: number): PixelRect {
     const liveDirty = this.op.kind === "draw" ? liveRibbonDirtySpine() : null;
     const from =
       liveDirty && liveDirty.dirtyFrom > 0 ? liveDirty.dirtyFrom : 0;
@@ -590,12 +604,6 @@ export class LiveStroke {
     let y0 = Math.floor((aabb.minY + view.scrollY) * z) - pad;
     let x1 = Math.ceil((aabb.maxX + view.scrollX) * z) + pad;
     let y1 = Math.ceil((aabb.maxY + view.scrollY) * z) + pad;
-    if (prev) {
-      x0 = Math.min(x0, prev.x);
-      y0 = Math.min(y0, prev.y);
-      x1 = Math.max(x1, prev.x + prev.w);
-      y1 = Math.max(y1, prev.y + prev.h);
-    }
     const maxW = Math.max(1, Math.round(this.box.width * dpr));
     const maxH = Math.max(1, Math.round(this.box.height * dpr));
     x0 = Math.max(0, x0);
