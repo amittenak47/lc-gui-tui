@@ -206,8 +206,8 @@ describe("live overlay dirty restore", () => {
     }, 1);
     const liveDirty = liveRibbonDirtySpine();
     expect(liveDirty?.dirtyFrom ?? 0).toBeGreaterThan(50);
-    expect(dirty.w).toBeLessThan(600);
-    expect(dirty.x).toBeGreaterThan(120);
+    expect(dirty.w).toBeLessThan(160);
+    expect(dirty.x).toBeGreaterThan(500);
     stroke.abandon();
   });
 
@@ -301,7 +301,7 @@ describe("live overlay dirty restore", () => {
     }, 1);
     expect(liveRibbonStats.suffixHits).toBeGreaterThan(liveRibbonStats.suffixMisses);
     expect(liveRibbonStats.suffixHits).toBeGreaterThan(20);
-    expect(dirty.w * dirty.h).toBeLessThan(500 * 500 * 0.35);
+    expect(dirty.w * dirty.h).toBeLessThan(500 * 500 * 0.12);
     stroke.abandon();
   });
 });
