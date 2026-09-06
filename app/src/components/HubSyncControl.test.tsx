@@ -41,6 +41,7 @@ describe("tabOffersHubSync", () => {
     expect(tabOffersHubSync("web")).toBe(true);
     expect(tabOffersHubSync("home")).toBe(false);
     expect(tabOffersHubSync("explore")).toBe(false);
+    expect(tabOffersHubSync("freehand")).toBe(false);
     expect(tabOffersHubSync("practice")).toBe(false);
   });
 });
