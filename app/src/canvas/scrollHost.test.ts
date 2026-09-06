@@ -7,6 +7,7 @@ import {
   hostKeyInDoc,
   scrollHostAtPoint,
   scrollHostLookupFromSlot,
+  scrollHostsIn,
   slotCssPerScene,
 } from "./scrollHost";
 
@@ -14,6 +15,11 @@ import {
 function sizeOf(el: HTMLElement, scrollWidth: number, clientWidth: number) {
   Object.defineProperty(el, "scrollWidth", { value: scrollWidth, configurable: true });
   Object.defineProperty(el, "clientWidth", { value: clientWidth, configurable: true });
+}
+
+function sizeH(el: HTMLElement, scrollHeight: number, clientHeight: number) {
+  Object.defineProperty(el, "scrollHeight", { value: scrollHeight, configurable: true });
+  Object.defineProperty(el, "clientHeight", { value: clientHeight, configurable: true });
 }
 
 function buildDoc(): { board: HTMLElement; doc: HTMLElement; pre: HTMLElement; code: HTMLElement } {
@@ -142,6 +148,17 @@ describe("horizontalScrollHost", () => {
     expect(hosts).toEqual([pre, second]);
     expect(hostKeyInDoc(pre, doc)).toBe(0);
     expect(hostKeyInDoc(second, doc)).toBe(1);
+  });
+
+  it("appends overflow-y-only hosts after horizontal keys", () => {
+    const { doc, pre } = buildDoc();
+    const tall = document.createElement("div");
+    tall.style.overflowY = "auto";
+    sizeH(tall, 800, 200);
+    doc.insertBefore(tall, pre);
+    expect(scrollHostsIn(doc)).toEqual([pre, tall]);
+    expect(hostKeyInDoc(pre, doc)).toBe(0);
+    expect(hostKeyInDoc(tall, doc)).toBe(1);
   });
 });
 

@@ -11,6 +11,7 @@ describe("Ink lab HUD", () => {
     expect(text).toContain("backend none");
     expect(text).toContain("paints 0");
     expect(text).toContain("hold no");
+    expect(text).toContain("suffix hit");
     expect(text).toContain("bake 0.0ms catmull");
   });
 

@@ -6,8 +6,10 @@
  * stroke under the pen is never tiled: it paints straight onto the overlay,
  * incrementally, so nothing stands between a pointer sample and a pixel.
  *
- * Default pen live paint is `createInkLabEngine`. Tiles, eraser, highlighter,
- * undo, and commit stay on this host. Stamp-live is not the default live path.
+ * Default pen live is the Ink lab WebGL engine (SDF capsules). Committed
+ * replay uses the same capsules into tiles / host-bound pass so annotate
+ * save-load and nested scroll keep working. Highlighter, eraser, undo, and
+ * InkOp stay here.
  */
 
 import {
@@ -21,10 +23,15 @@ import {
 import {
   HIGHLIGHT_WIDTH_SCALE,
   inkLineWidth,
+  isHostBoundOp,
   liveRibbonDirtySpine,
+  scenePointFromCanvasPixel,
+  setInkSceneTransform,
   trimHighlightLiftHook,
+  type InkBlotHalt,
   type InkOp,
   type SceneBounds,
+  type ScenePoint,
   type ScrollHostLookup,
   type ViewportTransform,
 } from "./rasterInk";
@@ -32,10 +39,10 @@ import type { ScrollHostPaintState } from "./scrollHost";
 import {
   DOC_PAGE_SELECTOR,
   docForScrollHost,
-  horizontalScrollHostsIn,
   hostKeyInDoc,
   hostSceneBounds,
   scrollHostAtPoint,
+  scrollHostsIn,
 } from "./scrollHost";
 import { InkTileCache, paintHostBoundPass, paintLiveOp } from "./inkTiles";
 import { InkPageBook } from "./inkPageCache";
@@ -73,9 +80,13 @@ import {
   createInkLabEngine,
   type InkLabEngine,
   type InkLabSample,
+  type InkLabUpResult,
 } from "./inkLab/engine";
+import type { SpineDot, StrokeAabb } from "./inkLab/instance";
 import { INK_GRAIN_DEFAULT, INK_SPEED_BLOT_BLEND_DEFAULT, INK_SPEED_FADE_DEFAULT } from "../util/inkSpeedPref";
 import { INK_BOLDNESS_DEFAULT } from "../util/inkBoldnessPref";
+
+type OverlayDirty = { x: number; y: number; w: number; h: number };
 
 export interface RasterInkHandle {
   clear(): void;
@@ -240,6 +251,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const inkLabRef = useRef<InkLabEngine | null>(null);
     const inkLabHostRef = useRef<HTMLCanvasElement | null>(null);
     const inkLabLiveRef = useRef(false);
+    /** Coalesced samples on the last lab move, for the load meter queue. */
+    const inkLabQueuedRef = useRef(0);
+    const labOverlayDirtyRef = useRef<OverlayDirty | null>(null);
+    /** Lift bake already reshaped this op — skip a second Chaikin in commitLive. */
+    const inkLabCommitRef = useRef(false);
     /** Last live paint flush, for rAF-period metrics. */
     const lastLivePaintAtRef = useRef(0);
     const loadMeterRef = useRef(createInkLoadMeter());
@@ -455,9 +471,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const forceInkRef = useRef(false);
 
     function scrollHostLookup(): ScrollHostLookup {
-      const map = new Map<number, { bounds: SceneBounds; scrollLeft: number }>();
+      const map = new Map<number, { bounds: SceneBounds; scrollLeft: number; scrollTop: number }>();
       for (const host of collectScrollHosts()) {
-        map.set(host.key, { bounds: host.bounds, scrollLeft: host.scrollLeft });
+        map.set(host.key, {
+          bounds: host.bounds,
+          scrollLeft: host.scrollLeft,
+          scrollTop: host.scrollTop,
+        });
       }
       return map;
     }
@@ -474,10 +494,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const rect = canvas.getBoundingClientRect();
       const out: ScrollHostPaintState[] = [];
       for (const doc of board.querySelectorAll(DOC_PAGE_SELECTOR)) {
-        for (const [key, el] of horizontalScrollHostsIn(doc).entries()) {
+        for (const [key, el] of scrollHostsIn(doc).entries()) {
           out.push({
             key,
             scrollLeft: el.scrollLeft,
+            scrollTop: el.scrollTop,
             bounds: hostSceneBounds(el, rect, view),
           });
         }
@@ -495,7 +516,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     function bindStrokeHost<T extends InkOp>(op: T): T {
       const host = strokeHostRef.current;
       if (!host) return op;
-      return { ...op, hostKey: host.key, scrollLeftAtDraw: host.scrollLeft };
+      return {
+        ...op,
+        hostKey: host.key,
+        scrollLeftAtDraw: host.scrollLeft,
+        scrollTopAtDraw: host.scrollTop,
+      };
     }
 
     /** Keep live ink tagged with the host captured at pointerdown. */
@@ -505,11 +531,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (live.hostKey !== undefined) {
           delete live.hostKey;
           delete live.scrollLeftAtDraw;
+          delete live.scrollTopAtDraw;
         }
         return;
       }
       live.hostKey = host.key;
       live.scrollLeftAtDraw = host.scrollLeft;
+      live.scrollTopAtDraw = host.scrollTop;
     }
 
     /**
@@ -710,7 +738,17 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               labHost.height = canvas.height;
             }
             inkLabRef.current.paint();
-            ctx.drawImage(labHost, 0, 0);
+            clipLabOverlayBlit(
+              ctx,
+              drawView,
+              dpr,
+              clipRef.current,
+              live,
+              hosts,
+              () => {
+                ctx.drawImage(labHost, 0, 0);
+              },
+            );
           } else {
             const stamped =
               session &&
@@ -942,7 +980,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       if (timed && prevAt > 0) inkMetrics.rafPeriod(now - prevAt);
       const queued = stroke.queuedSamples();
       const tick0 = performance.now();
-      stroke.tick(now);
+      if (!inkLabLiveRef.current) stroke.tick(now);
       if (timed) inkMetrics.addStage("tick", performance.now() - tick0);
 
       const canvas = canvasRef.current;
@@ -958,10 +996,20 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           labHost.height = canvas.height;
         }
         const stats = inkLabRef.current.paint();
-        const snap = committedSnapRef.current;
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        if (snap) ctx.drawImage(snap, 0, 0);
-        ctx.drawImage(labHost, 0, 0);
+        const local = aabbOverlayDirty(stats.aabb, canvas.width, canvas.height);
+        const dirty = unionOverlayDirty(local, labOverlayDirtyRef.current);
+        const liveOp = stroke.live;
+        if (liveOp) syncLiveHostBinding(liveOp);
+        clipLabOverlayBlit(
+          ctx,
+          strokeViewRef.current,
+          dpr,
+          clipRef.current,
+          liveOp,
+          scrollHostLookup(),
+          () => blitOverlayDirty(ctx, dirty, committedSnapRef.current, labHost),
+        );
+        labOverlayDirtyRef.current = local;
         liveRef.current = stroke.live;
         const live = stroke.live;
         liveDrawnIndexRef.current = live
@@ -977,11 +1025,23 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           frameMs: performance.now() - tick0,
           rafMs: prevAt > 0 ? now - prevAt : 0,
           spineN: stats.pts,
-          dirtyFrom: Math.max(0, stats.pts - 1),
-          suffixHit: true,
-          queued,
+          dirtyFrom: stats.dirtyFrom,
+          suffixHit: stats.suffix,
+          queued: inkLabQueuedRef.current,
+          backend: stats.backend,
+          segs: stats.segs,
+          ekfMs: stats.ekfMs,
+          drawMs: stats.drawMs,
+          hold: stats.hold,
         });
+        inkLabQueuedRef.current = 0;
         loadBarRef.current?.show(load);
+        if (stats.hold && livePaintRafRef.current == null) {
+          livePaintRafRef.current = requestAnimationFrame(() => {
+            livePaintRafRef.current = null;
+            flushLivePaint();
+          });
+        }
         return;
       }
 
@@ -1022,6 +1082,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         dirtyFrom: dirty?.dirtyFrom ?? 0,
         suffixHit: dirty?.suffixHit ?? false,
         queued,
+        backend: "live",
       });
       loadBarRef.current?.show(load);
     }, []);
@@ -1111,6 +1172,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               } else if (straight && pts.length >= 2) {
                 pts = [pts[0]!, pts[pts.length - 1]!];
               } else if (
+                !inkLabCommitRef.current &&
                 strength > 0 &&
                 !isLive &&
                 !live.pressureSensitive
@@ -1118,6 +1180,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
                 const nib = inkLineWidth(live.baseWidth, 0, false);
                 pts = smoothInkPoints(pts, strength, nib);
               } else if (
+                !inkLabCommitRef.current &&
                 strength > 0 &&
                 !isLive &&
                 live.pressureSensitive
@@ -1151,6 +1214,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       liveStrokeRef.current = null;
       liveRef.current = null;
       liveDrawnIndexRef.current = 0;
+      inkLabCommitRef.current = false;
 
       ensureTiles().appendOp(stamped);
       strokeHostRef.current = null;
@@ -1347,7 +1411,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     useEffect(() => () => tilesRef.current?.dispose(), []);
 
     /**
-     * Nested `scrollLeft` moves host-bound ink — repaint when any host scrolls.
+     * Nested scroll moves host-bound ink — repaint when any host scrolls.
      *
      * Scroll does not bubble; capture on the board hears every nested host
      * (lab pattern). Also attach per-host listeners and re-scan when the doc
@@ -1380,7 +1444,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const rescanHosts = () => {
         detachHosts();
         for (const doc of board.querySelectorAll(DOC_PAGE_SELECTOR)) {
-          for (const host of horizontalScrollHostsIn(doc)) {
+          for (const host of scrollHostsIn(doc)) {
             host.addEventListener("scroll", onScroll, { passive: true });
             attached.push(host);
           }
@@ -1472,6 +1536,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         liveStrokeRef.current = null;
         liveRef.current = null;
         inkLabLiveRef.current = false;
+        inkLabCommitRef.current = false;
+        labOverlayDirtyRef.current = null;
         inkLabRef.current?.clear();
         strokeViewRef.current = null;
         strokeBoxRef.current = null;
@@ -1590,7 +1656,27 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           drawingRef.current = false;
           activePointerRef.current = null;
           const orphan = liveStrokeRef.current;
-          if (orphan) liveRef.current = orphan.commit();
+          if (inkLabLiveRef.current && inkLabRef.current) {
+            const baked = inkLabRef.current.up();
+            if (orphan) {
+              liveRef.current = orphan.commit();
+              const view = strokeViewRef.current;
+              const rect = strokeRectRef.current;
+              if (liveRef.current && view && rect) {
+                applyInkLabBakeToOp(
+                  liveRef.current,
+                  baked,
+                  view,
+                  canvas.width / Math.max(1, rect.width),
+                );
+                inkLabCommitRef.current = true;
+              }
+            }
+            inkLabRef.current.clear();
+            inkLabLiveRef.current = false;
+          } else if (orphan) {
+            liveRef.current = orphan.commit();
+          }
           commitLiveRef.current();
         }
         try {
@@ -1656,6 +1742,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               ({
                 key,
                 scrollLeft: hostEl.scrollLeft,
+                scrollTop: hostEl.scrollTop,
                 bounds: hostSceneBounds(hostEl, rect, strokeView),
               } satisfies ScrollHostPaintState);
           }
@@ -1701,6 +1788,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (!reusable) repaintRef.current();
         captureCommittedSnapRef.current(canvas);
         const host = strokeHostRef.current;
+        const useLab = activeTool === "pen" && !straightInkRef.current;
         const stroke = beginLiveStroke({
           tool: activeTool,
           view: strokeView,
@@ -1715,16 +1803,19 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           speedInk: speedInkRef.current,
           speedBlotBlend: speedBlotBlendRef.current,
           speedFade: speedFadeRef.current,
-          grain: grainRef.current,
+          grain: 0,
           boldness: inkBoldnessRef.current,
-          splineOutline: splineOutlineRef.current,
-          splineGradient: splineGradientRef.current,
+          splineOutline: false,
+          splineGradient: false,
           smoothing: smoothingRef.current,
           smoothingMode: smoothingModeRef.current,
           getStraightAnchor: () =>
             straightAnchorFor(straightInkRef.current, shiftAnchorRef.current),
-          host: host ? { key: host.key, scrollLeft: host.scrollLeft } : null,
+          host: host
+            ? { key: host.key, scrollLeft: host.scrollLeft, scrollTop: host.scrollTop }
+            : null,
           onNeedPaint: () => paintLiveAfterChangeRef.current(),
+          shell: useLab,
         });
         liveStrokeRef.current = stroke;
         liveRef.current = stroke.live;
@@ -1733,10 +1824,29 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         drawingRef.current = true;
         activePointerRef.current = event.pointerId;
         strokeRecaptured = false;
-        const useLab = activeTool === "pen" && !splineOutlineRef.current;
         inkLabLiveRef.current = useLab;
+        labOverlayDirtyRef.current = null;
+        inkLabQueuedRef.current = 0;
         if (useLab) {
-          ensureInkLab().down(inkLabOverlaySample(canvas, rect, event));
+          const engine = ensureInkLab();
+          const live = stroke.live;
+          if (live && live.kind === "draw") {
+            const dpr = canvas.width / Math.max(1, rect.width);
+            engine.setPen({
+              color: live.color,
+              baseWidth: live.baseWidth,
+              overlayScale: strokeView.zoom * dpr,
+              dpr,
+              maxFullness: live.maxFullness,
+              pressureClip: live.pressureClip,
+              pressureSensitive: live.pressureSensitive,
+              speedInk: live.speedInk ?? 0,
+              speedBlotBlend: live.speedBlotBlend ?? 0,
+              speedFade: live.speedFade ?? 0,
+              boldness: live.boldness ?? 1,
+            });
+          }
+          engine.down(inkLabOverlaySample(canvas, rect, event));
         }
         loadMeterRef.current.begin();
         const liveAfterBegin = liveRef.current;
@@ -1855,11 +1965,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         // hand — and the only sample here whose age reflects a stall, since the
         // dispatched event carries the newest one.
         if (inkMetrics.enabled) inkMetrics.move(batch.length, batch[0]?.timeStamp);
-        stroke.ingest(batch.map(livePointerSample));
         if (inkLabLiveRef.current && inkLabRef.current) {
           inkLabRef.current.move(
             batch.map((item) => inkLabOverlaySample(canvas, rect, item)),
           );
+          inkLabQueuedRef.current = batch.length;
+        } else {
+          stroke.ingest(batch.map(livePointerSample));
         }
         liveRef.current = stroke.live;
         paintLiveAfterChangeRef.current();
@@ -1898,16 +2010,30 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (stroke) {
           const coalesced = event.getCoalescedEvents?.();
           const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
-          stroke.ingest(batch.map(livePointerSample));
           if (inkLabLiveRef.current && inkLabRef.current) {
             const last = batch[batch.length - 1] ?? event;
             const sampleRect = strokeRectRef.current ?? canvas.getBoundingClientRect();
-            inkLabRef.current.up(inkLabOverlaySample(canvas, sampleRect, last));
+            const baked = inkLabRef.current.up(
+              inkLabOverlaySample(canvas, sampleRect, last),
+            );
+            liveRef.current = stroke.commit();
+            const view = strokeViewRef.current;
+            if (liveRef.current && view) {
+              applyInkLabBakeToOp(
+                liveRef.current,
+                baked,
+                view,
+                canvas.width / Math.max(1, sampleRect.width),
+              );
+              inkLabCommitRef.current = true;
+            }
             inkLabRef.current.clear();
+          } else {
+            liveRef.current = stroke.commit();
           }
-          liveRef.current = stroke.commit();
         }
         inkLabLiveRef.current = false;
+        labOverlayDirtyRef.current = null;
         drawingRef.current = false;
         activePointerRef.current = null;
         strokeRecaptured = false;
@@ -1972,6 +2098,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         liveStrokeRef.current = null;
         liveRef.current = null;
         inkLabLiveRef.current = false;
+        inkLabCommitRef.current = false;
+        labOverlayDirtyRef.current = null;
         inkLabRef.current?.clear();
         drawingRef.current = false;
         activePointerRef.current = null;
@@ -2087,6 +2215,110 @@ function livePointerSample(event: PointerEvent): LivePointerSample {
   };
 }
 
+function unionOverlayDirty(a: OverlayDirty, b: OverlayDirty | null): OverlayDirty {
+  if (!b) return a;
+  const x0 = Math.min(a.x, b.x);
+  const y0 = Math.min(a.y, b.y);
+  const x1 = Math.max(a.x + a.w, b.x + b.w);
+  const y1 = Math.max(a.y + a.h, b.y + b.h);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+function aabbOverlayDirty(box: StrokeAabb, width: number, height: number): OverlayDirty {
+  if (!Number.isFinite(box.minX) || box.maxX < box.minX) {
+    return { x: 0, y: 0, w: width, h: height };
+  }
+  const pad = 4;
+  const x0 = Math.max(0, Math.floor(box.minX) - pad);
+  const y0 = Math.max(0, Math.floor(box.minY) - pad);
+  const x1 = Math.min(width, Math.ceil(box.maxX) + pad);
+  const y1 = Math.min(height, Math.ceil(box.maxY) + pad);
+  if (x1 <= x0 || y1 <= y0) return { x: 0, y: 0, w: width, h: height };
+  const w = x1 - x0;
+  const h = y1 - y0;
+  if (w * h > width * height * 0.7) return { x: 0, y: 0, w: width, h: height };
+  return { x: x0, y: y0, w, h };
+}
+
+function clipLabOverlayBlit(
+  ctx: CanvasRenderingContext2D,
+  view: ViewportTransform | null,
+  dpr: number,
+  pageClip: SceneBounds | null,
+  live: InkOp | null,
+  hosts: ScrollHostLookup,
+  draw: () => void,
+): void {
+  const host =
+    live && isHostBoundOp(live) ? hosts.get(live.hostKey!) ?? null : null;
+  if (!view || (!pageClip && !host)) {
+    draw();
+    return;
+  }
+  ctx.save();
+  setInkSceneTransform(ctx, view, dpr);
+  if (pageClip) {
+    ctx.beginPath();
+    ctx.rect(
+      pageClip.minX,
+      pageClip.minY,
+      pageClip.maxX - pageClip.minX,
+      pageClip.maxY - pageClip.minY,
+    );
+    ctx.clip();
+  }
+  if (host) {
+    ctx.beginPath();
+    ctx.rect(
+      host.bounds.minX,
+      host.bounds.minY,
+      host.bounds.maxX - host.bounds.minX,
+      host.bounds.maxY - host.bounds.minY,
+    );
+    ctx.clip();
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  draw();
+  ctx.restore();
+}
+
+function blitOverlayDirty(
+  ctx: CanvasRenderingContext2D,
+  dirty: OverlayDirty,
+  snap: HTMLCanvasElement | null,
+  live: HTMLCanvasElement,
+): void {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const prevSmooth = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(dirty.x, dirty.y, dirty.w, dirty.h);
+  if (snap) {
+    ctx.drawImage(
+      snap,
+      dirty.x,
+      dirty.y,
+      dirty.w,
+      dirty.h,
+      dirty.x,
+      dirty.y,
+      dirty.w,
+      dirty.h,
+    );
+  }
+  ctx.drawImage(
+    live,
+    dirty.x,
+    dirty.y,
+    dirty.w,
+    dirty.h,
+    dirty.x,
+    dirty.y,
+    dirty.w,
+    dirty.h,
+  );
+  ctx.imageSmoothingEnabled = prevSmooth;
+}
+
 function inkLabOverlaySample(
   canvas: HTMLCanvasElement,
   rect: DOMRect,
@@ -2103,4 +2335,45 @@ function inkLabOverlaySample(
     p: pressure,
     t: event.timeStamp,
   };
+}
+
+function inkLabSpineToScene(
+  dots: readonly SpineDot[],
+  view: ViewportTransform,
+  dpr: number,
+): ScenePoint[] {
+  const overlayScale = Math.max(1e-6, view.zoom * dpr);
+  return dots.map((d) => {
+    const scene = scenePointFromCanvasPixel(d.x / dpr, d.y / dpr, view);
+    const pt: ScenePoint = {
+      x: scene.x,
+      y: scene.y,
+      pressure: d.p ?? 0.5,
+      radius: d.r / overlayScale,
+    };
+    if (d.slow != null) pt.slowness = d.slow;
+    return pt;
+  });
+}
+
+function applyInkLabBakeToOp(
+  op: InkOp,
+  baked: InkLabUpResult,
+  view: ViewportTransform,
+  dpr: number,
+): void {
+  if (op.kind !== "draw" || baked.points.length === 0) return;
+  op.points = inkLabSpineToScene(baked.points, view, dpr);
+  if (baked.blotTipGrow > 0) op.blotTipGrow = baked.blotTipGrow;
+  if (baked.blotHalts.length === 0) return;
+  op.blotHalts = baked.blotHalts.map((h): InkBlotHalt => {
+    const scene = scenePointFromCanvasPixel(h.x / dpr, h.y / dpr, view);
+    return {
+      x: scene.x,
+      y: scene.y,
+      grow: h.grow,
+      ...(h.p != null ? { pressure: h.p } : {}),
+      ...(h.slow != null ? { slowness: h.slow } : {}),
+    };
+  });
 }

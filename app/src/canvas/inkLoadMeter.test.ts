@@ -95,7 +95,27 @@ describe("inkLoadMeter", () => {
     const text = formatInkLoadDebug(meter.peek());
     expect(text).toContain("paints 1");
     expect(text).toContain("slow 1");
-    expect(text).toContain("spine 90");
+    expect(text).toContain("pts 90");
     expect(text).toContain("queue 11");
+    expect(text).toContain("backend");
+    expect(text).toContain("suffix hit");
+  });
+
+  it("does not tax an incremental long spine", () => {
+    const meter = createInkLoadMeter();
+    meter.begin();
+    for (let i = 0; i < 40; i++) {
+      meter.frame(
+        cheap({
+          spineN: 80,
+          dirtyFrom: 79,
+          suffixHit: true,
+          backend: "canvas2d",
+        }),
+      );
+    }
+    expect(meter.peek().slowCalls).toBe(0);
+    expect(meter.peek().level).toBeLessThan(0.25);
+    expect(meter.peek().lift).toBe(false);
   });
 });

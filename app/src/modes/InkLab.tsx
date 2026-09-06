@@ -26,6 +26,7 @@ export type InkLabHud = {
   ekfMs: number;
   drawMs: number;
   hold: boolean;
+  suffix: boolean;
   bakeMs: number;
   bake: string;
 };
@@ -40,6 +41,7 @@ export const INK_LAB_HUD_ZERO: InkLabHud = {
   ekfMs: 0,
   drawMs: 0,
   hold: false,
+  suffix: true,
   bakeMs: 0,
   bake: "catmull",
 };
@@ -56,6 +58,7 @@ export function formatInkLabHud(hud: InkLabHud): string {
     `ekf ${hud.ekfMs.toFixed(2)}ms\n` +
     `draw ${hud.drawMs.toFixed(2)}ms\n` +
     `hold ${hud.hold ? "yes" : "no"}\n` +
+    `suffix ${hud.suffix ? "hit" : "miss"}\n` +
     `bake ${hud.bakeMs.toFixed(1)}ms ${hud.bake}`
   );
 }
@@ -97,13 +100,15 @@ export function InkLab({ active }: InkLabProps) {
         ekfMs: number;
         drawMs: number;
         hold: boolean;
+        suffix?: boolean;
+        backend?: string;
       },
       rafMs: number,
     ) => {
       const hud = hudRef.current;
       if (!hud) return;
       hud.textContent = formatInkLabHud({
-        backend: backendRef.current,
+        backend: stats.backend ?? backendRef.current,
         paints: paintsRef.current,
         frameMs: stats.frameMs,
         rafMs,
@@ -112,6 +117,7 @@ export function InkLab({ active }: InkLabProps) {
         ekfMs: stats.ekfMs,
         drawMs: stats.drawMs,
         hold: stats.hold,
+        suffix: stats.suffix ?? true,
         bakeMs: bakeRef.current.bakeMs,
         bake: bakeRef.current.bake,
       });
@@ -152,6 +158,7 @@ export function InkLab({ active }: InkLabProps) {
         const stats = engine.paint();
         paintsRef.current += 1;
         writeHud(stats, prev > 0 ? now - prev : 0);
+        if (drawingRef.current && stats.hold) schedulePaint();
       });
     };
 

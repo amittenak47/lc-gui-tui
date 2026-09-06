@@ -53,7 +53,7 @@ describe("a mark settles its own overlaps before it reaches the page", () => {
     const pts: ScenePoint[] = [];
     for (let i = 0; i < 60; i++) pts.push({ x: i * 3, y: i * 0.4, pressure: 0.6, slowness: 1.9 });
     const calls = destCalls(pts);
-    expect(calls.filter((c) => c.startsWith("drawImage")).length).toBeGreaterThan(0);
-    expect(calls.some((c) => c.startsWith("fill("))).toBe(false);
+    expect(calls.filter((c) => c.startsWith("fill(")).length).toBeGreaterThan(0);
+    expect(calls.filter((c) => c.startsWith("drawImage")).length).toBe(0);
   });
 });

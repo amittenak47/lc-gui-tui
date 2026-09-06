@@ -333,11 +333,13 @@ describe("ribbon scratch release", () => {
       },
       1,
     );
-    const big = debugRibbonScratchSize();
-    expect(big).not.toBeNull();
-    releaseLiveRibbonBuffers();
     expect(debugRibbonScratchSize()).toBeNull();
+    const longInk = ctx.getImageData(0, 0, 900, 500).data;
+    let longHits = 0;
+    for (let i = 3; i < longInk.length; i += 4) if (longInk[i]! > 0) longHits += 1;
+    expect(longHits).toBeGreaterThan(100);
 
+    ctx.clearRect(0, 0, 900, 500);
     applyInkOp(
       ctx,
       {
@@ -357,9 +359,12 @@ describe("ribbon scratch release", () => {
       },
       1,
     );
-    const small = debugRibbonScratchSize();
-    expect(small).not.toBeNull();
-    expect(small!.width * small!.height).toBeLessThan(big!.width * big!.height);
+    expect(debugRibbonScratchSize()).toBeNull();
+    const shortInk = ctx.getImageData(0, 0, 900, 500).data;
+    let shortHits = 0;
+    for (let i = 3; i < shortInk.length; i += 4) if (shortInk[i]! > 0) shortHits += 1;
+    expect(shortHits).toBeGreaterThan(10);
+    expect(shortHits).toBeLessThan(longHits);
     releaseLiveRibbonBuffers();
   });
 });
@@ -385,13 +390,17 @@ describe("solid Speed Ink ribbon resolution", () => {
       ],
     };
     applyInkOp(ctx, op, 1);
-    const at1x = debugRibbonScratchSize();
-    releaseLiveRibbonBuffers();
+    expect(debugRibbonScratchSize()).toBeNull();
+    const at1x = ctx.getImageData(0, 0, 800, 200).data;
+    let ink1 = 0;
+    for (let i = 3; i < at1x.length; i += 4) if (at1x[i]! > 0) ink1 += 1;
+    ctx.clearRect(0, 0, 800, 200);
     applyInkOp(ctx, op, 2);
-    const at2x = debugRibbonScratchSize();
-    expect(at1x).not.toBeNull();
-    expect(at2x).not.toBeNull();
-    expect(at2x!.width).toBeGreaterThan(at1x!.width * 1.5);
+    const at2x = ctx.getImageData(0, 0, 800, 200).data;
+    let ink2 = 0;
+    for (let i = 3; i < at2x.length; i += 4) if (at2x[i]! > 0) ink2 += 1;
+    expect(ink1).toBeGreaterThan(50);
+    expect(ink2).toBeGreaterThan(50);
     releaseLiveRibbonBuffers();
   });
 });

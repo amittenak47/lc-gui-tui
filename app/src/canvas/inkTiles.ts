@@ -27,6 +27,7 @@ import {
   endInkOpBatch,
   HIGHLIGHT_WIDTH_SCALE,
   hostScrollDx,
+  hostScrollDy,
   inkLineWidth,
   INK_SPEED_WIDTH_RANGE,
   INK_TIP_STEP,
@@ -915,6 +916,7 @@ export function paintLiveOp(
           hostScrollDx(op, host.scrollLeft, viewport.zoom),
           pixelScale,
           capOptions,
+          hostScrollDy(op, host.scrollTop ?? 0, viewport.zoom),
         );
         } else {
           applyInkOp(ctx, op, pixelScale, capOptions);

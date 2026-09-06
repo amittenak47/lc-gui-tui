@@ -1,10 +1,10 @@
 /**
  * Live-stroke load for the canvas lift bar.
  *
- * Counts each live tick+paint while the pointer is down and turns overruns,
+ * Counts each live paint while the pointer is down and turns overruns,
  * dropped frames, queued samples, and full remeshes into a 0–1 level. Red
- * means the open stroke is costing more than a frame — lift so the prefix can
- * bake instead of growing the live ribbon.
+ * means the open stroke is costing more than a frame. Suffix-hit must be
+ * honest — claiming a suffix on a full remesh hides the warning.
  *
  * Always on and cheap: a handful of adds per animation frame. Not the
  * DEBUG_INK console sampler.
@@ -39,6 +39,11 @@ export type InkLoadFrame = {
   suffixHit: boolean;
   /** Pointer samples waiting on the ring before this tick drained them. */
   queued: number;
+  backend?: string;
+  segs?: number;
+  ekfMs?: number;
+  drawMs?: number;
+  hold?: boolean;
 };
 
 export type InkLoadSnapshot = {
@@ -54,6 +59,11 @@ export type InkLoadSnapshot = {
   queued: number;
   dirtyFrom: number;
   suffixHit: boolean;
+  backend: string;
+  segs: number;
+  ekfMs: number;
+  drawMs: number;
+  hold: boolean;
 };
 
 function clamp01(n: number): number {
@@ -85,18 +95,27 @@ function snapshot(
     queued: last?.queued ?? 0,
     dirtyFrom: last?.dirtyFrom ?? 0,
     suffixHit: last?.suffixHit ?? true,
+    backend: last?.backend ?? "none",
+    segs: last?.segs ?? 0,
+    ekfMs: last?.ekfMs ?? 0,
+    drawMs: last?.drawMs ?? 0,
+    hold: last?.hold ?? false,
   };
 }
 
-/** Temporary on-canvas readout of the live-paint counters. */
+/** Live-paint counters, aligned with the Ink lab HUD. */
 export function formatInkLoadDebug(s: InkLoadSnapshot): string {
   const suffix = s.suffixHit ? "hit" : "miss";
   return [
+    `backend ${s.backend}`,
     `paints ${s.calls}  slow ${s.slowCalls}`,
-    `debt ${Math.round(s.debtMs)}ms  ema ${s.ema.toFixed(2)}`,
     `frame ${s.frameMs.toFixed(1)}ms  raf ${s.rafMs.toFixed(1)}ms`,
-    `queue ${s.queued}  spine ${s.spineN}`,
+    `pts ${s.spineN}  segs ${s.segs}`,
+    `ekf ${s.ekfMs.toFixed(2)}ms  draw ${s.drawMs.toFixed(2)}ms`,
+    `hold ${s.hold ? "yes" : "no"}`,
     `suffix ${suffix}  dirty ${s.dirtyFrom}`,
+    `debt ${Math.round(s.debtMs)}ms  ema ${s.ema.toFixed(2)}`,
+    `queue ${s.queued}`,
   ].join("\n");
 }
 
