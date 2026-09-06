@@ -5,6 +5,7 @@
 
 import { inkSlowness } from "../rasterInk";
 
+import { bakeSpine } from "./bake";
 import { createEkf, type EkfFilter } from "./ekf";
 import { createFallbackPainter, fillMiterStroke } from "./fallback";
 import {
@@ -102,8 +103,7 @@ function nibRadius(vx: number, vy: number, dpr: number, pressure: number): numbe
 }
 
 export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
-  const clothoidWanted = opts.clothoid === true;
-  void clothoidWanted;
+  const useClothoid = opts.clothoid === true;
   let host: HTMLCanvasElement | null = null;
   let backend: InkLabBackend = "canvas2d";
   let sdf: SdfRenderer | null = null;
@@ -209,6 +209,28 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     appendSpine(dot);
   };
 
+  const applyBaked = (points: SpineDot[]) => {
+    spine = points;
+    segs = 0;
+    aabb = emptyAabb();
+    fallback?.beginStroke();
+    if (points.length === 0) {
+      tip = null;
+      return;
+    }
+    expandAabb(aabb, points[0]!);
+    tip = points[points.length - 1]!;
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1]!;
+      const b = points[i]!;
+      ensureInst(segs + 1);
+      writeInstance(inst, segs, a, b, INK, INK);
+      segs += 1;
+      fallback?.appendHop(a, b, INK);
+      expandAabb(aabb, b);
+    }
+  };
+
   const blitLiveToSnap = () => {
     if (!snap) return;
     const sctx = snap.getContext("2d");
@@ -291,6 +313,8 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     up(s) {
       if (drawing) ingest(s);
       const t0 = performance.now();
+      const baked = bakeSpine(spine, { clothoid: useClothoid });
+      applyBaked(baked.points);
       blitLiveToSnap();
       const bakeMs = performance.now() - t0;
       drawing = false;
@@ -301,7 +325,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       segs = 0;
       tip = null;
       aabb = emptyAabb();
-      return { bakeMs, bake: "catmull" };
+      return { bakeMs, bake: baked.bake };
     },
     paint() {
       const t0 = performance.now();
