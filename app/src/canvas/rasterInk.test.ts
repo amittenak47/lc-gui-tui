@@ -75,6 +75,7 @@ import {
   smoothPressure,
   stampAlongSegment,
   curveAlongHop,
+  expandInkTurns,
   STROKE_WIDTH_MAX,
   STROKE_WIDTH_MIN,
   unionSceneBounds,
@@ -600,6 +601,31 @@ describe("curveAlongHop", () => {
     const seeds = curveAlongHop(pt(0, 0), pt(10, 0), pt(10, 400), 2);
     expect(seeds.length).toBeLessThanOrEqual(32);
     expect(seeds[seeds.length - 1].y).toBe(400);
+  });
+});
+
+describe("expandInkTurns", () => {
+  const pt = (x: number, y: number): ScenePoint => ({
+    x,
+    y,
+    pressure: NO_PRESSURE,
+  });
+
+  it("leaves a collinear run as the planted samples", () => {
+    const pts = [pt(0, 0), pt(10, 0), pt(40, 0)];
+    const out = expandInkTurns(pts, 2);
+    expect(out).toHaveLength(3);
+    expect(out[2]).toEqual(pts[2]);
+  });
+
+  it("plants off-chord midpoints on a right-angle turn", () => {
+    const pts = [pt(0, 0), pt(10, 0), pt(10, 10)];
+    const out = expandInkTurns(pts, 2);
+    expect(out.length).toBeGreaterThan(3);
+    let off = 0;
+    for (const s of out) off = Math.max(off, Math.abs(s.x - 10) * (s.y > 0.5 && s.y < 9.5 ? 1 : 0));
+    expect(off).toBeGreaterThan(0.2);
+    expect(out[out.length - 1]).toEqual(pts[2]);
   });
 });
 

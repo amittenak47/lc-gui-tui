@@ -1023,6 +1023,24 @@ export function curveAlongHop(
   return out;
 }
 
+/**
+ * Plant Catmull midpoints on turning hops. Live Speed Ink keeps the sparse
+ * pointer spine and stamps round strokes; lift runs this once so the ribbon
+ * bake still has off-chord samples.
+ */
+export function expandInkTurns(
+  points: readonly ScenePoint[],
+  spacing = HOP_CURVE_STEP,
+): ScenePoint[] {
+  if (points.length < 2) return points.slice();
+  const out: ScenePoint[] = [points[0]!];
+  for (let i = 1; i < points.length; i++) {
+    const prev = i >= 2 ? points[i - 2]! : null;
+    out.push(...curveAlongHop(prev, points[i - 1]!, points[i]!, spacing));
+  }
+  return out;
+}
+
 /* --------------------------------------------------------------- runs --- */
 
 /**
