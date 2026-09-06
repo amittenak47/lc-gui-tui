@@ -2,10 +2,12 @@
  * Comparison pad for the WebGL overlay pen. Not Speed Ink, not the board.
  *
  * Layout matches FreehandLab: one host, one visible canvas, one snap, HUD,
- * Clear. The engine lives in `canvas/inkLab` and is wired in later steps.
+ * Clear. Host talks only to `createInkLabEngine`.
  */
 
 import { useEffect, useRef } from "react";
+
+import { createInkLabEngine } from "../canvas/inkLab/engine";
 
 export interface InkLabProps {
   active: boolean;
@@ -59,6 +61,8 @@ export function InkLab({ active }: InkLabProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hudRef = useRef<HTMLPreElement | null>(null);
+  const engineRef = useRef<ReturnType<typeof createInkLabEngine> | null>(null);
+  const backendRef = useRef("none");
 
   useEffect(() => {
     const host = hostRef.current;
@@ -79,20 +83,34 @@ export function InkLab({ active }: InkLabProps) {
       }
     };
 
+    const engine = createInkLabEngine();
+    engineRef.current = engine;
+    const backend = engine.attach(canvas);
+    backendRef.current = backend;
+    const hud = hudRef.current;
+    if (hud) {
+      hud.textContent = formatInkLabHud({ ...INK_LAB_HUD_ZERO, backend });
+    }
+
     sizeToHost();
     const ro = new ResizeObserver(() => sizeToHost());
     ro.observe(host);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      engine.destroy();
+      engineRef.current = null;
+    };
   }, [active]);
 
   const clear = () => {
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext("2d");
-      ctx?.clearRect(0, 0, canvas.width, canvas.height);
-    }
+    engineRef.current?.clear();
     const hud = hudRef.current;
-    if (hud) hud.textContent = formatInkLabHud(INK_LAB_HUD_ZERO);
+    if (hud) {
+      hud.textContent = formatInkLabHud({
+        ...INK_LAB_HUD_ZERO,
+        backend: backendRef.current,
+      });
+    }
   };
 
   return (
