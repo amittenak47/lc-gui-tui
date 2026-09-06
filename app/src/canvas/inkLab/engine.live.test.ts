@@ -222,6 +222,20 @@ describe("Ink lab live path", () => {
     engine.up({ x: 240, y: 200, p: 0.5, t: 96 });
     engine.destroy();
   });
+
+  it("redrawSnap then paint presents onto the attached host", () => {
+    const canvas = createCanvas(80, 60) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.redrawSnap((ctx) => {
+      ctx.fillStyle = "#112233";
+      ctx.fillRect(10, 10, 20, 20);
+    });
+    engine.paint();
+    const data = canvas.getContext("2d")!.getImageData(15, 15, 1, 1).data;
+    expect(data[2]).toBeGreaterThan(0);
+    engine.destroy();
+  });
 });
 
 describe("EKF is the live filter", () => {

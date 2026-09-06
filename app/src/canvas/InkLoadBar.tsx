@@ -8,13 +8,11 @@
 
 import { forwardRef, useImperativeHandle, useRef } from "react";
 
-import {
-  formatInkLoadDebug,
-  type InkLoadSnapshot,
-} from "./inkLoadMeter";
+import { formatInkLabHud, type InkLabHud } from "./inkLab/hud";
+import { type InkLoadSnapshot } from "./inkLoadMeter";
 
 export interface InkLoadBarHandle {
-  show(snap: InkLoadSnapshot): void;
+  show(snap: InkLoadSnapshot, hud?: InkLabHud): void;
   /** Keep the last readout on screen; the next {@link show} resets it. */
   freeze(): void;
 }
@@ -32,7 +30,7 @@ export const InkLoadBar = forwardRef<InkLoadBarHandle, Record<never, never>>(
     useImperativeHandle(
       ref,
       (): InkLoadBarHandle => ({
-        show(snap) {
+        show(snap, hud) {
           const root = rootRef.current;
           const fill = fillRef.current;
           const hint = hintRef.current;
@@ -57,7 +55,22 @@ export const InkLoadBar = forwardRef<InkLoadBarHandle, Record<never, never>>(
             root.removeAttribute("aria-valuetext");
           }
           lastLiftRef.current = snap.lift;
-          const text = formatInkLoadDebug(snap);
+          const text = hud
+            ? formatInkLabHud(hud)
+            : formatInkLabHud({
+                backend: snap.backend,
+                paints: snap.calls,
+                frameMs: snap.frameMs,
+                rafMs: snap.rafMs,
+                pts: snap.spineN,
+                segs: snap.segs,
+                ekfMs: snap.ekfMs,
+                drawMs: snap.drawMs,
+                hold: snap.hold,
+                suffix: snap.suffixHit,
+                bakeMs: 0,
+                bake: "catmull",
+              });
           if (text !== lastDebugRef.current) {
             lastDebugRef.current = text;
             debug.textContent = text;
@@ -94,7 +107,7 @@ export const InkLoadBar = forwardRef<InkLoadBarHandle, Record<never, never>>(
         <div ref={hintRef} className="lc-ink-load-bar-hint" hidden>
           Lift pen
         </div>
-        <pre ref={debugRef} className="lc-ink-load-bar-debug" hidden />
+        <pre ref={debugRef} className="lc-ink-lab-hud" hidden />
       </div>
     );
   },

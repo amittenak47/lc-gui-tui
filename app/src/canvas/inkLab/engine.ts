@@ -84,6 +84,16 @@ export type InkLabEngine = {
   pointCount(): number;
   up(s?: InkLabSample): InkLabUpResult;
   paint(): InkLabPaintStats;
+  /**
+   * Copy the in-DOM host into the committed snap. Call at pointerdown so live
+   * composite keeps tiles / highlighter already on the overlay.
+   */
+  captureSnap(): void;
+  /**
+   * Rebuild the committed snap (camera change, undo). Next {@link paint}
+   * presents this plus any live SDF.
+   */
+  redrawSnap(paint: (ctx: CanvasRenderingContext2D) => void): void;
   clear(): void;
   destroy(): void;
 };
@@ -660,6 +670,27 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         dirtyFrom: suffix ? Math.max(0, segs > 0 ? segs - 1 : 0) : 0,
         aabb: dirty,
       };
+    },
+    captureSnap() {
+      if (!host) return;
+      syncSize();
+      if (!snap || !peer) return;
+      const sctx = snap.getContext("2d");
+      if (!sctx) return;
+      sctx.setTransform(1, 0, 0, 1, 0, 0);
+      sctx.clearRect(0, 0, snap.width, snap.height);
+      sctx.drawImage(host, 0, 0);
+    },
+    redrawSnap(paint) {
+      if (!host || !peer) return;
+      syncSize();
+      if (!snap) snap = peer(host.width, host.height);
+      if (!snap) return;
+      const sctx = snap.getContext("2d");
+      if (!sctx) return;
+      sctx.setTransform(1, 0, 0, 1, 0, 0);
+      sctx.clearRect(0, 0, snap.width, snap.height);
+      paint(sctx);
     },
     clear() {
       resetLive();
