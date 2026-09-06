@@ -1,6 +1,6 @@
 /**
- * Replay one pointer tape through perfect-freehand and Speed Ink stamp+bake.
- * InkLab backends are timed in a later step on the same tapes.
+ * Replay one pointer tape through perfect-freehand, Speed Ink stamp+bake, and
+ * the Ink lab engine. WebGL2 is timed on the pad; Node uses the 2D fallback.
  */
 
 import { createCanvas } from "@napi-rs/canvas";
@@ -24,7 +24,7 @@ import { expandInkTurns, type ScenePoint } from "../rasterInk";
 import { INK_SMOOTHING_MODE_DEFAULT, smoothInkPoints } from "../inkSmoothing";
 import { beginLiveStroke } from "../liveStroke";
 
-import type { InkLabSample } from "./engine";
+import { createInkLabEngine, type InkLabSample } from "./engine";
 
 export type TimingSummary = {
   n: number;
@@ -36,12 +36,18 @@ export type TimingSummary = {
   bakeMs: number | null;
 };
 
+export type InkLabTiming = TimingSummary & {
+  backend: string;
+  bake: string;
+};
+
 export type TapeReplay = {
   name: string;
   n: number;
   pf: TimingSummary;
   speedStamp: TimingSummary;
   speedBakeMs: number;
+  ink2d: InkLabTiming;
 };
 
 function percentile(sorted: number[], p: number): number {
@@ -225,6 +231,43 @@ export function timeSpeedStamp(
   });
 }
 
+export function timeInkLab(
+  samples: readonly InkLabSample[],
+  hold: boolean,
+): InkLabTiming {
+  ensureOffscreenCanvas();
+  if (samples.length === 0) {
+    return {
+      ...summarize([], 0, { lastMs: 0, holdMs: null, outlineN: 0, bakeMs: 0 }),
+      backend: "none",
+      bake: "catmull",
+    };
+  }
+  const canvas = createCanvas(800, 600) as unknown as HTMLCanvasElement;
+  const engine = createInkLabEngine();
+  const backend = engine.attach(canvas);
+  const frames: number[] = [];
+  engine.down(samples[0]!);
+  frames.push(engine.paint().frameMs);
+  for (let i = 1; i < samples.length; i++) {
+    engine.move([samples[i]!]);
+    frames.push(engine.paint().frameMs);
+  }
+  const up = engine.up(samples[samples.length - 1]!);
+  engine.paint();
+  engine.destroy();
+  return {
+    ...summarize(frames, samples.length, {
+      lastMs: up.bakeMs,
+      holdMs: hold ? frames[frames.length - 1]! : null,
+      outlineN: 0,
+      bakeMs: up.bakeMs,
+    }),
+    backend,
+    bake: up.bake,
+  };
+}
+
 export function replayTape(
   name: string,
   samples: readonly InkLabSample[],
@@ -233,12 +276,14 @@ export function replayTape(
   const pf = timePerfectFreehand(samples, hold);
   const speedStamp = timeSpeedStamp(samples, hold);
   const speedBakeMs = timeSpeedBake(samples);
+  const ink2d = timeInkLab(samples, hold);
   return {
     name,
     n: samples.length,
     pf,
     speedStamp,
     speedBakeMs,
+    ink2d,
   };
 }
 
@@ -252,7 +297,10 @@ export function formatReplayHud(row: TapeReplay): string {
     `  stamp  p50=${ms(row.speedStamp.p50)} p95=${ms(row.speedStamp.p95)}` +
     (row.speedStamp.holdMs != null ? ` hold=${ms(row.speedStamp.holdMs)}` : "") +
     `\n` +
-    `  bake   commit=${ms(row.speedStamp.bakeMs ?? 0)} rdp+chaikin+turns=${ms(row.speedBakeMs)}`
+    `  bake   commit=${ms(row.speedStamp.bakeMs ?? 0)} rdp+chaikin+turns=${ms(row.speedBakeMs)}\n` +
+    `  inklab backend=${row.ink2d.backend} bake=${row.ink2d.bake} p50=${ms(row.ink2d.p50)} p95=${ms(row.ink2d.p95)}` +
+    (row.ink2d.holdMs != null ? ` hold=${ms(row.ink2d.holdMs)}` : "") +
+    ` lift=${ms(row.ink2d.bakeMs ?? 0)}`
   );
 }
 
