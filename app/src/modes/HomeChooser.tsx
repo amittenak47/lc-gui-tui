@@ -1,5 +1,5 @@
 /**
- * Landing screen — Practice, Whiteboard, Freehand, Annotate, Browse, Explore.
+ * Landing screen — Practice, Whiteboard, Freehand, Ink lab, Annotate, Browse, Explore.
  *
  * There is no longer a "What do you want to do?" banner over the cards. The
  * header already says `choose a mode to start`, and the question was asking
@@ -28,6 +28,8 @@ export interface HomeChooserProps {
   onExplore: () => void;
   /** perfect-freehand comparison pad. */
   onFreehand: () => void;
+  /** WebGL ink lab comparison pad. */
+  onInkLab: () => void;
   /** Something is already opening; the cards stop taking taps. */
   busy?: boolean;
 }
@@ -193,6 +195,7 @@ export function HomeChooser({
   onBrowse,
   onExplore,
   onFreehand,
+  onInkLab,
   busy = false,
 }: HomeChooserProps) {
   const modes: HomeMode[] = [
@@ -269,6 +272,27 @@ export function HomeChooser({
         </Glyph>
       ),
       onOpen: onFreehand,
+    },
+    {
+      id: "inklab",
+      kicker: "Ink",
+      title: "Ink lab",
+      blurb: "WebGL overlay pen — compare feel and cost to Speed Ink and Freehand.",
+      live: (
+        <Glyph>
+          <path
+            className="lc-home-inklab"
+            d="M4 18c4-12 6 1 8-2 2-3 5 8 8 0"
+            pathLength={1}
+          />
+        </Glyph>
+      ),
+      icon: (
+        <Glyph>
+          <path d="M4 18c4-12 6 1 8-2 2-3 5 8 8 0" />
+        </Glyph>
+      ),
+      onOpen: onInkLab,
     },
     {
       id: "annotate",

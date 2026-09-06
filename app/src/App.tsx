@@ -764,7 +764,13 @@ export function App() {
   const groupHasBoard = Boolean(
     activeGroup?.children.some((id) => {
       const kind = tabState.tabs.find((tab) => tab.id === id)?.kind;
-      return kind != null && kind !== "home" && kind !== "explore" && kind !== "freehand";
+      return (
+        kind != null &&
+        kind !== "home" &&
+        kind !== "explore" &&
+        kind !== "freehand" &&
+        kind !== "inklab"
+      );
     }),
   );
 

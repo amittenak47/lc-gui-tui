@@ -29,7 +29,8 @@ export type TabKind =
   | "annotate"
   | "web"
   | "explore"
-  | "freehand";
+  | "freehand"
+  | "inklab";
 
 /** Mirrors `DocIndexChipStatus` without pulling a component into the model. */
 export type TabIndexState = "idle" | "indexing" | "indexed" | "error";
@@ -63,6 +64,9 @@ export const EXPLORE_TAB_LIMIT = 1;
 /** One comparison pad. Opening it again focuses the chip that exists. */
 export const FREEHAND_TAB_LIMIT = 1;
 
+/** One WebGL ink lab. Opening it again focuses the chip that exists. */
+export const INKLAB_TAB_LIMIT = 1;
+
 interface TabBase {
   id: string;
   title: string;
@@ -79,6 +83,10 @@ export interface ExploreTab extends TabBase {
 
 export interface FreehandTab extends TabBase {
   kind: "freehand";
+}
+
+export interface InkLabTab extends TabBase {
+  kind: "inklab";
 }
 
 export interface HomeTab extends TabBase {
@@ -141,7 +149,8 @@ export type TabRecord =
   | AnnotateTab
   | WebTab
   | ExploreTab
-  | FreehandTab;
+  | FreehandTab
+  | InkLabTab;
 
 /** Vertical sash = left | right panes. Horizontal sash = top | bottom. */
 export type SplitAxis = "vertical" | "horizontal";
@@ -426,6 +435,8 @@ export function sameEntity(a: TabRecord, b: TabRecord): boolean {
       // There is only ever one, so any two explore records are the same one.
       return true;
     case "freehand":
+      return true;
+    case "inklab":
       return true;
     case "annotate":
       /*
