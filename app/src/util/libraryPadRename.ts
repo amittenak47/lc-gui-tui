@@ -18,7 +18,7 @@ import {
 } from "./whiteboardStore";
 
 export function tabAllowsRename(tab: TabRecord): boolean {
-  if (tab.kind === "home" || tab.kind === "practice" || tab.kind === "explore") {
+  if (tab.kind === "home" || tab.kind === "practice" || tab.kind === "explore" || tab.kind === "freehand") {
     return false;
   }
   if (isFootnoteBoardTab(tab)) return false;

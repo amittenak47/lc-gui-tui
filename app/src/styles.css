@@ -38,6 +38,7 @@
   --lc-mode-annotate: #f0a33a;
   --lc-mode-browse: #34d399;
   --lc-mode-explore: #f472b6;
+  --lc-mode-freehand: #2dd4bf;
   --ink: #111827;
   --muted: #4b5563;
   --hint: #6b7280;
@@ -568,6 +569,10 @@ a,
 
 .lc-tab[data-tab-kind="explore"] {
   --lc-tab-mode: var(--lc-mode-explore);
+}
+
+.lc-tab[data-tab-kind="freehand"] {
+  --lc-tab-mode: var(--lc-mode-freehand);
 }
 
 .lc-tab[data-tab-kind="home"] {
@@ -6053,6 +6058,81 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-home-card[data-mode="explore"] {
   --lc-home-mode: var(--lc-mode-explore);
+}
+
+.lc-home-card[data-mode="freehand"] {
+  --lc-home-mode: var(--lc-mode-freehand);
+}
+
+.lc-overlay-content:has(.lc-freehand-lab) {
+  align-items: stretch;
+}
+
+.lc-freehand-lab {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  background: #f4f1ea;
+  touch-action: none;
+}
+
+.lc-freehand-lab-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.lc-freehand-lab-hud {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgb(24 24 24 / 72%);
+  color: #f4f4f5;
+  font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  pointer-events: none;
+  white-space: pre;
+}
+
+.lc-freehand-lab-note {
+  position: absolute;
+  left: 12px;
+  right: 88px;
+  bottom: 12px;
+  margin: 0;
+  color: color-mix(in srgb, var(--ink) 62%, transparent);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.lc-freehand-lab-clear {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.lc-home-card[data-mode="freehand"] .lc-home-freehand {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: lc-home-freehand 5s ease-in-out infinite;
+}
+
+@keyframes lc-home-freehand {
+  0%, 12% { stroke-dashoffset: 1; }
+  40%, 70% { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: 1; }
 }
 
 /*

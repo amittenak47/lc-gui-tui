@@ -190,6 +190,31 @@ describe("tabsReducer", () => {
     expect(sameEntity(a, board("b3", "nb-1"))).toBe(false);
   });
 
+  it("treats any two Freehand records as the same comparison pad", () => {
+    const a: TabRecord = {
+      id: "freehand-1",
+      kind: "freehand",
+      title: "Freehand",
+      dirty: false,
+      lastActive: 1,
+    };
+    const b: TabRecord = {
+      id: "freehand-2",
+      kind: "freehand",
+      title: "Freehand",
+      dirty: false,
+      lastActive: 2,
+    };
+    expect(sameEntity(a, b)).toBe(true);
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: a, at: 1 },
+      { type: "open", tab: b, at: 2 },
+    );
+    expect(state.tabs.filter((tab) => tab.kind === "freehand")).toHaveLength(1);
+    expect(state.activeId).toBe("freehand-1");
+  });
+
   it("caps web tabs and evicts the least recently used one", () => {
     const state = run(
       initialTabState(),

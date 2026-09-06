@@ -1,5 +1,5 @@
 /**
- * Landing screen — Practice, Whiteboard, Annotate, Browse, Explore.
+ * Landing screen — Practice, Whiteboard, Freehand, Annotate, Browse, Explore.
  *
  * There is no longer a "What do you want to do?" banner over the cards. The
  * header already says `choose a mode to start`, and the question was asking
@@ -26,6 +26,8 @@ export interface HomeChooserProps {
   onBrowse: () => void;
   /** The notes graph — one tab, see `EXPLORE_TAB_LIMIT`. */
   onExplore: () => void;
+  /** perfect-freehand comparison pad. */
+  onFreehand: () => void;
   /** Something is already opening; the cards stop taking taps. */
   busy?: boolean;
 }
@@ -190,6 +192,7 @@ export function HomeChooser({
   onAnnotate,
   onBrowse,
   onExplore,
+  onFreehand,
   busy = false,
 }: HomeChooserProps) {
   const modes: HomeMode[] = [
@@ -245,6 +248,27 @@ export function HomeChooser({
         </Glyph>
       ),
       onOpen: onWhiteboard,
+    },
+    {
+      id: "freehand",
+      kicker: "Ink",
+      title: "Freehand",
+      blurb: "perfect-freehand as tldraw uses it — compare feel and cost to Speed Ink.",
+      live: (
+        <Glyph>
+          <path
+            className="lc-home-freehand"
+            d="M4 17c3-11 6-2 8 1 2 3 5-9 8-1"
+            pathLength={1}
+          />
+        </Glyph>
+      ),
+      icon: (
+        <Glyph>
+          <path d="M4 17c3-11 6-2 8 1 2 3 5-9 8-1" />
+        </Glyph>
+      ),
+      onOpen: onFreehand,
     },
     {
       id: "annotate",
