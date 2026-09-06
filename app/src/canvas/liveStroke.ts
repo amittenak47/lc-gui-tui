@@ -40,6 +40,8 @@ import {
   curveAlongHop,
   expandInkTurns,
   setInkSceneTransform,
+  paintSplineInk,
+  usesSplineOutline,
   type InkDrawOp,
   type InkOp,
   type SceneBounds,
@@ -297,6 +299,8 @@ export interface BeginLiveStroke {
   speedFade: number;
   grain: number;
   boldness: number;
+  splineOutline?: boolean;
+  splineGradient?: boolean;
   smoothing: number;
   smoothingMode: InkSmoothingMode;
   /** Shift/toggle chord; re-read each drained sample. Returns an index or null. */
@@ -432,6 +436,12 @@ export class LiveStroke {
           : {}),
         ...(init.grain > 0 ? { grain: init.grain } : {}),
         boldness: init.boldness,
+        ...(init.splineOutline || init.splineGradient
+          ? {
+              splineOutline: true,
+              ...(init.splineGradient ? { splineGradient: true } : {}),
+            }
+          : {}),
         points: this.spine.asPoints(),
       };
       if (attackApplies) {
@@ -451,7 +461,12 @@ export class LiveStroke {
     }
     this.bindHost(init.host);
 
-    if (init.tool === "pen" && (speed > 0 || fade > 0 || blotBlend > 0)) {
+    if (
+      init.tool === "pen" &&
+      (speed > 0 || fade > 0 || blotBlend > 0) &&
+      !init.splineOutline &&
+      !init.splineGradient
+    ) {
       this.startDwell();
     }
   }
@@ -476,8 +491,15 @@ export class LiveStroke {
       live.kind === "draw" &&
       live.highlight !== true &&
       (live.speedInk ?? 0) > 0 &&
-      !this.reshapeActive()
+      !this.reshapeActive() &&
+      !this.splineOutlineLive()
     );
+  }
+
+  /** Perfect-freehand outline fill live. The ribbon and stamp paths stay off. */
+  splineOutlineLive(): boolean {
+    const live = this.op;
+    return live.kind === "draw" && usesSplineOutline(live) && !this.reshapeActive();
   }
 
   ingest(batch: readonly LivePointerSample[]): void {
@@ -568,6 +590,9 @@ export class LiveStroke {
       height: this.view.height - 2 * marginY,
     };
     const drawView = overdrawnViewport(baseView, marginY);
+    if (this.splineOutlineLive()) {
+      return this.paintSplineOutline(ctx, canvas, dpr, clip, snap, drawView, full);
+    }
     if (this.speedStampLive()) {
       return this.paintSpeedStamp(ctx, canvas, dpr, clip, snap, drawView, full);
     }
@@ -647,7 +672,9 @@ export class LiveStroke {
     const n = this.op.kind === "draw" ? this.op.points.length : 0;
     const hop = Math.max(2, this.lastHopSpine + 1);
     let from = 0;
-    if (this.speedStampLive()) {
+    if (this.splineOutlineLive()) {
+      from = 0;
+    } else if (this.speedStampLive()) {
       from = Math.max(0, n - hop);
     } else {
       const liveDirty = this.op.kind === "draw" ? liveRibbonDirtySpine() : null;
@@ -723,6 +750,59 @@ export class LiveStroke {
     this.prevOverlayDirty = full ? null : local;
     const n = this.op.kind === "draw" ? this.op.points.length : 0;
     this.lastLiveDirty = { dirtyFrom: Math.max(0, n - this.lastHopSpine), suffixHit: true };
+    this.markPath("incremental");
+    this.lastPaintFallback = false;
+    if (DEBUG_INK || inkMetrics.enabled) {
+      inkMetrics.overlay(canvas.width, canvas.height, dpr);
+    }
+    return "ok";
+  }
+
+  private paintSplineOutline(
+    ctx: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    dpr: number,
+    clip: SceneBounds | null,
+    snap: HTMLCanvasElement,
+    drawView: ViewportTransform,
+    full: boolean,
+  ): LivePaintResult {
+    if (this.op.kind !== "draw") return "fallback";
+    const local = this.overlayLocalPx(drawView, dpr);
+    const dirty = full
+      ? { x: 0, y: 0, w: canvas.width, h: canvas.height }
+      : unionPixelRects(local, this.prevOverlayDirty);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const prevSmooth = ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(dirty.x, dirty.y, dirty.w, dirty.h);
+    ctx.drawImage(
+      snap,
+      dirty.x,
+      dirty.y,
+      dirty.w,
+      dirty.h,
+      dirty.x,
+      dirty.y,
+      dirty.w,
+      dirty.h,
+    );
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(dirty.x, dirty.y, dirty.w, dirty.h);
+    ctx.clip();
+    setInkSceneTransform(ctx, drawView, dpr);
+    if (clip) {
+      ctx.beginPath();
+      ctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
+      ctx.clip();
+    }
+    paintSplineInk(ctx, this.op, false);
+    ctx.restore();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = prevSmooth;
+    this.prevOverlayDirty = full ? null : local;
+    this.lastLiveDirty = { dirtyFrom: 0, suffixHit: false };
     this.markPath("incremental");
     this.lastPaintFallback = false;
     if (DEBUG_INK || inkMetrics.enabled) {
@@ -996,7 +1076,7 @@ export class LiveStroke {
       return;
     }
     this.dropTransientTip();
-    if (this.speedStampLive()) {
+    if (this.speedStampLive() || this.splineOutlineLive()) {
       this.lastHopSpine = 1;
       this.spine.push(to);
       this.disc.commit(to);
@@ -1029,7 +1109,11 @@ export class LiveStroke {
     const speedInk = live.kind === "draw" ? (live.speedInk ?? 0) : 0;
     const speedFade = live.kind === "draw" ? (live.speedFade ?? 0) : 0;
     const speedBlot = live.kind === "draw" ? (live.speedBlotBlend ?? 0) : 0;
-    const trackPace = speedInk > 0 || speedFade > 0 || speedBlot > 0;
+    const trackPace =
+      speedInk > 0 ||
+      speedFade > 0 ||
+      speedBlot > 0 ||
+      (live.kind === "draw" && live.splineGradient === true);
     const reshapeLive = live.kind === "draw" && this.reshapeActive();
     const nib =
       live.kind === "draw"

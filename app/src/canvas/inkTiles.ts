@@ -903,7 +903,7 @@ export function paintLiveOp(
 ): void {
   setInkSceneTransform(ctx, viewport, dpr);
   const pixelScale = viewport.zoom * dpr;
-  const capOptions = { capEnd: true, capHead: true };
+  const capOptions = { capEnd: true, capHead: true, live: true };
   const paint = () => {
     if (isHostBoundOp(op)) {
       const host = hosts.get(op.hostKey!);

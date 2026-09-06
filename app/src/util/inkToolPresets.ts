@@ -65,6 +65,14 @@ import {
   saveInkSpeedFade,
 } from "./inkSpeedPref";
 import {
+  INK_SPLINE_GRADIENT_EVENT,
+  INK_SPLINE_OUTLINE_EVENT,
+  loadInkSplineGradient,
+  loadInkSplineOutline,
+  saveInkSplineGradient,
+  saveInkSplineOutline,
+} from "./inkSplinePref";
+import {
   INK_FULLNESS_DEFAULT,
   loadInkToolPrefs,
   saveInkToolPrefs,
@@ -91,6 +99,8 @@ export interface InkDrawSnapshot {
   blot: number;
   grain: number;
   fade: number;
+  splineOutline: boolean;
+  splineGradient: boolean;
   boldness: number;
 }
 
@@ -143,6 +153,8 @@ export function liveDrawSnapshot(name = "Global"): InkDrawSnapshot {
     blot: loadInkSpeedBlotBlend(),
     grain: loadInkGrain(),
     fade: loadInkSpeedFade(),
+    splineOutline: loadInkSplineOutline(),
+    splineGradient: loadInkSplineGradient(),
     boldness: loadInkBoldness(),
   };
 }
@@ -170,6 +182,8 @@ export function defaultDrawSnapshot(name = "Preset"): InkDrawSnapshot {
     blot: INK_SPEED_BLOT_BLEND_DEFAULT,
     grain: INK_GRAIN_DEFAULT,
     fade: INK_SPEED_FADE_DEFAULT,
+    splineOutline: false,
+    splineGradient: false,
     boldness: INK_BOLDNESS_DEFAULT,
   };
 }
@@ -229,6 +243,8 @@ function clampDraw(snap: InkDrawSnapshot): InkDrawSnapshot {
     blot: clamp(snap.blot, 0, 1),
     grain: clamp(snap.grain ?? 0, 0, 1),
     fade: clamp(snap.fade, 0, 1),
+    splineOutline: snap.splineOutline === true,
+    splineGradient: snap.splineGradient === true,
     boldness: clamp(snap.boldness, INK_BOLDNESS_MIN, INK_BOLDNESS_MAX),
   };
 }
@@ -356,6 +372,8 @@ export function writeLiveFromDraw(snap: InkDrawSnapshot, prefs: InkToolPrefs): I
   saveInkSpeedBlotBlend(snap.blot);
   saveInkGrain(snap.grain ?? 0);
   saveInkSpeedFade(snap.fade);
+  saveInkSplineOutline(snap.splineOutline === true);
+  saveInkSplineGradient(snap.splineGradient === true && snap.splineOutline === true);
   saveInkBoldness(snap.boldness);
   emit("lc-ink-pressure-clip");
   emit("lc-ink-smoothing");
@@ -363,6 +381,8 @@ export function writeLiveFromDraw(snap: InkDrawSnapshot, prefs: InkToolPrefs): I
   emit(INK_SPEED_BLOT_BLEND_EVENT);
   emit(INK_GRAIN_EVENT);
   emit(INK_SPEED_FADE_EVENT);
+  emit(INK_SPLINE_OUTLINE_EVENT);
+  emit(INK_SPLINE_GRADIENT_EVENT);
   emit(INK_BOLDNESS_EVENT);
   return next;
 }

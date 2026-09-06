@@ -279,6 +279,12 @@ import {
   loadInkSpeedFade,
 } from "../util/inkSpeedPref";
 import {
+  INK_SPLINE_GRADIENT_EVENT,
+  INK_SPLINE_OUTLINE_EVENT,
+  loadInkSplineGradient,
+  loadInkSplineOutline,
+} from "../util/inkSplinePref";
+import {
   INK_BOLDNESS_EVENT,
   loadInkBoldness,
 } from "../util/inkBoldnessPref";
@@ -1391,6 +1397,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   );
   const [inkGrain, setInkGrain] = useState(() => loadInkGrain());
   const [inkSpeedFade, setInkSpeedFade] = useState(() => loadInkSpeedFade());
+  const [inkSplineOutline, setInkSplineOutline] = useState(() => loadInkSplineOutline());
+  const [inkSplineGradient, setInkSplineGradient] = useState(() => loadInkSplineGradient());
   const [inkBoldness, setInkBoldness] = useState(() => loadInkBoldness());
   const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
   const [stampTrash, setStampTrash] = useState<{
@@ -3501,6 +3509,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const onFade = () => setInkSpeedFade(loadInkSpeedFade());
     window.addEventListener(INK_SPEED_FADE_EVENT, onFade);
     return () => window.removeEventListener(INK_SPEED_FADE_EVENT, onFade);
+  }, []);
+
+  useEffect(() => {
+    const onSpline = () => {
+      setInkSplineOutline(loadInkSplineOutline());
+      setInkSplineGradient(loadInkSplineGradient());
+    };
+    window.addEventListener(INK_SPLINE_OUTLINE_EVENT, onSpline);
+    window.addEventListener(INK_SPLINE_GRADIENT_EVENT, onSpline);
+    return () => {
+      window.removeEventListener(INK_SPLINE_OUTLINE_EVENT, onSpline);
+      window.removeEventListener(INK_SPLINE_GRADIENT_EVENT, onSpline);
+    };
   }, []);
 
   useEffect(() => {
@@ -9182,6 +9203,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         speedBlotBlend={inkSpeedBlotBlend}
         grain={inkGrain}
         speedFade={inkSpeedFade}
+        splineOutline={inkSplineOutline}
+        splineGradient={inkSplineGradient}
         inkBoldness={inkBoldness}
         partialErase={eraserPartial}
         pressureSensitive={pressureSensitive}

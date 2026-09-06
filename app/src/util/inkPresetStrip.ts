@@ -40,6 +40,12 @@ export function drawOpFromSnap(
     speedBlotBlend: snap.blot,
     ...(kind !== "highlighter" && (snap.grain ?? 0) > 0 ? { grain: snap.grain } : {}),
     speedFade: snap.fade,
+    ...(kind !== "highlighter" && snap.splineOutline
+      ? {
+          splineOutline: true,
+          ...(snap.splineGradient ? { splineGradient: true } : {}),
+        }
+      : {}),
     boldness: snap.boldness,
     highlight: kind === "highlighter",
     points: points.slice(),
