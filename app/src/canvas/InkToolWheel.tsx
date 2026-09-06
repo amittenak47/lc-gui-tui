@@ -144,7 +144,12 @@ function specRows(
     { label: "Ink boost", value: `${Math.round(snap.boldness * 100)}%` },
     {
       label: "Smoothing",
-      value: snap.smoothing === 0 ? "Off" : `${Math.round(snap.smoothing * 100)}% ${snap.smoothingMode}`,
+      value:
+        snap.smoothing === 0
+          ? "Off"
+          : kind === "pen"
+            ? `${Math.round(snap.smoothing * 100)}%`
+            : `${Math.round(snap.smoothing * 100)}% ${snap.smoothingMode}`,
     },
   ];
 }
