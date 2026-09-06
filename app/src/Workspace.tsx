@@ -116,6 +116,7 @@ import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { HomeChooser } from "./modes/HomeChooser";
 import { ExploreWorkspace } from "./modes/ExploreWorkspace";
 import { FreehandLab } from "./modes/FreehandLab";
+import { InkLab } from "./modes/InkLab";
 import { LinkStrokeOverlay, type LinkChip } from "./modes/LinkStrokeOverlay";
 import { collectDomLinkHits, boxesOverlap, type LinkHit } from "./modes/linkHitTest";
 import type { StrokeBox } from "./modes/linkStroke";
@@ -1633,7 +1634,11 @@ export function Workspace({
    * Setting state gives an ordinary commit to hang that on — child refs are
    * attached before the parent's effects run.
    */
-  const needsBoard = tab.kind !== "home" && tab.kind !== "explore" && tab.kind !== "freehand";
+  const needsBoard =
+    tab.kind !== "home" &&
+    tab.kind !== "explore" &&
+    tab.kind !== "freehand" &&
+    tab.kind !== "inklab";
   const [BoardView, setBoardView] = useState<BoardComponent | null>(
     () => peekBoardComponent(),
   );
@@ -4899,6 +4904,16 @@ export function Workspace({
       id: newTabId("freehand"),
       kind: "freehand",
       title: "Freehand",
+      dirty: false,
+      lastActive: 0,
+    });
+  }, [openWorkspace]);
+
+  const openInkLab = useCallback(() => {
+    openWorkspace({
+      id: newTabId("inklab"),
+      kind: "inklab",
+      title: "Ink lab",
       dirty: false,
       lastActive: 0,
     });
@@ -8293,6 +8308,7 @@ export function Workspace({
         case "home":
         case "explore":
         case "freehand":
+        case "inklab":
           // Home has no board to read back; the chooser is the whole of it.
           setBusy(null);
           setWorkspaceLoadActive(false);
@@ -10188,6 +10204,7 @@ export function Workspace({
               // that sits over a canvas which never mounts for them.
               tab.kind === "explore" ||
               tab.kind === "freehand" ||
+              tab.kind === "inklab" ||
               holdBrowseOverlay ||
               boardPreparing ||
               browseMotion !== "idle") && (
@@ -10260,6 +10277,8 @@ export function Workspace({
                   />
                 ) : tab.kind === "freehand" ? (
                   <FreehandLab active={active} />
+                ) : tab.kind === "inklab" ? (
+                  <InkLab active={active} />
                 ) : tab.kind === "home" && !holdBrowseOverlay ? (
                   <HomeChooser
                     busy={busy !== null || boardPreparing || workspaceLoadActive}
@@ -10269,6 +10288,7 @@ export function Workspace({
                     onBrowse={() => void openWebPage(WEB_HOME)}
                     onExplore={openExplore}
                     onFreehand={openFreehand}
+                    onInkLab={openInkLab}
                   />
                 ) : null}
               </div>

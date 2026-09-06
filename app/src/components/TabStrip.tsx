@@ -74,7 +74,7 @@ export interface TabStripProps {
   /** Which tabs are currently half of a split, so the menu can say `Unsplit`. */
   groupedIds?: string[];
   /**
-   * Double-tap a chip to rename it. Home, Practice, Explore, Freehand, and footnote
+   * Double-tap a chip to rename it. Home, Practice, Explore, Freehand, Ink lab, and footnote
    * boards are not offered — {@link tabAllowsRename}.
    */
   onRename?: (id: string, title: string) => void;
@@ -158,6 +158,12 @@ function TabIcon({ kind }: { kind: TabRecord["kind"] | "cancel" }) {
       return (
         <Glyph>
           <path d="M4 17c3-11 6-2 8 1 2 3 5-9 8-1" />
+        </Glyph>
+      );
+    case "inklab":
+      return (
+        <Glyph>
+          <path d="M4 18c4-12 6 1 8-2 2-3 5 8 8 0" />
         </Glyph>
       );
     case "web":
