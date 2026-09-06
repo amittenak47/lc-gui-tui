@@ -1,0 +1,47 @@
+{
+  "recordedAt": "2026-09-06T20:48:48.000Z",
+  "note": "Node + napi-rs canvas. Ink lab attach is canvas2d here; WebGL2 is for the XPPen pad. RasterInkLayer was not swapped. Board cutover is the next PR after a human accepts pad numbers.",
+  "webgl2": "unavailable in Node; time on the pad HUD (backend webgl2)",
+  "passBar": {
+    "longStrokeP95BelowPf": "pad",
+    "holdFlatVsN": "lab hold p95 0.92ms vs PF 0.22ms in Node; gate keeps pts=1",
+    "liveUnder8_3ms": "Node scribble p95 1.08ms; well under 8.3ms",
+    "defaultLiftNear1ms": "Node scribble lift 39ms includes bake+full 2D blit; pad WebGL blit should be cheaper",
+    "noInteriorDiscs": true,
+    "excalidrawStillScene": true
+  },
+  "rows": [
+    {
+      "name": "flick",
+      "n": 32,
+      "pf": { "p50": 0.046, "p95": 0.081, "lift": 0.115, "outline": 104 },
+      "stamp": { "p50": 0.338, "p95": 0.438 },
+      "bake": { "commit": 0.307, "rdpChaikinTurns": 0.227 },
+      "inklab": { "backend": "canvas2d", "bake": "catmull", "p50": 0.327, "p95": 0.432, "lift": 1.28 }
+    },
+    {
+      "name": "letter",
+      "n": 120,
+      "pf": { "p50": 0.043, "p95": 0.084, "lift": 0.103, "outline": 192 },
+      "stamp": { "p50": 0.324, "p95": 0.405 },
+      "bake": { "commit": 0.188, "rdpChaikinTurns": 0.175 },
+      "inklab": { "backend": "canvas2d", "bake": "catmull", "p50": 0.391, "p95": 0.588, "lift": 1.535 }
+    },
+    {
+      "name": "scribble",
+      "n": 512,
+      "pf": { "p50": 0.088, "p95": 0.174, "lift": 0.205, "outline": 1392 },
+      "stamp": { "p50": 0.32, "p95": 0.411 },
+      "bake": { "commit": 2.105, "rdpChaikinTurns": 2.872 },
+      "inklab": { "backend": "canvas2d", "bake": "catmull", "p50": 0.71, "p95": 1.077, "lift": 39.258 }
+    },
+    {
+      "name": "hold",
+      "n": 240,
+      "pf": { "p50": 0.045, "p95": 0.223, "lift": 0.206, "outline": 1852, "hold": 0.278 },
+      "stamp": { "p50": 1.365, "p95": 1.868, "hold": 1.868 },
+      "bake": { "commit": 0.49, "rdpChaikinTurns": 0.103 },
+      "inklab": { "backend": "canvas2d", "bake": "catmull", "p50": 0.549, "p95": 0.918, "hold": 0.796, "lift": 0.267 }
+    }
+  ]
+}

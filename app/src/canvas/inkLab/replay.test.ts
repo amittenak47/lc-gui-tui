@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { allBaselineTapes } from "./tapes";
 import { formatReplayHud, pfOutlineCount, replayTape } from "./replay";
 
-describe("PF baseline tapes", () => {
-  it("records p50/p95 vs N for PF and Speed Ink before any SDF work", () => {
+describe("compare tapes", () => {
+  it("replays PF, Speed Ink, and InkLab 2D on the same tapes", () => {
     const tapes = allBaselineTapes();
     expect(tapes.map((t) => [t.name, t.samples.length])).toEqual([
       ["flick", 32],
@@ -22,6 +22,9 @@ describe("PF baseline tapes", () => {
       expect(Number.isFinite(row.pf.p95)).toBe(true);
       expect(Number.isFinite(row.speedStamp.p95)).toBe(true);
       expect(Number.isFinite(row.speedBakeMs)).toBe(true);
+      expect(Number.isFinite(row.ink2d.p95)).toBe(true);
+      expect(row.ink2d.backend).toBe("canvas2d");
+      expect(row.ink2d.bake).toBe("catmull");
       expect(row.pf.outlineN).toBeGreaterThan(4);
     }
 
@@ -30,6 +33,7 @@ describe("PF baseline tapes", () => {
     const hold = rows[3]!;
     expect(scribble.pf.p95).toBeGreaterThan(flick.pf.p50);
     expect(hold.pf.holdMs).toBeGreaterThan(0);
+    expect(hold.ink2d.holdMs).toBeGreaterThan(0);
     expect(pfOutlineCount(tapes[1]!.samples)).toBe(rows[1]!.pf.outlineN);
   });
 });
