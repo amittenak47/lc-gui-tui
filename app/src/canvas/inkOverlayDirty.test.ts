@@ -363,3 +363,35 @@ describe("ribbon scratch release", () => {
     releaseLiveRibbonBuffers();
   });
 });
+
+describe("solid Speed Ink ribbon resolution", () => {
+  it("rasterises drying-off Speed Ink at the device scale, not one scene pixel", () => {
+    releaseLiveRibbonBuffers();
+    const canvas = createCanvas(800, 200);
+    const ctx = canvas.getContext("2d") as unknown as CanvasRenderingContext2D;
+    const op = {
+      kind: "draw" as const,
+      color: "#1a1a1a",
+      baseWidth: 8,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      points: [
+        { x: 20, y: 40, pressure: -1, slowness: 0.5 },
+        { x: 260, y: 40, pressure: -1, slowness: 0.5 },
+      ],
+    };
+    applyInkOp(ctx, op, 1);
+    const at1x = debugRibbonScratchSize();
+    releaseLiveRibbonBuffers();
+    applyInkOp(ctx, op, 2);
+    const at2x = debugRibbonScratchSize();
+    expect(at1x).not.toBeNull();
+    expect(at2x).not.toBeNull();
+    expect(at2x!.width).toBeGreaterThan(at1x!.width * 1.5);
+    releaseLiveRibbonBuffers();
+  });
+});

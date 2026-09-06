@@ -2197,6 +2197,17 @@ function fillInkRibbonSides(
 /** Cap a hi-res wash scratch so a page-sized doodle cannot allocate a 16k canvas. */
 const RIBBON_SCRATCH_MAX_PX = 8192;
 
+/**
+ * Device pixels per scene unit the ribbon scratch paints at.
+ *
+ * A 1-scene-pixel scratch blitted through zoom×dpr is the pixelated Speed Ink
+ * on a tablet. Wash already used `pixelScale`; solid ribbons (Ink Drying off)
+ * must too, or retina AA is a 1× bitmap stretched across the overlay/tiles.
+ */
+export function ribbonScratchDeviceScale(pixelScale: number): number {
+  return Math.max(1, pixelScale || 1);
+}
+
 /** What the shared ribbon scratch currently holds, for reuse inside a batch. */
 let ribbonScratchKey: readonly unknown[] | null = null;
 
@@ -2641,9 +2652,9 @@ function paintOpaqueRibbonThenAlpha(
   const height = Math.ceil(maxY + pad) - originY;
   if (width < 1 || height < 1) return false;
 
-  // Gradients are rasterized on this scratch. One scene pixel per unit plus a
-  // nearest-neighbour blit (zoom × dpr) turns a wash into trapezoid facets.
-  const wantScale = fills && fills.length > 0 ? Math.max(1, pixelScale || 1) : 1;
+  // Gradients *and* the solid silhouette rasterize here. One scene pixel per
+  // unit plus a blit through zoom×dpr turns the edge into tablet-sized pixels.
+  const wantScale = ribbonScratchDeviceScale(pixelScale);
   const scale = Math.min(
     wantScale,
     RIBBON_SCRATCH_MAX_PX / Math.max(width, 1),
@@ -4366,7 +4377,7 @@ function paintOpaqueMarkThenAlpha(
   const height = Math.ceil(bounds.maxY + pad) - originY;
   if (width < 1 || height < 1) return false;
   const scale = Math.min(
-    Math.max(1, pixelScale || 1),
+    ribbonScratchDeviceScale(pixelScale),
     RIBBON_SCRATCH_MAX_PX / Math.max(width, 1),
     RIBBON_SCRATCH_MAX_PX / Math.max(height, 1),
   );
