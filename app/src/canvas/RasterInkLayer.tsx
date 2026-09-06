@@ -150,6 +150,10 @@ export interface RasterInkLayerProps {
   grain?: number;
   /** Pace wash toward pencil (0–1). Stamped onto new pen strokes. */
   speedFade?: number;
+  /** Experimental: perfect-freehand outline fill instead of stamp/ribbon. */
+  splineOutline?: boolean;
+  /** Experimental: dry-ink gradient bitmap between the outline rails. */
+  splineGradient?: boolean;
   /** Opacity boost (0–3). Stamped onto new pen strokes. */
   inkBoldness?: number;
   /**
@@ -205,6 +209,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       speedBlotBlend = INK_SPEED_BLOT_BLEND_DEFAULT,
       grain = INK_GRAIN_DEFAULT,
       speedFade = INK_SPEED_FADE_DEFAULT,
+      splineOutline = false,
+      splineGradient = false,
       inkBoldness = INK_BOLDNESS_DEFAULT,
       partialErase = true,
       getViewport,
@@ -404,6 +410,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     grainRef.current = grain;
     const speedFadeRef = useRef(speedFade);
     speedFadeRef.current = speedFade;
+    const splineOutlineRef = useRef(splineOutline);
+    splineOutlineRef.current = splineOutline;
+    const splineGradientRef = useRef(splineGradient);
+    splineGradientRef.current = splineGradient;
     const inkBoldnessRef = useRef(inkBoldness);
     inkBoldnessRef.current = inkBoldness;
     const partialEraseRef = useRef(partialErase);
@@ -680,8 +690,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           const snap = committedSnapRef.current;
           const stamped =
             session &&
-            session.speedStampLive() &&
             snap &&
+            (session.speedStampLive() || session.splineOutlineLive()) &&
             session.paint(ctx, canvas, dpr, clipRef.current, hosts, snap, true) ===
               "ok";
           if (!stamped) {
@@ -941,7 +951,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       if (timed) inkMetrics.painted(stroke.lastEventTimeMs);
       const dirty =
         result === "ok"
-          ? stroke.speedStampLive()
+          ? stroke.speedStampLive() || stroke.splineOutlineLive()
             ? stroke.lastLiveDirty
             : liveRibbonDirtySpine()
           : null;
@@ -1627,6 +1637,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           speedFade: speedFadeRef.current,
           grain: grainRef.current,
           boldness: inkBoldnessRef.current,
+          splineOutline: splineOutlineRef.current,
+          splineGradient: splineGradientRef.current,
           smoothing: smoothingRef.current,
           smoothingMode: smoothingModeRef.current,
           getStraightAnchor: () =>

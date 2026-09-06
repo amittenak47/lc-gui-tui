@@ -237,6 +237,22 @@ describe("encodeInkOps / decodeInkOps", () => {
     expect(back.boldness).toBeUndefined();
   });
 
+  it("carries spline outline flags across", () => {
+    const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], {
+      splineOutline: true,
+      splineGradient: true,
+    });
+    const [back] = roundTrip([original]) as [InkDrawOp];
+    expect(back.splineOutline).toBe(true);
+    expect(back.splineGradient).toBe(true);
+  });
+
+  it("leaves spline flags absent on ordinary strokes", () => {
+    const [back] = roundTrip([stroke([{ x: 1, y: 2, pressure: 0.5 }])]) as [InkDrawOp];
+    expect(back.splineOutline).toBeUndefined();
+    expect(back.splineGradient).toBeUndefined();
+  });
+
   it("leaves speedInk absent when the stroke had none", () => {
     const [back] = roundTrip([stroke([{ x: 1, y: 2, pressure: 0.5 }])]) as [InkDrawOp];
     expect(back.speedInk).toBeUndefined();

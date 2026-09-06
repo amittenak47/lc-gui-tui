@@ -87,6 +87,10 @@ export interface EncodedOp {
   gr?: number;
   /** Opacity boost (0–3); absent → paint uses device pref. */
   ib?: number;
+  /** Experimental spline outline fill. */
+  so?: 1;
+  /** Experimental dry-ink gradient bitmap on the spline rails. */
+  sg?: 1;
   /** Highlighter stroke — absent means an ordinary pen one. */
   hl?: 1;
   /** Nested horizontal scroll host — document-order index in the doc scope. */
@@ -229,6 +233,8 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
       if (op.speedFade !== undefined) record.sf = op.speedFade;
       if (op.grain !== undefined) record.gr = op.grain;
       if (op.boldness !== undefined) record.ib = op.boldness;
+      if (op.splineOutline) record.so = 1;
+      if (op.splineGradient) record.sg = 1;
       if (op.highlight) record.hl = 1;
       if (op.hostKey !== undefined) record.hk = op.hostKey;
       if (op.scrollLeftAtDraw !== undefined) record.hsl = op.scrollLeftAtDraw;
@@ -414,6 +420,8 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
       if (record.sf !== undefined) op.speedFade = record.sf;
       if (record.gr !== undefined) op.grain = record.gr;
       if (record.ib !== undefined) op.boldness = record.ib;
+      if (record.so === 1) op.splineOutline = true;
+      if (record.sg === 1) op.splineGradient = true;
       if (record.hl === 1) op.highlight = true;
       if (record.hk !== undefined) op.hostKey = record.hk;
       if (typeof record.hsl === "number") op.scrollLeftAtDraw = record.hsl;
@@ -557,6 +565,8 @@ interface PackedOpMeta {
   sf?: number;
   gr?: number;
   ib?: number;
+  so?: 1;
+  sg?: 1;
   hl?: 1;
   hk?: number;
   hsl?: number;
@@ -592,6 +602,8 @@ export function packEncodedInk(encoded: EncodedInk): Uint8Array<ArrayBuffer> {
     ...(op.sf != null ? { sf: op.sf } : {}),
     ...(op.gr != null ? { gr: op.gr } : {}),
     ...(op.ib != null ? { ib: op.ib } : {}),
+    ...(op.so != null ? { so: op.so } : {}),
+    ...(op.sg != null ? { sg: op.sg } : {}),
     ...(op.hl != null ? { hl: op.hl } : {}),
     ...(op.hk != null ? { hk: op.hk } : {}),
     ...(op.hsl != null ? { hsl: op.hsl } : {}),
@@ -678,6 +690,8 @@ export function unpackEncodedInk(bytes: Uint8Array): EncodedInk | null {
     if (item.sf != null) record.sf = item.sf;
     if (item.gr != null) record.gr = item.gr;
     if (item.ib != null) record.ib = item.ib;
+    if (item.so != null) record.so = item.so;
+    if (item.sg != null) record.sg = item.sg;
     if (item.hl != null) record.hl = item.hl;
     if (item.hk != null) record.hk = item.hk;
     if (item.hsl != null) record.hsl = item.hsl;

@@ -17,6 +17,16 @@ import {
 } from "../util/inkBoldnessPref";
 import { loadInkSpeedBlotBlend } from "../util/inkSpeedPref";
 import { DEBUG_INK, inkMetrics, type InkStageName } from "./inkMetrics";
+import {
+  fillSplineGradient,
+  fillSplineOutline,
+  splineOutline,
+  splineRails,
+  splineStrokeOptions,
+  washGradientStrip,
+  SPLINE_THINNING,
+  type SplineSample,
+} from "./splineInk";
 
 function ribbonStage<T>(name: InkStageName, fn: () => T): T {
   if (!DEBUG_INK && !inkMetrics.enabled) return fn();
@@ -522,6 +532,16 @@ export interface InkDrawOp {
    * and a translucent stroke that did would band where the passes overlapped.
    */
   highlight?: boolean;
+  /**
+   * Experimental: perfect-freehand outline + one fill, stamped at draw time.
+   * Absent means the ordinary stamp / ribbon path.
+   */
+  splineOutline?: boolean;
+  /**
+   * Experimental: dry-ink wash as a bitmap between the two outline rails.
+   * Implies {@link splineOutline}. Absent means a flat fill.
+   */
+  splineGradient?: boolean;
   /** When set, the stroke tracks a nested horizontal scroller's `scrollLeft`. */
   hostKey?: number;
   scrollLeftAtDraw?: number;
@@ -2891,11 +2911,112 @@ function blotPressureAmt(op: InkDrawOp, point: { pressure: number }): number {
 /** Variable-width ribbon when Speed ink, Ink Drying, or Ink Pooling is on. */
 function usesSpeedRibbon(op: InkDrawOp): boolean {
   if (op.highlight) return false;
+  if (usesSplineOutline(op)) return false;
   return (
     (op.speedInk ?? 0) > 0 ||
     resolveSpeedBlotBlend(op) > 1e-3 ||
     resolveSpeedFade(op) > 1e-3
   );
+}
+
+export function usesSplineOutline(op: InkDrawOp): boolean {
+  return op.splineOutline === true && op.highlight !== true;
+}
+
+function splineSamples(op: InkDrawOp): SplineSample[] {
+  const speed = op.speedInk ?? 0;
+  const gradient = op.splineGradient === true;
+  const samples: SplineSample[] = new Array(op.points.length);
+  for (let i = 0; i < op.points.length; i++) {
+    const p = op.points[i]!;
+    let pressure = 0.5;
+    if (p.slowness !== undefined && (speed > 0 || gradient)) {
+      pressure = 0.2 + 0.8 * clamp01(p.slowness);
+    } else if (op.pressureSensitive && hasStylusPressure(p.pressure)) {
+      pressure = p.pressure;
+    }
+    samples[i] = { x: p.x, y: p.y, pressure };
+  }
+  return samples;
+}
+
+function splineWashColors(op: InkDrawOp): { r: number; g: number; b: number }[] {
+  const pts = op.points;
+  if (pts.length === 0) return [];
+  const dist: number[] = new Array(pts.length);
+  dist[0] = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!;
+    const b = pts[i]!;
+    dist[i] = dist[i - 1]! + Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  const total = dist[pts.length - 1]! || 1;
+  const speed = Math.max(op.speedInk ?? 0, 1e-6);
+  const n = 64;
+  const colors: { r: number; g: number; b: number }[] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const at = (i / Math.max(1, n - 1)) * total;
+    let k = 1;
+    while (k < dist.length && dist[k]! < at) k++;
+    const i0 = Math.max(0, k - 1);
+    const i1 = Math.min(pts.length - 1, k);
+    const span = dist[i1]! - dist[i0]!;
+    const t = span > 1e-6 ? (at - dist[i0]!) / span : 0;
+    const a = pts[i0]!;
+    const b = pts[i1]!;
+    const slow =
+      (a.slowness ?? INK_SLOWNESS_NEUTRAL) +
+      ((b.slowness ?? INK_SLOWNESS_NEUTRAL) - (a.slowness ?? INK_SLOWNESS_NEUTRAL)) * t;
+    colors[i] = dryWashRgb(op.color, inkSpeedAlphaGain(slow, speed, 1));
+  }
+  return colors;
+}
+
+/** Perfect-freehand outline fill, or a dry-ink bitmap between the two rails. */
+export function paintSplineInk(
+  ctx: CanvasRenderingContext2D,
+  op: InkDrawOp,
+  last: boolean,
+): void {
+  if (op.points.length === 0) return;
+  const samples = splineSamples(op);
+  const size = inkLineWidth(op.baseWidth, 0, false);
+  const thinning =
+    (op.speedInk ?? 0) > 0 || op.pressureSensitive ? SPLINE_THINNING : 0;
+  const opts = splineStrokeOptions(
+    size,
+    thinning,
+    last,
+    !op.pressureSensitive,
+  );
+  ctx.globalCompositeOperation = "source-over";
+  const tip = op.points[op.points.length - 1]!;
+  const style = inkStrokeStyle(
+    op.baseWidth,
+    op.maxFullness ?? 1,
+    tip.pressure,
+    op.pressureClip ?? 1,
+    op.pressureSensitive,
+    0,
+    tip.slowness ?? INK_SLOWNESS_NEUTRAL,
+    op.speedInk ?? 0,
+    false,
+    resolveInkBoldness(op),
+    resolveSpeedFade(op),
+  );
+  ctx.globalAlpha = Math.max(0, Math.min(1, style.alpha));
+  if (op.splineGradient) {
+    const strip = washGradientStrip(splineWashColors(op));
+    const rails = splineRails(samples, opts);
+    if (strip && rails.length >= 2) {
+      fillSplineGradient(ctx, rails, strip);
+      ctx.globalAlpha = 1;
+      return;
+    }
+  }
+  ctx.fillStyle = op.color;
+  fillSplineOutline(ctx, splineOutline(samples, opts));
+  ctx.globalAlpha = 1;
 }
 
 /**
@@ -5237,6 +5358,10 @@ function drawStrokeFrom(
   capEnd = true,
   capHead = true,
 ): void {
+  if (usesSplineOutline(op)) {
+    paintSplineInk(ctx, op, true);
+    return;
+  }
   const points = op.points;
   if (points.length === 0) return;
 
@@ -5427,7 +5552,7 @@ function eraseStampsFrom(
 }
 
 /** Apply one committed or live op in scene space (caller sets the transform). */
-export type ApplyInkOptions = { capEnd?: boolean; capHead?: boolean };
+export type ApplyInkOptions = { capEnd?: boolean; capHead?: boolean; live?: boolean };
 
 export function applyInkOp(
   ctx: CanvasRenderingContext2D,
@@ -5437,8 +5562,10 @@ export function applyInkOp(
 ): void {
   const capEnd = options?.capEnd ?? true;
   const capHead = options?.capHead ?? true;
-  if (op.kind === "draw") drawStrokeFrom(ctx, op, 0, pixelScale, capEnd, capHead);
-  else eraseStampsFrom(ctx, op, 0);
+  if (op.kind === "draw") {
+    if (usesSplineOutline(op)) paintSplineInk(ctx, op, options?.live !== true);
+    else drawStrokeFrom(ctx, op, 0, pixelScale, capEnd, capHead);
+  } else eraseStampsFrom(ctx, op, 0);
   ctx.globalCompositeOperation = "source-over";
 }
 
@@ -5521,6 +5648,11 @@ export function applyInkOpFrom(
   pixelScale = 0,
 ): number {
   if (op.kind === "draw") {
+    if (usesSplineOutline(op)) {
+      paintSplineInk(ctx, op, true);
+      ctx.globalCompositeOperation = "source-over";
+      return Math.max(fromIndex, op.points.length - 1);
+    }
     drawStrokeFrom(ctx, op, fromIndex, pixelScale, false);
     ctx.globalCompositeOperation = "source-over";
     return Math.max(fromIndex, op.points.length - 1);

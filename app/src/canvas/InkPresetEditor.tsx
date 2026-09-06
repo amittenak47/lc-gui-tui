@@ -1034,6 +1034,62 @@ function PhysicsKnobs({
           />
         </>
       )}
+
+      <SettingsBlock
+        title="Experimental: spline outline"
+        hint={
+          <>
+            Rebuilds a left and right rail from the pointer samples each frame
+            (perfect-freehand interpolation) and fills the tube once. The
+            ordinary stamp and Speed Ink ribbon stay off. Use this to compare
+            feel and frame cost on the same board. Saved on this device only.
+          </>
+        }
+      >
+        <SettingsChoice
+          label="Spline outline"
+          value={snap.splineOutline}
+          options={
+            [
+              [false, "Off"],
+              [true, "On"],
+            ] as Array<[boolean, string]>
+          }
+          onChange={(splineOutline) =>
+            onChange({
+              ...snap,
+              splineOutline,
+              splineGradient: splineOutline ? snap.splineGradient : false,
+            })
+          }
+        />
+      </SettingsBlock>
+      {snap.splineOutline && (
+        <SettingsBlock
+          title="Spline gradient"
+          hint={
+            <>
+              Dry ink as a gradient bitmap stretched between those two rails,
+              instead of a flat fill. Fast stretches go pale, slow ones stay
+              full. Saved on this device only.
+            </>
+          }
+        >
+          <SettingsChoice
+            label="Spline gradient"
+            value={snap.splineGradient}
+            options={
+              [
+                [false, "Off"],
+                [true, "On"],
+              ] as Array<[boolean, string]>
+            }
+            onChange={(splineGradient) =>
+              onChange({ ...snap, splineGradient })
+            }
+          />
+        </SettingsBlock>
+      )}
     </>
   );
 }
