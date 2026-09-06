@@ -93,10 +93,12 @@ export interface EncodedOp {
   sg?: 1;
   /** Highlighter stroke — absent means an ordinary pen one. */
   hl?: 1;
-  /** Nested horizontal scroll host — document-order index in the doc scope. */
+  /** Nested scroll host — document-order index in the doc scope. */
   hk?: number;
   /** Host `scrollLeft` when the stroke was written (not point slowness). */
   hsl?: number;
+  /** Host `scrollTop` when the stroke was written. Absent on older strokes. */
+  hst?: number;
   /** Stable stroke id for the global undo log. Absent on pre-shard blobs. */
   i?: number;
   /** Global composite order. Absent on pre-shard blobs. */
@@ -109,6 +111,11 @@ export interface EncodedOp {
   pr?: Uint8Array;
   /** Draw only, one per point; {@link BYTE_SENTINEL} means the key was absent. */
   sl?: Uint8Array;
+  /**
+   * Draw only, lab-baked scene radius in tenths. Absent → paint from styles.
+   * Length `n` when present.
+   */
+  rr?: Uint16Array;
 }
 
 export interface EncodedInk {
@@ -165,6 +172,15 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
     const deltas = new Int16Array((count - 1) * 2);
     const pressures = draw ? new Uint8Array(count) : undefined;
     const slownesses = draw ? new Uint8Array(count) : undefined;
+    let radii: Uint16Array | undefined;
+    if (draw) {
+      for (let i = 0; i < count; i += 1) {
+        if (typeof points[i]!.radius === "number" && Number.isFinite(points[i]!.radius)) {
+          radii = new Uint16Array(count);
+          break;
+        }
+      }
+    }
 
     /*
      * Deltas accumulate against the *rounded* previous position, not the real
@@ -197,6 +213,13 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
           point.pressure === NO_PRESSURE ? BYTE_SENTINEL : packUnit(point.pressure);
         slownesses[i] =
           point.slowness === undefined ? BYTE_SENTINEL : packUnit(point.slowness);
+        if (radii) {
+          const raw = point.radius;
+          radii[i] =
+            typeof raw === "number" && Number.isFinite(raw)
+              ? Math.max(0, Math.min(65535, Math.round(raw * COORD_SCALE)))
+              : 0;
+        }
       }
     }
 
@@ -238,10 +261,12 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
       if (op.highlight) record.hl = 1;
       if (op.hostKey !== undefined) record.hk = op.hostKey;
       if (op.scrollLeftAtDraw !== undefined) record.hsl = op.scrollLeftAtDraw;
+      if (op.scrollTopAtDraw !== undefined) record.hst = op.scrollTopAtDraw;
       if (op.id != null) record.i = op.id;
       if (op.seq != null) record.s = op.seq;
       record.pr = pressures;
       record.sl = slownesses;
+      if (radii) record.rr = radii;
     } else {
       /*
        * Erase ops carry geometry and nothing else.
@@ -257,6 +282,7 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
       record.r = op.radius;
       if (op.hostKey !== undefined) record.hk = op.hostKey;
       if (op.scrollLeftAtDraw !== undefined) record.hsl = op.scrollLeftAtDraw;
+      if (op.scrollTopAtDraw !== undefined) record.hst = op.scrollTopAtDraw;
       if (op.id != null) record.i = op.id;
       if (op.seq != null) record.s = op.seq;
     }
@@ -306,6 +332,7 @@ export function inkStorageStats(
     encodedPayloadBytes += record.xy.byteLength;
     encodedPayloadBytes += record.pr?.byteLength ?? 0;
     encodedPayloadBytes += record.sl?.byteLength ?? 0;
+    encodedPayloadBytes += record.rr?.byteLength ?? 0;
   }
   for (const op of encoded.raw ?? []) {
     points += op.points.length;
@@ -387,6 +414,8 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
         // ink, read as neutral"; `slowness: 0` means "flat out". Materialising
         // the key on every point would change how those strokes are drawn.
         if (rawSlowness !== BYTE_SENTINEL) point.slowness = unpackUnit(rawSlowness);
+        const packedR = record.rr?.[i];
+        if (packedR != null && packedR > 0) point.radius = packedR / COORD_SCALE;
         points[i] = point;
       } else {
         // Erase points are read for position only — see the encoder. The
@@ -425,6 +454,7 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
       if (record.hl === 1) op.highlight = true;
       if (record.hk !== undefined) op.hostKey = record.hk;
       if (typeof record.hsl === "number") op.scrollLeftAtDraw = record.hsl;
+      if (typeof record.hst === "number") op.scrollTopAtDraw = record.hst;
       if (typeof record.i === "number") op.id = record.i;
       if (typeof record.s === "number") op.seq = record.s;
       ops.push(op);
@@ -432,6 +462,7 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
       const erase: InkOp = { kind: "erase", radius: record.r ?? 1, points };
       if (record.hk !== undefined) erase.hostKey = record.hk;
       if (typeof record.hsl === "number") erase.scrollLeftAtDraw = record.hsl;
+      if (typeof record.hst === "number") erase.scrollTopAtDraw = record.hst;
       if (typeof record.i === "number") erase.id = record.i;
       if (typeof record.s === "number") erase.seq = record.s;
       ops.push(erase);
@@ -501,13 +532,14 @@ export function reviveEncodedInk(value: unknown): EncodedInk | null {
     record.xy = toTyped(Int16Array, record.xy);
     if (record.pr) record.pr = toTyped(Uint8Array, record.pr);
     if (record.sl) record.sl = toTyped(Uint8Array, record.sl);
+    if (record.rr) record.rr = toTyped(Uint16Array, record.rr);
     return record;
   });
   const raw = Array.isArray(candidate.raw) ? (candidate.raw as InkOp[]) : undefined;
   return raw ? { v: 2, ops, raw } : { v: 2, ops };
 }
 
-function toTyped<T extends Int16Array | Uint8Array>(
+function toTyped<T extends Int16Array | Uint8Array | Uint16Array>(
   Ctor: { new (values: number[]): T; new (length: number): T },
   value: unknown,
 ): T {
@@ -570,9 +602,11 @@ interface PackedOpMeta {
   hl?: 1;
   hk?: number;
   hsl?: number;
+  hst?: number;
   i?: number;
   s?: number;
   r?: number;
+  rrN?: number;
 }
 
 /**
@@ -590,6 +624,7 @@ export function packEncodedInk(encoded: EncodedInk): Uint8Array<ArrayBuffer> {
     xyN: op.xy.length,
     prN: op.pr?.length ?? 0,
     slN: op.sl?.length ?? 0,
+    rrN: op.rr?.length ?? 0,
     ...(op.c != null ? { c: op.c } : {}),
     ...(op.w != null ? { w: op.w } : {}),
     ...(op.f != null ? { f: op.f } : {}),
@@ -607,6 +642,7 @@ export function packEncodedInk(encoded: EncodedInk): Uint8Array<ArrayBuffer> {
     ...(op.hl != null ? { hl: op.hl } : {}),
     ...(op.hk != null ? { hk: op.hk } : {}),
     ...(op.hsl != null ? { hsl: op.hsl } : {}),
+    ...(op.hst != null ? { hst: op.hst } : {}),
     ...(op.i != null ? { i: op.i } : {}),
     ...(op.s != null ? { s: op.s } : {}),
     ...(op.r != null ? { r: op.r } : {}),
@@ -614,7 +650,7 @@ export function packEncodedInk(encoded: EncodedInk): Uint8Array<ArrayBuffer> {
   const metaBytes = new TextEncoder().encode(JSON.stringify({ meta, raw: encoded.raw }));
   let payload = 0;
   for (const op of encoded.ops) {
-    payload += op.xy.byteLength + (op.pr?.byteLength ?? 0) + (op.sl?.byteLength ?? 0);
+    payload += op.xy.byteLength + (op.pr?.byteLength ?? 0) + (op.sl?.byteLength ?? 0) + (op.rr?.byteLength ?? 0);
   }
   const out = new Uint8Array(12 + metaBytes.length + payload);
   const view = new DataView(out.buffer);
@@ -633,6 +669,10 @@ export function packEncodedInk(encoded: EncodedInk): Uint8Array<ArrayBuffer> {
     if (op.sl) {
       out.set(new Uint8Array(op.sl.buffer, op.sl.byteOffset, op.sl.byteLength), offset);
       offset += op.sl.byteLength;
+    }
+    if (op.rr) {
+      out.set(new Uint8Array(op.rr.buffer, op.rr.byteOffset, op.rr.byteLength), offset);
+      offset += op.rr.byteLength;
     }
   }
   return out;
@@ -671,6 +711,12 @@ export function unpackEncodedInk(bytes: Uint8Array): EncodedInk | null {
       sl = bytes.subarray(offset, offset + item.slN).slice();
       offset += item.slN;
     }
+    let rr: Uint16Array | undefined;
+    if (item.rrN && item.rrN > 0) {
+      rr = new Uint16Array(item.rrN);
+      new Uint8Array(rr.buffer).set(bytes.subarray(offset, offset + item.rrN * 2));
+      offset += item.rrN * 2;
+    }
     const record: EncodedOp = {
       k: item.k,
       x0: item.x0,
@@ -695,11 +741,13 @@ export function unpackEncodedInk(bytes: Uint8Array): EncodedInk | null {
     if (item.hl != null) record.hl = item.hl;
     if (item.hk != null) record.hk = item.hk;
     if (item.hsl != null) record.hsl = item.hsl;
+    if (item.hst != null) record.hst = item.hst;
     if (item.i != null) record.i = item.i;
     if (item.s != null) record.s = item.s;
     if (item.r != null) record.r = item.r;
     if (pr) record.pr = pr;
     if (sl) record.sl = sl;
+    if (rr) record.rr = rr;
     ops.push(record);
   }
   const raw = Array.isArray(parsed.raw) ? parsed.raw : undefined;

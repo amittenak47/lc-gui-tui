@@ -7,6 +7,12 @@ export type SpineDot = {
   y: number;
   r: number;
   rgb?: [number, number, number];
+  /** Coverage 0–1. Absent means opaque. */
+  a?: number;
+  /** Stylus pressure, for InkOp replay. */
+  p?: number;
+  /** Pace 0–1, for InkOp replay. */
+  slow?: number;
 };
 
 export function writeInstance(

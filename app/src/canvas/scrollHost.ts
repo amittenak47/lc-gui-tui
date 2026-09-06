@@ -11,11 +11,11 @@
  *
  * The gatekeeper asks this before it claims a gesture.
  *
- * **Host-bound ink.** Marks drawn inside a horizontally scrollable box are
- * stored in page coordinates but painted with a scroll offset so they stay on
- * the tokens they were written against. Each host gets a stable `hostKey` —
- * its document-order index among scroll hosts in the doc scope, the same
- * vocabulary {@link scopeRootsIn} uses for offset spaces.
+ * **Host-bound ink.** Marks drawn inside a scrollable box are stored in page
+ * coordinates but painted with a scroll offset so they stay on the tokens they
+ * were written against. Each host gets a stable `hostKey` — horizontal hosts
+ * first (document order, same as before), then overflow-y-only hosts appended
+ * so old files keep their keys.
  */
 
 import type { SceneBounds, ViewportTransform } from "./rasterInk";
@@ -40,6 +40,16 @@ export function isHorizontalScrollHost(node: HTMLElement): boolean {
   return overflowX === "auto" || overflowX === "scroll";
 }
 
+export function isVerticalScrollHost(node: HTMLElement): boolean {
+  if (node.scrollHeight - node.clientHeight <= OVERFLOW_SLACK_PX) return false;
+  const overflowY = getComputedStyle(node).overflowY;
+  return overflowY === "auto" || overflowY === "scroll";
+}
+
+export function isNestedScrollHost(node: HTMLElement): boolean {
+  return isHorizontalScrollHost(node) || isVerticalScrollHost(node);
+}
+
 /**
  * The nearest horizontally scrollable box at or above `target`, within the
  * document page — `null` if the pointer is on ordinary prose.
@@ -52,6 +62,21 @@ export function horizontalScrollHost(target: EventTarget | null): HTMLElement | 
   for (let node: Element | null = start; node && node !== stop; node = node.parentElement) {
     if (!(node instanceof HTMLElement)) continue;
     if (isHorizontalScrollHost(node)) return node;
+  }
+  return null;
+}
+
+/**
+ * Nearest nested scroller (horizontal or vertical) at or above `target`.
+ */
+export function nestedScrollHost(target: EventTarget | null): HTMLElement | null {
+  const start = target instanceof Element ? target : null;
+  const doc = start?.closest(DOC_PAGE_SELECTOR);
+  if (!start || !doc) return null;
+  const stop = doc.parentElement;
+  for (let node: Element | null = start; node && node !== stop; node = node.parentElement) {
+    if (!(node instanceof HTMLElement)) continue;
+    if (isNestedScrollHost(node)) return node;
   }
   return null;
 }
@@ -73,7 +98,7 @@ export function scrollHostAtPoint(clientX: number, clientY: number): HTMLElement
   let best: HTMLElement | null = null;
   let bestArea = Infinity;
   for (const doc of document.querySelectorAll(DOC_PAGE_SELECTOR)) {
-    for (const host of horizontalScrollHostsIn(doc)) {
+    for (const host of scrollHostsIn(doc)) {
       const box = host.getBoundingClientRect();
       if (
         clientX < box.left ||
@@ -99,7 +124,7 @@ export function scrollHostAtPoint(clientX: number, clientY: number): HTMLElement
     if (el.classList.contains("lc-raster-ink")) continue;
     if (el.tagName === "CANVAS") continue;
     if (el.closest?.(".lc-page-marks-slot")) continue;
-    const host = horizontalScrollHost(el);
+    const host = nestedScrollHost(el);
     if (!host) continue;
     const box = host.getBoundingClientRect();
     if (
@@ -118,11 +143,28 @@ export function scrollHostAtPoint(clientX: number, clientY: number): HTMLElement
 /**
  * Every horizontally scrollable box inside a document page, in document order.
  *
- * The index in this list is the stable `hostKey` stored on ink ops. Order is
- * fixed for a given DOM tree, so a stroke written today resolves to the same
- * box when the page is reopened tomorrow.
+ * Used by the board gesture gatekeeper (sideways drag). Ink keys use
+ * {@link scrollHostsIn}, which keeps this list first so old files stay valid.
  */
 export function horizontalScrollHostsIn(doc: Element): HTMLElement[] {
+  return hostsIn(doc, isHorizontalScrollHost);
+}
+
+/**
+ * Nested scroll hosts for ink: horizontal first (stable keys), then
+ * overflow-y-only hosts appended.
+ */
+export function scrollHostsIn(doc: Element): HTMLElement[] {
+  const horizontal = horizontalScrollHostsIn(doc);
+  const seen = new Set(horizontal);
+  const verticalOnly = hostsIn(
+    doc,
+    (node) => isVerticalScrollHost(node) && !seen.has(node),
+  );
+  return horizontal.length === 0 ? verticalOnly : [...horizontal, ...verticalOnly];
+}
+
+function hostsIn(doc: Element, match: (node: HTMLElement) => boolean): HTMLElement[] {
   const hosts: HTMLElement[] = [];
   const stop = doc.parentElement;
   const walker = doc.ownerDocument?.createTreeWalker(doc, NodeFilter.SHOW_ELEMENT);
@@ -131,14 +173,14 @@ export function horizontalScrollHostsIn(doc: Element): HTMLElement[] {
     if (!(node instanceof HTMLElement)) continue;
     if (node === doc) continue;
     if (stop && !doc.contains(node)) continue;
-    if (isHorizontalScrollHost(node)) hosts.push(node);
+    if (match(node)) hosts.push(node);
   }
   return hosts;
 }
 
 /** Document-order index of `host` among scroll hosts in `doc`, or null. */
 export function hostKeyInDoc(host: HTMLElement, doc: Element): number | null {
-  const hosts = horizontalScrollHostsIn(doc);
+  const hosts = scrollHostsIn(doc);
   const index = hosts.indexOf(host);
   return index >= 0 ? index : null;
 }
@@ -182,6 +224,7 @@ export function hostSceneBounds(
 export interface ScrollHostPaintState {
   key: number;
   scrollLeft: number;
+  scrollTop: number;
   bounds: SceneBounds;
 }
 
@@ -189,12 +232,12 @@ export interface ScrollHostPaintState {
  * Scene-space host lookup for export / offscreen paint.
  *
  * Maps each host's visible CSS box into {@link pageBounds} using the content
- * slot's on-screen size (CSS px per scene unit ≈ camera zoom).
+ * slot's on-screen size (CSS pixels per scene unit ≈ camera zoom).
  */
 export function scrollHostLookupFromSlot(
   slot: HTMLElement | null | undefined,
   pageBounds: SceneBounds | null | undefined,
-): Map<number, { bounds: SceneBounds; scrollLeft: number }> | null {
+): Map<number, { bounds: SceneBounds; scrollLeft: number; scrollTop: number }> | null {
   if (!slot || !pageBounds) return null;
   const pageW = pageBounds.maxX - pageBounds.minX;
   const pageH = pageBounds.maxY - pageBounds.minY;
@@ -203,12 +246,13 @@ export function scrollHostLookupFromSlot(
   if (slotRect.width < 1 || slotRect.height < 1) return null;
   const sx = slotRect.width / pageW;
   const sy = slotRect.height / pageH;
-  const map = new Map<number, { bounds: SceneBounds; scrollLeft: number }>();
+  const map = new Map<number, { bounds: SceneBounds; scrollLeft: number; scrollTop: number }>();
   for (const doc of slot.querySelectorAll(DOC_PAGE_SELECTOR)) {
-    horizontalScrollHostsIn(doc).forEach((el, key) => {
+    scrollHostsIn(doc).forEach((el, key) => {
       const r = el.getBoundingClientRect();
       map.set(key, {
         scrollLeft: el.scrollLeft,
+        scrollTop: el.scrollTop,
         bounds: {
           minX: pageBounds.minX + (r.left - slotRect.left) / sx,
           minY: pageBounds.minY + (r.top - slotRect.top) / sy,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { dryWashRgb } from "../rasterInk";
-import { capillaryRelax, growTipRadius, INK_HEX, washRgb } from "./style";
+import { capillaryRelax, growTipRadius, INK_HEX, labPenDot, washRgb } from "./style";
 
 describe("ink lab style", () => {
   it("wash uses dryWashRgb", () => {
@@ -18,6 +18,54 @@ describe("ink lab style", () => {
     for (let i = 0; i < 40; i++) r = growTipRadius(base, r);
     expect(r).toBeGreaterThan(base);
     expect(r).toBeLessThanOrEqual(base * 1.7 + 1e-6);
+  });
+
+  it("toolbar width and colour change the live nib", () => {
+    const thin = labPenDot(
+      {
+        color: "#112233",
+        baseWidth: 2,
+        overlayScale: 2,
+        dpr: 2,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 0,
+        speedBlotBlend: 0,
+        speedFade: 0,
+        boldness: 1,
+      },
+      0,
+      0,
+      2,
+      0.5,
+      0,
+      0,
+    );
+    const fat = labPenDot(
+      {
+        color: "#ff0000",
+        baseWidth: 20,
+        overlayScale: 2,
+        dpr: 2,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 0,
+        speedBlotBlend: 0,
+        speedFade: 0,
+        boldness: 1,
+      },
+      0,
+      0,
+      2,
+      0.5,
+      0,
+      0,
+    );
+    expect(fat.r).toBeGreaterThan(thin.r * 2);
+    expect(fat.rgb[0]).toBeGreaterThan(200);
+    expect(thin.rgb[0]).toBeLessThan(80);
   });
 
   it("capillary relaxes interior samples and is opt-in", () => {

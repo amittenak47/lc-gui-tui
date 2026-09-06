@@ -19,7 +19,7 @@ export type BakeResult = {
 };
 
 function toScene(d: SpineDot, pressure = 0.5): ScenePoint {
-  return { x: d.x, y: d.y, pressure };
+  return { x: d.x, y: d.y, pressure: d.p ?? pressure };
 }
 
 function meanRadius(spine: readonly SpineDot[]): number {
@@ -67,7 +67,22 @@ function radiiAlong(
             rgbA[2] + (rgbB[2] - rgbA[2]) * t,
           ] as [number, number, number])
         : rgbA ?? rgbB;
-    out.push({ x: p.x, y: p.y, r: a.r + (b.r - a.r) * t, rgb });
+    const p0 = a.p ?? 0.5;
+    const p1 = b.p ?? p0;
+    const s0 = a.slow;
+    const s1 = b.slow;
+    out.push({
+      x: p.x,
+      y: p.y,
+      r: a.r + (b.r - a.r) * t,
+      rgb,
+      a: (a.a ?? 1) + ((b.a ?? 1) - (a.a ?? 1)) * t,
+      p: p0 + (p1 - p0) * t,
+      slow:
+        s0 != null && s1 != null
+          ? s0 + (s1 - s0) * t
+          : s0 ?? s1,
+    });
   }
   return out;
 }

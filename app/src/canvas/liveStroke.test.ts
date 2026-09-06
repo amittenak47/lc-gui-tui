@@ -56,6 +56,7 @@ function beginPen(
     onNeedPaint?: () => void;
     splineOutline?: boolean;
     splineGradient?: boolean;
+    shell?: boolean;
   } = {},
 ) {
   const blot = extras.speedBlotBlend ?? (extras.speedInk ? 1 : 0);
@@ -82,6 +83,7 @@ function beginPen(
     getStraightAnchor: () => null,
     host: null,
     onNeedPaint: extras.onNeedPaint ?? (() => {}),
+    shell: extras.shell,
   });
 }
 
@@ -122,6 +124,17 @@ describe("LiveStroke ingest", () => {
     expect(stroke.queuedSamples()).toBe(2);
     stroke.tick(1120);
     expect(stroke.queuedSamples()).toBe(0);
+  });
+
+  it("shell skips ring drain so the lab engine owns the spine", () => {
+    const stroke = beginPen({ shell: true, speedInk: 1 });
+    stroke.ingest([sample(40, 10, 1100), sample(80, 12, 1116)]);
+    expect(stroke.queuedSamples()).toBe(0);
+    stroke.tick(1120);
+    const live = stroke.live;
+    expect(live?.kind).toBe("draw");
+    if (live?.kind !== "draw") return;
+    expect(live.points.length).toBe(1);
   });
 
   it("does not grow the spine with dense samples; the tip still tracks", () => {

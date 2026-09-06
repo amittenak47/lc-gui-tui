@@ -26,6 +26,7 @@ import {
   inkSpeedWidthGain,
   inkStrokesFromOps,
   hostScrollDx,
+  hostScrollDy,
   isHostBoundOp,
   paintHostBoundOps,
   ribbonSides,
@@ -1077,7 +1078,20 @@ function recordingContext() {
       if (composite !== "destination-out") return;
       erased.push({ ...map(x, y), r: r * transform[0], composite });
     },
-    fill() {},
+    fill() {
+      // Miter quads: midpoints of opposite edges recover the spine.
+      if (path.length >= 4) {
+        const a = {
+          x: (path[0]!.x + path[3]!.x) / 2,
+          y: (path[0]!.y + path[3]!.y) / 2,
+        };
+        const b = {
+          x: (path[1]!.x + path[2]!.x) / 2,
+          y: (path[1]!.y + path[2]!.y) / 2,
+        };
+        strokes.push({ from: a, to: b, alpha });
+      }
+    },
   };
 
   return { ctx: ctx as unknown as CanvasRenderingContext2D, strokes, erased };
@@ -1151,6 +1165,18 @@ describe("host-bound ink", () => {
     expect(hostScrollDx(draw([0, 0], [1, 1]), 50)).toBe(0);
   });
 
+  it("shifts paint by the scrollTop delta when stamped", () => {
+    const op = {
+      ...draw([10, 10], [40, 10]),
+      hostKey: 0,
+      scrollLeftAtDraw: 0,
+      scrollTopAtDraw: 16,
+    };
+    expect(hostScrollDy(op, 16)).toBeCloseTo(0);
+    expect(hostScrollDy(op, 40)).toBe(-24);
+    expect(hostScrollDy({ ...draw([0, 0], [1, 1]), hostKey: 0, scrollLeftAtDraw: 0 }, 40)).toBe(0);
+  });
+
   it("clips and translates host-bound paint", () => {
     const calls: Array<[string, ...number[]]> = [];
     const ctx = {
@@ -1202,6 +1228,49 @@ describe("host-bound ink", () => {
     expect(calls).toContainEqual(["translate", -30, 0]);
   });
 
+  it("translates host-bound paint by scrollTop as well as scrollLeft", () => {
+    const calls: Array<[string, ...number[]]> = [];
+    const ctx = {
+      save() {
+        calls.push(["save"]);
+      },
+      restore() {
+        calls.push(["restore"]);
+      },
+      beginPath() {},
+      rect() {},
+      clip() {},
+      translate(x: number, y: number) {
+        calls.push(["translate", x, y]);
+      },
+      setTransform() {},
+      moveTo() {},
+      lineTo() {},
+      stroke() {},
+      fill() {},
+      arc() {},
+      closePath() {},
+      globalCompositeOperation: "source-over",
+      globalAlpha: 1,
+      strokeStyle: "",
+      fillStyle: "",
+      lineCap: "",
+      lineJoin: "",
+      lineWidth: 0,
+    } as unknown as CanvasRenderingContext2D;
+    const op = {
+      ...draw([0, 0], [10, 0]),
+      hostKey: 0,
+      scrollLeftAtDraw: 0,
+      scrollTopAtDraw: 8,
+    };
+    const hosts = new Map([
+      [0, { bounds: { minX: 0, minY: 0, maxX: 40, maxY: 20 }, scrollLeft: 0, scrollTop: 18 }],
+    ]);
+    paintHostBoundOps(ctx, [op], hosts, 1);
+    expect(calls).toContainEqual(["translate", 0, -10]);
+  });
+
   it("leaves page-bound strokes alone", () => {
     const calls: string[] = [];
     const ctx = {
@@ -1251,7 +1320,9 @@ describe("host-bound ink", () => {
       stroke() {
         strokes.push("stroke");
       },
-      fill() {},
+      fill() {
+        strokes.push("fill");
+      },
       arc() {},
       closePath() {},
       globalCompositeOperation: "source-over",
@@ -1268,7 +1339,7 @@ describe("host-bound ink", () => {
       scrollLeftAtDraw: 40,
     };
     paintHostBoundOps(ctx, [op], new Map(), 1);
-    expect(strokes).toContain("stroke");
+    expect(strokes).toContain("fill");
   });
 
   it("export paintInkAtScale second-passes host-bound ops when hosts given", () => {
@@ -1682,7 +1753,7 @@ describe("paintInkDisc tip vs join", () => {
       1,
       { capHead: false, capEnd: false },
     );
-    expect(speed.strokeCount).toBeGreaterThan(0);
+    expect(speed.fillCount).toBeGreaterThan(0);
 
     const pen = inkDrawContext();
     applyInkOp(
@@ -1700,7 +1771,7 @@ describe("paintInkDisc tip vs join", () => {
       1,
       { capHead: false, capEnd: false },
     );
-    expect(pen.strokeCount).toBeGreaterThan(0);
+    expect(pen.fillCount).toBeGreaterThan(0);
   });
 
   it("does not grain-punch a hairline speed-ink stroke", () => {
@@ -1723,7 +1794,7 @@ describe("paintInkDisc tip vs join", () => {
       1,
       { capHead: false, capEnd: false },
     );
-    expect(drawCtx.strokeCount).toBeGreaterThan(0);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
     expect(drawCtx.strokeComposites.every((c) => c !== "destination-out")).toBe(true);
   });
 
@@ -1747,8 +1818,8 @@ describe("paintInkDisc tip vs join", () => {
       1,
       { capHead: false, capEnd: false },
     );
-    expect(drawCtx.strokeComposites.every((c) => c !== "destination-out")).toBe(true);
     expect(drawCtx.fillCount).toBeGreaterThan(0);
+    expect(drawCtx.strokeComposites.every((c) => c !== "destination-out")).toBe(true);
   });
 
   it("paints wide speed ink as a ribbon, not bevel runs", () => {
@@ -1794,7 +1865,7 @@ describe("paintInkDisc tip vs join", () => {
       { capHead: false, capEnd: false },
     );
     expect(drawCtx.strokeCount).toBe(0);
-    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI * 2) < 1e-6)).toBe(true);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
   });
 
   it("keeps a wide drying stroke on the ribbon", () => {
@@ -2040,7 +2111,7 @@ describe("contact stamp (Phase 1)", () => {
   it("does not collapse a real two-point line into a single disc", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1);
-    expect(drawCtx.strokeCount).toBeGreaterThan(0);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
   });
 });
 
@@ -2209,20 +2280,21 @@ describe("ribbon normal stability", () => {
 
 describe("drawStrokeFrom / applyInkOp live options", () => {
   it("uses bevel joins on the run path", () => {
-    const { ctx } = inkDrawContext();
-    applyInkOp(ctx, draw([0, 0], [50, 0], [50, 50]), 1);
-    expect(ctx.lineJoin).toBe("bevel");
+    const drawCtx = inkDrawContext();
+    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0], [50, 50]), 1);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
   });
 
   it("skips head caps when capHead is false", () => {
-    const drawCtx = inkDrawContext();
-    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: true });
-    const afterTail = drawCtx.fillCount;
-    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1, { capHead: true, capEnd: true });
-    expect(drawCtx.fillCount).toBeGreaterThan(afterTail);
-    const afterBoth = drawCtx.fillCount;
-    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: false });
-    expect(drawCtx.fillCount).toBe(afterBoth);
+    const noHead = inkDrawContext();
+    applyInkOp(noHead.ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: true });
+    const both = inkDrawContext();
+    applyInkOp(both.ctx, draw([0, 0], [50, 0]), 1, { capHead: true, capEnd: true });
+    expect(both.fillCount).toBeGreaterThan(noHead.fillCount);
+    const none = inkDrawContext();
+    applyInkOp(none.ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: false });
+    expect(none.fillCount).toBeGreaterThan(0);
+    expect(none.fillCount).toBeLessThan(both.fillCount);
   });
 
   it("paints constant-width and speed-ink strokes without incremental tail paint", () => {
@@ -2233,7 +2305,7 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
       1,
       { capHead: false, capEnd: false },
     );
-    expect(constant.strokeCount).toBeGreaterThan(0);
+    expect(constant.fillCount).toBeGreaterThan(0);
 
     const speed = inkDrawContext();
     applyInkOp(
@@ -2501,7 +2573,7 @@ describe("grain and blot pooling (Phase 2)", () => {
     expect(offAxis.length).toBeGreaterThan(0);
   });
 
-  it("etches grain through the trail, not only the caps", () => {
+  it("does not etch grain through the default pen trail", () => {
     const textured = inkDrawContext();
     applyInkOp(
       textured.ctx,
@@ -2517,16 +2589,10 @@ describe("grain and blot pooling (Phase 2)", () => {
       },
       1,
     );
-    const mid = textured.strokes.filter((s) => {
-      const x = (s.from.x + s.to.x) / 2;
-      return x > 20 && x < 60;
-    });
-    expect(mid.length).toBeGreaterThan(30);
-    const offAxis = mid.filter((s) => Math.abs((s.from.y + s.to.y) / 2) > 0.8);
-    expect(offAxis.length).toBeGreaterThan(0);
+    expect(textured.strokeComposites.every((c) => c !== "destination-out")).toBe(true);
   });
 
-  it("etches grain along width-only speed ink on the ribbon, not only the start cap", () => {
+  it("does not etch grain along width-only speed ink on the default pen", () => {
     const textured = inkDrawContext();
     applyInkOp(
       textured.ctx,
@@ -2546,7 +2612,6 @@ describe("grain and blot pooling (Phase 2)", () => {
       1,
       { capHead: false, capEnd: false },
     );
-    expect(textured.strokeCount).toBe(0);
     expect(textured.fillCount).toBeGreaterThan(0);
     expect(textured.strokeComposites.every((c) => c !== "destination-out")).toBe(true);
   });
@@ -2673,7 +2738,7 @@ describe("grain and blot pooling (Phase 2)", () => {
       },
       1,
     );
-    expect(textured.strokeCount).toBeGreaterThan(hard.strokeCount);
+    expect(textured.strokeCount).toBe(hard.strokeCount);
     expect(textured.fillCount).toBe(hard.fillCount);
   });
 
@@ -2733,7 +2798,7 @@ describe("grain and blot pooling (Phase 2)", () => {
     );
     expect(drawCtx.strokeCount).toBe(0);
     expect(drawCtx.fillCount).toBeGreaterThanOrEqual(3);
-    expect(drawCtx.linearGradients).toBeGreaterThan(0);
+    expect(drawCtx.fillStyles.length).toBeGreaterThan(1);
   });
 
   it("grows ribbon tip width from blotTipGrow on a moving stroke", () => {

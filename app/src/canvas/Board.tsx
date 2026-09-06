@@ -213,9 +213,9 @@ import {
 import {
   DOC_PAGE_SELECTOR,
   horizontalScrollHost,
-  horizontalScrollHostsIn,
   scrollHostAtPoint,
   scrollHostLookupFromSlot,
+  scrollHostsIn,
   slotCssPerScene,
 } from "./scrollHost";
 import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
@@ -2632,22 +2632,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onAnnotateCodeChange?.(annotateCode);
   }, [annotateCode, onAnnotateCodeChange]);
 
-  /** Snapshot nested host scrollLeft under the content slot (annotate toggle). */
-  const snapshotHostScroll = useCallback((): Map<HTMLElement, number> => {
+  /** Snapshot nested host scroll under the content slot (annotate toggle). */
+  const snapshotHostScroll = useCallback((): Map<HTMLElement, { left: number; top: number }> => {
     const slot = contentSlotNodeRef.current;
-    const out = new Map<HTMLElement, number>();
+    const out = new Map<HTMLElement, { left: number; top: number }>();
     if (!slot) return out;
     for (const doc of slot.querySelectorAll(DOC_PAGE_SELECTOR)) {
-      for (const host of horizontalScrollHostsIn(doc)) {
-        out.set(host, host.scrollLeft);
+      for (const host of scrollHostsIn(doc)) {
+        out.set(host, { left: host.scrollLeft, top: host.scrollTop });
       }
     }
     return out;
   }, []);
 
-  const restoreHostScroll = useCallback((saved: Map<HTMLElement, number>) => {
-    for (const [host, left] of saved) {
-      if (host.isConnected) host.scrollLeft = left;
+  const restoreHostScroll = useCallback((saved: Map<HTMLElement, { left: number; top: number }>) => {
+    for (const [host, pos] of saved) {
+      if (host.isConnected) {
+        host.scrollLeft = pos.left;
+        host.scrollTop = pos.top;
+      }
     }
   }, []);
 
@@ -3644,6 +3647,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return [...map.entries()].map(([key, host]) => ({
       key,
       scrollLeft: host.scrollLeft,
+      scrollTop: host.scrollTop,
       bounds: host.bounds,
     }));
   }, []);

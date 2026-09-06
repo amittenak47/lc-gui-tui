@@ -8,9 +8,8 @@
  * and remeshes once on lift. Other pens still plant a Catmull on a turning hop.
  *
  * Stamp-live (`speedStampLive`) is no longer the default whiteboard live path.
- * RasterInkLayer paints the default pen through `canvas/inkLab`. This session
- * still owns capture, highlighter, eraser, and lift commit into InkOp / tiles.
- * Do not delete the ribbon until committed paint uses the lab bake as well.
+ * RasterInkLayer paints the default pen through `canvas/inkLab` live and on
+ * commit. This session still owns capture, highlighter, eraser, and InkOp save.
  */
 
 import { overdrawnViewport } from "./panOffset";
@@ -310,8 +309,13 @@ export interface BeginLiveStroke {
   smoothingMode: InkSmoothingMode;
   /** Shift/toggle chord; re-read each drained sample. Returns an index or null. */
   getStraightAnchor: () => number | null;
-  host: { key: number; scrollLeft: number } | null;
+  host: { key: number; scrollLeft: number; scrollTop?: number } | null;
   onNeedPaint: () => void;
+  /**
+   * Ink-lab host owns live samples and paint. Skip dwell and the ring so a
+   * long scribble does not densify a second spine beside the engine.
+   */
+  shell?: boolean;
 }
 
 export function beginLiveStroke(init: BeginLiveStroke): LiveStroke {
@@ -331,6 +335,7 @@ export class LiveStroke {
   private readonly smoothingMode: InkSmoothingMode;
   private readonly getStraightAnchor: () => number | null;
   private readonly onNeedPaint: () => void;
+  private readonly shell: boolean;
   private readonly pointerType: string;
   private ringX = new Float64Array(RING_START);
   private ringY = new Float64Array(RING_START);
@@ -378,6 +383,7 @@ export class LiveStroke {
     this.smoothingMode = init.smoothingMode;
     this.getStraightAnchor = init.getStraightAnchor;
     this.onNeedPaint = init.onNeedPaint;
+    this.shell = init.shell === true;
     this.pointerType = init.first.pointerType;
     this.lastEventTimeMs = init.first.timeStamp;
     this.lastSampleTime = init.first.timeStamp;
@@ -467,6 +473,7 @@ export class LiveStroke {
     this.bindHost(init.host);
 
     if (
+      !this.shell &&
       init.tool === "pen" &&
       (speed > 0 || fade > 0 || blotBlend > 0) &&
       !init.splineOutline &&
@@ -508,7 +515,7 @@ export class LiveStroke {
   }
 
   ingest(batch: readonly LivePointerSample[]): void {
-    if (this.closed || batch.length === 0) return;
+    if (this.closed || this.shell || batch.length === 0) return;
     this.ensureRing(batch.length);
     for (const sample of batch) {
       const i = this.ringN;
@@ -523,7 +530,7 @@ export class LiveStroke {
   }
 
   tick(nowMs: number): boolean {
-    if (this.closed) return false;
+    if (this.closed || this.shell) return false;
     let dirty = false;
     const n = this.ringN;
     if (n > 0) {
@@ -982,10 +989,11 @@ export class LiveStroke {
     if (DEBUG_INK || inkMetrics.enabled) inkMetrics.path(tag);
   }
 
-  private bindHost(host: { key: number; scrollLeft: number } | null): void {
+  private bindHost(host: { key: number; scrollLeft: number; scrollTop?: number } | null): void {
     if (!host) return;
     this.op.hostKey = host.key;
     this.op.scrollLeftAtDraw = host.scrollLeft;
+    if (host.scrollTop !== undefined) this.op.scrollTopAtDraw = host.scrollTop;
   }
 
   private bindHostOnOp(): void {

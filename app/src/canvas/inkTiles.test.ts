@@ -461,20 +461,20 @@ describe("InkTileCache", () => {
     cache.draw(ctx, screen(1), 1);
     const before = cache.size;
     // The tile the stroke lands on — the one that had to stroke something.
-    const landed = canvases.created.find((tile) => tile.ops.includes("stroke"));
+    const landed = canvases.created.find((tile) => tile.ops.includes("fill"));
     expect(landed).toBeDefined();
-    const strokesBefore = landed!.ops.filter((op) => op === "stroke").length;
+    const strokesBefore = landed!.ops.filter((op) => op === "fill").length;
 
     cache.appendOp(draw([5, 5], [20, 20]));
 
     // Nothing is thrown away, and the new stroke went straight onto the tile.
     expect(cache.size).toBe(before);
-    expect(landed!.ops.filter((op) => op === "stroke").length).toBeGreaterThan(
+    expect(landed!.ops.filter((op) => op === "fill").length).toBeGreaterThan(
       strokesBefore,
     );
     // Compositing, not rebuilding: the tile was never cleared and replayed.
     expect(landed!.ops.lastIndexOf("clearRect")).toBeLessThan(
-      landed!.ops.lastIndexOf("stroke"),
+      landed!.ops.lastIndexOf("fill"),
     );
   });
 
@@ -491,7 +491,7 @@ describe("InkTileCache", () => {
     empty.cache.draw(destinationContext().ctx, screen(1), 1);
 
     const drawnIn = (created: Array<{ ops: string[] }>) =>
-      created.reduce((sum, tile) => sum + tile.ops.filter((op) => op === "stroke").length, 0);
+      created.reduce((sum, tile) => sum + tile.ops.filter((op) => op === "fill").length, 0);
     const busyBefore = drawnIn(busy.canvases.created);
     const emptyBefore = drawnIn(empty.canvases.created);
 
@@ -511,7 +511,7 @@ describe("InkTileCache", () => {
     cache.setOps([draw([0, 0], [40, 40])]);
     const { ctx } = destinationContext();
     cache.draw(ctx, screen(1), 1);
-    const landed = canvases.created.find((tile) => tile.ops.includes("stroke"))!;
+    const landed = canvases.created.find((tile) => tile.ops.includes("fill"))!;
     const fillsBefore = landed.ops.filter((op) => op === "fill").length;
     cache.appendOp(erase(6, [20, 20]));
     // `destination-out` against the tile's own pixels is what a replay would
@@ -619,7 +619,7 @@ describe("InkTileCache", () => {
     cache.setOps([draw([10, 10], [20, 20]), draw([3000, 10], [3010, 20])]);
     const { ctx } = destinationContext();
     cache.draw(ctx, screen(1), 1);
-    const painted = canvases.created.filter((c) => c.ops.includes("stroke"));
+    const painted = canvases.created.filter((c) => c.ops.includes("fill"));
     // Only the tile the near stroke lands on does any stroking.
     expect(painted).toHaveLength(1);
   });

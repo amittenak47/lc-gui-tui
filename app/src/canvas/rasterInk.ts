@@ -27,6 +27,9 @@ import {
   SPLINE_THINNING,
   type SplineSample,
 } from "./splineInk";
+import { fillMiterStroke } from "./inkLab/fallback";
+import type { SpineDot } from "./inkLab/instance";
+import { paintSdfSpine } from "./inkLab/sdfPaint";
 
 function ribbonStage<T>(name: InkStageName, fn: () => T): T {
   if (!DEBUG_INK && !inkMetrics.enabled) return fn();
@@ -449,6 +452,11 @@ export interface ScenePoint {
    * {@link INK_SLOWNESS_NEUTRAL}).
    */
   slowness?: number;
+  /**
+   * Scene-space nib radius from the WebGL lab bake. Absent on older strokes
+   * and on highlighter/eraser — paint recomputes from styles.
+   */
+  radius?: number;
 }
 
 export interface ViewportTransform {
@@ -464,12 +472,15 @@ export interface ViewportTransform {
 /** Scroll-host binding shared by draw and erase ops. */
 export interface InkHostBinding {
   /**
-   * Document-order index among horizontal scroll hosts in the doc scope —
-   * see {@link horizontalScrollHostsIn} in `scrollHost.ts`.
+   * Document-order index among nested scroll hosts in the doc scope —
+   * see {@link scrollHostsIn} in `scrollHost.ts`. Horizontal hosts keep
+   * their old keys; overflow-y-only hosts are appended after them.
    */
   hostKey: number;
   /** `scrollLeft` of that host when the stroke was written. */
   scrollLeftAtDraw: number;
+  /** `scrollTop` when written. Absent on older strokes → no vertical shift. */
+  scrollTopAtDraw?: number;
 }
 
 /** A pooling stamp left where the nib halted, then moved on. */
@@ -542,9 +553,10 @@ export interface InkDrawOp {
    * Implies {@link splineOutline}. Absent means a flat fill.
    */
   splineGradient?: boolean;
-  /** When set, the stroke tracks a nested horizontal scroller's `scrollLeft`. */
+  /** When set, the stroke tracks a nested scroller's `scrollLeft` / `scrollTop`. */
   hostKey?: number;
   scrollLeftAtDraw?: number;
+  scrollTopAtDraw?: number;
   /** Stable id for the global undo log. Assigned at commit. */
   id?: number;
   /** Global composite order. Assigned at commit. */
@@ -557,6 +569,7 @@ export interface InkEraseOp {
   radius: number;
   hostKey?: number;
   scrollLeftAtDraw?: number;
+  scrollTopAtDraw?: number;
   /** Stable id for the global undo log. Assigned at commit. */
   id?: number;
   /** Global composite order. Assigned at commit. */
@@ -566,7 +579,7 @@ export interface InkEraseOp {
 
 export type InkOp = InkDrawOp | InkEraseOp;
 
-/** True when an op was written inside a nested horizontal scroll host. */
+/** True when an op was written inside a nested scroll host. */
 export function isHostBoundOp(op: InkOp): boolean {
   return (
     op.hostKey !== undefined &&
@@ -584,7 +597,14 @@ export function isHostBoundOp(op: InkOp): boolean {
  */
 export function hostScrollDx(op: InkOp, scrollLeftNow: number, _zoom = 1): number {
   if (!isHostBoundOp(op)) return 0;
-  return -(scrollLeftNow - op.scrollLeftAtDraw!);
+  return op.scrollLeftAtDraw! - scrollLeftNow;
+}
+
+/** Scene-space Y shift for nested `scrollTop`. Missing field → 0 so old files stay put. */
+export function hostScrollDy(op: InkOp, scrollTopNow: number, _zoom = 1): number {
+  if (!isHostBoundOp(op) || op.scrollTopAtDraw === undefined) return 0;
+  if (!Number.isFinite(op.scrollTopAtDraw)) return 0;
+  return op.scrollTopAtDraw - scrollTopNow;
 }
 
 export function hasStylusPressure(pressure: number): boolean {
@@ -5350,6 +5370,66 @@ export function paintInkTerminalCap(
   ctx.fill();
 }
 
+function labVertexRgb(
+  color: string,
+  style: InkStrokeStyle,
+): [number, number, number] {
+  const washed = dryWashRgb(color, style.dryGain ?? 1);
+  const poolT = style.blotPool ?? 0;
+  if (poolT < 1e-3) return [washed.r, washed.g, washed.b];
+  const pooled = blotPoolRgb(
+    `rgb(${washed.r}, ${washed.g}, ${washed.b})`,
+    poolT,
+  );
+  return [pooled.r, pooled.g, pooled.b];
+}
+
+/**
+ * Default pen: same SDF capsules as the live lab engine.
+ * Tests without WebGL2 keep the mitered strip. Highlighter and spline stay
+ * on their own paths.
+ */
+function paintLabDrawOp(
+  ctx: CanvasRenderingContext2D,
+  op: InkDrawOp,
+  fromIndex: number,
+  pixelScale: number,
+  capEnd: boolean,
+  capHead: boolean,
+): void {
+  const points = op.points;
+  if (points.length === 0) return;
+  let styles = inkStrokePointStyles(op, 0);
+  styles = applyInkPoolingAtEnds(styles, op, points, 0);
+  const from = fromIndex > 0 ? Math.max(0, fromIndex - 1) : 0;
+  const spine: SpineDot[] = [];
+  for (let i = from; i < points.length; i++) {
+    const p = points[i]!;
+    const st = styles[i]!;
+    spine.push({
+      x: p.x,
+      y: p.y,
+      r:
+        typeof p.radius === "number" && Number.isFinite(p.radius) && p.radius > 0
+          ? p.radius
+          : paintedWidth(st.lineWidth, pixelScale) / 2,
+      rgb: labVertexRgb(op.color, st),
+      a: mixBlotAlpha(st.alpha, st.blotPool ?? 0),
+    });
+  }
+  if (spine.length === 0) return;
+  const tip = spine[spine.length - 1] ?? null;
+  if (paintSdfSpine(ctx, spine, tip)) {
+    ctx.globalAlpha = 1;
+    return;
+  }
+  fillMiterStroke(ctx, spine, tip, spine[0]!.rgb ?? [0, 0, 0], {
+    capHead: capHead && from === 0,
+    capEnd,
+  });
+  ctx.globalAlpha = 1;
+}
+
 function drawStrokeFrom(
   ctx: CanvasRenderingContext2D,
   op: InkDrawOp,
@@ -5441,6 +5521,11 @@ function drawStrokeFrom(
       growT > 1e-3 ? 1 : (last.dryGain ?? 1),
     );
     ctx.globalAlpha = 1;
+    return;
+  }
+
+  if (!op.highlight) {
+    paintLabDrawOp(ctx, op, start, pixelScale, capEnd, capHead);
     return;
   }
 
@@ -5570,7 +5655,7 @@ export function applyInkOp(
 }
 
 /**
- * Paint one op clipped to a host and shifted for `scrollLeft` drift.
+ * Paint one op clipped to a host and shifted for nested scroll drift.
  *
  * Used by the second pass in {@link paintHostBoundOps} and for live ink
  * inside a scrolling code block.
@@ -5582,6 +5667,7 @@ export function applyInkOpInHost(
   scrollDx: number,
   pixelScale = 0,
   options?: ApplyInkOptions,
+  scrollDy = 0,
 ): void {
   ctx.save();
   ctx.beginPath();
@@ -5592,7 +5678,7 @@ export function applyInkOpInHost(
     hostBounds.maxY - hostBounds.minY,
   );
   ctx.clip();
-  if (scrollDx !== 0) ctx.translate(scrollDx, 0);
+  if (scrollDx !== 0 || scrollDy !== 0) ctx.translate(scrollDx, scrollDy);
   applyInkOp(ctx, op, pixelScale, options);
   ctx.restore();
 }
@@ -5600,14 +5686,14 @@ export function applyInkOpInHost(
 /** Map from `hostKey` to live scroll state at paint time. */
 export type ScrollHostLookup = ReadonlyMap<
   number,
-  { bounds: SceneBounds; scrollLeft: number }
+  { bounds: SceneBounds; scrollLeft: number; scrollTop?: number }
 >;
 
 /**
  * Second paint pass for ops bound to nested horizontal scroll hosts.
  *
  * Page-bound ops are already in the tile cache; host-bound ones cannot be
- * baked there because their screen position moves when `scrollLeft` changes.
+ * baked there because their screen position moves when nested scroll changes.
  */
 export function paintHostBoundOps(
   ctx: CanvasRenderingContext2D,
@@ -5632,6 +5718,7 @@ export function paintHostBoundOps(
       hostScrollDx(op, host.scrollLeft, zoom),
       pixelScale,
       options,
+      hostScrollDy(op, host.scrollTop ?? 0, zoom),
     );
   }
 }

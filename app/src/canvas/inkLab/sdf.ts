@@ -79,6 +79,8 @@ export type SdfRenderer = {
   canvas: HTMLCanvasElement;
   resize(w: number, h: number): void;
   upload(data: Float32Array, count: number): void;
+  /** Draw one new capsule without clearing. Live path only. */
+  append(data: Float32Array, index: number, aabb: StrokeAabb): void;
   draw(aabb: StrokeAabb): void;
   clear(): void;
   destroy(): void;
@@ -180,8 +182,41 @@ export function tryCreateSdfRenderer(
   gl.clearColor(0, 0, 0, 0);
 
   let count = 0;
+  let instCap = 32;
   let viewW = canvas.width;
   let viewH = canvas.height;
+  gl.bindBuffer(gl.ARRAY_BUFFER, inst);
+  gl.bufferData(gl.ARRAY_BUFFER, instCap * stride, gl.DYNAMIC_DRAW);
+
+  const bindInstAt = (index: number) => {
+    gl!.bindBuffer(gl.ARRAY_BUFFER, inst);
+    const base = index * stride;
+    for (const [loc, size, offsetFloats] of specs) {
+      gl!.vertexAttribPointer(loc, size, gl.FLOAT, false, stride, base + offsetFloats * 4);
+    }
+  };
+
+  const growInst = (n: number) => {
+    if (n <= instCap) return false;
+    while (instCap < n) instCap *= 2;
+    gl!.bindBuffer(gl.ARRAY_BUFFER, inst);
+    gl!.bufferData(gl.ARRAY_BUFFER, instCap * stride, gl.DYNAMIC_DRAW);
+    return true;
+  };
+
+  const scissorAabb = (aabb: StrokeAabb) => {
+    const pad = 2;
+    const x0 = Math.max(0, Math.floor(aabb.minX) - pad);
+    const y0 = Math.max(0, Math.floor(aabb.minY) - pad);
+    const x1 = Math.min(viewW, Math.ceil(aabb.maxX) + pad);
+    const y1 = Math.min(viewH, Math.ceil(aabb.maxY) + pad);
+    if (x1 > x0 && y1 > y0 && x1 - x0 < viewW && y1 - y0 < viewH) {
+      gl!.enable(gl.SCISSOR_TEST);
+      gl!.scissor(x0, viewH - y1, x1 - x0, y1 - y0);
+    } else {
+      gl!.disable(gl.SCISSOR_TEST);
+    }
+  };
 
   const resize = (nw: number, nh: number) => {
     const width = Math.max(1, nw);
@@ -201,12 +236,38 @@ export function tryCreateSdfRenderer(
     resize,
     upload(data, n) {
       count = Math.max(0, n);
+      growInst(Math.max(count, 1));
       gl!.bindBuffer(gl.ARRAY_BUFFER, inst);
-      gl!.bufferData(
-        gl.ARRAY_BUFFER,
-        data.subarray(0, count * INSTANCE_FLOATS),
-        gl.DYNAMIC_DRAW,
-      );
+      if (count > 0) {
+        gl!.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, count * INSTANCE_FLOATS));
+      }
+    },
+    append(data, index, aabb) {
+      const grew = growInst(index + 1);
+      gl!.bindBuffer(gl.ARRAY_BUFFER, inst);
+      if (grew) {
+        gl!.bufferSubData(
+          gl.ARRAY_BUFFER,
+          0,
+          data.subarray(0, (index + 1) * INSTANCE_FLOATS),
+        );
+      } else {
+        gl!.bufferSubData(
+          gl.ARRAY_BUFFER,
+          index * stride,
+          data.subarray(index * INSTANCE_FLOATS, (index + 1) * INSTANCE_FLOATS),
+        );
+      }
+      count = index + 1;
+      gl!.viewport(0, 0, viewW, viewH);
+      gl!.useProgram(prog);
+      gl!.uniform2f(uView, viewW, viewH);
+      gl!.bindVertexArray(vao);
+      bindInstAt(index);
+      scissorAabb(aabb);
+      gl!.drawArraysInstanced(gl.TRIANGLES, 0, 6, 1);
+      bindInstAt(0);
+      gl!.disable(gl.SCISSOR_TEST);
     },
     clear() {
       count = 0;
@@ -221,17 +282,8 @@ export function tryCreateSdfRenderer(
       gl!.useProgram(prog);
       gl!.uniform2f(uView, viewW, viewH);
       gl!.bindVertexArray(vao);
-      const pad = 2;
-      const x0 = Math.max(0, Math.floor(aabb.minX) - pad);
-      const y0 = Math.max(0, Math.floor(aabb.minY) - pad);
-      const x1 = Math.min(viewW, Math.ceil(aabb.maxX) + pad);
-      const y1 = Math.min(viewH, Math.ceil(aabb.maxY) + pad);
-      if (x1 > x0 && y1 > y0 && x1 - x0 < viewW && y1 - y0 < viewH) {
-        gl!.enable(gl.SCISSOR_TEST);
-        gl!.scissor(x0, viewH - y1, x1 - x0, y1 - y0);
-      } else {
-        gl!.disable(gl.SCISSOR_TEST);
-      }
+      bindInstAt(0);
+      scissorAabb(aabb);
       gl!.drawArraysInstanced(gl.TRIANGLES, 0, 6, count);
       gl!.disable(gl.SCISSOR_TEST);
     },

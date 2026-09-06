@@ -126,13 +126,22 @@ export function fillMiterStroke(
   spine: readonly SpineDot[],
   tip: SpineDot | null,
   rgb: readonly [number, number, number],
+  opts?: { capHead?: boolean; capEnd?: boolean },
 ): void {
-  ctx.fillStyle = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+  const capHead = opts?.capHead !== false;
+  const capEnd = opts?.capEnd !== false;
+
+  const fillDot = (dot: SpineDot, fallback: readonly [number, number, number]) => {
+    const col = dot.rgb ?? fallback;
+    const a = dot.a ?? 1;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = `rgb(${col[0]}, ${col[1]}, ${col[2]})`;
+  };
+
   for (let i = 1; i < spine.length; i++) {
     const a = spine[i - 1]!;
     const b = spine[i]!;
-    const col = a.rgb ?? rgb;
-    ctx.fillStyle = `rgb(${col[0]}, ${col[1]}, ${col[2]})`;
+    fillDot(a, rgb);
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const len = Math.hypot(dx, dy);
@@ -152,21 +161,23 @@ export function fillMiterStroke(
     );
   }
   const head = spine[0];
-  if (head) {
-    const col = head.rgb ?? rgb;
-    ctx.fillStyle = `rgb(${col[0]}, ${col[1]}, ${col[2]})`;
+  if (head && capHead) {
+    fillDot(head, rgb);
     ctx.beginPath();
     ctx.arc(head.x, head.y, head.r, 0, Math.PI * 2);
     ctx.fill();
   }
   const tail = tip ?? spine[spine.length - 1];
-  if (tail && tail !== head) {
+  if (tail && capEnd && tail !== head) {
+    fillDot(tail, rgb);
     ctx.beginPath();
     ctx.arc(tail.x, tail.y, tail.r, 0, Math.PI * 2);
     ctx.fill();
-  } else if (tail && spine.length < 2) {
+  } else if (tail && capEnd && spine.length < 2) {
+    fillDot(tail, rgb);
     ctx.beginPath();
     ctx.arc(tail.x, tail.y, tail.r, 0, Math.PI * 2);
     ctx.fill();
   }
+  ctx.globalAlpha = 1;
 }

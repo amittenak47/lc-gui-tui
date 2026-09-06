@@ -134,6 +134,31 @@ describe("encodeInkOps / decodeInkOps", () => {
     const [back] = roundTrip([original]) as [InkDrawOp];
     expect(back.hostKey).toBe(2);
     expect(back.scrollLeftAtDraw).toBe(48);
+    expect(back.scrollTopAtDraw).toBeUndefined();
+  });
+
+  it("round-trips scrollTopAtDraw and baked nib radius", () => {
+    const original = stroke(
+      [
+        { x: 10, y: 10, pressure: 0.5, radius: 2.4 },
+        { x: 14, y: 11, pressure: 0.6, radius: 2.7 },
+      ],
+      {
+        hostKey: 0,
+        scrollLeftAtDraw: 12,
+        scrollTopAtDraw: 30,
+      },
+    );
+    const encoded = encodeInkOps([original]);
+    const [back] = decodeInkOps(encoded) as [InkDrawOp];
+    expect(back.scrollTopAtDraw).toBe(30);
+    expect(back.points[0]!.radius).toBeCloseTo(2.4, 1);
+    expect(back.points[1]!.radius).toBeCloseTo(2.7, 1);
+    const packed = unpackEncodedInk(packEncodedInk(encoded));
+    expect(packed).not.toBeNull();
+    const [fromPack] = decodeInkOps(packed!) as [InkDrawOp];
+    expect(fromPack.scrollTopAtDraw).toBe(30);
+    expect(fromPack.points[0]!.radius).toBeCloseTo(2.4, 1);
   });
 
   it("carries the draw op's settings across", () => {
