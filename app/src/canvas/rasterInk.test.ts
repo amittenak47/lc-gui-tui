@@ -66,6 +66,7 @@ import {
   paintInkDisc,
   paintGrainDisc,
   paintInkTerminalCap,
+  ribbonScratchDeviceScale,
   inkCapRoundness,
   trailingTipClusterStart,
   stampInkBlotHalt,
@@ -3009,5 +3010,14 @@ describe("grain and blot pooling (Phase 2)", () => {
     applyInkOp(plain.ctx, { ...op, blotTipGrow: 0 }, 1);
     expect(drawCtx.arcRadii.length).toBe(plain.arcRadii.length);
     expect(drawCtx.arcRadii.every((r) => r <= tipHalf + 1e-6)).toBe(true);
+  });
+});
+
+describe("ribbonScratchDeviceScale", () => {
+  it("matches the destination device scale instead of staying at one scene pixel", () => {
+    expect(ribbonScratchDeviceScale(0)).toBe(1);
+    expect(ribbonScratchDeviceScale(1)).toBe(1);
+    expect(ribbonScratchDeviceScale(2)).toBe(2);
+    expect(ribbonScratchDeviceScale(2.625)).toBe(2.625);
   });
 });
