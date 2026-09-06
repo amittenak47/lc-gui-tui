@@ -2022,7 +2022,7 @@ describe("disc-primary dwell path", () => {
     expect(isDiscPrimaryPath(points([0, 0], [40, 0], [80, 10]), 8)).toBe(false);
   });
 
-  it("paints a dwell cluster as discs rather than many ribbon quads", () => {
+  it("replays a dwell cluster as capsules, not a stamp disc", () => {
     const cluster = points(
       [10, 10],
       [10.1, 10],
@@ -2046,8 +2046,10 @@ describe("disc-primary dwell path", () => {
     };
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
-    // One growing disc stamp — not one fill per ribbon segment.
-    expect(drawCtx.fillCount).toBe(1);
+    expect(isDiscPrimaryPath(cluster, 8)).toBe(true);
+    expect(drawCtx.radialGradients).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
+    expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
   });
 });
 
@@ -2056,10 +2058,11 @@ describe("contact stamp (Phase 1)", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, draw([10, 10]), 1);
     expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.radialGradients).toBe(0);
     expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
   });
 
-  it("paints a pressure-on cluster of 8 samples inside 0.2× nib as one stamp", () => {
+  it("replays a pressure-on cluster as capsules, not one stamp disc", () => {
     const cluster = stylusPoints(
       0.75,
       [0, 0],
@@ -2083,11 +2086,12 @@ describe("contact stamp (Phase 1)", () => {
     };
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
-    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.radialGradients).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
     expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
   });
 
-  it("does not emit two heading-flipped terminal caps at the origin", () => {
+  it("does not emit heading-flipped half-caps at the origin", () => {
     const op: InkOp = {
       kind: "draw",
       color: "#000",
@@ -2104,7 +2108,8 @@ describe("contact stamp (Phase 1)", () => {
     };
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, op, 1);
-    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.radialGradients).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
     expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
   });
 
@@ -2279,10 +2284,30 @@ describe("ribbon normal stability", () => {
 });
 
 describe("drawStrokeFrom / applyInkOp live options", () => {
-  it("uses bevel joins on the run path", () => {
-    const drawCtx = inkDrawContext();
-    applyInkOp(drawCtx.ctx, draw([0, 0], [50, 0], [50, 50]), 1);
-    expect(drawCtx.fillCount).toBeGreaterThan(0);
+  it("replays default pen as capsules, including a dwell cluster", () => {
+    const long = inkDrawContext();
+    applyInkOp(long.ctx, draw([0, 0], [50, 0], [50, 50]), 1);
+    expect(long.fillCount).toBeGreaterThan(0);
+    expect(long.radialGradients).toBe(0);
+
+    const cluster = points([0, 0], [5, 1], [7, 0], [6, -1], [3, 0]);
+    const dwell = inkDrawContext();
+    applyInkOp(
+      dwell.ctx,
+      {
+        kind: "draw",
+        color: "#000",
+        baseWidth: 8,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        points: cluster,
+      },
+      1,
+    );
+    expect(isDiscPrimaryPath(cluster, 8)).toBe(true);
+    expect(dwell.radialGradients).toBe(0);
+    expect(dwell.fillCount).toBeGreaterThan(0);
   });
 
   it("skips head caps when capHead is false", () => {
@@ -2658,7 +2683,8 @@ describe("grain and blot pooling (Phase 2)", () => {
   it("does not read a missing grain field as the live dial", () => {
     const drawCtx = inkDrawContext();
     applyInkOp(drawCtx.ctx, draw([4, 4]), 1);
-    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.radialGradients).toBe(0);
+    expect(drawCtx.fillCount).toBeGreaterThan(0);
   });
 
   it("pools as a richer, less transparent deposit of the same colour", () => {

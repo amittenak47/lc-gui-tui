@@ -161,23 +161,25 @@ export function fillMiterStroke(
     );
   }
   const head = spine[0];
+  const tail = tip ?? spine[spine.length - 1];
   if (head && capHead) {
     fillDot(head, rgb);
     ctx.beginPath();
     ctx.arc(head.x, head.y, head.r, 0, Math.PI * 2);
     ctx.fill();
   }
-  const tail = tip ?? spine[spine.length - 1];
-  if (tail && capEnd && tail !== head) {
-    fillDot(tail, rgb);
-    ctx.beginPath();
-    ctx.arc(tail.x, tail.y, tail.r, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (tail && capEnd && spine.length < 2) {
-    fillDot(tail, rgb);
-    ctx.beginPath();
-    ctx.arc(tail.x, tail.y, tail.r, 0, Math.PI * 2);
-    ctx.fill();
+  if (tail && capEnd) {
+    const already =
+      capHead &&
+      !!head &&
+      Math.hypot(tail.x - head.x, tail.y - head.y) < 1e-4 &&
+      Math.abs(tail.r - head.r) < 1e-4;
+    if (!already) {
+      fillDot(tail, rgb);
+      ctx.beginPath();
+      ctx.arc(tail.x, tail.y, tail.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
   ctx.globalAlpha = 1;
 }

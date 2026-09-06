@@ -5387,7 +5387,7 @@ function labVertexRgb(
 /**
  * Default pen: same SDF capsules as the live lab engine.
  * Tests without WebGL2 keep the mitered strip. Highlighter and spline stay
- * on their own paths.
+ * on their own paths. Never stamp discs or grain-etch here.
  */
 function paintLabDrawOp(
   ctx: CanvasRenderingContext2D,
@@ -5461,10 +5461,22 @@ function drawStrokeFrom(
    */
   if (op.highlight) ctx.globalCompositeOperation = "multiply";
 
+  if (!op.highlight) {
+    /*
+     * Default pen is the Ink lab SDF capsules — live and committed.
+     * Taps, dwell clusters, and long strokes all go through the same spine
+     * replay. Stamp discs and grain etch stay off this path so lift cannot
+     * change the look. Tests without WebGL2 still mesh a miter strip.
+     */
+    if (points.length === 1 && fromIndex > 0) return;
+    paintLabDrawOp(ctx, op, fromIndex, pixelScale, capEnd, capHead);
+    return;
+  }
+
   // A tap is a dot — dotting an "i" used to draw nothing at all.
   if (points.length === 1) {
     if (fromIndex > 0) return;
-    const boldness = op.highlight ? 1 : resolveInkBoldness(op);
+    const boldness = 1;
     const style = inkStrokeStyle(
       op.baseWidth,
       op.maxFullness ?? 1,
@@ -5474,18 +5486,14 @@ function drawStrokeFrom(
       0,
       points[0].slowness ?? INK_SLOWNESS_NEUTRAL,
       op.speedInk ?? 0,
-      op.highlight === true,
+      true,
       boldness,
       resolveSpeedFade(op),
     );
-    if (op.highlight) {
-      ctx.globalAlpha = style.alpha;
-      ctx.beginPath();
-      ctx.arc(points[0].x, points[0].y, paintedWidth(style.lineWidth, pixelScale) / 2, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      paintContactDisc(ctx, op, points, pixelScale);
-    }
+    ctx.globalAlpha = style.alpha;
+    ctx.beginPath();
+    ctx.arc(points[0].x, points[0].y, paintedWidth(style.lineWidth, pixelScale) / 2, 0, Math.PI * 2);
+    ctx.fill();
     ctx.globalAlpha = 1;
     return;
   }
@@ -5496,12 +5504,6 @@ function drawStrokeFrom(
   const nib = nibWidth(op);
   const slice = points.slice(start);
   const blotBlend = resolveSpeedBlotBlend(op);
-  // Contact cluster: one disc at the original point, including pressure-on
-  // flat ink. Do not fan jitter into spokes or heading-flipped half-caps.
-  if (!op.highlight && fromIndex === 0 && isDiscPrimaryPath(points, nib)) {
-    paintContactDisc(ctx, op, points, pixelScale);
-    return;
-  }
   if (blotBlend > 1e-3 && isDiscPrimaryPath(slice, nib)) {
     const tip = points[points.length - 1];
     const styles = inkStrokePointStyles(op, start);
@@ -5521,11 +5523,6 @@ function drawStrokeFrom(
       growT > 1e-3 ? 1 : (last.dryGain ?? 1),
     );
     ctx.globalAlpha = 1;
-    return;
-  }
-
-  if (!op.highlight) {
-    paintLabDrawOp(ctx, op, start, pixelScale, capEnd, capHead);
     return;
   }
 
