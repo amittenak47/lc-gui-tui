@@ -131,6 +131,8 @@ export function fillMiterStroke(
   for (let i = 1; i < spine.length; i++) {
     const a = spine[i - 1]!;
     const b = spine[i]!;
+    const col = a.rgb ?? rgb;
+    ctx.fillStyle = `rgb(${col[0]}, ${col[1]}, ${col[2]})`;
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const len = Math.hypot(dx, dy);
@@ -151,6 +153,8 @@ export function fillMiterStroke(
   }
   const head = spine[0];
   if (head) {
+    const col = head.rgb ?? rgb;
+    ctx.fillStyle = `rgb(${col[0]}, ${col[1]}, ${col[2]})`;
     ctx.beginPath();
     ctx.arc(head.x, head.y, head.r, 0, Math.PI * 2);
     ctx.fill();

@@ -57,7 +57,17 @@ function radiiAlong(
     const b = src[Math.min(j + 1, src.length - 1)]!;
     const span = (acc[j + 1] ?? acc[j]!) - acc[j]!;
     const t = span > 1e-6 ? (target - acc[j]!) / span : 0;
-    out.push({ x: p.x, y: p.y, r: a.r + (b.r - a.r) * t });
+    const rgbA = a.rgb;
+    const rgbB = b.rgb;
+    const rgb =
+      rgbA && rgbB
+        ? ([
+            rgbA[0] + (rgbB[0] - rgbA[0]) * t,
+            rgbA[1] + (rgbB[1] - rgbA[1]) * t,
+            rgbA[2] + (rgbB[2] - rgbA[2]) * t,
+          ] as [number, number, number])
+        : rgbA ?? rgbB;
+    out.push({ x: p.x, y: p.y, r: a.r + (b.r - a.r) * t, rgb });
   }
   return out;
 }
