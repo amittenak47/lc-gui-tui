@@ -4,9 +4,8 @@
  * RasterInkLayer owns capture, the overlay, the stroke-start snapshot, and rAF.
  * This session owns ingest, attack/dwell/stamp, reshape, and live overlay paint.
  * Ingest writes a preallocated ring; tick drains it. Dense hops stay off the
- * spine and ride a transient tip. A turning hop seeds a centripetal curve
- * (even a short or mild one); a collinear hop stays one sample. Densify still
- * fills leftover chords.
+ * spine and ride a transient tip. Speed Ink stamps round canvas strokes live
+ * and remeshes once on lift. Other pens still plant a Catmull on a turning hop.
  */
 
 import { overdrawnViewport } from "./panOffset";
@@ -39,6 +38,9 @@ import {
   liveRibbonDirtySpine,
   prepareLiveRibbon,
   curveAlongHop,
+  expandInkTurns,
+  setInkSceneTransform,
+  type InkDrawOp,
   type InkOp,
   type SceneBounds,
   type ScenePoint,
@@ -57,6 +59,8 @@ import { straightenFromAnchor } from "./straightAnchor";
 const RING_START = 1024;
 /** Tip-cluster floor — extra coincident hold samples do not make a rounder disc. */
 const HOLD_DISC_SAMPLES = 4;
+/** Live Speed Ink eases toward the pace width so a flick does not hairline. */
+const STAMP_WIDTH_EASE = 0.45;
 
 /**
  * Running disc-vs-ribbon decision for the live trail.
@@ -350,6 +354,11 @@ export class LiveStroke {
   private prevOverlayDirty: PixelRect | null = null;
   /** Head halt is stamped once, when the path leaves the contact disc. */
   private headPoolCommitted = false;
+  private trail: HTMLCanvasElement | OffscreenCanvas | null = null;
+  private trailCtx: CanvasRenderingContext2D | null = null;
+  private trailStamped = 0;
+  private stampWidth = 0;
+  lastLiveDirty: { dirtyFrom: number; suffixHit: boolean } | null = null;
 
   constructor(init: BeginLiveStroke) {
     this.view = init.view;
@@ -460,6 +469,17 @@ export class LiveStroke {
     return this.lastPaintFallback || isHostBoundOp(this.op);
   }
 
+  /** Round canvas stamps live; the Speed Ink ribbon waits for lift. */
+  speedStampLive(): boolean {
+    const live = this.op;
+    return (
+      live.kind === "draw" &&
+      live.highlight !== true &&
+      (live.speedInk ?? 0) > 0 &&
+      !this.reshapeActive()
+    );
+  }
+
   ingest(batch: readonly LivePointerSample[]): void {
     if (this.closed || batch.length === 0) return;
     this.ensureRing(batch.length);
@@ -505,6 +525,7 @@ export class LiveStroke {
     clip: SceneBounds | null,
     hosts: ScrollHostLookup,
     snap: HTMLCanvasElement | null,
+    full = false,
   ): LivePaintResult {
     if (this.closed) return "fallback";
     this.bindHostOnOp();
@@ -512,12 +533,14 @@ export class LiveStroke {
       this.markPath("reshape");
       this.lastPaintFallback = true;
       this.prevOverlayDirty = null;
+      this.lastLiveDirty = null;
       return "fallback";
     }
     if (isHostBoundOp(this.op)) {
       this.markPath("hostBound");
       this.lastPaintFallback = true;
       this.prevOverlayDirty = null;
+      this.lastLiveDirty = null;
       return "fallback";
     }
     if (
@@ -527,12 +550,14 @@ export class LiveStroke {
       this.markPath("paintFrame");
       this.lastPaintFallback = true;
       this.prevOverlayDirty = null;
+      this.lastLiveDirty = null;
       return "fallback";
     }
     if (!snap || snap.width !== canvas.width || snap.height !== canvas.height) {
       this.markPath("paintFrame");
       this.lastPaintFallback = true;
       this.prevOverlayDirty = null;
+      this.lastLiveDirty = null;
       return "fallback";
     }
 
@@ -543,6 +568,9 @@ export class LiveStroke {
       height: this.view.height - 2 * marginY,
     };
     const drawView = overdrawnViewport(baseView, marginY);
+    if (this.speedStampLive()) {
+      return this.paintSpeedStamp(ctx, canvas, dpr, clip, snap, drawView, full);
+    }
     if (this.op.kind === "draw") {
       prepareLiveRibbon(this.op, drawView.zoom * dpr);
     }
@@ -572,6 +600,7 @@ export class LiveStroke {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = prevSmooth;
     this.prevOverlayDirty = local;
+    this.lastLiveDirty = liveRibbonDirtySpine();
     this.markPath("incremental");
     this.lastPaintFallback = false;
     if (DEBUG_INK || inkMetrics.enabled) {
@@ -587,6 +616,10 @@ export class LiveStroke {
     this.prevOverlayDirty = null;
     this.spine.captureView();
     this.op.points = this.spine.materialize();
+    if (this.speedStampLive() && this.op.kind === "draw") {
+      this.op.points = expandInkTurns(this.op.points);
+    }
+    this.dropSpeedTrail();
     releaseLiveRibbonBuffers();
     return this.op;
   }
@@ -601,6 +634,8 @@ export class LiveStroke {
     this.rawPoint = null;
     this.hasTransientTip = false;
     this.prevOverlayDirty = null;
+    this.lastLiveDirty = null;
+    this.dropSpeedTrail();
     releaseLiveRibbonBuffers();
   }
 
@@ -609,18 +644,23 @@ export class LiveStroke {
   }
 
   private overlayLocalPx(view: ViewportTransform, dpr: number): PixelRect {
-    const liveDirty = this.op.kind === "draw" ? liveRibbonDirtySpine() : null;
     const n = this.op.kind === "draw" ? this.op.points.length : 0;
-    // Suffix-hit: only the last hop (join + seeds). A turning hop can plant
-    // many samples; n-2 would be the last 2px, not the hop. Prefix remesh
-    // (dirtyFrom 0) keeps the full AABB.
     const hop = Math.max(2, this.lastHopSpine + 1);
-    const rawFrom = !liveDirty
-      ? 0
-      : liveDirty.suffixHit
-        ? Math.max(0, n - hop)
-        : liveDirty.dirtyFrom;
-    const from = Math.max(0, Math.min(rawFrom, n));
+    let from = 0;
+    if (this.speedStampLive()) {
+      from = Math.max(0, n - hop);
+    } else {
+      const liveDirty = this.op.kind === "draw" ? liveRibbonDirtySpine() : null;
+      // Suffix-hit: only the last hop (join + seeds). A turning hop can plant
+      // many samples; n-2 would be the last 2px, not the hop. Prefix remesh
+      // (dirtyFrom 0) keeps the full AABB.
+      const rawFrom = !liveDirty
+        ? 0
+        : liveDirty.suffixHit
+          ? Math.max(0, n - hop)
+          : liveDirty.dirtyFrom;
+      from = Math.max(0, Math.min(rawFrom, n));
+    }
     const aabb = strokeAabb(this.op, from);
     const z = view.zoom * dpr;
     const pad = 2;
@@ -639,6 +679,214 @@ export class LiveStroke {
     const h = y1 - y0;
     if (w * h > maxW * maxH * 0.7) return { x: 0, y: 0, w: maxW, h: maxH };
     return { x: x0, y: y0, w, h };
+  }
+
+  private paintSpeedStamp(
+    ctx: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
+    dpr: number,
+    clip: SceneBounds | null,
+    snap: HTMLCanvasElement,
+    drawView: ViewportTransform,
+    full: boolean,
+  ): LivePaintResult {
+    if (!this.ensureSpeedTrail(snap)) return "fallback";
+    this.stampPendingOntoTrail(drawView, dpr);
+    const local = this.overlayLocalPx(drawView, dpr);
+    const dirty = full
+      ? { x: 0, y: 0, w: canvas.width, h: canvas.height }
+      : unionPixelRects(local, this.prevOverlayDirty);
+    const trail = this.trail!;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const prevSmooth = ctx.imageSmoothingEnabled;
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(dirty.x, dirty.y, dirty.w, dirty.h);
+    ctx.drawImage(
+      trail as CanvasImageSource,
+      dirty.x,
+      dirty.y,
+      dirty.w,
+      dirty.h,
+      dirty.x,
+      dirty.y,
+      dirty.w,
+      dirty.h,
+    );
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(dirty.x, dirty.y, dirty.w, dirty.h);
+    ctx.clip();
+    this.paintSpeedTip(ctx, drawView, dpr, clip);
+    ctx.restore();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = prevSmooth;
+    this.prevOverlayDirty = full ? null : local;
+    const n = this.op.kind === "draw" ? this.op.points.length : 0;
+    this.lastLiveDirty = { dirtyFrom: Math.max(0, n - this.lastHopSpine), suffixHit: true };
+    this.markPath("incremental");
+    this.lastPaintFallback = false;
+    if (DEBUG_INK || inkMetrics.enabled) {
+      inkMetrics.overlay(canvas.width, canvas.height, dpr);
+    }
+    return "ok";
+  }
+
+  private ensureSpeedTrail(snap: HTMLCanvasElement): boolean {
+    const w = snap.width;
+    const h = snap.height;
+    if (this.trail && this.trailCtx && this.trail.width === w && this.trail.height === h) {
+      return true;
+    }
+    const canvas =
+      typeof OffscreenCanvas === "function"
+        ? new OffscreenCanvas(w, h)
+        : (() => {
+            const c = document.createElement("canvas");
+            c.width = w;
+            c.height = h;
+            return c;
+          })();
+    const tctx = canvas.getContext("2d");
+    if (!tctx) return false;
+    tctx.setTransform(1, 0, 0, 1, 0, 0);
+    tctx.clearRect(0, 0, w, h);
+    tctx.drawImage(snap, 0, 0);
+    this.trail = canvas;
+    this.trailCtx = tctx as CanvasRenderingContext2D;
+    this.trailStamped = 0;
+    this.stampWidth = 0;
+    return true;
+  }
+
+  private dropSpeedTrail(): void {
+    this.trail = null;
+    this.trailCtx = null;
+    this.trailStamped = 0;
+    this.stampWidth = 0;
+  }
+
+  private stampPendingOntoTrail(drawView: ViewportTransform, dpr: number): void {
+    const live = this.op;
+    const tctx = this.trailCtx;
+    if (live.kind !== "draw" || !tctx) return;
+    const planted = this.spineCount();
+    if (planted < 1) return;
+    const pixelScale = drawView.zoom * dpr;
+    tctx.save();
+    setInkSceneTransform(tctx, drawView, dpr);
+    tctx.lineCap = "round";
+    tctx.lineJoin = "round";
+    tctx.strokeStyle = live.color;
+    tctx.fillStyle = live.color;
+    if (this.trailStamped < 1) {
+      this.strokeSpeedDot(tctx, live, live.points[0]!, pixelScale);
+      this.trailStamped = 1;
+    }
+    for (let i = this.trailStamped; i < planted; i++) {
+      const from = live.points[i - 1]!;
+      const to = live.points[i]!;
+      this.strokeSpeedHop(tctx, live, from, to, pixelScale);
+    }
+    this.trailStamped = planted;
+    tctx.restore();
+  }
+
+  private paintSpeedTip(
+    ctx: CanvasRenderingContext2D,
+    drawView: ViewportTransform,
+    dpr: number,
+    clip: SceneBounds | null,
+  ): void {
+    const live = this.op;
+    if (live.kind !== "draw") return;
+    const points = live.points;
+    if (points.length === 0) return;
+    const pixelScale = drawView.zoom * dpr;
+    ctx.save();
+    setInkSceneTransform(ctx, drawView, dpr);
+    if (clip) {
+      ctx.beginPath();
+      ctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
+      ctx.clip();
+    }
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = live.color;
+    ctx.fillStyle = live.color;
+    const planted = this.spineCount();
+    if (this.hasTransientTip && planted >= 1 && points.length > planted) {
+      this.strokeSpeedHop(ctx, live, points[planted - 1]!, points[points.length - 1]!, pixelScale);
+    }
+    const grow = liveInkBlotGrow(live);
+    const tip = points[points.length - 1]!;
+    if (grow > 1e-3 || planted <= 1) {
+      this.strokeSpeedDot(ctx, live, tip, pixelScale, grow);
+    }
+    ctx.restore();
+  }
+
+  private strokeSpeedHop(
+    ctx: CanvasRenderingContext2D,
+    live: InkDrawOp,
+    from: ScenePoint,
+    to: ScenePoint,
+    pixelScale: number,
+  ): void {
+    const style = this.speedStampStyle(live, to);
+    this.easeStampWidth(style.lineWidth);
+    const width = this.paintedStampWidth(this.stampWidth, pixelScale);
+    if (width < 1e-6) return;
+    ctx.globalAlpha = Math.max(0, Math.min(1, style.alpha * (style.dryGain ?? 1)));
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  private strokeSpeedDot(
+    ctx: CanvasRenderingContext2D,
+    live: InkDrawOp,
+    at: ScenePoint,
+    pixelScale: number,
+    grow = 0,
+  ): void {
+    const style = this.speedStampStyle(live, at);
+    this.easeStampWidth(style.lineWidth);
+    const radius = (this.paintedStampWidth(this.stampWidth, pixelScale) / 2) * (1 + Math.max(0, grow));
+    if (radius < 1e-6) return;
+    ctx.globalAlpha = Math.max(0, Math.min(1, style.alpha * (style.dryGain ?? 1)));
+    ctx.beginPath();
+    ctx.arc(at.x, at.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  private speedStampStyle(live: InkDrawOp, point: ScenePoint) {
+    return inkStrokeStyle(
+      live.baseWidth,
+      live.maxFullness,
+      point.pressure,
+      live.pressureClip,
+      live.pressureSensitive,
+      0,
+      point.slowness ?? INK_SLOWNESS_NEUTRAL,
+      live.speedInk ?? 0,
+      false,
+      live.boldness ?? this.boldness,
+      live.speedFade ?? 0,
+    );
+  }
+
+  private easeStampWidth(target: number): void {
+    if (this.stampWidth <= 1e-6) this.stampWidth = target;
+    else this.stampWidth += (target - this.stampWidth) * STAMP_WIDTH_EASE;
+  }
+
+  private paintedStampWidth(lineWidth: number, pixelScale: number): number {
+    if (pixelScale <= 0) return lineWidth;
+    return Math.max(lineWidth, 0.65 / pixelScale);
   }
 
   private reshapeActive(): boolean {
@@ -738,6 +986,7 @@ export class LiveStroke {
     this.headPoolCommitted = false;
     this.lastPoint = this.spine.view[0] ?? origin;
     if (this.reshapeActive()) this.liveRaw = [origin];
+    this.dropSpeedTrail();
   }
 
   private appendSpine(from: ScenePoint, to: ScenePoint, step: number): void {
@@ -747,6 +996,14 @@ export class LiveStroke {
       return;
     }
     this.dropTransientTip();
+    if (this.speedStampLive()) {
+      this.lastHopSpine = 1;
+      this.spine.push(to);
+      this.disc.commit(to);
+      this.bindSpine();
+      this.lastPoint = to;
+      return;
+    }
     const n = this.spine.n;
     const start = n >= 1 ? this.spine.view[n - 1]! : from;
     const prev = n >= 2 ? this.spine.view[n - 2]! : null;
@@ -848,6 +1105,7 @@ export class LiveStroke {
       this.lastPoint = point;
       this.disc.reset(this.op.points[0]!);
       for (let i = 1; i < this.spine.n; i++) this.disc.commit(this.op.points[i]!);
+      this.dropSpeedTrail();
       return;
     }
 

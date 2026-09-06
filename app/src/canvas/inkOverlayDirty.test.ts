@@ -205,13 +205,14 @@ describe("live overlay dirty restore", () => {
       height: 200,
     }, 1);
     const liveDirty = liveRibbonDirtySpine();
-    expect(liveDirty?.dirtyFrom ?? 0).toBeGreaterThan(50);
+    expect(liveDirty).toBeNull();
+    expect(stroke.lastLiveDirty?.suffixHit).toBe(true);
     expect(dirty.w).toBeLessThan(160);
     expect(dirty.x).toBeGreaterThan(500);
     stroke.abandon();
   });
 
-  it("tessellates a looping LiveStroke as a pinned suffix, with a local overlay", () => {
+  it("stamps a looping Speed Ink stroke without suffix remesh, with a local overlay", () => {
     releaseLiveRibbonBuffers();
     Object.assign(liveRibbonStats, { suffixHits: 0, suffixMisses: 0, suffixRewinds: 0 });
     const overlay = createCanvas(500, 500);
@@ -299,8 +300,9 @@ describe("live overlay dirty restore", () => {
       width: 500,
       height: 500,
     }, 1);
-    expect(liveRibbonStats.suffixHits).toBeGreaterThan(liveRibbonStats.suffixMisses);
-    expect(liveRibbonStats.suffixHits).toBeGreaterThan(20);
+    expect(liveRibbonStats.suffixHits).toBe(0);
+    expect(liveRibbonStats.suffixMisses).toBe(0);
+    expect(stroke.lastLiveDirty?.suffixHit).toBe(true);
     expect(dirty.w * dirty.h).toBeLessThan(500 * 500 * 0.12);
     stroke.abandon();
   });

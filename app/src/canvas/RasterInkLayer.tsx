@@ -676,7 +676,17 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         if (live) {
           syncLiveHostBinding(live);
-          paintLiveOp(ctx, live, drawView, dpr, clipRef.current, hosts);
+          const session = liveStrokeRef.current;
+          const snap = committedSnapRef.current;
+          const stamped =
+            session &&
+            session.speedStampLive() &&
+            snap &&
+            session.paint(ctx, canvas, dpr, clipRef.current, hosts, snap, true) ===
+              "ok";
+          if (!stamped) {
+            paintLiveOp(ctx, live, drawView, dpr, clipRef.current, hosts);
+          }
           liveDrawnIndexRef.current =
             live.kind === "draw" ? Math.max(0, live.points.length - 1) : live.points.length;
         } else {
@@ -929,7 +939,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         repaintLiveRef.current();
       }
       if (timed) inkMetrics.painted(stroke.lastEventTimeMs);
-      const dirty = result === "ok" ? liveRibbonDirtySpine() : null;
+      const dirty =
+        result === "ok"
+          ? stroke.speedStampLive()
+            ? stroke.lastLiveDirty
+            : liveRibbonDirtySpine()
+          : null;
       const load = loadMeterRef.current.frame({
         frameMs: performance.now() - tick0,
         rafMs: prevAt > 0 ? now - prevAt : 0,
