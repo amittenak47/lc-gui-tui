@@ -28,4 +28,12 @@ describe("lift bake", () => {
     expect(out.points.length).toBeGreaterThan(1);
     expect(Number.isFinite(out.bakeMs)).toBe(true);
   });
+
+  it("smoothing 0 keeps the raw spine", () => {
+    const spine = line().map((p) => ({ x: p.x, y: p.y, r: 6 }));
+    const out = bakeSpine(spine, { smoothing: 0 });
+    expect(out.points).toHaveLength(spine.length);
+    expect(out.points[2]!.x).toBeCloseTo(20);
+    expect(out.points[2]!.y).toBeCloseTo(8);
+  });
 });

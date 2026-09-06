@@ -35,6 +35,8 @@ export type InkLabPen = {
   speedBlotBlend: number;
   speedFade: number;
   boldness: number;
+  /** Lift-bake Chaikin strength. Absent means the board default. */
+  smoothing?: number;
 };
 
 export function washRgb(vx: number, vy: number, dpr: number): [number, number, number] {

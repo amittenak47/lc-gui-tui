@@ -3,8 +3,8 @@
  * Default: RDP + Chaikin + expandInkTurns. Optional clothoid, ~3ms budget.
  */
 
+import { INK_SMOOTHING_DEFAULT, smoothInkPoints } from "../inkSmoothing";
 import { expandInkTurns, type ScenePoint } from "../rasterInk";
-import { smoothInkPoints } from "../inkSmoothing";
 
 import type { SpineDot } from "./instance";
 
@@ -87,8 +87,13 @@ function radiiAlong(
   return out;
 }
 
-export function bakeCatmull(points: readonly ScenePoint[], nibWidth: number): ScenePoint[] {
-  const smoothed = smoothInkPoints(points, 0.35, Math.max(nibWidth, 1e-6));
+export function bakeCatmull(
+  points: readonly ScenePoint[],
+  nibWidth: number,
+  strength = INK_SMOOTHING_DEFAULT,
+): ScenePoint[] {
+  if (strength <= 0) return [...points];
+  const smoothed = smoothInkPoints(points, strength, Math.max(nibWidth, 1e-6));
   return expandInkTurns(smoothed);
 }
 
@@ -174,9 +179,17 @@ export function bakeClothoid(spine: readonly SpineDot[]): ScenePoint[] {
 
 export function bakeSpine(
   spine: readonly SpineDot[],
-  opts: { clothoid?: boolean } = {},
+  opts: { clothoid?: boolean; smoothing?: number } = {},
 ): BakeResult {
   const t0 = performance.now();
+  const strength = opts.smoothing ?? INK_SMOOTHING_DEFAULT;
+  if (strength <= 0) {
+    return {
+      points: spine.map((p) => ({ ...p })),
+      bake: "catmull",
+      bakeMs: performance.now() - t0,
+    };
+  }
   const scenes = spine.map((p) => toScene(p));
   const nib = meanRadius(spine) * 2;
   if (opts.clothoid && spine.length >= 3) {
@@ -190,7 +203,7 @@ export function bakeSpine(
       };
     }
   }
-  const catmull = bakeCatmull(scenes, nib);
+  const catmull = bakeCatmull(scenes, nib, strength);
   return {
     points: radiiAlong(spine, catmull),
     bake: "catmull",

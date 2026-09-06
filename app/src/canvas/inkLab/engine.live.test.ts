@@ -202,6 +202,26 @@ describe("Ink lab live path", () => {
     engine.up({ x: 260, y: 40, p: 0.5, t: 1300 });
     engine.destroy();
   });
+
+  it("clipLiveToChord keeps the prefix and one live nib", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.down({ x: 40, y: 80, p: 0.5, t: 0 });
+    engine.move([
+      { x: 80, y: 90, p: 0.5, t: 16 },
+      { x: 120, y: 100, p: 0.5, t: 32 },
+      { x: 160, y: 110, p: 0.5, t: 48 },
+    ]);
+    const before = engine.pointCount();
+    expect(before).toBeGreaterThan(2);
+    engine.clipLiveToChord(0, { x: 200, y: 40, p: 0.5, t: 64 });
+    expect(engine.pointCount()).toBe(2);
+    engine.clipLiveToChord(0, { x: 240, y: 200, p: 0.5, t: 80 });
+    expect(engine.pointCount()).toBe(2);
+    engine.up({ x: 240, y: 200, p: 0.5, t: 96 });
+    engine.destroy();
+  });
 });
 
 describe("EKF is the live filter", () => {

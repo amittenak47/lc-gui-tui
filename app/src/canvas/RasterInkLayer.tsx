@@ -392,7 +392,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (event.key !== "Shift" || shiftAnchorRef.current != null) return;
         const live = liveRef.current;
         shiftAnchorRef.current = shiftAnchorAt(
-          live && live.kind === "draw" ? live.points.length : null,
+          inkLabLiveRef.current && inkLabRef.current
+            ? inkLabRef.current.pointCount()
+            : live && live.kind === "draw"
+              ? live.points.length
+              : null,
         );
       };
       const onUp = (event: KeyboardEvent) => {
@@ -1788,7 +1792,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (!reusable) repaintRef.current();
         captureCommittedSnapRef.current(canvas);
         const host = strokeHostRef.current;
-        const useLab = activeTool === "pen" && !straightInkRef.current;
+        const useLab = activeTool === "pen";
         const stroke = beginLiveStroke({
           tool: activeTool,
           view: strokeView,
@@ -1844,6 +1848,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               speedBlotBlend: live.speedBlotBlend ?? 0,
               speedFade: live.speedFade ?? 0,
               boldness: live.boldness ?? 1,
+              smoothing: smoothingRef.current,
             });
           }
           engine.down(inkLabOverlaySample(canvas, rect, event));
@@ -1966,9 +1971,17 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         // dispatched event carries the newest one.
         if (inkMetrics.enabled) inkMetrics.move(batch.length, batch[0]?.timeStamp);
         if (inkLabLiveRef.current && inkLabRef.current) {
-          inkLabRef.current.move(
-            batch.map((item) => inkLabOverlaySample(canvas, rect, item)),
+          const samples = batch.map((item) => inkLabOverlaySample(canvas, rect, item));
+          const chord = straightAnchorFor(
+            straightInkRef.current,
+            shiftAnchorRef.current,
           );
+          if (chord != null) {
+            const last = samples[samples.length - 1];
+            if (last) inkLabRef.current.clipLiveToChord(chord, last);
+          } else {
+            inkLabRef.current.move(samples);
+          }
           inkLabQueuedRef.current = batch.length;
         } else {
           stroke.ingest(batch.map(livePointerSample));
