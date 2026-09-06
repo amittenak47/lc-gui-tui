@@ -6,6 +6,11 @@
  * Ingest writes a preallocated ring; tick drains it. Dense hops stay off the
  * spine and ride a transient tip. Speed Ink stamps round canvas strokes live
  * and remeshes once on lift. Other pens still plant a Catmull on a turning hop.
+ *
+ * Stamp-live (`speedStampLive`) is the current whiteboard path. The successor
+ * lives in `canvas/inkLab` (EKF + WebGL2 round-cone overlay). Do not delete
+ * this file or the ribbon until that lab passes and a cutover PR swaps
+ * RasterInkLayer. The board flag stays stamp-live in this PR.
  */
 
 import { overdrawnViewport } from "./panOffset";
