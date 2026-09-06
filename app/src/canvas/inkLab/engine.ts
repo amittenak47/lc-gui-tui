@@ -4,6 +4,7 @@
  */
 
 import { blotGrowTFromTicks, inkSlowness } from "../rasterInk";
+import { INK_SMOOTHING_DEFAULT } from "../inkSmoothing";
 
 import { bakeSpine } from "./bake";
 import { createEkf, type EkfFilter } from "./ekf";
@@ -74,6 +75,13 @@ export type InkLabEngine = {
   setPen(pen: InkLabPen | null): void;
   down(s: InkLabSample): void;
   move(batch: InkLabSample[]): void;
+  /**
+   * Collapse the live tail to a chord from `anchorIndex`, keeping the
+   * freehand prefix. Straight-ink toggle uses 0; Shift uses the index at
+   * keydown. Next paint remeshes so the overlay does not keep the old tail.
+   */
+  clipLiveToChord(anchorIndex: number, current: InkLabSample): void;
+  pointCount(): number;
   up(s?: InkLabSample): InkLabUpResult;
   paint(): InkLabPaintStats;
   clear(): void;
@@ -400,6 +408,50 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     appendSpine(dot);
   };
 
+  const unionAabb = (dst: StrokeAabb, src: StrokeAabb) => {
+    if (!Number.isFinite(src.minX)) return;
+    dst.minX = Math.min(dst.minX, src.minX);
+    dst.minY = Math.min(dst.minY, src.minY);
+    dst.maxX = Math.max(dst.maxX, src.maxX);
+    dst.maxY = Math.max(dst.maxY, src.maxY);
+  };
+
+  const clipLiveToChord = (anchorIndex: number, current: InkLabSample) => {
+    if (!drawing) return;
+    if (spine.length === 0) {
+      ingest(current);
+      return;
+    }
+    const cut = Math.max(0, Math.min(anchorIndex, spine.length - 1));
+    const kept = spine.slice(0, cut + 1).map(cloneDot);
+    const prevBox = { ...aabb };
+    const savedGrow = blotTipGrow;
+    const savedHalts = blotHalts.map((h) => ({ ...h }));
+    spine = [];
+    segs = 0;
+    sdfLive = 0;
+    sdfFull = true;
+    paintedSegs = 0;
+    aabb = emptyAabb();
+    tip = null;
+    consumed = 0;
+    holding = false;
+    holdTicks = 0;
+    holdBase = null;
+    lastHoldWall = 0;
+    ekf = createEkf();
+    sdf?.clear();
+    fallback?.clearLive();
+    fallback?.beginStroke();
+    blotTipGrow = savedGrow;
+    blotHalts = savedHalts;
+    const lastKept = kept[kept.length - 1]!;
+    ekf.reset(lastKept.x, lastKept.y, current.t);
+    for (const d of kept) appendSpine(d);
+    ingest(current);
+    unionAabb(aabb, prevBox);
+  };
+
   const applyBaked = (points: SpineDot[]) => {
     spine = points;
     segs = 0;
@@ -542,6 +594,10 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       if (!drawing) return;
       for (const s of batch) ingest(s);
     },
+    clipLiveToChord,
+    pointCount() {
+      return spine.length;
+    },
     up(s) {
       if (drawing && s) ingest(s);
       if (holding && tip && spine.length > 0) {
@@ -553,7 +609,10 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         if (blotTipGrow > 1e-3) stampHalt(last, blotTipGrow);
       }
       const t0 = performance.now();
-      const baked = bakeSpine(spine, { clothoid: useClothoid });
+      const baked = bakeSpine(spine, {
+        clothoid: useClothoid,
+        smoothing: pen?.smoothing ?? INK_SMOOTHING_DEFAULT,
+      });
       const points = useCapillary ? capillaryRelax(baked.points) : baked.points;
       const exported = points.map(cloneDot);
       const exportedGrow = blotTipGrow;
