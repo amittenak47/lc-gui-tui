@@ -17,6 +17,7 @@ import {
   type StrokeAabb,
 } from "./instance";
 import { tryCreateSdfRenderer, type SdfRenderer } from "./sdf";
+import { capillaryRelax, growTipRadius, INK_RGB, washRgb } from "./style";
 
 export type InkLabBackend = "webgl2" | "canvas2d";
 export type InkLabBake = "catmull" | "clothoid";
@@ -53,9 +54,11 @@ export type InkLabEngineOpts = {
 };
 
 export const DISTANCE_GATE_CSS = 2.5;
-const INK: [number, number, number] = [26, 26, 26];
 const BASE_R_CSS = 7;
-const TIP_GROW = 1.7;
+
+function inkOf(d: SpineDot): [number, number, number] {
+  return d.rgb ?? INK_RGB;
+}
 
 function peerFactory(
   host: HTMLCanvasElement,
@@ -104,6 +107,7 @@ function nibRadius(vx: number, vy: number, dpr: number, pressure: number): numbe
 
 export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   const useClothoid = opts.clothoid === true;
+  const useCapillary = opts.capillary === true;
   let host: HTMLCanvasElement | null = null;
   let backend: InkLabBackend = "canvas2d";
   let sdf: SdfRenderer | null = null;
@@ -171,9 +175,9 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     holding = false;
     if (!prev) return;
     ensureInst(segs + 1);
-    writeInstance(inst, segs, prev, dot, INK, INK);
+    writeInstance(inst, segs, prev, dot, inkOf(prev), inkOf(dot));
     segs += 1;
-    fallback?.appendHop(prev, dot, INK);
+    fallback?.appendHop(prev, dot, inkOf(dot));
   };
 
   const ingest = (s: InkLabSample) => {
@@ -186,6 +190,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         x: s.x,
         y: s.y,
         r: nibRadius(0, 0, dpr, s.p),
+        rgb: washRgb(0, 0, dpr),
       };
       spine.push(first);
       expandAabb(aabb, first);
@@ -196,15 +201,23 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     }
     const f = ekf.step(s.x, s.y, s.t);
     const r = nibRadius(f.vx, f.vy, dpr, s.p);
-    const dot: SpineDot = { x: f.x, y: f.y, r };
+    const dot: SpineDot = { x: f.x, y: f.y, r, rgb: washRgb(f.vx, f.vy, dpr) };
     lastEkfMs = performance.now() - t0;
     const last = spine[spine.length - 1]!;
     const dist = Math.hypot(dot.x - last.x, dot.y - last.y);
     if (dist < gate) {
       holding = true;
-      const grown = Math.min(last.r * TIP_GROW, last.r + (TIP_GROW - 1) * last.r * 0.05);
-      tip = { x: last.x, y: last.y, r: Math.max(dot.r, grown) };
+      const grown = growTipRadius(last.r, tip?.r ?? last.r);
+      tip = {
+        x: last.x,
+        y: last.y,
+        r: Math.max(dot.r, grown),
+        rgb: last.rgb,
+      };
       return;
+    }
+    if (holding && tip) {
+      last.r = tip.r;
     }
     appendSpine(dot);
   };
@@ -224,9 +237,9 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       const a = points[i - 1]!;
       const b = points[i]!;
       ensureInst(segs + 1);
-      writeInstance(inst, segs, a, b, INK, INK);
+      writeInstance(inst, segs, a, b, inkOf(a), inkOf(b));
       segs += 1;
-      fallback?.appendHop(a, b, INK);
+      fallback?.appendHop(a, b, inkOf(b));
       expandAabb(aabb, b);
     }
   };
@@ -239,14 +252,14 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       ensureInst(segs + 1);
       let n = segs;
       if (tip) {
-        writeInstance(inst, n, tip, tip, INK, INK);
+        writeInstance(inst, n, tip, tip, inkOf(tip), inkOf(tip));
         n += 1;
       }
       sdf.upload(inst, n);
       sdf.draw(aabb);
       sctx.drawImage(sdf.canvas, 0, 0);
     } else {
-      fillMiterStroke(sctx, spine, tip, INK);
+      fillMiterStroke(sctx, spine, tip, INK_RGB);
     }
   };
 
@@ -262,10 +275,10 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       ensureInst(Math.max(1, segs + 1));
       let n = segs;
       if (spine.length === 1 && tip) {
-        writeInstance(inst, 0, tip, tip, INK, INK);
+        writeInstance(inst, 0, tip, tip, inkOf(tip), inkOf(tip));
         n = 1;
       } else if (tip) {
-        writeInstance(inst, n, tip, tip, INK, INK);
+        writeInstance(inst, n, tip, tip, inkOf(tip), inkOf(tip));
         n += 1;
       }
       sdf.upload(inst, n);
@@ -274,13 +287,14 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     } else if (holding && fallback) {
       fallback.blit(ctx);
       if (tip) {
-        ctx.fillStyle = `rgb(${INK[0]}, ${INK[1]}, ${INK[2]})`;
+        const rgb = inkOf(tip);
+        ctx.fillStyle = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
         ctx.beginPath();
         ctx.arc(tip.x, tip.y, tip.r, 0, Math.PI * 2);
         ctx.fill();
       }
     } else {
-      fillMiterStroke(ctx, spine, tip, INK);
+      fillMiterStroke(ctx, spine, tip, INK_RGB);
     }
   };
 
@@ -314,7 +328,8 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       if (drawing) ingest(s);
       const t0 = performance.now();
       const baked = bakeSpine(spine, { clothoid: useClothoid });
-      applyBaked(baked.points);
+      const points = useCapillary ? capillaryRelax(baked.points) : baked.points;
+      applyBaked(points);
       blitLiveToSnap();
       const bakeMs = performance.now() - t0;
       drawing = false;

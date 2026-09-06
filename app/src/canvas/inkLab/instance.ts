@@ -6,6 +6,7 @@ export type SpineDot = {
   x: number;
   y: number;
   r: number;
+  rgb?: [number, number, number];
 };
 
 export function writeInstance(
