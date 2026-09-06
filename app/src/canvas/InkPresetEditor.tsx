@@ -410,7 +410,7 @@ export function InkPresetEditor({
               </div>
               {draw && (
                 <div className="lc-preset-sheet-physics">
-                  <PhysicsKnobs snap={named} onChange={setDraft} />
+                  <PhysicsKnobs kind={kind} snap={named} onChange={setDraft} />
                 </div>
               )}
             </div>
@@ -843,9 +843,11 @@ function DrawKnobs({
 }
 
 function PhysicsKnobs({
+  kind,
   snap,
   onChange,
 }: {
+  kind: InkPresetKind;
   snap: InkDrawSnapshot;
   onChange: (next: InkDrawSnapshot) => void;
 }) {
@@ -969,12 +971,19 @@ function PhysicsKnobs({
       <SettingsBlock
         title="Stroke smoothing"
         hint={
-          <>
-            How much of the shake to take out of a pen stroke. Higher steadies a
-            shaky hand; lower keeps every kink you actually drew. With Speed
-            ink on, width still tapers along the stroke instead of stepping
-            into blocks. Saved on this device only.
-          </>
+          kind === "pen" ? (
+            <>
+              How much of the shake to take out when you lift. The live WebGL
+              trail stays under the nib. Off keeps every kink you actually
+              drew. Saved on this device only.
+            </>
+          ) : (
+            <>
+              How much of the shake to take out of a stroke. Higher steadies a
+              shaky hand; lower keeps every kink you actually drew. Saved on
+              this device only.
+            </>
+          )
         }
       >
         <SettingsRange
@@ -988,7 +997,7 @@ function PhysicsKnobs({
         />
       </SettingsBlock>
 
-      {smoothPct > 0 && (
+      {kind !== "pen" && smoothPct > 0 && (
         <>
           <p className="lc-settings-hint">
             When it is applied. <strong>On Lift</strong> tidies the stroke once
