@@ -1,24 +1,24 @@
 /**
  * Live-stroke load for the canvas lift bar.
  *
- * Counts each live paint while the pointer is down and turns overruns,
- * dropped frames, queued samples, and full remeshes into a 0–1 level. Red
- * means the open stroke is costing more than a frame. Suffix-hit must be
- * honest — claiming a suffix on a full remesh hides the warning.
+ * Fill is this paint's share of a 60Hz vsync — WebGL capsules are usually a
+ * few milliseconds, so the bar stays green. Red means the stroke is missing
+ * frames: paint over a vsync, a stalled rAF, or (canvas2d only) a full remesh.
  *
- * Always on and cheap: a handful of adds per animation frame. Not the
- * DEBUG_INK console sampler.
+ * Cheap: a handful of adds per animation frame. Not the DEBUG_INK sampler.
  */
 
-/** Paint+tessellate budget. A 60Hz ribbon frame is often 15ms; 14ms was red immediately. */
-export const INK_LOAD_BUDGET_MS = 18;
+/** One 60Hz display frame. Bar 1.0 means this paint used the whole vsync. */
+export const INK_LOAD_FRAME_MS = 1000 / 60;
+/** Paint over this counts as a missed vsync. */
+export const INK_LOAD_BUDGET_MS = INK_LOAD_FRAME_MS;
 /** rAF period that still counts as one display frame. */
 export const INK_LOAD_RAF_OK_MS = 16;
 /** rAF period that means a frame was dropped while the pen was down. */
 export const INK_LOAD_RAF_STALL_MS = 28;
-/** Accumulated overrun (ms) that fills the bar to red. */
+/** Accumulated overtime (ms) that fills the bar to red. */
 export const INK_LOAD_DEBT_RED_MS = 400;
-/** Slow live paints that fill the bar to red. */
+/** Missed-vsync paints that fill the bar to red. */
 export const INK_LOAD_SLOW_RED = 48;
 /** Extra debt when a long stroke remeshes from vertex 0. */
 export const INK_LOAD_REMESH_TAX_MS = 10;
@@ -157,13 +157,18 @@ export function createInkLoadMeter(): {
           : 0;
       debtMs += paintOver + rafOver * 0.5;
       if (paintOver > 0 || rafOver > 0) slowCalls += 1;
-      if (sample.spineN >= 32 && !sample.suffixHit && sample.dirtyFrom === 0) {
+      if (
+        sample.backend !== "webgl2" &&
+        sample.spineN >= 32 &&
+        !sample.suffixHit &&
+        sample.dirtyFrom === 0
+      ) {
         debtMs += INK_LOAD_REMESH_TAX_MS;
       }
       if (sample.queued > INK_LOAD_QUEUE_SLOW) {
         debtMs += (sample.queued - INK_LOAD_QUEUE_SLOW) * INK_LOAD_QUEUE_TAX_MS;
       }
-      const instant = clamp01(sample.frameMs / (INK_LOAD_BUDGET_MS * 2));
+      const instant = clamp01(sample.frameMs / INK_LOAD_FRAME_MS);
       ema = ema * (1 - INK_LOAD_EMA) + instant * INK_LOAD_EMA;
       return peek();
     },

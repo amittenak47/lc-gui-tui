@@ -46,7 +46,7 @@ describe("inkLoadMeter", () => {
     meter.begin();
     for (let i = 0; i < 40; i++) meter.frame(cheap({ spineN: 10 + i }));
     expect(meter.peek().slowCalls).toBe(0);
-    expect(meter.peek().level).toBeLessThan(0.25);
+    expect(meter.peek().level).toBeLessThan(0.35);
     expect(meter.peek().lift).toBe(false);
   });
 
@@ -115,7 +115,25 @@ describe("inkLoadMeter", () => {
       );
     }
     expect(meter.peek().slowCalls).toBe(0);
-    expect(meter.peek().level).toBeLessThan(0.25);
+    expect(meter.peek().level).toBeLessThan(0.35);
+    expect(meter.peek().lift).toBe(false);
+  });
+
+  it("does not tax a WebGL suffix miss the way stamp remesh did", () => {
+    const meter = createInkLoadMeter();
+    meter.begin();
+    for (let i = 0; i < 40; i++) {
+      meter.frame(
+        cheap({
+          spineN: 80,
+          dirtyFrom: 0,
+          suffixHit: false,
+          backend: "webgl2",
+        }),
+      );
+    }
+    expect(meter.peek().slowCalls).toBe(0);
+    expect(meter.peek().level).toBeLessThan(0.35);
     expect(meter.peek().lift).toBe(false);
   });
 });

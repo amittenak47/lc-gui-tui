@@ -3127,6 +3127,7 @@ body[data-lc-sash-drag="horizontal"] {
   inset: 0;
   z-index: 40;
   pointer-events: none;
+  overflow: visible;
   background: #f4f1ea;
 }
 

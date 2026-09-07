@@ -285,6 +285,10 @@ import {
   loadEraserPartial,
 } from "../util/eraserPartialPref";
 import {
+  INK_PERF_OVERLAY_EVENT,
+  loadInkPerfOverlay,
+} from "../util/inkPerfOverlayPref";
+import {
   captureInserts,
   captureWritesFile,
   describeCaptureResult,
@@ -1341,6 +1345,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [, setInkSplineGradient] = useState(() => loadInkSplineGradient());
   const [, setInkBoldness] = useState(() => loadInkBoldness());
   const [, setEraserPartial] = useState(() => loadEraserPartial());
+  const [perfOverlay, setPerfOverlay] = useState(() => loadInkPerfOverlay());
   const [stampTrash, setStampTrash] = useState<{
     ids: string[];
   } | null>(null);
@@ -3477,6 +3482,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const onEraser = () => setEraserPartial(loadEraserPartial());
     window.addEventListener(ERASER_PARTIAL_EVENT, onEraser);
     return () => window.removeEventListener(ERASER_PARTIAL_EVENT, onEraser);
+  }, []);
+
+  useEffect(() => {
+    const onOverlay = () => setPerfOverlay(loadInkPerfOverlay());
+    window.addEventListener(INK_PERF_OVERLAY_EVENT, onOverlay);
+    return () => window.removeEventListener(INK_PERF_OVERLAY_EVENT, onOverlay);
   }, []);
 
   useEffect(() => {
@@ -9345,6 +9356,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           interactive && inkToolActive && !presetStore.wheelLocked
         }
         onWheelHold={(x, y) => setInkWheel({ x, y })}
+        perfOverlay={perfOverlay}
       />
       {interactive && activeTool === "text" && <TextPlaceGhost ref={textPlaceGhostRef} />}
       {interactive && stampTrash && (
