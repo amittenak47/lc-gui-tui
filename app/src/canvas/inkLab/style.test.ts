@@ -173,8 +173,14 @@ describe("ink lab style", () => {
       pressureSensitive: false,
       speed: 1,
       fade: 1,
-      blot: 0,
+      blot: 1,
     });
+    const even = labPreviewSpine(pen, [
+      { x: 0, y: 0, pressure: 0.5, slowness: 0.5 },
+      { x: 40, y: 0, pressure: 0.5, slowness: 0.5 },
+      { x: 80, y: 0, pressure: 0.5, slowness: 0.5 },
+    ], 1);
+    expect(even[0]!.r).toBeCloseTo(even[1]!.r, 5);
     const spine = labPreviewSpine(pen, [
       { x: 0, y: 0, pressure: 0.5, slowness: 1 },
       { x: 40, y: 0, pressure: 0.5, slowness: 0.5 },

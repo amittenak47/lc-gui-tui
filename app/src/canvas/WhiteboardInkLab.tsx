@@ -72,6 +72,7 @@ export interface WhiteboardInkLabProps {
   pressureClip: number;
   pressureSensitive: boolean;
   smoothing?: number;
+  smoothingMode?: "lift" | "live";
   straightInk?: boolean;
   speedInk?: number;
   speedBlotBlend?: number;
@@ -166,6 +167,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       pressureClip,
       pressureSensitive,
       smoothing,
+      smoothingMode = "lift",
       straightInk = false,
       speedInk = 0,
       speedBlotBlend = 0,
@@ -215,6 +217,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     pressureSensitiveRef.current = pressureSensitive;
     const smoothingRef = useRef(smoothing);
     smoothingRef.current = smoothing;
+    const smoothingModeRef = useRef(smoothingMode);
+    smoothingModeRef.current = smoothingMode;
     const speedInkRef = useRef(speedInk);
     speedInkRef.current = speedInk;
     const blotRef = useRef(speedBlotBlend);
@@ -548,6 +552,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             blot: blotRef.current,
             fade: speedFadeRef.current,
             smoothing: smoothingRef.current,
+            smoothingMode: smoothingModeRef.current,
           }),
         );
         engine.captureSnap();

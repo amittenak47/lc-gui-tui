@@ -31,6 +31,7 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/blotRef/);
     expect(src).toMatch(/speedInkRef/);
     expect(src).toMatch(/speedFadeRef/);
+    expect(src).toMatch(/smoothingModeRef/);
   });
 });
 
@@ -43,5 +44,8 @@ describe("InkPresetEditor", () => {
     expect(src).toMatch(/Speed ink/);
     expect(src).toMatch(/Ink fade/);
     expect(src).toMatch(/Ink blot/);
+    expect(src).toMatch(/On Lift/);
+    expect(src).toMatch(/While Writing/);
+    expect(src).not.toMatch(/kind !== ["']pen["'] && smoothPct/);
   });
 });

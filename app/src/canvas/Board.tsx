@@ -1329,7 +1329,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkHandedness, setInkHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
   const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
-  const [, setInkSmoothingMode] = useState(() => loadInkSmoothingMode());
+  const [inkSmoothingMode, setInkSmoothingMode] = useState(() => loadInkSmoothingMode());
   const [straightInk, setStraightInk] = useState(() => inkPrefsRef.current.straightInk);
   const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
   const [inkSpeedBlotBlend, setInkSpeedBlotBlend] = useState(() =>
@@ -9331,6 +9331,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         inkColor={inkColor}
         pressureClip={pressureClip}
         smoothing={inkSmoothing}
+        smoothingMode={inkSmoothingMode}
         straightInk={straightInk}
         speedInk={inkSpeed}
         speedBlotBlend={inkSpeedBlotBlend}

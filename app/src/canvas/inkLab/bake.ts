@@ -1,5 +1,6 @@
 /**
- * Lift bake. Never from pointermove / rAF.
+ * Spine bake. Lift uses {@link bakeSpine}. Live reshape uses
+ * {@link reshapeSpine} from paint so While Writing can tidy behind the nib.
  * Default: RDP + Chaikin + expandInkTurns. Optional clothoid, ~3ms budget.
  */
 
@@ -209,4 +210,18 @@ export function bakeSpine(
     bake: "catmull",
     bakeMs: performance.now() - t0,
   };
+}
+
+/**
+ * Same Chaikin as lift, for the open stroke. Endpoints stay put so the nib
+ * still tracks the pen. Safe from rAF — does not write the engine spine.
+ */
+export function reshapeSpine(
+  spine: readonly SpineDot[],
+  strength: number,
+): SpineDot[] {
+  if (strength <= 0 || spine.length < 3) return spine.map((p) => ({ ...p }));
+  const scenes = spine.map((p) => toScene(p));
+  const nib = meanRadius(spine) * 2;
+  return radiiAlong(spine, bakeCatmull(scenes, nib, strength));
 }

@@ -46,6 +46,8 @@ export type InkLabPen = {
   boldness: number;
   /** Lift-bake Chaikin strength. Absent means the board default. */
   smoothing?: number;
+  /** When the strength dial runs: lift commit, or reshape while down. */
+  smoothingMode?: "lift" | "live";
 };
 
 export function labWashGain(slow: number): number {
@@ -182,9 +184,12 @@ export function labPreviewSpine(
   const out: SpineDot[] = [];
   for (let i = 0; i < dense.length; i++) {
     const p = dense[i]!;
-    const prev = dense[i - 1] ?? p;
-    const dx = (p.x - prev.x) * scaleX;
-    const dy = (p.y - prev.y) * scaleY;
+    const prev = dense[i - 1];
+    const next = dense[i + 1];
+    const from = prev ?? p;
+    const to = prev ? p : (next ?? p);
+    const dx = (to.x - from.x) * scaleX;
+    const dy = (to.y - from.y) * scaleY;
     const len = Math.hypot(dx, dy);
     const css = labCssSpeedFromSlowness(p.slowness ?? INK_SLOWNESS_NEUTRAL);
     const vx = len > 1e-6 ? (dx / len) * css * 1000 * dpr : 0;
@@ -214,6 +219,7 @@ export function labPenFromToolbar(opts: {
   speed?: number;
   fade?: number;
   smoothing?: number;
+  smoothingMode?: "lift" | "live";
 }): InkLabPen {
   return {
     color: opts.color,
@@ -228,6 +234,7 @@ export function labPenFromToolbar(opts: {
     speedFade: opts.fade ?? 0,
     boldness: 1,
     smoothing: opts.smoothing,
+    smoothingMode: opts.smoothingMode,
   };
 }
 

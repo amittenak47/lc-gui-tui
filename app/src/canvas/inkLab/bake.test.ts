@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { expandInkTurns, type ScenePoint } from "../rasterInk";
 import { smoothInkPoints } from "../inkSmoothing";
-import { bakeCatmull, bakeSpine } from "./bake";
+import { bakeCatmull, bakeSpine, reshapeSpine } from "./bake";
 
 function line(): ScenePoint[] {
   return [
@@ -35,5 +35,15 @@ describe("lift bake", () => {
     expect(out.points).toHaveLength(spine.length);
     expect(out.points[2]!.x).toBeCloseTo(20);
     expect(out.points[2]!.y).toBeCloseTo(8);
+  });
+
+  it("live reshape keeps the endpoints", () => {
+    const spine = line().map((p) => ({ x: p.x, y: p.y, r: 6 }));
+    const out = reshapeSpine(spine, 0.35);
+    expect(out[0]!.x).toBeCloseTo(0);
+    expect(out[0]!.y).toBeCloseTo(0);
+    expect(out[out.length - 1]!.x).toBeCloseTo(40);
+    expect(out[out.length - 1]!.y).toBeCloseTo(0);
+    expect(Math.abs(out[2]!.y)).toBeLessThan(8);
   });
 });
