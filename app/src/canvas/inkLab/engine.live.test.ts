@@ -583,6 +583,79 @@ describe("Ink lab live path", () => {
     engine.up({ x: 120, y: 94, p: 0.5, t: 48 });
     engine.destroy();
   });
+
+  it("washes sparse tablet-rate hops when fade is on", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const fadePen = {
+      color: "#c41e3a",
+      baseWidth: 16,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 0,
+      speedFade: 1,
+      boldness: 1,
+    };
+    const hops = (dt: number) => {
+      const engine = createInkLabEngine({ sdf: false });
+      engine.attach(canvas);
+      engine.setPen(fadePen);
+      engine.down({ x: 40, y: 80, p: 0.5, t: 0 });
+      engine.move([
+        { x: 52, y: 80, p: 0.5, t: dt },
+        { x: 64, y: 80, p: 0.5, t: dt * 2 },
+        { x: 76, y: 80, p: 0.5, t: dt * 3 },
+        { x: 88, y: 80, p: 0.5, t: dt * 4 },
+      ]);
+      const baked = engine.up({ x: 100, y: 80, p: 0.5, t: dt * 5 });
+      engine.destroy();
+      return baked;
+    };
+    const sparse = hops(24);
+    const first = sparse.points[0]!.rgb![0];
+    const fly = Math.max(...sparse.points.slice(1).map((p) => p.rgb![0]));
+    expect(fly).toBeGreaterThan(first + 8);
+  });
+
+  it("washes hops that share one pointer timestamp", () => {
+    let wall = 1000;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => wall);
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    try {
+      engine.attach(canvas);
+      engine.setPen({
+        color: "#c41e3a",
+        baseWidth: 16,
+        overlayScale: 1,
+        dpr: 1,
+        maxFullness: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speedInk: 0,
+        speedBlotBlend: 0,
+        speedFade: 1,
+        boldness: 1,
+      });
+      engine.down({ x: 40, y: 80, p: 0.5, t: 16 });
+      wall = 1016;
+      engine.move([
+        { x: 80, y: 80, p: 0.5, t: 16 },
+        { x: 120, y: 80, p: 0.5, t: 16 },
+        { x: 160, y: 80, p: 0.5, t: 16 },
+      ]);
+      const baked = engine.up({ x: 200, y: 80, p: 0.5, t: 16 });
+      const first = baked.points[0]!.rgb![0];
+      const fly = Math.max(...baked.points.slice(1).map((p) => p.rgb![0]));
+      expect(fly).toBeGreaterThan(first + 8);
+    } finally {
+      nowSpy.mockRestore();
+      engine.destroy();
+    }
+  });
 });
 
 describe("EKF is the live filter", () => {
