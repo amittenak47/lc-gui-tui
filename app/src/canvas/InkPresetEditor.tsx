@@ -15,13 +15,12 @@ import { StrokeSizeSlider } from "./StrokeSizeSlider";
 import { smoothInkPoints } from "./inkSmoothing";
 import {
   createInkLabEngine,
+  type InkLabEngine,
   type InkLabSample,
 } from "./inkLab/engine";
-import { fillMiterStroke } from "./inkLab/fallback";
-import { labNibRadius, labNibSizeFromUiWidth, labPenFromToolbar } from "./inkLab/style";
+import { labPenFromToolbar, labPreviewSpine } from "./inkLab/style";
 import {
   applyInkOp,
-  dryWashRgb,
   ERASER_WIDTH_MAX,
   inkLineWidth,
   inkSlowness,
@@ -94,10 +93,6 @@ function paintStrip(
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = getComputedStyle(canvas).getPropertyValue("--paper") || "#fdf6e3";
   ctx.fillRect(0, 0, w, h);
-  if (kind === "pen" && !isEraserWedge(snap)) {
-    paintLabStrip(ctx, snap);
-    return;
-  }
   const op = testStripDrawOp(kind, snap);
   if (!op) return;
   ctx.save();
@@ -105,21 +100,48 @@ function paintStrip(
   ctx.restore();
 }
 
-function paintLabStrip(ctx: CanvasRenderingContext2D, snap: InkDrawSnapshot): void {
-  const washed = dryWashRgb(snap.colour, 1);
-  const rgb: [number, number, number] = [washed.r, washed.g, washed.b];
-  const size = labNibSizeFromUiWidth(snap.width);
-  const r = labNibRadius(0, 0, 1, 0.5, size);
-  const spine = TEST_STRIP_POINTS.map((p) => ({
-    x: p.x,
-    y: p.y,
-    r,
-    rgb,
-    a: 1,
-    p: p.pressure,
-    slow: p.slowness,
-  }));
-  fillMiterStroke(ctx, spine, null, rgb);
+function labPenFromSnap(snap: InkDrawSnapshot, dpr: number) {
+  return labPenFromToolbar({
+    color: snap.colour,
+    uiWidth: snap.width,
+    dpr,
+    pressureClip: snap.pressureClip,
+    pressureSensitive: snap.pressureSensitive,
+    speed: snap.speed,
+    blot: snap.blot,
+    fade: snap.fade,
+    smoothing: snap.smoothing,
+  });
+}
+
+function paintLabPreview(
+  canvas: HTMLCanvasElement,
+  engine: InkLabEngine,
+  snap: InkDrawSnapshot,
+): void {
+  const cssW = Math.max(1, canvas.clientWidth || 468);
+  const cssH = Math.max(1, canvas.clientHeight || 88);
+  const dpr = window.devicePixelRatio || 1;
+  const bw = Math.round(cssW * dpr);
+  const bh = Math.round(cssH * dpr);
+  if (canvas.width !== bw || canvas.height !== bh) {
+    canvas.width = bw;
+    canvas.height = bh;
+  }
+  engine.attach(canvas);
+  const pen = labPenFromSnap(snap, dpr);
+  engine.setPen(pen);
+  engine.replaySpines([
+    labPreviewSpine(pen, TEST_STRIP_POINTS, dpr, cssW / 468, cssH / 88),
+  ]);
+  engine.paintOntoSnap((ctx) => {
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-over";
+    ctx.fillStyle = getComputedStyle(canvas).getPropertyValue("--paper") || "#fdf6e3";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  });
+  engine.paint();
 }
 
 function paintEraserDot(
@@ -456,6 +478,70 @@ export function InkPresetEditor({
 }
 
 function TestStrip({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }) {
+  if (kind === "pen" && !isEraserWedge(snap)) {
+    return <InkLabPreviewStrip snap={snap} />;
+  }
+  return <StampTestStrip kind={kind} snap={snap} />;
+}
+
+function InkLabPreviewStrip({ snap }: { snap: InkDrawSnapshot }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const engineRef = useRef<InkLabEngine | null>(null);
+  const snapRef = useRef(snap);
+  snapRef.current = snap;
+  const frameRef = useRef(0);
+
+  const paint = () => {
+    const canvas = canvasRef.current;
+    const engine = engineRef.current;
+    if (!canvas || !engine) return;
+    paintLabPreview(canvas, engine, snapRef.current);
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const engine = createInkLabEngine();
+    engineRef.current = engine;
+    engine.attach(canvas);
+    paint();
+    const ro = new ResizeObserver(() => paint());
+    ro.observe(canvas);
+    return () => {
+      ro.disconnect();
+      engine.destroy();
+      engineRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (frameRef.current !== 0) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = 0;
+      paint();
+    });
+  }, [snap]);
+
+  useEffect(
+    () => () => {
+      if (frameRef.current !== 0) cancelAnimationFrame(frameRef.current);
+      frameRef.current = 0;
+    },
+    [],
+  );
+
+  return (
+    <canvas
+      className="lc-preset-strip-canvas lc-ink-lab-canvas"
+      width={468}
+      height={88}
+      ref={canvasRef}
+      aria-hidden
+    />
+  );
+}
+
+function StampTestStrip({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameRef = useRef(0);
   const latest = useRef({ kind, snap });
@@ -555,18 +641,7 @@ function InkLabLivePad({ snap }: { snap: InkDrawSnapshot }) {
     const engine = createInkLabEngine();
     engineRef.current = engine;
     const syncPen = () => {
-      const current = snapRef.current;
-      engine.setPen(
-        labPenFromToolbar({
-          color: current.colour,
-          uiWidth: current.width,
-          dpr: window.devicePixelRatio || 1,
-          pressureClip: current.pressureClip,
-          pressureSensitive: current.pressureSensitive,
-          blot: current.blot,
-          smoothing: current.smoothing,
-        }),
-      );
+      engine.setPen(labPenFromSnap(snapRef.current, window.devicePixelRatio || 1));
     };
     const size = () => {
       const cssW = Math.max(1, canvas.clientWidth || 468);
@@ -651,17 +726,7 @@ function InkLabLivePad({ snap }: { snap: InkDrawSnapshot }) {
     const canvas = canvasRef.current;
     const engine = engineRef.current;
     if (!canvas || !engine) return;
-    engine.setPen(
-      labPenFromToolbar({
-        color: snap.colour,
-        uiWidth: snap.width,
-        dpr: window.devicePixelRatio || 1,
-        pressureClip: snap.pressureClip,
-        pressureSensitive: snap.pressureSensitive,
-        blot: snap.blot,
-        smoothing: snap.smoothing,
-      }),
-    );
+    engine.setPen(labPenFromSnap(snap, window.devicePixelRatio || 1));
   }, [snap]);
 
   return (
@@ -1098,36 +1163,43 @@ function PhysicsKnobs({
         </SettingsBlock>
       )}
 
-      {!lab && (
-        <SettingsBlock
-          title="Speed ink"
-          hint={
+      <SettingsBlock
+        title="Speed ink"
+        hint={
+          lab ? (
+            <>
+              Same nib as Off at a normal writing pace: slow down and the
+              capsule fattens, speed up and it thins. Ink fade and Ink blot are
+              separate and work when this is Off. Saved on this device only.
+            </>
+          ) : (
             <>
               Same pen as Off at a normal writing pace: slow down and the line
               fattens, speed up and it thins. Ink pooling and Ink drying are
               separate and work when this is Off. Saved on this device only.
             </>
-          }
-        >
-          <SettingsRange
-            label="Speed ink"
-            min={0}
-            max={100}
-            step={5}
-            value={speedPct}
-            display={speedPct === 0 ? "Off" : `${speedPct}%`}
-            onChange={(n) => onChange({ ...snap, speed: speedInkFromPercent(n) })}
-          />
-        </SettingsBlock>
-      )}
+          )
+        }
+      >
+        <SettingsRange
+          label="Speed ink"
+          min={0}
+          max={100}
+          step={5}
+          value={speedPct}
+          display={speedPct === 0 ? "Off" : `${speedPct}%`}
+          onChange={(n) => onChange({ ...snap, speed: speedInkFromPercent(n) })}
+        />
+      </SettingsBlock>
 
       <SettingsBlock
-        title={lab ? "Hold grow" : "Ink Pooling"}
+        title={lab ? "Ink blot" : "Ink Pooling"}
         hint={
           lab ? (
             <>
-              Hold the nib still and the Ink lab tip grows a richer pool. Off
-              stays nib-sized. Saved on this device only.
+              Hold the nib still and the tip grows a richer pool. Slow writing
+              lays a darker colour; Off stays nib-sized. Saved on this device
+              only.
             </>
           ) : (
             <>
@@ -1142,7 +1214,7 @@ function PhysicsKnobs({
         }
       >
         <SettingsRange
-          label={lab ? "Hold grow" : "Ink Pooling"}
+          label={lab ? "Ink blot" : "Ink Pooling"}
           min={0}
           max={100}
           step={5}
@@ -1151,20 +1223,27 @@ function PhysicsKnobs({
           onChange={(n) => onChange({ ...snap, blot: speedBlotBlendFromPercent(n) })}
         />
       </SettingsBlock>
-      {!lab && (
       <SettingsBlock
-        title="Ink Drying"
+        title={lab ? "Ink fade" : "Ink Drying"}
         hint={
-          <>
-            A pace wash: slow writing stays full, fast writing goes faint. Not
-            the same as Ink Pooling, which darkens colour rather than thinning
-            opacity, and not the same as Ink fullness, which dries by how far
-            you have travelled. Off keeps full ink. Saved on this device only.
-          </>
+          lab ? (
+            <>
+              A pace wash toward paper: slow writing stays full, fast writing
+              goes faint — the Ink lab pad look. Off keeps the colour solid.
+              Saved on this device only.
+            </>
+          ) : (
+            <>
+              A pace wash: slow writing stays full, fast writing goes faint. Not
+              the same as Ink Pooling, which darkens colour rather than thinning
+              opacity, and not the same as Ink fullness, which dries by how far
+              you have travelled. Off keeps full ink. Saved on this device only.
+            </>
+          )
         }
       >
         <SettingsRange
-          label="Ink Drying"
+          label={lab ? "Ink fade" : "Ink Drying"}
           min={0}
           max={100}
           step={5}
@@ -1173,7 +1252,6 @@ function PhysicsKnobs({
           onChange={(n) => onChange({ ...snap, fade: speedFadeFromPercent(n) })}
         />
       </SettingsBlock>
-      )}
 
       {!lab && (
       <SettingsBlock

@@ -73,7 +73,9 @@ export interface WhiteboardInkLabProps {
   pressureSensitive: boolean;
   smoothing?: number;
   straightInk?: boolean;
+  speedInk?: number;
   speedBlotBlend?: number;
+  speedFade?: number;
   getViewport: () => ViewportTransform | null;
   clip?: SceneBounds | null;
   onChange?: () => void;
@@ -165,7 +167,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       pressureSensitive,
       smoothing,
       straightInk = false,
+      speedInk = 0,
       speedBlotBlend = 0,
+      speedFade = 0,
       getViewport,
       clip = null,
       onChange,
@@ -211,8 +215,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     pressureSensitiveRef.current = pressureSensitive;
     const smoothingRef = useRef(smoothing);
     smoothingRef.current = smoothing;
+    const speedInkRef = useRef(speedInk);
+    speedInkRef.current = speedInk;
     const blotRef = useRef(speedBlotBlend);
     blotRef.current = speedBlotBlend;
+    const speedFadeRef = useRef(speedFade);
+    speedFadeRef.current = speedFade;
     const straightInkRef = useRef(straightInk);
     straightInkRef.current = straightInk;
     const getViewportRef = useRef(getViewport);
@@ -536,7 +544,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             dpr: window.devicePixelRatio || 1,
             pressureClip: pressureClipRef.current,
             pressureSensitive: pressureSensitiveRef.current,
+            speed: speedInkRef.current,
             blot: blotRef.current,
+            fade: speedFadeRef.current,
             smoothing: smoothingRef.current,
           }),
         );

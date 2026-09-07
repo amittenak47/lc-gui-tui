@@ -1840,7 +1840,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               dpr,
               pressureClip: pressureClipRef.current,
               pressureSensitive: pressureSensitiveRef.current,
+              speed: speedInkRef.current,
               blot: speedBlotBlendRef.current,
+              fade: speedFadeRef.current,
               smoothing: smoothingRef.current,
             }),
           );

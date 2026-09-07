@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { dryWashRgb } from "../rasterInk";
-import { capillaryRelax, growTipRadius, INK_HEX, labHoldGrow, labNibSizeFromUiWidth, labPenDot, labPressureAmt, washRgb } from "./style";
+import { capillaryRelax, growTipRadius, INK_HEX, labCssSpeedFromSlowness, labHoldGrow, labNibSizeFromUiWidth, labPenDot, labPenFromToolbar, labPreviewSpine, labPressureAmt, washRgb } from "./style";
 
 describe("ink lab style", () => {
   it("wash uses dryWashRgb", () => {
@@ -137,6 +137,53 @@ describe("ink lab style", () => {
   it("hold grow off stays nib-sized", () => {
     expect(labHoldGrow(8, 10, 0)).toBe(8);
     expect(labHoldGrow(8, 8, 1)).toBeGreaterThan(8);
+  });
+
+  it("speed ink fattens a slow nib and fade washes a fast one", () => {
+    const base = {
+      color: "#1a1a1a",
+      baseWidth: 8,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedBlotBlend: 0,
+      boldness: 1,
+    };
+    const evenStill = labPenDot({ ...base, speedInk: 0, speedFade: 0 }, 0, 0, 1, 0.5, 0, 0);
+    const evenFly = labPenDot({ ...base, speedInk: 0, speedFade: 0 }, 8000, 0, 1, 0.5, 0, 0);
+    expect(evenStill.r).toBeCloseTo(evenFly.r, 5);
+    const pacedStill = labPenDot({ ...base, speedInk: 1, speedFade: 0 }, 0, 0, 1, 0.5, 0, 0);
+    const pacedFly = labPenDot({ ...base, speedInk: 1, speedFade: 0 }, 8000, 0, 1, 0.5, 0, 0);
+    expect(pacedStill.r).toBeGreaterThan(pacedFly.r);
+    const solidFly = labPenDot({ ...base, speedInk: 0, speedFade: 0 }, 8000, 0, 1, 0.5, 0, 0);
+    const fadedFly = labPenDot({ ...base, speedInk: 0, speedFade: 1 }, 8000, 0, 1, 0.5, 0, 0);
+    expect(fadedFly.rgb[0]).toBeGreaterThan(solidFly.rgb[0]);
+    const blotSlow = labPenDot({ ...base, speedInk: 0, speedFade: 0, speedBlotBlend: 1 }, 0, 0, 1, 0.5, 0, 0);
+    expect(blotSlow.rgb[0]).toBeLessThan(evenStill.rgb[0]);
+  });
+
+  it("preview spine uses paced capsules instead of one miter radius", () => {
+    const pen = labPenFromToolbar({
+      color: "#2244aa",
+      uiWidth: 2,
+      dpr: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speed: 1,
+      fade: 1,
+      blot: 0,
+    });
+    const spine = labPreviewSpine(pen, [
+      { x: 0, y: 0, pressure: 0.5, slowness: 1 },
+      { x: 40, y: 0, pressure: 0.5, slowness: 0.5 },
+      { x: 80, y: 0, pressure: 0.5, slowness: 0 },
+    ], 1);
+    expect(spine.length).toBeGreaterThan(3);
+    expect(spine[0]!.r).toBeGreaterThan(spine[spine.length - 1]!.r);
+    expect(spine[spine.length - 1]!.rgb![0]).toBeGreaterThan(spine[0]!.rgb![0]);
+    expect(labCssSpeedFromSlowness(0.5)).toBeCloseTo(1.2, 5);
   });
 
   it("capillary relaxes interior samples and is opt-in", () => {
