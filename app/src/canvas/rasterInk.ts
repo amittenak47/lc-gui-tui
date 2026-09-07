@@ -30,7 +30,7 @@ function ribbonStage<T>(name: InkStageName, fn: () => T): T {
 }
 
 export const STROKE_WIDTH_MIN = 1;
-export const STROKE_WIDTH_MAX = 32;
+export const STROKE_WIDTH_MAX = 64;
 /** Eraser dial goes farther so the brush can clear large areas (4× prior max of 96). */
 export const ERASER_WIDTH_MAX = 384;
 export const STROKE_WIDTH_DEFAULT = 2;
@@ -533,12 +533,6 @@ export interface InkDrawOp {
    * and a translucent stroke that did would band where the passes overlapped.
    */
   highlight?: boolean;
-  /**
-   * Retired perfect-freehand flags. Decoded from old notebooks so they do not
-   * throw; paint ignores them and uses the proprietary nib.
-   */
-  splineOutline?: boolean;
-  splineGradient?: boolean;
   /** When set, the stroke tracks a nested scroller's `scrollLeft` / `scrollTop`. */
   hostKey?: number;
   scrollLeftAtDraw?: number;
@@ -5271,8 +5265,8 @@ function labVertexRgb(
 
 /**
  * Default pen: same SDF capsules as the live lab engine.
- * Tests without WebGL2 keep the mitered strip. Highlighter and spline stay
- * on their own paths. Never stamp discs or grain-etch here.
+ * Tests without WebGL2 keep the mitered strip. Highlighter stays on its own
+ * path. Never stamp discs or grain-etch here.
  */
 function paintLabDrawOp(
   ctx: CanvasRenderingContext2D,

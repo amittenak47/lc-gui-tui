@@ -21,6 +21,7 @@ import type {
 import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { shouldDismissBackdrop } from "../util/backdropDismiss";
 import { MorphBar } from "./MorphBar";
+import { SettingsSlider } from "./SettingsSlider";
 import { loadTestForwardMode, saveTestForwardMode, type TestForwardMode } from "../util/agentPrefs";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkToolPresets, saveInkToolPresets } from "../util/inkToolPresets";
@@ -457,7 +458,7 @@ interface DevicePrefs {
   chromeWakeTint: ChromeWakeTint;
   /** Show the live/pred/err pill while a PDF is flicked. */
   pdfFlickHud: boolean;
-  /** 0–100; 50 is the shipping coast length. */
+  /** 0–100; 0 stops on lift, 50 is the shipping coast, 100 is a long glide. */
   pdfFlickMomentum: number;
   /** Ink lab HUD + load bar on the whiteboard. */
   inkPerfOverlay: boolean;
@@ -2046,23 +2047,19 @@ export function SettingsModal({
 
               <div className="lc-settings-subhead">Flick momentum</div>
               <p className="lc-settings-hint">
-                How far a document keeps coasting after you lift. Middle is the
-                current feel. Lower stops sooner; higher glides further. Saved on
-                this device only.
+                How far a page keeps sliding after you lift. 0 stops immediately.
+                50 is the usual coast. 100 glides much further (about twelve times
+                that travel). Saved on this device only.
               </p>
-              <div className="lc-settings-slider">
-                <input
-                  className="lc-settings-slider-input"
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={1}
-                  value={pdfFlickMomentum}
-                  aria-label="Flick momentum"
-                  onChange={(event) => setPdfFlickMomentum(Number(event.target.value))}
-                />
-                <span className="lc-settings-slider-value">{pdfFlickMomentum}</span>
-              </div>
+              <SettingsSlider
+                label="Flick momentum"
+                min={0}
+                max={100}
+                step={1}
+                value={pdfFlickMomentum}
+                display={String(pdfFlickMomentum)}
+                onChange={setPdfFlickMomentum}
+              />
               </SettingsFold>
 
               <SettingsFold id="storage" title="Storage Settings">

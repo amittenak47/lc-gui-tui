@@ -13,6 +13,7 @@ import {
   INK_SPEED_NEUTRAL_PX_MS,
   INK_SPEED_SPAN,
   STROKE_WIDTH_DEFAULT,
+  STROKE_WIDTH_MIN,
   type ScenePoint,
 } from "../rasterInk";
 
@@ -68,12 +69,21 @@ export function washRgb(vx: number, vy: number, dpr: number): [number, number, n
 }
 
 /**
- * Slider units → pad size. Default width is size 1 (Ink lab nib).
- * Not stamp `inkLineWidth`.
+ * Slider units → pad size. Default width (2) is size 1.
+ *
+ * A hard `[0.45, 2.8]` cap made 1 still look like a 2–3 and froze the nib
+ * from 6 through 32. Size 1 is a hairline; 6–64 keep growing.
  */
+export const LAB_NIB_SIZE_AT_MIN = 0.2;
+
 export function labNibSizeFromUiWidth(uiWidth: number): number {
   const w = Number.isFinite(uiWidth) && uiWidth > 0 ? uiWidth : STROKE_WIDTH_DEFAULT;
-  return Math.max(0.45, Math.min(2.8, w / STROKE_WIDTH_DEFAULT));
+  const u = Math.max(STROKE_WIDTH_MIN, w);
+  if (u <= STROKE_WIDTH_DEFAULT) {
+    const t = (u - STROKE_WIDTH_MIN) / (STROKE_WIDTH_DEFAULT - STROKE_WIDTH_MIN);
+    return LAB_NIB_SIZE_AT_MIN + t * (1 - LAB_NIB_SIZE_AT_MIN);
+  }
+  return u / STROKE_WIDTH_DEFAULT;
 }
 
 export function labPressureAmt(pen: InkLabPen, pressure: number): number {
@@ -98,9 +108,9 @@ export function labNibRadius(
   const cssPxPerMs = Math.hypot(vx, vy) / 1000 / Math.max(dpr, 1e-6);
   const sLow = slow ?? inkSlowness(cssPxPerMs);
   const p = Math.max(0.15, Math.min(1, pressure));
-  const s = Math.max(0.45, Math.min(2.8, size));
+  const s = Math.max(LAB_NIB_SIZE_AT_MIN, size);
   return Math.max(
-    1.15 * dpr,
+    0.55 * dpr,
     LAB_NIB_CSS * dpr * (0.5 + 0.95 * sLow) * (0.7 + 0.3 * p) * s,
   );
 }
@@ -212,6 +222,19 @@ export function labPreviewSpine(
   }
   labPreviewPool(pen, out);
   return out;
+}
+
+/**
+ * Preview camera: size 1–8 fills the strip. Past 8 the camera steps back so
+ * 9 looks like 1, 16 like 8 — same growth again, path length unchanged.
+ */
+export const PREVIEW_SIZE_BAND = 8;
+
+export function wrapPreviewUiWidth(uiWidth: number, band = PREVIEW_SIZE_BAND): number {
+  const w = Number.isFinite(uiWidth) && uiWidth > 0 ? uiWidth : STROKE_WIDTH_MIN;
+  if (w <= band) return w;
+  const m = w % band;
+  return m === 0 ? band : m;
 }
 
 /** Fuse blot pools at the ends — contact and lift, not every slow wiggle. */

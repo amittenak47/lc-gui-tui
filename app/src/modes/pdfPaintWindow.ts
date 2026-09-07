@@ -152,7 +152,7 @@ export function pdfPaintShouldWaitForLanding(C: number, lastLaidOut: number): bo
  *
  * Parked (`paused`) tears the observer down. Unfocused-but-visible still
  * decodes 0.25 for the hole — those sheets are on screen. `holdDecode` only
- * strips rest-2 / path-fill so the focused tab keeps lossless.
+ * strips rest-2 / path-fill so a focused PDF sibling keeps lossless.
  */
 export function pdfMayTakeWorker(paused: boolean, _holdDecode = false): boolean {
   return !paused;

@@ -15,6 +15,7 @@ import {
 import { WHEEL_OPEN_MS } from "../util/gesture";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { InkPageBook } from "./inkPageCache";
+import { canvasBitmapFromClient } from "./canvasPointer";
 import { overlaySpineFromDrawOp, splitInkOpsForLabReplay } from "./inkLab/replay";
 import {
   createInkLabEngine,
@@ -117,15 +118,14 @@ function cloneOps(ops: readonly InkOp[]): InkOp[] {
 }
 
 function sampleOf(canvas: HTMLCanvasElement, event: PointerEvent): InkLabSample {
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
+  const { x, y } = canvasBitmapFromClient(canvas, event.clientX, event.clientY);
   const pressure =
     event.pointerType === "pen" && Number.isFinite(event.pressure)
       ? event.pressure
       : 0.5;
   return {
-    x: (event.clientX - rect.left) * dpr,
-    y: (event.clientY - rect.top) * dpr,
+    x,
+    y,
     p: pressure,
     t: event.timeStamp,
   };
@@ -370,11 +370,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return drawingRef.current;
         },
         repaint() {
+          if (!toolRef.current) return;
           rebuildOverlayFromBook();
           presentCommitted();
         },
         syncCamera() {
           if (drawingRef.current) return;
+          if (!toolRef.current) return;
           rebuildOverlayFromBook();
           presentCommitted();
         },
@@ -402,6 +404,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         commitCamera() {
           const canvas = canvasRef.current;
           if (canvas?.style.transform) canvas.style.transform = "";
+          if (!toolRef.current) return;
           rebuildOverlayFromBook();
           presentCommitted();
         },
@@ -410,6 +413,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           const canvas = canvasRef.current;
           if (canvas?.style.transform) canvas.style.transform = "";
           if (drawingRef.current) return;
+          if (!toolRef.current) return;
           rebuildOverlayFromBook();
           presentCommitted();
         },
@@ -506,8 +510,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (resized) {
           canvas.width = pixelW;
           canvas.height = pixelH;
-          rebuildOverlayFromBook();
-          presentCommitted();
+          if (toolRef.current) {
+            rebuildOverlayFromBook();
+            presentCommitted();
+          }
         }
       };
 
@@ -515,7 +521,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       const engine = createInkLabEngine();
       engineRef.current = engine;
       backendRef.current = engine.attach(canvas);
-      presentCommitted();
+      if (toolRef.current) presentCommitted();
       if (perfOverlayRef.current) {
         loadBarRef.current?.show(loadMeterRef.current.peek(), {
           ...INK_LAB_HUD_ZERO,
@@ -855,10 +861,20 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       });
     }, [perfOverlay]);
 
+    useEffect(() => {
+      if (!enabled || !tool) return;
+      rebuildOverlayFromBook();
+      presentCommitted();
+    }, [enabled, tool, presentCommitted, rebuildOverlayFromBook]);
+
     if (!enabled) return null;
 
     return (
-      <div className="lc-board-ink-lab-host" ref={hostRef}>
+      <div
+        className={tool ? "lc-board-ink-lab-host is-armed" : "lc-board-ink-lab-host"}
+        ref={hostRef}
+        aria-hidden={!tool}
+      >
         <canvas
           ref={canvasRef}
           className="lc-ink-lab-canvas"

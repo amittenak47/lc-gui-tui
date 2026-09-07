@@ -4,9 +4,10 @@
  * The pill is diagnostic chrome for flick-end prediction. It stays on until
  * Settings turns it off, matching the overlay that already shipped.
  *
- * Momentum is 0–100, 50 = the current exponential friction. Higher = longer
- * coast after a flick. The closed-form predictor and the rAF stepper must
- * share {@link pdfFlickFriction} or the HUD and the page disagree.
+ * Momentum is 0–100. 0 lifts to a dead stop. 50 is the shipping coast.
+ * 100 is a long glide (~12× that travel). The closed-form predictor and the
+ * rAF stepper must share {@link pdfFlickFriction} or the HUD and the page
+ * disagree.
  */
 
 import { PAN_FRICTION } from "../canvas/flickPredict";
@@ -19,6 +20,10 @@ export const PDF_FLICK_HUD_DEFAULT = true;
 export const PDF_FLICK_MOMENTUM_MIN = 0;
 export const PDF_FLICK_MOMENTUM_MAX = 100;
 export const PDF_FLICK_MOMENTUM_DEFAULT = 50;
+/** Coast length at dial 100, as a multiple of the shipping (50) travel. */
+export const PDF_FLICK_TRAVEL_AT_MAX = 12;
+/** Short glide at dial 1, as a multiple of shipping travel. */
+export const PDF_FLICK_TRAVEL_AT_ONE = 0.12;
 
 /** Fired when Settings saves, so an open board picks the new coast / HUD up. */
 export const PDF_READING_EVENT = "lc-pdf-reading";
@@ -65,13 +70,28 @@ export function savePdfFlickMomentum(value: number): void {
 }
 
 /**
+ * How far a flick coasts vs the shipping feel. 0 is a dead stop.
+ * Inverse of {@link pdfFlickFriction} / {@link PAN_FRICTION}.
+ */
+export function pdfFlickTravelScale(momentum = loadPdfFlickMomentum()): number {
+  const m = clampMomentum(momentum);
+  if (m <= 0) return 0;
+  if (m <= 50) {
+    const t = (m - 1) / 49;
+    return PDF_FLICK_TRAVEL_AT_ONE + t * (1 - PDF_FLICK_TRAVEL_AT_ONE);
+  }
+  const t = (m - 50) / 50;
+  return 1 + t * (PDF_FLICK_TRAVEL_AT_MAX - 1);
+}
+
+/**
  * Exponential friction per ms for the hand-pan coast.
  *
- * 0 on the dial is a short stop (~2.5× shipping friction). 50 is
- * {@link PAN_FRICTION}. 100 is a long glide (~0.4×).
+ * 0 on the dial is no coast (`0`, and Board must not start inertia — `exp(0)`
+ * would never slow). 50 is {@link PAN_FRICTION}. 100 is a long glide.
  */
 export function pdfFlickFriction(momentum = loadPdfFlickMomentum()): number {
-  const t = clampMomentum(momentum) / 50;
-  const scale = t <= 1 ? 2.5 - 1.5 * t : 1 - 0.6 * (t - 1);
-  return PAN_FRICTION * scale;
+  const scale = pdfFlickTravelScale(momentum);
+  if (!(scale > 0)) return 0;
+  return PAN_FRICTION / scale;
 }

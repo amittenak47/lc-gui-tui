@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { dryWashRgb } from "../rasterInk";
-import { capillaryRelax, growTipRadius, INK_HEX, labCssSpeedFromSlowness, labHoldGrow, labNibSizeFromUiWidth, labPenDot, labPenFromToolbar, labPreviewSpine, labPressureAmt, labSwellHoldPool, washRgb } from "./style";
+import { capillaryRelax, growTipRadius, INK_HEX, labCssSpeedFromSlowness, labHoldGrow, labNibSizeFromUiWidth, labPenDot, labPenFromToolbar, labPreviewSpine, labPressureAmt, labSwellHoldPool, washRgb, wrapPreviewUiWidth } from "./style";
 
 describe("ink lab style", () => {
   it("wash uses dryWashRgb", () => {
@@ -128,7 +128,40 @@ describe("ink lab style", () => {
 
   it("maps default slider width to pad size 1", () => {
     expect(labNibSizeFromUiWidth(2)).toBe(1);
-    expect(labNibSizeFromUiWidth(20)).toBe(2.8);
+    expect(labNibSizeFromUiWidth(1)).toBe(0.2);
+    expect(labNibSizeFromUiWidth(6)).toBe(3);
+    expect(labNibSizeFromUiWidth(32)).toBe(16);
+    expect(labNibSizeFromUiWidth(64)).toBe(32);
+    expect(labNibSizeFromUiWidth(32)).toBeGreaterThan(labNibSizeFromUiWidth(6));
+    expect(labNibSizeFromUiWidth(64)).toBeGreaterThan(labNibSizeFromUiWidth(32));
+  });
+
+  it("keeps growing the live nib past slider 6", () => {
+    const pen = (baseWidth: number) =>
+      labPenDot(
+        {
+          color: "#1a1a1a",
+          baseWidth,
+          overlayScale: 1,
+          dpr: 1,
+          maxFullness: 1,
+          pressureClip: 1,
+          pressureSensitive: false,
+          speedInk: 0,
+          speedBlotBlend: 0,
+          speedFade: 0,
+          boldness: 1,
+        },
+        0,
+        0,
+        1,
+        0.5,
+        0,
+        0,
+      );
+    expect(pen(1).r).toBeLessThan(pen(2).r * 0.45);
+    expect(pen(32).r).toBeGreaterThan(pen(6).r * 2);
+    expect(pen(64).r).toBeGreaterThan(pen(32).r);
   });
 
   it("pressure clip fattens a light press on the nib", () => {
@@ -256,5 +289,37 @@ describe("ink lab style", () => {
     expect(Math.abs(out[1]!.y)).toBeLessThan(12);
     expect(out[1]!.r).toBeLessThan(9);
     expect(out[0]).toEqual(jagged[0]);
+  });
+
+  it("preview camera steps back every 8 sizes so 9 looks like 1 and 16 like 8", () => {
+    expect(wrapPreviewUiWidth(1)).toBe(1);
+    expect(wrapPreviewUiWidth(8)).toBe(8);
+    expect(wrapPreviewUiWidth(9)).toBe(1);
+    expect(wrapPreviewUiWidth(16)).toBe(8);
+    expect(wrapPreviewUiWidth(32)).toBe(8);
+    expect(wrapPreviewUiWidth(33)).toBe(1);
+    expect(wrapPreviewUiWidth(64)).toBe(8);
+    expect(labNibSizeFromUiWidth(64)).toBe(32);
+    const penAt = (uiWidth: number) =>
+      labPenFromToolbar({
+        color: "#2244aa",
+        uiWidth,
+        dpr: 1,
+        pressureClip: 1,
+        pressureSensitive: false,
+        speed: 1,
+        fade: 0,
+        blot: 0,
+      });
+    const pts = [
+      { x: 40, y: 44, pressure: 0.5, slowness: 0.5 },
+      { x: 200, y: 44, pressure: 0.5, slowness: 0.5 },
+      { x: 400, y: 44, pressure: 0.5, slowness: 0.5 },
+    ];
+    const rOf = (ui: number) =>
+      labPreviewSpine(penAt(wrapPreviewUiWidth(ui)), pts, 1)[1]!.r;
+    expect(rOf(9)).toBeCloseTo(rOf(1), 5);
+    expect(rOf(16)).toBeCloseTo(rOf(8), 5);
+    expect(rOf(8)).toBeGreaterThan(rOf(1));
   });
 });

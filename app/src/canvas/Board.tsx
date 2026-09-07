@@ -1926,9 +1926,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     const nodes: HTMLElement[] = [];
-    root.querySelectorAll("canvas.lc-ink-lab-canvas").forEach((el) => {
-      if (el instanceof HTMLElement) nodes.push(el);
-    });
+    if (annotateCodeRef.current) {
+      root.querySelectorAll("canvas.lc-ink-lab-canvas").forEach((el) => {
+        if (el instanceof HTMLElement) nodes.push(el);
+      });
+    }
     if (linedSlotNodeRef.current) nodes.push(linedSlotNodeRef.current);
     if (titleSlotNodeRef.current) nodes.push(titleSlotNodeRef.current);
     panRideNodesRef.current = nodes;
@@ -1982,7 +1984,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       cameraLiveClassRafRef.current = requestAnimationFrame(() => {
         cameraLiveClassRafRef.current = 0;
-        docFlags.camera(true);
+        // `html.lc-doc-camera-live` hides every PDF text layer in the window.
+        // A whiteboard fit/recentre must not blur the split file next to it.
+        if (pageContentRef.current) docFlags.camera(true);
       });
     }
     if (cameraMotionTimerRef.current) window.clearTimeout(cameraMotionTimerRef.current);
@@ -4115,12 +4119,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        */
       if (isSubMarkDragLive()) return;
 
-      // Mouse: down+drag on words is native select. Touch/pen must still pan —
-      // Android has no wheel, `touch-action: none` kills native scroll, and an
-      // early return here left the statement stuck. Deferred selectable-doc pan
-      // below waits SELECT_HOLD_SLOP_PX; a live Selection aborts the arm.
+      // Mouse: down+drag on markdown words is native select. A PDF is a pan —
+      // the text layer is a hit target, not a selection surface in scroll mode.
+      // Returning here (or deferring as selectableDoc) made flick-scroll work
+      // only while camera-live had already hidden the layer, or while the
+      // WebGL overlay sat on top and stole the target away from `.lc-pdf-doc`.
+      const onPdfDoc =
+        resolveElement(event.target)?.closest(
+          ".lc-pdf-doc, .lc-pdf-page, .lc-pdf-canvas, .lc-pdf-text, .textLayer",
+        ) != null;
       if (
         event.pointerType === "mouse" &&
+        !onPdfDoc &&
         pointerOnSelectableText(event.clientX, event.clientY, event.target)
       ) {
         return;
@@ -4148,7 +4158,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * sideways twitch cannot rubber-band a wide `pre` before the hold claims.
        */
       const onSelectableDoc =
-        !onCodeDock && resolveElement(event.target)?.closest(".lc-doc-selectable") != null;
+        !onCodeDock &&
+        !onPdfDoc &&
+        resolveElement(event.target)?.closest(".lc-doc-selectable") != null;
       const deferred = onCodeDock || sideScroll != null || onSelectableDoc;
 
       // A finger on a coasting page is a full stop, and where it lands is where
@@ -4411,7 +4423,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const probe = clampPanScroll(cam.scrollX, cam.scrollY + rawY * 16, cam.zoom);
         return Math.abs(probe.scrollY - cam.scrollY) < 0.5 ? 0 : rawY;
       })();
-      if (PAN_INERTIA_ENABLED && Math.abs(velY) >= PAN_FLICK_MIN) {
+      if (
+        PAN_INERTIA_ENABLED &&
+        panFrictionRef.current > 0 &&
+        Math.abs(velY) >= PAN_FLICK_MIN
+      ) {
         startPanInertia(0, velY);
         return;
       }
@@ -6108,6 +6124,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         runFit(regionId, "frame");
         return;
       }
+      // A draw page must not width-fit on every viewport pulse — that is the
+      // "click the file, click back, whiteboard is zoomed in" loop.
+      if (isDrawPageRegion(regionId ?? mobileRegionRef.current)) {
+        runFit(regionId, "keepY");
+        return;
+      }
       runFit(regionId, "both");
     },
     [runFit],
@@ -6455,7 +6477,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       maybeGrowDrawFrame();
       runFit(null, "keepY");
       lastFittedBoardBoxRef.current = { w: live.width, h: live.height };
-      if (boxChanged) {
+      // Recentre / nudge used to zero lastFitted so this always looked like a
+      // size change and dispatched `resize`. Both split boards listen, so a
+      // whiteboard recentre width-fit the sibling PDF and hid its text layer.
+      if (prev.w >= 8 && prev.h >= 8 && boxChanged) {
         window.dispatchEvent(new Event("resize"));
         const content = contentSlotNodeRef.current;
         if (content) syncMarksSlotFrom(content);
@@ -6483,20 +6508,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * that). Recentre is that rewrite: live box, keepY, then aim the current
    * page and wake paint — not a trip back to page 1.
    *
-   * A draw page has no reading line to keep, and that is what left the button
-   * inert: on a tablet the page is locked at fit zoom with X already centred,
-   * so "width-fit and keep Y" described the camera it was already looking at.
-   * Nothing to change, nothing to show for the press. On a page, recentring
-   * means the page — fit it, and go to its top.
+   * A draw page has no reading line to keep. Recentre used to width-fit (`both`),
+   * which zoomed the sheet into the pane and, via `html.lc-doc-camera-live`,
+   * hid the split PDF's text layer. keepY recentres X and holds zoom.
    */
   const recentreKeepPlace = useCallback(() => {
     const drawPage = isDrawPageRegion(mobileRegionRef.current);
     if (drawPage) userAdjustedCameraRef.current = false;
     const page = peekPdfFilmCurrent(filmScope);
     const pass = () => {
-      lastFittedBoardBoxRef.current = { w: 0, h: 0 };
       applyLiveBoxFit(true);
-      if (drawPage) runFit(null, "both");
       reportContentSlot();
       rasterInkRef.current?.syncCamera();
       if (!drawPage && page >= 1 && peekPdfReadingFrames(filmScope).length > 0) {
@@ -6509,11 +6530,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     pass();
     requestAnimationFrame(() => {
       pass();
+      // A draw page is already on keepY. The document ladder re-aims the PDF
+      // after chrome/layout settle; repeating it on a pad retriggered the
+      // sibling file's camera-live blur.
+      if (drawPage) return;
       recentreTimersRef.current = [80, 200, 400].map((ms) =>
         window.setTimeout(pass, ms),
       );
     });
-  }, [applyLiveBoxFit, reportContentSlot, runFit]);
+  }, [applyLiveBoxFit, reportContentSlot]);
 
   /**
    * OS window resize (Tauri / WebView2) often never reaches `window.resize`
@@ -8684,7 +8709,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // (Gemini gatekeeper + CSS). Annotate restores normal canvas hits.
         interactive && !annotateCode && "lc-board-reading",
         interactive && annotateCode && "lc-board-annotating",
-        interactive && inkToolActive && "lc-board-ink-lab",
+        interactive && annotateCode && inkToolActive && "lc-board-ink-lab",
         transparentCanvas && "lc-board-paper",
         docPaper && "lc-board-doc-paper",
         // Highlighting / text-mark tools hand the surface back to the document
@@ -9390,7 +9415,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         ref={rasterInkRef}
         enabled={interactive}
         tool={
-          interactive && inkToolActive
+          interactive && annotateCode && inkToolActive
             ? activeTool === "eraser"
               ? "eraser"
               : activeTool === "highlighter"

@@ -5,8 +5,10 @@ import {
   loadPdfFlickHud,
   loadPdfFlickMomentum,
   pdfFlickFriction,
+  pdfFlickTravelScale,
   PDF_FLICK_HUD_DEFAULT,
   PDF_FLICK_MOMENTUM_DEFAULT,
+  PDF_FLICK_TRAVEL_AT_MAX,
   savePdfFlickHud,
   savePdfFlickMomentum,
 } from "./pdfReadingPref";
@@ -40,9 +42,16 @@ describe("pdfFlickFriction", () => {
     expect(loadPdfFlickMomentum()).toBe(PDF_FLICK_MOMENTUM_DEFAULT);
   });
 
+  it("is a dead stop at 0 so inertia must not run", () => {
+    expect(pdfFlickFriction(0)).toBe(0);
+    expect(pdfFlickTravelScale(0)).toBe(0);
+  });
+
   it("lowers friction as momentum goes up, so a flick coasts further", () => {
     expect(pdfFlickFriction(100)).toBeLessThan(pdfFlickFriction(50));
-    expect(pdfFlickFriction(0)).toBeGreaterThan(pdfFlickFriction(50));
+    expect(pdfFlickFriction(1)).toBeGreaterThan(pdfFlickFriction(50));
+    expect(pdfFlickTravelScale(100)).toBeCloseTo(PDF_FLICK_TRAVEL_AT_MAX, 8);
+    expect(pdfFlickTravelScale(50)).toBeCloseTo(1, 8);
   });
 
   it("clamps junk", () => {

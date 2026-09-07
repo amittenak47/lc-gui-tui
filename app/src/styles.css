@@ -3121,6 +3121,22 @@ body[data-lc-sash-drag="horizontal"] {
   background: #f4f1ea;
 }
 
+/*
+ * The pad stays mounted for load/save. Show it only while a drawing tool is
+ * armed — scroll mode has no pen, so the overlay would only steal flicks
+ * (and the sibling file's text layer) in a split.
+ */
+.lc-board:not(.lc-board-ink-lab) .lc-board-ink-lab-host,
+.lc-board-ink-lab-host:not(.is-armed) {
+  visibility: hidden;
+  pointer-events: none !important;
+}
+
+.lc-board-reading .lc-board-ink-lab-host,
+.lc-board-reading .lc-ink-lab-canvas {
+  pointer-events: none !important;
+}
+
 .lc-board-paper .lc-board-ink-lab-host,
 .lc-board-doc-paper .lc-board-ink-lab-host {
   background: transparent;
@@ -4934,6 +4950,7 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-preset-strip-canvas {
+  display: block;
   width: 100%;
   height: 88px;
   border-radius: 8px;
@@ -14381,16 +14398,25 @@ button.lc-row-selected:hover:not(:disabled) {
  * dozen one-word colour families do not, and thirteen full-width rows would be
  * most of the Personalise tab.
  */
-.lc-settings-choice-wrap,
 .lc-settings-choice-compact {
   flex-direction: row;
   flex-wrap: wrap;
   gap: 6px;
 }
 
+.lc-settings-choice-wrap {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5.2rem, 1fr));
+  gap: 6px;
+}
+
 .lc-settings-choice-wrap .lc-settings-choice-option {
   flex: 0 0 auto;
-  padding: 6px 12px;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 6px;
+  text-align: center;
 }
 
 .lc-settings-choice-compact .lc-settings-choice-option {
@@ -14398,6 +14424,10 @@ button.lc-row-selected:hover:not(:disabled) {
   min-width: 0;
   padding: 8px 10px;
   align-items: center;
+}
+
+.lc-settings-choice-wrap .lc-settings-choice-option strong {
+  width: 100%;
 }
 
 /* A dial where the choice rows would be a list of arbitrary percentages. Same
@@ -14414,14 +14444,62 @@ button.lc-row-selected:hover:not(:disabled) {
   background: var(--panel);
 }
 
-.lc-settings-slider-input {
+.lc-settings-slider-hit {
+  --lc-thumb: 16px;
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   height: 22px;
+}
+
+.lc-settings-slider-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 16%, var(--panel));
+  pointer-events: none;
+}
+
+.lc-settings-slider-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: calc(var(--lc-thumb) / 2 + (100% - var(--lc-thumb)) * var(--lc-slider-t, 0));
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.lc-settings-slider-thumb {
+  position: absolute;
+  top: 50%;
+  left: calc((100% - var(--lc-thumb)) * var(--lc-slider-t, 0));
+  width: var(--lc-thumb);
+  height: var(--lc-thumb);
+  margin-top: calc(var(--lc-thumb) / -2);
+  border-radius: 999px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.lc-settings-slider-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   margin: 0;
   padding: 0;
-  accent-color: var(--accent);
+  border: 0;
+  opacity: 0;
   cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
 }
 
 .lc-settings-slider-value {
@@ -14611,8 +14689,8 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-settings-choice-option.is-active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface, var(--bg)));
+  border-color: color-mix(in srgb, var(--ink) 42%, var(--accent));
+  background: color-mix(in srgb, var(--ink) 18%, var(--surface, var(--bg)));
 }
 
 .lc-settings-choice-option strong {
