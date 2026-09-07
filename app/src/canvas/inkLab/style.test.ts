@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { dryWashRgb } from "../rasterInk";
-import { capillaryRelax, growTipRadius, INK_HEX, labCssSpeedFromSlowness, labHoldGrow, labNibSizeFromUiWidth, labPenDot, labPenFromToolbar, labPreviewSpine, labPressureAmt, labSwellHoldPool, washRgb, wrapPreviewUiWidth } from "./style";
+import { applyPreviewCamera, capillaryRelax, growTipRadius, INK_HEX, labCssSpeedFromSlowness, labHoldGrow, labNibSizeFromUiWidth, labPenDot, labPenFromToolbar, labPreviewSpine, labPressureAmt, labSwellHoldPool, PREVIEW_BAND_MORPH_MS, PREVIEW_BAND_ZOOM_MS, PREVIEW_STEP_MS, previewSizeBandIndex, previewTransitionMs, previewZoomEase, samplePreviewCamera, washRgb, wrapPreviewUiWidth } from "./style";
 
 describe("ink lab style", () => {
   it("wash uses dryWashRgb", () => {
@@ -321,5 +321,63 @@ describe("ink lab style", () => {
     expect(rOf(9)).toBeCloseTo(rOf(1), 5);
     expect(rOf(16)).toBeCloseTo(rOf(8), 5);
     expect(rOf(8)).toBeGreaterThan(rOf(1));
+  });
+
+  it("preview camera bands 1–8, 9–16, 17–24 and eases through the jump", () => {
+    expect(previewSizeBandIndex(1)).toBe(0);
+    expect(previewSizeBandIndex(8)).toBe(0);
+    expect(previewSizeBandIndex(9)).toBe(1);
+    expect(previewSizeBandIndex(16)).toBe(1);
+    expect(previewSizeBandIndex(17)).toBe(2);
+    expect(previewZoomEase(0)).toBe(0);
+    expect(previewZoomEase(1)).toBe(1);
+    expect(previewZoomEase(0.5)).toBeCloseTo(0.5, 5);
+    expect(previewZoomEase(0.25)).toBeLessThan(0.25);
+    expect(previewZoomEase(0.75)).toBeGreaterThan(0.75);
+  });
+
+  it("eases each size step and zooms then morphs on a band cross", () => {
+    expect(previewTransitionMs(3, 4)).toBe(PREVIEW_STEP_MS);
+    expect(previewTransitionMs(8, 9)).toBe(PREVIEW_BAND_ZOOM_MS + PREVIEW_BAND_MORPH_MS);
+    expect(previewTransitionMs(9, 8)).toBe(PREVIEW_BAND_ZOOM_MS + PREVIEW_BAND_MORPH_MS);
+    const stepMid = samplePreviewCamera(3, 4, PREVIEW_STEP_MS / 2);
+    expect(stepMid.pathScale).toBe(1);
+    expect(stepMid.displayWidth).toBeGreaterThan(3);
+    expect(stepMid.displayWidth).toBeLessThan(4);
+    const zoomEnd = samplePreviewCamera(8, 9, PREVIEW_BAND_ZOOM_MS - 1);
+    expect(zoomEnd.displayWidth).toBe(8);
+    expect(zoomEnd.pathScale).toBeCloseTo(1 / 8, 5);
+    expect(zoomEnd.radiusScale).toBeCloseTo(1 / 8, 5);
+    const handoff = samplePreviewCamera(8, 9, PREVIEW_BAND_ZOOM_MS);
+    expect(handoff.displayWidth).toBe(1);
+    expect(handoff.pathScale).toBeCloseTo(1 / 8, 5);
+    expect(handoff.radiusScale).toBe(1);
+    const morphMid = samplePreviewCamera(
+      8,
+      9,
+      PREVIEW_BAND_ZOOM_MS + PREVIEW_BAND_MORPH_MS / 2,
+    );
+    expect(morphMid.displayWidth).toBe(1);
+    expect(morphMid.radiusScale).toBe(1);
+    expect(morphMid.pathScale).toBeGreaterThan(1 / 8);
+    expect(morphMid.pathScale).toBeLessThan(1);
+    const done = samplePreviewCamera(8, 9, PREVIEW_BAND_ZOOM_MS + PREVIEW_BAND_MORPH_MS);
+    expect(done.displayWidth).toBe(1);
+    expect(done.pathScale).toBe(1);
+    const zoomIn = samplePreviewCamera(9, 8, PREVIEW_BAND_ZOOM_MS - 1);
+    expect(zoomIn.displayWidth).toBe(1);
+    expect(zoomIn.pathScale).toBeCloseTo(8, 5);
+    expect(zoomIn.radiusScale).toBeCloseTo(8, 5);
+    const scaled = applyPreviewCamera(
+      [
+        { x: 0, y: 0, r: 8 },
+        { x: 100, y: 0, r: 8 },
+      ],
+      50,
+      0,
+      zoomEnd,
+    );
+    expect(scaled[0]!.x).toBeCloseTo(50 + (0 - 50) * zoomEnd.pathScale, 5);
+    expect(scaled[0]!.r).toBeCloseTo(8 * zoomEnd.radiusScale, 5);
   });
 });

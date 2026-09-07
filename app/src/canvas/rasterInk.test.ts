@@ -11,6 +11,8 @@ import {
   HIGHLIGHT_WIDTH_SCALE,
   trimHighlightLiftHook,
   highlightLiftKeepsTip,
+  highlighterChiselWidth,
+  highlighterDrawOp,
   inkBaseWidthForZoom,
   inkLineWidth,
   inkPoolingWidthGain,
@@ -224,6 +226,17 @@ describe("rasterInk sizing", () => {
       const thin = inkStrokeStyle(1, 1, NO_PRESSURE, 1, false, 0, 0.5, 0, true);
       const fat = inkStrokeStyle(8, 1, NO_PRESSURE, 1, false, 0, 0.5, 0, true);
       expect(fat.lineWidth).toBeGreaterThan(thin.lineWidth);
+    });
+
+    it("highlighterDrawOp stores a chisel, not a pressure nib", () => {
+      const op = highlighterDrawOp("#f5b301", 4, 1, [
+        { x: 0, y: 0, pressure: 0.2 },
+        { x: 40, y: 0, pressure: 1 },
+      ]);
+      expect(op.highlight).toBe(true);
+      expect(op.pressureSensitive).toBe(false);
+      expect(op.maxFullness).toBe(1);
+      expect(highlighterChiselWidth(op.baseWidth)).toBeGreaterThan(inkLineWidth(op.baseWidth, 0, false));
     });
 
     it("drops a short reverse tail at lift-off", () => {

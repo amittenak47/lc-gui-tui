@@ -29,9 +29,12 @@ import { labPenFromToolbar } from "./inkLab/style";
 import { createInkLoadMeter } from "./inkLoadMeter";
 import { InkLoadBar, type InkLoadBarHandle } from "./InkLoadBar";
 import {
+  highlighterChiselWidth,
+  highlighterDrawOp,
   inkBaseWidthForZoom,
   paintRasterInk,
   scenePointFromCanvasPixel,
+  trimHighlightLiftHook,
   type InkBlotHalt,
   type InkDrawOp,
   type InkOp,
@@ -131,6 +134,25 @@ function sampleOf(canvas: HTMLCanvasElement, event: PointerEvent): InkLabSample 
   };
 }
 
+function highlightPointOf(
+  canvas: HTMLCanvasElement,
+  event: PointerEvent,
+  paintView: ViewportTransform,
+): ScenePoint {
+  const { x, y } = canvasBitmapFromClient(canvas, event.clientX, event.clientY);
+  const dpr = canvas.width / Math.max(1, canvas.clientWidth || canvas.width);
+  const scene = scenePointFromCanvasPixel(x / dpr, y / dpr, paintView);
+  return { x: scene.x, y: scene.y, pressure: 0.5 };
+}
+
+function liveHighlightPoints(
+  points: readonly ScenePoint[],
+  straight: boolean,
+): ScenePoint[] {
+  if (straight && points.length >= 2) return [points[0]!, points[points.length - 1]!];
+  return points.slice();
+}
+
 function spineToScene(
   dots: readonly SpineDot[],
   view: ViewportTransform,
@@ -218,6 +240,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const overlayRef = useRef<SpineDot[][]>([]);
     const overlayRedoRef = useRef<SpineDot[][]>([]);
     const drawingRef = useRef(false);
+    const highlightPtsRef = useRef<ScenePoint[] | null>(null);
     const rafRef = useRef<number | null>(null);
     const shiftAnchorRef = useRef<number | null>(null);
     const holdTimerRef = useRef<number | null>(null);
@@ -304,16 +327,17 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       };
     }, []);
 
-    const presentCommitted = useCallback(() => {
+    const presentCommitted = useCallback((liveStamp: InkOp | null = null) => {
       const canvas = canvasRef.current;
       const engine = engineRef.current;
       if (!canvas || !engine) return;
       const { view, paintView, dpr, marginY } = readViews();
       engine.replaySpines(overlayRef.current);
       const { stamp } = splitInkOpsForLabReplay(bookRef.current.paintOps());
-      if (stamp.length > 0) {
+      const ops = liveStamp ? [...stamp, liveStamp] : stamp;
+      if (ops.length > 0) {
         engine.paintOntoSnap((sctx) => {
-          paintRasterInk(sctx, paintView, stamp, null, dpr, clipRef.current, false);
+          paintRasterInk(sctx, paintView, ops, null, dpr, clipRef.current, false);
         });
       }
       engine.paint();
@@ -616,8 +640,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           pending.decided = true;
           pending.opened = true;
           drawingRef.current = false;
+          highlightPtsRef.current = null;
           engine.cancelStroke();
-          engine.paint();
+          presentCommitted();
           if (perfOverlayRef.current) {
             loadMeterRef.current.end();
             loadBarRef.current?.freeze();
@@ -631,24 +656,42 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         }, WHEEL_OPEN_MS);
       };
 
-      const stampAccessory = (event: PointerEvent) => {
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
+      const paintLiveHighlight = () => {
+        const pts = highlightPtsRef.current;
+        if (!pts || pts.length === 0) return;
+        const { paintView } = readViews();
+        presentCommitted(
+          highlighterDrawOp(
+            inkColorRef.current,
+            strokeWidthRef.current,
+            paintView.zoom,
+            liveHighlightPoints(pts, straightInkRef.current),
+          ),
+        );
+      };
+
+      const scheduleHighlight = () => {
+        if (rafRef.current != null) return;
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = null;
+          paintLiveHighlight();
+        });
+      };
+
+      const stampEraser = (event: PointerEvent) => {
         const s = sampleOf(canvas, event);
         const dpr = canvas.width / Math.max(1, canvas.clientWidth || 1);
         const r = Math.max(6 * dpr, strokeWidthRef.current * 3 * dpr);
-        ctx.save();
-        if (toolRef.current === "eraser") {
+        engine.paintOntoSnap((ctx) => {
+          ctx.save();
           ctx.globalCompositeOperation = "destination-out";
           ctx.fillStyle = "#000";
-        } else {
-          ctx.globalCompositeOperation = "multiply";
-          ctx.fillStyle = inkColorRef.current;
-        }
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        });
+        engine.paint();
       };
 
       const onPointerDown = (event: PointerEvent) => {
@@ -687,9 +730,15 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         } catch {
           /* untrusted */
         }
+        if (toolRef.current === "highlighter") {
+          const { paintView } = readViews();
+          highlightPtsRef.current = [highlightPointOf(canvas, event, paintView)];
+          paintLiveHighlight();
+          return;
+        }
         if (toolRef.current !== "pen") {
           engine.captureSnap();
-          stampAccessory(event);
+          stampEraser(event);
           return;
         }
         engine.setPen(
@@ -744,8 +793,18 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           pending.lastY = event.clientY;
         }
         if (!drawingRef.current) return;
+        if (toolRef.current === "highlighter") {
+          const live = highlightPtsRef.current;
+          if (!live) return;
+          const { paintView } = readViews();
+          const coalesced = event.getCoalescedEvents?.();
+          const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
+          for (const item of batch) live.push(highlightPointOf(canvas, item, paintView));
+          scheduleHighlight();
+          return;
+        }
         if (toolRef.current !== "pen") {
-          stampAccessory(event);
+          stampEraser(event);
           return;
         }
         const coalesced = event.getCoalescedEvents?.();
@@ -778,6 +837,33 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         }
         if (!drawingRef.current) return;
         drawingRef.current = false;
+        if (toolRef.current === "highlighter") {
+          const raw = highlightPtsRef.current;
+          highlightPtsRef.current = null;
+          if (raw && raw.length > 0) {
+            const { paintView } = readViews();
+            const shaped = liveHighlightPoints(raw, straightInkRef.current);
+            const op = highlighterDrawOp(
+              inkColorRef.current,
+              strokeWidthRef.current,
+              paintView.zoom,
+              shaped,
+            );
+            op.points = trimHighlightLiftHook(op.points, highlighterChiselWidth(op.baseWidth));
+            if (op.points.length > 0) {
+              bookRef.current.commit(op);
+              overlayRedoRef.current = [];
+              onChangeRef.current?.();
+            }
+          }
+          presentCommitted();
+          try {
+            canvas.releasePointerCapture(event.pointerId);
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
         if (toolRef.current !== "pen") {
           engine.captureSnap();
           try {

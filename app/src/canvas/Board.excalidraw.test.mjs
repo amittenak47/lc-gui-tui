@@ -26,6 +26,8 @@ describe("WhiteboardInkLab", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
     expect(src).toMatch(/labPenFromToolbar/);
     expect(src).toMatch(/setPen\(/);
+    expect(src).toMatch(/highlighterDrawOp/);
+    expect(src).toMatch(/trimHighlightLiftHook/);
     expect(src).toMatch(/inkColorRef/);
     expect(src).toMatch(/strokeWidthRef/);
     expect(src).toMatch(/blotRef/);
@@ -41,8 +43,11 @@ describe("InkPresetEditor", () => {
   it("paints the pen Preview with Ink lab capsules, not the miter strip", () => {
     const src = readFileSync(join(here, "InkPresetEditor.tsx"), "utf8");
     expect(src).toMatch(/labPreviewSpine/);
-    expect(src).toMatch(/wrapPreviewUiWidth/);
+    expect(src).toMatch(/applyPreviewCamera/);
+    expect(src).toMatch(/samplePreviewCamera/);
     expect(src).toMatch(/InkLabPreviewStrip/);
+    expect(src).toMatch(/HighlightPreviewStrip/);
+    expect(src).toMatch(/previewSizeBandIndex/);
     expect(src).not.toMatch(/fillMiterStroke/);
     expect(src).toMatch(/Speed ink/);
     expect(src).toMatch(/Ink fade/);

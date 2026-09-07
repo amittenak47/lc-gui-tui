@@ -226,15 +226,144 @@ export function labPreviewSpine(
 
 /**
  * Preview camera: size 1–8 fills the strip. Past 8 the camera steps back so
- * 9 looks like 1, 16 like 8 — same growth again, path length unchanged.
+ * 9 looks like 1, 16 like 8 — same growth again.
+ *
+ * Every dial step eases. Crossing a band is two beats: a true zoom (path and
+ * nib scale together) then a morph that stretches the path back to the strip
+ * while the nib stays at the wrapped size.
  */
 export const PREVIEW_SIZE_BAND = 8;
+/** Ease for a one-notch size change (same band). */
+export const PREVIEW_STEP_MS = 200;
+/** First beat of a band cross: camera zoom out (up) or in (down). */
+export const PREVIEW_BAND_ZOOM_MS = 280;
+/** Second beat: path morphs to fill the strip again. */
+export const PREVIEW_BAND_MORPH_MS = 260;
 
 export function wrapPreviewUiWidth(uiWidth: number, band = PREVIEW_SIZE_BAND): number {
   const w = Number.isFinite(uiWidth) && uiWidth > 0 ? uiWidth : STROKE_WIDTH_MIN;
   if (w <= band) return w;
   const m = w % band;
   return m === 0 ? band : m;
+}
+
+/** 1–8 → 0, 9–16 → 1, … Crossing a band is the Preview zoom. */
+export function previewSizeBandIndex(uiWidth: number, band = PREVIEW_SIZE_BAND): number {
+  const w = Number.isFinite(uiWidth) && uiWidth > 0 ? uiWidth : STROKE_WIDTH_MIN;
+  return Math.max(0, Math.floor((w - 1) / band));
+}
+
+export function previewZoomEase(t: number): number {
+  const x = Math.max(0, Math.min(1, t));
+  return x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2;
+}
+
+export type PreviewCameraPose = {
+  /** Wrapped UI width that sets nib / chisel radius. */
+  displayWidth: number;
+  /** Path scale about the strip centre. 1 fills the strip. */
+  pathScale: number;
+  /** Extra radius multiply. Equals pathScale during the zoom beat. */
+  radiusScale: number;
+};
+
+export function previewRestPose(uiWidth: number): PreviewCameraPose {
+  return {
+    displayWidth: wrapPreviewUiWidth(uiWidth),
+    pathScale: 1,
+    radiusScale: 1,
+  };
+}
+
+export function previewTransitionMs(fromUi: number, toUi: number): number {
+  if (previewSizeBandIndex(fromUi) === previewSizeBandIndex(toUi)) {
+    return Math.abs(wrapPreviewUiWidth(fromUi) - wrapPreviewUiWidth(toUi)) < 1e-6
+      ? 0
+      : PREVIEW_STEP_MS;
+  }
+  const fromW = wrapPreviewUiWidth(fromUi);
+  const toW = wrapPreviewUiWidth(toUi);
+  if (Math.abs(fromW - toW) < 1e-6) return 0;
+  return PREVIEW_BAND_ZOOM_MS + PREVIEW_BAND_MORPH_MS;
+}
+
+export function samplePreviewCamera(
+  fromUi: number,
+  toUi: number,
+  elapsedMs: number,
+): PreviewCameraPose {
+  const dest = previewRestPose(toUi);
+  const fromW = wrapPreviewUiWidth(fromUi);
+  const toW = wrapPreviewUiWidth(toUi);
+  const crossed = previewSizeBandIndex(fromUi) !== previewSizeBandIndex(toUi);
+  if (!crossed) {
+    const dur = PREVIEW_STEP_MS;
+    if (elapsedMs >= dur) return dest;
+    if (elapsedMs <= 0) {
+      return { displayWidth: fromW, pathScale: 1, radiusScale: 1 };
+    }
+    const u = previewZoomEase(elapsedMs / dur);
+    return {
+      displayWidth: fromW + (toW - fromW) * u,
+      pathScale: 1,
+      radiusScale: 1,
+    };
+  }
+  if (Math.abs(fromW - toW) < 1e-6) return dest;
+  const ratio = toW / Math.max(fromW, 1e-6);
+  if (elapsedMs <= 0) {
+    return { displayWidth: fromW, pathScale: 1, radiusScale: 1 };
+  }
+  if (elapsedMs < PREVIEW_BAND_ZOOM_MS) {
+    const u = previewZoomEase(elapsedMs / PREVIEW_BAND_ZOOM_MS);
+    const s = 1 + (ratio - 1) * u;
+    return { displayWidth: fromW, pathScale: s, radiusScale: s };
+  }
+  if (elapsedMs >= PREVIEW_BAND_ZOOM_MS + PREVIEW_BAND_MORPH_MS) return dest;
+  const u = previewZoomEase((elapsedMs - PREVIEW_BAND_ZOOM_MS) / PREVIEW_BAND_MORPH_MS);
+  return {
+    displayWidth: toW,
+    pathScale: ratio + (1 - ratio) * u,
+    radiusScale: 1,
+  };
+}
+
+export function lerpPreviewPose(
+  from: PreviewCameraPose,
+  to: PreviewCameraPose,
+  t: number,
+): PreviewCameraPose {
+  const u = previewZoomEase(t);
+  return {
+    displayWidth: from.displayWidth + (to.displayWidth - from.displayWidth) * u,
+    pathScale: from.pathScale + (to.pathScale - from.pathScale) * u,
+    radiusScale: from.radiusScale + (to.radiusScale - from.radiusScale) * u,
+  };
+}
+
+export function applyPreviewPathScale<T extends { x: number; y: number }>(
+  points: readonly T[],
+  cx: number,
+  cy: number,
+  pathScale: number,
+): T[] {
+  if (Math.abs(pathScale - 1) < 1e-6) return points.map((p) => ({ ...p }));
+  return points.map((p) => ({
+    ...p,
+    x: cx + (p.x - cx) * pathScale,
+    y: cy + (p.y - cy) * pathScale,
+  }));
+}
+
+export function applyPreviewCamera(
+  points: readonly SpineDot[],
+  cx: number,
+  cy: number,
+  pose: PreviewCameraPose,
+): SpineDot[] {
+  const path = applyPreviewPathScale(points, cx, cy, pose.pathScale);
+  if (Math.abs(pose.radiusScale - 1) < 1e-6) return path;
+  return path.map((p) => ({ ...p, r: p.r * pose.radiusScale }));
 }
 
 /** Fuse blot pools at the ends — contact and lift, not every slow wiggle. */

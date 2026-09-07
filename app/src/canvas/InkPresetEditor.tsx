@@ -20,11 +20,24 @@ import {
   type InkLabSample,
 } from "./inkLab/engine";
 import { canvasBitmapFromClient, canvasCssFromClient } from "./canvasPointer";
-import { labPenFromToolbar, labPreviewSpine, wrapPreviewUiWidth, capillaryRelax } from "./inkLab/style";
+import {
+  labPenFromToolbar,
+  labPreviewSpine,
+  capillaryRelax,
+  previewSizeBandIndex,
+  previewRestPose,
+  previewTransitionMs,
+  samplePreviewCamera,
+  lerpPreviewPose,
+  applyPreviewCamera,
+  applyPreviewPathScale,
+  type PreviewCameraPose,
+} from "./inkLab/style";
 import { bakeSpine } from "./inkLab/bake";
 import {
   applyInkOp,
   ERASER_WIDTH_MAX,
+  highlighterDrawOp,
   inkLineWidth,
   inkSlowness,
   INK_HOLD_STILL_PX,
@@ -124,6 +137,7 @@ function paintLabPreview(
   canvas: HTMLCanvasElement,
   engine: InkLabEngine,
   snap: InkDrawSnapshot,
+  pose: PreviewCameraPose,
 ): void {
   const cssW = Math.max(1, canvas.clientWidth || 468);
   const cssH = Math.max(1, canvas.clientHeight || 88);
@@ -134,7 +148,7 @@ function paintLabPreview(
     canvas.width = bw;
     canvas.height = bh;
   }
-  const pen = labPenFromSnap({ ...snap, width: wrapPreviewUiWidth(snap.width) }, dpr);
+  const pen = labPenFromSnap({ ...snap, width: pose.displayWidth }, dpr);
   engine.setPen(pen);
   const raw = labPreviewSpine(pen, TEST_STRIP_POINTS, dpr, cssW / 468, cssH / 88);
   const baked = bakeSpine(raw, {
@@ -142,7 +156,8 @@ function paintLabPreview(
     smoothing: snap.smoothing,
   });
   const points = snap.capillary ? capillaryRelax(baked.points) : baked.points;
-  engine.replaySpines([points]);
+  const posed = applyPreviewCamera(points, (cssW / 2) * dpr, (cssH / 2) * dpr, pose);
+  engine.replaySpines([posed]);
   engine.paintOntoSnap((ctx) => {
     ctx.save();
     ctx.globalCompositeOperation = "destination-over";
@@ -151,6 +166,50 @@ function paintLabPreview(
     ctx.restore();
   });
   engine.paint();
+}
+
+function paintHighlightPreview(
+  canvas: HTMLCanvasElement,
+  snap: InkDrawSnapshot,
+  pose: PreviewCameraPose,
+): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const cssW = Math.max(1, canvas.clientWidth || 468);
+  const cssH = Math.max(1, canvas.clientHeight || 88);
+  const dpr = window.devicePixelRatio || 1;
+  const bw = Math.round(cssW * dpr);
+  const bh = Math.round(cssH * dpr);
+  if (canvas.width !== bw || canvas.height !== bh) {
+    canvas.width = bw;
+    canvas.height = bh;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  ctx.fillStyle = getComputedStyle(canvas).getPropertyValue("--paper") || "#fdf6e3";
+  ctx.fillRect(0, 0, cssW, cssH);
+  const sx = cssW / 468;
+  const sy = cssH / 88;
+  const cx = cssW / 2;
+  const cy = cssH / 2;
+  const points = TEST_STRIP_POINTS.map((p) => ({
+    ...p,
+    x: p.x * sx,
+    y: p.y * sy,
+  }));
+  const camera =
+    Math.abs(pose.radiusScale - pose.pathScale) < 1e-4 && Math.abs(pose.pathScale - 1) > 1e-4;
+  if (camera) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(pose.pathScale, pose.pathScale);
+    ctx.translate(-cx, -cy);
+    applyInkOp(ctx, highlighterDrawOp(snap.colour, pose.displayWidth, 1, points), 1);
+    ctx.restore();
+    return;
+  }
+  const posed = applyPreviewPathScale(points, cx, cy, pose.pathScale);
+  applyInkOp(ctx, highlighterDrawOp(snap.colour, pose.displayWidth, 1, posed), 1);
 }
 
 function paintEraserDot(
@@ -270,6 +329,7 @@ export function InkPresetEditor({
 
   const named = { ...draft, name: name.trim() || seed.name };
   const draw = !isEraserWedge(named);
+  const physics = draw && kind !== "highlighter";
   const paletteSig = inkPalette.join("|");
   const lastPaletteSigRef = useRef(paletteSig);
   useEffect(() => {
@@ -382,10 +442,14 @@ export function InkPresetEditor({
                   {livePreview
                     ? kind === "pen"
                       ? "Ink lab pad. Nib, colour, pressure, hold grow, and lift smoothing apply as you draw. Switching Live off, or Erase, clears the pad."
-                      : "Draw here with this preset before you Save. Switching Live off, or Erase, clears the pad."
+                      : kind === "highlighter"
+                        ? "Draw here with this highlighter before you Save. A translucent chisel — writing stays readable underneath. Switching Live off, or Erase, clears the pad."
+                        : "Draw here with this preset before you Save. Switching Live off, or Erase, clears the pad."
                     : kind === "pen"
-                      ? "How the Ink lab pen draws. Updates as you change the knobs."
-                      : "How this preset draws. Updates as you change the knobs."}
+                      ? "How the Ink lab pen draws. Updates as you change the knobs. Each size step eases. Past 8 the camera zooms out, then the stroke morphs to fill the strip again."
+                      : kind === "highlighter"
+                        ? "How the highlighter marks. A translucent chisel, not the Ink lab nib. Each size step eases; past 8 the camera zooms, then the mark morphs to fit."
+                        : "How this preset draws. Updates as you change the knobs."}
                 </p>
                 <div className="lc-preset-preview-stage">
                   {livePreview ? (
@@ -407,7 +471,7 @@ export function InkPresetEditor({
               </div>
             </section>
 
-            <div className={draw ? "lc-preset-sheet-cols" : "lc-preset-sheet-cols is-single"}>
+            <div className={physics ? "lc-preset-sheet-cols" : "lc-preset-sheet-cols is-single"}>
               <div className="lc-preset-sheet-side">
                 {kind === "eraser" && isEraserWedge(named) ? (
                   <SettingsBlock
@@ -471,7 +535,7 @@ export function InkPresetEditor({
                   </SettingsBlock>
                 )}
               </div>
-              {draw && (
+              {physics && (
                 <div className="lc-preset-sheet-physics">
                   <PhysicsKnobs kind={kind} snap={named} onChange={setDraft} />
                 </div>
@@ -490,7 +554,62 @@ function TestStrip({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot
   if (kind === "pen" && !isEraserWedge(snap)) {
     return <InkLabPreviewStrip snap={snap} />;
   }
+  if (kind === "highlighter" && !isEraserWedge(snap)) {
+    return <HighlightPreviewStrip snap={snap} />;
+  }
   return <StampTestStrip kind={kind} snap={snap} />;
+}
+
+function usePreviewCamera(uiWidth: number): PreviewCameraPose {
+  const [pose, setPose] = useState(() => previewRestPose(uiWidth));
+  const poseRef = useRef(pose);
+  const toUiRef = useRef(uiWidth);
+  const rafRef = useRef(0);
+
+  useEffect(() => {
+    const fromUi = toUiRef.current;
+    const dest = previewRestPose(uiWidth);
+    if (fromUi === uiWidth && rafRef.current === 0) {
+      poseRef.current = dest;
+      setPose(dest);
+      return;
+    }
+    const crossed = previewSizeBandIndex(fromUi) !== previewSizeBandIndex(uiWidth);
+    const origin = { ...poseRef.current };
+    toUiRef.current = uiWidth;
+    const duration = previewTransitionMs(fromUi, uiWidth);
+    if (duration <= 0) {
+      poseRef.current = dest;
+      setPose(dest);
+      return;
+    }
+    const t0 = performance.now();
+    const tick = (now: number) => {
+      const elapsed = now - t0;
+      const next = crossed
+        ? samplePreviewCamera(fromUi, uiWidth, elapsed)
+        : lerpPreviewPose(origin, dest, Math.min(1, elapsed / duration));
+      poseRef.current = next;
+      setPose({ ...next });
+      if (elapsed < duration) {
+        rafRef.current = requestAnimationFrame(tick);
+      } else {
+        poseRef.current = dest;
+        setPose(dest);
+        rafRef.current = 0;
+      }
+    };
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+      }
+    };
+  }, [uiWidth]);
+
+  return pose;
 }
 
 function InkLabPreviewStrip({ snap }: { snap: InkDrawSnapshot }) {
@@ -499,12 +618,15 @@ function InkLabPreviewStrip({ snap }: { snap: InkDrawSnapshot }) {
   const snapRef = useRef(snap);
   snapRef.current = snap;
   const frameRef = useRef(0);
+  const pose = usePreviewCamera(snap.width);
+  const poseRef = useRef(pose);
+  poseRef.current = pose;
 
   const paint = () => {
     const canvas = canvasRef.current;
     const engine = engineRef.current;
     if (!canvas || !engine) return;
-    paintLabPreview(canvas, engine, snapRef.current);
+    paintLabPreview(canvas, engine, snapRef.current, poseRef.current);
   };
 
   useEffect(() => {
@@ -529,7 +651,7 @@ function InkLabPreviewStrip({ snap }: { snap: InkDrawSnapshot }) {
       frameRef.current = 0;
       paint();
     });
-  }, [snap]);
+  }, [snap, pose]);
 
   useEffect(
     () => () => {
@@ -542,6 +664,57 @@ function InkLabPreviewStrip({ snap }: { snap: InkDrawSnapshot }) {
   return (
     <canvas
       className="lc-preset-strip-canvas lc-ink-lab-canvas"
+      width={468}
+      height={88}
+      ref={canvasRef}
+      aria-hidden
+    />
+  );
+}
+
+function HighlightPreviewStrip({ snap }: { snap: InkDrawSnapshot }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const snapRef = useRef(snap);
+  snapRef.current = snap;
+  const frameRef = useRef(0);
+  const pose = usePreviewCamera(snap.width);
+  const poseRef = useRef(pose);
+  poseRef.current = pose;
+
+  const paint = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    paintHighlightPreview(canvas, snapRef.current, poseRef.current);
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    paint();
+    const ro = new ResizeObserver(() => paint());
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (frameRef.current !== 0) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = 0;
+      paint();
+    });
+  }, [snap, pose]);
+
+  useEffect(
+    () => () => {
+      if (frameRef.current !== 0) cancelAnimationFrame(frameRef.current);
+      frameRef.current = 0;
+    },
+    [],
+  );
+
+  return (
+    <canvas
+      className="lc-preset-strip-canvas"
       width={468}
       height={88}
       ref={canvasRef}
@@ -818,7 +991,7 @@ function StampLivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnaps
         return;
       }
       for (const op of strokesRef.current) {
-        applyInkOp(ctx, op, dpr);
+        applyInkOp(ctx, op, 1);
       }
       const livePts = livePtsRef.current;
       if (!livePts || livePts.length === 0) return;
@@ -826,16 +999,17 @@ function StampLivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnaps
       if (isEraserWedge(liveSnap)) return;
       const smoothing = liveSnap.smoothing;
       const smoothingMode = liveSnap.smoothingMode;
+      const highlight = kindRef.current === "highlighter";
       const points =
-        smoothingMode === "live" && smoothing > 0
+        !highlight && smoothingMode === "live" && smoothing > 0
           ? smoothInkPoints(livePts, smoothing, inkLineWidth(liveSnap.width, 0, false))
           : livePts;
       const op = drawOpFromSnap(kindRef.current, liveSnap, points);
       if (op) {
-        if (blotTipGrowRef.current > 0) op.blotTipGrow = blotTipGrowRef.current;
-        if (blotHaltDestRef.current.blotHalts?.length)
+        if (!highlight && blotTipGrowRef.current > 0) op.blotTipGrow = blotTipGrowRef.current;
+        if (!highlight && blotHaltDestRef.current.blotHalts?.length)
           op.blotHalts = blotHaltDestRef.current.blotHalts;
-        applyInkOp(ctx, op, dpr);
+        applyInkOp(ctx, op, 1);
       }
     };
     paintFnRef.current = paint;
@@ -849,7 +1023,9 @@ function StampLivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnaps
       if (raw >= 0) pressureEmaRef.current = pressure;
 
       const current = snapRef.current;
+      const highlight = kindRef.current === "highlighter";
       const paced =
+        !highlight &&
         !isEraserWedge(current) &&
         (current.speed > 0 || current.blot > 0 || current.fade > 0);
       let slowness: number | undefined;
@@ -882,8 +1058,10 @@ function StampLivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnaps
         /* capture is best-effort */
       }
       const current = snapRef.current;
+      const highlight = kindRef.current === "highlighter";
       pressureEmaRef.current = 0;
       speedEmaRef.current =
+        !highlight &&
         !isEraserWedge(current) &&
         (current.speed > 0 || current.blot > 0 || current.fade > 0)
           ? INK_SPEED_NEUTRAL_PX_MS
@@ -901,7 +1079,11 @@ function StampLivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnaps
         livePtsRef.current = null;
       } else {
         livePtsRef.current = [pt];
-        if (!isEraserWedge(current) && (current.speed > 0 || current.blot > 0 || current.fade > 0)) {
+        if (
+          !highlight &&
+          !isEraserWedge(current) &&
+          (current.speed > 0 || current.blot > 0 || current.fade > 0)
+        ) {
           clearDwell();
           dwellTimerRef.current = setInterval(() => {
             if (!drawingRef.current) return;
@@ -974,8 +1156,14 @@ function StampLivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnaps
       const livePts = livePtsRef.current;
       if (!livePts) return;
       const liveSnap = snapRef.current;
+      const highlight = kindRef.current === "highlighter";
       let points = livePts;
-      if (!isEraserWedge(liveSnap) && points.length > 1 && liveSnap.smoothing > 0) {
+      if (
+        !highlight &&
+        !isEraserWedge(liveSnap) &&
+        points.length > 1 &&
+        liveSnap.smoothing > 0
+      ) {
         points = smoothInkPoints(
           points,
           liveSnap.smoothing,
@@ -984,8 +1172,8 @@ function StampLivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnaps
       }
       const op = drawOpFromSnap(kindRef.current, liveSnap, points);
       if (op && points.length > 0) {
-        if (blotTipGrowRef.current > 0) op.blotTipGrow = blotTipGrowRef.current;
-        if (blotHaltDestRef.current.blotHalts?.length)
+        if (!highlight && blotTipGrowRef.current > 0) op.blotTipGrow = blotTipGrowRef.current;
+        if (!highlight && blotHaltDestRef.current.blotHalts?.length)
           op.blotHalts = blotHaltDestRef.current.blotHalts;
         strokesRef.current.push(op);
       }
@@ -1041,11 +1229,18 @@ function DrawKnobs({
   onChange: (next: InkDrawSnapshot) => void;
 }) {
   const lab = kind === "pen";
+  const chisel = kind === "highlighter";
   return (
     <SettingsBlock
       title="Stroke"
       hint={
-        lab ? (
+        chisel ? (
+          <>
+            Highlighter chisel. Size is how wide a mark it lays — translucent,
+            so writing stays readable underneath. Two passes darken. Straight
+            lock draws a chord. Saved on this device only.
+          </>
+        ) : lab ? (
           snap.pressureSensitive ? (
             <>
               Ink lab nib. Size is the capsule radius on the pad. Stylus
@@ -1082,9 +1277,9 @@ function DrawKnobs({
         <StrokeSizeSlider
           value={snap.width}
           onChange={(width) => onChange({ ...snap, width })}
-          label="Nib size"
+          label={chisel ? "Chisel size" : "Nib size"}
         />
-        {!lab && (
+        {!lab && !chisel && (
           <div
             className={
               snap.pressureSensitive ? "lc-ink-fold is-open" : "lc-ink-fold"
@@ -1099,10 +1294,12 @@ function DrawKnobs({
             </div>
           </div>
         )}
-        <PressureSensitiveToggle
-          enabled={snap.pressureSensitive}
-          onChange={(pressureSensitive) => onChange({ ...snap, pressureSensitive })}
-        />
+        {!chisel && (
+          <PressureSensitiveToggle
+            enabled={snap.pressureSensitive}
+            onChange={(pressureSensitive) => onChange({ ...snap, pressureSensitive })}
+          />
+        )}
         <button
           type="button"
           className={
