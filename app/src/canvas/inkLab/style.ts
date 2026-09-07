@@ -7,7 +7,6 @@ import {
   dryWashRgb,
   hasStylusPressure,
   inkBlotPoolT,
-  inkBlotRestPoolT,
   INK_BLOT_SIZE_RANGE,
   inkSlowness,
   INK_SLOWNESS_NEUTRAL,
@@ -24,7 +23,7 @@ export const INK_RGB: [number, number, number] = [26, 26, 26];
 export const TIP_GROW = 1.7;
 export const LAB_NIB_CSS = 7;
 /** Pad wash at a sprint: mix toward paper. Stopped writing stays full. */
-const LAB_WASH_FAST = 0.42;
+const LAB_WASH_FAST = 0.65;
 
 /** Toolbar pen. Radius is the Ink lab nib, not a zoom-scaled stamp. */
 export type InkLabPen = {
@@ -57,7 +56,8 @@ export type InkLabPen = {
 
 export function labWashGain(slow: number): number {
   const s = Math.max(0, Math.min(1, slow));
-  return LAB_WASH_FAST + (1 - LAB_WASH_FAST) * s;
+  const dry = (1 - s) * (1 - s);
+  return 1 - (1 - LAB_WASH_FAST) * dry;
 }
 
 export function washRgb(vx: number, vy: number, dpr: number): [number, number, number] {
@@ -126,10 +126,7 @@ export function labPenDot(
   const gain = 1 + (labWashGain(slow) - 1) * fade;
   let washed = dryWashRgb(pen.color, gain);
   if (blot > 1e-3) {
-    const poolT = Math.max(
-      inkBlotRestPoolT(slow, blot),
-      inkBlotPoolT(_growT, blot),
-    );
+    const poolT = inkBlotPoolT(_growT, blot);
     if (poolT > 1e-3) {
       washed = blotPoolRgb(
         `rgb(${washed.r}, ${washed.g}, ${washed.b})`,
@@ -217,7 +214,7 @@ export function labPreviewSpine(
   return out;
 }
 
-/** Fuse blot pools at slow peaks so the Preview strip matches lift remesh. */
+/** Fuse blot pools at the ends — contact and lift, not every slow wiggle. */
 function labPreviewPool(pen: InkLabPen, spine: SpineDot[]): void {
   const blot = Math.max(0, Math.min(1, pen.speedBlotBlend));
   if (blot < 1e-3 || spine.length < 2) return;
@@ -227,20 +224,13 @@ function labPreviewPool(pen: InkLabPen, spine: SpineDot[]): void {
       ? ([p.rgb[0], p.rgb[1], p.rgb[2]] as [number, number, number])
       : undefined,
   }));
-  for (let i = 0; i < spine.length; i++) {
-    const s = rest[i]!.slow ?? 0;
-    if (s <= 0.78) continue;
-    const prev = rest[i - 1]?.slow ?? s;
-    const next = rest[i + 1]?.slow ?? s;
-    const peak =
-      (i === 0 || s >= prev) && (i === spine.length - 1 || s >= next);
-    if (!peak) continue;
-    const growT = blot * Math.min(1, (s - 0.5) / 0.5);
-    if (growT < 1e-3) continue;
-    const base = rest[i]!;
-    const grown = base.r * (1 + (TIP_GROW - 1) * growT);
-    labSwellHoldPool(spine, rest, grown, growT, base.rgb ?? INK_RGB, i);
-  }
+  const poolAt = (index: number) => {
+    const base = rest[index]!;
+    const grown = base.r * (1 + (TIP_GROW - 1) * blot);
+    labSwellHoldPool(spine, rest, grown, blot, base.rgb ?? INK_RGB, index);
+  };
+  poolAt(0);
+  poolAt(spine.length - 1);
 }
 
 /** Toolbar / preset snapshot → live Ink lab pen. Never scales by board zoom. */

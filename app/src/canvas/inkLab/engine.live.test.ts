@@ -452,7 +452,10 @@ describe("Ink lab live path", () => {
       wet.setPen({ ...pen, speedBlotBlend: 1 });
       wet.down({ x: 40, y: 90, p: 0.5, t: 0 });
       wet.move([{ x: 52, y: 90, p: 0.5, t: 16 }]);
-      for (let i = 0; i < 40; i++) wet.paint();
+      for (let i = 1; i <= 40; i++) {
+        wet.move([{ x: 52.1, y: 90.1, p: 0.5, t: 16 + i * 32 }]);
+        wet.paint();
+      }
       const wetBaked = wet.up({ x: 52, y: 90, p: 0.5, t: 1400 });
       expect(wetBaked.points[wetBaked.points.length - 1]!.r).toBeGreaterThan(
         dryBaked.points[dryBaked.points.length - 1]!.r,

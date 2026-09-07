@@ -121,8 +121,6 @@ export type InkLabEngineOpts = {
 
 export const DISTANCE_GATE_CSS = 2.5;
 const HOLD_TICK_MS = 32;
-/** Pause after the last sample before a still press counts as a hold. */
-const HOLD_IDLE_MS = 60;
 
 function inkOf(d: SpineDot): [number, number, number] {
   return d.rgb ?? INK_RGB;
@@ -221,7 +219,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   /** Spine radii/colours at hold start, so live pooling does not stack. */
   let holdRest: SpineDot[] | null = null;
   let lastHoldWall = 0;
-  let lastSampleWall = 0;
   let blotTipGrow = 0;
   let blotHalts: InkLabHalt[] = [];
 
@@ -251,7 +248,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     holdBase = null;
     holdRest = null;
     lastHoldWall = 0;
-    lastSampleWall = 0;
     blotTipGrow = 0;
     blotHalts = [];
     sdf?.clear();
@@ -407,7 +403,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
 
   const ingest = (s: InkLabSample) => {
     const t0 = performance.now();
-    lastSampleWall = t0;
     const dpr = pen?.dpr ?? (host ? dprOf(host) : 1);
     const gate = DISTANCE_GATE_CSS * dpr;
     if (spine.length === 0) {
@@ -773,12 +768,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     paint() {
       const t0 = performance.now();
       if (host && sdf?.isLost()) this.attach(host);
-      if (drawing && pen && pen.speedBlotBlend > 1e-3 && spine.length > 0) {
-        if (!holding && t0 - lastSampleWall >= HOLD_IDLE_MS) {
-          armHold(spine[spine.length - 1]!, t0);
-        }
-        if (holding) applyHoldGrow(t0);
-      }
+      if (drawing && holding && pen) applyHoldGrow(t0);
       syncSize();
       const tDraw = performance.now();
       const suffix = composite();
