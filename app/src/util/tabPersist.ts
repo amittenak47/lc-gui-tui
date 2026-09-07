@@ -77,9 +77,8 @@ function persistable(tab: TabRecord): TabRecord | null {
       // reads the graph as it is now rather than as it was when the app closed.
       return { ...tab, dirty: false };
     case "freehand":
-      return { ...tab, dirty: false };
     case "inklab":
-      return { ...tab, dirty: false };
+      return null;
     case "web": {
       const entries = tab.entries
         .filter((entry) => typeof entry.url === "string" && entry.url.length > 0)
@@ -159,12 +158,7 @@ function parseTab(raw: unknown): TabRecord | null {
   if (kind === "explore") {
     return persistable({ id, kind, title: "Explore", dirty, lastActive, group });
   }
-  if (kind === "freehand") {
-    return persistable({ id, kind, title: "Freehand", dirty, lastActive, group });
-  }
-  if (kind === "inklab") {
-    return persistable({ id, kind, title: "Ink lab", dirty, lastActive, group });
-  }
+  if (kind === "freehand" || kind === "inklab") return null;
   if (kind === "web") {
     const entriesRaw = Array.isArray(raw.entries) ? raw.entries : [];
     const entries = entriesRaw.flatMap((entry) => {
