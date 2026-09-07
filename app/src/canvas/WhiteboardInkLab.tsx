@@ -183,6 +183,7 @@ function opFromBake(
   uiWidth: number,
   pressureClip: number,
   pressureSensitive: boolean,
+  speedFade: number,
 ): InkDrawOp {
   const op: InkDrawOp = {
     kind: "draw",
@@ -194,6 +195,7 @@ function opFromBake(
     points: spineToScene(baked.points, view, dpr),
   };
   if (baked.blotTipGrow > 0) op.blotTipGrow = baked.blotTipGrow;
+  if (speedFade > 1e-6) op.speedFade = speedFade;
   if (baked.blotHalts.length > 0) {
     op.blotHalts = baked.blotHalts.map((h): InkBlotHalt => {
       const scene = scenePointFromCanvasPixel(h.x / dpr, h.y / dpr, view);
@@ -934,6 +936,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               strokeWidthRef.current,
               pressureClipRef.current,
               pressureSensitiveRef.current,
+              speedFadeRef.current,
             ),
           );
           overlayRef.current.push(baked.points.map((d) => ({ ...d })));

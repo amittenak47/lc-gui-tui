@@ -8,6 +8,7 @@ import { inkSlowness } from "../rasterInk";
 import { INK_SMOOTHING_DEFAULT } from "../inkSmoothing";
 
 import { bakeSpine, reshapeSpine } from "./bake";
+import { clipBlitRect } from "./clipBlit";
 import { createEkf, type EkfFilter } from "./ekf";
 import { createFallbackPainter, fillMiterStroke } from "./fallback";
 import {
@@ -18,11 +19,13 @@ import {
   type SpineDot,
   type StrokeAabb,
 } from "./instance";
+import { stampLiveSamples } from "./sampleTime";
 import { tryCreateSdfRenderer, type SdfRenderer } from "./sdf";
 import {
   capillaryRelax,
   growTipRadius,
   INK_RGB,
+  labFadeVel,
   labHoldGrow,
   labNibRadius,
   labPenDot,
@@ -122,6 +125,10 @@ export type InkLabEngineOpts = {
 export const DISTANCE_GATE_CSS = 2.5;
 const HOLD_TICK_MS = 32;
 const HOLD_PLATEAU_EPS = 1e-3;
+
+function wallNow(): number {
+  return typeof performance !== "undefined" ? performance.now() : 0;
+}
 
 function holdCapRadius(base: number, blot: number): number {
   const t = Math.max(0, Math.min(1, blot));
@@ -227,6 +234,10 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   let holdPlateau = false;
   let blotTipGrow = 0;
   let blotHalts: InkLabHalt[] = [];
+  let lastStamp = 0;
+  let lastWall = 0;
+  /** Host region last written with live ink. Next clip must cover this too. */
+  let blitBox: StrokeAabb | null = null;
 
   const ensureInst = (n: number) => {
     if (n <= instCap) return;
@@ -256,6 +267,9 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     holdPlateau = false;
     blotTipGrow = 0;
     blotHalts = [];
+    lastStamp = 0;
+    lastWall = 0;
+    blitBox = null;
     sdf?.clear();
     fallback?.clearLive();
   };
@@ -420,10 +434,13 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       lastEkfMs = performance.now() - t0;
       return;
     }
-    const f = ekf.step(s.x, s.y, s.t);
-    const dot = styledDot(f.x, f.y, f.vx, f.vy, dpr, s.p, 0);
-    lastEkfMs = performance.now() - t0;
+    const prev = ekf.current();
     const last = spine[spine.length - 1]!;
+    const f = ekf.step(s.x, s.y, s.t);
+    const dtMs = prev ? Math.max(0, f.t - prev.t) : 0;
+    const fadeV = labFadeVel(s.x - last.x, s.y - last.y, dtMs);
+    const dot = styledDot(f.x, f.y, fadeV.vx, fadeV.vy, dpr, s.p, 0);
+    lastEkfMs = performance.now() - t0;
     const dist = Math.hypot(dot.x - last.x, dot.y - last.y);
     if (dist < gate) {
       const now = typeof performance !== "undefined" ? performance.now() : s.t;
@@ -476,10 +493,21 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     dst.maxY = Math.max(dst.maxY, src.maxY);
   };
 
+  const ingestBatch = (batch: readonly InkLabSample[]) => {
+    if (batch.length === 0) return;
+    const wall = wallNow();
+    const stamped = stampLiveSamples(batch, lastStamp, wall, lastWall);
+    lastWall = wall;
+    for (const s of stamped) {
+      ingest(s);
+      lastStamp = s.t;
+    }
+  };
+
   const clipLiveToChord = (anchorIndex: number, current: InkLabSample) => {
     if (!drawing) return;
     if (spine.length === 0) {
-      ingest(current);
+      ingestBatch([current]);
       return;
     }
     const cut = Math.max(0, Math.min(anchorIndex, spine.length - 1));
@@ -506,10 +534,15 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     fallback?.beginStroke();
     blotTipGrow = savedGrow;
     blotHalts = savedHalts;
+    const wall = wallNow();
+    const stamped = stampLiveSamples([current], lastStamp, wall, lastWall);
+    lastWall = wall;
+    const next = stamped[0]!;
+    lastStamp = next.t;
     const lastKept = kept[kept.length - 1]!;
-    ekf.reset(lastKept.x, lastKept.y, current.t);
+    ekf.reset(lastKept.x, lastKept.y, next.t);
     for (const d of kept) appendSpine(d);
-    ingest(current);
+    ingest(next);
     unionAabb(aabb, prevBox);
   };
 
@@ -642,35 +675,87 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     return suffix;
   };
 
+  const presentHost = (
+    ctx: CanvasRenderingContext2D,
+    clip: { x: number; y: number; w: number; h: number } | null,
+    src: CanvasImageSource | null,
+  ) => {
+    if (!host) return;
+    if (!clip) {
+      ctx.clearRect(0, 0, host.width, host.height);
+      if (src) ctx.drawImage(src, 0, 0);
+      return;
+    }
+    if (src) {
+      ctx.drawImage(src, clip.x, clip.y, clip.w, clip.h, clip.x, clip.y, clip.w, clip.h);
+    } else {
+      ctx.clearRect(clip.x, clip.y, clip.w, clip.h);
+    }
+  };
+
+  const liveClipRect = (extra: StrokeAabb) => {
+    if (!host) return null;
+    const box = { ...extra };
+    if (blitBox) unionAabb(box, blitBox);
+    return clipBlitRect(box, host.width, host.height);
+  };
+
   const composite = (): boolean => {
     lastSuffix = true;
     if (!host) return lastSuffix;
     const ctx = host.getContext("2d");
     if (!ctx) return lastSuffix;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, host.width, host.height);
-    if (snap) ctx.drawImage(snap, 0, 0);
-    if (!drawing) return lastSuffix;
+    if (!drawing) {
+      blitBox = null;
+      presentHost(ctx, null, snap);
+      return lastSuffix;
+    }
     // While Writing only. Off / On Lift stay on the suffix path.
     const liveSmooth =
       pen?.smoothingMode === "live" && (pen.smoothing ?? 0) > 0 && spine.length >= 3;
     if (liveSmooth) {
+      presentHost(ctx, null, snap);
       drawDots(reshapeSpine(spine, pen!.smoothing ?? 0));
       remesh(spine);
       sdfLive = 0;
       sdfFull = true;
       lastSuffix = false;
+      blitBox = { minX: 0, minY: 0, maxX: host.width, maxY: host.height };
       return lastSuffix;
     }
     if (sdf) {
       lastSuffix = flushSdfLive();
-      ctx.drawImage(sdf.canvas, 0, 0);
+      const extra = lastSuffix ? lastLiveDirtyAabb() : { ...aabb };
+      const clip = liveClipRect(extra);
+      presentHost(ctx, clip, snap);
+      if (clip) {
+        ctx.drawImage(
+          sdf.canvas,
+          clip.x,
+          clip.y,
+          clip.w,
+          clip.h,
+          clip.x,
+          clip.y,
+          clip.w,
+          clip.h,
+        );
+        blitBox = {
+          minX: clip.x,
+          minY: clip.y,
+          maxX: clip.x + clip.w,
+          maxY: clip.y + clip.h,
+        };
+      }
       drawTip(ctx);
     } else if (fallback) {
+      presentHost(ctx, null, snap);
       fallback.blit(ctx);
       drawTip(ctx);
       lastSuffix = true;
     } else {
+      presentHost(ctx, null, snap);
       fillMiterStroke(ctx, spine, tip, INK_RGB);
       lastSuffix = false;
     }
@@ -716,18 +801,18 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     down(s) {
       resetLive();
       drawing = true;
-      ingest(s);
+      ingestBatch([s]);
     },
     move(batch) {
       if (!drawing) return;
-      for (const s of batch) ingest(s);
+      ingestBatch(batch);
     },
     clipLiveToChord,
     pointCount() {
       return spine.length;
     },
     up(s) {
-      if (drawing && s) ingest(s);
+      if (drawing && s) ingestBatch([s]);
       if ((holding || holdPlateau) && tip && spine.length > 0) {
         const last = spine[spine.length - 1]!;
         last.r = tip.r;

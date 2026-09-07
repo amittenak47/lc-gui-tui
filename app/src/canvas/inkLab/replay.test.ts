@@ -39,4 +39,31 @@ describe("ink lab replay", () => {
     expect(stamp).toHaveLength(2);
     expect(isInkLabPenOp(highlight)).toBe(false);
   });
+
+  it("washes replay capsules from stored slowness and speedFade", () => {
+    const spine = labSpineFromDrawOp(
+      penOp({
+        color: "#c41e3a",
+        speedFade: 1,
+        points: [
+          { x: 0, y: 0, pressure: 0.5, radius: 4, slowness: 1 },
+          { x: 10, y: 0, pressure: 0.5, radius: 4, slowness: 0 },
+        ],
+      }),
+    );
+    expect(spine[1]!.rgb![0]).toBeGreaterThan(spine[0]!.rgb![0] + 8);
+  });
+
+  it("keeps solid color when the stroke stored no fade", () => {
+    const spine = labSpineFromDrawOp(
+      penOp({
+        color: "#c41e3a",
+        points: [
+          { x: 0, y: 0, pressure: 0.5, radius: 4, slowness: 0 },
+          { x: 10, y: 0, pressure: 0.5, radius: 4, slowness: 0 },
+        ],
+      }),
+    );
+    expect(spine[0]!.rgb![0]).toBe(spine[1]!.rgb![0]);
+  });
 });

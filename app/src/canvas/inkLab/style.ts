@@ -25,6 +25,12 @@ export const TIP_GROW = 1.7;
 export const LAB_NIB_CSS = 7;
 /** Pad wash at a sprint: mix toward paper. Stopped writing stays full. */
 const LAB_WASH_FAST = 0.65;
+/**
+ * Coalesced desktop hops arrive about this far apart. One Android sample per
+ * rAF uses the full frame as dt, so the same flick reads as a dead stop and
+ * fade never fires. Cap the window used to turn a hop into wash velocity.
+ */
+export const LAB_FADE_DT_CAP_MS = 8;
 
 /** Toolbar pen. Radius is the Ink lab nib, not a zoom-scaled stamp. */
 export type InkLabPen = {
@@ -59,6 +65,25 @@ export function labWashGain(slow: number): number {
   const s = Math.max(0, Math.min(1, slow));
   const dry = (1 - s) * (1 - s);
   return 1 - (1 - LAB_WASH_FAST) * dry;
+}
+
+export function labDotWashRgb(
+  color: string,
+  slow: number,
+  fade: number,
+): { r: number; g: number; b: number } {
+  const f = Math.max(0, Math.min(1, fade));
+  const gain = 1 + (labWashGain(slow) - 1) * f;
+  return dryWashRgb(color, gain);
+}
+
+/** Boost hop velocity when the sample window is a whole rAF, not a coalesced dt. */
+export function labFadeVel(dx: number, dy: number, dtMs: number): { vx: number; vy: number } {
+  const windowMs =
+    Number.isFinite(dtMs) && dtMs > 1e-3
+      ? Math.min(dtMs, LAB_FADE_DT_CAP_MS)
+      : LAB_FADE_DT_CAP_MS;
+  return { vx: (dx * 1000) / windowMs, vy: (dy * 1000) / windowMs };
 }
 
 export function washRgb(vx: number, vy: number, dpr: number): [number, number, number] {
@@ -133,8 +158,7 @@ export function labPenDot(
   const blot = Math.max(0, Math.min(1, pen.speedBlotBlend));
   const widthSlow = INK_SLOWNESS_NEUTRAL + (slow - INK_SLOWNESS_NEUTRAL) * speed;
   const r = labNibRadius(vx, vy, dpr, pAmt, size, widthSlow);
-  const gain = 1 + (labWashGain(slow) - 1) * fade;
-  let washed = dryWashRgb(pen.color, gain);
+  let washed = labDotWashRgb(pen.color, slow, fade);
   if (blot > 1e-3) {
     const poolT = inkBlotPoolT(_growT, blot);
     if (poolT > 1e-3) {

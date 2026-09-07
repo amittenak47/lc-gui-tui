@@ -4,7 +4,7 @@
  */
 
 import { fillMiterStroke } from "./fallback";
-import { labNibRadius } from "./style";
+import { labDotWashRgb, labNibRadius } from "./style";
 import type { SpineDot } from "./instance";
 import {
   dryWashRgb,
@@ -43,17 +43,22 @@ function fallbackSceneRadius(op: InkDrawOp, pressure: number): number {
 }
 
 export function labSpineFromDrawOp(op: InkDrawOp): SpineDot[] {
-  const washed = dryWashRgb(op.color, 1);
-  const rgb: [number, number, number] = [washed.r, washed.g, washed.b];
-  return op.points.map((p) => ({
-    x: p.x,
-    y: p.y,
-    r: p.radius != null && p.radius > 0 ? p.radius : fallbackSceneRadius(op, p.pressure),
-    rgb,
-    a: 1,
-    p: p.pressure,
-    slow: p.slowness,
-  }));
+  const fade = op.speedFade ?? 0;
+  return op.points.map((p) => {
+    const washed =
+      p.slowness != null && fade > 1e-6
+        ? labDotWashRgb(op.color, p.slowness, fade)
+        : dryWashRgb(op.color, 1);
+    return {
+      x: p.x,
+      y: p.y,
+      r: p.radius != null && p.radius > 0 ? p.radius : fallbackSceneRadius(op, p.pressure),
+      rgb: [washed.r, washed.g, washed.b] as [number, number, number],
+      a: 1,
+      p: p.pressure,
+      slow: p.slowness,
+    };
+  });
 }
 
 /** Inverse of Board's overlay → scene bake. Ink lab replay is overlay pixels. */

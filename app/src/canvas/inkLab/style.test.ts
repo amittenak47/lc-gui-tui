@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { dryWashRgb } from "../rasterInk";
-import { applyPreviewCamera, capillaryRelax, growTipRadius, INK_HEX, labCssSpeedFromSlowness, labHoldGrow, labNibSizeFromUiWidth, labPenDot, labPenFromToolbar, labPreviewSpine, labPressureAmt, labSwellHoldPool, PREVIEW_BAND_MORPH_MS, PREVIEW_BAND_ZOOM_MS, PREVIEW_STEP_MS, previewSizeBandIndex, previewTransitionMs, previewZoomEase, samplePreviewCamera, washRgb, wrapPreviewUiWidth } from "./style";
+import { applyPreviewCamera, capillaryRelax, growTipRadius, INK_HEX, labCssSpeedFromSlowness, labFadeVel, labHoldGrow, labNibSizeFromUiWidth, labPenDot, labPenFromToolbar, labPreviewSpine, labPressureAmt, labSwellHoldPool, PREVIEW_BAND_MORPH_MS, PREVIEW_BAND_ZOOM_MS, PREVIEW_STEP_MS, previewSizeBandIndex, previewTransitionMs, previewZoomEase, samplePreviewCamera, washRgb, wrapPreviewUiWidth } from "./style";
 
 describe("ink lab style", () => {
   it("wash uses dryWashRgb", () => {
@@ -218,6 +218,14 @@ describe("ink lab style", () => {
     expect(blotSlow.rgb[0]).toBeCloseTo(evenStill.rgb[0], 0);
     const blotHold = labPenDot({ ...base, speedInk: 0, speedFade: 0, speedBlotBlend: 1 }, 0, 0, 1, 0.5, 0, 1);
     expect(blotHold.rgb[0]).toBeLessThan(evenStill.rgb[0]);
+  });
+
+  it("boosts hop velocity when the sample window is a whole rAF", () => {
+    expect(labFadeVel(12, 4, 4).vx).toBeCloseTo(3000);
+    expect(labFadeVel(12, 4, 4).vy).toBeCloseTo(1000);
+    const capped = labFadeVel(12, 4, 24);
+    expect(capped.vx).toBeCloseTo(1500);
+    expect(capped.vy).toBeCloseTo(500);
   });
 
   it("preview spine uses paced capsules instead of one miter radius", () => {

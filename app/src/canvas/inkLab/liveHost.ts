@@ -2,9 +2,8 @@
  * Board host live-stroke contract (plan B).
  *
  * Replay is for lift / camera. The nib rAF keeps one snap and a frozen
- * backing store until the pointer comes up. Shrinking to a 1:1 canvas here
- * would mix overdrawn overlay spines with live bitmap space — that clip is
- * plan C.
+ * backing store until the pointer comes up. Plan C clips the live snap+SDF
+ * blit to the dirty AABB; do not shrink the overlay canvas on pointer down.
  */
 
 export function skipCommittedReplay(
