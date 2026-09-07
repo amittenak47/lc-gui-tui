@@ -559,6 +559,30 @@ describe("Ink lab live path", () => {
     ).toBe(true);
     cap.destroy();
   });
+
+  it("does not clobber a live stroke when replaySpines is called", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.down({ x: 40, y: 80, p: 0.5, t: 0 });
+    engine.move([
+      { x: 70, y: 82, p: 0.5, t: 16 },
+      { x: 110, y: 90, p: 0.5, t: 32 },
+    ]);
+    const live = engine.paint();
+    expect(live.pts).toBeGreaterThan(1);
+    engine.replaySpines([
+      [
+        { x: 10, y: 10, r: 4 },
+        { x: 30, y: 12, r: 4 },
+      ],
+    ]);
+    const after = engine.paint();
+    expect(after.pts).toBe(live.pts);
+    expect(after.hold === live.hold || after.pts > 0).toBe(true);
+    engine.up({ x: 120, y: 94, p: 0.5, t: 48 });
+    engine.destroy();
+  });
 });
 
 describe("EKF is the live filter", () => {

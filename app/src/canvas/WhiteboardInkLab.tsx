@@ -17,6 +17,7 @@ import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/
 import { InkPageBook } from "./inkPageCache";
 import { canvasBitmapFromClient } from "./canvasPointer";
 import { overlaySpineFromDrawOp, splitInkOpsForLabReplay } from "./inkLab/replay";
+import { skipCommittedReplay } from "./inkLab/liveHost";
 import {
   createInkLabEngine,
   type InkLabEngine,
@@ -337,6 +338,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     }, []);
 
     const presentCommitted = useCallback((liveStamp: InkOp | null = null) => {
+      if (skipCommittedReplay(drawingRef.current, liveStamp)) return;
       const canvas = canvasRef.current;
       const engine = engineRef.current;
       if (!canvas || !engine) return;
@@ -380,6 +382,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           onChangeRef.current?.();
         },
         undo() {
+          if (drawingRef.current) return false;
           if (!bookRef.current.undoOnce()) return false;
           rebuildOverlayFromBook();
           presentCommitted();
@@ -387,6 +390,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return true;
         },
         redo() {
+          if (drawingRef.current) return false;
           if (!bookRef.current.redoOnce()) return false;
           rebuildOverlayFromBook();
           presentCommitted();
@@ -403,6 +407,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return drawingRef.current;
         },
         repaint() {
+          if (drawingRef.current) return;
           if (!toolRef.current) return;
           rebuildOverlayFromBook();
           presentCommitted();
@@ -437,6 +442,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         commitCamera() {
           const canvas = canvasRef.current;
           if (canvas?.style.transform) canvas.style.transform = "";
+          if (drawingRef.current) return;
           if (!toolRef.current) return;
           rebuildOverlayFromBook();
           presentCommitted();
@@ -455,6 +461,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         },
         setOps(ops) {
           bookRef.current.replaceAll(cloneOps(ops));
+          if (drawingRef.current) return;
           rebuildOverlayFromBook();
           presentCommitted();
         },
@@ -475,6 +482,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         },
         ingestInkPages(pages) {
           bookRef.current.ingestEncodedPages(pages);
+          if (drawingRef.current) return;
           rebuildOverlayFromBook();
           presentCommitted();
         },
@@ -523,6 +531,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       if (!host || !canvas) return;
 
       const sizeToHost = () => {
+        // Frozen while the nib is down: a resize here would remesh the page
+        // and grow the overdraw backing. Apply it on lift.
+        if (drawingRef.current) return;
         const dpr = window.devicePixelRatio || 1;
         const cssW = Math.max(1, host.clientWidth);
         const cssH = Math.max(1, host.clientHeight);
@@ -657,6 +668,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           drawingRef.current = false;
           highlightPtsRef.current = null;
           engine.cancelStroke();
+          sizeToHost();
           presentCommitted();
           if (wantMeter()) {
             loadMeterRef.current.end();
@@ -933,6 +945,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         } catch {
           /* ignore */
         }
+        sizeToHost();
       };
 
       const ro = new ResizeObserver(() => sizeToHost());
@@ -968,6 +981,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
 
     useEffect(() => {
       if (!enabled || !tool) return;
+      if (drawingRef.current) return;
       rebuildOverlayFromBook();
       presentCommitted();
     }, [enabled, tool, presentCommitted, rebuildOverlayFromBook]);
