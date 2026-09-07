@@ -517,7 +517,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           lastRafRef.current = now;
           const stats = engine.paint();
           reportLoad(stats, prev > 0 ? now - prev : 0, drawingRef.current);
-          if (drawingRef.current && stats.hold) schedulePaint();
+          if (drawingRef.current && (stats.hold || blotRef.current > 0)) {
+            schedulePaint();
+          }
         });
       };
 

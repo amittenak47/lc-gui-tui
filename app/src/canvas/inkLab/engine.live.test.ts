@@ -345,6 +345,126 @@ describe("Ink lab live path", () => {
     }
   });
 
+  it("hold grow starts on pointer down without a move", () => {
+    let wall = 0;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
+      wall += 40;
+      return wall;
+    });
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.setPen({
+      color: "#1a1a1a",
+      baseWidth: 2,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      speedFade: 0,
+      boldness: 1,
+      smoothing: 0,
+    });
+    try {
+      engine.down({ x: 80, y: 90, p: 0.5, t: 0 });
+      const first = engine.paint();
+      expect(first.hold).toBe(true);
+      for (let i = 0; i < 40; i++) engine.paint();
+      const baked = engine.up({ x: 80, y: 90, p: 0.5, t: 1400 });
+      expect(baked.blotTipGrow).toBeGreaterThan(0.3);
+      expect(baked.points[0]!.r).toBeGreaterThan(6);
+    } finally {
+      nowSpy.mockRestore();
+      engine.destroy();
+    }
+  });
+
+  it("blot off does not hold-grow a still press", () => {
+    let wall = 0;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
+      wall += 40;
+      return wall;
+    });
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.setPen({
+      color: "#1a1a1a",
+      baseWidth: 2,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      boldness: 1,
+      smoothing: 0,
+    });
+    try {
+      engine.down({ x: 80, y: 90, p: 0.5, t: 0 });
+      expect(engine.paint().hold).toBe(false);
+      for (let i = 0; i < 20; i++) engine.paint();
+      const baked = engine.up({ x: 80, y: 90, p: 0.5, t: 800 });
+      expect(baked.blotTipGrow).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+      engine.destroy();
+    }
+  });
+
+  it("mid-stroke hold fattens the trail behind the nib", () => {
+    let wall = 0;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
+      wall += 40;
+      return wall;
+    });
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const pen = {
+      color: "#1a1a1a",
+      baseWidth: 8,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedFade: 0,
+      boldness: 1,
+      smoothing: 0,
+    };
+    try {
+      const dry = createInkLabEngine({ sdf: false });
+      dry.attach(canvas);
+      dry.setPen({ ...pen, speedBlotBlend: 0 });
+      dry.down({ x: 40, y: 90, p: 0.5, t: 0 });
+      dry.move([{ x: 52, y: 90, p: 0.5, t: 16 }]);
+      const dryBaked = dry.up({ x: 52, y: 90, p: 0.5, t: 32 });
+      const dryPrev = dryBaked.points[0]!.r;
+      dry.destroy();
+
+      const wet = createInkLabEngine({ sdf: false });
+      wet.attach(canvas);
+      wet.setPen({ ...pen, speedBlotBlend: 1 });
+      wet.down({ x: 40, y: 90, p: 0.5, t: 0 });
+      wet.move([{ x: 52, y: 90, p: 0.5, t: 16 }]);
+      for (let i = 0; i < 40; i++) wet.paint();
+      const wetBaked = wet.up({ x: 52, y: 90, p: 0.5, t: 1400 });
+      expect(wetBaked.points[wetBaked.points.length - 1]!.r).toBeGreaterThan(
+        dryBaked.points[dryBaked.points.length - 1]!.r,
+      );
+      expect(wetBaked.points[0]!.r).toBeGreaterThan(dryPrev);
+      expect(wetBaked.blotHalts.length).toBeGreaterThan(0);
+      wet.destroy();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("reads clothoid and capillary from the pen on lift", () => {
     const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
     const base = {
