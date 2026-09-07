@@ -7,7 +7,7 @@
 import { inkSlowness } from "../rasterInk";
 import { INK_SMOOTHING_DEFAULT } from "../inkSmoothing";
 
-import { bakeSpine } from "./bake";
+import { bakeSpine, reshapeSpine } from "./bake";
 import { createEkf, type EkfFilter } from "./ekf";
 import { createFallbackPainter, fillMiterStroke } from "./fallback";
 import {
@@ -459,8 +459,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     unionAabb(aabb, prevBox);
   };
 
-  const applyBaked = (points: SpineDot[]) => {
-    spine = points;
+  const remesh = (points: readonly SpineDot[]) => {
     segs = 0;
     aabb = emptyAabb();
     fallback?.beginStroke();
@@ -481,6 +480,11 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     }
   };
 
+  const applyBaked = (points: SpineDot[]) => {
+    spine = points;
+    remesh(points);
+  };
+
   const blitLiveToSnap = () => {
     if (!snap) return;
     const sctx = snap.getContext("2d");
@@ -498,6 +502,38 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     } else {
       fillMiterStroke(sctx, spine, tip, INK_RGB);
     }
+  };
+
+  const drawDots = (points: readonly SpineDot[]) => {
+    if (!host) return;
+    const ctx = host.getContext("2d");
+    if (!ctx) return;
+    if (points.length === 0) return;
+    let n = 0;
+    const box = emptyAabb();
+    expandAabb(box, points[0]!);
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1]!;
+      const b = points[i]!;
+      ensureInst(n + 1);
+      writeInstance(inst, n, a, b, inkOf(a), inkOf(b));
+      n += 1;
+      expandAabb(box, b);
+    }
+    const end = points[points.length - 1]!;
+    if (sdf) {
+      sdf.upload(inst, n);
+      sdf.draw(box);
+      ctx.drawImage(sdf.canvas, 0, 0);
+    } else {
+      fillMiterStroke(ctx, points, end, INK_RGB);
+    }
+    ctx.globalAlpha = end.a ?? 1;
+    ctx.fillStyle = `rgb(${inkOf(end)[0]}, ${inkOf(end)[1]}, ${inkOf(end)[2]})`;
+    ctx.beginPath();
+    ctx.arc(end.x, end.y, end.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
   };
 
   const lastLiveDirtyAabb = (): StrokeAabb => {
@@ -555,6 +591,16 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     ctx.clearRect(0, 0, host.width, host.height);
     if (snap) ctx.drawImage(snap, 0, 0);
     if (!drawing) return lastSuffix;
+    const liveSmooth =
+      pen?.smoothingMode === "live" && (pen.smoothing ?? 0) > 0 && spine.length >= 3;
+    if (liveSmooth) {
+      drawDots(reshapeSpine(spine, pen!.smoothing ?? 0));
+      remesh(spine);
+      sdfLive = 0;
+      sdfFull = true;
+      lastSuffix = false;
+      return lastSuffix;
+    }
     if (sdf) {
       lastSuffix = flushSdfLive();
       ctx.drawImage(sdf.canvas, 0, 0);

@@ -1844,6 +1844,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               blot: speedBlotBlendRef.current,
               fade: speedFadeRef.current,
               smoothing: smoothingRef.current,
+              smoothingMode: smoothingModeRef.current,
             }),
           );
           engine.down(inkLabOverlaySample(canvas, rect, event));

@@ -261,6 +261,40 @@ describe("Ink lab live path", () => {
     engine.destroy();
   });
 
+  it("live smoothing does not drop the raw spine", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.setPen({
+      color: "#1a1a1a",
+      baseWidth: 2,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      boldness: 1,
+      smoothing: 0.5,
+      smoothingMode: "live",
+    });
+    engine.down({ x: 40, y: 80, p: 0.5, t: 0 });
+    engine.move([
+      { x: 70, y: 110, p: 0.5, t: 16 },
+      { x: 110, y: 70, p: 0.5, t: 32 },
+      { x: 150, y: 100, p: 0.5, t: 48 },
+      { x: 190, y: 80, p: 0.5, t: 64 },
+    ]);
+    const before = engine.pointCount();
+    engine.paint();
+    expect(engine.pointCount()).toBe(before);
+    const baked = engine.up({ x: 210, y: 90, p: 0.5, t: 80 });
+    expect(baked.points.length).toBeGreaterThan(2);
+    engine.destroy();
+  });
+
   it("hold grow off stays nib-sized while a hold grows the pad nib", () => {
     let wall = 0;
     const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
