@@ -32,6 +32,8 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/speedInkRef/);
     expect(src).toMatch(/speedFadeRef/);
     expect(src).toMatch(/smoothingModeRef/);
+    expect(src).toMatch(/InkLoadBar/);
+    expect(src).toMatch(/perfOverlay/);
   });
 });
 
@@ -46,6 +48,16 @@ describe("InkPresetEditor", () => {
     expect(src).toMatch(/Ink blot/);
     expect(src).toMatch(/On Lift/);
     expect(src).toMatch(/While Writing/);
+    expect(src).not.toMatch(/Performance overlay/);
     expect(src).not.toMatch(/kind !== ["']pen["'] && smoothPct/);
+  });
+});
+
+describe("SettingsModal", () => {
+  it("puts the performance overlay under Writing settings", () => {
+    const src = readFileSync(join(here, "../components/SettingsModal.tsx"), "utf8");
+    expect(src).toMatch(/id="writing"/);
+    expect(src).toMatch(/Performance overlay/);
+    expect(src).toMatch(/loadInkPerfOverlay/);
   });
 });

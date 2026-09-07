@@ -115,6 +115,10 @@ import {
   type OfflineMergePolicy,
 } from "../util/offlineMerge";
 import {
+  loadInkPerfOverlay,
+  saveInkPerfOverlay,
+} from "../util/inkPerfOverlayPref";
+import {
   loadPdfFlickHud,
   loadPdfFlickMomentum,
   savePdfFlickHud,
@@ -455,6 +459,8 @@ interface DevicePrefs {
   pdfFlickHud: boolean;
   /** 0–100; 50 is the shipping coast length. */
   pdfFlickMomentum: number;
+  /** Ink lab HUD + load bar on the whiteboard. */
+  inkPerfOverlay: boolean;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -485,6 +491,7 @@ function loadDevicePrefs(): DevicePrefs {
     chromeWakeTint: loadChromeWakeTint(),
     pdfFlickHud: loadPdfFlickHud(),
     pdfFlickMomentum: loadPdfFlickMomentum(),
+    inkPerfOverlay: loadInkPerfOverlay(),
   };
 }
 
@@ -515,7 +522,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.chromeWake === b.chromeWake &&
     a.chromeWakeTint === b.chromeWakeTint &&
     a.pdfFlickHud === b.pdfFlickHud &&
-    a.pdfFlickMomentum === b.pdfFlickMomentum
+    a.pdfFlickMomentum === b.pdfFlickMomentum &&
+    a.inkPerfOverlay === b.inkPerfOverlay
   );
 }
 
@@ -826,6 +834,7 @@ export function SettingsModal({
   );
   const [pdfFlickHud, setPdfFlickHud] = useState(() => loadPdfFlickHud());
   const [pdfFlickMomentum, setPdfFlickMomentum] = useState(() => loadPdfFlickMomentum());
+  const [inkPerfOverlay, setInkPerfOverlay] = useState(() => loadInkPerfOverlay());
   const [testForward, setTestForward] = useState<TestForwardMode>(() =>
     loadTestForwardMode(),
   );
@@ -1058,6 +1067,7 @@ export function SettingsModal({
     setChromeWakeTint(prefs.chromeWakeTint);
     setPdfFlickHud(prefs.pdfFlickHud);
     setPdfFlickMomentum(prefs.pdfFlickMomentum);
+    setInkPerfOverlay(prefs.inkPerfOverlay);
     setBaselinePrefs(prefs);
     // Saved only: the desktop that *is* the hub runs on a loopback it never
     // typed, and showing that here would read as "connected to some other PC".
@@ -1155,6 +1165,7 @@ export function SettingsModal({
     chromeWakeTint,
     pdfFlickHud,
     pdfFlickMomentum,
+    inkPerfOverlay,
   };
   const keysDirty =
     openaiKeyDraft.trim() !== "" ||
@@ -1222,6 +1233,7 @@ export function SettingsModal({
         saveChromeWakeTint(chromeWakeTint);
         savePdfFlickHud(pdfFlickHud);
         savePdfFlickMomentum(pdfFlickMomentum);
+        saveInkPerfOverlay(inkPerfOverlay);
         setBaselinePrefs(draftPrefs);
         void saveThisDevicePrefs(client).catch(() => {});
         window.dispatchEvent(
@@ -1950,6 +1962,45 @@ export function SettingsModal({
                     <strong>{paletteTagLabel(tag)}</strong>
                   </button>
                 ))}
+              </div>
+
+              <div className="lc-settings-subhead">Performance overlay</div>
+              <p className="lc-settings-hint">
+                Same HUD and load bar as Ink lab: frame time, paint count, and a
+                bar scaled to a 60 Hz frame. Off hides both. Saved on this device
+                only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Performance overlay"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!inkPerfOverlay}
+                  className={
+                    inkPerfOverlay
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() => setInkPerfOverlay(false)}
+                >
+                  <strong>Off</strong>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={inkPerfOverlay}
+                  className={
+                    inkPerfOverlay
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setInkPerfOverlay(true)}
+                >
+                  <strong>On</strong>
+                </button>
               </div>
               </SettingsFold>
 

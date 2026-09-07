@@ -22,8 +22,11 @@ import {
   type InkLabSample,
   type InkLabUpResult,
 } from "./inkLab/engine";
+import { INK_LAB_HUD_ZERO } from "./inkLab/hud";
 import type { SpineDot } from "./inkLab/instance";
 import { labPenFromToolbar } from "./inkLab/style";
+import { createInkLoadMeter } from "./inkLoadMeter";
+import { InkLoadBar, type InkLoadBarHandle } from "./InkLoadBar";
 import {
   inkBaseWidthForZoom,
   paintRasterInk,
@@ -83,6 +86,7 @@ export interface WhiteboardInkLabProps {
   onStylusAccessory?: (event: PointerEvent) => boolean;
   wheelHoldEnabled?: boolean;
   onWheelHold?: (clientX: number, clientY: number) => void;
+  perfOverlay?: boolean;
 }
 
 function cloneOps(ops: readonly InkOp[]): InkOp[] {
@@ -178,6 +182,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       onStylusAccessory,
       wheelHoldEnabled = false,
       onWheelHold,
+      perfOverlay = false,
     }: WhiteboardInkLabProps,
     ref,
   ) {
@@ -239,6 +244,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     wheelHoldEnabledRef.current = wheelHoldEnabled;
     const onWheelHoldRef = useRef(onWheelHold);
     onWheelHoldRef.current = onWheelHold;
+    const perfOverlayRef = useRef(perfOverlay);
+    perfOverlayRef.current = perfOverlay;
+    const loadMeterRef = useRef(createInkLoadMeter());
+    const loadBarRef = useRef<InkLoadBarHandle>(null);
+    const lastRafRef = useRef(0);
+    const bakeRef = useRef({ bakeMs: 0, bake: "catmull" });
+    const backendRef = useRef("none");
 
     const presentCommitted = useCallback(() => {
       const canvas = canvasRef.current;
@@ -431,14 +443,72 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       sizeToHost();
       const engine = createInkLabEngine();
       engineRef.current = engine;
-      engine.attach(canvas);
+      backendRef.current = engine.attach(canvas);
       presentCommitted();
+      if (perfOverlayRef.current) {
+        loadBarRef.current?.show(loadMeterRef.current.peek(), {
+          ...INK_LAB_HUD_ZERO,
+          backend: backendRef.current,
+        });
+      }
+
+      const reportLoad = (
+        stats: {
+          backend: string;
+          frameMs: number;
+          pts: number;
+          segs: number;
+          ekfMs: number;
+          drawMs: number;
+          hold: boolean;
+          suffix: boolean;
+          dirtyFrom: number;
+        },
+        rafMs: number,
+        live: boolean,
+      ) => {
+        if (!perfOverlayRef.current) return;
+        const load = live
+          ? loadMeterRef.current.frame({
+              frameMs: stats.frameMs,
+              rafMs,
+              spineN: stats.pts,
+              dirtyFrom: stats.dirtyFrom,
+              suffixHit: stats.suffix,
+              queued: 0,
+              backend: stats.backend,
+              segs: stats.segs,
+              ekfMs: stats.ekfMs,
+              drawMs: stats.drawMs,
+              hold: stats.hold,
+            })
+          : loadMeterRef.current.peek();
+        const bake = bakeRef.current;
+        loadBarRef.current?.show(load, {
+          backend: stats.backend,
+          paints: load.calls,
+          frameMs: stats.frameMs,
+          rafMs,
+          pts: stats.pts,
+          segs: stats.segs,
+          ekfMs: stats.ekfMs,
+          drawMs: stats.drawMs,
+          hold: stats.hold,
+          suffix: stats.suffix,
+          bakeMs: bake.bakeMs,
+          bake: bake.bake,
+        });
+      };
 
       const schedulePaint = () => {
         if (rafRef.current != null) return;
         rafRef.current = requestAnimationFrame(() => {
           rafRef.current = null;
+          const now = performance.now();
+          const prev = lastRafRef.current;
+          lastRafRef.current = now;
           const stats = engine.paint();
+          reportLoad(stats, prev > 0 ? now - prev : 0, drawingRef.current);
           if (drawingRef.current && stats.hold) schedulePaint();
         });
       };
@@ -471,6 +541,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           drawingRef.current = false;
           engine.cancelStroke();
           engine.paint();
+          if (perfOverlayRef.current) {
+            loadMeterRef.current.end();
+            loadBarRef.current?.freeze();
+          }
           try {
             canvas.releasePointerCapture(pending.pointerId);
           } catch {
@@ -557,6 +631,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         );
         engine.captureSnap();
         engine.down(sampleOf(canvas, event));
+        if (perfOverlayRef.current) {
+          lastRafRef.current = 0;
+          loadMeterRef.current.begin();
+        }
         schedulePaint();
       };
 
@@ -631,7 +709,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return;
         }
         const baked = engine.up(sampleOf(canvas, event));
-        engine.paint();
+        bakeRef.current = { bakeMs: baked.bakeMs, bake: baked.bake };
+        const now = performance.now();
+        const prev = lastRafRef.current;
+        lastRafRef.current = now;
+        const stats = engine.paint();
+        reportLoad(stats, prev > 0 ? now - prev : 0, true);
+        loadMeterRef.current.end();
+        loadBarRef.current?.freeze();
         if (baked.points.length > 0) {
           const dpr = canvas.width / Math.max(1, canvas.clientWidth || canvas.width);
           const view = getViewportRef.current() ?? {
@@ -684,6 +769,17 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       };
     }, [enabled, presentCommitted]);
 
+    useEffect(() => {
+      if (!perfOverlay) {
+        loadBarRef.current?.hide();
+        return;
+      }
+      loadBarRef.current?.show(loadMeterRef.current.peek(), {
+        ...INK_LAB_HUD_ZERO,
+        backend: backendRef.current,
+      });
+    }, [perfOverlay]);
+
     if (!enabled) return null;
 
     return (
@@ -695,6 +791,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           tabIndex={0}
           style={{ pointerEvents: tool ? "auto" : "none" }}
         />
+        <InkLoadBar ref={loadBarRef} />
       </div>
     );
   },

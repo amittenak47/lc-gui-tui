@@ -15,6 +15,8 @@ export interface InkLoadBarHandle {
   show(snap: InkLoadSnapshot, hud?: InkLabHud): void;
   /** Keep the last readout on screen; the next {@link show} resets it. */
   freeze(): void;
+  /** Hide the bar and HUD (Performance overlay off). */
+  hide(): void;
 }
 
 export const InkLoadBar = forwardRef<InkLoadBarHandle, Record<never, never>>(
@@ -85,6 +87,20 @@ export const InkLoadBar = forwardRef<InkLoadBarHandle, Record<never, never>>(
           root.classList.remove("is-lift");
           hint.hidden = true;
           root.removeAttribute("aria-valuetext");
+        },
+        hide() {
+          const root = rootRef.current;
+          const hint = hintRef.current;
+          const debug = debugRef.current;
+          if (!root || !hint) return;
+          lastLiftRef.current = false;
+          lastPctRef.current = -1;
+          lastDebugRef.current = "";
+          root.hidden = true;
+          root.classList.remove("is-open", "is-lift");
+          hint.hidden = true;
+          root.removeAttribute("aria-valuetext");
+          if (debug) debug.hidden = true;
         },
       }),
       [],
