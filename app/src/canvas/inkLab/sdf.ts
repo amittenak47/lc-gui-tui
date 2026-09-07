@@ -1,12 +1,16 @@
 /**
  * WebGL2 instanced sdRoundCone (tapered capsule). Draw the stroke AABB, not
  * the full screen. AA with smoothstep + fwidth.
+ *
+ * Depth is later-hop-on-top at a self-cross, SDF union only at adjacent joints.
+ * See {@link ./sdfDepth.ts}.
  */
 
 import {
   INSTANCE_FLOATS,
   type StrokeAabb,
 } from "./instance";
+import { SDF_DEPTH_JOINT, SDF_DEPTH_SLOTS } from "./sdfDepth";
 
 const VERT = `#version 300 es
 layout(location=0) in vec2 a_unit;
@@ -16,6 +20,7 @@ layout(location=3) in vec2 a_p1;
 layout(location=4) in float a_r1;
 layout(location=5) in vec3 a_c0;
 layout(location=6) in vec3 a_c1;
+layout(location=7) in float a_index;
 uniform vec2 u_view;
 out vec2 v_p;
 out vec2 v_p0;
@@ -24,6 +29,7 @@ out float v_r0;
 out float v_r1;
 out vec3 v_c0;
 out vec3 v_c1;
+flat out float v_index;
 void main() {
   float rad = max(a_r0, a_r1) + 2.5;
   vec2 mn = min(a_p0, a_p1) - vec2(rad);
@@ -36,6 +42,7 @@ void main() {
   v_r1 = a_r1;
   v_c0 = a_c0;
   v_c1 = a_c1;
+  v_index = a_index;
   vec2 clip = (pos / u_view) * 2.0 - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
 }
@@ -50,7 +57,11 @@ in float v_r0;
 in float v_r1;
 in vec3 v_c0;
 in vec3 v_c1;
+flat in float v_index;
 out vec4 frag;
+
+const float DEPTH_SLOTS = ${SDF_DEPTH_SLOTS.toFixed(1)};
+const float DEPTH_JOINT = ${SDF_DEPTH_JOINT.toFixed(1)};
 
 float sdRoundCone(vec2 p, vec2 a, vec2 b, float ra, float rb) {
   vec2 ba = b - a;
@@ -71,7 +82,12 @@ void main() {
   float h = clamp(dot(v_p - v_p0, ba) / l2, 0.0, 1.0);
   vec3 rgb = mix(v_c0, v_c1, h) / 255.0;
   frag = vec4(rgb * alpha, alpha);
-  gl_FragDepth = clamp(0.5 + d * 0.02, 0.0, 1.0);
+  float rad = max(max(v_r0, v_r1), 1.0);
+  float sdfz = clamp(0.5 + 0.5 * (d / rad), 0.0, 1.0);
+  float step = 1.0 / DEPTH_SLOTS;
+  float idx = clamp(v_index, 0.0, DEPTH_SLOTS - 1.0);
+  float base = (DEPTH_SLOTS - 1.0 - idx) * step;
+  gl_FragDepth = clamp(base + sdfz * step * DEPTH_JOINT, 0.0, 1.0);
 }
 `;
 
@@ -169,6 +185,7 @@ export function tryCreateSdfRenderer(
     [4, 1, 5],
     [5, 3, 6],
     [6, 3, 9],
+    [7, 1, 12],
   ];
   for (const [loc, size, offsetFloats] of specs) {
     gl.enableVertexAttribArray(loc);

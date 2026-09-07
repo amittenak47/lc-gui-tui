@@ -1,6 +1,6 @@
 /** One round-cone instance. CPU append, GPU instanced draw. */
 
-export const INSTANCE_FLOATS = 12;
+export const INSTANCE_FLOATS = 13;
 
 export type SpineDot = {
   x: number;
@@ -36,6 +36,8 @@ export function writeInstance(
   data[o + 9] = c1[0];
   data[o + 10] = c1[1];
   data[o + 11] = c1[2];
+  /** Hop index for later-on-top depth. Same as the instance slot. */
+  data[o + 12] = index;
 }
 
 export type StrokeAabb = {
