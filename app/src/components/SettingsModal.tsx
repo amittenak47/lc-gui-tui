@@ -118,6 +118,8 @@ import {
 import {
   loadInkPerfOverlay,
   saveInkPerfOverlay,
+  loadInkPerfBar,
+  saveInkPerfBar,
 } from "../util/inkPerfOverlayPref";
 import {
   loadPdfFlickHud,
@@ -460,8 +462,10 @@ interface DevicePrefs {
   pdfFlickHud: boolean;
   /** 0–100; 0 stops on lift, 50 is the shipping coast, 100 is a long glide. */
   pdfFlickMomentum: number;
-  /** Ink lab HUD + load bar on the whiteboard. */
+  /** Ink lab HUD on the whiteboard. */
   inkPerfOverlay: boolean;
+  /** 5px load bar on the whiteboard. */
+  inkPerfBar: boolean;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -493,6 +497,7 @@ function loadDevicePrefs(): DevicePrefs {
     pdfFlickHud: loadPdfFlickHud(),
     pdfFlickMomentum: loadPdfFlickMomentum(),
     inkPerfOverlay: loadInkPerfOverlay(),
+    inkPerfBar: loadInkPerfBar(),
   };
 }
 
@@ -524,7 +529,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.chromeWakeTint === b.chromeWakeTint &&
     a.pdfFlickHud === b.pdfFlickHud &&
     a.pdfFlickMomentum === b.pdfFlickMomentum &&
-    a.inkPerfOverlay === b.inkPerfOverlay
+    a.inkPerfOverlay === b.inkPerfOverlay &&
+    a.inkPerfBar === b.inkPerfBar
   );
 }
 
@@ -836,6 +842,7 @@ export function SettingsModal({
   const [pdfFlickHud, setPdfFlickHud] = useState(() => loadPdfFlickHud());
   const [pdfFlickMomentum, setPdfFlickMomentum] = useState(() => loadPdfFlickMomentum());
   const [inkPerfOverlay, setInkPerfOverlay] = useState(() => loadInkPerfOverlay());
+  const [inkPerfBar, setInkPerfBar] = useState(() => loadInkPerfBar());
   const [testForward, setTestForward] = useState<TestForwardMode>(() =>
     loadTestForwardMode(),
   );
@@ -1069,6 +1076,7 @@ export function SettingsModal({
     setPdfFlickHud(prefs.pdfFlickHud);
     setPdfFlickMomentum(prefs.pdfFlickMomentum);
     setInkPerfOverlay(prefs.inkPerfOverlay);
+    setInkPerfBar(prefs.inkPerfBar);
     setBaselinePrefs(prefs);
     // Saved only: the desktop that *is* the hub runs on a loopback it never
     // typed, and showing that here would read as "connected to some other PC".
@@ -1167,6 +1175,7 @@ export function SettingsModal({
     pdfFlickHud,
     pdfFlickMomentum,
     inkPerfOverlay,
+    inkPerfBar,
   };
   const keysDirty =
     openaiKeyDraft.trim() !== "" ||
@@ -1235,6 +1244,7 @@ export function SettingsModal({
         savePdfFlickHud(pdfFlickHud);
         savePdfFlickMomentum(pdfFlickMomentum);
         saveInkPerfOverlay(inkPerfOverlay);
+        saveInkPerfBar(inkPerfBar);
         setBaselinePrefs(draftPrefs);
         void saveThisDevicePrefs(client).catch(() => {});
         window.dispatchEvent(
@@ -1967,9 +1977,9 @@ export function SettingsModal({
 
               <div className="lc-settings-subhead">Performance overlay</div>
               <p className="lc-settings-hint">
-                Same HUD and load bar as Ink lab: frame time, paint count, and a
-                bar scaled to a 60 Hz frame. Off hides both. Saved on this device
-                only.
+                Frame HUD on the whiteboard: paint count, frame / rAF / draw
+                times with min–max–avg, and a short frame-time spark. The load
+                bar is a separate toggle. Saved on this device only.
               </p>
               <div
                 className="lc-settings-choice lc-settings-choice-compact"
@@ -1999,6 +2009,44 @@ export function SettingsModal({
                       : "lc-settings-choice-option"
                   }
                   onClick={() => setInkPerfOverlay(true)}
+                >
+                  <strong>On</strong>
+                </button>
+              </div>
+              <div className="lc-settings-subhead">Performance bar</div>
+              <p className="lc-settings-hint">
+                5px load bar scaled to a 60 Hz frame, with a lift hint when the
+                stroke is falling behind. Off hides the bar only. Saved on this
+                device only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Performance bar"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!inkPerfBar}
+                  className={
+                    inkPerfBar
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() => setInkPerfBar(false)}
+                >
+                  <strong>Off</strong>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={inkPerfBar}
+                  className={
+                    inkPerfBar
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setInkPerfBar(true)}
                 >
                   <strong>On</strong>
                 </button>

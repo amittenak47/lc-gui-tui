@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   INK_PERF_OVERLAY_EVENT,
+  loadInkPerfBar,
   loadInkPerfOverlay,
+  saveInkPerfBar,
   saveInkPerfOverlay,
 } from "./inkPerfOverlayPref";
 
@@ -39,6 +41,25 @@ describe("inkPerfOverlayPref", () => {
     };
     window.addEventListener(INK_PERF_OVERLAY_EVENT, on);
     saveInkPerfOverlay(true);
+    window.removeEventListener(INK_PERF_OVERLAY_EVENT, on);
+    expect(n).toBe(1);
+  });
+
+  it("keeps the load bar with a legacy overlay-on device", () => {
+    saveInkPerfOverlay(true);
+    expect(loadInkPerfBar()).toBe(true);
+    saveInkPerfBar(false);
+    expect(loadInkPerfBar()).toBe(false);
+    expect(loadInkPerfOverlay()).toBe(true);
+  });
+
+  it("notifies the board when the bar toggle changes", () => {
+    let n = 0;
+    const on = () => {
+      n += 1;
+    };
+    window.addEventListener(INK_PERF_OVERLAY_EVENT, on);
+    saveInkPerfBar(true);
     window.removeEventListener(INK_PERF_OVERLAY_EVENT, on);
     expect(n).toBe(1);
   });
