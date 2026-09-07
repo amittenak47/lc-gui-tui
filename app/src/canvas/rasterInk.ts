@@ -622,6 +622,30 @@ export const INK_TIP_STEP = 1.35;
 export const HIGHLIGHT_WIDTH_SCALE = 8;
 export const HIGHLIGHT_ALPHA = 0.3;
 
+/** Scene-space chisel width for a highlighter op stored at `baseWidth`. */
+export function highlighterChiselWidth(baseWidth: number): number {
+  return inkLineWidth(baseWidth, 0, false) * HIGHLIGHT_WIDTH_SCALE;
+}
+
+/** Highlighter stroke — one width, one wetness, multiply. Not the Ink lab nib. */
+export function highlighterDrawOp(
+  color: string,
+  uiWidth: number,
+  zoom: number,
+  points: readonly ScenePoint[],
+): InkDrawOp {
+  return {
+    kind: "draw",
+    color,
+    baseWidth: inkBaseWidthForZoom(uiWidth, zoom),
+    maxFullness: 1,
+    pressureClip: 1,
+    pressureSensitive: false,
+    highlight: true,
+    points: points.slice(),
+  };
+}
+
 /**
  * Drop the lift-off hook on a highlighter stroke.
  *

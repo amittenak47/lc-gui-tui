@@ -4955,6 +4955,7 @@ body[data-lc-sash-drag="horizontal"] {
   height: 88px;
   border-radius: 8px;
   background: var(--paper, #fdf6e3);
+  overflow: hidden;
 }
 
 .lc-preset-strip-canvas.is-live {
