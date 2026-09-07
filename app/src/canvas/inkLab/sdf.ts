@@ -2,7 +2,7 @@
  * WebGL2 instanced sdRoundCone (tapered capsule). Draw the stroke AABB, not
  * the full screen. AA with smoothstep + fwidth.
  *
- * Depth is later-hop-on-top at a self-cross, SDF union only at adjacent joints.
+ * Depth is hop index only: later on top. SDF is coverage, not a Voronoi pick.
  * See {@link ./sdfDepth.ts}.
  */
 
@@ -10,7 +10,7 @@ import {
   INSTANCE_FLOATS,
   type StrokeAabb,
 } from "./instance";
-import { SDF_DEPTH_JOINT, SDF_DEPTH_SLOTS } from "./sdfDepth";
+import { SDF_DEPTH_SLOTS } from "./sdfDepth";
 
 const VERT = `#version 300 es
 layout(location=0) in vec2 a_unit;
@@ -61,7 +61,6 @@ flat in float v_index;
 out vec4 frag;
 
 const float DEPTH_SLOTS = ${SDF_DEPTH_SLOTS.toFixed(1)};
-const float DEPTH_JOINT = ${SDF_DEPTH_JOINT.toFixed(1)};
 
 float sdRoundCone(vec2 p, vec2 a, vec2 b, float ra, float rb) {
   vec2 ba = b - a;
@@ -82,12 +81,10 @@ void main() {
   float h = clamp(dot(v_p - v_p0, ba) / l2, 0.0, 1.0);
   vec3 rgb = mix(v_c0, v_c1, h) / 255.0;
   frag = vec4(rgb * alpha, alpha);
-  float rad = max(max(v_r0, v_r1), 1.0);
-  float sdfz = clamp(0.5 + 0.5 * (d / rad), 0.0, 1.0);
   float step = 1.0 / DEPTH_SLOTS;
   float idx = clamp(v_index, 0.0, DEPTH_SLOTS - 1.0);
   float base = (DEPTH_SLOTS - 1.0 - idx) * step;
-  gl_FragDepth = clamp(base + sdfz * step * DEPTH_JOINT, 0.0, 1.0);
+  gl_FragDepth = clamp(base, 0.0, 1.0);
 }
 `;
 
