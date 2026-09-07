@@ -176,8 +176,15 @@ describe("ink lab style", () => {
     const solidFly = labPenDot({ ...base, speedInk: 0, speedFade: 0 }, 8000, 0, 1, 0.5, 0, 0);
     const fadedFly = labPenDot({ ...base, speedInk: 0, speedFade: 1 }, 8000, 0, 1, 0.5, 0, 0);
     expect(fadedFly.rgb[0]).toBeGreaterThan(solidFly.rgb[0]);
+    const ordinary = labPenDot({ ...base, speedInk: 0, speedFade: 1 }, 1200, 0, 1, 0.5, 0, 0);
+    const stillWet = labPenDot({ ...base, speedInk: 0, speedFade: 1 }, 0, 0, 1, 0.5, 0, 0);
+    expect(Math.abs(ordinary.rgb[0] - stillWet.rgb[0])).toBeLessThan(
+      Math.abs(fadedFly.rgb[0] - stillWet.rgb[0]) * 0.55,
+    );
     const blotSlow = labPenDot({ ...base, speedInk: 0, speedFade: 0, speedBlotBlend: 1 }, 0, 0, 1, 0.5, 0, 0);
-    expect(blotSlow.rgb[0]).toBeLessThan(evenStill.rgb[0]);
+    expect(blotSlow.rgb[0]).toBeCloseTo(evenStill.rgb[0], 0);
+    const blotHold = labPenDot({ ...base, speedInk: 0, speedFade: 0, speedBlotBlend: 1 }, 0, 0, 1, 0.5, 0, 1);
+    expect(blotHold.rgb[0]).toBeLessThan(evenStill.rgb[0]);
   });
 
   it("preview spine uses paced capsules instead of one miter radius", () => {
@@ -191,7 +198,17 @@ describe("ink lab style", () => {
       fade: 1,
       blot: 1,
     });
-    const even = labPreviewSpine(pen, [
+    const evenPen = labPenFromToolbar({
+      color: "#2244aa",
+      uiWidth: 2,
+      dpr: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speed: 1,
+      fade: 1,
+      blot: 0,
+    });
+    const even = labPreviewSpine(evenPen, [
       { x: 0, y: 0, pressure: 0.5, slowness: 0.5 },
       { x: 40, y: 0, pressure: 0.5, slowness: 0.5 },
       { x: 80, y: 0, pressure: 0.5, slowness: 0.5 },
@@ -208,7 +225,7 @@ describe("ink lab style", () => {
     expect(labCssSpeedFromSlowness(0.5)).toBeCloseTo(1.2, 5);
   });
 
-  it("preview blot swells slow peaks like a remeshed pool", () => {
+  it("preview blot swells contact and lift, not slow writing", () => {
     const pen = labPenFromToolbar({
       color: "#2244aa",
       uiWidth: 8,
@@ -221,11 +238,12 @@ describe("ink lab style", () => {
     });
     const spine = labPreviewSpine(pen, [
       { x: 0, y: 0, pressure: 0.5, slowness: 0.5 },
-      { x: 24, y: 0, pressure: 0.5, slowness: 0.9 },
-      { x: 48, y: 0, pressure: 0.5, slowness: 0.5 },
+      { x: 120, y: 0, pressure: 0.5, slowness: 0.9 },
+      { x: 240, y: 0, pressure: 0.5, slowness: 0.5 },
     ], 1);
-    const peak = Math.max(...spine.map((p) => p.r));
-    expect(peak).toBeGreaterThan(spine[0]!.r * 1.05);
+    const mid = spine[Math.floor(spine.length / 2)]!;
+    expect(spine[0]!.r).toBeGreaterThan(mid.r);
+    expect(spine[spine.length - 1]!.r).toBeGreaterThan(mid.r);
   });
 
   it("capillary relaxes interior samples and is opt-in", () => {

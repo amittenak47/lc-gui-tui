@@ -493,16 +493,16 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           : loadMeterRef.current.peek();
         const bake = bakeRef.current;
         loadBarRef.current?.show(load, {
-          backend: stats.backend,
+          backend: load.backend,
           paints: load.calls,
-          frameMs: stats.frameMs,
-          rafMs,
-          pts: stats.pts,
-          segs: stats.segs,
-          ekfMs: stats.ekfMs,
-          drawMs: stats.drawMs,
-          hold: stats.hold,
-          suffix: stats.suffix,
+          frameMs: load.frameMs,
+          rafMs: load.rafMs,
+          pts: load.spineN,
+          segs: load.segs,
+          ekfMs: load.ekfMs,
+          drawMs: load.drawMs,
+          hold: load.hold,
+          suffix: load.suffixHit,
           bakeMs: bake.bakeMs,
           bake: bake.bake,
         });
@@ -517,9 +517,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           lastRafRef.current = now;
           const stats = engine.paint();
           reportLoad(stats, prev > 0 ? now - prev : 0, drawingRef.current);
-          if (drawingRef.current && (stats.hold || blotRef.current > 0)) {
-            schedulePaint();
-          }
+          if (drawingRef.current && stats.hold) schedulePaint();
         });
       };
 
@@ -722,12 +720,23 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         }
         const baked = engine.up(sampleOf(canvas, event));
         bakeRef.current = { bakeMs: baked.bakeMs, bake: baked.bake };
-        const now = performance.now();
-        const prev = lastRafRef.current;
-        lastRafRef.current = now;
-        const stats = engine.paint();
-        reportLoad(stats, prev > 0 ? now - prev : 0, true);
+        engine.paint();
         loadMeterRef.current.end();
+        reportLoad(
+          {
+            backend: backendRef.current,
+            frameMs: 0,
+            pts: 0,
+            segs: 0,
+            ekfMs: 0,
+            drawMs: 0,
+            hold: false,
+            suffix: true,
+            dirtyFrom: 0,
+          },
+          0,
+          false,
+        );
         loadBarRef.current?.freeze();
         if (baked.points.length > 0) {
           const dpr = canvas.width / Math.max(1, canvas.clientWidth || canvas.width);
