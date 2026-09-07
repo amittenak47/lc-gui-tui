@@ -66,6 +66,29 @@ describe("ink lab style", () => {
     expect(fat.r).toBeGreaterThan(thin.r * 2);
     expect(fat.rgb[0]).toBeGreaterThan(200);
     expect(thin.rgb[0]).toBeLessThan(80);
+    expect(thin.a).toBe(1);
+    expect(fat.a).toBe(1);
+  });
+
+  it("does not bead the radius from speed-ink width gain", () => {
+    const pen = {
+      color: "#1a1a1a",
+      baseWidth: 8,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 1,
+      speedFade: 1,
+      boldness: 3,
+    };
+    const still = labPenDot(pen, 0, 0, 1, 0.5, 0, 0);
+    const flying = labPenDot(pen, 8000, 0, 1, 0.5, 400, 0);
+    expect(still.a).toBe(1);
+    expect(flying.a).toBe(1);
+    expect(still.r / flying.r).toBeLessThan(3);
   });
 
   it("capillary relaxes interior samples and is opt-in", () => {

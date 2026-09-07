@@ -1,8 +1,8 @@
 /**
  * Ink overlay over Excalidraw. The visible canvas is the Ink lab engine host
- * (WebGL SDF capsules). Excalidraw stays the camera. Committed strokes still
- * live in the tile book for save, undo, nested scroll, and pan. Highlighter
- * and eraser keep their 2D ops; they composite through the same lab host.
+ * (WebGL SDF capsules). Excalidraw stays the camera and shapes. Pen never
+ * goes through LiveStroke stamps. Highlighter and eraser keep 2D ops on the
+ * same host after the engine snap.
  */
 
 import {
@@ -15,11 +15,14 @@ import {
 
 import {
   HIGHLIGHT_WIDTH_SCALE,
+  inkBaseWidthForZoom,
   inkLineWidth,
   liveRibbonDirtySpine,
+  paintRasterInk,
   scenePointFromCanvasPixel,
   trimHighlightLiftHook,
   type InkBlotHalt,
+  type InkDrawOp,
   type InkOp,
   type SceneBounds,
   type ScenePoint,
@@ -717,15 +720,20 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         const hosts = scrollHostLookup();
         const live = liveRef.current;
         const engine = ensureInkLab();
-        const livePen = Boolean(
-          live && live.kind === "draw" && inkLabLiveRef.current && engine,
-        );
+        const livePen = Boolean(inkLabLiveRef.current && engine);
 
         if (livePen && engine) {
           engine.paint();
         } else if (engine) {
           engine.redrawSnap((sctx) => {
-            tiles.draw(sctx, drawView, dpr);
+            paintRasterInk(
+              sctx,
+              drawView,
+              opsRef.current,
+              null,
+              dpr,
+              clipRef.current,
+            );
             paintHostBoundPass(
               sctx,
               opsRef.current,
@@ -741,13 +749,12 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             syncLiveHostBinding(live);
             const session = liveStrokeRef.current;
             const snap = committedSnapRef.current;
-            const stamped =
+            const painted =
               session &&
               snap &&
-              (session.speedStampLive() || session.splineOutlineLive()) &&
               session.paint(ctx, canvas, dpr, clipRef.current, hosts, snap, true) ===
                 "ok";
-            if (!stamped) {
+            if (!painted) {
               paintLiveOp(ctx, live, drawView, dpr, clipRef.current, hosts);
             }
           } else {
@@ -770,12 +777,15 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         } else {
           ctx.setTransform(1, 0, 0, 1, 0, 0);
           ctx.clearRect(0, 0, canvas.width, canvas.height);
-          tiles.draw(ctx, drawView, dpr);
+          paintRasterInk(
+            ctx,
+            drawView,
+            opsRef.current,
+            live,
+            dpr,
+            clipRef.current,
+          );
           paintHostBoundPass(ctx, opsRef.current, hosts, drawView, dpr, clipRef.current);
-          if (live) {
-            syncLiveHostBinding(live);
-            paintLiveOp(ctx, live, drawView, dpr, clipRef.current, hosts);
-          }
         }
 
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -796,8 +806,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           marginY,
           ops: opsRef.current.length,
           clip: clipRef.current,
-          live: live !== null,
-          settled: tiles.settled,
+          live: live !== null || inkLabLiveRef.current,
+          settled: true,
         };
       },
       [ensureInkLab, ensureTiles, sizeCanvas],
@@ -990,16 +1000,15 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     repaintLiveRef.current = repaint;
 
     const flushLivePaint = useCallback(() => {
-      const stroke = liveStrokeRef.current;
-      if (!stroke) return;
       const now = performance.now();
       const prevAt = lastLivePaintAtRef.current;
       lastLivePaintAtRef.current = now;
       const timed = inkMetrics.enabled;
       if (timed && prevAt > 0) inkMetrics.rafPeriod(now - prevAt);
-      const queued = stroke.queuedSamples();
+      const stroke = liveStrokeRef.current;
+      const queued = stroke?.queuedSamples() ?? inkLabQueuedRef.current;
       const tick0 = performance.now();
-      if (!inkLabLiveRef.current) stroke.tick(now);
+      if (stroke && !inkLabLiveRef.current) stroke.tick(now);
       if (timed) inkMetrics.addStage("tick", performance.now() - tick0);
 
       const canvas = canvasRef.current;
@@ -1010,18 +1019,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
       if (inkLabLiveRef.current && inkLabRef.current) {
         const stats = inkLabRef.current.paint();
-        const liveOp = stroke.live;
-        if (liveOp) syncLiveHostBinding(liveOp);
-        liveRef.current = stroke.live;
-        const live = stroke.live;
-        liveDrawnIndexRef.current = live
-          ? live.kind === "draw"
-            ? Math.max(0, live.points.length - 1)
-            : live.points.length
-          : 0;
         if (timed) {
           inkMetrics.addStage("overlayBlit", stats.drawMs);
-          inkMetrics.painted(stroke.lastEventTimeMs);
+          inkMetrics.painted(performance.now());
         }
         const rafMs = prevAt > 0 ? now - prevAt : 0;
         const load = loadMeterRef.current.frame({
@@ -1061,6 +1061,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         }
         return;
       }
+
+      if (!stroke) return;
 
       const blit0 = timed ? performance.now() : 0;
       const result = stroke.paint(
@@ -1666,19 +1668,17 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           const orphan = liveStrokeRef.current;
           if (inkLabLiveRef.current && inkLabRef.current) {
             const baked = inkLabRef.current.up();
-            if (orphan) {
-              liveRef.current = orphan.commit();
-              const view = strokeViewRef.current;
-              const rect = strokeRectRef.current;
-              if (liveRef.current && view && rect) {
-                applyInkLabBakeToOp(
-                  liveRef.current,
-                  baked,
-                  view,
-                  canvas.width / Math.max(1, rect.width),
-                );
-                inkLabCommitRef.current = true;
-              }
+            const view = strokeViewRef.current;
+            const rect = strokeRectRef.current;
+            if (view && rect && baked.points.length > 0) {
+              liveRef.current = inkOpFromLabBake(
+                baked,
+                view,
+                canvas.width / Math.max(1, rect.width),
+                inkColorRef.current,
+                strokeWidthRef.current,
+              );
+              inkLabCommitRef.current = true;
             }
             labBakeRef.current = { bakeMs: baked.bakeMs, bake: baked.bake };
             inkLabLiveRef.current = false;
@@ -1794,9 +1794,42 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           painted.height === visibleH &&
           painted.marginY === marginY;
         if (!reusable) repaintRef.current();
-        captureCommittedSnapRef.current(canvas);
         const host = strokeHostRef.current;
         const useLab = activeTool === "pen";
+        lastLivePaintAtRef.current = 0;
+        drawingRef.current = true;
+        activePointerRef.current = event.pointerId;
+        strokeRecaptured = false;
+        inkLabLiveRef.current = useLab;
+        inkLabQueuedRef.current = 0;
+        liveDrawnIndexRef.current = 0;
+        if (useLab) {
+          liveStrokeRef.current = null;
+          liveRef.current = null;
+          const engine = ensureInkLab();
+          engine.captureSnap();
+          labBakeRef.current = { bakeMs: 0, bake: "catmull" };
+          const dpr = canvas.width / Math.max(1, rect.width);
+          engine.setPen({
+            color: inkColorRef.current,
+            baseWidth: inkBaseWidthForZoom(width, strokeView.zoom),
+            overlayScale: strokeView.zoom * dpr,
+            dpr,
+            maxFullness: 1,
+            pressureClip: pressureClipRef.current,
+            pressureSensitive: pressureSensitiveRef.current,
+            speedInk: 0,
+            speedBlotBlend: 0,
+            speedFade: 0,
+            boldness: 1,
+            smoothing: smoothingRef.current,
+          });
+          engine.down(inkLabOverlaySample(canvas, rect, event));
+          loadMeterRef.current.begin();
+          paintLiveAfterChangeRef.current(true);
+          return;
+        }
+        captureCommittedSnapRef.current(canvas);
         const stroke = beginLiveStroke({
           tool: activeTool,
           view: strokeView,
@@ -1823,41 +1856,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             ? { key: host.key, scrollLeft: host.scrollLeft, scrollTop: host.scrollTop }
             : null,
           onNeedPaint: () => paintLiveAfterChangeRef.current(),
-          shell: useLab,
         });
         liveStrokeRef.current = stroke;
         liveRef.current = stroke.live;
-        liveDrawnIndexRef.current = 0;
-        lastLivePaintAtRef.current = 0;
-        drawingRef.current = true;
-        activePointerRef.current = event.pointerId;
-        strokeRecaptured = false;
-        inkLabLiveRef.current = useLab;
-        inkLabQueuedRef.current = 0;
-        if (useLab) {
-          const engine = ensureInkLab();
-          engine.captureSnap();
-          labBakeRef.current = { bakeMs: 0, bake: "catmull" };
-          const live = stroke.live;
-          if (live && live.kind === "draw") {
-            const dpr = canvas.width / Math.max(1, rect.width);
-            engine.setPen({
-              color: live.color,
-              baseWidth: live.baseWidth,
-              overlayScale: strokeView.zoom * dpr,
-              dpr,
-              maxFullness: live.maxFullness,
-              pressureClip: live.pressureClip,
-              pressureSensitive: live.pressureSensitive,
-              speedInk: live.speedInk ?? 0,
-              speedBlotBlend: live.speedBlotBlend ?? 0,
-              speedFade: live.speedFade ?? 0,
-              boldness: live.boldness ?? 1,
-              smoothing: smoothingRef.current,
-            });
-          }
-          engine.down(inkLabOverlaySample(canvas, rect, event));
-        }
         loadMeterRef.current.begin();
         const liveAfterBegin = liveRef.current;
         if (
@@ -1957,7 +1958,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (!strokeView || !rect) return;
         event.preventDefault();
         const stroke = liveStrokeRef.current;
-        if (!stroke || !liveRef.current) return;
+        if (!inkLabLiveRef.current && (!stroke || !liveRef.current)) return;
 
         /*
          * Every sample the browser buffered since the last frame, in order.
@@ -1988,10 +1989,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
             inkLabRef.current.move(samples);
           }
           inkLabQueuedRef.current = batch.length;
-        } else {
+        } else if (stroke) {
           stroke.ingest(batch.map(livePointerSample));
+          liveRef.current = stroke.live;
         }
-        liveRef.current = stroke.live;
         paintLiveAfterChangeRef.current();
       };
 
@@ -2025,30 +2026,28 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           livePaintRafRef.current = null;
         }
         const stroke = liveStrokeRef.current;
-        if (stroke) {
-          const coalesced = event.getCoalescedEvents?.();
-          const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
-          if (inkLabLiveRef.current && inkLabRef.current) {
-            const last = batch[batch.length - 1] ?? event;
-            const sampleRect = strokeRectRef.current ?? canvas.getBoundingClientRect();
-            const baked = inkLabRef.current.up(
-              inkLabOverlaySample(canvas, sampleRect, last),
+        const coalesced = event.getCoalescedEvents?.();
+        const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
+        if (inkLabLiveRef.current && inkLabRef.current) {
+          const last = batch[batch.length - 1] ?? event;
+          const sampleRect = strokeRectRef.current ?? canvas.getBoundingClientRect();
+          const baked = inkLabRef.current.up(
+            inkLabOverlaySample(canvas, sampleRect, last),
+          );
+          const view = strokeViewRef.current;
+          if (view && baked.points.length > 0) {
+            liveRef.current = inkOpFromLabBake(
+              baked,
+              view,
+              canvas.width / Math.max(1, sampleRect.width),
+              inkColorRef.current,
+              strokeWidthRef.current,
             );
-            liveRef.current = stroke.commit();
-            const view = strokeViewRef.current;
-            if (liveRef.current && view) {
-              applyInkLabBakeToOp(
-                liveRef.current,
-                baked,
-                view,
-                canvas.width / Math.max(1, sampleRect.width),
-              );
-              inkLabCommitRef.current = true;
-            }
-            labBakeRef.current = { bakeMs: baked.bakeMs, bake: baked.bake };
-          } else {
-            liveRef.current = stroke.commit();
+            inkLabCommitRef.current = true;
           }
+          labBakeRef.current = { bakeMs: baked.bakeMs, bake: baked.bake };
+        } else if (stroke) {
+          liveRef.current = stroke.commit();
         }
         inkLabLiveRef.current = false;
         drawingRef.current = false;
@@ -2287,4 +2286,24 @@ function applyInkLabBakeToOp(
       ...(h.slow != null ? { slowness: h.slow } : {}),
     };
   });
+}
+
+function inkOpFromLabBake(
+  baked: InkLabUpResult,
+  view: ViewportTransform,
+  dpr: number,
+  color: string,
+  uiWidth: number,
+): InkDrawOp {
+  const op: InkDrawOp = {
+    kind: "draw",
+    color,
+    baseWidth: inkBaseWidthForZoom(uiWidth, view.zoom),
+    maxFullness: 1,
+    pressureClip: 1,
+    pressureSensitive: false,
+    points: [],
+  };
+  applyInkLabBakeToOp(op, baked, view, dpr);
+  return op;
 }
