@@ -618,6 +618,20 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
 
   return {
     attach(el) {
+      const sameHost = host === el;
+      const sdfOk = Boolean(sdf && !sdf.isLost());
+      if (sameHost && sdfOk) {
+        syncSize();
+        return backend;
+      }
+      if (sameHost && backend === "canvas2d" && fallback && !sdf) {
+        syncSize();
+        return backend;
+      }
+      sdf?.destroy();
+      fallback?.destroy();
+      sdf = null;
+      fallback = null;
       host = el;
       peer = peerFactory(el);
       const w = Math.max(1, el.width || 1);
@@ -694,6 +708,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     },
     paint() {
       const t0 = performance.now();
+      if (host && sdf?.isLost()) this.attach(host);
       if (drawing && holding && pen) applyHoldGrow(t0);
       syncSize();
       const tDraw = performance.now();
