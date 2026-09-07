@@ -417,7 +417,7 @@ describe("Ink lab live path", () => {
     }
   });
 
-  it("mid-stroke hold fattens the trail behind the nib", () => {
+  it("mid-stroke hold grows the nib without remeshing the trail", () => {
     let wall = 0;
     const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
       wall += 40;
@@ -454,13 +454,13 @@ describe("Ink lab live path", () => {
       wet.move([{ x: 52, y: 90, p: 0.5, t: 16 }]);
       for (let i = 1; i <= 40; i++) {
         wet.move([{ x: 52.1, y: 90.1, p: 0.5, t: 16 + i * 32 }]);
-        wet.paint();
+        expect(wet.paint().suffix).toBe(true);
       }
       const wetBaked = wet.up({ x: 52, y: 90, p: 0.5, t: 1400 });
       expect(wetBaked.points[wetBaked.points.length - 1]!.r).toBeGreaterThan(
         dryBaked.points[dryBaked.points.length - 1]!.r,
       );
-      expect(wetBaked.points[0]!.r).toBeGreaterThan(dryPrev);
+      expect(wetBaked.points[0]!.r).toBeCloseTo(dryPrev, 1);
       expect(wetBaked.blotHalts.length).toBeGreaterThan(0);
       wet.destroy();
     } finally {

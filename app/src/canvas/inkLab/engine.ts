@@ -27,7 +27,6 @@ import {
   labNibRadius,
   labPenDot,
   labPenNibOverlay,
-  labSwellHoldPool,
   TIP_GROW,
   washRgb,
   type InkLabPen,
@@ -216,8 +215,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   let consumed = 0;
   let holdTicks = 0;
   let holdBase: SpineDot | null = null;
-  /** Spine radii/colours at hold start, so live pooling does not stack. */
-  let holdRest: SpineDot[] | null = null;
   let lastHoldWall = 0;
   let blotTipGrow = 0;
   let blotHalts: InkLabHalt[] = [];
@@ -246,7 +243,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     consumed = 0;
     holdTicks = 0;
     holdBase = null;
-    holdRest = null;
     lastHoldWall = 0;
     blotTipGrow = 0;
     blotHalts = [];
@@ -336,7 +332,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     holding = true;
     holdTicks = 0;
     holdBase = cloneDot(at);
-    holdRest = spine.map(cloneDot);
     lastHoldWall = now;
   };
 
@@ -360,8 +355,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       consumed,
       blotTipGrow,
     );
-    const last = spine[spine.length - 1];
-    const already = Boolean(last && Math.abs(last.r - grown) < 1e-4);
     tip = {
       ...holdBase,
       r: grown,
@@ -369,18 +362,12 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       a: styled.a,
       slow: styled.slow,
     };
-    if (holdRest && holdRest.length === spine.length) {
-      labSwellHoldPool(spine, holdRest, grown, blotTipGrow, styled.rgb);
-    } else if (last) {
+    const last = spine[spine.length - 1];
+    if (last) {
       last.r = grown;
       last.rgb = styled.rgb;
       last.a = styled.a;
       last.slow = styled.slow;
-    }
-    if (!already) {
-      remesh(spine);
-      sdfFull = true;
-      sdfLive = 0;
     }
     expandAabb(aabb, tip);
   };
@@ -460,7 +447,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       holding = false;
       holdTicks = 0;
       holdBase = null;
-      holdRest = null;
       blotTipGrow = 0;
     }
     appendSpine(dot);
@@ -496,7 +482,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     holding = false;
     holdTicks = 0;
     holdBase = null;
-    holdRest = null;
     lastHoldWall = 0;
     ekf = createEkf();
     sdf?.clear();
@@ -662,6 +647,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     if (sdf) {
       lastSuffix = flushSdfLive();
       ctx.drawImage(sdf.canvas, 0, 0);
+      drawTip(ctx);
     } else if (fallback) {
       fallback.blit(ctx);
       drawTip(ctx);
