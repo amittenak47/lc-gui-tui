@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   contentBottomInFrame,
+  DRAW_GROWTH_CAP_SCROLL,
   DRAW_HEADER_BAND,
   growDrawHeight,
   initialDrawHeight,
@@ -47,6 +48,17 @@ describe("growDrawHeight", () => {
     ).toBe(5000);
   });
 
+  it("lets a scratch page grow past five screens", () => {
+    expect(
+      growDrawHeight({
+        basePageH: base,
+        currentH: 5000,
+        contentBottomRel: 4900,
+        capPages: DRAW_GROWTH_CAP_SCROLL,
+      }),
+    ).toBe(5500);
+  });
+
   it("never drops below the initial draw height", () => {
     expect(
       growDrawHeight({
@@ -87,5 +99,29 @@ describe("contentBottomInFrame", () => {
       frame,
     );
     expect(bottom).toBe(280);
+  });
+
+  it("counts restored ink that sits below the current frame", () => {
+    const bottom = contentBottomInFrame(
+      [],
+      [
+        {
+          kind: "draw",
+          color: "#111",
+          baseWidth: 2,
+          maxFullness: 1,
+          pressureClip: 1,
+          pressureSensitive: false,
+          points: [
+            { x: 40, y: 2100, pressure: 0.5 },
+            { x: 80, y: 2400, pressure: 0.5 },
+          ],
+        },
+      ],
+      frame,
+      DRAW_HEADER_BAND,
+      false,
+    );
+    expect(bottom).toBe(2400);
   });
 });
