@@ -14,7 +14,12 @@ import {
   createInkLabEngine,
   type InkLabSample,
 } from "../canvas/inkLab/engine";
-import { formatInkLabHud, INK_LAB_HUD_ZERO } from "../canvas/inkLab/hud";
+import {
+  createInkLabHudStats,
+  formatInkLabHud,
+  INK_LAB_HUD_ZERO,
+} from "../canvas/inkLab/hud";
+import { drawFrameSpark } from "../canvas/inkLab/hudSpark";
 
 export interface InkLabProps {
   active: boolean;
@@ -39,6 +44,7 @@ export function InkLab({ active }: InkLabProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hudRef = useRef<HTMLPreElement | null>(null);
+  const sparkRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<ReturnType<typeof createInkLabEngine> | null>(null);
   const backendRef = useRef("none");
   const paintsRef = useRef(0);
@@ -46,6 +52,7 @@ export function InkLab({ active }: InkLabProps) {
   const rafRef = useRef<number | null>(null);
   const bakeRef = useRef({ bakeMs: 0, bake: "catmull" });
   const drawingRef = useRef(false);
+  const hudStatsRef = useRef(createInkLabHudStats());
 
   useEffect(() => {
     const host = hostRef.current;
@@ -67,6 +74,7 @@ export function InkLab({ active }: InkLabProps) {
     ) => {
       const hud = hudRef.current;
       if (!hud) return;
+      const ranges = hudStatsRef.current.snapshot();
       hud.textContent = formatInkLabHud({
         backend: stats.backend ?? backendRef.current,
         paints: paintsRef.current,
@@ -80,7 +88,10 @@ export function InkLab({ active }: InkLabProps) {
         suffix: stats.suffix ?? true,
         bakeMs: bakeRef.current.bakeMs,
         bake: bakeRef.current.bake,
+        ...ranges,
       });
+      const spark = sparkRef.current;
+      if (spark) drawFrameSpark(spark, ranges.spark ?? []);
     };
 
     const sizeToHost = () => {
@@ -117,7 +128,9 @@ export function InkLab({ active }: InkLabProps) {
         lastRafRef.current = now;
         const stats = engine.paint();
         paintsRef.current += 1;
-        writeHud(stats, prev > 0 ? now - prev : 0);
+        const rafMs = prev > 0 ? now - prev : 0;
+        hudStatsRef.current.sample(stats.frameMs, rafMs, stats.drawMs, stats.ekfMs);
+        writeHud(stats, rafMs);
         if (drawingRef.current && stats.hold) schedulePaint();
       });
     };
@@ -128,6 +141,8 @@ export function InkLab({ active }: InkLabProps) {
       event.preventDefault();
       engine.down(sampleOf(canvas, event));
       drawingRef.current = true;
+      lastRafRef.current = 0;
+      hudStatsRef.current.reset();
       try {
         canvas.setPointerCapture(event.pointerId);
       } catch {
@@ -150,6 +165,7 @@ export function InkLab({ active }: InkLabProps) {
       bakeRef.current = engine.up(sampleOf(canvas, event));
       const stats = engine.paint();
       paintsRef.current += 1;
+      hudStatsRef.current.sample(stats.frameMs, 0, stats.drawMs, stats.ekfMs);
       writeHud(stats, 0);
       try {
         canvas.releasePointerCapture(event.pointerId);
@@ -180,6 +196,7 @@ export function InkLab({ active }: InkLabProps) {
     engineRef.current?.clear();
     paintsRef.current = 0;
     bakeRef.current = { bakeMs: 0, bake: "catmull" };
+    hudStatsRef.current.reset();
     const hud = hudRef.current;
     if (hud) {
       hud.textContent = formatInkLabHud({
@@ -187,6 +204,8 @@ export function InkLab({ active }: InkLabProps) {
         backend: backendRef.current,
       });
     }
+    const spark = sparkRef.current;
+    if (spark) drawFrameSpark(spark, []);
   };
 
   return (
@@ -197,9 +216,18 @@ export function InkLab({ active }: InkLabProps) {
         aria-label="Ink lab pad"
         tabIndex={0}
       />
-      <pre ref={hudRef} className="lc-ink-lab-hud">
-        {formatInkLabHud(INK_LAB_HUD_ZERO)}
-      </pre>
+      <div className="lc-ink-perf-stack">
+        <pre ref={hudRef} className="lc-ink-lab-hud">
+          {formatInkLabHud(INK_LAB_HUD_ZERO)}
+        </pre>
+        <canvas
+          ref={sparkRef}
+          className="lc-ink-lab-spark"
+          width={168}
+          height={36}
+          aria-hidden="true"
+        />
+      </div>
       <p className="lc-ink-lab-note">
         Comparison pad. WebGL overlay pen. Not Speed Ink. Not the whiteboard.
       </p>

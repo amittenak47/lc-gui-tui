@@ -64,6 +64,8 @@ describe("SettingsModal", () => {
     const src = readFileSync(join(here, "../components/SettingsModal.tsx"), "utf8");
     expect(src).toMatch(/id="writing"/);
     expect(src).toMatch(/Performance overlay/);
+    expect(src).toMatch(/Performance bar/);
     expect(src).toMatch(/loadInkPerfOverlay/);
+    expect(src).toMatch(/loadInkPerfBar/);
   });
 });

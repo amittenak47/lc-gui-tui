@@ -3174,7 +3174,8 @@ body[data-lc-sash-drag="horizontal"] {
   transition: opacity 160ms ease;
 }
 
-.lc-ink-load-bar.is-open {
+.lc-ink-load-bar.is-open,
+.lc-ink-load-bar.is-hud {
   opacity: 1;
 }
 
@@ -6146,6 +6147,30 @@ body[data-lc-sash-drag="horizontal"] {
   font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   pointer-events: none;
   white-space: pre;
+}
+
+.lc-ink-perf-stack {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 16;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.lc-ink-perf-stack .lc-ink-lab-hud {
+  position: static;
+}
+
+.lc-ink-lab-spark {
+  display: block;
+  width: 168px;
+  height: 36px;
+  border-radius: 8px;
+  pointer-events: none;
 }
 
 .lc-ink-lab-note {

@@ -23,7 +23,7 @@ import {
   type InkLabSample,
   type InkLabUpResult,
 } from "./inkLab/engine";
-import { INK_LAB_HUD_ZERO } from "./inkLab/hud";
+import { createInkLabHudStats, INK_LAB_HUD_ZERO } from "./inkLab/hud";
 import type { SpineDot } from "./inkLab/instance";
 import { labPenFromToolbar } from "./inkLab/style";
 import { createInkLoadMeter } from "./inkLoadMeter";
@@ -101,6 +101,7 @@ export interface WhiteboardInkLabProps {
   wheelHoldEnabled?: boolean;
   onWheelHold?: (clientX: number, clientY: number) => void;
   perfOverlay?: boolean;
+  perfBar?: boolean;
 }
 
 function fallbackViewport(width: number, height: number): ViewportTransform {
@@ -232,6 +233,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       wheelHoldEnabled = false,
       onWheelHold,
       perfOverlay = false,
+      perfBar = false,
     }: WhiteboardInkLabProps,
     ref,
   ) {
@@ -302,8 +304,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     onWheelHoldRef.current = onWheelHold;
     const perfOverlayRef = useRef(perfOverlay);
     perfOverlayRef.current = perfOverlay;
+    const perfBarRef = useRef(perfBar);
+    perfBarRef.current = perfBar;
     const loadMeterRef = useRef(createInkLoadMeter());
     const loadBarRef = useRef<InkLoadBarHandle>(null);
+    const hudStatsRef = useRef(createInkLabHudStats());
     const lastRafRef = useRef(0);
     const bakeRef = useRef({ bakeMs: 0, bake: "catmull" });
     const backendRef = useRef("none");
@@ -550,7 +555,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       engineRef.current = engine;
       backendRef.current = engine.attach(canvas);
       if (toolRef.current) presentCommitted();
-      if (perfOverlayRef.current) {
+      const wantMeter = () => perfOverlayRef.current || perfBarRef.current;
+      if (wantMeter()) {
         loadBarRef.current?.show(loadMeterRef.current.peek(), {
           ...INK_LAB_HUD_ZERO,
           backend: backendRef.current,
@@ -572,7 +578,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         rafMs: number,
         live: boolean,
       ) => {
-        if (!perfOverlayRef.current) return;
+        if (!wantMeter()) return;
+        if (live && perfOverlayRef.current) {
+          hudStatsRef.current.sample(stats.frameMs, rafMs, stats.drawMs, stats.ekfMs);
+        }
         const load = live
           ? loadMeterRef.current.frame({
               frameMs: stats.frameMs,
@@ -589,6 +598,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             })
           : loadMeterRef.current.peek();
         const bake = bakeRef.current;
+        const ranges = hudStatsRef.current.snapshot();
         loadBarRef.current?.show(load, {
           backend: load.backend,
           paints: load.calls,
@@ -602,6 +612,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           suffix: load.suffixHit,
           bakeMs: bake.bakeMs,
           bake: bake.bake,
+          ...ranges,
         });
       };
 
@@ -647,7 +658,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           highlightPtsRef.current = null;
           engine.cancelStroke();
           presentCommitted();
-          if (perfOverlayRef.current) {
+          if (wantMeter()) {
             loadMeterRef.current.end();
             loadBarRef.current?.freeze();
           }
@@ -764,9 +775,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         );
         engine.captureSnap();
         engine.down(sampleOf(canvas, event));
-        if (perfOverlayRef.current) {
+        if (wantMeter()) {
           lastRafRef.current = 0;
           loadMeterRef.current.begin();
+          hudStatsRef.current.reset();
         }
         schedulePaint();
       };
@@ -943,15 +955,16 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     }, [enabled, presentCommitted, readViews, rebuildOverlayFromBook]);
 
     useEffect(() => {
-      if (!perfOverlay) {
+      if (!perfOverlay && !perfBar) {
         loadBarRef.current?.hide();
         return;
       }
       loadBarRef.current?.show(loadMeterRef.current.peek(), {
         ...INK_LAB_HUD_ZERO,
         backend: backendRef.current,
+        ...hudStatsRef.current.snapshot(),
       });
-    }, [perfOverlay]);
+    }, [perfOverlay, perfBar]);
 
     useEffect(() => {
       if (!enabled || !tool) return;
@@ -974,7 +987,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           tabIndex={0}
           style={{ pointerEvents: tool ? "auto" : "none" }}
         />
-        <InkLoadBar ref={loadBarRef} />
+        <InkLoadBar ref={loadBarRef} bar={perfBar} overlay={perfOverlay} />
       </div>
     );
   },
