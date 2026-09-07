@@ -129,7 +129,6 @@ function paintLabPreview(
     canvas.width = bw;
     canvas.height = bh;
   }
-  engine.attach(canvas);
   const pen = labPenFromSnap(snap, dpr);
   engine.setPen(pen);
   engine.replaySpines([

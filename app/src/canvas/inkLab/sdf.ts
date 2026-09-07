@@ -83,6 +83,7 @@ export type SdfRenderer = {
   append(data: Float32Array, index: number, aabb: StrokeAabb): void;
   draw(aabb: StrokeAabb): void;
   clear(): void;
+  isLost(): boolean;
   destroy(): void;
 };
 
@@ -287,13 +288,19 @@ export function tryCreateSdfRenderer(
       gl!.drawArraysInstanced(gl.TRIANGLES, 0, 6, count);
       gl!.disable(gl.SCISSOR_TEST);
     },
+    isLost() {
+      return !gl || gl.isContextLost();
+    },
     destroy() {
-      gl!.deleteBuffer(quad);
-      gl!.deleteBuffer(inst);
-      gl!.deleteVertexArray(vao);
-      gl!.deleteProgram(prog);
-      gl!.deleteShader(vs);
-      gl!.deleteShader(fs);
+      if (gl && !gl.isContextLost()) {
+        gl.deleteBuffer(quad);
+        gl.deleteBuffer(inst);
+        gl.deleteVertexArray(vao);
+        gl.deleteProgram(prog);
+        gl.deleteShader(vs);
+        gl.deleteShader(fs);
+        gl.getExtension("WEBGL_lose_context")?.loseContext();
+      }
     },
   };
 }
