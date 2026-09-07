@@ -74,7 +74,7 @@ export interface TabStripProps {
   /** Which tabs are currently half of a split, so the menu can say `Unsplit`. */
   groupedIds?: string[];
   /**
-   * Double-tap a chip to rename it. Home, Practice, Explore, Freehand, Ink lab, and footnote
+   * Double-tap a chip to rename it. Home, Practice, Explore, and footnote
    * boards are not offered — {@link tabAllowsRename}.
    */
   onRename?: (id: string, title: string) => void;

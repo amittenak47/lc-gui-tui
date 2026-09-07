@@ -115,8 +115,6 @@ import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { HomeChooser } from "./modes/HomeChooser";
 import { ExploreWorkspace } from "./modes/ExploreWorkspace";
-import { FreehandLab } from "./modes/FreehandLab";
-import { InkLab } from "./modes/InkLab";
 import { LinkStrokeOverlay, type LinkChip } from "./modes/LinkStrokeOverlay";
 import { collectDomLinkHits, boxesOverlap, type LinkHit } from "./modes/linkHitTest";
 import type { StrokeBox } from "./modes/linkStroke";
@@ -4899,26 +4897,6 @@ export function Workspace({
     });
   }, [openWorkspace]);
 
-  const openFreehand = useCallback(() => {
-    openWorkspace({
-      id: newTabId("freehand"),
-      kind: "freehand",
-      title: "Freehand",
-      dirty: false,
-      lastActive: 0,
-    });
-  }, [openWorkspace]);
-
-  const openInkLab = useCallback(() => {
-    openWorkspace({
-      id: newTabId("inklab"),
-      kind: "inklab",
-      title: "Ink lab",
-      dirty: false,
-      lastActive: 0,
-    });
-  }, [openWorkspace]);
-
   /**
    * Every workspace the libraries know about, as graph nodes.
    *
@@ -8310,6 +8288,7 @@ export function Workspace({
         case "freehand":
         case "inklab":
           // Home has no board to read back; the chooser is the whole of it.
+          // Retired comparison pads fall through the same empty mount.
           setBusy(null);
           setWorkspaceLoadActive(false);
           setBoardPreparing(false);
@@ -10275,10 +10254,6 @@ export function Workspace({
                     // refused rather than hidden — the reason is worth saying.
                     canOpenInNewTab={(node) => node.type !== "practice"}
                   />
-                ) : tab.kind === "freehand" ? (
-                  <FreehandLab active={active} />
-                ) : tab.kind === "inklab" ? (
-                  <InkLab active={active} />
                 ) : tab.kind === "home" && !holdBrowseOverlay ? (
                   <HomeChooser
                     busy={busy !== null || boardPreparing || workspaceLoadActive}
@@ -10287,8 +10262,6 @@ export function Workspace({
                     onAnnotate={() => setAnnotateEntryOpen(true)}
                     onBrowse={() => void openWebPage(WEB_HOME)}
                     onExplore={openExplore}
-                    onFreehand={openFreehand}
-                    onInkLab={openInkLab}
                   />
                 ) : null}
               </div>
