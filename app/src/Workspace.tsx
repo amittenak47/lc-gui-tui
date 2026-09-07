@@ -1634,9 +1634,7 @@ export function Workspace({
    */
   const needsBoard =
     tab.kind !== "home" &&
-    tab.kind !== "explore" &&
-    tab.kind !== "freehand" &&
-    tab.kind !== "inklab";
+    tab.kind !== "explore";
   const [BoardView, setBoardView] = useState<BoardComponent | null>(
     () => peekBoardComponent(),
   );
@@ -8285,10 +8283,7 @@ export function Workspace({
       switch (tab.kind) {
         case "home":
         case "explore":
-        case "freehand":
-        case "inklab":
           // Home has no board to read back; the chooser is the whole of it.
-          // Retired comparison pads fall through the same empty mount.
           setBusy(null);
           setWorkspaceLoadActive(false);
           setBoardPreparing(false);
@@ -10182,8 +10177,6 @@ export function Workspace({
               // app draws itself rather than boards, so they share the layer
               // that sits over a canvas which never mounts for them.
               tab.kind === "explore" ||
-              tab.kind === "freehand" ||
-              tab.kind === "inklab" ||
               holdBrowseOverlay ||
               boardPreparing ||
               browseMotion !== "idle") && (

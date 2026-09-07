@@ -767,9 +767,7 @@ export function App() {
       return (
         kind != null &&
         kind !== "home" &&
-        kind !== "explore" &&
-        kind !== "freehand" &&
-        kind !== "inklab"
+        kind !== "explore"
       );
     }),
   );

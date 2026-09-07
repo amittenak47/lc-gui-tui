@@ -76,9 +76,6 @@ function persistable(tab: TabRecord): TabRecord | null {
       // The chip only. Nodes and edges live in IndexedDB, so a restored atlas
       // reads the graph as it is now rather than as it was when the app closed.
       return { ...tab, dirty: false };
-    case "freehand":
-    case "inklab":
-      return null;
     case "web": {
       const entries = tab.entries
         .filter((entry) => typeof entry.url === "string" && entry.url.length > 0)

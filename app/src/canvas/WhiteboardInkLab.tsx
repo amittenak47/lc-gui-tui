@@ -1,6 +1,6 @@
 /**
- * Whiteboard drawing surface. Same loop as {@link ../modes/InkLab.tsx}:
- * attach / down / move / up / paint. Board chrome maps onto the WebGL nib
+ * Whiteboard drawing surface. Attach / down / move / up / paint through
+ * {@link ./inkLab/engine.ts}. Board chrome maps onto the WebGL nib
  * (size, colour, pressure, hold grow, lift smoothing, straight).
  */
 

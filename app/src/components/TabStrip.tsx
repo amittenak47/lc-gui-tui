@@ -154,18 +154,6 @@ function TabIcon({ kind }: { kind: TabRecord["kind"] | "cancel" }) {
           <path d="M7.7 17 10.4 13.9" />
         </Glyph>
       );
-    case "freehand":
-      return (
-        <Glyph>
-          <path d="M4 17c3-11 6-2 8 1 2 3 5-9 8-1" />
-        </Glyph>
-      );
-    case "inklab":
-      return (
-        <Glyph>
-          <path d="M4 18c4-12 6 1 8-2 2-3 5 8 8 0" />
-        </Glyph>
-      );
     case "web":
       return (
         <Glyph>

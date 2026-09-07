@@ -78,7 +78,6 @@ import {
   stampAlongSegment,
   curveAlongHop,
   expandInkTurns,
-  usesSplineOutline,
   STROKE_WIDTH_MAX,
   STROKE_WIDTH_MIN,
   unionSceneBounds,
@@ -3111,40 +3110,5 @@ describe("ribbonScratchDeviceScale", () => {
     expect(ribbonScratchDeviceScale(1)).toBe(1);
     expect(ribbonScratchDeviceScale(2)).toBe(2);
     expect(ribbonScratchDeviceScale(2.625)).toBe(2.625);
-  });
-});
-
-describe("spline outline paint", () => {
-  it("fills one outline instead of stroking runs", () => {
-    const op: InkOp = {
-      kind: "draw",
-      color: "#112233",
-      baseWidth: 8,
-      maxFullness: 1,
-      pressureClip: 1,
-      pressureSensitive: false,
-      splineOutline: true,
-      points: points([0, 0], [20, 4], [40, 0], [60, 6]),
-    };
-    expect(usesSplineOutline(op)).toBe(true);
-    const drawCtx = inkDrawContext();
-    applyInkOp(drawCtx.ctx, op, 1);
-    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(1);
-    expect(drawCtx.strokeCount).toBe(0);
-  });
-
-  it("does not take the highlighter onto the spline path", () => {
-    const op: InkOp = {
-      kind: "draw",
-      color: "#ff0",
-      baseWidth: 8,
-      maxFullness: 1,
-      pressureClip: 1,
-      pressureSensitive: false,
-      highlight: true,
-      splineOutline: true,
-      points: points([0, 0], [20, 0]),
-    };
-    expect(usesSplineOutline(op)).toBe(false);
   });
 });
