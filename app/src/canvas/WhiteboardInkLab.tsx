@@ -317,16 +317,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         },
         undo() {
           if (!bookRef.current.undoOnce()) return false;
-          const last = overlayRef.current.pop();
-          if (last) overlayRedoRef.current.push(last);
+          rebuildOverlayFromBook();
           presentCommitted();
           onChangeRef.current?.();
           return true;
         },
         redo() {
           if (!bookRef.current.redoOnce()) return false;
-          const last = overlayRedoRef.current.pop();
-          if (last) overlayRef.current.push(last);
+          rebuildOverlayFromBook();
           presentCommitted();
           onChangeRef.current?.();
           return true;
@@ -341,10 +339,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return drawingRef.current;
         },
         repaint() {
+          rebuildOverlayFromBook();
           presentCommitted();
         },
         syncCamera() {
-          engineRef.current?.paint();
+          if (drawingRef.current) return;
+          rebuildOverlayFromBook();
+          presentCommitted();
         },
         setPanOffset(live) {
           const canvas = canvasRef.current;
@@ -358,9 +359,17 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         commitCamera() {
           const canvas = canvasRef.current;
           if (canvas?.style.transform) canvas.style.transform = "";
-          engineRef.current?.paint();
+          rebuildOverlayFromBook();
+          presentCommitted();
         },
-        setCameraMoving() {},
+        setCameraMoving(moving) {
+          if (moving) return;
+          const canvas = canvasRef.current;
+          if (canvas?.style.transform) canvas.style.transform = "";
+          if (drawingRef.current) return;
+          rebuildOverlayFromBook();
+          presentCommitted();
+        },
         getOps() {
           return bookRef.current.assembleOps();
         },

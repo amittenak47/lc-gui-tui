@@ -3746,9 +3746,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       appState: { scrollX: live.scrollX, scrollY: live.scrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
-    // Coalesced into this frame's rAF, ahead of `landPanOffset`'s — the ink is
-    // repainted for the camera we just committed before the offsets that were
-    // standing in for it are dropped.
     rasterInkRef.current?.syncCamera();
     landPanOffset(() => {
       committingScrollRef.current = false;
@@ -3791,6 +3788,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // Drop the riding flag only. Keep width/height/zoom so the next pan
       // from rest skips getAppState.
       if (liveCameraRef.current === live) live.live = false;
+      rasterInkRef.current?.syncCamera();
     });
   }, [flushVisualScroll, landPanOffset]);
   applyVisualScrollNowRef.current = applyVisualScrollNow;
@@ -7775,7 +7773,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         pulseCameraMotionRef.current();
       }
       if (!liveCameraRef.current?.live) clearPanOffsetsRef.current();
-      if (!rasterInkRef.current?.isDrawing()) {
+      if (!liveCameraRef.current?.live && !rasterInkRef.current?.isDrawing()) {
         rasterInkRef.current?.syncCamera();
       }
       if (!liveCameraRef.current?.live) scheduleSlotReports();
@@ -8400,6 +8398,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           },
           captureUpdate: CaptureUpdateAction.NEVER,
         });
+        rasterInkRef.current?.syncCamera();
         scheduleSlotReports();
       },
       appendScratchPage: (skeletons: Skeleton[]) => {
