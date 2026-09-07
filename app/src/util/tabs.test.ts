@@ -18,6 +18,7 @@ import {
   splitEdgeAt,
   tabsReducer,
   openTarget,
+  pdfHoldDecodeInSplit,
   visibleTabIds,
   webTabCount,
   webTabTitle,
@@ -465,5 +466,55 @@ describe("split groups", () => {
     expect(splitEdgeAt(box, 50, 5)).toBe("top");
     expect(splitEdgeAt(box, 50, 50)).toBeNull();
     expect(splitEdgeAt(box, -1, 50)).toBeNull();
+  });
+});
+
+describe("pdfHoldDecodeInSplit", () => {
+  function pdf(id: string, lastActive = 0): AnnotateTab {
+    return {
+      id,
+      kind: "annotate",
+      title: "book.pdf",
+      dirty: false,
+      lastActive,
+      docId: null,
+      hash: `h-${id}`,
+      docType: "pdf",
+      indexed: "idle",
+      source: null,
+    };
+  }
+
+  it("keeps a split PDF sharp when the focused pane is a whiteboard", () => {
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: pdf("doc"), at: 1 },
+      { type: "open", tab: board("pad", "nb-1"), at: 2 },
+      { type: "split", a: "doc", b: "pad", axis: "vertical", at: 3 },
+      { type: "focus", id: "pad", at: 4 },
+    );
+    expect(pdfHoldDecodeInSplit(state, "doc", true, false)).toBe(false);
+    expect(pdfHoldDecodeInSplit(state, "doc", true, true)).toBe(false);
+  });
+
+  it("yields rest-2 when two PDFs share a split and this one is unfocused", () => {
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: pdf("a"), at: 1 },
+      { type: "open", tab: pdf("b"), at: 2 },
+      { type: "split", a: "a", b: "b", axis: "vertical", at: 3 },
+      { type: "focus", id: "b", at: 4 },
+    );
+    expect(pdfHoldDecodeInSplit(state, "a", true, false)).toBe(true);
+    expect(pdfHoldDecodeInSplit(state, "b", true, true)).toBe(false);
+  });
+
+  it("does not yield for a parked PDF", () => {
+    const state = run(
+      initialTabState(),
+      { type: "open", tab: pdf("doc"), at: 1 },
+      { type: "open", tab: board("pad", "nb-1"), at: 2 },
+    );
+    expect(pdfHoldDecodeInSplit(state, "doc", false, false)).toBe(false);
   });
 });

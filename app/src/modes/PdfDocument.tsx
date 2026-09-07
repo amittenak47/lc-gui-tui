@@ -265,8 +265,11 @@ export interface PdfDocumentProps {
   paused?: boolean;
   /**
    * Split partner still on screen: keep the observer and bitmaps, do not
-   * take the shared pdf.js worker. `paused` is the off-screen case and
-   * tears the observer down — a tab tap must not do that.
+   * take the shared pdf.js worker. Only set this when that partner is also
+   * a PDF — a whiteboard does not need the worker, and yielding would leave
+   * the file at 0.25 preview ("blurred like scrolling") while you draw.
+   * `paused` is the off-screen case and tears the observer down — a tab tap
+   * must not do that.
    */
   holdDecode?: boolean;
   /**

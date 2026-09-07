@@ -41,6 +41,7 @@ describe("InkPresetEditor", () => {
   it("paints the pen Preview with Ink lab capsules, not the miter strip", () => {
     const src = readFileSync(join(here, "InkPresetEditor.tsx"), "utf8");
     expect(src).toMatch(/labPreviewSpine/);
+    expect(src).toMatch(/wrapPreviewUiWidth/);
     expect(src).toMatch(/InkLabPreviewStrip/);
     expect(src).not.toMatch(/fillMiterStroke/);
     expect(src).toMatch(/Speed ink/);

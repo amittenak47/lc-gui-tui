@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 
 import { HoldButton } from "../components/HoldButton";
 import { MorphBar } from "../components/MorphBar";
+import { SettingsSlider } from "../components/SettingsSlider";
 import { PinkEraserIcon, StraightIcon } from "../components/MarkToolIcons";
 import { ColorRadial } from "./ColorRadial";
 import { InkFullnessSlider } from "./InkFullnessSlider";
@@ -18,7 +19,8 @@ import {
   type InkLabEngine,
   type InkLabSample,
 } from "./inkLab/engine";
-import { labPenFromToolbar, labPreviewSpine, capillaryRelax } from "./inkLab/style";
+import { canvasBitmapFromClient, canvasCssFromClient } from "./canvasPointer";
+import { labPenFromToolbar, labPreviewSpine, wrapPreviewUiWidth, capillaryRelax } from "./inkLab/style";
 import { bakeSpine } from "./inkLab/bake";
 import {
   applyInkOp,
@@ -132,16 +134,15 @@ function paintLabPreview(
     canvas.width = bw;
     canvas.height = bh;
   }
-  const pen = labPenFromSnap(snap, dpr);
+  const pen = labPenFromSnap({ ...snap, width: wrapPreviewUiWidth(snap.width) }, dpr);
   engine.setPen(pen);
   const raw = labPreviewSpine(pen, TEST_STRIP_POINTS, dpr, cssW / 468, cssH / 88);
   const baked = bakeSpine(raw, {
     clothoid: snap.clothoid,
     smoothing: snap.smoothing,
   });
-  engine.replaySpines([
-    snap.capillary ? capillaryRelax(baked.points) : baked.points,
-  ]);
+  const points = snap.capillary ? capillaryRelax(baked.points) : baked.points;
+  engine.replaySpines([points]);
   engine.paintOntoSnap((ctx) => {
     ctx.save();
     ctx.globalCompositeOperation = "destination-over";
@@ -621,15 +622,14 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
 }
 
 function sampleOf(canvas: HTMLCanvasElement, event: PointerEvent): InkLabSample {
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
+  const { x, y } = canvasBitmapFromClient(canvas, event.clientX, event.clientY);
   const pressure =
     event.pointerType === "pen" && Number.isFinite(event.pressure)
       ? event.pressure
       : 0.5;
   return {
-    x: (event.clientX - rect.left) * dpr,
-    y: (event.clientY - rect.top) * dpr,
+    x,
+    y,
     p: pressure,
     t: event.timeStamp,
   };
@@ -841,9 +841,7 @@ function StampLivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnaps
     paintFnRef.current = paint;
 
     const pointFrom = (event: PointerEvent): ScenePoint => {
-      const rect = canvas.getBoundingClientRect();
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
+      const { x, y } = canvasCssFromClient(canvas, event.clientX, event.clientY);
       const t = event.timeStamp || performance.now();
       const raw = pointerPressure(event.pressure, event.pointerType);
       const prev = pressureEmaRef.current;
@@ -1414,19 +1412,15 @@ function SettingsRange({
   onChange: (next: number) => void;
 }) {
   return (
-    <div className="lc-settings-slider">
-      <input
-        type="range"
-        className="lc-settings-slider-input"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        aria-label={label}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-      <span className="lc-settings-slider-value">{display ?? `${value}%`}</span>
-    </div>
+    <SettingsSlider
+      label={label}
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      display={display}
+      onChange={onChange}
+    />
   );
 }
 

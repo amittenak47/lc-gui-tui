@@ -304,6 +304,31 @@ export function visibleTabIds(state: TabState): string[] {
   return group ? [...group.children] : [state.activeId];
 }
 
+/** Only an annotate PDF takes the shared pdf.js worker. */
+export function tabUsesPdfWorker(tab: TabRecord): boolean {
+  return tab.kind === "annotate" && tab.docType === "pdf";
+}
+
+/**
+ * Drop this PDF to 0.25 preview so a focused sibling PDF can keep rest-2.
+ *
+ * A whiteboard (or markdown) partner does not use the worker. Yielding anyway
+ * is why a split file went soft the moment the other pane was focused.
+ */
+export function pdfHoldDecodeInSplit(
+  state: TabState,
+  tabId: string,
+  showing: boolean,
+  active: boolean,
+): boolean {
+  if (!showing || active) return false;
+  const me = state.tabs.find((tab) => tab.id === tabId);
+  if (!me?.group || !tabUsesPdfWorker(me)) return false;
+  return state.tabs.some(
+    (tab) => tab.id !== tabId && tab.group === me.group && tabUsesPdfWorker(tab),
+  );
+}
+
 /**
  * Pin ids at the front of the live list, in that order, without duplicates.
  *
