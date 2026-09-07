@@ -38,7 +38,14 @@ import {
   type ScenePoint,
   type ViewportTransform,
 } from "./rasterInk";
-import type { PanCamera } from "./panOffset";
+import {
+  OVERDRAW_REBASE_HEADROOM,
+  PAN_REBASE_FRACTION,
+  overdrawMarginPx,
+  overdrawnViewport,
+  panDelta,
+  type PanCamera,
+} from "./panOffset";
 import { straightAnchorFor } from "./straightAnchor";
 
 export interface RasterInkHandle {
@@ -90,6 +97,20 @@ export interface WhiteboardInkLabProps {
   onWheelHold?: (clientX: number, clientY: number) => void;
   perfOverlay?: boolean;
 }
+
+function fallbackViewport(width: number, height: number): ViewportTransform {
+  return {
+    zoom: 1,
+    scrollX: 0,
+    scrollY: 0,
+    offsetLeft: 0,
+    offsetTop: 0,
+    width,
+    height,
+  };
+}
+
+type PaintedLabView = PanCamera & { width: number; height: number; marginY: number };
 
 function cloneOps(ops: readonly InkOp[]): InkOp[] {
   return ops.map((op) => ({ ...op, points: [...op.points] }));
@@ -259,49 +280,59 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const lastRafRef = useRef(0);
     const bakeRef = useRef({ bakeMs: 0, bake: "catmull" });
     const backendRef = useRef("none");
+    const marginYRef = useRef(0);
+    const paintedViewRef = useRef<PaintedLabView | null>(null);
+
+    const readViews = useCallback(() => {
+      const canvas = canvasRef.current;
+      const host = hostRef.current;
+      const marginY = marginYRef.current;
+      const raw = getViewportRef.current();
+      const width = Math.max(1, raw?.width || host?.clientWidth || 1);
+      const height = Math.max(1, raw?.height || host?.clientHeight || 1);
+      const view = raw
+        ? { ...raw, width, height }
+        : fallbackViewport(width, height);
+      const dpr = canvas
+        ? canvas.width / Math.max(1, canvas.clientWidth || canvas.width)
+        : 1;
+      return {
+        view,
+        paintView: overdrawnViewport(view, marginY),
+        dpr,
+        marginY,
+      };
+    }, []);
 
     const presentCommitted = useCallback(() => {
       const canvas = canvasRef.current;
       const engine = engineRef.current;
       if (!canvas || !engine) return;
-      const dpr = canvas.width / Math.max(1, canvas.clientWidth || canvas.width);
-      const view = getViewportRef.current() ?? {
-        zoom: 1,
-        scrollX: 0,
-        scrollY: 0,
-        offsetLeft: 0,
-        offsetTop: 0,
-        width: canvas.clientWidth,
-        height: canvas.clientHeight,
-      };
+      const { view, paintView, dpr, marginY } = readViews();
       engine.replaySpines(overlayRef.current);
       const { stamp } = splitInkOpsForLabReplay(bookRef.current.paintOps());
       if (stamp.length > 0) {
         engine.paintOntoSnap((sctx) => {
-          paintRasterInk(sctx, view, stamp, null, dpr, clipRef.current, false);
+          paintRasterInk(sctx, paintView, stamp, null, dpr, clipRef.current, false);
         });
       }
       engine.paint();
-    }, []);
+      paintedViewRef.current = {
+        scrollX: view.scrollX,
+        scrollY: view.scrollY,
+        zoom: view.zoom,
+        width: view.width,
+        height: view.height,
+        marginY,
+      };
+    }, [readViews]);
 
     const rebuildOverlayFromBook = useCallback(() => {
-      const canvas = canvasRef.current;
-      const dpr = canvas
-        ? canvas.width / Math.max(1, canvas.clientWidth || canvas.width)
-        : 1;
-      const view = getViewportRef.current() ?? {
-        zoom: 1,
-        scrollX: 0,
-        scrollY: 0,
-        offsetLeft: 0,
-        offsetTop: 0,
-        width: canvas?.clientWidth ?? 1,
-        height: canvas?.clientHeight ?? 1,
-      };
+      const { paintView, dpr } = readViews();
       const { lab } = splitInkOpsForLabReplay(bookRef.current.paintOps());
-      overlayRef.current = lab.map((op) => overlaySpineFromDrawOp(op, view, dpr));
+      overlayRef.current = lab.map((op) => overlaySpineFromDrawOp(op, paintView, dpr));
       overlayRedoRef.current = [];
-    }, []);
+    }, [readViews]);
 
     useImperativeHandle(
       ref,
@@ -354,7 +385,19 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             if (canvas.style.transform) canvas.style.transform = "";
             return true;
           }
-          return true;
+          // Board already translates `.lc-ink-lab-canvas`. We only veto when
+          // the overdraw margin is spent so a rebase can replay at the live camera.
+          if (drawingRef.current) return true;
+          const painted = paintedViewRef.current;
+          if (!painted) return false;
+          const delta = panDelta(
+            live,
+            painted,
+            { width: painted.width, height: painted.height },
+            PAN_REBASE_FRACTION,
+            { y: Math.max(1, painted.marginY) * OVERDRAW_REBASE_HEADROOM },
+          );
+          return !delta.rebase;
         },
         commitCamera() {
           const canvas = canvasRef.current;
@@ -446,13 +489,24 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         const dpr = window.devicePixelRatio || 1;
         const cssW = Math.max(1, host.clientWidth);
         const cssH = Math.max(1, host.clientHeight);
+        const marginY = overdrawMarginPx(cssH, dpr);
+        marginYRef.current = marginY;
+        const canvasCssH = cssH + 2 * marginY;
         const pixelW = Math.max(1, Math.round(cssW * dpr));
-        const pixelH = Math.max(1, Math.round(cssH * dpr));
-        if (canvas.width !== pixelW || canvas.height !== pixelH) {
+        const pixelH = Math.max(1, Math.round(canvasCssH * dpr));
+        const top = `${-marginY}px`;
+        const resized =
+          canvas.width !== pixelW ||
+          canvas.height !== pixelH ||
+          canvas.style.top !== top;
+        canvas.style.width = `${cssW}px`;
+        canvas.style.height = `${canvasCssH}px`;
+        canvas.style.top = top;
+        canvas.style.left = "0px";
+        if (resized) {
           canvas.width = pixelW;
           canvas.height = pixelH;
-          canvas.style.width = `${cssW}px`;
-          canvas.style.height = `${cssH}px`;
+          rebuildOverlayFromBook();
           presentCommitted();
         }
       };
@@ -748,20 +802,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         );
         loadBarRef.current?.freeze();
         if (baked.points.length > 0) {
-          const dpr = canvas.width / Math.max(1, canvas.clientWidth || canvas.width);
-          const view = getViewportRef.current() ?? {
-            zoom: 1,
-            scrollX: 0,
-            scrollY: 0,
-            offsetLeft: 0,
-            offsetTop: 0,
-            width: canvas.clientWidth,
-            height: canvas.clientHeight,
-          };
+          const { paintView, dpr } = readViews();
           bookRef.current.commit(
             opFromBake(
               baked,
-              view,
+              paintView,
               dpr,
               inkColorRef.current,
               strokeWidthRef.current,
@@ -797,7 +842,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         engine.destroy();
         engineRef.current = null;
       };
-    }, [enabled, presentCommitted]);
+    }, [enabled, presentCommitted, readViews, rebuildOverlayFromBook]);
 
     useEffect(() => {
       if (!perfOverlay) {
