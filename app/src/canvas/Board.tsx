@@ -1331,12 +1331,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
   const [, setInkSmoothingMode] = useState(() => loadInkSmoothingMode());
   const [straightInk, setStraightInk] = useState(() => inkPrefsRef.current.straightInk);
-  const [, setInkSpeed] = useState(() => loadInkSpeed());
+  const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
   const [inkSpeedBlotBlend, setInkSpeedBlotBlend] = useState(() =>
     loadInkSpeedBlotBlend(),
   );
   const [, setInkGrain] = useState(() => loadInkGrain());
-  const [, setInkSpeedFade] = useState(() => loadInkSpeedFade());
+  const [inkSpeedFade, setInkSpeedFade] = useState(() => loadInkSpeedFade());
   const [, setInkSplineOutline] = useState(() => loadInkSplineOutline());
   const [, setInkSplineGradient] = useState(() => loadInkSplineGradient());
   const [, setInkBoldness] = useState(() => loadInkBoldness());
@@ -9332,7 +9332,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         pressureClip={pressureClip}
         smoothing={inkSmoothing}
         straightInk={straightInk}
+        speedInk={inkSpeed}
         speedBlotBlend={inkSpeedBlotBlend}
+        speedFade={inkSpeedFade}
         pressureSensitive={pressureSensitive}
         getViewport={getViewport}
         clip={inkClip}
