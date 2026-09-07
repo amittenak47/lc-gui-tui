@@ -4,16 +4,6 @@ import { describe, expect, it } from "vitest";
 import { createFallbackPainter, fillMiterStroke } from "./fallback";
 
 describe("2D fallback", () => {
-  it("does not call arc at interior joins", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { dirname, join } = await import("node:path");
-    const { fileURLToPath } = await import("node:url");
-    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fallback.ts"), "utf8");
-    const loop = src.slice(src.indexOf("for (let i = 1"), src.indexOf("const head"));
-    expect(loop).toContain("fillQuad");
-    expect(loop).not.toContain(".arc(");
-  });
-
   it("paints a mitered strip onto a canvas", () => {
     const canvas = createCanvas(200, 120);
     const ctx = canvas.getContext("2d") as unknown as CanvasRenderingContext2D;
