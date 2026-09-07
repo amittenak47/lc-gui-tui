@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { dryWashRgb } from "../rasterInk";
-import { capillaryRelax, growTipRadius, INK_HEX, labCssSpeedFromSlowness, labHoldGrow, labNibSizeFromUiWidth, labPenDot, labPenFromToolbar, labPreviewSpine, labPressureAmt, washRgb } from "./style";
+import { capillaryRelax, growTipRadius, INK_HEX, labCssSpeedFromSlowness, labHoldGrow, labNibSizeFromUiWidth, labPenDot, labPenFromToolbar, labPreviewSpine, labPressureAmt, labSwellHoldPool, washRgb } from "./style";
 
 describe("ink lab style", () => {
   it("wash uses dryWashRgb", () => {
@@ -18,6 +18,22 @@ describe("ink lab style", () => {
     for (let i = 0; i < 40; i++) r = growTipRadius(base, r);
     expect(r).toBeGreaterThan(base);
     expect(r).toBeLessThanOrEqual(base * 1.7 + 1e-6);
+  });
+
+  it("hold pool swells the trail instead of a disc on a stick", () => {
+    const rest = [
+      { x: 0, y: 0, r: 8, rgb: [120, 120, 120] as [number, number, number] },
+      { x: 12, y: 0, r: 8, rgb: [120, 120, 120] as [number, number, number] },
+      { x: 24, y: 0, r: 8, rgb: [120, 120, 120] as [number, number, number] },
+    ];
+    const spine = rest.map((p) => ({ ...p, rgb: [...p.rgb] as [number, number, number] }));
+    labSwellHoldPool(spine, rest, 10, 1, [20, 20, 20]);
+    expect(spine[2]!.r).toBe(10);
+    expect(spine[1]!.r).toBeGreaterThan(8);
+    expect(spine[1]!.r).toBeLessThan(10);
+    expect(spine[0]!.r).toBeLessThanOrEqual(spine[1]!.r);
+    expect(spine[2]!.rgb![0]).toBe(20);
+    expect(spine[1]!.rgb![0]).toBeLessThan(120);
   });
 
   it("toolbar width and colour change the live nib", () => {
@@ -190,6 +206,26 @@ describe("ink lab style", () => {
     expect(spine[0]!.r).toBeGreaterThan(spine[spine.length - 1]!.r);
     expect(spine[spine.length - 1]!.rgb![0]).toBeGreaterThan(spine[0]!.rgb![0]);
     expect(labCssSpeedFromSlowness(0.5)).toBeCloseTo(1.2, 5);
+  });
+
+  it("preview blot swells slow peaks like a remeshed pool", () => {
+    const pen = labPenFromToolbar({
+      color: "#2244aa",
+      uiWidth: 8,
+      dpr: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speed: 0,
+      fade: 0,
+      blot: 1,
+    });
+    const spine = labPreviewSpine(pen, [
+      { x: 0, y: 0, pressure: 0.5, slowness: 0.5 },
+      { x: 24, y: 0, pressure: 0.5, slowness: 0.9 },
+      { x: 48, y: 0, pressure: 0.5, slowness: 0.5 },
+    ], 1);
+    const peak = Math.max(...spine.map((p) => p.r));
+    expect(peak).toBeGreaterThan(spine[0]!.r * 1.05);
   });
 
   it("capillary relaxes interior samples and is opt-in", () => {

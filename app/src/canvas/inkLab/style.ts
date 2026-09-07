@@ -6,7 +6,9 @@ import {
   blotPoolRgb,
   dryWashRgb,
   hasStylusPressure,
+  inkBlotPoolT,
   inkBlotRestPoolT,
+  INK_BLOT_SIZE_RANGE,
   inkSlowness,
   INK_SLOWNESS_NEUTRAL,
   INK_SPEED_NEUTRAL_PX_MS,
@@ -124,7 +126,10 @@ export function labPenDot(
   const gain = 1 + (labWashGain(slow) - 1) * fade;
   let washed = dryWashRgb(pen.color, gain);
   if (blot > 1e-3) {
-    const poolT = inkBlotRestPoolT(slow, blot);
+    const poolT = Math.max(
+      inkBlotRestPoolT(slow, blot),
+      inkBlotPoolT(_growT, blot),
+    );
     if (poolT > 1e-3) {
       washed = blotPoolRgb(
         `rgb(${washed.r}, ${washed.g}, ${washed.b})`,
@@ -208,7 +213,34 @@ export function labPreviewSpine(
       slow: styled.slow,
     });
   }
+  labPreviewPool(pen, out);
   return out;
+}
+
+/** Fuse blot pools at slow peaks so the Preview strip matches lift remesh. */
+function labPreviewPool(pen: InkLabPen, spine: SpineDot[]): void {
+  const blot = Math.max(0, Math.min(1, pen.speedBlotBlend));
+  if (blot < 1e-3 || spine.length < 2) return;
+  const rest = spine.map((p) => ({
+    ...p,
+    rgb: p.rgb
+      ? ([p.rgb[0], p.rgb[1], p.rgb[2]] as [number, number, number])
+      : undefined,
+  }));
+  for (let i = 0; i < spine.length; i++) {
+    const s = rest[i]!.slow ?? 0;
+    if (s <= 0.78) continue;
+    const prev = rest[i - 1]?.slow ?? s;
+    const next = rest[i + 1]?.slow ?? s;
+    const peak =
+      (i === 0 || s >= prev) && (i === spine.length - 1 || s >= next);
+    if (!peak) continue;
+    const growT = blot * Math.min(1, (s - 0.5) / 0.5);
+    if (growT < 1e-3) continue;
+    const base = rest[i]!;
+    const grown = base.r * (1 + (TIP_GROW - 1) * growT);
+    labSwellHoldPool(spine, rest, grown, growT, base.rgb ?? INK_RGB, i);
+  }
 }
 
 /** Toolbar / preset snapshot → live Ink lab pen. Never scales by board zoom. */
@@ -256,6 +288,62 @@ export function labHoldGrow(base: number, current: number, blot: number): number
   if (t < 1e-3) return base;
   const cap = base * (1 + (TIP_GROW - 1) * t);
   return Math.min(cap, current + (cap - base) * 0.05);
+}
+
+/**
+ * Bleed a hold pool back along the live spine so the blot is the stroke
+ * swelling, not a disc sitting on the last capsule. `rest` is the spine at
+ * hold start; each tick writes from that snapshot so growth does not stack.
+ */
+export function labSwellHoldPool(
+  spine: SpineDot[],
+  rest: readonly SpineDot[],
+  grownR: number,
+  growT: number,
+  rgb: [number, number, number],
+  tipIndex = spine.length - 1,
+): void {
+  if (spine.length === 0 || rest.length !== spine.length) return;
+  const iTip = Math.max(0, Math.min(tipIndex, spine.length - 1));
+  const last = spine[iTip]!;
+  last.r = Math.max(last.r, grownR);
+  last.rgb = rgb;
+  if (growT < 1e-3) return;
+  const acc = [0];
+  for (let i = 1; i < spine.length; i++) {
+    const a = spine[i - 1]!;
+    const b = spine[i]!;
+    acc.push(acc[i - 1]! + Math.hypot(b.x - a.x, b.y - a.y));
+  }
+  const origin = acc[iTip]!;
+  const restTip = rest[iTip]!.r;
+  const plateau = grownR;
+  const radius = grownR + restTip * (1.15 + INK_BLOT_SIZE_RANGE);
+  const g = Math.max(0, Math.min(1, growT));
+  for (let i = 0; i < spine.length; i++) {
+    const base = rest[i]!;
+    if (i === iTip) continue;
+    const dist = Math.abs(acc[i]! - origin);
+    let w = 0;
+    if (dist <= plateau) w = 1;
+    else if (dist < radius) {
+      const span = radius - plateau;
+      const t = span > 1e-6 ? 1 - (dist - plateau) / span : 1;
+      w = t * t;
+    }
+    w *= g;
+    if (w <= 0) continue;
+    const nextR = base.r + (grownR - base.r) * w;
+    spine[i]!.r = Math.max(spine[i]!.r, nextR);
+    const from = base.rgb;
+    if (from) {
+      spine[i]!.rgb = [
+        from[0] + (rgb[0] - from[0]) * w,
+        from[1] + (rgb[1] - from[1]) * w,
+        from[2] + (rgb[2] - from[2]) * w,
+      ];
+    }
+  }
 }
 
 export function capillaryRelax(points: readonly SpineDot[], sweeps = 6): SpineDot[] {

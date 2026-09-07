@@ -27,6 +27,7 @@ import {
   labNibRadius,
   labPenDot,
   labPenNibOverlay,
+  labSwellHoldPool,
   TIP_GROW,
   washRgb,
   type InkLabPen,
@@ -120,6 +121,8 @@ export type InkLabEngineOpts = {
 
 export const DISTANCE_GATE_CSS = 2.5;
 const HOLD_TICK_MS = 32;
+/** Pause after the last sample before a still press counts as a hold. */
+const HOLD_IDLE_MS = 60;
 
 function inkOf(d: SpineDot): [number, number, number] {
   return d.rgb ?? INK_RGB;
@@ -215,7 +218,10 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   let consumed = 0;
   let holdTicks = 0;
   let holdBase: SpineDot | null = null;
+  /** Spine radii/colours at hold start, so live pooling does not stack. */
+  let holdRest: SpineDot[] | null = null;
   let lastHoldWall = 0;
+  let lastSampleWall = 0;
   let blotTipGrow = 0;
   let blotHalts: InkLabHalt[] = [];
 
@@ -243,7 +249,9 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     consumed = 0;
     holdTicks = 0;
     holdBase = null;
+    holdRest = null;
     lastHoldWall = 0;
+    lastSampleWall = 0;
     blotTipGrow = 0;
     blotHalts = [];
     sdf?.clear();
@@ -327,6 +335,15 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     });
   };
 
+  const armHold = (at: SpineDot, now: number) => {
+    if (holding) return;
+    holding = true;
+    holdTicks = 0;
+    holdBase = cloneDot(at);
+    holdRest = spine.map(cloneDot);
+    lastHoldWall = now;
+  };
+
   const applyHoldGrow = (now: number) => {
     if (!holding || !pen || !holdBase || !tip) return;
     const dt = now - lastHoldWall;
@@ -338,10 +355,37 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     if (holdBase.r > 1e-6) {
       blotTipGrow = Math.max(blotTipGrow, (grown / holdBase.r - 1) / (TIP_GROW - 1));
     }
+    const styled = labPenDot(
+      pen,
+      0,
+      0,
+      pen.dpr,
+      holdBase.p ?? 0.5,
+      consumed,
+      blotTipGrow,
+    );
+    const last = spine[spine.length - 1];
+    const already = Boolean(last && Math.abs(last.r - grown) < 1e-4);
     tip = {
       ...holdBase,
       r: grown,
+      rgb: styled.rgb,
+      a: styled.a,
+      slow: styled.slow,
     };
+    if (holdRest && holdRest.length === spine.length) {
+      labSwellHoldPool(spine, holdRest, grown, blotTipGrow, styled.rgb);
+    } else if (last) {
+      last.r = grown;
+      last.rgb = styled.rgb;
+      last.a = styled.a;
+      last.slow = styled.slow;
+    }
+    if (!already) {
+      remesh(spine);
+      sdfFull = true;
+      sdfLive = 0;
+    }
     expandAabb(aabb, tip);
   };
 
@@ -363,6 +407,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
 
   const ingest = (s: InkLabSample) => {
     const t0 = performance.now();
+    lastSampleWall = t0;
     const dpr = pen?.dpr ?? (host ? dprOf(host) : 1);
     const gate = DISTANCE_GATE_CSS * dpr;
     if (spine.length === 0) {
@@ -372,6 +417,12 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       expandAabb(aabb, first);
       tip = first;
       fallback?.beginStroke();
+      if (pen && pen.speedBlotBlend > 1e-3) {
+        armHold(
+          first,
+          typeof performance !== "undefined" ? performance.now() : s.t,
+        );
+      }
       lastEkfMs = performance.now() - t0;
       return;
     }
@@ -381,15 +432,19 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     const last = spine[spine.length - 1]!;
     const dist = Math.hypot(dot.x - last.x, dot.y - last.y);
     if (dist < gate) {
-      if (!holding) {
-        holding = true;
-        holdTicks = 0;
-        holdBase = { ...last };
-        lastHoldWall = typeof performance !== "undefined" ? performance.now() : s.t;
-      }
+      const now = typeof performance !== "undefined" ? performance.now() : s.t;
       if (pen) {
-        applyHoldGrow(typeof performance !== "undefined" ? performance.now() : s.t);
+        if (pen.speedBlotBlend > 1e-3) {
+          armHold(last, now);
+          applyHoldGrow(now);
+        }
       } else {
+        if (!holding) {
+          holding = true;
+          holdTicks = 0;
+          holdBase = { ...last };
+          lastHoldWall = now;
+        }
         const grown = growTipRadius(last.r, tip?.r ?? last.r);
         tip = {
           x: last.x,
@@ -410,6 +465,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       holding = false;
       holdTicks = 0;
       holdBase = null;
+      holdRest = null;
       blotTipGrow = 0;
     }
     appendSpine(dot);
@@ -445,6 +501,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     holding = false;
     holdTicks = 0;
     holdBase = null;
+    holdRest = null;
     lastHoldWall = 0;
     ekf = createEkf();
     sdf?.clear();
@@ -560,6 +617,12 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   const flushSdfLive = (): boolean => {
     if (!sdf) return true;
     if (segs < 1) {
+      if (tip) {
+        ensureInst(1);
+        writeInstance(inst, 0, tip, tip, inkOf(tip), inkOf(tip));
+        sdf.upload(inst, 1);
+        sdf.draw(aabb);
+      }
       sdfLive = 0;
       return true;
     }
@@ -604,7 +667,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     if (sdf) {
       lastSuffix = flushSdfLive();
       ctx.drawImage(sdf.canvas, 0, 0);
-      drawTip(ctx);
     } else if (fallback) {
       fallback.blit(ctx);
       drawTip(ctx);
@@ -711,7 +773,12 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     paint() {
       const t0 = performance.now();
       if (host && sdf?.isLost()) this.attach(host);
-      if (drawing && holding && pen) applyHoldGrow(t0);
+      if (drawing && pen && pen.speedBlotBlend > 1e-3 && spine.length > 0) {
+        if (!holding && t0 - lastSampleWall >= HOLD_IDLE_MS) {
+          armHold(spine[spine.length - 1]!, t0);
+        }
+        if (holding) applyHoldGrow(t0);
+      }
       syncSize();
       const tDraw = performance.now();
       const suffix = composite();
