@@ -10,7 +10,6 @@ import {
   inkLineWidth,
   inkPoolingWidthGain,
   inkSlowness,
-  inkStrokeStyle,
 } from "../rasterInk";
 
 import type { SpineDot } from "./instance";
@@ -60,7 +59,10 @@ function rgbTuple(
 }
 
 /**
- * Live radius + wash from the same formulas the committed InkOp paint uses.
+ * Live radius matching the Ink lab pad: continuous capsules, not speed-ink
+ * beads. Toolbar size sets the base; pace and pressure taper it the same way
+ * `nibRadius` does on the comparison pad. Coverage stays opaque so overlapping
+ * cones do not read as a stamp chain.
  */
 export function labPenDot(
   pen: InkLabPen,
@@ -68,34 +70,27 @@ export function labPenDot(
   vy: number,
   dpr: number,
   pressure: number,
-  consumed: number,
+  _consumed: number,
   growT: number,
 ): { r: number; rgb: [number, number, number]; a: number; slow: number } {
   const cssPxPerMs = Math.hypot(vx, vy) / 1000 / Math.max(dpr, 1e-6);
   const slow = inkSlowness(cssPxPerMs);
-  const style = inkStrokeStyle(
-    pen.baseWidth,
-    pen.maxFullness,
-    pressure,
-    pen.pressureClip,
-    pen.pressureSensitive,
-    consumed,
-    slow,
-    pen.speedInk,
-    false,
-    pen.boldness,
-    pen.speedFade,
-  );
   const pAmt =
     pen.pressureSensitive && hasStylusPressure(pressure)
-      ? Math.max(0, Math.min(1, pressure))
-      : 1;
-  const widthGain = inkPoolingWidthGain(growT, pen.speedBlotBlend, pAmt);
-  const r = Math.max(0.5, (style.lineWidth * pen.overlayScale * widthGain) / 2);
-  const poolT =
-    growT > 1e-6 ? blotRichnessT(growT, pen.speedBlotBlend, slow, pAmt) : 0;
-  const washed = dryWashRgb(pen.color, style.dryGain ?? 1);
-  return { r, rgb: rgbTuple(washed, poolT), a: style.alpha, slow };
+      ? Math.max(0.15, Math.min(1, pressure))
+      : 0.5;
+  const baseR = Math.max(
+    1.15 * dpr,
+    (inkLineWidth(pen.baseWidth, 0, false) * pen.overlayScale) / 2,
+  );
+  const widthGain = inkPoolingWidthGain(growT, 0, pAmt);
+  const r = Math.max(
+    1.15 * dpr,
+    baseR * (0.5 + 0.95 * slow) * (0.7 + 0.3 * pAmt) * widthGain,
+  );
+  const poolT = growT > 1e-6 ? blotRichnessT(growT, 0, slow, pAmt) : 0;
+  const washed = dryWashRgb(pen.color, 1);
+  return { r, rgb: rgbTuple(washed, poolT), a: 1, slow };
 }
 
 export function labPenNibOverlay(pen: InkLabPen): number {
