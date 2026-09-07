@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   documentCameraAfterViewportChange,
   excalidrawViewportNeedsSync,
+  keepZoomCenterCameraAfterViewportChange,
   liveBoardViewSize,
   liveExcalidrawViewport,
 } from "./documentRotateCamera";
@@ -85,6 +86,74 @@ describe("documentCameraAfterViewportChange", () => {
     const before = inset.top / portrait.zoom - portrait.scrollY;
     const after = inset.top / landscape.zoom - landscape.scrollY;
     expect(after).toBeCloseTo(before, 5);
+  });
+});
+
+describe("keepZoomCenterCameraAfterViewportChange", () => {
+  const page = { minX: 0, minY: 0, maxX: 3920, maxY: 4200 };
+
+  it("keeps zoom and centers X when the pane grows", () => {
+    const thin = keepZoomCenterCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 390,
+      prevZoom: 0.1,
+      prevScrollY: -200,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    const wide = keepZoomCenterCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 844,
+      prevZoom: thin.zoom,
+      prevScrollY: thin.scrollY,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    expect(wide.zoom).toBeCloseTo(thin.zoom, 5);
+    const availW = 844 - inset.left - inset.right;
+    const slack = availW - 3920 * wide.zoom;
+    expect(slack).toBeGreaterThan(100);
+    expect(wide.scrollX).toBeCloseTo((inset.left + slack / 2) / wide.zoom, 5);
+  });
+
+  it("zooms out when the pane is too narrow for the kept zoom", () => {
+    const camera = keepZoomCenterCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 250,
+      prevZoom: 0.2,
+      prevScrollY: 0,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    const availW = 250 - inset.left - inset.right;
+    expect(camera.zoom).toBeCloseTo(availW / 3920, 5);
+    expect(3920 * camera.zoom).toBeLessThanOrEqual(availW + 0.5);
+  });
+
+  it("keeps the same scene line at the top of the hole", () => {
+    const first = keepZoomCenterCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 390,
+      prevZoom: 0.1,
+      prevScrollY: -480,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    const sceneYTop = inset.top / first.zoom - first.scrollY;
+    const next = keepZoomCenterCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 844,
+      prevZoom: first.zoom,
+      prevScrollY: first.scrollY,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    expect(inset.top / next.zoom - next.scrollY).toBeCloseTo(sceneYTop, 5);
   });
 });
 

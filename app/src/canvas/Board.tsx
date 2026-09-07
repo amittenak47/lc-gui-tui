@@ -125,6 +125,7 @@ import {
 import {
   documentCameraAfterViewportChange,
   excalidrawViewportNeedsSync,
+  keepZoomCenterCameraAfterViewportChange,
   liveBoardViewSize,
   liveExcalidrawViewport,
 } from "./documentRotateCamera";
@@ -5725,8 +5726,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           const ops = rasterInkRef.current?.getOps() ?? [];
           let nextH: number;
           if (isDrawPageRegion(typeof regionKey === "string" ? regionKey : null)) {
-            const basePageH = fillHeight;
-            drawBasePageHRef.current = basePageH;
             const contentBottomRel = contentBottomInFrame(live, ops, {
               x: primary.x,
               y: primary.y,
@@ -5734,14 +5733,38 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               height: num(primary.height, 0),
               customData: primary.customData ?? undefined,
             });
-            nextH = Math.max(
-              regionMin,
-              growDrawHeight({
-                basePageH,
-                currentH: num(primary.height, 0),
-                contentBottomRel,
-              }),
-            );
+            const curDrawH = num(primary.height, 0);
+            if (mode === "keepY") {
+              /*
+               * Sash / chrome resize: do not morph the sheet to the new hole.
+               * Width-fit fillHeight shrank a wider pane's page and killed scroll.
+               */
+              const prevZoom =
+                liveCameraRef.current?.zoom ??
+                (api.getAppState() as { zoom?: { value?: number } }).zoom?.value ??
+                1;
+              const basePageH = Math.max(1, availHeight / Math.max(prevZoom, 1e-6));
+              drawBasePageHRef.current = basePageH;
+              nextH = Math.max(
+                curDrawH,
+                growDrawHeight({
+                  basePageH,
+                  currentH: curDrawH,
+                  contentBottomRel,
+                }),
+              );
+            } else {
+              const basePageH = fillHeight;
+              drawBasePageHRef.current = basePageH;
+              nextH = Math.max(
+                regionMin,
+                growDrawHeight({
+                  basePageH,
+                  currentH: curDrawH,
+                  contentBottomRel,
+                }),
+              );
+            }
           } else if (
             Boolean(
               (primary as { customData?: { lcDocumentPage?: boolean } }).customData
@@ -5894,16 +5917,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         };
         const riding = liveCameraRef.current;
         const keepDocumentY = mode === "keepY";
+        const keepYInput = {
+          box: { minX, minY, maxX, maxY },
+          inset,
+          viewWidth,
+          prevZoom: riding?.live ? riding.zoom : (prevCamera.zoom?.value ?? 1),
+          prevScrollY: riding?.live ? riding.scrollY : (prevCamera.scrollY ?? 0),
+          zoomMin: FIT_ZOOM_MIN,
+          zoomMax: ZOOM_MAX,
+        };
         const rotated = keepDocumentY
-          ? documentCameraAfterViewportChange({
-              box: { minX, minY, maxX, maxY },
-              inset,
-              viewWidth,
-              prevZoom: riding?.live ? riding.zoom : (prevCamera.zoom?.value ?? 1),
-              prevScrollY: riding?.live ? riding.scrollY : (prevCamera.scrollY ?? 0),
-              zoomMin: FIT_ZOOM_MIN,
-              zoomMax: ZOOM_MAX,
-            })
+          ? isDrawPageRegion(page)
+            ? keepZoomCenterCameraAfterViewportChange(keepYInput)
+            : documentCameraAfterViewportChange(keepYInput)
           : null;
         const zoom =
           rotated?.zoom ??
