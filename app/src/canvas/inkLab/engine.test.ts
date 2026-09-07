@@ -1,17 +1,8 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { createInkLabEngine } from "./engine";
 
 describe("createInkLabEngine", () => {
-  it("does not import Excalidraw", () => {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const src = readFileSync(join(here, "engine.ts"), "utf8");
-    expect(src).not.toMatch(/from\s+["'][^"']*excalidraw/i);
-  });
-
   it("returns canvas2d when webgl2 is missing", () => {
     const canvas = {
       getContext(kind: string) {

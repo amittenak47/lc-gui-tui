@@ -65,7 +65,7 @@ describe("Ink lab live path", () => {
     expect(Number.isFinite(live.frameMs)).toBe(true);
     engine.up({ x: 180, y: 108, p: 0.45, t: 64 });
     engine.paint();
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d")!;
     const data = ctx.getImageData(0, 0, 400, 300).data;
     let ink = 0;
     for (let i = 3; i < data.length; i += 4) {
