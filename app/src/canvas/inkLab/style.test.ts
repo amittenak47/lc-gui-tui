@@ -364,10 +364,37 @@ describe("ink lab style", () => {
     const done = samplePreviewCamera(8, 9, PREVIEW_BAND_ZOOM_MS + PREVIEW_BAND_MORPH_MS);
     expect(done.displayWidth).toBe(1);
     expect(done.pathScale).toBe(1);
-    const zoomIn = samplePreviewCamera(9, 8, PREVIEW_BAND_ZOOM_MS - 1);
-    expect(zoomIn.displayWidth).toBe(1);
-    expect(zoomIn.pathScale).toBeCloseTo(8, 5);
-    expect(zoomIn.radiusScale).toBeCloseTo(8, 5);
+    const downMorphEnd = samplePreviewCamera(9, 8, PREVIEW_BAND_MORPH_MS - 1);
+    expect(downMorphEnd.displayWidth).toBe(1);
+    expect(downMorphEnd.radiusScale).toBe(1);
+    expect(downMorphEnd.pathScale).toBeGreaterThan(1 / 8);
+    expect(downMorphEnd.pathScale).toBeLessThan(1);
+    const downZoom = samplePreviewCamera(9, 8, PREVIEW_BAND_MORPH_MS);
+    expect(downZoom.displayWidth).toBe(8);
+    expect(downZoom.pathScale).toBeCloseTo(1 / 8, 5);
+    expect(downZoom.radiusScale).toBeCloseTo(1 / 8, 5);
+    const downDone = samplePreviewCamera(9, 8, PREVIEW_BAND_MORPH_MS + PREVIEW_BAND_ZOOM_MS);
+    expect(downDone.displayWidth).toBe(8);
+    expect(downDone.pathScale).toBe(1);
+    expect(downDone.radiusScale).toBe(1);
+    const upMorphMid = samplePreviewCamera(
+      8,
+      9,
+      PREVIEW_BAND_ZOOM_MS + PREVIEW_BAND_MORPH_MS / 2,
+    );
+    const downMorphMid = samplePreviewCamera(9, 8, PREVIEW_BAND_MORPH_MS / 2);
+    expect(downMorphMid.pathScale).toBeCloseTo(upMorphMid.pathScale, 5);
+    expect(downMorphMid.displayWidth).toBe(upMorphMid.displayWidth);
+    expect(downMorphMid.radiusScale).toBe(upMorphMid.radiusScale);
+    const upZoomMid = samplePreviewCamera(8, 9, PREVIEW_BAND_ZOOM_MS / 2);
+    const downZoomMid = samplePreviewCamera(
+      9,
+      8,
+      PREVIEW_BAND_MORPH_MS + PREVIEW_BAND_ZOOM_MS / 2,
+    );
+    expect(downZoomMid.pathScale).toBeCloseTo(upZoomMid.pathScale, 5);
+    expect(downZoomMid.radiusScale).toBeCloseTo(upZoomMid.radiusScale, 5);
+    expect(downZoomMid.displayWidth).toBe(upZoomMid.displayWidth);
     const scaled = applyPreviewCamera(
       [
         { x: 0, y: 0, r: 8 },

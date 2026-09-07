@@ -69,6 +69,12 @@ import {
   saveInkSpeedFade,
 } from "./inkSpeedPref";
 import {
+  INK_HIGHLIGHT_TIPS_DEFAULT,
+  INK_HIGHLIGHT_TIPS_EVENT,
+  loadInkHighlightTips,
+  saveInkHighlightTips,
+} from "./inkHighlightPref";
+import {
   INK_FULLNESS_DEFAULT,
   loadInkToolPrefs,
   saveInkToolPrefs,
@@ -100,6 +106,11 @@ export interface InkDrawSnapshot {
   grain: number;
   fade: number;
   boldness: number;
+  /**
+   * Extra highlighter end stamps. Pen ignores this. True overlaps a disc on
+   * each end (darker tips). False is one round wash at one colour.
+   */
+  highlightTips: boolean;
 }
 
 export interface InkEraserSnapshot {
@@ -154,6 +165,7 @@ export function liveDrawSnapshot(name = "Global"): InkDrawSnapshot {
     grain: loadInkGrain(),
     fade: loadInkSpeedFade(),
     boldness: loadInkBoldness(),
+    highlightTips: loadInkHighlightTips(),
   };
 }
 
@@ -183,6 +195,7 @@ export function defaultDrawSnapshot(name = "Preset"): InkDrawSnapshot {
     grain: INK_GRAIN_DEFAULT,
     fade: INK_SPEED_FADE_DEFAULT,
     boldness: INK_BOLDNESS_DEFAULT,
+    highlightTips: INK_HIGHLIGHT_TIPS_DEFAULT,
   };
 }
 
@@ -244,6 +257,7 @@ function clampDraw(snap: InkDrawSnapshot): InkDrawSnapshot {
     grain: clamp(snap.grain ?? 0, 0, 1),
     fade: clamp(snap.fade, 0, 1),
     boldness: clamp(snap.boldness, INK_BOLDNESS_MIN, INK_BOLDNESS_MAX),
+    highlightTips: snap.highlightTips === true,
   };
 }
 
@@ -373,6 +387,7 @@ export function writeLiveFromDraw(snap: InkDrawSnapshot, prefs: InkToolPrefs): I
   saveInkGrain(snap.grain ?? 0);
   saveInkSpeedFade(snap.fade);
   saveInkBoldness(snap.boldness);
+  saveInkHighlightTips(snap.highlightTips === true);
   emit("lc-ink-pressure-clip");
   emit("lc-ink-smoothing");
   emit("lc-ink-speed");
@@ -380,6 +395,7 @@ export function writeLiveFromDraw(snap: InkDrawSnapshot, prefs: InkToolPrefs): I
   emit(INK_GRAIN_EVENT);
   emit(INK_SPEED_FADE_EVENT);
   emit(INK_BOLDNESS_EVENT);
+  emit(INK_HIGHLIGHT_TIPS_EVENT);
   return next;
 }
 

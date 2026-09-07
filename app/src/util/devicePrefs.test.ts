@@ -100,4 +100,10 @@ describe("collectDevicePrefsBlob", () => {
       expect.objectContaining({ inkSpeedFade: expect.any(Number) }),
     );
   });
+
+  it("includes inkHighlightTips", () => {
+    expect(collectDevicePrefsBlob()).toEqual(
+      expect.objectContaining({ inkHighlightTips: expect.any(Boolean) }),
+    );
+  });
 });

@@ -228,16 +228,17 @@ export function labPreviewSpine(
  * Preview camera: size 1–8 fills the strip. Past 8 the camera steps back so
  * 9 looks like 1, 16 like 8 — same growth again.
  *
- * Every dial step eases. Crossing a band is two beats: a true zoom (path and
- * nib scale together) then a morph that stretches the path back to the strip
- * while the nib stays at the wrapped size.
+ * Every dial step eases. Crossing a band is two beats. Up a band: zoom out
+ * (path and nib scale together) then morph the path back to the strip while
+ * the nib stays at the wrapped size. Down a band is that pair in reverse —
+ * morph the path in, then zoom in — so shrinking matches growing.
  */
 export const PREVIEW_SIZE_BAND = 8;
 /** Ease for a one-notch size change (same band). */
 export const PREVIEW_STEP_MS = 200;
-/** First beat of a band cross: camera zoom out (up) or in (down). */
+/** Zoom beat: camera scale. First when going up a band, second when going down. */
 export const PREVIEW_BAND_ZOOM_MS = 280;
-/** Second beat: path morphs to fill the strip again. */
+/** Morph beat: path fills or leaves the strip. Second when going up, first when going down. */
 export const PREVIEW_BAND_MORPH_MS = 260;
 
 export function wrapPreviewUiWidth(uiWidth: number, band = PREVIEW_SIZE_BAND): number {
@@ -295,8 +296,9 @@ export function samplePreviewCamera(
   const dest = previewRestPose(toUi);
   const fromW = wrapPreviewUiWidth(fromUi);
   const toW = wrapPreviewUiWidth(toUi);
-  const crossed = previewSizeBandIndex(fromUi) !== previewSizeBandIndex(toUi);
-  if (!crossed) {
+  const fromBand = previewSizeBandIndex(fromUi);
+  const toBand = previewSizeBandIndex(toUi);
+  if (fromBand === toBand) {
     const dur = PREVIEW_STEP_MS;
     if (elapsedMs >= dur) return dest;
     if (elapsedMs <= 0) {
@@ -310,22 +312,37 @@ export function samplePreviewCamera(
     };
   }
   if (Math.abs(fromW - toW) < 1e-6) return dest;
-  const ratio = toW / Math.max(fromW, 1e-6);
   if (elapsedMs <= 0) {
     return { displayWidth: fromW, pathScale: 1, radiusScale: 1 };
   }
-  if (elapsedMs < PREVIEW_BAND_ZOOM_MS) {
-    const u = previewZoomEase(elapsedMs / PREVIEW_BAND_ZOOM_MS);
-    const s = 1 + (ratio - 1) * u;
-    return { displayWidth: fromW, pathScale: s, radiusScale: s };
+  if (toBand > fromBand) {
+    const ratio = toW / Math.max(fromW, 1e-6);
+    if (elapsedMs < PREVIEW_BAND_ZOOM_MS) {
+      const u = previewZoomEase(elapsedMs / PREVIEW_BAND_ZOOM_MS);
+      const s = 1 + (ratio - 1) * u;
+      return { displayWidth: fromW, pathScale: s, radiusScale: s };
+    }
+    if (elapsedMs >= PREVIEW_BAND_ZOOM_MS + PREVIEW_BAND_MORPH_MS) return dest;
+    const u = previewZoomEase((elapsedMs - PREVIEW_BAND_ZOOM_MS) / PREVIEW_BAND_MORPH_MS);
+    return {
+      displayWidth: toW,
+      pathScale: ratio + (1 - ratio) * u,
+      radiusScale: 1,
+    };
   }
-  if (elapsedMs >= PREVIEW_BAND_ZOOM_MS + PREVIEW_BAND_MORPH_MS) return dest;
-  const u = previewZoomEase((elapsedMs - PREVIEW_BAND_ZOOM_MS) / PREVIEW_BAND_MORPH_MS);
-  return {
-    displayWidth: toW,
-    pathScale: ratio + (1 - ratio) * u,
-    radiusScale: 1,
-  };
+  const ratio = fromW / Math.max(toW, 1e-6);
+  if (elapsedMs < PREVIEW_BAND_MORPH_MS) {
+    const u = previewZoomEase(elapsedMs / PREVIEW_BAND_MORPH_MS);
+    return {
+      displayWidth: fromW,
+      pathScale: 1 + (ratio - 1) * u,
+      radiusScale: 1,
+    };
+  }
+  if (elapsedMs >= PREVIEW_BAND_MORPH_MS + PREVIEW_BAND_ZOOM_MS) return dest;
+  const u = previewZoomEase((elapsedMs - PREVIEW_BAND_MORPH_MS) / PREVIEW_BAND_ZOOM_MS);
+  const s = ratio + (1 - ratio) * u;
+  return { displayWidth: toW, pathScale: s, radiusScale: s };
 }
 
 export function lerpPreviewPose(

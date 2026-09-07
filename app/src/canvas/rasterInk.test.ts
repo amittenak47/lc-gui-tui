@@ -13,6 +13,7 @@ import {
   highlightLiftKeepsTip,
   highlighterChiselWidth,
   highlighterDrawOp,
+  highlighterPaintsTips,
   inkBaseWidthForZoom,
   inkLineWidth,
   inkPoolingWidthGain,
@@ -232,11 +233,38 @@ describe("rasterInk sizing", () => {
       const op = highlighterDrawOp("#f5b301", 4, 1, [
         { x: 0, y: 0, pressure: 0.2 },
         { x: 40, y: 0, pressure: 1 },
-      ]);
+      ], false);
       expect(op.highlight).toBe(true);
       expect(op.pressureSensitive).toBe(false);
       expect(op.maxFullness).toBe(1);
+      expect(op.highlightTips).toBe(false);
+      expect(highlighterPaintsTips(op)).toBe(false);
       expect(highlighterChiselWidth(op.baseWidth)).toBeGreaterThan(inkLineWidth(op.baseWidth, 0, false));
+    });
+
+    it("highlighterDrawOp can keep the overlapping dark tips", () => {
+      const op = highlighterDrawOp("#f5b301", 4, 1, [{ x: 0, y: 0, pressure: 0.5 }], true);
+      expect(op.highlightTips).toBeUndefined();
+      expect(highlighterPaintsTips(op)).toBe(true);
+      expect(highlighterPaintsTips({ highlight: true, highlightTips: false })).toBe(false);
+    });
+
+    it("even wash is one round stroke, not a second cap on the wash", () => {
+      const pts = [
+        { x: 0, y: 0, pressure: 0.5 },
+        { x: 80, y: 0, pressure: 0.5 },
+      ];
+      const even = inkDrawContext();
+      applyInkOp(even.ctx, highlighterDrawOp("#f5b301", 4, 1, pts, false), 1);
+      expect(even.ctx.lineCap).toBe("round");
+      expect(even.caps).toHaveLength(0);
+      expect(even.fillCount).toBe(0);
+      expect(even.strokeCount).toBe(1);
+
+      const dark = inkDrawContext();
+      applyInkOp(dark.ctx, highlighterDrawOp("#f5b301", 4, 1, pts, true), 1);
+      expect(dark.ctx.lineCap).toBe("butt");
+      expect(dark.fillCount).toBeGreaterThanOrEqual(2);
     });
 
     it("drops a short reverse tail at lift-off", () => {

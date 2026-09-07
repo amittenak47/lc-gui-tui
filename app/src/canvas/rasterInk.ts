@@ -533,6 +533,12 @@ export interface InkDrawOp {
    * and a translucent stroke that did would band where the passes overlapped.
    */
   highlight?: boolean;
+  /**
+   * Extra highlighter end stamps. Absent or true is the old look: a disc
+   * over the wash, which multiply darkens into a blob at each tip. False
+   * keeps one round stroke at one colour.
+   */
+  highlightTips?: boolean;
   /** When set, the stroke tracks a nested scroller's `scrollLeft` / `scrollTop`. */
   hostKey?: number;
   scrollLeftAtDraw?: number;
@@ -633,8 +639,9 @@ export function highlighterDrawOp(
   uiWidth: number,
   zoom: number,
   points: readonly ScenePoint[],
+  tips = true,
 ): InkDrawOp {
-  return {
+  const op: InkDrawOp = {
     kind: "draw",
     color,
     baseWidth: inkBaseWidthForZoom(uiWidth, zoom),
@@ -644,6 +651,14 @@ export function highlighterDrawOp(
     highlight: true,
     points: points.slice(),
   };
+  if (!tips) op.highlightTips = false;
+  return op;
+}
+
+/** Extra overlapping highlighter caps. Absent means on, so older boards keep their dark tips. */
+export function highlighterPaintsTips(op: Pick<InkDrawOp, "highlight" | "highlightTips">): boolean {
+  if (op.highlight !== true) return true;
+  return op.highlightTips !== false;
 }
 
 /**
@@ -5434,8 +5449,14 @@ function drawStrokeFrom(
   const runs = inkStrokeRuns(op, start);
   if (runs.length === 0) return;
 
-  // Butt caps + bevel joins — round joins fan into spokes on thick curves.
-  ctx.lineCap = "butt";
+  const tips = highlighterPaintsTips(op);
+  /*
+   * Dark tips stamp a disc on each butt end. Multiply then darkens where that
+   * disc sits on the wash. Even wash is one round stroke — the cap is the
+   * line, so the colour stays even. Round joins fan into spokes on thick
+   * curves; bevel the joints either way.
+   */
+  ctx.lineCap = !tips && fromIndex === 0 && runs.length === 1 ? "round" : "butt";
   ctx.lineJoin = "bevel";
   for (let ri = 0; ri < runs.length; ri++) {
     const run = runs[ri];
@@ -5461,7 +5482,7 @@ function drawStrokeFrom(
     ctx.lineTo(pEnd.x, pEnd.y);
     ctx.stroke();
 
-    if (capHead && fromIndex === 0 && ri === 0) {
+    if (tips && capHead && fromIndex === 0 && ri === 0) {
       const origin = points[0];
       const heading =
         firstStrokeOutward(points, radius) ?? hashedHeading(origin, CAP_SALT_HEAD);
@@ -5479,7 +5500,7 @@ function drawStrokeFrom(
       );
     }
 
-    if (capEnd && ri === runs.length - 1) {
+    if (tips && capEnd && ri === runs.length - 1) {
       const origin = points[0];
       const prevIdx = Math.max(0, Math.ceil(run.end) - 1);
       const inner = points[prevIdx] ?? pStart;

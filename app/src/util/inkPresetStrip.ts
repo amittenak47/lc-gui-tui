@@ -42,6 +42,7 @@ export function drawOpFromSnap(
     speedFade: snap.fade,
     boldness: snap.boldness,
     highlight: kind === "highlighter",
+    ...(kind === "highlighter" && snap.highlightTips === false ? { highlightTips: false } : {}),
     points: points.slice(),
   };
 }

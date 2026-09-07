@@ -93,6 +93,7 @@ export interface WhiteboardInkLabProps {
   speedInk?: number;
   speedBlotBlend?: number;
   speedFade?: number;
+  highlightTips?: boolean;
   getViewport: () => ViewportTransform | null;
   clip?: SceneBounds | null;
   onChange?: () => void;
@@ -223,6 +224,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       speedInk = 0,
       speedBlotBlend = 0,
       speedFade = 0,
+      highlightTips = false,
       getViewport,
       clip = null,
       onChange,
@@ -282,6 +284,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     blotRef.current = speedBlotBlend;
     const speedFadeRef = useRef(speedFade);
     speedFadeRef.current = speedFade;
+    const highlightTipsRef = useRef(highlightTips);
+    highlightTipsRef.current = highlightTips;
     const straightInkRef = useRef(straightInk);
     straightInkRef.current = straightInk;
     const getViewportRef = useRef(getViewport);
@@ -666,6 +670,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             strokeWidthRef.current,
             paintView.zoom,
             liveHighlightPoints(pts, straightInkRef.current),
+            highlightTipsRef.current,
           ),
         );
       };
@@ -848,6 +853,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               strokeWidthRef.current,
               paintView.zoom,
               shaped,
+              highlightTipsRef.current,
             );
             op.points = trimHighlightLiftHook(op.points, highlighterChiselWidth(op.baseWidth));
             if (op.points.length > 0) {
