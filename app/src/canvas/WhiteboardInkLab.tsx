@@ -76,6 +76,8 @@ export interface WhiteboardInkLabProps {
   pressureSensitive: boolean;
   smoothing?: number;
   smoothingMode?: "lift" | "live";
+  clothoid?: boolean;
+  capillary?: boolean;
   straightInk?: boolean;
   speedInk?: number;
   speedBlotBlend?: number;
@@ -172,6 +174,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       pressureSensitive,
       smoothing,
       smoothingMode = "lift",
+      clothoid = false,
+      capillary = false,
       straightInk = false,
       speedInk = 0,
       speedBlotBlend = 0,
@@ -224,6 +228,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     smoothingRef.current = smoothing;
     const smoothingModeRef = useRef(smoothingMode);
     smoothingModeRef.current = smoothingMode;
+    const clothoidRef = useRef(clothoid);
+    clothoidRef.current = clothoid;
+    const capillaryRef = useRef(capillary);
+    capillaryRef.current = capillary;
     const speedInkRef = useRef(speedInk);
     speedInkRef.current = speedInk;
     const blotRef = useRef(speedBlotBlend);
@@ -627,6 +635,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             fade: speedFadeRef.current,
             smoothing: smoothingRef.current,
             smoothingMode: smoothingModeRef.current,
+            clothoid: clothoidRef.current,
+            capillary: capillaryRef.current,
           }),
         );
         engine.captureSnap();

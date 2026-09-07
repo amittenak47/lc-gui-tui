@@ -150,6 +150,8 @@ export interface RasterInkLayerProps {
   smoothing?: number;
   /** Whether {@link smoothing} is applied on the lift or under the nib. */
   smoothingMode?: InkSmoothingMode;
+  clothoid?: boolean;
+  capillary?: boolean;
   /**
    * Pen / highlighter draw a straight chord from the touch-down to the nib,
    * instead of following the hand. Toolbar toggle — not the Settings smoothing dial.
@@ -213,6 +215,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       pressureSensitive,
       smoothing = 0,
       smoothingMode = "lift",
+      clothoid = false,
+      capillary = false,
       straightInk = false,
       speedInk = 0,
       speedBlotBlend = INK_SPEED_BLOT_BLEND_DEFAULT,
@@ -370,6 +374,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     smoothingRef.current = smoothing;
     const smoothingModeRef = useRef(smoothingMode);
     smoothingModeRef.current = smoothingMode;
+    const clothoidRef = useRef(clothoid);
+    clothoidRef.current = clothoid;
+    const capillaryRef = useRef(capillary);
+    capillaryRef.current = capillary;
     const straightInkRef = useRef(straightInk);
     straightInkRef.current = straightInk;
     /*
@@ -1835,6 +1843,8 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
               fade: speedFadeRef.current,
               smoothing: smoothingRef.current,
               smoothingMode: smoothingModeRef.current,
+              clothoid: clothoidRef.current,
+              capillary: capillaryRef.current,
             }),
           );
           engine.down(inkLabOverlaySample(canvas, rect, event));

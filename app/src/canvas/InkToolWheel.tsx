@@ -169,6 +169,12 @@ function specRows(
             ? `${Math.round(snap.smoothing * 100)}%`
             : `${Math.round(snap.smoothing * 100)}% ${snap.smoothingMode}`,
     },
+    ...(kind === "pen"
+      ? [
+          { label: "Clothoids", value: snap.clothoid ? "On" : "Off" },
+          { label: "Capillary", value: snap.capillary ? "On" : "Off" },
+        ]
+      : []),
   ];
 }
 

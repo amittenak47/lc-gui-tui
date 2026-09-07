@@ -29,6 +29,15 @@ describe("lift bake", () => {
     expect(Number.isFinite(out.bakeMs)).toBe(true);
   });
 
+  it("clothoid remeshes even when Chaikin is off", () => {
+    const spine = line().map((p) => ({ x: p.x, y: p.y, r: 6 }));
+    const out = bakeSpine(spine, { clothoid: true, smoothing: 0 });
+    expect(out.bake).toBe("clothoid");
+    expect(out.points.length).toBeGreaterThan(spine.length);
+    expect(out.points[0]!.x).toBeCloseTo(0);
+    expect(out.points[out.points.length - 1]!.x).toBeCloseTo(40);
+  });
+
   it("smoothing 0 keeps the raw spine", () => {
     const spine = line().map((p) => ({ x: p.x, y: p.y, r: 6 }));
     const out = bakeSpine(spine, { smoothing: 0 });

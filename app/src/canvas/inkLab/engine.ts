@@ -676,11 +676,13 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         if (blotTipGrow > 1e-3) stampHalt(last, blotTipGrow);
       }
       const t0 = performance.now();
+      const clothoid = pen?.clothoid ?? useClothoid;
+      const capillary = pen?.capillary ?? useCapillary;
       const baked = bakeSpine(spine, {
-        clothoid: useClothoid,
+        clothoid,
         smoothing: pen?.smoothing ?? INK_SMOOTHING_DEFAULT,
       });
-      const points = useCapillary ? capillaryRelax(baked.points) : baked.points;
+      const points = capillary ? capillaryRelax(baked.points) : baked.points;
       const exported = points.map(cloneDot);
       const exportedGrow = blotTipGrow;
       const exportedHalts = blotHalts.map((h) => ({ ...h }));

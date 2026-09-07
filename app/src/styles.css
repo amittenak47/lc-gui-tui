@@ -5026,6 +5026,10 @@ body[data-lc-sash-drag="horizontal"] {
   text-align: center;
 }
 
+.lc-preset-sheet-field .lc-settings-choice-compact + .lc-settings-choice-compact {
+  margin-top: 8px;
+}
+
 .lc-preset-sheet-toggles {
   display: flex;
   gap: 6px;

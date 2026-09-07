@@ -47,6 +47,10 @@ export type InkLabPen = {
   smoothing?: number;
   /** When the strength dial runs: lift commit, or reshape while down. */
   smoothingMode?: "lift" | "live";
+  /** Lift-time Euler spiral. Never on the live nib. */
+  clothoid?: boolean;
+  /** Lift-time Laplacian relax. Never on the live nib. */
+  capillary?: boolean;
 };
 
 export function labWashGain(slow: number): number {
@@ -219,6 +223,8 @@ export function labPenFromToolbar(opts: {
   fade?: number;
   smoothing?: number;
   smoothingMode?: "lift" | "live";
+  clothoid?: boolean;
+  capillary?: boolean;
 }): InkLabPen {
   return {
     color: opts.color,
@@ -234,6 +240,8 @@ export function labPenFromToolbar(opts: {
     boldness: 1,
     smoothing: opts.smoothing,
     smoothingMode: opts.smoothingMode,
+    clothoid: opts.clothoid === true,
+    capillary: opts.capillary === true,
   };
 }
 
