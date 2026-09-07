@@ -3,13 +3,10 @@
  */
 
 import {
-  blotPoolRgb,
-  blotRichnessT,
   dryWashRgb,
   hasStylusPressure,
-  inkLineWidth,
-  inkPoolingWidthGain,
   inkSlowness,
+  STROKE_WIDTH_DEFAULT,
 } from "../rasterInk";
 
 import type { SpineDot } from "./instance";
@@ -17,13 +14,18 @@ import type { SpineDot } from "./instance";
 export const INK_HEX = "#1a1a1a";
 export const INK_RGB: [number, number, number] = [26, 26, 26];
 export const TIP_GROW = 1.7;
+/** Same CSS nib the comparison pad uses. Never scaled by camera zoom. */
+export const LAB_NIB_CSS = 7;
 
-/** Toolbar pen, mapped into overlay device pixels. */
+/** Toolbar pen. Radius is the Ink lab nib, not a zoom-scaled stamp. */
 export type InkLabPen = {
   color: string;
-  /** Scene-space baseWidth already converted with inkBaseWidthForZoom. */
+  /** Toolbar nib width (UI units). Not `inkBaseWidthForZoom`. */
   baseWidth: number;
-  /** Overlay device pixels per scene unit (zoom * dpr). */
+  /**
+   * Unused for radius. Kept so older `setPen` call sites still type-check.
+   * Pass 1.
+   */
   overlayScale: number;
   /** Device pixels per CSS pixel of the overlay. */
   dpr: number;
@@ -46,24 +48,42 @@ export function washRgb(vx: number, vy: number, dpr: number): [number, number, n
   return [r, g, b];
 }
 
-function rgbTuple(
-  washed: { r: number; g: number; b: number },
-  poolT: number,
-): [number, number, number] {
-  if (poolT < 1e-3) return [washed.r, washed.g, washed.b];
-  const pooled = blotPoolRgb(
-    `rgb(${washed.r}, ${washed.g}, ${washed.b})`,
-    poolT,
-  );
-  return [pooled.r, pooled.g, pooled.b];
+/**
+ * Slider units → pad size. Default width is size 1 (Ink lab nib).
+ * Not stamp `inkLineWidth`.
+ */
+export function labNibSizeFromUiWidth(uiWidth: number): number {
+  const w = Number.isFinite(uiWidth) && uiWidth > 0 ? uiWidth : STROKE_WIDTH_DEFAULT;
+  return Math.max(0.45, Math.min(2.8, w / STROKE_WIDTH_DEFAULT));
+}
+
+export function labPressureAmt(pen: InkLabPen, pressure: number): number {
+  if (!pen.pressureSensitive || !hasStylusPressure(pressure)) return 0.5;
+  const clip = Math.max(0.15, Math.min(1, pen.pressureClip || 1));
+  return Math.max(0.15, Math.min(1, pressure / clip));
 }
 
 /**
- * Live radius matching the Ink lab pad: continuous capsules, not speed-ink
- * beads. Toolbar size sets the base; pace and pressure taper it the same way
- * `nibRadius` does on the comparison pad. Coverage stays opaque so overlapping
- * cones do not read as a stamp chain.
+ * Ink lab pad nib. Radius stays above the sample gate so capsules overlap
+ * instead of leaving a dotted stamp trail. `size` is toolbar width vs default.
  */
+export function labNibRadius(
+  vx: number,
+  vy: number,
+  dpr: number,
+  pressure: number,
+  size = 1,
+): number {
+  const cssPxPerMs = Math.hypot(vx, vy) / 1000 / Math.max(dpr, 1e-6);
+  const slow = inkSlowness(cssPxPerMs);
+  const p = Math.max(0.15, Math.min(1, pressure));
+  const s = Math.max(0.45, Math.min(2.8, size));
+  return Math.max(
+    1.15 * dpr,
+    LAB_NIB_CSS * dpr * (0.5 + 0.95 * slow) * (0.7 + 0.3 * p) * s,
+  );
+}
+
 export function labPenDot(
   pen: InkLabPen,
   vx: number,
@@ -71,34 +91,60 @@ export function labPenDot(
   dpr: number,
   pressure: number,
   _consumed: number,
-  growT: number,
+  _growT: number,
 ): { r: number; rgb: [number, number, number]; a: number; slow: number } {
   const cssPxPerMs = Math.hypot(vx, vy) / 1000 / Math.max(dpr, 1e-6);
   const slow = inkSlowness(cssPxPerMs);
-  const pAmt =
-    pen.pressureSensitive && hasStylusPressure(pressure)
-      ? Math.max(0.15, Math.min(1, pressure))
-      : 0.5;
-  const baseR = Math.max(
-    1.15 * dpr,
-    (inkLineWidth(pen.baseWidth, 0, false) * pen.overlayScale) / 2,
-  );
-  const widthGain = inkPoolingWidthGain(growT, 0, pAmt);
-  const r = Math.max(
-    1.15 * dpr,
-    baseR * (0.5 + 0.95 * slow) * (0.7 + 0.3 * pAmt) * widthGain,
-  );
-  const poolT = growT > 1e-6 ? blotRichnessT(growT, 0, slow, pAmt) : 0;
+  const pAmt = labPressureAmt(pen, pressure);
+  const size = labNibSizeFromUiWidth(pen.baseWidth);
+  const r = labNibRadius(vx, vy, dpr, pAmt, size);
   const washed = dryWashRgb(pen.color, 1);
-  return { r, rgb: rgbTuple(washed, poolT), a: 1, slow };
+  return { r, rgb: [washed.r, washed.g, washed.b], a: 1, slow };
 }
 
 export function labPenNibOverlay(pen: InkLabPen): number {
-  return Math.max(1e-6, inkLineWidth(pen.baseWidth, 0, false) * pen.overlayScale);
+  return Math.max(
+    1e-6,
+    LAB_NIB_CSS * Math.max(pen.dpr, 1) * labNibSizeFromUiWidth(pen.baseWidth),
+  );
+}
+
+/** Toolbar / preset snapshot → live Ink lab pen. Never scales by board zoom. */
+export function labPenFromToolbar(opts: {
+  color: string;
+  uiWidth: number;
+  dpr: number;
+  pressureClip: number;
+  pressureSensitive: boolean;
+  blot?: number;
+  smoothing?: number;
+}): InkLabPen {
+  return {
+    color: opts.color,
+    baseWidth: opts.uiWidth,
+    overlayScale: 1,
+    dpr: opts.dpr,
+    maxFullness: 1,
+    pressureClip: opts.pressureClip,
+    pressureSensitive: opts.pressureSensitive,
+    speedInk: 0,
+    speedBlotBlend: opts.blot ?? 0,
+    speedFade: 0,
+    boldness: 1,
+    smoothing: opts.smoothing,
+  };
 }
 
 export function growTipRadius(base: number, current: number): number {
   const cap = base * TIP_GROW;
+  return Math.min(cap, current + (cap - base) * 0.05);
+}
+
+/** Hold-grow knob: 0 stays nib-sized, 1 is the pad's {@link TIP_GROW}. */
+export function labHoldGrow(base: number, current: number, blot: number): number {
+  const t = Math.max(0, Math.min(1, blot));
+  if (t < 1e-3) return base;
+  const cap = base * (1 + (TIP_GROW - 1) * t);
   return Math.min(cap, current + (cap - base) * 0.05);
 }
 

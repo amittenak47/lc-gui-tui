@@ -1,39 +1,42 @@
 import { describe, expect, it } from "vitest";
 
-import { allBaselineTapes } from "./tapes";
-import { formatReplayHud, pfOutlineCount, replayTape } from "./replay";
+import { isInkLabPenOp, labSpineFromDrawOp, splitInkOpsForLabReplay } from "./replay";
+import type { InkDrawOp, InkOp } from "../rasterInk";
 
-describe("compare tapes", () => {
-  it("replays PF, Speed Ink, and InkLab 2D on the same tapes", () => {
-    const tapes = allBaselineTapes();
-    expect(tapes.map((t) => [t.name, t.samples.length])).toEqual([
-      ["flick", 32],
-      ["letter", 120],
-      ["scribble", 512],
-      ["hold", 240],
-    ]);
+function penOp(partial: Partial<InkDrawOp> = {}): InkDrawOp {
+  return {
+    kind: "draw",
+    color: "#112233",
+    baseWidth: 2,
+    maxFullness: 1,
+    pressureClip: 1,
+    pressureSensitive: false,
+    points: [
+      { x: 0, y: 0, pressure: 0.5, radius: 4 },
+      { x: 10, y: 0, pressure: 0.5, radius: 4 },
+    ],
+    ...partial,
+  };
+}
 
-    const rows = tapes.map((tape) => replayTape(tape.name, tape.samples));
+describe("ink lab replay", () => {
+  it("keeps stored radii for capsule replay", () => {
+    const spine = labSpineFromDrawOp(penOp());
+    expect(spine).toHaveLength(2);
+    expect(spine[0]!.r).toBe(4);
+    expect(spine[1]!.x).toBe(10);
+  });
 
-    for (const row of rows) {
-      // eslint-disable-next-line no-console
-      console.log(formatReplayHud(row));
-      expect(Number.isFinite(row.pf.p50)).toBe(true);
-      expect(Number.isFinite(row.pf.p95)).toBe(true);
-      expect(Number.isFinite(row.speedStamp.p95)).toBe(true);
-      expect(Number.isFinite(row.speedBakeMs)).toBe(true);
-      expect(Number.isFinite(row.ink2d.p95)).toBe(true);
-      expect(row.ink2d.backend).toBe("canvas2d");
-      expect(row.ink2d.bake).toBe("catmull");
-      expect(row.pf.outlineN).toBeGreaterThan(4);
-    }
-
-    const flick = rows[0]!;
-    const scribble = rows[2]!;
-    const hold = rows[3]!;
-    expect(scribble.pf.p95).toBeGreaterThan(flick.pf.p50);
-    expect(hold.pf.holdMs).toBeGreaterThan(0);
-    expect(hold.ink2d.holdMs).toBeGreaterThan(0);
-    expect(pfOutlineCount(tapes[1]!.samples)).toBe(rows[1]!.pf.outlineN);
+  it("splits highlighter and eraser off the lab pass", () => {
+    const highlight = penOp({ highlight: true });
+    const erase: InkOp = {
+      kind: "erase",
+      radius: 8,
+      points: [{ x: 1, y: 1, pressure: 0.5 }],
+    };
+    const { lab, stamp } = splitInkOpsForLabReplay([penOp(), highlight, erase]);
+    expect(lab).toHaveLength(1);
+    expect(stamp).toHaveLength(2);
+    expect(isInkLabPenOp(highlight)).toBe(false);
   });
 });

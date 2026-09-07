@@ -1,25 +1,19 @@
 /**
- * The Excalidraw canvas, wrapped so nothing above it depends on Excalidraw.
+ * The board surface: Ink lab pad plus Board chrome.
  *
- * `@excalidraw/excalidraw` is a plain React component — only excalidraw.com's
- * wrapper is Electron — so it mounts straight into the Tauri WebView.
- *
- * Excalidraw's own chrome is hidden (see `.lc-board` in styles.css) and replaced
- * by {@link BoardToolbar} — one floating island at the bottom of the workspace
- * (the shell's `.lc-board-chrome-slot` over `.lc-main`, so a split still has
- * one bar). Tools, shapes, undo/redo, reset and ink colour live there. A stylus
- * session should never need a menu.
+ * Camera, templates, and markdown slots live in {@link createBoardScene}.
+ * There is no Excalidraw canvas.
  */
 
 import {
   CaptureUpdateAction,
-  Excalidraw,
-  convertToExcalidrawElements,
+  createBoardScene,
   exportToBlob,
   exportToCanvas,
   getCommonBounds,
-} from "@excalidraw/excalidraw";
-import "@excalidraw/excalidraw/index.css";
+  type ExcalidrawApi,
+} from "./boardScene";
+import { convertToExcalidrawElements } from "./convertSkeletons";
 import {
   forwardRef,
   useCallback,
@@ -134,7 +128,6 @@ import {
   liveBoardViewSize,
   liveExcalidrawViewport,
 } from "./documentRotateCamera";
-import { paintExcalidrawCanvases } from "./excalidrawCanvasSize";
 import { DOCUMENT_LAYER_SELECTOR, documentLayerHeight } from "./documentLayer";
 import {
   contentSlotCssTransform,
@@ -144,7 +137,6 @@ import {
 } from "./contentSlotPlace";
 import { encodeInkOps } from "./inkCodec";
 import {
-  fallbackPageFrames,
   lastPageId,
   offsetPageFrames,
   pageFramesFromPdfSlot,
@@ -195,7 +187,7 @@ import {
   TEXT_TAP_SLOP_PX,
   type TextPlaceViewport,
 } from "./textPlacement";
-import { RasterInkLayer, type RasterInkHandle } from "./RasterInkLayer";
+import { WhiteboardInkLab, type RasterInkHandle } from "./WhiteboardInkLab";
 import {
   INK_OVERDRAW_FRACTION,
   OVERDRAW_REBASE_HEADROOM,
@@ -330,45 +322,6 @@ import {
   resolveExportPaperColor,
   type PageExportLayers,
 } from "./exportPageComposite";
-
-/**
- * The slice of Excalidraw's imperative API this file uses, declared locally so a
- * version bump can't break the build over a type path.
- */
-interface ExcalidrawApi {
-  getSceneElements(): readonly unknown[];
-  getAppState(): Record<string, unknown>;
-  getFiles(): Record<string, unknown>;
-  addFiles?(files: Array<{
-    id: string;
-    mimeType: string;
-    dataURL: string;
-    created: number;
-  }>): void;
-  updateScene(scene: {
-    elements?: unknown[];
-    appState?: Record<string, unknown>;
-    captureUpdate?:
-      | typeof CaptureUpdateAction.NEVER
-      | typeof CaptureUpdateAction.IMMEDIATELY
-      | typeof CaptureUpdateAction.EVENTUALLY;
-  }): void;
-  setActiveTool(tool: {
-    type: string;
-    customType?: string;
-    /** Keep the tool after placing — required for click-around text placement. */
-    locked?: boolean;
-  }): void;
-  setCursor?(cursor: string): void;
-  resetCursor?(): void;
-  scrollToContent(target?: unknown, opts?: unknown): void;
-  onScrollChange?(
-    callback: (scrollX: number, scrollY: number, zoom: { value: number }) => void,
-  ): () => void;
-  history?: { clear(): void };
-  /** Re-read the container box. Split / rotate leave appState width stale otherwise. */
-  refresh?(): void;
-}
 
 /** Margin around the composite, so ink at the edge isn't flush with it. */
 const EXPORT_PADDING = 10;
@@ -1260,20 +1213,6 @@ export interface BoardProps {
   pageSpread?: { on: boolean; onToggle: () => void; busy?: boolean } | null;
 }
 
-/** Stable across renders — a fresh object makes Excalidraw thrash its tunnel store. */
-const UI_OPTIONS = {
-  canvasActions: {
-    changeViewBackgroundColor: false,
-    clearCanvas: false,
-    export: false,
-    loadScene: false,
-    saveToActiveFile: false,
-    saveAsImage: false,
-    toggleTheme: false,
-  },
-  tools: { image: false },
-} as const;
-
 function roundPx(value: number): number {
   return Math.round(value);
 }
@@ -1350,6 +1289,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   ref,
 ) {
   const apiRef = useRef<ExcalidrawApi | null>(null);
+  if (apiRef.current == null) apiRef.current = createBoardScene();
   const boardRef = useRef<HTMLDivElement | null>(null);
   const mobile = useIsMobile();
   const mobileRef = useRef(mobile);
@@ -1389,18 +1329,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkHandedness, setInkHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
   const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
-  const [inkSmoothingMode, setInkSmoothingMode] = useState(() => loadInkSmoothingMode());
+  const [, setInkSmoothingMode] = useState(() => loadInkSmoothingMode());
   const [straightInk, setStraightInk] = useState(() => inkPrefsRef.current.straightInk);
-  const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
+  const [, setInkSpeed] = useState(() => loadInkSpeed());
   const [inkSpeedBlotBlend, setInkSpeedBlotBlend] = useState(() =>
     loadInkSpeedBlotBlend(),
   );
-  const [inkGrain, setInkGrain] = useState(() => loadInkGrain());
-  const [inkSpeedFade, setInkSpeedFade] = useState(() => loadInkSpeedFade());
-  const [inkSplineOutline, setInkSplineOutline] = useState(() => loadInkSplineOutline());
-  const [inkSplineGradient, setInkSplineGradient] = useState(() => loadInkSplineGradient());
-  const [inkBoldness, setInkBoldness] = useState(() => loadInkBoldness());
-  const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
+  const [, setInkGrain] = useState(() => loadInkGrain());
+  const [, setInkSpeedFade] = useState(() => loadInkSpeedFade());
+  const [, setInkSplineOutline] = useState(() => loadInkSplineOutline());
+  const [, setInkSplineGradient] = useState(() => loadInkSplineGradient());
+  const [, setInkBoldness] = useState(() => loadInkBoldness());
+  const [, setEraserPartial] = useState(() => loadEraserPartial());
   const [stampTrash, setStampTrash] = useState<{
     ids: string[];
   } | null>(null);
@@ -1983,7 +1923,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     const nodes: HTMLElement[] = [];
-    root.querySelectorAll("canvas.excalidraw__canvas").forEach((el) => {
+    root.querySelectorAll("canvas.lc-ink-lab-canvas").forEach((el) => {
       if (el instanceof HTMLElement) nodes.push(el);
     });
     if (linedSlotNodeRef.current) nodes.push(linedSlotNodeRef.current);
@@ -3635,35 +3575,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   /**
-   * Nested scroll hosts for host-bound ink — same slot mapping as export so
-   * paint keys/bounds match PNG composite.
-   */
-  const getScrollHosts = useCallback(() => {
-    const map = scrollHostLookupFromSlot(
-      contentSlotNodeRef.current,
-      pageBoundsRef.current,
-    );
-    if (!map) return [];
-    return [...map.entries()].map(([key, host]) => ({
-      key,
-      scrollLeft: host.scrollLeft,
-      scrollTop: host.scrollTop,
-      bounds: host.bounds,
-    }));
-  }, []);
-
-  const getPageFrames = useCallback(() => {
-    const bounds = pageBoundsRef.current;
-    const local = peekPdfReadingFrames(filmScope);
-    if (local.length > 0 && bounds) {
-      return offsetPageFrames(local, bounds.minY);
-    }
-    const fromPdf = pageFramesFromPdfSlot(contentSlotNodeRef.current, bounds);
-    if (fromPdf.length > 0) return fromPdf;
-    return fallbackPageFrames(bounds);
-  }, []);
-
-  /**
    * Move the page for one scroll sample — no `updateScene`, no reblit.
    *
    * Everything on the board is bound to page coordinates for the duration of
@@ -4826,12 +4737,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const brush = eraserBrushRef.current;
       if (!brush || !next) return;
       const hitCanvas =
-        root.querySelector("canvas.lc-raster-ink") ??
-        root.querySelector("canvas.excalidraw__canvas");
+        root.querySelector("canvas.lc-ink-lab-canvas") ??
+        root.querySelector("canvas.lc-raster-ink");
       if (!(hitCanvas instanceof HTMLCanvasElement)) return;
       const boardRect = root.getBoundingClientRect();
       let rect = hitCanvas.getBoundingClientRect();
-      if (hitCanvas.classList.contains("lc-raster-ink")) {
+      if (
+        hitCanvas.classList.contains("lc-ink-lab-canvas") ||
+        hitCanvas.classList.contains("lc-raster-ink")
+      ) {
         const left = Math.max(rect.left, boardRect.left);
         const right = Math.min(rect.right, boardRect.right);
         const top = Math.max(rect.top, boardRect.top);
@@ -5083,8 +4997,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       document.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
 
     const interactiveCanvas = () =>
-      root.querySelector("canvas.excalidraw__canvas.interactive") ??
-      root.querySelector("canvas.excalidraw__canvas");
+      root.querySelector("canvas.lc-ink-lab-canvas");
 
     const paintGhost = (d: Drag) => {
       const ghost = textPlaceGhostRef.current;
@@ -6446,22 +6359,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!force && !boxChanged) {
         const state = api.getAppState() as { width?: number; height?: number };
         if (!excalidrawViewportNeedsSync(live, state)) return true;
-        paintExcalidrawCanvases(board, live.width, live.height);
         api.updateScene({
-          appState: { width: live.width, height: live.height },
+          appState: {
+            width: live.width,
+            height: live.height,
+            offsetLeft: box.left,
+            offsetTop: box.top,
+          },
           captureUpdate: CaptureUpdateAction.NEVER,
         });
         return true;
       }
       if (excalidrawViewportNeedsSync(live, api.getAppState() as { width?: number; height?: number })) {
         api.updateScene({
-          appState: { width: live.width, height: live.height },
+          appState: {
+            width: live.width,
+            height: live.height,
+            offsetLeft: box.left,
+            offsetTop: box.top,
+          },
           captureUpdate: CaptureUpdateAction.NEVER,
         });
       }
-      // View mode never attaches Excalidraw's window.resize. WebView2 often
-      // skips updateDOMRect until a pointer. Size the bitmaps here.
-      paintExcalidrawCanvases(board, live.width, live.height);
       api.refresh?.();
       maybeGrowDrawFrame();
       runFit(null, "keepY");
@@ -7794,6 +7713,160 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
   }, [maybeGrowDrawFrame, onChange, scheduleSlotReports]);
 
+  const handleCameraScroll = useCallback(
+    (scrollX: number, scrollY: number) => {
+      if (
+        scrollModeRef.current &&
+        !clampingScrollRef.current &&
+        lockedScrollXRef.current !== null &&
+        Math.abs(scrollX - lockedScrollXRef.current) > 0.05
+      ) {
+        clampingScrollRef.current = true;
+        apiRef.current?.updateScene({
+          appState: { scrollX: lockedScrollXRef.current },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        requestAnimationFrame(() => {
+          clampingScrollRef.current = false;
+        });
+      }
+
+      if (
+        activeToolRef.current === "hand" &&
+        handPanningRef.current &&
+        inertiaFrameRef.current === 0 &&
+        !clampingScrollRef.current &&
+        !committingScrollRef.current
+      ) {
+        const now = performance.now();
+        const last = lastPanScrollRef.current;
+        if (last.t > 0) {
+          const dt = Math.max(1, now - last.t);
+          const instantX = (scrollX - last.x) / dt;
+          const instantY = (scrollY - last.y) / dt;
+          panVelocityRef.current = {
+            x: panVelocityRef.current.x * 0.65 + instantX * 0.35,
+            y: panVelocityRef.current.y * 0.65 + instantY * 0.35,
+          };
+        }
+        lastPanScrollRef.current = { x: scrollX, y: scrollY, t: now };
+      }
+      if (!fittingCameraRef.current && !clampingScrollRef.current) {
+        pulseCameraMotionRef.current();
+      }
+      if (!liveCameraRef.current?.live) clearPanOffsetsRef.current();
+      if (!rasterInkRef.current?.isDrawing()) {
+        rasterInkRef.current?.syncCamera();
+      }
+      if (!liveCameraRef.current?.live) scheduleSlotReports();
+      if (!fittingCameraRef.current && !clampingScrollRef.current) {
+        userAdjustedCameraRef.current = true;
+      }
+      if (
+        clampingScrollRef.current ||
+        committingScrollRef.current ||
+        inertiaFrameRef.current !== 0 ||
+        liveCameraRef.current?.live
+      ) {
+        return;
+      }
+      const bounds = pageBoundsRef.current;
+      const api = apiRef.current;
+      if (!bounds || !api) return;
+      const state = api.getAppState() as {
+        width?: number;
+        height?: number;
+        zoom?: { value?: number };
+      };
+      if (typeof state.width !== "number" || typeof state.height !== "number") return;
+      const inset = measureChromeInsets(
+        boardRef.current,
+        toolbarHeightRef.current,
+        mapChromeHiddenRef.current,
+        mobileRef.current,
+      );
+      const next = clampScrollToBounds(
+        scrollX,
+        scrollY,
+        state.zoom?.value ?? 1,
+        state.width,
+        state.height,
+        bounds,
+        inset,
+      );
+      if (
+        Math.abs(next.scrollX - scrollX) < 0.05 &&
+        Math.abs(next.scrollY - scrollY) < 0.05
+      ) {
+        return;
+      }
+      clampingScrollRef.current = true;
+      api.updateScene({
+        appState: next,
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+      requestAnimationFrame(() => {
+        clampingScrollRef.current = false;
+      });
+    },
+    [scheduleSlotReports],
+  );
+
+  useLayoutEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    api.setOnChange?.(handleSceneChange);
+    return () => {
+      api.setOnChange?.(null);
+    };
+  }, [handleSceneChange]);
+
+  useLayoutEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    scrollUnsubRef.current?.();
+    scrollUnsubRef.current = api.onScrollChange?.(handleCameraScroll) ?? null;
+    return () => {
+      scrollUnsubRef.current?.();
+      scrollUnsubRef.current = null;
+    };
+  }, [handleCameraScroll]);
+
+  useLayoutEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    if (pageContentRef.current) {
+      ensureDocumentPageInScene();
+      syncPageVisibility();
+    }
+    const board = boardRef.current;
+    if (board) {
+      const box = board.getBoundingClientRect();
+      const live = liveExcalidrawViewport(box);
+      if (live) {
+        api.updateScene({
+          appState: {
+            width: live.width,
+            height: live.height,
+            offsetLeft: box.left,
+            offsetTop: box.top,
+          },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+      }
+    }
+    api.setActiveTool({ type: "hand" });
+    queueMicrotask(() => {
+      if (apiRef.current !== api) return;
+      if (!annotateCodeRef.current) {
+        ensureReadingHand();
+      }
+      reportCodeSlot();
+    });
+    // Boot once, same as the old Excalidraw API callback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const jumpToPdfPage = useCallback((pageId: number, opts?: { hold?: boolean }) => {
     const api = apiRef.current;
     if (!api || pageId < 1) return false;
@@ -8530,32 +8603,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, maybeGrowDrawFrame, nudgeViewportFit, refitToViewport, scheduleSlotReports, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand, armReadingScroll, syncDocumentScrollBounds],
   );
 
-  const theme = BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
-
-  const initialData = useMemo(
-    () => {
-      const prefs = inkPrefsRef.current;
-      return {
-        appState: {
-          viewBackgroundColor: boardViewBackground(transparentCanvas, theme.background),
-          currentItemStrokeColor: resolveInkColor(themeId, prefs.inkColor),
-          currentItemStrokeWidth: prefs.penWidth,
-          currentItemRoughness: 1,
-          // Not the hand-drawn default: typed notes should read like notes.
-          currentItemFontFamily: FONT_UI,
-          currentItemFontSize: DEFAULT_FONT_SIZE,
-          // Paint-like: single tap opens the editor (not drag-to-size).
-          currentItemAutoResize: true,
-          gridModeEnabled: false,
-        },
-        // We call settleFitView ourselves — Excalidraw's default fits the entire
-        // board and lands the problem as a postage stamp in the corner.
-        scrollToContent: false,
-      };
-    },
-    [theme.background, themeId, transparentCanvas, docPaper],
-  );
-
   return (
     <div
       ref={boardRef}
@@ -8566,6 +8613,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // (Gemini gatekeeper + CSS). Annotate restores normal canvas hits.
         interactive && !annotateCode && "lc-board-reading",
         interactive && annotateCode && "lc-board-annotating",
+        interactive && inkToolActive && "lc-board-ink-lab",
         transparentCanvas && "lc-board-paper",
         docPaper && "lc-board-doc-paper",
         // Highlighting / text-mark tools hand the surface back to the document
@@ -9184,45 +9232,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           onScrollBack={() => apiRef.current?.scrollToContent()}
         />
       )}
-      <RasterInkLayer
-        ref={rasterInkRef}
-        enabled={interactive}
-        tool={
-          interactive && inkToolActive
-            ? activeTool === "eraser"
-              ? "eraser"
-              : activeTool === "highlighter"
-                ? "highlighter"
-                : "pen"
-            : null
-        }
-        strokeWidth={strokeWidth}
-        inkColor={inkColor}
-        inkFullness={inkFullness}
-        pressureClip={pressureClip}
-        smoothing={inkSmoothing}
-        smoothingMode={inkSmoothingMode}
-        straightInk={straightInk}
-        speedInk={inkSpeed}
-        speedBlotBlend={inkSpeedBlotBlend}
-        grain={inkGrain}
-        speedFade={inkSpeedFade}
-        splineOutline={inkSplineOutline}
-        splineGradient={inkSplineGradient}
-        inkBoldness={inkBoldness}
-        partialErase={eraserPartial}
-        pressureSensitive={pressureSensitive}
-        getViewport={getViewport}
-        getScrollHosts={getScrollHosts}
-        getPageFrames={getPageFrames}
-        clip={inkClip}
-        onChange={handleInkChange}
-        onStylusAccessory={interactive ? handleStylusAccessory : undefined}
-        wheelHoldEnabled={
-          interactive && inkToolActive && !presetStore.wheelLocked
-        }
-        onWheelHold={(x, y) => setInkWheel({ x, y })}
-      />
       {inkWheel && !(presetEditor && !wheelPeek) && (
         <InkToolWheel
           open
@@ -9306,172 +9315,33 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           }}
         />
       )}
-      <Excalidraw
-        viewModeEnabled={!interactive || !annotateCode}
-        handleKeyboardGlobally={interactive}
-        excalidrawAPI={(api: unknown) => {
-          apiRef.current = api as ExcalidrawApi;
-          if (pageContentRef.current) {
-            ensureDocumentPageInScene();
-            syncPageVisibility();
-          }
-          scrollUnsubRef.current?.();
-          scrollUnsubRef.current =
-            apiRef.current.onScrollChange?.((scrollX, scrollY) => {
-              /*
-               * Reading mode: column never moves sideways.
-               *
-               * Excalidraw's hand is 2D; we own vertical drag, but wheel /
-               * clamp / stray pans can still nudge X. Pin every frame.
-               */
-              if (
-                scrollModeRef.current &&
-                !clampingScrollRef.current &&
-                lockedScrollXRef.current !== null &&
-                Math.abs(scrollX - lockedScrollXRef.current) > 0.05
-              ) {
-                clampingScrollRef.current = true;
-                apiRef.current?.updateScene({
-                  appState: { scrollX: lockedScrollXRef.current },
-                  captureUpdate: CaptureUpdateAction.NEVER,
-                });
-                requestAnimationFrame(() => {
-                  clampingScrollRef.current = false;
-                });
-              }
-
-              /*
-               * Estimate the throw — from the hand, never from the correction.
-               *
-               * This is where the bounce actually came from, and why fixing the
-               * inertia twice did not stop it. Drag past a boundary and each
-               * frame goes: Excalidraw moves the view out, this samples the
-               * delta, then the bounds clamp below snaps it back with
-               * `updateScene` — which raises a *second* scroll event, whose
-               * delta points back toward the middle. That reversed sample went
-               * into the same average as the real ones, so a flick into a wall
-               * lifted off with velocity pointing away from it and the view
-               * sailed backwards. A literal rebound, produced by measuring our
-               * own correction and calling it the user's hand.
-               *
-               * The snap-back frames are the ones raised while `clampingScroll`
-               * is set. Skipping them leaves the estimate made only of movement
-               * somebody's finger actually caused.
-               */
-              if (
-                activeToolRef.current === "hand" &&
-                handPanningRef.current &&
-                inertiaFrameRef.current === 0 &&
-                !clampingScrollRef.current &&
-                // A mid-drag rebase is our own bookkeeping catching the camera
-                // up to where the finger already is — same trap as the clamp
-                // above. Sampled, it reads as a frame the hand did not move and
-                // damps the flick that follows.
-                !committingScrollRef.current
-              ) {
-                const now = performance.now();
-                const last = lastPanScrollRef.current;
-                if (last.t > 0) {
-                  const dt = Math.max(1, now - last.t);
-                  const instantX = (scrollX - last.x) / dt;
-                  const instantY = (scrollY - last.y) / dt;
-                  panVelocityRef.current = {
-                    x: panVelocityRef.current.x * 0.65 + instantX * 0.35,
-                    y: panVelocityRef.current.y * 0.65 + instantY * 0.35,
-                  };
-                }
-                lastPanScrollRef.current = { x: scrollX, y: scrollY, t: now };
-              }
-              // Reblit the ink tiles for the new camera. Fires on zoom as well
-              // as scroll, which is what keeps a smooth zoom smooth.
-              if (!fittingCameraRef.current && !clampingScrollRef.current) {
-                pulseCameraMotionRef.current();
-              }
-              /*
-               * A camera move nobody was riding — a fit, a pinch, a page turn —
-               * ends any live pan translate. The slots below are about to be
-               * re-reported at absolute coordinates and the ink repainted, so
-               * an offset left over from a gesture would double every one of
-               * them. A live gesture keeps its offsets: it clears them itself,
-               * in the same frame it lands (see `landPanOffset`).
-               */
-              if (!liveCameraRef.current?.live) clearPanOffsetsRef.current();
-              if (!rasterInkRef.current?.isDrawing()) {
-                rasterInkRef.current?.syncCamera();
-              }
-              // Live samples already placed the file slot. A report here would
-              // read frozen appState and rewind the paper off the ink.
-              if (!liveCameraRef.current?.live) scheduleSlotReports();
-
-              // Tablet only — desktop keeps free pan (coach docks on the right).
-              if (!fittingCameraRef.current && !clampingScrollRef.current) {
-                userAdjustedCameraRef.current = true;
-              }
-              // The inertia step clamps every frame against the same bounds.
-              // Clamping again here only lands a second `updateScene` on top of
-              // the coast's own, which is the fight that made a flick judder.
-              if (
-                clampingScrollRef.current ||
-                committingScrollRef.current ||
-                inertiaFrameRef.current !== 0 ||
-                liveCameraRef.current?.live
-              ) {
-                return;
-              }
-              const bounds = pageBoundsRef.current;
-              const api = apiRef.current;
-              if (!bounds || !api) return;
-              const state = api.getAppState() as {
-                width?: number;
-                height?: number;
-                zoom?: { value?: number };
-              };
-              if (typeof state.width !== "number" || typeof state.height !== "number") return;
-              const inset = measureChromeInsets(
-                boardRef.current,
-                toolbarHeightRef.current,
-                mapChromeHiddenRef.current,
-                mobileRef.current,
-              );
-              const next = clampScrollToBounds(
-                scrollX,
-                scrollY,
-                state.zoom?.value ?? 1,
-                state.width,
-                state.height,
-                bounds,
-                inset,
-              );
-              if (
-                Math.abs(next.scrollX - scrollX) < 0.05 &&
-                Math.abs(next.scrollY - scrollY) < 0.05
-              ) {
-                return;
-              }
-              clampingScrollRef.current = true;
-              api.updateScene({
-                appState: next,
-                captureUpdate: CaptureUpdateAction.NEVER,
-              });
-              requestAnimationFrame(() => {
-                clampingScrollRef.current = false;
-              });
-            }) ?? null;
-          // Excalidraw fires this during _App's first render. setActiveTool
-          // now is setState on an unmounted class component.
-          const handed = apiRef.current;
-          queueMicrotask(() => {
-            if (apiRef.current !== handed) return;
-            handed.setActiveTool({ type: "hand" });
-            if (!annotateCodeRef.current) {
-              ensureReadingHand();
-            }
-            reportCodeSlot();
-          });
-        }}
-        onChange={handleSceneChange}
-        initialData={initialData}
-        UIOptions={UI_OPTIONS}
+      <WhiteboardInkLab
+        ref={rasterInkRef}
+        enabled={interactive}
+        tool={
+          interactive && inkToolActive
+            ? activeTool === "eraser"
+              ? "eraser"
+              : activeTool === "highlighter"
+                ? "highlighter"
+                : "pen"
+            : null
+        }
+        strokeWidth={strokeWidth}
+        inkColor={inkColor}
+        pressureClip={pressureClip}
+        smoothing={inkSmoothing}
+        straightInk={straightInk}
+        speedBlotBlend={inkSpeedBlotBlend}
+        pressureSensitive={pressureSensitive}
+        getViewport={getViewport}
+        clip={inkClip}
+        onChange={handleInkChange}
+        onStylusAccessory={interactive ? handleStylusAccessory : undefined}
+        wheelHoldEnabled={
+          interactive && inkToolActive && !presetStore.wheelLocked
+        }
+        onWheelHold={(x, y) => setInkWheel({ x, y })}
       />
       {interactive && activeTool === "text" && <TextPlaceGhost ref={textPlaceGhostRef} />}
       {interactive && stampTrash && (

@@ -1,8 +1,8 @@
 /**
- * Ink overlay over Excalidraw. The visible canvas is the Ink lab engine host
- * (WebGL SDF capsules). Excalidraw stays the camera and shapes. Pen never
- * goes through LiveStroke stamps. Highlighter and eraser keep 2D ops on the
- * same host after the engine snap.
+ * Whiteboard ink surface. The visible canvas is `.lc-ink-lab-canvas`.
+ * Pen is the Ink lab engine (WebGL SDF capsules). Excalidraw is hidden while
+ * an ink tool is in hand; camera numbers still come from the board view.
+ * Highlighter and eraser keep 2D ops on the same host after the engine snap.
  */
 
 import {
@@ -77,6 +77,8 @@ import {
   type InkLabUpResult,
 } from "./inkLab/engine";
 import type { SpineDot } from "./inkLab/instance";
+import { paintLabDrawOps, splitInkOpsForLabReplay } from "./inkLab/replay";
+import { labPenFromToolbar } from "./inkLab/style";
 import { INK_GRAIN_DEFAULT, INK_SPEED_BLOT_BLEND_DEFAULT, INK_SPEED_FADE_DEFAULT } from "../util/inkSpeedPref";
 import { INK_BOLDNESS_DEFAULT } from "../util/inkBoldnessPref";
 
@@ -247,6 +249,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
     const labBakeRef = useRef({ bakeMs: 0, bake: "catmull" });
     /** Lift bake already reshaped this op — skip a second Chaikin in commitLive. */
     const inkLabCommitRef = useRef(false);
+    /**
+     * After an Ink lab lift the snap already holds the baked stroke. The next
+     * paint must present it, not stamp-replay the page (that was the spots).
+     */
+    const preserveLabSnapRef = useRef(false);
     /** Last live paint flush, for rAF-period metrics. */
     const lastLivePaintAtRef = useRef(0);
     const loadMeterRef = useRef(createInkLoadMeter());
@@ -724,16 +731,24 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
 
         if (livePen && engine) {
           engine.paint();
+        } else if (engine && preserveLabSnapRef.current) {
+          preserveLabSnapRef.current = false;
+          engine.paint();
         } else if (engine) {
+          const { lab, stamp } = splitInkOpsForLabReplay(opsRef.current);
           engine.redrawSnap((sctx) => {
-            paintRasterInk(
-              sctx,
-              drawView,
-              opsRef.current,
-              null,
-              dpr,
-              clipRef.current,
-            );
+            paintLabDrawOps(sctx, drawView, lab, dpr, clipRef.current);
+            if (stamp.length > 0) {
+              paintRasterInk(
+                sctx,
+                drawView,
+                stamp,
+                null,
+                dpr,
+                clipRef.current,
+                false,
+              );
+            }
             paintHostBoundPass(
               sctx,
               opsRef.current,
@@ -1233,10 +1248,13 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       liveStrokeRef.current = null;
       liveRef.current = null;
       liveDrawnIndexRef.current = 0;
+      const keepLabSnap = inkLabCommitRef.current;
       inkLabCommitRef.current = false;
 
       ensureTiles().appendOp(stamped);
       strokeHostRef.current = null;
+      if (keepLabSnap) preserveLabSnapRef.current = true;
+      else preserveLabSnapRef.current = false;
       repaint();
       onChange?.();
     }, [ensureTiles, onChange, repaint]);
@@ -1255,6 +1273,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           liveStrokeRef.current = null;
         liveRef.current = null;
           liveDrawnIndexRef.current = 0;
+          preserveLabSnapRef.current = false;
           invalidateTiles();
           repaint();
           onChange?.();
@@ -1266,6 +1285,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           liveStrokeRef.current = null;
         liveRef.current = null;
           liveDrawnIndexRef.current = 0;
+          preserveLabSnapRef.current = false;
           invalidateTiles();
           repaint();
           onChange?.();
@@ -1278,6 +1298,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           liveStrokeRef.current = null;
         liveRef.current = null;
           liveDrawnIndexRef.current = 0;
+          preserveLabSnapRef.current = false;
           invalidateTiles();
           repaint();
           onChange?.();
@@ -1317,6 +1338,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           liveStrokeRef.current = null;
         liveRef.current = null;
           liveDrawnIndexRef.current = 0;
+          preserveLabSnapRef.current = false;
           invalidateTiles();
           repaint();
         },
@@ -1339,6 +1361,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           liveStrokeRef.current = null;
         liveRef.current = null;
           liveDrawnIndexRef.current = 0;
+          preserveLabSnapRef.current = false;
           invalidateTiles();
           repaint();
         },
@@ -1810,20 +1833,17 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           engine.captureSnap();
           labBakeRef.current = { bakeMs: 0, bake: "catmull" };
           const dpr = canvas.width / Math.max(1, rect.width);
-          engine.setPen({
-            color: inkColorRef.current,
-            baseWidth: inkBaseWidthForZoom(width, strokeView.zoom),
-            overlayScale: strokeView.zoom * dpr,
-            dpr,
-            maxFullness: 1,
-            pressureClip: pressureClipRef.current,
-            pressureSensitive: pressureSensitiveRef.current,
-            speedInk: 0,
-            speedBlotBlend: 0,
-            speedFade: 0,
-            boldness: 1,
-            smoothing: smoothingRef.current,
-          });
+          engine.setPen(
+            labPenFromToolbar({
+              color: inkColorRef.current,
+              uiWidth: width,
+              dpr,
+              pressureClip: pressureClipRef.current,
+              pressureSensitive: pressureSensitiveRef.current,
+              blot: speedBlotBlendRef.current,
+              smoothing: smoothingRef.current,
+            }),
+          );
           engine.down(inkLabOverlaySample(canvas, rect, event));
           loadMeterRef.current.begin();
           paintLiveAfterChangeRef.current(true);
@@ -2201,13 +2221,14 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           ref={canvasRef}
           className={
             tool === "eraser"
-              ? "lc-raster-ink lc-raster-ink-eraser"
+              ? "lc-raster-ink lc-ink-lab-canvas lc-raster-ink-eraser"
               : tool === "pen"
-                ? "lc-raster-ink lc-raster-ink-pen"
-                : "lc-raster-ink"
+                ? "lc-raster-ink lc-ink-lab-canvas lc-raster-ink-pen"
+                : "lc-raster-ink lc-ink-lab-canvas"
           }
           style={{ pointerEvents: tool ? "auto" : "none" }}
-          aria-hidden
+          aria-label="Ink lab pad"
+          tabIndex={0}
         />
         <InkLoadBar ref={loadBarRef} />
       </div>

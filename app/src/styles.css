@@ -3122,6 +3122,26 @@ body[data-lc-sash-drag="horizontal"] {
   cursor: none;
 }
 
+.lc-board-ink-lab-host {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  background: #f4f1ea;
+}
+
+.lc-board-paper .lc-board-ink-lab-host,
+.lc-board-doc-paper .lc-board-ink-lab-host {
+  background: transparent;
+}
+
+.lc-board-ink-lab-host .lc-ink-lab-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
 /*
  * Live-stroke load, pinned to the ink canvas so a split tab does not share one
  * bar across both panes. 5px track; the fill is compositor-only (scaleX).
@@ -6087,10 +6107,13 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-ink-lab-canvas {
+  touch-action: none;
+}
+
+.lc-ink-lab .lc-ink-lab-canvas {
   display: block;
   width: 100%;
   height: 100%;
-  touch-action: none;
   cursor: crosshair;
 }
 

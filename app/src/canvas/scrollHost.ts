@@ -122,6 +122,7 @@ export function scrollHostAtPoint(clientX: number, clientY: number): HTMLElement
   for (const el of document.elementsFromPoint(clientX, clientY)) {
     if (!(el instanceof HTMLElement)) continue;
     if (el.classList.contains("lc-raster-ink")) continue;
+    if (el.classList.contains("lc-ink-lab-canvas")) continue;
     if (el.tagName === "CANVAS") continue;
     if (el.closest?.(".lc-page-marks-slot")) continue;
     const host = nestedScrollHost(el);

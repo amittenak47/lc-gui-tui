@@ -1,9 +1,10 @@
 /**
  * Ink lab engine. Host-owned overlay: attach / down / move / up / paint / clear.
- * Camera later is zoom and scrollX/Y numbers, not a scene API.
+ * Camera is the host view (zoom / scroll baked into sample + replay coords).
+ * Excalidraw is not the ink surface.
  */
 
-import { blotGrowTFromTicks, inkSlowness } from "../rasterInk";
+import { inkSlowness } from "../rasterInk";
 import { INK_SMOOTHING_DEFAULT } from "../inkSmoothing";
 
 import { bakeSpine } from "./bake";
@@ -22,8 +23,11 @@ import {
   capillaryRelax,
   growTipRadius,
   INK_RGB,
+  labHoldGrow,
+  labNibRadius,
   labPenDot,
   labPenNibOverlay,
+  TIP_GROW,
   washRgb,
   type InkLabPen,
 } from "./style";
@@ -94,6 +98,15 @@ export type InkLabEngine = {
    * presents this plus any live SDF.
    */
   redrawSnap(paint: (ctx: CanvasRenderingContext2D) => void): void;
+  /**
+   * Replace the committed snap with SDF capsules for these overlay-space
+   * spines. Undo / restore. Not the 2D miter strip.
+   */
+  replaySpines(strokes: readonly SpineDot[][]): void;
+  /** Stamp highlighter / eraser onto the committed snap without clearing it. */
+  paintOntoSnap(paint: (ctx: CanvasRenderingContext2D) => void): void;
+  /** Drop the live stroke. Keep the committed snap. */
+  cancelStroke(): void;
   clear(): void;
   destroy(): void;
 };
@@ -106,7 +119,6 @@ export type InkLabEngineOpts = {
 };
 
 export const DISTANCE_GATE_CSS = 2.5;
-const BASE_R_CSS = 7;
 const HOLD_TICK_MS = 32;
 
 function inkOf(d: SpineDot): [number, number, number] {
@@ -171,10 +183,7 @@ function dprOf(canvas: HTMLCanvasElement): number {
 }
 
 function nibRadius(vx: number, vy: number, dpr: number, pressure: number): number {
-  const cssPxPerMs = Math.hypot(vx, vy) / 1000 / dpr;
-  const slow = inkSlowness(cssPxPerMs);
-  const p = Math.max(0.15, Math.min(1, pressure));
-  return Math.max(1.15 * dpr, BASE_R_CSS * dpr * (0.5 + 0.95 * slow) * (0.7 + 0.3 * p));
+  return labNibRadius(vx, vy, dpr, pressure, 1);
 }
 
 export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
@@ -325,25 +334,13 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     const extra = Math.max(1, Math.floor(Math.max(dt, HOLD_TICK_MS) / HOLD_TICK_MS));
     holdTicks += extra;
     lastHoldWall = now;
-    blotTipGrow = Math.max(
-      blotTipGrow,
-      blotGrowTFromTicks(holdTicks, pen.speedBlotBlend),
-    );
-    const grown = styledDot(
-      holdBase.x,
-      holdBase.y,
-      0,
-      0,
-      host ? (pen?.dpr ?? dprOf(host)) : (pen?.dpr ?? 1),
-      holdBase.p ?? 0.5,
-      blotTipGrow,
-    );
+    const grown = labHoldGrow(holdBase.r, tip.r, pen.speedBlotBlend);
+    if (holdBase.r > 1e-6) {
+      blotTipGrow = Math.max(blotTipGrow, (grown / holdBase.r - 1) / (TIP_GROW - 1));
+    }
     tip = {
       ...holdBase,
-      r: Math.max(holdBase.r, grown.r),
-      rgb: grown.rgb,
-      a: grown.a,
-      slow: grown.slow,
+      r: grown,
     };
     expandAabb(aabb, tip);
   };
@@ -691,6 +688,40 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       sctx.setTransform(1, 0, 0, 1, 0, 0);
       sctx.clearRect(0, 0, snap.width, snap.height);
       paint(sctx);
+    },
+    replaySpines(strokes) {
+      if (!host || !peer) return;
+      syncSize();
+      if (!snap) snap = peer(host.width, host.height);
+      if (!snap) return;
+      const sctx = snap.getContext("2d");
+      sctx?.setTransform(1, 0, 0, 1, 0, 0);
+      sctx?.clearRect(0, 0, snap.width, snap.height);
+      drawing = false;
+      holding = false;
+      for (const stroke of strokes) {
+        if (stroke.length === 0) continue;
+        applyBaked(stroke.map(cloneDot));
+        blitLiveToSnap();
+        sdf?.clear();
+        fallback?.clearLive();
+      }
+      spine = [];
+      segs = 0;
+      sdfLive = 0;
+      sdfFull = false;
+      paintedSegs = 0;
+      tip = null;
+      aabb = emptyAabb();
+    },
+    paintOntoSnap(paint) {
+      if (!snap) return;
+      const sctx = snap.getContext("2d");
+      if (!sctx) return;
+      paint(sctx);
+    },
+    cancelStroke() {
+      resetLive();
     },
     clear() {
       resetLive();
