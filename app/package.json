@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Handwriting whiteboard — Tauri v2 shell around an Excalidraw canvas. Desktop and APK embed the harness router (no lc serve, no LAN pairing).",
+  "description": "Handwriting whiteboard — Tauri v2 shell around an Ink lab pad. Desktop and APK embed the harness router (no lc serve, no LAN pairing).",
   "license": "PolyForm-Noncommercial-1.0.0",
   "scripts": {
     "dev": "vite",
@@ -35,7 +35,6 @@
     "icons:sync": "tauri icon ../docs/icons/tauri.manifest.json"
   },
   "dependencies": {
-    "@excalidraw/excalidraw": "0.18.1",
     "@monaco-editor/react": "^4.7.0",
     "@mozilla/readability": "^0.6.0",
     "@tauri-apps/api": "^2",

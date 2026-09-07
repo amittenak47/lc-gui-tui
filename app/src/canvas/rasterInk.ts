@@ -5776,10 +5776,15 @@ export function paintRasterInk(
    * enough — the tablet's one-page view clips the ink layer to the same box.
    */
   clip: SceneBounds | null = null,
+  /**
+   * When false, draw on top of whatever is already on `ctx` (Ink lab capsules).
+   * Default clears, which is what a full stamp replay needs.
+   */
+  clearCanvas = true,
 ): void {
   const { width, height } = viewport;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
+  if (clearCanvas) ctx.clearRect(0, 0, width, height);
 
   // Canvas element origin = top-left of the overlay. Only scroll + zoom apply here;
   // offsetLeft/offsetTop are viewport coords and must NOT be added again.

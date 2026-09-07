@@ -1,7 +1,7 @@
 import { createCanvas } from "@napi-rs/canvas";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createInkLabEngine } from "./engine";
+import { createInkLabEngine, DISTANCE_GATE_CSS } from "./engine";
 import { createEkf } from "./ekf";
 
 beforeAll(() => {
@@ -235,6 +235,80 @@ describe("Ink lab live path", () => {
     const data = canvas.getContext("2d")!.getImageData(15, 15, 1, 1).data;
     expect(data[2]).toBeGreaterThan(0);
     engine.destroy();
+  });
+
+  it("toolbar default width stays above the sample gate", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.setPen({
+      color: "#1a1a1a",
+      baseWidth: 2,
+      overlayScale: 8,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      boldness: 1,
+    });
+    engine.down({ x: 40, y: 80, p: 0.5, t: 0 });
+    engine.move([{ x: 80, y: 84, p: 0.5, t: 16 }]);
+    const baked = engine.up({ x: 120, y: 88, p: 0.5, t: 32 });
+    expect(baked.points[0]!.r).toBeGreaterThan(DISTANCE_GATE_CSS);
+    engine.destroy();
+  });
+
+  it("hold grow off stays nib-sized while a hold grows the pad nib", () => {
+    let wall = 0;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
+      wall += 40;
+      return wall;
+    });
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const pen = {
+      color: "#1a1a1a",
+      baseWidth: 2,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedFade: 0,
+      boldness: 1,
+      smoothing: 0,
+    };
+    try {
+      const off = createInkLabEngine({ sdf: false });
+      off.attach(canvas);
+      off.setPen({ ...pen, speedBlotBlend: 0 });
+      off.down({ x: 80, y: 90, p: 0.5, t: 0 });
+      for (let i = 1; i <= 40; i++) {
+        off.move([{ x: 80.1, y: 90.1, p: 0.5, t: i * 32 }]);
+        off.paint();
+      }
+      const offBaked = off.up({ x: 80.1, y: 90.1, p: 0.5, t: 1400 });
+      const offR = Math.max(...offBaked.points.map((p) => p.r));
+      off.destroy();
+
+      const on = createInkLabEngine({ sdf: false });
+      on.attach(canvas);
+      on.setPen({ ...pen, speedBlotBlend: 1 });
+      on.down({ x: 80, y: 90, p: 0.5, t: 0 });
+      for (let i = 1; i <= 40; i++) {
+        on.move([{ x: 80.1, y: 90.1, p: 0.5, t: i * 32 }]);
+        on.paint();
+      }
+      const onBaked = on.up({ x: 80.1, y: 90.1, p: 0.5, t: 1400 });
+      const onR = Math.max(...onBaked.points.map((p) => p.r));
+      expect(onR).toBeGreaterThan(offR * 1.1);
+      on.destroy();
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
 

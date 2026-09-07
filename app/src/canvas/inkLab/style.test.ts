@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { dryWashRgb } from "../rasterInk";
-import { capillaryRelax, growTipRadius, INK_HEX, labPenDot, washRgb } from "./style";
+import { capillaryRelax, growTipRadius, INK_HEX, labHoldGrow, labNibSizeFromUiWidth, labPenDot, labPressureAmt, washRgb } from "./style";
 
 describe("ink lab style", () => {
   it("wash uses dryWashRgb", () => {
@@ -70,6 +70,25 @@ describe("ink lab style", () => {
     expect(fat.a).toBe(1);
   });
 
+  it("does not shrink the nib when overlayScale is a zoom factor", () => {
+    const shared = {
+      color: "#1a1a1a",
+      baseWidth: 2,
+      dpr: 2,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      boldness: 1,
+    };
+    const atPad = labPenDot({ ...shared, overlayScale: 1 }, 0, 0, 2, 0.5, 0, 0);
+    const atZoom = labPenDot({ ...shared, overlayScale: 8 }, 0, 0, 2, 0.5, 0, 0);
+    expect(atZoom.r).toBeCloseTo(atPad.r, 5);
+    expect(atPad.r).toBeGreaterThan(2.5 * 2);
+  });
+
   it("does not bead the radius from speed-ink width gain", () => {
     const pen = {
       color: "#1a1a1a",
@@ -89,6 +108,35 @@ describe("ink lab style", () => {
     expect(still.a).toBe(1);
     expect(flying.a).toBe(1);
     expect(still.r / flying.r).toBeLessThan(3);
+  });
+
+  it("maps default slider width to pad size 1", () => {
+    expect(labNibSizeFromUiWidth(2)).toBe(1);
+    expect(labNibSizeFromUiWidth(20)).toBe(2.8);
+  });
+
+  it("pressure clip fattens a light press on the nib", () => {
+    const base = {
+      color: "#1a1a1a",
+      baseWidth: 2,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureSensitive: true,
+      speedInk: 0,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      boldness: 1,
+    };
+    const clipped = labPenDot({ ...base, pressureClip: 0.3 }, 0, 0, 1, 0.3, 0, 0);
+    const unclipped = labPenDot({ ...base, pressureClip: 1 }, 0, 0, 1, 0.3, 0, 0);
+    expect(clipped.r).toBeGreaterThan(unclipped.r);
+    expect(labPressureAmt({ ...base, pressureClip: 0.3 }, 0.3)).toBeCloseTo(1);
+  });
+
+  it("hold grow off stays nib-sized", () => {
+    expect(labHoldGrow(8, 10, 0)).toBe(8);
+    expect(labHoldGrow(8, 8, 1)).toBeGreaterThan(8);
   });
 
   it("capillary relaxes interior samples and is opt-in", () => {

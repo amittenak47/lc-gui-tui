@@ -14,7 +14,14 @@ import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
 import { StrokeSizeSlider } from "./StrokeSizeSlider";
 import { smoothInkPoints } from "./inkSmoothing";
 import {
+  createInkLabEngine,
+  type InkLabSample,
+} from "./inkLab/engine";
+import { fillMiterStroke } from "./inkLab/fallback";
+import { labNibRadius, labNibSizeFromUiWidth, labPenFromToolbar } from "./inkLab/style";
+import {
   applyInkOp,
+  dryWashRgb,
   ERASER_WIDTH_MAX,
   inkLineWidth,
   inkSlowness,
@@ -32,7 +39,7 @@ import {
   type ScenePoint,
 } from "./rasterInk";
 import type { InkHandedness } from "../util/inkHandedness";
-import { drawOpFromSnap, testStripDrawOp } from "../util/inkPresetStrip";
+import { drawOpFromSnap, TEST_STRIP_POINTS, testStripDrawOp } from "../util/inkPresetStrip";
 import {
   defaultDrawSnapshot,
   defaultEraserSnapshot,
@@ -87,11 +94,32 @@ function paintStrip(
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = getComputedStyle(canvas).getPropertyValue("--paper") || "#fdf6e3";
   ctx.fillRect(0, 0, w, h);
+  if (kind === "pen" && !isEraserWedge(snap)) {
+    paintLabStrip(ctx, snap);
+    return;
+  }
   const op = testStripDrawOp(kind, snap);
   if (!op) return;
   ctx.save();
   applyInkOp(ctx, op, 1);
   ctx.restore();
+}
+
+function paintLabStrip(ctx: CanvasRenderingContext2D, snap: InkDrawSnapshot): void {
+  const washed = dryWashRgb(snap.colour, 1);
+  const rgb: [number, number, number] = [washed.r, washed.g, washed.b];
+  const size = labNibSizeFromUiWidth(snap.width);
+  const r = labNibRadius(0, 0, 1, 0.5, size);
+  const spine = TEST_STRIP_POINTS.map((p) => ({
+    x: p.x,
+    y: p.y,
+    r,
+    rgb,
+    a: 1,
+    p: p.pressure,
+    slow: p.slowness,
+  }));
+  fillMiterStroke(ctx, spine, null, rgb);
 }
 
 function paintEraserDot(
@@ -321,8 +349,12 @@ export function InkPresetEditor({
                 </div>
                 <p className="lc-settings-hint">
                   {livePreview
-                    ? "Draw here with this preset before you Save. Switching Live off, or Erase, clears the pad."
-                    : "How this preset draws. Updates as you change the knobs."}
+                    ? kind === "pen"
+                      ? "Ink lab pad. Nib, colour, pressure, hold grow, and lift smoothing apply as you draw. Switching Live off, or Erase, clears the pad."
+                      : "Draw here with this preset before you Save. Switching Live off, or Erase, clears the pad."
+                    : kind === "pen"
+                      ? "How the Ink lab pen draws. Updates as you change the knobs."
+                      : "How this preset draws. Updates as you change the knobs."}
                 </p>
                 <div className="lc-preset-preview-stage">
                   {livePreview ? (
@@ -378,7 +410,7 @@ export function InkPresetEditor({
                     />
                   </SettingsBlock>
                 ) : (
-                  draw && <DrawKnobs snap={named} onChange={setDraft} />
+                  draw && <DrawKnobs kind={kind} snap={named} onChange={setDraft} />
                 )}
                 {draw && (
                   <SettingsBlock
@@ -488,6 +520,162 @@ function fillPreviewPaper(
 }
 
 function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }) {
+  if (kind === "pen" && !isEraserWedge(snap)) {
+    return <InkLabLivePad snap={snap} />;
+  }
+  return <StampLivePad kind={kind} snap={snap} />;
+}
+
+function sampleOf(canvas: HTMLCanvasElement, event: PointerEvent): InkLabSample {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const pressure =
+    event.pointerType === "pen" && Number.isFinite(event.pressure)
+      ? event.pressure
+      : 0.5;
+  return {
+    x: (event.clientX - rect.left) * dpr,
+    y: (event.clientY - rect.top) * dpr,
+    p: pressure,
+    t: event.timeStamp,
+  };
+}
+
+function InkLabLivePad({ snap }: { snap: InkDrawSnapshot }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const snapRef = useRef(snap);
+  snapRef.current = snap;
+  const engineRef = useRef<ReturnType<typeof createInkLabEngine> | null>(null);
+  const drawingRef = useRef(false);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const engine = createInkLabEngine();
+    engineRef.current = engine;
+    const syncPen = () => {
+      const current = snapRef.current;
+      engine.setPen(
+        labPenFromToolbar({
+          color: current.colour,
+          uiWidth: current.width,
+          dpr: window.devicePixelRatio || 1,
+          pressureClip: current.pressureClip,
+          pressureSensitive: current.pressureSensitive,
+          blot: current.blot,
+          smoothing: current.smoothing,
+        }),
+      );
+    };
+    const size = () => {
+      const cssW = Math.max(1, canvas.clientWidth || 468);
+      const cssH = Math.max(1, canvas.clientHeight || 88);
+      const dpr = window.devicePixelRatio || 1;
+      const bw = Math.round(cssW * dpr);
+      const bh = Math.round(cssH * dpr);
+      if (canvas.width !== bw || canvas.height !== bh) {
+        canvas.width = bw;
+        canvas.height = bh;
+      }
+      syncPen();
+      engine.paint();
+    };
+    size();
+    engine.attach(canvas);
+    syncPen();
+    engine.paint();
+
+    const schedule = () => {
+      if (rafRef.current != null) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        engine.paint();
+        if (drawingRef.current) schedule();
+      });
+    };
+
+    const onDown = (event: PointerEvent) => {
+      if (event.button !== 0 && event.pointerType !== "pen") return;
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch {
+        /* capture is best-effort */
+      }
+      syncPen();
+      drawingRef.current = true;
+      engine.down(sampleOf(canvas, event));
+      schedule();
+    };
+    const onMove = (event: PointerEvent) => {
+      if (!drawingRef.current) return;
+      const coalesced = event.getCoalescedEvents?.();
+      const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
+      engine.move(batch.map((item) => sampleOf(canvas, item)));
+      schedule();
+    };
+    const onUp = (event: PointerEvent) => {
+      if (!drawingRef.current) return;
+      drawingRef.current = false;
+      engine.up(sampleOf(canvas, event));
+      engine.paint();
+      try {
+        canvas.releasePointerCapture(event.pointerId);
+      } catch {
+        /* already released */
+      }
+    };
+
+    const ro = new ResizeObserver(() => size());
+    ro.observe(canvas);
+    canvas.addEventListener("pointerdown", onDown);
+    canvas.addEventListener("pointermove", onMove);
+    canvas.addEventListener("pointerup", onUp);
+    canvas.addEventListener("pointercancel", onUp);
+    return () => {
+      drawingRef.current = false;
+      ro.disconnect();
+      canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerup", onUp);
+      canvas.removeEventListener("pointercancel", onUp);
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      engine.destroy();
+      engineRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const engine = engineRef.current;
+    if (!canvas || !engine) return;
+    engine.setPen(
+      labPenFromToolbar({
+        color: snap.colour,
+        uiWidth: snap.width,
+        dpr: window.devicePixelRatio || 1,
+        pressureClip: snap.pressureClip,
+        pressureSensitive: snap.pressureSensitive,
+        blot: snap.blot,
+        smoothing: snap.smoothing,
+      }),
+    );
+  }, [snap]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="lc-preset-strip-canvas is-live lc-ink-lab-canvas"
+      width={468}
+      height={88}
+      aria-label="Ink lab pad"
+    />
+  );
+}
+
+function StampLivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const kindRef = useRef(kind);
   const snapRef = useRef(snap);
@@ -773,17 +961,35 @@ function LivePad({ kind, snap }: { kind: InkPresetKind; snap: InkWedgeSnapshot }
 }
 
 function DrawKnobs({
+  kind,
   snap,
   onChange,
 }: {
+  kind: InkPresetKind;
   snap: InkDrawSnapshot;
   onChange: (next: InkDrawSnapshot) => void;
 }) {
+  const lab = kind === "pen";
   return (
     <SettingsBlock
       title="Stroke"
       hint={
-        snap.pressureSensitive ? (
+        lab ? (
+          snap.pressureSensitive ? (
+            <>
+              Ink lab nib. Size is the capsule radius on the pad. Stylus
+              pressure tapers that radius — a light touch is thinner, a firm
+              press matches the slider. Straight lock draws a chord. Saved on
+              this device only.
+            </>
+          ) : (
+            <>
+              Ink lab nib and a straight-stroke lock. The starburst turns on
+              stylus pressure, which tapers capsule radius. Saved on this
+              device only.
+            </>
+          )
+        ) : snap.pressureSensitive ? (
           <>
             Pressure is on: how hard you press changes how dark the ink is, not
             how wide. A light touch is paler, a firm press is solid. Ink fullness
@@ -807,19 +1013,21 @@ function DrawKnobs({
           onChange={(width) => onChange({ ...snap, width })}
           label="Nib size"
         />
-        <div
-          className={
-            snap.pressureSensitive ? "lc-ink-fold is-open" : "lc-ink-fold"
-          }
-        >
-          <div className="lc-ink-fold-inner">
-            <InkFullnessSlider
-              value={snap.fullness}
-              onChange={(fullness) => onChange({ ...snap, fullness })}
-              enabled={snap.pressureSensitive}
-            />
+        {!lab && (
+          <div
+            className={
+              snap.pressureSensitive ? "lc-ink-fold is-open" : "lc-ink-fold"
+            }
+          >
+            <div className="lc-ink-fold-inner">
+              <InkFullnessSlider
+                value={snap.fullness}
+                onChange={(fullness) => onChange({ ...snap, fullness })}
+                enabled={snap.pressureSensitive}
+              />
+            </div>
           </div>
-        </div>
+        )}
         <PressureSensitiveToggle
           enabled={snap.pressureSensitive}
           onChange={(pressureSensitive) => onChange({ ...snap, pressureSensitive })}
@@ -851,6 +1059,7 @@ function PhysicsKnobs({
   snap: InkDrawSnapshot;
   onChange: (next: InkDrawSnapshot) => void;
 }) {
+  const lab = kind === "pen";
   const speedPct = speedInkToPercent(snap.speed);
   const smoothPct = smoothingToPercent(snap.smoothing);
   const clipPct = pressureClipToPercent(snap.pressureClip);
@@ -860,12 +1069,20 @@ function PhysicsKnobs({
         <SettingsBlock
           title="Pressure clip"
           hint={
-            <>
-              How hard a press counts as solid ink — a threshold on darkness,
-              not width. 100% means you have to press fully for full opacity;
-              30% lets a lighter press look just as dark. Saved on this device
-              only.
-            </>
+            lab ? (
+              <>
+                How hard a press counts as a full-width nib. 100% means you have
+                to press fully for the thickest capsule; 30% lets a lighter press
+                reach that width. Saved on this device only.
+              </>
+            ) : (
+              <>
+                How hard a press counts as solid ink — a threshold on darkness,
+                not width. 100% means you have to press fully for full opacity;
+                30% lets a lighter press look just as dark. Saved on this device
+                only.
+              </>
+            )
           }
         >
           <SettingsRange
@@ -881,42 +1098,51 @@ function PhysicsKnobs({
         </SettingsBlock>
       )}
 
-      <SettingsBlock
-        title="Speed ink"
-        hint={
-          <>
-            Same pen as Off at a normal writing pace: slow down and the line
-            fattens, speed up and it thins. Ink pooling and Ink drying are
-            separate and work when this is Off. Saved on this device only.
-          </>
-        }
-      >
-        <SettingsRange
-          label="Speed ink"
-          min={0}
-          max={100}
-          step={5}
-          value={speedPct}
-          display={speedPct === 0 ? "Off" : `${speedPct}%`}
-          onChange={(n) => onChange({ ...snap, speed: speedInkFromPercent(n) })}
-        />
-      </SettingsBlock>
+      {!lab && (
+        <SettingsBlock
+          title="Speed ink"
+          hint={
+            <>
+              Same pen as Off at a normal writing pace: slow down and the line
+              fattens, speed up and it thins. Ink pooling and Ink drying are
+              separate and work when this is Off. Saved on this device only.
+            </>
+          }
+        >
+          <SettingsRange
+            label="Speed ink"
+            min={0}
+            max={100}
+            step={5}
+            value={speedPct}
+            display={speedPct === 0 ? "Off" : `${speedPct}%`}
+            onChange={(n) => onChange({ ...snap, speed: speedInkFromPercent(n) })}
+          />
+        </SettingsBlock>
+      )}
 
       <SettingsBlock
-        title="Ink Pooling"
+        title={lab ? "Hold grow" : "Ink Pooling"}
         hint={
-          <>
-            Hold at a stop to slowly grow a richer pool at the nib. Does not
-            taper the moving trail. Slow writing lays a richer colour; fast
-            writing does not wash it paler. Works with Speed ink off. Off stays
-            nib-sized. 100% still takes about a second+ of holding to reach a
-            modest pool past the stroke, denser than the trail not paler. Saved
-            on this device only.
-          </>
+          lab ? (
+            <>
+              Hold the nib still and the Ink lab tip grows a richer pool. Off
+              stays nib-sized. Saved on this device only.
+            </>
+          ) : (
+            <>
+              Hold at a stop to slowly grow a richer pool at the nib. Does not
+              taper the moving trail. Slow writing lays a richer colour; fast
+              writing does not wash it paler. Works with Speed ink off. Off stays
+              nib-sized. 100% still takes about a second+ of holding to reach a
+              modest pool past the stroke, denser than the trail not paler. Saved
+              on this device only.
+            </>
+          )
         }
       >
         <SettingsRange
-          label="Ink Pooling"
+          label={lab ? "Hold grow" : "Ink Pooling"}
           min={0}
           max={100}
           step={5}
@@ -925,6 +1151,7 @@ function PhysicsKnobs({
           onChange={(n) => onChange({ ...snap, blot: speedBlotBlendFromPercent(n) })}
         />
       </SettingsBlock>
+      {!lab && (
       <SettingsBlock
         title="Ink Drying"
         hint={
@@ -946,7 +1173,9 @@ function PhysicsKnobs({
           onChange={(n) => onChange({ ...snap, fade: speedFadeFromPercent(n) })}
         />
       </SettingsBlock>
+      )}
 
+      {!lab && (
       <SettingsBlock
         title="Ink boldness"
         hint={
@@ -967,6 +1196,7 @@ function PhysicsKnobs({
           onChange={(n) => onChange({ ...snap, boldness: inkBoldnessFromPercent(n) })}
         />
       </SettingsBlock>
+      )}
 
       <SettingsBlock
         title="Stroke smoothing"
