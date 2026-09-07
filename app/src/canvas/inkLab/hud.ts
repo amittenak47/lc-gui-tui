@@ -1,5 +1,5 @@
 /**
- * Ink lab overlay HUD. Board and the comparison pad share this readout.
+ * Ink lab overlay HUD. Board performance overlay uses this readout.
  */
 
 export type InkLabHud = {

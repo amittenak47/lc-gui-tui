@@ -20,7 +20,6 @@ import type { SpineDot } from "./instance";
 export const INK_HEX = "#1a1a1a";
 export const INK_RGB: [number, number, number] = [26, 26, 26];
 export const TIP_GROW = 1.7;
-/** Same CSS nib the comparison pad uses. Never scaled by camera zoom. */
 export const LAB_NIB_CSS = 7;
 /** Pad wash at a sprint: mix toward paper. Stopped writing stays full. */
 const LAB_WASH_FAST = 0.42;

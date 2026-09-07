@@ -54,8 +54,6 @@ function beginPen(
     speedBlotBlend?: number;
     zoom?: number;
     onNeedPaint?: () => void;
-    splineOutline?: boolean;
-    splineGradient?: boolean;
     shell?: boolean;
   } = {},
 ) {
@@ -76,8 +74,6 @@ function beginPen(
     speedFade: extras.speedInk ? 1 : 0,
     grain: 0,
     boldness: 1,
-    splineOutline: extras.splineOutline,
-    splineGradient: extras.splineGradient,
     smoothing: 0,
     smoothingMode: INK_SMOOTHING_MODE_DEFAULT,
     getStraightAnchor: () => null,
@@ -389,25 +385,6 @@ describe("LiveStroke ingest", () => {
     expect(live.blotTipGrow ?? 0).toBeGreaterThan(0.5);
     expect(dirty).toBe(false);
     expect(stroke.tick(t0 + 80 + 201 * 32)).toBe(false);
-    stroke.abandon();
-  });
-});
-
-describe("spline outline live", () => {
-  it("takes the outline path and leaves stamp-live off, even with Speed Ink on", () => {
-    const stroke = beginPen({ speedInk: 1, splineOutline: true });
-    expect(stroke.splineOutlineLive()).toBe(true);
-    expect(stroke.speedStampLive()).toBe(false);
-    const live = stroke.live;
-    expect(live?.kind === "draw" && live.splineOutline).toBe(true);
-    stroke.abandon();
-  });
-
-  it("stamps gradient onto the op when that knob is on", () => {
-    const stroke = beginPen({ splineGradient: true });
-    const live = stroke.live;
-    expect(live?.kind === "draw" && live.splineOutline).toBe(true);
-    expect(live?.kind === "draw" && live.splineGradient).toBe(true);
     stroke.abandon();
   });
 });

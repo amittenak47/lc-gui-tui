@@ -271,12 +271,6 @@ import {
   loadInkSpeedFade,
 } from "../util/inkSpeedPref";
 import {
-  INK_SPLINE_GRADIENT_EVENT,
-  INK_SPLINE_OUTLINE_EVENT,
-  loadInkSplineGradient,
-  loadInkSplineOutline,
-} from "../util/inkSplinePref";
-import {
   INK_BOLDNESS_EVENT,
   loadInkBoldness,
 } from "../util/inkBoldnessPref";
@@ -1341,8 +1335,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   );
   const [, setInkGrain] = useState(() => loadInkGrain());
   const [inkSpeedFade, setInkSpeedFade] = useState(() => loadInkSpeedFade());
-  const [, setInkSplineOutline] = useState(() => loadInkSplineOutline());
-  const [, setInkSplineGradient] = useState(() => loadInkSplineGradient());
   const [, setInkBoldness] = useState(() => loadInkBoldness());
   const [, setEraserPartial] = useState(() => loadEraserPartial());
   const [perfOverlay, setPerfOverlay] = useState(() => loadInkPerfOverlay());
@@ -3457,19 +3449,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const onFade = () => setInkSpeedFade(loadInkSpeedFade());
     window.addEventListener(INK_SPEED_FADE_EVENT, onFade);
     return () => window.removeEventListener(INK_SPEED_FADE_EVENT, onFade);
-  }, []);
-
-  useEffect(() => {
-    const onSpline = () => {
-      setInkSplineOutline(loadInkSplineOutline());
-      setInkSplineGradient(loadInkSplineGradient());
-    };
-    window.addEventListener(INK_SPLINE_OUTLINE_EVENT, onSpline);
-    window.addEventListener(INK_SPLINE_GRADIENT_EVENT, onSpline);
-    return () => {
-      window.removeEventListener(INK_SPLINE_OUTLINE_EVENT, onSpline);
-      window.removeEventListener(INK_SPLINE_GRADIENT_EVENT, onSpline);
-    };
   }, []);
 
   useEffect(() => {

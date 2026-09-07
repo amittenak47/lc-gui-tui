@@ -52,8 +52,6 @@ const draw: InkDrawSnapshot = {
   blot: 0.55,
   grain: 0,
   fade: 0,
-  splineOutline: false,
-  splineGradient: false,
   boldness: 1,
 };
 
@@ -303,9 +301,6 @@ describe("test strip", () => {
     expect(wider?.baseWidth).toBe(9);
     expect(a?.speedFade).toBe(0);
     expect(testStripDrawOp("pen", { ...draw, fade: 0.4 })?.speedFade).toBe(0.4);
-    expect(testStripDrawOp("pen", { ...draw, splineOutline: true })?.splineOutline).toBe(
-      true,
-    );
     expect(testStripDrawOp("eraser", eraser)).toBeNull();
   });
 

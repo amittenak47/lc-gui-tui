@@ -188,7 +188,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: join(rootDir, "index.html"),
-        hostInkLab: join(rootDir, "host-ink-lab.html"),
       },
       output: {
         /*

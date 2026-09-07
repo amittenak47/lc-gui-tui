@@ -74,31 +74,19 @@ describe("serializeTabState", () => {
     expect(serial.tabs[1]).toMatchObject({ dirty: false, notebookId: "nb-1" });
   });
 
-  it("drops retired Freehand and Ink lab chips", () => {
-    const state: TabState = {
-      tabs: [
-        { id: HOME_TAB_ID, kind: "home", title: "Home", dirty: false, lastActive: 0 },
-        { id: "fh", kind: "freehand", title: "Freehand", dirty: false, lastActive: 1 },
-        { id: "il", kind: "inklab", title: "Ink lab", dirty: false, lastActive: 2 },
-        board("b1", "nb-1"),
-      ],
-      activeId: "fh",
-      groups: [],
-    };
-    const serial = serializeTabState(state);
-    expect(serial.tabs.map((tab) => tab.id)).toEqual([HOME_TAB_ID, "b1"]);
-    expect(serial.activeId).toBe(HOME_TAB_ID);
+  it("drops retired Freehand and Ink lab chips from saved sessions", () => {
     const parsed = parseTabState({
       v: 1,
       tabs: [
         { id: HOME_TAB_ID, kind: "home", title: "Home", lastActive: 0 },
         { id: "fh", kind: "freehand", title: "Freehand", lastActive: 1 },
         { id: "il", kind: "inklab", title: "Ink lab", lastActive: 2 },
+        { id: "b1", kind: "whiteboard", title: "Board", lastActive: 3, notebookId: "nb-1" },
       ],
       activeId: "il",
       groups: [],
     });
-    expect(parsed?.tabs.map((tab) => tab.id)).toEqual([HOME_TAB_ID]);
+    expect(parsed?.tabs.map((tab) => tab.id)).toEqual([HOME_TAB_ID, "b1"]);
     expect(parsed?.activeId).toBe(HOME_TAB_ID);
   });
 

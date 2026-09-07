@@ -21,9 +21,7 @@ export function tabAllowsRename(tab: TabRecord): boolean {
   if (
     tab.kind === "home" ||
     tab.kind === "practice" ||
-    tab.kind === "explore" ||
-    tab.kind === "freehand" ||
-    tab.kind === "inklab"
+    tab.kind === "explore"
   ) {
     return false;
   }
