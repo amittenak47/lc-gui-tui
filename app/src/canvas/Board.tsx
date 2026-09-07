@@ -260,7 +260,7 @@ import {
 } from "../util/linedPaperPref";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
-import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref";
+import { loadInkSmoothing, loadInkSmoothingMode, loadInkClothoid, loadInkCapillary } from "../util/inkSmoothingPref";
 import {
   INK_GRAIN_EVENT,
   INK_SPEED_BLOT_BLEND_EVENT,
@@ -1328,6 +1328,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
   const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
   const [inkSmoothingMode, setInkSmoothingMode] = useState(() => loadInkSmoothingMode());
+  const [inkClothoid, setInkClothoid] = useState(() => loadInkClothoid());
+  const [inkCapillary, setInkCapillary] = useState(() => loadInkCapillary());
   const [straightInk, setStraightInk] = useState(() => inkPrefsRef.current.straightInk);
   const [inkSpeed, setInkSpeed] = useState(() => loadInkSpeed());
   const [inkSpeedBlotBlend, setInkSpeedBlotBlend] = useState(() =>
@@ -3421,6 +3423,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const onSmoothing = () => {
       setInkSmoothing(loadInkSmoothing());
       setInkSmoothingMode(loadInkSmoothingMode());
+      setInkClothoid(loadInkClothoid());
+      setInkCapillary(loadInkCapillary());
     };
     window.addEventListener("lc-ink-smoothing", onSmoothing);
     return () => window.removeEventListener("lc-ink-smoothing", onSmoothing);
@@ -9322,6 +9326,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         pressureClip={pressureClip}
         smoothing={inkSmoothing}
         smoothingMode={inkSmoothingMode}
+        clothoid={inkClothoid}
+        capillary={inkCapillary}
         straightInk={straightInk}
         speedInk={inkSpeed}
         speedBlotBlend={inkSpeedBlotBlend}

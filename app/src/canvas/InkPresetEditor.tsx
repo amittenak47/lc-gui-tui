@@ -18,7 +18,8 @@ import {
   type InkLabEngine,
   type InkLabSample,
 } from "./inkLab/engine";
-import { labPenFromToolbar, labPreviewSpine } from "./inkLab/style";
+import { labPenFromToolbar, labPreviewSpine, capillaryRelax } from "./inkLab/style";
+import { bakeSpine } from "./inkLab/bake";
 import {
   applyInkOp,
   ERASER_WIDTH_MAX,
@@ -112,6 +113,8 @@ function labPenFromSnap(snap: InkDrawSnapshot, dpr: number) {
     fade: snap.fade,
     smoothing: snap.smoothing,
     smoothingMode: snap.smoothingMode,
+    clothoid: snap.clothoid,
+    capillary: snap.capillary,
   });
 }
 
@@ -131,8 +134,13 @@ function paintLabPreview(
   }
   const pen = labPenFromSnap(snap, dpr);
   engine.setPen(pen);
+  const raw = labPreviewSpine(pen, TEST_STRIP_POINTS, dpr, cssW / 468, cssH / 88);
+  const baked = bakeSpine(raw, {
+    clothoid: snap.clothoid,
+    smoothing: snap.smoothing,
+  });
   engine.replaySpines([
-    labPreviewSpine(pen, TEST_STRIP_POINTS, dpr, cssW / 468, cssH / 88),
+    snap.capillary ? capillaryRelax(baked.points) : baked.points,
   ]);
   engine.paintOntoSnap((ctx) => {
     ctx.save();
@@ -1327,6 +1335,44 @@ function PhysicsKnobs({
             onChange={(smoothingMode) => onChange({ ...snap, smoothingMode })}
           />
         </>
+      )}
+
+      {lab && (
+        <SettingsBlock
+          title="Lift finish"
+          hint={
+            <>
+              Both run once when you lift, never under the nib.{" "}
+              <strong>Clothoids</strong> fit Euler spirals through the stroke so
+              bends keep even curvature. <strong>Capillary</strong> relaxes the
+              spine so kinks and wash steps bleed together. Saved on this device
+              only.
+            </>
+          }
+        >
+          <SettingsChoice
+            label="Clothoids"
+            value={snap.clothoid}
+            options={
+              [
+                [false, "Clothoids off"],
+                [true, "Clothoids on"],
+              ] as Array<[boolean, string]>
+            }
+            onChange={(clothoid) => onChange({ ...snap, clothoid })}
+          />
+          <SettingsChoice
+            label="Capillary"
+            value={snap.capillary}
+            options={
+              [
+                [false, "Capillary off"],
+                [true, "Capillary on"],
+              ] as Array<[boolean, string]>
+            }
+            onChange={(capillary) => onChange({ ...snap, capillary })}
+          />
+        </SettingsBlock>
       )}
     </>
   );

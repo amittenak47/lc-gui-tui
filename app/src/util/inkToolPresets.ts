@@ -44,8 +44,12 @@ import {
   INK_SMOOTHING_MODE_DEFAULT,
   loadInkSmoothing,
   loadInkSmoothingMode,
+  loadInkClothoid,
+  loadInkCapillary,
   saveInkSmoothing,
   saveInkSmoothingMode,
+  saveInkClothoid,
+  saveInkCapillary,
 } from "./inkSmoothingPref";
 import {
   INK_GRAIN_DEFAULT,
@@ -87,6 +91,10 @@ export interface InkDrawSnapshot {
   pressureClip: number;
   smoothing: number;
   smoothingMode: InkSmoothingMode;
+  /** Lift-time Euler spiral. Pen only. */
+  clothoid: boolean;
+  /** Lift-time Laplacian relax. Pen only. */
+  capillary: boolean;
   speed: number;
   blot: number;
   grain: number;
@@ -139,6 +147,8 @@ export function liveDrawSnapshot(name = "Global"): InkDrawSnapshot {
     pressureClip: loadInkPressureClip(),
     smoothing: loadInkSmoothing(),
     smoothingMode: loadInkSmoothingMode(),
+    clothoid: loadInkClothoid(),
+    capillary: loadInkCapillary(),
     speed: loadInkSpeed(),
     blot: loadInkSpeedBlotBlend(),
     grain: loadInkGrain(),
@@ -166,6 +176,8 @@ export function defaultDrawSnapshot(name = "Preset"): InkDrawSnapshot {
     pressureClip: PRESSURE_CLIP_DEFAULT,
     smoothing: INK_SMOOTHING_DEFAULT,
     smoothingMode: INK_SMOOTHING_MODE_DEFAULT,
+    clothoid: false,
+    capillary: false,
     speed: INK_SPEED_DEFAULT,
     blot: INK_SPEED_BLOT_BLEND_DEFAULT,
     grain: INK_GRAIN_DEFAULT,
@@ -225,6 +237,8 @@ function clampDraw(snap: InkDrawSnapshot): InkDrawSnapshot {
     pressureClip: clamp(snap.pressureClip, 0.3, 1),
     smoothing: clamp(snap.smoothing, 0, 1),
     smoothingMode: snap.smoothingMode === "live" ? "live" : "lift",
+    clothoid: snap.clothoid === true,
+    capillary: snap.capillary === true,
     speed: clamp(snap.speed, 0, 1),
     blot: clamp(snap.blot, 0, 1),
     grain: clamp(snap.grain ?? 0, 0, 1),
@@ -352,6 +366,8 @@ export function writeLiveFromDraw(snap: InkDrawSnapshot, prefs: InkToolPrefs): I
   saveInkPressureClip(snap.pressureClip);
   saveInkSmoothing(snap.smoothing);
   saveInkSmoothingMode(snap.smoothingMode);
+  saveInkClothoid(snap.clothoid === true);
+  saveInkCapillary(snap.capillary === true);
   saveInkSpeed(snap.speed);
   saveInkSpeedBlotBlend(snap.blot);
   saveInkGrain(snap.grain ?? 0);

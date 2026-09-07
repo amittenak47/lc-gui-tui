@@ -344,6 +344,61 @@ describe("Ink lab live path", () => {
       nowSpy.mockRestore();
     }
   });
+
+  it("reads clothoid and capillary from the pen on lift", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const base = {
+      color: "#1a1a1a",
+      baseWidth: 8,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      boldness: 1,
+      smoothing: 0,
+    };
+    const hops = [
+      { x: 40, y: 80, p: 0.5, t: 0 },
+      { x: 80, y: 80, p: 0.5, t: 16 },
+      { x: 120, y: 120, p: 0.5, t: 32 },
+      { x: 160, y: 120, p: 0.5, t: 48 },
+      { x: 200, y: 80, p: 0.5, t: 64 },
+    ];
+    const off = createInkLabEngine({ sdf: false });
+    off.attach(canvas);
+    off.setPen(base);
+    off.down(hops[0]!);
+    off.move(hops.slice(1, -1));
+    const raw = off.up(hops[hops.length - 1]!);
+    expect(raw.bake).toBe("catmull");
+    off.destroy();
+
+    const cloth = createInkLabEngine({ sdf: false });
+    cloth.attach(canvas);
+    cloth.setPen({ ...base, clothoid: true });
+    cloth.down(hops[0]!);
+    cloth.move(hops.slice(1, -1));
+    const clothBaked = cloth.up(hops[hops.length - 1]!);
+    expect(clothBaked.bake).toBe("clothoid");
+    expect(clothBaked.points.length).toBeGreaterThan(raw.points.length);
+    cloth.destroy();
+
+    const cap = createInkLabEngine({ sdf: false });
+    cap.attach(canvas);
+    cap.setPen({ ...base, capillary: true });
+    cap.down(hops[0]!);
+    cap.move(hops.slice(1, -1));
+    const capBaked = cap.up(hops[hops.length - 1]!);
+    expect(capBaked.points.length).toBe(raw.points.length);
+    expect(
+      capBaked.points.some((p, i) => Math.abs(p.y - (raw.points[i]?.y ?? p.y)) > 0.05),
+    ).toBe(true);
+    cap.destroy();
+  });
 });
 
 describe("EKF is the live filter", () => {

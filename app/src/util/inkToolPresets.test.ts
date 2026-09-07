@@ -4,6 +4,7 @@ import { ERASER_WIDTH_MAX, STROKE_WIDTH_DEFAULT } from "../canvas/rasterInk";
 import { selectHoldYieldsToScroll } from "./gesture";
 import { INK_BOLDNESS_DEFAULT, INK_BOLDNESS_MIN, loadInkBoldness, saveInkBoldness } from "./inkBoldnessPref";
 import { loadInkGrain, loadInkSpeedFade } from "./inkSpeedPref";
+import { loadInkClothoid, loadInkCapillary } from "./inkSmoothingPref";
 import { loadInkToolPrefs, saveInkToolPrefs } from "./inkToolPrefs";
 import { drawOpFromSnap, TEST_STRIP_POINTS, testStripDrawOp } from "./inkPresetStrip";
 import {
@@ -48,6 +49,8 @@ const draw: InkDrawSnapshot = {
   pressureClip: 1,
   smoothing: 0.2,
   smoothingMode: "lift",
+  clothoid: false,
+  capillary: false,
   speed: 0,
   blot: 0.55,
   grain: 0,
@@ -327,6 +330,8 @@ describe("Reset stock snapshots", () => {
     expect(stock.width).toBe(STROKE_WIDTH_DEFAULT);
     expect(stock.straightInk).toBe(false);
     expect(stock.pressureSensitive).toBe(true);
+    expect(stock.clothoid).toBe(false);
+    expect(stock.capillary).toBe(false);
     expect(stock.speed).toBe(0);
     expect(stock.blot).toBe(0);
     expect(stock.grain).toBe(0);
@@ -346,6 +351,10 @@ describe("Reset stock snapshots", () => {
     writeLiveFromDraw(stock, loadInkToolPrefs());
     expect(loadInkToolPrefs().penWidth).toBe(STROKE_WIDTH_DEFAULT);
     expect(loadInkBoldness()).toBe(INK_BOLDNESS_DEFAULT);
+    expect(loadInkClothoid()).toBe(false);
+    expect(loadInkCapillary()).toBe(false);
+    expect(loadInkClothoid()).toBe(false);
+    expect(loadInkCapillary()).toBe(false);
     let store = loadInkToolPresets();
     store = saveWedge(store, "pen", 1, stock);
     store = applyWedge(store, "pen", 1);
@@ -354,5 +363,16 @@ describe("Reset stock snapshots", () => {
       width: STROKE_WIDTH_DEFAULT,
       boldness: INK_BOLDNESS_DEFAULT,
     });
+  });
+
+  it("writes clothoid and capillary onto live keys", () => {
+    writeLiveFromDraw(
+      { ...defaultDrawSnapshot("Heading"), clothoid: true, capillary: true },
+      loadInkToolPrefs(),
+    );
+    expect(loadInkClothoid()).toBe(true);
+    expect(loadInkCapillary()).toBe(true);
+    expect(liveDrawSnapshot().clothoid).toBe(true);
+    expect(liveDrawSnapshot().capillary).toBe(true);
   });
 });

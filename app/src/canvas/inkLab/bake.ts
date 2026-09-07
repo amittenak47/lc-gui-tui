@@ -1,7 +1,8 @@
 /**
  * Spine bake. Lift uses {@link bakeSpine}. Live reshape uses
  * {@link reshapeSpine} from paint so While Writing can tidy behind the nib.
- * Default: RDP + Chaikin + expandInkTurns. Optional clothoid, ~3ms budget.
+ * Default: RDP + Chaikin + expandInkTurns. Optional clothoid after that,
+ * even when Chaikin is off, ~3ms budget.
  */
 
 import { INK_SMOOTHING_DEFAULT, smoothInkPoints } from "../inkSmoothing";
@@ -184,30 +185,26 @@ export function bakeSpine(
 ): BakeResult {
   const t0 = performance.now();
   const strength = opts.smoothing ?? INK_SMOOTHING_DEFAULT;
-  if (strength <= 0) {
-    return {
-      points: spine.map((p) => ({ ...p })),
-      bake: "catmull",
-      bakeMs: performance.now() - t0,
-    };
+  let points: SpineDot[];
+  let bake: BakeKind = "catmull";
+  if (strength > 0) {
+    const scenes = spine.map((p) => toScene(p));
+    const nib = meanRadius(spine) * 2;
+    points = radiiAlong(spine, bakeCatmull(scenes, nib, strength));
+  } else {
+    points = spine.map((p) => ({ ...p }));
   }
-  const scenes = spine.map((p) => toScene(p));
-  const nib = meanRadius(spine) * 2;
-  if (opts.clothoid && spine.length >= 3) {
-    const cloth = bakeClothoid(spine);
-    const ms = performance.now() - t0;
-    if (ms <= CLOTHOID_BUDGET_MS) {
-      return {
-        points: radiiAlong(spine, cloth),
-        bake: "clothoid",
-        bakeMs: ms,
-      };
+  if (opts.clothoid && points.length >= 3) {
+    const c0 = performance.now();
+    const cloth = bakeClothoid(points);
+    if (performance.now() - c0 <= CLOTHOID_BUDGET_MS) {
+      points = radiiAlong(points, cloth);
+      bake = "clothoid";
     }
   }
-  const catmull = bakeCatmull(scenes, nib, strength);
   return {
-    points: radiiAlong(spine, catmull),
-    bake: "catmull",
+    points,
+    bake,
     bakeMs: performance.now() - t0,
   };
 }

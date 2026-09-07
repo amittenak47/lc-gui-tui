@@ -8,6 +8,8 @@ import {
 
 const KEY = "whiteboard.inkSmoothing";
 const MODE_KEY = "whiteboard.inkSmoothingMode";
+const CLOTHOID_KEY = "whiteboard.inkClothoid";
+const CAPILLARY_KEY = "whiteboard.inkCapillary";
 
 export const INK_SMOOTHING_MIN = 0;
 export const INK_SMOOTHING_MAX = 1;
@@ -58,6 +60,40 @@ export function saveInkSmoothingMode(mode: InkSmoothingMode): void {
   } catch {
     /* private browsing */
   }
+}
+
+function loadFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveFlag(key: string, on: boolean): void {
+  try {
+    localStorage.setItem(key, on ? "1" : "0");
+  } catch {
+    /* private browsing */
+  }
+}
+
+/** Lift-time Euler spiral. Off until turned on in pen settings. */
+export function loadInkClothoid(): boolean {
+  return loadFlag(CLOTHOID_KEY);
+}
+
+export function saveInkClothoid(on: boolean): void {
+  saveFlag(CLOTHOID_KEY, on);
+}
+
+/** Lift-time Laplacian relax. Off until turned on in pen settings. */
+export function loadInkCapillary(): boolean {
+  return loadFlag(CAPILLARY_KEY);
+}
+
+export function saveInkCapillary(on: boolean): void {
+  saveFlag(CAPILLARY_KEY, on);
 }
 
 export { INK_SMOOTHING_DEFAULT, INK_SMOOTHING_MODE_DEFAULT, type InkSmoothingMode };
