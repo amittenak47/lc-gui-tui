@@ -204,12 +204,16 @@ function paintHighlightPreview(
     ctx.translate(cx, cy);
     ctx.scale(pose.pathScale, pose.pathScale);
     ctx.translate(-cx, -cy);
-    applyInkOp(ctx, highlighterDrawOp(snap.colour, pose.displayWidth, 1, points), 1);
+    applyInkOp(
+      ctx,
+      highlighterDrawOp(snap.colour, pose.displayWidth, 1, points, snap.highlightTips === true),
+      1,
+    );
     ctx.restore();
     return;
   }
   const posed = applyPreviewPathScale(points, cx, cy, pose.pathScale);
-  applyInkOp(ctx, highlighterDrawOp(snap.colour, pose.displayWidth, 1, posed), 1);
+  applyInkOp(ctx, highlighterDrawOp(snap.colour, pose.displayWidth, 1, posed, snap.highlightTips === true), 1);
 }
 
 function paintEraserDot(
@@ -1314,6 +1318,25 @@ function DrawKnobs({
           <StraightIcon />
         </button>
       </div>
+      {chisel && (
+        <>
+          <p className="lc-settings-hint">
+            Dark tips stamp a second cap on each end. Multiply then doubles
+            the wash there. Even wash is one round stroke at one colour.
+          </p>
+          <SettingsChoice
+            label="Highlighter ends"
+            value={snap.highlightTips === true}
+            options={
+              [
+                [false, "Even wash"],
+                [true, "Dark tips"],
+              ] as Array<[boolean, string]>
+            }
+            onChange={(highlightTips) => onChange({ ...snap, highlightTips })}
+          />
+        </>
+      )}
     </SettingsBlock>
   );
 }

@@ -151,6 +151,13 @@ function specRows(
     ];
   }
   if (isEraserWedge(snap)) return [{ label: "Name", value: snap.name }];
+  if (kind === "highlighter") {
+    return [
+      { label: "Nib", value: String(snap.width) },
+      { label: "Straight line", value: snap.straightInk ? "On" : "Off" },
+      { label: "Ends", value: snap.highlightTips === true ? "Dark tips" : "Even wash" },
+    ];
+  }
   return [
     { label: "Nib", value: String(snap.width) },
     { label: "Ink fullness", value: `${Math.round((snap.pressureSensitive ? snap.fullness : 1) * 100)}%` },
@@ -165,16 +172,10 @@ function specRows(
       value:
         snap.smoothing === 0
           ? "Off"
-          : kind === "pen"
-            ? `${Math.round(snap.smoothing * 100)}%`
-            : `${Math.round(snap.smoothing * 100)}% ${snap.smoothingMode}`,
+          : `${Math.round(snap.smoothing * 100)}%`,
     },
-    ...(kind === "pen"
-      ? [
-          { label: "Clothoids", value: snap.clothoid ? "On" : "Off" },
-          { label: "Capillary", value: snap.capillary ? "On" : "Off" },
-        ]
-      : []),
+    { label: "Clothoids", value: snap.clothoid ? "On" : "Off" },
+    { label: "Capillary", value: snap.capillary ? "On" : "Off" },
   ];
 }
 

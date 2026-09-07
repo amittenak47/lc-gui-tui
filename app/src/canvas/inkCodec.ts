@@ -89,6 +89,8 @@ export interface EncodedOp {
   ib?: number;
   /** Highlighter stroke — absent means an ordinary pen one. */
   hl?: 1;
+  /** Extra highlighter end stamps. 0 = even wash. Absent = dark overlapping tips (old boards). */
+  ht?: 0;
   /** Nested scroll host — document-order index in the doc scope. */
   hk?: number;
   /** Host `scrollLeft` when the stroke was written (not point slowness). */
@@ -253,6 +255,7 @@ export function encodeInkOps(ops: readonly InkOp[]): EncodedInk {
       if (op.grain !== undefined) record.gr = op.grain;
       if (op.boldness !== undefined) record.ib = op.boldness;
       if (op.highlight) record.hl = 1;
+      if (op.highlight && op.highlightTips === false) record.ht = 0;
       if (op.hostKey !== undefined) record.hk = op.hostKey;
       if (op.scrollLeftAtDraw !== undefined) record.hsl = op.scrollLeftAtDraw;
       if (op.scrollTopAtDraw !== undefined) record.hst = op.scrollTopAtDraw;
@@ -444,6 +447,7 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
       if (record.gr !== undefined) op.grain = record.gr;
       if (record.ib !== undefined) op.boldness = record.ib;
       if (record.hl === 1) op.highlight = true;
+      if (record.ht === 0) op.highlightTips = false;
       if (record.hk !== undefined) op.hostKey = record.hk;
       if (typeof record.hsl === "number") op.scrollLeftAtDraw = record.hsl;
       if (typeof record.hst === "number") op.scrollTopAtDraw = record.hst;
@@ -590,6 +594,7 @@ interface PackedOpMeta {
   gr?: number;
   ib?: number;
   hl?: 1;
+  ht?: 0;
   hk?: number;
   hsl?: number;
   hst?: number;
@@ -628,6 +633,7 @@ export function packEncodedInk(encoded: EncodedInk): Uint8Array<ArrayBuffer> {
     ...(op.gr != null ? { gr: op.gr } : {}),
     ...(op.ib != null ? { ib: op.ib } : {}),
     ...(op.hl != null ? { hl: op.hl } : {}),
+    ...(op.ht != null ? { ht: op.ht } : {}),
     ...(op.hk != null ? { hk: op.hk } : {}),
     ...(op.hsl != null ? { hsl: op.hsl } : {}),
     ...(op.hst != null ? { hst: op.hst } : {}),
@@ -725,6 +731,7 @@ export function unpackEncodedInk(bytes: Uint8Array): EncodedInk | null {
     if (item.gr != null) record.gr = item.gr;
     if (item.ib != null) record.ib = item.ib;
     if (item.hl != null) record.hl = item.hl;
+    if (item.ht != null) record.ht = item.ht;
     if (item.hk != null) record.hk = item.hk;
     if (item.hsl != null) record.hsl = item.hsl;
     if (item.hst != null) record.hst = item.hst;

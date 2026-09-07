@@ -35,6 +35,7 @@ import {
   saveInkClothoid,
   saveInkCapillary,
 } from "./inkSmoothingPref";
+import { loadInkHighlightTips, saveInkHighlightTips } from "./inkHighlightPref";
 import {
   loadInkGrain,
   loadInkSpeed,
@@ -105,6 +106,7 @@ export function collectDevicePrefsBlob(): Record<string, unknown> {
     inkSmoothingMode: loadInkSmoothingMode(),
     inkClothoid: loadInkClothoid(),
     inkCapillary: loadInkCapillary(),
+    inkHighlightTips: loadInkHighlightTips(),
     inkSpeed: loadInkSpeed(),
     inkSpeedBlotBlend: loadInkSpeedBlotBlend(),
     inkGrain: loadInkGrain(),
@@ -143,6 +145,7 @@ export function applyDevicePrefsBlob(prefs: Record<string, unknown>): void {
   }
   if (typeof prefs.inkClothoid === "boolean") saveInkClothoid(prefs.inkClothoid);
   if (typeof prefs.inkCapillary === "boolean") saveInkCapillary(prefs.inkCapillary);
+  if (typeof prefs.inkHighlightTips === "boolean") saveInkHighlightTips(prefs.inkHighlightTips);
   if (typeof prefs.inkSpeed === "number") saveInkSpeed(prefs.inkSpeed);
   if (typeof prefs.inkSpeedBlotBlend === "number") saveInkSpeedBlotBlend(prefs.inkSpeedBlotBlend);
   if (typeof prefs.inkGrain === "number") saveInkGrain(prefs.inkGrain);

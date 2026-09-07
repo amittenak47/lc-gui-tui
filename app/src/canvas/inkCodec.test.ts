@@ -280,6 +280,27 @@ describe("encodeInkOps / decodeInkOps", () => {
     expect(back.highlight).toBeUndefined();
   });
 
+  it("remembers an even highlighter wash", () => {
+    const original = stroke([{ x: 1, y: 2, pressure: 0.5 }], {
+      highlight: true,
+      highlightTips: false,
+    });
+    const [back] = roundTrip([original]) as [InkDrawOp];
+    expect(back.highlight).toBe(true);
+    expect(back.highlightTips).toBe(false);
+    const packed = unpackEncodedInk(packEncodedInk(encodeInkOps([original])));
+    expect(packed).not.toBeNull();
+    const [fromPack] = decodeInkOps(packed!) as [InkDrawOp];
+    expect(fromPack.highlightTips).toBe(false);
+  });
+
+  it("leaves highlighter tips absent so old boards keep dark overlapping ends", () => {
+    const [back] = roundTrip([
+      stroke([{ x: 1, y: 2, pressure: 0.5 }], { highlight: true }),
+    ]) as [InkDrawOp];
+    expect(back.highlightTips).toBeUndefined();
+  });
+
   it("round-trips an erase op's geometry and radius", () => {
     const original: InkEraseOp = {
       kind: "erase",

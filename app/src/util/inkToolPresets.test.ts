@@ -5,6 +5,7 @@ import { selectHoldYieldsToScroll } from "./gesture";
 import { INK_BOLDNESS_DEFAULT, INK_BOLDNESS_MIN, loadInkBoldness, saveInkBoldness } from "./inkBoldnessPref";
 import { loadInkGrain, loadInkSpeedFade } from "./inkSpeedPref";
 import { loadInkClothoid, loadInkCapillary } from "./inkSmoothingPref";
+import { loadInkHighlightTips } from "./inkHighlightPref";
 import { loadInkToolPrefs, saveInkToolPrefs } from "./inkToolPrefs";
 import { drawOpFromSnap, TEST_STRIP_POINTS, testStripDrawOp } from "./inkPresetStrip";
 import {
@@ -56,6 +57,7 @@ const draw: InkDrawSnapshot = {
   grain: 0,
   fade: 0,
   boldness: 1,
+  highlightTips: false,
 };
 
 const eraser: InkEraserSnapshot = {
@@ -126,6 +128,28 @@ describe("inkToolPresets", () => {
     store = saveWedge(store, "pen", 1, { ...draw, grain: 0.45 });
     store = applyWedge(store, "pen", 1);
     expect(loadInkGrain()).toBe(0.45);
+  });
+
+  it("treats an old highlighter wedge without tips as an even wash", () => {
+    const store = loadInkToolPresets();
+    const { highlightTips: _omit, ...old } = draw;
+    localStorage.setItem(
+      "whiteboard.inkToolPresets.v2",
+      JSON.stringify({
+        ...store,
+        custom: { ...store.custom, highlighter: [old, null, null, null, null] },
+      }),
+    );
+    const loaded = loadInkToolPresets();
+    expect((loaded.custom.highlighter[0] as InkDrawSnapshot).highlightTips).toBe(false);
+  });
+
+  it("applying a highlighter wedge writes dark tips onto the live key", () => {
+    let store = loadInkToolPresets();
+    store = saveWedge(store, "highlighter", 1, { ...draw, highlightTips: true });
+    store = applyWedge(store, "highlighter", 1);
+    expect(loadInkHighlightTips()).toBe(true);
+    expect(liveDrawSnapshot().highlightTips).toBe(true);
   });
 
   it("applying Global restores stored defaults after a custom wedge", () => {
@@ -304,6 +328,10 @@ describe("test strip", () => {
     expect(wider?.baseWidth).toBe(9);
     expect(a?.speedFade).toBe(0);
     expect(testStripDrawOp("pen", { ...draw, fade: 0.4 })?.speedFade).toBe(0.4);
+    expect(testStripDrawOp("highlighter", { ...draw, highlightTips: false })?.highlightTips).toBe(
+      false,
+    );
+    expect(testStripDrawOp("highlighter", { ...draw, highlightTips: true })?.highlightTips).toBeUndefined();
     expect(testStripDrawOp("eraser", eraser)).toBeNull();
   });
 
@@ -335,6 +363,7 @@ describe("Reset stock snapshots", () => {
     expect(stock.speed).toBe(0);
     expect(stock.blot).toBe(0);
     expect(stock.grain).toBe(0);
+    expect(stock.highlightTips).toBe(false);
     expect("body" in stock).toBe(false);
     expect(liveDrawSnapshot().boldness).toBe(INK_BOLDNESS_MIN);
     expect(liveDrawSnapshot().width).toBe(32);
@@ -353,8 +382,7 @@ describe("Reset stock snapshots", () => {
     expect(loadInkBoldness()).toBe(INK_BOLDNESS_DEFAULT);
     expect(loadInkClothoid()).toBe(false);
     expect(loadInkCapillary()).toBe(false);
-    expect(loadInkClothoid()).toBe(false);
-    expect(loadInkCapillary()).toBe(false);
+    expect(loadInkHighlightTips()).toBe(false);
     let store = loadInkToolPresets();
     store = saveWedge(store, "pen", 1, stock);
     store = applyWedge(store, "pen", 1);
@@ -374,5 +402,14 @@ describe("Reset stock snapshots", () => {
     expect(loadInkCapillary()).toBe(true);
     expect(liveDrawSnapshot().clothoid).toBe(true);
     expect(liveDrawSnapshot().capillary).toBe(true);
+  });
+
+  it("writes highlighter dark tips onto live keys", () => {
+    writeLiveFromDraw(
+      { ...defaultDrawSnapshot("Mark"), highlightTips: true },
+      loadInkToolPrefs(),
+    );
+    expect(loadInkHighlightTips()).toBe(true);
+    expect(liveDrawSnapshot().highlightTips).toBe(true);
   });
 });
