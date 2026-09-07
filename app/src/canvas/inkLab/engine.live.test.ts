@@ -42,7 +42,6 @@ describe("Ink lab live path", () => {
     const stats = engine.paint();
     expect(stats.pts).toBe(1);
     expect(stats.segs).toBe(0);
-    expect(stats.hold).toBe(true);
     engine.up({ x: 80.2, y: 90.1, p: 0.5, t: 200 });
     engine.destroy();
   });
@@ -345,7 +344,7 @@ describe("Ink lab live path", () => {
     }
   });
 
-  it("hold grow starts on pointer down without a move", () => {
+  it("hold grow waits for a still pen inside the distance gate", () => {
     let wall = 0;
     const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
       wall += 40;
@@ -370,10 +369,11 @@ describe("Ink lab live path", () => {
     });
     try {
       engine.down({ x: 80, y: 90, p: 0.5, t: 0 });
-      const first = engine.paint();
-      expect(first.hold).toBe(true);
+      expect(engine.paint().hold).toBe(false);
+      engine.move([{ x: 80.2, y: 90.1, p: 0.5, t: 16 }]);
+      expect(engine.paint().hold).toBe(true);
       for (let i = 0; i < 40; i++) engine.paint();
-      const baked = engine.up({ x: 80, y: 90, p: 0.5, t: 1400 });
+      const baked = engine.up({ x: 80.2, y: 90.1, p: 0.5, t: 1400 });
       expect(baked.blotTipGrow).toBeGreaterThan(0.3);
       expect(baked.points[0]!.r).toBeGreaterThan(6);
     } finally {
@@ -411,6 +411,43 @@ describe("Ink lab live path", () => {
       for (let i = 0; i < 20; i++) engine.paint();
       const baked = engine.up({ x: 80, y: 90, p: 0.5, t: 800 });
       expect(baked.blotTipGrow).toBe(0);
+    } finally {
+      nowSpy.mockRestore();
+      engine.destroy();
+    }
+  });
+
+  it("stops the hold rAF once the pool has plateaued", () => {
+    let wall = 0;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
+      wall += 40;
+      return wall;
+    });
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.setPen({
+      color: "#1a1a1a",
+      baseWidth: 2,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 1,
+      speedFade: 0,
+      boldness: 1,
+      smoothing: 0,
+    });
+    try {
+      engine.down({ x: 80, y: 90, p: 0.5, t: 0 });
+      engine.move([{ x: 80.2, y: 90.1, p: 0.5, t: 16 }]);
+      let lastHold = true;
+      for (let i = 0; i < 40; i++) lastHold = engine.paint().hold;
+      expect(lastHold).toBe(false);
+      const baked = engine.up({ x: 80.2, y: 90.1, p: 0.5, t: 1400 });
+      expect(baked.blotTipGrow).toBeGreaterThan(0.9);
     } finally {
       nowSpy.mockRestore();
       engine.destroy();

@@ -120,6 +120,12 @@ export type InkLabEngineOpts = {
 
 export const DISTANCE_GATE_CSS = 2.5;
 const HOLD_TICK_MS = 32;
+const HOLD_PLATEAU_EPS = 1e-3;
+
+function holdCapRadius(base: number, blot: number): number {
+  const t = Math.max(0, Math.min(1, blot));
+  return base * (1 + (TIP_GROW - 1) * t);
+}
 
 function inkOf(d: SpineDot): [number, number, number] {
   return d.rgb ?? INK_RGB;
@@ -216,6 +222,8 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   let holdTicks = 0;
   let holdBase: SpineDot | null = null;
   let lastHoldWall = 0;
+  /** Pool reached cap; do not re-arm until the pen hops. */
+  let holdPlateau = false;
   let blotTipGrow = 0;
   let blotHalts: InkLabHalt[] = [];
 
@@ -244,6 +252,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     holdTicks = 0;
     holdBase = null;
     lastHoldWall = 0;
+    holdPlateau = false;
     blotTipGrow = 0;
     blotHalts = [];
     sdf?.clear();
@@ -328,11 +337,16 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   };
 
   const armHold = (at: SpineDot, now: number) => {
-    if (holding) return;
+    if (holding || holdPlateau) return;
     holding = true;
     holdTicks = 0;
     holdBase = cloneDot(at);
     lastHoldWall = now;
+  };
+
+  const endHoldPool = () => {
+    holding = false;
+    holdPlateau = true;
   };
 
   const applyHoldGrow = (now: number) => {
@@ -370,6 +384,9 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       last.slow = styled.slow;
     }
     expandAabb(aabb, tip);
+    if (grown >= holdCapRadius(holdBase.r, pen.speedBlotBlend) - HOLD_PLATEAU_EPS) {
+      endHoldPool();
+    }
   };
 
   const appendSpine = (dot: SpineDot) => {
@@ -399,12 +416,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       expandAabb(aabb, first);
       tip = first;
       fallback?.beginStroke();
-      if (pen && pen.speedBlotBlend > 1e-3) {
-        armHold(
-          first,
-          typeof performance !== "undefined" ? performance.now() : s.t,
-        );
-      }
       lastEkfMs = performance.now() - t0;
       return;
     }
@@ -420,7 +431,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
           armHold(last, now);
           applyHoldGrow(now);
         }
-      } else {
+      } else if (!holdPlateau) {
         if (!holding) {
           holding = true;
           holdTicks = 0;
@@ -438,15 +449,19 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
           slow: last.slow,
         };
         expandAabb(aabb, tip);
+        if (holdBase && grown >= holdCapRadius(holdBase.r, 1) - HOLD_PLATEAU_EPS) {
+          endHoldPool();
+        }
       }
       return;
     }
-    if (holding) {
+    if (holding || holdPlateau) {
       if (tip) last.r = tip.r;
       if (blotTipGrow > 1e-3) stampHalt(last, blotTipGrow);
       holding = false;
       holdTicks = 0;
       holdBase = null;
+      holdPlateau = false;
       blotTipGrow = 0;
     }
     appendSpine(dot);
@@ -483,6 +498,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     holdTicks = 0;
     holdBase = null;
     lastHoldWall = 0;
+    holdPlateau = false;
     ekf = createEkf();
     sdf?.clear();
     fallback?.clearLive();
@@ -634,6 +650,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     ctx.clearRect(0, 0, host.width, host.height);
     if (snap) ctx.drawImage(snap, 0, 0);
     if (!drawing) return lastSuffix;
+    // While Writing only. Off / On Lift stay on the suffix path.
     const liveSmooth =
       pen?.smoothingMode === "live" && (pen.smoothing ?? 0) > 0 && spine.length >= 3;
     if (liveSmooth) {
@@ -710,7 +727,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     },
     up(s) {
       if (drawing && s) ingest(s);
-      if (holding && tip && spine.length > 0) {
+      if ((holding || holdPlateau) && tip && spine.length > 0) {
         const last = spine[spine.length - 1]!;
         last.r = tip.r;
         last.rgb = tip.rgb;
@@ -734,6 +751,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       const bakeMs = performance.now() - t0;
       drawing = false;
       holding = false;
+      holdPlateau = false;
       sdf?.clear();
       fallback?.clearLive();
       spine = [];
