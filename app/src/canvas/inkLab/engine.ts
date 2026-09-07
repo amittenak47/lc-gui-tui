@@ -89,8 +89,8 @@ export type InkLabEngine = {
   up(s?: InkLabSample): InkLabUpResult;
   paint(): InkLabPaintStats;
   /**
-   * Copy the in-DOM host into the committed snap. Call at pointerdown so live
-   * composite keeps tiles / highlighter already on the overlay.
+   * Copy the in-DOM host into the committed snap. Call once at pointerdown;
+   * live composite is that snap plus the live SDF until lift.
    */
   captureSnap(): void;
   /**
@@ -100,7 +100,8 @@ export type InkLabEngine = {
   redrawSnap(paint: (ctx: CanvasRenderingContext2D) => void): void;
   /**
    * Replace the committed snap with SDF capsules for these overlay-space
-   * spines. Undo / restore. Not the 2D miter strip.
+   * spines. Undo / restore. Not the 2D miter strip. No-op while a live
+   * stroke is down — replay belongs to lift / camera, not the nib rAF.
    */
   replaySpines(strokes: readonly SpineDot[][]): void;
   /** Stamp highlighter / eraser onto the committed snap without clearing it. */
@@ -814,6 +815,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       paint(sctx);
     },
     replaySpines(strokes) {
+      if (drawing) return;
       if (!host || !peer) return;
       syncSize();
       if (!snap) snap = peer(host.width, host.height);
