@@ -132,18 +132,18 @@ export function HoldButton({
   const stopHold = useCallback((opts: { reset: boolean; release?: boolean }) => {
     const wasHolding = holdingRef.current;
     const wasConfirmed = confirmedRef.current;
+    const elapsed = performance.now() - startRef.current;
+    const filled = wasConfirmed || (wasHolding && elapsed + 16 >= holdMs);
     holdingRef.current = false;
     clearFillDelay();
     if (rafRef.current != null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-    if (
-      opts.release &&
-      wasHolding &&
-      !wasConfirmed &&
-      onTapRef.current
-    ) {
+    if (opts.release && wasHolding && filled && !wasConfirmed) {
+      confirmedRef.current = true;
+      onConfirmRef.current();
+    } else if (opts.release && wasHolding && !filled && onTapRef.current) {
       onTapRef.current();
     }
     // Always clear the fill on release — leaving it full after confirm made
@@ -152,7 +152,7 @@ export function HoldButton({
       confirmedRef.current = false;
       setHoldProgress(0);
     }
-  }, [clearFillDelay]);
+  }, [clearFillDelay, holdMs]);
 
   const displayProgress =
     holdProgress > 0

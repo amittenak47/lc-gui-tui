@@ -140,4 +140,39 @@ describe("HoldButton", () => {
     });
     host.remove();
   });
+
+  it("confirms on release once the fill duration has elapsed", async () => {
+    const onTap = vi.fn();
+    const onConfirm = vi.fn();
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(
+        <HoldButton label="Test" onConfirm={onConfirm} onTap={onTap} holdMs={40} />,
+      );
+    });
+
+    const button = host.querySelector("button")!;
+    await act(async () => {
+      button.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, button: 0 }),
+      );
+    });
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 55));
+    });
+    await act(async () => {
+      button.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1 }));
+    });
+
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(onTap).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+  });
 });

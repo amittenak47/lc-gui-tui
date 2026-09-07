@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 
 import { MorphBar } from "../components/MorphBar";
 import { HighlighterIcon, PenToolIcon, PinkEraserIcon } from "../components/MarkToolIcons";
-import { HOLD_MS } from "../util/gesture";
+import { HOLD_MS, HOLD_TAP_FILL_DELAY_MS } from "../util/gesture";
 import type { InkHandedness } from "../util/inkHandedness";
 import {
   eraserWedgeFill,
@@ -28,6 +28,24 @@ const INNER_OUTER = 64;
 const INNER_INNER = 28;
 const VIEW_PAD = 12;
 const CARD_W = 184;
+
+/**
+ * Hold-fill is armed at {@link HOLD_MS}. Lift after it completes to edit.
+ * Lift once the fill has started, but before it completes, keeps the wheel
+ * open so the hold can be retried. A short tap still applies when Tap OK is off.
+ */
+export type WedgeHoldRelease = "edit" | "retry" | "tap";
+
+export function wedgeHoldReleaseAction(
+  elapsedMs: number,
+  holdMs: number,
+  filled: boolean,
+  tapDelayMs = HOLD_TAP_FILL_DELAY_MS,
+): WedgeHoldRelease {
+  if (filled || elapsedMs + 16 >= holdMs) return "edit";
+  if (elapsedMs >= tapDelayMs) return "retry";
+  return "tap";
+}
 
 const KINDS: InkPresetKind[] = ["pen", "highlighter", "eraser"];
 
@@ -257,9 +275,11 @@ export function InkToolWheel({
   const holdIndexRef = useRef<number | null>(null);
   const holdFromRef = useRef<DOMRect | null>(null);
   const confirmedHoldRef = useRef(false);
+  const filledHoldRef = useRef(false);
   const appliedRef = useRef(false);
   const pressedWedgeRef = useRef<number | null>(null);
   const holdPointerIdRef = useRef<number | null>(null);
+  const suppressBackdropUntilRef = useRef(0);
   const attachHoldWindowRef = useRef<(pointerId: number) => void>(() => {});
   const detachHoldWindowRef = useRef<() => void>(() => {});
   const storeRef = useRef(store);
@@ -287,6 +307,7 @@ export function InkToolWheel({
       const from = opts.from ?? holdFromRef.current ?? hubRectFallback(rootRef.current);
       onEditRef.current(kindRef.current, index, from);
     }
+    filledHoldRef.current = false;
     holdFromRef.current = null;
     setHold(null);
   }, []);
@@ -297,7 +318,8 @@ export function InkToolWheel({
     const t = Math.min(1, (performance.now() - holdStartRef.current) / HOLD_MS);
     setHold({ index, t });
     if (t >= 1) {
-      stopHold({ confirm: true });
+      filledHoldRef.current = true;
+      holdRafRef.current = null;
       return;
     }
     holdRafRef.current = requestAnimationFrame(tickHold);
@@ -307,6 +329,7 @@ export function InkToolWheel({
     (index: number) => {
       if (holdRafRef.current != null) cancelAnimationFrame(holdRafRef.current);
       confirmedHoldRef.current = false;
+      filledHoldRef.current = false;
       holdIndexRef.current = index;
       holdStartRef.current = performance.now();
       setHold({ index, t: 0 });
@@ -325,10 +348,21 @@ export function InkToolWheel({
       }
       const useIndex = pressedWedgeRef.current;
       pressedWedgeRef.current = null;
-      detachHoldWindowRef.current();
-      const held = confirmedHoldRef.current;
-      if (!held) stopHold({ confirm: false });
-      if (held || appliedRef.current || useIndex == null) return;
+      const elapsed = performance.now() - holdStartRef.current;
+      const action = wedgeHoldReleaseAction(
+        elapsed,
+        HOLD_MS,
+        filledHoldRef.current,
+      );
+      event.preventDefault();
+      suppressBackdropUntilRef.current = performance.now() + 200;
+      if (action === "edit" && holdIndexRef.current != null) {
+        stopHold({ confirm: true });
+        return;
+      }
+      stopHold({ confirm: false });
+      if (action === "retry") return;
+      if (appliedRef.current || useIndex == null) return;
       const useSnap = wedgeAt(storeRef.current, kindRef.current, useIndex);
       if (!useSnap) return;
       if (
@@ -347,13 +381,25 @@ export function InkToolWheel({
       appliedRef.current = true;
       onConfirmRef.current(kindRef.current, useIndex);
     };
+    const onCancel = (event: PointerEvent) => {
+      if (
+        holdPointerIdRef.current != null &&
+        event.pointerId !== holdPointerIdRef.current
+      ) {
+        return;
+      }
+      pressedWedgeRef.current = null;
+      stopHold({ confirm: false });
+    };
     attachHoldWindowRef.current = (pointerId: number) => {
       detachHoldWindowRef.current();
       holdPointerIdRef.current = pointerId;
       window.addEventListener("pointerup", onUp, true);
+      window.addEventListener("pointercancel", onCancel, true);
     };
     detachHoldWindowRef.current = () => {
       window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onCancel, true);
       holdPointerIdRef.current = null;
     };
     return () => detachHoldWindowRef.current();
@@ -459,6 +505,7 @@ export function InkToolWheel({
 
   const onBackdrop = (event: React.PointerEvent) => {
     if (locked || !armed) return;
+    if (performance.now() < suppressBackdropUntilRef.current) return;
     const node = rootRef.current;
     if (node && event.target instanceof Node && node.contains(event.target)) return;
     close();
@@ -675,7 +722,8 @@ export function InkToolWheel({
               ))}
             </dl>
             <p className="lc-ink-wheel-card-hint">
-              Linger to read · hold the wedge until it fills to edit
+              Linger to read · hold the wedge until it fills, then lift to edit.
+              Lift early to try again.
             </p>
           </aside>
         </MorphBar>
