@@ -68,7 +68,56 @@ export function excalidrawViewportNeedsSync(
   );
 }
 
+function clampFitZoom(zoom: number, zoomMin: number, zoomMax: number): number {
+  return Math.min(zoomMax, Math.max(zoomMin, zoom));
+}
+
+function cameraAfterViewportChange(
+  input: {
+    box: SceneBox;
+    inset: ViewportInset;
+    viewWidth: number;
+    prevZoom: number;
+    prevScrollY: number;
+    zoomMin: number;
+    zoomMax: number;
+  },
+  nextZoom: number,
+): { zoom: number; scrollX: number; scrollY: number } {
+  const availW = Math.max(1, input.viewWidth - input.inset.left - input.inset.right);
+  const boxW = Math.max(1, input.box.maxX - input.box.minX);
+  const prevZoom =
+    Number.isFinite(input.prevZoom) && input.prevZoom > 0 ? input.prevZoom : 1;
+  const zoom = clampFitZoom(nextZoom, input.zoomMin, input.zoomMax);
+  const slackX = Math.max(0, availW - boxW * zoom);
+  const scrollX = (input.inset.left + slackX / 2) / zoom - input.box.minX;
+  const sceneYTop = input.inset.top / prevZoom - input.prevScrollY;
+  const scrollY = input.inset.top / zoom - sceneYTop;
+  return { zoom, scrollX, scrollY };
+}
+
 export function documentCameraAfterViewportChange(input: {
+  box: SceneBox;
+  inset: ViewportInset;
+  viewWidth: number;
+  prevZoom: number;
+  prevScrollY: number;
+  zoomMin: number;
+  zoomMax: number;
+}): { zoom: number; scrollX: number; scrollY: number } {
+  const availW = Math.max(1, input.viewWidth - input.inset.left - input.inset.right);
+  const boxW = Math.max(1, input.box.maxX - input.box.minX);
+  return cameraAfterViewportChange(input, availW / boxW);
+}
+
+/**
+ * Split sash / pane resize for a draw page: do not zoom in to fill a wider hole.
+ *
+ * Width-fit on every keepY made the sheet expand with the sash. Keep the
+ * previous zoom, zoom out only when the page no longer fits, and center leftover
+ * slack. ScrollY still holds the same scene line at the top of the hole.
+ */
+export function keepZoomCenterCameraAfterViewportChange(input: {
   box: SceneBox;
   inset: ViewportInset;
   viewWidth: number;
@@ -81,13 +130,5 @@ export function documentCameraAfterViewportChange(input: {
   const boxW = Math.max(1, input.box.maxX - input.box.minX);
   const prevZoom =
     Number.isFinite(input.prevZoom) && input.prevZoom > 0 ? input.prevZoom : 1;
-  const zoom = Math.min(
-    input.zoomMax,
-    Math.max(input.zoomMin, availW / boxW),
-  );
-  const slackX = Math.max(0, availW - boxW * zoom);
-  const scrollX = (input.inset.left + slackX / 2) / zoom - input.box.minX;
-  const sceneYTop = input.inset.top / prevZoom - input.prevScrollY;
-  const scrollY = input.inset.top / zoom - sceneYTop;
-  return { zoom, scrollX, scrollY };
+  return cameraAfterViewportChange(input, Math.min(prevZoom, availW / boxW));
 }
