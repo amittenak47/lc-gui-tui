@@ -64,6 +64,9 @@ import { ANNOTATE_PAGE_W, ANNOTATE_REGION, MD_INK_MIN_PAGE_H, MD_INK_TAIL_PAD, b
 import {
   contentAABBsInFrame,
   contentBottomInFrame,
+  DRAW_GROWTH_CAP,
+  DRAW_GROWTH_CAP_SCROLL,
+  DRAW_HEADER_BAND,
   growDrawHeight,
   isDrawPageRegion,
 } from "../templates/drawPageGrowth";
@@ -2597,15 +2600,39 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const toggleAnnotate = useCallback(() => {
     wakeChromeRef.current();
     const saved = snapshotHostScroll();
+    const live = liveCameraRef.current;
+    const state = apiRef.current?.getAppState() as
+      | {
+          scrollX?: number;
+          scrollY?: number;
+          zoom?: { value?: number };
+        }
+      | undefined;
+    const savedCam = {
+      scrollX: live?.live ? live.scrollX : (state?.scrollX ?? 0),
+      scrollY: live?.live ? live.scrollY : (state?.scrollY ?? 0),
+      zoom: live?.live ? live.zoom : (state?.zoom?.value ?? 1),
+    };
     setAnnotateCode((current) => {
       const next = !current;
       modeIndicatorRef.current?.show(next ? "Annotation" : "Scroll mode");
       return next;
     });
-    // Mode flip changes PE/classes; restore scroll after commit and repaint ink.
+    // Mode flip changes PE/classes; restore scroll after commit and replay ink.
     requestAnimationFrame(() => {
       restoreHostScroll(saved);
-      rasterInkRef.current?.repaint();
+      if (isDrawPageRegion(mobileRegionRef.current) && apiRef.current) {
+        userAdjustedCameraRef.current = true;
+        apiRef.current.updateScene({
+          appState: {
+            scrollX: savedCam.scrollX,
+            scrollY: savedCam.scrollY,
+            zoom: { value: savedCam.zoom },
+          },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+      }
+      rasterInkRef.current?.syncCamera();
     });
   }, [restoreHostScroll, snapshotHostScroll]);
 
@@ -2632,11 +2659,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (highlighting) setHighlighting(false);
   }, [annotateCode, editing, highlighting]);
 
-  /** Annotate PE/class flip can desync host-bound ink — repaint after the mode settles. */
+  /** Annotate PE/class flip can desync host-bound ink — replay after the mode settles. */
   useEffect(() => {
     if (!interactive) return;
     const id = requestAnimationFrame(() => {
-      rasterInkRef.current?.repaint();
+      rasterInkRef.current?.syncCamera();
     });
     return () => cancelAnimationFrame(id);
   }, [annotateCode, interactive]);
@@ -2816,14 +2843,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // Same widening as the preview split: the frame's box has to be concrete
     // before anything measures against it.
     const curH = num(frame.height, 0);
-    const contentBottomRel = contentBottomInFrame(live, ops, {
-      x: frame.x,
-      y: frame.y,
-      width: num(frame.width, 0),
-      height: curH,
-      customData: frame.customData ?? undefined,
+    const contentBottomRel = contentBottomInFrame(
+      live,
+      ops,
+      {
+        x: frame.x,
+        y: frame.y,
+        width: num(frame.width, 0),
+        height: curH,
+        customData: frame.customData ?? undefined,
+      },
+      DRAW_HEADER_BAND,
+      false,
+    );
+    const nextH = growDrawHeight({
+      basePageH,
+      currentH: curH,
+      contentBottomRel,
+      capPages:
+        typeof page === "string" && page.startsWith("pad-")
+          ? DRAW_GROWTH_CAP_SCROLL
+          : DRAW_GROWTH_CAP,
     });
-    const nextH = growDrawHeight({ basePageH, currentH: curH, contentBottomRel });
     if (Math.abs(curH - nextH) <= 1) return false;
 
     const nextElements = live.map((el) =>
@@ -5724,14 +5765,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           const ops = rasterInkRef.current?.getOps() ?? [];
           let nextH: number;
           if (isDrawPageRegion(typeof regionKey === "string" ? regionKey : null)) {
-            const contentBottomRel = contentBottomInFrame(live, ops, {
-              x: primary.x,
-              y: primary.y,
-              width: num(primary.width, 0),
-              height: num(primary.height, 0),
-              customData: primary.customData ?? undefined,
-            });
+            const contentBottomRel = contentBottomInFrame(
+              live,
+              ops,
+              {
+                x: primary.x,
+                y: primary.y,
+                width: num(primary.width, 0),
+                height: num(primary.height, 0),
+                customData: primary.customData ?? undefined,
+              },
+              DRAW_HEADER_BAND,
+              false,
+            );
             const curDrawH = num(primary.height, 0);
+            const capPages = isScratch
+              ? DRAW_GROWTH_CAP_SCROLL
+              : DRAW_GROWTH_CAP;
             if (mode === "keepY") {
               /*
                * Sash / chrome resize: do not morph the sheet to the new hole.
@@ -5749,6 +5799,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   basePageH,
                   currentH: curDrawH,
                   contentBottomRel,
+                  capPages,
                 }),
               );
             } else {
@@ -5760,6 +5811,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   basePageH,
                   currentH: curDrawH,
                   contentBottomRel,
+                  capPages,
                 }),
               );
             }

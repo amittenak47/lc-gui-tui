@@ -20,6 +20,8 @@ import type { InkOp } from "../canvas/rasterInk";
  */
 export const DRAW_HEADER_BAND = 0;
 export const DRAW_GROWTH_CAP = 5;
+/** Scratch / whiteboard: keep growing so writing can scroll instead of hitting a 5-page wall. */
+export const DRAW_GROWTH_CAP_SCROLL = 80;
 export const DRAW_BUFFER_FRAC = 0.5;
 
 export function initialDrawHeight(basePageH: number): number {
@@ -30,12 +32,14 @@ export function growDrawHeight({
   basePageH,
   currentH,
   contentBottomRel,
+  capPages = DRAW_GROWTH_CAP,
 }: {
   basePageH: number;
   currentH: number;
   contentBottomRel: number;
+  capPages?: number;
 }): number {
-  const cap = basePageH * DRAW_GROWTH_CAP;
+  const cap = basePageH * capPages;
   const floor = initialDrawHeight(basePageH);
   const buffer = basePageH * DRAW_BUFFER_FRAC;
   let h = currentH;
@@ -120,6 +124,7 @@ function inkOpAABB(
   op: InkOp,
   frame: { x: number; y: number; width: number; height: number },
   headerBottom: number,
+  clipHeight: boolean,
 ): SceneAABB | null {
   if (op.kind !== "draw" || op.points.length === 0) return null;
   let minX = Infinity;
@@ -129,7 +134,8 @@ function inkOpAABB(
   const maxXf = frame.x + frame.width;
   const maxYf = frame.y + frame.height;
   for (const pt of op.points) {
-    if (pt.x < frame.x || pt.y < headerBottom || pt.x > maxXf || pt.y > maxYf) continue;
+    if (pt.x < frame.x || pt.y < headerBottom || pt.x > maxXf) continue;
+    if (clipHeight && pt.y > maxYf) continue;
     minX = Math.min(minX, pt.x);
     minY = Math.min(minY, pt.y);
     maxX = Math.max(maxX, pt.x);
@@ -145,6 +151,7 @@ export function contentAABBsInFrame(
   ops: readonly InkOp[],
   frame: { x: number; y: number; width: number; height: number; customData?: { lcRegion?: string } },
   headerBand = DRAW_HEADER_BAND,
+  clipInkToFrameHeight = true,
 ): SceneAABB[] {
   const headerBottom = frame.y + headerBand;
   const regionId = frame.customData?.lcRegion;
@@ -160,7 +167,7 @@ export function contentAABBsInFrame(
   }
 
   for (const op of ops) {
-    const box = inkOpAABB(op, frame, headerBottom);
+    const box = inkOpAABB(op, frame, headerBottom, clipInkToFrameHeight);
     if (box) aabbs.push(box);
   }
 
@@ -173,8 +180,9 @@ export function contentBottomInFrame(
   ops: readonly InkOp[],
   frame: { x: number; y: number; width: number; height: number; customData?: { lcRegion?: string } },
   headerBand = DRAW_HEADER_BAND,
+  clipInkToFrameHeight = true,
 ): number {
-  const aabbs = contentAABBsInFrame(elements, ops, frame, headerBand);
+  const aabbs = contentAABBsInFrame(elements, ops, frame, headerBand, clipInkToFrameHeight);
   let bottomRel = headerBand;
   for (const box of aabbs) {
     bottomRel = Math.max(bottomRel, box.y + box.height - frame.y);
