@@ -74,7 +74,7 @@ describe("serializeTabState", () => {
     expect(serial.tabs[1]).toMatchObject({ dirty: false, notebookId: "nb-1" });
   });
 
-  it("drops retired Freehand and Ink lab chips from saved sessions", () => {
+  it("drops retired Freehand chips and restores Ink lab", () => {
     const parsed = parseTabState({
       v: 1,
       tabs: [
@@ -86,8 +86,8 @@ describe("serializeTabState", () => {
       activeId: "il",
       groups: [],
     });
-    expect(parsed?.tabs.map((tab) => tab.id)).toEqual([HOME_TAB_ID, "b1"]);
-    expect(parsed?.activeId).toBe(HOME_TAB_ID);
+    expect(parsed?.tabs.map((tab) => tab.id)).toEqual([HOME_TAB_ID, "il", "b1"]);
+    expect(parsed?.activeId).toBe("il");
   });
 
   it("keeps a footnote scratch board that has no library notebook id", () => {
