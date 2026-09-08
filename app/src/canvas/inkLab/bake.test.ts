@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { expandInkTurns, type ScenePoint } from "../rasterInk";
 import { smoothInkPoints } from "../inkSmoothing";
-import { bakeCatmull, bakeSpine, reshapeSpine } from "./bake";
+import { bakeCatmull, bakeSpine, reshapeLiveSpine, reshapeSpine } from "./bake";
 
 function line(): ScenePoint[] {
   return [
@@ -54,5 +54,43 @@ describe("lift bake", () => {
     expect(out[out.length - 1]!.x).toBeCloseTo(40);
     expect(out[out.length - 1]!.y).toBeCloseTo(0);
     expect(Math.abs(out[2]!.y)).toBeLessThan(8);
+  });
+
+  it("live-smooth tail keeps endpoints and freezes the prefix", () => {
+    const rawScene: ScenePoint[] = [];
+    const spine = [];
+    for (let i = 0; i < 400; i++) {
+      spine.push({
+        x: i * 3,
+        y: Math.sin(i / 18) * 8,
+        r: 6,
+        slow: 0.5,
+      });
+    }
+    let cache = null as ReturnType<typeof reshapeLiveSpine>["cache"];
+    let prev: { x: number; y: number }[] | null = null;
+    let frozen = 0;
+    let drift = 0;
+    for (let n = 20; n <= spine.length; n += 10) {
+      const slice = spine.slice(0, n);
+      const r = reshapeLiveSpine(slice, 0.6, cache, rawScene);
+      cache = r.cache;
+      if (prev && frozen > 0) {
+        for (let i = 0; i < frozen && i < r.points.length && i < prev.length; i++) {
+          drift = Math.max(
+            drift,
+            Math.hypot(r.points[i]!.x - prev[i]!.x, r.points[i]!.y - prev[i]!.y),
+          );
+        }
+      }
+      prev = r.points.map((p) => ({ x: p.x, y: p.y }));
+      frozen = cache ? cache.prefix.length : 0;
+    }
+    expect(frozen).toBeGreaterThan(0);
+    expect(drift).toBe(0);
+    const last = reshapeLiveSpine(spine, 0.6, cache, rawScene);
+    expect(last.points[0]!.x).toBeCloseTo(0);
+    expect(last.points[last.points.length - 1]!.x).toBeCloseTo(spine[spine.length - 1]!.x);
+    expect(last.points[0]!.slow).toBeCloseTo(0.5);
   });
 });
