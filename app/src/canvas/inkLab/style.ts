@@ -98,10 +98,11 @@ export function washRgb(vx: number, vy: number, dpr: number): [number, number, n
 /**
  * Slider units → pad size. Default width (2) is size 1.
  *
- * A hard `[0.45, 2.8]` cap made 1 still look like a 2–3 and froze the nib
- * from 6 through 32. Size 1 is a hairline; 6–64 keep growing.
+ * Size 1 on the wheel is a hairline (~0.5 CSS px radius). A previous 0.2
+ * scale still sat on a 7px lab nib and looked like a marker. 6–64 keep
+ * growing from the default.
  */
-export const LAB_NIB_SIZE_AT_MIN = 0.2;
+export const LAB_NIB_SIZE_AT_MIN = 0.075;
 
 export function labNibSizeFromUiWidth(uiWidth: number): number {
   const w = Number.isFinite(uiWidth) && uiWidth > 0 ? uiWidth : STROKE_WIDTH_DEFAULT;
@@ -120,9 +121,9 @@ export function labPressureAmt(pen: InkLabPen, pressure: number): number {
 }
 
 /**
- * Ink lab pad nib. Radius stays above the sample gate so capsules overlap
- * instead of leaving a dotted stamp trail. `size` is toolbar width vs default.
- * Pass `slow` to drive speed-ink without inventing a fake velocity.
+ * Ink lab pad nib. `size` is toolbar width vs default (slider 2 → 1).
+ * Slider 1 is a hairline; the stamp gate tightens with the radius so the
+ * trail stays a line instead of staying fat enough to overlap a 2.5px hop.
  * Stylus pressure does not change width — only deposit, via {@link labPenDot}.
  */
 export function labNibRadius(
@@ -138,7 +139,7 @@ export function labNibRadius(
   const sLow = slow ?? inkSlowness(cssPxPerMs);
   const s = Math.max(LAB_NIB_SIZE_AT_MIN, size);
   return Math.max(
-    0.55 * dpr,
+    0.28 * dpr,
     LAB_NIB_CSS * dpr * (0.5 + 0.95 * sLow) * s,
   );
 }

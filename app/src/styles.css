@@ -2810,16 +2810,13 @@ body[data-lc-sash-drag="horizontal"] {
  *
  * A reading scroll deliberately does not move Excalidraw's camera — pushing
  * `updateScene` per sample is what held the board at ~30fps — so the ink
- * bitmap, Excalidraw's own canvases, the lined rules and the page title are all
+ * bitmap, Excalidraw's own canvases, and the page title are all
  * still correct relative to the page and wrong only by a translation Board
  * writes as inline `translate3d` on these nodes (not inherited `--lc-pan-*` on
- * the board root — that invalidated style for the whole markdown subtree). On
- * the compositor that is free; the alternative is a full raster pass per frame.
- * Board drops the offset and re-reports every slot in the frame the gesture
- * lands, so nothing here is ever more than a gesture old.
+ * the board root — that invalidated style for the whole markdown subtree). Lined
+ * paper stays viewport-sized and rides pan on `background-position` instead.
  */
 .lc-board .excalidraw__canvas,
-.lc-board-lined-overlay,
 .lc-page-title-slot {
   will-change: transform;
 }
@@ -8789,10 +8786,11 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-board-lined-overlay {
   position: absolute;
+  inset: 0;
   z-index: 3;
   pointer-events: none;
   overflow: hidden;
-  border-radius: 2px;
+  border-radius: 0;
   background-image: repeating-linear-gradient(
     to bottom,
     transparent 0,

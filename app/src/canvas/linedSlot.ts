@@ -50,3 +50,18 @@ export function linedSlotCanSkip(
   if (!prev) return false;
   return sameLinedSlot(prev, next);
 }
+
+/** Viewport-sized rules; `panY` is the live reading-scroll ride. */
+export function applyLinedSlotStyle(
+  node: HTMLElement,
+  slot: LinedSlot,
+  panY = 0,
+): void {
+  node.style.left = "0px";
+  node.style.top = "0px";
+  node.style.width = `${slot.width}px`;
+  node.style.height = `${slot.height}px`;
+  node.style.transform = "";
+  node.style.backgroundSize = `100% ${slot.gap}px`;
+  node.style.backgroundPosition = `0 ${slot.phase + panY}px`;
+}

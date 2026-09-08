@@ -1,7 +1,7 @@
 import { createCanvas } from "@napi-rs/canvas";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createInkLabEngine, DISTANCE_GATE_CSS } from "./engine";
+import { createInkLabEngine, DISTANCE_GATE_CSS, labStampGatePx } from "./engine";
 import { createEkf } from "./ekf";
 
 beforeAll(() => {
@@ -295,6 +295,11 @@ describe("Ink lab live path", () => {
     const baked = engine.up({ x: 120, y: 88, p: 0.5, t: 32 });
     expect(baked.points[0]!.r).toBeGreaterThan(DISTANCE_GATE_CSS);
     engine.destroy();
+  });
+
+  it("tightens the stamp gate for a hairline nib", () => {
+    expect(labStampGatePx(0.5, 1)).toBeLessThan(1);
+    expect(labStampGatePx(8, 1)).toBe(DISTANCE_GATE_CSS);
   });
 
   it("live smoothing does not drop the raw spine", () => {
