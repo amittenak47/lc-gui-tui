@@ -73,7 +73,8 @@ float sdRoundCone(vec2 p, vec2 a, vec2 b, float ra, float rb) {
 
 void main() {
   float d = sdRoundCone(v_p, v_p0, v_p1, v_r0, v_r1);
-  float aa = max(fwidth(d), 0.75);
+  float rad = max(v_r0, v_r1);
+  float aa = max(fwidth(d), clamp(rad * 0.4, 0.18, 0.75));
   float alpha = 1.0 - smoothstep(-aa, aa, d);
   if (alpha < 0.004) discard;
   vec2 ba = v_p1 - v_p0;

@@ -123,6 +123,14 @@ export type InkLabEngineOpts = {
 };
 
 export const DISTANCE_GATE_CSS = 2.5;
+
+/** How far the next stamp may sit. Thin nibs step closer so they stay a line. */
+export function labStampGatePx(radiusPx: number, dpr: number): number {
+  const pix = Math.max(dpr, 1e-6);
+  const cap = DISTANCE_GATE_CSS * pix;
+  const byNib = Math.max(0.35 * pix, radiusPx * 0.85);
+  return Math.min(cap, byNib);
+}
 const HOLD_TICK_MS = 32;
 const HOLD_PLATEAU_EPS = 1e-3;
 
@@ -430,7 +438,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   const ingest = (s: InkLabSample) => {
     const t0 = performance.now();
     const dpr = pen?.dpr ?? (host ? dprOf(host) : 1);
-    const gate = DISTANCE_GATE_CSS * dpr;
     if (spine.length === 0) {
       ekf.reset(s.x, s.y, s.t);
       const first = styledDot(s.x, s.y, 0, 0, dpr, s.p, 0);
@@ -449,6 +456,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     const dot = styledDot(f.x, f.y, fadeV.vx, fadeV.vy, dpr, s.p, 0);
     lastEkfMs = performance.now() - t0;
     const dist = Math.hypot(dot.x - last.x, dot.y - last.y);
+    const gate = labStampGatePx(last.r, dpr);
     if (dist < gate) {
       const now = typeof performance !== "undefined" ? performance.now() : s.t;
       if (pen) {

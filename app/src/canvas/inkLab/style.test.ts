@@ -128,7 +128,7 @@ describe("ink lab style", () => {
 
   it("maps default slider width to pad size 1", () => {
     expect(labNibSizeFromUiWidth(2)).toBe(1);
-    expect(labNibSizeFromUiWidth(1)).toBe(0.2);
+    expect(labNibSizeFromUiWidth(1)).toBeCloseTo(0.075);
     expect(labNibSizeFromUiWidth(6)).toBe(3);
     expect(labNibSizeFromUiWidth(32)).toBe(16);
     expect(labNibSizeFromUiWidth(64)).toBe(32);
@@ -159,7 +159,8 @@ describe("ink lab style", () => {
         0,
         0,
       );
-    expect(pen(1).r).toBeLessThan(pen(2).r * 0.45);
+    expect(pen(1).r).toBeLessThan(0.85);
+    expect(pen(1).r).toBeLessThan(pen(2).r * 0.2);
     expect(pen(32).r).toBeGreaterThan(pen(6).r * 2);
     expect(pen(64).r).toBeGreaterThan(pen(32).r);
   });

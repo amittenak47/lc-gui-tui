@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { linedSlotCanSkip, sameLinedSlot, type LinedSlot } from "./linedSlot";
+import { applyLinedSlotStyle, linedSlotCanSkip, sameLinedSlot, type LinedSlot } from "./linedSlot";
 
 const SLOT: LinedSlot = {
   left: 12,
@@ -46,5 +46,21 @@ describe("linedSlotCanSkip", () => {
 
   it("does not skip when the geometry moved", () => {
     expect(linedSlotCanSkip(SLOT, { ...SLOT, left: 13 }, true)).toBe(false);
+  });
+});
+
+describe("applyLinedSlotStyle", () => {
+  it("pins the overlay to the viewport and rides pan on the rules", () => {
+    const node = {
+      style: {} as Record<string, string>,
+    };
+    applyLinedSlotStyle(node as unknown as HTMLElement, SLOT, 12);
+    expect(node.style.left).toBe("0px");
+    expect(node.style.top).toBe("0px");
+    expect(node.style.width).toBe("800px");
+    expect(node.style.height).toBe("1200px");
+    expect(node.style.transform).toBe("");
+    expect(node.style.backgroundSize).toBe("100% 36px");
+    expect(node.style.backgroundPosition).toBe("0 16.25px");
   });
 });

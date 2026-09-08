@@ -165,7 +165,7 @@ import {
 import { pdfLandingHoldClear, pdfPreloadPages, pdfRestPages } from "../modes/pdfPaintWindow";
 import { remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
 import { eraserScreenRadius } from "./rasterInk";
-import { linedSlotCanSkip } from "./linedSlot";
+import { applyLinedSlotStyle, linedSlotCanSkip } from "./linedSlot";
 import { SPLIT_RESIZE_EVENT, splitResizePhase } from "../util/splitResize";
 import { reanchorInkOps } from "./reanchorInk";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
@@ -1945,7 +1945,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (el instanceof HTMLElement) nodes.push(el);
       });
     }
-    if (linedSlotNodeRef.current) nodes.push(linedSlotNodeRef.current);
     if (titleSlotNodeRef.current) nodes.push(titleSlotNodeRef.current);
     panRideNodesRef.current = nodes;
   }, []);
@@ -1967,6 +1966,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         dx === 0 && dy === 0 ? "" : `translate3d(${dx}px, ${dy}px, 0)`;
       for (const node of ensurePanRideNodes()) {
         if (node.style.transform !== next) node.style.transform = next;
+      }
+      const lined = linedSlotNodeRef.current;
+      const slot = lastLinedSlotRef.current;
+      if (lined && slot) {
+        lined.style.backgroundPosition = `0 ${slot.phase + dy}px`;
       }
     },
     [ensurePanRideNodes],
@@ -2419,7 +2423,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     notify(next);
   }, []);
 
-  /** Keep lined paper clipped to the open template frame (screen space). */
+  /** Keep lined paper over the whole board, not a centred page card. */
   /** Project the open scratch page's title line to screen for the pager overlay. */
   const reportTitleSlot = useCallback(() => {
     const api = apiRef.current;
@@ -2755,9 +2759,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       return;
     }
-    const api = apiRef.current;
-    const bounds = pageBoundsRef.current;
-    if (!api || !bounds) {
+    const root = boardRef.current;
+    const width = roundPx(root?.clientWidth ?? 0);
+    const height = roundPx(root?.clientHeight ?? 0);
+    const gap = linedPaperScreenPx(linedPaperRef.current);
+    if (!root || gap <= 0 || width < 8 || height < 8) {
       if (lastLinedSlotRef.current !== null) {
         lastLinedSlotRef.current = null;
         setLinedSlotOn(false);
@@ -2765,74 +2771,37 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     /*
-     * Committed camera, deliberately — the rules ride the live pan on an
-     * inline translate (see `setPagePanOffset`). Reporting the live camera
-     * here as well would apply the gesture twice, and writing `left`/`top` per
-     * sample would lay out and repaint this gradient on the main thread at
-     * pointer rate, which is exactly what the translate exists to avoid.
-     * Mid-gesture the numbers below cannot change, so this early-outs.
+     * Committed camera, deliberately — live pan shifts `background-position`
+     * in `setPagePanOffset` so the overlay can stay viewport-sized. Reporting
+     * the live camera here would apply the gesture twice.
      */
-    const state = api.getAppState() as {
-      scrollX?: number;
+    const api = apiRef.current;
+    const state = (api?.getAppState() ?? {}) as {
       scrollY?: number;
       zoom?: { value?: number };
     };
-    const zoom = state.zoom?.value ?? 1;
-    const scrollX = state.scrollX ?? 0;
+    const zoom = Math.max(0.05, state.zoom?.value ?? 1);
     const scrollY = state.scrollY ?? 0;
-    // Keep lines inside the dashed stroke.
-    const pad = Math.max(2, Math.round(3 * zoom));
-    const left = roundPx((bounds.minX + scrollX) * zoom + pad);
-    const top = roundPx((bounds.minY + scrollY) * zoom + pad);
-    const width = roundPx(Math.max(0, (bounds.maxX - bounds.minX) * zoom - pad * 2));
-    const height = roundPx(Math.max(0, (bounds.maxY - bounds.minY) * zoom - pad * 2));
-    // Handwriting rules: fixed screen pitch so a fitted wide draw frame cannot
-    // shrink statement-prose spacing into an unwritable grid. This path only
-    // runs for draw pages (`linedPaperOn`); statement/code never get here.
-    const zoomSafe = Math.max(0.05, zoom);
-    const gap = linedPaperScreenPx(linedPaperRef.current);
-    if (gap <= 0) {
-      if (lastLinedSlotRef.current !== null) {
-        lastLinedSlotRef.current = null;
-        setLinedSlotOn(false);
-      }
-      return;
-    }
-    const pitchScene = gap / zoomSafe;
-
-    let phase = 0;
-    // Lock rules from the frame top — draw pages have no statement body grid.
-    const firstRulePx = (bounds.minY + pitchScene + scrollY) * zoom;
-    const rel = firstRulePx - top;
-    phase = ((rel - gap + 1) % gap + gap) % gap;
+    const pitchScene = gap / zoom;
+    const originY = pageBoundsRef.current?.minY ?? 0;
+    // Lock rules from the frame top when a page exists; otherwise scene 0.
+    const firstRulePx = (originY + pitchScene + scrollY) * zoom;
+    const phase = ((firstRulePx - gap + 1) % gap + gap) % gap;
 
     const next = {
-      left,
-      top,
+      left: 0,
+      top: 0,
       width,
       height,
       gap,
-      // Same sub-pixel precision as the gap, or the phase walks off the rules.
       phase: Math.round(phase * 100) / 100,
     };
     const prev = lastLinedSlotRef.current;
     const node = linedSlotNodeRef.current;
-    // The node's absence is part of the test — see `linedSlotCanSkip`.
     if (linedSlotCanSkip(prev, next, node != null)) return;
     lastLinedSlotRef.current = next;
-    if (width > 8 && height > 8) {
-      setLinedSlotOn((on) => on || true);
-      if (node) {
-        node.style.left = `${next.left}px`;
-        node.style.top = `${next.top}px`;
-        node.style.width = `${next.width}px`;
-        node.style.height = `${next.height}px`;
-        node.style.backgroundSize = `100% ${next.gap}px`;
-        node.style.backgroundPosition = `0 ${next.phase}px`;
-      }
-    } else {
-      setLinedSlotOn((on) => (on ? false : on));
-    }
+    setLinedSlotOn((on) => on || true);
+    if (node) applyLinedSlotStyle(node, next, panOffsetRef.current.y);
   }, []);
 
   const maybeGrowDrawFrame = useCallback((): boolean => {
@@ -6208,12 +6177,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const next = lastLinedSlotRef.current;
     const node = linedSlotNodeRef.current;
     if (!next || !node) return;
-    node.style.left = `${next.left}px`;
-    node.style.top = `${next.top}px`;
-    node.style.width = `${next.width}px`;
-    node.style.height = `${next.height}px`;
-    node.style.backgroundSize = `100% ${next.gap}px`;
-    node.style.backgroundPosition = `0 ${next.phase}px`;
+    applyLinedSlotStyle(node, next, panOffsetRef.current.y);
   }, [linedSlotOn]);
 
   /**
@@ -6656,6 +6620,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
          * width; it does not need the fit to have worked.
          */
         reportContentSlot();
+        reportLinedSlot();
         run(false);
       }, 60);
     };
@@ -6706,7 +6671,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (timer != null) window.clearTimeout(timer);
       for (const id of late) window.clearTimeout(id);
     };
-  }, [applyLiveBoxFit, reportContentSlot]);
+  }, [applyLiveBoxFit, reportContentSlot, reportLinedSlot]);
 
   /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
