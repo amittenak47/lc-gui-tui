@@ -5,7 +5,8 @@
  * backing store until the pointer comes up. Plan C clips the live snap+SDF
  * blit to the dirty AABB; do not shrink the overlay canvas on pointer down.
  * Plan E keeps the rAF pump armed while the nib is down — pointermove only
- * ingests. Empty vsyncs skip GPU present; 90Hz+ caps composites at 60fps.
+ * ingests. Empty vsyncs skip GPU present; 90Hz+ caps composites at 60fps
+ * unless Match display is on.
  * Scheduling paint from move made the HUD rAF track the tablet's coalesced
  * move rate instead of the display.
  */

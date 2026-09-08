@@ -46,6 +46,7 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/addEventListener\("pointermove", onPointerMove, true\)/);
     expect(src).toMatch(/shouldCompositeLive/);
     expect(src).toMatch(/livePresentStride/);
+    expect(src).toMatch(/matchDisplayRef/);
     expect(src).toMatch(/const marginY = 0/);
     expect(src).not.toMatch(/overdrawMarginPx/);
     const tick = src.slice(src.indexOf("const onPaintFrame"), src.indexOf("const schedulePaint"));
@@ -83,8 +84,10 @@ describe("SettingsModal", () => {
     expect(src).toMatch(/Performance overlay/);
     expect(src).toMatch(/Performance bar/);
     expect(src).toMatch(/Display refresh/);
+    expect(src).toMatch(/Match display/);
     expect(src).toMatch(/loadInkPerfOverlay/);
     expect(src).toMatch(/loadInkPerfBar/);
     expect(src).toMatch(/loadInkDisplayHz/);
+    expect(src).toMatch(/loadInkMatchDisplay/);
   });
 });

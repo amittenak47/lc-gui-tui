@@ -48,6 +48,13 @@ describe("display Hz", () => {
     expect(livePresentStride(240)).toBe(4);
   });
 
+  it("Match display presents every dirty vsync", () => {
+    expect(livePresentStride(90, true)).toBe(1);
+    expect(livePresentStride(120, true)).toBe(1);
+    expect(livePresentStride(240, true)).toBe(1);
+    expect(livePresentStride(60, true)).toBe(1);
+  });
+
   it("skips empty ticks and respects the present stride", () => {
     expect(shouldCompositeLive(false, false, 0, 2)).toBe(false);
     expect(shouldCompositeLive(true, false, 0, 2)).toBe(true);

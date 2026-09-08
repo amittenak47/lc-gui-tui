@@ -1,6 +1,7 @@
 /**
  * Display refresh for live ink: HUD vsync and present cap.
- * Never present faster than 60fps on 90Hz+ panels.
+ * Default: never present faster than 60fps on 90Hz+ panels.
+ * Match display: present every dirty vsync; HUD still uses the Hz setting.
  */
 
 export const INK_DISPLAY_HZ = [60, 90, 120, 240] as const;
@@ -49,8 +50,13 @@ export function resolveDisplayHz(
 
 /**
  * Present at most 60fps: every N vsyncs. 60Hz → 1, 90/120 → 2, 240 → 4.
+ * Match display skips the cap and presents every dirty vsync.
  */
-export function livePresentStride(hz: InkDisplayHz): number {
+export function livePresentStride(
+  hz: InkDisplayHz,
+  matchDisplay = false,
+): number {
+  if (matchDisplay) return 1;
   return Math.max(1, Math.round(hz / 60));
 }
 

@@ -125,6 +125,8 @@ import {
   INK_DISPLAY_HZ,
   loadInkDisplayHz,
   saveInkDisplayHz,
+  loadInkMatchDisplay,
+  saveInkMatchDisplay,
   type InkDisplayHzPref,
 } from "../util/inkDisplayHzPref";
 import {
@@ -474,6 +476,8 @@ interface DevicePrefs {
   inkPerfBar: boolean;
   /** Display refresh for HUD vsync and live present cap. */
   inkDisplayHz: InkDisplayHzPref;
+  /** Present every dirty vsync. Off keeps the 60fps cap on 90Hz+. */
+  inkMatchDisplay: boolean;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -507,6 +511,7 @@ function loadDevicePrefs(): DevicePrefs {
     inkPerfOverlay: loadInkPerfOverlay(),
     inkPerfBar: loadInkPerfBar(),
     inkDisplayHz: loadInkDisplayHz(),
+    inkMatchDisplay: loadInkMatchDisplay(),
   };
 }
 
@@ -540,7 +545,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.pdfFlickMomentum === b.pdfFlickMomentum &&
     a.inkPerfOverlay === b.inkPerfOverlay &&
     a.inkPerfBar === b.inkPerfBar &&
-    a.inkDisplayHz === b.inkDisplayHz
+    a.inkDisplayHz === b.inkDisplayHz &&
+    a.inkMatchDisplay === b.inkMatchDisplay
   );
 }
 
@@ -854,6 +860,7 @@ export function SettingsModal({
   const [inkPerfOverlay, setInkPerfOverlay] = useState(() => loadInkPerfOverlay());
   const [inkPerfBar, setInkPerfBar] = useState(() => loadInkPerfBar());
   const [inkDisplayHz, setInkDisplayHz] = useState<InkDisplayHzPref>(() => loadInkDisplayHz());
+  const [inkMatchDisplay, setInkMatchDisplay] = useState(() => loadInkMatchDisplay());
   const [testForward, setTestForward] = useState<TestForwardMode>(() =>
     loadTestForwardMode(),
   );
@@ -1089,6 +1096,7 @@ export function SettingsModal({
     setInkPerfOverlay(prefs.inkPerfOverlay);
     setInkPerfBar(prefs.inkPerfBar);
     setInkDisplayHz(prefs.inkDisplayHz);
+    setInkMatchDisplay(prefs.inkMatchDisplay);
     setBaselinePrefs(prefs);
     // Saved only: the desktop that *is* the hub runs on a loopback it never
     // typed, and showing that here would read as "connected to some other PC".
@@ -1189,6 +1197,7 @@ export function SettingsModal({
     inkPerfOverlay,
     inkPerfBar,
     inkDisplayHz,
+    inkMatchDisplay,
   };
   const keysDirty =
     openaiKeyDraft.trim() !== "" ||
@@ -1259,6 +1268,7 @@ export function SettingsModal({
         saveInkPerfOverlay(inkPerfOverlay);
         saveInkPerfBar(inkPerfBar);
         saveInkDisplayHz(inkDisplayHz);
+        saveInkMatchDisplay(inkMatchDisplay);
         setBaselinePrefs(draftPrefs);
         void saveThisDevicePrefs(client).catch(() => {});
         window.dispatchEvent(
@@ -1991,9 +2001,10 @@ export function SettingsModal({
 
               <div className="lc-settings-subhead">Display refresh</div>
               <p className="lc-settings-hint">
-                Grades the HUD and caps live ink at 60 frames a second on 90 Hz
-                and faster panels. Auto reads the vsync gap. Canvas size stays
-                1:1. Saved on this device only.
+                Grades the HUD against this vsync. Auto reads the gap. On 90 Hz
+                and faster, live ink presents at most 60 frames a second unless
+                Match display is on. Canvas size stays 1:1. Saved on this
+                device only.
               </p>
               <div
                 className="lc-settings-choice lc-settings-choice-compact"
@@ -2029,6 +2040,44 @@ export function SettingsModal({
                     <strong>{hz}</strong>
                   </button>
                 ))}
+              </div>
+              <div className="lc-settings-subhead">Match display</div>
+              <p className="lc-settings-hint">
+                Present live ink on every dirty vsync. Off keeps the 60 fps cap
+                on 90 Hz and faster panels. Does not change the panel or the
+                HUD ruler. Saved on this device only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Match display"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!inkMatchDisplay}
+                  className={
+                    inkMatchDisplay
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() => setInkMatchDisplay(false)}
+                >
+                  <strong>Off</strong>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={inkMatchDisplay}
+                  className={
+                    inkMatchDisplay
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setInkMatchDisplay(true)}
+                >
+                  <strong>On</strong>
+                </button>
               </div>
               <div className="lc-settings-subhead">Performance overlay</div>
               <p className="lc-settings-hint">

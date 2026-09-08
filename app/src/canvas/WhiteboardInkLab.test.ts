@@ -23,4 +23,8 @@ describe("WhiteboardInkLab", () => {
     expect(shouldCompositeLive(true, false, 0, 2)).toBe(true);
     expect(shouldCompositeLive(false, true, 0, 2)).toBe(true);
   });
+
+  it("Match display uses stride 1 so every dirty vsync composites", () => {
+    expect(shouldCompositeLive(true, false, 1, 1)).toBe(true);
+  });
 });

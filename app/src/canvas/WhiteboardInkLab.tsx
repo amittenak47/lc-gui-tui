@@ -112,6 +112,8 @@ export interface WhiteboardInkLabProps {
   perfBar?: boolean;
   /** Auto / 60 / 90 / 120 / 240 — HUD vsync and live present cap. */
   displayHz?: InkDisplayHzPref;
+  /** Present every dirty vsync. Off keeps the 60fps cap on 90Hz+. */
+  matchDisplay?: boolean;
 }
 
 function fallbackViewport(width: number, height: number): ViewportTransform {
@@ -247,6 +249,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       perfOverlay = false,
       perfBar = false,
       displayHz = "auto",
+      matchDisplay = false,
     }: WhiteboardInkLabProps,
     ref,
   ) {
@@ -321,6 +324,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     perfBarRef.current = perfBar;
     const displayHzRef = useRef(displayHz);
     displayHzRef.current = displayHz;
+    const matchDisplayRef = useRef(matchDisplay);
+    matchDisplayRef.current = matchDisplay;
     const loadMeterRef = useRef(createInkLoadMeter());
     const loadBarRef = useRef<InkLoadBarHandle>(null);
     const hudStatsRef = useRef(createInkLabHudStats());
@@ -682,7 +687,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         const hz = resolveDisplayHz(displayHzRef.current, medianMs(rafGaps));
         const vsyncMs = vsyncMsForHz(hz);
         loadMeterRef.current.setVsyncMs(vsyncMs);
-        const stride = livePresentStride(hz);
+        const stride = livePresentStride(hz, matchDisplayRef.current);
         const tick = liveTick;
         liveTick += 1;
         if (live && !shouldCompositeLive(liveDirty, liveHold, tick, stride)) {
