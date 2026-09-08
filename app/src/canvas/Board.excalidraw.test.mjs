@@ -44,6 +44,11 @@ describe("WhiteboardInkLab", () => {
     expect(src).not.toMatch(/drawingRef\.current && stats\.hold/);
     expect(src).toMatch(/addEventListener\("pointerdown", onPointerDown, true\)/);
     expect(src).toMatch(/addEventListener\("pointermove", onPointerMove, true\)/);
+    const tick = src.slice(src.indexOf("const onPaintFrame"), src.indexOf("const schedulePaint"));
+    expect(tick.indexOf("keepLivePaintPump")).toBeGreaterThan(-1);
+    expect(tick.indexOf("keepLivePaintPump")).toBeLessThan(tick.indexOf("engine.paint"));
+    expect(tick.indexOf("engine.paint")).toBeLessThan(tick.indexOf("reportLoad"));
+    expect(src).toMatch(/shouldFlushLiveHud/);
   });
 });
 
