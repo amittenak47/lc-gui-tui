@@ -3316,6 +3316,22 @@ body[data-lc-sash-drag="horizontal"] {
   cursor: none;
 }
 
+.lc-scene-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 42;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.lc-scene-overlay-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+  pointer-events: none;
+}
+
 .lc-board-ink-lab-host {
   position: absolute;
   inset: 0;

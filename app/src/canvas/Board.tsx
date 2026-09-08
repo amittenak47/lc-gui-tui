@@ -198,6 +198,7 @@ import {
   type TextPlaceViewport,
 } from "./textPlacement";
 import { WhiteboardInkLab, type RasterInkHandle } from "./WhiteboardInkLab";
+import { SceneOverlay, type SceneOverlayHandle } from "./SceneOverlay";
 import {
   INK_OVERDRAW_FRACTION,
   OVERDRAW_REBASE_HEADROOM,
@@ -1813,6 +1814,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       waiter.reject(new Error("Board unmounted before ink attached"));
     }
   }, []);
+  const sceneOverlayRef = useRef<SceneOverlayHandle>(null);
   const [shapesOpen, setShapesOpen] = useState(false);
   const [captureMenuOpen, setCaptureMenuOpen] = useState(false);
   const [captureRegion, setCaptureRegion] = useState<{
@@ -3855,6 +3857,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     setPagePanOffsetRef.current(rideDx, delta.dy);
     pulseCameraMotionRef.current();
+    sceneOverlayRef.current?.redraw();
   }, []);
 
   const flushVisualScroll = useCallback(() => {
@@ -7864,6 +7867,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         syncStampTrash();
         return;
       }
+      sceneOverlayRef.current?.redraw();
 
       /*
        * Page-tall frames + selection ants = scroll death.
@@ -8159,6 +8163,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       ) {
         applyVisualScrollNowRef.current(scrollX, scrollY);
       }
+      if (!liveCameraRef.current?.live) sceneOverlayRef.current?.redraw();
       if (!liveCameraRef.current?.live) scheduleSlotReports();
       if (!fittingCameraRef.current && !clampingScrollRef.current) {
         userAdjustedCameraRef.current = true;
@@ -9845,6 +9850,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         perfBar={perfBar && isDrawPageRegion(mobileRegion ?? null)}
         displayHz={displayHz}
         matchDisplay={matchDisplay}
+      />
+      <SceneOverlay
+        ref={sceneOverlayRef}
+        getElements={() => apiRef.current?.getSceneElements() ?? []}
+        getFiles={() =>
+          (apiRef.current?.getFiles() ?? {}) as Record<
+            string,
+            { dataURL?: string; mimeType?: string } | undefined
+          >
+        }
+        getViewport={getViewport}
       />
       {interactive && activeTool === "text" && <TextPlaceGhost ref={textPlaceGhostRef} />}
       {interactive && stampTrash && (

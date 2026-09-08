@@ -3,6 +3,8 @@
  * Frames / text / stamps stay as data. The visible pad is Ink lab.
  */
 
+import { paintSceneToExport } from "./paintScene";
+
 export const CaptureUpdateAction = {
   NEVER: "NEVER",
   IMMEDIATELY: "IMMEDIATELY",
@@ -146,6 +148,14 @@ export async function exportToCanvas(opts: {
   if (ctx) {
     ctx.fillStyle = paperColor(opts.appState);
     ctx.fillRect(0, 0, width, height);
+    const files = (opts.files ?? {}) as Record<string, { dataURL?: string } | undefined>;
+    paintSceneToExport(ctx, opts.elements, {
+      minX,
+      minY,
+      padding,
+      exportScale,
+      files,
+    });
   }
   return canvas;
 }
