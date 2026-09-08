@@ -81,6 +81,16 @@ describe("parseVizProgram", () => {
     })!;
     expect(program.frames.map((f) => f.label)).toEqual(["ok", "also ok"]);
   });
+
+  it("drops frames past the 40-frame trace cap", () => {
+    const frames = Array.from({ length: 41 }, (_, i) => ({
+      label: `step ${i}`,
+      cells: [i],
+    }));
+    const program = parseVizProgram({ viz: "array", id: "long", frames })!;
+    expect(program.frames).toHaveLength(40);
+    expect(program.frames[39]?.label).toBe("step 39");
+  });
 });
 
 describe("isVizKind", () => {
