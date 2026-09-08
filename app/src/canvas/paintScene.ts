@@ -13,6 +13,7 @@ export interface PaintSceneMeta {
   lcDocumentPage?: boolean;
   lcVizId?: string;
   lcStamp?: boolean;
+  lcStampGroup?: string;
 }
 
 export interface PaintSceneElement {
@@ -23,6 +24,7 @@ export interface PaintSceneElement {
   width?: number;
   height?: number;
   angle?: number;
+  locked?: boolean;
   strokeColor?: string;
   backgroundColor?: string;
   fillStyle?: string;

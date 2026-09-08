@@ -76,6 +76,8 @@ export type ToolName =
   | "text"
   | "rectangle"
   | "ellipse"
+  | "diamond"
+  | "line"
   | "arrow";
 
 /** Screen-space rectangle relative to the board container. */

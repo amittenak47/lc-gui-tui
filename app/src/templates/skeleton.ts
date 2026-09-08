@@ -115,6 +115,10 @@ export interface SkeletonMeta {
    * four-screen-wide geometry heals itself the first time it is opened.
    */
   lcReadingColumn?: boolean;
+  /** User-drawn primitive or library stamp — selectable, not a page frame. */
+  lcStamp?: boolean;
+  /** Shared id so a multi-piece stamp moves and deletes together. */
+  lcStampGroup?: string;
 }
 
 /** Muted palette: the coach's ink should read as annotation, not as the work. */

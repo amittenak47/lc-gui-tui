@@ -112,6 +112,8 @@ function dockAnchorRect(toolbar: HTMLElement | null): DOMRect | null {
 const SHAPE_TOOLS: Array<{ tool: ToolName; label: string; glyph: string }> = [
   { tool: "rectangle", label: "Square", glyph: "▭" },
   { tool: "ellipse", label: "Circle", glyph: "◯" },
+  { tool: "diamond", label: "Diamond", glyph: "◇" },
+  { tool: "line", label: "Line", glyph: "／" },
   { tool: "arrow", label: "Arrow", glyph: "↗" },
   { tool: "text", label: "Text box", glyph: "T" },
 ];
@@ -830,6 +832,8 @@ export function BoardToolbar({
     shapesOpen ||
     active === "rectangle" ||
     active === "ellipse" ||
+    active === "diamond" ||
+    active === "line" ||
     active === "arrow" ||
     active === "text";
   const shapesUiActive =

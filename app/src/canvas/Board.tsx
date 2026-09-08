@@ -200,6 +200,22 @@ import {
 import { WhiteboardInkLab, type RasterInkHandle } from "./WhiteboardInkLab";
 import { SceneOverlay, type SceneOverlayHandle } from "./SceneOverlay";
 import {
+  SceneSelectionOverlay,
+  type SceneSelectionOverlayHandle,
+} from "./SceneSelectionOverlay";
+import {
+  expandStampGroup,
+  flipElement,
+  hitTestScene,
+  isSelectableSceneElement,
+  isShapeDrawTool,
+  MIN_SHAPE_SPAN,
+  moveElement,
+  shapeSpan,
+  skeletonFromDrag,
+} from "./shapeGesture";
+import type { PaintSceneElement } from "./paintScene";
+import {
   INK_OVERDRAW_FRACTION,
   OVERDRAW_REBASE_HEADROOM,
   panDelta,
@@ -795,6 +811,8 @@ const DRAWING_TOOLS = new Set<ToolName>([
   "text",
   "rectangle",
   "ellipse",
+  "diamond",
+  "line",
   "arrow",
 ]);
 
@@ -1815,6 +1833,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
   }, []);
   const sceneOverlayRef = useRef<SceneOverlayHandle>(null);
+  const shapeSelectRef = useRef<SceneSelectionOverlayHandle>(null);
+  const shapeDraftRef = useRef<unknown | null>(null);
   const [shapesOpen, setShapesOpen] = useState(false);
   const [captureMenuOpen, setCaptureMenuOpen] = useState(false);
   const [captureRegion, setCaptureRegion] = useState<{
@@ -3403,9 +3423,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * default here — this is a board you sketch on, and the toolbar is one
        * tap away when you do want to stop.
        */
-      const sticky = tool === "rectangle" || tool === "ellipse" || tool === "arrow";
+      const sticky =
+        tool === "rectangle" ||
+        tool === "ellipse" ||
+        tool === "diamond" ||
+        tool === "line" ||
+        tool === "arrow";
       apiRef.current?.setActiveTool({ type: tool, locked: sticky });
-      apiRef.current?.resetCursor?.();
+      if (sticky) apiRef.current?.setCursor?.("crosshair");
+      else apiRef.current?.resetCursor?.();
     }
 
     /*
@@ -3858,6 +3884,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     setPagePanOffsetRef.current(rideDx, delta.dy);
     pulseCameraMotionRef.current();
     sceneOverlayRef.current?.redraw();
+    shapeSelectRef.current?.redraw();
   }, []);
 
   const flushVisualScroll = useCallback(() => {
@@ -4050,7 +4077,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (
         el.closest(
           ".lc-toolbar, .lc-map-controls, .lc-pager, .lc-stamp-trash, .lc-capture-overlay," +
-            " .lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-footnote-overview" +
+            " .lc-scene-select, .lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-footnote-overview" +
             ", .lc-footnote-bubble, .lc-scroll-back-hold, .lc-hold-reveal, .lc-split-sash",
         )
       ) {
@@ -4688,149 +4715,243 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [interactive]);
 
   /*
-   * A shape must not be able to trap the pen, and must be deletable the moment
-   * it exists.
+   * Drag-to-create primitives, plus select/move on the selection tool.
    *
-   * Two Excalidraw behaviours combine badly here. A *click* with the arrow tool
-   * — as opposed to a drag — opens a multi-point line: every further tap adds a
-   * bend, and the polyline is only closed by Escape, Enter or a double click.
-   * On a keyboard-less tablet whose double click we have just taken away (see
-   * the guard above), that is a state with no exit, which is what "I was stuck
-   * in the arrow shape adding bends" describes. And because a multi-point line
-   * in progress is not *selected*, the trash never appeared either, so the
-   * arrow could not be removed once it was there.
+   * Ink lab is not armed for shape tools, and the pad no longer creates
+   * rectangles on its own. A drag writes a skeleton into the scene; a tap
+   * shorter than MIN_SHAPE_SPAN is a stray and is dropped. Release selects
+   * the new mark so the trash appears. The tool stays sticky.
    *
-   * So: a drag draws a shape, a tap does nothing. Whatever the gesture leaves
-   * behind is selected on release, which is what puts the trash over it.
-   *
-   * The work is deferred a frame because Excalidraw finishes its own pointerup
-   * first — reading the scene synchronously here sees the state before the
-   * element lands.
+   * Coach diagrams (`lcVizId`) and page frames stay unselectable.
    */
   useEffect(() => {
     if (!interactive) return;
     const root = boardRef.current;
     if (!root) return;
 
-    /** Shorter than this, in scene units, and the "arrow" was a stray tap. */
-    const MIN_SHAPE_SPAN = 4;
+    const chrome =
+      ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select";
 
-    let idsAtDown: Set<string> | null = null;
+    type DrawDrag = {
+      kind: "draw";
+      type: "rectangle" | "ellipse" | "diamond" | "line" | "arrow";
+      pointerId: number;
+      x0: number;
+      y0: number;
+      x1: number;
+      y1: number;
+    };
+    type MoveDrag = {
+      kind: "move";
+      pointerId: number;
+      lastX: number;
+      lastY: number;
+      ids: Set<string>;
+    };
+    let drag: DrawDrag | MoveDrag | null = null;
 
-    const shapeToolUp = () =>
-      activeToolRef.current === "arrow" ||
-      activeToolRef.current === "rectangle" ||
-      activeToolRef.current === "ellipse";
-
-    const onPointerDown = () => {
-      const api = apiRef.current;
-      if (!api || !shapeToolUp()) {
-        idsAtDown = null;
+    const paintDraft = (d: DrawDrag) => {
+      const skeleton = skeletonFromDrag(d.type, d.x0, d.y0, d.x1, d.y1, {
+        stroke: inkColorRef.current,
+        fill: "transparent",
+        width: strokeWidthRef.current,
+      });
+      const [el] = convertToExcalidrawElements([skeleton]) as PaintSceneElement[];
+      if (!el) {
+        shapeDraftRef.current = null;
         return;
       }
-      idsAtDown = new Set(
-        (api.getSceneElements() as Array<{ id: string; isDeleted?: boolean }>)
-          .filter((el) => !el.isDeleted)
-          .map((el) => el.id),
-      );
+      shapeDraftRef.current = { ...el, id: "lc-shape-draft" };
+      sceneOverlayRef.current?.redraw();
     };
 
-    const settle = () => {
+    const clearDraft = () => {
+      if (!shapeDraftRef.current) return;
+      shapeDraftRef.current = null;
+      sceneOverlayRef.current?.redraw();
+    };
+
+    const replaceByIds = (
+      ids: Set<string>,
+      mapEl: (el: PaintSceneElement) => PaintSceneElement,
+      commit: boolean,
+    ) => {
       const api = apiRef.current;
-      const before = idsAtDown;
-      idsAtDown = null;
-      if (!api || !before || !shapeToolUp()) return;
-
-      const state = api.getAppState() as {
-        multiElement?: { id?: string } | null;
-        editingLinearElement?: { elementId?: string } | null;
-      };
-      const openId =
-        state.multiElement?.id ?? state.editingLinearElement?.elementId ?? null;
-
-      const live = api.getSceneElements() as Array<{
-        id: string;
-        type?: string;
-        elbowed?: boolean;
-        width?: number;
-        height?: number;
-        points?: readonly (readonly [number, number])[];
-        isDeleted?: boolean;
-        [key: string]: unknown;
-      }>;
-
-      const fresh = live.filter((el) => !el.isDeleted && !before.has(el.id));
-      if (fresh.length === 0 && !openId) return;
-
-      // A shape with no extent is a tap, not a drawing. Excalidraw keeps it as
-      // the seed of a multi-point line; we throw it away instead.
-      const spanOf = (el: (typeof live)[number]) => {
-        const points = el.points;
-        if (points && points.length > 0) {
-          let span = 0;
-          for (const [px, py] of points) span = Math.max(span, Math.hypot(px, py));
-          return span;
-        }
-        return Math.hypot(el.width ?? 0, el.height ?? 0);
-      };
-
-      const strays = new Set(
-        fresh.filter((el) => spanOf(el) < MIN_SHAPE_SPAN).map((el) => el.id),
-      );
-      const kept = fresh.filter((el) => !strays.has(el.id));
-
-      const selected: Record<string, true> = {};
-      for (const el of kept) selected[el.id] = true;
-
-      const tool = activeToolRef.current;
+      if (!api) return;
+      const live = api.getSceneElements() as PaintSceneElement[];
       api.updateScene({
-        elements: strays.size
-          ? live.map((el) => (strays.has(el.id) ? { ...el, isDeleted: true } : el))
-          : live,
+        elements: live.map((el) => (el.id && ids.has(el.id) ? mapEl(el) : el)) as unknown[],
+        captureUpdate: commit ? CaptureUpdateAction.IMMEDIATELY : CaptureUpdateAction.NEVER,
+      });
+      sceneOverlayRef.current?.redraw();
+      shapeSelectRef.current?.redraw();
+      syncStampTrashRef.current();
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (!annotateCodeRef.current) return;
+      if (event.button !== 0 && event.pointerType === "mouse") return;
+      const tool = activeToolRef.current;
+      if (tool === "text" || tool === "hand" || tool === "freedraw" || tool === "highlighter" || tool === "eraser") {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest(chrome)) return;
+      if (!target.closest(".lc-board")) return;
+
+      const api = apiRef.current;
+      if (!api) return;
+      const scene = clientToScene(event.clientX, event.clientY);
+
+      if (isShapeDrawTool(tool)) {
+        api.updateScene({
+          appState: {
+            selectedElementIds: {},
+            selectedGroupIds: {},
+            selectedLinearElement: null,
+            editingLinearElement: null,
+          },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        drag = {
+          kind: "draw",
+          type: tool,
+          pointerId: event.pointerId,
+          x0: scene.x,
+          y0: scene.y,
+          x1: scene.x,
+          y1: scene.y,
+        };
+        paintDraft(drag);
+        try {
+          root.setPointerCapture(event.pointerId);
+        } catch {
+          /* ignore */
+        }
+        event.stopPropagation();
+        return;
+      }
+
+      if (tool !== "selection") return;
+
+      const live = api.getSceneElements() as PaintSceneElement[];
+      const hit = hitTestScene(live, scene.x, scene.y);
+      if (hit?.id && isSelectableSceneElement(hit)) {
+        const members = expandStampGroup(live, [hit]);
+        const selected: Record<string, true> = {};
+        const ids = new Set<string>();
+        for (const el of members) {
+          if (!el.id) continue;
+          selected[el.id] = true;
+          ids.add(el.id);
+        }
+        api.updateScene({
+          appState: {
+            selectedElementIds: selected,
+            selectedGroupIds: {},
+            selectedLinearElement:
+              members.length === 1 && isLinearElementType(members[0]?.type)
+                ? linearEditorState({ id: members[0]!.id!, elbowed: false })
+                : null,
+          },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+        drag = { kind: "move", pointerId: event.pointerId, lastX: scene.x, lastY: scene.y, ids };
+        shapeSelectRef.current?.redraw();
+        syncStampTrashRef.current();
+        try {
+          root.setPointerCapture(event.pointerId);
+        } catch {
+          /* ignore */
+        }
+        event.stopPropagation();
+        return;
+      }
+
+      api.updateScene({
         appState: {
-          // Closing the polyline is the whole point — these two are what "stuck
-          // in the arrow" actually was.
-          multiElement: null,
-          editingLinearElement: null,
-          selectedElementIds: selected,
+          selectedElementIds: {},
           selectedGroupIds: {},
-          selectedLinearElement:
-            kept.length === 1 && isLinearElementType(kept[0]?.type)
-              ? linearEditorState({
-                  id: kept[0]!.id,
-                  elbowed: Boolean(kept[0]!.elbowed),
-                })
-              : null,
+          selectedLinearElement: null,
+          editingLinearElement: null,
         },
         captureUpdate: CaptureUpdateAction.NEVER,
       });
-      /*
-       * Selecting the finished shape is what makes the trash appear, but
-       * Excalidraw treats that selection as a reason to drop back to the
-       * selection tool — undoing the `locked` we set when the tool was armed.
-       * Re-assert the shape tool so a second rectangle is one gesture, not
-       * three. The next drag clears the selection the way Excalidraw always
-       * does when a locked shape tool starts a new mark.
-       */
-      if (tool === "arrow" || tool === "rectangle" || tool === "ellipse") {
-        api.setActiveTool({ type: tool, locked: true });
-      }
+      shapeSelectRef.current?.redraw();
+      syncStampTrashRef.current();
     };
 
-    const onPointerUp = () => {
-      if (!idsAtDown) return;
-      requestAnimationFrame(settle);
+    const onPointerMove = (event: PointerEvent) => {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const scene = clientToScene(event.clientX, event.clientY);
+      if (drag.kind === "draw") {
+        drag.x1 = scene.x;
+        drag.y1 = scene.y;
+        paintDraft(drag);
+        return;
+      }
+      const dx = scene.x - drag.lastX;
+      const dy = scene.y - drag.lastY;
+      drag.lastX = scene.x;
+      drag.lastY = scene.y;
+      if (dx === 0 && dy === 0) return;
+      replaceByIds(drag.ids, (el) => moveElement(el, dx, dy), false);
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const finished = drag;
+      drag = null;
+      if (finished.kind === "draw") {
+        clearDraft();
+        if (shapeSpan(finished.x0, finished.y0, finished.x1, finished.y1) < MIN_SHAPE_SPAN) {
+          return;
+        }
+        const api = apiRef.current;
+        if (!api) return;
+        const skeleton = skeletonFromDrag(finished.type, finished.x0, finished.y0, finished.x1, finished.y1, {
+          stroke: inkColorRef.current,
+          fill: "transparent",
+          width: strokeWidthRef.current,
+        });
+        const created = convertToExcalidrawElements([skeleton]) as PaintSceneElement[];
+        const id = created[0]?.id;
+        if (!id) return;
+        api.updateScene({
+          elements: [...(api.getSceneElements() as unknown[]), ...created],
+          appState: {
+            selectedElementIds: { [id]: true },
+            selectedGroupIds: {},
+            selectedLinearElement: isLinearElementType(finished.type)
+              ? linearEditorState({ id, elbowed: false })
+              : null,
+            multiElement: null,
+            editingLinearElement: null,
+          },
+          captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+        });
+        api.setActiveTool({ type: finished.type, locked: true });
+        sceneOverlayRef.current?.redraw();
+        shapeSelectRef.current?.redraw();
+        syncStampTrashRef.current();
+        return;
+      }
+      replaceByIds(finished.ids, (el) => el, true);
     };
 
     root.addEventListener("pointerdown", onPointerDown);
+    root.addEventListener("pointermove", onPointerMove);
     root.addEventListener("pointerup", onPointerUp);
     root.addEventListener("pointercancel", onPointerUp);
     return () => {
       root.removeEventListener("pointerdown", onPointerDown);
+      root.removeEventListener("pointermove", onPointerMove);
       root.removeEventListener("pointerup", onPointerUp);
       root.removeEventListener("pointercancel", onPointerUp);
+      clearDraft();
     };
-  }, [interactive]);
+  }, [clientToScene, interactive]);
 
   /*
    * Take the screen edges back from Android while writing.
@@ -5120,7 +5241,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (
         target instanceof Element &&
         target.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select",
         )
       ) {
         return;
@@ -5410,7 +5531,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!(target instanceof Element)) return;
       if (
         target.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay",
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select",
         )
       ) {
         return;
@@ -7704,6 +7825,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!api) {
       stampTrashPosRef.current = null;
       setStampTrash((current) => (current ? null : current));
+      shapeSelectRef.current?.redraw();
       return;
     }
     const state = api.getAppState() as {
@@ -7723,6 +7845,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const hide = () => {
       stampTrashPosRef.current = null;
       setStampTrash((current) => (current ? null : current));
+      shapeSelectRef.current?.redraw();
     };
     if (selectedIds.size === 0) {
       hide();
@@ -7788,6 +7911,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       return { ids };
     });
+    shapeSelectRef.current?.redraw();
   }, []);
   syncStampTrashRef.current = syncStampTrash;
 
@@ -7868,6 +7992,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         return;
       }
       sceneOverlayRef.current?.redraw();
+      shapeSelectRef.current?.redraw();
 
       /*
        * Page-tall frames + selection ants = scroll death.
@@ -8164,6 +8289,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         applyVisualScrollNowRef.current(scrollX, scrollY);
       }
       if (!liveCameraRef.current?.live) sceneOverlayRef.current?.redraw();
+      if (!liveCameraRef.current?.live) shapeSelectRef.current?.redraw();
       if (!liveCameraRef.current?.live) scheduleSlotReports();
       if (!fittingCameraRef.current && !clampingScrollRef.current) {
         userAdjustedCameraRef.current = true;
@@ -9089,6 +9215,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         interactive && !annotateCode && "lc-board-reading",
         interactive && annotateCode && "lc-board-annotating",
         interactive && annotateCode && inkToolActive && "lc-board-ink-lab",
+        interactive && annotateCode && isShapeDrawTool(activeTool) && "lc-board-shape-tool",
         transparentCanvas && "lc-board-paper",
         docPaper && "lc-board-doc-paper",
         // Highlighting / text-mark tools hand the surface back to the document
@@ -9853,7 +9980,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       />
       <SceneOverlay
         ref={sceneOverlayRef}
-        getElements={() => apiRef.current?.getSceneElements() ?? []}
+        getElements={() => {
+          const els = [...(apiRef.current?.getSceneElements() ?? [])];
+          if (shapeDraftRef.current) els.push(shapeDraftRef.current);
+          return els;
+        }}
         getFiles={() =>
           (apiRef.current?.getFiles() ?? {}) as Record<
             string,
@@ -9862,6 +9993,86 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
         getViewport={getViewport}
       />
+      {interactive && (
+        <SceneSelectionOverlay
+          ref={shapeSelectRef}
+          getMembers={() => {
+            const api = apiRef.current;
+            if (!api) return [];
+            const state = api.getAppState() as {
+              selectedElementIds?: Record<string, boolean>;
+            };
+            const ids = new Set(
+              Object.entries(state.selectedElementIds ?? {})
+                .filter(([, on]) => on)
+                .map(([id]) => id),
+            );
+            if (ids.size === 0) return [];
+            const els = api.getSceneElements() as PaintSceneElement[];
+            const selected = els.filter(
+              (el) => el.id && ids.has(el.id) && isSelectableSceneElement(el),
+            );
+            return expandStampGroup(els, selected);
+          }}
+          getViewport={getViewport}
+          clientToScene={(clientX, clientY) => {
+            const scene = clientToScene(clientX, clientY);
+            return { x: scene.x, y: scene.y };
+          }}
+          onChange={(next, commit) => {
+            const api = apiRef.current;
+            if (!api) return;
+            const byId = new Map<string, PaintSceneElement>();
+            for (const el of next) {
+              if (el.id) byId.set(el.id, el);
+            }
+            if (byId.size === 0) return;
+            const live = api.getSceneElements() as PaintSceneElement[];
+            api.updateScene({
+              elements: live.map((el) =>
+                el.id && byId.has(el.id) ? byId.get(el.id)! : el,
+              ) as unknown[],
+              captureUpdate: commit
+                ? CaptureUpdateAction.IMMEDIATELY
+                : CaptureUpdateAction.NEVER,
+            });
+            sceneOverlayRef.current?.redraw();
+            shapeSelectRef.current?.redraw();
+            syncStampTrashRef.current();
+          }}
+          onFlip={(axis) => {
+            const api = apiRef.current;
+            if (!api) return;
+            const state = api.getAppState() as {
+              selectedElementIds?: Record<string, boolean>;
+            };
+            const ids = new Set(
+              Object.entries(state.selectedElementIds ?? {})
+                .filter(([, on]) => on)
+                .map(([id]) => id),
+            );
+            const els = api.getSceneElements() as PaintSceneElement[];
+            const selected = els.filter(
+              (el) => el.id && ids.has(el.id) && isSelectableSceneElement(el),
+            );
+            const members = expandStampGroup(els, selected).map((el) =>
+              flipElement(el, axis),
+            );
+            const byId = new Map(
+              members.filter((el) => el.id).map((el) => [el.id!, el]),
+            );
+            api.updateScene({
+              elements: els.map((el) =>
+                el.id && byId.has(el.id) ? byId.get(el.id)! : el,
+              ) as unknown[],
+              captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+            });
+            sceneOverlayRef.current?.redraw();
+            shapeSelectRef.current?.redraw();
+            syncStampTrashRef.current();
+          }}
+        />
+      )}
       {interactive && activeTool === "text" && <TextPlaceGhost ref={textPlaceGhostRef} />}
       {interactive && stampTrash && (
         <button
