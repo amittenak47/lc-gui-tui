@@ -1,8 +1,8 @@
 /**
  * Transform chrome for selected scene primitives.
  *
- * Corner grips scale. One morphing dock holds rotate / flip / delete so the
- * actions sit together instead of as four floating pills.
+ * Corner and edge grips scale. One morphing dock holds rotate / flip / delete
+ * so the actions sit together instead of as four floating pills.
  */
 
 import {
@@ -26,12 +26,14 @@ import {
   rotateDeltaFromDrag,
   rotateAbout,
   scaleAbout,
+  scaleElement,
   sceneSelectionBounds,
   setLinearPoint,
-  snapAngle,
   type ScaleHandle,
   type SceneBounds,
 } from "./shapeGesture";
+
+const SCALE_HANDLES: ScaleHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
 export interface SceneSelectionOverlayHandle {
   redraw(): void;
@@ -52,8 +54,10 @@ interface OverlayView {
   top: number;
   width: number;
   height: number;
+  angle: number;
   cx: number;
-  cy: number;
+  dockY: number;
+  dockBelow: number;
   dockTop: boolean;
   linear: Array<{ index: number; left: number; top: number }>;
   mids: Array<{ after: number; left: number; top: number }>;
@@ -69,12 +73,15 @@ function cssPoint(x: number, y: number, view: ViewportTransform): { left: number
 function buildView(members: PaintSceneElement[], view: ViewportTransform): OverlayView | null {
   const bounds = sceneSelectionBounds(members);
   if (!bounds) return null;
-  const nw = cssPoint(bounds.minX, bounds.minY, view);
-  const se = cssPoint(bounds.maxX, bounds.maxY, view);
-  const left = nw.left;
-  const top = nw.top;
-  const width = Math.max(8, se.left - nw.left);
-  const height = Math.max(8, se.top - nw.top);
+  const aabbNw = cssPoint(bounds.minX, bounds.minY, view);
+  const aabbSe = cssPoint(bounds.maxX, bounds.maxY, view);
+  const aabbW = Math.max(8, aabbSe.left - aabbNw.left);
+  const aabbH = Math.max(8, aabbSe.top - aabbNw.top);
+  let left = aabbNw.left;
+  let top = aabbNw.top;
+  let width = aabbW;
+  let height = aabbH;
+  let angle = 0;
   const linear: OverlayView["linear"] = [];
   const mids: OverlayView["mids"] = [];
   if (members.length === 1) {
@@ -91,6 +98,13 @@ function buildView(members: PaintSceneElement[], view: ViewportTransform): Overl
         const p = cssPoint(el.x + (a[0] + b[0]) / 2, el.y + (a[1] + b[1]) / 2, view);
         mids.push({ after: i, left: p.left, top: p.top });
       }
+    } else {
+      const origin = cssPoint(el.x, el.y, view);
+      left = origin.left;
+      top = origin.top;
+      width = Math.max(8, Math.abs(el.width ?? 0) * view.zoom);
+      height = Math.max(8, Math.abs(el.height ?? 0) * view.zoom);
+      angle = el.angle ?? 0;
     }
   }
   return {
@@ -98,85 +112,62 @@ function buildView(members: PaintSceneElement[], view: ViewportTransform): Overl
     top,
     width,
     height,
-    cx: left + width / 2,
-    cy: top + height / 2,
-    dockTop: top >= 56,
+    angle,
+    cx: aabbNw.left + aabbW / 2,
+    dockY: aabbNw.top,
+    dockBelow: aabbNw.top + aabbH,
+    dockTop: aabbNw.top >= 56,
     linear,
     mids,
   };
 }
 
+function iconProps() {
+  return {
+    viewBox: "0 0 24 24",
+    width: 18,
+    height: 18,
+    fill: "none" as const,
+    stroke: "currentColor",
+    strokeWidth: 2.25,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true as const,
+  };
+}
+
 function RotateIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M4 12a8 8 0 0 1 13.7-5.6L20 8"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M20 3v5h-5"
-      />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        d="M20 12a8 8 0 1 1-3-6.3"
-      />
+    <svg {...iconProps()}>
+      <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8" />
+      <path d="M20 3v5h-5" />
+      <path d="M20 12a8 8 0 1 1-3-6.3" />
     </svg>
   );
 }
 
 function FlipHIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
-      <path fill="none" stroke="currentColor" strokeWidth="1.8" d="M12 3v18" />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-        d="M10 8 5 12l5 4M14 8l5 4-5 4"
-      />
+    <svg {...iconProps()}>
+      <path d="M12 3v18" />
+      <path d="M10 8 5 12l5 4M14 8l5 4-5 4" />
     </svg>
   );
 }
 
 function FlipVIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
-      <path fill="none" stroke="currentColor" strokeWidth="1.8" d="M3 12h18" />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-        d="M8 10 12 5l4 5M8 14l4 5 4-5"
-      />
+    <svg {...iconProps()}>
+      <path d="M3 12h18" />
+      <path d="M8 10 12 5l4 5M8 14l4 5 4-5" />
     </svg>
   );
 }
 
 function TrashIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"
-      />
+    <svg {...iconProps()}>
+      <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" />
     </svg>
   );
 }
@@ -292,6 +283,10 @@ export const SceneSelectionOverlay = forwardRef<
     event.stopPropagation();
     const scene = sceneFromEvent(event);
     if (drag.kind === "scale") {
+      if (drag.origin.length === 1) {
+        onChangeRef.current([scaleElement(drag.origin[0]!, drag.handle, scene.x, scene.y)], false);
+        return;
+      }
       const to = resizeBounds(drag.from, drag.handle, scene.x, scene.y);
       onChangeRef.current(
         drag.origin.map((el) => scaleAbout(el, drag.from, to)),
@@ -324,10 +319,10 @@ export const SceneSelectionOverlay = forwardRef<
     event.stopPropagation();
     dragRef.current = null;
     if (drag.kind === "rotate") {
-      const snapped = snapAngle(drag.accumulated);
+      const live = magnetOrthogonal(drag.accumulated);
       setSpin(null);
       onChangeRef.current(
-        drag.origin.map((el) => rotateAbout(el, drag.cx, drag.cy, snapped)),
+        drag.origin.map((el) => rotateAbout(el, drag.cx, drag.cy, live)),
         true,
       );
       return;
@@ -360,29 +355,35 @@ export const SceneSelectionOverlay = forwardRef<
         <>
           <div
             className="lc-scene-select-box"
-            style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
-          />
-          {(["nw", "ne", "se", "sw"] as ScaleHandle[]).map((handle) => (
-            <button
-              key={handle}
-              type="button"
-              className={`lc-scene-select-handle lc-scene-select-handle-${handle}`}
-              style={{
-                left: handle === "nw" || handle === "sw" ? box.left : box.left + box.width,
-                top: handle === "nw" || handle === "ne" ? box.top : box.top + box.height,
-              }}
-              aria-label={`Scale ${handle}`}
-              onPointerDown={onScaleDown(handle)}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              onPointerCancel={onPointerUp}
-            />
-          ))}
+            style={{
+              left: box.left,
+              top: box.top,
+              width: box.width,
+              height: box.height,
+              transform: box.angle ? `rotate(${box.angle}rad)` : undefined,
+            }}
+          >
+            {SCALE_HANDLES.filter((handle) => {
+              if (box.linear.length === 0) return true;
+              return handle === "nw" || handle === "ne" || handle === "se" || handle === "sw";
+            }).map((handle) => (
+              <button
+                key={handle}
+                type="button"
+                className={`lc-scene-select-handle lc-scene-select-handle-${handle}`}
+                aria-label={`Scale ${handle}`}
+                onPointerDown={onScaleDown(handle)}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerUp}
+              />
+            ))}
+          </div>
           <div
             className={box.dockTop ? "lc-scene-select-dock is-above" : "lc-scene-select-dock is-below"}
             style={{
               left: box.cx,
-              top: box.dockTop ? box.top : box.top + box.height,
+              top: box.dockTop ? box.dockY : box.dockBelow,
             }}
           >
             <MorphBar active="actions" axis="width" className="lc-scene-select-menu">
@@ -391,7 +392,7 @@ export const SceneSelectionOverlay = forwardRef<
                   type="button"
                   className={spin != null ? "lc-scene-select-spinning" : undefined}
                   aria-label="Rotate"
-                  title="Rotate — snaps to 90°"
+                  title="Rotate — holds square at 90°"
                   onPointerDown={onRotateDown}
                   onPointerMove={onPointerMove}
                   onPointerUp={onPointerUp}
