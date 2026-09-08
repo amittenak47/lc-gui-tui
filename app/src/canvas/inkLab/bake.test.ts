@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { expandInkTurns, type ScenePoint } from "../rasterInk";
 import { smoothInkPoints } from "../inkSmoothing";
 import { bakeCatmull, bakeSpine, reshapeLiveSpine, reshapeSpine } from "./bake";
+import { emptyAabb, expandAabb } from "./instance";
 
 function line(): ScenePoint[] {
   return [
@@ -89,8 +90,16 @@ describe("lift bake", () => {
     expect(frozen).toBeGreaterThan(0);
     expect(drift).toBe(0);
     const last = reshapeLiveSpine(spine, 0.6, cache, rawScene);
+    expect(last.from).toBeGreaterThan(0);
     expect(last.points[0]!.x).toBeCloseTo(0);
     expect(last.points[last.points.length - 1]!.x).toBeCloseTo(spine[spine.length - 1]!.x);
     expect(last.points[0]!.slow).toBeCloseTo(0.5);
+    const tail = emptyAabb();
+    const full = emptyAabb();
+    for (const p of last.points) expandAabb(full, p);
+    for (let i = last.from; i < last.points.length; i++) expandAabb(tail, last.points[i]!);
+    const tailArea = (tail.maxX - tail.minX) * (tail.maxY - tail.minY);
+    const fullArea = (full.maxX - full.minX) * (full.maxY - full.minY);
+    expect(tailArea).toBeLessThan(fullArea * 0.5);
   });
 });

@@ -92,9 +92,18 @@ export type SdfRenderer = {
   canvas: HTMLCanvasElement;
   resize(w: number, h: number): void;
   upload(data: Float32Array, count: number): void;
+  /**
+   * Write hops `[from, count)` into the instance buffer.
+   * Returns true when the buffer grew and prefix GPU data was discarded.
+   */
+  uploadTail(data: Float32Array, from: number, count: number): boolean;
   /** Draw one new capsule without clearing. Live path only. */
   append(data: Float32Array, index: number, aabb: StrokeAabb): void;
   draw(aabb: StrokeAabb): void;
+  /** Scissor-clear color+depth in `aabb`. Frozen prefix outside the box stays. */
+  erase(aabb: StrokeAabb): void;
+  /** Draw instances from `from` scissored to `aabb`. Does not clear. */
+  redraw(aabb: StrokeAabb, from?: number): void;
   clear(): void;
   isLost(): boolean;
   destroy(): void;
@@ -225,12 +234,17 @@ export function tryCreateSdfRenderer(
     const y0 = Math.max(0, Math.floor(aabb.minY) - pad);
     const x1 = Math.min(viewW, Math.ceil(aabb.maxX) + pad);
     const y1 = Math.min(viewH, Math.ceil(aabb.maxY) + pad);
-    if (x1 > x0 && y1 > y0 && x1 - x0 < viewW && y1 - y0 < viewH) {
-      gl!.enable(gl.SCISSOR_TEST);
-      gl!.scissor(x0, viewH - y1, x1 - x0, y1 - y0);
-    } else {
+    if (x1 <= x0 || y1 <= y0) {
       gl!.disable(gl.SCISSOR_TEST);
+      return;
     }
+    const full = x0 <= 0 && y0 <= 0 && x1 >= viewW && y1 >= viewH;
+    if (full) {
+      gl!.disable(gl.SCISSOR_TEST);
+      return;
+    }
+    gl!.enable(gl.SCISSOR_TEST);
+    gl!.scissor(x0, viewH - y1, x1 - x0, y1 - y0);
   };
 
   const resize = (nw: number, nh: number) => {
@@ -256,6 +270,20 @@ export function tryCreateSdfRenderer(
       if (count > 0) {
         gl!.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, count * INSTANCE_FLOATS));
       }
+    },
+    uploadTail(data, from, n) {
+      count = Math.max(0, n);
+      const grew = growInst(Math.max(count, 1));
+      const start = grew || from <= 0 ? 0 : from;
+      gl!.bindBuffer(gl.ARRAY_BUFFER, inst);
+      if (count > start) {
+        gl!.bufferSubData(
+          gl.ARRAY_BUFFER,
+          start * stride,
+          data.subarray(start * INSTANCE_FLOATS, count * INSTANCE_FLOATS),
+        );
+      }
+      return grew;
     },
     append(data, index, aabb) {
       const grew = growInst(index + 1);
@@ -300,6 +328,26 @@ export function tryCreateSdfRenderer(
       bindInstAt(0);
       scissorAabb(aabb);
       gl!.drawArraysInstanced(gl.TRIANGLES, 0, 6, count);
+      gl!.disable(gl.SCISSOR_TEST);
+    },
+    erase(aabb) {
+      gl!.viewport(0, 0, viewW, viewH);
+      scissorAabb(aabb);
+      gl!.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl!.disable(gl.SCISSOR_TEST);
+    },
+    redraw(aabb, from = 0) {
+      const start = Math.max(0, Math.min(from, count));
+      const n = count - start;
+      if (n < 1) return;
+      gl!.viewport(0, 0, viewW, viewH);
+      gl!.useProgram(prog);
+      gl!.uniform2f(uView, viewW, viewH);
+      gl!.bindVertexArray(vao);
+      bindInstAt(start);
+      scissorAabb(aabb);
+      gl!.drawArraysInstanced(gl.TRIANGLES, 0, 6, n);
+      bindInstAt(0);
       gl!.disable(gl.SCISSOR_TEST);
     },
     isLost() {

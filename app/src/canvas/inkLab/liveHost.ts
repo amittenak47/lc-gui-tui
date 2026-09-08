@@ -6,7 +6,8 @@
  * blit to the dirty AABB; do not shrink the overlay canvas on pointer down.
  * Plan E keeps the rAF pump armed while the nib is down — pointermove only
  * ingests. Empty vsyncs skip GPU present; 90Hz+ caps composites at 60fps
- * unless Match display is on.
+ * unless Match display is on. While Writing only erases and blits the
+ * live-smooth tail; frozen ink stays in the SDF and on the host.
  * Scheduling paint from move made the HUD rAF track the tablet's coalesced
  * move rate instead of the display.
  */
