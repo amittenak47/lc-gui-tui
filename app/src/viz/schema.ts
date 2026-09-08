@@ -253,7 +253,7 @@ export function parentChildEdges(entries: unknown[], count: number): Array<[numb
 /** A nested panel inside `composite`. Depth-1 only — nested composites are skipped. */
 export function compositePanel(
   value: unknown,
-): { viz: VizKind; title: string; frame: VizFrame } | null {
+): { viz: Exclude<VizKind, "composite">; title: string; frame: VizFrame } | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   const viz = record.viz ?? record.kind;

@@ -181,11 +181,8 @@ const REVIEW_DROPS_PHOTOS = "Review sends the board, not attachments";
  *
  * `problem` has a solution file, a test run and a review pipeline behind it, so
  * the full flag set means something. `pad` — scratchpad and the document pads —
- * has none of that: Draw has no region to draw into, Review has nothing staged
- * to review, Lazy has no `solution.py` to fill, and the analyse-on-send /
- * ambient cadence is a property of a problem attempt rather than of a page
- * being read. Rendering them disabled taught the writer nothing except that
- * five of the seven controls are dead, so on a pad they are not rendered.
+ * has no Review/Lazy pipeline and no analyse-on-send cadence, so those stay
+ * hidden. Draw is available: Ask can emit a viz program onto the open pad.
  * Scratchpad also drops Annotations (`allowAnnotations`): there is no custom
  * block select on a blank board.
  */
@@ -586,6 +583,12 @@ export function AgentSidePanel({
   const [reviewBoard, setReviewBoard] = useState(false);
   const [lazy, setLazy] = useState(false);
   const cycleBoard = useCallback(() => {
+    if (padSurface) {
+      setDraw((on) => !on);
+      setReviewBoard(false);
+      setLazy(false);
+      return;
+    }
     if (draw) {
       setDraw(false);
       setReviewBoard(true);
@@ -597,15 +600,19 @@ export function AgentSidePanel({
     } else {
       setDraw(true);
     }
-  }, [draw, reviewBoard, lazy]);
+  }, [draw, reviewBoard, lazy, padSurface]);
   const boardLabel = draw ? "Draw" : reviewBoard ? "Review" : lazy ? "Lazy" : "Board";
-  const boardTip = draw
-    ? "Draw — the agent sketches on the board. Hold to cycle."
-    : reviewBoard
-      ? "Review — send the board for a written review. Hold to cycle."
-      : lazy
-        ? "Lazy — fill the solution from the board. Hold to cycle."
-        : "Board modes off. Hold to cycle Draw, Review, Lazy.";
+  const boardTip = padSurface
+    ? draw
+      ? "Draw — the agent sketches on this pad. Hold to turn off."
+      : "Board off. Hold to ask the agent to draw on this pad."
+    : draw
+      ? "Draw — the agent sketches on the board. Hold to cycle."
+      : reviewBoard
+        ? "Review — send the board for a written review. Hold to cycle."
+        : lazy
+          ? "Lazy — fill the solution from the board. Hold to cycle."
+          : "Board modes off. Hold to cycle Draw, Review, Lazy.";
   const [handwriting, setHandwriting] = useState(false);
   const [reasoning, setReasoning] = useState(loadAgentReasoningLevel);
   const [annotations, setAnnotations] = useState(false);
@@ -895,14 +902,15 @@ export function AgentSidePanel({
     return () => window.removeEventListener("resize", onResize);
   }, [mobile, open]);
 
-  // Ask-only workspaces clear the pipeline flags they cannot honour.
-  // Handwriting is not one of them on a pad — see `annotateUnavailable`.
+  // Ask-only workspaces clear pipeline flags they cannot honour. Pads keep Draw.
   useEffect(() => {
     if (!askOnly) return;
-    setDraw(false);
     setReviewBoard(false);
     setLazy(false);
-    if (!padSurface) setHandwriting(false);
+    if (!padSurface) {
+      setDraw(false);
+      setHandwriting(false);
+    }
   }, [askOnly, padSurface]);
 
   /*
@@ -2031,25 +2039,27 @@ export function AgentSidePanel({
               </Tip>
             </div>
             <div className="lc-agent-composer-actions">
-              {!padSurface && (
-                <Tip tip={boardTip} placement="top">
+              <Tip tip={boardTip} placement="top">
                 <HoldButton
                   label={boardLabel}
                   className={`lc-flag lc-agent-pipeline${
                     draw || reviewBoard || lazy ? " lc-flag-active" : ""
-                  }${flagUnavailable}`}
+                  }${askOnly && !padSurface ? flagUnavailable : ""}`}
                   pressed={draw || reviewBoard || lazy}
-                  disabled={busy || askOnly}
+                  disabled={busy || (askOnly && !padSurface)}
                   onConfirm={cycleBoard}
-                  ariaLabel="Board: hold to cycle Draw, Review, Lazy"
+                  ariaLabel={
+                    padSurface
+                      ? "Board: hold to toggle Draw"
+                      : "Board: hold to cycle Draw, Review, Lazy"
+                  }
                 >
                   <span className="lc-label-long">{boardLabel}</span>
                   <span className="lc-label-short" aria-hidden>
                     {boardLabel.match(/[A-Z]/)?.[0] ?? boardLabel[0]}
                   </span>
                 </HoldButton>
-                </Tip>
-              )}
+              </Tip>
               <Tip
                 tip={
                   reviewBoard

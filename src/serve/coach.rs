@@ -22,10 +22,10 @@ use crate::llm::coach::{
     ApproachCandidate, ApproachOutcome, ApproachPlan, ApproachTransition, BoardScaffold,
     BoardSnapshot, BridgeResponse, Claim, CoachContext, EventSink, LazyFillResponse,
     ReviewResponse, ASK_SYSTEM_PROMPT, BRIDGE_SYSTEM_PROMPT, LAZY_FILL_SYSTEM_PROMPT,
-    LAZY_HINT_SYSTEM_PROMPT, PLANNER_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
+    LAZY_HINT_SYSTEM_PROMPT, PAD_ASK_SYSTEM_PROMPT, PLANNER_SYSTEM_PROMPT, SCAFFOLD_SYSTEM_PROMPT,
 };
 use crate::llm::{make_provider_for_mode, ChatMessage, ChatRequest};
-use crate::llm::docs::{preset_system, run_document_ask, AskContext};
+use crate::llm::docs::{preset_system, run_document_ask, run_pad_ask, AskContext};
 use crate::llm::reasoning::ReasoningEffort;
 use crate::llm::helpers::clip;
 use crate::pad::AgentSurface;
@@ -624,6 +624,9 @@ pub struct AskRequest {
     /// `low` / `medium` / `high`. Absent with `reasoning: true` means on, no budget.
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// Student turned Draw on. Pad Ask should emit a diagram, not prose alone.
+    #[serde(default)]
+    pub draw: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -687,6 +690,8 @@ pub struct AskEnvelope {
     pub reasoning: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proposed_annotations: Vec<crate::llm::docs::ProposedAnnotation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub programs: Vec<crate::llm::VizProgram>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub process_events: Vec<ProcessEventDto>,
 }
@@ -767,6 +772,7 @@ pub async fn run_ask(
         .as_deref()
         .and_then(ReasoningEffort::parse);
     let want_reasoning = request.reasoning || effort.is_some();
+    let want_draw = request.draw;
     let local_pad = surface.is_pad();
     let dataset = if local_pad {
         None
@@ -813,11 +819,19 @@ pub async fn run_ask(
             "ask",
             if document_ask {
                 "answering from the document"
+            } else if local_pad {
+                "answering from the pad"
             } else {
                 "answering from the problem statement and your code"
             },
         );
         let mut prompt = build_ask_prompt(&meta, description.as_deref(), &question, &ctx);
+        if want_draw && local_pad {
+            prompt.push_str(
+                "\n\nThe student turned Draw on. Call `draw_structure` or `animate_trace`; \
+                 do not answer with prose alone.\n",
+            );
+        }
         if document_ask {
             let hash = document_hash.as_deref().expect("document_ask implies hash");
             let query = if highlight.trim().is_empty() {
@@ -862,7 +876,7 @@ pub async fn run_ask(
                 marks_prose,
                 retrieved,
             };
-            let (reply, proposed) = run_document_ask(
+            let outcome = run_document_ask(
                 provider.as_ref(),
                 &cfg,
                 preset_system(preset.as_deref()),
@@ -877,9 +891,32 @@ pub async fn run_ask(
             return Ok(AskEnvelope {
                 task_id: meta.task_id,
                 provider: provider.label(),
-                reply,
+                reply: outcome.reply,
                 reasoning: String::new(),
-                proposed_annotations: proposed,
+                proposed_annotations: outcome.proposed,
+                programs: outcome.programs,
+                process_events: Vec::new(),
+            });
+        }
+        if local_pad {
+            let outcome = run_pad_ask(
+                provider.as_ref(),
+                &cfg,
+                PAD_ASK_SYSTEM_PROMPT,
+                prompt,
+                images,
+                &events,
+                want_reasoning,
+                effort,
+            )?;
+            events.stage("done", "");
+            return Ok(AskEnvelope {
+                task_id: meta.task_id,
+                provider: provider.label(),
+                reply: outcome.reply,
+                reasoning: String::new(),
+                proposed_annotations: outcome.proposed,
+                programs: outcome.programs,
                 process_events: Vec::new(),
             });
         }
@@ -899,6 +936,7 @@ pub async fn run_ask(
             reply: reply.content.trim().to_string(),
             reasoning: String::new(),
             proposed_annotations: Vec::new(),
+            programs: Vec::new(),
             process_events: Vec::new(),
         })
     })
