@@ -66,4 +66,19 @@ describe("ink lab replay", () => {
     );
     expect(spine[0]!.rgb![0]).toBe(spine[1]!.rgb![0]);
   });
+
+  it("washes replay capsules from stored stylus pressure", () => {
+    const spine = labSpineFromDrawOp(
+      penOp({
+        color: "#1a1a1a",
+        pressureSensitive: true,
+        points: [
+          { x: 0, y: 0, pressure: 0.2, radius: 4 },
+          { x: 10, y: 0, pressure: 1, radius: 4 },
+        ],
+      }),
+    );
+    expect(spine[0]!.r).toBe(spine[1]!.r);
+    expect(spine[0]!.rgb![0]).toBeGreaterThan(spine[1]!.rgb![0] + 8);
+  });
 });

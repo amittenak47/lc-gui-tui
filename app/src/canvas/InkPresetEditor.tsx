@@ -1248,15 +1248,15 @@ function DrawKnobs({
           snap.pressureSensitive ? (
             <>
               Ink lab nib. Size is the capsule radius on the pad. Stylus
-              pressure tapers that radius — a light touch is thinner, a firm
-              press matches the slider. Straight lock draws a chord. Saved on
-              this device only.
+              pressure changes darkness, not width — a light touch is paler, a
+              firm press is solid. Straight lock draws a chord. Saved on this
+              device only.
             </>
           ) : (
             <>
               Ink lab nib and a straight-stroke lock. The starburst turns on
-              stylus pressure, which tapers capsule radius. Saved on this
-              device only.
+              stylus pressure: how hard you press then changes darkness, not
+              width. Saved on this device only.
             </>
           )
         ) : snap.pressureSensitive ? (

@@ -4,7 +4,7 @@
  */
 
 import { fillMiterStroke } from "./fallback";
-import { labDotWashRgb, labNibRadius } from "./style";
+import { labDepositAmt, labDotWashRgb, labMixDepositRgb, labNibRadius } from "./style";
 import type { SpineDot } from "./instance";
 import {
   dryWashRgb,
@@ -44,11 +44,24 @@ function fallbackSceneRadius(op: InkDrawOp, pressure: number): number {
 
 export function labSpineFromDrawOp(op: InkDrawOp): SpineDot[] {
   const fade = op.speedFade ?? 0;
-  return op.points.map((p) => {
-    const washed =
+  const depositPen = {
+    maxFullness: op.maxFullness,
+    pressureClip: op.pressureClip,
+    pressureSensitive: op.pressureSensitive,
+    boldness: op.boldness ?? 1,
+  };
+  let consumed = 0;
+  return op.points.map((p, i) => {
+    if (i > 0) {
+      const prev = op.points[i - 1]!;
+      const nib = Math.max(p.radius ?? prev.radius ?? 4, 1e-6);
+      consumed += Math.hypot(p.x - prev.x, p.y - prev.y) / nib;
+    }
+    let washed =
       p.slowness != null && fade > 1e-6
         ? labDotWashRgb(op.color, p.slowness, fade)
         : dryWashRgb(op.color, 1);
+    washed = labMixDepositRgb(washed, labDepositAmt(depositPen, p.pressure, consumed));
     return {
       x: p.x,
       y: p.y,

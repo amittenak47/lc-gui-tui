@@ -164,7 +164,7 @@ describe("ink lab style", () => {
     expect(pen(64).r).toBeGreaterThan(pen(32).r);
   });
 
-  it("pressure clip fattens a light press on the nib", () => {
+  it("pressure clip darkens a light press, not the nib width", () => {
     const base = {
       color: "#1a1a1a",
       baseWidth: 2,
@@ -179,8 +179,31 @@ describe("ink lab style", () => {
     };
     const clipped = labPenDot({ ...base, pressureClip: 0.3 }, 0, 0, 1, 0.3, 0, 0);
     const unclipped = labPenDot({ ...base, pressureClip: 1 }, 0, 0, 1, 0.3, 0, 0);
-    expect(clipped.r).toBeGreaterThan(unclipped.r);
+    expect(clipped.r).toBeCloseTo(unclipped.r, 5);
+    expect(clipped.rgb[0]).toBeLessThan(unclipped.rgb[0] - 8);
     expect(labPressureAmt({ ...base, pressureClip: 0.3 }, 0.3)).toBeCloseTo(1);
+  });
+
+  it("starburst maps stylus pressure onto dryness, not radius", () => {
+    const base = {
+      color: "#1a1a1a",
+      baseWidth: 8,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      speedInk: 0,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      boldness: 1,
+    };
+    const off = labPenDot({ ...base, pressureSensitive: false }, 0, 0, 1, 0.2, 0, 0);
+    const light = labPenDot({ ...base, pressureSensitive: true }, 0, 0, 1, 0.2, 0, 0);
+    const firm = labPenDot({ ...base, pressureSensitive: true }, 0, 0, 1, 1, 0, 0);
+    expect(light.r).toBeCloseTo(firm.r, 5);
+    expect(off.r).toBeCloseTo(firm.r, 5);
+    expect(light.rgb[0]).toBeGreaterThan(firm.rgb[0] + 8);
+    expect(firm.rgb[0]).toBeCloseTo(off.rgb[0], 0);
   });
 
   it("hold grow off stays nib-sized", () => {
