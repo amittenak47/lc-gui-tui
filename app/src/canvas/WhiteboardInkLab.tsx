@@ -45,6 +45,8 @@ import {
   highlighterDrawOp,
   inkBaseWidthForZoom,
   isHostBoundOp,
+  eraserCanvasRadius,
+  eraserSceneRadius,
   paintHostBoundOps,
   paintRasterInk,
   scenePointFromCanvasPixel,
@@ -126,6 +128,8 @@ export interface WhiteboardInkLabProps {
   onStylusAccessory?: (event: PointerEvent) => boolean;
   wheelHoldEnabled?: boolean;
   onWheelHold?: (clientX: number, clientY: number) => void;
+  /** Pixel rub vs drop whole strokes. Default matches the writer pref. */
+  partialErase?: boolean;
   perfOverlay?: boolean;
   perfBar?: boolean;
   /** Auto / 60 / 90 / 120 / 240 — HUD vsync and live present cap. */
@@ -295,6 +299,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       onStylusAccessory,
       wheelHoldEnabled = false,
       onWheelHold,
+      partialErase = true,
       perfOverlay = false,
       perfBar = false,
       displayHz = "auto",
@@ -315,6 +320,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const strokeHostRef = useRef<ScrollHostPaintState | null>(null);
     const strokeHostElRef = useRef<HTMLElement | null>(null);
     const highlightPtsRef = useRef<ScenePoint[] | null>(null);
+    const erasePtsRef = useRef<ScenePoint[] | null>(null);
     const rafRef = useRef<number | null>(null);
     const replayRafRef = useRef<number | null>(null);
     const replayGenRef = useRef(0);
@@ -336,6 +342,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
 
     const toolRef = useRef(tool);
     toolRef.current = tool;
+    const partialEraseRef = useRef(partialErase);
+    partialEraseRef.current = partialErase;
     const strokeWidthRef = useRef(strokeWidth);
     strokeWidthRef.current = strokeWidth;
     const inkColorRef = useRef(inkColor);
@@ -873,7 +881,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       const engine = createInkLabEngine();
       engineRef.current = engine;
       backendRef.current = engine.attach(canvas);
-      presentCommitted();
+      rebuildAndReplay();
       const wantMeter = () => perfOverlayRef.current || perfBarRef.current;
       if (wantMeter()) {
         loadBarRef.current?.show(loadMeterRef.current.peek(), {
@@ -1021,6 +1029,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           drawingRef.current = false;
           highlightPtsRef.current = null;
           pendingStampPatchRef.current = null;
+          erasePtsRef.current = null;
           strokeHostRef.current = null;
           strokeHostElRef.current = null;
           stopPaintPump();
@@ -1068,8 +1077,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
 
       const stampEraser = (event: PointerEvent) => {
         const s = sampleOf(canvas, event);
+        const { paintView } = readViews();
         const dpr = canvas.width / Math.max(1, canvas.clientWidth || 1);
-        const r = Math.max(6 * dpr, strokeWidthRef.current * 3 * dpr);
+        const r = eraserCanvasRadius(strokeWidthRef.current, paintView.zoom, dpr);
         engine.paintOntoSnap((ctx) => {
           ctx.save();
           ctx.globalCompositeOperation = "destination-out";
@@ -1080,6 +1090,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           ctx.restore();
         });
         engine.paint();
+        const live = erasePtsRef.current;
+        if (live) live.push(highlightPointOf(canvas, event, paintView));
       };
 
       const onPointerDown = (event: PointerEvent) => {
@@ -1130,6 +1142,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         }
         if (toolRef.current !== "pen") {
           engine.captureSnap();
+          pendingStampPatchRef.current = engine.copySnapPatch();
+          erasePtsRef.current = [];
           stampEraser(event);
           return;
         }
@@ -1203,7 +1217,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return;
         }
         if (toolRef.current !== "pen") {
-          stampEraser(event);
+          const coalesced = event.getCoalescedEvents?.();
+          const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
+          for (const item of batch) stampEraser(item);
           return;
         }
         const coalesced = event.getCoalescedEvents?.();
@@ -1288,7 +1304,46 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return;
         }
         if (toolRef.current !== "pen") {
-          engine.captureSnap();
+          const raw = erasePtsRef.current;
+          erasePtsRef.current = null;
+          const patch = pendingStampPatchRef.current;
+          pendingStampPatchRef.current = null;
+          if (raw && raw.length > 0) {
+            const op = bindInkOpToHost(
+              {
+                kind: "erase" as const,
+                radius: eraserSceneRadius(strokeWidthRef.current),
+                points: raw,
+              },
+              strokeHostRef.current,
+            );
+            if (!partialEraseRef.current) {
+              const kept = bookRef.current.strokeErase(op);
+              if (kept) {
+                rememberCommitPatch(null);
+                rebuildAndReplay();
+                onChangeRef.current?.();
+              } else if (patch) {
+                engine.restoreSnapPatch(patch);
+                engine.paint();
+              } else {
+                presentCommitted();
+              }
+            } else {
+              bookRef.current.commit(op);
+              overlayRedoRef.current = [];
+              if (isHostBoundOp(op) || !patch) {
+                rememberCommitPatch(null);
+                presentCommitted();
+              } else {
+                rememberCommitPatch(patch);
+              }
+              onChangeRef.current?.();
+            }
+          } else if (patch) {
+            engine.restoreSnapPatch(patch);
+            engine.paint();
+          }
           try {
             canvas.releasePointerCapture(event.pointerId);
           } catch {
@@ -1381,7 +1436,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         engine.destroy();
         engineRef.current = null;
       };
-    }, [captureStrokeHost, enabled, pinStrokeHostScroll, presentCommitted, readViews, stampOpOntoSnap]);
+    }, [captureStrokeHost, enabled, pinStrokeHostScroll, presentCommitted, readViews, rebuildAndReplay, stampOpOntoSnap]);
 
     /**
      * Nested scroll moves host-bound ink — remesh when any host scrolls.

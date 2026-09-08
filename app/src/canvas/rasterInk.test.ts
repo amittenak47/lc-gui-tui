@@ -4,6 +4,7 @@ import {
   applyInkOp,
   applyInkPoolingAtEnds,
   clampExportScale,
+  eraserCanvasRadius,
   eraserSceneRadius,
   eraserScreenRadius,
   exportScaleFrom,
@@ -118,6 +119,8 @@ describe("rasterInk sizing", () => {
     expect(eraserSceneRadius(2)).toBe(3.5);
     expect(eraserScreenRadius(2, 1)).toBe(3.5);
     expect(eraserScreenRadius(2, 0.5)).toBe(1.75);
+    expect(eraserCanvasRadius(2, 1, 2)).toBe(7);
+    expect(eraserCanvasRadius(2, 0.5, 2)).toBe(3.5);
   });
 
   it("keeps tip width fixed under stylus pressure (alpha only)", () => {

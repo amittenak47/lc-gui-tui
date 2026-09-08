@@ -207,13 +207,11 @@ import {
   isSubMarkDragLive,
 } from "./docSelectionGesture";
 import {
-  DOC_PAGE_SELECTOR,
   horizontalScrollHost,
   isInkPadTarget,
   restoreHostScrollIn,
   scrollHostAtPoint,
   scrollHostLookupFromSlot,
-  scrollHostsIn,
   slotCssPerScene,
   snapshotHostScrollIn,
   type HostScrollSnapshot,
@@ -1357,7 +1355,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [, setInkGrain] = useState(() => loadInkGrain());
   const [inkSpeedFade, setInkSpeedFade] = useState(() => loadInkSpeedFade());
   const [, setInkBoldness] = useState(() => loadInkBoldness());
-  const [, setEraserPartial] = useState(() => loadEraserPartial());
+  const [eraserPartial, setEraserPartial] = useState(() => loadEraserPartial());
   const [perfOverlay, setPerfOverlay] = useState(() => loadInkPerfOverlay());
   const [perfBar, setPerfBar] = useState(() => loadInkPerfBar());
   const [displayHz, setDisplayHz] = useState(() => loadInkDisplayHz());
@@ -9446,6 +9444,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         speedBlotBlend={inkSpeedBlotBlend}
         speedFade={inkSpeedFade}
         pressureSensitive={pressureSensitive}
+        partialErase={eraserPartial}
         getViewport={getViewport}
         clip={inkClip}
         onChange={handleInkChange}
