@@ -3332,6 +3332,104 @@ body[data-lc-sash-drag="horizontal"] {
   pointer-events: none;
 }
 
+.lc-scene-select {
+  position: absolute;
+  inset: 0;
+  z-index: 43;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.lc-scene-select-box {
+  position: absolute;
+  border: 1.5px solid color-mix(in srgb, var(--ink) 55%, transparent);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.lc-scene-select-handle,
+.lc-scene-select-rotate,
+.lc-scene-select-point,
+.lc-scene-select-mid,
+.lc-scene-select-flips button {
+  pointer-events: auto;
+  position: absolute;
+  border: 1px solid var(--chrome-edge);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 18%);
+  padding: 0;
+  touch-action: none;
+}
+
+.lc-scene-select-handle {
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  margin-top: -7px;
+  border-radius: 3px;
+  cursor: nwse-resize;
+}
+
+.lc-scene-select-handle-ne,
+.lc-scene-select-handle-sw {
+  cursor: nesw-resize;
+}
+
+.lc-scene-select-rotate {
+  width: 28px;
+  height: 28px;
+  margin-left: -14px;
+  margin-top: -40px;
+  border-radius: 50%;
+  cursor: grab;
+  font-size: 14px;
+  line-height: 26px;
+}
+
+.lc-scene-select-flips {
+  position: absolute;
+  display: flex;
+  gap: 6px;
+  margin-left: -32px;
+  margin-top: 10px;
+  pointer-events: none;
+}
+
+.lc-scene-select-flips button {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 26px;
+}
+
+.lc-scene-select-point {
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  margin-top: -8px;
+  border-radius: 50%;
+  background: var(--surface);
+  cursor: grab;
+}
+
+.lc-scene-select-mid {
+  width: 22px;
+  height: 22px;
+  margin-left: -11px;
+  margin-top: -11px;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 20px;
+  opacity: 0.85;
+}
+
+.lc-board-shape-tool {
+  cursor: crosshair;
+}
+
 .lc-board-ink-lab-host {
   position: absolute;
   inset: 0;
