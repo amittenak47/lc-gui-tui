@@ -5,7 +5,7 @@
 import type { Skeleton } from "../../templates/skeleton";
 import {
   CELL,
-  HEADER_H,
+  headerOffset,
   arrow,
   caption,
   cellBox,
@@ -23,7 +23,7 @@ const LINK = 34;
 export function renderLinkedList(ctx: RenderContext): Skeleton[] {
   const { frame, origin } = ctx;
   const out = header(ctx);
-  const top = origin.y + HEADER_H + 18;
+  const top = origin.y + headerOffset(ctx) + 18;
   const pointers = pointersByIndex(frame);
   const stride = NODE_W + LINK;
 

@@ -14,7 +14,7 @@ import type { Skeleton } from "../../templates/skeleton";
 import {
   CELL,
   CELL_GAP,
-  HEADER_H,
+  headerOffset,
   arrow,
   caption,
   cellBox,
@@ -60,7 +60,7 @@ interface TreeOptions {
 function renderTreeInner(ctx: RenderContext, options: TreeOptions): Skeleton[] {
   const { frame, origin } = ctx;
   const out = header(ctx);
-  const top = origin.y + HEADER_H;
+  const top = origin.y + headerOffset(ctx);
   const levels = frame.cells.length > 0 ? depthOf(frame.cells.length - 1) + 1 : 0;
   const width = Math.max(2 ** Math.max(levels - 1, 0) * (NODE + CELL_GAP), NODE * 4);
 

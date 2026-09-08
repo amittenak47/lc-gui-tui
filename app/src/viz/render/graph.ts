@@ -8,7 +8,7 @@
 
 import type { Skeleton } from "../../templates/skeleton";
 import {
-  HEADER_H,
+  headerOffset,
   arrow,
   caption,
   cellBox,
@@ -44,7 +44,7 @@ export function renderGraph(ctx: RenderContext): Skeleton[] {
   const radius = Math.max(MIN_RADIUS, count * RADIUS_PER_NODE);
   const centre = {
     x: origin.x + radius + NODE,
-    y: origin.y + HEADER_H + radius + NODE / 2,
+    y: origin.y + headerOffset(ctx) + radius + NODE / 2,
   };
 
   const labels = frame.cells.map(cellText);
@@ -93,7 +93,7 @@ export function renderGraph(ctx: RenderContext): Skeleton[] {
   });
 
   if (count === 0) {
-    out.push(caption(ctx, "empty", origin.x, origin.y + HEADER_H, "(no nodes)"));
+    out.push(caption(ctx, "empty", origin.x, origin.y + headerOffset(ctx), "(no nodes)"));
   }
   return [...out, ...footer(ctx, centre.y + radius + NODE / 2)];
 }
