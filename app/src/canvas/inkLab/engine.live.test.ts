@@ -74,6 +74,43 @@ describe("Ink lab live path", () => {
     engine.destroy();
   });
 
+  it("a speed-ink start borrows the hop heading, not a standstill disc", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const pen = {
+      color: "#1a1a1a",
+      baseWidth: 8,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 1,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      boldness: 1,
+      smoothing: 0,
+    };
+    const stroke = createInkLabEngine({ sdf: false });
+    stroke.attach(canvas);
+    stroke.setPen(pen);
+    stroke.down({ x: 40, y: 80, p: 0.5, t: 0 });
+    stroke.move([{ x: 120, y: 80, p: 0.5, t: 8 }]);
+    const hopped = stroke.up({ x: 140, y: 80, p: 0.5, t: 16 });
+    stroke.destroy();
+
+    const tap = createInkLabEngine({ sdf: false });
+    tap.attach(canvas);
+    tap.setPen(pen);
+    tap.down({ x: 40, y: 80, p: 0.5, t: 0 });
+    const tapped = tap.up({ x: 40.2, y: 80.1, p: 0.5, t: 8 });
+    tap.destroy();
+
+    const start = hopped.points[0]!.r;
+    const body = hopped.points[1]!.r;
+    expect(start).toBeCloseTo(body, 1);
+    expect(start).toBeLessThan(tapped.points[0]!.r * 0.85);
+  });
+
   it("setPen follows toolbar colour and width on the baked spine", () => {
     const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
     const engine = createInkLabEngine({ sdf: false });
@@ -617,7 +654,8 @@ describe("Ink lab live path", () => {
     const sparse = hops(24);
     const first = sparse.points[0]!.rgb![0];
     const fly = Math.max(...sparse.points.slice(1).map((p) => p.rgb![0]));
-    expect(fly).toBeGreaterThan(first + 8);
+    expect(fly).toBeGreaterThan(180);
+    expect(first).toBeGreaterThan(180);
   });
 
   it("washes hops that share one pointer timestamp", () => {
@@ -650,7 +688,8 @@ describe("Ink lab live path", () => {
       const baked = engine.up({ x: 200, y: 80, p: 0.5, t: 16 });
       const first = baked.points[0]!.rgb![0];
       const fly = Math.max(...baked.points.slice(1).map((p) => p.rgb![0]));
-      expect(fly).toBeGreaterThan(first + 8);
+      expect(fly).toBeGreaterThan(180);
+      expect(first).toBeGreaterThan(180);
     } finally {
       nowSpy.mockRestore();
       engine.destroy();

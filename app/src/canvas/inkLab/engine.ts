@@ -482,6 +482,27 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       holdPlateau = false;
       blotTipGrow = 0;
     }
+    // First sample is planted at rest. Speed ink would leave a standstill
+    // disc; borrow this hop's heading so the start matches the body.
+    if (spine.length === 1) {
+      const origin = spine[0]!;
+      const headed = styledDot(
+        origin.x,
+        origin.y,
+        fadeV.vx,
+        fadeV.vy,
+        dpr,
+        origin.p ?? s.p,
+        0,
+      );
+      spine[0] = {
+        ...origin,
+        r: headed.r,
+        rgb: headed.rgb,
+        a: headed.a,
+        slow: headed.slow,
+      };
+    }
     appendSpine(dot);
   };
 
