@@ -292,6 +292,10 @@ import {
   loadInkPerfOverlay,
 } from "../util/inkPerfOverlayPref";
 import {
+  INK_DISPLAY_HZ_EVENT,
+  loadInkDisplayHz,
+} from "../util/inkDisplayHzPref";
+import {
   captureInserts,
   captureWritesFile,
   describeCaptureResult,
@@ -1351,6 +1355,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [, setEraserPartial] = useState(() => loadEraserPartial());
   const [perfOverlay, setPerfOverlay] = useState(() => loadInkPerfOverlay());
   const [perfBar, setPerfBar] = useState(() => loadInkPerfBar());
+  const [displayHz, setDisplayHz] = useState(() => loadInkDisplayHz());
   const [stampTrash, setStampTrash] = useState<{
     ids: string[];
   } | null>(null);
@@ -3533,6 +3538,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
     window.addEventListener(INK_PERF_OVERLAY_EVENT, onOverlay);
     return () => window.removeEventListener(INK_PERF_OVERLAY_EVENT, onOverlay);
+  }, []);
+
+  useEffect(() => {
+    const onHz = () => setDisplayHz(loadInkDisplayHz());
+    window.addEventListener(INK_DISPLAY_HZ_EVENT, onHz);
+    return () => window.removeEventListener(INK_DISPLAY_HZ_EVENT, onHz);
   }, []);
 
   useEffect(() => {
@@ -9462,6 +9473,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         onWheelHold={(x, y) => setInkWheel({ x, y })}
         perfOverlay={perfOverlay}
         perfBar={perfBar}
+        displayHz={displayHz}
       />
       {interactive && activeTool === "text" && <TextPlaceGhost ref={textPlaceGhostRef} />}
       {interactive && stampTrash && (

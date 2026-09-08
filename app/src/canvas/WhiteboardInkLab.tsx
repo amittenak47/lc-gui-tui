@@ -19,6 +19,14 @@ import { canvasBitmapFromClient } from "./canvasPointer";
 import { overlaySpineFromDrawOp, splitInkOpsForLabReplay } from "./inkLab/replay";
 import { keepLivePaintPump, shouldFlushLiveHud, skipCommittedReplay } from "./inkLab/liveHost";
 import {
+  livePresentStride,
+  medianMs,
+  resolveDisplayHz,
+  shouldCompositeLive,
+  vsyncMsForHz,
+  type InkDisplayHzPref,
+} from "./inkLab/displayHz";
+import {
   createInkLabEngine,
   type InkLabEngine,
   type InkLabSample,
@@ -46,7 +54,6 @@ import {
 import {
   OVERDRAW_REBASE_HEADROOM,
   PAN_REBASE_FRACTION,
-  overdrawMarginPx,
   overdrawnViewport,
   panDelta,
   type PanCamera,
@@ -103,6 +110,8 @@ export interface WhiteboardInkLabProps {
   onWheelHold?: (clientX: number, clientY: number) => void;
   perfOverlay?: boolean;
   perfBar?: boolean;
+  /** Auto / 60 / 90 / 120 / 240 — HUD vsync and live present cap. */
+  displayHz?: InkDisplayHzPref;
 }
 
 function fallbackViewport(width: number, height: number): ViewportTransform {
@@ -237,6 +246,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       onWheelHold,
       perfOverlay = false,
       perfBar = false,
+      displayHz = "auto",
     }: WhiteboardInkLabProps,
     ref,
   ) {
@@ -309,6 +319,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     perfOverlayRef.current = perfOverlay;
     const perfBarRef = useRef(perfBar);
     perfBarRef.current = perfBar;
+    const displayHzRef = useRef(displayHz);
+    displayHzRef.current = displayHz;
     const loadMeterRef = useRef(createInkLoadMeter());
     const loadBarRef = useRef<InkLoadBarHandle>(null);
     const hudStatsRef = useRef(createInkLabHudStats());
@@ -533,18 +545,19 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       if (!host || !canvas) return;
 
       const sizeToHost = () => {
-        // Frozen while the nib is down: a resize here would remesh the page
-        // and grow the overdraw backing. Apply it on lift.
+        // Frozen while the nib is down: a resize here would remesh the page.
+        // Apply it on lift. Overlay is 1:1 — pan is off while this canvas is
+        // the ink surface, so the 75% overdraw bands are never in view.
         if (drawingRef.current) return;
         const dpr = window.devicePixelRatio || 1;
         const cssW = Math.max(1, host.clientWidth);
         const cssH = Math.max(1, host.clientHeight);
-        const marginY = overdrawMarginPx(cssH, dpr);
+        const marginY = 0;
         marginYRef.current = marginY;
-        const canvasCssH = cssH + 2 * marginY;
+        const canvasCssH = cssH;
         const pixelW = Math.max(1, Math.round(cssW * dpr));
         const pixelH = Math.max(1, Math.round(canvasCssH * dpr));
-        const top = `${-marginY}px`;
+        const top = "0px";
         const resized =
           canvas.width !== pixelW ||
           canvas.height !== pixelH ||
@@ -576,6 +589,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         });
       }
       let lastHudFlushAt = 0;
+      let liveDirty = false;
+      let liveHold = false;
+      let liveTick = 0;
+      const rafGaps: number[] = [];
 
       const reportLoad = (
         stats: {
@@ -591,6 +608,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         },
         rafMs: number,
         live: boolean,
+        vsyncMs: number,
       ) => {
         if (!wantMeter()) return;
         const overlayOn = perfOverlayRef.current;
@@ -632,6 +650,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
                 suffix: load.suffixHit,
                 bakeMs: bake.bakeMs,
                 bake: bake.bake,
+                vsyncMs,
                 ...hudStatsRef.current.snapshot(),
               }
             : undefined,
@@ -649,13 +668,31 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         rafRef.current = null;
         // Re-arm before paint/HUD. Requesting the next vsync at the end of
         // a long tick is how 16.7ms frames become 33ms (HUD avg ~25ms).
-        if (keepLivePaintPump(drawingRef.current)) {
+        const live = keepLivePaintPump(drawingRef.current);
+        if (live) {
           rafRef.current = requestAnimationFrame(onPaintFrame);
         }
         const prev = lastRafRef.current;
         lastRafRef.current = now;
+        const rafMs = prev > 0 ? now - prev : 0;
+        if (rafMs > 0) {
+          rafGaps.push(rafMs);
+          if (rafGaps.length > 8) rafGaps.shift();
+        }
+        const hz = resolveDisplayHz(displayHzRef.current, medianMs(rafGaps));
+        const vsyncMs = vsyncMsForHz(hz);
+        loadMeterRef.current.setVsyncMs(vsyncMs);
+        const stride = livePresentStride(hz);
+        const tick = liveTick;
+        liveTick += 1;
+        if (live && !shouldCompositeLive(liveDirty, liveHold, tick, stride)) {
+          if (perfOverlayRef.current && rafMs > 0) hudStatsRef.current.noteRaf(rafMs);
+          return;
+        }
         const stats = engine.paint();
-        reportLoad(stats, prev > 0 ? now - prev : 0, drawingRef.current);
+        liveHold = stats.hold;
+        liveDirty = false;
+        reportLoad(stats, rafMs, drawingRef.current, vsyncMs);
       };
 
       const schedulePaint = () => {
@@ -811,9 +848,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         );
         engine.captureSnap();
         engine.down(sampleOf(canvas, event));
+        liveDirty = true;
+        liveHold = false;
+        liveTick = 0;
+        rafGaps.length = 0;
+        lastRafRef.current = 0;
+        lastHudFlushAt = 0;
         if (wantMeter()) {
-          lastRafRef.current = 0;
-          lastHudFlushAt = 0;
           loadMeterRef.current.begin();
           hudStatsRef.current.reset();
         }
@@ -868,6 +909,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         const last = samples[samples.length - 1];
         if (chord != null && last) engine.clipLiveToChord(chord, last);
         else engine.move(samples);
+        liveDirty = true;
         schedulePaint();
       };
 
@@ -947,6 +989,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           },
           0,
           false,
+          vsyncMsForHz(resolveDisplayHz(displayHzRef.current, medianMs(rafGaps))),
         );
         loadBarRef.current?.freeze();
         if (baked.points.length > 0) {

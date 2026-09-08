@@ -138,7 +138,7 @@ export const InkLoadBar = forwardRef<InkLoadBarHandle, InkLoadBarProps>(
             lastDebugRef.current = text;
             debug.textContent = text;
           }
-          if (spark) drawFrameSpark(spark, hud?.spark ?? []);
+          if (spark) drawFrameSpark(spark, hud?.spark ?? [], hud?.vsyncMs);
         },
         freeze() {
           const root = rootRef.current;

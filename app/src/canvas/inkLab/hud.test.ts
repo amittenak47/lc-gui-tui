@@ -45,6 +45,16 @@ describe("Ink lab HUD", () => {
     expect(snap.frameRange?.n).toBe(2);
   });
 
+  it("records skip-empty rAF without pinning frame or spark", () => {
+    const stats = createInkLabHudStats();
+    stats.sample(3, 11.1, 1, 0.05);
+    stats.noteRaf(11.0);
+    const snap = stats.snapshot();
+    expect(snap.rafRange?.n).toBe(2);
+    expect(snap.frameRange?.n).toBe(1);
+    expect(snap.spark?.length).toBe(1);
+  });
+
   it("caps the spark at a short window", () => {
     const stats = createInkLabHudStats();
     for (let i = 0; i < INK_LAB_SPARK_N + 8; i++) stats.sample(1, 16, 1, 0.05);

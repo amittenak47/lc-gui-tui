@@ -136,4 +136,23 @@ describe("inkLoadMeter", () => {
     expect(meter.peek().level).toBeLessThan(0.35);
     expect(meter.peek().lift).toBe(false);
   });
+
+  it("does not treat one skipped 90Hz beat as a stall", () => {
+    const meter = createInkLoadMeter();
+    meter.setVsyncMs(1000 / 90);
+    meter.begin();
+    for (let i = 0; i < 40; i++) {
+      meter.frame(cheap({ rafMs: 22, frameMs: 1, spineN: 10 + i }));
+    }
+    expect(meter.peek().slowCalls).toBe(0);
+    expect(meter.peek().lift).toBe(false);
+  });
+
+  it("counts a 90Hz stall after several missed beats", () => {
+    const meter = createInkLoadMeter();
+    meter.setVsyncMs(1000 / 90);
+    meter.begin();
+    meter.frame(cheap({ rafMs: 40, frameMs: 1 }));
+    expect(meter.peek().slowCalls).toBe(1);
+  });
 });
