@@ -10,7 +10,9 @@ mod registry;
 pub mod tools;
 
 pub use kinds::{VizFrame, VizProgram, MAX_TRACE_FRAMES, VIZ_KINDS};
-pub use registry::{parse_tool_calls, registry, viz_tools, viz_tools_as_prompt, VizTool};
+pub use registry::{
+    ask_draw_tools, parse_tool_calls, registry, viz_tools, viz_tools_as_prompt, VizTool,
+};
 
 #[cfg(test)]
 mod tests {
@@ -44,6 +46,18 @@ mod tests {
                 "cite_test_case",
                 "highlight_student_work"
             ]
+        );
+    }
+
+    #[test]
+    fn ask_draw_tools_omit_problem_only_cite() {
+        let names: Vec<String> = ask_draw_tools()
+            .iter()
+            .filter_map(|t| t.pointer("/function/name")?.as_str().map(str::to_string))
+            .collect();
+        assert_eq!(
+            names,
+            ["draw_structure", "animate_trace", "annotate_region"]
         );
     }
 

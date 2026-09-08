@@ -37,6 +37,20 @@ pub fn viz_tools() -> Vec<serde_json::Value> {
     registry().into_iter().map(|tool| tool.schema()).collect()
 }
 
+/// Draw tools for pad/document Ask. `cite_test_case` stays problem-only.
+pub fn ask_draw_tools() -> Vec<serde_json::Value> {
+    registry()
+        .into_iter()
+        .filter(|tool| {
+            matches!(
+                tool.name(),
+                "draw_structure" | "animate_trace" | "annotate_region"
+            )
+        })
+        .map(|tool| tool.schema())
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // The no-tool-calling fallback
 // ---------------------------------------------------------------------------

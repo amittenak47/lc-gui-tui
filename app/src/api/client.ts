@@ -799,6 +799,7 @@ export class LcClient {
       preset?: string;
       reasoning?: boolean;
       reasoning_effort?: "low" | "medium" | "high";
+      draw?: boolean;
     },
   ): Promise<{
     task_id: string;
@@ -806,6 +807,7 @@ export class LcClient {
     reply: string;
     reasoning?: string;
     proposed_annotations?: ProposedAnnotation[];
+    programs?: unknown[];
     process_events?: Array<{
       kind: string;
       label: string;
@@ -830,6 +832,7 @@ export class LcClient {
     if (opts.preset) body.preset = opts.preset;
     if (opts.reasoning) body.reasoning = true;
     if (opts.reasoning_effort) body.reasoning_effort = opts.reasoning_effort;
+    if (opts.draw) body.draw = true;
     try {
       return await this.cmd("lc_coach_ask", { body }, timeoutMs ?? COACH_HTTP_TIMEOUT_MS);
     } catch (cause) {

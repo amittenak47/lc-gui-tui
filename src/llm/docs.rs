@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::docs_index;
 use crate::llm::coach::{EventSink, ToolStatus};
-use crate::llm::viz::parse_tool_calls;
+use crate::llm::viz::{ask_draw_tools, parse_tool_calls, VizProgram};
 use crate::llm::{is_tool_calling_unsupported, ChatMessage, ChatRequest, LlmProvider};
 use crate::llm::reasoning::ReasoningEffort;
 
@@ -20,6 +20,10 @@ contradicts those chunks.\n\
 - When it helps: (1) a short physical or mechanical analogy, (2) the mechanism as a few sequential \
 steps, (3) a tiny pseudocode fragment — not a full solution dump.\n\
 - Tools are optional. Call one only if the prompt is missing something you need.\n\
+- Draw with `draw_structure` / `animate_trace` only when the question is operational (a trace \
+or a layout), and only with values from the highlight, retrieved chunks, or the question. Never \
+invent a LeetCode example. `cite_test_case` is not available. Skip `annotate_region` — this is \
+not a LeetCode board.\n\
 - Plain text. No JSON unless you are emitting a tool-call fallback object.";
 
 pub const PRESET_DE_JARGON: &str = "Act as a strict parser. Extract every novel term, variable, or \
@@ -180,6 +184,12 @@ pub struct AskContext {
     pub retrieved: String,
 }
 
+pub struct AskOutcome {
+    pub reply: String,
+    pub proposed: Vec<ProposedAnnotation>,
+    pub programs: Vec<VizProgram>,
+}
+
 const MAX_TOOL_ITERS: usize = 3;
 
 pub fn run_document_ask(
@@ -192,13 +202,74 @@ pub fn run_document_ask(
     events: &EventSink,
     reasoning: bool,
     effort: Option<ReasoningEffort>,
-) -> Result<(String, Vec<ProposedAnnotation>)> {
-    let tools = document_tools(cfg);
+) -> Result<AskOutcome> {
+    let mut tools = document_tools(cfg);
+    tools.extend(ask_draw_tools());
+    run_tooled_ask(
+        provider,
+        cfg,
+        system,
+        user,
+        images,
+        ctx,
+        events,
+        reasoning,
+        effort,
+        tools,
+    )
+}
+
+/// Whiteboard Ask: viz draw tools, no document RAG.
+pub fn run_pad_ask(
+    provider: &dyn LlmProvider,
+    cfg: &Config,
+    system: &str,
+    user: String,
+    images: Vec<String>,
+    events: &EventSink,
+    reasoning: bool,
+    effort: Option<ReasoningEffort>,
+) -> Result<AskOutcome> {
+    let ctx = AskContext {
+        document_hash: None,
+        page: None,
+        highlight: String::new(),
+        page_text: String::new(),
+        marks_prose: String::new(),
+        retrieved: String::new(),
+    };
+    run_tooled_ask(
+        provider,
+        cfg,
+        system,
+        user,
+        images,
+        &ctx,
+        events,
+        reasoning,
+        effort,
+        ask_draw_tools(),
+    )
+}
+
+fn run_tooled_ask(
+    provider: &dyn LlmProvider,
+    cfg: &Config,
+    system: &str,
+    user: String,
+    images: Vec<String>,
+    ctx: &AskContext,
+    events: &EventSink,
+    reasoning: bool,
+    effort: Option<ReasoningEffort>,
+    tools: Vec<serde_json::Value>,
+) -> Result<AskOutcome> {
     let mut messages = vec![
         ChatMessage::system(system),
         ChatMessage::user(user.clone()).with_images(images),
     ];
     let mut proposed = Vec::new();
+    let mut programs = Vec::new();
     let mut reply = match provider.chat_ex(
         &ChatRequest::new(messages.clone())
             .with_tools(tools.clone())
@@ -223,7 +294,11 @@ pub fn run_document_ask(
             }
             events.emit_reasoning(&parsed.reasoning);
             if parsed.tool_calls.is_empty() {
-                return Ok((parsed.content.trim().to_string(), proposed));
+                return Ok(AskOutcome {
+                    reply: parsed.content.trim().to_string(),
+                    proposed,
+                    programs,
+                });
             }
             messages = fb_messages;
             parsed
@@ -239,17 +314,86 @@ pub fn run_document_ask(
         let mut results = Vec::new();
         for call in &reply.tool_calls {
             events.tool(call.name.as_str(), ToolStatus::Proposed, tool_summary(&call.name), None);
-            let (text, maybe_ann) = dispatch_tool(cfg, ctx, call.name.as_str(), &call.arguments)?;
-            events.tool(
-                call.name.as_str(),
-                ToolStatus::Accepted,
-                clip_tool_detail(&text),
-                None,
-            );
-            if let Some(ann) = maybe_ann {
-                proposed.push(ann);
+            match call.name.as_str() {
+                "draw_structure" | "animate_trace" => {
+                    match serde_json::from_value::<VizProgram>(call.arguments.clone()) {
+                        Ok(program) => match program.rejection() {
+                            None => {
+                                let detail = if program.title.trim().is_empty() {
+                                    program.id.clone()
+                                } else {
+                                    program.title.clone()
+                                };
+                                events.tool(
+                                    call.name.as_str(),
+                                    ToolStatus::Accepted,
+                                    detail.clone(),
+                                    None,
+                                );
+                                results.push(format!(
+                                    "{}: queued a diagram ({detail}) for the board",
+                                    call.name
+                                ));
+                                programs.push(program);
+                            }
+                            Some(why) => {
+                                events.tool(
+                                    call.name.as_str(),
+                                    ToolStatus::Rejected,
+                                    call.name.clone(),
+                                    Some(why.clone()),
+                                );
+                                results.push(format!("{}: dropped a diagram: {why}", call.name));
+                            }
+                        },
+                        Err(err) => {
+                            let why = format!("unreadable {} call: {err}", call.name);
+                            events.tool(
+                                call.name.as_str(),
+                                ToolStatus::Rejected,
+                                call.name.clone(),
+                                Some(why.clone()),
+                            );
+                            results.push(format!("{}: {why}", call.name));
+                        }
+                    }
+                }
+                "annotate_region" => {
+                    let text = "this pad has no named regions (approach/walkthrough/…). \
+                                skip annotate_region rather than inventing LeetCode pages.";
+                    events.tool(
+                        call.name.as_str(),
+                        ToolStatus::Accepted,
+                        clip_tool_detail(text),
+                        None,
+                    );
+                    results.push(format!("{}: {text}", call.name));
+                }
+                "cite_test_case" => {
+                    let text = "cite_test_case is only for corpus problems with sample cases.";
+                    events.tool(
+                        call.name.as_str(),
+                        ToolStatus::Accepted,
+                        clip_tool_detail(text),
+                        None,
+                    );
+                    results.push(format!("{}: {text}", call.name));
+                }
+                _ => {
+                    let (text, maybe_ann) =
+                        dispatch_tool(cfg, ctx, call.name.as_str(), &call.arguments)?;
+                    events.tool(
+                        call.name.as_str(),
+                        ToolStatus::Accepted,
+                        clip_tool_detail(&text),
+                        None,
+                    );
+                    if let Some(ann) = maybe_ann {
+                        proposed.push(ann);
+                    }
+                    results.push(format!("{}: {}", call.name, text));
+                }
             }
-            results.push(format!("{}: {}", call.name, text));
         }
         messages.push(ChatMessage::assistant(if reply.content.trim().is_empty() {
             format!(
@@ -290,7 +434,11 @@ pub fn run_document_ask(
         )?;
         events.emit_reasoning(&reply.reasoning);
     }
-    Ok((reply.content.trim().to_string(), proposed))
+    Ok(AskOutcome {
+        reply: reply.content.trim().to_string(),
+        proposed,
+        programs,
+    })
 }
 
 fn tool_summary(name: &str) -> &'static str {
@@ -304,6 +452,9 @@ fn tool_summary(name: &str) -> &'static str {
         "list_document_marks" => "listing marks",
         "save_annotation" => "pinning a tab",
         "search_web" => "searching the web",
+        "draw_structure" => "drawing a structure",
+        "animate_trace" => "animating a trace",
+        "annotate_region" => "annotating a region",
         _ => "calling a tool",
     }
 }
@@ -586,7 +737,7 @@ mod tests {
             always_tool: false,
             reasoning: "",
         };
-        let (reply, proposed) = run_document_ask(
+        let outcome = run_document_ask(
             &provider,
             &Config::default(),
             DOCUMENT_ASK_SYSTEM,
@@ -598,8 +749,8 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(reply.contains("SGD"));
-        assert!(proposed.is_empty());
+        assert!(outcome.reply.contains("SGD"));
+        assert!(outcome.proposed.is_empty());
         assert_eq!(provider.calls.get(), 2);
     }
 
@@ -611,7 +762,7 @@ mod tests {
             always_tool: true,
             reasoning: "",
         };
-        let (reply, _) = run_document_ask(
+        let outcome = run_document_ask(
             &provider,
             &Config::default(),
             DOCUMENT_ASK_SYSTEM,
@@ -623,7 +774,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(reply.contains("SGD"));
+        assert!(outcome.reply.contains("SGD"));
         // initial + 3 tool rounds + 1 forced plain-text close
         assert_eq!(provider.calls.get(), 1 + MAX_TOOL_ITERS + 1);
     }
@@ -724,5 +875,25 @@ mod tests {
             lines.iter().any(|l| l.starts_with("reasoning:First I look")),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn document_ask_offers_draw_tools_but_not_cite_test_case() {
+        let mut tools = document_tools(&Config::default());
+        tools.extend(crate::llm::ask_draw_tools());
+        let names: Vec<String> = tools
+            .iter()
+            .filter_map(|t| {
+                t.pointer("/function/name")
+                    .and_then(|n| n.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+        assert!(names.contains(&"draw_structure".into()));
+        assert!(names.contains(&"animate_trace".into()));
+        assert!(names.contains(&"annotate_region".into()));
+        assert!(names.contains(&"query_document_vectors".into()));
+        assert!(!names.iter().any(|n| n == "cite_test_case"));
+        assert!(crate::llm::coach::ASK_VIZ_RULES.contains("cite_test_case"));
     }
 }

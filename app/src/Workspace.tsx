@@ -6213,7 +6213,12 @@ export function Workspace({
       threadAnchor?: CoachReplyRef | null,
       photos?: CoachAttachment[],
       pendingAck?: CoachPendingAck,
-      docAsk?: { preset?: string | null; highlight?: string; reasoning?: AgentReasoningLevel },
+      docAsk?: {
+        preset?: string | null;
+        highlight?: string;
+        reasoning?: AgentReasoningLevel;
+        draw?: boolean;
+      },
     ) => {
       const note = question.trim();
       if (!problem || !note) {
@@ -6280,6 +6285,7 @@ export function Workspace({
                 question: asked,
                 ...(images.length > 0 ? { images } : {}),
                 ...reasoningAskFields(docAsk?.reasoning ?? "off"),
+                ...(docAsk?.draw ? { draw: true } : {}),
               }
             : {
                 surface,
@@ -6288,11 +6294,13 @@ export function Workspace({
                 ...(images.length > 0 ? { images } : {}),
                 ...docExtras,
                 ...reasoningAskFields(docAsk?.reasoning ?? "off"),
+                ...(docAsk?.draw ? { draw: true } : {}),
               };
         const result = await runCoachJob<{
           reply: string;
           reasoning?: string;
           proposed_annotations?: ProposedAnnotation[];
+          programs?: unknown[];
           process_events?: Array<{
             kind: string;
             label: string;
@@ -6312,6 +6320,7 @@ export function Workspace({
               ...(images.length > 0 ? { images } : {}),
               ...docExtras,
               ...reasoningAskFields(docAsk?.reasoning ?? "off"),
+              ...(docAsk?.draw ? { draw: true } : {}),
             }),
         );
         if (coachRunGenRef.current !== genAtStart) return;
@@ -6334,13 +6343,37 @@ export function Workspace({
             ts: ev.ts,
           });
         }
+        const drawables = (result.programs ?? [])
+          .map(parseVizProgram)
+          .filter((candidate): candidate is VizProgram => candidate !== null)
+          .slice(0, MAX_VISIBLE_DRAWINGS);
+        if (drawables.length > 0) {
+          markPadDirty();
+          if (mobile && !isLocalPad(problem)) setActiveRegion("agent");
+        }
+        const [firstDrawing, ...moreDrawings] = drawables;
         finishCoachTurn(turnId, [
           {
-            content: reply || "The model returned an empty reply.",
+            content:
+              reply ||
+              (firstDrawing
+                ? "Drew a diagram on the board."
+                : "The model returned an empty reply."),
             ...(result.reasoning?.trim() ? { reasoning: result.reasoning.trim() } : {}),
+            ...(firstDrawing ? { drawing: withNewDrawing(firstDrawing) } : {}),
           },
+          ...moreDrawings.map((drawable, index) => ({
+            content: `Drew diagram ${index + 2} of ${drawables.length} on the board.`,
+            drawing: withNewDrawing(drawable),
+          })),
         ]);
         applyProposedAnnotations(result.proposed_annotations ?? []);
+        if (drawables.length > 0) {
+          setAgentMessages((current) => {
+            queueMicrotask(() => syncDrawingsToBoard(current));
+            return current;
+          });
+        }
       } catch (cause) {
         failText = messageOf(cause);
         if (coachRunGenRef.current === genAtStart) setError(failText);
@@ -6360,7 +6393,7 @@ export function Workspace({
         if (coachSendDepthRef.current === 0) drainCoachSendQueueRef.current();
       }
     },
-    [applyProposedAnnotations, client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob, appendProcessEvent, appendReasoning, openCoachPanel],
+    [applyProposedAnnotations, client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob, appendProcessEvent, appendReasoning, openCoachPanel, markPadDirty, mobile, syncDrawingsToBoard],
   );
 
   /** `runTests` fires this and is defined above it — see the auto-forward. */
@@ -6379,7 +6412,7 @@ export function Workspace({
       isLocalPad(problem)
         ? {
             ask: true,
-            draw: false,
+            draw: requestedFlags.draw,
             reviewBoard: false,
             lazy: false,
             handwriting: requestedFlags.handwriting,
@@ -6725,8 +6758,14 @@ export function Workspace({
             label: shot.label,
             png: shot.png,
           }));
+          const padDraw = Boolean(flags.draw && isLocalPad(problem));
+          const askText =
+            prompt.trim() ||
+            (padDraw
+              ? "Draw the relevant structure on the board. Use only values already in this prompt or on the board. Do not invent a LeetCode example."
+              : prompt);
           await askAgent(
-            prompt,
+            askText,
             threadAnchor,
             [...photos, ...boardShots],
             pendingAck,
@@ -6734,10 +6773,11 @@ export function Workspace({
               preset: flags.askPreset,
               highlight: quotedPassage,
               reasoning: flags.reasoning,
+              ...(padDraw ? { draw: true } : {}),
             },
           );
         }
-        if (flags.draw) {
+        if (flags.draw && !isLocalPad(problem)) {
           await askForDiagram(text, threadAnchor);
         }
         if (flags.lazy && problem) {
