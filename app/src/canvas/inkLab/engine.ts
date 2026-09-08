@@ -238,6 +238,8 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   let lastWall = 0;
   /** Host region last written with live ink. Next clip must cover this too. */
   let blitBox: StrokeAabb | null = null;
+  /** Tail-only blit while the live-smooth prefix is frozen. */
+  let liveTailBlit: StrokeAabb | null = null;
   let liveSmoothCache: LiveSmoothCache | null = null;
   const liveSmoothScene: ScenePoint[] = [];
 
@@ -272,6 +274,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     lastStamp = 0;
     lastWall = 0;
     blitBox = null;
+    liveTailBlit = null;
     liveSmoothCache = null;
     liveSmoothScene.length = 0;
     sdf?.clear();
@@ -619,26 +622,47 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   const drawDots = (
     points: readonly SpineDot[],
     clip: { x: number; y: number; w: number; h: number } | null = null,
+    from = 0,
+    dirty: StrokeAabb | null = null,
   ) => {
     if (!host) return;
     const ctx = host.getContext("2d");
     if (!ctx) return;
     if (points.length === 0) return;
-    let n = 0;
-    const box = emptyAabb();
-    expandAabb(box, points[0]!);
-    for (let i = 1; i < points.length; i++) {
-      const a = points[i - 1]!;
-      const b = points[i]!;
-      ensureInst(n + 1);
-      writeInstance(inst, n, a, b, inkOf(a), inkOf(b));
-      n += 1;
-      expandAabb(box, b);
+    const start = Math.max(0, Math.min(from, points.length - 1));
+    const segsOut = Math.max(0, points.length - 1);
+    const box = dirty ?? emptyAabb();
+    if (!dirty) {
+      expandAabb(box, points[start]!);
+      for (let i = start + 1; i < points.length; i++) expandAabb(box, points[i]!);
+    }
+    ensureInst(Math.max(segsOut, 1));
+    for (let hop = start; hop < segsOut; hop++) {
+      const a = points[hop]!;
+      const b = points[hop + 1]!;
+      writeInstance(inst, hop, a, b, inkOf(a), inkOf(b));
     }
     const end = points[points.length - 1]!;
     if (sdf) {
-      sdf.upload(inst, n);
-      sdf.draw(box);
+      const fullBox = () => {
+        const all = emptyAabb();
+        expandAabb(all, points[0]!);
+        for (let i = 1; i < points.length; i++) expandAabb(all, points[i]!);
+        return all;
+      };
+      if (start <= 0) {
+        sdf.upload(inst, segsOut);
+        sdf.draw(fullBox());
+      } else {
+        const grew = sdf.uploadTail(inst, start, segsOut);
+        if (grew) {
+          sdf.upload(inst, segsOut);
+          sdf.draw(fullBox());
+        } else {
+          sdf.erase(box);
+          sdf.redraw(box, Math.max(0, start - 2));
+        }
+      }
       if (clip) {
         ctx.drawImage(
           sdf.canvas,
@@ -655,7 +679,19 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         ctx.drawImage(sdf.canvas, 0, 0);
       }
     } else {
-      fillMiterStroke(ctx, points, end, INK_RGB);
+      if (clip) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(clip.x, clip.y, clip.w, clip.h);
+        ctx.clip();
+      }
+      fillMiterStroke(
+        ctx,
+        start > 0 ? points.slice(start) : points,
+        end,
+        INK_RGB,
+      );
+      if (clip) ctx.restore();
     }
     ctx.globalAlpha = end.a ?? 1;
     ctx.fillStyle = `rgb(${inkOf(end)[0]}, ${inkOf(end)[1]}, ${inkOf(end)[2]})`;
@@ -765,12 +801,30 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       );
       liveSmoothCache = reshaped.cache;
       const extra = emptyAabb();
-      for (const p of reshaped.points) expandAabb(extra, p);
-      const clip = liveClipRect(extra);
+      const from = reshaped.from;
+      const start = Math.max(0, Math.min(from, reshaped.points.length - 1));
+      if (reshaped.points.length > 0) {
+        expandAabb(extra, reshaped.points[start]!);
+        for (let i = start + 1; i < reshaped.points.length; i++) {
+          expandAabb(extra, reshaped.points[i]!);
+        }
+      }
+      // Frozen prefix is already on the host. Do not keep the from=0
+      // whole-stroke blit or a full-page fill keeps copying the page.
+      const dirty = { ...extra };
+      if (from > 0) {
+        if (liveTailBlit) unionAabb(dirty, liveTailBlit);
+      } else {
+        liveTailBlit = null;
+        if (blitBox) unionAabb(dirty, blitBox);
+      }
+      const clip = host
+        ? clipBlitRect(dirty, host.width, host.height)
+        : null;
       presentHost(ctx, clip, snap);
-      drawDots(reshaped.points, clip);
+      drawDots(reshaped.points, clip, from, dirty);
       lastSuffix = false;
-      blitBox = clip
+      const nextBlit = clip
         ? {
             minX: clip.x,
             minY: clip.y,
@@ -778,6 +832,8 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
             maxY: clip.y + clip.h,
           }
         : extra;
+      blitBox = nextBlit;
+      liveTailBlit = from > 0 ? nextBlit : null;
       return lastSuffix;
     }
     if (sdf) {
@@ -905,6 +961,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       aabb = emptyAabb();
       liveSmoothCache = null;
       liveSmoothScene.length = 0;
+      liveTailBlit = null;
       return {
         bakeMs,
         bake: baked.bake,

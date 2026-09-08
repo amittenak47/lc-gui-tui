@@ -34,11 +34,42 @@ function toScene(d: SpineDot, pressure = 0.5): ScenePoint {
   };
 }
 
-function meanRadius(spine: readonly SpineDot[]): number {
-  if (spine.length === 0) return 4;
+function meanRadius(spine: readonly SpineDot[], from = 0): number {
+  const n = spine.length;
+  if (n === 0) return 4;
+  const start = Math.max(0, Math.min(from, n - 1));
   let s = 0;
-  for (const p of spine) s += p.r;
-  return s / spine.length;
+  for (let i = start; i < n; i++) s += spine[i]!.r;
+  return s / Math.max(1, n - start);
+}
+
+function syncRawScene(rawScene: ScenePoint[], spine: readonly SpineDot[]): void {
+  const n = spine.length;
+  for (let i = 0; i < n; i++) {
+    const d = spine[i]!;
+    const p = rawScene[i];
+    if (!p) {
+      rawScene[i] = {
+        x: d.x,
+        y: d.y,
+        pressure: d.p ?? 0.5,
+        ...(d.slow != null ? { slowness: d.slow } : {}),
+      };
+      continue;
+    }
+    p.x = d.x;
+    p.y = d.y;
+    p.pressure = d.p ?? 0.5;
+    if (d.slow != null) p.slowness = d.slow;
+    else delete p.slowness;
+  }
+  rawScene.length = n;
+}
+
+/** Hop index where the live-smooth tail starts (join into the frozen prefix). */
+export function liveSmoothFrom(cache: LiveSmoothCache | null): number {
+  const frozen = cache?.prefix.length ?? 0;
+  return frozen > 1 ? frozen - 1 : 0;
 }
 
 function radiiAlong(
@@ -243,16 +274,18 @@ export function reshapeLiveSpine(
   strength: number,
   cache: LiveSmoothCache | null,
   rawScene: ScenePoint[],
-): { points: SpineDot[]; cache: LiveSmoothCache | null } {
+): { points: SpineDot[]; cache: LiveSmoothCache | null; from: number } {
   if (strength <= 0 || spine.length < 3) {
-    return { points: spine.map((p) => ({ ...p })), cache: null };
+    return { points: spine.map((p) => ({ ...p })), cache: null, from: 0 };
   }
-  rawScene.length = 0;
-  for (const d of spine) rawScene.push(toScene(d));
-  const nib = meanRadius(spine) * 2;
+  syncRawScene(rawScene, spine);
+  const fromHint = liveSmoothFrom(cache);
+  const nib = meanRadius(spine, fromHint) * 2;
   const live = smoothLiveInkPoints(rawScene, strength, nib, cache);
+  const from = liveSmoothFrom(live.cache);
   return {
     points: radiiAlong(spine, live.points),
     cache: live.cache,
+    from,
   };
 }
