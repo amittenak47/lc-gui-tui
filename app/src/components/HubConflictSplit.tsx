@@ -1,14 +1,15 @@
 /**
  * The conflict split: Local on the left, the other device on the right.
  *
- * Nothing has been written yet. Each row (handwriting, each note) is its own
- * choice: ✓ that copy, ✓ both, or ✕ both (drop that entry). What ✓ both means
- * depends on what the row is: one mark two devices both wrote on becomes one
- * mark carrying both sides' notes and boards, ink merges its strokes, and two
- * marks that merely share a page stay two. The file itself always stays. Top
- * ✓ / ✕ fill a whole column without wiping the other side. Keep is enabled
- * once every row is settled, then PUT to the hub so the other device matches
- * on Sync.
+ * Nothing has been written yet. Each row (each handwriting page, each note)
+ * is its own choice: ✓ that copy, ✓ both, or ✕ both (drop that entry). What
+ * ✓ both means depends on what the row is: one mark two devices both wrote on
+ * becomes one mark carrying both sides' notes and boards, ink merges that
+ * page's strokes, and two marks that merely share a page stay two. Identical
+ * footnotes and identical ink pages are omitted — they are not a choice. The
+ * file itself always stays. Top ✓ / ✕ fill a whole column without wiping the
+ * other side. Keep is enabled once every row is settled, then PUT to the hub
+ * so the other device matches on Sync.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -17,7 +18,7 @@ import type { AnnotatePadDto, InkPageDto, LcClient } from "../api/client";
 import type { PageFrame } from "../canvas/inkPageIndex";
 import type { DocFootnote } from "../util/docFootnotes";
 import { conflictFocusPage, inkDtosHavePage, mergeInkDtos } from "../util/conflictPage";
-import { loadConflictPreviewInkPage, type FootnoteInkBoard } from "../util/inkSync";
+import { loadConflictPreviewInkPage } from "../util/inkSync";
 import { Tip } from "./Tip";
 import { ConflictPagePreview } from "./ConflictPagePreview";
 import { FootnoteOverview } from "../modes/FootnoteOverview";
@@ -28,8 +29,16 @@ import {
   type HubInkChoice,
   type HubPadConflict,
   entrySettled,
-  footnoteDiffRows,
+  footnoteInkDiffRows,
+  footnoteInkPageRowId,
+  inkChoiceFromPick,
+  inkPageRowId,
+  isInkRowId,
   mergeFootnotes,
+  padInkDiffRows,
+  parseFootnoteInkPageRowId,
+  parseInkPageRowId,
+  visibleFootnoteDiffRows,
 } from "../util/hubConflictStash";
 
 export interface HubConflictSplitProps {
@@ -82,28 +91,13 @@ function nameOf(conflict: HubPadConflict): string {
 /**
  * How many pages of handwriting a side has.
  *
- * The id lists, not the frozen DTOs: freezing gzips only the page the split is
- * about, so counting the preview would tell a reader with a whole read-through
- * of margin notes that they have one page. Ids ride on the ping digest and a
- * cheap local read — see `hubInkPageIds` / `localInkPageIds`. Older stashes
- * carry no ids, so the preview list still stands in.
+ * Older stashes carry no ids, so the preview list still stands in.
  */
 function inkCount(
   ids: readonly number[] | null | undefined,
   pages: readonly InkPageDto[] | null | undefined,
 ): number {
   return ids?.length ?? pages?.length ?? 0;
-}
-
-/** Scratch boards this side has handwriting on. */
-function scratchBoardCount(
-  boards: readonly FootnoteInkBoard[] | undefined,
-  side: Side,
-): number {
-  if (!boards) return 0;
-  return boards.filter((board) =>
-    side === "local" ? board.localPageIds.length > 0 : board.hubPageIds.length > 0,
-  ).length;
 }
 
 function pickOf(
@@ -203,6 +197,12 @@ function NoteRow({
   );
 }
 
+function notesOf(body: HubPadConflict["local"] | HubPadConflict["server"]): DocFootnote[] {
+  return Array.isArray((body as AnnotatePadDto | null)?.footnotes)
+    ? ((body as AnnotatePadDto).footnotes as DocFootnote[])
+    : [];
+}
+
 export function HubConflictSplit({
   conflict,
   busy = false,
@@ -230,29 +230,26 @@ export function HubConflictSplit({
 
   const rows = useMemo<FootnoteDiffRow[]>(() => {
     if (!conflict || conflict.kind !== "annotate") return [];
-    const notesOf = (body: HubPadConflict["local"] | HubPadConflict["server"]) =>
-      Array.isArray((body as AnnotatePadDto | null)?.footnotes)
-        ? ((body as AnnotatePadDto).footnotes as DocFootnote[])
-        : [];
-    return footnoteDiffRows(notesOf(conflict.local), notesOf(conflict.server));
+    return visibleFootnoteDiffRows(notesOf(conflict.local), notesOf(conflict.server));
   }, [conflict]);
+
+  const padInkRows = useMemo(
+    () => (conflict ? padInkDiffRows(conflict) : []),
+    [conflict],
+  );
+  const fnInkRows = useMemo(
+    () => (conflict ? footnoteInkDiffRows(conflict) : []),
+    [conflict],
+  );
 
   const serverMissing = Boolean(conflict) && conflict!.server == null;
   const serverInkUnread = Boolean(conflict) && conflict!.serverInk === null;
 
-  const inkHas = (side: Side): boolean => {
-    if (!conflict) return false;
-    if (scratchBoardCount(conflict.footnoteInk, side) > 0) return true;
-    if (side === "local") {
-      return Boolean(conflict.local) || inkCount(conflict.localInkPageIds, conflict.localInk) > 0;
-    }
-    if (conflict.serverInk === null) return true;
-    return Boolean(conflict.server) || inkCount(conflict.hubInkPageIds, conflict.serverInk) > 0;
-  };
+  const padInkBlocked = (id: string): boolean => parseInkPageRowId(id) != null;
 
   const toggleKeep = (side: Side, id: string) => {
     if (side === "server" && serverMissing) return;
-    if (side === "server" && id === INK_ROW_ID && serverInkUnread) return;
+    if (side === "server" && padInkBlocked(id) && serverInkUnread) return;
     setPicks((current) => {
       const now = current[id]?.[side];
       return { ...current, [id]: { ...current[id], [side]: now === true ? undefined : true } };
@@ -268,7 +265,14 @@ export function HubConflictSplit({
 
   const idsOnSide = (side: Side): string[] => {
     const ids: string[] = [];
-    if (inkHas(side)) ids.push(INK_ROW_ID);
+    for (const row of padInkRows) {
+      const has = side === "local" ? row.hasLocal : row.hasServer;
+      if (has) ids.push(inkPageRowId(row.pageId));
+    }
+    for (const row of fnInkRows) {
+      const has = side === "local" ? row.hasLocal : row.hasServer;
+      if (has) ids.push(footnoteInkPageRowId(row.wbId, row.pageId));
+    }
     for (const row of rows) {
       const has = side === "local" ? Boolean(row.local) : Boolean(row.server);
       if (has) ids.push(row.id);
@@ -288,7 +292,7 @@ export function HubConflictSplit({
     setPicks((current) => {
       const next = { ...current };
       for (const id of ids) {
-        if (side === "server" && id === INK_ROW_ID && serverInkUnread && value === true) {
+        if (side === "server" && padInkBlocked(id) && serverInkUnread && value === true) {
           continue;
         }
         next[id] = { ...next[id], [side]: value };
@@ -311,19 +315,43 @@ export function HubConflictSplit({
     return "undecided";
   };
 
+  const inkPageChoices = () =>
+    padInkRows.map((row) => ({
+      pageId: row.pageId,
+      choice: inkChoiceFromPick(picks[inkPageRowId(row.pageId)]),
+    }));
+
+  const footnoteInkPageChoices = () =>
+    fnInkRows.map((row) => ({
+      wbId: row.wbId,
+      pageId: row.pageId,
+      choice: inkChoiceFromPick(picks[footnoteInkPageRowId(row.wbId, row.pageId)]),
+    }));
+
   const inkChoice = (): HubInkChoice => {
-    const localInk = pickOf(picks, INK_ROW_ID, "local") === true;
-    const serverInk = pickOf(picks, INK_ROW_ID, "server") === true;
-    if (localInk && serverInk) return "merged";
-    if (localInk) return "local";
-    if (serverInk) return "server";
-    return "none";
+    const choices = [
+      ...inkPageChoices().map((row) => row.choice),
+      ...footnoteInkPageChoices().map((row) => row.choice),
+    ];
+    if (choices.length === 0) return "none";
+    const first = choices[0]!;
+    return choices.every((choice) => choice === first) ? first : "merged";
   };
 
   const notesHomed = rows.every((row) =>
     entrySettled(Boolean(row.local), Boolean(row.server), picks[row.id]),
   );
-  const inkHomed = entrySettled(inkHas("local"), inkHas("server"), picks[INK_ROW_ID]);
+  const inkHomed =
+    padInkRows.every((row) =>
+      entrySettled(row.hasLocal, row.hasServer, picks[inkPageRowId(row.pageId)]),
+    ) &&
+    fnInkRows.every((row) =>
+      entrySettled(
+        row.hasLocal,
+        row.hasServer,
+        picks[footnoteInkPageRowId(row.wbId, row.pageId)],
+      ),
+    );
   const valid = Boolean(conflict) && notesHomed && inkHomed;
 
   const allKept = (side: Side): boolean =>
@@ -364,8 +392,10 @@ export function HubConflictSplit({
     if (!conflict || !valid) return;
     const ink = inkChoice();
     const pick = overallPick();
+    const inkPages = inkPageChoices();
+    const footnoteInkPages = footnoteInkPageChoices();
     if (pick !== "merged" || conflict.kind !== "annotate") {
-      onResolve({ pick, ink });
+      onResolve({ pick, ink, inkPages, footnoteInkPages });
       return;
     }
     const resolved: Record<string, { local: boolean; server: boolean }> = {};
@@ -377,8 +407,8 @@ export function HubConflictSplit({
     }
     const boardRemints: Record<string, string> = {};
     const merged = mergeFootnotes(
-      rows.map((row) => row.local).filter(Boolean) as DocFootnote[],
-      rows.map((row) => row.server).filter(Boolean) as DocFootnote[],
+      notesOf(conflict.local),
+      notesOf(conflict.server),
       { local: false, server: false },
       resolved,
       boardRemints,
@@ -387,15 +417,25 @@ export function HubConflictSplit({
       pick: "merged",
       footnotes: merged,
       ink,
+      inkPages,
+      footnoteInkPages,
       ...(Object.keys(boardRemints).length > 0 ? { boardRemints } : {}),
     });
   };
 
   const focusPage = useMemo(() => {
     if (!conflict) return 1;
+    const padPage = parseInkPageRowId(focusedId);
+    if (padPage != null) {
+      return padPage >= 1 ? padPage : conflictFocusPage({ inkPageId: conflict.inkPageId });
+    }
+    const fnPage = parseFootnoteInkPageRowId(focusedId);
+    if (fnPage) {
+      return fnPage.pageId >= 1 ? fnPage.pageId : 1;
+    }
     if (focusedId === INK_ROW_ID) {
       return conflictFocusPage({
-        inkPageId: conflict.inkPageId,
+        inkPageId: conflict.inkPageId ?? padInkRows[0]?.pageId,
         ink: [...(conflict.localInk ?? []), ...(conflict.serverInk ?? [])],
       });
     }
@@ -405,7 +445,7 @@ export function HubConflictSplit({
       inkPageId: conflict.inkPageId,
       ink: conflict.localInk,
     });
-  }, [conflict, focusedId, rows]);
+  }, [conflict, focusedId, rows, padInkRows]);
 
   useEffect(() => {
     setOverlayInk({ local: [], server: [] });
@@ -465,67 +505,52 @@ export function HubConflictSplit({
         ? "Every change needs a choice — ✓ keep or ✕ drop. ✓ both on the same change combines the two; ✕ both removes that entry. The file itself always stays."
         : "";
 
-  const renderInkRow = (side: Side) => {
-    const n =
-      side === "local"
-        ? inkCount(conflict.localInkPageIds, conflict.localInk)
-        : inkCount(conflict.hubInkPageIds, conflict.serverInk);
-    const kept = pickOf(picks, INK_ROW_ID, side) === true;
-    const dropped = pickOf(picks, INK_ROW_ID, side) === false;
-    /*
-     * Scratch boards are handwriting too, and this row decides them.
-     *
-     * Their strokes ride their own hub keys now rather than the pad's JSON, so
-     * a ✓ or ✕ here settles them along with the document's pages. Saying how
-     * many there are is the difference between a choice and a surprise.
-     */
-    const boards = scratchBoardCount(conflict.footnoteInk, side);
-    const boardHint =
-      boards === 0 ? "" : boards === 1 ? " · 1 board" : ` · ${boards} boards`;
-    const pageHint =
-      (conflict.inkPageId != null
-        ? `page ${conflict.inkPageId}`
-        : n === 1
-          ? "1 page"
-          : `${n} pages`) + boardHint;
+  const renderInkChoiceRow = (
+    side: Side,
+    id: string,
+    has: boolean,
+    unread: boolean,
+    excerpt: string,
+  ) => {
+    if (!has) return null;
+    const kept = pickOf(picks, id, side) === true;
+    const dropped = pickOf(picks, id, side) === false;
     const label = sideLabel(side);
     return (
       <li
+        key={id}
         className={[
           "lc-hub-conflict-note",
           "lc-hub-conflict-ink",
-          focusedId === INK_ROW_ID ? "is-focused" : "",
+          focusedId === id ? "is-focused" : "",
         ]
           .filter(Boolean)
           .join(" ")}
+        data-note-id={id}
         data-pick={kept ? "keep" : dropped ? "drop" : "undecided"}
-        onClick={() => setFocusedId(INK_ROW_ID)}
+        onClick={() => setFocusedId(id)}
       >
         <span className="lc-hub-conflict-note-kind">ink</span>
         <span className="lc-hub-conflict-note-excerpt">
-          {side === "server" && serverInkUnread
-            ? "Could not read handwriting"
-            : n > 0
-              ? `Handwriting (${pageHint})`
-              : "No handwriting"}
+          {unread ? "Could not read handwriting" : excerpt}
         </span>
         <span className="lc-hub-conflict-note-actions">
           <button
             type="button"
             data-action="keep"
             aria-pressed={kept}
-            disabled={side === "server" && (serverMissing || serverInkUnread)}
+            disabled={unread || (side === "server" && serverMissing)}
             aria-label={`Keep ${label} handwriting`}
             title={
               kept
                 ? "This handwriting is kept — tap to reconsider. ✓ both merges both stroke sets."
-                : `✓ keeps ${label} handwriting. ✓ both merges both stroke sets.`
+                : `✓ keeps the ${label} copy. ✓ both merges both stroke sets.`
             }
             className={kept ? "lc-doc-confirm-btn lc-doc-confirm-yes" : "lc-doc-confirm-btn"}
             onClick={(event) => {
               event.stopPropagation();
-              toggleKeep(side, INK_ROW_ID);
-              setFocusedId(INK_ROW_ID);
+              toggleKeep(side, id);
+              setFocusedId(id);
             }}
           >
             ✓
@@ -537,14 +562,14 @@ export function HubConflictSplit({
             aria-label={`Drop ${label} handwriting`}
             title={
               dropped
-                ? "This handwriting will be removed — tap to reconsider. ✕ both sides keeps the file with no ink."
-                : `✕ drops ${label} handwriting. ✕ both sides keeps the file with no ink.`
+                ? "This handwriting will be removed — tap to reconsider. ✕ both sides keeps the file with no ink on this page."
+                : `✕ drops the ${label} copy. ✕ both sides keeps the file with no ink on this page.`
             }
             className={dropped ? "lc-doc-confirm-btn lc-doc-confirm-no" : "lc-doc-confirm-btn"}
             onClick={(event) => {
               event.stopPropagation();
-              toggleDrop(side, INK_ROW_ID);
-              setFocusedId(INK_ROW_ID);
+              toggleDrop(side, id);
+              setFocusedId(id);
             }}
           >
             ✕
@@ -552,6 +577,47 @@ export function HubConflictSplit({
         </span>
       </li>
     );
+  };
+
+  const renderInkRows = (side: Side) => (
+    <>
+      {padInkRows.map((row) => {
+        const id = inkPageRowId(row.pageId);
+        const has = side === "local" ? row.hasLocal : row.hasServer;
+        const unread = side === "server" && serverInkUnread;
+        return renderInkChoiceRow(
+          side,
+          id,
+          has,
+          unread,
+          `Handwriting (page ${row.pageId})`,
+        );
+      })}
+      {fnInkRows.map((row) => {
+        const id = footnoteInkPageRowId(row.wbId, row.pageId);
+        const has = side === "local" ? row.hasLocal : row.hasServer;
+        return renderInkChoiceRow(
+          side,
+          id,
+          has,
+          false,
+          `Scratch (${row.wbId}, page ${row.pageId})`,
+        );
+      })}
+    </>
+  );
+
+  const showInkOn = (side: Side, page: number): boolean => {
+    const disputed = padInkRows.find((row) => row.pageId === page);
+    if (!disputed) {
+      return (
+        inkCount(
+          side === "local" ? conflict.localInkPageIds : conflict.hubInkPageIds,
+          side === "local" ? conflict.localInk : conflict.serverInk,
+        ) > 0
+      );
+    }
+    return pickOf(picks, inkPageRowId(page), side) === true;
   };
 
   /*
@@ -583,7 +649,7 @@ export function HubConflictSplit({
    */
   const hubSides: Side[] = (["local", "server"] as const).filter(
     (side) =>
-      focusedId !== INK_ROW_ID &&
+      !isInkRowId(focusedId) &&
       rows.some((row) => row.id === focusedId) &&
       pickOf(picks, focusedId, side) === true,
   );
@@ -708,7 +774,7 @@ export function HubConflictSplit({
      * Focus still chooses *which* row's card, so there is one per pane rather
      * than one per kept mark.
      */
-    const focusedRow = focusedId === INK_ROW_ID ? null : rows.find((row) => row.id === focusedId);
+    const focusedRow = isInkRowId(focusedId) ? null : rows.find((row) => row.id === focusedId);
     const focusedNote =
       focusedRow && pickOf(picks, focusedRow.id, side) === true
         ? (side === "local" ? focusedRow.local : focusedRow.server)
@@ -774,7 +840,7 @@ export function HubConflictSplit({
                 ? mergeInkDtos(conflict.localInk, overlayInk.local)
                 : mergeInkDtos(conflict.serverInk, overlayInk.server)
             }
-            showInk={pickOf(picks, INK_ROW_ID, side) === true}
+            showInk={showInkOn(side, focusPage)}
             bytes={bytes}
             filmScope={filmScopeBase ? `${filmScopeBase}-${side}` : undefined}
             sourceText={
@@ -815,7 +881,7 @@ export function HubConflictSplit({
             </div>
           ) : null}
           <ol className="lc-hub-conflict-list">
-            {renderInkRow(side)}
+            {renderInkRows(side)}
             {rows.map((row) => (
               <NoteRow
                 key={`${side}:${row.id}`}

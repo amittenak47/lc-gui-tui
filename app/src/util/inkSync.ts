@@ -52,6 +52,49 @@ import { loadPadHub } from "./padHub";
 
 export type InkPadKind = "annotate" | "whiteboard";
 
+/** One page's identity for a conflict freeze — ids plus the ping/IDB clock. */
+export interface InkPageStamp {
+  pageId: number;
+  updatedAt: number;
+  /** Freeze preview bytes, when present. Same clock with different gz still differs. */
+  gz?: string;
+}
+
+/** A page that is not the same on both devices. */
+export interface InkPageDiffRow {
+  pageId: number;
+  hasLocal: boolean;
+  hasServer: boolean;
+}
+
+/**
+ * Pages that disagree, by clock (and gzip when both sides have a preview).
+ *
+ * Same `updatedAt` is the ping's "in sync" — {@link isInkConflict} uses the
+ * same equality. A freeze that also has preview bytes can still flag a page
+ * whose clocks tied but whose strokes did not.
+ */
+export function inkPageDiffRows(
+  local: readonly InkPageStamp[],
+  hub: readonly InkPageStamp[],
+): InkPageDiffRow[] {
+  const localBy = new Map<number, InkPageStamp>();
+  for (const stamp of local) localBy.set(stamp.pageId, stamp);
+  const hubBy = new Map<number, InkPageStamp>();
+  for (const stamp of hub) hubBy.set(stamp.pageId, stamp);
+  const ids = [...new Set([...localBy.keys(), ...hubBy.keys()])].sort((a, b) => a - b);
+  const out: InkPageDiffRow[] = [];
+  for (const pageId of ids) {
+    const here = localBy.get(pageId);
+    const there = hubBy.get(pageId);
+    if (here && there && here.updatedAt === there.updatedAt) {
+      if (here.gz == null || there.gz == null || here.gz === there.gz) continue;
+    }
+    out.push({ pageId, hasLocal: Boolean(here), hasServer: Boolean(there) });
+  }
+  return out;
+}
+
 /**
  * Separates an annotate pad's id from one of its footnote scratch boards.
  *
@@ -193,22 +236,40 @@ async function encodedPagesFromDtos(
  * compressing a whole read-through to ask how many pages there were.
  */
 export async function localInkPageIds(kind: InkPadKind, key: string): Promise<number[]> {
+  return (await localInkPageStamps(kind, key)).map((row) => row.pageId);
+}
+
+/** This device's pages as stamps — ids plus the IDB clock, still no gzip. */
+export async function localInkPageStamps(
+  kind: InkPadKind,
+  key: string,
+): Promise<InkPageStamp[]> {
   const rows = await getInkPageRecords(inkDocKey(kind, key));
-  return rows.map((row) => row.pageId).sort((a, b) => a - b);
+  return rows
+    .map((row) => ({ pageId: row.pageId, updatedAt: row.updatedAt }))
+    .sort((a, b) => a.pageId - b.pageId);
 }
 
 /**
- * The page a conflict preview should open on, given both sides' page ids.
+ * The page a conflict preview should open on.
  *
- * The split focuses the ink row first and `conflictFocusPage` falls back to
- * the first page of the two lists concatenated — so this is the same page, and
- * knowing it up front is what lets the freeze fetch one page instead of a pad.
- * An ink stop already names its page and does not come through here.
+ * Prefer a page that actually differs (stamps from IDB and the ping digest).
+ * Without stamps, the first id either side has — the split still focuses the
+ * first ink row, and knowing that page up front is what lets the freeze fetch
+ * one page instead of a pad. An ink stop already names its page and does not
+ * come through here.
  */
 export function previewInkPages(
   localIds: readonly number[],
   hubIds: readonly number[],
+  localStamps?: readonly InkPageStamp[],
+  hubStamps?: readonly InkPageStamp[],
 ): number[] {
+  if (localStamps && hubStamps) {
+    const diffs = inkPageDiffRows(localStamps, hubStamps);
+    const first = diffs.find((row) => row.pageId >= 1)?.pageId ?? diffs[0]?.pageId;
+    return first == null ? [] : [first];
+  }
   const first = localIds.find((id) => id >= 1) ?? hubIds.find((id) => id >= 1);
   return first == null ? [] : [first];
 }
@@ -459,6 +520,126 @@ export async function applyInkChoice(
   }
 }
 
+/**
+ * Write one choice per page, leaving every other page of the pad alone.
+ *
+ * The split used to have one handwriting row for the whole pad, so
+ * {@link applyInkChoice} could treat "Keep Local" as "this device's ink, and
+ * empty everything the hub had extra". Per-page rows only name the pages that
+ * differ; identical pages must not be empty-PUT or deleted just because a
+ * sibling page was in the merge window.
+ */
+export async function applyInkChoicesByPage(
+  client: LcClient,
+  kind: InkPadKind,
+  key: string,
+  choices: readonly { pageId: number; choice: HubInkChoice }[],
+  serverInk: readonly InkPageDto[] | null,
+  opts: {
+    hubPageIds?: readonly number[];
+    fetchHubPages?: (pageIds: readonly number[]) => Promise<InkPageDto[] | null>;
+  } = {},
+): Promise<void> {
+  if (choices.length === 0) return;
+  const docKey = inkDocKey(kind, key);
+  const now = Date.now();
+  const needHub = [
+    ...new Set(
+      choices
+        .filter((row) => row.choice === "server" || row.choice === "merged")
+        .map((row) => row.pageId),
+    ),
+  ];
+  let hubList: readonly InkPageDto[] = serverInk ?? [];
+  if (needHub.length > 0) {
+    if (opts.fetchHubPages) {
+      const fetched = await opts.fetchHubPages(needHub);
+      if (fetched == null) {
+        throw new Error("the other device's handwriting could not be read");
+      }
+      const got = new Set(fetched.map((page) => page.page_id));
+      if (needHub.some((id) => !got.has(id))) {
+        throw new Error("the other device's handwriting could not be read");
+      }
+      hubList = fetched;
+    } else if (serverInk == null) {
+      throw new Error("the other device's handwriting could not be read");
+    } else {
+      const got = new Set(serverInk.map((page) => page.page_id));
+      if (needHub.some((id) => !got.has(id))) {
+        throw new Error("the other device's handwriting could not be read");
+      }
+      hubList = serverInk;
+    }
+  }
+  const hubBy = new Map(hubList.map((page) => [page.page_id, page]));
+  const localBy = new Map(
+    (await getInkPageRecords(docKey)).map((row) => [row.pageId, row]),
+  );
+
+  for (const { pageId, choice } of choices) {
+    if (choice === "local") {
+      const row = localBy.get(pageId);
+      if (row) {
+        const gz = await gzOf(row);
+        if (gz) {
+          await client.putInkPage({
+            kind,
+            key,
+            page_id: pageId,
+            updated_at: row.updatedAt,
+            gz: bytesToB64(gz),
+          });
+        }
+      } else {
+        const emptyGz = await emptyInkGz();
+        await client.putInkPage({
+          kind,
+          key,
+          page_id: pageId,
+          updated_at: now,
+          gz: emptyGz,
+        });
+      }
+      continue;
+    }
+    if (choice === "server") {
+      const page = hubBy.get(pageId);
+      if (!page?.gz) {
+        throw new Error("the other device's handwriting could not be read");
+      }
+      await writeInkPage(docKey, page);
+      continue;
+    }
+    if (choice === "none") {
+      const emptyGz = await emptyInkGz();
+      await writeInkPage(docKey, { page_id: pageId, updated_at: now, gz: emptyGz });
+      await client.putInkPage({
+        kind,
+        key,
+        page_id: pageId,
+        updated_at: now,
+        gz: emptyGz,
+      });
+      continue;
+    }
+    const localEnc = localBy.has(pageId)
+      ? await encodedFromRecord(localBy.get(pageId)!)
+      : null;
+    const hubPage = hubBy.get(pageId);
+    const hubEnc = hubPage?.gz ? await encodedFromGzB64(hubPage.gz) : null;
+    const merged = mergeEncodedPages(
+      localEnc ? new Map([[pageId, localEnc]]) : new Map(),
+      hubEnc ? new Map([[pageId, hubEnc]]) : new Map(),
+    );
+    const encoded = merged.get(pageId);
+    if (!encoded) continue;
+    const gz = bytesToB64(await gzipBytes(packEncodedInk(encoded)));
+    await writeInkPage(docKey, { page_id: pageId, updated_at: now, gz });
+    await client.putInkPage({ kind, key, page_id: pageId, updated_at: now, gz });
+  }
+}
+
 /** One footnote scratch board's handwriting, as the conflict stash sees it. */
 export interface FootnoteInkBoard {
   wbId: string;
@@ -466,6 +647,10 @@ export interface FootnoteInkBoard {
   hubPageIds: number[];
   /** Page ids this device holds for it. Ids only — no strokes are read. */
   localPageIds: number[];
+  /** Local clock per page, when the freeze recorded it. */
+  localPages?: InkPageStamp[];
+  /** Hub clock per page, from the ping digest. */
+  hubPages?: InkPageStamp[];
 }
 
 /**
@@ -498,6 +683,42 @@ export async function applyFootnoteInkChoice(
       hubPageIds: board.hubPageIds,
       ...(opts.fetchHubPages
         ? { fetchHubPages: (pageIds: readonly number[]) => opts.fetchHubPages!(key, pageIds) }
+        : {}),
+    });
+  }
+}
+
+/**
+ * Per-page choices for footnote scratch boards.
+ *
+ * Same rule as the pad: only named pages are written. A board whose strokes
+ * match on both devices is not in the list and is left alone.
+ */
+export async function applyFootnoteInkPageChoices(
+  client: LcClient,
+  docId: string,
+  choices: readonly { wbId: string; pageId: number; choice: HubInkChoice }[],
+  boards: readonly FootnoteInkBoard[] | undefined,
+  opts: {
+    fetchHubPages?: (
+      key: string,
+      pageIds: readonly number[],
+    ) => Promise<InkPageDto[] | null>;
+  } = {},
+): Promise<void> {
+  const byBoard = new Map<string, { pageId: number; choice: HubInkChoice }[]>();
+  for (const row of choices) {
+    const list = byBoard.get(row.wbId) ?? [];
+    list.push({ pageId: row.pageId, choice: row.choice });
+    byBoard.set(row.wbId, list);
+  }
+  for (const [wbId, pages] of byBoard) {
+    const key = footnoteInkHubKey(docId, wbId);
+    const board = boards?.find((row) => row.wbId === wbId);
+    await applyInkChoicesByPage(client, "annotate", key, pages, null, {
+      hubPageIds: board?.hubPageIds,
+      ...(opts.fetchHubPages
+        ? { fetchHubPages: (pageIds) => opts.fetchHubPages!(key, pageIds) }
         : {}),
     });
   }

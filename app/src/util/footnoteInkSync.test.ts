@@ -206,6 +206,28 @@ describe("applyFootnoteInkChoice", () => {
   });
 });
 
+describe("applyFootnoteInkPageChoices", () => {
+  it("writes only the named board page", async () => {
+    const { applyFootnoteInkPageChoices } = await loadInkSync({
+      "fnwb:pad-1:wb7": [1],
+      "fnwb:pad-1:wb8": [1],
+    });
+    const putInkPage = vi.fn().mockResolvedValue(undefined);
+    await applyFootnoteInkPageChoices(
+      { putInkPage } as never,
+      "pad-1",
+      [{ wbId: "wb7", pageId: 1, choice: "local" }],
+      [
+        { wbId: "wb7", hubPageIds: [1], localPageIds: [1] },
+        { wbId: "wb8", hubPageIds: [1], localPageIds: [1] },
+      ],
+    );
+    const keys = putInkPage.mock.calls.map((call) => call[0].key);
+    expect(keys).toContain("pad-1/fn/wb7");
+    expect(keys).not.toContain("pad-1/fn/wb8");
+  });
+});
+
 describe("remintFootnoteInk", () => {
   const page = (key: string, pageId: number) => ({
     kind: "annotate" as const,

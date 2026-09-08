@@ -365,7 +365,9 @@ import {
 } from "./util/inkConflicts";
 import {
   applyFootnoteInkChoice,
+  applyFootnoteInkPageChoices,
   applyInkChoice,
+  applyInkChoicesByPage,
   fetchHubInkPages,
   remintFootnoteInk,
 } from "./util/inkSync";
@@ -466,7 +468,7 @@ async function restoreInk(board: BoardHandle, docKey: string | null, blob: { ink
     const shards = await getInkPages(docKey);
     if (shards.size > 0) {
       board.ingestInkPages(shards);
-      return;
+      if (board.getInkOpCount() > 0) return;
     }
   }
   const ops = inkOpsFrom(blob);
@@ -963,31 +965,56 @@ export function Workspace({
         }
       }
       const inkChoice = inkChoiceOf(resolution);
-      await applyInkChoice(
-        client,
-        c.kind,
-        c.id,
-        inkChoice,
-        c.serverInk ?? null,
-        {
-          // Ids off the ping digest, not the stash's preview list: that list
-          // is scoped to the page the split drew, and a discard has to name
-          // every hub page or the rest comes back on the next walk.
-          ...(c.hubInkPageIds ? { hubPageIds: c.hubInkPageIds } : {}),
-          // And the bytes, now that a choice has been made and we know which
-          // pages it writes. The freeze took one page; this takes the set.
-          fetchHubPages: (pageIds) => fetchHubInkPages(client, c.kind, c.id, pageIds),
-        },
-      );
+      if (resolution.inkPages) {
+        await applyInkChoicesByPage(
+          client,
+          c.kind,
+          c.id,
+          resolution.inkPages,
+          c.serverInk ?? null,
+          {
+            ...(c.hubInkPageIds ? { hubPageIds: c.hubInkPageIds } : {}),
+            fetchHubPages: (pageIds) => fetchHubInkPages(client, c.kind, c.id, pageIds),
+          },
+        );
+      } else {
+        await applyInkChoice(
+          client,
+          c.kind,
+          c.id,
+          inkChoice,
+          c.serverInk ?? null,
+          {
+            // Ids off the ping digest, not the stash's preview list: that list
+            // is scoped to the page the split drew, and a discard has to name
+            // every hub page or the rest comes back on the next walk.
+            ...(c.hubInkPageIds ? { hubPageIds: c.hubInkPageIds } : {}),
+            // And the bytes, now that a choice has been made and we know which
+            // pages it writes. The freeze took one page; this takes the set.
+            fetchHubPages: (pageIds) => fetchHubInkPages(client, c.kind, c.id, pageIds),
+          },
+        );
+      }
       /*
        * The scratch boards' handwriting, under the same choice.
        *
        * It used to travel inside the pad's JSON, so whichever pane won carried
        * it along. Now it is ink like any other ink, on keys of its own, and it
        * has to be resolved or the document settles while the boards go on
-       * disagreeing.
+       * disagreeing. Per-page lists leave identical boards untouched.
        */
-      if (c.footnoteInk?.length) {
+      if (resolution.footnoteInkPages) {
+        await applyFootnoteInkPageChoices(
+          client,
+          c.id,
+          resolution.footnoteInkPages,
+          c.footnoteInk,
+          {
+            fetchHubPages: (key, pageIds) =>
+              fetchHubInkPages(client, "annotate", key, pageIds),
+          },
+        );
+      } else if (c.footnoteInk?.length) {
         await applyFootnoteInkChoice(client, c.id, c.footnoteInk, inkChoice, {
           fetchHubPages: (key, pageIds) =>
             fetchHubInkPages(client, "annotate", key, pageIds),

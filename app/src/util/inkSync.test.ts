@@ -172,7 +172,7 @@ describe("applyInkChoice", () => {
       deleteInkPages,
     }));
     const mod = await import("./inkSync");
-    return { applyInkChoice: mod.applyInkChoice, deleteInkPages };
+    return { applyInkChoice: mod.applyInkChoice, applyInkChoicesByPage: mod.applyInkChoicesByPage, deleteInkPages };
   }
 
   const page = (pageId: number) => ({
@@ -273,6 +273,45 @@ describe("applyInkChoice", () => {
       .sort((a, b) => a - b);
     expect(cleared).toEqual([7, 40]);
   });
+
+  it("writes one page without deleting the rest of the pad", async () => {
+    const { applyInkChoicesByPage, deleteInkPages } = await loadApply([
+      { pageId: 1 },
+      { pageId: 2 },
+    ]);
+    const putInkPage = vi.fn().mockResolvedValue(undefined);
+    await applyInkChoicesByPage(
+      { putInkPage } as never,
+      "annotate",
+      "p1",
+      [{ pageId: 2, choice: "server" }],
+      [page(2)],
+    );
+    expect(deleteInkPages).not.toHaveBeenCalled();
+    expect(putInkPage).not.toHaveBeenCalled();
+  });
+
+  it("empty-PUTs only the named hub-only page on keep-local", async () => {
+    const { applyInkChoicesByPage, deleteInkPages } = await loadApply([{ pageId: 1 }]);
+    const putInkPage = vi.fn().mockResolvedValue(undefined);
+    await applyInkChoicesByPage(
+      { putInkPage } as never,
+      "annotate",
+      "p1",
+      [{ pageId: 3, choice: "local" }],
+      [page(3)],
+    );
+    expect(deleteInkPages).not.toHaveBeenCalled();
+    expect(putInkPage.mock.calls.map((call) => call[0]?.page_id)).toEqual([3]);
+  });
+
+  it("does not touch the pad when no pages were named", async () => {
+    const { applyInkChoicesByPage, deleteInkPages } = await loadApply([{ pageId: 1 }]);
+    const putInkPage = vi.fn();
+    await applyInkChoicesByPage({ putInkPage } as never, "annotate", "p1", [], [page(1)]);
+    expect(deleteInkPages).not.toHaveBeenCalled();
+    expect(putInkPage).not.toHaveBeenCalled();
+  });
 });
 
 describe("previewInkPages", () => {
@@ -289,6 +328,26 @@ describe("previewInkPages", () => {
   it("asks for nothing when neither side has ink", async () => {
     const { previewInkPages } = await import("./inkSync");
     expect(previewInkPages([], [])).toEqual([]);
+  });
+
+  it("opens on the first page the two clocks disagree about", async () => {
+    const { previewInkPages } = await import("./inkSync");
+    expect(
+      previewInkPages(
+        [1, 7, 12],
+        [1, 7, 12],
+        [
+          { pageId: 1, updatedAt: 10 },
+          { pageId: 7, updatedAt: 20 },
+          { pageId: 12, updatedAt: 30 },
+        ],
+        [
+          { pageId: 1, updatedAt: 10 },
+          { pageId: 7, updatedAt: 21 },
+          { pageId: 12, updatedAt: 30 },
+        ],
+      ),
+    ).toEqual([7]);
   });
 });
 
