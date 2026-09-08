@@ -3,15 +3,21 @@
  */
 
 import { tagViz, type Skeleton } from "../../templates/skeleton";
-import type { RenderContext, Renderer } from "../layout";
-import type { VizFrame, VizKind, VizProgram } from "../schema";
+import { caption, footer, header, headerOffset, type RenderContext, type Renderer } from "../layout";
+import { compositePanel, type VizFrame, type VizKind, type VizProgram } from "../schema";
+import { renderBits } from "./bits";
+import { renderCallTree } from "./calltree";
+import { renderDpList, renderDpTable } from "./dp";
 import { renderGraph } from "./graph";
 import { renderArray, renderQueue, renderStack } from "./linear";
 import { renderLinkedList } from "./linked";
+import { renderSegTree } from "./segtree";
 import { renderGrid, renderHashmap } from "./tabular";
 import { renderHeap, renderTree } from "./tree";
+import { renderTrie } from "./trie";
+import { renderUnionFind } from "./unionfind";
 
-export const RENDERERS: Record<VizKind, Renderer> = {
+const BASE_RENDERERS: Omit<Record<VizKind, Renderer>, "composite"> = {
   array: renderArray,
   grid: renderGrid,
   hashmap: renderHashmap,
@@ -21,6 +27,69 @@ export const RENDERERS: Record<VizKind, Renderer> = {
   stack: renderStack,
   queue: renderQueue,
   graph: renderGraph,
+  trie: renderTrie,
+  unionfind: renderUnionFind,
+  dplist: renderDpList,
+  dptable: renderDpTable,
+  segtree: renderSegTree,
+  calltree: renderCallTree,
+  bits: renderBits,
+};
+
+/**
+ * Named side-by-side panels. Nested `composite` is depth-1 — skipped, not recursed.
+ */
+function renderComposite(ctx: RenderContext): Skeleton[] {
+  const out = header(ctx);
+  const top = ctx.origin.y + headerOffset(ctx) + 20;
+  let cursor = ctx.origin.x;
+  let bottom = top;
+  const panels = ctx.frame.cells
+    .map(compositePanel)
+    .filter((panel): panel is NonNullable<typeof panel> => panel !== null);
+
+  panels.forEach((panel, index) => {
+    const renderer = BASE_RENDERERS[panel.viz];
+    const subProgram: VizProgram = {
+      viz: panel.viz,
+      id: `${ctx.program.id}-p${index}`,
+      title: panel.title,
+      frames: [panel.frame],
+    };
+    const subCtx: RenderContext = {
+      program: subProgram,
+      frame: panel.frame,
+      frameIndex: 0,
+      origin: { x: cursor, y: top },
+      bare: true,
+      palette: ctx.palette,
+    };
+    if (panel.title) {
+      out.push(caption(ctx, `panel-${index}-name`, cursor, top - 20, panel.title, { accent: true }));
+    }
+    const pieces = renderer(subCtx);
+    out.push(...pieces);
+    const maxX = pieces.reduce(
+      (max, skeleton) => Math.max(max, (skeleton.x ?? cursor) + (skeleton.width ?? 40)),
+      cursor + 80,
+    );
+    const maxY = pieces.reduce(
+      (max, skeleton) => Math.max(max, (skeleton.y ?? top) + (skeleton.height ?? 40)),
+      top,
+    );
+    cursor = maxX + 36;
+    bottom = Math.max(bottom, maxY);
+  });
+
+  if (panels.length === 0) {
+    out.push(caption(ctx, "empty", ctx.origin.x, top, "(empty composite)"));
+  }
+  return [...out, ...footer(ctx, bottom)];
+}
+
+export const RENDERERS: Record<VizKind, Renderer> = {
+  ...BASE_RENDERERS,
+  composite: renderComposite,
 };
 
 /**

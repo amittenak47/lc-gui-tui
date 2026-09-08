@@ -7,7 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const VIZ_KINDS: [&str; 9] = [
+pub const MAX_TRACE_FRAMES: usize = 40;
+
+pub const VIZ_KINDS: [&str; 17] = [
     "array",
     "grid",
     "hashmap",
@@ -17,6 +19,14 @@ pub const VIZ_KINDS: [&str; 9] = [
     "stack",
     "queue",
     "graph",
+    "trie",
+    "unionfind",
+    "dplist",
+    "dptable",
+    "segtree",
+    "calltree",
+    "composite",
+    "bits",
 ];
 
 /// One step of an animation: the full semantic state at that moment, not a
@@ -80,6 +90,11 @@ impl VizProgram {
         if self.frames.is_empty() {
             return Some("the diagram had no frames".to_string());
         }
+        if self.frames.len() > MAX_TRACE_FRAMES {
+            return Some(format!(
+                "a trace may have at most {MAX_TRACE_FRAMES} frames — split the rest into another animate_trace"
+            ));
+        }
         if !self.has_content() {
             return Some(format!(
                 "every frame of the {:?} was empty — `cells`/`entries` carry the contents, \
@@ -114,9 +129,13 @@ pub(super) fn frame_schema() -> serde_json::Value {
                 "type": "array",
                 "description":
                     "THE CONTENTS at this step, in full, not a diff. Required for array, grid, \
-                     stack, queue, linkedlist, tree, heap, and graph — a frame with an empty \
+                     stack, queue, linkedlist, tree, heap, graph, trie, unionfind, dplist, \
+                     dptable, segtree, calltree, composite, and bits — a frame with an empty \
                      `cells` draws an empty box. array: [2,7,11,15]. grid: [[1,0],[0,1]]. \
-                     tree/heap: level-order with nulls, [5,3,8,null,1]. graph: node labels.",
+                     tree/heap: level-order with nulls, [5,3,8,null,1]. graph: node labels. \
+                     trie: nodes {ch, end}. unionfind: parent[]. dplist: dp[]. dptable: rows of \
+                     the table. segtree: {lo,hi,val}. calltree: {fn, args}. composite: nested \
+                     panels {viz, cells, …}. bits: 0/1 cells.",
                 "items": {}
             },
             "pointers": {
@@ -136,8 +155,11 @@ pub(super) fn frame_schema() -> serde_json::Value {
                 "type": "array",
                 "description":
                     "REQUIRED for hashmap: the map's contents as [key, value] pairs, e.g. \
-                     [[2,0],[7,1]]. For tree/graph/linkedlist it holds edges as [from, to]. A \
-                     hashmap frame with an empty `entries` draws an empty map.",
+                     [[2,0],[7,1]]. For tree/graph/linkedlist/trie/calltree it holds edges as \
+                     [from, to] (trie/calltree are parent→child, not heap 2i+1). unionfind: \
+                     rank[] when it is a number list. dplist: predecessor indices. dptable: \
+                     optional [col labels] then [row labels], then pred arrows. A hashmap \
+                     frame with an empty `entries` draws an empty map.",
                 "items": {}
             },
             "note": {"type": "string", "description": "One line on why this step happens."}

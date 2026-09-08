@@ -84,9 +84,12 @@ describe("parseVizProgram", () => {
 });
 
 describe("isVizKind", () => {
-  it("recognizes the nine kinds the daemon advertises", () => {
+  it("recognizes every kind the daemon advertises", () => {
     expect(isVizKind("linkedlist")).toBe(true);
-    expect(isVizKind("trie")).toBe(false);
+    expect(isVizKind("trie")).toBe(true);
+    expect(isVizKind("unionfind")).toBe(true);
+    expect(isVizKind("composite")).toBe(true);
+    expect(isVizKind("hypercube")).toBe(false);
     expect(isVizKind(7)).toBe(false);
   });
 });

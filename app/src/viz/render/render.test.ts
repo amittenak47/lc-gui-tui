@@ -62,11 +62,83 @@ const SAMPLES: Record<VizKind, VizProgram> = {
     { cells: ["0", "1", "2"], entries: [["0", "1"], ["1", "2"]], highlight: [0] },
     { cells: ["0", "1", "2"], entries: [["0", "1"], ["1", "2"]], highlight: [2] },
   ]),
+  trie: program("trie", [
+    {
+      cells: [{ ch: "", end: false }, { ch: "a", end: false }, { ch: "p", end: true }],
+      entries: [[0, 1], [1, 2]],
+      highlight: [2],
+    },
+    {
+      cells: [{ ch: "", end: false }, { ch: "a", end: false }, { ch: "p", end: true }],
+      entries: [[0, 1], [1, 2]],
+      highlight: [1],
+    },
+  ]),
+  unionfind: program("unionfind", [
+    { cells: [0, 0, 2], entries: [1, 0, 0], highlight: [1] },
+    { cells: [0, 0, 0], entries: [1, 0, 0], highlight: [2] },
+  ]),
+  dplist: program("dplist", [
+    { cells: [0, 1, 2], entries: [-1, 0, 1], highlight: [2] },
+    { cells: [0, 1, 4], entries: [-1, 0, 1], highlight: [2] },
+  ]),
+  dptable: program("dptable", [
+    { cells: [[0, 1], [1, 0]], entries: [["", "a"], ["", "b"]], highlight: [3] },
+    { cells: [[0, 1], [1, 1]], entries: [["", "a"], ["", "b"]], highlight: [3] },
+  ]),
+  segtree: program("segtree", [
+    {
+      cells: [
+        { lo: 0, hi: 3, val: 6 },
+        { lo: 0, hi: 1, val: 3 },
+        { lo: 2, hi: 3, val: 3 },
+      ],
+      highlight: [0],
+    },
+    {
+      cells: [
+        { lo: 0, hi: 3, val: 7 },
+        { lo: 0, hi: 1, val: 3 },
+        { lo: 2, hi: 3, val: 4 },
+      ],
+      highlight: [2],
+    },
+  ]),
+  calltree: program("calltree", [
+    {
+      cells: [{ fn: "fib", args: 3 }, { fn: "fib", args: 2 }, { fn: "fib", args: 1 }],
+      entries: [[0, 1], [0, 2]],
+      highlight: [0],
+    },
+    {
+      cells: [{ fn: "fib", args: 3 }, { fn: "fib", args: 2 }, { fn: "fib", args: 1 }],
+      entries: [[0, 1], [0, 2]],
+      highlight: [1],
+    },
+  ]),
+  composite: program("composite", [
+    {
+      cells: [
+        { viz: "array", cells: [1, 2] },
+        { viz: "stack", cells: ["x"] },
+      ],
+    },
+    {
+      cells: [
+        { viz: "array", cells: [1, 2, 3] },
+        { viz: "stack", cells: ["x"] },
+      ],
+    },
+  ]),
+  bits: program("bits", [
+    { cells: [1, 0, 1, 1], highlight: [0] },
+    { cells: [1, 1, 0, 1], highlight: [1] },
+  ]),
 };
 
 describe("renderer registry", () => {
   it("has a deterministic layout function for every advertised kind", () => {
-    // The tool schema in src/llm/tools.rs promises the model these nine.
+    // The tool schema in src/llm/viz/kinds.rs promises the model these kinds.
     expect(Object.keys(RENDERERS).sort()).toEqual([...VIZ_KINDS].sort());
   });
 });

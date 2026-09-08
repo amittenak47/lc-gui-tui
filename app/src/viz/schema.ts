@@ -19,9 +19,20 @@ export const VIZ_KINDS = [
   "stack",
   "queue",
   "graph",
+  "trie",
+  "unionfind",
+  "dplist",
+  "dptable",
+  "segtree",
+  "calltree",
+  "composite",
+  "bits",
 ] as const;
 
 export type VizKind = (typeof VIZ_KINDS)[number];
+
+/** Per-call cap on `animate_trace`. Extra frames are dropped, not rendered. */
+export const MAX_TRACE_FRAMES = 40;
 
 /**
  * One step. Frames carry the **full** state, not a diff, so the scrubber can
@@ -76,11 +87,11 @@ export function parseVizProgram(raw: unknown): VizProgram | null {
     viz: record.viz,
     id,
     title: typeof record.title === "string" ? record.title : "",
-    frames,
+    frames: frames.slice(0, MAX_TRACE_FRAMES),
   };
 }
 
-function normalizeFrame(raw: unknown): VizFrame | null {
+export function normalizeFrame(raw: unknown): VizFrame | null {
   if (typeof raw !== "object" || raw === null) return null;
   const record = raw as Record<string, unknown>;
 
@@ -158,4 +169,100 @@ export function entryPair(entry: unknown): [string, string] | null {
     }
   }
   return null;
+}
+
+/** Trie node: `{ch, end}` or a character string (`"a*"` marks a word end). */
+export function trieNode(value: unknown): { ch: string; end: boolean } {
+  if (value === null || value === undefined) return { ch: "", end: false };
+  if (typeof value === "string") {
+    const end = value.endsWith("*") || value.endsWith("$");
+    return { ch: end ? value.slice(0, -1) : value, end };
+  }
+  if (typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const raw = record.ch ?? record.char ?? record.c;
+    const ch = raw === undefined ? "" : cellText(raw);
+    const end = Boolean(record.end ?? record.isEnd ?? record.terminal ?? record.word);
+    return { ch, end };
+  }
+  return { ch: cellText(value), end: false };
+}
+
+/** Segment-tree node: `{lo, hi, val}` or `[lo, hi, val]`. */
+export function intervalNode(
+  value: unknown,
+): { lo: string; hi: string; val: string } | null {
+  if (Array.isArray(value) && value.length >= 3) {
+    return { lo: cellText(value[0]), hi: cellText(value[1]), val: cellText(value[2]) };
+  }
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const lo = record.lo ?? record.l ?? record.left ?? record.start;
+    const hi = record.hi ?? record.r ?? record.right ?? record.end;
+    const val = record.val ?? record.value ?? record.v ?? record.sum;
+    if (lo === undefined && hi === undefined && val === undefined) return null;
+    return {
+      lo: cellText(lo ?? ""),
+      hi: cellText(hi ?? ""),
+      val: cellText(val ?? ""),
+    };
+  }
+  return null;
+}
+
+/** Recursion frame label: `{fn, args}` or a preformatted string. */
+export function callLabel(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const fn = record.fn ?? record.name ?? record.func ?? record.call;
+    if (fn !== undefined) {
+      const name = cellText(fn);
+      const args = record.args ?? record.arg ?? record.arguments;
+      if (args === undefined) return name;
+      const argText = Array.isArray(args) ? args.map(cellText).join(", ") : cellText(args);
+      return `${name}(${argText})`;
+    }
+  }
+  return cellText(value);
+}
+
+/** Integer parent→child edges from `entries`, ignoring anything unreadable. */
+export function parentChildEdges(entries: unknown[], count: number): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const entry of entries) {
+    const pair = entryPair(entry);
+    if (!pair) continue;
+    const from = Number(pair[0]);
+    const to = Number(pair[1]);
+    if (
+      Number.isInteger(from) &&
+      Number.isInteger(to) &&
+      from >= 0 &&
+      to >= 0 &&
+      from < count &&
+      to < count &&
+      from !== to
+    ) {
+      out.push([from, to]);
+    }
+  }
+  return out;
+}
+
+/** A nested panel inside `composite`. Depth-1 only — nested composites are skipped. */
+export function compositePanel(
+  value: unknown,
+): { viz: VizKind; title: string; frame: VizFrame } | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const viz = record.viz ?? record.kind;
+  if (!isVizKind(viz) || viz === "composite") return null;
+  const frame = normalizeFrame(record);
+  if (!frame) return null;
+  return {
+    viz,
+    title: typeof record.title === "string" ? record.title : "",
+    frame,
+  };
 }

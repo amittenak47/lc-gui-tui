@@ -175,7 +175,8 @@ whole integer is truly a single register.\n\
 matters. Pointers should name what they mean (`i`, `rev`, `num`). The scrubber and the chat \
 reply should agree on what each step shows.\n\
 - Every frame carries the FULL state at that step, not a diff.\n\
-- A frame's contents go in `cells` (array, grid, stack, queue, linkedlist, tree, heap, graph) or \
+- A frame's contents go in `cells` (array, grid, stack, queue, linkedlist, tree, heap, graph, \
+trie, unionfind, dplist, dptable, segtree, calltree, composite, bits) or \
 in `entries` (a hashmap's [key, value] pairs, and edges elsewhere). `pointers` takes integer \
 INDICES only, and `label` / `note` are prose. A frame whose `cells` and `entries` are both empty \
 draws an empty box and is thrown away, however good its note is — this is the single most common \
@@ -183,6 +184,12 @@ way a diagram is lost.\n\
   Right: {\"label\": \"i=1\", \"cells\": [2,7,11,15], \"pointers\": {\"i\": 1}, \"note\": \"need = 2\"}.\n\
   Wrong: {\"label\": \"i=1\", \"pointers\": {\"num\": 7, \"need\": 2}} — those are values, not \
 indices, and the frame draws nothing.\n\
+- Kind shapes the model must not fake: trie nodes are `{ch, end}` with parent→child `entries` \
+(not heap `2i+1`). unionfind: `cells` is parent[], `entries` is rank[] when ranks matter. \
+dplist: `cells` is dp[] and predecessors go in `entries`. dptable: a grid, optional axis labels \
+as the first scalar lists in `entries`. segtree: `{lo,hi,val}` nodes in heap order. calltree: \
+frames `{fn, args}` plus call edges. composite: named panels, each a nested kind, one level deep. \
+bits: one cell per bit (or one integer plus a width).\n\
 - Reuse the same `id` when you mean the same structure, so it is updated rather than duplicated.\n\
 - `cite_test_case` only accepts indices into the sample cases you were shown.\n\
 - Keep the prose reply short but specific: name what the diagram shows and what \
