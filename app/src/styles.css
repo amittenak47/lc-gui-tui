@@ -3346,6 +3346,8 @@ body[data-lc-sash-drag="horizontal"] {
   border-radius: 6px;
   box-sizing: border-box;
   pointer-events: none;
+  overflow: visible;
+  transform-origin: center center;
   background: color-mix(in srgb, var(--ink) 3%, transparent);
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--surface) 55%, transparent),
@@ -3366,27 +3368,97 @@ body[data-lc-sash-drag="horizontal"] {
   pointer-events: auto;
   position: absolute;
   padding: 0;
+  min-width: 0;
+  min-height: 0;
+  appearance: none;
+  -webkit-appearance: none;
   touch-action: none;
 }
 
 .lc-scene-select-handle {
-  width: 13px;
-  height: 13px;
-  margin-left: -6.5px;
-  margin-top: -6.5px;
+  width: 7px;
+  height: 7px;
+  margin-left: -3.5px;
+  margin-top: -3.5px;
   border-radius: 50%;
-  border: 1.5px solid color-mix(in srgb, var(--ink) 82%, transparent);
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1.25px solid color-mix(in srgb, var(--ink) 88%, transparent);
+  background: #fff;
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--surface) 70%, transparent),
-    0 2px 8px rgb(0 0 0 / 18%);
-  backdrop-filter: blur(8px);
+    0 0 0 1px color-mix(in srgb, var(--surface) 80%, transparent),
+    0 1px 3px rgb(0 0 0 / 22%);
   cursor: nwse-resize;
 }
 
-.lc-scene-select-handle-ne,
-.lc-scene-select-handle-sw {
+.lc-scene-select-handle::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+}
+
+.lc-scene-select-handle-nw {
+  left: 0;
+  top: 0;
+}
+
+.lc-scene-select-handle-n {
+  left: 50%;
+  top: 0;
+  width: 12px;
+  height: 4px;
+  margin-left: -6px;
+  margin-top: -2px;
+  border-radius: 2px;
+  cursor: ns-resize;
+}
+
+.lc-scene-select-handle-ne {
+  left: 100%;
+  top: 0;
   cursor: nesw-resize;
+}
+
+.lc-scene-select-handle-e {
+  left: 100%;
+  top: 50%;
+  width: 4px;
+  height: 12px;
+  margin-left: -2px;
+  margin-top: -6px;
+  border-radius: 2px;
+  cursor: ew-resize;
+}
+
+.lc-scene-select-handle-se {
+  left: 100%;
+  top: 100%;
+}
+
+.lc-scene-select-handle-s {
+  left: 50%;
+  top: 100%;
+  width: 12px;
+  height: 4px;
+  margin-left: -6px;
+  margin-top: -2px;
+  border-radius: 2px;
+  cursor: ns-resize;
+}
+
+.lc-scene-select-handle-sw {
+  left: 0;
+  top: 100%;
+  cursor: nesw-resize;
+}
+
+.lc-scene-select-handle-w {
+  left: 0;
+  top: 50%;
+  width: 4px;
+  height: 12px;
+  margin-left: -2px;
+  margin-top: -6px;
+  border-radius: 2px;
+  cursor: ew-resize;
 }
 
 .lc-scene-select-dock {
@@ -3406,9 +3478,13 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-morph-bar.lc-scene-select-menu {
   pointer-events: auto;
-  border: 1px solid color-mix(in srgb, var(--ink) 10%, var(--chrome-edge));
+  overflow: visible;
+  min-width: 124px;
+  min-height: 34px;
+  color: #1c1917;
+  border: 1px solid color-mix(in srgb, var(--ink) 18%, var(--chrome-edge));
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  background: color-mix(in srgb, #fff 82%, var(--surface));
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, #fff 40%, transparent),
     0 10px 28px rgb(0 0 0 / 16%);
@@ -3419,40 +3495,56 @@ body[data-lc-sash-drag="horizontal"] {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 4px;
+  padding: 3px;
+  opacity: 1;
+  filter: none;
+  transform: none;
 }
 
 .lc-scene-select-menu button {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 0;
   border-radius: 50%;
   background: transparent;
-  color: var(--ink);
+  color: #1c1917;
   cursor: pointer;
   touch-action: none;
 }
 
+.lc-scene-select-menu button svg {
+  display: block;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  overflow: visible;
+  color: inherit;
+  stroke: currentColor;
+}
+
 .lc-scene-select-menu button:hover,
 .lc-scene-select-menu button:focus-visible {
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  background: color-mix(in srgb, #1c1917 10%, transparent);
 }
 
 .lc-scene-select-menu button.is-danger:hover,
 .lc-scene-select-menu button.is-danger:focus-visible {
-  color: #c44;
+  color: #b42318;
   background: color-mix(in srgb, #c44 12%, transparent);
 }
 
 .lc-scene-select-menu button.lc-scene-select-spinning {
   width: auto;
-  min-width: 32px;
+  min-width: 28px;
   padding: 0 8px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--ink) 9%, transparent);
+  background: color-mix(in srgb, #1c1917 9%, transparent);
 }
 
 .lc-morph-bar.lc-scene-select-rotate {
@@ -3460,6 +3552,7 @@ body[data-lc-sash-drag="horizontal"] {
   background: transparent;
   box-shadow: none;
   backdrop-filter: none;
+  overflow: visible;
   display: inline-flex;
   vertical-align: middle;
 }
@@ -3469,6 +3562,9 @@ body[data-lc-sash-drag="horizontal"] {
   align-items: center;
   justify-content: center;
   padding: 0;
+  opacity: 1;
+  filter: none;
+  transform: none;
 }
 
 .lc-scene-select-angle {

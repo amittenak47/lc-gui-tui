@@ -280,25 +280,42 @@ export function flipElement<T extends PaintSceneElement>(element: T, axis: "h" |
   return { ...element, angle: Math.PI - (element.angle ?? 0) };
 }
 
-export type ScaleHandle = "nw" | "ne" | "se" | "sw";
+export type ScaleHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
+const MOVES_MIN_X = new Set<ScaleHandle>(["nw", "w", "sw"]);
+const MOVES_MAX_X = new Set<ScaleHandle>(["ne", "e", "se"]);
+const MOVES_MIN_Y = new Set<ScaleHandle>(["nw", "n", "ne"]);
+const MOVES_MAX_Y = new Set<ScaleHandle>(["sw", "s", "se"]);
+
+/** Keep a hair of size when a drag passes through zero, without pinning the sign. */
+function keepSpan(anchor: number, pointer: number): number {
+  const delta = pointer - anchor;
+  if (Math.abs(delta) >= MIN_SHAPE_SPAN) return pointer;
+  return anchor + Math.sign(delta || 1) * MIN_SHAPE_SPAN;
+}
+
+/**
+ * Move the grabbed edges to the pointer. `min` may pass `max` so a corner can
+ * travel through the opposite edge and keep going.
+ */
 export function resizeBounds(from: SceneBounds, handle: ScaleHandle, sceneX: number, sceneY: number): SceneBounds {
-  let minX = from.minX;
-  let minY = from.minY;
-  let maxX = from.maxX;
-  let maxY = from.maxY;
-  if (handle === "nw" || handle === "sw") minX = Math.min(sceneX, maxX - MIN_SHAPE_SPAN);
-  if (handle === "ne" || handle === "se") maxX = Math.max(sceneX, minX + MIN_SHAPE_SPAN);
-  if (handle === "nw" || handle === "ne") minY = Math.min(sceneY, maxY - MIN_SHAPE_SPAN);
-  if (handle === "sw" || handle === "se") maxY = Math.max(sceneY, minY + MIN_SHAPE_SPAN);
+  let { minX, minY, maxX, maxY } = from;
+  if (MOVES_MIN_X.has(handle)) minX = keepSpan(maxX, sceneX);
+  if (MOVES_MAX_X.has(handle)) maxX = keepSpan(minX, sceneX);
+  if (MOVES_MIN_Y.has(handle)) minY = keepSpan(maxY, sceneY);
+  if (MOVES_MAX_Y.has(handle)) maxY = keepSpan(minY, sceneY);
   return { minX, minY, maxX, maxY };
 }
 
+function signedRatio(fromMin: number, fromMax: number, toMin: number, toMax: number): number {
+  const from = fromMax - fromMin;
+  if (Math.abs(from) < 1e-9) return 1;
+  return (toMax - toMin) / from;
+}
+
 export function scaleAbout<T extends PaintSceneElement>(element: T, from: SceneBounds, to: SceneBounds): T {
-  const fromW = Math.max(MIN_SHAPE_SPAN, from.maxX - from.minX);
-  const fromH = Math.max(MIN_SHAPE_SPAN, from.maxY - from.minY);
-  const sx = (to.maxX - to.minX) / fromW;
-  const sy = (to.maxY - to.minY) / fromH;
+  const sx = signedRatio(from.minX, from.maxX, to.minX, to.maxX);
+  const sy = signedRatio(from.minY, from.maxY, to.minY, to.maxY);
   const map = (wx: number, wy: number): [number, number] => [
     to.minX + (wx - from.minX) * sx,
     to.minY + (wy - from.minY) * sy,
@@ -306,22 +323,85 @@ export function scaleAbout<T extends PaintSceneElement>(element: T, from: SceneB
   if (element.points && element.points.length >= 2) {
     const world = element.points.map(([px, py]) => map(element.x + px, element.y + py));
     const origin = world[0]!;
+    const last = world[world.length - 1]!;
     return {
       ...element,
       x: origin[0],
       y: origin[1],
-      width: to.maxX - to.minX,
-      height: to.maxY - to.minY,
+      width: last[0] - origin[0],
+      height: last[1] - origin[1],
       points: world.map(([wx, wy]) => [wx - origin[0], wy - origin[1]] as [number, number]),
     };
   }
-  const [nx, ny] = map(element.x, element.y);
+  const [nx0, ny0] = map(element.x, element.y);
+  let width = (element.width ?? 0) * sx;
+  let height = (element.height ?? 0) * sy;
+  let x = nx0;
+  let y = ny0;
+  if (width < 0) {
+    x += width;
+    width = -width;
+  }
+  if (height < 0) {
+    y += height;
+    height = -height;
+  }
+  return { ...element, x, y, width, height };
+}
+
+/** Scale a rotated box in its own axes so a corner drag follows the shape. */
+export function resizeElementLocal<T extends PaintSceneElement>(
+  element: T,
+  handle: ScaleHandle,
+  sceneX: number,
+  sceneY: number,
+): T {
+  if (element.points && element.points.length >= 2) {
+    const from = sceneElementBounds(element);
+    return scaleAbout(element, from, resizeBounds(from, handle, sceneX, sceneY));
+  }
+  const w = element.width ?? 0;
+  const h = element.height ?? 0;
+  const angle = element.angle ?? 0;
+  if (!angle) {
+    const from = sceneElementBounds(element);
+    return scaleAbout(element, from, resizeBounds(from, handle, sceneX, sceneY));
+  }
+  const cx = element.x + w / 2;
+  const cy = element.y + h / 2;
+  const icos = Math.cos(-angle);
+  const isin = Math.sin(-angle);
+  const dx = sceneX - cx;
+  const dy = sceneY - cy;
+  const localX = dx * icos - dy * isin + w / 2;
+  const localY = dx * isin + dy * icos + h / 2;
+  const to = resizeBounds({ minX: 0, minY: 0, maxX: w, maxY: h }, handle, localX, localY);
+  const sx = signedRatio(0, w, to.minX, to.maxX);
+  const sy = signedRatio(0, h, to.minY, to.maxY);
+  let nw = w * sx;
+  let nh = h * sy;
+  let x0 = to.minX;
+  let y0 = to.minY;
+  if (nw < 0) {
+    x0 += nw;
+    nw = -nw;
+  }
+  if (nh < 0) {
+    y0 += nh;
+    nh = -nh;
+  }
+  const ncx = x0 + nw / 2 - w / 2;
+  const ncy = y0 + nh / 2 - h / 2;
+  const ca = Math.cos(angle);
+  const sa = Math.sin(angle);
+  const worldCx = cx + ncx * ca - ncy * sa;
+  const worldCy = cy + ncx * sa + ncy * ca;
   return {
     ...element,
-    x: nx,
-    y: ny,
-    width: (element.width ?? 0) * sx,
-    height: (element.height ?? 0) * sy,
+    x: worldCx - nw / 2,
+    y: worldCy - nh / 2,
+    width: nw,
+    height: nh,
   };
 }
 
@@ -331,8 +411,7 @@ export function scaleElement<T extends PaintSceneElement>(
   sceneX: number,
   sceneY: number,
 ): T {
-  const from = sceneElementBounds(element);
-  return scaleAbout(element, from, resizeBounds(from, handle, sceneX, sceneY));
+  return resizeElementLocal(element, handle, sceneX, sceneY);
 }
 
 export function setLinearPoint<T extends PaintSceneElement>(

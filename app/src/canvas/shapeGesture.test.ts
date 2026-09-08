@@ -129,15 +129,44 @@ describe("transforms", () => {
     expect(next.points?.[1]).toEqual([5, 0]);
   });
 
-  it("scales from the south-east handle", () => {
+  it("lets the south-east handle cross the opposite edge", () => {
     const next = scaleElement(
       { type: "rectangle", x: 0, y: 0, width: 10, height: 10 },
       "se",
-      40,
+      -20,
       30,
     );
+    expect(next.x).toBeCloseTo(-20);
+    expect(next.y).toBeCloseTo(0);
+    expect(next.width).toBeCloseTo(20);
+    expect(next.height).toBeCloseTo(30);
+  });
+
+  it("resizes from an edge without changing the other axis", () => {
+    const next = scaleElement(
+      { type: "rectangle", x: 0, y: 0, width: 10, height: 10 },
+      "e",
+      40,
+      5,
+    );
+    expect(next.x).toBe(0);
+    expect(next.y).toBe(0);
     expect(next.width).toBe(40);
-    expect(next.height).toBe(30);
+    expect(next.height).toBe(10);
+  });
+
+  it("scales a rotated box along its own width", () => {
+    const next = scaleElement(
+      { type: "rectangle", x: 0, y: 0, width: 20, height: 10, angle: Math.PI / 2 },
+      "e",
+      10,
+      25,
+    );
+    expect(next.width).toBeCloseTo(30);
+    expect(next.height).toBeCloseTo(10);
+    expect(next.angle).toBeCloseTo(Math.PI / 2);
+    expect(next.x + next.width / 2).toBeCloseTo(10);
+    expect(next.y + next.height / 2).toBeCloseTo(10);
   });
 
   it("flips an arrow's points across the vertical midline", () => {
