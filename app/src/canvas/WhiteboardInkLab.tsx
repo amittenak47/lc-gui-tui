@@ -17,7 +17,7 @@ import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/
 import { InkPageBook } from "./inkPageCache";
 import { canvasBitmapFromClient } from "./canvasPointer";
 import { overlaySpineFromDrawOp, splitInkOpsForLabReplay } from "./inkLab/replay";
-import { keepLivePaintPump, skipCommittedReplay } from "./inkLab/liveHost";
+import { keepLivePaintPump, shouldFlushLiveHud, skipCommittedReplay } from "./inkLab/liveHost";
 import {
   createInkLabEngine,
   type InkLabEngine,
@@ -575,6 +575,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           backend: backendRef.current,
         });
       }
+      let lastHudFlushAt = 0;
 
       const reportLoad = (
         stats: {
@@ -592,7 +593,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         live: boolean,
       ) => {
         if (!wantMeter()) return;
-        if (live && perfOverlayRef.current) {
+        const overlayOn = perfOverlayRef.current;
+        if (live && overlayOn) {
           hudStatsRef.current.sample(stats.frameMs, rafMs, stats.drawMs, stats.ekfMs);
         }
         const load = live
@@ -611,22 +613,30 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             })
           : loadMeterRef.current.peek();
         const bake = bakeRef.current;
-        const ranges = hudStatsRef.current.snapshot();
-        loadBarRef.current?.show(load, {
-          backend: load.backend,
-          paints: load.calls,
-          frameMs: load.frameMs,
-          rafMs: load.rafMs,
-          pts: load.spineN,
-          segs: load.segs,
-          ekfMs: load.ekfMs,
-          drawMs: load.drawMs,
-          hold: load.hold,
-          suffix: load.suffixHit,
-          bakeMs: bake.bakeMs,
-          bake: bake.bake,
-          ...ranges,
-        });
+        const hudNow = typeof performance !== "undefined" ? performance.now() : 0;
+        const flushHud = overlayOn && shouldFlushLiveHud(lastHudFlushAt, hudNow, live);
+        if (flushHud) lastHudFlushAt = hudNow;
+        loadBarRef.current?.show(
+          load,
+          flushHud
+            ? {
+                backend: load.backend,
+                paints: load.calls,
+                frameMs: load.frameMs,
+                rafMs: load.rafMs,
+                pts: load.spineN,
+                segs: load.segs,
+                ekfMs: load.ekfMs,
+                drawMs: load.drawMs,
+                hold: load.hold,
+                suffix: load.suffixHit,
+                bakeMs: bake.bakeMs,
+                bake: bake.bake,
+                ...hudStatsRef.current.snapshot(),
+              }
+            : undefined,
+          flushHud,
+        );
       };
 
       const stopPaintPump = () => {
@@ -635,21 +645,22 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         rafRef.current = null;
       };
 
+      const onPaintFrame = (now: number) => {
+        rafRef.current = null;
+        // Re-arm before paint/HUD. Requesting the next vsync at the end of
+        // a long tick is how 16.7ms frames become 33ms (HUD avg ~25ms).
+        if (keepLivePaintPump(drawingRef.current)) {
+          rafRef.current = requestAnimationFrame(onPaintFrame);
+        }
+        const prev = lastRafRef.current;
+        lastRafRef.current = now;
+        const stats = engine.paint();
+        reportLoad(stats, prev > 0 ? now - prev : 0, drawingRef.current);
+      };
+
       const schedulePaint = () => {
         if (rafRef.current != null) return;
-        rafRef.current = requestAnimationFrame(() => {
-          rafRef.current = null;
-          const now = performance.now();
-          const prev = lastRafRef.current;
-          lastRafRef.current = now;
-          const stats = engine.paint();
-          reportLoad(stats, prev > 0 ? now - prev : 0, drawingRef.current);
-          // Present every vsync while the nib is down. Pointermove only
-          // ingests; waiting on the next coalesced sample made HUD rAF
-          // track the tablet's move rate (~25ms) and miss frames (~100ms)
-          // even when draw was ~1ms.
-          if (keepLivePaintPump(drawingRef.current)) schedulePaint();
-        });
+        rafRef.current = requestAnimationFrame(onPaintFrame);
       };
 
       const armWheel = () => {
@@ -802,6 +813,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         engine.down(sampleOf(canvas, event));
         if (wantMeter()) {
           lastRafRef.current = 0;
+          lastHudFlushAt = 0;
           loadMeterRef.current.begin();
           hudStatsRef.current.reset();
         }
@@ -965,9 +977,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
 
       const ro = new ResizeObserver(() => sizeToHost());
       ro.observe(host);
-      // Capture phase, same as RasterInkLayer: ingest before bubble
-      // handlers on the board chrome. setPointerCapture still owns the
-      // rest of the stroke.
+      // Capture phase of the DOM event (window → canvas, before bubble
+      // back out). Not a WebGL stage. Same as RasterInkLayer: ingest
+      // before bubble handlers on the board chrome.
       canvas.addEventListener("pointerdown", onPointerDown, true);
       canvas.addEventListener("pointermove", onPointerMove, true);
       canvas.addEventListener("pointerup", onPointerUp, true);

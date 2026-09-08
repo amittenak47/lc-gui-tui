@@ -25,3 +25,19 @@ export function skipCommittedReplay(
 export function keepLivePaintPump(drawing: boolean): boolean {
   return drawing;
 }
+
+/**
+ * Overlay text/spark at most this often while the nib is down. Min/max/avg
+ * still sample every paint. Writing a `<pre>` every vsync on the board is
+ * enough layout to miss the next frame (16.7 then 33.3 → ~25ms avg).
+ */
+export const LIVE_HUD_FLUSH_MS = 48;
+
+export function shouldFlushLiveHud(
+  lastAt: number,
+  now: number,
+  live: boolean,
+): boolean {
+  if (!live) return true;
+  return !(lastAt > 0) || now - lastAt >= LIVE_HUD_FLUSH_MS;
+}

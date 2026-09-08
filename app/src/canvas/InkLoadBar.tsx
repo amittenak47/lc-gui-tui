@@ -13,7 +13,11 @@ import { drawFrameSpark } from "./inkLab/hudSpark";
 import { type InkLoadSnapshot } from "./inkLoadMeter";
 
 export interface InkLoadBarHandle {
-  show(snap: InkLoadSnapshot, hud?: InkLabHud): void;
+  /**
+   * `overlay: false` updates the load bar only. Live paint uses that so a
+   * `<pre>` rewrite cannot miss the next vsync; min/max/avg still sample.
+   */
+  show(snap: InkLoadSnapshot, hud?: InkLabHud, overlay?: boolean): void;
   /** Keep the last readout on screen; the next {@link show} resets it. */
   freeze(): void;
   /** Hide the bar and HUD. */
@@ -85,7 +89,7 @@ export const InkLoadBar = forwardRef<InkLoadBarHandle, InkLoadBarProps>(
     useImperativeHandle(
       ref,
       (): InkLoadBarHandle => ({
-        show(snap, hud) {
+        show(snap, hud, overlay = true) {
           const root = rootRef.current;
           const fill = fillRef.current;
           const hint = hintRef.current;
@@ -113,7 +117,7 @@ export const InkLoadBar = forwardRef<InkLoadBarHandle, InkLoadBarProps>(
             lastLiftRef.current = snap.lift;
             root.classList.toggle("is-lift", snap.lift);
           }
-          if (!overlayRef.current) return;
+          if (!overlayRef.current || overlay === false) return;
           const text = hud
             ? formatInkLabHud(hud)
             : formatInkLabHud({
