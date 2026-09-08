@@ -145,9 +145,9 @@ describe("textbook PDFs from Downloads", () => {
 
           expect(pageIdForOp(mid, frames)).toBe(midPage);
           expect(ink.opCount()).toBe(4);
-          expect(ink.undoOnce()).toBe(true);
+          expect(ink.undoOnce()).toBeTruthy();
           expect(ink.opCount()).toBe(3);
-          expect(ink.redoOnce()).toBe(true);
+          expect(ink.redoOnce()).toBeTruthy();
 
           ink.setVisiblePage(midPage);
           const hotPages = [...ink.hot.keys()]

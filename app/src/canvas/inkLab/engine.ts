@@ -69,12 +69,22 @@ export type InkLabHalt = {
   slow?: number;
 };
 
+export type InkLabSnapPatch = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  data: ImageData;
+};
+
 export type InkLabUpResult = {
   bakeMs: number;
   bake: InkLabBake;
   points: SpineDot[];
   blotTipGrow: number;
   blotHalts: InkLabHalt[];
+  /** Pixels under this stroke before it was blitted. Undo restores this. */
+  undoPatch: InkLabSnapPatch | null;
 };
 
 export type InkLabEngine = {
@@ -103,10 +113,16 @@ export type InkLabEngine = {
   redrawSnap(paint: (ctx: CanvasRenderingContext2D) => void): void;
   /**
    * Replace the committed snap with SDF capsules for these overlay-space
-   * spines. Undo / restore. Not the 2D miter strip. No-op while a live
+   * spines. Camera / restore. Not the 2D miter strip. No-op while a live
    * stroke is down — replay belongs to lift / camera, not the nib rAF.
    */
   replaySpines(strokes: readonly SpineDot[][]): void;
+  /** Draw spines onto the committed snap without clearing it. Redo of one pen. */
+  appendSpines(strokes: readonly SpineDot[][]): void;
+  /** Copy snap pixels in `box`, or the whole snap. */
+  copySnapPatch(box?: StrokeAabb): InkLabSnapPatch | null;
+  /** Put a {@link copySnapPatch} back. Undo of one stroke. */
+  restoreSnapPatch(patch: InkLabSnapPatch): void;
   /** Stamp highlighter / eraser onto the committed snap without clearing it. */
   paintOntoSnap(paint: (ctx: CanvasRenderingContext2D) => void): void;
   /** Drop the live stroke. Keep the committed snap. */
@@ -608,6 +624,63 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     remesh(points);
   };
 
+  const copySnapPatch = (box?: StrokeAabb): InkLabSnapPatch | null => {
+    if (!snap) return null;
+    const sctx = snap.getContext("2d");
+    if (!sctx) return null;
+    const rect = box
+      ? clipBlitRect(box, snap.width, snap.height, 8)
+      : { x: 0, y: 0, w: snap.width, h: snap.height };
+    if (!rect) return null;
+    return {
+      x: rect.x,
+      y: rect.y,
+      w: rect.w,
+      h: rect.h,
+      data: sctx.getImageData(rect.x, rect.y, rect.w, rect.h),
+    };
+  };
+
+  const restoreSnapPatch = (patch: InkLabSnapPatch) => {
+    if (!snap) return;
+    const sctx = snap.getContext("2d");
+    if (!sctx) return;
+    sctx.putImageData(patch.data, patch.x, patch.y);
+  };
+
+  const resetAfterBlit = () => {
+    spine = [];
+    segs = 0;
+    sdfLive = 0;
+    sdfFull = false;
+    paintedSegs = 0;
+    tip = null;
+    aabb = emptyAabb();
+  };
+
+  const blitSpinesOntoSnap = (strokes: readonly SpineDot[][], clear: boolean) => {
+    if (drawing) return;
+    if (!host || !peer) return;
+    syncSize();
+    if (!snap) snap = peer(host.width, host.height);
+    if (!snap) return;
+    if (clear) {
+      const sctx = snap.getContext("2d");
+      sctx?.setTransform(1, 0, 0, 1, 0, 0);
+      sctx?.clearRect(0, 0, snap.width, snap.height);
+    }
+    drawing = false;
+    holding = false;
+    for (const stroke of strokes) {
+      if (stroke.length === 0) continue;
+      applyBaked(stroke.map(cloneDot));
+      blitLiveToSnap();
+      sdf?.clear();
+      fallback?.clearLive();
+    }
+    resetAfterBlit();
+  };
+
   const blitLiveToSnap = () => {
     if (!snap) return;
     const sctx = snap.getContext("2d");
@@ -621,7 +694,22 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       }
       sdf.upload(inst, n);
       sdf.draw(aabb);
-      sctx.drawImage(sdf.canvas, 0, 0);
+      const clip = clipBlitRect(aabb, snap.width, snap.height, 8);
+      if (clip) {
+        sctx.drawImage(
+          sdf.canvas,
+          clip.x,
+          clip.y,
+          clip.w,
+          clip.h,
+          clip.x,
+          clip.y,
+          clip.w,
+          clip.h,
+        );
+      } else {
+        sctx.drawImage(sdf.canvas, 0, 0);
+      }
     } else {
       fillMiterStroke(sctx, spine, tip, INK_RGB);
     }
@@ -953,6 +1041,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       const exportedGrow = blotTipGrow;
       const exportedHalts = blotHalts.map((h) => ({ ...h }));
       applyBaked(points);
+      const undoPatch = points.length > 0 ? copySnapPatch(aabb) : null;
       blitLiveToSnap();
       const bakeMs = performance.now() - t0;
       drawing = false;
@@ -960,13 +1049,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       holdPlateau = false;
       sdf?.clear();
       fallback?.clearLive();
-      spine = [];
-      segs = 0;
-      sdfLive = 0;
-      sdfFull = false;
-      paintedSegs = 0;
-      tip = null;
-      aabb = emptyAabb();
+      resetAfterBlit();
       liveSmoothCache = null;
       liveSmoothScene.length = 0;
       liveTailBlit = null;
@@ -976,6 +1059,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         points: exported,
         blotTipGrow: exportedGrow,
         blotHalts: exportedHalts,
+        undoPatch,
       };
     },
     paint() {
@@ -1023,31 +1107,13 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       paint(sctx);
     },
     replaySpines(strokes) {
-      if (drawing) return;
-      if (!host || !peer) return;
-      syncSize();
-      if (!snap) snap = peer(host.width, host.height);
-      if (!snap) return;
-      const sctx = snap.getContext("2d");
-      sctx?.setTransform(1, 0, 0, 1, 0, 0);
-      sctx?.clearRect(0, 0, snap.width, snap.height);
-      drawing = false;
-      holding = false;
-      for (const stroke of strokes) {
-        if (stroke.length === 0) continue;
-        applyBaked(stroke.map(cloneDot));
-        blitLiveToSnap();
-        sdf?.clear();
-        fallback?.clearLive();
-      }
-      spine = [];
-      segs = 0;
-      sdfLive = 0;
-      sdfFull = false;
-      paintedSegs = 0;
-      tip = null;
-      aabb = emptyAabb();
+      blitSpinesOntoSnap(strokes, true);
     },
+    appendSpines(strokes) {
+      blitSpinesOntoSnap(strokes, false);
+    },
+    copySnapPatch,
+    restoreSnapPatch,
     paintOntoSnap(paint) {
       if (!snap) return;
       const sctx = snap.getContext("2d");

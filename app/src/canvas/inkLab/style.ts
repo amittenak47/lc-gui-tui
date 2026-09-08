@@ -24,7 +24,7 @@ import type { SpineDot } from "./instance";
 export const INK_HEX = "#1a1a1a";
 export const INK_RGB: [number, number, number] = [26, 26, 26];
 export const TIP_GROW = 1.7;
-export const LAB_NIB_CSS = 7;
+export const LAB_NIB_CSS = 0.85;
 /** Pad wash at a sprint: mix toward paper. Stopped writing stays full. */
 const LAB_WASH_FAST = 0.65;
 /**
@@ -98,11 +98,10 @@ export function washRgb(vx: number, vy: number, dpr: number): [number, number, n
 /**
  * Slider units → pad size. Default width (2) is size 1.
  *
- * Size 1 on the wheel is a hairline (~0.5 CSS px radius). A previous 0.2
- * scale still sat on a 7px lab nib and looked like a marker. 6–64 keep
- * growing from the default.
+ * Size 1 is half of size 2, then each tick adds the same step (`n / 2`).
+ * The old 7px lab nib made every step a marker and 1→2 a 13× cliff.
  */
-export const LAB_NIB_SIZE_AT_MIN = 0.075;
+export const LAB_NIB_SIZE_AT_MIN = 0.5;
 
 export function labNibSizeFromUiWidth(uiWidth: number): number {
   const w = Number.isFinite(uiWidth) && uiWidth > 0 ? uiWidth : STROKE_WIDTH_DEFAULT;
@@ -122,9 +121,9 @@ export function labPressureAmt(pen: InkLabPen, pressure: number): number {
 
 /**
  * Ink lab pad nib. `size` is toolbar width vs default (slider 2 → 1).
- * Slider 1 is a hairline; the stamp gate tightens with the radius so the
- * trail stays a line instead of staying fat enough to overlap a 2.5px hop.
- * Stylus pressure does not change width — only deposit, via {@link labPenDot}.
+ * Resting width is a fine pen, not a marker. Speed ink only scales that
+ * around the resting size; it does not invent a fatter baseline.
+ * The stamp gate tightens with the radius so a hairline stays a line.
  */
 export function labNibRadius(
   vx: number,

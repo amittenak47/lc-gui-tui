@@ -273,7 +273,7 @@ describe("Ink lab live path", () => {
     engine.destroy();
   });
 
-  it("toolbar default width stays above the sample gate", () => {
+  it("toolbar default width is a fine pen, not a marker", () => {
     const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
     const engine = createInkLabEngine({ sdf: false });
     engine.attach(canvas);
@@ -293,7 +293,10 @@ describe("Ink lab live path", () => {
     engine.down({ x: 40, y: 80, p: 0.5, t: 0 });
     engine.move([{ x: 80, y: 84, p: 0.5, t: 16 }]);
     const baked = engine.up({ x: 120, y: 88, p: 0.5, t: 32 });
-    expect(baked.points[0]!.r).toBeGreaterThan(DISTANCE_GATE_CSS);
+    expect(baked.points[0]!.r).toBeLessThan(2);
+    expect(labStampGatePx(baked.points[0]!.r, 1)).toBeLessThanOrEqual(
+      baked.points[0]!.r,
+    );
     engine.destroy();
   });
 
@@ -457,7 +460,7 @@ describe("Ink lab live path", () => {
       for (let i = 0; i < 40; i++) engine.paint();
       const baked = engine.up({ x: 80.2, y: 90.1, p: 0.5, t: 1400 });
       expect(baked.blotTipGrow).toBeGreaterThan(0.3);
-      expect(baked.points[0]!.r).toBeGreaterThan(6);
+      expect(baked.points[0]!.r).toBeGreaterThan(1.15);
     } finally {
       nowSpy.mockRestore();
       engine.destroy();
@@ -739,6 +742,66 @@ describe("Ink lab live path", () => {
       nowSpy.mockRestore();
       engine.destroy();
     }
+  });
+
+  it("undo patch restores the snap without replaying earlier strokes", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    const ink = (x: number, y: number, w: number, h: number) => {
+      const data = canvas.getContext("2d")!.getImageData(x, y, w, h).data;
+      let n = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i]! > 0) n += 1;
+      return n;
+    };
+    const stroke = (x0: number, x1: number) => {
+      engine.down({ x: x0, y: 80, p: 0.6, t: 0 });
+      engine.move([
+        { x: (x0 + x1) / 2, y: 82, p: 0.6, t: 16 },
+        { x: x1, y: 84, p: 0.55, t: 32 },
+      ]);
+      return engine.up({ x: x1 + 8, y: 86, p: 0.5, t: 48 });
+    };
+    stroke(30, 70);
+    engine.paint();
+    const leftAfterFirst = ink(0, 0, 120, 300);
+    const second = stroke(260, 320);
+    engine.paint();
+    expect(ink(240, 0, 160, 300)).toBeGreaterThan(10);
+    expect(second.undoPatch).not.toBeNull();
+    engine.restoreSnapPatch(second.undoPatch!);
+    engine.paint();
+    expect(ink(0, 0, 120, 300)).toBe(leftAfterFirst);
+    expect(ink(240, 0, 160, 300)).toBe(0);
+    engine.appendSpines([second.points]);
+    engine.paint();
+    expect(ink(240, 0, 160, 300)).toBeGreaterThan(10);
+    expect(ink(0, 0, 120, 300)).toBe(leftAfterFirst);
+    engine.destroy();
+  });
+
+  it("replay of two far strokes keeps both after clipped blits", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    const ink = (x: number, y: number, w: number, h: number) => {
+      const data = canvas.getContext("2d")!.getImageData(x, y, w, h).data;
+      let n = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i]! > 0) n += 1;
+      return n;
+    };
+    const bake = (x0: number, x1: number) => {
+      engine.down({ x: x0, y: 80, p: 0.6, t: 0 });
+      engine.move([{ x: x1, y: 84, p: 0.55, t: 32 }]);
+      return engine.up({ x: x1 + 6, y: 86, p: 0.5, t: 48 }).points;
+    };
+    const a = bake(30, 70);
+    const b = bake(260, 320);
+    engine.replaySpines([a, b]);
+    engine.paint();
+    expect(ink(0, 0, 120, 300)).toBeGreaterThan(10);
+    expect(ink(240, 0, 160, 300)).toBeGreaterThan(10);
+    engine.destroy();
   });
 });
 

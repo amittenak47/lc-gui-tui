@@ -58,10 +58,10 @@ describe("InkPageBook", () => {
     book.setVisiblePage(10);
     const second = book.commit(stroke(10 * 118 - 80));
     expect(book.opCount()).toBe(2);
-    expect(book.undoOnce()).toBe(true);
+    expect(book.undoOnce()?.kind).toBe("add");
     expect(book.assembleOps().some((op) => op.id === second.id)).toBe(false);
     expect(book.assembleOps()).toHaveLength(1);
-    expect(book.redoOnce()).toBe(true);
+    expect(book.redoOnce()?.kind).toBe("add");
     expect(book.assembleOps()).toHaveLength(2);
   });
 

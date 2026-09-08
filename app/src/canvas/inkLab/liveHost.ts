@@ -20,6 +20,41 @@ export function skipCommittedReplay(
 }
 
 /**
+ * Live highlighter already has the pre-stroke snap. Restoring that and
+ * stamping the live op is enough — replaying every pen would hitch.
+ */
+export function usePreStrokeStamp(
+  liveStamp: unknown | null | undefined,
+  hasPreStrokePatch: boolean,
+): boolean {
+  return liveStamp != null && hasPreStrokePatch;
+}
+
+export type PaintedLabView = {
+  scrollX: number;
+  scrollY: number;
+  zoom: number;
+  width: number;
+  height: number;
+  marginY: number;
+};
+
+export function samePaintedView(
+  a: PaintedLabView | null,
+  b: Pick<PaintedLabView, "scrollX" | "scrollY" | "zoom" | "width" | "height" | "marginY">,
+): boolean {
+  if (!a) return false;
+  return (
+    a.scrollX === b.scrollX &&
+    a.scrollY === b.scrollY &&
+    a.zoom === b.zoom &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.marginY === b.marginY
+  );
+}
+
+/**
  * Keep the overlay rAF running for the whole stroke, not only blot-hold
  * ticks. A still plateau must not be the thing that stops the pump: the
  * next hop still needs a vsync callback already queued, or a busy board
