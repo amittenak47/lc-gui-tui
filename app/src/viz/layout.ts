@@ -204,3 +204,105 @@ export function pointersByIndex(frame: VizFrame): Map<number, string[]> {
 export function isHighlighted(frame: VizFrame, index: number): boolean {
   return frame.highlight.includes(index);
 }
+
+/**
+ * Centres for an arbitrary parent→child forest (trie, union-find, call tree).
+ *
+ * Not the heap `2i+1` rule — edges come from `entries`. Isolated nodes sit in
+ * a row of their own.
+ */
+export function layoutForest(
+  count: number,
+  parentToChild: Array<[number, number]>,
+  origin: { x: number; y: number },
+  options: { node?: number; gap?: number; levelH?: number } = {},
+): Array<{ x: number; y: number }> {
+  const node = options.node ?? 44;
+  const gap = options.gap ?? 16;
+  const levelH = options.levelH ?? 78;
+  const unit = node + gap;
+  if (count <= 0) return [];
+
+  const children: number[][] = Array.from({ length: count }, () => []);
+  const indeg = new Array(count).fill(0);
+  for (const [parent, child] of parentToChild) {
+    if (
+      parent === child ||
+      parent < 0 ||
+      child < 0 ||
+      parent >= count ||
+      child >= count
+    ) {
+      continue;
+    }
+    children[parent]!.push(child);
+    indeg[child] += 1;
+  }
+
+  const roots: number[] = [];
+  for (let i = 0; i < count; i++) if (indeg[i] === 0) roots.push(i);
+  if (roots.length === 0) roots.push(0);
+
+  const subtreeWidth = (index: number, visiting: Set<number>): number => {
+    if (visiting.has(index)) return unit;
+    visiting.add(index);
+    const kids = children[index] ?? [];
+    if (kids.length === 0) {
+      visiting.delete(index);
+      return unit;
+    }
+    let sum = 0;
+    for (const kid of kids) sum += subtreeWidth(kid, visiting);
+    visiting.delete(index);
+    return Math.max(unit, sum);
+  };
+
+  const positions = Array.from({ length: count }, () => ({ x: origin.x, y: origin.y }));
+  const placed = new Set<number>();
+
+  const place = (index: number, left: number, depth: number) => {
+    if (placed.has(index)) return;
+    placed.add(index);
+    const width = subtreeWidth(index, new Set());
+    positions[index] = { x: left + width / 2, y: origin.y + depth * levelH };
+    let cursor = left;
+    for (const kid of children[index] ?? []) {
+      const kidWidth = subtreeWidth(kid, new Set());
+      place(kid, cursor, depth + 1);
+      cursor += kidWidth;
+    }
+  };
+
+  let cursor = origin.x;
+  for (const root of roots) {
+    const width = subtreeWidth(root, new Set());
+    place(root, cursor, 0);
+    cursor += width + gap;
+  }
+  for (let i = 0; i < count; i++) {
+    if (placed.has(i)) continue;
+    positions[i] = { x: cursor + node / 2, y: origin.y };
+    cursor += unit;
+  }
+  return positions;
+}
+
+/** Arrow between two node centres, stopping short of the boxes. */
+export function linkArrow(
+  ctx: RenderContext,
+  slot: string,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  node = 44,
+): Skeleton {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const inset = node / 2 + 4;
+  return arrow(
+    ctx,
+    slot,
+    { x: from.x + (dx / length) * inset, y: from.y + (dy / length) * inset },
+    { x: to.x - (dx / length) * inset, y: to.y - (dy / length) * inset },
+  );
+}
