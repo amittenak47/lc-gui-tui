@@ -4,7 +4,7 @@
  * Toolbar: tap cycles the next palette (fetch past the end); hold opens the
  * wheel. Open hub: tap cycles palettes already in history, no fetch.
  * Embedded (preset sheet) hub: same as the toolbar tap — next, including fetch.
- * Wedge: tap/drag picks; hold opens the OS colour editor for that slot.
+ * Wedge: tap/drag picks; hold opens a colour editor for that slot.
  *
  * Portaled with `position: fixed` so the toolbar scroller cannot clip the ring.
  * Open/close and palette swaps use the same MorphBar timing as the shape flyout:
@@ -26,8 +26,8 @@ import { subscribePageSurfaceMove } from "../modes/sheetAnchor";
 
 import { MorphBar } from "../components/MorphBar";
 import type { InkHandedness } from "../util/inkHandedness";
-
 import { HOLD_MS } from "../util/gesture";
+import { ColorSlotEditor } from "./ColorSlotEditor";
 /**
  * Hold on a wedge to change what colour lives there.
  *
@@ -213,8 +213,8 @@ export function ColorRadial({
    * put a finger down and leave it there.
    */
   const editTimerRef = useRef<number>(0);
-  const editingSlotRef = useRef<number | null>(null);
-  const colorInputRef = useRef<HTMLInputElement | null>(null);
+  const [slotEdit, setSlotEdit] = useState<{ index: number; color: string } | null>(null);
+  const slotEditLock = useRef(false);
 
   const shown = pending ?? value;
   useEffect(() => {
@@ -239,19 +239,11 @@ export function ColorRadial({
   useEffect(() => cancelEditHold, [cancelEditHold]);
 
   /**
-   * Hand the slot to the platform's own colour picker.
-   *
-   * A native `<input type="color">` rather than a bespoke wheel: it is the one
-   * picker that works in the tablet's WebView and on the desktop without
-   * shipping a second colour UI, and on a touch device it is the OS picker the
-   * writer already knows.
+   * Open the slot editor. Draft stays local until check; X discards.
    */
   const openSlotEditor = useCallback((index: number, current: string) => {
-    const input = colorInputRef.current;
-    if (!input) return;
-    editingSlotRef.current = index;
-    input.value = current;
-    input.click();
+    slotEditLock.current = true;
+    setSlotEdit({ index, color: current });
   }, []);
 
   const wedges = useMemo(
@@ -335,7 +327,7 @@ export function ColorRadial({
     const onDown = (event: PointerEvent) => {
       const target = event.target;
       if (target instanceof Node && rootRef.current?.contains(target)) return;
-      if (target instanceof Element && target.closest(".lc-color-wheel")) return;
+      if (target instanceof Element && target.closest(".lc-color-wheel, .lc-color-slot-editor")) return;
       close();
     };
     const onKey = (event: KeyboardEvent) => {
@@ -459,7 +451,7 @@ export function ColorRadial({
                   ? (event) => {
                       event.preventDefault();
                       event.stopPropagation();
-                      if (editingSlotRef.current !== null) return;
+                      if (slotEditLock.current) return;
                       cancelEditHold();
                       pickColor(wedge.color);
                       close();
@@ -517,22 +509,6 @@ export function ColorRadial({
             </div>
           ))}
         </MorphBar>
-        <input
-          ref={colorInputRef}
-          type="color"
-          className="lc-color-slot-input"
-          aria-hidden
-          tabIndex={-1}
-          onChange={(event) => {
-            const slot = editingSlotRef.current;
-            editingSlotRef.current = null;
-            if (slot === null) return;
-            onEditColor?.(slot, event.target.value);
-          }}
-          onBlur={() => {
-            editingSlotRef.current = null;
-          }}
-        />
         <button
           type="button"
           className="lc-color-wheel-hub"
@@ -546,7 +522,7 @@ export function ColorRadial({
             onCyclePrev || onCycleNext ? "Tap to cycle palettes" : undefined
           }
           onClick={() => {
-            if (editingSlotRef.current !== null) return;
+            if (slotEditLock.current) return;
             cancelEditHold();
             // Embedded ring is always open — same as the toolbar tap: next
             // palette, which is the ColorHunt fetch at the end of history.
@@ -637,6 +613,28 @@ export function ColorRadial({
         </button>
       )}
       {wheel}
+      {slotEdit && (
+        <ColorSlotEditor
+          color={slotEdit.color}
+          anchor={(() => {
+            if (embedded && rootRef.current) {
+              const rect = rootRef.current.getBoundingClientRect();
+              return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+            }
+            return anchor ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+          })()}
+          onConfirm={(next) => {
+            onEditColor?.(slotEdit.index, next);
+            pickColor(next);
+            slotEditLock.current = false;
+            setSlotEdit(null);
+          }}
+          onDiscard={() => {
+            slotEditLock.current = false;
+            setSlotEdit(null);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -85,7 +85,11 @@ export function MorphBar({
 
     const read = () => {
       if (axis === "height") {
-        setSize(measure.scrollHeight);
+        const full = measure.scrollHeight;
+        const painted = measure.clientHeight;
+        // A max-height panel that scrolls reports a taller scrollHeight than
+        // the box on screen. Morph to the painted box so the shell fits.
+        setSize(painted > 0 && full > painted + 1 ? painted : full);
         return;
       }
       // Width shells start at 0 with overflow:hidden. Measure max-content so

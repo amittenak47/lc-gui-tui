@@ -43,6 +43,32 @@ describe("createBoardScene", () => {
     api.updateScene({ appState: { scrollY: 40, zoom: { value: 2 } } });
     expect(scroll).toHaveBeenCalledWith(0, 40, { value: 2 });
   });
+
+  it("undoes an IMMEDIATELY scene write", () => {
+    const api = createBoardScene({
+      elements: [{ id: "a", x: 0, y: 0, width: 10, height: 10 }],
+    });
+    api.updateScene({
+      elements: [{ id: "b", x: 4, y: 0, width: 10, height: 10 }],
+      captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+    });
+    expect((api.getSceneElements()[0] as { id: string }).id).toBe("b");
+    expect(api.history?.undo()).toBe(true);
+    expect((api.getSceneElements()[0] as { id: string }).id).toBe("a");
+    expect(api.history?.redo()).toBe(true);
+    expect((api.getSceneElements()[0] as { id: string }).id).toBe("b");
+  });
+
+  it("does not record NEVER updates", () => {
+    const api = createBoardScene({
+      elements: [{ id: "a", x: 0, y: 0, width: 10, height: 10 }],
+    });
+    api.updateScene({
+      elements: [{ id: "a", x: 8, y: 0, width: 10, height: 10 }],
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    expect(api.history?.undo()).toBe(false);
+  });
 });
 
 describe("getCommonBounds", () => {

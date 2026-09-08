@@ -304,7 +304,6 @@ export function BoardToolbar({
   const [configuring, setConfiguring] = useState<ShapeStamp | null>(null);
   const [mods, setMods] = useState<Record<string, ShapeModValue>>({});
   const [moveAsOne, setMoveAsOne] = useState(true);
-  const [shapePhase, setShapePhase] = useState<"list" | "fade" | "mod">("list");
   const toolbarRootRef = useRef<HTMLDivElement | null>(null);
 
   const [layout, setLayout] = useState<ToolbarLayout>(() => loadToolbarLayout());
@@ -472,7 +471,6 @@ export function BoardToolbar({
     if (!shapesOpen) {
       setConfiguring(null);
       setMods({});
-      setShapePhase("list");
     }
   }, [shapesOpen]);
 
@@ -789,12 +787,9 @@ export function BoardToolbar({
     setConfiguring(shape);
     setMods({ ...shape.defaults });
     setMoveAsOne(true);
-    setShapePhase("fade");
-    window.setTimeout(() => setShapePhase("mod"), 200);
   };
 
   const backToList = () => {
-    setShapePhase("list");
     setConfiguring(null);
     setMods({});
   };
@@ -1250,121 +1245,97 @@ export function BoardToolbar({
       </div>
 
       {shapesOpen && (
-        <div
-          className={shapePhase === "mod" ? "lc-shapes lc-shapes-modifying" : "lc-shapes"}
+        <MorphBar
+          active={configuring ? "mod" : "list"}
+          axis="height"
+          className="lc-shapes"
           role="menu"
           aria-label="Shape library"
         >
-          {shapePhase !== "mod" && (
-            <>
-              {SHAPE_GROUPS.map((group) => {
-                const items = SHAPES.filter((shape) => shape.group === group);
-                if (
-                  shapePhase === "fade" &&
-                  configuring &&
-                  !items.some((shape) => shape.id === configuring.id)
-                ) {
-                  return (
-                    <div key={group} className="lc-shape-group lc-shape-group-fade" aria-hidden>
-                      <h4>{group}</h4>
-                    </div>
-                  );
-                }
-                return (
-                  <div key={group} className="lc-shape-group">
-                    <h4 className={shapePhase === "fade" ? "lc-shape-heading-fade" : undefined}>
-                      {group}
-                    </h4>
-                    {items.map((shape) => {
-                      const fading =
-                        shapePhase === "fade" && configuring && configuring.id !== shape.id;
-                      const rising =
-                        shapePhase === "fade" && configuring && configuring.id === shape.id;
-                      return (
-                        <button
-                          key={shape.id}
-                          type="button"
-                          role="menuitem"
-                          className={
-                            rising
-                              ? "lc-shape lc-shape-rising"
-                              : fading
-                                ? "lc-shape lc-shape-fade"
-                                : "lc-shape"
-                          }
-                          onClick={() => pickShape(shape)}
-                        >
-                          {shape.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </>
-          )}
-
-          {shapePhase === "mod" && configuring && (
-            <div className="lc-shape-modifier">
-              <button type="button" className="lc-shape-back" onClick={backToList}>
-                ← {modifierTitle}
-              </button>
-              <p className="lc-muted lc-shape-mod-hint">Configure, then place on the board.</p>
-              {configuring?.fields.map((field) => (
-                <label key={field.key} className="lc-shape-field">
-                  <span>{field.label}</span>
-                  {field.kind === "int" ? (
-                    <input
-                      type="number"
-                      min={field.min}
-                      max={field.max}
-                      step={field.step ?? 1}
-                      value={Number(mods[field.key] ?? configuring.defaults[field.key] ?? 0)}
-                      onChange={(event) =>
-                        setMods((current) => ({
-                          ...current,
-                          [field.key]: Number(event.target.value),
-                        }))
-                      }
-                    />
-                  ) : (
-                    <input
-                      type="text"
-                      placeholder={field.placeholder}
-                      value={String(mods[field.key] ?? configuring.defaults[field.key] ?? "")}
-                      onChange={(event) =>
-                        setMods((current) => ({
-                          ...current,
-                          [field.key]: event.target.value,
-                        }))
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") placeConfigured();
-                      }}
-                    />
-                  )}
-                </label>
-              ))}
-              <label className="lc-shape-lock">
-                <input
-                  type="checkbox"
-                  checked={moveAsOne}
-                  onChange={(event) => setMoveAsOne(event.target.checked)}
-                />
-                <span>
-                  <strong>Move as one piece</strong>
-                  <span className="lc-muted">
-                    {" "}
-                    — on: drag the whole graphic together; off: move parts separately
+          <div data-morph-id="list">
+            {SHAPE_GROUPS.map((group) => {
+              const items = SHAPES.filter((shape) => shape.group === group);
+              return (
+                <div key={group} className="lc-shape-group">
+                  <h4>{group}</h4>
+                  {items.map((shape) => (
+                    <button
+                      key={shape.id}
+                      type="button"
+                      role="menuitem"
+                      className="lc-shape"
+                      onClick={() => pickShape(shape)}
+                    >
+                      {shape.label}
+                    </button>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+          <div data-morph-id="mod">
+            {configuring && (
+              <div className="lc-shape-modifier">
+                <button type="button" className="lc-shape-back" onClick={backToList}>
+                  ← {modifierTitle}
+                </button>
+                <p className="lc-muted lc-shape-mod-hint">Configure, then place on the board.</p>
+                {configuring.fields.map((field) => (
+                  <label key={field.key} className="lc-shape-field">
+                    <span>{field.label}</span>
+                    {field.kind === "int" ? (
+                      <input
+                        type="number"
+                        min={field.min}
+                        max={field.max}
+                        step={field.step ?? 1}
+                        value={Number(mods[field.key] ?? configuring.defaults[field.key] ?? 0)}
+                        onChange={(event) =>
+                          setMods((current) => ({
+                            ...current,
+                            [field.key]: Number(event.target.value),
+                          }))
+                        }
+                      />
+                    ) : (
+                      <input
+                        type="text"
+                        placeholder={field.placeholder}
+                        value={String(mods[field.key] ?? configuring.defaults[field.key] ?? "")}
+                        onChange={(event) =>
+                          setMods((current) => ({
+                            ...current,
+                            [field.key]: event.target.value,
+                          }))
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") placeConfigured();
+                        }}
+                      />
+                    )}
+                  </label>
+                ))}
+                <label className="lc-shape-lock">
+                  <input
+                    type="checkbox"
+                    checked={moveAsOne}
+                    onChange={(event) => setMoveAsOne(event.target.checked)}
+                  />
+                  <span>
+                    <strong>Move as one piece</strong>
+                    <span className="lc-muted">
+                      {" "}
+                      — on: drag the whole graphic together; off: move parts separately
+                    </span>
                   </span>
-                </span>
-              </label>
-              <button type="button" className="lc-shape-place" onClick={placeConfigured}>
-                Place on board
-              </button>
-            </div>
-          )}
-        </div>
+                </label>
+                <button type="button" className="lc-shape-place" onClick={placeConfigured}>
+                  Place on board
+                </button>
+              </div>
+            )}
+          </div>
+        </MorphBar>
       )}
     </div>
   );

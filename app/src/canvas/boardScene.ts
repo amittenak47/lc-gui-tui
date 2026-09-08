@@ -52,7 +52,13 @@ export interface ExcalidrawApi {
   scrollToContent(target?: unknown, opts?: unknown): void;
   onScrollChange?(callback: BoardScrollHandler): () => void;
   setOnChange?(handler: BoardChangeHandler | null): void;
-  history?: { clear(): void };
+  history?: {
+    clear(): void;
+    undo(): boolean;
+    redo(): boolean;
+    canUndo(): boolean;
+    canRedo(): boolean;
+  };
   refresh?(): void;
 }
 
@@ -206,6 +212,22 @@ export function createBoardScene(initial?: {
   const scrollListeners = new Set<BoardScrollHandler>();
   let onChange: BoardChangeHandler | null = null;
   const cursor = { value: "" };
+  const undoStack: unknown[][] = [];
+  const redoStack: unknown[][] = [];
+  let applyingHistory = false;
+  const HISTORY_LIMIT = 80;
+
+  const cloneElements = (list: unknown[]): unknown[] =>
+    JSON.parse(JSON.stringify(list)) as unknown[];
+
+  const recordsHistory = (capture?: CaptureUpdate): boolean =>
+    capture === CaptureUpdateAction.IMMEDIATELY || capture === CaptureUpdateAction.EVENTUALLY;
+
+  const liveElements = () => elements.filter((raw) => !(raw as SceneEl).isDeleted);
+
+  const notifyChange = () => {
+    onChange?.(liveElements(), appState);
+  };
 
   const notifyScroll = () => {
     const zoom = { value: zoomValue(appState) };
@@ -216,7 +238,7 @@ export function createBoardScene(initial?: {
 
   const api: ExcalidrawApi = {
     getSceneElements() {
-      return elements.filter((raw) => !(raw as SceneEl).isDeleted);
+      return liveElements();
     },
     getAppState() {
       return appState;
@@ -231,6 +253,15 @@ export function createBoardScene(initial?: {
       const prevX = appState.scrollX;
       const prevY = appState.scrollY;
       const prevZoom = zoomValue(appState);
+      if (
+        scene.elements &&
+        !applyingHistory &&
+        recordsHistory(scene.captureUpdate)
+      ) {
+        undoStack.push(cloneElements(elements));
+        if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+        redoStack.length = 0;
+      }
       if (scene.elements) elements = scene.elements;
       if (scene.appState) {
         const nextZoom = scene.appState.zoom;
@@ -246,7 +277,7 @@ export function createBoardScene(initial?: {
       const cameraMoved =
         prevX !== appState.scrollX || prevY !== appState.scrollY || prevZoom !== nextZoom;
       if (cameraMoved) notifyScroll();
-      if (!isCameraOnly(scene)) onChange?.(api.getSceneElements(), appState);
+      if (!isCameraOnly(scene)) notifyChange();
     },
     setActiveTool(tool) {
       appState = {
@@ -284,7 +315,48 @@ export function createBoardScene(initial?: {
       onChange = handler;
     },
     history: {
-      clear() {},
+      clear() {
+        undoStack.length = 0;
+        redoStack.length = 0;
+      },
+      undo() {
+        if (undoStack.length === 0) return false;
+        redoStack.push(cloneElements(elements));
+        applyingHistory = true;
+        elements = undoStack.pop()!;
+        appState = {
+          ...appState,
+          selectedElementIds: {},
+          selectedGroupIds: {},
+          selectedLinearElement: null,
+          editingLinearElement: null,
+        };
+        applyingHistory = false;
+        notifyChange();
+        return true;
+      },
+      redo() {
+        if (redoStack.length === 0) return false;
+        undoStack.push(cloneElements(elements));
+        applyingHistory = true;
+        elements = redoStack.pop()!;
+        appState = {
+          ...appState,
+          selectedElementIds: {},
+          selectedGroupIds: {},
+          selectedLinearElement: null,
+          editingLinearElement: null,
+        };
+        applyingHistory = false;
+        notifyChange();
+        return true;
+      },
+      canUndo() {
+        return undoStack.length > 0;
+      },
+      canRedo() {
+        return redoStack.length > 0;
+      },
     },
     refresh() {},
   };
