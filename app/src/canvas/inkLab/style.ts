@@ -12,6 +12,8 @@ import {
   INK_SLOWNESS_NEUTRAL,
   INK_SPEED_NEUTRAL_PX_MS,
   INK_SPEED_SPAN,
+  inkStrokeAlpha,
+  normalizePressure,
   STROKE_WIDTH_DEFAULT,
   STROKE_WIDTH_MIN,
   type ScenePoint,
@@ -121,23 +123,63 @@ export function labPressureAmt(pen: InkLabPen, pressure: number): number {
  * Ink lab pad nib. Radius stays above the sample gate so capsules overlap
  * instead of leaving a dotted stamp trail. `size` is toolbar width vs default.
  * Pass `slow` to drive speed-ink without inventing a fake velocity.
+ * Stylus pressure does not change width — only deposit, via {@link labPenDot}.
  */
 export function labNibRadius(
   vx: number,
   vy: number,
   dpr: number,
-  pressure: number,
+  _pressure: number,
   size = 1,
   slow?: number,
 ): number {
+  void _pressure;
   const cssPxPerMs = Math.hypot(vx, vy) / 1000 / Math.max(dpr, 1e-6);
   const sLow = slow ?? inkSlowness(cssPxPerMs);
-  const p = Math.max(0.15, Math.min(1, pressure));
   const s = Math.max(LAB_NIB_SIZE_AT_MIN, size);
   return Math.max(
     0.55 * dpr,
-    LAB_NIB_CSS * dpr * (0.5 + 0.95 * sLow) * (0.7 + 0.3 * p) * s,
+    LAB_NIB_CSS * dpr * (0.5 + 0.95 * sLow) * s,
   );
+}
+
+/** Reservoir ceiling × stylus pressure. SDF has no alpha, so this is an RGB wash. */
+export function labDepositAmt(
+  pen: Pick<
+    InkLabPen,
+    "maxFullness" | "pressureClip" | "pressureSensitive" | "boldness"
+  >,
+  pressure: number,
+  consumed = 0,
+): number {
+  const stylus = pen.pressureSensitive && hasStylusPressure(pressure);
+  const pNorm = stylus ? normalizePressure(pressure, pen.pressureClip) : 0;
+  return inkStrokeAlpha(
+    pen.maxFullness,
+    pNorm,
+    stylus,
+    consumed,
+    INK_SLOWNESS_NEUTRAL,
+    0,
+    pen.boldness,
+    0,
+    0,
+  );
+}
+
+/** Mix already-washed ink toward paper (245) by a 0–1 deposit. */
+export function labMixDepositRgb(
+  rgb: { r: number; g: number; b: number },
+  deposit: number,
+): { r: number; g: number; b: number } {
+  const g = Math.max(0, Math.min(1, deposit));
+  if (g >= 1 - 1e-6) return rgb;
+  const paper = 245;
+  return {
+    r: rgb.r * g + paper * (1 - g),
+    g: rgb.g * g + paper * (1 - g),
+    b: rgb.b * g + paper * (1 - g),
+  };
 }
 
 export function labPenDot(
@@ -168,6 +210,7 @@ export function labPenDot(
       );
     }
   }
+  washed = labMixDepositRgb(washed, labDepositAmt(pen, pressure, _consumed));
   return { r, rgb: [washed.r, washed.g, washed.b], a: 1, slow };
 }
 
