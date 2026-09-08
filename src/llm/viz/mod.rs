@@ -9,7 +9,7 @@ mod kinds;
 mod registry;
 pub mod tools;
 
-pub use kinds::{VizFrame, VizProgram, VIZ_KINDS};
+pub use kinds::{VizFrame, VizProgram, MAX_TRACE_FRAMES, VIZ_KINDS};
 pub use registry::{parse_tool_calls, registry, viz_tools, viz_tools_as_prompt, VizTool};
 
 #[cfg(test)]
@@ -215,5 +215,83 @@ mod tests {
         let pointers = frame["pointers"]["description"].as_str().unwrap();
         assert!(entries.contains("REQUIRED for hashmap"));
         assert!(pointers.contains("never values"), "the observed failure mode");
+    }
+
+    fn sample_for(kind: &str) -> String {
+        let body = match kind {
+            "hashmap" => r#""entries": [[2, 0]]"#,
+            "graph" => r#""cells": ["0","1"], "entries": [[0, 1]]"#,
+            "trie" => r#""cells": [{"ch":"a","end":true}], "entries": []"#,
+            "unionfind" => r#""cells": [0, 0], "entries": [0, 1]"#,
+            "dplist" => r#""cells": [0, 1], "entries": [-1, 0]"#,
+            "dptable" => r#""cells": [[0, 1], [1, 0]]"#,
+            "segtree" => r#""cells": [{"lo":0,"hi":1,"val":3}]"#,
+            "calltree" => r#""cells": [{"fn":"fib","args":2}], "entries": []"#,
+            "composite" => r#""cells": [{"viz":"array","cells":[1, 2]}]"#,
+            "bits" => r#""cells": [1, 0, 1]"#,
+            "grid" => r#""cells": [[1, 0], [0, 1]]"#,
+            _ => r#""cells": [2, 7]"#,
+        };
+        format!(
+            r#"{{"viz":"{kind}","id":"sample-{kind}","frames":[{{"label":"step",{body}}}]}}"#
+        )
+    }
+
+    #[test]
+    fn every_kind_is_known_and_a_sample_is_drawable() {
+        for kind in VIZ_KINDS {
+            let program: VizProgram = serde_json::from_str(&sample_for(kind)).unwrap();
+            assert!(program.is_known_kind(), "{kind}");
+            assert!(program.has_content(), "{kind} sample was empty");
+            assert_eq!(program.rejection(), None, "{kind}");
+        }
+    }
+
+    #[test]
+    fn the_tool_enum_lists_every_kind() {
+        let tools = viz_tools();
+        for name in ["draw_structure", "animate_trace"] {
+            let tool = tools
+                .iter()
+                .find(|t| t.pointer("/function/name").and_then(|n| n.as_str()) == Some(name))
+                .expect(name);
+            let listed: Vec<String> = tool
+                .pointer("/function/parameters/properties/viz/enum")
+                .and_then(|v| v.as_array())
+                .unwrap()
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
+            for kind in VIZ_KINDS {
+                assert!(
+                    listed.iter().any(|item| item == kind),
+                    "{name} schema missing {kind}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn animate_trace_schema_still_caps_at_forty() {
+        let tools = viz_tools();
+        let max = tools
+            .iter()
+            .find(|t| t.pointer("/function/name").and_then(|n| n.as_str()) == Some("animate_trace"))
+            .and_then(|t| t.pointer("/function/parameters/properties/frames/maxItems"))
+            .and_then(|v| v.as_u64());
+        assert_eq!(max, Some(MAX_TRACE_FRAMES as u64));
+    }
+
+    #[test]
+    fn forty_one_frames_are_rejected() {
+        let frames: String = (0..41)
+            .map(|i| format!(r#"{{"label":"s{i}","cells":[{i}]}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let raw = format!(r#"{{"viz":"array","id":"long","frames":[{frames}]}}"#);
+        let program: VizProgram = serde_json::from_str(&raw).unwrap();
+        assert_eq!(program.frames.len(), 41);
+        let why = program.rejection().expect("41 frames must not draw");
+        assert!(why.contains("40"), "{why}");
     }
 }
