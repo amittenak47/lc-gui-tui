@@ -1,11 +1,16 @@
 /**
  * Spine bake. Lift uses {@link bakeSpine}. Live reshape uses
- * {@link reshapeSpine} from paint so While Writing can tidy behind the nib.
+ * {@link reshapeLiveSpine} from paint so While Writing only tidies the tail.
  * Default: RDP + Chaikin + expandInkTurns. Optional clothoid after that,
  * even when Chaikin is off, ~3ms budget.
  */
 
-import { INK_SMOOTHING_DEFAULT, smoothInkPoints } from "../inkSmoothing";
+import {
+  INK_SMOOTHING_DEFAULT,
+  smoothInkPoints,
+  smoothLiveInkPoints,
+  type LiveSmoothCache,
+} from "../inkSmoothing";
 import { expandInkTurns, type ScenePoint } from "../rasterInk";
 
 import type { SpineDot } from "./instance";
@@ -21,7 +26,12 @@ export type BakeResult = {
 };
 
 function toScene(d: SpineDot, pressure = 0.5): ScenePoint {
-  return { x: d.x, y: d.y, pressure: d.p ?? pressure };
+  return {
+    x: d.x,
+    y: d.y,
+    pressure: d.p ?? pressure,
+    ...(d.slow != null ? { slowness: d.slow } : {}),
+  };
 }
 
 function meanRadius(spine: readonly SpineDot[]): number {
@@ -221,4 +231,28 @@ export function reshapeSpine(
   const scenes = spine.map((p) => toScene(p));
   const nib = meanRadius(spine) * 2;
   return radiiAlong(spine, bakeCatmull(scenes, nib, strength));
+}
+
+/**
+ * While Writing: freeze the prefix and Chaikin only the live-smooth tail.
+ * `rawScene` must be a stable array (same identity across paints) so the
+ * cache can keep its source pointer.
+ */
+export function reshapeLiveSpine(
+  spine: readonly SpineDot[],
+  strength: number,
+  cache: LiveSmoothCache | null,
+  rawScene: ScenePoint[],
+): { points: SpineDot[]; cache: LiveSmoothCache | null } {
+  if (strength <= 0 || spine.length < 3) {
+    return { points: spine.map((p) => ({ ...p })), cache: null };
+  }
+  rawScene.length = 0;
+  for (const d of spine) rawScene.push(toScene(d));
+  const nib = meanRadius(spine) * 2;
+  const live = smoothLiveInkPoints(rawScene, strength, nib, cache);
+  return {
+    points: radiiAlong(spine, live.points),
+    cache: live.cache,
+  };
 }

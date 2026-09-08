@@ -4,10 +4,10 @@
  * Excalidraw is not the ink surface.
  */
 
-import { inkSlowness } from "../rasterInk";
-import { INK_SMOOTHING_DEFAULT } from "../inkSmoothing";
+import { inkSlowness, type ScenePoint } from "../rasterInk";
+import { INK_SMOOTHING_DEFAULT, type LiveSmoothCache } from "../inkSmoothing";
 
-import { bakeSpine, reshapeSpine } from "./bake";
+import { bakeSpine, reshapeLiveSpine } from "./bake";
 import { clipBlitRect } from "./clipBlit";
 import { createEkf, type EkfFilter } from "./ekf";
 import { createFallbackPainter, fillMiterStroke } from "./fallback";
@@ -238,6 +238,8 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   let lastWall = 0;
   /** Host region last written with live ink. Next clip must cover this too. */
   let blitBox: StrokeAabb | null = null;
+  let liveSmoothCache: LiveSmoothCache | null = null;
+  const liveSmoothScene: ScenePoint[] = [];
 
   const ensureInst = (n: number) => {
     if (n <= instCap) return;
@@ -270,6 +272,8 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     lastStamp = 0;
     lastWall = 0;
     blitBox = null;
+    liveSmoothCache = null;
+    liveSmoothScene.length = 0;
     sdf?.clear();
     fallback?.clearLive();
   };
@@ -612,7 +616,10 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     }
   };
 
-  const drawDots = (points: readonly SpineDot[]) => {
+  const drawDots = (
+    points: readonly SpineDot[],
+    clip: { x: number; y: number; w: number; h: number } | null = null,
+  ) => {
     if (!host) return;
     const ctx = host.getContext("2d");
     if (!ctx) return;
@@ -632,7 +639,21 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     if (sdf) {
       sdf.upload(inst, n);
       sdf.draw(box);
-      ctx.drawImage(sdf.canvas, 0, 0);
+      if (clip) {
+        ctx.drawImage(
+          sdf.canvas,
+          clip.x,
+          clip.y,
+          clip.w,
+          clip.h,
+          clip.x,
+          clip.y,
+          clip.w,
+          clip.h,
+        );
+      } else {
+        ctx.drawImage(sdf.canvas, 0, 0);
+      }
     } else {
       fillMiterStroke(ctx, points, end, INK_RGB);
     }
@@ -736,13 +757,27 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     const liveSmooth =
       pen?.smoothingMode === "live" && (pen.smoothing ?? 0) > 0 && spine.length >= 3;
     if (liveSmooth) {
-      presentHost(ctx, null, snap);
-      drawDots(reshapeSpine(spine, pen!.smoothing ?? 0));
-      remesh(spine);
-      sdfLive = 0;
-      sdfFull = true;
+      const reshaped = reshapeLiveSpine(
+        spine,
+        pen!.smoothing ?? 0,
+        liveSmoothCache,
+        liveSmoothScene,
+      );
+      liveSmoothCache = reshaped.cache;
+      const extra = emptyAabb();
+      for (const p of reshaped.points) expandAabb(extra, p);
+      const clip = liveClipRect(extra);
+      presentHost(ctx, clip, snap);
+      drawDots(reshaped.points, clip);
       lastSuffix = false;
-      blitBox = { minX: 0, minY: 0, maxX: host.width, maxY: host.height };
+      blitBox = clip
+        ? {
+            minX: clip.x,
+            minY: clip.y,
+            maxX: clip.x + clip.w,
+            maxY: clip.y + clip.h,
+          }
+        : extra;
       return lastSuffix;
     }
     if (sdf) {
@@ -868,6 +903,8 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       paintedSegs = 0;
       tip = null;
       aabb = emptyAabb();
+      liveSmoothCache = null;
+      liveSmoothScene.length = 0;
       return {
         bakeMs,
         bake: baked.bake,
