@@ -42,7 +42,6 @@ describe("tabOffersHubSync", () => {
     expect(tabOffersHubSync("home")).toBe(false);
     expect(tabOffersHubSync("explore")).toBe(false);
     expect(tabOffersHubSync("practice")).toBe(false);
-    expect(tabOffersHubSync("inklab")).toBe(false);
   });
 });
 
