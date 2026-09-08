@@ -22,6 +22,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { subscribePageSurfaceMove } from "../modes/sheetAnchor";
 
 import { MorphBar } from "../components/MorphBar";
 import type { InkHandedness } from "../util/inkHandedness";
@@ -323,11 +324,9 @@ export function ColorRadial({
       );
     };
     sync();
-    window.addEventListener("resize", sync);
-    window.addEventListener("scroll", sync, true);
+    const stopSurface = subscribePageSurfaceMove(sync);
     return () => {
-      window.removeEventListener("resize", sync);
-      window.removeEventListener("scroll", sync, true);
+      stopSurface();
     };
   }, [wheelShown, outerR]);
 

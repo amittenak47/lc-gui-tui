@@ -3046,7 +3046,8 @@ body[data-lc-sash-drag="horizontal"] {
   left: 0;
   top: 0;
   pointer-events: none;
-  z-index: 4;
+  /* Above the ink host (3 / 12) — the ring is a cursor, not a page layer. */
+  z-index: 14;
   border: 1.5px solid var(--ink);
   border-radius: 50%;
   background: color-mix(in srgb, var(--ink) 10%, transparent);
@@ -3112,31 +3113,32 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-board-ink-lab-host {
   position: absolute;
   inset: 0;
-  z-index: 40;
+  /* Same stack as `.lc-raster-ink`: above the page (1), under marks (13). */
+  z-index: 3;
   pointer-events: none;
   overflow: hidden;
-  background: #f4f1ea;
+  background: transparent;
+}
+
+.lc-annotating-code .lc-board-ink-lab-host,
+.lc-board-doc-paper .lc-board-ink-lab-host {
+  z-index: 12;
 }
 
 /*
- * The pad stays mounted for load/save. Show it only while a drawing tool is
- * armed — scroll mode has no pen, so the overlay would only steal flicks
- * (and the sibling file's text layer) in a split.
+ * The pad stays mounted for load/save. Pointers only while a drawing tool is
+ * armed — scroll mode has no pen, so flicks must reach the page. The strokes
+ * themselves stay visible; hiding the host made a written pad look blank until
+ * Annotate was tapped.
  */
 .lc-board:not(.lc-board-ink-lab) .lc-board-ink-lab-host,
 .lc-board-ink-lab-host:not(.is-armed) {
-  visibility: hidden;
   pointer-events: none !important;
 }
 
 .lc-board-reading .lc-board-ink-lab-host,
 .lc-board-reading .lc-ink-lab-canvas {
   pointer-events: none !important;
-}
-
-.lc-board-paper .lc-board-ink-lab-host,
-.lc-board-doc-paper .lc-board-ink-lab-host {
-  background: transparent;
 }
 
 .lc-board-ink-lab-host .lc-ink-lab-canvas {
@@ -3147,6 +3149,10 @@ body[data-lc-sash-drag="horizontal"] {
   width: 100%;
   height: 100%;
   touch-action: none;
+}
+
+.lc-board-ink-lab-host .lc-ink-lab-canvas.lc-raster-ink-eraser {
+  cursor: none;
 }
 
 /*
@@ -8707,6 +8713,15 @@ body[data-lc-sash-drag="horizontal"] {
    */
   touch-action: none;
   overscroll-behavior-x: contain;
+}
+
+/*
+ * Annotate: a stroke over a wide fence must not be read as nested pan, and a
+ * layout hitch must not overflow-anchor the block back to scrollLeft 0.
+ */
+.lc-board-annotating .lc-md-ink-doc pre,
+.lc-board-annotating .lc-code-doc-pre {
+  overflow-anchor: none;
 }
 
 .lc-md-ink-doc pre code {
@@ -17637,7 +17652,8 @@ html.lc-doc-camera-live .lc-page-marks-slot {
  * a tool is up, and an inline style beats an ordinary rule. Same reason
  * `.lc-board-reading .excalidraw__canvas` above needs it.
  */
-.lc-board-highlighting .lc-raster-ink {
+.lc-board-highlighting .lc-raster-ink,
+.lc-board-highlighting .lc-ink-lab-canvas {
   pointer-events: none !important;
 }
 
