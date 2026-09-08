@@ -10,7 +10,12 @@
  */
 
 import type { AnnotatePadDto, InkPageDto, WhiteboardPadDto } from "../api/client";
-import type { FootnoteInkBoard } from "./inkSync";
+import {
+  inkPageDiffRows,
+  type FootnoteInkBoard,
+  type InkPageDiffRow,
+  type InkPageStamp,
+} from "./inkSync";
 import type { DocFootnote, DocFootnoteWhiteboard } from "./docFootnotes";
 import { freshWhiteboardId } from "./docFootnotes";
 
@@ -56,6 +61,16 @@ export interface HubPadConflict {
    */
   localInkPageIds?: number[];
   /**
+   * This device's pages as stamps (id + clock). The split diffs these against
+   * {@link hubInkStamps} so only pages that disagree become rows.
+   */
+  localInkStamps?: InkPageStamp[];
+  /**
+   * Hub pages as stamps, off the ping digest. Same clock as a silent ink
+   * newest-wins would have used.
+   */
+  hubInkStamps?: InkPageStamp[];
+  /**
    * Footnote scratch boards with handwriting, on either side.
    *
    * Their strokes used to travel inside the pad's JSON, so a pane choice
@@ -76,15 +91,159 @@ export interface HubPadConflict {
   serverInk?: InkPageDto[] | null;
 }
 
-/** Synthetic row id for the handwriting choice on the split. */
+/** Synthetic row id prefix for handwriting choices on the split. */
 export const INK_ROW_ID = "__ink__";
+
+export function inkPageRowId(pageId: number): string {
+  return `${INK_ROW_ID}:${pageId}`;
+}
+
+export function parseInkPageRowId(id: string): number | null {
+  const prefix = `${INK_ROW_ID}:`;
+  if (!id.startsWith(prefix) || id.startsWith(`${INK_ROW_ID}:fn:`)) return null;
+  const rest = id.slice(prefix.length);
+  if (!/^-?\d+$/.test(rest)) return null;
+  return Number(rest);
+}
+
+export function footnoteInkPageRowId(wbId: string, pageId: number): string {
+  return `${INK_ROW_ID}:fn:${wbId}:${pageId}`;
+}
+
+export function parseFootnoteInkPageRowId(
+  id: string,
+): { wbId: string; pageId: number } | null {
+  const prefix = `${INK_ROW_ID}:fn:`;
+  if (!id.startsWith(prefix)) return null;
+  const rest = id.slice(prefix.length);
+  const colon = rest.lastIndexOf(":");
+  if (colon <= 0) return null;
+  const wbId = rest.slice(0, colon);
+  const pageId = Number(rest.slice(colon + 1));
+  if (!wbId || !Number.isInteger(pageId)) return null;
+  return { wbId, pageId };
+}
+
+export function isInkRowId(id: string): boolean {
+  return (
+    id === INK_ROW_ID ||
+    parseInkPageRowId(id) != null ||
+    parseFootnoteInkPageRowId(id) != null
+  );
+}
 
 export type HubInkChoice = "local" | "server" | "merged" | "none";
 
+export type HubInkPageChoice = { pageId: number; choice: HubInkChoice };
+export type HubFootnoteInkPageChoice = {
+  wbId: string;
+  pageId: number;
+  choice: HubInkChoice;
+};
+
+function stampsFrom(
+  stamps: readonly InkPageStamp[] | undefined,
+  ids: readonly number[] | undefined,
+  pages: readonly InkPageDto[] | null | undefined,
+): InkPageStamp[] {
+  if (stamps?.length) {
+    const gzBy = new Map((pages ?? []).map((page) => [page.page_id, page.gz]));
+    return stamps.map((stamp) =>
+      stamp.gz != null || !gzBy.has(stamp.pageId)
+        ? stamp
+        : { ...stamp, gz: gzBy.get(stamp.pageId) },
+    );
+  }
+  if (pages?.length) {
+    return pages.map((page) => ({
+      pageId: page.page_id,
+      updatedAt: page.updated_at,
+      gz: page.gz,
+    }));
+  }
+  return (ids ?? []).map((pageId) => ({ pageId, updatedAt: 0 }));
+}
+
+/**
+ * Pad handwriting pages that disagree.
+ *
+ * The walk already syncs per page. The merge window used to lump them into one
+ * row; this is that row split so a textbook with one contested margin still
+ * keeps the rest.
+ */
+export function padInkDiffRows(conflict: HubPadConflict): InkPageDiffRow[] {
+  const local = stampsFrom(
+    conflict.localInkStamps,
+    conflict.localInkPageIds,
+    conflict.localInk,
+  );
+  const hub = stampsFrom(
+    conflict.hubInkStamps,
+    conflict.hubInkPageIds,
+    conflict.serverInk ?? undefined,
+  );
+  const rows = inkPageDiffRows(local, hub);
+  const colliding = conflict.inkPageId;
+  if (colliding == null || rows.some((row) => row.pageId === colliding)) return rows;
+  const hasLocal =
+    local.some((stamp) => stamp.pageId === colliding) ||
+    (conflict.localInkPageIds?.includes(colliding) ?? false) ||
+    (conflict.localInk?.some((page) => page.page_id === colliding) ?? false);
+  const hasServer =
+    hub.some((stamp) => stamp.pageId === colliding) ||
+    (conflict.hubInkPageIds?.includes(colliding) ?? false) ||
+    (conflict.serverInk?.some((page) => page.page_id === colliding) ?? false);
+  rows.push({
+    pageId: colliding,
+    hasLocal: hasLocal || !hasServer,
+    hasServer: hasServer || !hasLocal,
+  });
+  rows.sort((a, b) => a.pageId - b.pageId);
+  return rows;
+}
+
+export type FootnoteInkDiffRow = InkPageDiffRow & { wbId: string };
+
+/** Scratch-board pages that disagree, one row per board+page. */
+export function footnoteInkDiffRows(conflict: HubPadConflict): FootnoteInkDiffRow[] {
+  const out: FootnoteInkDiffRow[] = [];
+  for (const board of conflict.footnoteInk ?? []) {
+    const local =
+      board.localPages ?? board.localPageIds.map((pageId) => ({ pageId, updatedAt: 0 }));
+    const hub =
+      board.hubPages ?? board.hubPageIds.map((pageId) => ({ pageId, updatedAt: 0 }));
+    for (const row of inkPageDiffRows(local, hub)) {
+      out.push({ wbId: board.wbId, ...row });
+    }
+  }
+  return out;
+}
+
+export function inkChoiceFromPick(
+  pick: { local?: boolean; server?: boolean } | undefined,
+): HubInkChoice {
+  const local = pick?.local === true;
+  const server = pick?.server === true;
+  if (local && server) return "merged";
+  if (local) return "local";
+  if (server) return "server";
+  return "none";
+}
+
 /** What the reader chose; the caller applies it to stores and the hub. */
 export type HubConflictResolution =
-  | { pick: "local"; ink?: HubInkChoice }
-  | { pick: "server"; ink?: HubInkChoice }
+  | {
+      pick: "local";
+      ink?: HubInkChoice;
+      inkPages?: HubInkPageChoice[];
+      footnoteInkPages?: HubFootnoteInkPageChoice[];
+    }
+  | {
+      pick: "server";
+      ink?: HubInkChoice;
+      inkPages?: HubInkPageChoice[];
+      footnoteInkPages?: HubFootnoteInkPageChoice[];
+    }
   | {
       pick: "merged";
       /**
@@ -93,6 +252,8 @@ export type HubConflictResolution =
        */
       footnotes?: DocFootnote[];
       ink?: HubInkChoice;
+      inkPages?: HubInkPageChoice[];
+      footnoteInkPages?: HubFootnoteInkPageChoice[];
       /**
        * Incoming (hub) whiteboard ids reminted while combining a same-id mark.
        * The resolver copies the hub blob under the new id before local KV
@@ -188,6 +349,21 @@ export function footnoteDiffRows(
         local !== null && server !== null && JSON.stringify(local) !== JSON.stringify(server),
     };
   });
+}
+
+/**
+ * Same-id marks whose bodies match — they are not a merge choice.
+ *
+ * {@link footnoteDiffRows} still lists them so {@link mergeFootnotes} can keep
+ * them; the split hides them so the window is differences only.
+ */
+export function visibleFootnoteDiffRows(
+  localNotes: readonly DocFootnote[],
+  serverNotes: readonly DocFootnote[],
+): FootnoteDiffRow[] {
+  return footnoteDiffRows(localNotes, serverNotes).filter(
+    (row) => !row.sameId || row.differs,
+  );
 }
 
 /**
@@ -317,6 +493,10 @@ export function combineFootnotePair(
  * now passes an explicit pick for every settled row and false/false panes so
  * mix-and-match cannot inherit a whole-pane keep.
  *
+ * Same-id marks whose bodies already match are not a choice. They stay, even
+ * when the panes drop every difference — hiding them from the window must not
+ * delete them.
+ *
  * Local order leads and server-only marks append, so a resolve that keeps
  * everything reads back as the local set plus what only the hub had.
  */
@@ -329,6 +509,10 @@ export function mergeFootnotes(
 ): DocFootnote[] {
   const out: DocFootnote[] = [];
   for (const row of footnoteDiffRows(localNotes, serverNotes)) {
+    if (row.sameId && !row.differs && row.local) {
+      out.push(row.local);
+      continue;
+    }
     const pick = picks[row.id];
     const keepLocal = pick ? pick.local : panes.local;
     const keepServer = pick ? pick.server : panes.server;

@@ -63,6 +63,17 @@ const CONFLICT: HubPadConflict = {
   ]),
 };
 
+/** Same notes as CONFLICT, plus one page of handwriting that disagrees. */
+const WITH_INK: HubPadConflict = {
+  ...CONFLICT,
+  localInkPageIds: [1],
+  hubInkPageIds: [1],
+  localInkStamps: [{ pageId: 1, updatedAt: 10 }],
+  hubInkStamps: [{ pageId: 1, updatedAt: 20 }],
+};
+
+const EMPTY_INK = { inkPages: [] as const, footnoteInkPages: [] as const };
+
 function mount(
   conflict: HubPadConflict | null = CONFLICT,
   busy = false,
@@ -135,7 +146,11 @@ describe("HubConflictSplit", () => {
     act(() => paneButton(1, "drop").click());
     act(() => resolveButton().click());
     expect(onResolve).toHaveBeenCalledTimes(1);
-    expect(onResolve.mock.calls[0]![0]).toEqual({ pick: "local", ink: "local" });
+    expect(onResolve.mock.calls[0]![0]).toEqual({
+      pick: "local",
+      ink: "none",
+      ...EMPTY_INK,
+    });
   });
 
   it("a per-mark keep adds a hub-only note without requiring the other pane ✓", () => {
@@ -150,7 +165,7 @@ describe("HubConflictSplit", () => {
     expect(onResolve).toHaveBeenCalledTimes(1);
     const resolution = onResolve.mock.calls[0]![0];
     expect(resolution.pick).toBe("merged");
-    expect(resolution.ink).toBe("local");
+    expect(resolution.ink).toBe("none");
     const ids = resolution.footnotes.map((n: { id: string }) => n.id);
     expect(ids).toContain("n1");
     expect(ids).toContain("srv");
@@ -188,7 +203,7 @@ describe("HubConflictSplit guards", () => {
     act(() => resolveButton().click());
     expect(onResolve).toHaveBeenCalledTimes(1);
     expect(onResolve.mock.calls[0]![0].pick).toBe("local");
-    expect(onResolve.mock.calls[0]![0].ink).toBe("local");
+    expect(onResolve.mock.calls[0]![0].ink).toBe("none");
   });
 });
 
@@ -199,11 +214,16 @@ describe("HubConflictSplit ink and labels", () => {
   });
 
   it("keeps only this device's copy and its ink on a single Local ✓ plus the other ✕", () => {
-    const { onResolve } = mount();
+    const { onResolve } = mount(WITH_INK);
     act(() => paneButton(0, "keep").click());
     act(() => paneButton(1, "drop").click());
     act(() => resolveButton().click());
-    expect(onResolve.mock.calls[0]![0]).toEqual({ pick: "local", ink: "local" });
+    expect(onResolve.mock.calls[0]![0]).toEqual({
+      pick: "local",
+      ink: "local",
+      inkPages: [{ pageId: 1, choice: "local" }],
+      footnoteInkPages: [],
+    });
   });
 
   it("lets both columns be dropped — the file stays, notes and ink do not", () => {
@@ -221,10 +241,11 @@ describe("HubConflictSplit ink and labels", () => {
     expect(onResolve.mock.calls[0]![0].pick).toBe("merged");
     expect(onResolve.mock.calls[0]![0].ink).toBe("none");
     expect(onResolve.mock.calls[0]![0].footnotes).toEqual([]);
+    expect(onResolve.mock.calls[0]![0].inkPages).toEqual([]);
   });
 
   it("✕ ink on both sides keeps the file with no handwriting", () => {
-    const { onResolve } = mount();
+    const { onResolve } = mount(WITH_INK);
     act(() => paneButton(0, "keep").click());
     act(() => paneButton(1, "drop").click());
     act(() => {
@@ -235,6 +256,7 @@ describe("HubConflictSplit ink and labels", () => {
     act(() => resolveButton().click());
     expect(onResolve.mock.calls[0]![0].pick).toBe("local");
     expect(onResolve.mock.calls[0]![0].ink).toBe("none");
+    expect(onResolve.mock.calls[0]![0].inkPages).toEqual([{ pageId: 1, choice: "none" }]);
   });
 
   it("names the right pane with otherLabel", () => {
@@ -259,7 +281,7 @@ describe("HubConflictSplit ink and labels", () => {
   });
 
   it("Keep selection enables after every row is settled without the pane header", () => {
-    const { onResolve } = mount();
+    const { onResolve } = mount(WITH_INK);
     expect(resolveButton().disabled).toBe(true);
     act(() => {
       inkRow(1)
@@ -283,6 +305,7 @@ describe("HubConflictSplit ink and labels", () => {
     const resolution = onResolve.mock.calls[0]![0];
     expect(resolution.pick).toBe("merged");
     expect(resolution.ink).toBe("server");
+    expect(resolution.inkPages).toEqual([{ pageId: 1, choice: "server" }]);
     const ids = resolution.footnotes.map((n: { id: string }) => n.id);
     expect(ids).toContain("n1");
     expect(ids).toContain("same");
@@ -297,6 +320,82 @@ describe("HubConflictSplit ink and labels", () => {
     expect(preview).toBeTruthy();
     expect(list).toBeTruthy();
     expect(list!.compareDocumentPosition(preview!)).toBe(Node.DOCUMENT_POSITION_PRECEDING);
+  });
+
+  it("omits a footnote that is already the same on both devices", () => {
+    const twin = {
+      id: "twin",
+      kind: "note" as const,
+      anchor: { kind: "text" as const, start: 0, end: 4, scope: "p1" },
+      excerpt: "unchanged quote",
+      createdAt: 8,
+    };
+    const conflict: HubPadConflict = {
+      ...CONFLICT,
+      local: annotateBody("book", 900, [
+        ...((CONFLICT.local as AnnotatePadDto).footnotes as unknown[]),
+        twin,
+      ]),
+      server: annotateBody("book", 500, [
+        ...((CONFLICT.server as AnnotatePadDto).footnotes as unknown[]),
+        twin,
+      ]),
+    };
+    const { onResolve } = mount(conflict);
+    expect(document.querySelector('[data-note-id="twin"]')).toBeNull();
+    act(() => paneButton(0, "keep").click());
+    act(() => {
+      noteByText("hub only mark")
+        .querySelector('[data-action="keep"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    act(() => resolveButton().click());
+    const ids = onResolve.mock.calls[0]![0].footnotes.map((n: { id: string }) => n.id);
+    expect(ids).toContain("twin");
+    expect(ids).toContain("n1");
+    expect(ids).toContain("srv");
+  });
+
+  it("lists only handwriting pages that disagree, and keeps A / B / A+B per page", () => {
+    const conflict: HubPadConflict = {
+      ...CONFLICT,
+      localInkStamps: [
+        { pageId: 1, updatedAt: 10 },
+        { pageId: 2, updatedAt: 20 },
+        { pageId: 4, updatedAt: 40 },
+      ],
+      hubInkStamps: [
+        { pageId: 1, updatedAt: 10 },
+        { pageId: 2, updatedAt: 21 },
+        { pageId: 3, updatedAt: 30 },
+      ],
+    };
+    const { onResolve } = mount(conflict);
+    expect(document.querySelector('[data-note-id="__ink__:1"]')).toBeNull();
+    expect(document.querySelector('[data-note-id="__ink__:2"]')).toBeTruthy();
+    expect(document.querySelector('[data-note-id="__ink__:3"]')).toBeTruthy();
+    expect(document.querySelector('[data-note-id="__ink__:4"]')).toBeTruthy();
+
+    act(() => paneButton(0, "keep").click());
+    act(() => paneButton(1, "drop").click());
+    // Page 2: keep both copies so the strokes merge.
+    act(() => {
+      const row = document.querySelectorAll(".lc-hub-conflict-pane")[1]!
+        .querySelector('[data-note-id="__ink__:2"]')!;
+      row.querySelector('[data-action="keep"]')!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    act(() => resolveButton().click());
+    const inkPages = onResolve.mock.calls[0]![0].inkPages as Array<{
+      pageId: number;
+      choice: string;
+    }>;
+    expect(inkPages).toEqual([
+      { pageId: 2, choice: "merged" },
+      { pageId: 3, choice: "none" },
+      { pageId: 4, choice: "local" },
+    ]);
   });
 });
 
@@ -438,7 +537,7 @@ describe("what the panes are asked to draw", () => {
   });
 
   it("answers for handwriting the same way", async () => {
-    await mountSpied();
+    await mountSpied(WITH_INK);
     // Focus alone draws nothing.
     act(() => inkRow(0).click());
     expect(inkOn(0)).toBe(false);
@@ -459,7 +558,7 @@ describe("what the panes are asked to draw", () => {
 
   it("leaves earlier decisions drawn while you answer the next row", async () => {
     // Deciding the ink does not un-draw the mark you already kept.
-    await mountSpied();
+    await mountSpied(WITH_INK);
     tick(0, SAME, "keep");
     expect(notesOn(0)).toEqual(["same"]);
 
@@ -474,7 +573,7 @@ describe("what the panes are asked to draw", () => {
      * Keeping the whole Local column draws every Local change and leaves the
      * other pane alone — the same answer as ticking each row by hand.
      */
-    await mountSpied();
+    await mountSpied(WITH_INK);
     act(() => paneButton(0, "keep").click());
     expect(notesOn(0)).toEqual(["n1", "same"]);
     expect(inkOn(0)).toBe(true);
@@ -555,7 +654,7 @@ describe("the mark hub, one per pane", () => {
    * device's footnotes, so it could only ever show one of the two.
    */
   const BOTH: HubPadConflict = {
-    ...CONFLICT,
+    ...WITH_INK,
     local: annotateBody("book", 900, [
       {
         id: "same",
@@ -670,7 +769,7 @@ describe("the mark hub, one per pane", () => {
   });
 
   it("does not offer Keep Server for handwriting that could not be read", () => {
-    mount({ ...CONFLICT, localInk: [], serverInk: null });
+    mount({ ...WITH_INK, localInk: [], serverInk: null });
     const serverInk = inkRow(1);
     expect(serverInk.textContent).toContain("Could not read handwriting");
     const keep = serverInk.querySelector('[data-action="keep"]') as HTMLButtonElement;

@@ -21,7 +21,7 @@ import {
   fetchHubInkPages,
   footnoteInkKeys,
   localInkAsDtos,
-  localInkPageIds,
+  localInkPageStamps,
   previewInkPages,
   splitFootnoteInkHubKey,
   type FootnoteInkBoard,
@@ -540,9 +540,10 @@ export function HubSyncControl({
          * Free — the walk already made that ping — and the honest answer to
          * "what is on the hub" for a resolve that only has to name pages.
          */
-        const hubInkPageIds = snapshot.inkDigests
+        const hubInkStamps = snapshot.inkDigests
           .filter((row) => row.kind === padInfo.kind && row.key === padInfo.id)
-          .map((row) => row.page_id);
+          .map((row) => ({ pageId: row.page_id, updatedAt: row.updated_at }));
+        const hubInkPageIds = hubInkStamps.map((row) => row.pageId);
 
         /**
          * Both copies as they stood when the walk stopped.
@@ -560,10 +561,13 @@ export function HubSyncControl({
          * ping digest and cost nothing.
          */
         const freezeCopies = async (previewPages?: readonly number[]) => {
-          const localInkPages = await localInkPageIds(padInfo.kind, padInfo.id).catch(
-            () => [] as number[],
+          const localInkStamps = await localInkPageStamps(padInfo.kind, padInfo.id).catch(
+            () => [] as { pageId: number; updatedAt: number }[],
           );
-          const preview = previewPages ?? previewInkPages(localInkPages, hubInkPageIds);
+          const localInkPages = localInkStamps.map((row) => row.pageId);
+          const preview =
+            previewPages ??
+            previewInkPages(localInkPages, hubInkPageIds, localInkStamps, hubInkStamps);
           const [server, localInk, serverInk, local] = await Promise.all([
             fetchHubBody(),
             localInkAsDtos(padInfo.kind, padInfo.id, preview).catch(() => []),
@@ -592,14 +596,18 @@ export function HubSyncControl({
               async () => knownBoards,
             );
             for (const key of keys) {
+              const hubPages = snapshot.inkDigests
+                .filter((row) => row.kind === "annotate" && row.key === key)
+                .map((row) => ({ pageId: row.page_id, updatedAt: row.updated_at }));
+              const localPages = await localInkPageStamps("annotate", key).catch(
+                () => [] as { pageId: number; updatedAt: number }[],
+              );
               footnoteInk.push({
                 wbId: splitFootnoteInkHubKey(key)!.wbId,
-                hubPageIds: snapshot.inkDigests
-                  .filter((row) => row.kind === "annotate" && row.key === key)
-                  .map((row) => row.page_id),
-                localPageIds: await localInkPageIds("annotate", key).catch(
-                  () => [] as number[],
-                ),
+                hubPageIds: hubPages.map((row) => row.pageId),
+                localPageIds: localPages.map((row) => row.pageId),
+                hubPages,
+                localPages,
               });
             }
           }
@@ -610,6 +618,8 @@ export function HubSyncControl({
             local,
             hubInkPageIds,
             localInkPageIds: localInkPages,
+            hubInkStamps,
+            localInkStamps,
             footnoteInk,
           };
         };
@@ -672,6 +682,8 @@ export function HubSyncControl({
               serverInk: copies.serverInk,
               hubInkPageIds: copies.hubInkPageIds,
               localInkPageIds: copies.localInkPageIds,
+              hubInkStamps: copies.hubInkStamps,
+              localInkStamps: copies.localInkStamps,
               footnoteInk: copies.footnoteInk,
             });
             // Workspace already wrote pad JSON + the chosen ink.
@@ -720,6 +732,8 @@ export function HubSyncControl({
               serverInk: copies.serverInk,
               hubInkPageIds: copies.hubInkPageIds,
               localInkPageIds: copies.localInkPageIds,
+              hubInkStamps: copies.hubInkStamps,
+              localInkStamps: copies.localInkStamps,
               footnoteInk: copies.footnoteInk,
               inkPageId: ink.pageId,
             });

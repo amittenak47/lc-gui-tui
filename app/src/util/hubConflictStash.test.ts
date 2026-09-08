@@ -9,8 +9,10 @@ import {
   hubConflict,
   inkChoiceOf,
   mergeFootnotes,
+  padInkDiffRows,
   stashHubConflict,
   subscribeHubConflict,
+  visibleFootnoteDiffRows,
 } from "./hubConflictStash";
 
 function note(id: string, excerpt = `quote ${id}`, extra: Partial<DocFootnote> = {}): DocFootnote {
@@ -45,6 +47,14 @@ describe("footnoteDiffRows", () => {
       [note("a", "another wording")],
     );
     expect(rows[0]!.differs).toBe(true);
+  });
+
+  it("hides same-id marks whose bodies already match", () => {
+    const rows = visibleFootnoteDiffRows(
+      [note("a"), note("b")],
+      [note("a"), note("c")],
+    );
+    expect(rows.map((row) => row.id)).toEqual(["b", "c"]);
   });
 });
 
@@ -97,6 +107,15 @@ describe("mergeFootnotes (the plan's ✓ rules)", () => {
       { local: true, server: true },
     );
     expect(merged.map((row) => row.id)).toEqual(["a", "b"]);
+  });
+
+  it("keeps identical same-id marks even when every difference is dropped", () => {
+    const merged = mergeFootnotes(
+      [note("a"), note("b")],
+      [note("a")],
+      { local: false, server: false },
+    );
+    expect(merged.map((row) => row.id)).toEqual(["a"]);
   });
 });
 
@@ -285,5 +304,42 @@ describe("inkChoiceOf", () => {
     expect(inkChoiceOf({ pick: "local" })).toBe("local");
     expect(inkChoiceOf({ pick: "server" })).toBe("server");
     expect(inkChoiceOf({ pick: "merged" })).toBe("merged");
+  });
+});
+
+describe("padInkDiffRows", () => {
+  it("omits pages whose clocks already match", () => {
+    const rows = padInkDiffRows({
+      kind: "annotate",
+      id: "pad-1",
+      stage: "pad",
+      detail: "both changed",
+      local: null,
+      server: null,
+      localInkStamps: [
+        { pageId: 1, updatedAt: 10 },
+        { pageId: 2, updatedAt: 20 },
+      ],
+      hubInkStamps: [
+        { pageId: 1, updatedAt: 10 },
+        { pageId: 2, updatedAt: 21 },
+      ],
+    });
+    expect(rows.map((row) => row.pageId)).toEqual([2]);
+  });
+
+  it("keeps a page whose clocks tied but whose preview bytes did not", () => {
+    const rows = padInkDiffRows({
+      kind: "whiteboard",
+      id: "w1",
+      stage: "ink",
+      detail: "page 0",
+      local: null,
+      server: null,
+      inkPageId: 0,
+      localInk: [{ kind: "whiteboard", key: "w1", page_id: 0, updated_at: 1, gz: "aaa" }],
+      serverInk: [{ kind: "whiteboard", key: "w1", page_id: 0, updated_at: 1, gz: "bbb" }],
+    });
+    expect(rows).toEqual([{ pageId: 0, hasLocal: true, hasServer: true }]);
   });
 });
