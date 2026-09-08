@@ -217,6 +217,39 @@ export function rotateElement<T extends PaintSceneElement>(element: T, delta: nu
   return { ...element, angle: (element.angle ?? 0) + delta };
 }
 
+/** Orbit `element` around a group centre, then spin it on its own centre. */
+export function rotateAbout<T extends PaintSceneElement>(
+  element: T,
+  cx: number,
+  cy: number,
+  delta: number,
+): T {
+  const b = sceneElementBounds(element);
+  const ecx = (b.minX + b.maxX) / 2;
+  const ecy = (b.minY + b.maxY) / 2;
+  const cos = Math.cos(delta);
+  const sin = Math.sin(delta);
+  const dx = ecx - cx;
+  const dy = ecy - cy;
+  const ncx = cx + dx * cos - dy * sin;
+  const ncy = cy + dx * sin + dy * cos;
+  return rotateElement(moveElement(element, ncx - ecx, ncy - ecy), delta);
+}
+
+export function flipAbout<T extends PaintSceneElement>(
+  element: T,
+  axis: "h" | "v",
+  cx: number,
+  cy: number,
+): T {
+  const b = sceneElementBounds(element);
+  const ecx = (b.minX + b.maxX) / 2;
+  const ecy = (b.minY + b.maxY) / 2;
+  const nx = axis === "h" ? 2 * cx - ecx : ecx;
+  const ny = axis === "v" ? 2 * cy - ecy : ecy;
+  return flipElement(moveElement(element, nx - ecx, ny - ecy), axis);
+}
+
 export function rotateDeltaFromDrag(
   cx: number,
   cy: number,
@@ -364,5 +397,36 @@ export function expandStampGroup(
     if (el.id && ids.has(el.id)) return true;
     const g = el.customData?.lcStampGroup;
     return Boolean(g && groups.has(g) && el.customData?.lcStamp);
+  });
+}
+
+export const ORTHO_STEP = Math.PI / 2;
+/** Sticky window while rotating — still lets you pass through to a free angle. */
+export const ORTHO_MAGNET = (8 * Math.PI) / 180;
+
+export function snapAngle(angle: number, step = ORTHO_STEP): number {
+  return Math.round(angle / step) * step;
+}
+
+export function magnetOrthogonal(angle: number, window = ORTHO_MAGNET): number {
+  const snapped = snapAngle(angle);
+  return Math.abs(angle - snapped) <= window ? snapped : angle;
+}
+
+export function clonePaintElements(elements: readonly PaintSceneElement[]): PaintSceneElement[] {
+  return elements.map((el) => ({
+    ...el,
+    points: el.points?.map((pt) => [pt[0], pt[1]] as [number, number]),
+  }));
+}
+
+export function elementsIntersectingBox(
+  elements: readonly PaintSceneElement[],
+  box: SceneBounds,
+): PaintSceneElement[] {
+  return elements.filter((el) => {
+    if (!isSelectableSceneElement(el)) return false;
+    const b = sceneElementBounds(el);
+    return b.minX <= box.maxX && b.maxX >= box.minX && b.minY <= box.maxY && b.maxY >= box.minY;
   });
 }

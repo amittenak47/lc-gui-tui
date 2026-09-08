@@ -191,8 +191,6 @@ import {
 import { TextPlaceGhost, type TextPlaceGhostHandle } from "./TextPlaceGhost";
 import {
   minTextBox,
-  textClientFromScene,
-  textEditorAnchor,
   textPlaceRect,
   TEXT_TAP_SLOP_PX,
   type TextPlaceViewport,
@@ -203,14 +201,18 @@ import {
   SceneSelectionOverlay,
   type SceneSelectionOverlayHandle,
 } from "./SceneSelectionOverlay";
+import { SceneTextEditor, type SceneTextEdit } from "./SceneTextEditor";
 import {
+  elementsIntersectingBox,
   expandStampGroup,
-  flipElement,
+  flipAbout,
   hitTestScene,
   isSelectableSceneElement,
   isShapeDrawTool,
   MIN_SHAPE_SPAN,
   moveElement,
+  normBox,
+  sceneSelectionBounds,
   shapeSpan,
   skeletonFromDrag,
 } from "./shapeGesture";
@@ -1399,14 +1401,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const stampTrashNodeRef = useRef<HTMLButtonElement | null>(null);
   const stampTrashPosRef = useRef<{ left: number; top: number } | null>(null);
   const syncStampTrashRef = useRef<() => void>(() => {});
-  const attachStampTrash = useCallback((node: HTMLButtonElement | null) => {
-    stampTrashNodeRef.current = node;
-    const pos = stampTrashPosRef.current;
-    if (node && pos) {
-      node.style.left = `${pos.left}px`;
-      node.style.top = `${pos.top}px`;
-    }
-  }, []);
   /**
    * Markdown content slot — width is React state (rare); left/top/zoom are
    * written to the DOM node so a scroll frame does not re-render Board.
@@ -1835,6 +1829,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const sceneOverlayRef = useRef<SceneOverlayHandle>(null);
   const shapeSelectRef = useRef<SceneSelectionOverlayHandle>(null);
   const shapeDraftRef = useRef<unknown | null>(null);
+  const [textEdit, setTextEdit] = useState<SceneTextEdit | null>(null);
+  const textEditRef = useRef<SceneTextEdit | null>(null);
+  textEditRef.current = textEdit;
   const [shapesOpen, setShapesOpen] = useState(false);
   const [captureMenuOpen, setCaptureMenuOpen] = useState(false);
   const [captureRegion, setCaptureRegion] = useState<{
@@ -3671,21 +3668,93 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const deleteSelection = useCallback(() => {
     const api = apiRef.current;
-    if (!api || !stampTrash) return;
-    const kill = new Set(stampTrash.ids);
+    if (!api) return;
+    const state = api.getAppState() as { selectedElementIds?: Record<string, boolean> };
+    const selectedIds = new Set(
+      Object.entries(state.selectedElementIds ?? {})
+        .filter(([, on]) => on)
+        .map(([id]) => id),
+    );
+    if (selectedIds.size === 0 && stampTrash) {
+      for (const id of stampTrash.ids) selectedIds.add(id);
+    }
+    if (selectedIds.size === 0) return;
     const current = api.getSceneElements() as Array<{
       id: string;
       isDeleted?: boolean;
+      customData?: { lcStamp?: boolean; lcStampGroup?: string } | null;
       [key: string]: unknown;
     }>;
+    const groups = new Set(
+      current
+        .filter((el) => selectedIds.has(el.id))
+        .map((el) => el.customData?.lcStampGroup)
+        .filter((id): id is string => Boolean(id)),
+    );
+    const kill = new Set<string>();
+    for (const el of current) {
+      if (selectedIds.has(el.id)) kill.add(el.id);
+      const g = el.customData?.lcStampGroup;
+      if (g && groups.has(g) && el.customData?.lcStamp) kill.add(el.id);
+    }
     api.updateScene({
       elements: current.map((el) => (kill.has(el.id) ? { ...el, isDeleted: true } : el)),
       appState: { selectedElementIds: {} },
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     });
     setStampTrash(null);
+    sceneOverlayRef.current?.redraw();
+    shapeSelectRef.current?.redraw();
     onChange?.();
   }, [onChange, stampTrash]);
+
+  const finishTextEdit = useCallback(
+    (text: string, cancelled: boolean) => {
+      const edit = textEditRef.current;
+      if (!edit) return;
+      textEditRef.current = null;
+      setTextEdit(null);
+      const api = apiRef.current;
+      if (!api) return;
+      const empty = text.trim().length === 0;
+      if (edit.created && (cancelled || empty)) {
+        if (!api.history?.undo()) {
+          const live = api.getSceneElements() as PaintSceneElement[];
+          api.updateScene({
+            elements: live.map((el) =>
+              el.id === edit.id ? { ...el, isDeleted: true } : el,
+            ) as unknown[],
+            appState: { selectedElementIds: {} },
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+        }
+        sceneOverlayRef.current?.redraw();
+        shapeSelectRef.current?.redraw();
+        syncStampTrashRef.current();
+        onChange?.();
+        return;
+      }
+      if (cancelled) {
+        sceneOverlayRef.current?.redraw();
+        shapeSelectRef.current?.redraw();
+        return;
+      }
+      const live = api.getSceneElements() as PaintSceneElement[];
+      const changed = text !== edit.text;
+      api.updateScene({
+        elements: live.map((el) =>
+          el.id === edit.id ? { ...el, text, originalText: text } : el,
+        ) as unknown[],
+        captureUpdate:
+          edit.created || !changed ? CaptureUpdateAction.NEVER : CaptureUpdateAction.IMMEDIATELY,
+      });
+      sceneOverlayRef.current?.redraw();
+      shapeSelectRef.current?.redraw();
+      syncStampTrashRef.current();
+      onChange?.();
+    },
+    [onChange],
+  );
 
   /** Scene coords from a pointer event over the Excalidraw viewport. */
   const clientToScene = useCallback((clientX: number, clientY: number) => {
@@ -4077,7 +4146,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (
         el.closest(
           ".lc-toolbar, .lc-map-controls, .lc-pager, .lc-stamp-trash, .lc-capture-overlay," +
-            " .lc-scene-select, .lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-footnote-overview" +
+            " .lc-scene-select, .lc-scene-text-editor, .lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-footnote-overview" +
             ", .lc-footnote-bubble, .lc-scroll-back-hold, .lc-hold-reveal, .lc-split-sash",
         )
       ) {
@@ -4670,6 +4739,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (activeToolRef.current === "text") return;
       event.preventDefault();
       event.stopPropagation();
+      const api = apiRef.current;
+      if (!api) return;
+      const scene = clientToScene(event.clientX, event.clientY);
+      const hit = hitTestScene(api.getSceneElements() as PaintSceneElement[], scene.x, scene.y);
+      if (!hit?.id || hit.type !== "text" || !isSelectableSceneElement(hit)) return;
+      setTextEdit({
+        id: hit.id,
+        x: hit.x,
+        y: hit.y,
+        width: hit.width ?? 120,
+        height: hit.height ?? 28,
+        text: String(hit.text ?? ""),
+        fontSize: typeof hit.fontSize === "number" ? hit.fontSize : 20,
+        fontFamily: hit.fontFamily,
+        color: hit.strokeColor && hit.strokeColor !== "transparent" ? hit.strokeColor : inkColorRef.current,
+        created: false,
+      });
     };
 
     /*
@@ -4712,7 +4798,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       root.removeEventListener("pointerdown", onTapDown);
       root.removeEventListener("pointerup", onTapUp);
     };
-  }, [interactive]);
+  }, [clientToScene, interactive]);
 
   /*
    * Drag-to-create primitives, plus select/move on the selection tool.
@@ -4730,7 +4816,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!root) return;
 
     const chrome =
-      ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select";
+      ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select, .lc-scene-text-editor";
 
     type DrawDrag = {
       kind: "draw";
@@ -4748,7 +4834,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       lastY: number;
       ids: Set<string>;
     };
-    let drag: DrawDrag | MoveDrag | null = null;
+    type MarqueeDrag = {
+      kind: "marquee";
+      pointerId: number;
+      x0: number;
+      y0: number;
+      x1: number;
+      y1: number;
+      originClientX: number;
+      originClientY: number;
+    };
+    let drag: DrawDrag | MoveDrag | MarqueeDrag | null = null;
 
     const paintDraft = (d: DrawDrag) => {
       const skeleton = skeletonFromDrag(d.type, d.x0, d.y0, d.x1, d.y1, {
@@ -4788,8 +4884,23 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       syncStampTrashRef.current();
     };
 
+    const paintMarquee = (d: MarqueeDrag, clientX: number, clientY: number) => {
+      const rect = root.getBoundingClientRect();
+      const ax = d.originClientX - rect.left;
+      const ay = d.originClientY - rect.top;
+      const bx = clientX - rect.left;
+      const by = clientY - rect.top;
+      shapeSelectRef.current?.setMarquee({
+        left: Math.min(ax, bx),
+        top: Math.min(ay, by),
+        width: Math.abs(bx - ax),
+        height: Math.abs(by - ay),
+      });
+    };
+
     const onPointerDown = (event: PointerEvent) => {
       if (!annotateCodeRef.current) return;
+      if (textEditRef.current) return;
       if (event.button !== 0 && event.pointerType === "mouse") return;
       const tool = activeToolRef.current;
       if (tool === "text" || tool === "hand" || tool === "freedraw" || tool === "highlighter" || tool === "eraser") {
@@ -4869,17 +4980,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         return;
       }
 
-      api.updateScene({
-        appState: {
-          selectedElementIds: {},
-          selectedGroupIds: {},
-          selectedLinearElement: null,
-          editingLinearElement: null,
-        },
-        captureUpdate: CaptureUpdateAction.NEVER,
-      });
-      shapeSelectRef.current?.redraw();
-      syncStampTrashRef.current();
+      drag = {
+        kind: "marquee",
+        pointerId: event.pointerId,
+        x0: scene.x,
+        y0: scene.y,
+        x1: scene.x,
+        y1: scene.y,
+        originClientX: event.clientX,
+        originClientY: event.clientY,
+      };
+      try {
+        root.setPointerCapture(event.pointerId);
+      } catch {
+        /* ignore */
+      }
+      event.stopPropagation();
     };
 
     const onPointerMove = (event: PointerEvent) => {
@@ -4889,6 +5005,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         drag.x1 = scene.x;
         drag.y1 = scene.y;
         paintDraft(drag);
+        return;
+      }
+      if (drag.kind === "marquee") {
+        drag.x1 = scene.x;
+        drag.y1 = scene.y;
+        paintMarquee(drag, event.clientX, event.clientY);
         return;
       }
       const dx = scene.x - drag.lastX;
@@ -4933,6 +5055,56 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         });
         api.setActiveTool({ type: finished.type, locked: true });
         sceneOverlayRef.current?.redraw();
+        shapeSelectRef.current?.redraw();
+        syncStampTrashRef.current();
+        return;
+      }
+      if (finished.kind === "marquee") {
+        shapeSelectRef.current?.setMarquee(null);
+        const api = apiRef.current;
+        if (!api) return;
+        const travel = Math.hypot(
+          event.clientX - finished.originClientX,
+          event.clientY - finished.originClientY,
+        );
+        if (travel < SELECT_HOLD_SLOP_PX) {
+          api.updateScene({
+            appState: {
+              selectedElementIds: {},
+              selectedGroupIds: {},
+              selectedLinearElement: null,
+              editingLinearElement: null,
+            },
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+          shapeSelectRef.current?.redraw();
+          syncStampTrashRef.current();
+          return;
+        }
+        const box = normBox(finished.x0, finished.y0, finished.x1, finished.y1);
+        const live = api.getSceneElements() as PaintSceneElement[];
+        const hits = elementsIntersectingBox(live, {
+          minX: box.x,
+          minY: box.y,
+          maxX: box.x + box.width,
+          maxY: box.y + box.height,
+        });
+        const members = expandStampGroup(live, hits);
+        const selected: Record<string, true> = {};
+        for (const el of members) {
+          if (el.id) selected[el.id] = true;
+        }
+        api.updateScene({
+          appState: {
+            selectedElementIds: selected,
+            selectedGroupIds: {},
+            selectedLinearElement:
+              members.length === 1 && isLinearElementType(members[0]?.type)
+                ? linearEditorState({ id: members[0]!.id!, elbowed: false })
+                : null,
+          },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
         shapeSelectRef.current?.redraw();
         syncStampTrashRef.current();
         return;
@@ -5177,12 +5349,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [activeTool, strokeWidth]);
 
   const undoBoard = useCallback(() => {
-    rasterInkRef.current?.undo();
-  }, []);
+    if (rasterInkRef.current?.undo()) return;
+    if (apiRef.current?.history?.undo()) {
+      sceneOverlayRef.current?.redraw();
+      shapeSelectRef.current?.redraw();
+      syncStampTrashRef.current();
+      onChange?.();
+    }
+  }, [onChange]);
 
   const redoBoard = useCallback(() => {
-    rasterInkRef.current?.redo();
-  }, []);
+    if (rasterInkRef.current?.redo()) return;
+    if (apiRef.current?.history?.redo()) {
+      sceneOverlayRef.current?.redraw();
+      shapeSelectRef.current?.redraw();
+      syncStampTrashRef.current();
+      onChange?.();
+    }
+  }, [onChange]);
 
   /*
    * Ctrl/Cmd+Z, and Shift for redo.
@@ -5241,7 +5425,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (
         target instanceof Element &&
         target.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select",
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select, .lc-scene-text-editor",
         )
       ) {
         return;
@@ -5289,29 +5473,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
 
   /**
-   * Text placement — our gesture, Excalidraw's editor.
+   * Text placement — our gesture, our editor.
    *
-   * Two upstream rules fight a locked text tool on a tablet.
-   * `handleTextOnPointerDown` returns early while `editingTextElement` is set,
-   * so every box after the first costs two taps: one to commit, one to place.
-   * And `handleCanvasDoubleClick` — the one entry point that will open the
-   * wysiwyg on an element we placed ourselves — bails unless the active tool is
-   * `selection`. Dispatching a double-click while Excalidraw sat on the text
-   * tool was therefore a no-op: the box appeared, the editor never did, and the
-   * soft keyboard never came up.
-   *
-   * So Excalidraw stays on `selection` for as long as our Text tool is up, we
-   * own the pointer gesture, insert the element, select it, then hand over with
-   * a double-click inside it. Upstream sees a selected text element, treats it
-   * as existing, and opens and focuses its textarea. That focus lands inside
-   * the pointerup's user-activation window, which is what makes Android raise
-   * the keyboard.
-   *
-   * Nothing here replays pointer events. The previous attempt did, and
-   * `handleCanvasPointerDown` calls `setPointerCapture` with the id it is
-   * given — a synthetic id belongs to no active pointer, so it threw and took
-   * the placement down with it. That is why replay worked on a mouse and never
-   * on a tablet.
+   * Ink lab is unarmed on the text tool, and there is no Excalidraw wysiwyg.
+   * A tap or drag inserts a scene text element, then {@link SceneTextEditor}
+   * opens on top of it. Empty cancel undoes the insert.
    */
   useEffect(() => {
     if (!interactive) return;
@@ -5325,8 +5491,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
     let drag: Drag | null = null;
     let frame = 0;
-    /** rAF id of an in-flight hand-off, so a fast second tap cancels the first. */
-    let handoff = 0;
 
     const readViewport = (): TextPlaceViewport => {
       const state = apiRef.current?.getAppState() as
@@ -5352,12 +5516,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return { x: clientX - boardRect.left, y: clientY - boardRect.top };
     };
 
-    const openEditable = () =>
-      document.querySelector<HTMLTextAreaElement>("textarea.excalidraw-wysiwyg");
-
-    const interactiveCanvas = () =>
-      root.querySelector("canvas.lc-ink-lab-canvas");
-
     const paintGhost = (d: Drag) => {
       const ghost = textPlaceGhostRef.current;
       if (!ghost) return;
@@ -5381,63 +5539,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     const hideGhost = () => {
       textPlaceGhostRef.current?.setVisible(false);
-    };
-
-    /**
-     * Drop the student's blank text boxes.
-     *
-     * Placing leaves an empty element behind whenever the editor is dismissed
-     * without typing, and they are invisible but selectable. Template text is
-     * tagged and never touched.
-     */
-    const cullEmptyStudentText = () => {
-      const api = apiRef.current;
-      if (!api) return;
-      const current = api.getSceneElements() as Array<{
-        id: string;
-        type: string;
-        text?: string;
-        originalText?: string;
-        isDeleted?: boolean;
-        customData?: { lcRegion?: string; lcVizId?: string } | null;
-        [key: string]: unknown;
-      }>;
-      let changed = false;
-      const next = current.map((el) => {
-        if (el.isDeleted || el.type !== "text") return el;
-        if (el.customData?.lcRegion || el.customData?.lcVizId) return el;
-        if ((el.originalText ?? el.text ?? "").trim().length > 0) return el;
-        changed = true;
-        return { ...el, isDeleted: true };
-      });
-      if (!changed) return;
-      api.updateScene({
-        elements: next,
-        appState: { selectedElementIds: {} },
-        captureUpdate: CaptureUpdateAction.NEVER,
-      });
-    };
-
-    /** Run `task` once the open editor has committed itself, or give up. */
-    const afterEditorCloses = (task: () => void, framesLeft = 24) => {
-      if (!openEditable()) {
-        task();
-        return;
-      }
-      if (framesLeft <= 0) {
-        // The editor is wedged open. Blurring is the last thing that reliably
-        // commits it; placing on top of it would only be refused.
-        openEditable()?.blur();
-        handoff = requestAnimationFrame(() => {
-          handoff = 0;
-          task();
-        });
-        return;
-      }
-      handoff = requestAnimationFrame(() => {
-        handoff = 0;
-        afterEditorCloses(task, framesLeft - 1);
-      });
     };
 
     const placeText = (d: Drag) => {
@@ -5470,6 +5571,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const created = convert(skeletons) as Array<{ id: string; [key: string]: unknown }>;
       if (created.length === 0) return;
       const textEl = created[0];
+      if (!textEl?.id) return;
 
       const live = api.getSceneElements() as Array<{
         id: string;
@@ -5479,48 +5581,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       api.updateScene({
         elements: [...live.filter((el) => !el.isDeleted), ...created],
         appState: {
-          // Selecting it is what makes the hand-off unambiguous: `startTextEditing`
-          // prefers the single selected text element over whatever the pointer
-          // happens to be over, so the double-click cannot bind our note into a
-          // region rectangle underneath it.
           selectedElementIds: { [textEl.id]: true },
           selectedGroupIds: {},
           editingGroupId: null,
         },
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
-
-      // Next frame: the selection has to be in Excalidraw's state before the
-      // double-click reads it back.
-      handoff = requestAnimationFrame(() => {
-        handoff = 0;
-        const canvas = interactiveCanvas();
-        if (!(canvas instanceof Element)) return;
-        const anchor = textEditorAnchor(rect);
-        const at = textClientFromScene(anchor.x, anchor.y, readViewport());
-        canvas.dispatchEvent(
-          new MouseEvent("dblclick", {
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            clientX: at.x,
-            clientY: at.y,
-            button: 0,
-            detail: 2,
-          }),
-        );
-        // A tablet keyboard sometimes needs the focus asserted again after
-        // Excalidraw's own deferred focus; harmless when it is already focused.
-        handoff = requestAnimationFrame(() => {
-          handoff = 0;
-          const editable = openEditable();
-          if (editable) {
-            if (document.activeElement !== editable) editable.focus();
-            return;
-          }
-          // Editor refused to open — do not leave an invisible box behind.
-          cullEmptyStudentText();
-        });
+      sceneOverlayRef.current?.redraw();
+      setTextEdit({
+        id: textEl.id,
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        text: "",
+        fontSize: fontSizeRef.current,
+        fontFamily,
+        color: inkColorRef.current,
+        created: true,
       });
     };
 
@@ -5531,7 +5609,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!(target instanceof Element)) return;
       if (
         target.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select",
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select, .lc-scene-text-editor",
         )
       ) {
         return;
@@ -5541,21 +5619,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         return;
       }
       if (!target.closest(".excalidraw, .lc-board")) return;
-
-      if (handoff) {
-        cancelAnimationFrame(handoff);
-        handoff = 0;
+      if (textEditRef.current) {
+        event.stopPropagation();
+        return;
       }
 
       /*
-       * `stopPropagation`, never `stopImmediatePropagation` or `preventDefault`.
-       *
-       * Excalidraw's own canvas handlers hang off the React root below us, so
-       * stopping propagation is enough to keep the selection tool out of the
-       * way. The open editor's commit-on-outside-press listener is on `window`
-       * like ours, so `stopImmediatePropagation` would silence it and the box
-       * would never commit. And `preventDefault` on a touch pointerdown is what
-       * costs you the soft keyboard on Android.
+       * `stopPropagation`, never `preventDefault`.
+       * `preventDefault` on a touch pointerdown is what costs you the soft
+       * keyboard on Android.
        */
       event.stopPropagation();
 
@@ -5576,27 +5648,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (activeToolRef.current !== "text") return;
 
       if (!drag) {
-        // Hover preview — only meaningful with a mouse or a hovering stylus.
-        if (openEditable()) {
+        if (textEditRef.current || root.querySelector(".lc-scene-text-editor")) {
           hideGhost();
           return;
         }
         const target = event.target;
         if (
           target instanceof Element &&
-          target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager")
+          target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-scene-text-editor")
         ) {
           hideGhost();
           return;
         }
-        const hitCanvas = interactiveCanvas();
-        if (!(hitCanvas instanceof HTMLCanvasElement)) return;
-        const canvasRect = hitCanvas.getBoundingClientRect();
+        const boardRect = root.getBoundingClientRect();
         if (
-          event.clientX < canvasRect.left ||
-          event.clientX > canvasRect.right ||
-          event.clientY < canvasRect.top ||
-          event.clientY > canvasRect.bottom
+          event.clientX < boardRect.left ||
+          event.clientX > boardRect.right ||
+          event.clientY < boardRect.top ||
+          event.clientY > boardRect.bottom
         ) {
           hideGhost();
           return;
@@ -5635,12 +5704,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         /* ignore */
       }
       hideGhost();
-      // The open editor commits itself one frame after our pointerdown; placing
-      // before that lands the new box in a scene it is about to rewrite.
-      afterEditorCloses(() => {
-        cullEmptyStudentText();
-        placeText(finished);
-      });
+      placeText(finished);
     };
 
     const onPointerCancel = (event: PointerEvent) => {
@@ -5659,7 +5723,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       window.removeEventListener("pointerup", onPointerUp, true);
       window.removeEventListener("pointercancel", onPointerCancel, true);
       if (frame) cancelAnimationFrame(frame);
-      if (handoff) cancelAnimationFrame(handoff);
       hideGhost();
     };
   }, [convert, interactive]);
@@ -8056,7 +8119,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
       }
 
-      const editingId = appState?.editingTextElement?.id ?? null;
+      const editingId = textEditRef.current?.id ?? appState?.editingTextElement?.id ?? null;
       const structuralUi =
         Boolean(appState?.isResizing) ||
         Boolean(appState?.resizingElement) ||
@@ -9997,6 +10060,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         <SceneSelectionOverlay
           ref={shapeSelectRef}
           getMembers={() => {
+            if (textEdit) return [];
             const api = apiRef.current;
             if (!api) return [];
             const state = api.getAppState() as {
@@ -10055,11 +10119,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             const selected = els.filter(
               (el) => el.id && ids.has(el.id) && isSelectableSceneElement(el),
             );
-            const members = expandStampGroup(els, selected).map((el) =>
-              flipElement(el, axis),
-            );
+            const members = expandStampGroup(els, selected);
+            const bounds = sceneSelectionBounds(members);
+            if (!bounds) return;
+            const cx = (bounds.minX + bounds.maxX) / 2;
+            const cy = (bounds.minY + bounds.maxY) / 2;
+            const flipped = members.map((el) => flipAbout(el, axis, cx, cy));
             const byId = new Map(
-              members.filter((el) => el.id).map((el) => [el.id!, el]),
+              flipped.filter((el) => el.id).map((el) => [el.id!, el]),
             );
             api.updateScene({
               elements: els.map((el) =>
@@ -10071,46 +10138,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             shapeSelectRef.current?.redraw();
             syncStampTrashRef.current();
           }}
+          onDelete={deleteSelection}
+        />
+      )}
+      {interactive && textEdit && (
+        <SceneTextEditor
+          edit={textEdit}
+          getViewport={getViewport}
+          onCommit={(text) => finishTextEdit(text, false)}
+          onCancel={() => finishTextEdit(textEditRef.current?.text ?? "", true)}
         />
       )}
       {interactive && activeTool === "text" && <TextPlaceGhost ref={textPlaceGhostRef} />}
-      {interactive && stampTrash && (
-        <button
-          ref={attachStampTrash}
-          type="button"
-          className="lc-stamp-trash"
-          style={
-            stampTrashPosRef.current
-              ? {
-                  left: stampTrashPosRef.current.left,
-                  top: stampTrashPosRef.current.top,
-                }
-              : undefined
-          }
-          aria-label="Delete selection"
-          title="Delete"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => deleteSelection()}
-        >
-          <svg
-            viewBox="0 0 24 24"
-            width="16"
-            height="16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden
-          >
-            <path d="M3 6h18" />
-            <path d="M8 6V4h8v2" />
-            <path d="M19 6l-1 14H6L5 6" />
-            <path d="M10 11v6" />
-            <path d="M14 11v6" />
-          </svg>
-        </button>
-      )}
       {interactive && <CaptureFeedback ref={captureFeedbackRef} />}
 
       {interactive && captureArmed && (

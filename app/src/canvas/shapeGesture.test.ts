@@ -8,10 +8,14 @@ import {
   MIN_SHAPE_SPAN,
   rotateDeltaFromDrag,
   rotateElement,
+  rotateAbout,
   scaleElement,
   sceneElementBounds,
   shapeSpan,
   skeletonFromDrag,
+  snapAngle,
+  magnetOrthogonal,
+  elementsIntersectingBox,
 } from "./shapeGesture";
 
 describe("skeletonFromDrag", () => {
@@ -187,5 +191,38 @@ describe("transforms", () => {
 
   it("measures a rotate drag as a right angle", () => {
     expect(rotateDeltaFromDrag(0, 0, 1, 0, 0, 1)).toBeCloseTo(Math.PI / 2);
+  });
+
+  it("orbits a box around a group centre", () => {
+    const next = rotateAbout(
+      { type: "rectangle", x: 10, y: 0, width: 10, height: 10, angle: 0 },
+      0,
+      5,
+      Math.PI / 2,
+    );
+    expect(next.x + 5).toBeCloseTo(0);
+    expect(next.y + 5).toBeCloseTo(20);
+    expect(next.angle).toBeCloseTo(Math.PI / 2);
+  });
+
+  it("snaps a free angle onto the nearest orthogonal", () => {
+    expect(snapAngle(0.2)).toBeCloseTo(0);
+    expect(snapAngle(Math.PI / 2 - 0.1)).toBeCloseTo(Math.PI / 2);
+  });
+
+  it("magnets only when close to square", () => {
+    expect(magnetOrthogonal(0.02)).toBeCloseTo(0);
+    expect(magnetOrthogonal(Math.PI / 6)).toBeCloseTo(Math.PI / 6);
+  });
+
+  it("selects every stamp that intersects a marquee", () => {
+    const hit = elementsIntersectingBox(
+      [
+        { id: "in", type: "rectangle", x: 0, y: 0, width: 10, height: 10 },
+        { id: "out", type: "rectangle", x: 80, y: 80, width: 10, height: 10 },
+      ],
+      { minX: -1, minY: -1, maxX: 5, maxY: 5 },
+    );
+    expect(hit.map((el) => el.id)).toEqual(["in"]);
   });
 });
