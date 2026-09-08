@@ -930,6 +930,11 @@ export function eraserScreenRadius(strokeWidth: number, zoom: number): number {
   return eraserSceneRadius(strokeWidth) * Math.max(0.05, zoom);
 }
 
+/** Bitmap-pixel radius of the visible eraser ring. */
+export function eraserCanvasRadius(strokeWidth: number, zoom: number, dpr: number): number {
+  return Math.max(1, eraserScreenRadius(strokeWidth, zoom) * Math.max(0.05, dpr));
+}
+
 /** Raw pointer pressure: real 0–1 for stylus, {@link NO_PRESSURE} for mouse/touch. */
 export function pointerPressure(raw: number, pointerType: string): number {
   if (pointerType === "pen") {
