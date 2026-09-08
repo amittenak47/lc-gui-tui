@@ -16,8 +16,10 @@ import { WHEEL_OPEN_MS } from "../util/gesture";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { InkPageBook } from "./inkPageCache";
 import { canvasBitmapFromClient } from "./canvasPointer";
-import { overlaySpineFromDrawOp, splitInkOpsForLabReplay } from "./inkLab/replay";
-import { keepLivePaintPump, shouldFlushLiveHud, skipCommittedReplay } from "./inkLab/liveHost";
+import { commitOverlay, pushCapped, redoOverlay, undoOverlay } from "./inkLab/history";
+import { isInkLabPenOp, overlaySpineFromDrawOp, splitInkOpsForLabReplay } from "./inkLab/replay";
+import { keepLivePaintPump, samePaintedView, shouldFlushLiveHud, skipCommittedReplay, usePreStrokeStamp } from "./inkLab/liveHost";
+import { REPLAY_SLICE_MS, replayUntil } from "./inkLab/replayJob";
 import {
   livePresentStride,
   medianMs,
@@ -30,6 +32,7 @@ import {
   createInkLabEngine,
   type InkLabEngine,
   type InkLabSample,
+  type InkLabSnapPatch,
   type InkLabUpResult,
 } from "./inkLab/engine";
 import { createInkLabHudStats, INK_LAB_HUD_ZERO } from "./inkLab/hud";
@@ -259,9 +262,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const bookRef = useRef(new InkPageBook());
     const overlayRef = useRef<SpineDot[][]>([]);
     const overlayRedoRef = useRef<SpineDot[][]>([]);
+    const snapUndoRef = useRef<(InkLabSnapPatch | null)[]>([]);
+    const snapRedoRef = useRef<(InkLabSnapPatch | null)[]>([]);
+    const pendingStampPatchRef = useRef<InkLabSnapPatch | null>(null);
     const drawingRef = useRef(false);
     const highlightPtsRef = useRef<ScenePoint[] | null>(null);
     const rafRef = useRef<number | null>(null);
+    const replayRafRef = useRef<number | null>(null);
+    const replayGenRef = useRef(0);
     const shiftAnchorRef = useRef<number | null>(null);
     const holdTimerRef = useRef<number | null>(null);
     const pendingHoldRef = useRef<{
@@ -362,56 +370,215 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       const engine = engineRef.current;
       if (!canvas || !engine) return;
       const { view, paintView, dpr, marginY } = readViews();
-      engine.replaySpines(overlayRef.current);
-      const { stamp } = splitInkOpsForLabReplay(bookRef.current.paintOps());
-      const ops = liveStamp ? [...stamp, liveStamp] : stamp;
-      if (ops.length > 0) {
-        engine.paintOntoSnap((sctx) => {
-          paintRasterInk(sctx, paintView, ops, null, dpr, clipRef.current, false);
-        });
-      }
-      engine.paint();
-      paintedViewRef.current = {
-        scrollX: view.scrollX,
-        scrollY: view.scrollY,
-        zoom: view.zoom,
-        width: view.width,
-        height: view.height,
-        marginY,
+      const recordView = () => {
+        paintedViewRef.current = {
+          scrollX: view.scrollX,
+          scrollY: view.scrollY,
+          zoom: view.zoom,
+          width: view.width,
+          height: view.height,
+          marginY,
+        };
       };
+      const stampTail = (extra: InkOp | null) => {
+        const { stamp } = splitInkOpsForLabReplay(bookRef.current.paintOps());
+        const ops = extra ? [...stamp, extra] : stamp;
+        if (ops.length > 0) {
+          engine.paintOntoSnap((sctx) => {
+            paintRasterInk(sctx, paintView, ops, null, dpr, clipRef.current, false);
+          });
+        }
+        engine.paint();
+        recordView();
+      };
+
+      if (usePreStrokeStamp(liveStamp, pendingStampPatchRef.current != null)) {
+        engine.restoreSnapPatch(pendingStampPatchRef.current!);
+        engine.paintOntoSnap((sctx) => {
+          paintRasterInk(sctx, paintView, [liveStamp!], null, dpr, clipRef.current, false);
+        });
+        engine.paint();
+        recordView();
+        return;
+      }
+
+      replayGenRef.current += 1;
+      const gen = replayGenRef.current;
+      if (replayRafRef.current != null) {
+        cancelAnimationFrame(replayRafRef.current);
+        replayRafRef.current = null;
+      }
+
+      const strokes = overlayRef.current;
+      engine.replaySpines([]);
+      if (strokes.length === 0) {
+        stampTail(liveStamp);
+        return;
+      }
+
+      let i = 0;
+      const step = () => {
+        if (gen !== replayGenRef.current) return;
+        i = replayUntil(i, strokes.length, () => performance.now(), REPLAY_SLICE_MS, (idx) => {
+          engine.appendSpines([strokes[idx]!]);
+        });
+        engine.paint();
+        if (i < strokes.length) {
+          replayRafRef.current = requestAnimationFrame(step);
+          return;
+        }
+        replayRafRef.current = null;
+        stampTail(liveStamp);
+      };
+      step();
     }, [readViews]);
 
-    const rebuildOverlayFromBook = useCallback(() => {
+    const remeshOverlaysFromBook = useCallback(() => {
       const { paintView, dpr } = readViews();
       const { lab } = splitInkOpsForLabReplay(bookRef.current.paintOps());
       overlayRef.current = lab.map((op) => overlaySpineFromDrawOp(op, paintView, dpr));
-      overlayRedoRef.current = [];
+      const redo: SpineDot[][] = [];
+      for (const entry of bookRef.current.redo) {
+        if (entry.kind === "add" && isInkLabPenOp(entry.op)) {
+          redo.push(overlaySpineFromDrawOp(entry.op, paintView, dpr));
+        }
+      }
+      overlayRedoRef.current = redo;
     }, [readViews]);
+
+    const forgetPixelHistory = useCallback(() => {
+      snapUndoRef.current = [];
+      snapRedoRef.current = [];
+      pendingStampPatchRef.current = null;
+    }, []);
+
+    const rebuildAndReplay = useCallback(
+      (keepPixels = false) => {
+        remeshOverlaysFromBook();
+        if (!keepPixels) forgetPixelHistory();
+        presentCommitted();
+      },
+      [forgetPixelHistory, presentCommitted, remeshOverlaysFromBook],
+    );
+
+    const presentIfCameraMoved = useCallback(() => {
+      const { view, marginY } = readViews();
+      if (
+        samePaintedView(paintedViewRef.current, {
+          scrollX: view.scrollX,
+          scrollY: view.scrollY,
+          zoom: view.zoom,
+          width: view.width,
+          height: view.height,
+          marginY,
+        })
+      ) {
+        engineRef.current?.paint();
+        return;
+      }
+      rebuildAndReplay();
+    }, [readViews, rebuildAndReplay]);
+
+    const stampOpOntoSnap = useCallback(
+      (op: InkOp) => {
+        const engine = engineRef.current;
+        if (!engine) return;
+        const { paintView, dpr } = readViews();
+        engine.paintOntoSnap((sctx) => {
+          paintRasterInk(sctx, paintView, [op], null, dpr, clipRef.current, false);
+        });
+      },
+      [readViews],
+    );
+
+    const rememberCommitPatch = (patch: InkLabSnapPatch | null) => {
+      pushCapped(snapUndoRef.current, patch);
+      snapRedoRef.current = [];
+    };
 
     useImperativeHandle(
       ref,
       () => ({
         clear() {
           if (!bookRef.current.hasInk()) return;
+          replayGenRef.current += 1;
+          if (replayRafRef.current != null) {
+            cancelAnimationFrame(replayRafRef.current);
+            replayRafRef.current = null;
+          }
           bookRef.current.clear();
           overlayRef.current = [];
           overlayRedoRef.current = [];
+          forgetPixelHistory();
           engineRef.current?.clear();
           engineRef.current?.paint();
           onChangeRef.current?.();
         },
         undo() {
           if (drawingRef.current) return false;
-          if (!bookRef.current.undoOnce()) return false;
-          rebuildOverlayFromBook();
+          replayGenRef.current += 1;
+          if (replayRafRef.current != null) {
+            cancelAnimationFrame(replayRafRef.current);
+            replayRafRef.current = null;
+          }
+          const entry = bookRef.current.undoOnce();
+          if (!entry) return false;
+          const engine = engineRef.current;
+          const pixel = snapUndoRef.current.pop();
+          const hadPixel = pixel !== undefined;
+          if (hadPixel) snapRedoRef.current.push(pixel);
+          if (entry.kind === "add" && isInkLabPenOp(entry.op)) {
+            undoOverlay(overlayRef.current, overlayRedoRef.current);
+          }
+          if (pixel && engine) {
+            engine.restoreSnapPatch(pixel);
+            engine.paint();
+            onChangeRef.current?.();
+            return true;
+          }
+          remeshOverlaysFromBook();
+          if (!hadPixel) forgetPixelHistory();
           presentCommitted();
           onChangeRef.current?.();
           return true;
         },
         redo() {
           if (drawingRef.current) return false;
-          if (!bookRef.current.redoOnce()) return false;
-          rebuildOverlayFromBook();
+          replayGenRef.current += 1;
+          if (replayRafRef.current != null) {
+            cancelAnimationFrame(replayRafRef.current);
+            replayRafRef.current = null;
+          }
+          const entry = bookRef.current.redoOnce();
+          if (!entry) return false;
+          const engine = engineRef.current;
+          const pixel = snapRedoRef.current.pop();
+          const hadPixel = pixel !== undefined;
+          if (hadPixel) pushCapped(snapUndoRef.current, pixel);
+          if (entry.kind === "add" && isInkLabPenOp(entry.op)) {
+            const spine = redoOverlay(overlayRef.current, overlayRedoRef.current);
+            if (spine && engine) {
+              if (!hadPixel) {
+                const patch = engine.copySnapPatch();
+                if (patch) pushCapped(snapUndoRef.current, patch);
+              }
+              engine.appendSpines([spine]);
+              engine.paint();
+              onChangeRef.current?.();
+              return true;
+            }
+          } else if (entry.kind === "add" && engine) {
+            if (!hadPixel) {
+              const patch = engine.copySnapPatch();
+              if (patch) pushCapped(snapUndoRef.current, patch);
+            }
+            stampOpOntoSnap(entry.op);
+            engine.paint();
+            onChangeRef.current?.();
+            return true;
+          }
+          remeshOverlaysFromBook();
+          if (!hadPixel) forgetPixelHistory();
           presentCommitted();
           onChangeRef.current?.();
           return true;
@@ -428,14 +595,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         repaint() {
           if (drawingRef.current) return;
           if (!toolRef.current) return;
-          rebuildOverlayFromBook();
-          presentCommitted();
+          presentIfCameraMoved();
         },
         syncCamera() {
           if (drawingRef.current) return;
           if (!toolRef.current) return;
-          rebuildOverlayFromBook();
-          presentCommitted();
+          presentIfCameraMoved();
         },
         setPanOffset(live) {
           const canvas = canvasRef.current;
@@ -463,8 +628,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (canvas?.style.transform) canvas.style.transform = "";
           if (drawingRef.current) return;
           if (!toolRef.current) return;
-          rebuildOverlayFromBook();
-          presentCommitted();
+          presentIfCameraMoved();
         },
         setCameraMoving(moving) {
           if (moving) return;
@@ -472,8 +636,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (canvas?.style.transform) canvas.style.transform = "";
           if (drawingRef.current) return;
           if (!toolRef.current) return;
-          rebuildOverlayFromBook();
-          presentCommitted();
+          presentIfCameraMoved();
         },
         getOps() {
           return bookRef.current.assembleOps();
@@ -481,8 +644,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         setOps(ops) {
           bookRef.current.replaceAll(cloneOps(ops));
           if (drawingRef.current) return;
-          rebuildOverlayFromBook();
-          presentCommitted();
+          rebuildAndReplay();
         },
         getOpCount() {
           return bookRef.current.opCount();
@@ -502,8 +664,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         ingestInkPages(pages) {
           bookRef.current.ingestEncodedPages(pages);
           if (drawingRef.current) return;
-          rebuildOverlayFromBook();
-          presentCommitted();
+          rebuildAndReplay();
         },
         assembleEncoded() {
           return bookRef.current.assembleEncoded();
@@ -518,7 +679,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           bookRef.current.seedCold(pages);
         },
       }),
-      [presentCommitted, rebuildOverlayFromBook],
+      [
+        forgetPixelHistory,
+        presentCommitted,
+        presentIfCameraMoved,
+        rebuildAndReplay,
+        remeshOverlaysFromBook,
+        stampOpOntoSnap,
+      ],
     );
 
     useEffect(() => {
@@ -574,10 +742,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (resized) {
           canvas.width = pixelW;
           canvas.height = pixelH;
-          if (toolRef.current) {
-            rebuildOverlayFromBook();
-            presentCommitted();
-          }
+          engineRef.current?.paint();
         }
       };
 
@@ -732,6 +897,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           pending.opened = true;
           drawingRef.current = false;
           highlightPtsRef.current = null;
+          pendingStampPatchRef.current = null;
           stopPaintPump();
           engine.cancelStroke();
           sizeToHost();
@@ -825,6 +991,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           /* untrusted */
         }
         if (toolRef.current === "highlighter") {
+          engine.captureSnap();
+          pendingStampPatchRef.current = engine.copySnapPatch();
           const { paintView } = readViews();
           highlightPtsRef.current = [highlightPointOf(canvas, event, paintView)];
           paintLiveHighlight();
@@ -956,10 +1124,26 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             if (op.points.length > 0) {
               bookRef.current.commit(op);
               overlayRedoRef.current = [];
+              const patch = pendingStampPatchRef.current;
+              pendingStampPatchRef.current = null;
+              if (patch) {
+                engine.restoreSnapPatch(patch);
+                stampOpOntoSnap(op);
+                engine.paint();
+                rememberCommitPatch(patch);
+              } else {
+                rememberCommitPatch(null);
+                presentCommitted();
+              }
               onChangeRef.current?.();
+            } else {
+              pendingStampPatchRef.current = null;
+              presentCommitted();
             }
+          } else {
+            pendingStampPatchRef.current = null;
+            presentCommitted();
           }
-          presentCommitted();
           try {
             canvas.releasePointerCapture(event.pointerId);
           } catch {
@@ -1011,8 +1195,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               speedFadeRef.current,
             ),
           );
-          overlayRef.current.push(baked.points.map((d) => ({ ...d })));
-          overlayRedoRef.current = [];
+          commitOverlay(
+            overlayRef.current,
+            overlayRedoRef.current,
+            baked.points.map((d) => ({ ...d })),
+          );
+          rememberCommitPatch(baked.undoPatch);
           onChangeRef.current?.();
         }
         try {
@@ -1039,11 +1227,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         canvas.removeEventListener("pointerup", onPointerUp, true);
         canvas.removeEventListener("pointercancel", onPointerUp, true);
         if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+        if (replayRafRef.current != null) cancelAnimationFrame(replayRafRef.current);
+        replayGenRef.current += 1;
         if (holdTimerRef.current != null) window.clearTimeout(holdTimerRef.current);
         engine.destroy();
         engineRef.current = null;
       };
-    }, [enabled, presentCommitted, readViews, rebuildOverlayFromBook]);
+    }, [enabled, presentCommitted, readViews, stampOpOntoSnap]);
 
     useEffect(() => {
       if (!perfOverlay && !perfBar) {
@@ -1056,13 +1246,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         ...hudStatsRef.current.snapshot(),
       });
     }, [perfOverlay, perfBar]);
-
-    useEffect(() => {
-      if (!enabled || !tool) return;
-      if (drawingRef.current) return;
-      rebuildOverlayFromBook();
-      presentCommitted();
-    }, [enabled, tool, presentCommitted, rebuildOverlayFromBook]);
 
     if (!enabled) return null;
 

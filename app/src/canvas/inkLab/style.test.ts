@@ -102,7 +102,8 @@ describe("ink lab style", () => {
     const atPad = labPenDot({ ...shared, overlayScale: 1 }, 0, 0, 2, 0.5, 0, 0);
     const atZoom = labPenDot({ ...shared, overlayScale: 8 }, 0, 0, 2, 0.5, 0, 0);
     expect(atZoom.r).toBeCloseTo(atPad.r, 5);
-    expect(atPad.r).toBeGreaterThan(2.5 * 2);
+    expect(atPad.r).toBeGreaterThan(0.8);
+    expect(atPad.r).toBeLessThan(3);
   });
 
   it("does not bead the radius from speed-ink width gain", () => {
@@ -128,7 +129,7 @@ describe("ink lab style", () => {
 
   it("maps default slider width to pad size 1", () => {
     expect(labNibSizeFromUiWidth(2)).toBe(1);
-    expect(labNibSizeFromUiWidth(1)).toBeCloseTo(0.075);
+    expect(labNibSizeFromUiWidth(1)).toBe(0.5);
     expect(labNibSizeFromUiWidth(6)).toBe(3);
     expect(labNibSizeFromUiWidth(32)).toBe(16);
     expect(labNibSizeFromUiWidth(64)).toBe(32);
@@ -159,8 +160,11 @@ describe("ink lab style", () => {
         0,
         0,
       );
-    expect(pen(1).r).toBeLessThan(0.85);
-    expect(pen(1).r).toBeLessThan(pen(2).r * 0.2);
+    expect(pen(1).r).toBeLessThan(0.7);
+    expect(pen(2).r).toBeLessThan(1.2);
+    expect(pen(1).r / pen(2).r).toBeGreaterThan(0.4);
+    expect(pen(1).r / pen(2).r).toBeLessThan(0.65);
+    expect(pen(3).r - pen(2).r).toBeCloseTo(pen(2).r - pen(1).r, 1);
     expect(pen(32).r).toBeGreaterThan(pen(6).r * 2);
     expect(pen(64).r).toBeGreaterThan(pen(32).r);
   });

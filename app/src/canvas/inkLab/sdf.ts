@@ -321,13 +321,16 @@ export function tryCreateSdfRenderer(
     },
     draw(aabb) {
       gl!.viewport(0, 0, viewW, viewH);
+      scissorAabb(aabb);
       gl!.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      if (count < 1) return;
+      if (count < 1) {
+        gl!.disable(gl.SCISSOR_TEST);
+        return;
+      }
       gl!.useProgram(prog);
       gl!.uniform2f(uView, viewW, viewH);
       gl!.bindVertexArray(vao);
       bindInstAt(0);
-      scissorAabb(aabb);
       gl!.drawArraysInstanced(gl.TRIANGLES, 0, 6, count);
       gl!.disable(gl.SCISSOR_TEST);
     },

@@ -317,22 +317,22 @@ export class InkPageBook {
     this.bump();
   }
 
-  undoOnce(): boolean {
+  undoOnce(): InkUndoEntry | null {
     const entry = this.undo.pop();
-    if (!entry) return false;
+    if (!entry) return null;
     this.applyInverse(entry);
     this.redo.push(entry);
     this.bump();
-    return true;
+    return entry;
   }
 
-  redoOnce(): boolean {
+  redoOnce(): InkUndoEntry | null {
     const entry = this.redo.pop();
-    if (!entry) return false;
+    if (!entry) return null;
     this.applyForward(entry);
     this.undo.push(entry);
     this.bump();
-    return true;
+    return entry;
   }
 
   canUndo(): boolean {
