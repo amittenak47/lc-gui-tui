@@ -28,9 +28,27 @@ export interface RenderContext {
   frameIndex: number;
   /** Top-left of this diagram's slot in the agent lane. */
   origin: { x: number; y: number };
+  /** Skip title/note — user stamps share the layout without the coach header. */
+  bare?: boolean;
+  /** Override coach colours when the same layout is a student stamp. */
+  palette?: { ink: string; fill: string; accent?: string };
 }
 
 export type Renderer = (ctx: RenderContext) => Skeleton[];
+
+export function headerOffset(ctx: RenderContext): number {
+  return ctx.bare ? 0 : HEADER_H;
+}
+
+function strokeOf(ctx: RenderContext, accent = false): string {
+  if (accent) return ctx.palette?.accent ?? COACH_ACCENT;
+  return ctx.palette?.ink ?? COACH_INK;
+}
+
+function fillOf(ctx: RenderContext, highlighted: boolean): string {
+  if (highlighted) return "#fff7ed";
+  return ctx.palette?.fill ?? COACH_FILL;
+}
 
 export function slotId(ctx: RenderContext, slot: string): string {
   return vizElementId(ctx.program.id, slot);
@@ -57,7 +75,7 @@ export function cellBox(
   // Long values (e.g. 1800) need a wider box than the default digit cell.
   const width = options.width ?? Math.max(CELL, text.length * 12 + 20);
   const height = options.height ?? CELL;
-  const ink = highlighted ? COACH_ACCENT : "#1e1e1e";
+  const ink = highlighted ? (ctx.palette?.accent ?? COACH_ACCENT) : strokeOf(ctx);
   return [
     {
       id: slotId(ctx, slot),
@@ -66,8 +84,8 @@ export function cellBox(
       y,
       width,
       height,
-      strokeColor: highlighted ? COACH_ACCENT : COACH_INK,
-      backgroundColor: highlighted ? "#fff7ed" : COACH_FILL,
+      strokeColor: highlighted ? (ctx.palette?.accent ?? COACH_ACCENT) : strokeOf(ctx),
+      backgroundColor: fillOf(ctx, highlighted),
       fillStyle: "solid",
       strokeWidth: highlighted ? 2 : 1,
       roughness: 0,
@@ -99,7 +117,7 @@ export function caption(
     text,
     fontSize: options.fontSize ?? 13,
     fontFamily: FONT_CODE,
-    strokeColor: options.accent ? COACH_ACCENT : COACH_INK,
+    strokeColor: strokeOf(ctx, options.accent),
   };
 }
 
@@ -119,7 +137,7 @@ export function arrow(
       [0, 0],
       [to.x - from.x, to.y - from.y],
     ],
-    strokeColor: options.accent ? COACH_ACCENT : COACH_INK,
+    strokeColor: strokeOf(ctx, options.accent),
     strokeWidth: 1,
     roughness: 0,
   };
@@ -130,6 +148,7 @@ export function arrow(
  * between structures.
  */
 export function header(ctx: RenderContext): Skeleton[] {
+  if (ctx.bare) return [];
   const { origin, program, frame, frameIndex } = ctx;
   const out: Skeleton[] = [
     caption(ctx, "title", origin.x, origin.y, program.title || program.id, {
@@ -148,7 +167,7 @@ export function header(ctx: RenderContext): Skeleton[] {
 
 /** The frame's note, placed under a structure of the given height. */
 export function footer(ctx: RenderContext, belowY: number): Skeleton[] {
-  if (!ctx.frame.note.trim()) return [];
+  if (ctx.bare || !ctx.frame.note.trim()) return [];
   return [caption(ctx, "note", ctx.origin.x, belowY + 12, wrap(ctx.frame.note, 52))];
 }
 

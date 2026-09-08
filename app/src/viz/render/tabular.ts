@@ -6,7 +6,7 @@ import type { Skeleton } from "../../templates/skeleton";
 import {
   CELL,
   CELL_GAP,
-  HEADER_H,
+  headerOffset,
   caption,
   cellBox,
   footer,
@@ -26,7 +26,7 @@ import { cellText, entryPair } from "../schema";
 export function renderGrid(ctx: RenderContext): Skeleton[] {
   const { frame, origin } = ctx;
   const out = header(ctx);
-  const top = origin.y + HEADER_H;
+  const top = origin.y + headerOffset(ctx);
 
   const rows: unknown[][] = frame.cells.every((row) => Array.isArray(row))
     ? (frame.cells as unknown[][])
@@ -62,7 +62,7 @@ export function renderGrid(ctx: RenderContext): Skeleton[] {
 export function renderHashmap(ctx: RenderContext): Skeleton[] {
   const { frame, origin } = ctx;
   const out = header(ctx);
-  const top = origin.y + HEADER_H;
+  const top = origin.y + headerOffset(ctx);
   const KEY_W = CELL * 2;
   const VAL_W = CELL * 2;
   const ROW_H = 36;

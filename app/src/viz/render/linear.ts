@@ -9,7 +9,7 @@ import type { Skeleton } from "../../templates/skeleton";
 import {
   CELL,
   CELL_GAP,
-  HEADER_H,
+  headerOffset,
   caption,
   cellBox,
   footer,
@@ -24,7 +24,7 @@ import { cellText } from "../schema";
 export function renderArray(ctx: RenderContext): Skeleton[] {
   const { frame, origin } = ctx;
   const out = header(ctx);
-  const top = origin.y + HEADER_H + 18; // Room for pointer labels above row.
+  const top = origin.y + headerOffset(ctx) + 18; // Room for pointer labels above row.
   const pointers = pointersByIndex(frame);
 
   frame.cells.forEach((value, index) => {
@@ -54,7 +54,7 @@ export function renderArray(ctx: RenderContext): Skeleton[] {
 export function renderStack(ctx: RenderContext): Skeleton[] {
   const { frame, origin } = ctx;
   const out = header(ctx);
-  const baseY = origin.y + HEADER_H;
+  const baseY = origin.y + headerOffset(ctx);
   const count = frame.cells.length;
 
   frame.cells.forEach((value, index) => {
@@ -81,7 +81,7 @@ export function renderStack(ctx: RenderContext): Skeleton[] {
 export function renderQueue(ctx: RenderContext): Skeleton[] {
   const { frame, origin } = ctx;
   const out = header(ctx);
-  const top = origin.y + HEADER_H + 18;
+  const top = origin.y + headerOffset(ctx) + 18;
   const count = frame.cells.length;
 
   frame.cells.forEach((value, index) => {

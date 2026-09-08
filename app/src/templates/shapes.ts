@@ -5,6 +5,7 @@
  * placed. Stamp ink stays a fixed sketch colour — it does not follow Appearance.
  */
 
+import { renderStamp } from "../viz/render";
 import { FONT_CODE, FONT_UI, TEXT_PRIMARY, type Skeleton } from "./skeleton";
 
 export type ShapeModValue = string | number;
@@ -66,7 +67,7 @@ function box(
     backgroundColor: options.background ?? palette.fill,
     fillStyle: "solid",
     strokeWidth: 1,
-    roughness: 1,
+    roughness: 0,
     label: { text, fontSize: 16, strokeColor: palette.ink },
     fontFamily: options.mono ? FONT_CODE : FONT_UI,
   };
@@ -83,7 +84,7 @@ function arrow(palette: ShapePalette, x1: number, y1: number, x2: number, y2: nu
     ],
     strokeColor: palette.ink,
     strokeWidth: 1,
-    roughness: 1,
+    roughness: 0,
   };
 }
 
@@ -125,13 +126,7 @@ export const SHAPES: ShapeStamp[] = [
     defaults: { length: 5 },
     build: (x, y, mods, palette) => {
       const length = clampInt(intOf(mods, "length", 5), 1, 32);
-      const cell = 56;
-      const out: Skeleton[] = [];
-      for (let i = 0; i < length; i++) {
-        out.push(box(palette, x + i * cell, y, cell, cell, "", { mono: true }));
-        out.push(caption(palette, x + i * cell + 6, y + cell + 6, String(i), true));
-      }
-      return out;
+      return renderStamp("array", { x, y }, { cells: Array.from({ length }, () => "") }, palette);
     },
   },
   {
@@ -146,14 +141,8 @@ export const SHAPES: ShapeStamp[] = [
     build: (x, y, mods, palette) => {
       const rows = clampInt(intOf(mods, "rows", 3), 1, 24);
       const cols = clampInt(intOf(mods, "cols", 4), 1, 24);
-      const cell = 48;
-      const out: Skeleton[] = [];
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          out.push(box(palette, x + c * cell, y + r * cell, cell, cell, "", { mono: true }));
-        }
-      }
-      return out;
+      const cells = Array.from({ length: rows }, () => Array.from({ length: cols }, () => ""));
+      return renderStamp("grid", { x, y }, { cells }, palette);
     },
   },
   {
@@ -164,18 +153,12 @@ export const SHAPES: ShapeStamp[] = [
     defaults: { nodes: 3 },
     build: (x, y, mods, palette) => {
       const nodes = clampInt(intOf(mods, "nodes", 3), 1, 24);
-      const node = 72;
-      const gap = 44;
-      const out: Skeleton[] = [];
-      for (let i = 0; i < nodes; i++) {
-        const nx = x + i * (node + gap);
-        out.push(box(palette, nx, y, node, 52, "", { mono: true }));
-        if (i < nodes - 1) {
-          out.push(arrow(palette, nx + node, y + 26, nx + node + gap - 6, y + 26));
-        }
-      }
-      out.push(caption(palette, x + nodes * (node + gap) - gap, y + 18, "∅"));
-      return out;
+      return renderStamp(
+        "linkedlist",
+        { x, y },
+        { cells: Array.from({ length: nodes }, () => "") },
+        palette,
+      );
     },
   },
   {
@@ -186,40 +169,13 @@ export const SHAPES: ShapeStamp[] = [
     defaults: { levels: 2 },
     build: (x, y, mods, palette) => {
       const levels = clampInt(intOf(mods, "levels", 2), 1, 10);
-      const size = 56;
-      const vGap = 96;
-      const leafCount = 2 ** Math.max(0, levels - 1);
-      const hGap = size + 20;
-      const totalWidth = Math.max(hGap, leafCount * hGap);
-      const centers: Array<{ cx: number; cy: number; level: number; index: number }> = [];
-
-      for (let level = 0; level < levels; level++) {
-        const count = 2 ** level;
-        const span = totalWidth / count;
-        for (let i = 0; i < count; i++) {
-          centers.push({
-            level,
-            index: i,
-            cx: x + span * (i + 0.5),
-            cy: y + level * vGap,
-          });
-        }
-      }
-
-      const out: Skeleton[] = [];
-      for (const node of centers) {
-        if (node.level === 0) continue;
-        const parent = centers.find(
-          (candidate) =>
-            candidate.level === node.level - 1 && candidate.index === Math.floor(node.index / 2),
-        );
-        if (!parent) continue;
-        out.push(arrow(palette, parent.cx, parent.cy + size, node.cx, node.cy));
-      }
-      for (const node of centers) {
-        out.push(box(palette, node.cx - size / 2, node.cy, size, size, "", { mono: true }));
-      }
-      return out;
+      const count = 2 ** levels - 1;
+      return renderStamp(
+        "tree",
+        { x, y },
+        { cells: Array.from({ length: count }, () => "") },
+        palette,
+      );
     },
   },
   {
@@ -230,12 +186,12 @@ export const SHAPES: ShapeStamp[] = [
     defaults: { height: 4 },
     build: (x, y, mods, palette) => {
       const height = clampInt(intOf(mods, "height", 4), 1, 20);
-      const out: Skeleton[] = [];
-      for (let i = 0; i < height; i++) {
-        out.push(box(palette, x, y + i * 44, 120, 44, "", { mono: true }));
-      }
-      out.push(caption(palette, x + 132, y + 12, "← top"));
-      return out;
+      return renderStamp(
+        "stack",
+        { x, y },
+        { cells: Array.from({ length: height }, () => "") },
+        palette,
+      );
     },
   },
   {
@@ -246,15 +202,12 @@ export const SHAPES: ShapeStamp[] = [
     defaults: { rows: 4 },
     build: (x, y, mods, palette) => {
       const rows = clampInt(intOf(mods, "rows", 4), 1, 20);
-      const out: Skeleton[] = [
-        caption(palette, x, y - 22, "key"),
-        caption(palette, x + 132, y - 22, "value"),
-      ];
-      for (let i = 0; i < rows; i++) {
-        out.push(box(palette, x, y + i * 42, 124, 42, "", { mono: true }));
-        out.push(box(palette, x + 128, y + i * 42, 124, 42, "", { mono: true }));
-      }
-      return out;
+      return renderStamp(
+        "hashmap",
+        { x, y },
+        { entries: Array.from({ length: rows }, () => ["", ""]) },
+        palette,
+      );
     },
   },
   {
@@ -284,12 +237,12 @@ export const SHAPES: ShapeStamp[] = [
     defaults: { slots: 4 },
     build: (x, y, mods, palette) => {
       const slots = clampInt(intOf(mods, "slots", 4), 1, 24);
-      const out: Skeleton[] = [caption(palette, x, y - 22, "front")];
-      for (let i = 0; i < slots; i++) {
-        out.push(box(palette, x + i * 60, y, 60, 52, "", { mono: true }));
-      }
-      out.push(caption(palette, x + slots * 60 - 44, y + 58, "back"));
-      return out;
+      return renderStamp(
+        "queue",
+        { x, y },
+        { cells: Array.from({ length: slots }, () => "") },
+        palette,
+      );
     },
   },
   {
