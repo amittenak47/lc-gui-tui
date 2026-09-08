@@ -33,6 +33,12 @@ import {
 import { footnoteThemeVars } from "../util/footnoteTheme";
 import { fitTextareaHeight } from "../util/fitTextareaHeight";
 import { normalizeExternalUrl } from "../util/openExternal";
+import {
+  hasUsableViewportBox,
+  liveFootnoteAnchorRect,
+  subscribePageSurfaceMove,
+  viewportBoxesOverlap,
+} from "./sheetAnchor";
 import { HOLD_SENSITIVE_MS } from "../util/gesture";
 export interface FootnoteOverviewProps {
   footnote: DocFootnote;
@@ -518,16 +524,22 @@ export function FootnoteOverview({
   const place = useCallback(() => {
     const node = panelRef.current;
     if (!node) return;
+    const live = liveFootnoteAnchorRect(footnote.id, anchorRect) ?? anchorRect ?? null;
     applyViewportSize(node, task);
-    clampPanel(node, anchorRect);
-  }, [anchorRect, task]);
+    if (
+      hasUsableViewportBox(live) &&
+      live &&
+      !viewportBoxesOverlap(live, paneBox(live))
+    ) {
+      onClose();
+      return;
+    }
+    clampPanel(node, live);
+  }, [anchorRect, footnote.id, onClose, task]);
   useLayoutEffect(() => {
     place();
     const node = panelRef.current;
-    const view = window.visualViewport;
-    view?.addEventListener("resize", place);
-    view?.addEventListener("scroll", place);
-    window.addEventListener("resize", place);
+    const stopSurface = subscribePageSurfaceMove(place);
     const observer =
       node && typeof ResizeObserver !== "undefined"
         ? new ResizeObserver(() => place())
@@ -535,9 +547,7 @@ export function FootnoteOverview({
     if (node && observer) observer.observe(node);
     return () => {
       observer?.disconnect();
-      view?.removeEventListener("resize", place);
-      view?.removeEventListener("scroll", place);
-      window.removeEventListener("resize", place);
+      stopSurface();
     };
   }, [place, task, notes.length, whiteboards.length, threads.length, userLinks.length, subMarks.length]);
   const openThreadMessages = useMemo(

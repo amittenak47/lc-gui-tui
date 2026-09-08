@@ -92,6 +92,11 @@ import { currentInkPalette } from "../util/inkPaletteHistory";
 import { footnoteThemeVars } from "../util/footnoteTheme";
 import { isAndroidDevice } from "../util/androidDevice";
 import { fillPdfQuoteText } from "./pdfQuoteText";
+import {
+  hasUsableViewportBox,
+  subscribePageSurfaceMove,
+  viewportBoxesOverlap,
+} from "./sheetAnchor";
 
 /** How far into the edge a drag has to reach before the page starts moving. */
 const SELECT_EDGE_PX = 36;
@@ -2102,18 +2107,23 @@ export function DocSelectionLayer({
 
   useLayoutEffect(() => {
     if (phase !== "confirm" && phase !== "actions" && !subMarkConfirm) return;
-    const relayout = () => placeSelectionChrome(selectionChromeRef.current);
+    const relayout = () => {
+      const at = highlightBox();
+      if (hasUsableViewportBox(at) && at && !viewportBoxesOverlap(at, paneBox())) {
+        dismiss();
+        return;
+      }
+      placeSelectionChrome(selectionChromeRef.current);
+    };
     relayout();
     // Android / Motion: one more place after layout paints select rects.
     const id = requestAnimationFrame(relayout);
-    window.addEventListener("resize", relayout);
-    window.visualViewport?.addEventListener("resize", relayout);
+    const stopSurface = subscribePageSurfaceMove(relayout);
     return () => {
       cancelAnimationFrame(id);
-      window.removeEventListener("resize", relayout);
-      window.visualViewport?.removeEventListener("resize", relayout);
+      stopSurface();
     };
-  }, [phase, placeSelectionChrome, overlaps.length, selection, copied, subMarkConfirm, subMarkLive]);
+  }, [copied, dismiss, overlaps.length, phase, placeSelectionChrome, selection, subMarkConfirm, subMarkLive]);
 
   const subMarkLivePaint = useMemo(() => {
     const body = bodyRef.current;

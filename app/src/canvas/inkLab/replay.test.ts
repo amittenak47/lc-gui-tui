@@ -40,6 +40,14 @@ describe("ink lab replay", () => {
     expect(isInkLabPenOp(highlight)).toBe(false);
   });
 
+  it("sends host-bound pens through the stamp pass", () => {
+    const hosted = penOp({ hostKey: 0, scrollLeftAtDraw: 40, scrollTopAtDraw: 0 });
+    expect(isInkLabPenOp(hosted)).toBe(false);
+    const { lab, stamp } = splitInkOpsForLabReplay([penOp(), hosted]);
+    expect(lab).toHaveLength(1);
+    expect(stamp).toEqual([hosted]);
+  });
+
   it("washes replay capsules from stored slowness and speedFade", () => {
     const spine = labSpineFromDrawOp(
       penOp({

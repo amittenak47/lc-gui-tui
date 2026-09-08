@@ -50,6 +50,26 @@ export function isNestedScrollHost(node: HTMLElement): boolean {
   return isHorizontalScrollHost(node) || isVerticalScrollHost(node);
 }
 
+/** Pointer is on the ink pad, not the document. Board pan must not claim it. */
+export function isInkPadTarget(target: EventTarget | null): boolean {
+  const el = target instanceof Element ? target : null;
+  if (!el) return false;
+  return (
+    el.closest(".lc-ink-lab-canvas, .lc-board-ink-lab-host, .lc-raster-ink") != null
+  );
+}
+
+/** Put a nested scroller back if something moved it (pen pan, focus, remount). */
+export function pinHostScroll(
+  el: HTMLElement | null | undefined,
+  left: number,
+  top: number,
+): void {
+  if (!el) return;
+  if (el.scrollLeft !== left) el.scrollLeft = left;
+  if (el.scrollTop !== top) el.scrollTop = top;
+}
+
 /**
  * The nearest horizontally scrollable box at or above `target`, within the
  * document page — `null` if the pointer is on ordinary prose.
@@ -227,6 +247,47 @@ export interface ScrollHostPaintState {
   scrollLeft: number;
   scrollTop: number;
   bounds: SceneBounds;
+}
+
+/** Nested `scrollLeft` / `scrollTop` keyed by document-order host, not node identity. */
+export interface HostScrollSnapshot {
+  doc: number;
+  key: number;
+  left: number;
+  top: number;
+}
+
+/**
+ * Snapshot nested host scroll so annotate/scroll toggles can restore it.
+ *
+ * React may replace the `<pre>` on that class flip; element-identity maps then
+ * skip restore and the box jumps to 0. Keys survive remount.
+ */
+export function snapshotHostScrollIn(root: ParentNode | null | undefined): HostScrollSnapshot[] {
+  if (!root) return [];
+  const out: HostScrollSnapshot[] = [];
+  root.querySelectorAll(DOC_PAGE_SELECTOR).forEach((doc, docIndex) => {
+    scrollHostsIn(doc).forEach((el, key) => {
+      out.push({ doc: docIndex, key, left: el.scrollLeft, top: el.scrollTop });
+    });
+  });
+  return out;
+}
+
+export function restoreHostScrollIn(
+  root: ParentNode | null | undefined,
+  saved: readonly HostScrollSnapshot[],
+): void {
+  if (!root || saved.length === 0) return;
+  const docs = root.querySelectorAll(DOC_PAGE_SELECTOR);
+  for (const pos of saved) {
+    const doc = docs[pos.doc];
+    if (!doc) continue;
+    const host = scrollHostsIn(doc)[pos.key];
+    if (!host) continue;
+    if (host.scrollLeft !== pos.left) host.scrollLeft = pos.left;
+    if (host.scrollTop !== pos.top) host.scrollTop = pos.top;
+  }
 }
 
 /**

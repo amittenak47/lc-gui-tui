@@ -44,16 +44,30 @@ import {
   highlighterChiselWidth,
   highlighterDrawOp,
   inkBaseWidthForZoom,
+  isHostBoundOp,
+  paintHostBoundOps,
   paintRasterInk,
   scenePointFromCanvasPixel,
+  setInkSceneTransform,
   trimHighlightLiftHook,
   type InkBlotHalt,
   type InkDrawOp,
   type InkOp,
   type SceneBounds,
   type ScenePoint,
+  type ScrollHostLookup,
   type ViewportTransform,
 } from "./rasterInk";
+import {
+  DOC_PAGE_SELECTOR,
+  docForScrollHost,
+  hostKeyInDoc,
+  hostSceneBounds,
+  pinHostScroll,
+  scrollHostAtPoint,
+  scrollHostsIn,
+  type ScrollHostPaintState,
+} from "./scrollHost";
 import {
   OVERDRAW_REBASE_HEADROOM,
   PAN_REBASE_FRACTION,
@@ -71,6 +85,7 @@ export interface RasterInkHandle {
   hasInk(): boolean;
   isDrawing(): boolean;
   repaint(): void;
+  replayCommitted(): void;
   syncCamera(): void;
   setPanOffset(live: PanCamera | null): boolean;
   commitCamera(): void;
@@ -189,6 +204,37 @@ function spineToScene(
   });
 }
 
+function paintInkStamps(
+  sctx: CanvasRenderingContext2D,
+  paintView: ViewportTransform,
+  ops: readonly InkOp[],
+  dpr: number,
+  clip: SceneBounds | null,
+  hosts: ScrollHostLookup,
+): void {
+  paintRasterInk(sctx, paintView, ops, null, dpr, clip, false);
+  if (hosts.size === 0 && !ops.some((op) => isHostBoundOp(op))) return;
+  setInkSceneTransform(sctx, paintView, dpr);
+  if (clip) {
+    sctx.save();
+    sctx.beginPath();
+    sctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
+    sctx.clip();
+  }
+  paintHostBoundOps(sctx, ops, hosts, paintView.zoom * dpr, undefined, paintView.zoom);
+  if (clip) sctx.restore();
+}
+
+function bindInkOpToHost<T extends InkOp>(op: T, host: ScrollHostPaintState | null): T {
+  if (!host) return op;
+  return {
+    ...op,
+    hostKey: host.key,
+    scrollLeftAtDraw: host.scrollLeft,
+    scrollTopAtDraw: host.scrollTop,
+  };
+}
+
 function opFromBake(
   baked: InkLabUpResult,
   view: ViewportTransform,
@@ -266,6 +312,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const snapRedoRef = useRef<(InkLabSnapPatch | null)[]>([]);
     const pendingStampPatchRef = useRef<InkLabSnapPatch | null>(null);
     const drawingRef = useRef(false);
+    const strokeHostRef = useRef<ScrollHostPaintState | null>(null);
+    const strokeHostElRef = useRef<HTMLElement | null>(null);
     const highlightPtsRef = useRef<ScenePoint[] | null>(null);
     const rafRef = useRef<number | null>(null);
     const replayRafRef = useRef<number | null>(null);
@@ -364,6 +412,81 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       };
     }, []);
 
+    const collectScrollHosts = useCallback((): readonly ScrollHostPaintState[] => {
+      const canvas = canvasRef.current;
+      if (!canvas) return [];
+      const board = canvas.closest(".lc-board");
+      if (!board) return [];
+      const { paintView } = readViews();
+      const rect = canvas.getBoundingClientRect();
+      const out: ScrollHostPaintState[] = [];
+      for (const doc of board.querySelectorAll(DOC_PAGE_SELECTOR)) {
+        for (const [key, el] of scrollHostsIn(doc).entries()) {
+          out.push({
+            key,
+            scrollLeft: el.scrollLeft,
+            scrollTop: el.scrollTop,
+            bounds: hostSceneBounds(el, rect, paintView),
+          });
+        }
+      }
+      return out;
+    }, [readViews]);
+
+    const scrollHostLookup = useCallback((): ScrollHostLookup => {
+      const map = new Map<number, { bounds: SceneBounds; scrollLeft: number; scrollTop: number }>();
+      for (const host of collectScrollHosts()) {
+        map.set(host.key, {
+          bounds: host.bounds,
+          scrollLeft: host.scrollLeft,
+          scrollTop: host.scrollTop,
+        });
+      }
+      return map;
+    }, [collectScrollHosts]);
+
+    const captureStrokeHost = useCallback(
+      (clientX: number, clientY: number) => {
+        const canvas = canvasRef.current;
+        if (!canvas) {
+          strokeHostRef.current = null;
+          strokeHostElRef.current = null;
+          return;
+        }
+        const hostEl = scrollHostAtPoint(clientX, clientY);
+        if (!hostEl) {
+          strokeHostRef.current = null;
+          strokeHostElRef.current = null;
+          return;
+        }
+        const doc = docForScrollHost(hostEl);
+        const key = doc ? hostKeyInDoc(hostEl, doc) : null;
+        if (key == null) {
+          strokeHostRef.current = null;
+          strokeHostElRef.current = null;
+          return;
+        }
+        const listed = collectScrollHosts().find((host) => host.key === key);
+        strokeHostElRef.current = hostEl;
+        strokeHostRef.current =
+          listed ??
+          ({
+            key,
+            scrollLeft: hostEl.scrollLeft,
+            scrollTop: hostEl.scrollTop,
+            bounds: hostSceneBounds(hostEl, canvas.getBoundingClientRect(), readViews().paintView),
+          } satisfies ScrollHostPaintState);
+      },
+      [collectScrollHosts, readViews],
+    );
+
+    const pinStrokeHostScroll = useCallback(() => {
+      const el = strokeHostElRef.current;
+      const host = strokeHostRef.current;
+      if (!el || !host) return;
+      pinHostScroll(el, host.scrollLeft, host.scrollTop);
+    }, []);
+
     const presentCommitted = useCallback((liveStamp: InkOp | null = null) => {
       if (skipCommittedReplay(drawingRef.current, liveStamp)) return;
       const canvas = canvasRef.current;
@@ -385,7 +508,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         const ops = extra ? [...stamp, extra] : stamp;
         if (ops.length > 0) {
           engine.paintOntoSnap((sctx) => {
-            paintRasterInk(sctx, paintView, ops, null, dpr, clipRef.current, false);
+            paintInkStamps(sctx, paintView, ops, dpr, clipRef.current, scrollHostLookup());
           });
         }
         engine.paint();
@@ -395,7 +518,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       if (usePreStrokeStamp(liveStamp, pendingStampPatchRef.current != null)) {
         engine.restoreSnapPatch(pendingStampPatchRef.current!);
         engine.paintOntoSnap((sctx) => {
-          paintRasterInk(sctx, paintView, [liveStamp!], null, dpr, clipRef.current, false);
+          paintInkStamps(sctx, paintView, [liveStamp!], dpr, clipRef.current, scrollHostLookup());
         });
         engine.paint();
         recordView();
@@ -431,7 +554,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         stampTail(liveStamp);
       };
       step();
-    }, [readViews]);
+    }, [readViews, scrollHostLookup]);
 
     const remeshOverlaysFromBook = useCallback(() => {
       const { paintView, dpr } = readViews();
@@ -485,10 +608,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (!engine) return;
         const { paintView, dpr } = readViews();
         engine.paintOntoSnap((sctx) => {
-          paintRasterInk(sctx, paintView, [op], null, dpr, clipRef.current, false);
+          paintInkStamps(sctx, paintView, [op], dpr, clipRef.current, scrollHostLookup());
         });
       },
-      [readViews],
+      [readViews, scrollHostLookup],
     );
 
     const rememberCommitPatch = (patch: InkLabSnapPatch | null) => {
@@ -594,12 +717,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         },
         repaint() {
           if (drawingRef.current) return;
-          if (!toolRef.current) return;
           presentIfCameraMoved();
+        },
+        replayCommitted() {
+          if (drawingRef.current) return;
+          rebuildAndReplay();
         },
         syncCamera() {
           if (drawingRef.current) return;
-          if (!toolRef.current) return;
           presentIfCameraMoved();
         },
         setPanOffset(live) {
@@ -627,7 +752,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           const canvas = canvasRef.current;
           if (canvas?.style.transform) canvas.style.transform = "";
           if (drawingRef.current) return;
-          if (!toolRef.current) return;
           presentIfCameraMoved();
         },
         setCameraMoving(moving) {
@@ -635,7 +759,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           const canvas = canvasRef.current;
           if (canvas?.style.transform) canvas.style.transform = "";
           if (drawingRef.current) return;
-          if (!toolRef.current) return;
           presentIfCameraMoved();
         },
         getOps() {
@@ -750,7 +873,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       const engine = createInkLabEngine();
       engineRef.current = engine;
       backendRef.current = engine.attach(canvas);
-      if (toolRef.current) presentCommitted();
+      presentCommitted();
       const wantMeter = () => perfOverlayRef.current || perfBarRef.current;
       if (wantMeter()) {
         loadBarRef.current?.show(loadMeterRef.current.peek(), {
@@ -898,6 +1021,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           drawingRef.current = false;
           highlightPtsRef.current = null;
           pendingStampPatchRef.current = null;
+          strokeHostRef.current = null;
+          strokeHostElRef.current = null;
           stopPaintPump();
           engine.cancelStroke();
           sizeToHost();
@@ -920,12 +1045,15 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (!pts || pts.length === 0) return;
         const { paintView } = readViews();
         presentCommitted(
-          highlighterDrawOp(
-            inkColorRef.current,
-            strokeWidthRef.current,
-            paintView.zoom,
-            liveHighlightPoints(pts, straightInkRef.current),
-            highlightTipsRef.current,
+          bindInkOpToHost(
+            highlighterDrawOp(
+              inkColorRef.current,
+              strokeWidthRef.current,
+              paintView.zoom,
+              liveHighlightPoints(pts, straightInkRef.current),
+              highlightTipsRef.current,
+            ),
+            strokeHostRef.current,
           ),
         );
       };
@@ -964,6 +1092,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
+        captureStrokeHost(event.clientX, event.clientY);
         if (
           wheelHoldEnabledRef.current &&
           toolRef.current &&
@@ -985,6 +1114,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           armWheel();
         }
         drawingRef.current = true;
+        pinStrokeHostScroll();
         try {
           canvas.setPointerCapture(event.pointerId);
         } catch {
@@ -1061,6 +1191,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           pending.lastY = event.clientY;
         }
         if (!drawingRef.current) return;
+        pinStrokeHostScroll();
         if (toolRef.current === "highlighter") {
           const live = highlightPtsRef.current;
           if (!live) return;
@@ -1113,12 +1244,15 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (raw && raw.length > 0) {
             const { paintView } = readViews();
             const shaped = liveHighlightPoints(raw, straightInkRef.current);
-            const op = highlighterDrawOp(
-              inkColorRef.current,
-              strokeWidthRef.current,
-              paintView.zoom,
-              shaped,
-              highlightTipsRef.current,
+            const op = bindInkOpToHost(
+              highlighterDrawOp(
+                inkColorRef.current,
+                strokeWidthRef.current,
+                paintView.zoom,
+                shaped,
+                highlightTipsRef.current,
+              ),
+              strokeHostRef.current,
             );
             op.points = trimHighlightLiftHook(op.points, highlighterChiselWidth(op.baseWidth));
             if (op.points.length > 0) {
@@ -1126,14 +1260,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               overlayRedoRef.current = [];
               const patch = pendingStampPatchRef.current;
               pendingStampPatchRef.current = null;
-              if (patch) {
+              if (isHostBoundOp(op) || !patch) {
+                rememberCommitPatch(null);
+                presentCommitted();
+              } else {
                 engine.restoreSnapPatch(patch);
                 stampOpOntoSnap(op);
                 engine.paint();
                 rememberCommitPatch(patch);
-              } else {
-                rememberCommitPatch(null);
-                presentCommitted();
               }
               onChangeRef.current?.();
             } else {
@@ -1149,6 +1283,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           } catch {
             /* ignore */
           }
+          strokeHostRef.current = null;
+          strokeHostElRef.current = null;
           return;
         }
         if (toolRef.current !== "pen") {
@@ -1158,6 +1294,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           } catch {
             /* ignore */
           }
+          strokeHostRef.current = null;
+          strokeHostElRef.current = null;
           return;
         }
         const baked = engine.up(sampleOf(canvas, event));
@@ -1183,7 +1321,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         loadBarRef.current?.freeze();
         if (baked.points.length > 0) {
           const { paintView, dpr } = readViews();
-          bookRef.current.commit(
+          const op = bindInkOpToHost(
             opFromBake(
               baked,
               paintView,
@@ -1194,13 +1332,21 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               pressureSensitiveRef.current,
               speedFadeRef.current,
             ),
+            strokeHostRef.current,
           );
-          commitOverlay(
-            overlayRef.current,
-            overlayRedoRef.current,
-            baked.points.map((d) => ({ ...d })),
-          );
-          rememberCommitPatch(baked.undoPatch);
+          bookRef.current.commit(op);
+          if (isInkLabPenOp(op)) {
+            commitOverlay(
+              overlayRef.current,
+              overlayRedoRef.current,
+              baked.points.map((d) => ({ ...d })),
+            );
+            rememberCommitPatch(baked.undoPatch);
+          } else {
+            overlayRedoRef.current = [];
+            rememberCommitPatch(null);
+            presentCommitted();
+          }
           onChangeRef.current?.();
         }
         try {
@@ -1208,6 +1354,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         } catch {
           /* ignore */
         }
+        strokeHostRef.current = null;
+        strokeHostElRef.current = null;
         sizeToHost();
       };
 
@@ -1233,7 +1381,78 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         engine.destroy();
         engineRef.current = null;
       };
-    }, [enabled, presentCommitted, readViews, stampOpOntoSnap]);
+    }, [captureStrokeHost, enabled, pinStrokeHostScroll, presentCommitted, readViews, stampOpOntoSnap]);
+
+    /**
+     * Nested scroll moves host-bound ink — remesh when any host scrolls.
+     *
+     * Scroll does not bubble; capture on the board hears every nested host.
+     * Per-host listeners plus MutationObserver/ResizeObserver pick up
+     * scrollers that appear after the first scan. While the nib is down, put
+     * the captured host back instead — a sideways stroke used to drive
+     * `scrollLeft` toward 0.
+     */
+    useEffect(() => {
+      if (!enabled) return;
+      const board =
+        canvasRef.current?.closest(".lc-board") ?? hostRef.current?.closest(".lc-board");
+      if (!board) return;
+      let frame: number | null = null;
+      let attached: HTMLElement[] = [];
+      const onScroll = () => {
+        if (drawingRef.current) {
+          pinStrokeHostScroll();
+          return;
+        }
+        if (!bookRef.current.paintOps().some((op) => isHostBoundOp(op))) return;
+        if (frame != null) return;
+        frame = requestAnimationFrame(() => {
+          frame = null;
+          if (drawingRef.current) return;
+          forgetPixelHistory();
+          presentCommitted();
+        });
+      };
+      const detachHosts = () => {
+        for (const host of attached) {
+          host.removeEventListener("scroll", onScroll);
+        }
+        attached = [];
+      };
+      const rescanHosts = () => {
+        detachHosts();
+        for (const doc of board.querySelectorAll(DOC_PAGE_SELECTOR)) {
+          for (const host of scrollHostsIn(doc)) {
+            host.addEventListener("scroll", onScroll, { passive: true });
+            attached.push(host);
+          }
+        }
+      };
+      rescanHosts();
+      board.addEventListener("scroll", onScroll, { capture: true, passive: true });
+      const mo =
+        typeof MutationObserver === "function"
+          ? new MutationObserver(() => rescanHosts())
+          : null;
+      mo?.observe(board, { childList: true, subtree: true });
+      const ro =
+        typeof ResizeObserver === "function"
+          ? new ResizeObserver(() => {
+              rescanHosts();
+              if (!drawingRef.current) onScroll();
+            })
+          : null;
+      for (const doc of board.querySelectorAll(DOC_PAGE_SELECTOR)) {
+        ro?.observe(doc);
+      }
+      return () => {
+        board.removeEventListener("scroll", onScroll, true);
+        detachHosts();
+        mo?.disconnect();
+        ro?.disconnect();
+        if (frame != null) cancelAnimationFrame(frame);
+      };
+    }, [enabled, forgetPixelHistory, pinStrokeHostScroll, presentCommitted]);
 
     useEffect(() => {
       if (!perfOverlay && !perfBar) {
@@ -1257,9 +1476,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       >
         <canvas
           ref={canvasRef}
-          className="lc-ink-lab-canvas"
+          className={
+            tool === "eraser" ? "lc-ink-lab-canvas lc-raster-ink-eraser" : "lc-ink-lab-canvas"
+          }
           aria-label="Ink lab pad"
-          tabIndex={0}
+          tabIndex={-1}
           style={{ pointerEvents: tool ? "auto" : "none" }}
         />
         <InkLoadBar ref={loadBarRef} bar={perfBar} overlay={perfOverlay} />

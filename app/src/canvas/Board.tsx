@@ -209,10 +209,14 @@ import {
 import {
   DOC_PAGE_SELECTOR,
   horizontalScrollHost,
+  isInkPadTarget,
+  restoreHostScrollIn,
   scrollHostAtPoint,
   scrollHostLookupFromSlot,
   scrollHostsIn,
   slotCssPerScene,
+  snapshotHostScrollIn,
+  type HostScrollSnapshot,
 } from "./scrollHost";
 import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
 import {
@@ -1940,11 +1944,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     const nodes: HTMLElement[] = [];
-    if (annotateCodeRef.current) {
-      root.querySelectorAll("canvas.lc-ink-lab-canvas").forEach((el) => {
-        if (el instanceof HTMLElement) nodes.push(el);
-      });
-    }
+    root.querySelectorAll(".lc-board-ink-lab-host canvas.lc-ink-lab-canvas").forEach((el) => {
+      if (el instanceof HTMLElement) nodes.push(el);
+    });
     if (titleSlotNodeRef.current) nodes.push(titleSlotNodeRef.current);
     panRideNodesRef.current = nodes;
   }, []);
@@ -2597,31 +2599,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onAnnotateCodeChange?.(annotateCode);
   }, [annotateCode, onAnnotateCodeChange]);
 
-  /** Snapshot nested host scroll under the content slot (annotate toggle). */
-  const snapshotHostScroll = useCallback((): Map<HTMLElement, { left: number; top: number }> => {
-    const slot = contentSlotNodeRef.current;
-    const out = new Map<HTMLElement, { left: number; top: number }>();
-    if (!slot) return out;
-    for (const doc of slot.querySelectorAll(DOC_PAGE_SELECTOR)) {
-      for (const host of scrollHostsIn(doc)) {
-        out.set(host, { left: host.scrollLeft, top: host.scrollTop });
-      }
-    }
-    return out;
-  }, []);
-
-  const restoreHostScroll = useCallback((saved: Map<HTMLElement, { left: number; top: number }>) => {
-    for (const [host, pos] of saved) {
-      if (host.isConnected) {
-        host.scrollLeft = pos.left;
-        host.scrollTop = pos.top;
-      }
-    }
-  }, []);
+  /** Nested host scroll to restore after annotate/scroll class flips remount the pre. */
+  const pendingHostScrollRef = useRef<HostScrollSnapshot[] | null>(null);
 
   const toggleAnnotate = useCallback(() => {
     wakeChromeRef.current();
-    const saved = snapshotHostScroll();
+    pendingHostScrollRef.current = snapshotHostScrollIn(contentSlotNodeRef.current);
     const live = liveCameraRef.current;
     const state = apiRef.current?.getAppState() as
       | {
@@ -2640,9 +2623,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       modeIndicatorRef.current?.show(next ? "Annotation" : "Scroll mode");
       return next;
     });
-    // Mode flip changes PE/classes; restore scroll after commit and replay ink.
     requestAnimationFrame(() => {
-      restoreHostScroll(saved);
       if (isDrawPageRegion(mobileRegionRef.current) && apiRef.current) {
         userAdjustedCameraRef.current = true;
         apiRef.current.updateScene({
@@ -2654,9 +2635,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           captureUpdate: CaptureUpdateAction.NEVER,
         });
       }
-      rasterInkRef.current?.syncCamera();
     });
-  }, [restoreHostScroll, snapshotHostScroll]);
+  }, []);
+
+  /*
+   * Restore nested scroll after the mode class flip, then remesh host-bound ink.
+   *
+   * One rAF used to write scrollLeft onto the pre from *before* React replaced
+   * it, so annotate always opened at 0. Replay used to no-op unless a drawing
+   * tool was armed and the camera had moved — marks sat wrong until the next
+   * pan.
+   */
+  useLayoutEffect(() => {
+    const saved = pendingHostScrollRef.current;
+    if (!saved) return;
+    restoreHostScrollIn(contentSlotNodeRef.current, saved);
+    const replay = () => {
+      restoreHostScrollIn(contentSlotNodeRef.current, saved);
+      refreshPanRideNodes();
+      rasterInkRef.current?.replayCommitted();
+      pendingHostScrollRef.current = null;
+    };
+    const id = requestAnimationFrame(replay);
+    return () => cancelAnimationFrame(id);
+  }, [annotateCode, refreshPanRideNodes]);
 
   // Leaving Annotate puts the pen down, and the highlighter and Link with it.
   useEffect(() => {
@@ -2685,7 +2687,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   useEffect(() => {
     if (!interactive) return;
     const id = requestAnimationFrame(() => {
-      rasterInkRef.current?.syncCamera();
+      if (pendingHostScrollRef.current) return;
+      rasterInkRef.current?.replayCommitted();
     });
     return () => cancelAnimationFrame(id);
   }, [annotateCode, interactive]);
@@ -3920,6 +3923,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       ) {
         return false;
       }
+      // Pen down on the pad is a stroke. Treating it as nested `scrollLeft`
+      // snaps a wide codeblock back to 0 as the nib travels left-to-right.
+      if (isInkPadTarget(el)) return false;
       return el.closest(".lc-board") != null;
     };
 
@@ -3929,6 +3935,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // mid-drag, which is why this is checked on every move and not only at
       // pointerdown.
       if (selectionOwnsGesture()) return false;
+      if (rasterInkRef.current?.isDrawing()) return false;
       if (!annotateCodeRef.current) return true;
       // Sweep (doc highlighting) must still pan — otherwise the page is stuck.
       if (highlightingRef.current) return true;
@@ -4145,10 +4152,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // gesture turns out to be is what decides who owns it.
       // Geometry hit — annotate lands on the ink canvas, so `event.target` is
       // never inside the doc and `horizontalScrollHost(target)` always misses.
-      const sideScroll = onCodeDock
-        ? null
-        : scrollHostAtPoint(event.clientX, event.clientY) ??
-          horizontalScrollHost(event.target);
+      const sideScroll =
+        onCodeDock ||
+        isInkPadTarget(event.target) ||
+        (annotateCodeRef.current &&
+          (activeToolRef.current === "freedraw" ||
+            activeToolRef.current === "highlighter" ||
+            activeToolRef.current === "eraser"))
+          ? null
+          : scrollHostAtPoint(event.clientX, event.clientY) ??
+            horizontalScrollHost(event.target);
       /*
        * Selectable prose defers for the same reason, on time rather than axis.
        *
@@ -4788,7 +4801,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const brush = eraserBrushRef.current;
       if (!brush || !next) return;
       const hitCanvas =
-        root.querySelector("canvas.lc-ink-lab-canvas") ??
+        root.querySelector(".lc-board-ink-lab-host canvas.lc-ink-lab-canvas") ??
         root.querySelector("canvas.lc-raster-ink");
       if (!(hitCanvas instanceof HTMLCanvasElement)) return;
       const boardRect = root.getBoundingClientRect();

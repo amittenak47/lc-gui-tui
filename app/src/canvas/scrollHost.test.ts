@@ -5,9 +5,13 @@ import {
   horizontalScrollHost,
   horizontalScrollHostsIn,
   hostKeyInDoc,
+  isInkPadTarget,
+  pinHostScroll,
+  restoreHostScrollIn,
   scrollHostAtPoint,
   scrollHostLookupFromSlot,
   scrollHostsIn,
+  snapshotHostScrollIn,
   slotCssPerScene,
 } from "./scrollHost";
 
@@ -227,5 +231,75 @@ describe("scrollHostLookupFromSlot", () => {
       maxY: 140,
     });
     expect(slotCssPerScene(slot, pageBounds)).toBeCloseTo(1);
+  });
+});
+
+describe("host scroll snapshot", () => {
+  it("restores onto remounted hosts by document-order key", () => {
+    const { board, pre } = buildDoc();
+    Object.defineProperty(pre, "scrollLeft", {
+      value: 80,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(pre, "scrollTop", {
+      value: 12,
+      writable: true,
+      configurable: true,
+    });
+    const saved = snapshotHostScrollIn(board);
+    expect(saved).toEqual([{ doc: 0, key: 0, left: 80, top: 12 }]);
+    pre.remove();
+    const next = document.createElement("pre");
+    next.style.overflowX = "auto";
+    sizeOf(next, 900, 400);
+    Object.defineProperty(next, "scrollLeft", {
+      value: 0,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(next, "scrollTop", {
+      value: 0,
+      writable: true,
+      configurable: true,
+    });
+    board.querySelector(".lc-md-ink-doc")!.append(next);
+    restoreHostScrollIn(board, saved);
+    expect(next.scrollLeft).toBe(80);
+    expect(next.scrollTop).toBe(12);
+  });
+});
+
+describe("isInkPadTarget", () => {
+  it("treats the WebGL pad as not a board pan surface", () => {
+    const canvas = document.createElement("canvas");
+    canvas.className = "lc-ink-lab-canvas";
+    const host = document.createElement("div");
+    host.className = "lc-board-ink-lab-host";
+    host.append(canvas);
+    document.body.append(host);
+    expect(isInkPadTarget(canvas)).toBe(true);
+    expect(isInkPadTarget(host)).toBe(true);
+    expect(isInkPadTarget(document.body)).toBe(false);
+    host.remove();
+  });
+});
+
+describe("pinHostScroll", () => {
+  it("restores nested scroll that drifted during a stroke", () => {
+    const el = document.createElement("div");
+    Object.defineProperty(el, "scrollLeft", {
+      value: 0,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(el, "scrollTop", {
+      value: 4,
+      writable: true,
+      configurable: true,
+    });
+    pinHostScroll(el, 80, 12);
+    expect(el.scrollLeft).toBe(80);
+    expect(el.scrollTop).toBe(12);
   });
 });
