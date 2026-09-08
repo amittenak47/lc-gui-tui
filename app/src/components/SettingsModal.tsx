@@ -122,6 +122,12 @@ import {
   saveInkPerfBar,
 } from "../util/inkPerfOverlayPref";
 import {
+  INK_DISPLAY_HZ,
+  loadInkDisplayHz,
+  saveInkDisplayHz,
+  type InkDisplayHzPref,
+} from "../util/inkDisplayHzPref";
+import {
   loadPdfFlickHud,
   loadPdfFlickMomentum,
   savePdfFlickHud,
@@ -466,6 +472,8 @@ interface DevicePrefs {
   inkPerfOverlay: boolean;
   /** 5px load bar on the whiteboard. */
   inkPerfBar: boolean;
+  /** Display refresh for HUD vsync and live present cap. */
+  inkDisplayHz: InkDisplayHzPref;
 }
 
 function loadDevicePrefs(): DevicePrefs {
@@ -498,6 +506,7 @@ function loadDevicePrefs(): DevicePrefs {
     pdfFlickMomentum: loadPdfFlickMomentum(),
     inkPerfOverlay: loadInkPerfOverlay(),
     inkPerfBar: loadInkPerfBar(),
+    inkDisplayHz: loadInkDisplayHz(),
   };
 }
 
@@ -530,7 +539,8 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.pdfFlickHud === b.pdfFlickHud &&
     a.pdfFlickMomentum === b.pdfFlickMomentum &&
     a.inkPerfOverlay === b.inkPerfOverlay &&
-    a.inkPerfBar === b.inkPerfBar
+    a.inkPerfBar === b.inkPerfBar &&
+    a.inkDisplayHz === b.inkDisplayHz
   );
 }
 
@@ -843,6 +853,7 @@ export function SettingsModal({
   const [pdfFlickMomentum, setPdfFlickMomentum] = useState(() => loadPdfFlickMomentum());
   const [inkPerfOverlay, setInkPerfOverlay] = useState(() => loadInkPerfOverlay());
   const [inkPerfBar, setInkPerfBar] = useState(() => loadInkPerfBar());
+  const [inkDisplayHz, setInkDisplayHz] = useState<InkDisplayHzPref>(() => loadInkDisplayHz());
   const [testForward, setTestForward] = useState<TestForwardMode>(() =>
     loadTestForwardMode(),
   );
@@ -1077,6 +1088,7 @@ export function SettingsModal({
     setPdfFlickMomentum(prefs.pdfFlickMomentum);
     setInkPerfOverlay(prefs.inkPerfOverlay);
     setInkPerfBar(prefs.inkPerfBar);
+    setInkDisplayHz(prefs.inkDisplayHz);
     setBaselinePrefs(prefs);
     // Saved only: the desktop that *is* the hub runs on a loopback it never
     // typed, and showing that here would read as "connected to some other PC".
@@ -1176,6 +1188,7 @@ export function SettingsModal({
     pdfFlickMomentum,
     inkPerfOverlay,
     inkPerfBar,
+    inkDisplayHz,
   };
   const keysDirty =
     openaiKeyDraft.trim() !== "" ||
@@ -1245,6 +1258,7 @@ export function SettingsModal({
         savePdfFlickMomentum(pdfFlickMomentum);
         saveInkPerfOverlay(inkPerfOverlay);
         saveInkPerfBar(inkPerfBar);
+        saveInkDisplayHz(inkDisplayHz);
         setBaselinePrefs(draftPrefs);
         void saveThisDevicePrefs(client).catch(() => {});
         window.dispatchEvent(
@@ -1975,6 +1989,47 @@ export function SettingsModal({
                 ))}
               </div>
 
+              <div className="lc-settings-subhead">Display refresh</div>
+              <p className="lc-settings-hint">
+                Grades the HUD and caps live ink at 60 frames a second on 90 Hz
+                and faster panels. Auto reads the vsync gap. Canvas size stays
+                1:1. Saved on this device only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Display refresh"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={inkDisplayHz === "auto"}
+                  className={
+                    inkDisplayHz === "auto"
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setInkDisplayHz("auto")}
+                >
+                  <strong>Auto</strong>
+                </button>
+                {INK_DISPLAY_HZ.map((hz) => (
+                  <button
+                    key={hz}
+                    type="button"
+                    role="radio"
+                    aria-checked={inkDisplayHz === hz}
+                    className={
+                      inkDisplayHz === hz
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setInkDisplayHz(hz)}
+                  >
+                    <strong>{hz}</strong>
+                  </button>
+                ))}
+              </div>
               <div className="lc-settings-subhead">Performance overlay</div>
               <p className="lc-settings-hint">
                 Frame HUD on the whiteboard: paint count, frame / rAF / draw
@@ -2015,9 +2070,9 @@ export function SettingsModal({
               </div>
               <div className="lc-settings-subhead">Performance bar</div>
               <p className="lc-settings-hint">
-                5px load bar scaled to a 60 Hz frame, with a lift hint when the
-                stroke is falling behind. Off hides the bar only. Saved on this
-                device only.
+                5px load bar scaled to one display vsync (Auto or the refresh
+                you pick), with a lift hint when the stroke is missing several
+                beats. Off hides the bar only. Saved on this device only.
               </p>
               <div
                 className="lc-settings-choice lc-settings-choice-compact"

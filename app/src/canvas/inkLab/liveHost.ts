@@ -4,9 +4,10 @@
  * Replay is for lift / camera. The nib rAF keeps one snap and a frozen
  * backing store until the pointer comes up. Plan C clips the live snap+SDF
  * blit to the dirty AABB; do not shrink the overlay canvas on pointer down.
- * Plan E presents every vsync while the nib is down — pointermove only
- * ingests. Scheduling paint from move made the HUD rAF track the tablet's
- * coalesced move rate instead of the display.
+ * Plan E keeps the rAF pump armed while the nib is down — pointermove only
+ * ingests. Empty vsyncs skip GPU present; 90Hz+ caps composites at 60fps.
+ * Scheduling paint from move made the HUD rAF track the tablet's coalesced
+ * move rate instead of the display.
  */
 
 export function skipCommittedReplay(

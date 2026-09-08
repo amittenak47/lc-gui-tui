@@ -28,6 +28,8 @@ export type InkLabHud = {
   drawRange?: InkLabMsRange;
   ekfRange?: InkLabMsRange;
   spark?: readonly number[];
+  /** One display vsync in ms. Spark hairline and red threshold follow this. */
+  vsyncMs?: number;
 };
 
 export const INK_LAB_HUD_ZERO: InkLabHud = {
@@ -102,6 +104,8 @@ export function formatInkLabHud(hud: InkLabHud): string {
 export type InkLabHudStats = {
   reset: () => void;
   sample: (frameMs: number, rafMs: number, drawMs: number, ekfMs: number) => void;
+  /** rAF only — skip-empty ticks must not pin frame/draw/spark at 0. */
+  noteRaf: (rafMs: number) => void;
   snapshot: () => Pick<
     InkLabHud,
     "frameRange" | "rafRange" | "drawRange" | "ekfRange" | "spark"
@@ -129,8 +133,11 @@ export function createInkLabHudStats(): InkLabHudStats {
       if (rafMs > 0) raf = pushRange(raf, rafMs);
       draw = pushRange(draw, drawMs);
       ekf = pushRange(ekf, ekfMs);
-      spark.push(frameMs);
+      spark.push(rafMs > 0 ? rafMs : frameMs);
       if (spark.length > INK_LAB_SPARK_N) spark.shift();
+    },
+    noteRaf(rafMs) {
+      if (rafMs > 0) raf = pushRange(raf, rafMs);
     },
     snapshot() {
       return {

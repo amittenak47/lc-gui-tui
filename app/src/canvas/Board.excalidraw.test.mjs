@@ -38,12 +38,16 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/perfOverlay/);
   });
 
-  it("paints every vsync while the pen is down, from capture-phase pointer events", () => {
+  it("re-arms vsync before a budget present, from capture-phase pointer events", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
     expect(src).toMatch(/keepLivePaintPump\(drawingRef\.current\)/);
     expect(src).not.toMatch(/drawingRef\.current && stats\.hold/);
     expect(src).toMatch(/addEventListener\("pointerdown", onPointerDown, true\)/);
     expect(src).toMatch(/addEventListener\("pointermove", onPointerMove, true\)/);
+    expect(src).toMatch(/shouldCompositeLive/);
+    expect(src).toMatch(/livePresentStride/);
+    expect(src).toMatch(/const marginY = 0/);
+    expect(src).not.toMatch(/overdrawMarginPx/);
     const tick = src.slice(src.indexOf("const onPaintFrame"), src.indexOf("const schedulePaint"));
     expect(tick.indexOf("keepLivePaintPump")).toBeGreaterThan(-1);
     expect(tick.indexOf("keepLivePaintPump")).toBeLessThan(tick.indexOf("engine.paint"));
@@ -78,7 +82,9 @@ describe("SettingsModal", () => {
     expect(src).toMatch(/id="writing"/);
     expect(src).toMatch(/Performance overlay/);
     expect(src).toMatch(/Performance bar/);
+    expect(src).toMatch(/Display refresh/);
     expect(src).toMatch(/loadInkPerfOverlay/);
     expect(src).toMatch(/loadInkPerfBar/);
+    expect(src).toMatch(/loadInkDisplayHz/);
   });
 });

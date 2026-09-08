@@ -1,20 +1,24 @@
 /**
  * Live-stroke load for the canvas lift bar.
  *
- * Fill is this paint's share of a 60Hz vsync — WebGL capsules are usually a
- * few milliseconds, so the bar stays green. Red means the stroke is missing
- * frames: paint over a vsync, a stalled rAF, or (canvas2d only) a full remesh.
+ * Fill is this paint's share of one display vsync — WebGL capsules are usually
+ * a few milliseconds, so the bar stays green. Red means the stroke is missing
+ * several beats: paint over a vsync, a stalled rAF, or (canvas2d only) a full
+ * remesh. Default vsync is 60Hz; WhiteboardInkLab sets it from the refresh
+ * setting.
  *
  * Cheap: a handful of adds per animation frame. Not the DEBUG_INK sampler.
  */
+
+import { rafStallMs } from "./inkLab/displayHz";
 
 /** One 60Hz display frame. Bar 1.0 means this paint used the whole vsync. */
 export const INK_LOAD_FRAME_MS = 1000 / 60;
 /** Paint over this counts as a missed vsync. */
 export const INK_LOAD_BUDGET_MS = INK_LOAD_FRAME_MS;
-/** rAF period that still counts as one display frame. */
+/** rAF period that still counts as one display frame (60Hz default). */
 export const INK_LOAD_RAF_OK_MS = 16;
-/** rAF period that means a frame was dropped while the pen was down. */
+/** rAF period that means a frame was dropped (60Hz default: ~two extra beats). */
 export const INK_LOAD_RAF_STALL_MS = 28;
 /** Accumulated overtime (ms) that fills the bar to red. */
 export const INK_LOAD_DEBT_RED_MS = 400;
@@ -103,6 +107,10 @@ function snapshot(
   };
 }
 
+function paintBudgetMs(vsyncMs: number): number {
+  return vsyncMs > 0 ? vsyncMs : INK_LOAD_FRAME_MS;
+}
+
 /** Live-paint counters, aligned with the Ink lab HUD. */
 export function formatInkLoadDebug(s: InkLoadSnapshot): string {
   const suffix = s.suffixHit ? "hit" : "miss";
@@ -124,6 +132,7 @@ export function createInkLoadMeter(): {
   frame: (sample: InkLoadFrame) => InkLoadSnapshot;
   end: () => InkLoadSnapshot;
   peek: () => InkLoadSnapshot;
+  setVsyncMs: (ms: number) => void;
 } {
   let open = false;
   let calls = 0;
@@ -131,6 +140,7 @@ export function createInkLoadMeter(): {
   let debtMs = 0;
   let ema = 0;
   let last: InkLoadFrame | null = null;
+  let vsyncMs = INK_LOAD_FRAME_MS;
 
   const peek = (): InkLoadSnapshot =>
     snapshot(calls, slowCalls, debtMs, ema, last);
@@ -146,15 +156,18 @@ export function createInkLoadMeter(): {
       return peek();
     },
 
+    setVsyncMs(ms: number) {
+      if (ms > 0 && Number.isFinite(ms)) vsyncMs = ms;
+    },
+
     frame(sample: InkLoadFrame): InkLoadSnapshot {
       if (!open) return peek();
       calls += 1;
       last = sample;
-      const paintOver = Math.max(0, sample.frameMs - INK_LOAD_BUDGET_MS);
-      const rafOver =
-        sample.rafMs > INK_LOAD_RAF_STALL_MS
-          ? sample.rafMs - INK_LOAD_RAF_OK_MS
-          : 0;
+      const budget = paintBudgetMs(vsyncMs);
+      const stall = rafStallMs(vsyncMs);
+      const paintOver = Math.max(0, sample.frameMs - budget);
+      const rafOver = sample.rafMs > stall ? sample.rafMs - budget : 0;
       debtMs += paintOver + rafOver * 0.5;
       if (paintOver > 0 || rafOver > 0) slowCalls += 1;
       if (
@@ -168,7 +181,7 @@ export function createInkLoadMeter(): {
       if (sample.queued > INK_LOAD_QUEUE_SLOW) {
         debtMs += (sample.queued - INK_LOAD_QUEUE_SLOW) * INK_LOAD_QUEUE_TAX_MS;
       }
-      const instant = clamp01(sample.frameMs / INK_LOAD_FRAME_MS);
+      const instant = clamp01(sample.frameMs / budget);
       ema = ema * (1 - INK_LOAD_EMA) + instant * INK_LOAD_EMA;
       return peek();
     },
