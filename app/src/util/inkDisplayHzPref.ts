@@ -17,6 +17,7 @@ export {
 };
 
 const KEY = "whiteboard.inkDisplayHz";
+const MATCH_KEY = "whiteboard.inkMatchDisplay";
 
 export const INK_DISPLAY_HZ_EVENT = "lc-ink-display-hz";
 
@@ -44,6 +45,24 @@ export function loadInkDisplayHz(): InkDisplayHzPref {
 export function saveInkDisplayHz(pref: InkDisplayHzPref): void {
   try {
     localStorage.setItem(KEY, String(pref));
+  } catch {
+    /* private browsing */
+  }
+  emit();
+}
+
+/** Present every dirty vsync. Off (default) keeps the 60fps cap on 90Hz+. */
+export function loadInkMatchDisplay(): boolean {
+  try {
+    return localStorage.getItem(MATCH_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveInkMatchDisplay(on: boolean): void {
+  try {
+    localStorage.setItem(MATCH_KEY, on ? "1" : "0");
   } catch {
     /* private browsing */
   }

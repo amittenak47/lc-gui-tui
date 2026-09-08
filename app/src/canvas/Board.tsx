@@ -294,6 +294,7 @@ import {
 import {
   INK_DISPLAY_HZ_EVENT,
   loadInkDisplayHz,
+  loadInkMatchDisplay,
 } from "../util/inkDisplayHzPref";
 import {
   captureInserts,
@@ -1356,6 +1357,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [perfOverlay, setPerfOverlay] = useState(() => loadInkPerfOverlay());
   const [perfBar, setPerfBar] = useState(() => loadInkPerfBar());
   const [displayHz, setDisplayHz] = useState(() => loadInkDisplayHz());
+  const [matchDisplay, setMatchDisplay] = useState(() => loadInkMatchDisplay());
   const [stampTrash, setStampTrash] = useState<{
     ids: string[];
   } | null>(null);
@@ -3541,7 +3543,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   useEffect(() => {
-    const onHz = () => setDisplayHz(loadInkDisplayHz());
+    const onHz = () => {
+      setDisplayHz(loadInkDisplayHz());
+      setMatchDisplay(loadInkMatchDisplay());
+    };
     window.addEventListener(INK_DISPLAY_HZ_EVENT, onHz);
     return () => window.removeEventListener(INK_DISPLAY_HZ_EVENT, onHz);
   }, []);
@@ -9474,6 +9479,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         perfOverlay={perfOverlay}
         perfBar={perfBar}
         displayHz={displayHz}
+        matchDisplay={matchDisplay}
       />
       {interactive && activeTool === "text" && <TextPlaceGhost ref={textPlaceGhostRef} />}
       {interactive && stampTrash && (
