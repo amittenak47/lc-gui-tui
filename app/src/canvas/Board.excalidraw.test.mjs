@@ -37,6 +37,14 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/InkLoadBar/);
     expect(src).toMatch(/perfOverlay/);
   });
+
+  it("paints every vsync while the pen is down, from capture-phase pointer events", () => {
+    const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
+    expect(src).toMatch(/keepLivePaintPump\(drawingRef\.current\)/);
+    expect(src).not.toMatch(/drawingRef\.current && stats\.hold/);
+    expect(src).toMatch(/addEventListener\("pointerdown", onPointerDown, true\)/);
+    expect(src).toMatch(/addEventListener\("pointermove", onPointerMove, true\)/);
+  });
 });
 
 describe("InkPresetEditor", () => {

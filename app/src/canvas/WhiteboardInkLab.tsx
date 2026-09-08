@@ -17,7 +17,7 @@ import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/
 import { InkPageBook } from "./inkPageCache";
 import { canvasBitmapFromClient } from "./canvasPointer";
 import { overlaySpineFromDrawOp, splitInkOpsForLabReplay } from "./inkLab/replay";
-import { skipCommittedReplay } from "./inkLab/liveHost";
+import { keepLivePaintPump, skipCommittedReplay } from "./inkLab/liveHost";
 import {
   createInkLabEngine,
   type InkLabEngine,
@@ -629,6 +629,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         });
       };
 
+      const stopPaintPump = () => {
+        if (rafRef.current == null) return;
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      };
+
       const schedulePaint = () => {
         if (rafRef.current != null) return;
         rafRef.current = requestAnimationFrame(() => {
@@ -638,7 +644,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           lastRafRef.current = now;
           const stats = engine.paint();
           reportLoad(stats, prev > 0 ? now - prev : 0, drawingRef.current);
-          if (drawingRef.current && stats.hold) schedulePaint();
+          // Present every vsync while the nib is down. Pointermove only
+          // ingests; waiting on the next coalesced sample made HUD rAF
+          // track the tablet's move rate (~25ms) and miss frames (~100ms)
+          // even when draw was ~1ms.
+          if (keepLivePaintPump(drawingRef.current)) schedulePaint();
         });
       };
 
@@ -669,6 +679,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           pending.opened = true;
           drawingRef.current = false;
           highlightPtsRef.current = null;
+          stopPaintPump();
           engine.cancelStroke();
           sizeToHost();
           presentCommitted();
@@ -868,6 +879,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         }
         if (!drawingRef.current) return;
         drawingRef.current = false;
+        stopPaintPump();
         if (toolRef.current === "highlighter") {
           const raw = highlightPtsRef.current;
           highlightPtsRef.current = null;
@@ -953,16 +965,19 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
 
       const ro = new ResizeObserver(() => sizeToHost());
       ro.observe(host);
-      canvas.addEventListener("pointerdown", onPointerDown);
-      canvas.addEventListener("pointermove", onPointerMove);
-      canvas.addEventListener("pointerup", onPointerUp);
-      canvas.addEventListener("pointercancel", onPointerUp);
+      // Capture phase, same as RasterInkLayer: ingest before bubble
+      // handlers on the board chrome. setPointerCapture still owns the
+      // rest of the stroke.
+      canvas.addEventListener("pointerdown", onPointerDown, true);
+      canvas.addEventListener("pointermove", onPointerMove, true);
+      canvas.addEventListener("pointerup", onPointerUp, true);
+      canvas.addEventListener("pointercancel", onPointerUp, true);
       return () => {
         ro.disconnect();
-        canvas.removeEventListener("pointerdown", onPointerDown);
-        canvas.removeEventListener("pointermove", onPointerMove);
-        canvas.removeEventListener("pointerup", onPointerUp);
-        canvas.removeEventListener("pointercancel", onPointerUp);
+        canvas.removeEventListener("pointerdown", onPointerDown, true);
+        canvas.removeEventListener("pointermove", onPointerMove, true);
+        canvas.removeEventListener("pointerup", onPointerUp, true);
+        canvas.removeEventListener("pointercancel", onPointerUp, true);
         if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
         if (holdTimerRef.current != null) window.clearTimeout(holdTimerRef.current);
         engine.destroy();
