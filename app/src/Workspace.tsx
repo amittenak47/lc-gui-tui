@@ -115,7 +115,6 @@ import { AmbientPanel, type AmbientEntry } from "./modes/AmbientPanel";
 import { ProblemBrowser } from "./modes/ProblemBrowser";
 import { HomeChooser } from "./modes/HomeChooser";
 import { ExploreWorkspace } from "./modes/ExploreWorkspace";
-import { InkLab } from "./modes/InkLab";
 import { LinkStrokeOverlay, type LinkChip } from "./modes/LinkStrokeOverlay";
 import { collectDomLinkHits, boxesOverlap, type LinkHit } from "./modes/linkHitTest";
 import type { StrokeBox } from "./modes/linkStroke";
@@ -1636,8 +1635,7 @@ export function Workspace({
    */
   const needsBoard =
     tab.kind !== "home" &&
-    tab.kind !== "explore" &&
-    tab.kind !== "inklab";
+    tab.kind !== "explore";
   const [BoardView, setBoardView] = useState<BoardComponent | null>(
     () => peekBoardComponent(),
   );
@@ -4893,16 +4891,6 @@ export function Workspace({
       id: newTabId("explore"),
       kind: "explore",
       title: "Explore",
-      dirty: false,
-      lastActive: 0,
-    });
-  }, [openWorkspace]);
-
-  const openInkLab = useCallback(() => {
-    openWorkspace({
-      id: newTabId("inklab"),
-      kind: "inklab",
-      title: "Ink lab",
       dirty: false,
       lastActive: 0,
     });
@@ -8296,7 +8284,6 @@ export function Workspace({
       switch (tab.kind) {
         case "home":
         case "explore":
-        case "inklab":
           // Home has no board to read back; the chooser is the whole of it.
           setBusy(null);
           setWorkspaceLoadActive(false);
@@ -10196,7 +10183,6 @@ export function Workspace({
               // app draws itself rather than boards, so they share the layer
               // that sits over a canvas which never mounts for them.
               tab.kind === "explore" ||
-              tab.kind === "inklab" ||
               holdBrowseOverlay ||
               boardPreparing ||
               browseMotion !== "idle") && (
@@ -10267,8 +10253,6 @@ export function Workspace({
                     // refused rather than hidden — the reason is worth saying.
                     canOpenInNewTab={(node) => node.type !== "practice"}
                   />
-                ) : tab.kind === "inklab" ? (
-                  <InkLab active={active} />
                 ) : tab.kind === "home" && !holdBrowseOverlay ? (
                   <HomeChooser
                     busy={busy !== null || boardPreparing || workspaceLoadActive}
@@ -10277,7 +10261,6 @@ export function Workspace({
                     onAnnotate={() => setAnnotateEntryOpen(true)}
                     onBrowse={() => void openWebPage(WEB_HOME)}
                     onExplore={openExplore}
-                    onInkLab={openInkLab}
                   />
                 ) : null}
               </div>

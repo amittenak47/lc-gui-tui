@@ -767,8 +767,7 @@ export function App() {
       return (
         kind != null &&
         kind !== "home" &&
-        kind !== "explore" &&
-        kind !== "inklab"
+        kind !== "explore"
       );
     }),
   );

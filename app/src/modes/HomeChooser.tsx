@@ -1,5 +1,5 @@
 /**
- * Landing screen — Practice, Whiteboard, Ink lab, Annotate, Browse, Explore.
+ * Landing screen — Practice, Whiteboard, Annotate, Browse, Explore.
  *
  * There is no longer a "What do you want to do?" banner over the cards. The
  * header already says `choose a mode to start`, and the question was asking
@@ -16,7 +16,7 @@
 
 import type { CSSProperties, ReactNode } from "react";
 
-import { FEATURE_INK_LAB_TAB, FEATURE_LEETCODE } from "../featureFlags";
+import { FEATURE_LEETCODE } from "../featureFlags";
 
 export interface HomeChooserProps {
   onPractice: () => void;
@@ -26,8 +26,6 @@ export interface HomeChooserProps {
   onBrowse: () => void;
   /** The notes graph — one tab, see `EXPLORE_TAB_LIMIT`. */
   onExplore: () => void;
-  /** WebGL ink lab comparison pad. Drop with FEATURE_INK_LAB_TAB. */
-  onInkLab: () => void;
   /** Something is already opening; the cards stop taking taps. */
   busy?: boolean;
 }
@@ -192,7 +190,6 @@ export function HomeChooser({
   onAnnotate,
   onBrowse,
   onExplore,
-  onInkLab,
   busy = false,
 }: HomeChooserProps) {
   const modes: HomeMode[] = [
@@ -249,31 +246,6 @@ export function HomeChooser({
       ),
       onOpen: onWhiteboard,
     },
-    ...(FEATURE_INK_LAB_TAB
-      ? [
-          {
-            id: "inklab",
-            kicker: "Ink",
-            title: "Ink lab",
-            blurb: "WebGL overlay pen — compare feel and cost to the whiteboard nib.",
-            live: (
-              <Glyph>
-                <path
-                  className="lc-home-inklab"
-                  d="M4 18c4-12 6 1 8-2 2-3 5 8 8 0"
-                  pathLength={1}
-                />
-              </Glyph>
-            ),
-            icon: (
-              <Glyph>
-                <path d="M4 18c4-12 6 1 8-2 2-3 5 8 8 0" />
-              </Glyph>
-            ),
-            onOpen: onInkLab,
-          } satisfies HomeMode,
-        ]
-      : []),
     {
       id: "annotate",
       kicker: "Reading",
