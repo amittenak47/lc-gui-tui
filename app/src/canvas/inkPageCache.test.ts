@@ -40,7 +40,8 @@ describe("InkPageBook", () => {
       book.visiblePage = page;
       book.commit(stroke(page * 118 - 80));
     }
-    book.setVisiblePage(10);
+    expect(book.setVisiblePage(10)).toBe(true);
+    expect(book.setVisiblePage(10)).toBe(false);
     const hotPages = [...book.hot.keys()].filter((id) => id !== SPANNING_PAGE_ID).sort((a, b) => a - b);
     expect(hotPages).toEqual(
       Array.from({ length: 1 + 2 * INK_LRU_RADIUS }, (_, i) => 10 - INK_LRU_RADIUS + i),
@@ -212,6 +213,30 @@ describe("InkPageBook", () => {
     book.commit(stroke(40));
     expect(book.canRedo()).toBe(false);
     expect(book.redoOnce()).toBeNull();
+  });
+
+  it("does not treat a still LRU window as a hydrate", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(3));
+    book.commit(stroke(20));
+    expect(book.setVisiblePage(1)).toBe(false);
+    expect(book.setVisiblePage(2)).toBe(false);
+    expect(book.setVisiblePage(3)).toBe(false);
+  });
+
+  it("answers host-bound without assembling paint ops", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(1));
+    book.commit(stroke(20));
+    expect(book.hasHostBoundInk()).toBe(false);
+    book.commit(
+      stroke(20, {
+        hostKey: 0,
+        scrollLeftAtDraw: 0,
+        scrollTopAtDraw: 0,
+      }),
+    );
+    expect(book.hasHostBoundInk()).toBe(true);
   });
 
   it("rebins fallback page-1 strokes onto the real notebook pages", () => {

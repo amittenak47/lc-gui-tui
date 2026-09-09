@@ -4,7 +4,12 @@ import { WhiteboardInkLab } from "./WhiteboardInkLab";
 import {
   inkCanvasPixelsChanged,
   instantReplayOnBackingResize,
+  instantReplayOnCameraRebase,
+  instantReplayOnFirstPresent,
+  instantReplayOnPageWindow,
+  instantReplayOnPointerDown,
   keepLivePaintPump,
+  remeshOnCameraMovingEnd,
   skipCommittedReplay,
   skipReplayOnWheelAbort,
 } from "./inkLab/liveHost";
@@ -44,7 +49,28 @@ describe("WhiteboardInkLab", () => {
     expect(skipReplayOnWheelAbort()).toBe(true);
   });
 
-  it("does not instantly remesh after a backing-store resize", () => {
-    expect(instantReplayOnBackingResize()).toBe(false);
+  it("keeps live resize atomic and loading resize sliced", () => {
+    expect(instantReplayOnBackingResize()).toBe(true);
+    expect(instantReplayOnBackingResize(true)).toBe(false);
+  });
+
+  it("does not instantly remesh when the page window hydrates", () => {
+    expect(instantReplayOnPageWindow()).toBe(false);
+  });
+
+  it("does not remesh the notebook on an eraser tool pick", () => {
+    expect(remeshOnCameraMovingEnd(false)).toBe(false);
+  });
+
+  it("slices the first present after a restore", () => {
+    expect(instantReplayOnFirstPresent()).toBe(false);
+  });
+
+  it("does not instantly remesh the notebook on pointer down", () => {
+    expect(instantReplayOnPointerDown()).toBe(false);
+  });
+
+  it("lands a camera rebase in one present", () => {
+    expect(instantReplayOnCameraRebase()).toBe(true);
   });
 });

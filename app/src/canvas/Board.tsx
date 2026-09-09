@@ -1044,6 +1044,8 @@ export interface BoardProps {
   onThemePick?: (id: string) => void;
   /** False on the problem browser — canvas is read-only and tools are hidden. */
   interactive?: boolean;
+  /** Workspace load overlay is still up; first ink paint is owned by primeInkSnap. */
+  preparing?: boolean;
   /**
    * Map chrome / pen island. Off on the unfocused half of a split so there is
    * one set of controls; tapping that pane focuses it and restores them.
@@ -1258,6 +1260,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     themeId,
     onThemePick,
     interactive = true,
+    preparing = false,
     chromeEnabled = true,
     chromeHost = null,
     onCodeSlot,
@@ -3244,6 +3247,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const applyInkWedge = useCallback(
     (kind: "pen" | "highlighter" | "eraser", index: number) => {
       const next = applyWedge(presetStoreRef.current, kind, index);
+      presetStoreRef.current = next;
       setPresetStore(next);
       syncInkFromPrefs();
     },
@@ -3275,15 +3279,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * editing that element.
      */
     if (tool === "freedraw" || tool === "highlighter" || tool === "eraser") {
-      apiRef.current?.updateScene({
-        appState: {
-          selectedElementIds: {},
-          selectedGroupIds: {},
-          selectedLinearElement: null,
-          editingLinearElement: null,
-        },
-        captureUpdate: CaptureUpdateAction.NEVER,
-      });
+      const state = apiRef.current?.getAppState() as
+        | {
+            selectedElementIds?: Record<string, unknown>;
+            selectedGroupIds?: Record<string, unknown>;
+            selectedLinearElement?: unknown;
+            editingLinearElement?: unknown;
+          }
+        | undefined;
+      const hasSelection =
+        Object.keys(state?.selectedElementIds ?? {}).length > 0 ||
+        Object.keys(state?.selectedGroupIds ?? {}).length > 0 ||
+        state?.selectedLinearElement != null ||
+        state?.editingLinearElement != null;
+      if (hasSelection) {
+        apiRef.current?.updateScene({
+          appState: {
+            selectedElementIds: {},
+            selectedGroupIds: {},
+            selectedLinearElement: null,
+            editingLinearElement: null,
+          },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+      }
     }
     if (tool === "freedraw" || tool === "highlighter") {
       apiRef.current?.setActiveTool({ type: "custom", customType: "lcInk", locked: false });
@@ -3338,10 +3357,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * as well as on pointerup — picking any other tool is the most obvious way
      * a hand tries to get out of a shape that will not let go.
      */
-    apiRef.current?.updateScene({
-      appState: { multiElement: null, editingLinearElement: null },
-      captureUpdate: CaptureUpdateAction.NEVER,
-    });
+    const linear = apiRef.current?.getAppState() as
+      | { multiElement?: unknown; editingLinearElement?: unknown }
+      | undefined;
+    if (linear?.multiElement != null || linear?.editingLinearElement != null) {
+      apiRef.current?.updateScene({
+        appState: { multiElement: null, editingLinearElement: null },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    }
     // The brush node unmounts with the tool; hiding it here keeps a stale ring
     // off the canvas for the frame between the click and the unmount.
     if (tool !== "eraser") eraserBrushRef.current?.setVisible(false);
@@ -4817,7 +4841,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     commitVisualScrollRef.current();
-    rasterInkRef.current?.setCameraMoving(false);
+    rasterInkRef.current?.cancelCameraMotion();
   }, [activeTool, stopPanInertia]);
 
   const inkToolActive =
@@ -8575,6 +8599,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (maybeGrowDrawFrame()) scheduleSlotReports();
         syncPageVisibility();
       },
+      primeInkSnap: () => rasterInkRef.current?.primeSnap() ?? Promise.resolve(),
       encodedInkShards: () => rasterInkRef.current?.encodedShards() ?? [],
       assembleEncodedInk: () =>
         rasterInkRef.current?.assembleEncoded() ?? encodeInkOps([]),
@@ -9678,6 +9703,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       <WhiteboardInkLab
         ref={rasterInkRef}
         enabled
+        preparing={preparing}
         tool={
           interactive && annotateCode && inkToolActive
             ? activeTool === "eraser"

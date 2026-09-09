@@ -87,6 +87,18 @@ export type InkLabUpResult = {
   undoPatch: InkLabSnapPatch | null;
 };
 
+export type InkLabBakeOptions = {
+  smoothing: number;
+  clothoid: boolean;
+  capillary: boolean;
+};
+
+export type InkLabRawLiftResult = InkLabUpResult & {
+  /** Raw overlay-space input for the off-thread final bake. */
+  bakeInput: SpineDot[];
+  bakeOptions: InkLabBakeOptions;
+};
+
 export type InkLabEngine = {
   attach(canvas: HTMLCanvasElement): InkLabBackend;
   setPen(pen: InkLabPen | null): void;
@@ -100,6 +112,8 @@ export type InkLabEngine = {
   clipLiveToChord(anchorIndex: number, current: InkLabSample): void;
   pointCount(): number;
   up(s?: InkLabSample): InkLabUpResult;
+  /** End the pointer synchronously, but leave the full Catmull bake to a worker. */
+  liftRaw(s?: InkLabSample): InkLabRawLiftResult;
   paint(): InkLabPaintStats;
   /**
    * Copy the in-DOM host into the committed snap. Call once at pointerdown;
@@ -260,10 +274,8 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   let blotHalts: InkLabHalt[] = [];
   let lastStamp = 0;
   let lastWall = 0;
-  /** Host region last written with live ink. Next clip must cover this too. */
-  let blitBox: StrokeAabb | null = null;
-  /** Tail-only blit while the live-smooth prefix is frozen. */
-  let liveTailBlit: StrokeAabb | null = null;
+  /** Previous smoothed tail in the private SDF surface (never the page snap). */
+  let liveRedrawBox: StrokeAabb | null = null;
   let liveSmoothCache: LiveSmoothCache | null = null;
   const liveSmoothScene: ScenePoint[] = [];
 
@@ -297,8 +309,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     blotHalts = [];
     lastStamp = 0;
     lastWall = 0;
-    blitBox = null;
-    liveTailBlit = null;
+    liveRedrawBox = null;
     liveSmoothCache = null;
     liveSmoothScene.length = 0;
     sdf?.clear();
@@ -747,6 +758,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         return all;
       };
       if (start <= 0) {
+        sdf.clear();
         sdf.upload(inst, segsOut);
         sdf.draw(fullBox());
       } else {
@@ -867,13 +879,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     }
   };
 
-  const liveClipRect = (extra: StrokeAabb) => {
-    if (!host) return null;
-    const box = { ...extra };
-    if (blitBox) unionAabb(box, blitBox);
-    return clipBlitRect(box, host.width, host.height);
-  };
-
   const composite = (): boolean => {
     lastSuffix = true;
     if (!host) return lastSuffix;
@@ -881,13 +886,14 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     if (!ctx) return lastSuffix;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     if (!drawing) {
-      blitBox = null;
       presentHost(ctx, null, snap);
       return lastSuffix;
     }
-    // While Writing only. Off / On Lift stay on the suffix path.
+    // The live preview is curved in both smoothing modes. "On Lift" controls
+    // when the final storage bake lands; it must not make sparse tablet events
+    // appear as a polyline until pointer-up.
     const liveSmooth =
-      pen?.smoothingMode === "live" && (pen.smoothing ?? 0) > 0 && spine.length >= 3;
+      (pen?.smoothing ?? 0) > 0 && spine.length >= 3;
     if (liveSmooth) {
       const reshaped = reshapeLiveSpine(
         spine,
@@ -896,66 +902,30 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         liveSmoothScene,
       );
       liveSmoothCache = reshaped.cache;
-      const extra = emptyAabb();
       const from = reshaped.from;
       const start = Math.max(0, Math.min(from, reshaped.points.length - 1));
+      const currentDirty = emptyAabb();
       if (reshaped.points.length > 0) {
-        expandAabb(extra, reshaped.points[start]!);
+        expandAabb(currentDirty, reshaped.points[start]!);
         for (let i = start + 1; i < reshaped.points.length; i++) {
-          expandAabb(extra, reshaped.points[i]!);
+          expandAabb(currentDirty, reshaped.points[i]!);
         }
       }
-      // Frozen prefix is already on the host. Do not keep the from=0
-      // whole-stroke blit or a full-page fill keeps copying the page.
-      const dirty = { ...extra };
-      if (from > 0) {
-        if (liveTailBlit) unionAabb(dirty, liveTailBlit);
-      } else {
-        liveTailBlit = null;
-        if (blitBox) unionAabb(dirty, blitBox);
-      }
-      const clip = host
-        ? clipBlitRect(dirty, host.width, host.height)
-        : null;
-      presentHost(ctx, clip, snap);
-      drawDots(reshaped.points, clip, from, dirty);
+      const dirty = { ...currentDirty };
+      if (from > 0 && liveRedrawBox) unionAabb(dirty, liveRedrawBox);
+      // Always restore the authoritative committed snapshot as a whole. The
+      // previous dirty-rectangle restore was the growing square: if host and
+      // snap diverged, every frame copied stale pixels back into that box.
+      presentHost(ctx, null, snap);
+      drawDots(reshaped.points, null, from, dirty);
+      liveRedrawBox = from > 0 ? currentDirty : null;
       lastSuffix = false;
-      const nextBlit = clip
-        ? {
-            minX: clip.x,
-            minY: clip.y,
-            maxX: clip.x + clip.w,
-            maxY: clip.y + clip.h,
-          }
-        : extra;
-      blitBox = nextBlit;
-      liveTailBlit = from > 0 ? nextBlit : null;
       return lastSuffix;
     }
     if (sdf) {
       lastSuffix = flushSdfLive();
-      const extra = lastSuffix ? lastLiveDirtyAabb() : { ...aabb };
-      const clip = liveClipRect(extra);
-      presentHost(ctx, clip, snap);
-      if (clip) {
-        ctx.drawImage(
-          sdf.canvas,
-          clip.x,
-          clip.y,
-          clip.w,
-          clip.h,
-          clip.x,
-          clip.y,
-          clip.w,
-          clip.h,
-        );
-        blitBox = {
-          minX: clip.x,
-          minY: clip.y,
-          maxX: clip.x + clip.w,
-          maxY: clip.y + clip.h,
-        };
-      }
+      presentHost(ctx, null, snap);
+      ctx.drawImage(sdf.canvas, 0, 0);
       drawTip(ctx);
     } else if (fallback) {
       presentHost(ctx, null, snap);
@@ -968,6 +938,63 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       lastSuffix = false;
     }
     return lastSuffix;
+  };
+
+  type LiftState = {
+    raw: SpineDot[];
+    grow: number;
+    halts: InkLabHalt[];
+    options: InkLabBakeOptions;
+  };
+
+  const beginLift = (s?: InkLabSample): LiftState => {
+    if (drawing && s) ingestBatch([s]);
+    if ((holding || holdPlateau) && tip && spine.length > 0) {
+      const last = spine[spine.length - 1]!;
+      last.r = tip.r;
+      last.rgb = tip.rgb;
+      last.a = tip.a;
+      last.slow = tip.slow;
+      if (blotTipGrow > 1e-3) stampHalt(last, blotTipGrow);
+    }
+    return {
+      raw: spine.map(cloneDot),
+      grow: blotTipGrow,
+      halts: blotHalts.map((halt) => ({ ...halt })),
+      options: {
+        smoothing: pen?.smoothing ?? INK_SMOOTHING_DEFAULT,
+        clothoid: pen?.clothoid ?? useClothoid,
+        capillary: pen?.capillary ?? useCapillary,
+      },
+    };
+  };
+
+  const finishLift = (
+    state: LiftState,
+    points: SpineDot[],
+    bake: InkLabBake,
+    bakeMs: number,
+    keepUndoPatch: boolean,
+  ): InkLabUpResult => {
+    applyBaked(points);
+    const undoPatch = keepUndoPatch && points.length > 0 ? copySnapPatch(aabb) : null;
+    blitLiveToSnap();
+    drawing = false;
+    holding = false;
+    holdPlateau = false;
+    sdf?.clear();
+    fallback?.clearLive();
+    resetAfterBlit();
+    liveSmoothCache = null;
+    liveSmoothScene.length = 0;
+    return {
+      bakeMs,
+      bake,
+      points: points.map(cloneDot),
+      blotTipGrow: state.grow,
+      blotHalts: state.halts,
+      undoPatch,
+    };
   };
 
   return {
@@ -1020,47 +1047,38 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       return spine.length;
     },
     up(s) {
-      if (drawing && s) ingestBatch([s]);
-      if ((holding || holdPlateau) && tip && spine.length > 0) {
-        const last = spine[spine.length - 1]!;
-        last.r = tip.r;
-        last.rgb = tip.rgb;
-        last.a = tip.a;
-        last.slow = tip.slow;
-        if (blotTipGrow > 1e-3) stampHalt(last, blotTipGrow);
-      }
+      const state = beginLift(s);
       const t0 = performance.now();
-      const clothoid = pen?.clothoid ?? useClothoid;
-      const capillary = pen?.capillary ?? useCapillary;
-      const baked = bakeSpine(spine, {
-        clothoid,
-        smoothing: pen?.smoothing ?? INK_SMOOTHING_DEFAULT,
+      const baked = bakeSpine(state.raw, {
+        clothoid: state.options.clothoid,
+        smoothing: state.options.smoothing,
       });
-      const points = capillary ? capillaryRelax(baked.points) : baked.points;
-      const exported = points.map(cloneDot);
-      const exportedGrow = blotTipGrow;
-      const exportedHalts = blotHalts.map((h) => ({ ...h }));
-      applyBaked(points);
-      const undoPatch = points.length > 0 ? copySnapPatch(aabb) : null;
-      blitLiveToSnap();
+      const points = state.options.capillary ? capillaryRelax(baked.points) : baked.points;
       const bakeMs = performance.now() - t0;
-      drawing = false;
-      holding = false;
-      holdPlateau = false;
-      sdf?.clear();
-      fallback?.clearLive();
-      resetAfterBlit();
-      liveSmoothCache = null;
-      liveSmoothScene.length = 0;
-      liveTailBlit = null;
-      return {
-        bakeMs,
-        bake: baked.bake,
-        points: exported,
-        blotTipGrow: exportedGrow,
-        blotHalts: exportedHalts,
-        undoPatch,
-      };
+      return finishLift(state, points, baked.bake, bakeMs, true);
+    },
+    liftRaw(s) {
+      const state = beginLift(s);
+      const t0 = performance.now();
+      // Reuse the bounded live-tail smoother so the committed pixels do not
+      // jump back to raw chords while the worker computes the final bake.
+      const preview =
+        state.options.smoothing > 0 && state.raw.length >= 3
+          ? reshapeLiveSpine(
+              state.raw,
+              state.options.smoothing,
+              liveSmoothCache,
+              liveSmoothScene,
+            ).points
+          : state.raw;
+      const result = finishLift(
+        state,
+        preview,
+        "catmull",
+        performance.now() - t0,
+        false,
+      );
+      return { ...result, bakeInput: state.raw, bakeOptions: state.options };
     },
     paint() {
       const t0 = performance.now();

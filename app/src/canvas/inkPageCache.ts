@@ -30,7 +30,7 @@ import {
   pageIdForOp,
   type PageFrame,
 } from "./inkPageIndex";
-import type { InkEraseOp, InkOp } from "./rasterInk";
+import { isHostBoundOp, type InkEraseOp, type InkOp } from "./rasterInk";
 import { opsAfterPartialErase, opsAfterStrokeErase, opsWithErasesBaked } from "./strokeEraser";
 
 export const INK_UNDO_CAP = 40;
@@ -89,6 +89,16 @@ export class InkPageBook {
     return this.opTotal > 0;
   }
 
+  /** Nested-scroll observers must not sort the whole hot set to answer this. */
+  hasHostBoundInk(): boolean {
+    for (const ops of this.hot.values()) {
+      for (const op of ops) {
+        if (isHostBoundOp(op)) return true;
+      }
+    }
+    return false;
+  }
+
   dirtyCount(): number {
     return this.dirty.size;
   }
@@ -127,10 +137,10 @@ export class InkPageBook {
     const next = Math.max(1, Math.floor(page) || 1);
     const last = lastPageId(this.frames);
     const wanted = new Set(lruWindow(next, last, this.radius));
-    let changed = next !== this.visiblePage;
     this.visiblePage = next;
     this.touchLru(next);
 
+    let changed = false;
     for (const pageId of wanted) {
       if (this.hot.has(pageId)) continue;
       if (this.hydrate(pageId)) changed = true;

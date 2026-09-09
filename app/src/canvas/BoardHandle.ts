@@ -145,6 +145,8 @@ export interface BoardHandle {
   /** Replace raster ink (notebook restore after the ink layer has mounted). */
   setInkOps(ops: InkOp[], opts?: { paint?: boolean }): void;
   ingestInkPages(pages: Map<number, EncodedInk>, opts?: { paint?: boolean }): void;
+  /** Paint restored ink in slices while the loading overlay is still up. */
+  primeInkSnap(): Promise<void>;
   takeDirtyInkPages(): Map<number, EncodedInk>;
   markInkPagesFlushed(pageIds: Iterable<number>): void;
   dirtyInkPageCount(): number;
