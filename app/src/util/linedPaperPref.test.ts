@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   isLinedPaperMode,
+  linedPaperCssGap,
   linedPaperLabel,
+  linedPaperScenePitch,
   linedPaperScreenPx,
+  linedPitchFromAppState,
   loadLinedPaperMode,
   nextLinedPaperMode,
   saveLinedPaperMode,
@@ -65,5 +68,24 @@ describe("lined paper persist", () => {
   it("falls back when the stored value is not one we know", () => {
     localStorage.setItem("whiteboard.linedPaper.v1", "legal");
     expect(loadLinedPaperMode()).toBe("off");
+  });
+});
+
+describe("lined paper scene pitch", () => {
+  it("locks the gap to the zoom it was written at", () => {
+    expect(linedPaperScenePitch("wide", 0.5)).toBe(LINED_PAPER_WIDE_SCREEN_PX / 0.5);
+    expect(linedPaperCssGap(LINED_PAPER_WIDE_SCREEN_PX / 0.5, 0.25)).toBe(
+      LINED_PAPER_WIDE_SCREEN_PX * 0.5,
+    );
+  });
+
+  it("reads a stored pitch, and recovers one from a saved camera", () => {
+    expect(linedPitchFromAppState({ linedPitch: 72, zoom: 0.4 })).toBe(72);
+    expect(linedPitchFromAppState({ zoom: 0.5 })).toBe(LINED_PAPER_WIDE_SCREEN_PX / 0.5);
+    expect(linedPitchFromAppState({ zoom: { value: 0.5 } })).toBe(LINED_PAPER_WIDE_SCREEN_PX / 0.5);
+    expect(linedPitchFromAppState({ zoom: 0.5 }, "college")).toBe(
+      LINED_PAPER_COLLEGE_SCREEN_PX / 0.5,
+    );
+    expect(linedPitchFromAppState(null)).toBe(0);
   });
 });

@@ -4,6 +4,7 @@ import {
   documentCameraAfterViewportChange,
   excalidrawViewportNeedsSync,
   keepZoomCenterCameraAfterViewportChange,
+  keepZoomKeepPanCameraAfterViewportChange,
   liveBoardViewSize,
   liveExcalidrawViewport,
 } from "./documentRotateCamera";
@@ -154,6 +155,44 @@ describe("keepZoomCenterCameraAfterViewportChange", () => {
       zoomMax: 1.75,
     });
     expect(inset.top / next.zoom - next.scrollY).toBeCloseTo(sceneYTop, 5);
+  });
+});
+
+describe("keepZoomKeepPanCameraAfterViewportChange", () => {
+  const page = { minX: 0, minY: 0, maxX: 3920, maxY: 4200 };
+
+  it("keeps the saved pan when zoom still fits", () => {
+    const next = keepZoomKeepPanCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 844,
+      prevZoom: 0.1,
+      prevScrollX: -1200,
+      prevScrollY: -400,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    expect(next.zoom).toBe(0.1);
+    expect(next.scrollX).toBeCloseTo(-1200, 5);
+    expect(next.scrollY).toBeCloseTo(-400, 5);
+  });
+
+  it("keeps the same scene point when it has to zoom out", () => {
+    const prevZoom = 0.5;
+    const prevScrollX = -800;
+    const sceneXLeft = inset.left / prevZoom - prevScrollX;
+    const next = keepZoomKeepPanCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 250,
+      prevZoom,
+      prevScrollX,
+      prevScrollY: -200,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    expect(next.zoom).toBeLessThan(prevZoom);
+    expect(inset.left / next.zoom - next.scrollX).toBeCloseTo(sceneXLeft, 5);
   });
 });
 

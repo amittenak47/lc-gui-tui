@@ -27,7 +27,7 @@ export interface BoardBlob {
    */
   v: 1;
   elements: unknown[];
-  appState: { scrollX: number; scrollY: number; zoom: number; pdfPage?: number };
+  appState: { scrollX: number; scrollY: number; zoom: number; pdfPage?: number; linedPitch?: number };
   /** Raster pen/eraser ops as written before the codec — still read, never written. */
   ink?: InkOp[];
   /**

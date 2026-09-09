@@ -128,7 +128,7 @@ import {
 import {
   documentCameraAfterViewportChange,
   excalidrawViewportNeedsSync,
-  keepZoomCenterCameraAfterViewportChange,
+  keepZoomKeepPanCameraAfterViewportChange,
   liveBoardViewSize,
   liveExcalidrawViewport,
 } from "./documentRotateCamera";
@@ -6054,6 +6054,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
          * portrait scrollX in a landscape hole — the off-center page.
          */
         const prevCamera = api.getAppState() as {
+          scrollX?: number;
           scrollY?: number;
           zoom?: { value?: number };
         };
@@ -6064,13 +6065,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           inset,
           viewWidth,
           prevZoom: riding?.live ? riding.zoom : (prevCamera.zoom?.value ?? 1),
+          prevScrollX: riding?.live ? riding.scrollX : (prevCamera.scrollX ?? 0),
           prevScrollY: riding?.live ? riding.scrollY : (prevCamera.scrollY ?? 0),
           zoomMin: FIT_ZOOM_MIN,
           zoomMax: ZOOM_MAX,
         };
         const rotated = keepDocumentY
           ? isDrawPageRegion(page)
-            ? keepZoomCenterCameraAfterViewportChange(keepYInput)
+            ? keepZoomKeepPanCameraAfterViewportChange(keepYInput)
             : documentCameraAfterViewportChange(keepYInput)
           : null;
         const zoom =
@@ -6585,7 +6587,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    */
   const recentreKeepPlace = useCallback(() => {
     const drawPage = isDrawPageRegion(mobileRegionRef.current);
-    if (drawPage) userAdjustedCameraRef.current = false;
     const page = peekPdfFilmCurrent(filmScope);
     const pass = () => {
       applyLiveBoxFit(true);
