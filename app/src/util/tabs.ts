@@ -460,6 +460,16 @@ export function sameEntity(a: TabRecord, b: TabRecord): boolean {
 }
 
 /**
+ * Whether the live workspace should write `notebookId` onto its chip.
+ *
+ * Skip null: a remount starts with no id in state, and writing that over a
+ * restored chip makes `sameEntity` miss, so Load opens a second Exam 1.
+ */
+export function shouldMirrorNotebookId(liveId: string | null | undefined): liveId is string {
+  return typeof liveId === "string" && liveId.length > 0;
+}
+
+/**
  * The record an `open` collapses onto, or null when it earns a new chip.
  *
  * Two things collapse an open: it is the same entity, or it is Practice and a

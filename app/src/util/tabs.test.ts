@@ -14,6 +14,7 @@ import {
   pinLive,
   promoteLive,
   sameEntity,
+  shouldMirrorNotebookId,
   splitChildren,
   splitEdgeAt,
   tabsReducer,
@@ -130,6 +131,13 @@ describe("tabsReducer", () => {
     );
     expect(state.tabs).toHaveLength(2);
     expect(state.activeId).toBe("b1");
+  });
+
+  it("does not let a live null notebook id wipe a restored chip", () => {
+    expect(shouldMirrorNotebookId(null)).toBe(false);
+    expect(shouldMirrorNotebookId("nb-7")).toBe(true);
+    expect(sameEntity(board("b1", "nb-7"), board("b2", null))).toBe(false);
+    expect(sameEntity(board("b1", "nb-7"), board("b2", "nb-7"))).toBe(true);
   });
 
   it("treats a workspace with no storage key yet as its own tab", () => {
