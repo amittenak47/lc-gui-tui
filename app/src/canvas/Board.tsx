@@ -168,6 +168,7 @@ import { eraserScreenRadius } from "./rasterInk";
 import { applyLinedSlotStyle, linedSlotCanSkip } from "./linedSlot";
 import { SPLIT_RESIZE_EVENT, splitResizePhase } from "../util/splitResize";
 import { reanchorInkOps } from "./reanchorInk";
+import { shouldSeedInkFromBlob } from "./inkRestore";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
 import {
   ANNOUNCE_HOLD_MS,
@@ -257,8 +258,10 @@ import {
   PDF_READING_EVENT,
 } from "../util/pdfReadingPref";
 import {
+  linedPaperCssGap,
   linedPaperLabel,
-  linedPaperScreenPx,
+  linedPaperScenePitch,
+  linedPitchFromAppState,
   loadLinedPaperMode,
   nextLinedPaperMode,
   saveLinedPaperMode,
@@ -1528,6 +1531,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [linedPaperMode, setLinedPaperMode] = useState<LinedPaperMode>(loadLinedPaperMode);
   const linedPaperRef = useRef(linedPaperMode);
   linedPaperRef.current = linedPaperMode;
+  /** Scene units between rules — travels with the notebook, not the screen. */
+  const linedPitchRef = useRef(0);
   /**
    * Ruled lines belong on pages you draw on.
    *
@@ -2599,10 +2604,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   /** Nested host scroll to restore after annotate/scroll class flips remount the pre. */
   const pendingHostScrollRef = useRef<HostScrollSnapshot[] | null>(null);
+  const rememberedHostScrollRef = useRef<HostScrollSnapshot[]>([]);
 
   const toggleAnnotate = useCallback(() => {
     wakeChromeRef.current();
     pendingHostScrollRef.current = snapshotHostScrollIn(contentSlotNodeRef.current);
+    rememberedHostScrollRef.current = pendingHostScrollRef.current;
     const live = liveCameraRef.current;
     const state = apiRef.current?.getAppState() as
       | {
@@ -2648,8 +2655,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const saved = pendingHostScrollRef.current;
     if (!saved) return;
     restoreHostScrollIn(contentSlotNodeRef.current, saved);
+    rememberedHostScrollRef.current = saved;
     const replay = () => {
       restoreHostScrollIn(contentSlotNodeRef.current, saved);
+      rememberedHostScrollRef.current = saved;
       refreshPanRideNodes();
       rasterInkRef.current?.replayCommitted();
       pendingHostScrollRef.current = null;
@@ -2763,8 +2772,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const root = boardRef.current;
     const width = roundPx(root?.clientWidth ?? 0);
     const height = roundPx(root?.clientHeight ?? 0);
-    const gap = linedPaperScreenPx(linedPaperRef.current);
-    if (!root || gap <= 0 || width < 8 || height < 8) {
+    if (!root || width < 8 || height < 8) {
       if (lastLinedSlotRef.current !== null) {
         lastLinedSlotRef.current = null;
         setLinedSlotOn(false);
@@ -2783,10 +2791,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
     const zoom = Math.max(0.05, state.zoom?.value ?? 1);
     const scrollY = state.scrollY ?? 0;
-    const pitchScene = gap / zoom;
+    let scenePitch = linedPitchRef.current;
+    if (!(scenePitch > 0)) {
+      scenePitch = linedPaperScenePitch(linedPaperRef.current, zoom);
+      if (scenePitch > 0) linedPitchRef.current = scenePitch;
+    }
+    const gap = linedPaperCssGap(scenePitch, zoom);
+    if (!(gap > 0)) {
+      if (lastLinedSlotRef.current !== null) {
+        lastLinedSlotRef.current = null;
+        setLinedSlotOn(false);
+      }
+      return;
+    }
     const originY = pageBoundsRef.current?.minY ?? 0;
     // Lock rules from the frame top when a page exists; otherwise scene 0.
-    const firstRulePx = (originY + pitchScene + scrollY) * zoom;
+    const firstRulePx = (originY + scenePitch + scrollY) * zoom;
     const phase = ((firstRulePx - gap + 1) % gap + gap) % gap;
 
     const next = {
@@ -4239,6 +4259,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!drag || drag.pointerId !== event.pointerId) return;
       if (!handPanningRef.current) return;
       if (!canOwnScroll()) return;
+      if (rasterInkRef.current?.isDrawing()) {
+        drag.sideScroll = null;
+        drag.sideScrollActive = false;
+        return;
+      }
       /*
        * Live underline/highlight drag owns the finger. Opening the panel
        * must not steal pan — a mark taller than the viewport needs scroll.
@@ -4768,6 +4793,42 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     activeTool === "freedraw" ||
     activeTool === "eraser" ||
     activeTool === "highlighter";
+
+  /*
+   * Keep nested `pre` scroll while the pen is armed.
+   *
+   * Annotate class flips and ink `onChange` can replace the fence; the new
+   * node starts at 0. Remember the last settled place in reading/hand, and
+   * write it back on every nested scroll and DOM swap while a drawing tool
+   * is up so letters of one word do not bind to two offsets.
+   */
+  useEffect(() => {
+    const slot = contentSlotNodeRef.current;
+    if (!slot) return;
+    const freeze = annotateCode && inkToolActive;
+    const onScroll = () => {
+      if (freeze) {
+        restoreHostScrollIn(slot, rememberedHostScrollRef.current);
+        return;
+      }
+      rememberedHostScrollRef.current = snapshotHostScrollIn(slot);
+    };
+    slot.addEventListener("scroll", onScroll, true);
+    const mo =
+      typeof MutationObserver === "function"
+        ? new MutationObserver(() => {
+            if (freeze) restoreHostScrollIn(slot, rememberedHostScrollRef.current);
+            else rememberedHostScrollRef.current = snapshotHostScrollIn(slot);
+          })
+        : null;
+    mo?.observe(slot, { childList: true, subtree: true });
+    if (freeze) restoreHostScrollIn(slot, rememberedHostScrollRef.current);
+    else rememberedHostScrollRef.current = snapshotHostScrollIn(slot);
+    return () => {
+      slot.removeEventListener("scroll", onScroll, true);
+      mo?.disconnect();
+    };
+  }, [annotateCode, inkToolActive]);
 
   // Eraser ring follows the pointer via window listeners so a click-without-move
   // does not lose the brush (pointerleave on the board fired sporadically).
@@ -8553,6 +8614,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             scrollX: state.scrollX ?? 0,
             scrollY: state.scrollY ?? 0,
             zoom: state.zoom?.value ?? 1,
+            ...(linedPitchRef.current > 0 ? { linedPitch: linedPitchRef.current } : {}),
             pdfPage: (() => {
               const origin = pageBoundsRef.current?.minY ?? 0;
               const frames = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
@@ -8620,11 +8682,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // Also drop tool/selection: a board saved while annotating would restore
         // Select, and finger-scroll dies until the toolbar is toggled.
         const saved = { ...((appState as Record<string, unknown> | undefined) ?? {}) };
+        linedPitchRef.current = linedPitchFromAppState(appState, "wide");
         delete saved.zoom;
         delete saved.scrollX;
         delete saved.scrollY;
         delete saved.activeTool;
         delete saved.selectedElementIds;
+        delete saved.linedPitch;
         if (options?.files && apiRef.current?.addFiles) {
           const list = Object.values(options.files).map((file) => ({
             id: file.id,
@@ -8642,19 +8706,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         /*
          * Ink is absolute scene points, so it has to be carried across the heal.
          *
-         * `healBoardLayout` re-stacks the saved frames onto today's rules, and a
-         * board saved under different geometry lands with every page below the
-         * first at a new Y. Elements ride that out on their `lcRegionOy`
-         * offsets; pen strokes have no frame to hang off and would be left
-         * behind on the desk between pages.
+         * Live notebooks store strokes in shards. The blob's `inkC` is empty on
+         * purpose — seeding that would `replaceAll([])` and mark pages dirty
+         * before restoreInk ingests the shards.
          */
-        rasterInkRef.current?.setOps(
-          reanchorInkOps(
-            chromeStripped as unknown as LayoutElement[],
-            healed as unknown as LayoutElement[],
-            options?.ink ?? [],
-          ),
-        );
+        const blobInk = options?.ink ?? [];
+        if (shouldSeedInkFromBlob(blobInk)) {
+          rasterInkRef.current?.setOps(
+            reanchorInkOps(
+              chromeStripped as unknown as LayoutElement[],
+              healed as unknown as LayoutElement[],
+              blobInk,
+            ),
+          );
+        }
         applyInkPaletteHistoryRef.current(
           normalizeInkPaletteHistory(options?.inkPalettes, themeId),
         );
@@ -9159,6 +9224,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                         linedPaperRef.current = next;
                         setLinedPaperMode(next);
                         saveLinedPaperMode(next);
+                        if (next !== "off" && !(linedPitchRef.current > 0)) {
+                          const api = apiRef.current;
+                          const zoom = Math.max(
+                            0.05,
+                            (api?.getAppState() as { zoom?: { value?: number } } | undefined)?.zoom
+                              ?.value ?? 1,
+                          );
+                          const pitch = linedPaperScenePitch(next, zoom);
+                          if (pitch > 0) linedPitchRef.current = pitch;
+                        }
                         reflowReadingText();
                         requestAnimationFrame(reportLinedSlot);
                       }}

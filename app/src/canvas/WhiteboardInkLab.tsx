@@ -18,6 +18,7 @@ import { InkPageBook } from "./inkPageCache";
 import { canvasBitmapFromClient } from "./canvasPointer";
 import { commitOverlay, pushCapped, redoOverlay, undoOverlay } from "./inkLab/history";
 import { isInkLabPenOp, overlaySpineFromDrawOp, splitInkOpsForLabReplay } from "./inkLab/replay";
+import { opsWithErasesBaked } from "./strokeEraser";
 import { keepLivePaintPump, samePaintedView, shouldFlushLiveHud, skipCommittedReplay, usePreStrokeStamp } from "./inkLab/liveHost";
 import { REPLAY_SLICE_MS, replayUntil } from "./inkLab/replayJob";
 import {
@@ -62,17 +63,23 @@ import {
 } from "./rasterInk";
 import {
   DOC_PAGE_SELECTOR,
-  docForScrollHost,
-  hostKeyInDoc,
   hostSceneBounds,
-  pinHostScroll,
+  hostScrollSnapshotOf,
+  mergeHostScrollSnapshots,
+  pickSettledHostScroll,
+  pinHostScrollSnapshot,
+  restoreDroppedHostScroll,
   scrollHostAtPoint,
   scrollHostsIn,
+  snapshotHostScrollIn,
+  upsertHostScrollSnapshot,
+  type HostScrollSnapshot,
   type ScrollHostPaintState,
 } from "./scrollHost";
 import {
   OVERDRAW_REBASE_HEADROOM,
   PAN_REBASE_FRACTION,
+  overdrawMarginPx,
   overdrawnViewport,
   panDelta,
   type PanCamera,
@@ -319,6 +326,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const drawingRef = useRef(false);
     const strokeHostRef = useRef<ScrollHostPaintState | null>(null);
     const strokeHostElRef = useRef<HTMLElement | null>(null);
+    const strokeHostPinRef = useRef<HostScrollSnapshot | null>(null);
+    const lastHostScrollRef = useRef<HostScrollSnapshot[]>([]);
     const highlightPtsRef = useRef<ScenePoint[] | null>(null);
     const erasePtsRef = useRef<ScenePoint[] | null>(null);
     const rafRef = useRef<number | null>(null);
@@ -398,6 +407,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const backendRef = useRef("none");
     const marginYRef = useRef(0);
     const paintedViewRef = useRef<PaintedLabView | null>(null);
+    const cameraMovingRef = useRef(false);
+    const sizeToHostRef = useRef<() => void>(() => {});
 
     const readViews = useCallback(() => {
       const canvas = canvasRef.current;
@@ -418,6 +429,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         dpr,
         marginY,
       };
+    }, []);
+
+    const boardRoot = useCallback((): Element | null => {
+      return (
+        canvasRef.current?.closest(".lc-board") ??
+        hostRef.current?.closest(".lc-board") ??
+        null
+      );
     }, []);
 
     const collectScrollHosts = useCallback((): readonly ScrollHostPaintState[] => {
@@ -453,49 +472,66 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       return map;
     }, [collectScrollHosts]);
 
+    const holdNestedScroll = useCallback(() => {
+      const board = boardRoot();
+      if (!board) return;
+      restoreDroppedHostScroll(board, lastHostScrollRef.current);
+      const pin = strokeHostPinRef.current;
+      if (!pin) return;
+      const el = pinHostScrollSnapshot(board, pin);
+      if (el) strokeHostElRef.current = el;
+    }, [boardRoot]);
+
     const captureStrokeHost = useCallback(
       (clientX: number, clientY: number) => {
         const canvas = canvasRef.current;
-        if (!canvas) {
+        const board = boardRoot();
+        const clear = () => {
           strokeHostRef.current = null;
           strokeHostElRef.current = null;
+          strokeHostPinRef.current = null;
+        };
+        if (!canvas || !board) {
+          clear();
           return;
         }
         const hostEl = scrollHostAtPoint(clientX, clientY);
         if (!hostEl) {
-          strokeHostRef.current = null;
-          strokeHostElRef.current = null;
+          clear();
           return;
         }
-        const doc = docForScrollHost(hostEl);
-        const key = doc ? hostKeyInDoc(hostEl, doc) : null;
-        if (key == null) {
-          strokeHostRef.current = null;
-          strokeHostElRef.current = null;
+        const live = hostScrollSnapshotOf(hostEl, board);
+        if (!live) {
+          clear();
           return;
         }
-        const listed = collectScrollHosts().find((host) => host.key === key);
-        strokeHostElRef.current = hostEl;
+        const remembered = lastHostScrollRef.current.find(
+          (s) => s.doc === live.doc && s.key === live.key,
+        );
+        const pin = pickSettledHostScroll(live, remembered);
+        const pinnedEl = pinHostScrollSnapshot(board, pin) ?? hostEl;
+        lastHostScrollRef.current = upsertHostScrollSnapshot(lastHostScrollRef.current, pin);
+        strokeHostPinRef.current = pin;
+        strokeHostElRef.current = pinnedEl;
+        const listed = collectScrollHosts().find((host) => host.key === pin.key);
         strokeHostRef.current =
-          listed ??
-          ({
-            key,
-            scrollLeft: hostEl.scrollLeft,
-            scrollTop: hostEl.scrollTop,
-            bounds: hostSceneBounds(hostEl, canvas.getBoundingClientRect(), readViews().paintView),
-          } satisfies ScrollHostPaintState);
+          listed != null
+            ? { ...listed, scrollLeft: pin.left, scrollTop: pin.top }
+            : ({
+                key: pin.key,
+                scrollLeft: pin.left,
+                scrollTop: pin.top,
+                bounds: hostSceneBounds(
+                  pinnedEl,
+                  canvas.getBoundingClientRect(),
+                  readViews().paintView,
+                ),
+              } satisfies ScrollHostPaintState);
       },
-      [collectScrollHosts, readViews],
+      [boardRoot, collectScrollHosts, readViews],
     );
 
-    const pinStrokeHostScroll = useCallback(() => {
-      const el = strokeHostElRef.current;
-      const host = strokeHostRef.current;
-      if (!el || !host) return;
-      pinHostScroll(el, host.scrollLeft, host.scrollTop);
-    }, []);
-
-    const presentCommitted = useCallback((liveStamp: InkOp | null = null) => {
+    const presentCommitted = useCallback((liveStamp: InkOp | null = null, instant = false) => {
       if (skipCommittedReplay(drawingRef.current, liveStamp)) return;
       const canvas = canvasRef.current;
       const engine = engineRef.current;
@@ -512,7 +548,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         };
       };
       const stampTail = (extra: InkOp | null) => {
-        const { stamp } = splitInkOpsForLabReplay(bookRef.current.paintOps());
+        const { stamp } = splitInkOpsForLabReplay(
+          opsWithErasesBaked(bookRef.current.paintOps()),
+        );
         const ops = extra ? [...stamp, extra] : stamp;
         if (ops.length > 0) {
           engine.paintOntoSnap((sctx) => {
@@ -547,6 +585,17 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         return;
       }
 
+      /*
+       * Camera rebase must land in one present. Slicing across rAFs is how a
+       * flick looked like the page reloading — each slice cleared and redrew
+       * more spines — and it is only needed when opening a dense book.
+       */
+      if (instant) {
+        engine.replaySpines(strokes);
+        stampTail(liveStamp);
+        return;
+      }
+
       let i = 0;
       const step = () => {
         if (gen !== replayGenRef.current) return;
@@ -566,7 +615,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
 
     const remeshOverlaysFromBook = useCallback(() => {
       const { paintView, dpr } = readViews();
-      const { lab } = splitInkOpsForLabReplay(bookRef.current.paintOps());
+      const { lab } = splitInkOpsForLabReplay(
+        opsWithErasesBaked(bookRef.current.paintOps()),
+      );
       overlayRef.current = lab.map((op) => overlaySpineFromDrawOp(op, paintView, dpr));
       const redo: SpineDot[][] = [];
       for (const entry of bookRef.current.redo) {
@@ -584,10 +635,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     }, []);
 
     const rebuildAndReplay = useCallback(
-      (keepPixels = false) => {
+      (keepPixels = false, instant = false) => {
         remeshOverlaysFromBook();
         if (!keepPixels) forgetPixelHistory();
-        presentCommitted();
+        presentCommitted(null, instant);
       },
       [forgetPixelHistory, presentCommitted, remeshOverlaysFromBook],
     );
@@ -607,7 +658,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         engineRef.current?.paint();
         return;
       }
-      rebuildAndReplay();
+      rebuildAndReplay(false, true);
     }, [readViews, rebuildAndReplay]);
 
     const stampOpOntoSnap = useCallback(
@@ -747,13 +798,17 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (drawingRef.current) return true;
           const painted = paintedViewRef.current;
           if (!painted) return false;
-          const delta = panDelta(
-            live,
-            painted,
-            { width: painted.width, height: painted.height },
-            PAN_REBASE_FRACTION,
-            { y: Math.max(1, painted.marginY) * OVERDRAW_REBASE_HEADROOM },
-          );
+          const marginY = painted.marginY;
+          const delta =
+            marginY > 0
+              ? panDelta(
+                  live,
+                  painted,
+                  { width: painted.width, height: painted.height },
+                  PAN_REBASE_FRACTION,
+                  { y: marginY * OVERDRAW_REBASE_HEADROOM },
+                )
+              : panDelta(live, painted, painted);
           return !delta.rebase;
         },
         commitCamera() {
@@ -763,10 +818,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           presentIfCameraMoved();
         },
         setCameraMoving(moving) {
+          cameraMovingRef.current = moving;
           if (moving) return;
           const canvas = canvasRef.current;
           if (canvas?.style.transform) canvas.style.transform = "";
           if (drawingRef.current) return;
+          sizeToHostRef.current();
           presentIfCameraMoved();
         },
         getOps() {
@@ -775,7 +832,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         setOps(ops) {
           bookRef.current.replaceAll(cloneOps(ops));
           if (drawingRef.current) return;
-          rebuildAndReplay();
+          rebuildAndReplay(false, true);
         },
         getOpCount() {
           return bookRef.current.opCount();
@@ -795,7 +852,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         ingestInkPages(pages) {
           bookRef.current.ingestEncodedPages(pages);
           if (drawingRef.current) return;
-          rebuildAndReplay();
+          rebuildAndReplay(false, true);
         },
         assembleEncoded() {
           return bookRef.current.assembleEncoded();
@@ -849,19 +906,20 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       if (!host || !canvas) return;
 
       const sizeToHost = () => {
-        // Frozen while the nib is down: a resize here would remesh the page.
-        // Apply it on lift. Overlay is 1:1 — pan is off while this canvas is
-        // the ink surface, so the 75% overdraw bands are never in view.
-        if (drawingRef.current) return;
+        // Frozen while the nib is down or the page is riding: a resize here
+        // would remesh the page. Apply it on lift / settle. Overdraw is the
+        // pan budget: without it setPanOffset rebases after <1px and every
+        // scroll frame remeshes.
+        if (drawingRef.current || cameraMovingRef.current) return;
         const dpr = window.devicePixelRatio || 1;
         const cssW = Math.max(1, host.clientWidth);
         const cssH = Math.max(1, host.clientHeight);
-        const marginY = 0;
+        const marginY = overdrawMarginPx(cssH, dpr);
         marginYRef.current = marginY;
-        const canvasCssH = cssH;
+        const canvasCssH = cssH + 2 * marginY;
         const pixelW = Math.max(1, Math.round(cssW * dpr));
         const pixelH = Math.max(1, Math.round(canvasCssH * dpr));
-        const top = "0px";
+        const top = `${-marginY}px`;
         const resized =
           canvas.width !== pixelW ||
           canvas.height !== pixelH ||
@@ -873,15 +931,16 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (resized) {
           canvas.width = pixelW;
           canvas.height = pixelH;
-          engineRef.current?.paint();
+          if (engineRef.current) rebuildAndReplay(false, true);
         }
       };
+      sizeToHostRef.current = sizeToHost;
 
       sizeToHost();
       const engine = createInkLabEngine();
       engineRef.current = engine;
       backendRef.current = engine.attach(canvas);
-      rebuildAndReplay();
+      rebuildAndReplay(false, true);
       const wantMeter = () => perfOverlayRef.current || perfBarRef.current;
       if (wantMeter()) {
         loadBarRef.current?.show(loadMeterRef.current.peek(), {
@@ -1026,6 +1085,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           }
           pending.decided = true;
           pending.opened = true;
+          holdNestedScroll();
           drawingRef.current = false;
           highlightPtsRef.current = null;
           pendingStampPatchRef.current = null;
@@ -1126,7 +1186,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           armWheel();
         }
         drawingRef.current = true;
-        pinStrokeHostScroll();
+        holdNestedScroll();
         try {
           canvas.setPointerCapture(event.pointerId);
         } catch {
@@ -1205,7 +1265,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           pending.lastY = event.clientY;
         }
         if (!drawingRef.current) return;
-        pinStrokeHostScroll();
+        holdNestedScroll();
         if (toolRef.current === "highlighter") {
           const live = highlightPtsRef.current;
           if (!live) return;
@@ -1252,6 +1312,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           }
         }
         if (!drawingRef.current) return;
+        holdNestedScroll();
         drawingRef.current = false;
         stopPaintPump();
         if (toolRef.current === "highlighter") {
@@ -1330,15 +1391,17 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
                 presentCommitted();
               }
             } else {
-              bookRef.current.commit(op);
-              overlayRedoRef.current = [];
-              if (isHostBoundOp(op) || !patch) {
+              const kept = bookRef.current.partialErase(op);
+              if (kept) {
                 rememberCommitPatch(null);
-                presentCommitted();
+                rebuildAndReplay();
+                onChangeRef.current?.();
+              } else if (patch) {
+                engine.restoreSnapPatch(patch);
+                engine.paint();
               } else {
-                rememberCommitPatch(patch);
+                presentCommitted();
               }
-              onChangeRef.current?.();
             }
           } else if (patch) {
             engine.restoreSnapPatch(patch);
@@ -1436,16 +1499,17 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         engine.destroy();
         engineRef.current = null;
       };
-    }, [captureStrokeHost, enabled, pinStrokeHostScroll, presentCommitted, readViews, rebuildAndReplay, stampOpOntoSnap]);
+    }, [captureStrokeHost, enabled, holdNestedScroll, presentCommitted, readViews, rebuildAndReplay, stampOpOntoSnap]);
 
     /**
      * Nested scroll moves host-bound ink — remesh when any host scrolls.
      *
      * Scroll does not bubble; capture on the board hears every nested host.
      * Per-host listeners plus MutationObserver/ResizeObserver pick up
-     * scrollers that appear after the first scan. While the nib is down, put
-     * the captured host back instead — a sideways stroke used to drive
-     * `scrollLeft` toward 0.
+     * scrollers that appear after the first scan. Pin by `{ doc, key }` while
+     * a drawing tool is armed: React replacing the `<pre>` used to leave the
+     * captured node disconnected, so `scrollLeft` snapped to 0 and letters
+     * bound against two different offsets.
      */
     useEffect(() => {
       if (!enabled) return;
@@ -1455,15 +1519,18 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       let frame: number | null = null;
       let attached: HTMLElement[] = [];
       const onScroll = () => {
-        if (drawingRef.current) {
-          pinStrokeHostScroll();
-          return;
+        if (drawingRef.current || toolRef.current) {
+          holdNestedScroll();
+          if (drawingRef.current) return;
+        } else {
+          lastHostScrollRef.current = snapshotHostScrollIn(board);
         }
         if (!bookRef.current.paintOps().some((op) => isHostBoundOp(op))) return;
         if (frame != null) return;
         frame = requestAnimationFrame(() => {
           frame = null;
           if (drawingRef.current) return;
+          if (toolRef.current) holdNestedScroll();
           forgetPixelHistory();
           presentCommitted();
         });
@@ -1484,10 +1551,15 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         }
       };
       rescanHosts();
+      if (!toolRef.current) lastHostScrollRef.current = snapshotHostScrollIn(board);
       board.addEventListener("scroll", onScroll, { capture: true, passive: true });
       const mo =
         typeof MutationObserver === "function"
-          ? new MutationObserver(() => rescanHosts())
+          ? new MutationObserver(() => {
+              rescanHosts();
+              if (drawingRef.current || toolRef.current) holdNestedScroll();
+              else lastHostScrollRef.current = snapshotHostScrollIn(board);
+            })
           : null;
       mo?.observe(board, { childList: true, subtree: true });
       const ro =
@@ -1507,7 +1579,28 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         ro?.disconnect();
         if (frame != null) cancelAnimationFrame(frame);
       };
-    }, [enabled, forgetPixelHistory, pinStrokeHostScroll, presentCommitted]);
+    }, [enabled, forgetPixelHistory, holdNestedScroll, presentCommitted]);
+
+    useEffect(() => {
+      if (!enabled) return;
+      const board = boardRoot();
+      if (!board) return;
+      if (!tool) {
+        lastHostScrollRef.current = snapshotHostScrollIn(board);
+        strokeHostPinRef.current = null;
+        return;
+      }
+      const apply = () => {
+        lastHostScrollRef.current = mergeHostScrollSnapshots(
+          lastHostScrollRef.current,
+          snapshotHostScrollIn(board),
+        );
+        restoreDroppedHostScroll(board, lastHostScrollRef.current);
+      };
+      apply();
+      const id = requestAnimationFrame(apply);
+      return () => cancelAnimationFrame(id);
+    }, [boardRoot, enabled, tool]);
 
     useEffect(() => {
       if (!perfOverlay && !perfBar) {

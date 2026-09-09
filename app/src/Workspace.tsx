@@ -61,6 +61,7 @@ import {
 } from "./util/hubAutoSyncPref";
 import { loadBoardComponent, peekBoardComponent, type BoardComponent } from "./canvas/boardChunk";
 import { inkOpsFrom } from "./canvas/inkCodec";
+import { inkRestoreSource } from "./canvas/inkRestore";
 import { drainDirtyInkArchives } from "./canvas/inkArchiveClient";
 import type { BoardHandle, BoardBlob, ScreenRect } from "./canvas/BoardHandle";
 import { studentAuthoredElements, studentElements } from "./canvas/capture";
@@ -451,8 +452,17 @@ function consumeSessionColdWorkspace(): boolean {
   return true;
 }
 
-async function flushDirtyInk(board: BoardHandle, docKey: string | null): Promise<void> {
-  if (!docKey || board.isInking()) return;
+async function flushDirtyInk(
+  board: BoardHandle,
+  docKey: string | null,
+  attempt = 0,
+): Promise<void> {
+  if (!docKey) return;
+  if (board.isInking()) {
+    if (attempt >= 8) return;
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    return flushDirtyInk(board, docKey, attempt + 1);
+  }
   const dirty = board.takeDirtyInkPages();
   if (dirty.size === 0) return;
   try {
@@ -466,17 +476,14 @@ async function flushDirtyInk(board: BoardHandle, docKey: string | null): Promise
 }
 
 async function restoreInk(board: BoardHandle, docKey: string | null, blob: { ink?: unknown; inkC?: unknown }): Promise<void> {
-  if (docKey) {
-    const shards = await getInkPages(docKey);
-    if (shards.size > 0) {
-      // Shards are the live copy, including a page that is now empty after an
-      // erase. Falling through to pad JSON would put the deleted strokes back.
-      board.ingestInkPages(shards);
-      return;
-    }
-  }
+  const shards = docKey ? await getInkPages(docKey) : new Map();
   const ops = inkOpsFrom(blob);
-  if (ops.length > 0) board.setInkOps(ops);
+  const source = inkRestoreSource(shards.size, ops.length);
+  if (source === "shards") {
+    board.ingestInkPages(shards);
+    return;
+  }
+  if (source === "blob") board.setInkOps(ops);
 }
 
 /**
