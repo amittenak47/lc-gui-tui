@@ -42,7 +42,14 @@ function fallbackSceneRadius(op: InkDrawOp, pressure: number): number {
   return labNibRadius(0, 0, 1, pressure, size);
 }
 
-export function labSpineFromDrawOp(op: InkDrawOp): SpineDot[] {
+/** Append a bounded point range while preserving distance-dependent deposit. */
+export function appendLabSpineRange(
+  op: InkDrawOp,
+  out: SpineDot[],
+  from: number,
+  to: number,
+  initialConsumed = 0,
+): number {
   const fade = op.speedFade ?? 0;
   const depositPen = {
     maxFullness: op.maxFullness,
@@ -50,8 +57,11 @@ export function labSpineFromDrawOp(op: InkDrawOp): SpineDot[] {
     pressureSensitive: op.pressureSensitive,
     boldness: op.boldness ?? 1,
   };
-  let consumed = 0;
-  return op.points.map((p, i) => {
+  let consumed = initialConsumed;
+  const start = Math.max(0, from);
+  const end = Math.min(op.points.length, Math.max(start, to));
+  for (let i = start; i < end; i++) {
+    const p = op.points[i]!;
     if (i > 0) {
       const prev = op.points[i - 1]!;
       const nib = Math.max(p.radius ?? prev.radius ?? 4, 1e-6);
@@ -62,7 +72,7 @@ export function labSpineFromDrawOp(op: InkDrawOp): SpineDot[] {
         ? labDotWashRgb(op.color, p.slowness, fade)
         : dryWashRgb(op.color, 1);
     washed = labMixDepositRgb(washed, labDepositAmt(depositPen, p.pressure, consumed));
-    return {
+    out.push({
       x: p.x,
       y: p.y,
       r: p.radius != null && p.radius > 0 ? p.radius : fallbackSceneRadius(op, p.pressure),
@@ -70,8 +80,15 @@ export function labSpineFromDrawOp(op: InkDrawOp): SpineDot[] {
       a: 1,
       p: p.pressure,
       slow: p.slowness,
-    };
-  });
+    });
+  }
+  return consumed;
+}
+
+export function labSpineFromDrawOp(op: InkDrawOp): SpineDot[] {
+  const out: SpineDot[] = [];
+  appendLabSpineRange(op, out, 0, op.points.length);
+  return out;
 }
 
 /** Inverse of Board's overlay → scene bake. Ink lab replay is overlay pixels. */

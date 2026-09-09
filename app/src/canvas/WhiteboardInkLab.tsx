@@ -19,7 +19,7 @@ import { pageIdAtViewport, type PageFrame } from "./inkPageIndex";
 import { canvasBitmapFromClient } from "./canvasPointer";
 import { commitOverlay, dropRedoStacks, pushCapped, redoOverlay, undoOverlay } from "./inkLab/history";
 import { isInkLabPenOp, overlaySpineFromDrawOp, splitInkOpsForLabReplay } from "./inkLab/replay";
-import { opsWithErasesBaked } from "./strokeEraser";
+import { appendErasePathPoint, opsWithErasesBaked } from "./strokeEraser";
 import { bakeSpineOffThread } from "./inkLab/bakeClient";
 import {
   inkCanvasPixelsChanged,
@@ -28,15 +28,22 @@ import {
   instantReplayOnFirstPresent,
   instantReplayOnPageWindow,
   instantReplayOnPointerDown,
+  instantReplayOnUndo,
   keepLivePaintPump,
   mutationIsInkChrome,
   remeshOnCameraMovingEnd,
   samePaintedView,
+  shouldFlushLiveHud,
   skipCommittedReplay,
   skipReplayOnWheelAbort,
   usePreStrokeStamp,
 } from "./inkLab/liveHost";
-import { EraseBakeJob, REPLAY_SLICE_MS, replayUntil } from "./inkLab/replayJob";
+import {
+  EraseBakeJob,
+  OverlaySpineJob,
+  REPLAY_POINT_CHUNK,
+  REPLAY_SLICE_MS,
+} from "./inkLab/replayJob";
 import {
   livePresentStride,
   medianMs,
@@ -676,13 +683,27 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return;
         }
 
-        let i = 0;
+        let strokeIndex = 0;
+        let pointIndex = 0;
         const step = () => {
           if (gen !== replayGenRef.current) return;
-          i = replayUntil(i, strokes.length, () => performance.now(), REPLAY_SLICE_MS, (idx) => {
-            engine.appendSpines([strokes[idx]!]);
-          });
-          if (i < strokes.length) {
+          const started = performance.now();
+          let didWork = false;
+          while (strokeIndex < strokes.length) {
+            if (didWork && performance.now() - started >= REPLAY_SLICE_MS) break;
+            const stroke = strokes[strokeIndex]!;
+            if (stroke.length === 0 || pointIndex >= stroke.length) {
+              strokeIndex += 1;
+              pointIndex = 0;
+              continue;
+            }
+            didWork = true;
+            const end = Math.min(stroke.length, pointIndex + REPLAY_POINT_CHUNK);
+            const start = pointIndex === 0 ? 0 : pointIndex - 1;
+            engine.appendSpines([stroke.slice(start, end)]);
+            pointIndex = end;
+          }
+          if (strokeIndex < strokes.length) {
             replayRafRef.current = requestAnimationFrame(step);
             return;
           }
@@ -693,9 +714,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       });
     }, [readViews, scrollHostLookup]);
 
-    const remeshOverlaysFromBook = useCallback(() => {
+    const remeshOverlaysFromOps = useCallback((ops: readonly InkOp[]) => {
       const { paintView, dpr } = readViews();
-      const { lab } = prepareReplaySync();
+      const split = splitInkOpsForLabReplay(ops);
+      preparedReplayRef.current = { ...split, revision: bookRef.current.revision() };
+      const { lab } = split;
       overlayRef.current = lab.map((op) => overlaySpineFromDrawOp(op, paintView, dpr));
       const redo: SpineDot[][] = [];
       for (const entry of bookRef.current.redo) {
@@ -705,6 +728,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       }
       overlayRedoRef.current = redo;
     }, [readViews]);
+
+    const remeshOverlaysFromBook = useCallback(() => {
+      remeshOverlaysFromOps(opsWithErasesBaked(bookRef.current.paintOps()));
+    }, [remeshOverlaysFromOps]);
 
     const forgetPixelHistory = useCallback(() => {
       snapUndoRef.current = [];
@@ -745,9 +772,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             cancelAnimationFrame(replayRafRef.current);
             replayRafRef.current = null;
           }
-          const overlay: SpineDot[][] = [];
+          let overlay: SpineDot[][] = [];
           let prepared: PreparedReplay | null = null;
-          let i = 0;
+          let meshJob: OverlaySpineJob | null = null;
           const afterRemesh = () => {
             if (gen !== replayGenRef.current) return;
             if (!prepared || bookRef.current.revision() !== revision) {
@@ -777,14 +804,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               }
               const split = splitInkOpsForLabReplay(bakeJob.result());
               prepared = { ...split, revision };
+              meshJob = new OverlaySpineJob(prepared.lab, paintView, dpr);
             }
-            i = replayUntil(i, prepared.lab.length, () => performance.now(), REPLAY_SLICE_MS, (idx) => {
-              overlay.push(overlaySpineFromDrawOp(prepared!.lab[idx]!, paintView, dpr));
-            });
-            if (i < prepared.lab.length) {
+            if (!meshJob!.step(() => performance.now(), REPLAY_SLICE_MS)) {
               replayRafRef.current = requestAnimationFrame(remeshStep);
               return;
             }
+            overlay = meshJob!.result();
             replayRafRef.current = null;
             afterRemesh();
           };
@@ -915,12 +941,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             return true;
           }
           if (entry.kind === "add" && isInkLabPenOp(entry.op) && engine) {
-            presentCommitted(null, true);
+            presentCommitted(null, instantReplayOnUndo());
             onChangeRef.current?.();
             return true;
           }
           remeshOverlaysFromBook();
-          presentCommitted(null, true);
+          presentCommitted(null, instantReplayOnUndo());
           onChangeRef.current?.();
           return true;
         },
@@ -960,7 +986,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             return true;
           }
           remeshOverlaysFromBook();
-          presentCommitted(null, true);
+          presentCommitted(null, instantReplayOnUndo());
           onChangeRef.current?.();
           return true;
         },
@@ -1198,6 +1224,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       let liveDirty = false;
       let liveHold = false;
       let liveTick = 0;
+      let lastHudFlushAt = 0;
       const rafGaps: number[] = [];
 
       const reportLoad = (
@@ -1237,10 +1264,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             })
           : loadMeterRef.current.peek();
         const bake = bakeRef.current;
-        // Keep all DOM writes off the nib rAF. Stats still accumulate above;
-        // the bar/HUD flushes once on lift, after the paint pump has stopped.
-        if (live) return;
-        const flushHud = overlayOn;
+        // Sampling remains per paint, while text/spark DOM work is throttled.
+        // End-only made the diagnostic overlay useless; per-vsync made it part
+        // of the performance problem it was meant to measure.
+        const now = performance.now();
+        const flushHud = overlayOn && shouldFlushLiveHud(lastHudFlushAt, now, live);
+        if (live && !flushHud) return;
+        if (flushHud) lastHudFlushAt = now;
         loadBarRef.current?.show(
           load,
           flushHud
@@ -1407,7 +1437,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         });
         engine.paint();
         const live = erasePtsRef.current;
-        if (live) live.push(highlightPointOf(canvas, event, paintView));
+        if (live) {
+          appendErasePathPoint(
+            live,
+            highlightPointOf(canvas, event, paintView),
+            eraserSceneRadius(strokeWidthRef.current),
+          );
+        }
       };
 
       const onPointerDown = (event: PointerEvent) => {
@@ -1647,7 +1683,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               const kept = bookRef.current.strokeErase(op);
               if (kept) {
                 rememberCommitPatch(null);
-                rebuildAndReplay(false, false);
+                // The live eraser already changed the authoritative snap.
+                // Refresh the camera-independent overlay cache, but do not
+                // clear and replay the whole notebook after every rub.
+                remeshOverlaysFromOps(opsWithErasesBaked(kept));
+                engine.paint();
                 onChangeRef.current?.();
               } else if (patch) {
                 engine.restoreSnapPatch(patch);
@@ -1659,7 +1699,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               const kept = bookRef.current.partialErase(op);
               if (kept) {
                 rememberCommitPatch(null);
-                rebuildAndReplay(false, false);
+                remeshOverlaysFromOps(kept);
+                engine.paint();
                 onChangeRef.current?.();
               } else if (patch) {
                 engine.restoreSnapPatch(patch);
@@ -1809,7 +1850,15 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         engine.destroy();
         engineRef.current = null;
       };
-    }, [captureStrokeHost, holdNestedScroll, presentCommitted, readViews, rebuildAndReplay, stampOpOntoSnap]);
+    }, [
+      captureStrokeHost,
+      holdNestedScroll,
+      presentCommitted,
+      readViews,
+      rebuildAndReplay,
+      remeshOverlaysFromOps,
+      stampOpOntoSnap,
+    ]);
 
     /**
      * Nested scroll moves host-bound ink — remesh when any host scrolls.

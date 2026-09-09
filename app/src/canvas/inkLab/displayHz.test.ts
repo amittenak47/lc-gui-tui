@@ -41,9 +41,9 @@ describe("display Hz", () => {
     expect(resolveDisplayHz(90, 16.7)).toBe(90);
   });
 
-  it("caps live presents at 60fps on 90Hz+", () => {
+  it("does not divide a 90Hz tablet down to 45fps", () => {
     expect(livePresentStride(60)).toBe(1);
-    expect(livePresentStride(90)).toBe(2);
+    expect(livePresentStride(90)).toBe(1);
     expect(livePresentStride(120)).toBe(2);
     expect(livePresentStride(240)).toBe(4);
   });

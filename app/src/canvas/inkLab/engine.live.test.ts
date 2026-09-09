@@ -780,6 +780,78 @@ describe("Ink lab live path", () => {
     engine.destroy();
   });
 
+  it("liftRaw keeps an undo patch like a synchronous lift", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    const ink = (x: number, y: number, w: number, h: number) => {
+      const data = canvas.getContext("2d")!.getImageData(x, y, w, h).data;
+      let n = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i]! > 0) n += 1;
+      return n;
+    };
+    engine.down({ x: 40, y: 80, p: 0.6, t: 0 });
+    engine.move([
+      { x: 90, y: 82, p: 0.6, t: 16 },
+      { x: 140, y: 84, p: 0.55, t: 32 },
+    ]);
+    engine.up({ x: 148, y: 86, p: 0.5, t: 48 });
+    engine.paint();
+    const leftAfterFirst = ink(0, 0, 180, 300);
+    engine.down({ x: 260, y: 80, p: 0.6, t: 0 });
+    engine.move([
+      { x: 290, y: 82, p: 0.6, t: 16 },
+      { x: 320, y: 84, p: 0.55, t: 32 },
+    ]);
+    const lifted = engine.liftRaw({ x: 328, y: 86, p: 0.5, t: 48 });
+    engine.paint();
+    expect(ink(240, 0, 160, 300)).toBeGreaterThan(10);
+    expect(lifted.undoPatch).not.toBeNull();
+    engine.restoreSnapPatch(lifted.undoPatch!);
+    engine.paint();
+    expect(ink(0, 0, 180, 300)).toBe(leftAfterFirst);
+    expect(ink(240, 0, 160, 300)).toBe(0);
+    engine.destroy();
+  });
+
+  it("live-smooth suffix-hits after the prefix freezes", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.setPen({
+      color: "#1a1a1a",
+      baseWidth: 2,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      boldness: 1,
+      smoothing: 0.5,
+      smoothingMode: "live",
+    });
+    engine.down({ x: 10, y: 40, p: 0.5, t: 0 });
+    for (let i = 1; i <= 280; i++) {
+      engine.move([
+        {
+          x: 10 + i * 4,
+          y: 40 + Math.sin(i / 8) * 18,
+          p: 0.5,
+          t: i * 8,
+        },
+      ]);
+      if (i % 20 === 0) engine.paint();
+    }
+    const stats = engine.paint();
+    expect(stats.pts).toBeGreaterThan(200);
+    expect(stats.suffix).toBe(true);
+    engine.liftRaw({ x: 360, y: 40, p: 0.5, t: 2300 });
+    engine.destroy();
+  });
+
   it("replay of two far strokes keeps both after clipped blits", () => {
     const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
     const engine = createInkLabEngine({ sdf: false });
