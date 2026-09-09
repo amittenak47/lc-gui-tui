@@ -312,6 +312,86 @@ describe("applyInkChoice", () => {
     expect(deleteInkPages).not.toHaveBeenCalled();
     expect(putInkPage).not.toHaveBeenCalled();
   });
+
+  it("writes mixed whiteboard page picks back as one page-1 shard", async () => {
+    const { encodeInkOps, packEncodedInk, unpackEncodedInk, decodeInkOps } = await import("../canvas/inkCodec");
+    const { bytesToB64, b64ToBytes } = await import("../api/nativeHttp");
+    const { bytesFromMaybeGzip } = await import("./gzip");
+    const { NO_PRESSURE } = await import("../canvas/rasterInk");
+    const { SCRATCH_PAGE_H, SCRATCH_PAGE_GUTTER } = await import("../templates/whiteboard");
+    const draw = (y: number, color: string) => ({
+      kind: "draw" as const,
+      color,
+      baseWidth: 4,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      points: [
+        { x: 80, y, pressure: NO_PRESSURE },
+        { x: 120, y, pressure: NO_PRESSURE },
+      ],
+    });
+    const y2 = SCRATCH_PAGE_H + SCRATCH_PAGE_GUTTER + 40;
+    const localOps = [draw(40, "#111"), draw(y2, "#111")];
+    const hubOps = [draw(40, "#c00"), draw(y2, "#c00")];
+    const hubGz = bytesToB64(packEncodedInk(encodeInkOps(hubOps)));
+    const written: Array<{ page_id: number; gz: string }> = [];
+    vi.resetModules();
+    vi.doMock("./idb", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./idb")>()),
+      withStore: async (
+        _store: string,
+        _mode: string,
+        fn: (store: { put: (row: unknown, key: string) => void; delete: (key: string) => void }) => void,
+      ) => {
+        fn({ put: () => {}, delete: () => {} });
+      },
+    }));
+    vi.doMock("./inkPageStore", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./inkPageStore")>()),
+      getInkPageRecords: () =>
+        Promise.resolve([
+          {
+            v: 1 as const,
+            docKey: "wb:w1",
+            pageId: 1,
+            inkC: encodeInkOps(localOps),
+            dirty: true,
+            updatedAt: 10,
+          },
+        ]),
+      deleteInkPages: vi.fn(async () => {}),
+    }));
+    const { applyInkChoicesByPage } = await import("./inkSync");
+    const putInkPage = vi.fn(async (page: { page_id: number; gz: string }) => {
+      written.push({ page_id: page.page_id, gz: page.gz });
+    });
+    await applyInkChoicesByPage(
+      { putInkPage } as never,
+      "whiteboard",
+      "w1",
+      [
+        { pageId: 1, choice: "local" },
+        { pageId: 2, choice: "server" },
+      ],
+      [
+        {
+          kind: "whiteboard",
+          key: "w1",
+          page_id: 1,
+          updated_at: 20,
+          gz: hubGz,
+        },
+      ],
+    );
+    expect(written.map((row) => row.page_id)).toEqual([1]);
+    const encoded = unpackEncodedInk(await bytesFromMaybeGzip(b64ToBytes(written[0]!.gz)));
+    expect(encoded).not.toBeNull();
+    const ops = decodeInkOps(encoded!);
+    expect(ops).toHaveLength(2);
+    expect(ops[0]).toMatchObject({ color: "#111" });
+    expect(ops[1]).toMatchObject({ color: "#c00" });
+  });
 });
 
 describe("previewInkPages", () => {
@@ -348,6 +428,26 @@ describe("previewInkPages", () => {
         ],
       ),
     ).toEqual([7]);
+  });
+
+  it("names every page the two clocks disagree about", async () => {
+    const { previewInkPages } = await import("./inkSync");
+    expect(
+      previewInkPages(
+        [1, 7, 12],
+        [1, 7, 12],
+        [
+          { pageId: 1, updatedAt: 10 },
+          { pageId: 7, updatedAt: 20 },
+          { pageId: 12, updatedAt: 30 },
+        ],
+        [
+          { pageId: 1, updatedAt: 10 },
+          { pageId: 7, updatedAt: 21 },
+          { pageId: 12, updatedAt: 31 },
+        ],
+      ),
+    ).toEqual([7, 12]);
   });
 });
 

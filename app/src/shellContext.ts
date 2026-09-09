@@ -120,6 +120,7 @@ export interface WorkspaceChrome {
     walkError?: string | null;
     /** The walk is asking which copy to keep, not spinning. */
     walkWaiting?: "conflict" | null;
+    padSync?: "synced" | "not-synced" | null;
   };
 }
 
@@ -164,6 +165,7 @@ export function chromeLooksSame(current: WorkspaceChrome, next: WorkspaceChrome)
     current.docIndex.walkJob === next.docIndex.walkJob &&
     current.docIndex.walkError === next.docIndex.walkError &&
     current.docIndex.walkWaiting === next.docIndex.walkWaiting &&
+    current.docIndex.padSync === next.docIndex.padSync &&
     progressEqual(current.docIndex.walkProgress, next.docIndex.walkProgress) &&
     progressEqual(current.docIndex.indexProgress, next.docIndex.indexProgress) &&
     progressEqual(current.docIndex.embedProgress, next.docIndex.embedProgress)

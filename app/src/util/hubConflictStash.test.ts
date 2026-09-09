@@ -6,10 +6,13 @@ import {
   combineFootnotePair,
   entrySettled,
   footnoteDiffRows,
+  footnotePartDiffs,
+  footnotePartRowId,
   hubConflict,
   inkChoiceOf,
   mergeFootnotes,
   padInkDiffRows,
+  footnoteInkDiffRows,
   stashHubConflict,
   subscribeHubConflict,
   visibleFootnoteDiffRows,
@@ -48,13 +51,68 @@ describe("footnoteDiffRows", () => {
     );
     expect(rows[0]!.differs).toBe(true);
   });
+});
 
+describe("visibleFootnoteDiffRows", () => {
   it("hides same-id marks whose bodies already match", () => {
     const rows = visibleFootnoteDiffRows(
       [note("a"), note("b")],
       [note("a"), note("c")],
     );
     expect(rows.map((row) => row.id)).toEqual(["b", "c"]);
+  });
+});
+
+describe("footnotePartDiffs", () => {
+  const noteEntry = (id: string, text: string) => ({
+    id,
+    text,
+    createdAt: 1,
+    updatedAt: 2,
+  });
+
+  it("names each changed piece instead of lumping the mark", () => {
+    const parts = footnotePartDiffs(
+      note("a", "here", {
+        notes: [noteEntry("n1", "mine")],
+        threads: [{ rootId: "t1", title: "Local chat", createdAt: 1 }],
+        whiteboards: [{ id: "wb1", createdAt: 1, updatedAt: 2 }],
+        subMarks: [
+          { id: "s1", kind: "underline", excerpt: "one", start: 0, end: 1 },
+        ],
+      }),
+      note("a", "there", {
+        notes: [noteEntry("n2", "theirs")],
+        threads: [{ rootId: "t2", title: "Hub chat", createdAt: 1 }],
+        whiteboards: [{ id: "wb2", createdAt: 1, updatedAt: 2 }],
+        subMarks: [
+          { id: "s2", kind: "underline", excerpt: "two", start: 4, end: 5 },
+        ],
+      }),
+    );
+    expect(parts.map((part) => part.kind).sort()).toEqual([
+      "boards",
+      "boards",
+      "chats",
+      "chats",
+      "notes",
+      "notes",
+      "underlines",
+      "underlines",
+    ]);
+    expect(parts.some((part) => part.id === footnotePartRowId("a", "notes", "n1"))).toBe(
+      true,
+    );
+  });
+
+  it("skips pieces that already match", () => {
+    const shared = [noteEntry("n1", "same")];
+    expect(
+      footnotePartDiffs(
+        note("a", "here", { notes: shared }),
+        note("a", "there", { notes: shared }),
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -268,6 +326,27 @@ describe("combineFootnotePair", () => {
     expect(merged.map((row) => row.id)).toEqual(["a", "b"]);
     expect(merged[0]!.excerpt).toBe("theirs");
   });
+
+  it("lets a part pick keep the other device's notes on a local shell", () => {
+    const noteEntry = (id: string, text: string) => ({
+      id,
+      text,
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    const merged = mergeFootnotes(
+      [note("a", "here", { notes: [noteEntry("n1", "mine")] })],
+      [note("a", "there", { notes: [noteEntry("n2", "theirs")] })],
+      { local: false, server: false },
+      {
+        a: { local: true, server: false },
+        [footnotePartRowId("a", "notes", "n2")]: { local: false, server: true },
+      },
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.excerpt).toBe("here");
+    expect(merged[0]!.notes?.map((row) => row.id).sort()).toEqual(["n1", "n2"]);
+  });
 });
 
 describe("stash store", () => {
@@ -341,5 +420,41 @@ describe("padInkDiffRows", () => {
       serverInk: [{ kind: "whiteboard", key: "w1", page_id: 0, updated_at: 1, gz: "bbb" }],
     });
     expect(rows).toEqual([{ pageId: 0, hasLocal: true, hasServer: true }]);
+  });
+});
+
+describe("footnoteInkDiffRows", () => {
+  it("keeps one row per mark board and page, not one handwriting lump", () => {
+    const rows = footnoteInkDiffRows({
+      kind: "annotate",
+      id: "p1",
+      stage: "pad",
+      detail: "both changed",
+      local: null,
+      server: null,
+      footnoteInk: [
+        {
+          wbId: "mark-a",
+          localPageIds: [1],
+          hubPageIds: [1],
+          localPages: [{ pageId: 1, updatedAt: 1 }],
+          hubPages: [{ pageId: 1, updatedAt: 2 }],
+        },
+        {
+          wbId: "mark-b",
+          localPageIds: [1, 2],
+          hubPageIds: [1],
+          localPages: [
+            { pageId: 1, updatedAt: 3 },
+            { pageId: 2, updatedAt: 4 },
+          ],
+          hubPages: [{ pageId: 1, updatedAt: 3 }],
+        },
+      ],
+    });
+    expect(rows).toEqual([
+      { wbId: "mark-a", pageId: 1, hasLocal: true, hasServer: true },
+      { wbId: "mark-b", pageId: 2, hasLocal: true, hasServer: false },
+    ]);
   });
 });

@@ -40,6 +40,12 @@ import {
   type EncodedInk,
 } from "../canvas/inkCodec";
 import type { HubInkChoice } from "./hubConflictStash";
+import { binOpsByPage, type PageFrame } from "../canvas/inkPageIndex";
+import { inkOpsBounds, type InkOp } from "../canvas/rasterInk";
+import {
+  whiteboardMergeFrames,
+  whiteboardMergePageId,
+} from "../templates/whiteboard";
 import {
   deleteEdge,
   edgeIsGone,
@@ -267,8 +273,7 @@ export function previewInkPages(
 ): number[] {
   if (localStamps && hubStamps) {
     const diffs = inkPageDiffRows(localStamps, hubStamps);
-    const first = diffs.find((row) => row.pageId >= 1)?.pageId ?? diffs[0]?.pageId;
-    return first == null ? [] : [first];
+    return diffs.map((row) => row.pageId).filter((id) => id >= 0);
   }
   const first = localIds.find((id) => id >= 1) ?? hubIds.find((id) => id >= 1);
   return first == null ? [] : [first];
@@ -520,6 +525,183 @@ export async function applyInkChoice(
   }
 }
 
+async function splitInkDtosByFrames(
+  pages: readonly InkPageDto[],
+  frames: readonly PageFrame[],
+): Promise<InkPageDto[]> {
+  if (frames.length <= 1) return [...pages];
+  if (pages.some((page) => page.page_id >= 2)) return [...pages];
+  const lump = pages.find((page) => page.page_id <= 1 && page.gz);
+  if (!lump?.gz) return [...pages];
+  const encoded = await encodedFromGzB64(lump.gz);
+  if (!encoded) return [...pages];
+  const bins = binOpsByPage(decodeInkOps(encoded), frames);
+  if (![...bins.keys()].some((id) => id >= 2)) return [...pages];
+  const out: InkPageDto[] = [];
+  for (const [pageId, list] of bins) {
+    if (pageId < 1) continue;
+    const gz = bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps(list))));
+    out.push({ ...lump, page_id: pageId, gz });
+  }
+  return out;
+}
+
+async function splitLumpedLocalInk(
+  docKey: string,
+  localBy: Map<number, InkPageRecord>,
+  frames: readonly PageFrame[],
+  now: number,
+): Promise<Map<number, InkPageRecord>> {
+  if (frames.length <= 1) return localBy;
+  if ([...localBy.keys()].some((id) => id >= 2)) return localBy;
+  const lump = localBy.get(1) ?? localBy.get(0);
+  if (!lump) return localBy;
+  const encoded = await encodedFromRecord(lump);
+  if (!encoded) return localBy;
+  const bins = binOpsByPage(decodeInkOps(encoded), frames);
+  if (![...bins.keys()].some((id) => id >= 2)) return localBy;
+  for (const [pageId, list] of bins) {
+    if (pageId < 1) continue;
+    const gz = bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps(list))));
+    await writeInkPage(docKey, { page_id: pageId, updated_at: now, gz });
+  }
+  return new Map((await getInkPageRecords(docKey)).map((row) => [row.pageId, row]));
+}
+
+function binWhiteboardMergeOps(
+  ops: readonly InkOp[],
+  frames: readonly PageFrame[],
+): Map<number, InkOp[]> {
+  const bins = new Map<number, InkOp[]>();
+  for (const op of ops) {
+    const pageId = whiteboardMergePageId(op, frames);
+    const list = bins.get(pageId);
+    if (list) list.push(op);
+    else bins.set(pageId, [op]);
+  }
+  return bins;
+}
+
+async function decodeOpsFromRecords(
+  rows: Iterable<InkPageRecord>,
+): Promise<InkOp[]> {
+  const out: InkOp[] = [];
+  for (const row of rows) {
+    const encoded = await encodedFromRecord(row);
+    if (!encoded) continue;
+    const ops = decodeInkOps(encoded);
+    if (ops && ops.length > 0) out.push(...ops);
+  }
+  return out;
+}
+
+async function decodeOpsFromDtos(
+  pages: readonly InkPageDto[],
+): Promise<InkOp[]> {
+  const out: InkOp[] = [];
+  for (const page of pages) {
+    if (!page.gz) continue;
+    const encoded = await encodedFromGzB64(page.gz);
+    if (!encoded) continue;
+    const ops = decodeInkOps(encoded);
+    if (ops && ops.length > 0) out.push(...ops);
+  }
+  return out;
+}
+
+/**
+ * Apply Keep / Drop per virtual sheet, then write the pad back as page 1.
+ *
+ * Whiteboards save and sync as one shard. The merge window names 4200-tall
+ * screens so two devices can keep different parts of that blob. Those ids are
+ * not hub pages — reconstituting them as page 2 would fight the next walk.
+ */
+async function applyWhiteboardInkChoicesByPage(
+  client: LcClient,
+  key: string,
+  choices: readonly { pageId: number; choice: HubInkChoice }[],
+  serverInk: readonly InkPageDto[] | null,
+  opts: {
+    hubPageIds?: readonly number[];
+    fetchHubPages?: (pageIds: readonly number[]) => Promise<InkPageDto[] | null>;
+  },
+): Promise<void> {
+  if (choices.length === 0) return;
+  const kind = "whiteboard" as const;
+  const docKey = inkDocKey(kind, key);
+  const now = Date.now();
+  const needHub = choices.some(
+    (row) => row.choice === "server" || row.choice === "merged",
+  );
+  let hubList: readonly InkPageDto[] = serverInk ?? [];
+  if (needHub) {
+    const fetchIds = [
+      ...new Set([1, ...(opts.hubPageIds ?? []).filter((id) => id >= 0)]),
+    ];
+    if (opts.fetchHubPages) {
+      const fetched = await opts.fetchHubPages(fetchIds);
+      if (fetched == null) {
+        throw new Error("the other device's handwriting could not be read");
+      }
+      if (!fetched.some((page) => page.page_id <= 1 && page.gz)) {
+        throw new Error("the other device's handwriting could not be read");
+      }
+      hubList = fetched;
+    } else if (serverInk == null) {
+      throw new Error("the other device's handwriting could not be read");
+    } else {
+      hubList = serverInk;
+    }
+  }
+  const localBy = new Map(
+    (await getInkPageRecords(docKey)).map((row) => [row.pageId, row]),
+  );
+  const localOps = await decodeOpsFromRecords(localBy.values());
+  const hubOps = needHub ? await decodeOpsFromDtos(hubList) : [];
+  const maxY = Math.max(
+    inkOpsBounds(localOps)?.maxY ?? 0,
+    inkOpsBounds(hubOps)?.maxY ?? 0,
+  );
+  const maxChoice = Math.max(1, ...choices.map((row) => row.pageId));
+  const frames = whiteboardMergeFrames(maxChoice, maxY);
+  const localBins = binWhiteboardMergeOps(localOps, frames);
+  const hubBins = binWhiteboardMergeOps(hubOps, frames);
+  const choiceBy = new Map(choices.map((row) => [row.pageId, row.choice]));
+  const pageIds = [
+    ...new Set([
+      ...frames.map((frame) => frame.pageId),
+      ...localBins.keys(),
+      ...hubBins.keys(),
+      ...choiceBy.keys(),
+    ]),
+  ]
+    .filter((id) => id >= 1)
+    .sort((a, b) => a - b);
+  const kept: InkOp[] = [];
+  for (const pageId of pageIds) {
+    const choice = choiceBy.get(pageId) ?? "local";
+    if (choice === "local") kept.push(...(localBins.get(pageId) ?? []));
+    else if (choice === "server") kept.push(...(hubBins.get(pageId) ?? []));
+    else if (choice === "merged") {
+      kept.push(...(localBins.get(pageId) ?? []), ...(hubBins.get(pageId) ?? []));
+    }
+  }
+  const gz = bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps(kept))));
+  await withStore(STORE_INK_PAGES, "readwrite", (store) => {
+    for (const pageId of localBy.keys()) {
+      if (pageId !== 1) store.delete(inkPageKey(docKey, pageId));
+    }
+  });
+  await writeInkPage(docKey, { page_id: 1, updated_at: now, gz });
+  await client.putInkPage({ kind, key, page_id: 1, updated_at: now, gz });
+  const hubIds = opts.hubPageIds ?? hubList.map((page) => page.page_id);
+  const emptyGz = await emptyInkGz();
+  for (const pageId of new Set(hubIds)) {
+    if (pageId === 1) continue;
+    await client.putInkPage({ kind, key, page_id: pageId, updated_at: now, gz: emptyGz });
+  }
+}
+
 /**
  * Write one choice per page, leaving every other page of the pad alone.
  *
@@ -538,9 +720,14 @@ export async function applyInkChoicesByPage(
   opts: {
     hubPageIds?: readonly number[];
     fetchHubPages?: (pageIds: readonly number[]) => Promise<InkPageDto[] | null>;
+    pageFrames?: readonly PageFrame[];
   } = {},
 ): Promise<void> {
   if (choices.length === 0) return;
+  if (kind === "whiteboard") {
+    await applyWhiteboardInkChoicesByPage(client, key, choices, serverInk, opts);
+    return;
+  }
   const docKey = inkDocKey(kind, key);
   const now = Date.now();
   const needHub = [
@@ -551,14 +738,18 @@ export async function applyInkChoicesByPage(
     ),
   ];
   let hubList: readonly InkPageDto[] = serverInk ?? [];
+  const frames = opts.pageFrames;
   if (needHub.length > 0) {
+    const fetchIds =
+      frames && frames.length > 1 ? [...new Set([...needHub, 1])] : needHub;
     if (opts.fetchHubPages) {
-      const fetched = await opts.fetchHubPages(needHub);
+      const fetched = await opts.fetchHubPages(fetchIds);
       if (fetched == null) {
         throw new Error("the other device's handwriting could not be read");
       }
       const got = new Set(fetched.map((page) => page.page_id));
-      if (needHub.some((id) => !got.has(id))) {
+      const missing = needHub.filter((id) => !got.has(id));
+      if (missing.length > 0 && !(frames && frames.length > 1 && got.has(1))) {
         throw new Error("the other device's handwriting could not be read");
       }
       hubList = fetched;
@@ -566,16 +757,22 @@ export async function applyInkChoicesByPage(
       throw new Error("the other device's handwriting could not be read");
     } else {
       const got = new Set(serverInk.map((page) => page.page_id));
-      if (needHub.some((id) => !got.has(id))) {
+      if (needHub.some((id) => !got.has(id)) && !(frames && frames.length > 1 && got.has(1))) {
         throw new Error("the other device's handwriting could not be read");
       }
       hubList = serverInk;
     }
   }
+  if (frames && frames.length > 1) {
+    hubList = await splitInkDtosByFrames(hubList, frames);
+  }
   const hubBy = new Map(hubList.map((page) => [page.page_id, page]));
-  const localBy = new Map(
+  let localBy = new Map(
     (await getInkPageRecords(docKey)).map((row) => [row.pageId, row]),
   );
+  if (frames && frames.length > 1) {
+    localBy = await splitLumpedLocalInk(docKey, localBy, frames, now);
+  }
 
   for (const { pageId, choice } of choices) {
     if (choice === "local") {

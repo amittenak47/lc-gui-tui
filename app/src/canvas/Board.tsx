@@ -43,6 +43,7 @@ import {
   parseScratchPageId,
   scratchTitleAnchor,
   SCRATCH_PAGE_W,
+  whiteboardPageFramesFromElements,
 } from "../templates/whiteboard";
 import {
   isReadingColumnFrame,
@@ -2044,8 +2045,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       ) {
         return;
       }
-      rasterInkRef.current?.setCameraMoving(false);
       commitVisualScrollRef.current();
+      rasterInkRef.current?.setCameraMoving(false);
     }, CAMERA_IDLE_TEARDOWN_MS);
   }, [filmScope]);
   const pulseCameraMotionRef = useRef(pulseCameraMotion);
@@ -3634,6 +3635,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
   }, []);
 
+  const getInkPageFrames = useCallback(() => {
+    const origin = pageBoundsRef.current?.minY ?? 0;
+    const pdf = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
+    if (pdf.length > 0) return pdf;
+    return whiteboardPageFramesFromElements(elements());
+  }, [elements, filmScope]);
+
   /**
    * Move the page for one scroll sample — no `updateScene`, no reblit.
    *
@@ -3834,10 +3842,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /**
    * Push live camera into Excalidraw once the gesture settles.
    *
-   * Keep `live` true through the settle paint. Clearing it before
-   * `setCameraMoving(false)` → `commitCamera` made ink fall back to
-   * Excalidraw's still-stale appState and flash the pre-flick view (often
-   * the top of the page) for one frame when a coast hits the bottom wall.
+   * Clear the ride translate in this turn, then remesh. Landing that remesh
+   * a frame later left the page at the live camera with the old translate still
+   * on the ink — a ghost, then a rubber-band when the translate dropped.
    */
   const commitVisualScroll = useCallback(() => {
     if (cameraIdleTeardownTimerRef.current) {
@@ -3862,12 +3869,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       appState: { scrollX: live.scrollX, scrollY: live.scrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
+    // Same tick as the camera write: a delayed land left Excalidraw on the
+    // live page while the ink canvas still carried the ride translate — the
+    // ghost, then the rubber-band when the translate finally dropped.
+    clearPanOffsetsRef.current();
+    if (liveCameraRef.current === live) live.live = false;
+    rasterInkRef.current?.syncCamera();
     landPanOffset(() => {
       committingScrollRef.current = false;
-      // Drop the riding flag only. Keep width/height/zoom so the next pan
-      // from rest skips getAppState.
-      if (liveCameraRef.current === live) live.live = false;
-      rasterInkRef.current?.syncCamera();
     });
   }, [flushVisualScroll, landPanOffset]);
   applyVisualScrollNowRef.current = applyVisualScrollNow;
@@ -3996,6 +4005,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       handPanningRef.current = false;
       panVelocityRef.current = { x: 0, y: 0 };
       panPeakVelYRef.current = 0;
+      commitVisualScrollRef.current();
       rasterInkRef.current?.setCameraMoving(false);
     };
     const unclaim = onSelectionGestureClaimed(dropPanForSelection);
@@ -4325,8 +4335,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           // again this gesture — settle it here rather than leaving the board
           // sitting on a translate that no lift is going to come and clear.
           stopPanInertia();
-          rasterInkRef.current?.setCameraMoving(false);
           commitVisualScrollRef.current();
+          rasterInkRef.current?.setCameraMoving(false);
           event.preventDefault();
           event.stopPropagation();
           try {
@@ -4435,8 +4445,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       flushVisualScrollRef.current();
 
       if (!canOwnScroll()) {
-        rasterInkRef.current?.setCameraMoving(false);
         commitVisualScrollRef.current();
+        rasterInkRef.current?.setCameraMoving(false);
         return;
       }
 
@@ -4451,16 +4461,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // Code dock tap — never armed, let Monaco receive focus.
       if (drag?.codeDock && !drag.armed) {
         if (!inertiaFrameRef.current) {
-          rasterInkRef.current?.setCameraMoving(false);
           commitVisualScrollRef.current();
+          rasterInkRef.current?.setCameraMoving(false);
         }
         return;
       }
 
       if (!drag?.armed) {
         if (!inertiaFrameRef.current) {
-          rasterInkRef.current?.setCameraMoving(false);
           commitVisualScrollRef.current();
+          rasterInkRef.current?.setCameraMoving(false);
         }
         return;
       }
@@ -4806,8 +4816,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       annotateToolFlipRef.current = false;
       return;
     }
-    rasterInkRef.current?.setCameraMoving(false);
     commitVisualScrollRef.current();
+    rasterInkRef.current?.setCameraMoving(false);
   }, [activeTool, stopPanInertia]);
 
   const inkToolActive =
@@ -9692,6 +9702,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         pressureSensitive={pressureSensitive}
         partialErase={eraserPartial}
         getViewport={getViewport}
+        getPageFrames={getInkPageFrames}
         clip={inkClip}
         onChange={handleInkChange}
         onStylusAccessory={interactive ? handleStylusAccessory : undefined}

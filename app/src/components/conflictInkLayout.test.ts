@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  conflictFitSpan,
   conflictInkPlacement,
+  conflictInkXBounds,
+  conflictOpsForPage,
+  conflictPaperFrames,
+  conflictPaperPageStyle,
+  mergeConflictPageFrames,
+  expandLumpedInkDiffRows,
+  whiteboardInkMergeRows,
+  inkPageIdsFromOps,
   inkSlotsEqual,
   inkedPageIds,
   type ConflictInkSlot,
 } from "./conflictInkLayout";
+import { NO_PRESSURE, type InkDrawOp } from "../canvas/rasterInk";
+import { SCRATCH_PAGE_H, SCRATCH_PAGE_GUTTER, whiteboardMergeFrames, whiteboardPageFrames } from "../templates/whiteboard";
 
 const slot = (over: Partial<ConflictInkSlot> = {}): ConflictInkSlot => ({
   page: 6,
@@ -44,6 +55,7 @@ describe("conflictInkPlacement", () => {
     // The pane lays the same page out narrower than the board did.
     expect(conflictInkPlacement(slot(), undefined, 540).scale).toBe(0.5);
     expect(conflictInkPlacement(slot({ width: 540 }), undefined, 540).scale).toBe(1);
+    expect(conflictInkPlacement(slot(), undefined, 540).originX).toBe(0);
   });
 
   it("starts the paint at the page's own scene Y", () => {
@@ -58,6 +70,25 @@ describe("conflictInkPlacement", () => {
       540,
     );
     expect(placed.originY).toBe(1750);
+    expect(placed.originX).toBe(0);
+  });
+
+  it("width-fits ink that starts left of the page so the first letters are not clipped", () => {
+    /*
+     * The whiteboard unions the sheet with ink that sits left of the frame
+     * and width-fits that box. Origin zero here was the merge-window bug:
+     * strokes that began at the left edge (or a hair past it) were painted
+     * against the pane's clip and the first letters vanished.
+     */
+    const placed = conflictInkPlacement(
+      slot({ width: 392, left: 0, top: 0, height: 420 }),
+      { pageId: 1, minY: 0, maxY: 4200 },
+      3920,
+      { minX: -200, maxX: 1800 },
+    );
+    expect(placed.originX).toBe(-200);
+    expect(placed.scale).toBe(392 / (3920 + 200));
+    expect(placed.originY).toBe(0);
   });
 
   it("does not put every page at the top of the book", () => {
@@ -139,5 +170,162 @@ describe("what a canvas per page is worth", () => {
     const surface = inked.length * pageHeight;
     expect(surface).toBe(pageHeight);
     expect(surface).toBeLessThan(65535);
+  });
+});
+
+function stroke(y: number): InkDrawOp {
+  return {
+    kind: "draw",
+    color: "#111",
+    baseWidth: 4,
+    maxFullness: 1,
+    pressureClip: 1,
+    pressureSensitive: false,
+    points: [
+      { x: 80, y, pressure: NO_PRESSURE },
+      { x: 120, y, pressure: NO_PRESSURE },
+    ],
+  };
+}
+
+describe("conflictOpsForPage", () => {
+  const frames = whiteboardPageFrames(2);
+
+  it("puts page-1-blob strokes onto the visual page they were written on", () => {
+    const page2Y = frames[1]!.minY + 40;
+    const ops = [stroke(40), stroke(page2Y)];
+    expect(conflictOpsForPage(ops, 1, frames)).toHaveLength(1);
+    expect(conflictOpsForPage(ops, 2, frames)).toHaveLength(1);
+  });
+});
+
+describe("conflictPaperFrames", () => {
+  it("grows the stack when ink sits past the last template page", () => {
+    const frames = conflictPaperFrames(undefined, 1, SCRATCH_PAGE_H * 2.5);
+    expect(frames.length).toBeGreaterThan(1);
+    expect(frames.at(-1)!.maxY).toBeGreaterThan(SCRATCH_PAGE_H * 2);
+  });
+
+  it("keeps live grown heights when they already cover the ink", () => {
+    const live = [{ pageId: 1, minY: 0, maxY: 8000 }];
+    expect(conflictPaperFrames(live, 1, 7000)).toEqual(live);
+  });
+});
+
+describe("conflictFitSpan", () => {
+  it("unions ink that sits left of the page into the fit width", () => {
+    const span = conflictFitSpan(3920, { minX: -200, maxX: 1800 });
+    expect(span?.minX).toBe(-200);
+    expect(span?.width).toBe(4120);
+  });
+});
+
+describe("conflictInkXBounds", () => {
+  it("includes stroke width so left-edge letters are not clipped", () => {
+    const bounds = conflictInkXBounds([stroke(40)]);
+    expect(bounds).not.toBeNull();
+    expect(bounds!.minX).toBeLessThan(80);
+  });
+});
+
+describe("conflictPaperPageStyle", () => {
+  it("sizes the sheet to the fitted box the ink is painted in", () => {
+    const style = conflictPaperPageStyle(
+      { pageId: 1, minY: 0, maxY: 4200 },
+      3920,
+      true,
+      4120,
+    );
+    expect(style.aspectRatio).toBe("4120 / 4200");
+  });
+});
+
+describe("mergeConflictPageFrames", () => {
+  it("keeps grown live heights and extra pages from the other copy", () => {
+    const merged = mergeConflictPageFrames(
+      [{ pageId: 1, minY: 0, maxY: 8000 }],
+      [
+        { pageId: 1, minY: 0, maxY: 4200 },
+        { pageId: 2, minY: 4264, maxY: 8464 },
+      ],
+    );
+    expect(merged).toEqual([
+      { pageId: 1, minY: 0, maxY: 8000 },
+      { pageId: 2, minY: 4264, maxY: 8464 },
+    ]);
+  });
+});
+
+describe("expandLumpedInkDiffRows", () => {
+  const frames = whiteboardPageFrames(2);
+
+  it("keeps a real per-page list alone", () => {
+    const rows = [
+      { pageId: 2, hasLocal: true, hasServer: true },
+      { pageId: 3, hasLocal: true, hasServer: false },
+    ];
+    expect(expandLumpedInkDiffRows(rows, frames, [2], [2])).toEqual(rows);
+  });
+
+  it("splits a page-1 blob onto the pads the strokes sit on", () => {
+    const expanded = expandLumpedInkDiffRows(
+      [{ pageId: 1, hasLocal: true, hasServer: true }],
+      frames,
+      [1, 2],
+      [1],
+    );
+    expect(expanded).toEqual([
+      { pageId: 1, hasLocal: true, hasServer: true },
+      { pageId: 2, hasLocal: true, hasServer: false },
+    ]);
+  });
+
+  it("still splits when the pad only stored one template frame", () => {
+    const expanded = expandLumpedInkDiffRows(
+      [{ pageId: 1, hasLocal: true, hasServer: true }],
+      whiteboardPageFrames(1),
+      [1, 2],
+      [1, 2],
+    );
+    expect(expanded.map((row) => row.pageId)).toEqual([1, 2]);
+  });
+});
+
+describe("inkPageIdsFromOps", () => {
+  it("names every notebook page a lumped blob actually wrote on", () => {
+    const frames = whiteboardPageFrames(2);
+    const ops = [stroke(40), stroke(frames[1]!.minY + 40)];
+    expect(inkPageIdsFromOps(ops, frames)).toEqual([1, 2]);
+  });
+});
+
+describe("whiteboardInkMergeRows", () => {
+  it("splits a grown page-1 blob onto the sheets the strokes sit on", () => {
+    const y2 = SCRATCH_PAGE_H + SCRATCH_PAGE_GUTTER + 40;
+    const frames = whiteboardMergeFrames(1, y2);
+    expect(frames.length).toBeGreaterThan(1);
+    const rows = whiteboardInkMergeRows(
+      [{ pageId: 1, hasLocal: true, hasServer: true }],
+      frames,
+      [stroke(40), stroke(y2)],
+      [stroke(80)],
+    );
+    expect(rows).toEqual([
+      { pageId: 1, hasLocal: true, hasServer: true },
+      { pageId: 2, hasLocal: true, hasServer: false },
+    ]);
+  });
+
+  it("omits a virtual page whose strokes already match", () => {
+    const y2 = SCRATCH_PAGE_H + SCRATCH_PAGE_GUTTER + 40;
+    const frames = whiteboardMergeFrames(1, y2);
+    const page2 = stroke(y2);
+    const rows = whiteboardInkMergeRows(
+      [{ pageId: 1, hasLocal: true, hasServer: true }],
+      frames,
+      [stroke(40), page2],
+      [stroke(80), page2],
+    );
+    expect(rows).toEqual([{ pageId: 1, hasLocal: true, hasServer: true }]);
   });
 });

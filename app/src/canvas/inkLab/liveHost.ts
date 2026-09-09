@@ -20,6 +20,36 @@ export function skipCommittedReplay(
 }
 
 /**
+ * Assigning `canvas.width` / `height` clears the bitmap even when the numbers
+ * already match. A CSS `top` mismatch is only the overdraw park — remesh when
+ * the backing store actually changed.
+ */
+export function inkCanvasPixelsChanged(
+  canvas: { width: number; height: number },
+  pixelW: number,
+  pixelH: number,
+): boolean {
+  return canvas.width !== pixelW || canvas.height !== pixelH;
+}
+
+/**
+ * Hold-open of the nib wheel aborts the live stroke. The committed snap still
+ * has the page. Replaying every overlay spine on that timer ANRs a tablet
+ * sitting on a dense notebook.
+ */
+export function skipReplayOnWheelAbort(): boolean {
+  return true;
+}
+
+/**
+ * Camera rebase must land in one present. A backing-store resize already wiped
+ * the bitmap — slice the remesh so the sizeToHost path cannot ANR Android.
+ */
+export function instantReplayOnBackingResize(): boolean {
+  return false;
+}
+
+/**
  * Live highlighter already has the pre-stroke snap. Restoring that and
  * stamping the live op is enough — replaying every pen would hitch.
  */

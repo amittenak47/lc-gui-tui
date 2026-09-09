@@ -33,5 +33,8 @@ describe("chromeLooksSame", () => {
         chrome({ walkStage: "pad", walkWaiting: "conflict" }),
       ),
     ).toBe(false);
+    expect(chromeLooksSame(chrome({ padSync: "synced" }), chrome({ padSync: "not-synced" }))).toBe(
+      false,
+    );
   });
 });

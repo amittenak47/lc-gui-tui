@@ -9,7 +9,9 @@
 import { FONT_UI, templatePalette, type Skeleton } from "./skeleton";
 import { WHITEBOARD_PAGE_LIMIT } from "../util/whiteboardStore";
 import { defaultLineHeight, SCRATCH_LINE_PITCH, topYForLinedRow } from "../modes/textBaseline";
-import type { PageFrame } from "../canvas/inkPageIndex";
+import { pageIndexForSceneY, type PageFrame } from "../canvas/inkPageIndex";
+import { inkOpBounds } from "../canvas/inkTiles";
+import type { InkOp } from "../canvas/rasterInk";
 
 export const WHITEBOARD_TASK_ID = "__whiteboard__";
 /** Pre-rename task id. Still recognised when restoring an old session. */
@@ -59,6 +61,101 @@ export function whiteboardPageFrames(pageCount: number): PageFrame[] {
     });
   }
   return frames;
+}
+
+/**
+ * Virtual sheets for a merge window — the pad is still one stored page.
+ *
+ * Live whiteboards grow page 1 instead of inserting pad-2, so a long Exam
+ * pad is one shard. Merge still has to name each 4200-tall screen so Keep /
+ * Drop can pick strokes by where they were written. Save and sync stay page 1.
+ */
+export function whiteboardMergeFrames(pageCount: number, inkMaxY = 0): PageFrame[] {
+  const pitch = SCRATCH_PAGE_H + SCRATCH_PAGE_GUTTER;
+  const span = Math.max(inkMaxY, SCRATCH_PAGE_H);
+  const count = Math.max(
+    1,
+    Math.min(32, Math.max(Math.floor(pageCount) || 1, Math.ceil(span / pitch))),
+  );
+  const frames: PageFrame[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const minY = index * pitch;
+    const last = index === count - 1;
+    frames.push({
+      pageId: index + 1,
+      minY,
+      maxY: last ? Math.max(minY + SCRATCH_PAGE_H, span) : (index + 1) * pitch,
+    });
+  }
+  return frames;
+}
+
+/** One stroke → one virtual merge page (center Y; gaps go to the nearer sheet). */
+export function whiteboardMergePageId(
+  op: InkOp,
+  frames: readonly PageFrame[],
+): number {
+  if (frames.length <= 1) return frames[0]?.pageId ?? 1;
+  const box = inkOpBounds(op);
+  return pageIndexForSceneY((box.minY + box.maxY) / 2, frames);
+}
+
+export function whiteboardMergeOpsForPage(
+  ops: readonly InkOp[],
+  pageId: number,
+  frames: readonly PageFrame[],
+): InkOp[] {
+  return ops.filter((op) => whiteboardMergePageId(op, frames) === pageId);
+}
+
+/**
+ * Page frames from the live scratch rectangles, including grown heights.
+ *
+ * Template frames are a fixed 4200 tall. A page that grew to hold more writing
+ * would otherwise clip that ink in the merge window and bin it as page 1.
+ */
+export function whiteboardPageFramesFromElements(
+  elements: readonly unknown[],
+): PageFrame[] {
+  const frames: PageFrame[] = [];
+  for (const raw of elements) {
+    if (!raw || typeof raw !== "object") continue;
+    const el = raw as {
+      y?: unknown;
+      height?: unknown;
+      customData?: { lcScratchFrame?: unknown; lcScratchPage?: unknown } | null;
+    };
+    const meta = el.customData;
+    if (!meta?.lcScratchFrame) continue;
+    const page = meta.lcScratchPage;
+    if (typeof page !== "number" || !Number.isFinite(page) || page < 0) continue;
+    const index = Math.floor(page);
+    const origin = scratchPageOrigin(index);
+    const y = typeof el.y === "number" && Number.isFinite(el.y) ? el.y : origin.y;
+    const height =
+      typeof el.height === "number" && Number.isFinite(el.height) && el.height >= 400
+        ? el.height
+        : SCRATCH_PAGE_H;
+    frames.push({
+      pageId: index + 1,
+      minY: y,
+      maxY: y + height,
+    });
+  }
+  if (frames.length === 0) return [];
+  frames.sort((a, b) => a.pageId - b.pageId || a.minY - b.minY);
+  return frames;
+}
+
+/** Scratch frames stored on a frozen pad JSON, not the live board. */
+export function whiteboardPageFramesFromPad(body: unknown): PageFrame[] {
+  if (!body || typeof body !== "object") return [];
+  const board = (body as { board?: { elements?: unknown } }).board;
+  const elements =
+    board && typeof board === "object"
+      ? (board as { elements?: unknown }).elements
+      : undefined;
+  return Array.isArray(elements) ? whiteboardPageFramesFromElements(elements) : [];
 }
 
 function zoomFromAppState(raw: unknown): number {

@@ -119,6 +119,8 @@ export interface DocIndexChipProps {
   walkError?: string | null;
   /** Asking which copy to keep — not a spinning stage. */
   walkWaiting?: "conflict" | null;
+  /** Resting pad sync, for tabs the walk is not currently walking. */
+  padSync?: "synced" | "not-synced" | null;
 }
 
 export function DocIndexChip({
@@ -138,6 +140,7 @@ export function DocIndexChip({
   walkProgress,
   walkError,
   walkWaiting,
+  padSync,
 }: DocIndexChipProps) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -239,7 +242,24 @@ export function DocIndexChip({
       </span>
     );
   }
-  if (status === "idle" && !onIndex) return null;
+  const restPad =
+    walkStage === "synced" || padSync === "synced"
+      ? "synced"
+      : padSync === "not-synced"
+        ? "not-synced"
+        : null;
+  if (restPad && !canOpen) {
+    return (
+      <span
+        className={
+          restPad === "synced" ? "lc-doc-index-chip is-ok" : "lc-doc-index-chip is-offer"
+        }
+      >
+        {restPad === "synced" ? "synced" : "not synced"}
+      </span>
+    );
+  }
+  if (status === "idle" && !onIndex && !restPad) return null;
   if (status === "error") {
     return (
       <span className="lc-doc-index-chip is-bad" title={error ?? "index error"}>
@@ -292,8 +312,10 @@ export function DocIndexChip({
         ref={buttonRef}
         type="button"
         className={
-          walkStage === "synced"
+          restPad === "synced"
             ? "lc-doc-index-chip is-ok"
+            : restPad === "not-synced"
+            ? "lc-doc-index-chip is-offer"
             : unindexed
             ? "lc-doc-index-chip is-offer"
             : wordsOnly
@@ -308,9 +330,11 @@ export function DocIndexChip({
           setOpen((current) => !current);
         }}
       >
-        {walkStage === "synced"
+        {restPad === "synced"
           ? "synced"
-          : unindexed
+          : restPad === "not-synced"
+            ? "not synced"
+            : unindexed
             ? "not indexed"
             : wordsOnly
               ? "indexed · words"

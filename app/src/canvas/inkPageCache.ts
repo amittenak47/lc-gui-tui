@@ -107,7 +107,11 @@ export class InkPageBook {
         return cur && cur.pageId === f.pageId && cur.minY === f.minY && cur.maxY === f.maxY;
       });
     if (same) return false;
-    const shouldRebin = this.usedFallback && frames.length > 1 && this.opTotal > 0;
+    const prevCount = this.frames.length;
+    const shouldRebin =
+      this.opTotal > 0 &&
+      frames.length > 1 &&
+      (this.usedFallback || prevCount <= 1);
     this.frames = frames.slice();
     this.usedFallback = frames.length <= 1;
     if (shouldRebin) {

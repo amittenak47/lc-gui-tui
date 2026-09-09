@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
-import { HubSyncControl, tabOffersHubSync, type HubSyncWalkHost } from "./HubSyncControl";
+import { HubSyncControl, padTabSync, tabOffersHubSync, type HubSyncWalkHost } from "./HubSyncControl";
 import type { LcClient } from "../api/client";
 import { PAD_HUB_KEY } from "../util/padHub";
 
@@ -33,6 +33,61 @@ function mount() {
 function activeLabel(button: HTMLButtonElement): string | null | undefined {
   return button.querySelector(".lc-morph-panel.is-active")?.textContent;
 }
+
+describe("padTabSync", () => {
+  it("lands a whiteboard on synced after a walk, and not-synced after an edit", () => {
+    expect(
+      padTabSync({
+        walkStage: "synced",
+        padEditSeq: 0,
+        hubHint: null,
+        hasDocument: false,
+        hasPad: true,
+      }),
+    ).toBe("synced");
+    expect(
+      padTabSync({
+        walkStage: null,
+        padEditSeq: 1,
+        hubHint: {
+          padUpdatedAt: 500,
+          padUpToDate: true,
+          indexedOnHub: true,
+        } as never,
+        hasDocument: false,
+        hasPad: true,
+      }),
+    ).toBe("not-synced");
+  });
+
+  it("matches the pill's rest Synced when the hint says the hub is current", () => {
+    expect(
+      padTabSync({
+        walkStage: null,
+        padEditSeq: 0,
+        hubHint: {
+          padUpdatedAt: 500,
+          padUpToDate: true,
+          indexedOnHub: true,
+        } as never,
+        hasDocument: false,
+        hasPad: true,
+      }),
+    ).toBe("synced");
+  });
+
+  it("stays off a tab with no pad", () => {
+    expect(
+      padTabSync({
+        walkStage: null,
+        padEditSeq: 0,
+        hubHint: null,
+        hasDocument: true,
+        hasPad: false,
+      }),
+    ).toBeNull();
+  });
+});
 
 describe("tabOffersHubSync", () => {
   it("is a document or a whiteboard, not Home", () => {
