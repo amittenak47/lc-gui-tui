@@ -291,3 +291,62 @@ describe("reading pan compositor", () => {
     expect(css).not.toMatch(/html\.lc-doc-camera-live \.lc-page-marks-slot/);
   });
 });
+
+describe("lined overlay vs ink", () => {
+  it("sits under the ink pad so a rule cannot cut a stroke cap", () => {
+    const css = readFileSync(join(here, "../styles.css"), "utf8");
+    const overlay = css.slice(
+      css.indexOf(".lc-board-lined-overlay {"),
+      css.indexOf(".lc-agent-fold {"),
+    );
+    const host = css.slice(
+      css.indexOf(".lc-board-ink-lab-host {"),
+      css.indexOf(".lc-annotating-code .lc-board-ink-lab-host"),
+    );
+    const overlayZ = Number(/z-index:\s*(\d+)/.exec(overlay)?.[1]);
+    const hostZ = Number(/z-index:\s*(\d+)/.exec(host)?.[1]);
+    expect(overlayZ).toBeGreaterThan(0);
+    expect(hostZ).toBeGreaterThan(overlayZ);
+  });
+});
+
+describe("ink undo after a new stroke", () => {
+  it("undo and redo present in one frame and drop every redo stack", () => {
+    const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
+    const undoAt = src.indexOf("undo() {");
+    const redoAt = src.indexOf("redo() {");
+    const canAt = src.indexOf("canUndo() {");
+    expect(undoAt).toBeGreaterThan(-1);
+    expect(redoAt).toBeGreaterThan(undoAt);
+    expect(canAt).toBeGreaterThan(redoAt);
+    const undo = src.slice(undoAt, redoAt);
+    expect(undo).toMatch(/presentCommitted\(null, true\)/);
+    expect(undo).not.toMatch(/forgetPixelHistory/);
+    const redo = src.slice(redoAt, canAt);
+    expect(redo).toMatch(/presentCommitted\(null, true\)/);
+    expect(redo).not.toMatch(/forgetPixelHistory/);
+    expect(src).toMatch(/dropRedoStacks/);
+    expect(src).toMatch(/before the nib goes down/);
+  });
+});
+
+describe("empty Redo must not freeze the pad", () => {
+  it("does not dispatch a fake Ctrl+Z the same handler will catch", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const undoBoard = src.slice(
+      src.indexOf("const undoBoard = useCallback"),
+      src.indexOf("const redoBoard = useCallback"),
+    );
+    const redoBoard = src.slice(
+      src.indexOf("const redoBoard = useCallback"),
+      src.indexOf("Empty Redo used to dispatch"),
+    );
+    expect(undoBoard).not.toMatch(/triggerUndo|dispatchEvent/);
+    expect(redoBoard).not.toMatch(/triggerRedo|dispatchEvent/);
+    const onKey = src.slice(
+      src.indexOf("Empty Redo used to dispatch"),
+      src.indexOf("window.addEventListener(\"keydown\", onKey, true)"),
+    );
+    expect(onKey).toMatch(/if \(!event\.isTrusted\) return/);
+  });
+});

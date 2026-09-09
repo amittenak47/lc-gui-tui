@@ -16,7 +16,7 @@ import { WHEEL_OPEN_MS } from "../util/gesture";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { InkPageBook } from "./inkPageCache";
 import { canvasBitmapFromClient } from "./canvasPointer";
-import { commitOverlay, pushCapped, redoOverlay, undoOverlay } from "./inkLab/history";
+import { commitOverlay, dropRedoStacks, pushCapped, redoOverlay, undoOverlay } from "./inkLab/history";
 import { isInkLabPenOp, overlaySpineFromDrawOp, splitInkOpsForLabReplay } from "./inkLab/replay";
 import { opsWithErasesBaked } from "./strokeEraser";
 import { keepLivePaintPump, samePaintedView, shouldFlushLiveHud, skipCommittedReplay, usePreStrokeStamp } from "./inkLab/liveHost";
@@ -91,6 +91,7 @@ export interface RasterInkHandle {
   undo(): boolean;
   redo(): boolean;
   canUndo(): boolean;
+  canRedo(): boolean;
   hasInk(): boolean;
   isDrawing(): boolean;
   repaint(): void;
@@ -534,7 +535,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       [boardRoot, collectScrollHosts, readViews],
     );
 
-    const presentCommitted = useCallback((liveStamp: InkOp | null = null, instant = false) => {
+    const presentCommitted = useCallback((liveStamp: InkOp | null = null, instant = true) => {
       if (skipCommittedReplay(drawingRef.current, liveStamp)) return;
       const canvas = canvasRef.current;
       const engine = engineRef.current;
@@ -638,7 +639,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     }, []);
 
     const rebuildAndReplay = useCallback(
-      (keepPixels = false, instant = false) => {
+      (keepPixels = false, instant = true) => {
         remeshOverlaysFromBook();
         if (!keepPixels) forgetPixelHistory();
         presentCommitted(null, instant);
@@ -678,7 +679,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
 
     const rememberCommitPatch = (patch: InkLabSnapPatch | null) => {
       pushCapped(snapUndoRef.current, patch);
-      snapRedoRef.current = [];
+      dropRedoStacks(overlayRedoRef.current, snapRedoRef.current);
     };
 
     useImperativeHandle(
@@ -710,8 +711,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (!entry) return false;
           const engine = engineRef.current;
           const pixel = snapUndoRef.current.pop();
-          const hadPixel = pixel !== undefined;
-          if (hadPixel) snapRedoRef.current.push(pixel);
+          if (pixel !== undefined) snapRedoRef.current.push(pixel);
           if (entry.kind === "add" && isInkLabPenOp(entry.op)) {
             undoOverlay(overlayRef.current, overlayRedoRef.current);
           }
@@ -721,9 +721,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             onChangeRef.current?.();
             return true;
           }
+          if (entry.kind === "add" && isInkLabPenOp(entry.op) && engine) {
+            presentCommitted(null, true);
+            onChangeRef.current?.();
+            return true;
+          }
           remeshOverlaysFromBook();
-          if (!hadPixel) forgetPixelHistory();
-          presentCommitted();
+          presentCommitted(null, true);
           onChangeRef.current?.();
           return true;
         },
@@ -763,13 +767,15 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             return true;
           }
           remeshOverlaysFromBook();
-          if (!hadPixel) forgetPixelHistory();
-          presentCommitted();
+          presentCommitted(null, true);
           onChangeRef.current?.();
           return true;
         },
         canUndo() {
           return bookRef.current.canUndo();
+        },
+        canRedo() {
+          return bookRef.current.canRedo();
         },
         hasInk() {
           return bookRef.current.hasInk();
@@ -1174,6 +1180,17 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (event.button !== 0) return;
         event.preventDefault();
         event.stopPropagation();
+        /*
+         * A sliced remesh from undo still appending spines would capture a
+         * half-empty snap, then freeze on the next undo/redo. Finish it
+         * before the nib goes down.
+         */
+        if (replayRafRef.current != null) {
+          replayGenRef.current += 1;
+          cancelAnimationFrame(replayRafRef.current);
+          replayRafRef.current = null;
+          presentCommitted(null, true);
+        }
         captureStrokeHost(event.clientX, event.clientY);
         if (
           wheelHoldEnabledRef.current &&
@@ -1344,7 +1361,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             op.points = trimHighlightLiftHook(op.points, highlighterChiselWidth(op.baseWidth));
             if (op.points.length > 0) {
               bookRef.current.commit(op);
-              overlayRedoRef.current = [];
+              dropRedoStacks(overlayRedoRef.current, snapRedoRef.current);
               const patch = pendingStampPatchRef.current;
               pendingStampPatchRef.current = null;
               if (isHostBoundOp(op) || !patch) {
@@ -1471,9 +1488,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             );
             rememberCommitPatch(baked.undoPatch);
           } else {
-            overlayRedoRef.current = [];
+            dropRedoStacks(overlayRedoRef.current, snapRedoRef.current);
             rememberCommitPatch(null);
-            presentCommitted();
+            presentCommitted(null, true);
           }
           onChangeRef.current?.();
         }

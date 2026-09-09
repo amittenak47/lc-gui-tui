@@ -22,6 +22,16 @@ export function commitOverlay(
   redo.length = 0;
 }
 
+/**
+ * A new stroke after undo must drop every redo stack together. Overlay redo
+ * that outlives the book is what remeshes the page on the next Ctrl+Shift+Z
+ * (undo → draw → undo → redo freeze).
+ */
+export function dropRedoStacks<T>(overlayRedo: T[][], pixelRedo: unknown[]): void {
+  overlayRedo.length = 0;
+  pixelRedo.length = 0;
+}
+
 export function undoOverlay(
   committed: SpineDot[][],
   redo: SpineDot[][],

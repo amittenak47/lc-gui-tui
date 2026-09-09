@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { emptyAabb } from "./instance";
-import { clipBlitRect } from "./clipBlit";
+import { CLIP_BLIT_PAD, clipBlitRect, SDF_SCISSOR_PAD } from "./clipBlit";
 
 describe("clipBlitRect", () => {
   it("returns null for an empty box", () => {
@@ -26,5 +26,9 @@ describe("clipBlitRect", () => {
       6,
     );
     expect(clip).toEqual({ x: 784, y: 0, w: 16, h: 14 });
+  });
+
+  it("scissors farther than the blit so a cap box cannot land in the snap", () => {
+    expect(SDF_SCISSOR_PAD).toBeGreaterThan(CLIP_BLIT_PAD);
   });
 });
