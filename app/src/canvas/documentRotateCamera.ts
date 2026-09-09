@@ -132,3 +132,34 @@ export function keepZoomCenterCameraAfterViewportChange(input: {
     Number.isFinite(input.prevZoom) && input.prevZoom > 0 ? input.prevZoom : 1;
   return cameraAfterViewportChange(input, Math.min(prevZoom, availW / boxW));
 }
+
+/**
+ * Notebook / draw page: keep zoom and the scene point under the hole.
+ *
+ * Centering leftover slack (or left-aligning when zoomed in) threw away the
+ * saved pan, so handwriting written in the middle of a 3920-wide pad landed
+ * off-screen after restore / Recentre / the reveal ladder.
+ */
+export function keepZoomKeepPanCameraAfterViewportChange(input: {
+  box: SceneBox;
+  inset: ViewportInset;
+  viewWidth: number;
+  prevZoom: number;
+  prevScrollX: number;
+  prevScrollY: number;
+  zoomMin: number;
+  zoomMax: number;
+}): { zoom: number; scrollX: number; scrollY: number } {
+  const availW = Math.max(1, input.viewWidth - input.inset.left - input.inset.right);
+  const boxW = Math.max(1, input.box.maxX - input.box.minX);
+  const prevZoom =
+    Number.isFinite(input.prevZoom) && input.prevZoom > 0 ? input.prevZoom : 1;
+  const zoom = clampFitZoom(Math.min(prevZoom, availW / boxW), input.zoomMin, input.zoomMax);
+  const sceneXLeft = input.inset.left / prevZoom - input.prevScrollX;
+  const sceneYTop = input.inset.top / prevZoom - input.prevScrollY;
+  return {
+    zoom,
+    scrollX: input.inset.left / zoom - sceneXLeft,
+    scrollY: input.inset.top / zoom - sceneYTop,
+  };
+}

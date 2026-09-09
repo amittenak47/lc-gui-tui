@@ -36,6 +36,7 @@ describe("Board", () => {
     expect(src).toMatch(/linedPitchFromAppState/);
     expect(src).toMatch(/linedPaperCssGap/);
     expect(src).toMatch(/linedPaperScenePitch/);
+    expect(src).toMatch(/keepZoomKeepPanCameraAfterViewportChange/);
   });
 });
 
