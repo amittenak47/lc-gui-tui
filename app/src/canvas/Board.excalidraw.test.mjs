@@ -18,6 +18,18 @@ describe("Board", () => {
     expect(src).toMatch(/shouldSeedInkFromBlob/);
   });
 
+  it("drops the pan translate before a mid-flick remesh", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const rebase = src.slice(
+      src.indexOf("const rebaseVisualScroll = useCallback"),
+      src.indexOf("const commitVisualScroll = useCallback"),
+    );
+    expect(rebase.indexOf("clearPanOffsetsRef.current()")).toBeGreaterThan(-1);
+    expect(rebase.indexOf("clearPanOffsetsRef.current()")).toBeLessThan(
+      rebase.indexOf("rasterInkRef.current?.syncCamera()"),
+    );
+  });
+
   it("stores lined-paper pitch in scene units so rules travel with the ink", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     expect(src).toMatch(/linedPitch:/);
