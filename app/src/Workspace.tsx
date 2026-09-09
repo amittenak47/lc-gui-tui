@@ -186,6 +186,7 @@ import {
   isFootnoteBoardTab,
   newTabId,
   pdfHoldDecodeInSplit,
+  shouldMirrorNotebookId,
   webTabTitle,
   type TabRecord,
   type WebTab,
@@ -4531,6 +4532,17 @@ export function Workspace({
   );
   openWhiteboardRef.current = (opts) => void openWhiteboard(opts);
 
+  const openOrReloadWhiteboard = useCallback(
+    (notebookId: string) => {
+      if (whiteboardNotebookId === notebookId) {
+        void loadWhiteboard({ notebookId, tabId: tab.id, userLoad: true });
+        return;
+      }
+      openWhiteboard({ notebookId });
+    },
+    [loadWhiteboard, openWhiteboard, tab.id, whiteboardNotebookId],
+  );
+
   const openAnnotate = useCallback(
     async (input: {
       name: string;
@@ -4884,7 +4896,7 @@ export function Workspace({
           return;
         }
         case "whiteboard":
-          openWhiteboard({ notebookId: node.id });
+          openOrReloadWhiteboard(node.id);
           return;
         case "annotate":
         case "web": {
@@ -4929,7 +4941,7 @@ export function Workspace({
           return;
       }
     },
-    [client, openAnnotate, openWhiteboard, pickProblem],
+    [client, openAnnotate, openOrReloadWhiteboard, pickProblem],
   );
 
   const openExplore = useCallback(() => {
@@ -8641,6 +8653,7 @@ export function Workspace({
    */
   useEffect(() => {
     if (isFootnoteBoardTab(tab)) return;
+    if (!shouldMirrorNotebookId(whiteboardNotebookId)) return;
     patchTab(tab.id, { notebookId: whiteboardNotebookId });
   }, [patchTab, tab, whiteboardNotebookId]);
 
@@ -10821,7 +10834,7 @@ export function Workspace({
             }
             if (choice === "load" && notebookId) {
               setWhiteboardEntryOpen(false);
-              void openWhiteboard({ notebookId });
+              openOrReloadWhiteboard(notebookId);
               return;
             }
             if (choice === "snapshot" && notebookId && whiteboardNotebookId) {
@@ -10886,7 +10899,7 @@ export function Workspace({
             if (choice === "load" && notebookId) {
               setLeaving(null);
               setLeavingPhase("open");
-              void openWhiteboard({ notebookId });
+              openOrReloadWhiteboard(notebookId);
               return;
             }
             void resolveLeave(choice === "save", choice === "save" ? notebookId : undefined);
