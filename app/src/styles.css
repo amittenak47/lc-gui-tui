@@ -3128,7 +3128,7 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-board-ink-lab-host {
   position: absolute;
   inset: 0;
-  /* Same stack as `.lc-raster-ink`: above the page (1), under marks (13). */
+  /* Above the page (1) and lined rules (2), under marks (13). */
   z-index: 3;
   pointer-events: none;
   overflow: hidden;
@@ -8819,7 +8819,11 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-board-lined-overlay {
   position: absolute;
   inset: 0;
-  z-index: 3;
+  /*
+   * Paper, under the ink pad (host z-index 3). Sharing that layer let the
+   * 1.25px rule composite across stroke caps and read as a cut on the line.
+   */
+  z-index: 2;
   pointer-events: none;
   overflow: hidden;
   border-radius: 0;

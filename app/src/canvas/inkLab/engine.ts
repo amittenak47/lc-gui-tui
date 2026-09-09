@@ -8,7 +8,7 @@ import { inkSlowness, type ScenePoint } from "../rasterInk";
 import { INK_SMOOTHING_DEFAULT, type LiveSmoothCache } from "../inkSmoothing";
 
 import { bakeSpine, reshapeLiveSpine } from "./bake";
-import { clipBlitRect } from "./clipBlit";
+import { CLIP_BLIT_PAD, clipBlitRect } from "./clipBlit";
 import { createEkf, type EkfFilter } from "./ekf";
 import { createFallbackPainter, fillMiterStroke } from "./fallback";
 import {
@@ -629,7 +629,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     const sctx = snap.getContext("2d");
     if (!sctx) return null;
     const rect = box
-      ? clipBlitRect(box, snap.width, snap.height, 8)
+        ? clipBlitRect(box, snap.width, snap.height, CLIP_BLIT_PAD)
       : { x: 0, y: 0, w: snap.width, h: snap.height };
     if (!rect) return null;
     return {
@@ -694,7 +694,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       }
       sdf.upload(inst, n);
       sdf.draw(aabb);
-      const clip = clipBlitRect(aabb, snap.width, snap.height, 8);
+      const clip = clipBlitRect(aabb, snap.width, snap.height, CLIP_BLIT_PAD);
       if (clip) {
         sctx.drawImage(
           sdf.canvas,

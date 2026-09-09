@@ -1026,34 +1026,6 @@ function num(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-/** Excalidraw only handles undo/redo when its key handler runs — not via a fake API. */
-function triggerUndo(): void {
-  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
-  document.dispatchEvent(
-    new KeyboardEvent("keydown", {
-      key: "z",
-      code: "KeyZ",
-      bubbles: true,
-      cancelable: true,
-      ...(isMac ? { metaKey: true } : { ctrlKey: true }),
-    }),
-  );
-}
-
-function triggerRedo(): void {
-  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
-  document.dispatchEvent(
-    new KeyboardEvent("keydown", {
-      key: "z",
-      code: "KeyZ",
-      bubbles: true,
-      cancelable: true,
-      shiftKey: true,
-      ...(isMac ? { metaKey: true } : { ctrlKey: true }),
-    }),
-  );
-}
-
 export interface BoardProps {
   /**
    * Which mounted workspace this is, for PDF navigation state.
@@ -4986,28 +4958,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [activeTool, strokeWidth]);
 
   const undoBoard = useCallback(() => {
-    if (rasterInkRef.current?.undo()) return;
-    triggerUndo();
+    rasterInkRef.current?.undo();
   }, []);
 
   const redoBoard = useCallback(() => {
-    if (rasterInkRef.current?.redo()) return;
-    triggerRedo();
+    rasterInkRef.current?.redo();
   }, []);
 
   /*
    * Ctrl/Cmd+Z, and Shift for redo.
    *
-   * Excalidraw binds these itself, and that is the bug: its handler only knows
-   * about *its* elements, so a real Ctrl+Z sailed past every stroke on the page
-   * and undid whatever Excalidraw happened to be holding — usually nothing, and
-   * occasionally the wrong thing. `undoBoard` is the composite the toolbar
-   * buttons already use: ink first, scene second. Taking the key here and
-   * stopping it means there is one undo, and it is that one.
+   * Empty Redo used to dispatch a fake Ctrl+Shift+Z into this same capture
+   * listener, which called redoBoard again until the pad froze. Only real
+   * keystrokes; ink is the only history.
    */
   useEffect(() => {
     if (!interactive) return;
     const onKey = (event: KeyboardEvent) => {
+      if (!event.isTrusted) return;
       if (event.key !== "z" && event.key !== "Z") return;
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
       // Typing in a note, a text box or the address bar is not drawing.

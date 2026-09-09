@@ -376,7 +376,11 @@ export class InkPageBook {
   }
 
   canUndo(): boolean {
-    return this.undo.length > 0 || this.opTotal > 0;
+    return this.undo.length > 0;
+  }
+
+  canRedo(): boolean {
+    return this.redo.length > 0;
   }
 
   private applyInverse(entry: InkUndoEntry): void {

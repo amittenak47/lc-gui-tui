@@ -6,6 +6,7 @@
  * See {@link ./sdfDepth.ts}.
  */
 
+import { SDF_SCISSOR_PAD } from "./clipBlit";
 import {
   INSTANCE_FLOATS,
   type StrokeAabb,
@@ -230,7 +231,7 @@ export function tryCreateSdfRenderer(
   };
 
   const scissorAabb = (aabb: StrokeAabb) => {
-    const pad = 2;
+    const pad = SDF_SCISSOR_PAD;
     const x0 = Math.max(0, Math.floor(aabb.minX) - pad);
     const y0 = Math.max(0, Math.floor(aabb.minY) - pad);
     const x1 = Math.min(viewW, Math.ceil(aabb.maxX) + pad);

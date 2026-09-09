@@ -1,11 +1,19 @@
 import type { StrokeAabb } from "./instance";
 
 /** Live composite clip. Full-canvas snap+SDF blits are plan-C waste. */
+export const CLIP_BLIT_PAD = 8;
+
+/**
+ * SDF scissor must sit outside the 2D blit. A tighter scissor left a 1px
+ * rectangle in the copied pixels — the white box on each stroke cap.
+ */
+export const SDF_SCISSOR_PAD = CLIP_BLIT_PAD + 4;
+
 export function clipBlitRect(
   box: StrokeAabb,
   width: number,
   height: number,
-  pad = 6,
+  pad = CLIP_BLIT_PAD,
 ): { x: number; y: number; w: number; h: number } | null {
   if (
     !Number.isFinite(box.minX) ||
