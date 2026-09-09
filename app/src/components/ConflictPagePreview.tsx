@@ -106,6 +106,8 @@ export function ConflictPagePreview({
     const apply = () => {
       const width = Math.round(node.clientWidth);
       if (width > 0) setCssWidth(width);
+      const height = Math.round(node.scrollHeight);
+      if (height > 0) setStackH(height);
     };
     apply();
     if (typeof ResizeObserver === "undefined") return;
@@ -124,7 +126,8 @@ export function ConflictPagePreview({
       if (!node) return false;
       const top =
         node.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop;
-      root.scrollTo({ top });
+      if (typeof root.scrollTo === "function") root.scrollTo({ top });
+      else root.scrollTop = top;
       return true;
     };
     if (jump()) return;
@@ -145,6 +148,11 @@ export function ConflictPagePreview({
     cssWidth > 0 &&
     (Boolean(bytes && bytes.byteLength > 0) || Boolean(borrowed));
   const useMarkdown = !usePdf && Boolean(sourceText);
+  const usePaper = !usePdf && !useMarkdown;
+  const paperPages =
+    pageFrames && pageFrames.length > 0
+      ? pageFrames.filter((frame) => frame.pageId >= 1).map((frame) => frame.pageId)
+      : [Math.max(1, page)];
 
   const keptNotes = notes ?? [];
 
@@ -315,7 +323,10 @@ export function ConflictPagePreview({
           pageFrames?.find((row) => row.pageId === slot.page),
           sceneWidth,
         );
-        for (const row of (inkPages ?? []).filter((entry) => entry.page_id === slot.page)) {
+        for (const row of (inkPages ?? []).filter(
+          (entry) =>
+            entry.page_id === slot.page || (slot.page === 1 && entry.page_id === 0),
+        )) {
           if (!row.gz) continue;
           const ops = await opsFromGz(row.gz);
           if (gone) return;
@@ -335,7 +346,11 @@ export function ConflictPagePreview({
         hostRef.current = node;
         setScrollRoot((current) => (current === node ? current : node));
       }}
-      className={usePdf || useMarkdown ? "lc-hub-conflict-preview is-harness" : "lc-hub-conflict-preview"}
+      className={
+        usePdf || useMarkdown || usePaper
+          ? "lc-hub-conflict-preview is-harness"
+          : "lc-hub-conflict-preview"
+      }
       data-page={String(page)}
     >
       {usePdf && filmScope ? (
@@ -391,7 +406,31 @@ export function ConflictPagePreview({
           </DocSelectionLayer>
         </div>
       ) : (
-        <p className="lc-muted">Page {page}</p>
+        <div className="lc-hub-conflict-doc" ref={docRef}>
+          {paperPages.map((pageId) => (
+            <div
+              key={pageId}
+              className="lc-hub-conflict-lined"
+              data-pdf-page={String(pageId)}
+            />
+          ))}
+          {showInk
+            ? inkSlots.map((slot) => (
+                <canvas
+                  key={slot.page}
+                  data-ink-page={slot.page}
+                  className="lc-hub-conflict-ink-layer"
+                  style={{
+                    left: slot.left,
+                    top: slot.top,
+                    width: slot.width,
+                    height: slot.height,
+                  }}
+                  aria-hidden
+                />
+              ))
+            : null}
+        </div>
       )}
     </div>
   );

@@ -9,6 +9,7 @@
 import { FONT_UI, templatePalette, type Skeleton } from "./skeleton";
 import { WHITEBOARD_PAGE_LIMIT } from "../util/whiteboardStore";
 import { defaultLineHeight, SCRATCH_LINE_PITCH, topYForLinedRow } from "../modes/textBaseline";
+import type { PageFrame } from "../canvas/inkPageIndex";
 
 export const WHITEBOARD_TASK_ID = "__whiteboard__";
 /** Pre-rename task id. Still recognised when restoring an old session. */
@@ -43,6 +44,21 @@ export function scratchPageOrigin(index: number): { x: number; y: number } {
     x: 0,
     y: index * (SCRATCH_PAGE_H + SCRATCH_PAGE_GUTTER),
   };
+}
+
+/** Scene Y of each notebook page, for conflict preview and ink binning. */
+export function whiteboardPageFrames(pageCount: number): PageFrame[] {
+  const count = Math.max(1, Math.floor(pageCount) || 1);
+  const frames: PageFrame[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const origin = scratchPageOrigin(index);
+    frames.push({
+      pageId: index + 1,
+      minY: origin.y,
+      maxY: origin.y + SCRATCH_PAGE_H,
+    });
+  }
+  return frames;
 }
 
 function zoomFromAppState(raw: unknown): number {

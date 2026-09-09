@@ -476,15 +476,20 @@ async function flushDirtyInk(
   }
 }
 
-async function restoreInk(board: BoardHandle, docKey: string | null, blob: { ink?: unknown; inkC?: unknown }): Promise<void> {
+async function restoreInk(
+  board: BoardHandle,
+  docKey: string | null,
+  blob: { ink?: unknown; inkC?: unknown },
+  opts?: { paint?: boolean },
+): Promise<void> {
   const shards = docKey ? await getInkPages(docKey) : new Map();
   const ops = inkOpsFrom(blob);
   const source = inkRestoreSource(shards.size, ops.length);
   if (source === "shards") {
-    board.ingestInkPages(shards);
+    board.ingestInkPages(shards, opts);
     return;
   }
-  if (source === "blob") board.setInkOps(ops);
+  if (source === "blob") board.setInkOps(ops, opts);
 }
 
 /**
@@ -2830,7 +2835,7 @@ export function Workspace({
         // against a frame about to change size. See `openWhiteboard`.
         if (hasSavedBoard && saved) {
           const handle = boardRef.current;
-          if (handle) await restoreInk(handle, null, saved);
+          if (handle) await restoreInk(handle, null, saved, { paint: false });
         }
         if (!livePad && hasSavedBoard && saved) {
           const seed = {
@@ -3102,7 +3107,9 @@ export function Workspace({
          */
         if (restored && notebook) {
           const handle = boardRef.current;
-          if (handle) await restoreInk(handle, whiteboardDocKey(notebook.id), notebook.board);
+          if (handle) await restoreInk(handle, whiteboardDocKey(notebook.id), notebook.board, {
+            paint: false,
+          });
         } else if (restored && fnSaved && opts.footnoteBoard) {
           const handle = boardRef.current;
           if (handle) {
@@ -3110,22 +3117,23 @@ export function Workspace({
               handle,
               footnoteWhiteboardDocKey(opts.footnoteBoard.docId, opts.footnoteBoard.wbId),
               fnSaved.board,
+              { paint: false },
             );
           }
         }
         /*
-         * Saved camera, not a PDF-style width-fit.
-         *
-         * restoreBoard drops zoom/scroll and used to scheduleFitView, which
-         * width-fits pad-0. A notebook that was looking at a stroke in the
-         * middle of the page came back tight to the frame. Fresh pads still
-         * settleFitView.
+         * Ink is already on the book. Width-fit this window so the lined page
+         * is the ink's screen box — same fraction of the hole the tablet used,
+         * not a letterboxed strip that crops the left of the writing.
          */
         if (savedView) {
           boardRef.current?.restoreView(savedView);
         } else {
           await boardRef.current?.settleFitView();
         }
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
 
         // Taken after the template and any restored ink have landed, so it is
         // the notebook as the writer first sees it. Anything that moves this
@@ -8893,13 +8901,14 @@ export function Workspace({
     wasSplitRoleRef.current = splitRole;
     wasWebLiveRef.current = webLive;
     if (!returning && !splitChanged && !froze) return;
-    // Same settle ladder as rotate: the first frame is often still full-width.
+    // Re-measure *this* board. `window.resize` also hits the partner pane in a
+    // split and was why tapping one half reloaded the other. `nudgeViewportFit`
+    // zeros the last box and keepY-fits — that is an open, not a tab return.
     const delays = [0, 80, 200, 400, 700];
     const ids = delays.map((ms) =>
       window.setTimeout(() => {
         boardRef.current?.syncDocumentScrollBounds();
-        boardRef.current?.nudgeViewportFit();
-        window.dispatchEvent(new Event("resize"));
+        boardRef.current?.syncLiveBox();
       }, ms),
     );
     return () => {
@@ -9848,7 +9857,7 @@ export function Workspace({
             annotateCode && "lc-annotating-code",
             pdfFilmOpen &&
               showing &&
-              active &&
+              (active || Boolean(splitRole)) &&
               pdfNav &&
               pdfNav.count >= 2 &&
               "lc-has-pdf-film",
@@ -10027,7 +10036,10 @@ export function Workspace({
               }
               setAnnotateFootnotes([]);
             }}
-            onAnnotateCodeChange={setAnnotateCode}
+            onAnnotateCodeChange={(next) => {
+              if (problem && isWhiteboard(problem)) return;
+              setAnnotateCode(next);
+            }}
             // Ruled lines under somebody else's typography would be noise.
             linedPaperToggle={Boolean(problem) && (!isAnnotate(problem) || Boolean(footnoteBoardSession))}
             mobileRegion={
@@ -10117,7 +10129,8 @@ export function Workspace({
                       docHash={annotateSource.hash}
                       frameWidth={annotatePageWidth}
                       initialPage={pdfSessionPage || undefined}
-                      paused={!showing || Boolean(hubConflictAsk)}
+                      paused={Boolean(hubConflictAsk)}
+                      offscreen={!showing}
                       holdDecode={pdfHoldDecodeInSplit(
                         tabsRef.current,
                         tab.id,
@@ -10221,13 +10234,18 @@ export function Workspace({
             }
           />
           ) : null}
-          {showing && active && pdfFilmOpen && pdfNav && pdfNav.count >= 2 && (
+          {showing &&
+            (active || Boolean(splitRole)) &&
+            pdfFilmOpen &&
+            pdfNav &&
+            pdfNav.count >= 2 && (
             <PdfPageRail
               filmScope={tab.id}
               count={pdfNav.count}
               current={pdfNav.current}
               docHash={annotateSource?.hash}
               aspects={pdfNav.aspects}
+              fillThumbs={active}
               renderThumb={renderPdfThumb}
               onJump={(page) => {
                 resetPdfFilmPredicted(tab.id);

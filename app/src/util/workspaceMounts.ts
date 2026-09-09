@@ -84,6 +84,14 @@ export function planWorkspaceMounts<T extends { id: string }>(input: {
     entries.push({ tab, active: id === activeId, showing: true });
   }
 
+  /*
+   * LRU `liveIds` puts the focused tab first. Mapping that order into the
+   * DOM moved both canvases on every split click — WebGL and pdf.js went
+   * blank and looked like a reload. Keep mount order as the tab strip.
+   */
+  const tabIndex = new Map(allTabs.map((tab, index) => [tab.id, index]));
+  entries.sort((a, b) => (tabIndex.get(a.tab.id) ?? 0) - (tabIndex.get(b.tab.id) ?? 0));
+
   return entries.map((entry) => {
     const splitIndex = groupChildren ? groupChildren.indexOf(entry.tab.id) : -1;
     const onScreen = groupChildren ? splitIndex >= 0 : visibleIds.includes(entry.tab.id);

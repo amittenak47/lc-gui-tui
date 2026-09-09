@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyLinedSlotStyle, linedSlotCanSkip, sameLinedSlot, type LinedSlot } from "./linedSlot";
+import { applyLinedSlotStyle, linedOverlayViewport, linedSlotCanSkip, sameLinedSlot, type LinedSlot } from "./linedSlot";
 
 const SLOT: LinedSlot = {
   left: 12,
@@ -49,14 +49,29 @@ describe("linedSlotCanSkip", () => {
   });
 });
 
+describe("linedOverlayViewport", () => {
+  it("covers the board hole, not the authored sheet", () => {
+    expect(linedOverlayViewport(1600, 900, 36, 4.25)).toEqual({
+      left: 0,
+      top: 0,
+      width: 1600,
+      height: 900,
+      gap: 36,
+      phase: 4.25,
+    });
+  });
+});
+
 describe("applyLinedSlotStyle", () => {
-  it("pins the overlay to the viewport and rides pan on the rules", () => {
+  it("pins the overlay to the page box and rides pan on the rules", () => {
     const node = {
       style: {} as Record<string, string>,
     };
     applyLinedSlotStyle(node as unknown as HTMLElement, SLOT, 12);
-    expect(node.style.left).toBe("0px");
-    expect(node.style.top).toBe("0px");
+    expect(node.style.left).toBe("12px");
+    expect(node.style.top).toBe("40px");
+    expect(node.style.right).toBe("auto");
+    expect(node.style.bottom).toBe("auto");
     expect(node.style.width).toBe("800px");
     expect(node.style.height).toBe("1200px");
     expect(node.style.transform).toBe("");

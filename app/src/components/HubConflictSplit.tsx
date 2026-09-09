@@ -7,9 +7,9 @@
  * becomes one mark carrying both sides' notes and boards, ink merges that
  * page's strokes, and two marks that merely share a page stay two. Identical
  * footnotes and identical ink pages are omitted — they are not a choice. The
- * file itself always stays. Top ✓ / ✕ fill a whole column without wiping the
- * other side. Keep is enabled once every row is settled, then PUT to the hub
- * so the other device matches on Sync.
+ * file itself always stays. Top ✓ keeps that column and discards the other
+ * unless the other is already fully kept (A+B). Keep is enabled once every
+ * row is settled, then PUT to the hub so the other device matches on Sync.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -250,9 +250,15 @@ export function HubConflictSplit({
   const toggleKeep = (side: Side, id: string) => {
     if (side === "server" && serverMissing) return;
     if (side === "server" && padInkBlocked(id) && serverInkUnread) return;
+    const other: Side = side === "local" ? "server" : "local";
     setPicks((current) => {
       const now = current[id]?.[side];
-      return { ...current, [id]: { ...current[id], [side]: now === true ? undefined : true } };
+      if (now === true) {
+        return { ...current, [id]: { ...current[id], [side]: undefined } };
+      }
+      const nextSide: SidePick = { ...current[id], [side]: true };
+      if (nextSide[other] !== true) nextSide[other] = false;
+      return { ...current, [id]: nextSide };
     });
   };
 
@@ -302,7 +308,29 @@ export function HubConflictSplit({
   };
 
   const onPaneKeep = (side: Side) => {
-    setSideAll(side, paneFilled(side, true) ? undefined : true);
+    const other: Side = side === "local" ? "server" : "local";
+    if (side === "server" && serverMissing) return;
+    setPicks((current) => {
+      const ids = idsOnSide(side);
+      const otherIds = idsOnSide(other);
+      if (ids.length === 0) return current;
+      const thisFilled = ids.every((id) => current[id]?.[side] === true);
+      const next = { ...current };
+      if (thisFilled) {
+        for (const id of ids) next[id] = { ...next[id], [side]: undefined };
+        return next;
+      }
+      const otherFilled =
+        otherIds.length > 0 && otherIds.every((id) => current[id]?.[other] === true);
+      for (const id of ids) {
+        if (side === "server" && padInkBlocked(id) && serverInkUnread) continue;
+        next[id] = { ...next[id], [side]: true };
+      }
+      if (!otherFilled) {
+        for (const id of otherIds) next[id] = { ...next[id], [other]: false };
+      }
+      return next;
+    });
   };
 
   const onPaneDrop = (side: Side) => {
@@ -617,7 +645,9 @@ export function HubConflictSplit({
         ) > 0
       );
     }
-    return pickOf(picks, inkPageRowId(page), side) === true;
+    // Show this side's copy until it is dropped, so the page is not blank
+    // before anyone has ticked a row.
+    return pickOf(picks, inkPageRowId(page), side) !== false;
   };
 
   /*
@@ -745,18 +775,14 @@ export function HubConflictSplit({
     const label = sideLabel(side);
     const keepBlocked = side === "server" && serverMissing;
     /*
-     * The page shows what you have kept, and only that.
+     * The page shows this side's copy until you drop it.
      *
-     * ✓ on a side draws that side's copy in that side's pane; ✕ and undecided
-     * draw nothing. So a row starts with neither pane showing anything, which
-     * is the honest picture of a change nobody has answered for yet, and the
-     * page fills in as you decide — one side, the other, or both. A column ✓
-     * at the top is the same rule applied to every row at once.
+     * ✓ on a side keeps drawing that copy; ✕ hides it. Undecided still shows
+     * the page, so a whiteboard is not a blank pane while you decide. Marks
+     * wait for a tick — they are a choice, not the paper.
      *
-     * Deliberately not driven by focus. Tapping a row is asking to *see* it —
-     * it scrolls that page in and opens the row's hub — and a tap that also
-     * drew the mark made the page disagree with the ticks beside it, which is
-     * the one thing this view has to get right.
+     * Tapping a row scrolls that page in. A column ✓ at the top is the same
+     * keep-this-drop-the-other rule applied to every row at once.
      */
     const keptNotes = rows
       .map((row) => (pickOf(picks, row.id, side) === true ? (side === "local" ? row.local : row.server) : null))
@@ -790,7 +816,7 @@ export function HubConflictSplit({
             tip={
               verdict === "keep"
                 ? `Every ${label} copy is kept — tap to clear this column`
-                : `✓ keeps every ${label} change. The other column is left as-is.`
+                : `✓ keeps every ${label} change and discards the other column. Keep both columns to combine them.`
             }
           >
             <button

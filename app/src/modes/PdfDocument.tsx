@@ -261,15 +261,25 @@ export interface PdfDocumentProps {
   /**
    * Parked tab: keep the worker and LRU, do not decode and do not write the
    * shared film / LRU pointers. Two open books used to fight over one C.
+   *
+   * This tears the observer down. A tab tap must not set it — switching away
+   * hides the wrap (`display: none`) but the file is still mounted. Use
+   * {@link offscreen} for that.
    */
   paused?: boolean;
+  /**
+   * Mounted but not on screen (the other tab is showing). Keep bitmaps and
+   * the observer; freeze intersection and do not take the worker. Coming back
+   * is showing the page again, not opening the file.
+   */
+  offscreen?: boolean;
   /**
    * Split partner still on screen: keep the observer and bitmaps, do not
    * take the shared pdf.js worker. Only set this when that partner is also
    * a PDF — a whiteboard does not need the worker, and yielding would leave
    * the file at 0.25 preview ("blurred like scrolling") while you draw.
-   * `paused` is the off-screen case and tears the observer down — a tab tap
-   * must not do that.
+   * `paused` is the off-screen *unmount* case and tears the observer down — a
+   * tab tap must not do that. {@link offscreen} is the tap: keep the picture.
    */
   holdDecode?: boolean;
   /**
@@ -534,6 +544,7 @@ export function PdfDocument({
   onError,
   initialPage = 0,
   paused = false,
+  offscreen = false,
   holdDecode = false,
   idleThumbs = false,
   standalone = false,
@@ -554,6 +565,8 @@ export function PdfDocument({
   initialPageRef.current = initialPage;
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const offscreenRef = useRef(offscreen);
+  offscreenRef.current = offscreen;
   const holdDecodeRef = useRef(holdDecode);
   holdDecodeRef.current = holdDecode;
   const idleThumbsRef = useRef(idleThumbs);
@@ -572,9 +585,13 @@ export function PdfDocument({
   const thumbCancelRef = useRef<() => void>(() => {});
   const thumbIdleArmRef = useRef<() => void>(() => {});
   useEffect(() => {
-    if (paused || initialPage < 1) return;
+    if (pausedRef.current || initialPage < 1) return;
     publishPdfFilmCurrent(filmScope, initialPage);
-  }, [initialPage, paused]);
+    /*
+     * Do not depend on `paused`. Unpausing used to republish the *open* page,
+     * so switching back from the other tab jumped the file to session start.
+     */
+  }, [initialPage, filmScope]);
   const visibleRatioRef = useRef<Map<number, number>>(new Map());
   /** Per-slot ratios so two-up halves of one sheet do not un-see each other. */
   const visibleSlotRatioRef = useRef<Map<Element, number>>(new Map());
@@ -644,6 +661,15 @@ export function PdfDocument({
     wakePdfPaintPump(filmScope);
     setWindowTick((tick) => tick + 1);
   }, [holdDecode, filmScope]);
+
+  const wasOffscreenRef = useRef(offscreen);
+  useEffect(() => {
+    const was = wasOffscreenRef.current;
+    wasOffscreenRef.current = offscreen;
+    if (offscreen || !was) return;
+    wakePdfPaintPump(filmScope);
+    setWindowTick((tick) => tick + 1);
+  }, [offscreen, filmScope]);
 
   useEffect(() => {
     if (!docHash) return;
@@ -970,6 +996,7 @@ export function PdfDocument({
 
     const observer = new IntersectionObserver(
       (entries) => {
+        if (offscreenRef.current) return;
         for (const entry of entries) {
           if (entry.isIntersecting) {
             visibleSlotRatioRef.current.set(entry.target, entry.intersectionRatio);
@@ -1132,7 +1159,7 @@ export function PdfDocument({
     const host = hostRef.current;
     const doc = docRef.current;
     const TextLayer = textLayerRef.current;
-    if (paused || !host || !doc || !TextLayer || pages.length === 0) return;
+    if (paused || offscreen || !host || !doc || !TextLayer || pages.length === 0) return;
     const lastLaidOut = pages[pages.length - 1]?.pageNumber ?? 0;
     if (pdfPaintShouldWaitForLanding(peekPdfFilmCurrent(filmScope), lastLaidOut)) return;
     if (pumpRef.current) return;
@@ -1589,6 +1616,7 @@ export function PdfDocument({
       try {
         for (;;) {
           if (disposedRef.current || pausedRef.current) return;
+          if (offscreenRef.current) return;
 
           const lastLaidOut = pagesRef.current.at(-1)?.pageNumber ?? 0;
           if (pdfPaintShouldWaitForLanding(peekPdfFilmCurrent(filmScope), lastLaidOut)) return;
@@ -1605,8 +1633,8 @@ export function PdfDocument({
             rest,
           );
           await yieldToInput();
-          if (disposedRef.current || pausedRef.current) return;
-          if (!pdfMayTakeWorker(pausedRef.current, holdDecodeRef.current)) return;
+          if (disposedRef.current || pausedRef.current || offscreenRef.current) return;
+          if (!pdfMayTakeWorker(pausedRef.current, holdDecodeRef.current, offscreenRef.current)) return;
 
           const holeCount = peekPdfIntersectingPages(filmScope).length;
           const canvasCap = pdfLiveCanvasCap(Math.max(holeCount, wantedRef.current.size));
@@ -1685,7 +1713,7 @@ export function PdfDocument({
         }
       }
     })();
-  }, [pages, windowTick, paused]);
+  }, [pages, windowTick, paused, offscreen]);
 
   /**
    * Filmstrip JPEGs: copy LRU first, else a ~48px pdf.js render. Only after
@@ -1693,7 +1721,7 @@ export function PdfDocument({
    */
   useEffect(() => {
     const hash = docHash;
-    if (paused || !idleThumbs || !hash) return;
+    if (paused || offscreen || !idleThumbs || !hash) return;
     const doc = docRef.current;
     if (!doc) return;
 
@@ -1714,6 +1742,7 @@ export function PdfDocument({
     const busy = () =>
       disposedRef.current ||
       pausedRef.current ||
+      offscreenRef.current ||
       isDocCameraLive(filmScope) ||
       pumpRef.current ||
       Boolean(inFlightPaintRef.current);
@@ -1814,7 +1843,7 @@ export function PdfDocument({
       unsubLive();
       abortFill();
     };
-  }, [idleThumbs, paused, docHash, pages]);
+  }, [idleThumbs, paused, offscreen, docHash, pages]);
 
   // Height is reported from the laid-out stack rather than summed from the page
   // sizes: the gaps, and any rounding the browser does, belong in the number the

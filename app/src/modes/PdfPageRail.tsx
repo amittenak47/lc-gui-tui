@@ -53,6 +53,12 @@ export interface PdfPageRailProps {
   aspects?: number[];
   onJump: (page: number) => void;
   renderThumb?: PdfThumbRenderer;
+  /**
+   * Decode missing thumbs. An unfocused split PDF keeps the strip for layout
+   * so the page does not reflow, but must not fill JPEGs — two open books
+   * used to decode the strip at once.
+   */
+  fillThumbs?: boolean;
 }
 
 export function PdfPageRail({
@@ -63,6 +69,7 @@ export function PdfPageRail({
   aspects,
   onJump,
   renderThumb,
+  fillThumbs = true,
 }: PdfPageRailProps) {
   const currentRef = useRef<HTMLButtonElement | null>(null);
   const stripRef = useRef<HTMLElement | null>(null);
@@ -188,7 +195,7 @@ export function PdfPageRail({
   }, [count, railRange.start, railRange.end]);
 
   useEffect(() => {
-    if (count < 2) return;
+    if (!fillThumbs || count < 2) return;
     let cancelled = false;
     const needed = thumbWindow(currentPage, count, visibleRef.current);
     publishPdfFilmThumbWanted(filmScope, needed);
@@ -247,7 +254,7 @@ export function PdfPageRail({
     return () => {
       cancelled = true;
     };
-  }, [count, currentPage, stripTick, renderThumb, idleTick]);
+  }, [count, currentPage, stripTick, renderThumb, idleTick, fillThumbs, filmScope]);
 
   if (count < 2) return null;
 

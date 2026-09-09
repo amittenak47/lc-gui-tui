@@ -136,6 +136,50 @@ describe("InkPageBook", () => {
     expect(book.assembleOps().some((op) => op.id === a.id)).toBe(true);
   });
 
+  it("partial-erase cuts the stroke out of the book so remesh cannot restore it", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(2));
+    book.commit(
+      stroke(20, {
+        points: [
+          { x: 0, y: 20, pressure: NO_PRESSURE },
+          { x: 100, y: 20, pressure: NO_PRESSURE },
+        ],
+      }),
+    );
+    const erase: InkEraseOp = {
+      kind: "erase",
+      radius: 8,
+      points: [
+        { x: 50, y: 20, pressure: NO_PRESSURE },
+        { x: 52, y: 20, pressure: NO_PRESSURE },
+      ],
+    };
+    expect(book.partialErase(erase)).not.toBeNull();
+    expect(book.assembleOps().some((op) => op.kind === "erase")).toBe(false);
+    expect(book.opCount()).toBeGreaterThan(0);
+    book.undoOnce();
+    expect(book.opCount()).toBe(1);
+  });
+
+  it("writes baked draws on flush so dest-out erases cannot come back", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(1));
+    book.commit(stroke(20));
+    book.commit({
+      kind: "erase",
+      radius: 8,
+      points: [
+        { x: 10, y: 20, pressure: NO_PRESSURE },
+        { x: 12, y: 20, pressure: NO_PRESSURE },
+      ],
+    });
+    const dirty = book.takeDirtyEncoded();
+    const encoded = [...dirty.values()][0]!;
+    const ops = decodeInkOps(encoded);
+    expect(ops.some((op) => op.kind === "erase")).toBe(false);
+  });
+
   it("bumps revision on undo-then-redraw so the same op count is not the same mix", () => {
     const book = new InkPageBook();
     book.setFrames(frames(2));

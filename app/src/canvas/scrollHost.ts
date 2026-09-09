@@ -290,6 +290,100 @@ export function restoreHostScrollIn(
   }
 }
 
+/** Collapse this far toward the origin in one shot is a remount/native snap, not a drag. */
+const HOST_SCROLL_DROP_PX = 1;
+
+/** Live nested-scroll snapshot for `host` inside `root`, or null if it is not a host. */
+export function hostScrollSnapshotOf(
+  host: HTMLElement,
+  root: ParentNode | null | undefined,
+): HostScrollSnapshot | null {
+  if (!root) return null;
+  const docs = root.querySelectorAll(DOC_PAGE_SELECTOR);
+  for (let i = 0; i < docs.length; i++) {
+    const node = docs[i];
+    if (node !== host && !node.contains(host)) continue;
+    const key = hostKeyInDoc(host, node);
+    if (key == null) continue;
+    return { doc: i, key, left: host.scrollLeft, top: host.scrollTop };
+  }
+  return null;
+}
+
+/**
+ * Prefer the last settled nested scroll when the live host has jumped toward 0.
+ *
+ * Pointerdown can already see `scrollLeft === 0` after a remount or Direct
+ * Manipulation snap; pinning that value then writes the jump in.
+ */
+export function pickSettledHostScroll(
+  live: HostScrollSnapshot,
+  remembered: HostScrollSnapshot | undefined,
+): HostScrollSnapshot {
+  if (!remembered || remembered.doc !== live.doc || remembered.key !== live.key) {
+    return live;
+  }
+  return {
+    ...live,
+    left:
+      remembered.left - live.left > HOST_SCROLL_DROP_PX ? remembered.left : live.left,
+    top: remembered.top - live.top > HOST_SCROLL_DROP_PX ? remembered.top : live.top,
+  };
+}
+
+export function upsertHostScrollSnapshot(
+  list: readonly HostScrollSnapshot[],
+  next: HostScrollSnapshot,
+): HostScrollSnapshot[] {
+  const out = list.filter((s) => s.doc !== next.doc || s.key !== next.key);
+  out.push(next);
+  return out;
+}
+
+/** For each host, keep the remembered place if live has collapsed toward 0. */
+export function mergeHostScrollSnapshots(
+  remembered: readonly HostScrollSnapshot[],
+  live: readonly HostScrollSnapshot[],
+): HostScrollSnapshot[] {
+  const map = new Map<string, HostScrollSnapshot>();
+  for (const s of live) map.set(`${s.doc}:${s.key}`, s);
+  for (const s of remembered) {
+    const k = `${s.doc}:${s.key}`;
+    const now = map.get(k);
+    map.set(k, now ? pickSettledHostScroll(now, s) : s);
+  }
+  return [...map.values()];
+}
+
+export function restoreDroppedHostScroll(
+  root: ParentNode | null | undefined,
+  remembered: readonly HostScrollSnapshot[],
+): void {
+  if (!root || remembered.length === 0) return;
+  const live = snapshotHostScrollIn(root);
+  const liveOf = new Map(live.map((s) => [`${s.doc}:${s.key}`, s] as const));
+  const pins = remembered.filter((r) => {
+    const now = liveOf.get(`${r.doc}:${r.key}`);
+    if (!now) return true;
+    return (
+      r.left - now.left > HOST_SCROLL_DROP_PX || r.top - now.top > HOST_SCROLL_DROP_PX
+    );
+  });
+  restoreHostScrollIn(root, pins);
+}
+
+/** Write `pin` onto the current host for that key (survives React replacing the node). */
+export function pinHostScrollSnapshot(
+  root: ParentNode | null | undefined,
+  pin: HostScrollSnapshot | null | undefined,
+): HTMLElement | null {
+  if (!root || !pin) return null;
+  restoreHostScrollIn(root, [pin]);
+  const doc = root.querySelectorAll(DOC_PAGE_SELECTOR)[pin.doc];
+  if (!doc) return null;
+  return scrollHostsIn(doc)[pin.key] ?? null;
+}
+
 /**
  * Scene-space host lookup for export / offscreen paint.
  *

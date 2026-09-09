@@ -7,6 +7,7 @@ import { act } from "react";
 
 import { DocSelectionLayer } from "./DocSelectionLayer";
 import type { DocFootnote } from "../util/docFootnotes";
+import { publishPdfViewPages, resetPdfFilmScopes } from "./pdfFilm";
 
 const MARK: DocFootnote = {
   id: "same",
@@ -67,6 +68,7 @@ function landText(host: HTMLElement) {
 
 afterEach(() => {
   document.body.textContent = "";
+  resetPdfFilmScopes();
   vi.restoreAllMocks();
 });
 
@@ -109,7 +111,7 @@ describe("marks made on a wider copy of the same page", () => {
    * jsdom measures nothing, so the boxes are stated: a body whose page 6 sits
    * 2305px down, which is where a pane scrolled to that page would have it.
    */
-  function mountScaled(markScale: number) {
+  function mountScaled(markScale: number, paletteScope = "") {
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
@@ -119,6 +121,7 @@ describe("marks made on a wider copy of the same page", () => {
           enabled={false}
           placeExisting
           markScale={markScale}
+          paletteScope={paletteScope}
           footnotes={[REGION_MARK]}
         >
           <div data-doc-scope="p6" />
@@ -183,6 +186,20 @@ describe("marks made on a wider copy of the same page", () => {
     });
     const band = host.querySelector(".lc-doc-footnote-band") as HTMLElement;
     expect(parseFloat(band.style.top)).toBeLessThan(4313);
+    act(() => root.unmount());
+  });
+
+  it("hides a footnote whose PDF page is not in view", () => {
+    publishPdfViewPages("tab-1", [1], []);
+    const { host, root, page } = mountScaled(347 / 642, "tab-1");
+    act(() => {
+      page.append(document.createElement("span"));
+    });
+    expect(host.querySelector(".lc-doc-footnote-band")).toBeNull();
+    act(() => {
+      publishPdfViewPages("tab-1", [6], []);
+    });
+    expect(host.querySelector(".lc-doc-footnote-band")).not.toBeNull();
     act(() => root.unmount());
   });
 });

@@ -68,6 +68,7 @@ import {
   DRAW_GROWTH_CAP_SCROLL,
   DRAW_HEADER_BAND,
   growDrawHeight,
+  inkNeedsAnnotateToggleReplay,
   isDrawPageRegion,
 } from "../templates/drawPageGrowth";
 import { INK_REGION_GAP, INK_REGION_PAD, inkRegionSplit } from "./inkRegionSplit";
@@ -128,7 +129,9 @@ import {
 import {
   documentCameraAfterViewportChange,
   excalidrawViewportNeedsSync,
-  keepZoomKeepPanCameraAfterViewportChange,
+  drawPageCameraAfterViewportChange,
+  drawPageFitBox,
+  drawPageRecentreCamera,
   liveBoardViewSize,
   liveExcalidrawViewport,
 } from "./documentRotateCamera";
@@ -165,8 +168,8 @@ import {
 import { pdfLandingHoldClear, pdfPreloadPages, pdfRestPages } from "../modes/pdfPaintWindow";
 import { remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
 import { eraserScreenRadius } from "./rasterInk";
-import { applyLinedSlotStyle, linedSlotCanSkip } from "./linedSlot";
-import { SPLIT_RESIZE_EVENT, splitResizePhase } from "../util/splitResize";
+import { applyLinedSlotStyle, linedOverlayViewport, linedSlotCanSkip } from "./linedSlot";
+import { SPLIT_RESIZE_EVENT, sashDragActive, splitResizePhase } from "../util/splitResize";
 import { reanchorInkOps } from "./reanchorInk";
 import { shouldSeedInkFromBlob } from "./inkRestore";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
@@ -258,14 +261,18 @@ import {
   PDF_READING_EVENT,
 } from "../util/pdfReadingPref";
 import {
+  activeLinedPitch,
+  ensureLinedPitchPair,
+  linedFirstRuleScene,
   linedPaperCssGap,
   linedPaperLabel,
-  linedPaperScenePitch,
-  linedPitchFromAppState,
+  linedPitchStateFromAppState,
   loadLinedPaperMode,
   nextLinedPaperMode,
   saveLinedPaperMode,
   type LinedPaperMode,
+  type LinedPitchPair,
+  type LinedRuling,
 } from "../util/linedPaperPref";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
@@ -939,6 +946,7 @@ function clampScrollToBounds(
   viewHeight: number,
   bounds: SceneBounds,
   inset: { top: number; left: number; right: number; bottom: number },
+  alignX: "start" | "center" | "keep" = "center",
 ): { scrollX: number; scrollY: number } {
   const availW = Math.max(1, viewWidth - inset.left - inset.right);
   const availH = Math.max(1, viewHeight - inset.top - inset.bottom);
@@ -952,7 +960,16 @@ function clampScrollToBounds(
   // Use a looser epsilon so a width-fitted page does not allow one-sided drift
   // from float error / gutter padding.
   if (contentW <= visW + 1) {
-    nextX = inset.left / zoom - bounds.minX + (visW - contentW) / 2;
+    const leftAlign = inset.left / zoom - bounds.minX;
+    const slack = visW - contentW;
+    if (alignX === "keep") {
+      const rightAlign = leftAlign + slack;
+      const lo = Math.min(leftAlign, rightAlign);
+      const hi = Math.max(leftAlign, rightAlign);
+      nextX = Math.min(hi, Math.max(lo, scrollX));
+    } else {
+      nextX = leftAlign + (alignX === "start" ? 0 : slack / 2);
+    }
   } else {
     const maxX = inset.left / zoom - bounds.minX;
     const minX = (viewWidth - inset.right) / zoom - bounds.maxX;
@@ -1462,6 +1479,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   highlightingRef.current = highlighting;
   const annotateCodeRef = useRef(annotateCode);
   annotateCodeRef.current = annotateCode;
+  /** Annotate/scroll flip also swaps hand↔pen; that must not remesh the book. */
+  const annotateToolFlipRef = useRef(false);
   /**
    * Ink colour-wheel history for this annotation (saved on the board blob).
    */
@@ -1531,7 +1550,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [linedPaperMode, setLinedPaperMode] = useState<LinedPaperMode>(loadLinedPaperMode);
   const linedPaperRef = useRef(linedPaperMode);
   linedPaperRef.current = linedPaperMode;
-  /** Scene units between rules — travels with the notebook, not the screen. */
+  /**
+   * Both rulings from the write-time zoom. Overlay on or off, resize and
+   * reload scale this pair — they do not recapture 36px/28px on this screen.
+   */
+  const linedPitchPairRef = useRef<LinedPitchPair | null>(null);
+  /** Which original paper the ink was written to (or picked as the better fit). */
+  const linedRuleRef = useRef<LinedRuling | null>(null);
+  /** Active scene pitch — the chosen ruling from the pair. */
   const linedPitchRef = useRef(0);
   /**
    * Ruled lines belong on pages you draw on.
@@ -1545,6 +1571,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     linedPaperMode !== "off" && isDrawPageRegion(mobileRegion ?? null);
   const linedPaperOnRef = useRef(linedPaperOn);
   linedPaperOnRef.current = linedPaperOn;
+  const ensureLinedPair = useCallback((zoom: number) => {
+    const pair = ensureLinedPitchPair(linedPitchPairRef.current, zoom);
+    if (!pair) return;
+    if (!linedRuleRef.current && linedPaperRef.current !== "off") {
+      linedRuleRef.current = linedPaperRef.current;
+    }
+    linedPitchPairRef.current = pair;
+    linedPitchRef.current = activeLinedPitch(pair, linedRuleRef.current);
+  }, []);
   /**
    * The board's content width in CSS pixels.
    *
@@ -2608,38 +2643,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const toggleAnnotate = useCallback(() => {
     wakeChromeRef.current();
-    pendingHostScrollRef.current = snapshotHostScrollIn(contentSlotNodeRef.current);
-    rememberedHostScrollRef.current = pendingHostScrollRef.current;
-    const live = liveCameraRef.current;
-    const state = apiRef.current?.getAppState() as
-      | {
-          scrollX?: number;
-          scrollY?: number;
-          zoom?: { value?: number };
-        }
-      | undefined;
-    const savedCam = {
-      scrollX: live?.live ? live.scrollX : (state?.scrollX ?? 0),
-      scrollY: live?.live ? live.scrollY : (state?.scrollY ?? 0),
-      zoom: live?.live ? live.zoom : (state?.zoom?.value ?? 1),
-    };
+    const drawPad = isDrawPageRegion(mobileRegionRef.current);
+    if (!drawPad) {
+      pendingHostScrollRef.current = snapshotHostScrollIn(contentSlotNodeRef.current);
+      rememberedHostScrollRef.current = pendingHostScrollRef.current;
+    }
+    annotateToolFlipRef.current = true;
     setAnnotateCode((current) => {
       const next = !current;
       modeIndicatorRef.current?.show(next ? "Annotation" : "Scroll mode");
       return next;
-    });
-    requestAnimationFrame(() => {
-      if (isDrawPageRegion(mobileRegionRef.current) && apiRef.current) {
-        userAdjustedCameraRef.current = true;
-        apiRef.current.updateScene({
-          appState: {
-            scrollX: savedCam.scrollX,
-            scrollY: savedCam.scrollY,
-            zoom: { value: savedCam.zoom },
-          },
-          captureUpdate: CaptureUpdateAction.NEVER,
-        });
-      }
     });
   }, []);
 
@@ -2652,6 +2665,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * pan.
    */
   useLayoutEffect(() => {
+    if (!inkNeedsAnnotateToggleReplay(mobileRegionRef.current)) {
+      pendingHostScrollRef.current = null;
+      return;
+    }
     const saved = pendingHostScrollRef.current;
     if (!saved) return;
     restoreHostScrollIn(contentSlotNodeRef.current, saved);
@@ -2693,6 +2710,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /** Annotate PE/class flip can desync host-bound ink — replay after the mode settles. */
   useEffect(() => {
     if (!interactive) return;
+    if (!inkNeedsAnnotateToggleReplay(mobileRegionRef.current)) return;
     const id = requestAnimationFrame(() => {
       if (pendingHostScrollRef.current) return;
       rasterInkRef.current?.replayCommitted();
@@ -2755,12 +2773,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const reportLinedSlot = useCallback(() => {
     /*
-     * `linedPaperOn` is the whole gate — see where it is derived.
-     *
-     * It is false on the code page and on the statement, and for the same
-     * reason in both: those pages already have a line grid of their own, at
-     * their own pitch, and a second one behind them agrees with neither and
-     * beats against the first.
+     * Painted rules are gated here. Both source pitches still live on the
+     * notebook while this is off — first fit / restore capture the pair so
+     * resize and reload keep the same grid when the overlay comes back.
      */
     if (!linedPaperOnRef.current) {
       if (lastLinedSlotRef.current !== null) {
@@ -2786,16 +2801,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      */
     const api = apiRef.current;
     const state = (api?.getAppState() ?? {}) as {
+      scrollX?: number;
       scrollY?: number;
       zoom?: { value?: number };
     };
     const zoom = Math.max(0.05, state.zoom?.value ?? 1);
     const scrollY = state.scrollY ?? 0;
-    let scenePitch = linedPitchRef.current;
-    if (!(scenePitch > 0)) {
-      scenePitch = linedPaperScenePitch(linedPaperRef.current, zoom);
-      if (scenePitch > 0) linedPitchRef.current = scenePitch;
-    }
+    ensureLinedPair(zoom);
+    const visibleRule: LinedRuling =
+      linedPaperRef.current === "college" ? "college" : "wide";
+    const scenePitch = activeLinedPitch(linedPitchPairRef.current, visibleRule);
+    linedPitchRef.current = scenePitch;
     const gap = linedPaperCssGap(scenePitch, zoom);
     if (!(gap > 0)) {
       if (lastLinedSlotRef.current !== null) {
@@ -2804,26 +2820,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       return;
     }
-    const originY = pageBoundsRef.current?.minY ?? 0;
-    // Lock rules from the frame top when a page exists; otherwise scene 0.
-    const firstRulePx = (originY + scenePitch + scrollY) * zoom;
+    const bounds = pageBoundsRef.current;
+    const originY = bounds?.minY ?? 0;
+    // Lock rules from the frame top; sit ink just above this ruling's line.
+    const firstRulePx = (linedFirstRuleScene(originY, scenePitch, true) + scrollY) * zoom;
     const phase = ((firstRulePx - gap + 1) % gap + gap) % gap;
-
-    const next = {
-      left: 0,
-      top: 0,
+    const next = linedOverlayViewport(
       width,
       height,
       gap,
-      phase: Math.round(phase * 100) / 100,
-    };
+      Math.round(phase * 100) / 100,
+    );
     const prev = lastLinedSlotRef.current;
     const node = linedSlotNodeRef.current;
     if (linedSlotCanSkip(prev, next, node != null)) return;
     lastLinedSlotRef.current = next;
     setLinedSlotOn((on) => on || true);
     if (node) applyLinedSlotStyle(node, next, panOffsetRef.current.y);
-  }, []);
+  }, [ensureLinedPair]);
 
   const maybeGrowDrawFrame = useCallback((): boolean => {
     const api = apiRef.current;
@@ -3007,23 +3021,33 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * Clamp whenever we know the open page box (md-ink / region frames).
      */
     const state = api.getAppState() as { width?: number; height?: number };
-    if (typeof state.width !== "number" || typeof state.height !== "number") {
-      return { scrollX, scrollY };
-    }
+    const fitted = lastFittedBoardBoxRef.current;
+    const boardBox =
+      fitted.w >= 8 && fitted.h >= 8
+        ? { width: fitted.w, height: fitted.h }
+        : boardRef.current?.getBoundingClientRect();
+    const { viewWidth, viewHeight } = liveBoardViewSize(boardBox, state);
+    if (viewWidth < 1 || viewHeight < 1) return { scrollX, scrollY };
     const inset = measureChromeInsets(
       boardRef.current,
       toolbarHeightRef.current,
       mapChromeHiddenRef.current,
       mobileRef.current,
     );
+    /*
+     * `start` re-pins the sheet on every wheel tick, which is what undid
+     * Recentre: slack on the right (split hole vs a stale full-window width)
+     * walked the ink left. Keep the X Recentre / fit just wrote.
+     */
     return clampScrollToBounds(
       scrollX,
       scrollY,
       zoom,
-      state.width,
-      state.height,
+      viewWidth,
+      viewHeight,
       bounds,
       inset,
+      isDrawPageRegion(mobileRegionRef.current) ? "keep" : "center",
     );
   }, []);
 
@@ -3413,11 +3437,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     setShapesOpen(false);
     setCaptureMenuOpen(false);
+    const alreadyHand = activeToolRef.current === "hand";
     setTool("hand");
     apiRef.current?.updateScene({
       appState: { selectedElementIds: {} },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
+    if (alreadyHand) annotateToolFlipRef.current = false;
     // Only when the toolbar mode flips — setTool changes every tool pick and
     // must not yank the pen back to Select mid-stroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3650,6 +3676,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const applyVisualScrollNow = useCallback((scrollX: number, scrollY: number) => {
     const api = apiRef.current;
     if (!api) return;
+    const lockX = scrollModeRef.current ? lockedScrollXRef.current : null;
+    if (lockX != null) scrollX = lockX;
     const pending = pendingPdfPageRef.current;
     if (pending >= 1) {
       const origin = pageBoundsRef.current?.minY ?? 0;
@@ -3749,13 +3777,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const delta = panDelta(liveCam, committed, { width, height }, undefined, {
       y: height * INK_OVERDRAW_FRACTION * OVERDRAW_REBASE_HEADROOM,
     });
+    /*
+     * Lined paper only rides Y (`background-position`). Translating ink in X
+     * while scrolling down sheared the writing off the left of the rules.
+     * Scroll mode already locks the column; the compositor must too.
+     */
+    const rideDx = scrollModeRef.current ? 0 : delta.dx;
     const inkRides = rasterInkRef.current?.setPanOffset(liveCam) ?? true;
     if (delta.rebase || !inkRides) {
       if (!committingScrollRef.current) rebaseVisualScrollRef.current();
+      // A reverse flick after the overdraw ran out used to `return` without
+      // translating, so the page sat dead until the remesh landed.
+      setPagePanOffsetRef.current(rideDx, delta.dy);
       pulseCameraMotionRef.current();
       return;
     }
-    setPagePanOffsetRef.current(delta.dx, delta.dy);
+    setPagePanOffsetRef.current(rideDx, delta.dy);
     pulseCameraMotionRef.current();
   }, []);
 
@@ -4149,10 +4186,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (isSubMarkDragLive()) return;
 
       // Mouse: down+drag on markdown words is native select. A PDF is a pan —
-      // the text layer is a hit target, not a selection surface in scroll mode.
-      // Returning here (or deferring as selectableDoc) made flick-scroll work
-      // only while camera-live had already hidden the layer, or while the
-      // WebGL overlay sat on top and stole the target away from `.lc-pdf-doc`.
+      // the text layer is a hit target, not a native-select surface. Skip the
+      // early return so a drag can still pan; still mark the PDF selectable
+      // below so hold-to-marquee can claim the finger (same 16px slop as
+      // markdown). Excluding `.lc-pdf-doc` from selectableDoc stopPropagation'd
+      // pointerdown and the hold never armed.
       const onPdfDoc =
         resolveElement(event.target)?.closest(
           ".lc-pdf-doc, .lc-pdf-page, .lc-pdf-canvas, .lc-pdf-text, .textLayer",
@@ -4194,7 +4232,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        */
       const onSelectableDoc =
         !onCodeDock &&
-        !onPdfDoc &&
         resolveElement(event.target)?.closest(".lc-doc-selectable") != null;
       const deferred = onCodeDock || sideScroll != null || onSelectableDoc;
 
@@ -4214,6 +4251,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!deferred) {
         event.preventDefault();
         event.stopPropagation();
+      } else if (onPdfDoc) {
+        // PDF text is user-select:text. Without this, a flick starts a native
+        // range and selectableDoc aborts pan. Do not stopPropagation — the
+        // hold-to-marquee listener on `.lc-doc-selectable` still has to fire.
+        event.preventDefault();
       }
 
       handPanningRef.current = true;
@@ -4787,8 +4829,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     stopPanInertia();
     handPanningRef.current = false;
     panDragRef.current = null;
-    rasterInkRef.current?.setCameraMoving(false);
     docFlags.pointer(false);
+    if (annotateToolFlipRef.current) {
+      annotateToolFlipRef.current = false;
+      return;
+    }
+    rasterInkRef.current?.setCameraMoving(false);
     commitVisualScrollRef.current();
   }, [activeTool, stopPanInertia]);
 
@@ -5486,12 +5532,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   /*
-   * Hand-zoom floor. Tablet locks zoom-out at page fit; desktop stays free —
-   * but never *above* the fit, or a narrow split pane in a small window would
-   * snap back to a zoom that does not show the whole page.
+   * Hand-zoom floor. A notebook locks zoom-out at page fit so you cannot pinch
+   * out into empty paper beside the sheet. Documents still allow desktop to go
+   * out to ZOOM_MIN, but never *above* the fit, or a narrow split pane would
+   * snap back to a crop.
    */
   const getZoomFloor = useCallback(() => {
     const fit = fitZoomMinRef.current;
+    if (fit != null && isDrawPageRegion(mobileRegionRef.current)) return fit;
     if (mobile && mobileRegionRef.current != null && fit != null) return fit;
     return fit != null ? Math.min(ZOOM_MIN, fit) : ZOOM_MIN;
   }, [mobile]);
@@ -5536,14 +5584,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           mapChromeHiddenRef.current,
           mobile,
         );
+        const fitted = lastFittedBoardBoxRef.current;
+        const boardBox =
+          fitted.w >= 8 && fitted.h >= 8
+            ? { width: fitted.w, height: fitted.h }
+            : boardRef.current?.getBoundingClientRect();
+        const { viewWidth, viewHeight } = liveBoardViewSize(boardBox, state);
         const clampedScroll = clampScrollToBounds(
           appState.scrollX,
           appState.scrollY,
           clamped,
-          state.width,
-          state.height,
+          viewWidth || state.width,
+          viewHeight || state.height,
           bounds,
           inset,
+          isDrawPageRegion(mobileRegionRef.current) ? "keep" : "center",
         );
         appState = { ...appState, ...clampedScroll };
       }
@@ -5699,18 +5754,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           : live?.live
             ? live.scrollY
             : (state.scrollY ?? 0);
-        const baseX = pending
-          ? pending.scrollX
-          : live?.live
-            ? live.scrollX
-            : (state.scrollX ?? 0);
+        const lockX = scrollModeRef.current ? lockedScrollXRef.current : null;
+        const baseX =
+          lockX ??
+          (pending
+            ? pending.scrollX
+            : live?.live
+              ? live.scrollX
+              : (state.scrollX ?? 0));
         const wheeled = clampPanScroll(
           baseX,
           baseY - (event.deltaY / zoom) * SCROLL_WHEEL_GAIN,
           zoom,
         );
-        if (scrollModeRef.current) lockedScrollXRef.current = wheeled.scrollX;
-        scheduleVisualScrollRef.current(wheeled.scrollX, wheeled.scrollY);
+        scheduleVisualScrollRef.current(lockX ?? wheeled.scrollX, wheeled.scrollY);
         return;
       }
 
@@ -5730,7 +5787,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => root.removeEventListener("scroll", onNestedScroll, { capture: true });
   }, [interactive]);
 
-  type FitMode = "frame" | "camera" | "both" | "keepY";
+  type FitMode = "frame" | "camera" | "both" | "keepY" | "recentre";
 
   const runFit = useCallback(
     (regionId?: string | null, mode: FitMode = "both") => {
@@ -5813,7 +5870,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
       const isScratchPage = typeof page === "string" && page.startsWith("pad-");
 
-      if (mode === "frame" || mode === "both" || mode === "keepY") {
+      if (mode === "frame" || mode === "both" || mode === "keepY" || mode === "recentre") {
         /*
          * Grow/shrink the focus *frame* so width-fill zoom also fills height.
          * Zoom alone cannot do this when the authored aspect is wider than the hole.
@@ -5874,7 +5931,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             const capPages = isScratch
               ? DRAW_GROWTH_CAP_SCROLL
               : DRAW_GROWTH_CAP;
-            if (mode === "keepY") {
+            if (mode === "keepY" || mode === "recentre") {
               /*
                * Sash / chrome resize: do not morph the sheet to the new hole.
                * Width-fit fillHeight shrank a wider pane's page and killed scroll.
@@ -5980,7 +6037,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
       }
 
-      if (mode === "camera" || mode === "both" || mode === "keepY") {
+      if (mode === "camera" || mode === "both" || mode === "keepY" || mode === "recentre") {
         let minX = Infinity;
         let minY = Infinity;
         let maxX = -Infinity;
@@ -6005,6 +6062,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           }
         }
         if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
+
+        const drawPage = isDrawPageRegion(page);
+        // Notebooks fit the sheet and the writing. A shifted pageW window
+        // used to zoom to the paper while ink left of the frame pushed the
+        // right of the page off a split pane. Union, then width-fit.
+        if (drawPage || isScratchPage) {
+          const fitted = drawPageFitBox(
+            { minX, minY, maxX, maxY },
+            inkOpsBounds(rasterInkRef.current?.getOps() ?? []),
+            SCRATCH_PAGE_W,
+          );
+          minX = fitted.minX;
+          maxX = fitted.maxX;
+        }
 
         const boxWidth = Math.max(1, maxX - minX);
         const boxHeight = Math.max(1, maxY - minY);
@@ -6048,10 +6119,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           page === "agent" ||
           isDrawPageRegion(page);
         /*
-         * Rotate / window resize on a document: width-fit and center X, keep
-         * the scene line that was at the top of the hole. A full reset jumps
-         * to page 1; skipping the camera (the old userAdjusted path) leaves
-         * portrait scrollX in a landscape hole — the off-center page.
+         * Rotate / window resize: documents width-fit and center X. Notebooks
+         * width-fit this hole so writing and lined paper fill the window —
+         * a larger desktop zooms in with the sheet instead of leaving a gap.
+         * A full reset jumps to page 1; skipping the camera leaves portrait
+         * scrollX in a landscape hole.
          */
         const prevCamera = api.getAppState() as {
           scrollX?: number;
@@ -6059,7 +6131,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           zoom?: { value?: number };
         };
         const riding = liveCameraRef.current;
-        const keepDocumentY = mode === "keepY";
+        const keepDocumentY = mode === "keepY" || mode === "recentre";
         const keepYInput = {
           box: { minX, minY, maxX, maxY },
           inset,
@@ -6071,26 +6143,32 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           zoomMax: ZOOM_MAX,
         };
         const rotated = keepDocumentY
-          ? isDrawPageRegion(page)
-            ? keepZoomKeepPanCameraAfterViewportChange(keepYInput)
+          ? drawPage
+            ? mode === "recentre"
+              ? drawPageRecentreCamera(keepYInput)
+              : drawPageCameraAfterViewportChange(keepYInput)
             : documentCameraAfterViewportChange(keepYInput)
           : null;
+        const fitWidth = availWidth;
         const zoom =
           rotated?.zoom ??
           clampZoom(
             widthOnly
-              ? availWidth / boxWidth
-              : Math.min(availWidth / boxWidth, availHeight / boxHeight),
+              ? fitWidth / boxWidth
+              : Math.min(fitWidth / boxWidth, availHeight / boxHeight),
             FIT_ZOOM_MIN,
           );
         fitZoomMinRef.current = zoom;
-        // Tablet locks zoom-out at page fit; desktop (coach on the right) stays free.
+        // Notebooks lock zoom-out at the page fit on every device.
         setZoomFloorPct(
-          Math.round((mobile && page ? zoom : Math.min(ZOOM_MIN, zoom)) * 100),
+          Math.round(
+            (drawPage || (mobile && page) ? zoom : Math.min(ZOOM_MIN, zoom)) * 100,
+          ),
         );
         pageBoundsRef.current = { minX, minY, maxX, maxY };
+        if (drawPage) ensureLinedPair(zoom);
 
-        const slackX = Math.max(0, availWidth - boxWidth * zoom);
+        const slackX = drawPage ? 0 : Math.max(0, availWidth - boxWidth * zoom);
         const slackY =
           isScratchPage || widthOnly
             ? 0
@@ -6109,6 +6187,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             viewHeight,
             { minX, minY, maxX, maxY },
             inset,
+            drawPage ? (mode === "recentre" ? "keep" : "start") : "center",
           );
           nextScrollX = clamped.scrollX;
           nextScrollY = clamped.scrollY;
@@ -6168,7 +6247,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // that initial view.
       syncPageVisibility();
     },
-    [mobile, reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot, syncPageVisibility],
+    [ensureLinedPair, mobile, reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot, syncPageVisibility],
   );
 
   const fitFrame = useCallback(
@@ -6196,16 +6275,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /** Resize the page frame and refit zoom/scroll to the chrome hole (window/board resize). */
   const refitToViewport = useCallback(
     (regionId?: string | null) => {
+      // Draw pages width-fit this window and keep Y. Restore used to mark the
+      // saved tablet camera as a user pinch, so this path only resized the
+      // frame and left the writing zoomed in with the left cropped.
+      if (isDrawPageRegion(regionId ?? mobileRegionRef.current)) {
+        runFit(regionId, "keepY");
+        return;
+      }
       // Wheel already moved the camera. `both` recentres Y at the page top —
       // that is the snap back to the start after a desktop wheel.
       if (userAdjustedCameraRef.current || liveCameraRef.current?.live) {
         runFit(regionId, "frame");
-        return;
-      }
-      // A draw page must not width-fit on every viewport pulse — that is the
-      // "click the file, click back, whiteboard is zoomed in" loop.
-      if (isDrawPageRegion(regionId ?? mobileRegionRef.current)) {
-        runFit(regionId, "keepY");
         return;
       }
       runFit(regionId, "both");
@@ -6511,7 +6591,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * canvas at `window.innerWidth` until a pointer runs `updateDOMRect`.
    */
   const applyLiveBoxFit = useCallback(
-    (force: boolean): boolean => {
+    (force: boolean, remeshInk = true): boolean => {
       const board = boardRef.current;
       const api = apiRef.current;
       if (!board || !api) return false;
@@ -6535,6 +6615,56 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         });
         return true;
       }
+      const panLive =
+        liveCameraRef.current?.live ||
+        cameraMotionActiveRef.current ||
+        handPanningRef.current;
+      const sashLive = sashDragActive();
+      /*
+       * Sash drag: write the new hole, do not keepY.
+       *
+       * Every move used to refit both boards and dispatch `window.resize`, so
+       * the sibling document hid its text layer and the tab looked like it
+       * remounted. The drag already wrote CSS widths; the camera waits for
+       * `settle` (force after `data-lc-sash-drag` is cleared).
+       */
+      if (panLive || sashLive) {
+        if (excalidrawViewportNeedsSync(live, api.getAppState() as { width?: number; height?: number })) {
+          api.updateScene({
+            appState: {
+              width: live.width,
+              height: live.height,
+              offsetLeft: box.left,
+              offsetTop: box.top,
+            },
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+        }
+        lastFittedBoardBoxRef.current = { w: live.width, h: live.height };
+        return true;
+      }
+      /*
+       * Chrome / annotate toolbar changes the hole height, not the page width.
+       * keepY here remeshed the book and jumped a parked document back to
+       * page 1 the moment its partner pane took focus (chrome left this half).
+       * Grow the frame if needed; leave zoom/X/Y alone.
+       */
+      if (prev.w >= 8 && live.width === prev.w && live.height !== prev.h) {
+        if (excalidrawViewportNeedsSync(live, api.getAppState() as { width?: number; height?: number })) {
+          api.updateScene({
+            appState: {
+              width: live.width,
+              height: live.height,
+              offsetLeft: box.left,
+              offsetTop: box.top,
+            },
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+        }
+        maybeGrowDrawFrame();
+        lastFittedBoardBoxRef.current = { w: live.width, h: live.height };
+        return true;
+      }
       if (excalidrawViewportNeedsSync(live, api.getAppState() as { width?: number; height?: number })) {
         api.updateScene({
           appState: {
@@ -6549,12 +6679,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       api.refresh?.();
       maybeGrowDrawFrame();
       runFit(null, "keepY");
+      if (remeshInk && isDrawPageRegion(mobileRegionRef.current)) {
+        rasterInkRef.current?.syncCamera();
+      }
       lastFittedBoardBoxRef.current = { w: live.width, h: live.height };
-      // Recentre / nudge used to zero lastFitted so this always looked like a
-      // size change and dispatched `resize`. Both split boards listen, so a
-      // whiteboard recentre width-fit the sibling PDF and hid its text layer.
       if (prev.w >= 8 && prev.h >= 8 && boxChanged) {
-        window.dispatchEvent(new Event("resize"));
         const content = contentSlotNodeRef.current;
         if (content) syncMarksSlotFrom(content);
       }
@@ -6563,10 +6692,33 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [maybeGrowDrawFrame, runFit],
   );
 
+  const viewportFitRafRef = useRef(0);
+  const viewportFitSettleRef = useRef(0);
+
+  const scheduleLiveViewportFit = useCallback(() => {
+    if (!viewportFitRafRef.current) {
+      viewportFitRafRef.current = requestAnimationFrame(() => {
+        viewportFitRafRef.current = 0;
+        reportContentSlot();
+        reportLinedSlot();
+        applyLiveBoxFit(false, false);
+      });
+    }
+    window.clearTimeout(viewportFitSettleRef.current);
+    viewportFitSettleRef.current = window.setTimeout(() => {
+      applyLiveBoxFit(true, true);
+    }, 120);
+  }, [applyLiveBoxFit, reportContentSlot, reportLinedSlot]);
+
   const nudgeViewportFit = useCallback(() => {
     lastFittedBoardBoxRef.current = { w: 0, h: 0 };
     applyLiveBoxFit(true);
     requestAnimationFrame(() => applyLiveBoxFit(true));
+  }, [applyLiveBoxFit]);
+
+  const syncLiveBox = useCallback(() => {
+    applyLiveBoxFit(false);
+    requestAnimationFrame(() => applyLiveBoxFit(false));
   }, [applyLiveBoxFit]);
 
   /**
@@ -6581,9 +6733,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * that). Recentre is that rewrite: live box, keepY, then aim the current
    * page and wake paint — not a trip back to page 1.
    *
-   * A draw page has no reading line to keep. Recentre used to width-fit (`both`),
-   * which zoomed the sheet into the pane and, via `html.lc-doc-camera-live`,
-   * hid the split PDF's text layer. keepY recentres X and holds zoom.
+   * A draw page has no reading line to keep. Recentre width-fits like a
+   * resize but holds the scene point under the hole's centre — left-aligning
+   * that fit is what walked the ink sideways.
    */
   const recentreKeepPlace = useCallback(() => {
     const drawPage = isDrawPageRegion(mobileRegionRef.current);
@@ -6599,39 +6751,40 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
     for (const id of recentreTimersRef.current) window.clearTimeout(id);
     recentreTimersRef.current = [];
+    if (drawPage) {
+      maybeGrowDrawFrame();
+      runFit(null, "recentre");
+      rasterInkRef.current?.syncCamera();
+      reportLinedSlot();
+      return;
+    }
     pass();
     requestAnimationFrame(() => {
       pass();
       // A draw page is already on keepY. The document ladder re-aims the PDF
       // after chrome/layout settle; repeating it on a pad retriggered the
       // sibling file's camera-live blur.
-      if (drawPage) return;
       recentreTimersRef.current = [80, 200, 400].map((ms) =>
         window.setTimeout(pass, ms),
       );
     });
-  }, [applyLiveBoxFit, reportContentSlot]);
+  }, [applyLiveBoxFit, maybeGrowDrawFrame, reportContentSlot, reportLinedSlot, runFit]);
 
   /**
    * OS window resize (Tauri / WebView2) often never reaches `window.resize`
    * until the next pointer. Native `onResized` is the event that actually fires.
+   *
+   * One keepY per frame while the window is moving; remesh ink once it settles.
+   * The old 50/160/320 shotgun remeshed the book several times per native event.
    */
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    const kick = () => {
-      lastFittedBoardBoxRef.current = { w: 0, h: 0 };
-      applyLiveBoxFit(true);
-      requestAnimationFrame(() => applyLiveBoxFit(true));
-    };
     void import("@tauri-apps/api/window")
       .then(({ getCurrentWindow }) => {
         if (cancelled) return undefined;
         return getCurrentWindow().onResized(() => {
-          kick();
-          window.setTimeout(kick, 50);
-          window.setTimeout(kick, 160);
-          window.setTimeout(kick, 320);
+          scheduleLiveViewportFit();
         });
       })
       .then((fn) => {
@@ -6644,75 +6797,42 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       cancelled = true;
       unlisten?.();
     };
-  }, [applyLiveBoxFit]);
+  }, [scheduleLiveViewportFit]);
 
   /** Page-locked boards: grow the frame and refit width on every board resize. */
   useEffect(() => {
     const board = boardRef.current;
     if (!board || typeof ResizeObserver === "undefined") return;
     lastFittedBoardBoxRef.current = { w: 0, h: 0 };
-    let timer: number | null = null;
     const late: number[] = [];
     let apiWaits = 0;
     const ORIENT_RETRIES_MS = [0, 80, 200, 400, 700];
-    const run = (force: boolean) => {
+    const run = (force: boolean, remeshInk = true) => {
       const box = boardRef.current?.getBoundingClientRect();
       const w = Math.round(box?.width ?? 0);
       const h = Math.round(box?.height ?? 0);
       if (w < 8 || h < 8) return;
-      const prev = lastFittedBoardBoxRef.current;
-      // Split sash / rotate: layout settles a few frames after the first box.
-      // Same retry ladder as orientationchange — one keepY on a half-laid-out
-      // pane left the camera on the old full-width hole, content off to the right.
-      const jumped =
-        !force && prev.w >= 8 && (Math.abs(w - prev.w) > 40 || Math.abs(h - prev.h) > 40);
-      if (!applyLiveBoxFit(force)) {
+      if (!applyLiveBoxFit(force, remeshInk)) {
         // API not live yet — do not stamp lastFitted; retry until it is.
         if (apiWaits < 12) {
           apiWaits += 1;
-          late.push(window.setTimeout(() => run(true), 80));
-        }
-        return;
-      }
-      if (jumped) {
-        for (const id of late) window.clearTimeout(id);
-        late.length = 0;
-        for (const ms of [80, 200, 400, 700]) {
-          late.push(window.setTimeout(() => run(true), ms));
+          late.push(window.setTimeout(() => run(true, true), 80));
         }
       }
     };
-    const schedule = () => {
-      if (timer != null) window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        /*
-         * Place the paper first, and never behind the fit.
-         *
-         * `run` goes through `runFit`, which returns early when the scene has
-         * no focus frame — and which can throw on a half-built one. That is
-         * exactly the state the slot's fallback width exists for, so putting
-         * placement after it meant a resize or a sash drag left the page laid
-         * out for the pane it used to be in. Placement is a transform and a
-         * width; it does not need the fit to have worked.
-         */
-        reportContentSlot();
-        reportLinedSlot();
-        run(false);
-      }, 60);
-    };
-    const observer = new ResizeObserver(schedule);
+    const observer = new ResizeObserver(() => scheduleLiveViewportFit());
     observer.observe(board);
     const wrap = board.parentElement;
     if (wrap && wrap !== board) observer.observe(wrap);
-    window.addEventListener("resize", schedule);
-    window.visualViewport?.addEventListener("resize", schedule);
-    requestAnimationFrame(() => run(true));
+    window.addEventListener("resize", scheduleLiveViewportFit);
+    window.visualViewport?.addEventListener("resize", scheduleLiveViewportFit);
+    requestAnimationFrame(() => run(true, true));
     const onOrient = () => {
       lastFittedBoardBoxRef.current = { w: 0, h: 0 };
       for (const id of late) window.clearTimeout(id);
       late.length = 0;
       for (const ms of ORIENT_RETRIES_MS) {
-        late.push(window.setTimeout(() => run(true), ms));
+        late.push(window.setTimeout(() => run(true, true), ms));
       }
     };
     window.addEventListener("orientationchange", onOrient);
@@ -6734,20 +6854,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      */
     const onSplitResize = (event: Event) => {
       if (splitResizePhase(event) === "settle") onOrient();
-      else schedule();
+      else scheduleLiveViewportFit();
     };
     window.addEventListener(SPLIT_RESIZE_EVENT, onSplitResize);
     return () => {
       observer.disconnect();
-      window.removeEventListener("resize", schedule);
-      window.visualViewport?.removeEventListener("resize", schedule);
+      window.removeEventListener("resize", scheduleLiveViewportFit);
+      window.visualViewport?.removeEventListener("resize", scheduleLiveViewportFit);
       window.removeEventListener("orientationchange", onOrient);
       window.removeEventListener(SPLIT_RESIZE_EVENT, onSplitResize);
       orientation?.removeEventListener("change", onOrient);
-      if (timer != null) window.clearTimeout(timer);
+      if (viewportFitRafRef.current) cancelAnimationFrame(viewportFitRafRef.current);
+      viewportFitRafRef.current = 0;
+      window.clearTimeout(viewportFitSettleRef.current);
       for (const id of late) window.clearTimeout(id);
     };
-  }, [applyLiveBoxFit, reportContentSlot, reportLinedSlot]);
+  }, [applyLiveBoxFit, scheduleLiveViewportFit]);
 
   /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
@@ -6780,6 +6902,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       refitToViewport();
       await waitFrame();
       reportContentSlot();
+      rasterInkRef.current?.syncCamera();
     })();
   }, [refitToViewport, reportContentSlot]);
 
@@ -7371,32 +7494,41 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     /*
      * A saved PDF camera is applied before interactive flips true. The open
      * fit here used to wipe that and land on page 1 every time.
+     *
+     * Coming back from the other pane is the same trap: `interactive` goes
+     * false while this board is parked, then true again. That is not an open.
+     * If the page is already placed, keep it — do not width-fit or settleFit
+     * as if the notebook were empty.
      */
-    const keepCamera = becameInteractive && userAdjustedCameraRef.current;
+    const alreadyPlaced = pageBoundsRef.current != null;
+    const keepCamera =
+      (becameInteractive && alreadyPlaced) ||
+      (becameInteractive && userAdjustedCameraRef.current);
     if (!keepCamera) userAdjustedCameraRef.current = false;
-    // Hide the other pages *before* fitting: a page is the only thing on the
-    // canvas, so zooming out on a tablet shows one frame, not the whole column.
-    // Ink clip tracks the same box — without this, marks from the previous page
-    // can flash on the next one until the next camera tick.
-    //
-    // Open often measured this column while it was parked or under Home's
-    // overlay. ResizeObserver can miss the reveal, so re-read height here —
-    // otherwise the pan clamp stays on the 1100 floor and the wheel is a no-op.
     syncDocumentScrollBounds();
     reportCodeSlot();
+    /*
+     * Notebook: one width-fit at the live box, then paint ink on that camera.
+     * The document settle ladder remeshed the book five times on open and on
+     * annotate/scroll chrome, which is the hung reverse-flick and the blurry
+     * first paint.
+     */
+    if (isDrawPageRegion(next)) {
+      if (becameInteractive && alreadyPlaced) {
+        rasterInkRef.current?.syncCamera();
+        if (!annotateCodeRef.current) armReadingScroll();
+        return;
+      }
+      userAdjustedCameraRef.current = false;
+      runFit(next, "keepY");
+      rasterInkRef.current?.syncCamera();
+      if (!annotateCodeRef.current) armReadingScroll();
+      return;
+    }
     rasterInkRef.current?.syncCamera();
     if (keepCamera) {
       if (!annotateCodeRef.current) armReadingScroll();
-      /*
-       * A notebook camera is the view. Width-fitting here is what made a
-       * reopened whiteboard look like a PDF page filling the hole.
-       *
-       * Documents still keepY: a saved zoom from a different pane size has
-       * to be re-derived or the page spills out of a split.
-       */
-      if (isDrawPageRegion(next)) {
-        syncDocumentScrollBounds();
-        rasterInkRef.current?.syncCamera();
+      if (becameInteractive && alreadyPlaced) {
         return;
       }
       /*
@@ -7443,6 +7575,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     armReadingScroll,
     nudgeViewportFit,
     reportCodeSlot,
+    runFit,
     settleFitView,
     syncDocumentScrollBounds,
   ]);
@@ -7923,7 +8056,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         pulseCameraMotionRef.current();
       }
       if (!liveCameraRef.current?.live) clearPanOffsetsRef.current();
-      if (!liveCameraRef.current?.live && !rasterInkRef.current?.isDrawing()) {
+      if (
+        !fittingCameraRef.current &&
+        !clampingScrollRef.current &&
+        !committingScrollRef.current &&
+        !liveCameraRef.current?.live &&
+        !rasterInkRef.current?.isDrawing()
+      ) {
         rasterInkRef.current?.syncCamera();
       }
       if (!liveCameraRef.current?.live) scheduleSlotReports();
@@ -7953,15 +8092,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         mapChromeHiddenRef.current,
         mobileRef.current,
       );
+      const fitted = lastFittedBoardBoxRef.current;
+      const boardBox =
+        fitted.w >= 8 && fitted.h >= 8
+          ? { width: fitted.w, height: fitted.h }
+          : boardRef.current?.getBoundingClientRect();
+      const { viewWidth, viewHeight } = liveBoardViewSize(boardBox, state);
       const next = clampScrollToBounds(
         scrollX,
         scrollY,
         state.zoom?.value ?? 1,
-        state.width,
-        state.height,
+        viewWidth || state.width,
+        viewHeight || state.height,
         bounds,
         inset,
+        isDrawPageRegion(mobileRegionRef.current) ? "keep" : "center",
       );
+      const lockX = scrollModeRef.current ? lockedScrollXRef.current : null;
+      if (lockX != null) next.scrollX = lockX;
       if (
         Math.abs(next.scrollX - scrollX) < 0.05 &&
         Math.abs(next.scrollY - scrollY) < 0.05
@@ -8444,8 +8592,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       markInkPagesFlushed: (pageIds) => {
         rasterInkRef.current?.markInkPagesFlushed(pageIds);
       },
-      ingestInkPages: (pages) => {
-        rasterInkRef.current?.ingestInkPages(pages);
+      ingestInkPages: (pages, opts) => {
+        rasterInkRef.current?.ingestInkPages(pages, opts);
         if (maybeGrowDrawFrame()) scheduleSlotReports();
         syncPageVisibility();
       },
@@ -8458,8 +8606,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       showPadTitle: (label) => {
         padTitleRef.current?.show(label);
       },
-      setInkOps: (ops) => {
-        rasterInkRef.current?.setOps(ops);
+      setInkOps: (ops, opts) => {
+        rasterInkRef.current?.setOps(ops, opts);
         /*
          * Restored ink has to grow the page, the same as drawn ink does.
          *
@@ -8521,8 +8669,35 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       restoreView: (saved) => {
         const api = apiRef.current;
         if (!api || !saved) return;
-        userAdjustedCameraRef.current = true;
         const zoom = saved.zoom > 0 ? saved.zoom : 1;
+        const drawPage = isDrawPageRegion(mobileRegionRef.current);
+        if (drawPage) {
+          /*
+           * Width-fit this window. The saved zoom/scrollX is the tablet camera
+           * — putting it back crops the left of the writing and marks the
+           * camera as a user pinch, so later fits never zoom out.
+           * Keep scrollY + that zoom only as the previous camera so keepY
+           * holds the same scene line.
+           */
+          userAdjustedCameraRef.current = false;
+          api.updateScene({
+            appState: {
+              scrollY: saved.scrollY,
+              zoom: { value: zoom },
+            },
+            captureUpdate: CaptureUpdateAction.NEVER,
+          });
+          const page = mobileRegionRef.current;
+          runFit(page, "keepY");
+          scheduleSlotReports();
+          requestAnimationFrame(() => {
+            runFit(page, "keepY");
+            rasterInkRef.current?.syncCamera();
+            scheduleSlotReports();
+          });
+          return;
+        }
+        userAdjustedCameraRef.current = true;
         api.updateScene({
           appState: {
             scrollX: saved.scrollX,
@@ -8583,6 +8758,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       },
       settleFitView,
       nudgeViewportFit,
+      syncLiveBox,
       waitForTemplate,
       fitCodeToSource,
       hasRasterInk: () => rasterInkRef.current?.hasInk() ?? false,
@@ -8619,6 +8795,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             scrollY: state.scrollY ?? 0,
             zoom: state.zoom?.value ?? 1,
             ...(linedPitchRef.current > 0 ? { linedPitch: linedPitchRef.current } : {}),
+            ...(linedPitchPairRef.current
+              ? {
+                  linedPitchWide: linedPitchPairRef.current.wide,
+                  linedPitchCollege: linedPitchPairRef.current.college,
+                }
+              : {}),
+            ...(linedRuleRef.current ? { linedRule: linedRuleRef.current } : {}),
             pdfPage: (() => {
               const origin = pageBoundsRef.current?.minY ?? 0;
               const frames = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
@@ -8686,13 +8869,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // Also drop tool/selection: a board saved while annotating would restore
         // Select, and finger-scroll dies until the toolbar is toggled.
         const saved = { ...((appState as Record<string, unknown> | undefined) ?? {}) };
-        linedPitchRef.current = linedPitchFromAppState(appState, "wide");
+        const lined = linedPitchStateFromAppState(appState, linedPaperRef.current);
+        linedPitchPairRef.current = lined.pair;
+        linedRuleRef.current = lined.rule;
+        linedPitchRef.current = activeLinedPitch(lined.pair, lined.rule);
+        if (lined.rule && linedPaperRef.current !== "off") {
+          linedPaperRef.current = lined.rule;
+          setLinedPaperMode(lined.rule);
+          saveLinedPaperMode(lined.rule);
+        }
         delete saved.zoom;
         delete saved.scrollX;
         delete saved.scrollY;
         delete saved.activeTool;
         delete saved.selectedElementIds;
         delete saved.linedPitch;
+        delete saved.linedPitchWide;
+        delete saved.linedPitchCollege;
+        delete saved.linedRule;
         if (options?.files && apiRef.current?.addFiles) {
           const list = Object.values(options.files).map((file) => ({
             id: file.id,
@@ -8773,7 +8967,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       armReadingScroll,
       syncDocumentScrollBounds,
     }),
-    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, maybeGrowDrawFrame, nudgeViewportFit, refitToViewport, scheduleSlotReports, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand, armReadingScroll, syncDocumentScrollBounds],
+    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, maybeGrowDrawFrame, nudgeViewportFit, syncLiveBox, refitToViewport, runFit, scheduleSlotReports, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand, armReadingScroll, syncDocumentScrollBounds],
   );
 
   return (
@@ -9228,16 +9422,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                         linedPaperRef.current = next;
                         setLinedPaperMode(next);
                         saveLinedPaperMode(next);
-                        if (next !== "off" && !(linedPitchRef.current > 0)) {
+                        if (next !== "off") {
+                          linedRuleRef.current = next;
                           const api = apiRef.current;
                           const zoom = Math.max(
                             0.05,
                             (api?.getAppState() as { zoom?: { value?: number } } | undefined)?.zoom
                               ?.value ?? 1,
                           );
-                          const pitch = linedPaperScenePitch(next, zoom);
-                          if (pitch > 0) linedPitchRef.current = pitch;
+                          ensureLinedPair(zoom);
+                          linedPitchRef.current = activeLinedPitch(
+                            linedPitchPairRef.current,
+                            next,
+                          );
                         }
+                        lastLinedSlotRef.current = null;
                         reflowReadingText();
                         requestAnimationFrame(reportLinedSlot);
                       }}
@@ -9500,7 +9699,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       )}
       <WhiteboardInkLab
         ref={rasterInkRef}
-        enabled={interactive}
+        enabled
         tool={
           interactive && annotateCode && inkToolActive
             ? activeTool === "eraser"
@@ -9674,8 +9873,8 @@ function RecentreIcon() {
   return (
     <svg
       viewBox="0 0 24 24"
-      width="17"
-      height="17"
+      width="16"
+      height="16"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.7"

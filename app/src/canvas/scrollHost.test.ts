@@ -5,8 +5,13 @@ import {
   horizontalScrollHost,
   horizontalScrollHostsIn,
   hostKeyInDoc,
+  hostScrollSnapshotOf,
   isInkPadTarget,
+  mergeHostScrollSnapshots,
+  pickSettledHostScroll,
   pinHostScroll,
+  pinHostScrollSnapshot,
+  restoreDroppedHostScroll,
   restoreHostScrollIn,
   scrollHostAtPoint,
   scrollHostLookupFromSlot,
@@ -267,6 +272,69 @@ describe("host scroll snapshot", () => {
     restoreHostScrollIn(board, saved);
     expect(next.scrollLeft).toBe(80);
     expect(next.scrollTop).toBe(12);
+  });
+
+  it("keeps the settled nested scroll when live has snapped to 0", () => {
+    const live = { doc: 0, key: 0, left: 0, top: 0 };
+    const remembered = { doc: 0, key: 0, left: 240, top: 12 };
+    expect(pickSettledHostScroll(live, remembered)).toEqual(remembered);
+    expect(pickSettledHostScroll({ ...live, left: 260 }, remembered)).toEqual({
+      doc: 0,
+      key: 0,
+      left: 260,
+      top: 12,
+    });
+  });
+
+  it("pins onto a remounted host by key, not the detached node", () => {
+    const { board, doc, pre } = buildDoc();
+    Object.defineProperty(pre, "scrollLeft", {
+      value: 180,
+      writable: true,
+      configurable: true,
+    });
+    const pin = hostScrollSnapshotOf(pre, board);
+    expect(pin).toEqual({ doc: 0, key: 0, left: 180, top: 0 });
+    pre.remove();
+    const next = document.createElement("pre");
+    next.style.overflowX = "auto";
+    sizeOf(next, 900, 400);
+    Object.defineProperty(next, "scrollLeft", {
+      value: 0,
+      writable: true,
+      configurable: true,
+    });
+    doc.append(next);
+    expect(pinHostScrollSnapshot(board, pin)).toBe(next);
+    expect(next.scrollLeft).toBe(180);
+  });
+
+  it("restores dropped nested scroll after a remount", () => {
+    const { board, doc, pre } = buildDoc();
+    Object.defineProperty(pre, "scrollLeft", {
+      value: 90,
+      writable: true,
+      configurable: true,
+    });
+    const remembered = snapshotHostScrollIn(board);
+    pre.remove();
+    const next = document.createElement("pre");
+    next.style.overflowX = "auto";
+    sizeOf(next, 900, 400);
+    Object.defineProperty(next, "scrollLeft", {
+      value: 0,
+      writable: true,
+      configurable: true,
+    });
+    doc.append(next);
+    restoreDroppedHostScroll(board, remembered);
+    expect(next.scrollLeft).toBe(90);
+  });
+
+  it("merges live hosts with remembered places that collapsed", () => {
+    const remembered = [{ doc: 0, key: 0, left: 40, top: 0 }];
+    const live = [{ doc: 0, key: 0, left: 0, top: 0 }];
+    expect(mergeHostScrollSnapshots(remembered, live)).toEqual(remembered);
   });
 });
 

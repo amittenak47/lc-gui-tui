@@ -17101,21 +17101,18 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * Reading pan: drop the pdf.js overlay and footnote bands from the compositor.
- * Glyphs stay on the page canvas. Quotes/footnotes need those spans at rest —
- * hide only while `setDocCameraLive(true)`, not on mere pointer-down (hold-
- * then-drag still has to hit the text layer).
+ * Reading pan: drop the pdf.js overlay from the compositor. Glyphs stay on
+ * the page canvas. Quotes need those spans at rest — hide only while
+ * `setDocCameraLive(true)`, not on mere pointer-down (hold-then-drag still
+ * has to hit the text layer). Footnote packs stay up during pan; they ride
+ * the marks-slot transform. Off-screen PDF pages hide their own marks in
+ * DocSelectionLayer when the intersecting set changes, not every frame.
  */
 html.lc-doc-camera-live .lc-pdf-text.textLayer {
   visibility: hidden;
   pointer-events: none !important;
   user-select: none !important;
   -webkit-user-select: none !important;
-}
-
-html.lc-doc-camera-live .lc-page-marks-slot {
-  visibility: hidden;
-  pointer-events: none !important;
 }
 
 

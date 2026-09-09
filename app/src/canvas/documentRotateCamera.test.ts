@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   documentCameraAfterViewportChange,
+  DRAW_PAGE_REF_VIEW_W,
   excalidrawViewportNeedsSync,
   keepZoomCenterCameraAfterViewportChange,
   keepZoomKeepPanCameraAfterViewportChange,
+  drawPageCameraAfterViewportChange,
+  drawPageFitBox,
+  drawPageRecentreCamera,
   liveBoardViewSize,
   liveExcalidrawViewport,
 } from "./documentRotateCamera";
@@ -158,6 +162,162 @@ describe("keepZoomCenterCameraAfterViewportChange", () => {
   });
 });
 
+describe("drawPageFitBox", () => {
+  const page = { minX: 0, minY: 10, maxX: 800, maxY: 4200 };
+
+  it("keeps the authored sheet width so the camera does not zoom into the ink", () => {
+    const box = drawPageFitBox(page, { minX: 400 }, 3920);
+    expect(box.minX).toBe(0);
+    expect(box.maxX).toBe(3920);
+    expect(box.minY).toBe(10);
+  });
+
+  it("zooms out when writing starts before the frame so the right of the sheet stays on screen", () => {
+    const box = drawPageFitBox(page, { minX: -80 }, 3920);
+    expect(box.minX).toBe(-80);
+    expect(box.maxX).toBe(3920);
+  });
+
+  it("zooms out when writing runs past the sheet", () => {
+    const box = drawPageFitBox(page, { minX: 0, maxX: 4100 }, 3920);
+    expect(box.minX).toBe(0);
+    expect(box.maxX).toBe(4100);
+  });
+});
+
+describe("drawPageCameraAfterViewportChange", () => {
+  const page = { minX: 0, minY: 0, maxX: 3920, maxY: 4200 };
+
+  it("scales writing with the window and pins the page to the left", () => {
+    const tablet = drawPageCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 390,
+      prevZoom: 0.1,
+      prevScrollY: -200,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    const desktop = drawPageCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 844,
+      prevZoom: tablet.zoom,
+      prevScrollY: tablet.scrollY,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    expect(desktop.zoom).toBeGreaterThan(tablet.zoom);
+    const tabletAvail = 390 - inset.left - inset.right;
+    const desktopAvail = 844 - inset.left - inset.right;
+    expect(tablet.zoom).toBeCloseTo(tabletAvail / 3920, 5);
+    expect(desktop.zoom).toBeCloseTo(desktopAvail / 3920, 5);
+    expect(inset.left / tablet.zoom - tablet.scrollX).toBeCloseTo(0, 5);
+    expect(inset.left / desktop.zoom - desktop.scrollX).toBeCloseTo(0, 5);
+  });
+
+  it("fills a desktop window instead of letterboxing a tablet hole", () => {
+    const tablet = drawPageCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: DRAW_PAGE_REF_VIEW_W,
+      prevZoom: 1,
+      prevScrollY: -200,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    const desktop = drawPageCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 1800,
+      prevZoom: tablet.zoom,
+      prevScrollY: tablet.scrollY,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    const desktopAvail = 1800 - inset.left - inset.right;
+    expect(desktop.zoom).toBeGreaterThan(tablet.zoom);
+    expect(desktop.zoom).toBeCloseTo(desktopAvail / 3920, 5);
+    expect(inset.left / desktop.zoom - desktop.scrollX).toBeCloseTo(0, 5);
+  });
+
+  it("still honours an explicit fit cap when a caller asks for one", () => {
+    const desktop = drawPageCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 1800,
+      prevZoom: 1,
+      prevScrollY: 0,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+      capViewWidth: DRAW_PAGE_REF_VIEW_W,
+    });
+    expect(desktop.zoom).toBeCloseTo(DRAW_PAGE_REF_VIEW_W / 3920, 5);
+  });
+
+  it("still scales down when the window is narrower than the tablet hole", () => {
+    const wide = drawPageCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 844,
+      prevZoom: 0.4,
+      prevScrollY: 0,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    const thin = drawPageCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 250,
+      prevZoom: wide.zoom,
+      prevScrollY: wide.scrollY,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    expect(thin.zoom).toBeLessThan(wide.zoom);
+    const availW = 250 - inset.left - inset.right;
+    expect(3920 * thin.zoom).toBeLessThanOrEqual(availW + 0.5);
+    expect(inset.left / thin.zoom - thin.scrollX).toBeCloseTo(0, 5);
+  });
+
+  it("keeps the same scene line at the top of the hole", () => {
+    const first = drawPageCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 390,
+      prevZoom: 0.1,
+      prevScrollY: -480,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    const sceneYTop = inset.top / first.zoom - first.scrollY;
+    const next = drawPageCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 844,
+      prevZoom: first.zoom,
+      prevScrollY: first.scrollY,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    expect(inset.top / next.zoom - next.scrollY).toBeCloseTo(sceneYTop, 5);
+  });
+
+  it("stays left-aligned when zoom hits the cap and leftover slack appears", () => {
+    const camera = drawPageCameraAfterViewportChange({
+      box: { minX: 0, minY: 0, maxX: 342, maxY: 4000 },
+      inset,
+      viewWidth: 844,
+      prevZoom: 1,
+      prevScrollY: 0,
+      zoomMin: 0.15,
+      zoomMax: 1.75,
+    });
+    expect(camera.zoom).toBe(1.75);
+    expect(inset.left / camera.zoom - camera.scrollX).toBeCloseTo(0, 5);
+  });
+});
+
 describe("keepZoomKeepPanCameraAfterViewportChange", () => {
   const page = { minX: 0, minY: 0, maxX: 3920, maxY: 4200 };
 
@@ -175,6 +335,23 @@ describe("keepZoomKeepPanCameraAfterViewportChange", () => {
     expect(next.zoom).toBe(0.1);
     expect(next.scrollX).toBeCloseTo(-1200, 5);
     expect(next.scrollY).toBeCloseTo(-400, 5);
+  });
+
+  it("does not zoom in when the desktop hole is wider than the tablet", () => {
+    const tabletZoom = 0.2;
+    const next = keepZoomKeepPanCameraAfterViewportChange({
+      box: page,
+      inset,
+      viewWidth: 1800,
+      prevZoom: tabletZoom,
+      prevScrollX: 0,
+      prevScrollY: -120,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    expect(next.zoom).toBe(tabletZoom);
+    expect(next.zoom).toBeLessThan((1800 - inset.left - inset.right) / 3920);
+    expect(next.scrollY).toBeCloseTo(-120, 5);
   });
 
   it("keeps the same scene point when it has to zoom out", () => {
@@ -267,6 +444,35 @@ describe("the split-pane fit floor", () => {
       zoomMax: 1.75,
     });
     expect(camera.zoom).toBeGreaterThan(0.15);
+  });
+});
+
+describe("drawPageRecentreCamera", () => {
+  const page = { minX: 0, minY: 0, maxX: 3920, maxY: 4200 };
+
+  it("width-fits about the hole centre instead of slamming to the left edge", () => {
+    const viewWidth = 844;
+    const availW = viewWidth - inset.left - inset.right;
+    const prevZoom = 0.8;
+    const prevScrollX = (viewWidth - inset.right) / prevZoom - page.maxX;
+    const next = drawPageRecentreCamera({
+      box: page,
+      inset,
+      viewWidth,
+      prevZoom,
+      prevScrollX,
+      prevScrollY: -200,
+      zoomMin: 0.02,
+      zoomMax: 1.75,
+    });
+    expect(next.zoom).toBeCloseTo(availW / 3920, 5);
+    const holeCenter = inset.left + availW / 2;
+    expect(holeCenter / next.zoom - next.scrollX).toBeCloseTo(
+      holeCenter / prevZoom - prevScrollX,
+      5,
+    );
+    const startAlignX = inset.left / next.zoom - page.minX;
+    expect(next.scrollX).not.toBeCloseTo(startAlignX, 3);
   });
 });
 

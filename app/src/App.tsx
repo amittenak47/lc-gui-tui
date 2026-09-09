@@ -856,13 +856,16 @@ export function App() {
       if (id === state.activeId) return;
       // The strip is chrome for the focused book only. Leaving it open as a
       // global meant both split PDFs filled thumbs at once — a 44 MB file
-      // next to a short one. Clicking the other tab (or its pane) closes it;
-      // "Show page previews" on the newly focused book turns it back on.
-      // Unpersisted, so the next launch still follows the last explicit toggle.
-      setPdfFilmOpen(false);
+      // next to a short one. Clicking a *different* tab closes it; swapping
+      // halves of the same split must not, or the file pane reflows and looks
+      // like it reloaded.
+      const sameSplit = Boolean(tab.group && tab.group === state.tabs.find((entry) => entry.id === state.activeId)?.group);
+      if (!sameSplit) setPdfFilmOpen(false);
       setMissingTab(null);
       setError(null);
-      promote(id);
+      // Already on screen (the other split half): promoting it reorders the
+      // live list, React moves the canvas nodes, and both panes flash empty.
+      if (!visibleTabIds(state).includes(id)) promote(id);
       dispatchTabs({ type: "focus", id, at: Date.now() });
     },
     [promote],

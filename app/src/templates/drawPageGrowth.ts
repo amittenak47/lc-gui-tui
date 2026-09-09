@@ -197,3 +197,12 @@ export function isDrawPageRegion(region: string | null | undefined): boolean {
   if (region.startsWith("mdink")) return false;
   return true;
 }
+
+/**
+ * Annotate/scroll class flips remount nested `pre` hosts, so documents have to
+ * remesh host-bound ink. A notebook has no nested host — remeshing the book
+ * on every toggle is the 150–550ms rAF stall on a simple pad.
+ */
+export function inkNeedsAnnotateToggleReplay(region: string | null | undefined): boolean {
+  return !isDrawPageRegion(region);
+}

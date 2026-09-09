@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   announceSplitResize,
+  sashDragActive,
   SPLIT_RESIZE_EVENT,
   splitResizePhase,
 } from "./splitResize";
@@ -37,5 +38,15 @@ describe("splitResizePhase", () => {
     expect(
       splitResizePhase(new CustomEvent(SPLIT_RESIZE_EVENT, { detail: { phase: "wat" } })),
     ).toBeNull();
+  });
+});
+
+describe("sashDragActive", () => {
+  it("is true only while the body carries the drag flag", () => {
+    expect(sashDragActive()).toBe(false);
+    document.body.dataset.lcSashDrag = "vertical";
+    expect(sashDragActive()).toBe(true);
+    delete document.body.dataset.lcSashDrag;
+    expect(sashDragActive()).toBe(false);
   });
 });
