@@ -1849,11 +1849,10 @@ export function Workspace({
    * ready. A transition that finishes early is not a transition, it is a
    * decoration over a wait, and it makes the wait feel longer than it is.
    *
-   * Preparing must clear *before* the "done" beat. The status UI is
-   * `done={motion === "done"}` (and used to also require `!boardPreparing`).
-   * Callers left preparing true through the whole hold, so the checkmark
-   * never painted — then idle + preparing false landed in one frame and the
-   * spinner simply vanished.
+   * The checkmark is the done beat. Callers must await ink remesh
+   * (`primeInkSnap`) *before* this so the spinner still covers that work.
+   * Preparing stays true through the hold so the page is not shown under a
+   * check that has not finished.
    */
   const finishLoadingTransition = useCallback(
     async (fromBrowse: boolean, switching: boolean, loadGen: number) => {
@@ -2855,6 +2854,7 @@ export function Workspace({
           void pushProblemPad(client, seed);
         }
         await boardRef.current?.settleFitView();
+        await boardRef.current?.primeInkSnap();
 
         if (userLoad) {
           await finishLoadingTransition(fromBrowse, switching, loadGen);
@@ -3139,6 +3139,7 @@ export function Workspace({
         await new Promise<void>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
         });
+        await boardRef.current?.primeInkSnap();
 
         // Taken after the template and any restored ink have landed, so it is
         // the notebook as the writer first sees it. Anything that moves this
@@ -3923,7 +3924,9 @@ export function Workspace({
         // camera after that page exists; do not fit to the stack top first.
         if (existing) {
           const handle = boardRef.current;
-          if (handle) await restoreInk(handle, annotateDocKey(existing.id), existing.board);
+          if (handle) await restoreInk(handle, annotateDocKey(existing.id), existing.board, {
+            paint: false,
+          });
         }
 
         // Document must finish laying out (measure stable) before reveal.
@@ -4063,6 +4066,7 @@ export function Workspace({
             boardRef.current?.restoreView(existing.board.appState);
           }
         }
+        await boardRef.current?.primeInkSnap();
 
         {
           const board = boardRef.current;
@@ -4103,11 +4107,16 @@ export function Workspace({
         );
         if (workspaceLoadGenRef.current !== loadGen) return;
         if (existing) {
-          // Again, now that the raster layer is interactive. The first restore
-          // ran while preparing (canvas unmounted); Sync's reload works because
-          // it paints on a live board. Same moment as the reading-hand arm.
+          // First restore already filled the book (paint:false) and primeInkSnap
+          // sliced the overlay. A second ingest here remeshed every spine the
+          // moment the doodle overlay dropped — "isn't responding" on open.
           const handle = boardRef.current;
-          if (handle) await restoreInk(handle, annotateDocKey(existing.id), existing.board);
+          if (handle && !handle.hasRasterInk()) {
+            await restoreInk(handle, annotateDocKey(existing.id), existing.board, {
+              paint: false,
+            });
+            await handle.primeInkSnap();
+          }
         }
         const relandPdf = () => {
           const filmed = peekPdfFilmCurrent(tab.id);
@@ -10015,6 +10024,7 @@ export function Workspace({
             filmScope={tab.id}
             ref={boardRef}
             themeId={themeId}
+            preparing={boardPreparing}
             onThemePick={setThemeId}
             readingSize={readingSize}
             interactive={Boolean(
@@ -11302,7 +11312,7 @@ function WorkspaceLoadStatus({ done, themeId }: { done: boolean; themeId: string
       aria-live="polite"
       aria-label={done ? "Workspace ready" : "Loading workspace"}
     >
-      {!done && <LoadingDoodle themeId={themeId} />}
+      <LoadingDoodle themeId={themeId} />
       {done ? (
         <div className="lc-spinner-check" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="22" height="22">

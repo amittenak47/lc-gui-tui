@@ -252,6 +252,9 @@ export function tryCreateSdfRenderer(
   const resize = (nw: number, nh: number) => {
     const width = Math.max(1, nw);
     const height = Math.max(1, nh);
+    if (viewW === width && viewH === height && canvas.width === width && canvas.height === height) {
+      return;
+    }
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
       canvas.height = height;

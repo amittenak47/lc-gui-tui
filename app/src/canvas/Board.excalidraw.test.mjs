@@ -26,6 +26,35 @@ describe("Board", () => {
     );
     expect(present).toMatch(/canvasRef\.current\?\.style\.transform/);
     expect(src).toMatch(/if \(canvasRef\.current\?\.style\.transform\) return/);
+    expect(present).toMatch(/instantReplayOnPageWindow\(\)/);
+    expect(present).toMatch(/instantReplayOnFirstPresent\(\)/);
+    expect(present).toMatch(/instantReplayOnCameraRebase\(\)/);
+    expect(present).not.toMatch(/engineRef\.current\?\.paint\(\)/);
+  });
+
+  it("does not remesh ink when a tool pick ends a camera that was not moving", () => {
+    const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
+    const board = readFileSync(join(here, "Board.tsx"), "utf8");
+    const moving = src.slice(
+      src.indexOf("setCameraMoving(moving) {"),
+      src.indexOf("sizeToHostRef.current();"),
+    );
+    expect(moving).toMatch(/remeshOnCameraMovingEnd\(wasMoving\)/);
+    expect(board).toMatch(
+      /stopPanInertia\(\);[\s\S]{0,400}commitVisualScrollRef\.current\(\);[\s\S]{0,100}cancelCameraMotion\(\)/,
+    );
+  });
+
+  it("applies a wheel wedge to the live store before setTool re-reads lastWedge", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const apply = src.slice(
+      src.indexOf("const applyInkWedge = useCallback"),
+      src.indexOf("const applyTextModeToAppState"),
+    );
+    expect(apply).toMatch(/presetStoreRef\.current = next/);
+    expect(apply.indexOf("presetStoreRef.current = next")).toBeLessThan(
+      apply.indexOf("setPresetStore(next)"),
+    );
   });
 
   it("commits the live camera before idle remesh", () => {
@@ -226,13 +255,30 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/overdrawMarginPx/);
     expect(src).not.toMatch(/const marginY = 0/);
     expect(src).toMatch(/if \(drawingRef\.current \|\| cameraMovingRef\.current\) return/);
-    expect(src).toMatch(/rebuildAndReplay\(false, true\)/);
+    expect(src).toMatch(/instantReplayOnCameraRebase\(\)/);
+    expect(src).toMatch(/rebuildAndReplay\(false, instantReplayOnFirstPresent\(\)\)/);
+    expect(src).toMatch(/bakeSpineOffThread/);
+    const composite = readFileSync(join(here, "inkLab/engine.ts"), "utf8").slice(
+      readFileSync(join(here, "inkLab/engine.ts"), "utf8").indexOf("const composite"),
+      readFileSync(join(here, "inkLab/engine.ts"), "utf8").indexOf("type LiftState"),
+    );
+    expect(composite).not.toMatch(/clipBlitRect|liveClipRect/);
     expect(src).not.toMatch(/Math\.max\(1, painted\.marginY\)/);
     const tick = src.slice(src.indexOf("const onPaintFrame"), src.indexOf("const schedulePaint"));
     expect(tick.indexOf("keepLivePaintPump")).toBeGreaterThan(-1);
     expect(tick.indexOf("keepLivePaintPump")).toBeLessThan(tick.indexOf("engine.paint"));
     expect(tick.indexOf("engine.paint")).toBeLessThan(tick.indexOf("reportLoad"));
-    expect(src).toMatch(/shouldFlushLiveHud/);
+    const report = src.slice(src.indexOf("const reportLoad"), src.indexOf("const stopPaintPump"));
+    expect(report).toMatch(/if \(live\) return/);
+    expect(src).toMatch(/primeSnap\(\)/);
+    expect(src).toMatch(/replayRafRef\.current != null/);
+    expect(src).toMatch(/new EraseBakeJob/);
+    expect(src).toMatch(/engine\.liftRaw/);
+    expect(src).toMatch(/bakeSpineOffThread/);
+    expect(src).toMatch(/if \(drawingRef\.current\) return/);
+    const down = src.slice(src.indexOf("const onPointerDown"), src.indexOf("const onPointerMove"));
+    expect(down).toMatch(/instantReplayOnPointerDown/);
+    expect(down).not.toMatch(/presentCommitted\(null, true\)/);
   });
 });
 
@@ -287,6 +333,18 @@ describe("Workspace pane switch", () => {
     const src = readFileSync(join(here, "../Workspace.tsx"), "utf8");
     expect(src).toMatch(/paint: false/);
     expect(src).toMatch(/ingestInkPages\(shards, opts\)/);
+    expect(src).toMatch(/primeInkSnap/);
+    expect(src).toMatch(/await boardRef\.current\?\.primeInkSnap\(\)/);
+    expect(src).not.toMatch(/^\s*boardRef\.current\?\.primeInkSnap\(\);/m);
+    expect(src).not.toMatch(/^\s*handle\.primeInkSnap\(\);/m);
+  });
+
+  it("keeps the loading doodle through the check beat", () => {
+    const src = readFileSync(join(here, "../Workspace.tsx"), "utf8");
+    expect(src).not.toMatch(/!done && <LoadingDoodle/);
+    const start = src.indexOf("function WorkspaceLoadStatus");
+    expect(start).toBeGreaterThan(-1);
+    expect(src.slice(start, start + 900)).toMatch(/<LoadingDoodle themeId=\{themeId\} \/>/);
   });
 
   it("does not tear the PDF down when switching to the other pane", () => {
@@ -361,7 +419,7 @@ describe("ink undo after a new stroke", () => {
     expect(redo).toMatch(/presentCommitted\(null, true\)/);
     expect(redo).not.toMatch(/forgetPixelHistory/);
     expect(src).toMatch(/dropRedoStacks/);
-    expect(src).toMatch(/before the nib goes down/);
+    expect(src).toMatch(/instantReplayOnPointerDown/);
   });
 });
 

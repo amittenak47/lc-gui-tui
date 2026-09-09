@@ -3,8 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   inkCanvasPixelsChanged,
   instantReplayOnBackingResize,
+  instantReplayOnCameraRebase,
+  instantReplayOnFirstPresent,
+  instantReplayOnPageWindow,
+  instantReplayOnPointerDown,
   keepLivePaintPump,
   LIVE_HUD_FLUSH_MS,
+  mutationIsInkChrome,
+  remeshOnCameraMovingEnd,
   samePaintedView,
   shouldFlushLiveHud,
   skipCommittedReplay,
@@ -58,7 +64,36 @@ describe("live host contract", () => {
     expect(skipReplayOnWheelAbort()).toBe(true);
   });
 
-  it("slices the remesh after a real backing-store resize", () => {
-    expect(instantReplayOnBackingResize()).toBe(false);
+  it("keeps a live resize atomic but slices first paint under loading", () => {
+    expect(instantReplayOnBackingResize()).toBe(true);
+    expect(instantReplayOnBackingResize(true)).toBe(false);
+  });
+
+  it("does not instantly remesh when the page LRU hydrates", () => {
+    expect(instantReplayOnPageWindow()).toBe(false);
+  });
+
+  it("does not instantly remesh the first present after restore", () => {
+    expect(instantReplayOnFirstPresent()).toBe(false);
+  });
+
+  it("does not remesh the notebook when a tool pick calls setCameraMoving(false)", () => {
+    expect(remeshOnCameraMovingEnd(false)).toBe(false);
+    expect(remeshOnCameraMovingEnd(true)).toBe(true);
+  });
+
+  it("does not instantly remesh the notebook on pointer down", () => {
+    expect(instantReplayOnPointerDown()).toBe(false);
+  });
+
+  it("lands a camera rebase in one present", () => {
+    expect(instantReplayOnCameraRebase()).toBe(true);
+  });
+
+  it("ignores HUD mutations under the ink host", () => {
+    const host = { contains: (node: Node) => node === host || node.parentNode === host };
+    const hud = { parentNode: host } as unknown as Node;
+    expect(mutationIsInkChrome([{ target: hud }], host as unknown as Node)).toBe(true);
+    expect(mutationIsInkChrome([{ target: hud }], null)).toBe(false);
   });
 });

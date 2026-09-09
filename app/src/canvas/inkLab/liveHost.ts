@@ -42,11 +42,64 @@ export function skipReplayOnWheelAbort(): boolean {
 }
 
 /**
- * Camera rebase must land in one present. A backing-store resize already wiped
- * the bitmap — slice the remesh so the sizeToHost path cannot ANR Android.
+ * Interactive resize is a camera rebase and lands in one present. During
+ * loading the opaque overlay owns first paint, so a dense restore may prepare
+ * the wiped backing store in slices without exposing partial ink.
  */
-export function instantReplayOnBackingResize(): boolean {
+export function instantReplayOnBackingResize(preparing = false): boolean {
+  return !preparing;
+}
+
+/**
+ * LRU hydrate is not a camera rebase. Instant overlay rebuild on that path
+ * is the "Whiteboard isn't responding" dialog on a dense Exam page.
+ */
+export function instantReplayOnPageWindow(): boolean {
   return false;
+}
+
+/**
+ * First present after restore (loading overlay still up, or just dropping)
+ * must not remesh every overlay spine on one tick. Slice it like a resize.
+ */
+export function instantReplayOnFirstPresent(): boolean {
+  return false;
+}
+
+/**
+ * Pointer-down used to cancel a sliced remesh and replay every overlay spine
+ * on the nib stack — "Whiteboard isn't responding" plus a growing clip square.
+ */
+export function instantReplayOnPointerDown(): boolean {
+  return false;
+}
+
+/**
+ * Camera rebase must land in one present. Slicing it is the ghost / blank
+ * page after a flick — each slice clears the snap then paints more spines.
+ */
+export function instantReplayOnCameraRebase(): boolean {
+  return true;
+}
+
+/**
+ * Picking eraser / pen / highlighter is not a pan settle. `setCameraMoving(false)`
+ * used to remesh every overlay spine on that tap.
+ */
+export function remeshOnCameraMovingEnd(wasMoving: boolean): boolean {
+  return wasMoving;
+}
+
+/**
+ * HUD / load-bar text lives under the ink host. Nested-scroll observers must
+ * not treat those writes as a new `<pre>` scroller.
+ */
+export function mutationIsInkChrome(
+  records: readonly { target: Node }[],
+  inkHost: Node | null,
+): boolean {
+  if (!inkHost || records.length === 0) return false;
+  return records.every((record) => inkHost.contains(record.target));
 }
 
 /**
