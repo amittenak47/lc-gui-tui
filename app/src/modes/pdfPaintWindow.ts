@@ -150,12 +150,17 @@ export function pdfPaintShouldWaitForLanding(C: number, lastLaidOut: number): bo
 /**
  * Who may call `page.render` on the shared pdf.js worker.
  *
- * Parked (`paused`) tears the observer down. Unfocused-but-visible still
- * decodes 0.25 for the hole — those sheets are on screen. `holdDecode` only
+ * Parked (`paused`) tears the observer down. Mounted-but-hidden (`offscreen`)
+ * keeps the picture and skips the worker — coming back is not an open.
+ * Unfocused-but-visible still decodes 0.25 for the hole. `holdDecode` only
  * strips rest-2 / path-fill so a focused PDF sibling keeps lossless.
  */
-export function pdfMayTakeWorker(paused: boolean, _holdDecode = false): boolean {
-  return !paused;
+export function pdfMayTakeWorker(
+  paused: boolean,
+  _holdDecode = false,
+  offscreen = false,
+): boolean {
+  return !paused && !offscreen;
 }
 
 /** Keep GPU slots for C±R and every sheet actually in the viewport. */

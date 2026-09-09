@@ -23,14 +23,14 @@ describe("inkedPageIds", () => {
     ).toEqual([2, 6]);
   });
 
-  it("leaves the spanning shard out", () => {
+  it("leaves the spanning shard off a textbook, and onto page 1 when it is the only ink", () => {
     /*
-     * Page 0 is where strokes go when their box crosses a page gap. It belongs
-     * to no single slot, and treating the id as a page number would draw those
-     * strokes on page one.
+     * Page 0 is where strokes go when their box crosses a page gap. On a
+     * textbook it belongs to no single slot. On a one-page pad it is still
+     * the page, so the preview has to draw it there.
      */
     expect(inkedPageIds([{ page_id: 0 }, { page_id: 3 }])).toEqual([3]);
-    expect(inkedPageIds([{ page_id: 0 }])).toEqual([]);
+    expect(inkedPageIds([{ page_id: 0 }])).toEqual([1]);
   });
 
   it("has nothing to say about a pad with no ink", () => {

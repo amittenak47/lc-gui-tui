@@ -31,7 +31,7 @@ import {
   type PageFrame,
 } from "./inkPageIndex";
 import type { InkEraseOp, InkOp } from "./rasterInk";
-import { opsAfterStrokeErase } from "./strokeEraser";
+import { opsAfterPartialErase, opsAfterStrokeErase, opsWithErasesBaked } from "./strokeEraser";
 
 export const INK_UNDO_CAP = 40;
 
@@ -41,6 +41,11 @@ export const INK_COLD_CAP = 32;
 export type InkUndoEntry =
   | { kind: "add"; pageId: number; op: InkOp }
   | { kind: "removeMany"; items: { pageId: number; op: InkOp }[] }
+  | {
+      kind: "replaceMany";
+      removed: { pageId: number; op: InkOp }[];
+      added: { pageId: number; op: InkOp }[];
+    }
   | { kind: "clear"; pages: Map<number, EncodedInk> };
 
 export class InkPageBook {
@@ -182,7 +187,8 @@ export class InkPageBook {
   takeDirtyEncoded(): Map<number, EncodedInk> {
     const out = new Map<number, EncodedInk>();
     for (const pageId of this.dirty) {
-      out.set(pageId, this.encodedPage(pageId) ?? { v: 2, ops: [] });
+      const raw = this.encodedPage(pageId) ?? { v: 2, ops: [] };
+      out.set(pageId, encodeInkOps(opsWithErasesBaked(decodeInkOps(raw))));
     }
     return out;
   }
@@ -300,6 +306,40 @@ export class InkPageBook {
     return this.paintOps();
   }
 
+  /**
+   * Pixel-eraser: cut the rub out of visible draw ops so remesh/save/sync
+   * cannot put the ink back. `null` when the rub missed.
+   */
+  partialErase(erase: InkEraseOp): InkOp[] | null {
+    const paint = this.paintOps();
+    const clipped = opsAfterPartialErase(paint, erase);
+    if (!clipped) return null;
+    const nextOps = opsWithErasesBaked(clipped);
+    const removed: { pageId: number; op: InkOp }[] = [];
+    for (const [pageId, list] of this.hot) {
+      for (const op of list) removed.push({ pageId, op });
+    }
+    const added: { pageId: number; op: InkOp }[] = [];
+    for (const op of nextOps) {
+      const stamped = this.ensureIdentity(op, op.id != null || op.seq != null);
+      added.push({ pageId: pageIdForOp(stamped, this.frames), op: stamped });
+    }
+    this.hot.clear();
+    for (const item of added) {
+      const list = this.hot.get(item.pageId);
+      if (list) list.push(item.op);
+      else this.hot.set(item.pageId, [item.op]);
+      this.markDirty(item.pageId);
+    }
+    for (const item of removed) this.markDirty(item.pageId);
+    this.opTotal += added.length - removed.length;
+    this.pushUndo({ kind: "replaceMany", removed, added });
+    this.redo = [];
+    this.setVisiblePage(this.visiblePage);
+    this.bump();
+    return this.paintOps();
+  }
+
   clear(): void {
     if (this.opTotal === 0) return;
     const pages = new Map<number, EncodedInk>();
@@ -355,6 +395,20 @@ export class InkPageBook {
       }
       return;
     }
+    if (entry.kind === "replaceMany") {
+      for (const item of entry.added) {
+        this.removeOp(item.pageId, item.op);
+        this.opTotal = Math.max(0, this.opTotal - 1);
+        this.markDirty(item.pageId);
+      }
+      for (const item of entry.removed) {
+        this.hydrate(item.pageId);
+        this.insert(item.pageId, item.op);
+        this.opTotal += 1;
+        this.markDirty(item.pageId);
+      }
+      return;
+    }
     this.hot.clear();
     this.cold.clear();
     this.opTotal = 0;
@@ -378,6 +432,20 @@ export class InkPageBook {
       for (const item of entry.items) {
         this.removeOp(item.pageId, item.op);
         this.opTotal = Math.max(0, this.opTotal - 1);
+        this.markDirty(item.pageId);
+      }
+      return;
+    }
+    if (entry.kind === "replaceMany") {
+      for (const item of entry.removed) {
+        this.removeOp(item.pageId, item.op);
+        this.opTotal = Math.max(0, this.opTotal - 1);
+        this.markDirty(item.pageId);
+      }
+      for (const item of entry.added) {
+        this.hydrate(item.pageId);
+        this.insert(item.pageId, item.op);
+        this.opTotal += 1;
         this.markDirty(item.pageId);
       }
       return;

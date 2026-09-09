@@ -118,6 +118,8 @@ export function SplitSash({
       if (!dragRef.current) return;
       applyCss(event.clientX, event.clientY);
       const ratio = ratioRef.current;
+      // Clear `data-lc-sash-drag` before settle — boards skip keepY while it
+      // is set, so the final refit has to see a clean body.
       unbind();
       if (ratio != null) onRatioRef.current(ratio);
       announceSettled();

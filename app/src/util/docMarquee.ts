@@ -415,6 +415,32 @@ export function pdfPageNumberOf(root: HTMLElement): number | null {
   return n >= 1 ? n : null;
 }
 
+/** 1-based PDF page encoded in a doc scope (`p12`, `p12r`), or null. */
+export function pdfPageFromDocScope(scope: string | null | undefined): number | null {
+  if (!scope) return null;
+  const match = /^p(\d+)/.exec(scope);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return n >= 1 ? n : null;
+}
+
+/**
+ * Whether a mark on `scope` should paint given the pages currently in view.
+ *
+ * Empty intersecting (markdown, or PDF before the film publishes) shows every
+ * mark. A PDF page that is mounted in the paint window but not on screen is
+ * hidden here — not the whole overlay on every pan frame.
+ */
+export function footnoteVisibleOnViewPages(
+  scope: string | null | undefined,
+  intersectingPages: readonly number[],
+): boolean {
+  if (intersectingPages.length === 0) return true;
+  const page = pdfPageFromDocScope(scope);
+  if (page == null) return true;
+  return intersectingPages.includes(page);
+}
+
 /** Scope root under a viewport point, or the body. */
 export function scopeRootAtPoint(
   body: HTMLElement,

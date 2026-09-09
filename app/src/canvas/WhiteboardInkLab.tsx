@@ -100,13 +100,16 @@ export interface RasterInkHandle {
   commitCamera(): void;
   setCameraMoving(moving: boolean): void;
   getOps(): InkOp[];
-  setOps(ops: readonly InkOp[]): void;
+  setOps(ops: readonly InkOp[], opts?: { paint?: boolean }): void;
   getOpCount(): number;
   getRevision(): number;
   dirtyInkPageCount(): number;
   takeDirtyInkPages(): Map<number, import("./inkCodec").EncodedInk>;
   markInkPagesFlushed(pageIds: Iterable<number>): void;
-  ingestInkPages(pages: Map<number, import("./inkCodec").EncodedInk>): void;
+  ingestInkPages(
+    pages: Map<number, import("./inkCodec").EncodedInk>,
+    opts?: { paint?: boolean },
+  ): void;
   assembleEncoded(): import("./inkCodec").EncodedInk;
   encodedShards(): import("./inkCodec").EncodedInk[];
   inkPageIds(): number[];
@@ -829,9 +832,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         getOps() {
           return bookRef.current.assembleOps();
         },
-        setOps(ops) {
+        setOps(ops, opts) {
           bookRef.current.replaceAll(cloneOps(ops));
           if (drawingRef.current) return;
+          if (opts?.paint === false) return;
           rebuildAndReplay(false, true);
         },
         getOpCount() {
@@ -849,9 +853,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         markInkPagesFlushed(pageIds) {
           bookRef.current.markFlushed(pageIds);
         },
-        ingestInkPages(pages) {
+        ingestInkPages(pages, opts) {
           bookRef.current.ingestEncodedPages(pages);
           if (drawingRef.current) return;
+          if (opts?.paint === false) return;
           rebuildAndReplay(false, true);
         },
         assembleEncoded() {
@@ -900,7 +905,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     }, []);
 
     useEffect(() => {
-      if (!enabled) return;
       const host = hostRef.current;
       const canvas = canvasRef.current;
       if (!host || !canvas) return;
@@ -914,6 +918,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         const dpr = window.devicePixelRatio || 1;
         const cssW = Math.max(1, host.clientWidth);
         const cssH = Math.max(1, host.clientHeight);
+        /*
+         * Parked panes are `display: none`. Measuring that as 1×1 and remeshing
+         * throws the writing away until a later replay — and switching tabs
+         * parks the notebook you just left.
+         */
+        if (host.clientWidth < 8 || host.clientHeight < 8) return;
         const marginY = overdrawMarginPx(cssH, dpr);
         marginYRef.current = marginY;
         const canvasCssH = cssH + 2 * marginY;
@@ -1499,7 +1509,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         engine.destroy();
         engineRef.current = null;
       };
-    }, [captureStrokeHost, enabled, holdNestedScroll, presentCommitted, readViews, rebuildAndReplay, stampOpOntoSnap]);
+    }, [captureStrokeHost, holdNestedScroll, presentCommitted, readViews, rebuildAndReplay, stampOpOntoSnap]);
 
     /**
      * Nested scroll moves host-bound ink — remesh when any host scrolls.
@@ -1614,8 +1624,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       });
     }, [perfOverlay, perfBar]);
 
-    if (!enabled) return null;
-
+    /*
+     * Always keep the WebGL pad in the tree. `enabled` used to unmount it, and
+     * switching to the other split pane / tab sets `interactive` false on this
+     * board — which destroyed the engine and looked like the notes had been
+     * deleted. Pointers stay off while `tool` is null.
+     */
     return (
       <div
         className={tool ? "lc-board-ink-lab-host is-armed" : "lc-board-ink-lab-host"}

@@ -581,7 +581,10 @@ export async function applyInkChoicesByPage(
     if (choice === "local") {
       const row = localBy.get(pageId);
       if (row) {
-        const gz = await gzOf(row);
+        const encoded = await encodedFromRecord(row);
+        const gz = encoded
+          ? await gzipBytes(packEncodedInk(encoded))
+          : await gzOf(row);
         if (gz) {
           await client.putInkPage({
             kind,

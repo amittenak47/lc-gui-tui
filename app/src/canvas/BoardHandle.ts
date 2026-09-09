@@ -27,7 +27,16 @@ export interface BoardBlob {
    */
   v: 1;
   elements: unknown[];
-  appState: { scrollX: number; scrollY: number; zoom: number; pdfPage?: number; linedPitch?: number };
+  appState: {
+    scrollX: number;
+    scrollY: number;
+    zoom: number;
+    pdfPage?: number;
+    linedPitch?: number;
+    linedPitchWide?: number;
+    linedPitchCollege?: number;
+    linedRule?: "wide" | "college";
+  };
   /** Raster pen/eraser ops as written before the codec — still read, never written. */
   ink?: InkOp[];
   /**
@@ -134,8 +143,8 @@ export interface BoardHandle {
    */
   isInking(): boolean;
   /** Replace raster ink (notebook restore after the ink layer has mounted). */
-  setInkOps(ops: InkOp[]): void;
-  ingestInkPages(pages: Map<number, EncodedInk>): void;
+  setInkOps(ops: InkOp[], opts?: { paint?: boolean }): void;
+  ingestInkPages(pages: Map<number, EncodedInk>, opts?: { paint?: boolean }): void;
   takeDirtyInkPages(): Map<number, EncodedInk>;
   markInkPagesFlushed(pageIds: Iterable<number>): void;
   dirtyInkPageCount(): number;
@@ -171,6 +180,14 @@ export interface BoardHandle {
    * pointer used to be required before the pane looked right.
    */
   nudgeViewportFit(): void;
+  /**
+   * Re-measure this board if its box actually changed.
+   *
+   * Coming back from the other tab is not a resize. `nudgeViewportFit` zeros
+   * the last box and keepY-fits as if the file had just opened — that is the
+   * jump to page 1. This path leaves zoom/X/Y alone when the hole is the same.
+   */
+  syncLiveBox(): void;
   /**
    * Re-read the paper's laid-out height into the pan clamp.
    *

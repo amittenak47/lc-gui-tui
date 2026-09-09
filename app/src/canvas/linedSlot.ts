@@ -51,14 +51,38 @@ export function linedSlotCanSkip(
   return sameLinedSlot(prev, next);
 }
 
-/** Viewport-sized rules; `panY` is the live reading-scroll ride. */
+/**
+ * Rules fill the board, not the authored sheet.
+ *
+ * A 3920-wide pad in a desktop hole sat as a tablet strip down the middle.
+ * Horizontal rules only need the page's Y phase — left/width can be the hole.
+ */
+export function linedOverlayViewport(
+  width: number,
+  height: number,
+  gap: number,
+  phase: number,
+): LinedSlot {
+  return {
+    left: 0,
+    top: 0,
+    width,
+    height,
+    gap,
+    phase,
+  };
+}
+
 export function applyLinedSlotStyle(
   node: HTMLElement,
   slot: LinedSlot,
   panY = 0,
 ): void {
-  node.style.left = "0px";
-  node.style.top = "0px";
+  node.style.inset = "unset";
+  node.style.right = "auto";
+  node.style.bottom = "auto";
+  node.style.left = `${slot.left}px`;
+  node.style.top = `${slot.top}px`;
   node.style.width = `${slot.width}px`;
   node.style.height = `${slot.height}px`;
   node.style.transform = "";

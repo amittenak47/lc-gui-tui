@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NO_PRESSURE, type InkDrawOp, type InkEraseOp, type InkOp } from "./rasterInk";
-import { eraseTouchesStroke, opsAfterStrokeErase } from "./strokeEraser";
+import { eraseTouchesStroke, opsAfterPartialErase, opsAfterStrokeErase, opsWithErasesBaked } from "./strokeEraser";
 
 function stroke(id: string, ...pairs: Array<[number, number]>): InkDrawOp {
   return {
@@ -75,14 +75,10 @@ describe("opsAfterStrokeErase", () => {
   });
 
   it("says nothing happened when the rub touched nothing", () => {
-    // `null`, not an equal copy: waving the eraser over blank paper is not an
-    // edit, and an undo step for it would be one that does nothing visible.
     expect(opsAfterStrokeErase([near, far], rub(4, [50, 250]))).toBeNull();
   });
 
   it("leaves earlier erases where they are", () => {
-    // They are part of how the page got to look this way; dropping one would
-    // bring back ink the writer had already taken off.
     const earlier = rub(9, [0, 0], [10, 0]);
     const ops: InkOp[] = [near, earlier, far];
     const out = opsAfterStrokeErase(ops, rub(4, [50, 0]));
@@ -91,5 +87,36 @@ describe("opsAfterStrokeErase", () => {
 
   it("can clear the page", () => {
     expect(opsAfterStrokeErase([near], rub(400, [50, 0]))).toEqual([]);
+  });
+});
+
+describe("opsAfterPartialErase", () => {
+  it("cuts a hole in the stroked run and keeps the rest", () => {
+    const line = stroke("ink", [0, 0], [100, 0]);
+    const out = opsAfterPartialErase([line], rub(8, [50, 0]));
+    expect(out).not.toBeNull();
+    const draws = out!.filter((op) => op.kind === "draw");
+    expect(draws.length).toBeGreaterThanOrEqual(2);
+    expect(draws.every((op) => op.kind === "draw" && op.points.every((p) => Math.abs(p.x - 50) > 4))).toBe(
+      true,
+    );
+  });
+
+  it("drops a stroke the rub swallowed", () => {
+    const dot = stroke("ink", [10, 10]);
+    expect(opsAfterPartialErase([dot], rub(20, [10, 10]))).toEqual([]);
+  });
+});
+
+describe("opsWithErasesBaked", () => {
+  it("applies dest-out erases to overlay pens so remesh cannot restore them", () => {
+    const line = stroke("ink", [0, 0], [100, 0]);
+    const baked = opsWithErasesBaked([line, rub(8, [50, 0])]);
+    expect(baked.some((op) => op.kind === "erase")).toBe(false);
+    const draws = baked.filter((op) => op.kind === "draw");
+    expect(draws.length).toBeGreaterThanOrEqual(1);
+    expect(draws.every((op) => op.kind === "draw" && !op.points.some((p) => Math.abs(p.x - 50) < 2))).toBe(
+      true,
+    );
   });
 });

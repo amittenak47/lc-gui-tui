@@ -6,6 +6,7 @@ import {
   DRAW_HEADER_BAND,
   growDrawHeight,
   initialDrawHeight,
+  inkNeedsAnnotateToggleReplay,
 } from "./drawPageGrowth";
 
 describe("initialDrawHeight", () => {
@@ -123,5 +124,17 @@ describe("contentBottomInFrame", () => {
       false,
     );
     expect(bottom).toBe(2400);
+  });
+});
+
+describe("inkNeedsAnnotateToggleReplay", () => {
+  it("does not remesh a notebook when flipping annotate/scroll", () => {
+    expect(inkNeedsAnnotateToggleReplay("pad-0")).toBe(false);
+    expect(inkNeedsAnnotateToggleReplay("approach")).toBe(false);
+  });
+
+  it("still remeshes a document whose nested hosts remount", () => {
+    expect(inkNeedsAnnotateToggleReplay("code")).toBe(true);
+    expect(inkNeedsAnnotateToggleReplay("mdink-0")).toBe(true);
   });
 });

@@ -30,17 +30,132 @@ describe("Board", () => {
     );
   });
 
-  it("stores lined-paper pitch in scene units so rules travel with the ink", () => {
+  it("still translates while a bottom-of-flick remesh is in flight", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const apply = src.slice(
+      src.indexOf("const applyVisualScrollNow = useCallback"),
+      src.indexOf("const flushVisualScroll = useCallback"),
+    );
+    const veto = apply.slice(apply.indexOf("if (delta.rebase"));
+    expect(veto).toMatch(/setPagePanOffsetRef\.current\(rideDx, delta\.dy\)/);
+  });
+
+  it("does not remesh ink inside the keepY camera write", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const at = src.indexOf("placeContentSlotAtRef.current(nextScrollX, nextScrollY, zoom);");
+    expect(at).toBeGreaterThan(-1);
+    const after = src.slice(at, at + 280);
+    expect(after).not.toMatch(/syncCamera/);
+  });
+
+  it("does not left-align the notebook on every scroll after Recentre", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const clamp = src.slice(
+      src.indexOf("const clampPanScroll = useCallback"),
+      src.indexOf("publishPdfFilmFromScrollRef.current"),
+    );
+    expect(clamp).toMatch(/liveBoardViewSize/);
+    expect(clamp).toMatch(/\? "keep" : "center"/);
+    expect(clamp).not.toMatch(/\? "start" : "center"/);
+    const wheel = src.slice(
+      src.indexOf("* The wheel reads the page. It is the only thing it does now."),
+      src.indexOf("root.addEventListener(\"wheel\""),
+    );
+    expect(wheel).not.toMatch(/lockedScrollXRef.current = wheeled.scrollX/);
+    expect(wheel).toMatch(/lockX \?\? wheeled.scrollX/);
+  });
+
+  it("stores both lined-paper pitches from the write camera so rules travel with the ink", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     expect(src).toMatch(/linedPitch:/);
-    expect(src).toMatch(/linedPitchFromAppState/);
+    expect(src).toMatch(/linedPitchWide/);
+    expect(src).toMatch(/linedPitchCollege/);
+    expect(src).toMatch(/linedPitchStateFromAppState/);
     expect(src).toMatch(/linedPaperCssGap/);
-    expect(src).toMatch(/linedPaperScenePitch/);
-    expect(src).toMatch(/keepZoomKeepPanCameraAfterViewportChange/);
+    expect(src).toMatch(/ensureLinedPair/);
+    expect(src).toMatch(/linedFirstRuleScene/);
+    expect(src).toMatch(/drawPageCameraAfterViewportChange/);
+    expect(src).not.toMatch(/capViewWidth:/);
+    expect(src).not.toMatch(/linedPaperScenePitch\(next, zoom\)/);
+  });
+
+  it("width-fits a restored notebook to this window and pins the left of the writing", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const restore = src.slice(
+      src.indexOf("restoreView: (saved)"),
+      src.indexOf("appendScratchPage:"),
+    );
+    expect(restore).toMatch(/saved\.scrollY/);
+    expect(restore).toMatch(/runFit\(page, "keepY"\)/);
+    expect(restore).toMatch(/userAdjustedCameraRef\.current = false/);
+    expect(src).toMatch(/drawPageFitBox/);
+    const refit = src.slice(
+      src.indexOf("const refitToViewport = useCallback"),
+      src.indexOf("const scheduleFitView"),
+    );
+    expect(refit.indexOf("isDrawPageRegion")).toBeLessThan(
+      refit.indexOf("userAdjustedCameraRef.current"),
+    );
+  });
+
+  it("does not remesh the notebook when flipping annotate and scroll", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    expect(src).toMatch(/inkNeedsAnnotateToggleReplay/);
+    expect(src).toMatch(/annotateToolFlipRef/);
+    expect(src).toMatch(/live\.width === prev\.w/);
+    expect(src).not.toMatch(/enabled=\{interactive\}/);
+    expect(src).toMatch(/alreadyPlaced/);
+    expect(src).toMatch(/const syncLiveBox = useCallback/);
+    expect(src).toMatch(/const rideDx = scrollModeRef.current \? 0 : delta.dx/);
+  });
+
+  it("does not ping-pong a sash drag through window.resize", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const fit = src.slice(
+      src.indexOf("const applyLiveBoxFit"),
+      src.indexOf("const nudgeViewportFit"),
+    );
+    expect(fit).toMatch(/sashDragActive/);
+    expect(fit).not.toMatch(/dispatchEvent\(new Event\("resize"\)\)/);
+    expect(fit).toMatch(/remeshInk/);
+    expect(src).toMatch(/scheduleLiveViewportFit/);
+    expect(src).not.toMatch(/setTimeout\(kick, 50\)/);
+  });
+
+  it("recentres a notebook about the hole centre", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    expect(src).toMatch(/drawPageRecentreCamera/);
+    expect(src).toMatch(/runFit\(null, "recentre"\)/);
+    expect(src).toMatch(/linedOverlayViewport/);
+  });
+
+  it("defers pan on a selectable PDF so hold-to-footnote can arm", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const down = src.slice(
+      src.indexOf("const onSelectableDoc ="),
+      src.indexOf("const deferred = onCodeDock"),
+    );
+    expect(down).toMatch(/lc-doc-selectable/);
+    expect(down).not.toMatch(/!onPdfDoc/);
+    expect(src).toMatch(
+      /hold-to-marquee listener on `\.lc-doc-selectable` still has to fire/,
+    );
   });
 });
 
 describe("WhiteboardInkLab", () => {
+  it("does not unmount the pad when the board is parked", () => {
+    const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
+    expect(src).not.toMatch(/if \(!enabled\) return null;/);
+    expect(src).toMatch(/clientWidth < 8/);
+    const boot = src.slice(
+      src.indexOf("const sizeToHost = () => {"),
+      src.indexOf("Nested scroll moves host-bound ink"),
+    );
+    expect(boot).not.toMatch(/if \(!enabled\) return;/);
+    expect(boot).not.toMatch(/enabled,/);
+  });
+
   it("does not replay ink with the miter strip", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
     expect(src).not.toMatch(/paintLabDrawOps/);
@@ -118,5 +233,61 @@ describe("SettingsModal", () => {
     expect(src).toMatch(/loadInkPerfBar/);
     expect(src).toMatch(/loadInkDisplayHz/);
     expect(src).toMatch(/loadInkMatchDisplay/);
+  });
+});
+
+describe("Workspace pane switch", () => {
+  it("does not treat coming back as a window resize or a fresh open", () => {
+    const src = readFileSync(join(here, "../Workspace.tsx"), "utf8");
+    const settle = src.slice(
+      src.indexOf("const returning = showing && !wasShowingRef.current"),
+      src.indexOf("A parked save used to leave switchMotion"),
+    );
+    expect(settle).toMatch(/syncLiveBox/);
+    expect(settle).not.toMatch(/boardRef\.current\?\.nudgeViewportFit/);
+    expect(settle).not.toMatch(/dispatchEvent\(new Event\("resize"\)\)/);
+  });
+
+  it("holds notebook ink until the camera has fitted", () => {
+    const src = readFileSync(join(here, "../Workspace.tsx"), "utf8");
+    expect(src).toMatch(/paint: false/);
+    expect(src).toMatch(/ingestInkPages\(shards, opts\)/);
+  });
+
+  it("does not tear the PDF down when switching to the other pane", () => {
+    const src = readFileSync(join(here, "../Workspace.tsx"), "utf8");
+    expect(src).toMatch(/paused=\{Boolean\(hubConflictAsk\)\}/);
+    expect(src).toMatch(/offscreen=\{!showing\}/);
+    expect(src).not.toMatch(/paused=\{!showing/);
+  });
+
+  it("keeps the PDF film layout on the unfocused split half", () => {
+    const src = readFileSync(join(here, "../Workspace.tsx"), "utf8");
+    expect(src).toMatch(/active \|\| Boolean\(splitRole\)/);
+    expect(src).toMatch(/fillThumbs=\{active\}/);
+  });
+
+  it("does not close the PDF film when swapping split halves", () => {
+    const src = readFileSync(join(here, "../App.tsx"), "utf8");
+    expect(src).toMatch(/if \(!sameSplit\) setPdfFilmOpen\(false\)/);
+  });
+
+  it("does not move canvas DOM nodes when focusing the other split half", () => {
+    const src = readFileSync(join(here, "../App.tsx"), "utf8");
+    expect(src).toMatch(/if \(!visibleTabIds\(state\)\.includes\(id\)\) promote\(id\)/);
+  });
+
+  it("keeps the PDF film layout on the unfocused split half", () => {
+    const src = readFileSync(join(here, "../Workspace.tsx"), "utf8");
+    expect(src).toMatch(/active \|\| Boolean\(splitRole\)/);
+    expect(src).toMatch(/fillThumbs=\{active\}/);
+  });
+});
+
+describe("reading pan compositor", () => {
+  it("hides the PDF text layer while the camera is live, not the footnote slot", () => {
+    const css = readFileSync(join(here, "../styles.css"), "utf8");
+    expect(css).toMatch(/html\.lc-doc-camera-live \.lc-pdf-text\.textLayer/);
+    expect(css).not.toMatch(/html\.lc-doc-camera-live \.lc-page-marks-slot/);
   });
 });

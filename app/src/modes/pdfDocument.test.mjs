@@ -405,3 +405,16 @@ describe("paint must not read the flick-end guess", () => {
     expect(src).not.toMatch(/publishPdfFilmPredicted|peekPdfFilmPredicted|pdfFlickPredictPage/);
   });
 });
+
+describe("pane switch must not reopen the file", () => {
+  it("freezes intersection and skips the worker without tearing the observer", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(process.cwd(), "src/modes/PdfDocument.tsx"), "utf8");
+    expect(src).toMatch(/offscreen\?: boolean/);
+    expect(src).toMatch(/if \(offscreenRef\.current\) return;/);
+    expect(src).toMatch(/pdfMayTakeWorker\(pausedRef\.current, holdDecodeRef\.current, offscreenRef\.current\)/);
+    expect(src).toMatch(/\[initialPage, filmScope\]/);
+    expect(src).toMatch(/Do not depend on `paused`/);
+  });
+});

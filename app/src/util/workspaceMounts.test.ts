@@ -142,4 +142,30 @@ describe("planWorkspaceMounts", () => {
     });
     expect(mounts.map((m) => m.tab.id)).toEqual(["a"]);
   });
+
+  it("does not reorder mounts when only focus moves inside a split", () => {
+    const before = planWorkspaceMounts({
+      liveTabs: live([
+        ["a", true, true],
+        ["b", false, true],
+      ]),
+      allTabs: tabs,
+      visibleIds: ["a", "b"],
+      groupChildren: ["a", "b"],
+      activeId: "a",
+    });
+    const after = planWorkspaceMounts({
+      liveTabs: live([
+        ["b", true, true],
+        ["a", false, true],
+      ]),
+      allTabs: tabs,
+      visibleIds: ["a", "b"],
+      groupChildren: ["a", "b"],
+      activeId: "b",
+    });
+    expect(before.map((m) => m.tab.id)).toEqual(after.map((m) => m.tab.id));
+    expect(after.map((m) => m.tab.id)).toEqual(["a", "b"]);
+    expect(after.find((m) => m.tab.id === "b")?.active).toBe(true);
+  });
 });

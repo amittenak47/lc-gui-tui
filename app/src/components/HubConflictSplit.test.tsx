@@ -140,10 +140,10 @@ describe("HubConflictSplit", () => {
     expect(resolveButton().disabled).toBe(true);
   });
 
-  it("top ✓ then the other ✕ keeps that whole copy", () => {
+  it("top ✓ keeps that whole copy and discards the other column", () => {
     const { onResolve } = mount();
     act(() => paneButton(0, "keep").click());
-    act(() => paneButton(1, "drop").click());
+    expect(paneButton(1, "drop").getAttribute("aria-pressed")).toBe("true");
     act(() => resolveButton().click());
     expect(onResolve).toHaveBeenCalledTimes(1);
     expect(onResolve.mock.calls[0]![0]).toEqual({
@@ -213,10 +213,10 @@ describe("HubConflictSplit ink and labels", () => {
     resetPdfThumbs();
   });
 
-  it("keeps only this device's copy and its ink on a single Local ✓ plus the other ✕", () => {
+  it("keeps only this device's copy and its ink on a single Local ✓", () => {
     const { onResolve } = mount(WITH_INK);
     act(() => paneButton(0, "keep").click());
-    act(() => paneButton(1, "drop").click());
+    expect(paneButton(1, "drop").getAttribute("aria-pressed")).toBe("true");
     act(() => resolveButton().click());
     expect(onResolve.mock.calls[0]![0]).toEqual({
       pick: "local",
@@ -247,7 +247,6 @@ describe("HubConflictSplit ink and labels", () => {
   it("✕ ink on both sides keeps the file with no handwriting", () => {
     const { onResolve } = mount(WITH_INK);
     act(() => paneButton(0, "keep").click());
-    act(() => paneButton(1, "drop").click());
     act(() => {
       inkRow(0).querySelector('[data-action="drop"]')!.dispatchEvent(
         new MouseEvent("click", { bubbles: true }),
@@ -377,7 +376,6 @@ describe("HubConflictSplit ink and labels", () => {
     expect(document.querySelector('[data-note-id="__ink__:4"]')).toBeTruthy();
 
     act(() => paneButton(0, "keep").click());
-    act(() => paneButton(1, "drop").click());
     // Page 2: keep both copies so the strokes merge.
     act(() => {
       const row = document.querySelectorAll(".lc-hub-conflict-pane")[1]!
@@ -483,10 +481,11 @@ describe("what the panes are asked to draw", () => {
   const HUB_ONLY = "srv";
   const inkOn = (side: 0 | 1) => panes()[side]!.dataset.ink === "on";
 
-  it("draws nothing for a change nobody has answered for", async () => {
+  it("draws nothing for a mark nobody has answered for", async () => {
     /*
-     * Both sides start untoggled, and that is the honest picture: a change
-     * with no decision yet is not something either pane is showing you.
+     * Both sides start untoggled, and that is the honest picture for marks: a
+     * change with no decision yet is not something either pane is showing you.
+     * Handwriting is different — the page itself has to be visible.
      */
     await mountSpied();
     expect(notesOn(0)).toEqual([]);
@@ -538,10 +537,8 @@ describe("what the panes are asked to draw", () => {
 
   it("answers for handwriting the same way", async () => {
     await mountSpied(WITH_INK);
-    // Focus alone draws nothing.
-    act(() => inkRow(0).click());
-    expect(inkOn(0)).toBe(false);
-    expect(inkOn(1)).toBe(false);
+    expect(inkOn(0)).toBe(true);
+    expect(inkOn(1)).toBe(true);
 
     tickInk(0, "keep");
     expect(inkOn(0)).toBe(true);
@@ -551,7 +548,7 @@ describe("what the panes are asked to draw", () => {
     expect(inkOn(0)).toBe(true);
     expect(inkOn(1)).toBe(true);
 
-    tickInk(0, "keep");
+    tickInk(0, "drop");
     expect(inkOn(0)).toBe(false);
     expect(inkOn(1)).toBe(true);
   });
@@ -568,17 +565,14 @@ describe("what the panes are asked to draw", () => {
     expect(inkOn(0)).toBe(true);
   });
 
-  it("a column ✓ is the same rule applied to every row", async () => {
-    /*
-     * Keeping the whole Local column draws every Local change and leaves the
-     * other pane alone — the same answer as ticking each row by hand.
-     */
+  it("a column ✓ keeps that side and discards the other", async () => {
     await mountSpied(WITH_INK);
     act(() => paneButton(0, "keep").click());
     expect(notesOn(0)).toEqual(["n1", "same"]);
     expect(inkOn(0)).toBe(true);
     expect(notesOn(1)).toEqual([]);
     expect(inkOn(1)).toBe(false);
+    expect(paneButton(1, "drop").getAttribute("aria-pressed")).toBe("true");
   });
 
   const FAR: HubPadConflict = {

@@ -71,6 +71,7 @@ import {
   finalizeMarquee,
   padQuoteRect,
   pdfPageNumberOf,
+  footnoteVisibleOnViewPages,
   localRectCoversHost,
   localRects,
   scaleOf,
@@ -92,6 +93,10 @@ import { currentInkPalette } from "../util/inkPaletteHistory";
 import { footnoteThemeVars } from "../util/footnoteTheme";
 import { isAndroidDevice } from "../util/androidDevice";
 import { fillPdfQuoteText } from "./pdfQuoteText";
+import {
+  peekPdfIntersectingPages,
+  subscribePdfViewPages,
+} from "./pdfFilm";
 import {
   hasUsableViewportBox,
   subscribePageSurfaceMove,
@@ -158,6 +163,7 @@ type PaintedSubMark = {
   rects: LocalRect[];
   color?: string;
   palette?: string[];
+  scope?: string;
 };
 
 function paintedSubMarksEqual(a: PaintedSubMark[], b: PaintedSubMark[]): boolean {
@@ -169,6 +175,7 @@ function paintedSubMarksEqual(a: PaintedSubMark[], b: PaintedSubMark[]): boolean
       x.id !== y.id ||
       x.kind !== y.kind ||
       x.color !== y.color ||
+      x.scope !== y.scope ||
       x.rects.length !== y.rects.length
     ) {
       return false;
@@ -382,6 +389,8 @@ export function DocSelectionLayer({
     }>
   >([]);
   const [paintedSubMarks, setPaintedSubMarks] = useState<PaintedSubMark[]>([]);
+  /** PDF pages currently intersecting the viewport; empty means show every mark. */
+  const [viewPages, setViewPages] = useState<readonly number[]>([]);
   const [copied, setCopied] = useState(false);
   /** Native text select vs hold-marquee — drives which actions sheet buttons show. */
   const [actionsVia, setActionsVia] = useState<"native" | "marquee">("native");
@@ -511,6 +520,13 @@ export function DocSelectionLayer({
   const paletteNow = useCallback(() => inkPaletteNow(paletteScope), [paletteScope]);
   const inkHistory = useSyncExternalStore(subscribePalette, paletteNow, paletteNow);
   const inkPalette = currentInkPalette(inkHistory);
+
+  useEffect(() => {
+    if (!paletteScope) return;
+    return subscribePdfViewPages(paletteScope, () => {
+      setViewPages(peekPdfIntersectingPages(paletteScope));
+    });
+  }, [paletteScope]);
 
   const paintMarquee = useCallback((rect: LocalRect, _root: HTMLElement) => {
     const body = bodyRef.current;
@@ -2145,10 +2161,25 @@ export function DocSelectionLayer({
     ? footnoteThemeVars(subMarkPaintTheme.color, subMarkPaintTheme.palette)
     : subMarkTint;
 
+  const visibleRibbons = useMemo(
+    () =>
+      ribbons.filter((entry) =>
+        footnoteVisibleOnViewPages(entry.footnote.anchor.scope, viewPages),
+      ),
+    [ribbons, viewPages],
+  );
+  const visibleSubMarks = useMemo(
+    () =>
+      paintedSubMarks.filter((entry) =>
+        footnoteVisibleOnViewPages(entry.scope, viewPages),
+      ),
+    [paintedSubMarks, viewPages],
+  );
+
   const aiTabTops = useMemo(
     () =>
       stackAiTabTops(
-        ribbons
+        visibleRibbons
           .filter((entry) => entry.footnote.kind === "ai")
           .map((entry) => ({
             id: entry.footnote.id,
@@ -2158,7 +2189,7 @@ export function DocSelectionLayer({
                 : entry.at?.top) ?? 0,
           })),
       ),
-    [ribbons],
+    [visibleRibbons],
   );
 
   return (
@@ -2175,8 +2206,8 @@ export function DocSelectionLayer({
             rects.length === 0 &&
             hitRects.length === 0 &&
             !band &&
-            ribbons.length === 0 &&
-            paintedSubMarks.length === 0
+            visibleRibbons.length === 0 &&
+            visibleSubMarks.length === 0
           }
         >
           {band &&
@@ -2232,7 +2263,7 @@ export function DocSelectionLayer({
               />
             );
           })}
-          {ribbons.map(({ footnote, at, bands, useBands, number }) => {
+          {visibleRibbons.map(({ footnote, at, bands, useBands, number }) => {
             /*
              * Tap opens the mark; hold fills left→right and deletes.
              *
@@ -2371,7 +2402,7 @@ export function DocSelectionLayer({
             );
           })}
 
-          {paintedSubMarks.flatMap((entry) =>
+          {visibleSubMarks.flatMap((entry) =>
             entry.rects.map((rect, index) => {
               // A highlight is a wash and wants the same air as a mark band. An
               // underline is a rule sitting on the baseline: pad it and the rule
@@ -2909,6 +2940,7 @@ function collectPaintedSubMarks(
               rects: localRects(body, range),
               color: mark.color ?? footnote.color,
               palette: mark.palette,
+              scope: footnote.anchor.scope,
             });
             continue;
           }
@@ -2921,6 +2953,7 @@ function collectPaintedSubMarks(
           rects: mark.bands,
           color: mark.color ?? footnote.color,
           palette: mark.palette,
+          scope: footnote.anchor.scope,
         });
       }
     }

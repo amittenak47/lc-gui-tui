@@ -64,9 +64,14 @@ export function inkedPageIds(
   rows: readonly { page_id: number }[] | undefined,
 ): number[] {
   const ids = new Set<number>();
+  let spanning = false;
   for (const row of rows ?? []) {
     if (row.page_id >= 1) ids.add(row.page_id);
+    else if (row.page_id === 0) spanning = true;
   }
+  // Spanning ink has no slot of its own. On a one-page pad (whiteboard) it
+  // still has to land somewhere — page 1 is that page.
+  if (spanning && ids.size === 0) ids.add(1);
   return [...ids].sort((a, b) => a - b);
 }
 

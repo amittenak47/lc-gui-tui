@@ -36,3 +36,9 @@ export function splitResizePhase(event: Event): SplitResizePhase | null {
   if (!detail) return null;
   return detail.phase === "move" || detail.phase === "settle" ? detail.phase : null;
 }
+
+/** True for the length of a sash pointer drag (`data-lc-sash-drag` on `<body>`). */
+export function sashDragActive(): boolean {
+  if (typeof document === "undefined") return false;
+  return Boolean(document.body?.dataset?.lcSashDrag);
+}

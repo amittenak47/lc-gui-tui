@@ -13,7 +13,9 @@ import {
   localRectCoversHost,
   padQuoteRect,
   scaleOf,
+  pdfPageFromDocScope,
   pdfPageNumberOf,
+  footnoteVisibleOnViewPages,
   tightClientRects,
   tightLocalRects,
   unionLocalRects,
@@ -805,5 +807,20 @@ describe("unionRectsIntoLines / unionRectsIntoBlocks", () => {
     slot.append(inner);
     expect(pdfPageNumberOf(inner)).toBe(12);
     expect(pdfPageNumberOf(document.createElement("div"))).toBeNull();
+  });
+
+  it("parses a PDF page out of a doc scope id", () => {
+    expect(pdfPageFromDocScope("p1")).toBe(1);
+    expect(pdfPageFromDocScope("p12r")).toBe(12);
+    expect(pdfPageFromDocScope("chapter.xhtml")).toBeNull();
+    expect(pdfPageFromDocScope(undefined)).toBeNull();
+  });
+
+  it("hides a PDF mark whose page is not intersecting the viewport", () => {
+    expect(footnoteVisibleOnViewPages("p6", [])).toBe(true);
+    expect(footnoteVisibleOnViewPages("p6", [6, 7])).toBe(true);
+    expect(footnoteVisibleOnViewPages("p6r", [1, 2])).toBe(false);
+    expect(footnoteVisibleOnViewPages("chapter.xhtml", [1, 2])).toBe(true);
+    expect(footnoteVisibleOnViewPages(undefined, [1, 2])).toBe(true);
   });
 });

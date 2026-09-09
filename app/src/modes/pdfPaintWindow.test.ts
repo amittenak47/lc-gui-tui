@@ -132,11 +132,13 @@ describe("pdfDecodeQueue", () => {
 });
 
 describe("pdfMayTakeWorker", () => {
-  it("only parks drop the worker; a visible unfocused pane may still decode 0.25", () => {
+  it("only parks and offscreen tabs drop the worker; a visible unfocused pane may still decode 0.25", () => {
     expect(pdfMayTakeWorker(false, false)).toBe(true);
     expect(pdfMayTakeWorker(true, false)).toBe(false);
     expect(pdfMayTakeWorker(false, true)).toBe(true);
     expect(pdfMayTakeWorker(true, true)).toBe(false);
+    expect(pdfMayTakeWorker(false, false, true)).toBe(false);
+    expect(pdfMayTakeWorker(false, true, true)).toBe(false);
   });
 });
 
