@@ -37,3 +37,15 @@ export function isWorkspaceLoadBusy(busy: string | null): boolean {
 export function workspaceLoadHomeLabel(busy: string | null): boolean {
   return busy === "opening whiteboard…" || busy === "opening document…";
 }
+
+/**
+ * The parked-split effect may drop `boardPreparing` only when nothing is
+ * actually loading.
+ *
+ * Session restore is `userLoad: false` (no theatre) but it is still a load:
+ * the chip and lined paper come back before ink shards are ingested. Clearing
+ * preparing in that gap mounts the WebGL pad on an empty book.
+ */
+export function mayClearParkedPreparing(loadInFlight: boolean): boolean {
+  return !loadInFlight;
+}
