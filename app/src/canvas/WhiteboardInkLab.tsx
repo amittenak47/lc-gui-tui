@@ -780,7 +780,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         },
         replayCommitted() {
           if (drawingRef.current) return;
-          rebuildAndReplay();
+          rebuildAndReplay(false, true);
         },
         syncCamera() {
           if (drawingRef.current) return;
@@ -1382,7 +1382,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               const kept = bookRef.current.strokeErase(op);
               if (kept) {
                 rememberCommitPatch(null);
-                rebuildAndReplay();
+                rebuildAndReplay(false, true);
                 onChangeRef.current?.();
               } else if (patch) {
                 engine.restoreSnapPatch(patch);
@@ -1394,7 +1394,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               const kept = bookRef.current.partialErase(op);
               if (kept) {
                 rememberCommitPatch(null);
-                rebuildAndReplay();
+                rebuildAndReplay(false, true);
                 onChangeRef.current?.();
               } else if (patch) {
                 engine.restoreSnapPatch(patch);

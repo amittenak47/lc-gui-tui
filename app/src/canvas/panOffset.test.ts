@@ -93,7 +93,33 @@ describe("panDelta", () => {
     expect(delta).toEqual({ dx: 0, dy: 0, rebase: true });
   });
 
-  it("treats a nonsense camera as a repaint, never as a translate", () => {
+  it("a sub-pixel overdraw cap rebases on the first flick", () => {
+    // Ink lab used to pass `max(1, marginY=0) * 0.85` as the Y limit, so a
+    // 2px scroll remeshed the whole overlay. The ride needs the painted margin.
+    const delta = panDelta(
+      { scrollX: 0, scrollY: 2, zoom: 1 },
+      { scrollX: 0, scrollY: 0, zoom: 1 },
+      VIEW,
+      PAN_REBASE_FRACTION,
+      { y: 0.85 },
+    );
+    expect(delta.rebase).toBe(true);
+  });
+
+  it("rides a real overdraw margin instead of rebasing every sample", () => {
+    const margin = VIEW.height * INK_OVERDRAW_FRACTION;
+    const delta = panDelta(
+      { scrollX: 0, scrollY: 80, zoom: 1 },
+      { scrollX: 0, scrollY: 0, zoom: 1 },
+      VIEW,
+      PAN_REBASE_FRACTION,
+      { y: margin * OVERDRAW_REBASE_HEADROOM },
+    );
+    expect(delta.rebase).toBe(false);
+    expect(delta.dy).toBe(80);
+  });
+
+  it("treats a nonsense camera as a rebase, not a NaN translate", () => {
     const painted = { scrollX: 0, scrollY: 0, zoom: 1 };
     expect(panDelta({ scrollX: 0, scrollY: 0, zoom: 0 }, painted, VIEW).rebase).toBe(true);
     expect(panDelta({ scrollX: Number.NaN, scrollY: 0, zoom: 1 }, painted, VIEW).rebase).toBe(true);

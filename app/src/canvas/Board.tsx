@@ -3813,6 +3813,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       appState: { scrollX: live.scrollX, scrollY: live.scrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
+    // Drop the ride before remesh. Leaving translate3d on while syncCamera
+    // paints at the live camera is the ghost of the pre-flick page.
+    clearPanOffsetsRef.current();
     rasterInkRef.current?.syncCamera();
     landPanOffset(() => {
       committingScrollRef.current = false;
