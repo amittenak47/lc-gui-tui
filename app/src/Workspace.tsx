@@ -126,6 +126,8 @@ import {
   buildWhiteboardTemplate,
   buildScratchPageSkeletons,
   countWhiteboardPages,
+  SCRATCH_PAGE_W,
+  whiteboardPageFrames,
   WHITEBOARD_DATASET,
   WHITEBOARD_TASK_ID,
   LEGACY_SCRATCHPAD_TASK_ID,
@@ -394,7 +396,7 @@ import { renderAnnotation } from "./viz/render/annotation";
 import { renderHighlight } from "./viz/render/highlight";
 import { parseVizProgram, type VizProgram } from "./viz/schema";
 import { messageOf, traceOpen } from "./util/messageOf";
-import { loadChromeFate } from "./util/workspaceLoad";
+import { loadChromeFate, mayClearParkedPreparing } from "./util/workspaceLoad";
 
 type Mode = "review" | "ambient";
 
@@ -467,8 +469,10 @@ async function restoreInk(board: BoardHandle, docKey: string | null, blob: { ink
   if (docKey) {
     const shards = await getInkPages(docKey);
     if (shards.size > 0) {
+      // Shards are the live copy, including a page that is now empty after an
+      // erase. Falling through to pad JSON would put the deleted strokes back.
       board.ingestInkPages(shards);
-      if (board.getInkOpCount() > 0) return;
+      return;
     }
   }
   const ops = inkOpsFrom(blob);
@@ -921,6 +925,13 @@ export function Workspace({
     hubConflictBusyRef.current = true;
     setHubConflictBusy(true);
     try {
+      const liveBoard = boardRef.current;
+      if (liveBoard && c.stage === "pad") {
+        await flushDirtyInk(
+          liveBoard,
+          c.kind === "whiteboard" ? whiteboardDocKey(c.id) : annotateDocKey(c.id),
+        );
+      }
       if (c.stage === "pad") {
         if (resolution.pick === "server" && c.server) {
           if (c.kind === "annotate") {
@@ -965,7 +976,22 @@ export function Workspace({
         }
       }
       const inkChoice = inkChoiceOf(resolution);
-      if (resolution.inkPages) {
+      const wholePadInk =
+        (resolution.pick === "local" && inkChoice === "local") ||
+        (resolution.pick === "server" && inkChoice === "server");
+      if (wholePadInk || !resolution.inkPages) {
+        await applyInkChoice(
+          client,
+          c.kind,
+          c.id,
+          inkChoice,
+          c.serverInk ?? null,
+          {
+            ...(c.hubInkPageIds ? { hubPageIds: c.hubInkPageIds } : {}),
+            fetchHubPages: (pageIds) => fetchHubInkPages(client, c.kind, c.id, pageIds),
+          },
+        );
+      } else {
         await applyInkChoicesByPage(
           client,
           c.kind,
@@ -974,23 +1000,6 @@ export function Workspace({
           c.serverInk ?? null,
           {
             ...(c.hubInkPageIds ? { hubPageIds: c.hubInkPageIds } : {}),
-            fetchHubPages: (pageIds) => fetchHubInkPages(client, c.kind, c.id, pageIds),
-          },
-        );
-      } else {
-        await applyInkChoice(
-          client,
-          c.kind,
-          c.id,
-          inkChoice,
-          c.serverInk ?? null,
-          {
-            // Ids off the ping digest, not the stash's preview list: that list
-            // is scoped to the page the split drew, and a discard has to name
-            // every hub page or the rest comes back on the next walk.
-            ...(c.hubInkPageIds ? { hubPageIds: c.hubInkPageIds } : {}),
-            // And the bytes, now that a choice has been made and we know which
-            // pages it writes. The freeze took one page; this takes the set.
             fetchHubPages: (pageIds) => fetchHubInkPages(client, c.kind, c.id, pageIds),
           },
         );
@@ -2601,7 +2610,7 @@ export function Workspace({
       const cold = userLoad && consumeSessionColdWorkspace();
       const fromBrowse = userLoad && !problem;
       const switching = userLoad && Boolean(problem);
-      setWorkspaceLoadActive(userLoad);
+      setWorkspaceLoadActive(true);
       if (userLoad) setShellLoadActive(true);
       setActiveRegion("constraints");
       setStatementHeight(null);
@@ -2922,14 +2931,16 @@ export function Workspace({
        *
        * fromBrowse: browser overlay spinner → slide → checkmark → board under
        * preparing → reveal. switching: WorkspaceLoadStatus blur spinner → check.
-       * User-started opens pay the spinner. Tab remounts skip it. Boot banners
-       * and the "Whiteboard" title wait stay first-open only.
+       * User-started opens pay the spinner. Tab remounts skip the theatre, but
+       * they still hold `workspaceLoadActive` so parked-preparing cannot mount
+       * the ink canvas on an empty book before shards land.
        */
       const userLoad = opts.userLoad === true;
       const cold = userLoad && consumeSessionColdWorkspace();
       const fromBrowse = userLoad && !problem;
       const switching = userLoad && Boolean(problem);
-      setWorkspaceLoadActive(userLoad);
+      setWorkspaceLoadActive(true);
+      setBoardPreparing(true);
       if (userLoad) setShellLoadActive(true);
       if (cold) setBusy("opening whiteboard…");
       setError(null);
@@ -3508,14 +3519,15 @@ export function Workspace({
        * Same loading transition as pickProblem — do not invent a parallel path.
        * fromBrowse: browser overlay spinner → slide → checkmark → board under
        * preparing → reveal. switching: WorkspaceLoadStatus blur spinner → check.
-       * User-started opens pay the spinner; remounts skip it. Boot banners
-       * stay first-open only.
+       * User-started opens pay the spinner; remounts skip the theatre. Both
+       * still hold `workspaceLoadActive` until ink and camera have landed.
        */
       const userLoad = input.userLoad === true;
       const cold = userLoad && consumeSessionColdWorkspace();
       const fromBrowse = userLoad && !problem;
       const switching = userLoad && Boolean(problem);
-      setWorkspaceLoadActive(userLoad);
+      setWorkspaceLoadActive(true);
+      setBoardPreparing(true);
       if (userLoad) setShellLoadActive(true);
       if (cold) setBusy("opening document…");
       setError(null);
@@ -8878,12 +8890,13 @@ export function Workspace({
   /*
    * A parked save used to leave switchMotion busy / preparing on. Focusing the
    * partner in a split then replayed the load theatre over a board that was
-   * already there. Skip that when nothing is actually loading.
+   * already there. Skip that when nothing is actually loading — and a relaunch
+   * restore *is* loading, even when it skipped the spinner.
    */
   useEffect(() => {
     if (!showing) return;
     if (!problem) return;
-    if (workspaceLoadActive) return;
+    if (!mayClearParkedPreparing(workspaceLoadActive)) return;
     setSwitchMotion((motion) => (motion === "idle" ? motion : "idle"));
     setBoardPreparing((on) => (on ? false : on));
   }, [problem, showing, workspaceLoadActive]);
@@ -10361,13 +10374,12 @@ export function Workspace({
           docHash={annotateSource?.docType === "pdf" ? annotateSource.hash : undefined}
           bytes={annotateSource?.docType === "pdf" ? annotateSource.bytes ?? undefined : undefined}
           filmScopeBase={`${tab.id}:conflict`}
-          sceneWidth={annotatePageWidth}
-          /*
-           * The reader's own page frames, so each pane can place a page's ink
-           * where that page actually is. The board is paused behind the split
-           * and keeps the frames it last published.
-           */
-          pageFrames={peekPdfReadingFrames(tab.id)}
+          sceneWidth={isWhiteboard(problem) ? SCRATCH_PAGE_W : annotatePageWidth}
+          pageFrames={
+            isWhiteboard(problem)
+              ? whiteboardPageFrames(whiteboardPageCount)
+              : peekPdfReadingFrames(tab.id)
+          }
           client={client}
           onResolve={(resolution) => void handleHubConflictResolve(resolution)}
         />

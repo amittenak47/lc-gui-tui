@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   isWorkspaceLoadBusy,
   loadChromeFate,
+  mayClearParkedPreparing,
   workspaceLoadHomeLabel,
 } from "./workspaceLoad";
 
@@ -42,5 +43,12 @@ describe("workspaceLoadHomeLabel", () => {
     expect(workspaceLoadHomeLabel("opening whiteboard…")).toBe(true);
     expect(workspaceLoadHomeLabel("opening document…")).toBe(true);
     expect(workspaceLoadHomeLabel("loading the workspace…")).toBe(false);
+  });
+});
+
+describe("mayClearParkedPreparing", () => {
+  it("holds preparing for a relaunch restore, not only a user open", () => {
+    expect(mayClearParkedPreparing(true)).toBe(false);
+    expect(mayClearParkedPreparing(false)).toBe(true);
   });
 });
