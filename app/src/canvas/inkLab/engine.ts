@@ -912,14 +912,24 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         }
       }
       const dirty = { ...currentDirty };
-      if (from > 0 && liveRedrawBox) unionAabb(dirty, liveRedrawBox);
-      // Always restore the authoritative committed snapshot as a whole. The
-      // previous dirty-rectangle restore was the growing square: if host and
-      // snap diverged, every frame copied stale pixels back into that box.
-      presentHost(ctx, null, snap);
-      drawDots(reshaped.points, null, from, dirty);
+      const prevBox = liveRedrawBox;
+      if (from > 0 && prevBox) unionAabb(dirty, prevBox);
+      /*
+       * Restore only the live-smooth tail once the prefix is already on the
+       * host. A full-canvas snap blit every paint is the 33–55ms rAF on a
+       * tablet. Restoring a box that covers the frozen prefix was the growing
+       * square: snap has no live ink, so that restore punched a hole the tail
+       * redraw never filled. The first frozen frame still redraws the whole
+       * stroke so the prefix lands on the host.
+       */
+      const keepPrefix = from > 0 && prevBox != null;
+      const clip = keepPrefix
+        ? clipBlitRect(dirty, host.width, host.height, CLIP_BLIT_PAD)
+        : null;
+      presentHost(ctx, clip, snap);
+      drawDots(reshaped.points, clip, keepPrefix ? from : 0, dirty);
       liveRedrawBox = from > 0 ? currentDirty : null;
-      lastSuffix = false;
+      lastSuffix = Boolean(clip);
       return lastSuffix;
     }
     if (sdf) {
@@ -1071,12 +1081,14 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
               liveSmoothScene,
             ).points
           : state.raw;
+      // Keep the pre-blit snap patch. `false` here left every pen stroke
+      // with a null undo slot, so Ctrl+Z remeshed the whole notebook.
       const result = finishLift(
         state,
         preview,
         "catmull",
         performance.now() - t0,
-        false,
+        true,
       );
       return { ...result, bakeInput: state.raw, bakeOptions: state.options };
     },

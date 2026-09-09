@@ -75,6 +75,14 @@ export function instantReplayOnPointerDown(): boolean {
 }
 
 /**
+ * Undo/redo without a pixel patch must not remesh every overlay spine on the
+ * click stack. That is the Close App / Wait dialog on a dense Exam page.
+ */
+export function instantReplayOnUndo(): boolean {
+  return false;
+}
+
+/**
  * Camera rebase must land in one present. Slicing it is the ghost / blank
  * page after a flick — each slice clears the snap then paints more spines.
  */
@@ -152,7 +160,7 @@ export function keepLivePaintPump(drawing: boolean): boolean {
  * still sample every paint. Writing a `<pre>` every vsync on the board is
  * enough layout to miss the next frame (16.7 then 33.3 → ~25ms avg).
  */
-export const LIVE_HUD_FLUSH_MS = 48;
+export const LIVE_HUD_FLUSH_MS = 200;
 
 export function shouldFlushLiveHud(
   lastAt: number,

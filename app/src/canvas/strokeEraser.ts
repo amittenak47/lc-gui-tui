@@ -223,6 +223,44 @@ function pointInsideRub(point: ScenePoint, erase: InkEraseOp, reach: number): bo
 }
 
 /**
+ * Keep an eraser gesture dense enough to describe the swept disc, but do not
+ * store every coalesced hardware sample. Clipping cost is proportional to
+ * `stroke points × erase points`; retaining hundreds of near-identical rub
+ * samples is what made pointer-up stall before replay even began.
+ */
+export function appendErasePathPoint(
+  path: ScenePoint[],
+  point: ScenePoint,
+  radius: number,
+): void {
+  const previous = path[path.length - 1];
+  if (!previous) {
+    path.push(point);
+    return;
+  }
+  const dx = point.x - previous.x;
+  const dy = point.y - previous.y;
+  const distance = Math.hypot(dx, dy);
+  const maxGap = Math.max(1, radius * 0.4);
+  if (distance < maxGap) return;
+  const steps = Math.ceil(distance / maxGap);
+  for (let step = 1; step <= steps; step++) {
+    const t = step / steps;
+    const next: ScenePoint = {
+      x: previous.x + dx * t,
+      y: previous.y + dy * t,
+      pressure: previous.pressure + (point.pressure - previous.pressure) * t,
+    };
+    if (previous.slowness != null || point.slowness != null) {
+      const a = previous.slowness ?? point.slowness ?? 0;
+      const b = point.slowness ?? previous.slowness ?? 0;
+      next.slowness = a + (b - a) * t;
+    }
+    path.push(next);
+  }
+}
+
+/**
  * Pieces of `op` that lie outside the rub, or `null` when the rub missed.
  *
  * Empty array means the stroke was taken entirely.
@@ -254,6 +292,118 @@ export function clipDrawOpOutsideErase(op: InkDrawOp, erase: InkEraseOp): InkDra
       void _id;
       return { ...rest, points: run };
     });
+}
+
+/** Point-bounded equivalent of {@link clipDrawOpOutsideErase}. */
+export class EraseClipJob {
+  private phase: "single" | "segments" | "clip" | "runs" | "done";
+  private sourceIndex = 1;
+  private eraseIndex = 0;
+  private segmentIndex = 0;
+  private runIndex = 0;
+  private changed = false;
+  private segments: Array<[ScenePoint, ScenePoint]> = [];
+  private nextSegments: Array<[ScenePoint, ScenePoint]> = [];
+  private runs: ScenePoint[][] = [];
+  private readonly reach: number;
+
+  constructor(
+    private readonly op: InkDrawOp,
+    private readonly erase: InkEraseOp,
+  ) {
+    this.reach = eraseReach(op, erase);
+    this.phase = op.points.length <= 1 ? "single" : "segments";
+    if (op.points.length === 0 || erase.points.length === 0) this.phase = "done";
+  }
+
+  step(now: () => number, budgetMs: number): boolean {
+    const started = now();
+    let didWork = false;
+    while (this.phase !== "done") {
+      if (didWork && now() - started >= budgetMs) return false;
+      didWork = true;
+
+      if (this.phase === "single") {
+        const point = this.op.points[0];
+        const at = this.erase.points[this.eraseIndex++];
+        if (!point || !at) {
+          this.phase = "done";
+          continue;
+        }
+        const dx = point.x - at.x;
+        const dy = point.y - at.y;
+        if (dx * dx + dy * dy <= this.reach * this.reach) {
+          this.changed = true;
+          this.phase = "done";
+        } else if (this.eraseIndex >= this.erase.points.length) {
+          this.phase = "done";
+        }
+        continue;
+      }
+
+      if (this.phase === "segments") {
+        const b = this.op.points[this.sourceIndex];
+        const a = this.op.points[this.sourceIndex - 1];
+        if (a && b) this.segments.push([a, b]);
+        this.sourceIndex += 1;
+        if (this.sourceIndex >= this.op.points.length) {
+          this.phase = "clip";
+          this.segmentIndex = 0;
+        }
+        continue;
+      }
+
+      if (this.phase === "clip") {
+        if (this.eraseIndex >= this.erase.points.length || this.segments.length === 0) {
+          this.phase = "runs";
+          this.runIndex = 0;
+          continue;
+        }
+        if (this.segmentIndex >= this.segments.length) {
+          this.segments = this.nextSegments;
+          this.nextSegments = [];
+          this.segmentIndex = 0;
+          this.eraseIndex += 1;
+          continue;
+        }
+        const [a, b] = this.segments[this.segmentIndex++]!;
+        const at = this.erase.points[this.eraseIndex]!;
+        const pieces = clipSegmentOutside(a, b, at.x, at.y, this.reach);
+        if (
+          pieces.length !== 1 ||
+          !nearlySame(pieces[0]![0], a) ||
+          !nearlySame(pieces[0]![1], b)
+        ) {
+          this.changed = true;
+        }
+        this.nextSegments.push(...pieces);
+        continue;
+      }
+
+      const segment = this.segments[this.runIndex++];
+      if (segment) {
+        const [a, b] = segment;
+        const last = this.runs[this.runs.length - 1];
+        if (last && nearlySame(last[last.length - 1]!, a)) last.push(b);
+        else this.runs.push([a, b]);
+      }
+      if (this.runIndex >= this.segments.length) this.phase = "done";
+    }
+    return true;
+  }
+
+  result(): InkDrawOp[] | null {
+    if (this.phase !== "done") throw new Error("erase clip is not complete");
+    if (!this.changed) return null;
+    if (this.op.points.length <= 1) return [];
+    return this.runs
+      .filter((run) => run.length >= 2)
+      .map((run) => {
+        const { id: _id, ...rest } = this.op;
+        void _id;
+        return { ...rest, points: run };
+      });
+  }
 }
 
 /**

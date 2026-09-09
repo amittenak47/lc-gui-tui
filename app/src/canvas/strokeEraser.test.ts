@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { NO_PRESSURE, type InkDrawOp, type InkEraseOp, type InkOp } from "./rasterInk";
-import { eraseTouchesStroke, opsAfterPartialErase, opsAfterStrokeErase, opsWithErasesBaked } from "./strokeEraser";
+import {
+  appendErasePathPoint,
+  eraseTouchesStroke,
+  opsAfterPartialErase,
+  opsAfterStrokeErase,
+  opsWithErasesBaked,
+} from "./strokeEraser";
 
 function stroke(id: string, ...pairs: Array<[number, number]>): InkDrawOp {
   return {
@@ -87,6 +93,22 @@ describe("opsAfterStrokeErase", () => {
 
   it("can clear the page", () => {
     expect(opsAfterStrokeErase([near], rub(400, [50, 0]))).toEqual([]);
+  });
+});
+
+describe("appendErasePathPoint", () => {
+  it("drops redundant hardware samples while keeping the swept disc gapless", () => {
+    const points: InkEraseOp["points"] = [];
+    const point = (x: number) => ({ x, y: 0, pressure: NO_PRESSURE });
+    appendErasePathPoint(points, point(0), 10);
+    appendErasePathPoint(points, point(1), 10);
+    appendErasePathPoint(points, point(20), 10);
+
+    expect(points).toHaveLength(6);
+    expect(points.at(-1)?.x).toBe(20);
+    for (let i = 1; i < points.length; i++) {
+      expect(points[i]!.x - points[i - 1]!.x).toBeLessThanOrEqual(4);
+    }
   });
 });
 

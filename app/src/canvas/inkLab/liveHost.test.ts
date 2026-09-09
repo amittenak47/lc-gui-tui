@@ -7,6 +7,7 @@ import {
   instantReplayOnFirstPresent,
   instantReplayOnPageWindow,
   instantReplayOnPointerDown,
+  instantReplayOnUndo,
   keepLivePaintPump,
   LIVE_HUD_FLUSH_MS,
   mutationIsInkChrome,
@@ -84,6 +85,10 @@ describe("live host contract", () => {
 
   it("does not instantly remesh the notebook on pointer down", () => {
     expect(instantReplayOnPointerDown()).toBe(false);
+  });
+
+  it("does not remesh the notebook on the undo click stack", () => {
+    expect(instantReplayOnUndo()).toBe(false);
   });
 
   it("lands a camera rebase in one present", () => {

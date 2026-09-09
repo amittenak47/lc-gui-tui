@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { opsWithErasesBaked } from "../strokeEraser";
-import type { InkOp } from "../rasterInk";
-import { EraseBakeJob, replayUntil } from "./replayJob";
+import type { InkDrawOp, InkOp } from "../rasterInk";
+import { overlaySpineFromDrawOp } from "./replay";
+import { EraseBakeJob, OverlaySpineJob, replayUntil } from "./replayJob";
 
 describe("replayUntil", () => {
   it("always paints one index even when the budget is already spent", () => {
@@ -80,5 +81,27 @@ describe("EraseBakeJob", () => {
     while (!job.step(() => clock++, 1)) turns += 1;
     expect(turns).toBeGreaterThan(1);
     expect(job.result()).toEqual(opsWithErasesBaked(ops));
+  });
+});
+
+describe("OverlaySpineJob", () => {
+  it("matches whole-stroke conversion while yielding inside a hot stroke", () => {
+    const op: InkDrawOp = {
+      kind: "draw",
+      color: "#111111",
+      baseWidth: 2,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      points: Array.from({ length: 450 }, (_, x) => ({ x, y: x % 7, pressure: 0.5 })),
+    };
+    const view = { zoom: 1.25, scrollX: 3, scrollY: -4 };
+    const job = new OverlaySpineJob([op], view, 2);
+    let clock = 0;
+    let turns = 0;
+    while (!job.step(() => clock++, 1)) turns += 1;
+
+    expect(turns).toBeGreaterThan(1);
+    expect(job.result()).toEqual([overlaySpineFromDrawOp(op, view, 2)]);
   });
 });

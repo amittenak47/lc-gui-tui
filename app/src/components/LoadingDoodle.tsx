@@ -9,8 +9,10 @@
  * Color: {@link resolveInkColor} with the app theme (same as Board), not the
  * veil's muted overlay color.
  *
- * After {@link DOODLE_TTL_MS}, each stroke erases from its oldest tip (tail)
- * toward the newest.
+ * Committed strokes are cached in a backing bitmap. The old implementation
+ * replayed every point of every retained stroke on every rAF, so the doodle
+ * consumed progressively more of the UI thread while somebody wrote. That
+ * starved both pointer delivery and the loading spinner.
  */
 
 import { useEffect, useRef } from "react";
@@ -31,7 +33,7 @@ import {
 import { loadThemeId } from "../theme/appThemes";
 import { INK_BOLDNESS_EVENT, loadInkBoldness } from "../util/inkBoldnessPref";
 import { loadInkPressureClip } from "../util/inkPressureClip";
-import { loadInkSmoothing, loadInkSmoothingMode } from "../util/inkSmoothingPref";
+import { loadInkSmoothing } from "../util/inkSmoothingPref";
 import {
   INK_GRAIN_EVENT,
   INK_SPEED_BLOT_BLEND_EVENT,
@@ -64,7 +66,6 @@ interface InkLive {
   grain: number;
   speedFade: number;
   smoothing: number;
-  smoothingMode: "lift" | "live";
 }
 
 function loadLiveInk(themeId: string): InkLive {
@@ -83,7 +84,6 @@ function loadLiveInk(themeId: string): InkLive {
     grain: loadInkGrain(),
     speedFade: loadInkSpeedFade(),
     smoothing: loadInkSmoothing(),
-    smoothingMode: loadInkSmoothingMode(),
   };
 }
 
@@ -124,6 +124,7 @@ export function LoadingDoodle({
   const lastSampleRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const strokesRef = useRef<Stroke[]>([]);
   const rafRef = useRef<number | null>(null);
+  const expiryTimerRef = useRef<number | null>(null);
   const themeIdRef = useRef(themeId ?? loadThemeId());
   themeIdRef.current = themeId ?? loadThemeId();
   const inkRef = useRef<InkLive>(loadLiveInk(themeIdRef.current));
@@ -134,6 +135,9 @@ export function LoadingDoodle({
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const backing = document.createElement("canvas");
+    const backingCtx = backing.getContext("2d");
+    if (!backingCtx) return;
 
     inkRef.current = loadLiveInk(themeIdRef.current);
 
@@ -148,6 +152,17 @@ export function LoadingDoodle({
     window.addEventListener(INK_SPEED_FADE_EVENT, reloadInk);
     window.addEventListener(INK_BOLDNESS_EVENT, reloadInk);
 
+    const drawCommitted = (op: InkDrawOp) => {
+      backingCtx.setTransform(dprRef.current, 0, 0, dprRef.current, 0, 0);
+      applyInkOp(backingCtx, op, dprRef.current);
+    };
+
+    const rebuildBacking = () => {
+      backingCtx.setTransform(1, 0, 0, 1, 0, 0);
+      backingCtx.clearRect(0, 0, backing.width, backing.height);
+      for (const stroke of strokesRef.current) drawCommitted(stroke.op);
+    };
+
     const resize = () => {
       const parent = canvas.parentElement;
       if (!parent) return;
@@ -160,40 +175,27 @@ export function LoadingDoodle({
         canvas.width = nextW;
         canvas.height = nextH;
       }
+      if (backing.width !== nextW || backing.height !== nextH) {
+        backing.width = nextW;
+        backing.height = nextH;
+        rebuildBacking();
+      }
       canvas.style.width = `${rect.width}px`;
       canvas.style.height = `${rect.height}px`;
     };
 
-    const paint = (now = performance.now()) => {
-      const parent = canvas.parentElement;
-      if (!parent) return;
-      const { width, height } = parent.getBoundingClientRect();
+    const paint = () => {
       const dpr = dprRef.current;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(backing, 0, 0);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, width, height);
       const pixelScale = dpr;
-
-      const kept: Stroke[] = [];
-      for (const stroke of strokesRef.current) {
-        const age = now - stroke.at;
-        if (age >= DOODLE_TTL_MS + ERASE_MS) continue;
-        let op = stroke.op;
-        if (age > DOODLE_TTL_MS && stroke.op.points.length > 1) {
-          const progress = Math.min(1, (age - DOODLE_TTL_MS) / ERASE_MS);
-          const drop = Math.floor(progress * (stroke.op.points.length - 1));
-          const visible = stroke.op.points.slice(drop);
-          if (visible.length < 2) continue;
-          op = { ...stroke.op, points: visible };
-        }
-        applyInkOp(ctx, op, pixelScale);
-        kept.push(stroke);
-      }
-      strokesRef.current = kept;
 
       if (strokeRef.current) {
         const live = inkRef.current;
         const points =
-          live.smoothingMode === "live" && live.smoothing > 0
+          live.smoothing > 0
             ? smoothInkPoints(
                 strokeRef.current,
                 live.smoothing,
@@ -204,13 +206,33 @@ export function LoadingDoodle({
       }
     };
 
-    const loop = () => {
-      paint();
-      rafRef.current = requestAnimationFrame(loop);
+    const schedulePaint = () => {
+      if (rafRef.current != null) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        paint();
+      });
     };
 
-    const pointFrom = (event: PointerEvent): ScenePoint => {
-      const rect = canvas.getBoundingClientRect();
+    const scheduleExpiry = () => {
+      if (expiryTimerRef.current != null) window.clearTimeout(expiryTimerRef.current);
+      expiryTimerRef.current = null;
+      const first = strokesRef.current[0];
+      if (!first) return;
+      const due = first.at + DOODLE_TTL_MS + ERASE_MS;
+      expiryTimerRef.current = window.setTimeout(() => {
+        expiryTimerRef.current = null;
+        const now = performance.now();
+        strokesRef.current = strokesRef.current.filter(
+          (stroke) => stroke.at + DOODLE_TTL_MS + ERASE_MS > now,
+        );
+        rebuildBacking();
+        schedulePaint();
+        scheduleExpiry();
+      }, Math.max(0, due - performance.now()));
+    };
+
+    const pointFrom = (event: PointerEvent, rect: DOMRect): ScenePoint => {
       const x = event.clientX - rect.left;
       const y = event.clientY - rect.top;
       const t = event.timeStamp || performance.now();
@@ -257,11 +279,16 @@ export function LoadingDoodle({
       pressureEmaRef.current = 0;
       speedEmaRef.current = 0;
       lastSampleRef.current = null;
-      strokeRef.current = [pointFrom(event)];
+      strokeRef.current = [pointFrom(event, canvas.getBoundingClientRect())];
+      schedulePaint();
     };
     const onMove = (event: PointerEvent) => {
       if (!strokeRef.current) return;
-      strokeRef.current.push(pointFrom(event));
+      const rect = canvas.getBoundingClientRect();
+      const coalesced = event.getCoalescedEvents?.();
+      const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
+      for (const sample of batch) strokeRef.current.push(pointFrom(sample, rect));
+      schedulePaint();
     };
     const onUp = (event: PointerEvent) => {
       if (!strokeRef.current) return;
@@ -272,6 +299,12 @@ export function LoadingDoodle({
       }
       const live = inkRef.current;
       let points = strokeRef.current;
+      const rect = canvas.getBoundingClientRect();
+      const last = points[points.length - 1];
+      const lifted = pointFrom(event, rect);
+      if (!last || Math.hypot(lifted.x - last.x, lifted.y - last.y) > 0.25) {
+        points = [...points, lifted];
+      }
       if (points.length > 1 && live.smoothing > 0) {
         points = smoothInkPoints(
           points,
@@ -280,17 +313,21 @@ export function LoadingDoodle({
         );
       }
       if (points.length > 1) {
+        const op = makeDrawOp(live, points);
         strokesRef.current.push({
-          op: makeDrawOp(live, points),
+          op,
           at: performance.now(),
         });
+        drawCommitted(op);
+        scheduleExpiry();
       }
       strokeRef.current = null;
       lastSampleRef.current = null;
+      schedulePaint();
     };
 
     resize();
-    rafRef.current = requestAnimationFrame(loop);
+    paint();
     const ro = new ResizeObserver(resize);
     if (canvas.parentElement) ro.observe(canvas.parentElement);
     canvas.addEventListener("pointerdown", onDown);
@@ -299,6 +336,7 @@ export function LoadingDoodle({
     canvas.addEventListener("pointercancel", onUp);
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      if (expiryTimerRef.current != null) window.clearTimeout(expiryTimerRef.current);
       ro.disconnect();
       window.removeEventListener("lc-ink-smoothing", reloadInk);
       window.removeEventListener("lc-ink-pressure-clip", reloadInk);

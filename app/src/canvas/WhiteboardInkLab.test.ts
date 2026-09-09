@@ -8,6 +8,7 @@ import {
   instantReplayOnFirstPresent,
   instantReplayOnPageWindow,
   instantReplayOnPointerDown,
+  instantReplayOnUndo,
   keepLivePaintPump,
   remeshOnCameraMovingEnd,
   skipCommittedReplay,
@@ -68,6 +69,10 @@ describe("WhiteboardInkLab", () => {
 
   it("does not instantly remesh the notebook on pointer down", () => {
     expect(instantReplayOnPointerDown()).toBe(false);
+  });
+
+  it("does not instantly remesh the notebook on undo without a pixel patch", () => {
+    expect(instantReplayOnUndo()).toBe(false);
   });
 
   it("lands a camera rebase in one present", () => {

@@ -269,7 +269,8 @@ describe("WhiteboardInkLab", () => {
     expect(tick.indexOf("keepLivePaintPump")).toBeLessThan(tick.indexOf("engine.paint"));
     expect(tick.indexOf("engine.paint")).toBeLessThan(tick.indexOf("reportLoad"));
     const report = src.slice(src.indexOf("const reportLoad"), src.indexOf("const stopPaintPump"));
-    expect(report).toMatch(/if \(live\) return/);
+    expect(report).toMatch(/shouldFlushLiveHud/);
+    expect(report).toMatch(/if \(live && !flushHud\) return/);
     expect(src).toMatch(/primeSnap\(\)/);
     expect(src).toMatch(/replayRafRef\.current != null/);
     expect(src).toMatch(/new EraseBakeJob/);
@@ -345,6 +346,14 @@ describe("Workspace pane switch", () => {
     const start = src.indexOf("function WorkspaceLoadStatus");
     expect(start).toBeGreaterThan(-1);
     expect(src.slice(start, start + 900)).toMatch(/<LoadingDoodle themeId=\{themeId\} \/>/);
+  });
+
+  it("does not replay accumulated loading doodles every frame", () => {
+    const src = readFileSync(join(here, "../components/LoadingDoodle.tsx"), "utf8");
+    expect(src).toMatch(/const backing = document\.createElement\("canvas"\)/);
+    expect(src).toMatch(/ctx\.drawImage\(backing, 0, 0\)/);
+    expect(src).toMatch(/getCoalescedEvents/);
+    expect(src).not.toMatch(/requestAnimationFrame\(loop\)/);
   });
 
   it("does not tear the PDF down when switching to the other pane", () => {
