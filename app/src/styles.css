@@ -1909,7 +1909,55 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 }
 
 .lc-hub-conflict-pane[data-verdict="keep"] {
-  background: color-mix(in srgb, var(--ok) 5%, transparent);
+  background: color-mix(in srgb, var(--ok) 38%, var(--bg));
+}
+
+.lc-hub-conflict-pane[data-verdict="reject"] {
+  background: color-mix(in srgb, var(--bad) 38%, var(--bg));
+}
+
+.lc-hub-conflict-pane[data-verdict="keep"] .lc-hub-conflict-pane-head {
+  background: color-mix(in srgb, var(--ok) 32%, var(--bg));
+  border-bottom-color: color-mix(in srgb, var(--ok) 50%, var(--chrome-edge));
+}
+
+.lc-hub-conflict-pane[data-verdict="reject"] .lc-hub-conflict-pane-head {
+  background: color-mix(in srgb, var(--bad) 32%, var(--bg));
+  border-bottom-color: color-mix(in srgb, var(--bad) 50%, var(--chrome-edge));
+}
+
+.lc-hub-conflict-note[data-pick="keep"],
+.lc-hub-conflict-note.is-keep {
+  background: color-mix(in srgb, var(--ok) 52%, var(--surface));
+  border-color: color-mix(in srgb, var(--ok) 78%, var(--chrome-edge));
+}
+
+.lc-hub-conflict-note[data-pick="drop"],
+.lc-hub-conflict-note.is-drop {
+  background: color-mix(in srgb, var(--bad) 52%, var(--surface));
+  border-color: color-mix(in srgb, var(--bad) 78%, var(--chrome-edge));
+}
+
+.lc-hub-conflict.is-picking .lc-hub-conflict-note[data-pick="undecided"] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent, var(--ink)) 45%, transparent);
+}
+
+.lc-hub-conflict-pane-head [data-action="keep"][aria-pressed="true"],
+.lc-hub-conflict-note [data-action="keep"][aria-pressed="true"],
+.lc-hub-conflict [data-action="keep"][aria-pressed="true"].lc-doc-confirm-yes {
+  background: color-mix(in srgb, var(--ok) 16%, var(--surface));
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--ok) 28%, var(--chrome-edge));
+  box-shadow: none;
+}
+
+.lc-hub-conflict-pane-head [data-action="drop"][aria-pressed="true"],
+.lc-hub-conflict-note [data-action="drop"][aria-pressed="true"],
+.lc-hub-conflict [data-action="drop"][aria-pressed="true"].lc-doc-confirm-no {
+  background: color-mix(in srgb, var(--bad) 16%, var(--surface));
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--bad) 28%, var(--chrome-edge));
+  box-shadow: none;
 }
 
 .lc-hub-conflict-sash {
@@ -1952,6 +2000,7 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-hub-conflict-preview {
   position: absolute;
   inset: 0;
+  z-index: 0;
   min-height: 0;
   display: flex;
   align-items: center;
@@ -1963,9 +2012,22 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-hub-conflict-preview.is-harness {
   display: block;
   align-items: stretch;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  /*
+   * The board's ancestor `touch-action: none` does not apply here, but a
+   * Windows/Android overlay still will not coast a native overflow the way
+   * the reader does. ConflictPagePreview owns the flick; wheel stays native.
+   */
+  touch-action: none;
+  scroll-snap-type: y proximity;
+  scrollbar-gutter: stable;
+}
+
+.lc-hub-conflict-preview.is-harness .lc-hub-conflict-doc {
+  opacity: 1;
 }
 
 .lc-hub-conflict-doc {
@@ -1990,17 +2052,29 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 
 .lc-hub-conflict-lined {
   width: 100%;
-  min-height: 100%;
-  aspect-ratio: 3920 / 4200;
+  min-height: 160px;
+  flex-shrink: 0;
+  scroll-snap-align: start;
+  scroll-snap-stop: normal;
   background-color: var(--surface);
   background-image: repeating-linear-gradient(
     to bottom,
     transparent 0,
-    transparent calc(1.6em - 1px),
-    color-mix(in srgb, var(--ink) 12%, transparent) calc(1.6em - 1px),
-    color-mix(in srgb, var(--ink) 12%, transparent) 1.6em
+    transparent calc(100% - 1.25px),
+    color-mix(in srgb, var(--ink) 42%, transparent) calc(100% - 1.25px),
+    color-mix(in srgb, var(--ink) 42%, transparent) 100%
   );
-  background-size: 100% 1.6em;
+  opacity: 0.9;
+}
+
+.lc-hub-conflict-lined[data-pick="keep"] {
+  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--ok) 55%, transparent);
+  background-color: color-mix(in srgb, var(--ok) 16%, var(--surface));
+}
+
+.lc-hub-conflict-lined[data-pick="drop"] {
+  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--bad) 55%, transparent);
+  background-color: color-mix(in srgb, var(--bad) 16%, var(--surface));
 }
 
 .lc-hub-conflict-page-fit {
@@ -2016,6 +2090,31 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-hub-conflict-ink-layer {
   position: absolute;
   pointer-events: none;
+  transform: translateZ(0);
+}
+
+.lc-hub-conflict-load {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--overlay-bg, var(--bg)) 55%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: color-mix(in srgb, var(--ink) 55%, transparent);
+}
+
+.lc-hub-conflict-load.is-done {
+  pointer-events: none;
+  animation: lc-hub-conflict-load-out 280ms ease 560ms both;
+}
+
+@keyframes lc-hub-conflict-load-out {
+  to {
+    opacity: 0;
+  }
 }
 
 .lc-hub-conflict-mark {
@@ -2046,6 +2145,57 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 
 .lc-hub-conflict-pane-head .lc-tip-target {
   display: contents;
+}
+
+.lc-hub-conflict-entry {
+  list-style: none;
+}
+
+.lc-hub-conflict-entry-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lc-hub-conflict-note-twist {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.lc-hub-conflict-note.is-part {
+  margin-left: 18px;
+  position: relative;
+}
+
+.lc-hub-conflict-note.is-part::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: -8px;
+  bottom: 50%;
+  width: 2px;
+  background: var(--chrome-edge);
+}
+
+.lc-hub-conflict-note.is-part::after {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  width: 10px;
+  height: 2px;
+  background: var(--chrome-edge);
 }
 
 .lc-hub-conflict-note {

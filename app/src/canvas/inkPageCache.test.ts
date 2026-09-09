@@ -213,4 +213,16 @@ describe("InkPageBook", () => {
     expect(book.canRedo()).toBe(false);
     expect(book.redoOnce()).toBeNull();
   });
+
+  it("rebins fallback page-1 strokes onto the real notebook pages", () => {
+    const book = new InkPageBook();
+    book.commit(stroke(40));
+    book.commit(stroke(160));
+    expect(book.pageIds()).toEqual([1]);
+    expect(book.setFrames(frames(2))).toBe(true);
+    const page1 = book.hot.get(1) ?? decodeInkOps(book.cold.get(1)!);
+    const page2 = book.hot.get(2) ?? decodeInkOps(book.cold.get(2)!);
+    expect(page1).toHaveLength(1);
+    expect(page2).toHaveLength(1);
+  });
 });

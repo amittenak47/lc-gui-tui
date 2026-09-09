@@ -105,6 +105,23 @@ describe("the chip while a Sync walk runs", () => {
     expect(chip(host)?.textContent).not.toContain("indexed");
     expect(chip(host)?.className).not.toContain("is-working");
   });
+
+  it("says synced on a whiteboard that has no index card", () => {
+    const { host } = mount({ status: "idle", onIndex: null, walkStage: "synced" });
+    expect(chip(host)?.textContent).toContain("synced");
+    expect(chip(host)).not.toBeNull();
+  });
+
+  it("says not synced when the pad has local edits", () => {
+    const { host } = mount({ status: "idle", onIndex: null, padSync: "not-synced" });
+    expect(chip(host)?.textContent).toContain("not synced");
+  });
+
+  it("says not synced on an indexed file whose pad is dirty", () => {
+    const { host } = mount({ status: "indexed", padSync: "not-synced" });
+    expect(chip(host)?.textContent).toContain("not synced");
+    expect(chip(host)?.textContent).not.toContain("indexed");
+  });
 });
 
 describe("the chip at rest", () => {

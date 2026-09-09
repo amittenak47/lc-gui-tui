@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  inkCanvasPixelsChanged,
+  instantReplayOnBackingResize,
   keepLivePaintPump,
   LIVE_HUD_FLUSH_MS,
   samePaintedView,
   shouldFlushLiveHud,
   skipCommittedReplay,
+  skipReplayOnWheelAbort,
   usePreStrokeStamp,
 } from "./liveHost";
 
@@ -43,5 +46,19 @@ describe("live host contract", () => {
     expect(shouldFlushLiveHud(10, 10 + LIVE_HUD_FLUSH_MS - 1, true)).toBe(false);
     expect(shouldFlushLiveHud(10, 10 + LIVE_HUD_FLUSH_MS, true)).toBe(true);
     expect(shouldFlushLiveHud(10, 11, false)).toBe(true);
+  });
+
+  it("does not treat a CSS park as a backing-store resize", () => {
+    expect(inkCanvasPixelsChanged({ width: 800, height: 1200 }, 800, 1200)).toBe(false);
+    expect(inkCanvasPixelsChanged({ width: 800, height: 1200 }, 800, 1201)).toBe(true);
+    expect(inkCanvasPixelsChanged({ width: 800, height: 1200 }, 801, 1200)).toBe(true);
+  });
+
+  it("does not remesh the notebook when the nib wheel aborts a live stroke", () => {
+    expect(skipReplayOnWheelAbort()).toBe(true);
+  });
+
+  it("slices the remesh after a real backing-store resize", () => {
+    expect(instantReplayOnBackingResize()).toBe(false);
   });
 });

@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client";
 import { act } from "react";
 
 import { HubConflictSplit } from "./HubConflictSplit";
-import type { AnnotatePadDto } from "../api/client";
+import type { AnnotatePadDto, WhiteboardPadDto } from "../api/client";
 import type { HubPadConflict } from "../util/hubConflictStash";
 import { rememberPdfThumb, resetPdfThumbs } from "../modes/pdfFilm";
 
@@ -138,6 +138,18 @@ describe("HubConflictSplit", () => {
     });
     expect(onResolve).not.toHaveBeenCalled();
     expect(resolveButton().disabled).toBe(true);
+  });
+
+  it("leaves keep and drop as theme circles until they are pressed", () => {
+    mount();
+    const keep = paneButton(0, "keep");
+    const drop = paneButton(0, "drop");
+    expect(keep.getAttribute("aria-pressed")).toBe("false");
+    expect(keep.className).toBe("lc-doc-confirm-btn");
+    expect(drop.className).toBe("lc-doc-confirm-btn");
+    act(() => keep.click());
+    expect(paneButton(0, "keep").className).toContain("lc-doc-confirm-yes");
+    expect(paneButton(1, "drop").className).toContain("lc-doc-confirm-no");
   });
 
   it("top ✓ keeps that whole copy and discards the other column", () => {
@@ -395,6 +407,205 @@ describe("HubConflictSplit ink and labels", () => {
       { pageId: 4, choice: "local" },
     ]);
   });
+
+  it("fills a kept subentry and says how many choices remain", () => {
+    mount(WITH_INK);
+    act(() => {
+      inkRow(0)
+        .querySelector('[data-action="keep"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(inkRow(0).classList.contains("is-keep")).toBe(true);
+    expect(inkRow(0).getAttribute("data-pick")).toBe("keep");
+    expect(document.querySelector(".lc-hub-conflict")!.classList.contains("is-picking")).toBe(
+      true,
+    );
+    expect(document.body.textContent).toMatch(/still need/);
+  });
+
+  it("fills a dropped subentry in red", () => {
+    mount(WITH_INK);
+    act(() => {
+      inkRow(1)
+        .querySelector('[data-action="drop"]')!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(inkRow(1).classList.contains("is-drop")).toBe(true);
+    expect(inkRow(1).getAttribute("data-pick")).toBe("drop");
+  });
+
+  it("stacks notebook pages in the preview even when ink is one page-1 shard", () => {
+    const elements = [
+      { y: 0, height: 4200, customData: { lcScratchFrame: true, lcScratchPage: 0 } },
+      { y: 4264, height: 4200, customData: { lcScratchFrame: true, lcScratchPage: 1 } },
+    ];
+    const body = (updated: number): WhiteboardPadDto => ({
+      id: "w1",
+      title: "Exam 1",
+      updated_at: updated,
+      page_count: 1,
+      board: { elements } as WhiteboardPadDto["board"],
+      agent: [],
+    });
+    mount({
+      kind: "whiteboard",
+      id: "w1",
+      stage: "ink",
+      detail: "both wrote",
+      local: body(10),
+      server: body(20),
+      localInkPageIds: [1],
+      hubInkPageIds: [1],
+      localInkStamps: [{ pageId: 1, updatedAt: 10 }],
+      hubInkStamps: [{ pageId: 1, updatedAt: 20 }],
+    });
+    expect(document.body.textContent).toMatch(/Handwriting \(page 1\)/);
+    expect(document.body.textContent).not.toMatch(/Handwriting \(page 2\)/);
+    expect(document.querySelectorAll('[data-pdf-page="1"]').length).toBeGreaterThan(0);
+    expect(document.querySelectorAll('[data-pdf-page="2"]').length).toBeGreaterThan(0);
+  });
+
+  it("lists each notebook page after a lumped page-1 blob decodes", async () => {
+    const { encodeInkOps, packEncodedInk } = await import("../canvas/inkCodec");
+    const { bytesToB64 } = await import("../api/nativeHttp");
+    const { NO_PRESSURE } = await import("../canvas/rasterInk");
+    const { SCRATCH_PAGE_H, SCRATCH_PAGE_GUTTER } = await import("../templates/whiteboard");
+    const y2 = SCRATCH_PAGE_H + SCRATCH_PAGE_GUTTER + 40;
+    const gz = bytesToB64(
+      packEncodedInk(
+        encodeInkOps([
+          {
+            kind: "draw",
+            color: "#111",
+            baseWidth: 4,
+            maxFullness: 1,
+            pressureClip: 1,
+            pressureSensitive: false,
+            points: [
+              { x: 80, y: 40, pressure: NO_PRESSURE },
+              { x: 120, y: 40, pressure: NO_PRESSURE },
+            ],
+          },
+          {
+            kind: "draw",
+            color: "#111",
+            baseWidth: 4,
+            maxFullness: 1,
+            pressureClip: 1,
+            pressureSensitive: false,
+            points: [
+              { x: 80, y: y2, pressure: NO_PRESSURE },
+              { x: 120, y: y2, pressure: NO_PRESSURE },
+            ],
+          },
+        ]),
+      ),
+    );
+    const elements = [
+      { y: 0, height: 4200, customData: { lcScratchFrame: true, lcScratchPage: 0 } },
+      { y: 4264, height: 4200, customData: { lcScratchFrame: true, lcScratchPage: 1 } },
+    ];
+    const body = (updated: number): WhiteboardPadDto => ({
+      id: "w1",
+      title: "Exam 1",
+      updated_at: updated,
+      page_count: 2,
+      board: { elements } as WhiteboardPadDto["board"],
+      agent: [],
+    });
+    mount({
+      kind: "whiteboard",
+      id: "w1",
+      stage: "ink",
+      detail: "both wrote",
+      local: body(10),
+      server: body(20),
+      localInkPageIds: [1],
+      hubInkPageIds: [1],
+      localInkStamps: [{ pageId: 1, updatedAt: 10 }],
+      hubInkStamps: [{ pageId: 1, updatedAt: 20 }],
+      localInk: [{ kind: "whiteboard", key: "w1", page_id: 1, updated_at: 10, gz }],
+      serverInk: [],
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(document.body.textContent).toMatch(/Handwriting \(page 1\)/);
+    expect(document.body.textContent).toMatch(/Handwriting \(page 2\)/);
+  });
+
+  it("lists virtual sheets of a grown page-1 whiteboard after the blob decodes", async () => {
+    const { encodeInkOps, packEncodedInk } = await import("../canvas/inkCodec");
+    const { bytesToB64 } = await import("../api/nativeHttp");
+    const { NO_PRESSURE } = await import("../canvas/rasterInk");
+    const { SCRATCH_PAGE_H, SCRATCH_PAGE_GUTTER } = await import("../templates/whiteboard");
+    const y2 = SCRATCH_PAGE_H + SCRATCH_PAGE_GUTTER + 40;
+    const draw = (y: number) => ({
+      kind: "draw" as const,
+      color: "#111",
+      baseWidth: 4,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      points: [
+        { x: 80, y, pressure: NO_PRESSURE },
+        { x: 120, y, pressure: NO_PRESSURE },
+      ],
+    });
+    const gz = bytesToB64(packEncodedInk(encodeInkOps([draw(40), draw(y2)])));
+    const body = (updated: number): WhiteboardPadDto => ({
+      id: "w1",
+      title: "Exam 1",
+      updated_at: updated,
+      page_count: 1,
+      board: {
+        elements: [
+          { y: 0, height: 8000, customData: { lcScratchFrame: true, lcScratchPage: 0 } },
+        ],
+      } as WhiteboardPadDto["board"],
+      agent: [],
+    });
+    mount({
+      kind: "whiteboard",
+      id: "w1",
+      stage: "ink",
+      detail: "both wrote",
+      local: body(10),
+      server: body(20),
+      localInkPageIds: [1],
+      hubInkPageIds: [1],
+      localInkStamps: [{ pageId: 1, updatedAt: 10 }],
+      hubInkStamps: [{ pageId: 1, updatedAt: 20 }],
+      localInk: [{ kind: "whiteboard", key: "w1", page_id: 1, updated_at: 10, gz }],
+      serverInk: [],
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(document.body.textContent).toMatch(/Handwriting \(page 1\)/);
+    expect(document.body.textContent).toMatch(/Handwriting \(page 2\)/);
+  });
+
+  it("lists footnote scratch per mark board, not as one pad row", () => {
+    mount({
+      ...CONFLICT,
+      footnoteInk: [
+        {
+          wbId: "n1",
+          localPageIds: [1],
+          hubPageIds: [1],
+          localPages: [{ pageId: 1, updatedAt: 1 }],
+          hubPages: [{ pageId: 1, updatedAt: 2 }],
+        },
+      ],
+    });
+    expect(document.body.textContent).toMatch(/Scratch \(n1, page 1\)/);
+    expect(document.body.textContent).not.toMatch(/Handwriting \(page 1\)/);
+  });
 });
 
 /*
@@ -430,6 +641,8 @@ describe("what the panes are asked to draw", () => {
         notes?: readonly { id: string }[];
         showInk?: boolean;
         inkPages?: readonly { page_id: number }[];
+        droppedPages?: readonly number[];
+        keptPages?: readonly number[];
       }) => (
         <div
           className="lc-hub-conflict-preview"
@@ -437,6 +650,8 @@ describe("what the panes are asked to draw", () => {
           data-notes={(props.notes ?? []).map((note) => note.id).join(",")}
           data-ink={props.showInk ? "on" : "off"}
           data-ink-pages={(props.inkPages ?? []).map((row) => row.page_id).join(",")}
+          data-dropped={(props.droppedPages ?? []).join(",")}
+          data-kept={(props.keptPages ?? []).join(",")}
         />
       ),
     }));
@@ -480,6 +695,10 @@ describe("what the panes are asked to draw", () => {
   const SAME = "same";
   const HUB_ONLY = "srv";
   const inkOn = (side: 0 | 1) => panes()[side]!.dataset.ink === "on";
+  const droppedPagesOn = (side: 0 | 1) =>
+    (panes()[side]!.dataset.dropped ?? "").split(",").filter(Boolean);
+  const keptPagesOn = (side: 0 | 1) =>
+    (panes()[side]!.dataset.kept ?? "").split(",").filter(Boolean);
 
   it("draws nothing for a mark nobody has answered for", async () => {
     /*
@@ -542,15 +761,23 @@ describe("what the panes are asked to draw", () => {
 
     tickInk(0, "keep");
     expect(inkOn(0)).toBe(true);
-    expect(inkOn(1)).toBe(false);
+    expect(inkOn(1)).toBe(true);
+    expect(keptPagesOn(0)).toEqual(["1"]);
+    expect(droppedPagesOn(1)).toEqual(["1"]);
 
     tickInk(1, "keep");
     expect(inkOn(0)).toBe(true);
     expect(inkOn(1)).toBe(true);
+    expect(keptPagesOn(0)).toEqual(["1"]);
+    expect(keptPagesOn(1)).toEqual(["1"]);
+    expect(droppedPagesOn(0)).toEqual([]);
+    expect(droppedPagesOn(1)).toEqual([]);
 
     tickInk(0, "drop");
-    expect(inkOn(0)).toBe(false);
+    expect(inkOn(0)).toBe(true);
     expect(inkOn(1)).toBe(true);
+    expect(droppedPagesOn(0)).toEqual(["1"]);
+    expect(keptPagesOn(1)).toEqual(["1"]);
   });
 
   it("leaves earlier decisions drawn while you answer the next row", async () => {
@@ -571,7 +798,9 @@ describe("what the panes are asked to draw", () => {
     expect(notesOn(0)).toEqual(["n1", "same"]);
     expect(inkOn(0)).toBe(true);
     expect(notesOn(1)).toEqual([]);
-    expect(inkOn(1)).toBe(false);
+    expect(inkOn(1)).toBe(true);
+    expect(droppedPagesOn(1)).toEqual(["1"]);
+    expect(keptPagesOn(0)).toEqual(["1"]);
     expect(paneButton(1, "drop").getAttribute("aria-pressed")).toBe("true");
   });
 
@@ -634,9 +863,7 @@ describe("what the panes are asked to draw", () => {
   });
 });
 
-describe("the mark hub, one per pane", () => {
-  // The hub portals to `document.body`, so a split left mounted keeps its
-  // cards in the next test's count.
+describe("footnote rows, without opening the panel", () => {
   afterEach(() => {
     document.body.textContent = "";
   });
@@ -645,7 +872,8 @@ describe("the mark hub, one per pane", () => {
    * The same mark on both sides, each carrying its own note.
    *
    * That difference is the point: the live hub in the workspace reads *this*
-   * device's footnotes, so it could only ever show one of the two.
+   * device's footnotes, so it could only ever show one of the two. The merge
+   * window lists those pieces as subentries instead of mounting the panel.
    */
   const BOTH: HubPadConflict = {
     ...WITH_INK,
@@ -671,10 +899,6 @@ describe("the mark hub, one per pane", () => {
     ]),
   };
 
-  function hubs() {
-    return document.querySelectorAll(".lc-footnote-overview");
-  }
-
   /** The ✓ / ✕ on one row, in one pane. */
   const tickRow = (side: 0 | 1, id: string, action: "keep" | "drop") => {
     const pane = document.querySelectorAll(".lc-hub-conflict-pane")[side]!;
@@ -684,82 +908,29 @@ describe("the mark hub, one per pane", () => {
     });
   };
 
-  it("shows no card for a row nobody has answered for", () => {
-    /*
-     * The card is the same change as the mark, described in full, so it waits
-     * for the same decision. Two cards over two deliberately blank pages said
-     * the opposite of the ticks beside them.
-     */
-    mount(BOTH);
-    act(() => noteByText("kept here with new words").click());
-    expect(hubs()).toHaveLength(0);
-  });
-
-  it("opens the card on the side that was kept, and only that side", () => {
-    mount(BOTH);
-    act(() => noteByText("kept here with new words").click());
-
-    tickRow(0, "same", "keep");
-    expect(hubs()).toHaveLength(1);
-    expect(document.body.textContent).toContain("note from this device");
-    expect(document.body.textContent).not.toContain("note from the other one");
-
-    tickRow(1, "same", "keep");
-    expect(hubs()).toHaveLength(2);
-    expect(document.body.textContent).toContain("note from the other one");
-  });
-
-  it("takes the card away again when the ✓ is taken back", () => {
-    mount(BOTH);
-    act(() => noteByText("kept here with new words").click());
-    tickRow(0, "same", "keep");
-    expect(hubs()).toHaveLength(1);
-
-    tickRow(0, "same", "keep");
-    expect(hubs()).toHaveLength(0);
-  });
-
-  it("shows each side its own copy, which is the point of two cards", () => {
-    // The live hub in the workspace reads this device's footnotes, so it could
-    // only ever have shown one of the two.
+  it("never opens the footnote panel from a row", () => {
     mount(BOTH);
     act(() => noteByText("kept here with new words").click());
     tickRow(0, "same", "keep");
     tickRow(1, "same", "keep");
-
-    const text = document.body.textContent ?? "";
-    expect(text).toContain("note from this device");
-    expect(text).toContain("note from the other one");
+    expect(document.querySelectorAll(".lc-footnote-overview")).toHaveLength(0);
+    expect(noteByText("kept here with new words").className).toContain("is-focused");
   });
 
-  it("closes both hubs when handwriting takes the focus", () => {
+  it("lists each changed piece under the mark", () => {
     mount(BOTH);
-    act(() => noteByText("kept here with new words").click());
-    tickRow(0, "same", "keep");
-    tickRow(1, "same", "keep");
-    expect(hubs()).toHaveLength(2);
-
-    act(() => inkRow(0).click());
-    expect(hubs()).toHaveLength(0);
+    expect(noteByText("note from this device")).toBeTruthy();
+    expect(noteByText("note from the other one")).toBeTruthy();
+    expect(noteByText("note from this device").className).toContain("is-part");
   });
 
-  it("offers no way to write into a copy that may be about to lose", () => {
-    // Keep is the only write in this flow; anything typed into the losing copy
-    // would be thrown away without saying so.
+  it("lets a subentry be kept on its own", () => {
     mount(BOTH);
-    act(() => noteByText("kept here with new words").click());
-    tickRow(0, "same", "keep");
-
-    expect(document.querySelectorAll(".lc-footnote-overview-add")).toHaveLength(0);
-    // Still readable, which is the whole reason it is open.
-    expect(document.body.textContent).toContain("note from this device");
-  });
-
-  it("shows one hub when only one side has that mark", () => {
-    mount();
-    act(() => noteByText("local only mark").click());
-    tickRow(0, "n1", "keep");
-    expect(hubs()).toHaveLength(1);
+    tickRow(0, "same::notes:ln", "keep");
+    const row = document.querySelectorAll(".lc-hub-conflict-pane")[0]!.querySelector(
+      '[data-note-id="same::notes:ln"]',
+    )!;
+    expect(row.getAttribute("data-pick")).toBe("keep");
   });
 
   it("does not offer Keep Server for handwriting that could not be read", () => {

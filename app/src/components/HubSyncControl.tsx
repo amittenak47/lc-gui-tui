@@ -104,6 +104,38 @@ export function tabOffersHubSync(kind: string): boolean {
   return kind === "annotate" || kind === "whiteboard" || kind === "web";
 }
 
+/**
+ * Resting pad label for the tab chip, matching the pill's idle claim.
+ *
+ * Walking stages keep their own words (`pad…`, `ink…`). This is only the
+ * landed / dirty axis the pill already knew: Synced vs Sync, spelled out
+ * beside the name so a whiteboard is not the one tab that stays silent.
+ */
+export function padTabSync(args: {
+  walkStage?: string | null;
+  padEditSeq: number;
+  hubHint: (DocHubHint & { padUpToDate?: boolean; indexedOnHub?: boolean }) | null;
+  hasDocument: boolean;
+  hasPad: boolean;
+}): "synced" | "not-synced" | null {
+  if (!args.hasPad) return null;
+  const walking =
+    args.walkStage != null &&
+    args.walkStage !== "idle" &&
+    args.walkStage !== "synced";
+  if (walking) return null;
+  if (args.walkStage === "synced") return "synced";
+  if (args.padEditSeq > 0) return "not-synced";
+  if (
+    args.hubHint?.padUpdatedAt != null &&
+    args.hubHint.padUpToDate !== false &&
+    (args.hasDocument ? args.hubHint.indexedOnHub : true)
+  ) {
+    return "synced";
+  }
+  return "not-synced";
+}
+
 const LABEL: Record<HubSyncStage, string> = {
   idle: "Sync",
   index: "Index",
@@ -290,6 +322,13 @@ export function HubSyncControl({
   const syncedAtSeqRef = useRef(0);
   const editSeqRef = useRef(editSeq);
   editSeqRef.current = editSeq;
+  /**
+   * Pull remounts the board. That fingerprint is not a new authoring edit,
+   * but `editSeq` often ticks once after `emitReload` because restore/grow
+   * look like a scene change. Absorb that tick so Synced does not bounce
+   * back to Sync / not-synced on its own.
+   */
+  const absorbReloadEditsRef = useRef(false);
 
   // Clearing on unmount keeps the stub walk from writing state into a dead
   // tree; the real walk aborts so it cannot PUT or raise a conflict after the
@@ -309,6 +348,10 @@ export function HubSyncControl({
   useEffect(() => {
     if (walkStageRef.current !== "synced") return;
     if (editSeq === syncedAtSeqRef.current) return;
+    if (absorbReloadEditsRef.current) {
+      syncedAtSeqRef.current = editSeq;
+      return;
+    }
     walkStageRef.current = "idle";
     hostRef.current?.onWalkProgress(null);
   }, [editSeq]);
@@ -777,6 +820,7 @@ export function HubSyncControl({
       // wrote those pages into IDB, and the open PDF kept showing yesterday's
       // strokes until someone closed and reopened the file.
       try {
+        absorbReloadEditsRef.current = true;
         await host?.emitReload();
       } catch {
         // The stores already hold the walk. A failed remount must not park
@@ -784,6 +828,10 @@ export function HubSyncControl({
       }
       syncedAtSeqRef.current = editSeqRef.current;
       goStage("synced");
+      queueMicrotask(() => {
+        syncedAtSeqRef.current = editSeqRef.current;
+        absorbReloadEditsRef.current = false;
+      });
       walkingRef.current = false;
     } catch (cause) {
       walkingRef.current = false;

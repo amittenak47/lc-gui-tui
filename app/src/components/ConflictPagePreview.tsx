@@ -6,12 +6,12 @@
  * change list sits on top of this in the parent.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { InkPageDto } from "../api/client";
 import { b64ToBytes } from "../api/nativeHttp";
 import { decodeInkOps, unpackEncodedInk } from "../canvas/inkCodec";
-import { paintInkAtScale, type InkOp } from "../canvas/rasterInk";
+import { inkOpsBounds, paintInkAtScale, type InkOp } from "../canvas/rasterInk";
 import { makeDocFlagHolds, type DocFlagHolds } from "../canvas/docSelectionGesture";
 import { AnnotateDocument } from "../modes/AnnotateDocument";
 import { DocSelectionLayer } from "../modes/DocSelectionLayer";
@@ -23,12 +23,27 @@ import { cameraPulseSettleMs } from "../util/cameraBusy";
 import { bytesFromMaybeGzip } from "../util/gzip";
 import type { PageFrame } from "../canvas/inkPageIndex";
 import type { DocFootnote } from "../util/docFootnotes";
+import { SCRATCH_PAGE_W } from "../templates/whiteboard";
 import {
+  activeLinedPitch,
+  linedPaperScenePitch,
+  type LinedPitchPair,
+  type LinedRuling,
+} from "../util/linedPaperPref";
+import {
+  conflictFitSpan,
   conflictInkPlacement,
+  conflictInkXBounds,
+  conflictLinedBackground,
+  conflictOpsForPage,
+  conflictPaperFrames,
+  conflictPaperPageStyle,
   inkSlotsEqual,
   inkedPageIds,
+  pageFramesEqual,
   type ConflictInkSlot,
 } from "./conflictInkLayout";
+import { attachOverflowFlick } from "./conflictPreviewFlick";
 
 const EMPTY_PDF_BYTES = new ArrayBuffer(0);
 
@@ -61,17 +76,25 @@ export function ConflictPagePreview({
   notes,
   inkPages,
   showInk = false,
+  droppedPages,
+  keptPages,
   bytes,
   filmScope,
   sourceText,
   sceneWidth,
   pageFrames,
+  pageCount,
+  linedPitch,
+  linedPitchPair,
+  linedRule,
 }: {
   hash?: string;
   page: number;
   notes?: readonly DocFootnote[];
   inkPages?: readonly InkPageDto[];
   showInk?: boolean;
+  droppedPages?: readonly number[];
+  keptPages?: readonly number[];
   bytes?: ArrayBuffer;
   filmScope?: string;
   sourceText?: string;
@@ -86,6 +109,12 @@ export function ConflictPagePreview({
    * be painted as though the page began at scene zero.
    */
   pageFrames?: readonly PageFrame[];
+  /** Notebook length when frames are missing or shorter than the pad. */
+  pageCount?: number;
+  /** Scene pitch the rules were written to, so merge lines sit under the ink. */
+  linedPitch?: number;
+  linedPitchPair?: LinedPitchPair | null;
+  linedRule?: LinedRuling | null;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const docRef = useRef<HTMLDivElement | null>(null);
@@ -99,15 +128,31 @@ export function ConflictPagePreview({
   const [cssWidth, setCssWidth] = useState(0);
   const [scrollRoot, setScrollRoot] = useState<HTMLElement | null>(null);
   const [stackH, setStackH] = useState(0);
+  const [decodedShards, setDecodedShards] = useState<{ pageId: number; ops: InkOp[] }[]>(
+    [],
+  );
+  const [decodeGen, setDecodeGen] = useState(0);
+  const [decodeDone, setDecodeDone] = useState(true);
+  const [loadPhase, setLoadPhase] = useState<"busy" | "done" | "idle">("busy");
+  const [inkPainted, setInkPainted] = useState(false);
+  const inkPagesRef = useRef(inkPages);
+  inkPagesRef.current = inkPages;
+  const pageFramesRef = useRef(pageFrames);
+  if (!pageFramesEqual(pageFramesRef.current, pageFrames)) {
+    pageFramesRef.current = pageFrames;
+  }
+  const stablePageFrames = pageFramesRef.current;
+  const decodedOps = useMemo(
+    () => decodedShards.flatMap((shard) => shard.ops),
+    [decodedShards],
+  );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = hostRef.current;
     if (!node) return;
     const apply = () => {
       const width = Math.round(node.clientWidth);
       if (width > 0) setCssWidth(width);
-      const height = Math.round(node.scrollHeight);
-      if (height > 0) setStackH(height);
     };
     apply();
     if (typeof ResizeObserver === "undefined") return;
@@ -139,7 +184,15 @@ export function ConflictPagePreview({
       gone = true;
       observer.disconnect();
     };
-  }, [page, stackH]);
+    // Only when the focused row names a new page. Re-running on stack height
+    // snapped the pane back to page 1 on every layout tick and read as flicker.
+  }, [page]);
+
+  useEffect(() => {
+    const root = scrollRoot;
+    if (!root) return;
+    return attachOverflowFlick(root);
+  }, [scrollRoot]);
 
   const borrowed = hash ? borrowPdfDocument(hash) : null;
   const usePdf =
@@ -149,12 +202,62 @@ export function ConflictPagePreview({
     (Boolean(bytes && bytes.byteLength > 0) || Boolean(borrowed));
   const useMarkdown = !usePdf && Boolean(sourceText);
   const usePaper = !usePdf && !useMarkdown;
-  const paperPages =
-    pageFrames && pageFrames.length > 0
-      ? pageFrames.filter((frame) => frame.pageId >= 1).map((frame) => frame.pageId)
-      : [Math.max(1, page)];
+  const inkMaxY = useMemo(() => {
+    if (decodedOps.length === 0) return 0;
+    const bounds = inkOpsBounds(decodedOps);
+    return bounds?.maxY ?? 0;
+  }, [decodedOps]);
+  const paperFrames = useMemo(
+    () => conflictPaperFrames(stablePageFrames, pageCount ?? page, usePaper ? inkMaxY : 0),
+    [stablePageFrames, pageCount, page, usePaper, inkMaxY],
+  );
 
   const keptNotes = notes ?? [];
+
+  const inkSignature = (inkPages ?? [])
+    .map((row) => `${row.page_id}:${row.updated_at}:${row.gz?.length ?? 0}`)
+    .join("|");
+
+  useEffect(() => {
+    setInkPainted(false);
+    setLoadPhase("busy");
+    setDecodedShards([]);
+    const rows = inkPagesRef.current ?? [];
+    setDecodeDone(!(showInk && rows.some((row) => row.gz)));
+    setDecodeGen((n) => n + 1);
+  }, [inkSignature, showInk, hash, sourceText]);
+
+  useEffect(() => {
+    if (!showInk) {
+      setDecodedShards([]);
+      setDecodeDone(true);
+      return;
+    }
+    const rows = inkPagesRef.current ?? [];
+    if (rows.length === 0 || !rows.some((row) => row.gz)) {
+      setDecodedShards([]);
+      setDecodeDone(true);
+      return;
+    }
+    let gone = false;
+    setDecodeDone(false);
+    void (async () => {
+      const shards: { pageId: number; ops: InkOp[] }[] = [];
+      for (const row of rows) {
+        if (!row.gz) continue;
+        const ops = await opsFromGz(row.gz);
+        if (gone) return;
+        if (ops && ops.length > 0) shards.push({ pageId: row.page_id, ops });
+      }
+      if (!gone) {
+        setDecodedShards(shards);
+        setDecodeDone(true);
+      }
+    })();
+    return () => {
+      gone = true;
+    };
+  }, [showInk, decodeGen]);
 
   /*
    * Scrolling this pane has to reach the same paint path the reader uses.
@@ -265,9 +368,35 @@ export function ConflictPagePreview({
    * slot. Bounded by the number of inked pages, not by the length of the book.
    */
   const [inkSlots, setInkSlots] = useState<ConflictInkSlot[]>([]);
-  const inkedPages = useMemo(() => inkedPageIds(inkPages), [inkPages]);
+  const inkedPages = useMemo(() => {
+    if (usePaper && decodedOps.length > 0) {
+      const ids = paperFrames
+        .filter(
+          (frame) => conflictOpsForPage(decodedOps, frame.pageId, paperFrames).length > 0,
+        )
+        .map((frame) => frame.pageId);
+      if (ids.length > 0) return ids;
+    }
+    return inkedPageIds(inkPages);
+  }, [usePaper, decodedOps, paperFrames, inkPages]);
+  const inkX = useMemo(
+    () => (usePaper ? conflictInkXBounds(decodedOps) : null),
+    [usePaper, decodedOps],
+  );
+  const paperZoom = useMemo(() => {
+    if (!usePaper || !(cssWidth > 0)) return 1;
+    const fitted = conflictFitSpan(sceneWidth, inkX);
+    const boxW = fitted?.width ?? (sceneWidth && sceneWidth > 0 ? sceneWidth : SCRATCH_PAGE_W);
+    return cssWidth / Math.max(1, boxW);
+  }, [usePaper, cssWidth, sceneWidth, inkX]);
+  const scenePitch = useMemo(() => {
+    const fromPair = activeLinedPitch(linedPitchPair ?? null, linedRule ?? null);
+    if (fromPair > 0) return fromPair;
+    if (linedPitch && linedPitch > 0) return linedPitch;
+    return linedPaperScenePitch("wide", paperZoom);
+  }, [linedPitchPair, linedRule, linedPitch, paperZoom]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const doc = docRef.current;
     if (!showInk || !doc || inkedPages.length === 0) {
       setInkSlots((current) => (current.length === 0 ? current : []));
@@ -289,56 +418,102 @@ export function ConflictPagePreview({
       });
     }
     setInkSlots((current) => (inkSlotsEqual(current, next) ? current : next));
-    // `stackH` re-runs this once the stack has laid out, so the slots are
-    // measured against real boxes rather than an empty host.
-    // `pageFrames` too: frames arriving after the first measure change where
-    // every page's ink belongs, so the slots have to be re-read with them.
-  }, [showInk, inkedPages, cssWidth, stackH, pageFrames]);
+    // Measure after the stack has a width and the paper pages exist. Do not
+    // re-run on scrollHeight — that rebuilt canvases while the finger moved.
+  }, [showInk, inkedPages, cssWidth, paperFrames, decodedOps]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const doc = docRef.current;
-    if (!showInk || !doc || inkSlots.length === 0) return;
-    let gone = false;
-    void (async () => {
-      for (const slot of inkSlots) {
-        const canvas = doc.querySelector<HTMLCanvasElement>(
-          `canvas[data-ink-page="${slot.page}"]`,
-        );
-        if (!canvas) continue;
-        const width = Math.max(1, Math.round(slot.width));
-        const height = Math.max(1, Math.round(slot.height));
+    if (!showInk) return;
+    if (!doc || inkSlots.length === 0) {
+      if (decodedOps.length === 0 && (inkPagesRef.current?.length ?? 0) === 0) {
+        setInkPainted(true);
+      }
+      return;
+    }
+    const frames = usePaper ? paperFrames : stablePageFrames;
+    for (const slot of inkSlots) {
+      const canvas = doc.querySelector<HTMLCanvasElement>(
+        `canvas[data-ink-page="${slot.page}"]`,
+      );
+      if (!canvas) continue;
+      const width = Math.max(1, Math.round(slot.width));
+      const height = Math.max(1, Math.round(slot.height));
+      if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
-        let ctx: CanvasRenderingContext2D | null = null;
-        try {
-          ctx = canvas.getContext("2d");
-        } catch {
-          continue;
-        }
-        if (!ctx) continue;
-        ctx.clearRect(0, 0, width, height);
-        // Scene → this slot; see `conflictInkPlacement`.
-        const { scale, originY } = conflictInkPlacement(
-          { ...slot, width },
-          pageFrames?.find((row) => row.pageId === slot.page),
-          sceneWidth,
-        );
-        for (const row of (inkPages ?? []).filter(
-          (entry) =>
-            entry.page_id === slot.page || (slot.page === 1 && entry.page_id === 0),
-        )) {
-          if (!row.gz) continue;
-          const ops = await opsFromGz(row.gz);
-          if (gone) return;
-          if (!ops || ops.length === 0) continue;
-          paintInkAtScale(ctx, ops, { x: 0, y: originY }, scale);
-        }
       }
-    })();
-    return () => {
-      gone = true;
-    };
-  }, [showInk, inkSlots, inkPages, sceneWidth, pageFrames]);
+      let ctx: CanvasRenderingContext2D | null = null;
+      try {
+        ctx = canvas.getContext("2d");
+      } catch {
+        continue;
+      }
+      if (!ctx) continue;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      const { scale, originX, originY } = conflictInkPlacement(
+        { ...slot, width },
+        frames?.find((row) => row.pageId === slot.page),
+        sceneWidth,
+        usePaper ? inkX : null,
+      );
+      const pageOps = usePaper
+        ? conflictOpsForPage(decodedOps, slot.page, paperFrames)
+        : decodedShards
+            .filter(
+              (shard) =>
+                shard.pageId === slot.page || (slot.page === 1 && shard.pageId === 0),
+            )
+            .flatMap((shard) => shard.ops);
+      if (pageOps.length === 0) continue;
+      ctx.save();
+      if (droppedPages?.includes(slot.page)) ctx.globalAlpha = 0.38;
+      paintInkAtScale(ctx, pageOps, { x: originX, y: originY }, scale);
+      ctx.restore();
+    }
+    setInkPainted(true);
+  }, [
+    showInk,
+    inkSlots,
+    decodedOps,
+    decodedShards,
+    sceneWidth,
+    stablePageFrames,
+    paperFrames,
+    usePaper,
+    inkX,
+    droppedPages,
+  ]);
+
+  const paperReady =
+    (usePdf ? cssWidth > 0 : useMarkdown ? true : cssWidth > 0) &&
+    !(showInk && !decodeDone) &&
+    !(showInk && inkedPages.length > 0 && cssWidth > 0 && !inkPainted);
+
+  useEffect(() => {
+    if (loadPhase !== "busy") return;
+    if (!paperReady) return;
+    setLoadPhase("done");
+  }, [loadPhase, paperReady]);
+
+  useEffect(() => {
+    if (loadPhase !== "done") return;
+    const reduce =
+      typeof window !== "undefined" &&
+      window.matchMedia &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const hold = reduce ? 0 : 560;
+    const fade = reduce ? 0 : 280;
+    const id = window.setTimeout(() => setLoadPhase("idle"), hold + fade);
+    return () => window.clearTimeout(id);
+  }, [loadPhase]);
+
+  useEffect(() => {
+    if (loadPhase !== "busy") return;
+    const id = window.setTimeout(() => setLoadPhase("idle"), 8000);
+    return () => window.clearTimeout(id);
+  }, [loadPhase]);
 
   return (
     <div
@@ -352,6 +527,7 @@ export function ConflictPagePreview({
           : "lc-hub-conflict-preview"
       }
       data-page={String(page)}
+      aria-busy={loadPhase !== "idle"}
     >
       {usePdf && filmScope ? (
         <div className="lc-hub-conflict-doc" ref={docRef}>
@@ -407,13 +583,31 @@ export function ConflictPagePreview({
         </div>
       ) : (
         <div className="lc-hub-conflict-doc" ref={docRef}>
-          {paperPages.map((pageId) => (
-            <div
-              key={pageId}
-              className="lc-hub-conflict-lined"
-              data-pdf-page={String(pageId)}
-            />
-          ))}
+          {paperFrames.map((frame, index) => {
+            const lined = conflictLinedBackground(frame.minY, scenePitch, paperZoom);
+            const pick = droppedPages?.includes(frame.pageId)
+              ? "drop"
+              : keptPages?.includes(frame.pageId)
+                ? "keep"
+                : undefined;
+            return (
+              <div
+                key={frame.pageId}
+                className="lc-hub-conflict-lined"
+                data-pdf-page={String(frame.pageId)}
+                data-pick={pick}
+                style={{
+                  ...conflictPaperPageStyle(
+                    frame,
+                    sceneWidth,
+                    index === paperFrames.length - 1,
+                    conflictFitSpan(sceneWidth, inkX)?.width,
+                  ),
+                  ...(lined ?? {}),
+                }}
+              />
+            );
+          })}
           {showInk
             ? inkSlots.map((slot) => (
                 <canvas
@@ -432,6 +626,35 @@ export function ConflictPagePreview({
             : null}
         </div>
       )}
+      {loadPhase !== "idle" ? (
+        <div
+          className={
+            loadPhase === "done"
+              ? "lc-hub-conflict-load is-done"
+              : "lc-hub-conflict-load"
+          }
+          role="status"
+          aria-live="polite"
+          aria-label={loadPhase === "done" ? "Paper ready" : "Loading paper"}
+        >
+          {loadPhase === "done" ? (
+            <div className="lc-spinner-check" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22">
+                <path
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+            </div>
+          ) : (
+            <div className="lc-spinner" aria-hidden="true" />
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }

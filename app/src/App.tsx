@@ -1246,7 +1246,8 @@ export function App() {
             activeIndexChip={
               chrome.docIndex.status === "idle" &&
               !chrome.docIndex.onIndex &&
-              !chrome.docIndex.walkStage ? undefined : (
+              !chrome.docIndex.walkStage &&
+              !chrome.docIndex.padSync ? undefined : (
                 <DocIndexChip
                   status={chrome.docIndex.status}
                   meta={chrome.docIndex.meta as never}
@@ -1264,6 +1265,7 @@ export function App() {
                   walkProgress={chrome.docIndex.walkProgress}
                   walkError={chrome.docIndex.walkError}
                   walkWaiting={chrome.docIndex.walkWaiting}
+                  padSync={chrome.docIndex.padSync}
                 />
               )
             }

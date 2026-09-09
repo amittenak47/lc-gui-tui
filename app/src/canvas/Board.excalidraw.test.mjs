@@ -18,6 +18,41 @@ describe("Board", () => {
     expect(src).toMatch(/shouldSeedInkFromBlob/);
   });
 
+  it("does not remesh ink while the board is still riding the pan", () => {
+    const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
+    const present = src.slice(
+      src.indexOf("const presentIfCameraMoved = useCallback"),
+      src.indexOf("[applyPageWindow, readViews, rebuildAndReplay]"),
+    );
+    expect(present).toMatch(/canvasRef\.current\?\.style\.transform/);
+    expect(src).toMatch(/if \(canvasRef\.current\?\.style\.transform\) return/);
+  });
+
+  it("commits the live camera before idle remesh", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const idle = src.slice(
+      src.indexOf("cameraIdleTeardownTimerRef.current = window.setTimeout"),
+      src.indexOf("pulseCameraMotionRef.current = pulseCameraMotion"),
+    );
+    expect(idle.indexOf("commitVisualScrollRef.current()")).toBeGreaterThan(-1);
+    expect(idle.indexOf("commitVisualScrollRef.current()")).toBeLessThan(
+      idle.indexOf("setCameraMoving(false)"),
+    );
+  });
+
+  it("drops the pan translate before a settle remesh", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const commit = src.slice(
+      src.indexOf("const commitVisualScroll = useCallback"),
+      src.indexOf("applyVisualScrollNowRef.current = applyVisualScrollNow"),
+    );
+    expect(commit.indexOf("clearPanOffsetsRef.current()")).toBeGreaterThan(-1);
+    expect(commit.indexOf("clearPanOffsetsRef.current()")).toBeLessThan(
+      commit.indexOf("rasterInkRef.current?.syncCamera()"),
+    );
+    expect(commit).not.toMatch(/landPanOffset\(\(\) => \{[^}]*syncCamera/s);
+  });
+
   it("drops the pan translate before a mid-flick remesh", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     const rebase = src.slice(

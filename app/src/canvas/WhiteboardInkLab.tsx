@@ -15,11 +15,21 @@ import {
 import { WHEEL_OPEN_MS } from "../util/gesture";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { InkPageBook } from "./inkPageCache";
+import { pageIdAtViewport, type PageFrame } from "./inkPageIndex";
 import { canvasBitmapFromClient } from "./canvasPointer";
 import { commitOverlay, dropRedoStacks, pushCapped, redoOverlay, undoOverlay } from "./inkLab/history";
 import { isInkLabPenOp, overlaySpineFromDrawOp, splitInkOpsForLabReplay } from "./inkLab/replay";
 import { opsWithErasesBaked } from "./strokeEraser";
-import { keepLivePaintPump, samePaintedView, shouldFlushLiveHud, skipCommittedReplay, usePreStrokeStamp } from "./inkLab/liveHost";
+import {
+  inkCanvasPixelsChanged,
+  instantReplayOnBackingResize,
+  keepLivePaintPump,
+  samePaintedView,
+  shouldFlushLiveHud,
+  skipCommittedReplay,
+  skipReplayOnWheelAbort,
+  usePreStrokeStamp,
+} from "./inkLab/liveHost";
 import { REPLAY_SLICE_MS, replayUntil } from "./inkLab/replayJob";
 import {
   livePresentStride,
@@ -135,6 +145,8 @@ export interface WhiteboardInkLabProps {
   highlightTips?: boolean;
   getViewport: () => ViewportTransform | null;
   clip?: SceneBounds | null;
+  /** PDF / notebook page frames in scene Y, or empty → single-page fallback. */
+  getPageFrames?: () => readonly PageFrame[];
   onChange?: () => void;
   onStylusAccessory?: (event: PointerEvent) => boolean;
   wheelHoldEnabled?: boolean;
@@ -306,6 +318,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       highlightTips = false,
       getViewport,
       clip = null,
+      getPageFrames,
       onChange,
       onStylusAccessory,
       wheelHoldEnabled = false,
@@ -385,6 +398,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     straightInkRef.current = straightInk;
     const getViewportRef = useRef(getViewport);
     getViewportRef.current = getViewport;
+    const getPageFramesRef = useRef(getPageFrames);
+    getPageFramesRef.current = getPageFrames;
     const clipRef = useRef(clip);
     clipRef.current = clip;
     const onChangeRef = useRef(onChange);
@@ -647,8 +662,27 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       [forgetPixelHistory, presentCommitted, remeshOverlaysFromBook],
     );
 
+    const applyPageWindow = useCallback((viewport: ViewportTransform) => {
+      const frames = getPageFramesRef.current?.() ?? [];
+      const book = bookRef.current;
+      const rebin = frames.length > 0 ? book.setFrames(frames) : false;
+      if (frames.length === 0) return rebin;
+      const top = viewport.scrollY === 0 ? 0 : -viewport.scrollY;
+      const zoom = viewport.zoom || 1;
+      const bottom = top + viewport.height / zoom;
+      const page = pageIdAtViewport(book.frames, top, bottom);
+      const windowed = book.setVisiblePage(page);
+      return rebin || windowed;
+    }, []);
+
     const presentIfCameraMoved = useCallback(() => {
+      if (drawingRef.current) return;
+      if (canvasRef.current?.style.transform) return;
       const { view, marginY } = readViews();
+      if (applyPageWindow(view)) {
+        rebuildAndReplay(false, true);
+        return;
+      }
       if (
         samePaintedView(paintedViewRef.current, {
           scrollX: view.scrollX,
@@ -663,7 +697,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         return;
       }
       rebuildAndReplay(false, true);
-    }, [readViews, rebuildAndReplay]);
+    }, [applyPageWindow, readViews, rebuildAndReplay]);
+
+    useEffect(() => {
+      const { view } = readViews();
+      if (applyPageWindow(view)) rebuildAndReplay(false, true);
+    }, [applyPageWindow, readViews, rebuildAndReplay]);
 
     const stampOpOntoSnap = useCallback(
       (op: InkOp) => {
@@ -821,17 +860,17 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return !delta.rebase;
         },
         commitCamera() {
-          const canvas = canvasRef.current;
-          if (canvas?.style.transform) canvas.style.transform = "";
           if (drawingRef.current) return;
+          if (canvasRef.current?.style.transform) return;
           presentIfCameraMoved();
         },
         setCameraMoving(moving) {
           cameraMovingRef.current = moving;
           if (moving) return;
-          const canvas = canvasRef.current;
-          if (canvas?.style.transform) canvas.style.transform = "";
-          if (drawingRef.current) return;
+          // Board owns the pan translate. Clearing it here remeshed at the live
+          // camera while the canvas was still riding, which is the ghost, and
+          // then land cleared the translate — the rubber-band.
+          if (canvasRef.current?.style.transform) return;
           sizeToHostRef.current();
           presentIfCameraMoved();
         },
@@ -936,18 +975,21 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         const pixelW = Math.max(1, Math.round(cssW * dpr));
         const pixelH = Math.max(1, Math.round(canvasCssH * dpr));
         const top = `${-marginY}px`;
-        const resized =
-          canvas.width !== pixelW ||
-          canvas.height !== pixelH ||
-          canvas.style.top !== top;
         canvas.style.width = `${cssW}px`;
         canvas.style.height = `${canvasCssH}px`;
         canvas.style.top = top;
         canvas.style.left = "0px";
-        if (resized) {
-          canvas.width = pixelW;
-          canvas.height = pixelH;
-          if (engineRef.current) rebuildAndReplay(false, true);
+        /*
+         * `canvas.width = canvas.width` still wipes the bitmap. A CSS `top`
+         * mismatch used to count as a resize, clear the page, then remesh
+         * every overlay spine on the pointer-up / wheel-open stack — Android
+         * ANR on a dense notebook.
+         */
+        if (!inkCanvasPixelsChanged(canvas, pixelW, pixelH)) return;
+        canvas.width = pixelW;
+        canvas.height = pixelH;
+        if (engineRef.current) {
+          rebuildAndReplay(false, instantReplayOnBackingResize());
         }
       };
       sizeToHostRef.current = sizeToHost;
@@ -1110,8 +1152,17 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           strokeHostElRef.current = null;
           stopPaintPump();
           engine.cancelStroke();
-          sizeToHost();
-          presentCommitted();
+          /*
+           * The snap still has the page. sizeToHost + presentCommitted here
+           * remeshed every overlay spine on the hold timer — "Whiteboard
+           * isn't responding" on a dense Exam page.
+           */
+          if (skipReplayOnWheelAbort()) {
+            engine.paint();
+          } else {
+            sizeToHost();
+            presentCommitted();
+          }
           if (wantMeter()) {
             loadMeterRef.current.end();
             loadBarRef.current?.freeze();
@@ -1513,12 +1564,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       canvas.addEventListener("pointermove", onPointerMove, true);
       canvas.addEventListener("pointerup", onPointerUp, true);
       canvas.addEventListener("pointercancel", onPointerUp, true);
+      canvas.addEventListener("lostpointercapture", onPointerUp, true);
       return () => {
         ro.disconnect();
         canvas.removeEventListener("pointerdown", onPointerDown, true);
         canvas.removeEventListener("pointermove", onPointerMove, true);
         canvas.removeEventListener("pointerup", onPointerUp, true);
         canvas.removeEventListener("pointercancel", onPointerUp, true);
+        canvas.removeEventListener("lostpointercapture", onPointerUp, true);
         if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
         if (replayRafRef.current != null) cancelAnimationFrame(replayRafRef.current);
         replayGenRef.current += 1;

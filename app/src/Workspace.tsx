@@ -49,7 +49,7 @@ import type {
 import { DEFAULT_DATASET } from "./api/types";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { HoldButton } from "./components/HoldButton";
-import { HubSyncControl, tabOffersHubSync } from "./components/HubSyncControl";
+import { HubSyncControl, padTabSync, tabOffersHubSync } from "./components/HubSyncControl";
 import { LoadingDoodle } from "./components/LoadingDoodle";
 import { waitForTopBannersIdle } from "./components/StatusBanner";
 import {
@@ -129,6 +129,8 @@ import {
   countWhiteboardPages,
   SCRATCH_PAGE_W,
   whiteboardPageFrames,
+  whiteboardPageFramesFromElements,
+  whiteboardPageFramesFromPad,
   WHITEBOARD_DATASET,
   WHITEBOARD_TASK_ID,
   LEGACY_SCRATCHPAD_TASK_ID,
@@ -1014,6 +1016,9 @@ export function Workspace({
           {
             ...(c.hubInkPageIds ? { hubPageIds: c.hubInkPageIds } : {}),
             fetchHubPages: (pageIds) => fetchHubInkPages(client, c.kind, c.id, pageIds),
+            ...(c.kind === "whiteboard"
+              ? { pageFrames: whiteboardPageFramesFromPad(c.local ?? c.server) }
+              : {}),
           },
         );
       }
@@ -4265,10 +4270,21 @@ export function Workspace({
         if (notebook.agent.length > 0) {
           setAgentMessages(restoreAgentMessages(notebook.agent));
         }
+        const inkMix = boardInkMix(board);
+        lastEditSeqHashRef.current = sceneFingerprint(board.getElements(), inkMix);
+        lastEditSeqMarksRef.current = "";
       } finally {
         padHubApplyRef.current = false;
         boardSaveSuspendedRef.current = false;
       }
+      requestAnimationFrame(() => {
+        const live = boardRef.current;
+        if (!live) return;
+        lastEditSeqHashRef.current = sceneFingerprint(
+          live.getElements(),
+          boardInkMix(live),
+        );
+      });
       return;
     }
     if (detail.kind !== "annotate") return;
@@ -4291,6 +4307,9 @@ export function Workspace({
       if (source && !isBinaryDocType(doc.docType) && doc.source !== source.text) {
         setAnnotateSource({ ...source, text: doc.source });
       }
+      const inkMix = boardInkMix(board);
+      lastEditSeqHashRef.current = sceneFingerprint(board.getElements(), inkMix);
+      lastEditSeqMarksRef.current = footnoteRevision(annotateFootnotesRef.current);
     } finally {
       padHubApplyRef.current = false;
       boardSaveSuspendedRef.current = false;
@@ -9103,6 +9122,13 @@ export function Workspace({
         walkProgress: walkReport?.progress ?? null,
         walkError: walkReport?.error ?? null,
         walkWaiting: walkReport?.waiting ?? null,
+        padSync: padTabSync({
+          walkStage: walkReport?.stage ?? null,
+          padEditSeq,
+          hubHint,
+          hasDocument: Boolean(indexInputsRef.current),
+          hasPad: Boolean(annotateDocId || whiteboardNotebookId),
+        }),
         /*
          * Indexing reads the pad's stored text, which is the frozen copy.
          *
@@ -9136,6 +9162,10 @@ export function Workspace({
     problem,
     setChrome,
     walkReport,
+    padEditSeq,
+    hubHint,
+    annotateDocId,
+    whiteboardNotebookId,
     workspaceLoadActive,
   ]);
 
@@ -10415,7 +10445,14 @@ export function Workspace({
           sceneWidth={isWhiteboard(problem) ? SCRATCH_PAGE_W : annotatePageWidth}
           pageFrames={
             isWhiteboard(problem)
-              ? whiteboardPageFrames(whiteboardPageCount)
+              ? (() => {
+                  const live = whiteboardPageFramesFromElements(
+                    boardRef.current?.getElements() ?? [],
+                  );
+                  return live.length > 0
+                    ? live
+                    : whiteboardPageFrames(whiteboardPageCount);
+                })()
               : peekPdfReadingFrames(tab.id)
           }
           client={client}

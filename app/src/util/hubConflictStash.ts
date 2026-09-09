@@ -16,7 +16,13 @@ import {
   type InkPageDiffRow,
   type InkPageStamp,
 } from "./inkSync";
-import type { DocFootnote, DocFootnoteWhiteboard } from "./docFootnotes";
+import type {
+  DocFootnote,
+  DocFootnoteNote,
+  DocFootnoteSubMark,
+  DocFootnoteThread,
+  DocFootnoteWhiteboard,
+} from "./docFootnotes";
 import { freshWhiteboardId } from "./docFootnotes";
 
 export type HubPadKind = "annotate" | "whiteboard";
@@ -366,6 +372,222 @@ export function visibleFootnoteDiffRows(
   );
 }
 
+/** Granular pieces of a same-id mark that can be kept independently. */
+export type FootnotePartKind = "notes" | "chats" | "boards" | "underlines";
+
+export type FootnoteSidePick = { local?: boolean; server?: boolean };
+
+export interface FootnotePartDiff {
+  id: string;
+  noteId: string;
+  kind: FootnotePartKind;
+  itemId: string;
+  label: string;
+  hasLocal: boolean;
+  hasServer: boolean;
+}
+
+export function footnotePartRowId(
+  noteId: string,
+  kind: FootnotePartKind,
+  itemId: string,
+): string {
+  return `${noteId}::${kind}:${itemId}`;
+}
+
+export function parseFootnotePartRowId(
+  id: string,
+): { noteId: string; kind: FootnotePartKind; itemId: string } | null {
+  const at = id.indexOf("::");
+  if (at <= 0) return null;
+  const noteId = id.slice(0, at);
+  const rest = id.slice(at + 2);
+  const colon = rest.indexOf(":");
+  if (colon <= 0) return null;
+  const kind = rest.slice(0, colon);
+  const itemId = rest.slice(colon + 1);
+  if (
+    kind !== "notes" &&
+    kind !== "chats" &&
+    kind !== "boards" &&
+    kind !== "underlines"
+  ) {
+    return null;
+  }
+  if (!noteId || !itemId) return null;
+  return { noteId, kind, itemId };
+}
+
+export function footnoteOwnsBoard(row: FootnoteDiffRow, wbId: string): boolean {
+  return [...(row.local?.whiteboards ?? []), ...(row.server?.whiteboards ?? [])].some(
+    (board) => board.id === wbId,
+  );
+}
+
+function jsonEqual(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+function previewOf(text: string | undefined, fallback: string): string {
+  const trimmed = (text ?? "").replace(/\s+/g, " ").trim();
+  if (!trimmed) return fallback;
+  return trimmed.length > 48 ? `${trimmed.slice(0, 47)}…` : trimmed;
+}
+
+function threadList(note: DocFootnote | null): DocFootnoteThread[] {
+  const threads = [...(note?.threads ?? [])];
+  const root = note?.threadRootId;
+  if (root && !threads.some((thread) => thread.rootId === root)) {
+    threads.unshift({
+      rootId: root,
+      title: "Coach chat",
+      createdAt: note?.createdAt ?? 0,
+    });
+  }
+  return threads;
+}
+
+function collectPartDiffs<T>(
+  noteId: string,
+  kind: FootnotePartKind,
+  localItems: readonly T[],
+  serverItems: readonly T[],
+  keyOf: (item: T) => string,
+  labelOf: (item: T) => string,
+): FootnotePartDiff[] {
+  const localBy = new Map(localItems.map((item) => [keyOf(item), item]));
+  const serverBy = new Map(serverItems.map((item) => [keyOf(item), item]));
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const item of [...localItems, ...serverItems]) {
+    const id = keyOf(item);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  const out: FootnotePartDiff[] = [];
+  for (const itemId of ids) {
+    const local = localBy.get(itemId);
+    const server = serverBy.get(itemId);
+    if (local != null && server != null && jsonEqual(local, server)) continue;
+    out.push({
+      id: footnotePartRowId(noteId, kind, itemId),
+      noteId,
+      kind,
+      itemId,
+      label: labelOf((local ?? server)!),
+      hasLocal: local != null,
+      hasServer: server != null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Which pieces of a same-id mark disagree, each as its own keep/drop row.
+ *
+ * Pad JSON already unions notes, coach-thread handles, and board pointers when
+ * you ✓ both copies of the mark. Underlines stay local, and the actual scratch
+ * pixels live on `fnwb:` keys listed separately. This list is how the split
+ * names those pieces so a reader can keep notes from A and a board from B.
+ *
+ * One-sided marks have no parts — keeping the mark keeps everything on it.
+ * Agent *messages* ride on the pad's `agent` array, not the footnote; the
+ * chat row is the thread handle the mark stores.
+ */
+export function footnotePartDiffs(
+  local: DocFootnote | null,
+  server: DocFootnote | null,
+): FootnotePartDiff[] {
+  if (!local || !server) return [];
+  return [
+    ...collectPartDiffs(
+      local.id,
+      "notes",
+      local.notes ?? [],
+      server.notes ?? [],
+      (note: DocFootnoteNote) => note.id,
+      (note) => previewOf(note.text, "Note"),
+    ),
+    ...collectPartDiffs(
+      local.id,
+      "chats",
+      threadList(local),
+      threadList(server),
+      (thread) => thread.rootId,
+      (thread) => previewOf(thread.title, "Coach chat"),
+    ),
+    ...collectPartDiffs(
+      local.id,
+      "boards",
+      local.whiteboards ?? [],
+      server.whiteboards ?? [],
+      (board: DocFootnoteWhiteboard) => board.id,
+      (board) => previewOf(board.title, "Scratch board"),
+    ),
+    ...collectPartDiffs(
+      local.id,
+      "underlines",
+      local.subMarks ?? [],
+      server.subMarks ?? [],
+      (mark: DocFootnoteSubMark) => mark.id,
+      (mark) => previewOf(mark.excerpt, mark.kind),
+    ),
+  ];
+}
+
+function partChoice(
+  noteId: string,
+  kind: FootnotePartKind,
+  itemId: string,
+  parent: { local: boolean; server: boolean },
+  picks?: Record<string, FootnoteSidePick>,
+): { local: boolean; server: boolean } {
+  const own = picks?.[footnotePartRowId(noteId, kind, itemId)];
+  return {
+    local: own?.local ?? parent.local,
+    server: own?.server ?? parent.server,
+  };
+}
+
+function mergeKeyed<T>(
+  localItems: readonly T[] | undefined,
+  incomingItems: readonly T[] | undefined,
+  keyOf: (item: T) => string,
+  noteId: string,
+  kind: FootnotePartKind,
+  parent: { local: boolean; server: boolean },
+  picks: Record<string, FootnoteSidePick> | undefined,
+  onBoth: (local: T, incoming: T) => T,
+): T[] | undefined {
+  const localBy = new Map((localItems ?? []).map((item) => [keyOf(item), item]));
+  const incomingBy = new Map((incomingItems ?? []).map((item) => [keyOf(item), item]));
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const item of [...(localItems ?? []), ...(incomingItems ?? [])]) {
+    const id = keyOf(item);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  const out: T[] = [];
+  for (const itemId of ids) {
+    const choice = partChoice(noteId, kind, itemId, parent, picks);
+    const local = localBy.get(itemId);
+    const incoming = incomingBy.get(itemId);
+    if (choice.local && choice.server) {
+      if (local && incoming) out.push(onBoth(local, incoming));
+      else if (local) out.push(local);
+      else if (incoming) out.push(incoming);
+    } else if (choice.local && local) {
+      out.push(local);
+    } else if (choice.server && incoming) {
+      out.push(incoming);
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 /**
  * Whether this entry has a finished choice.
  *
@@ -406,27 +628,46 @@ function unionBy<T>(
  * Same pointer on both copies of one mark: remint the incoming id so both
  * blobs keep a `fnwb:` key. Notes/threads/links still collapse by id.
  */
-function unionWhiteboards(
+function mergeWhiteboardsForParts(
   local: readonly DocFootnoteWhiteboard[] | undefined,
   incoming: readonly DocFootnoteWhiteboard[] | undefined,
   remints: Record<string, string>,
+  noteId: string,
+  parent: { local: boolean; server: boolean },
+  picks: Record<string, FootnoteSidePick>,
 ): DocFootnoteWhiteboard[] | undefined {
-  if (!local?.length && !incoming?.length) return undefined;
-  const out: DocFootnoteWhiteboard[] = [...(local ?? [])];
-  const seen = new Set(out.map((board) => board.id));
-  for (const board of incoming ?? []) {
-    if (!seen.has(board.id)) {
-      seen.add(board.id);
-      out.push(board);
-      continue;
-    }
-    const used = out.map((row) => ({ id: row.id, createdAt: 0, updatedAt: 0 }));
-    const fresh = freshWhiteboardId(used);
-    remints[board.id] = fresh;
-    seen.add(fresh);
-    out.push({ ...board, id: fresh });
+  const localBy = new Map((local ?? []).map((board) => [board.id, board]));
+  const incomingBy = new Map((incoming ?? []).map((board) => [board.id, board]));
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const board of [...(local ?? []), ...(incoming ?? [])]) {
+    if (seen.has(board.id)) continue;
+    seen.add(board.id);
+    ids.push(board.id);
   }
-  return out;
+  const out: DocFootnoteWhiteboard[] = [];
+  const used = [...(local ?? []), ...(incoming ?? [])].map((row) => ({
+    id: row.id,
+    createdAt: 0,
+    updatedAt: 0,
+  }));
+  for (const itemId of ids) {
+    const choice = partChoice(noteId, "boards", itemId, parent, picks);
+    const mine = localBy.get(itemId);
+    const theirs = incomingBy.get(itemId);
+    if (choice.local && mine) out.push(mine);
+    if (choice.server && theirs) {
+      if (choice.local && mine) {
+        const fresh = freshWhiteboardId(used);
+        remints[theirs.id] = fresh;
+        used.push({ id: fresh, createdAt: 0, updatedAt: 0 });
+        out.push({ ...theirs, id: fresh });
+      } else {
+        out.push(theirs);
+      }
+    }
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 /**
@@ -448,23 +689,73 @@ function unionWhiteboards(
  * a choice: a region mark with no picture cannot say what it points at, so the
  * incoming one is better than none.
  *
- * `subMarks` are not merged. They are underlines indexing into `blockText` by
- * offset, and two devices that both edited the quote have two different sets of
- * offsets into two different strings — combining them by concatenation would
- * paint underlines across words nobody underlined. Local's stand.
+ * `subMarks` default to local's. They index into `blockText` by offset, and
+ * two devices that both edited the quote have two different sets of offsets
+ * into two different strings — concatenating them would paint underlines
+ * across words nobody underlined. When the quote text matches, A+B unions
+ * by id. Explicit part picks override either rule.
  */
 export function combineFootnotePair(
   local: DocFootnote,
   incoming: DocFootnote,
   remints: Record<string, string> = {},
+  picks: Record<string, FootnoteSidePick> = {},
+  parent: { local: boolean; server: boolean } = { local: true, server: true },
 ): DocFootnote {
+  const noteId = local.id;
+  const shell = parent.local ? local : incoming;
+  const quotesMatch =
+    (local.blockText ?? local.excerpt) === (incoming.blockText ?? incoming.excerpt);
+  const underlineParent =
+    parent.local && parent.server && !quotesMatch
+      ? { local: true, server: false }
+      : parent;
   const combined: DocFootnote = {
-    ...local,
-    png: local.png ?? incoming.png,
-    notes: unionBy(local.notes, incoming.notes, (note) => note.id),
-    whiteboards: unionWhiteboards(local.whiteboards, incoming.whiteboards, remints),
-    threads: unionBy(local.threads, incoming.threads, (thread) => thread.rootId),
-    userLinks: unionBy(local.userLinks, incoming.userLinks, (link) => link.url),
+    ...shell,
+    png: (parent.local ? local.png : incoming.png) ?? (parent.local ? incoming.png : local.png),
+    notes: mergeKeyed(
+      local.notes,
+      incoming.notes,
+      (note) => note.id,
+      noteId,
+      "notes",
+      parent,
+      picks,
+      (mine) => mine,
+    ),
+    whiteboards: mergeWhiteboardsForParts(
+      local.whiteboards,
+      incoming.whiteboards,
+      remints,
+      noteId,
+      parent,
+      picks,
+    ),
+    threads: mergeKeyed(
+      local.threads,
+      incoming.threads,
+      (thread) => thread.rootId,
+      noteId,
+      "chats",
+      parent,
+      picks,
+      (mine) => mine,
+    ),
+    userLinks: parent.local && parent.server
+      ? unionBy(local.userLinks, incoming.userLinks, (link) => link.url)
+      : parent.local
+        ? local.userLinks
+        : incoming.userLinks,
+    subMarks: mergeKeyed(
+      local.subMarks,
+      incoming.subMarks,
+      (mark) => mark.id,
+      noteId,
+      "underlines",
+      underlineParent,
+      picks,
+      (mine) => mine,
+    ),
   };
   /*
    * Last touched by either device. Absent on both stays absent — a mark that
@@ -479,6 +770,7 @@ export function combineFootnotePair(
   if (combined.whiteboards === undefined) delete combined.whiteboards;
   if (combined.threads === undefined) delete combined.threads;
   if (combined.userLinks === undefined) delete combined.userLinks;
+  if (combined.subMarks === undefined) delete combined.subMarks;
   if (combined.png === undefined) delete combined.png;
   return combined;
 }
@@ -504,7 +796,7 @@ export function mergeFootnotes(
   localNotes: readonly DocFootnote[],
   serverNotes: readonly DocFootnote[],
   panes: { local: boolean; server: boolean },
-  picks: Record<string, { local: boolean; server: boolean }> = {},
+  picks: Record<string, FootnoteSidePick> = {},
   remints: Record<string, string> = {},
 ): DocFootnote[] {
   const out: DocFootnote[] = [];
@@ -514,10 +806,15 @@ export function mergeFootnotes(
       continue;
     }
     const pick = picks[row.id];
-    const keepLocal = pick ? pick.local : panes.local;
-    const keepServer = pick ? pick.server : panes.server;
-    if (keepLocal && keepServer && row.local && row.server) {
-      out.push(combineFootnotePair(row.local, row.server, remints));
+    const keepLocal = pick ? pick.local === true : panes.local;
+    const keepServer = pick ? pick.server === true : panes.server;
+    if (row.local && row.server && (keepLocal || keepServer)) {
+      out.push(
+        combineFootnotePair(row.local, row.server, remints, picks, {
+          local: keepLocal,
+          server: keepServer,
+        }),
+      );
       continue;
     }
     if (keepLocal && row.local) out.push(row.local);

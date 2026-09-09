@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { WhiteboardInkLab } from "./WhiteboardInkLab";
-import { keepLivePaintPump, skipCommittedReplay } from "./inkLab/liveHost";
+import {
+  inkCanvasPixelsChanged,
+  instantReplayOnBackingResize,
+  keepLivePaintPump,
+  skipCommittedReplay,
+  skipReplayOnWheelAbort,
+} from "./inkLab/liveHost";
 import { shouldCompositeLive } from "./inkLab/displayHz";
 
 describe("WhiteboardInkLab", () => {
@@ -26,5 +32,19 @@ describe("WhiteboardInkLab", () => {
 
   it("Match display uses stride 1 so every dirty vsync composites", () => {
     expect(shouldCompositeLive(true, false, 1, 1)).toBe(true);
+  });
+
+  it("does not remesh when only the overdraw park moved", () => {
+    expect(inkCanvasPixelsChanged({ width: 1080, height: 2400 }, 1080, 2400)).toBe(
+      false,
+    );
+  });
+
+  it("does not replay the notebook on nib-wheel abort", () => {
+    expect(skipReplayOnWheelAbort()).toBe(true);
+  });
+
+  it("does not instantly remesh after a backing-store resize", () => {
+    expect(instantReplayOnBackingResize()).toBe(false);
   });
 });
