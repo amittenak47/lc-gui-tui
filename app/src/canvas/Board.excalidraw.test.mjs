@@ -12,6 +12,19 @@ describe("Board", () => {
     expect(src).not.toMatch(/<Excalidraw\b/);
     expect(src).not.toMatch(/excalidraw\/index\.css/);
   });
+
+  it("does not seed the live book from an empty inkC before shards land", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    expect(src).toMatch(/shouldSeedInkFromBlob/);
+  });
+
+  it("stores lined-paper pitch in scene units so rules travel with the ink", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    expect(src).toMatch(/linedPitch:/);
+    expect(src).toMatch(/linedPitchFromAppState/);
+    expect(src).toMatch(/linedPaperCssGap/);
+    expect(src).toMatch(/linedPaperScenePitch/);
+  });
 });
 
 describe("WhiteboardInkLab", () => {
@@ -47,8 +60,11 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/shouldCompositeLive/);
     expect(src).toMatch(/livePresentStride/);
     expect(src).toMatch(/matchDisplayRef/);
-    expect(src).toMatch(/const marginY = 0/);
-    expect(src).not.toMatch(/overdrawMarginPx/);
+    expect(src).toMatch(/overdrawMarginPx/);
+    expect(src).not.toMatch(/const marginY = 0/);
+    expect(src).toMatch(/if \(drawingRef\.current \|\| cameraMovingRef\.current\) return/);
+    expect(src).toMatch(/rebuildAndReplay\(false, true\)/);
+    expect(src).not.toMatch(/Math\.max\(1, painted\.marginY\)/);
     const tick = src.slice(src.indexOf("const onPaintFrame"), src.indexOf("const schedulePaint"));
     expect(tick.indexOf("keepLivePaintPump")).toBeGreaterThan(-1);
     expect(tick.indexOf("keepLivePaintPump")).toBeLessThan(tick.indexOf("engine.paint"));
