@@ -18,20 +18,27 @@ import {
 import type { Skeleton } from "../templates/skeleton";
 import { renderViz } from "./render";
 import type { VizProgram } from "./schema";
+import { getCommonBounds } from "../canvas/boardScene";
+import { convertToExcalidrawElements } from "../canvas/convertSkeletons";
 
 /** The slice of Excalidraw's imperative API this module needs. */
 export interface SceneApi {
   getSceneElements(): ReadonlyArray<VizSceneElement>;
   updateScene(scene: { elements: unknown[] }): void;
+  getViewportBounds?(): { x: number; y: number; width: number; height: number } | null;
 }
 
 export interface VizSceneElement {
   id: string;
   x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
   customData?: {
     lcVizId?: string;
     lcRegion?: string;
     lcRegionFrame?: boolean;
+    lcVizOrigin?: { x: number; y: number; width: number; height?: number };
   } | null;
 }
 
@@ -103,10 +110,49 @@ export function applyViz(
   frameIndex: number,
 ): void {
   const existing = api.getSceneElements();
-  const origin = originForProgram(existing, program.id);
-  const skeletons = renderViz(program, frameIndex, origin);
+  const lane = existing.find((el) => el.customData?.lcRegionFrame && el.customData.lcRegion === "agent");
+  const viewport = !lane ? api.getViewportBounds?.() : null;
+  const saved = existing.find((el) => el.customData?.lcVizId === program.id)?.customData?.lcVizOrigin;
+  const fallback = originForProgram(existing, program.id);
+  let origin: { x: number; y: number; width: number; height?: number } = saved ?? (viewport
+    ? { x: viewport.x + AGENT_PADDING, y: viewport.y + AGENT_PADDING, width: Math.max(120, viewport.width - AGENT_PADDING * 2) }
+    : { ...fallback, width: Math.max(120, (lane?.width ?? AGENT_LANE.w) - AGENT_PADDING * 2) });
+  // Reserve the entire trace's height so growing structures never collide.
+  const measure = measureProgram(program);
+  const scale = Math.min(1, origin.width / Math.max(1, measure.width));
+  origin = { ...origin, height: measure.height * scale };
+  if (!saved) {
+    const others = existing.filter((el) => el.customData?.lcVizId && el.customData.lcVizId !== program.id);
+    const bottom = others.reduce((max, el) => {
+      const placement = el.customData?.lcVizOrigin;
+      return Math.max(max, placement ? placement.y + (placement.height ?? el.height ?? 0) : (el.y ?? 0) + (el.height ?? 0));
+    }, origin.y - 28);
+    if (others.length && (!viewport || bottom < viewport.y + viewport.height)) origin = { ...origin, y: Math.max(origin.y, bottom + 28) };
+  }
+  const skeletons = renderViz(program, frameIndex, { x: 0, y: 0 }).map((el): Skeleton => ({
+    ...el,
+    x: origin.x + (el.x - measure.minX) * scale,
+    y: origin.y + (el.y - measure.minY) * scale,
+    width: el.width === undefined ? undefined : el.width * scale,
+    height: el.height === undefined ? undefined : el.height * scale,
+    fontSize: el.fontSize === undefined ? undefined : el.fontSize * scale,
+    points: el.points?.map(([x, y]) => [x * scale, y * scale]),
+    label: el.label ? { ...el.label, fontSize: (el.label.fontSize ?? 16) * scale } : undefined,
+    customData: { ...el.customData, lcVizOrigin: origin, ...(!lane && viewport ? { lcRegion: undefined } : {}) },
+  }));
   const converted = convert(skeletons);
   api.updateScene({ elements: mergeVizElements(existing, converted, program.id) });
+}
+
+const programMeasurements = new WeakMap<VizProgram, { minX: number; minY: number; width: number; height: number }>();
+function measureProgram(program: VizProgram) {
+  const cached = programMeasurements.get(program);
+  if (cached) return cached;
+  const all = program.frames.flatMap((_, i) => convertToExcalidrawElements(renderViz(program, i, { x: 0, y: 0 }), { regenerateIds: false }));
+  const [minX, minY, maxX, maxY] = getCommonBounds(all);
+  const measured = { minX, minY, width: maxX - minX, height: maxY - minY };
+  programMeasurements.set(program, measured);
+  return measured;
 }
 
 /** Draw (or replace) an annotation sticky in the agent lane. */

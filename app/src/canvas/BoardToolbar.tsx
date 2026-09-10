@@ -51,6 +51,7 @@ import {
   type ResetClearMode,
 } from "./resetClearMode";
 import { FontSizeSlider } from "./FontSizeSlider";
+import { ShapePreview } from "./ShapePreview";
 import { inkSwatches } from "./inkColors";
 import { InkFullnessSlider } from "./InkFullnessSlider";
 import { PressureSensitiveToggle } from "./PressureSensitiveToggle";
@@ -1249,7 +1250,7 @@ export function BoardToolbar({
           active={configuring ? "mod" : "list"}
           axis="height"
           className="lc-shapes"
-          role="menu"
+          role="dialog"
           aria-label="Shape library"
         >
           <div data-morph-id="list">
@@ -1262,11 +1263,11 @@ export function BoardToolbar({
                     <button
                       key={shape.id}
                       type="button"
-                      role="menuitem"
                       className="lc-shape"
                       onClick={() => pickShape(shape)}
                     >
-                      {shape.label}
+                      <ShapePreview shape={shape} />
+                      <span>{shape.label}</span>
                     </button>
                   ))}
                 </div>
@@ -1279,7 +1280,8 @@ export function BoardToolbar({
                 <button type="button" className="lc-shape-back" onClick={backToList}>
                   ← {modifierTitle}
                 </button>
-                <p className="lc-muted lc-shape-mod-hint">Configure, then place on the board.</p>
+                <ShapePreview shape={configuring} mods={mods} large />
+                <p className="lc-muted lc-shape-mod-hint">Adjust the preview, then place your shape.</p>
                 {configuring.fields.map((field) => (
                   <label key={field.key} className="lc-shape-field">
                     <span>{field.label}</span>

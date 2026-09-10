@@ -12,6 +12,7 @@ import {
   footer,
   header,
   isHighlighted,
+  traceCellWidth,
   type RenderContext,
 } from "../layout";
 import { cellText, entryPair } from "../schema";
@@ -27,6 +28,7 @@ export function renderGrid(ctx: RenderContext): Skeleton[] {
   const { frame, origin } = ctx;
   const out = header(ctx);
   const top = origin.y + headerOffset(ctx);
+  const width = traceCellWidth(ctx);
 
   const rows: unknown[][] = frame.cells.every((row) => Array.isArray(row))
     ? (frame.cells as unknown[][])
@@ -40,10 +42,10 @@ export function renderGrid(ctx: RenderContext): Skeleton[] {
         ...cellBox(
           ctx,
           `cell-${r}-${c}`,
-          origin.x + c * (CELL + CELL_GAP),
+          origin.x + c * (width + CELL_GAP),
           top + r * (CELL + CELL_GAP),
           cellText(value),
-          { highlighted: isHighlighted(frame, index) },
+          { highlighted: isHighlighted(frame, index), width },
         ),
       );
     });

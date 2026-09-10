@@ -82,14 +82,13 @@ describe("parseVizProgram", () => {
     expect(program.frames.map((f) => f.label)).toEqual(["ok", "also ok"]);
   });
 
-  it("drops frames past the 40-frame trace cap", () => {
+  it("rejects a 41-frame trace instead of silently losing the conclusion", () => {
     const frames = Array.from({ length: 41 }, (_, i) => ({
       label: `step ${i}`,
       cells: [i],
     }));
-    const program = parseVizProgram({ viz: "array", id: "long", frames })!;
-    expect(program.frames).toHaveLength(40);
-    expect(program.frames[39]?.label).toBe("step 39");
+    expect(parseVizProgram({ viz: "array", id: "long", frames })).toBeNull();
+    expect(parseVizProgram({ viz: "array", id: "limit", frames: frames.slice(0, 40) })?.frames).toHaveLength(40);
   });
 });
 

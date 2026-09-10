@@ -8574,6 +8574,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     ref,
     (): BoardHandle => ({
       getElements: elements,
+      getViewportBounds: () => {
+        const view = getViewport();
+        return view ? { x: -view.scrollX, y: -view.scrollY, width: view.width / view.zoom, height: view.height / view.zoom } : null;
+      },
       // Callers hand back what `getElements` gave them — unpaged — so the open
       // page has to be re-applied on the way in.
       setElements: (next) => {
@@ -8581,7 +8585,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           next as PageableElement[],
           mobileRegionRef.current,
         );
-        apiRef.current?.updateScene({ elements: (paged ?? next) as unknown[] });
+        apiRef.current?.updateScene({ elements: (paged ?? next) as unknown[], captureUpdate: CaptureUpdateAction.NEVER });
       },
       convert,
       seedTemplate: (skeletons: Skeleton[]) => {

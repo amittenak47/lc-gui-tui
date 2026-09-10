@@ -14,13 +14,22 @@ import {
   vizElementId,
   type Skeleton,
 } from "../templates/skeleton";
-import type { VizFrame, VizProgram } from "./schema";
+import { cellText, type VizFrame, type VizProgram } from "./schema";
 
 export const CELL = 52;
 export const CELL_GAP = 6;
 export const ROW_GAP = 44;
 /** Height reserved above the structure for the title and frame label. */
 export const HEADER_H = 56;
+
+/** One column pitch for the entire trace, so large values cannot overlap or make it jump. */
+export function traceCellWidth(ctx: RenderContext): number {
+  let width = CELL;
+  for (const frame of ctx.program.frames) {
+    for (const value of frame.cells.flat()) width = Math.max(width, Math.min(160, cellText(value).length * 10 + 20));
+  }
+  return width;
+}
 
 export interface RenderContext {
   program: VizProgram;
@@ -89,6 +98,7 @@ export function cellBox(
       fillStyle: "solid",
       strokeWidth: highlighted ? 2 : 1,
       roughness: 0,
+      roundness: { type: 3 },
       label: {
         text,
         fontSize: 16,
