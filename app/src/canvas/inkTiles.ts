@@ -299,8 +299,8 @@ export interface InkTileCacheOptions {
   /** True while foreground ink owns the frame; deferred tile work must yield. */
   pause?: () => boolean;
   /**
-   * Raster tiles off the UI thread. Loading and camera present still wait for
-   * {@link InkTileCache.settled} before swapping a bitmap; this only keeps
+   * Raster tiles off the UI thread. Camera present waits for
+   * {@link InkTileCache.covered} before swapping a bitmap; this only keeps
    * `draw` to blits.
    */
   useWorker?: boolean;
@@ -833,6 +833,16 @@ export class InkTileCache {
   /** True while the last draw left tiles to rasterise in the background. */
   get settled(): boolean {
     return this.pending.length === 0 && this.inflight.size === 0 && !this.hydrating;
+  }
+
+  /**
+   * True when the last draw blitted every visible tile from cache.
+   *
+   * Inflight work for tiles this view did not miss does not count. Hydrate
+   * must finish first — fallbacks are not coverage.
+   */
+  get covered(): boolean {
+    return this.pending.length === 0 && !this.hydrating;
   }
 
   private tileBounds(level: number, tx: number, ty: number): SceneBounds {

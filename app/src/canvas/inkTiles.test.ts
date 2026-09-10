@@ -618,6 +618,16 @@ describe("InkTileCache", () => {
     cache.draw(ctx, screen(1), 1);
     expect(canvases.created).toHaveLength(0);
     expect(cache.settled).toBe(false);
+    expect(cache.covered).toBe(false);
+  });
+
+  it("is covered once every visible tile was blitted from cache", () => {
+    const { cache } = makeCache();
+    cache.setOps([draw([0, 0], [40, 0])]);
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+    expect(cache.covered).toBe(true);
+    expect(cache.settled).toBe(true);
   });
 
   it("records pointer-up ink without painting cached tiles synchronously", () => {
