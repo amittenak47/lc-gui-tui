@@ -11,6 +11,7 @@ import {
 } from "../canvas/rasterInk";
 
 const KEY = "whiteboard.inkToolPrefs.v1";
+export const INK_TOOL_PREFS_EVENT = "lc-ink-tool-prefs";
 
 export const INK_FULLNESS_DEFAULT = 1;
 
@@ -77,6 +78,7 @@ export function loadInkToolPrefs(): InkToolPrefs {
 export function saveInkToolPrefs(prefs: InkToolPrefs): void {
   try {
     localStorage.setItem(KEY, JSON.stringify(prefs));
+    window.dispatchEvent(new Event(INK_TOOL_PREFS_EVENT));
   } catch {
     /* private browsing */
   }

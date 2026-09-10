@@ -253,7 +253,7 @@ describe("Board", () => {
     expect(src).toMatch(/drawPageRecentreCamera/);
     expect(src).toMatch(/runFit\(null, "recentre"\)/);
     expect(src).toMatch(/paintExcalidrawCanvases/);
-    expect(src).toMatch(/remeshInk && drawPage \? "recentre"/);
+    expect(src).toMatch(/remeshInk && drawPage && !keepY \? "recentre"/);
     expect(src).not.toMatch(/ORIENT_RETRIES_MS/);
     expect(src).toMatch(/linedOverlayViewport/);
   });
@@ -474,7 +474,7 @@ describe("Workspace pane switch", () => {
 
   it("does not clear the CSS ride before the staged bitmap is ready", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
-    const step = src.slice(src.indexOf("const step = () => {"), src.indexOf("if (instant) step();"));
+    const step = src.slice(src.indexOf("const step = async () => {"), src.indexOf("if (instant) step();"));
     expect(step.indexOf("if (!tiles.covered) return")).toBeGreaterThan(-1);
     expect(step.indexOf("if (!tiles.covered) return")).toBeLessThan(
       step.indexOf("engine.redrawSnap"),

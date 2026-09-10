@@ -247,6 +247,7 @@ import { BROWSE_PICK_QUIET_MS, browsePickBlocked } from "./util/browsePickGuard"
 import { waitForAnnotateLaidOut, waitForPdfPageNode, waitForPdfPagePainted } from "./util/annotateLaidOut";
 import { planAutosaveTick } from "./util/autosaveSchedule";
 import { isCameraBusy, yieldToInput } from "./util/cameraBusy";
+import { isLoadingDoodleActive, waitForLoadingDoodleIdle } from "./util/loadingDoodleActivity";
 import { isDocCameraLive } from "./canvas/docSelectionGesture";
 import {
   buildAnnotateSidecar,
@@ -489,13 +490,15 @@ async function restoreInk(
   opts?: { paint?: boolean },
 ): Promise<void> {
   const shards = docKey ? await getInkPages(docKey) : new Map();
+  if (isLoadingDoodleActive()) await yieldToInput();
   const ops = inkOpsFrom(blob);
   const source = inkRestoreSource(shards.size, ops.length);
   if (source === "shards") {
     board.ingestInkPages(shards, opts);
-    return;
+  } else if (source === "blob") {
+    board.setInkOps(ops, opts);
   }
-  if (source === "blob") board.setInkOps(ops, opts);
+  if (isLoadingDoodleActive()) await yieldToInput();
 }
 
 /**
@@ -1870,6 +1873,7 @@ export function Workspace({
    */
   const finishLoadingTransition = useCallback(
     async (fromBrowse: boolean, switching: boolean, loadGen: number) => {
+      await waitForLoadingDoodleIdle();
       if (workspaceLoadGenRef.current !== loadGen) return;
       // Keep the board hidden through the checkmark hold. Clearing preparing
       // first used to paint the page under a spinner that had not finished.
@@ -1883,6 +1887,7 @@ export function Workspace({
         setSwitchMotion("done");
         await waitMs(doneHoldMs());
       }
+      await waitForLoadingDoodleIdle();
       if (workspaceLoadGenRef.current !== loadGen) return;
       setBoardPreparing(false);
     },
@@ -2875,6 +2880,8 @@ export function Workspace({
           if (workspaceLoadGenRef.current !== loadGen) return true;
         }
 
+        await waitForLoadingDoodleIdle();
+        if (workspaceLoadGenRef.current !== loadGen) return true;
         setBrowseMotion("idle");
         setSwitchMotion("idle");
         setHoldBrowseOverlay(false);
@@ -3184,6 +3191,8 @@ export function Workspace({
           if (workspaceLoadGenRef.current !== loadGen) return;
         }
 
+        await waitForLoadingDoodleIdle();
+        if (workspaceLoadGenRef.current !== loadGen) return;
         setBrowseMotion("idle");
         setSwitchMotion("idle");
         setHoldBrowseOverlay(false);
@@ -4107,6 +4116,8 @@ export function Workspace({
           if (workspaceLoadGenRef.current !== loadGen) return;
         }
 
+        await waitForLoadingDoodleIdle();
+        if (workspaceLoadGenRef.current !== loadGen) return;
         setBrowseMotion("idle");
         setSwitchMotion("idle");
         setHoldBrowseOverlay(false);
@@ -9032,6 +9043,7 @@ export function Workspace({
     // Same check-hold as a finished load, even if the spinner had not painted
     // yet — Cancel must not snap Home in one frame.
     await waitMs(doneHoldMs());
+    await waitForLoadingDoodleIdle();
     setBrowseMotion("idle");
     setSwitchMotion("idle");
     setHoldBrowseOverlay(false);
@@ -9931,7 +9943,10 @@ export function Workspace({
           ]
             .filter(Boolean)
             .join(" ")}
-          onPointerDownCapture={() => {
+          onPointerDownCapture={(event) => {
+            const target = event.target;
+            if (target instanceof Element && target.closest(".lc-loading-doodle, .lc-overlay-spinner")) return;
+            if (holdBrowseOverlay || boardPreparing || browseMotion !== "idle") return;
             if (!active && showing) focusTab(tab.id);
           }}
         >
@@ -10051,6 +10066,7 @@ export function Workspace({
             ref={boardRef}
             themeId={themeId}
             preparing={boardPreparing}
+            splitPaused={Boolean(splitRole) && !active}
             onThemePick={setThemeId}
             readingSize={readingSize}
             interactive={Boolean(

@@ -330,7 +330,20 @@ export class InkTileCache {
   private drawCount = 0;
   private budget = TILE_BUDGET_MIN;
   private pending: PendingTile[] = [];
+  private visibleMisses = 1;
   private idleHandle = 0;
+  private suspended = false;
+
+  /** Stop the unfocused split's pump without polling every animation frame. */
+  setSuspended(on: boolean): void {
+    this.suspended = on;
+    if (on && this.idleHandle) {
+      this.cancel(this.idleHandle);
+      this.idleHandle = 0;
+    } else if (!on && !this.idleHandle && this.pending.length > 0) {
+      this.idleHandle = this.schedule(() => this.runPending());
+    }
+  }
   /** True between the start of a camera gesture and its settle. */
   private moving = false;
   /**
@@ -790,6 +803,7 @@ export class InkTileCache {
   }
 
   private pumpWorker(): void {
+    if (this.suspended) return;
     if (this.inflight.size > 0) return;
     const next = this.pending.shift();
     if (!next) {
@@ -825,19 +839,19 @@ export class InkTileCache {
         }
         this.inflight.delete(key);
         if (bitmap) this.installSource(next.level, next.tx, next.ty, bitmap);
-        else this.renderTile(next.level, next.tx, next.ty);
+        else if (!this.suspended) this.renderTile(next.level, next.tx, next.ty);
         this.evict();
         this.onTilesReady?.();
-        if (this.pending.length > 0 || this.inflight.size > 0) {
+        if (!this.suspended && (this.pending.length > 0 || this.inflight.size > 0)) {
           this.idleHandle = this.schedule(() => this.runPending());
         }
       })
       .catch(() => {
         if (generation !== this.workerGeneration) return;
         this.inflight.delete(key);
-        this.renderTile(next.level, next.tx, next.ty);
+        if (!this.suspended) this.renderTile(next.level, next.tx, next.ty);
         this.onTilesReady?.();
-        if (this.pending.length > 0) {
+        if (!this.suspended && this.pending.length > 0) {
           this.idleHandle = this.schedule(() => this.runPending());
         }
       });
@@ -867,7 +881,9 @@ export class InkTileCache {
    * 10–30s blank pad.
    */
   get covered(): boolean {
-    return this.pending.length === 0;
+    // Shifting the last queued tile into a worker is not a completed blit.
+    // Only draw() can establish coverage for its viewport.
+    return this.visibleMisses === 0;
   }
 
   /**
@@ -970,6 +986,7 @@ export class InkTileCache {
 
   private runPending(): void {
     this.idleHandle = 0;
+    if (this.suspended) return;
     if (this.pending.length === 0 && this.inflight.size === 0) return;
     if (this.pause()) {
       this.idleHandle = this.schedule(() => this.runPending());
@@ -1027,6 +1044,7 @@ export class InkTileCache {
     const visible = visibleDrawBounds(view, this.clip);
     if (!visible) {
       this.pending = [];
+      this.visibleMisses = 0;
       return;
     }
 
@@ -1042,7 +1060,7 @@ export class InkTileCache {
     const toDeviceX = (sceneX: number) => (sceneX + viewport.scrollX) * pixelScale;
     const toDeviceY = (sceneY: number) => (sceneY + viewport.scrollY) * pixelScale;
 
-    const deadline = this.pause()
+    const deadline = this.suspended || this.pause()
       ? this.now()
       : this.now() + (this.moving ? MOVING_BUDGET_MS : DRAW_BUDGET_MS);
     const missed: PendingTile[] = [];
@@ -1106,6 +1124,7 @@ export class InkTileCache {
     }
 
     this.pending = missed;
+    this.visibleMisses = missed.length;
     this.evict();
     if (missed.length === 0 && this.persistDirty) {
       this.persistDirty = false;

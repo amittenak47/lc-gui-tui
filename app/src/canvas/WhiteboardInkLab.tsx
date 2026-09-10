@@ -14,6 +14,8 @@ import {
 
 import { WHEEL_OPEN_MS } from "../util/gesture";
 import { sashDragActive } from "../util/splitResize";
+import { isLoadingDoodleActive } from "../util/loadingDoodleActivity";
+import { yieldToInput } from "../util/cameraBusy";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { thinInkPointsForStorage } from "./inkSmoothing";
 import { InkPageBook } from "./inkPageCache";
@@ -122,7 +124,7 @@ export interface RasterInkHandle {
   replayCommitted(): void;
   /** Slice the first paint after restore so loading overlay drop cannot ANR. */
   primeSnap(): Promise<void>;
-  syncCamera(): void | Promise<void>;
+  syncCamera(allowPaused?: boolean): void | Promise<void>;
   setPanOffset(live: PanCamera | null): boolean;
   commitCamera(): void;
   setCameraMoving(moving: boolean): void;
@@ -149,6 +151,7 @@ export interface WhiteboardInkLabProps {
   enabled: boolean;
   /** Loading owns first paint; camera fits under the spinner must not force an atomic book replay. */
   preparing?: boolean;
+  splitPaused?: boolean;
   tool: "pen" | "eraser" | "highlighter" | null;
   strokeWidth: number;
   inkColor: string;
@@ -329,6 +332,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     {
       enabled,
       preparing = false,
+      splitPaused = false,
       tool,
       strokeWidth,
       inkColor,
@@ -361,6 +365,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const hostRef = useRef<HTMLDivElement | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const engineRef = useRef<InkLabEngine | null>(null);
+    const engineWaitersRef = useRef<Array<{
+      resolve: () => void;
+      reject: (error: Error) => void;
+    }>>([]);
+    const primeSnapRef = useRef<Promise<void> | null>(null);
     const tilesRef = useRef<InkTileCache | null>(null);
     const tileStageRef = useRef<HTMLCanvasElement | null>(null);
     const tileReadyRef = useRef<() => void>(() => {});
@@ -402,6 +411,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     toolRef.current = tool;
     const preparingRef = useRef(preparing);
     preparingRef.current = preparing;
+    const splitPausedRef = useRef(false);
+    splitPausedRef.current = splitPaused && !preparing;
+    const replayAllowPausedRef = useRef(false);
     const partialEraseRef = useRef(partialErase);
     partialEraseRef.current = partialErase;
     const strokeWidthRef = useRef(strokeWidth);
@@ -461,7 +473,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const marginYRef = useRef(0);
     const paintedViewRef = useRef<PaintedLabView | null>(null);
     const cameraMovingRef = useRef(false);
-    const sizeToHostRef = useRef<() => void>(() => {});
+    const sizeToHostRef = useRef<(allowPaused?: boolean, paint?: boolean) => void>(() => {});
 
     const ensureTiles = useCallback(() => {
       if (!tilesRef.current) {
@@ -469,7 +481,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           onTilesReady: () => tileReadyRef.current(),
           useWorker: true,
           persist: true,
-          pause: () => drawingRef.current || sashDragActive(),
+          pause: () => drawingRef.current || sashDragActive() ||
+            (splitPausedRef.current && !replayAllowPausedRef.current),
         });
       }
       return tilesRef.current;
@@ -620,17 +633,19 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       });
     };
 
-    const presentCommitted = useCallback((liveStamp: InkOp | null = null, instant = true): Promise<void> => {
+    const presentCommitted = useCallback(async (liveStamp: InkOp | null = null, instant = true, allowPaused = false): Promise<void> => {
       if (skipCommittedReplay(drawingRef.current, liveStamp)) return Promise.resolve();
-      // #region agent log
-      fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'WhiteboardInkLab.tsx:presentCommitted',message:'replay snap from tiles',data:{instant,drawing:drawingRef.current,ops:bookRef.current.paintOps().length,tiles:tilesRef.current?.size??-1,scrollY:readViews().view.scrollY,scrollX:readViews().view.scrollX,zoom:readViews().view.zoom,transform:Boolean(canvasRef.current?.style.transform)},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
-      const canvas = canvasRef.current;
-      const engine = engineRef.current;
-      if (!canvas || !engine) {
-        settleReplayWaiters();
-        return Promise.resolve();
+      if (splitPausedRef.current && !allowPaused) return;
+      // Imperative prime can arrive before the passive attach effect. A
+      // missing engine must never acknowledge a successfully painted camera.
+      if (!engineRef.current) {
+        await new Promise<void>((resolve, reject) => engineWaitersRef.current.push({ resolve, reject }));
       }
+      const engine = engineRef.current;
+      const canvas = canvasRef.current;
+      if (!canvas || !engine) throw new Error("Ink canvas detached before first present");
+      if (isLoadingDoodleActive()) await yieldToInput();
+      if (engineRef.current !== engine) throw new Error("Ink engine detached before present");
       const { view, paintView, dpr, marginY } = readViews();
       const recordView = () => {
         paintedViewRef.current = {
@@ -662,7 +677,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         }
 
         committedBuildRef.current = true;
+        replayAllowPausedRef.current = allowPaused;
         const tiles = ensureTiles();
+        tiles.setSuspended(splitPausedRef.current && !allowPaused);
         const committed = bookRef.current.paintOps();
         tiles.setClip(inkPaintClip(clipRef.current, inkOpsBounds(committed)));
         tiles.syncOpsDeferred(committed);
@@ -672,9 +689,16 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
          * flick looked like the page reloading — each slice cleared and redrew
          * more spines — and it is only needed when opening a dense book.
          */
-        const step = () => {
+        let stepInProgress = false;
+        const step = async () => {
           if (gen !== replayGenRef.current) return;
           replayRafRef.current = null;
+          stepInProgress = true;
+          if (isLoadingDoodleActive()) await yieldToInput();
+          stepInProgress = false;
+          if (gen !== replayGenRef.current) return;
+          if (splitPausedRef.current && !allowPaused) return;
+          if (sashDragActive()) return;
 
           let stage = tileStageRef.current;
           if (!stage) {
@@ -754,6 +778,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           overlayRef.current = [];
           overlayRedoRef.current = [];
           committedBuildRef.current = false;
+          replayAllowPausedRef.current = false;
+          tiles.setSuspended(splitPausedRef.current);
           tileReadyRef.current = () => {};
           // Instant camera rebase must drop ink CSS and lined-paper ride in
           // this turn (Board's waiter clears paper). Two rAFs at 90Hz is two
@@ -762,7 +788,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           else settleReplayWaitersAfterPaint(gen);
         };
         tileReadyRef.current = () => {
-          if (gen !== replayGenRef.current || replayRafRef.current != null) return;
+          if (gen !== replayGenRef.current || replayRafRef.current != null || stepInProgress) return;
+          if (splitPausedRef.current && !allowPaused) return;
           replayRafRef.current = requestAnimationFrame(step);
         };
         if (instant) step();
@@ -777,8 +804,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     }, []);
 
     const rebuildAndReplay = useCallback(
-      (keepPixels = false, instant = true, restart = false): Promise<void> => {
+      (keepPixels = false, instant = true, restart = false, allowPaused = false): Promise<void> => {
         if (drawingRef.current) return Promise.resolve();
+        if (splitPausedRef.current && !allowPaused) return Promise.resolve();
         // A sliced remesh may join. Camera / undo / a wiped backing store must
         // not — skipping that rebase is ink stuck to the old camera.
         if (!restart && !instant && replayRafRef.current != null) {
@@ -787,7 +815,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           });
         }
         if (!keepPixels) forgetPixelHistory();
-        return presentCommitted(null, instant);
+        return presentCommitted(null, instant, allowPaused);
       },
       [forgetPixelHistory, presentCommitted],
     );
@@ -806,8 +834,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       return changed;
     }, []);
 
-    const presentIfCameraMoved = useCallback((cameraSettle = false): Promise<void> => {
+    const presentIfCameraMoved = useCallback((cameraSettle = false, allowPaused = false): Promise<void> => {
       if (drawingRef.current) return Promise.resolve();
+      if (splitPausedRef.current && !allowPaused) return Promise.resolve();
       // Riding: a settle remesh must run with the translate still on; finish()
       // drops it in the same present as the new snap. Mid-gesture skips.
       if (!cameraSettle && canvasRef.current?.style.transform) return Promise.resolve();
@@ -817,6 +846,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       if (preparingRef.current) return Promise.resolve();
       const { view, marginY } = readViews();
       const windowed = applyPageWindow(view);
+      if (committedBuildRef.current) {
+        return rebuildAndReplay(false, instantReplayOnCameraRebase(), true, allowPaused);
+      }
       const next = {
         scrollX: view.scrollX,
         scrollY: view.scrollY,
@@ -830,6 +862,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return rebuildAndReplay(
             false,
             cameraSettle ? instantReplayOnCameraRebase() : instantReplayOnFirstPresent(),
+            false, allowPaused,
           );
         }
         return Promise.resolve();
@@ -839,13 +872,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return rebuildAndReplay(
             false,
             cameraSettle ? instantReplayOnCameraRebase() : instantReplayOnPageWindow(),
+            false, allowPaused,
           );
         }
         return Promise.resolve();
       }
       // Pan and zoom both compose a new frame from cached scene bitmaps. The
       // current camera keeps riding until that complete frame is swapped in.
-      return rebuildAndReplay(false, instantReplayOnCameraRebase());
+      return rebuildAndReplay(false, instantReplayOnCameraRebase(), false, allowPaused);
     }, [applyPageWindow, readViews, rebuildAndReplay]);
 
     useEffect(() => {
@@ -993,14 +1027,22 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         },
         primeSnap() {
           if (drawingRef.current) return Promise.resolve();
+          if (primeSnapRef.current) return primeSnapRef.current;
+          sizeToHostRef.current(true, false);
           applyPageWindow(readViews().view);
           // Loading never starts an eager replay, so prime is the single owner
           // of the final laid-out camera and duplicate callers simply join it.
-          return rebuildAndReplay(false, instantReplayOnFirstPresent());
+          const pending = rebuildAndReplay(false, instantReplayOnFirstPresent(), true, true)
+            .finally(() => {
+              if (primeSnapRef.current === pending) primeSnapRef.current = null;
+            });
+          primeSnapRef.current = pending;
+          return pending;
         },
-        syncCamera() {
+        syncCamera(allowPaused = false) {
           if (drawingRef.current) return Promise.resolve();
-          return presentIfCameraMoved(true);
+          sizeToHostRef.current(allowPaused, false);
+          return presentIfCameraMoved(true, allowPaused);
         },
         setPanOffset(live) {
           const canvas = canvasRef.current;
@@ -1148,7 +1190,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       const canvas = canvasRef.current;
       if (!host || !canvas) return;
 
-      const sizeToHost = () => {
+      const sizeToHost = (allowPaused = false, paint = true) => {
+        if (splitPausedRef.current && !allowPaused) return;
         // Frozen while the nib is down or the page is riding: a resize here
         // would remesh the page. Apply it on lift / settle. Overdraw is the
         // pan budget: without it setPanOffset rebases after <1px and every
@@ -1180,13 +1223,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
          * ANR on a dense notebook.
          */
         if (!inkCanvasPixelsChanged(canvas, pixelW, pixelH)) return;
-        // #region agent log
-        fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'WhiteboardInkLab.tsx:sizeToHost',message:'backing resize remesh',data:{pixelW,pixelH,prevW:canvas.width,pixelHPrev:canvas.height,drawing:drawingRef.current},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
-        // #endregion
         canvas.width = pixelW;
         canvas.height = pixelH;
+        paintedViewRef.current = null;
         if (engineRef.current) {
-          if (preparingRef.current) return;
+          if (!paint || preparingRef.current || splitPausedRef.current) return;
           rebuildAndReplay(
             false,
             instantReplayOnBackingResize(false),
@@ -1196,10 +1237,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       };
       sizeToHostRef.current = sizeToHost;
 
-      sizeToHost();
+      sizeToHost(true);
       const engine = createInkLabEngine();
       engineRef.current = engine;
       backendRef.current = engine.attach(canvas);
+      for (const waiter of engineWaitersRef.current.splice(0)) waiter.resolve();
       if (!preparingRef.current) {
         rebuildAndReplay(false, instantReplayOnFirstPresent());
       }
@@ -1295,6 +1337,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
 
       const onPaintFrame = (now: number) => {
         rafRef.current = null;
+        if ((splitPausedRef.current || sashDragActive()) && !drawingRef.current) return;
         // Re-arm before paint/HUD. Requesting the next vsync at the end of
         // a long tick is how 16.7ms frames become 33ms (HUD avg ~25ms).
         const live = keepLivePaintPump(drawingRef.current);
@@ -1325,6 +1368,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       };
 
       const schedulePaint = () => {
+        if ((splitPausedRef.current || sashDragActive()) && !drawingRef.current) return;
         if (rafRef.current != null) return;
         rafRef.current = requestAnimationFrame(onPaintFrame);
       };
@@ -1731,9 +1775,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return;
         }
         const baked = engine.liftRaw(sampleOf(canvas, event));
-        // #region agent log
-        fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'WhiteboardInkLab.tsx:pointerup',message:'lift',data:{pts:baked.points.length,ops:bookRef.current.paintOps().length,tiles:tilesRef.current?.size??-1,scrollY:readViews().view.scrollY},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
         bakeRef.current = { bakeMs: baked.bakeMs, bake: baked.bake };
         engine.paint();
         loadMeterRef.current.end();
@@ -1863,6 +1904,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (holdTimerRef.current != null) window.clearTimeout(holdTimerRef.current);
         engine.destroy();
         engineRef.current = null;
+        for (const waiter of engineWaitersRef.current.splice(0)) {
+          waiter.reject(new Error("Ink canvas unmounted before engine attach"));
+        }
         tilesRef.current?.dispose();
         tilesRef.current = null;
       };
@@ -1874,6 +1918,23 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       rebuildAndReplay,
       stampOpOntoSnap,
     ]);
+
+    useEffect(() => {
+      const paused = splitPaused && !preparing;
+      tilesRef.current?.setSuspended(paused && !replayAllowPausedRef.current);
+      if (paused) {
+        if (!drawingRef.current && rafRef.current != null) {
+          cancelAnimationFrame(rafRef.current);
+          rafRef.current = null;
+        }
+      } else if (!preparing) {
+        sizeToHostRef.current(false, false);
+        // Resume a replay left waiting on the paused tile pump as well as a
+        // camera that changed while this pane was out of focus.
+        if (committedBuildRef.current) void rebuildAndReplay(false, false, true);
+        else void presentIfCameraMoved(true);
+      }
+    }, [splitPaused, preparing, rebuildAndReplay, presentIfCameraMoved]);
 
     /**
      * Nested scroll moves host-bound ink — remesh when any host scrolls.
@@ -1893,7 +1954,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       let frame: number | null = null;
       let attached: HTMLElement[] = [];
       const onScroll = () => {
-        if (preparingRef.current) return;
+        if (preparingRef.current || splitPausedRef.current) return;
         if (drawingRef.current || toolRef.current) {
           if (strokeHostPinRef.current || lastHostScrollRef.current.length > 0) {
             holdNestedScroll();
@@ -1906,7 +1967,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (frame != null) return;
         frame = requestAnimationFrame(() => {
           frame = null;
-          if (drawingRef.current) return;
+          if (drawingRef.current || splitPausedRef.current) return;
           if (toolRef.current) holdNestedScroll();
           forgetPixelHistory();
           presentCommitted();

@@ -35,6 +35,39 @@ function pointer(type: string, x: number, y: number) {
 }
 
 describe("SplitSash", () => {
+  it.each(["pointerup", "pointercancel", "unmount"])("restores canvas pixels and visibility after %s", (end) => {
+    const host = document.createElement("main");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    act(() => root.render(<>
+      <div className="is-split-a"><div className="lc-board"><canvas /></div></div>
+      <SplitSash axis="vertical" onRatio={() => {}} />
+    </>));
+    const board = host.querySelector<HTMLElement>(".lc-board")!;
+    const canvas = board.querySelector("canvas")!;
+    const rect = { left: 0, top: 0, width: 500, height: 800, right: 500, bottom: 800 } as DOMRect;
+    host.getBoundingClientRect = board.getBoundingClientRect = canvas.getBoundingClientRect = () => rect;
+    canvas.style.setProperty("visibility", "visible", "important");
+    const copy = vi.fn();
+    const context = vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({ drawImage: copy } as unknown as CanvasRenderingContext2D);
+    try {
+      act(() => host.querySelector("button")!.dispatchEvent(pointer("pointerdown", 250, 100)));
+      expect(copy).toHaveBeenCalledWith(canvas, 0, 0);
+      expect(board.querySelector(".lc-sash-snapshot")).not.toBeNull();
+      expect(canvas.style.visibility).toBe("hidden");
+      if (end === "unmount") act(() => root.unmount());
+      else act(() => window.dispatchEvent(pointer(end, 300, 100)));
+      expect(board.querySelector(".lc-sash-snapshot")).toBeNull();
+      expect(canvas.style.visibility).toBe("visible");
+      expect(canvas.style.getPropertyPriority("visibility")).toBe("important");
+    } finally {
+      if (end !== "unmount") act(() => root.unmount());
+      context.mockRestore();
+      host.remove();
+    }
+  });
+
   it("holds board layout fixed while dragging and restores it on settle", async () => {
     const host = document.createElement("main");
     host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800 }) as DOMRect;

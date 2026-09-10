@@ -1048,6 +1048,8 @@ export interface BoardProps {
   interactive?: boolean;
   /** Workspace load overlay is still up; first ink paint is owned by primeInkSnap. */
   preparing?: boolean;
+  /** Keep the unfocused split pane's bitmap still until focus or sash settle. */
+  splitPaused?: boolean;
   /**
    * Map chrome / pen island. Off on the unfocused half of a split so there is
    * one set of controls; tapping that pane focuses it and restores them.
@@ -1263,6 +1265,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onThemePick,
     interactive = true,
     preparing = false,
+    splitPaused = false,
     chromeEnabled = true,
     chromeHost = null,
     onCodeSlot,
@@ -1300,8 +1303,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   },
   ref,
 ) {
+  const splitPausedRef = useRef(false);
+  splitPausedRef.current = splitPaused && !preparing;
+  const splitFitRef = useRef(false);
   const apiRef = useRef<ExcalidrawApi | null>(null);
-  if (apiRef.current == null) apiRef.current = createBoardScene();
+  if (apiRef.current == null) {
+    const scene = createBoardScene();
+    const updateScene = scene.updateScene;
+    scene.updateScene = (update) => {
+      const state = update.appState;
+      if (splitPausedRef.current && !splitFitRef.current && !update.elements && state &&
+          ["scrollX", "scrollY", "zoom", "width", "height"].some((key) => key in state)) return;
+      updateScene(update);
+    };
+    apiRef.current = scene;
+  }
   const boardRef = useRef<HTMLDivElement | null>(null);
   const mobile = useIsMobile();
   const mobileRef = useRef(mobile);
@@ -1535,6 +1551,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * reload scale this pair — they do not recapture 36px/28px on this screen.
    */
   const linedPitchPairRef = useRef<LinedPitchPair | null>(null);
+  const linedFirstFitZoomRef = useRef<number | null>(null);
+  const linedStoredPitchRef = useRef(false);
   /** Which original paper the ink was written to (or picked as the better fit). */
   const linedRuleRef = useRef<LinedRuling | null>(null);
   /** Active scene pitch — the chosen ruling from the pair. */
@@ -1552,6 +1570,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const linedPaperOnRef = useRef(linedPaperOn);
   linedPaperOnRef.current = linedPaperOn;
   const ensureLinedPair = useCallback((zoom: number) => {
+    if (linedFirstFitZoomRef.current == null) return;
     const pair = ensureLinedPitchPair(linedPitchPairRef.current, zoom);
     if (!pair) return;
     if (!linedRuleRef.current && linedPaperRef.current !== "off") {
@@ -1778,7 +1797,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const lastPageCameraRef = useRef<{ scrollY: number; zoom: number } | null>(null);
   const textPlaceGhostRef = useRef<TextPlaceGhostHandle | null>(null);
   const captureFeedbackRef = useRef<CaptureFeedbackHandle | null>(null);
-  const rasterInkRef = useRef<RasterInkHandle>(null);
+  const rasterInkRef = useRef<RasterInkHandle | null>(null);
+  const inkAttachWaitersRef = useRef<Array<{
+    resolve: (ink: RasterInkHandle) => void;
+    reject: (error: Error) => void;
+  }>>([]);
+  const attachRasterInk = useCallback((ink: RasterInkHandle | null) => {
+    rasterInkRef.current = ink;
+    if (ink) {
+      for (const waiter of inkAttachWaitersRef.current.splice(0)) waiter.resolve(ink);
+    }
+  }, []);
+  useEffect(() => () => {
+    for (const waiter of inkAttachWaitersRef.current.splice(0)) {
+      waiter.reject(new Error("Board unmounted before ink attached"));
+    }
+  }, []);
   const [shapesOpen, setShapesOpen] = useState(false);
   const [captureMenuOpen, setCaptureMenuOpen] = useState(false);
   const [captureRegion, setCaptureRegion] = useState<{
@@ -2879,9 +2913,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           : DRAW_GROWTH_CAP,
     });
     if (Math.abs(curH - nextH) <= 1) return false;
-    // #region agent log
-    fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'Board.tsx:maybeGrowDrawFrame',message:'draw frame grew',data:{curH,nextH,contentBottomRel,scrollY:liveCameraRef.current?.scrollY,live:liveCameraRef.current?.live},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
 
     const nextElements = live.map((el) =>
       el.id === frame!.id ? { ...el, height: nextH } : el,
@@ -3860,6 +3891,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * sample starts riding again from zero.
    */
   const rebaseVisualScroll = useCallback(() => {
+    if (splitPausedRef.current) return;
     if (committingScrollRef.current) return;
     // Arm the burst guard before flush: applying a pending sample can still
     // ask for rebase, and must not re-enter while this settle is in flight.
@@ -3900,6 +3932,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * on the ink — a ghost, then a rubber-band when the translate dropped.
    */
   const commitVisualScroll = useCallback(() => {
+    if (splitPausedRef.current) return;
     // syncCamera intentionally skips while drawing. Dropping the CSS ride in
     // that case moves the bitmap without repainting it at the new camera.
     if (rasterInkRef.current?.isDrawing()) return;
@@ -5648,6 +5681,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   const runZoomAnimFrame = useCallback(() => {
+    if (splitPausedRef.current) {
+      zoomAnimRef.current = null;
+      rasterInkRef.current?.cancelCameraMotion();
+      return;
+    }
     const anim = zoomAnimRef.current;
     if (!anim) return;
     const t = Math.min(1, (performance.now() - anim.start) / ZOOM_ANIM_MS);
@@ -5819,6 +5857,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const runFit = useCallback(
     (regionId?: string | null, mode: FitMode = "both") => {
+      if (splitPausedRef.current && !splitFitRef.current) return;
       const api = apiRef.current;
       if (!api) return;
 
@@ -6198,7 +6237,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           ),
         );
         pageBoundsRef.current = { minX, minY, maxX, maxY };
-        if (drawPage) ensureLinedPair(zoom);
+        if (drawPage) {
+          if (linedFirstFitZoomRef.current == null) {
+            const pair = linedPitchPairRef.current;
+            // Heal only an unsaved, ink-free dummy-zoom capture. Saved pitches
+            // and real fits stay in scene units across split/rotate changes.
+            if (!linedStoredPitchRef.current && !rasterInkRef.current?.hasInk() && pair &&
+                Math.abs(pair.wide - 36) < 0.01 && Math.abs(pair.college - 28) < 0.01) {
+              linedPitchPairRef.current = null;
+            }
+            linedFirstFitZoomRef.current = zoom;
+          }
+          ensureLinedPair(linedFirstFitZoomRef.current);
+        }
 
         const slackX = drawPage ? 0 : Math.max(0, availWidth - boxWidth * zoom);
         const slackY =
@@ -6225,9 +6276,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           nextScrollY = clamped.scrollY;
         }
         if (scrollModeRef.current) lockedScrollXRef.current = nextScrollX;
-        // #region agent log
-        fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'Board.tsx:runFit',message:'camera write',data:{mode,prevY:liveCameraRef.current?.scrollY,nextScrollY,nextScrollX,zoom,viewWidth,viewHeight,minY,maxY,dy:(nextScrollY-(liveCameraRef.current?.scrollY??nextScrollY))},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
-        // #endregion
         api.updateScene({
           appState: {
             zoom: { value: zoom },
@@ -6631,7 +6679,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * A draw page Recentres about the hole centre; documents keepY.
    */
   const applyLiveBoxFit = useCallback(
-    (force: boolean, remeshInk = true): boolean => {
+    (force: boolean, remeshInk = true, keepY = false): boolean => {
+      if (splitPausedRef.current && !splitFitRef.current) return true;
       // Guard before measuring: sash layout already owns this frame.
       if (sashDragActive()) return true;
       if (rasterInkRef.current?.isDrawing()) {
@@ -6677,7 +6726,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * page 1 the moment its partner pane took focus (chrome left this half).
        * Grow the frame if needed; leave zoom/X/Y alone.
        */
-      if (prev.w >= 8 && live.width === prev.w && live.height !== prev.h) {
+      if (!force && prev.w >= 8 && live.width === prev.w && live.height !== prev.h) {
         if (excalidrawViewportNeedsSync(live, api.getAppState() as { width?: number; height?: number })) {
           api.updateScene({
             appState: {
@@ -6719,12 +6768,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         clearPanOffsets();
         paintExcalidrawCanvases(board, live.width, live.height);
       }
-      // #region agent log
-      fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'Board.tsx:applyLiveBoxFit',message:'box fit',data:{force,remeshInk,boxChanged,drawPage,w:live.width,h:live.height,prevW:prev.w,prevH:prev.h,scrollY:liveCameraRef.current?.scrollY,panLive:Boolean(panLive),sashLive},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
-      runFit(null, remeshInk && drawPage ? "recentre" : "keepY");
+      runFit(null, remeshInk && drawPage && !keepY ? "recentre" : "keepY");
       if (remeshInk) {
-        rasterInkRef.current?.syncCamera();
+        rasterInkRef.current?.syncCamera(splitFitRef.current);
         if (drawPage) reportLinedSlot();
       }
       lastFittedBoardBoxRef.current = { w: live.width, h: live.height };
@@ -6738,15 +6784,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   );
 
   const viewportFitSettleRef = useRef(0);
+  const viewportFitKeepYRef = useRef(false);
 
   const scheduleLiveViewportFit = useCallback(() => {
-    if (sashDragActive()) return;
+    if (sashDragActive() || splitPausedRef.current) return;
     window.clearTimeout(viewportFitSettleRef.current);
     viewportFitSettleRef.current = window.setTimeout(() => {
-      // #region agent log
-      fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'Board.tsx:scheduleLiveViewportFit',message:'resize settle remesh',data:{scrollY:liveCameraRef.current?.scrollY,w:lastFittedBoardBoxRef.current.w,h:lastFittedBoardBoxRef.current.h},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
-      applyLiveBoxFit(false, true);
+      const keepY = viewportFitKeepYRef.current;
+      viewportFitKeepYRef.current = false;
+      applyLiveBoxFit(false, true, keepY);
     }, 120);
   }, [applyLiveBoxFit]);
 
@@ -6899,7 +6945,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * One remesh — a timeout ladder Recentred the book five times.
      */
     const onSplitResize = (event: Event) => {
-      if (splitResizePhase(event) === "settle") onOrient();
+      if (splitResizePhase(event) !== "settle") return;
+      splitFitRef.current = true;
+      try { onOrient(); } finally { splitFitRef.current = false; }
     };
     window.addEventListener(SPLIT_RESIZE_EVENT, onSplitResize);
     return () => {
@@ -6913,6 +6961,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       for (const id of late) window.clearTimeout(id);
     };
   }, [applyLiveBoxFit, scheduleLiveViewportFit]);
+
+  const wasSplitPausedRef = useRef(splitPaused);
+  useEffect(() => {
+    const resumed = wasSplitPausedRef.current && !splitPaused;
+    wasSplitPausedRef.current = splitPaused;
+    if (splitPaused) {
+      stopPanInertia();
+      window.clearTimeout(viewportFitSettleRef.current);
+      rasterInkRef.current?.cancelCameraMotion();
+    } else if (resumed) {
+      applyLiveBoxFit(true, true, true);
+    }
+  }, [splitPaused, applyLiveBoxFit, stopPanInertia]);
 
   /** Chrome show/hide — repaint overlays only; preserve zoom and pan. */
   useEffect(() => {
@@ -8036,6 +8097,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     if (inkDeferredFitRef.current) {
       inkDeferredFitRef.current = false;
+      viewportFitKeepYRef.current = true;
       scheduleLiveViewportFit();
     }
   }, [maybeGrowDrawFrame, onChange, scheduleSlotReports, scheduleLiveViewportFit]);
@@ -8629,7 +8691,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (maybeGrowDrawFrame()) scheduleSlotReports();
         syncPageVisibility();
       },
-      primeInkSnap: () => rasterInkRef.current?.primeSnap() ?? Promise.resolve(),
+      primeInkSnap: async () => {
+        const ink = rasterInkRef.current ?? await new Promise<RasterInkHandle>((resolve, reject) => {
+          inkAttachWaitersRef.current.push({ resolve, reject });
+        });
+        await ink.primeSnap();
+      },
       encodedInkShards: () => rasterInkRef.current?.encodedShards() ?? [],
       assembleEncodedInk: () =>
         rasterInkRef.current?.assembleEncoded() ?? encodeInkOps([]),
@@ -8905,6 +8972,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const saved = { ...((appState as Record<string, unknown> | undefined) ?? {}) };
         const lined = linedPitchStateFromAppState(appState, linedPaperRef.current);
         linedPitchPairRef.current = lined.pair;
+        linedStoredPitchRef.current = lined.pair != null;
+        linedFirstFitZoomRef.current = null;
         linedRuleRef.current = lined.rule;
         linedPitchRef.current = activeLinedPitch(lined.pair, lined.rule);
         if (lined.rule && linedPaperRef.current !== "off") {
@@ -9736,9 +9805,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         />
       )}
       <WhiteboardInkLab
-        ref={rasterInkRef}
+        ref={attachRasterInk}
         enabled
         preparing={preparing}
+        splitPaused={splitPaused}
         tool={
           interactive && annotateCode && inkToolActive
             ? activeTool === "eraser"
