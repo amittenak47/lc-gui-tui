@@ -16,10 +16,11 @@ import { WHEEL_OPEN_MS } from "../util/gesture";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { InkPageBook } from "./inkPageCache";
 import { pageIdAtViewport, type PageFrame } from "./inkPageIndex";
+import { InkTileCache, inkOpBounds } from "./inkTiles";
 import { canvasBitmapFromClient } from "./canvasPointer";
 import { commitOverlay, dropRedoStacks, pushCapped, redoOverlay, undoOverlay } from "./inkLab/history";
-import { isInkLabPenOp, overlaySpineFromDrawOp, splitInkOpsForLabReplay } from "./inkLab/replay";
-import { appendErasePathPoint, opsWithErasesBaked } from "./strokeEraser";
+import { isInkLabPenOp } from "./inkLab/replay";
+import { appendErasePathPoint } from "./strokeEraser";
 import { bakeSpineOffThread } from "./inkLab/bakeClient";
 import {
   inkCanvasPixelsChanged,
@@ -38,18 +39,6 @@ import {
   skipReplayOnWheelAbort,
   usePreStrokeStamp,
 } from "./inkLab/liveHost";
-import {
-  canShiftPaintedSnap,
-  shiftSpineDots,
-  snapShiftDevicePx,
-  spineRunsInRects,
-} from "./inkLab/cameraShift";
-import {
-  EraseBakeJob,
-  OverlaySpineJob,
-  REPLAY_POINT_CHUNK,
-  REPLAY_SLICE_MS,
-} from "./inkLab/replayJob";
 import {
   livePresentStride,
   medianMs,
@@ -200,10 +189,6 @@ function fallbackViewport(width: number, height: number): ViewportTransform {
 }
 
 type PaintedLabView = PanCamera & { width: number; height: number; marginY: number };
-
-type PreparedReplay = ReturnType<typeof splitInkOpsForLabReplay> & {
-  revision: number;
-};
 
 function cloneOps(ops: readonly InkOp[]): InkOp[] {
   return ops.map((op) => ({ ...op, points: [...op.points] }));
@@ -365,6 +350,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const hostRef = useRef<HTMLDivElement | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const engineRef = useRef<InkLabEngine | null>(null);
+    const tilesRef = useRef<InkTileCache | null>(null);
+    const tileStageRef = useRef<HTMLCanvasElement | null>(null);
+    const tileReadyRef = useRef<() => void>(() => {});
+    const committedBuildRef = useRef(false);
     const bookRef = useRef(new InkPageBook());
     const overlayRef = useRef<SpineDot[][]>([]);
     const overlayRedoRef = useRef<SpineDot[][]>([]);
@@ -382,7 +371,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const replayRafRef = useRef<number | null>(null);
     const replayGenRef = useRef(0);
     const replayWaitersRef = useRef<Array<() => void>>([]);
-    const preparedReplayRef = useRef<PreparedReplay | null>(null);
     const shiftAnchorRef = useRef<number | null>(null);
     const holdTimerRef = useRef<number | null>(null);
     const pendingHoldRef = useRef<{
@@ -463,6 +451,18 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const paintedViewRef = useRef<PaintedLabView | null>(null);
     const cameraMovingRef = useRef(false);
     const sizeToHostRef = useRef<() => void>(() => {});
+
+    const ensureTiles = useCallback(() => {
+      if (!tilesRef.current) {
+        tilesRef.current = new InkTileCache({
+          onTilesReady: () => tileReadyRef.current(),
+          // The loading doodle owns the UI thread while the nib is down. Tile
+          // preparation resumes on the next frame after the gesture ends.
+          pause: isLoadingDoodleActive,
+        });
+      }
+      return tilesRef.current;
+    }, []);
 
     const readViews = useCallback(() => {
       const canvas = canvasRef.current;
@@ -604,18 +604,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       });
     };
 
-    const prepareReplaySync = (): PreparedReplay => {
-      const revision = bookRef.current.revision();
-      const cached = preparedReplayRef.current;
-      if (cached?.revision === revision) return cached;
-      const split = splitInkOpsForLabReplay(
-        opsWithErasesBaked(bookRef.current.paintOps()),
-      );
-      const prepared = { ...split, revision };
-      preparedReplayRef.current = prepared;
-      return prepared;
-    };
-
     const presentCommitted = useCallback((liveStamp: InkOp | null = null, instant = true): Promise<void> => {
       if (skipCommittedReplay(drawingRef.current, liveStamp)) return Promise.resolve();
       const canvas = canvasRef.current;
@@ -635,18 +623,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           marginY,
         };
       };
-      const stampTail = (extra: InkOp | null) => {
-        const { stamp } = prepareReplaySync();
-        const ops = extra ? [...stamp, extra] : stamp;
-        if (ops.length > 0) {
-          engine.paintOntoSnap((sctx) => {
-            paintInkStamps(sctx, paintView, ops, dpr, clipRef.current, scrollHostLookup());
-          });
-        }
-        engine.paint();
-        recordView();
-      };
-
       if (usePreStrokeStamp(liveStamp, pendingStampPatchRef.current != null)) {
         engine.restoreSnapPatch(pendingStampPatchRef.current!);
         engine.paintOntoSnap((sctx) => {
@@ -666,87 +642,99 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           replayRafRef.current = null;
         }
 
-        const finish = (extra: InkOp | null) => {
-          if (gen !== replayGenRef.current) return;
-          // Drop the ride translate in this present, not before remesh.
-          // Clearing it first showed the old snap at the new camera (ghost)
-          // and remeshing with it still on after paint is a double offset.
-          if (canvas.style.transform) canvas.style.transform = "";
-          stampTail(extra);
-          settleReplayWaitersAfterPaint(gen);
-        };
-
-        const strokes = overlayRef.current;
-        engine.replaySpines([]);
-        if (strokes.length === 0) {
-          finish(liveStamp);
-          return;
-        }
+        committedBuildRef.current = true;
+        const tiles = ensureTiles();
+        const committed = bookRef.current.paintOps();
+        tiles.setClip(clipRef.current);
+        tiles.syncOpsDeferred(committed);
 
         /*
          * Camera rebase must land in one present. Slicing across rAFs is how a
          * flick looked like the page reloading — each slice cleared and redrew
          * more spines — and it is only needed when opening a dense book.
          */
-        if (instant) {
-          engine.replaySpines(strokes);
-          finish(liveStamp);
-          return;
-        }
-
-        let strokeIndex = 0;
-        let pointIndex = 0;
         const step = () => {
           if (gen !== replayGenRef.current) return;
+          replayRafRef.current = null;
           if (isLoadingDoodleActive()) {
             replayRafRef.current = requestAnimationFrame(step);
             return;
           }
-          const started = performance.now();
-          let didWork = false;
-          while (strokeIndex < strokes.length) {
-            if (didWork && performance.now() - started >= REPLAY_SLICE_MS) break;
-            const stroke = strokes[strokeIndex]!;
-            if (stroke.length === 0 || pointIndex >= stroke.length) {
-              strokeIndex += 1;
-              pointIndex = 0;
-              continue;
-            }
-            didWork = true;
-            const end = Math.min(stroke.length, pointIndex + REPLAY_POINT_CHUNK);
-            const start = pointIndex === 0 ? 0 : pointIndex - 1;
-            engine.appendSpines([stroke.slice(start, end)]);
-            pointIndex = end;
+
+          let stage = tileStageRef.current;
+          if (!stage) {
+            stage = document.createElement("canvas");
+            tileStageRef.current = stage;
           }
-          if (strokeIndex < strokes.length) {
-            replayRafRef.current = requestAnimationFrame(step);
+          if (stage.width !== canvas.width) stage.width = canvas.width;
+          if (stage.height !== canvas.height) stage.height = canvas.height;
+          const sctx = stage.getContext("2d");
+          if (!sctx) {
+            committedBuildRef.current = false;
+            settleReplayWaiters();
             return;
           }
-          replayRafRef.current = null;
-          finish(liveStamp);
+
+          sctx.setTransform(1, 0, 0, 1, 0, 0);
+          sctx.clearRect(0, 0, stage.width, stage.height);
+          tiles.draw(sctx, paintView, dpr);
+          if (!tiles.settled) return;
+
+          const hosts = scrollHostLookup();
+          if (hosts.size > 0 || committed.some((op) => isHostBoundOp(op))) {
+            setInkSceneTransform(sctx, paintView, dpr);
+            const box = clipRef.current;
+            if (box) {
+              sctx.save();
+              sctx.beginPath();
+              sctx.rect(box.minX, box.minY, box.maxX - box.minX, box.maxY - box.minY);
+              sctx.clip();
+            }
+            paintHostBoundOps(
+              sctx,
+              committed,
+              hosts,
+              paintView.zoom * dpr,
+              undefined,
+              paintView.zoom,
+            );
+            if (box) sctx.restore();
+          }
+
+          // Keep the old camera visible while tiles are prepared. Replacing
+          // the snap, dropping the CSS ride, and painting happen in one tick.
+          engine.redrawSnap((snapCtx) => snapCtx.drawImage(stage!, 0, 0));
+          if (liveStamp) {
+            engine.paintOntoSnap((snapCtx) => {
+              paintInkStamps(
+                snapCtx,
+                paintView,
+                [liveStamp],
+                dpr,
+                clipRef.current,
+                scrollHostLookup(),
+              );
+            });
+          }
+          if (canvas.style.transform) canvas.style.transform = "";
+          engine.paint();
+          recordView();
+          // Pixel history is camera-local. New strokes can repopulate these
+          // fast-path stacks; saved strokes stay in the scene tile cache.
+          overlayRef.current = [];
+          overlayRedoRef.current = [];
+          committedBuildRef.current = false;
+          tileReadyRef.current = () => {};
+          settleReplayWaitersAfterPaint(gen);
         };
-        step();
+        tileReadyRef.current = () => {
+          if (gen !== replayGenRef.current || replayRafRef.current != null) return;
+          replayRafRef.current = requestAnimationFrame(step);
+        };
+        if (instant) step();
+        else replayRafRef.current = requestAnimationFrame(step);
       });
-    }, [readViews, scrollHostLookup]);
-
-    const remeshOverlaysFromOps = useCallback((ops: readonly InkOp[]) => {
-      const { paintView, dpr } = readViews();
-      const split = splitInkOpsForLabReplay(ops);
-      preparedReplayRef.current = { ...split, revision: bookRef.current.revision() };
-      const { lab } = split;
-      overlayRef.current = lab.map((op) => overlaySpineFromDrawOp(op, paintView, dpr));
-      const redo: SpineDot[][] = [];
-      for (const entry of bookRef.current.redo) {
-        if (entry.kind === "add" && isInkLabPenOp(entry.op)) {
-          redo.push(overlaySpineFromDrawOp(entry.op, paintView, dpr));
-        }
-      }
-      overlayRedoRef.current = redo;
-    }, [readViews]);
-
-    const remeshOverlaysFromBook = useCallback(() => {
-      remeshOverlaysFromOps(opsWithErasesBaked(bookRef.current.paintOps()));
-    }, [remeshOverlaysFromOps]);
+    }, [ensureTiles, readViews, scrollHostLookup]);
 
     const forgetPixelHistory = useCallback(() => {
       snapUndoRef.current = [];
@@ -765,78 +753,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           });
         }
         if (!keepPixels) forgetPixelHistory();
-        if (instant) {
-          remeshOverlaysFromBook();
-          return presentCommitted(null, true);
-        }
-        /*
-         * Spine mesh used to walk every hot stroke on one tick, then the sliced
-         * replay ran after the loading check. Yield the mesh too so Windows
-         * cannot hang the window while the spinner still says "loading".
-         * Do not empty overlayRef until the new mesh is ready — swapping in []
-         * then restarting remesh is how the tablet went blank and died.
-         */
-        return new Promise((resolve) => {
-          replayWaitersRef.current.push(resolve);
-          const { paintView, dpr } = readViews();
-          const revision = bookRef.current.revision();
-          const bakeJob = new EraseBakeJob(bookRef.current.paintOps());
-          replayGenRef.current += 1;
-          const gen = replayGenRef.current;
-          if (replayRafRef.current != null) {
-            cancelAnimationFrame(replayRafRef.current);
-            replayRafRef.current = null;
-          }
-          let overlay: SpineDot[][] = [];
-          let prepared: PreparedReplay | null = null;
-          let meshJob: OverlaySpineJob | null = null;
-          const afterRemesh = () => {
-            if (gen !== replayGenRef.current) return;
-            if (!prepared || bookRef.current.revision() !== revision) {
-              // The book changed while preparation yielded. Restarting here
-              // would clear the half-built snap; let the owning mutation issue
-              // the replacement replay instead.
-              settleReplayWaiters();
-              return;
-            }
-            preparedReplayRef.current = prepared;
-            overlayRef.current = overlay;
-            const redo: SpineDot[][] = [];
-            for (const entry of bookRef.current.redo) {
-              if (entry.kind === "add" && isInkLabPenOp(entry.op)) {
-                redo.push(overlaySpineFromDrawOp(entry.op, paintView, dpr));
-              }
-            }
-            overlayRedoRef.current = redo;
-            void presentCommitted(null, false);
-          };
-          const remeshStep = () => {
-            if (gen !== replayGenRef.current) return;
-            if (isLoadingDoodleActive()) {
-              replayRafRef.current = requestAnimationFrame(remeshStep);
-              return;
-            }
-            if (!prepared) {
-              if (!bakeJob.step(() => performance.now(), REPLAY_SLICE_MS)) {
-                replayRafRef.current = requestAnimationFrame(remeshStep);
-                return;
-              }
-              const split = splitInkOpsForLabReplay(bakeJob.result());
-              prepared = { ...split, revision };
-              meshJob = new OverlaySpineJob(prepared.lab, paintView, dpr);
-            }
-            if (!meshJob!.step(() => performance.now(), REPLAY_SLICE_MS)) {
-              replayRafRef.current = requestAnimationFrame(remeshStep);
-              return;
-            }
-            overlay = meshJob!.result();
-            replayRafRef.current = null;
-            afterRemesh();
-          };
-          remeshStep();
-        });
+        return presentCommitted(null, instant);
       },
-      [forgetPixelHistory, presentCommitted, readViews, remeshOverlaysFromBook],
+      [forgetPixelHistory, presentCommitted],
     );
 
     const applyPageWindow = useCallback((viewport: ViewportTransform) => {
@@ -850,41 +769,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       const page = pageIdAtViewport(book.frames, top, bottom);
       const windowed = book.setVisiblePage(page);
       const changed = rebin || windowed;
-      if (changed) preparedReplayRef.current = null;
       return changed;
     }, []);
-
-    const presentShiftedCamera = useCallback(
-      (
-        painted: PaintedLabView,
-        next: PaintedLabView,
-        dpr: number,
-      ): Promise<void> | null => {
-        const canvas = canvasRef.current;
-        const engine = engineRef.current;
-        if (!canvas || !engine) return null;
-        const { dx, dy } = snapShiftDevicePx(painted, next, dpr);
-        if (dx === 0 && dy === 0) {
-          paintedViewRef.current = next;
-          if (canvas.style.transform) canvas.style.transform = "";
-          return Promise.resolve();
-        }
-        const rects = engine.shiftSnap(dx, dy);
-        if (!rects) return null;
-        shiftSpineDots(overlayRef.current, dx, dy);
-        shiftSpineDots(overlayRedoRef.current, dx, dy);
-        forgetPixelHistory();
-        if (rects.length > 0) {
-          const runs = overlayRef.current.flatMap((stroke) => spineRunsInRects(stroke, rects));
-          if (runs.length > 0) engine.appendSpines(runs, rects);
-        }
-        if (canvas.style.transform) canvas.style.transform = "";
-        engine.paint();
-        paintedViewRef.current = next;
-        return Promise.resolve();
-      },
-      [forgetPixelHistory],
-    );
 
     const presentIfCameraMoved = useCallback((cameraSettle = false): Promise<void> => {
       if (drawingRef.current) return Promise.resolve();
@@ -895,7 +781,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       // owner calls primeSnap once layout is final; replaying here would turn
       // each fit into a full dense-page remesh before the spinner can paint.
       if (preparingRef.current) return Promise.resolve();
-      const { view, marginY, dpr } = readViews();
+      const { view, marginY } = readViews();
       const windowed = applyPageWindow(view);
       const next = {
         scrollX: view.scrollX,
@@ -923,18 +809,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         }
         return Promise.resolve();
       }
-      // Pan: slide the existing snap. Remeshing Exam 1 on settle is the
-      // Close App / Wait after write-then-scroll. Zoom / hydrate still remesh.
-      if (
-        canShiftPaintedSnap(paintedViewRef.current, next) &&
-        !windowed &&
-        replayRafRef.current == null
-      ) {
-        const shifted = presentShiftedCamera(paintedViewRef.current, next, dpr);
-        if (shifted) return shifted;
-      }
+      // Pan and zoom both compose a new frame from cached scene bitmaps. The
+      // current camera keeps riding until that complete frame is swapped in.
       return rebuildAndReplay(false, instantReplayOnCameraRebase());
-    }, [applyPageWindow, presentShiftedCamera, readViews, rebuildAndReplay]);
+    }, [applyPageWindow, readViews, rebuildAndReplay]);
 
     useEffect(() => {
       const { view } = readViews();
@@ -972,7 +850,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             cancelAnimationFrame(replayRafRef.current);
             replayRafRef.current = null;
           }
+          committedBuildRef.current = false;
+          tileReadyRef.current = () => {};
           bookRef.current.clear();
+          ensureTiles().setOps([]);
           overlayRef.current = [];
           overlayRedoRef.current = [];
           forgetPixelHistory();
@@ -985,11 +866,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (drawingRef.current) return false;
           const entry = bookRef.current.undoOnce();
           if (!entry) return false;
+          ensureTiles().syncOpsDeferred(bookRef.current.paintOps());
           replayGenRef.current += 1;
           if (replayRafRef.current != null) {
             cancelAnimationFrame(replayRafRef.current);
             replayRafRef.current = null;
           }
+          committedBuildRef.current = false;
+          tileReadyRef.current = () => {};
           const engine = engineRef.current;
           const pixel = snapUndoRef.current.pop();
           if (pixel !== undefined) snapRedoRef.current.push(pixel);
@@ -1007,7 +891,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             onChangeRef.current?.();
             return true;
           }
-          remeshOverlaysFromBook();
           presentCommitted(null, instantReplayOnUndo());
           onChangeRef.current?.();
           return true;
@@ -1016,11 +899,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (drawingRef.current) return false;
           const entry = bookRef.current.redoOnce();
           if (!entry) return false;
+          ensureTiles().syncOpsDeferred(bookRef.current.paintOps());
           replayGenRef.current += 1;
           if (replayRafRef.current != null) {
             cancelAnimationFrame(replayRafRef.current);
             replayRafRef.current = null;
           }
+          committedBuildRef.current = false;
+          tileReadyRef.current = () => {};
           const engine = engineRef.current;
           const pixel = snapRedoRef.current.pop();
           const hadPixel = pixel !== undefined;
@@ -1047,7 +933,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             onChangeRef.current?.();
             return true;
           }
-          remeshOverlaysFromBook();
           presentCommitted(null, instantReplayOnUndo());
           onChangeRef.current?.();
           return true;
@@ -1116,6 +1001,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         setCameraMoving(moving) {
           const wasMoving = cameraMovingRef.current;
           cameraMovingRef.current = moving;
+          ensureTiles().setMoving(moving);
           if (moving) return;
           // Board owns the pan translate. Clearing it here remeshed at the live
           // camera while the canvas was still riding, which is the ghost, and
@@ -1138,9 +1024,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             cancelAnimationFrame(replayRafRef.current);
             replayRafRef.current = null;
           }
+          committedBuildRef.current = false;
+          tileReadyRef.current = () => {};
           settleReplayWaiters();
-          preparedReplayRef.current = null;
           bookRef.current.replaceAll(cloneOps(ops));
+          ensureTiles().syncOpsDeferred(bookRef.current.paintOps());
           if (drawingRef.current) return;
           if (opts?.paint === false) return;
           rebuildAndReplay(false, false);
@@ -1166,9 +1054,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             cancelAnimationFrame(replayRafRef.current);
             replayRafRef.current = null;
           }
+          committedBuildRef.current = false;
+          tileReadyRef.current = () => {};
           settleReplayWaiters();
-          preparedReplayRef.current = null;
           bookRef.current.ingestEncodedPages(pages);
+          ensureTiles().syncOpsDeferred(bookRef.current.paintOps());
           if (drawingRef.current) return;
           if (opts?.paint === false) return;
           rebuildAndReplay(false, false);
@@ -1188,11 +1078,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       }),
       [
         applyPageWindow,
+        ensureTiles,
         forgetPixelHistory,
         presentCommitted,
         presentIfCameraMoved,
         rebuildAndReplay,
-        remeshOverlaysFromBook,
         stampOpOntoSnap,
       ],
     );
@@ -1523,7 +1413,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
          * overlay spine on the pointer stack — "Whiteboard isn't responding"
          * plus a growing clip square of a half-painted snap.
          */
-        if (replayRafRef.current != null && !instantReplayOnPointerDown()) {
+        if (
+          (replayRafRef.current != null || committedBuildRef.current) &&
+          !instantReplayOnPointerDown()
+        ) {
           return;
         }
         captureStrokeHost(event.clientX, event.clientY);
@@ -1696,7 +1589,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             );
             op.points = trimHighlightLiftHook(op.points, highlighterChiselWidth(op.baseWidth));
             if (op.points.length > 0) {
-              bookRef.current.commit(op);
+              const committed = bookRef.current.commit(op);
+              ensureTiles().deferOp(committed);
               dropRedoStacks(overlayRedoRef.current, snapRedoRef.current);
               const patch = pendingStampPatchRef.current;
               pendingStampPatchRef.current = null;
@@ -1744,11 +1638,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             if (!partialEraseRef.current) {
               const kept = bookRef.current.strokeErase(op);
               if (kept) {
+                ensureTiles().syncOpsDeferred(kept);
                 rememberCommitPatch(null);
                 // The live eraser already changed the authoritative snap.
                 // Refresh the camera-independent overlay cache, but do not
                 // clear and replay the whole notebook after every rub.
-                remeshOverlaysFromOps(opsWithErasesBaked(kept));
+                overlayRef.current = [];
+                overlayRedoRef.current = [];
                 engine.paint();
                 onChangeRef.current?.();
               } else if (patch) {
@@ -1760,8 +1656,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             } else {
               const kept = bookRef.current.partialErase(op);
               if (kept) {
+                ensureTiles().syncOpsDeferred(kept);
                 rememberCommitPatch(null);
-                remeshOverlaysFromOps(kept);
+                overlayRef.current = [];
+                overlayRedoRef.current = [];
                 engine.paint();
                 onChangeRef.current?.();
               } else if (patch) {
@@ -1827,7 +1725,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             strokeHost,
           );
           const committed = bookRef.current.commit(op) as InkDrawOp;
-          preparedReplayRef.current = null;
+          ensureTiles().deferOp(committed);
           if (isInkLabPenOp(op)) {
             const overlayIndex = overlayRef.current.length;
             const previewSpine = baked.points.map((d) => ({ ...d }));
@@ -1855,8 +1753,20 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
                   pressureSensitive,
                   speedFade,
                 );
+                const previewBounds = inkOpBounds(committed);
                 committed.points = finalOp.points;
-                preparedReplayRef.current = null;
+                const finalBounds = inkOpBounds(committed);
+                // The preview pixels stay visible; the next camera paint must
+                // rebuild affected tiles from the final off-thread curve.
+                tilesRef.current?.invalidateBounds(
+                  {
+                    minX: Math.min(previewBounds.minX, finalBounds.minX),
+                    minY: Math.min(previewBounds.minY, finalBounds.minY),
+                    maxX: Math.max(previewBounds.maxX, finalBounds.maxX),
+                    maxY: Math.max(previewBounds.maxY, finalBounds.maxY),
+                  },
+                  committed,
+                );
                 // Only replace the cached overlay when nothing else has
                 // changed it. The visible snap already contains the curved
                 // live preview, so no full-page remesh is needed here.
@@ -1907,10 +1817,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
         if (replayRafRef.current != null) cancelAnimationFrame(replayRafRef.current);
         replayGenRef.current += 1;
+        committedBuildRef.current = false;
+        tileReadyRef.current = () => {};
         settleReplayWaiters();
         if (holdTimerRef.current != null) window.clearTimeout(holdTimerRef.current);
         engine.destroy();
         engineRef.current = null;
+        tilesRef.current?.dispose();
+        tilesRef.current = null;
       };
     }, [
       captureStrokeHost,
@@ -1918,7 +1832,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       presentCommitted,
       readViews,
       rebuildAndReplay,
-      remeshOverlaysFromOps,
       stampOpOntoSnap,
     ]);
 

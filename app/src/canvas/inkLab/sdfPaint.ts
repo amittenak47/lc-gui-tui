@@ -46,6 +46,90 @@ function destSize(ctx: CanvasRenderingContext2D): { w: number; h: number } {
   };
 }
 
+/** Paint disjoint committed strokes with one upload and one GPU-to-2D blit. */
+export function paintSdfSpines(
+  dest: CanvasRenderingContext2D,
+  strokes: readonly (readonly SpineDot[])[],
+): boolean {
+  if (strokes.length === 0) return true;
+  if (typeof dest.getTransform !== "function") return false;
+
+  let transform: DOMMatrix;
+  try {
+    transform = dest.getTransform();
+  } catch {
+    return false;
+  }
+  if (
+    !transform ||
+    !Number.isFinite(transform.a) ||
+    !Number.isFinite(transform.b) ||
+    !Number.isFinite(transform.c) ||
+    !Number.isFinite(transform.d) ||
+    !Number.isFinite(transform.e) ||
+    !Number.isFinite(transform.f)
+  ) {
+    return false;
+  }
+
+  const mapped: SpineDot[][] = [];
+  const box = emptyAabb();
+  let maxInstances = 0;
+  for (const stroke of strokes) {
+    if (stroke.length === 0) continue;
+    const next = stroke.map((d) => mapDot(transform, d));
+    for (const dot of next) expandAabb(box, dot);
+    mapped.push(next);
+    maxInstances += Math.max(1, next.length - 1);
+  }
+  if (!Number.isFinite(box.minX) || maxInstances < 1) return true;
+
+  const { w: destW, h: destH } = destSize(dest);
+  const pad = 4;
+  const x0 = Math.max(0, Math.floor(box.minX) - pad);
+  const y0 = Math.max(0, Math.floor(box.minY) - pad);
+  const x1 = Math.min(destW, Math.ceil(box.maxX) + pad);
+  const y1 = Math.min(destH, Math.ceil(box.maxY) + pad);
+  const w = x1 - x0;
+  const h = y1 - y0;
+  if (w < 1 || h < 1) return true;
+
+  if (pooled === undefined) pooled = tryCreateSdfRenderer(w, h, peer);
+  if (!pooled) {
+    pooled = null;
+    return false;
+  }
+
+  pooled.resize(w, h);
+  pooled.clear();
+  const inst = new Float32Array(maxInstances * INSTANCE_FLOATS);
+  let segs = 0;
+  const shift = (d: SpineDot): SpineDot => ({ ...d, x: d.x - x0, y: d.y - y0 });
+  for (const stroke of mapped) {
+    if (stroke.length === 1) {
+      const a = shift(stroke[0]!);
+      writeInstance(inst, segs, a, a, a.rgb ?? INK_RGB, a.rgb ?? INK_RGB);
+      segs += 1;
+      continue;
+    }
+    for (let i = 1; i < stroke.length; i += 1) {
+      const a = shift(stroke[i - 1]!);
+      const b = shift(stroke[i]!);
+      writeInstance(inst, segs, a, b, a.rgb ?? INK_RGB, b.rgb ?? INK_RGB);
+      segs += 1;
+    }
+  }
+  if (segs < 1) return true;
+
+  pooled.upload(inst, segs);
+  pooled.draw({ minX: 0, minY: 0, maxX: w, maxY: h });
+  dest.save();
+  dest.setTransform(1, 0, 0, 1, 0, 0);
+  dest.drawImage(pooled.canvas, x0, y0);
+  dest.restore();
+  return true;
+}
+
 /**
  * True when this dest was painted (including nothing visible).
  * False when WebGL is unavailable — caller should use the canvas2d strip.
@@ -62,6 +146,17 @@ export function paintSdfSpine(
   try {
     transform = dest.getTransform();
   } catch {
+    return false;
+  }
+  if (
+    !transform ||
+    !Number.isFinite(transform.a) ||
+    !Number.isFinite(transform.b) ||
+    !Number.isFinite(transform.c) ||
+    !Number.isFinite(transform.d) ||
+    !Number.isFinite(transform.e) ||
+    !Number.isFinite(transform.f)
+  ) {
     return false;
   }
 

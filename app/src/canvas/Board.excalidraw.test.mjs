@@ -22,14 +22,14 @@ describe("Board", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
     const present = src.slice(
       src.indexOf("const presentIfCameraMoved = useCallback"),
-      src.indexOf("[applyPageWindow, presentShiftedCamera, readViews, rebuildAndReplay]"),
+      src.indexOf("[applyPageWindow, readViews, rebuildAndReplay]"),
     );
     expect(present).toMatch(/canvasRef\.current\?\.style\.transform/);
     expect(src).toMatch(/if \(canvasRef\.current\?\.style\.transform\) return/);
     expect(present).toMatch(/instantReplayOnPageWindow\(\)/);
     expect(present).toMatch(/instantReplayOnFirstPresent\(\)/);
-    expect(present).toMatch(/canShiftPaintedSnap/);
-    expect(present).toMatch(/presentShiftedCamera/);
+    expect(present).toMatch(/cached scene bitmaps/);
+    expect(present).not.toMatch(/shiftSnap/);
     expect(present).toMatch(/instantReplayOnCameraRebase\(\)/);
     expect(present).not.toMatch(/engineRef\.current\?\.paint\(\)/);
   });
@@ -272,7 +272,12 @@ describe("WhiteboardInkLab", () => {
     expect(report).toMatch(/if \(live && !flushHud\) return/);
     expect(src).toMatch(/primeSnap\(\)/);
     expect(src).toMatch(/replayRafRef\.current != null/);
-    expect(src).toMatch(/new EraseBakeJob/);
+    expect(src).toMatch(/new InkTileCache/);
+    expect(src).toMatch(/tiles\.draw/);
+    expect(src).toMatch(/engine\.redrawSnap/);
+    expect(src).not.toMatch(/new EraseBakeJob/);
+    expect(src).not.toMatch(/engine\.replaySpines/);
+    expect(src).not.toMatch(/engine\.shiftSnap/);
     expect(src).toMatch(/engine\.liftRaw/);
     expect(src).toMatch(/bakeSpineOffThread/);
     expect(src).toMatch(/if \(drawingRef\.current\) return/);
@@ -358,9 +363,10 @@ describe("Workspace pane switch", () => {
     expect(src).not.toMatch(/requestAnimationFrame\(loop\)/);
   });
 
-  it("pauses sliced restore work while the loading doodle owns the pen", () => {
+  it("pauses cached restore work while the loading doodle owns the pen", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
-    expect(src.match(/if \(isLoadingDoodleActive\(\)\)/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(src).toMatch(/pause: isLoadingDoodleActive/);
+    expect(src).toMatch(/if \(isLoadingDoodleActive\(\)\)/);
   });
 
   it("stores undo pixels with canvas copies instead of synchronous GPU readback", () => {
