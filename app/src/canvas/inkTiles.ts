@@ -34,11 +34,14 @@ import {
   isHostBoundOp,
   paintHostBoundOps,
   setInkSceneTransform,
+  type InkDrawOp,
   type InkOp,
   type SceneBounds,
   type ScrollHostLookup,
   type ViewportTransform,
 } from "./rasterInk";
+import { isInkLabPenOp, labSpineFromDrawOp } from "./inkLab/replay";
+import { paintSdfSpines } from "./inkLab/sdfPaint";
 
 /** Tile edge in device pixels. */
 export const TILE_PX = 384;
@@ -287,6 +290,8 @@ export interface InkTileCacheOptions {
   /** Injectable for tests. */
   schedule?: (callback: () => void) => number;
   cancel?: (handle: number) => void;
+  /** True while foreground ink owns the frame; deferred tile work must yield. */
+  pause?: () => boolean;
 }
 
 interface PendingTile {
@@ -297,6 +302,7 @@ interface PendingTile {
 
 export class InkTileCache {
   private ops: InkOp[] = [];
+  private opBounds = new WeakMap<InkOp, SceneBounds>();
   private readonly tiles = new Map<string, Tile>();
   private readonly tilePx: number;
   private readonly onTilesReady?: () => void;
@@ -304,6 +310,7 @@ export class InkTileCache {
   private readonly now: () => number;
   private readonly schedule: (callback: () => void) => number;
   private readonly cancel: (handle: number) => void;
+  private readonly pause: () => boolean;
 
   private clip: SceneBounds | null = null;
   private drawCount = 0;
@@ -344,6 +351,15 @@ export class InkTileCache {
     this.schedule =
       options.schedule ?? ((callback) => requestAnimationFrame(callback));
     this.cancel = options.cancel ?? ((handle) => cancelAnimationFrame(handle));
+    this.pause = options.pause ?? (() => false);
+  }
+
+  private boundsOf(op: InkOp): SceneBounds {
+    const cached = this.opBounds.get(op);
+    if (cached) return cached;
+    const bounds = inkOpBounds(op);
+    this.opBounds.set(op, bounds);
+    return bounds;
   }
 
   /**
@@ -418,7 +434,7 @@ export class InkTileCache {
     // pixels that must come off, and the ones that must go on.
     let dirty: SceneBounds | null = null;
     const widen = (op: InkOp) => {
-      const bounds = inkOpBounds(op);
+      const bounds = this.boundsOf(op);
       dirty = dirty ? unionBounds(dirty, bounds) : bounds;
     };
     for (let i = shared; i < prev.length; i += 1) widen(prev[i]);
@@ -451,7 +467,7 @@ export class InkTileCache {
   appendOp(op: InkOp): void {
     this.ops.push(op);
     if (isHostBoundOp(op)) return;
-    const bounds = inkOpBounds(op);
+    const bounds = this.boundsOf(op);
     /*
      * Every tile below repaints the same op, and deriving that op's ribbon is
      * the expensive half of the work: styles, coalescing, densifying, pooling,
@@ -476,6 +492,105 @@ export class InkTileCache {
   }
 
   /** Composite one op onto a tile that is already rasterised. */
+  private boundedDrawRuns(op: InkDrawOp, bounds: SceneBounds): InkDrawOp[] {
+    const points = op.points;
+    if (points.length <= 256) return [op];
+    const runs: InkDrawOp[] = [];
+    let runStart = -1;
+    const flush = (end: number) => {
+      if (runStart < 0) return;
+      const from = Math.max(0, runStart - 1);
+      const to = Math.min(points.length, end + 1);
+      runs.push({ ...op, points: points.slice(from, to) });
+      runStart = -1;
+    };
+    for (let i = 1; i < points.length; i += 1) {
+      const a = points[i - 1]!;
+      const b = points[i]!;
+      const reach = Math.max(
+        2,
+        op.baseWidth * (op.highlight ? HIGHLIGHT_WIDTH_SCALE : 1),
+        a.radius ?? 0,
+        b.radius ?? 0,
+      );
+      const hits =
+        Math.max(a.x, b.x) + reach >= bounds.minX &&
+        Math.min(a.x, b.x) - reach <= bounds.maxX &&
+        Math.max(a.y, b.y) + reach >= bounds.minY &&
+        Math.min(a.y, b.y) - reach <= bounds.maxY;
+      if (hits) {
+        if (runStart < 0) runStart = i - 1;
+      } else {
+        flush(i);
+      }
+    }
+    flush(points.length);
+    return runs;
+  }
+
+  /**
+   * Synchronise history without raster work or a geometry walk.
+   *
+   * Whiteboard mutations already changed the visible WebGL snap. Their cache
+   * bookkeeping must stay off pointer-up / eraser-confirm; missing tiles are
+   * rebuilt later by the atomic camera preparation.
+   */
+  syncOpsDeferred(ops: readonly InkOp[]): void {
+    if (
+      this.ops.length === ops.length &&
+      this.ops.every((op, index) => op === ops[index])
+    ) {
+      return;
+    }
+    this.ops = [...ops];
+    this.invalidate();
+  }
+
+  /**
+   * Record a committed op without raster work on the pointer-up stack.
+   * The live WebGL host already contains those pixels; touched cache tiles are
+   * rebuilt later, before the next atomic camera presentation.
+   */
+  deferOp(op: InkOp): void {
+    this.ops.push(op);
+    if (isHostBoundOp(op) || this.tiles.size === 0) return;
+    const bounds = this.boundsOf(op);
+    for (const [key, tile] of [...this.tiles]) {
+      const box = this.tileBounds(tile.level, tile.tx, tile.ty);
+      if (boundsOverlap(bounds, box)) this.tiles.delete(key);
+    }
+  }
+
+  private paintBoundedOp(
+    ctx: CanvasRenderingContext2D,
+    op: InkOp,
+    bounds: SceneBounds,
+    scale: number,
+  ): void {
+    const points = op.points;
+    // Short marks are cheaper to submit whole. Long page-covering scribbles
+    // must not allocate/upload their entire WebGL spine once per visible tile.
+    if (points.length <= 256) {
+      applyInkOp(ctx, op, scale);
+      return;
+    }
+
+    if (op.kind === "erase") {
+      const r = Math.max(0, op.radius);
+      const local = points.filter(
+        (p) =>
+          p.x + r >= bounds.minX &&
+          p.x - r <= bounds.maxX &&
+          p.y + r >= bounds.minY &&
+          p.y - r <= bounds.maxY,
+      );
+      if (local.length > 0) applyInkOp(ctx, { ...op, points: local }, scale);
+      return;
+    }
+
+    for (const run of this.boundedDrawRuns(op, bounds)) applyInkOp(ctx, run, scale);
+  }
+
   private paintOpIntoTile(tile: Tile, op: InkOp, bounds: SceneBounds): void {
     const ctx = tile.canvas.getContext("2d");
     if (!ctx) {
@@ -499,7 +614,7 @@ export class InkTileCache {
       );
       ctx.clip();
     }
-    applyInkOp(ctx, op, scale);
+    this.paintBoundedOp(ctx, op, this.paddedTileBounds(bounds, scale), scale);
     if (this.clip) ctx.restore();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
@@ -521,10 +636,21 @@ export class InkTileCache {
 
   invalidate(): void {
     this.tiles.clear();
+    this.opBounds = new WeakMap<InkOp, SceneBounds>();
     this.pending = [];
     if (this.idleHandle) {
       this.cancel(this.idleHandle);
       this.idleHandle = 0;
+    }
+  }
+
+  /** Drop only cached pixels touched by changed stroke geometry. */
+  invalidateBounds(bounds: SceneBounds, op?: InkOp): void {
+    if (op) this.opBounds.delete(op);
+    for (const [key, tile] of [...this.tiles]) {
+      const tileBounds = this.tileBounds(tile.level, tile.tx, tile.ty);
+      const padded = this.paddedTileBounds(tileBounds, levelScale(tile.level));
+      if (boundsOverlap(bounds, padded)) this.tiles.delete(key);
     }
   }
 
@@ -623,13 +749,29 @@ export class InkTileCache {
         );
         ctx.clip();
       }
-      // Chronological, so a stroke drawn after an erase survives it. Ops that
-      // miss the tile are skipped: an erase outside it cannot reach in.
+      // Chronological, so a stroke drawn after an erase survives it. Adjacent
+      // WebGL pen ops share one upload/blit; erases and highlighters flush the
+      // batch to preserve compositing order.
+      let labRuns: InkDrawOp[] = [];
+      const flushLab = () => {
+        if (labRuns.length === 0) return;
+        const spines = labRuns.map(labSpineFromDrawOp);
+        if (!paintSdfSpines(ctx, spines)) {
+          for (const run of labRuns) applyInkOp(ctx, run, scale);
+        }
+        labRuns = [];
+      };
       for (const op of this.ops) {
         if (isHostBoundOp(op)) continue;
-        if (!boundsOverlap(inkOpBounds(op), this.paddedTileBounds(bounds, scale))) continue;
-        applyInkOp(ctx, op, scale);
+        if (!boundsOverlap(this.boundsOf(op), this.paddedTileBounds(bounds, scale))) continue;
+        if (isInkLabPenOp(op)) {
+          labRuns.push(...this.boundedDrawRuns(op, this.paddedTileBounds(bounds, scale)));
+          continue;
+        }
+        flushLab();
+        this.paintBoundedOp(ctx, op, this.paddedTileBounds(bounds, scale), scale);
       }
+      flushLab();
       if (this.clip) ctx.restore();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
@@ -650,6 +792,10 @@ export class InkTileCache {
   private runPending(): void {
     this.idleHandle = 0;
     if (this.pending.length === 0) return;
+    if (this.pause()) {
+      this.idleHandle = this.schedule(() => this.runPending());
+      return;
+    }
     // "Idle" is a lie while a gesture is running — this pass shares the frame
     // with it. Keep filling ground in, but a sliver at a time.
     const deadline =
@@ -713,8 +859,9 @@ export class InkTileCache {
     const toDeviceX = (sceneX: number) => (sceneX + viewport.scrollX) * pixelScale;
     const toDeviceY = (sceneY: number) => (sceneY + viewport.scrollY) * pixelScale;
 
-    const deadline =
-      this.now() + (this.moving ? MOVING_BUDGET_MS : DRAW_BUDGET_MS);
+    const deadline = this.pause()
+      ? this.now()
+      : this.now() + (this.moving ? MOVING_BUDGET_MS : DRAW_BUDGET_MS);
     const missed: PendingTile[] = [];
     // Worked out on the first miss, if there is one, and reused for the rest.
     let fallbacks: number[] | null = null;

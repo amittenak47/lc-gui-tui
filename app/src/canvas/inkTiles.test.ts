@@ -577,6 +577,37 @@ describe("InkTileCache", () => {
     expect(canvases.created.length).toBeGreaterThan(madeInDraw);
   });
 
+  it("does no tile work while a loading doodle owns the frame", () => {
+    let paused = true;
+    const { cache, canvases, scheduled } = makeCache({ pause: () => paused });
+    cache.setOps([draw([0, 0], [700, 500])]);
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+    expect(cache.settled).toBe(false);
+    expect(canvases.created).toHaveLength(0);
+
+    scheduled.shift()?.();
+    expect(canvases.created).toHaveLength(0);
+    paused = false;
+    let guard = 0;
+    while (!cache.settled && guard++ < 20) scheduled.shift()?.();
+    expect(cache.settled).toBe(true);
+    expect(canvases.created.length).toBeGreaterThan(0);
+  });
+
+  it("records pointer-up ink without painting cached tiles synchronously", () => {
+    const { cache, canvases } = makeCache();
+    const first = draw([0, 0], [40, 40]);
+    cache.setOps([first]);
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+    const before = canvases.created.reduce((n, canvas) => n + canvas.ops.length, 0);
+
+    cache.deferOp(draw([10, 10], [700, 500]));
+    const after = canvases.created.reduce((n, canvas) => n + canvas.ops.length, 0);
+    expect(after).toBe(before);
+  });
+
   it("evicts the least recently seen tiles past its budget", () => {
     const { cache } = makeCache();
     cache.setOps([draw([0, 0], [40000, 40000])]);
