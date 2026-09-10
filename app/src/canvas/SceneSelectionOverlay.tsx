@@ -44,7 +44,7 @@ export interface SceneSelectionOverlayProps {
   getMembers: () => PaintSceneElement[];
   getViewport: () => ViewportTransform | null;
   clientToScene: (clientX: number, clientY: number) => { x: number; y: number };
-  onChange: (next: PaintSceneElement[], commit: boolean) => void;
+  onChange: (next: PaintSceneElement[], commit: boolean, previous?: PaintSceneElement[]) => void;
   onFlip: (axis: "h" | "v") => void;
   onDelete: () => void;
 }
@@ -113,7 +113,7 @@ function buildView(members: PaintSceneElement[], view: ViewportTransform): Overl
     width,
     height,
     angle,
-    cx: aabbNw.left + aabbW / 2,
+    cx: Math.max(104, Math.min(view.width - 104, aabbNw.left + aabbW / 2)),
     dockY: aabbNw.top,
     dockBelow: aabbNw.top + aabbH,
     dockTop: aabbNw.top >= 56,
@@ -193,6 +193,7 @@ export const SceneSelectionOverlay = forwardRef<
     height: number;
   } | null>(null);
   const [spin, setSpin] = useState<number | null>(null);
+  const [keepProportions, setKeepProportions] = useState(false);
   const getMembersRef = useRef(getMembers);
   getMembersRef.current = getMembers;
   const getViewportRef = useRef(getViewport);
@@ -217,7 +218,7 @@ export const SceneSelectionOverlay = forwardRef<
         origin: PaintSceneElement[];
         accumulated: number;
       }
-    | { kind: "point"; index: number }
+    | { kind: "point"; index: number; origin: PaintSceneElement[] }
     | null
   >(null);
 
@@ -273,7 +274,7 @@ export const SceneSelectionOverlay = forwardRef<
   const onPointDown = (index: number) => (event: ReactPointerEvent) => {
     event.stopPropagation();
     event.preventDefault();
-    dragRef.current = { kind: "point", index };
+    dragRef.current = { kind: "point", index, origin: clonePaintElements(getMembersRef.current()) };
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   };
 
@@ -284,10 +285,10 @@ export const SceneSelectionOverlay = forwardRef<
     const scene = sceneFromEvent(event);
     if (drag.kind === "scale") {
       if (drag.origin.length === 1) {
-        onChangeRef.current([scaleElement(drag.origin[0]!, drag.handle, scene.x, scene.y)], false);
+        onChangeRef.current([scaleElement(drag.origin[0]!, drag.handle, scene.x, scene.y, keepProportions || event.shiftKey)], false);
         return;
       }
-      const to = resizeBounds(drag.from, drag.handle, scene.x, scene.y);
+      const to = resizeBounds(drag.from, drag.handle, scene.x, scene.y, keepProportions || event.shiftKey);
       onChangeRef.current(
         drag.origin.map((el) => scaleAbout(el, drag.from, to)),
         false,
@@ -324,10 +325,19 @@ export const SceneSelectionOverlay = forwardRef<
       onChangeRef.current(
         drag.origin.map((el) => rotateAbout(el, drag.cx, drag.cy, live)),
         true,
+        drag.origin,
       );
       return;
     }
-    onChangeRef.current(getMembersRef.current(), true);
+    onChangeRef.current(getMembersRef.current(), true, drag.origin);
+  };
+
+  const onPointerCancel = (event: ReactPointerEvent) => {
+    event.stopPropagation();
+    const drag = dragRef.current;
+    dragRef.current = null;
+    setSpin(null);
+    if (drag) onChangeRef.current(drag.origin, false);
   };
 
   const onMidClick = (after: number) => (event: ReactPointerEvent) => {
@@ -335,7 +345,10 @@ export const SceneSelectionOverlay = forwardRef<
     event.preventDefault();
     const el = getMembersRef.current()[0];
     if (!el) return;
-    onChangeRef.current([insertLinearMid(el, after)], true);
+    const origin = clonePaintElements([el]);
+    dragRef.current = { kind: "point", index: after + 1, origin };
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    onChangeRef.current([insertLinearMid(el, after)], false);
   };
 
   return (
@@ -375,7 +388,7 @@ export const SceneSelectionOverlay = forwardRef<
                 onPointerDown={onScaleDown(handle)}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
-                onPointerCancel={onPointerUp}
+                onPointerCancel={onPointerCancel}
               />
             ))}
           </div>
@@ -392,11 +405,19 @@ export const SceneSelectionOverlay = forwardRef<
                   type="button"
                   className={spin != null ? "lc-scene-select-spinning" : undefined}
                   aria-label="Rotate"
-                  title="Rotate — holds square at 90°"
+                  title="Drag to rotate · Enter to turn 90°"
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    const members = getMembersRef.current();
+                    const bounds = sceneSelectionBounds(members);
+                    if (!bounds) return;
+                    onChangeRef.current(members.map((el) => rotateAbout(el, (bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2, Math.PI / 2)), true);
+                  }}
                   onPointerDown={onRotateDown}
                   onPointerMove={onPointerMove}
                   onPointerUp={onPointerUp}
-                  onPointerCancel={onPointerUp}
+                  onPointerCancel={onPointerCancel}
                 >
                   <MorphBar
                     active={spin != null ? "deg" : "icon"}
@@ -411,6 +432,12 @@ export const SceneSelectionOverlay = forwardRef<
                       <span className="lc-scene-select-angle">{spinLabel(spin ?? 0)}</span>
                     </div>
                   </MorphBar>
+                </button>
+                <button type="button" aria-label="Keep proportions" aria-pressed={keepProportions}
+                  title="Keep proportions when resizing corners (Shift)"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => { event.stopPropagation(); setKeepProportions((value) => !value); }}>
+                  <svg {...iconProps()}><rect x="5" y="8" width="14" height="12" rx="2" /><path d={keepProportions ? "M8 8V6a4 4 0 0 1 8 0v2" : "M8 8V6a4 4 0 0 1 8 0"} /><path d="M12 13v3" /></svg>
                 </button>
                 <button
                   type="button"
@@ -462,7 +489,7 @@ export const SceneSelectionOverlay = forwardRef<
               onPointerDown={onPointDown(pt.index)}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
-              onPointerCancel={onPointerUp}
+              onPointerCancel={onPointerCancel}
             />
           ))}
           {box.mids.map((mid) => (
@@ -474,6 +501,15 @@ export const SceneSelectionOverlay = forwardRef<
               aria-label="Add bend"
               title="Add bend"
               onPointerDown={onMidClick(mid.after)}
+              onClick={(event) => {
+                if (event.detail !== 0) return;
+                event.stopPropagation();
+                const el = getMembersRef.current()[0];
+                if (el) onChangeRef.current([insertLinearMid(el, mid.after)], true);
+              }}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerCancel}
             >
               +
             </button>

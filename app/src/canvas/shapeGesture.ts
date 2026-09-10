@@ -298,8 +298,19 @@ function keepSpan(anchor: number, pointer: number): number {
  * Move the grabbed edges to the pointer. `min` may pass `max` so a corner can
  * travel through the opposite edge and keep going.
  */
-export function resizeBounds(from: SceneBounds, handle: ScaleHandle, sceneX: number, sceneY: number): SceneBounds {
+export function resizeBounds(from: SceneBounds, handle: ScaleHandle, sceneX: number, sceneY: number, preserveAspect = false): SceneBounds {
   let { minX, minY, maxX, maxY } = from;
+  if (preserveAspect && handle.length === 2) {
+    const anchorX = MOVES_MIN_X.has(handle) ? maxX : minX;
+    const anchorY = MOVES_MIN_Y.has(handle) ? maxY : minY;
+    const width = Math.max(MIN_SHAPE_SPAN, maxX - minX);
+    const height = Math.max(MIN_SHAPE_SPAN, maxY - minY);
+    const dx = sceneX - anchorX;
+    const dy = sceneY - anchorY;
+    const scale = Math.max(Math.abs(dx) / width, Math.abs(dy) / height, MIN_SHAPE_SPAN / Math.min(width, height));
+    sceneX = anchorX + (Math.sign(dx) || (MOVES_MIN_X.has(handle) ? -1 : 1)) * width * scale;
+    sceneY = anchorY + (Math.sign(dy) || (MOVES_MIN_Y.has(handle) ? -1 : 1)) * height * scale;
+  }
   if (MOVES_MIN_X.has(handle)) minX = keepSpan(maxX, sceneX);
   if (MOVES_MAX_X.has(handle)) maxX = keepSpan(minX, sceneX);
   if (MOVES_MIN_Y.has(handle)) minY = keepSpan(maxY, sceneY);
@@ -355,17 +366,18 @@ export function resizeElementLocal<T extends PaintSceneElement>(
   handle: ScaleHandle,
   sceneX: number,
   sceneY: number,
+  preserveAspect = false,
 ): T {
   if (element.points && element.points.length >= 2) {
     const from = sceneElementBounds(element);
-    return scaleAbout(element, from, resizeBounds(from, handle, sceneX, sceneY));
+    return scaleAbout(element, from, resizeBounds(from, handle, sceneX, sceneY, preserveAspect));
   }
   const w = element.width ?? 0;
   const h = element.height ?? 0;
   const angle = element.angle ?? 0;
   if (!angle) {
     const from = sceneElementBounds(element);
-    return scaleAbout(element, from, resizeBounds(from, handle, sceneX, sceneY));
+    return scaleAbout(element, from, resizeBounds(from, handle, sceneX, sceneY, preserveAspect));
   }
   const cx = element.x + w / 2;
   const cy = element.y + h / 2;
@@ -375,7 +387,7 @@ export function resizeElementLocal<T extends PaintSceneElement>(
   const dy = sceneY - cy;
   const localX = dx * icos - dy * isin + w / 2;
   const localY = dx * isin + dy * icos + h / 2;
-  const to = resizeBounds({ minX: 0, minY: 0, maxX: w, maxY: h }, handle, localX, localY);
+  const to = resizeBounds({ minX: 0, minY: 0, maxX: w, maxY: h }, handle, localX, localY, preserveAspect);
   const sx = signedRatio(0, w, to.minX, to.maxX);
   const sy = signedRatio(0, h, to.minY, to.maxY);
   let nw = w * sx;
@@ -410,8 +422,9 @@ export function scaleElement<T extends PaintSceneElement>(
   handle: ScaleHandle,
   sceneX: number,
   sceneY: number,
+  preserveAspect = false,
 ): T {
-  return resizeElementLocal(element, handle, sceneX, sceneY);
+  return resizeElementLocal(element, handle, sceneX, sceneY, preserveAspect);
 }
 
 export function setLinearPoint<T extends PaintSceneElement>(
@@ -440,7 +453,7 @@ export function insertLinearMid<T extends PaintSceneElement>(element: T, after: 
   if (!a || !b) return element;
   const mid: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
   points.splice(after + 1, 0, mid);
-  return { ...element, points };
+  return { ...element, points, roundness: { type: 3 } };
 }
 
 export function sceneSelectionBounds(elements: readonly PaintSceneElement[]): SceneBounds | null {

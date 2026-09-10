@@ -148,7 +148,7 @@ export default defineConfig({
     // Cargo locks DLLs under src-tauri/target while compiling; Vite watching
     // them on Windows throws EBUSY and kills beforeDevCommand.
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/.tmp-viz-review/**"],
     },
     proxy: {
       // ColorHunt has no CORS headers; the WebView/browser cannot hit it.

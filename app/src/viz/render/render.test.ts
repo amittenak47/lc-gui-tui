@@ -228,6 +228,18 @@ describe("three-step array animation", () => {
 });
 
 describe("highlighting", () => {
+  it.each(["trie", "unionfind", "calltree", "segtree"] as const)("keeps %s roots below its header", (kind) => {
+    const elements = renderViz(SAMPLES[kind], 0, ORIGIN);
+    const frameLabel = elements.find((el) => el.id?.endsWith("framelabel"))!;
+    const nodes = elements.filter((el) => el.type === "rectangle");
+    expect(nodes.length).toBeGreaterThan(0);
+    expect(Math.min(...nodes.map((el) => el.y))).toBeGreaterThan(frameLabel.y + (frameLabel.fontSize ?? 13));
+  });
+  it("draws union-find pointers toward the parent", () => {
+    const elements = renderViz(SAMPLES.unionfind, 0, ORIGIN);
+    const edge = elements.find((el) => el.type === "arrow")!;
+    expect(edge.points![1][1]).toBeLessThan(0);
+  });
   it("changes the stroke of the highlighted cell only", () => {
     const [frameA, frameB] = [0, 1].map((index) => renderViz(SAMPLES.array, index, ORIGIN));
     const cellOf = (elements: typeof frameA, slot: string) =>

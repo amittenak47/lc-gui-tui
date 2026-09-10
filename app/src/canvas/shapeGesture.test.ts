@@ -19,6 +19,19 @@ import {
 } from "./shapeGesture";
 
 describe("skeletonFromDrag", () => {
+  it("preserves proportions when resizing a rotated box", () => {
+    const original = { type: "rectangle", x: 10, y: 20, width: 100, height: 50, angle: Math.PI / 4 };
+    const resized = scaleElement(original, "se", 240, 180, true);
+    expect(resized.width / resized.height).toBeCloseTo(2);
+    expect(resized.angle).toBe(original.angle);
+  });
+  it("preserves proportions while crossing the opposite corner", () => {
+    const resized = scaleElement({ type: "rectangle", x: 0, y: 0, width: 100, height: 50 }, "se", -200, -40, true);
+    expect(resized.width).toBe(200);
+    expect(resized.height).toBe(100);
+    expect(resized.x).toBe(-200);
+    expect(resized.y).toBe(-100);
+  });
   it("normalises a rectangle so width and height are positive", () => {
     const sk = skeletonFromDrag("rectangle", 40, 40, 10, 20, {
       stroke: "#111",

@@ -1,0 +1,148 @@
+Astra last status prior to usage limit
+Captured: 2026-09-10
+Branch: ai-enhancement
+HEAD at capture: a8fcd64 feat(viz): ease playback and preview shapes
+
+This is the working tree Astra left. Source listed under "Committed in this
+snapshot" is in git. Capture dirs and screenshots stay on disk only (about
+6.5 GB). They are listed here so a later session can find them.
+
+Resume from: undo baselines, pointercancel restore, keep-proportions dock
+toggle, viz tree roots below headers, union-find arrows toward parents.
+
+------------------------------------------------------------------------------
+Committed in this snapshot
+------------------------------------------------------------------------------
+
+Modified:
+  .gitignore
+  app/src/canvas/Board.tsx
+  app/src/canvas/SceneOverlay.tsx
+  app/src/canvas/SceneSelectionOverlay.tsx
+  app/src/canvas/boardScene.test.ts
+  app/src/canvas/boardScene.ts
+  app/src/canvas/paintScene.ts
+  app/src/canvas/shapeGesture.test.ts
+  app/src/canvas/shapeGesture.ts
+  app/src/styles.css
+  app/src/viz/layout.ts
+  app/src/viz/render/calltree.ts
+  app/src/viz/render/render.test.ts
+  app/src/viz/render/segtree.ts
+  app/src/viz/render/unionfind.ts
+  app/vite.config.ts
+
+Untracked source:
+  app/scripts/viz-review.html
+  app/scripts/viz-review.mjs
+  app/scripts/viz-review.tsx
+  app/src/canvas/SceneSelectionOverlay.test.tsx
+  ASTRA_LAST_STATUS.txt
+
+------------------------------------------------------------------------------
+On disk, not in git (Astra capture / review artifacts)
+------------------------------------------------------------------------------
+
+Directories:
+  .codex-video-analysis/          1 files, 0.6 MB
+  .tmp-rec1/                     73 files, 58.8 MB
+  .tmp-rec2/                     22 files, 2.9 MB
+  .tmp-unix/                     (empty of files git would add)
+  app/.tmp-rec-eraser2/           97 files, 2.1 MB
+  app/.tmp-rec-frames/            5 files, 0.5 MB
+  app/tmp-angle-gaps/            43 files, 3.3 MB
+  app/tmp-ask-video/              81 files, 10.2 MB
+  app/tmp-blot-morph/             387 files, 28.1 MB
+  app/tmp-blot-preview/          159 files, 4.0 MB
+  app/tmp-compare-b/             406 files, 94.5 MB
+  app/tmp-erase-sync/             24 files, 3.4 MB
+  app/tmp-fade-frames/            32 files, 3.4 MB
+  app/tmp-flick-frames/           163 files, 100.2 MB
+  app/tmp-fn-195056/              11 files, 4.0 MB
+  app/tmp-hold-gate/              118 files, 1.0 MB
+  app/tmp-host-jump/              29 files, 0.9 MB
+  app/tmp-jagged/                 18 files, 7.8 MB
+  app/tmp-lag-frames/             44 files, 0.9 MB
+  app/tmp-lift-remesh/            57 files, 1.8 MB
+  app/tmp-lift-start/             51 files, 1.5 MB
+  app/tmp-load-scroll/            282 files, 34.7 MB
+  app/tmp-pass-frames/            31 files, 1.9 MB
+  app/tmp-pass-hi/                48 files, 2.4 MB
+  app/tmp-raf-e2/                 97 files, 3.8 MB
+  app/tmp-raf-video/              53 files, 3.6 MB
+  app/tmp-rubber-watch/           22299 files, 5161.8 MB
+  app/tmp-scrcpy-frames/         1510 files, 912.1 MB
+  app/tmp-scrcpy-unique/          130 files, 82.5 MB
+  app/tmp-scroll-freeze/          48 files, 5.0 MB
+  app/tmp-select-review/          33 files, 0.8 MB
+  app/tmp-test-raf/               32 files, 2.0 MB
+  app/tmp-watch-rec/              63 files, 3.8 MB
+  app/tmp-watch-scale/            32 files, 21.7 MB
+  app/tmp-watch-spots/            66 files, 2.8 MB
+  app/tmp-watch-toggle/           310 files, 16.2 MB
+  app/tmp-watch-webgl/            32 files, 2.5 MB
+  app/tmp-watch-webgl2/           69 files, 3.1 MB
+
+Loose files:
+  app/.tmp-pad-shot.png
+  app/.tmp-pad-ui.xml
+  app/frame-003.png
+  app/frame-008.png
+  app/frame-014.png
+  app/frame-020.png
+  app/frame-026.png
+  app/frame-029.png
+  app/tmp-ink-review-001.png through app/tmp-ink-review-074.png
+  app/tmp-pad-exam1.png
+  app/tmp-pad-exam1b.png
+  app/tmp-pad-exam1c.png
+  app/tmp-pad-flick.mp4
+  app/tmp-pad-flick1.png
+  app/tmp-pad-flick2.png
+  app/tmp-pad-home.png
+  app/tmp-pad-idle.png
+  app/tmp-pad-title.png
+  app/tmp-pad-title2.png
+  app/tmp-pad-top.png
+  app/tmp-rec-frame-01.png through app/tmp-rec-frame-15.png
+  app/tmp-scrcpy-flick.mp4
+  app/tmp-v4-01.png through app/tmp-v4-14.png
+
+------------------------------------------------------------------------------
+What the source changes do
+------------------------------------------------------------------------------
+
+Canvas / selection
+  - updateScene accepts historyBaseline. Undo stores that snapshot, not the
+    last live preview, so one undo rewinds a whole drag.
+  - Board move-drag keeps an origin map. pointercancel restores origin
+    without committing. Commit passes origin as historyBaseline.
+  - SceneSelectionOverlay onChange(next, commit, previous). Scale, rotate,
+    and bend pass the pre-gesture members as previous.
+  - Keep-proportions dock toggle (aria-label "Keep proportions") plus Shift.
+    Corner handles scale uniformly in resizeBounds.
+  - Dock X is clamped so rotate/flip/delete stay on screen.
+  - Selection menu buttons are 38px. Pressed lock state uses the hover fill.
+  - New bend points get roundness type 3. paintScene quadratic-curves
+    polylines that have roundness.
+  - pointercancel on overlay restore does not commit.
+  - getCommonBounds includes rotated AABB corners so exports do not clip.
+
+Overlay perf
+  - SceneOverlay skips JSON.stringify when viz element refs are unchanged.
+  - Image cache keys off fileId + dataURL pairs instead of stringify.
+
+Viz
+  - layoutForest takes nodeHeight and places roots at the node centre, so
+    trie / unionfind / calltree / segtree sit below the frame label.
+  - calltree uses one width for every node (max label in the program).
+  - union-find arrows point from member to parent (edge id edge-{to}-{from}).
+  - Tests: roots below header; union-find pointer dy < 0.
+
+Tooling
+  - .gitignore and Vite watch ignore app/.tmp-viz-review/.
+  - app/scripts/viz-review.{mjs,tsx,html} headless Chrome review of viz.
+
+Unfinished / next
+  - Capture dirs above are local evidence, not source.
+  - Do not git-add tmp-rubber-watch or tmp-scrcpy-frames.

@@ -47,11 +47,12 @@ export function renderUnionFind(ctx: RenderContext): Skeleton[] {
   });
   const centres = layoutForest(count, edges, { x: origin.x, y: top }, { node: NODE });
 
-  edges.forEach(([from, to], edgeIndex) => {
+  edges.forEach(([from, to]) => {
     const a = centres[from];
     const b = centres[to];
     if (!a || !b) return;
-    out.push(linkArrow(ctx, `edge-${edgeIndex}`, a, b, NODE));
+    // Parent pointers point from a member to its root, not down a child tree.
+    out.push(linkArrow(ctx, `edge-${to}-${from}`, b, a, NODE));
   });
 
   for (let index = 0; index < count; index++) {

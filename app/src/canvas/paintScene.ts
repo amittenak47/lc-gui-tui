@@ -241,7 +241,16 @@ function paintLinear(ctx: CanvasRenderingContext2D, element: PaintSceneElement):
   applyStroke(ctx, element);
   ctx.beginPath();
   ctx.moveTo(pts[0]![0], pts[0]![1]);
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i]![0], pts[i]![1]);
+  if (element.roundness && pts.length > 2) {
+    for (let i = 1; i < pts.length - 1; i++) {
+      const control = pts[i]!;
+      const next = pts[i + 1]!;
+      const end = i === pts.length - 2 ? next : [(control[0] + next[0]) / 2, (control[1] + next[1]) / 2];
+      ctx.quadraticCurveTo(control[0], control[1], end[0], end[1]);
+    }
+  } else {
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i]![0], pts[i]![1]);
+  }
   ctx.stroke();
   if (element.type === "arrow") {
     const a = pts[pts.length - 2]!;

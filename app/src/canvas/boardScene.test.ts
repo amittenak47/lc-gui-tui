@@ -7,6 +7,17 @@ import {
 } from "./boardScene";
 
 describe("createBoardScene", () => {
+  it("undoes an entire gesture after many preview writes", () => {
+    const initial = [{ id: "shape", x: 0, y: 0, width: 100, height: 50 }];
+    const api = createBoardScene({ elements: initial });
+    for (const width of [120, 140, 180]) api.updateScene({ elements: [{ ...initial[0], width }], captureUpdate: CaptureUpdateAction.NEVER });
+    api.updateScene({ elements: [{ ...initial[0], width: 200 }], captureUpdate: CaptureUpdateAction.IMMEDIATELY, historyBaseline: initial });
+    expect(api.history?.undo()).toBe(true);
+    expect(api.getSceneElements()).toEqual(initial);
+    expect(api.history?.undo()).toBe(false);
+    expect(api.history?.redo()).toBe(true);
+    expect(api.getSceneElements()).toEqual([{ ...initial[0], width: 200 }]);
+  });
   it("stores camera without an Excalidraw canvas", () => {
     const api = createBoardScene();
     api.updateScene({
@@ -72,6 +83,10 @@ describe("createBoardScene", () => {
 });
 
 describe("getCommonBounds", () => {
+  it("includes rotated corners so exports do not clip the shape", () => {
+    const bounds = getCommonBounds([{ x: 20, y: 0, width: 10, height: 40, angle: Math.PI / 2 }]);
+    [5, 15, 45, 25].forEach((value, i) => expect(bounds[i]).toBeCloseTo(value));
+  });
   it("unions element boxes", () => {
     expect(
       getCommonBounds([

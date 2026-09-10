@@ -45,7 +45,7 @@ export function renderSegTree(ctx: RenderContext): Skeleton[] {
   const count = frame.cells.length;
   const levels = count > 0 ? depthOf(count - 1) + 1 : 0;
   const width = Math.max(2 ** Math.max(levels - 1, 0) * (NODE + CELL_GAP), NODE * 4);
-  const originTop = { x: origin.x, y: top };
+  const originTop = { x: origin.x, y: top + NODE / 2 + 18 };
 
   frame.cells.forEach((value, index) => {
     if (!intervalNode(value)) return;
