@@ -11,6 +11,7 @@ import {
   instantReplayOnUndo,
   keepLivePaintPump,
   remeshOnCameraMovingEnd,
+  shiftSnapOnCameraRebase,
   skipCommittedReplay,
   skipReplayOnWheelAbort,
 } from "./inkLab/liveHost";
@@ -75,7 +76,8 @@ describe("WhiteboardInkLab", () => {
     expect(instantReplayOnUndo()).toBe(false);
   });
 
-  it("lands a camera rebase in one present", () => {
+  it("slides pan but keeps a real camera rebase atomic", () => {
+    expect(shiftSnapOnCameraRebase()).toBe(true);
     expect(instantReplayOnCameraRebase()).toBe(true);
   });
 });

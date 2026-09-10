@@ -52,6 +52,11 @@ import {
 import { AGENT_SHEET_LOCK_EVENT, loadAgentSheetLock } from "./util/agentSheetLockPref";
 import { loadTestForwardMode, type TestForwardMode } from "./util/agentPrefs";
 import { installHandednessAttr } from "./util/inkHandedness";
+import {
+  BOOT_DONE_HOLD_MS,
+  BOOT_EXIT_MS,
+  bootOverlayMayFinish,
+} from "./util/workspaceLoad";
 import { installSafeAreaInsets } from "./util/safeArea";
 import { isAndroidDevice } from "./util/androidDevice";
 import { useIsMobile } from "./util/mobile";
@@ -119,11 +124,11 @@ function prefersReducedMotion(): boolean {
 }
 
 function doneHoldMs(): number {
-  return prefersReducedMotion() ? 0 : 420;
+  return prefersReducedMotion() ? 0 : BOOT_DONE_HOLD_MS;
 }
 
 function serverGateExitMs(): number {
-  return prefersReducedMotion() ? 0 : 240;
+  return prefersReducedMotion() ? 0 : BOOT_EXIT_MS;
 }
 
 function waitMs(ms: number): Promise<void> {
@@ -157,6 +162,8 @@ export function App() {
   const [bootPhase, setBootPhase] = useState<"enter" | "show" | "done" | "exit" | "gone">("enter");
   /** The boot overlay is still on screen, so nothing else may open in front of it. */
   const bootOverlayPendingRef = useRef(true);
+  const bootHoldRef = useRef(false);
+  const bootIdleShellRef = useRef(true);
   /** The LLM came back offline while the overlay was still up. Ask once it is gone. */
   const llmGateWantedRef = useRef(false);
 
@@ -309,6 +316,10 @@ export function App() {
    *
    * Overlay is opaque from the first paint (no fade-in). The rAF only advances
    * the phase machine; CSS must not start this overlay at opacity 0.
+   *
+   * The checkmark used to fire on a timer (~1s) while Exam 1 was still
+   * remeshing, then a second spinner, then a white page. Hold until the
+   * workspace reports idle, or until Home is actually sitting there.
    */
   useEffect(() => {
     let cancelled = false;
@@ -317,7 +328,23 @@ export function App() {
       if (cancelled) return;
       setBootPhase((phase) => (phase === "enter" ? "show" : phase));
       void (async () => {
-        await waitMs(doneHoldMs());
+        const started = performance.now();
+        let sawLoad = false;
+        while (!cancelled) {
+          const loading = bootHoldRef.current;
+          if (loading) sawLoad = true;
+          if (
+            bootOverlayMayFinish({
+              elapsedMs: performance.now() - started,
+              loading,
+              sawLoad,
+              idleShell: bootIdleShellRef.current,
+            })
+          ) {
+            break;
+          }
+          await waitMs(32);
+        }
         if (cancelled) return;
         setBootPhase("done");
         await waitMs(doneHoldMs());
@@ -669,6 +696,11 @@ export function App() {
   }, []);
 
   const [shellLoadActive, setShellLoadActive] = useState(false);
+  bootHoldRef.current = chrome.loading || shellLoadActive;
+  {
+    const kind = activeTabOf(tabState)?.kind;
+    bootIdleShellRef.current = kind === "home" || kind === "explore";
+  }
   const userLoadIdsRef = useRef(new Set<string>());
   const markUserLoad = useCallback((id: string) => {
     userLoadIdsRef.current.add(id);

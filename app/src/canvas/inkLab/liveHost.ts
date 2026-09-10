@@ -83,10 +83,16 @@ export function instantReplayOnUndo(): boolean {
 }
 
 /**
- * Camera rebase must land in one present. Slicing it is the ghost / blank
- * page after a flick — each slice clears the snap then paints more spines.
+ * Pan slides the snap and never enters this path. A real zoom/resize rebase is
+ * still one atomic present: slicing it is the blank page / crawling-spines
+ * regression. Camera is a correctness constraint, not a replay budget.
  */
 export function instantReplayOnCameraRebase(): boolean {
+  return true;
+}
+
+/** Pan settle must not remesh. Slide the committed snap; fill the new strip. */
+export function shiftSnapOnCameraRebase(): boolean {
   return true;
 }
 

@@ -22,12 +22,14 @@ describe("Board", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
     const present = src.slice(
       src.indexOf("const presentIfCameraMoved = useCallback"),
-      src.indexOf("[applyPageWindow, readViews, rebuildAndReplay]"),
+      src.indexOf("[applyPageWindow, presentShiftedCamera, readViews, rebuildAndReplay]"),
     );
     expect(present).toMatch(/canvasRef\.current\?\.style\.transform/);
     expect(src).toMatch(/if \(canvasRef\.current\?\.style\.transform\) return/);
     expect(present).toMatch(/instantReplayOnPageWindow\(\)/);
     expect(present).toMatch(/instantReplayOnFirstPresent\(\)/);
+    expect(present).toMatch(/canShiftPaintedSnap/);
+    expect(present).toMatch(/presentShiftedCamera/);
     expect(present).toMatch(/instantReplayOnCameraRebase\(\)/);
     expect(present).not.toMatch(/engineRef\.current\?\.paint\(\)/);
   });
@@ -69,28 +71,25 @@ describe("Board", () => {
     );
   });
 
-  it("drops the pan translate before a settle remesh", () => {
+  it("keeps the pan translate until the settle remesh presents", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     const commit = src.slice(
       src.indexOf("const commitVisualScroll = useCallback"),
       src.indexOf("applyVisualScrollNowRef.current = applyVisualScrollNow"),
     );
-    expect(commit.indexOf("clearPanOffsetsRef.current()")).toBeGreaterThan(-1);
-    expect(commit.indexOf("clearPanOffsetsRef.current()")).toBeLessThan(
-      commit.indexOf("rasterInkRef.current?.syncCamera()"),
+    expect(commit).toMatch(
+      /syncCamera\(\)\)\.then\(\(\) => \{[\s\S]*clearPanOffsetsRef\.current\(\)/,
     );
-    expect(commit).not.toMatch(/landPanOffset\(\(\) => \{[^}]*syncCamera/s);
   });
 
-  it("drops the pan translate before a mid-flick remesh", () => {
+  it("keeps the pan translate until a mid-flick remesh presents", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     const rebase = src.slice(
       src.indexOf("const rebaseVisualScroll = useCallback"),
       src.indexOf("const commitVisualScroll = useCallback"),
     );
-    expect(rebase.indexOf("clearPanOffsetsRef.current()")).toBeGreaterThan(-1);
-    expect(rebase.indexOf("clearPanOffsetsRef.current()")).toBeLessThan(
-      rebase.indexOf("rasterInkRef.current?.syncCamera()"),
+    expect(rebase).toMatch(
+      /syncCamera\(\)\)\.then\(\(\) => \{[\s\S]*clearPanOffsetsRef\.current\(\)/,
     );
   });
 
@@ -262,7 +261,7 @@ describe("WhiteboardInkLab", () => {
       readFileSync(join(here, "inkLab/engine.ts"), "utf8").indexOf("const composite"),
       readFileSync(join(here, "inkLab/engine.ts"), "utf8").indexOf("type LiftState"),
     );
-    expect(composite).not.toMatch(/clipBlitRect|liveClipRect/);
+    expect(composite).toMatch(/clipBlitRect/);
     expect(src).not.toMatch(/Math\.max\(1, painted\.marginY\)/);
     const tick = src.slice(src.indexOf("const onPaintFrame"), src.indexOf("const schedulePaint"));
     expect(tick.indexOf("keepLivePaintPump")).toBeGreaterThan(-1);
@@ -352,8 +351,25 @@ describe("Workspace pane switch", () => {
     const src = readFileSync(join(here, "../components/LoadingDoodle.tsx"), "utf8");
     expect(src).toMatch(/const backing = document\.createElement\("canvas"\)/);
     expect(src).toMatch(/ctx\.drawImage\(backing, 0, 0\)/);
+    expect(src).toMatch(/applyInkOpFrom/);
+    const tail = src.slice(src.indexOf("const paintTail"), src.indexOf("const schedulePaint"));
+    expect(tail).not.toMatch(/smoothInkPoints/);
     expect(src).toMatch(/getCoalescedEvents/);
     expect(src).not.toMatch(/requestAnimationFrame\(loop\)/);
+  });
+
+  it("pauses sliced restore work while the loading doodle owns the pen", () => {
+    const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
+    expect(src.match(/if \(isLoadingDoodleActive\(\)\)/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("stores undo pixels with canvas copies instead of synchronous GPU readback", () => {
+    const src = readFileSync(join(here, "inkLab/engine.ts"), "utf8");
+    const start = src.indexOf("const copySnapPatch");
+    const end = src.indexOf("const restoreSnapPatch", start);
+    const copy = src.slice(start, end);
+    expect(copy).toMatch(/drawImage/);
+    expect(copy).not.toMatch(/getImageData/);
   });
 
   it("does not tear the PDF down when switching to the other pane", () => {
@@ -422,10 +438,10 @@ describe("ink undo after a new stroke", () => {
     expect(redoAt).toBeGreaterThan(undoAt);
     expect(canAt).toBeGreaterThan(redoAt);
     const undo = src.slice(undoAt, redoAt);
-    expect(undo).toMatch(/presentCommitted\(null, true\)/);
+    expect(undo).toMatch(/presentCommitted\(null, instantReplayOnUndo\(\)\)/);
     expect(undo).not.toMatch(/forgetPixelHistory/);
     const redo = src.slice(redoAt, canAt);
-    expect(redo).toMatch(/presentCommitted\(null, true\)/);
+    expect(redo).toMatch(/presentCommitted\(null, instantReplayOnUndo\(\)\)/);
     expect(redo).not.toMatch(/forgetPixelHistory/);
     expect(src).toMatch(/dropRedoStacks/);
     expect(src).toMatch(/instantReplayOnPointerDown/);

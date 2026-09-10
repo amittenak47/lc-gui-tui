@@ -875,6 +875,34 @@ describe("Ink lab live path", () => {
     expect(ink(240, 0, 160, 300)).toBeGreaterThan(10);
     engine.destroy();
   });
+
+  it("shifts the snap by a camera delta instead of remeshing", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    const ink = (x: number, y: number, w: number, h: number) => {
+      const data = canvas.getContext("2d")!.getImageData(x, y, w, h).data;
+      let n = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i]! > 0) n += 1;
+      return n;
+    };
+    engine.down({ x: 40, y: 80, p: 0.6, t: 0 });
+    engine.move([
+      { x: 70, y: 82, p: 0.6, t: 16 },
+      { x: 110, y: 90, p: 0.55, t: 32 },
+    ]);
+    engine.up({ x: 118, y: 96, p: 0.5, t: 48 });
+    engine.paint();
+    expect(ink(0, 0, 160, 300)).toBeGreaterThan(10);
+    const beforeRight = ink(180, 0, 160, 300);
+    const rects = engine.shiftSnap(80, 0);
+    expect(rects).not.toBeNull();
+    expect(rects![0]).toEqual({ x: 0, y: 0, w: 80, h: 300 });
+    engine.paint();
+    expect(ink(0, 0, 60, 300)).toBe(0);
+    expect(ink(180, 0, 160, 300)).toBeGreaterThan(beforeRight);
+    engine.destroy();
+  });
 });
 
 describe("EKF is the live filter", () => {

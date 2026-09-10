@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { emptyAabb } from "./instance";
-import { CLIP_BLIT_PAD, clipBlitRect, SDF_SCISSOR_PAD } from "./clipBlit";
+import { CLIP_BLIT_PAD, clipBlitRect, intersectPixelRects, SDF_SCISSOR_PAD } from "./clipBlit";
 
 describe("clipBlitRect", () => {
   it("returns null for an empty box", () => {
@@ -30,5 +30,14 @@ describe("clipBlitRect", () => {
 
   it("scissors farther than the blit so a cap box cannot land in the snap", () => {
     expect(SDF_SCISSOR_PAD).toBeGreaterThan(CLIP_BLIT_PAD);
+  });
+
+  it("intersects pixel boxes", () => {
+    expect(
+      intersectPixelRects({ x: 0, y: 0, w: 40, h: 20 }, { x: 30, y: 10, w: 20, h: 20 }),
+    ).toEqual({ x: 30, y: 10, w: 10, h: 10 });
+    expect(
+      intersectPixelRects({ x: 0, y: 0, w: 10, h: 10 }, { x: 20, y: 20, w: 5, h: 5 }),
+    ).toBeNull();
   });
 });

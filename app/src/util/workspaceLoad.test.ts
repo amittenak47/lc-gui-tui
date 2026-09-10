@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BOOT_EMPTY_READY_MS,
+  BOOT_MAX_WAIT_MS,
+  BOOT_MIN_SHOW_MS,
+  bootOverlayMayFinish,
   isWorkspaceLoadBusy,
   loadChromeFate,
   mayClearParkedPreparing,
@@ -50,5 +54,70 @@ describe("mayClearParkedPreparing", () => {
   it("holds preparing for a relaunch restore, not only a user open", () => {
     expect(mayClearParkedPreparing(true)).toBe(false);
     expect(mayClearParkedPreparing(false)).toBe(true);
+  });
+});
+
+describe("bootOverlayMayFinish", () => {
+  it("does not finish during the minimum show", () => {
+    expect(
+      bootOverlayMayFinish({
+        elapsedMs: BOOT_MIN_SHOW_MS - 1,
+        loading: false,
+        sawLoad: true,
+        idleShell: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("holds while a workspace is still loading", () => {
+    expect(
+      bootOverlayMayFinish({
+        elapsedMs: 800,
+        loading: true,
+        sawLoad: true,
+        idleShell: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("finishes after a load has actually completed", () => {
+    expect(
+      bootOverlayMayFinish({
+        elapsedMs: BOOT_MIN_SHOW_MS,
+        loading: false,
+        sawLoad: true,
+        idleShell: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("lets an idle Home finish after the empty-ready beat", () => {
+    expect(
+      bootOverlayMayFinish({
+        elapsedMs: BOOT_EMPTY_READY_MS,
+        loading: false,
+        sawLoad: false,
+        idleShell: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat a pending whiteboard tab as idle Home", () => {
+    expect(
+      bootOverlayMayFinish({
+        elapsedMs: BOOT_EMPTY_READY_MS,
+        loading: false,
+        sawLoad: false,
+        idleShell: false,
+      }),
+    ).toBe(false);
+    expect(
+      bootOverlayMayFinish({
+        elapsedMs: BOOT_MAX_WAIT_MS,
+        loading: false,
+        sawLoad: false,
+        idleShell: false,
+      }),
+    ).toBe(true);
   });
 });
