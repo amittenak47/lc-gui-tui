@@ -1276,10 +1276,11 @@ export function App() {
               void renameTabPad(client, record, title);
             }}
             activeIndexChip={
-              chrome.docIndex.status === "idle" &&
-              !chrome.docIndex.onIndex &&
-              !chrome.docIndex.walkStage &&
-              !chrome.docIndex.padSync ? undefined : (
+              (chrome.docIndex.viewportWait ||
+                chrome.docIndex.status !== "idle" ||
+                Boolean(chrome.docIndex.onIndex) ||
+                Boolean(chrome.docIndex.walkStage) ||
+                Boolean(chrome.docIndex.padSync)) ? (
                 <DocIndexChip
                   status={chrome.docIndex.status}
                   meta={chrome.docIndex.meta as never}
@@ -1299,8 +1300,9 @@ export function App() {
                   walkWaiting={chrome.docIndex.walkWaiting}
                   padSync={chrome.docIndex.padSync}
                   onSync={chrome.docIndex.onSync}
+                  viewportWait={chrome.docIndex.viewportWait}
                 />
-              )
+              ) : undefined
             }
           />
             <span className="lc-header-slot" ref={setHeaderLeft} />

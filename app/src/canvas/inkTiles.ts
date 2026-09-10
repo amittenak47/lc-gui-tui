@@ -353,6 +353,7 @@ export class InkTileCache {
   private readonly persist: boolean;
   private sig = "";
   private hydrating = false;
+  private sliceVisible = false;
   private hydrateGen = 0;
   private inflight = new Set<string>();
   private persistDirty = false;
@@ -838,11 +839,22 @@ export class InkTileCache {
   /**
    * True when the last draw blitted every visible tile from cache.
    *
-   * Inflight work for tiles this view did not miss does not count. Hydrate
-   * must finish first — fallbacks are not coverage.
+   * Inflight work for tiles this view did not miss does not count. Persist
+   * hydrate of the rest of the book is not coverage — that wait is the
+   * 10–30s blank pad.
    */
   get covered(): boolean {
-    return this.pending.length === 0 && !this.hydrating;
+    return this.pending.length === 0;
+  }
+
+  /**
+   * Raster visible misses on the calling thread inside the draw budget.
+   *
+   * First present uses this under the overlay so the open camera is ink, not
+   * a worker queue. Pan/zoom leave it off so those frames stay blits.
+   */
+  setSliceVisible(on: boolean): void {
+    this.sliceVisible = on;
   }
 
   private tileBounds(level: number, tx: number, ty: number): SceneBounds {
@@ -1026,11 +1038,13 @@ export class InkTileCache {
       const bounds = this.tileBounds(level, tx, ty);
       const key = tileKey(level, tx, ty);
       let tile = this.tiles.get(key);
-      if (!tile && this.now() < deadline && !this.useWorker && !this.hydrating) {
+      const canSlice =
+        this.now() < deadline && (!this.useWorker || this.sliceVisible);
+      if (!tile && canSlice) {
         tile = this.renderTile(level, tx, ty) ?? undefined;
       }
       if (!tile) {
-        if (!this.hydrating) missed.push({ level, tx, ty });
+        missed.push({ level, tx, ty });
         if (fallbacks === null) fallbacks = this.fallbackLevels(level);
         this.blitFallback(ctx, bounds, toDeviceX, toDeviceY, fallbacks);
         continue;

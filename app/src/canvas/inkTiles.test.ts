@@ -630,6 +630,35 @@ describe("InkTileCache", () => {
     expect(cache.settled).toBe(true);
   });
 
+  it("is not covered when only some other tile exists", () => {
+    const { cache } = makeCache({ useWorker: true });
+    cache.setOps([draw([0, 0], [40, 0])]);
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+    expect(cache.size).toBe(0);
+    expect(cache.covered).toBe(false);
+  });
+
+  it("slice-rasters the visible view on the main thread when asked", () => {
+    const { cache, canvases } = makeCache({ useWorker: true });
+    cache.setSliceVisible(true);
+    cache.setOps([draw([0, 0], [40, 0])]);
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+    expect(canvases.created.length).toBeGreaterThan(0);
+    expect(cache.covered).toBe(true);
+  });
+
+  it("queues visible misses while persist hydrate is still running", () => {
+    const { cache, scheduled } = makeCache({ persist: true, useWorker: true });
+    cache.setOps([draw([0, 0], [40, 0])]);
+    cache.setClip({ minX: -100, minY: -100, maxX: 400, maxY: 400 });
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+    expect(cache.covered).toBe(false);
+    expect(scheduled.length).toBeGreaterThan(0);
+  });
+
   it("records pointer-up ink without painting cached tiles synchronously", () => {
     const { cache, canvases } = makeCache();
     const first = draw([0, 0], [40, 40]);

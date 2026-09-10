@@ -319,7 +319,9 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/replayRafRef\.current != null/);
     expect(src).toMatch(/useWorker: true/);
     expect(src).toMatch(/persist: true/);
-    expect(src).toMatch(/riding \? !tiles\.covered/);
+    expect(src).toMatch(/if \(!tiles\.covered\) return/);
+    expect(src).toMatch(/setSliceVisible/);
+    expect(src).not.toMatch(/tiles\.size === 0 && !tiles\.settled/);
     expect(src).not.toMatch(/new EraseBakeJob/);
     expect(src).not.toMatch(/engine\.replaySpines/);
     expect(src).not.toMatch(/engine\.shiftSnap/);
@@ -408,10 +410,9 @@ describe("Workspace pane switch", () => {
     expect(src).not.toMatch(/requestAnimationFrame\(loop\)/);
   });
 
-  it("pauses cached restore work while the loading doodle owns the pen", () => {
+  it("does not pause tile work for the loading doodle", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
-    expect(src).toMatch(/pause: isLoadingDoodleActive/);
-    expect(src).toMatch(/if \(isLoadingDoodleActive\(\)\)/);
+    expect(src).not.toMatch(/pause: isLoadingDoodleActive/);
     expect(src).toMatch(/useWorker: true/);
     expect(src).toMatch(/persist: true/);
   });
@@ -419,8 +420,8 @@ describe("Workspace pane switch", () => {
   it("does not clear the CSS ride before the staged bitmap is ready", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
     const step = src.slice(src.indexOf("const step = () => {"), src.indexOf("if (instant) step();"));
-    expect(step.indexOf("riding ? !tiles.covered")).toBeGreaterThan(-1);
-    expect(step.indexOf("riding ? !tiles.covered")).toBeLessThan(
+    expect(step.indexOf("if (!tiles.covered) return")).toBeGreaterThan(-1);
+    expect(step.indexOf("if (!tiles.covered) return")).toBeLessThan(
       step.indexOf("engine.redrawSnap"),
     );
     expect(step.indexOf("engine.redrawSnap")).toBeLessThan(
