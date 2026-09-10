@@ -6,12 +6,14 @@ import {
   roundInkCorners,
   simplifyInkPoints,
   smoothInkPoints,
+  thinInkPointsForStorage,
   liveSmoothingTau,
   liveSmoothingWeight,
   INK_SMOOTHING_DEFAULT,
   LIVE_MAX_LAG_NIBS,
   LIVE_SMOOTHING_MAX_TAU_MS,
   SIMPLIFY_MAX_FRACTION,
+  SIMPLIFY_STORAGE_FRACTION,
 } from "./inkSmoothing";
 import { NO_PRESSURE, type ScenePoint } from "./rasterInk";
 
@@ -97,6 +99,18 @@ describe("simplifyInkPoints", () => {
   it("does nothing at zero tolerance", () => {
     const points = jitteryLine(20);
     expect(simplifyInkPoints(points, 0)).toHaveLength(20);
+  });
+});
+
+describe("thinInkPointsForStorage", () => {
+  it("thins at the storage floor, not harder", () => {
+    const points = path([0, 0], [5, 0], [10, 0], [15, 0]);
+    const out = thinInkPointsForStorage(points, 7.5);
+    expect(out).toEqual(simplifyInkPoints(points, 7.5 * SIMPLIFY_STORAGE_FRACTION));
+  });
+
+  it("passes short strokes through", () => {
+    expect(thinInkPointsForStorage(path([1, 2], [3, 4]), 8)).toEqual(path([1, 2], [3, 4]));
   });
 });
 

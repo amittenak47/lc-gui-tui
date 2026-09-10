@@ -886,6 +886,53 @@ describe("Ink lab live path", () => {
     engine.destroy();
   });
 
+  it("liftRaw keeps the live pixels instead of a bake remesh", () => {
+    const canvas = createCanvas(400, 200) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.setPen({
+      color: "#1a1a1a",
+      baseWidth: 2,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      boldness: 1,
+      smoothing: 0.5,
+      smoothingMode: "live",
+    });
+    engine.down({ x: 20, y: 80, p: 0.6, t: 0 });
+    for (let i = 1; i <= 40; i++) {
+      engine.move([
+        {
+          x: 20 + i * 8,
+          y: 80 + Math.sin(i / 2) * 24,
+          p: 0.6,
+          t: i * 8,
+        },
+      ]);
+      if (i % 4 === 0) engine.paint();
+    }
+    engine.paint();
+    const ink = () => {
+      const data = canvas.getContext("2d")!.getImageData(0, 0, 400, 200).data;
+      let n = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i]! > 20) n += 1;
+      return n;
+    };
+    const liveInk = ink();
+    expect(liveInk).toBeGreaterThan(40);
+    const lifted = engine.liftRaw({ x: 340, y: 80, p: 0.5, t: 400 });
+    engine.paint();
+    expect(ink()).toBeGreaterThanOrEqual(liveInk);
+    expect(lifted.points.length).toBeGreaterThan(2);
+    engine.destroy();
+  });
+
   it("replay of two far strokes keeps both after clipped blits", () => {
     const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
     const engine = createInkLabEngine({ sdf: false });

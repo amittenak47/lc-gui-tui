@@ -299,11 +299,17 @@ describe("WhiteboardInkLab", () => {
     expect(boot).not.toMatch(/enabled,/);
   });
 
+  it("replays committed overlay with SDF capsules, not the miter strip", () => {
+    const src = readFileSync(join(here, "inkLab/replay.ts"), "utf8");
+    const paint = src.slice(src.indexOf("export function paintLabDrawOps"));
+    expect(paint).toMatch(/paintSdfSpines/);
+    expect(paint.indexOf("paintSdfSpines")).toBeLessThan(paint.indexOf("fillMiterStroke"));
+  });
+
   it("does not replay ink with the miter strip", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
     expect(src).not.toMatch(/paintLabDrawOps/);
     expect(src).not.toMatch(/fillMiterStroke/);
-    expect(src).not.toMatch(/inkLineWidth/);
   });
 
   it("maps toolbar colour, width, and hold grow onto the WebGL nib", () => {
@@ -362,6 +368,8 @@ describe("WhiteboardInkLab", () => {
     expect(src).not.toMatch(/engine\.shiftSnap/);
     expect(src).toMatch(/engine\.liftRaw/);
     expect(src).toMatch(/bakeSpineOffThread/);
+    expect(src).toMatch(/thinInkPointsForStorage/);
+    expect(src).not.toMatch(/overlayRef\.current\[overlayIndex\] = finalBake/);
     expect(src).toMatch(/if \(drawingRef\.current\) return/);
     const down = src.slice(src.indexOf("const onPointerDown"), src.indexOf("const onPointerMove"));
     expect(down).toMatch(/instantReplayOnPointerDown/);

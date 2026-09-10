@@ -62,6 +62,7 @@ import {
   simplifyModulatedInkPoints,
   SIMPLIFY_MODULATED_FRACTION,
   smoothInkPoints,
+  thinInkPointsForStorage,
   type InkSmoothingMode,
 } from "./inkSmoothing";
 import { WHEEL_OPEN_MS } from "../util/gesture";
@@ -74,6 +75,7 @@ import { beginLiveStroke, type LivePointerSample, type LiveStroke } from "./live
 import {
   createInkLabEngine,
   type InkLabEngine,
+  type InkLabRawLiftResult,
   type InkLabSample,
   type InkLabUpResult,
 } from "./inkLab/engine";
@@ -1250,10 +1252,10 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       const keepLabSnap = inkLabCommitRef.current;
       inkLabCommitRef.current = false;
 
-      ensureTiles().appendOp(stamped);
+      if (keepLabSnap) ensureTiles().deferOp(stamped);
+      else ensureTiles().appendOp(stamped);
       strokeHostRef.current = null;
-      if (keepLabSnap) preserveLabSnapRef.current = true;
-      else preserveLabSnapRef.current = false;
+      preserveLabSnapRef.current = keepLabSnap;
       repaint();
       onChange?.();
     }, [ensureTiles, onChange, repaint]);
@@ -1689,7 +1691,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           activePointerRef.current = null;
           const orphan = liveStrokeRef.current;
           if (inkLabLiveRef.current && inkLabRef.current) {
-            const baked = inkLabRef.current.up();
+            const baked = inkLabRef.current.liftRaw();
             const view = strokeViewRef.current;
             const rect = strokeRectRef.current;
             if (view && rect && baked.points.length > 0) {
@@ -2053,7 +2055,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
         if (inkLabLiveRef.current && inkLabRef.current) {
           const last = batch[batch.length - 1] ?? event;
           const sampleRect = strokeRectRef.current ?? canvas.getBoundingClientRect();
-          const baked = inkLabRef.current.up(
+          const baked = inkLabRef.current.liftRaw(
             inkLabOverlaySample(canvas, sampleRect, last),
           );
           const view = strokeViewRef.current;
@@ -2291,12 +2293,17 @@ function inkLabSpineToScene(
 
 function applyInkLabBakeToOp(
   op: InkOp,
-  baked: InkLabUpResult,
+  baked: InkLabUpResult | InkLabRawLiftResult,
   view: ViewportTransform,
   dpr: number,
 ): void {
   if (op.kind !== "draw" || baked.points.length === 0) return;
-  op.points = inkLabSpineToScene(baked.points, view, dpr);
+  const scene = inkLabSpineToScene(baked.points, view, dpr);
+  const smoothing =
+    "bakeOptions" in baked ? baked.bakeOptions.smoothing : 0;
+  const nib = inkLineWidth(op.baseWidth, 0, false);
+  op.points =
+    smoothing > 0 ? thinInkPointsForStorage(scene, nib) : scene;
   if (baked.blotTipGrow > 0) op.blotTipGrow = baked.blotTipGrow;
   if (baked.blotHalts.length === 0) return;
   op.blotHalts = baked.blotHalts.map((h): InkBlotHalt => {
