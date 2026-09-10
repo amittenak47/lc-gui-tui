@@ -55,6 +55,7 @@ import {
   type InkLabUpResult,
 } from "./inkLab/engine";
 import { createInkLabHudStats, INK_LAB_HUD_ZERO } from "./inkLab/hud";
+import { peekInkTileMetrics } from "./inkTileMetrics";
 import type { SpineDot } from "./inkLab/instance";
 import { labPenFromToolbar } from "./inkLab/style";
 import { createInkLoadMeter } from "./inkLoadMeter";
@@ -71,6 +72,8 @@ import {
   scenePointFromCanvasPixel,
   setInkSceneTransform,
   trimHighlightLiftHook,
+  inkOpsBounds,
+  inkPaintClip,
   type InkBlotHalt,
   type InkDrawOp,
   type InkOp,
@@ -459,6 +462,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           // The loading doodle owns the UI thread while the nib is down. Tile
           // preparation resumes on the next frame after the gesture ends.
           pause: isLoadingDoodleActive,
+          useWorker: true,
+          persist: true,
         });
       }
       return tilesRef.current;
@@ -469,8 +474,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       const host = hostRef.current;
       const marginY = marginYRef.current;
       const raw = getViewportRef.current();
-      const width = Math.max(1, raw?.width || host?.clientWidth || 1);
-      const height = Math.max(1, raw?.height || host?.clientHeight || 1);
+      /*
+       * Cover the ink host, not Excalidraw's appState box. A stale smaller
+       * width/height left a strip of canvas with no tiles — the screen cutting
+       * writing at the edge. RasterInkLayer sizes the same way.
+       */
+      const width = Math.max(1, host?.clientWidth || raw?.width || 1);
+      const height = Math.max(1, host?.clientHeight || raw?.height || 1);
       const view = raw
         ? { ...raw, width, height }
         : fallbackViewport(width, height);
@@ -645,7 +655,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         committedBuildRef.current = true;
         const tiles = ensureTiles();
         const committed = bookRef.current.paintOps();
-        tiles.setClip(clipRef.current);
+        tiles.setClip(inkPaintClip(clipRef.current, inkOpsBounds(committed)));
         tiles.syncOpsDeferred(committed);
 
         /*
@@ -1216,6 +1226,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             })
           : loadMeterRef.current.peek();
         const bake = bakeRef.current;
+        const tiles = peekInkTileMetrics();
         // Sampling remains per paint, while text/spark DOM work is throttled.
         // End-only made the diagnostic overlay useless; per-vsync made it part
         // of the performance problem it was meant to measure.
@@ -1239,6 +1250,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
                 suffix: load.suffixHit,
                 bakeMs: bake.bakeMs,
                 bake: bake.bake,
+                tileMs: tiles.renderMs,
+                sdfMs: tiles.sdfMs,
                 vsyncMs,
                 ...hudStatsRef.current.snapshot(),
               }

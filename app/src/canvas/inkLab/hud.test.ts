@@ -15,6 +15,7 @@ describe("Ink lab HUD", () => {
     expect(text).toContain("hold no");
     expect(text).toContain("suffix hit");
     expect(text).toContain("bake 0.0ms catmull");
+    expect(text).not.toContain("tile");
     expect(text).toContain("frame 0.0ms");
     expect(text).not.toContain("avg");
   });
@@ -34,6 +35,15 @@ describe("Ink lab HUD", () => {
     expect(text).toContain("frame 10.0ms  2.0–10.0  avg 6.0");
     expect(text).toContain("raf 17.0ms  16.0–17.0");
     expect(text).toContain("draw 8.00ms  1.50–8.00");
+  });
+
+  it("prints separate tile and sdf clocks when measured", () => {
+    const text = formatInkLabHud({
+      ...INK_LAB_HUD_ZERO,
+      tileMs: 12.4,
+      sdfMs: 8.1,
+    });
+    expect(text).toContain("tile 12.4ms  sdf 8.1ms");
   });
 
   it("skips a zero raf so the first paint does not pin min at 0", () => {

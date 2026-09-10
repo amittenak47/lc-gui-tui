@@ -23,6 +23,8 @@ export type InkLabHud = {
   suffix: boolean;
   bakeMs: number;
   bake: string;
+  tileMs?: number;
+  sdfMs?: number;
   frameRange?: InkLabMsRange;
   rafRange?: InkLabMsRange;
   drawRange?: InkLabMsRange;
@@ -97,7 +99,10 @@ export function formatInkLabHud(hud: InkLabHud): string {
     `${formatRange("draw", hud.drawMs, 2, hud.drawRange)}\n` +
     `hold ${hud.hold ? "yes" : "no"}\n` +
     `suffix ${hud.suffix ? "hit" : "miss"}\n` +
-    `bake ${hud.bakeMs.toFixed(1)}ms ${hud.bake}`
+    `bake ${hud.bakeMs.toFixed(1)}ms ${hud.bake}` +
+    (hud.tileMs != null || hud.sdfMs != null
+      ? `\ntile ${((hud.tileMs ?? 0)).toFixed(1)}ms  sdf ${((hud.sdfMs ?? 0)).toFixed(1)}ms`
+      : "")
   );
 }
 

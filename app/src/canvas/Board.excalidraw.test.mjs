@@ -161,6 +161,17 @@ describe("Board", () => {
     );
   });
 
+  it("grows the ink clip to the writing so the screen cannot cut it", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const vis = src.slice(
+      src.indexOf("const syncPageVisibility = useCallback"),
+      src.indexOf("const reportCodeSlot = useCallback"),
+    );
+    expect(vis).toMatch(/inkPaintClip/);
+    expect(vis).toMatch(/inkOpsBounds/);
+    expect(vis).not.toMatch(/sameBounds\(current, bounds\)/);
+  });
+
   it("does not remesh the notebook when flipping annotate and scroll", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     expect(src).toMatch(/inkNeedsAnnotateToggleReplay/);
@@ -207,6 +218,14 @@ describe("Board", () => {
 });
 
 describe("WhiteboardInkLab", () => {
+  it("covers the ink host, not a stale Excalidraw box", () => {
+    const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
+    expect(src).toMatch(/host\?\.clientWidth \|\| raw\?\.width/);
+    expect(src).toMatch(/host\?\.clientHeight \|\| raw\?\.height/);
+    expect(src).not.toMatch(/raw\?\.width \|\| host\?\.clientWidth/);
+    expect(src).toMatch(/inkPaintClip\(clipRef\.current, inkOpsBounds\(committed\)\)/);
+  });
+
   it("does not unmount the pad when the board is parked", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
     expect(src).not.toMatch(/if \(!enabled\) return null;/);
@@ -272,9 +291,9 @@ describe("WhiteboardInkLab", () => {
     expect(report).toMatch(/if \(live && !flushHud\) return/);
     expect(src).toMatch(/primeSnap\(\)/);
     expect(src).toMatch(/replayRafRef\.current != null/);
-    expect(src).toMatch(/new InkTileCache/);
-    expect(src).toMatch(/tiles\.draw/);
-    expect(src).toMatch(/engine\.redrawSnap/);
+    expect(src).toMatch(/useWorker: true/);
+    expect(src).toMatch(/persist: true/);
+    expect(src).toMatch(/if \(!tiles\.settled\) return/);
     expect(src).not.toMatch(/new EraseBakeJob/);
     expect(src).not.toMatch(/engine\.replaySpines/);
     expect(src).not.toMatch(/engine\.shiftSnap/);
@@ -367,6 +386,19 @@ describe("Workspace pane switch", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
     expect(src).toMatch(/pause: isLoadingDoodleActive/);
     expect(src).toMatch(/if \(isLoadingDoodleActive\(\)\)/);
+    expect(src).toMatch(/useWorker: true/);
+    expect(src).toMatch(/persist: true/);
+  });
+
+  it("does not clear the CSS ride before the staged bitmap is ready", () => {
+    const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
+    const step = src.slice(src.indexOf("const step = () => {"), src.indexOf("tileReadyRef.current = () => {"));
+    expect(step.indexOf("if (!tiles.settled) return")).toBeGreaterThan(-1);
+    expect(step.indexOf("if (!tiles.settled) return")).toBeLessThan(
+      step.indexOf("engine.redrawSnap"),
+    );
+    expect(step.indexOf("engine.redrawSnap")).toBeLessThan(step.indexOf("canvas.style.transform"));
+    expect(step.indexOf("canvas.style.transform")).toBeLessThan(step.indexOf("engine.paint()"));
   });
 
   it("stores undo pixels with canvas copies instead of synchronous GPU readback", () => {

@@ -338,6 +338,7 @@ import {
   inkStrokesFromOps,
   paintInkAtScale,
   unionSceneBounds,
+  inkPaintClip,
   type InkOp,
   type SceneBounds,
   type ViewportTransform,
@@ -2292,7 +2293,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     } else {
       pageBoundsRef.current = null;
     }
-    setInkClip((current) => (sameBounds(current, bounds) ? current : bounds));
+    const ink = inkOpsBounds(rasterInkRef.current?.getOps() ?? []);
+    const clip = inkPaintClip(
+      unionSceneBounds(bounds, pageBoundsRef.current),
+      ink,
+    );
+    setInkClip((current) => (sameBounds(current, clip) ? current : clip));
 
     const next = applyPageVisibility(live, page);
     if (!next) return;

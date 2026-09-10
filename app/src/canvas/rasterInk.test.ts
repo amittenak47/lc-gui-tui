@@ -85,6 +85,7 @@ import {
   STROKE_WIDTH_MAX,
   STROKE_WIDTH_MIN,
   unionSceneBounds,
+  inkPaintClip,
   type InkOp,
   type ScenePoint,
 } from "./rasterInk";
@@ -1041,6 +1042,15 @@ describe("ink bounds", () => {
     expect(unionSceneBounds(null, b)).toEqual(b);
     expect(unionSceneBounds(a, null)).toEqual(a);
     expect(unionSceneBounds(null, null)).toBeNull();
+  });
+
+  it("grows the page clip to the writing so the screen cannot cut it", () => {
+    const page = { minX: 0, minY: 0, maxX: 100, maxY: 200 };
+    const ink = { minX: -40, minY: 10, maxX: 80, maxY: 50 };
+    expect(inkPaintClip(page, ink)).toEqual({ minX: -40, minY: 0, maxX: 100, maxY: 200 });
+    expect(inkPaintClip(page, null)).toEqual(page);
+    expect(inkPaintClip(null, ink)).toEqual(ink);
+    expect(inkPaintClip(null, null)).toBeNull();
   });
 });
 
