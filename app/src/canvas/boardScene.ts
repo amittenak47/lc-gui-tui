@@ -41,6 +41,8 @@ export interface ExcalidrawApi {
     elements?: unknown[];
     appState?: Record<string, unknown>;
     captureUpdate?: CaptureUpdate;
+    /** Pre-drag geometry; preview writes must not become the undo checkpoint. */
+    historyBaseline?: unknown[];
   }): void;
   setActiveTool(tool: {
     type: string;
@@ -67,6 +69,7 @@ type SceneEl = {
   y?: number;
   width?: number;
   height?: number;
+  angle?: number;
   isDeleted?: boolean;
   points?: Array<[number, number]>;
 };
@@ -110,10 +113,21 @@ export function getCommonBounds(elements: readonly unknown[]): [number, number, 
     const y = el.y ?? 0;
     const w = el.width ?? 0;
     const h = el.height ?? 0;
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x + w);
-    maxY = Math.max(maxY, y + h);
+    if (el.angle && !el.points) {
+      const cos = Math.abs(Math.cos(el.angle));
+      const sin = Math.abs(Math.sin(el.angle));
+      const rx = (Math.abs(w) * cos + Math.abs(h) * sin) / 2;
+      const ry = (Math.abs(w) * sin + Math.abs(h) * cos) / 2;
+      minX = Math.min(minX, x + w / 2 - rx);
+      minY = Math.min(minY, y + h / 2 - ry);
+      maxX = Math.max(maxX, x + w / 2 + rx);
+      maxY = Math.max(maxY, y + h / 2 + ry);
+    } else {
+      minX = Math.min(minX, x, x + w);
+      minY = Math.min(minY, y, y + h);
+      maxX = Math.max(maxX, x, x + w);
+      maxY = Math.max(maxY, y, y + h);
+    }
     if (Array.isArray(el.points)) {
       for (const pt of el.points) {
         minX = Math.min(minX, x + pt[0]);
@@ -261,7 +275,7 @@ export function createBoardScene(initial?: {
         !applyingHistory &&
         recordsHistory(scene.captureUpdate)
       ) {
-        undoStack.push(cloneElements(elements));
+        undoStack.push(cloneElements(scene.historyBaseline ?? elements));
         if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
         redoStack.length = 0;
       }

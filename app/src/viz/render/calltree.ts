@@ -25,8 +25,10 @@ export function renderCallTree(ctx: RenderContext): Skeleton[] {
   const top = origin.y + headerOffset(ctx);
   const count = frame.cells.length;
   const edges = parentChildEdges(frame.entries, count);
+  const nodeWidth = Math.max(NODE_W, ...ctx.program.frames.flatMap((step) => step.cells.map((cell) => Math.min(240, callLabel(cell).length * 9 + 20))));
   const centres = layoutForest(count, edges, { x: origin.x, y: top }, {
-    node: NODE_W,
+    node: nodeWidth,
+    nodeHeight: NODE_H,
     gap: 20,
     levelH: 70,
   });
@@ -42,7 +44,7 @@ export function renderCallTree(ctx: RenderContext): Skeleton[] {
     const centre = centres[index];
     if (!centre) return;
     const text = callLabel(value);
-    const width = Math.max(NODE_W, text.length * 9 + 20);
+    const width = nodeWidth;
     out.push(
       ...cellBox(ctx, `frame-${index}`, centre.x - width / 2, centre.y - NODE_H / 2, text, {
         highlighted: isHighlighted(frame, index),

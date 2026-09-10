@@ -4833,6 +4833,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       lastX: number;
       lastY: number;
       ids: Set<string>;
+      origin: Map<string | undefined, PaintSceneElement>;
     };
     type MarqueeDrag = {
       kind: "marquee";
@@ -4871,12 +4872,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       ids: Set<string>,
       mapEl: (el: PaintSceneElement) => PaintSceneElement,
       commit: boolean,
+      origin?: Map<string | undefined, PaintSceneElement>,
     ) => {
       const api = apiRef.current;
       if (!api) return;
       const live = api.getSceneElements() as PaintSceneElement[];
       api.updateScene({
         elements: live.map((el) => (el.id && ids.has(el.id) ? mapEl(el) : el)) as unknown[],
+        historyBaseline: origin ? live.map((el) => origin.get(el.id) ?? el) : undefined,
         captureUpdate: commit ? CaptureUpdateAction.IMMEDIATELY : CaptureUpdateAction.NEVER,
       });
       sceneOverlayRef.current?.redraw();
@@ -4968,7 +4971,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           },
           captureUpdate: CaptureUpdateAction.NEVER,
         });
-        drag = { kind: "move", pointerId: event.pointerId, lastX: scene.x, lastY: scene.y, ids };
+        drag = { kind: "move", pointerId: event.pointerId, lastX: scene.x, lastY: scene.y, ids, origin: new Map(members.map((el) => [el.id, el])) };
         shapeSelectRef.current?.redraw();
         syncStampTrashRef.current();
         try {
@@ -5025,6 +5028,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!drag || drag.pointerId !== event.pointerId) return;
       const finished = drag;
       drag = null;
+      if (event.type === "pointercancel") {
+        clearDraft();
+        shapeSelectRef.current?.setMarquee(null);
+        if (finished.kind === "move") replaceByIds(finished.ids, (el) => finished.origin.get(el.id) ?? el, false);
+        return;
+      }
       if (finished.kind === "draw") {
         clearDraft();
         if (shapeSpan(finished.x0, finished.y0, finished.x1, finished.y1) < MIN_SHAPE_SPAN) {
@@ -5109,7 +5118,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         syncStampTrashRef.current();
         return;
       }
-      replaceByIds(finished.ids, (el) => el, true);
+      replaceByIds(finished.ids, (el) => el, true, finished.origin);
     };
 
     root.addEventListener("pointerdown", onPointerDown);
@@ -10087,7 +10096,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             const scene = clientToScene(clientX, clientY);
             return { x: scene.x, y: scene.y };
           }}
-          onChange={(next, commit) => {
+          onChange={(next, commit, previous) => {
             const api = apiRef.current;
             if (!api) return;
             const byId = new Map<string, PaintSceneElement>();
@@ -10096,7 +10105,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             }
             if (byId.size === 0) return;
             const live = api.getSceneElements() as PaintSceneElement[];
+            const before = previous ? new Map(previous.map((el) => [el.id, el])) : null;
             api.updateScene({
+              historyBaseline: before ? live.map((el) => before.get(el.id) ?? el) : undefined,
               elements: live.map((el) =>
                 el.id && byId.has(el.id) ? byId.get(el.id)! : el,
               ) as unknown[],

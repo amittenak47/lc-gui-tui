@@ -30,10 +30,11 @@ export const SceneOverlay = forwardRef<SceneOverlayHandle, SceneOverlayProps>(
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const animationRef = useRef(0);
     const signatureRef = useRef("");
+    const lastVizRef = useRef<PaintSceneElement[]>([]);
     const transitionRef = useRef<{ from: PaintSceneElement[]; to: PaintSceneElement[]; start: number } | null>(null);
     const displayedRef = useRef<PaintSceneElement[]>([]);
     const imagesRef = useRef<Record<string, CanvasImageSource>>({});
-    const imageSignatureRef = useRef("");
+    const imageFilesRef = useRef<Array<[string | undefined, string | undefined]>>([]);
     const imageGenerationRef = useRef(0);
     const reducedRef = useRef(false);
     const getElementsRef = useRef(getElements);
@@ -66,7 +67,9 @@ export const SceneOverlay = forwardRef<SceneOverlayHandle, SceneOverlayProps>(
       if (!view) return;
       const elements = getElementsRef.current() as PaintSceneElement[];
       const viz = elements.filter((el) => el.customData?.lcVizId);
-      const signature = JSON.stringify(viz);
+      const sameViz = viz.length === lastVizRef.current.length && viz.every((el, i) => el === lastVizRef.current[i]);
+      const signature = sameViz ? signatureRef.current : JSON.stringify(viz);
+      lastVizRef.current = viz;
       const now = performance.now();
       if (signature !== signatureRef.current) {
         transitionRef.current = displayedRef.current.length && viz.length && !reducedRef.current
@@ -81,10 +84,11 @@ export const SceneOverlay = forwardRef<SceneOverlayHandle, SceneOverlayProps>(
       if (progress >= 1 || reducedRef.current) transitionRef.current = null;
 
       const files = getFilesRef.current?.() ?? {};
-      const imageSignature = JSON.stringify(elements.filter((el) => el.type === "image" && !el.isDeleted)
-        .map((el) => [el.fileId, el.fileId ? files[el.fileId]?.dataURL : null]));
-      if (imageSignature !== imageSignatureRef.current) {
-        imageSignatureRef.current = imageSignature;
+      const imageFiles: Array<[string | undefined, string | undefined]> = elements.filter((el) => el.type === "image" && !el.isDeleted)
+        .map((el) => [el.fileId, el.fileId ? files[el.fileId]?.dataURL : undefined]);
+      const sameImages = imageFiles.length === imageFilesRef.current.length && imageFiles.every(([id, url], i) => id === imageFilesRef.current[i][0] && url === imageFilesRef.current[i][1]);
+      if (!sameImages) {
+        imageFilesRef.current = imageFiles;
         const generation = ++imageGenerationRef.current;
         void loadSceneImages(elements, files).then((images) => {
           if (generation !== imageGenerationRef.current) return;
@@ -116,6 +120,7 @@ export const SceneOverlay = forwardRef<SceneOverlayHandle, SceneOverlayProps>(
         media?.removeEventListener("change", onMotion);
         if (animationRef.current) cancelAnimationFrame(animationRef.current);
         imageGenerationRef.current++;
+        imageFilesRef.current = [];
       };
     }, [redraw]);
 

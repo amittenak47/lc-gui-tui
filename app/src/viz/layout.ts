@@ -225,9 +225,10 @@ export function layoutForest(
   count: number,
   parentToChild: Array<[number, number]>,
   origin: { x: number; y: number },
-  options: { node?: number; gap?: number; levelH?: number } = {},
+  options: { node?: number; nodeHeight?: number; gap?: number; levelH?: number } = {},
 ): Array<{ x: number; y: number }> {
   const node = options.node ?? 44;
+  const centreY = origin.y + (options.nodeHeight ?? node) / 2;
   const gap = options.gap ?? 16;
   const levelH = options.levelH ?? 78;
   const unit = node + gap;
@@ -274,7 +275,7 @@ export function layoutForest(
     if (placed.has(index)) return;
     placed.add(index);
     const width = subtreeWidth(index, new Set());
-    positions[index] = { x: left + width / 2, y: origin.y + depth * levelH };
+    positions[index] = { x: left + width / 2, y: centreY + depth * levelH };
     let cursor = left;
     for (const kid of children[index] ?? []) {
       const kidWidth = subtreeWidth(kid, new Set());
@@ -291,7 +292,7 @@ export function layoutForest(
   }
   for (let i = 0; i < count; i++) {
     if (placed.has(i)) continue;
-    positions[i] = { x: cursor + node / 2, y: origin.y };
+    positions[i] = { x: cursor + node / 2, y: centreY };
     cursor += unit;
   }
   return positions;
