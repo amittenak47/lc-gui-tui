@@ -105,6 +105,7 @@ import {
   PAN_REBASE_FRACTION,
   overdrawMarginPx,
   overdrawnViewport,
+  inkInputViewport,
   panDelta,
   type PanCamera,
 } from "./panOffset";
@@ -468,6 +469,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           onTilesReady: () => tileReadyRef.current(),
           useWorker: true,
           persist: true,
+          pause: () => drawingRef.current || sashDragActive(),
         });
       }
       return tilesRef.current;
@@ -620,6 +622,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
 
     const presentCommitted = useCallback((liveStamp: InkOp | null = null, instant = true): Promise<void> => {
       if (skipCommittedReplay(drawingRef.current, liveStamp)) return Promise.resolve();
+      // #region agent log
+      fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'WhiteboardInkLab.tsx:presentCommitted',message:'replay snap from tiles',data:{instant,drawing:drawingRef.current,ops:bookRef.current.paintOps().length,tiles:tilesRef.current?.size??-1,scrollY:readViews().view.scrollY,scrollX:readViews().view.scrollX,zoom:readViews().view.zoom,transform:Boolean(canvasRef.current?.style.transform)},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       const canvas = canvasRef.current;
       const engine = engineRef.current;
       if (!canvas || !engine) {
@@ -1175,6 +1180,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
          * ANR on a dense notebook.
          */
         if (!inkCanvasPixelsChanged(canvas, pixelW, pixelH)) return;
+        // #region agent log
+        fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'WhiteboardInkLab.tsx:sizeToHost',message:'backing resize remesh',data:{pixelW,pixelH,prevW:canvas.width,pixelHPrev:canvas.height,drawing:drawingRef.current},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
         canvas.width = pixelW;
         canvas.height = pixelH;
         if (engineRef.current) {
@@ -1430,6 +1438,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         }
       };
 
+      let strokePaintView: ViewportTransform | null = null;
+      let strokeDpr = 1;
       const onPointerDown = (event: PointerEvent) => {
         if (!toolRef.current) return;
         if (onStylusAccessoryRef.current?.(event)) {
@@ -1452,6 +1462,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return;
         }
         captureStrokeHost(event.clientX, event.clientY);
+        const input = readViews();
+        strokePaintView = overdrawnViewport(
+          inkInputViewport(input.view, paintedViewRef.current, Boolean(canvas.style.transform)),
+          input.marginY,
+        );
+        strokeDpr = input.dpr;
         if (
           wheelHoldEnabledRef.current &&
           toolRef.current &&
@@ -1715,6 +1731,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return;
         }
         const baked = engine.liftRaw(sampleOf(canvas, event));
+        // #region agent log
+        fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'WhiteboardInkLab.tsx:pointerup',message:'lift',data:{pts:baked.points.length,ops:bookRef.current.paintOps().length,tiles:tilesRef.current?.size??-1,scrollY:readViews().view.scrollY},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
         bakeRef.current = { bakeMs: baked.bakeMs, bake: baked.bake };
         engine.paint();
         loadMeterRef.current.end();
@@ -1736,7 +1755,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         );
         loadBarRef.current?.freeze();
         if (baked.points.length > 0) {
-          const { paintView, dpr } = readViews();
+          const paintView = strokePaintView ?? readViews().paintView;
+          const dpr = strokeDpr;
           const color = inkColorRef.current;
           const uiWidth = strokeWidthRef.current;
           const pressureClip = pressureClipRef.current;

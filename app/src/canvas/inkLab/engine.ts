@@ -301,6 +301,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
 
   const resetLive = () => {
     spine = [];
+    previousInputDot = null;
     segs = 0;
     sdfLive = 0;
     sdfFull = false;
@@ -472,6 +473,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     fallback?.appendHop(prev, dot, inkOf(dot));
   };
 
+  let previousInputDot: SpineDot | null = null;
   const ingest = (s: InkLabSample) => {
     const t0 = performance.now();
     const dpr = pen?.dpr ?? (host ? dprOf(host) : 1);
@@ -557,8 +559,10 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     }
     // SDF capsules follow chords. Plant Catmull samples off a turning hop so
     // the live stroke is round; a sparse tablet polyline stays a polyline.
-    const prevHop = spine.length >= 2 ? spine[spine.length - 2]! : null;
-    for (const seed of seedSpineHop(prevHop, last, dot)) appendSpine(seed);
+    // Control points are accepted input samples, never inserted spline seeds.
+    // A seed just behind the tip shortens the incoming tangent to nearly zero.
+    for (const seed of seedSpineHop(previousInputDot, last, dot)) appendSpine(seed);
+    previousInputDot = last;
   };
 
   const unionAabb = (dst: StrokeAabb, src: StrokeAabb) => {
@@ -591,6 +595,8 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     const prevBox = { ...aabb };
     const savedGrow = blotTipGrow;
     const savedHalts = blotHalts.map((h) => ({ ...h }));
+    liveSmoothCache = null;
+    liveSmoothScene.length = 0;
     spine = [];
     segs = 0;
     sdfLive = 0;
@@ -616,6 +622,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     const next = stamped[0]!;
     lastStamp = next.t;
     const lastKept = kept[kept.length - 1]!;
+    previousInputDot = null;
     ekf.reset(lastKept.x, lastKept.y, next.t);
     for (const d of kept) appendSpine(d);
     ingest(next);
@@ -771,7 +778,17 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     const sctx = snap.getContext("2d");
     if (!sctx) return;
     sctx.setTransform(1, 0, 0, 1, 0, 0);
+    const rect = clipBlitRect(aabb, snap.width, snap.height, CLIP_BLIT_PAD);
+    if (!rect) return;
+    // Replace the stroke footprint. Source-over of the entire host deposits
+    // every older antialiased edge again on each lift and makes it darken.
+    sctx.save();
+    sctx.beginPath();
+    sctx.rect(rect.x, rect.y, rect.w, rect.h);
+    sctx.clip();
+    sctx.globalCompositeOperation = "copy";
     sctx.drawImage(host, 0, 0);
+    sctx.restore();
   };
 
   const blitLiveToSnap = () => {
@@ -969,8 +986,11 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   ) => {
     if (!host) return;
     if (!clip) {
-      ctx.clearRect(0, 0, host.width, host.height);
-      if (src) ctx.drawImage(src, 0, 0);
+      if (src) {
+        ctx.globalCompositeOperation = "copy";
+        ctx.drawImage(src, 0, 0);
+        ctx.globalCompositeOperation = "source-over";
+      } else ctx.clearRect(0, 0, host.width, host.height);
       return;
     }
     if (src) {
@@ -1179,6 +1199,12 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     },
     liftRaw(s) {
       const state = beginLift(s);
+      // Drain input that arrived after the last rAF before deriving the lift
+      // preview: reshapeLiveSpine extends the shared frozen-prefix cache.
+      if (drawing && paintedSegs !== segs) {
+        composite();
+        paintedSegs = segs;
+      }
       const t0 = performance.now();
       // Keep the live-smoothed mesh already on the host. bakeSpine here would
       // sparsify the overlay into polygon vertices after lift.

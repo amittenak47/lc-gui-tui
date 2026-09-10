@@ -125,3 +125,13 @@ export function overdrawnViewport<
     height: viewport.height + 2 * marginYPx,
   };
 }
+/** Pointer coordinates on a CSS-riding bitmap belong to its painted camera. */
+export function inkInputViewport<T extends PanCamera>(
+  live: T,
+  painted: PanCamera | null,
+  riding: boolean,
+): T {
+  return painted && riding
+    ? { ...live, zoom: painted.zoom, scrollX: painted.scrollX, scrollY: painted.scrollY }
+    : { ...live };
+}

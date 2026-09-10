@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  inkInputViewport,
   INK_OVERDRAW_FRACTION,
   MAX_INK_CANVAS_DEVICE_PX,
   OVERDRAW_REBASE_HEADROOM,
@@ -181,5 +182,24 @@ describe("overdrawnViewport", () => {
   it("is a no-op when margin is zero", () => {
     const base = { scrollX: 1, scrollY: 2, zoom: 1.5, width: 10, height: 20 };
     expect(overdrawnViewport(base, 0)).toBe(base);
+  });
+});
+describe("ink input during a CSS pan ride", () => {
+  it("stores the point under the pen in the painted camera, without applying pan twice", () => {
+    const painted = { scrollX: 0, scrollY: -3000, zoom: 2 };
+    const live = { ...painted, scrollY: -3200 };
+    const rideY = (live.scrollY - painted.scrollY) * live.zoom;
+    const penScreenY = 500;
+    const bitmapY = penScreenY - rideY;
+    const captured = inkInputViewport(live, painted, true);
+    const sceneY = bitmapY / captured.zoom - captured.scrollY;
+    expect((sceneY + live.scrollY) * live.zoom).toBe(penScreenY);
+    live.scrollY -= 100;
+    expect(captured.scrollY).toBe(-3000);
+  });
+
+  it("uses the current camera when the bitmap is no longer translated", () => {
+    const live = { scrollX: 0, scrollY: -3200, zoom: 2 };
+    expect(inkInputViewport(live, { ...live, scrollY: -3000 }, false)).toEqual(live);
   });
 });

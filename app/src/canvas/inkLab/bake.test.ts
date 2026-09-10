@@ -16,6 +16,24 @@ function line(): ScenePoint[] {
 }
 
 describe("lift bake", () => {
+  it("does not revisit source geometry or restyle the frozen prefix", () => {
+    let prefixReads = 0;
+    const spine = Array.from({ length: 500 }, (_, i) => ({
+      get x() { if (i < 50) prefixReads++; return i * 3; },
+      y: Math.sin(i / 12) * 15,
+      r: 4 + (i % 7) / 10,
+      rgb: [40, 50, 60] as [number, number, number],
+    }));
+    const raw: ScenePoint[] = [];
+    const first = reshapeLiveSpine(spine, 0.6, null, raw);
+    expect(first.from).toBeGreaterThan(0);
+    prefixReads = 0;
+    spine.push({ x: 1500, y: 0, r: 4, rgb: [60, 70, 80] });
+    const next = reshapeLiveSpine(spine, 0.6, first.cache, raw);
+    expect(prefixReads).toBe(0);
+    expect(next.points[0]).toBe(first.points[0]);
+    expect(next.points.at(-1)!.x).toBe(1500);
+  });
   it("Catmull path matches expandInkTurns on a fixture", () => {
     const pts = line();
     const expected = expandInkTurns(smoothInkPoints(pts, 0.35, 8));

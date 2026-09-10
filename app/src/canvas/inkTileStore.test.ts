@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { inkOpsFingerprint } from "./inkOpsFingerprint";
 import { noteInkTileRaster, peekInkTileMetrics, resetInkTileMetrics } from "./inkTileMetrics";
-import { loadPersistedInkTiles, persistInkTile, resetInkTileStoreForTests } from "./inkTileStore";
+import { inkTilePersistKey, loadPersistedInkTiles, persistInkTile, resetInkTileStoreForTests } from "./inkTileStore";
 import { NO_PRESSURE, type InkDrawOp } from "./rasterInk";
 
 function draw(...pairs: Array<[number, number]>): InkDrawOp {
@@ -48,6 +48,11 @@ describe("inkTileMetrics", () => {
 });
 
 describe("inkTileStore", () => {
+  it("does not reuse potentially incomplete bitmaps from the old worker cache", () => {
+    const ops = [draw([1, 2], [3, 4])];
+    expect(inkTilePersistKey(ops, null)).not.toBe(inkOpsFingerprint(ops));
+    expect(inkTilePersistKey(ops, null)).toBe(inkTilePersistKey(ops, null));
+  });
   afterEach(() => {
     resetInkTileStoreForTests();
     vi.unstubAllGlobals();

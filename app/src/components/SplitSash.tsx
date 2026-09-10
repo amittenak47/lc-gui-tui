@@ -48,12 +48,14 @@ export function SplitSash({
   const unbindRef = useRef<(() => void) | null>(null);
   const moveRafRef = useRef(0);
   const pendingPtrRef = useRef<{ x: number; y: number } | null>(null);
+  const dragBoxRef = useRef<DOMRect | null>(null);
+  const restoreBoardsRef = useRef<(() => void) | null>(null);
 
   const ratioAt = (x: number, y: number): number | null => {
     const sash = sashRef.current;
     const main = sash?.parentElement;
     if (!main) return null;
-    const box = main.getBoundingClientRect();
+    const box = dragBoxRef.current ?? main.getBoundingClientRect();
     return clampSplitRatio(
       axis === "vertical"
         ? (x - box.left) / Math.max(1, box.width)
@@ -111,6 +113,9 @@ export function SplitSash({
     pendingPtrRef.current = null;
     unbindRef.current?.();
     unbindRef.current = null;
+    restoreBoardsRef.current?.();
+    restoreBoardsRef.current = null;
+    dragBoxRef.current = null;
     dragRef.current = false;
     setDragging(false);
     delete document.body.dataset.lcSashDrag;
@@ -132,6 +137,9 @@ export function SplitSash({
       pendingPtrRef.current = null;
       unbindRef.current?.();
       unbindRef.current = null;
+      restoreBoardsRef.current?.();
+      restoreBoardsRef.current = null;
+      dragBoxRef.current = null;
       dragRef.current = false;
       delete document.body.dataset.lcSashDrag;
     },
@@ -140,6 +148,34 @@ export function SplitSash({
 
   const bindDrag = () => {
     unbindRef.current?.();
+    const main = sashRef.current?.parentElement;
+    dragBoxRef.current = main?.getBoundingClientRect() ?? null;
+    // Resize the outer clips during the gesture. Keeping the board layout
+    // fixed avoids container-query/PDF layout and ResizeObservers on each move.
+    // Measure all boards before writing any styles.
+    const boards = [...(main?.querySelectorAll<HTMLElement>(
+      ".is-split-a > .lc-board, .is-split-b > .lc-board",
+    ) ?? [])].map((node) => ({
+      node, width: node.clientWidth, height: node.clientHeight,
+      styles: ["width", "height", "flex-grow", "flex-shrink", "flex-basis"].map((key) => ({
+        key, value: node.style.getPropertyValue(key), priority: node.style.getPropertyPriority(key),
+      })),
+    }));
+    for (const { node, width, height } of boards) {
+      node.style.width = `${width}px`;
+      node.style.height = `${height}px`;
+      node.style.flexGrow = "0";
+      node.style.flexShrink = "0";
+      node.style.flexBasis = "auto";
+    }
+    restoreBoardsRef.current = () => {
+      for (const { node, styles } of boards) {
+        for (const { key, value, priority } of styles) {
+          if (value) node.style.setProperty(key, value, priority);
+          else node.style.removeProperty(key);
+        }
+      }
+    };
     const onMove = (event: PointerEvent) => {
       if (!dragRef.current) return;
       event.preventDefault();

@@ -2679,6 +2679,11 @@ body[data-lc-sash-drag] {
   user-select: none;
 }
 
+body[data-lc-sash-drag] .lc-canvas-wrap.is-split-a,
+body[data-lc-sash-drag] .lc-canvas-wrap.is-split-b {
+  overflow: hidden;
+}
+
 body[data-lc-sash-drag="vertical"] {
   cursor: col-resize;
 }

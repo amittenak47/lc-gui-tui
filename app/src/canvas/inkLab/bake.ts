@@ -43,9 +43,9 @@ function meanRadius(spine: readonly SpineDot[], from = 0): number {
   return s / Math.max(1, n - start);
 }
 
-function syncRawScene(rawScene: ScenePoint[], spine: readonly SpineDot[]): void {
+function syncRawScene(rawScene: ScenePoint[], spine: readonly SpineDot[], appendOnly = false): void {
   const n = spine.length;
-  for (let i = 0; i < n; i++) {
+  for (let i = appendOnly ? Math.max(0, rawScene.length - 1) : 0; i < n; i++) {
     const d = spine[i]!;
     const p = rawScene[i];
     if (!p) {
@@ -72,30 +72,44 @@ export function liveSmoothFrom(cache: LiveSmoothCache | null): number {
   return frozen > 1 ? frozen - 1 : 0;
 }
 
+type LiveRadii = {
+  acc: number[];
+  walked: number[];
+  indices: number[];
+  points: SpineDot[];
+};
+const liveRadii = new WeakMap<LiveSmoothCache, LiveRadii>();
+
 function radiiAlong(
   src: readonly SpineDot[],
   baked: readonly ScenePoint[],
+  memo?: LiveRadii,
+  frozen = 0,
 ): SpineDot[] {
   if (baked.length === 0) return [];
   if (src.length === 0) {
     return baked.map((p) => ({ x: p.x, y: p.y, r: 4 }));
   }
-  const acc = [0];
-  for (let i = 1; i < src.length; i++) {
-    acc.push(
-      acc[i - 1]! + Math.hypot(src[i]!.x - src[i - 1]!.x, src[i]!.y - src[i - 1]!.y),
-    );
+  const acc = memo?.acc ?? [0];
+  for (let i = Math.max(1, acc.length - 1); i < src.length; i++) {
+    acc[i] = acc[i - 1]! + Math.hypot(src[i]!.x - src[i - 1]!.x, src[i]!.y - src[i - 1]!.y);
   }
+  acc.length = src.length;
   const total = acc[acc.length - 1]! || 1;
-  const out: SpineDot[] = [];
-  let j = 0;
-  let walked = 0;
-  for (let i = 0; i < baked.length; i++) {
+  const start = memo ? Math.min(frozen, memo.points.length, baked.length) : 0;
+  const out: SpineDot[] = memo ? memo.points.slice(0, start) : [];
+  let j = start > 0 ? memo!.indices[start - 1]! : 0;
+  let walked = start > 0 ? memo!.walked[start - 1]! : 0;
+  for (let i = start; i < baked.length; i++) {
     const p = baked[i]!;
     if (i > 0) walked += Math.hypot(p.x - baked[i - 1]!.x, p.y - baked[i - 1]!.y);
     const u = Math.min(1, walked / Math.max(total, 1e-6));
     const target = u * total;
     while (j + 1 < acc.length && acc[j + 1]! < target) j += 1;
+    if (memo) {
+      memo.walked[i] = walked;
+      memo.indices[i] = j;
+    }
     const a = src[Math.min(j, src.length - 1)]!;
     const b = src[Math.min(j + 1, src.length - 1)]!;
     const span = (acc[j + 1] ?? acc[j]!) - acc[j]!;
@@ -126,6 +140,12 @@ function radiiAlong(
           ? s0 + (s1 - s0) * t
           : s0 ?? s1,
     });
+  }
+  if (memo) {
+    memo.acc = acc;
+    memo.points = out;
+    memo.walked.length = out.length;
+    memo.indices.length = out.length;
   }
   return out;
 }
@@ -278,13 +298,22 @@ export function reshapeLiveSpine(
   if (strength <= 0 || spine.length < 3) {
     return { points: spine.map((p) => ({ ...p })), cache: null, from: 0 };
   }
-  syncRawScene(rawScene, spine);
-  const fromHint = liveSmoothFrom(cache);
+  syncRawScene(rawScene, spine, cache != null && rawScene.length <= spine.length);
+  const fromHint = cache?.anchor ?? 0;
   const nib = meanRadius(spine, fromHint) * 2;
+  const frozenBefore = liveSmoothFrom(cache);
   const live = smoothLiveInkPoints(rawScene, strength, nib, cache);
   const from = liveSmoothFrom(live.cache);
+  let memo = live.cache ? liveRadii.get(live.cache) : undefined;
+  // Geometry and styling freeze together. Rewalking/reallocating all radii
+  // and RGB values each frame made long strokes slower despite tail-only GPU work.
+  const frozen = memo ? frozenBefore : 0;
+  if (!memo && live.cache) {
+    memo = { acc: [0], walked: [], indices: [], points: [] };
+    liveRadii.set(live.cache, memo);
+  }
   return {
-    points: radiiAlong(spine, live.points),
+    points: radiiAlong(spine, live.points, memo, frozen),
     cache: live.cache,
     from,
   };
