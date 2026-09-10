@@ -59,6 +59,10 @@ import {
 import {
   loadHubAutosync,
 } from "./util/hubAutoSyncPref";
+import {
+  HUB_SYNC_WINDOW_PILL_EVENT,
+  loadHubSyncWindowPill,
+} from "./util/hubSyncWindowPillPref";
 import { loadBoardComponent, peekBoardComponent, type BoardComponent } from "./canvas/boardChunk";
 import { inkOpsFrom } from "./canvas/inkCodec";
 import { inkRestoreSource } from "./canvas/inkRestore";
@@ -1087,6 +1091,16 @@ export function Workspace({
 
   const [padEditSeq, setPadEditSeq] = useState(0);
   const bumpPadEdit = useCallback(() => setPadEditSeq((n) => n + 1), []);
+  const hubSyncTapRef = useRef<(() => void) | null>(null);
+  const onHubSync = useCallback(() => {
+    hubSyncTapRef.current?.();
+  }, []);
+  const [hubSyncWindowPill, setHubSyncWindowPill] = useState(loadHubSyncWindowPill);
+  useEffect(() => {
+    const onPref = () => setHubSyncWindowPill(loadHubSyncWindowPill());
+    window.addEventListener(HUB_SYNC_WINDOW_PILL_EVENT, onPref);
+    return () => window.removeEventListener(HUB_SYNC_WINDOW_PILL_EVENT, onPref);
+  }, []);
 
   const hubSyncHostRef = useRef<HubSyncWalkHost | null>(null);
   /**
@@ -9131,6 +9145,8 @@ export function Workspace({
         onIndex:
           indexInputsRef.current?.docType === "web" ? indexOpenDocumentByHand : null,
         onEmbed: indexInputsRef.current ? embedOpenDocument : null,
+        onSync:
+          tabOffersHubSync(tab.kind) && !isFootnoteBoardTab(tab) ? onHubSync : null,
         indexProgress: docIndexProgress,
         embedProgress: docEmbedProgress,
         embedEta: docEmbedEta,
@@ -9176,6 +9192,7 @@ export function Workspace({
     docEmbedding,
     embedOpenDocument,
     indexOpenDocumentByHand,
+    onHubSync,
     webLive,
     problem,
     setChrome,
@@ -9185,6 +9202,7 @@ export function Workspace({
     annotateDocId,
     whiteboardNotebookId,
     workspaceLoadActive,
+    tab.kind,
   ]);
 
   return (
@@ -9868,23 +9886,20 @@ export function Workspace({
         </form>
       )}
       </>, headerSlots.chrome) : null}
-      {/* The one-tap hub Sync pill lives beside the board's map controls in
-          the chrome slot; only a focused document / whiteboard / web pad
-          mounts its own. Home used to, and the library cards are not a pad. */}
+      {/* One HubSyncControl owns the walk. The chrome pill is optional. */}
       {active &&
-      headerSlots.boardChrome &&
       tabOffersHubSync(tab.kind) &&
       !isFootnoteBoardTab(tab) &&
       !hubConflictAsk ? (
-        createPortal(
-          <HubSyncControl
-            hubHint={hubHint}
-            client={client}
-            host={hubSyncHostRef.current}
-            editSeq={padEditSeq}
-          />,
-          headerSlots.boardChrome,
-        )
+        <HubSyncControl
+          hubHint={hubHint}
+          client={client}
+          host={hubSyncHostRef.current}
+          editSeq={padEditSeq}
+          showDock={hubSyncWindowPill}
+          dock={headerSlots.boardChrome ?? null}
+          tapRef={hubSyncTapRef}
+        />
       ) : null}
         <div
           className={[

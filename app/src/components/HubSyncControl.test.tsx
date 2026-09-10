@@ -160,6 +160,23 @@ describe("HubSyncControl (step-2 stub)", () => {
     expect(activeLabel(button)).toBe("Pad");
   });
 
+  it("hides the dock and still walks from tapRef", () => {
+    vi.useFakeTimers();
+    const tapRef: { current: (() => void) | null } = { current: null };
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    act(() => root.render(<HubSyncControl showDock={false} tapRef={tapRef} />));
+    expect(host.querySelector(".lc-hub-sync")).toBeNull();
+    act(() => {
+      tapRef.current?.();
+    });
+    act(() => root.render(<HubSyncControl showDock tapRef={tapRef} />));
+    const button = host.querySelector(".lc-hub-sync") as HTMLButtonElement;
+    expect(button.dataset.stage).toBe("pad");
+    act(() => root.unmount());
+  });
+
   it("rests on Synced when the hint says the hub already has everything", () => {
     vi.useFakeTimers();
     const hint = {

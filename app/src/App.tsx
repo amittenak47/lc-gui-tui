@@ -1298,6 +1298,7 @@ export function App() {
                   walkError={chrome.docIndex.walkError}
                   walkWaiting={chrome.docIndex.walkWaiting}
                   padSync={chrome.docIndex.padSync}
+                  onSync={chrome.docIndex.onSync}
                 />
               )
             }

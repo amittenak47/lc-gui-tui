@@ -7,7 +7,8 @@
  * uses the same order.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { createPortal } from "react-dom";
 
 import type { AnnotatePadDto, LcClient, WhiteboardPadDto } from "../api/client";
 import type { DocHubHint } from "../util/hubHint";
@@ -252,6 +253,15 @@ export interface HubSyncControlProps {
    * against the value now — and it re-renders, which a ref would not.
    */
   editSeq?: number;
+  /**
+   * The chrome overlay pill. Off (default) keeps Sync in the tab chip; On
+   * puts this dock back. The walk owner is this control either way.
+   */
+  showDock?: boolean;
+  /** Where to portal the pill. Absent when the chrome slot is not mounted. */
+  dock?: HTMLElement | null;
+  /** Tab Sync button calls the same walk as the pill. */
+  tapRef?: MutableRefObject<(() => void) | null>;
 }
 
 export function HubSyncControl({
@@ -259,6 +269,9 @@ export function HubSyncControl({
   client = null,
   host = null,
   editSeq = 0,
+  showDock = true,
+  dock = null,
+  tapRef,
 }: HubSyncControlProps) {
   /*
    * No hub, no pill.
@@ -361,6 +374,7 @@ export function HubSyncControl({
      * Mid-walk taps do nothing; the walk owns itself until it lands. A parked
      * failure is the exception — that tap is the retry.
      */
+    if (wired && !hub) return;
     if (busy && !walkError) return;
     // Where to resume. A failure parks on its own stage and retries from it;
     // everything else — idle, and a finished walk — starts at the top of
@@ -865,8 +879,6 @@ export function HubSyncControl({
     };
   }, [stage, client, host]);
 
-  if (wired && !hub) return null;
-
   const busy = stage !== "idle" && stage !== "synced";
   /*
    * Synced, until the reader writes something.
@@ -893,7 +905,12 @@ export function HubSyncControl({
   const settled = stage === "synced" && !editedSinceSynced ? "synced" : restStage;
   const activeStage = busy ? stage : settled;
 
-  return (
+  if (tapRef) tapRef.current = onTap;
+
+  if (wired && !hub) return null;
+  if (!showDock) return null;
+
+  const pill = (
     <span className="lc-hub-sync-dock">
       <button
         type="button"
@@ -919,4 +936,5 @@ export function HubSyncControl({
       </button>
     </span>
   );
+  return dock ? createPortal(pill, dock) : pill;
 }

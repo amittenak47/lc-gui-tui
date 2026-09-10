@@ -122,6 +122,10 @@ import {
   saveInkPerfBar,
 } from "../util/inkPerfOverlayPref";
 import {
+  loadHubSyncWindowPill,
+  saveHubSyncWindowPill,
+} from "../util/hubSyncWindowPillPref";
+import {
   INK_DISPLAY_HZ,
   loadInkDisplayHz,
   saveInkDisplayHz,
@@ -474,6 +478,8 @@ interface DevicePrefs {
   inkPerfOverlay: boolean;
   /** 5px load bar on the whiteboard. */
   inkPerfBar: boolean;
+  /** Floating Hub Sync pill on the board chrome. Off keeps Sync in the tab. */
+  hubSyncWindowPill: boolean;
   /** Display refresh for HUD vsync and live present cap. */
   inkDisplayHz: InkDisplayHzPref;
   /** Present every dirty vsync. Off keeps the 60fps cap on 90Hz+. */
@@ -510,6 +516,7 @@ function loadDevicePrefs(): DevicePrefs {
     pdfFlickMomentum: loadPdfFlickMomentum(),
     inkPerfOverlay: loadInkPerfOverlay(),
     inkPerfBar: loadInkPerfBar(),
+    hubSyncWindowPill: loadHubSyncWindowPill(),
     inkDisplayHz: loadInkDisplayHz(),
     inkMatchDisplay: loadInkMatchDisplay(),
   };
@@ -545,6 +552,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.pdfFlickMomentum === b.pdfFlickMomentum &&
     a.inkPerfOverlay === b.inkPerfOverlay &&
     a.inkPerfBar === b.inkPerfBar &&
+    a.hubSyncWindowPill === b.hubSyncWindowPill &&
     a.inkDisplayHz === b.inkDisplayHz &&
     a.inkMatchDisplay === b.inkMatchDisplay
   );
@@ -859,6 +867,7 @@ export function SettingsModal({
   const [pdfFlickMomentum, setPdfFlickMomentum] = useState(() => loadPdfFlickMomentum());
   const [inkPerfOverlay, setInkPerfOverlay] = useState(() => loadInkPerfOverlay());
   const [inkPerfBar, setInkPerfBar] = useState(() => loadInkPerfBar());
+  const [hubSyncWindowPill, setHubSyncWindowPill] = useState(() => loadHubSyncWindowPill());
   const [inkDisplayHz, setInkDisplayHz] = useState<InkDisplayHzPref>(() => loadInkDisplayHz());
   const [inkMatchDisplay, setInkMatchDisplay] = useState(() => loadInkMatchDisplay());
   const [testForward, setTestForward] = useState<TestForwardMode>(() =>
@@ -1095,6 +1104,7 @@ export function SettingsModal({
     setPdfFlickMomentum(prefs.pdfFlickMomentum);
     setInkPerfOverlay(prefs.inkPerfOverlay);
     setInkPerfBar(prefs.inkPerfBar);
+    setHubSyncWindowPill(prefs.hubSyncWindowPill);
     setInkDisplayHz(prefs.inkDisplayHz);
     setInkMatchDisplay(prefs.inkMatchDisplay);
     setBaselinePrefs(prefs);
@@ -1196,6 +1206,7 @@ export function SettingsModal({
     pdfFlickMomentum,
     inkPerfOverlay,
     inkPerfBar,
+    hubSyncWindowPill,
     inkDisplayHz,
     inkMatchDisplay,
   };
@@ -1267,6 +1278,7 @@ export function SettingsModal({
         savePdfFlickMomentum(pdfFlickMomentum);
         saveInkPerfOverlay(inkPerfOverlay);
         saveInkPerfBar(inkPerfBar);
+        saveHubSyncWindowPill(hubSyncWindowPill);
         saveInkDisplayHz(inkDisplayHz);
         saveInkMatchDisplay(inkMatchDisplay);
         setBaselinePrefs(draftPrefs);
@@ -2113,6 +2125,43 @@ export function SettingsModal({
                       : "lc-settings-choice-option"
                   }
                   onClick={() => setInkPerfOverlay(true)}
+                >
+                  <strong>On</strong>
+                </button>
+              </div>
+              <div className="lc-settings-subhead">Window Sync pill</div>
+              <p className="lc-settings-hint">
+                Off keeps Sync in the tab. On puts the overlay pill back on
+                the board chrome. Saved on this device only.
+              </p>
+              <div
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Window Sync pill"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!hubSyncWindowPill}
+                  className={
+                    hubSyncWindowPill
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() => setHubSyncWindowPill(false)}
+                >
+                  <strong>Off</strong>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={hubSyncWindowPill}
+                  className={
+                    hubSyncWindowPill
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setHubSyncWindowPill(true)}
                 >
                   <strong>On</strong>
                 </button>
