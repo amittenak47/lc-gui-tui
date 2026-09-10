@@ -15,6 +15,7 @@ import {
 import { WHEEL_OPEN_MS } from "../util/gesture";
 import { sashDragActive } from "../util/splitResize";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
+import { thinInkPointsForStorage } from "./inkSmoothing";
 import { InkPageBook } from "./inkPageCache";
 import { pageIdAtViewport, type PageFrame } from "./inkPageIndex";
 import { InkTileCache, inkOpBounds } from "./inkTiles";
@@ -65,6 +66,7 @@ import {
   highlighterChiselWidth,
   highlighterDrawOp,
   inkBaseWidthForZoom,
+  inkLineWidth,
   isHostBoundOp,
   eraserCanvasRadius,
   eraserSceneRadius,
@@ -288,15 +290,21 @@ function opFromBake(
   pressureClip: number,
   pressureSensitive: boolean,
   speedFade: number,
+  smoothing = 0,
 ): InkDrawOp {
+  const baseWidth = inkBaseWidthForZoom(uiWidth, view.zoom);
+  const scene = spineToScene(baked.points, view, dpr);
   const op: InkDrawOp = {
     kind: "draw",
     color,
-    baseWidth: inkBaseWidthForZoom(uiWidth, view.zoom),
+    baseWidth,
     maxFullness: 1,
     pressureClip,
     pressureSensitive,
-    points: spineToScene(baked.points, view, dpr),
+    points:
+      smoothing > 0
+        ? thinInkPointsForStorage(scene, inkLineWidth(baseWidth, 0, false))
+        : scene,
   };
   if (baked.blotTipGrow > 0) op.blotTipGrow = baked.blotTipGrow;
   if (speedFade > 1e-6) op.speedFade = speedFade;
@@ -1745,13 +1753,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               pressureClip,
               pressureSensitive,
               speedFade,
+              baked.bakeOptions.smoothing,
             ),
             strokeHost,
           );
           const committed = bookRef.current.commit(op) as InkDrawOp;
           ensureTiles().deferOp(committed);
           if (isInkLabPenOp(op)) {
-            const overlayIndex = overlayRef.current.length;
             const previewSpine = baked.points.map((d) => ({ ...d }));
             commitOverlay(
               overlayRef.current,
@@ -1760,11 +1768,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             );
             rememberCommitPatch(baked.undoPatch);
             const committedRevision = bookRef.current.revision();
-            if (
-              baked.bakeOptions.smoothing > 0 ||
-              baked.bakeOptions.clothoid ||
-              baked.bakeOptions.capillary
-            ) {
+            if (baked.bakeOptions.clothoid || baked.bakeOptions.capillary) {
               void bakeSpineOffThread(baked.bakeInput, baked.bakeOptions).then((finalBake) => {
                 const final = { ...baked, ...finalBake, undoPatch: null };
                 const finalOp = opFromBake(
@@ -1776,12 +1780,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
                   pressureClip,
                   pressureSensitive,
                   speedFade,
+                  baked.bakeOptions.smoothing,
                 );
                 const previewBounds = inkOpBounds(committed);
                 committed.points = finalOp.points;
                 const finalBounds = inkOpBounds(committed);
-                // The preview pixels stay visible; the next camera paint must
-                // rebuild affected tiles from the final off-thread curve.
                 tilesRef.current?.invalidateBounds(
                   {
                     minX: Math.min(previewBounds.minX, finalBounds.minX),
@@ -1791,16 +1794,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
                   },
                   committed,
                 );
-                // Only replace the cached overlay when nothing else has
-                // changed it. The visible snap already contains the curved
-                // live preview, so no full-page remesh is needed here.
-                if (
-                  bookRef.current.revision() === committedRevision &&
-                  overlayRef.current[overlayIndex] === previewSpine
-                ) {
-                  overlayRef.current[overlayIndex] = finalBake.points.map((dot) => ({ ...dot }));
+                if (bookRef.current.revision() === committedRevision) {
+                  bakeRef.current = { bakeMs: finalBake.bakeMs, bake: finalBake.bake };
                 }
-                bakeRef.current = { bakeMs: finalBake.bakeMs, bake: finalBake.bake };
                 onChangeRef.current?.();
               });
             }

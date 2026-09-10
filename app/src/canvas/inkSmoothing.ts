@@ -125,6 +125,20 @@ export const SIMPLIFY_MAX_FRACTION = 0.5;
  */
 export const SIMPLIFY_STORAGE_FRACTION = 1 / 15;
 
+/**
+ * Thin a committed stroke at the storage floor only.
+ *
+ * Lift already painted the live mesh. This is the 1/15-nib floor paid once
+ * for later tile rasters — not a second Chaikin that shows polygon vertices.
+ */
+export function thinInkPointsForStorage(
+  points: readonly ScenePoint[],
+  nibWidth: number,
+): ScenePoint[] {
+  if (points.length < 3) return [...points];
+  return simplifyInkPoints(points, Math.max(nibWidth, 1e-6) * SIMPLIFY_STORAGE_FRACTION);
+}
+
 /** Simplifier floor for live commits — looser than storage, still under the ink. */
 export const SIMPLIFY_LIVE_FRACTION = 1 / 6;
 

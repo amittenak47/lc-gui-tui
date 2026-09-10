@@ -9,6 +9,8 @@ describe("createInkLabEngine", () => {
         if (kind === "webgl2") return null;
         return {
           clearRect() {},
+          setTransform() {},
+          drawImage() {},
         };
       },
     } as unknown as HTMLCanvasElement;

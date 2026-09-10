@@ -761,6 +761,19 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     return dests;
   };
 
+  /**
+   * Freeze the live host into the committed snap. A remesh of the raw
+   * samples (or a second Chaikin) is what turned a dark overlapping hatch
+   * into a thin polygon after lift.
+   */
+  const blitHostToSnap = () => {
+    if (!host || !snap) return;
+    const sctx = snap.getContext("2d");
+    if (!sctx) return;
+    sctx.setTransform(1, 0, 0, 1, 0, 0);
+    sctx.drawImage(host, 0, 0);
+  };
+
   const blitLiveToSnap = () => {
     if (!snap) return;
     const sctx = snap.getContext("2d");
@@ -1073,10 +1086,19 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     bake: InkLabBake,
     bakeMs: number,
     keepUndoPatch: boolean,
+    keepLivePixels: boolean,
   ): InkLabUpResult => {
-    applyBaked(points);
+    if (keepLivePixels) {
+      // Host already has the live composite after a paint. Re-presenting the
+      // empty snap punches the frozen prefix and the tail redraw cannot fill it.
+      if (paintedSegs === 0) composite();
+      else if (liveRedrawBox) unionAabb(aabb, liveRedrawBox);
+    } else {
+      applyBaked(points);
+    }
     const undoPatch = keepUndoPatch && points.length > 0 ? copySnapPatch(aabb) : null;
-    blitLiveToSnap();
+    if (keepLivePixels) blitHostToSnap();
+    else blitLiveToSnap();
     drawing = false;
     holding = false;
     holdPlateau = false;
@@ -1153,13 +1175,13 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       });
       const points = state.options.capillary ? capillaryRelax(baked.points) : baked.points;
       const bakeMs = performance.now() - t0;
-      return finishLift(state, points, baked.bake, bakeMs, true);
+      return finishLift(state, points, baked.bake, bakeMs, true, true);
     },
     liftRaw(s) {
       const state = beginLift(s);
       const t0 = performance.now();
-      // Reuse the bounded live-tail smoother so the committed pixels do not
-      // jump back to raw chords while the worker computes the final bake.
+      // Keep the live-smoothed mesh already on the host. bakeSpine here would
+      // sparsify the overlay into polygon vertices after lift.
       const preview =
         state.options.smoothing > 0 && state.raw.length >= 3
           ? reshapeLiveSpine(
@@ -1176,6 +1198,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         preview,
         "catmull",
         performance.now() - t0,
+        true,
         true,
       );
       return { ...result, bakeInput: state.raw, bakeOptions: state.options };

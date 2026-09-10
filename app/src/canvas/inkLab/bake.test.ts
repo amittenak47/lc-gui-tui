@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { expandInkTurns, type ScenePoint } from "../rasterInk";
-import { smoothInkPoints } from "../inkSmoothing";
+import { SIMPLIFY_STORAGE_FRACTION, simplifyInkPoints, smoothInkPoints } from "../inkSmoothing";
 import { bakeCatmull, bakeSpine, reshapeLiveSpine, reshapeSpine } from "./bake";
 import { emptyAabb, expandAabb } from "./instance";
 
@@ -55,6 +55,30 @@ describe("lift bake", () => {
     expect(out[out.length - 1]!.x).toBeCloseTo(40);
     expect(out[out.length - 1]!.y).toBeCloseTo(0);
     expect(Math.abs(out[2]!.y)).toBeLessThan(8);
+  });
+
+  it("live reshape at lift keeps at least as many points as a storage bake", () => {
+    const spine: { x: number; y: number; r: number; p: number }[] = [];
+    for (let i = 0; i < 80; i++) {
+      spine.push({
+        x: i * 4,
+        y: Math.sin(i / 3) * 14 + (i % 5) * 0.4,
+        r: 6,
+        p: 0.5,
+      });
+    }
+    const rawScene: ScenePoint[] = [];
+    let cache = null as ReturnType<typeof reshapeLiveSpine>["cache"];
+    let live = reshapeLiveSpine(spine, 0.35, cache, rawScene);
+    for (let n = 12; n <= spine.length; n += 8) {
+      live = reshapeLiveSpine(spine.slice(0, n), 0.35, cache, rawScene);
+      cache = live.cache;
+    }
+    const baked = bakeSpine(spine, { smoothing: 0.35 });
+    const scenes = spine.map((p) => ({ x: p.x, y: p.y, pressure: p.p }));
+    const stored = simplifyInkPoints(scenes, 12 * SIMPLIFY_STORAGE_FRACTION);
+    expect(live.points.length).toBeGreaterThanOrEqual(stored.length);
+    expect(live.points.length).not.toBe(baked.points.length);
   });
 
   it("live-smooth tail keeps endpoints and freezes the prefix", () => {
