@@ -248,7 +248,15 @@ describe("Board", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     expect(src).toMatch(/drawPageRecentreCamera/);
     expect(src).toMatch(/runFit\(null, "recentre"\)/);
+    expect(src).toMatch(/paintExcalidrawCanvases/);
+    expect(src).toMatch(/remeshInk && drawPage \? "recentre"/);
+    expect(src).not.toMatch(/ORIENT_RETRIES_MS/);
     expect(src).toMatch(/linedOverlayViewport/);
+  });
+
+  it("announces split settle so both boards remesh once", () => {
+    const src = readFileSync(join(here, "../App.tsx"), "utf8");
+    expect(src).toMatch(/announceSplitResize\("settle"\)/);
   });
 
   it("defers pan on a selectable PDF so hold-to-footnote can arm", () => {
@@ -399,7 +407,9 @@ describe("Workspace pane switch", () => {
       src.indexOf("A parked save used to leave switchMotion"),
     );
     expect(settle).toMatch(/syncLiveBox/);
+    expect(settle).toMatch(/remeshLayout/);
     expect(settle).not.toMatch(/boardRef\.current\?\.nudgeViewportFit/);
+    expect(settle).not.toMatch(/\[0, 80, 200, 400, 700\]/);
     expect(settle).not.toMatch(/dispatchEvent\(new Event\("resize"\)\)/);
   });
 

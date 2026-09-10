@@ -136,6 +136,7 @@ import {
   liveBoardViewSize,
   liveExcalidrawViewport,
 } from "./documentRotateCamera";
+import { paintExcalidrawCanvases } from "./excalidrawCanvasSize";
 import { DOCUMENT_LAYER_SELECTOR, documentLayerHeight } from "./documentLayer";
 import {
   contentSlotCssTransform,
@@ -6611,10 +6612,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [mobileRegion, interactive]);
 
   /**
-   * Write the live `.lc-board` box onto Excalidraw, then keepY-fit.
+   * Write the live `.lc-board` box onto Excalidraw, then fit.
    *
    * `api.refresh()` only copies offsets. Without this, split/rotate leave the
    * canvas at `window.innerWidth` until a pointer runs `updateDOMRect`.
+   * A draw page Recentres about the hole centre; documents keepY.
    */
   const applyLiveBoxFit = useCallback(
     (force: boolean, remeshInk = true): boolean => {
@@ -6701,9 +6703,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       api.refresh?.();
       maybeGrowDrawFrame();
-      runFit(null, "keepY");
-      if (remeshInk && isDrawPageRegion(mobileRegionRef.current)) {
+      const drawPage = isDrawPageRegion(mobileRegionRef.current);
+      if (remeshInk) {
+        clearPanOffsets();
+        paintExcalidrawCanvases(board, live.width, live.height);
+      }
+      runFit(null, remeshInk && drawPage ? "recentre" : "keepY");
+      if (remeshInk && drawPage) {
         rasterInkRef.current?.syncCamera();
+        reportLinedSlot();
       }
       lastFittedBoardBoxRef.current = { w: live.width, h: live.height };
       if (prev.w >= 8 && prev.h >= 8 && boxChanged) {
@@ -6712,7 +6720,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       return true;
     },
-    [maybeGrowDrawFrame, runFit],
+    [clearPanOffsets, maybeGrowDrawFrame, reportLinedSlot, runFit],
   );
 
   const viewportFitRafRef = useRef(0);
@@ -6722,8 +6730,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!viewportFitRafRef.current) {
       viewportFitRafRef.current = requestAnimationFrame(() => {
         viewportFitRafRef.current = 0;
-        reportContentSlot();
-        reportLinedSlot();
         applyLiveBoxFit(false, false);
       });
     }
@@ -6731,7 +6737,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     viewportFitSettleRef.current = window.setTimeout(() => {
       applyLiveBoxFit(true, true);
     }, 120);
-  }, [applyLiveBoxFit, reportContentSlot, reportLinedSlot]);
+  }, [applyLiveBoxFit]);
 
   const nudgeViewportFit = useCallback(() => {
     lastFittedBoardBoxRef.current = { w: 0, h: 0 };
@@ -6743,6 +6749,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     applyLiveBoxFit(false);
     requestAnimationFrame(() => applyLiveBoxFit(false));
   }, [applyLiveBoxFit]);
+
+  const remeshLayout = useCallback(() => {
+    if (!isDrawPageRegion(mobileRegionRef.current)) {
+      syncLiveBox();
+      return;
+    }
+    lastFittedBoardBoxRef.current = { w: 0, h: 0 };
+    applyLiveBoxFit(true, true);
+  }, [applyLiveBoxFit, syncLiveBox]);
 
   /**
    * The Recentre button.
@@ -6829,7 +6844,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     lastFittedBoardBoxRef.current = { w: 0, h: 0 };
     const late: number[] = [];
     let apiWaits = 0;
-    const ORIENT_RETRIES_MS = [0, 80, 200, 400, 700];
     const run = (force: boolean, remeshInk = true) => {
       const box = boardRef.current?.getBoundingClientRect();
       const w = Math.round(box?.width ?? 0);
@@ -6854,9 +6868,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       lastFittedBoardBoxRef.current = { w: 0, h: 0 };
       for (const id of late) window.clearTimeout(id);
       late.length = 0;
-      for (const ms of ORIENT_RETRIES_MS) {
-        late.push(window.setTimeout(() => run(true, true), ms));
-      }
+      run(true, true);
     };
     window.addEventListener("orientationchange", onOrient);
     const orientation = window.screen?.orientation;
@@ -6871,9 +6883,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * new width and both boards still fitted to the old ones.
      *
      * `settle` takes the orientation path deliberately: it clears the
-     * last-fitted box so the run cannot early-out on "same size as last time",
-     * and it retries on the same ladder, because the first frame after a drag
-     * is as half-laid-out as the first frame after a rotate.
+     * last-fitted box so the run cannot early-out on "same size as last time".
+     * One remesh — a timeout ladder Recentred the book five times.
      */
     const onSplitResize = (event: Event) => {
       if (splitResizePhase(event) === "settle") onOrient();
@@ -7536,14 +7547,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * first paint.
      */
     if (isDrawPageRegion(next)) {
-      if (becameInteractive && alreadyPlaced) {
-        rasterInkRef.current?.syncCamera();
-        if (!annotateCodeRef.current) armReadingScroll();
-        return;
-      }
-      userAdjustedCameraRef.current = false;
-      runFit(next, "keepY");
-      rasterInkRef.current?.syncCamera();
+      lastFittedBoardBoxRef.current = { w: 0, h: 0 };
+      applyLiveBoxFit(true, true);
       if (!annotateCodeRef.current) armReadingScroll();
       return;
     }
@@ -7557,31 +7562,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * Keep where you were. Re-derive how big it should be.
        *
        * A saved camera carries a zoom that fitted the pane it was saved in, and
-       * nothing checks that today's pane is that pane. Capture a page on the
-       * full window, reopen it in half of a split, and the saved zoom is around
-       * three times too large — the page arrives spilling out of its pane, and
-       * comes right the instant anything resizes. That is not a coincidence:
-       * `keepCamera` skips the open fit entirely, so a resize was genuinely the
-       * only thing left that would re-fit.
-       *
-       * `keepY` is precisely what that resize does — hold the scene line at the
-       * top of the hole, which is the page you were on, and re-fit the width.
-       * So the reader keeps their place and stops having to nudge the sash to
-       * get their document sized.
-       *
-       * On the ladder because the first frames of an open are not the pane's
-       * final box: the content is still measuring, and a split that is still
-       * laying out reports a width it is about to stop having.
+       * nothing checks that today's pane is that pane. `keepY` holds the scene
+       * line at the top of the hole. One pass — a timeout ladder was five
+       * Recentres and a jump to page 1.
        */
-      const settle = [0, 80, 200, 400, 700].map((ms) =>
-        window.setTimeout(() => {
-          syncDocumentScrollBounds();
-          nudgeViewportFit();
-        }, ms),
-      );
-      return () => {
-        for (const id of settle) window.clearTimeout(id);
-      };
+      syncDocumentScrollBounds();
+      syncLiveBox();
+      return;
     }
     void settleFitView().then(() => {
       syncDocumentScrollBounds();
@@ -7594,12 +7581,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [
     interactive,
     mobileRegion,
+    applyLiveBoxFit,
     armReadingScroll,
-    nudgeViewportFit,
     reportCodeSlot,
-    runFit,
     settleFitView,
     syncDocumentScrollBounds,
+    syncLiveBox,
   ]);
 
   /*
@@ -8788,6 +8775,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       settleFitView,
       nudgeViewportFit,
       syncLiveBox,
+      remeshLayout,
       waitForTemplate,
       fitCodeToSource,
       hasRasterInk: () => rasterInkRef.current?.hasInk() ?? false,
@@ -8996,7 +8984,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       armReadingScroll,
       syncDocumentScrollBounds,
     }),
-    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, maybeGrowDrawFrame, nudgeViewportFit, syncLiveBox, refitToViewport, runFit, scheduleSlotReports, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand, armReadingScroll, syncDocumentScrollBounds],
+    [convert, elements, fitCamera, fitCodeToSource, fitCurrentView, fitFrame, fitView, maybeGrowDrawFrame, nudgeViewportFit, remeshLayout, syncLiveBox, refitToViewport, runFit, scheduleSlotReports, settleFitView, waitForTemplate, resetTemplate, scheduleFitView, setTool, syncPageVisibility, themeId, undoBoard, zoomIn, zoomOut, ensureReadingHand, armReadingScroll, syncDocumentScrollBounds],
   );
 
   return (
