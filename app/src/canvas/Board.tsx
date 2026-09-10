@@ -2995,8 +2995,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const clampPanScroll = useCallback((scrollX: number, scrollY: number, zoom: number) => {
     let bounds = pageBoundsRef.current;
-    const api = apiRef.current;
-    if (!bounds || !api) return { scrollX, scrollY };
+    if (!bounds) return { scrollX, scrollY };
     // Cached height only — wheel hits this many times per frame.
     if (pageContentRef.current) {
       bounds = pageBoundsWithRendered(
@@ -3011,13 +3010,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * offered "Scroll back to content" and the hold button sat on a dead zone.
      * Clamp whenever we know the open page box (md-ink / region frames).
      */
-    const state = api.getAppState() as { width?: number; height?: number };
     const fitted = lastFittedBoardBoxRef.current;
-    const boardBox =
-      fitted.w >= 8 && fitted.h >= 8
-        ? { width: fitted.w, height: fitted.h }
-        : boardRef.current?.getBoundingClientRect();
-    const { viewWidth, viewHeight } = liveBoardViewSize(boardBox, state);
+    let viewWidth: number;
+    let viewHeight: number;
+    if (fitted.w >= 8 && fitted.h >= 8) {
+      viewWidth = fitted.w;
+      viewHeight = fitted.h;
+    } else {
+      const api = apiRef.current;
+      if (!api) return { scrollX, scrollY };
+      const state = api.getAppState() as { width?: number; height?: number };
+      const boardBox = boardRef.current?.getBoundingClientRect();
+      const size = liveBoardViewSize(boardBox, state);
+      viewWidth = size.viewWidth;
+      viewHeight = size.viewHeight;
+    }
     if (viewWidth < 1 || viewHeight < 1) return { scrollX, scrollY };
     const inset = measureChromeInsets(
       boardRef.current,
@@ -4212,12 +4219,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        */
       if (isSubMarkDragLive()) return;
 
-      // Mouse: down+drag on markdown words is native select. A PDF is a pan —
-      // the text layer is a hit target, not a native-select surface. Skip the
-      // early return so a drag can still pan; still mark the PDF selectable
-      // below so hold-to-marquee can claim the finger (same 16px slop as
-      // markdown). Excluding `.lc-pdf-doc` from selectableDoc stopPropagation'd
-      // pointerdown and the hold never armed.
+      // A PDF is a pan. Markdown still defers 16px so hold-to-select can arm.
+      // Do not stopPropagation — the hold-to-marquee listener on `.lc-doc-selectable` still has to fire.
       const onPdfDoc =
         resolveElement(event.target)?.closest(
           ".lc-pdf-doc, .lc-pdf-page, .lc-pdf-canvas, .lc-pdf-text, .textLayer",
@@ -4259,6 +4262,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        */
       const onSelectableDoc =
         !onCodeDock &&
+        !onPdfDoc &&
         resolveElement(event.target)?.closest(".lc-doc-selectable") != null;
       const deferred = onCodeDock || sideScroll != null || onSelectableDoc;
 
@@ -4277,11 +4281,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // Code dock: defer preventDefault until pan arms — taps must reach Monaco.
       if (!deferred) {
         event.preventDefault();
-        event.stopPropagation();
+        if (!onPdfDoc) event.stopPropagation();
       } else if (onPdfDoc) {
-        // PDF text is user-select:text. Without this, a flick starts a native
-        // range and selectableDoc aborts pan. Do not stopPropagation — the
-        // hold-to-marquee listener on `.lc-doc-selectable` still has to fire.
         event.preventDefault();
       }
 
@@ -5748,15 +5749,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const api = apiRef.current;
       if (!api) return;
 
-      const state = api.getAppState() as {
-        zoom?: { value?: number };
-        scrollX?: number;
-        scrollY?: number;
-        offsetLeft?: number;
-        offsetTop?: number;
-      };
-      const zoom = state.zoom?.value ?? 1;
-
       /*
        * The wheel reads the page. It is the only thing it does now.
        *
@@ -5768,29 +5760,35 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         event.preventDefault();
         event.stopPropagation();
         userAdjustedCameraRef.current = true;
-        // Prefer pending (scheduled) then live — wheel samples coalesce, so
-        // chaining off only `live` would drop travel still waiting on rAF.
+        // Prefer pending (scheduled) then live even after settle, then the
+        // last committed pan camera. Reading Excalidraw on the first sample
+        // is the stall from a dead stop.
         const pending = pendingVisualScrollRef.current;
         const live = liveCameraRef.current;
+        const committed = committedPanCameraRef.current;
+        const zoom = Math.max(0.05, live?.zoom ?? committed.zoom);
         const baseY = pending
           ? pending.scrollY
-          : live?.live
+          : live != null
             ? live.scrollY
-            : (state.scrollY ?? 0);
+            : committed.scrollY;
         const lockX = scrollModeRef.current ? lockedScrollXRef.current : null;
         const baseX =
           lockX ??
           (pending
             ? pending.scrollX
-            : live?.live
+            : live != null
               ? live.scrollX
-              : (state.scrollX ?? 0));
+              : committed.scrollX);
         const wheeled = clampPanScroll(
           baseX,
           baseY - (event.deltaY / zoom) * SCROLL_WHEEL_GAIN,
           zoom,
         );
-        scheduleVisualScrollRef.current(lockX ?? wheeled.scrollX, wheeled.scrollY);
+        const nextX = lockX ?? wheeled.scrollX;
+        const nextY = wheeled.scrollY;
+        if (!live?.live) applyVisualScrollNowRef.current(nextX, nextY);
+        else scheduleVisualScrollRef.current(nextX, nextY);
         return;
       }
 
