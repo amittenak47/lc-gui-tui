@@ -13,6 +13,7 @@ import {
 } from "react";
 
 import { WHEEL_OPEN_MS } from "../util/gesture";
+import { sashDragActive } from "../util/splitResize";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { InkPageBook } from "./inkPageCache";
 import { pageIdAtViewport, type PageFrame } from "./inkPageIndex";
@@ -1147,7 +1148,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         // would remesh the page. Apply it on lift / settle. Overdraw is the
         // pan budget: without it setPanOffset rebases after <1px and every
         // scroll frame remeshes.
-        if (drawingRef.current || cameraMovingRef.current) return;
+        if (drawingRef.current || cameraMovingRef.current || sashDragActive()) return;
         const dpr = window.devicePixelRatio || 1;
         const cssW = Math.max(1, host.clientWidth);
         const cssH = Math.max(1, host.clientHeight);

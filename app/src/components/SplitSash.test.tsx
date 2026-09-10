@@ -19,6 +19,14 @@ beforeAll(() => {
   }
 });
 
+function flushRaf() {
+  return act(async () => {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
 function pointer(type: string, x: number, y: number) {
   const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 });
   Object.defineProperty(event, "pointerId", { value: 1 });
@@ -27,7 +35,7 @@ function pointer(type: string, x: number, y: number) {
 }
 
 describe("SplitSash", () => {
-  it("writes CSS vars on move and commits the ratio on pointerup", () => {
+  it("writes CSS vars on move and commits the ratio on pointerup", async () => {
     const onRatio = vi.fn();
     const host = document.createElement("div");
     Object.defineProperty(host, "getBoundingClientRect", {
@@ -48,6 +56,7 @@ describe("SplitSash", () => {
     act(() => {
       window.dispatchEvent(pointer("pointermove", 300, 100));
     });
+    await flushRaf();
     expect(onRatio).not.toHaveBeenCalled();
     expect(host.style.getPropertyValue("--lc-split-a")).toBe("0.3");
     expect(host.style.getPropertyValue("--lc-split-b")).toBe("0.7");
@@ -63,7 +72,7 @@ describe("SplitSash", () => {
     });
   });
 
-  it("still resizes when the board under the finger stops bubbling", () => {
+  it("still resizes when the board under the finger stops bubbling", async () => {
     const onRatio = vi.fn();
     const host = document.createElement("div");
     Object.defineProperty(host, "getBoundingClientRect", {
@@ -84,6 +93,7 @@ describe("SplitSash", () => {
     act(() => {
       board.dispatchEvent(pointer("pointermove", 220, 100));
     });
+    await flushRaf();
     expect(onRatio).not.toHaveBeenCalled();
     expect(host.style.getPropertyValue("--lc-split-a")).toBe("0.22");
     act(() => {
@@ -96,7 +106,7 @@ describe("SplitSash", () => {
     expect(onRatio.mock.calls[0]?.[0]).toBeCloseTo(0.22, 5);
   });
 
-  it("acts on each pointer move once", () => {
+  it("acts on each pointer move once", async () => {
     // The handler was bound to `window` *and* `document`, so an ordinary move
     // reached both: two layout reads, two CSS writes, two board resizes.
     const moves: string[] = [];
@@ -123,6 +133,7 @@ describe("SplitSash", () => {
     act(() => {
       window.dispatchEvent(pointer("pointermove", 300, 100));
     });
+    await flushRaf();
     expect(moves).toEqual(["move"]);
     act(() => {
       window.dispatchEvent(pointer("pointerup", 300, 100));
