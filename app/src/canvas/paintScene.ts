@@ -193,13 +193,16 @@ function paintBoundLabel(
   const w = box.width ?? 0;
   const h = box.height ?? 0;
   const fontSize = label.fontSize ?? 16;
+  const lines = text.split("\n");
+  const lineHeight = fontSize * (label.lineHeight ?? 1.25);
   ctx.save();
   ctx.fillStyle = label.strokeColor && label.strokeColor !== "transparent" ? label.strokeColor : "#1e1e1e";
   ctx.font = `${fontSize}px ${fontFace(label.fontFamily ?? FONT_UI)}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  const maxWidth = Math.max(8, w - 8);
-  ctx.fillText(text, w / 2, h / 2, maxWidth);
+  const maxWidth = Math.max(8, (box.type === "diamond" ? w * 0.6 : w) - 12);
+  const startY = h / 2 - (lines.length - 1) * lineHeight / 2;
+  lines.forEach((line, index) => ctx.fillText(line, w / 2, startY + index * lineHeight, maxWidth));
   ctx.restore();
 }
 
@@ -233,6 +236,7 @@ function paintLinear(ctx: CanvasRenderingContext2D, element: PaintSceneElement):
   const pts = element.points;
   if (!pts || pts.length < 2) return;
   ctx.save();
+  ctx.globalAlpha *= (element.opacity ?? 100) / 100;
   ctx.translate(element.x, element.y);
   applyStroke(ctx, element);
   ctx.beginPath();
@@ -263,17 +267,35 @@ function paintLinear(ctx: CanvasRenderingContext2D, element: PaintSceneElement):
 
 function inView(element: PaintSceneElement, view: PaintSceneOptions["view"]): boolean {
   if (!view) return true;
-  const x = element.x;
-  const y = element.y;
-  let maxX = x + (element.width ?? 0);
-  let maxY = y + (element.height ?? 0);
+  // Auto-sized text has no reliable bounds until it is measured by the painter.
+  if (element.type === "text" && (!element.width || !element.height)) return true;
+  const { x, y } = element;
+  const w = element.width ?? 0;
+  const h = element.height ?? 0;
+  let minX = Math.min(x, x + w);
+  let minY = Math.min(y, y + h);
+  let maxX = Math.max(x, x + w);
+  let maxY = Math.max(y, y + h);
   if (element.points) {
     for (const pt of element.points) {
+      minX = Math.min(minX, x + pt[0]);
+      minY = Math.min(minY, y + pt[1]);
       maxX = Math.max(maxX, x + pt[0]);
       maxY = Math.max(maxY, y + pt[1]);
     }
+  } else if (element.angle) {
+    const cos = Math.abs(Math.cos(element.angle));
+    const sin = Math.abs(Math.sin(element.angle));
+    const rx = (Math.abs(w) * cos + Math.abs(h) * sin) / 2;
+    const ry = (Math.abs(w) * sin + Math.abs(h) * cos) / 2;
+    minX = x + w / 2 - rx;
+    maxX = x + w / 2 + rx;
+    minY = y + h / 2 - ry;
+    maxY = y + h / 2 + ry;
   }
-  return x <= view.maxX && y <= view.maxY && maxX >= view.minX && maxY >= view.minY;
+  const bleed = Math.max(12, element.strokeWidth ?? 1);
+  return minX - bleed <= view.maxX && minY - bleed <= view.maxY &&
+    maxX + bleed >= view.minX && maxY + bleed >= view.minY;
 }
 
 /**
@@ -292,13 +314,13 @@ export function paintSceneElements(
   const bound = new Map<string, PaintSceneElement[]>();
   const rest: PaintSceneElement[] = [];
   for (const el of drawable) {
-    if (opts.view && !opts.all && !inView(el, opts.view)) continue;
     if (el.type === "text" && el.containerId && byId.has(el.containerId)) {
       const list = bound.get(el.containerId) ?? [];
       list.push(el);
       bound.set(el.containerId, list);
       continue;
     }
+    if (opts.view && !opts.all && !inView(el, opts.view)) continue;
     rest.push(el);
   }
 

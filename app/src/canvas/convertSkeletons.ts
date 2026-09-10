@@ -83,7 +83,7 @@ export function convertToExcalidrawElements(
       el.scale = skeleton.scale ?? [1, 1];
     }
     if (skeleton.label?.text) {
-      const labelId = newId();
+      const labelId = !regenerate ? `${id}-label` : newId();
       const fontSize = skeleton.label.fontSize ?? 20;
       const label: Record<string, unknown> = {
         ...baseElement(
@@ -99,6 +99,8 @@ export function convertToExcalidrawElements(
             textAlign: skeleton.label.textAlign ?? "center",
             verticalAlign: skeleton.label.verticalAlign ?? "middle",
             customData: skeleton.customData,
+            locked: skeleton.locked,
+            opacity: skeleton.opacity,
           },
           labelId,
         ),
@@ -106,7 +108,7 @@ export function convertToExcalidrawElements(
         text: skeleton.label.text,
         originalText: skeleton.label.text,
         fontSize,
-        fontFamily: 2,
+        fontFamily: skeleton.fontFamily ?? 2,
         lineHeight: 1.25,
         textAlign: skeleton.label.textAlign ?? "center",
         verticalAlign: skeleton.label.verticalAlign ?? "middle",

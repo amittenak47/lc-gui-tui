@@ -1,4 +1,4 @@
-import { createCanvas } from "@napi-rs/canvas";
+import { createCanvas, type Canvas } from "@napi-rs/canvas";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -12,11 +12,11 @@ function ctx2d(w = 80, h = 80) {
   const canvas = createCanvas(w, h);
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("no ctx");
-  return { canvas, ctx };
+  return { canvas, ctx: ctx as unknown as CanvasRenderingContext2D };
 }
 
 function sampleAt(
-  canvas: ReturnType<typeof createCanvas>,
+  canvas: Canvas,
   x: number,
   y: number,
 ): number[] {
@@ -62,6 +62,37 @@ describe("isDrawableSceneElement", () => {
 });
 
 describe("paintSceneElements", () => {
+  it("keeps a backwards arrow visible when its origin is outside the viewport", () => {
+    const { canvas, ctx } = ctx2d();
+    paintSceneElements(ctx, [{ type: "arrow", x: 120, y: 30, points: [[0, 0], [-100, 0]], strokeColor: "#ff0000", strokeWidth: 4 }],
+      { view: { minX: 0, minY: 0, maxX: 80, maxY: 80 } });
+    expect(sampleAt(canvas, 45, 30)).toEqual([255, 0, 0, 255]);
+  });
+
+  it("respects arrow opacity", () => {
+    const { canvas, ctx } = ctx2d();
+    paintSceneElements(ctx, [{ type: "arrow", x: 5, y: 30, points: [[0, 0], [60, 0]], strokeColor: "#ff0000", strokeWidth: 4, opacity: 50 }]);
+    expect(sampleAt(canvas, 30, 30)[3]).toBeCloseTo(128, -1);
+  });
+
+  it("paints rotated boxes that reach into the viewport", () => {
+    const { canvas, ctx } = ctx2d();
+    paintSceneElements(ctx, [{ type: "rectangle", x: 100, y: -40, width: 10, height: 150, angle: Math.PI / 2, backgroundColor: "#ff0000" }],
+      { view: { minX: 0, minY: 0, maxX: 80, maxY: 80 } });
+    expect(sampleAt(canvas, 50, 35)).toEqual([255, 0, 0, 255]);
+  });
+
+  it("lays bound labels out over multiple lines even if their stale position is offscreen", () => {
+    const { canvas, ctx } = ctx2d(100, 100);
+    paintSceneElements(ctx, [
+      { id: "box", type: "rectangle", x: 10, y: 10, width: 80, height: 80 },
+      { type: "text", x: 1000, y: 1000, width: 40, height: 20, containerId: "box", text: "FIRST\nSECOND", fontSize: 16, strokeColor: "#000000" },
+    ], { view: { minX: 0, minY: 0, maxX: 100, maxY: 100 } });
+    const inkIn = (y: number) => [...canvas.getContext("2d").getImageData(10, y, 80, 18).data].filter((_, i) => i % 4 === 3).some((alpha) => alpha > 0);
+    expect(inkIn(30)).toBe(true);
+    expect(inkIn(51)).toBe(true);
+  });
+
   it("fills a rectangle so export is not empty paper", () => {
     const { canvas, ctx } = ctx2d();
     ctx.fillStyle = "#ffffff";
@@ -118,7 +149,7 @@ describe("paintSceneElements", () => {
   });
 
   it("paints arrows under boxes when both are present", () => {
-    const { ctx } = ctx2d();
+    const { canvas, ctx } = ctx2d();
     paintSceneElements(ctx, [
       {
         type: "arrow",
@@ -143,7 +174,8 @@ describe("paintSceneElements", () => {
         strokeColor: "#ff0000",
       },
     ]);
-    expect(true).toBe(true);
+    expect(sampleAt(canvas, 20, 20)).toEqual([255, 0, 0, 255]);
+    expect(sampleAt(canvas, 40, 20)[0]).toBeLessThan(40);
   });
 });
 
