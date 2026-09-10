@@ -8,6 +8,7 @@ import { inkSlowness, type ScenePoint } from "../rasterInk";
 import { INK_SMOOTHING_DEFAULT, type LiveSmoothCache } from "../inkSmoothing";
 
 import { bakeSpine, reshapeLiveSpine } from "./bake";
+import { seedSpineHop } from "./seedHop";
 import { CLIP_BLIT_PAD, clipBlitRect, intersectPixelRects, type PixelRect } from "./clipBlit";
 import { exposedShiftRects, shiftClearsSnap, spineHitsRects } from "./cameraShift";
 import { createEkf, type EkfFilter } from "./ekf";
@@ -554,7 +555,10 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         slow: headed.slow,
       };
     }
-    appendSpine(dot);
+    // SDF capsules follow chords. Plant Catmull samples off a turning hop so
+    // the live stroke is round; a sparse tablet polyline stays a polyline.
+    const prevHop = spine.length >= 2 ? spine[spine.length - 2]! : null;
+    for (const seed of seedSpineHop(prevHop, last, dot)) appendSpine(seed);
   };
 
   const unionAabb = (dst: StrokeAabb, src: StrokeAabb) => {
