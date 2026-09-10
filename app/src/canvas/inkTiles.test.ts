@@ -11,6 +11,7 @@ import {
   tileSceneSize,
   tileVisitOrder,
   viewportSceneBounds,
+  visibleDrawBounds,
   LEVEL_STEP,
   TILE_OVERLAP_PX,
   TILE_PX,
@@ -87,6 +88,21 @@ describe("tile ranges", () => {
       maxX: 250,
       maxY: 120,
     });
+  });
+
+  it("fills the camera when the page clip is inset from the view", () => {
+    const view = { minX: 0, minY: 0, maxX: 800, maxY: 600 };
+    const clip = { minX: 200, minY: 0, maxX: 800, maxY: 600 };
+    expect(visibleDrawBounds(view, clip)).toEqual(view);
+  });
+
+  it("skips when the page clip is a different page", () => {
+    expect(
+      visibleDrawBounds(
+        { minX: 0, minY: 0, maxX: 800, maxY: 600 },
+        { minX: 9000, minY: 9000, maxX: 9100, maxY: 9100 },
+      ),
+    ).toBeNull();
   });
 });
 
@@ -593,6 +609,15 @@ describe("InkTileCache", () => {
     while (!cache.settled && guard++ < 20) scheduled.shift()?.();
     expect(cache.settled).toBe(true);
     expect(canvases.created.length).toBeGreaterThan(0);
+  });
+
+  it("does not raster inside draw when the worker owns tile paint", () => {
+    const { cache, canvases } = makeCache({ useWorker: true });
+    cache.setOps([draw([0, 0], [40, 0])]);
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+    expect(canvases.created).toHaveLength(0);
+    expect(cache.settled).toBe(false);
   });
 
   it("records pointer-up ink without painting cached tiles synchronously", () => {

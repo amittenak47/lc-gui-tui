@@ -19,6 +19,9 @@ import { INK_RGB } from "./style";
 let pooled: SdfRenderer | null | undefined;
 
 function peer(w: number, h: number): HTMLCanvasElement | null {
+  if (typeof OffscreenCanvas === "function") {
+    return new OffscreenCanvas(Math.max(1, w), Math.max(1, h)) as unknown as HTMLCanvasElement;
+  }
   if (typeof document === "undefined" || typeof document.createElement !== "function") {
     return null;
   }

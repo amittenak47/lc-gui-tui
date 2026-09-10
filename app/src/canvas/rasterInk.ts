@@ -5753,6 +5753,20 @@ export function unionSceneBounds(
 }
 
 /**
+ * Clip box for committed ink.
+ *
+ * The page frame used to scissor writing that sat left of the sheet (or past
+ * a first-open view) while lined paper still filled the hole. Grow to the
+ * writing so the screen cannot cut it.
+ */
+export function inkPaintClip(
+  page: SceneBounds | null,
+  ink: SceneBounds | null,
+): SceneBounds | null {
+  return unionSceneBounds(page, ink);
+}
+
+/**
  * Where the drawn ink sits, padded by the widest line it could have been
  * stroked with. Null when nothing has been drawn — the caller's cue that the
  * plain Excalidraw export is already complete.

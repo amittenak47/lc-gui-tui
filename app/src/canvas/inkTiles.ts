@@ -40,33 +40,30 @@ import {
   type ScrollHostLookup,
   type ViewportTransform,
 } from "./rasterInk";
-import { isInkLabPenOp, labSpineFromDrawOp } from "./inkLab/replay";
-import { paintSdfSpines } from "./inkLab/sdfPaint";
+import { paintInkTile } from "./inkLab/tilePaint";
+import {
+  LEVEL_STEP,
+  TILE_OVERLAP_PX,
+  TILE_PX,
+  inkTileCanvasPx,
+  levelScale,
+  tileSceneSize,
+} from "./inkTileGrid";
+import {
+  blobFromTileSource,
+  inkTilePersistKey,
+  loadPersistedInkTiles,
+  persistInkTile,
+} from "./inkTileStore";
 
-/** Tile edge in device pixels. */
-export const TILE_PX = 384;
-/**
- * Extra pixels past each tile edge, baked into the canvas only.
- *
- * A stroke that meets the square is rasterised with neighbour context so the
- * core-edge pixels are fully covered. The dest blit copies the core, not this
- * pad: overlapping dest copies of translucent ink stacked into a lattice the
- * colour of the stroke.
- *
- * 3px was enough for solid-ink AA. A drying wash that clips there still
- * showed a grid-aligned color cut, so the pad is on the order of a nib.
- */
-export const TILE_OVERLAP_PX = 16;
-
-/**
- * Zoom levels tiles are rasterised at, as steps of the exponent of two.
- *
- * Half-steps mean the worst-case resample between a tile and the screen is
- * √2 — visible as a touch of softness mid-gesture, gone as soon as the
- * background pass catches up. Whole steps would double that; quarter steps
- * would re-rasterise the page twice as often for a difference nobody sees.
- */
-export const LEVEL_STEP = 0.5;
+export {
+  LEVEL_STEP,
+  TILE_OVERLAP_PX,
+  TILE_PX,
+  inkTileCanvasPx,
+  levelScale,
+  tileSceneSize,
+} from "./inkTileGrid";
 
 /** Milliseconds of rasterising allowed inside one `draw` call. */
 export const DRAW_BUDGET_MS = 5;
@@ -117,16 +114,6 @@ export function pickRenderLevel(pixelScale: number): number {
   return Math.round(Math.log2(safe) / LEVEL_STEP) * LEVEL_STEP;
 }
 
-/** Device pixels per scene unit that a level rasterises at. */
-export function levelScale(level: number): number {
-  return 2 ** level;
-}
-
-/** Scene-space edge of one tile at a level. */
-export function tileSceneSize(level: number, tilePx = TILE_PX): number {
-  return tilePx / levelScale(level);
-}
-
 export function tileRangeFor(view: SceneBounds, tileScene: number): TileRange {
   return {
     minTx: Math.floor(view.minX / tileScene),
@@ -175,6 +162,23 @@ export function viewportSceneBounds(viewport: ViewportTransform): SceneBounds {
     maxX: -viewport.scrollX + viewport.width / zoom,
     maxY: -viewport.scrollY + viewport.height / zoom,
   };
+}
+
+/**
+ * Scene box whose tiles we blit.
+ *
+ * Intersecting the camera with the page clip dropped the strip of screen that
+ * sits outside a tight first-open frame. Lined paper still filled the hole;
+ * writing stopped at a vertical cut. If the page is on screen, fill the camera.
+ * A clip that misses the camera is a different page — skip.
+ */
+export function visibleDrawBounds(
+  view: SceneBounds,
+  clip: SceneBounds | null,
+): SceneBounds | null {
+  if (!clip) return view;
+  if (!boundsOverlap(view, clip)) return null;
+  return view;
 }
 
 export function boundsOverlap(a: SceneBounds, b: SceneBounds): boolean {
@@ -268,7 +272,9 @@ interface Tile {
   level: number;
   tx: number;
   ty: number;
-  canvas: HTMLCanvasElement;
+  canvas: CanvasImageSource;
+  width: number;
+  height: number;
   /** Draw-call counter when this tile was last blitted, for eviction. */
   usedAt: number;
   /** True once anything was rasterised into it. */
@@ -292,6 +298,14 @@ export interface InkTileCacheOptions {
   cancel?: (handle: number) => void;
   /** True while foreground ink owns the frame; deferred tile work must yield. */
   pause?: () => boolean;
+  /**
+   * Raster tiles off the UI thread. Loading and camera present still wait for
+   * {@link InkTileCache.settled} before swapping a bitmap; this only keeps
+   * `draw` to blits.
+   */
+  useWorker?: boolean;
+  /** Persist completed scene tiles so a full-quit reopen is a hydrate + blit. */
+  persist?: boolean;
 }
 
 interface PendingTile {
@@ -335,6 +349,13 @@ export class InkTileCache {
   private lastLevel: number | null = null;
   /** `scrollY` of the last draw — drives leading-edge visit order. */
   private lastScrollY: number | null = null;
+  private readonly useWorker: boolean;
+  private readonly persist: boolean;
+  private sig = "";
+  private hydrating = false;
+  private hydrateGen = 0;
+  private inflight = new Set<string>();
+  private persistDirty = false;
 
   constructor(options: InkTileCacheOptions = {}) {
     this.tilePx = options.tilePx ?? TILE_PX;
@@ -352,6 +373,8 @@ export class InkTileCache {
       options.schedule ?? ((callback) => requestAnimationFrame(callback));
     this.cancel = options.cancel ?? ((handle) => cancelAnimationFrame(handle));
     this.pause = options.pause ?? (() => false);
+    this.useWorker = options.useWorker === true;
+    this.persist = options.persist === true;
   }
 
   private boundsOf(op: InkOp): SceneBounds {
@@ -427,6 +450,7 @@ export class InkTileCache {
     // worth keeping and no flash to avoid — the page is changing wholesale.
     if (shared === 0) {
       this.invalidate();
+      this.beginHydrate();
       return;
     }
 
@@ -544,6 +568,8 @@ export class InkTileCache {
     }
     this.ops = [...ops];
     this.invalidate();
+    this.persistDirty = true;
+    this.beginHydrate();
   }
 
   /**
@@ -553,6 +579,8 @@ export class InkTileCache {
    */
   deferOp(op: InkOp): void {
     this.ops.push(op);
+    this.sig = this.contentSig();
+    this.persistDirty = true;
     if (isHostBoundOp(op) || this.tiles.size === 0) return;
     const bounds = this.boundsOf(op);
     for (const [key, tile] of [...this.tiles]) {
@@ -592,7 +620,12 @@ export class InkTileCache {
   }
 
   private paintOpIntoTile(tile: Tile, op: InkOp, bounds: SceneBounds): void {
-    const ctx = tile.canvas.getContext("2d");
+    const canvas = tile.canvas as HTMLCanvasElement;
+    if (typeof canvas.getContext !== "function") {
+      this.tiles.delete(tile.key);
+      return;
+    }
+    const ctx = canvas.getContext("2d");
     if (!ctx) {
       // Nothing sane to composite onto — fall back to the old behaviour and
       // let the tile rasterise from scratch next time it is asked for.
@@ -632,12 +665,16 @@ export class InkTileCache {
     if (same) return;
     this.clip = clip;
     this.invalidate();
+    this.beginHydrate();
   }
 
   invalidate(): void {
     this.tiles.clear();
     this.opBounds = new WeakMap<InkOp, SceneBounds>();
     this.pending = [];
+    this.inflight.clear();
+    this.hydrateGen += 1;
+    this.hydrating = false;
     if (this.idleHandle) {
       this.cancel(this.idleHandle);
       this.idleHandle = 0;
@@ -659,6 +696,135 @@ export class InkTileCache {
     this.ops = [];
   }
 
+  private contentSig(): string {
+    return inkTilePersistKey(this.ops, this.clip);
+  }
+
+  private beginHydrate(): void {
+    this.sig = this.contentSig();
+    if (!this.persist || !this.sig) return;
+    const sig = this.sig;
+    const gen = this.hydrateGen;
+    this.hydrating = true;
+    void loadPersistedInkTiles(sig)
+      .then(async (rows) => {
+        if (gen !== this.hydrateGen || this.sig !== sig) return;
+        for (const row of rows) {
+          const key = tileKey(row.level, row.tx, row.ty);
+          if (this.tiles.has(key)) continue;
+          if (typeof createImageBitmap !== "function") continue;
+          let source: CanvasImageSource;
+          try {
+            source = await createImageBitmap(row.blob);
+          } catch {
+            continue;
+          }
+          if (gen !== this.hydrateGen || this.sig !== sig) return;
+          this.tiles.set(key, {
+            key,
+            level: row.level,
+            tx: row.tx,
+            ty: row.ty,
+            canvas: source,
+            width: row.width,
+            height: row.height,
+            usedAt: this.drawCount,
+            painted: true,
+          });
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (gen === this.hydrateGen) this.hydrating = false;
+        this.onTilesReady?.();
+      });
+  }
+
+  private installSource(
+    level: number,
+    tx: number,
+    ty: number,
+    source: CanvasImageSource,
+  ): void {
+    const key = tileKey(level, tx, ty);
+    if (this.tiles.has(key)) return;
+    const canvasPx = this.tileCanvasPx();
+    const tile: Tile = {
+      key,
+      level,
+      tx,
+      ty,
+      canvas: source,
+      width: canvasPx,
+      height: canvasPx,
+      usedAt: this.drawCount,
+      painted: true,
+    };
+    this.tiles.set(key, tile);
+    this.schedulePersist(tile);
+  }
+
+  private schedulePersist(tile: Tile): void {
+    if (!this.persist) return;
+    const sig = this.sig || this.contentSig();
+    this.sig = sig;
+    void blobFromTileSource(tile.canvas, tile.width, tile.height).then((blob) => {
+      if (!blob || this.sig !== sig) return;
+      return persistInkTile(sig, {
+        level: tile.level,
+        tx: tile.tx,
+        ty: tile.ty,
+        blob,
+        width: tile.width,
+        height: tile.height,
+      });
+    });
+  }
+
+  private pumpWorker(): void {
+    if (this.inflight.size > 0) return;
+    const next = this.pending.shift();
+    if (!next) {
+      this.onTilesReady?.();
+      return;
+    }
+    const key = tileKey(next.level, next.tx, next.ty);
+    if (this.tiles.has(key)) {
+      this.schedule(() => this.pumpWorker());
+      return;
+    }
+    this.inflight.add(key);
+    void import("./inkLab/tileRasterClient")
+      .then((mod) =>
+        mod.rasterInkTileOffThread({
+          ops: this.ops,
+          clip: this.clip,
+          level: next.level,
+          tx: next.tx,
+          ty: next.ty,
+          tilePx: this.tilePx,
+        }),
+      )
+      .then((bitmap) => {
+        this.inflight.delete(key);
+        if (bitmap) this.installSource(next.level, next.tx, next.ty, bitmap);
+        else this.renderTile(next.level, next.tx, next.ty);
+        this.evict();
+        this.onTilesReady?.();
+        if (this.pending.length > 0 || this.inflight.size > 0) {
+          this.idleHandle = this.schedule(() => this.runPending());
+        }
+      })
+      .catch(() => {
+        this.inflight.delete(key);
+        this.renderTile(next.level, next.tx, next.ty);
+        this.onTilesReady?.();
+        if (this.pending.length > 0) {
+          this.idleHandle = this.schedule(() => this.runPending());
+        }
+      });
+  }
+
   /** Tiles currently held — for tests and for the metrics readout. */
   get size(): number {
     return this.tiles.size;
@@ -666,7 +832,7 @@ export class InkTileCache {
 
   /** True while the last draw left tiles to rasterise in the background. */
   get settled(): boolean {
-    return this.pending.length === 0;
+    return this.pending.length === 0 && this.inflight.size === 0 && !this.hydrating;
   }
 
   private tileBounds(level: number, tx: number, ty: number): SceneBounds {
@@ -680,7 +846,7 @@ export class InkTileCache {
   }
 
   private tileCanvasPx(): number {
-    return this.tilePx + 2 * TILE_OVERLAP_PX;
+    return inkTileCanvasPx(this.tilePx);
   }
 
   /** Scene → tile pixels, origin at the padded top-left. */
@@ -720,63 +886,31 @@ export class InkTileCache {
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
 
-    const bounds = this.tileBounds(level, tx, ty);
-    const scale = levelScale(level);
+    paintInkTile(
+      ctx,
+      {
+        ops: this.ops,
+        clip: this.clip,
+        level,
+        tx,
+        ty,
+        tilePx: this.tilePx,
+      },
+      (op) => this.boundsOf(op),
+    );
     const tile: Tile = {
       key,
       level,
       tx,
       ty,
       canvas,
+      width: canvasPx,
+      height: canvasPx,
       usedAt: this.drawCount,
       painted: true,
     };
-
-    const paintable = this.clip ? intersectBounds(bounds, this.clip) : bounds;
-    if (paintable) {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, canvasPx, canvasPx);
-      // Scene → tile pixels: the padded top-left is the origin.
-      this.setTileTransform(ctx, bounds, scale);
-      if (this.clip) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(
-          this.clip.minX,
-          this.clip.minY,
-          this.clip.maxX - this.clip.minX,
-          this.clip.maxY - this.clip.minY,
-        );
-        ctx.clip();
-      }
-      // Chronological, so a stroke drawn after an erase survives it. Adjacent
-      // WebGL pen ops share one upload/blit; erases and highlighters flush the
-      // batch to preserve compositing order.
-      let labRuns: InkDrawOp[] = [];
-      const flushLab = () => {
-        if (labRuns.length === 0) return;
-        const spines = labRuns.map(labSpineFromDrawOp);
-        if (!paintSdfSpines(ctx, spines)) {
-          for (const run of labRuns) applyInkOp(ctx, run, scale);
-        }
-        labRuns = [];
-      };
-      for (const op of this.ops) {
-        if (isHostBoundOp(op)) continue;
-        if (!boundsOverlap(this.boundsOf(op), this.paddedTileBounds(bounds, scale))) continue;
-        if (isInkLabPenOp(op)) {
-          labRuns.push(...this.boundedDrawRuns(op, this.paddedTileBounds(bounds, scale)));
-          continue;
-        }
-        flushLab();
-        this.paintBoundedOp(ctx, op, this.paddedTileBounds(bounds, scale), scale);
-      }
-      flushLab();
-      if (this.clip) ctx.restore();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-    }
-
     this.tiles.set(key, tile);
+    this.schedulePersist(tile);
     return tile;
   }
 
@@ -791,9 +925,13 @@ export class InkTileCache {
 
   private runPending(): void {
     this.idleHandle = 0;
-    if (this.pending.length === 0) return;
+    if (this.pending.length === 0 && this.inflight.size === 0) return;
     if (this.pause()) {
       this.idleHandle = this.schedule(() => this.runPending());
+      return;
+    }
+    if (this.useWorker) {
+      this.pumpWorker();
       return;
     }
     // "Idle" is a lie while a gesture is running — this pass shares the frame
@@ -841,7 +979,7 @@ export class InkTileCache {
     const tileScene = tileSceneSize(level, this.tilePx);
 
     const view = viewportSceneBounds(viewport);
-    const visible = this.clip ? intersectBounds(view, this.clip) : view;
+    const visible = visibleDrawBounds(view, this.clip);
     if (!visible) {
       this.pending = [];
       return;
@@ -878,11 +1016,11 @@ export class InkTileCache {
       const bounds = this.tileBounds(level, tx, ty);
       const key = tileKey(level, tx, ty);
       let tile = this.tiles.get(key);
-      if (!tile && this.now() < deadline) {
+      if (!tile && this.now() < deadline && !this.useWorker && !this.hydrating) {
         tile = this.renderTile(level, tx, ty) ?? undefined;
       }
       if (!tile) {
-        missed.push({ level, tx, ty });
+        if (!this.hydrating) missed.push({ level, tx, ty });
         if (fallbacks === null) fallbacks = this.fallbackLevels(level);
         this.blitFallback(ctx, bounds, toDeviceX, toDeviceY, fallbacks);
         continue;
@@ -922,6 +1060,10 @@ export class InkTileCache {
 
     this.pending = missed;
     this.evict();
+    if (missed.length === 0 && this.persistDirty) {
+      this.persistDirty = false;
+      for (const tile of this.tiles.values()) this.schedulePersist(tile);
+    }
     if (missed.length > 0 && this.idleHandle === 0) {
       this.idleHandle = this.schedule(() => this.runPending());
     }
