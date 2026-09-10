@@ -2781,18 +2781,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     /*
-     * Committed camera, deliberately — live pan shifts `background-position`
-     * in `setPagePanOffset` so the overlay can stay viewport-sized. Reporting
-     * the live camera here would apply the gesture twice.
+     * Camera ink will paint — liveCameraRef even after the gesture bit
+     * drops, then getAppState. Reporting only the committed Excalidraw
+     * camera left the rules on a 15s-idle scroll while ink was already on
+     * the live one. Live pan still rides `background-position` and does not
+     * call this; a live sample here would apply that ride twice.
      */
+    const live = liveCameraRef.current;
     const api = apiRef.current;
     const state = (api?.getAppState() ?? {}) as {
       scrollX?: number;
       scrollY?: number;
       zoom?: { value?: number };
     };
-    const zoom = Math.max(0.05, state.zoom?.value ?? 1);
-    const scrollY = state.scrollY ?? 0;
+    const zoom = Math.max(0.05, live?.zoom ?? state.zoom?.value ?? 1);
+    const scrollY = live?.scrollY ?? state.scrollY ?? 0;
+    const panY = live != null ? 0 : panOffsetRef.current.y;
     ensureLinedPair(zoom);
     const visibleRule: LinedRuling =
       linedPaperRef.current === "college" ? "college" : "wide";
@@ -2822,7 +2826,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (linedSlotCanSkip(prev, next, node != null)) return;
     lastLinedSlotRef.current = next;
     setLinedSlotOn((on) => on || true);
-    if (node) applyLinedSlotStyle(node, next, panOffsetRef.current.y);
+    if (node) applyLinedSlotStyle(node, next, panY);
   }, [ensureLinedPair]);
 
   const maybeGrowDrawFrame = useCallback((): boolean => {
@@ -6348,12 +6352,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   });
 
   useLayoutEffect(() => {
-    if (!linedSlotOn) return;
+    if (!linedPaperOn || !linedSlotOn) return;
     const next = lastLinedSlotRef.current;
     const node = linedSlotNodeRef.current;
     if (!next || !node) return;
-    applyLinedSlotStyle(node, next, panOffsetRef.current.y);
-  }, [linedSlotOn]);
+    applyLinedSlotStyle(
+      node,
+      next,
+      liveCameraRef.current != null ? 0 : panOffsetRef.current.y,
+    );
+  }, [linedPaperOn, linedSlotOn]);
 
   /**
    * Put `lcmdink-0-frame` in the scene if the document is open and the page is gone.
@@ -9441,15 +9449,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       onClick={() => {
                         const next = nextLinedPaperMode(linedPaperRef.current);
                         linedPaperRef.current = next;
+                        linedPaperOnRef.current =
+                          next !== "off" && isDrawPageRegion(mobileRegionRef.current);
                         setLinedPaperMode(next);
                         saveLinedPaperMode(next);
                         if (next !== "off") {
                           linedRuleRef.current = next;
-                          const api = apiRef.current;
+                          const live = liveCameraRef.current;
                           const zoom = Math.max(
                             0.05,
-                            (api?.getAppState() as { zoom?: { value?: number } } | undefined)?.zoom
-                              ?.value ?? 1,
+                            live?.zoom ??
+                              (apiRef.current?.getAppState() as { zoom?: { value?: number } } | undefined)
+                                ?.zoom?.value ??
+                              1,
                           );
                           ensureLinedPair(zoom);
                           linedPitchRef.current = activeLinedPitch(
@@ -9458,8 +9470,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                           );
                         }
                         lastLinedSlotRef.current = null;
-                        reflowReadingText();
-                        requestAnimationFrame(reportLinedSlot);
+                        rasterInkRef.current?.syncCamera();
+                        reportLinedSlot();
                       }}
                     >
                       <span aria-hidden>🗒️</span>
