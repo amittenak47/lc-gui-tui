@@ -135,6 +135,7 @@ describe("Board", () => {
       src.indexOf("publishPdfFilmFromScrollRef.current"),
     );
     expect(clamp).toMatch(/liveBoardViewSize/);
+    expect(clamp).toMatch(/fitted\.w >= 8 && fitted\.h >= 8/);
     expect(clamp).toMatch(/\? "keep" : "center"/);
     expect(clamp).not.toMatch(/\? "start" : "center"/);
     const wheel = src.slice(
@@ -143,6 +144,9 @@ describe("Board", () => {
     );
     expect(wheel).not.toMatch(/lockedScrollXRef.current = wheeled.scrollX/);
     expect(wheel).toMatch(/lockX \?\? wheeled.scrollX/);
+    expect(wheel).not.toMatch(/getAppState/);
+    expect(wheel).toMatch(/committedPanCameraRef/);
+    expect(wheel).toMatch(/if \(!live\?\.live\) applyVisualScrollNowRef\.current/);
   });
 
   it("stores both lined-paper pitches from the write camera so rules travel with the ink", () => {
@@ -259,14 +263,15 @@ describe("Board", () => {
     expect(src).toMatch(/announceSplitResize\("settle"\)/);
   });
 
-  it("defers pan on a selectable PDF so hold-to-footnote can arm", () => {
+  it("arms PDF pan immediately and still lets hold-to-marquee fire", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     const down = src.slice(
       src.indexOf("const onSelectableDoc ="),
       src.indexOf("const deferred = onCodeDock"),
     );
     expect(down).toMatch(/lc-doc-selectable/);
-    expect(down).not.toMatch(/!onPdfDoc/);
+    expect(down).toMatch(/!onPdfDoc/);
+    expect(src).toMatch(/if \(!onPdfDoc\) event\.stopPropagation\(\)/);
     expect(src).toMatch(
       /hold-to-marquee listener on `\.lc-doc-selectable` still has to fire/,
     );
