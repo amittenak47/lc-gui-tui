@@ -123,6 +123,8 @@ export interface WorkspaceChrome {
     padSync?: "synced" | "not-synced" | null;
     /** Tab Sync button — same walk as the window pill. */
     onSync?: (() => void) | null;
+    /** Viewport ink is still rasterising under the open overlay. */
+    viewportWait?: boolean;
   };
 }
 
@@ -169,6 +171,7 @@ export function chromeLooksSame(current: WorkspaceChrome, next: WorkspaceChrome)
     current.docIndex.walkWaiting === next.docIndex.walkWaiting &&
     current.docIndex.padSync === next.docIndex.padSync &&
     current.docIndex.onSync === next.docIndex.onSync &&
+    current.docIndex.viewportWait === next.docIndex.viewportWait &&
     progressEqual(current.docIndex.walkProgress, next.docIndex.walkProgress) &&
     progressEqual(current.docIndex.indexProgress, next.docIndex.indexProgress) &&
     progressEqual(current.docIndex.embedProgress, next.docIndex.embedProgress)

@@ -107,8 +107,6 @@ import {
   type PanCamera,
 } from "./panOffset";
 import { straightAnchorFor } from "./straightAnchor";
-import { isLoadingDoodleActive } from "../util/loadingDoodleActivity";
-
 export interface RasterInkHandle {
   clear(): void;
   undo(): boolean;
@@ -460,9 +458,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       if (!tilesRef.current) {
         tilesRef.current = new InkTileCache({
           onTilesReady: () => tileReadyRef.current(),
-          // The loading doodle owns the UI thread while the nib is down. Tile
-          // preparation resumes on the next frame after the gesture ends.
-          pause: isLoadingDoodleActive,
           useWorker: true,
           persist: true,
         });
@@ -667,10 +662,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         const step = () => {
           if (gen !== replayGenRef.current) return;
           replayRafRef.current = null;
-          if (isLoadingDoodleActive()) {
-            replayRafRef.current = requestAnimationFrame(step);
-            return;
-          }
 
           let stage = tileStageRef.current;
           if (!stage) {
@@ -690,13 +681,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           sctx.clearRect(0, 0, stage.width, stage.height);
           const { view: liveView, paintView: livePaint, dpr: liveDpr, marginY: liveMargin } =
             readViews();
-          tiles.draw(sctx, livePaint, liveDpr);
-          // Keep riding the last complete snap until this camera is covered.
-          // Swapping a sparse worker blit then dropping CSS is the 90Hz
-          // reverse-flick flash (paper without ink, or both gone). First open
-          // has nothing to ride: wait only while the stage is empty.
+          // First present slice-rasters this camera under the overlay. A pan
+          // ride waits on the same coverage so a sparse worker blit cannot
+          // replace the last complete snap.
           const riding = Boolean(canvas.style.transform);
-          if (riding ? !tiles.covered : tiles.size === 0 && !tiles.settled) return;
+          tiles.setSliceVisible(!riding);
+          tiles.draw(sctx, livePaint, liveDpr);
+          if (!tiles.covered) return;
+          tiles.setSliceVisible(false);
 
           const hosts = scrollHostLookup();
           if (hosts.size > 0 || committed.some((op) => isHostBoundOp(op))) {

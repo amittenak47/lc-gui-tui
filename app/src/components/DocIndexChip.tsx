@@ -158,6 +158,8 @@ export interface DocIndexChipProps {
    * control. Does not open the index card.
    */
   onSync?: (() => void) | null;
+  /** First-open viewport ink is still landing. Sweep only; no 10–30s dim. */
+  viewportWait?: boolean;
 }
 
 export function DocIndexChip({
@@ -179,6 +181,7 @@ export function DocIndexChip({
   walkWaiting,
   padSync,
   onSync,
+  viewportWait,
 }: DocIndexChipProps) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -263,6 +266,15 @@ export function DocIndexChip({
         syncBtn,
       );
     }
+  }
+
+  if (viewportWait) {
+    return withChipSync(
+      <span className="lc-doc-index-chip is-working" title="Loading ink">
+        <WorkRing progress={null} />
+      </span>,
+      syncBtn,
+    );
   }
 
   // `onIndex` is also the re-index action once a document is already in — the

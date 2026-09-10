@@ -8889,7 +8889,6 @@ export function Workspace({
    * for the length of the swap.
    */
   const shellLoading =
-    boardPreparing ||
     browseMotion === "busy" ||
     browseMotion === "exit" ||
     browseMotion === "done" ||
@@ -9147,6 +9146,7 @@ export function Workspace({
         onEmbed: indexInputsRef.current ? embedOpenDocument : null,
         onSync:
           tabOffersHubSync(tab.kind) && !isFootnoteBoardTab(tab) ? onHubSync : null,
+        viewportWait: boardPreparing,
         indexProgress: docIndexProgress,
         embedProgress: docEmbedProgress,
         embedEta: docEmbedEta,
@@ -9202,6 +9202,7 @@ export function Workspace({
     annotateDocId,
     whiteboardNotebookId,
     workspaceLoadActive,
+    boardPreparing,
     tab.kind,
   ]);
 

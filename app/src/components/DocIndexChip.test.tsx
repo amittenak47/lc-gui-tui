@@ -148,6 +148,11 @@ describe("the chip while a Sync walk runs", () => {
     expect(onSync).toHaveBeenCalledTimes(1);
     expect(document.querySelector(".lc-doc-index-pop")?.classList.contains("is-open")).toBe(false);
   });
+
+  it("sweeps on the tab while the viewport ink is still landing", () => {
+    const { host } = mount({ status: "idle", onIndex: null, viewportWait: true });
+    expect(chip(host)?.className).toContain("is-working");
+  });
 });
 
 describe("the chip at rest", () => {
