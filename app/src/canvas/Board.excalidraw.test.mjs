@@ -91,6 +91,9 @@ describe("Board", () => {
     expect(rebase).toMatch(
       /syncCamera\(\)\)\.then\(\(\) => \{[\s\S]*clearPanOffsetsRef\.current\(\)/,
     );
+    expect(rebase.indexOf("syncCamera()")).toBeLessThan(
+      rebase.lastIndexOf("committedPanCameraRef.current ="),
+    );
   });
 
   it("still translates while a bottom-of-flick remesh is in flight", () => {
@@ -101,6 +104,20 @@ describe("Board", () => {
     );
     const veto = apply.slice(apply.indexOf("if (delta.rebase"));
     expect(veto).toMatch(/setPagePanOffsetRef\.current\(rideDx, delta\.dy\)/);
+  });
+
+  it("rides ink when Excalidraw pans without a Board gesture", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const scroll = src.slice(
+      src.indexOf("const handleCameraScroll = useCallback"),
+      src.indexOf("scrollUnsubRef.current = api.onScrollChange"),
+    );
+    expect(scroll).toMatch(/applyVisualScrollNowRef\.current\(scrollX, scrollY\)/);
+    expect(scroll).toMatch(/!handPanningRef\.current/);
+    expect(scroll).not.toMatch(
+      /if \(!liveCameraRef\.current\?\.live\) clearPanOffsetsRef\.current\(\)/,
+    );
+    expect(scroll).not.toMatch(/rasterInkRef\.current\?\.syncCamera\(\)/);
   });
 
   it("does not remesh ink inside the keepY camera write", () => {
@@ -176,6 +193,9 @@ describe("Board", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     expect(src).toMatch(/inkNeedsAnnotateToggleReplay/);
     expect(src).toMatch(/annotateToolFlipRef/);
+    expect(src).toMatch(/lastInkToolRef/);
+    expect(src).toMatch(/setTool\(lastInkToolRef\.current\)/);
+    expect(src).not.toMatch(/Pen is the annotate entry tool/);
     expect(src).toMatch(/live\.width === prev\.w/);
     expect(src).not.toMatch(/enabled=\{interactive\}/);
     expect(src).toMatch(/alreadyPlaced/);
@@ -293,7 +313,7 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/replayRafRef\.current != null/);
     expect(src).toMatch(/useWorker: true/);
     expect(src).toMatch(/persist: true/);
-    expect(src).toMatch(/if \(!tiles\.settled\) return/);
+    expect(src).toMatch(/riding \? !tiles\.covered/);
     expect(src).not.toMatch(/new EraseBakeJob/);
     expect(src).not.toMatch(/engine\.replaySpines/);
     expect(src).not.toMatch(/engine\.shiftSnap/);
@@ -392,13 +412,19 @@ describe("Workspace pane switch", () => {
 
   it("does not clear the CSS ride before the staged bitmap is ready", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
-    const step = src.slice(src.indexOf("const step = () => {"), src.indexOf("tileReadyRef.current = () => {"));
-    expect(step.indexOf("if (!tiles.settled) return")).toBeGreaterThan(-1);
-    expect(step.indexOf("if (!tiles.settled) return")).toBeLessThan(
+    const step = src.slice(src.indexOf("const step = () => {"), src.indexOf("if (instant) step();"));
+    expect(step.indexOf("riding ? !tiles.covered")).toBeGreaterThan(-1);
+    expect(step.indexOf("riding ? !tiles.covered")).toBeLessThan(
       step.indexOf("engine.redrawSnap"),
     );
-    expect(step.indexOf("engine.redrawSnap")).toBeLessThan(step.indexOf("canvas.style.transform"));
-    expect(step.indexOf("canvas.style.transform")).toBeLessThan(step.indexOf("engine.paint()"));
+    expect(step.indexOf("engine.redrawSnap")).toBeLessThan(
+      step.indexOf('canvas.style.transform = ""'),
+    );
+    expect(step.indexOf('canvas.style.transform = ""')).toBeLessThan(step.indexOf("engine.paint()"));
+    expect(step.indexOf("engine.paint()")).toBeLessThan(step.indexOf("if (instant) settleReplayWaiters()"));
+    expect(step.indexOf("settleReplayWaitersAfterPaint")).toBeGreaterThan(
+      step.indexOf("if (instant) settleReplayWaiters()"),
+    );
   });
 
   it("stores undo pixels with canvas copies instead of synchronous GPU readback", () => {

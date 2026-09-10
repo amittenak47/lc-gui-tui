@@ -687,12 +687,19 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
 
           sctx.setTransform(1, 0, 0, 1, 0, 0);
           sctx.clearRect(0, 0, stage.width, stage.height);
-          tiles.draw(sctx, paintView, dpr);
-          if (!tiles.settled) return;
+          const { view: liveView, paintView: livePaint, dpr: liveDpr, marginY: liveMargin } =
+            readViews();
+          tiles.draw(sctx, livePaint, liveDpr);
+          // Keep riding the last complete snap until this camera is covered.
+          // Swapping a sparse worker blit then dropping CSS is the 90Hz
+          // reverse-flick flash (paper without ink, or both gone). First open
+          // has nothing to ride: wait only while the stage is empty.
+          const riding = Boolean(canvas.style.transform);
+          if (riding ? !tiles.covered : tiles.size === 0 && !tiles.settled) return;
 
           const hosts = scrollHostLookup();
           if (hosts.size > 0 || committed.some((op) => isHostBoundOp(op))) {
-            setInkSceneTransform(sctx, paintView, dpr);
+            setInkSceneTransform(sctx, livePaint, liveDpr);
             const box = clipRef.current;
             if (box) {
               sctx.save();
@@ -704,9 +711,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               sctx,
               committed,
               hosts,
-              paintView.zoom * dpr,
+              livePaint.zoom * liveDpr,
               undefined,
-              paintView.zoom,
+              livePaint.zoom,
             );
             if (box) sctx.restore();
           }
@@ -718,9 +725,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             engine.paintOntoSnap((snapCtx) => {
               paintInkStamps(
                 snapCtx,
-                paintView,
+                livePaint,
                 [liveStamp],
-                dpr,
+                liveDpr,
                 clipRef.current,
                 scrollHostLookup(),
               );
@@ -728,14 +735,25 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           }
           if (canvas.style.transform) canvas.style.transform = "";
           engine.paint();
-          recordView();
+          paintedViewRef.current = {
+            scrollX: liveView.scrollX,
+            scrollY: liveView.scrollY,
+            zoom: liveView.zoom,
+            width: liveView.width,
+            height: liveView.height,
+            marginY: liveMargin,
+          };
           // Pixel history is camera-local. New strokes can repopulate these
           // fast-path stacks; saved strokes stay in the scene tile cache.
           overlayRef.current = [];
           overlayRedoRef.current = [];
           committedBuildRef.current = false;
           tileReadyRef.current = () => {};
-          settleReplayWaitersAfterPaint(gen);
+          // Instant camera rebase must drop ink CSS and lined-paper ride in
+          // this turn (Board's waiter clears paper). Two rAFs at 90Hz is two
+          // visible frames of one layer without the other.
+          if (instant) settleReplayWaiters();
+          else settleReplayWaitersAfterPaint(gen);
         };
         tileReadyRef.current = () => {
           if (gen !== replayGenRef.current || replayRafRef.current != null) return;

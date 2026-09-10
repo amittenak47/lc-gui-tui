@@ -1456,6 +1456,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   highlightingRef.current = highlighting;
   const annotateCodeRef = useRef(annotateCode);
   annotateCodeRef.current = annotateCode;
+  /** Last pen / highlighter / eraser — scroll mode parks on hand, then this comes back. */
+  const lastInkToolRef = useRef<"freedraw" | "highlighter" | "eraser">("freedraw");
   /** Annotate/scroll flip also swaps hand↔pen; that must not remesh the book. */
   const annotateToolFlipRef = useRef(false);
   /**
@@ -2716,7 +2718,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     if (annotateCode && activeToolRef.current === "hand") {
-      setActiveToolRef.current("freedraw");
+      setActiveToolRef.current(lastInkToolRef.current);
     }
   }, [highlighting, annotateCode]);
 
@@ -2738,7 +2740,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   useEffect(() => {
     if (annotateCode) {
       setActiveToolRef.current(
-        DRAWING_TOOLS.has(activeToolRef.current) ? activeToolRef.current : "freedraw",
+        DRAWING_TOOLS.has(activeToolRef.current)
+          ? activeToolRef.current
+          : lastInkToolRef.current,
       );
       return;
     }
@@ -3285,6 +3289,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * editing that element.
      */
     if (tool === "freedraw" || tool === "highlighter" || tool === "eraser") {
+      lastInkToolRef.current = tool;
       const state = apiRef.current?.getAppState() as
         | {
             selectedElementIds?: Record<string, unknown>;
@@ -3434,8 +3439,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (annotateCode) {
       setShapesOpen(false);
       setCaptureMenuOpen(false);
-      // Pen is the annotate entry tool — Select is a deliberate second pick.
-      setTool("freedraw");
+      // Scroll parks on hand. Come back on the last pen / highlighter / eraser.
+      setTool(lastInkToolRef.current);
       return;
     }
     setShapesOpen(false);
@@ -3851,19 +3856,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       committingScrollRef.current = false;
       return;
     }
-    committedPanCameraRef.current = {
-      scrollX: live.scrollX,
-      scrollY: live.scrollY,
-      zoom: live.zoom,
-    };
     api.updateScene({
       appState: { scrollX: live.scrollX, scrollY: live.scrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
-    // Keep the ride up while the snap rebuilds. Dropping it first showed
-    // the old page at the live camera, then remeshing Exam 1 on this tick
-    // was Close App / Wait. land after the present.
+    // Keep committed at the painted camera until the snap lands. Updating it
+    // first shrank the CSS ride while the bitmap was still old — ink lagged
+    // the page. Keep the ride up while the snap rebuilds; land after present.
     void Promise.resolve(rasterInkRef.current?.syncCamera()).then(() => {
+      const now = liveCameraRef.current;
+      committedPanCameraRef.current = {
+        scrollX: now?.scrollX ?? live.scrollX,
+        scrollY: now?.scrollY ?? live.scrollY,
+        zoom: now?.zoom ?? live.zoom,
+      };
       clearPanOffsetsRef.current();
       landPanOffset(() => {
         committingScrollRef.current = false;
@@ -3892,19 +3898,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       return;
     }
     committingScrollRef.current = true;
-    committedPanCameraRef.current = {
-      scrollX: live.scrollX,
-      scrollY: live.scrollY,
-      zoom: live.zoom,
-    };
     apiRef.current?.updateScene({
       appState: { scrollX: live.scrollX, scrollY: live.scrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
     // Same as mid-flick rebase: remesh under the ride, then drop it in the
-    // present. Clearing first plus an instant remesh froze the pad.
+    // present. Clearing first plus an instant remesh froze the pad. Commit
+    // the painted camera only after that present, or leftover CSS undershoots.
     if (liveCameraRef.current === live) live.live = false;
     void Promise.resolve(rasterInkRef.current?.syncCamera()).then(() => {
+      const now = liveCameraRef.current;
+      committedPanCameraRef.current = {
+        scrollX: now?.scrollX ?? live.scrollX,
+        scrollY: now?.scrollY ?? live.scrollY,
+        zoom: now?.zoom ?? live.zoom,
+      };
       clearPanOffsetsRef.current();
       landPanOffset(() => {
         committingScrollRef.current = false;
@@ -8065,15 +8073,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!fittingCameraRef.current && !clampingScrollRef.current) {
         pulseCameraMotionRef.current();
       }
-      if (!liveCameraRef.current?.live) clearPanOffsetsRef.current();
+      /*
+       * Excalidraw already moved (pinch, two-finger, a drawing tool that the
+       * gatekeeper does not own). Ride the ink with that camera. Clearing the
+       * translate and remeshing every scroll event left writing stuck while
+       * the page slid — the rubber-band on Exam 1.
+       */
       if (
+        !handPanningRef.current &&
+        inertiaFrameRef.current === 0 &&
         !fittingCameraRef.current &&
         !clampingScrollRef.current &&
         !committingScrollRef.current &&
-        !liveCameraRef.current?.live &&
         !rasterInkRef.current?.isDrawing()
       ) {
-        rasterInkRef.current?.syncCamera();
+        applyVisualScrollNowRef.current(scrollX, scrollY);
       }
       if (!liveCameraRef.current?.live) scheduleSlotReports();
       if (!fittingCameraRef.current && !clampingScrollRef.current) {
