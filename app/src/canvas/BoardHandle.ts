@@ -183,6 +183,10 @@ export interface BoardHandle {
    */
   nudgeViewportFit(): void;
   /**
+   * One Recentre-order remesh for a draw page. Documents re-measure only.
+   */
+  remeshLayout(): void;
+  /**
    * Re-measure this board if its box actually changed.
    *
    * Coming back from the other tab is not a resize. `nudgeViewportFit` zeros

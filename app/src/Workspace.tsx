@@ -8954,17 +8954,18 @@ export function Workspace({
     // Re-measure *this* board. `window.resize` also hits the partner pane in a
     // split and was why tapping one half reloaded the other. `nudgeViewportFit`
     // zeros the last box and keepY-fits — that is an open, not a tab return.
-    const delays = [0, 80, 200, 400, 700];
-    const ids = delays.map((ms) =>
-      window.setTimeout(() => {
-        boardRef.current?.syncDocumentScrollBounds();
+    const ids = [window.setTimeout(() => {
+      boardRef.current?.syncDocumentScrollBounds();
+      if (problem && isWhiteboard(problem)) {
+        boardRef.current?.remeshLayout();
+      } else {
         boardRef.current?.syncLiveBox();
-      }, ms),
-    );
+      }
+    }, 0)];
     return () => {
       for (const id of ids) window.clearTimeout(id);
     };
-  }, [showing, splitRole, webLive]);
+  }, [showing, splitRole, webLive, problem]);
 
   /*
    * A parked save used to leave switchMotion busy / preparing on. Focusing the

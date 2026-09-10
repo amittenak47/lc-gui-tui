@@ -75,6 +75,7 @@ import {
   type TabRecord,
 } from "./util/tabs";
 import { loadTabState, saveTabState } from "./util/tabPersist";
+import { announceSplitResize } from "./util/splitResize";
 import { isCameraBusy } from "./util/cameraBusy";
 import { ensureDevicePrefs } from "./util/devicePrefs";
 import {
@@ -1015,10 +1016,12 @@ export function App() {
       at: Date.now(),
     });
     setLiveIds((current) => pinLive(current, [anchor, incoming]));
+    announceSplitResize("settle");
   }, []);
 
   const unsplitTab = useCallback((id: string) => {
     dispatchTabs({ type: "unsplit", id });
+    announceSplitResize("settle");
   }, []);
 
   /*
@@ -1064,6 +1067,7 @@ export function App() {
       );
       if (paired) {
         dispatchTabs({ type: "swap-split", id: dragId });
+        announceSplitResize("settle");
         return;
       }
       splitTabs(ontoId, dragId, "right");
