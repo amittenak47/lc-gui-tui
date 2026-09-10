@@ -2234,7 +2234,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           aria-label="Ink lab pad"
           tabIndex={0}
         />
-        <InkLoadBar ref={loadBarRef} />
+        <InkLoadBar ref={loadBarRef} bar={false} overlay={false} />
       </div>
     );
   },

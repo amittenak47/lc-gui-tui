@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createInkLabEngine, DISTANCE_GATE_CSS, labStampGatePx } from "./engine";
 import { createEkf } from "./ekf";
+import { seedSpineHop } from "./seedHop";
 
 beforeAll(() => {
   (globalThis as Record<string, unknown>).OffscreenCanvas = class {
@@ -13,6 +14,65 @@ beforeAll(() => {
 });
 
 describe("Ink lab live path", () => {
+  it("does not darken older translucent ink when another stroke lifts", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.redrawSnap((ctx) => {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+      ctx.fillRect(20, 20, 20, 20);
+    });
+    engine.paint();
+    const alpha = () => canvas.getContext("2d")!.getImageData(25, 25, 1, 1).data[3];
+    const before = alpha();
+    for (let i = 0; i < 3; i++) {
+      engine.down({ x: 150, y: 120 + i * 20, p: 0.5, t: 100 * i });
+      engine.move([{ x: 200, y: 120 + i * 20, p: 0.5, t: 100 * i + 16 }]);
+      engine.paint();
+      engine.liftRaw();
+      engine.paint();
+      expect(alpha()).toBe(before);
+    }
+    engine.destroy();
+  });
+  it("uses input hops as spline controls after a previously densified turn", () => {
+    const run = (samples: Array<{ x: number; y: number; p: number; t: number }>) => {
+      const engine = createInkLabEngine({ sdf: false });
+      engine.down(samples[0]!);
+      engine.move(samples.slice(1));
+      const result = engine.liftRaw().bakeInput;
+      engine.destroy();
+      return result;
+    };
+    const samples = [
+      { x: 40, y: 80, p: 0.5, t: 0 },
+      { x: 90, y: 80, p: 0.5, t: 16 },
+      { x: 100, y: 140, p: 0.5, t: 32 },
+      { x: 180, y: 155, p: 0.5, t: 48 },
+    ];
+    const first = run(samples.slice(0, 2));
+    const turn = run(samples.slice(0, 3));
+    const full = run(samples);
+    expect(turn.length).toBeGreaterThan(3);
+    const expected = seedSpineHop(first.at(-1)!, turn.at(-1)!, full.at(-1)!);
+    expect(full.slice(turn.length).map(({ x, y }) => ({ x, y })))
+      .toEqual(expected.map(({ x, y }) => ({ x, y })));
+  });
+
+  it("paints the last unpresented hop before preserving live pixels on lift", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.down({ x: 40, y: 80, p: 0.5, t: 0 });
+    engine.move([{ x: 100, y: 80, p: 0.5, t: 16 }]);
+    engine.paint();
+    engine.move([{ x: 240, y: 80, p: 0.5, t: 32 }]);
+    engine.liftRaw();
+    engine.paint();
+    const data = canvas.getContext("2d")!.getImageData(180, 60, 40, 40).data;
+    expect(data.some((value, i) => i % 4 === 3 && value > 0)).toBe(true);
+    engine.destroy();
+  });
   it("returns canvas2d when webgl2 is stubbed false", () => {
     const canvas = {
       width: 200,

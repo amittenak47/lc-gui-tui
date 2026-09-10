@@ -2879,6 +2879,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           : DRAW_GROWTH_CAP,
     });
     if (Math.abs(curH - nextH) <= 1) return false;
+    // #region agent log
+    fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'Board.tsx:maybeGrowDrawFrame',message:'draw frame grew',data:{curH,nextH,contentBottomRel,scrollY:liveCameraRef.current?.scrollY,live:liveCameraRef.current?.live},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
 
     const nextElements = live.map((el) =>
       el.id === frame!.id ? { ...el, height: nextH } : el,
@@ -3897,6 +3900,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * on the ink — a ghost, then a rubber-band when the translate dropped.
    */
   const commitVisualScroll = useCallback(() => {
+    // syncCamera intentionally skips while drawing. Dropping the CSS ride in
+    // that case moves the bitmap without repainting it at the new camera.
+    if (rasterInkRef.current?.isDrawing()) return;
     if (cameraIdleTeardownTimerRef.current) {
       window.clearTimeout(cameraIdleTeardownTimerRef.current);
       cameraIdleTeardownTimerRef.current = 0;
@@ -5809,12 +5815,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [interactive]);
 
   type FitMode = "frame" | "camera" | "both" | "keepY" | "recentre";
+  const inkDeferredFitRef = useRef(false);
 
   const runFit = useCallback(
     (regionId?: string | null, mode: FitMode = "both") => {
       const api = apiRef.current;
       if (!api) return;
 
+      if (rasterInkRef.current?.isDrawing()) {
+        inkDeferredFitRef.current = true;
+        return;
+      }
       // One region / scratch page per fit so the dashed border can fill the chrome
       // hole. Desktop landing uses the problem statement alone (code stays below).
       const page = regionId ?? mobileRegionRef.current;
@@ -6214,6 +6225,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           nextScrollY = clamped.scrollY;
         }
         if (scrollModeRef.current) lockedScrollXRef.current = nextScrollX;
+        // #region agent log
+        fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'Board.tsx:runFit',message:'camera write',data:{mode,prevY:liveCameraRef.current?.scrollY,nextScrollY,nextScrollX,zoom,viewWidth,viewHeight,minY,maxY,dy:(nextScrollY-(liveCameraRef.current?.scrollY??nextScrollY))},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
         api.updateScene({
           appState: {
             zoom: { value: zoom },
@@ -6618,6 +6632,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    */
   const applyLiveBoxFit = useCallback(
     (force: boolean, remeshInk = true): boolean => {
+      // Guard before measuring: sash layout already owns this frame.
+      if (sashDragActive()) return true;
+      if (rasterInkRef.current?.isDrawing()) {
+        inkDeferredFitRef.current = true;
+        return true;
+      }
       const board = boardRef.current;
       const api = apiRef.current;
       if (!board || !api) return false;
@@ -6651,21 +6671,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * Excalidraw 30fps cap on both halves. Camera waits for settle.
        */
       if (sashLive) return true;
-      if (panLive) {
-        if (excalidrawViewportNeedsSync(live, api.getAppState() as { width?: number; height?: number })) {
-          api.updateScene({
-            appState: {
-              width: live.width,
-              height: live.height,
-              offsetLeft: box.left,
-              offsetTop: box.top,
-            },
-            captureUpdate: CaptureUpdateAction.NEVER,
-          });
-        }
-        lastFittedBoardBoxRef.current = { w: live.width, h: live.height };
-        return true;
-      }
       /*
        * Chrome / annotate toolbar changes the hole height, not the page width.
        * keepY here remeshed the book and jumped a parked document back to
@@ -6702,14 +6707,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       api.refresh?.();
       maybeGrowDrawFrame();
       const drawPage = isDrawPageRegion(mobileRegionRef.current);
+      if (panLive) {
+        // A real resize ends the old gesture, but runFit keeps its live Y.
+        stopPanInertia();
+        handPanningRef.current = false;
+        panDragRef.current = null;
+        cameraMotionActiveRef.current = false;
+        rasterInkRef.current?.cancelCameraMotion();
+      }
       if (remeshInk) {
         clearPanOffsets();
         paintExcalidrawCanvases(board, live.width, live.height);
       }
+      // #region agent log
+      fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'Board.tsx:applyLiveBoxFit',message:'box fit',data:{force,remeshInk,boxChanged,drawPage,w:live.width,h:live.height,prevW:prev.w,prevH:prev.h,scrollY:liveCameraRef.current?.scrollY,panLive:Boolean(panLive),sashLive},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       runFit(null, remeshInk && drawPage ? "recentre" : "keepY");
-      if (remeshInk && drawPage) {
+      if (remeshInk) {
         rasterInkRef.current?.syncCamera();
-        reportLinedSlot();
+        if (drawPage) reportLinedSlot();
       }
       lastFittedBoardBoxRef.current = { w: live.width, h: live.height };
       if (prev.w >= 8 && prev.h >= 8 && boxChanged) {
@@ -6718,22 +6734,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       return true;
     },
-    [clearPanOffsets, maybeGrowDrawFrame, reportLinedSlot, runFit],
+    [clearPanOffsets, maybeGrowDrawFrame, reportLinedSlot, runFit, stopPanInertia],
   );
 
-  const viewportFitRafRef = useRef(0);
   const viewportFitSettleRef = useRef(0);
 
   const scheduleLiveViewportFit = useCallback(() => {
-    if (!viewportFitRafRef.current) {
-      viewportFitRafRef.current = requestAnimationFrame(() => {
-        viewportFitRafRef.current = 0;
-        applyLiveBoxFit(false, false);
-      });
-    }
+    if (sashDragActive()) return;
     window.clearTimeout(viewportFitSettleRef.current);
     viewportFitSettleRef.current = window.setTimeout(() => {
-      applyLiveBoxFit(true, true);
+      // #region agent log
+      fetch('http://127.0.0.1:7340/ingest/649342b3-0790-4e7a-b4d9-9161c6b26eb8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4aebf1'},body:JSON.stringify({sessionId:'4aebf1',location:'Board.tsx:scheduleLiveViewportFit',message:'resize settle remesh',data:{scrollY:liveCameraRef.current?.scrollY,w:lastFittedBoardBoxRef.current.w,h:lastFittedBoardBoxRef.current.h},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
+      // #endregion
+      applyLiveBoxFit(false, true);
     }, 120);
   }, [applyLiveBoxFit]);
 
@@ -6863,6 +6876,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     window.visualViewport?.addEventListener("resize", scheduleLiveViewportFit);
     requestAnimationFrame(() => run(true, true));
     const onOrient = () => {
+      window.clearTimeout(viewportFitSettleRef.current);
       lastFittedBoardBoxRef.current = { w: 0, h: 0 };
       for (const id of late) window.clearTimeout(id);
       late.length = 0;
@@ -6895,8 +6909,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       window.removeEventListener("orientationchange", onOrient);
       window.removeEventListener(SPLIT_RESIZE_EVENT, onSplitResize);
       orientation?.removeEventListener("change", onOrient);
-      if (viewportFitRafRef.current) cancelAnimationFrame(viewportFitRafRef.current);
-      viewportFitRafRef.current = 0;
       window.clearTimeout(viewportFitSettleRef.current);
       for (const id of late) window.clearTimeout(id);
     };
@@ -7554,6 +7566,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (keepCamera) {
       if (!annotateCodeRef.current) armReadingScroll();
       if (becameInteractive && alreadyPlaced) {
+        // Focus can change chrome insets even when the outer pane is the same
+        // size. Refit width with keepY; never use the page-one camera fit.
+        applyLiveBoxFit(true, true);
         return;
       }
       /*
@@ -8019,7 +8034,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (maybeGrowDrawFrame()) {
       scheduleSlotReports();
     }
-  }, [maybeGrowDrawFrame, onChange, scheduleSlotReports]);
+    if (inkDeferredFitRef.current) {
+      inkDeferredFitRef.current = false;
+      scheduleLiveViewportFit();
+    }
+  }, [maybeGrowDrawFrame, onChange, scheduleSlotReports, scheduleLiveViewportFit]);
 
   const handleCameraScroll = useCallback(
     (scrollX: number, scrollY: number) => {
@@ -9752,8 +9771,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           interactive && inkToolActive && !presetStore.wheelLocked
         }
         onWheelHold={(x, y) => setInkWheel({ x, y })}
-        perfOverlay={perfOverlay}
-        perfBar={perfBar}
+        perfOverlay={perfOverlay && isDrawPageRegion(mobileRegion ?? null)}
+        perfBar={perfBar && isDrawPageRegion(mobileRegion ?? null)}
         displayHz={displayHz}
         matchDisplay={matchDisplay}
       />

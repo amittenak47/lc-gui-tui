@@ -328,6 +328,16 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/perfOverlay/);
   });
 
+  it("keeps the ink perf HUD on the whiteboard, not the file viewer", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    expect(src).toMatch(
+      /perfOverlay=\{perfOverlay && isDrawPageRegion\(mobileRegion \?\? null\)\}/,
+    );
+    expect(src).toMatch(
+      /perfBar=\{perfBar && isDrawPageRegion\(mobileRegion \?\? null\)\}/,
+    );
+  });
+
   it("re-arms vsync before a budget present, from capture-phase pointer events", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
     expect(src).toMatch(/keepLivePaintPump\(drawingRef\.current\)/);

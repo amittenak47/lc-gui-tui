@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./inkLab/tileRasterClient", () => ({ rasterInkTileOffThread: vi.fn() }));
+import { rasterInkTileOffThread } from "./inkLab/tileRasterClient";
 
 import {
   boundsOverlap,
@@ -670,6 +673,39 @@ describe("InkTileCache", () => {
     cache.deferOp(draw([10, 10], [700, 500]));
     const after = canvases.created.reduce((n, canvas) => n + canvas.ops.length, 0);
     expect(after).toBe(before);
+  });
+
+  it("rejects stale worker pixels and sends new ink in the next history snapshot", async () => {
+    const jobs: Array<{ resolve: (bitmap: ImageBitmap) => void; ops: readonly InkOp[] }> = [];
+    vi.mocked(rasterInkTileOffThread).mockImplementation((job) =>
+      new Promise((resolve) => jobs.push({ resolve, ops: job.ops })),
+    );
+    const { cache, scheduled } = makeCache({ useWorker: true });
+    const first = draw([10, 10], [20, 20]);
+    const fresh = draw([30, 30], [40, 40]);
+    cache.setOps([first]);
+    const view = { ...screen(1), width: 100, height: 100 };
+    const { ctx } = destinationContext();
+    cache.draw(ctx, view, 1);
+    scheduled.shift()!();
+    await vi.waitFor(() => expect(jobs).toHaveLength(1));
+    cache.deferOp(fresh);
+    const close = vi.fn();
+    jobs[0]!.resolve({ close } as unknown as ImageBitmap);
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(cache.size).toBe(0);
+    expect(jobs[0]!.ops).toEqual([first]);
+
+    cache.draw(ctx, view, 1);
+    scheduled.shift()!();
+    await vi.waitFor(() => expect(jobs).toHaveLength(2));
+    expect(jobs[1]!.ops).toEqual([first, fresh]);
+    expect(jobs[1]!.ops).not.toBe(jobs[0]!.ops);
+    jobs[1]!.resolve({ close: vi.fn() } as unknown as ImageBitmap);
+    await vi.waitFor(() => expect(cache.size).toBe(1));
+    cache.draw(ctx, view, 1);
+    expect(cache.covered).toBe(true);
+    cache.dispose();
   });
 
   it("evicts the least recently seen tiles past its budget", () => {

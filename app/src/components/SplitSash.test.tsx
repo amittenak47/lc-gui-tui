@@ -35,6 +35,31 @@ function pointer(type: string, x: number, y: number) {
 }
 
 describe("SplitSash", () => {
+  it("holds board layout fixed while dragging and restores it on settle", async () => {
+    const host = document.createElement("main");
+    host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800 }) as DOMRect;
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    act(() => root.render(<>
+      <div className="is-split-a"><div className="lc-board" style={{ width: "100%" }} /></div>
+      <SplitSash axis="vertical" onRatio={() => {}} />
+    </>));
+    const board = host.querySelector<HTMLElement>(".lc-board")!;
+    Object.defineProperty(board, "clientWidth", { value: 500 });
+    Object.defineProperty(board, "clientHeight", { value: 800 });
+    act(() => host.querySelector("button")!.dispatchEvent(pointer("pointerdown", 500, 100)));
+    expect(board.style.width).toBe("500px");
+    expect(board.style.height).toBe("800px");
+    act(() => window.dispatchEvent(pointer("pointermove", 700, 100)));
+    await flushRaf();
+    expect(board.style.width).toBe("500px");
+    act(() => window.dispatchEvent(pointer("pointerup", 700, 100)));
+    expect(board.style.width).toBe("100%");
+    expect(board.style.height).toBe("");
+    expect(board.style.flex).toBe("");
+    act(() => root.unmount());
+    host.remove();
+  });
   it("writes CSS vars on move and commits the ratio on pointerup", async () => {
     const onRatio = vi.fn();
     const host = document.createElement("div");

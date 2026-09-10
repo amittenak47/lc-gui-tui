@@ -356,6 +356,8 @@ export class InkTileCache {
   private sliceVisible = false;
   private hydrateGen = 0;
   private inflight = new Set<string>();
+  private workerGeneration = 0;
+  private workerOps: readonly InkOp[] | null = null;
   private persistDirty = false;
 
   constructor(options: InkTileCacheOptions = {}) {
@@ -446,6 +448,7 @@ export class InkTileCache {
       return;
     }
 
+    this.invalidateWorkerHistory();
     this.ops = next;
     // Nothing in common: a different notebook, or a clear. There is no cache
     // worth keeping and no flash to avoid — the page is changing wholesale.
@@ -490,6 +493,7 @@ export class InkTileCache {
    * independent of what is already written there.
    */
   appendOp(op: InkOp): void {
+    this.invalidateWorkerHistory();
     this.ops.push(op);
     if (isHostBoundOp(op)) return;
     const bounds = this.boundsOf(op);
@@ -579,6 +583,7 @@ export class InkTileCache {
    * rebuilt later, before the next atomic camera presentation.
    */
   deferOp(op: InkOp): void {
+    this.invalidateWorkerHistory();
     this.ops.push(op);
     this.sig = this.contentSig();
     this.persistDirty = true;
@@ -586,7 +591,7 @@ export class InkTileCache {
     const bounds = this.boundsOf(op);
     for (const [key, tile] of [...this.tiles]) {
       const box = this.tileBounds(tile.level, tile.tx, tile.ty);
-      if (boundsOverlap(bounds, box)) this.tiles.delete(key);
+      if (boundsOverlap(bounds, this.paddedTileBounds(box, levelScale(tile.level)))) this.tiles.delete(key);
     }
   }
 
@@ -670,6 +675,7 @@ export class InkTileCache {
   }
 
   invalidate(): void {
+    this.invalidateWorkerHistory();
     this.tiles.clear();
     this.opBounds = new WeakMap<InkOp, SceneBounds>();
     this.pending = [];
@@ -684,6 +690,7 @@ export class InkTileCache {
 
   /** Drop only cached pixels touched by changed stroke geometry. */
   invalidateBounds(bounds: SceneBounds, op?: InkOp): void {
+    this.invalidateWorkerHistory();
     if (op) this.opBounds.delete(op);
     for (const [key, tile] of [...this.tiles]) {
       const tileBounds = this.tileBounds(tile.level, tile.tx, tile.ty);
@@ -795,11 +802,16 @@ export class InkTileCache {
       return;
     }
     this.inflight.add(key);
+    const generation = this.workerGeneration;
+    // The client uses identity to decide whether to send history. Appends and
+    // geometry edits must get a fresh snapshot, even if this.ops was mutated.
+    const ops = this.workerOps ?? (this.workerOps = this.ops.slice());
+    const clip = this.clip;
     void import("./inkLab/tileRasterClient")
       .then((mod) =>
         mod.rasterInkTileOffThread({
-          ops: this.ops,
-          clip: this.clip,
+          ops,
+          clip,
           level: next.level,
           tx: next.tx,
           ty: next.ty,
@@ -807,6 +819,10 @@ export class InkTileCache {
         }),
       )
       .then((bitmap) => {
+        if (generation !== this.workerGeneration) {
+          bitmap?.close();
+          return;
+        }
         this.inflight.delete(key);
         if (bitmap) this.installSource(next.level, next.tx, next.ty, bitmap);
         else this.renderTile(next.level, next.tx, next.ty);
@@ -817,6 +833,7 @@ export class InkTileCache {
         }
       })
       .catch(() => {
+        if (generation !== this.workerGeneration) return;
         this.inflight.delete(key);
         this.renderTile(next.level, next.tx, next.ty);
         this.onTilesReady?.();
@@ -824,6 +841,12 @@ export class InkTileCache {
           this.idleHandle = this.schedule(() => this.runPending());
         }
       });
+  }
+
+  private invalidateWorkerHistory(): void {
+    this.workerGeneration += 1;
+    this.workerOps = null;
+    this.inflight.clear();
   }
 
   /** Tiles currently held — for tests and for the metrics readout. */
