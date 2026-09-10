@@ -979,9 +979,10 @@ const HOP_CURVE_MAX = 32;
 const HOP_CURVE_ALPHA = 0.5;
 /**
  * CR sample spacing. Live ribbon densify is coarser (~2px); using that here
- * left short turning hops as a single `to`.
+ * left short turning hops as a single `to`. 0.5 keeps thin SDF capsules round
+ * on turns without filling straight runs.
  */
-const HOP_CURVE_STEP = 0.75;
+export const HOP_CURVE_STEP = 0.5;
 
 function hopChordStraight(
   prev: ScenePoint,

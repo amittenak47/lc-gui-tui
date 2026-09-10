@@ -74,6 +74,40 @@ describe("Ink lab live path", () => {
     engine.destroy();
   });
 
+  it("seeds Catmull midpoints on a turning hop", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.setPen({
+      color: "#1a1a1a",
+      baseWidth: 8,
+      overlayScale: 1,
+      dpr: 1,
+      maxFullness: 1,
+      pressureClip: 1,
+      pressureSensitive: false,
+      speedInk: 0,
+      speedBlotBlend: 0,
+      speedFade: 0,
+      boldness: 1,
+      smoothing: 0,
+    });
+    engine.down({ x: 40, y: 80, p: 0.5, t: 0 });
+    engine.move([
+      { x: 80, y: 80, p: 0.5, t: 16 },
+      { x: 80, y: 120, p: 0.5, t: 32 },
+    ]);
+    expect(engine.pointCount()).toBeGreaterThan(3);
+    const baked = engine.up({ x: 80, y: 120, p: 0.5, t: 48 });
+    expect(baked.points.length).toBeGreaterThan(3);
+    let off = 0;
+    for (const p of baked.points) {
+      if (p.y > 81 && p.y < 119) off = Math.max(off, Math.abs(p.x - 80));
+    }
+    expect(off).toBeGreaterThan(0.2);
+    engine.destroy();
+  });
+
   it("a speed-ink start borrows the hop heading, not a standstill disc", () => {
     const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
     const pen = {
@@ -815,7 +849,7 @@ describe("Ink lab live path", () => {
   });
 
   it("live-smooth suffix-hits after the prefix freezes", () => {
-    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const canvas = createCanvas(1200, 300) as unknown as HTMLCanvasElement;
     const engine = createInkLabEngine({ sdf: false });
     engine.attach(canvas);
     engine.setPen({
