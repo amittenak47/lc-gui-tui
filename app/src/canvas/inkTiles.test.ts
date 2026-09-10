@@ -624,6 +624,24 @@ describe("InkTileCache", () => {
     expect(cache.covered).toBe(false);
   });
 
+  it("suspends an unfocused pane without polling and resumes its missing tiles", () => {
+    const { cache, canvases, scheduled } = makeCache();
+    cache.setOps([draw([0, 0], [40, 0])]);
+    cache.setSuspended(true);
+    const { ctx } = destinationContext();
+    cache.draw(ctx, screen(1), 1);
+    scheduled.shift()?.();
+    expect(scheduled).toHaveLength(0);
+    expect(canvases.created).toHaveLength(0);
+    expect(cache.covered).toBe(false);
+    cache.setSuspended(false);
+    let guard = 0;
+    while (!cache.settled && guard++ < 20) scheduled.shift()?.();
+    cache.draw(ctx, screen(1), 1);
+    expect(cache.covered).toBe(true);
+    cache.dispose();
+  });
+
   it("is covered once every visible tile was blitted from cache", () => {
     const { cache } = makeCache();
     cache.setOps([draw([0, 0], [40, 0])]);
@@ -689,6 +707,8 @@ describe("InkTileCache", () => {
     cache.draw(ctx, view, 1);
     scheduled.shift()!();
     await vi.waitFor(() => expect(jobs).toHaveLength(1));
+    // The queue is empty but its only visible tile is still in flight.
+    expect(cache.covered).toBe(false);
     cache.deferOp(fresh);
     const close = vi.fn();
     jobs[0]!.resolve({ close } as unknown as ImageBitmap);
@@ -703,6 +723,7 @@ describe("InkTileCache", () => {
     expect(jobs[1]!.ops).not.toBe(jobs[0]!.ops);
     jobs[1]!.resolve({ close: vi.fn() } as unknown as ImageBitmap);
     await vi.waitFor(() => expect(cache.size).toBe(1));
+    expect(cache.covered).toBe(false); // Installed pixels have not been blitted yet.
     cache.draw(ctx, view, 1);
     expect(cache.covered).toBe(true);
     cache.dispose();

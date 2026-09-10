@@ -196,15 +196,6 @@ function asPositive(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-function zoomFromUnknown(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
-  if (value && typeof value === "object" && "value" in value) {
-    const inner = (value as { value: unknown }).value;
-    if (typeof inner === "number" && Number.isFinite(inner) && inner > 0) return inner;
-  }
-  return 0;
-}
-
 function rulingFromUnknown(value: unknown, fallbackMode: LinedPaperMode): LinedRuling | null {
   if (isLinedRuling(value)) return value;
   if (fallbackMode === "wide" || fallbackMode === "college") return fallbackMode;
@@ -229,14 +220,13 @@ export function linedPitchStateFromAppState(
     }) ??
     (asPositive(rec.linedPitch) > 0
       ? linedPitchPairFromRuling(asPositive(rec.linedPitch), rule ?? "wide")
-      : linedPitchPairFromZoom(zoomFromUnknown(rec.zoom)));
+      : null);
   return { pair, rule };
 }
 
 /**
- * Scene pitch stored on the notebook, or recovered from the camera it was
- * written at (older files only saved zoom; the overlay used to be 36px on
- * whatever screen you opened).
+ * Explicit scene pitch stored on the notebook. A camera zoom alone cannot
+ * establish the original ruling; capture it at the first real width-fit.
  */
 export function linedPitchFromAppState(
   appState: unknown,

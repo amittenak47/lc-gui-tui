@@ -6132,6 +6132,13 @@ body[data-lc-sash-drag="horizontal"] {
  * every width; the card itself is a wide row so the glyph has room to move.
  * ------------------------------------------------------------------------- */
 
+@media (pointer: coarse) {
+  .lc-overlay-spinner {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
 .lc-home-chooser {
   width: min(560px, 100%);
   margin: auto;

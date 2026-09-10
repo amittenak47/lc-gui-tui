@@ -88,14 +88,21 @@ describe("lined paper scene pitch", () => {
     );
   });
 
-  it("reads a stored pitch, and recovers one from a saved camera", () => {
+  it("restores explicit pitches but leaves zoom-only files for the first fit", () => {
     expect(linedPitchFromAppState({ linedPitch: 72, zoom: 0.4 })).toBe(72);
-    expect(linedPitchFromAppState({ zoom: 0.5 })).toBe(LINED_PAPER_WIDE_SCREEN_PX / 0.5);
-    expect(linedPitchFromAppState({ zoom: { value: 0.5 } })).toBe(LINED_PAPER_WIDE_SCREEN_PX / 0.5);
-    expect(linedPitchFromAppState({ zoom: 0.5 }, "college")).toBe(
-      LINED_PAPER_COLLEGE_SCREEN_PX / 0.5,
-    );
+    expect(linedPitchFromAppState({ zoom: 0.5 })).toBe(0);
+    expect(linedPitchFromAppState({ zoom: { value: 0.5 } })).toBe(0);
+    expect(linedPitchFromAppState({ zoom: 0.5 }, "college")).toBe(0);
+    expect(linedPitchStateFromAppState({ zoom: { value: 1 } }).pair).toBeNull();
     expect(linedPitchFromAppState(null)).toBe(0);
+  });
+
+  it("captures 36px at the first width-fit and scales that paper in a split", () => {
+    const pair = ensureLinedPitchPair(null, 0.2)!;
+    expect(linedPaperCssGap(pair.wide, 0.2)).toBe(36);
+    const splitPair = ensureLinedPitchPair(pair, 0.1)!;
+    expect(splitPair).toEqual(pair);
+    expect(linedPaperCssGap(splitPair.wide, 0.1)).toBe(18);
   });
 
   it("captures wide and college from the same write zoom, never equal", () => {

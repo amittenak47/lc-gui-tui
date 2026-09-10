@@ -15,7 +15,7 @@
  * starved both pointer delivery and the loading spinner.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { resolveInkColor } from "../canvas/inkColors";
 import { smoothInkPoints } from "../canvas/inkSmoothing";
@@ -44,7 +44,7 @@ import {
   loadInkSpeedBlotBlend,
   loadInkSpeedFade,
 } from "../util/inkSpeedPref";
-import { loadInkToolPrefs } from "../util/inkToolPrefs";
+import { INK_TOOL_PREFS_EVENT, loadInkToolPrefs } from "../util/inkToolPrefs";
 import {
   beginLoadingDoodle,
   endLoadingDoodle,
@@ -136,7 +136,8 @@ export function LoadingDoodle({
   const doodleTokenRef = useRef<object>({});
   const themeIdRef = useRef(themeId ?? loadThemeId());
   themeIdRef.current = themeId ?? loadThemeId();
-  const inkRef = useRef<InkLive>(loadLiveInk(themeIdRef.current));
+  const [initialInk] = useState(() => loadLiveInk(themeIdRef.current));
+  const inkRef = useRef<InkLive>(initialInk);
   const dprRef = useRef(1);
 
   useEffect(() => {
@@ -160,6 +161,7 @@ export function LoadingDoodle({
     window.addEventListener(INK_GRAIN_EVENT, reloadInk);
     window.addEventListener(INK_SPEED_FADE_EVENT, reloadInk);
     window.addEventListener(INK_BOLDNESS_EVENT, reloadInk);
+    window.addEventListener(INK_TOOL_PREFS_EVENT, reloadInk);
 
     const drawCommitted = (op: InkDrawOp) => {
       backingCtx.setTransform(dprRef.current, 0, 0, dprRef.current, 0, 0);
@@ -172,7 +174,13 @@ export function LoadingDoodle({
       for (const stroke of strokesRef.current) drawCommitted(stroke.op);
     };
 
+    let resizePending = false;
     const resize = () => {
+      if (strokeRef.current) {
+        resizePending = true;
+        return;
+      }
+      resizePending = false;
       const parent = canvas.parentElement;
       if (!parent) return;
       const rect = parent.getBoundingClientRect();
@@ -231,6 +239,7 @@ export function LoadingDoodle({
       const due = first.at + DOODLE_TTL_MS + ERASE_MS;
       expiryTimerRef.current = window.setTimeout(() => {
         expiryTimerRef.current = null;
+        if (strokeRef.current) return; // Lift schedules expiry again.
         const now = performance.now();
         strokesRef.current = strokesRef.current.filter(
           (stroke) => stroke.at + DOODLE_TTL_MS + ERASE_MS > now,
@@ -277,9 +286,9 @@ export function LoadingDoodle({
     };
 
     const onDown = (event: PointerEvent) => {
+      if (pointerIdRef.current != null) return;
       if (event.button !== 0 && event.pointerType !== "pen") return;
       event.preventDefault();
-      inkRef.current = loadLiveInk(themeIdRef.current);
       try {
         canvas.setPointerCapture(event.pointerId);
       } catch {
@@ -293,7 +302,7 @@ export function LoadingDoodle({
       beginLoadingDoodle(doodleTokenRef.current);
       liveFromRef.current = 0;
       strokeRef.current = [pointFrom(event, pointerBoundsRef.current)];
-      schedulePaint();
+      paintTail();
     };
     const onMove = (event: PointerEvent) => {
       if (!strokeRef.current || event.pointerId !== pointerIdRef.current) return;
@@ -305,6 +314,7 @@ export function LoadingDoodle({
     };
     const onUp = (event: PointerEvent) => {
       if (!strokeRef.current || event.pointerId !== pointerIdRef.current) return;
+      pointerIdRef.current = null;
       try {
         canvas.releasePointerCapture(event.pointerId);
       } catch {
@@ -315,7 +325,7 @@ export function LoadingDoodle({
       const rect = pointerBoundsRef.current ?? canvas.getBoundingClientRect();
       const last = points[points.length - 1];
       const lifted = pointFrom(event, rect);
-      if (!last || Math.hypot(lifted.x - last.x, lifted.y - last.y) > 0.25) {
+      if (event.type === "pointerup" && (!last || Math.hypot(lifted.x - last.x, lifted.y - last.y) > 0.25)) {
         points = [...points, lifted];
       }
       if (points.length > 1 && live.smoothing > 0) {
@@ -340,18 +350,29 @@ export function LoadingDoodle({
       liveFromRef.current = 0;
       endLoadingDoodle(doodleTokenRef.current);
       lastSampleRef.current = null;
+      if (resizePending) resize();
       presentBacking();
+      scheduleExpiry();
     };
 
     resize();
     presentBacking();
-    const ro = new ResizeObserver(resize);
+    const ro = new ResizeObserver(() => {
+      resize();
+      if (!strokeRef.current) presentBacking();
+    });
     if (canvas.parentElement) ro.observe(canvas.parentElement);
     canvas.addEventListener("pointerdown", onDown);
     canvas.addEventListener("pointermove", onMove);
     canvas.addEventListener("pointerup", onUp);
     canvas.addEventListener("pointercancel", onUp);
+    canvas.addEventListener("lostpointercapture", onUp);
     return () => {
+      if (pointerIdRef.current != null) {
+        try { canvas.releasePointerCapture(pointerIdRef.current); } catch { /* detached */ }
+      }
+      pointerIdRef.current = null;
+      strokeRef.current = null;
       endLoadingDoodle(doodleTokenRef.current);
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       if (expiryTimerRef.current != null) window.clearTimeout(expiryTimerRef.current);
@@ -363,10 +384,12 @@ export function LoadingDoodle({
       window.removeEventListener(INK_GRAIN_EVENT, reloadInk);
       window.removeEventListener(INK_SPEED_FADE_EVENT, reloadInk);
       window.removeEventListener(INK_BOLDNESS_EVENT, reloadInk);
+      window.removeEventListener(INK_TOOL_PREFS_EVENT, reloadInk);
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerup", onUp);
       canvas.removeEventListener("pointercancel", onUp);
+      canvas.removeEventListener("lostpointercapture", onUp);
     };
   }, []);
 

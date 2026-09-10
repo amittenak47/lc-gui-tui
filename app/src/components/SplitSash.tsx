@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { announceSplitResize } from "../util/splitResize";
+import { snapshotSashCanvases } from "../util/sashCanvasSnapshot";
 import { clampSplitRatio, type SplitAxis } from "../util/tabs";
 
 const MOVE_OPTS: AddEventListenerOptions = { capture: true, passive: false };
@@ -148,6 +149,7 @@ export function SplitSash({
 
   const bindDrag = () => {
     unbindRef.current?.();
+    restoreBoardsRef.current?.();
     const main = sashRef.current?.parentElement;
     dragBoxRef.current = main?.getBoundingClientRect() ?? null;
     // Resize the outer clips during the gesture. Keeping the board layout
@@ -161,6 +163,7 @@ export function SplitSash({
         key, value: node.style.getPropertyValue(key), priority: node.style.getPropertyPriority(key),
       })),
     }));
+    const restoreSnapshots = boards.map(({ node }) => snapshotSashCanvases(node));
     for (const { node, width, height } of boards) {
       node.style.width = `${width}px`;
       node.style.height = `${height}px`;
@@ -169,6 +172,7 @@ export function SplitSash({
       node.style.flexBasis = "auto";
     }
     restoreBoardsRef.current = () => {
+      for (const restore of restoreSnapshots) restore();
       for (const { node, styles } of boards) {
         for (const { key, value, priority } of styles) {
           if (value) node.style.setProperty(key, value, priority);
