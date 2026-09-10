@@ -159,6 +159,28 @@ describe("Board", () => {
     expect(src).not.toMatch(/linedPaperScenePitch\(next, zoom\)/);
   });
 
+  it("aligns lined paper from the live camera on toggle, same turn as ink", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const report = src.slice(
+      src.indexOf("const reportLinedSlot = useCallback"),
+      src.indexOf("const maybeGrowDrawFrame"),
+    );
+    expect(report).toMatch(/liveCameraRef\.current/);
+    expect(report).toMatch(/live\?\.scrollY \?\? state\.scrollY/);
+    const toggle = src.slice(
+      src.indexOf("const next = nextLinedPaperMode"),
+      src.indexOf("lc-lined-toggle") > 0
+        ? src.indexOf("<span aria-hidden>🗒️</span>")
+        : src.length,
+    );
+    expect(toggle).toContain("linedPaperOnRef.current");
+    expect(toggle).toContain("rasterInkRef.current?.syncCamera()");
+    expect(toggle).toContain("reportLinedSlot()");
+    expect(toggle).not.toMatch(/reflowReadingText\(\)/);
+    expect(toggle).not.toMatch(/requestAnimationFrame\(reportLinedSlot\)/);
+    expect(src).toMatch(/if \(!linedPaperOn \|\| !linedSlotOn\) return/);
+  });
+
   it("width-fits a restored notebook to this window and pins the left of the writing", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     const restore = src.slice(
