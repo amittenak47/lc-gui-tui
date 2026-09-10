@@ -214,6 +214,12 @@ describe("Board", () => {
     expect(fit).toMatch(/remeshInk/);
     expect(src).toMatch(/scheduleLiveViewportFit/);
     expect(src).not.toMatch(/setTimeout\(kick, 50\)/);
+    const split = src.slice(
+      src.indexOf("const onSplitResize"),
+      src.indexOf("window.addEventListener(SPLIT_RESIZE_EVENT"),
+    );
+    expect(split).toMatch(/settle/);
+    expect(split).not.toMatch(/scheduleLiveViewportFit/);
   });
 
   it("recentres a notebook about the hole centre", () => {
@@ -292,7 +298,7 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/matchDisplayRef/);
     expect(src).toMatch(/overdrawMarginPx/);
     expect(src).not.toMatch(/const marginY = 0/);
-    expect(src).toMatch(/if \(drawingRef\.current \|\| cameraMovingRef\.current\) return/);
+    expect(src).toMatch(/if \(drawingRef\.current \|\| cameraMovingRef\.current \|\| sashDragActive\(\)\) return/);
     expect(src).toMatch(/instantReplayOnCameraRebase\(\)/);
     expect(src).toMatch(/rebuildAndReplay\(false, instantReplayOnFirstPresent\(\)\)/);
     expect(src).toMatch(/bakeSpineOffThread/);

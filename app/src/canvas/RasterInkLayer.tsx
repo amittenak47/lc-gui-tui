@@ -65,6 +65,7 @@ import {
   type InkSmoothingMode,
 } from "./inkSmoothing";
 import { WHEEL_OPEN_MS } from "../util/gesture";
+import { sashDragActive } from "../util/splitResize";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { inkMetrics } from "./inkMetrics";
 import { createInkLoadMeter } from "./inkLoadMeter";
@@ -1412,7 +1413,7 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       if (!board || typeof ResizeObserver !== "function") return;
       const observer = new ResizeObserver(() => {
         alignedBoxRef.current = null;
-        if (drawingRef.current) return;
+        if (drawingRef.current || sashDragActive()) return;
         repaintRef.current();
       });
       observer.observe(board);

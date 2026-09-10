@@ -46,6 +46,8 @@ export function SplitSash({
   onRatioRef.current = onRatio;
   const lastTapRef = useRef(0);
   const unbindRef = useRef<(() => void) | null>(null);
+  const moveRafRef = useRef(0);
+  const pendingPtrRef = useRef<{ x: number; y: number } | null>(null);
 
   const ratioAt = (x: number, y: number): number | null => {
     const sash = sashRef.current;
@@ -70,6 +72,27 @@ export function SplitSash({
     announceSplitResize("move");
   };
 
+  const flushMove = (x: number, y: number) => {
+    if (moveRafRef.current) {
+      cancelAnimationFrame(moveRafRef.current);
+      moveRafRef.current = 0;
+    }
+    pendingPtrRef.current = null;
+    applyCss(x, y);
+  };
+
+  const scheduleMove = (x: number, y: number) => {
+    pendingPtrRef.current = { x, y };
+    if (moveRafRef.current) return;
+    moveRafRef.current = requestAnimationFrame(() => {
+      moveRafRef.current = 0;
+      const pending = pendingPtrRef.current;
+      pendingPtrRef.current = null;
+      if (!dragRef.current || !pending) return;
+      applyCss(pending.x, pending.y);
+    });
+  };
+
   /**
    * The gesture is over and the panes are their final size.
    *
@@ -81,6 +104,11 @@ export function SplitSash({
   const announceSettled = () => announceSplitResize("settle");
 
   const unbind = () => {
+    if (moveRafRef.current) {
+      cancelAnimationFrame(moveRafRef.current);
+      moveRafRef.current = 0;
+    }
+    pendingPtrRef.current = null;
     unbindRef.current?.();
     unbindRef.current = null;
     dragRef.current = false;
@@ -99,6 +127,9 @@ export function SplitSash({
    */
   useEffect(
     () => () => {
+      if (moveRafRef.current) cancelAnimationFrame(moveRafRef.current);
+      moveRafRef.current = 0;
+      pendingPtrRef.current = null;
       unbindRef.current?.();
       unbindRef.current = null;
       dragRef.current = false;
@@ -112,11 +143,11 @@ export function SplitSash({
     const onMove = (event: PointerEvent) => {
       if (!dragRef.current) return;
       event.preventDefault();
-      applyCss(event.clientX, event.clientY);
+      scheduleMove(event.clientX, event.clientY);
     };
     const onUp = (event: PointerEvent) => {
       if (!dragRef.current) return;
-      applyCss(event.clientX, event.clientY);
+      flushMove(event.clientX, event.clientY);
       const ratio = ratioRef.current;
       // Clear `data-lc-sash-drag` before settle — boards skip keepY while it
       // is set, so the final refit has to see a clean body.

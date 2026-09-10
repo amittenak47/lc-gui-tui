@@ -6639,14 +6639,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         handPanningRef.current;
       const sashLive = sashDragActive();
       /*
-       * Sash drag: write the new hole, do not keepY.
-       *
-       * Every move used to refit both boards and dispatch `window.resize`, so
-       * the sibling document hid its text layer and the tab looked like it
-       * remounted. The drag already wrote CSS widths; the camera waits for
-       * `settle` (force after `data-lc-sash-drag` is cleared).
+       * Sash drag: CSS already resized the panes. updateScene here is the
+       * Excalidraw 30fps cap on both halves. Camera waits for settle.
        */
-      if (panLive || sashLive) {
+      if (sashLive) return true;
+      if (panLive) {
         if (excalidrawViewportNeedsSync(live, api.getAppState() as { width?: number; height?: number })) {
           api.updateScene({
             appState: {
@@ -6872,7 +6869,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      */
     const onSplitResize = (event: Event) => {
       if (splitResizePhase(event) === "settle") onOrient();
-      else scheduleLiveViewportFit();
     };
     window.addEventListener(SPLIT_RESIZE_EVENT, onSplitResize);
     return () => {
