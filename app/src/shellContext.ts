@@ -121,6 +121,8 @@ export interface WorkspaceChrome {
     /** The walk is asking which copy to keep, not spinning. */
     walkWaiting?: "conflict" | null;
     padSync?: "synced" | "not-synced" | null;
+    /** Tab Sync button — same walk as the window pill. */
+    onSync?: (() => void) | null;
   };
 }
 
@@ -166,6 +168,7 @@ export function chromeLooksSame(current: WorkspaceChrome, next: WorkspaceChrome)
     current.docIndex.walkError === next.docIndex.walkError &&
     current.docIndex.walkWaiting === next.docIndex.walkWaiting &&
     current.docIndex.padSync === next.docIndex.padSync &&
+    current.docIndex.onSync === next.docIndex.onSync &&
     progressEqual(current.docIndex.walkProgress, next.docIndex.walkProgress) &&
     progressEqual(current.docIndex.indexProgress, next.docIndex.indexProgress) &&
     progressEqual(current.docIndex.embedProgress, next.docIndex.embedProgress)

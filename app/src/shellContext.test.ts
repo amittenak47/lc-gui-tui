@@ -36,5 +36,8 @@ describe("chromeLooksSame", () => {
     expect(chromeLooksSame(chrome({ padSync: "synced" }), chrome({ padSync: "not-synced" }))).toBe(
       false,
     );
+    const tap = () => {};
+    expect(chromeLooksSame(chrome({ onSync: tap }), chrome({ onSync: tap }))).toBe(true);
+    expect(chromeLooksSame(chrome({ onSync: tap }), chrome({ onSync: null }))).toBe(false);
   });
 });

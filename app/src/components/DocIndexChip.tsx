@@ -2,7 +2,7 @@
  * Header chip for the document index — morphs into a card about embedding.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import type { DocIndexStatus } from "../api/client";
@@ -60,6 +60,38 @@ function WorkRing({ progress }: { progress: DocWorkProgress | null }) {
       {pct != null && <b className="lc-doc-index-ring-pct">{pct}</b>}
     </>
   );
+}
+
+function ChipSync({
+  onSync,
+  walking,
+  walkError,
+}: {
+  onSync?: (() => void) | null;
+  walking: boolean;
+  walkError?: string | null;
+}) {
+  if (!onSync) return null;
+  return (
+    <button
+      type="button"
+      className="lc-doc-index-sync"
+      aria-label="Hub sync"
+      data-error={walkError ?? undefined}
+      disabled={walking && !walkError}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSync();
+      }}
+    >
+      Sync
+    </button>
+  );
+}
+
+function withChipSync(node: ReactNode, sync: ReactNode) {
+  if (!sync) return node;
+  return <span className="lc-doc-index-chip-row">{node}{sync}</span>;
 }
 
 export interface DocIndexChipProps {
@@ -121,6 +153,11 @@ export interface DocIndexChipProps {
   walkWaiting?: "conflict" | null;
   /** Resting pad sync, for tabs the walk is not currently walking. */
   padSync?: "synced" | "not-synced" | null;
+  /**
+   * Start the hub walk. Same walk as the window pill; this is the in-tab
+   * control. Does not open the index card.
+   */
+  onSync?: (() => void) | null;
 }
 
 export function DocIndexChip({
@@ -141,6 +178,7 @@ export function DocIndexChip({
   walkError,
   walkWaiting,
   padSync,
+  onSync,
 }: DocIndexChipProps) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -182,21 +220,26 @@ export function DocIndexChip({
    */
   const walking =
     walkStage != null && walkStage !== "idle" && walkStage !== "synced";
+  const syncBtn = onSync ? (
+    <ChipSync onSync={onSync} walking={walking} walkError={walkError} />
+  ) : null;
   if (walking && walkError) {
-    return (
+    return withChipSync(
       <span className="lc-doc-index-chip is-bad" title={walkError}>
         {walkError}
-      </span>
+      </span>,
+      syncBtn,
     );
   }
   if (walking && walkWaiting === "conflict") {
-    return (
+    return withChipSync(
       <span
         className="lc-doc-index-chip"
         title="Both copies changed — pick which stays."
       >
         choose copy
-      </span>
+      </span>,
+      syncBtn,
     );
   }
   if (walking) {
@@ -212,11 +255,12 @@ export function DocIndexChip({
           : "indexing…"
         : `${walkStage}…`;
     if (label) {
-      return (
+      return withChipSync(
         <span className="lc-doc-index-chip is-working">
           <WorkRing progress={walkProgress ?? null} />
           {label}
-        </span>
+        </span>,
+        syncBtn,
       );
     }
   }
@@ -224,22 +268,24 @@ export function DocIndexChip({
   // `onIndex` is also the re-index action once a document is already in — the
   // work is identical, `upsert` deletes and rewrites.
   if (status === "indexing") {
-    return (
+    return withChipSync(
       <span className="lc-doc-index-chip is-working">
         <WorkRing progress={indexProgress ?? null} />
         indexing…
-      </span>
+      </span>,
+      syncBtn,
     );
   }
   if (embedding) {
-    return (
+    return withChipSync(
       <span
         className="lc-doc-index-chip is-working"
         title={embedEta ?? "Embedding — the estimate appears after the first batch."}
       >
         <WorkRing progress={embedProgress ?? null} />
         embedding…
-      </span>
+      </span>,
+      syncBtn,
     );
   }
   const restPad =
@@ -249,22 +295,24 @@ export function DocIndexChip({
         ? "not-synced"
         : null;
   if (restPad && !canOpen) {
-    return (
+    return withChipSync(
       <span
         className={
           restPad === "synced" ? "lc-doc-index-chip is-ok" : "lc-doc-index-chip is-offer"
         }
       >
         {restPad === "synced" ? "synced" : "not synced"}
-      </span>
+      </span>,
+      syncBtn,
     );
   }
   if (status === "idle" && !onIndex && !restPad) return null;
   if (status === "error") {
-    return (
+    return withChipSync(
       <span className="lc-doc-index-chip is-bad" title={error ?? "index error"}>
         {error ?? "index error"}
-      </span>
+      </span>,
+      syncBtn,
     );
   }
 
@@ -308,6 +356,7 @@ export function DocIndexChip({
 
   return (
     <>
+      {withChipSync(
       <button
         ref={buttonRef}
         type="button"
@@ -339,7 +388,9 @@ export function DocIndexChip({
             : wordsOnly
               ? "indexed · words"
               : "indexed"}
-      </button>
+      </button>,
+      syncBtn,
+      )}
       {typeof document !== "undefined" &&
         createPortal(
           <div

@@ -122,6 +122,32 @@ describe("the chip while a Sync walk runs", () => {
     expect(chip(host)?.textContent).toContain("not synced");
     expect(chip(host)?.textContent).not.toContain("indexed");
   });
+
+  it("puts Sync beside pad status without opening an index card", () => {
+    const onSync = vi.fn();
+    const { host } = mount({
+      status: "idle",
+      onIndex: null,
+      padSync: "not-synced",
+      onSync,
+    });
+    const sync = host.querySelector(".lc-doc-index-sync") as HTMLButtonElement;
+    expect(sync).not.toBeNull();
+    expect(sync.getAttribute("aria-label")).toBe("Hub sync");
+    act(() => sync.click());
+    expect(onSync).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toContain("Index this document");
+  });
+
+  it("puts Sync beside an indexed chip without stealing the popover", () => {
+    const onSync = vi.fn();
+    const { host } = mount({ status: "indexed", onSync });
+    const sync = host.querySelector(".lc-doc-index-sync") as HTMLButtonElement;
+    expect(sync).not.toBeNull();
+    act(() => sync.click());
+    expect(onSync).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".lc-doc-index-pop")?.classList.contains("is-open")).toBe(false);
+  });
 });
 
 describe("the chip at rest", () => {

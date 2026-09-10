@@ -773,6 +773,36 @@ a,
   white-space: nowrap;
 }
 
+.lc-doc-index-chip-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.lc-doc-index-sync {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--hint);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.lc-doc-index-sync:hover,
+.lc-doc-index-sync:focus-visible {
+  color: var(--ink);
+}
+
+.lc-doc-index-sync:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .lc-header .lc-tab-close {
   flex-shrink: 0;
   width: 20px;
