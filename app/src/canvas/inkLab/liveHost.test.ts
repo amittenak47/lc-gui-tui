@@ -13,6 +13,7 @@ import {
   mutationIsInkChrome,
   remeshOnCameraMovingEnd,
   samePaintedView,
+  shiftSnapOnCameraRebase,
   shouldFlushLiveHud,
   skipCommittedReplay,
   skipReplayOnWheelAbort,
@@ -91,7 +92,8 @@ describe("live host contract", () => {
     expect(instantReplayOnUndo()).toBe(false);
   });
 
-  it("lands a camera rebase in one present", () => {
+  it("slides pan but keeps a real camera rebase atomic", () => {
+    expect(shiftSnapOnCameraRebase()).toBe(true);
     expect(instantReplayOnCameraRebase()).toBe(true);
   });
 

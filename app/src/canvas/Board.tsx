@@ -3854,12 +3854,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       appState: { scrollX: live.scrollX, scrollY: live.scrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
-    // Drop the ride before remesh. Leaving translate3d on while syncCamera
-    // paints at the live camera is the ghost of the pre-flick page.
-    clearPanOffsetsRef.current();
-    rasterInkRef.current?.syncCamera();
-    landPanOffset(() => {
-      committingScrollRef.current = false;
+    // Keep the ride up while the snap rebuilds. Dropping it first showed
+    // the old page at the live camera, then remeshing Exam 1 on this tick
+    // was Close App / Wait. land after the present.
+    void Promise.resolve(rasterInkRef.current?.syncCamera()).then(() => {
+      clearPanOffsetsRef.current();
+      landPanOffset(() => {
+        committingScrollRef.current = false;
+      });
     });
   }, [flushVisualScroll, landPanOffset]);
 
@@ -3893,14 +3895,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       appState: { scrollX: live.scrollX, scrollY: live.scrollY },
       captureUpdate: CaptureUpdateAction.NEVER,
     });
-    // Same tick as the camera write: a delayed land left Excalidraw on the
-    // live page while the ink canvas still carried the ride translate — the
-    // ghost, then the rubber-band when the translate finally dropped.
-    clearPanOffsetsRef.current();
+    // Same as mid-flick rebase: remesh under the ride, then drop it in the
+    // present. Clearing first plus an instant remesh froze the pad.
     if (liveCameraRef.current === live) live.live = false;
-    rasterInkRef.current?.syncCamera();
-    landPanOffset(() => {
-      committingScrollRef.current = false;
+    void Promise.resolve(rasterInkRef.current?.syncCamera()).then(() => {
+      clearPanOffsetsRef.current();
+      landPanOffset(() => {
+        committingScrollRef.current = false;
+      });
     });
   }, [flushVisualScroll, landPanOffset]);
   applyVisualScrollNowRef.current = applyVisualScrollNow;

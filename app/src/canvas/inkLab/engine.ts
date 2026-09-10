@@ -8,7 +8,8 @@ import { inkSlowness, type ScenePoint } from "../rasterInk";
 import { INK_SMOOTHING_DEFAULT, type LiveSmoothCache } from "../inkSmoothing";
 
 import { bakeSpine, reshapeLiveSpine } from "./bake";
-import { CLIP_BLIT_PAD, clipBlitRect } from "./clipBlit";
+import { CLIP_BLIT_PAD, clipBlitRect, intersectPixelRects, type PixelRect } from "./clipBlit";
+import { exposedShiftRects, shiftClearsSnap, spineHitsRects } from "./cameraShift";
 import { createEkf, type EkfFilter } from "./ekf";
 import { createFallbackPainter, fillMiterStroke } from "./fallback";
 import {
@@ -74,7 +75,8 @@ export type InkLabSnapPatch = {
   y: number;
   w: number;
   h: number;
-  data: ImageData;
+  /** GPU/canvas copy. Avoids a synchronous getImageData readback on lift. */
+  image: CanvasImageSource;
 };
 
 export type InkLabUpResult = {
@@ -132,7 +134,12 @@ export type InkLabEngine = {
    */
   replaySpines(strokes: readonly SpineDot[][]): void;
   /** Draw spines onto the committed snap without clearing it. Redo of one pen. */
-  appendSpines(strokes: readonly SpineDot[][]): void;
+  appendSpines(strokes: readonly SpineDot[][], clips?: readonly PixelRect[]): void;
+  /**
+   * Slide the committed snap by a camera delta. Returns the newly exposed
+   * strips to fill, or null when the jump has no overlap and must remesh.
+   */
+  shiftSnap(dx: number, dy: number): PixelRect[] | null;
   /** Copy snap pixels in `box`, or the whole snap. */
   copySnapPatch(box?: StrokeAabb): InkLabSnapPatch | null;
   /** Put a {@link copySnapPatch} back. Undo of one stroke. */
@@ -278,6 +285,8 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   let liveRedrawBox: StrokeAabb | null = null;
   let liveSmoothCache: LiveSmoothCache | null = null;
   const liveSmoothScene: ScenePoint[] = [];
+  /** Camera-shift fill: blit only into these destination strips. */
+  let blitClip: readonly PixelRect[] | null = null;
 
   const ensureInst = (n: number) => {
     if (n <= instCap) return;
@@ -636,19 +645,33 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   };
 
   const copySnapPatch = (box?: StrokeAabb): InkLabSnapPatch | null => {
-    if (!snap) return null;
-    const sctx = snap.getContext("2d");
-    if (!sctx) return null;
+    if (!snap || !peer) return null;
     const rect = box
-        ? clipBlitRect(box, snap.width, snap.height, CLIP_BLIT_PAD)
+      ? clipBlitRect(box, snap.width, snap.height, CLIP_BLIT_PAD)
       : { x: 0, y: 0, w: snap.width, h: snap.height };
     if (!rect) return null;
+    const image = peer(rect.w, rect.h);
+    const pctx = image?.getContext("2d");
+    if (!image || !pctx) return null;
+    pctx.setTransform(1, 0, 0, 1, 0, 0);
+    pctx.clearRect(0, 0, rect.w, rect.h);
+    pctx.drawImage(
+      snap,
+      rect.x,
+      rect.y,
+      rect.w,
+      rect.h,
+      0,
+      0,
+      rect.w,
+      rect.h,
+    );
     return {
       x: rect.x,
       y: rect.y,
       w: rect.w,
       h: rect.h,
-      data: sctx.getImageData(rect.x, rect.y, rect.w, rect.h),
+      image,
     };
   };
 
@@ -656,7 +679,33 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     if (!snap) return;
     const sctx = snap.getContext("2d");
     if (!sctx) return;
-    sctx.putImageData(patch.data, patch.x, patch.y);
+    sctx.setTransform(1, 0, 0, 1, 0, 0);
+    sctx.clearRect(patch.x, patch.y, patch.w, patch.h);
+    sctx.drawImage(patch.image, patch.x, patch.y);
+  };
+
+  const shiftSnap = (dx: number, dy: number): PixelRect[] | null => {
+    if (drawing) return null;
+    if (!host || !peer) return null;
+    syncSize();
+    if (!snap) snap = peer(host.width, host.height);
+    if (!snap) return null;
+    const idx = Math.round(dx);
+    const idy = Math.round(dy);
+    if (idx === 0 && idy === 0) return [];
+    if (shiftClearsSnap(snap.width, snap.height, idx, idy)) return null;
+    const tmp = peer(snap.width, snap.height);
+    if (!tmp) return null;
+    tmp.width = snap.width;
+    tmp.height = snap.height;
+    const tctx = tmp.getContext("2d");
+    const sctx = snap.getContext("2d");
+    if (!tctx || !sctx) return null;
+    tctx.drawImage(snap, 0, 0);
+    sctx.setTransform(1, 0, 0, 1, 0, 0);
+    sctx.clearRect(0, 0, snap.width, snap.height);
+    sctx.drawImage(tmp, idx, idy);
+    return exposedShiftRects(snap.width, snap.height, idx, idy);
   };
 
   const resetAfterBlit = () => {
@@ -684,6 +733,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     holding = false;
     for (const stroke of strokes) {
       if (stroke.length === 0) continue;
+      if (blitClip && !spineHitsRects(stroke, blitClip)) continue;
       applyBaked(stroke.map(cloneDot));
       blitLiveToSnap();
       sdf?.clear();
@@ -692,10 +742,28 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     resetAfterBlit();
   };
 
+  const destClipsFor = (
+    strokeClip: PixelRect | null,
+    width: number,
+    height: number,
+  ): PixelRect[] => {
+    if (!blitClip || blitClip.length === 0) return strokeClip ? [strokeClip] : [];
+    const src = strokeClip ?? { x: 0, y: 0, w: width, h: height };
+    const dests: PixelRect[] = [];
+    for (const clip of blitClip) {
+      const hit = intersectPixelRects(src, clip);
+      if (hit) dests.push(hit);
+    }
+    return dests;
+  };
+
   const blitLiveToSnap = () => {
     if (!snap) return;
     const sctx = snap.getContext("2d");
     if (!sctx) return;
+    const strokeClip = clipBlitRect(aabb, snap.width, snap.height, CLIP_BLIT_PAD);
+    const dests = destClipsFor(strokeClip, snap.width, snap.height);
+    if (dests.length === 0 && blitClip) return;
     if (sdf) {
       ensureInst(segs + 1);
       let n = segs;
@@ -704,23 +772,39 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         n += 1;
       }
       sdf.upload(inst, n);
-      sdf.draw(aabb);
-      const clip = clipBlitRect(aabb, snap.width, snap.height, CLIP_BLIT_PAD);
-      if (clip) {
-        sctx.drawImage(
-          sdf.canvas,
-          clip.x,
-          clip.y,
-          clip.w,
-          clip.h,
-          clip.x,
-          clip.y,
-          clip.w,
-          clip.h,
-        );
+      if (dests.length > 0) {
+        const drawBox = emptyAabb();
+        for (const dest of dests) {
+          drawBox.minX = Math.min(drawBox.minX, dest.x);
+          drawBox.minY = Math.min(drawBox.minY, dest.y);
+          drawBox.maxX = Math.max(drawBox.maxX, dest.x + dest.w);
+          drawBox.maxY = Math.max(drawBox.maxY, dest.y + dest.h);
+        }
+        sdf.draw(drawBox);
+        for (const clip of dests) {
+          sctx.drawImage(
+            sdf.canvas,
+            clip.x,
+            clip.y,
+            clip.w,
+            clip.h,
+            clip.x,
+            clip.y,
+            clip.w,
+            clip.h,
+          );
+        }
       } else {
+        sdf.draw(aabb);
         sctx.drawImage(sdf.canvas, 0, 0);
       }
+    } else if (dests.length > 0) {
+      sctx.save();
+      sctx.beginPath();
+      for (const clip of dests) sctx.rect(clip.x, clip.y, clip.w, clip.h);
+      sctx.clip();
+      fillMiterStroke(sctx, spine, tip, INK_RGB);
+      sctx.restore();
     } else {
       fillMiterStroke(sctx, spine, tip, INK_RGB);
     }
@@ -1137,11 +1221,15 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       paint(sctx);
     },
     replaySpines(strokes) {
+      blitClip = null;
       blitSpinesOntoSnap(strokes, true);
     },
-    appendSpines(strokes) {
+    appendSpines(strokes, clips) {
+      blitClip = clips && clips.length > 0 ? clips : null;
       blitSpinesOntoSnap(strokes, false);
+      blitClip = null;
     },
+    shiftSnap,
     copySnapPatch,
     restoreSnapPatch,
     paintOntoSnap(paint) {

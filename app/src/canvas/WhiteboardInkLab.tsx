@@ -39,6 +39,12 @@ import {
   usePreStrokeStamp,
 } from "./inkLab/liveHost";
 import {
+  canShiftPaintedSnap,
+  shiftSpineDots,
+  snapShiftDevicePx,
+  spineRunsInRects,
+} from "./inkLab/cameraShift";
+import {
   EraseBakeJob,
   OverlaySpineJob,
   REPLAY_POINT_CHUNK,
@@ -108,6 +114,7 @@ import {
   type PanCamera,
 } from "./panOffset";
 import { straightAnchorFor } from "./straightAnchor";
+import { isLoadingDoodleActive } from "../util/loadingDoodleActivity";
 
 export interface RasterInkHandle {
   clear(): void;
@@ -121,7 +128,7 @@ export interface RasterInkHandle {
   replayCommitted(): void;
   /** Slice the first paint after restore so loading overlay drop cannot ANR. */
   primeSnap(): Promise<void>;
-  syncCamera(): void;
+  syncCamera(): void | Promise<void>;
   setPanOffset(live: PanCamera | null): boolean;
   commitCamera(): void;
   setCameraMoving(moving: boolean): void;
@@ -661,6 +668,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
 
         const finish = (extra: InkOp | null) => {
           if (gen !== replayGenRef.current) return;
+          // Drop the ride translate in this present, not before remesh.
+          // Clearing it first showed the old snap at the new camera (ghost)
+          // and remeshing with it still on after paint is a double offset.
+          if (canvas.style.transform) canvas.style.transform = "";
           stampTail(extra);
           settleReplayWaitersAfterPaint(gen);
         };
@@ -687,6 +698,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         let pointIndex = 0;
         const step = () => {
           if (gen !== replayGenRef.current) return;
+          if (isLoadingDoodleActive()) {
+            replayRafRef.current = requestAnimationFrame(step);
+            return;
+          }
           const started = performance.now();
           let didWork = false;
           while (strokeIndex < strokes.length) {
@@ -797,6 +812,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           };
           const remeshStep = () => {
             if (gen !== replayGenRef.current) return;
+            if (isLoadingDoodleActive()) {
+              replayRafRef.current = requestAnimationFrame(remeshStep);
+              return;
+            }
             if (!prepared) {
               if (!bakeJob.step(() => performance.now(), REPLAY_SLICE_MS)) {
                 replayRafRef.current = requestAnimationFrame(remeshStep);
@@ -835,44 +854,87 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       return changed;
     }, []);
 
-    const presentIfCameraMoved = useCallback((cameraSettle = false) => {
-      if (drawingRef.current) return;
-      if (canvasRef.current?.style.transform) return;
+    const presentShiftedCamera = useCallback(
+      (
+        painted: PaintedLabView,
+        next: PaintedLabView,
+        dpr: number,
+      ): Promise<void> | null => {
+        const canvas = canvasRef.current;
+        const engine = engineRef.current;
+        if (!canvas || !engine) return null;
+        const { dx, dy } = snapShiftDevicePx(painted, next, dpr);
+        if (dx === 0 && dy === 0) {
+          paintedViewRef.current = next;
+          if (canvas.style.transform) canvas.style.transform = "";
+          return Promise.resolve();
+        }
+        const rects = engine.shiftSnap(dx, dy);
+        if (!rects) return null;
+        shiftSpineDots(overlayRef.current, dx, dy);
+        shiftSpineDots(overlayRedoRef.current, dx, dy);
+        forgetPixelHistory();
+        if (rects.length > 0) {
+          const runs = overlayRef.current.flatMap((stroke) => spineRunsInRects(stroke, rects));
+          if (runs.length > 0) engine.appendSpines(runs, rects);
+        }
+        if (canvas.style.transform) canvas.style.transform = "";
+        engine.paint();
+        paintedViewRef.current = next;
+        return Promise.resolve();
+      },
+      [forgetPixelHistory],
+    );
+
+    const presentIfCameraMoved = useCallback((cameraSettle = false): Promise<void> => {
+      if (drawingRef.current) return Promise.resolve();
+      // Riding: a settle remesh must run with the translate still on; finish()
+      // drops it in the same present as the new snap. Mid-gesture skips.
+      if (!cameraSettle && canvasRef.current?.style.transform) return Promise.resolve();
       // Opening/restore fits can move the camera several times. The loading
       // owner calls primeSnap once layout is final; replaying here would turn
       // each fit into a full dense-page remesh before the spinner can paint.
-      if (preparingRef.current) return;
-      const { view, marginY } = readViews();
+      if (preparingRef.current) return Promise.resolve();
+      const { view, marginY, dpr } = readViews();
       const windowed = applyPageWindow(view);
+      const next = {
+        scrollX: view.scrollX,
+        scrollY: view.scrollY,
+        zoom: view.zoom,
+        width: view.width,
+        height: view.height,
+        marginY,
+      };
       if (!paintedViewRef.current) {
         if (windowed || bookRef.current.hasInk()) {
-          rebuildAndReplay(
+          return rebuildAndReplay(
             false,
             cameraSettle ? instantReplayOnCameraRebase() : instantReplayOnFirstPresent(),
           );
         }
-        return;
+        return Promise.resolve();
       }
-      if (
-        samePaintedView(paintedViewRef.current, {
-          scrollX: view.scrollX,
-          scrollY: view.scrollY,
-          zoom: view.zoom,
-          width: view.width,
-          height: view.height,
-          marginY,
-        })
-      ) {
+      if (samePaintedView(paintedViewRef.current, next)) {
         if (windowed) {
-          rebuildAndReplay(
+          return rebuildAndReplay(
             false,
             cameraSettle ? instantReplayOnCameraRebase() : instantReplayOnPageWindow(),
           );
         }
-        return;
+        return Promise.resolve();
       }
-      rebuildAndReplay(false, instantReplayOnCameraRebase());
-    }, [applyPageWindow, readViews, rebuildAndReplay]);
+      // Pan: slide the existing snap. Remeshing Exam 1 on settle is the
+      // Close App / Wait after write-then-scroll. Zoom / hydrate still remesh.
+      if (
+        canShiftPaintedSnap(paintedViewRef.current, next) &&
+        !windowed &&
+        replayRafRef.current == null
+      ) {
+        const shifted = presentShiftedCamera(paintedViewRef.current, next, dpr);
+        if (shifted) return shifted;
+      }
+      return rebuildAndReplay(false, instantReplayOnCameraRebase());
+    }, [applyPageWindow, presentShiftedCamera, readViews, rebuildAndReplay]);
 
     useEffect(() => {
       const { view } = readViews();
@@ -1018,8 +1080,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return rebuildAndReplay(false, instantReplayOnFirstPresent());
         },
         syncCamera() {
-          if (drawingRef.current) return;
-          presentIfCameraMoved(true);
+          if (drawingRef.current) return Promise.resolve();
+          return presentIfCameraMoved(true);
         },
         setPanOffset(live) {
           const canvas = canvasRef.current;

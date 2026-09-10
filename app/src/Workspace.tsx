@@ -400,7 +400,7 @@ import { renderAnnotation } from "./viz/render/annotation";
 import { renderHighlight } from "./viz/render/highlight";
 import { parseVizProgram, type VizProgram } from "./viz/schema";
 import { messageOf, traceOpen } from "./util/messageOf";
-import { loadChromeFate, mayClearParkedPreparing } from "./util/workspaceLoad";
+import { loadChromeFate, mayClearParkedPreparing, BOOT_DONE_HOLD_MS, LOAD_FADE_MS, LOAD_SLIDE_MS } from "./util/workspaceLoad";
 
 type Mode = "review" | "ambient";
 
@@ -2959,7 +2959,7 @@ export function Workspace({
       const switching = userLoad && Boolean(problem);
       setWorkspaceLoadActive(true);
       setBoardPreparing(true);
-      if (userLoad) setShellLoadActive(true);
+      setShellLoadActive(true);
       if (cold) setBusy("opening whiteboard…");
       setError(null);
       setTests(null);
@@ -2992,7 +2992,12 @@ export function Workspace({
         }
         traceOpen("whiteboard: mounting the board", { loadGen });
         setBoardPreparing(true);
-        setProblem(WHITEBOARD_PROBLEM);
+        flushSync(() => {
+          setProblem(WHITEBOARD_PROBLEM);
+        });
+        for (let i = 0; i < 30 && !boardRef.current; i += 1) {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        }
         setPseudocode("");
         loadedSourceRef.current = "";
         lastSavedHashRef.current = null;
@@ -3151,6 +3156,13 @@ export function Workspace({
             : null;
         }
 
+        // Banners (LLM offline, etc.) used to hold the page visible and white
+        // after the overlay had already dropped. Keep preparing until they idle.
+        if (cold) {
+          await waitForTopBannersIdle();
+          if (workspaceLoadGenRef.current !== loadGen) return;
+        }
+
         // Complete the loading transition (same beats and teardown as
         // pickProblem / openAnnotate). Coach stays closed through the reveal.
         if (userLoad) {
@@ -3169,9 +3181,6 @@ export function Workspace({
         setCoachOpen(false);
         const title = restored && notebook ? notebook.title : "Whiteboard";
         if (cold) {
-          // Banner first (LLM offline, etc.), then the board fade and title.
-          await waitForTopBannersIdle();
-          if (workspaceLoadGenRef.current !== loadGen) return;
           setEntering(true);
           const fadeMs = boardFadeMs() || 1;
           window.setTimeout(() => {
@@ -11098,15 +11107,15 @@ function prefersReducedMotion(): boolean {
 }
 
 function slideDurationMs(): number {
-  return prefersReducedMotion() ? 0 : 320;
+  return prefersReducedMotion() ? 0 : LOAD_SLIDE_MS;
 }
 
 function doneHoldMs(): number {
-  return prefersReducedMotion() ? 0 : 560;
+  return prefersReducedMotion() ? 0 : BOOT_DONE_HOLD_MS;
 }
 
 function boardFadeMs(): number {
-  return prefersReducedMotion() ? 0 : 420;
+  return prefersReducedMotion() ? 0 : LOAD_FADE_MS;
 }
 
 

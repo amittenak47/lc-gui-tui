@@ -6,7 +6,15 @@ import type { SpineDot } from "./instance";
 import { appendLabSpineRange } from "./replay";
 
 export const REPLAY_SLICE_MS = 3;
-export const REPLAY_POINT_CHUNK = 192;
+/**
+ * GPU replay chunk. Each chunk incurs a WebGL upload/draw and a canvas blit;
+ * 192 points turned a dense page into thousands of forced cross-canvas copies
+ * and stretched restore to ~30 seconds. 2048 stays bounded while amortizing
+ * that fixed cost.
+ */
+export const REPLAY_POINT_CHUNK = 2048;
+/** CPU-only camera-space conversion stays fine-grained for input latency. */
+const MESH_POINT_CHUNK = 192;
 
 /**
  * Paint `[from, n)` until `budgetMs` elapses. Always paints at least one
@@ -141,7 +149,7 @@ export class OverlaySpineJob {
         continue;
       }
       didWork = true;
-      const end = Math.min(op.points.length, this.pointIndex + REPLAY_POINT_CHUNK);
+      const end = Math.min(op.points.length, this.pointIndex + MESH_POINT_CHUNK);
       const from = this.current.length;
       this.consumed = appendLabSpineRange(
         op,

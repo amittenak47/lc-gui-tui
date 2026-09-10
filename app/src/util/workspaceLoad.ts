@@ -49,3 +49,34 @@ export function workspaceLoadHomeLabel(busy: string | null): boolean {
 export function mayClearParkedPreparing(loadInFlight: boolean): boolean {
   return !loadInFlight;
 }
+
+/** Spinner is visible at least this long so a fast restore is not a blink. */
+export const BOOT_MIN_SHOW_MS = 180;
+/** Checkmark beat after the workspace snap is actually on screen. */
+export const BOOT_DONE_HOLD_MS = 180;
+export const BOOT_EXIT_MS = 160;
+/** Home with nothing to restore may finish after this, not the old 1s theatre. */
+export const BOOT_EMPTY_READY_MS = 400;
+/** Dense Exam restore must not hold the splash forever. */
+export const BOOT_MAX_WAIT_MS = 20_000;
+/** Overlay slide away. Match `.lc-slide-in` / `.lc-slide-out`. */
+export const LOAD_SLIDE_MS = 180;
+/** Board fade-in after the overlay drops. Match `.lc-board-in`. */
+export const LOAD_FADE_MS = 200;
+
+/**
+ * Boot splash used to run on a timer and drop while the notebook was still
+ * white. Hold until a real load has finished, or until Home is idle.
+ */
+export function bootOverlayMayFinish(opts: {
+  elapsedMs: number;
+  loading: boolean;
+  sawLoad: boolean;
+  idleShell: boolean;
+}): boolean {
+  if (opts.elapsedMs < BOOT_MIN_SHOW_MS) return false;
+  if (opts.loading) return false;
+  if (opts.sawLoad) return true;
+  if (opts.idleShell && opts.elapsedMs >= BOOT_EMPTY_READY_MS) return true;
+  return opts.elapsedMs >= BOOT_MAX_WAIT_MS;
+}
