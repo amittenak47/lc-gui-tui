@@ -80,6 +80,8 @@ export interface SkeletonMeta {
    * replaces exactly this group when the frame changes.
    */
   lcVizId?: string;
+  /** Fixed placement across frame replacements, even when other groups close. */
+  lcVizOrigin?: { x: number; y: number; width: number; height?: number };
   /** Stable slot name within a viz group, e.g. `cell:3`, `ptr:i`. */
   lcSlot?: string;
   /** Scratchpad notebook page index (0-based). */

@@ -2142,6 +2142,7 @@ export function Workspace({
     if (!board) return null;
     return {
       getSceneElements: () => board.getElements(),
+      getViewportBounds: () => board.getViewportBounds(),
       updateScene: (scene) => board.setElements(scene.elements),
     };
   }, []);
@@ -7349,7 +7350,7 @@ export function Workspace({
       const api = sceneApi();
       if (!board || !api) return;
       markPadDirty();
-      if (mobile) setActiveRegion("agent");
+      if (mobile && problem) setActiveRegion("agent");
       setAgentMessages((current) => {
         const next = current.map((message) => {
           if (message.drawing?.program.id !== programId) return message;
@@ -7370,20 +7371,20 @@ export function Workspace({
         return next;
       });
     },
-    [sceneApi, mobile, markPadDirty],
+    [sceneApi, mobile, problem, markPadDirty],
   );
 
   const toggleDrawing = useCallback(
     (messageId: string, expanded: boolean) => {
       markPadDirty();
-      if (expanded && mobile) setActiveRegion("agent");
+      if (expanded && mobile && problem) setActiveRegion("agent");
       setAgentMessages((current) => {
         const next = setDrawingExpanded(current, messageId, expanded);
         queueMicrotask(() => syncDrawingsToBoard(next));
         return next;
       });
     },
-    [syncDrawingsToBoard, mobile, markPadDirty],
+    [syncDrawingsToBoard, mobile, problem, markPadDirty],
   );
 
 

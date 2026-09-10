@@ -93,6 +93,8 @@ export interface ScreenRect {
 export interface BoardHandle {
   /** Live scene elements, including the coach's — callers filter. */
   getElements(): SceneElementLike[];
+  /** Visible scene rectangle, for placing a new drawing on a pad. */
+  getViewportBounds(): { x: number; y: number; width: number; height: number } | null;
   /** Replace the whole element list. Used by the viz applier. */
   setElements(elements: unknown[]): void;
   /** Turn skeletons into real elements without touching the scene. */

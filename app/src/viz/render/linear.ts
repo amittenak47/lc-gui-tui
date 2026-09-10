@@ -16,6 +16,7 @@ import {
   header,
   isHighlighted,
   pointersByIndex,
+  traceCellWidth,
   type RenderContext,
 } from "../layout";
 import { cellText } from "../schema";
@@ -26,21 +27,23 @@ export function renderArray(ctx: RenderContext): Skeleton[] {
   const out = header(ctx);
   const top = origin.y + headerOffset(ctx) + 18; // Room for pointer labels above row.
   const pointers = pointersByIndex(frame);
+  const width = traceCellWidth(ctx);
 
   frame.cells.forEach((value, index) => {
-    const x = origin.x + index * (CELL + CELL_GAP);
+    const x = origin.x + index * (width + CELL_GAP);
     out.push(
       ...cellBox(ctx, `cell-${index}`, x, top, cellText(value), {
         highlighted: isHighlighted(frame, index),
+        width,
       }),
     );
     out.push(caption(ctx, `idx-${index}`, x + 4, top + CELL + 6, String(index)));
 
     const names = pointers.get(index);
     if (names) {
-      out.push(
-        caption(ctx, `ptr-${index}`, x + 4, top - 20, `${names.join(",")}↓`, { accent: true }),
-      );
+      names.forEach((name, offset) => out.push(
+        caption(ctx, `ptr-${name}`, x + 4 + offset * 24, top - 20, `${name}↓`, { accent: true }),
+      ));
     }
   });
 
@@ -83,12 +86,14 @@ export function renderQueue(ctx: RenderContext): Skeleton[] {
   const out = header(ctx);
   const top = origin.y + headerOffset(ctx) + 18;
   const count = frame.cells.length;
+  const width = traceCellWidth(ctx);
 
   frame.cells.forEach((value, index) => {
-    const x = origin.x + index * (CELL + CELL_GAP);
+    const x = origin.x + index * (width + CELL_GAP);
     out.push(
       ...cellBox(ctx, `cell-${index}`, x, top, cellText(value), {
         highlighted: isHighlighted(frame, index),
+        width,
       }),
     );
     if (index === 0) {

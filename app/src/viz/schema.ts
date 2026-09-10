@@ -31,7 +31,7 @@ export const VIZ_KINDS = [
 
 export type VizKind = (typeof VIZ_KINDS)[number];
 
-/** Per-call cap on `animate_trace`. Extra frames are dropped, not rendered. */
+/** Per-call cap on `animate_trace`. Oversized programs are rejected on both sides. */
 export const MAX_TRACE_FRAMES = 40;
 
 /**
@@ -80,6 +80,7 @@ export function parseVizProgram(raw: unknown): VizProgram | null {
   if (!id) return null;
 
   const rawFrames = Array.isArray(record.frames) ? record.frames : [];
+  if (rawFrames.length > MAX_TRACE_FRAMES) return null;
   const frames = rawFrames.map(normalizeFrame).filter((frame): frame is VizFrame => frame !== null);
   if (frames.length === 0) return null;
 
@@ -87,7 +88,7 @@ export function parseVizProgram(raw: unknown): VizProgram | null {
     viz: record.viz,
     id,
     title: typeof record.title === "string" ? record.title : "",
-    frames: frames.slice(0, MAX_TRACE_FRAMES),
+    frames,
   };
 }
 

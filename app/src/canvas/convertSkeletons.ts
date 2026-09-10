@@ -70,6 +70,9 @@ export function convertToExcalidrawElements(
       el.verticalAlign = skeleton.verticalAlign ?? "top";
       el.autoResize = skeleton.autoResize ?? true;
       el.containerId = null;
+      const lines = String(el.text).split("\n");
+      if (!skeleton.width) el.width = Math.max(1, ...lines.map((line) => line.length * Number(el.fontSize) * 0.62));
+      if (!skeleton.height) el.height = lines.length * Number(el.fontSize) * Number(el.lineHeight);
     }
     if (skeleton.type === "arrow" || skeleton.type === "line") {
       el.points = skeleton.points ?? [
