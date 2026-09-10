@@ -78,12 +78,13 @@ export function SceneTextEditor({ edit, getViewport, onCommit, onCancel }: Scene
       }}
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
+        if (event.nativeEvent.isComposing) return;
         if (event.key === "Escape") {
           event.preventDefault();
           finish(false);
           return;
         }
-        if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
           finish(true);
         }

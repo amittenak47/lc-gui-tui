@@ -155,12 +155,15 @@ export async function exportToCanvas(opts: {
     ctx.fillStyle = paperColor(opts.appState);
     ctx.fillRect(0, 0, width, height);
     const files = (opts.files ?? {}) as Record<string, { dataURL?: string } | undefined>;
+    const { loadSceneImages } = await import("./sceneImages");
+    const images = await loadSceneImages(opts.elements as import("./paintScene").PaintSceneElement[], files);
     paintSceneToExport(ctx, opts.elements, {
       minX,
       minY,
       padding,
       exportScale,
       files,
+      images,
     });
   }
   return canvas;
