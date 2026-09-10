@@ -2355,8 +2355,8 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
     100% * var(--lc-split-a, 0.5) /
       (var(--lc-split-a, 0.5) + var(--lc-split-b, 0.5))
   );
-  width: 24px;
-  margin-left: -12px;
+  width: 8px;
+  margin-left: -4px;
   flex: none;
   z-index: 90;
 }
@@ -2514,7 +2514,8 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-split-sash.is-vertical::before {
   content: "";
   position: absolute;
-  inset: -6px -16px;
+  /* Height only — side wings used to eat ~1cm of each pane. */
+  inset: -6px 0;
 }
 
 .lc-split-sash::after {
@@ -2546,7 +2547,7 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   outline-offset: 2px;
 }
 
-/* No outline while dragging: it drew the button's whole 24px box as a second
+/* No outline while dragging: it drew the button's whole hit box as a second
    pair of lines, which is what made the seam look thick. The lit `::after`
    already says the sash has the pointer. */
 
@@ -2601,7 +2602,7 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-split-sash.is-horizontal::before {
   content: "";
   position: absolute;
-  inset: -16px 0;
+  inset: 0;
 }
 
 .lc-split-sash.is-horizontal::after {
@@ -2619,11 +2620,16 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 
 @media (pointer: coarse) {
   .lc-split-sash.is-vertical {
-    flex-basis: 20px;
+    flex-basis: 16px;
+  }
+
+  .lc-main.is-split-vertical > .lc-split-sash.is-vertical {
+    width: 16px;
+    margin-left: -8px;
   }
 
   .lc-split-sash.is-vertical::before {
-    inset: -6px -12px;
+    inset: -6px 0;
   }
 
   .lc-split-sash.is-vertical::after {
