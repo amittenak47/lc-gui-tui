@@ -3548,24 +3548,30 @@ body[data-lc-sash-drag="horizontal"] {
   background: color-mix(in srgb, #1c1917 9%, transparent);
 }
 
-.lc-morph-bar.lc-scene-select-rotate {
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  backdrop-filter: none;
-  overflow: visible;
-  display: inline-flex;
-  vertical-align: middle;
+.lc-scene-select-rotate {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  pointer-events: none;
 }
 
-.lc-scene-select-rotate .lc-morph-panel.is-active {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
+.lc-scene-select-rotate > span {
+  grid-area: 1 / 1;
+  transition: opacity 120ms ease;
+}
+
+.lc-scene-select-rotate .lc-scene-select-angle,
+.lc-scene-select-rotate.is-spinning .lc-scene-select-rotate-icon {
+  opacity: 0;
+}
+
+.lc-scene-select-rotate.is-spinning .lc-scene-select-angle {
   opacity: 1;
-  filter: none;
-  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-scene-select-rotate > span { transition: none; }
 }
 
 .lc-scene-select-angle {
@@ -5687,6 +5693,8 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-morph-bar.lc-shape-flyout {
   /* flyout chrome lives on the morph shell when MorphBar carries the class */
   display: block;
+  /* MorphBar measures the panel; shell padding must not clip its last item. */
+  box-sizing: content-box;
 }
 
 .lc-morph-panel {
