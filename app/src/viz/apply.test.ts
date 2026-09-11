@@ -10,9 +10,9 @@ const program = parseVizProgram({ id: "walk", viz: "array", title: "Walk", frame
   { label: "Advance", cells: [100000, 2, 3], pointers: { i: 1 } },
 ] })!;
 
-function scene(initial: VizSceneElement[] = []) {
+function scene(initial: VizSceneElement[] = [], zoom = 1) {
   let elements = initial;
-  let viewport = { x: 50, y: 1200, width: 380, height: 800 };
+  let viewport = { x: 50, y: 1200, width: 380 / zoom, height: 800 / zoom, zoom };
   const api: SceneApi = {
     getSceneElements: () => elements,
     updateScene: (next) => { elements = next.elements as VizSceneElement[]; },
@@ -23,6 +23,16 @@ function scene(initial: VizSceneElement[] = []) {
 const convert = (items: Parameters<typeof convertToExcalidrawElements>[0]) => convertToExcalidrawElements(items, { regenerateIds: false });
 
 describe("diagram placement", () => {
+  it("keeps pad diagrams readable at a zoomed-out notebook camera", () => {
+    const normal = scene();
+    const zoomed = scene([], 0.1);
+    applyViz(normal.api, convert, program, 0);
+    applyViz(zoomed.api, convert, program, 0);
+    const a = getCommonBounds(normal.elements());
+    const b = getCommonBounds(zoomed.elements());
+    expect((b[2] - b[0]) * 0.1).toBeCloseTo(a[2] - a[0]);
+    expect((b[3] - b[1]) * 0.1).toBeCloseTo(a[3] - a[1]);
+  });
   it("puts pad drawings inside the viewport and keeps them anchored after panning", () => {
     const board = scene();
     applyViz(board.api, convert, program, 0);

@@ -212,6 +212,7 @@ import {
   MIN_SHAPE_SPAN,
   moveElement,
   normBox,
+  scaleAbout,
   sceneSelectionBounds,
   shapeSpan,
   skeletonFromDrag,
@@ -7211,24 +7212,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     (shape: ShapeStamp, mods: Record<string, ShapeModValue>, moveAsOne: boolean) => {
       const api = apiRef.current;
       if (!api) return;
-      const state = api.getAppState() as {
-        scrollX?: number;
-        scrollY?: number;
-        width?: number;
-        height?: number;
-        zoom?: { value?: number };
-      };
-      const zoom = state.zoom?.value ?? 1;
-      const x = Math.round(-(state.scrollX ?? 0) + (state.width ?? 1200) / (2 * zoom) - 200);
-      const y = Math.round(-(state.scrollY ?? 0) + (state.height ?? 800) / (2 * zoom) - 100);
+      const view = getViewport();
+      if (!view) return;
       const resolved = resolveShapeMods(shape, mods);
       // Fixed sketch palette — stamps do not follow Appearance.
-      let pieces = convert(shape.build(x, y, resolved, DEFAULT_SHAPE_PALETTE)) as Array<{
+      let pieces = convert(shape.build(0, 0, resolved, DEFAULT_SHAPE_PALETTE)) as Array<PaintSceneElement & {
         id: string;
         groupIds?: string[];
-        customData?: Record<string, unknown> | null;
-        [key: string]: unknown;
       }>;
+      const [minX, minY, maxX, maxY] = getCommonBounds(pieces);
+      const width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
+      const scale = Math.min(1 / view.zoom, view.width * 0.7 / (view.zoom * width), view.height * 0.6 / (view.zoom * height));
+      const x = -view.scrollX + (view.width / view.zoom - width * scale) / 2;
+      const y = -view.scrollY + (view.height / view.zoom - height * scale) / 2;
+      pieces = pieces.map(element => ({ ...scaleAbout(element,
+        { minX, minY, maxX, maxY }, { minX: x, minY: y, maxX: x + width * scale, maxY: y + height * scale }),
+        ...(element.fontSize ? { fontSize: element.fontSize * scale } : {}),
+        ...(element.strokeWidth ? { strokeWidth: element.strokeWidth * scale } : {}),
+      }));
 
       if (moveAsOne && pieces.length > 1) {
         const groupId = `lcstamp-${shape.id}-${Date.now().toString(36)}`;
@@ -7254,12 +7255,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
 
       // IMMEDIATELY so Undo/Redo include library stamps (Server, Array, …).
+      setTool("selection");
       api.updateScene({
         elements: [...(api.getSceneElements() as unknown[]), ...pieces],
+        appState: { selectedElementIds: Object.fromEntries(pieces.map(element => [element.id, true])) },
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
+      sceneOverlayRef.current?.redraw();
+      shapeSelectRef.current?.redraw();
     },
-    [convert],
+    [convert, getViewport, setTool],
   );
 
   /** Place an image element at viewport center (or an explicit scene rect). */
@@ -8585,7 +8590,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       getElements: elements,
       getViewportBounds: () => {
         const view = getViewport();
-        return view ? { x: -view.scrollX, y: -view.scrollY, width: view.width / view.zoom, height: view.height / view.zoom } : null;
+        return view ? { x: -view.scrollX, y: -view.scrollY, width: view.width / view.zoom, height: view.height / view.zoom, zoom: view.zoom } : null;
       },
       // Callers hand back what `getElements` gave them — unpaged — so the open
       // page has to be re-applied on the way in.
