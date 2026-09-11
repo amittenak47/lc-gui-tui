@@ -796,7 +796,9 @@ export function BoardToolbar({
   };
 
   const placeConfigured = () => {
-    if (configuring) onStamp(configuring, mods, moveAsOne);
+    if (!configuring) return;
+    onStamp(configuring, mods, moveAsOne);
+    onToggleShapes();
     backToList();
   };
 

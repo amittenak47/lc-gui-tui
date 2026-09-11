@@ -7350,7 +7350,7 @@ export function Workspace({
       const api = sceneApi();
       if (!board || !api) return;
       markPadDirty();
-      if (mobile && problem) setActiveRegion("agent");
+      if (mobile && problem && !isLocalPad(problem)) setActiveRegion("agent");
       setAgentMessages((current) => {
         const next = current.map((message) => {
           if (message.drawing?.program.id !== programId) return message;
@@ -7377,7 +7377,7 @@ export function Workspace({
   const toggleDrawing = useCallback(
     (messageId: string, expanded: boolean) => {
       markPadDirty();
-      if (expanded && mobile && problem) setActiveRegion("agent");
+      if (expanded && mobile && problem && !isLocalPad(problem)) setActiveRegion("agent");
       setAgentMessages((current) => {
         const next = setDrawingExpanded(current, messageId, expanded);
         queueMicrotask(() => syncDrawingsToBoard(next));

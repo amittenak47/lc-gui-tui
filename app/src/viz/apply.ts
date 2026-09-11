@@ -25,7 +25,7 @@ import { convertToExcalidrawElements } from "../canvas/convertSkeletons";
 export interface SceneApi {
   getSceneElements(): ReadonlyArray<VizSceneElement>;
   updateScene(scene: { elements: unknown[] }): void;
-  getViewportBounds?(): { x: number; y: number; width: number; height: number } | null;
+  getViewportBounds?(): { x: number; y: number; width: number; height: number; zoom?: number } | null;
 }
 
 export interface VizSceneElement {
@@ -38,7 +38,7 @@ export interface VizSceneElement {
     lcVizId?: string;
     lcRegion?: string;
     lcRegionFrame?: boolean;
-    lcVizOrigin?: { x: number; y: number; width: number; height?: number };
+    lcVizOrigin?: { x: number; y: number; width: number; height?: number; scale?: number };
   } | null;
 }
 
@@ -114,13 +114,16 @@ export function applyViz(
   const viewport = !lane ? api.getViewportBounds?.() : null;
   const saved = existing.find((el) => el.customData?.lcVizId === program.id)?.customData?.lcVizOrigin;
   const fallback = originForProgram(existing, program.id);
-  let origin: { x: number; y: number; width: number; height?: number } = saved ?? (viewport
-    ? { x: viewport.x + AGENT_PADDING, y: viewport.y + AGENT_PADDING, width: Math.max(120, viewport.width - AGENT_PADDING * 2) }
+  const zoom = viewport?.zoom && viewport.zoom > 0 ? viewport.zoom : 1;
+  const padding = viewport ? Math.min(AGENT_PADDING / zoom, viewport.width * 0.1) : AGENT_PADDING;
+  let origin: NonNullable<NonNullable<VizSceneElement["customData"]>["lcVizOrigin"]> = saved ?? (viewport
+    ? { x: viewport.x + padding, y: viewport.y + padding, width: Math.max(1, viewport.width - padding * 2) }
     : { ...fallback, width: Math.max(120, (lane?.width ?? AGENT_LANE.w) - AGENT_PADDING * 2) });
   // Reserve the entire trace's height so growing structures never collide.
   const measure = measureProgram(program);
-  const scale = Math.min(1, origin.width / Math.max(1, measure.width));
-  origin = { ...origin, height: measure.height * scale };
+  const preferredScale = saved?.scale ?? (viewport ? Math.min(1 / zoom, viewport.height * 0.75 / Math.max(1, measure.height)) : 1);
+  const scale = Math.min(preferredScale, origin.width / Math.max(1, measure.width));
+  origin = { ...origin, height: measure.height * scale, scale };
   if (!saved) {
     const others = existing.filter((el) => el.customData?.lcVizId && el.customData.lcVizId !== program.id);
     const bottom = others.reduce((max, el) => {
@@ -136,6 +139,7 @@ export function applyViz(
     width: el.width === undefined ? undefined : el.width * scale,
     height: el.height === undefined ? undefined : el.height * scale,
     fontSize: el.fontSize === undefined ? undefined : el.fontSize * scale,
+    strokeWidth: el.strokeWidth === undefined ? undefined : el.strokeWidth * scale,
     points: el.points?.map(([x, y]) => [x * scale, y * scale]),
     label: el.label ? { ...el.label, fontSize: (el.label.fontSize ?? 16) * scale } : undefined,
     customData: { ...el.customData, lcVizOrigin: origin, ...(!lane && viewport ? { lcRegion: undefined } : {}) },
