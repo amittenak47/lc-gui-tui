@@ -451,6 +451,28 @@ describe("previewInkPages", () => {
   });
 });
 
+describe("expandPreviewInkPages", () => {
+  it("leaves an annotate page list alone", async () => {
+    const { expandPreviewInkPages } = await import("./inkSync");
+    expect(expandPreviewInkPages("annotate", [40])).toEqual([40]);
+    expect(expandPreviewInkPages("annotate", [0])).toEqual([0]);
+  });
+
+  it("adds page 1 when a whiteboard stop names the spanning shard", async () => {
+    const { expandPreviewInkPages } = await import("./inkSync");
+    expect(expandPreviewInkPages("whiteboard", [0])).toEqual([0, 1]);
+    expect(expandPreviewInkPages("whiteboard", [1])).toEqual([0, 1]);
+    expect(expandPreviewInkPages("whiteboard", [2])).toEqual([2]);
+  });
+
+  it("names a whiteboard spanning stop as page 1", async () => {
+    const { conflictInkPageId } = await import("./inkSync");
+    expect(conflictInkPageId("whiteboard", 0)).toBe(1);
+    expect(conflictInkPageId("whiteboard", 1)).toBe(1);
+    expect(conflictInkPageId("annotate", 0)).toBe(0);
+  });
+});
+
 describe("fetchHubInkPages", () => {
   const page = (pageId: number) => ({
     kind: "annotate" as const,
@@ -534,8 +556,36 @@ describe("loadConflictPreviewInkPage", () => {
     );
     expect(getInkPage).toHaveBeenCalledTimes(1);
     expect(getInkPage).toHaveBeenCalledWith("annotate", "p1", 40);
-    expect(got.server?.page_id).toBe(40);
-    expect(got.local?.page_id).toBe(40);
+    expect(got.server?.map((row) => row.page_id)).toEqual([40]);
+    expect(got.local?.map((row) => row.page_id)).toEqual([40]);
+  });
+
+  it("on a whiteboard page-0 stop, also asks for page 1", async () => {
+    vi.resetModules();
+    vi.doMock("./inkPageStore", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./inkPageStore")>()),
+      getInkPageRecords: () =>
+        Promise.resolve([
+          {
+            v: 1 as const,
+            docKey: "wb:w1",
+            pageId: 1,
+            gz: new Uint8Array([1, 2, 3]),
+            dirty: false,
+            updatedAt: 4,
+          },
+        ]),
+    }));
+    const { loadConflictPreviewInkPage } = await import("./inkSync");
+    const getInkPage = vi.fn(async (_k: string, _key: string, id: number) => ({
+      kind: "whiteboard" as const,
+      key: "w1",
+      page_id: id,
+      updated_at: 20,
+      gz: "YQ==",
+    }));
+    await loadConflictPreviewInkPage({ getInkPage } as never, "whiteboard", "w1", 0);
+    expect(getInkPage.mock.calls.map((call) => call[2]).sort()).toEqual([0, 1]);
   });
 });
 

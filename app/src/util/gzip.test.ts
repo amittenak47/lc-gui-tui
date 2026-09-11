@@ -73,11 +73,27 @@ describe("without CompressionStream", () => {
     expect(new TextDecoder().decode(bytes)).toBe("hello");
   });
 
-  it("says so plainly when asked to read a compressed file it cannot", async () => {
-    const compressed = await gzipText(JSON.stringify({ v: 1 }));
+  it("still inflates when DecompressionStream is missing", async () => {
+    const text = JSON.stringify({ v: 1, points: [1, 2, 3] });
+    const compressed = await gzipText(text);
     if (!isGzip(compressed)) return; // platform never compressed it
     vi.stubGlobal("DecompressionStream", undefined);
-    await expect(textFromMaybeGzip(compressed)).rejects.toThrow(/compressed/);
+    expect(await textFromMaybeGzip(compressed)).toBe(text);
+  });
+
+  it("falls back to fflate when the stream throws", async () => {
+    const text = JSON.stringify({ v: 1, points: [1, 2, 3] });
+    const compressed = await gzipText(text);
+    if (!isGzip(compressed)) return;
+    vi.stubGlobal(
+      "DecompressionStream",
+      class {
+        constructor() {
+          throw new Error("webview stream broken");
+        }
+      },
+    );
+    expect(await textFromMaybeGzip(compressed)).toBe(text);
   });
 
   it("round-trips raw bytes the archive path uses", async () => {

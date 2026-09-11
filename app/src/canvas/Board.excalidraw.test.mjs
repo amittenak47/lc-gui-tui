@@ -505,6 +505,12 @@ describe("Workspace pane switch", () => {
     expect(src).not.toMatch(/paused=\{!showing/);
   });
 
+  it("keeps the Sync walk mounted while the conflict split is up", () => {
+    const src = readFileSync(join(here, "../Workspace.tsx"), "utf8");
+    expect(src).toMatch(/showDock=\{hubSyncWindowPill && !hubConflictAsk\}/);
+    expect(src).not.toMatch(/!hubConflictAsk \?\s*\(\s*<HubSyncControl/);
+  });
+
   it("keeps the PDF film layout on the unfocused split half", () => {
     const src = readFileSync(join(here, "../Workspace.tsx"), "utf8");
     expect(src).toMatch(/active \|\| Boolean\(splitRole\)/);

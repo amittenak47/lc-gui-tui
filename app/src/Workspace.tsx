@@ -948,7 +948,7 @@ export function Workspace({
     setHubConflictBusy(true);
     try {
       const liveBoard = boardRef.current;
-      if (liveBoard && c.stage === "pad") {
+      if (liveBoard) {
         await flushDirtyInk(
           liveBoard,
           c.kind === "whiteboard" ? whiteboardDocKey(c.id) : annotateDocKey(c.id),
@@ -4311,6 +4311,14 @@ export function Workspace({
         });
         setWhiteboardPageCount(pages);
         await restoreInk(board, whiteboardDocKey(notebook.id), notebook.board);
+        /*
+         * Open width-fits after ink so the lined page is the ink's screen box.
+         * Reload used to keep the camera from under the conflict overlay, which
+         * cropped the title off the left and locked X, so a flick could not
+         * reach it. Leave annotate: Ink Lab on the pad ate the scroll gesture.
+         */
+        await board.settleFitView();
+        board.armReadingScroll();
         if (notebook.agent.length > 0) {
           setAgentMessages(restoreAgentMessages(notebook.agent));
         }
@@ -4324,6 +4332,7 @@ export function Workspace({
       requestAnimationFrame(() => {
         const live = boardRef.current;
         if (!live) return;
+        live.nudgeViewportFit();
         lastEditSeqHashRef.current = sceneFingerprint(
           live.getElements(),
           boardInkMix(live),
@@ -4351,6 +4360,7 @@ export function Workspace({
       if (source && !isBinaryDocType(doc.docType) && doc.source !== source.text) {
         setAnnotateSource({ ...source, text: doc.source });
       }
+      board.armReadingScroll();
       const inkMix = boardInkMix(board);
       lastEditSeqHashRef.current = sceneFingerprint(board.getElements(), inkMix);
       lastEditSeqMarksRef.current = footnoteRevision(annotateFootnotesRef.current);
@@ -9941,17 +9951,20 @@ export function Workspace({
         </form>
       )}
       </>, headerSlots.chrome) : null}
-      {/* One HubSyncControl owns the walk. The chrome pill is optional. */}
+      {/*
+       * One HubSyncControl owns the walk. Hide the chrome pill during a
+       * conflict — do not unmount. Unmount aborts the walk, Keep writes into
+       * a dead run, and the next Sync raises the same conflict forever.
+       */}
       {active &&
       tabOffersHubSync(tab.kind) &&
-      !isFootnoteBoardTab(tab) &&
-      !hubConflictAsk ? (
+      !isFootnoteBoardTab(tab) ? (
         <HubSyncControl
           hubHint={hubHint}
           client={client}
           host={hubSyncHostRef.current}
           editSeq={padEditSeq}
-          showDock={hubSyncWindowPill}
+          showDock={hubSyncWindowPill && !hubConflictAsk}
           dock={headerSlots.boardChrome ?? null}
           tapRef={hubSyncTapRef}
         />

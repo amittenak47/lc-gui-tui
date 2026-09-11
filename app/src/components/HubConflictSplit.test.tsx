@@ -536,6 +536,82 @@ describe("HubConflictSplit ink and labels", () => {
     expect(document.body.textContent).toMatch(/Handwriting \(page 2\)/);
   });
 
+  it("clicking a handwriting page jumps both previews to that sheet", async () => {
+    const { encodeInkOps, packEncodedInk } = await import("../canvas/inkCodec");
+    const { bytesToB64 } = await import("../api/nativeHttp");
+    const { NO_PRESSURE } = await import("../canvas/rasterInk");
+    const { SCRATCH_PAGE_H, SCRATCH_PAGE_GUTTER } = await import("../templates/whiteboard");
+    const y2 = SCRATCH_PAGE_H + SCRATCH_PAGE_GUTTER + 40;
+    const gz = bytesToB64(
+      packEncodedInk(
+        encodeInkOps([
+          {
+            kind: "draw",
+            color: "#111",
+            baseWidth: 4,
+            maxFullness: 1,
+            pressureClip: 1,
+            pressureSensitive: false,
+            points: [
+              { x: 80, y: 40, pressure: NO_PRESSURE },
+              { x: 120, y: 40, pressure: NO_PRESSURE },
+            ],
+          },
+          {
+            kind: "draw",
+            color: "#111",
+            baseWidth: 4,
+            maxFullness: 1,
+            pressureClip: 1,
+            pressureSensitive: false,
+            points: [
+              { x: 80, y: y2, pressure: NO_PRESSURE },
+              { x: 120, y: y2, pressure: NO_PRESSURE },
+            ],
+          },
+        ]),
+      ),
+    );
+    const elements = [
+      { y: 0, height: 4200, customData: { lcScratchFrame: true, lcScratchPage: 0 } },
+      { y: 4264, height: 4200, customData: { lcScratchFrame: true, lcScratchPage: 1 } },
+    ];
+    const body = (updated: number): WhiteboardPadDto => ({
+      id: "w1",
+      title: "Exam 1",
+      updated_at: updated,
+      page_count: 2,
+      board: { elements } as WhiteboardPadDto["board"],
+      agent: [],
+    });
+    mount({
+      kind: "whiteboard",
+      id: "w1",
+      stage: "ink",
+      detail: "both wrote",
+      local: body(10),
+      server: body(20),
+      localInkPageIds: [1],
+      hubInkPageIds: [1],
+      localInkStamps: [{ pageId: 1, updatedAt: 10 }],
+      hubInkStamps: [{ pageId: 1, updatedAt: 20 }],
+      localInk: [{ kind: "whiteboard", key: "w1", page_id: 1, updated_at: 10, gz }],
+      serverInk: [],
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const previews = () =>
+      Array.from(document.querySelectorAll<HTMLElement>(".lc-hub-conflict-preview"));
+    expect(previews()[0]!.dataset.page).toBe("1");
+    act(() => noteByText("Handwriting (page 2)").click());
+    expect(previews().map((pane) => pane.dataset.page)).toEqual(["2", "2"]);
+    act(() => noteByText("Handwriting (page 1)").click());
+    expect(previews().map((pane) => pane.dataset.page)).toEqual(["1", "1"]);
+  });
+
   it("lists virtual sheets of a grown page-1 whiteboard after the blob decodes", async () => {
     const { encodeInkOps, packEncodedInk } = await import("../canvas/inkCodec");
     const { bytesToB64 } = await import("../api/nativeHttp");
@@ -629,8 +705,20 @@ describe("what the panes are asked to draw", () => {
     conflict: HubPadConflict = CONFLICT,
     extra: {
       fetchPreviewInk?: (pageId: number) => Promise<{
-        local: { kind: "annotate"; key: string; page_id: number; updated_at: number; gz: string } | null;
-        server: { kind: "annotate"; key: string; page_id: number; updated_at: number; gz: string } | null;
+        local: {
+          kind: "annotate" | "whiteboard";
+          key: string;
+          page_id: number;
+          updated_at: number;
+          gz: string;
+        } | null;
+        server: {
+          kind: "annotate" | "whiteboard";
+          key: string;
+          page_id: number;
+          updated_at: number;
+          gz: string;
+        } | null;
       }>;
     } = {},
   ) {
@@ -638,6 +726,7 @@ describe("what the panes are asked to draw", () => {
     vi.doMock("./ConflictPagePreview", () => ({
       ConflictPagePreview: (props: {
         page: number;
+        focusKey?: string;
         notes?: readonly { id: string }[];
         showInk?: boolean;
         inkPages?: readonly { page_id: number }[];
@@ -647,6 +736,7 @@ describe("what the panes are asked to draw", () => {
         <div
           className="lc-hub-conflict-preview"
           data-page={String(props.page)}
+          data-focus={props.focusKey ?? ""}
           data-notes={(props.notes ?? []).map((note) => note.id).join(",")}
           data-ink={props.showInk ? "on" : "off"}
           data-ink-pages={(props.inkPages ?? []).map((row) => row.page_id).join(",")}
@@ -830,6 +920,7 @@ describe("what the panes are asked to draw", () => {
     expect(panes().map((pane) => pane.dataset.page)).toEqual(["12", "12"]);
     act(() => noteByText("page forty mark").click());
     expect(panes().map((pane) => pane.dataset.page)).toEqual(["40", "40"]);
+    expect(panes()[0]!.dataset.focus).toBe("far");
   });
 
   it("fetches that page's ink for the overlay, not the rest of the pad", async () => {
@@ -860,6 +951,56 @@ describe("what the panes are asked to draw", () => {
     expect(fetchPreviewInk.mock.calls.map((call) => call[0])).toEqual([40]);
     expect(panes()[0]!.dataset.inkPages).toBe("12,40");
     expect(panes()[1]!.dataset.inkPages).toBe("12,40");
+  });
+
+  it("does not treat a page-0 spanning shard as covering page 1", async () => {
+    const fetchPreviewInk = vi.fn(async (pageId: number) => ({
+      local: {
+        kind: "whiteboard" as const,
+        key: "w1",
+        page_id: pageId,
+        updated_at: 1,
+        gz: "local-1",
+      },
+      server: {
+        kind: "whiteboard" as const,
+        key: "w1",
+        page_id: pageId,
+        updated_at: 1,
+        gz: "hub-1",
+      },
+    }));
+    const body = (updated: number): WhiteboardPadDto => ({
+      id: "w1",
+      title: "Exam 1",
+      updated_at: updated,
+      page_count: 1,
+      board: {
+        elements: [
+          { y: 0, height: 4200, customData: { lcScratchFrame: true, lcScratchPage: 0 } },
+        ],
+      } as WhiteboardPadDto["board"],
+      agent: [],
+    });
+    await mountSpied(
+      {
+        kind: "whiteboard",
+        id: "w1",
+        stage: "ink",
+        detail: "page 0 has new strokes here and on the hub",
+        inkPageId: 0,
+        local: body(10),
+        server: body(20),
+        localInk: [{ kind: "whiteboard", key: "w1", page_id: 0, updated_at: 10, gz: "span" }],
+        serverInk: [{ kind: "whiteboard", key: "w1", page_id: 0, updated_at: 20, gz: "span" }],
+      },
+      { fetchPreviewInk },
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(fetchPreviewInk.mock.calls.map((call) => call[0])).toContain(1);
   });
 });
 

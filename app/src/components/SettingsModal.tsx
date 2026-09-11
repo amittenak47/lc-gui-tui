@@ -2859,7 +2859,7 @@ export function SettingsModal({
                 <datalist id="lc-model-options">
                   {(catalog?.models ?? []).map((entry) => (
                     <option key={entry.id} value={entry.id}>
-                      {entry.source === "disk" ? "on disk" : "on the server"}
+                      {entry.source === "disk" ? `${entry.id} · disk` : `${entry.id} · server`}
                     </option>
                   ))}
                 </datalist>

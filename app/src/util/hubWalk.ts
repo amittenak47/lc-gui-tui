@@ -10,6 +10,7 @@
 import type { AnnotatePadDto, EdgeRowDto, InkPageDigestDto, LcClient, WhiteboardPadDto } from "../api/client";
 import { LcApiError } from "../api/client";
 import {
+  conflictInkPageId,
   footnoteInkKeys,
   isInkConflict,
   inkDocKey,
@@ -180,7 +181,7 @@ export async function walkSyncInk(
       if (isInkConflict(local, digest, since)) {
         return {
           outcome: "conflict",
-          pageId: digest.page_id,
+          pageId: conflictInkPageId(pad.kind, digest.page_id),
           inkKey: digest.key,
           ...(splitFootnoteInkHubKey(digest.key)?.wbId
             ? { wbId: splitFootnoteInkHubKey(digest.key)!.wbId }

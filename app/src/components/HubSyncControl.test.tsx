@@ -880,6 +880,73 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect(button.dataset.stage).toBe("synced");
     });
 
+    it("keeps walking when the dock hides for a conflict split", async () => {
+      vi.useFakeTimers();
+      const annotateRow = { id: "pad-1", updated_at: 500, deleted_at: null };
+      const client = fakeClient({
+        pingPadSync: vi.fn().mockResolvedValue({ now: 1, annotate: [annotateRow] }),
+        getAnnotatePad: vi.fn().mockResolvedValue({
+          id: "pad-1",
+          name: "book.pdf",
+          updated_at: 500,
+          footnotes: [],
+          source: "hub copy",
+        }),
+        putAnnotatePad: vi.fn(),
+      });
+      const { host, walkReports } = makeHost({
+        hash: "h",
+        name: "book.pdf",
+        docType: "pdf",
+        text: "",
+        bytes: null,
+      });
+      let resolveConflict: ((value: { pick: "local" | "server" }) => void) | undefined;
+      const hostMutable = host as unknown as {
+        pad(): Promise<unknown>;
+        onConflict(c: unknown): Promise<{ pick: "local" | "server" }>;
+      };
+      hostMutable.pad = async () => ({
+        kind: "annotate" as const,
+        id: "pad-1",
+        hubAckUpdatedAt: () => 100,
+        buildBody: () => ({ id: "pad-1", name: "book.pdf", updated_at: 900 }),
+        markHubAck: () => {},
+      });
+      hostMutable.onConflict = () =>
+        new Promise((resolve) => {
+          resolveConflict = resolve;
+        });
+      const hostEl = document.createElement("div");
+      document.body.append(hostEl);
+      const root = createRoot(hostEl);
+      const render = (showDock: boolean) =>
+        act(() =>
+          root.render(<HubSyncControl client={client} host={host} showDock={showDock} />),
+        );
+      render(true);
+      const button = hostEl.querySelector(".lc-hub-sync") as HTMLButtonElement;
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await vi.runAllTimersAsync();
+      });
+      expect(
+        walkReports.some((r) => r && (r as { waiting?: string }).waiting === "conflict"),
+      ).toBe(true);
+      render(false);
+      expect(hostEl.querySelector(".lc-hub-sync")).toBeNull();
+      await act(async () => {
+        resolveConflict?.({ pick: "server" });
+        await vi.runAllTimersAsync();
+      });
+      expect(walkReports.at(-1)).toEqual({ stage: "synced", progress: null });
+      render(true);
+      expect((hostEl.querySelector(".lc-hub-sync") as HTMLButtonElement).dataset.stage).toBe(
+        "synced",
+      );
+      act(() => root.unmount());
+    });
+
     it("after keep-local resolves, re-bases on the hub row and PUTs the kept copy", async () => {
       vi.useFakeTimers();
       const annotateRow = { id: "pad-1", updated_at: 500, deleted_at: null };
