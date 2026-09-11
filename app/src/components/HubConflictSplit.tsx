@@ -44,7 +44,7 @@ import {
   visibleFootnoteDiffRows,
 } from "../util/hubConflictStash";
 import { linedPitchStateFromAppState } from "../util/linedPaperPref";
-import { mergeConflictPageFrames, expandLumpedInkDiffRows, decodeConflictInkPages, inkPageIdsFromOps, conflictPaperFrames, whiteboardConflictFrames, whiteboardInkMergeRows } from "./conflictInkLayout";
+import { mergeConflictPageFrames, expandLumpedInkDiffRows, decodeConflictInkPages, inkPageIdsFromOps, conflictPaperFrames, whiteboardConflictFrames, whiteboardInkMergeRows, pageFramesEqual } from "./conflictInkLayout";
 import {
   countWhiteboardPages,
   whiteboardPageFramesFromPad,
@@ -314,6 +314,9 @@ export function HubConflictSplit({
 }: HubConflictSplitProps) {
   const [picks, setPicks] = useState<Record<string, SidePick>>({});
   const [focusedId, setFocusedId] = useState<string>(INK_ROW_ID);
+  const [focusRevision, setFocusRevision] = useState(0);
+  const focusRow = (id: string) => { setFocusedId(id); setFocusRevision(value => value + 1); };
+  const [inkLoading, setInkLoading] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [overlayInk, setOverlayInk] = useState<{
     local: InkPageDto[];
@@ -347,14 +350,19 @@ export function HubConflictSplit({
     return visibleFootnoteDiffRows(notesOf(conflict.local), notesOf(conflict.server));
   }, [conflict]);
 
+  // Workspace measures fresh arrays on each render. Equal frame values must
+  // not cancel decoding and start the entire notebook again on a slow tablet.
+  const pageFramesRef = useRef(pageFrames);
+  if (!pageFramesEqual(pageFramesRef.current, pageFrames)) pageFramesRef.current = pageFrames;
+  const stablePageFrames = pageFramesRef.current;
   const previewFrames = useMemo(
     () =>
       mergeConflictPageFrames(
-        pageFrames,
+        stablePageFrames,
         whiteboardPageFramesFromPad(conflict?.local ?? null),
         whiteboardPageFramesFromPad(conflict?.server ?? null),
       ),
-    [pageFrames, conflict],
+    [stablePageFrames, conflict],
   );
   const listFrames = useMemo(
     () =>
@@ -558,6 +566,7 @@ export function HubConflictSplit({
       return;
     }
     let gone = false;
+    setInkLoading(true);
     void (async () => {
       const [localShards, serverShards] = await Promise.all([
         decodeConflictInkPages(mergeInkDtos(conflict.localInk, overlayInk.local)),
@@ -587,6 +596,7 @@ export function HubConflictSplit({
         localShards,
         serverShards,
       });
+      setInkLoading(false);
     })();
     return () => {
       gone = true;
@@ -694,7 +704,8 @@ export function HubConflictSplit({
   }, [conflict, focusedId, rows, padInkRows]);
 
   useEffect(() => {
-    setOverlayInk({ local: [], server: [] });
+    setOverlayInk(current => current.local.length || current.server.length
+      ? { local: [], server: [] } : current);
     overlayTriedRef.current = new Set();
   }, [conflict?.id]);
 
@@ -790,7 +801,7 @@ export function HubConflictSplit({
           .join(" ")}
         data-note-id={id}
         data-pick={kept ? "keep" : dropped ? "drop" : "undecided"}
-        onClick={() => setFocusedId(id)}
+        onClick={() => focusRow(id)}
       >
         <span className="lc-hub-conflict-note-kind">ink</span>
         <span className="lc-hub-conflict-note-excerpt">
@@ -812,7 +823,7 @@ export function HubConflictSplit({
             onClick={(event) => {
               event.stopPropagation();
               toggleKeep(side, id);
-              setFocusedId(id);
+              focusRow(id);
             }}
           >
             ✓
@@ -831,7 +842,7 @@ export function HubConflictSplit({
             onClick={(event) => {
               event.stopPropagation();
               toggleDrop(side, id);
-              setFocusedId(id);
+              focusRow(id);
             }}
           >
             ✕
@@ -987,8 +998,9 @@ export function HubConflictSplit({
             }
             linedPitchPair={lined.pair}
             linedRule={lined.rule}
-            focusKey={focusedId}
+            focusKey={`${focusedId}:${focusRevision}`}
             decodedInk={side === "local" ? inkHits.localShards : inkHits.serverShards}
+            inkLoading={inkLoading}
           />
           <ol
             className={["lc-hub-conflict-list", pickingStarted && !valid ? "is-picking" : ""]
@@ -1021,7 +1033,7 @@ export function HubConflictSplit({
                       childCount={childCount}
                       onKeep={toggleKeep}
                       onDrop={toggleDrop}
-                      onFocus={setFocusedId}
+                      onFocus={focusRow}
                       onToggleExpand={() =>
                         setCollapsed((current) => ({
                           ...current,
@@ -1049,7 +1061,7 @@ export function HubConflictSplit({
                               part
                               onKeep={toggleKeep}
                               onDrop={toggleDrop}
-                              onFocus={setFocusedId}
+                              onFocus={focusRow}
                             />
                           );
                         })

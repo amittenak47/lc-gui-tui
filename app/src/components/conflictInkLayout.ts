@@ -14,9 +14,9 @@
 import type { PageFrame } from "../canvas/inkPageIndex";
 import { inkOpBounds } from "../canvas/inkTiles";
 import { b64ToBytes } from "../api/nativeHttp";
-import { decodeInkOps, unpackEncodedInk } from "../canvas/inkCodec";
+import { decodeInkOpsAsync } from "../canvas/inkCodec";
+import { gunzipUnpackInk } from "../canvas/inkArchiveClient";
 import { inkOpsBounds, type InkOp } from "../canvas/rasterInk";
-import { bytesFromMaybeGzip } from "../util/gzip";
 import type { InkPageDto } from "../api/client";
 import { drawPageFitBox } from "../canvas/documentRotateCamera";
 import {
@@ -153,7 +153,32 @@ export function inkPageIdsFromOps(
 
 export function inkOpsEqual(a: readonly InkOp[], b: readonly InkOp[]): boolean {
   if (a.length !== b.length) return false;
-  return JSON.stringify(a) === JSON.stringify(b);
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i]!;
+    const right = b[i]!;
+    if (left === right) continue;
+    if (left.kind !== right.kind || left.points.length !== right.points.length) return false;
+    // Matching endpoints do not imply matching handwriting or pen settings.
+    // Compare scalar style fields once, then samples without serializing pages.
+    const styles = new Set([...Object.keys(left), ...Object.keys(right)]);
+    for (const key of styles) {
+      if (key === "points" || key === "blotHalts") continue;
+      if (left[key as keyof InkOp] !== right[key as keyof InkOp]) return false;
+    }
+    if (left.kind === "draw" && right.kind === "draw") {
+      const a = left.blotHalts ?? [], b = right.blotHalts ?? [];
+      if (a.length !== b.length) return false;
+      for (let j = 0; j < a.length; j++) {
+        if (a[j].x !== b[j].x || a[j].y !== b[j].y || a[j].grow !== b[j].grow ||
+            a[j].pressure !== b[j].pressure || a[j].slowness !== b[j].slowness) return false;
+      }
+    }
+    for (let j = 0; j < left.points.length; j++) {
+      const a = left.points[j]!, b = right.points[j]!;
+      if (a.x !== b.x || a.y !== b.y || a.pressure !== b.pressure || a.slowness !== b.slowness || a.radius !== b.radius) return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -284,9 +309,9 @@ export async function decodeConflictInkPages(
     if (!row.gz || seenGz.has(row.gz)) continue;
     seenGz.add(row.gz);
     try {
-      const encoded = unpackEncodedInk(await bytesFromMaybeGzip(b64ToBytes(row.gz)));
+      const encoded = await gunzipUnpackInk(b64ToBytes(row.gz));
       if (!encoded) continue;
-      const ops = decodeInkOps(encoded);
+      const ops = await decodeInkOpsAsync(encoded);
       if (!ops || ops.length === 0) continue;
       const pageId =
         row.kind === "whiteboard" && row.page_id <= 1 ? 1 : row.page_id;

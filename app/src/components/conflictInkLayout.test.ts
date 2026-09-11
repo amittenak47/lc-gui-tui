@@ -13,6 +13,7 @@ import {
   inkPageIdsFromOps,
   inkSlotsEqual,
   inkedPageIds,
+  inkOpsEqual,
   type ConflictInkSlot,
 } from "./conflictInkLayout";
 import { NO_PRESSURE, type InkDrawOp } from "../canvas/rasterInk";
@@ -153,6 +154,16 @@ describe("inkSlotsEqual", () => {
   });
 });
 
+describe("inkOpsEqual", () => {
+  it("does not stringify the whole page", () => {
+    const a = stroke(40);
+    const b = stroke(40);
+    expect(inkOpsEqual([a], [a])).toBe(true);
+    expect(inkOpsEqual([a], [b])).toBe(true);
+    expect(inkOpsEqual([a], [stroke(80)])).toBe(false);
+  });
+});
+
 describe("what a canvas per page is worth", () => {
   it("bounds the surface by the page, not by the book", () => {
     /*
@@ -170,6 +181,33 @@ describe("what a canvas per page is worth", () => {
     const surface = inked.length * pageHeight;
     expect(surface).toBe(pageHeight);
     expect(surface).toBeLessThan(65535);
+  });
+});
+
+describe("complete handwriting equality", () => {
+  it("detects edits between identical endpoints", () => {
+    const original = stroke(40);
+    original.points.splice(1, 0, { x: 100, y: 50, pressure: 0.5 });
+    const changed = structuredClone(original);
+    expect(inkOpsEqual([original], [changed])).toBe(true);
+    changed.points[1].y = 60;
+    expect(inkOpsEqual([original], [changed])).toBe(false);
+  });
+
+  it("preserves pressure and pen-setting differences as merge choices", () => {
+    const original = stroke(40);
+    const pressure = structuredClone(original);
+    pressure.points[0].pressure = 0.8;
+    expect(inkOpsEqual([original], [pressure])).toBe(false);
+    expect(inkOpsEqual([original], [{ ...original, baseWidth: 8 }])).toBe(false);
+  });
+
+  it("compares pooled-ink samples by value across separately decoded copies", () => {
+    const original = { ...stroke(40), blotHalts: [{ x: 100, y: 40, grow: 0.3 }] };
+    const copy = structuredClone(original);
+    expect(inkOpsEqual([original], [copy])).toBe(true);
+    copy.blotHalts[0].grow = 0.8;
+    expect(inkOpsEqual([original], [copy])).toBe(false);
   });
 });
 

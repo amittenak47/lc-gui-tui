@@ -6,12 +6,13 @@
  * changes how strokes are drawn without changing anything visible in a diff.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   DENSE_PAGE_POINTS,
   concatEncodedInk,
   decodeInkOps,
+  decodeInkOpsAsync,
   encodeInkOps,
   inkOpsFrom,
   inkStorageStats,
@@ -378,6 +379,39 @@ describe("encodeInkOps / decodeInkOps", () => {
 
   it("survives an empty op list", () => {
     expect(decodeInkOps(encodeInkOps([]))).toEqual([]);
+  });
+
+  it("decodeInkOpsAsync matches decodeInkOps across yields", async () => {
+    const ops = Array.from({ length: 30 }, (_, i) =>
+      stroke([
+        { x: i, y: 1, pressure: NO_PRESSURE },
+        { x: i + 1, y: 1, pressure: NO_PRESSURE },
+      ]),
+    );
+    const encoded = encodeInkOps(ops);
+    expect(await decodeInkOpsAsync(encoded, 8)).toEqual(decodeInkOps(encoded));
+  });
+
+  it("does not wait for tablet animation frames to decode a large notebook", async () => {
+    const raf = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", raf);
+    const encoded = encodeInkOps(Array.from({length: 2400}, () => stampChain(3)));
+    try {
+      expect(await decodeInkOpsAsync(encoded)).toEqual(decodeInkOps(encoded));
+      expect(raf).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("yields to input when decoding consumes its CPU budget", async () => {
+    let clock = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock += 6);
+    const yieldTask = vi.fn(async () => {});
+    vi.stubGlobal("scheduler", {yield: yieldTask});
+    const encoded = encodeInkOps(Array.from({length: 72}, () => stampChain(3)));
+    try {
+      expect(await decodeInkOpsAsync(encoded)).toEqual(decodeInkOps(encoded));
+      expect(yieldTask).toHaveBeenCalledTimes(2);
+    } finally { now.mockRestore(); vi.unstubAllGlobals(); }
   });
 
   it("costs well under ten bytes a point on a stamp chain", () => {

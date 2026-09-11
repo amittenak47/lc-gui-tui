@@ -2001,6 +2001,7 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   gap: 8px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--chrome-edge);
+  touch-action: manipulation;
 }
 
 .lc-hub-conflict-tab {
@@ -2046,13 +2047,7 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  /*
-   * The board's ancestor `touch-action: none` does not apply here, but a
-   * Windows/Android overlay still will not coast a native overflow the way
-   * the reader does. ConflictPagePreview owns the flick; wheel stays native.
-   */
-  touch-action: none;
-  scroll-snap-type: y proximity;
+  touch-action: pan-y;
   scrollbar-gutter: stable;
 }
 
@@ -2114,13 +2109,12 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 }
 
 /*
- * One per inked page, placed over that page's slot — the component sets left,
+ * Short strips placed over each page's slot — the component sets left,
  * top, width and height, because where a page sits is measured, not styled.
  */
 .lc-hub-conflict-ink-layer {
   position: absolute;
   pointer-events: none;
-  transform: translateZ(0);
 }
 
 .lc-hub-conflict-load {
@@ -2131,14 +2125,12 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   place-items: center;
   pointer-events: none;
   background: color-mix(in srgb, var(--overlay-bg, var(--bg)) 55%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   color: color-mix(in srgb, var(--ink) 55%, transparent);
 }
 
 .lc-hub-conflict-load.is-done {
   pointer-events: none;
-  animation: lc-hub-conflict-load-out 280ms ease 560ms both;
+  animation: lc-hub-conflict-load-out 160ms ease both;
 }
 
 @keyframes lc-hub-conflict-load-out {
@@ -2170,7 +2162,7 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   border-radius: 10px;
   border: 1px solid var(--chrome-edge);
   background: color-mix(in srgb, var(--surface) 88%, transparent);
-  backdrop-filter: blur(8px);
+  touch-action: manipulation;
 }
 
 .lc-hub-conflict-pane-head .lc-tip-target {

@@ -719,7 +719,7 @@ describe("HubConflictSplit ink and labels", () => {
     expect(document.body.textContent).toMatch(/Handwriting \(page 1\)/);
     expect(
       document.querySelectorAll('.lc-hub-conflict-preview[aria-busy="true"]'),
-    ).toHaveLength(0);
+    ).toHaveLength(2);
   });
 });
 
@@ -959,7 +959,10 @@ describe("what the panes are asked to draw", () => {
     expect(panes().map((pane) => pane.dataset.page)).toEqual(["12", "12"]);
     act(() => noteByText("page forty mark").click());
     expect(panes().map((pane) => pane.dataset.page)).toEqual(["40", "40"]);
-    expect(panes()[0]!.dataset.focus).toBe("far");
+    expect(panes().map((pane) => pane.dataset.focus)).toEqual(["far:1", "far:1"]);
+    // Re-selecting the same entry after scrolling must request another jump.
+    act(() => noteByText("page forty mark").click());
+    expect(panes().map((pane) => pane.dataset.focus)).toEqual(["far:2", "far:2"]);
   });
 
   it("fetches that page's ink for the overlay, not the rest of the pad", async () => {
