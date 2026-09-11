@@ -290,6 +290,30 @@ describe("agent-lane slotting", () => {
 });
 
 describe("cellBox value alignment", () => {
+  it.each(["dplist", "dptable"] as const)("keeps %s columns apart and stable as values grow", kind => {
+    const cells = kind === "dplist" ? [1, 2] : [[1, 2]];
+    const grown = kind === "dplist" ? [1234567, 2] : [[1234567, 2]];
+    const p = program(kind, [{ cells }, { cells: grown }]);
+    const [before, after] = [0, 1].map(frame => renderViz(p, frame, ORIGIN).filter(el => el.type === "rectangle"));
+    expect(before[0].x + before[0].width!).toBeLessThan(before[1].x);
+    expect(before.map(el => [el.x, el.width])).toEqual(after.map(el => [el.x, el.width]));
+  });
+
+  it("keeps DP predecessor arrowheads outside cell fills", () => {
+    const p = program("dptable", [{ cells: [[1, 2], [3, 4]], entries: [["a", "b"], ["c", "d"], [3, 2], [3, 0]] }]);
+    const elements = renderViz(p, 0, ORIGIN);
+    const boxes = elements.filter(el => el.type === "rectangle");
+    const edges = elements.filter(el => el.type === "arrow");
+    expect(edges).toHaveLength(2);
+    for (const edge of edges) {
+      for (const point of edge.points!) {
+        const x = edge.x + point[0], y = edge.y + point[1];
+        expect(boxes.some(box => x >= box.x && x <= box.x + box.width! && y >= box.y && y <= box.y + box.height!)).toBe(false);
+      }
+      expect(Math.hypot(...edge.points![1])).toBeGreaterThan(12);
+    }
+  });
+
   it("binds the value as a centred label on the cell box", () => {
     const ctx: RenderContext = {
       program: SAMPLES.array,

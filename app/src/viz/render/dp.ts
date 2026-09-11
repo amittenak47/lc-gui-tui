@@ -17,6 +17,7 @@ import {
   footer,
   header,
   isHighlighted,
+  traceCellWidth,
   type RenderContext,
 } from "../layout";
 import { cellText, entryPair } from "../schema";
@@ -42,12 +43,14 @@ export function renderDpList(ctx: RenderContext): Skeleton[] {
   const out = header(ctx);
   const top = origin.y + headerOffset(ctx) + 18;
   const count = frame.cells.length;
+  const width = traceCellWidth(ctx);
 
   frame.cells.forEach((value, index) => {
-    const x = origin.x + index * (CELL + CELL_GAP);
+    const x = origin.x + index * (width + CELL_GAP);
     out.push(
       ...cellBox(ctx, `cell-${index}`, x, top, cellText(value), {
         highlighted: isHighlighted(frame, index),
+        width,
       }),
     );
     out.push(caption(ctx, `idx-${index}`, x + 4, top + CELL + 6, String(index)));
@@ -82,8 +85,8 @@ export function renderDpList(ctx: RenderContext): Skeleton[] {
 
   const predY = top + CELL + 28;
   links.forEach(([from, to], edgeIndex) => {
-    const x1 = origin.x + from * (CELL + CELL_GAP) + CELL / 2;
-    const x2 = origin.x + to * (CELL + CELL_GAP) + CELL / 2;
+    const x1 = origin.x + from * (width + CELL_GAP) + width / 2;
+    const x2 = origin.x + to * (width + CELL_GAP) + width / 2;
     out.push(
       arrow(ctx, `pred-${edgeIndex}`, { x: x1, y: predY }, { x: x2, y: predY }, { accent: true }),
     );
@@ -120,21 +123,27 @@ export function renderDpTable(ctx: RenderContext): Skeleton[] {
     leftover.push(entry);
   }
 
-  const labelW = rowLabels ? 36 : 0;
+  // Reserve the same geometry across the trace, including room for arrowheads
+  // between cells. Centre-to-centre arrows disappear under the cell fills.
+  const width = Math.max(traceCellWidth(ctx), ...ctx.program.frames.flatMap(f =>
+    scalarList(f.entries[0])?.map(label => label.length * 8 + 12) ?? []));
+  const labelW = rowLabels ? Math.max(36, ...ctx.program.frames.flatMap(f =>
+    scalarList(f.entries[1])?.map(label => label.length * 8 + 12) ?? [])) : 0;
+  const gap = 24;
   const gridX = origin.x + labelW;
   const gridY = top + (colLabels ? 22 : 0);
 
   if (colLabels) {
     colLabels.forEach((label, c) => {
       out.push(
-        caption(ctx, `colh-${c}`, gridX + c * (CELL + CELL_GAP) + 4, top, label, { accent: true }),
+        caption(ctx, `colh-${c}`, gridX + c * (width + gap) + 4, top, label, { accent: true }),
       );
     });
   }
   if (rowLabels) {
     rowLabels.forEach((label, r) => {
       out.push(
-        caption(ctx, `rowh-${r}`, origin.x, gridY + r * (CELL + CELL_GAP) + 16, label, {
+        caption(ctx, `rowh-${r}`, origin.x, gridY + r * (CELL + gap) + 16, label, {
           accent: true,
         }),
       );
@@ -146,12 +155,13 @@ export function renderDpTable(ctx: RenderContext): Skeleton[] {
   rows.forEach((row, r) => {
     row.forEach((value, c) => {
       const index = flat++;
-      const x = gridX + c * (CELL + CELL_GAP);
-      const y = gridY + r * (CELL + CELL_GAP);
-      centres[index] = { x: x + CELL / 2, y: y + CELL / 2 };
+      const x = gridX + c * (width + gap);
+      const y = gridY + r * (CELL + gap);
+      centres[index] = { x: x + width / 2, y: y + CELL / 2 };
       out.push(
         ...cellBox(ctx, `cell-${r}-${c}`, x, y, cellText(value), {
           highlighted: isHighlighted(frame, index),
+          width,
         }),
       );
     });
@@ -164,13 +174,17 @@ export function renderDpTable(ctx: RenderContext): Skeleton[] {
     const to = Number(pair[1]);
     const a = centres[from];
     const b = centres[to];
-    if (!a || !b) return;
-    out.push(arrow(ctx, `pred-${edgeIndex}`, a, b, { accent: true }));
+    if (!a || !b || from === to) return;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const t = 1 / Math.max(Math.abs(dx) / (width / 2 + 2), Math.abs(dy) / (CELL / 2 + 2));
+    out.push(arrow(ctx, `pred-${edgeIndex}`,
+      { x: a.x + dx * t, y: a.y + dy * t },
+      { x: b.x - dx * t, y: b.y - dy * t }, { accent: true }));
   });
 
   if (rows.length === 0 || (rows[0]?.length ?? 0) === 0) {
     out.push(caption(ctx, "empty", origin.x, top, "(empty dp table)"));
   }
-  const bottom = gridY + Math.max(rows.length, 1) * (CELL + CELL_GAP);
+  const bottom = gridY + Math.max(rows.length, 1) * (CELL + gap);
   return [...out, ...footer(ctx, bottom)];
 }
