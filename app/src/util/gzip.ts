@@ -1,3 +1,5 @@
+import { gunzipSync } from "fflate";
+
 /**
  * gzip, for the payloads that are still strings.
  *
@@ -14,6 +16,11 @@
  * a sidecar is recognised by its first two bytes rather than by its file name,
  * which means one that was renamed, or written by a build without
  * `CompressionStream`, still opens.
+ *
+ * Inflate always has an fflate fallback. A tablet WebView that lacks
+ * `DecompressionStream` (or advertises it and then throws) used to drop
+ * conflict-preview strokes while live ink still painted from the uncompressed
+ * IDB WAL.
  */
 
 /** gzip's magic number. Present on every member, first thing in the file. */
@@ -52,16 +59,35 @@ export async function gzipBytes(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Ar
   }
 }
 
+function inflateGzipWithFflate(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
+  const out = gunzipSync(bytes);
+  return new Uint8Array(out) as Uint8Array<ArrayBuffer>;
+}
+
+async function inflateGzip(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
+  if (typeof DecompressionStream === "function") {
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(
+        new DecompressionStream("gzip"),
+      );
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    } catch {
+      /* Stream exists but failed — Android WebView has done this. */
+    }
+  }
+  try {
+    return inflateGzipWithFflate(bytes);
+  } catch {
+    throw new Error("this device cannot read a compressed annotation archive");
+  }
+}
+
 /** Inverse of {@link gzipBytes}; sniffs magic so uncompressed archives still open. */
 export async function bytesFromMaybeGzip(
   bytes: Uint8Array<ArrayBuffer>,
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (!isGzip(bytes)) return bytes;
-  if (typeof DecompressionStream !== "function") {
-    throw new Error("this device cannot read a compressed annotation archive");
-  }
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  return inflateGzip(bytes);
 }
 
 /**
@@ -71,10 +97,5 @@ export async function bytesFromMaybeGzip(
  * a name it cannot trust.
  */
 export async function textFromMaybeGzip(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
-  if (!isGzip(bytes)) return new TextDecoder().decode(bytes);
-  if (typeof DecompressionStream !== "function") {
-    throw new Error("this device cannot read a compressed annotation file");
-  }
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-  return await new Response(stream).text();
+  return new TextDecoder().decode(await bytesFromMaybeGzip(bytes));
 }

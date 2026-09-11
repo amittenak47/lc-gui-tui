@@ -1,7 +1,7 @@
 /**
  * The conflict split: Local on the left, the other device on the right.
  *
- * Nothing has been written yet. Each row (each handwriting page, each note)
+ * No choice has been saved yet. Each row (each handwriting page, each note)
  * is its own choice: ✓ that copy, ✓ both, or ✕ both (drop that entry). What
  * ✓ both means depends on what the row is: one mark two devices both wrote on
  * becomes one mark carrying both sides' notes and boards, ink merges that
@@ -78,13 +78,21 @@ export interface HubConflictSplitProps {
   /**
    * Test seam: one page of overlay ink. Production uses {@link loadConflictPreviewInkPage}.
    */
-  fetchPreviewInk?: (
-    pageId: number,
-  ) => Promise<{ local: InkPageDto | null; server: InkPageDto | null }>;
+  fetchPreviewInk?: (pageId: number) => Promise<{
+    local: InkPageDto | InkPageDto[] | null;
+    server: InkPageDto | InkPageDto[] | null;
+  }>;
 }
 
 type Side = "local" | "server";
 type SidePick = { local?: boolean; server?: boolean };
+
+function overlayInkPages(
+  row: InkPageDto | InkPageDto[] | null | undefined,
+): InkPageDto[] {
+  if (row == null) return [];
+  return Array.isArray(row) ? row : [row];
+}
 
 function updatedAtOf(pad: HubPadConflict["local"] | HubPadConflict["server"]): number | null {
   if (!pad) return null;
@@ -684,11 +692,15 @@ export function HubConflictSplit({
       ![...(conflict.localInk ?? []), ...(conflict.serverInk ?? [])].some(
         (page) => page.page_id >= 2,
       );
+    /*
+     * Page 1 gz is the whole notebook blob, so it covers every virtual sheet.
+     * Page 0 is the spanning shard — it does not stand in for page 1.
+     */
     const covers = (pages: readonly InkPageDto[], pageId: number) =>
       inkDtosHavePage(pages, pageId) ||
       (lumpedWhiteboard &&
         pageId >= 1 &&
-        pages.some((page) => page.page_id <= 1 && Boolean(page.gz)));
+        pages.some((page) => page.page_id === 1 && Boolean(page.gz)));
     if (covers(localPages, focusPage) && covers(serverPages, focusPage)) {
       return;
     }
@@ -705,14 +717,8 @@ export function HubConflictSplit({
         finished = true;
         if (gone) return;
         setOverlayInk((current) => ({
-          local:
-            got.local && !inkDtosHavePage(current.local, got.local.page_id)
-              ? [...current.local, got.local]
-              : current.local,
-          server:
-            got.server && !inkDtosHavePage(current.server, got.server.page_id)
-              ? [...current.server, got.server]
-              : current.server,
+          local: mergeInkDtos(current.local, overlayInkPages(got.local)),
+          server: mergeInkDtos(current.server, overlayInkPages(got.server)),
         }));
       })
       .catch(() => {
@@ -965,6 +971,7 @@ export function HubConflictSplit({
             }
             linedPitchPair={lined.pair}
             linedRule={lined.rule}
+            focusKey={focusedId}
           />
           <ol
             className={["lc-hub-conflict-list", pickingStarted && !valid ? "is-picking" : ""]
@@ -1066,8 +1073,8 @@ export function HubConflictSplit({
       <header className="lc-hub-conflict-head">
         <strong>Both copies changed — {nameOf(conflict)}</strong>
         <span>
-          {conflict.detail}. Local is this device; {otherLabel} is the other. Nothing has been
-          written yet.
+          {conflict.detail}. Local is this device; {otherLabel} is the other. No choice has
+          been saved yet.
         </span>
       </header>
       <div className="lc-hub-conflict-split">

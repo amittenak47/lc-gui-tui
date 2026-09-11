@@ -108,4 +108,68 @@ describe("MorphBar", () => {
     expect(after.style.height).toBe("");
     void root;
   });
+
+  it("sizes a percentage-capped panel to its content, like Settings", () => {
+    const restore = mockPanelBox({ scrollHeight: 400, clientHeight: 80, maxHeight: "100%" });
+    try {
+      const { shell } = mount(
+        <MorphBar active="one" axis="height">
+          <div data-morph-id="one">one</div>
+        </MorphBar>,
+      );
+      expect(shell.style.height).toBe("400px");
+    } finally {
+      restore();
+    }
+  });
+
+  it("sizes a vh-capped flyout to the painted box", () => {
+    const restore = mockPanelBox({ scrollHeight: 400, clientHeight: 80, maxHeight: "50vh" });
+    try {
+      const { shell } = mount(
+        <MorphBar active="one" axis="height">
+          <div data-morph-id="one">one</div>
+        </MorphBar>,
+      );
+      expect(shell.style.height).toBe("80px");
+    } finally {
+      restore();
+    }
+  });
 });
+
+function mockPanelBox(box: {
+  scrollHeight: number;
+  clientHeight: number;
+  maxHeight: string;
+}) {
+  const prevScroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+  const prevClient = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+  const prevStyle = window.getComputedStyle.bind(window);
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+    configurable: true,
+    get() {
+      return box.scrollHeight;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+    configurable: true,
+    get() {
+      return box.clientHeight;
+    },
+  });
+  window.getComputedStyle = ((el: Element) => {
+    const real = prevStyle(el);
+    return new Proxy(real, {
+      get(target, prop, receiver) {
+        if (prop === "maxHeight") return box.maxHeight;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+  }) as typeof window.getComputedStyle;
+  return () => {
+    if (prevScroll) Object.defineProperty(HTMLElement.prototype, "scrollHeight", prevScroll);
+    if (prevClient) Object.defineProperty(HTMLElement.prototype, "clientHeight", prevClient);
+    window.getComputedStyle = prevStyle;
+  };
+}

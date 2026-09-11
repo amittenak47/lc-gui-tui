@@ -16,6 +16,11 @@ pub struct ProviderConfigDto {
     /// None on PUT = leave the stored flag (older clients). Some(true/false) persists.
     #[serde(default)]
     pub vision: Option<bool>,
+    /// None on PUT = leave toml (older Settings). Some("") = match on words.
+    #[serde(default)]
+    pub embed_model: Option<String>,
+    #[serde(default)]
+    pub embed_base_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -100,24 +105,32 @@ fn config_dto(cfg: &Config) -> ConfigDto {
             model: cfg.llm.local.model.clone(),
             vision_model: cfg.llm.local.vision_model.clone(),
             vision: cfg.llm.local.vision,
+            embed_model: Some(cfg.llm.local.embed_model.clone()),
+            embed_base_url: Some(cfg.llm.local.embed_base_url.clone()),
         },
         ollama: ProviderConfigDto {
             base_url: cfg.llm.ollama.base_url.clone(),
             model: cfg.llm.ollama.model.clone(),
             vision_model: cfg.llm.ollama.vision_model.clone(),
             vision: cfg.llm.ollama.vision,
+            embed_model: None,
+            embed_base_url: None,
         },
         openai: ProviderConfigDto {
             base_url: cfg.llm.openai.base_url.clone(),
             model: cfg.llm.openai.model.clone(),
             vision_model: cfg.llm.openai.vision_model.clone(),
             vision: cfg.llm.openai.vision,
+            embed_model: None,
+            embed_base_url: None,
         },
         groq: ProviderConfigDto {
             base_url: cfg.llm.groq.base_url.clone(),
             model: cfg.llm.groq.model.clone(),
             vision_model: cfg.llm.groq.vision_model.clone(),
             vision: cfg.llm.groq.vision,
+            embed_model: None,
+            embed_base_url: None,
         },
         modes: ModesConfigDto {
             ambient: cfg.llm.modes.ambient.clone(),
@@ -188,6 +201,12 @@ fn apply_config_dto(cfg: &mut Config, dto: &ConfigDto) -> anyhow::Result<()> {
     cfg.llm.local.vision_model = dto.local.vision_model.clone();
     if let Some(flag) = dto.local.vision {
         cfg.llm.local.vision = Some(flag);
+    }
+    if let Some(model) = &dto.local.embed_model {
+        cfg.llm.local.embed_model = model.trim().to_string();
+    }
+    if let Some(url) = &dto.local.embed_base_url {
+        cfg.llm.local.embed_base_url = url.trim().to_string();
     }
     cfg.llm.ollama.base_url = dto.ollama.base_url.clone();
     cfg.llm.ollama.model = dto.ollama.model.clone();
@@ -306,11 +325,41 @@ mod tests {
         cfg.serve.searxng_url = "http://127.0.0.1:8888".into();
         let mut dto = config_dto(&cfg);
         dto.local.model = "other-chat".into();
+        // Older Settings omitted these fields. Changing chat must not blank them.
+        dto.local.embed_model = None;
+        dto.local.embed_base_url = None;
         apply_config_dto(&mut cfg, &dto).unwrap();
         assert_eq!(cfg.llm.local.model, "other-chat");
         assert_eq!(cfg.llm.local.embed_model, "nomic");
         assert_eq!(cfg.llm.local.embed_base_url, "http://127.0.0.1:8081/v1");
         assert_eq!(cfg.serve.searxng_url, "http://127.0.0.1:8888");
+    }
+
+    #[test]
+    fn apply_config_dto_writes_embed_from_settings() {
+        let mut cfg = Config::default();
+        let mut dto = config_dto(&cfg);
+        dto.local.embed_model = Some("nomic-embed-text".into());
+        dto.local.embed_base_url = Some("http://127.0.0.1:8081/v1".into());
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert_eq!(cfg.llm.local.embed_model, "nomic-embed-text");
+        assert_eq!(cfg.llm.local.embed_base_url, "http://127.0.0.1:8081/v1");
+        let echoed = config_dto(&cfg);
+        assert_eq!(echoed.local.embed_model.as_deref(), Some("nomic-embed-text"));
+        assert_eq!(
+            echoed.local.embed_base_url.as_deref(),
+            Some("http://127.0.0.1:8081/v1")
+        );
+    }
+
+    #[test]
+    fn apply_config_dto_clears_embed_when_settings_sends_empty() {
+        let mut cfg = Config::default();
+        cfg.llm.local.embed_model = "nomic".into();
+        let mut dto = config_dto(&cfg);
+        dto.local.embed_model = Some("".into());
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert_eq!(cfg.llm.local.embed_model, "");
     }
 
     #[test]

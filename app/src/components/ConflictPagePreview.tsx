@@ -87,6 +87,7 @@ export function ConflictPagePreview({
   linedPitch,
   linedPitchPair,
   linedRule,
+  focusKey,
 }: {
   hash?: string;
   page: number;
@@ -115,6 +116,8 @@ export function ConflictPagePreview({
   linedPitch?: number;
   linedPitchPair?: LinedPitchPair | null;
   linedRule?: LinedRuling | null;
+  /** Re-scroll when the focused row changes, even if the page number did not. */
+  focusKey?: string;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const docRef = useRef<HTMLDivElement | null>(null);
@@ -184,9 +187,9 @@ export function ConflictPagePreview({
       gone = true;
       observer.disconnect();
     };
-    // Only when the focused row names a new page. Re-running on stack height
-    // snapped the pane back to page 1 on every layout tick and read as flicker.
-  }, [page]);
+    // Focused row, not only page number: tapping Handwriting (page 1) again
+    // after a flick must still jump. Stack-height ticks must not.
+  }, [page, focusKey]);
 
   useEffect(() => {
     const root = scrollRoot;

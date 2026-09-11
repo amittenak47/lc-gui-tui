@@ -87,9 +87,21 @@ export function MorphBar({
       if (axis === "height") {
         const full = measure.scrollHeight;
         const painted = measure.clientHeight;
-        // A max-height panel that scrolls reports a taller scrollHeight than
-        // the box on screen. Morph to the painted box so the shell fits.
-        setSize(painted > 0 && full > painted + 1 ? painted : full);
+        /*
+         * Flyouts cap with `50vh` / a px max-height: scrollHeight is the
+         * whole menu, so the shell would grow past the cap. Morph to the
+         * painted box so the bar matches what is on screen.
+         *
+         * Settings caps with `max-height: 100%` of *this* bar. Using painted
+         * there is a collapse loop — the panel overflows the current shell,
+         * we lock to that short clientHeight, and the dialog never grows.
+         * Main still sizes to scrollHeight; percentage caps must too.
+         */
+        const cap = getComputedStyle(measure).maxHeight;
+        const percentCap = cap.endsWith("%");
+        setSize(
+          !percentCap && painted > 0 && full > painted + 1 ? painted : full,
+        );
         return;
       }
       // Width shells start at 0 with overflow:hidden. Measure max-content so

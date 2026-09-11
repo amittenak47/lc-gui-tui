@@ -280,6 +280,28 @@ export function previewInkPages(
 }
 
 /**
+ * Whiteboard ink is stored as page 1. Walks and leftover spanning shards still
+ * name page 0. Freezing only 0 downloads that empty row; the split then treats
+ * `page_id <= 1` as "we already have page 1", so the preview stays lined paper.
+ */
+export function expandPreviewInkPages(
+  kind: InkPadKind,
+  pageIds: readonly number[],
+): number[] {
+  const ids = new Set(pageIds.filter((id) => id >= 0));
+  if (kind === "whiteboard" && (ids.has(0) || ids.has(1))) {
+    ids.add(0);
+    ids.add(1);
+  }
+  return [...ids].sort((a, b) => a - b);
+}
+
+/** Whiteboard spanning (page 0) is the same blob as page 1. */
+export function conflictInkPageId(kind: InkPadKind, pageId: number): number {
+  return kind === "whiteboard" && pageId <= 1 ? 1 : pageId;
+}
+
+/**
  * The hub's bytes for named pages, or `null` when the transfer failed.
  *
  * Per page, on the route that exists for exactly this. Asking for the pad to
@@ -322,17 +344,14 @@ export async function loadConflictPreviewInkPage(
   kind: InkPadKind,
   key: string,
   pageId: number,
-): Promise<{ local: InkPageDto | null; server: InkPageDto | null }> {
-  if (!(pageId >= 0)) return { local: null, server: null };
-  const localRows = await localInkAsDtos(kind, key, [pageId]).catch(() => []);
-  const local = localRows.find((row) => row.page_id === pageId) ?? null;
-  if (!client) return { local, server: null };
-  const hub = await fetchHubInkPages(client, kind, key, [pageId]);
-  if (hub == null) return { local, server: null };
-  return {
-    local,
-    server: hub.find((row) => row.page_id === pageId) ?? null,
-  };
+): Promise<{ local: InkPageDto[]; server: InkPageDto[] | null }> {
+  if (!(pageId >= 0)) return { local: [], server: [] };
+  const ids = expandPreviewInkPages(kind, [pageId]);
+  const localRows = await localInkAsDtos(kind, key, ids).catch(() => []);
+  if (!client) return { local: localRows, server: [] };
+  const hub = await fetchHubInkPages(client, kind, key, ids);
+  if (hub == null) return { local: localRows, server: null };
+  return { local: localRows, server: hub };
 }
 
 /**
@@ -441,7 +460,20 @@ export async function applyInkChoice(
     return fetched;
   };
   if (choice === "local") {
-    await pushInkPagesToHub(client, kind, key);
+    const localRows = await getInkPageRecords(docKey);
+    for (const row of localRows) {
+      const gz = await gzOf(row);
+      if (!gz) continue;
+      const packed = bytesToB64(gz);
+      await writeInkPage(docKey, { page_id: row.pageId, updated_at: now, gz: packed });
+      await client.putInkPage({
+        kind,
+        key,
+        page_id: row.pageId,
+        updated_at: now,
+        gz: packed,
+      });
+    }
     // Hub-only page ids stay on the hub unless we empty-PUT them. Keep Local
     // used to upload this device's pages and leave the rest, so discarded
     // handwriting came back on the next walk.
@@ -636,7 +668,7 @@ async function applyWhiteboardInkChoicesByPage(
   let hubList: readonly InkPageDto[] = serverInk ?? [];
   if (needHub) {
     const fetchIds = [
-      ...new Set([1, ...(opts.hubPageIds ?? []).filter((id) => id >= 0)]),
+      ...new Set([0, 1, ...(opts.hubPageIds ?? []).filter((id) => id >= 0)]),
     ];
     if (opts.fetchHubPages) {
       const fetched = await opts.fetchHubPages(fetchIds);
@@ -783,12 +815,14 @@ export async function applyInkChoicesByPage(
           ? await gzipBytes(packEncodedInk(encoded))
           : await gzOf(row);
         if (gz) {
+          const packed = bytesToB64(gz);
+          await writeInkPage(docKey, { page_id: pageId, updated_at: now, gz: packed });
           await client.putInkPage({
             kind,
             key,
             page_id: pageId,
-            updated_at: row.updatedAt,
-            gz: bytesToB64(gz),
+            updated_at: now,
+            gz: packed,
           });
         }
       } else {

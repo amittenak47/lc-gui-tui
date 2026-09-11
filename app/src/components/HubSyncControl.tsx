@@ -24,6 +24,7 @@ import {
   localInkAsDtos,
   localInkPageStamps,
   previewInkPages,
+  expandPreviewInkPages,
   splitFootnoteInkHubKey,
   type FootnoteInkBoard,
 } from "../util/inkSync";
@@ -622,9 +623,11 @@ export function HubSyncControl({
             () => [] as { pageId: number; updatedAt: number }[],
           );
           const localInkPages = localInkStamps.map((row) => row.pageId);
-          const preview =
+          const preview = expandPreviewInkPages(
+            padInfo.kind,
             previewPages ??
-            previewInkPages(localInkPages, hubInkPageIds, localInkStamps, hubInkStamps);
+              previewInkPages(localInkPages, hubInkPageIds, localInkStamps, hubInkStamps),
+          );
           const [server, localInk, serverInk, local] = await Promise.all([
             fetchHubBody(),
             localInkAsDtos(padInfo.kind, padInfo.id, preview).catch(() => []),
@@ -687,6 +690,9 @@ export function HubSyncControl({
           conflict: HubPadConflict,
         ): Promise<HubConflictResolution> => {
           if (abort.signal.aborted) return Promise.reject(new WalkAborted());
+          // Keep's reload ticks editSeq. Absorb those until Synced lands, or
+          // the chip falls back to "not synced" on a walk that just finished.
+          absorbReloadEditsRef.current = true;
           stashHubConflict(conflict);
           hostRef.current?.onWalkProgress({
             stage: walkStageRef.current,
