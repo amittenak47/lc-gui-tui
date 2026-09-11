@@ -1,9 +1,9 @@
 /**
- * Finger/pen flick on a conflict pane's paper stack.
+ * Mouse-drag coast on a conflict pane's paper stack.
  *
- * The board owns reading-mode pan with `touch-action: none`. This overlay is
- * a plain overflow scroller, so Windows/Android will not give it the same
- * coast unless we drive `scrollTop` ourselves. Wheel stays native.
+ * Touch and pen use native `overflow` + `touch-action: pan-y`. JS flick used
+ * to `preventDefault` and `setPointerCapture` on those pointers, which killed
+ * native scroll and ate Keep / Drop taps after a gesture.
  */
 
 import { PAN_FRICTION } from "../canvas/flickPredict";
@@ -27,8 +27,14 @@ export function attachOverflowFlick(root: HTMLElement): () => void {
     coast = 0;
   };
 
+  const isMouse = (event: PointerEvent) =>
+    event.pointerType === "mouse" || event.pointerType === "";
+
   const onDown = (event: PointerEvent) => {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (!isMouse(event) || event.button !== 0) return;
+    if ((event.target as HTMLElement | null)?.closest?.("button, .lc-hub-conflict-list")) {
+      return;
+    }
     stopCoast();
     pointerId = event.pointerId;
     lastY = event.clientY;
@@ -46,13 +52,7 @@ export function attachOverflowFlick(root: HTMLElement): () => void {
     if (!armed) {
       if (Math.abs(dy) < ARM_PX) return;
       armed = true;
-      try {
-        root.setPointerCapture(pointerId);
-      } catch {
-        /* capture is best-effort */
-      }
     }
-    event.preventDefault();
     root.scrollTop += dy;
     velY = dy / dt;
   };
@@ -89,14 +89,14 @@ export function attachOverflowFlick(root: HTMLElement): () => void {
   };
 
   root.addEventListener("pointerdown", onDown);
-  root.addEventListener("pointermove", onMove, { passive: false });
-  root.addEventListener("pointerup", onUp);
-  root.addEventListener("pointercancel", onUp);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+  window.addEventListener("pointercancel", onUp);
   return () => {
     stopCoast();
     root.removeEventListener("pointerdown", onDown);
-    root.removeEventListener("pointermove", onMove);
-    root.removeEventListener("pointerup", onUp);
-    root.removeEventListener("pointercancel", onUp);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("pointercancel", onUp);
   };
 }

@@ -469,6 +469,44 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
   return ops;
 }
 
+function yieldToUi(): Promise<void> {
+  const scheduler = (globalThis as unknown as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (scheduler?.yield) return scheduler.yield();
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * Same as {@link decodeInkOps}, with a small CPU budget between input yields.
+ *
+ * Conflict preview used to decode a whole exam on the WebView thread, so Keep /
+ * Drop and flick sat dead for a minute. Waiting one animation frame per 24
+ * strokes also imposed seconds of artificial delay on a large notebook,
+ * especially on tablets with a lower refresh rate.
+ */
+export async function decodeInkOpsAsync(
+  encoded: EncodedInk,
+  yieldEvery = 24,
+): Promise<InkOp[]> {
+  const batchSize = Math.max(1, Math.floor(yieldEvery) || 24);
+  if (encoded.ops.length <= batchSize) return decodeInkOps(encoded);
+  const out: InkOp[] = [];
+  let started = performance.now();
+  for (let i = 0; i < encoded.ops.length; i += batchSize) {
+    out.push(
+      ...decodeInkOps({
+        v: encoded.v,
+        ops: encoded.ops.slice(i, i + batchSize),
+      }),
+    );
+    if (i + batchSize < encoded.ops.length && performance.now() - started >= 5) {
+      await yieldToUi();
+      started = performance.now();
+    }
+  }
+  if (encoded.raw) out.push(...encoded.raw);
+  return out;
+}
+
 /**
  * The ink on a board, whichever way it was written.
  *
