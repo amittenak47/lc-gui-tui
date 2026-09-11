@@ -357,7 +357,9 @@ export function scaleAbout<T extends PaintSceneElement>(element: T, from: SceneB
     y += height;
     height = -height;
   }
-  return { ...element, x, y, width, height };
+  return { ...element, x, y, width, height,
+    ...(element.type === "text" && element.fontSize ? { fontSize: element.fontSize * Math.sqrt(Math.abs(sx * sy)) } : {}),
+  };
 }
 
 /** Scale a rotated box in its own axes so a corner drag follows the shape. */
@@ -414,6 +416,7 @@ export function resizeElementLocal<T extends PaintSceneElement>(
     y: worldCy - nh / 2,
     width: nw,
     height: nh,
+    ...(element.type === "text" && element.fontSize ? { fontSize: element.fontSize * Math.sqrt(Math.abs(sx * sy)) } : {}),
   };
 }
 

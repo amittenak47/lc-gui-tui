@@ -7227,7 +7227,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const y = -view.scrollY + (view.height / view.zoom - height * scale) / 2;
       pieces = pieces.map(element => ({ ...scaleAbout(element,
         { minX, minY, maxX, maxY }, { minX: x, minY: y, maxX: x + width * scale, maxY: y + height * scale }),
-        ...(element.fontSize ? { fontSize: element.fontSize * scale } : {}),
         ...(element.strokeWidth ? { strokeWidth: element.strokeWidth * scale } : {}),
       }));
 

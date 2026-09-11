@@ -10,6 +10,7 @@ import {
   rotateElement,
   rotateAbout,
   scaleElement,
+  scaleAbout,
   sceneElementBounds,
   shapeSpan,
   skeletonFromDrag,
@@ -19,6 +20,17 @@ import {
 } from "./shapeGesture";
 
 describe("skeletonFromDrag", () => {
+  it("scales labels with the rest of a stamp", () => {
+    const label = { type: "text", x: 10, y: 20, width: 50, height: 20, fontSize: 16, text: "Server" };
+    const next = scaleAbout(label, { minX: 0, minY: 0, maxX: 100, maxY: 50 }, { minX: 0, minY: 0, maxX: 200, maxY: 100 });
+    expect(next).toMatchObject({ x: 20, y: 40, width: 100, height: 40, fontSize: 32 });
+  });
+  it.each([0, Math.PI / 2])("scales text when its corner is resized at angle %s", angle => {
+    const x = 50 + 150 * Math.cos(angle) - 75 * Math.sin(angle);
+    const y = 25 + 150 * Math.sin(angle) + 75 * Math.cos(angle);
+    const next = scaleElement({ type: "text", x: 0, y: 0, width: 100, height: 50, fontSize: 16, angle }, "se", x, y, true);
+    expect(next.fontSize).toBeCloseTo(32);
+  });
   it("preserves proportions when resizing a rotated box", () => {
     const original = { type: "rectangle", x: 10, y: 20, width: 100, height: 50, angle: Math.PI / 4 };
     const resized = scaleElement(original, "se", 240, 180, true);
