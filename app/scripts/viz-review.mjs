@@ -26,6 +26,7 @@ try {
   let serial = 0;
   const pending = new Map();
   const errors = [];
+  const openTrace = [];
   const network = [];
   const requests = new Map();
   socket.onmessage = ({ data }) => {
@@ -36,6 +37,7 @@ try {
     if (msg.method === "Network.loadingFailed") network.push(msg.params);
     if (msg.method === "Network.responseReceived" && msg.params.response.status >= 400) network.push(msg.params.response);
     if (msg.method === "Runtime.consoleAPICalled" && msg.params.type === "error") network.push(msg.params.args);
+    if (msg.method === "Runtime.consoleAPICalled" && msg.params.args[0]?.value?.startsWith?.("[lc:open]")) openTrace.push(msg.params.args.map(arg => arg.value));
     const request = pending.get(msg.id);
     if (request) { pending.delete(msg.id); msg.error ? request.reject(new Error(JSON.stringify(msg.error))) : request.resolve(msg.result); }
   };
@@ -67,7 +69,10 @@ try {
       if (point) break;
       await sleep(100);
     }
-    if (!point) throw new Error(`Control not reachable: ${selector}`);
+    if (!point) {
+      await screenshot("unreachable-control");
+      throw new Error(`Control not reachable: ${selector}; ${await evaluate('document.body.innerText')}`);
+    }
     await send("Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", clickCount: 1 });
     if (hold) await sleep(hold);
     await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...point, button: "left", clickCount: 1 });
@@ -94,10 +99,10 @@ try {
   await screenshot("desktop-playing");
   await sleep(1300);
   if (!await evaluate('Boolean(document.querySelector(`[aria-label="Replay"]`))')) throw new Error("Playback did not finish");
-  for (const name of ["trie", "unionfind", "calltree"]) {
+  for (const name of ["trie", "unionfind", "calltree", "dptable"]) {
     await evaluate(`[...document.querySelectorAll("nav button")].find(b => b.textContent === ${JSON.stringify(name)}).click()`);
     await sleep(350);
-    await evaluate('document.querySelector(`[aria-label="Next step"]`).click()');
+    await evaluate('document.querySelector(`[aria-label="Next step"]`)?.click()');
     await sleep(350);
     await screenshot(`desktop-${name}`);
   }
@@ -128,24 +133,54 @@ try {
   if (await evaluate('Boolean(document.querySelector(`[aria-label$="Continue without LLM"]`))')) await press('[aria-label$="Continue without LLM"]', 600);
   await press('[aria-label$="New notebook"]', 600);
   for (let i = 0; i < 200; i++) {
-    if (await evaluate('Boolean(document.querySelector(".lc-toolbar"))')) break;
+    if (await evaluate('Boolean(document.querySelector(`[aria-label="Show toolbar"]`))')) break;
     await sleep(100);
   }
+  if (await evaluate('Boolean(document.querySelector(`[aria-label="Show toolbar"]`))')) await press('[aria-label="Show toolbar"]');
   if (!await evaluate('Boolean(document.querySelector(".lc-toolbar"))')) {
     await screenshot("app-notebook-failed");
     const moduleError = await evaluate('import("/src/canvas/Board.tsx").then(() => "loaded", e => String(e))');
-    throw new Error(`Notebook did not load: ${JSON.stringify({errors, network, moduleError, pending:[...requests.values()], body:await evaluate('document.body.innerText')})}`);
+    throw new Error(`Notebook did not load: ${JSON.stringify({errors, network, moduleError, openTrace, pending:[...requests.values()], body:await evaluate('document.body.innerText')})}`);
   }
   console.log(`Notebook: ${await evaluate('document.body.innerText.slice(0, 1000)')}`);
   await screenshot("app-notebook");
   await press('.lc-toolbar .lc-shapes-wrap > button');
-  await press('.lc-shape-flyout [data-morph-id="shapes"] button:nth-of-type(7)');
+  await press('.lc-shape-flyout .is-active > button:last-child');
   await screenshot("app-shape-library");
   await press('.lc-shapes .lc-shape');
   await screenshot("app-shape-config");
   await press('.lc-shapes .lc-shape-place');
   await sleep(300);
+  if (await evaluate('Boolean(document.querySelector(".lc-shapes"))')) throw new Error("Stamp placement left library open");
+  const stampFits = await evaluate(`(() => {
+    const r = document.querySelector('.lc-scene-select-box')?.getBoundingClientRect();
+    return r && r.width >= 200 && r.x >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight;
+  })()`);
+  if (!stampFits) throw new Error("Placed stamp is too small or outside the viewport");
   await screenshot("app-array-stamp");
+  const rotation = await evaluate(`(() => {
+    const button = document.querySelector('.lc-scene-select-menu [aria-label="Rotate"]');
+    if (!button) throw new Error('Placed stamp was not selected');
+    const r = button.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  })()`);
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", ...rotation, button: "left", clickCount: 1 });
+  const checkAngleCenter = async () => {
+    const offset = await evaluate(`(() => {
+      const r = document.querySelector('.lc-scene-select-menu [aria-label="Rotate"]').getBoundingClientRect();
+      const a = document.querySelector('.lc-scene-select-angle').getBoundingClientRect();
+      return Math.hypot(a.x + a.width / 2 - r.x - r.width / 2, a.y + a.height / 2 - r.y - r.height / 2);
+    })()`);
+    if (offset > 1) throw new Error(`Rotation label drifted ${offset}px from its button`);
+  };
+  for (const delay of [0, 60, 120]) { await sleep(delay); await checkAngleCenter(); }
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: rotation.x + 60, y: rotation.y + 25, button: "left", buttons: 1 });
+  await sleep(80);
+  await checkAngleCenter();
+  await screenshot("app-rotating");
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: rotation.x + 60, y: rotation.y + 25, button: "left", clickCount: 1 });
+  await sleep(180);
+  await screenshot("app-rotated");
   await writeFile(resolve(out, "browser-errors.json"), JSON.stringify(errors, null, 2));
   if (errors.length) throw new Error(`Browser raised ${errors.length} exceptions; see browser-errors.json`);
   console.log(`Visual review passed. Screenshots: ${out}`);
