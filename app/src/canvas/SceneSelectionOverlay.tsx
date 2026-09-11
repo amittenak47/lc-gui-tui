@@ -419,19 +419,10 @@ export const SceneSelectionOverlay = forwardRef<
                   onPointerUp={onPointerUp}
                   onPointerCancel={onPointerCancel}
                 >
-                  <MorphBar
-                    active={spin != null ? "deg" : "icon"}
-                    axis="width"
-                    animateOnMount={false}
-                    className="lc-scene-select-rotate"
-                  >
-                    <div data-morph-id="icon">
-                      <RotateIcon />
-                    </div>
-                    <div data-morph-id="deg">
-                      <span className="lc-scene-select-angle">{spinLabel(spin ?? 0)}</span>
-                    </div>
-                  </MorphBar>
+                  <span className={`lc-scene-select-rotate${spin != null ? " is-spinning" : ""}`} aria-hidden="true">
+                    <span className="lc-scene-select-rotate-icon"><RotateIcon /></span>
+                    <span className="lc-scene-select-angle">{spinLabel(spin ?? 0)}</span>
+                  </span>
                 </button>
                 <button type="button" aria-label="Keep proportions" aria-pressed={keepProportions}
                   title="Keep proportions when resizing corners (Shift)"
