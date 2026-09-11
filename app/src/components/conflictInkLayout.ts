@@ -209,14 +209,16 @@ export function whiteboardInkMergeRows(
 ): { pageId: number; hasLocal: boolean; hasServer: boolean }[] {
   const lumped = rows.length > 0 && rows.every((row) => row.pageId <= 1);
   if (!lumped) {
-    return expandLumpedInkDiffRows(
-      rows,
-      frames,
-      inkPageIdsFromOps(localOps, frames),
-      inkPageIdsFromOps(serverOps, frames),
+    return collapseSpanningInkRows(
+      expandLumpedInkDiffRows(
+        rows,
+        frames,
+        inkPageIdsFromOps(localOps, frames),
+        inkPageIdsFromOps(serverOps, frames),
+      ),
     );
   }
-  if (frames.length <= 1) return rows.map((row) => ({ ...row }));
+  if (frames.length <= 1) return collapseSpanningInkRows(rows);
   const out: { pageId: number; hasLocal: boolean; hasServer: boolean }[] = [];
   for (const frame of frames) {
     if (frame.pageId < 1) continue;
@@ -230,7 +232,29 @@ export function whiteboardInkMergeRows(
       hasServer: server.length > 0,
     });
   }
-  return out.length > 0 ? out : rows.map((row) => ({ ...row }));
+  return out.length > 0 ? out : collapseSpanningInkRows(rows);
+}
+
+/**
+ * Page 0 is the leftover spanning shard, not a sheet. Until ops decode, the
+ * stamp list still names 0 and 1 as two rows — merge them so the tablet is
+ * not asked to Keep a page that does not exist.
+ */
+export function collapseSpanningInkRows(
+  rows: readonly { pageId: number; hasLocal: boolean; hasServer: boolean }[],
+): { pageId: number; hasLocal: boolean; hasServer: boolean }[] {
+  const byId = new Map<number, { pageId: number; hasLocal: boolean; hasServer: boolean }>();
+  for (const row of rows) {
+    const pageId = row.pageId < 1 ? 1 : row.pageId;
+    const prev = byId.get(pageId);
+    if (!prev) {
+      byId.set(pageId, { pageId, hasLocal: row.hasLocal, hasServer: row.hasServer });
+      continue;
+    }
+    prev.hasLocal = prev.hasLocal || row.hasLocal;
+    prev.hasServer = prev.hasServer || row.hasServer;
+  }
+  return [...byId.values()].sort((a, b) => a.pageId - b.pageId);
 }
 
 /** Virtual sheets covering a grown page-1 pad, for the merge list and preview. */
@@ -243,17 +267,30 @@ export function whiteboardConflictFrames(
   return whiteboardMergeFrames(Math.max(1, pageCount, live?.length ?? 0), Math.max(inkMaxY, liveMax));
 }
 
+export type ConflictInkShard = { pageId: number; ops: InkOp[] };
+
+/**
+ * Inflate conflict preview blobs once.
+ *
+ * Page 0 and page 1 on a whiteboard are often the same gzip. Decoding both
+ * (and then again in each pane) is what wedged the tablet merge window.
+ */
 export async function decodeConflictInkPages(
   pages: readonly InkPageDto[] | undefined,
-): Promise<InkOp[]> {
-  const out: InkOp[] = [];
+): Promise<ConflictInkShard[]> {
+  const out: ConflictInkShard[] = [];
+  const seenGz = new Set<string>();
   for (const row of pages ?? []) {
-    if (!row.gz) continue;
+    if (!row.gz || seenGz.has(row.gz)) continue;
+    seenGz.add(row.gz);
     try {
       const encoded = unpackEncodedInk(await bytesFromMaybeGzip(b64ToBytes(row.gz)));
       if (!encoded) continue;
       const ops = decodeInkOps(encoded);
-      if (ops && ops.length > 0) out.push(...ops);
+      if (!ops || ops.length === 0) continue;
+      const pageId =
+        row.kind === "whiteboard" && row.page_id <= 1 ? 1 : row.page_id;
+      out.push({ pageId, ops });
     } catch {
       /* skip a bad shard */
     }

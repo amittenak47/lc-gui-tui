@@ -328,12 +328,16 @@ export function HubConflictSplit({
     maxY: number;
     localOps: InkOp[];
     serverOps: InkOp[];
+    localShards: { pageId: number; ops: InkOp[] }[];
+    serverShards: { pageId: number; ops: InkOp[] }[];
   }>({
     local: [],
     server: [],
     maxY: 0,
     localOps: [],
     serverOps: [],
+    localShards: [],
+    serverShards: [],
   });
 
   const sideLabel = (side: Side) => (side === "local" ? "Local" : otherLabel);
@@ -542,16 +546,26 @@ export function HubConflictSplit({
 
   useEffect(() => {
     if (!conflict) {
-      setInkHits({ local: [], server: [], maxY: 0, localOps: [], serverOps: [] });
+      setInkHits({
+        local: [],
+        server: [],
+        maxY: 0,
+        localOps: [],
+        serverOps: [],
+        localShards: [],
+        serverShards: [],
+      });
       return;
     }
     let gone = false;
     void (async () => {
-      const [localOps, serverOps] = await Promise.all([
+      const [localShards, serverShards] = await Promise.all([
         decodeConflictInkPages(mergeInkDtos(conflict.localInk, overlayInk.local)),
         decodeConflictInkPages(mergeInkDtos(conflict.serverInk, overlayInk.server)),
       ]);
       if (gone) return;
+      const localOps = localShards.flatMap((shard) => shard.ops);
+      const serverOps = serverShards.flatMap((shard) => shard.ops);
       const maxY = Math.max(
         inkOpsBounds(localOps)?.maxY ?? 0,
         inkOpsBounds(serverOps)?.maxY ?? 0,
@@ -570,6 +584,8 @@ export function HubConflictSplit({
         maxY,
         localOps,
         serverOps,
+        localShards,
+        serverShards,
       });
     })();
     return () => {
@@ -972,6 +988,7 @@ export function HubConflictSplit({
             linedPitchPair={lined.pair}
             linedRule={lined.rule}
             focusKey={focusedId}
+            decodedInk={side === "local" ? inkHits.localShards : inkHits.serverShards}
           />
           <ol
             className={["lc-hub-conflict-list", pickingStarted && !valid ? "is-picking" : ""]

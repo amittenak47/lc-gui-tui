@@ -682,6 +682,45 @@ describe("HubConflictSplit ink and labels", () => {
     expect(document.body.textContent).toMatch(/Scratch \(n1, page 1\)/);
     expect(document.body.textContent).not.toMatch(/Handwriting \(page 1\)/);
   });
+
+  it("does not list spanning page 0 as a handwriting row", () => {
+    const body = (updated: number): WhiteboardPadDto => ({
+      id: "w1",
+      title: "Exam 1",
+      updated_at: updated,
+      page_count: 2,
+      board: {
+        elements: [
+          { y: 0, height: 4200, customData: { lcScratchFrame: true, lcScratchPage: 0 } },
+          { y: 4264, height: 4200, customData: { lcScratchFrame: true, lcScratchPage: 1 } },
+        ],
+      } as WhiteboardPadDto["board"],
+      agent: [],
+    });
+    mount({
+      kind: "whiteboard",
+      id: "w1",
+      stage: "pad",
+      detail: "the hub has changes from another device",
+      local: body(10),
+      server: body(20),
+      localInkPageIds: [0, 1],
+      hubInkPageIds: [0, 1],
+      localInkStamps: [
+        { pageId: 0, updatedAt: 10 },
+        { pageId: 1, updatedAt: 11 },
+      ],
+      hubInkStamps: [
+        { pageId: 0, updatedAt: 20 },
+        { pageId: 1, updatedAt: 21 },
+      ],
+    });
+    expect(document.body.textContent).not.toMatch(/Handwriting \(page 0\)/);
+    expect(document.body.textContent).toMatch(/Handwriting \(page 1\)/);
+    expect(
+      document.querySelectorAll('.lc-hub-conflict-preview[aria-busy="true"]'),
+    ).toHaveLength(0);
+  });
 });
 
 /*

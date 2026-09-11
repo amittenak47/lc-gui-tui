@@ -328,4 +328,18 @@ describe("whiteboardInkMergeRows", () => {
     );
     expect(rows).toEqual([{ pageId: 1, hasLocal: true, hasServer: true }]);
   });
+
+  it("does not keep a spanning page-0 stamp as its own row", () => {
+    expect(
+      whiteboardInkMergeRows(
+        [
+          { pageId: 0, hasLocal: true, hasServer: true },
+          { pageId: 1, hasLocal: true, hasServer: true },
+        ],
+        whiteboardMergeFrames(2),
+        [],
+        [],
+      ),
+    ).toEqual([{ pageId: 1, hasLocal: true, hasServer: true }]);
+  });
 });
