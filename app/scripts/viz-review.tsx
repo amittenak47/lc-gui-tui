@@ -9,6 +9,7 @@ import { SHAPES } from "../src/templates/shapes";
 import { renderViz } from "../src/viz/render";
 import { convertToExcalidrawElements } from "../src/canvas/convertSkeletons";
 import { parseVizProgram } from "../src/viz/schema";
+import { DIRK_EDIT_DISTANCE_ONE_STEP } from "../src/viz/fixtures/dirk-qwen3";
 import "../src/styles.css";
 
 const programs = [
@@ -29,6 +30,7 @@ const programs = [
     { label: "Enter fib(3)", cells: [{ fn: "fib", args: [3] }], highlight: [0] },
     { label: "Expand the two branches", cells: [{ fn: "fib", args: [3] }, { fn: "fib", args: [2] }, { fn: "fib", args: [1] }], entries: [[0, 1], [0, 2]], highlight: [1, 2] },
   ] },
+  { ...DIRK_EDIT_DISTANCE_ONE_STEP, frames: DIRK_EDIT_DISTANCE_ONE_STEP.frames.map(frame => ({ ...frame, entries: [...frame.entries, [10, 5]] })) },
 ].map((p) => parseVizProgram(p)!);
 
 function Review() {
