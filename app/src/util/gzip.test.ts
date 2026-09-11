@@ -96,6 +96,44 @@ describe("without CompressionStream", () => {
     expect(await textFromMaybeGzip(compressed)).toBe(text);
   });
 
+  it("does not use DecompressionStream on Android", async () => {
+    const text = JSON.stringify({ v: 1, points: [1, 2, 3] });
+    const compressed = await gzipText(text);
+    if (!isGzip(compressed)) return;
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (Linux; Android 14; SM-X910) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    });
+    const ctor = vi.fn(function DecompressionStream() {
+      throw new Error("Android must not wait on this stream");
+    });
+    vi.stubGlobal("DecompressionStream", ctor);
+    expect(await textFromMaybeGzip(compressed)).toBe(text);
+    expect(ctor).not.toHaveBeenCalled();
+  });
+
+  it("falls back when the stream never finishes", async () => {
+    const text = JSON.stringify({ v: 1, points: [1, 2, 3] });
+    const compressed = await gzipText(text);
+    if (!isGzip(compressed)) return;
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "DecompressionStream",
+      class {
+        constructor() {
+          return new TransformStream();
+        }
+      },
+    );
+    try {
+      const pending = textFromMaybeGzip(compressed);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(await pending).toBe(text);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("round-trips raw bytes the archive path uses", async () => {
     const raw = new Uint8Array([1, 2, 3, 4, 5, 9, 8, 7]);
     const copy = new Uint8Array(raw);

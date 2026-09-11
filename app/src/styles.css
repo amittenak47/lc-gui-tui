@@ -6494,6 +6494,11 @@ body[data-lc-sash-drag="horizontal"] {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
+
+  .lc-hub-conflict-load {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 .lc-home-chooser {

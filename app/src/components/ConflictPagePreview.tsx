@@ -88,6 +88,7 @@ export function ConflictPagePreview({
   linedPitchPair,
   linedRule,
   focusKey,
+  decodedInk,
 }: {
   hash?: string;
   page: number;
@@ -118,6 +119,11 @@ export function ConflictPagePreview({
   linedRule?: LinedRuling | null;
   /** Re-scroll when the focused row changes, even if the page number did not. */
   focusKey?: string;
+  /**
+   * Already-decoded strokes from the split. When this is passed (even empty),
+   * the pane does not gunzip again — that second decode is what wedged Android.
+   */
+  decodedInk?: readonly { pageId: number; ops: InkOp[] }[];
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const docRef = useRef<HTMLDivElement | null>(null);
@@ -136,7 +142,14 @@ export function ConflictPagePreview({
   );
   const [decodeGen, setDecodeGen] = useState(0);
   const [decodeDone, setDecodeDone] = useState(true);
-  const [loadPhase, setLoadPhase] = useState<"busy" | "done" | "idle">("busy");
+  /*
+   * Lined paper is CSS. A busy overlay on top of it is what made the tablet
+   * look blank (the sheets were already below the spinner). PDF/markdown still
+   * wait for a width.
+   */
+  const [loadPhase, setLoadPhase] = useState<"busy" | "done" | "idle">(
+    hash || sourceText ? "busy" : "idle",
+  );
   const [inkPainted, setInkPainted] = useState(false);
   const inkPagesRef = useRef(inkPages);
   inkPagesRef.current = inkPages;
@@ -220,17 +233,27 @@ export function ConflictPagePreview({
   const inkSignature = (inkPages ?? [])
     .map((row) => `${row.page_id}:${row.updated_at}:${row.gz?.length ?? 0}`)
     .join("|");
+  const parentOwnsInk = decodedInk !== undefined;
+  const waitForHarness = Boolean(hash) || Boolean(sourceText);
 
   useEffect(() => {
     setInkPainted(false);
-    setLoadPhase("busy");
+    setLoadPhase(waitForHarness ? "busy" : "idle");
+    if (parentOwnsInk) {
+      setDecodedShards(
+        (decodedInk ?? []).map((shard) => ({ pageId: shard.pageId, ops: shard.ops })),
+      );
+      setDecodeDone(true);
+      return;
+    }
     setDecodedShards([]);
     const rows = inkPagesRef.current ?? [];
     setDecodeDone(!(showInk && rows.some((row) => row.gz)));
     setDecodeGen((n) => n + 1);
-  }, [inkSignature, showInk, hash, sourceText]);
+  }, [inkSignature, showInk, hash, sourceText, parentOwnsInk, decodedInk, waitForHarness]);
 
   useEffect(() => {
+    if (parentOwnsInk) return;
     if (!showInk) {
       setDecodedShards([]);
       setDecodeDone(true);
@@ -260,7 +283,7 @@ export function ConflictPagePreview({
     return () => {
       gone = true;
     };
-  }, [showInk, decodeGen]);
+  }, [showInk, decodeGen, parentOwnsInk]);
 
   /*
    * Scrolling this pane has to reach the same paint path the reader uses.
@@ -427,11 +450,14 @@ export function ConflictPagePreview({
 
   useLayoutEffect(() => {
     const doc = docRef.current;
-    if (!showInk) return;
+    if (!showInk) {
+      setInkPainted(true);
+      return;
+    }
     if (!doc || inkSlots.length === 0) {
-      if (decodedOps.length === 0 && (inkPagesRef.current?.length ?? 0) === 0) {
-        setInkPainted(true);
-      }
+      // Nothing to paint yet (or ever). Do not hold the overlay for a slot
+      // that the spanning page-0 blob will never own.
+      setInkPainted(true);
       return;
     }
     const frames = usePaper ? paperFrames : stablePageFrames;
@@ -489,10 +515,11 @@ export function ConflictPagePreview({
     droppedPages,
   ]);
 
-  const paperReady =
-    (usePdf ? cssWidth > 0 : useMarkdown ? true : cssWidth > 0) &&
-    !(showInk && !decodeDone) &&
-    !(showInk && inkedPages.length > 0 && cssWidth > 0 && !inkPainted);
+  const paperReady = waitForHarness
+    ? (usePdf ? cssWidth > 0 : useMarkdown ? true : cssWidth > 0) &&
+      !(showInk && !decodeDone) &&
+      !(showInk && inkedPages.length > 0 && cssWidth > 0 && !inkPainted)
+    : true;
 
   useEffect(() => {
     if (loadPhase !== "busy") return;
