@@ -15,11 +15,15 @@ import {
   keepLivePaintPump,
   LIVE_HUD_FLUSH_MS,
   mutationIsInkChrome,
+  pageStageMatchesCanvas,
   remeshOnCameraMovingEnd,
+  remeshOnNestedHostScroll,
   samePaintedView,
   shiftSnapOnCameraRebase,
   shouldFlushLiveHud,
   skipCommittedReplay,
+  skipHostBoundPresentWhileCameraBusy,
+  skipHostBoundPresentWhilePagePan,
   skipReplayOnWheelAbort,
   usePreStrokeStamp,
 } from "./liveHost";
@@ -64,6 +68,16 @@ function simulatePrintBurst(opts: {
     t += opts.betweenMs;
   }
   return { maxDownBlockMs: maxBlock, lastDownBlockMs: lastBlock };
+}
+
+function simulateFenceScroll(opts: {
+  samples: number;
+  remeshMs: number;
+  restampMs: number;
+  remeshEachSample: boolean;
+}): { maxSampleMs: number; totalMs: number } {
+  const sampleMs = opts.remeshEachSample ? opts.remeshMs : opts.restampMs;
+  return { maxSampleMs: sampleMs, totalMs: sampleMs * opts.samples };
 }
 
 describe("live host contract", () => {
@@ -177,6 +191,39 @@ describe("live host contract", () => {
   it("slides pan but keeps a real camera rebase atomic", () => {
     expect(shiftSnapOnCameraRebase()).toBe(true);
     expect(instantReplayOnCameraRebase()).toBe(true);
+  });
+
+  it("does not remesh the notebook on nested fence scroll", () => {
+    expect(remeshOnNestedHostScroll()).toBe(false);
+    expect(skipHostBoundPresentWhileCameraBusy()).toBe(false);
+    expect(skipHostBoundPresentWhilePagePan()).toBe(true);
+  });
+
+  it("rejects page stages from a different backing-store size", () => {
+    expect(pageStageMatchesCanvas({ width: 100, height: 200 }, { width: 100, height: 200 })).toBe(
+      true,
+    );
+    expect(pageStageMatchesCanvas({ width: 100, height: 200 }, { width: 100, height: 201 })).toBe(
+      false,
+    );
+    expect(pageStageMatchesCanvas(null, { width: 100, height: 200 })).toBe(false);
+  });
+
+  it("keeps nested fence samples on a restamp, not a remesh", () => {
+    const remesh = simulateFenceScroll({
+      samples: 20,
+      remeshMs: 40,
+      restampMs: 2,
+      remeshEachSample: true,
+    });
+    expect(remesh.maxSampleMs).toBe(40);
+    const restamp = simulateFenceScroll({
+      samples: 20,
+      remeshMs: 40,
+      restampMs: 2,
+      remeshEachSample: remeshOnNestedHostScroll(),
+    });
+    expect(restamp.maxSampleMs).toBe(2);
   });
 
   it("ignores HUD mutations under the ink host", () => {

@@ -15,10 +15,11 @@ import {
 import { WHEEL_OPEN_MS } from "../util/gesture";
 import { sashDragActive } from "../util/splitResize";
 import { isLoadingDoodleActive } from "../util/loadingDoodleActivity";
-import { isCameraBusy, yieldToInput } from "../util/cameraBusy";
+import { yieldToInput } from "../util/cameraBusy";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { thinInkPointsForStorage } from "./inkSmoothing";
 import { InkPageBook } from "./inkPageCache";
+import { HostInkRasterCache, InkGeometrySnapshot } from "./inkLab/hostRaster";
 import { pageIdAtViewport, type PageFrame } from "./inkPageIndex";
 import { InkTileCache, inkOpBounds } from "./inkTiles";
 import { canvasBitmapFromClient } from "./canvasPointer";
@@ -40,10 +41,14 @@ import {
   instantReplayOnUndo,
   keepLivePaintPump,
   mutationIsInkChrome,
+  pageStageMatchesCanvas,
   remeshOnCameraMovingEnd,
+  remeshOnNestedHostScroll,
   samePaintedView,
   shouldFlushLiveHud,
   skipCommittedReplay,
+  skipHostBoundPresentWhileCameraBusy,
+  skipHostBoundPresentWhilePagePan,
   skipReplayOnWheelAbort,
   usePreStrokeStamp,
 } from "./inkLab/liveHost";
@@ -102,7 +107,9 @@ import {
   rememberBoardScrollHosts,
   mergeHostScrollSnapshots,
   pickSettledHostScroll,
-  pinHostScrollSnapshot,
+  restoreListedHostScroll,
+  snapshotListedHostScroll,
+  mutationAffectsScrollHosts,
   restoreDroppedHostScroll,
   snapshotHostScrollIn,
   upsertHostScrollSnapshot,
@@ -270,6 +277,17 @@ function paintInkStamps(
   hosts: ScrollHostLookup,
 ): void {
   paintRasterInk(sctx, paintView, ops, null, dpr, clip, false);
+  paintHostBoundLayer(sctx, paintView, ops, dpr, clip, hosts);
+}
+
+function paintHostBoundLayer(
+  sctx: CanvasRenderingContext2D,
+  paintView: ViewportTransform,
+  ops: readonly InkOp[],
+  dpr: number,
+  clip: SceneBounds | null,
+  hosts: ScrollHostLookup,
+): void {
   if (hosts.size === 0 && !ops.some((op) => isHostBoundOp(op))) return;
   setInkSceneTransform(sctx, paintView, dpr);
   if (clip) {
@@ -280,6 +298,25 @@ function paintInkStamps(
   }
   paintHostBoundOps(sctx, ops, hosts, paintView.zoom * dpr, undefined, paintView.zoom);
   if (clip) sctx.restore();
+}
+
+function capturePageStage(
+  pageRef: { current: HTMLCanvasElement | null },
+  stage: HTMLCanvasElement,
+): void {
+  let page = pageRef.current;
+  if (!page) {
+    page = document.createElement("canvas");
+    pageRef.current = page;
+  }
+  if (page.width !== stage.width) page.width = stage.width;
+  if (page.height !== stage.height) page.height = stage.height;
+  const pctx = page.getContext("2d");
+  if (!pctx) return;
+  pctx.setTransform(1, 0, 0, 1, 0, 0);
+  pctx.globalCompositeOperation = "copy";
+  pctx.drawImage(stage, 0, 0);
+  pctx.globalCompositeOperation = "source-over";
 }
 
 function bindInkOpToHost<T extends InkOp>(op: T, host: ScrollHostPaintState | null): T {
@@ -379,6 +416,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const primeSnapRef = useRef<Promise<void> | null>(null);
     const tilesRef = useRef<InkTileCache | null>(null);
     const tileStageRef = useRef<HTMLCanvasElement | null>(null);
+    const pageStageRef = useRef<HTMLCanvasElement | null>(null);
+    const pageGeometryRef = useRef(new InkGeometrySnapshot());
+    const hostRasterRef = useRef(new HostInkRasterCache());
+    const presentedHostsRef = useRef<ScrollHostLookup>(new Map());
     const tileReadyRef = useRef<() => void>(() => {});
     const committedBuildRef = useRef(false);
     const bookRef = useRef(new InkPageBook());
@@ -572,12 +613,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const holdNestedScroll = useCallback(() => {
       const board = boardRoot();
       if (!board) return;
-      restoreDroppedHostScroll(board, lastHostScrollRef.current);
+      if (!nestedHostsRef.current || nestedHostsRef.current.some(h => !h.el.isConnected)) fillNestedHosts(board);
       const pin = strokeHostPinRef.current;
-      if (!pin) return;
-      const el = pinHostScrollSnapshot(board, pin);
+      const el = restoreListedHostScroll(nestedHostsRef.current ?? [], lastHostScrollRef.current, pin);
       if (el) strokeHostElRef.current = el;
-    }, [boardRoot]);
+    }, [boardRoot, fillNestedHosts]);
 
     const captureStrokeHost = useCallback(
       (clientX: number, clientY: number) => {
@@ -626,7 +666,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           (s) => s.doc === live.doc && s.key === live.key,
         );
         const pin = pickSettledHostScroll(live, remembered);
-        const pinnedEl = pinHostScrollSnapshot(board, pin) ?? hostEl;
+        if (hostEl.scrollLeft !== pin.left) hostEl.scrollLeft = pin.left;
+        if (hostEl.scrollTop !== pin.top) hostEl.scrollTop = pin.top;
+        const pinnedEl = hostEl;
         lastHostScrollRef.current = upsertHostScrollSnapshot(lastHostScrollRef.current, pin);
         strokeHostPinRef.current = pin;
         strokeHostElRef.current = pinnedEl;
@@ -728,7 +770,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         replayAllowPausedRef.current = allowPaused;
         const tiles = ensureTiles();
         tiles.setSuspended(splitPausedRef.current && !allowPaused);
-        const committed = bookRef.current.paintOps();
+        let committed = bookRef.current.paintOps();
+        const replayGeometry = new InkGeometrySnapshot();
+        replayGeometry.capture(committed);
         tiles.setClip(inkPaintClip(clipRef.current, inkOpsBounds(committed)));
         tiles.syncOpsDeferred(committed);
 
@@ -754,6 +798,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (splitPausedRef.current && !allowPaused) return;
           if (sashDragActive()) return;
 
+          const latest = bookRef.current.paintOps();
+          if (!replayGeometry.matches(latest)) {
+            committed = latest;
+            replayGeometry.capture(latest);
+            tiles.setClip(inkPaintClip(clipRef.current, inkOpsBounds(latest)));
+            tiles.syncOpsDeferred(latest);
+          }
+
           let stage = tileStageRef.current;
           if (!stage) {
             stage = document.createElement("canvas");
@@ -772,11 +824,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           sctx.clearRect(0, 0, stage.width, stage.height);
           const { view: liveView, paintView: livePaint, dpr: liveDpr, marginY: liveMargin } =
             readViews();
-          // First present slice-rasters this camera under the overlay. A pan
-          // ride waits on the same coverage so a sparse worker blit cannot
-          // replace the last complete snap.
+          // Never publish tile holes over the last complete camera. With a
+          // worker, camera motion only blits; no main-thread stroke remeshing.
           const riding = Boolean(canvas.style.transform);
-          tiles.setSliceVisible(!riding);
+          tiles.setSliceVisible(!riding && preparingRef.current);
           tiles.draw(sctx, livePaint, liveDpr);
           if (!tiles.covered) return;
           tiles.setSliceVisible(false);
@@ -787,26 +838,21 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             return;
           }
 
+          capturePageStage(pageStageRef, stage);
+          pageGeometryRef.current.capture(committed.filter(op => !isHostBoundOp(op)));
           const hosts = scrollHostLookup();
-          if (hosts.size > 0 || committed.some((op) => isHostBoundOp(op))) {
-            setInkSceneTransform(sctx, livePaint, liveDpr);
-            const box = clipRef.current;
-            if (box) {
-              sctx.save();
-              sctx.beginPath();
-              sctx.rect(box.minX, box.minY, box.maxX - box.minX, box.maxY - box.minY);
-              sctx.clip();
-            }
-            paintHostBoundOps(
-              sctx,
-              committed,
-              hosts,
-              livePaint.zoom * liveDpr,
-              undefined,
-              livePaint.zoom,
-            );
-            if (box) sctx.restore();
+          hostRasterRef.current.sync(committed);
+          sctx.save();
+          setInkSceneTransform(sctx, livePaint, liveDpr);
+          const clip = clipRef.current;
+          if (clip) {
+            sctx.beginPath();
+            sctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
+            sctx.clip();
           }
+          hostRasterRef.current.paint(sctx, hosts, livePaint.zoom * liveDpr);
+          sctx.restore();
+          presentedHostsRef.current = hosts;
 
           // Keep the old camera visible while tiles are prepared. Replacing
           // the snap, dropping the CSS ride, and painting happen in one tick.
@@ -833,13 +879,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             height: liveView.height,
             marginY: liveMargin,
           };
-          // Pixel history is camera-local. New strokes can repopulate these
-          // fast-path stacks; saved strokes stay in the scene tile cache.
-          overlayRef.current = [];
-          overlayRedoRef.current = [];
           committedBuildRef.current = false;
           replayAllowPausedRef.current = false;
           tiles.setSuspended(splitPausedRef.current);
+          // A finished callback must never later overwrite a newly lifted letter.
+          overlayRef.current = [];
+          overlayRedoRef.current = [];
           tileReadyRef.current = () => {};
           // Instant camera rebase must drop ink CSS and lined-paper ride in
           // this turn (Board's waiter clears paper). Two rAFs at 90Hz is two
@@ -856,6 +901,74 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         else replayRafRef.current = requestAnimationFrame(step);
       });
     }, [ensureTiles, readViews, scrollHostLookup]);
+
+    const presentHostBoundOnly = useCallback((): boolean => {
+      if (drawingRef.current || preparingRef.current) return false;
+      if (splitPausedRef.current) return false;
+      if (skipHostBoundPresentWhilePagePan() && cameraMovingRef.current) return false;
+      if (skipHostBoundPresentWhileCameraBusy()) return false;
+      if (committedBuildRef.current) return false;
+      if (!bookRef.current.hasHostBoundInk()) return false;
+      const page = pageStageRef.current;
+      const engine = engineRef.current;
+      const canvas = canvasRef.current;
+      if (!page || !engine || !canvas) return false;
+      if (!pageStageMatchesCanvas(page, canvas)) return false;
+      const { view, paintView, dpr, marginY } = readViews();
+      const next = {
+        scrollX: view.scrollX,
+        scrollY: view.scrollY,
+        zoom: view.zoom,
+        width: view.width,
+        height: view.height,
+        marginY,
+      };
+      if (!samePaintedView(paintedViewRef.current, next)) return false;
+      const committed = bookRef.current.paintOps();
+      // A page cache from before the latest letter/undo/worker bake is unsafe.
+      if (!pageGeometryRef.current.matches(committed.filter(op => !isHostBoundOp(op)))) return false;
+      const hosts = scrollHostLookup();
+      const oldHosts = presentedHostsRef.current;
+      // Layout changes need one complete replay, not a scroll-only patch.
+      if (hosts.size !== oldHosts.size) return false;
+      for (const [key, h] of hosts) {
+        const old = oldHosts.get(key);
+        if (!old || old.bounds.minX !== h.bounds.minX || old.bounds.minY !== h.bounds.minY ||
+            old.bounds.maxX !== h.bounds.maxX || old.bounds.maxY !== h.bounds.maxY) return false;
+      }
+      hostRasterRef.current.sync(committed);
+      const scale = paintView.zoom * dpr;
+      for (const [key, host] of hosts) {
+        const old = oldHosts.get(key)!;
+        if (old.scrollLeft === host.scrollLeft && old.scrollTop === host.scrollTop) continue;
+        // Undo patches contain pixels at the old nested scroll position.
+        snapUndoRef.current = [];
+        snapRedoRef.current = [];
+        pendingStampPatchRef.current = null;
+        const b = host.bounds;
+        const x = Math.max(0, Math.floor((b.minX + paintView.scrollX) * scale));
+        const y = Math.max(0, Math.floor((b.minY + paintView.scrollY) * scale));
+        const right = Math.min(canvas.width, Math.ceil((b.maxX + paintView.scrollX) * scale));
+        const bottom = Math.min(canvas.height, Math.ceil((b.maxY + paintView.scrollY) * scale));
+        if (right <= x || bottom <= y) continue;
+        engine.redrawSnapRegion({ x, y, w: right - x, h: bottom - y }, sctx => {
+          sctx.drawImage(page, x, y, right - x, bottom - y, x, y, right - x, bottom - y);
+          setInkSceneTransform(sctx, paintView, dpr);
+          const clip = clipRef.current;
+          if (clip) {
+            sctx.beginPath();
+            sctx.rect(clip.minX, clip.minY, clip.maxX - clip.minX, clip.maxY - clip.minY);
+            sctx.clip();
+          }
+          hostRasterRef.current.paint(sctx, hosts, scale, {
+            minX: x / scale - paintView.scrollX, minY: y / scale - paintView.scrollY,
+            maxX: right / scale - paintView.scrollX, maxY: bottom / scale - paintView.scrollY,
+          });
+        });
+      }
+      presentedHostsRef.current = hosts;
+      return true;
+    }, [readViews, scrollHostLookup]);
 
     const forgetPixelHistory = useCallback(() => {
       snapUndoRef.current = [];
@@ -981,6 +1094,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           committedBuildRef.current = false;
           tileReadyRef.current = () => {};
           bookRef.current.clear();
+          pageStageRef.current = null;
+          hostRasterRef.current.sync([]);
           ensureTiles().setOps([]);
           overlayRef.current = [];
           overlayRedoRef.current = [];
@@ -1084,6 +1199,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         replayCommitted(onlyHostBound = false) {
           if (drawingRef.current || preparingRef.current) return;
           if (onlyHostBound && !bookRef.current.hasHostBoundInk()) return;
+          if (onlyHostBound && presentHostBoundOnly()) return;
           rebuildAndReplay(false, false);
         },
         primeSnap() {
@@ -1222,6 +1338,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         ensureTiles,
         forgetPixelHistory,
         presentCommitted,
+        presentHostBoundOnly,
         presentIfCameraMoved,
         rebuildAndReplay,
         stampOpOntoSnap,
@@ -2062,17 +2179,23 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           }
           if (drawingRef.current) return;
         } else {
-          lastHostScrollRef.current = snapshotHostScrollIn(board);
+          lastHostScrollRef.current = snapshotListedHostScroll(nestedHostsRef.current ?? []);
         }
         if (!bookRef.current.hasHostBoundInk()) return;
-        if (cameraMovingRef.current || isCameraBusy()) return;
+        if (skipHostBoundPresentWhilePagePan() && cameraMovingRef.current) return;
+        if (skipHostBoundPresentWhileCameraBusy()) return;
         if (frame != null) return;
         frame = requestAnimationFrame(() => {
           frame = null;
           if (drawingRef.current || splitPausedRef.current) return;
+          // The pending replay reads the latest offsets. Restarting it on
+          // every scroll event starves coverage and repeatedly sorts the book.
+          if (committedBuildRef.current || cameraMovingRef.current) return;
           if (toolRef.current) holdNestedScroll();
-          forgetPixelHistory();
-          presentCommitted();
+          if (remeshOnNestedHostScroll() || !presentHostBoundOnly()) {
+            forgetPixelHistory();
+            presentCommitted(null, false);
+          }
         });
       };
       const detachHosts = () => {
@@ -2096,6 +2219,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         typeof MutationObserver === "function"
           ? new MutationObserver((records) => {
               if (mutationIsInkChrome(records, hostRef.current)) return;
+              if (!mutationAffectsScrollHosts(records)) return;
               rescanHosts();
               if (drawingRef.current) return;
               if (toolRef.current) {
@@ -2125,7 +2249,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         ro?.disconnect();
         if (frame != null) cancelAnimationFrame(frame);
       };
-    }, [enabled, fillNestedHosts, forgetPixelHistory, holdNestedScroll, presentCommitted]);
+    }, [enabled, fillNestedHosts, forgetPixelHistory, holdNestedScroll, presentCommitted, presentHostBoundOnly]);
 
     useEffect(() => {
       if (!enabled) return;

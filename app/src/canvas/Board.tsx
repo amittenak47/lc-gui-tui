@@ -58,7 +58,6 @@ import {
   cameraPulseSettleMs,
   noteCameraBusy,
   noteCameraIdlePulse,
-  waitWhileCameraBusy,
 } from "../util/cameraBusy";
 import { noteReadingPointerDown } from "../util/inputLatency";
 import { traceOpen } from "../util/messageOf";
@@ -74,7 +73,6 @@ import {
   isDrawPageRegion,
 } from "../templates/drawPageGrowth";
 import { INK_REGION_GAP, INK_REGION_PAD, inkRegionSplit } from "./inkRegionSplit";
-import { idleRemeshAfterStrokeMs } from "./inkLab/liveHost";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
 import { MOBILE_REGION_ORDER, REGION_GUTTER, REGION_MIN, REGION_BLURB, REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
@@ -240,6 +238,10 @@ import {
   invalidateBoardScrollHostLayout,
   isInkPadTarget,
   restoreHostScrollIn,
+  restoreListedHostScroll,
+  snapshotListedHostScroll,
+  listScrollHostsInBoard,
+  mutationAffectsScrollHosts,
   scrollHostLookupFromSlot,
   slotCssPerScene,
   snapshotHostScrollIn,
@@ -1440,11 +1442,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     onMarksSlotRef.current?.(node);
   }, []);
-  const syncMarksSlotFrom = (content: HTMLElement) => {
+  const syncMarksSlotFrom = (content: HTMLElement, measure = true) => {
     const marks = marksSlotNodeRef.current;
     if (!marks) return;
     marks.style.transform = content.style.transform;
-    marks.style.height = `${content.offsetHeight}px`;
+    // Height changes on layout, not camera translation. Reading offsetHeight
+    // after transform writes forces document layout on every scroll frame.
+    if (measure) marks.style.height = `${content.offsetHeight}px`;
   };
 
   const [contentSceneWidth, setContentSceneWidth] = useState(1);
@@ -2604,7 +2608,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const node = contentSlotNodeRef.current;
     if (node) {
       node.style.transform = contentSlotCssTransform(next);
-      syncMarksSlotFrom(node);
+      syncMarksSlotFrom(node, false);
     }
     return next;
   };
@@ -2728,33 +2732,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const saved = pendingHostScrollRef.current ?? [];
     restoreHostScrollIn(contentSlotNodeRef.current, saved);
     rememberedHostScrollRef.current = saved;
-    let idleId: number | null = null;
-    let timeoutId: number | null = null;
     const replay = () => {
       restoreHostScrollIn(contentSlotNodeRef.current, saved);
       rememberedHostScrollRef.current = saved;
       refreshPanRideNodes();
       pendingHostScrollRef.current = null;
-      const run = () => {
-        idleId = null;
-        timeoutId = null;
-        void waitWhileCameraBusy().then(() => {
-          rasterInkRef.current?.replayCommitted(true);
-        });
-      };
-      if (typeof requestIdleCallback === "function") {
-        idleId = requestIdleCallback(run, { timeout: idleRemeshAfterStrokeMs() });
-      } else {
-        timeoutId = window.setTimeout(run, idleRemeshAfterStrokeMs());
-      }
+      // A tool switch is input, not background work. The ink layer either
+      // patches changed host offsets or schedules its interruptible replay.
+      rasterInkRef.current?.replayCommitted(true);
     };
     const id = requestAnimationFrame(replay);
     return () => {
       cancelAnimationFrame(id);
-      if (idleId != null && typeof cancelIdleCallback === "function") {
-        cancelIdleCallback(idleId);
-      }
-      if (timeoutId != null) window.clearTimeout(timeoutId);
     };
   }, [annotateCode, interactive, refreshPanRideNodes]);
 
@@ -5270,24 +5259,29 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const slot = contentSlotNodeRef.current;
     if (!slot) return;
     const freeze = annotateCode && inkToolActive;
-    const onScroll = () => {
+    let listed = listScrollHostsInBoard(slot);
+    const rememberOrRestore = () => {
       if (freeze) {
-        restoreHostScrollIn(slot, rememberedHostScrollRef.current);
+        restoreListedHostScroll(listed, rememberedHostScrollRef.current, null, true);
         return;
       }
-      rememberedHostScrollRef.current = snapshotHostScrollIn(slot);
+      rememberedHostScrollRef.current = snapshotListedHostScroll(listed);
+    };
+    const onScroll = (event: Event) => {
+      if (!listed.some(host => host.el === event.target)) listed = listScrollHostsInBoard(slot);
+      rememberOrRestore();
     };
     slot.addEventListener("scroll", onScroll, true);
     const mo =
       typeof MutationObserver === "function"
-        ? new MutationObserver(() => {
-            if (freeze) restoreHostScrollIn(slot, rememberedHostScrollRef.current);
-            else rememberedHostScrollRef.current = snapshotHostScrollIn(slot);
+        ? new MutationObserver(records => {
+            if (!mutationAffectsScrollHosts(records)) return;
+            listed = listScrollHostsInBoard(slot);
+            rememberOrRestore();
           })
         : null;
     mo?.observe(slot, { childList: true, subtree: true });
-    if (freeze) restoreHostScrollIn(slot, rememberedHostScrollRef.current);
-    else rememberedHostScrollRef.current = snapshotHostScrollIn(slot);
+    rememberOrRestore();
     return () => {
       slot.removeEventListener("scroll", onScroll, true);
       mo?.disconnect();

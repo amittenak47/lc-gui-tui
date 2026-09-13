@@ -15,8 +15,10 @@ import {
   instantReplayOnUndo,
   keepLivePaintPump,
   remeshOnCameraMovingEnd,
+  remeshOnNestedHostScroll,
   shiftSnapOnCameraRebase,
   skipCommittedReplay,
+  skipHostBoundPresentWhileCameraBusy,
   skipReplayOnWheelAbort,
 } from "./inkLab/liveHost";
 import { shouldCompositeLive } from "./inkLab/displayHz";
@@ -71,6 +73,11 @@ describe("WhiteboardInkLab", () => {
   it("does not remesh on letter lift; waits until the pen is idle", () => {
     expect(idleRemeshAfterStrokeMs()).toBe(400);
     expect(remeshOnHostBoundLift()).toBe(false);
+  });
+
+  it("restamps host-bound ink on nested scroll instead of remeshing", () => {
+    expect(remeshOnNestedHostScroll()).toBe(false);
+    expect(skipHostBoundPresentWhileCameraBusy()).toBe(false);
   });
 
   it("skips ink canvas CSS writes when the park already matches", () => {

@@ -14,6 +14,42 @@ beforeAll(() => {
 });
 
 describe("Ink lab live path", () => {
+  it("replaces transparent host regions without deleting newer ink elsewhere", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.redrawSnap(ctx => { ctx.fillStyle = "red"; ctx.fillRect(20, 20, 20, 20); });
+    engine.paint();
+    engine.down({ x: 280, y: 180, p: 0.5, t: 0 });
+    engine.move([{ x: 340, y: 180, p: 0.5, t: 16 }]);
+    engine.liftRaw(); // No rAF or idle timer needed to display a short letter.
+    const ctx = canvas.getContext("2d")!;
+    const before = ctx.getImageData(260, 160, 100, 40).data;
+    expect(before.some((v, i) => i % 4 === 3 && v > 0)).toBe(true);
+    engine.redrawSnapRegion({ x: 10, y: 10, w: 50, h: 50 }, () => {});
+    expect(ctx.getImageData(25, 25, 1, 1).data[3]).toBe(0);
+    expect(ctx.getImageData(260, 160, 100, 40).data).toEqual(before);
+    engine.paint();
+    expect(ctx.getImageData(260, 160, 100, 40).data).toEqual(before);
+    engine.destroy();
+  });
+
+  it("does not accumulate translucent background alpha inside repeated live clips", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.redrawSnap(ctx => { ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fillRect(0, 0, 400, 300); });
+    engine.paint();
+    engine.down({ x: 40, y: 100, p: 0.5, t: 0 });
+    engine.move([{ x: 220, y: 100, p: 0.5, t: 16 }]);
+    engine.paint();
+    const ctx = canvas.getContext("2d")!;
+    const first = ctx.getImageData(100, 94, 1, 1).data;
+    engine.paint(); engine.paint();
+    expect(ctx.getImageData(100, 94, 1, 1).data).toEqual(first);
+    engine.destroy();
+  });
+
   it("does not darken older translucent ink when another stroke lifts", () => {
     const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
     const engine = createInkLabEngine({ sdf: false });

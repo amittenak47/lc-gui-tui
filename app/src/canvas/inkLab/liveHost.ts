@@ -138,6 +138,40 @@ export function instantReplayOnCameraRebase(): boolean {
   return true;
 }
 
+/**
+ * Nested `pre.scrollLeft` must not remesh tiles. Host-bound ink is not in the
+ * tile cache; restamp it from the last page-only blit. Full `presentCommitted`
+ * on every sample is the 5–30fps fence and the frozen overlay (HTML moves,
+ * AABB pixels stay).
+ */
+export function remeshOnNestedHostScroll(): boolean {
+  return false;
+}
+
+/**
+ * Android holds `isCameraBusy` for 900ms after a flick. Skipping the host-bound
+ * restamp in that window is ink gone until the fence is touched.
+ */
+export function skipHostBoundPresentWhileCameraBusy(): boolean {
+  return false;
+}
+
+/**
+ * Page pan already CSS-translates the snap with the `<pre>`. Restamping during
+ * that ride paints live-camera host-bound onto an old-camera bitmap.
+ */
+export function skipHostBoundPresentWhilePagePan(): boolean {
+  return true;
+}
+
+/** Cached page blit is reusable only at the same backing-store size. */
+export function pageStageMatchesCanvas(
+  page: { width: number; height: number } | null | undefined,
+  canvas: { width: number; height: number },
+): boolean {
+  return page != null && page.width === canvas.width && page.height === canvas.height;
+}
+
 /** Pan settle must not remesh. Slide the committed snap; fill the new strip. */
 export function shiftSnapOnCameraRebase(): boolean {
   return true;

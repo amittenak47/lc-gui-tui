@@ -128,6 +128,8 @@ export type InkLabEngine = {
    * presents this plus any live SDF.
    */
   redrawSnap(paint: (ctx: CanvasRenderingContext2D) => void): void;
+  /** Replace and present only a device-pixel region; leave other live pixels alone. */
+  redrawSnapRegion(box: { x: number; y: number; w: number; h: number }, paint: (ctx: CanvasRenderingContext2D) => void): void;
   /**
    * Replace the committed snap with SDF capsules for these overlay-space
    * spines. Camera / restore. Not the 2D miter strip. No-op while a live
@@ -886,7 +888,9 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
           sdf.draw(fullBox());
         } else {
           sdf.erase(box);
-          sdf.redraw(box, Math.max(0, start - 2));
+          // A returning tail can cross an old prefix. Erasing this rectangle
+          // also erases that prefix, so redraw all resident instances in it.
+          sdf.redraw(box, 0);
         }
       }
       if (clip) {
@@ -913,7 +917,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       }
       fillMiterStroke(
         ctx,
-        start > 0 ? points.slice(start) : points,
+        points,
         end,
         INK_RGB,
       );
@@ -994,6 +998,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       return;
     }
     if (src) {
+      ctx.clearRect(clip.x, clip.y, clip.w, clip.h);
       ctx.drawImage(src, clip.x, clip.y, clip.w, clip.h, clip.x, clip.y, clip.w, clip.h);
     } else {
       ctx.clearRect(clip.x, clip.y, clip.w, clip.h);
@@ -1299,6 +1304,24 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       sctx.setTransform(1, 0, 0, 1, 0, 0);
       sctx.clearRect(0, 0, snap.width, snap.height);
       paint(sctx);
+    },
+    redrawSnapRegion(box, paint) {
+      if (drawing || !host || !snap) return;
+      const sctx = snap.getContext("2d");
+      const ctx = host.getContext("2d");
+      if (!sctx || !ctx) return;
+      sctx.save();
+      sctx.setTransform(1, 0, 0, 1, 0, 0);
+      sctx.beginPath();
+      sctx.rect(box.x, box.y, box.w, box.h);
+      sctx.clip();
+      sctx.clearRect(box.x, box.y, box.w, box.h);
+      paint(sctx);
+      sctx.restore();
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      presentHost(ctx, box, snap);
+      ctx.restore();
     },
     replaySpines(strokes) {
       blitClip = null;
