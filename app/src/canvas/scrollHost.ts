@@ -101,6 +101,159 @@ export function nestedScrollHost(target: EventTarget | null): HTMLElement | null
   return null;
 }
 
+export type NestedScrollHost = {
+  el: HTMLElement;
+  doc: number;
+  key: number;
+};
+
+/** Client box captured with the host list so later hit-tests skip layout. */
+export type NestedScrollHostBox = NestedScrollHost & {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
+type BoardHostCache = {
+  listed: NestedScrollHost[];
+  boxes: NestedScrollHostBox[] | null;
+};
+
+const BOARD_HOSTS = new WeakMap<ParentNode, BoardHostCache>();
+
+/**
+ * Geometry hit-test against a cached host list. Callers that already scanned
+ * the document (pen-down) must not walk KaTeX/`pre` again.
+ */
+export function hitScrollHostAtPoint(
+  clientX: number,
+  clientY: number,
+  hosts: readonly HTMLElement[],
+): HTMLElement | null {
+  let best: HTMLElement | null = null;
+  let bestArea = Infinity;
+  for (const host of hosts) {
+    if (!host.isConnected) continue;
+    const box = host.getBoundingClientRect();
+    if (
+      clientX < box.left ||
+      clientX > box.right ||
+      clientY < box.top ||
+      clientY > box.bottom
+    ) {
+      continue;
+    }
+    const area = Math.max(0, box.width) * Math.max(0, box.height);
+    if (area < bestArea) {
+      bestArea = area;
+      best = host;
+    }
+  }
+  return best;
+}
+
+/**
+ * Hit-test stored client boxes. No `getBoundingClientRect` — print letters
+ * after the first must not force a KaTeX layout.
+ */
+export function hitScrollHostAtBoxes(
+  clientX: number,
+  clientY: number,
+  hosts: readonly NestedScrollHostBox[],
+): NestedScrollHostBox | null {
+  let best: NestedScrollHostBox | null = null;
+  let bestArea = Infinity;
+  for (const host of hosts) {
+    if (!host.el.isConnected) continue;
+    if (
+      clientX < host.left ||
+      clientX > host.right ||
+      clientY < host.top ||
+      clientY > host.bottom
+    ) {
+      continue;
+    }
+    const area = Math.max(0, host.right - host.left) * Math.max(0, host.bottom - host.top);
+    if (area < bestArea) {
+      bestArea = area;
+      best = host;
+    }
+  }
+  return best;
+}
+
+export function boxScrollHosts(hosts: readonly NestedScrollHost[]): NestedScrollHostBox[] {
+  const out: NestedScrollHostBox[] = [];
+  for (const host of hosts) {
+    if (!host.el.isConnected) continue;
+    const box = host.el.getBoundingClientRect();
+    out.push({
+      el: host.el,
+      doc: host.doc,
+      key: host.key,
+      left: box.left,
+      top: box.top,
+      right: box.right,
+      bottom: box.bottom,
+    });
+  }
+  return out;
+}
+
+export function rememberBoardScrollHosts(
+  board: ParentNode,
+  listed: NestedScrollHost[],
+): void {
+  BOARD_HOSTS.set(board, { listed, boxes: null });
+}
+
+/** Rects moved (pan). Keep the element list — do not re-run getComputedStyle. */
+export function invalidateBoardScrollHostLayout(board: ParentNode): void {
+  const cached = BOARD_HOSTS.get(board);
+  if (cached) cached.boxes = null;
+}
+
+export function boxedScrollHostsInBoard(board: ParentNode): NestedScrollHostBox[] {
+  let cached = BOARD_HOSTS.get(board);
+  if (!cached) {
+    cached = { listed: listScrollHostsInBoard(board), boxes: null };
+    BOARD_HOSTS.set(board, cached);
+  }
+  if (!cached.boxes) {
+    cached.listed = cached.listed.filter((host) => host.el.isConnected);
+    if (cached.listed.length === 0) cached.listed = listScrollHostsInBoard(board);
+    cached.boxes = boxScrollHosts(cached.listed);
+  }
+  return cached.boxes;
+}
+
+export function hitBoardScrollHostAtPoint(
+  clientX: number,
+  clientY: number,
+  board: ParentNode | null | undefined,
+): HTMLElement | null {
+  if (!board) return null;
+  return hitScrollHostAtBoxes(clientX, clientY, boxedScrollHostsInBoard(board))?.el ?? null;
+}
+
+/**
+ * Nested hosts in a board, keyed like {@link snapshotHostScrollIn}.
+ * Fill once per mutation/resize; pen-down only hit-tests this list.
+ */
+export function listScrollHostsInBoard(
+  root: ParentNode | null | undefined,
+): NestedScrollHost[] {
+  if (!root) return [];
+  const out: NestedScrollHost[] = [];
+  root.querySelectorAll(DOC_PAGE_SELECTOR).forEach((doc, docIndex) => {
+    scrollHostsIn(doc).forEach((el, key) => {
+      out.push({ el, doc: docIndex, key });
+    });
+  });
+  return out;
+}
+
 /**
  * Scroll host under a client point.
  *
@@ -115,9 +268,12 @@ export function nestedScrollHost(target: EventTarget | null): HTMLElement | null
 export function scrollHostAtPoint(clientX: number, clientY: number): HTMLElement | null {
   if (typeof document === "undefined") return null;
 
+  const docs = document.querySelectorAll(DOC_PAGE_SELECTOR);
+  if (docs.length === 0) return null;
+
   let best: HTMLElement | null = null;
   let bestArea = Infinity;
-  for (const doc of document.querySelectorAll(DOC_PAGE_SELECTOR)) {
+  for (const doc of docs) {
     for (const host of scrollHostsIn(doc)) {
       const box = host.getBoundingClientRect();
       if (
@@ -220,20 +376,19 @@ export function docForScrollHost(host: HTMLElement): Element | null {
  * `canvasRect` is the ink overlay's client rect; `viewport` is the Excalidraw
  * camera the overlay is painted against.
  */
-export function hostSceneBounds(
-  host: HTMLElement,
-  canvasRect: DOMRect,
+export function hostSceneBoundsFromClientBox(
+  hostBox: { left: number; top: number; right: number; bottom: number },
+  canvasRect: { left: number; top: number },
   viewport: Pick<ViewportTransform, "zoom" | "scrollX" | "scrollY">,
 ): SceneBounds {
-  const hostRect = host.getBoundingClientRect();
   const topLeft = scenePointFromCanvasPixel(
-    hostRect.left - canvasRect.left,
-    hostRect.top - canvasRect.top,
+    hostBox.left - canvasRect.left,
+    hostBox.top - canvasRect.top,
     viewport,
   );
   const bottomRight = scenePointFromCanvasPixel(
-    hostRect.right - canvasRect.left,
-    hostRect.bottom - canvasRect.top,
+    hostBox.right - canvasRect.left,
+    hostBox.bottom - canvasRect.top,
     viewport,
   );
   return {
@@ -242,6 +397,14 @@ export function hostSceneBounds(
     maxX: bottomRight.x,
     maxY: bottomRight.y,
   };
+}
+
+export function hostSceneBounds(
+  host: HTMLElement,
+  canvasRect: DOMRect,
+  viewport: Pick<ViewportTransform, "zoom" | "scrollX" | "scrollY">,
+): SceneBounds {
+  return hostSceneBoundsFromClientBox(host.getBoundingClientRect(), canvasRect, viewport);
 }
 
 /** Live scroll state for one host at paint time. */

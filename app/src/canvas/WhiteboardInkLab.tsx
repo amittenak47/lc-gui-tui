@@ -15,7 +15,7 @@ import {
 import { WHEEL_OPEN_MS } from "../util/gesture";
 import { sashDragActive } from "../util/splitResize";
 import { isLoadingDoodleActive } from "../util/loadingDoodleActivity";
-import { yieldToInput } from "../util/cameraBusy";
+import { isCameraBusy, yieldToInput } from "../util/cameraBusy";
 import { wheelHoldIsDrawingHop, wheelHoldOutcome, wheelHoldTurn } from "../util/inkToolPresets";
 import { thinInkPointsForStorage } from "./inkSmoothing";
 import { InkPageBook } from "./inkPageCache";
@@ -28,11 +28,15 @@ import { appendErasePathPoint } from "./strokeEraser";
 import { bakeSpineOffThread } from "./inkLab/bakeClient";
 import {
   inkCanvasPixelsChanged,
+  inkCanvasCssMatches,
+  idleRemeshAfterStrokeMs,
+  remeshOnHostBoundLift,
   instantReplayOnBackingResize,
   instantReplayOnCameraRebase,
   instantReplayOnFirstPresent,
   instantReplayOnPageWindow,
   instantReplayOnPointerDown,
+  finishReplayWhileDrawing,
   instantReplayOnUndo,
   keepLivePaintPump,
   mutationIsInkChrome,
@@ -90,14 +94,16 @@ import {
 } from "./rasterInk";
 import {
   DOC_PAGE_SELECTOR,
-  hostSceneBounds,
-  hostScrollSnapshotOf,
+  boxedScrollHostsInBoard,
+  hitScrollHostAtBoxes,
+  hostSceneBoundsFromClientBox,
+  invalidateBoardScrollHostLayout,
+  listScrollHostsInBoard,
+  rememberBoardScrollHosts,
   mergeHostScrollSnapshots,
   pickSettledHostScroll,
   pinHostScrollSnapshot,
   restoreDroppedHostScroll,
-  scrollHostAtPoint,
-  scrollHostsIn,
   snapshotHostScrollIn,
   upsertHostScrollSnapshot,
   type HostScrollSnapshot,
@@ -385,6 +391,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const strokeHostRef = useRef<ScrollHostPaintState | null>(null);
     const strokeHostElRef = useRef<HTMLElement | null>(null);
     const strokeHostPinRef = useRef<HostScrollSnapshot | null>(null);
+    const nestedHostsRef = useRef<{ el: HTMLElement; doc: number; key: number }[] | null>(null);
+    const replayNeededAfterStrokeRef = useRef(false);
+    const idleRemeshTimerRef = useRef<number | null>(null);
     const lastHostScrollRef = useRef<HostScrollSnapshot[]>([]);
     const highlightPtsRef = useRef<ScenePoint[] | null>(null);
     const erasePtsRef = useRef<ScenePoint[] | null>(null);
@@ -527,6 +536,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       );
     }, []);
 
+    const fillNestedHosts = useCallback((board: Element) => {
+      const listed = listScrollHostsInBoard(board);
+      nestedHostsRef.current = listed;
+      rememberBoardScrollHosts(board, listed);
+    }, []);
+
     const collectScrollHosts = useCallback((): readonly ScrollHostPaintState[] => {
       const canvas = canvasRef.current;
       if (!canvas) return [];
@@ -534,18 +549,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       if (!board) return [];
       const { paintView } = readViews();
       const rect = canvas.getBoundingClientRect();
-      const out: ScrollHostPaintState[] = [];
-      for (const doc of board.querySelectorAll(DOC_PAGE_SELECTOR)) {
-        for (const [key, el] of scrollHostsIn(doc).entries()) {
-          out.push({
-            key,
-            scrollLeft: el.scrollLeft,
-            scrollTop: el.scrollTop,
-            bounds: hostSceneBounds(el, rect, paintView),
-          });
-        }
-      }
-      return out;
+      return boxedScrollHostsInBoard(board).map((host) => ({
+        key: host.key,
+        scrollLeft: host.el.scrollLeft,
+        scrollTop: host.el.scrollTop,
+        bounds: hostSceneBoundsFromClientBox(host, rect, paintView),
+      }));
     }, [readViews]);
 
     const scrollHostLookup = useCallback((): ScrollHostLookup => {
@@ -583,16 +592,36 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           clear();
           return;
         }
-        const hostEl = scrollHostAtPoint(clientX, clientY);
-        if (!hostEl) {
+        if (!nestedHostsRef.current) fillNestedHosts(board);
+        let listed = (nestedHostsRef.current ?? []).filter((h) => h.el.isConnected);
+        if (listed.length !== (nestedHostsRef.current?.length ?? 0)) {
+          nestedHostsRef.current = listed;
+          rememberBoardScrollHosts(board, listed);
+          if (listed.length === 0) {
+            fillNestedHosts(board);
+            listed = nestedHostsRef.current ?? [];
+          }
+        }
+        if (listed.length === 0) {
           clear();
           return;
         }
-        const live = hostScrollSnapshotOf(hostEl, board);
-        if (!live) {
+        const hit = hitScrollHostAtBoxes(
+          clientX,
+          clientY,
+          boxedScrollHostsInBoard(board),
+        );
+        if (!hit) {
           clear();
           return;
         }
+        const hostEl = hit.el;
+        const live = {
+          doc: hit.doc,
+          key: hit.key,
+          left: hostEl.scrollLeft,
+          top: hostEl.scrollTop,
+        };
         const remembered = lastHostScrollRef.current.find(
           (s) => s.doc === live.doc && s.key === live.key,
         );
@@ -601,28 +630,37 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         lastHostScrollRef.current = upsertHostScrollSnapshot(lastHostScrollRef.current, pin);
         strokeHostPinRef.current = pin;
         strokeHostElRef.current = pinnedEl;
-        const listed = collectScrollHosts().find((host) => host.key === pin.key);
-        strokeHostRef.current =
-          listed != null
-            ? { ...listed, scrollLeft: pin.left, scrollTop: pin.top }
-            : ({
-                key: pin.key,
-                scrollLeft: pin.left,
-                scrollTop: pin.top,
-                bounds: hostSceneBounds(
-                  pinnedEl,
-                  canvas.getBoundingClientRect(),
-                  readViews().paintView,
-                ),
-              } satisfies ScrollHostPaintState);
+        const { paintView } = readViews();
+        const canvasRect = canvas.getBoundingClientRect();
+        const pinnedBox =
+          pinnedEl === hostEl
+            ? hit
+            : pinnedEl.getBoundingClientRect();
+        strokeHostRef.current = {
+          key: pin.key,
+          scrollLeft: pin.left,
+          scrollTop: pin.top,
+          bounds: hostSceneBoundsFromClientBox(pinnedBox, canvasRect, paintView),
+        };
       },
-      [boardRoot, collectScrollHosts, readViews],
+      [boardRoot, fillNestedHosts, readViews],
     );
 
     const settleReplayWaiters = () => {
       const waiters = replayWaitersRef.current;
       replayWaitersRef.current = [];
       for (const done of waiters) done();
+    };
+
+    const abortInFlightCommittedReplay = () => {
+      replayGenRef.current += 1;
+      if (replayRafRef.current != null) {
+        cancelAnimationFrame(replayRafRef.current);
+        replayRafRef.current = null;
+      }
+      committedBuildRef.current = false;
+      tileReadyRef.current = () => {};
+      settleReplayWaiters();
     };
 
     const settleReplayWaitersAfterPaint = (gen: number) => {
@@ -676,6 +714,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         replayWaitersRef.current.push(resolve);
         replayGenRef.current += 1;
         const gen = replayGenRef.current;
+        replayNeededAfterStrokeRef.current = false;
+        if (idleRemeshTimerRef.current != null) {
+          window.clearTimeout(idleRemeshTimerRef.current);
+          idleRemeshTimerRef.current = null;
+        }
         if (replayRafRef.current != null) {
           cancelAnimationFrame(replayRafRef.current);
           replayRafRef.current = null;
@@ -699,9 +742,15 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (gen !== replayGenRef.current) return;
           replayRafRef.current = null;
           stepInProgress = true;
-          if (isLoadingDoodleActive()) await yieldToInput();
+          if (!instant || isLoadingDoodleActive()) await yieldToInput();
           stepInProgress = false;
           if (gen !== replayGenRef.current) return;
+          if (drawingRef.current && !finishReplayWhileDrawing()) {
+            committedBuildRef.current = false;
+            replayNeededAfterStrokeRef.current = true;
+            settleReplayWaiters();
+            return;
+          }
           if (splitPausedRef.current && !allowPaused) return;
           if (sashDragActive()) return;
 
@@ -731,6 +780,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           tiles.draw(sctx, livePaint, liveDpr);
           if (!tiles.covered) return;
           tiles.setSliceVisible(false);
+          if (drawingRef.current && !finishReplayWhileDrawing()) {
+            committedBuildRef.current = false;
+            replayNeededAfterStrokeRef.current = true;
+            settleReplayWaiters();
+            return;
+          }
 
           const hosts = scrollHostLookup();
           if (hosts.size > 0 || committed.some((op) => isHostBoundOp(op))) {
@@ -1084,7 +1139,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           const wasMoving = cameraMovingRef.current;
           cameraMovingRef.current = moving;
           ensureTiles().setMoving(moving);
-          if (moving) return;
+          if (moving) {
+            const board = boardRoot();
+            if (board) invalidateBoardScrollHostLayout(board);
+            return;
+          }
           // Board owns the pan translate. Clearing it here remeshed at the live
           // camera while the canvas was still riding, which is the ghost, and
           // then land cleared the translate — the rubber-band.
@@ -1218,10 +1277,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         const pixelW = Math.max(1, Math.round(cssW * dpr));
         const pixelH = Math.max(1, Math.round(canvasCssH * dpr));
         const top = `${-marginY}px`;
-        canvas.style.width = `${cssW}px`;
-        canvas.style.height = `${canvasCssH}px`;
-        canvas.style.top = top;
-        canvas.style.left = "0px";
+        if (!inkCanvasCssMatches(canvas, cssW, canvasCssH, top)) {
+          canvas.style.width = `${cssW}px`;
+          canvas.style.height = `${canvasCssH}px`;
+          canvas.style.top = top;
+          canvas.style.left = "0px";
+        }
         /*
          * `canvas.width = canvas.width` still wipes the bitmap. A CSS `top`
          * mismatch used to count as a resize, clear the page, then remesh
@@ -1491,6 +1552,24 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
 
       let strokePaintView: ViewportTransform | null = null;
       let strokeDpr = 1;
+      const cancelIdleRemesh = () => {
+        if (idleRemeshTimerRef.current != null) {
+          window.clearTimeout(idleRemeshTimerRef.current);
+          idleRemeshTimerRef.current = null;
+        }
+      };
+      const scheduleIdleRemesh = () => {
+        cancelIdleRemesh();
+        if (!replayNeededAfterStrokeRef.current) return;
+        idleRemeshTimerRef.current = window.setTimeout(() => {
+          idleRemeshTimerRef.current = null;
+          if (drawingRef.current) return;
+          if (!replayNeededAfterStrokeRef.current) return;
+          if (committedBuildRef.current) return;
+          replayNeededAfterStrokeRef.current = false;
+          void rebuildAndReplay(false, false);
+        }, idleRemeshAfterStrokeMs());
+      };
       const onPointerDown = (event: PointerEvent) => {
         if (!toolRef.current) return;
         if (onStylusAccessoryRef.current?.(event)) {
@@ -1505,12 +1584,16 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
          * Instant-finishing a sliced remesh under the nib remeshed every
          * overlay spine on the pointer stack — "Whiteboard isn't responding"
          * plus a growing clip square of a half-painted snap.
+         * Still start the stroke: abort the in-flight gen so step cannot
+         * blit over live pixels, and remesh after the pen has been idle.
          */
+        cancelIdleRemesh();
         if (
           (replayRafRef.current != null || committedBuildRef.current) &&
           !instantReplayOnPointerDown()
         ) {
-          return;
+          abortInFlightCommittedReplay();
+          replayNeededAfterStrokeRef.current = true;
         }
         captureStrokeHost(event.clientX, event.clientY);
         const input = readViews();
@@ -1695,7 +1778,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               dropRedoStacks(overlayRedoRef.current, snapRedoRef.current);
               const patch = pendingStampPatchRef.current;
               pendingStampPatchRef.current = null;
-              if (isHostBoundOp(op) || !patch) {
+              if (!patch) {
                 rememberCommitPatch(null);
                 presentCommitted();
               } else {
@@ -1871,6 +1954,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
                 onChangeRef.current?.();
               });
             }
+          } else if (!remeshOnHostBoundLift()) {
+            rememberCommitPatch(baked.undoPatch);
           } else {
             dropRedoStacks(overlayRedoRef.current, snapRedoRef.current);
             rememberCommitPatch(null);
@@ -1886,6 +1971,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         strokeHostRef.current = null;
         strokeHostElRef.current = null;
         sizeToHost();
+        scheduleIdleRemesh();
       };
 
       const ro = new ResizeObserver(() => sizeToHost());
@@ -1912,6 +1998,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         tileReadyRef.current = () => {};
         settleReplayWaiters();
         if (holdTimerRef.current != null) window.clearTimeout(holdTimerRef.current);
+        if (idleRemeshTimerRef.current != null) {
+          window.clearTimeout(idleRemeshTimerRef.current);
+          idleRemeshTimerRef.current = null;
+        }
         engine.destroy();
         engineRef.current = null;
         for (const waiter of engineWaitersRef.current.splice(0)) {
@@ -1964,6 +2054,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       let frame: number | null = null;
       let attached: HTMLElement[] = [];
       const onScroll = () => {
+        invalidateBoardScrollHostLayout(board);
         if (preparingRef.current || splitPausedRef.current) return;
         if (drawingRef.current || toolRef.current) {
           if (strokeHostPinRef.current || lastHostScrollRef.current.length > 0) {
@@ -1974,6 +2065,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           lastHostScrollRef.current = snapshotHostScrollIn(board);
         }
         if (!bookRef.current.hasHostBoundInk()) return;
+        if (cameraMovingRef.current || isCameraBusy()) return;
         if (frame != null) return;
         frame = requestAnimationFrame(() => {
           frame = null;
@@ -1991,11 +2083,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       };
       const rescanHosts = () => {
         detachHosts();
-        for (const doc of board.querySelectorAll(DOC_PAGE_SELECTOR)) {
-          for (const host of scrollHostsIn(doc)) {
-            host.addEventListener("scroll", onScroll, { passive: true });
-            attached.push(host);
-          }
+        fillNestedHosts(board);
+        for (const { el } of nestedHostsRef.current ?? []) {
+          el.addEventListener("scroll", onScroll, { passive: true });
+          attached.push(el);
         }
       };
       rescanHosts();
@@ -2034,7 +2125,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         ro?.disconnect();
         if (frame != null) cancelAnimationFrame(frame);
       };
-    }, [enabled, forgetPixelHistory, holdNestedScroll, presentCommitted]);
+    }, [enabled, fillNestedHosts, forgetPixelHistory, holdNestedScroll, presentCommitted]);
 
     useEffect(() => {
       if (!enabled) return;

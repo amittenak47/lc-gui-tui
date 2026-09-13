@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   inkCanvasPixelsChanged,
+  inkCanvasCssMatches,
+  idleRemeshAfterStrokeMs,
+  remeshOnHostBoundLift,
   instantReplayOnBackingResize,
   instantReplayOnCameraRebase,
   instantReplayOnFirstPresent,
   instantReplayOnPageWindow,
   instantReplayOnPointerDown,
+  finishReplayWhileDrawing,
   instantReplayOnUndo,
   keepLivePaintPump,
   LIVE_HUD_FLUSH_MS,
@@ -19,6 +23,48 @@ import {
   skipReplayOnWheelAbort,
   usePreStrokeStamp,
 } from "./liveHost";
+
+/**
+ * Main-thread occupancy of remesh vs a print burst.
+ *
+ * `remeshOnLift`: current bug — every lift that aborted remesh starts remesh
+ * immediately. The next pointerdown cannot run until that step returns.
+ *
+ * `idleRemeshMs`: remesh only after the pen has been up this long. A word-gap
+ * of 40ms never starts remesh; the next "t" is not queued.
+ */
+function simulatePrintBurst(opts: {
+  letters: number;
+  writeMs: number;
+  betweenMs: number;
+  remeshStepMs: number;
+  remeshOnLift: boolean;
+  idleRemeshMs: number;
+}): { maxDownBlockMs: number; lastDownBlockMs: number } {
+  let t = 0;
+  let remeshBusyUntil = 0;
+  let idleFireAt: number | null = null;
+  let maxBlock = 0;
+  let lastBlock = 0;
+  for (let i = 0; i < opts.letters; i++) {
+    if (!opts.remeshOnLift && idleFireAt != null && idleFireAt <= t && remeshBusyUntil <= t) {
+      remeshBusyUntil = idleFireAt + opts.remeshStepMs;
+      idleFireAt = null;
+    }
+    const downAt = Math.max(t, remeshBusyUntil);
+    const block = downAt - t;
+    maxBlock = Math.max(maxBlock, block);
+    lastBlock = block;
+    t = downAt;
+    remeshBusyUntil = 0;
+    idleFireAt = null;
+    t += opts.writeMs;
+    if (opts.remeshOnLift) remeshBusyUntil = t + opts.remeshStepMs;
+    else idleFireAt = t + opts.idleRemeshMs;
+    t += opts.betweenMs;
+  }
+  return { maxDownBlockMs: maxBlock, lastDownBlockMs: lastBlock };
+}
 
 describe("live host contract", () => {
   it("blocks a full replay while the pointer is down", () => {
@@ -62,6 +108,38 @@ describe("live host contract", () => {
     expect(inkCanvasPixelsChanged({ width: 800, height: 1200 }, 801, 1200)).toBe(true);
   });
 
+  it("treats already-written ink canvas CSS as a no-op", () => {
+    const canvas = { style: { width: "800px", height: "1400px", top: "-100px", left: "0px" } };
+    expect(inkCanvasCssMatches(canvas, 800, 1400, "-100px")).toBe(true);
+    expect(inkCanvasCssMatches(canvas, 801, 1400, "-100px")).toBe(false);
+  });
+
+  it("does not remesh the notebook on a host-bound pen lift", () => {
+    expect(remeshOnHostBoundLift()).toBe(false);
+  });
+
+  it("defers remesh after a letter so the next down is not queued behind it", () => {
+    expect(idleRemeshAfterStrokeMs()).toBe(400);
+    const remeshOnLift = simulatePrintBurst({
+      letters: 8,
+      writeMs: 80,
+      betweenMs: 40,
+      remeshStepMs: 500,
+      remeshOnLift: true,
+      idleRemeshMs: idleRemeshAfterStrokeMs(),
+    });
+    expect(remeshOnLift.maxDownBlockMs).toBeGreaterThan(400);
+    const idle = simulatePrintBurst({
+      letters: 8,
+      writeMs: 80,
+      betweenMs: 40,
+      remeshStepMs: 500,
+      remeshOnLift: false,
+      idleRemeshMs: idleRemeshAfterStrokeMs(),
+    });
+    expect(idle.maxDownBlockMs).toBe(0);
+  });
+
   it("does not remesh the notebook when the nib wheel aborts a live stroke", () => {
     expect(skipReplayOnWheelAbort()).toBe(true);
   });
@@ -86,6 +164,10 @@ describe("live host contract", () => {
 
   it("does not instantly remesh the notebook on pointer down", () => {
     expect(instantReplayOnPointerDown()).toBe(false);
+  });
+
+  it("does not finish a sliced remesh onto the host while the nib is down", () => {
+    expect(finishReplayWhileDrawing()).toBe(false);
   });
 
   it("does not remesh the notebook on the undo click stack", () => {

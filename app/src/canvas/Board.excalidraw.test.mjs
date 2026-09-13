@@ -104,6 +104,25 @@ describe("Board", () => {
     );
     const veto = apply.slice(apply.indexOf("if (delta.rebase"));
     expect(veto).toMatch(/setPagePanOffsetRef\.current\(rideDx, delta\.dy\)/);
+    expect(apply).not.toMatch(/sceneOverlayRef\.current\?\.redraw/);
+    expect(apply).not.toMatch(/shapeSelectRef\.current\?\.redraw/);
+  });
+
+  it("rides the scene overlay instead of rerasterizing it on every pan sample", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const ride = src.slice(
+      src.indexOf("const refreshPanRideNodes = useCallback"),
+      src.indexOf("const ensurePanRideNodes"),
+    );
+    expect(ride).toMatch(/lc-scene-overlay/);
+    expect(ride).toMatch(/lc-scene-select/);
+    expect(ride).toMatch(/excalidraw__canvas/);
+    const land = src.slice(
+      src.indexOf("const landPanOffset = useCallback"),
+      src.indexOf("const clampPanScroll"),
+    );
+    expect(land).toMatch(/sceneOverlayRef\.current\?\.redraw/);
+    expect(land).toMatch(/shapeSelectRef\.current\?\.redraw/);
   });
 
   it("rides ink when Excalidraw pans without a Board gesture", () => {
@@ -227,6 +246,26 @@ describe("Board", () => {
     expect(src).toMatch(/alreadyPlaced/);
     expect(src).toMatch(/const syncLiveBox = useCallback/);
     expect(src).toMatch(/const rideDx = scrollModeRef.current \? 0 : delta.dx/);
+    expect(src).toMatch(/idleRemeshAfterStrokeMs/);
+    expect(src).toMatch(/requestIdleCallback/);
+    const toggle = src.slice(
+      src.indexOf("Restore nested scroll after the mode class flip"),
+      src.indexOf("Leaving Annotate puts the pen down"),
+    );
+    expect(toggle).toMatch(/requestIdleCallback/);
+    expect(toggle).toMatch(/requestIdleCallback\(run/);
+    expect(toggle).toMatch(/waitWhileCameraBusy/);
+    expect(toggle).toMatch(/replayCommitted\(true\)/);
+  });
+
+  it("hit-tests nested pan hosts from the board cache, not the whole document", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    expect(src).toMatch(/hitBoardScrollHostAtPoint/);
+    expect(src).toMatch(/nestedHostAtPointer/);
+    expect(src).not.toMatch(/scrollHostAtPoint\(/);
+    const css = readFileSync(join(here, "../styles.css"), "utf8");
+    expect(css).not.toMatch(/\.lc-board-reading \.lc-doc-selectable \*/);
+    expect(css).not.toMatch(/\.lc-board-annotating \.lc-md-ink-doc pre/);
   });
 
   it("does not ping-pong a sash drag through window.resize", () => {
@@ -387,7 +426,28 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/if \(drawingRef\.current\) return/);
     const down = src.slice(src.indexOf("const onPointerDown"), src.indexOf("const onPointerMove"));
     expect(down).toMatch(/instantReplayOnPointerDown/);
+    expect(down).toMatch(/abortInFlightCommittedReplay/);
+    expect(down).toMatch(/cancelIdleRemesh/);
     expect(down).not.toMatch(/presentCommitted\(null, true\)/);
+    expect(src).toMatch(/finishReplayWhileDrawing/);
+    expect(src).toMatch(/scheduleIdleRemesh/);
+    expect(src).toMatch(/idleRemeshAfterStrokeMs/);
+    expect(src).toMatch(/inkCanvasCssMatches/);
+    expect(src).toMatch(/sizeToHost\(\);\s*scheduleIdleRemesh\(\);/);
+    expect(src).toMatch(/remeshOnHostBoundLift/);
+    expect(src).toMatch(/else if \(!remeshOnHostBoundLift\(\)\)/);
+    expect(src).not.toMatch(/isHostBoundOp\(op\) \|\| !patch/);
+    expect(src).toMatch(/cameraMovingRef\.current \|\| isCameraBusy\(\)/);
+    expect(src).toMatch(/if \(!instant \|\| isLoadingDoodleActive\(\)\) await yieldToInput\(\)/);
+    const capture = src.slice(
+      src.indexOf("const captureStrokeHost"),
+      src.indexOf("const settleReplayWaiters"),
+    );
+    expect(capture).toMatch(/hitScrollHostAtBoxes/);
+    expect(capture).toMatch(/boxedScrollHostsInBoard/);
+    expect(capture).not.toMatch(/hitScrollHostAtPoint/);
+    expect(capture).not.toMatch(/scrollHostAtPoint\(/);
+    expect(capture).not.toMatch(/collectScrollHosts\(/);
   });
 });
 
