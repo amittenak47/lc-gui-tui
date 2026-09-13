@@ -1044,6 +1044,45 @@ describe("Ink lab live path", () => {
     expect(ink(180, 0, 160, 300)).toBeGreaterThan(beforeRight);
     engine.destroy();
   });
+
+  it("does not restore the whole snap on the first live frame", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    engine.paint();
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "rgb(200, 0, 0)";
+    ctx.fillRect(8, 8, 4, 4);
+    expect(ctx.getImageData(9, 9, 1, 1).data[0]).toBeGreaterThan(100);
+    engine.down({ x: 220, y: 160, p: 0.6, t: 0 });
+    engine.move([{ x: 280, y: 168, p: 0.55, t: 16 }]);
+    engine.paint();
+    expect(ctx.getImageData(9, 9, 1, 1).data[0]).toBeGreaterThan(100);
+    engine.destroy();
+  });
+
+  it("keeps a far first stroke when the next letter lifts without a full paint", () => {
+    const canvas = createCanvas(400, 300) as unknown as HTMLCanvasElement;
+    const engine = createInkLabEngine({ sdf: false });
+    engine.attach(canvas);
+    const ink = (x: number, y: number, w: number, h: number) => {
+      const data = canvas.getContext("2d")!.getImageData(x, y, w, h).data;
+      let n = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i]! > 0) n += 1;
+      return n;
+    };
+    const letter = (x0: number, x1: number, t0: number) => {
+      engine.down({ x: x0, y: 80, p: 0.6, t: t0 });
+      engine.move([{ x: x1, y: 84, p: 0.55, t: t0 + 16 }]);
+      engine.paint();
+      engine.liftRaw({ x: x1, y: 86, p: 0.5, t: t0 + 32 });
+    };
+    letter(30, 70, 0);
+    letter(260, 320, 100);
+    expect(ink(0, 0, 120, 300)).toBeGreaterThan(10);
+    expect(ink(240, 0, 160, 300)).toBeGreaterThan(10);
+    engine.destroy();
+  });
 });
 
 describe("EKF is the live filter", () => {

@@ -377,6 +377,10 @@ describe("WhiteboardInkLab", () => {
     expect(src).not.toMatch(/engine\.replaySpines/);
     expect(src).not.toMatch(/engine\.shiftSnap/);
     expect(src).toMatch(/engine\.liftRaw/);
+    const liftAt = src.indexOf("const baked = engine.liftRaw");
+    const endAt = src.indexOf("loadMeterRef.current.end()", liftAt);
+    expect(endAt).toBeGreaterThan(liftAt);
+    expect(src.slice(liftAt, endAt)).not.toMatch(/engine\.paint\(\)/);
     expect(src).toMatch(/bakeSpineOffThread/);
     expect(src).toMatch(/thinInkPointsForStorage/);
     expect(src).not.toMatch(/overlayRef\.current\[overlayIndex\] = finalBake/);
@@ -537,8 +541,10 @@ describe("Workspace pane switch", () => {
 describe("reading pan compositor", () => {
   it("hides the PDF text layer while the camera is live, not the footnote slot", () => {
     const css = readFileSync(join(here, "../styles.css"), "utf8");
-    expect(css).toMatch(/html\.lc-doc-camera-live \.lc-pdf-text\.textLayer/);
-    expect(css).not.toMatch(/html\.lc-doc-camera-live \.lc-page-marks-slot/);
+    expect(css).toMatch(/html\.lc-doc-camera-live \.lc-pdf-text\.textLayer[\s\S]*?visibility:\s*hidden/);
+    expect(css).not.toMatch(
+      /html\.lc-doc-camera-live \.lc-page-marks-slot\s*\{[^}]*visibility:\s*hidden/,
+    );
   });
 });
 

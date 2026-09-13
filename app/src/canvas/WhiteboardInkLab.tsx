@@ -1779,7 +1779,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         }
         const baked = engine.liftRaw(sampleOf(canvas, event));
         bakeRef.current = { bakeMs: baked.bakeMs, bake: baked.bake };
-        engine.paint();
+        // Live pixels already sit on the host; lift AABB-patched snap.
+        // A full paint() here is another page-sized copy on every letter.
         loadMeterRef.current.end();
         reportLoad(
           {
