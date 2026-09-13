@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   horizontalScrollHost,
@@ -57,6 +57,25 @@ beforeEach(() => {
 });
 
 describe("horizontalScrollHost", () => {
+  it("does not read layout for prose or KaTeX glyphs while finding markdown hosts", () => {
+    const { doc, pre } = buildDoc();
+    const layout = vi.fn(() => 400);
+    for (let i = 0; i < 1000; i++) {
+      const span = document.createElement("span");
+      span.style.height = "1em";
+      Object.defineProperty(span, "scrollWidth", { get: layout });
+      Object.defineProperty(span, "scrollHeight", { get: layout });
+      doc.append(span);
+    }
+    const math = document.createElement("span");
+    math.className = "katex-display";
+    math.style.overflowX = "auto";
+    sizeOf(math, 900, 400);
+    doc.append(math);
+    expect(scrollHostsIn(doc)).toEqual([pre, math]);
+    expect(layout).not.toHaveBeenCalled();
+  });
+
   it("finds the codeblock from the text inside it", () => {
     const { pre, code } = buildDoc();
     expect(horizontalScrollHost(code)).toBe(pre);

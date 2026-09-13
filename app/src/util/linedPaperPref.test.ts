@@ -5,6 +5,7 @@ import {
   completeLinedPitchPair,
   ensureLinedPitchPair,
   isLinedPaperMode,
+  linedPaperModeFromAppState,
   linedFirstRuleScene,
   linedPaperCssGap,
   linedPaperLabel,
@@ -22,6 +23,12 @@ import {
   LINED_PAPER_SIT_ABOVE_FRAC,
   LINED_PAPER_WIDE_SCREEN_PX,
 } from "./linedPaperPref";
+
+it("does not infer saved overlay visibility from the pitch", () => {
+  expect(linedPaperModeFromAppState({ linedPitch: 100 })).toBe("off");
+  expect(linedPaperModeFromAppState({ linedPaperMode: "off", linedPitch: 100 })).toBe("off");
+  expect(linedPaperModeFromAppState({ linedPaperMode: "college" })).toBe("college");
+});
 
 beforeEach(() => {
   const store = new Map<string, string>();

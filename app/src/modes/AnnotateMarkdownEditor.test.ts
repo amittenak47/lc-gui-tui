@@ -55,6 +55,28 @@ describe("isFreshOwnedNote", () => {
 });
 
 describe("applyMdFormat", () => {
+  it("wraps selected math and leaves the caret inside the dollars", () => {
+    const next = applyMdFormat("Use x^2 here", 4, 7, "math");
+    expect(next.source).toBe("Use $x^2$ here");
+    expect(next.cursor).toBe(8);
+    expect(applyMdFormat("", 0, 0, "math")).toEqual({ source: "$x$", cursor: 2 });
+  });
+
+  it("inserts an empty display block with the caret on its inner line", () => {
+    expect(applyMdFormat("", 0, 0, "displayMath")).toEqual({ source: "$$\n\n$$\n", cursor: 3 });
+  });
+
+  it("wraps selected display math and separates the surrounding paragraphs", () => {
+    const next = applyMdFormat("Before x^2 after", 7, 10, "displayMath");
+    expect(next.source).toBe("Before \n\n$$\nx^2\n$$\n\n after");
+    expect(next.source.slice(next.cursor)).toBe("\n$$\n\n after");
+  });
+
+  it("reuses blank lines and clamps a reversed display selection", () => {
+    expect(applyMdFormat("Notes\n\n", 99, 99, "displayMath").source).toBe("Notes\n\n$$\n\n$$\n");
+    expect(applyMdFormat("x^2", 99, -1, "displayMath").source).toBe("$$\nx^2\n$$\n");
+  });
+
   it("wraps a selection in bold marks", () => {
     const next = applyMdFormat("say hello there", 4, 9, "bold");
     expect(next.source).toBe("say **hello** there");

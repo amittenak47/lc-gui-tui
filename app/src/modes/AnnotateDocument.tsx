@@ -14,10 +14,14 @@
  */
 
 import DOMPurify from "dompurify";
-import { marked } from "marked";
+import { Marked } from "marked";
+import "katex/dist/katex.min.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { docPreview, parseInline, truncationNoticeHtml } from "./docPreview";
+import { markedTexmathDollars } from "./mdMath";
+
+const markedMath = new Marked({ gfm: true, breaks: false }).use(markedTexmathDollars());
 
 export interface AnnotateDocumentProps {
   source: string;
@@ -51,12 +55,14 @@ export interface AnnotateDocumentProps {
  */
 export function renderMarkdown(source: string): string {
   const { text, hidden } = docPreview(source);
-  const html = marked.parse(text, { async: false, gfm: true, breaks: false });
+  const html = markedMath.parse(text, { async: false });
   const clean = DOMPurify.sanitize(html, {
     // No `target`/`rel` juggling needed: links are inert here anyway, since
     // the surface never receives a pointer event.
     FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form", "input"],
-    FORBID_ATTR: ["style", "onerror", "onload", "onclick"],
+    // KaTeX positions glyphs with inline styles; style elements stay forbidden.
+    FORBID_ATTR: ["onerror", "onload", "onclick"],
+    ADD_ATTR: ["style"],
   });
   // Appended after sanitising because it is ours, not the document's.
   return clean + truncationNoticeHtml(hidden);

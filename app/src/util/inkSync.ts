@@ -273,9 +273,13 @@ export function previewInkPages(
 ): number[] {
   if (localStamps && hubStamps) {
     const diffs = inkPageDiffRows(localStamps, hubStamps);
-    return diffs.map((row) => row.pageId).filter((id) => id >= 0);
+    const changed = diffs.map((row) => row.pageId).filter((id) => id >= 0);
+    if (changed.length > 0) return changed;
   }
-  const first = localIds.find((id) => id >= 1) ?? hubIds.find((id) => id >= 1);
+  // A pad-metadata conflict can have identical ink. It still needs a real
+  // preview; an empty fetch made the first sync look like an empty notebook.
+  const first = localIds.find((id) => id >= 1) ?? hubIds.find((id) => id >= 1)
+    ?? localIds.find((id) => id >= 0) ?? hubIds.find((id) => id >= 0);
   return first == null ? [] : [first];
 }
 

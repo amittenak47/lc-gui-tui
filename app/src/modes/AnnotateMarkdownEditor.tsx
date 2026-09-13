@@ -44,7 +44,9 @@ export type MdFormatKind =
   | "quote"
   | "task"
   | "link"
-  | "fence";
+  | "fence"
+  | "math"
+  | "displayMath";
 
 export interface AnnotateMarkdownEditorHandle {
   format: (kind: MdFormatKind) => void;
@@ -98,9 +100,10 @@ function wrapInline(
   start: number,
   end: number,
   mark: string,
+  placeholder = "text",
 ): { source: string; cursor: number } {
   const range = clampRange(source, start, end);
-  const inner = source.slice(range.start, range.end) || "text";
+  const inner = source.slice(range.start, range.end) || placeholder;
   const next = `${source.slice(0, range.start)}${mark}${inner}${mark}${source.slice(range.end)}`;
   return { source: next, cursor: range.start + mark.length + inner.length };
 }
@@ -128,6 +131,18 @@ export function applyMdFormat(
   const range = clampRange(source, start, end);
   if (kind === "bold") return wrapInline(source, range.start, range.end, "**");
   if (kind === "italic") return wrapInline(source, range.start, range.end, "*");
+  if (kind === "math") return wrapInline(source, range.start, range.end, "$", "x");
+  if (kind === "displayMath") {
+    const before = source.slice(0, range.start);
+    const after = source.slice(range.end);
+    const inner = source.slice(range.start, range.end);
+    const lead = before.length === 0 || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+    const tail = after.startsWith("\n") || after.length === 0 ? "" : "\n";
+    return {
+      source: `${before}${lead}$$\n${inner}\n$$\n${tail}${after}`,
+      cursor: before.length + lead.length + 3 + inner.length,
+    };
+  }
   if (kind === "heading") return prefixCurrentLine(source, range.start, "# ");
   if (kind === "list") return prefixCurrentLine(source, range.start, "- ");
   if (kind === "quote") return prefixCurrentLine(source, range.start, "> ");

@@ -43,7 +43,7 @@ import {
   parseInkPageRowId,
   visibleFootnoteDiffRows,
 } from "../util/hubConflictStash";
-import { linedPitchStateFromAppState } from "../util/linedPaperPref";
+import { linedPaperModeFromAppState, linedPitchStateFromAppState } from "../util/linedPaperPref";
 import { mergeConflictPageFrames, expandLumpedInkDiffRows, decodeConflictInkPages, inkPageIdsFromOps, conflictPaperFrames, whiteboardConflictFrames, whiteboardInkMergeRows, pageFramesEqual } from "./conflictInkLayout";
 import {
   countWhiteboardPages,
@@ -535,14 +535,6 @@ export function HubConflictSplit({
       ),
     );
   const valid = Boolean(conflict) && notesHomed && inkHomed;
-  const lined = useMemo(
-    () =>
-      linedPitchStateFromAppState(
-        padBoardAppState(conflict?.local ?? null) ??
-          padBoardAppState(conflict?.server ?? null),
-      ),
-    [conflict],
-  );
   const localInkPages = useMemo(
     () => (conflict ? mergeInkDtos(conflict.localInk, overlayInk.local) : []),
     [conflict, overlayInk.local],
@@ -905,6 +897,9 @@ export function HubConflictSplit({
 
   const renderPane = (side: Side) => {
     const body = side === "local" ? conflict.local : conflict.server;
+    const appState = padBoardAppState(body);
+    const lined = linedPitchStateFromAppState(appState);
+    const hasChoices = idsOnSide(side).length > 0;
     const at = updatedAtOf(body);
     const verdict = paneVerdict(side);
     const label = sideLabel(side);
@@ -940,7 +935,7 @@ export function HubConflictSplit({
               type="button"
               data-action="keep"
               aria-pressed={verdict === "keep"}
-              disabled={keepBlocked}
+              disabled={keepBlocked || !hasChoices}
               aria-label={`Keep every ${label} copy`}
               className={
                 verdict === "keep"
@@ -964,6 +959,7 @@ export function HubConflictSplit({
               data-action="drop"
               aria-pressed={verdict === "reject"}
               aria-label={`Drop every ${label} change`}
+              disabled={!hasChoices}
               className={
                 verdict === "reject" ? "lc-doc-confirm-btn lc-doc-confirm-no" : "lc-doc-confirm-btn"
               }
@@ -974,6 +970,7 @@ export function HubConflictSplit({
           </Tip>
         </header>
         <div className="lc-hub-conflict-pane-body">
+          {!hasChoices && !inkLoading && <p className="lc-muted">No differing marks or handwriting on this side.</p>}
           <ConflictPagePreview
             hash={docHash}
             page={focusPage}
@@ -998,6 +995,7 @@ export function HubConflictSplit({
             }
             linedPitchPair={lined.pair}
             linedRule={lined.rule}
+            linedPaperMode={linedPaperModeFromAppState(appState)}
             focusKey={`${focusedId}:${focusRevision}`}
             decodedInk={side === "local" ? inkHits.localShards : inkHits.serverShards}
             inkLoading={inkLoading}

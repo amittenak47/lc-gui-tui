@@ -9255,6 +9255,28 @@ body[data-lc-sash-drag="horizontal"] {
   overflow-x: auto;
 }
 
+.lc-md-ink-doc .katex-display {
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.15em 0;
+}
+
+.lc-md-ink-doc .lc-math-numbered {
+  display: flex;
+  align-items: center;
+  gap: 1em;
+}
+
+.lc-md-ink-doc .lc-math-numbered .katex-display {
+  flex: 1;
+  min-width: 0;
+}
+
+.lc-md-ink-doc .lc-math-number {
+  flex: none;
+}
+
 /*
  * A wide code block is the one place in the note that scrolls sideways.
  *
@@ -9271,7 +9293,8 @@ body[data-lc-sash-drag="horizontal"] {
  * a block that answered clicks itself would be a hole in the page where
  * Excalidraw cannot be selected into and a rubber band cannot be started.
  */
-.lc-board-reading .lc-page-content-slot .lc-md-ink-doc pre {
+.lc-board-reading .lc-page-content-slot .lc-md-ink-doc pre,
+.lc-board-reading .lc-page-content-slot .lc-md-ink-doc .katex-display {
   pointer-events: auto;
   /*
    * `touch-action: pan-x` used to win over `.lc-doc-selectable * { touch-action: none }`
@@ -9288,6 +9311,7 @@ body[data-lc-sash-drag="horizontal"] {
  * layout hitch must not overflow-anchor the block back to scrollLeft 0.
  */
 .lc-board-annotating .lc-md-ink-doc pre,
+.lc-board-annotating .lc-md-ink-doc .katex-display,
 .lc-board-annotating .lc-code-doc-pre {
   overflow-anchor: none;
   overscroll-behavior: none;

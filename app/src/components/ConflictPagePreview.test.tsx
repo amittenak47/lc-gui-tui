@@ -61,3 +61,14 @@ it('dims existing canvases for Drop without scheduling more paint', async () => 
   expect(canvas?.style.opacity).toBe('0.38');
   expect(raster.paint).toHaveBeenCalledTimes(calls);
 });
+
+it('shows rules only when the saved overlay mode is on', () => {
+  act(()=>root.render(<ConflictPagePreview {...props} showInk={false} linedPitchPair={{wide:100,college:80}} />));
+  const paper = () => host.querySelector<HTMLElement>('.lc-hub-conflict-lined')!;
+  expect(paper().style.backgroundImage).toBe('none');
+  act(()=>root.render(<ConflictPagePreview {...props} showInk={false} linedPitchPair={{wide:100,college:80}} linedPaperMode="college" linedRule="college" />));
+  expect(paper().style.backgroundImage).not.toBe('none');
+  expect(paper().style.backgroundSize).toContain('80px');
+  act(()=>root.render(<ConflictPagePreview {...props} showInk={false} linedPitchPair={{wide:100,college:80}} linedPaperMode="off" />));
+  expect(paper().style.backgroundImage).toBe('none');
+});

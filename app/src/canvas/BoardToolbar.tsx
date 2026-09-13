@@ -216,6 +216,8 @@ export interface BoardToolbarProps {
  * type it instead.
  */
 const MD_TOOLS: Array<{ kind: MdFormatKind; glyph: string; label: string; tip: string }> = [
+  { kind: "math", glyph: "$", label: "Inline math", tip: "Inline math — $formula$" },
+  { kind: "displayMath", glyph: "$$", label: "Display math", tip: "Display math — a $$ block" },
   { kind: "heading", glyph: "H", label: "Heading", tip: "Heading — # at the line start" },
   { kind: "bold", glyph: "B", label: "Bold", tip: "Bold — **around the words**" },
   { kind: "italic", glyph: "I", label: "Italic", tip: "Italic — *around the words*" },
@@ -237,6 +239,7 @@ function MarkdownTools({ onFormat }: { onFormat?: (kind: MdFormatKind) => void }
           aria-label={tool.label}
           data-tip={tool.tip}
           data-tip-placement="bottom"
+          onMouseDown={(event) => event.preventDefault()}
           onClick={() => onFormat?.(tool.kind)}
         >
           <span className="lc-tool-emoji" aria-hidden>

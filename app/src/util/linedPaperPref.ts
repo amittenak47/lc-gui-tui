@@ -58,6 +58,12 @@ export function isLinedPaperMode(value: unknown): value is LinedPaperMode {
   return value === "wide" || value === "college" || value === "off";
 }
 
+/** Missing on older files: their pitch records geometry, not visibility. */
+export function linedPaperModeFromAppState(appState: unknown): LinedPaperMode {
+  const mode = (appState as { linedPaperMode?: unknown } | null)?.linedPaperMode;
+  return isLinedPaperMode(mode) ? mode : "off";
+}
+
 export function isLinedRuling(value: unknown): value is LinedRuling {
   return value === "wide" || value === "college";
 }

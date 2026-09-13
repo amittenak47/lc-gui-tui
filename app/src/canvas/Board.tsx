@@ -285,6 +285,7 @@ import {
 import {
   activeLinedPitch,
   ensureLinedPitchPair,
+  isLinedPaperMode,
   linedFirstRuleScene,
   linedPaperCssGap,
   linedPaperLabel,
@@ -2682,6 +2683,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const toggleAnnotate = useCallback(() => {
     wakeChromeRef.current();
+    if (editing) {
+      modeIndicatorRef.current?.show("Switch to Preview to annotate");
+      return;
+    }
     const drawPad = isDrawPageRegion(mobileRegionRef.current);
     if (!drawPad) {
       pendingHostScrollRef.current = snapshotHostScrollIn(contentSlotNodeRef.current);
@@ -2693,7 +2698,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       modeIndicatorRef.current?.show(next ? "Annotation" : "Scroll mode");
       return next;
     });
-  }, []);
+  }, [editing]);
 
   /*
    * Restore nested scroll after the mode class flip, then remesh host-bound ink.
@@ -2704,24 +2709,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * pan.
    */
   useLayoutEffect(() => {
+    if (!interactive) return;
     if (!inkNeedsAnnotateToggleReplay(mobileRegionRef.current)) {
       pendingHostScrollRef.current = null;
       return;
     }
-    const saved = pendingHostScrollRef.current;
-    if (!saved) return;
+    const saved = pendingHostScrollRef.current ?? [];
     restoreHostScrollIn(contentSlotNodeRef.current, saved);
     rememberedHostScrollRef.current = saved;
     const replay = () => {
       restoreHostScrollIn(contentSlotNodeRef.current, saved);
       rememberedHostScrollRef.current = saved;
       refreshPanRideNodes();
-      rasterInkRef.current?.replayCommitted();
+      rasterInkRef.current?.replayCommitted(true);
       pendingHostScrollRef.current = null;
     };
     const id = requestAnimationFrame(replay);
     return () => cancelAnimationFrame(id);
-  }, [annotateCode, refreshPanRideNodes]);
+  }, [annotateCode, interactive, refreshPanRideNodes]);
 
   // Leaving Annotate puts the pen down, and the highlighter and Link with it.
   useEffect(() => {
@@ -2745,17 +2750,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (annotateCode) setAnnotateCode(false);
     if (highlighting) setHighlighting(false);
   }, [annotateCode, editing, highlighting]);
-
-  /** Annotate PE/class flip can desync host-bound ink — replay after the mode settles. */
-  useEffect(() => {
-    if (!interactive) return;
-    if (!inkNeedsAnnotateToggleReplay(mobileRegionRef.current)) return;
-    const id = requestAnimationFrame(() => {
-      if (pendingHostScrollRef.current) return;
-      rasterInkRef.current?.replayCommitted();
-    });
-    return () => cancelAnimationFrame(id);
-  }, [annotateCode, interactive]);
 
   useEffect(() => {
     onHighlightingChange?.(highlighting);
@@ -9106,6 +9100,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             scrollX: state.scrollX ?? 0,
             scrollY: state.scrollY ?? 0,
             zoom: state.zoom?.value ?? 1,
+            linedPaperMode: linedPaperRef.current,
             ...(linedPitchRef.current > 0 ? { linedPitch: linedPitchRef.current } : {}),
             ...(linedPitchPairRef.current
               ? {
@@ -9187,7 +9182,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         linedFirstFitZoomRef.current = null;
         linedRuleRef.current = lined.rule;
         linedPitchRef.current = activeLinedPitch(lined.pair, lined.rule);
-        if (lined.rule && linedPaperRef.current !== "off") {
+        if (isLinedPaperMode(saved.linedPaperMode)) {
+          linedPaperRef.current = saved.linedPaperMode;
+          setLinedPaperMode(saved.linedPaperMode);
+        } else if (lined.rule && linedPaperRef.current !== "off") {
           linedPaperRef.current = lined.rule;
           setLinedPaperMode(lined.rule);
           saveLinedPaperMode(lined.rule);
@@ -9201,6 +9199,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         delete saved.linedPitchWide;
         delete saved.linedPitchCollege;
         delete saved.linedRule;
+        delete saved.linedPaperMode;
         if (options?.files && apiRef.current?.addFiles) {
           const list = Object.values(options.files).map((file) => ({
             id: file.id,
@@ -9425,9 +9424,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                         : "lc-lined-toggle lc-tip-target"
                     }
                     aria-pressed={annotateCode}
-                    aria-label={annotateCode ? "Hide toolbar" : "Show toolbar"}
+                    aria-label={editing ? "Annotation requires Preview" : annotateCode ? "Hide toolbar" : "Show toolbar"}
+                    aria-disabled={editing || undefined}
                     data-tip={
-                      annotateCode
+                      editing ? "Switch to Preview to annotate" : annotateCode
                         ? "Toolbar on — tap to scroll the page"
                         : "Toolbar — annotate this page"
                     }
