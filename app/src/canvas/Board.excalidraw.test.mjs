@@ -317,8 +317,10 @@ describe("Board", () => {
     expect(down).toMatch(/!onPdfDoc/);
     expect(src).toMatch(/if \(!onPdfDoc\) event\.stopPropagation\(\)/);
     expect(src).toMatch(
-      /hold-to-marquee listener on `\.lc-doc-selectable` still has to fire/,
+      /listener on `\.lc-doc-selectable` still has to fire/,
     );
+    expect(src).not.toMatch(/pointerOnSelectableText/);
+    expect(src).toMatch(/else if \(onPdfDoc \|\| onSelectableDoc\)/);
   });
 });
 
