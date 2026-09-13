@@ -169,7 +169,7 @@ import {
 } from "../modes/pdfFilm";
 import { pdfLandingHoldClear, pdfPreloadPages, pdfRestPages } from "../modes/pdfPaintWindow";
 import { remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
-import { eraserScreenRadius } from "./rasterInk";
+import { eraserPageWidth, eraserScreenRadius } from "./rasterInk";
 import { applyLinedSlotStyle, linedOverlayViewport, linedSlotCanSkip } from "./linedSlot";
 import { SPLIT_RESIZE_EVENT, sashDragActive, splitResizePhase } from "../util/splitResize";
 import { reanchorInkOps } from "./reanchorInk";
@@ -5313,7 +5313,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       const { zoom } = clientToScene(next.clientX, next.clientY);
       brushZoomRef.current = zoom;
-      brush.setDiameter(eraserScreenRadius(strokeWidthRef.current, zoom) * 2);
+      const page = pageBoundsRef.current;
+      const pageW = eraserPageWidth(page ? page.maxX - page.minX : undefined);
+      brush.setDiameter(eraserScreenRadius(strokeWidthRef.current, zoom, pageW) * 2);
       brush.move(next.clientX - boardRect.left, next.clientY - boardRect.top);
       if (!visible) {
         visible = true;
@@ -5349,7 +5351,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   // next pointer sample. This runs per slider step, not per move.
   useEffect(() => {
     if (activeTool !== "eraser") return;
-    eraserBrushRef.current?.setDiameter(eraserScreenRadius(strokeWidth, brushZoomRef.current) * 2);
+    const page = pageBoundsRef.current;
+    const pageW = eraserPageWidth(page ? page.maxX - page.minX : undefined);
+    eraserBrushRef.current?.setDiameter(
+      eraserScreenRadius(strokeWidth, brushZoomRef.current, pageW) * 2,
+    );
   }, [activeTool, strokeWidth]);
 
   const undoBoard = useCallback(() => {
