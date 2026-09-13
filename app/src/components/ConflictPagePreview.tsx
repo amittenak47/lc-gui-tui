@@ -26,6 +26,7 @@ import {
   linedPaperScenePitch,
   type LinedPitchPair,
   type LinedRuling,
+  type LinedPaperMode,
 } from "../util/linedPaperPref";
 import {
   conflictFitSpan,
@@ -76,6 +77,7 @@ export function ConflictPagePreview({
   linedPitch,
   linedPitchPair,
   linedRule,
+  linedPaperMode = "off",
   focusKey,
   decodedInk,
   inkLoading = false,
@@ -107,6 +109,7 @@ export function ConflictPagePreview({
   linedPitch?: number;
   linedPitchPair?: LinedPitchPair | null;
   linedRule?: LinedRuling | null;
+  linedPaperMode?: LinedPaperMode;
   /** Re-scroll when the focused row changes, even if the page number did not. */
   focusKey?: string;
   /**
@@ -386,11 +389,12 @@ export function ConflictPagePreview({
     return cssWidth / Math.max(1, boxW);
   }, [usePaper, cssWidth, sceneWidth, inkX]);
   const scenePitch = useMemo(() => {
+    if (linedPaperMode === "off") return 0;
     const fromPair = activeLinedPitch(linedPitchPair ?? null, linedRule ?? null);
     if (fromPair > 0) return fromPair;
     if (linedPitch && linedPitch > 0) return linedPitch;
-    return linedPaperScenePitch("wide", paperZoom);
-  }, [linedPitchPair, linedRule, linedPitch, paperZoom]);
+    return linedPaperScenePitch(linedPaperMode, paperZoom);
+  }, [linedPitchPair, linedRule, linedPitch, linedPaperMode, paperZoom]);
 
   useLayoutEffect(() => {
     const doc = docRef.current;
@@ -588,7 +592,7 @@ export function ConflictPagePreview({
                     index === paperFrames.length - 1,
                     conflictFitSpan(sceneWidth, inkX)?.width,
                   ),
-                  ...(lined ?? {}),
+                  ...(lined ?? { backgroundImage: "none" }),
                 }}
               />
             );

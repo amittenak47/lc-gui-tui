@@ -176,27 +176,30 @@ export function horizontalScrollHostsIn(doc: Element): HTMLElement[] {
  * overflow-y-only hosts appended.
  */
 export function scrollHostsIn(doc: Element): HTMLElement[] {
-  const horizontal = horizontalScrollHostsIn(doc);
-  const seen = new Set(horizontal);
-  const verticalOnly = hostsIn(
-    doc,
-    (node) => isVerticalScrollHost(node) && !seen.has(node),
-  );
+  const horizontal: HTMLElement[] = [];
+  const verticalOnly: HTMLElement[] = [];
+  for (const node of hostCandidates(doc)) {
+    if (isHorizontalScrollHost(node)) horizontal.push(node);
+    else if (isVerticalScrollHost(node)) verticalOnly.push(node);
+  }
   return horizontal.length === 0 ? verticalOnly : [...horizontal, ...verticalOnly];
 }
 
+function hostCandidates(doc: Element): HTMLElement[] {
+  // Markdown's scroll containers are code/math blocks and explicit source
+  // styles. Walking every word/glyph reads layout thousands of times on each
+  // pen-down and mode switch. Web/EPUB documents can have arbitrary CSS, so
+  // keep their general discovery path.
+  const selector = doc.matches(".lc-md-ink-doc, .lc-code-doc")
+    ? 'pre, .katex-display, [style*="overflow" i]'
+    : "*";
+  return Array.from(doc.querySelectorAll(selector)).filter(
+    (node): node is HTMLElement => node instanceof HTMLElement,
+  );
+}
+
 function hostsIn(doc: Element, match: (node: HTMLElement) => boolean): HTMLElement[] {
-  const hosts: HTMLElement[] = [];
-  const stop = doc.parentElement;
-  const walker = doc.ownerDocument?.createTreeWalker(doc, NodeFilter.SHOW_ELEMENT);
-  if (!walker) return hosts;
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    if (!(node instanceof HTMLElement)) continue;
-    if (node === doc) continue;
-    if (stop && !doc.contains(node)) continue;
-    if (match(node)) hosts.push(node);
-  }
-  return hosts;
+  return hostCandidates(doc).filter(match);
 }
 
 /** Document-order index of `host` among scroll hosts in `doc`, or null. */

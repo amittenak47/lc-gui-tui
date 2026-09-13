@@ -36,6 +36,7 @@ export interface BoardBlob {
     linedPitchWide?: number;
     linedPitchCollege?: number;
     linedRule?: "wide" | "college";
+    linedPaperMode?: "wide" | "college" | "off";
   };
   /** Raster pen/eraser ops as written before the codec — still read, never written. */
   ink?: InkOp[];

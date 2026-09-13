@@ -121,7 +121,7 @@ export interface RasterInkHandle {
   hasInk(): boolean;
   isDrawing(): boolean;
   repaint(): void;
-  replayCommitted(): void;
+  replayCommitted(onlyHostBound?: boolean): void;
   /** Slice the first paint after restore so loading overlay drop cannot ANR. */
   primeSnap(): Promise<void>;
   syncCamera(allowPaused?: boolean): void | Promise<void>;
@@ -1021,8 +1021,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (drawingRef.current) return;
           presentIfCameraMoved();
         },
-        replayCommitted() {
+        replayCommitted(onlyHostBound = false) {
           if (drawingRef.current || preparingRef.current) return;
+          if (onlyHostBound && !bookRef.current.hasHostBoundInk()) return;
           rebuildAndReplay(false, false);
         },
         primeSnap() {
@@ -1570,7 +1571,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             capillary: capillaryRef.current,
           }),
         );
-        engine.captureSnap();
+        // The previous lift/replay already committed the page to the snap.
+        // Copying the full overdraw canvas here charges every short pen stroke
+        // for pixels that have not changed since the preceding lift.
         engine.down(sampleOf(canvas, event));
         liveDirty = true;
         liveHold = false;

@@ -395,6 +395,12 @@ describe("applyInkChoice", () => {
 });
 
 describe("previewInkPages", () => {
+  it("previews unchanged ink when only the pad metadata conflicts", async () => {
+    const { previewInkPages } = await import("./inkSync");
+    const stamps = [{ pageId: 1, updatedAt: 10 }];
+    expect(previewInkPages([1], [1], stamps, stamps)).toEqual([1]);
+    expect(previewInkPages([0], [0], [{ pageId: 0, updatedAt: 10 }], [{ pageId: 0, updatedAt: 10 }])).toEqual([0]);
+  });
   it("opens on the first page this device has ink for", async () => {
     const { previewInkPages } = await import("./inkSync");
     expect(previewInkPages([7, 12, 40], [1, 7])).toEqual([7]);
