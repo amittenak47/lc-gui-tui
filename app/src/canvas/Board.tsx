@@ -4123,32 +4123,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       !annotateCodeRef.current &&
       resolveElement(target)?.closest(".lc-code-dock") != null;
 
-    /** Hit is on selectable prose/code/PDF text — native Selection owns the drag. */
-    const pointerOnSelectableText = (
-      clientX: number,
-      clientY: number,
-      target: EventTarget | null,
-    ): boolean => {
-      const el = resolveElement(target);
-      if (!el?.closest(".lc-doc-selectable-body")) return false;
-      if (el.closest(".lc-doc-select-overlay, .lc-doc-sheet, .lc-doc-confirm")) return false;
-      if (el.closest("img, canvas, svg, video")) return false;
-      const caret =
-        typeof document.caretRangeFromPoint === "function"
-          ? document.caretRangeFromPoint(clientX, clientY)
-          : null;
-      if (caret?.startContainer?.nodeType === Node.TEXT_NODE) {
-        return (caret.startContainer.textContent?.length ?? 0) > 0;
-      }
-      // PDF text layer spans — caretRangeFromPoint is flaky; trust the layer.
-      if (el.closest(".lc-pdf-text, .textLayer")) return true;
-      // Inside pre/code but not on a text node → leave for sideScroll / pan.
-      if (el.closest("pre, code")) return false;
-      return (
-        el.closest("p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, span, label") != null
-      );
-    };
-
     const isScrollSurface = (target: EventTarget | null) => {
       const el = resolveElement(target);
       if (!el) return false;
@@ -4390,19 +4364,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        */
       if (isSubMarkDragLive()) return;
 
-      // A PDF is a pan. Markdown still defers 16px so hold-to-select can arm.
-      // Do not stopPropagation — the hold-to-marquee listener on `.lc-doc-selectable` still has to fire.
+      // A PDF is a pan. Markdown is too: a mouse flick on prose used to
+      // return here so native drag-select could own the gesture, which is
+      // how a chapter you can wheel through would not move under the pointer.
+      // Stillness still arms hold-to-select; do not stopPropagation — that
+      // listener on `.lc-doc-selectable` still has to fire.
       const onPdfDoc =
         resolveElement(event.target)?.closest(
           ".lc-pdf-doc, .lc-pdf-page, .lc-pdf-canvas, .lc-pdf-text, .textLayer",
         ) != null;
-      if (
-        event.pointerType === "mouse" &&
-        !onPdfDoc &&
-        pointerOnSelectableText(event.clientX, event.clientY, event.target)
-      ) {
-        return;
-      }
 
       const onCodeDock = isCodeDockTarget(event.target);
       const codeDockEl = onCodeDock
@@ -4449,10 +4419,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       flickSettleErrRef.current = 0;
 
       // Code dock: defer preventDefault until pan arms — taps must reach Monaco.
+      // Markdown prose must preventDefault too, or native drag-select starts
+      // in the 16px slop and then wins the gesture.
       if (!deferred) {
         event.preventDefault();
         if (!onPdfDoc) event.stopPropagation();
-      } else if (onPdfDoc) {
+      } else if (onPdfDoc || onSelectableDoc) {
         event.preventDefault();
       }
 
@@ -4571,10 +4543,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!drag.armed) {
         if (Math.hypot(dx, dy) < armThresholdPx(drag)) return;
         if (drag.selectableDoc) {
-          const live = window.getSelection();
-          if (live && !live.isCollapsed && live.rangeCount > 0) {
+          if (selectionOwnsGesture()) {
             dropPanForSelection();
             return;
+          }
+          try {
+            window.getSelection()?.removeAllRanges();
+          } catch {
+            /* native highlight is not the reading gesture */
           }
         }
         stopPanInertia();
