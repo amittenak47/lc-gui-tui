@@ -48,7 +48,6 @@ import {
   shouldFlushLiveHud,
   skipCommittedReplay,
   skipHostBoundPresentWhileCameraBusy,
-  skipHostBoundPresentWhilePagePan,
   skipReplayOnWheelAbort,
   usePreStrokeStamp,
 } from "./inkLab/liveHost";
@@ -528,6 +527,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const marginYRef = useRef(0);
     const paintedViewRef = useRef<PaintedLabView | null>(null);
     const cameraMovingRef = useRef(false);
+    const lastStrokeAtRef = useRef(-Infinity);
     const sizeToHostRef = useRef<(allowPaused?: boolean, paint?: boolean) => void>(() => {});
 
     const ensureTiles = useCallback(() => {
@@ -536,7 +536,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           onTilesReady: () => tileReadyRef.current(),
           useWorker: true,
           persist: true,
-          pause: () => drawingRef.current || sashDragActive() ||
+          pause: () => drawingRef.current ||
+            performance.now() - lastStrokeAtRef.current < idleRemeshAfterStrokeMs() || sashDragActive() ||
             (splitPausedRef.current && !replayAllowPausedRef.current),
         });
       }
@@ -588,8 +589,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       if (!canvas) return [];
       const board = canvas.closest(".lc-board");
       if (!board) return [];
-      const { paintView } = readViews();
-      const rect = canvas.getBoundingClientRect();
+      const { paintView, marginY } = readViews();
+      // Paint at the live camera, even while the old bitmap is CSS-translated.
+      // Its client rect belongs to the old pixels and would shift host clips
+      // a second time. The stationary wrapper is the new bitmap's origin.
+      const wrapper = hostRef.current!.getBoundingClientRect();
+      const rect = { left: wrapper.left, top: wrapper.top - marginY };
       return boxedScrollHostsInBoard(board).map((host) => ({
         key: host.key,
         scrollLeft: host.el.scrollLeft,
@@ -702,7 +707,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       }
       committedBuildRef.current = false;
       tileReadyRef.current = () => {};
-      settleReplayWaiters();
+      // Camera callers are waiting for pixels, not cancellation. Keep their
+      // waiters until the idle retry presents, otherwise Board drops the CSS
+      // translation while the bitmap still belongs to the previous camera.
     };
 
     const settleReplayWaitersAfterPaint = (gen: number) => {
@@ -792,7 +799,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (drawingRef.current && !finishReplayWhileDrawing()) {
             committedBuildRef.current = false;
             replayNeededAfterStrokeRef.current = true;
-            settleReplayWaiters();
             return;
           }
           if (splitPausedRef.current && !allowPaused) return;
@@ -834,7 +840,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (drawingRef.current && !finishReplayWhileDrawing()) {
             committedBuildRef.current = false;
             replayNeededAfterStrokeRef.current = true;
-            settleReplayWaiters();
             return;
           }
 
@@ -905,7 +910,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const presentHostBoundOnly = useCallback((): boolean => {
       if (drawingRef.current || preparingRef.current) return false;
       if (splitPausedRef.current) return false;
-      if (skipHostBoundPresentWhilePagePan() && cameraMovingRef.current) return false;
       if (skipHostBoundPresentWhileCameraBusy()) return false;
       if (committedBuildRef.current) return false;
       if (!bookRef.current.hasHostBoundInk()) return false;
@@ -1020,7 +1024,15 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       const { view, marginY } = readViews();
       const windowed = applyPageWindow(view);
       if (committedBuildRef.current) {
-        return rebuildAndReplay(false, instantReplayOnCameraRebase(), true, allowPaused);
+        if (allowPaused && !replayAllowPausedRef.current) {
+          return rebuildAndReplay(false, instantReplayOnCameraRebase(), true, true);
+        }
+        // The active build reads the latest camera before presenting. Joining
+        // keeps scroll samples from restarting preparation on every frame.
+        return new Promise(resolve => {
+          replayWaitersRef.current.push(resolve);
+          tileReadyRef.current();
+        });
       }
       const next = {
         scrollX: view.scrollX,
@@ -1584,6 +1596,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           pending.opened = true;
           holdNestedScroll();
           drawingRef.current = false;
+          lastStrokeAtRef.current = performance.now();
+          scheduleIdleRemesh();
           highlightPtsRef.current = null;
           pendingStampPatchRef.current = null;
           erasePtsRef.current = null;
@@ -1705,6 +1719,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
          * blit over live pixels, and remesh after the pen has been idle.
          */
         cancelIdleRemesh();
+        lastStrokeAtRef.current = performance.now();
         if (
           (replayRafRef.current != null || committedBuildRef.current) &&
           !instantReplayOnPointerDown()
@@ -1872,6 +1887,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         holdNestedScroll();
         drawingRef.current = false;
         stopPaintPump();
+        lastStrokeAtRef.current = performance.now();
+        scheduleIdleRemesh();
         if (toolRef.current === "highlighter") {
           const raw = highlightPtsRef.current;
           highlightPtsRef.current = null;
@@ -2088,7 +2105,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         strokeHostRef.current = null;
         strokeHostElRef.current = null;
         sizeToHost();
-        scheduleIdleRemesh();
       };
 
       const ro = new ResizeObserver(() => sizeToHost());
@@ -2182,7 +2198,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           lastHostScrollRef.current = snapshotListedHostScroll(nestedHostsRef.current ?? []);
         }
         if (!bookRef.current.hasHostBoundInk()) return;
-        if (skipHostBoundPresentWhilePagePan() && cameraMovingRef.current) return;
         if (skipHostBoundPresentWhileCameraBusy()) return;
         if (frame != null) return;
         frame = requestAnimationFrame(() => {
@@ -2190,7 +2205,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (drawingRef.current || splitPausedRef.current) return;
           // The pending replay reads the latest offsets. Restarting it on
           // every scroll event starves coverage and repeatedly sorts the book.
-          if (committedBuildRef.current || cameraMovingRef.current) return;
+          if (committedBuildRef.current) return;
           if (toolRef.current) holdNestedScroll();
           if (remeshOnNestedHostScroll() || !presentHostBoundOnly()) {
             forgetPixelHistory();

@@ -2608,6 +2608,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const node = contentSlotNodeRef.current;
     if (node) {
       node.style.transform = contentSlotCssTransform(next);
+      // Client boxes change with every camera placement. Keep discovery
+      // cached, but measure fresh boxes when ink next needs host clips.
+      if (boardRef.current) invalidateBoardScrollHostLayout(boardRef.current);
       syncMarksSlotFrom(node, false);
     }
     return next;
