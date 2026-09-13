@@ -58,6 +58,7 @@ import {
   cameraPulseSettleMs,
   noteCameraBusy,
   noteCameraIdlePulse,
+  waitWhileCameraBusy,
 } from "../util/cameraBusy";
 import { noteReadingPointerDown } from "../util/inputLatency";
 import { traceOpen } from "../util/messageOf";
@@ -73,6 +74,7 @@ import {
   isDrawPageRegion,
 } from "../templates/drawPageGrowth";
 import { INK_REGION_GAP, INK_REGION_PAD, inkRegionSplit } from "./inkRegionSplit";
+import { idleRemeshAfterStrokeMs } from "./inkLab/liveHost";
 import { recolorTemplateElements } from "../templates/problemBoard";
 import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
 import { MOBILE_REGION_ORDER, REGION_GUTTER, REGION_MIN, REGION_BLURB, REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
@@ -234,9 +236,10 @@ import {
 } from "./docSelectionGesture";
 import {
   horizontalScrollHost,
+  hitBoardScrollHostAtPoint,
+  invalidateBoardScrollHostLayout,
   isInkPadTarget,
   restoreHostScrollIn,
-  scrollHostAtPoint,
   scrollHostLookupFromSlot,
   slotCssPerScene,
   snapshotHostScrollIn,
@@ -2001,11 +2004,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * How far the page has been dragged from the camera everything was painted at.
    *
    * Reading scroll leaves Excalidraw's camera alone (see `applyVisualScrollNow`),
-   * so the ink bitmap, Excalidraw's own canvases, the lined paper and the page
-   * title are all still correct *relative to the page* and wrong only by this
-   * translation. Writing `translate3d` on those few nodes (not a custom property
-   * on the board root) keeps the compositor cheap — `--lc-pan-*` on `.lc-board`
-   * invalidated style for the whole markdown subtree every sample.
+   * so the ink bitmap, Excalidraw's own canvases, the scene overlay, the
+   * selection chrome, the lined paper and the page title are all still correct
+   * *relative to the page* and wrong only by this translation. Writing
+   * `translate3d` on those few nodes (not a custom property on the board root)
+   * keeps the compositor cheap — `--lc-pan-*` on `.lc-board` invalidated style
+   * for the whole markdown subtree every sample.
    */
   const panOffsetRef = useRef({ x: 0, y: 0 });
   const panRideNodesRef = useRef<HTMLElement[]>([]);
@@ -2020,6 +2024,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     root.querySelectorAll(".lc-board-ink-lab-host canvas.lc-ink-lab-canvas").forEach((el) => {
       if (el instanceof HTMLElement) nodes.push(el);
     });
+    root.querySelectorAll("canvas.excalidraw__canvas").forEach((el) => {
+      if (el instanceof HTMLElement) nodes.push(el);
+    });
+    const overlay = root.querySelector(".lc-scene-overlay");
+    if (overlay instanceof HTMLElement) nodes.push(overlay);
+    const select = root.querySelector(".lc-scene-select");
+    if (select instanceof HTMLElement) nodes.push(select);
     if (titleSlotNodeRef.current) nodes.push(titleSlotNodeRef.current);
     panRideNodesRef.current = nodes;
   }, []);
@@ -2717,15 +2728,34 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const saved = pendingHostScrollRef.current ?? [];
     restoreHostScrollIn(contentSlotNodeRef.current, saved);
     rememberedHostScrollRef.current = saved;
+    let idleId: number | null = null;
+    let timeoutId: number | null = null;
     const replay = () => {
       restoreHostScrollIn(contentSlotNodeRef.current, saved);
       rememberedHostScrollRef.current = saved;
       refreshPanRideNodes();
-      rasterInkRef.current?.replayCommitted(true);
       pendingHostScrollRef.current = null;
+      const run = () => {
+        idleId = null;
+        timeoutId = null;
+        void waitWhileCameraBusy().then(() => {
+          rasterInkRef.current?.replayCommitted(true);
+        });
+      };
+      if (typeof requestIdleCallback === "function") {
+        idleId = requestIdleCallback(run, { timeout: idleRemeshAfterStrokeMs() });
+      } else {
+        timeoutId = window.setTimeout(run, idleRemeshAfterStrokeMs());
+      }
     };
     const id = requestAnimationFrame(replay);
-    return () => cancelAnimationFrame(id);
+    return () => {
+      cancelAnimationFrame(id);
+      if (idleId != null && typeof cancelIdleCallback === "function") {
+        cancelIdleCallback(idleId);
+      }
+      if (timeoutId != null) window.clearTimeout(timeoutId);
+    };
   }, [annotateCode, interactive, refreshPanRideNodes]);
 
   // Leaving Annotate puts the pen down, and the highlighter and Link with it.
@@ -3034,6 +3064,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           placeContentSlotAtRef.current(live.scrollX, live.scrollY, live.zoom);
         }
         clearPanOffsetsRef.current();
+        sceneOverlayRef.current?.redraw();
+        shapeSelectRef.current?.redraw();
         runSlotReports();
         onLanded?.();
       });
@@ -3947,8 +3979,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     setPagePanOffsetRef.current(rideDx, delta.dy);
     pulseCameraMotionRef.current();
-    sceneOverlayRef.current?.redraw();
-    shapeSelectRef.current?.redraw();
   }, []);
 
   const flushVisualScroll = useCallback(() => {
@@ -4012,6 +4042,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         zoom: now?.zoom ?? live.zoom,
       };
       clearPanOffsetsRef.current();
+      sceneOverlayRef.current?.redraw();
+      shapeSelectRef.current?.redraw();
       landPanOffset(() => {
         committingScrollRef.current = false;
       });
@@ -4059,6 +4091,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         zoom: now?.zoom ?? live.zoom,
       };
       clearPanOffsetsRef.current();
+      sceneOverlayRef.current?.redraw();
+      shapeSelectRef.current?.redraw();
       landPanOffset(() => {
         committingScrollRef.current = false;
       });
@@ -4151,6 +4185,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // snaps a wide codeblock back to 0 as the nib travels left-to-right.
       if (isInkPadTarget(el)) return false;
       return el.closest(".lc-board") != null;
+    };
+
+    const nestedHostAtPointer = (
+      clientX: number,
+      clientY: number,
+      target: EventTarget | null,
+    ) => {
+      invalidateBoardScrollHostLayout(root);
+      return (
+        hitBoardScrollHostAtPoint(clientX, clientY, root) ??
+        horizontalScrollHost(target)
+      );
     };
 
     const canOwnScroll = () => {
@@ -4382,8 +4428,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             activeToolRef.current === "highlighter" ||
             activeToolRef.current === "eraser"))
           ? null
-          : scrollHostAtPoint(event.clientX, event.clientY) ??
-            horizontalScrollHost(event.target);
+          : nestedHostAtPointer(event.clientX, event.clientY, event.target);
       /*
        * Selectable prose defers for the same reason, on time rather than axis.
        *
@@ -5199,6 +5244,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     docFlags.pointer(false);
     if (annotateToolFlipRef.current) {
       annotateToolFlipRef.current = false;
+      if (!annotateCodeRef.current && liveCameraRef.current?.live) {
+        commitVisualScrollRef.current();
+      }
       return;
     }
     commitVisualScrollRef.current();

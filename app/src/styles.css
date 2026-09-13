@@ -9288,12 +9288,13 @@ body[data-lc-sash-drag="horizontal"] {
  * board is not holding the gesture; under `.lc-board-reading` the ancestor's
  * `touch-action: none` wins and the drag is ours to carry out by hand.
  *
- * Reading mode only. Annotating, the pointer belongs to whatever tool is up:
- * a block that answered clicks itself would be a hole in the page where
- * Excalidraw cannot be selected into and a rubber band cannot be started.
+ * Always on the hosts, not toggled via `.lc-board-reading` / `.lc-board-annotating`.
+ * Flipping those ancestors used to restyle every `pre` and `.katex-display` on
+ * a DPV chapter — the toggle hitch, then a dead first pan.
  */
-.lc-board-reading .lc-page-content-slot .lc-md-ink-doc pre,
-.lc-board-reading .lc-page-content-slot .lc-md-ink-doc .katex-display {
+.lc-page-content-slot .lc-md-ink-doc pre,
+.lc-page-content-slot .lc-md-ink-doc .katex-display,
+.lc-page-content-slot .lc-code-doc-pre {
   pointer-events: auto;
   /*
    * `touch-action: pan-x` used to win over `.lc-doc-selectable * { touch-action: none }`
@@ -9302,18 +9303,8 @@ body[data-lc-sash-drag="horizontal"] {
    * nested `scrollLeft` via `sideScroll` — keep touch-action none.
    */
   touch-action: none;
-  overscroll-behavior-x: contain;
-}
-
-/*
- * Annotate: a stroke over a wide fence must not be read as nested pan, and a
- * layout hitch must not overflow-anchor the block back to scrollLeft 0.
- */
-.lc-board-annotating .lc-md-ink-doc pre,
-.lc-board-annotating .lc-md-ink-doc .katex-display,
-.lc-board-annotating .lc-code-doc-pre {
-  overflow-anchor: none;
   overscroll-behavior: none;
+  overflow-anchor: none;
 }
 
 .lc-md-ink-doc pre code {
@@ -9360,12 +9351,6 @@ body[data-lc-sash-drag="horizontal"] {
   font-family: inherit;
   font-size: inherit;
   white-space: inherit;
-}
-
-.lc-board-reading .lc-page-content-slot .lc-code-doc-pre {
-  pointer-events: auto;
-  touch-action: none;
-  overscroll-behavior-x: contain;
 }
 
 .lc-md-ink-doc table {
@@ -16306,15 +16291,13 @@ button.lc-row-selected:hover:not(:disabled) {
  * window must keep native drag-select, and a wide tablet in landscape can
  * miss the mobile media query.
  */
-.lc-android .lc-board-reading .lc-doc-selectable-body,
-.lc-android .lc-board-reading .lc-doc-selectable-body * {
+.lc-android .lc-board-reading .lc-doc-selectable-body {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
 }
 
-.lc-android .lc-board-reading.lc-board-highlighting .lc-doc-selectable-body,
-.lc-android .lc-board-reading.lc-board-highlighting .lc-doc-selectable-body * {
+.lc-android .lc-board-reading.lc-board-highlighting .lc-doc-selectable-body {
   -webkit-user-select: text;
   user-select: text;
   -webkit-touch-callout: default;
@@ -16348,13 +16331,12 @@ button.lc-row-selected:hover:not(:disabled) {
  * words move with it.
  *
  * Reading mode already sets `touch-action: none` on `.lc-board` so the board's
- * own pan can arm; this says the same thing about everything inside the
- * document, where the scrollable boxes actually are. Nothing is lost: Board
- * drives the sideways scroll of a wide block itself (`drag.sideScroll`), so
- * there was never a native scroll worth keeping.
+ * own pan can arm. Nested overflow hosts (`pre`, `.katex-display`) have the
+ * same rule on themselves. Do not select `.lc-doc-selectable *` — that restyles
+ * every KaTeX glyph when flipping annotate/scroll.
  */
-.lc-board-reading .lc-doc-selectable,
-.lc-board-reading .lc-doc-selectable * {
+.lc-doc-selectable,
+.lc-doc-selectable-body {
   touch-action: none;
   overscroll-behavior: contain;
 }
@@ -18470,7 +18452,9 @@ html.lc-doc-camera-live .lc-pdf-text.textLayer {
  * will-change kept the whole column as a GPU layer after the first new view.
  */
 html.lc-doc-camera-live .lc-page-content-slot,
-html.lc-doc-camera-live .lc-page-marks-slot {
+html.lc-doc-camera-live .lc-page-marks-slot,
+html.lc-doc-camera-live .lc-scene-overlay,
+html.lc-doc-camera-live .lc-scene-select {
   will-change: transform;
 }
 

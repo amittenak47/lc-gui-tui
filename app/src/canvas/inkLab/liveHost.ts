@@ -33,6 +33,45 @@ export function inkCanvasPixelsChanged(
 }
 
 /**
+ * Assigning `canvas.style.width/height/top` on every letter dirties layout
+ * even when the strings already match. The next `getBoundingClientRect` on
+ * nested hosts then walks the whole KaTeX tree.
+ */
+export function inkCanvasCssMatches(
+  canvas: { style: { width: string; height: string; top: string; left: string } },
+  cssW: number,
+  cssH: number,
+  top: string,
+): boolean {
+  return (
+    canvas.style.width === `${cssW}px` &&
+    canvas.style.height === `${cssH}px` &&
+    canvas.style.top === top &&
+    canvas.style.left === "0px"
+  );
+}
+
+/**
+ * After aborting remesh to take a letter, do not rebuild on that letter's lift.
+ * Lift-stack remesh (`collectScrollHosts` + tiles) occupies the main thread,
+ * so the next pointerdown sits in the queue — the blank gap before "th".
+ * Wait until the pen has been up this long.
+ */
+export function idleRemeshAfterStrokeMs(): number {
+  return 400;
+}
+
+/**
+ * Host-bound pen is still a pen. Lift already AABB-patched the letter onto
+ * the snap. `presentCommitted(null, true)` on that stack remeshed the whole
+ * notebook synchronously — frozen page, no ANR, ink appears after Home
+ * (Massive_Lag). Nested-scroll remesh stays on the host-scroll observer.
+ */
+export function remeshOnHostBoundLift(): boolean {
+  return false;
+}
+
+/**
  * Hold-open of the nib wheel aborts the live stroke. The committed snap still
  * has the page. Replaying every overlay spine on that timer ANRs a tablet
  * sitting on a dense notebook.
@@ -71,6 +110,14 @@ export function instantReplayOnFirstPresent(): boolean {
  * on the nib stack — "Whiteboard isn't responding" plus a growing clip square.
  */
 export function instantReplayOnPointerDown(): boolean {
+  return false;
+}
+
+/**
+ * An in-flight sliced remesh must not blit onto the host after the nib is down.
+ * That wipe is the growing clip square. Abort the gen; do not finish the step.
+ */
+export function finishReplayWhileDrawing(): boolean {
   return false;
 }
 

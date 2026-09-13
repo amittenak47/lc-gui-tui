@@ -4,7 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   horizontalScrollHost,
   horizontalScrollHostsIn,
+  hitScrollHostAtPoint,
+  hitScrollHostAtBoxes,
+  hitBoardScrollHostAtPoint,
   hostKeyInDoc,
+  listScrollHostsInBoard,
+  rememberBoardScrollHosts,
   hostScrollSnapshotOf,
   isInkPadTarget,
   mergeHostScrollSnapshots,
@@ -232,6 +237,57 @@ describe("scrollHostAtPoint", () => {
     board.append(ink);
     document.elementsFromPoint = () => [ink, board];
     expect(scrollHostAtPoint(10, 10)).toBeNull();
+  });
+
+  it("does not hit-test the page when there is no document", () => {
+    const ink = document.createElement("canvas");
+    ink.className = "lc-ink-lab-canvas";
+    document.body.append(ink);
+    const hit = vi.fn(() => [ink]);
+    document.elementsFromPoint = hit;
+    expect(scrollHostAtPoint(10, 10)).toBeNull();
+    expect(hit).not.toHaveBeenCalled();
+  });
+
+  it("hit-tests a cached host list without walking the document", () => {
+    const { pre } = buildDoc();
+    pre.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }) as DOMRect;
+    expect(hitScrollHostAtPoint(10, 10, [pre])).toBe(pre);
+    expect(hitScrollHostAtPoint(200, 200, [pre])).toBeNull();
+  });
+
+  it("hit-tests cached boxes without reading layout", () => {
+    const { pre } = buildDoc();
+    const layout = vi.fn(() => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }) as DOMRect);
+    pre.getBoundingClientRect = layout;
+    const boxes = [
+      { el: pre, doc: 0, key: 0, left: 0, top: 0, right: 100, bottom: 100 },
+    ];
+    expect(hitScrollHostAtBoxes(10, 10, boxes)?.el).toBe(pre);
+    expect(hitScrollHostAtBoxes(200, 200, boxes)).toBeNull();
+    expect(layout).not.toHaveBeenCalled();
+  });
+
+  it("reuses a board host list so a second pan down skips getComputedStyle", () => {
+    const { board, pre } = buildDoc();
+    pre.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }) as DOMRect;
+    const style = vi.spyOn(window, "getComputedStyle");
+    rememberBoardScrollHosts(board, listScrollHostsInBoard(board));
+    const firstCalls = style.mock.calls.length;
+    expect(hitBoardScrollHostAtPoint(10, 10, board)).toBe(pre);
+    const afterBox = style.mock.calls.length;
+    expect(hitBoardScrollHostAtPoint(10, 10, board)).toBe(pre);
+    expect(style.mock.calls.length).toBe(afterBox);
+    expect(afterBox).toBe(firstCalls);
+    style.mockRestore();
+  });
+
+  it("lists nested hosts in a board once for later hit-tests", () => {
+    const { board, pre } = buildDoc();
+    expect(listScrollHostsInBoard(board)).toEqual([{ el: pre, doc: 0, key: 0 }]);
+    expect(listScrollHostsInBoard(document.createElement("div"))).toEqual([]);
   });
 });
 

@@ -3,11 +3,15 @@ import { describe, expect, it } from "vitest";
 import { WhiteboardInkLab } from "./WhiteboardInkLab";
 import {
   inkCanvasPixelsChanged,
+  inkCanvasCssMatches,
+  idleRemeshAfterStrokeMs,
+  remeshOnHostBoundLift,
   instantReplayOnBackingResize,
   instantReplayOnCameraRebase,
   instantReplayOnFirstPresent,
   instantReplayOnPageWindow,
   instantReplayOnPointerDown,
+  finishReplayWhileDrawing,
   instantReplayOnUndo,
   keepLivePaintPump,
   remeshOnCameraMovingEnd,
@@ -64,12 +68,32 @@ describe("WhiteboardInkLab", () => {
     expect(remeshOnCameraMovingEnd(false)).toBe(false);
   });
 
+  it("does not remesh on letter lift; waits until the pen is idle", () => {
+    expect(idleRemeshAfterStrokeMs()).toBe(400);
+    expect(remeshOnHostBoundLift()).toBe(false);
+  });
+
+  it("skips ink canvas CSS writes when the park already matches", () => {
+    expect(
+      inkCanvasCssMatches(
+        { style: { width: "1px", height: "2px", top: "-3px", left: "0px" } },
+        1,
+        2,
+        "-3px",
+      ),
+    ).toBe(true);
+  });
+
   it("slices the first present after a restore", () => {
     expect(instantReplayOnFirstPresent()).toBe(false);
   });
 
   it("does not instantly remesh the notebook on pointer down", () => {
     expect(instantReplayOnPointerDown()).toBe(false);
+  });
+
+  it("does not blit a sliced remesh over a live stroke", () => {
+    expect(finishReplayWhileDrawing()).toBe(false);
   });
 
   it("does not instantly remesh the notebook on undo without a pixel patch", () => {
