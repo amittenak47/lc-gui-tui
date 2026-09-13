@@ -9099,7 +9099,6 @@ body[data-lc-sash-drag="horizontal"] {
   z-index: 1;
   transform-origin: 0 0;
   /* Scroll moves this via transform only — keep it off the layout path. */
-  will-change: transform;
   /* Not `contain: paint` — that makes Range.getClientRects() the slot box,
    * so the hold marquee is treated as a page-cover and never paints. */
   contain: layout;
@@ -18462,9 +18461,17 @@ html.lc-doc-camera-live .lc-pdf-text.textLayer {
   /* Above `.lc-annotating-code .lc-raster-ink` (12) and the toolbar dock. */
   z-index: 13;
   transform-origin: 0 0;
-  will-change: transform;
   pointer-events: none;
   overflow: visible;
+}
+
+/*
+ * Promote the markdown/PDF slots only while the camera is riding. A permanent
+ * will-change kept the whole column as a GPU layer after the first new view.
+ */
+html.lc-doc-camera-live .lc-page-content-slot,
+html.lc-doc-camera-live .lc-page-marks-slot {
+  will-change: transform;
 }
 
 

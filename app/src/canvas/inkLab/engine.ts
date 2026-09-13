@@ -1040,32 +1040,59 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
        * host. A full-canvas snap blit every paint is the 33–55ms rAF on a
        * tablet. Restoring a box that covers the frozen prefix was the growing
        * square: snap has no live ink, so that restore punched a hole the tail
-       * redraw never filled. The first frozen frame still redraws the whole
-       * stroke so the prefix lands on the host.
+       * redraw never filled. The first frames still redraw the whole *stroke*
+       * into its AABB so the prefix lands — never the whole canvas (`clip`
+       * null). Print letters never freeze a prefix, so a null clip made every
+       * down a page-sized copy.
        */
       const keepPrefix = from > 0 && prevBox != null;
-      const clip = keepPrefix
-        ? clipBlitRect(dirty, host.width, host.height, CLIP_BLIT_PAD)
-        : null;
-      presentHost(ctx, clip, snap);
+      const clip = clipBlitRect(dirty, host.width, host.height, CLIP_BLIT_PAD);
+      if (clip) presentHost(ctx, clip, snap);
       drawDots(reshaped.points, clip, keepPrefix ? from : 0, dirty);
       liveRedrawBox = from > 0 ? currentDirty : null;
       lastSuffix = Boolean(clip);
       return lastSuffix;
     }
+    const strokeClip = clipBlitRect(aabb, host.width, host.height, CLIP_BLIT_PAD);
+    if (strokeClip) presentHost(ctx, strokeClip, snap);
     if (sdf) {
       lastSuffix = flushSdfLive();
-      presentHost(ctx, null, snap);
-      ctx.drawImage(sdf.canvas, 0, 0);
+      if (strokeClip) {
+        ctx.drawImage(
+          sdf.canvas,
+          strokeClip.x,
+          strokeClip.y,
+          strokeClip.w,
+          strokeClip.h,
+          strokeClip.x,
+          strokeClip.y,
+          strokeClip.w,
+          strokeClip.h,
+        );
+      }
       drawTip(ctx);
     } else if (fallback) {
-      presentHost(ctx, null, snap);
-      fallback.blit(ctx);
+      if (strokeClip) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(strokeClip.x, strokeClip.y, strokeClip.w, strokeClip.h);
+        ctx.clip();
+        fallback.blit(ctx);
+        ctx.restore();
+      }
       drawTip(ctx);
       lastSuffix = true;
     } else {
-      presentHost(ctx, null, snap);
-      fillMiterStroke(ctx, spine, tip, INK_RGB);
+      if (strokeClip) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(strokeClip.x, strokeClip.y, strokeClip.w, strokeClip.h);
+        ctx.clip();
+        fillMiterStroke(ctx, spine, tip, INK_RGB);
+        ctx.restore();
+      } else {
+        fillMiterStroke(ctx, spine, tip, INK_RGB);
+      }
       lastSuffix = false;
     }
     return lastSuffix;
