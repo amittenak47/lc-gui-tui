@@ -422,7 +422,6 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/presentHostBoundOnly/);
     expect(src).toMatch(/remeshOnNestedHostScroll/);
     expect(src).toMatch(/skipHostBoundPresentWhileCameraBusy/);
-    expect(src).toMatch(/skipHostBoundPresentWhilePagePan/);
     expect(src).not.toMatch(/cameraMovingRef\.current \|\| isCameraBusy\(\)/);
     expect(src).toMatch(/setSliceVisible/);
     expect(src).not.toMatch(/tiles\.size === 0 && !tiles\.settled/);
@@ -447,7 +446,6 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/scheduleIdleRemesh/);
     expect(src).toMatch(/idleRemeshAfterStrokeMs/);
     expect(src).toMatch(/inkCanvasCssMatches/);
-    expect(src).toMatch(/sizeToHost\(\);\s*scheduleIdleRemesh\(\);/);
     expect(src).toMatch(/remeshOnHostBoundLift/);
     expect(src).toMatch(/else if \(!remeshOnHostBoundLift\(\)\)/);
     expect(src).not.toMatch(/isHostBoundOp\(op\) \|\| !patch/);

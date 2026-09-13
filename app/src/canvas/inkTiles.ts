@@ -372,6 +372,9 @@ export class InkTileCache {
   private workerGeneration = 0;
   private workerOps: readonly InkOp[] | null = null;
   private persistDirty = false;
+  private persistQueue = new Map<string, Tile>();
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private persistInFlight = false;
 
   constructor(options: InkTileCacheOptions = {}) {
     this.tilePx = options.tilePx ?? TILE_PX;
@@ -598,7 +601,6 @@ export class InkTileCache {
   deferOp(op: InkOp): void {
     this.invalidateWorkerHistory();
     this.ops.push(op);
-    this.sig = this.contentSig();
     this.persistDirty = true;
     if (isHostBoundOp(op) || this.tiles.size === 0) return;
     const bounds = this.boundsOf(op);
@@ -713,6 +715,9 @@ export class InkTileCache {
   }
 
   dispose(): void {
+    if (this.persistTimer != null) clearTimeout(this.persistTimer);
+    this.persistTimer = null;
+    this.persistQueue.clear();
     this.invalidate();
     this.ops = [];
   }
@@ -722,8 +727,9 @@ export class InkTileCache {
   }
 
   private beginHydrate(): void {
+    if (!this.persist) return;
     this.sig = this.contentSig();
-    if (!this.persist || !this.sig) return;
+    if (!this.sig) return;
     const sig = this.sig;
     const gen = this.hydrateGen;
     this.hydrating = true;
@@ -787,19 +793,42 @@ export class InkTileCache {
 
   private schedulePersist(tile: Tile): void {
     if (!this.persist) return;
-    const sig = this.sig || this.contentSig();
-    this.sig = sig;
-    void blobFromTileSource(tile.canvas, tile.width, tile.height).then((blob) => {
-      if (!blob || this.sig !== sig) return;
-      return persistInkTile(sig, {
-        level: tile.level,
-        tx: tile.tx,
-        ty: tile.ty,
-        blob,
-        width: tile.width,
-        height: tile.height,
+    this.persistQueue.set(tile.key, tile);
+    this.schedulePersistIdle();
+  }
+
+  private schedulePersistIdle(delay = 500): void {
+    if (this.persistTimer != null || this.persistInFlight || this.persistQueue.size === 0) return;
+    // Hashing the book and GPU readback/PNG encoding must not run on a pen
+    // lift or a camera present. Drain one bitmap at a time after reading and
+    // writing have yielded, rather than encoding the whole cache in one turn.
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      if (this.moving || this.suspended || this.pause()) {
+        this.schedulePersistIdle();
+        return;
+      }
+      const tile = this.persistQueue.values().next().value as Tile | undefined;
+      if (!tile) return;
+      this.persistQueue.delete(tile.key);
+      if (this.tiles.get(tile.key) !== tile) {
+        this.schedulePersistIdle();
+        return;
+      }
+      const generation = this.workerGeneration;
+      const sig = this.sig || (this.sig = this.contentSig());
+      this.persistInFlight = true;
+      void blobFromTileSource(tile.canvas, tile.width, tile.height).then(blob => {
+        if (!blob || generation !== this.workerGeneration) return;
+        return persistInkTile(sig, {
+          level: tile.level, tx: tile.tx, ty: tile.ty, blob,
+          width: tile.width, height: tile.height,
+        });
+      }).finally(() => {
+        this.persistInFlight = false;
+        this.schedulePersistIdle(32);
       });
-    });
+    }, delay);
   }
 
   private pumpWorker(): void {
@@ -839,7 +868,8 @@ export class InkTileCache {
         }
         this.inflight.delete(key);
         if (bitmap) this.installSource(next.level, next.tx, next.ty, bitmap);
-        else if (!this.suspended) this.renderTile(next.level, next.tx, next.ty);
+        else if (!this.suspended && !this.pause()) this.renderTile(next.level, next.tx, next.ty);
+        else this.pending.push(next);
         this.evict();
         this.onTilesReady?.();
         if (!this.suspended && (this.pending.length > 0 || this.inflight.size > 0)) {
@@ -849,7 +879,8 @@ export class InkTileCache {
       .catch(() => {
         if (generation !== this.workerGeneration) return;
         this.inflight.delete(key);
-        if (!this.suspended) this.renderTile(next.level, next.tx, next.ty);
+        if (!this.suspended && !this.pause()) this.renderTile(next.level, next.tx, next.ty);
+        else this.pending.push(next);
         this.onTilesReady?.();
         if (!this.suspended && this.pending.length > 0) {
           this.idleHandle = this.schedule(() => this.runPending());
@@ -861,6 +892,11 @@ export class InkTileCache {
     this.workerGeneration += 1;
     this.workerOps = null;
     this.inflight.clear();
+    this.sig = "";
+    this.hydrateGen += 1;
+    this.hydrating = false;
+    this.persistQueue.clear();
+    this.persistDirty = this.persist;
   }
 
   /** Tiles currently held — for tests and for the metrics readout. */
@@ -981,6 +1017,7 @@ export class InkTileCache {
     const drop = this.tiles.size - this.budget;
     for (let i = 0; i < drop; i++) {
       this.tiles.delete(bySeen[i].key);
+      this.persistQueue.delete(bySeen[i].key);
     }
   }
 

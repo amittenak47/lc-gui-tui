@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./inkLab/tileRasterClient", () => ({ rasterInkTileOffThread: vi.fn() }));
 import { rasterInkTileOffThread } from "./inkLab/tileRasterClient";
+import * as tileStore from "./inkTileStore";
 
 import {
   boundsOverlap,
@@ -693,6 +694,67 @@ describe("InkTileCache", () => {
     expect(after).toBe(before);
   });
 
+  it("does not scan previous letters for a persistence fingerprint on lift", () => {
+    let reads = 0;
+    const first = draw([10, 10], [20, 20]);
+    Object.defineProperty(first.points[0], "x", { get: () => { reads++; return 10; } });
+    const { cache } = makeCache({ persist: true });
+    cache.syncOpsDeferred([first]);
+    reads = 0;
+    for (let i = 0; i < 100; i++) cache.deferOp(draw([30 + i, 30], [35 + i, 40]));
+    expect(reads).toBe(0);
+    cache.dispose();
+  });
+
+  it("defers bitmap encoding during scrolling and between printed letters", async () => {
+    vi.useFakeTimers();
+    const encode = vi.spyOn(tileStore, "blobFromTileSource").mockResolvedValue(null);
+    let writing = false;
+    const { cache } = makeCache({ persist: true, pause: () => writing });
+    try {
+      cache.syncOpsDeferred([draw([10, 10], [20, 20])]);
+      const { ctx } = destinationContext();
+      cache.draw(ctx, screen(1), 1);
+      expect(encode).not.toHaveBeenCalled();
+      cache.setMoving(true);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(encode).not.toHaveBeenCalled();
+      cache.setMoving(false);
+      writing = true;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(encode).not.toHaveBeenCalled();
+      writing = false;
+      await vi.advanceTimersByTimeAsync(500);
+      expect(encode).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(32);
+      expect(encode).toHaveBeenCalledTimes(2);
+    } finally {
+      cache.dispose(); encode.mockRestore(); vi.useRealTimers();
+    }
+  });
+
+  it("does not persist an old bitmap after asynchronous stroke geometry changes", async () => {
+    vi.useFakeTimers();
+    let finish!: (blob: Blob) => void;
+    const encode = vi.spyOn(tileStore, "blobFromTileSource").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const persist = vi.spyOn(tileStore, "persistInkTile").mockResolvedValue();
+    const { cache } = makeCache({ persist: true });
+    try {
+      const op = draw([10, 10], [20, 20]);
+      cache.syncOpsDeferred([op]);
+      cache.draw(destinationContext().ctx, screen(1), 1);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(encode).toHaveBeenCalledTimes(1);
+      op.points = draw([10, 10], [90, 90]).points;
+      cache.invalidateBounds(inkOpBounds(op), op);
+      finish(new Blob(["old pixels"]));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(persist).not.toHaveBeenCalled();
+    } finally {
+      cache.dispose(); encode.mockRestore(); persist.mockRestore(); vi.useRealTimers();
+    }
+  });
+
   it("rejects stale worker pixels and sends new ink in the next history snapshot", async () => {
     const jobs: Array<{ resolve: (bitmap: ImageBitmap) => void; ops: readonly InkOp[] }> = [];
     vi.mocked(rasterInkTileOffThread).mockImplementation((job) =>
@@ -725,6 +787,31 @@ describe("InkTileCache", () => {
     await vi.waitFor(() => expect(cache.size).toBe(1));
     expect(cache.covered).toBe(false); // Installed pixels have not been blitted yet.
     cache.draw(ctx, view, 1);
+    expect(cache.covered).toBe(true);
+    cache.dispose();
+  });
+
+  it("waits for writing idle before falling back from a failed tile worker", async () => {
+    let finish!: (bitmap: null) => void;
+    let writing = false;
+    vi.mocked(rasterInkTileOffThread).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const { cache, canvases, scheduled } = makeCache({ useWorker: true, pause: () => writing });
+    const view = { ...screen(1), width: 100, height: 100 };
+    cache.setOps([draw([10, 10], [20, 20])]);
+    cache.draw(destinationContext().ctx, view, 1);
+    scheduled.shift()!();
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    writing = true;
+    finish(null);
+    await vi.waitFor(() => expect(scheduled.length).toBeGreaterThan(0));
+    expect(canvases.created).toHaveLength(0);
+    scheduled.shift()!();
+    expect(canvases.created).toHaveLength(0);
+    writing = false;
+    vi.mocked(rasterInkTileOffThread).mockResolvedValue(null);
+    scheduled.shift()!();
+    await vi.waitFor(() => expect(canvases.created).toHaveLength(1));
+    cache.draw(destinationContext().ctx, view, 1);
     expect(cache.covered).toBe(true);
     cache.dispose();
   });
