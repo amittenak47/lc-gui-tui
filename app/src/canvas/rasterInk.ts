@@ -921,18 +921,43 @@ export function smoothPressure(previous: number, sample: number): number {
   return previous + (sample - previous) * PRESSURE_SMOOTHING;
 }
 
-/** Scene-unit eraser radius from the same slider as pen width. */
-export function eraserSceneRadius(strokeWidth: number): number {
-  return strokeWidth * 1.75;
+/**
+ * Desk the eraser dial is calibrated to (scratch / student-column width).
+ * Documents are a reading column (~760), so the same slider is page-sized
+ * unless radius is scaled by {@link eraserPageWidth}.
+ */
+export const ERASER_REF_PAGE_W = 3920;
+/** Clips at desk scale still use {@link ERASER_REF_PAGE_W} so ink past the sheet does not fatten the nib. */
+const ERASER_DESK_PAGE_FLOOR = ERASER_REF_PAGE_W * 0.85;
+
+/** Scene width the eraser slider is interpreted against. */
+export function eraserPageWidth(sceneWidth?: number | null): number {
+  if (!(typeof sceneWidth === "number") || !(sceneWidth > 0)) return ERASER_REF_PAGE_W;
+  if (sceneWidth >= ERASER_DESK_PAGE_FLOOR) return ERASER_REF_PAGE_W;
+  return sceneWidth;
 }
 
-export function eraserScreenRadius(strokeWidth: number, zoom: number): number {
-  return eraserSceneRadius(strokeWidth) * Math.max(0.05, zoom);
+/** Scene-unit eraser radius from the same slider as pen width. */
+export function eraserSceneRadius(strokeWidth: number, pageSceneWidth?: number | null): number {
+  return strokeWidth * 1.75 * (eraserPageWidth(pageSceneWidth) / ERASER_REF_PAGE_W);
+}
+
+export function eraserScreenRadius(
+  strokeWidth: number,
+  zoom: number,
+  pageSceneWidth?: number | null,
+): number {
+  return eraserSceneRadius(strokeWidth, pageSceneWidth) * Math.max(0.05, zoom);
 }
 
 /** Bitmap-pixel radius of the visible eraser ring. */
-export function eraserCanvasRadius(strokeWidth: number, zoom: number, dpr: number): number {
-  return Math.max(1, eraserScreenRadius(strokeWidth, zoom) * Math.max(0.05, dpr));
+export function eraserCanvasRadius(
+  strokeWidth: number,
+  zoom: number,
+  dpr: number,
+  pageSceneWidth?: number | null,
+): number {
+  return Math.max(1, eraserScreenRadius(strokeWidth, zoom, pageSceneWidth) * Math.max(0.05, dpr));
 }
 
 /** Raw pointer pressure: real 0–1 for stylus, {@link NO_PRESSURE} for mouse/touch. */

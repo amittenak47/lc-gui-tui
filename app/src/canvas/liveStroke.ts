@@ -306,6 +306,8 @@ export interface BeginLiveStroke {
   /** Shift/toggle chord; re-read each drained sample. Returns an index or null. */
   getStraightAnchor: () => number | null;
   host: { key: number; scrollLeft: number; scrollTop?: number } | null;
+  /** Scene width of the fitted page; eraser slider is calibrated to a 3920 desk. */
+  pageSceneWidth?: number;
   onNeedPaint: () => void;
   /**
    * Ink-lab host owns live samples and paint. Skip dwell and the ring so a
@@ -455,7 +457,7 @@ export class LiveStroke {
     } else {
       this.op = {
         kind: "erase",
-        radius: eraserSceneRadius(init.uiWidth),
+        radius: eraserSceneRadius(init.uiWidth, init.pageSceneWidth),
         points: this.spine.asPoints(),
       };
       this.liveRaw = null;

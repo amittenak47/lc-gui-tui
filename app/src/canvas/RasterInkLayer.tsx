@@ -15,6 +15,7 @@ import {
 
 import {
   HIGHLIGHT_WIDTH_SCALE,
+  eraserPageWidth,
   inkBaseWidthForZoom,
   inkLineWidth,
   liveRibbonDirtySpine,
@@ -1879,6 +1880,9 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
           host: host
             ? { key: host.key, scrollLeft: host.scrollLeft, scrollTop: host.scrollTop }
             : null,
+          pageSceneWidth: eraserPageWidth(
+            clipRef.current ? clipRef.current.maxX - clipRef.current.minX : undefined,
+          ),
           onNeedPaint: () => paintLiveAfterChangeRef.current(),
         });
         liveStrokeRef.current = stroke;

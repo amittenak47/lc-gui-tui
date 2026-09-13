@@ -71,6 +71,7 @@ import {
   inkLineWidth,
   isHostBoundOp,
   eraserCanvasRadius,
+  eraserPageWidth,
   eraserSceneRadius,
   paintHostBoundOps,
   paintRasterInk,
@@ -448,6 +449,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     getPageFramesRef.current = getPageFrames;
     const clipRef = useRef(clip);
     clipRef.current = clip;
+    const eraserPageW = () =>
+      eraserPageWidth(
+        clipRef.current ? clipRef.current.maxX - clipRef.current.minX : undefined,
+      );
     const onChangeRef = useRef(onChange);
     onChangeRef.current = onChange;
     const onStylusAccessoryRef = useRef(onStylusAccessory);
@@ -1462,7 +1467,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         const s = sampleOf(canvas, event);
         const { paintView } = readViews();
         const dpr = canvas.width / Math.max(1, canvas.clientWidth || 1);
-        const r = eraserCanvasRadius(strokeWidthRef.current, paintView.zoom, dpr);
+        const pageW = eraserPageW();
+        const r = eraserCanvasRadius(strokeWidthRef.current, paintView.zoom, dpr, pageW);
         engine.paintOntoSnap((ctx) => {
           ctx.save();
           ctx.globalCompositeOperation = "destination-out";
@@ -1478,7 +1484,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           appendErasePathPoint(
             live,
             highlightPointOf(canvas, event, paintView),
-            eraserSceneRadius(strokeWidthRef.current),
+            eraserSceneRadius(strokeWidthRef.current, pageW),
           );
         }
       };
@@ -1725,7 +1731,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             const op = bindInkOpToHost(
               {
                 kind: "erase" as const,
-                radius: eraserSceneRadius(strokeWidthRef.current),
+                radius: eraserSceneRadius(strokeWidthRef.current, eraserPageW()),
                 points: raw,
               },
               strokeHostRef.current,

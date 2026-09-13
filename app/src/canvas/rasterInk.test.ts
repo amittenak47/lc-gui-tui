@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 
+import { SCRATCH_PAGE_W } from "../templates/whiteboard";
+
 import {
   applyInkOp,
   applyInkPoolingAtEnds,
   clampExportScale,
+  ERASER_REF_PAGE_W,
   eraserCanvasRadius,
+  eraserPageWidth,
   eraserSceneRadius,
   eraserScreenRadius,
   exportScaleFrom,
@@ -122,6 +126,18 @@ describe("rasterInk sizing", () => {
     expect(eraserScreenRadius(2, 0.5)).toBe(1.75);
     expect(eraserCanvasRadius(2, 1, 2)).toBe(7);
     expect(eraserCanvasRadius(2, 0.5, 2)).toBe(3.5);
+  });
+
+  it("keeps the pad nib on a 3920 desk and shrinks it on a reading column", () => {
+    expect(ERASER_REF_PAGE_W).toBe(SCRATCH_PAGE_W);
+    expect(eraserPageWidth(3920)).toBe(ERASER_REF_PAGE_W);
+    expect(eraserPageWidth(3856)).toBe(ERASER_REF_PAGE_W);
+    expect(eraserSceneRadius(384, 3920)).toBe(384 * 1.75);
+    expect(eraserSceneRadius(384, 760)).toBeCloseTo(384 * 1.75 * (760 / 3920));
+    const avail = 844;
+    expect(eraserScreenRadius(384, avail / 3920, 3920)).toBeCloseTo(
+      eraserScreenRadius(384, avail / 760, 760),
+    );
   });
 
   it("keeps tip width fixed under stylus pressure (alpha only)", () => {
