@@ -17,6 +17,8 @@ import {
   pinHostScroll,
   pinHostScrollSnapshot,
   restoreDroppedHostScroll,
+  restoreListedHostScroll,
+  mutationAffectsScrollHosts,
   restoreHostScrollIn,
   scrollHostAtPoint,
   scrollHostLookupFromSlot,
@@ -429,6 +431,54 @@ describe("isInkPadTarget", () => {
 });
 
 describe("pinHostScroll", () => {
+  it("restores many fence offsets with one discovery per document", () => {
+    const { board, doc, pre } = buildDoc();
+    const fences = [pre];
+    for (let i = 0; i < 9; i++) {
+      const fence = document.createElement("pre");
+      fence.style.overflowX = "auto";
+      sizeOf(fence, 900, 400);
+      doc.append(fence); fences.push(fence);
+    }
+    const query = vi.spyOn(doc, "querySelectorAll");
+    restoreHostScrollIn(board, fences.map((_, key) => ({ doc: 0, key, left: 80 + key, top: 0 })));
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(fences.map(f => f.scrollLeft)).toEqual(fences.map((_, i) => 80 + i));
+    query.mockRestore();
+  });
+
+  it("pins cached elements without rediscovering hosts or reading styles", () => {
+    const { board, pre } = buildDoc();
+    const listed = listScrollHostsInBoard(board);
+    const query = vi.spyOn(board, "querySelectorAll");
+    const style = vi.spyOn(window, "getComputedStyle");
+    const pin = { doc: 0, key: 0, left: 80, top: 12 };
+    expect(restoreListedHostScroll(listed, [pin], pin)).toBe(pre);
+    expect(pre.scrollLeft).toBe(80);
+    expect(pre.scrollTop).toBe(12);
+    pre.scrollLeft = 0;
+    restoreListedHostScroll(listed, [pin], null);
+    expect(pre.scrollLeft).toBe(80);
+    pre.scrollLeft = 95;
+    restoreListedHostScroll(listed, [pin], null);
+    expect(pre.scrollLeft).toBe(95);
+    expect(query).not.toHaveBeenCalled();
+    expect(style).not.toHaveBeenCalled();
+    query.mockRestore(); style.mockRestore();
+  });
+
+  it("ignores toolbar mutations but catches changes/remounts in the document", () => {
+    const { board, doc, pre } = buildDoc();
+    const toolbar = document.createElement("div");
+    board.append(toolbar);
+    const record = (target: Node, addedNodes: Node[] = [], removedNodes: Node[] = []) =>
+      ({ target, addedNodes, removedNodes }) as unknown as MutationRecord;
+    expect(mutationAffectsScrollHosts([record(toolbar, [document.createElement("button")])])).toBe(false);
+    expect(mutationAffectsScrollHosts([record(pre)])).toBe(true);
+    expect(mutationAffectsScrollHosts([record(board, [], [doc])])).toBe(true);
+    expect(mutationAffectsScrollHosts([record(board, [doc])])).toBe(true);
+  });
+
   it("restores nested scroll that drifted during a stroke", () => {
     const el = document.createElement("div");
     Object.defineProperty(el, "scrollLeft", {

@@ -246,15 +246,12 @@ describe("Board", () => {
     expect(src).toMatch(/alreadyPlaced/);
     expect(src).toMatch(/const syncLiveBox = useCallback/);
     expect(src).toMatch(/const rideDx = scrollModeRef.current \? 0 : delta.dx/);
-    expect(src).toMatch(/idleRemeshAfterStrokeMs/);
-    expect(src).toMatch(/requestIdleCallback/);
     const toggle = src.slice(
       src.indexOf("Restore nested scroll after the mode class flip"),
       src.indexOf("Leaving Annotate puts the pen down"),
     );
-    expect(toggle).toMatch(/requestIdleCallback/);
-    expect(toggle).toMatch(/requestIdleCallback\(run/);
-    expect(toggle).toMatch(/waitWhileCameraBusy/);
+    expect(toggle).not.toMatch(/requestIdleCallback|waitWhileCameraBusy|setTimeout/);
+    expect(toggle).toMatch(/requestAnimationFrame\(replay\)/);
     expect(toggle).toMatch(/replayCommitted\(true\)/);
   });
 
@@ -266,6 +263,14 @@ describe("Board", () => {
     const css = readFileSync(join(here, "../styles.css"), "utf8");
     expect(css).not.toMatch(/\.lc-board-reading \.lc-doc-selectable \*/);
     expect(css).not.toMatch(/\.lc-board-annotating \.lc-md-ink-doc pre/);
+  });
+
+  it("does not measure document height on the vertical scroll transform path", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const place = src.slice(src.indexOf("const placeContentSlotAt ="), src.indexOf("placeContentSlotAtRef.current = placeContentSlotAt"));
+    expect(place).toContain("syncMarksSlotFrom(node, false)");
+    const sync = src.slice(src.indexOf("const syncMarksSlotFrom ="), src.indexOf("const [contentSceneWidth"));
+    expect(sync).toContain("if (measure) marks.style.height");
   });
 
   it("does not ping-pong a sash drag through window.resize", () => {
@@ -410,6 +415,15 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/useWorker: true/);
     expect(src).toMatch(/persist: true/);
     expect(src).toMatch(/if \(!tiles\.covered\) return/);
+    expect(src).toMatch(/replayGeometry\.matches\(latest\)/);
+    expect(src).toMatch(/pageGeometryRef\.current\.matches/);
+    expect(src).toMatch(/engine\.redrawSnapRegion/);
+    expect(src).toMatch(/capturePageStage/);
+    expect(src).toMatch(/presentHostBoundOnly/);
+    expect(src).toMatch(/remeshOnNestedHostScroll/);
+    expect(src).toMatch(/skipHostBoundPresentWhileCameraBusy/);
+    expect(src).toMatch(/skipHostBoundPresentWhilePagePan/);
+    expect(src).not.toMatch(/cameraMovingRef\.current \|\| isCameraBusy\(\)/);
     expect(src).toMatch(/setSliceVisible/);
     expect(src).not.toMatch(/tiles\.size === 0 && !tiles\.settled/);
     expect(src).not.toMatch(/new EraseBakeJob/);
@@ -437,7 +451,6 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/remeshOnHostBoundLift/);
     expect(src).toMatch(/else if \(!remeshOnHostBoundLift\(\)\)/);
     expect(src).not.toMatch(/isHostBoundOp\(op\) \|\| !patch/);
-    expect(src).toMatch(/cameraMovingRef\.current \|\| isCameraBusy\(\)/);
     expect(src).toMatch(/if \(!instant \|\| isLoadingDoodleActive\(\)\) await yieldToInput\(\)/);
     const capture = src.slice(
       src.indexOf("const captureStrokeHost"),

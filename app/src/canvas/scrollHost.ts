@@ -446,10 +446,14 @@ export function restoreHostScrollIn(
 ): void {
   if (!root || saved.length === 0) return;
   const docs = root.querySelectorAll(DOC_PAGE_SELECTOR);
+  const indexed = new Map<number, HTMLElement[]>();
   for (const pos of saved) {
     const doc = docs[pos.doc];
     if (!doc) continue;
-    const host = scrollHostsIn(doc)[pos.key];
+    // One discovery per document, not one full discovery per saved fence.
+    let hosts = indexed.get(pos.doc);
+    if (!hosts) { hosts = scrollHostsIn(doc); indexed.set(pos.doc, hosts); }
+    const host = hosts[pos.key];
     if (!host) continue;
     if (host.scrollLeft !== pos.left) host.scrollLeft = pos.left;
     if (host.scrollTop !== pos.top) host.scrollTop = pos.top;
@@ -536,6 +540,45 @@ export function restoreDroppedHostScroll(
     );
   });
   restoreHostScrollIn(root, pins);
+}
+
+/** Input hot path: the observer already indexed these elements. Do not
+ * rediscover every fence (and read computed styles) for each letter/sample. */
+export function restoreListedHostScroll(
+  hosts: readonly NestedScrollHost[],
+  remembered: readonly HostScrollSnapshot[],
+  pin: HostScrollSnapshot | null,
+  freeze = false,
+): HTMLElement | null {
+  const saved = new Map(remembered.map(pos => [`${pos.doc}:${pos.key}`, pos]));
+  let pinned: HTMLElement | null = null;
+  for (const host of hosts) {
+    if (!host.el.isConnected) continue;
+    const isPin = pin?.doc === host.doc && pin.key === host.key;
+    const pos = isPin ? pin : saved.get(`${host.doc}:${host.key}`);
+    if (!pos) continue;
+    if (isPin) pinned = host.el;
+    if (isPin || freeze ? host.el.scrollLeft !== pos.left : pos.left - host.el.scrollLeft > HOST_SCROLL_DROP_PX) host.el.scrollLeft = pos.left;
+    if (isPin || freeze ? host.el.scrollTop !== pos.top : pos.top - host.el.scrollTop > HOST_SCROLL_DROP_PX) host.el.scrollTop = pos.top;
+  }
+  return pinned;
+}
+
+export function snapshotListedHostScroll(hosts: readonly NestedScrollHost[]): HostScrollSnapshot[] {
+  return hosts.filter(host => host.el.isConnected).map(({ el, doc, key }) =>
+    ({ doc, key, left: el.scrollLeft, top: el.scrollTop }));
+}
+
+/** Toolbar/HUD mutations must not invalidate the document host index. */
+export function mutationAffectsScrollHosts(records: readonly MutationRecord[]): boolean {
+  const inDocument = (node: Node): boolean => {
+    const el = node.nodeType === 1 ? node as Element : node.parentElement;
+    return Boolean(el?.closest(DOC_PAGE_SELECTOR));
+  };
+  const containsDocument = (node: Node): boolean => node.nodeType === 1 &&
+    Boolean((node as Element).matches(DOC_PAGE_SELECTOR) || (node as Element).querySelector(DOC_PAGE_SELECTOR));
+  return records.some(record => inDocument(record.target) ||
+    [...record.addedNodes, ...record.removedNodes].some(containsDocument));
 }
 
 /** Write `pin` onto the current host for that key (survives React replacing the node). */
