@@ -321,6 +321,8 @@ import {
 import { annotatePadBody, whiteboardPadBody } from "./util/padSync";
 import { renameLibraryPad } from "./util/libraryPadRename";
 import { loadPadHub, loadPadSyncSince } from "./util/padHub";
+import { discoverHubPads, waitForPadPushes } from "./util/padSync";
+import { hubReloadAppState, hubReloadDocumentElements } from "./util/boardHubReload";
 import {
   applyConflictFootnoteBoards,
   deleteFootnoteWhiteboard,
@@ -388,12 +390,13 @@ import { ensureCodingRoom } from "./util/solutionPad";
 import { isDarkTheme } from "./theme/appThemes";
 import {
   enforceVisibleDrawingCap,
-  restoreMessageDrawing,
   setDrawingExpanded,
   visibleDrawings,
   withNewDrawing,
   MAX_VISIBLE_DRAWINGS,
 } from "./viz/drawingState";
+import { persistableAgentMessages, restoreAgentMessages } from "./modes/agentTranscript";
+import { DocumentDrawingPanel } from "./viz/DocumentDrawingPanel";
 import {
   applyAnnotation,
   applyHighlight,
@@ -464,12 +467,16 @@ async function flushDirtyInk(
   board: BoardHandle,
   docKey: string | null,
   attempt = 0,
+  strict = false,
 ): Promise<void> {
   if (!docKey) return;
   if (board.isInking()) {
-    if (attempt >= 8) return;
+    if (attempt >= 8) {
+      if (strict) throw new Error("Finish this stroke, then sync again.");
+      return;
+    }
     await new Promise((resolve) => window.setTimeout(resolve, 250));
-    return flushDirtyInk(board, docKey, attempt + 1);
+    return flushDirtyInk(board, docKey, attempt + 1, strict);
   }
   const dirty = board.takeDirtyInkPages();
   if (dirty.size === 0) return;
@@ -478,7 +485,8 @@ async function flushDirtyInk(
     board.markInkPagesFlushed(dirty.keys());
     // Phase 4: gzip is the worker's job. Do not await it under a save/tick.
     void drainDirtyInkArchives();
-  } catch {
+  } catch (cause) {
+    if (strict) throw cause;
     /* stay dirty — the next save retries */
   }
 }
@@ -1071,6 +1079,7 @@ export function Workspace({
         id: c.id,
         op: "reload",
       });
+      syncPreparedRevisionRef.current = syncWorkingRevisionRef.current();
       hubConflictAskRef.current = null;
       setHubConflictAsk(null);
       ask.resolve(resolution);
@@ -1106,6 +1115,8 @@ export function Workspace({
   }, []);
 
   const hubSyncHostRef = useRef<HubSyncWalkHost | null>(null);
+  const syncWorkingRevisionRef = useRef<(() => string)>(() => "");
+  const syncPreparedRevisionRef = useRef<string | null>(null);
   /**
    * Live rehydrate after a walk (and after auto-sync apply).
    *
@@ -1117,6 +1128,45 @@ export function Workspace({
   );
   if (!hubSyncHostRef.current) {
     hubSyncHostRef.current = {
+      prepare: async () => {
+        const board = boardRef.current;
+        const notebookId = whiteboardNotebookIdRef.current;
+        const docId = annotateDocIdRef.current;
+        if (!board || footnoteBoardRef.current) return;
+        if (footnoteBoardSessionRef.current) throw new Error("Close the scratch board before syncing the document.");
+        const id = notebookId ?? docId;
+        if (!id) return;
+        const kind = notebookId ? "whiteboard" : "annotate";
+        await waitForPadPushes(kind, id);
+        if (boardRef.current !== board || (notebookId ? whiteboardNotebookIdRef.current : annotateDocIdRef.current) !== id) {
+          throw new Error("The open pad changed. Sync the current pad again.");
+        }
+        await flushDirtyInk(board, notebookId ? whiteboardDocKey(id) : annotateDocKey(id), 0, true);
+        const revision = syncWorkingRevisionRef.current();
+        const live = board.saveBoard({ assembleInk: false });
+        const agent = persistableAgentMessages(agentMessagesRef.current);
+        if (notebookId) {
+          const previous = await getWhiteboardNotebook(id);
+          if (!previous) return;
+          await saveWhiteboardNotebook({
+            id, board: live, agent,
+            pageCount: Math.max(previous.pageCount, countWhiteboardPages(live.elements)),
+          });
+        } else {
+          const source = annotateSourceRef.current;
+          if (!source) return;
+          await saveAnnotateDoc({
+            id, name: source.name, hash: source.hash, source: source.text,
+            docType: source.docType, board: live, agent,
+            footnotes: annotateFootnotesRef.current,
+          });
+        }
+        // This is the working copy. Explicit Save alone owns the baseline.
+        if (revision !== syncWorkingRevisionRef.current()) {
+          throw new Error("The page changed while preparing sync. Your edits are kept; sync again.");
+        }
+        syncPreparedRevisionRef.current = revision;
+      },
       doc: () => {
         const job = indexInputsRef.current;
         if (!job) return null;
@@ -1164,6 +1214,10 @@ export function Workspace({
         };
       },
       emitReload: () => {
+        if (syncPreparedRevisionRef.current !== null &&
+            syncPreparedRevisionRef.current !== syncWorkingRevisionRef.current()) {
+          throw new Error("The page changed during sync. Your edits are kept; sync again to send them.");
+        }
         const notebookId = whiteboardNotebookIdRef.current;
         if (notebookId) {
           return applyHubReloadRef.current({
@@ -1994,6 +2048,18 @@ export function Workspace({
    */
   const agentMessagesRef = useRef<AgentChatMessage[]>([]);
   agentMessagesRef.current = agentMessages;
+  syncWorkingRevisionRef.current = () => {
+    const board = boardRef.current;
+    if (!board) return "";
+    return JSON.stringify([
+      whiteboardNotebookIdRef.current, annotateDocIdRef.current,
+      padContentFingerprint(board.getElements(), boardInkMix(board)),
+      footnoteRevision(annotateFootnotesRef.current),
+      persistableAgentMessages(agentMessagesRef.current),
+      annotateSourceRef.current?.text,
+      board.saveBoard({ assembleInk: false }).appState.linedPaperMode,
+    ]);
+  };
   /** FIFO coach sends waiting while a turn is in flight. */
   const coachSendQueueRef = useRef<CoachSendQueueItem[]>([]);
   /** Bumped on interrupt/merge so late HTTP/WS results are ignored. */
@@ -2153,6 +2219,13 @@ export function Workspace({
       const board = boardRef.current;
       const api = sceneApi();
       if (!board || !api) return;
+      if (isAnnotate(problemRef.current)) {
+        const ids = new Set(messages.flatMap((message) => message.drawing ? [message.drawing.program.id] : []));
+        const elements = board.getElements();
+        const kept = elements.filter((element) => !ids.has(element.customData?.lcVizId ?? ""));
+        if (kept.length !== elements.length) board.setElements(kept);
+        return;
+      }
       const visible = visibleDrawings(messages);
       const visibleIds = new Set(visible.map((drawing) => drawing.program.id));
       for (const id of Array.from(
@@ -2175,6 +2248,10 @@ export function Workspace({
     },
     [sceneApi],
   );
+
+  useEffect(() => {
+    if (problem && isAnnotate(problem) && !boardPreparing) syncDrawingsToBoard(agentMessages);
+  }, [agentMessages, boardPreparing, problem, syncDrawingsToBoard]);
 
   /** Stage 1 of the ambient sampler: cheap, synchronous, runs every tick. */
   const probe = useCallback((): AmbientProbe => {
@@ -4291,10 +4368,13 @@ export function Workspace({
     if (detail.op !== "reload") return;
     const board = boardRef.current;
     if (!board) return;
+    const beforeReload = syncWorkingRevisionRef.current();
     if (detail.kind === "whiteboard") {
       if (whiteboardNotebookIdRef.current !== detail.id) return;
       const notebook = await getWhiteboardNotebook(detail.id);
       if (!notebook) return;
+      if (boardRef.current !== board || whiteboardNotebookIdRef.current !== detail.id) return;
+      if (beforeReload !== syncWorkingRevisionRef.current()) throw new Error("The page changed during reload. Sync again.");
       padHubApplyRef.current = true;
       boardSaveSuspendedRef.current = true;
       try {
@@ -4303,7 +4383,7 @@ export function Workspace({
           WHITEBOARD_PAGE_LIMIT,
           Math.max(1, notebook.pageCount, countWhiteboardPages(notebook.board.elements)),
         );
-        board.restoreBoard(notebook.board.elements, live.appState, {
+        board.restoreBoard(notebook.board.elements, hubReloadAppState(live.appState, notebook.board.appState), {
           skeletons: buildWhiteboardTemplate(pages, isDarkTheme(themeId)),
           files: notebook.board.files,
           inkPalettes: notebook.board.inkPalettes,
@@ -4319,9 +4399,8 @@ export function Workspace({
          */
         await board.settleFitView();
         board.armReadingScroll();
-        if (notebook.agent.length > 0) {
-          setAgentMessages(restoreAgentMessages(notebook.agent));
-        }
+        agentMessagesRef.current = restoreAgentMessages(notebook.agent);
+        setAgentMessages(agentMessagesRef.current);
         const inkMix = boardInkMix(board);
         lastEditSeqHashRef.current = sceneFingerprint(board.getElements(), inkMix);
         lastEditSeqMarksRef.current = "";
@@ -4344,16 +4423,22 @@ export function Workspace({
     if (annotateDocIdRef.current !== detail.id) return;
     const doc = await getAnnotateDoc(detail.id);
     if (!doc) return;
+    if (boardRef.current !== board || annotateDocIdRef.current !== detail.id) return;
+    if (beforeReload !== syncWorkingRevisionRef.current()) throw new Error("The page changed during reload. Sync again.");
     padHubApplyRef.current = true;
     boardSaveSuspendedRef.current = true;
     try {
       const live = board.saveBoard({ assembleInk: false });
-      board.restoreBoard(doc.board.elements, live.appState, {
+      board.restoreBoard(hubReloadDocumentElements(doc.board.elements, live.elements),
+        hubReloadAppState(live.appState, doc.board.appState), {
         skipFit: true,
         files: doc.board.files,
         inkPalettes: doc.board.inkPalettes,
       });
       await restoreInk(board, annotateDocKey(doc.id), doc.board);
+      board.syncDocumentScrollBounds();
+      agentMessagesRef.current = restoreAgentMessages(doc.agent ?? []);
+      setAgentMessages(agentMessagesRef.current);
       setAnnotateFootnotesRaw(doc.footnotes ?? []);
       annotateFootnotesRef.current = doc.footnotes ?? [];
       const source = annotateSourceRef.current;
@@ -4402,11 +4487,18 @@ export function Workspace({
         });
         return;
       }
-      void applyHubReloadRef.current(detail);
+      // Background delivery must not replace an unsaved live page. Explicit
+      // Sync prepares the working copy and awaits the guarded reload itself.
+      const board = boardRef.current;
+      if (dirtyRef.current || (board && lastEditSeqHashRef.current !==
+          sceneFingerprint(board.getElements(), boardInkMix(board)))) return;
+      void applyHubReloadRef.current(detail).catch(() => {
+        setNotice("The page changed during sync. Tap Sync to try again.");
+      });
     };
     window.addEventListener(PAD_HUB_WINDOW_EVENT, onHub);
     return () => window.removeEventListener(PAD_HUB_WINDOW_EVENT, onHub);
-  }, [closeTab, loadProblem, tab.id]);
+  }, [closeTab, loadProblem, setNotice, tab.id]);
 
   /**
    * Write the annotation set out as a file the writer can keep.
@@ -7359,6 +7451,8 @@ export function Workspace({
       const board = boardRef.current;
       const api = sceneApi();
       if (!board || !api) return;
+      const existing = agentMessagesRef.current.find((message) => message.drawing?.program.id === programId)?.drawing;
+      if (!existing || (existing.frameIndex ?? 0) === frameIndex) return;
       markPadDirty();
       if (mobile && problem && !isLocalPad(problem)) setActiveRegion("agent");
       setAgentMessages((current) => {
@@ -7370,7 +7464,7 @@ export function Workspace({
           };
         });
         const drawing = next.find((message) => message.drawing?.program.id === programId)?.drawing;
-        if (drawing && drawing.expanded && !drawing.redacted) {
+        if (drawing && drawing.expanded && !drawing.redacted && !isAnnotate(problemRef.current)) {
           applyViz(
             api,
             (skeletons) => board.convert(skeletons, { regenerateIds: false }),
@@ -10004,6 +10098,9 @@ export function Workspace({
             if (!active && showing) focusTab(tab.id);
           }}
         >
+          {problem && isAnnotate(problem) && !canvasLoading && (
+            <DocumentDrawingPanel messages={agentMessages} onHide={toggleDrawing} onFrame={showDrawingFrame} />
+          )}
           {/*
             The live page sits in front of the board, not instead of it.
 
@@ -10363,6 +10460,7 @@ export function Workspace({
                 : null
             }
             pdfFilmPublish={active}
+            pdfDocument={annotateSource?.docType === "pdf" && !footnoteBoardSession}
             pageSpread={
               annotateSource?.docType === "pdf"
                 ? { on: pdfSpread, onToggle: togglePdfSpread, busy: pdfLayoutBusy }
@@ -10848,6 +10946,7 @@ export function Workspace({
       {annotateEntryOpen && (
         <AnnotateDialog
           mode="entry"
+          onRefreshHub={() => discoverHubPads(client)}
           kind={entryKind}
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isAnnotate(problem))}
@@ -10974,6 +11073,7 @@ export function Workspace({
       {whiteboardEntryOpen && (
         <WhiteboardDialog
           mode="entry"
+          onRefreshHub={() => discoverHubPads(client)}
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isWhiteboard(problem))}
           snapshotKey={whiteboardNotebookId}
@@ -11282,95 +11382,6 @@ function isSocketRunUnavailable(cause: unknown): boolean {
  * The daemon stores the transcript opaquely, so anything malformed is dropped
  * here rather than crashing the panel on a half-written file.
  */
-function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
-  if (!Array.isArray(stored)) return [];
-  return stored.flatMap((entry) => {
-    if (!entry || typeof entry !== "object") return [];
-    const message = entry as Partial<AgentChatMessage> & { drawing?: unknown };
-    if (typeof message.id !== "string" || typeof message.role !== "string") return [];
-    // Older builds could persist an in-flight placeholder. Drop it — a turn
-    // stuck on "Working…" would wait for a socket that will never answer.
-    if (message.pending) return [];
-    const drawing = restoreMessageDrawing(message.drawing);
-    const content = typeof message.content === "string" ? message.content : "";
-    const processEvents = Array.isArray(message.processEvents)
-      ? message.processEvents
-      : undefined;
-    const reasoning =
-      typeof message.reasoning === "string" && message.reasoning.trim()
-        ? message.reasoning
-        : undefined;
-    const flags = Array.isArray(message.flags)
-      ? message.flags.filter((flag): flag is string => typeof flag === "string" && flag.length > 0)
-      : undefined;
-    // This function rebuilds a turn field by field, so anything not named here
-    // is dropped on reload — a reply thread has to be carried explicitly or it
-    // survives exactly until the page refreshes.
-    const raw = message.replyTo;
-    const replyTo =
-      raw &&
-      typeof raw.id === "string" &&
-      typeof raw.role === "string" &&
-      typeof raw.excerpt === "string"
-        ? { id: raw.id, role: raw.role as AgentChatMessage["role"], excerpt: raw.excerpt }
-        : undefined;
-    // Empty assistant shells left after stripping `pending` are noise.
-    if (
-      message.role === "assistant" &&
-      !content.trim() &&
-      !message.review &&
-      !message.bridge &&
-      !message.attachments?.length &&
-      !drawing &&
-      !processEvents?.length &&
-      !reasoning
-    ) {
-      return [];
-    }
-    return [
-      {
-        id: message.id,
-        role: message.role as AgentChatMessage["role"],
-        content,
-        at: typeof message.at === "number" ? message.at : Date.now(),
-        review: message.review,
-        bridge: message.bridge,
-        attachments: message.attachments,
-        ...(flags && flags.length > 0 ? { flags } : {}),
-        ...(processEvents ? { processEvents } : {}),
-        ...(reasoning ? { reasoning } : {}),
-        ...(drawing ? { drawing } : {}),
-        ...(replyTo ? { replyTo } : {}),
-      },
-    ];
-  });
-}
-
-/** Persist finished turns only — never an in-flight `pending` placeholder. */
-/**
- * The thread as it should be stored, which is not the thread as it is shown.
- *
- * Pending turns go, because a turn that never finished is not a turn. And an
- * attached photo drops to its thumbnail: `png` is sized for a vision model —
- * 1568px, 3–5.5 MB base64 — and it has already been sent by the time anything
- * persists. Keeping it would mean four photos on one message costing more than
- * the entire localStorage budget, forever, to redisplay an image the bubble
- * draws at 320px anyway.
- */
-function persistableAgentMessages(messages: AgentChatMessage[]): AgentChatMessage[] {
-  return messages
-    .filter((message) => !message.pending)
-    .map((message) => {
-      if (!message.attachments?.some((att) => att.thumb)) return message;
-      return {
-        ...message,
-        attachments: message.attachments.map((att) =>
-          att.thumb ? { ...att, png: att.thumb } : att,
-        ),
-      };
-    });
-}
-
 /**
  * Did the daemon refuse the request because the body was too big?
  *

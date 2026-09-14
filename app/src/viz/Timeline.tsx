@@ -32,6 +32,8 @@ export function Timeline({ program, onFrame, initialFrame = 0, playbackMs = 1200
   callbackRef.current = onFrame;
   const initialRef = useRef(initialFrame);
   initialRef.current = initialFrame;
+  // Chat and the document viewer share one persisted frame selection.
+  useEffect(() => { setFrame(clampFrame(initialFrame, total)); }, [initialFrame, total]);
   // Same-id replacements can have a different trace with the same frame count.
   const revision = JSON.stringify(program);
 

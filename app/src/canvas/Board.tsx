@@ -202,6 +202,7 @@ import {
   type SceneSelectionOverlayHandle,
 } from "./SceneSelectionOverlay";
 import { SceneTextEditor, type SceneTextEdit } from "./SceneTextEditor";
+import { fitSceneText } from "./sceneTextLayout";
 import {
   elementsIntersectingBox,
   expandStampGroup,
@@ -1247,6 +1248,8 @@ export interface BoardProps {
    * used to clobber each other's current page.
    */
   pdfFilmPublish?: boolean;
+  /** Only PDF documents can wait for a saved PDF page to finish laying out. */
+  pdfDocument?: boolean;
   /**
    * Two-up / spread: each scanned sheet becomes two stacked reading slots.
    * Shown for any PDF, including one page. Off by default.
@@ -1327,6 +1330,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onToggleSheetLock,
     pageFilm = null,
     pdfFilmPublish = true,
+    pdfDocument = false,
     pageSpread = null,
   },
   ref,
@@ -1841,6 +1845,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [textEdit, setTextEdit] = useState<SceneTextEdit | null>(null);
   const textEditRef = useRef<SceneTextEdit | null>(null);
   textEditRef.current = textEdit;
+  useLayoutEffect(() => {
+    sceneOverlayRef.current?.redraw();
+    shapeSelectRef.current?.redraw();
+    if (textEdit) textPlaceGhostRef.current?.setVisible(false);
+  }, [textEdit]);
   const [shapesOpen, setShapesOpen] = useState(false);
   const [captureMenuOpen, setCaptureMenuOpen] = useState(false);
   const [captureRegion, setCaptureRegion] = useState<{
@@ -1998,6 +2007,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   >(() => {});
   const pdfFilmPublishRef = useRef(pdfFilmPublish);
   pdfFilmPublishRef.current = pdfFilmPublish;
+  const pdfDocumentRef = useRef(pdfDocument);
+  pdfDocumentRef.current = pdfDocument;
   const pdfPanLogRef = useRef({ n: 0, t: 0 });
   const scheduleVisualScrollRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
   const flushVisualScrollRef = useRef<() => void>(() => {});
@@ -3728,7 +3739,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [onChange, stampTrash]);
 
   const finishTextEdit = useCallback(
-    (text: string, cancelled: boolean) => {
+    (text: string, cancelled: boolean, draft?: SceneTextEdit) => {
       const edit = textEditRef.current;
       if (!edit) return;
       textEditRef.current = null;
@@ -3759,21 +3770,48 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         return;
       }
       const live = api.getSceneElements() as PaintSceneElement[];
-      const changed = text !== edit.text;
+      const original = live.find((el) => el.id === edit.id);
+      const next = original && fitSceneText({ ...original,
+        text, originalText: text, fontSize: draft?.fontSize ?? edit.fontSize,
+        width: draft?.width ?? edit.width, autoResize: draft?.autoResize ?? edit.autoResize,
+        lineHeight: edit.lineHeight, isDeleted: empty,
+      });
+      const changed = JSON.stringify(next) !== JSON.stringify(original);
       api.updateScene({
         elements: live.map((el) =>
-          el.id === edit.id ? { ...el, text, originalText: text } : el,
+          el.id === edit.id && next ? next : el,
         ) as unknown[],
         captureUpdate:
           edit.created || !changed ? CaptureUpdateAction.NEVER : CaptureUpdateAction.IMMEDIATELY,
       });
+      setTool("selection");
       sceneOverlayRef.current?.redraw();
       shapeSelectRef.current?.redraw();
       syncStampTrashRef.current();
       onChange?.();
     },
-    [onChange],
+    [onChange, setTool],
   );
+
+  const beginTextEdit = useCallback((hit: PaintSceneElement) => {
+    if (!hit.id || hit.type !== "text" || textEditRef.current) return;
+    const fitted = fitSceneText({ ...hit, autoResize: hit.autoResize === true });
+    const edit: SceneTextEdit = {
+      id: hit.id, x: hit.x, y: hit.y, width: fitted.width, height: fitted.height,
+      text: String(hit.originalText ?? hit.text ?? ""),
+      fontSize: hit.fontSize ?? 20, fontFamily: hit.fontFamily,
+      lineHeight: hit.lineHeight, autoResize: hit.autoResize === true, angle: hit.angle,
+      color: hit.strokeColor && hit.strokeColor !== "transparent" ? hit.strokeColor : inkColorRef.current,
+      created: false,
+    };
+    textEditRef.current = edit;
+    setTextEdit(edit);
+    setFontSizeState(edit.fontSize);
+    apiRef.current?.updateScene({
+      appState: { selectedElementIds: { [hit.id]: true } },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+  }, []);
 
   /** Scene coords from a pointer event over the Excalidraw viewport. */
   const clientToScene = useCallback((clientX: number, clientY: number) => {
@@ -4123,6 +4161,32 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       !annotateCodeRef.current &&
       resolveElement(target)?.closest(".lc-code-dock") != null;
 
+    /** Hit is on selectable prose/code/PDF text — native Selection owns the drag. */
+    const pointerOnSelectableText = (
+      clientX: number,
+      clientY: number,
+      target: EventTarget | null,
+    ): boolean => {
+      const el = resolveElement(target);
+      if (!el?.closest(".lc-doc-selectable-body")) return false;
+      if (el.closest(".lc-doc-select-overlay, .lc-doc-sheet, .lc-doc-confirm")) return false;
+      if (el.closest("img, canvas, svg, video")) return false;
+      const caret =
+        typeof document.caretRangeFromPoint === "function"
+          ? document.caretRangeFromPoint(clientX, clientY)
+          : null;
+      if (caret?.startContainer?.nodeType === Node.TEXT_NODE) {
+        return (caret.startContainer.textContent?.length ?? 0) > 0;
+      }
+      // PDF text layer spans — caretRangeFromPoint is flaky; trust the layer.
+      if (el.closest(".lc-pdf-text, .textLayer")) return true;
+      // Inside pre/code but not on a text node → leave for sideScroll / pan.
+      if (el.closest("pre, code")) return false;
+      return (
+        el.closest("p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, span, label") != null
+      );
+    };
+
     const isScrollSurface = (target: EventTarget | null) => {
       const el = resolveElement(target);
       if (!el) return false;
@@ -4141,7 +4205,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (
         el.closest(
           ".lc-toolbar, .lc-map-controls, .lc-pager, .lc-stamp-trash, .lc-capture-overlay," +
-            " .lc-scene-select, .lc-scene-text-editor, .lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-footnote-overview" +
+            " .lc-scene-select, .lc-scene-text-edit, .lc-doc-footnote, .lc-doc-confirm, .lc-doc-sheet, .lc-footnote-overview" +
             ", .lc-footnote-bubble, .lc-scroll-back-hold, .lc-hold-reveal, .lc-split-sash",
         )
       ) {
@@ -4364,15 +4428,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        */
       if (isSubMarkDragLive()) return;
 
-      // A PDF is a pan. Markdown is too: a mouse flick on prose used to
-      // return here so native drag-select could own the gesture, which is
-      // how a chapter you can wheel through would not move under the pointer.
-      // Stillness still arms hold-to-select; do not stopPropagation — that
-      // listener on `.lc-doc-selectable` still has to fire.
+      // A PDF is a pan. Markdown still defers 16px so hold-to-select can arm.
+      // Do not stopPropagation — the hold-to-marquee listener on `.lc-doc-selectable` still has to fire.
       const onPdfDoc =
         resolveElement(event.target)?.closest(
           ".lc-pdf-doc, .lc-pdf-page, .lc-pdf-canvas, .lc-pdf-text, .textLayer",
         ) != null;
+      if (
+        event.pointerType === "mouse" &&
+        !onPdfDoc &&
+        pointerOnSelectableText(event.clientX, event.clientY, event.target)
+      ) {
+        return;
+      }
 
       const onCodeDock = isCodeDockTarget(event.target);
       const codeDockEl = onCodeDock
@@ -4419,12 +4487,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       flickSettleErrRef.current = 0;
 
       // Code dock: defer preventDefault until pan arms — taps must reach Monaco.
-      // Markdown prose must preventDefault too, or native drag-select starts
-      // in the 16px slop and then wins the gesture.
       if (!deferred) {
         event.preventDefault();
         if (!onPdfDoc) event.stopPropagation();
-      } else if (onPdfDoc || onSelectableDoc) {
+      } else if (onPdfDoc) {
         event.preventDefault();
       }
 
@@ -4543,14 +4609,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!drag.armed) {
         if (Math.hypot(dx, dy) < armThresholdPx(drag)) return;
         if (drag.selectableDoc) {
-          if (selectionOwnsGesture()) {
+          const live = window.getSelection();
+          if (live && !live.isCollapsed && live.rangeCount > 0) {
             dropPanForSelection();
             return;
-          }
-          try {
-            window.getSelection()?.removeAllRanges();
-          } catch {
-            /* native highlight is not the reading gesture */
           }
         }
         stopPanInertia();
@@ -4752,18 +4814,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const scene = clientToScene(event.clientX, event.clientY);
       const hit = hitTestScene(api.getSceneElements() as PaintSceneElement[], scene.x, scene.y);
       if (!hit?.id || hit.type !== "text" || !isSelectableSceneElement(hit)) return;
-      setTextEdit({
-        id: hit.id,
-        x: hit.x,
-        y: hit.y,
-        width: hit.width ?? 120,
-        height: hit.height ?? 28,
-        text: String(hit.text ?? ""),
-        fontSize: typeof hit.fontSize === "number" ? hit.fontSize : 20,
-        fontFamily: hit.fontFamily,
-        color: hit.strokeColor && hit.strokeColor !== "transparent" ? hit.strokeColor : inkColorRef.current,
-        created: false,
-      });
+      beginTextEdit(hit);
     };
 
     /*
@@ -4806,7 +4857,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       root.removeEventListener("pointerdown", onTapDown);
       root.removeEventListener("pointerup", onTapUp);
     };
-  }, [clientToScene, interactive]);
+  }, [beginTextEdit, clientToScene, interactive]);
 
   /*
    * Drag-to-create primitives, plus select/move on the selection tool.
@@ -4824,7 +4875,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!root) return;
 
     const chrome =
-      ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select, .lc-scene-text-editor";
+      ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select, .lc-scene-text-edit";
 
     type DrawDrag = {
       kind: "draw";
@@ -5380,22 +5431,34 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [activeTool, strokeWidth]);
 
   const undoBoard = useCallback(() => {
-    if (rasterInkRef.current?.undo()) return;
+    if (rasterInkRef.current?.undo()) {
+      modeIndicatorRef.current?.show("Undone", 700);
+      return;
+    }
     if (apiRef.current?.history?.undo()) {
       sceneOverlayRef.current?.redraw();
       shapeSelectRef.current?.redraw();
       syncStampTrashRef.current();
       onChange?.();
+      modeIndicatorRef.current?.show("Undone", 700);
+    } else {
+      modeIndicatorRef.current?.show("Nothing to undo", 900);
     }
   }, [onChange]);
 
   const redoBoard = useCallback(() => {
-    if (rasterInkRef.current?.redo()) return;
+    if (rasterInkRef.current?.redo()) {
+      modeIndicatorRef.current?.show("Redone", 700);
+      return;
+    }
     if (apiRef.current?.history?.redo()) {
       sceneOverlayRef.current?.redraw();
       shapeSelectRef.current?.redraw();
       syncStampTrashRef.current();
       onChange?.();
+      modeIndicatorRef.current?.show("Redone", 700);
+    } else {
+      modeIndicatorRef.current?.show("Nothing to redo", 900);
     }
   }, [onChange]);
 
@@ -5456,7 +5519,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (
         target instanceof Element &&
         target.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select, .lc-scene-text-editor",
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select, .lc-scene-text-edit",
         )
       ) {
         return;
@@ -5628,6 +5691,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         text: "",
         fontSize: fontSizeRef.current,
         fontFamily,
+        lineHeight: defaultLineHeight(fontFamily),
+        autoResize: rect.autoResize,
         color: inkColorRef.current,
         created: true,
       });
@@ -5640,7 +5705,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!(target instanceof Element)) return;
       if (
         target.closest(
-          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select, .lc-scene-text-editor",
+          ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select, .lc-scene-text-edit",
         )
       ) {
         return;
@@ -5662,6 +5727,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        */
       event.stopPropagation();
 
+      const scene = clientToScene(event.clientX, event.clientY);
+      const hit = hitTestScene((apiRef.current?.getSceneElements() ?? []) as PaintSceneElement[], scene.x, scene.y);
+      if (hit?.type === "text" && isSelectableSceneElement(hit)) {
+        beginTextEdit(hit);
+        return;
+      }
+
       drag = {
         origin: { x: event.clientX, y: event.clientY },
         current: { x: event.clientX, y: event.clientY },
@@ -5679,14 +5751,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (activeToolRef.current !== "text") return;
 
       if (!drag) {
-        if (textEditRef.current || root.querySelector(".lc-scene-text-editor")) {
+        if (textEditRef.current || root.querySelector(".lc-scene-text-edit")) {
           hideGhost();
           return;
         }
         const target = event.target;
         if (
           target instanceof Element &&
-          target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-scene-text-editor")
+          target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-scene-text-edit")
         ) {
           hideGhost();
           return;
@@ -5756,16 +5828,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (frame) cancelAnimationFrame(frame);
       hideGhost();
     };
-  }, [convert, interactive]);
+  }, [beginTextEdit, clientToScene, convert, interactive]);
 
   const setFontSize = useCallback((size: number) => {
     const clamped = Math.min(TEXT_FONT_MAX, Math.max(TEXT_FONT_MIN, Math.round(size)));
     setFontSizeState(clamped);
-    // Forward-only: size applies to the next typed run / next placed box.
-    // Do not rewrite the editing element or live wysiwyg — that used to resize
-    // the whole box mid-type (Paint keeps prior glyphs at their own size).
-    // Excalidraw still stores one fontSize per text element, so mixed sizes in
-    // one box need separate placements until a rich-text editor exists.
+    fontSizeRef.current = clamped;
+    setTextEdit((edit) => edit ? { ...edit, fontSize: clamped } : null);
     apiRef.current?.updateScene({
       appState: { currentItemFontSize: clamped },
       captureUpdate: CaptureUpdateAction.NEVER,
@@ -5977,7 +6046,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!(target instanceof Element)) return;
       if (
         target.closest(
-          ".lc-code-dock, .lc-toolbar, .lc-map-controls, .monaco-editor, textarea, input, [contenteditable='true']",
+          ".lc-code-dock, .lc-toolbar, .lc-map-controls, .lc-scene-select, .lc-scene-text-edit, .monaco-editor, textarea, input, [contenteditable='true']",
         )
       ) {
         return;
@@ -6514,7 +6583,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
          * the previous orientation — so the file slot stayed on the old zoom
          * until spread toggle rewrote C. Stamp the fitted camera here.
          */
-        const prevLive = liveCameraRef.current;
         const offsets = api.getAppState() as {
           offsetLeft?: number;
           offsetTop?: number;
@@ -6530,8 +6598,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           zoom,
           width: viewWidth,
           height: viewHeight,
-          offsetLeft: prevLive?.offsetLeft ?? offsets.offsetLeft ?? 0,
-          offsetTop: prevLive?.offsetTop ?? offsets.offsetTop ?? 0,
+          offsetLeft: offsets.offsetLeft ?? 0,
+          offsetTop: offsets.offsetTop ?? 0,
           live: false,
         };
         placeContentSlotAtRef.current(nextScrollX, nextScrollY, zoom);
@@ -6915,8 +6983,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const prev = lastFittedBoardBoxRef.current;
       const boxChanged = live.width !== prev.w || live.height !== prev.h;
       if (!force && !boxChanged) {
-        const state = api.getAppState() as { width?: number; height?: number };
-        if (!excalidrawViewportNeedsSync(live, state)) return true;
+        const state = api.getAppState() as { width?: number; height?: number; offsetLeft?: number; offsetTop?: number };
+        if (!excalidrawViewportNeedsSync(live, state) && state.offsetLeft === box.left && state.offsetTop === box.top) return true;
         api.updateScene({
           appState: {
             width: live.width,
@@ -6926,6 +6994,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           },
           captureUpdate: CaptureUpdateAction.NEVER,
         });
+        if (liveCameraRef.current) {
+          liveCameraRef.current.width = live.width;
+          liveCameraRef.current.height = live.height;
+          liveCameraRef.current.offsetLeft = box.left;
+          liveCameraRef.current.offsetTop = box.top;
+        }
         return true;
       }
       const panLive =
@@ -6956,21 +7030,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             captureUpdate: CaptureUpdateAction.NEVER,
           });
         }
+        if (liveCameraRef.current) {
+          liveCameraRef.current.width = live.width;
+          liveCameraRef.current.height = live.height;
+          liveCameraRef.current.offsetLeft = box.left;
+          liveCameraRef.current.offsetTop = box.top;
+        }
         maybeGrowDrawFrame();
         lastFittedBoardBoxRef.current = { w: live.width, h: live.height };
         return true;
       }
-      if (excalidrawViewportNeedsSync(live, api.getAppState() as { width?: number; height?: number })) {
-        api.updateScene({
-          appState: {
-            width: live.width,
-            height: live.height,
-            offsetLeft: box.left,
-            offsetTop: box.top,
-          },
-          captureUpdate: CaptureUpdateAction.NEVER,
-        });
-      }
+      api.updateScene({
+        appState: {
+          width: live.width,
+          height: live.height,
+          offsetLeft: box.left,
+          offsetTop: box.top,
+        },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
       api.refresh?.();
       maybeGrowDrawFrame();
       const drawPage = isDrawPageRegion(mobileRegionRef.current);
@@ -8273,17 +8351,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         });
       }
 
-      // Text tool handoff:
-      // - Enter (empty or not) → hand
-      // - Typed text then click-away → hand
-      // - Empty click-away → stay on text so another click can place quickly
+      // Keep the finished box selected so its width and font controls remain available.
       if (prevEditingId && !editingId && activeTool === "text") {
         const finished = current.find((el) => el.id === prevEditingId && !el.isDeleted);
         const finishedText = (finished?.originalText ?? finished?.text ?? "").trim();
         const viaEnter = textFinishedViaEnterRef.current;
         textFinishedViaEnterRef.current = false;
         if (viaEnter || finishedText.length > 0) {
-          setTool("hand");
+          setTool("selection");
         } else {
           // Stay on the Text tool: dismissing an empty box is usually the press
           // that places the next one. Nothing to re-arm — our own gesture owns
@@ -9040,7 +9115,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const origin = pageBoundsRef.current?.minY ?? 0;
         const frames = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
         const viewH = liveCameraRef.current?.height ?? 800;
-        const savedPage = pdfPageFromSavedView(saved, frames, viewH);
+        // Older saves tagged every format with the PDF film's default page 1.
+        // Waiting for that page on Markdown blocks every subsequent scroll.
+        const savedPage = pdfDocumentRef.current ? pdfPageFromSavedView(saved, frames, viewH) : 0;
+        if (!pdfDocumentRef.current) pendingPdfPageRef.current = 0;
         if (savedPage >= 1) {
           if (jumpToPdfPage(savedPage)) return;
           pendingPdfPageRef.current = savedPage;
@@ -9136,7 +9214,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 }
               : {}),
             ...(linedRuleRef.current ? { linedRule: linedRuleRef.current } : {}),
-            pdfPage: (() => {
+            ...(pdfDocumentRef.current ? { pdfPage: (() => {
               const origin = pageBoundsRef.current?.minY ?? 0;
               const frames = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
               const live = liveCameraRef.current;
@@ -9145,7 +9223,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               const h = live?.height ?? state.height ?? 800;
               if (frames.length > 0) return pageIdFromCamera(frames, y, z, h);
               return peekPdfFilmCurrent(filmScope);
-            })(),
+            })() } : {}),
           },
           // Encoded, not raw — `ink` stays readable forever but is never
           // written again. See `inkCodec`; read it back with `inkOpsFrom`.
@@ -10088,7 +10166,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       <SceneOverlay
         ref={sceneOverlayRef}
         getElements={() => {
-          const els = [...(apiRef.current?.getSceneElements() ?? [])];
+          const els = (apiRef.current?.getSceneElements() ?? []).filter(
+            (raw) => (raw as PaintSceneElement).id !== textEditRef.current?.id,
+          );
           if (shapeDraftRef.current) els.push(shapeDraftRef.current);
           return els;
         }}
@@ -10104,7 +10184,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         <SceneSelectionOverlay
           ref={shapeSelectRef}
           getMembers={() => {
-            if (textEdit) return [];
+            if (textEditRef.current) return [];
             const api = apiRef.current;
             if (!api) return [];
             const state = api.getAppState() as {
@@ -10185,13 +10265,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             syncStampTrashRef.current();
           }}
           onDelete={deleteSelection}
+          onEditText={beginTextEdit}
         />
       )}
       {interactive && textEdit && (
         <SceneTextEditor
+          key={textEdit.id}
           edit={textEdit}
           getViewport={getViewport}
-          onCommit={(text) => finishTextEdit(text, false)}
+          onFontSize={setFontSize}
+          onCommit={(draft) => finishTextEdit(draft.text, false, draft)}
           onCancel={() => finishTextEdit(textEditRef.current?.text ?? "", true)}
         />
       )}

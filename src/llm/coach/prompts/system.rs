@@ -266,7 +266,7 @@ Rules:\n\
 - You may show tiny illustrative fragments (a condition, a loop bound), but NEVER write a full \
 corrected function or a complete working solution.\n\
 - If asked for the full solution, decline and keep coaching.\n\
-- Do not reply with JSON. Plain text only.";
+- Do not reply with JSON. Use Markdown; wrap inline math in $...$ and display math in $$...$$ on separate lines.";
 
 /// Pad/document Ask may draw. Corpus problem Ask stays prose-only (Draw uses `/coach/viz`).
 pub const ASK_VIZ_RULES: &str = "You may call `draw_structure` or `animate_trace` when the \
@@ -286,6 +286,7 @@ Rules:\n\
 - You may show tiny illustrative fragments, but NEVER write a full corrected function or a \
 complete working solution.\n\
 - If asked for the full solution, decline and keep coaching.\n\
+- Use Markdown; wrap inline math in $...$ and display math in $$...$$ on separate lines.\n\
 - You may call tools to draw. After drawing, still answer in prose.\n\
 \n\
 You may call `draw_structure` or `animate_trace` when the question is operational — tracing a \

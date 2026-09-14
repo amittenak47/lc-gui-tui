@@ -32,6 +32,7 @@ async function loadInkSync(docKeys: Record<string, number[]> = {}) {
     const real = await importOriginal<typeof import("./inkPageStore")>();
     return {
       ...real,
+      markInkPageSynced: vi.fn(async () => {}),
       listInkDocKeys: async (prefix: string) =>
         Object.keys(docKeys).filter((key) => key.startsWith(prefix)),
       getInkPageRecords: async (docKey: string) =>
@@ -270,6 +271,7 @@ describe("remintFootnoteInk", () => {
     vi.resetModules();
     vi.doMock("./inkPageStore", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./inkPageStore")>()),
+      markInkPageSynced: vi.fn(async () => {}),
       copyInkPages,
       getInkPageRecords: async () => [],
       listInkDocKeys: async () => [],
@@ -288,7 +290,7 @@ describe("remintFootnoteInk", () => {
   it("writes nothing when the board it came from could not be read", async () => {
     const { remintFootnoteInk } = await loadInkSync();
     const putInkPage = vi.fn();
-    await remintFootnoteInk(
+    await expect(remintFootnoteInk(
       {
         getInkPage: async () => {
           throw new Error("offline");
@@ -299,7 +301,7 @@ describe("remintFootnoteInk", () => {
       "wb7",
       "wbFresh",
       [1],
-    );
+    )).rejects.toThrow("could not be downloaded");
     expect(putInkPage).not.toHaveBeenCalled();
   });
 });

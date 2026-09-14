@@ -89,11 +89,16 @@ function visualViewportBottomGap(): number {
   return gap > 0 ? Math.round(gap) : 0;
 }
 
-function visualViewportTopGap(): number {
-  const vv = window.visualViewport;
-  if (!vv) return 0;
-  const gap = Math.round(vv.offsetTop);
-  return gap > 0 ? gap : 0;
+/** Keyboard panning is a viewport origin, never status-bar padding. */
+export function shellViewport(
+  layoutHeight: number,
+  viewport?: Pick<VisualViewport, "offsetTop" | "height" | "scale"> | null,
+): { top: number; height: number } {
+  // Keep browser pinch zoom available; do not reflow the whole app as it zooms.
+  if (!viewport || Math.abs(viewport.scale - 1) > 0.01 || viewport.height <= 0) {
+    return { top: 0, height: layoutHeight };
+  }
+  return { top: Math.max(0, viewport.offsetTop), height: viewport.height };
 }
 
 let nativeInsets: SystemInsets | null = null;
@@ -102,7 +107,7 @@ let nativeKnown = false;
 function publishInsets(): void {
   const root = document.documentElement;
   const native = nativeInsets ?? { top: 0, right: 0, bottom: 0, left: 0 };
-  const top = combineTopInset(readEnvInset("top"), visualViewportTopGap(), native.top, {
+  const top = combineTopInset(readEnvInset("top"), 0, native.top, {
     android: isAndroidDevice(),
     nativeKnown,
   });
@@ -118,6 +123,9 @@ function publishInsets(): void {
   root.style.setProperty("--lc-safe-right", `${Math.round(right)}px`);
   root.style.setProperty("--lc-safe-bottom", `${safeBottom}px`);
   root.style.setProperty("--lc-keyboard-inset", `${keyboardInset}px`);
+  const viewport = shellViewport(window.innerHeight, window.visualViewport);
+  root.style.setProperty("--lc-viewport-top", `${viewport.top}px`);
+  root.style.setProperty("--lc-viewport-height", `${viewport.height}px`);
 }
 
 /** Keep `--lc-safe-*` in sync with rotation, keyboard, and Android nav bar changes. */
@@ -128,18 +136,21 @@ export function installSafeAreaInsets(): () => void {
 
   let cancelled = false;
   let frame = 0;
+  let nativeRequest = 0;
   const schedule = () => {
     cancelAnimationFrame(frame);
     frame = requestAnimationFrame(publishInsets);
   };
 
   const pullNativeInsets = async () => {
+    const request = ++nativeRequest;
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const got = await invoke<SystemInsets>("get_system_insets", {
         density: window.devicePixelRatio || 1,
       });
-      if (cancelled || !got || typeof got.top !== "number") return;
+      if (cancelled || request !== nativeRequest || !got ||
+          ![got.top, got.right, got.bottom, got.left].every(Number.isFinite)) return;
       nativeInsets = {
         top: Math.max(0, got.top),
         right: Math.max(0, got.right),
@@ -157,6 +168,8 @@ export function installSafeAreaInsets(): () => void {
   void pullNativeInsets();
   window.addEventListener("resize", schedule);
   window.addEventListener("resize", pullNativeInsets);
+  window.addEventListener("orientationchange", schedule);
+  window.addEventListener("orientationchange", pullNativeInsets);
   window.visualViewport?.addEventListener("resize", schedule);
   window.visualViewport?.addEventListener("scroll", schedule);
 
@@ -165,6 +178,8 @@ export function installSafeAreaInsets(): () => void {
     cancelAnimationFrame(frame);
     window.removeEventListener("resize", schedule);
     window.removeEventListener("resize", pullNativeInsets);
+    window.removeEventListener("orientationchange", schedule);
+    window.removeEventListener("orientationchange", pullNativeInsets);
     window.visualViewport?.removeEventListener("resize", schedule);
     window.visualViewport?.removeEventListener("scroll", schedule);
     nativeInsets = null;
@@ -175,5 +190,7 @@ export function installSafeAreaInsets(): () => void {
     root.style.removeProperty("--lc-safe-right");
     root.style.removeProperty("--lc-safe-bottom");
     root.style.removeProperty("--lc-keyboard-inset");
+    root.style.removeProperty("--lc-viewport-top");
+    root.style.removeProperty("--lc-viewport-height");
   };
 }

@@ -1,7 +1,7 @@
 /**
  * Geometry for the Text tool's placement gesture.
  *
- * A tap drops an auto-growing box; a drag draws a fixed-width one that wraps.
+ * A tap drops a default-width box; a drag chooses its wrap width.
  * Kept apart from the DOM plumbing in `Board` so the "is this a tap?" slop and
  * the minimum readable box can be pinned down in tests.
  */
@@ -95,7 +95,7 @@ export function textPlaceRect(
   const min = minTextBox(fontSize, zoom);
 
   if (!dragged) {
-    return { x: a.x, y: a.y, width: min.width, height: min.height, autoResize: true };
+    return { x: a.x, y: a.y, width: min.width, height: min.height, autoResize: false };
   }
   return {
     x: Math.min(a.x, b.x),

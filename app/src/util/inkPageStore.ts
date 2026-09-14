@@ -29,6 +29,8 @@ export interface InkPageRecord {
   gz?: Uint8Array<ArrayBuffer>;
   dirty: boolean;
   updatedAt: number;
+  /** Authored revision last exchanged with the hub (independent of gzip/save). */
+  syncedUpdatedAt?: number;
 }
 
 /**
@@ -121,15 +123,18 @@ export async function putInkPages(
   if (entries.length === 0) return;
   await withStore(STORE_INK_PAGES, "readwrite", (store) => {
     for (const [pageId, inkC] of entries) {
-      const row: InkPageRecord = {
-        v: 1,
-        docKey,
-        pageId,
-        inkC,
-        dirty,
-        updatedAt: now,
+      const key = inkPageKey(docKey, pageId);
+      const request = store.get(key);
+      request.onsuccess = () => {
+        const existing = request.result as InkPageRecord | undefined;
+        const row: InkPageRecord = {
+          v: 1, docKey, pageId, inkC, dirty,
+          updatedAt: Math.max(now, (existing?.updatedAt ?? 0) + 1),
+          ...(existing?.syncedUpdatedAt != null
+            ? { syncedUpdatedAt: existing.syncedUpdatedAt } : {}),
+        };
+        store.put(row, key);
       };
-      store.put(row, inkPageKey(docKey, pageId));
     }
   });
 }
@@ -140,18 +145,36 @@ export async function putInkPageArchive(
   gz: Uint8Array<ArrayBuffer>,
   expectedUpdatedAt: number,
 ): Promise<boolean> {
-  const existing = await getInkPageRecord(docKey, pageId);
-  if (!shouldPromoteToArchive(existing, expectedUpdatedAt)) return false;
-  const row: InkPageRecord = {
-    v: 1,
-    docKey,
-    pageId,
-    gz,
-    dirty: false,
-    updatedAt: Date.now(),
-  };
-  await run(STORE_INK_PAGES, "readwrite", (store) => store.put(row, inkPageKey(docKey, pageId)));
-  return true;
+  let promoted = false;
+  await withStore(STORE_INK_PAGES, "readwrite", (store) => {
+    const key = inkPageKey(docKey, pageId);
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const existing = request.result as InkPageRecord | undefined;
+      if (!shouldPromoteToArchive(existing, expectedUpdatedAt)) return;
+      // Compare and replace in one transaction. Compression changes storage,
+      // not the authored revision used by sync conflict detection.
+      const { inkC: _wal, ...row } = existing!;
+      store.put({ ...row, gz, dirty: false }, key);
+      promoted = true;
+    };
+  });
+  return promoted;
+}
+
+/** Remember only the revision sent; a stroke arriving during PUT stays unsynced. */
+export async function markInkPageSynced(
+  docKey: string, pageId: number, updatedAt: number,
+): Promise<void> {
+  await withStore(STORE_INK_PAGES, "readwrite", (store) => {
+    const key = inkPageKey(docKey, pageId);
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const row = request.result as InkPageRecord | undefined;
+      if (!row || row.updatedAt < updatedAt || (row.syncedUpdatedAt ?? 0) > updatedAt) return;
+      store.put({ ...row, syncedUpdatedAt: updatedAt }, key);
+    };
+  });
 }
 
 export async function getInkPages(docKey: string): Promise<Map<number, EncodedInk>> {

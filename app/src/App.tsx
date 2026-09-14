@@ -20,6 +20,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { LcClient } from "./api/client";
+import { NotificationStack } from "./components/NotificationStack";
+import { showNotification } from "./util/notifications";
 import { isTauriRuntime } from "./api/nativeHttp";
 import type { SearchOptions } from "./api/client";
 import type { CoachCapabilities, CoachFlags, SessionSnapshot } from "./api/types";
@@ -174,6 +176,7 @@ export function App() {
 
   useEffect(() => {
     if (!notice) return;
+    showNotification(notice, 5000);
     const timer = window.setTimeout(() => setNotice(null), 5000);
     return () => window.clearTimeout(timer);
   }, [notice]);
@@ -195,6 +198,12 @@ export function App() {
   const [hubAutosyncOn, setHubAutosyncOn] = useState(
     () => loadHubAutosyncPref() === "on",
   );
+  const [hubRevision, setHubRevision] = useState(0);
+  useEffect(() => {
+    const changed = () => setHubRevision((revision) => revision + 1);
+    window.addEventListener(PAD_HUB_EVENT, changed);
+    return () => window.removeEventListener(PAD_HUB_EVENT, changed);
+  }, []);
   /** Re-read on Save, so turning it off tears the timer down without a remount. */
   useEffect(() => {
     const onHubAutosync = () => setHubAutosyncOn(loadHubAutosyncPref() === "on");
@@ -279,7 +288,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [serverLink, client, hubAutosyncOn]);
+  }, [serverLink, client, hubAutosyncOn, hubRevision]);
 
   useEffect(() => {
     if (serverLink !== "online") return;
@@ -825,10 +834,13 @@ export function App() {
     if (!activeGroup) {
       main.style.removeProperty("--lc-split-a");
       main.style.removeProperty("--lc-split-b");
+      announceSplitResize("settle");
       return;
     }
     main.style.setProperty("--lc-split-a", String(activeGroup.split.ratio));
     main.style.setProperty("--lc-split-b", String(1 - activeGroup.split.ratio));
+    // The panes and their CSS widths now reflect React's committed layout.
+    announceSplitResize("settle");
   }, [activeGroup]);
 
   /*
@@ -1016,12 +1028,10 @@ export function App() {
       at: Date.now(),
     });
     setLiveIds((current) => pinLive(current, [anchor, incoming]));
-    announceSplitResize("settle");
   }, []);
 
   const unsplitTab = useCallback((id: string) => {
     dispatchTabs({ type: "unsplit", id });
-    announceSplitResize("settle");
   }, []);
 
   /*
@@ -1067,7 +1077,6 @@ export function App() {
       );
       if (paired) {
         dispatchTabs({ type: "swap-split", id: dragId });
-        announceSplitResize("settle");
         return;
       }
       splitTabs(ontoId, dragId, "right");
@@ -1216,6 +1225,7 @@ export function App() {
 
   return (
     <ShellContext.Provider value={shell}>
+      <NotificationStack />
       <div
         className={[
           "lc-app",
@@ -1330,7 +1340,6 @@ export function App() {
         >
           <div className="lc-chrome-overlay-top" aria-live="polite" ref={overlayTopRef}>
             <StatusBanner text={error} variant="error" />
-            <StatusBanner text={!error ? notice : null} variant="notice" />
           </div>
           {/*
             One list, one `.map()`: see `planWorkspaceMounts`. Parked, on

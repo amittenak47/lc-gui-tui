@@ -24,7 +24,7 @@ steps, (3) a tiny pseudocode fragment — not a full solution dump.\n\
 or a layout), and only with values from the highlight, retrieved chunks, or the question. Never \
 invent a LeetCode example. `cite_test_case` is not available. Skip `annotate_region` — this is \
 not a LeetCode board.\n\
-- Plain text. No JSON unless you are emitting a tool-call fallback object.";
+- Format prose with Markdown. Use $...$ for inline math and $$...$$ on separate lines for display math. No JSON unless you are emitting a tool-call fallback object.";
 
 pub const PRESET_DE_JARGON: &str = "Act as a strict parser. Extract every novel term, variable, or \
 acronym in the highlighted text. Give a one-sentence mechanical definition for each, based only on \
@@ -264,6 +264,8 @@ fn run_tooled_ask(
     effort: Option<ReasoningEffort>,
     tools: Vec<serde_json::Value>,
 ) -> Result<AskOutcome> {
+    let system = format!("{system}\nFormat prose with Markdown; use $...$ for inline math and $$...$$ on separate lines for display math.");
+    let system = system.as_str();
     let mut messages = vec![
         ChatMessage::system(system),
         ChatMessage::user(user.clone()).with_images(images),

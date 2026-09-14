@@ -161,20 +161,33 @@ export function AnnotateDocument({ source, onMeasure, selectable = false }: Anno
      * timed out and the reader was told to pick a smaller file, about a file
      * with nothing in it.
      */
+    let cancelled = false;
+    let raf2 = 0;
     const report = () => {
+      if (cancelled) return;
       if (!shouldReportDocumentHeight(node.clientWidth, Boolean(source.trim()))) return;
       onMeasureRef.current?.(Math.max(node.scrollHeight, node.offsetHeight));
     };
     report();
-    const raf = requestAnimationFrame(report);
+    const raf = requestAnimationFrame(() => {
+      report();
+      raf2 = requestAnimationFrame(report);
+    });
+    void document.fonts?.ready?.then(report);
 
     if (typeof ResizeObserver !== "function") {
-      return () => cancelAnimationFrame(raf);
+      return () => {
+        cancelled = true;
+        cancelAnimationFrame(raf);
+        cancelAnimationFrame(raf2);
+      };
     }
     const observer = new ResizeObserver(report);
     observer.observe(node);
     return () => {
+      cancelled = true;
       cancelAnimationFrame(raf);
+      cancelAnimationFrame(raf2);
       observer.disconnect();
     };
   }, [html, parsed, source]);

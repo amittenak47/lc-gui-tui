@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { INK_UNDO_CAP, InkPageBook } from "./inkPageCache";
+import { InkPageBook } from "./inkPageCache";
 import { INK_LRU_RADIUS, SPANNING_PAGE_ID, type PageFrame } from "./inkPageIndex";
 import { decodeInkOps } from "./inkCodec";
 import { NO_PRESSURE, type InkDrawOp, type InkEraseOp } from "./rasterInk";
@@ -192,15 +192,18 @@ describe("InkPageBook", () => {
     expect(book.revision()).toBeGreaterThan(afterDraw);
   });
 
-  it("canUndo follows the history stack, not leftover ink past the cap", () => {
+  it("undoes and redoes the whole session beyond the old 40-stroke cap", () => {
     const book = new InkPageBook();
     book.setFrames(frames(1));
-    for (let i = 0; i < INK_UNDO_CAP + 3; i += 1) book.commit(stroke(20 + i));
+    for (let i = 0; i < 200; i += 1) book.commit(stroke(20 + i));
     expect(book.canUndo()).toBe(true);
-    for (let i = 0; i < INK_UNDO_CAP; i += 1) expect(book.undoOnce()).not.toBeNull();
+    for (let i = 0; i < 200; i += 1) expect(book.undoOnce()).not.toBeNull();
     expect(book.undoOnce()).toBeNull();
-    expect(book.opCount()).toBeGreaterThan(0);
+    expect(book.opCount()).toBe(0);
     expect(book.canUndo()).toBe(false);
+    for (let i = 0; i < 200; i += 1) expect(book.redoOnce()).not.toBeNull();
+    expect(book.opCount()).toBe(200);
+    expect(book.redoOnce()).toBeNull();
   });
 
   it("a new stroke drops redo so Redo is a no-op, not a remesh", () => {

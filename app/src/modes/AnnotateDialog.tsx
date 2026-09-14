@@ -12,11 +12,13 @@ import { useEffect, useRef, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { HubLibraryRefresh } from "../components/HubLibraryRefresh";
 import { useLibraryDeleteArm } from "../util/armedDelete";
 import { DOUBLE_TAP_MS } from "../util/gesture";
 import {
   annotateDocLabel,
-  deleteAnnotateDoc,
+  ANNOTATE_LIBRARY_EVENT,
+  trashAnnotateDoc,
   listAnnotateDocs,
   listAnnotateTrash,
   setAnnotateDocLocked,
@@ -80,6 +82,7 @@ interface LeaveProps {
 }
 
 interface EntryProps {
+  onRefreshHub?: () => Promise<number>;
   mode: "entry";
   /** Wording and choices. Defaults to the document library. */
   kind?: AnnotateDialogKind;
@@ -111,10 +114,30 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   const [saveTitle, setSaveTitle] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const removingRef = useRef<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const lastTapRef = useRef({ id: "", at: 0 });
   const { tapArmed, arm } = useLibraryDeleteArm();
+
+  useEffect(() => {
+    const refresh = () => {
+      const live = listAnnotateDocs();
+      setDocs(live);
+      setTrash(listAnnotateTrash());
+      if (removingRef.current && !live.some((row) => row.id === removingRef.current)) {
+        removingRef.current = null;
+        setRemoving(false);
+        arm();
+      }
+      // The local index commits before hub sync finishes.
+      setPendingId((id) => id && live.some((row) => row.id === id) ? id : null);
+    };
+    window.addEventListener(ANNOTATE_LIBRARY_EVENT, refresh);
+    return () => window.removeEventListener(ANNOTATE_LIBRARY_EVENT, refresh);
+  }, [arm]);
 
   useEffect(() => {
     setDocs(listAnnotateDocs());
@@ -203,18 +226,35 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
     lastTapRef.current = { id, at: now };
   };
 
-  const removeDoc = (id: string) => setPendingId(id);
+  const removeDoc = (id: string) => {
+    setRemoveError(null);
+    setPendingId(id);
+  };
 
   const confirmRemove = async (id: string) => {
+    if (removingRef.current) return;
+    removingRef.current = id;
+    setRemoving(true);
+    setRemoveError(null);
     try {
       if (props.onDelete) await props.onDelete(id);
-      else await deleteAnnotateDoc(id);
+      else await trashAnnotateDoc(id);
+      if (listAnnotateDocs().some((row) => row.id === id)) {
+        throw new Error("This document could not be removed. It may be locked.");
+      }
       arm();
-    } catch {
-      /* ignore */
+      setPendingId((pending) => pending === id ? null : pending);
+    } catch (cause) {
+      if (removingRef.current === id) {
+        setRemoveError(cause instanceof Error ? cause.message : "Could not remove this document. Try again.");
+      }
+    } finally {
+      if (removingRef.current === id) {
+        removingRef.current = null;
+        setRemoving(false);
+      }
+      refreshList();
     }
-    setPendingId(null);
-    refreshList();
   };
 
   const archived = visibleTrash;
@@ -260,6 +300,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                     ? "Save these annotations, start a second set on this file, or open another document."
                     : "Write a new note, open a document to annotate, or reopen a recent one."}
           </p>
+          {props.mode === "entry" && props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} />}
         </div>
 
         <div className="lc-settings-body">
@@ -621,6 +662,8 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
           message="It leaves the live library."
           detail={TOMBSTONE_COPY}
           confirmLabel="Delete"
+          pending={removing}
+          error={removeError}
           onConfirm={() => void confirmRemove(pendingId)}
           onCancel={() => setPendingId(null)}
         />

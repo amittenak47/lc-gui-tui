@@ -112,6 +112,7 @@ describe("walkSyncInk (stage F)", () => {
         );
       },
       writeInkPage: () => Promise.resolve(),
+      markInkPageSynced: vi.fn(async () => {}),
     }));
     return keys;
   }

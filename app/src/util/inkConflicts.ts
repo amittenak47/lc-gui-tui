@@ -1,11 +1,8 @@
 /**
  * Pages two devices both drew on, said out loud.
  *
- * Newest-wins is the right default and the wrong thing to do quietly. Every
- * other rule in pad sync resolves a difference that only one person made; this
- * one can resolve away a page somebody wrote on, on a device they are still
- * holding. The losing copy is recoverable from the snapshot tiers, but only if
- * the reader knows there was something to recover.
+ * Background sync preserves both sides of a conflicting page. The notification
+ * directs the reader to the explicit Sync walk to compare and choose a copy.
  *
  * A store rather than a prop, because the pane that can show a banner is not
  * the pane the conflict happened on — sync runs for the whole library.
@@ -60,8 +57,7 @@ export function subscribeInkConflicts(listener: () => void): () => void {
  * What the banner says.
  *
  * Names the pages, because "a page" is not something the reader can go and
- * look at. Names the snapshot too — the recovery is real and nobody would
- * guess it exists.
+ * look at, and offers the explicit action that resolves the conflict.
  */
 export function inkConflictMessage(rows: readonly InkConflict[]): string | null {
   if (rows.length === 0) return null;
@@ -70,7 +66,7 @@ export function inkConflictMessage(rows: readonly InkConflict[]): string | null 
     pages.length === 1
       ? `page ${pages[0]}`
       : `pages ${pages.slice(0, -1).join(", ")} and ${pages[pages.length - 1]}`;
-  return `Another device had also drawn on ${list} since this one last synced — the newer copy is showing. The older one is in this pad's snapshots.`;
+  return `Both devices changed ${list}. Your local ink is kept. Tap Sync to compare and choose what to keep.`;
 }
 
 export function resetInkConflictsForTests(): void {

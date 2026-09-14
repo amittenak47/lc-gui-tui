@@ -116,8 +116,11 @@ function readIndex(): WhiteboardNotebookMeta[] {
 }
 
 /** Throws {@link StorageFullError} when the origin is out of room — see `storageQuota`. */
+export const WHITEBOARD_LIBRARY_EVENT = "lc-whiteboard-library";
+
 function writeIndex(entries: WhiteboardNotebookMeta[]): void {
   setStorageItem(LIBRARY_KEY, JSON.stringify(entries));
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(WHITEBOARD_LIBRARY_EVENT));
 }
 
 /** Synchronous on purpose — the library dialog renders names, not boards. */

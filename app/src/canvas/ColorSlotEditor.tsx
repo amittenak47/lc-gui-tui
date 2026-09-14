@@ -5,7 +5,7 @@
  * confirm on this WebView. Check commits; X (or Escape) discards.
  */
 
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 
 import {
@@ -23,6 +23,7 @@ export interface ColorSlotEditorProps {
   anchor: { x: number; y: number };
   onConfirm: (color: string) => void;
   onDiscard: () => void;
+  zIndex?: number;
 }
 
 type ChannelMode = "rgb" | "hex";
@@ -75,13 +76,46 @@ function EyedropIcon() {
   );
 }
 
-export function ColorSlotEditor({ color, anchor, onConfirm, onDiscard }: ColorSlotEditorProps) {
+export function ColorSlotEditor({ color, anchor, onConfirm, onDiscard, zIndex = 140 }: ColorSlotEditorProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [hsv, setHsv] = useState<Hsv>(() => hexToHsv(color) ?? { h: 0, s: 0, v: 0 });
-  const [mode, setMode] = useState<ChannelMode>("rgb");
+  const [mode, setMode] = useState<ChannelMode>("hex");
   const hex = hsvToHex(hsv);
+  const [hexDraft, setHexDraft] = useState(hex);
+  useEffect(() => setHexDraft(hex), [hex]);
   const rgb = hsvToRgb(hsv);
   const hueFill = `hsl(${hsv.h}, 100%, 50%)`;
+
+  useLayoutEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    const place = () => {
+      const view = window.visualViewport;
+      const x = view?.offsetLeft ?? 0;
+      const y = view?.offsetTop ?? 0;
+      const width = view?.width ?? window.innerWidth;
+      const height = view?.height ?? window.innerHeight;
+      node.style.maxWidth = `${Math.max(0, width - 16)}px`;
+      node.style.maxHeight = `${Math.max(0, height - 16)}px`;
+      const box = node.getBoundingClientRect();
+      const preferredX = anchor.x + 86 + box.width <= x + width - 8
+        ? anchor.x + 86 : anchor.x - 86 - box.width;
+      node.style.left = `${Math.max(x + 8, Math.min(preferredX, x + width - box.width - 8))}px`;
+      node.style.top = `${Math.max(y + 8, Math.min(anchor.y - box.height / 2, y + height - box.height - 8))}px`;
+    };
+    place();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(place) : null;
+    observer?.observe(node);
+    window.addEventListener("resize", place);
+    window.visualViewport?.addEventListener("resize", place);
+    window.visualViewport?.addEventListener("scroll", place);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", place);
+      window.visualViewport?.removeEventListener("resize", place);
+      window.visualViewport?.removeEventListener("scroll", place);
+    };
+  }, [anchor.x, anchor.y]);
 
   const setFromEvent = useCallback((event: ReactPointerEvent<HTMLDivElement>, kind: "sv" | "hue") => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -158,8 +192,6 @@ export function ColorSlotEditor({ color, anchor, onConfirm, onDiscard }: ColorSl
   };
 
   const canDrop = typeof window !== "undefined" && "EyeDropper" in window;
-  const left = Math.min(window.innerWidth - 236, Math.max(8, anchor.x + 86));
-  const top = Math.min(window.innerHeight - 268, Math.max(8, anchor.y - 120));
 
   return createPortal(
     <div
@@ -167,9 +199,10 @@ export function ColorSlotEditor({ color, anchor, onConfirm, onDiscard }: ColorSl
       className="lc-color-slot-editor"
       role="dialog"
       aria-label="Edit ink colour"
-      style={{ left, top }}
+      style={{ zIndex }}
       onPointerDown={(event) => event.stopPropagation()}
     >
+      <div className="lc-color-slot-heading"><span>Your color</span><i style={{ background: color }} title="Original color" /></div>
       <div
         className="lc-color-slot-sv"
         style={{
@@ -234,9 +267,12 @@ export function ColorSlotEditor({ color, anchor, onConfirm, onDiscard }: ColorSl
         <div className="lc-color-slot-channels">
           <label className="lc-color-slot-hex">
             <input
-              value={hex}
+              value={hexDraft}
               spellCheck={false}
+              aria-label="Hex color"
+              onBlur={() => setHexDraft(hex)}
               onChange={(event) => {
+                setHexDraft(event.target.value);
                 const next = hexToHsv(event.target.value);
                 if (next) setHsv(next);
               }}
@@ -262,6 +298,7 @@ export function ColorSlotEditor({ color, anchor, onConfirm, onDiscard }: ColorSl
           onClick={() => onConfirm(hex)}
         >
           <CheckIcon />
+          <span>Use color</span>
         </button>
         <button
           type="button"

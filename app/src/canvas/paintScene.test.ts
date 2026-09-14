@@ -1,5 +1,5 @@
 import { createCanvas, type Canvas } from "@napi-rs/canvas";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   isDrawableSceneElement,
@@ -26,6 +26,15 @@ function sampleAt(
 }
 
 describe("isDrawableSceneElement", () => {
+  it("paints wrapped text at natural glyph width, including exports", () => {
+    const { ctx } = ctx2d(400, 400);
+    const paint = vi.spyOn(ctx, "fillText");
+    paintSceneElements(ctx, [{ type: "text", x: 10, y: 10, width: 120, height: 160,
+      autoResize: false, text: "Text should wrap inside the box", fontSize: 24, strokeColor: "#000" }], { all: true });
+    expect(paint.mock.calls.length).toBeGreaterThan(1);
+    expect(paint.mock.calls.every((args) => args.length === 3)).toBe(true);
+    paint.mockRestore();
+  });
   it("skips page frames and deleted elements", () => {
     expect(
       isDrawableSceneElement({

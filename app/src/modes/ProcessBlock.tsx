@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { STAGE_LABELS, type CoachProcessEvent } from "../api/types";
+import { AgentRichText } from "./AgentRichText";
 
 export const DOC_TOOL_LABELS: Record<string, string> = {
   query_document_vectors: "searching the book",
@@ -159,7 +160,8 @@ export function ProcessBlock({
                     {processLine(event)}
                   </button>
                   {canOpen && openKey === key ? (
-                    <div className="lc-agent-process-step-body">{body}</div>
+                    <AgentRichText text={body} animate animateInitial={running}
+                      className="lc-agent-process-step-body" />
                   ) : null}
                 </li>
               );

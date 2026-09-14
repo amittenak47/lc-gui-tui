@@ -4,6 +4,15 @@ import { describe, expect, it } from "vitest";
 import { documentLayerHeight } from "./documentLayer";
 
 describe("documentLayerHeight", () => {
+  it("does not feed a padded frame height back into document growth", () => {
+    const slot = document.createElement("div");
+    const inner = document.createElement("div");
+    inner.className = "lc-md-ink-doc";
+    slot.append(inner);
+    Object.defineProperty(slot, "scrollHeight", { value: 9180 });
+    Object.defineProperty(inner, "scrollHeight", { value: 9000 });
+    expect(documentLayerHeight(slot)).toBe(9000);
+  });
   it("takes the inner document scrollHeight when the slot is still at the 1100 floor", () => {
     const slot = document.createElement("div");
     const inner = document.createElement("div");

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { INK_UNDO_CAP } from "../inkPageCache";
+import { INK_PIXEL_HISTORY_CAP as INK_UNDO_CAP } from "./history";
 import type { SpineDot } from "./instance";
 import { commitOverlay, dropRedoStacks, pushCapped, redoOverlay, undoOverlay } from "./history";
 
@@ -74,7 +74,7 @@ describe("ink lab overlay stacks", () => {
     expect(pixelUndo).toEqual([1, 4]);
   });
 
-  it("caps pixel history the same way the book caps undo", () => {
+  it("keeps bitmap history bounded independently of session undo", () => {
     const stack: number[] = [];
     for (let i = 0; i < INK_UNDO_CAP + 5; i += 1) pushCapped(stack, i);
     expect(stack).toHaveLength(INK_UNDO_CAP);

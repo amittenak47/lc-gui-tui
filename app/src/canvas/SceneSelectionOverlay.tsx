@@ -18,6 +18,8 @@ import {
 import { MorphBar } from "../components/MorphBar";
 import type { PaintSceneElement } from "./paintScene";
 import type { ViewportTransform } from "./rasterInk";
+import { fitSceneText } from "./sceneTextLayout";
+import { TextFontSizeControl } from "./TextFontSizeControl";
 import {
   clonePaintElements,
   insertLinearMid,
@@ -47,6 +49,7 @@ export interface SceneSelectionOverlayProps {
   onChange: (next: PaintSceneElement[], commit: boolean, previous?: PaintSceneElement[]) => void;
   onFlip: (axis: "h" | "v") => void;
   onDelete: () => void;
+  onEditText?: (element: PaintSceneElement) => void;
 }
 
 interface OverlayView {
@@ -55,6 +58,7 @@ interface OverlayView {
   width: number;
   height: number;
   angle: number;
+  textFontSize: number | null;
   cx: number;
   dockY: number;
   dockBelow: number;
@@ -113,10 +117,11 @@ function buildView(members: PaintSceneElement[], view: ViewportTransform): Overl
     width,
     height,
     angle,
+    textFontSize: members.length === 1 && members[0]?.type === "text" ? members[0].fontSize ?? 20 : null,
     cx: Math.max(104, Math.min(view.width - 104, aabbNw.left + aabbW / 2)),
     dockY: aabbNw.top,
     dockBelow: aabbNw.top + aabbH,
-    dockTop: aabbNw.top >= 56,
+    dockTop: aabbNw.top >= 70,
     linear,
     mids,
   };
@@ -182,7 +187,7 @@ export const SceneSelectionOverlay = forwardRef<
   SceneSelectionOverlayHandle,
   SceneSelectionOverlayProps
 >(function SceneSelectionOverlay(
-  { getMembers, getViewport, clientToScene, onChange, onFlip, onDelete },
+  { getMembers, getViewport, clientToScene, onChange, onFlip, onDelete, onEditText },
   ref,
 ) {
   const [box, setBox] = useState<OverlayView | null>(null);
@@ -367,7 +372,7 @@ export const SceneSelectionOverlay = forwardRef<
       {box && (
         <>
           <div
-            className="lc-scene-select-box"
+            className={`lc-scene-select-box${box.textFontSize !== null ? " lc-scene-text-selection" : ""}`}
             style={{
               left: box.left,
               top: box.top,
@@ -377,6 +382,7 @@ export const SceneSelectionOverlay = forwardRef<
             }}
           >
             {SCALE_HANDLES.filter((handle) => {
+              if (box.textFontSize !== null) return handle === "e" || handle === "w";
               if (box.linear.length === 0) return true;
               return handle === "nw" || handle === "ne" || handle === "se" || handle === "sw";
             }).map((handle) => (
@@ -384,7 +390,7 @@ export const SceneSelectionOverlay = forwardRef<
                 key={handle}
                 type="button"
                 className={`lc-scene-select-handle lc-scene-select-handle-${handle}`}
-                aria-label={`Scale ${handle}`}
+                aria-label={box.textFontSize !== null ? `Resize text ${handle === "e" ? "right" : "left"} edge` : `Scale ${handle}`}
                 onPointerDown={onScaleDown(handle)}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
@@ -399,8 +405,18 @@ export const SceneSelectionOverlay = forwardRef<
               top: box.dockTop ? box.dockY : box.dockBelow,
             }}
           >
-            <MorphBar active="actions" axis="width" className="lc-scene-select-menu">
+            <MorphBar active="actions" axis="width" className={`lc-scene-select-menu${box.textFontSize !== null ? " lc-scene-text-menu" : ""}`}>
               <div data-morph-id="actions">
+                {box.textFontSize !== null && <>
+                  <button type="button" className="lc-scene-text-edit-action" onClick={() => {
+                    const el = getMembersRef.current()[0];
+                    if (el) onEditText?.(el);
+                  }}>Edit text</button>
+                  <TextFontSizeControl value={box.textFontSize} label="Selected text font size" onChange={(fontSize) => {
+                      onChangeRef.current(getMembersRef.current().map((el) => fitSceneText({ ...el, fontSize })), true);
+                    }} />
+                </>}
+                {box.textFontSize === null && <>
                 <button
                   type="button"
                   className={spin != null ? "lc-scene-select-spinning" : undefined}
@@ -454,6 +470,7 @@ export const SceneSelectionOverlay = forwardRef<
                 >
                   <FlipVIcon />
                 </button>
+                </>}
                 <button
                   type="button"
                   aria-label="Delete selection"

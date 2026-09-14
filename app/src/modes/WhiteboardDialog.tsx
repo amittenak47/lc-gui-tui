@@ -6,10 +6,12 @@ import { useEffect, useRef, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { HubLibraryRefresh } from "../components/HubLibraryRefresh";
 import { useLibraryDeleteArm } from "../util/armedDelete";
 import { DOUBLE_TAP_MS } from "../util/gesture";
 import {
   deleteWhiteboardNotebook,
+  WHITEBOARD_LIBRARY_EVENT,
   listWhiteboardNotebooks,
   listWhiteboardTrash,
   setWhiteboardNotebookLocked,
@@ -47,6 +49,7 @@ interface LeaveProps {
 }
 
 interface EntryProps {
+  onRefreshHub?: () => Promise<number>;
   mode: "entry";
   pending?: boolean;
   exiting?: boolean;
@@ -82,6 +85,19 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const [renameDraft, setRenameDraft] = useState("");
   const lastTapRef = useRef({ id: "", at: 0 });
   const { tapArmed, arm } = useLibraryDeleteArm();
+
+  useEffect(() => {
+    const refresh = () => {
+      setNotebooks(listWhiteboardNotebooks());
+      setTrash(listWhiteboardTrash());
+    };
+    window.addEventListener(WHITEBOARD_LIBRARY_EVENT, refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener(WHITEBOARD_LIBRARY_EVENT, refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
 
   useEffect(() => {
     setNotebooks(listWhiteboardNotebooks());
@@ -211,6 +227,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                   ? "Save this notebook, load another, or start blank."
                   : "Start blank or load a saved notebook."}
           </p>
+          {props.mode === "entry" && props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} />}
         </div>
 
         <div className="lc-settings-body">

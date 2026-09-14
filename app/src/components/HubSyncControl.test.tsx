@@ -1258,6 +1258,33 @@ describe("HubSyncControl (step-2 stub)", () => {
       vi.resetModules();
     });
 
+    it("waits for the live flush before taking the hub snapshot", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient();
+      const { host } = makeHost(null);
+      let release!: () => void;
+      host.prepare = () => new Promise<void>((resolve) => { release = resolve; });
+      const button = await mountWalk(client, withWhiteboardPad(host));
+      await act(async () => { button.click(); });
+      expect(client.pingPadSync).not.toHaveBeenCalled();
+      await act(async () => { release(); await vi.runAllTimersAsync(); });
+      expect(client.pingPadSync).toHaveBeenCalledTimes(1);
+      expect(button.dataset.stage).toBe("synced");
+    });
+
+    it("reports reload failure and permits another sync", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient();
+      const { host, reload, walkReports } = makeHost(null);
+      reload.mockRejectedValueOnce(new Error("reload failed"));
+      const button = await mountWalk(client, withWhiteboardPad(host));
+      await act(async () => { button.click(); await vi.runAllTimersAsync(); });
+      expect(button.dataset.stage).toBe("pull");
+      expect(walkReports.at(-1)).toMatchObject({ stage: "pull", error: "reload failed" });
+      await act(async () => { button.click(); await vi.runAllTimersAsync(); });
+      expect(button.dataset.stage).toBe("synced");
+    });
+
     it("reports every stage it walks, and lands the tab on synced", async () => {
       // The pill morphs its own labels; the tab beside the document had no way
       // to know a walk was running at all, so it read `indexed` throughout.

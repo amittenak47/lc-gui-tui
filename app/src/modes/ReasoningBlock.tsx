@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AgentRichText } from "./AgentRichText";
 
 /**
  * Full model thinking, separate from the process step list.
@@ -33,7 +34,8 @@ export function ReasoningBlock({
           {running ? "Reasoning…" : "Reasoning"}
         </span>
       </button>
-      {expanded ? <div className="lc-agent-reasoning-body">{body}</div> : null}
+      {expanded ? <AgentRichText text={body} animate animateInitial={running}
+        className="lc-agent-reasoning-body" /> : null}
     </div>
   );
 }
