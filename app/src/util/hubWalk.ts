@@ -197,13 +197,19 @@ export async function walkSyncInk(
    * hub that went away mid-stage still ended the walk on "Synced" with the
    * strokes still only on one device.
    */
-  await syncInkPages(
+  const conflicts = await syncInkPages(
     client,
     digests,
     inkKeys.map((key) => ({ kind: pad.kind, key })),
     since,
     { strict: true },
   );
+  const conflict = conflicts[0];
+  if (conflict) {
+    const wbId = splitFootnoteInkHubKey(conflict.key)?.wbId;
+    return { outcome: "conflict", pageId: conflictInkPageId(pad.kind, conflict.pageId),
+      inkKey: conflict.key, ...(wbId ? { wbId } : {}) };
+  }
   return { outcome: "ok" };
 }
 

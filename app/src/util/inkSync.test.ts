@@ -30,6 +30,13 @@ describe("remoteWins", () => {
 describe("isInkConflict", () => {
   const since = 100;
 
+  it("does not confuse a manual sync's acknowledgement with a dual write", () => {
+    expect(isInkConflict({ updatedAt: 200, syncedUpdatedAt: 150 }, { updated_at: 150 }, 0)).toBe(false);
+    expect(isInkConflict({ updatedAt: 150, syncedUpdatedAt: 150 }, { updated_at: 200 }, 0)).toBe(false);
+    // A later unrelated background ping must not hide an unresolved page conflict.
+    expect(isInkConflict({ updatedAt: 200, syncedUpdatedAt: 150 }, { updated_at: 250 }, 999)).toBe(true);
+  });
+
   it("is not a conflict when only the other device drew", () => {
     // The ordinary case: this page has not been touched here since the last
     // sync, so taking the remote copy discards nothing.
@@ -55,14 +62,14 @@ describe("isInkConflict", () => {
 });
 
 describe("ink conflict banner", () => {
-  it("names the page and where the losing copy went", () => {
+  it("names the page and preserves local ink until a choice", () => {
     resetInkConflictsForTests();
     noteInkConflicts([
       { kind: "whiteboard", key: "w1", pageId: 3, localUpdatedAt: 2, remoteUpdatedAt: 3 },
     ]);
     const message = inkConflictMessage(inkConflictsFor("whiteboard", "w1"));
     expect(message).toContain("page 3");
-    expect(message).toContain("snapshots");
+    expect(message).toContain("local ink is kept");
     resetInkConflictsForTests();
   });
 
@@ -158,6 +165,7 @@ describe("applyInkChoice", () => {
     }));
     vi.doMock("./inkPageStore", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./inkPageStore")>()),
+      markInkPageSynced: vi.fn(async () => {}),
       getInkPageRecords: () =>
         Promise.resolve(
           localRows.map((row) => ({
@@ -349,6 +357,7 @@ describe("applyInkChoice", () => {
     }));
     vi.doMock("./inkPageStore", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./inkPageStore")>()),
+      markInkPageSynced: vi.fn(async () => {}),
       getInkPageRecords: () =>
         Promise.resolve([
           {
@@ -534,6 +543,7 @@ describe("loadConflictPreviewInkPage", () => {
     vi.resetModules();
     vi.doMock("./inkPageStore", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./inkPageStore")>()),
+      markInkPageSynced: vi.fn(async () => {}),
       getInkPageRecords: () =>
         Promise.resolve([
           {
@@ -570,6 +580,7 @@ describe("loadConflictPreviewInkPage", () => {
     vi.resetModules();
     vi.doMock("./inkPageStore", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./inkPageStore")>()),
+      markInkPageSynced: vi.fn(async () => {}),
       getInkPageRecords: () =>
         Promise.resolve([
           {
@@ -622,6 +633,7 @@ describe("applyInkChoice fetches what a choice writes", () => {
     }));
     vi.doMock("./inkPageStore", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./inkPageStore")>()),
+      markInkPageSynced: vi.fn(async () => {}),
       getInkPageRecords: () =>
         Promise.resolve(
           localRows.map((row) => ({
@@ -747,6 +759,7 @@ describe("localInkAsDtos", () => {
     vi.resetModules();
     vi.doMock("./inkPageStore", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./inkPageStore")>()),
+      markInkPageSynced: vi.fn(async () => {}),
       getInkPageRecords: () =>
         Promise.resolve(
           pageIds.map((pageId) => ({
@@ -795,6 +808,7 @@ describe("syncInkPages strict pull", () => {
     }));
     vi.doMock("./inkPageStore", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./inkPageStore")>()),
+      markInkPageSynced: vi.fn(async () => {}),
       getInkPageRecords: () => Promise.resolve([]),
     }));
     return import("./inkSync");

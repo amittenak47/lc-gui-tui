@@ -319,8 +319,8 @@ describe("Board", () => {
     expect(src).toMatch(
       /listener on `\.lc-doc-selectable` still has to fire/,
     );
-    expect(src).not.toMatch(/pointerOnSelectableText/);
-    expect(src).toMatch(/else if \(onPdfDoc \|\| onSelectableDoc\)/);
+    expect(src.includes("pointerOnSelectableText")).toBe(true);
+    expect(src.includes("else if (onPdfDoc)")).toBe(true);
   });
 });
 

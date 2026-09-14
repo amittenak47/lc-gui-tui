@@ -35,6 +35,8 @@ export interface HoldButtonProps {
    * Short press released before the fill completes.
    */
   onTap?: () => void;
+  /** A brief liquid wash for a reversible tap action such as clearing ink. */
+  tapFeedback?: boolean;
   /** How long the fill takes. Defaults to the shared {@link HOLD_MS}. */
   holdMs?: number;
   disabled?: boolean;
@@ -94,6 +96,7 @@ export function HoldButton({
   children,
   onConfirm,
   onTap,
+  tapFeedback = false,
   holdMs = HOLD_MS,
   disabled = false,
   className,
@@ -111,6 +114,7 @@ export function HoldButton({
   holdThrough = false,
 }: HoldButtonProps) {
   const [holdProgress, setHoldProgress] = useState(0);
+  const fillRef = useRef<HTMLSpanElement>(null);
   const holdingRef = useRef(false);
   const rafRef = useRef<number | null>(null);
   const fillDelayRef = useRef<number | null>(null);
@@ -145,6 +149,14 @@ export function HoldButton({
       onConfirmRef.current();
     } else if (opts.release && wasHolding && !filled && onTapRef.current) {
       onTapRef.current();
+      if (tapFeedback && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+        fillRef.current?.getAnimations?.().forEach((animation) => animation.cancel());
+        fillRef.current?.animate?.([
+          { transform: "translateY(100%)", opacity: 1 },
+          { transform: "translateY(-8%)", opacity: 1, offset: 0.65 },
+          { transform: "translateY(-8%)", opacity: 0 },
+        ], { duration: 360, easing: "ease-out" });
+      }
     }
     // Always clear the fill on release — leaving it full after confirm made
     // Offline look stuck after the gate dialog closed.
@@ -152,7 +164,7 @@ export function HoldButton({
       confirmedRef.current = false;
       setHoldProgress(0);
     }
-  }, [clearFillDelay, holdMs]);
+  }, [clearFillDelay, holdMs, tapFeedback]);
 
   const displayProgress =
     holdProgress > 0
@@ -238,6 +250,7 @@ export function HoldButton({
           : { ...style, ["--lc-hold" as string]: String(displayProgress) }
       }
       data-region={dataRegion ? "" : undefined}
+      data-filling={displayProgress > 0 ? "" : undefined}
       disabled={disabled}
       aria-label={
         ariaLabel ??
@@ -286,7 +299,7 @@ export function HoldButton({
       }}
       onBlur={() => stopHold({ reset: true })}
     >
-      <span className="lc-hold-reveal-fill" aria-hidden />
+      <span ref={fillRef} className="lc-hold-reveal-fill" aria-hidden />
       <span className="lc-hold-reveal-label">{children ?? label}</span>
     </button>
   );

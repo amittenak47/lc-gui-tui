@@ -33,8 +33,6 @@ import {
 import { isHostBoundOp, type InkEraseOp, type InkOp } from "./rasterInk";
 import { opsAfterPartialErase, opsAfterStrokeErase, opsWithErasesBaked } from "./strokeEraser";
 
-export const INK_UNDO_CAP = 40;
-
 /** Recently-evicted encoded pages kept in RAM so a short jump back is free. */
 export const INK_COLD_CAP = 32;
 
@@ -537,9 +535,6 @@ export class InkPageBook {
 
   private pushUndo(entry: InkUndoEntry): void {
     this.undo.push(entry);
-    if (this.undo.length > INK_UNDO_CAP) {
-      this.undo.splice(0, this.undo.length - INK_UNDO_CAP);
-    }
   }
 
   private ensureIdentity(op: InkOp, preserve = false): InkOp {

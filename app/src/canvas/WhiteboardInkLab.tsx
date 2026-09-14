@@ -1131,7 +1131,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           tileReadyRef.current = () => {};
           const engine = engineRef.current;
           const pixel = snapUndoRef.current.pop();
-          if (pixel !== undefined) snapRedoRef.current.push(pixel);
+          // Keep one slot per semantic undo, even past the bitmap cache.
+          // Otherwise Redo pairs an old operation with a newer stroke's patch.
+          snapRedoRef.current.push(pixel ?? null);
           if (entry.kind === "add" && isInkLabPenOp(entry.op)) {
             undoOverlay(overlayRef.current, overlayRedoRef.current);
           }

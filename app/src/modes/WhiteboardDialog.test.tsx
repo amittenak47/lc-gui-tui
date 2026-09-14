@@ -12,6 +12,7 @@ const live = vi.hoisted(() => ({ rows: [] as WhiteboardNotebookMeta[] }));
 const trash = vi.hoisted(() => ({ rows: [] as WhiteboardNotebookMeta[] }));
 
 vi.mock("../util/whiteboardStore", () => ({
+  WHITEBOARD_LIBRARY_EVENT: "lc-whiteboard-library",
   listWhiteboardNotebooks: () => live.rows,
   listWhiteboardTrash: () => trash.rows,
   deleteWhiteboardNotebook: vi.fn(),

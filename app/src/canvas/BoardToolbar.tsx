@@ -65,6 +65,18 @@ import { StrokeSizeSlider } from "./StrokeSizeSlider";
  */
 let narrowVotes = 0;
 
+function animateHistoryArrow(button: HTMLButtonElement, direction: number) {
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  const arrow = button.querySelector("svg");
+  arrow?.getAnimations?.().forEach((animation) => animation.cancel());
+  arrow?.animate?.([
+    { transform: "rotate(0)" },
+    { transform: `rotate(${direction * 40}deg)`, offset: 0.4 },
+    { transform: `rotate(${-direction * 8}deg)`, offset: 0.75 },
+    { transform: "rotate(0)" },
+  ], { duration: 320, easing: "ease-out" });
+}
+
 /** Board hole when the desktop coach is open; otherwise the window. */
 function boardChromeBox(): { left: number; top: number; right: number; bottom: number } {
   const app = document.querySelector(".lc-app");
@@ -1150,26 +1162,27 @@ export function BoardToolbar({
 
         <button
           type="button"
-          className="lc-tool lc-tip-target"
+          className="lc-tool lc-tip-target lc-history-tool"
           aria-label="Undo"
           data-tip="Undo"
           data-tip-placement="bottom"
-          onClick={onUndo}
+          onClick={(event) => { animateHistoryArrow(event.currentTarget, -1); onUndo(); }}
         >
           <UndoIcon />
         </button>
         <button
           type="button"
-          className="lc-tool lc-tip-target"
+          className="lc-tool lc-tip-target lc-history-tool"
           aria-label="Redo"
           data-tip="Redo"
           data-tip-placement="bottom"
-          onClick={onRedo}
+          onClick={(event) => { animateHistoryArrow(event.currentTarget, 1); onRedo(); }}
         >
           <RedoIcon />
         </button>
         <HoldButton
           label="Reset board"
+          tapFeedback={!resetLocked}
           ariaLabel={
             resetLocked
               ? `Reset ${resetClearModeLabel(resetMode)} locked — tap to switch mode, hold to unlock`

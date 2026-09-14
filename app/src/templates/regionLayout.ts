@@ -41,6 +41,8 @@ export interface LayoutElement {
     lcFixedSize?: boolean;
     lcPinnedHeader?: boolean;
     lcReadingColumn?: boolean;
+    lcDocumentPage?: boolean;
+    lcMdInkFrame?: boolean;
   } | null;
   [key: string]: unknown;
 }

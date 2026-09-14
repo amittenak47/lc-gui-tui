@@ -10,6 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LcClient } from "../api/client";
 import type { WalkPad, WalkSnapshot } from "./hubWalk";
+import { encodeInkOps, packEncodedInk } from "../canvas/inkCodec";
+import { gzipBytes } from "./gzip";
+import { bytesToB64 } from "../api/nativeHttp";
 
 /** Local ink, keyed the way the ink page store keys it. */
 let localPages: Record<string, Array<{ pageId: number; updatedAt: number }>> = {};
@@ -21,9 +24,13 @@ vi.mock("./idb", async (importOriginal) => ({
   withStore: async (
     _store: string,
     _mode: string,
-    fn: (store: { put: (row: unknown, key: string) => void }) => void,
+    fn: (store: unknown) => void,
   ) => {
-    fn({ put: () => {} });
+    fn({ put: () => {}, get: () => {
+      const request = { result: undefined, onsuccess: null as (() => void) | null };
+      queueMicrotask(() => request.onsuccess?.());
+      return request;
+    } });
   },
 }));
 
@@ -31,6 +38,7 @@ vi.mock("./inkPageStore", async (importOriginal) => {
   const real = await importOriginal<typeof import("./inkPageStore")>();
   return {
     ...real,
+    markInkPageSynced: vi.fn(async () => {}),
     listInkDocKeys: async (prefix: string) =>
       Object.keys(localPages).filter((key) => key.startsWith(prefix)),
     getInkPageRecords: async (docKey: string) =>
@@ -124,10 +132,11 @@ describe("walkSyncInk with scratch boards", () => {
 
   it("pulls a board only the hub has, without the reader opening it", async () => {
     pointers = new Set(["wb9"]);
+    const gz = bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps([]))));
     const client = fakeClient({
       getInkPages: vi.fn(async (_kind: string, key: string) =>
         key === "pad-1/fn/wb9"
-          ? [{ kind: "annotate", key, page_id: 1, updated_at: 900, gz: "YQ==" }]
+          ? [{ kind: "annotate", key, page_id: 1, updated_at: 900, gz }]
           : [],
       ),
     });

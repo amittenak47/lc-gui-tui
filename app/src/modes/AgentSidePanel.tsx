@@ -18,6 +18,7 @@ import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
 import { ProcessBlock, reasoningBodyForTurn } from "./ProcessBlock";
 import { ReasoningBlock } from "./ReasoningBlock";
+import { AgentRichText } from "./AgentRichText";
 import {
   cycleAgentReasoning,
   loadAgentReasoningLevel,
@@ -739,7 +740,7 @@ export function AgentSidePanel({
      * whatever the length of the passage, and a × to take it back off.
      */
     setPageQuote({ text: quoteSeed.text.trim(), excerpt: replyExcerpt(quoteSeed.text) });
-    window.setTimeout(() => composerRef.current?.focus(), 0);
+    window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
   }, [quoteSeed]);
 
   /** A footnote tapped on the page — jump the panel to the thread it made. */
@@ -899,8 +900,16 @@ export function AgentSidePanel({
       setSheetOffset(next);
     };
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    window.visualViewport?.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.visualViewport?.removeEventListener("resize", onResize);
+    };
   }, [mobile, open]);
+
+  useEffect(() => {
+    if (!open) composerRef.current?.blur();
+  }, [open]);
 
   // Ask-only workspaces clear pipeline flags they cannot honour. Pads keep Draw.
   useEffect(() => {
@@ -1134,9 +1143,15 @@ export function AgentSidePanel({
    * reads as the panel having moved for no reason.
    */
   const jumpToMessage = useCallback((id: string) => {
-    const node = document.querySelector<HTMLElement>(`[data-coach-message="${id}"]`);
-    if (!node) return;
-    node.scrollIntoView({ behavior: "smooth", block: "center" });
+    const list = listRef.current;
+    const node = Array.from(list?.querySelectorAll<HTMLElement>("[data-coach-message]") ?? [])
+      .find((entry) => entry.dataset.coachMessage === id);
+    if (!node || !list) return;
+    // scrollIntoView also scrolls the shell and body, stranding the translated
+    // sheet and moving Home under Android's status bar on return from a thread.
+    const target = list.scrollTop + node.getBoundingClientRect().top -
+      list.getBoundingClientRect().top - (list.clientHeight - node.offsetHeight) / 2;
+    list.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
     node.classList.add("is-flashed");
     window.setTimeout(() => node.classList.remove("is-flashed"), 1400);
   }, []);
@@ -1223,7 +1238,7 @@ export function AgentSidePanel({
       requestAnimationFrame(() => {
         const el = composerRef.current;
         if (!el) return;
-        el.focus();
+        el.focus({ preventScroll: true });
         const end = el.value.length;
         el.setSelectionRange(end, end);
       });
@@ -1377,7 +1392,8 @@ export function AgentSidePanel({
     mobile
       ? {
           ...(sheetOffset !== null
-            ? { transform: `translate3d(0, ${sheetOffset}px, 0)` }
+            ? { transform: sheetDragging ? `translate3d(0, ${sheetOffset}px, 0)` :
+                open ? "translate3d(0, 0, 0)" : `translate3d(0, calc(100% - ${COACH_SHEET_PEEK_PX}px), 0)` }
             : { visibility: "hidden" as const }),
           transition:
             sheetDragging || !sheetMotionOn
@@ -1601,9 +1617,8 @@ export function AgentSidePanel({
                   <span className="lc-agent-reply-stub-text">{replyStub!.excerpt}</span>
                 </button>
               )}
-              {message.content ? (
-                <div className="lc-agent-turn-body">{message.content}</div>
-              ) : null}
+              <AgentRichText text={message.content} animate={message.role === "assistant"}
+                animateInitial={Boolean(message.pending)} className="lc-agent-turn-body" />
               {!openThreadId && replyCount > 0 && (
                 /*
                  * The thread, collapsed to one line.
@@ -2265,6 +2280,7 @@ function DrawingSection({
           Drawing
         </span>
         <span className="lc-muted lc-agent-drawing-title">{title}</span>
+        <span className="lc-agent-drawing-visibility">{expanded ? "On page" : "Hidden"}</span>
       </button>
       {expanded && (
         <div className="lc-agent-drawing-body">

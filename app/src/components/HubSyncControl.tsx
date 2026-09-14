@@ -40,7 +40,6 @@ function footnotesOf(
   return Array.isArray(notes) ? (notes as DocFootnote[]) : [];
 }
 import { PAD_HUB_EVENT, loadPadHub } from "../util/padHub";
-import { pushDocBytes } from "../util/padSync";
 import type { DocWorkProgress } from "./DocIndexChip";
 import {
   snapshotFromPing,
@@ -172,11 +171,10 @@ class WalkConflict extends Error {
 /**
  * PUT the document bytes exactly once per walk.
  *
- * `pushDocBytes` already queues on failure, so an unreachable hub costs one
- * queued job, never a retry storm.
+ * A queued transfer is not completion. The explicit walk must see the error.
  */
 async function pushBytesOnce(client: LcClient, hash: string, bytes: ArrayBuffer): Promise<void> {
-  await pushDocBytes(client, hash, bytes);
+  await client.putDocBytes(hash, bytes);
 }
 
 /**
@@ -188,6 +186,8 @@ async function pushBytesOnce(client: LcClient, hash: string, bytes: ArrayBuffer)
  * unless the walk reports.
  */
 export interface HubSyncWalkHost {
+  /** Flush the live working copy without changing the explicit-Save baseline. */
+  prepare?(): Promise<void>;
   doc(): {
     hash: string;
     name: string;
@@ -380,7 +380,9 @@ export function HubSyncControl({
     // Where to resume. A failure parks on its own stage and retries from it;
     // everything else — idle, and a finished walk — starts at the top of
     // this tab's walk (Index when there is a document, Pad when there is not).
-    const from: HubSyncStage = walkError ? stage : walkStages(walkHasDocument(host))[0];
+    const from: HubSyncStage = walkError
+      ? stage === "index" ? "index" : "pad"
+      : walkStages(walkHasDocument(host))[0];
     setWalkError(null);
     if (client && host) {
       void runWalk(from);
@@ -443,6 +445,8 @@ export function HubSyncControl({
        * more correct of the two: every stage of a walk should be looking at
        * the same world.
        */
+      await host?.prepare?.();
+      throwIfAborted();
       const ping = await client!.pingPadSync(0);
       throwIfAborted();
 
@@ -468,6 +472,9 @@ export function HubSyncControl({
         if (!bytesOnHub && doc.bytes) {
           await pushBytesOnce(client!, doc.hash, doc.bytes);
           bytesOnHub = true;
+        }
+        if (!bytesOnHub && (doc.docType === "pdf" || doc.docType === "epub")) {
+          throw new Error("The hub does not have this file, and this device no longer holds it. Reopen it here, then sync.");
         }
 
         // — C: index. Skip when the hub already has pages.
@@ -842,9 +849,9 @@ export function HubSyncControl({
       try {
         absorbReloadEditsRef.current = true;
         await host?.emitReload();
-      } catch {
-        // The stores already hold the walk. A failed remount must not park
-        // the pill on Pull after a sync that actually landed.
+        throwIfAborted();
+      } finally {
+        absorbReloadEditsRef.current = false;
       }
       syncedAtSeqRef.current = editSeqRef.current;
       goStage("synced");

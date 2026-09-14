@@ -12,9 +12,10 @@ const live = vi.hoisted(() => ({ rows: [] as AnnotateDocMeta[] }));
 const trash = vi.hoisted(() => ({ rows: [] as AnnotateDocMeta[] }));
 
 vi.mock("../util/annotateStore", () => ({
+  ANNOTATE_LIBRARY_EVENT: "lc-annotate-library",
   listAnnotateDocs: () => live.rows,
   listAnnotateTrash: () => trash.rows,
-  deleteAnnotateDoc: vi.fn(),
+  trashAnnotateDoc: vi.fn(),
   setAnnotateDocLocked: vi.fn(),
   annotateDocLabel: (doc: AnnotateDocMeta) => doc.label?.trim() || doc.name,
 }));
@@ -65,6 +66,7 @@ afterEach(() => {
 });
 
 function mount(props: {
+  onDelete?: (id: string) => void | Promise<void>;
   kind?: "document" | "web";
   onRestoreTrash?: (id: string) => void | Promise<void>;
   onRename?: (id: string, title: string) => void | Promise<void>;
@@ -119,6 +121,35 @@ async function tap(label: string, host: HTMLElement) {
 }
 
 describe("AnnotateDialog", () => {
+  it("closes confirmation and updates live/Trash as soon as local deletion commits", async () => {
+    let finish!: () => void;
+    const syncing = new Promise<void>((resolve) => { finish = resolve; });
+    const onDelete = vi.fn(async (id: string) => {
+      const row = live.rows.find((entry) => entry.id === id)!;
+      live.rows = live.rows.filter((entry) => entry.id !== id);
+      trash.rows = [{ ...row, deletedAt: 2 }];
+      window.dispatchEvent(new Event("lc-annotate-library"));
+      await syncing;
+    });
+    const view = mount({ onDelete });
+    await hold("Recent", view.host);
+    const remove = view.host.querySelector<HTMLButtonElement>(".lc-scratch-load-trash")!;
+    expect(remove).toBeTruthy();
+    await act(async () => {
+      remove.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, button: 0 }));
+      await new Promise((resolve) => setTimeout(resolve, HOLD_MS + 50));
+      remove.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1, button: 0 }));
+    });
+    expect(view.host.textContent).toContain("Remove this document?");
+    await hold("Delete", view.host);
+    expect(onDelete).toHaveBeenCalledWith("d1");
+    expect(view.host.textContent).not.toContain("Remove this document?");
+    expect(view.host.querySelector('[aria-label="Open note.md: tap to edit, hold to confirm"]')).toBeNull();
+    expect(view.host.textContent).toContain("Restore · note.md");
+    await act(async () => { finish(); await syncing; });
+    view.unmount();
+  });
+
   it("keeps web pads out of the document Recent list", async () => {
     const view = mount({ kind: "document" });
     await hold("Recent", view.host);

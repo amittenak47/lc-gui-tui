@@ -331,8 +331,11 @@ function readIndex(): AnnotateDocMeta[] {
 }
 
 /** Throws {@link StorageFullError} when the origin is out of room — see `storageQuota`. */
+export const ANNOTATE_LIBRARY_EVENT = "lc-annotate-library";
+
 function writeIndex(entries: AnnotateDocMeta[]): void {
   setStorageItem(LIBRARY_KEY, JSON.stringify(entries));
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(ANNOTATE_LIBRARY_EVENT));
 }
 
 /**

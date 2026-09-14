@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
@@ -42,6 +42,7 @@ describe("processLine", () => {
 
 describe("ProcessBlock", () => {
   it("tapping a reason step opens the detail", async () => {
+    vi.useFakeTimers();
     const host = document.createElement("div");
     document.body.appendChild(host);
     const root = createRoot(host);
@@ -66,10 +67,13 @@ describe("ProcessBlock", () => {
       step.click();
     });
     const body = host.querySelector(".lc-agent-process-step-body");
+    expect(body?.getAttribute("aria-busy")).toBe("true");
+    await act(async () => { vi.advanceTimersByTime(1000); });
     expect(body?.textContent).toContain("Extra prose");
     expect(body?.closest("[data-active='true']") || body).toBeTruthy();
     root.unmount();
     host.remove();
+    vi.useRealTimers();
   });
 
   it("keeps reason stages in Thinking and leaves the CoT blob for Reasoning", async () => {

@@ -6,6 +6,7 @@ import {
   applyHubAnnotate,
   applyPadSyncPing,
   deletePadEverywhere,
+  discoverHubPads,
   enqueuePadSync,
   flushPadSyncQueue,
   peekPadSyncQueueForTests,
@@ -26,6 +27,8 @@ import {
   TrashQueueFullError,
 } from "./padSync";
 import { noteCameraBusy, resetCameraBusyForTests } from "./cameraBusy";
+import { setHostLoopback } from "./padHub";
+import * as inkSync from "./inkSync";
 
 const restoreWhiteboardNotebook = vi.fn(async (_entry?: unknown) => {});
 const restoreWhiteboardFromTrash = vi.fn(
@@ -191,6 +194,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  setHostLoopback(null);
   vi.unstubAllGlobals();
   resetCameraBusyForTests();
 });
@@ -225,6 +230,49 @@ describe("padSync queue", () => {
 });
 
 describe("padSync pull", () => {
+  it("discovers missing pads with autosync off and records the received revision", async () => {
+    setHostLoopback({ url: "http://fixture", token: "test" });
+    hubAutosyncState.on = false;
+    const row = { id: "w1", title: "Tablet notebook", updated_at: 100, sync_seq: 2,
+      page_count: 1, board: emptyBoard, agent: [{ id: "chat-1" }] };
+    const client = fakeClient({
+      listWhiteboardPads: vi.fn(async () => [row]),
+      listAnnotatePads: vi.fn(async () => []),
+      getInkPages: vi.fn(async () => []),
+    });
+    expect(await discoverHubPads(client)).toBe(1);
+    expect(restoreWhiteboardNotebook).toHaveBeenCalledWith(expect.objectContaining({
+      id: "w1", hubAckUpdatedAt: 100, syncSeq: 2, agent: row.agent,
+    }));
+    expect(hubAutosyncState.on).toBe(false);
+  });
+
+  it("never overwrites a local notebook during library discovery", async () => {
+    setHostLoopback({ url: "http://fixture", token: "test" });
+    getWhiteboardNotebook.mockResolvedValue({ id: "w1", updatedAt: 1, board: emptyBoard });
+    const client = fakeClient({
+      listWhiteboardPads: vi.fn(async () => [{ id: "w1", title: "Hub", updated_at: 100,
+        page_count: 1, board: emptyBoard, agent: [] }]),
+      listAnnotatePads: vi.fn(async () => []),
+      getInkPages: vi.fn(async () => []),
+    });
+    expect(await discoverHubPads(client)).toBe(0);
+    expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
+    expect(client.getInkPages).not.toHaveBeenCalled();
+  });
+
+  it("does not expose a new notebook when its ink download is incomplete", async () => {
+    setHostLoopback({ url: "http://fixture", token: "test" });
+    const client = fakeClient({
+      listWhiteboardPads: vi.fn(async () => [{ id: "w1", title: "Hub", updated_at: 100,
+        page_count: 1, board: { ...emptyBoard, inkPages: { v: 1, pageIds: [1] } }, agent: [] }]),
+      listAnnotatePads: vi.fn(async () => []),
+      getInkPages: vi.fn(async () => []),
+    });
+    await expect(discoverHubPads(client)).rejects.toThrow("missing");
+    expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
+  });
+
   it("does not delete snapshots or bytes when the server omitted a row", async () => {
     const client = fakeClient({
       listWhiteboardPads: vi.fn(async () => [
@@ -286,6 +334,50 @@ describe("deletePadEverywhere", () => {
 });
 
 describe("padSync ping", () => {
+  it("waits for ink before publishing an incoming notebook", async () => {
+    let finish!: () => void;
+    const transfer = new Promise<void>((resolve) => { finish = resolve; });
+    const ink = vi.spyOn(inkSync, "syncInkPages").mockImplementationOnce(async () => {
+      await transfer;
+      return [];
+    });
+    const client = fakeClient({ pingPadSync: vi.fn(async () => ({
+      now: 100, whiteboard: [{ id: "w1", title: "N", updated_at: 40,
+        page_count: 1, board: emptyBoard, agent: [] }],
+      annotate: [], snapshots: [], gone: [],
+    })) });
+    const work = applyPadSyncPing(client);
+    await vi.waitFor(() => expect(ink).toHaveBeenCalled());
+    expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
+    finish();
+    await work;
+    expect(restoreWhiteboardNotebook).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the notebook unpublished when its ink transfer fails", async () => {
+    vi.spyOn(inkSync, "syncInkPages").mockRejectedValueOnce(new Error("missing ink"));
+    await expect(applyPadSyncPing(fakeClient({ pingPadSync: vi.fn(async () => ({
+      now: 100, whiteboard: [{ id: "w1", title: "N", updated_at: 40,
+        page_count: 1, board: emptyBoard, agent: [] }],
+      annotate: [], snapshots: [], gone: [],
+    })) }))).rejects.toThrow("missing ink");
+    expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
+  });
+
+  it("keeps local pad metadata when either its ink or its saved content conflicts", async () => {
+    vi.spyOn(inkSync, "syncInkPages").mockResolvedValueOnce([
+      { kind: "whiteboard", key: "w1", pageId: 1, localUpdatedAt: 20, remoteUpdatedAt: 40 },
+    ]);
+    getWhiteboardNotebook.mockResolvedValue({ id: "w2", updatedAt: 20, hubAckUpdatedAt: 10,
+      board: emptyBoard });
+    await applyPadSyncPing(fakeClient({ pingPadSync: vi.fn(async () => ({
+      now: 100, whiteboard: ["w1", "w2"].map((id) => ({ id, title: "N", updated_at: 40,
+        page_count: 1, board: emptyBoard, agent: [] })),
+      annotate: [], snapshots: [], gone: [],
+    })) }));
+    expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
+  });
+
   it("skips a tick while the camera is moving", async () => {
     noteCameraBusy();
     const pingPadSync = vi.fn(async () => ({
@@ -763,7 +855,7 @@ describe("live PUT CAS and gone", () => {
     agent: [],
   };
 
-  it("applies a 409 body and does not queue", async () => {
+  it("preserves the local notebook on 409 and leaves resolution to explicit Sync", async () => {
     const hub = {
       id: "w1",
       title: "Hub",
@@ -778,9 +870,7 @@ describe("live PUT CAS and gone", () => {
       }),
     });
     await pushWhiteboardPad(client, notebook);
-    expect(restoreWhiteboardNotebook).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "w1", updatedAt: 40, hubAckUpdatedAt: 40 }),
-    );
+    expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
     expect(peekPadSyncQueueForTests()).toHaveLength(0);
   });
 

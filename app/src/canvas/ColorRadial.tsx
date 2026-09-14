@@ -192,7 +192,7 @@ export function ColorRadial({
   handedness,
   compact = false,
   embedded = false,
-  wheelZIndex = 90,
+  wheelZIndex = 260,
 }: ColorRadialProps) {
   const filterUid = useId().replace(/:/g, "");
   const outerR = embedded ? EMBEDDED_OUTER_R : OUTER_R;
@@ -616,6 +616,7 @@ export function ColorRadial({
       {slotEdit && (
         <ColorSlotEditor
           color={slotEdit.color}
+          zIndex={Math.max(140, (wheelZIndex ?? 130) + 1)}
           anchor={(() => {
             if (embedded && rootRef.current) {
               const rect = rootRef.current.getBoundingClientRect();

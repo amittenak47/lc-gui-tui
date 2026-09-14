@@ -16,6 +16,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { trailDistances, trailingPoints } from "./loadingDoodleTrail";
 
 import { resolveInkColor } from "../canvas/inkColors";
 import { smoothInkPoints } from "../canvas/inkSmoothing";
@@ -51,11 +52,12 @@ import {
 } from "../util/loadingDoodleActivity";
 
 const DOODLE_TTL_MS = 6_666;
-const ERASE_MS = 666;
+const ERASE_MS = 1_800;
 
 interface Stroke {
   op: InkDrawOp;
   at: number;
+  distances: number[];
 }
 
 interface InkLive {
@@ -148,6 +150,11 @@ export function LoadingDoodle({
     const backing = document.createElement("canvas");
     const backingCtx = backing.getContext("2d");
     if (!backingCtx) return;
+    const liveCanvas = document.createElement("canvas");
+    const liveCtx = liveCanvas.getContext("2d");
+    if (!liveCtx) return;
+    let eraseRaf: number | null = null;
+    let stableCount = 0;
 
     inkRef.current = loadLiveInk(themeIdRef.current);
 
@@ -171,7 +178,10 @@ export function LoadingDoodle({
     const rebuildBacking = () => {
       backingCtx.setTransform(1, 0, 0, 1, 0, 0);
       backingCtx.clearRect(0, 0, backing.width, backing.height);
-      for (const stroke of strokesRef.current) drawCommitted(stroke.op);
+      const now = performance.now();
+      const stable = strokesRef.current.filter((stroke) => now < stroke.at + DOODLE_TTL_MS);
+      for (const stroke of stable) drawCommitted(stroke.op);
+      stableCount = stable.length;
     };
 
     let resizePending = false;
@@ -192,6 +202,12 @@ export function LoadingDoodle({
         canvas.width = nextW;
         canvas.height = nextH;
       }
+      // Effects can restart while the visible canvas keeps its dimensions
+      // (StrictMode, hot reload). The new live bitmap still starts at 300x150.
+      if (liveCanvas.width !== nextW || liveCanvas.height !== nextH) {
+        liveCanvas.width = nextW;
+        liveCanvas.height = nextH;
+      }
       if (backing.width !== nextW || backing.height !== nextH) {
         backing.width = nextW;
         backing.height = nextH;
@@ -205,22 +221,35 @@ export function LoadingDoodle({
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(backing, 0, 0);
+      const now = performance.now();
+      ctx.setTransform(dprRef.current, 0, 0, dprRef.current, 0, 0);
+      for (const stroke of strokesRef.current) {
+        const progress = (now - stroke.at - DOODLE_TTL_MS) / ERASE_MS;
+        if (progress < 0 || progress >= 1) continue;
+        applyInkOp(ctx, {
+          ...stroke.op,
+          points: trailingPoints(stroke.op.points, stroke.distances, progress),
+        }, dprRef.current);
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(liveCanvas, 0, 0);
     };
 
     const paintTail = () => {
       const points = strokeRef.current;
       if (!points || points.length === 0) return;
       const dpr = dprRef.current;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      liveCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       // Keep the live path O(new points). Reshaping and repainting the growing
       // polyline here made every later frame more expensive than the prior one.
       // Shape the final ephemeral stroke once on lift instead.
       liveFromRef.current = applyInkOpFrom(
-        ctx,
+        liveCtx,
         makeDrawOp(inkRef.current, points),
         liveFromRef.current,
         dpr,
       );
+      presentBacking();
     };
 
     const schedulePaint = () => {
@@ -234,19 +263,26 @@ export function LoadingDoodle({
     const scheduleExpiry = () => {
       if (expiryTimerRef.current != null) window.clearTimeout(expiryTimerRef.current);
       expiryTimerRef.current = null;
+      if (eraseRaf != null) return;
       const first = strokesRef.current[0];
       if (!first) return;
-      const due = first.at + DOODLE_TTL_MS + ERASE_MS;
+      const due = first.at + DOODLE_TTL_MS;
       expiryTimerRef.current = window.setTimeout(() => {
         expiryTimerRef.current = null;
-        if (strokeRef.current) return; // Lift schedules expiry again.
-        const now = performance.now();
-        strokesRef.current = strokesRef.current.filter(
-          (stroke) => stroke.at + DOODLE_TTL_MS + ERASE_MS > now,
-        );
-        rebuildBacking();
-        presentBacking();
-        scheduleExpiry();
+        const sweep = () => {
+          eraseRaf = null;
+          const now = performance.now();
+          strokesRef.current = strokesRef.current.filter(
+            (stroke) => stroke.at + DOODLE_TTL_MS + ERASE_MS > now,
+          );
+          const stable = strokesRef.current.filter((stroke) => now < stroke.at + DOODLE_TTL_MS).length;
+          if (stable !== stableCount) rebuildBacking();
+          presentBacking();
+          if (strokesRef.current.some((stroke) => now >= stroke.at + DOODLE_TTL_MS)) {
+            eraseRaf = requestAnimationFrame(sweep);
+          } else scheduleExpiry();
+        };
+        sweep();
       }, Math.max(0, due - performance.now()));
     };
 
@@ -335,16 +371,20 @@ export function LoadingDoodle({
           inkLineWidth(live.baseWidth, 0, false),
         );
       }
-      if (points.length > 1) {
+      if (points.length > 0) {
         const op = makeDrawOp(live, points);
         strokesRef.current.push({
           op,
           at: performance.now(),
+          distances: trailDistances(points),
         });
         drawCommitted(op);
+        stableCount += 1;
         scheduleExpiry();
       }
       strokeRef.current = null;
+      liveCtx.setTransform(1, 0, 0, 1, 0, 0);
+      liveCtx.clearRect(0, 0, liveCanvas.width, liveCanvas.height);
       pointerIdRef.current = null;
       pointerBoundsRef.current = null;
       liveFromRef.current = 0;
@@ -375,6 +415,7 @@ export function LoadingDoodle({
       strokeRef.current = null;
       endLoadingDoodle(doodleTokenRef.current);
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      if (eraseRaf != null) cancelAnimationFrame(eraseRaf);
       if (expiryTimerRef.current != null) window.clearTimeout(expiryTimerRef.current);
       ro.disconnect();
       window.removeEventListener("lc-ink-smoothing", reloadInk);

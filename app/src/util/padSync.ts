@@ -48,6 +48,8 @@ import { syncDocChunks } from "./docChunkSync";
 import { noteInkConflicts } from "./inkConflicts";
 import {
   footnoteInkKeys,
+  footnoteInkHubKey,
+  pullInkPagesOverLocal,
   syncEdges,
   syncInkPages,
   type InkPadKind,
@@ -358,14 +360,14 @@ async function applyLivePutFailure(
     return true;
   }
   if (!isConflict(cause)) return false;
-  const body = errorJson(cause);
-  if (kind === "whiteboard") {
-    await applyHubWhiteboard(body, { emitReload: true });
-  } else if (kind === "annotate") {
-    await applyHubAnnotate(body, { emitReload: true });
-  } else {
-    await applyHubProblem(body, { emitReload: true });
+  // A background Save has no consent to replace the local notebook or chat.
+  // Leave its acknowledgement unchanged so explicit Sync opens the comparison.
+  if (kind === "whiteboard" || kind === "annotate") {
+    await dropPadPayloadJobs(kind, padId);
+    return true;
   }
+  const body = errorJson(cause);
+  await applyHubProblem(body, { emitReload: true });
   await dropPadPayloadJobs(kind, padId);
   return true;
 }
@@ -459,7 +461,34 @@ async function applyHubProblem(
   return true;
 }
 
-export async function pushWhiteboardPad(
+const pendingPadPushes = new Map<string, Set<Promise<boolean>>>();
+
+function trackPadPush(kind: string, id: string, job: Promise<boolean>): Promise<boolean> {
+  const key = `${kind}:${id}`;
+  const pending = pendingPadPushes.get(key) ?? new Set<Promise<boolean>>();
+  pending.add(job);
+  pendingPadPushes.set(key, pending);
+  const release = () => {
+    pending.delete(job);
+    if (pending.size === 0) pendingPadPushes.delete(key);
+  };
+  void job.then(release, release);
+  return job;
+}
+
+/** First Save may still be uploading when Sync is tapped. Read its ack afterwards. */
+export async function waitForPadPushes(kind: string, id: string): Promise<void> {
+  const key = `${kind}:${id}`;
+  while (pendingPadPushes.get(key)?.size) {
+    await Promise.all([...pendingPadPushes.get(key)!]);
+  }
+}
+
+export function pushWhiteboardPad(client: LcClient, notebook: WhiteboardNotebook): Promise<boolean> {
+  return trackPadPush("whiteboard", notebook.id, pushWhiteboardPadNow(client, notebook));
+}
+
+async function pushWhiteboardPadNow(
   client: LcClient,
   notebook: WhiteboardNotebook,
 ): Promise<boolean> {
@@ -518,7 +547,11 @@ export async function annotatePadBody(doc: AnnotateDoc): Promise<AnnotatePadDto>
   };
 }
 
-export async function pushAnnotatePad(client: LcClient, doc: AnnotateDoc): Promise<boolean> {
+export function pushAnnotatePad(client: LcClient, doc: AnnotateDoc): Promise<boolean> {
+  return trackPadPush("annotate", doc.id, pushAnnotatePadNow(client, doc));
+}
+
+async function pushAnnotatePadNow(client: LcClient, doc: AnnotateDoc): Promise<boolean> {
   const body = await annotatePadBody(doc);
   if (exceedsHubBodyCap(body)) {
     throw new Error(
@@ -987,6 +1020,46 @@ function boardLooksCorrupt(board: unknown): boolean {
   return blob.v !== 1 || !Array.isArray(blob.elements);
 }
 
+/** Explicit library discovery. Existing local entries (including dirty ones) are untouched. */
+export async function discoverHubPads(client: LcClient): Promise<number> {
+  if (!loadPadHub()) throw new Error("The hub is not connected yet. Try again when it is available.");
+  const [whiteboards, documents] = await Promise.all([
+    client.listWhiteboardPads(), client.listAnnotatePads(),
+  ]);
+  let imported = 0;
+  for (const row of whiteboards) {
+    if (listWhiteboardTrash().some((entry) => entry.id === row.id) || await getWhiteboardNotebook(row.id)) continue;
+    const board = row.board as BoardBlob;
+    if (boardLooksCorrupt(board)) throw new Error(`“${row.title}” has an unreadable board on the hub.`);
+    await pullInkPagesOverLocal(client, "whiteboard", row.id, board.inkPages?.pageIds);
+    // Dependencies first; do not offer a notebook that downloaded only its name.
+    if (await getWhiteboardNotebook(row.id) || listWhiteboardTrash().some((entry) => entry.id === row.id)) continue;
+    await applyHubWhiteboard(row, { emitReload: false });
+    imported++;
+  }
+  for (const row of documents) {
+    if (listAnnotateTrash().some((entry) => entry.id === row.id) || await getAnnotateDoc(row.id)) continue;
+    const board = row.board as BoardBlob;
+    if (boardLooksCorrupt(board)) throw new Error(`“${row.name}” has an unreadable board on the hub.`);
+    if ((row.doc_type === "pdf" || row.doc_type === "epub") && !(await getDocBytes(row.hash))) {
+      const bytes = await client.getDocBytes(row.hash);
+      if (!bytes?.byteLength || !bytesMatchDocHash(row.hash, bytes)) {
+        throw new Error(`The source file for “${row.name}” is not available on the hub yet.`);
+      }
+      await putDocBytes(row.hash, bytes);
+    }
+    await pullInkPagesOverLocal(client, "annotate", row.id, board.inkPages?.pageIds);
+    const boards = row.footnote_boards as Record<string, { board: BoardBlob }> | undefined;
+    for (const [wbId, scratch] of Object.entries(boards ?? {})) {
+      await pullInkPagesOverLocal(client, "annotate", footnoteInkHubKey(row.id, wbId), scratch.board.inkPages?.pageIds);
+    }
+    if (await getAnnotateDoc(row.id) || listAnnotateTrash().some((entry) => entry.id === row.id)) continue;
+    await applyHubAnnotate(row, { emitReload: false });
+    imported++;
+  }
+  return imported;
+}
+
 export async function pullPads(client: LcClient): Promise<void> {
   const [whiteboards, annotate] = await Promise.all([
     client.listWhiteboardPads(),
@@ -1007,6 +1080,8 @@ export async function pullPads(client: LcClient): Promise<void> {
       pageCount: row.page_count,
       board: row.board as BoardBlob,
       agent: Array.isArray(row.agent) ? row.agent : [],
+      syncSeq: row.sync_seq,
+      hubAckUpdatedAt: row.updated_at,
     });
   }
 
@@ -1027,6 +1102,8 @@ export async function pullPads(client: LcClient): Promise<void> {
       board: row.board as BoardBlob,
       footnotes: Array.isArray(row.footnotes) ? (row.footnotes as DocFootnote[]) : [],
       agent: Array.isArray(row.agent) ? row.agent : [],
+      syncSeq: row.sync_seq,
+      hubAckUpdatedAt: row.updated_at,
     });
     if (row.hash) {
       const have = await getDocBytes(row.hash);
@@ -1134,10 +1211,76 @@ async function applyPadSyncPingBody(
     }
   }
 
+  /*
+   * Handwriting and edges — the two rows that were authored and unsynced.
+   *
+   * On the same ping, and off the same watermark: the digest of what changed
+   * arrives with everything else, so a quiet interval costs no extra request
+   * and moves no strokes. Only pads the digest actually names, plus the ones
+   * this device holds, are examined.
+   */
+  const conflictedPads = new Set<string>();
+  {
+    if (isCameraBusy()) return;
+    const pads: Array<{ kind: InkPadKind; key: string }> = [
+      ...listWhiteboardNotebooks().map((row) => ({ kind: "whiteboard" as const, key: row.id })),
+      ...listAnnotateDocs().map((row) => ({ kind: "annotate" as const, key: row.id })),
+      ...ping.whiteboard.map((row) => ({ kind: "whiteboard" as const, key: row.id })),
+      ...ping.annotate.map((row) => ({ kind: "annotate" as const, key: row.id })),
+    ];
+    /*
+     * Footnote scratch boards are ink keys too.
+     *
+     * `{padId}/fn/{wbId}`. The digest already names the ones the hub has, and
+     * `syncInkPages` would pick those up on its own — but a board that only
+     * exists here has no digest row, so nothing would ever push it. Ink arrives before the pad rows are published, so a live reload never
+     * restores a newly advertised board with its previous or missing ink.
+     */
+    for (const row of listAnnotateDocs()) {
+      for (const key of await footnoteInkKeys(row.id, ping.ink ?? [], () =>
+        localFootnoteBoardIds(row.id),
+      )) {
+        pads.push({ kind: "annotate", key });
+      }
+    }
+    const available = (kind: string, key: string) => {
+      const parent = kind === "annotate" ? key.split("/fn/")[0]! : key;
+      return !(kind === "annotate" ? trashAn : trashWb).has(parent) &&
+        !pendingDelete.has(`${kind}:${parent}`) &&
+        !(ping.gone ?? []).some((row) => row.kind === kind && row.id === parent);
+    };
+    const conflicts = await syncInkPages(client,
+      (ping.ink ?? []).filter((row) => available(row.kind, row.key)),
+      pads.filter((pad) => available(pad.kind, pad.key)), since, { strict: true });
+    if (conflicts.length > 0) {
+      noteInkConflicts(conflicts);
+      for (const row of conflicts) conflictedPads.add(`${row.kind}:${row.key.split("/fn/")[0]}`);
+    }
+    await syncEdges(client, ping.edges ?? [], ping.gone_edges ?? []);
+  }
+  // Required transfers must finish before metadata can cause an open page to reload.
+  for (const row of ping.annotate) {
+    if (conflictedPads.has(`annotate:${row.id}`) || trashAn.has(row.id) ||
+        pendingDelete.has(`annotate:${row.id}`)) continue;
+    if ((row.doc_type === "pdf" || row.doc_type === "epub") && row.hash) {
+      if (!(await getDocBytes(row.hash))) {
+        const bytes = await client.getDocBytes(row.hash);
+        if (!bytes?.byteLength || !bytesMatchDocHash(row.hash, bytes)) {
+          throw new Error(`Document bytes are missing for ${row.name}`);
+        }
+        await putDocBytes(row.hash, bytes);
+      }
+    }
+  }
+
+
   for (const row of ping.whiteboard) {
     if (isCameraBusy()) return;
     if (trashWb.has(row.id) || pendingDelete.has(`whiteboard:${row.id}`)) continue;
+    if (conflictedPads.has(`whiteboard:${row.id}`)) continue;
     const local = await getWhiteboardNotebook(row.id);
+    if (local?.hubAckUpdatedAt != null && local.updatedAt > local.hubAckUpdatedAt &&
+        row.updated_at > local.hubAckUpdatedAt) continue;
     if (local?.locked && local.deletedAt) continue;
     const stale =
       !local ||
@@ -1154,7 +1297,10 @@ async function applyPadSyncPingBody(
   for (const row of ping.annotate) {
     if (isCameraBusy()) return;
     if (trashAn.has(row.id) || pendingDelete.has(`annotate:${row.id}`)) continue;
+    if (conflictedPads.has(`annotate:${row.id}`)) continue;
     const local = await getAnnotateDoc(row.id);
+    if (local?.hubAckUpdatedAt != null && local.updatedAt > local.hubAckUpdatedAt &&
+        row.updated_at > local.hubAckUpdatedAt) continue;
     const stale =
       !local ||
       boardLooksCorrupt(local.board) ||
@@ -1183,40 +1329,6 @@ async function applyPadSyncPingBody(
     await syncDocChunks(client, [...hashes]).catch(() => {});
   }
 
-  /*
-   * Handwriting and edges — the two rows that were authored and unsynced.
-   *
-   * On the same ping, and off the same watermark: the digest of what changed
-   * arrives with everything else, so a quiet interval costs no extra request
-   * and moves no strokes. Only pads the digest actually names, plus the ones
-   * this device holds, are examined.
-   */
-  {
-    if (isCameraBusy()) return;
-    const pads: Array<{ kind: InkPadKind; key: string }> = [
-      ...listWhiteboardNotebooks().map((row) => ({ kind: "whiteboard" as const, key: row.id })),
-      ...listAnnotateDocs().map((row) => ({ kind: "annotate" as const, key: row.id })),
-    ];
-    /*
-     * Footnote scratch boards are ink keys too.
-     *
-     * `{padId}/fn/{wbId}`. The digest already names the ones the hub has, and
-     * `syncInkPages` would pick those up on its own — but a board that only
-     * exists here has no digest row, so nothing would ever push it. The pad
-     * rows above are applied earlier in this ping, so a board another device
-     * just made already has its pointer by now.
-     */
-    for (const row of listAnnotateDocs()) {
-      for (const key of await footnoteInkKeys(row.id, ping.ink ?? [], () =>
-        localFootnoteBoardIds(row.id),
-      )) {
-        pads.push({ kind: "annotate", key });
-      }
-    }
-    const conflicts = await syncInkPages(client, ping.ink ?? [], pads, since).catch(() => []);
-    if (conflicts.length > 0) noteInkConflicts(conflicts);
-    await syncEdges(client, ping.edges ?? [], ping.gone_edges ?? []).catch(() => {});
-  }
 
   for (const row of ping.problem ?? []) {
     if (isCameraBusy()) return;
@@ -1245,7 +1357,8 @@ async function applyPadSyncPingBody(
     await writeSnapshotIfNewer(row);
   }
 
-  savePadSyncSince(ping.now);
+  // Keep unresolved pages in subsequent incremental pings.
+  if (conflictedPads.size === 0) savePadSyncSince(ping.now);
 }
 
 export async function sweepPadTrash(now = Date.now()): Promise<void> {

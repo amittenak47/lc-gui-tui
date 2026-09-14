@@ -5,6 +5,7 @@
  */
 
 import { FONT_CODE, FONT_UI } from "../templates/skeleton";
+import { layoutSceneText } from "./sceneTextLayout";
 
 export interface PaintSceneMeta {
   lcRegionFrame?: boolean;
@@ -34,6 +35,8 @@ export interface PaintSceneElement {
   roundness?: null | { type: number };
   points?: Array<[number, number]>;
   text?: string;
+  originalText?: string;
+  autoResize?: boolean;
   fontSize?: number;
   fontFamily?: number;
   lineHeight?: number;
@@ -219,14 +222,18 @@ function paintFreeText(ctx: CanvasRenderingContext2D, element: PaintSceneElement
   ctx.fillStyle = element.strokeColor && element.strokeColor !== "transparent" ? element.strokeColor : "#1e1e1e";
   ctx.font = `${fontSize}px ${fontFace(element.fontFamily)}`;
   ctx.textAlign = align === "center" ? "center" : align === "right" ? "right" : "left";
-  ctx.textBaseline = "top";
+  ctx.textBaseline = "alphabetic";
   const x = align === "center" ? w / 2 : align === "right" ? w : 0;
-  const lines = text.split("\n");
+  const { lines } = layoutSceneText(element, ctx);
+  const metrics = ctx.measureText("Mg");
+  const ascent = metrics.fontBoundingBoxAscent ?? fontSize * 0.9;
+  const descent = metrics.fontBoundingBoxDescent ?? fontSize * 0.2;
+  const baseline = (lineHeight - ascent - descent) / 2 + ascent;
   let y = 0;
   if (valign === "middle") y = (h - lines.length * lineHeight) / 2;
   else if (valign === "bottom") y = h - lines.length * lineHeight;
   for (const line of lines) {
-    ctx.fillText(line, x, y, w > 0 ? w : undefined);
+    ctx.fillText(line, x, y + baseline);
     y += lineHeight;
   }
   ctx.restore();

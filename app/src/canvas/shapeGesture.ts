@@ -8,6 +8,7 @@
 import type { Skeleton } from "../templates/skeleton";
 import type { ToolName } from "./BoardHandle";
 import { isPageFrame, type PaintSceneElement } from "./paintScene";
+import { fitSceneText } from "./sceneTextLayout";
 
 export const MIN_SHAPE_SPAN = 4;
 
@@ -427,7 +428,11 @@ export function scaleElement<T extends PaintSceneElement>(
   sceneY: number,
   preserveAspect = false,
 ): T {
-  return resizeElementLocal(element, handle, sceneX, sceneY, preserveAspect);
+  const resized = resizeElementLocal(element, handle, sceneX, sceneY, preserveAspect);
+  if (element.type === "text" && !element.containerId && (handle === "e" || handle === "w")) {
+    return fitSceneText({ ...resized, fontSize: element.fontSize, autoResize: false });
+  }
+  return resized;
 }
 
 export function setLinearPoint<T extends PaintSceneElement>(

@@ -7,6 +7,17 @@ import {
 } from "./boardScene";
 
 describe("createBoardScene", () => {
+  it("retains the full session beyond 80 scene edits", () => {
+    const api = createBoardScene({ elements: [] });
+    for (let i = 0; i < 120; i += 1) {
+      api.updateScene({ elements: [{ id: "shape", x: i }], captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+    }
+    for (let i = 0; i < 120; i += 1) expect(api.history?.undo()).toBe(true);
+    expect(api.getSceneElements()).toEqual([]);
+    expect(api.history?.undo()).toBe(false);
+    for (let i = 0; i < 120; i += 1) expect(api.history?.redo()).toBe(true);
+    expect(api.getSceneElements()).toEqual([{ id: "shape", x: 119 }]);
+  });
   it("undoes an entire gesture after many preview writes", () => {
     const initial = [{ id: "shape", x: 0, y: 0, width: 100, height: 50 }];
     const api = createBoardScene({ elements: initial });

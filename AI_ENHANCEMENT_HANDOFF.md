@@ -1,5 +1,46 @@
 # Shapes and visualization handoff
 
+## Current checkpoint — September 14, 2026
+
+The September 10 report below is historical. This checkpoint collects the
+annotation, sync and Agent UI work after `7aac70fe`. The user requested that
+the accumulated work be committed, pushed and merged into main.
+Detailed local status: `docs/current-work-status.md` (intentionally gitignored).
+
+This continuation fixed text wrapping/editing/font controls, eraser stacking,
+split-layout settlement and cached pane offsets. It also reproduced and fixed
+Markdown scrolling after restoring ink: non-PDF saves incorrectly carried
+`pdfPage: 1`, causing the camera to wait forever for a PDF page. Non-PDF restores
+now ignore that legacy marker, and new saves omit it. Ink is preserved.
+
+TypeScript and 174 focused tests pass. Isolated Chrome checks pass for text,
+eraser layers, split-to-full ink alignment across PDF/Markdown/EPUB/code/web,
+and long Markdown scrolling after five strokes and save/restore. Actual user
+desktop validation: the user reported the previous build appeared fixed.
+No desktop/APK rebuild or install here.
+
+Pre-commit verification: production frontend build and 93 Rust LLM tests pass.
+Full frontend run: 3,236 passed, 7 skipped, 3 failures. One failure is the
+previously documented tracked dwell-blot assertion in inkMarkCompositing.test.ts;
+the other two came from the old untracked DocSelectionLayer.attached.test.mjs
+experiment, whose implementation is absent. That experiment is preserved in
+ignored `.tmp-attachment-experiment/`, outside the app suite. No assertion was
+weakened or application behavior changed to silence those failures.
+Generated screenshots, browser profiles, videos and temporary tools stay local
+under ignored temporary paths; reusable review scripts are included.
+The repaired `text-box-review.mjs --reopen` harness passes all five formats:
+write in split, persist ink shards, unmount, reopen full-width, return to split,
+then leave split again. Checks cover visible pixels, page-relative alignment
+and preserved decoded ink coordinates (allowing existing save quantization).
+
+Pause for the user's annotation check. Next verify/tighten the existing sync
+changes. Agent Chat is not declared complete. Afterwards, Phase 3 covers
+chat-owned whiteboards, thumbnail attachments and their sync; the user also
+wants agent-created/saved code or Markdown files attachable to chat/footnotes
+through existing Monaco/Markdown document support. That phase is not started.
+
+## Historical shape/visualization checkpoint
+
 Updated September 10, 2026. Continue on **`ai-enhancement`**, kept local.
 
 ## Scope and branch state

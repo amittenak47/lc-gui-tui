@@ -57,14 +57,14 @@ describe("textPlaceRect", () => {
     offsetTop: 0,
   };
 
-  it("treats a press that barely moves as a tap and lets the box grow", () => {
+  it("gives a tap a default wrap width", () => {
     const rect = textPlaceRect(
       { x: 100, y: 100 },
       { x: 100 + TEXT_TAP_SLOP_PX, y: 100 + TEXT_TAP_SLOP_PX },
       flat,
       20,
     );
-    expect(rect.autoResize).toBe(true);
+    expect(rect.autoResize).toBe(false);
     expect(rect.x).toBe(100);
     expect(rect.y).toBe(100);
     expect(rect).toMatchObject(minTextBox(20, 1));

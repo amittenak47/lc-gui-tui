@@ -27,6 +27,7 @@ import {
   getInkPageRecords,
   inkPageKey,
   listInkDocKeys,
+  markInkPageSynced,
   type InkPageRecord,
   whiteboardDocKey,
 } from "./inkPageStore";
@@ -470,7 +471,7 @@ export async function applyInkChoice(
       if (!gz) continue;
       const packed = bytesToB64(gz);
       await writeInkPage(docKey, { page_id: row.pageId, updated_at: now, gz: packed });
-      await client.putInkPage({
+      await putConfirmedInkPage(client, {
         kind,
         key,
         page_id: row.pageId,
@@ -488,7 +489,7 @@ export async function applyInkChoice(
       const emptyGz = await emptyInkGz();
       for (const pageId of new Set(hubIds)) {
         if (localIds.has(pageId)) continue;
-        await client.putInkPage({
+        await putConfirmedInkPage(client, {
           kind,
           key,
           page_id: pageId,
@@ -517,7 +518,7 @@ export async function applyInkChoice(
     await deleteInkPages(docKey);
     for (const page of pages) {
       if (!page.gz) continue;
-      await writeInkPage(docKey, page);
+      await writeInkPage(docKey, page, undefined, true);
     }
     return;
   }
@@ -534,7 +535,7 @@ export async function applyInkChoice(
     for (const pageId of ids) {
       const body = { page_id: pageId, updated_at: now, gz: emptyGz };
       await writeInkPage(docKey, body);
-      await client.putInkPage({ kind, key, page_id: pageId, updated_at: now, gz: emptyGz });
+      await putConfirmedInkPage(client, { kind, key, page_id: pageId, updated_at: now, gz: emptyGz });
     }
     return;
   }
@@ -557,7 +558,7 @@ export async function applyInkChoice(
     await writeInkPage(docKey, { page_id: pageId, updated_at: now, gz });
   }
   for (const [pageId, gz] of gzByPage) {
-    await client.putInkPage({ kind, key, page_id: pageId, updated_at: now, gz });
+    await putConfirmedInkPage(client, { kind, key, page_id: pageId, updated_at: now, gz });
   }
 }
 
@@ -729,12 +730,12 @@ async function applyWhiteboardInkChoicesByPage(
     }
   });
   await writeInkPage(docKey, { page_id: 1, updated_at: now, gz });
-  await client.putInkPage({ kind, key, page_id: 1, updated_at: now, gz });
+  await putConfirmedInkPage(client, { kind, key, page_id: 1, updated_at: now, gz });
   const hubIds = opts.hubPageIds ?? hubList.map((page) => page.page_id);
   const emptyGz = await emptyInkGz();
   for (const pageId of new Set(hubIds)) {
     if (pageId === 1) continue;
-    await client.putInkPage({ kind, key, page_id: pageId, updated_at: now, gz: emptyGz });
+    await putConfirmedInkPage(client, { kind, key, page_id: pageId, updated_at: now, gz: emptyGz });
   }
 }
 
@@ -821,7 +822,7 @@ export async function applyInkChoicesByPage(
         if (gz) {
           const packed = bytesToB64(gz);
           await writeInkPage(docKey, { page_id: pageId, updated_at: now, gz: packed });
-          await client.putInkPage({
+          await putConfirmedInkPage(client, {
             kind,
             key,
             page_id: pageId,
@@ -831,7 +832,7 @@ export async function applyInkChoicesByPage(
         }
       } else {
         const emptyGz = await emptyInkGz();
-        await client.putInkPage({
+        await putConfirmedInkPage(client, {
           kind,
           key,
           page_id: pageId,
@@ -846,13 +847,13 @@ export async function applyInkChoicesByPage(
       if (!page?.gz) {
         throw new Error("the other device's handwriting could not be read");
       }
-      await writeInkPage(docKey, page);
+      await writeInkPage(docKey, page, undefined, true);
       continue;
     }
     if (choice === "none") {
       const emptyGz = await emptyInkGz();
       await writeInkPage(docKey, { page_id: pageId, updated_at: now, gz: emptyGz });
-      await client.putInkPage({
+      await putConfirmedInkPage(client, {
         kind,
         key,
         page_id: pageId,
@@ -874,7 +875,7 @@ export async function applyInkChoicesByPage(
     if (!encoded) continue;
     const gz = bytesToB64(await gzipBytes(packEncodedInk(encoded)));
     await writeInkPage(docKey, { page_id: pageId, updated_at: now, gz });
-    await client.putInkPage({ kind, key, page_id: pageId, updated_at: now, gz });
+    await putConfirmedInkPage(client, { kind, key, page_id: pageId, updated_at: now, gz });
   }
 }
 
@@ -997,19 +998,18 @@ export async function remintFootnoteInk(
     for (const page of pages) {
       if (!page.gz) continue;
       await writeInkPage(toDoc, { page_id: page.page_id, updated_at: now, gz: page.gz });
-      await client
-        .putInkPage({
+      await putConfirmedInkPage(client, {
           kind: "annotate",
           key: toKey,
           page_id: page.page_id,
           updated_at: now,
           gz: page.gz,
-        })
-        .catch(() => undefined);
+        });
     }
     return;
   }
-  await pushInkPagesToHub(client, "annotate", toKey).catch(() => undefined);
+  if (hubPageIds.length) throw new Error("The scratch board's ink could not be downloaded. Sync again.");
+  await pushInkPagesToHub(client, "annotate", toKey);
 }
 
 /**
@@ -1029,13 +1029,14 @@ export interface InkConflict {
 }
 
 export function isInkConflict(
-  local: { updatedAt: number } | undefined,
+  local: { updatedAt: number; syncedUpdatedAt?: number } | undefined,
   remote: { updated_at: number },
   since: number,
 ): boolean {
   if (!local) return false;
   if (local.updatedAt === remote.updated_at) return false;
-  return local.updatedAt > since && remote.updated_at > since;
+  const agreed = local.syncedUpdatedAt ?? since;
+  return local.updatedAt > agreed && remote.updated_at > agreed;
 }
 
 /**
@@ -1066,9 +1067,23 @@ async function gzOf(row: InkPageRecord): Promise<Uint8Array<ArrayBuffer> | null>
   }
 }
 
+/** A refused write is not an acknowledgement; a lost response can be retried safely. */
+async function putConfirmedInkPage(client: LcClient, page: InkPageDto): Promise<void> {
+  const ack = await client.putInkPage(page);
+  if (ack?.applied === false) {
+    const existing = await client.getInkPage(page.kind, page.key, page.page_id);
+    if (!existing || existing.updated_at !== page.updated_at || existing.gz !== page.gz) {
+      throw new Error(`The hub refused ink page ${page.page_id}. Sync again.`);
+    }
+  }
+  await markInkPageSynced(inkDocKey(page.kind, page.key), page.page_id, page.updated_at);
+}
+
 async function writeInkPage(
   docKey: string,
   page: { page_id: number; updated_at: number; gz: string },
+  expected?: InkPageRecord | null,
+  acknowledged = false,
 ): Promise<void> {
   const raw = b64ToBytes(page.gz);
   const buf = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
@@ -1081,10 +1096,26 @@ async function writeInkPage(
     // this device restating what it was just told.
     dirty: false,
     updatedAt: page.updated_at,
+    syncedUpdatedAt: acknowledged ? page.updated_at : 0,
   };
+  let changed = false;
   await withStore(STORE_INK_PAGES, "readwrite", (store) => {
-    store.put(row, inkPageKey(docKey, row.pageId));
+    const key = inkPageKey(docKey, row.pageId);
+    if (expected === undefined) {
+      store.put(row, key);
+      return;
+    }
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const current = request.result as InkPageRecord | undefined;
+      if ((current?.updatedAt ?? null) !== (expected?.updatedAt ?? null)) {
+        changed = true;
+        return;
+      }
+      store.put(row, key);
+    };
   });
+  if (changed) throw new Error(`Ink page ${page.page_id} changed during download. Sync again.`);
 }
 
 /**
@@ -1106,13 +1137,24 @@ export async function pullInkPagesOverLocal(
   client: LcClient,
   kind: InkPadKind,
   key: string,
+  expectedPageIds: readonly number[] = [],
 ): Promise<number> {
   const bytes = await client.getInkPages(kind, key);
+  for (const pageId of expectedPageIds) {
+    if (!bytes.some((page) => page.page_id === pageId && page.gz)) {
+      throw new Error(`Ink page ${pageId} was missing from the hub download`);
+    }
+  }
+  for (const page of bytes) {
+    if (!page.gz || !(await encodedFromGzB64(page.gz))) {
+      throw new Error(`Ink page ${page.page_id} could not be read`);
+    }
+  }
   const docKey = inkDocKey(kind, key);
   let written = 0;
   for (const full of bytes) {
     if (!full.gz) continue;
-    await writeInkPage(docKey, full);
+    await writeInkPage(docKey, full, undefined, true);
     written++;
   }
   return written;
@@ -1128,8 +1170,8 @@ export async function pushInkPagesToHub(
   let pushed = 0;
   for (const row of localRows) {
     const gz = await gzOf(row);
-    if (!gz) continue;
-    await client.putInkPage({
+    if (!gz) throw new Error(`Ink page ${row.pageId} could not be encoded`);
+    await putConfirmedInkPage(client, {
       kind,
       key,
       page_id: row.pageId,
@@ -1190,10 +1232,12 @@ export async function syncInkPages(
     const localBy = new Map(localRows.map((row) => [row.pageId, row]));
     const remoteDigests = byPad.get(id) ?? [];
     const remoteBy = new Map(remoteDigests.map((row) => [row.page_id, row]));
+    const conflicted = new Set<number>();
 
     const toPull = remoteDigests.filter((row) => {
       const local = localBy.get(row.page_id);
       if (isInkConflict(local, row, since)) {
+        conflicted.add(row.page_id);
         conflicts.push({
           kind: pad.kind,
           key: pad.key,
@@ -1201,6 +1245,7 @@ export async function syncInkPages(
           localUpdatedAt: local!.updatedAt,
           remoteUpdatedAt: row.updated_at,
         });
+        return false;
       }
       return remoteWins(local, row);
     });
@@ -1222,16 +1267,33 @@ export async function syncInkPages(
           }
           continue;
         }
-        await writeInkPage(docKey, full);
+        if (full.updated_at !== digest.updated_at) {
+          if (strict) throw new Error(`Ink page ${digest.page_id} changed on the hub. Sync again.`);
+          continue;
+        }
+        if (!(await encodedFromGzB64(full.gz))) {
+          if (strict) throw new Error(`Ink page ${digest.page_id} could not be read`);
+          continue;
+        }
+        await writeInkPage(docKey, full, localBy.get(digest.page_id) ?? null, true);
       }
     }
 
     for (const row of localRows) {
+      if (conflicted.has(row.pageId)) continue;
       const remote = remoteBy.get(row.pageId);
-      if (remote && remote.updated_at >= row.updatedAt) continue;
+      if (remote && remote.updated_at >= row.updatedAt) {
+        if (remote.updated_at === row.updatedAt) {
+          await markInkPageSynced(docKey, row.pageId, row.updatedAt);
+        }
+        continue;
+      }
       const gz = await gzOf(row);
-      if (!gz) continue;
-      const put = client.putInkPage({
+      if (!gz) {
+        if (strict) throw new Error(`Ink page ${row.pageId} could not be encoded`);
+        continue;
+      }
+      const put = putConfirmedInkPage(client, {
         kind: pad.kind,
         key: pad.key,
         page_id: row.pageId,

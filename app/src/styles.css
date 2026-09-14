@@ -3244,8 +3244,8 @@ body[data-lc-sash-drag="horizontal"] {
   left: 0;
   top: 0;
   pointer-events: none;
-  /* Above the ink host (3 / 12) — the ring is a cursor, not a page layer. */
-  z-index: 14;
+  /* Above document content, marks and scene images (42), below toolbars. */
+  z-index: 44;
   border: 1.5px solid var(--ink);
   border-radius: 50%;
   background: color-mix(in srgb, var(--ink) 10%, transparent);
@@ -3272,11 +3272,11 @@ body[data-lc-sash-drag="horizontal"] {
   left: 0;
   top: 0;
   pointer-events: none;
-  z-index: 6;
+  z-index: 44;
   box-sizing: border-box;
   /* Match Excalidraw selection drag chrome (#6965db), not app --accent. */
   border: 1.5px dashed #6965db;
-  background: color-mix(in srgb, #6965db 12%, transparent);
+  background: transparent;
   border-radius: 2px;
   will-change: transform;
 }
@@ -3599,21 +3599,122 @@ body[data-lc-sash-drag="horizontal"] {
   opacity: 0.8;
 }
 
-.lc-scene-text-editor {
+.lc-scene-text-frame {
   position: absolute;
   z-index: 46;
+  outline: 1px solid #6965db;
+}
+
+.lc-scene-select-box.lc-scene-text-selection {
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  border-color: #6965db;
+}
+
+.lc-scene-text-editor {
+  display: block;
+  box-sizing: border-box;
   margin: 0;
-  padding: 2px 4px;
-  border: 1px solid color-mix(in srgb, var(--ink) 28%, transparent);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   outline: none;
   resize: none;
   overflow: hidden;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+  box-shadow: none;
+  letter-spacing: normal;
+  overflow-wrap: anywhere;
   -webkit-user-select: text;
   user-select: text;
   touch-action: auto;
+}
+
+.lc-scene-text-controls {
+  position: absolute;
+  z-index: 47;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 3px 6px 3px 14px;
+  border: 1px solid color-mix(in srgb, var(--ink) 14%, transparent);
+  border-radius: 16px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 3px 12px rgb(0 0 0 / 10%);
+  font: 13px/1.4 system-ui, sans-serif;
+}
+
+.lc-scene-text-size {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  font: 12px/1.4 system-ui, sans-serif;
+  color: var(--muted);
+}
+
+.lc-scene-text-size .lc-stroke-slider {
+  padding: 0;
+  border: 0;
+  margin: 0;
+}
+
+.lc-scene-text-controls button {
+  min-height: 36px;
+  padding: 4px 14px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 0;
+  border-radius: 11px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lc-morph-bar.lc-scene-text-menu {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  border-radius: 16px;
+  box-shadow: 0 3px 12px rgb(0 0 0 / 10%);
+}
+
+.lc-scene-text-menu .lc-morph-panel.is-active {
+  gap: 10px;
+  padding: 3px 6px;
+}
+
+.lc-scene-text-menu button {
+  color: var(--ink);
+}
+
+.lc-scene-text-menu button.lc-scene-text-edit-action {
+  width: auto;
+  padding: 0 12px;
+  border-radius: 11px;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.lc-scene-text-width {
+  position: absolute;
+  top: 50%;
+  right: -9px;
+  width: 18px;
+  height: 28px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 5px solid transparent;
+  border-radius: 6px;
+  background: #6965db;
+  background-clip: padding-box;
+  cursor: ew-resize;
+  touch-action: none;
 }
 
 .lc-board-shape-tool {
@@ -6104,6 +6205,16 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-reset-tool {
   position: relative;
+}
+
+.lc-hold-reveal.lc-hold-icon.lc-reset-tool .lc-hold-reveal-fill {
+  background: linear-gradient(var(--lc-hold-pill-top), var(--lc-hold-pill-bottom));
+}
+
+.lc-tool[aria-label="Undo"]:active,
+.lc-tool[aria-label="Redo"]:active {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+  transform: scale(0.9);
 }
 
 .lc-reset-mode-dots {
@@ -13731,9 +13842,15 @@ button.lc-row-selected:hover:not(:disabled) {
 
 /* Shell uses the page background edge-to-edge; safe-area fill lives on the coach sheet. */
 .lc-mobile.lc-app {
+  position: fixed;
+  top: var(--lc-viewport-top, 0px);
+  left: 0;
+  right: 0;
   box-sizing: border-box;
   height: 100%;
-  height: 100dvh;
+  height: var(--lc-viewport-height, 100dvh);
+  /* The shell already ends above the keyboard. Do not lift descendants twice. */
+  --lc-keyboard-inset: 0px;
   padding-left: var(--lc-safe-left);
   padding-right: var(--lc-safe-right);
 }
@@ -15847,8 +15964,11 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-color-slot-editor {
   position: fixed;
   z-index: 140;
-  width: 220px;
-  padding: 10px 10px 8px;
+  box-sizing: border-box;
+  width: 196px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 8px;
   border-radius: 16px;
   border: 1px solid color-mix(in srgb, var(--ink) 10%, var(--chrome-edge));
   background: color-mix(in srgb, var(--surface) 88%, transparent);
@@ -15860,7 +15980,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-color-slot-sv {
   position: relative;
-  height: 112px;
+  height: 88px;
   border-radius: 10px;
   overflow: hidden;
   touch-action: none;
@@ -18873,3 +18993,114 @@ html.lc-doc-camera-live .lc-scene-select {
   font-size: 12px;
   cursor: pointer;
 }
+
+/* Small transient messages share the space immediately below Home. */
+.lc-notification-stack {
+  position: fixed;
+  top: calc(var(--lc-safe-top, 0px) + 46px);
+  left: 8px;
+  z-index: 250;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(270px, calc(100vw - 24px));
+  pointer-events: none;
+}
+.lc-notification {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px 9px 12px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 9px;
+  background: var(--surface, #f8f7f4);
+  color: var(--ink);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 12%);
+  font: 500 12px/1.4 var(--lc-sans);
+  pointer-events: auto;
+}
+.lc-notification span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.lc-notification button {
+  flex: 0 0 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+}
+.lc-notification button:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.lc-library-refresh { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; font-size: 12px; }
+.lc-history-tool, .lc-history-tool:hover, .lc-history-tool:active {
+  background: transparent !important;
+  color: var(--ink);
+  -webkit-tap-highlight-color: transparent;
+}
+.lc-history-tool svg { transform-origin: center; }
+.lc-history-tool:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.lc-toolbar button { -webkit-tap-highlight-color: transparent; }
+.lc-color-slot-editor { background: var(--surface); padding: 10px; border-radius: 14px; }
+.lc-color-slot-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; color: var(--muted); font: 600 11px/1.2 var(--lc-sans); }
+.lc-color-slot-heading i { width: 12px; height: 12px; border-radius: 4px; border: 1px solid var(--chrome-edge); }
+.lc-color-slot-actions { justify-content: space-between; gap: 8px; margin-top: 8px; }
+.lc-color-slot-go { flex: 1; gap: 6px; border-radius: 8px; font-size: 11px; }
+.lc-color-slot-stop { border-radius: 8px; }
+.lc-color-slot-channels label { min-width: 0; }
+
+/* The existing hold clock drives the liquid; the confirmation gesture is unchanged. */
+.lc-hold-reveal:not(.lc-progress-fill) > .lc-hold-reveal-fill {
+  inset: 0;
+  width: 100%;
+  clip-path: none;
+  -webkit-clip-path: none;
+  transform: translateY(calc((1 - var(--lc-hold, 0)) * 112%));
+  overflow: visible;
+}
+.lc-hold-reveal:not(.lc-progress-fill) > .lc-hold-reveal-fill::before,
+.lc-hold-reveal:not(.lc-progress-fill) > .lc-hold-reveal-fill::after {
+  content: "";
+  position: absolute;
+  width: 180%;
+  height: 12px;
+  left: -40%;
+  top: -5px;
+  border-radius: 50%;
+  background: inherit;
+}
+.lc-hold-reveal[data-filling] > .lc-hold-reveal-fill::before { animation: lc-liquid-wave 650ms ease-in-out infinite alternate; }
+.lc-hold-reveal[data-filling] > .lc-hold-reveal-fill::after { opacity: 0.5; animation: lc-liquid-wave 850ms ease-in-out infinite alternate-reverse; }
+@keyframes lc-liquid-wave { from { transform: translateX(-12%) rotate(-3deg); } to { transform: translateX(12%) rotate(3deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .lc-hold-reveal > .lc-hold-reveal-fill::before, .lc-hold-reveal > .lc-hold-reveal-fill::after { animation: none !important; }
+}
+
+/* Chat shares the document's Markdown + Math without its page geometry. */
+.lc-agent-markdown { min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.55; }
+.lc-agent-markdown:empty { display: none; }
+.lc-agent-markdown > :first-child { margin-top: 0; }
+.lc-agent-markdown > :last-child { margin-bottom: 0; }
+.lc-agent-markdown p { margin: .55em 0; }
+.lc-agent-markdown :is(h1,h2,h3,h4) { font-size: 1.08em; line-height: 1.3; margin: .9em 0 .4em; }
+.lc-agent-markdown :is(ul,ol) { padding-left: 1.5em; margin: .6em 0; }
+.lc-agent-markdown pre { max-width: 100%; overflow-x: auto; padding: 10px; border-radius: 8px; background: color-mix(in srgb,var(--ink) 6%,transparent); }
+.lc-agent-markdown code { font-size: .9em; }
+.lc-agent-markdown blockquote { margin: .5em 0; padding-left: 10px; border-left: 2px solid var(--chrome-edge); }
+.lc-agent-markdown .katex-display { overflow-x: auto; overflow-y: hidden; padding: .25em 0; }
+.lc-agent-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.lc-agent-markdown :is(th,td) { padding: 4px 8px; border: 1px solid var(--chrome-edge); }
+.lc-agent-markdown img { max-width: 100%; }
+.lc-agent-drawing-visibility { margin-left: auto; flex-shrink: 0; padding: 2px 6px; border-radius: 6px; font-size: 10px; background: color-mix(in srgb,var(--ink) 6%,transparent); color: var(--hint); }
+.lc-mobile .lc-side { max-height: max(52px, calc(var(--lc-viewport-height, 100dvh) - var(--lc-header-height) - var(--lc-safe-top))); }
+
+.lc-document-drawing-panel { position: absolute; top: 12px; right: 12px; z-index: 35; width: min(320px, calc(100% - 24px)); max-height: calc(100% - 80px); overflow: auto; border: 1px solid var(--chrome-edge); border-radius: 12px; background: var(--panel); box-shadow: 0 4px 18px rgb(0 0 0 / 14%); padding: 8px; }
+.lc-document-drawing-panel header { display: flex; align-items: center; gap: 6px; }
+.lc-document-drawing-panel header button { background: transparent; border: none; color: var(--ink); }
+.lc-document-drawing-panel .lc-drawing-fold { flex: 1; text-align: left; font-size: 12px; }
+.lc-document-drawing-panel .lc-drawing-hide { width: 32px; padding: 0; font-size: 18px; }
+.lc-document-drawing-panel .lc-document-drawing-title { padding: 2px 6px 8px; color: var(--hint); font-size: 11px; }
+.lc-document-drawing-panel canvas { display: block; width: 100%; height: 180px; border-radius: 8px; background: #fffdf7; }
+.lc-document-drawing-panel .lc-timeline { margin-top: 6px; }
+.lc-document-drawing-panel > select { width: 100%; margin: 4px 0 8px; }

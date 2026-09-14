@@ -5,10 +5,12 @@
  * having to remesh every remaining stroke on Ctrl+Z.
  */
 
-import { INK_UNDO_CAP } from "../inkPageCache";
 import type { SpineDot } from "./instance";
 
-export function pushCapped<T>(stack: T[], item: T, cap = INK_UNDO_CAP): void {
+/** Bitmap acceleration only; semantic undo lasts for the open session. */
+export const INK_PIXEL_HISTORY_CAP = 40;
+
+export function pushCapped<T>(stack: T[], item: T, cap = INK_PIXEL_HISTORY_CAP): void {
   stack.push(item);
   if (stack.length > cap) stack.splice(0, stack.length - cap);
 }

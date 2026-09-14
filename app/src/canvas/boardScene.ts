@@ -232,7 +232,6 @@ export function createBoardScene(initial?: {
   const undoStack: unknown[][] = [];
   const redoStack: unknown[][] = [];
   let applyingHistory = false;
-  const HISTORY_LIMIT = 80;
 
   const cloneElements = (list: unknown[]): unknown[] =>
     JSON.parse(JSON.stringify(list)) as unknown[];
@@ -276,7 +275,6 @@ export function createBoardScene(initial?: {
         recordsHistory(scene.captureUpdate)
       ) {
         undoStack.push(cloneElements(scene.historyBaseline ?? elements));
-        if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
         redoStack.length = 0;
       }
       if (scene.elements) elements = scene.elements;

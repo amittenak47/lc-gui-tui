@@ -47,7 +47,7 @@ pub fn build_ask_prompt(
     } else {
         let _ = writeln!(
             out,
-            "\n## Your reply\n\nAnswer the question as a tutor. Plain text only — no JSON."
+            "\n## Your reply\n\nAnswer the question as a tutor. Markdown prose with $...$ inline math or $$...$$ display math — no JSON."
         );
     }
     out
@@ -111,7 +111,7 @@ mod tests {
             "how do I start?",
             &CoachContext::default(),
         );
-        assert!(corpus.contains("Plain text only"));
+        assert!(corpus.contains("Markdown prose"));
         assert!(!corpus.contains("draw_structure"));
     }
 }
