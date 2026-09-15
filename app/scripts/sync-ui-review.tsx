@@ -1,8 +1,10 @@
 // Isolated browser fixture: no daemon, accounts, or user notebooks.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Board } from "../src/canvas/Board";
 import { AnnotateDocument } from "../src/modes/AnnotateDocument";
+import { TabStrip } from "../src/components/TabStrip";
+import { initialTabState, tabsReducer, type TabState } from "../src/util/tabs";
 import { ColorSlotEditor } from "../src/canvas/ColorSlotEditor";
 import { NotificationStack } from "../src/components/NotificationStack";
 import { AgentSidePanel, type AgentChatMessage } from "../src/modes/AgentSidePanel";
@@ -18,6 +20,18 @@ function Review() {
   const [height,setHeight] = useState(0);
   const [editor,setEditor] = useState(false);
   const [agent,setAgent] = useState(false);
+  const [showing, setShowing] = useState(true);
+  const [mounted, setMounted] = useState(true);
+  const [tabsVisible, setTabsVisible] = useState(false);
+  const [, setRevision] = useState(0);
+  useEffect(() => {
+    Object.assign(window, {
+      reviewRerender: () => setRevision(n => n + 1),
+      reviewSetShowing: setShowing,
+      reviewClose: () => setMounted(false),
+      reviewShowTabs: () => setTabsVisible(true),
+    });
+  }, []);
   useEffect(() => {
     Object.assign(window,{reviewBoard:board.current,reviewShowEditor:()=>setEditor(true),reviewShowAgent:()=>{setEditor(false);setAgent(true);}});
     const timer=setTimeout(async()=>{
@@ -30,18 +44,38 @@ function Review() {
     return ()=>clearTimeout(timer);
   },[]);
   return <>
-    <header className="lc-header" style={{height:38,minHeight:38}}>⌂ Home</header>
+    <header className="lc-header" style={{height:38,minHeight:38}}>{tabsVisible ? <TabReview /> : "⌂ Home"}</header>
     <NotificationStack />
-    <div style={{position:"relative",height:"calc(100% - 38px)"}}>
-      <Board ref={board} filmScope="sync-review" themeId="graphite" mobileRegion={ANNOTATE_REGION}
+    <div style={{position:"relative",height:"calc(100% - 38px)", display: showing ? undefined : "none"}}>
+      {mounted && <Board ref={board} filmScope="sync-review" themeId="graphite" mobileRegion={ANNOTATE_REGION}
+        splitPaused={!showing}
         focusRegion={ANNOTATE_REGION} transparentCanvas docPaper selectableContent
         pageContent={<AnnotateDocument source={source} onMeasure={setHeight}/>}
-        pageContentHeight={annotatePageHeight(height)}/>
+        pageContentHeight={annotatePageHeight(height)}/>}
     </div>
     {editor && <ColorSlotEditor color="#b88662" anchor={{x:24,y:1080}} zIndex={270}
       onConfirm={()=>setEditor(false)} onDiscard={()=>setEditor(false)} />}
     {agent && <AgentReview />}
   </>;
+}
+function TabReview() {
+  const [state, dispatch] = useReducer(tabsReducer, null, (): TabState => ({
+    ...initialTabState(), activeId: "review-a",
+    tabs: [...initialTabState().tabs, ...["a", "b", "c", "d"].map(id => ({
+      id: `review-${id}`, kind: "whiteboard" as const, title: `Notebook ${id.toUpperCase()}`,
+      dirty: false, lastActive: 0, notebookId: id,
+    }))],
+  }));
+  return <TabStrip tabs={state.tabs} groups={state.groups} activeId={state.activeId}
+    onFocus={id => dispatch({type:"focus",id,at:Date.now()})}
+    onClose={id => dispatch({type:"close",id})}
+    onReorder={(id,targetId,side) => dispatch({type:"reorder",id,targetId,side})}
+    onUnsplit={id => dispatch({type:"unsplit",id})}
+    onTabDropOnTab={(id,targetId) => {
+      if (state.groups.some(group => group.children.includes(id) && group.children.includes(targetId))) {
+        dispatch({type:"swap-split",id});
+      } else dispatch({type:"split",a:targetId,b:id,axis:"vertical",at:Date.now()});
+    }} />;
 }
 function AgentReview() {
   useEffect(() => installSafeAreaInsets(), []);

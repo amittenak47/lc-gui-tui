@@ -10217,7 +10217,7 @@ export function Workspace({
             ref={boardRef}
             themeId={themeId}
             preparing={boardPreparing}
-            splitPaused={Boolean(splitRole) && !active}
+            splitPaused={!showing || (Boolean(splitRole) && !active)}
             onThemePick={setThemeId}
             readingSize={readingSize}
             interactive={Boolean(

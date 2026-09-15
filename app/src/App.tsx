@@ -1280,6 +1280,7 @@ export function App() {
             onClose={closeTab}
             onCancelLoad={shellLoadActive ? cancelLoad : undefined}
             onTabDropOnTab={onTabDropOnTab}
+            onReorder={(id, targetId, side) => dispatchTabs({ type: "reorder", id, targetId, side })}
             onSplitWithActive={splitWithActive}
             onUnsplit={unsplitTab}
             groupedIds={groupedIds}

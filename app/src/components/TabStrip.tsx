@@ -63,6 +63,8 @@ export interface TabStripProps {
    * Dropped onto another workspace chip — those two become a vertical split.
    */
   onTabDropOnTab?: (dragId: string, ontoId: string) => void;
+  /** Drop at a chip boundary to insert it without creating a split. */
+  onReorder?: (id: string, targetId: string, side: "before" | "after") => void;
   /**
    * Split from the chip's menu, for readers who never find the drag.
    *
@@ -231,6 +233,7 @@ export function TabStrip({
   onTabDrop,
   onTabDragEnd,
   onTabDropOnTab,
+  onReorder,
   onSplitWithActive,
   onUnsplit,
   groupedIds = [],
@@ -256,6 +259,9 @@ export function TabStrip({
   );
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [insertion, setInsertion] = useState<{
+    id: string; side: "before" | "after"; x: number; top: number; height: number;
+  } | null>(null);
   /** Dragging a grouped chip clear of its pair — dropping here breaks the split. */
   const [detaching, setDetaching] = useState(false);
   const [cancelHit, setCancelHit] = useState(false);
@@ -399,6 +405,30 @@ export function TabStrip({
     return distanceOutside(row.getBoundingClientRect(), x, y) > DETACH_MARGIN_PX;
   };
 
+  const insertionAt = (tab: TabRecord, x: number, y: number): typeof insertion => {
+    if (!onReorder) return null;
+    let nearest: typeof insertion = null;
+    let distance = Infinity;
+    const chips = Array.from(stripRef.current?.querySelectorAll<HTMLElement>(".lc-tab[data-tab-id]") ?? []);
+    for (const chip of chips) {
+      const id = chip.dataset.tabId!;
+      if (id === tab.id || id === HOME_TAB_ID) continue;
+      const box = chip.getBoundingClientRect();
+      if (box.width <= 0 || y < box.top - 4 || y > box.bottom + 4) continue;
+      const group = groups.find(group => group.id === chip.dataset.tabGroup);
+      for (const side of ["before", "after"] as const) {
+        // Other split groups expose only their outside boundaries.
+        if (group && group.id !== tab.group && id !== group.children[side === "before" ? 0 : 1]) continue;
+        const edge = side === "before" ? box.left : box.right;
+        const gap = Math.abs(x - edge);
+        if (gap > Math.min(24, box.width / 4) || gap >= distance) continue;
+        distance = gap;
+        nearest = { id, side, x: edge, top: box.top, height: box.height };
+      }
+    }
+    return nearest;
+  };
+
   return (
     <div className="lc-tab-strip" role="tablist" aria-label="Open workspaces" ref={stripRef}>
       {rows.map((row) => (
@@ -443,7 +473,7 @@ export function TabStrip({
                   ? homeAborts
                     ? "Home — stops the page that is loading"
                     : tab.title
-                  : `${tab.title}\nDrag onto another tab to split · right-click for more`
+                  : `${tab.title}\nDrag between tabs to reorder · onto a tab to split · right-click for more`
               }
               aria-label={label}
               onClick={() => {
@@ -509,10 +539,12 @@ export function TabStrip({
                 const dy = event.clientY - drag.y;
                 if (!drag.moved && dx * dx + dy * dy < 100) return;
                 drag.moved = true;
-                const onto = chipIdAt(stripRef.current, event.clientX, event.clientY, tab.id);
+                const insert = insertionAt(tab, event.clientX, event.clientY);
+                setInsertion(insert);
+                const onto = insert ? null : chipIdAt(stripRef.current, event.clientX, event.clientY, tab.id);
                 setDropTargetId(onto);
                 setDetaching(
-                  wouldDetach(tab.id, tab.group, event.clientX, event.clientY),
+                  !insert && wouldDetach(tab.id, tab.group, event.clientX, event.clientY),
                 );
                 setCarry({ id: tab.id, title: tab.title, x: event.clientX, y: event.clientY });
                 onTabDrag?.(tab.id, event.clientX, event.clientY);
@@ -522,8 +554,10 @@ export function TabStrip({
                 if (!drag || drag.id !== tab.id) return;
                 if (drag.moved) {
                   skipClickRef.current = true;
+                  const insert = insertionAt(tab, event.clientX, event.clientY);
                   const onto = chipIdAt(stripRef.current, event.clientX, event.clientY, tab.id);
-                  if (onto) onTabDropOnTab?.(tab.id, onto);
+                  if (insert) onReorder?.(tab.id, insert.id, insert.side);
+                  else if (onto) onTabDropOnTab?.(tab.id, onto);
                   else if (wouldDetach(tab.id, tab.group, event.clientX, event.clientY)) {
                     onUnsplit?.(tab.id);
                   }
@@ -532,6 +566,7 @@ export function TabStrip({
                 dragRef.current = null;
                 setCarry(null);
                 setDropTargetId(null);
+                setInsertion(null);
                 setDetaching(false);
                 onTabDragEnd?.();
               }}
@@ -539,6 +574,7 @@ export function TabStrip({
                 dragRef.current = null;
                 setCarry(null);
                 setDropTargetId(null);
+                setInsertion(null);
                 setDetaching(false);
                 onTabDragEnd?.();
               }}
@@ -599,6 +635,8 @@ export function TabStrip({
         * clips its own overflow — a ghost drawn inside it would be sliced off
         * the moment it left the header, which is the entire journey.
         */}
+      {insertion ? createPortal(<div className="lc-tab-insertion" aria-hidden
+        style={{ left: insertion.x - 1, top: insertion.top, height: insertion.height }} />, document.body) : null}
       {carry
         ? createPortal(
             <div

@@ -133,6 +133,10 @@ export function AnnotateDocument({ source, onMeasure, selectable = false }: Anno
     };
   }, [inline, source]);
   const html = parsed ?? PREPARING_HTML;
+  // React compares this prop by identity. A fresh wrapper assigns innerHTML
+  // again even when the string is unchanged, replacing every word/fence and
+  // triggering layout and the ink/selection observers on ordinary UI updates.
+  const markup = useMemo(() => ({ __html: html }), [html]);
 
   const onMeasureRef = useRef(onMeasure);
   onMeasureRef.current = onMeasure;
@@ -201,7 +205,7 @@ export function AnnotateDocument({ source, onMeasure, selectable = false }: Anno
       // selection layer around this only takes them in Scroll mode.
       aria-hidden={selectable ? undefined : true}
       // eslint-disable-next-line react/no-danger -- sanitised in renderMarkdown
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={markup}
     />
   );
 }

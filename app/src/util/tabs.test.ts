@@ -477,6 +477,53 @@ describe("split groups", () => {
   });
 });
 
+describe("tab insertion", () => {
+  const make = () => run(initialTabState(), ...["a", "b", "c", "d"].map(id =>
+    ({ type: "open" as const, tab: board(id, id), at: 1 })));
+  const ids = (state: TabState) => state.tabs.map(tab => tab.id);
+
+  it("moves both directions, retaining active tab and records", () => {
+    const state = make();
+    const left = tabsReducer(state, { type: "reorder", id: "d", targetId: "b", side: "before" });
+    expect(ids(left)).toEqual([HOME_TAB_ID, "a", "d", "b", "c"]);
+    const right = tabsReducer(left, { type: "reorder", id: "a", targetId: "c", side: "after" });
+    expect(ids(right)).toEqual([HOME_TAB_ID, "d", "b", "c", "a"]);
+    expect(right.activeId).toBe(state.activeId);
+    expect(right.tabs.find(tab => tab.id === "a")).toBe(state.tabs[1]);
+    expect(ids(tabsReducer(right, { type: "hydrate", state: right }))).toEqual(ids(right));
+  });
+
+  it("inserts around a split as a unit even when its stored tabs were not adjacent", () => {
+    const state = tabsReducer(make(), { type: "split", a: "a", b: "c", axis: "vertical", at: 2 });
+    const moved = tabsReducer(state, { type: "reorder", id: "d", targetId: "a", side: "after" });
+    expect(ids(moved)).toEqual([HOME_TAB_ID, "a", "c", "d", "b"]);
+    expect(moved.groups).toEqual(state.groups);
+  });
+
+  it("moves a split member out to a new position without losing its partner", () => {
+    const state = tabsReducer(make(), { type: "split", a: "a", b: "c", axis: "vertical", at: 2 });
+    const moved = tabsReducer(state, { type: "reorder", id: "c", targetId: "d", side: "after" });
+    expect(ids(moved)).toEqual([HOME_TAB_ID, "a", "b", "d", "c"]);
+    expect(moved.groups).toEqual([]);
+    expect(moved.tabs.every(tab => !tab.group)).toBe(true);
+  });
+
+  it("reorders within a split without detaching or changing its ratio", () => {
+    const state = tabsReducer(make(), { type: "split", a: "a", b: "c", axis: "vertical", at: 2 });
+    const moved = tabsReducer(state, { type: "reorder", id: "c", targetId: "a", side: "before" });
+    expect(moved.groups[0]!.children).toEqual(["c", "a"]);
+    expect(moved.groups[0]!.split).toEqual(state.groups[0]!.split);
+    expect(tabsReducer(moved, { type: "reorder", id: "c", targetId: "a", side: "before" })).toBe(moved);
+  });
+
+  it("keeps Home fixed and ignores stale targets", () => {
+    const state = make();
+    for (const [id, targetId] of [[HOME_TAB_ID, "a"], ["a", HOME_TAB_ID], ["a", "missing"], ["a", "a"]]) {
+      expect(tabsReducer(state, { type: "reorder", id, targetId, side: "before" })).toBe(state);
+    }
+  });
+});
+
 describe("pdfHoldDecodeInSplit", () => {
   function pdf(id: string, lastActive = 0): AnnotateTab {
     return {

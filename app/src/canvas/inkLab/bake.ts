@@ -303,7 +303,10 @@ export function reshapeLiveSpine(
   const nib = meanRadius(spine, fromHint) * 2;
   const frozenBefore = liveSmoothFrom(cache);
   const live = smoothLiveInkPoints(rawScene, strength, nib, cache);
-  const from = liveSmoothFrom(live.cache);
+  // Upload from the boundary that was painted LAST time. The new cache can
+  // freeze multiple segments after a delayed frame; starting at its new
+  // boundary would leave those segments stale or absent in the GPU buffer.
+  const from = live.cache === cache ? frozenBefore : 0;
   let memo = live.cache ? liveRadii.get(live.cache) : undefined;
   // Geometry and styling freeze together. Rewalking/reallocating all radii
   // and RGB values each frame made long strokes slower despite tail-only GPU work.

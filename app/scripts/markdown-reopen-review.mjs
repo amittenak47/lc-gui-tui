@@ -97,4 +97,88 @@ try {
   await writeFile(resolve(out,'results.json'),JSON.stringify({fresh,saved,reopened,errors},null,2));
   console.log(JSON.stringify({fresh,saved,reopened}));
   assert(reopened.delta > 100, "Saved annotation camera blocks Markdown scrolling on reopen");
+  const rendering = await evaluate(`(async () => {
+    const doc = document.querySelector('.lc-md-ink-doc');
+    const heading = doc.querySelector('h2');
+    let replacements = 0;
+    const observer = new MutationObserver(records => replacements += records.length);
+    observer.observe(doc, {childList:true, subtree:true});
+    for (let i=0; i<20; i++) {
+      window.reviewRerender();
+      await new Promise(requestAnimationFrame);
+    }
+    observer.disconnect();
+    return {replacements, sameHeading: heading === doc.querySelector('h2'),
+      headings: doc.querySelectorAll('h2').length, height:doc.offsetHeight};
+  })()`);
+  assert.equal(rendering.replacements, 0, 'UI updates rebuilt the Markdown DOM');
+  assert(rendering.sameHeading && rendering.headings === 100 && rendering.height > 5000);
+
+  // Sample actual browser layout work during a stream of wheel events.
+  await send('Performance.enable');
+  const metrics = async () => Object.fromEntries((await send('Performance.getMetrics')).metrics.map(m => [m.name,m.value]));
+  const beforeScroll = await metrics();
+  for (let i=0; i<30; i++) {
+    await send('Input.dispatchMouseEvent', {type:'mouseWheel', x:450, y:650, deltaX:0, deltaY:35});
+    await sleep(16);
+  }
+  const afterScroll = await metrics();
+  const scrollWork = {layouts: afterScroll.LayoutCount-beforeScroll.LayoutCount,
+    layoutMs: (afterScroll.LayoutDuration-beforeScroll.LayoutDuration)*1000,
+    scriptMs: (afterScroll.ScriptDuration-beforeScroll.ScriptDuration)*1000};
+  await shot('markdown-rendering');
+
+  // Park and close during camera motion: neither may leave global paint holds.
+  const beforePark = await bounds();
+  await evaluate('window.reviewSetShowing(false)');
+  await sleep(100);
+  const parked = await evaluate(`(async () => {
+    const {isDocCameraLive} = await import('/src/canvas/docSelectionGesture.ts');
+    return {live:isDocCameraLive(), promoted:document.documentElement.classList.contains('lc-doc-camera-live')};
+  })()`);
+  assert(!parked.live && !parked.promoted, 'Parked Markdown retains camera hold');
+  await evaluate('window.reviewSetShowing(true)');
+  await sleep(500);
+  const resumed = await bounds();
+  assert(Math.abs(resumed.y-beforePark.y) < 1 && Math.abs(resumed.zoom-beforePark.zoom) < 0.001,
+    'Returning to Markdown changed the reading camera');
+  await wheel();
+  await send('Input.dispatchMouseEvent', {type:'mouseWheel', x:450, y:650, deltaX:0, deltaY:80});
+  await sleep(30);
+  await evaluate('window.reviewClose()');
+  await sleep(100);
+  const closed = await evaluate(`(async () => {
+    const {isDocCameraLive} = await import('/src/canvas/docSelectionGesture.ts');
+    return {live:isDocCameraLive(), promoted:document.documentElement.classList.contains('lc-doc-camera-live')};
+  })()`);
+  assert(!closed.live && !closed.promoted, 'Closed Markdown retains camera hold');
+  await evaluate('window.reviewShowTabs()');
+  await sleep(100);
+  const tabOrder = () => evaluate(`Array.from(document.querySelectorAll('.lc-tab')).map(tab => tab.dataset.tabId)`);
+  const tabRect = id => evaluate(`(() => {
+    const r = document.querySelector('[data-tab-id="${id}"]').getBoundingClientRect();
+    return {left:r.left,right:r.right,x:(r.left+r.right)/2,y:(r.top+r.bottom)/2};
+  })()`);
+  const dragTab = async (id, targetId, side) => {
+    const from = await tabRect(id), to = await tabRect(targetId);
+    const x = side === 'before' ? to.left + 2 : side === 'after' ? to.right - 2 : to.x;
+    await send('Input.dispatchMouseEvent', {type:'mousePressed',x:from.x,y:from.y,button:'left',buttons:1,clickCount:1});
+    await send('Input.dispatchMouseEvent', {type:'mouseMoved',x,y:to.y,button:'left',buttons:1});
+    await sleep(50);
+    if (side) assert(await evaluate("Boolean(document.querySelector('.lc-tab-insertion'))"), 'No insertion marker');
+    await send('Input.dispatchMouseEvent', {type:'mouseReleased',x,y:to.y,button:'left',buttons:0,clickCount:1});
+    await sleep(100);
+  };
+  await dragTab('review-d','review-b','before');
+  assert.deepEqual(await tabOrder(), ['review-a','review-d','review-b','review-c']);
+  await dragTab('review-a','review-c','after');
+  assert.deepEqual(await tabOrder(), ['review-d','review-b','review-c','review-a']);
+  await dragTab('review-c','review-b',null);
+  await dragTab('review-c','review-b',null);
+  assert.deepEqual(await tabOrder(), ['review-d','review-c','review-b','review-a']);
+  assert.equal(await evaluate("document.querySelectorAll('.lc-tab-row.is-group').length"), 1);
+  await shot('tab-reordering');
+  console.log(JSON.stringify({tabReorder:'passed', splitSwap:'passed'}));
+  await writeFile(resolve(out,'results.json'),JSON.stringify({fresh,saved,reopened,rendering,scrollWork,parked,closed,errors},null,2));
+  console.log(JSON.stringify({rendering,scrollWork,parked,closed,errors}));
 } finally { socket?.close(); chrome.kill(); server.kill(); }

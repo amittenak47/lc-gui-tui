@@ -230,6 +230,7 @@ export type TabAction =
   | { type: "split"; a: string; b: string; axis: SplitAxis; edge?: SplitEdge; at: number }
   | { type: "unsplit"; id: string }
   | { type: "swap-split"; id: string }
+  | { type: "reorder"; id: string; targetId: string; side: "before" | "after" }
   | { type: "set-ratio"; groupId: string; ratio: number }
   | { type: "hydrate"; state: TabState };
 
@@ -669,6 +670,39 @@ export function tabsReducer(state: TabState, action: TabAction): TabState {
             : tab,
         ),
       };
+    }
+
+    case "reorder": {
+      if (action.id === HOME_TAB_ID || action.targetId === HOME_TAB_ID || action.id === action.targetId) return state;
+      if (!state.tabs.some(tab => tab.id === action.id) || !state.tabs.some(tab => tab.id === action.targetId)) return state;
+      const sourceGroup = groupOf(state, action.id);
+      if (sourceGroup?.children.includes(action.targetId)) {
+        const children: [string, string] = action.side === "before"
+          ? [action.id, action.targetId] : [action.targetId, action.id];
+        if (children[0] === sourceGroup.children[0]) return state;
+        return { ...state, groups: state.groups.map(group => group.id === sourceGroup.id ? { ...group, children } : group) };
+      }
+      // Follow the strip's visual order, where split partners are adjacent
+      // even if they were opened far apart. Insertion beside a pair keeps it intact.
+      const ordered: TabRecord[] = [];
+      const seen = new Set<string>();
+      for (const tab of state.tabs) {
+        for (const id of groupOf(state, tab.id)?.children ?? [tab.id]) {
+          if (seen.has(id)) continue;
+          seen.add(id);
+          const member = state.tabs.find(candidate => candidate.id === id);
+          if (member) ordered.push(member);
+        }
+      }
+      const next = detachFromGroup({ ...state, tabs: ordered }, action.id);
+      const moving = next.tabs.find(tab => tab.id === action.id)!;
+      const tabs = next.tabs.filter(tab => tab.id !== action.id);
+      const targetGroup = groupOf(next, action.targetId);
+      const targetId = targetGroup
+        ? targetGroup.children[action.side === "before" ? 0 : 1] : action.targetId;
+      const index = tabs.findIndex(tab => tab.id === targetId) + (action.side === "after" ? 1 : 0);
+      tabs.splice(index, 0, moving);
+      return { ...next, tabs };
     }
 
     case "unsplit":
