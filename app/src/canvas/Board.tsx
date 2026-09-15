@@ -6895,12 +6895,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [scrollMode]);
 
   useEffect(() => {
-    return () => {
+    const releaseCamera = () => {
       if (cameraMotionTimerRef.current) window.clearTimeout(cameraMotionTimerRef.current);
       cameraMotionTimerRef.current = 0;
+      if (cameraIdleTeardownTimerRef.current) window.clearTimeout(cameraIdleTeardownTimerRef.current);
+      cameraIdleTeardownTimerRef.current = 0;
+      if (cameraLiveClassRafRef.current) cancelAnimationFrame(cameraLiveClassRafRef.current);
+      cameraLiveClassRafRef.current = 0;
+      if (visualScrollRafRef.current) cancelAnimationFrame(visualScrollRafRef.current);
+      visualScrollRafRef.current = 0;
+      pendingVisualScrollRef.current = null;
       cameraMotionActiveRef.current = false;
+      // A parked/closed document must release its global CSS and paint hold.
+      // Cancelling only the settle timer left the hold latched indefinitely.
+      docFlags.camera(false);
+      docFlags.pointer(false);
     };
-  }, []);
+    if (splitPaused) releaseCamera();
+    return releaseCamera;
+  }, [splitPaused, docFlags]);
 
   // Entering or leaving Carbon / transparent paper flips the canvas after the
   // theme has already been applied, so it needs its own push.
@@ -7267,7 +7280,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       window.clearTimeout(viewportFitSettleRef.current);
       rasterInkRef.current?.cancelCameraMotion();
     } else if (resumed) {
-      applyLiveBoxFit(true, true, true);
+      // Hidden tabs also pause. Preserve their camera when the pane size has
+      // not changed; a real split/resize still takes the normal fit path.
+      applyLiveBoxFit(false, true, true);
     }
   }, [splitPaused, applyLiveBoxFit, stopPanInertia]);
 

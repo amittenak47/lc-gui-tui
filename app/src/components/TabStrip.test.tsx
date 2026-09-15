@@ -466,6 +466,53 @@ describe("TabStrip", () => {
     view.unmount();
   });
 
+  describe("reordering", () => {
+    for (const pointerType of ["mouse", "touch", "pen"]) {
+      it(`inserts between chips with ${pointerType} and keeps centre drops for splits`, () => {
+        const onReorder = vi.fn();
+        const onTabDropOnTab = vi.fn();
+        const view = mount({ tabs: [homeTab(), board("a", "A"), board("b", "B"), board("c", "C")], onReorder, onTabDropOnTab });
+        for (const [i, chip] of view.chips().entries()) {
+          vi.spyOn(chip, "getBoundingClientRect").mockReturnValue({ left: i * 110, right: i * 110 + 100,
+            top: 0, bottom: 32, width: 100, height: 32 } as DOMRect);
+        }
+        const hit = grab(view, "C");
+        act(() => hit.dispatchEvent(pointer("pointerdown", { x: 260, y: 16, type: pointerType })));
+        act(() => hit.dispatchEvent(pointer("pointermove", { x: 106, y: 16, type: pointerType })));
+        expect(document.querySelector(".lc-tab-insertion")).not.toBeNull();
+        expect(view.host.querySelector(".is-drop-target")).toBeNull();
+        act(() => hit.dispatchEvent(pointer("pointerup", { x: 106, y: 16, type: pointerType })));
+        expect(onReorder).toHaveBeenCalledWith("c", "b", "before");
+        expect(onTabDropOnTab).not.toHaveBeenCalled();
+        expect(document.querySelector(".lc-tab-insertion")).toBeNull();
+        act(() => {
+          hit.dispatchEvent(pointer("pointerdown", { x: 260, y: 16, type: pointerType }));
+          hit.dispatchEvent(pointer("pointermove", { x: 150, y: 16, type: pointerType }));
+          hit.dispatchEvent(pointer("pointerup", { x: 150, y: 16, type: pointerType }));
+        });
+        expect(onTabDropOnTab).toHaveBeenCalledWith("c", "b");
+        view.unmount();
+      });
+    }
+
+    it("cancels insertion without changing order", () => {
+      const onReorder = vi.fn();
+      const view = mount({ tabs: [homeTab(), board("a", "A"), board("b", "B")], onReorder });
+      vi.spyOn(view.chips()[1]!, "getBoundingClientRect").mockReturnValue({ left: 110, right: 210,
+        top: 0, bottom: 32, width: 100, height: 32 } as DOMRect);
+      const hit = grab(view, "A");
+      act(() => {
+        hit.dispatchEvent(pointer("pointerdown", { x: 50, y: 16 }));
+        hit.dispatchEvent(pointer("pointermove", { x: 210, y: 16 }));
+      });
+      expect(document.querySelector(".lc-tab-insertion")).not.toBeNull();
+      act(() => hit.dispatchEvent(pointer("pointercancel", { x: 210, y: 16 })));
+      expect(document.querySelector(".lc-tab-insertion")).toBeNull();
+      expect(onReorder).not.toHaveBeenCalled();
+      view.unmount();
+    });
+  });
+
   describe("groups", () => {
     const pair: TabGroup = {
       id: "g1",

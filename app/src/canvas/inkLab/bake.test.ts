@@ -16,6 +16,27 @@ function line(): ScenePoint[] {
 }
 
 describe("lift bake", () => {
+  it("uploads every changed segment when a delayed paint freezes a batch of samples", () => {
+    const raw: ScenePoint[] = [];
+    const spine: Array<{ x: number; y: number; r: number }> = [];
+    let cache: ReturnType<typeof reshapeLiveSpine>["cache"] = null;
+    let resident: Array<{ x: number; y: number; r: number }> = [];
+    // Simulate the retained GPU segment buffer, including pauses of several
+    // frames. Its unchanged prefix plus this upload must equal the full mesh.
+    for (const count of [24, 100, 104, 180, 184, 320, 324, 500]) {
+      while (spine.length < count) {
+        const i = spine.length;
+        spine.push({ x: i * 2, y: 100 + Math.sin(i / 17) * 35, r: 2 });
+      }
+      const out = reshapeLiveSpine(spine, 0.6, cache, raw);
+      cache = out.cache;
+      expect(out.from).toBeLessThanOrEqual(resident.length);
+      resident = [...resident.slice(0, out.from), ...out.points.slice(out.from).map(p => ({ ...p }))];
+      expect(resident).toEqual(out.points);
+    }
+    expect(cache!.prefix.length).toBeGreaterThan(0);
+  });
+
   it("does not revisit source geometry or restyle the frozen prefix", () => {
     let prefixReads = 0;
     const spine = Array.from({ length: 500 }, (_, i) => ({
@@ -26,7 +47,8 @@ describe("lift bake", () => {
     }));
     const raw: ScenePoint[] = [];
     const first = reshapeLiveSpine(spine, 0.6, null, raw);
-    expect(first.from).toBeGreaterThan(0);
+    expect(first.from).toBe(0);
+    expect(first.cache!.prefix.length).toBeGreaterThan(0);
     prefixReads = 0;
     spine.push({ x: 1500, y: 0, r: 4, rgb: [60, 70, 80] });
     const next = reshapeLiveSpine(spine, 0.6, first.cache, raw);

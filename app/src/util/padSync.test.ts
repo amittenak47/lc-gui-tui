@@ -29,6 +29,10 @@ import {
 import { noteCameraBusy, resetCameraBusyForTests } from "./cameraBusy";
 import { setHostLoopback } from "./padHub";
 import * as inkSync from "./inkSync";
+import { persistableAgentMessages, restoreAgentMessages } from "../modes/agentTranscript";
+import type { AgentChatMessage } from "../modes/AgentSidePanel";
+import { parseVizProgram } from "../viz/schema";
+import { visibleDrawings } from "../viz/drawingState";
 
 const restoreWhiteboardNotebook = vi.fn(async (_entry?: unknown) => {});
 const restoreWhiteboardFromTrash = vi.fn(
@@ -230,6 +234,54 @@ describe("padSync queue", () => {
 });
 
 describe("padSync pull", () => {
+  it.each([true, false])("round-trips chat drawings with expanded=%s through notebook and document sync", async (expanded) => {
+    setHostLoopback({ url: "http://fixture", token: "test" });
+    const program = parseVizProgram({
+      id: "walk", viz: "array", title: "Array walk",
+      frames: [
+        { label: "Start", cells: [1, 2, 3], pointers: { i: 0 } },
+        { label: "Next", cells: [1, 2, 3], pointers: { i: 1 } },
+      ],
+    })!;
+    expect(program).toBeTruthy();
+    const messages: AgentChatMessage[] = [
+      { id: "question", role: "user", content: "Explain the walk", at: 1 },
+      {
+        id: "answer", role: "assistant", at: 2,
+        content: "**Index** $i$\n\n$$i + 1$$",
+        reasoning: "Compare the two positions.",
+        processEvents: [{ kind: "stage", label: "reason", detail: "Check the index.", ts: 2 }],
+        replyTo: { id: "question", role: "user", excerpt: "Explain the walk" },
+        drawing: { program, expanded, redacted: false, frameIndex: 1 },
+      },
+      { id: "pending", role: "assistant", content: "", at: 3, pending: true },
+    ];
+    const agent = persistableAgentMessages(messages);
+    const sender = fakeClient();
+    await pushWhiteboardPad(sender, {
+      id: "w1", title: "Notebook", updatedAt: 100, pageCount: 1, board: emptyBoard, agent,
+    });
+    await pushAnnotatePad(sender, {
+      id: "a1", name: "note.md", hash: "hash", docType: "markdown",
+      updatedAt: 100, source: "# Note", board: emptyBoard, agent, footnotes: [],
+    });
+    // Serialize the actual upload bodies before a fresh device discovers them.
+    const whiteboard = JSON.parse(JSON.stringify(vi.mocked(sender.putWhiteboardPad).mock.calls[0]![1]));
+    const document = JSON.parse(JSON.stringify(vi.mocked(sender.putAnnotatePad).mock.calls[0]![1]));
+    const receiver = fakeClient({
+      listWhiteboardPads: vi.fn(async () => [whiteboard]),
+      listAnnotatePads: vi.fn(async () => [document]),
+      getInkPages: vi.fn(async () => []),
+    });
+    expect(await discoverHubPads(receiver)).toBe(2);
+    for (const restore of [restoreWhiteboardNotebook, restoreAnnotateDoc]) {
+      const saved = restore.mock.calls[0]![0] as { agent: unknown[] };
+      const reopened = restoreAgentMessages(saved.agent);
+      expect(reopened).toEqual(messages.slice(0, 2));
+      expect(visibleDrawings(reopened)).toHaveLength(expanded ? 1 : 0);
+    }
+  });
+
   it("discovers missing pads with autosync off and records the received revision", async () => {
     setHostLoopback({ url: "http://fixture", token: "test" });
     hubAutosyncState.on = false;

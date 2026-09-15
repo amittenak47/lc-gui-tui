@@ -2700,6 +2700,15 @@ body[data-lc-sash-drag="horizontal"] {
   box-shadow: inset 0 0 0 1px var(--lc-tab-mode, var(--accent));
 }
 
+.lc-tab-insertion {
+  position: fixed;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  z-index: 60;
+  pointer-events: none;
+}
+
 /*
  * The chip that follows the pointer.
  *

@@ -1,6 +1,51 @@
 # Shapes and visualization handoff
 
-## Current checkpoint — September 14, 2026
+## Current continuation — September 15, 2026
+
+User confirmed Markdown scrolling and Agent Panel anchoring are fixed. Skip
+the Markdown inspection in the continuation checklist. Finish sync verification
+and the existing Agent chat enhancements before Phase 3: Markdown/math, word
+reveal including Thinking/Reasoning, document drawing controls and persistence.
+Drawings ride with messages in the containing document/notebook sync payload;
+independent chat-owned whiteboards and attachments remain Phase 3 work.
+
+Workspace is on `ai-enhancement`. The requested rebase onto `main` completed;
+local and fetched remote branches already shared `547af22a`. Uncommitted work
+was preserved. Detailed continuation: `docs/current-work-status.md` (gitignored).
+
+### Verification and publication checkpoint
+
+- Existing Agent UI capabilities are present: shared Markdown/KaTeX for chat,
+  agent prompt instructions for inline/display math, presentation-only word
+  reveal for answers and open Thinking/Reasoning details, and a bounded drawing
+  viewer at the upper-right of annotated documents. The chat toggle shows
+  “On page” or “Hidden”; chat and viewer use the same selected frame.
+- 99 focused chat/drawing/sync tests pass. New tests serialize actual notebook
+  and document upload bodies, discover them through a separate client fixture,
+  and restore the threaded chat with its full program, selected frame, visibility,
+  math, process details and reasoning. Both expanded and hidden drawings pass;
+  pending response placeholders are excluded. This is fixture verification,
+  not a fresh desktop/tablet or live-model acceptance run.
+- Another 93 tests pass for tab reordering, Markdown DOM stability and live ink
+  baking. TypeScript and the production frontend build pass (existing mixed
+  static/dynamic import warnings).
+- Isolated Chrome sync/Agent review passes: archive acknowledgements, no false
+  conflict for unchanged ink, ruling-off reload with retained ink, three
+  thread-return/close cycles, drawing frame selection and hide. No browser errors.
+- Isolated Chrome tab/Markdown regression also passes: real pointer reordering
+  and split swapping, zero DOM replacements across 20 unrelated updates, saved
+  camera restoration, and released camera holds after hiding or closing the tab.
+- User requested committing the accumulated work and pushing it to `main`.
+  Included changes cover tab insertion/reordering, preserving Markdown DOM,
+  releasing hidden/closed camera holds, preserving camera on tab return, the
+  delayed-frame ink upload boundary, review scripts and the existing icon change.
+
+Remaining: actual cross-device/live-model acceptance of the chat and sync paths,
+then Phase 3 chat-owned whiteboards/cards/attachments and agent-created code or
+Markdown attachments. Markdown scrolling and panel anchoring are user-confirmed;
+do not reopen those investigations without a new reproduction.
+
+## Previous checkpoint — September 14, 2026
 
 The September 10 report below is historical. This checkpoint collects the
 annotation, sync and Agent UI work after `7aac70fe`. The user requested that
