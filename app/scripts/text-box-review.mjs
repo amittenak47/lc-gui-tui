@@ -68,6 +68,30 @@ try {
     await sleep(100);
   }
   assert(await evaluate("Boolean(window.reviewReady)"), `Board not ready: ${JSON.stringify({ errors, requests: [...requests.values()], body: await evaluate('document.body.innerText.slice(0,500)') })}`);
+  if (process.argv.includes("--identity")) {
+    await evaluate("window.beforeRerender = window.reviewCurrentBoard(); window.reviewTheme('paper')");
+    for (let i = 0; i < 100; i++) {
+      if (await evaluate("window.reviewCurrentBoard() !== window.beforeRerender")) break;
+      await sleep(50);
+    }
+    assert(await evaluate("window.reviewCurrentBoard() !== window.beforeRerender"), "Expected a refreshed imperative handle");
+    assert(await evaluate("window.reviewCurrentBoard().instanceId != null && window.reviewCurrentBoard().instanceId === window.beforeRerender.instanceId"), "Rerender must not look like a pad switch during sync");
+    await evaluate("window.reviewClose()");
+    for (let i = 0; i < 100; i++) {
+      if (await evaluate("window.reviewCurrentBoard() === null")) break;
+      await sleep(50);
+    }
+    assert(await evaluate("window.reviewCurrentBoard() === null"), "Unmount must invalidate the active board");
+    await evaluate("window.reviewOpen()");
+    for (let i = 0; i < 100; i++) {
+      if (await evaluate("Boolean(window.reviewReady)")) break;
+      await sleep(50);
+    }
+    assert(await evaluate("window.reviewReady && window.reviewCurrentBoard().instanceId !== window.beforeRerender.instanceId"), "Remount must still block a stale sync operation");
+    assert.equal(errors.length, 0, JSON.stringify(errors));
+    console.log("Board identity survives handle refresh; unmount/remount invalidates stale sync.");
+    process.exitCode = 0;
+  } else {
   await evaluate("document.querySelector('[aria-label=\"Show toolbar\"]').click()");
   await sleep(250);
   const click = async (x, y) => {
@@ -299,6 +323,7 @@ try {
   console.log("Text wrapping, no ghost/shadow, font wheel, resize, reopen and cancel passed.");
   }
 
+  }
 } finally {
   socket?.close();
   chrome.kill();

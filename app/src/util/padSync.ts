@@ -1027,35 +1027,50 @@ export async function discoverHubPads(client: LcClient): Promise<number> {
     client.listWhiteboardPads(), client.listAnnotatePads(),
   ]);
   let imported = 0;
+  const failures: string[] = [];
   for (const row of whiteboards) {
     if (listWhiteboardTrash().some((entry) => entry.id === row.id) || await getWhiteboardNotebook(row.id)) continue;
-    const board = row.board as BoardBlob;
-    if (boardLooksCorrupt(board)) throw new Error(`“${row.title}” has an unreadable board on the hub.`);
-    await pullInkPagesOverLocal(client, "whiteboard", row.id, board.inkPages?.pageIds);
-    // Dependencies first; do not offer a notebook that downloaded only its name.
-    if (await getWhiteboardNotebook(row.id) || listWhiteboardTrash().some((entry) => entry.id === row.id)) continue;
-    await applyHubWhiteboard(row, { emitReload: false });
-    imported++;
+    try {
+      const board = row.board as BoardBlob;
+      if (boardLooksCorrupt(board)) throw new Error(`“${row.title}” has an unreadable board on the hub.`);
+      await pullInkPagesOverLocal(client, "whiteboard", row.id, board.inkPages?.pageIds);
+      // Dependencies first; do not offer a notebook that downloaded only its name.
+      if (await getWhiteboardNotebook(row.id) || listWhiteboardTrash().some((entry) => entry.id === row.id)) continue;
+      await applyHubWhiteboard(row, { emitReload: false });
+      imported++;
+    } catch (cause) {
+      failures.push(`“${row.title}”: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
   }
   for (const row of documents) {
     if (listAnnotateTrash().some((entry) => entry.id === row.id) || await getAnnotateDoc(row.id)) continue;
-    const board = row.board as BoardBlob;
-    if (boardLooksCorrupt(board)) throw new Error(`“${row.name}” has an unreadable board on the hub.`);
-    if ((row.doc_type === "pdf" || row.doc_type === "epub") && !(await getDocBytes(row.hash))) {
-      const bytes = await client.getDocBytes(row.hash);
-      if (!bytes?.byteLength || !bytesMatchDocHash(row.hash, bytes)) {
-        throw new Error(`The source file for “${row.name}” is not available on the hub yet.`);
+    try {
+      const board = row.board as BoardBlob;
+      if (boardLooksCorrupt(board)) throw new Error(`“${row.name}” has an unreadable board on the hub.`);
+      if ((row.doc_type === "pdf" || row.doc_type === "epub") && !(await getDocBytes(row.hash))) {
+        const bytes = await client.getDocBytes(row.hash);
+        if (!bytes?.byteLength || !bytesMatchDocHash(row.hash, bytes)) {
+          throw new Error(`The source file for “${row.name}” is not available on the hub yet.`);
+        }
+        await putDocBytes(row.hash, bytes);
       }
-      await putDocBytes(row.hash, bytes);
+      await pullInkPagesOverLocal(client, "annotate", row.id, board.inkPages?.pageIds);
+      const boards = row.footnote_boards as Record<string, { board: BoardBlob }> | undefined;
+      for (const [wbId, scratch] of Object.entries(boards ?? {})) {
+        await pullInkPagesOverLocal(client, "annotate", footnoteInkHubKey(row.id, wbId), scratch.board.inkPages?.pageIds);
+      }
+      if (await getAnnotateDoc(row.id) || listAnnotateTrash().some((entry) => entry.id === row.id)) continue;
+      await applyHubAnnotate(row, { emitReload: false });
+      imported++;
+    } catch (cause) {
+      failures.push(`“${row.name}”: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
-    await pullInkPagesOverLocal(client, "annotate", row.id, board.inkPages?.pageIds);
-    const boards = row.footnote_boards as Record<string, { board: BoardBlob }> | undefined;
-    for (const [wbId, scratch] of Object.entries(boards ?? {})) {
-      await pullInkPagesOverLocal(client, "annotate", footnoteInkHubKey(row.id, wbId), scratch.board.inkPages?.pageIds);
-    }
-    if (await getAnnotateDoc(row.id) || listAnnotateTrash().some((entry) => entry.id === row.id)) continue;
-    await applyHubAnnotate(row, { emitReload: false });
-    imported++;
+  }
+  if (failures.length) {
+    // An incomplete older upload must not hide unrelated, complete pads.
+    // Keep reporting the failures; never publish a pad without its ink/source.
+    const added = imported ? `Added ${imported} ${imported === 1 ? "pad" : "pads"}. ` : "";
+    throw new Error(`${added}Could not download ${failures.length} ${failures.length === 1 ? "pad" : "pads"}: ${failures.join("; ")}`);
   }
   return imported;
 }

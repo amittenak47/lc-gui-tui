@@ -77,12 +77,12 @@ export function Timeline({ program, onFrame, initialFrame = 0, playbackMs = 1200
   return <section className={`lc-timeline${playing ? " is-playing" : ""}`} aria-label={`Animation: ${program.title || program.id}`}>
     <div className="lc-timeline-meta">
       <span className="lc-timeline-kind">{program.viz === "dptable" ? "DP table" : program.viz === "unionfind" ? "Union find" : program.viz}</span>
-      <span className="lc-timeline-count">{total > 1 ? `Step ${frame + 1} of ${total}` : "Diagram"}</span>
+      <span className="lc-timeline-count" aria-label={total > 1 ? `Step ${frame + 1} of ${total}` : "Diagram"}>{total > 1 ? `${frame + 1} · ${total}` : "Diagram"}</span>
     </div>
     {total > 1 && <>
       <div className="lc-timeline-controls" role="group" aria-label="Playback controls">
         <button type="button" aria-label="Previous step" title="Previous step" onClick={() => step(frame - 1)} disabled={frame === 0}><TransportIcon kind="prev" /></button>
-        <button type="button" className="lc-timeline-play" aria-label={action} onClick={toggle}><TransportIcon kind={playing ? "pause" : atEnd ? "replay" : "play"} /><span>{action}</span></button>
+        <button type="button" className="lc-timeline-play" aria-label={action} title={action} onClick={toggle}><TransportIcon kind={playing ? "pause" : atEnd ? "replay" : "play"} /></button>
         <button type="button" aria-label="Next step" title="Next step" onClick={() => step(frame + 1)} disabled={atEnd}><TransportIcon kind="next" /></button>
         <select className="lc-timeline-speed" aria-label="Playback speed" value={speed} onChange={(event) => setSpeed(Number(event.target.value))}>
           {[0.5, 1, 1.5, 2].map((value) => <option key={value} value={value}>{value}×</option>)}

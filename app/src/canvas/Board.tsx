@@ -1335,6 +1335,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   },
   ref,
 ) {
+  const instanceId = useRef({}).current;
   const splitPausedRef = useRef(false);
   splitPausedRef.current = splitPaused && !preparing;
   const splitFitRef = useRef(false);
@@ -8697,6 +8698,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   useImperativeHandle(
     ref,
     (): BoardHandle => ({
+      instanceId,
       getElements: elements,
       getViewportBounds: () => {
         const view = getViewport();

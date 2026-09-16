@@ -1138,7 +1138,8 @@ export function Workspace({
         if (!id) return;
         const kind = notebookId ? "whiteboard" : "annotate";
         await waitForPadPushes(kind, id);
-        if (boardRef.current !== board || (notebookId ? whiteboardNotebookIdRef.current : annotateDocIdRef.current) !== id) {
+        // A rerender refreshes the handle without replacing the mounted board.
+        if (boardRef.current?.instanceId !== board.instanceId || (notebookId ? whiteboardNotebookIdRef.current : annotateDocIdRef.current) !== id) {
           throw new Error("The open pad changed. Sync the current pad again.");
         }
         await flushDirtyInk(board, notebookId ? whiteboardDocKey(id) : annotateDocKey(id), 0, true);
@@ -4373,7 +4374,7 @@ export function Workspace({
       if (whiteboardNotebookIdRef.current !== detail.id) return;
       const notebook = await getWhiteboardNotebook(detail.id);
       if (!notebook) return;
-      if (boardRef.current !== board || whiteboardNotebookIdRef.current !== detail.id) return;
+      if (boardRef.current?.instanceId !== board.instanceId || whiteboardNotebookIdRef.current !== detail.id) return;
       if (beforeReload !== syncWorkingRevisionRef.current()) throw new Error("The page changed during reload. Sync again.");
       padHubApplyRef.current = true;
       boardSaveSuspendedRef.current = true;
@@ -4423,7 +4424,7 @@ export function Workspace({
     if (annotateDocIdRef.current !== detail.id) return;
     const doc = await getAnnotateDoc(detail.id);
     if (!doc) return;
-    if (boardRef.current !== board || annotateDocIdRef.current !== detail.id) return;
+    if (boardRef.current?.instanceId !== board.instanceId || annotateDocIdRef.current !== detail.id) return;
     if (beforeReload !== syncWorkingRevisionRef.current()) throw new Error("The page changed during reload. Sync again.");
     padHubApplyRef.current = true;
     boardSaveSuspendedRef.current = true;
@@ -5734,6 +5735,7 @@ export function Workspace({
           ...(offset === 0
             ? {
                 processEvents: placeholder.processEvents,
+                ...(placeholder.pendingAck?.flags?.length ? { flags: placeholder.pendingAck.flags } : {}),
                 ...(placeholder.reasoning ? { reasoning: placeholder.reasoning } : {}),
               }
             : {}),

@@ -92,6 +92,8 @@ export interface ScreenRect {
 }
 
 export interface BoardHandle {
+  /** Stable for this mounted Board; imperative handles can change on rerender. */
+  readonly instanceId: object;
   /** Live scene elements, including the coach's — callers filter. */
   getElements(): SceneElementLike[];
   /** Visible scene rectangle, for placing a new drawing on a pad. */

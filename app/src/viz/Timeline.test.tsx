@@ -66,7 +66,8 @@ describe("Timeline", () => {
     const replacement = { ...program, title: "A different walk" };
     await act(async () => root.render(<StrictMode><Timeline program={replacement} onFrame={onFrame} initialFrame={1} /></StrictMode>));
     expect(onFrame).toHaveBeenLastCalledWith(1);
-    expect(host.textContent).toContain("Step 2 of 3");
+    expect(host.querySelector('.lc-timeline-count')?.textContent).toBe("2 · 3");
+    expect(host.querySelector('[aria-label="Step 2 of 3"]')).toBeTruthy();
   });
   it("cancels pending playback on unmount", async () => {
     await click("Play");

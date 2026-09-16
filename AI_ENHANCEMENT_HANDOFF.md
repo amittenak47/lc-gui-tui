@@ -1,5 +1,33 @@
 # Shapes and visualization handoff
 
+## Latest continuation — September 16, 2026
+
+Resume from `docs/agent-ui-sync-sep16-handoff.md` (local/gitignored).
+User requested wrapping up with about 20% usage remaining. Added requested
+chat header/word reveal, bubble and drawing animations, compact playback UI.
+Fixed live array cell/pointer schema reliability and discovery stopping at
+an incomplete hub pad. Focused tests and actual browser motion checks pass;
+real reasoning-enabled document Draw now returns [1,2,3] with i=0,1,2.
+Latest APK installed successfully over wireless ADB; app opens with existing
+tabs/data preserved. Full cross-device round-trip acceptance remains pending.
+User requested stopping at 8% usage remaining; detailed results are in the local handoff.
+Changes remain uncommitted on `ai-enhancement`. Phase 3 stays deferred.
+
+## Latest handoff — paused September 15, 2026
+
+User requested pausing tests at 5% usage remaining. Resume from
+`docs/live-agent-sync-handoff.md` (local/gitignored), which supersedes the
+continuation notes below. Main is pushed at `1791ca74`; workspace is on
+`ai-enhancement`. Only `examples/live_router.rs` has new uncommitted source
+changes: optional isolated data storage and loopback binding for live review.
+
+Live Dirk Ask rendered math and emitted reasoning events, but reasoning-enabled
+Draw exhausted retries on empty frames. A reasoning-disabled diagnostic retried
+successfully with a three-frame array. Captured requests/responses are preserved;
+no production drawing fix yet. Actual tablet CDP works when the app is foreground,
+but physical desktop/tablet sync acceptance has not been performed. Test helper
+processes were stopped; user's model server/tablet connection were preserved.
+
 ## Current continuation — September 15, 2026
 
 User confirmed Markdown scrolling and Agent Panel anchoring are fixed. Skip

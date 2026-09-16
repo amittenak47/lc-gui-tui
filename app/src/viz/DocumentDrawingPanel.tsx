@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatedDisclosure } from "../components/AnimatedDisclosure";
 import { convertToExcalidrawElements } from "../canvas/convertSkeletons";
 import { getCommonBounds } from "../canvas/boardScene";
 import { paintSceneToExport } from "../canvas/paintScene";
@@ -8,11 +10,21 @@ import { renderViz } from "./render";
 import { Timeline } from "./Timeline";
 
 /** A document's chat drawings stay in a bounded viewer over the page. */
-export function DocumentDrawingPanel({ messages, onHide, onFrame }: {
+interface DocumentDrawingPanelProps {
   messages: AgentChatMessage[];
   onHide: (messageId: string, expanded: boolean) => void;
   onFrame: (programId: string, frame: number) => void;
-}) {
+}
+
+export function DocumentDrawingPanel(props: DocumentDrawingPanelProps) {
+  return <AnimatePresence>
+    {props.messages.some(message => isDrawingVisible(message.drawing)) &&
+      <DrawingPanelContent key="drawing" {...props} />}
+  </AnimatePresence>;
+}
+
+function DrawingPanelContent({ messages, onHide, onFrame }: DocumentDrawingPanelProps) {
+  const reduced = useReducedMotion();
   const visible = messages.filter((message) => isDrawingVisible(message.drawing));
   const [selected, setSelected] = useState<string | null>(null);
   const [compact, setCompact] = useState(false);
@@ -49,14 +61,18 @@ export function DocumentDrawingPanel({ messages, onHide, onFrame }: {
     return () => resize.disconnect();
   }, [scene, compact]);
   if (!drawing || !message) return null;
-  return <section className="lc-document-drawing-panel" aria-label="Drawing on this document">
+  return <motion.section className="lc-document-drawing-panel" aria-label="Drawing on this document"
+    initial={reduced ? false : { opacity: 0, scale: 0.45 }}
+    animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: reduced ? 1 : 0.45 }}
+    style={{ originX: 1, originY: 0 }}
+    transition={{ duration: reduced ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}>
     <header>
       <button type="button" className="lc-drawing-fold" aria-expanded={!compact}
         onClick={() => setCompact((value) => !value)}>{compact ? "▸" : "▾"} Drawing</button>
       <button type="button" className="lc-drawing-hide" aria-label="Hide drawing"
         onClick={() => onHide(message.id, false)}>×</button>
     </header>
-    {!compact && <>
+    <AnimatedDisclosure open={!compact}>
       {visible.length > 1 ? <select aria-label="Visible drawing" value={message.id}
         onChange={(event) => setSelected(event.target.value)}>
         {visible.map((entry) => <option key={entry.id} value={entry.id}>
@@ -65,6 +81,6 @@ export function DocumentDrawingPanel({ messages, onHide, onFrame }: {
       <canvas ref={canvas} role="img" aria-label={drawing.program.title || "Agent drawing"} />
       <Timeline key={drawing.program.id} program={drawing.program} initialFrame={drawing.frameIndex ?? 0}
         onFrame={(frame) => onFrame(drawing.program.id, frame)} />
-    </>}
-  </section>;
+    </AnimatedDisclosure>
+  </motion.section>;
 }

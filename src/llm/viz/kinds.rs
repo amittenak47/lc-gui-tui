@@ -131,12 +131,17 @@ pub(super) fn frame_schema() -> serde_json::Value {
                     "THE CONTENTS at this step, in full, not a diff. Required for array, grid, \
                      stack, queue, linkedlist, tree, heap, graph, trie, unionfind, dplist, \
                      dptable, segtree, calltree, composite, and bits — a frame with an empty \
-                     `cells` draws an empty box. array: [2,7,11,15]. grid: [[1,0],[0,1]]. \
+                     `cells` draws an empty box. array: [2,7,11,15] (primitive values, NOT \
+                     objects such as {ch,end} or {value}). grid: [[1,0],[0,1]]. \
                      tree/heap: level-order with nulls, [5,3,8,null,1]. graph: node labels. \
                      trie: nodes {ch, end}. unionfind: parent[]. dplist: dp[]. dptable: rows of \
                      the table. segtree: {lo,hi,val}. calltree: {fn, args}. composite: nested \
                      panels {viz, cells, …}. bits: 0/1 cells.",
-                "items": {}
+                "items": {"anyOf": [
+                    {"type": "number"}, {"type": "string"}, {"type": "boolean"},
+                    {"type": "null"}, {"type": "array", "items": {}},
+                    {"type": "object", "additionalProperties": true}
+                ]}
             },
             "pointers": {
                 "type": "object",
@@ -144,6 +149,9 @@ pub(super) fn frame_schema() -> serde_json::Value {
                     "Named INDICES into cells — positions, never values, never map contents. \
                      e.g. {\"i\": 0, \"j\": 3}. If you want to show what a variable holds, put it \
                      in `cells`, `entries`, or `note`.",
+                // Advertise common loop indices explicitly while continuing
+                // to accept arbitrary named pointers.
+                "properties": {"i": {"type": "integer"}, "j": {"type": "integer"}},
                 "additionalProperties": {"type": "integer"}
             },
             "highlight": {
@@ -164,6 +172,8 @@ pub(super) fn frame_schema() -> serde_json::Value {
             },
             "note": {"type": "string", "description": "One line on why this step happens."}
         },
-        "required": ["label"]
+        // Explicit empty arrays are allowed (an empty stack is a valid step),
+        // but omitting the state altogether silently produced blank traces.
+        "required": ["label", "cells", "entries"]
     })
 }
