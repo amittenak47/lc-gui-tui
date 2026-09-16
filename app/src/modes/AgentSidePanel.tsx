@@ -12,13 +12,15 @@ import { createPortal } from "react-dom";
 
 import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/types";
 import { HoldButton } from "../components/HoldButton";
+import { AnimatedDisclosure } from "../components/AnimatedDisclosure";
 import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
 import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
 import { ProcessBlock, reasoningBodyForTurn } from "./ProcessBlock";
 import { ReasoningBlock } from "./ReasoningBlock";
-import { AgentRichText } from "./AgentRichText";
+import { AgentRichText, useWordReveal } from "./AgentRichText";
+import { AgentMessageBubble } from "./AgentMessageBubble";
 import {
   cycleAgentReasoning,
   loadAgentReasoningLevel,
@@ -690,6 +692,10 @@ export function AgentSidePanel({
   const threadMotionRef = useRef<ThreadMotion>("idle");
 
   const { threadReplies, rootMessages } = useMemo(() => groupThreads(messages), [messages]);
+  const seenMessages = useRef(new Set(messages.map(message => message.id)));
+  useEffect(() => {
+    for (const message of messages) seenMessages.current.add(message.id);
+  }, [messages]);
 
   const visibleMessages = useMemo(
     () => visibleThreadMessages(messages, openThreadId, { threadReplies, rootMessages }),
@@ -1515,8 +1521,9 @@ export function AgentSidePanel({
             const replyStub = message.replyTo;
             const replyCount = threadReplies.get(message.id)?.length ?? 0;
             return (
-            <div
+            <AgentMessageBubble
               key={message.id}
+              enter={!seenMessages.current.has(message.id) && (message.role === "user" || message.role === "assistant")}
               data-coach-message={message.id}
               className={`lc-agent-turn lc-agent-turn-selectable lc-agent-turn-${turnKind(message.role)}${
                 messageMenu?.messageId === message.id
@@ -1551,6 +1558,7 @@ export function AgentSidePanel({
                 event.stopPropagation();
               }}
             >
+              {message.role === "assistant" && <MessageFlags message={message} header />}
               <div
                 className={
                   message.role === "assistant" && message.review?.provider
@@ -1652,24 +1660,6 @@ export function AgentSidePanel({
                   </span>
                 </button>
               )}
-              {message.flags && message.flags.length > 0 && (
-                <div className="lc-agent-turn-footnotes">
-                  <span className="lc-agent-turn-flag-rule" aria-hidden />
-                  <div className="lc-agent-turn-flags" aria-label="Send flags">
-                    {message.flags.map((flag) => (
-                      <span key={flag} className="lc-agent-turn-flag">
-                        {flag}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {message.pending && !message.processEvents?.length && (
-                <div className="lc-agent-turn-body">
-                  <span className="lc-agent-spinner" aria-hidden />
-                  {pendingAckLine(message)}
-                </div>
-              )}
               {message.attachments && message.attachments.length > 0 && (
                 <div className="lc-agent-attachments" aria-label="Attached layouts">
                   {message.attachments.map((att) => (
@@ -1731,7 +1721,8 @@ export function AgentSidePanel({
                   }
                 />
               )}
-            </div>
+              {message.role !== "assistant" && <MessageFlags message={message} />}
+            </AgentMessageBubble>
             );
           })}
           {children}
@@ -2254,6 +2245,20 @@ export function pendingAckLine(message: AgentChatMessage): string {
   return inputPart;
 }
 
+function MessageFlags({ message, header = false }: { message: AgentChatMessage; header?: boolean }) {
+  const pending = Boolean(message.pending);
+  const flags = pending ? message.pendingAck?.flags ?? message.flags : message.flags;
+  const text = flags?.join(" · ") || (pending ? "Working…" : "");
+  const shown = useWordReveal(text, pending, pending);
+  if (!text) return null;
+  return <div className={`lc-agent-turn-footnotes${header ? " lc-agent-turn-header-flags" : ""}`} role={pending ? "status" : undefined}>
+    <span className="lc-agent-turn-flag-rule" aria-hidden />
+    <div className="lc-agent-turn-flags" aria-label={pending ? "Agent request" : "Send flags"} aria-busy={shown !== text}>
+      <span className="lc-agent-turn-flag lc-agent-turn-flag-stream">{shown}</span>
+    </div>
+  </div>;
+}
+
 function DrawingSection({
   drawing,
   onToggle,
@@ -2274,7 +2279,7 @@ function DrawingSection({
         aria-expanded={expanded}
         onClick={() => onToggle(!drawing.expanded || Boolean(drawing.redacted))}
       >
-        <span aria-hidden>{expanded ? "▾" : "▸"}</span>
+        <span className="lc-agent-drawing-chevron" aria-hidden>▸</span>
         <span className="lc-agent-drawing-label">
           {drawing.redacted && !drawing.expanded ? "[redacted] " : ""}
           Drawing
@@ -2282,7 +2287,7 @@ function DrawingSection({
         <span className="lc-muted lc-agent-drawing-title">{title}</span>
         <span className="lc-agent-drawing-visibility">{expanded ? "On page" : "Hidden"}</span>
       </button>
-      {expanded && (
+      <AnimatedDisclosure open={expanded}>
         <div className="lc-agent-drawing-body">
           <Timeline
             program={drawing.program}
@@ -2290,7 +2295,7 @@ function DrawingSection({
             onFrame={onFrame}
           />
         </div>
-      )}
+      </AnimatedDisclosure>
     </div>
   );
 }

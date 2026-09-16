@@ -38,10 +38,13 @@ function Review() {
   const [height, setHeight] = useState(1400);
   const [annotating, setAnnotating] = useState(false);
   const [mounted, setMounted] = useState(true);
+  const [theme, setTheme] = useState("graphite");
   useEffect(() => {
     Object.assign(window, {
       reviewClose: () => { Object.assign(window, { reviewReady: false }); setMounted(false); },
       reviewOpen: () => setMounted(true),
+      reviewCurrentBoard: () => ref.current,
+      reviewTheme: setTheme,
     });
   }, []);
   useEffect(() => {
@@ -63,7 +66,7 @@ function Review() {
     : format === "web" ? <WebDocument html={chapter} url="https://example.com" onMeasure={setHeight} />
     : format === "markdown" || format === "long-markdown" ? <AnnotateDocument source={format === "long-markdown" ? longMarkdown : '# Eraser layer check\n\nDocument content beneath the cursor.'} onMeasure={setHeight} selectable={!annotating} />
     : <><h2>Divisible subsequences</h2><p>Write your explanation below.</p></>;
-  return mounted ? <Board ref={ref} splitPaused={paused} filmScope="text-box-review" themeId="graphite" mobileRegion={ANNOTATE_REGION} focusRegion={ANNOTATE_REGION}
+  return mounted ? <Board ref={ref} splitPaused={paused} filmScope="text-box-review" themeId={theme} mobileRegion={ANNOTATE_REGION} focusRegion={ANNOTATE_REGION}
     onAnnotateCodeChange={setAnnotating}
     pdfDocument={format === "pdf"}
     transparentCanvas docPaper selectableContent pageContentHeight={format !== "sample" ? annotatePageHeight(height) : 1400}

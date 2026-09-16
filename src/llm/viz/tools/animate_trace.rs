@@ -13,7 +13,10 @@ impl VizTool for AnimateTrace {
             self.name(),
             "Draw one structure stepped through time. Emit the full state in every frame; the \
              student scrubs the timeline. Prefer many short frames (digit-by-digit, index-by-index) \
-             over a few coarse ones. Use this instead of drawing the same array several times.",
+             over a few coarse ones. Use this instead of drawing the same array several times. \
+             Every frame includes cells and entries (use [] for an unused field). \
+             For an array [1,2], a frame is {\"label\":\"visit first\",\"cells\":[1,2],\"entries\":[],\"pointers\":{\"i\":0}}. \
+             Repeat the full cells in the next frame even when only the pointer changes.",
             serde_json::json!({
                 "type": "object",
                 "properties": {

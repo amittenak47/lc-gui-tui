@@ -3,6 +3,7 @@
 //!
 //! ```bash
 //! cargo run --example live_router -- 7979
+//! cargo run --no-default-features --example live_router -- 7979 .tmp-live-agent/backend
 //! ```
 //!
 //! Not a product surface: the desktop window and the APK dispatch in-process
@@ -25,6 +26,12 @@ async fn main() -> Result<()> {
     // and clearing it here means testing the config route deletes the user's
     // pad-hub pairing code.
     let mut cfg = Config::load()?;
+    // Keep provider settings, but put review pads/indexes in a separate directory.
+    // Choose it only after reading config; never copy credentials into artifacts.
+    if let Some(directory) = std::env::args().nth(2) {
+        std::fs::create_dir_all(&directory)?;
+        whiteboard::config::set_config_dir(std::fs::canonicalize(directory)?);
+    }
     // LC_CFG_SET="coach.planner_enabled=true,coach.draw_review_enabled=false"
     if let Ok(overrides) = std::env::var("LC_CFG_SET") {
         for pair in overrides.split(',').map(str::trim).filter(|p| !p.is_empty()) {
@@ -44,5 +51,7 @@ async fn main() -> Result<()> {
     );
     eprintln!("listening on http://127.0.0.1:{port}");
     let state = serve::new_state(cfg);
-    serve::listen_lan(state, port).await
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    axum::serve(listener, serve::router(state)).await?;
+    Ok(())
 }

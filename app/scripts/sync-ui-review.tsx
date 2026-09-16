@@ -88,6 +88,17 @@ function AgentReview() {
   ]);
   const onFrame=(id:string,frame:number)=>setMessages(current=>current.map(m=>m.drawing?.program.id===id?{...m,drawing:{...m.drawing,frameIndex:frame}}:m));
   const onToggle=(id:string,expanded:boolean)=>setMessages(current=>current.map(m=>m.id===id&&m.drawing?{...m,drawing:{...m.drawing,expanded}}:m));
+  useEffect(() => {
+    Object.assign(window, {
+      reviewBeginAgentTurn: () => setMessages(current => [...current,
+        {id:"motion-user",role:"user",at:Date.now(),content:"Explain the sum using a short animated drawing.",flags:["Ask","Reasoning · high","Draw"]},
+        {id:"motion-agent",role:"assistant",at:Date.now(),content:"",pending:true,pendingAck:{flags:["Ask","Reasoning · high","Draw"],hasQuestion:true,boardAttached:false,photoCount:0}},
+      ]),
+      reviewCompleteAgentTurn: () => setMessages(current => current.map(message => message.id === "motion-agent"
+        ? {...message,pending:false,flags:message.pendingAck?.flags,content:"The **sum** is $1+2+3=6$.\n\nEach frame visits the next cell and adds its value to the running total."}
+        : message)),
+    });
+  }, []);
   return <div className={`lc-app lc-mobile ${open?"lc-app-agent-open":""}`} style={{zIndex:500}}>
     <header className="lc-header">⌂ Home</header>
     <main className="lc-main" style={{position:"relative",flex:1,background:"var(--bg)"}}>

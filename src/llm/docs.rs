@@ -397,19 +397,16 @@ fn run_tooled_ask(
                 }
             }
         }
-        messages.push(ChatMessage::assistant(if reply.content.trim().is_empty() {
-            format!(
-                "(called tools: {})",
-                reply
-                    .tool_calls
-                    .iter()
-                    .map(|c| c.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        } else {
-            reply.content.clone()
-        }));
+        // Keep the attempted arguments beside their results. A name alone
+        // leaves the next call unable to inspect or repair a rejected frame.
+        // Use the same text envelope as the fallback for non-native tool APIs.
+        let calls: Vec<_> = reply.tool_calls.iter().map(|call| {
+            serde_json::json!({"tool": call.name, "arguments": call.arguments})
+        }).collect();
+        messages.push(ChatMessage::assistant(format!(
+            "{}\n{}", reply.content,
+            serde_json::json!({"calls": calls}),
+        )));
         messages.push(ChatMessage::user(format!(
             "Tool results:\n{}\n\nContinue. Call another tool only if needed, otherwise answer.",
             results.join("\n")
@@ -897,5 +894,46 @@ mod tests {
         assert!(names.contains(&"query_document_vectors".into()));
         assert!(!names.iter().any(|n| n == "cite_test_case"));
         assert!(crate::llm::coach::ASK_VIZ_RULES.contains("cite_test_case"));
+    }
+
+    #[test]
+    fn rejected_drawing_keeps_arguments_for_repair() {
+        struct Repair(Cell<usize>);
+        impl LlmProvider for Repair {
+            fn label(&self) -> String { "repair".into() }
+            fn chat(&self, _: &str, _: &str) -> Result<String> { unreachable!() }
+            fn chat_ex(&self, req: &ChatRequest) -> Result<ChatReply> {
+                let turn = self.0.get();
+                self.0.set(turn + 1);
+                let mut arguments = serde_json::json!({
+                    "viz":"array", "id":"walk", "frames":[
+                        {"label":"first", "pointers":{"i":0}},
+                        {"label":"second", "pointers":{"i":1}}
+                    ]
+                });
+                if turn == 1 {
+                    let previous = &req.messages[req.messages.len() - 2].content;
+                    let envelope: serde_json::Value = serde_json::from_str(previous.trim()).unwrap();
+                    assert_eq!(envelope["calls"][0]["arguments"], arguments);
+                    assert!(req.messages.last().unwrap().content.contains("every frame"));
+                    for frame in arguments["frames"].as_array_mut().unwrap() {
+                        frame["cells"] = serde_json::json!([1, 2]);
+                        frame["entries"] = serde_json::json!([]);
+                    }
+                }
+                if turn < 2 {
+                    Ok(ChatReply { content:String::new(), reasoning:String::new(),
+                        tool_calls:vec![ToolCall {name:"animate_trace".into(), arguments}] })
+                } else {
+                    assert!(req.messages.last().unwrap().content.contains("queued a diagram"));
+                    Ok(ChatReply {content:"Here is the walk.".into(), reasoning:String::new(), tool_calls:vec![]})
+                }
+            }
+        }
+        let outcome = run_pad_ask(&Repair(Cell::new(0)), &Config::default(), "Tutor",
+            "Walk [1,2]".into(), vec![], &EventSink::none(), true, None).unwrap();
+        assert_eq!(outcome.programs.len(), 1);
+        assert_eq!(outcome.programs[0].frames[0].cells, vec![serde_json::json!(1), serde_json::json!(2)]);
+        assert_eq!(outcome.reply, "Here is the walk.");
     }
 }

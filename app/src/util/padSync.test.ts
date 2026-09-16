@@ -325,6 +325,27 @@ describe("padSync pull", () => {
     expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
   });
 
+  it("discovers complete pads after an incomplete upload and reports what was skipped", async () => {
+    setHostLoopback({ url: "http://fixture", token: "test" });
+    hubAutosyncState.on = false;
+    const client = fakeClient({
+      listWhiteboardPads: vi.fn(async () => [
+        { id: "broken", title: "Incomplete notebook", updated_at: 100, page_count: 1,
+          board: { ...emptyBoard, inkPages: { v: 1, pageIds: [0] } }, agent: [] },
+        { id: "complete", title: "Complete notebook", updated_at: 100, page_count: 1,
+          board: emptyBoard, agent: [{ id: "kept-chat" }] },
+      ]),
+      listAnnotatePads: vi.fn(async () => [{ id: "document", name: "Complete.md", hash: "md-complete",
+        doc_type: "markdown", source: "# Complete", updated_at: 100, board: emptyBoard, agent: [], footnotes: [] }]),
+      getInkPages: vi.fn(async () => []),
+    });
+    await expect(discoverHubPads(client)).rejects.toThrow(/Added 2 pads.*Incomplete notebook.*missing/);
+    expect(restoreWhiteboardNotebook).toHaveBeenCalledTimes(1);
+    expect(restoreWhiteboardNotebook).toHaveBeenCalledWith(expect.objectContaining({ id: "complete", agent: [{ id: "kept-chat" }] }));
+    expect(restoreAnnotateDoc).toHaveBeenCalledWith(expect.objectContaining({ id: "document" }));
+    expect(hubAutosyncState.on).toBe(false);
+  });
+
   it("does not delete snapshots or bytes when the server omitted a row", async () => {
     const client = fakeClient({
       listWhiteboardPads: vi.fn(async () => [
