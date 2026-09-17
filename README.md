@@ -12,9 +12,7 @@ shoulder.
 
 If you run into any bugs, [please let me know](https://github.com/amittenak47/lc-gui-tui/issues) so I can fix it ASAP. I only have this one Android device so I'm not sure what compatibility issues people may encounter.
 
-The app is free. Feel free to tip if you like it. Most of my repo is lazy documented with Cursor/Claude because I spent more time adding+finalizing features and fixing small bugs than actually using the app, so I will improve documentation with more of my own language in the near future.
-
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/amittenak47)
+Most of my repo is lazy documented with Cursor/Claude because I spent more time adding+finalizing features and fixing small bugs than actually using the app, so I will improve documentation with more of my own language in the near future.
 
 `5 problem sets` · `local or Groq` · `tablet or desktop` · `PolyForm Noncommercial`
 
