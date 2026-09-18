@@ -74,6 +74,8 @@ import {
   footnoteVisibleOnViewPages,
   localRectCoversHost,
   localRects,
+  pdfPageFromDocScope,
+  invalidateDocCoverGeometry,
   scaleOf,
   scopeRootAtPoint,
   textUnder,
@@ -95,7 +97,10 @@ import { isAndroidDevice } from "../util/androidDevice";
 import { fillPdfQuoteText } from "./pdfQuoteText";
 import {
   peekPdfIntersectingPages,
+  peekPdfPlacementPages,
+  subscribeDocPlacementRev,
   subscribePdfViewPages,
+  type DocPlacementRev,
 } from "./pdfFilm";
 import {
   hasUsableViewportBox,
@@ -185,6 +190,38 @@ function paintedSubMarksEqual(a: PaintedSubMark[], b: PaintedSubMark[]): boolean
     }
   }
   return true;
+}
+
+/** `"all"` or a page set. Empty film lists mean the whole document. */
+type PlacePages = "all" | ReadonlySet<number>;
+
+function footnoteOnPlacePages(
+  scope: string | null | undefined,
+  pages: PlacePages,
+): boolean {
+  if (pages === "all" || pages.size === 0) return true;
+  const n = pdfPageFromDocScope(scope);
+  if (n == null) return true;
+  return pages.has(n);
+}
+
+function placePagesFromFilm(scope: string | undefined): PlacePages {
+  if (!scope) return "all";
+  const pages = peekPdfPlacementPages(scope);
+  return pages.length === 0 ? "all" : new Set(pages);
+}
+
+function addedPlacePages(
+  prev: PlacePages,
+  next: PlacePages,
+): number[] | "all" {
+  if (next === "all") return prev === "all" ? [] : "all";
+  if (prev === "all") return [];
+  const added: number[] = [];
+  for (const n of next) {
+    if (!prev.has(n)) added.push(n);
+  }
+  return added;
 }
 
 export interface DocSelectionResult {
@@ -311,13 +348,15 @@ function rectForAnchor(
    * anything showing the same page narrower has to bring the box with it.
    */
   markScale = 1,
+  bodyBox?: DOMRect,
+  bodyScale?: number,
 ): LocalRect | null {
   if (isRegionAnchor(anchor)) {
-    const scale = scaleOf(body) || 1;
-    const bodyBox = body.getBoundingClientRect();
+    const scale = bodyScale || scaleOf(body) || 1;
+    const origin = bodyBox ?? body.getBoundingClientRect();
     const rootBox = root.getBoundingClientRect();
-    const offsetX = (rootBox.left - bodyBox.left) / scale;
-    const offsetY = (rootBox.top - bodyBox.top) / scale;
+    const offsetX = (rootBox.left - origin.left) / scale;
+    const offsetY = (rootBox.top - origin.top) / scale;
     return {
       left: anchor.x * markScale + offsetX,
       top: anchor.y * markScale + offsetY,
@@ -444,7 +483,7 @@ export function DocSelectionLayer({
   /** The edge auto-scroll's frame, null when the finger is not at an edge. */
   const edgeFrameRef = useRef<number | null>(null);
   /** Latest placement pass, so the window observer can re-run it. */
-  const placeRef = useRef<(() => void) | null>(null);
+  const placeRef = useRef<((pages?: PlacePages) => void) | null>(null);
 
   /**
    * Live hold→marquee gesture.
@@ -1701,13 +1740,14 @@ export function DocSelectionLayer({
    * observer rather than a prop the renderers report through: the layer should
    * not have to know which of them is slow, and the next one will be too.
    *
-   * The window comes for free from the renderer. Resolving a mark walks its own
-   * scope's text and nothing else, and a page the renderer has not painted has
-   * no text — so a mark a thousand pages away costs a failed lookup rather than
-   * a walk of the book, and lands the moment its page is painted and the
-   * mutation observer above notices. Keeping a second window here, on a
-   * different rule from the renderer's, is what previously left a mark on the
-   * next page unplaced while its text sat there ready.
+   * The window comes from the renderer (`intersecting ∪ rest`). Resolving a
+   * mark walks its own scope's text and nothing else, and a page the renderer
+   * has not painted has no text — so a mark a thousand pages away costs a
+   * failed lookup rather than a walk of the book, and lands the moment that
+   * page enters the paint window or its text revision publishes. Keeping a
+   * second window here, on a different rule from the renderer's, is what
+   * previously left a mark on the next page unplaced while its text sat there
+   * ready.
    */
   useLayoutEffect(() => {
     const body = bodyRef.current;
@@ -1718,18 +1758,17 @@ export function DocSelectionLayer({
     }
 
     const numbers = numberFootnotes(footnotes);
-    const place = () => {
+    const place = (pages: PlacePages = "all") => {
       const roots = scopeRootsIn(body);
       // Numbering follows the document, so the sort has to know page order.
       orderScopes(roots.map((root) => root.dataset.docScope ?? ""));
-      const placed: Array<{
-        footnote: DocFootnote;
-        at: LocalRect;
-        bands: LocalRect[];
-        useBands: boolean;
-        number: number;
-      }> = [];
-      for (const footnote of footnotes) {
+      const bodyBox = body.getBoundingClientRect();
+      const bodyScale = scaleOf(body) || 1;
+      const placed: RibbonPlacement[] = [];
+      const selected = footnotes.filter((footnote) =>
+        footnoteOnPlacePages(footnote.anchor.scope, pages),
+      );
+      for (const footnote of selected) {
         const scope = footnote.anchor.scope;
         const root = scopeRootIn(body, scope) as HTMLElement | null;
         if (!root) continue;
@@ -1771,7 +1810,14 @@ export function DocSelectionLayer({
             : usableStored.length > 0
               ? usableStored
               : (() => {
-                  const at = rectForAnchor(body, root, footnote.anchor, markScale);
+                  const at = rectForAnchor(
+                    body,
+                    root,
+                    footnote.anchor,
+                    markScale,
+                    bodyBox,
+                    bodyScale,
+                  );
                   return at && !localRectCoversHost(body, at) ? [at] : [];
                 })();
         if (bands.length === 0) continue;
@@ -1787,9 +1833,29 @@ export function DocSelectionLayer({
       }
       // Skip React commits when geometry is unchanged — mid-scroll place() used
       // to re-render the overlay every time even when nothing moved.
-      setRibbons((prev) => (ribbonsPlacementEqual(prev, placed) ? prev : placed));
-      const subPaint = collectPaintedSubMarks(body, footnotes);
-      setPaintedSubMarks((prev) => (paintedSubMarksEqual(prev, subPaint) ? prev : subPaint));
+      setRibbons((prev) => {
+        const next =
+          pages === "all"
+            ? placed
+            : [
+                ...prev.filter(
+                  (entry) => !footnoteOnPlacePages(entry.footnote.anchor.scope, pages),
+                ),
+                ...placed,
+              ];
+        return ribbonsPlacementEqual(prev, next) ? prev : next;
+      });
+      const subPaint = collectPaintedSubMarks(body, selected);
+      setPaintedSubMarks((prev) => {
+        const next =
+          pages === "all"
+            ? subPaint
+            : [
+                ...prev.filter((entry) => !footnoteOnPlacePages(entry.scope, pages)),
+                ...subPaint,
+              ];
+        return paintedSubMarksEqual(prev, next) ? prev : next;
+      });
       const overlayNode = overlayRef.current;
       if (overlayNode) {
         overlayNode.style.left = "0px";
@@ -1802,7 +1868,7 @@ export function DocSelectionLayer({
     };
     placeRef.current = place;
     // One-shot on deps: ribbons still ride marksSlot transform during pan.
-    place();
+    place(placePagesFromFilm(cameraScope));
 
     /*
      * Nested horizontal scroll moves the words under a fixed camera. Ribbons
@@ -1810,14 +1876,36 @@ export function DocSelectionLayer({
      * stay where the quote was when the mark was made. Capture on the body so
      * late-mounted PDF/EPUB text layers still fire.
      */
-    let placementDeferred = false;
+    let placementNeeded = false;
+    let pendingAll = false;
+    const pendingPages = new Set<number>();
+    const markDirty = (pages: PlacePages = "all") => {
+      placementNeeded = true;
+      if (pages === "all") pendingAll = true;
+      else for (const n of pages) pendingPages.add(n);
+    };
+    const flushPlace = () => {
+      if (!placementNeeded) return;
+      const pages: PlacePages = pendingAll ? "all" : new Set(pendingPages);
+      placementNeeded = false;
+      pendingAll = false;
+      pendingPages.clear();
+      place(pages);
+    };
+    const runOrDefer = (pages: PlacePages = "all") => {
+      if (isDocCameraLive(cameraScope)) {
+        markDirty(pages);
+        return;
+      }
+      place(pages);
+    };
     let scrollFrame: number | null = null;
     const onHostScroll = (event: Event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
       if (!horizontalScrollHost(target)) return;
       if (isDocCameraLive(cameraScope)) {
-        placementDeferred = true;
+        markDirty("all");
         return;
       }
       // Coalesce — scroll fires every frame and synchronous place() was
@@ -1825,19 +1913,19 @@ export function DocSelectionLayer({
       if (scrollFrame != null) return;
       scrollFrame = requestAnimationFrame(() => {
         scrollFrame = null;
-        place();
+        place("all");
       });
     };
     body.addEventListener("scroll", onHostScroll, { capture: true, passive: true });
     const onViewResize = () => {
       if (isDocCameraLive(cameraScope)) {
-        placementDeferred = true;
+        markDirty("all");
         return;
       }
       if (scrollFrame != null) return;
       scrollFrame = requestAnimationFrame(() => {
         scrollFrame = null;
-        place();
+        place("all");
       });
     };
     window.addEventListener("resize", onViewResize);
@@ -1856,6 +1944,9 @@ export function DocSelectionLayer({
      * Critical: disconnect the observer while the camera is live. Deferring
      * `place()` alone still left MutationObserver + rAF firing every text-layer
      * paint during a flick (~30fps chop). Pause delivery; reconnect on settle.
+     * Camera-live itself is not dirty — ribbons ride the transform. Text that
+     * lands while disconnected arrives as a placement revision from the
+     * renderer, not as a missed mutation.
      */
     const watchMutations = enabled || highlighting || placeExisting;
     let frame: number | null = null;
@@ -1871,17 +1962,18 @@ export function DocSelectionLayer({
     let observing = false;
     const observer = new MutationObserver(() => {
       if (isDocCameraLive(cameraScope)) {
-        placementDeferred = true;
+        // Disconnected during live; this path is a belt if delivery still runs.
+        markDirty(placePagesFromFilm(cameraScope));
         return;
       }
       if (frame != null) return;
       frame = requestAnimationFrame(() => {
         frame = null;
         if (isDocCameraLive(cameraScope)) {
-          placementDeferred = true;
+          markDirty(placePagesFromFilm(cameraScope));
           return;
         }
-        place();
+        place(placePagesFromFilm(cameraScope));
       });
     });
     const startObserver = () => {
@@ -1899,22 +1991,38 @@ export function DocSelectionLayer({
       }
     };
     if (!isDocCameraLive(cameraScope)) startObserver();
-    else placementDeferred = true;
+
+    let windowPages = placePagesFromFilm(cameraScope);
+    const unsubView = cameraScope
+      ? subscribePdfViewPages(cameraScope, () => {
+          const next = placePagesFromFilm(cameraScope);
+          const added = addedPlacePages(windowPages, next);
+          windowPages = next;
+          if (added === "all") runOrDefer("all");
+          else if (added.length > 0) runOrDefer(new Set(added));
+        })
+      : () => {};
+
+    const unsubRev = cameraScope
+      ? subscribeDocPlacementRev(cameraScope, (rev: DocPlacementRev) => {
+          if (rev === "all") invalidateDocCoverGeometry();
+          runOrDefer(rev === "all" ? "all" : new Set(rev));
+        })
+      : () => {};
 
     const unsubCamera = subscribeDocCameraLive((live) => {
       if (live) {
-        placementDeferred = true;
         stopObserver();
         return;
       }
       startObserver();
-      if (!placementDeferred) return;
-      placementDeferred = false;
-      place();
+      flushPlace();
     }, cameraScope);
     return () => {
       stopObserver();
       unsubCamera();
+      unsubView();
+      unsubRev();
       unbindView();
       body.removeEventListener("scroll", onHostScroll, true);
       placeRef.current = null;

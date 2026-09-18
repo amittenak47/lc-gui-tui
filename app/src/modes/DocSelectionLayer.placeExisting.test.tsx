@@ -7,7 +7,8 @@ import { act } from "react";
 
 import { DocSelectionLayer } from "./DocSelectionLayer";
 import type { DocFootnote } from "../util/docFootnotes";
-import { publishPdfViewPages, resetPdfFilmScopes } from "./pdfFilm";
+import { publishDocPlacementRev, publishPdfViewPages, resetPdfFilmScopes } from "./pdfFilm";
+import { makeDocFlagHolds, resetDocCameraForTests } from "../canvas/docSelectionGesture";
 
 const MARK: DocFootnote = {
   id: "same",
@@ -39,7 +40,7 @@ const REGION_MARK: DocFootnote = {
  * measure. Whether the mark ever appears comes down to whether the layer is
  * still watching when the text layer lands.
  */
-function mountLayer(props: { placeExisting?: boolean }) {
+function mountLayer(props: { placeExisting?: boolean; paletteScope?: string }) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
@@ -48,6 +49,7 @@ function mountLayer(props: { placeExisting?: boolean }) {
       <DocSelectionLayer
         enabled={false}
         placeExisting={props.placeExisting}
+        paletteScope={props.paletteScope}
         footnotes={[MARK]}
       >
         <div data-doc-scope="p6" />
@@ -69,6 +71,7 @@ function landText(host: HTMLElement) {
 afterEach(() => {
   document.body.textContent = "";
   resetPdfFilmScopes();
+  resetDocCameraForTests();
   vi.restoreAllMocks();
 });
 
@@ -196,6 +199,53 @@ describe("marks made on a wider copy of the same page", () => {
       page.append(document.createElement("span"));
     });
     expect(host.querySelector(".lc-doc-footnote-band")).toBeNull();
+    act(() => {
+      publishPdfViewPages("tab-1", [6], []);
+    });
+    expect(host.querySelector(".lc-doc-footnote-band")).not.toBeNull();
+    act(() => root.unmount());
+  });
+
+  it("does not remasure on camera settle when the document did not change", () => {
+    publishPdfViewPages("tab-1", [6], []);
+    const { host, root, page } = mountScaled(347 / 642, "tab-1");
+    act(() => {
+      page.append(document.createElement("span"));
+    });
+    expect(host.querySelector(".lc-doc-footnote-band")).not.toBeNull();
+
+    let measured = 0;
+    const pageBox = page.getBoundingClientRect;
+    page.getBoundingClientRect = () => {
+      measured += 1;
+      return pageBox.call(page);
+    };
+    const holds = makeDocFlagHolds("tab-1");
+    act(() => holds.camera(true));
+    act(() => holds.camera(false));
+    expect(measured).toBe(0);
+    act(() => root.unmount());
+  });
+
+  it("places from a renderer revision after a flick, not from settle itself", () => {
+    publishPdfViewPages("tab-1", [1], []);
+    const holds = makeDocFlagHolds("tab-1");
+    act(() => holds.camera(true));
+    const { host, root, page } = mountScaled(347 / 642, "tab-1");
+    act(() => holds.camera(false));
+    expect(host.querySelector(".lc-doc-footnote-band")).toBeNull();
+
+    let measured = 0;
+    const pageBox = page.getBoundingClientRect;
+    page.getBoundingClientRect = () => {
+      measured += 1;
+      return pageBox.call(page);
+    };
+    act(() => {
+      publishDocPlacementRev("tab-1", [6]);
+    });
+    expect(measured).toBeGreaterThan(0);
+
     act(() => {
       publishPdfViewPages("tab-1", [6], []);
     });

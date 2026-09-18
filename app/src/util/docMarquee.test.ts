@@ -9,6 +9,7 @@ import {
   coversViewportBox,
   finalizeMarquee,
   hitRectsUnder,
+  invalidateDocCoverGeometry,
   isPageCoverRect,
   localRectCoversHost,
   padQuoteRect,
@@ -671,7 +672,9 @@ describe("a wash over one page of many", () => {
   function book() {
     const host = document.createElement("div");
     host.className = "lc-doc-selectable-body";
-    Object.defineProperty(host, "offsetWidth", { value: 800 });
+    Object.defineProperty(host, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(host, "offsetHeight", { value: 40000, configurable: true });
+    Object.defineProperty(host, "scrollHeight", { value: 40000, configurable: true });
     host.getBoundingClientRect = () => box(0, 0, 800, 40000);
     const page = document.createElement("div");
     page.dataset.docScope = "page-2";
@@ -702,7 +705,8 @@ describe("a wash over one page of many", () => {
     /*
      * The cover test runs several times per pointer sample, and its list ends
      * with every page in the document. Re-walking a textbook on each of those
-     * is the sweep stall — so the answer is kept until the body itself moves.
+     * is the sweep stall — so the answer is kept until layout changes, not
+     * until the camera translates the body.
      */
     const { host, page } = book();
     let measured = 0;
@@ -717,10 +721,31 @@ describe("a wash over one page of many", () => {
     coverReferenceBoxes(host);
     expect(measured).toBe(1);
 
-    // A pan, a zoom or a re-layout all move the body: measure again.
+    // A pan only translates the slot: local page boxes stay.
     host.getBoundingClientRect = () => box(0, -600, 800, 40000);
     coverReferenceBoxes(host);
+    expect(measured).toBe(1);
+  });
+
+  it("remasures after a layout change or an explicit invalidation", () => {
+    const { host, page } = book();
+    let measured = 0;
+    const pageBox = page.getBoundingClientRect;
+    page.getBoundingClientRect = () => {
+      measured += 1;
+      return pageBox.call(page);
+    };
+
+    coverReferenceBoxes(host);
+    expect(measured).toBe(1);
+
+    Object.defineProperty(host, "offsetWidth", { value: 640, configurable: true });
+    coverReferenceBoxes(host);
     expect(measured).toBe(2);
+
+    invalidateDocCoverGeometry();
+    coverReferenceBoxes(host);
+    expect(measured).toBe(3);
   });
 
   it("drops the wash and keeps the lines in one pass", () => {

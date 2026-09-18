@@ -69,6 +69,7 @@ import {
   peekPdfThumb,
   pdfThumbViewportScale,
   publishPdfLayoutBusy,
+  publishDocPlacementRev,
   rememberPdfThumb,
   openedPdfThumbHashes,
   PDF_FILM_THUMB_CSS,
@@ -1175,6 +1176,7 @@ export function PdfDocument({
           node.removeAttribute("data-painted");
         }
       }
+      if (pagesToDrop.length > 0) publishDocPlacementRev(filmScope, pagesToDrop);
     };
 
     type PdfPageProxy = Awaited<ReturnType<typeof doc.getPage>>;
@@ -1224,6 +1226,7 @@ export function PdfDocument({
         );
       }
       textFilledRef.current.add(n);
+      publishDocPlacementRev(filmScope, [n]);
       return true;
     };
 
@@ -1310,6 +1313,7 @@ export function PdfDocument({
           if (text) text.textContent = "";
         }
       }
+      if (!keepText) publishDocPlacementRev(filmScope, [n]);
       return true;
     };
 

@@ -41,7 +41,11 @@ import {
   resetPdfFilmScopes,
   peekPdfFilmCurrent,
   peekPdfIntersectingPages,
+  peekPdfPlacementPages,
+  pdfPlacementPages,
+  publishDocPlacementRev,
   publishPdfViewPages,
+  subscribeDocPlacementRev,
 } from "./pdfFilm";
 
 /** One mounted workspace. Nav state is keyed by tab, so tests need a tab. */
@@ -423,6 +427,7 @@ describe("nav state is per mounted document", () => {
     expect(peekPdfReadingFrames("annotate-2")).toEqual([{ pageId: 9, minY: 0, maxY: 5 }]);
     expect(peekPdfIntersectingPages("annotate-1")).toEqual([2]);
     expect(peekPdfIntersectingPages("annotate-2")).toEqual([]);
+    expect(peekPdfPlacementPages("annotate-1")).toEqual([2, 1, 3]);
     resetPdfFilmScopes();
   });
 
@@ -436,6 +441,44 @@ describe("nav state is per mounted document", () => {
     // Gone means back to the start, not inherited from the other document.
     expect(peekPdfFilmCurrent("annotate-1")).toBe(1);
     expect(peekPdfFilmCurrent("annotate-2")).toBe(4);
+    resetPdfFilmScopes();
+  });
+});
+
+describe("pdf placement pages", () => {
+  it("unions intersecting and rest, and is empty before the film publishes", () => {
+    expect(pdfPlacementPages([], [])).toEqual([]);
+    expect(pdfPlacementPages([2], [1, 3])).toEqual([2, 1, 3]);
+    expect(pdfPlacementPages([2, 3], [1, 2, 3, 4])).toEqual([2, 3, 1, 4]);
+  });
+});
+
+describe("doc placement revision", () => {
+  it("notifies subscribers of per-page fills and a full-stack relayout", () => {
+    resetPdfFilmScopes();
+    const seen: Array<number[] | "all"> = [];
+    const unsub = subscribeDocPlacementRev(SCOPE, (pages) => seen.push(pages));
+    publishDocPlacementRev(SCOPE, [6]);
+    publishDocPlacementRev(SCOPE, [6, 7]);
+    publishDocPlacementRev(SCOPE, []);
+    publishDocPlacementRev(SCOPE, "all");
+    expect(seen).toEqual([[6], [6, 7], "all"]);
+    unsub();
+    resetPdfFilmScopes();
+  });
+
+  it("publishes all when layout busy clears", () => {
+    vi.useFakeTimers();
+    resetPdfFilmScopes();
+    const seen: Array<number[] | "all"> = [];
+    const unsub = subscribeDocPlacementRev(SCOPE, (pages) => seen.push(pages));
+    publishPdfLayoutBusy(SCOPE, true);
+    expect(seen).toEqual([]);
+    publishPdfLayoutBusy(SCOPE, false);
+    vi.advanceTimersByTime(200);
+    expect(seen).toEqual(["all"]);
+    unsub();
+    vi.useRealTimers();
     resetPdfFilmScopes();
   });
 });

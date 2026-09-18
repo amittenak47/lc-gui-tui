@@ -181,6 +181,10 @@ export function trimThumbCache(
  * nothing about where you are in it — so the slot that is already unique per
  * mounted workspace is the one to key on.
  */
+
+/** Pages whose document geometry changed, or the whole stack. */
+export type DocPlacementRev = number[] | "all";
+
 type FilmNav = {
   current: number;
   currentListeners: Set<(page: number) => void>;
@@ -202,6 +206,8 @@ type FilmNav = {
   intersectingPages: number[];
   restPages: number[];
   viewPageListeners: Set<() => void>;
+  /** Text fill / spread — annotation placement remasures these pages. */
+  placementRevListeners: Set<(pages: DocPlacementRev) => void>;
   /** Strip cells the idle thumb pass should fill first. */
   thumbWanted: number[];
 };
@@ -228,6 +234,7 @@ function nav(scope: string): FilmNav {
       intersectingPages: [],
       restPages: [],
       viewPageListeners: new Set(),
+      placementRevListeners: new Set(),
       thumbWanted: [],
     };
     navByScope.set(scope, found);
@@ -395,9 +402,11 @@ export function subscribePdfPaintWake(scope: string, listener: () => void): () =
 export const PDF_LAYOUT_BUSY_MIN_MS = 160;
 const PDF_LAYOUT_BUSY_MAX_MS = 5000;
 
-function emitLayoutBusy(state: FilmNav, busy: boolean): void {
+function emitLayoutBusy(scope: string, state: FilmNav, busy: boolean): void {
+  const was = state.layoutBusy;
   state.layoutBusy = busy;
   for (const listener of state.layoutBusyListeners) listener(state.layoutBusy);
+  if (was && !busy) publishDocPlacementRev(scope, "all");
 }
 
 export function publishPdfLayoutBusy(scope: string, busy: boolean): void {
@@ -410,11 +419,11 @@ export function publishPdfLayoutBusy(scope: string, busy: boolean): void {
     if (state.layoutBusy) return;
     state.layoutBusySince =
       typeof performance !== "undefined" ? performance.now() : Date.now();
-    emitLayoutBusy(state, true);
+    emitLayoutBusy(scope, state, true);
     if (state.layoutBusyMaxTimer) clearTimeout(state.layoutBusyMaxTimer);
     state.layoutBusyMaxTimer = setTimeout(() => {
       state.layoutBusyMaxTimer = 0;
-      if (state.layoutBusy) emitLayoutBusy(state, false);
+      if (state.layoutBusy) emitLayoutBusy(scope, state, false);
     }, PDF_LAYOUT_BUSY_MAX_MS) as unknown as number;
     return;
   }
@@ -427,7 +436,7 @@ export function publishPdfLayoutBusy(scope: string, busy: boolean): void {
       clearTimeout(state.layoutBusyMaxTimer);
       state.layoutBusyMaxTimer = 0;
     }
-    if (state.layoutBusy) emitLayoutBusy(state, false);
+    if (state.layoutBusy) emitLayoutBusy(scope, state, false);
   };
   if (wait > 0) {
     state.layoutBusyClearTimer = setTimeout(finish, wait) as unknown as number;
@@ -499,6 +508,58 @@ export function resetPdfViewPages(scope: string): void {
   state.intersectingPages = [];
   state.restPages = [];
   for (const listener of state.viewPageListeners) listener();
+}
+
+/**
+ * Pages the paint pump actually fills: on-screen hole plus rest neighbours.
+ *
+ * Empty (markdown, or PDF before the film publishes) means "the whole
+ * document" to annotation placement — not an extra window with its own rule.
+ */
+export function pdfPlacementPages(
+  intersecting: readonly number[],
+  rest: readonly number[],
+): number[] {
+  if (intersecting.length === 0 && rest.length === 0) return [];
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const n of [...intersecting, ...rest]) {
+    if (n >= 1 && !seen.has(n)) {
+      seen.add(n);
+      out.push(n);
+    }
+  }
+  return out;
+}
+
+export function peekPdfPlacementPages(scope: string): readonly number[] {
+  const state = nav(scope);
+  return pdfPlacementPages(state.intersectingPages, state.restPages);
+}
+
+/**
+ * Text landed, text was cleared, or the page stack was relaid out.
+ *
+ * Annotation ribbons ride the camera transform; they remasure from this, not
+ * from every pan settle. `"all"` is spread / column relayout.
+ */
+export function publishDocPlacementRev(scope: string, pages: DocPlacementRev): void {
+  if (!scope) return;
+  if (pages !== "all" && pages.length === 0) return;
+  const state = nav(scope);
+  const payload: DocPlacementRev = pages === "all" ? "all" : [...pages];
+  for (const listener of [...state.placementRevListeners]) listener(payload);
+}
+
+export function subscribeDocPlacementRev(
+  scope: string,
+  listener: (pages: DocPlacementRev) => void,
+): () => void {
+  const state = nav(scope);
+  state.placementRevListeners.add(listener);
+  return () => {
+    state.placementRevListeners.delete(listener);
+  };
 }
 
 export function publishPdfFilmThumbWanted(scope: string, pages: readonly number[]): void {
