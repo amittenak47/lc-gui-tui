@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
@@ -31,6 +31,14 @@ const REGION_MARK: DocFootnote = {
   excerpt: "Contents",
   createdAt: 1,
   bands: [{ left: 179, top: 4313, width: 117, height: 27 }],
+};
+
+const PAGE1_MARK: DocFootnote = {
+  id: "page1",
+  kind: "note",
+  anchor: { kind: "region", scope: "p1", x: 20, y: 20, w: 40, h: 18 },
+  excerpt: "Title",
+  createdAt: 1,
 };
 
 /**
@@ -68,10 +76,15 @@ function landText(host: HTMLElement) {
   });
 }
 
+beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+});
+
 afterEach(() => {
   document.body.textContent = "";
   resetPdfFilmScopes();
   resetDocCameraForTests();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -114,31 +127,60 @@ describe("marks made on a wider copy of the same page", () => {
    * jsdom measures nothing, so the boxes are stated: a body whose page 6 sits
    * 2305px down, which is where a pane scrolled to that page would have it.
    */
-  function mountScaled(markScale: number, paletteScope = "") {
+  function mountScaled(
+    markScale: number,
+    paletteScope = "",
+    footnotes: readonly DocFootnote[] = [REGION_MARK],
+    pdf = paletteScope !== "",
+  ) {
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
-    act(() =>
-      root.render(
-        <DocSelectionLayer
-          enabled={false}
-          placeExisting
-          markScale={markScale}
-          paletteScope={paletteScope}
-          footnotes={[REGION_MARK]}
-        >
-          <div data-doc-scope="p6" />
-        </DocSelectionLayer>,
-      ),
+    const pageEl = (scope: string, pdfPage?: number) => (
+      <div
+        data-doc-scope={scope}
+        {...(pdfPage != null ? { "data-pdf-page": String(pdfPage) } : {})}
+      />
     );
-    const body = host.querySelector("[data-doc-scope=p6]")!.parentElement as HTMLElement;
-    const page = host.querySelector("[data-doc-scope=p6]") as HTMLElement;
-    Object.defineProperty(body, "offsetWidth", { value: 347, configurable: true });
-    body.getBoundingClientRect = () =>
-      ({ left: 0, top: 0, right: 347, bottom: 4000, width: 347, height: 4000, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
-    page.getBoundingClientRect = () =>
-      ({ left: 0, top: 2305, right: 347, bottom: 2740, width: 347, height: 435, x: 0, y: 2305, toJSON: () => ({}) }) as DOMRect;
-    return { host, root, body, page };
+    const tree = (notes: readonly DocFootnote[]) => (
+      <DocSelectionLayer
+        enabled={false}
+        placeExisting
+        markScale={markScale}
+        paletteScope={paletteScope}
+        footnotes={notes}
+      >
+        {pdf ? pageEl("p1", 1) : null}
+        {pageEl("p6", pdf ? 6 : undefined)}
+      </DocSelectionLayer>
+    );
+    act(() => root.render(tree(footnotes)));
+    const bindBoxes = () => {
+      const body = host.querySelector("[data-doc-scope=p6]")!.parentElement as HTMLElement;
+      const page = host.querySelector("[data-doc-scope=p6]") as HTMLElement;
+      const page1 = host.querySelector("[data-doc-scope=p1]") as HTMLElement | null;
+      Object.defineProperty(body, "offsetWidth", { value: 347, configurable: true });
+      body.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, right: 347, bottom: 4000, width: 347, height: 4000, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+      page.getBoundingClientRect = () =>
+        ({ left: 0, top: 2305, right: 347, bottom: 2740, width: 347, height: 435, x: 0, y: 2305, toJSON: () => ({}) }) as DOMRect;
+      if (page1) {
+        page1.getBoundingClientRect = () =>
+          ({ left: 0, top: 0, right: 347, bottom: 435, width: 347, height: 435, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+      }
+      return { body, page };
+    };
+    const { body, page } = bindBoxes();
+    return {
+      host,
+      root,
+      body,
+      page,
+      setFootnotes(notes: readonly DocFootnote[]) {
+        act(() => root.render(tree(notes)));
+        bindBoxes();
+      },
+    };
   }
 
   it("brings a region anchor across in proportion", () => {
@@ -249,6 +291,95 @@ describe("marks made on a wider copy of the same page", () => {
     act(() => {
       publishPdfViewPages("tab-1", [6], []);
     });
+    expect(host.querySelector(".lc-doc-footnote-band")).not.toBeNull();
+    act(() => root.unmount());
+  });
+
+  it("drops a deleted mark instead of resurrecting it when its page returns", () => {
+    publishPdfViewPages("tab-1", [6], []);
+    const { host, root, page, setFootnotes } = mountScaled(347 / 642, "tab-1", [
+      PAGE1_MARK,
+      REGION_MARK,
+    ]);
+    act(() => {
+      page.append(document.createElement("span"));
+    });
+    expect(host.querySelector(".lc-doc-footnote-band")).not.toBeNull();
+
+    act(() => {
+      publishPdfViewPages("tab-1", [1], []);
+    });
+    setFootnotes([PAGE1_MARK]);
+    act(() => {
+      publishPdfViewPages("tab-1", [6], []);
+    });
+    expect(host.querySelector(".lc-doc-footnote-band")).toBeNull();
+    act(() => root.unmount());
+  });
+
+  it("clears ribbons when the last annotation is removed", () => {
+    publishPdfViewPages("tab-1", [6], []);
+    const { host, root, page, setFootnotes } = mountScaled(347 / 642, "tab-1");
+    act(() => {
+      page.append(document.createElement("span"));
+    });
+    expect(host.querySelector(".lc-doc-footnote-band")).not.toBeNull();
+    setFootnotes([]);
+    expect(host.querySelector(".lc-doc-footnote-band")).toBeNull();
+    act(() => root.unmount());
+  });
+
+  it("places markdown text that landed during a flick", async () => {
+    const holds = makeDocFlagHolds("md-1");
+    const { host, root, page } = mountScaled(347 / 642, "md-1", [REGION_MARK], false);
+    let measured = 0;
+    const pageBox = page.getBoundingClientRect;
+    page.getBoundingClientRect = () => {
+      measured += 1;
+      return pageBox.call(page);
+    };
+    await act(async () => holds.camera(true));
+    await act(async () => {
+      page.append(document.createElement("span"));
+      await Promise.resolve();
+    });
+    expect(measured).toBe(0);
+    await act(async () => holds.camera(false));
+    expect(measured).toBeGreaterThan(0);
+    expect(host.querySelector(".lc-doc-footnote-band")).not.toBeNull();
+    act(() => root.unmount());
+  });
+
+  it("keeps a scheduled PDF placement when a flick starts before the frame runs", async () => {
+    publishPdfViewPages("tab-1", [6], []);
+    const { host, root, page } = mountScaled(347 / 642, "tab-1");
+    let measured = 0;
+    const pageBox = page.getBoundingClientRect;
+    page.getBoundingClientRect = () => {
+      measured += 1;
+      return pageBox.call(page);
+    };
+    let pending: FrameRequestCallback | null = null;
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      pending = cb;
+      return 99;
+    });
+    const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      if (id === 99) pending = null;
+    });
+    page.append(document.createElement("span"));
+    await Promise.resolve();
+    expect(pending).not.toBeNull();
+    expect(measured).toBe(0);
+    const holds = makeDocFlagHolds("tab-1");
+    await act(async () => holds.camera(true));
+    expect(cancel).toHaveBeenCalledWith(99);
+    expect(pending).toBeNull();
+    expect(measured).toBe(0);
+    raf.mockRestore();
+    cancel.mockRestore();
+    await act(async () => holds.camera(false));
+    expect(measured).toBeGreaterThan(0);
     expect(host.querySelector(".lc-doc-footnote-band")).not.toBeNull();
     act(() => root.unmount());
   });

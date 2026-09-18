@@ -224,6 +224,22 @@ function addedPlacePages(
   return added;
 }
 
+function liveFootnoteIds(footnotes: readonly DocFootnote[]): Set<string> {
+  return new Set(footnotes.map((footnote) => footnote.id));
+}
+
+function liveSubMarkIds(footnotes: readonly DocFootnote[]): Set<string> {
+  const ids = new Set<string>();
+  for (const footnote of footnotes) {
+    for (const mark of footnote.subMarks ?? []) ids.add(mark.id);
+  }
+  return ids;
+}
+
+function documentUsesPdfPlacement(body: HTMLElement): boolean {
+  return Boolean(body.querySelector(".lc-pdf-doc, [data-pdf-page]"));
+}
+
 export interface DocSelectionResult {
   text: string;
   excerpt: string;
@@ -1756,6 +1772,11 @@ export function DocSelectionLayer({
       setPaintedSubMarks([]);
       return;
     }
+    if (footnotes.length === 0) {
+      setRibbons([]);
+      setPaintedSubMarks([]);
+      return;
+    }
 
     const numbers = numberFootnotes(footnotes);
     const place = (pages: PlacePages = "all") => {
@@ -1834,12 +1855,15 @@ export function DocSelectionLayer({
       // Skip React commits when geometry is unchanged — mid-scroll place() used
       // to re-render the overlay every time even when nothing moved.
       setRibbons((prev) => {
+        const liveIds = liveFootnoteIds(footnotes);
         const next =
           pages === "all"
             ? placed
             : [
                 ...prev.filter(
-                  (entry) => !footnoteOnPlacePages(entry.footnote.anchor.scope, pages),
+                  (entry) =>
+                    liveIds.has(entry.footnote.id) &&
+                    !footnoteOnPlacePages(entry.footnote.anchor.scope, pages),
                 ),
                 ...placed,
               ];
@@ -1847,11 +1871,16 @@ export function DocSelectionLayer({
       });
       const subPaint = collectPaintedSubMarks(body, selected);
       setPaintedSubMarks((prev) => {
+        const liveIds = liveSubMarkIds(footnotes);
         const next =
           pages === "all"
             ? subPaint
             : [
-                ...prev.filter((entry) => !footnoteOnPlacePages(entry.scope, pages)),
+                ...prev.filter(
+                  (entry) =>
+                    liveIds.has(entry.id) &&
+                    !footnoteOnPlacePages(entry.scope, pages),
+                ),
                 ...subPaint,
               ];
         return paintedSubMarksEqual(prev, next) ? prev : next;
@@ -1913,6 +1942,10 @@ export function DocSelectionLayer({
       if (scrollFrame != null) return;
       scrollFrame = requestAnimationFrame(() => {
         scrollFrame = null;
+        if (isDocCameraLive(cameraScope)) {
+          markDirty("all");
+          return;
+        }
         place("all");
       });
     };
@@ -1925,6 +1958,10 @@ export function DocSelectionLayer({
       if (scrollFrame != null) return;
       scrollFrame = requestAnimationFrame(() => {
         scrollFrame = null;
+        if (isDocCameraLive(cameraScope)) {
+          markDirty("all");
+          return;
+        }
         place("all");
       });
     };
@@ -1944,13 +1981,15 @@ export function DocSelectionLayer({
      * Critical: disconnect the observer while the camera is live. Deferring
      * `place()` alone still left MutationObserver + rAF firing every text-layer
      * paint during a flick (~30fps chop). Pause delivery; reconnect on settle.
-     * Camera-live itself is not dirty — ribbons ride the transform. Text that
-     * lands while disconnected arrives as a placement revision from the
-     * renderer, not as a missed mutation.
+     * Camera-live itself is not dirty — ribbons ride the transform. PDF text
+     * that lands while disconnected arrives as a placement revision. Markdown
+     * and EPUB have no such publisher, so their observer stays up and only
+     * sets the dirty flag until settle.
      */
     const watchMutations = enabled || highlighting || placeExisting;
+    const pdfBody = documentUsesPdfPlacement(body);
     let frame: number | null = null;
-    if (!watchMutations || footnotes.length === 0 || typeof MutationObserver !== "function") {
+    if (!watchMutations || typeof MutationObserver !== "function") {
       return () => {
         unbindView();
         body.removeEventListener("scroll", onHostScroll, true);
@@ -1962,7 +2001,6 @@ export function DocSelectionLayer({
     let observing = false;
     const observer = new MutationObserver(() => {
       if (isDocCameraLive(cameraScope)) {
-        // Disconnected during live; this path is a belt if delivery still runs.
         markDirty(placePagesFromFilm(cameraScope));
         return;
       }
@@ -1981,16 +2019,18 @@ export function DocSelectionLayer({
       observer.observe(body, { childList: true, subtree: true, characterData: true });
       observing = true;
     };
-    const stopObserver = () => {
-      if (!observing) return;
-      observer.disconnect();
-      observing = false;
+    const stopObserver = (keepPending = false) => {
+      if (observing) {
+        observer.disconnect();
+        observing = false;
+      }
       if (frame != null) {
         cancelAnimationFrame(frame);
         frame = null;
+        if (keepPending) markDirty(placePagesFromFilm(cameraScope));
       }
     };
-    if (!isDocCameraLive(cameraScope)) startObserver();
+    if (!pdfBody || !isDocCameraLive(cameraScope)) startObserver();
 
     let windowPages = placePagesFromFilm(cameraScope);
     const unsubView = cameraScope
@@ -2012,7 +2052,7 @@ export function DocSelectionLayer({
 
     const unsubCamera = subscribeDocCameraLive((live) => {
       if (live) {
-        stopObserver();
+        if (pdfBody) stopObserver(true);
         return;
       }
       startObserver();
