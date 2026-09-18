@@ -1848,6 +1848,13 @@ input[type="checkbox"] {
 
 .lc-board-chrome-slot .lc-map-controls > * {
   pointer-events: auto;
+  /*
+   * Reading pan sets will-change:transform on the page slot. Chromium then
+   * hit-tests that compositor layer ahead of this overlay's none-parent, so
+   * the first tap after a flick lands on the page instead of annotate.
+   * Own layer — the control wins.
+   */
+  transform: translateZ(0);
 }
 
 /* Once the sash owns the pointer, boards must not steal the move. */
@@ -7493,6 +7500,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-map-controls > * {
   pointer-events: auto;
+  transform: translateZ(0);
 }
 
 /*

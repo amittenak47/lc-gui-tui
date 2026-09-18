@@ -250,6 +250,10 @@ import {
 } from "./scrollHost";
 import { SELECT_HOLD_SLOP_PX } from "../util/gesture";
 import {
+  activateChromeControl,
+  chromeHitAtPoint,
+} from "./chromeHit";
+import {
   applyGestureExclusions,
   edgeStrips,
   setDrawingImmersive,
@@ -2757,7 +2761,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const pendingHostScrollRef = useRef<HostScrollSnapshot[] | null>(null);
   const rememberedHostScrollRef = useRef<HostScrollSnapshot[]>([]);
 
+  const annotateTapPointerRef = useRef<number | null>(null);
+  const annotateToggleAtRef = useRef(0);
   const toggleAnnotate = useCallback(() => {
+    /*
+     * Touch after a pan often delivers `pointerup` and a delayed `click`, or
+     * the gatekeeper synthesizes `click` for a compositor mis-hit. Same tap
+     * must not flip twice.
+     */
+    const now = performance.now();
+    if (now - annotateToggleAtRef.current < 280) return;
+    annotateToggleAtRef.current = now;
     wakeChromeRef.current();
     if (editing) {
       modeIndicatorRef.current?.show("Switch to Preview to annotate");
@@ -4458,9 +4472,38 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       inertiaFrameRef.current = requestAnimationFrame(step);
     };
 
+    let pendingChromeTap: {
+      el: HTMLElement;
+      pointerId: number;
+      x: number;
+      y: number;
+    } | null = null;
+
     const onPointerDown = (event: PointerEvent) => {
-      if (!canOwnScroll()) return;
       if (event.button !== 0) return;
+      /*
+       * Chrome is portalled over the board. After a flick the page slot is a
+       * compositor layer and the first tap on annotate can miss the overlay
+       * (`event.target` is the page). Boxes still see the button.
+       */
+      const chromeHit = chromeHitAtPoint(event.clientX, event.clientY);
+      if (chromeHit.control || chromeHit.surface) {
+        event.preventDefault();
+        event.stopPropagation();
+        stopPanInertia();
+        pdfCoastRef.current = false;
+        flickPredFrozenRef.current = null;
+        pendingChromeTap = chromeHit.control
+          ? {
+              el: chromeHit.control,
+              pointerId: event.pointerId,
+              x: event.clientX,
+              y: event.clientY,
+            }
+          : null;
+        return;
+      }
+      if (!canOwnScroll()) return;
       if (!isScrollSurface(event.target)) return;
       /*
        * First thing, before any work of our own: everything between the
@@ -4799,10 +4842,44 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       pulseCameraMotionRef.current();
     };
 
+    const onLostCapture = (event: PointerEvent) => {
+      if (pendingChromeTap?.pointerId === event.pointerId) pendingChromeTap = null;
+      releaseHeldPointer(event.pointerId);
+    };
+
+    const onWindowChromeDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      const target = event.target;
+      if (
+        !(target instanceof Element) ||
+        !target.closest(".lc-map-controls, .lc-board-chrome-slot, .lc-hub-sync-dock")
+      ) {
+        return;
+      }
+      stopPanInertia();
+      pdfCoastRef.current = false;
+      flickPredFrozenRef.current = null;
+    };
+
+    const onWindowChromeUp = (event: PointerEvent) => {
+      const pending = pendingChromeTap;
+      if (!pending || pending.pointerId !== event.pointerId) return;
+      pendingChromeTap = null;
+      if (event.type === "pointercancel") return;
+      if (Math.hypot(event.clientX - pending.x, event.clientY - pending.y) > SELECT_HOLD_SLOP_PX) {
+        return;
+      }
+      activateChromeControl(pending.el);
+    };
+
     root.addEventListener("pointerdown", onPointerDown, true);
     root.addEventListener("pointermove", onPointerMove, true);
     root.addEventListener("pointerup", onPointerUp, true);
     root.addEventListener("pointercancel", onPointerUp, true);
+    root.addEventListener("lostpointercapture", onLostCapture);
+    window.addEventListener("pointerdown", onWindowChromeDown, true);
+    window.addEventListener("pointerup", onWindowChromeUp, true);
+    window.addEventListener("pointercancel", onWindowChromeUp, true);
     return () => {
       unclaim();
       if (heldPointerId != null) {
@@ -4813,6 +4890,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       root.removeEventListener("pointermove", onPointerMove, true);
       root.removeEventListener("pointerup", onPointerUp, true);
       root.removeEventListener("pointercancel", onPointerUp, true);
+      root.removeEventListener("lostpointercapture", onLostCapture);
+      window.removeEventListener("pointerdown", onWindowChromeDown, true);
+      window.removeEventListener("pointerup", onWindowChromeUp, true);
+      window.removeEventListener("pointercancel", onWindowChromeUp, true);
       stopPanInertia();
     };
   }, [clampPanScroll, interactive, refreshPanRideNodes, stopPanInertia]);
@@ -9602,8 +9683,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                         : "Toolbar — annotate this page"
                     }
                     data-tip-placement="bottom"
-                    onPointerDown={() => {
+                    onPointerDown={(event) => {
+                      annotateTapPointerRef.current = event.pointerId;
                       if (annotatePeek) peekAnnotate();
+                    }}
+                    onPointerCancel={() => {
+                      annotateTapPointerRef.current = null;
+                    }}
+                    onPointerUp={(event) => {
+                      if (annotateTapPointerRef.current !== event.pointerId) return;
+                      annotateTapPointerRef.current = null;
+                      if (event.button !== 0 && event.pointerType === "mouse") return;
+                      toggleAnnotate();
                     }}
                     onClick={toggleAnnotate}
                   >
