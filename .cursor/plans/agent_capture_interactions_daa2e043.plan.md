@@ -36,7 +36,8 @@ Review corrections (take precedence over conflicting text below):
 
 Progress is recorded here with each implementation commit. Device-only checks remain explicitly pending until performed; passing unit tests does not imply Android acceptance.
 
-- Plan corrections: recorded; implementation pending.
+- Plan corrections: committed in dae2afbe.
+- Step 1: implemented FIFO preparation reservations, transport-owned execution, Abort/Edit/Retry actions, retained attempt history, IndexedDB full request storage, interrupted restore, live status/dots and completion-only reasoning. TypeScript/build and 34 focused tests pass. Native Tauri invoke is not HTTP fetch and cannot accept AbortController: cancellation suppresses late results and waits for native completion before draining; WS uses its cancellation acknowledgement. Full device queue acceptance remains pending. Further steps add frozen document context to persisted requests.
 
 # Agent, capture, and touch — expanded implementation plan
 

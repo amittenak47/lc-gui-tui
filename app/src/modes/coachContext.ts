@@ -100,7 +100,7 @@ export function buildConversationContext(
     : messages;
 
   const usable = source.filter(
-    (message) => !message.pending && message.content.trim().length > 0,
+    (message) => !message.pending && !message.queued && (!message.requestState || message.requestState === "completed") && message.content.trim().length > 0,
   );
   if (usable.length === 0) return "";
 

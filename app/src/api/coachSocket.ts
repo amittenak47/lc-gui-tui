@@ -71,6 +71,7 @@ export function shouldAnalyze(
 
 /** Live progress for one interactive run, as its stages land. */
 export interface RunHandlers {
+  signal?: AbortSignal;
   onProcess?(event: CoachProcessEvent): void;
   onReasoning?(text: string): void;
 }
@@ -343,6 +344,20 @@ export class AmbientCoach {
         stage: null,
         tool: null,
       });
+      if (handlers.signal?.aborted) {
+        this.settle(requestId, run => run.reject(new Error("cancelled")));
+        return;
+      }
+      const abort = () => this.cancel(requestId);
+      handlers.signal?.addEventListener("abort", abort, { once: true });
+      const pending = this.pending.get(requestId)!;
+      const resolveOriginal = pending.resolve, rejectOriginal = pending.reject;
+      pending.resolve = value => {
+        handlers.signal?.removeEventListener("abort", abort);
+        if (handlers.signal?.aborted) rejectOriginal(new Error("cancelled"));
+        else resolveOriginal(value);
+      };
+      pending.reject = error => { handlers.signal?.removeEventListener("abort", abort); rejectOriginal(error); };
       this.touch(requestId);
       /*
        * A frame that could not be written is a run that will never answer.
