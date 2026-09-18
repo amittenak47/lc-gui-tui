@@ -5,6 +5,7 @@
  * There is no Excalidraw canvas.
  */
 
+import { selectionCaptureFrame } from "./selectionCapture";
 import {
   CaptureUpdateAction,
   createBoardScene,
@@ -9061,8 +9062,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }).map(node => node.textContent ?? "").join("\n");
         const scene = apiRef.current?.getSceneElements() as Array<{ id: string; version?: number }> | undefined;
         return { viewport, pages, text, revision: JSON.stringify([
-          scene?.map(e => [e.id, e.version]), rasterInkRef.current?.getOps(),
+          scene?.map(e => [e.id, e.version]), rasterInkRef.current?.getRevision(),
         ]) };
+      },
+      exportSelectionCapture: async (bounds) => {
+        const api = apiRef.current;
+        const view = getViewport();
+        if (!api || !view || bounds.width < 1 || bounds.height < 1) throw new Error("Selection has no capture bounds");
+        const frame = selectionCaptureFrame(bounds, view);
+        return exportSceneFrameBlob(api, rasterInkRef.current?.getOps() ?? [], frame, deviceExportScale(), pageExportLayers());
       },
       exportViewThumb: async () => {
         const api = apiRef.current;
