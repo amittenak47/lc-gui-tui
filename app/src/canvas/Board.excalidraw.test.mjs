@@ -642,12 +642,13 @@ describe("reading pan compositor", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     expect(src).toMatch(/chromeHitAtPoint\(event\.clientX, event\.clientY\)/);
     expect(src).toMatch(/activateChromeControl\(pending\.el\)/);
+    expect(src).toMatch(/annotateSkipClickRef\.current = true/);
+    expect(src).toMatch(/if \(annotateSkipClickRef\.current\)/);
     const annotate = src.slice(
       src.indexOf("aria-label={editing ? \"Annotation requires Preview\""),
-      src.indexOf("onClick={toggleAnnotate}"),
+      src.indexOf("onClick={() => {"),
     );
     expect(annotate).toMatch(/onPointerUp=/);
-    expect(src).toMatch(/if \(now - annotateToggleAtRef\.current < 280\) return/);
   });
 
   it("does not toggle a document-wide camera-live class on html", () => {
