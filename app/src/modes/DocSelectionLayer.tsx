@@ -291,6 +291,8 @@ export interface DocSelectionLayerProps {
    */
   markScale?: number;
   footnotes?: readonly DocFootnote[];
+  onScreenshot?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void | Promise<void>;
+  onAskAgent?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void | Promise<void>;
   onAnnotate?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
   onCopy?: (
     selection: DocSelectionResult,
@@ -394,6 +396,8 @@ export function DocSelectionLayer({
   markScale = 1,
   footnotes = [],
   onAnnotate,
+  onScreenshot,
+  onAskAgent,
   onCopy,
   onSearch,
   onMark,
@@ -2793,6 +2797,8 @@ export function DocSelectionLayer({
                       </ul>
                     )}
                     <div className="lc-doc-sheet-actions">
+                      {onScreenshot && <button type="button" role="menuitem" className="lc-doc-sheet-action" onClick={() => act(onScreenshot)}><span aria-hidden="true">▣</span><span>Screenshot</span></button>}
+                      {onAskAgent && <button type="button" role="menuitem" className="lc-doc-sheet-action" onClick={() => act(onAskAgent)}><span aria-hidden="true">?</span><span>Ask Agent</span></button>}
                       {onMark && (
                         <button
                           type="button"

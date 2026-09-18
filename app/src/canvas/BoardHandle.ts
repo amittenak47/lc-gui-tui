@@ -237,6 +237,7 @@ export interface BoardHandle {
    * when they asked. Null when there is no camera to read.
    */
   captureDocumentView(): import("../modes/documentView").DocumentViewSnapshot;
+  exportSelectionCapture(bounds: { left: number; top: number; width: number; height: number }): Promise<Blob>;
   exportViewThumb(): Promise<{ label: string; png: string } | null>;
   /**
    * PNG of one coach diagram, cropped to the group it drew.

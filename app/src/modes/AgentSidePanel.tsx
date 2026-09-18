@@ -365,6 +365,7 @@ export interface AgentSendFlags {
    * prefixes it onto the prompt, the same way it does a reply's excerpt.
    */
   pageQuote?: string;
+  documentView?: import("./documentView").DocumentViewContext;
   /** The message this turn is answering, when the writer quoted one. */
   replyTo?: CoachReplyRef;
   /** The thread this send belongs to, or null when it is addressed to the room. */
@@ -490,7 +491,7 @@ export interface AgentSidePanelProps {
    * sentence twice still lands: the effect keys off the token changing, and the
    * caller owns the value. The panel never writes back to it.
    */
-  quoteSeed?: { token: number; text: string } | null;
+  quoteSeed?: { token: number; text: string; attachment?: CoachAttachment; view?: import("./documentView").DocumentViewContext } | null;
   /**
    * Open this thread — a footnote tapped on the page. Same token contract as
    * {@link quoteSeed}; `null` id returns to the room.
@@ -757,6 +758,8 @@ export function AgentSidePanel({
      * whatever the length of the passage, and a × to take it back off.
      */
     setPageQuote({ text: quoteSeed.text.trim(), excerpt: replyExcerpt(quoteSeed.text) });
+    setOpenThreadId(null); setReplyTo(null);
+    if (quoteSeed.attachment) setPhotos(current => [...current, quoteSeed.attachment!]);
     window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
   }, [quoteSeed]);
 
@@ -1372,7 +1375,7 @@ export function AgentSidePanel({
         reasoning,
         annotations: allowAnnotations && annotations,
         ...(photos.length > 0 ? { photos } : {}),
-        ...(pageQuote ? { pageQuote: pageQuote.text } : {}),
+        ...(pageQuote ? { pageQuote: pageQuote.text, documentView: quoteSeed?.view } : {}),
         threadRootId: openThreadId,
         ...(replyTo ? { replyTo } : {}),
         ...(documentPresets && askPreset ? { askPreset } : {}),

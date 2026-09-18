@@ -410,6 +410,8 @@ import { parseVizProgram, type VizProgram } from "./viz/schema";
 import { messageOf, traceOpen } from "./util/messageOf";
 import { loadChromeFate, mayClearParkedPreparing, BOOT_DONE_HOLD_MS, LOAD_FADE_MS, LOAD_SLIDE_MS } from "./util/workspaceLoad";
 
+import { saveCaptureToDevice, describeCaptureResult } from "./util/capturePrefs";
+import { photoFromFile } from "./util/photoAttach";
 import { thumbnailFromPng } from "./util/photoAttach";
 import { documentAskFields, sameDocumentView, type DocumentViewContext } from "./modes/documentView";
 import { CoachSendCoordinator } from "./modes/coachSendCoordinator";
@@ -864,8 +866,9 @@ export function Workspace({
   const [coachQuoteSeed, setCoachQuoteSeed] = useState<{
     token: number;
     text: string;
+    attachment?: CoachAttachment;
+    view?: DocumentViewContext;
   } | null>(null);
-  void setCoachQuoteSeed;
   const [coachFocusThread, setCoachFocusThread] = useState<{
     token: number;
     rootId: string | null;
@@ -7001,10 +7004,10 @@ export function Workspace({
     try {
       const source = annotateSourceRef.current;
       const board = boardRef.current;
-      const snapshot = source && board ? board.captureDocumentView() : null;
-      let view: DocumentViewContext | undefined = snapshot && source ? {
+      const snapshot = !flags.documentView && source && board ? board.captureDocumentView() : null;
+      let view: DocumentViewContext | undefined = flags.documentView ?? (snapshot && source ? {
         ...snapshot, document_hash: source.hash, title: source.name, format: source.docType,
-      } : undefined;
+      } : undefined);
       const viewImage = snapshot && board && modeHasVision("ask") ? await board.exportViewThumb() : null;
       if (snapshot && (annotateSourceRef.current !== source || boardRef.current !== board ||
           !sameDocumentView(snapshot, board!.captureDocumentView()))) {
@@ -8024,6 +8027,27 @@ export function Workspace({
     },
     [openFootnoteOverview],
   );
+
+  const captureDocSelection = async (selection: DocSelectionResult, rect: DOMRect | null, ask: boolean) => {
+    const board = boardRef.current; const source = annotateSourceRef.current;
+    try {
+      if (!board || !source || !rect) throw new Error("Select a visible area first");
+      const snapshot = board.captureDocumentView();
+      const blob = await board.exportSelectionCapture(rect);
+      if (boardRef.current !== board || annotateSourceRef.current !== source || !sameDocumentView(snapshot, board.captureDocumentView())) {
+        throw new Error("The view changed during capture. Select the area again.");
+      }
+      if (!ask) { setNotice(describeCaptureResult(await saveCaptureToDevice(blob, "lc-selection"))); return; }
+      const photo = await photoFromFile(new File([blob], "Selection.png", { type: "image/png" }));
+      if (annotateSourceRef.current !== source) throw new Error("Document changed; select again");
+      pendingQuoteRef.current = selection;
+      setCoachQuoteSeed({ token: Date.now(), text: selection.text || selection.excerpt,
+        attachment: { label: photo.name, png: photo.png, thumb: photo.thumb },
+        view: { ...snapshot, text: selection.text || snapshot.text, document_hash: source.hash, title: source.name, format: source.docType },
+      });
+      openCoachPanel();
+    } catch (error) { setError(messageOf(error)); }
+  };
 
   const onDocCopy = useCallback(
     async (selection: DocSelectionResult, _anchorRect: DOMRect | null) => {
@@ -10311,6 +10335,8 @@ export function Workspace({
                   marksHost={marksSlot}
                   footnotes={annotateFootnotes}
                   onAnnotate={onDocAnnotate}
+                  onScreenshot={(selection, rect) => captureDocSelection(selection, rect, false)}
+                  onAskAgent={(selection, rect) => captureDocSelection(selection, rect, true)}
                   onCopy={onDocCopy}
                   onSearch={onDocSearch}
                   onMark={highlighting ? onDocMark : undefined}
@@ -10395,6 +10421,8 @@ export function Workspace({
                   marksHost={marksSlot}
                   footnotes={annotateFootnotes}
                   onAnnotate={onDocAnnotate}
+                  onScreenshot={(selection, rect) => captureDocSelection(selection, rect, false)}
+                  onAskAgent={(selection, rect) => captureDocSelection(selection, rect, true)}
                   onCopy={onDocCopy}
                   onSearch={onDocSearch}
                   onMark={highlighting ? onDocMark : undefined}
