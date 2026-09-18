@@ -4,9 +4,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clearPdfTextHit,
   hidePdfPanText,
   PDF_PAN_TEXT_HIDDEN_CLASS,
+  PDF_TEXT_HIT_CLASS,
   revealPdfPanText,
+  syncPdfTextHit,
 } from "./pdfFilm";
 
 function page(n: number, filled: boolean) {
@@ -53,5 +56,26 @@ describe("hidePdfPanText", () => {
     hidePdfPanText(host, [], hidden);
     expect(p1.text.classList.contains(PDF_PAN_TEXT_HIDDEN_CLASS)).toBe(false);
     expect(hidden.size).toBe(0);
+  });
+});
+
+describe("syncPdfTextHit", () => {
+  it("marks only the intersecting hosts and drops pages that left", () => {
+    const host = document.createElement("div");
+    const p1 = page(1, true);
+    const p2 = page(2, true);
+    const p3 = page(3, true);
+    host.append(p1.slot, p2.slot, p3.slot);
+    const hit = new Set<HTMLElement>();
+    syncPdfTextHit(host, [2], hit);
+    expect(p1.text.classList.contains(PDF_TEXT_HIT_CLASS)).toBe(false);
+    expect(p2.text.classList.contains(PDF_TEXT_HIT_CLASS)).toBe(true);
+    expect(p3.text.classList.contains(PDF_TEXT_HIT_CLASS)).toBe(false);
+    syncPdfTextHit(host, [3], hit);
+    expect(p2.text.classList.contains(PDF_TEXT_HIT_CLASS)).toBe(false);
+    expect(p3.text.classList.contains(PDF_TEXT_HIT_CLASS)).toBe(true);
+    clearPdfTextHit(hit);
+    expect(p3.text.classList.contains(PDF_TEXT_HIT_CLASS)).toBe(false);
+    expect(hit.size).toBe(0);
   });
 });

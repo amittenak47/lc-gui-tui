@@ -74,6 +74,8 @@ import {
   openedPdfThumbHashes,
   hidePdfPanText,
   revealPdfPanText,
+  syncPdfTextHit,
+  clearPdfTextHit,
   PDF_FILM_THUMB_CSS,
   type PdfThumbRenderer,
 } from "./pdfFilm";
@@ -621,6 +623,7 @@ export function PdfDocument({
    */
   const textFilledRef = useRef<Set<number>>(new Set());
   const panHiddenTextRef = useRef<Set<HTMLElement>>(new Set());
+  const textHitRef = useRef<Set<HTMLElement>>(new Set());
   const quoteFillRef = useRef<(page: number) => Promise<boolean>>(async () => false);
   /** Pages the viewport can currently see. */
   const visibleRef = useRef<Set<number>>(new Set());
@@ -1140,6 +1143,35 @@ export function PdfDocument({
       reveal();
     };
   }, [filmScope, pages]);
+
+  /*
+   * Quote hits belong on the pages in view, not every text layer in the book.
+   *
+   * Flipping `.lc-page-content-selectable` used to restyle every pdf.js span.
+   * `selectable` here follows scroll / highlight / footnote-panel; the class
+   * lands only on the intersecting hosts.
+   */
+  useEffect(() => {
+    const sync = () => {
+      const host = hostRef.current;
+      if (!host) return;
+      if (!selectable) {
+        clearPdfTextHit(textHitRef.current);
+        return;
+      }
+      syncPdfTextHit(
+        host,
+        peekPdfIntersectingPages(filmScope),
+        textHitRef.current,
+      );
+    };
+    sync();
+    const unsubView = subscribePdfViewPages(filmScope, sync);
+    return () => {
+      unsubView();
+      clearPdfTextHit(textHitRef.current);
+    };
+  }, [filmScope, pages, selectable]);
 
   /*
    * Nav outlives a relayout.

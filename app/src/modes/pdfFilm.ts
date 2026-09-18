@@ -568,6 +568,45 @@ export function revealPdfPanText(hidden: Set<HTMLElement>): void {
   hidden.clear();
 }
 
+/** Class on a pdf.js text host that should receive quotes / highlight hits. */
+export const PDF_TEXT_HIT_CLASS = "lc-pdf-text-hit";
+
+/**
+ * Pointer/select styles for on-screen PDF text only.
+ *
+ * `.lc-page-content-selectable .lc-pdf-text span` restyled every glyph in the
+ * book when flipping annotate/scroll. Intersecting hosts are a handful of
+ * pages; the rest stay `pointer-events: none`.
+ */
+export function syncPdfTextHit(
+  host: ParentNode,
+  pages: readonly number[],
+  hit: Set<HTMLElement>,
+): void {
+  const next = new Set<HTMLElement>();
+  for (const n of pages) {
+    if (n < 1) continue;
+    for (const slot of host.querySelectorAll(`[data-pdf-page="${n}"]`)) {
+      const text = slot.querySelector<HTMLElement>(".lc-pdf-text");
+      if (!text) continue;
+      next.add(text);
+      if (hit.has(text)) continue;
+      text.classList.add(PDF_TEXT_HIT_CLASS);
+      hit.add(text);
+    }
+  }
+  for (const text of [...hit]) {
+    if (next.has(text)) continue;
+    text.classList.remove(PDF_TEXT_HIT_CLASS);
+    hit.delete(text);
+  }
+}
+
+export function clearPdfTextHit(hit: Set<HTMLElement>): void {
+  for (const text of hit) text.classList.remove(PDF_TEXT_HIT_CLASS);
+  hit.clear();
+}
+
 /**
  * Text landed, text was cleared, or the page stack was relaid out.
  *

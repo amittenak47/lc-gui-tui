@@ -270,7 +270,8 @@ describe("Board", () => {
     const place = src.slice(src.indexOf("const placeContentSlotAt ="), src.indexOf("placeContentSlotAtRef.current = placeContentSlotAt"));
     expect(place).toContain("syncMarksSlotFrom(node, false)");
     const sync = src.slice(src.indexOf("const syncMarksSlotFrom ="), src.indexOf("const [contentSceneWidth"));
-    expect(sync).toContain("if (measure) marks.style.height");
+    expect(sync).toMatch(/if \(!measure\) return/);
+    expect(sync).toMatch(/marksSlotHeightPxRef/);
   });
 
   it("does not ping-pong a sash drag through window.resize", () => {
@@ -622,6 +623,15 @@ describe("reading pan compositor", () => {
       /html\.lc-doc-camera-live \.lc-page-marks-slot\s*\{[^}]*visibility:\s*hidden/,
     );
     expect(css).not.toMatch(/html\.lc-doc-camera-live \.lc-page-content-slot/);
+  });
+
+  it("does not restyle every PDF glyph when flipping annotate and scroll", () => {
+    const css = readFileSync(join(here, "../styles.css"), "utf8");
+    expect(css).toMatch(/\.lc-pdf-text\.textLayer\.lc-pdf-text-hit[\s\S]*?pointer-events:\s*auto/);
+    expect(css).not.toMatch(/\.lc-page-content-selectable \.lc-pdf-text\.textLayer span/);
+    expect(css).not.toMatch(/\.lc-android \.lc-board-reading \.lc-doc-selectable-body/);
+    const layer = readFileSync(join(here, "../modes/DocSelectionLayer.tsx"), "utf8");
+    expect(layer).toMatch(/if \(geometryChanged\) place\(/);
   });
 
   it("does not toggle a document-wide camera-live class on html", () => {

@@ -419,6 +419,13 @@ export function DocSelectionLayer({
    */
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const placeGeometryRef = useRef<{
+    footnotes: readonly DocFootnote[];
+    highlighting: boolean;
+    placeExisting: boolean;
+    markScale: number;
+    cameraScope: string | undefined;
+  } | null>(null);
   const [rects, setRects] = useState<LocalRect[]>([]);
   const [selection, setSelection] = useState<DocSelectionResult | null>(null);
   /**
@@ -1896,8 +1903,24 @@ export function DocSelectionLayer({
       }
     };
     placeRef.current = place;
-    // One-shot on deps: ribbons still ride marksSlot transform during pan.
-    place(placePagesFromFilm(cameraScope));
+    // Ribbons ride the marks-slot transform. Annotate/scroll only flips
+    // `enabled` — remasuring here forced layout after the mode class change.
+    const prev = placeGeometryRef.current;
+    const geometryChanged =
+      !prev ||
+      prev.footnotes !== footnotes ||
+      prev.highlighting !== highlighting ||
+      prev.placeExisting !== placeExisting ||
+      prev.markScale !== markScale ||
+      prev.cameraScope !== cameraScope;
+    placeGeometryRef.current = {
+      footnotes,
+      highlighting,
+      placeExisting,
+      markScale,
+      cameraScope,
+    };
+    if (geometryChanged) place(placePagesFromFilm(cameraScope));
 
     /*
      * Nested horizontal scroll moves the words under a fixed camera. Ribbons
