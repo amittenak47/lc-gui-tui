@@ -1429,6 +1429,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * kept in step with the content slot's, and the marks portal into it.
    */
   const marksSlotNodeRef = useRef<HTMLDivElement | null>(null);
+  /** Last paper height written onto the marks slot — reuse across mode flips. */
+  const marksSlotHeightPxRef = useRef(0);
   /**
    * Stable, because an inline ref callback is a new function every render —
    * React would detach and re-attach the node each time, which remounts
@@ -1436,6 +1438,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    */
   const onMarksSlotRef = useRef(onMarksSlot);
   onMarksSlotRef.current = onMarksSlot;
+  const writeMarksSlotHeight = (height: number) => {
+    const marks = marksSlotNodeRef.current;
+    if (!marks || !(height >= 1)) return;
+    marksSlotHeightPxRef.current = height;
+    const next = `${height}px`;
+    if (marks.style.height !== next) marks.style.height = next;
+  };
   const attachMarksSlot = useCallback((node: HTMLDivElement | null) => {
     marksSlotNodeRef.current = node;
     // Mirror whatever the content slot is showing right now, so a remount does
@@ -1443,7 +1452,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const from = contentSlotNodeRef.current;
     if (node && from) {
       node.style.transform = from.style.transform;
-      node.style.height = `${from.offsetHeight}px`;
+      const known = marksSlotHeightPxRef.current;
+      if (known >= 1) node.style.height = `${known}px`;
+      else {
+        const height = from.offsetHeight;
+        if (height >= 1) {
+          marksSlotHeightPxRef.current = height;
+          node.style.height = `${height}px`;
+        }
+      }
     }
     onMarksSlotRef.current?.(node);
   }, []);
@@ -1451,9 +1468,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const marks = marksSlotNodeRef.current;
     if (!marks) return;
     marks.style.transform = content.style.transform;
-    // Height changes on layout, not camera translation. Reading offsetHeight
-    // after transform writes forces document layout on every scroll frame.
-    if (measure) marks.style.height = `${content.offsetHeight}px`;
+    // Height changes on layout, not camera translation or annotate/scroll.
+    // Reading offsetHeight after a mode class flip forces the pending style
+    // recalc of the document. Reuse the last measured paper height.
+    if (!measure) return;
+    if (marksSlotHeightPxRef.current >= 1) {
+      writeMarksSlotHeight(marksSlotHeightPxRef.current);
+      return;
+    }
+    writeMarksSlotHeight(content.offsetHeight);
   };
 
   const [contentSceneWidth, setContentSceneWidth] = useState(1);
@@ -6719,7 +6742,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const last = lastContentSlotRef.current;
     if (!node || !last) return;
     node.style.transform = contentSlotCssTransform(last);
-    syncMarksSlotFrom(node);
+    syncMarksSlotFrom(node, false);
   });
 
   useLayoutEffect(() => {
@@ -6808,6 +6831,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         pageContentHeightRef.current ?? 0,
         fromDom >= 1 ? fromDom + MD_INK_TAIL_PAD : 0,
       );
+      if (height >= 1) writeMarksSlotHeight(height);
       if (!api || height < 1) return;
       if (pageContentRef.current) ensureDocumentPageInScene();
       const current = api.getSceneElements() as SceneElementLike[];
