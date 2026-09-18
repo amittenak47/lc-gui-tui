@@ -163,6 +163,7 @@ pub fn run() {
         web_capture::webview_eval_json,
         colorhunt::colorhunt_random,
         capture_save::save_png_bytes,
+        capture_save::pick_capture_folder,
         capture_save::share_png_bytes,
         ink_available,
         boot_notice,

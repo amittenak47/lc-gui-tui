@@ -410,12 +410,15 @@ import { parseVizProgram, type VizProgram } from "./viz/schema";
 import { messageOf, traceOpen } from "./util/messageOf";
 import { loadChromeFate, mayClearParkedPreparing, BOOT_DONE_HOLD_MS, LOAD_FADE_MS, LOAD_SLIDE_MS } from "./util/workspaceLoad";
 
+import { thumbnailFromPng } from "./util/photoAttach";
+import { documentAskFields, sameDocumentView, type DocumentViewContext } from "./modes/documentView";
 import { CoachSendCoordinator } from "./modes/coachSendCoordinator";
 import { saveCoachRequest, loadCoachRequest } from "./modes/coachRequestStore";
 type Mode = "review" | "ambient";
 
 /** One coach composer send, prepared and waiting in the FIFO queue. */
 interface CoachSendQueueItem {
+  view?: DocumentViewContext;
   text: string;
   flags: AgentSendFlags;
   userMessageId: string;
@@ -6344,6 +6347,7 @@ export function Workspace({
         highlight?: string;
         reasoning?: AgentReasoningLevel;
         draw?: boolean;
+        view?: DocumentViewContext;
       },
     ) => {
       const note = question.trim();
@@ -6386,7 +6390,7 @@ export function Workspace({
         const images = (photos ?? []).map((photo) => photo.png);
         const surface = askSurface(problem);
         const source = annotateSourceRef.current;
-        const docExtras =
+        const docExtras = docAsk?.view ? { ...documentAskFields(docAsk.view), ...(docAsk?.highlight ? { highlight: docAsk.highlight } : {}), ...(docAsk?.preset ? { preset: docAsk.preset } : {}) } :
           surface === "annotate" && source
             ? {
                 document_hash: source.hash,
@@ -6898,6 +6902,7 @@ export function Workspace({
             pendingAck,
             {
               preset: flags.askPreset,
+              view: item.view,
               highlight: quotedPassage,
               reasoning: flags.reasoning,
               ...(padDraw ? { draw: true } : {}),
@@ -6994,17 +6999,38 @@ export function Workspace({
     const coordinator = coachCoordinatorRef.current!;
     coordinator.reserve(id);
     try {
+      const source = annotateSourceRef.current;
+      const board = boardRef.current;
+      const snapshot = source && board ? board.captureDocumentView() : null;
+      let view: DocumentViewContext | undefined = snapshot && source ? {
+        ...snapshot, document_hash: source.hash, title: source.name, format: source.docType,
+      } : undefined;
+      const viewImage = snapshot && board && modeHasVision("ask") ? await board.exportViewThumb() : null;
+      if (snapshot && (annotateSourceRef.current !== source || boardRef.current !== board ||
+          !sameDocumentView(snapshot, board!.captureDocumentView()))) {
+        throw new Error("The document changed during capture. Please retry your question from the intended view.");
+      }
+      if (view && !viewImage) view = { ...view, limitation: view.text.trim()
+        ? "Image unavailable; answer from the visible extracted text."
+        : "The current view has no readable extracted text or image. Ask for a capture before describing it." };
       const prepared = await prepareCoachSend(text, flags);
       if (coordinator.tickets.get(id)?.controller.signal.aborted) return;
-      const item: CoachSendQueueItem = { ...prepared, userMessageId: id, threadAnchor: sendThreadAnchor(prepared, id) };
+      if (snapshot && (annotateSourceRef.current !== source || !sameDocumentView(snapshot, board!.captureDocumentView()))) {
+        throw new Error("The document changed while preparing this question. Please send again from the intended view.");
+      }
+      const item: CoachSendQueueItem = { ...prepared, view, userMessageId: id, threadAnchor: sendThreadAnchor(prepared, id),
+        attachments: [...(prepared.attachments ?? []), ...(viewImage ? [viewImage] : [])] };
+      if (item.attachments) item.attachments = await Promise.all(item.attachments.map(async att => ({
+        ...att, thumb: att.thumb ?? await thumbnailFromPng(att.png),
+      })));
       await saveCoachRequest(id, item);
       setAgentMessages(current => current.map(message => message.id === id ? {
-        ...message, content: prepared.bubble, attachments: prepared.attachments, flags: prepared.flagBits, requestId: id,
+        ...message, content: prepared.bubble, attachments: item.attachments, flags: prepared.flagBits, requestId: id,
       } : message));
       applyCoachFootnote(prepared.anchorId, id, prepared.text, prepared.attachedFootnoteIds);
       coordinator.ready(id, item);
     } catch (error) { coordinator.fail(id, error); setError(messageOf(error)); }
-  }, [prepareCoachSend, pushCoachMessage, applyCoachFootnote, sendThreadAnchor]);
+  }, [prepareCoachSend, pushCoachMessage, applyCoachFootnote, sendThreadAnchor, modeHasVision]);
 
   executeCoachSendRef.current = executeCoachSend;
   drainCoachSendQueueRef.current = () => coachCoordinatorRef.current?.drain();

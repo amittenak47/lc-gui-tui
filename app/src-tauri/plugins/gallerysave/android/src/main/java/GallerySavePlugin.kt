@@ -6,6 +6,10 @@ import android.content.Intent
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.DocumentsContract
+import android.net.Uri
+import androidx.activity.result.ActivityResult
+import app.tauri.annotation.ActivityCallback
 import android.util.Base64
 import androidx.core.content.FileProvider
 import app.tauri.annotation.Command
@@ -33,6 +37,8 @@ class GallerySavePlugin(private val activity: Activity) : Plugin(activity) {
     class SaveArgs {
         var png_base64: String = ""
         var filename: String = "lc-capture.png"
+        var destination: String = "photos"
+        var directory: String? = null
     }
 
     @Command
@@ -50,11 +56,58 @@ class GallerySavePlugin(private val activity: Activity) : Plugin(activity) {
         }
 
         try {
-            val uri = insertPng(bytes, safeName(args.filename))
+            val name = safeName(args.filename)
+            val uri = if (args.destination == "folder") {
+                insertDocument(bytes, name, args.directory)
+            } else insertPng(bytes, name, args.destination == "downloads")
             invoke.resolve(JSObject().apply { put("uri", uri) })
         } catch (error: Exception) {
             invoke.reject(error.message ?: "gallery save failed")
         }
+    }
+
+    @Command
+    fun pick_folder(invoke: Invoke) {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            }
+            startActivityForResult(invoke, intent, "folderResult")
+        } catch (error: Exception) { invoke.reject(error.message ?: "Folder picker unavailable") }
+    }
+
+    @ActivityCallback
+    fun folderResult(invoke: Invoke, result: ActivityResult) {
+        if (result.resultCode == Activity.RESULT_CANCELED) {
+            invoke.resolve(JSObject().apply { put("uri", "") }); return
+        }
+        try {
+            val data = result.data ?: throw IOException("No folder returned")
+            val uri = data.data ?: throw IOException("No folder returned")
+            val flags = data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            activity.contentResolver.takePersistableUriPermission(uri, flags)
+            invoke.resolve(JSObject().apply { put("uri", uri.toString()) })
+        } catch (error: Exception) { invoke.reject(error.message ?: "Folder permission failed") }
+    }
+
+    private fun insertDocument(bytes: ByteArray, name: String, directory: String?): String {
+        if (directory.isNullOrBlank()) throw IOException("Choose a capture folder in Settings")
+        val tree = Uri.parse(directory)
+        if (tree.scheme != "content" || !DocumentsContract.isTreeUri(tree)) throw IOException("Choose the folder again in Settings")
+        val resolver = activity.contentResolver
+        val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+        val uri = DocumentsContract.createDocument(resolver, parent, "image/png", name)
+            ?: throw IOException("Cannot create capture; choose the folder again")
+        try {
+            resolver.openOutputStream(uri, "w").use { stream ->
+                if (stream == null) throw IOException("Cannot write to selected folder")
+                stream.write(bytes)
+            }
+        } catch (error: Exception) {
+            runCatching { DocumentsContract.deleteDocument(resolver, uri) }
+            throw error
+        }
+        return uri.toString()
     }
 
     @InvokeArg
@@ -116,20 +169,22 @@ class GallerySavePlugin(private val activity: Activity) : Plugin(activity) {
             .replace(Regex("[^A-Za-z0-9._-]"), "_")
             .let { if (it.lowercase().endsWith(".png")) it else "$it.png" }
 
-    private fun insertPng(bytes: ByteArray, displayName: String): String {
+    private fun insertPng(bytes: ByteArray, displayName: String, downloads: Boolean): String {
+        if (downloads && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) throw IOException("Use a selected folder on this Android version")
         val resolver = activity.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Images.Media.MIME_TYPE, "image/png")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/lc")
+                put(MediaStore.Images.Media.RELATIVE_PATH, (if (downloads) Environment.DIRECTORY_DOWNLOADS else Environment.DIRECTORY_PICTURES) + "/lc")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
         }
 
         val collection =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                if (downloads) MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                else MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
             } else {
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI
             }
@@ -137,6 +192,7 @@ class GallerySavePlugin(private val activity: Activity) : Plugin(activity) {
         val uri = resolver.insert(collection, values)
             ?: throw IOException("MediaStore insert returned null")
 
+        try {
         resolver.openOutputStream(uri).use { stream ->
             if (stream == null) throw IOException("cannot open MediaStore output stream")
             stream.write(bytes)
@@ -150,5 +206,9 @@ class GallerySavePlugin(private val activity: Activity) : Plugin(activity) {
         }
 
         return uri.toString()
+        } catch (error: Exception) {
+            runCatching { resolver.delete(uri, null, null) }
+            throw error
+        }
     }
 }

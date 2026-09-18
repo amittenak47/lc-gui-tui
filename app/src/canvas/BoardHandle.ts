@@ -236,6 +236,7 @@ export interface BoardHandle {
    * viewport in scene coordinates, so it is exactly what the writer could see
    * when they asked. Null when there is no camera to read.
    */
+  captureDocumentView(): import("../modes/documentView").DocumentViewSnapshot;
   exportViewThumb(): Promise<{ label: string; png: string } | null>;
   /**
    * PNG of one coach diagram, cropped to the group it drew.

@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   captureInserts,
@@ -14,12 +14,31 @@ import {
   saveCaptureCountdown,
   saveCaptureDestination,
   saveCaptureFolder,
+  saveCaptureToDevice,
   shortPath,
   CAPTURE_COUNTDOWN_DEFAULT,
 } from "./capturePrefs";
 
 beforeEach(() => {
+  const values = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value), clear: () => values.clear() });
   localStorage.clear();
+});
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+import { invoke } from "@tauri-apps/api/core";
+
+describe("native capture adapter", () => {
+  it("passes a SAF URI unchanged and reports a refused native write honestly", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    saveCaptureDestination("folder"); saveCaptureFolder("content://tree/test");
+    vi.mocked(invoke).mockRejectedValueOnce("permission revoked");
+    const blob = { arrayBuffer: async () => new Uint8Array([1, 2]).buffer } as Blob;
+    expect(await saveCaptureToDevice(blob)).toEqual({ outcome: "failed", detail: "permission revoked" });
+    expect(invoke).toHaveBeenCalledWith("save_png_bytes", expect.objectContaining({ directory: "content://tree/test", destination: "folder" }));
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
 });
 
 describe("capture destination", () => {
@@ -93,6 +112,8 @@ describe("describeCaptureResult", () => {
       "downloads",
       "folder",
       "shared",
+      "share-opened",
+      "cancelled",
       "downloaded",
       "board-only",
       "failed",

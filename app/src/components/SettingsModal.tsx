@@ -96,6 +96,7 @@ import {
   loadCaptureCountdown,
   loadCaptureDestination,
   loadCaptureFolder,
+  pickCaptureFolder,
   saveCaptureCountdown,
   saveCaptureFolder,
   saveCaptureMode,
@@ -1840,13 +1841,12 @@ export function SettingsModal({
                   {captureDestination === "folder" && (
                     <>
                       <p className="lc-settings-hint">
-                        Absolute path. <code>~</code> works. The folder is created if it
-                        does not exist; if the write fails the capture falls back to a
-                        download and the toast says so.
+                        On Android, choose a folder to grant access. On desktop, enter an absolute path (<code>~</code> works). Save failures are reported.
                       </p>
                       <input
                         type="text"
                         value={captureFolder}
+                        readOnly={/Android/i.test(navigator.userAgent)}
                         spellCheck={false}
                         autoCapitalize="off"
                         autoCorrect="off"
@@ -1854,6 +1854,10 @@ export function SettingsModal({
                         aria-label="Capture folder"
                         onChange={(event) => setCaptureFolder(event.target.value)}
                       />
+                      {/Android/i.test(navigator.userAgent) && <button type="button" onClick={async () => {
+                        try { const folder = await pickCaptureFolder(); if (folder) setCaptureFolder(folder); }
+                        catch (error) { window.alert(`Could not choose folder: ${String(error)}`); }
+                      }}>Choose folder…</button>}
                     </>
                   )}
 
