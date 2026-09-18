@@ -410,6 +410,8 @@ import { parseVizProgram, type VizProgram } from "./viz/schema";
 import { messageOf, traceOpen } from "./util/messageOf";
 import { loadChromeFate, mayClearParkedPreparing, BOOT_DONE_HOLD_MS, LOAD_FADE_MS, LOAD_SLIDE_MS } from "./util/workspaceLoad";
 
+import { CoachSendCoordinator } from "./modes/coachSendCoordinator";
+import { saveCoachRequest, loadCoachRequest } from "./modes/coachRequestStore";
 type Mode = "review" | "ambient";
 
 /** One coach composer send, prepared and waiting in the FIFO queue. */
@@ -2062,7 +2064,20 @@ export function Workspace({
     ]);
   };
   /** FIFO coach sends waiting while a turn is in flight. */
-  const coachSendQueueRef = useRef<CoachSendQueueItem[]>([]);
+  const coachSignalRef = useRef<AbortSignal | null>(null);
+  const coachCoordinatorRef = useRef<CoachSendCoordinator<CoachSendQueueItem> | null>(null);
+  if (!coachCoordinatorRef.current) coachCoordinatorRef.current = new CoachSendCoordinator(
+    async (item, signal) => {
+      coachSignalRef.current = signal;
+      try { await executeCoachSendRef.current(item); }
+      finally { coachSignalRef.current = null; }
+    },
+    ticket => setAgentMessages(current => current.map(m => m.id === ticket.id ? {
+      ...m, requestState: ticket.state,
+      queued: ticket.state === "queued" || ticket.state === "preparing",
+    } : m)),
+  );
+  useEffect(() => () => coachCoordinatorRef.current?.dispose(), []);
   /** Bumped on interrupt/merge so late HTTP/WS results are ignored. */
   const coachRunGenRef = useRef(0);
   /** Pending assistant placeholder for the active coach run. */
@@ -5766,20 +5781,24 @@ export function Workspace({
       http: () => Promise<T>,
     ): Promise<T> => {
       const socket = coachRef.current;
-      if (!coachFlags.ws_runs || !socket) return http();
+      const signal = coachSignalRef.current;
+      signal?.throwIfAborted();
+      const guardedHttp = async () => { signal?.throwIfAborted(); const value = await http(); signal?.throwIfAborted(); return value; };
+      if (!coachFlags.ws_runs || !socket) return guardedHttp();
       try {
         return await socket.run<T>(action, payload, {
+          signal: signal ?? undefined,
           onProcess: (event) => {
-            if (messageId && coachFlags.process_events_ui) appendProcessEvent(messageId, event);
+            if (!signal?.aborted && messageId && coachFlags.process_events_ui) appendProcessEvent(messageId, event);
           },
           onReasoning: (text) => {
-            if (messageId) appendReasoning(messageId, text);
+            if (!signal?.aborted && messageId) appendReasoning(messageId, text);
           },
         });
       } catch (cause) {
         // A daemon that predates run frames, or a socket that dropped, should
         // cost the student a retry at worst — not the answer.
-        if (isSocketRunUnavailable(cause)) return http();
+        if (!signal?.aborted && isSocketRunUnavailable(cause)) return guardedHttp();
         throw cause;
       }
     },
@@ -5801,6 +5820,8 @@ export function Workspace({
         | "flags"
         | "replyTo"
         | "queued"
+        | "requestState"
+        | "retryOf"
       >,
     ) => {
       markPadDirty();
@@ -6482,6 +6503,7 @@ export function Workspace({
       } catch (cause) {
         failText = messageOf(cause);
         if (coachRunGenRef.current === genAtStart) setError(failText);
+        throw cause;
       } finally {
         if (coachRunGenRef.current !== genAtStart) {
           if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
@@ -6882,9 +6904,11 @@ export function Workspace({
             },
           );
         }
+        coachSignalRef.current?.throwIfAborted();
         if (flags.draw && !isLocalPad(problem)) {
           await askForDiagram(text, threadAnchor);
         }
+        coachSignalRef.current?.throwIfAborted();
         if (flags.lazy && problem) {
           setBusy("lazy fill…");
           try {
@@ -6963,158 +6987,74 @@ export function Workspace({
     [],
   );
 
-  const enqueueCoachSend = useCallback(
-    async (text: string, flags: AgentSendFlags) => {
+  const enqueueCoachSend = useCallback(async (text: string, flags: AgentSendFlags) => {
+    const id = pushCoachMessage("user", text || flags.pageQuote || "Question", {
+      queued: true, requestState: "preparing", ...(flags.replyTo ? { replyTo: flags.replyTo } : {}),
+    });
+    const coordinator = coachCoordinatorRef.current!;
+    coordinator.reserve(id);
+    try {
       const prepared = await prepareCoachSend(text, flags);
-      const userMessageId = pushCoachMessage("user", prepared.bubble, {
-        ...(prepared.attachments ? { attachments: prepared.attachments } : {}),
-        ...(prepared.flagBits.length > 0 ? { flags: prepared.flagBits } : {}),
-        ...(flags.replyTo ?? prepared.threadAnchor
-          ? { replyTo: flags.replyTo ?? prepared.threadAnchor ?? undefined }
-          : {}),
-        queued: true,
-      });
-      applyCoachFootnote(
-        prepared.anchorId,
-        userMessageId,
-        prepared.text,
-        prepared.attachedFootnoteIds,
-      );
-      coachSendQueueRef.current.push({
-        text: prepared.text,
-        flags: prepared.flags,
-        userMessageId,
-        prompt: prepared.prompt,
-        attachments: prepared.attachments,
-        threadAnchor: sendThreadAnchor(prepared, userMessageId),
-        photos: prepared.photos,
-        quotedPassage: prepared.quotedPassage,
-        anchorId: prepared.anchorId,
-        omittedMarkCount: prepared.omittedMarkCount,
-        includedMarkCount: prepared.includedMarkCount,
-        questionTruncated: prepared.questionTruncated,
-      });
-    },
-    [prepareCoachSend, pushCoachMessage, applyCoachFootnote, sendThreadAnchor],
-  );
-
-  const drainCoachSendQueue = useCallback(() => {
-    if (busyRef.current !== null) return;
-    const next = coachSendQueueRef.current.shift();
-    if (!next) return;
-    void executeCoachSendRef.current(next);
-  }, []);
+      if (coordinator.tickets.get(id)?.controller.signal.aborted) return;
+      const item: CoachSendQueueItem = { ...prepared, userMessageId: id, threadAnchor: sendThreadAnchor(prepared, id) };
+      await saveCoachRequest(id, item);
+      setAgentMessages(current => current.map(message => message.id === id ? {
+        ...message, content: prepared.bubble, attachments: prepared.attachments, flags: prepared.flagBits, requestId: id,
+      } : message));
+      applyCoachFootnote(prepared.anchorId, id, prepared.text, prepared.attachedFootnoteIds);
+      coordinator.ready(id, item);
+    } catch (error) { coordinator.fail(id, error); setError(messageOf(error)); }
+  }, [prepareCoachSend, pushCoachMessage, applyCoachFootnote, sendThreadAnchor]);
 
   executeCoachSendRef.current = executeCoachSend;
-  drainCoachSendQueueRef.current = drainCoachSendQueue;
+  drainCoachSendQueueRef.current = () => coachCoordinatorRef.current?.drain();
 
+  const abortCoachMessage = (id: string) => {
+    const coordinator = coachCoordinatorRef.current!;
+    const running = coordinator.runningId === id;
+    coordinator.abort(id);
+    if (running) {
+      coachRunGenRef.current += 1;
+      const turn = activeCoachTurnIdRef.current;
+      if (turn) setAgentMessages(current => current.map(m => m.id === turn
+        ? { ...m, pending: false, content: m.content || "Cancelled", requestState: "cancelled" } : m));
+      setCoachPhase(null);
+      setBusy(null);
+    }
+  };
+  const retryCoachMessage = async (id: string) => {
+    try {
+      const item = coachCoordinatorRef.current?.tickets.get(id)?.value ?? await loadCoachRequest<CoachSendQueueItem>(id);
+      if (!item) throw new Error("Original request is unavailable. Send a new question with the document open.");
+      const nextId = pushCoachMessage("user", item.text, { queued: true, requestState: "preparing", retryOf: id, attachments: item.attachments });
+      coachCoordinatorRef.current!.reserve(nextId);
+      const next = { ...item, userMessageId: nextId };
+      await saveCoachRequest(nextId, next);
+      setAgentMessages(current => current.map(m => m.id === nextId ? { ...m, requestId: nextId } : m));
+      coachCoordinatorRef.current!.ready(nextId, next);
+    } catch (error) { setError(messageOf(error)); }
+  };
+  const editCoachMessage = (id: string, text?: string) => {
+    const coordinator = coachCoordinatorRef.current!;
+    if (text === undefined) return coordinator.beginEdit(id);
+    const ticket = coordinator.tickets.get(id);
+    if (ticket?.value) {
+      const previous = ticket.value;
+      const next = { ...previous, text, prompt: previous.text && previous.prompt.includes(previous.text)
+        ? previous.prompt.replace(previous.text, text) : text };
+      void saveCoachRequest(id, next).then(() => {
+        setAgentMessages(current => current.map(m => m.id === id ? { ...m, content: text } : m));
+        coordinator.endEdit(id, next);
+      }).catch(error => { setError(messageOf(error)); coordinator.endEdit(id); });
+    }
+    return true;
+  };
   const sendCoachChat = useCallback(
     (text: string, requestedFlags: AgentSendFlags, mode: "queue" | "merge" = "queue") => {
-      const flags = normalizeCoachFlags(requestedFlags);
-
-      if (mode === "merge" && busyRef.current !== null) {
-        coachRef.current?.cancelAll();
-        coachRunGenRef.current += 1;
-        const activeTurn = activeCoachTurnIdRef.current;
-        if (activeTurn) {
-          finishCoachTurn(activeTurn, null);
-          activeCoachTurnIdRef.current = null;
-        }
-        setCoachPhase("Updating with your new messages…");
-        setBusy(null);
-        // Keep queued user bubbles on screen; drop the waiting jobs. One new
-        // ask sees them all via withConversationContext.
-        const queuedIds = new Set(
-          coachSendQueueRef.current.map((item) => item.userMessageId),
-        );
-        coachSendQueueRef.current = [];
-        setAgentMessages((current) =>
-          current.map((message) =>
-            message.queued || queuedIds.has(message.id)
-              ? { ...message, queued: undefined }
-              : message,
-          ),
-        );
-        void (async () => {
-          const prepared = await prepareCoachSend(text, flags);
-          const userMessageId = pushCoachMessage("user", prepared.bubble, {
-            ...(prepared.attachments ? { attachments: prepared.attachments } : {}),
-            ...(prepared.flagBits.length > 0 ? { flags: prepared.flagBits } : {}),
-            ...(flags.replyTo ?? prepared.threadAnchor
-              ? { replyTo: flags.replyTo ?? prepared.threadAnchor ?? undefined }
-              : {}),
-          });
-          applyCoachFootnote(
-            prepared.anchorId,
-            userMessageId,
-            prepared.text,
-            prepared.attachedFootnoteIds,
-          );
-          await executeCoachSend({
-            text: prepared.text,
-            flags: prepared.flags,
-            userMessageId,
-            prompt: prepared.prompt,
-            attachments: prepared.attachments,
-            threadAnchor: sendThreadAnchor(prepared, userMessageId),
-            photos: prepared.photos,
-            quotedPassage: prepared.quotedPassage,
-            anchorId: prepared.anchorId,
-            omittedMarkCount: prepared.omittedMarkCount,
-            includedMarkCount: prepared.includedMarkCount,
-            questionTruncated: prepared.questionTruncated,
-          });
-        })();
-        return;
-      }
-
-      if (mode === "queue" && busyRef.current !== null) {
-        void enqueueCoachSend(text, flags);
-        suppressCoachPanelOpenRef.current = false;
-        return;
-      }
-
-      void (async () => {
-        const prepared = await prepareCoachSend(text, flags);
-        const userMessageId = pushCoachMessage("user", prepared.bubble, {
-          ...(prepared.attachments ? { attachments: prepared.attachments } : {}),
-          ...(prepared.flagBits.length > 0 ? { flags: prepared.flagBits } : {}),
-          ...(flags.replyTo ?? prepared.threadAnchor
-            ? { replyTo: flags.replyTo ?? prepared.threadAnchor ?? undefined }
-            : {}),
-        });
-        applyCoachFootnote(
-          prepared.anchorId,
-          userMessageId,
-          prepared.text,
-          prepared.attachedFootnoteIds,
-        );
-        await executeCoachSend({
-          text: prepared.text,
-          flags: prepared.flags,
-          userMessageId,
-          prompt: prepared.prompt,
-          attachments: prepared.attachments,
-          threadAnchor: sendThreadAnchor(prepared, userMessageId),
-          photos: prepared.photos,
-          quotedPassage: prepared.quotedPassage,
-          anchorId: prepared.anchorId,
-          omittedMarkCount: prepared.omittedMarkCount,
-          includedMarkCount: prepared.includedMarkCount,
-          questionTruncated: prepared.questionTruncated,
-        });
-      })();
-    },
-    [
-      normalizeCoachFlags,
-      prepareCoachSend,
-      pushCoachMessage,
-      applyCoachFootnote,
-      executeCoachSend,
-      enqueueCoachSend,
-      finishCoachTurn,
-      sendThreadAnchor,
-    ],
+      const coordinator = coachCoordinatorRef.current!;
+      if (mode === "merge" && coordinator.runningId) abortCoachMessage(coordinator.runningId);
+      void enqueueCoachSend(text, normalizeCoachFlags(requestedFlags));
+    }, [enqueueCoachSend, normalizeCoachFlags],
   );
 
   const sendCoachFromFootnote = useCallback(
@@ -10726,6 +10666,10 @@ export function Workspace({
               threadRootIdRef.current = rootId;
             }}
             onSend={sendCoachChat}
+            onAbortMessage={abortCoachMessage}
+            onRetryMessage={retryCoachMessage}
+            onEditMessage={editCoachMessage}
+            onCancelEdit={id => coachCoordinatorRef.current?.endEdit(id)}
             onRequestBridge={(messageId) => {
               revealForMessageIdRef.current = messageId;
               setRevealError(null);

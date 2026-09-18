@@ -17,6 +17,7 @@ import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
 import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
+import { ThinkingDots } from "./ThinkingDots";
 import { ProcessBlock, reasoningBodyForTurn } from "./ProcessBlock";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { AgentRichText, useWordReveal } from "./AgentRichText";
@@ -434,6 +435,9 @@ export interface AgentChatMessage {
   pendingAck?: CoachPendingAck;
   /** User message waiting in the FIFO send queue while the coach is busy. */
   queued?: boolean;
+  requestId?: string;
+  retryOf?: string;
+  requestState?: import("./coachSendCoordinator").SendState;
   /**
    * The turn this one is answering.
    *
@@ -515,6 +519,10 @@ export interface AgentSidePanelProps {
   }>;
   onToggleAttached?: (id: string) => void;
   onSend: (text: string, flags: AgentSendFlags, mode?: "queue" | "merge") => void;
+  onAbortMessage?: (id: string) => void;
+  onRetryMessage?: (id: string) => void;
+  onEditMessage?: (id: string, text?: string) => boolean;
+  onCancelEdit?: (id: string) => void;
   /** The open thread, so the caller can narrow what the coach is told. */
   onThreadChange?: (rootId: string | null) => void;
   /** Opens the hold-to-reveal dialog for the review on this message. */
@@ -553,6 +561,7 @@ export function AgentSidePanel({
   annotationChoices = [],
   onToggleAttached,
   onSend,
+  onAbortMessage, onRetryMessage, onEditMessage, onCancelEdit,
   onThreadChange,
   onRequestBridge,
   onToggleDrawing,
@@ -618,6 +627,8 @@ export function AgentSidePanel({
           : "Board modes off. Hold to cycle Draw, Review, Lazy.";
   const [handwriting, setHandwriting] = useState(false);
   const [reasoning, setReasoning] = useState(loadAgentReasoningLevel);
+  const [editingQueued, setEditingQueued] = useState<AgentChatMessage | null>(null);
+  const [queueEditText, setQueueEditText] = useState("");
   const [annotations, setAnnotations] = useState(false);
   const [askPreset, setAskPreset] = useState<AskPresetId | null>(null);
   const attachedCount = attachedMarks?.length ?? 0;
@@ -1574,6 +1585,9 @@ export function AgentSidePanel({
               >
                 {ROLE_LABEL[message.role]}
               </div>
+              {message.pending && <ThinkingDots />}
+              {message.requestState && !message.queued && <small>{message.requestState}</small>}
+              {message.retryOf && <small>Retry · previous attempt retained above</small>}
               {message.queued && (
                 <span className="lc-agent-queued" aria-label="Queued message">Queued</span>
               )}
@@ -1592,7 +1606,7 @@ export function AgentSidePanel({
                       running={Boolean(message.pending)}
                     />
                   )}
-                  {reasoningText ? (
+                  {reasoningText && !message.pending ? (
                     <ReasoningBlock
                       text={reasoningText}
                       running={Boolean(message.pending)}
@@ -1744,6 +1758,13 @@ export function AgentSidePanel({
           </p>
         ) : null}
 
+        {editingQueued && <div role="dialog" aria-label="Edit queued message">
+          <textarea aria-label="Queued question" value={queueEditText} onChange={e => setQueueEditText(e.target.value)} />
+          <button type="button" disabled={!queueEditText.trim()} onClick={() => {
+            onEditMessage?.(editingQueued.id, queueEditText.trim()); setEditingQueued(null);
+          }}>Save queued question</button>
+          <button type="button" onClick={() => { onCancelEdit?.(editingQueued.id); setEditingQueued(null); }}>Cancel edit</button>
+        </div>}
         <form className="lc-agent-composer" onSubmit={(event) => submit("queue", event)}>
           <div className="lc-agent-pane-expand-row">
             <PaneExpandButton
@@ -2138,6 +2159,14 @@ export function AgentSidePanel({
               style={{ top: messageMenu.top, left: messageMenu.left }}
               onClick={(event) => event.stopPropagation()}
             >
+              {menuMessage.role === "user" && menuMessage.requestState && <>
+                {["preparing", "queued", "running"].includes(menuMessage.requestState) ?
+                  <button role="menuitem" onClick={() => { onAbortMessage?.(menuMessage.id); closeMessageMenu(); }}>Abort</button> :
+                  <button role="menuitem" onClick={() => { onRetryMessage?.(menuMessage.requestId ?? menuMessage.id); closeMessageMenu(); }}>Retry</button>}
+                {menuMessage.requestState === "queued" && <button role="menuitem" onClick={() => {
+                  if (onEditMessage?.(menuMessage.id)) { setEditingQueued(menuMessage); setQueueEditText(menuMessage.content); closeMessageMenu(); }
+                }}>Edit</button>}
+              </>}
               <button
                 type="button"
                 role="menuitem"

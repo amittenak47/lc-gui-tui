@@ -52,6 +52,9 @@ export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
         role: message.role as AgentChatMessage["role"],
         content,
         at: typeof message.at === "number" ? message.at : Date.now(),
+        requestId: message.requestId, retryOf: message.retryOf,
+        requestState: message.requestState && ["preparing", "queued", "running"].includes(message.requestState)
+          ? "interrupted" : message.requestState,
         review: message.review,
         bridge: message.bridge,
         attachments: message.attachments,
