@@ -18074,14 +18074,14 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * Reading pan: drop the pdf.js overlay from the compositor. Glyphs stay on
- * the page canvas. Quotes need those spans at rest — hide only while
- * `setDocCameraLive(true)`, not on mere pointer-down (hold-then-drag still
- * has to hit the text layer). Footnote packs stay up during pan; they ride
- * the marks-slot transform. Off-screen PDF pages hide their own marks in
- * DocSelectionLayer when the intersecting set changes, not every frame.
+ * Reading pan: drop the on-screen pdf.js overlay from the compositor. Glyphs
+ * stay on the page canvas. Quotes need those spans at rest — hide only the
+ * intersecting hosts, and only while the camera is pulsing, not on mere
+ * pointer-down (hold-then-drag still has to hit the text layer). An ancestor
+ * class on `html` restyled every text layer in the book. Footnote packs stay
+ * up during pan; they ride the marks-slot transform.
  */
-html.lc-doc-camera-live .lc-pdf-text.textLayer {
+.lc-pdf-text.textLayer.lc-pdf-pan-hidden {
   visibility: hidden;
   pointer-events: none !important;
   user-select: none !important;
@@ -18623,18 +18623,6 @@ html.lc-doc-camera-live .lc-pdf-text.textLayer {
   pointer-events: none;
   overflow: visible;
 }
-
-/*
- * Promote the markdown/PDF slots only while the camera is riding. A permanent
- * will-change kept the whole column as a GPU layer after the first new view.
- */
-html.lc-doc-camera-live .lc-page-content-slot,
-html.lc-doc-camera-live .lc-page-marks-slot,
-html.lc-doc-camera-live .lc-scene-overlay,
-html.lc-doc-camera-live .lc-scene-select {
-  will-change: transform;
-}
-
 
 /*
  * Highlighter: the document takes the pointer back for the length of a sweep.

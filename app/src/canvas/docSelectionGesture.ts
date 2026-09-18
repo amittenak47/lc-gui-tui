@@ -56,20 +56,20 @@ let cameraLive = false;
 let pointerHeld = false;
 let publishedFrozen = false;
 const cameraLiveListeners = new Set<(live: boolean) => void>();
+const cameraPulseListeners = new Set<(live: boolean) => void>();
 const scopeHolds = new Map<string, { camera: boolean; pointer: boolean }>();
 const scopeListeners = new Map<string, Set<(live: boolean) => void>>();
+const scopeCameraListeners = new Map<string, Set<(live: boolean) => void>>();
 let legacyCameraLiveUnsub: (() => void) | null = null;
 
-/** `document.documentElement` while the reading camera is mid-gesture. */
+/**
+ * Legacy name for the document-wide class that used to hide every PDF text
+ * layer. Kept so tests can assert it is no longer applied to `html`.
+ */
 export const DOC_CAMERA_LIVE_CLASS = "lc-doc-camera-live";
 
 function paintFrozen(): boolean {
   return cameraLive || pointerHeld;
-}
-
-function syncCameraLiveClass(): void {
-  if (typeof document === "undefined") return;
-  document.documentElement.classList.toggle(DOC_CAMERA_LIVE_CLASS, cameraLive);
 }
 
 function publishPaintFrozen(): void {
@@ -124,7 +124,7 @@ export function setDocCameraLive(live: boolean): void {
   const next = cameraLiveCount > 0;
   if (cameraLive === next) return;
   cameraLive = next;
-  syncCameraLiveClass();
+  for (const handler of [...cameraPulseListeners]) handler(next);
   publishPaintFrozen();
 }
 
@@ -167,6 +167,12 @@ function publishScopeFrozen(scope: string, live: boolean): void {
   for (const handler of [...listeners]) handler(live);
 }
 
+function publishScopeCamera(scope: string, live: boolean): void {
+  const listeners = scopeCameraListeners.get(scope);
+  if (!listeners) return;
+  for (const handler of [...listeners]) handler(live);
+}
+
 function setScopeHold(
   scope: string | undefined,
   key: "camera" | "pointer",
@@ -178,6 +184,7 @@ function setScopeHold(
   const next = { ...prev, [key]: live };
   if (!next.camera && !next.pointer) scopeHolds.delete(scope);
   else scopeHolds.set(scope, next);
+  if (key === "camera" && prev.camera !== live) publishScopeCamera(scope, live);
   const now = next.camera || next.pointer;
   if (was !== now) publishScopeFrozen(scope, now);
 }
@@ -219,16 +226,15 @@ export function makeDocFlagHolds(scope?: string): DocFlagHolds {
 export function resetDocCameraForTests(): void {
   cameraLiveCount = 0;
   pointerHeldCount = 0;
-  if (cameraLive) {
-    cameraLive = false;
-    syncCameraLiveClass();
-  }
+  cameraLive = false;
   pointerHeld = false;
   claimedHandlers.clear();
   scrollShares.clear();
   subMarkHits.clear();
   scopeHolds.clear();
   scopeListeners.clear();
+  scopeCameraListeners.clear();
+  cameraPulseListeners.clear();
   publishPaintFrozen();
 }
 
@@ -240,12 +246,18 @@ export function isDocCameraLive(scope?: string): boolean {
   return paintFrozen();
 }
 
+/** Camera pulse only — not pointer-down. Hold-then-drag still needs the text layer. */
+export function isDocCameraPulsing(scope?: string): boolean {
+  if (scope) return Boolean(scopeHolds.get(scope)?.camera);
+  return cameraLive;
+}
+
 /**
  * Subscribe to camera live edges.
  *
  * Pass `scope` for one surface's freeze. Omit it for the process-wide sum
- * (hub ping, CSS class). A paint pump must pass its film scope or a leftover
- * flick on the other split pane cancels its decode.
+ * (hub ping). A paint pump must pass its film scope or a leftover flick on
+ * the other split pane cancels its decode.
  */
 export function subscribeDocCameraLive(
   handler: (live: boolean) => void,
@@ -266,6 +278,35 @@ export function subscribeDocCameraLive(
   cameraLiveListeners.add(handler);
   return () => {
     cameraLiveListeners.delete(handler);
+  };
+}
+
+/**
+ * Camera pulse edges, even when pointer-down already froze paint.
+ *
+ * {@link subscribeDocCameraLive} is paint-frozen (camera or pointer). Hiding
+ * PDF text on that signal would blank the layer on hold-then-drag. Text hide
+ * and ride `will-change` subscribe here instead.
+ */
+export function subscribeDocCameraPulse(
+  handler: (live: boolean) => void,
+  scope?: string,
+): () => void {
+  if (scope) {
+    let listeners = scopeCameraListeners.get(scope);
+    if (!listeners) {
+      listeners = new Set();
+      scopeCameraListeners.set(scope, listeners);
+    }
+    listeners.add(handler);
+    return () => {
+      listeners.delete(handler);
+      if (listeners.size === 0) scopeCameraListeners.delete(scope);
+    };
+  }
+  cameraPulseListeners.add(handler);
+  return () => {
+    cameraPulseListeners.delete(handler);
   };
 }
 

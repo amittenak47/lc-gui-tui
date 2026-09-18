@@ -2059,6 +2059,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return panRideNodesRef.current;
   }, [refreshPanRideNodes]);
 
+  /**
+   * GPU-promote the nodes that already take `translate3d`, not every page slot
+   * under an ancestor class. A document-wide `will-change` restyled the book.
+   */
+  const setPanRideWillChange = useCallback(
+    (on: boolean) => {
+      const value = on ? "transform" : "";
+      const apply = (node: HTMLElement | null | undefined) => {
+        if (!node) return;
+        if (node.style.willChange !== value) node.style.willChange = value;
+      };
+      apply(contentSlotNodeRef.current);
+      apply(marksSlotNodeRef.current);
+      for (const node of ensurePanRideNodes()) apply(node);
+    },
+    [ensurePanRideNodes],
+  );
+
   const setPagePanOffset = useCallback(
     (dx: number, dy: number) => {
       const current = panOffsetRef.current;
@@ -2097,16 +2115,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!panRidePrimedRef.current) refreshPanRideNodes();
       panRidePrimedRef.current = false;
       rasterInkRef.current?.setCameraMoving(true);
-      // First pan frame already wrote translate3d. Hide text next frame so
-      // idle-wakeup is not a style recalc of every pdf.js span.
+      // First pan frame already wrote translate3d. Hide on-screen text next
+      // frame so the opening sample stays a transform.
       if (cameraLiveClassRafRef.current) {
         cancelAnimationFrame(cameraLiveClassRafRef.current);
       }
       cameraLiveClassRafRef.current = requestAnimationFrame(() => {
         cameraLiveClassRafRef.current = 0;
-        // `html.lc-doc-camera-live` hides every PDF text layer in the window.
-        // A whiteboard fit/recentre must not blur the split file next to it.
-        if (pageContentRef.current) docFlags.camera(true);
+        // Camera pulse, not an html class: PdfDocument hides intersecting
+        // text layers. A whiteboard fit/recentre must not freeze the split
+        // file next to it.
+        if (pageContentRef.current) {
+          docFlags.camera(true);
+          setPanRideWillChange(true);
+        }
       });
     }
     if (cameraMotionTimerRef.current) window.clearTimeout(cameraMotionTimerRef.current);
@@ -2121,6 +2143,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         cameraLiveClassRafRef.current = 0;
       }
       docFlags.camera(false);
+      setPanRideWillChange(false);
     }, cameraPulseSettleMs());
     // Commit / ink moving-mode drop wait for a real reading idle, not the
     // pulse settle. A 3–5s pause then a same-direction burst must still be
@@ -2137,7 +2160,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       commitVisualScrollRef.current();
       rasterInkRef.current?.setCameraMoving(false);
     }, CAMERA_IDLE_TEARDOWN_MS);
-  }, [filmScope]);
+  }, [filmScope, setPanRideWillChange]);
   const pulseCameraMotionRef = useRef(pulseCameraMotion);
   const readScrollRef = useRef<() => { scrollX: number; scrollY: number; zoom: number }>(
     () => ({ scrollX: 0, scrollY: 0, zoom: 1 }),
@@ -6907,14 +6930,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       visualScrollRafRef.current = 0;
       pendingVisualScrollRef.current = null;
       cameraMotionActiveRef.current = false;
-      // A parked/closed document must release its global CSS and paint hold.
-      // Cancelling only the settle timer left the hold latched indefinitely.
+      // A parked/closed document must release its paint hold. Cancelling only
+      // the settle timer left the hold latched indefinitely.
       docFlags.camera(false);
       docFlags.pointer(false);
+      setPanRideWillChange(false);
     };
     if (splitPaused) releaseCamera();
     return releaseCamera;
-  }, [splitPaused, docFlags]);
+  }, [splitPaused, docFlags, setPanRideWillChange]);
 
   // Entering or leaving Carbon / transparent paper flips the canvas after the
   // theme has already been applied, so it needs its own push.
