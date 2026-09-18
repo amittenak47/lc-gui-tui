@@ -158,27 +158,76 @@ export function isCoverRect(
 }
 
 /**
- * The last answer, kept while the document has not moved under it.
+ * Document-local cover boxes, kept while the *layout* has not changed.
  *
- * Every one of these boxes is a `getBoundingClientRect`, and the list ends with
- * *every page in the document* — a textbook has hundreds of `[data-doc-scope]`
- * divs, all of them in the DOM whether or not their bitmap is. The cover test
- * runs three or four times per pointer sample during a sweep (paint the band,
- * preview the sub-mark, filter the band in render, filter each ribbon), so a
- * finger dragged across a book was re-measuring the whole book several times a
- * frame and allocating a key string per page each time. That is the stall.
+ * Every one of these boxes used to be a `getBoundingClientRect`, and the list
+ * ends with *every page in the document* — a textbook has hundreds of
+ * `[data-doc-scope]` divs. The cover test runs three or four times per pointer
+ * sample during a sweep, so a finger dragged across a book was re-measuring
+ * the whole book several times a frame.
  *
- * None of those boxes can move while the body itself is still: the camera
- * transforms the slot the pages sit in, so a pan, a zoom or a re-layout all
- * show up as a different body box, and the entry is thrown away then. Keyed on
- * the body's own rect rather than on a frame counter for exactly that reason —
- * a scroll that writes a new transform and re-measures inside one frame gets
- * fresh boxes, not the ones from before the write.
+ * Camera pan only translates the slot those pages sit in. Body-local page
+ * boxes do not move. Keying on the body's viewport rect flushed the cache on
+ * every flick and then remasured the book — that was the settle stall.
+ *
+ * Board / canvas-wrap boxes are viewport-fixed: their position relative to the
+ * document *does* change during scroll, so they are never stored here. Measure
+ * those two nodes at test time, or skip them when the local page list already
+ * answers.
  */
-const coverBoxCache = new WeakMap<HTMLElement, { key: string; boxes: ViewportBox[] }>();
+type CoverCache = {
+  epoch: number;
+  offsetWidth: number;
+  offsetHeight: number;
+  scrollHeight: number;
+  local: ViewportBox[];
+};
 
-function hostBoxKey(box: DOMRect): string {
-  return `${Math.round(box.left)}:${Math.round(box.top)}:${Math.round(box.width)}:${Math.round(box.height)}`;
+const coverBoxCache = new WeakMap<HTMLElement, CoverCache>();
+let coverLayoutEpoch = 0;
+
+/** Spread / column relayout: local page offsets are no longer valid. */
+export function invalidateDocCoverGeometry(): void {
+  coverLayoutEpoch += 1;
+}
+
+function localBoxKey(box: ViewportBox): string {
+  return `${Math.round(box.left)}:${Math.round(box.top)}:${Math.round(box.right)}:${Math.round(box.bottom)}`;
+}
+
+function viewportToLocalBox(
+  origin: DOMRect,
+  scale: number,
+  box: ViewportBox,
+): ViewportBox {
+  return {
+    left: (box.left - origin.left) / scale,
+    top: (box.top - origin.top) / scale,
+    right: (box.right - origin.left) / scale,
+    bottom: (box.bottom - origin.top) / scale,
+  };
+}
+
+function localBoxToViewport(
+  origin: DOMRect,
+  scale: number,
+  box: ViewportBox,
+): ViewportBox {
+  return {
+    left: origin.left + box.left * scale,
+    top: origin.top + box.top * scale,
+    right: origin.left + box.right * scale,
+    bottom: origin.top + box.bottom * scale,
+  };
+}
+
+function localRectAsBox(rect: LocalRect): ViewportBox {
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: rect.left + rect.width,
+    bottom: rect.top + rect.height,
+  };
 }
 
 /**
@@ -200,36 +249,27 @@ function hostBoxKey(box: DOMRect): string {
  * the selection" is the page's own corner when the selection *is* the page.
  * Catching it here is what stops the next piece of chrome inheriting it.
  */
-export function coverReferenceBoxes(host: HTMLElement): ViewportBox[] {
-  const own = host.getBoundingClientRect();
-  const key = hostBoxKey(own);
-  const cached = coverBoxCache.get(host);
-  if (cached && cached.key === key) return cached.boxes;
-  const boxes = measureCoverReferenceBoxes(host);
-  coverBoxCache.set(host, { key, boxes });
-  return boxes;
-}
-
-function measureCoverReferenceBoxes(host: HTMLElement): ViewportBox[] {
+function measureLocalCoverBoxes(host: HTMLElement): ViewportBox[] {
+  const origin = host.getBoundingClientRect();
+  const scale = scaleOf(host) || 1;
   const boxes: ViewportBox[] = [];
   const seen = new Set<string>();
   const push = (node: Element | null | undefined) => {
     if (!(node instanceof HTMLElement)) return;
     const box = node.getBoundingClientRect();
     if (box.width <= 1 || box.height <= 1) return;
-    const key = hostBoxKey(box);
+    const local = viewportToLocalBox(origin, scale, box);
+    const key = localBoxKey(local);
     if (seen.has(key)) return;
     seen.add(key);
-    boxes.push(box);
+    boxes.push(local);
   };
   push(host);
   for (const selector of COVER_SLOT_SELECTORS) {
     push(host.closest(selector));
   }
-  push(host.closest(".lc-canvas-wrap"));
   const board = host.closest(".lc-board");
   if (board) {
-    push(board);
     for (const node of board.querySelectorAll(
       ".lc-page-content-slot, .lc-page-marks-slot, .lc-doc-select-overlay",
     )) {
@@ -241,12 +281,64 @@ function measureCoverReferenceBoxes(host: HTMLElement): ViewportBox[] {
   return boxes;
 }
 
+function localCoverBoxes(host: HTMLElement): ViewportBox[] {
+  const cached = coverBoxCache.get(host);
+  if (
+    cached &&
+    cached.epoch === coverLayoutEpoch &&
+    cached.offsetWidth === host.offsetWidth &&
+    cached.offsetHeight === host.offsetHeight &&
+    cached.scrollHeight === host.scrollHeight
+  ) {
+    return cached.local;
+  }
+  const local = measureLocalCoverBoxes(host);
+  coverBoxCache.set(host, {
+    epoch: coverLayoutEpoch,
+    offsetWidth: host.offsetWidth,
+    offsetHeight: host.offsetHeight,
+    scrollHeight: host.scrollHeight,
+    local,
+  });
+  return local;
+}
+
+/** Board / wrap — viewport-fixed; never cached across a pan. */
+function liveViewportCoverBoxes(host: HTMLElement): ViewportBox[] {
+  const boxes: ViewportBox[] = [];
+  const push = (node: Element | null) => {
+    if (!(node instanceof HTMLElement)) return;
+    const box = node.getBoundingClientRect();
+    if (box.width <= 1 || box.height <= 1) return;
+    boxes.push(box);
+  };
+  push(host.closest(".lc-canvas-wrap"));
+  push(host.closest(".lc-board"));
+  return boxes;
+}
+
+export function coverReferenceBoxes(host: HTMLElement): ViewportBox[] {
+  const origin = host.getBoundingClientRect();
+  const scale = scaleOf(host) || 1;
+  const viewport = localCoverBoxes(host).map((box) =>
+    localBoxToViewport(origin, scale, box),
+  );
+  return [...viewport, ...liveViewportCoverBoxes(host)];
+}
+
 export function isPageCoverRect(
   rect: ViewportBox,
   host: HTMLElement,
   slop = HOST_COVER_SLOP_PX,
 ): boolean {
-  return coverReferenceBoxes(host).some((box) => isCoverRect(rect, box, slop));
+  const origin = host.getBoundingClientRect();
+  const scale = scaleOf(host) || 1;
+  const localSlop = slop / scale;
+  const localRect = viewportToLocalBox(origin, scale, rect);
+  if (localCoverBoxes(host).some((box) => isCoverRect(localRect, box, localSlop))) {
+    return true;
+  }
+  return liveViewportCoverBoxes(host).some((box) => isCoverRect(rect, box, slop));
 }
 
 export function unionViewportBoxes(
@@ -365,18 +457,17 @@ export function localRectCoversHost(
   rect: LocalRect,
   slop = HOST_COVER_SLOP_PX,
 ): boolean {
-  const origin = host.getBoundingClientRect();
   const scale = scaleOf(host) || 1;
-  return isPageCoverRect(
-    {
-      left: origin.left + rect.left * scale,
-      top: origin.top + rect.top * scale,
-      right: origin.left + (rect.left + rect.width) * scale,
-      bottom: origin.top + (rect.top + rect.height) * scale,
-    },
-    host,
-    slop,
-  );
+  const localSlop = slop / scale;
+  const localBox = localRectAsBox(rect);
+  if (localCoverBoxes(host).some((box) => isCoverRect(localBox, box, localSlop))) {
+    return true;
+  }
+  const live = liveViewportCoverBoxes(host);
+  if (live.length === 0) return false;
+  const origin = host.getBoundingClientRect();
+  const viewportRect = localBoxToViewport(origin, scale, localBox);
+  return live.some((box) => isCoverRect(viewportRect, box, slop));
 }
 
 /** Viewport point → body-local layout coordinates. */
