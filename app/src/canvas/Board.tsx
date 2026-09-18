@@ -2762,16 +2762,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const rememberedHostScrollRef = useRef<HostScrollSnapshot[]>([]);
 
   const annotateTapPointerRef = useRef<number | null>(null);
-  const annotateToggleAtRef = useRef(0);
+  /** Pointerup already flipped; the leftover compatibility `click` must not. */
+  const annotateSkipClickRef = useRef(false);
   const toggleAnnotate = useCallback(() => {
-    /*
-     * Touch after a pan often delivers `pointerup` and a delayed `click`, or
-     * the gatekeeper synthesizes `click` for a compositor mis-hit. Same tap
-     * must not flip twice.
-     */
-    const now = performance.now();
-    if (now - annotateToggleAtRef.current < 280) return;
-    annotateToggleAtRef.current = now;
     wakeChromeRef.current();
     if (editing) {
       modeIndicatorRef.current?.show("Switch to Preview to annotate");
@@ -9685,6 +9678,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     data-tip-placement="bottom"
                     onPointerDown={(event) => {
                       annotateTapPointerRef.current = event.pointerId;
+                      annotateSkipClickRef.current = false;
                       if (annotatePeek) peekAnnotate();
                     }}
                     onPointerCancel={() => {
@@ -9694,9 +9688,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       if (annotateTapPointerRef.current !== event.pointerId) return;
                       annotateTapPointerRef.current = null;
                       if (event.button !== 0 && event.pointerType === "mouse") return;
+                      annotateSkipClickRef.current = true;
                       toggleAnnotate();
                     }}
-                    onClick={toggleAnnotate}
+                    onClick={() => {
+                      if (annotateSkipClickRef.current) {
+                        annotateSkipClickRef.current = false;
+                        return;
+                      }
+                      toggleAnnotate();
+                    }}
                   >
                     <AnnotateIcon on={annotateCode} />
                   </button>
