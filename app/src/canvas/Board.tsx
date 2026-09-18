@@ -156,6 +156,7 @@ import {
 } from "./inkPageIndex";
 import {
   peekPdfReadingFrames,
+  peekPdfIntersectingPages,
   peekPdfFilmCurrent,
   publishPdfFilmCurrent,
   publishPdfFilmFromCamera,
@@ -9040,6 +9041,29 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
         return thumbs;
       },
+      captureDocumentView: () => {
+        const state = apiRef.current?.getAppState() as { width?: number; height?: number } | undefined;
+        const cam = readScrollRef.current();
+        const viewport = { x: -cam.scrollX, y: -cam.scrollY, width: (state?.width ?? 0) / cam.zoom, height: (state?.height ?? 0) / cam.zoom };
+        const root = contentSlotNodeRef.current;
+        const boardBox = boardRef.current?.getBoundingClientRect();
+        const pages = [...peekPdfIntersectingPages(filmScope)];
+        const blocks = root ? Array.from(root.querySelectorAll<HTMLElement>(
+          pdfDocumentRef.current ? ".lc-pdf-text" : "p, pre, li, h1, h2, h3, h4, blockquote, td",
+        )) : [];
+        const text = blocks.filter(node => {
+          if (pdfDocumentRef.current) {
+            const n = Number(node.closest("[data-pdf-page]")?.getAttribute("data-pdf-page"));
+            return pages.includes(n);
+          }
+          const box = node.getBoundingClientRect();
+          return boardBox && box.bottom > boardBox.top && box.top < boardBox.bottom;
+        }).map(node => node.textContent ?? "").join("\n");
+        const scene = apiRef.current?.getSceneElements() as Array<{ id: string; version?: number }> | undefined;
+        return { viewport, pages, text, revision: JSON.stringify([
+          scene?.map(e => [e.id, e.version]), rasterInkRef.current?.getOps(),
+        ]) };
+      },
       exportViewThumb: async () => {
         const api = apiRef.current;
         if (!api) return null;
@@ -9050,14 +9074,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           width?: number;
           height?: number;
         };
-        const zoom = num(state.zoom?.value, 1) || 1;
+        const camera = readScrollRef.current();
+        const zoom = camera.zoom || 1;
         const viewW = num(state.width, 0);
         const viewH = num(state.height, 0);
         if (viewW <= 0 || viewH <= 0) return null;
         // Excalidraw's camera: sceneX = viewportX / zoom - scrollX.
         const crop = {
-          x: -num(state.scrollX, 0),
-          y: -num(state.scrollY, 0),
+          x: -camera.scrollX,
+          y: -camera.scrollY,
           width: viewW / zoom,
           height: viewH / zoom,
         };
@@ -9085,7 +9110,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
         const png = await captureImage(
           () => exportRegionBlob(api, ops, visible, crop, 1, pageExportLayers()),
-          { maxEdge: 640, maxBase64: 2 * 1024 * 1024 },
+          { maxEdge: 1600, maxBase64: 2 * 1024 * 1024 },
         );
         return png ? { label: "This view", png } : null;
       },

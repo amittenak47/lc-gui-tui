@@ -117,6 +117,16 @@ export async function photoFromFile(file: File): Promise<PickedPhoto> {
   };
 }
 
+/** Display-sized copy only. Preserve the original separately for retries. */
+export async function thumbnailFromPng(png: string): Promise<string> {
+  const image = new Image();
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve(); image.onerror = () => reject(new Error("Capture thumbnail failed"));
+    image.src = `data:image/png;base64,${png}`;
+  });
+  return encodeAt(image, PHOTO_THUMB_EDGE);
+}
+
 /**
  * Ask for one or more images and normalise them.
  *

@@ -30,6 +30,8 @@ struct SaveArgs {
     /// Base64 PNG payload (JNI-friendly).
     png_base64: String,
     filename: String,
+    destination: String,
+    directory: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -46,7 +48,7 @@ struct SaveResponse {
 pub struct GallerySave<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> GallerySave<R> {
-    pub fn save_png(&self, png_bytes: &[u8], filename: &str) -> Result<String> {
+    pub fn save_png(&self, png_bytes: &[u8], filename: &str, destination: &str, directory: Option<String>) -> Result<String> {
         use base64::Engine;
         let png_base64 = base64::engine::general_purpose::STANDARD.encode(png_bytes);
         let response = self.0.run_mobile_plugin::<SaveResponse>(
@@ -54,8 +56,15 @@ impl<R: Runtime> GallerySave<R> {
             SaveArgs {
                 png_base64,
                 filename: filename.to_string(),
+                destination: destination.to_string(),
+                directory,
             },
         )?;
+        Ok(response.uri)
+    }
+
+    pub fn pick_folder(&self) -> Result<String> {
+        let response = self.0.run_mobile_plugin::<SaveResponse>("pick_folder", ())?;
         Ok(response.uri)
     }
 

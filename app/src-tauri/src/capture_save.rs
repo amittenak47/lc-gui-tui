@@ -50,16 +50,18 @@ pub fn save_png_bytes(
 
     #[cfg(target_os = "android")]
     {
-        if dest == CaptureDest::Photos {
-            if let Some(gallery) = app.gallery_save() {
-                return gallery
-                    .save_png(&bytes, &name)
-                    .map_err(|err| err.to_string());
-            }
-            return Err("gallery save plugin unavailable".into());
-        }
+        let gallery = app.gallery_save().ok_or("gallery save plugin unavailable")?;
+        let destination = match dest {
+            CaptureDest::Photos => "photos",
+            CaptureDest::Downloads => "downloads",
+            CaptureDest::Folder => "folder",
+        };
+        return gallery.save_png(&bytes, &name, destination, directory)
+            .map_err(|err| err.to_string());
     }
 
+    #[cfg(not(target_os = "android"))]
+    {
     let dir = match dest {
         CaptureDest::Folder => {
             let raw = directory.unwrap_or_default();
@@ -72,9 +74,37 @@ pub fn save_png_bytes(
         _ => resolve_save_dir(&app, dest)?,
     };
     fs::create_dir_all(&dir).map_err(|err| format!("create save dir: {err}"))?;
-    let path = dir.join(&name);
-    fs::write(&path, &bytes).map_err(|err| format!("write png: {err}"))?;
-    Ok(path.to_string_lossy().into_owned())
+    use std::io::Write;
+    for suffix in 0..10000 {
+        let candidate = if suffix == 0 { name.clone() } else {
+            format!("{}-{suffix}.png", name.trim_end_matches(".png"))
+        };
+        let path = dir.join(candidate);
+        match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                file.write_all(&bytes).map_err(|err| format!("write png: {err}"))?;
+                return Ok(path.to_string_lossy().into_owned());
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("create png: {err}")),
+        }
+    }
+    Err("too many captures with that name".into())
+    }
+}
+
+#[tauri::command]
+pub fn pick_capture_folder(app: AppHandle) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    {
+        app.gallery_save().ok_or("gallery save plugin unavailable")?
+            .pick_folder().map_err(|err| err.to_string())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("Use a folder path on desktop".into())
+    }
 }
 
 /// Expand a leading `~` so a typed path behaves the way a shell would.

@@ -23,6 +23,8 @@ export type CaptureOutcome =
   | "downloads"
   | "folder"
   | "shared"
+  | "share-opened"
+  | "cancelled"
   | "downloaded"
   | "board-only"
   | "failed";
@@ -130,13 +132,11 @@ export function saveCaptureDestination(value: CaptureDestination): void {
   }
 }
 
-/**
- * Absolute folder for the `folder` destination.
- *
- * Typed rather than picked: a native directory picker means another Tauri
- * plugin and another permission on every platform, and on a tablet the answer
- * is nearly always one path the student sets once.
- */
+/** Desktop path or persisted Android SAF tree URI. */
+export async function pickCaptureFolder(): Promise<string | null> {
+  const uri = await tauriInvoke<string>("pick_capture_folder", {});
+  return uri || null;
+}
 export function loadCaptureFolder(): string {
   try {
     return localStorage.getItem(FOLDER_KEY) ?? "";
@@ -237,9 +237,10 @@ async function shareViaTauri(blob: Blob, filename: string): Promise<CaptureSaveR
       payload: await blobToBase64(blob),
       filename,
     });
-    return { outcome: "shared" };
+    return { outcome: "share-opened" };
   } catch (cause) {
     console.warn("[lc] share_png_bytes failed", cause);
+    if (/Android/i.test(navigator.userAgent)) return { outcome: "failed", detail: String(cause) };
     return null;
   }
 }
@@ -258,7 +259,7 @@ async function shareViaWebApi(blob: Blob, filename: string): Promise<CaptureSave
   } catch (cause) {
     // The chooser being dismissed is a decision, not a failure to fall back on.
     if (cause instanceof DOMException && cause.name === "AbortError") {
-      return { outcome: "shared" };
+      return { outcome: "cancelled" };
     }
     return null;
   }
@@ -314,13 +315,13 @@ export async function saveCaptureToDevice(
   }
 
   const saved = await saveViaTauri(blob, filename, destination, folder);
-  if (saved && saved.outcome !== "failed") return saved;
+  if (saved) return saved;
 
   // Browser, or a native write that was refused. Hand back a download.
   const web = await shareViaWebApi(blob, filename);
   if (web) return web;
   const link = saveViaDownloadLink(blob, filename);
-  return saved?.detail ? { ...link, detail: saved.detail } : link;
+  return link;
 }
 
 /** One line for the toast. */
@@ -332,10 +333,14 @@ export function describeCaptureResult(result: CaptureSaveResult): string {
       return result.path ? `Saved · ${shortPath(result.path)}` : "Saved to Downloads";
     case "folder":
       return result.path ? `Saved · ${shortPath(result.path)}` : "Saved to your folder";
+    case "cancelled":
+      return "Share cancelled";
+    case "share-opened":
+      return "Share sheet opened";
     case "shared":
       return "Shared";
     case "downloaded":
-      return result.path ? `Downloaded ${result.path}` : "Downloaded";
+      return result.path ? `Download requested · ${result.path}` : "Download requested";
     case "board-only":
       return "Added to the board";
     case "failed":

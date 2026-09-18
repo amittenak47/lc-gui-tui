@@ -37,6 +37,7 @@ Review corrections (take precedence over conflicting text below):
 Progress is recorded here with each implementation commit. Device-only checks remain explicitly pending until performed; passing unit tests does not imply Android acceptance.
 
 - Plan corrections: committed in dae2afbe.
+- Step 2: implemented Send-time document identity/view/text snapshots with post-capture validation, live-camera viewport images, full request storage plus display thumbnails, MediaStore Downloads and persisted SAF folder selection. Native failures no longer claim a browser download succeeded; share-opened/cancelled are distinct. Validation: 21 focused tests, production build, cargo check --lib and gallerysave compileDebugKotlin pass. Installed-device destination/cancellation acceptance remains pending.
 - Step 1: implemented FIFO preparation reservations, transport-owned execution, Abort/Edit/Retry actions, retained attempt history, IndexedDB full request storage, interrupted restore, live status/dots and completion-only reasoning. TypeScript/build and 34 focused tests pass. Native Tauri invoke is not HTTP fetch and cannot accept AbortController: cancellation suppresses late results and waits for native completion before draining; WS uses its cancellation acknowledgement. Full device queue acceptance remains pending. Further steps add frozen document context to persisted requests.
 
 # Agent, capture, and touch — expanded implementation plan
