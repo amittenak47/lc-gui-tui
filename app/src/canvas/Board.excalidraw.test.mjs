@@ -612,12 +612,21 @@ describe("Workspace pane switch", () => {
 });
 
 describe("reading pan compositor", () => {
-  it("hides the PDF text layer while the camera is live, not the footnote slot", () => {
+  it("hides only the on-screen PDF text layer class, not every layer via html", () => {
     const css = readFileSync(join(here, "../styles.css"), "utf8");
-    expect(css).toMatch(/html\.lc-doc-camera-live \.lc-pdf-text\.textLayer[\s\S]*?visibility:\s*hidden/);
+    expect(css).toMatch(
+      /\.lc-pdf-text\.textLayer\.lc-pdf-pan-hidden[\s\S]*?visibility:\s*hidden/,
+    );
+    expect(css).not.toMatch(/html\.lc-doc-camera-live \.lc-pdf-text/);
     expect(css).not.toMatch(
       /html\.lc-doc-camera-live \.lc-page-marks-slot\s*\{[^}]*visibility:\s*hidden/,
     );
+    expect(css).not.toMatch(/html\.lc-doc-camera-live \.lc-page-content-slot/);
+  });
+
+  it("does not toggle a document-wide camera-live class on html", () => {
+    const src = readFileSync(join(here, "docSelectionGesture.ts"), "utf8");
+    expect(src).not.toMatch(/documentElement\.classList\.toggle\(DOC_CAMERA_LIVE_CLASS/);
   });
 });
 

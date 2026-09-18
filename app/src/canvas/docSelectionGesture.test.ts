@@ -2,9 +2,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  DOC_CAMERA_LIVE_CLASS,
   isDocChromeTarget,
   isDocCameraLive,
+  isDocCameraPulsing,
   isSubMarkDragLive,
   makeDocFlagHolds,
   pointerInSubMark,
@@ -14,8 +14,10 @@ import {
   setSubMarkDragLive,
   setSubMarkPointerHit,
   subscribeDocCameraLive,
+  subscribeDocCameraPulse,
   onDocScrollRequest,
   requestDocScroll,
+  DOC_CAMERA_LIVE_CLASS,
 } from "./docSelectionGesture";
 
 afterEach(() => {
@@ -103,7 +105,7 @@ describe("pointer held freezes the paint pump", () => {
     unsub();
   });
 
-  it("hides overlay text on the real camera pulse, not on pointer-down", () => {
+  it("does not restyle the document from an html camera-live class", () => {
     setDocPointerHeld(false);
     setDocCameraLive(false);
     setDocPointerHeld(true);
@@ -112,13 +114,12 @@ describe("pointer held freezes the paint pump", () => {
     );
     setDocCameraLive(true);
     expect(document.documentElement.classList.contains(DOC_CAMERA_LIVE_CLASS)).toBe(
-      true,
-    );
-    setDocCameraLive(false);
-    expect(document.documentElement.classList.contains(DOC_CAMERA_LIVE_CLASS)).toBe(
       false,
     );
+    expect(isDocCameraPulsing()).toBe(true);
+    setDocCameraLive(false);
     setDocPointerHeld(false);
+    expect(isDocCameraPulsing()).toBe(false);
   });
 });
 
@@ -156,17 +157,13 @@ describe("two surfaces share the flags", () => {
     expect(isDocCameraLive()).toBe(false);
   });
 
-  it("keeps the overlay-text class up while any camera is live", () => {
+  it("stays pulsing while any camera share is live", () => {
     setDocCameraLive(true);
     setDocCameraLive(true);
     setDocCameraLive(false);
-    expect(document.documentElement.classList.contains(DOC_CAMERA_LIVE_CLASS)).toBe(
-      true,
-    );
+    expect(isDocCameraPulsing()).toBe(true);
     setDocCameraLive(false);
-    expect(document.documentElement.classList.contains(DOC_CAMERA_LIVE_CLASS)).toBe(
-      false,
-    );
+    expect(isDocCameraPulsing()).toBe(false);
   });
 
   it("publishes one edge per transition, not one per share", () => {
@@ -267,6 +264,30 @@ describe("makeDocFlagHolds", () => {
     server.camera(false);
     expect(seen).toEqual([true, false]);
     unsub();
+  });
+
+  it("camera pulse notifies even when pointer already froze paint", () => {
+    const holds = makeDocFlagHolds("tab");
+    const frozen: boolean[] = [];
+    const pulse: boolean[] = [];
+    const unsubFrozen = subscribeDocCameraLive((live) => frozen.push(live), "tab");
+    const unsubPulse = subscribeDocCameraPulse((live) => pulse.push(live), "tab");
+    holds.pointer(true);
+    expect(frozen).toEqual([true]);
+    expect(pulse).toEqual([]);
+    expect(isDocCameraPulsing("tab")).toBe(false);
+    holds.camera(true);
+    expect(frozen).toEqual([true]);
+    expect(pulse).toEqual([true]);
+    expect(isDocCameraPulsing("tab")).toBe(true);
+    holds.pointer(false);
+    expect(frozen).toEqual([true]);
+    expect(pulse).toEqual([true]);
+    holds.camera(false);
+    expect(frozen).toEqual([true, false]);
+    expect(pulse).toEqual([true, false]);
+    unsubFrozen();
+    unsubPulse();
   });
 });
 

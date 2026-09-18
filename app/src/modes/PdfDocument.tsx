@@ -35,7 +35,7 @@
 
 import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { isDocCameraLive, subscribeDocCameraLive } from "../canvas/docSelectionGesture";
+import { isDocCameraLive, isDocCameraPulsing, subscribeDocCameraLive, subscribeDocCameraPulse } from "../canvas/docSelectionGesture";
 import type { PageFrame } from "../canvas/inkPageIndex";
 import {
   isCameraBusy,
@@ -72,6 +72,8 @@ import {
   publishDocPlacementRev,
   rememberPdfThumb,
   openedPdfThumbHashes,
+  hidePdfPanText,
+  revealPdfPanText,
   PDF_FILM_THUMB_CSS,
   type PdfThumbRenderer,
 } from "./pdfFilm";
@@ -618,6 +620,7 @@ export function PdfDocument({
    * again.
    */
   const textFilledRef = useRef<Set<number>>(new Set());
+  const panHiddenTextRef = useRef<Set<HTMLElement>>(new Set());
   const quoteFillRef = useRef<(page: number) => Promise<boolean>>(async () => false);
   /** Pages the viewport can currently see. */
   const visibleRef = useRef<Set<number>>(new Set());
@@ -1103,6 +1106,40 @@ export function PdfDocument({
       observer.disconnect();
     };
   }, [pages, paused, standalone, scrollRoot, filmScope]);
+
+  /*
+   * Hide only the text layers in the viewport hole while the camera pulses.
+   *
+   * `html.lc-doc-camera-live .lc-pdf-text` restyled every span in the book on
+   * the frame after the first pan sample. Intersecting hosts are a handful of
+   * pages; the rest stay out of that style invalidation. Camera pulse, not
+   * pointer-down — a hold-then-drag still has to hit the layer.
+   */
+  useEffect(() => {
+    const hide = () => {
+      const host = hostRef.current;
+      if (!host) return;
+      hidePdfPanText(
+        host,
+        peekPdfIntersectingPages(filmScope),
+        panHiddenTextRef.current,
+      );
+    };
+    const reveal = () => revealPdfPanText(panHiddenTextRef.current);
+    if (isDocCameraPulsing(filmScope)) hide();
+    const unsubPulse = subscribeDocCameraPulse((live) => {
+      if (live) hide();
+      else reveal();
+    }, filmScope);
+    const unsubView = subscribePdfViewPages(filmScope, () => {
+      if (isDocCameraPulsing(filmScope)) hide();
+    });
+    return () => {
+      unsubPulse();
+      unsubView();
+      reveal();
+    };
+  }, [filmScope, pages]);
 
   /*
    * Nav outlives a relayout.

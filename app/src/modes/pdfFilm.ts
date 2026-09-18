@@ -537,6 +537,37 @@ export function peekPdfPlacementPages(scope: string): readonly number[] {
   return pdfPlacementPages(state.intersectingPages, state.restPages);
 }
 
+/** Class on a pdf.js text host while that page is on screen during a pan. */
+export const PDF_PAN_TEXT_HIDDEN_CLASS = "lc-pdf-pan-hidden";
+
+/**
+ * Hide on-screen PDF text layers for the compositor, not the whole book.
+ *
+ * An ancestor class matching every `.lc-pdf-text` restyles tens of thousands
+ * of glyph spans. Only the intersecting hosts get this class; off-screen
+ * layers stay untouched until they enter the hole.
+ */
+export function hidePdfPanText(
+  host: ParentNode,
+  pages: readonly number[],
+  hidden: Set<HTMLElement>,
+): void {
+  for (const n of pages) {
+    if (n < 1) continue;
+    for (const slot of host.querySelectorAll(`[data-pdf-page="${n}"]`)) {
+      const text = slot.querySelector<HTMLElement>(".lc-pdf-text");
+      if (!text || hidden.has(text)) continue;
+      text.classList.add(PDF_PAN_TEXT_HIDDEN_CLASS);
+      hidden.add(text);
+    }
+  }
+}
+
+export function revealPdfPanText(hidden: Set<HTMLElement>): void {
+  for (const text of hidden) text.classList.remove(PDF_PAN_TEXT_HIDDEN_CLASS);
+  hidden.clear();
+}
+
 /**
  * Text landed, text was cleared, or the page stack was relaid out.
  *
