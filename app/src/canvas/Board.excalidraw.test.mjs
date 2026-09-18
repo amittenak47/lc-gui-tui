@@ -634,6 +634,22 @@ describe("reading pan compositor", () => {
     expect(layer).toMatch(/if \(geometryChanged\) place\(/);
   });
 
+  it("keeps board chrome hittable after a flick, including the first annotate tap", () => {
+    const css = readFileSync(join(here, "../styles.css"), "utf8");
+    expect(css).toMatch(
+      /\.lc-board-chrome-slot \.lc-map-controls > \*[\s\S]*?transform:\s*translateZ\(0\)/,
+    );
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    expect(src).toMatch(/chromeHitAtPoint\(event\.clientX, event\.clientY\)/);
+    expect(src).toMatch(/activateChromeControl\(pending\.el\)/);
+    const annotate = src.slice(
+      src.indexOf("aria-label={editing ? \"Annotation requires Preview\""),
+      src.indexOf("onClick={toggleAnnotate}"),
+    );
+    expect(annotate).toMatch(/onPointerUp=/);
+    expect(src).toMatch(/if \(now - annotateToggleAtRef\.current < 280\) return/);
+  });
+
   it("does not toggle a document-wide camera-live class on html", () => {
     const src = readFileSync(join(here, "docSelectionGesture.ts"), "utf8");
     expect(src).not.toMatch(/documentElement\.classList\.toggle\(DOC_CAMERA_LIVE_CLASS/);
