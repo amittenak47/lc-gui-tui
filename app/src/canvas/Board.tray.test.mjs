@@ -9,17 +9,18 @@ describe("vertical menu visibility", () => {
     // Main drawing chrome can stay hidden; the corner tray must still provide
     // its theme, page and agent controls, rather than restore only the eye.
     expect(board).toMatch(/const mountStackTools = chromeEnabled;/);
-    expect(board).toMatch(/const chromeStackOpen = agentOpen \|\| chromeShown\.eye;/);
+    expect(board).toMatch(/const chromeStackOpen = chromeShown\.eye;/);
   });
 
   it("lets the same fold control operate in visible, fade and hidden modes", () => {
     const start = board.indexOf('<div className={`lc-chrome-stack-tray');
     const end = board.indexOf('data-lc-explore-chrome', start);
     const tray = board.slice(start, end);
-    expect(tray).toContain('trayFolded && !agentOpen');
+    expect(tray).toContain('trayFolded ? " is-folded" : ""');
     expect(tray).toContain('aria-expanded={!trayFolded}');
     expect(tray).toContain('setTrayFolded(value => !value)');
     expect(tray).not.toContain('chromeMode');
+    expect(tray).not.toContain('agentOpen');
   });
 
   it("points collapse down and expand up along the bottom-anchored tray", () => {
@@ -31,15 +32,19 @@ describe("vertical menu visibility", () => {
     expect(folded).toContain('pointer-events: none');
   });
 
-  it("raises the dot's stacking ancestor above the sheet, but below open dialogs", () => {
-    expect(css).toContain('.lc-mobile.lc-app-agent-open:not(:has(.lc-modal-backdrop, .lc-settings-backdrop)) .lc-board-chrome-slot:has(.lc-agent-tray-dot) { z-index: 100; }');
-    expect(css).not.toContain('.lc-map-controls:has(.lc-agent-tray-dot) { z-index: 100; }');
-    expect(css).toContain('.lc-mobile.lc-app-agent-open .lc-board-chrome-slot .lc-agent-tray-dot { pointer-events: auto !important; }');
+  it("keeps the agent tray under the open panel instead of punching through it", () => {
+    expect(css).toContain('.lc-app-agent-open .lc-side {');
+    const side = css.slice(css.indexOf('.lc-app-agent-open .lc-side {'), css.indexOf('}', css.indexOf('.lc-app-agent-open .lc-side {')));
+    expect(side).toContain('z-index: 99');
+    expect(css).not.toContain('.lc-board-chrome-slot:has(.lc-agent-tray-dot) { z-index: 100; }');
+    expect(css).not.toContain('.lc-board-chrome-slot .lc-agent-tray-dot { pointer-events: auto !important; }');
+    expect(css).not.toContain('.lc-map-chrome-stack:has(.lc-agent-tray-dot) { opacity: 1; }');
   });
 
-  it("keeps the agent close dot awake without exposing the other menu tools", () => {
-    expect(board).toContain('const chromeStackOpen = agentOpen || chromeShown.eye;');
-    expect(board).toContain('{chromeTraySleeps && !agentOpen && (');
-    expect(css).toContain('.lc-mobile.lc-app-agent-open .lc-chrome-stack-tray.has-agent-open > :not(.lc-agent-tray-dot) { display: none; }');
+  it("does not collapse the view tray to a close-dot overlay while chat is open", () => {
+    expect(board).not.toContain('has-agent-open');
+    expect(css).not.toContain('.lc-chrome-stack-tray.has-agent-open');
+    expect(board).toContain('{chromeTraySleeps && (');
+    expect(board).not.toContain('{chromeTraySleeps && !agentOpen && (');
   });
 });

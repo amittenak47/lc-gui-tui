@@ -9894,6 +9894,8 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-app-agent-open .lc-side {
   box-shadow: -6px 8px 18px rgb(0 0 0 / 14%);
+  /* Board chrome lives at 95; keep the panel above the view tray. */
+  z-index: 99;
 }
 
 .lc-agent-chat {
@@ -19157,11 +19159,6 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-side-sheet {
   transition: transform 220ms cubic-bezier(.22,1,.36,1), visibility 220ms;
 }
-.lc-agent-snap-toggle {
-  position: absolute; top: 6px; right: 10px; z-index: 2;
-  font-size: 11px; padding: 3px 7px; border-radius: 8px;
-  background: var(--panel); color: var(--muted); border: 1px solid var(--chrome-edge);
-}
 .lc-map-chrome-stack:not(.has-wake) > .lc-chrome-stack-tray {
   display: flex; flex-direction: column; gap: 2px;
 }
@@ -19179,12 +19176,6 @@ button.lc-row-selected:hover:not(:disabled) {
   display: block; width: 11px; height: 11px; border-radius: 50%; background: #cf4c4c;
 }
 .lc-agent-tray-dot[data-online="true"] > span { background: #39a86b; }
-/* Keep the toggle reachable above the open sheet; other board tools stay inert. */
-.lc-mobile.lc-app-agent-open .lc-map-chrome-stack:has(.lc-agent-tray-dot) { opacity: 1; }
-.lc-mobile.lc-app-agent-open .lc-chrome-stack-tray.has-agent-open > :not(.lc-agent-tray-dot) { display: none; }
-.lc-mobile.lc-app-agent-open .lc-board-chrome-slot .lc-agent-tray-dot { pointer-events: auto !important; }
-/* Modal backdrops can precede the slot in DOM order; do not tie their z-index. */
-.lc-mobile.lc-app-agent-open:not(:has(.lc-modal-backdrop, .lc-settings-backdrop)) .lc-board-chrome-slot:has(.lc-agent-tray-dot) { z-index: 100; }
 @media (prefers-reduced-motion: reduce) {
   .lc-side-sheet, .lc-chrome-stack-tray > *, .lc-map-chrome-stack .lc-chrome-stack-tray.is-folded > * { transition: none; }
 }

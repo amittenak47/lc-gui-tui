@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type RefObject, type PointerEvent as ReactPointerEvent } from "react";
+import { useLayoutEffect, useRef, type RefObject, type PointerEvent as ReactPointerEvent } from "react";
 
 export function settleSheetHeight(height: number, available: number, initial: number, snap: boolean): number {
   const min = Math.min(180, available);
@@ -17,7 +17,6 @@ export function useAgentSheet(panel: RefObject<HTMLElement | null>, mobile: bool
   const initial = useRef(0);
   const drag = useRef<{ id: number; y: number; height: number; next: number } | null>(null);
   const raf = useRef(0);
-  const [snap, setSnap] = useState(() => { try { return localStorage.getItem("lc.agent.snap") !== "off"; } catch { return true; } });
   const apply = (height: number) => { if (panel.current) panel.current.style.height = `${height}px`; };
   useLayoutEffect(() => {
     const node = panel.current;
@@ -74,15 +73,12 @@ export function useAgentSheet(panel: RefObject<HTMLElement | null>, mobile: bool
     const d = drag.current; if (!d || d.id !== e.pointerId) return;
     cancelAnimationFrame(raf.current); raf.current = 0; drag.current = null;
     const cancel = e.type === "pointercancel" || e.type === "lostpointercapture";
-    saved.current = cancel ? d.height : settleSheetHeight(d.height + d.y - e.clientY, available.current, initial.current, snap);
+    saved.current = cancel ? d.height : settleSheetHeight(d.height + d.y - e.clientY, available.current, initial.current, true);
     apply(saved.current);
     if (panel.current) panel.current.style.removeProperty("transition");
     document.documentElement.classList.remove("lc-agent-dragging");
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     if (!cancel && Math.abs(e.clientY - d.y) < 8) close();
   };
-  return { down, move, end, snap, toggleSnap: () => setSnap(value => {
-    try { localStorage.setItem("lc.agent.snap", value ? "off" : "on"); } catch { /* preference only */ }
-    return !value;
-  }) };
+  return { down, move, end };
 }
