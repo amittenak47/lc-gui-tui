@@ -1241,9 +1241,9 @@ export interface BoardProps {
   linedPaperToggle?: boolean;
   /** Optional fold handle under the bottom chrome (coach closed → open). */
   coachFold?: ReactNode;
-  /** Pin the mobile coach sheet against drag gestures. */
-  sheetDragLocked?: boolean;
-  onToggleSheetLock?: () => void;
+  agentOpen?: boolean;
+  agentOnline?: boolean;
+  onToggleAgent?: () => void;
   /**
    * PDF page-preview filmstrip. Only passed for a stacked PDF — EPUB and
    * markdown are one flowing document and have nothing to thumbnail.
@@ -1332,8 +1332,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     onAnnotateCodeChange,
     linedPaperToggle = false,
     coachFold = null,
-    sheetDragLocked = false,
-    onToggleSheetLock,
+    agentOpen = false,
+    agentOnline = false,
+    onToggleAgent,
     pageFilm = null,
     pdfFilmPublish = true,
     pdfDocument = false,
@@ -1675,6 +1676,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * `awake` is what a tap in the corner turns on and the idle timer turns off
    * again; it means nothing in `visible`, and is the whole of the other two.
    */
+  const [trayFolded, setTrayFolded] = useState(false);
   const [chromeMode, setChromeMode] = useState<ChromeMode>(loadChromeMode);
   const [chromeWakeMarker, setChromeWakeMarker] =
     useState<ChromeWakeMarker>(loadChromeWakeMarker);
@@ -9967,7 +9969,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 role="toolbar"
                 aria-label="Board view"
               >
-                <div className="lc-chrome-stack-tray">
+                <div className={`lc-chrome-stack-tray${trayFolded && chromeMode === "visible" && !agentOpen ? " is-folded" : ""}${agentOpen ? " has-agent-open" : ""}`}>
+                {chromeMode === "visible" && !agentOpen && <button type="button" className="lc-lined-toggle lc-tray-fold" aria-expanded={!trayFolded} aria-label={trayFolded ? "Expand vertical menu" : "Collapse vertical menu"} onClick={() => setTrayFolded(value => !value)}><span aria-hidden="true">{trayFolded ? "⌄" : "⌃"}</span></button>}
                 {/*
                   Explore portals search / filter / cluster into this slot so
                   the tray grows in place instead of painting a second island.
@@ -10110,30 +10113,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     </span>
                   </button>
                 )}
-                {mountStackTools && mobile && onToggleSheetLock && (
-                  <button
-                    type="button"
-                    className={[
-                      "lc-lined-toggle lc-tip-target",
-                      sheetDragLocked ? "is-active" : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                    aria-pressed={sheetDragLocked}
-                    aria-label={
-                      sheetDragLocked
-                        ? "Unlock agent sheet drag-open"
-                        : "Lock agent sheet against drag-open from the bottom"
-                    }
-                    data-tip={
-                      sheetDragLocked
-                        ? "Agent lock on — blocks drag-open from the bottom"
-                        : "Lock agent sheet against drag-open from the bottom"
-                    }
-                    data-tip-placement="bottom"
-                    onClick={onToggleSheetLock}
-                  >
-                    <LockIcon locked={sheetDragLocked} />
+                {mountStackTools && onToggleAgent && (
+                  <button type="button" className="lc-lined-toggle lc-agent-tray-dot" aria-expanded={agentOpen}
+                    aria-controls="lc-agent-panel" aria-label={`${agentOpen ? "Hide" : "Open"} agent — ${agentOnline ? "online" : "offline"}`}
+                    data-online={agentOnline} onClick={onToggleAgent}>
+                    <span aria-hidden="true" />
                   </button>
                 )}
                 {/* Recentre — see `recentreKeepPlace` for why it is two rules. */}
@@ -10539,29 +10523,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     </div>
   );
 });
-
-function LockIcon({ locked = false }: { locked?: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      aria-hidden
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="5" y="11" width="14" height="10" rx="2" />
-      {locked ? (
-        <path d="M8 11V8a4 4 0 0 1 8 0v3" />
-      ) : (
-        <path d="M8 11V8a4 4 0 0 1 7.5-1" />
-      )}
-    </svg>
-  );
-}
 
 /** Crosshair in a frame — "put the page back where it belongs". */
 function RecentreIcon() {
