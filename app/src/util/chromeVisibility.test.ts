@@ -41,7 +41,7 @@ describe("chromeVisibility", () => {
     expect(chromeVisibility("fade", false)).toEqual({ chrome: false, eye: false });
   });
 
-  it("gives hidden back the eye alone, never the controls", () => {
+  it("restores the eye and utility tray while keeping the main controls hidden", () => {
     expect(chromeVisibility("hidden", false)).toEqual({ chrome: false, eye: false });
     expect(chromeVisibility("hidden", true)).toEqual({ chrome: false, eye: true });
   });

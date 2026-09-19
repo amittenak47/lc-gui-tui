@@ -19166,11 +19166,11 @@ button.lc-row-selected:hover:not(:disabled) {
   display: flex; flex-direction: column; gap: 2px;
 }
 .lc-chrome-stack-tray > :not(.lc-tray-fold) {
-  transform-origin: top center;
+  transform-origin: bottom center;
   transition: transform 220ms ease, opacity 220ms ease, max-height 0ms;
 }
 .lc-map-chrome-stack .lc-chrome-stack-tray.is-folded > :not(.lc-tray-fold) {
-  transform: translateY(-10px) scaleY(0); opacity: 0;
+  transform: translateY(10px) scaleY(0); opacity: 0;
   max-height: 0; min-height: 0; margin: 0; padding-top: 0; padding-bottom: 0;
   overflow: hidden; pointer-events: none; visibility: hidden;
   transition: transform 220ms ease, opacity 220ms ease, max-height 0ms 220ms, visibility 0ms 220ms;
@@ -19183,7 +19183,8 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile.lc-app-agent-open .lc-map-chrome-stack:has(.lc-agent-tray-dot) { opacity: 1; }
 .lc-mobile.lc-app-agent-open .lc-chrome-stack-tray.has-agent-open > :not(.lc-agent-tray-dot) { display: none; }
 .lc-mobile.lc-app-agent-open .lc-board-chrome-slot .lc-agent-tray-dot { pointer-events: auto !important; }
-.lc-mobile.lc-app-agent-open .lc-map-controls:has(.lc-agent-tray-dot) { z-index: 100; }
+/* Modal backdrops can precede the slot in DOM order; do not tie their z-index. */
+.lc-mobile.lc-app-agent-open:not(:has(.lc-modal-backdrop, .lc-settings-backdrop)) .lc-board-chrome-slot:has(.lc-agent-tray-dot) { z-index: 100; }
 @media (prefers-reduced-motion: reduce) {
   .lc-side-sheet, .lc-chrome-stack-tray > *, .lc-map-chrome-stack .lc-chrome-stack-tray.is-folded > * { transition: none; }
 }

@@ -27,6 +27,7 @@ isProject: false
 
 Review corrections (take precedence over conflicting text below):
 
+- September 19 user revision: use Astra Low for these implementation fixes. The right-hand utility tray, including fold/expand, must remain available in visible, idle-fade and visibility-hidden modes; hiding the drawing toolbar must not strip the utility tray down to the eye alone. Its existing idle/wake animation still applies. This supersedes the earlier request to hide fold in the visibility flow. Collapse points down and expand points up to match the bottom-anchored tray.
 - Persist original request attachments in IndexedDB/app storage, referenced by stable IDs. Thumbnails are display assets, never substitutes for the original retry payload. Retain the exact prepared request for retry and report missing assets instead of silently substituting the current view.
 - Freeze document identity, revision and camera/selection bounds before asynchronous capture. Validate that source again after capture; reject a changed source and preserve the question draft rather than attach mismatched pixels.
 - Abort invalidates the attempt immediately, but queue draining must wait for transport release. WS cancellation requires acknowledgement or an isolated replacement connection; HTTP uses AbortController plus late-result guards. Compound ask/draw/review jobs must stop at cancellation boundaries.
@@ -50,14 +51,18 @@ Progress is recorded here with each implementation commit. Device-only checks re
 | Undo / redo | `dcc893c1` |
 | Notifications | `f57ab233` |
 | Request/draft hardening | `e99b901e` |
+| Queued execution failures | `73efde90` |
 
 ### Validation and remaining acceptance
 
 - Production builds pass. Rust `cargo check --lib` and Android gallerysave `compileDebugKotlin` pass; this is not an installed APK acceptance test.
 - Focused integration/regression run: 210 tests pass across queue/socket, Ask payload, selection draft/menu, capture, sheet drag, notifications, ink and PDF placement. Additional native prepared-request adapter test passes.
-- Full-suite run: 3,295 passed, 1 failed, 7 skipped. The failure is `inkMarkCompositing.test.ts` (dwell-blot destination blit); that test, `rasterInk.ts`, and its `inkLab` implementation are unchanged from the starting commit. Do not treat the full suite as green. Use `NODE_OPTIONS=--no-experimental-webstorage` with this machine’s Node 26 so older jsdom tests get browser storage.
+- Full-suite rerun September 19: 3,299 passed, 1 failed, 7 skipped. The failure is `inkMarkCompositing.test.ts` (dwell-blot destination blit); that test, `rasterInk.ts`, and its `inkLab` implementation are unchanged from the starting commit. Do not treat the full suite as green. Use `NODE_OPTIONS=--no-experimental-webstorage` with this machine’s Node 26 so older jsdom tests get browser storage.
 - Android reconnected on September 19. APK build and installed-device checks are in progress; the device's agent indicator is offline. Still required: Photos/Downloads/SAF save and permission revocation, share chooser, PDF/Markdown/EPUB visual crops, queued edits/abort/retry against a real model, populated-panel drag/keyboard/safe areas, tray animations/dot hit-testing, and idle-to-flick/undo latency measurements.
 - Follow-up hardening: queued Review/Diagram/Lazy execution errors now reach the coordinator as failures, rather than looking completed after their UI error handler. FIFO continues after failures (5 coordinator tests pass).
+- Device-found UI issue: the open sheet covered the agent dot because its ancestor chrome slot was at z-index 95 under the sheet at 99. Raising the child controls did not escape that stacking context. Raising the slot instead was confirmed with on-device hit-testing; permanent APK verification follows the tray changes. Closed sheet is hidden/inert and restores its height.
+- Astra Low tray follow-up: fold/expand works in all three visibility modes, with collapse-down/expand-up SVGs and matching motion; hidden mode retains the utility tray independently of the drawing toolbar. The open agent keeps its close dot awake, and chrome elevation yields to dialogs. TypeScript and 64 targeted tests pass.
+- Device-found native issue: capture commands were registered but absent from Tauri's permission allow-list, so the installed APK rejected them before MediaStore. Added an explicit main-window save/share/folder-picker permission and a regression check; rebuilding for installed-device verification. Capture adapter and permission tests pass (20 tests).
 - Native Android sharing reports **share sheet opened**, not confirmation that another app saved it. The chooser API used here does not report that outcome. Selected-folder picker cancellation leaves the existing preference unchanged.
 - A capture failure preserves the selection and reports an error; the optional explicit text-only continuation UI has not been added. Existing-image import remains import-to-board; capture destinations govern screenshot exports.
 - Independent Astra High review remains recommended for request races, native URI permissions and PDF-scroll regressions before device sign-off.
