@@ -1223,7 +1223,6 @@ export function AgentSidePanel({
       >
         <span className="lc-agent-fold-bar" aria-hidden />
       </div>
-      {mobile && <button type="button" className="lc-agent-snap-toggle" aria-pressed={sheet.snap} onClick={sheet.toggleSnap}>Snap {sheet.snap ? "on" : "off"}</button>}
       <div
         className={[
           "lc-agent-chat",

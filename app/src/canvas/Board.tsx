@@ -1702,8 +1702,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     .filter(Boolean)
     .join(" ");
   const chromeTraySleeps = chromeMode === "fade" || chromeMode === "hidden";
-  // The open agent's close dot must outlive the board's idle timer.
-  const chromeStackOpen = agentOpen || chromeShown.eye;
+  const chromeStackOpen = chromeShown.eye;
   // The corner always restores the complete menu, including in hidden mode.
   // Keep its contents mounted so the wake animation can close and reopen it.
   const mountStackTools = chromeEnabled;
@@ -9972,8 +9971,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 role="toolbar"
                 aria-label="Board view"
               >
-                <div className={`lc-chrome-stack-tray${trayFolded && !agentOpen ? " is-folded" : ""}${agentOpen ? " has-agent-open" : ""}`}>
-                {!agentOpen && (
+                <div className={`lc-chrome-stack-tray${trayFolded ? " is-folded" : ""}`}>
                   <button
                     type="button"
                     className="lc-lined-toggle lc-tray-fold"
@@ -9985,7 +9983,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       <path d={trayFolded ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"} />
                     </svg>
                   </button>
-                )}
                 {/*
                   Explore portals search / filter / cluster into this slot so
                   the tray grows in place instead of painting a second island.
@@ -10173,7 +10170,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   </button>
                 )}
                 </div>
-                {chromeTraySleeps && !agentOpen && (
+                {chromeTraySleeps && (
                   <button
                     type="button"
                     className={chromeWakeClass}
