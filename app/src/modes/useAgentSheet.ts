@@ -28,10 +28,14 @@ export function useAgentSheet(panel: RefObject<HTMLElement | null>, mobile: bool
       const bottom = (vv?.offsetTop ?? 0) + (vv?.height ?? window.innerHeight);
       const headerBottom = document.querySelector(".lc-header")?.getBoundingClientRect().bottom ?? 0;
       available.current = Math.max(0, bottom - Math.max(headerBottom, vv?.offsetTop ?? 0) - 8);
-      initial.current ||= Math.min(600, window.innerHeight * .64);
-      const height = settleSheetHeight(drag.current?.next ?? saved.current ?? initial.current, available.current, initial.current, false);
-      if (drag.current) { drag.current.next = height; }
-      apply(height);
+      const height = drag.current?.next ?? saved.current;
+      if (height != null) {
+        const next = settleSheetHeight(height, available.current, initial.current || height, false);
+        if (drag.current) drag.current.next = next;
+        apply(next);
+      } else {
+        node.style.removeProperty("height");
+      }
       node.style.bottom = "0px";
       node.style.maxHeight = `${available.current}px`;
       node.style.transform = open ? "translate3d(0,0,0)" : "translate3d(0,110%,0)";
@@ -59,6 +63,7 @@ export function useAgentSheet(panel: RefObject<HTMLElement | null>, mobile: bool
     if (!mobile || !open || e.button !== 0 || !panel.current) return;
     e.preventDefault();
     const height = panel.current.getBoundingClientRect().height;
+    initial.current ||= height;
     drag.current = { id: e.pointerId, y: e.clientY, height, next: height };
     panel.current.style.transition = "none";
     document.documentElement.classList.add("lc-agent-dragging");
