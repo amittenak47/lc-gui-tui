@@ -9673,8 +9673,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
              * strip has to be this element's real height — see `liveDockStrip`.
              */
             ref={trackDockStrip}
+            inert={agentOpen}
+            aria-hidden={agentOpen || undefined}
             className={[
               "lc-map-controls lc-map-controls-paged",
+              agentOpen ? "is-agent-covered" : "",
               mapChromeHidden ? "lc-map-controls-collapsed" : "",
             ]
               .filter(Boolean)
