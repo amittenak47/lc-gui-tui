@@ -296,6 +296,22 @@ describe("InkTileCache", () => {
    * squares the budget never reached came back as holes, in a band across the
    * lower half because tiles are walked top-to-bottom.
    */
+  describe("history cursor synchronization", () => {
+    it("keeps distant tiles through undo and redo without rasterizing in the call", () => {
+      const { cache, canvases } = makeCache();
+      const far = draw([700, 500], [720, 520]); const near = draw([20, 20], [40, 40]);
+      cache.setOps([far, near]); const { ctx } = destinationContext();
+      cache.draw(ctx, screen(1), 1); const before = cache.size; const painted = canvases.created.length;
+      cache.syncHistoryDeferred([far]);
+      expect(cache.size).toBeGreaterThan(0); expect(cache.size).toBeLessThan(before);
+      expect(canvases.created.length).toBe(painted);
+      cache.draw(ctx, screen(1), 1); const redrawn = canvases.created.length;
+      cache.syncHistoryDeferred([far, near]);
+      expect(canvases.created.length).toBe(redrawn); expect(cache.size).toBeGreaterThan(0);
+      cache.dispose();
+    });
+  });
+
   describe("setOps keeps the tiles a change did not touch", () => {
     it("drops only the tiles the removed stroke covered", () => {
       const { cache } = makeCache();

@@ -676,7 +676,7 @@ describe("lined overlay vs ink", () => {
 });
 
 describe("ink undo after a new stroke", () => {
-  it("undo and redo present in one frame and drop every redo stack", () => {
+  it("undo and redo coalesce presentation and drop every redo stack", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
     const undoAt = src.indexOf("undo() {");
     const redoAt = src.indexOf("redo() {");
@@ -685,10 +685,11 @@ describe("ink undo after a new stroke", () => {
     expect(redoAt).toBeGreaterThan(undoAt);
     expect(canAt).toBeGreaterThan(redoAt);
     const undo = src.slice(undoAt, redoAt);
-    expect(undo).toMatch(/presentCommitted\(null, instantReplayOnUndo\(\)\)/);
+    expect(undo).toMatch(/scheduleHistoryPaint\(true\)/);
     expect(undo).not.toMatch(/forgetPixelHistory/);
     const redo = src.slice(redoAt, canAt);
-    expect(redo).toMatch(/presentCommitted\(null, instantReplayOnUndo\(\)\)/);
+    expect(redo).toMatch(/scheduleHistoryPaint\(true\)/);
+    expect(src).toMatch(/void presentCommitted\(null, instantReplayOnUndo\(\)\)/);
     expect(redo).not.toMatch(/forgetPixelHistory/);
     expect(src).toMatch(/dropRedoStacks/);
     expect(src).toMatch(/instantReplayOnPointerDown/);

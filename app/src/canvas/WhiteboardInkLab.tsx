@@ -440,6 +440,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const rafRef = useRef<number | null>(null);
     const replayRafRef = useRef<number | null>(null);
     const replayGenRef = useRef(0);
+    const historyFrameRef = useRef<number | null>(null);
+    const historyPixelsDirtyRef = useRef(false);
     const replayWaitersRef = useRef<Array<() => void>>([]);
     const shiftAnchorRef = useRef<number | null>(null);
     const holdTimerRef = useRef<number | null>(null);
@@ -885,6 +887,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             marginY: liveMargin,
           };
           committedBuildRef.current = false;
+          historyPixelsDirtyRef.current = false;
           replayAllowPausedRef.current = false;
           tiles.setSuspended(splitPausedRef.current);
           // A finished callback must never later overwrite a newly lifted letter.
@@ -906,6 +909,19 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         else replayRafRef.current = requestAnimationFrame(step);
       });
     }, [ensureTiles, readViews, scrollHostLookup]);
+
+    const scheduleHistoryPaint = (replay: boolean) => {
+      historyPixelsDirtyRef.current ||= replay;
+      if (historyFrameRef.current != null) return;
+      historyFrameRef.current = requestAnimationFrame(() => {
+        historyFrameRef.current = null;
+        ensureTiles().syncHistoryDeferred(bookRef.current.paintOps());
+        if (historyPixelsDirtyRef.current) {
+          if (drawingRef.current) { replayNeededAfterStrokeRef.current = true; return; }
+          void presentCommitted(null, instantReplayOnUndo());
+        }
+      });
+    };
 
     const presentHostBoundOnly = useCallback((): boolean => {
       if (drawingRef.current || preparingRef.current) return false;
@@ -1121,7 +1137,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (drawingRef.current) return false;
           const entry = bookRef.current.undoOnce();
           if (!entry) return false;
-          ensureTiles().syncOpsDeferred(bookRef.current.paintOps());
+          scheduleHistoryPaint(false);
           replayGenRef.current += 1;
           if (replayRafRef.current != null) {
             cancelAnimationFrame(replayRafRef.current);
@@ -1137,18 +1153,18 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (entry.kind === "add" && isInkLabPenOp(entry.op)) {
             undoOverlay(overlayRef.current, overlayRedoRef.current);
           }
-          if (pixel && engine) {
+          if (pixel && engine && !historyPixelsDirtyRef.current) {
             engine.restoreSnapPatch(pixel);
             engine.paint();
             onChangeRef.current?.();
             return true;
           }
           if (entry.kind === "add" && isInkLabPenOp(entry.op) && engine) {
-            presentCommitted(null, instantReplayOnUndo());
+            scheduleHistoryPaint(true);
             onChangeRef.current?.();
             return true;
           }
-          presentCommitted(null, instantReplayOnUndo());
+          scheduleHistoryPaint(true);
           onChangeRef.current?.();
           return true;
         },
@@ -1156,7 +1172,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (drawingRef.current) return false;
           const entry = bookRef.current.redoOnce();
           if (!entry) return false;
-          ensureTiles().syncOpsDeferred(bookRef.current.paintOps());
+          scheduleHistoryPaint(false);
           replayGenRef.current += 1;
           if (replayRafRef.current != null) {
             cancelAnimationFrame(replayRafRef.current);
@@ -1170,7 +1186,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (hadPixel) pushCapped(snapUndoRef.current, pixel);
           if (entry.kind === "add" && isInkLabPenOp(entry.op)) {
             const spine = redoOverlay(overlayRef.current, overlayRedoRef.current);
-            if (spine && engine) {
+            if (spine && engine && !historyPixelsDirtyRef.current) {
               if (!hadPixel) {
                 const patch = engine.copySnapPatch();
                 if (patch) pushCapped(snapUndoRef.current, patch);
@@ -1180,7 +1196,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
               onChangeRef.current?.();
               return true;
             }
-          } else if (entry.kind === "add" && engine) {
+          } else if (entry.kind === "add" && engine && !historyPixelsDirtyRef.current) {
             if (!hadPixel) {
               const patch = engine.copySnapPatch();
               if (patch) pushCapped(snapUndoRef.current, patch);
@@ -1190,7 +1206,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             onChangeRef.current?.();
             return true;
           }
-          presentCommitted(null, instantReplayOnUndo());
+          scheduleHistoryPaint(true);
           onChangeRef.current?.();
           return true;
         },
@@ -1721,6 +1737,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
          * blit over live pixels, and remesh after the pen has been idle.
          */
         cancelIdleRemesh();
+        if (historyPixelsDirtyRef.current) replayNeededAfterStrokeRef.current = true;
         lastStrokeAtRef.current = performance.now();
         if (
           (replayRafRef.current != null || committedBuildRef.current) &&
@@ -2127,6 +2144,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         canvas.removeEventListener("pointercancel", onPointerUp, true);
         canvas.removeEventListener("lostpointercapture", onPointerUp, true);
         if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+        if (historyFrameRef.current != null) cancelAnimationFrame(historyFrameRef.current);
+        historyFrameRef.current = null;
         if (replayRafRef.current != null) cancelAnimationFrame(replayRafRef.current);
         replayGenRef.current += 1;
         committedBuildRef.current = false;

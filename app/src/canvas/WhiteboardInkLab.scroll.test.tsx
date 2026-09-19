@@ -3,6 +3,7 @@ import { createCanvas, type Canvas } from "@napi-rs/canvas";
 import { act, createRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { InkTileCache } from "./inkTiles";
 import { WhiteboardInkLab, type RasterInkHandle } from "./WhiteboardInkLab";
 import { paintInkTile } from "./inkLab/tilePaint";
 import { invalidateBoardScrollHostLayout } from "./scrollHost";
@@ -106,6 +107,26 @@ afterEach(async () => {
 });
 
 describe("annotation camera presentation", () => {
+  it("applies 55 rapid undos and redos while coalescing cache work beyond pixel history", async () => {
+    await ready([], "pen");
+    const event = (type: string, y: number) => {
+      const e = new MouseEvent(type, { button: 0, clientX: 100, clientY: y, bubbles: true });
+      Object.defineProperties(e, { pointerId: { value: 1 }, pointerType: { value: "pen" }, pressure: { value: .5 } });
+      surface().dispatchEvent(e);
+    };
+    for (let i = 0; i < 60; i++) {
+      await act(async () => { event("pointerdown", 40 + i * 2); event("pointerup", 41 + i * 2); });
+    }
+    expect(ref.current!.getOpCount()).toBe(60);
+    const sync = vi.spyOn(InkTileCache.prototype, "syncHistoryDeferred");
+    await act(async () => { for (let i = 0; i < 55; i++) expect(ref.current!.undo()).toBe(true); });
+    expect(ref.current!.getOpCount()).toBe(5); expect(sync).not.toHaveBeenCalled();
+    await frames(30); expect(sync).toHaveBeenCalledTimes(1);
+    await act(async () => { for (let i = 0; i < 55; i++) expect(ref.current!.redo()).toBe(true); });
+    expect(ref.current!.getOpCount()).toBe(60);
+    await frames(30); expect(sync).toHaveBeenCalledTimes(2);
+    expect(alpha(100, 180 + 40)).toBeGreaterThan(0);
+  });
   it("keeps page and nested ink visible through a translated camera rebase and back", async () => {
     await ready([stroke(100), stroke(450, 0)]);
     expect(alpha(100, 280)).toBeGreaterThan(0); // 180px overdraw margin
