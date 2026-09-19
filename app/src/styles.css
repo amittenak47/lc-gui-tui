@@ -10807,7 +10807,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-agent-chat.is-focus-composer .lc-agent-composer textarea {
   flex: 1 1 auto;
-  min-height: 12rem;
+  min-height: 20rem;
 }
 
 .lc-agent-messages.lc-scroll-pane {
@@ -10855,7 +10855,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-agent-composer textarea {
   width: 100%;
-  min-height: 6.5rem;
+  min-height: 10.8rem;
   resize: none;
   border-radius: 8px;
   border: 1px solid var(--chrome-edge);
@@ -14149,7 +14149,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 /* The composer is the reason to open the sheet; give it room to type. */
 .lc-mobile .lc-agent-composer textarea {
-  min-height: 5.5rem;
+  min-height: 9.1rem;
 }
 
 .lc-mobile .lc-agent-composer-bar .lc-agent-annotate,
