@@ -7,7 +7,7 @@
  * as assistant turns.
  */
 
-import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/types";
@@ -17,6 +17,7 @@ import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
 import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
+import { useAgentSheet } from "./useAgentSheet";
 import { ThinkingDots } from "./ThinkingDots";
 import { ProcessBlock, reasoningBodyForTurn } from "./ProcessBlock";
 import { ReasoningBlock } from "./ReasoningBlock";
@@ -42,12 +43,6 @@ import {
   showsReplyStub,
   visibleThreadMessages,
 } from "./coachThreads";
-
-/** Visible strip when the mobile coach sheet is parked closed. */
-const COACH_SHEET_PEEK_PX = 52;
-/** Drag past this fraction of sheet height (or fling) to snap open/closed. */
-const COACH_SHEET_SNAP = 0.28;
-const COACH_SHEET_FLING_VX = 0.55;
 
 export type CoachMode = "review" | "ambient";
 
@@ -568,7 +563,7 @@ export function AgentSidePanel({
   onToggleDrawing,
   onDrawingFrame,
   children,
-  sheetDragLocked = false,
+
 }: AgentSidePanelProps) {
   const mobile = useIsMobile();
   const setOpen = useCallback(
@@ -777,19 +772,7 @@ export function AgentSidePanel({
   const listRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
-  const [sheetOffset, setSheetOffset] = useState<number | null>(null);
-  /** Transitions armed only after the first measured park — avoids open→peek slide on mount. */
-  const [sheetMotionOn, setSheetMotionOn] = useState(false);
-  const sheetReadyRef = useRef(false);
-  const [sheetDragging, setSheetDragging] = useState(false);
-  const sheetDragRef = useRef<{
-    pointerId: number;
-    startY: number;
-    startOffset: number;
-    lastY: number;
-    lastT: number;
-    velocity: number;
-  } | null>(null);
+  const sheet = useAgentSheet(panelRef, mobile, open, () => setOpen(false));
   const longPressRef = useRef<{
     timer: ReturnType<typeof setTimeout> | null;
     armTimer: ReturnType<typeof setTimeout> | null;
@@ -809,123 +792,6 @@ export function AgentSidePanel({
     moved: false,
     armed: false,
   });
-
-  const sheetHeight = () => panelRef.current?.offsetHeight ?? 0;
-  const closedOffset = () => Math.max(0, sheetHeight() - COACH_SHEET_PEEK_PX);
-
-  /*
-   * Publish how far the sheet is open, for chrome that has to answer to it.
-   *
-   * The board's toolbar sits where the sheet rises, so dragging the coach up
-   * used to bury it — the controls were still there, still lit, under a panel.
-   * Fading it out is the honest reading of "the coach has the screen now", and
-   * it has to track the *drag*, not the end state, or the toolbar blinks off at
-   * the start of a gesture the reader may not finish.
-   *
-   * A custom property rather than a prop: this changes every frame of a drag,
-   * and threading it through App into Board would re-render the whole board
-   * for something only the compositor needs. `--lc-agent-open` is 0..1, and
-   * absent means desktop, where the coach is a side panel and covers nothing.
-   */
-  useEffect(() => {
-    const root = document.documentElement;
-    if (!mobile) {
-      root.style.removeProperty("--lc-agent-open");
-      root.classList.remove("lc-agent-dragging");
-      return;
-    }
-    if (sheetOffset === null) {
-      root.style.removeProperty("--lc-agent-open");
-      root.classList.toggle("lc-agent-dragging", sheetDragging);
-      return () => {
-        root.style.removeProperty("--lc-agent-open");
-        root.classList.remove("lc-agent-dragging");
-      };
-    }
-    const closed = closedOffset();
-    const parked = !open && closed > 0 && sheetOffset >= closed - 0.5;
-    if (parked) {
-      root.style.removeProperty("--lc-agent-open");
-    } else {
-      const shut = closed > 0 ? Math.min(1, Math.max(0, sheetOffset / closed)) : open ? 0 : 1;
-      root.style.setProperty("--lc-agent-open", (1 - shut).toFixed(3));
-    }
-    root.classList.toggle("lc-agent-dragging", sheetDragging);
-    return () => {
-      root.style.removeProperty("--lc-agent-open");
-      root.classList.remove("lc-agent-dragging");
-    };
-  }, [mobile, open, sheetOffset, sheetDragging]);
-
-  useLayoutEffect(() => {
-    if (!mobile || sheetDragging) return;
-    const apply = () => {
-      const height = sheetHeight();
-      // Height 0 ⇒ closedOffset is 0 ⇒ translateY(0) paints the sheet fully open.
-      // Stay hidden (sheetOffset null) until layout knows the real height.
-      if (height <= 0) return;
-      const next = open ? 0 : closedOffset();
-      if (!open && next <= 0) return;
-      setSheetOffset((prev) => {
-        /*
-         * First measured offset must snap. Arming transition before this paint
-         * made the sheet animate from translateY(0) (full open) down to the
-         * peek strip after the loading overlay lifted — "spawn mid-screen then
-         * close". Keep motion off until that snap has committed.
-         */
-        if (prev === null) {
-          setSheetMotionOn(false);
-          sheetReadyRef.current = false;
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              sheetReadyRef.current = true;
-              setSheetMotionOn(true);
-            });
-          });
-        }
-        return next;
-      });
-    };
-    apply();
-    const panel = panelRef.current;
-    let ro: ResizeObserver | null = null;
-    if (panel && typeof ResizeObserver !== "undefined") {
-      ro = new ResizeObserver(() => apply());
-      ro.observe(panel);
-    }
-    let frames = 0;
-    let id = 0;
-    const tick = () => {
-      apply();
-      frames += 1;
-      if (sheetHeight() <= 0 && frames < 16) {
-        id = window.requestAnimationFrame(tick);
-      }
-    };
-    id = window.requestAnimationFrame(tick);
-    return () => {
-      window.cancelAnimationFrame(id);
-      ro?.disconnect();
-    };
-  }, [mobile, open, sheetDragging]);
-
-  useEffect(() => {
-    if (!mobile) return;
-    const onResize = () => {
-      if (sheetDragRef.current) return;
-      const height = sheetHeight();
-      if (height <= 0) return;
-      const next = open ? 0 : closedOffset();
-      if (!open && next <= 0) return;
-      setSheetOffset(next);
-    };
-    window.addEventListener("resize", onResize);
-    window.visualViewport?.addEventListener("resize", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-      window.visualViewport?.removeEventListener("resize", onResize);
-    };
-  }, [mobile, open]);
 
   useEffect(() => {
     if (!open) composerRef.current?.blur();
@@ -956,96 +822,6 @@ export function AgentSidePanel({
     }
     setAnnotations(attachedCount > 0);
   }, [allowAnnotations, attachedCount]);
-
-  const endSheetDrag = useCallback(
-    (event: ReactPointerEvent<HTMLElement>) => {
-      const drag = sheetDragRef.current;
-      if (!drag || drag.pointerId !== event.pointerId) return;
-      sheetDragRef.current = null;
-      setSheetDragging(false);
-      try {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      } catch {
-        /* already released */
-      }
-
-      const closed = closedOffset();
-      const offset = Math.min(
-        closed,
-        Math.max(0, drag.startOffset + (event.clientY - drag.startY)),
-      );
-      const travel = Math.abs(event.clientY - drag.startY);
-      // Tap the handle to toggle when you didn't really drag.
-      if (travel < 10) {
-        const nextOpen = !open;
-        setOpen(nextOpen);
-        setSheetOffset(nextOpen ? 0 : closed);
-        return;
-      }
-      const flungOpen = drag.velocity < -COACH_SHEET_FLING_VX;
-      const flungClosed = drag.velocity > COACH_SHEET_FLING_VX;
-      const nextOpen = flungOpen
-        ? true
-        : flungClosed
-          ? false
-          : offset < closed * (1 - COACH_SHEET_SNAP);
-      setOpen(nextOpen);
-      setSheetOffset(nextOpen ? 0 : closed);
-    },
-    [open, setOpen],
-  );
-
-  const onSheetHandlePointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLElement>) => {
-      // Lock blocks peek-up open, not drag-down close.
-      if (!mobile || (sheetDragLocked && !open)) return;
-      if (event.button !== 0) return;
-      event.preventDefault();
-      const startOffset = open ? 0 : closedOffset();
-      sheetDragRef.current = {
-        pointerId: event.pointerId,
-        startY: event.clientY,
-        startOffset,
-        lastY: event.clientY,
-        lastT: performance.now(),
-        velocity: 0,
-      };
-      setSheetDragging(true);
-      setSheetOffset(startOffset);
-      event.currentTarget.setPointerCapture(event.pointerId);
-    },
-    [mobile, open, sheetDragLocked],
-  );
-
-  const onSheetHandlePointerMove = useCallback(
-    (event: ReactPointerEvent<HTMLElement>) => {
-      const drag = sheetDragRef.current;
-      if (!drag || drag.pointerId !== event.pointerId) return;
-      const now = performance.now();
-      const dt = Math.max(1, now - drag.lastT);
-      const dy = event.clientY - drag.lastY;
-      drag.velocity = dy / dt;
-      drag.lastY = event.clientY;
-      drag.lastT = now;
-      const closed = closedOffset();
-      const next = Math.min(
-        closed,
-        Math.max(0, drag.startOffset + (event.clientY - drag.startY)),
-      );
-      setSheetOffset(next);
-    },
-    [],
-  );
-
-  const onSheetHandleKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLElement>) => {
-      if (sheetDragLocked && !open) return;
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      setOpen(!open);
-    },
-    [open, setOpen, sheetDragLocked],
-  );
 
   const clearLongPress = useCallback(() => {
     const state = longPressRef.current;
@@ -1408,20 +1184,6 @@ export function AgentSidePanel({
     setLightboxClosing(false);
   };
 
-  const sheetStyle =
-    mobile
-      ? {
-          ...(sheetOffset !== null
-            ? { transform: sheetDragging ? `translate3d(0, ${sheetOffset}px, 0)` :
-                open ? "translate3d(0, 0, 0)" : `translate3d(0, calc(100% - ${COACH_SHEET_PEEK_PX}px), 0)` }
-            : { visibility: "hidden" as const }),
-          transition:
-            sheetDragging || !sheetMotionOn
-              ? "none"
-              : "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
-        }
-      : undefined;
-
   return (
     <aside
       ref={panelRef}
@@ -1429,44 +1191,32 @@ export function AgentSidePanel({
         "lc-side",
         "lc-side-open",
         mobile ? "lc-side-sheet" : "",
-        mobile && !open && !sheetDragging ? "lc-side-sheet-parked" : "",
-        mobile && sheetDragging ? "lc-side-sheet-dragging" : "",
-        mobile && sheetDragLocked && !open ? "lc-side-sheet-locked" : "",
+
       ]
         .filter(Boolean)
         .join(" ")}
       id="lc-agent-panel"
       aria-label="Agent"
-      style={sheetStyle}
+      aria-hidden={!open}
     >
       <div
         className="lc-agent-sheet-handle"
         role="button"
         tabIndex={0}
         aria-expanded={open}
-        aria-label={
-          open
-            ? "Drag down to close agent"
-            : sheetDragLocked
-              ? "Agent sheet locked — open from the header"
-              : "Drag up to open agent"
-        }
-        title={
-          open
-            ? "Drag down to close"
-            : sheetDragLocked
-              ? "Locked — open from the header"
-              : "Drag up to open"
-        }
-        onPointerDown={mobile ? onSheetHandlePointerDown : undefined}
-        onPointerMove={mobile ? onSheetHandlePointerMove : undefined}
-        onPointerUp={mobile ? endSheetDrag : undefined}
-        onPointerCancel={mobile ? endSheetDrag : undefined}
-        onKeyDown={onSheetHandleKeyDown}
+        aria-label="Drag to resize agent; tap to hide"
+        title="Drag to resize; tap to hide"
+        onPointerDown={sheet.down}
+        onPointerMove={sheet.move}
+        onPointerUp={sheet.end}
+        onPointerCancel={sheet.end}
+        onLostPointerCapture={sheet.end}
+        onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpen(false); } }}
         onClick={mobile ? undefined : () => setOpen(false)}
       >
         <span className="lc-agent-fold-bar" aria-hidden />
       </div>
+      {mobile && <button type="button" className="lc-agent-snap-toggle" aria-pressed={sheet.snap} onClick={sheet.toggleSnap}>Snap {sheet.snap ? "on" : "off"}</button>}
       <div
         className={[
           "lc-agent-chat",

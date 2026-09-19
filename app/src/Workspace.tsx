@@ -105,11 +105,6 @@ import {
   type AgentReasoningLevel,
   type TestForwardMode,
 } from "./util/agentPrefs";
-import {
-  AGENT_SHEET_LOCK_EVENT,
-  loadAgentSheetLock,
-  saveAgentSheetLock,
-} from "./util/agentSheetLockPref";
 import { ensureTypingImports } from "./util/pythonImports";
 
 /** Room under the last line of code so a note fits below it. */
@@ -645,8 +640,6 @@ export function Workspace({
     setAutosaveMs,
     testForward,
     setTestForward,
-    sheetDragLocked,
-    setSheetDragLocked,
     pdfFilmOpen,
     setPdfFilmOpen,
     recognizer,
@@ -2118,21 +2111,6 @@ export function Workspace({
     return () => window.removeEventListener("lc-agent-test-forward", onChange);
   }, []);
   /** Pin the mobile coach sheet — no drag-to-open/close from the handle. */
-  useEffect(() => {
-    const onChange = (event: Event) => {
-      const next = (event as CustomEvent<boolean>).detail;
-      setSheetDragLocked(typeof next === "boolean" ? next : loadAgentSheetLock());
-    };
-    window.addEventListener(AGENT_SHEET_LOCK_EVENT, onChange);
-    return () => window.removeEventListener(AGENT_SHEET_LOCK_EVENT, onChange);
-  }, []);
-  const onToggleSheetLock = useCallback(() => {
-    setSheetDragLocked((current) => {
-      const next = !current;
-      saveAgentSheetLock(next);
-      return next;
-    });
-  }, []);
   /** Thread the composer is inside, if any — narrows what the coach is told. */
   const threadRootIdRef = useRef<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -10448,8 +10426,9 @@ export function Workspace({
               ) : null
             }
             coachFold={null}
-            sheetDragLocked={mobile ? sheetDragLocked : false}
-            onToggleSheetLock={mobile ? onToggleSheetLock : undefined}
+            agentOpen={coachOpen}
+            agentOnline={serverLinkRef.current === "online" && llmLink === "online"}
+            onToggleAgent={() => coachOpen ? setCoachOpen(false) : openCoachPanel()}
             pageFilm={
               pdfNav && pdfNav.count >= 2
                 ? { open: pdfFilmOpen && active, onToggle: togglePdfFilm }
@@ -10669,7 +10648,6 @@ export function Workspace({
               if (open) openCoachPanel();
               else setCoachOpen(false);
             }}
-            sheetDragLocked={sheetDragLocked}
             busy={busy !== null}
             error={error}
             thinking={busy !== null || thinking}
