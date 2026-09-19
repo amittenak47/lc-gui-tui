@@ -10,9 +10,10 @@
  *   - **visible** — everything stays put.
  *   - **fade** — everything is there, and goes quiet a few seconds after you
  *     stop using it. The eye goes with it. Touching the corner brings it back.
- *   - **hidden** — nothing, not even the eye. Touching the corner brings the
- *     eye back on its own, so the controls are one more tap away rather than
- *     permanently on screen.
+ *   - **hidden** — the main drawing controls stay hidden. Touching the corner
+ *     restores the eye and Board's complete utility menu, including its fold
+ *     control. That menu sleeps again when idle; an open agent keeps its close
+ *     dot reachable.
  *
  * Persisted, because it is a way of working rather than a per-page choice.
  */
@@ -75,9 +76,9 @@ export function chromeModeLabel(mode: ChromeMode): string {
 }
 
 export interface ChromeVisibility {
-  /** The toolbar, theme chip and lined-paper toggle. */
+  /** The main drawing toolbar and annotation chrome. */
   chrome: boolean;
-  /** The eye itself, which outlives the rest in `hidden`. */
+  /** The eye and utility tray, independently available in `hidden`. */
   eye: boolean;
 }
 
