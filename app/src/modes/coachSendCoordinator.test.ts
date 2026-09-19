@@ -2,6 +2,18 @@ import { describe, expect, it } from "vitest";
 import { CoachSendCoordinator } from "./coachSendCoordinator";
 const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
 describe("coach send ordering and transport ownership", () => {
+  it("keeps execution failures terminal and continues with the next ticket", async () => {
+    const seen: string[] = [];
+    const q = new CoachSendCoordinator<string>(async value => {
+      seen.push(value); if (value === "a") throw new Error("provider failed");
+    }, () => {});
+    q.reserve("a"); q.reserve("b"); q.ready("a", "a"); q.ready("b", "b");
+    await tick(); await tick();
+    expect(q.tickets.get("a")?.state).toBe("failed");
+    expect(q.tickets.get("a")?.error).toContain("provider failed");
+    expect(q.tickets.get("b")?.state).toBe("completed");
+    expect(seen).toEqual(["a", "b"]);
+  });
   it("disposing a blocked preparation cannot start the next queued request", () => {
     const seen: string[] = [];
     const q = new CoachSendCoordinator<string>(async value => { seen.push(value); }, () => {});
