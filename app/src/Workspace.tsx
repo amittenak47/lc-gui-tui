@@ -5999,6 +5999,7 @@ export function Workspace({
     } catch (cause) {
       failText = messageOf(cause);
       if (coachRunGenRef.current === genAtStart) setError(failText);
+      if (coachRequestRef.current) throw cause;
     } finally {
       if (coachRunGenRef.current !== genAtStart) {
         if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
@@ -6193,6 +6194,7 @@ export function Workspace({
     } catch (cause) {
       failText = messageOf(cause);
       if (coachRunGenRef.current === genAtStart) setError(failText);
+      if (coachRequestRef.current) throw cause;
     } finally {
       if (coachRunGenRef.current !== genAtStart) {
         if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
@@ -6912,6 +6914,7 @@ export function Workspace({
             await applyFilledCode(fill.filled_code, fill.note, threadAnchor);
           } catch (cause) {
             setError(messageOf(cause));
+            throw cause;
           } finally {
             setBusy(null);
           }

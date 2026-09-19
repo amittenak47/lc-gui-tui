@@ -18,7 +18,7 @@ todos:
     content: Sequential notification presenter; coalesce undo/redo to latest cursor without unlimited snapshots
     status: completed
   - id: validate-build-device
-    content: Automated builds/tests recorded below; reconnect Android for installed-device acceptance
+    content: Automated builds/tests recorded below; connected Android acceptance in progress
     status: in_progress
 isProject: false
 ---
@@ -49,13 +49,15 @@ Progress is recorded here with each implementation commit. Device-only checks re
 | Panel / vertical tray | `5ca45993` |
 | Undo / redo | `dcc893c1` |
 | Notifications | `f57ab233` |
+| Request/draft hardening | `e99b901e` |
 
 ### Validation and remaining acceptance
 
 - Production builds pass. Rust `cargo check --lib` and Android gallerysave `compileDebugKotlin` pass; this is not an installed APK acceptance test.
 - Focused integration/regression run: 210 tests pass across queue/socket, Ask payload, selection draft/menu, capture, sheet drag, notifications, ink and PDF placement. Additional native prepared-request adapter test passes.
 - Full-suite run: 3,295 passed, 1 failed, 7 skipped. The failure is `inkMarkCompositing.test.ts` (dwell-blot destination blit); that test, `rasterInk.ts`, and its `inkLab` implementation are unchanged from the starting commit. Do not treat the full suite as green. Use `NODE_OPTIONS=--no-experimental-webstorage` with this machine’s Node 26 so older jsdom tests get browser storage.
-- ADB reports no attached device. Still required: Photos/Downloads/SAF save and permission revocation, share chooser, PDF/Markdown/EPUB visual crops, queued edits/abort/retry against a real model, populated-panel drag/keyboard/safe areas, tray animations/dot hit-testing, and idle-to-flick/undo latency measurements.
+- Android reconnected on September 19. APK build and installed-device checks are in progress; the device's agent indicator is offline. Still required: Photos/Downloads/SAF save and permission revocation, share chooser, PDF/Markdown/EPUB visual crops, queued edits/abort/retry against a real model, populated-panel drag/keyboard/safe areas, tray animations/dot hit-testing, and idle-to-flick/undo latency measurements.
+- Follow-up hardening: queued Review/Diagram/Lazy execution errors now reach the coordinator as failures, rather than looking completed after their UI error handler. FIFO continues after failures (5 coordinator tests pass).
 - Native Android sharing reports **share sheet opened**, not confirmation that another app saved it. The chooser API used here does not report that outcome. Selected-folder picker cancellation leaves the existing preference unchanged.
 - A capture failure preserves the selection and reports an error; the optional explicit text-only continuation UI has not been added. Existing-image import remains import-to-board; capture destinations govern screenshot exports.
 - Independent Astra High review remains recommended for request races, native URI permissions and PDF-scroll regressions before device sign-off.
