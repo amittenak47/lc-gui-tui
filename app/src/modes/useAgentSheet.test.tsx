@@ -2,14 +2,15 @@
 import { act, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { settleSheetHeight, useAgentSheet } from "./useAgentSheet";
+import { AGENT_SHEET_MIN_PX, settleSheetHeight, useAgentSheet } from "./useAgentSheet";
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); document.body.textContent = ""; });
 it("snaps only near stops, clamps below header, and allows free sizes", () => {
   expect(settleSheetHeight(395, 800, 600, true)).toBe(400);
-  expect(settleSheetHeight(350, 800, 600, true)).toBe(350);
-  expect(settleSheetHeight(395, 800, 600, false)).toBe(395);
+  expect(settleSheetHeight(500, 800, 600, true)).toBe(500);
+  expect(settleSheetHeight(500, 800, 600, false)).toBe(500);
   expect(settleSheetHeight(900, 700, 600, false)).toBe(700);
   expect(settleSheetHeight(180, 120, 600, true)).toBe(120);
+  expect(settleSheetHeight(80, 800, 600, false)).toBe(AGENT_SHEET_MIN_PX);
 });
 it("leaves the first open height to CSS until the handle is dragged", () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -45,5 +46,8 @@ it("drags without rendering transcript, preserves height across hiding, and canc
   act(() => root.render(<Panel open />)); expect(node.style.height).toBe(height);
   send("pointerdown", 500); send("pointermove", 300); send("pointercancel", 300);
   expect(node.style.height).toBe("500px");
+  send("pointerdown", 400); send("pointermove", 1400);
+  act(() => vi.advanceTimersByTime(17));
+  expect(node.style.height).toBe(`${AGENT_SHEET_MIN_PX}px`);
   act(() => root.unmount());
 });
