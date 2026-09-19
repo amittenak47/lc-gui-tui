@@ -50,12 +50,18 @@ describe("vertical menu visibility", () => {
     expect(board).not.toContain('{chromeTraySleeps && !agentOpen && (');
   });
 
-  it("keeps the view tray opaque on the document when chat is open", () => {
-    const start = css.indexOf(".lc-map-chrome-stack {");
-    const stack = css.slice(start, css.indexOf(".lc-map-chrome-stack.has-wake {", start));
-    expect(stack).not.toContain("var(--lc-agent-open");
-    expect(css).toContain(".lc-mobile.lc-app-agent-open .lc-map-controls {");
-    expect(css).toContain("var(--lc-agent-sheet) + var(--lc-agent-sheet-lift)");
-    expect(css).toContain(".lc-mobile.lc-app-agent-open .lc-board-chrome-slot .lc-map-chrome-right");
+  it("hides and disables the tray during chat without changing its visibility or fold state", () => {
+    expect(board).toContain('inert={agentOpen}');
+    expect(board).toContain('aria-hidden={agentOpen || undefined}');
+    expect(board).toContain('agentOpen ? "is-agent-covered" : ""');
+    const start = css.indexOf('.lc-map-controls.is-agent-covered {');
+    const hidden = css.slice(start, css.indexOf('}', start));
+    expect(hidden).toContain('opacity: 0');
+    expect(hidden).toContain('visibility: hidden');
+    expect(hidden).toContain('pointer-events: none');
+    expect(css).not.toContain('.lc-mobile.lc-app-agent-open .lc-map-controls {');
+    expect(css).not.toContain('.lc-mobile.lc-app-agent-open .lc-board-chrome-slot .lc-map-chrome-right');
+    expect(board).toContain('const chromeStackOpen = chromeShown.eye;');
+    expect(board).toContain('trayFolded ? " is-folded" : ""');
   });
 });

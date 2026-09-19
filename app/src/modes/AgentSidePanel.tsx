@@ -159,8 +159,6 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-const NOT_ON_SCRATCHPAD = "Not available on this pad";
-
 /*
  * Review and (+) are mutually exclusive, and the reason is that Review cannot
  * carry an attachment.
@@ -182,8 +180,8 @@ const REVIEW_DROPS_PHOTOS = "Review sends the board, not attachments";
  * the full flag set means something. `pad` — scratchpad and the document pads —
  * has no Review/Lazy pipeline and no analyse-on-send cadence, so those stay
  * hidden. Draw is available: Ask can emit a viz program onto the open pad.
- * Scratchpad also drops Annotations (`allowAnnotations`): there is no custom
- * block select on a blank board.
+ * Scratchpad omits footnotes (`allowAnnotations`), but keeps the Annotations
+ * menu for Ink and the agent options.
  */
 export type AgentSurface = "problem" | "pad";
 
@@ -579,14 +577,13 @@ export function AgentSidePanel({
     setChatFocus((current) => nextChatPaneFocus(current, pane));
   }, []);
   /**
-   * Pads keep Ask and Handwriting; document pads also keep Annotations. The
+   * Pads keep Ask and Ink; document pads also keep footnotes. The
    * pipeline flags and the cadence toggles are gone rather than greyed. See
    * {@link AgentSurface}.
    */
   const padSurface = agentSurface === "pad";
   /** Handwriting is greyed only where there is genuinely nothing to attach. */
   const annotateUnavailable = askOnly && !padSurface;
-  const flagUnavailable = askOnly ? " lc-flag-unavailable" : "";
   const [draw, setDraw] = useState(false);
   const [reviewBoard, setReviewBoard] = useState(false);
   const [lazy, setLazy] = useState(false);
@@ -609,18 +606,7 @@ export function AgentSidePanel({
       setDraw(true);
     }
   }, [draw, reviewBoard, lazy, padSurface]);
-  const boardLabel = draw ? "Draw" : reviewBoard ? "Review" : lazy ? "Lazy" : "Board";
-  const boardTip = padSurface
-    ? draw
-      ? "Draw — the agent sketches on this pad. Hold to turn off."
-      : "Board off. Hold to ask the agent to draw on this pad."
-    : draw
-      ? "Draw — the agent sketches on the board. Hold to cycle."
-      : reviewBoard
-        ? "Review — send the board for a written review. Hold to cycle."
-        : lazy
-          ? "Lazy — fill the solution from the board. Hold to cycle."
-          : "Board modes off. Hold to cycle Draw, Review, Lazy.";
+  const boardLabel = draw ? "Draw" : reviewBoard ? "Review" : lazy ? "Lazy" : "Ask";
   const [handwriting, setHandwriting] = useState(false);
   const [reasoning, setReasoning] = useState(loadAgentReasoningLevel);
   const [editingQueued, setEditingQueued] = useState<AgentChatMessage | null>(null);
@@ -628,7 +614,6 @@ export function AgentSidePanel({
   const [annotations, setAnnotations] = useState(false);
   const [askPreset, setAskPreset] = useState<AskPresetId | null>(null);
   const attachedCount = attachedMarks?.length ?? 0;
-  const annotationsUnavailable = annotateUnavailable;
   /** Photos staged by (+), sent with the next message and cleared after. */
   const [photos, setPhotos] = useState<CoachAttachment[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -1533,24 +1518,6 @@ export function AgentSidePanel({
             />
           </div>
           <div className="lc-agent-composer-body">
-          {documentPresets && (
-            <div className="lc-agent-presets" role="group" aria-label="Ask presets">
-              {ASK_PRESETS.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  className={`lc-flag${askPreset === preset.id ? " lc-flag-active" : ""}`}
-                  aria-pressed={askPreset === preset.id}
-                  disabled={busy}
-                  onClick={() =>
-                    setAskPreset((current) => (current === preset.id ? null : preset.id))
-                  }
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-          )}
           {allowAnnotations && attachedMarks.length > 0 && (
             <>
             <div className="lc-agent-mark-chips" aria-label="Attached annotations">
@@ -1730,122 +1697,24 @@ export function AgentSidePanel({
             </div>
             )}
             <div className="lc-agent-composer-mid">
-              <Tip
-                tip={
-                  annotateUnavailable
-                    ? NOT_ON_SCRATCHPAD
-                    : "Send your ink with the page it was drawn on"
-                }
-                placement="left"
-              >
-                <button
-                  type="button"
-                  className={`lc-flag lc-agent-annotate${
-                    handwriting ? " lc-flag-active" : ""
-                  }${annotateUnavailable ? " lc-flag-unavailable" : ""}`}
-                  aria-pressed={handwriting}
-                  disabled={busy || annotateUnavailable}
-                  onClick={() => setHandwriting((current) => !current)}
-                  aria-label="Whiteboard"
-                >
-                  <span className="lc-label-long">Whiteboard</span>
-                  <span className="lc-label-short" aria-hidden>
-                    W
-                  </span>
-                </button>
-              </Tip>
-              {allowAnnotations && (
-                <span className="lc-agent-annotate-wrap">
-                <Tip
-                  tip={
-                    annotateUnavailable
-                      ? NOT_ON_SCRATCHPAD
-                      : "Choose which marks to send with this ask"
-                  }
-                  placement="top"
-                >
+              <span className="lc-agent-annotate-wrap">
+                <Tip tip="Choose ink, footnotes and agent options" placement="top">
                   <button
                     ref={annotateBtnRef}
                     type="button"
-                    className={`lc-flag lc-agent-annotate${
-                      annotations ? " lc-flag-active" : ""
-                    }${annotationsUnavailable ? " lc-flag-unavailable" : ""}`}
-                    aria-pressed={annotations}
+                    className={`lc-flag lc-agent-annotate${handwriting || annotations ? " lc-flag-active" : ""}`}
                     aria-expanded={markMenuOpen}
                     aria-haspopup="menu"
-                    disabled={busy || annotationsUnavailable}
-                    onClick={() => {
-                      if (annotationChoices.length === 0 && !markMenuOpen) {
-                        setAnnotations((current) => !current);
-                        return;
-                      }
-                      toggleMarkMenu();
-                    }}
+                    onClick={toggleMarkMenu}
                     aria-label="Annotations"
                   >
                     <span className="lc-label-long">Annotations</span>
-                    <span className="lc-label-short" aria-hidden>
-                      A
-                    </span>
+                    <span className="lc-label-short" aria-hidden>A</span>
                   </button>
                 </Tip>
-                </span>
-              )}
-              <Tip
-                tip="Click to cycle off, low, medium, high. Low 1k tokens, medium 4k, high unlimited. Full text folds under the answer."
-                placement="top"
-              >
-                <button
-                  type="button"
-                  className={`lc-flag${reasoning !== "off" ? " lc-flag-active" : ""}`}
-                  aria-pressed={reasoning !== "off"}
-                  disabled={busy}
-                  onClick={() => {
-                    setReasoning((current) => {
-                      const next = cycleAgentReasoning(current);
-                      saveAgentReasoningLevel(next);
-                      return next;
-                    });
-                  }}
-                  aria-label={reasoning === "off" ? "Reasoning off" : `Reasoning ${reasoning}`}
-                >
-                  <span className="lc-label-long">
-                    {reasoning === "off" ? "Reasoning" : `Reasoning · ${reasoning}`}
-                  </span>
-                  <span className="lc-label-short" aria-hidden>
-                    {reasoning === "off"
-                      ? "R"
-                      : reasoning === "low"
-                        ? "Lo"
-                        : reasoning === "medium"
-                          ? "Md"
-                          : "Hi"}
-                  </span>
-                </button>
-              </Tip>
+              </span>
             </div>
             <div className="lc-agent-composer-actions">
-              <Tip tip={boardTip} placement="top">
-                <HoldButton
-                  label={boardLabel}
-                  className={`lc-flag lc-agent-pipeline${
-                    draw || reviewBoard || lazy ? " lc-flag-active" : ""
-                  }${askOnly && !padSurface ? flagUnavailable : ""}`}
-                  pressed={draw || reviewBoard || lazy}
-                  disabled={busy || (askOnly && !padSurface)}
-                  onConfirm={cycleBoard}
-                  ariaLabel={
-                    padSurface
-                      ? "Board: hold to toggle Draw"
-                      : "Board: hold to cycle Draw, Review, Lazy"
-                  }
-                >
-                  <span className="lc-label-long">{boardLabel}</span>
-                  <span className="lc-label-short" aria-hidden>
-                    {boardLabel.match(/[A-Z]/)?.[0] ?? boardLabel[0]}
-                  </span>
-                </HoldButton>
-              </Tip>
               <Tip
                 tip={
                   reviewBoard
@@ -1861,7 +1730,7 @@ export function AgentSidePanel({
                   className="lc-flag lc-agent-attach"
                   aria-label="Add Photo"
                   disabled={
-                    busy || picking || reviewBoard || photos.length >= PHOTO_ATTACH_LIMIT
+                    picking || reviewBoard || photos.length >= PHOTO_ATTACH_LIMIT
                   }
                   onClick={() => {
                     setPhotoError(null);
@@ -1953,9 +1822,24 @@ export function AgentSidePanel({
             <div
               className="lc-agent-scope-menu lc-agent-mark-menu"
               role="menu"
-              aria-label="Annotations on this page"
-              style={{ left: markMenuPos.left, bottom: markMenuPos.bottom }}
+              aria-label="Annotations and agent options"
+              style={{ left: markMenuPos.left, bottom: markMenuPos.bottom, maxHeight: `calc(100dvh - ${markMenuPos.bottom + 12}px)` }}
             >
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-label="Ink"
+                aria-checked={handwriting}
+                className={`lc-agent-scope-option lc-agent-option-row${handwriting ? " is-active" : ""}`}
+                title="Attach marked-board ink crops with the next message"
+                disabled={annotateUnavailable}
+                onClick={() => setHandwriting(current => !current)}
+              >
+                <span>Ink</span><span>{handwriting ? "Enabled" : "Disabled"}</span>
+              </button>
+              {allowAnnotations && <>
+              <div role="separator" className="lc-agent-options-divider" />
+              <span className="lc-agent-options-label">Footnotes</span>
               {annotationChoices.length === 0 ? (
                 <p className="lc-agent-mark-menu-empty">No marks on this page</p>
               ) : (
@@ -1969,6 +1853,7 @@ export function AgentSidePanel({
                       role="menuitemcheckbox"
                       aria-checked={picked}
                       aria-label={chipLabel}
+                      disabled={annotateUnavailable}
                       className={`lc-footnote-chip${picked ? " is-picked" : ""}`}
                       style={footnoteThemeVars(mark.color, mark.palette ?? [])}
                       onClick={() => onToggleAttached?.(mark.id)}
@@ -1983,6 +1868,51 @@ export function AgentSidePanel({
                   );
                 })
               )}
+              </>}
+              <div role="separator" className="lc-agent-options-divider" />
+              <button
+                type="button"
+                role="menuitem"
+                className="lc-agent-scope-option lc-agent-option-row"
+                aria-label={`Action: ${boardLabel}`}
+                title={padSurface ? "Tap to cycle Draw, Ask" : "Tap to cycle Draw, Review, Lazy, Ask"}
+                disabled={askOnly && !padSurface}
+                onClick={cycleBoard}
+              >
+                <span>Action</span><span>{boardLabel}</span>
+              </button>
+              {documentPresets && <>
+                <div role="separator" className="lc-agent-options-divider" />
+                <div role="group" aria-label="Ask presets" className="lc-agent-options-presets">
+                  {ASK_PRESETS.map(preset => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={askPreset === preset.id}
+                      className={`lc-agent-scope-option${askPreset === preset.id ? " is-active" : ""}`}
+                      onClick={() => setAskPreset(current => current === preset.id ? null : preset.id)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </>}
+              <div role="separator" className="lc-agent-options-divider" />
+              <button
+                type="button"
+                role="menuitem"
+                className="lc-agent-scope-option lc-agent-option-row"
+                aria-label={`Reasoning: ${reasoning}`}
+                title="Tap to cycle Off, Low, Medium, High"
+                onClick={() => setReasoning(current => {
+                  const next = cycleAgentReasoning(current);
+                  saveAgentReasoningLevel(next);
+                  return next;
+                })}
+              >
+                <span>Reasoning</span><span>{reasoning[0].toUpperCase() + reasoning.slice(1)}</span>
+              </button>
             </div>,
           document.body,
         )}

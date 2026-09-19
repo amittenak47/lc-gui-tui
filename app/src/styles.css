@@ -14016,13 +14016,8 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * Board chrome sits on top of the coach panel, and rides it.
- *
- * The toolbar and the icon stack are anchored to the panel's top edge rather
- * than to the bottom of the screen, so opening the coach lifts them with it
- * instead of leaving them behind it. `bottom` is what animates — the sheet
- * moves on a transform, and matching that here is what makes the two read as
- * one thing rather than as a panel that grew and some buttons that jumped.
+ * Board chrome stays anchored above the parked coach handle. The open panel
+ * hides it without changing the user's visibility or fold state.
  */
 .lc-mobile .lc-map-controls {
   /* Room for the parked coach peek handle under the chrome. */
@@ -14034,8 +14029,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * Map chrome stays on the document when the coach opens — it no longer fades
- * with `--lc-agent-open`. Open-agent `bottom` is the sheet height, set later.
+ * Opening the coach does not reposition the board controls.
  */
 
 @media (prefers-reduced-motion: reduce) {
@@ -14059,9 +14053,10 @@ button.lc-row-selected:hover:not(:disabled) {
   pointer-events: none !important;
 }
 
-.lc-mobile.lc-app-agent-open .lc-board-chrome-slot .lc-map-chrome-right,
-.lc-mobile.lc-app-agent-open .lc-board-chrome-slot .lc-map-chrome-right * {
-  pointer-events: auto !important;
+.lc-map-controls.is-agent-covered {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .lc-mobile .lc-agent-toggle-open {
@@ -14390,13 +14385,6 @@ button.lc-row-selected:hover:not(:disabled) {
    */
   align-items: flex-end;
   gap: 4px;
-}
-
-.lc-mobile.lc-app-agent-open .lc-map-controls {
-  bottom: calc(
-    4px + var(--lc-agent-sheet) + var(--lc-agent-sheet-lift) + var(--lc-safe-bottom) +
-      var(--lc-map-above-coach)
-  );
 }
 
 .lc-mobile .lc-map-chrome-stack:not(.has-wake) {
@@ -18656,6 +18644,32 @@ button.lc-row-selected:hover:not(:disabled) {
   padding: 6px 8px;
   font-size: 11px;
   color: var(--muted, #6b7280);
+}
+
+.lc-agent-mark-menu .lc-agent-option-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 32px;
+  gap: 16px;
+}
+
+.lc-agent-options-divider {
+  flex-shrink: 0;
+  border-top: 1px solid var(--chrome-edge, var(--line));
+  margin: 3px 4px;
+}
+
+.lc-agent-options-label {
+  padding: 2px 10px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.lc-agent-options-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 
