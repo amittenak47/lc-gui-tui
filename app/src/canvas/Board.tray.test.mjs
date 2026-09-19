@@ -64,4 +64,31 @@ describe("vertical menu visibility", () => {
     expect(board).toContain('const chromeStackOpen = chromeShown.eye;');
     expect(board).toContain('trayFolded ? " is-folded" : ""');
   });
+
+  it("lets the theme popover paint beside the tray and open inward", () => {
+    expect(css).toContain(
+      ".lc-chrome-stack-tray:not(.is-folded) .lc-chrome-stack-fold-inner:has(.lc-palette-popover) {",
+    );
+    const start = css.indexOf(
+      ".lc-chrome-stack-tray:not(.is-folded) .lc-chrome-stack-fold-inner:has(.lc-palette-popover) {",
+    );
+    const open = css.slice(start, css.indexOf("}", start));
+    expect(open).toContain("overflow: visible");
+    expect(css).toContain(
+      '[data-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map',
+    );
+    const flip = css.slice(
+      css.indexOf(
+        '[data-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map',
+      ),
+      css.indexOf(
+        "}",
+        css.indexOf(
+          '[data-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map',
+        ),
+      ),
+    );
+    expect(flip).toContain("left: calc(100% + 6px)");
+    expect(flip).toContain("right: auto");
+  });
 });

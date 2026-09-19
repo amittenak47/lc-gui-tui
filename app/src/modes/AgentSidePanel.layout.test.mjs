@@ -13,15 +13,62 @@ describe("agent panel chrome", () => {
     expect(row).toContain("top: 8px");
     expect(row).toContain("right: 12px");
     expect(css).toContain("padding: 4px 12px 8px");
-    expect(css).toContain(".lc-agent-composer > .lc-agent-pane-expand-row");
+  });
+
+  it("puts the chat-box expand on the composer bar before Annotations", () => {
+    const bar = panel.slice(panel.indexOf('className="lc-agent-composer-mid"'));
+    const expand = bar.indexOf('pane="composer"');
+    const annotations = bar.indexOf('aria-label="Annotations"');
+    expect(expand).toBeGreaterThan(-1);
+    expect(annotations).toBeGreaterThan(expand);
+    const composer = panel.slice(panel.indexOf('className="lc-agent-composer"'));
+    expect(composer.includes("lc-agent-pane-expand-row")).toBe(false);
+  });
+
+  it("keeps photo immediately before Send", () => {
+    const actions = panel.slice(panel.indexOf('className="lc-agent-composer-actions"'));
+    expect(actions.indexOf('aria-label="Add Photo"')).toBeLessThan(actions.indexOf('aria-label="Send"'));
+    const hand = css.slice(css.indexOf("[data-handedness=\"left\"] .lc-agent-composer-actions {"));
+    expect(hand.slice(0, 180)).not.toContain("row-reverse");
+  });
+
+  it("fades the top of the transcript instead of leaving a blank band", () => {
+    expect(css).toContain(".lc-agent-messages-host::before");
+    expect(css).toContain("backdrop-filter: blur(6px)");
+    const messages = css.slice(
+      css.indexOf(".lc-agent-messages {"),
+      css.indexOf(".lc-agent-messages-anchor"),
+    );
+    expect(messages).not.toContain("mask-image:");
+    expect(messages).not.toContain("justify-content: flex-end");
+  });
+
+  it("lets the transcript scroll without a visible scrollbar", () => {
+    const messages = css.slice(
+      css.indexOf(".lc-agent-messages {"),
+      css.indexOf(".lc-agent-messages-anchor"),
+    );
+    expect(messages).toContain("overflow-y: auto");
+    expect(messages).toContain("scrollbar-width: none");
+    expect(css).toContain(".lc-agent-messages.lc-scroll-pane::-webkit-scrollbar");
+    expect(panel).toContain("lc-agent-messages-anchor");
+  });
+
+  it("closes the annotations menu with the inverted pop", () => {
+    expect(css).toContain("@keyframes lc-doc-unpop");
+    expect(css).toContain(".lc-agent-scope-menu.is-closing");
+    expect(panel).toContain("markMenuClosing");
+    expect(panel).toContain("InkScribbleIcon");
+    expect(panel).toContain("SendIcon");
+    expect(css).toContain("width: 13.5rem");
   });
 
   it("grows the composer when the chat box is expanded", () => {
-    expect(css).toContain(".lc-agent-chat.is-focus-composer .lc-agent-composer {\n  flex: 1 1 auto;");
-    expect(css).toContain(".lc-agent-chat.is-focus-composer .lc-agent-composer textarea {\n  flex: 1 1 auto;");
-    expect(panel).toContain("rows={8}");
-    expect(css).toContain("min-height: 10rem");
-    expect(css).toContain("min-height: 9rem");
+    expect(css).toMatch(/\.lc-agent-chat\.is-focus-composer \.lc-agent-composer \{\s*flex: 1 1 auto;/);
+    expect(css).toMatch(/\.lc-agent-chat\.is-focus-composer \.lc-agent-composer textarea \{\s*flex: 1 1 auto;/);
+    expect(panel).toContain("rows={6}");
+    expect(css).toMatch(/\.lc-agent-composer textarea \{[\s\S]*?min-height: 6\.5rem/);
+    expect(css).toMatch(/\.lc-mobile \.lc-agent-composer textarea \{[\s\S]*?min-height: 5\.5rem/);
   });
 
   it("keeps the open sheet above a clipped one-line composer", () => {

@@ -81,13 +81,33 @@ it("keeps footnote selection live in the submenu and sends attached notes indepe
     onToggleAttached: toggle,
   });
   openOptions();
-  const note = document.querySelector<HTMLButtonElement>('.lc-agent-mark-menu .lc-footnote-chip')!;
+  tap(button("Footnotes"));
+  const note = document.querySelector<HTMLButtonElement>('.lc-agent-footnote-menu .lc-footnote-chip')!;
   expect(note.getAttribute("aria-checked")).toBe("true");
   tap(note);
   expect(toggle).toHaveBeenCalledWith("fn");
   expect(button("Annotations").getAttribute("aria-expanded")).toBe("true");
   tap(button("Send"));
   expect(send).toHaveBeenCalledWith("", expect.objectContaining({ annotations: true, handwriting: false, ask: true }), "queue");
+});
+
+it("opens footnotes toward the page, marks the row selected, and never shows empty copy", () => {
+  mount({ annotationChoices: [{ id: "fn", number: 1, title: "Note" }] });
+  openOptions();
+  expect(document.body.textContent).not.toContain("No marks on this page");
+  expect(button("Footnotes").className).not.toContain("is-active");
+  tap(button("Footnotes"));
+  expect(button("Footnotes").className).toContain("is-active");
+  expect(button("Footnotes").getAttribute("aria-expanded")).toBe("true");
+  expect(document.querySelector('[aria-label="Page footnotes"]')).toBeTruthy();
+  expect(document.querySelector(".lc-agent-footnote-menu .lc-footnote-chip")).toBeTruthy();
+});
+
+it("omits the footnotes row when this page has no marks", () => {
+  mount({ annotationChoices: [] });
+  openOptions();
+  expect(button("Footnotes")).toBeNull();
+  expect(document.body.textContent).not.toContain("No marks on this page");
 });
 
 it("cycles problem actions through Draw, Review, Lazy, Ask and gates photos only for Review", () => {
@@ -103,10 +123,16 @@ it("cycles problem actions through Draw, Review, Lazy, Ask and gates photos only
 it("cycles reasoning Off, Low, Medium, High and back while preserving the preference", () => {
   mount();
   openOptions();
+  expect(button("Reasoning: off").className).not.toContain("is-active");
   for (const [from, to] of [["off", "low"], ["low", "medium"], ["medium", "high"], ["high", "off"]]) {
     tap(button(`Reasoning: ${from}`));
     expect(button(`Reasoning: ${to}`)).toBeTruthy();
     expect(localStorage.getItem("whiteboard.agent.reasoningLevel.v1")).toBe(to);
+    if (to === "off") {
+      expect(button(`Reasoning: ${to}`).className).not.toContain("is-active");
+    } else {
+      expect(button(`Reasoning: ${to}`).className).toContain("is-active");
+    }
   }
 });
 
