@@ -1762,7 +1762,7 @@ export function AgentSidePanel({
           <textarea
             ref={composerRef}
             value={draft}
-            rows={6}
+            rows={10}
             placeholder="Ask the agent about your board or code…"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {

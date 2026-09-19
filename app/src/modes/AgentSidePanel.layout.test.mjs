@@ -66,9 +66,9 @@ describe("agent panel chrome", () => {
   it("grows the composer when the chat box is expanded", () => {
     expect(css).toMatch(/\.lc-agent-chat\.is-focus-composer \.lc-agent-composer \{\s*flex: 1 1 auto;/);
     expect(css).toMatch(/\.lc-agent-chat\.is-focus-composer \.lc-agent-composer textarea \{\s*flex: 1 1 auto;/);
-    expect(panel).toContain("rows={6}");
-    expect(css).toMatch(/\.lc-agent-composer textarea \{[\s\S]*?min-height: 6\.5rem/);
-    expect(css).toMatch(/\.lc-mobile \.lc-agent-composer textarea \{[\s\S]*?min-height: 5\.5rem/);
+    expect(panel).toContain("rows={10}");
+    expect(css).toMatch(/\.lc-agent-composer textarea \{[\s\S]*?min-height: 10\.8rem/);
+    expect(css).toMatch(/\.lc-mobile \.lc-agent-composer textarea \{[\s\S]*?min-height: 9\.1rem/);
   });
 
   it("keeps the open sheet above a clipped one-line composer", () => {
