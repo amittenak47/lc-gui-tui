@@ -27,6 +27,12 @@ describe("markMenuClickShouldKeepOpen", () => {
     menu.appendChild(item);
     document.body.appendChild(menu);
 
+    const footnotes = document.createElement("div");
+    footnotes.className = "lc-agent-footnote-menu";
+    const note = document.createElement("button");
+    footnotes.appendChild(note);
+    document.body.appendChild(footnotes);
+
     const chip = document.createElement("span");
     chip.className = "lc-fn-badge";
     document.body.appendChild(chip);
@@ -35,11 +41,13 @@ describe("markMenuClickShouldKeepOpen", () => {
     document.body.appendChild(outside);
 
     expect(markMenuClickShouldKeepOpen(item)).toBe(true);
+    expect(markMenuClickShouldKeepOpen(note)).toBe(true);
     expect(markMenuClickShouldKeepOpen(chip)).toBe(true);
     expect(markMenuClickShouldKeepOpen(outside)).toBe(false);
     expect(markMenuClickShouldKeepOpen(null)).toBe(false);
 
     menu.remove();
+    footnotes.remove();
     chip.remove();
     outside.remove();
   });

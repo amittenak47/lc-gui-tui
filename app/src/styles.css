@@ -9555,9 +9555,9 @@ body[data-lc-sash-drag="horizontal"] {
   justify-content: center;
   flex: 0 0 auto;
   width: 100%;
-  /* Taller hit target; bar sits near the top so thumbs clear the home gesture. */
-  min-height: 52px;
-  padding: 8px 14px 16px;
+  /* Hit target for the grab; bar sits near the top so thumbs clear home swipe. */
+  min-height: 40px;
+  padding: 6px 14px 8px;
   border: 0;
   background: transparent;
   cursor: grab;
@@ -9768,7 +9768,7 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-palette-popover-map {
-  /* Open to the left of the color chip (map chrome + browser foot). */
+  /* Inward of the view tray: left of a right-hand stack. */
   right: calc(100% + 6px);
   left: auto;
   bottom: 0;
@@ -9776,6 +9776,11 @@ body[data-lc-sash-drag="horizontal"] {
   display: flex;
   flex-direction: column;
   z-index: 48;
+}
+
+[data-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map {
+  left: calc(100% + 6px);
+  right: auto;
 }
 
 .lc-agent-toggle-open {
@@ -9904,6 +9909,8 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 0;
   padding-top: 0;
   flex: 1 1 auto;
+  overflow-x: clip;
+  overflow-y: hidden;
 }
 
 .lc-agent-messages-host {
@@ -9912,6 +9919,26 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.lc-agent-messages-host::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 40px;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    var(--panel) 0%,
+    color-mix(in srgb, var(--panel) 55%, transparent) 55%,
+    transparent 100%
+  );
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  mask-image: linear-gradient(to bottom, #000 0%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, transparent 100%);
 }
 
 .lc-agent-messages {
@@ -9919,14 +9946,25 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 12px;
+  padding: 8px 12px 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.lc-agent-messages-anchor {
+  flex: 1 0 0px;
+  min-height: 0;
+  pointer-events: none;
 }
 
 .lc-app:not(.lc-mobile) .lc-agent-messages {
-  padding: 32px 12px 12px;
+  padding: 8px 12px 12px;
 }
 
 .lc-agent-empty {
@@ -10068,7 +10106,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-agent-turn-selectable {
   -webkit-touch-callout: none;
-  touch-action: manipulation;
+  touch-action: pan-y;
   -webkit-user-select: none;
   user-select: none;
   transition:
@@ -10675,10 +10713,17 @@ body[data-lc-sash-drag="horizontal"] {
   color: var(--accent);
 }
 
-.lc-agent-pane-expand-icon {
+.lc-agent-pane-expand-icon,
+.lc-agent-composer-icon {
   width: 11px;
   height: 11px;
   display: block;
+  flex-shrink: 0;
+}
+
+.lc-agent-scribble-icon {
+  width: 13px;
+  height: 13px;
 }
 
 .lc-agent-messages-host > .lc-agent-pane-expand.is-overlay {
@@ -10702,6 +10747,10 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-agent-composer > .lc-agent-pane-expand-row {
   margin: 0;
   padding: 2px 0 0;
+}
+
+.lc-agent-composer-bar .lc-agent-pane-expand {
+  margin-left: 0;
 }
 
 .lc-agent-pane-expand-panel {
@@ -10761,19 +10810,30 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 12rem;
 }
 
-.lc-agent-messages.lc-scroll-pane,
+.lc-agent-messages.lc-scroll-pane {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.lc-agent-messages.lc-scroll-pane::-webkit-scrollbar,
+.lc-agent-messages.lc-scroll-pane::-webkit-scrollbar-thumb,
+.lc-agent-messages.lc-scroll-pane::-webkit-scrollbar-track {
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
 .lc-agent-reasoning-body {
   scrollbar-width: thin;
   scrollbar-color: auto;
 }
 
-.lc-agent-messages.lc-scroll-pane::-webkit-scrollbar,
 .lc-agent-reasoning-body::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-.lc-agent-messages.lc-scroll-pane::-webkit-scrollbar-thumb,
 .lc-agent-reasoning-body::-webkit-scrollbar-thumb {
   border-radius: 999px;
   border: 0;
@@ -10795,7 +10855,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-agent-composer textarea {
   width: 100%;
-  min-height: 10rem;
+  min-height: 6.5rem;
   resize: none;
   border-radius: 8px;
   border: 1px solid var(--chrome-edge);
@@ -10836,13 +10896,23 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-agent-composer-bar .lc-mode,
 .lc-agent-composer-actions button,
 .lc-agent-composer-mid button {
-  min-height: 24px;
-  height: 24px;
+  min-height: 20px;
+  height: 20px;
+  min-width: 20px;
   padding: 0 6px;
   font-size: 11px;
   border-radius: 5px;
   line-height: 1;
   white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.lc-agent-annotate,
+.lc-agent-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
 }
 
 /* Handwriting / Annotations — between cadence and the right cluster. */
@@ -14079,7 +14149,14 @@ button.lc-row-selected:hover:not(:disabled) {
 
 /* The composer is the reason to open the sheet; give it room to type. */
 .lc-mobile .lc-agent-composer textarea {
-  min-height: 9rem;
+  min-height: 5.5rem;
+}
+
+.lc-mobile .lc-agent-composer-bar .lc-agent-annotate,
+.lc-mobile .lc-agent-composer-actions button {
+  width: 20px;
+  min-width: 20px;
+  padding: 0;
 }
 
 /* ------------------------------------------------------------ mobile UI --- */
@@ -14142,10 +14219,10 @@ button.lc-row-selected:hover:not(:disabled) {
   .lc-agent-composer-bar .lc-mode,
   .lc-agent-composer-actions button,
   .lc-agent-composer-mid button {
-    min-height: 22px;
-    height: 22px;
+    min-height: 20px;
+    height: 20px;
     padding: 0 5px;
-    min-width: 22px;
+    min-width: 20px;
   }
 }
 
@@ -15945,6 +16022,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-agent-chat {
   /* The pushed views translate past the panel edge — never a scrollbar. */
   overflow-x: clip;
+  overflow-y: hidden;
 }
 
 .lc-thread-motion-enter .lc-agent-messages {
@@ -16339,9 +16417,8 @@ button.lc-row-selected:hover:not(:disabled) {
 
 /*
  * Composer cluster sides stay fixed: cadence left, flags+Send right.
- * Handedness still mirrors *within* the flags group (Send nearest the
- * writing-hand edge of that cluster) and moves the whole panel, but it must
- * not swap the two clusters — that is the layout the writer asked for.
+ * Handedness still moves the whole panel, but photo stays immediately
+ * before Send so the attach control is not stranded on the far side.
  */
 [data-handedness="left"] .lc-agent-composer-bar {
   flex-direction: row;
@@ -16353,7 +16430,6 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 [data-handedness="left"] .lc-agent-composer-actions {
-  flex-direction: row-reverse;
   justify-content: flex-end;
   margin-left: auto;
   margin-right: 0;
@@ -16465,11 +16541,12 @@ button.lc-row-selected:hover:not(:disabled) {
   color: #fff;
 }
 
-/* + Photo is a labeled entrance, not a square plus. */
+/* + matches the composer expand square. */
 .lc-agent-attach {
-  min-width: 0;
-  padding: 0 8px;
-  font-size: 11px;
+  width: 20px;
+  min-width: 20px;
+  padding: 0;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -16899,6 +16976,66 @@ button.lc-row-selected:hover:not(:disabled) {
   }
 }
 
+@keyframes lc-doc-unpop {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes lc-footnote-sub-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(10px) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes lc-footnote-sub-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(-10px) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes lc-footnote-sub-out-left {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(10px) scale(0.96);
+  }
+}
+
+@keyframes lc-footnote-sub-out-right {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(-10px) scale(0.96);
+  }
+}
+
 /*
  * Accept or reject the selection, at its top-right corner.
  *
@@ -17213,7 +17350,8 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-agent-mark-chips .lc-footnote-chip::after,
-.lc-agent-mark-menu .lc-footnote-chip::after {
+.lc-agent-mark-menu .lc-footnote-chip::after,
+.lc-agent-footnote-menu .lc-footnote-chip::after {
   content: none;
 }
 
@@ -18567,6 +18705,11 @@ button.lc-row-selected:hover:not(:disabled) {
   animation: lc-doc-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.lc-agent-scope-menu.is-closing {
+  pointer-events: none;
+  animation: lc-doc-unpop 160ms cubic-bezier(0.64, 0, 0.78, 0) both;
+}
+
 /* The chooser hangs off the composer's edge, which the writing hand moves. */
 [data-handedness="left"] .lc-agent-scope-menu {
   right: auto;
@@ -18606,18 +18749,68 @@ button.lc-row-selected:hover:not(:disabled) {
   left: 0;
   right: auto;
   bottom: auto;
-  max-height: min(32vh, 220px);
+  box-sizing: border-box;
+  max-height: min(42vh, 280px);
+  overflow-x: hidden;
   overflow-y: auto;
-  min-width: 7rem;
-  width: max-content;
-  max-width: min(200px, calc(100vw - 24px));
+  width: 13.5rem;
+  min-width: 13.5rem;
+  max-width: min(13.5rem, calc(100vw - 24px));
   flex-direction: column;
   align-items: stretch;
   gap: 3px;
   padding: 4px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
-.lc-agent-mark-menu .lc-footnote-chip {
+.lc-agent-mark-menu::-webkit-scrollbar,
+.lc-agent-footnote-menu::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.lc-agent-footnote-menu {
+  position: fixed;
+  z-index: 241;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  box-sizing: border-box;
+  width: 13.5rem;
+  min-width: 13.5rem;
+  max-width: min(13.5rem, calc(100vw - 24px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  padding: 4px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.lc-agent-footnote-menu.is-side-left {
+  transform-origin: right center;
+  animation: lc-footnote-sub-in-left 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lc-agent-footnote-menu.is-side-right {
+  transform-origin: left center;
+  animation: lc-footnote-sub-in-right 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lc-agent-footnote-menu.is-side-left.is-closing {
+  animation: lc-footnote-sub-out-left 160ms cubic-bezier(0.64, 0, 0.78, 0) both;
+}
+
+.lc-agent-footnote-menu.is-side-right.is-closing {
+  animation: lc-footnote-sub-out-right 160ms cubic-bezier(0.64, 0, 0.78, 0) both;
+}
+
+.lc-agent-mark-menu .lc-footnote-chip,
+.lc-agent-footnote-menu .lc-footnote-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -18633,7 +18826,8 @@ button.lc-row-selected:hover:not(:disabled) {
   text-align: left;
 }
 
-.lc-agent-mark-menu .lc-footnote-chip.is-picked {
+.lc-agent-mark-menu .lc-footnote-chip.is-picked,
+.lc-agent-footnote-menu .lc-footnote-chip.is-picked {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 22%, var(--panel));
   color: var(--accent);
@@ -19249,6 +19443,14 @@ button.lc-row-selected:hover:not(:disabled) {
     opacity 180ms ease,
     transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
     visibility 0ms;
+}
+
+/*
+ * Fold clips with overflow:hidden. The theme popover is absolute beside the
+ * chip, so while it is open the inner must not eat it.
+ */
+.lc-chrome-stack-tray:not(.is-folded) .lc-chrome-stack-fold-inner:has(.lc-palette-popover) {
+  overflow: visible;
 }
 .lc-chrome-stack-tray.is-folded .lc-chrome-stack-fold-inner {
   opacity: 0;

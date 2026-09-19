@@ -24,11 +24,13 @@ export function BackgroundPalette({ themeId, onPick, variant = "compact" }: Back
 
   useEffect(() => {
     if (!open) return;
-    const onPointer = (event: MouseEvent) => {
+    const onPointer = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
-    document.addEventListener("mousedown", onPointer);
-    return () => document.removeEventListener("mousedown", onPointer);
+    // pointerdown, not mousedown: Android synthesizes a delayed mousedown after
+    // the opening tap, which would close the popover before it can paint.
+    document.addEventListener("pointerdown", onPointer);
+    return () => document.removeEventListener("pointerdown", onPointer);
   }, [open]);
 
   // Map popover opens left of the chip; header opens below — tip on the far side.
