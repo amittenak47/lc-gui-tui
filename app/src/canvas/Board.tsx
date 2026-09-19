@@ -9983,6 +9983,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       <path d={trayFolded ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"} />
                     </svg>
                   </button>
+                <div className="lc-chrome-stack-fold">
+                <div className="lc-chrome-stack-fold-inner" aria-hidden={trayFolded || undefined}>
                 {/*
                   Explore portals search / filter / cluster into this slot so
                   the tray grows in place instead of painting a second island.
@@ -10169,6 +10171,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     <EyeIcon closed={chromeMode === "hidden"} half={chromeMode === "fade"} />
                   </button>
                 )}
+                </div>
+                </div>
                 </div>
                 {chromeTraySleeps && (
                   <button

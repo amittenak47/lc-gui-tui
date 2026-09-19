@@ -25,11 +25,13 @@ describe("vertical menu visibility", () => {
 
   it("points collapse down and expand up along the bottom-anchored tray", () => {
     expect(board).toContain('trayFolded ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"');
-    const start = css.indexOf('.lc-map-chrome-stack .lc-chrome-stack-tray.is-folded > :not(.lc-tray-fold) {');
+    expect(board).toContain('className="lc-chrome-stack-fold"');
+    expect(board).toContain('lc-chrome-stack-fold-inner');
+    expect(css).toContain('.lc-chrome-stack-tray.is-folded .lc-chrome-stack-fold');
+    const start = css.indexOf('.lc-chrome-stack-tray.is-folded .lc-chrome-stack-fold {');
     const folded = css.slice(start, css.indexOf('}', start));
-    expect(folded).toContain('translateY(10px) scaleY(0)');
-    expect(folded).toContain('visibility: hidden');
-    expect(folded).toContain('pointer-events: none');
+    expect(folded).toContain('grid-template-rows: 0fr');
+    expect(css).toContain('transform: translateY(8px)');
   });
 
   it("keeps the agent tray under the open panel instead of punching through it", () => {
