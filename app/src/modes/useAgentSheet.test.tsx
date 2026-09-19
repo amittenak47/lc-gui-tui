@@ -11,6 +11,17 @@ it("snaps only near stops, clamps below header, and allows free sizes", () => {
   expect(settleSheetHeight(900, 700, 600, false)).toBe(700);
   expect(settleSheetHeight(180, 120, 600, true)).toBe(120);
 });
+it("leaves the first open height to CSS until the handle is dragged", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  function Panel() {
+    const ref = useRef<HTMLElement>(null); const sheet = useAgentSheet(ref, true, true, () => {});
+    return <aside ref={ref}><button onPointerDown={sheet.down}>Resize</button></aside>;
+  }
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  act(() => root.render(<Panel />));
+  expect(host.querySelector("aside")!.style.height).toBe("");
+  act(() => root.unmount());
+});
 it("drags without rendering transcript, preserves height across hiding, and cancels safely", () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.useFakeTimers();
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16));
