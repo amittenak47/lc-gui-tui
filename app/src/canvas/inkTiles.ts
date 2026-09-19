@@ -593,6 +593,30 @@ export class InkTileCache {
     this.beginHydrate();
   }
 
+  /** History cursor moved: preserve unrelated tiles and let draw rebuild only
+   * visible misses. Unlike setOps, appends never raster synchronously here. */
+  syncHistoryDeferred(ops: readonly InkOp[]): void {
+    const prev = this.ops;
+    let shared = 0;
+    while (shared < prev.length && shared < ops.length && prev[shared] === ops[shared]) shared++;
+    if (shared === prev.length && shared === ops.length) return;
+    this.invalidateWorkerHistory();
+    this.pending = [];
+    if (this.idleHandle) { this.cancel(this.idleHandle); this.idleHandle = 0; }
+    this.ops = [...ops];
+    let dirty: SceneBounds | null = null;
+    for (const op of [...prev.slice(shared), ...ops.slice(shared)]) {
+      if (isHostBoundOp(op)) continue;
+      const bounds = this.boundsOf(op);
+      dirty = dirty ? unionBounds(dirty, bounds) : bounds;
+    }
+    if (!dirty) return;
+    for (const [key, tile] of this.tiles) {
+      const bounds = this.paddedTileBounds(this.tileBounds(tile.level, tile.tx, tile.ty), levelScale(tile.level));
+      if (boundsOverlap(dirty, bounds)) this.tiles.delete(key);
+    }
+  }
+
   /**
    * Record a committed op without raster work on the pointer-up stack.
    * The live WebGL host already contains those pixels; touched cache tiles are
