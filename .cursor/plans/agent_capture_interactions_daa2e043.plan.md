@@ -4,22 +4,22 @@ overview: Expand the proposed five-step agent/capture/touch plan into file-level
 todos:
   - id: change-1-queue
     content: Extract coachSendCoordinator; FIFO, abort/edit/retry, persist interrupted, live dots; do not gate on workspace busy
-    status: pending
+    status: completed
   - id: change-2-context-save
     content: DocumentViewContext snapshot at Send; Android MediaStore Downloads + SAF; structured save results
-    status: pending
+    status: completed
   - id: change-3-selection
     content: Selection Screenshot + draft-only Ask Agent via exportSceneFrameBlob and pendingQuoteRef
-    status: pending
+    status: completed
   - id: change-4-panel-toolbar
     content: Dot toggles panel; DOM-only height drag with snaps; independent toolbar fold; ignore sheet lock
-    status: pending
+    status: completed
   - id: change-5-undo-toasts
     content: Sequential notification presenter; coalesce undo/redo to latest cursor without unlimited snapshots
-    status: pending
+    status: completed
   - id: validate-build-device
-    content: Per-change app/ npm run build + vitest; PDF negative scans; Magic Note Pad acceptance from the proposed plan
-    status: pending
+    content: Automated builds/tests recorded below; reconnect Android for installed-device acceptance
+    status: in_progress
 isProject: false
 ---
 
@@ -37,6 +37,30 @@ Review corrections (take precedence over conflicting text below):
 Progress is recorded here with each implementation commit. Device-only checks remain explicitly pending until performed; passing unit tests does not imply Android acceptance.
 
 - Plan corrections: committed in dae2afbe.
+- Final hardening: exact outgoing Ask and compound-job bodies persist for Retry on both transports; images are deduplicated and omitted for non-vision models. Queued edits repack frozen quote/marks rather than replace matching text inside a quote. Preparation failure restores draft text/photos; failed selection capture keeps the selection. Cancellation/disposal races, explicit merge retention, hidden-panel execution and selection context normalization are covered or corrected. Native queued calls wait for invoke completion (no JS timeout releasing the queue early). Removed simulated review phase timers.
+
+### Commit checkpoints
+
+| Step | Commit |
+| --- | --- |
+| Queue / live status | `1362d7fd` |
+| Frozen view / Android saves | `24c77b34` |
+| Selection actions | `60784839` |
+| Panel / vertical tray | `5ca45993` |
+| Undo / redo | `dcc893c1` |
+| Notifications | `f57ab233` |
+
+### Validation and remaining acceptance
+
+- Production builds pass. Rust `cargo check --lib` and Android gallerysave `compileDebugKotlin` pass; this is not an installed APK acceptance test.
+- Focused integration/regression run: 210 tests pass across queue/socket, Ask payload, selection draft/menu, capture, sheet drag, notifications, ink and PDF placement. Additional native prepared-request adapter test passes.
+- Full-suite run: 3,295 passed, 1 failed, 7 skipped. The failure is `inkMarkCompositing.test.ts` (dwell-blot destination blit); that test, `rasterInk.ts`, and its `inkLab` implementation are unchanged from the starting commit. Do not treat the full suite as green. Use `NODE_OPTIONS=--no-experimental-webstorage` with this machine’s Node 26 so older jsdom tests get browser storage.
+- ADB reports no attached device. Still required: Photos/Downloads/SAF save and permission revocation, share chooser, PDF/Markdown/EPUB visual crops, queued edits/abort/retry against a real model, populated-panel drag/keyboard/safe areas, tray animations/dot hit-testing, and idle-to-flick/undo latency measurements.
+- Native Android sharing reports **share sheet opened**, not confirmation that another app saved it. The chooser API used here does not report that outcome. Selected-folder picker cancellation leaves the existing preference unchanged.
+- A capture failure preserves the selection and reports an error; the optional explicit text-only continuation UI has not been added. Existing-image import remains import-to-board; capture destinations govern screenshot exports.
+- Independent Astra High review remains recommended for request races, native URI permissions and PDF-scroll regressions before device sign-off.
+
+### Per-step evidence
 - Step 5b (notifications): implemented an ordered single-message presenter with leftward exits, no duplicate suppression/drop cap, faster backlog draining, dismissal and reduced motion. Validation: 3 timing/order tests pass; production build passes. Device animation acceptance remains pending.
 - Step 5a (undo/redo): implemented one-frame history repaint coalescing and deferred dirty-region tile invalidation. Every semantic operation applies immediately; cached pixel fast paths remain bounded, stale fast-path paints are blocked during fallback replay, and worker rendering retains its existing yielding/cancellation boundaries. Validation: build and 131 ink/PDF tests pass, including 60 real strokes followed by 55 undos and 55 redos with one cache synchronization per burst. Device latency measurements remain pending.
 - Step 4: implemented DOM/rAF sheet resizing with optional proximity snaps, header/viewport clamping, pointer-cancel handling, retained height/draft and fully hidden/inert closed sheet. Replaced the board lock with an online/offline agent toggle and added independent vertical-tray folding with reduced-motion-aware transitions; visibility restores the retained fold state. Validation: production build, 53 PDF contract tests and 2 sheet sizing/interaction tests pass (including no transcript render during drag). Device animation, keyboard and dot hit-testing remain pending.

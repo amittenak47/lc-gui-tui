@@ -7,6 +7,7 @@ import {
   type AmbientProbe,
   type WebSocketLike,
 } from "./coachSocket";
+import { CoachSendCoordinator } from "../modes/coachSendCoordinator";
 import type { ServerFrame } from "./types";
 
 function probe(overrides: Partial<AmbientProbe> = {}): AmbientProbe {
@@ -66,6 +67,21 @@ function fakeSocket() {
 
 describe("AmbientCoach", () => {
   const pairing = { baseUrl: "http://127.0.0.1:7878", token: null };
+
+  it("holds the FIFO transport after abort until a terminal frame acknowledges it", async () => {
+    const socket = fakeSocket();
+    const coach = new AmbientCoach(pairing, { onFrame: () => {} }, () => socket, "s1");
+    coach.connect("two-sum"); socket.onopen?.({});
+    const q = new CoachSendCoordinator<string>(async (question, signal) => { await coach.run("ask", { question }, { signal }); }, () => {});
+    q.reserve("a"); q.ready("a", "first"); q.reserve("b"); q.ready("b", "second");
+    const first = JSON.parse(socket.sent[1]); q.abort("a");
+    expect(socket.sent.map(raw => JSON.parse(raw)).filter(f => f.type === "run")).toHaveLength(1);
+    socket.onmessage?.({ data: JSON.stringify({ type: "result", request_id: first.request_id, action: "ask", body: { reply: "late" } }) });
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(q.tickets.get("a")?.state).toBe("cancelled");
+    expect(socket.sent.map(raw => JSON.parse(raw)).filter(f => f.type === "run")).toHaveLength(2);
+    q.dispose(); coach.stop();
+  });
 
   it("says hello with the problem on the board", () => {
     const socket = fakeSocket();

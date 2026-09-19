@@ -9063,7 +9063,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           return boardBox && box.bottom > boardBox.top && box.top < boardBox.bottom;
         }).map(node => node.textContent ?? "").join("\n");
         const scene = apiRef.current?.getSceneElements() as Array<{ id: string; version?: number }> | undefined;
-        return { viewport, pages, text, revision: JSON.stringify([
+        return { paneId: filmScope, viewport, pages, text, revision: JSON.stringify([
           scene?.map(e => [e.id, e.version]), rasterInkRef.current?.getRevision(),
         ]) };
       },

@@ -1816,7 +1816,7 @@ export function SettingsModal({
                     >
                       <strong>A folder you pick</strong>
                       <span className="lc-muted">
-                        Write PNGs into a directory you name below. Desktop app only.
+                        Choose an Android folder, or enter a desktop directory below.
                       </span>
                     </button>
                     <button

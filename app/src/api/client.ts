@@ -705,6 +705,14 @@ export class LcClient {
     return this.cmd("lc_coach_capabilities");
   }
 
+  /** Replay the same wire body on native HTTP as on the WebSocket transport. */
+  async runPreparedCoach<T>(action: import("./types").RunAction, body: Record<string, unknown>): Promise<T> {
+    const commands = { ask: "lc_coach_ask", review: "lc_coach_review", viz: "lc_coach_viz", lazy: "lc_coach_lazy", draw_review: "lc_coach_draw_review" } as const;
+    // Do not race the native invocation with a JS timer: releasing the FIFO
+    // before invoke settles would let a cancelled native request overlap its successor.
+    return this.cmd<T>(commands[action], { body });
+  }
+
   async review(
     taskId: string,
     board: BoardSnapshot,

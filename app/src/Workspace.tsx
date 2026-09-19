@@ -409,13 +409,18 @@ import { saveCaptureToDevice, describeCaptureResult } from "./util/capturePrefs"
 import { photoFromFile } from "./util/photoAttach";
 import { thumbnailFromPng } from "./util/photoAttach";
 import { documentAskFields, sameDocumentView, type DocumentViewContext } from "./modes/documentView";
+import { freezeCoachAsk, askImages, type CoachAskPayload } from "./modes/coachAskPayload";
 import { CoachSendCoordinator } from "./modes/coachSendCoordinator";
 import { saveCoachRequest, loadCoachRequest } from "./modes/coachRequestStore";
 type Mode = "review" | "ambient";
 
 /** One coach composer send, prepared and waiting in the FIFO queue. */
 interface CoachSendQueueItem {
+  askPayload?: CoachAskPayload;
+  runInputs?: Partial<Record<RunAction, Array<Record<string, unknown>>>>;
+  promptInput?: { quote?: string; marks: DocFootnote[]; numbers: Array<[string, number]>; budget: number };
   view?: DocumentViewContext;
+  origin?: { surface: "whiteboard" | "annotate" | "problem"; task_id: string; dataset: string };
   text: string;
   flags: AgentSendFlags;
   userMessageId: string;
@@ -2064,12 +2069,17 @@ export function Workspace({
   };
   /** FIFO coach sends waiting while a turn is in flight. */
   const coachSignalRef = useRef<AbortSignal | null>(null);
+  const coachRequestRef = useRef<CoachSendQueueItem | null>(null);
+  const coachRequestStepsRef = useRef<Partial<Record<RunAction, number>>>({});
   const coachCoordinatorRef = useRef<CoachSendCoordinator<CoachSendQueueItem> | null>(null);
   if (!coachCoordinatorRef.current) coachCoordinatorRef.current = new CoachSendCoordinator(
     async (item, signal) => {
       coachSignalRef.current = signal;
+      coachRequestRef.current = item; coachRequestStepsRef.current = {};
+      const previousSuppression = suppressCoachPanelOpenRef.current;
+      suppressCoachPanelOpenRef.current = true;
       try { await executeCoachSendRef.current(item); }
-      finally { coachSignalRef.current = null; }
+      finally { coachSignalRef.current = null; coachRequestRef.current = null; suppressCoachPanelOpenRef.current = previousSuppression; }
     },
     ticket => setAgentMessages(current => current.map(m => m.id === ticket.id ? {
       ...m, requestState: ticket.state,
@@ -5767,7 +5777,17 @@ export function Workspace({
       const socket = coachRef.current;
       const signal = coachSignalRef.current;
       signal?.throwIfAborted();
-      const guardedHttp = async () => { signal?.throwIfAborted(); const value = await http(); signal?.throwIfAborted(); return value; };
+      const request = action === "draw_review" ? null : coachRequestRef.current;
+      if (request) {
+        const index = coachRequestStepsRef.current[action] ?? 0;
+        coachRequestStepsRef.current[action] = index + 1;
+        request.runInputs ??= {};
+        const inputs = request.runInputs[action] ??= [];
+        if (inputs[index]) payload = structuredClone(inputs[index]);
+        else { inputs[index] = structuredClone(payload); await saveCoachRequest(request.userMessageId, request); }
+        signal?.throwIfAborted();
+      }
+      const guardedHttp = async () => { signal?.throwIfAborted(); const value = await (request ? client.runPreparedCoach<T>(action, payload) : http()); signal?.throwIfAborted(); return value; };
       if (!coachFlags.ws_runs || !socket) return guardedHttp();
       try {
         return await socket.run<T>(action, payload, {
@@ -5786,7 +5806,7 @@ export function Workspace({
         throw cause;
       }
     },
-    [coachFlags.ws_runs, coachFlags.process_events_ui, appendProcessEvent, appendReasoning],
+    [client, coachFlags.ws_runs, coachFlags.process_events_ui, appendProcessEvent, appendReasoning],
   );
 
   const pushCoachMessage = useCallback(
@@ -5860,29 +5880,7 @@ export function Workspace({
         : includeBoard
           ? "your board"
           : "your question";
-    // Timed guesses at the phases, for the path that has nothing better. When
-    // runs go over the socket the real stage boundaries arrive instead, and
-    // guessing over the top of them would contradict them.
-    const phaseTimers: number[] = [];
-    if (!coachFlags.ws_runs) {
-      const phases = includeBoard
-        ? [
-            note ? "Reading your message…" : "Reading the request…",
-            "Loading your layouts…",
-            `Thinking about ${topic}…`,
-            "Preparing response…",
-          ]
-        : ["Reading your message…", `Thinking about ${topic}…`, "Preparing response…"];
-      let delay = 0;
-      for (const label of phases) {
-        const id = window.setTimeout(() => setCoachPhase(label), delay);
-        phaseTimers.push(id);
-        delay += label.startsWith("Thinking") ? 2200 : 900;
-      }
-      setCoachPhase(phases[0]);
-    } else {
-      setCoachPhase(`Thinking about ${topic}…`);
-    }
+    setCoachPhase(`Working on ${topic}…`);
 
     const turnId = beginCoachTurn(threadAnchor ?? undefined, pendingAck);
     let finished = false;
@@ -6009,7 +6007,6 @@ export function Workspace({
       // Every early return above — an empty board, a missing question — lands
       // here too, and none of them should leave a turn waiting forever.
       if (!finished) finishCoachTurn(turnId, coachFailureTurns(failText));
-      for (const id of phaseTimers) window.clearTimeout(id);
       setCoachPhase(null);
       setBusy(null);
       if (activeCoachTurnIdRef.current === turnId) activeCoachTurnIdRef.current = null;
@@ -6329,6 +6326,7 @@ export function Workspace({
         reasoning?: AgentReasoningLevel;
         draw?: boolean;
         view?: DocumentViewContext;
+        request?: CoachSendQueueItem;
       },
     ) => {
       const note = question.trim();
@@ -6368,10 +6366,12 @@ export function Workspace({
         });
         // Attached photos ride the same payload on both transports — the WS
         // run frame and POST /coach/ask deserialize the one AskRequest.
-        const images = (photos ?? []).map((photo) => photo.png);
-        const surface = askSurface(problem);
+        const images = askImages(photos ?? [], modeHasVision("ask"));
+        const surface = docAsk?.request?.origin?.surface ?? askSurface(problem);
+        const taskId = docAsk?.request?.origin?.task_id ?? problem.task_id;
+        const dataset = docAsk?.request?.origin?.dataset ?? problem.dataset;
         const source = annotateSourceRef.current;
-        const docExtras = docAsk?.view ? { ...documentAskFields(docAsk.view), ...(docAsk?.highlight ? { highlight: docAsk.highlight } : {}), ...(docAsk?.preset ? { preset: docAsk.preset } : {}) } :
+        const docExtras = docAsk?.view ? { ...documentAskFields(modeHasVision("ask") ? docAsk.view : { ...docAsk.view, limitation: "This model cannot see images. Answer only from the extracted text/quote; do not infer unseen figures." }), ...(docAsk?.highlight ? { highlight: docAsk.highlight } : {}), ...(docAsk?.preset ? { preset: docAsk.preset } : {}) } :
           surface === "annotate" && source
             ? {
                 document_hash: source.hash,
@@ -6387,12 +6387,12 @@ export function Workspace({
                 ...(docAsk?.preset ? { preset: docAsk.preset } : {}),
               }
             : {};
-        const askPayload =
+        const askPayload = await freezeCoachAsk(docAsk?.request, () =>
           surface === "problem"
             ? {
                 surface,
-                task_id: problem.task_id,
-                dataset: problem.dataset,
+                task_id: taskId,
+                dataset,
                 question: asked,
                 ...(images.length > 0 ? { images } : {}),
                 ...reasoningAskFields(docAsk?.reasoning ?? "off"),
@@ -6400,13 +6400,13 @@ export function Workspace({
               }
             : {
                 surface,
-                task_id: problem.task_id,
+                task_id: taskId,
                 question: asked,
                 ...(images.length > 0 ? { images } : {}),
                 ...docExtras,
                 ...reasoningAskFields(docAsk?.reasoning ?? "off"),
                 ...(docAsk?.draw ? { draw: true } : {}),
-              };
+              }, saveCoachRequest);
         const result = await runCoachJob<{
           reply: string;
           reasoning?: string;
@@ -6424,15 +6424,7 @@ export function Workspace({
           askPayload,
           turnId,
           () =>
-            client.ask(asked, {
-              surface,
-              task_id: problem.task_id,
-              ...(surface === "problem" ? { dataset: problem.dataset } : {}),
-              ...(images.length > 0 ? { images } : {}),
-              ...docExtras,
-              ...reasoningAskFields(docAsk?.reasoning ?? "off"),
-              ...(docAsk?.draw ? { draw: true } : {}),
-            }),
+            client.ask(askPayload.question, askPayload),
         );
         if (coachRunGenRef.current !== genAtStart) return;
         finished = true;
@@ -6478,8 +6470,9 @@ export function Workspace({
             drawing: withNewDrawing(drawable),
           })),
         ]);
-        applyProposedAnnotations(result.proposed_annotations ?? []);
-        if (drawables.length > 0) {
+        const sourceStillOpen = !docAsk?.view || annotateSourceRef.current?.hash === docAsk.view.document_hash;
+        if (sourceStillOpen) applyProposedAnnotations(result.proposed_annotations ?? []);
+        if (drawables.length > 0 && sourceStillOpen) {
           setAgentMessages((current) => {
             queueMicrotask(() => syncDrawingsToBoard(current));
             return current;
@@ -6505,7 +6498,7 @@ export function Workspace({
         if (coachSendDepthRef.current === 0) drainCoachSendQueueRef.current();
       }
     },
-    [applyProposedAnnotations, client, problem, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob, appendProcessEvent, appendReasoning, openCoachPanel, markPadDirty, mobile, syncDrawingsToBoard],
+    [applyProposedAnnotations, client, problem, modeHasVision, syncSolution, beginCoachTurn, finishCoachTurn, runCoachJob, appendProcessEvent, appendReasoning, openCoachPanel, markPadDirty, mobile, syncDrawingsToBoard],
   );
 
   /** `runTests` fires this and is defined above it — see the auto-forward. */
@@ -6532,6 +6525,7 @@ export function Workspace({
             reasoning: requestedFlags.reasoning,
             ...(requestedFlags.photos ? { photos: requestedFlags.photos } : {}),
             ...(requestedFlags.pageQuote ? { pageQuote: requestedFlags.pageQuote } : {}),
+            ...(requestedFlags.documentView ? { documentView: requestedFlags.documentView } : {}),
             ...(requestedFlags.replyTo ? { replyTo: requestedFlags.replyTo } : {}),
             ...(requestedFlags.threadRootId != null
               ? { threadRootId: requestedFlags.threadRootId }
@@ -6581,7 +6575,7 @@ export function Workspace({
 
       const codeShot = (() => {
         const board = boardRef.current;
-        if (!board) return null;
+        if (!board || !(flags.handwriting || flags.annotations || flags.reviewBoard || flags.lazy)) return null;
         const ops = inkOpsFrom(board.saveBoard());
         if (ops.length === 0) return null;
         const frame = board
@@ -6688,13 +6682,10 @@ export function Workspace({
           : photos.length > 0
             ? "What am I looking at?"
             : "What should I focus on next?");
-      const assembled = assembleAskPrompt({
-        question: asked,
-        quote: quotedPassage,
-        marks,
-        numbers: numberFootnotes(annotateFootnotesRef.current),
-        budget: isLocalPad(problem) ? PAD_ASK_CLIP_CHARS : PROBLEM_ASK_CLIP_CHARS,
-      });
+      const promptInput = { quote: quotedPassage, marks: structuredClone(marks),
+        numbers: [...numberFootnotes(annotateFootnotesRef.current).entries()],
+        budget: isLocalPad(problem) ? PAD_ASK_CLIP_CHARS : PROBLEM_ASK_CLIP_CHARS };
+      const assembled = assembleAskPrompt({ ...promptInput, question: asked, numbers: new Map(promptInput.numbers) });
       const prompt = assembled.prompt;
 
       // One Send seeds one thread on the marks the model actually received.
@@ -6722,6 +6713,7 @@ export function Workspace({
         photos,
         quotedPassage,
         prompt,
+        promptInput,
         anchorId,
         attachedFootnoteIds,
         omittedMarkCount: assembled.omittedMarkIds.length,
@@ -6884,6 +6876,7 @@ export function Workspace({
             {
               preset: flags.askPreset,
               view: item.view,
+              request: item,
               highlight: quotedPassage,
               reasoning: flags.reasoning,
               ...(padDraw ? { draw: true } : {}),
@@ -6981,12 +6974,18 @@ export function Workspace({
     coordinator.reserve(id);
     try {
       const source = annotateSourceRef.current;
+      const origin = problem ? { surface: askSurface(problem), task_id: problem.task_id, dataset: problem.dataset } : undefined;
       const board = boardRef.current;
       const snapshot = !flags.documentView && source && board ? board.captureDocumentView() : null;
       let view: DocumentViewContext | undefined = flags.documentView ?? (snapshot && source ? {
-        ...snapshot, document_hash: source.hash, title: source.name, format: source.docType,
+        ...snapshot, text: snapshot.text.trim() || snapshot.pages.map(page => pageTextForAsk(source.hash, page)).filter(Boolean).join("\n\n"),
+        document_hash: source.hash, title: source.name, format: source.docType,
       } : undefined);
-      const viewImage = snapshot && board && modeHasVision("ask") ? await board.exportViewThumb() : null;
+      const [viewImage, prepared] = await Promise.all([
+        snapshot && board && modeHasVision("ask")
+          ? withTimeout(board.exportViewThumb(), THUMB_EXPORT_TIMEOUT_MS, "Current-view capture timed out") : Promise.resolve(null),
+        prepareCoachSend(text, flags),
+      ]);
       if (snapshot && (annotateSourceRef.current !== source || boardRef.current !== board ||
           !sameDocumentView(snapshot, board!.captureDocumentView()))) {
         throw new Error("The document changed during capture. Please retry your question from the intended view.");
@@ -6994,24 +6993,25 @@ export function Workspace({
       if (view && !viewImage) view = { ...view, limitation: view.text.trim()
         ? "Image unavailable; answer from the visible extracted text."
         : "The current view has no readable extracted text or image. Ask for a capture before describing it." };
-      const prepared = await prepareCoachSend(text, flags);
-      if (coordinator.tickets.get(id)?.controller.signal.aborted) return;
+      if (coordinator.tickets.get(id)?.controller.signal.aborted) return true;
       if (snapshot && (annotateSourceRef.current !== source || !sameDocumentView(snapshot, board!.captureDocumentView()))) {
         throw new Error("The document changed while preparing this question. Please send again from the intended view.");
       }
-      const item: CoachSendQueueItem = { ...prepared, view, userMessageId: id, threadAnchor: sendThreadAnchor(prepared, id),
+      const item: CoachSendQueueItem = { ...prepared, view, origin, userMessageId: id, threadAnchor: sendThreadAnchor(prepared, id),
         attachments: [...(prepared.attachments ?? []), ...(viewImage ? [viewImage] : [])] };
       if (item.attachments) item.attachments = await Promise.all(item.attachments.map(async att => ({
         ...att, thumb: att.thumb ?? await thumbnailFromPng(att.png),
       })));
       await saveCoachRequest(id, item);
+      if (coordinator.tickets.get(id)?.controller.signal.aborted) return true;
       setAgentMessages(current => current.map(message => message.id === id ? {
         ...message, content: prepared.bubble, attachments: item.attachments, flags: prepared.flagBits, requestId: id,
       } : message));
       applyCoachFootnote(prepared.anchorId, id, prepared.text, prepared.attachedFootnoteIds);
       coordinator.ready(id, item);
-    } catch (error) { coordinator.fail(id, error); setError(messageOf(error)); }
-  }, [prepareCoachSend, pushCoachMessage, applyCoachFootnote, sendThreadAnchor, modeHasVision]);
+      return true;
+    } catch (error) { coordinator.fail(id, error); setError(messageOf(error)); return false; }
+  }, [prepareCoachSend, pushCoachMessage, applyCoachFootnote, sendThreadAnchor, modeHasVision, problem]);
 
   executeCoachSendRef.current = executeCoachSend;
   drainCoachSendQueueRef.current = () => coachCoordinatorRef.current?.drain();
@@ -7030,16 +7030,17 @@ export function Workspace({
     }
   };
   const retryCoachMessage = async (id: string) => {
+    let reservedId: string | null = null;
     try {
       const item = coachCoordinatorRef.current?.tickets.get(id)?.value ?? await loadCoachRequest<CoachSendQueueItem>(id);
       if (!item) throw new Error("Original request is unavailable. Send a new question with the document open.");
       const nextId = pushCoachMessage("user", item.text, { queued: true, requestState: "preparing", retryOf: id, attachments: item.attachments });
-      coachCoordinatorRef.current!.reserve(nextId);
+      coachCoordinatorRef.current!.reserve(nextId); reservedId = nextId;
       const next = { ...item, userMessageId: nextId };
       await saveCoachRequest(nextId, next);
       setAgentMessages(current => current.map(m => m.id === nextId ? { ...m, requestId: nextId } : m));
       coachCoordinatorRef.current!.ready(nextId, next);
-    } catch (error) { setError(messageOf(error)); }
+    } catch (error) { if (reservedId) coachCoordinatorRef.current?.fail(reservedId, error); setError(messageOf(error)); }
   };
   const editCoachMessage = (id: string, text?: string) => {
     const coordinator = coachCoordinatorRef.current!;
@@ -7047,8 +7048,10 @@ export function Workspace({
     const ticket = coordinator.tickets.get(id);
     if (ticket?.value) {
       const previous = ticket.value;
-      const next = { ...previous, text, prompt: previous.text && previous.prompt.includes(previous.text)
-        ? previous.prompt.replace(previous.text, text) : text };
+      const question = previous.flags.replyTo ? `Replying to your earlier message: “${previous.flags.replyTo.excerpt}”\n\n${text}` : text;
+      const assembled = assembleAskPrompt({ ...(previous.promptInput ?? { quote: previous.quotedPassage, budget: PAD_ASK_CLIP_CHARS }),
+        question, numbers: new Map(previous.promptInput?.numbers) });
+      const next = { ...previous, text, prompt: assembled.prompt, askPayload: undefined, runInputs: undefined, questionTruncated: assembled.questionTruncated };
       void saveCoachRequest(id, next).then(() => {
         setAgentMessages(current => current.map(m => m.id === id ? { ...m, content: text } : m));
         coordinator.endEdit(id, next);
@@ -7059,8 +7062,15 @@ export function Workspace({
   const sendCoachChat = useCallback(
     (text: string, requestedFlags: AgentSendFlags, mode: "queue" | "merge" = "queue") => {
       const coordinator = coachCoordinatorRef.current!;
-      if (mode === "merge" && coordinator.runningId) abortCoachMessage(coordinator.runningId);
-      void enqueueCoachSend(text, normalizeCoachFlags(requestedFlags));
+      let flags = normalizeCoachFlags(requestedFlags);
+      if (mode === "merge" && coordinator.runningId && !coordinator.editing) {
+        const merging = [...coordinator.tickets.values()].filter(ticket => ticket.value && ["queued", "running"].includes(ticket.state));
+        const prior = merging.map(ticket => ticket.value!);
+        text = `${text}\n\nEarlier requests to address together:\n${prior.map(item => [item.prompt, item.view ? documentAskFields(item.view).page_text : ""].filter(Boolean).join("\n")).join("\n\n")}`;
+        flags = { ...flags, photos: [...(flags.photos ?? []), ...prior.flatMap(item => item.attachments ?? [])] };
+        for (const ticket of merging) abortCoachMessage(ticket.id);
+      }
+      return enqueueCoachSend(text, flags);
     }, [enqueueCoachSend, normalizeCoachFlags],
   );
 
@@ -8015,7 +8025,7 @@ export function Workspace({
       if (boardRef.current !== board || annotateSourceRef.current !== source || !sameDocumentView(snapshot, board.captureDocumentView())) {
         throw new Error("The view changed during capture. Select the area again.");
       }
-      if (!ask) { setNotice(describeCaptureResult(await saveCaptureToDevice(blob, "lc-selection"))); return; }
+      if (!ask) { const saved = await saveCaptureToDevice(blob, "lc-selection"); setNotice(describeCaptureResult(saved)); return saved.outcome !== "failed"; }
       const photo = await photoFromFile(new File([blob], "Selection.png", { type: "image/png" }));
       if (annotateSourceRef.current !== source) throw new Error("Document changed; select again");
       pendingQuoteRef.current = selection;
@@ -8024,7 +8034,8 @@ export function Workspace({
         view: { ...snapshot, text: selection.text || snapshot.text, document_hash: source.hash, title: source.name, format: source.docType },
       });
       openCoachPanel();
-    } catch (error) { setError(messageOf(error)); }
+      return true;
+    } catch (error) { setError(messageOf(error)); return false; }
   };
 
   const onDocCopy = useCallback(
