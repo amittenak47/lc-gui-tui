@@ -291,8 +291,8 @@ export interface DocSelectionLayerProps {
    */
   markScale?: number;
   footnotes?: readonly DocFootnote[];
-  onScreenshot?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void | Promise<void>;
-  onAskAgent?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void | Promise<void>;
+  onScreenshot?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => boolean | void | Promise<boolean | void>;
+  onAskAgent?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => boolean | void | Promise<boolean | void>;
   onAnnotate?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
   onCopy?: (
     selection: DocSelectionResult,
@@ -2114,13 +2114,13 @@ export function DocSelectionLayer({
     : [];
 
   const act = (
-    run: ((selection: DocSelectionResult, anchorRect: DOMRect | null) => void | Promise<void>) | undefined,
+    run: ((selection: DocSelectionResult, anchorRect: DOMRect | null) => boolean | void | Promise<boolean | void>) | undefined,
   ) => {
     const current = selection;
     const anchorRect = highlightBox();
     if (!current || !run) return;
-    void Promise.resolve(run(current, anchorRect)).finally(() => {
-      dismiss();
+    void Promise.resolve(run(current, anchorRect)).then((ok) => {
+      if (ok !== false) dismiss();
     });
   };
 

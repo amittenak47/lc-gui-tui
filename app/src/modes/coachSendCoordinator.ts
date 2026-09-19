@@ -14,6 +14,7 @@ export class CoachSendCoordinator<T> {
   private queue: SendTicket<T>[] = [];
   private active: SendTicket<T> | null = null;
   private edit: string | null = null;
+  private disposing = false;
   constructor(private execute: (value: T, signal: AbortSignal) => Promise<void>,
     private changed: (ticket: SendTicket<T>) => void) {}
   reserve(id: string): SendTicket<T> {
@@ -50,11 +51,16 @@ export class CoachSendCoordinator<T> {
     if (t && value !== undefined) t.value = value;
     this.edit = null; this.drain();
   }
+  get editing(): boolean { return this.edit !== null; }
   get runningId(): string | null { return this.active?.id ?? null; }
   get busy(): boolean { return Boolean(this.active || this.queue.length); }
-  dispose(): void { for (const t of this.tickets.values()) this.abort(t.id); }
+  dispose(): void {
+    this.disposing = true;
+    for (const t of this.tickets.values()) this.abort(t.id);
+    this.queue = []; this.edit = null; this.disposing = false;
+  }
   drain(): void {
-    if (this.active || this.edit) return;
+    if (this.disposing || this.active || this.edit) return;
     while (this.queue.length && ["cancelled", "failed"].includes(this.queue[0].state)) this.queue.shift();
     const t = this.queue[0];
     if (!t || t.state !== "queued" || t.value === undefined) return;

@@ -514,7 +514,7 @@ export interface AgentSidePanelProps {
     palette?: string[];
   }>;
   onToggleAttached?: (id: string) => void;
-  onSend: (text: string, flags: AgentSendFlags, mode?: "queue" | "merge") => void;
+  onSend: (text: string, flags: AgentSendFlags, mode?: "queue" | "merge") => void | Promise<boolean>;
   onAbortMessage?: (id: string) => void;
   onRetryMessage?: (id: string) => void;
   onEditMessage?: (id: string, text?: string) => boolean;
@@ -1140,7 +1140,8 @@ export function AgentSidePanel({
   const submit = (mode: "queue" | "merge" = "queue", event?: FormEvent) => {
     event?.preventDefault();
     if (!canSend) return;
-    onSend(
+    const sentDraft = draft, sentPhotos = photos, sentQuote = pageQuote;
+    const sent = onSend(
       draft.trim(),
       {
         ask: askOnly || (!reviewBoard && !lazy && !draw),
@@ -1158,6 +1159,12 @@ export function AgentSidePanel({
       },
       mode,
     );
+    void Promise.resolve(sent).then(ok => {
+      if (ok !== false) return;
+      setDraft(current => current ? `${sentDraft}\n\n${current}` : sentDraft);
+      setPhotos(current => [...sentPhotos, ...current]);
+      setPageQuote(current => current ?? sentQuote);
+    });
     setReplyTo(null);
     setPageQuote(null);
     setDraft("");

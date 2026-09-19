@@ -1,4 +1,5 @@
 export interface DocumentViewSnapshot {
+  paneId?: string;
   viewport: { x: number; y: number; width: number; height: number };
   pages: number[];
   text: string;

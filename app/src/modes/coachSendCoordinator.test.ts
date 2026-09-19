@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { CoachSendCoordinator } from "./coachSendCoordinator";
 const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
 describe("coach send ordering and transport ownership", () => {
+  it("disposing a blocked preparation cannot start the next queued request", () => {
+    const seen: string[] = [];
+    const q = new CoachSendCoordinator<string>(async value => { seen.push(value); }, () => {});
+    q.reserve("a"); q.reserve("b"); q.ready("b", "b"); q.dispose();
+    expect(seen).toEqual([]); expect(q.tickets.get("b")?.state).toBe("cancelled");
+  });
   it("reserves before preparation and waits for transport release after abort", async () => {
     const seen: string[] = []; const releases: Array<() => void> = [];
     const q = new CoachSendCoordinator<string>(value => { seen.push(value); return new Promise(r => releases.push(r)); }, () => {});

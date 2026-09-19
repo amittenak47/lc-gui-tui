@@ -282,8 +282,8 @@ function saveViaDownloadLink(blob: Blob, filename: string): CaptureSaveResult {
 }
 
 export function captureFilename(basename = "lc-capture"): string {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  return `${basename}-${stamp}.png`;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 23);
+  return `${basename}-${stamp}-${Math.random().toString(36).slice(2, 8)}.png`;
 }
 
 /**
