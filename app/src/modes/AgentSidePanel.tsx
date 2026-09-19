@@ -1223,6 +1223,13 @@ export function AgentSidePanel({
       >
         <span className="lc-agent-fold-bar" aria-hidden />
       </div>
+      <div className="lc-agent-pane-expand-row lc-agent-pane-expand-panel">
+        <PaneExpandButton
+          pane="messages"
+          focus={chatFocus}
+          onToggle={toggleChatFocus}
+        />
+      </div>
       <div
         className={[
           "lc-agent-chat",
@@ -1233,13 +1240,6 @@ export function AgentSidePanel({
           .filter(Boolean)
           .join(" ")}
       >
-        <div className="lc-agent-pane-expand-row">
-          <PaneExpandButton
-            pane="messages"
-            focus={chatFocus}
-            onToggle={toggleChatFocus}
-          />
-        </div>
         {openThreadId ? (
           <div className="lc-agent-thread-bar">
             <button
@@ -1668,7 +1668,7 @@ export function AgentSidePanel({
           <textarea
             ref={composerRef}
             value={draft}
-            rows={4}
+            rows={8}
             placeholder="Ask the agent about your board or code…"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {

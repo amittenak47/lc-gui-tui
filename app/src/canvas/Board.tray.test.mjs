@@ -49,4 +49,13 @@ describe("vertical menu visibility", () => {
     expect(board).toContain('{chromeTraySleeps && (');
     expect(board).not.toContain('{chromeTraySleeps && !agentOpen && (');
   });
+
+  it("keeps the view tray opaque on the document when chat is open", () => {
+    const start = css.indexOf(".lc-map-chrome-stack {");
+    const stack = css.slice(start, css.indexOf(".lc-map-chrome-stack.has-wake {", start));
+    expect(stack).not.toContain("var(--lc-agent-open");
+    expect(css).toContain(".lc-mobile.lc-app-agent-open .lc-map-controls {");
+    expect(css).toContain("var(--lc-agent-sheet) + var(--lc-agent-sheet-lift)");
+    expect(css).toContain(".lc-mobile.lc-app-agent-open .lc-board-chrome-slot .lc-map-chrome-right");
+  });
 });

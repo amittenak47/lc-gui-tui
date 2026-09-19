@@ -1,7 +1,10 @@
 import { useLayoutEffect, useRef, type RefObject, type PointerEvent as ReactPointerEvent } from "react";
 
+/** Open-sheet floor: grab bar, presets, and a usable composer — not a clipped stub. */
+export const AGENT_SHEET_MIN_PX = 400;
+
 export function settleSheetHeight(height: number, available: number, initial: number, snap: boolean): number {
-  const min = Math.min(180, available);
+  const min = Math.min(AGENT_SHEET_MIN_PX, available);
   const clamped = Math.max(min, Math.min(available, height));
   if (!snap) return clamped;
   const stops = [initial, available * .25, available * .5, available * .75].map(n => Math.max(min, Math.min(available, n)));
