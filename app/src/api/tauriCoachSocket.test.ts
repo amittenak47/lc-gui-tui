@@ -24,6 +24,7 @@ it("isolates event subscriptions, sends, and disconnects by socket", async () =>
   expect(mocks.invoke).toHaveBeenCalledWith("lc_coach_disconnect", { channelId: firstId });
   expect(mocks.invoke).not.toHaveBeenCalledWith("lc_coach_disconnect", { channelId: secondId });
   second.close();
+  await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("lc_coach_disconnect", { channelId: secondId }));
 });
 
 it("closes immediately but disconnects after an in-flight native connect resolves", async () => {
@@ -34,10 +35,11 @@ it("closes immediately but disconnects after an in-flight native connect resolve
   const opened = vi.fn(); const closed = vi.fn();
   socket.onopen = opened; socket.onclose = closed;
   await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+  const channelId = mocks.invoke.mock.calls.find(([cmd]) => cmd === "lc_coach_connect")![1].channelId;
   socket.close(); expect(closed).toHaveBeenCalledOnce();
-  expect(mocks.invoke.mock.calls.some(([cmd]) => cmd === "lc_coach_disconnect")).toBe(false);
+  expect(mocks.invoke).not.toHaveBeenCalledWith("lc_coach_disconnect", { channelId });
   finish();
-  await vi.waitFor(() => expect(mocks.invoke.mock.calls.some(([cmd]) => cmd === "lc_coach_disconnect")).toBe(true));
+  await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("lc_coach_disconnect", { channelId }));
   expect(opened).not.toHaveBeenCalled();
 });
 
@@ -47,4 +49,5 @@ it("reports failed native connection and closes the transport", async () => {
   socket.onerror = vi.fn(); socket.onclose = vi.fn();
   await vi.waitFor(() => expect(socket.onclose).toHaveBeenCalledOnce());
   expect(socket.onerror).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(mocks.invoke.mock.calls.some(([cmd]) => cmd === "lc_coach_disconnect")).toBe(true));
 });
