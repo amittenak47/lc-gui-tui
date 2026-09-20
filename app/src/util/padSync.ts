@@ -13,6 +13,7 @@ import type {
 } from "../api/client";
 import { LcApiError as ApiError } from "../api/client";
 import type { BoardBlob } from "../canvas/BoardHandle";
+import { artifactCatalogFields } from "./padArtifacts";
 import {
   deleteAnnotateDoc,
   getAnnotateDoc,
@@ -383,8 +384,10 @@ export async function applyHubWhiteboard(
   if (!raw || typeof raw !== "object") return false;
   const row = raw as WhiteboardPadDto;
   if (typeof row.id !== "string" || !row.board) return false;
+  const artifactFields = artifactCatalogFields(row.artifacts, { kind: "whiteboard", id: row.id });
   const local = await getWhiteboardNotebook(row.id);
   await restoreWhiteboardNotebook({
+    ...artifactFields,
     id: row.id,
     title: row.title,
     updatedAt: row.updated_at,
@@ -407,8 +410,10 @@ export async function applyHubAnnotate(
   if (!raw || typeof raw !== "object") return false;
   const row = raw as AnnotatePadDto;
   if (typeof row.id !== "string" || !row.board) return false;
+  const artifactFields = artifactCatalogFields(row.artifacts, { kind: "annotate", id: row.id });
   const local = await getAnnotateDoc(row.id);
   await restoreAnnotateDoc({
+    ...artifactFields,
     id: row.id,
     name: row.name,
     hash: row.hash,
@@ -447,6 +452,7 @@ async function applyHubProblem(
   const row = raw as ProblemPadDto;
   if (typeof row.id !== "string" || !row.board) return false;
   await putProblemBoard({
+    ...artifactCatalogFields(row.artifacts, { kind: "problem", id: row.id }),
     id: row.id,
     dataset: row.dataset,
     taskId: row.task_id,
@@ -507,6 +513,7 @@ async function pushWhiteboardPadNow(
 /** The wire form of a notebook; shared by autosave and the Sync walk. */
 export function whiteboardPadBody(notebook: WhiteboardNotebook): WhiteboardPadDto {
   return {
+    ...artifactCatalogFields(notebook.artifacts, { kind: "whiteboard", id: notebook.id }),
     id: notebook.id,
     title: notebook.title,
     updated_at: notebook.updatedAt,
@@ -521,6 +528,7 @@ export function whiteboardPadBody(notebook: WhiteboardNotebook): WhiteboardPadDt
 /** The wire form of an annotate doc; shared by autosave and the Sync walk. */
 export async function annotatePadBody(doc: AnnotateDoc): Promise<AnnotatePadDto> {
   return {
+    ...artifactCatalogFields(doc.artifacts, { kind: "annotate", id: doc.id }),
     id: doc.id,
     name: doc.name,
     ...(doc.label?.trim() ? { label: doc.label.trim() } : {}),
@@ -577,6 +585,7 @@ export async function pushProblemPad(
   row: ProblemBoardRecord,
 ): Promise<boolean> {
   const body: ProblemPadDto = {
+    ...artifactCatalogFields(row.artifacts, { kind: "problem", id: row.id }),
     id: row.id,
     dataset: row.dataset,
     task_id: row.taskId,
@@ -968,6 +977,7 @@ async function pushRestoreAllFour(
     const notebook = await getWhiteboardNotebook(padId);
     if (!notebook) return;
     await client.putWhiteboardPad(padId, {
+      ...artifactCatalogFields(notebook.artifacts, { kind: "whiteboard", id: notebook.id }),
       id: notebook.id,
       title: notebook.title,
       updated_at: notebook.updatedAt,
@@ -980,6 +990,7 @@ async function pushRestoreAllFour(
     const doc = await getAnnotateDoc(padId);
     if (!doc) return;
     await client.putAnnotatePad(padId, {
+      ...artifactCatalogFields(doc.artifacts, { kind: "annotate", id: doc.id }),
       id: doc.id,
       name: doc.name,
       ...(doc.label?.trim() ? { label: doc.label.trim() } : {}),
@@ -1090,6 +1101,7 @@ export async function pullPads(client: LcClient): Promise<void> {
     const missing = !local || boardLooksCorrupt(local.board);
     if (!missing) continue;
     await restoreWhiteboardNotebook({
+      ...artifactCatalogFields(row.artifacts, { kind: "whiteboard", id: row.id }),
       id: row.id,
       title: row.title,
       updatedAt: row.updated_at,
@@ -1109,6 +1121,7 @@ export async function pullPads(client: LcClient): Promise<void> {
     const missing = !local || boardLooksCorrupt(local.board);
     if (!missing) continue;
     await restoreAnnotateDoc({
+      ...artifactCatalogFields(row.artifacts, { kind: "annotate", id: row.id }),
       id: row.id,
       name: row.name,
       hash: row.hash,

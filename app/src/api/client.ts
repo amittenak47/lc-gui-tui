@@ -4,6 +4,7 @@
 
 import { b64ToBytes, bytesToB64, loadInvoke, readInvokeResult } from "./nativeHttp";
 import { loadPadHub, type PadHub } from "../util/padHub";
+import { requireArtifactCatalogAck, type ArtifactCatalog } from "../util/padArtifacts";
 import type {
   AdjacentProblems,
   AttemptOutcome,
@@ -373,6 +374,7 @@ export interface SearchOptions {
 const COACH_HTTP_TIMEOUT_MS = 180_000;
 
 export interface WhiteboardPadDto {
+  artifacts?: ArtifactCatalog;
   id: string;
   title: string;
   updated_at: number;
@@ -385,6 +387,7 @@ export interface WhiteboardPadDto {
 }
 
 export interface AnnotatePadDto {
+  artifacts?: ArtifactCatalog;
   id: string;
   name: string;
   /** Display name for this set. Absent means show {@link name}. */
@@ -424,6 +427,7 @@ export interface ApplyAckDto {
 }
 
 export interface ProblemPadDto {
+  artifacts?: ArtifactCatalog;
   id: string;
   dataset: string;
   task_id: string;
@@ -1322,12 +1326,14 @@ export class LcClient {
   }
 
   async putWhiteboardPad(id: string, body: WhiteboardPadDto): Promise<WhiteboardPadDto> {
-    return padInvokeOrHub(
+    const written = await padInvokeOrHub<WhiteboardPadDto>(
       () => this.cmd("lc_put_whiteboard", { id, body }),
       "PUT",
       `/pads/whiteboard/${encodeURIComponent(id)}`,
       body,
     );
+    requireArtifactCatalogAck(body.artifacts, written?.artifacts, { kind: "whiteboard", id });
+    return written;
   }
 
   async tombstoneWhiteboardPad(id: string, seq = 0): Promise<ApplyAckDto> {
@@ -1364,12 +1370,14 @@ export class LcClient {
   }
 
   async putAnnotatePad(id: string, body: AnnotatePadDto): Promise<AnnotatePadDto> {
-    return padInvokeOrHub(
+    const written = await padInvokeOrHub<AnnotatePadDto>(
       () => this.cmd("lc_put_annotate", { id, body }),
       "PUT",
       `/pads/annotate/${encodeURIComponent(id)}`,
       body,
     );
+    requireArtifactCatalogAck(body.artifacts, written?.artifacts, { kind: "annotate", id });
+    return written;
   }
 
   async tombstoneAnnotatePad(id: string, seq = 0): Promise<ApplyAckDto> {
@@ -1403,12 +1411,15 @@ export class LcClient {
   }
 
   async putProblemPad(dataset: string, taskId: string, body: ProblemPadDto): Promise<ProblemPadDto> {
-    return padInvokeOrHub(
+    const written = await padInvokeOrHub<ProblemPadDto>(
       () => this.cmd("lc_put_problem", { dataset, task_id: taskId, body }),
       "PUT",
       `/pads/problem/${encodeURIComponent(dataset)}/${encodeURIComponent(taskId)}`,
       body,
     );
+    requireArtifactCatalogAck(body.artifacts, written?.artifacts,
+      { kind: "problem", id: `${dataset.trim()}/${taskId.trim()}` });
+    return written;
   }
 
   async tombstoneProblemPad(dataset: string, taskId: string, seq = 0): Promise<ApplyAckDto> {

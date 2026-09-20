@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 
 use crate::config::config_dir;
 
+mod artifacts;
+
 /// Same cap as `serve::MAX_BODY_BYTES` — kept here so this module does not
 /// import the HTTP layer.
 const MAX_BLOB_BYTES: usize = 32 * 1024 * 1024;
@@ -140,6 +142,9 @@ pub fn open(path: &Path) -> Result<Connection> {
     ensure_column(&conn, "annotate", "sync_seq", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(&conn, "annotate", "footnote_boards_json", "TEXT NOT NULL DEFAULT '{}'")?;
     ensure_column(&conn, "annotate", "label", "TEXT NOT NULL DEFAULT ''")?;
+    for table in ["whiteboard", "annotate", "problem"] {
+        ensure_column(&conn, table, "artifacts_json", "TEXT")?;
+    }
     migrate_tombstones_to_gone(&conn)?;
     Ok(conn)
 }
@@ -224,6 +229,8 @@ pub struct WhiteboardPad {
     pub board: serde_json::Value,
     #[serde(default)]
     pub agent: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifacts: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,6 +261,8 @@ pub struct AnnotatePad {
     pub agent: serde_json::Value,
     #[serde(default = "empty_json_object", skip_serializing_if = "is_empty_json_object")]
     pub footnote_boards: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifacts: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -270,6 +279,8 @@ pub struct ProblemPad {
     pub board: serde_json::Value,
     #[serde(default)]
     pub agent: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifacts: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -382,7 +393,7 @@ fn read_whiteboard(conn: &Connection, id: &str) -> Result<Option<WhiteboardPad>>
     let row = conn
         .query_row(
             "SELECT id, title, updated_at, page_count, deleted_at, board_json, agent_json,
-                    ifnull(sync_seq, 0)
+                    ifnull(sync_seq, 0), artifacts_json
              FROM whiteboard WHERE id = ?1",
             params![id],
             |row| {
@@ -395,6 +406,7 @@ fn read_whiteboard(conn: &Connection, id: &str) -> Result<Option<WhiteboardPad>>
                     board: parse_json(&row.get::<_, String>(5)?),
                     agent: parse_json(&row.get::<_, String>(6)?),
                     sync_seq: row.get(7)?,
+                    artifacts: row.get::<_, Option<String>>(8)?.map(|raw| parse_json(&raw)),
                     base_updated_at: None,
                 })
             },
@@ -405,7 +417,7 @@ fn read_whiteboard(conn: &Connection, id: &str) -> Result<Option<WhiteboardPad>>
 
 const ANNOTATE_SELECT: &str = "id, name, hash, doc_type, updated_at, deleted_at, source_text,
                 footnotes_json, board_json, agent_json, ifnull(sync_seq, 0),
-                ifnull(footnote_boards_json, '{}'), ifnull(label, '')";
+                ifnull(footnote_boards_json, '{}'), ifnull(label, ''), artifacts_json";
 
 fn read_annotate(conn: &Connection, id: &str) -> Result<Option<AnnotatePad>> {
     let row = conn
@@ -421,11 +433,11 @@ fn read_annotate(conn: &Connection, id: &str) -> Result<Option<AnnotatePad>> {
 pub fn list_whiteboard(conn: &Connection, archived: bool) -> Result<Vec<WhiteboardPad>> {
     let sql = if archived {
         "SELECT id, title, updated_at, page_count, deleted_at, board_json, agent_json,
-                ifnull(sync_seq, 0)
+                ifnull(sync_seq, 0), artifacts_json
          FROM whiteboard WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
     } else {
         "SELECT id, title, updated_at, page_count, deleted_at, board_json, agent_json,
-                ifnull(sync_seq, 0)
+                ifnull(sync_seq, 0), artifacts_json
          FROM whiteboard WHERE deleted_at IS NULL ORDER BY updated_at DESC"
     };
     let mut stmt = conn.prepare(sql)?;
@@ -460,6 +472,7 @@ fn map_whiteboard_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WhiteboardPad
         board: parse_json(&row.get::<_, String>(5)?),
         agent: parse_json(&row.get::<_, String>(6)?),
         sync_seq: row.get(7)?,
+        artifacts: row.get::<_, Option<String>>(8)?.map(|raw| parse_json(&raw)),
         base_updated_at: None,
     })
 }
@@ -479,6 +492,7 @@ fn map_annotate_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnnotatePad> {
         sync_seq: row.get(10)?,
         footnote_boards: parse_json(&row.get::<_, String>(11)?),
         label: row.get(12)?,
+        artifacts: row.get::<_, Option<String>>(13)?.map(|raw| parse_json(&raw)),
         base_updated_at: None,
     })
 }
@@ -487,7 +501,7 @@ fn map_annotate_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnnotatePad> {
 pub fn list_changed_whiteboard(conn: &Connection, since: i64) -> Result<Vec<WhiteboardPad>> {
     let mut stmt = conn.prepare(
         "SELECT id, title, updated_at, page_count, deleted_at, board_json, agent_json,
-                ifnull(sync_seq, 0)
+                ifnull(sync_seq, 0), artifacts_json
          FROM whiteboard
          WHERE deleted_at IS NULL AND updated_at > ?1
          ORDER BY updated_at DESC",
@@ -656,6 +670,7 @@ pub fn get_annotate(conn: &Connection, id: &str) -> Result<Option<AnnotatePad>> 
 }
 
 pub fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutcome<WhiteboardPad>> {
+    artifacts::validate(pad.artifacts.as_ref(), None, "whiteboard", &pad.id)?;
     let existing = read_whiteboard(conn, &pad.id)?;
     let gone = gone_seq(conn, PadKind::Whiteboard, &pad.id)?;
     if gone > 0 && pad.sync_seq <= gone {
@@ -676,6 +691,7 @@ pub fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutco
         } else if pad.updated_at < stored.updated_at {
             return Ok(PutOutcome::Conflict(stored.clone()));
         }
+        artifacts::validate(pad.artifacts.as_ref(), stored.artifacts.as_ref(), "whiteboard", &pad.id)?;
         insert_revision(
             conn,
             "whiteboard",
@@ -700,8 +716,8 @@ pub fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutco
     }
 
     conn.execute(
-        "INSERT INTO whiteboard (id, title, updated_at, page_count, deleted_at, board_json, agent_json, sync_seq)
-         VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7)
+        "INSERT INTO whiteboard (id, title, updated_at, page_count, deleted_at, board_json, agent_json, sync_seq, artifacts_json)
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?8)
          ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
             updated_at = excluded.updated_at,
@@ -709,7 +725,8 @@ pub fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutco
             deleted_at = NULL,
             board_json = excluded.board_json,
             agent_json = excluded.agent_json,
-            sync_seq = excluded.sync_seq",
+            sync_seq = excluded.sync_seq,
+            artifacts_json = COALESCE(excluded.artifacts_json, whiteboard.artifacts_json)",
         params![
             pad.id,
             pad.title,
@@ -718,6 +735,7 @@ pub fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutco
             json_text(&pad.board),
             json_text(&pad.agent),
             next_seq,
+            pad.artifacts.as_ref().map(json_text),
         ],
     )?;
     Ok(PutOutcome::Written(
@@ -726,6 +744,7 @@ pub fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutco
 }
 
 pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<AnnotatePad>> {
+    artifacts::validate(pad.artifacts.as_ref(), None, "annotate", &pad.id)?;
     let existing = read_annotate(conn, &pad.id)?;
     let gone = gone_seq(conn, PadKind::Annotate, &pad.id)?;
     if gone > 0 && pad.sync_seq <= gone {
@@ -746,6 +765,7 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
         } else if pad.updated_at < stored.updated_at {
             return Ok(PutOutcome::Conflict(stored.clone()));
         }
+        artifacts::validate(pad.artifacts.as_ref(), stored.artifacts.as_ref(), "annotate", &pad.id)?;
         insert_revision(
             conn,
             "annotate",
@@ -771,8 +791,8 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
 
     conn.execute(
         "INSERT INTO annotate (id, name, hash, doc_type, updated_at, deleted_at, source_text,
-                               footnotes_json, board_json, agent_json, sync_seq, footnote_boards_json, label)
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                               footnotes_json, board_json, agent_json, sync_seq, footnote_boards_json, label, artifacts_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             hash = excluded.hash,
@@ -785,7 +805,8 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
             agent_json = excluded.agent_json,
             sync_seq = excluded.sync_seq,
             footnote_boards_json = excluded.footnote_boards_json,
-            label = excluded.label",
+            label = excluded.label,
+            artifacts_json = COALESCE(excluded.artifacts_json, annotate.artifacts_json)",
         params![
             pad.id,
             pad.name,
@@ -799,6 +820,7 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
             next_seq,
             json_text(&pad.footnote_boards),
             pad.label.trim(),
+            pad.artifacts.as_ref().map(json_text),
         ],
     )?;
     Ok(PutOutcome::Written(
@@ -818,6 +840,7 @@ pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<Pro
     };
     let mut pad = pad.clone();
     pad.id = id;
+    artifacts::validate(pad.artifacts.as_ref(), None, "problem", &pad.id)?;
     if pad.dataset.is_empty() || pad.task_id.is_empty() {
         if let Some((dataset, task_id)) = pad.id.split_once('/') {
             if pad.dataset.is_empty() {
@@ -848,6 +871,7 @@ pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<Pro
         } else if pad.updated_at < stored.updated_at {
             return Ok(PutOutcome::Conflict(stored.clone()));
         }
+        artifacts::validate(pad.artifacts.as_ref(), stored.artifacts.as_ref(), "problem", &pad.id)?;
         insert_revision(
             conn,
             "problem",
@@ -867,15 +891,16 @@ pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<Pro
     }
 
     conn.execute(
-        "INSERT INTO problem (id, dataset, task_id, updated_at, board_json, agent_json, sync_seq)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO problem (id, dataset, task_id, updated_at, board_json, agent_json, sync_seq, artifacts_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(id) DO UPDATE SET
             dataset = excluded.dataset,
             task_id = excluded.task_id,
             updated_at = excluded.updated_at,
             board_json = excluded.board_json,
             agent_json = excluded.agent_json,
-            sync_seq = excluded.sync_seq",
+            sync_seq = excluded.sync_seq,
+            artifacts_json = COALESCE(excluded.artifacts_json, problem.artifacts_json)",
         params![
             pad.id,
             pad.dataset,
@@ -884,6 +909,7 @@ pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<Pro
             json_text(&pad.board),
             json_text(&pad.agent),
             next_seq,
+            pad.artifacts.as_ref().map(json_text),
         ],
     )?;
     Ok(PutOutcome::Written(
@@ -894,7 +920,7 @@ pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<Pro
 fn read_problem(conn: &Connection, id: &str) -> Result<Option<ProblemPad>> {
     let row = conn
         .query_row(
-            "SELECT id, dataset, task_id, updated_at, board_json, agent_json, ifnull(sync_seq, 0)
+            "SELECT id, dataset, task_id, updated_at, board_json, agent_json, ifnull(sync_seq, 0), artifacts_json
              FROM problem WHERE id = ?1",
             params![id],
             |row| {
@@ -906,6 +932,7 @@ fn read_problem(conn: &Connection, id: &str) -> Result<Option<ProblemPad>> {
                     board: parse_json(&row.get::<_, String>(4)?),
                     agent: parse_json(&row.get::<_, String>(5)?),
                     sync_seq: row.get(6)?,
+                    artifacts: row.get::<_, Option<String>>(7)?.map(|raw| parse_json(&raw)),
                     base_updated_at: None,
                 })
             },
@@ -923,13 +950,14 @@ fn map_problem_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProblemPad> {
         board: parse_json(&row.get::<_, String>(4)?),
         agent: parse_json(&row.get::<_, String>(5)?),
         sync_seq: row.get(6)?,
+        artifacts: row.get::<_, Option<String>>(7)?.map(|raw| parse_json(&raw)),
         base_updated_at: None,
     })
 }
 
 pub fn list_changed_problem(conn: &Connection, since: i64) -> Result<Vec<ProblemPad>> {
     let mut stmt = conn.prepare(
-        "SELECT id, dataset, task_id, updated_at, board_json, agent_json, ifnull(sync_seq, 0)
+        "SELECT id, dataset, task_id, updated_at, board_json, agent_json, ifnull(sync_seq, 0), artifacts_json
          FROM problem
          WHERE updated_at > ?1
          ORDER BY updated_at DESC",
@@ -1637,6 +1665,7 @@ mod tests {
             base_updated_at: None,
             board: json!({"v": 1, "elements": [{"id": id}]}),
             agent: json!([{"role": "assistant"}]),
+            artifacts: None,
         }
     }
 
@@ -1656,6 +1685,7 @@ mod tests {
             board: json!({"v": 1, "elements": []}),
             agent: json!([]),
             footnote_boards: json!({}),
+            artifacts: None,
         }
     }
 
@@ -1670,7 +1700,58 @@ mod tests {
             base_updated_at: None,
             board: json!({"v": 1, "elements": [{"id": "ink"}]}),
             agent: json!([]),
+            artifacts: None,
         }
+    }
+
+    #[test]
+    fn artifact_catalogs_round_trip_and_survive_legacy_writes() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        let catalog = |kind: &str, id: &str| json!({
+            "v": 1, "parent": {"kind": kind, "id": id}, "revision": "catalog-1",
+            "artifacts": [{
+                "id": "note-1", "title": "Explanation.md", "revision": "note-r1",
+                "createdAt": 1, "updatedAt": 2, "associations": [{"kind": "file"}],
+                "content": {"kind": "markdown", "documentId": "owned-1", "sourceRevision": "source-1"}
+            }]
+        });
+        let mut whiteboard = wb("w1", 10);
+        whiteboard.artifacts = Some(catalog("whiteboard", "w1"));
+        put_whiteboard(&conn, &whiteboard).unwrap();
+        let mut annotate = an("a1", 10);
+        annotate.artifacts = Some(catalog("annotate", "a1"));
+        put_annotate(&conn, &annotate).unwrap();
+        let mut problem = pb("leetcode/1", 10);
+        problem.artifacts = Some(catalog("problem", "leetcode/1"));
+        put_problem(&conn, &problem).unwrap();
+        drop(conn);
+        // Reopen also exercises idempotent additive schema migration.
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 20)).unwrap();
+        put_annotate(&conn, &an("a1", 20)).unwrap();
+        put_problem(&conn, &pb("leetcode/1", 20)).unwrap();
+        assert_eq!(get_whiteboard(&conn, "w1").unwrap().unwrap().artifacts, whiteboard.artifacts);
+        assert_eq!(get_annotate(&conn, "a1").unwrap().unwrap().artifacts, annotate.artifacts);
+        assert_eq!(get_problem(&conn, "leetcode/1").unwrap().unwrap().artifacts, problem.artifacts);
+        assert_eq!(list_changed_whiteboard(&conn, 0).unwrap()[0].artifacts, whiteboard.artifacts);
+        assert_eq!(list_changed_annotate(&conn, 0).unwrap()[0].artifacts, annotate.artifacts);
+        assert_eq!(list_changed_problem(&conn, 0).unwrap()[0].artifacts, problem.artifacts);
+    }
+
+    #[test]
+    fn invalid_artifact_parent_does_not_overwrite_the_pad() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        put_whiteboard(&conn, &wb("w1", 10)).unwrap();
+        let mut bad = wb("w1", 20);
+        bad.artifacts = Some(json!({
+            "v": 1, "parent": {"kind": "whiteboard", "id": "other"},
+            "revision": "c1", "artifacts": []
+        }));
+        assert!(put_whiteboard(&conn, &bad).is_err());
+        assert_eq!(get_whiteboard(&conn, "w1").unwrap().unwrap().updated_at, 10);
+        assert_eq!(revision_count(&conn, "whiteboard", "w1").unwrap(), 0);
     }
 
     #[test]
@@ -2324,6 +2405,7 @@ mod tests {
             board: json!({ "elements": [] }),
             agent: json!([]),
             footnote_boards: json!({}),
+            artifacts: None,
         }
     }
 

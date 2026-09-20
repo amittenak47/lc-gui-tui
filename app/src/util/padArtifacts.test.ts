@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   artifactCreationAssociations, artifactDependencies, artifactDependencyKey,
   artifactRefKey, missingArtifactDependencies, parseArtifactCatalog,
-  sanitizeArtifactRefs, type ArtifactCatalog, type ArtifactRef,
+  requireArtifactCatalogAck, sanitizeArtifactRefs, type ArtifactCatalog, type ArtifactRef,
 } from "./padArtifacts";
 
 const parent = { kind: "annotate" as const, id: "annotation-set-1" };
@@ -135,5 +135,34 @@ describe("artifact dependency readiness", () => {
     const input = catalog();
     input.artifacts[0]!.deletedAt = 2;
     expect(missingArtifactDependencies(input, new Set())).toEqual([]);
+  });
+});
+
+describe("artifact catalog acknowledgements", () => {
+  it("accepts a complete catalog echoed back by the hub", () => {
+    const input = catalog();
+    expect(() => requireArtifactCatalogAck(input, JSON.parse(JSON.stringify(input)), parent)).not.toThrow();
+  });
+
+  it("refuses an old hub's success response when it dropped the field", () => {
+    expect(() => requireArtifactCatalogAck(catalog(), undefined, parent)).toThrow("not synced");
+  });
+
+  it("refuses same-revision truncation and a different parent", () => {
+    const sent = catalog();
+    expect(() => requireArtifactCatalogAck(sent, { ...sent, artifacts: [] }, parent)).toThrow("not synced");
+    expect(() => requireArtifactCatalogAck(sent, { ...sent, parent: { ...parent, id: "other" } }, parent))
+      .toThrow("different parent");
+  });
+
+  it("does not impose the new acknowledgement contract on legacy pads", () => {
+    expect(() => requireArtifactCatalogAck(undefined, undefined, parent)).not.toThrow();
+  });
+
+  it("preserves explicit restore ancestry", () => {
+    const input = catalog();
+    input.artifacts[0]!.restoredFrom = "tombstone-r2";
+    expect(parseArtifactCatalog(input)?.artifacts[0]!.restoredFrom).toBe("tombstone-r2");
+    expect(() => requireArtifactCatalogAck(input, input, parent)).not.toThrow();
   });
 });

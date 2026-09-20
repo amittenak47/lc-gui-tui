@@ -45,6 +45,8 @@ export interface PadArtifact {
   content: ArtifactContent;
   /** Retain identity/content references for explicit restore; never filter out. */
   deletedAt?: number;
+  /** Explicit restore must name the tombstone revision it supersedes. */
+  restoredFrom?: string;
 }
 
 export interface ArtifactCatalog {
@@ -158,6 +160,7 @@ export function parseArtifactCatalog(value: unknown): ArtifactCatalog | undefine
         !timestamp(entry.createdAt) || !timestamp(entry.updatedAt) || entry.updatedAt < entry.createdAt ||
         !Array.isArray(entry.associations)) return invalid();
     if (entry.deletedAt !== undefined && (!timestamp(entry.deletedAt) || entry.deletedAt < entry.createdAt || entry.deletedAt > entry.updatedAt)) return invalid();
+    if (entry.restoredFrom !== undefined && !identity(entry.restoredFrom)) return invalid();
     ids.add(entry.id);
     const associations = entry.associations.map((raw) => parseAssociation(raw) ?? invalid());
     if (new Set(associations.map((association) => JSON.stringify(association))).size !== associations.length) return invalid();
@@ -166,6 +169,7 @@ export function parseArtifactCatalog(value: unknown): ArtifactCatalog | undefine
       createdAt: entry.createdAt, updatedAt: entry.updatedAt, associations,
       content: parseContent(entry.content),
       ...(entry.deletedAt !== undefined ? { deletedAt: entry.deletedAt as number } : {}),
+      ...(entry.restoredFrom !== undefined ? { restoredFrom: entry.restoredFrom as string } : {}),
     };
   });
   return { v: 1, parent, revision: value.revision, artifacts };
@@ -182,6 +186,20 @@ export function artifactCatalogFields(
     throw new Error("Artifact catalog belongs to a different parent; existing content was kept.");
   }
   return { artifacts };
+}
+
+/** An older hub can accept the PUT yet silently discard an unknown field. */
+export function requireArtifactCatalogAck(
+  sent: ArtifactCatalog | undefined,
+  received: unknown,
+  parent: ArtifactParent,
+): void {
+  if (!sent) return;
+  const expected = artifactCatalogFields(sent, parent).artifacts!;
+  const actual = artifactCatalogFields(received, parent).artifacts;
+  if (!actual || JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error("The hub did not preserve the artifact catalog. Update the hub and retry; attachments are not synced.");
+  }
 }
 
 export type ArtifactDependency =

@@ -4,6 +4,7 @@ import { LcApiError, type LcClient } from "../api/client";
 import {
   annotatePadBody,
   applyHubAnnotate,
+  applyHubWhiteboard,
   applyPadSyncPing,
   deletePadEverywhere,
   discoverHubPads,
@@ -20,6 +21,7 @@ import {
   pushPadSnapshot,
   pushProblemPad,
   pushWhiteboardPad,
+  whiteboardPadBody,
   resetPadSyncQueueForTests,
   restoreTrashedPad,
   scheduleIdlePadSyncPing,
@@ -31,6 +33,7 @@ import { setHostLoopback } from "./padHub";
 import * as inkSync from "./inkSync";
 import { persistableAgentMessages, restoreAgentMessages } from "../modes/agentTranscript";
 import type { AgentChatMessage } from "../modes/AgentSidePanel";
+import type { ArtifactCatalog } from "./padArtifacts";
 import { parseVizProgram } from "../viz/schema";
 import { visibleDrawings } from "../viz/drawingState";
 
@@ -1081,6 +1084,44 @@ describe("live PUT CAS and gone", () => {
 });
 
 describe("applyHubAnnotate footnote boards", () => {
+  it("carries validated catalogs through document upload and download", async () => {
+    const artifacts: ArtifactCatalog = {
+      v: 1, parent: { kind: "annotate", id: "a1" }, revision: "c1", artifacts: [],
+    };
+    const body = await annotatePadBody({
+      id: "a1", name: "n.md", hash: "h", docType: "markdown", updatedAt: 40,
+      source: "#", board: emptyBoard, footnotes: [], agent: [], artifacts,
+    });
+    expect(body.artifacts).toEqual(artifacts);
+    await applyHubAnnotate(body, { emitReload: false });
+    expect(restoreAnnotateDoc).toHaveBeenCalledWith(expect.objectContaining({ artifacts }));
+  });
+
+  it("carries validated catalogs through notebook upload and download", async () => {
+    const artifacts: ArtifactCatalog = {
+      v: 1, parent: { kind: "whiteboard", id: "w1" }, revision: "c1", artifacts: [],
+    };
+    const body = whiteboardPadBody({
+      id: "w1", title: "Notebook", updatedAt: 40, pageCount: 1,
+      board: emptyBoard, agent: [], artifacts,
+    });
+    expect(body.artifacts).toEqual(artifacts);
+    await applyHubWhiteboard(body, { emitReload: false });
+    expect(restoreWhiteboardNotebook).toHaveBeenCalledWith(expect.objectContaining({ artifacts }));
+  });
+
+  it("rejects foreign catalogs before replacing a local document", async () => {
+    const artifacts: ArtifactCatalog = {
+      v: 1, parent: { kind: "annotate", id: "other" }, revision: "c1", artifacts: [],
+    };
+    restoreAnnotateDoc.mockClear();
+    await expect(applyHubAnnotate({
+      id: "a1", name: "n.md", hash: "h", doc_type: "markdown", updated_at: 40,
+      source: "#", board: emptyBoard, footnotes: [], agent: [], artifacts,
+    }, { emitReload: false })).rejects.toThrow("different parent");
+    expect(restoreAnnotateDoc).not.toHaveBeenCalled();
+  });
+
   it("does not upload or queue a parent after a scratch dependency read fails", async () => {
     const client = fakeClient();
     const unavailable = new Error("Missing attached whiteboard");
