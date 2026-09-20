@@ -46,6 +46,19 @@ export async function putFootnoteWhiteboard(
   });
 }
 
+/** Save the dependency before callers publish a footnote/chat pointer to it. */
+export async function createFootnoteWhiteboard(docId: string): Promise<string> {
+  const wbId = `fnwb-${crypto.randomUUID()}`;
+  await putFootnoteWhiteboard(docId, wbId, {
+    board: {
+      v: 1, elements: [], appState: { scrollX: 0, scrollY: 0, zoom: 1 },
+      inkPages: { v: 1, pageIds: [] },
+    },
+    pageCount: 1,
+  });
+  return wbId;
+}
+
 /** Annotate workspace listens so its pad clock notices a split-pane save. */
 export const FNWB_SAVED_EVENT = "lc-fnwb-saved";
 
@@ -60,6 +73,16 @@ export async function getFootnoteWhiteboard(
 ): Promise<FootnoteWhiteboardContent | null> {
   const row = await getContent<unknown>(footnoteWhiteboardKey(docId, wbId));
   if (!isContent(row)) return null;
+  return row;
+}
+
+/** An absent/corrupt saved scene must not become an editable blank replacement. */
+export async function requireFootnoteWhiteboard(
+  docId: string,
+  wbId: string,
+): Promise<FootnoteWhiteboardContent> {
+  const row = await getFootnoteWhiteboard(docId, wbId);
+  if (!row || !isTransferableScene(row)) throw new MissingFootnoteBoardsError(docId, [wbId]);
   return row;
 }
 
@@ -137,7 +160,7 @@ export async function collectFootnoteBoards(
 export class MissingFootnoteBoardsError extends Error {
   readonly code = "missing-footnote-boards";
   constructor(readonly docId: string, readonly boardIds: readonly string[]) {
-    super(`Cannot sync: ${boardIds.length} attached whiteboard${boardIds.length === 1 ? " is" : "s are"} unavailable. Reopen or download the missing content, then retry.`);
+    super(`Cannot open or sync: ${boardIds.length} attached whiteboard${boardIds.length === 1 ? " is" : "s are"} unavailable. Download the missing content, then retry.`);
     this.name = "MissingFootnoteBoardsError";
   }
 }

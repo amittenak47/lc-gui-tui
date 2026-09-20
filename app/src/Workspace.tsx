@@ -327,6 +327,8 @@ import {
   FNWB_SAVED_EVENT,
   getFootnoteWhiteboard,
   putFootnoteWhiteboard,
+  createFootnoteWhiteboard,
+  requireFootnoteWhiteboard,
   forkSharedWhiteboardPointers,
   type FootnoteWhiteboardContent,
 } from "./util/footnoteWhiteboardStore";
@@ -3093,6 +3095,9 @@ export function Workspace({
         setBoardPreparing(true);
       }
       try {
+        const scratchToOpen = opts.footnoteBoard
+          ? await requireFootnoteWhiteboard(opts.footnoteBoard.docId, opts.footnoteBoard.wbId)
+          : null;
         await migrateLegacyWhiteboard(countWhiteboardPages);
         // Mount the board under the overlay / blur, but keep it invisible until
         // fit settles — then crossfade so the coach sheet never paints mid-open.
@@ -3142,14 +3147,17 @@ export function Workspace({
             : await getWhiteboardNotebook(notebookId);
         if (opts.footnoteBoard) {
           notebookId = null;
-          fnSaved = await getFootnoteWhiteboard(opts.footnoteBoard.docId, opts.footnoteBoard.wbId);
+          fnSaved = scratchToOpen;
           footnoteBoardBaselineRef.current = fnSaved;
           if (fnSaved?.board?.elements) {
             const pages = Math.min(
               WHITEBOARD_PAGE_LIMIT,
               Math.max(1, fnSaved.pageCount, countWhiteboardPages(fnSaved.board.elements)),
             );
-            savedView = whiteboardSavedCamera(fnSaved.board.appState);
+            const blankScratch = fnSaved.board.elements.length === 0 &&
+              !fnSaved.board.ink?.length && !fnSaved.board.inkC &&
+              !fnSaved.board.inkPages?.pageIds.length;
+            savedView = blankScratch ? null : whiteboardSavedCamera(fnSaved.board.appState);
             const skeletons = buildWhiteboardTemplate(pages, dark);
             boardRef.current?.restoreBoard(fnSaved.board.elements, fnSaved.board.appState, {
               skeletons,
@@ -3309,8 +3317,11 @@ export function Workspace({
       } catch (cause) {
         if (workspaceLoadGenRef.current !== loadGen) return;
         setError(messageOf(cause));
-        boardSaveSuspendedRef.current = false;
-        agentSaveSuspendedRef.current = false;
+        // A failed scratch load must not autosave a mounted empty canvas over
+        // its missing dependency. Retry the load after the content arrives.
+        if (opts.footnoteBoard) setProblem(null);
+        boardSaveSuspendedRef.current = Boolean(opts.footnoteBoard);
+        agentSaveSuspendedRef.current = Boolean(opts.footnoteBoard);
         setHoldBrowseOverlay(false);
         setBoardPreparing(false);
         setWorkspaceLoadActive(false);
@@ -7948,19 +7959,25 @@ export function Workspace({
         });
       } catch (cause: unknown) {
         noteStorageFull(cause);
+        throw cause;
       }
     },
     [noteStorageFull],
   );
 
   const openFootnoteBoardSplit = useCallback(
-    async (footnoteId: string, wbId: string) => {
-      let docId = annotateDocIdRef.current;
+    async (footnoteId: string, wbId: string, createdForDocId?: string) => {
+      const initialProblem = problemRef.current;
+      let docId = createdForDocId ?? annotateDocIdRef.current;
       if (!docId) {
         const minted = await saveAnnotateSession();
         docId = minted?.id ?? annotateDocIdRef.current;
         if (!docId) return;
       }
+      await requireFootnoteWhiteboard(docId, wbId);
+      if (problemRef.current !== initialProblem ||
+          (annotateDocIdRef.current && annotateDocIdRef.current !== docId) ||
+          !annotateFootnotesRef.current.some((mark) => mark.id === footnoteId)) return;
       await persistFootnoteBoardPointer(footnoteId, wbId, docId);
       setOpenFootnoteId(null);
       setFootnoteAnchorRect(null);
@@ -7988,6 +8005,33 @@ export function Workspace({
     [focusTab, openWorkspace, persistFootnoteBoardPointer, saveAnnotateSession, splitTabs, tab.id],
   );
   void openFootnoteBoard;
+
+  const creatingFootnoteBoardRef = useRef(false);
+  const createFootnoteBoardSplit = useCallback(async (footnoteId: string) => {
+    if (creatingFootnoteBoardRef.current) return;
+    creatingFootnoteBoardRef.current = true;
+    const initialProblem = problemRef.current;
+    try {
+      let docId = annotateDocIdRef.current;
+      if (!docId) {
+        const saved = await saveAnnotateSession();
+        docId = saved?.id ?? annotateDocIdRef.current;
+      }
+      if (!docId || problemRef.current !== initialProblem ||
+          (annotateDocIdRef.current && annotateDocIdRef.current !== docId) ||
+          !annotateFootnotesRef.current.some((mark) => mark.id === footnoteId)) return;
+      const wbId = await createFootnoteWhiteboard(docId);
+      // Navigation/mark deletion during the write must not attach it elsewhere.
+      // Retain the unreferenced scene for recovery instead of deleting user data.
+      if (problemRef.current !== initialProblem || (annotateDocIdRef.current && annotateDocIdRef.current !== docId) ||
+          !annotateFootnotesRef.current.some((mark) => mark.id === footnoteId)) return;
+      await openFootnoteBoardSplit(footnoteId, wbId, docId);
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      creatingFootnoteBoardRef.current = false;
+    }
+  }, [openFootnoteBoardSplit, saveAnnotateSession]);
 
 
   /*
@@ -10808,8 +10852,11 @@ export function Workspace({
             onActiveSubMarkIdChange={setActiveSubMarkId}
             onClose={dismissFootnoteOverview}
             onChange={onFootnoteChange}
+            onCreateWhiteboard={() => {
+              void createFootnoteBoardSplit(openFootnote.id);
+            }}
             onOpenWhiteboard={(wbId) => {
-              void openFootnoteBoardSplit(openFootnote.id, wbId);
+              void openFootnoteBoardSplit(openFootnote.id, wbId).catch((cause) => setError(messageOf(cause)));
             }}
             onDeleteWhiteboard={(wbId) => {
               const docId = annotateDocIdRef.current;

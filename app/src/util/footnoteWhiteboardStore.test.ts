@@ -18,6 +18,8 @@ import type { DocFootnote } from "./docFootnotes";
 import {
   applyFootnoteBoards,
   collectFootnoteBoards,
+  createFootnoteWhiteboard,
+  requireFootnoteWhiteboard,
   slimFootnoteBoard,
   deleteFootnoteWhiteboard,
   footnoteWhiteboardKey,
@@ -67,6 +69,20 @@ afterEach(() => {
 });
 
 describe("footnoteWhiteboardStore", () => {
+  it("persists a complete blank scene before returning its new identity", async () => {
+    const first = await createFootnoteWhiteboard("doc-1");
+    const second = await createFootnoteWhiteboard("doc-1");
+    expect(first).not.toBe(second);
+    expect(await getFootnoteWhiteboard("doc-1", first)).toEqual({
+      board: {
+        v: 1, elements: [], appState: { scrollX: 0, scrollY: 0, zoom: 1 },
+        inkPages: { v: 1, pageIds: [] },
+      }, pageCount: 1,
+    });
+    expect(await collectFootnoteBoards("doc-1", [mark("f1", [first])], { requireAll: true }))
+      .toHaveProperty(first);
+  });
+
   it("refuses an incomplete upload while allowing partial local previews", async () => {
     await putFootnoteWhiteboard("doc-1", "present", { board: board(), pageCount: 1 });
     const notes = [mark("fn1", ["present", "missing"]), mark("fn2", ["missing"])];
@@ -85,6 +101,8 @@ describe("footnoteWhiteboardStore", () => {
     await putContent(footnoteWhiteboardKey("doc-1", "bad"), { board: {}, pageCount: 1 });
     await expect(collectFootnoteBoards("doc-1", [mark("fn1", ["bad"])], { requireAll: true }))
       .rejects.toBeInstanceOf(MissingFootnoteBoardsError);
+    await expect(requireFootnoteWhiteboard("doc-1", "bad")).rejects.toBeInstanceOf(MissingFootnoteBoardsError);
+    await expect(requireFootnoteWhiteboard("doc-1", "absent")).rejects.toBeInstanceOf(MissingFootnoteBoardsError);
   });
 
   it("can retry the same references after their missing scenes arrive", async () => {

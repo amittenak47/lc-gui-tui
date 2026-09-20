@@ -12,7 +12,6 @@ import { AnimatePresence, motion } from "motion/react";
 import type { AgentChatMessage } from "./AgentSidePanel";
 import {
   freshNoteId,
-  freshWhiteboardId,
   type DocFootnote,
   type DocFootnoteNote,
   type DocFootnoteSubMarkKind,
@@ -87,6 +86,8 @@ export interface FootnoteOverviewProps {
   onRemoveWorkspaceLink?: (edgeId: string) => void;
   /** Open a footnote-owned scratch board on this annotate tab. */
   onOpenWhiteboard?: (id: string) => void;
+  /** The owner persists the new scene before publishing its pointer. */
+  onCreateWhiteboard?: () => void;
   /** Drop the KV blob after the pointer is gone. */
   onDeleteWhiteboard?: (id: string) => void;
   /**
@@ -363,6 +364,7 @@ export function FootnoteOverview({
   onOpenWorkspaceLink,
   onRemoveWorkspaceLink,
   onOpenWhiteboard,
+  onCreateWhiteboard,
   onDeleteWhiteboard,
   readOnly = false,
   anchorRect,
@@ -564,12 +566,6 @@ export function FootnoteOverview({
   };
   const updateWhiteboards = (next: typeof whiteboards) => {
     onChange({ ...footnote, whiteboards: next.length > 0 ? next : undefined });
-  };
-  const addWhiteboard = () => {
-    const now = Date.now();
-    const id = freshWhiteboardId(whiteboards, now);
-    updateWhiteboards([...whiteboards, { id, createdAt: now, updatedAt: now }]);
-    onOpenWhiteboard?.(id);
   };
   const removeWhiteboard = (id: string) => {
     updateWhiteboards(whiteboards.filter((entry) => entry.id !== id));
@@ -1048,7 +1044,7 @@ export function FootnoteOverview({
                   </HubSection>
                 ) : null
               ) : (
-              <HubSection title="Whiteboards" onAdd={addWhiteboard}>
+              <HubSection title="Whiteboards" onAdd={onCreateWhiteboard}>
                 {whiteboards.length > 0 && (
                   <ul className={listClass(whiteboards.length)}>
                     {whiteboards.map((board) => (
