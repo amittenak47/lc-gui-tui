@@ -39,6 +39,7 @@ import {
 import { healBoardLayout } from "./healBoardLayout";
 import { waitForFontsReady } from "./fontsReady";
 import { trackDockStrip } from "./liveDockStrip";
+import { useUtilityTrayRef } from "./useUtilityTrayRef";
 import {
   healScratchpadGeometry,
   parseScratchPageId,
@@ -1507,6 +1508,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * margin the moment they scroll down.
    */
   const lockedScrollXRef = useRef<number | null>(null);
+  const utilityTrayRef = useUtilityTrayRef();
   /** Pen goes to the code page instead of the editor. */
   const [annotateCode, setAnnotateCode] = useState(false);
   /** Highlighter mode — see `onHighlightingChange`. Annotate-only. */
@@ -9924,7 +9926,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               </div>
               )}
             </div>
-            <div className="lc-map-chrome-right">
+            <div className="lc-map-chrome-right" ref={utilityTrayRef}>
               {/*
                 Right panel: Recentre, lined paper, theme, eye (sheet lock on
                 mobile). One card. Annotate stays on the opposite end. Eye

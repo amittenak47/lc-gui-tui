@@ -505,7 +505,7 @@ describe("InkPresetEditor", () => {
 });
 
 describe("SettingsModal", () => {
-  it("puts the performance overlay under Writing settings", () => {
+  it("keeps the performance overlay under Annotate", () => {
     const src = readFileSync(join(here, "../components/SettingsModal.tsx"), "utf8");
     expect(src).toMatch(/id="writing"/);
     expect(src).toMatch(/Performance overlay/);

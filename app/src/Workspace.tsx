@@ -167,6 +167,7 @@ import {
 } from "./util/docExtract";
 import type { DocAnchor } from "./util/docAnchors";
 import { installHandednessAttr } from "./util/inkHandedness";
+import { installUiHandednessAttr } from "./util/uiHandedness";
 import { openExternalUrl } from "./util/openExternal";
 import { WEB_HOME, fetchWebPage, hostLabelFromUrl, webPageWidthForViewport, type WebHtmlSource } from "./util/webPage";
 import { CodeDocument } from "./modes/CodeDocument";
@@ -688,6 +689,7 @@ export function Workspace({
 
   // Writing hand mirrors the chrome across the Y-axis — see inkHandedness.
   useEffect(() => installHandednessAttr(), []);
+  useEffect(() => installUiHandednessAttr(), []);
 
   /**
    * Mobile paging. Desktop keeps the one wide stacked canvas; on a tablet each

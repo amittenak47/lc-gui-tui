@@ -151,6 +151,7 @@ import {
   saveThisDevicePrefs,
 } from "../util/devicePrefs";
 import { FEATURE_LEETCODE } from "../featureFlags";
+import { loadUiHandedness, saveUiHandedness, type UiHandedness } from "../util/uiHandedness";
 import { PAD_HUB_EVENT, loadSavedPadHub, savePadHub } from "../util/padHub";
 import { compareIndexFacts, indexFacts } from "../util/indexReport";
 import type { SettingsFact } from "../util/settingsFacts";
@@ -419,6 +420,7 @@ function emptyConfig(): LcConfig {
 
 /** Device-only prefs edited in Personalise — deferred until Save like config.toml. */
 interface DevicePrefs {
+  uiHandedness: UiHandedness;
   handedness: InkHandedness;
   /**
    * Hand a failed run to the coach without being asked.
@@ -482,6 +484,7 @@ interface DevicePrefs {
 
 function loadDevicePrefs(): DevicePrefs {
   return {
+    uiHandedness: loadUiHandedness(),
     handedness: loadInkHandedness(),
     testForward: loadTestForwardMode(),
     captureMode: loadCaptureMode(),
@@ -518,6 +521,7 @@ function loadDevicePrefs(): DevicePrefs {
 
 function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
   return (
+    a.uiHandedness === b.uiHandedness &&
     a.handedness === b.handedness &&
     a.testForward === b.testForward &&
     a.captureMode === b.captureMode &&
@@ -847,6 +851,7 @@ export function SettingsModal({
   const [lanUrl, setLanUrl] = useState<string | null>(null);
   const [bootNotice, setBootNotice] = useState<string | null>(null);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
+  const [uiHandedness, setUiHandedness] = useState<UiHandedness>(loadUiHandedness);
   const [colorWheelOnToolbar, setColorWheelOnToolbar] = useState(
     () => loadInkToolPresets().colorWheelOnToolbar,
   );
@@ -1071,6 +1076,7 @@ export function SettingsModal({
     setBusy("loading…");
     const prefs = loadDevicePrefs();
     setHandedness(prefs.handedness);
+    setUiHandedness(prefs.uiHandedness);
     setTestForward(prefs.testForward);
     setCaptureMode(prefs.captureMode);
     setCaptureDestination(prefs.captureDestination);
@@ -1172,6 +1178,7 @@ export function SettingsModal({
   if (!open) return null;
 
   const draftPrefs: DevicePrefs = {
+    uiHandedness,
     handedness,
     testForward,
     captureMode,
@@ -1242,6 +1249,7 @@ export function SettingsModal({
       // Device prefs never need the daemon — persist them even if PUT /config fails.
       if (prefsDirty) {
         saveInkHandedness(handedness);
+        saveUiHandedness(uiHandedness);
         saveTestForwardMode(testForward);
         saveCaptureMode(captureMode);
         saveCaptureDestination(captureDestination);
@@ -2595,6 +2603,13 @@ export function SettingsModal({
               {indexWipe.kind === "failed" && <SettingsFacts facts={indexWipe.facts} error />}
               </SettingsFold>
               <SettingsFold id="ui" title="UI">
+                <div className="lc-settings-subhead">UI hand</div>
+                <p className="lc-settings-hint">Header, agent panel and general menus. Ink tools keep their separate Annotate hand. Saved on this device.</p>
+                <div className="lc-settings-choice" role="radiogroup" aria-label="UI hand">
+                  {(["right", "left"] as const).map(hand => <button key={hand} type="button" role="radio"
+                    aria-checked={uiHandedness === hand} className={uiHandedness === hand ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                    onClick={() => setUiHandedness(hand)}><strong>{hand === "right" ? "Right hand" : "Left hand"}</strong></button>)}
+                </div>
                 <div className="lc-settings-subhead">Agent behavior</div>
                 <p className="lc-settings-hint">Shared by document, whiteboard and problem chats. Model reasoning effort stays in the chat composer.</p>
                 <div className="lc-settings-choice lc-settings-coach-flags">

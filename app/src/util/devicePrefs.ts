@@ -3,6 +3,7 @@
  */
 
 import type { DevicePrefsDto, LcClient } from "../api/client";
+import { loadUiHandedness, saveUiHandedness } from "./uiHandedness";
 import { loadTestForwardMode, saveTestForwardMode } from "./agentPrefs";
 import { loadAutosaveBanner, loadAutosaveInterval, saveAutosaveBanner, saveAutosaveInterval } from "./autosavePref";
 import {
@@ -94,6 +95,7 @@ export function otherDeviceLabel(): string {
 export function collectDevicePrefsBlob(): Record<string, unknown> {
   const tools = loadInkToolPresets();
   return {
+    uiHandedness: loadUiHandedness(),
     handedness: loadInkHandedness(),
     testForward: loadTestForwardMode(),
     captureMode: loadCaptureMode(),
@@ -125,6 +127,7 @@ export function collectDevicePrefsBlob(): Record<string, unknown> {
 }
 
 export function applyDevicePrefsBlob(prefs: Record<string, unknown>): void {
+  if (prefs.uiHandedness === "left" || prefs.uiHandedness === "right") saveUiHandedness(prefs.uiHandedness);
   if (typeof prefs.handedness === "string") saveInkHandedness(prefs.handedness as InkHandedness);
   if (prefs.testForward === "wait" || prefs.testForward === "whole-run" || prefs.testForward === "per-case") {
     saveTestForwardMode(prefs.testForward);

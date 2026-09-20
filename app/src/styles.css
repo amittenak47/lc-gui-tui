@@ -326,7 +326,7 @@ a,
   --lc-board-chrome-right: var(--lc-agent-width, 520px);
 }
 
-[data-handedness="left"] .lc-app-agent-open:not(.lc-mobile) {
+[data-ui-handedness="left"] .lc-app-agent-open:not(.lc-mobile) {
   --lc-board-chrome-left: var(--lc-agent-width, 520px);
   --lc-board-chrome-right: 0px;
 }
@@ -347,6 +347,7 @@ a,
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "tabs center actions";
   align-items: center;
   column-gap: 12px;
   height: var(--lc-header-height);
@@ -404,6 +405,7 @@ a,
 }
 
 .lc-header-left {
+  grid-area: tabs;
   justify-self: stretch;
   width: 100%;
   min-width: 0;
@@ -418,6 +420,7 @@ a,
 
 .lc-header-right {
   justify-self: end;
+  grid-area: actions;
 }
 
 /*
@@ -1422,6 +1425,7 @@ html[data-theme="dark"] .lc-web-doc {
 }
 
 .lc-header-center {
+  grid-area: center;
   justify-self: center;
   display: flex;
   flex-direction: row;
@@ -4773,8 +4777,11 @@ body[data-lc-sash-drag="horizontal"] {
 
 [data-handedness="left"][data-lc-chrome-narrow]
   .lc-map-controls.lc-map-controls-paged
-  .lc-board-dock,
-[data-handedness="left"][data-lc-chrome-narrow]
+  .lc-board-dock {
+  grid-column: 1;
+  justify-self: start;
+}
+[data-ui-handedness="left"][data-lc-chrome-narrow]
   .lc-map-controls.lc-map-controls-paged
   .lc-map-chrome-right {
   grid-column: 1;
@@ -9778,7 +9785,7 @@ body[data-lc-sash-drag="horizontal"] {
   z-index: 48;
 }
 
-[data-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map {
+[data-ui-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map {
   left: calc(100% + 6px);
   right: auto;
 }
@@ -16349,12 +16356,12 @@ button.lc-row-selected:hover:not(:disabled) {
  * would sit under the panel with dead space beside it. Same for the status
  * strip that is inset away from the panel.
  */
-[data-handedness="left"] .lc-app-agent-open .lc-main {
+[data-ui-handedness="left"] .lc-app-agent-open .lc-main {
   margin-right: 0;
   margin-left: var(--lc-agent-width, 520px);
 }
 
-[data-handedness="left"] .lc-app-agent-open:not(.lc-mobile) .lc-chrome-overlay-top {
+[data-ui-handedness="left"] .lc-app-agent-open:not(.lc-mobile) .lc-chrome-overlay-top {
   right: 0;
   left: var(--lc-agent-width, 520px);
 }
@@ -16378,18 +16385,18 @@ button.lc-row-selected:hover:not(:disabled) {
   left: 0;
 }
 
-[data-handedness="left"] .lc-mobile.lc-app-agent-open .lc-main {
+[data-ui-handedness="left"] .lc-mobile.lc-app-agent-open .lc-main {
   margin-right: 0;
   margin-left: 0;
 }
 
-[data-handedness="left"] .lc-mobile.lc-app-agent-open .lc-chrome-overlay-top {
+[data-ui-handedness="left"] .lc-mobile.lc-app-agent-open .lc-chrome-overlay-top {
   right: 0;
   left: 0;
 }
 
 /* Coach panel swaps edges, and with it the seam and the shadow that sells it. */
-[data-handedness="left"] .lc-side {
+[data-ui-handedness="left"] .lc-side {
   right: auto;
   left: 0;
   border-left: none;
@@ -16397,17 +16404,17 @@ button.lc-row-selected:hover:not(:disabled) {
   box-shadow: 6px 0 18px rgb(0 0 0 / 18%);
 }
 
-[data-handedness="left"] .lc-app-agent-open .lc-side {
+[data-ui-handedness="left"] .lc-app-agent-open .lc-side {
   box-shadow: 6px 8px 18px rgb(0 0 0 / 14%);
 }
 
 /* The collapsed tab hangs off the panel's outer edge, so it flips too. */
-[data-handedness="left"] .lc-side-tab-wrap {
+[data-ui-handedness="left"] .lc-side-tab-wrap {
   right: auto;
   left: 0;
 }
 
-[data-handedness="left"] .lc-side-tab {
+[data-ui-handedness="left"] .lc-side-tab {
   padding: 0 12px 0 14px;
   border-radius: 0 8px 8px 0;
   border-right: 1px solid var(--line);
@@ -16420,28 +16427,28 @@ button.lc-row-selected:hover:not(:disabled) {
  * Handedness still moves the whole panel, but photo stays immediately
  * before Send so the attach control is not stranded on the far side.
  */
-[data-handedness="left"] .lc-agent-composer-bar {
+[data-ui-handedness="left"] .lc-agent-composer-bar {
   flex-direction: row;
 }
 
-[data-handedness="left"] .lc-agent-composer-bar .lc-modes {
+[data-ui-handedness="left"] .lc-agent-composer-bar .lc-modes {
   margin-right: 0;
   margin-left: 0;
 }
 
-[data-handedness="left"] .lc-agent-composer-actions {
+[data-ui-handedness="left"] .lc-agent-composer-actions {
   justify-content: flex-end;
   margin-left: auto;
   margin-right: 0;
 }
 
 /* Tooltips open away from the panel's edge, which has just changed sides. */
-[data-handedness="left"] .lc-agent-composer-bar .lc-modes .lc-tip-target::after {
+[data-ui-handedness="left"] .lc-agent-composer-bar .lc-modes .lc-tip-target::after {
   left: auto;
   right: calc(100% + 5px);
 }
 
-[data-handedness="left"] .lc-agent-composer-actions .lc-tip-target::after {
+[data-ui-handedness="left"] .lc-agent-composer-actions .lc-tip-target::after {
   right: auto;
   left: calc(100% + 5px);
 }
@@ -16453,16 +16460,12 @@ button.lc-row-selected:hover:not(:disabled) {
  * `row-reverse` mirrors; the paged one pins the stacks to the box edges — swap
  * `left`/`right` so Recentre / Theme / Eye follow the writing hand.
  */
-[data-handedness="left"] .lc-map-controls {
-  flex-direction: row-reverse;
-}
-
 [data-handedness="left"] .lc-map-controls-paged .lc-map-chrome-left {
   left: auto;
   right: 0;
 }
 
-[data-handedness="left"] .lc-map-controls-paged .lc-map-chrome-right {
+[data-ui-handedness="left"] .lc-map-controls-paged .lc-map-chrome-right {
   right: auto;
   left: 0;
 }
@@ -16471,8 +16474,8 @@ button.lc-row-selected:hover:not(:disabled) {
   flex-direction: row-reverse;
 }
 
-[data-handedness="left"] .lc-map-chrome-right,
-[data-handedness="left"] .lc-map-controls-collapsed .lc-map-chrome-right {
+[data-ui-handedness="left"] .lc-map-chrome-right,
+[data-ui-handedness="left"] .lc-map-controls-collapsed .lc-map-chrome-right {
   align-items: flex-start;
   padding-right: 0;
   padding-left: env(safe-area-inset-left, 0px);
@@ -16482,7 +16485,7 @@ button.lc-row-selected:hover:not(:disabled) {
  * Action sheets (selection, footnote) anchor to the hand rather than the page.
  * The sheet itself is centred on its anchor, so only the rows inside flip.
  */
-[data-handedness="left"] .lc-doc-sheet-actions {
+[data-ui-handedness="left"] .lc-doc-sheet-actions {
   flex-direction: row-reverse;
 }
 
@@ -18711,7 +18714,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /* The chooser hangs off the composer's edge, which the writing hand moves. */
-[data-handedness="left"] .lc-agent-scope-menu {
+[data-ui-handedness="left"] .lc-agent-scope-menu {
   right: auto;
   left: 0;
 }
@@ -19466,6 +19469,38 @@ button.lc-row-selected:hover:not(:disabled) {
   display: block; width: 11px; height: 11px; border-radius: 50%; background: #cf4c4c;
 }
 .lc-agent-tray-dot[data-online="true"] > span { background: #39a86b; }
+/* UI hand moves app chrome; writing hand remains independent. */
+[data-ui-handedness="left"] .lc-header,
+[data-ui-handedness="left"] .lc-mobile.lc-app-problem .lc-header {
+  grid-template-areas: "actions center tabs";
+  grid-template-columns: auto auto minmax(0, 1fr);
+}
+[data-ui-handedness="left"] .lc-header-left,
+[data-ui-handedness="left"] .lc-header-right,
+[data-ui-handedness="left"] .lc-header-center,
+[data-ui-handedness="left"] .lc-header .lc-actions { flex-direction: row-reverse; }
+[data-ui-handedness="left"] .lc-header-right { justify-self: start; }
+[data-ui-handedness="left"] .lc-settings-foot,
+[data-ui-handedness="left"] .lc-modal-actions { flex-direction: row-reverse; }
+[data-ui-handedness="left"] .lc-agent-pane-expand-panel { right: auto; left: 12px; }
+[data-handedness="left"] .lc-toolbar:not(.is-column) .lc-toolbar-row { flex-direction: row-reverse; }
+[data-handedness="left"] .lc-preset-sheet-head { flex-direction: row-reverse; }
+[data-handedness="left"] .lc-preset-sheet-actions { margin-left: 0; margin-right: auto; flex-direction: row-reverse; }
+@media (min-width: 561px) {
+  [data-handedness="left"] .lc-preset-sheet-cols:not(.is-single) {
+    grid-template-columns: minmax(280px, 1.15fr) minmax(200px, 0.85fr);
+  }
+  [data-handedness="left"] .lc-preset-sheet-cols:not(.is-single) > .lc-preset-sheet-side { grid-column: 2; grid-row: 1; }
+  [data-handedness="left"] .lc-preset-sheet-cols:not(.is-single) > .lc-preset-sheet-physics { grid-column: 1; grid-row: 1; }
+}
+/* Narrow rails use equal flexible columns so each hand can select its own edge. */
+[data-lc-chrome-narrow] .lc-map-controls.lc-map-controls-paged { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+/* Opposite hands put the annotation toggle and utility tray on the same side:
+   reserve a separate row above the tray instead of overlapping touch targets. */
+[data-ui-handedness="left"]:not([data-handedness="left"]) .lc-map-controls-paged .lc-map-chrome-left,
+[data-handedness="left"]:not([data-ui-handedness="left"]) .lc-map-controls-paged .lc-map-chrome-left {
+  bottom: calc(var(--lc-utility-tray-height, 320px) + 8px);
+}
 @media (prefers-reduced-motion: reduce) {
   .lc-side-sheet,
   .lc-chrome-stack-fold,

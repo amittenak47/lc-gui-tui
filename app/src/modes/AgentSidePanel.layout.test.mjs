@@ -28,7 +28,7 @@ describe("agent panel chrome", () => {
   it("keeps photo immediately before Send", () => {
     const actions = panel.slice(panel.indexOf('className="lc-agent-composer-actions"'));
     expect(actions.indexOf('aria-label="Add Photo"')).toBeLessThan(actions.indexOf('aria-label="Send"'));
-    const hand = css.slice(css.indexOf("[data-handedness=\"left\"] .lc-agent-composer-actions {"));
+    const hand = css.slice(css.indexOf("[data-ui-handedness=\"left\"] .lc-agent-composer-actions {"));
     expect(hand.slice(0, 180)).not.toContain("row-reverse");
   });
 

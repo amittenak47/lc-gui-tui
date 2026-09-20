@@ -1,10 +1,9 @@
 /**
  * Local preference: which palm zone the near-pen chrome sits in.
  *
- * Two things read this. The colour radial tilts its swatches away from the
- * writing hand, which is a per-gesture decision made in JS. Everything else —
- * the coach panel, the board dock, the toolbars and the action sheets — is
- * laid out in CSS, so rather than thread a prop through every one of them the
+ * The colour radial tilts away from the writing hand in JS. Ink toolbar,
+ * preset editor and annotation toggle layout use CSS. App chrome (header,
+ * agent panel and general menus) uses the separate UI hand preference. This
  * preference is published as `data-handedness` on the document element and the
  * stylesheet mirrors the chrome across the Y-axis from there. Portalled chrome
  * (message menus, sheets) lands outside the app subtree, which is the reason
