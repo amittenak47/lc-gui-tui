@@ -38,6 +38,7 @@ import { sweepFootnoteWhiteboards, whiteboardIdsOn } from "./footnoteWhiteboardS
 import { setStorageItem } from "./storageQuota";
 import { hashBytes } from "./docBytes";
 import { webIdentityUrl } from "./webIdentity";
+import { artifactCatalogFields, type ArtifactCatalog } from "./padArtifacts";
 
 export const ANNOTATE_LIBRARY_LIMIT = 30;
 export const ANNOTATE_TRASH_TTL_MS = 3 * 24 * 60 * 60 * 1000;
@@ -71,6 +72,8 @@ export class AnnotateLibraryFullError extends Error {
 }
 
 export interface AnnotateDocMeta {
+  /** Small local index hint; the catalog itself belongs in contentStore. */
+  artifactRevision?: string;
   id: string;
   /** File name as opened, for display. */
   name: string;
@@ -132,6 +135,7 @@ export function annotateDocLabel(meta: AnnotateDocMeta): string {
 }
 
 export interface AnnotateDoc extends AnnotateDocMeta {
+  artifacts?: ArtifactCatalog;
   /**
    * The markdown or source text, so an entry can be reopened without hunting
    * for the file again.
@@ -185,6 +189,7 @@ const PRE_RENAME_INDEX = "lc.md-ink.index.v1";
 
 /** The heavy half of an entry, stored per-id in IndexedDB. See `contentStore`. */
 interface AnnotateContent {
+  artifacts?: ArtifactCatalog;
   source: string;
   board: BoardBlob;
   footnotes: DocFootnote[];
@@ -433,6 +438,7 @@ async function readContent(meta: AnnotateDocMeta): Promise<AnnotateDoc | null> {
       board: content.board,
       footnotes: sanitizeFootnotes(content.footnotes),
       agent: Array.isArray(content.agent) ? content.agent : [],
+      ...artifactCatalogFields(content.artifacts, { kind: "annotate", id: meta.id }),
       ...(Array.isArray(content.captures) ? { captures: content.captures } : {}),
       ...(content.padKind ? { padKind: content.padKind } : {}),
     };
@@ -612,6 +618,8 @@ export async function migrateAnnotateKeysToId(): Promise<number> {
  * affected its payload.
  */
 export async function saveAnnotateDoc(input: {
+  /** Omitted by ink-only autosave; preserve the existing catalog. */
+  artifacts?: ArtifactCatalog;
   id?: string;
   name: string;
   hash: string;
@@ -654,11 +662,16 @@ export async function saveAnnotateDoc(input: {
   // "there are none" — an autosave that omits them must not wipe the set the
   // reading session built up.
   const prior =
-    input.footnotes && Array.isArray(input.agent)
+    input.footnotes && Array.isArray(input.agent) &&
+      !(existing?.artifactRevision && input.artifacts === undefined)
       ? null
       : await getContent<AnnotateContent>(id);
   const footnotes = input.footnotes ? [...input.footnotes] : prior?.footnotes ?? [];
   const agent = Array.isArray(input.agent) ? input.agent : prior?.agent ?? [];
+  const artifactFields = artifactCatalogFields(
+    input.artifacts === undefined ? prior?.artifacts : input.artifacts,
+    { kind: "annotate", id },
+  );
   /*
    * Same contract as footnotes: undefined means "this caller does not track
    * captures", not "there are none". An autosave that omits them must not drop
@@ -673,6 +686,7 @@ export async function saveAnnotateDoc(input: {
   const owned = input.owned ?? existing?.owned;
   const meta: AnnotateDocMeta = {
     id,
+    ...(artifactFields.artifacts ? { artifactRevision: artifactFields.artifacts.revision } : {}),
     name: input.name.trim() || existing?.name || "Untitled.md",
     hash: input.hash,
     docType: input.docType ?? existing?.docType ?? "markdown",
@@ -686,6 +700,7 @@ export async function saveAnnotateDoc(input: {
   };
   writeIndex([meta, ...index.filter((entry) => entry.id !== id)]);
   await putContent(id, {
+    ...artifactFields,
     source: input.source,
     board: input.board,
     footnotes,
@@ -695,6 +710,7 @@ export async function saveAnnotateDoc(input: {
   } satisfies AnnotateContent);
   return {
     ...meta,
+    ...artifactFields,
     source: input.source,
     board: input.board,
     footnotes,
@@ -827,9 +843,18 @@ export async function deleteAnnotateDoc(id: string): Promise<void> {
  * `restoreWhiteboardNotebook` for why both of those would be wrong here.
  */
 export async function restoreAnnotateDoc(entry: AnnotateDoc): Promise<void> {
-  const { source, board, footnotes, agent, ...meta } = entry;
+  const { source, board, footnotes, agent, artifacts, ...meta } = entry;
+  const prior = artifacts === undefined && getAnnotateDocMeta(entry.id)?.artifactRevision
+    ? await getContent<AnnotateContent>(entry.id) : null;
+  const artifactFields = artifactCatalogFields(
+    artifacts === undefined ? prior?.artifacts : artifacts,
+    { kind: "annotate", id: entry.id },
+  );
+  delete meta.artifactRevision;
+  if (artifactFields.artifacts) meta.artifactRevision = artifactFields.artifacts.revision;
   writeIndex([meta, ...readIndex().filter((existing) => existing.id !== entry.id)]);
   await putContent(entry.id, {
+    ...artifactFields,
     source,
     board,
     footnotes: footnotes ?? [],

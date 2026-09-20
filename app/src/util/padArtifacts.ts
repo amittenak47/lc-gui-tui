@@ -171,6 +171,19 @@ export function parseArtifactCatalog(value: unknown): ArtifactCatalog | undefine
   return { v: 1, parent, revision: value.revision, artifacts };
 }
 
+/** Validate before changing storage; an absent legacy field does not mean delete. */
+export function artifactCatalogFields(
+  value: unknown,
+  parent: ArtifactParent,
+): { artifacts?: ArtifactCatalog } {
+  const artifacts = parseArtifactCatalog(value);
+  if (!artifacts) return {};
+  if (artifacts.parent.kind !== parent.kind || artifacts.parent.id !== parent.id) {
+    throw new Error("Artifact catalog belongs to a different parent; existing content was kept.");
+  }
+  return { artifacts };
+}
+
 export type ArtifactDependency =
   | { kind: "scene"; id: string; revision: string }
   | { kind: "ink"; id: string; pageId: number; revision: string }

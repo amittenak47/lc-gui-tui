@@ -7,6 +7,7 @@ import { deleteContent, getContent, putContent } from "./contentStore";
 import { deletePadSnapshots } from "./padSnapshotStore";
 import { deleteInkPages, whiteboardDocKey } from "./inkPageStore";
 import { setStorageItem } from "./storageQuota";
+import { artifactCatalogFields, type ArtifactCatalog } from "./padArtifacts";
 
 export const WHITEBOARD_LIBRARY_LIMIT = 50;
 export const WHITEBOARD_PAGE_LIMIT = 10;
@@ -23,6 +24,8 @@ export class WhiteboardLibraryFullError extends Error {
 export type WhiteboardBoardBlob = BoardBlob;
 
 export interface WhiteboardNotebookMeta {
+  /** Local presence/revision hint only; never put the catalog in this index. */
+  artifactRevision?: string;
   id: string;
   title: string;
   updatedAt: number;
@@ -45,6 +48,7 @@ export interface WhiteboardNotebookMeta {
 }
 
 export interface WhiteboardNotebook extends WhiteboardNotebookMeta {
+  artifacts?: ArtifactCatalog;
   board: WhiteboardBoardBlob;
   agent: unknown[];
 }
@@ -62,6 +66,7 @@ const PRE_RENAME_INDEX = "lc.scratchpad.index.v1";
 
 /** The heavy half: the board, and the coach thread that goes with it. */
 interface WhiteboardContent {
+  artifacts?: ArtifactCatalog;
   board: WhiteboardBoardBlob;
   agent: unknown[];
 }
@@ -187,7 +192,8 @@ export async function getWhiteboardNotebook(id: string): Promise<WhiteboardNoteb
   if (!meta) return null;
   const content = await getContent<WhiteboardContent>(id);
   if (content?.board) {
-    return { ...meta, board: content.board, agent: Array.isArray(content.agent) ? content.agent : [] };
+    return { ...meta, board: content.board, agent: Array.isArray(content.agent) ? content.agent : [],
+      ...artifactCatalogFields(content.artifacts, { kind: "whiteboard", id }) };
   }
   const legacy = legacyLibrary().find((entry) => entry.id === id);
   if (!legacy) return null;
@@ -213,6 +219,7 @@ function freshId(library: readonly WhiteboardNotebookMeta[], now: number): strin
 }
 
 export async function saveWhiteboardNotebook(input: {
+  artifacts?: ArtifactCatalog;
   id?: string;
   title?: string;
   board: WhiteboardBoardBlob;
@@ -232,11 +239,16 @@ export async function saveWhiteboardNotebook(input: {
   const named = Boolean(existing?.named) || Boolean(input.title?.trim());
   // An absent `agent` means "this caller has no opinion", not "the thread is
   // empty" — the board autosave saves without one and must not wipe the chat.
-  const agent = Array.isArray(input.agent)
-    ? input.agent
-    : (await getContent<WhiteboardContent>(id))?.agent ?? [];
+  const prior = !Array.isArray(input.agent) || (existing?.artifactRevision && input.artifacts === undefined)
+    ? await getContent<WhiteboardContent>(id) : null;
+  const agent = Array.isArray(input.agent) ? input.agent : prior?.agent ?? [];
+  const artifactFields = artifactCatalogFields(
+    input.artifacts === undefined ? prior?.artifacts : input.artifacts,
+    { kind: "whiteboard", id },
+  );
   const meta: WhiteboardNotebookMeta = {
     id,
+    ...(artifactFields.artifacts ? { artifactRevision: artifactFields.artifacts.revision } : {}),
     title,
     updatedAt: now,
     pageCount: Math.min(WHITEBOARD_PAGE_LIMIT, Math.max(1, input.pageCount)),
@@ -247,8 +259,8 @@ export async function saveWhiteboardNotebook(input: {
     ...(existing?.hubAckUpdatedAt != null ? { hubAckUpdatedAt: existing.hubAckUpdatedAt } : {}),
   };
   writeIndex([meta, ...library.filter((entry) => entry.id !== id)]);
-  await putContent(id, { board: input.board, agent } satisfies WhiteboardContent);
-  return { ...meta, board: input.board, agent };
+  await putContent(id, { board: input.board, agent, ...artifactFields } satisfies WhiteboardContent);
+  return { ...meta, board: input.board, agent, ...artifactFields };
 }
 
 export function markWhiteboardHubAck(id: string, updatedAt: number): void {
@@ -264,9 +276,9 @@ export function setWhiteboardNotebookLocked(id: string, locked: boolean): void {
   const library = readIndex();
   const existing = library.find((entry) => entry.id === id);
   if (!existing) return;
-  const next: WhiteboardNotebookMeta = locked
-    ? { ...existing, locked: true }
-    : { id: existing.id, title: existing.title, updatedAt: existing.updatedAt, pageCount: existing.pageCount };
+  const next: WhiteboardNotebookMeta = { ...existing };
+  if (locked) next.locked = true;
+  else delete next.locked;
   writeIndex([next, ...library.filter((entry) => entry.id !== id)]);
 }
 
@@ -318,7 +330,8 @@ export async function restoreWhiteboardFromTrash(id: string): Promise<Whiteboard
   writeIndex([next, ...readIndex().filter((entry) => entry.id !== id)]);
   const content = await getContent<WhiteboardContent>(id);
   if (!content) return null;
-  return { ...next, board: content.board, agent: content.agent };
+  return { ...next, board: content.board, agent: content.agent,
+    ...artifactCatalogFields(content.artifacts, { kind: "whiteboard", id }) };
 }
 
 export async function sweepWhiteboardTrash(now = Date.now()): Promise<string[]> {
@@ -360,9 +373,17 @@ export async function deleteWhiteboardNotebook(id: string): Promise<void> {
  * since this only ever restores an entry that was already in the library.
  */
 export async function restoreWhiteboardNotebook(entry: WhiteboardNotebook): Promise<void> {
-  const { board, agent, ...meta } = entry;
+  const { board, agent, artifacts, ...meta } = entry;
+  const prior = artifacts === undefined && readIndex().find((row) => row.id === entry.id)?.artifactRevision
+    ? await getContent<WhiteboardContent>(entry.id) : null;
+  const artifactFields = artifactCatalogFields(
+    artifacts === undefined ? prior?.artifacts : artifacts,
+    { kind: "whiteboard", id: entry.id },
+  );
+  delete meta.artifactRevision;
+  if (artifactFields.artifacts) meta.artifactRevision = artifactFields.artifacts.revision;
   writeIndex([meta, ...readIndex().filter((existing) => existing.id !== entry.id)]);
-  await putContent(entry.id, { board, agent: agent ?? [] } satisfies WhiteboardContent);
+  await putContent(entry.id, { board, agent: agent ?? [], ...artifactFields } satisfies WhiteboardContent);
 }
 
 /** Migrate the pre-library single-slot keys if present. */
