@@ -84,6 +84,8 @@ interface PendingRun {
   reject(error: Error): void;
   /** Idle watchdog — see {@link RUN_ACK_TIMEOUT_MS}. */
   watchdog: ReturnType<typeof setTimeout> | null;
+  /** A timed-out run still owns the wire until terminal acknowledgement. */
+  timeoutReason: string | null;
   /** True once the daemon has named a stage — the run is picked up. */
   acked: boolean;
   /** The last stage named, so a stall can say where it happened. */
@@ -119,6 +121,7 @@ const RUN_ACK_TIMEOUT_MS = 20_000;
  * to fail.
  */
 const RUN_STAGE_TIMEOUT_MS = 210_000;
+const CANCEL_ACK_TIMEOUT_MS = 5_000;
 
 export interface AmbientHandlers {
   onFrame(frame: ServerFrame): void;
@@ -246,6 +249,7 @@ export class AmbientCoach {
   /** Interactive runs awaiting a `result` or `error`, keyed by request id. */
   private readonly pending = new Map<string, PendingRun>();
   private runSeq = 0;
+  private connectionFailure: string | null = null;
   /**
    * False after an older daemon rejects a `run` frame. Further jobs skip the
    * socket and let the caller fall straight to HTTP.
@@ -273,10 +277,12 @@ export class AmbientCoach {
     this.stop();
     // A fresh socket might be a rebuilt daemon — try run frames again.
     this.runsSupported = true;
+    this.connectionFailure = null;
     const socket = this.createSocket(coachSocketUrl(this.pairing));
     this.socket = socket;
 
     socket.onopen = () => {
+      if (this.socket !== socket) return;
       this.open = true;
       this.send({ type: "hello", session_id: this.sessionId, task_id: taskId });
       const queued = this.outbox;
@@ -285,6 +291,7 @@ export class AmbientCoach {
       this.handlers.onOpen?.();
     };
     socket.onmessage = (event) => {
+      if (this.socket !== socket) return;
       let frame: ServerFrame;
       try {
         frame = JSON.parse(event.data) as ServerFrame;
@@ -297,8 +304,11 @@ export class AmbientCoach {
       if (this.routeRunFrame(frame)) return;
       this.handlers.onFrame(frame);
     };
-    socket.onerror = () => this.handlers.onError?.("the agent connection failed");
+    socket.onerror = () => {
+      if (this.socket === socket) this.handlers.onError?.("the agent connection failed");
+    };
     socket.onclose = () => {
+      if (this.socket !== socket) return;
       this.open = false;
       this.failPending("the agent connection closed before it answered");
       this.handlers.onClose?.();
@@ -327,6 +337,7 @@ export class AmbientCoach {
     payload: Record<string, unknown>,
     handlers: RunHandlers = {},
   ): Promise<T> {
+    if (this.connectionFailure) return Promise.reject(new Error(this.connectionFailure));
     if (!this.runsSupported) {
       return Promise.reject(
         new Error("cannot parse frame: daemon has no run frames — use HTTP"),
@@ -340,6 +351,7 @@ export class AmbientCoach {
         resolve: (body) => resolve(body as T),
         reject,
         watchdog: null,
+        timeoutReason: null,
         acked: false,
         stage: null,
         tool: null,
@@ -385,14 +397,26 @@ export class AmbientCoach {
    */
   private touch(requestId: string): void {
     const run = this.pending.get(requestId);
-    if (!run) return;
+    if (!run || run.timeoutReason) return;
     if (run.watchdog !== null) clearTimeout(run.watchdog);
     const budget = run.acked ? RUN_STAGE_TIMEOUT_MS : RUN_ACK_TIMEOUT_MS;
     run.watchdog = setTimeout(() => {
-      // Tell the daemon before giving up, so a run that is merely slow is
-      // stopped rather than left writing into a turn nobody is waiting on.
+      // Keep FIFO ownership while the daemon releases its one-run slot.
+      // Rejecting here used to let the next queued question hit "busy".
+      run.timeoutReason = stallReason(run);
+      run.watchdog = setTimeout(() => {
+        // No acknowledgement: retire this connection before rejecting. Never
+        // flush a timed-out outbox or submit another job on the uncertain wire.
+        this.connectionFailure = "Agent cancellation was not acknowledged. Reopen this tab to reconnect, then Retry.";
+        const socket = this.socket;
+        this.socket = null;
+        this.open = false;
+        this.outbox = [];
+        socket?.close();
+        this.failPending(run.timeoutReason!);
+        this.handlers.onClose?.();
+      }, CANCEL_ACK_TIMEOUT_MS);
       this.send({ type: "cancel", request_id: requestId });
-      this.settle(requestId, (lost) => lost.reject(new Error(stallReason(lost))));
     }, budget);
   }
 
@@ -402,7 +426,8 @@ export class AmbientCoach {
     if (!run) return;
     this.pending.delete(requestId);
     if (run.watchdog !== null) clearTimeout(run.watchdog);
-    finish(run);
+    if (run.timeoutReason) run.reject(new Error(run.timeoutReason));
+    else finish(run);
   }
 
   /** Ask the daemon to stop a run. Its promise rejects when the daemon agrees. */

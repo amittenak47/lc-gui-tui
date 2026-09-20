@@ -97,6 +97,43 @@ describe("AmbientCoach", () => {
     coach.stop();
   });
 
+  it("holds the FIFO after a timeout until cancellation is acknowledged", async () => {
+    vi.useFakeTimers();
+    const socket = fakeSocket();
+    const coach = new AmbientCoach(pairing, { onFrame: () => {} }, () => socket, "s1");
+    coach.connect("two-sum"); socket.onopen?.({});
+    const q = new CoachSendCoordinator<string>(async question => {
+      await coach.run("ask", { question });
+    }, () => {});
+    q.reserve("a"); q.ready("a", "first"); q.reserve("b"); q.ready("b", "second");
+    const runs = () => socket.sent.map(raw => JSON.parse(raw)).filter(f => f.type === "run");
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(runs()).toHaveLength(1);
+    expect(coach.busy).toBe(true);
+    socket.onmessage?.({ data: JSON.stringify({ type: "result", request_id: runs()[0].request_id, body: { reply: "late" } }) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(q.tickets.get("a")?.state).toBe("failed");
+    expect(q.tickets.get("a")?.error).toMatch(/never picked up/i);
+    expect(runs()).toHaveLength(2);
+    q.dispose(); coach.stop(); vi.useRealTimers();
+  });
+
+  it("retires an unacknowledged connection before any queued work can reuse it", async () => {
+    vi.useFakeTimers();
+    const socket = fakeSocket(); socket.close = vi.fn();
+    const coach = new AmbientCoach(pairing, { onFrame: () => {} }, () => socket, "s1");
+    coach.connect("two-sum");
+    // Socket never opens: its outbox must not be flushed by a late onopen.
+    const first = expect(coach.run("ask", { question: "first" })).rejects.toThrow(/never picked up/i);
+    await vi.advanceTimersByTimeAsync(25_000); await first;
+    expect(socket.close).toHaveBeenCalledOnce();
+    socket.onopen?.({});
+    expect(socket.sent).toEqual([]);
+    await expect(coach.run("ask", { question: "second" })).rejects.toThrow(/reconnect/i);
+    expect(coach.busy).toBe(false);
+    coach.stop(); vi.useRealTimers();
+  });
+
   it("captures only when the board changed", async () => {
     vi.useFakeTimers();
     const socket = fakeSocket();
