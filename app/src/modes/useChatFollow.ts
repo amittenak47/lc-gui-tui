@@ -4,10 +4,13 @@ import { useLayoutEffect, useRef, type RefObject } from "react";
  * Reading older messages opts out until the user returns to the bottom. */
 export function useChatFollow(list: RefObject<HTMLDivElement | null>, scope: string, open: boolean) {
   const pinned = useRef(true);
+  const positions = useRef(new Map<string, { top: number; pinned: boolean }>());
   useLayoutEffect(() => {
     const node = list.current;
     if (!node || !open) return;
-    pinned.current = true;
+    const saved = positions.current.get(scope);
+    pinned.current = saved?.pinned ?? true;
+    if (saved && !saved.pinned) node.scrollTop = saved.top;
     let raf = 0;
     const follow = () => {
       if (!pinned.current || raf) return;
@@ -27,7 +30,11 @@ export function useChatFollow(list: RefObject<HTMLDivElement | null>, scope: str
     const mutation = new MutationObserver(watch);
     mutation.observe(node, { childList: true });
     watch();
-    return () => { cancelAnimationFrame(raf); resize?.disconnect(); mutation.disconnect(); node.removeEventListener("scroll", onScroll); };
+    return () => {
+      positions.current.set(scope, { top: node.scrollTop, pinned: pinned.current });
+      if (positions.current.size > 100) positions.current.delete(positions.current.keys().next().value!);
+      cancelAnimationFrame(raf); resize?.disconnect(); mutation.disconnect(); node.removeEventListener("scroll", onScroll);
+    };
   }, [list, scope, open]);
   return pinned;
 }

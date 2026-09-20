@@ -1141,7 +1141,7 @@ export function AgentSidePanel({
     const node = listRef.current;
     if (!node) return;
     if (openThreadId) {
-      node.scrollTop = node.scrollHeight;
+      if (chatPinned.current) node.scrollTop = node.scrollHeight;
       return;
     }
     const returning = exitedRootRef.current;

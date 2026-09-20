@@ -65,3 +65,15 @@ it("resets following for a new thread and cancels pending work when closed", () 
   expect(vi.getTimerCount()).toBe(0);
   expect(disconnect).toHaveBeenCalled();
 });
+
+it("keeps a reader's position when the panel reopens", () => {
+  act(() => root.render(<Transcript />));
+  const list = host.firstElementChild as HTMLDivElement;
+  Object.defineProperties(list, { scrollHeight: { value: 500 }, clientHeight: { value: 100 } });
+  act(() => vi.advanceTimersByTime(16));
+  list.scrollTop = 100; list.dispatchEvent(new Event("scroll"));
+  act(() => root.render(<Transcript open={false} />));
+  act(() => root.render(<Transcript />));
+  resized(); act(() => vi.advanceTimersByTime(16));
+  expect(list.scrollTop).toBe(100);
+});
