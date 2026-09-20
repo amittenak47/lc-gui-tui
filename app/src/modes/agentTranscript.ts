@@ -1,5 +1,6 @@
 import type { AgentChatMessage } from "./AgentSidePanel";
 import { restoreMessageDrawing } from "../viz/drawingState";
+import { sanitizeArtifactRefs } from "../util/padArtifacts";
 
 export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
   if (!Array.isArray(stored)) return [];
@@ -11,6 +12,7 @@ export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
     // stuck on "Working…" would wait for a socket that will never answer.
     if (message.pending) return [];
     const drawing = restoreMessageDrawing(message.drawing);
+    const artifacts = sanitizeArtifactRefs(message.artifacts);
     const content = typeof message.content === "string" ? message.content : "";
     const processEvents = Array.isArray(message.processEvents)
       ? message.processEvents
@@ -40,6 +42,7 @@ export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
       !message.review &&
       !message.bridge &&
       !message.attachments?.length &&
+      !artifacts?.length &&
       !drawing &&
       !processEvents?.length &&
       !reasoning
@@ -58,6 +61,7 @@ export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
         review: message.review,
         bridge: message.bridge,
         attachments: message.attachments,
+        ...(artifacts ? { artifacts } : {}),
         ...(flags && flags.length > 0 ? { flags } : {}),
         ...(processEvents ? { processEvents } : {}),
         ...(reasoning ? { reasoning } : {}),

@@ -34,6 +34,7 @@ import { footnoteThemeVars } from "../util/footnoteTheme";
 import { useIsMobile } from "../util/mobile";
 import { PHOTO_ATTACH_LIMIT, pickPhotos } from "../util/photoAttach";
 import type { MessageDrawing } from "../viz/drawingState";
+import type { ArtifactRef } from "../util/padArtifacts";
 import { Timeline } from "../viz/Timeline";
 import { BridgePanel } from "./RevealDialog";
 import { ReviewPanel } from "./ReviewPanel";
@@ -454,6 +455,8 @@ export interface AgentChatMessage {
   bridgeError?: string | null;
   /** Layout thumbnails when Review board was attached. */
   attachments?: CoachAttachment[];
+  /** Persistent content links; thumbnails remain separate, expendable previews. */
+  artifacts?: ArtifactRef[];
   /** Coach diagram — expand/collapse controls board visibility. */
   drawing?: MessageDrawing;
   /** Composer flags that rode along with Send — footnotes under the bubble text. */

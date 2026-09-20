@@ -24,6 +24,7 @@ import {
 } from "./docAnchors";
 import type { LocalRect } from "./docMarquee";
 import { normalizePalette } from "./inkPaletteHistory";
+import { sanitizeArtifactRefs, type ArtifactRef } from "./padArtifacts";
 
 export type DocFootnoteKind = "coach" | "search" | "note" | "ai";
 
@@ -139,6 +140,8 @@ export interface DocFootnote {
   notes?: DocFootnoteNote[];
   /** Scratch boards attached to this mark, oldest first. */
   whiteboards?: DocFootnoteWhiteboard[];
+  /** Shared Phase 3 links; legacy scratch pointers above remain readable. */
+  artifacts?: ArtifactRef[];
   /** Extra links the writer saved on the overview card. */
   userLinks?: DocFootnoteUserLink[];
   /**
@@ -647,6 +650,7 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
         color: rawColor,
         updatedAt: rawUpdatedAt,
         whiteboards: rawWhiteboards,
+        artifacts: rawArtifacts,
         ...rest
       } = candidate as DocFootnote & { userNotes?: unknown };
       // Pulled out of the spread so a stored non-number is dropped rather than
@@ -657,6 +661,7 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
           : undefined;
       const notes = sanitizeNotes(candidate.notes, userNotes, now);
       const whiteboards = sanitizeWhiteboards(rawWhiteboards, now);
+      const artifacts = sanitizeArtifactRefs(rawArtifacts);
       const excerpt = typeof candidate.excerpt === "string" ? candidate.excerpt : "";
       const threads = sanitizeThreads(candidate.threads, candidate.threadRootId, excerpt, now);
       const userLinks = sanitizeUserLinks(candidate.userLinks);
@@ -680,6 +685,7 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
           anchor,
           notes,
           whiteboards,
+          ...(artifacts ? { artifacts } : {}),
           threads,
           ...(userLinks ? { userLinks } : {}),
           ...(color ? { color } : {}),
@@ -845,6 +851,7 @@ export function footnoteFieldsRevision(entry: DocFootnote): string {
         (entry.whiteboards ?? [])
           .map((board) => `${board.id}:${board.updatedAt}:${board.title ?? ""}`)
           .join("\x1f"),
+        JSON.stringify(entry.artifacts ?? []),
         entry.threadRootId ?? "",
         (entry.threads ?? []).map((thread) => `${thread.rootId}|${thread.title}`).join("\x1f"),
         (entry.userLinks ?? []).map((link) => `${link.title ?? ""}|${link.url}`).join("\x1f"),
