@@ -69,6 +69,29 @@ try {
     await sleep(100);
   }
   assert(ready, "Board did not become ready");
+  if (process.argv.includes('--handedness')) {
+    const matrix = [];
+    for (const width of [900, 420]) {
+      await send('Emulation.setDeviceMetricsOverride', {width,height:1100,deviceScaleFactor:1,mobile:false});
+      for (const ink of ['right','left']) for (const ui of ['right','left']) {
+        await evaluate(`Promise.all([import('/src/util/inkHandedness.ts'),import('/src/util/uiHandedness.ts')]).then(([a,b])=>{a.saveInkHandedness('${ink}');a.applyHandednessAttr('${ink}');b.saveUiHandedness('${ui}');})`);
+        await sleep(300);
+        const boxes = await evaluate(`(()=>{
+          const box=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,height:r.height}};
+          return {tabs:box('.lc-header-left'),actions:box('.lc-header-right'),ink:box('.lc-map-chrome-left'),tray:box('.lc-map-chrome-right')};
+        })()`);
+        assert(ui==='left' ? boxes.actions.right<=boxes.tabs.x+1 : boxes.tabs.right<=boxes.actions.x+1, `Header hand mismatch: ${JSON.stringify({width,ink,ui,boxes})}`);
+        const overlap = boxes.ink.width>0 && boxes.tray.width>0 && Math.min(boxes.ink.right,boxes.tray.right)>Math.max(boxes.ink.x,boxes.tray.x)+1 && Math.min(boxes.ink.bottom,boxes.tray.bottom)>Math.max(boxes.ink.y,boxes.tray.y)+1;
+        assert(!overlap, `Opposite hand touch targets overlap: ${JSON.stringify({width,ink,ui,boxes})}`);
+        assert(boxes.tray.x>=0 && boxes.tray.right<=width+1, `Tray outside viewport: ${JSON.stringify(boxes)}`);
+        matrix.push({width,ink,ui,boxes});
+        await shot(`hands-${width}-${ink}-${ui}`);
+      }
+    }
+    await writeFile(resolve(out,'handedness-matrix.json'),JSON.stringify(matrix,null,2));
+    await evaluate("Promise.all([import('/src/util/inkHandedness.ts'),import('/src/util/uiHandedness.ts')]).then(([a,b])=>{a.saveInkHandedness('right');a.applyHandednessAttr('right');b.saveUiHandedness('right');})");
+    await send('Emulation.setDeviceMetricsOverride', {width:900,height:1100,deviceScaleFactor:1,mobile:false});
+  }
   const storage = await evaluate(`(async () => {
     const store = await import('/src/util/inkPageStore.ts');
     const codec = await import('/src/canvas/inkCodec.ts');
@@ -117,6 +140,7 @@ try {
   await evaluate("window.reviewShowAgent()");
   await sleep(500);
   if (process.argv.includes('--motion')) {
+    await evaluate("import('/src/util/agentDisplayPrefs.ts').then(m=>m.saveAgentDisplayPrefs({...m.DEFAULT_AGENT_DISPLAY_PREFS,autoCollapseThinking:true}))");
     await evaluate("document.querySelector('.lc-agent-messages').scrollTop = 0");
     const oldAnimations = await evaluate("[...document.querySelectorAll('.lc-agent-turn')].some(n=>getComputedStyle(n).animationName==='lc-agent-bubble-enter')");
     assert.equal(oldAnimations, false, 'Saved history must stay still');

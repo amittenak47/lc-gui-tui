@@ -75,16 +75,16 @@ describe("vertical menu visibility", () => {
     const open = css.slice(start, css.indexOf("}", start));
     expect(open).toContain("overflow: visible");
     expect(css).toContain(
-      '[data-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map',
+      '[data-ui-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map',
     );
     const flip = css.slice(
       css.indexOf(
-        '[data-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map',
+        '[data-ui-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map',
       ),
       css.indexOf(
         "}",
         css.indexOf(
-          '[data-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map',
+          '[data-ui-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map',
         ),
       ),
     );

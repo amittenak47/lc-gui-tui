@@ -44,7 +44,11 @@ function Review() {
     return ()=>clearTimeout(timer);
   },[]);
   return <>
-    <header className="lc-header" style={{height:38,minHeight:38}}>{tabsVisible ? <TabReview /> : "⌂ Home"}</header>
+    <header className="lc-header" style={{height:38,minHeight:38}}>
+      <div className="lc-header-left"><button>Home</button>{tabsVisible ? <TabReview /> : null}</div>
+      <div className="lc-header-center">Tools</div>
+      <div className="lc-header-right"><button>Settings</button><button>Agent</button></div>
+    </header>
     <NotificationStack />
     <div style={{position:"relative",height:"calc(100% - 38px)", display: showing ? undefined : "none"}}>
       {mounted && <Board ref={board} filmScope="sync-review" themeId="graphite" mobileRegion={ANNOTATE_REGION}
