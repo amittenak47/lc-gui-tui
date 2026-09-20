@@ -37,6 +37,12 @@ impl Groq {
 }
 
 impl LlmProvider for Groq {
+    fn chat_ex_with_events(&self, req: &ChatRequest, events: &crate::llm::coach::EventSink) -> Result<ChatReply> {
+        super::http::chat_completions_stream(
+            &self.base_url, Some(&self.api_key), self.model_for(req), req, events,
+        )
+    }
+
     fn label(&self) -> String {
         format!("groq/{}", self.model)
     }

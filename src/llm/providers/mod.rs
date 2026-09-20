@@ -18,6 +18,14 @@ pub trait LlmProvider {
     /// Multi-turn call with optional tools, images, and JSON-object output.
     /// Kept separate from [`LlmProvider::chat`] so `lc ask` is unaffected.
     fn chat_ex(&self, req: &ChatRequest) -> Result<ChatReply>;
+    /// Providers without streaming support still report their completed reasoning.
+    fn chat_ex_with_events(&self, req: &ChatRequest, events: &crate::llm::coach::EventSink) -> Result<ChatReply> {
+        if let Some(err) = events.cancelled_error() { return Err(err); }
+        let reply = self.chat_ex(req)?;
+        if let Some(err) = events.cancelled_error() { return Err(err); }
+        events.emit_reasoning(&reply.reasoning);
+        Ok(reply)
+    }
 }
 
 pub fn make_provider(cfg: &Config, name: Option<&str>) -> Result<Box<dyn LlmProvider>> {

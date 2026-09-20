@@ -9,6 +9,8 @@ import {
 } from "./coachSocket";
 import { CoachSendCoordinator } from "../modes/coachSendCoordinator";
 import type { ServerFrame } from "./types";
+import { mergeProcessEvent } from "../modes/processEvents";
+import type { CoachProcessEvent } from "./types";
 
 function probe(overrides: Partial<AmbientProbe> = {}): AmbientProbe {
   return { sceneHash: 1, newElements: 10, hasContent: true, ...overrides };
@@ -67,6 +69,28 @@ function fakeSocket() {
 
 describe("AmbientCoach", () => {
   const pairing = { baseUrl: "http://127.0.0.1:7878", token: null };
+
+  it("routes growing reasoning rows only to their active request", async () => {
+    const socket = fakeSocket();
+    const coach = new AmbientCoach(pairing, { onFrame: () => {} }, () => socket, "s1");
+    coach.connect("two-sum"); socket.onopen?.({});
+    let events: CoachProcessEvent[] = [];
+    const pending = coach.run("ask", { question: "Why?" }, {
+      onProcess: event => { events = mergeProcessEvent(events, event); },
+    });
+    const { request_id } = JSON.parse(socket.sent[1]!);
+    const send = (id: string, detail: string) => socket.onmessage?.({ data: JSON.stringify({
+      type: "stage", request_id: id, stage: "reason", update_id: "reason-1-0", detail,
+    }) });
+    send(request_id, "First"); send("unrelated", "Ignore"); send(request_id, "First full step");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ updateId: "reason-1-0", detail: "First full step" });
+    socket.onmessage?.({ data: JSON.stringify({ type: "result", request_id, action: "ask", body: { reply: "Done" } }) });
+    await pending;
+    send(request_id, "Too late");
+    expect(events[0]?.detail).toBe("First full step");
+    coach.stop();
+  });
 
   it("holds the FIFO transport after abort until a terminal frame acknowledges it", async () => {
     const socket = fakeSocket();

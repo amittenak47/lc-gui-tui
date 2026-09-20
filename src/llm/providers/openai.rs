@@ -47,6 +47,12 @@ impl OpenAi {
 }
 
 impl LlmProvider for OpenAi {
+    fn chat_ex_with_events(&self, req: &ChatRequest, events: &crate::llm::coach::EventSink) -> Result<ChatReply> {
+        self.explain_unreachable(super::http::chat_completions_stream(
+            &self.base_url, self.api_key.as_deref(), self.model_for(req), req, events,
+        ))
+    }
+
     fn label(&self) -> String {
         format!("{}/{} @ {}", self.label, self.model, self.base_url)
     }

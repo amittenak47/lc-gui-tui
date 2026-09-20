@@ -43,7 +43,7 @@ impl ToolStatus {
 #[derive(Debug, Clone)]
 pub enum CoachEvent {
     /// A named pipeline step started. `detail` is a short human string.
-    Stage { stage: String, detail: String },
+    Stage { stage: String, detail: String, update_id: Option<String> },
     Tool {
         name: String,
         status: ToolStatus,
@@ -102,8 +102,8 @@ impl EventSink {
     }
 
     /// Bail out of a stage sequence once the client stopped caring. Callers use
-    /// this at stage boundaries; a model call already in flight still finishes,
-    /// because the provider is blocking HTTP with its own timeout.
+    /// this at stage boundaries and streamed reads. A blocked network read is
+    /// still bounded by the provider timeout, not interrupted by this flag.
     pub fn cancelled_error(&self) -> Option<anyhow::Error> {
         self.is_cancelled()
             .then(|| anyhow::anyhow!("the coach run was cancelled"))
@@ -122,7 +122,15 @@ impl EventSink {
         self.emit(CoachEvent::Stage {
             stage: stage.to_string(),
             detail: detail.into(),
+            update_id: None,
         });
+    }
+
+    /// Replace a growing reasoning step rather than append a token-sized row.
+    pub fn reasoning_step(&self, id: String, text: String) {
+        if !self.is_cancelled() {
+            self.emit(CoachEvent::Stage { stage: "reason".into(), detail: text, update_id: Some(id) });
+        }
     }
 
     pub fn tool(

@@ -128,6 +128,8 @@ pub enum ServerFrame {
         request_id: String,
         stage: String,
         detail: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        update_id: Option<String>,
     },
     /// One diagram tool call, as it was proposed / accepted / dropped.
     ToolEvent {
@@ -457,10 +459,11 @@ fn spawn_run(
 fn run_event_sink(outgoing: UnboundedSender<ServerFrame>, request_id: String) -> EventSink {
     EventSink::new(move |event| {
         let frame = match event {
-            CoachEvent::Stage { stage, detail } => ServerFrame::Stage {
+            CoachEvent::Stage { stage, detail, update_id } => ServerFrame::Stage {
                 request_id: request_id.clone(),
                 stage,
                 detail,
+                update_id,
             },
             CoachEvent::Tool {
                 name,
@@ -742,6 +745,7 @@ mod tests {
             request_id: "r-1".into(),
             stage: "claim".into(),
             detail: "naming the approach".into(),
+            update_id: None,
         });
         assert_eq!(stage["type"], "stage");
         assert_eq!(stage["request_id"], "r-1");

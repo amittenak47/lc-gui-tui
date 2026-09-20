@@ -482,6 +482,7 @@ export class AmbientCoach {
         this.pending.get(frame.request_id)?.handlers.onProcess?.({
           kind: "stage",
           label: frame.stage,
+          updateId: frame.update_id,
           detail: frame.detail || undefined,
           ts: Date.now(),
         });

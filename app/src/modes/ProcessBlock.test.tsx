@@ -17,6 +17,21 @@ describe("reasonTitle", () => {
 });
 
 describe("processLine", () => {
+  it("shows genuine stream updates immediately in the same row", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const event: CoachProcessEvent = { kind: "stage", label: "reason", detail: "First", updateId: "reason-1-0", ts: 1 };
+    await act(async () => root.render(<ProcessBlock events={[event]} running />));
+    const row = host.querySelector(".lc-agent-process-step");
+    expect(row?.textContent).toContain("First");
+    await act(async () => root.render(<ProcessBlock events={[{ ...event, detail: "First complete step", ts: 2 }]} running />));
+    expect(host.querySelector(".lc-agent-process-step")).toBe(row);
+    expect(row?.textContent).toContain("First complete step");
+    await act(async () => root.unmount());
+    host.remove();
+  });
+
   it("names document tools instead of 'drew'", () => {
     expect(
       processLine({

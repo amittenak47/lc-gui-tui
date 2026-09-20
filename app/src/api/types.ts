@@ -505,6 +505,8 @@ export const STAGE_LABELS: Record<string, string> = {
 
 /** One line in a chat turn's process block. */
 export interface CoachProcessEvent {
+  /** Stable identity for incremental replacement of one Thinking bullet. */
+  updateId?: string;
   kind: "stage" | "tool" | "reasoning";
   /** Stage name, or tool name for a tool event. */
   label: string;
@@ -526,7 +528,7 @@ export type ServerFrame =
   | { type: "skipped"; reason: string }
   | { type: "thinking" }
   | ({ type: "nudge"; nudges_so_far: number } & AmbientNudge)
-  | { type: "stage"; request_id: string; stage: string; detail: string }
+  | { type: "stage"; request_id: string; stage: string; detail: string; update_id?: string }
   | {
       type: "tool_event";
       request_id: string;

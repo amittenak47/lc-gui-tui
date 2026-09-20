@@ -76,7 +76,7 @@ export function processLine(event: CoachProcessEvent | undefined): string {
 }
 
 function eventKey(event: CoachProcessEvent, index: number): string {
-  return `${event.ts}-${index}-${event.label}`;
+  return event.updateId ?? `${event.ts}-${index}-${event.label}`;
 }
 
 /**
@@ -128,6 +128,9 @@ export function ProcessBlock({
               const key = eventKey(event, index);
               const body = event.detail?.trim() ?? "";
               const canOpen = body.length > 0 && body !== processLine(event);
+              // Provider deltas already arrive incrementally. Do not delay
+              // them with a reveal timer that each incoming delta resets.
+              const revealBufferedStep = !event.updateId;
               return (
                 <li
                   key={key}
@@ -140,7 +143,8 @@ export function ProcessBlock({
                     .filter(Boolean)
                     .join(" ")}
                 >
-                  {running ? <AgentRichText text={body || processLine(event)} animate animateInitial
+                  {running ? <AgentRichText text={body || processLine(event)}
+                    animate={revealBufferedStep} animateInitial={revealBufferedStep}
                     className="lc-agent-process-step-body" /> : <><button
                     type="button"
                     className="lc-agent-process-step-btn"

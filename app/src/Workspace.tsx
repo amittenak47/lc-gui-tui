@@ -18,6 +18,7 @@ import { useShell } from "./shellContext";
 
 import { LcApiError, type AnnotatePadDto, type DocIndexStatus, type ProposedAnnotation, type SearchOptions } from "./api/client";
 import { AmbientCoach, defaultCoachSocketFactory, type AmbientProbe } from "./api/coachSocket";
+import { mergeProcessEvent } from "./modes/processEvents";
 import { isTauriRuntime } from "./api/nativeHttp";
 import { liveWebviewSupported } from "./util/liveWebviewSupport";
 import { etaLabel, etaMs, newEta, recordBatch } from "./util/embedEta";
@@ -5692,7 +5693,7 @@ export function Workspace({
     setAgentMessages((current) =>
       current.map((message) =>
         message.id === messageId
-          ? { ...message, processEvents: [...(message.processEvents ?? []), event] }
+          ? { ...message, processEvents: mergeProcessEvent(message.processEvents ?? [], event) }
           : message,
       ),
     );
@@ -6413,6 +6414,7 @@ export function Workspace({
           proposed_annotations?: ProposedAnnotation[];
           programs?: unknown[];
           process_events?: Array<{
+            update_id?: string;
             kind: string;
             label: string;
             detail?: string;
@@ -6439,6 +6441,7 @@ export function Workspace({
               ? ev.status
               : undefined;
           appendProcessEvent(turnId, {
+            updateId: ev.update_id,
             kind: ev.kind === "tool" ? "tool" : "stage",
             label: ev.label,
             detail: ev.detail,

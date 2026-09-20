@@ -272,11 +272,12 @@ fn run_tooled_ask(
     ];
     let mut proposed = Vec::new();
     let mut programs = Vec::new();
-    let mut reply = match provider.chat_ex(
+    let mut reply = match provider.chat_ex_with_events(
         &ChatRequest::new(messages.clone())
             .with_tools(tools.clone())
             .with_reasoning(reasoning)
             .with_reasoning_effort(effort),
+        events,
     ) {
         Ok(reply) => reply,
         Err(err) if is_tool_calling_unsupported(&err) => {
@@ -286,15 +287,15 @@ fn run_tooled_ask(
                 ChatMessage::user(fallback),
             ];
             let mut parsed =
-                provider.chat_ex(
+                provider.chat_ex_with_events(
                     &ChatRequest::new(fb_messages.clone())
                         .with_reasoning(reasoning)
                         .with_reasoning_effort(effort),
+                    events,
                 )?;
             if parsed.tool_calls.is_empty() {
                 parsed.tool_calls = parse_tool_calls(&parsed.content);
             }
-            events.emit_reasoning(&parsed.reasoning);
             if parsed.tool_calls.is_empty() {
                 return Ok(AskOutcome {
                     reply: parsed.content.trim().to_string(),
@@ -307,7 +308,6 @@ fn run_tooled_ask(
         }
         Err(err) => return Err(err),
     };
-    events.emit_reasoning(&reply.reasoning);
 
     for _ in 0..MAX_TOOL_ITERS {
         if reply.tool_calls.is_empty() {
@@ -411,13 +411,13 @@ fn run_tooled_ask(
             "Tool results:\n{}\n\nContinue. Call another tool only if needed, otherwise answer.",
             results.join("\n")
         )));
-        reply = provider.chat_ex(
+        reply = provider.chat_ex_with_events(
             &ChatRequest::new(messages.clone())
                 .with_tools(tools.clone())
                 .with_reasoning(reasoning)
                 .with_reasoning_effort(effort),
+            events,
         )?;
-        events.emit_reasoning(&reply.reasoning);
         if reply.tool_calls.is_empty() {
             reply.tool_calls = parse_tool_calls(&reply.content);
         }
@@ -426,12 +426,12 @@ fn run_tooled_ask(
         messages.push(ChatMessage::user(
             "Answer the question now in plain text. Do not call tools.",
         ));
-        reply = provider.chat_ex(
+        reply = provider.chat_ex_with_events(
             &ChatRequest::new(messages)
                 .with_reasoning(reasoning)
                 .with_reasoning_effort(effort),
+            events,
         )?;
-        events.emit_reasoning(&reply.reasoning);
     }
     Ok(AskOutcome {
         reply: reply.content.trim().to_string(),
@@ -831,7 +831,7 @@ mod tests {
                 CoachEvent::Tool { name, status, .. } => {
                     log.lock().unwrap().push(format!("tool:{name}:{}", status.as_str()));
                 }
-                CoachEvent::Stage { stage, detail } => {
+                CoachEvent::Stage { stage, detail, .. } => {
                     log.lock().unwrap().push(format!("stage:{stage}:{detail}"));
                 }
                 CoachEvent::Reasoning { text } => {

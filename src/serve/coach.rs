@@ -638,6 +638,8 @@ pub struct ProcessEventDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     pub ts: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_id: Option<String>,
 }
 
 impl From<&crate::llm::coach::CoachEvent> for ProcessEventDto {
@@ -647,7 +649,7 @@ impl From<&crate::llm::coach::CoachEvent> for ProcessEventDto {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         match event {
-            crate::llm::coach::CoachEvent::Stage { stage, detail } => Self {
+            crate::llm::coach::CoachEvent::Stage { stage, detail, update_id } => Self {
                 kind: "stage".into(),
                 label: stage.clone(),
                 detail: if detail.is_empty() {
@@ -657,6 +659,7 @@ impl From<&crate::llm::coach::CoachEvent> for ProcessEventDto {
                 },
                 status: None,
                 ts,
+                update_id: update_id.clone(),
             },
             crate::llm::coach::CoachEvent::Tool {
                 name,
@@ -669,6 +672,7 @@ impl From<&crate::llm::coach::CoachEvent> for ProcessEventDto {
                 detail: Some(summary.clone()),
                 status: Some(status.as_str().to_string()),
                 ts,
+                update_id: None,
             },
             crate::llm::coach::CoachEvent::Reasoning { text } => Self {
                 kind: "reasoning".into(),
@@ -676,6 +680,7 @@ impl From<&crate::llm::coach::CoachEvent> for ProcessEventDto {
                 detail: Some(text.clone()),
                 status: None,
                 ts,
+                update_id: None,
             },
         }
     }
@@ -700,12 +705,21 @@ pub async fn ask(
     State(state): State<Shared>,
     Json(request): Json<AskRequest>,
 ) -> Result<Json<AskEnvelope>, AppError> {
-    let bag = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let bag = std::sync::Arc::new(std::sync::Mutex::new(Vec::<ProcessEventDto>::new()));
     let events = EventSink::new({
         let bag = bag.clone();
         move |ev| {
             if let Ok(mut lock) = bag.lock() {
-                lock.push(ProcessEventDto::from(&ev));
+                let next = ProcessEventDto::from(&ev);
+                if let Some(id) = &next.update_id {
+                    if next.detail.as_deref().unwrap_or("").trim().is_empty() {
+                        lock.retain(|entry| entry.update_id.as_ref() != Some(id));
+                        return;
+                    }
+                }
+                let previous = next.update_id.as_ref().and_then(|id| lock.iter_mut()
+                    .find(|entry| entry.update_id.as_ref() == Some(id)));
+                if let Some(previous) = previous { *previous = next; } else { lock.push(next); }
             }
         }
     });
@@ -920,15 +934,15 @@ pub async fn run_ask(
                 process_events: Vec::new(),
             });
         }
-        let reply = provider.chat_ex(
+        let reply = provider.chat_ex_with_events(
             &ChatRequest::new(vec![
                 ChatMessage::system(ASK_SYSTEM_PROMPT),
                 ChatMessage::user(prompt).with_images(images),
             ])
             .with_reasoning(want_reasoning)
             .with_reasoning_effort(effort),
+            &events,
         )?;
-        events.emit_reasoning(&reply.reasoning);
         events.stage("done", "");
         Ok(AskEnvelope {
             task_id: meta.task_id,

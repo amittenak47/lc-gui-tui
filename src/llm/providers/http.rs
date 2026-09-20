@@ -1,6 +1,9 @@
 use anyhow::{bail, Context, Result};
 
 use super::{ChatMessage, ChatReply, ChatRequest, ToolCall};
+use crate::llm::coach::EventSink;
+
+mod stream;
 
 /// Shared OpenAI-compatible /chat/completions call (Groq, Ollama, vLLM, LM Studio).
 pub(crate) fn chat_completions(
@@ -39,6 +42,18 @@ pub(crate) fn chat_completions_ex(
     model: &str,
     req: &ChatRequest,
 ) -> Result<ChatReply> {
+    chat_completions_inner(base_url, api_key, model, req, None)
+}
+
+pub(crate) fn chat_completions_stream(
+    base_url: &str, api_key: Option<&str>, model: &str, req: &ChatRequest, events: &EventSink,
+) -> Result<ChatReply> {
+    chat_completions_inner(base_url, api_key, model, req, Some(events))
+}
+
+fn chat_completions_inner(
+    base_url: &str, api_key: Option<&str>, model: &str, req: &ChatRequest, events: Option<&EventSink>,
+) -> Result<ChatReply> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(180))
         .build()?;
@@ -73,10 +88,29 @@ pub(crate) fn chat_completions_ex(
         req.reasoning_effort,
     );
 
-    let value = post_chat(&client, &url, api_key, &body)?;
+    if let Some(events) = events {
+        if let Some(err) = events.cancelled_error() { return Err(err); }
+        body["stream"] = serde_json::json!(true);
+        let response = send_chat(&client, &url, api_key, &body)?;
+        let content_type = response.headers().get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()).unwrap_or("");
+        if content_type.contains("text/event-stream") {
+            return stream::read(response, events);
+        }
+        // Some compatible servers ignore stream=true and return normal JSON.
+        // Consume that same response: never retry a partially generated request.
+        let reply = parse_reply(&response.json().context("non-JSON chat response")?)?;
+        if let Some(err) = events.cancelled_error() { return Err(err); }
+        events.emit_reasoning(&reply.reasoning);
+        return Ok(reply);
+    }
+    parse_reply(&post_chat(&client, &url, api_key, &body)?)
+}
+
+fn parse_reply(value: &serde_json::Value) -> Result<ChatReply> {
     let message = value
         .pointer("/choices/0/message")
-        .with_context(|| format!("unexpected response shape from {url}"))?;
+        .context("unexpected chat response shape")?;
 
     let raw_content = message
         .get("content")
@@ -126,16 +160,23 @@ fn post_chat(
     api_key: Option<&str>,
     body: &serde_json::Value,
 ) -> Result<serde_json::Value> {
+    let text = send_chat(client, url, api_key, body)?.text()?;
+    serde_json::from_str(&text).with_context(|| format!("non-JSON response from {url}"))
+}
+
+fn send_chat(
+    client: &reqwest::blocking::Client, url: &str, api_key: Option<&str>, body: &serde_json::Value,
+) -> Result<reqwest::blocking::Response> {
     let mut request = client.post(url).json(body);
     if let Some(key) = api_key {
         request = request.bearer_auth(key);
     }
     let response = request.send()?;
     let status = response.status();
-    let text = response.text()?;
     if !status.is_success() {
+        let text = response.text()?;
         let snippet: String = text.chars().take(600).collect();
         bail!("LLM request to {url} failed ({status}): {snippet}");
     }
-    serde_json::from_str(&text).with_context(|| format!("non-JSON response from {url}"))
+    Ok(response)
 }
