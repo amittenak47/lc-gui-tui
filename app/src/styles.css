@@ -19488,7 +19488,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-agent-process-steps .lc-agent-process-step,
 .lc-agent-process-steps .lc-agent-process-step-body { opacity: 1; animation: none; }
 @media (forced-colors: active) {
-  .lc-agent-process-step[data-thinking-color]::before { background: CanvasText; }
+  .lc-agent-process-step[data-thinking-color]:not(.lc-agent-process-step-rejected)::before { background: CanvasText; }
 }
 /* UI hand moves app chrome; writing hand remains independent. */
 [data-ui-handedness="left"] .lc-header,
@@ -19503,6 +19503,8 @@ button.lc-row-selected:hover:not(:disabled) {
 [data-ui-handedness="left"] .lc-header-right { justify-self: start; }
 [data-ui-handedness="left"] .lc-settings-foot,
 [data-ui-handedness="left"] .lc-modal-actions { flex-direction: row-reverse; }
+[data-ui-handedness="left"] .lc-settings-head-row { flex-direction: row-reverse; }
+[data-ui-handedness="left"] .lc-settings-head-save { margin-left: 0; margin-right: auto; }
 [data-ui-handedness="left"] .lc-agent-pane-expand-panel { right: auto; left: 12px; }
 [data-handedness="left"] .lc-toolbar:not(.is-column) .lc-toolbar-row { flex-direction: row-reverse; }
 [data-handedness="left"] .lc-preset-sheet-head { flex-direction: row-reverse; }
