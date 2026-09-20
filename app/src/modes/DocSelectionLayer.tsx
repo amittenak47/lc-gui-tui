@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createSelectionActionGate, type SelectionActionContext, type SelectionActionFailure, type SelectionActionResult } from "./selectionAction";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 
@@ -291,8 +292,8 @@ export interface DocSelectionLayerProps {
    */
   markScale?: number;
   footnotes?: readonly DocFootnote[];
-  onScreenshot?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => boolean | void | Promise<boolean | void>;
-  onAskAgent?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => boolean | void | Promise<boolean | void>;
+  onScreenshot?: (selection: DocSelectionResult, anchorRect: DOMRect | null, context: SelectionActionContext) => SelectionActionResult | Promise<SelectionActionResult>;
+  onAskAgent?: (selection: DocSelectionResult, anchorRect: DOMRect | null, context: SelectionActionContext) => SelectionActionResult | Promise<SelectionActionResult>;
   onAnnotate?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
   onCopy?: (
     selection: DocSelectionResult,
@@ -431,7 +432,17 @@ export function DocSelectionLayer({
     cameraScope: string | undefined;
   } | null>(null);
   const [rects, setRects] = useState<LocalRect[]>([]);
-  const [selection, setSelection] = useState<DocSelectionResult | null>(null);
+  const [selection, setSelectionState] = useState<DocSelectionResult | null>(null);
+  const actionGate = useRef(createSelectionActionGate());
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionFailure, setActionFailure] = useState<{ result: SelectionActionFailure; context: SelectionActionContext } | null>(null);
+  const setSelection = useCallback((next: DocSelectionResult | null) => {
+    actionGate.current.reset();
+    setActionBusy(false);
+    setActionFailure(null);
+    setSelectionState(next);
+  }, []);
+  useEffect(() => () => actionGate.current.reset(), []);
   /**
    * How far along the selection is: still being dragged, waiting to be
    * confirmed, or confirmed and showing what can be done with it.
@@ -2113,15 +2124,28 @@ export function DocSelectionLayer({
       )
     : [];
 
+  const finishAction = async (run: () => SelectionActionResult | Promise<SelectionActionResult>, context: SelectionActionContext) => {
+    setActionBusy(true);
+    setActionFailure(null);
+    try {
+      const result = await run();
+      if (!context.isCurrent()) return;
+      if (result && typeof result === "object") setActionFailure({ result, context });
+      else if (result !== false) dismiss();
+    } catch (error) {
+      if (context.isCurrent()) setActionFailure({ result: { ok: false, error: error instanceof Error ? error.message : String(error) }, context });
+    } finally {
+      if (context.isCurrent()) setActionBusy(false);
+    }
+  };
   const act = (
-    run: ((selection: DocSelectionResult, anchorRect: DOMRect | null) => boolean | void | Promise<boolean | void>) | undefined,
+    run: ((selection: DocSelectionResult, anchorRect: DOMRect | null, context: SelectionActionContext) => SelectionActionResult | Promise<SelectionActionResult>) | undefined,
   ) => {
     const current = selection;
     const anchorRect = highlightBox();
     if (!current || !run) return;
-    void Promise.resolve(run(current, anchorRect)).then((ok) => {
-      if (ok !== false) dismiss();
-    });
+    const context = actionGate.current.begin();
+    void finishAction(() => run(current, anchorRect, context), context);
   };
 
   /**
@@ -2797,8 +2821,11 @@ export function DocSelectionLayer({
                       </ul>
                     )}
                     <div className="lc-doc-sheet-actions">
-                      {onScreenshot && <button type="button" role="menuitem" className="lc-doc-sheet-action" onClick={() => act(onScreenshot)}><span aria-hidden="true">▣</span><span>Screenshot</span></button>}
-                      {onAskAgent && <button type="button" role="menuitem" className="lc-doc-sheet-action" onClick={() => act(onAskAgent)}><span aria-hidden="true">?</span><span>Ask Agent</span></button>}
+                      {onScreenshot && <button type="button" role="menuitem" className="lc-doc-sheet-action" disabled={actionBusy} onClick={() => act(onScreenshot)}><span aria-hidden="true">▣</span><span>Screenshot</span></button>}
+                      {onAskAgent && <button type="button" role="menuitem" className="lc-doc-sheet-action" disabled={actionBusy} onClick={() => act(onAskAgent)}><span aria-hidden="true">?</span><span>Ask Agent</span></button>}
+                      {actionFailure && <p role="alert" className="lc-warning">{actionFailure.result.error}</p>}
+                      {actionFailure?.result.continueTextOnly && <button type="button" role="menuitem" className="lc-doc-sheet-action" disabled={actionBusy}
+                        onClick={() => void finishAction(actionFailure.result.continueTextOnly!, actionFailure.context)}>Continue with text only</button>}
                       {onMark && (
                         <button
                           type="button"

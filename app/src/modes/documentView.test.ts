@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { documentAskFields, documentImageContext, hasDocumentCapture, sameDocumentIdentity, sameDocumentView, type DocumentViewContext } from "./documentView";
 const view: DocumentViewContext = { document_hash: "book", title: "Book", format: "pdf", pages: [3, 4], text: "visible words", revision: "ink1", viewport: { x: 0, y: 10, width: 800, height: 600 } };
 describe("frozen document context", () => {
+  it("retains the explicit text-only selection limitation when no image is attached", () => {
+    const limitation = "Selection image unavailable. Answer only from selected text; do not infer unseen figures.";
+    expect(documentAskFields(documentImageContext({ ...view, limitation }, false)).page_text).toContain(limitation);
+  });
   it("retains visible pages and text independently of later navigation", () => {
     const stored = structuredClone(view);
     expect(documentAskFields(stored)).toMatchObject({ document_hash: "book", page: 3 });

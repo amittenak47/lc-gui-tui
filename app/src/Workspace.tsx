@@ -409,6 +409,7 @@ import { saveCaptureToDevice, describeCaptureResult } from "./util/capturePrefs"
 import { photoFromFile } from "./util/photoAttach";
 import { thumbnailFromPng } from "./util/photoAttach";
 import { documentAskFields, documentImageContext, hasDocumentCapture, sameDocumentIdentity, sameDocumentView, type DocumentViewContext } from "./modes/documentView";
+import { selectionCaptureFailure, type SelectionActionContext, type SelectionActionResult } from "./modes/selectionAction";
 import { freezeCoachAsk, askImages, type CoachAskPayload } from "./modes/coachAskPayload";
 import { CoachSendCoordinator } from "./modes/coachSendCoordinator";
 import { saveCoachRequest, loadCoachRequest } from "./modes/coachRequestStore";
@@ -8024,27 +8025,53 @@ export function Workspace({
     [openFootnoteOverview],
   );
 
-  const captureDocSelection = async (selection: DocSelectionResult, rect: DOMRect | null, ask: boolean) => {
+  const captureDocSelection = async (selection: DocSelectionResult, rect: DOMRect | null, ask: boolean, context: SelectionActionContext): Promise<SelectionActionResult> => {
     const board = boardRef.current; const source = annotateSourceRef.current;
+    const selected = structuredClone(selection);
+    let frozenView: DocumentViewContext | undefined;
+    const validateSource = () => {
+      if (!board || !source || !frozenView || boardRef.current !== board || annotateSourceRef.current !== source ||
+          !sameDocumentIdentity(frozenView, { document_hash: source.hash, paneId: board.captureDocumentView().paneId })) {
+        throw new Error("The selected document or pane changed. Select the area again.");
+      }
+    };
+    const seedTextOnly = () => {
+      validateSource();
+      pendingQuoteRef.current = selected;
+      setCoachQuoteSeed({ token: Date.now(), text: selected.text.trim(),
+        view: { ...frozenView!, text: selected.text.trim(), limitation: "Selection image unavailable. Answer only from the selected text; do not infer unseen figures." },
+      });
+      openCoachPanel();
+    };
     try {
-      if (!board || !source || !rect) throw new Error("Select a visible area first");
+      if (!context.isCurrent()) return false;
+      if (!board || !source) throw new Error("Select a visible area first");
       const snapshot = board.captureDocumentView();
-      const blob = await board.exportSelectionCapture(rect);
+      frozenView = structuredClone({ ...snapshot, document_hash: source.hash, title: source.name, format: source.docType });
+      if (!rect) throw new Error("Selection image has no visible capture bounds.");
+      const blob = await withTimeout(board.exportSelectionCapture(rect), THUMB_EXPORT_TIMEOUT_MS, "Selection capture timed out");
+      if (!context.isCurrent()) return false;
       if (boardRef.current !== board || annotateSourceRef.current !== source || !sameDocumentView(snapshot, board.captureDocumentView())) {
         throw new Error("The view changed during capture. Select the area again.");
       }
       if (!ask) { const saved = await saveCaptureToDevice(blob, "lc-selection"); setNotice(describeCaptureResult(saved)); return saved.outcome !== "failed"; }
-      const photo = await photoFromFile(new File([blob], "Selection.png", { type: "image/png" }));
-      if (annotateSourceRef.current !== source) throw new Error("Document changed; select again");
-      pendingQuoteRef.current = selection;
+      const photo = await withTimeout(photoFromFile(new File([blob], "Selection.png", { type: "image/png" })), THUMB_EXPORT_TIMEOUT_MS, "Selection image preparation timed out");
+      if (!context.isCurrent()) return false;
+      validateSource();
+      pendingQuoteRef.current = selected;
       const documentCaptureId = globalThis.crypto?.randomUUID?.() ?? `selection-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      setCoachQuoteSeed({ token: Date.now(), text: selection.text || selection.excerpt,
+      setCoachQuoteSeed({ token: Date.now(), text: selected.text || selected.excerpt,
         attachment: { label: photo.name, png: photo.png, thumb: photo.thumb, documentCaptureId },
-        view: { ...snapshot, text: selection.text || snapshot.text, document_hash: source.hash, title: source.name, format: source.docType, documentCaptureId },
+        view: { ...frozenView, text: selected.text || snapshot.text, documentCaptureId },
       });
       openCoachPanel();
       return true;
-    } catch (error) { setError(messageOf(error)); return false; }
+    } catch (error) {
+      if (!context.isCurrent()) return false;
+      if (ask && frozenView) return selectionCaptureFailure(messageOf(error), selected.text, context, seedTextOnly);
+      setError(messageOf(error));
+      return { ok: false, error: messageOf(error) };
+    }
   };
 
   const onDocCopy = useCallback(
@@ -10333,8 +10360,8 @@ export function Workspace({
                   marksHost={marksSlot}
                   footnotes={annotateFootnotes}
                   onAnnotate={onDocAnnotate}
-                  onScreenshot={(selection, rect) => captureDocSelection(selection, rect, false)}
-                  onAskAgent={(selection, rect) => captureDocSelection(selection, rect, true)}
+                  onScreenshot={(selection, rect, context) => captureDocSelection(selection, rect, false, context)}
+                  onAskAgent={(selection, rect, context) => captureDocSelection(selection, rect, true, context)}
                   onCopy={onDocCopy}
                   onSearch={onDocSearch}
                   onMark={highlighting ? onDocMark : undefined}
@@ -10419,8 +10446,8 @@ export function Workspace({
                   marksHost={marksSlot}
                   footnotes={annotateFootnotes}
                   onAnnotate={onDocAnnotate}
-                  onScreenshot={(selection, rect) => captureDocSelection(selection, rect, false)}
-                  onAskAgent={(selection, rect) => captureDocSelection(selection, rect, true)}
+                  onScreenshot={(selection, rect, context) => captureDocSelection(selection, rect, false, context)}
+                  onAskAgent={(selection, rect, context) => captureDocSelection(selection, rect, true, context)}
                   onCopy={onDocCopy}
                   onSearch={onDocSearch}
                   onMark={highlighting ? onDocMark : undefined}

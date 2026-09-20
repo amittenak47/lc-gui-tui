@@ -32,3 +32,23 @@ it("offers Retry only after terminal state and selection seeds a draft without s
   menu(); expect(button("Abort")).toBeUndefined(); act(() => button("Retry").click());
   expect(retry).toHaveBeenCalledWith("question");
 });
+
+it("text-only selection keeps a typed draft and sends the frozen quote only on Send", () => {
+  const send = vi.fn();
+  const props = { open: true, mode: "review" as const, onModeChange: () => {}, busy: false, messages: [], onSend: send };
+  act(() => root.render(<AgentSidePanel {...props} />));
+  const composer = host.querySelector("textarea")!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(composer, "Explain this passage");
+    composer.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const view = { document_hash: "book", title: "Book", format: "pdf", pages: [3], text: "Selected passage", revision: "v1",
+    viewport: { x: 0, y: 0, width: 800, height: 600 }, limitation: "Selection image unavailable; use selected text only." };
+  act(() => root.render(<AgentSidePanel {...props} quoteSeed={{ token: 2, text: "Selected passage", view }} />));
+  expect(composer.value).toBe("Explain this passage");
+  expect(send).not.toHaveBeenCalled();
+  expect(host.querySelector('[aria-label="Attached photos"]')).toBeNull();
+  act(() => host.querySelector<HTMLButtonElement>('[aria-label="Send"]')!.click());
+  expect(send).toHaveBeenCalledWith("Explain this passage", expect.objectContaining({ pageQuote: "Selected passage", documentView: view }), "queue");
+  expect(send.mock.calls[0][1].photos).toBeUndefined();
+});

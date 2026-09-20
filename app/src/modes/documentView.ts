@@ -31,9 +31,9 @@ export function sameDocumentIdentity(
 }
 export function documentImageContext(view: DocumentViewContext, hasImage: boolean): DocumentViewContext {
   if (hasImage) return view;
-  return { ...view, limitation: view.text.trim()
+  return { ...view, limitation: view.limitation ?? (view.text.trim()
     ? "Image unavailable; answer from the visible extracted text."
-    : "The current view has no readable extracted text or image. Ask for a capture before describing it." };
+    : "The current view has no readable extracted text or image. Ask for a capture before describing it.") };
 }
 export function hasDocumentCapture(
   view: DocumentViewContext,
