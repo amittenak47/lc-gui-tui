@@ -19476,6 +19476,20 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-agent-process-step-content a { cursor: pointer; }
 .lc-agent-process-step-content pre, .lc-agent-process-step-content code { cursor: text; }
 .lc-agent-process-step-excerpt { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lc-agent-process-step[data-thinking-color="0"] { --lc-thought-accent: #648ed5; }
+.lc-agent-process-step[data-thinking-color="1"] { --lc-thought-accent: #9d79c5; }
+.lc-agent-process-step[data-thinking-color="2"] { --lc-thought-accent: #4f9d9a; }
+.lc-agent-process-step[data-thinking-color="3"] { --lc-thought-accent: #be8d4b; }
+.lc-agent-process-step[data-thinking-color="4"] { --lc-thought-accent: #c477a0; }
+.lc-agent-process-step[data-thinking-color]:not(.lc-agent-process-step-rejected)::before {
+  background: color-mix(in srgb, var(--lc-thought-accent) 80%, var(--ink));
+  width: 7px; height: 7px;
+}
+.lc-agent-process-steps .lc-agent-process-step,
+.lc-agent-process-steps .lc-agent-process-step-body { opacity: 1; animation: none; }
+@media (forced-colors: active) {
+  .lc-agent-process-step[data-thinking-color]::before { background: CanvasText; }
+}
 /* UI hand moves app chrome; writing hand remains independent. */
 [data-ui-handedness="left"] .lc-header,
 [data-ui-handedness="left"] .lc-mobile.lc-app-problem .lc-header {

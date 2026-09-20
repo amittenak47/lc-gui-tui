@@ -4,7 +4,7 @@ import { STAGE_LABELS, type CoachProcessEvent } from "../api/types";
 import { AgentRichText } from "./AgentRichText";
 import { AnimatedDisclosure } from "../components/AnimatedDisclosure";
 import { DEFAULT_AGENT_DISPLAY_PREFS, type AgentDisplayPrefs } from "../util/agentDisplayPrefs";
-import { newThinkingDisclosure, thinkingStepKey, type ThinkingDisclosureState } from "./thinkingDisplay";
+import { newThinkingDisclosure, thinkingStepKey, thinkingStepColor, type ThinkingDisclosureState } from "./thinkingDisplay";
 
 export const DOC_TOOL_LABELS: Record<string, string> = {
   query_document_vectors: "searching the book",
@@ -142,6 +142,7 @@ export function ProcessBlock({
               return (
                 <li
                   key={key}
+                  data-thinking-color={displayPrefs.colorThinkingSteps ? thinkingStepColor(key) : undefined}
                   className={[
                     "lc-agent-process-step",
                     event.status === "rejected" ? "lc-agent-process-step-rejected" : "",
