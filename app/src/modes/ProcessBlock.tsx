@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { STAGE_LABELS, type CoachProcessEvent } from "../api/types";
 import { AgentRichText } from "./AgentRichText";
+import { AnimatedDisclosure } from "../components/AnimatedDisclosure";
 
 export const DOC_TOOL_LABELS: Record<string, string> = {
   query_document_vectors: "searching the book",
@@ -87,33 +88,23 @@ function eventKey(event: CoachProcessEvent, index: number): string {
 export function ProcessBlock({
   events,
   running,
+  onCollapsed,
 }: {
   events: CoachProcessEvent[];
   running: boolean;
+  onCollapsed?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [openKey, setOpenKey] = useState<string | null>(null);
-  const [shownCount, setShownCount] = useState(0);
   const shown = events.filter(
     (event) => event.label !== "done" && !isReasoningEvent(event),
   );
-  const expanded = open;
+  const expanded = running || open;
   useEffect(() => {
-    if (running) {
-      setShownCount(shown.length);
-      return;
-    }
-    if (shownCount >= shown.length) {
-      setShownCount(shown.length);
-      return;
-    }
-    const id = window.setTimeout(() => {
-      setShownCount((current) => Math.min(shown.length, current + 1));
-    }, 60);
-    return () => window.clearTimeout(id);
-  }, [running, shown.length, shownCount]);
-  const visible = shown.slice(0, running ? shown.length : shownCount);
-  const latest = visible[visible.length - 1];
+    // A completed live turn always folds first. Restored history starts folded.
+    setOpen(false); setOpenKey(null);
+  }, [running]);
+  const visible = shown;
   if (shown.length === 0) return null;
 
   return (
@@ -122,17 +113,16 @@ export function ProcessBlock({
         type="button"
         className="lc-agent-process-toggle"
         aria-expanded={expanded}
+        disabled={running}
         onClick={() => setOpen((current) => !current)}
       >
         {running && <span className="lc-agent-spinner" aria-hidden />}
         <span className="lc-agent-process-chevron" aria-hidden />
         <span className="lc-agent-process-label">
-          {running
-            ? processLine(latest)
-            : `Thinking · ${shown.length} step${shown.length === 1 ? "" : "s"}`}
+          {running ? "Thinking…" : `Thinking · ${shown.length} step${shown.length === 1 ? "" : "s"}`}
         </span>
       </button>
-      {expanded && (
+      <AnimatedDisclosure open={expanded} onExitComplete={onCollapsed} animateInitial={running}>
         <ol className="lc-agent-process-steps">
             {visible.map((event, index) => {
               const key = eventKey(event, index);
@@ -150,7 +140,8 @@ export function ProcessBlock({
                     .filter(Boolean)
                     .join(" ")}
                 >
-                  <button
+                  {running ? <AgentRichText text={body || processLine(event)} animate animateInitial
+                    className="lc-agent-process-step-body" /> : <><button
                     type="button"
                     className="lc-agent-process-step-btn"
                     aria-expanded={openKey === key}
@@ -162,12 +153,12 @@ export function ProcessBlock({
                   {canOpen && openKey === key ? (
                     <AgentRichText text={body} animate animateInitial={running}
                       className="lc-agent-process-step-body" />
-                  ) : null}
+                  ) : null}</>}
                 </li>
               );
             })}
         </ol>
-      )}
+      </AnimatedDisclosure>
     </div>
   );
 }

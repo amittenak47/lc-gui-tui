@@ -90,10 +90,14 @@ function AgentReview() {
   const onToggle=(id:string,expanded:boolean)=>setMessages(current=>current.map(m=>m.id===id&&m.drawing?{...m,drawing:{...m.drawing,expanded}}:m));
   useEffect(() => {
     Object.assign(window, {
+      reviewOpenAgent: () => setOpen(true),
       reviewBeginAgentTurn: () => setMessages(current => [...current,
         {id:"motion-user",role:"user",at:Date.now(),content:"Explain the sum using a short animated drawing.",flags:["Ask","Reasoning · high","Draw"]},
         {id:"motion-agent",role:"assistant",at:Date.now(),content:"",pending:true,pendingAck:{flags:["Ask","Reasoning · high","Draw"],hasQuestion:true,boardAttached:false,photoCount:0}},
       ]),
+      reviewThinkingStep: () => setMessages(current => current.map(message => message.id === "motion-agent"
+        ? {...message,processEvents:[{kind:"stage",label:"reason",ts:1,detail:"First inspect every cell in the array. Then compare the current pointer with the previous position so that no value is counted twice."}],reasoning:"Provider reasoning retained for the completed turn."}
+        : message)),
       reviewCompleteAgentTurn: () => setMessages(current => current.map(message => message.id === "motion-agent"
         ? {...message,pending:false,flags:message.pendingAck?.flags,content:"The **sum** is $1+2+3=6$.\n\nEach frame visits the next cell and adds its value to the running total."}
         : message)),

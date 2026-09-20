@@ -41,7 +41,7 @@ describe("processLine", () => {
 });
 
 describe("ProcessBlock", () => {
-  it("tapping a reason step opens the detail", async () => {
+  it("reveals full live step details automatically without tapping titles", async () => {
     vi.useFakeTimers();
     const host = document.createElement("div");
     document.body.appendChild(host);
@@ -58,14 +58,8 @@ describe("ProcessBlock", () => {
       root.render(<ProcessBlock events={events} running={true} />);
     });
     const toggle = host.querySelector(".lc-agent-process-toggle") as HTMLButtonElement;
-    await act(async () => {
-      toggle.click();
-    });
-    const step = host.querySelector(".lc-agent-process-step-btn") as HTMLButtonElement;
-    expect(step).toBeTruthy();
-    await act(async () => {
-      step.click();
-    });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector(".lc-agent-process-step-btn")).toBeNull();
     const body = host.querySelector(".lc-agent-process-step-body");
     expect(body?.getAttribute("aria-busy")).toBe("true");
     await act(async () => { vi.advanceTimersByTime(1000); });

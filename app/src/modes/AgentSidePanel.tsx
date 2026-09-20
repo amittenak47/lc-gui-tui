@@ -18,10 +18,9 @@ import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
 import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
 import { useAgentSheet } from "./useAgentSheet";
-import { ThinkingDots } from "./ThinkingDots";
-import { ProcessBlock, reasoningBodyForTurn } from "./ProcessBlock";
-import { ReasoningBlock } from "./ReasoningBlock";
-import { AgentRichText, useWordReveal } from "./AgentRichText";
+import { useWordReveal } from "./AgentRichText";
+import { AgentTurnResponse } from "./AgentTurnResponse";
+import { useChatFollow } from "./useChatFollow";
 import { AgentMessageBubble } from "./AgentMessageBubble";
 import {
   cycleAgentReasoning,
@@ -809,6 +808,7 @@ export function AgentSidePanel({
     threadMotionRef.current = threadMotion;
   }, [threadMotion]);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const chatPinned = useChatFollow(listRef, openThreadId ?? "__room__", open);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
   const sheet = useAgentSheet(panelRef, mobile, open, () => setOpen(false));
@@ -1174,7 +1174,7 @@ export function AgentSidePanel({
 
   useEffect(() => {
     const node = listRef.current;
-    if (!node) return;
+    if (!node || !chatPinned.current) return;
     node.scrollTop = node.scrollHeight;
   }, [
     // eslint-disable-next-line react-hooks/exhaustive-deps -- signature ignores frameIndex
@@ -1465,36 +1465,13 @@ export function AgentSidePanel({
               >
                 {ROLE_LABEL[message.role]}
               </div>
-              {message.pending && <ThinkingDots />}
               {message.requestState && !message.queued && <small>{message.requestState}</small>}
               {message.retryOf && <small>Retry · previous attempt retained above</small>}
               {message.queued && (
                 <span className="lc-agent-queued" aria-label="Queued message">Queued</span>
               )}
-              {(() => {
-                const reasoningText = reasoningBodyForTurn(
-                  message.reasoning,
-                  message.processEvents,
-                );
-                const hasProcess = Boolean(message.processEvents?.length);
-                if (!hasProcess && !reasoningText) return null;
-                return (
-                <div className="lc-agent-think-stack">
-                  {message.processEvents && message.processEvents.length > 0 && (
-                    <ProcessBlock
-                      events={message.processEvents}
-                      running={Boolean(message.pending)}
-                    />
-                  )}
-                  {reasoningText && !message.pending ? (
-                    <ReasoningBlock
-                      text={reasoningText}
-                      running={Boolean(message.pending)}
-                    />
-                  ) : null}
-                </div>
-                );
-              })()}
+              <AgentTurnResponse pending={Boolean(message.pending)} events={message.processEvents}
+                reasoning={message.reasoning} text={message.content} assistant={message.role === "assistant"}>
               {showsReplyStub(message, openThreadId) && (
                 /*
                  * The quoted turn, above the reply that answers it.
@@ -1519,8 +1496,7 @@ export function AgentSidePanel({
                   <span className="lc-agent-reply-stub-text">{replyStub!.excerpt}</span>
                 </button>
               )}
-              <AgentRichText text={message.content} animate={message.role === "assistant"}
-                animateInitial={Boolean(message.pending)} className="lc-agent-turn-body" />
+              </AgentTurnResponse>
               {!openThreadId && replyCount > 0 && (
                 /*
                  * The thread, collapsed to one line.

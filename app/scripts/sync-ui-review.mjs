@@ -130,8 +130,20 @@ try {
     assert(footer.includes('Reasoning · high')&&!footer.includes('got question'),footer);
     assert(footerStart.length < footer.length, 'Pending footer should fill progressively');
     await shot('pending-footer');
-    await evaluate("window.reviewCompleteAgentTurn()");
+    await evaluate("window.reviewThinkingStep()");
     await sleep(90);
+    const thinkingPartial = await evaluate("document.querySelector('[data-coach-message=motion-agent] .lc-agent-process-step-body').textContent");
+    await sleep(1700);
+    const thinkingFull = await evaluate("document.querySelector('[data-coach-message=motion-agent] .lc-agent-process-step-body').textContent");
+    assert(thinkingFull.length>thinkingPartial.length && thinkingFull.includes('counted twice'), 'Live thinking must reveal the full detail');
+    await shot('thinking-expanded');
+    const thinkingHeight = await evaluate("document.querySelector('[data-coach-message=motion-agent]').getBoundingClientRect().height");
+    await evaluate("window.reviewCompleteAgentTurn()");
+    await sleep(60);
+    assert.equal(await evaluate("Boolean(document.querySelector('[data-coach-message=motion-agent] .lc-agent-turn-body'))"),false,'Answer must wait for thinking fold');
+    const foldingHeight = await evaluate("document.querySelector('[data-coach-message=motion-agent]').getBoundingClientRect().height");
+    assert(foldingHeight<thinkingHeight,'Thinking should fold upward');
+    for(let i=0;i<30;i++) {if(await evaluate("Boolean(document.querySelector('[data-coach-message=motion-agent] .lc-agent-turn-body'))"))break;await sleep(20);}
     const partial = await evaluate("document.querySelector('[data-coach-message=motion-agent] .lc-agent-turn-body').textContent");
     await sleep(1600);
     const complete = await evaluate("document.querySelector('[data-coach-message=motion-agent] .lc-agent-turn-body').textContent");
@@ -160,7 +172,8 @@ try {
   const bounds = () => evaluate(`(() => {
     const header=document.querySelector('.lc-app .lc-header').getBoundingClientRect();
     const sheet=document.querySelector('.lc-side').getBoundingClientRect();
-    return {headerTop:header.top,headerBottom:header.bottom,sheetTop:sheet.top,sheetBottom:sheet.bottom,height:innerHeight,bodyScroll:document.scrollingElement.scrollTop};
+    const panel=document.querySelector('.lc-side');
+    return {headerTop:header.top,headerBottom:header.bottom,sheetTop:sheet.top,sheetBottom:sheet.bottom,height:innerHeight,bodyScroll:document.scrollingElement.scrollTop,hidden:getComputedStyle(panel).visibility==='hidden',inert:panel.inert};
   })()`);
   const cycles=[];
   for(let cycle=0;cycle<3;cycle++) {
@@ -171,10 +184,10 @@ try {
     await evaluate("document.querySelector('.lc-agent-sheet-handle').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))");
     await sleep(300);
     const parked=await bounds();cycles.push(parked);
-    assert(Math.abs(parked.sheetTop-(parked.height-52))<2,`Sheet drift: ${JSON.stringify(parked)}`);
+    assert(parked.hidden && parked.inert && parked.sheetTop>=parked.height,`Closed sheet must be hidden/inert, not a peek bar: ${JSON.stringify(parked)}`);
     assert(parked.headerTop>=0 && parked.bodyScroll===0,`Header drift: ${JSON.stringify(parked)}`);
     if(cycle<2) {
-      await evaluate("document.querySelector('.lc-agent-sheet-handle').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))");
+      await evaluate("window.reviewOpenAgent()");
       await sleep(300);
     }
   }
