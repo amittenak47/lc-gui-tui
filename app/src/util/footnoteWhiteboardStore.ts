@@ -113,14 +113,43 @@ export function slimFootnoteBoard(
 export async function collectFootnoteBoards(
   docId: string,
   footnotes: readonly DocFootnote[],
-  opts: { slim?: boolean } = {},
+  opts: { slim?: boolean; requireAll?: boolean } = {},
 ): Promise<Record<string, FootnoteWhiteboardContent>> {
   const out: Record<string, FootnoteWhiteboardContent> = {};
+  const missing: string[] = [];
   for (const wbId of whiteboardIdsOn(footnotes)) {
     const row = await getFootnoteWhiteboard(docId, wbId);
-    if (row) out[wbId] = opts.slim ? slimFootnoteBoard(row) : row;
+    if (!row || (opts.requireAll && !isTransferableScene(row))) {
+      missing.push(wbId);
+      continue;
+    }
+    Object.defineProperty(out, wbId, {
+      value: opts.slim ? slimFootnoteBoard(row) : row,
+      enumerable: true, configurable: true, writable: true,
+    });
   }
+  // Reads/previews can show what is available. An upload cannot publish a
+  // pointer whose scene we failed to read, replacing a complete remote copy.
+  if (opts.requireAll && missing.length) throw new MissingFootnoteBoardsError(docId, missing);
   return out;
+}
+
+export class MissingFootnoteBoardsError extends Error {
+  readonly code = "missing-footnote-boards";
+  constructor(readonly docId: string, readonly boardIds: readonly string[]) {
+    super(`Cannot sync: ${boardIds.length} attached whiteboard${boardIds.length === 1 ? " is" : "s are"} unavailable. Reopen or download the missing content, then retry.`);
+    this.name = "MissingFootnoteBoardsError";
+  }
+}
+
+/** Old board.v=1 scenes remain valid; malformed objects are not empty boards. */
+function isTransferableScene(content: FootnoteWhiteboardContent): boolean {
+  const { board, pageCount } = content;
+  return board.v === 1 && Array.isArray(board.elements) &&
+    Number.isSafeInteger(pageCount) && pageCount >= 1 &&
+    Boolean(board.appState) &&
+    Number.isFinite(board.appState.scrollX) && Number.isFinite(board.appState.scrollY) &&
+    Number.isFinite(board.appState.zoom) && board.appState.zoom > 0;
 }
 
 /**

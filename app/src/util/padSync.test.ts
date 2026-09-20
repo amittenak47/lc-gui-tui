@@ -116,13 +116,13 @@ vi.mock("./hubAutoSyncPref", () => ({
 
 const footnoteBoardMocks = vi.hoisted(() => ({
   applyFootnoteBoards: vi.fn(async (_docId?: string, _boards?: unknown) => {}),
-  collectFootnoteBoards: vi.fn(async (_docId?: string, _footnotes?: unknown) => ({})),
+  collectFootnoteBoards: vi.fn(async (_docId?: string, _footnotes?: unknown, _opts?: unknown) => ({})),
 }));
 vi.mock("./footnoteWhiteboardStore", () => ({
   applyFootnoteBoards: (docId: string, boards: unknown) =>
     footnoteBoardMocks.applyFootnoteBoards(docId, boards),
-  collectFootnoteBoards: (docId: string, footnotes: unknown) =>
-    footnoteBoardMocks.collectFootnoteBoards(docId, footnotes),
+  collectFootnoteBoards: (docId: string, footnotes: unknown, opts: unknown) =>
+    footnoteBoardMocks.collectFootnoteBoards(docId, footnotes, opts),
 }));
 
 vi.mock("./padSnapshotStore", () => ({
@@ -1081,6 +1081,18 @@ describe("live PUT CAS and gone", () => {
 });
 
 describe("applyHubAnnotate footnote boards", () => {
+  it("does not upload or queue a parent after a scratch dependency read fails", async () => {
+    const client = fakeClient();
+    const unavailable = new Error("Missing attached whiteboard");
+    footnoteBoardMocks.collectFootnoteBoards.mockRejectedValueOnce(unavailable);
+    await expect(pushAnnotatePad(client, {
+      id: "a1", name: "n.md", hash: "h", docType: "markdown", updatedAt: 40,
+      source: "#", board: emptyBoard, footnotes: [], agent: [],
+    })).rejects.toBe(unavailable);
+    expect(client.putAnnotatePad).not.toHaveBeenCalled();
+    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+  });
+
   it("puts collected boards on the annotate PUT body", async () => {
     const boards = {
       "wb-1": { board: emptyBoard, pageCount: 1 },
@@ -1106,7 +1118,9 @@ describe("applyHubAnnotate footnote boards", () => {
       board: emptyBoard,
       agent: [],
     });
-    expect(footnoteBoardMocks.collectFootnoteBoards).toHaveBeenCalledWith("a1", expect.any(Array));
+    expect(footnoteBoardMocks.collectFootnoteBoards).toHaveBeenCalledWith(
+      "a1", expect.any(Array), { slim: true, requireAll: true },
+    );
     expect(body.footnote_boards).toEqual(boards);
   });
 

@@ -543,6 +543,7 @@ export async function annotatePadBody(doc: AnnotateDoc): Promise<AnnotatePadDto>
      */
     footnote_boards: await collectFootnoteBoards(doc.id, doc.footnotes ?? [], {
       slim: true,
+      requireAll: true,
     }),
   };
 }

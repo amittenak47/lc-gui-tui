@@ -13,7 +13,7 @@ vi.mock("./idb", () => ({
 }));
 
 import type { BoardBlob } from "../canvas/BoardHandle";
-import { getContent } from "./contentStore";
+import { getContent, putContent } from "./contentStore";
 import type { DocFootnote } from "./docFootnotes";
 import {
   applyFootnoteBoards,
@@ -23,6 +23,7 @@ import {
   footnoteWhiteboardKey,
   forkSharedWhiteboardPointers,
   getFootnoteWhiteboard,
+  MissingFootnoteBoardsError,
   putFootnoteWhiteboard,
   sweepFootnoteWhiteboards,
 } from "./footnoteWhiteboardStore";
@@ -66,6 +67,42 @@ afterEach(() => {
 });
 
 describe("footnoteWhiteboardStore", () => {
+  it("refuses an incomplete upload while allowing partial local previews", async () => {
+    await putFootnoteWhiteboard("doc-1", "present", { board: board(), pageCount: 1 });
+    const notes = [mark("fn1", ["present", "missing"]), mark("fn2", ["missing"])];
+    expect(Object.keys(await collectFootnoteBoards("doc-1", notes))).toEqual(["present"]);
+    await expect(collectFootnoteBoards("doc-1", notes, { slim: true, requireAll: true }))
+      .rejects.toMatchObject({
+        name: "MissingFootnoteBoardsError", code: "missing-footnote-boards",
+        docId: "doc-1", boardIds: ["missing"],
+      });
+    // No missing-board placeholders or destructive repairs are written.
+    expect(await getFootnoteWhiteboard("doc-1", "missing")).toBeNull();
+    expect(await getFootnoteWhiteboard("doc-1", "present")).not.toBeNull();
+  });
+
+  it("rejects malformed scenes instead of publishing them as usable attachments", async () => {
+    await putContent(footnoteWhiteboardKey("doc-1", "bad"), { board: {}, pageCount: 1 });
+    await expect(collectFootnoteBoards("doc-1", [mark("fn1", ["bad"])], { requireAll: true }))
+      .rejects.toBeInstanceOf(MissingFootnoteBoardsError);
+  });
+
+  it("can retry the same references after their missing scenes arrive", async () => {
+    const notes = [mark("fn1", ["late"])];
+    await expect(collectFootnoteBoards("doc-1", notes, { requireAll: true })).rejects.toThrow();
+    await putFootnoteWhiteboard("doc-1", "late", { board: board(), pageCount: 1 });
+    expect(await collectFootnoteBoards("doc-1", notes, { requireAll: true }))
+      .toEqual({ late: { board: board(), pageCount: 1 } });
+  });
+
+  it("serializes reserved-looking IDs as ordinary own properties", async () => {
+    await putFootnoteWhiteboard("doc-1", "__proto__", { board: board(), pageCount: 1 });
+    const collected = await collectFootnoteBoards("doc-1", [mark("fn1", ["__proto__"])], { requireAll: true });
+    expect(Object.keys(collected)).toEqual(["__proto__"]);
+    expect(Object.getPrototypeOf(collected)).toBe(Object.prototype);
+    expect(JSON.parse(JSON.stringify(collected))["__proto__"].pageCount).toBe(1);
+  });
+
   it("round-trips a board blob", async () => {
     await putFootnoteWhiteboard("doc-1", "wb-1", { board: board("a"), pageCount: 1 });
     expect(await getFootnoteWhiteboard("doc-1", "wb-1")).toEqual({
