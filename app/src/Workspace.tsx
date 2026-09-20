@@ -5600,10 +5600,7 @@ export function Workspace({
     if (!problem) return;
     const ambient = AMBIENT_ENABLED && mode === "ambient";
     if (!ambient && !coachFlags.ws_runs) return;
-    // Named invoke carries Ask / Review. The LAN socket is 127.0.0.1:7878,
-    // which the APK does not bind — opening it paints "the agent connection
-    // failed" on every document.
-    if (isTauriRuntime() && !ambient) return;
+    // Native uses an isolated invoke/event channel; no LAN listener is needed.
 
     const onFrame = (frame: ServerFrame) => {
       switch (frame.type) {

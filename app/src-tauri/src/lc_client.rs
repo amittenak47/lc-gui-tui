@@ -3,7 +3,7 @@
 //! HTTP routes are dispatched through axum without binding a port. The ambient
 //! coach uses Tauri events instead of a loopback WebSocket.
 
-use std::sync::Mutex;
+use std::{collections::HashMap, sync::Mutex};
 
 use base64::Engine;
 use harness::serve::{self, Shared};
@@ -110,17 +110,17 @@ fn response_body(bytes: Vec<u8>, content_type: &str) -> serde_json::Value {
 
 struct CoachSession {
     incoming: mpsc::UnboundedSender<String>,
-    tasks: Vec<tauri::async_runtime::JoinHandle<()>>,
+    emit_task: tauri::async_runtime::JoinHandle<()>,
 }
 
 pub struct CoachHub {
-    inner: Mutex<Option<CoachSession>>,
+    inner: Mutex<HashMap<String, CoachSession>>,
 }
 
 impl CoachHub {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(None),
+            inner: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -130,8 +130,22 @@ pub async fn lc_coach_connect(
     app: AppHandle,
     state: State<'_, Shared>,
     hub: State<'_, CoachHub>,
+    channel_id: Option<String>,
 ) -> Result<(), String> {
-    lc_coach_disconnect_inner(&hub)?;
+    let channel = channel_id.unwrap_or_default();
+    let event_name = if channel.is_empty() {
+        "lc-coach-frame".to_string()
+    } else {
+        if !channel.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err("invalid coach channel".into());
+        }
+        format!("lc-coach-frame-{channel}")
+    };
+    let mut sessions = hub.inner.lock().map_err(|_| "coach hub lock poisoned")?;
+    if let Some(session) = sessions.remove(&channel) {
+        drop(session.incoming);
+        session.emit_task.abort();
+    }
 
     let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
@@ -140,27 +154,29 @@ pub async fn lc_coach_connect(
     let emit_task = tauri::async_runtime::spawn(async move {
         while let Some(frame) = outgoing_rx.recv().await {
             if let Ok(json) = serde_json::to_string(&frame) {
-                let _ = app_emit.emit("lc-coach-frame", json);
+                let _ = app_emit.emit(&event_name, json);
             }
         }
     });
 
     let serve_state = state.inner().clone();
-    let drive_task = tauri::async_runtime::spawn(async move {
+    // Dropping incoming lets drive_channels cancel its in-flight work on exit.
+    // Aborting this driver would skip that cleanup and detach provider work.
+    tauri::async_runtime::spawn(async move {
         ws::drive_channels(serve_state, incoming_rx, outgoing_tx).await;
     });
 
-    *hub.inner.lock().map_err(|_| "coach hub lock poisoned")? = Some(CoachSession {
+    sessions.insert(channel, CoachSession {
         incoming: incoming_tx,
-        tasks: vec![emit_task, drive_task],
+        emit_task,
     });
     Ok(())
 }
 
 #[tauri::command]
-pub async fn lc_coach_send(hub: State<'_, CoachHub>, frame: String) -> Result<(), String> {
+pub async fn lc_coach_send(hub: State<'_, CoachHub>, frame: String, channel_id: Option<String>) -> Result<(), String> {
     let guard = hub.inner.lock().map_err(|_| "coach hub lock poisoned")?;
-    let Some(session) = guard.as_ref() else {
+    let Some(session) = guard.get(channel_id.as_deref().unwrap_or_default()) else {
         return Err("coach is not connected".into());
     };
     session
@@ -170,17 +186,15 @@ pub async fn lc_coach_send(hub: State<'_, CoachHub>, frame: String) -> Result<()
 }
 
 #[tauri::command]
-pub async fn lc_coach_disconnect(hub: State<'_, CoachHub>) -> Result<(), String> {
-    lc_coach_disconnect_inner(&hub)
+pub async fn lc_coach_disconnect(hub: State<'_, CoachHub>, channel_id: Option<String>) -> Result<(), String> {
+    lc_coach_disconnect_inner(&hub, channel_id.as_deref().unwrap_or_default())
 }
 
-fn lc_coach_disconnect_inner(hub: &CoachHub) -> Result<(), String> {
+fn lc_coach_disconnect_inner(hub: &CoachHub, channel: &str) -> Result<(), String> {
     let mut guard = hub.inner.lock().map_err(|_| "coach hub lock poisoned")?;
-    if let Some(session) = guard.take() {
+    if let Some(session) = guard.remove(channel) {
         drop(session.incoming);
-        for task in session.tasks {
-            task.abort();
-        }
+        session.emit_task.abort();
     }
     Ok(())
 }

@@ -152,6 +152,8 @@ type Unlisten = () => void;
  * `ws://127.0.0.1:7878/coach/session`.
  */
 export function createTauriCoachSocket(_url: string): WebSocketLike {
+  const channelId = crypto.randomUUID();
+  let connecting: Promise<unknown> | null = null;
   let onopen: WebSocketLike["onopen"] = null;
   let onclose: WebSocketLike["onclose"] = null;
   let onerror: WebSocketLike["onerror"] = null;
@@ -161,18 +163,24 @@ export function createTauriCoachSocket(_url: string): WebSocketLike {
 
   const socket: WebSocketLike = {
     send(data: string) {
+      if (closed) return;
       void import("@tauri-apps/api/core")
-        .then(({ invoke }) => invoke("lc_coach_send", { frame: data }))
-        .catch(() => onerror?.(null));
+        .then(({ invoke }) => { if (!closed) return invoke("lc_coach_send", { frame: data, channelId }); })
+        .catch(() => { if (!closed) { onerror?.(null); socket.close(); } });
     },
     close() {
       if (closed) return;
       closed = true;
       unlisten?.();
       unlisten = null;
+      onclose?.(null);
       void import("@tauri-apps/api/core")
-        .then(({ invoke }) => invoke("lc_coach_disconnect"))
-        .finally(() => onclose?.(null));
+        .then(async ({ invoke }) => {
+          // A close during native connect must remove the eventual session too.
+          await connecting?.catch(() => {});
+          await invoke("lc_coach_disconnect", { channelId });
+        })
+        .catch(() => {});
     },
     get onopen() {
       return onopen;
@@ -208,7 +216,8 @@ export function createTauriCoachSocket(_url: string): WebSocketLike {
     ])
       .then(async ([{ invoke }, { listen }]) => {
         if (closed) return;
-        unlisten = await listen<string>("lc-coach-frame", (event) => {
+        unlisten = await listen<string>(`lc-coach-frame-${channelId}`, (event) => {
+          if (closed) return;
           const data =
             typeof event.payload === "string" ? event.payload : JSON.stringify(event.payload);
           onmessage?.({ data });
@@ -218,11 +227,15 @@ export function createTauriCoachSocket(_url: string): WebSocketLike {
           unlisten = null;
           return;
         }
-        await invoke("lc_coach_connect");
+        connecting = invoke("lc_coach_connect", { channelId });
+        await connecting;
         if (closed) return;
         onopen?.(null);
       })
-      .catch(() => onerror?.(null));
+      .catch(() => {
+        unlisten?.(); unlisten = null;
+        if (!closed) { onerror?.(null); socket.close(); }
+      });
   });
 
   return socket;
