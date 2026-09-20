@@ -487,6 +487,7 @@ export interface AgentChatMessage {
 }
 
 export interface AgentSidePanelProps {
+  showProcess?: boolean;
   open: boolean;
   mode: CoachMode;
   onModeChange: (mode: CoachMode) => void;
@@ -574,6 +575,7 @@ export interface AgentSidePanelProps {
 }
 
 export function AgentSidePanel({
+  showProcess = true,
   open,
   mode,
   onModeChange,
@@ -1471,6 +1473,7 @@ export function AgentSidePanel({
                 <span className="lc-agent-queued" aria-label="Queued message">Queued</span>
               )}
               <AgentTurnResponse pending={Boolean(message.pending)} events={message.processEvents}
+                showProcess={showProcess}
                 reasoning={message.reasoning} text={message.content} assistant={message.role === "assistant"}>
               {showsReplyStub(message, openThreadId) && (
                 /*

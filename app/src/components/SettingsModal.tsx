@@ -159,8 +159,8 @@ import { SettingsFacts, factsFromMessage } from "./SettingsFacts";
 type TabId = "workspace" | "personalise" | "ai" | "llm";
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: "personalise", label: "Personalise" },
-  { id: "ai", label: "AI Behavior" },
+  { id: "personalise", label: "Personalize" },
+  ...(FEATURE_LEETCODE ? [{ id: "ai" as const, label: "Leetcode Behavior" }] : []),
   ...(FEATURE_LEETCODE ? [{ id: "workspace" as const, label: "Workspace" }] : []),
   { id: "llm", label: "LLM" },
 ];
@@ -168,9 +168,10 @@ const TABS: { id: TabId; label: string }[] = [
 const SETTINGS_PAGE_TITLES: Record<string, string> = {
   paths: "Paths",
   datasets: "Datasets",
-  writing: "Writing settings",
-  reading: "Reading",
-  storage: "Storage Settings",
+  writing: "Annotate",
+  reading: "Scroll",
+  storage: "Storage",
+  ui: "UI",
   tests: "Test Cases",
   llm: "LLM",
 };
@@ -242,25 +243,20 @@ const COACH_FLAG_GROUPS: Array<{
 }> = [
   {
     id: "coach-knows",
-    title: "What the agent knows before it looks",
+    title: "Agent Planning",
     blurb:
-      "Extra model calls made once per problem, before your board is read. Both cost a call, so both start off.",
+      "Optional approach planning makes an extra model call per problem and starts off.",
     flags: [
       [
         "planner_enabled",
         "Plan the approaches first",
         "One call per problem, to the planner provider on the LLM tab, cataloging the approach families the problem admits — so a small local model is asked the narrow questions it is good at and a bigger one answers the broad one. Built from the statement and the sample cases only: it cannot reach a solution, and a test keeps it that way.",
       ],
-      [
-        "draw_review_enabled",
-        "Check drawn diagrams",
-        "After a diagram renders, look at the picture and redraw it once if it does not show what it claims. Needs a vision model on the viz provider.",
-      ],
     ],
   },
   {
     id: "coach-reads",
-    title: "How it reads your board",
+    title: "Agent Approach",
     blurb: "What the agent does when the board argues for something.",
     flags: [
       [
@@ -270,11 +266,9 @@ const COACH_FLAG_GROUPS: Array<{
       ],
     ],
   },
-  {
-    id: "coach-answers",
-    title: "How its answers arrive",
-    blurb: "Transport and transparency — neither changes what it says.",
-    flags: [
+];
+
+const SHARED_AGENT_FLAGS: Array<[keyof CoachFlags, string, string]> = [
       [
         "ws_runs",
         "Answer over the live connection",
@@ -283,10 +277,9 @@ const COACH_FLAG_GROUPS: Array<{
       [
         "process_events_ui",
         "Show what the agent is doing",
-        "A collapsible list of stages and diagram tool calls above each answer.",
+        "Show Thinking steps and tool activity in all chats, including saved messages. Does not hide the separate Reasoning fold or change model reasoning effort.",
       ],
-    ],
-  },
+      ["draw_review_enabled", "Check drawn diagrams", "Review a rendered diagram and correct it once when needed. All boards; needs a vision model and an extra model call."],
 ];
 
 /** What each coach mode is for, shown under its provider picker. */
@@ -1599,12 +1592,11 @@ export function SettingsModal({
 
           {tab === "personalise" && (
             <div className="lc-settings-fields">
-              <SettingsFold id="writing" title="Writing settings">
+              <SettingsFold id="writing" title="Annotate">
               <div className="lc-settings-subhead">Writing hand</div>
               <p className="lc-settings-hint">
-                Tilts the colour picker so swatches sit clear of your writing hand, and
-                mirrors the chrome — agent panel, board dock, toolbars and action sheets —
-                to the same side. Saved on this device only — not in <code>config.toml</code>.
+                Positions ink tools, colour wheels and the pen preset editor for your writing hand.
+                The rest of the app has a separate hand setting under UI. Saved on this device.
               </p>
               <div className="lc-settings-choice" role="radiogroup" aria-label="Writing hand">
                 <button
@@ -1619,7 +1611,7 @@ export function SettingsModal({
                   onClick={() => setHandedness("right")}
                 >
                   <strong>Right hand</strong>
-                  <span className="lc-muted">Chrome sits below-right of the tip, panels on the right.</span>
+                  <span className="lc-muted">Ink controls arranged for a right-handed writer.</span>
                 </button>
                 <button
                   type="button"
@@ -1633,7 +1625,7 @@ export function SettingsModal({
                   onClick={() => setHandedness("left")}
                 >
                   <strong>Left hand</strong>
-                  <span className="lc-muted">Chrome sits below-left of the tip, panels mirrored left.</span>
+                  <span className="lc-muted">Ink controls arranged for a left-handed writer.</span>
                 </button>
               </div>
 
@@ -2210,7 +2202,7 @@ export function SettingsModal({
               </div>
               </SettingsFold>
 
-              <SettingsFold id="reading" title="Reading">
+              <SettingsFold id="reading" title="Scroll">
               <div className="lc-settings-subhead">Flick-end pill</div>
               <p className="lc-settings-hint">
                 While a PDF is flicked, a small overlay can show the live page, the
@@ -2267,7 +2259,7 @@ export function SettingsModal({
               />
               </SettingsFold>
 
-              <SettingsFold id="storage" title="Storage Settings">
+              <SettingsFold id="storage" title="Storage">
               <div className="lc-settings-subhead">Devices</div>
               <p className="lc-settings-hint">
                 Personalise is per device. This one is {deviceRole()} ({loadDeviceId().slice(0, 8)}…).
@@ -2602,10 +2594,25 @@ export function SettingsModal({
               {indexWipe.kind === "done" && <SettingsFacts facts={indexWipe.facts} />}
               {indexWipe.kind === "failed" && <SettingsFacts facts={indexWipe.facts} error />}
               </SettingsFold>
+              <SettingsFold id="ui" title="UI">
+                <div className="lc-settings-subhead">Agent behavior</div>
+                <p className="lc-settings-hint">Shared by document, whiteboard and problem chats. Model reasoning effort stays in the chat composer.</p>
+                <div className="lc-settings-choice lc-settings-coach-flags">
+                  {SHARED_AGENT_FLAGS.map(([key, label, hint]) => (
+                    <button key={key} type="button" role="switch"
+                      aria-checked={(draft.coach ?? DEFAULT_COACH_FLAGS)[key]}
+                      className={(draft.coach ?? DEFAULT_COACH_FLAGS)[key] ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                      onClick={() => setDraft(prev => ({ ...prev, coach: { ...DEFAULT_COACH_FLAGS, ...prev.coach,
+                        [key]: !(prev.coach ?? DEFAULT_COACH_FLAGS)[key] } }))}>
+                      <strong>{label}</strong><span className="lc-muted">{hint}</span>
+                    </button>
+                  ))}
+                </div>
+              </SettingsFold>
             </div>
           )}
 
-          {tab === "ai" && (
+          {tab === "ai" && FEATURE_LEETCODE && (
             <div className="lc-settings-fields">
               {FEATURE_LEETCODE && (
               <SettingsFold id="tests" title="Test Cases">

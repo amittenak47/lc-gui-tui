@@ -236,7 +236,8 @@ approach per board. Most problems admit several, and an agent that quietly
 switches between them ends up arguing with itself. If your board changes enough
 to change the answer, it says so and says why.
 
-Two extras stay off until you turn them on in **Settings → AI Behavior**. A
+Two extras stay off until enabled: approach planning under **Settings → Leetcode Behavior**,
+and diagram review under **Settings → Personalize → UI**. A
 planner works out which approach families a problem admits before the local
 agent reads your board, and is worth pointing at a larger model. A diagram check
 looks at each rendered diagram and redraws it once if the picture does not show

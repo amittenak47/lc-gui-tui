@@ -6,13 +6,14 @@ import { AgentRichText } from "./AgentRichText";
 import { ThinkingDots } from "./ThinkingDots";
 
 /** Presentation state only. The canonical reply/events remain in the transcript. */
-export function AgentTurnResponse({ pending, events = [], reasoning, text, assistant, children }: {
+export function AgentTurnResponse({ pending, events = [], reasoning, text, assistant, children, showProcess = true }: {
+  showProcess?: boolean;
   pending: boolean; events?: CoachProcessEvent[]; reasoning?: string;
   text: string; assistant: boolean; children?: ReactNode;
 }) {
   const [phase, setPhase] = useState<"working" | "collapsing" | "answer">(pending ? "working" : "answer");
   const wasLive = useRef(pending);
-  const hasSteps = events.some(event => event.label !== "done" && !isReasoningEvent(event));
+  const hasSteps = showProcess && events.some(event => event.label !== "done" && !isReasoningEvent(event));
   const body = reasoningBodyForTurn(reasoning, events);
   const finishCollapse = useCallback(() => setPhase(current => current === "collapsing" ? "answer" : current), []);
   useEffect(() => {
@@ -23,12 +24,13 @@ export function AgentTurnResponse({ pending, events = [], reasoning, text, assis
     }
   }, [pending, phase, hasSteps]);
   useEffect(() => {
+    if (!hasSteps && phase === "collapsing") finishCollapse();
     if (phase !== "collapsing") return;
     // Backgrounding can suspend motion's RAF. Never strand a completed reply.
     const onHidden = () => { if (document.hidden) finishCollapse(); };
     document.addEventListener("visibilitychange", onHidden);
     return () => document.removeEventListener("visibilitychange", onHidden);
-  }, [phase, finishCollapse]);
+  }, [phase, finishCollapse, hasSteps]);
   const showAnswer = !pending && phase === "answer";
   return <>
     {(hasSteps || (body && showAnswer)) && <div className="lc-agent-think-stack">

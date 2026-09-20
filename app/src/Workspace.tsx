@@ -5792,7 +5792,7 @@ export function Workspace({
         return await socket.run<T>(action, payload, {
           signal: signal ?? undefined,
           onProcess: (event) => {
-            if (!signal?.aborted && messageId && coachFlags.process_events_ui) appendProcessEvent(messageId, event);
+            if (!signal?.aborted && messageId) appendProcessEvent(messageId, event);
           },
           onReasoning: (text) => {
             if (!signal?.aborted && messageId) appendReasoning(messageId, text);
@@ -10688,6 +10688,7 @@ export function Workspace({
       {active && headerSlots.agentPanel && !hubConflictAsk ? createPortal(<>
         {problem && !canvasLoading && (
           <AgentSidePanel
+            showProcess={coachFlags.process_events_ui}
             open={coachOpen}
             mode={mode}
             onModeChange={setMode}

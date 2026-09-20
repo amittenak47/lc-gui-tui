@@ -802,7 +802,7 @@ pub async fn run_ask(
         let mut store = state.board_sessions.lock().await;
         let session = store.entry(&board_key);
         let full = session.coach_context();
-        if cfg.coach.approach_commitment {
+        if local_pad || cfg.coach.approach_commitment {
             full
         } else {
             CoachContext {
