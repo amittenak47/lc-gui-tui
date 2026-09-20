@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { documentAskFields, sameDocumentView, type DocumentViewContext } from "./documentView";
+import { documentAskFields, documentImageContext, hasDocumentCapture, sameDocumentIdentity, sameDocumentView, type DocumentViewContext } from "./documentView";
 const view: DocumentViewContext = { document_hash: "book", title: "Book", format: "pdf", pages: [3, 4], text: "visible words", revision: "ink1", viewport: { x: 0, y: 10, width: 800, height: 600 } };
 describe("frozen document context", () => {
   it("retains visible pages and text independently of later navigation", () => {
@@ -14,5 +14,42 @@ describe("frozen document context", () => {
     expect(fields.page_text.length).toBeLessThan(12200);
     expect(fields.page_text).toContain("truncated");
     expect(fields.page_text).toContain("Image unavailable");
+  });
+  it("rejects a different pane even when camera and ink revisions match", () => {
+    const left = { ...view, paneId: "left" };
+    expect(sameDocumentView(left, { ...left, paneId: "right" })).toBe(false);
+    expect(sameDocumentView(left, { ...left, paneId: undefined })).toBe(false);
+    expect(sameDocumentView(left, structuredClone(left))).toBe(true);
+  });
+  it("rejects changed visible pages or extracted text during export", () => {
+    expect(sameDocumentView(view, { ...view, pages: [4, 5] })).toBe(false);
+    expect(sameDocumentView(view, { ...view, text: "newly loaded text" })).toBe(false);
+    expect(sameDocumentView(view, { ...view, viewport: { height: 600, width: 800, y: 10, x: 0 } })).toBe(true);
+  });
+  it("allows a frozen selection after scrolling, but rejects another source or pane", () => {
+    const seed = { ...view, paneId: "left" };
+    const scrolled = { ...seed, viewport: { ...view.viewport, y: 500 }, revision: "ink2" };
+    expect(sameDocumentIdentity(seed, scrolled)).toBe(true);
+    expect(sameDocumentView(seed, scrolled)).toBe(false);
+    expect(sameDocumentIdentity(seed, { ...seed, document_hash: "other-book" })).toBe(false);
+    expect(sameDocumentIdentity(seed, { ...seed, paneId: "right" })).toBe(false);
+  });
+  it("requires the selection's own PNG, not an unrelated photo or a removed capture", () => {
+    const seed = { ...view, documentCaptureId: "selection-1" };
+    const capture = { documentCaptureId: "selection-1", png: "selection-png" };
+    expect(hasDocumentCapture(seed, [capture])).toBe(true);
+    expect(hasDocumentCapture(seed, [{ png: "unrelated-photo" }])).toBe(false);
+    expect(hasDocumentCapture(seed, [{ ...capture, documentCaptureId: "selection-2" }])).toBe(false);
+    expect(hasDocumentCapture(seed, [{ ...capture, png: "" }])).toBe(false);
+    expect(hasDocumentCapture(view, [capture])).toBe(false);
+    const available = documentImageContext(seed, hasDocumentCapture(seed, [capture]));
+    expect(documentAskFields(available).page_text).not.toContain("Image unavailable");
+    const removed = documentImageContext(seed, hasDocumentCapture(seed, [{ png: "unrelated-photo" }]));
+    expect(documentAskFields(removed).page_text).toContain("Image unavailable");
+  });
+  it("preserves an existing limitation with an image and reports missing text and image", () => {
+    expect(documentImageContext({ ...view, limitation: "Some pages were omitted" }, true).limitation).toBe("Some pages were omitted");
+    expect(documentImageContext({ ...view, text: " " }, false).limitation).toContain("no readable extracted text or image");
+    expect(view.limitation).toBeUndefined();
   });
 });

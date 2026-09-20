@@ -408,7 +408,7 @@ import { loadChromeFate, mayClearParkedPreparing, BOOT_DONE_HOLD_MS, LOAD_FADE_M
 import { saveCaptureToDevice, describeCaptureResult } from "./util/capturePrefs";
 import { photoFromFile } from "./util/photoAttach";
 import { thumbnailFromPng } from "./util/photoAttach";
-import { documentAskFields, sameDocumentView, type DocumentViewContext } from "./modes/documentView";
+import { documentAskFields, documentImageContext, hasDocumentCapture, sameDocumentIdentity, sameDocumentView, type DocumentViewContext } from "./modes/documentView";
 import { freezeCoachAsk, askImages, type CoachAskPayload } from "./modes/coachAskPayload";
 import { CoachSendCoordinator } from "./modes/coachSendCoordinator";
 import { saveCoachRequest, loadCoachRequest } from "./modes/coachRequestStore";
@@ -6980,10 +6980,14 @@ export function Workspace({
       const origin = problem ? { surface: askSurface(problem), task_id: problem.task_id, dataset: problem.dataset } : undefined;
       const board = boardRef.current;
       const snapshot = !flags.documentView && source && board ? board.captureDocumentView() : null;
-      let view: DocumentViewContext | undefined = flags.documentView ?? (snapshot && source ? {
+      let view: DocumentViewContext | undefined = flags.documentView ? structuredClone(flags.documentView) : (snapshot && source ? {
         ...snapshot, text: snapshot.text.trim() || snapshot.pages.map(page => pageTextForAsk(source.hash, page)).filter(Boolean).join("\n\n"),
         document_hash: source.hash, title: source.name, format: source.docType,
       } : undefined);
+      const seedMatchesSource = () => !flags.documentView || Boolean(source && board && view &&
+        annotateSourceRef.current === source && boardRef.current === board &&
+        sameDocumentIdentity(view, { document_hash: source.hash, paneId: board.captureDocumentView().paneId }));
+      if (!seedMatchesSource()) throw new Error("The selected document or pane changed. Select the area again before sending.");
       const [viewImage, prepared] = await Promise.all([
         snapshot && board && modeHasVision("ask")
           ? withTimeout(board.exportViewThumb(), THUMB_EXPORT_TIMEOUT_MS, "Current-view capture timed out") : Promise.resolve(null),
@@ -6993,11 +6997,12 @@ export function Workspace({
           !sameDocumentView(snapshot, board!.captureDocumentView()))) {
         throw new Error("The document changed during capture. Please retry your question from the intended view.");
       }
-      if (view && !viewImage) view = { ...view, limitation: view.text.trim()
-        ? "Image unavailable; answer from the visible extracted text."
-        : "The current view has no readable extracted text or image. Ask for a capture before describing it." };
+      if (!seedMatchesSource()) throw new Error("The selected document or pane changed while preparing this question. Select the area again.");
+      if (view) view = documentImageContext(view, modeHasVision("ask") && (
+        flags.documentView ? hasDocumentCapture(view, prepared.attachments ?? []) : Boolean(viewImage?.png)
+      ));
       if (coordinator.tickets.get(id)?.controller.signal.aborted) return true;
-      if (snapshot && (annotateSourceRef.current !== source || !sameDocumentView(snapshot, board!.captureDocumentView()))) {
+      if (snapshot && (annotateSourceRef.current !== source || boardRef.current !== board || !sameDocumentView(snapshot, board!.captureDocumentView()))) {
         throw new Error("The document changed while preparing this question. Please send again from the intended view.");
       }
       const item: CoachSendQueueItem = { ...prepared, view, origin, userMessageId: id, threadAnchor: sendThreadAnchor(prepared, id),
@@ -8032,9 +8037,10 @@ export function Workspace({
       const photo = await photoFromFile(new File([blob], "Selection.png", { type: "image/png" }));
       if (annotateSourceRef.current !== source) throw new Error("Document changed; select again");
       pendingQuoteRef.current = selection;
+      const documentCaptureId = globalThis.crypto?.randomUUID?.() ?? `selection-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       setCoachQuoteSeed({ token: Date.now(), text: selection.text || selection.excerpt,
-        attachment: { label: photo.name, png: photo.png, thumb: photo.thumb },
-        view: { ...snapshot, text: selection.text || snapshot.text, document_hash: source.hash, title: source.name, format: source.docType },
+        attachment: { label: photo.name, png: photo.png, thumb: photo.thumb, documentCaptureId },
+        view: { ...snapshot, text: selection.text || snapshot.text, document_hash: source.hash, title: source.name, format: source.docType, documentCaptureId },
       });
       openCoachPanel();
       return true;

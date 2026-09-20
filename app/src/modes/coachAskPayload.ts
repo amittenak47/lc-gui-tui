@@ -7,7 +7,7 @@ export async function freezeCoachAsk<T extends FrozenAsk>(item: T | undefined, b
   if (item?.askPayload) return structuredClone(item.askPayload);
   const payload = structuredClone(build());
   if (item) { item.askPayload = payload; await save(item.userMessageId, item); }
-  return payload;
+  return structuredClone(payload);
 }
 export function askImages(photos: readonly { png: string }[], vision: boolean): string[] {
   return vision ? [...new Set(photos.map(photo => photo.png).filter(Boolean))] : [];

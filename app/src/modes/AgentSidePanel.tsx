@@ -418,6 +418,8 @@ export interface CoachPendingAck {
 
 export interface CoachAttachment {
   label: string;
+  /** Identity of the frozen document selection this PNG depicts. */
+  documentCaptureId?: string;
   /** Raw base64 PNG (no data: prefix). */
   png: string;
   /**
