@@ -220,7 +220,8 @@ import {
   shapeSpan,
   skeletonFromDrag,
 } from "./shapeGesture";
-import type { PaintSceneElement } from "./paintScene";
+import { paintSceneToExport, type PaintSceneElement, type PaintSceneFile } from "./paintScene";
+import { loadSceneImages } from "./sceneImages";
 import {
   INK_OVERDRAW_FRACTION,
   OVERDRAW_REBASE_HEADROOM,
@@ -691,10 +692,12 @@ async function exportSceneFrameBlob(
   /** See {@link exportBoardBlob}. Sets the composite scale here, not just Excalidraw's. */
   exportScale = 2,
   pageLayers: PageExportLayers | null = null,
+  excludeCoachViz = false,
 ): Promise<Blob> {
   const appState = { ...(api.getAppState() as object), exportScale } as Record<string, unknown>;
   const files = api.getFiles();
-  const all = api.getSceneElements() as SceneElementLike[];
+  const all = (api.getSceneElements() as SceneElementLike[]).filter(el =>
+    !el.isDeleted && !(excludeCoachViz && el.customData?.lcVizId));
   const paper = resolveExportPaperColor(
     (appState as { viewBackgroundColor?: string }).viewBackgroundColor,
     pageLayers?.paperColor ?? "#ffffff",
@@ -723,32 +726,14 @@ async function exportSceneFrameBlob(
   await compositePageLayers(ctx, bounds, drawScale, pageLayers);
 
   if (all.length > 0) {
-    const board = await exportToCanvas({
-      elements: all as never,
-      appState: {
-        ...(appState as object),
-        exportBackground: true,
-        viewBackgroundColor: paper,
-      } as never,
-      files: files as never,
-      exportPadding: 0,
+    // Paint directly into the bounded crop. An intermediate full-book canvas
+    // can exceed the browser limit and its opaque background hides page pixels.
+    const sceneFiles = files as Record<string, PaintSceneFile | undefined>;
+    const images = await loadSceneImages(all as PaintSceneElement[], sceneFiles);
+    paintSceneToExport(ctx, all, {
+      minX: frame.x, minY: frame.y, padding: 0, exportScale: drawScale,
+      files: sceneFiles, images,
     });
-    const [minX, minY, maxX, maxY] = getCommonBounds(all as never);
-    const boardBounds: SceneBounds = { minX, minY, maxX, maxY };
-    const boardScale = exportScaleFrom(board.width, board.height, boardBounds);
-    if (boardScale !== null) {
-      ctx.drawImage(
-        board,
-        (frame.x - minX) * boardScale,
-        (frame.y - minY) * boardScale,
-        frame.width * boardScale,
-        frame.height * boardScale,
-        0,
-        0,
-        width,
-        height,
-      );
-    }
   }
 
   const regionOps = ops.filter((op) =>
@@ -9099,29 +9084,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           height: viewH / zoom,
         };
 
-        const all = api.getSceneElements() as SceneElementLike[];
         const ops = rasterInkRef.current?.getOps() ?? [];
-        /*
-         * Anything *overlapping* the crop, not only what is centred in it.
-         *
-         * A region crop is a window onto a page, so a paragraph or a stroke that
-         * runs off the top of the screen is still part of what the reader is
-         * looking at — dropping it because its midpoint is above the fold would
-         * cut the sentence the question is about.
-         */
-        const visible = all.filter((el) => {
-          if (el.isDeleted) return false;
-          if (el.customData?.lcVizId) return false;
-          return (
-            el.x <= crop.x + crop.width &&
-            el.y <= crop.y + crop.height &&
-            el.x + el.width >= crop.x &&
-            el.y + el.height >= crop.y
-          );
-        });
-
+        // The visible page frame spans the entire book. exportRegionBlob unions
+        // element/page bounds and shrank hundreds of pages to a 4px-wide image.
+        // A viewport is an exact crop, not a region whose contents can expand it.
         const png = await captureImage(
-          () => exportRegionBlob(api, ops, visible, crop, 1, pageExportLayers()),
+          () => exportSceneFrameBlob(api, ops, crop, 1, pageExportLayers(), true),
           { maxEdge: 1600, maxBase64: 2 * 1024 * 1024 },
         );
         return png ? { label: "This view", png } : null;

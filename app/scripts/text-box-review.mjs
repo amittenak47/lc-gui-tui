@@ -68,7 +68,48 @@ try {
     await sleep(100);
   }
   assert(await evaluate("Boolean(window.reviewReady)"), `Board not ready: ${JSON.stringify({ errors, requests: [...requests.values()], body: await evaluate('document.body.innerText.slice(0,500)') })}`);
-  if (process.argv.includes("--identity")) {
+  if (process.argv.includes("--scroll-audit")) {
+    await evaluate(`window.reviewDocument('long-markdown')`);
+    await sleep(1600);
+    const text = await evaluate(`(()=>{const p=document.querySelector('.lc-md-ink-doc p');const r=p.getBoundingClientRect();return {x:r.left+15,y:r.top+10};})()`);
+    await send("Input.dispatchMouseEvent", {type:"mousePressed",button:"left",clickCount:1,...text});
+    for(let i=1;i<=12;i++)await send("Input.dispatchMouseEvent", {type:"mouseMoved",button:"left",buttons:1,x:text.x+i*12,y:text.y});
+    await send("Input.dispatchMouseEvent", {type:"mouseReleased",button:"left",clickCount:1,x:text.x+144,y:text.y});
+    assert((await evaluate(`window.getSelection()?.toString() || ''`)).length>3, 'Mouse prose drag must select text');
+    await evaluate(`window.getSelection()?.removeAllRanges()`);
+    const before=await evaluate(`window.reviewCurrentBoard().captureDocumentView().viewport.y`);
+    await send("Input.dispatchMouseEvent",{type:"mouseWheel",x:600,y:400,deltaY:500,deltaX:0});
+    await sleep(600);
+    const wheeled=await evaluate(`window.reviewCurrentBoard().captureDocumentView().viewport.y`);
+    assert(wheeled>before+10,'Wheel must scroll after native text selection');
+    await send("Input.dispatchTouchEvent",{type:"touchStart",touchPoints:[{x:600,y:550}]});
+    for(let i=1;i<=10;i++){await send("Input.dispatchTouchEvent",{type:"touchMove",touchPoints:[{x:600,y:550-i*18}]});await sleep(16);}
+    await send("Input.dispatchTouchEvent",{type:"touchEnd",touchPoints:[]});await sleep(650);
+    const touched=await evaluate(`window.reviewCurrentBoard().captureDocumentView().viewport.y`);
+    assert(touched>wheeled+10,'Touch prose drag must still pan');
+    console.log(JSON.stringify({nativeMouseSelection:true,wheelDelta:wheeled-before,touchDelta:touched-wheeled}));
+  } else if (process.argv.includes("--capture")) {
+    for (const format of ["pdf", "markdown", "epub", "long-markdown"]) {
+      await evaluate(`window.reviewDocument(${JSON.stringify(format)})`);
+      await sleep(1800);
+      const capture = await evaluate(`(async()=>{
+        const board=window.reviewCurrentBoard();
+        const view=board.captureDocumentView();
+        const thumb=await board.exportViewThumb();
+        const image=new Image();image.src=thumb.png.startsWith('data:')?thumb.png:'data:image/png;base64,'+thumb.png;await image.decode();
+        const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
+        const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0);
+        const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+        const colors=new Set();for(let i=0;i<pixels.length;i+=4)colors.add(pixels[i]+','+pixels[i+1]+','+pixels[i+2]);
+        return {png:thumb.png,width:image.width,height:image.height,view,colors:colors.size};
+      })()`);
+      assert(Math.abs(capture.width/capture.height - capture.view.viewport.width/capture.view.viewport.height)<0.015,
+        `${format}: viewport crop expanded to document bounds`);
+      assert(capture.colors>20, `${format}: blank capture (${capture.colors} colors)`);
+      await writeFile(resolve(out, `capture-${format}.png`), Buffer.from(capture.png.replace(/^data:[^,]+,/,""),"base64"));
+      console.log(`${format}: ${capture.width}x${capture.height}, ${capture.colors} colors`);
+    }
+  } else if (process.argv.includes("--identity")) {
     await evaluate("window.beforeRerender = window.reviewCurrentBoard(); window.reviewTheme('paper')");
     for (let i = 0; i < 100; i++) {
       if (await evaluate("window.reviewCurrentBoard() !== window.beforeRerender")) break;

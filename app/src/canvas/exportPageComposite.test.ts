@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { compositePageLayers, resolveExportPaperColor } from "./exportPageComposite";
 
@@ -24,6 +24,42 @@ describe("resolveExportPaperColor", () => {
 });
 
 describe("compositePageLayers", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("loads DOM layers as self-contained XML data images, not tainting blob URLs", async () => {
+    const sources: string[] = [];
+    vi.stubGlobal("Image", class {
+      onload?: () => void;
+      set src(value: string) { sources.push(value); queueMicrotask(() => this.onload?.()); }
+    });
+    const slot = document.createElement("div");
+    slot.innerHTML = '<p>Selection α<br>second line</p>';
+    const bounds = { minX: 0, minY: 0, maxX: 200, maxY: 100 };
+    const drawImage = vi.fn();
+    await compositePageLayers({ drawImage } as unknown as CanvasRenderingContext2D, bounds, 1,
+      { contentSlot: slot, marksSlot: slot, pageBounds: bounds, paperColor: "#fff" });
+    expect(sources).toHaveLength(2);
+    for (const source of sources) {
+      expect(source).toMatch(/^data:image\/svg\+xml;charset=utf-8,/);
+      const xml = decodeURIComponent(source.slice(source.indexOf(",") + 1));
+      const parsed = new DOMParser().parseFromString(xml, "image/svg+xml");
+      expect(parsed.querySelector("parsererror")).toBeNull();
+      expect(parsed.querySelector("p")?.textContent).toBe("Selection αsecond line");
+    }
+    expect(drawImage).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a failed document raster instead of exporting blank paper", async () => {
+    vi.stubGlobal("Image", class {
+      onerror?: () => void;
+      set src(_value: string) { queueMicrotask(() => this.onerror?.()); }
+    });
+    const bounds = { minX: 0, minY: 0, maxX: 200, maxY: 100 };
+    await expect(compositePageLayers({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D, bounds, 1,
+      { contentSlot: document.createElement("div"), marksSlot: null, pageBounds: bounds, paperColor: "#fff" }))
+      .rejects.toThrow("export layer image failed");
+  });
+
   it("no-ops without page bounds", async () => {
     await expect(
       compositePageLayers(

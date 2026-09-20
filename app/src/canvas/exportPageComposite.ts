@@ -94,7 +94,6 @@ async function drawDomSlot(
 
   const css = collectStylesheetText();
   const wrapper = document.createElement("div");
-  wrapper.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
   wrapper.style.width = `${pageBounds.maxX - pageBounds.minX}px`;
   wrapper.style.height = `${pageBounds.maxY - pageBounds.minY}px`;
   wrapper.style.position = "relative";
@@ -107,22 +106,19 @@ async function drawDomSlot(
     `viewBox="${localX} ${localY} ${sceneW} ${sceneH}">` +
     `<style type="text/css"><![CDATA[${css}]]></style>` +
     `<foreignObject x="0" y="0" width="${pageBounds.maxX - pageBounds.minX}" ` +
-    `height="${pageBounds.maxY - pageBounds.minY}">${wrapper.outerHTML}</foreignObject></svg>`;
+    `height="${pageBounds.maxY - pageBounds.minY}">${new XMLSerializer().serializeToString(wrapper)}</foreignObject></svg>`;
 
-  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  try {
-    const img = await loadImage(url);
-    const dx = (overlap.minX - exportBounds.minX) * drawScale;
-    const dy = (overlap.minY - exportBounds.minY) * drawScale;
-    ctx.drawImage(img, dx, dy, pixelW, pixelH);
-    return true;
-  } catch (cause) {
-    console.warn("[lc-export] drawDomSlot failed", cause);
-    return false;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  // Chromium/WebView marks a blob-backed SVG containing foreignObject as
+  // origin-unclean even when every node is local. Drawing it succeeds, but the
+  // final PNG encode then throws SecurityError (including otherwise clean PDF
+  // captures with a marks layer). A self-contained data SVG stays exportable.
+  // XML serialization also closes HTML void elements for the SVG image parser.
+  const img = await loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+  const dx = (overlap.minX - exportBounds.minX) * drawScale;
+  const dy = (overlap.minY - exportBounds.minY) * drawScale;
+  ctx.drawImage(img, dx, dy, pixelW, pixelH);
+  // Do not turn a failed document layer into a successful blank screenshot.
+  return true;
 }
 
 /**

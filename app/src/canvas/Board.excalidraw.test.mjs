@@ -6,6 +6,25 @@ import { describe, expect, it } from "vitest";
 const here = dirname(fileURLToPath(import.meta.url));
 
 describe("Board", () => {
+  it("captures a viewport without unioning the entire document frame", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const view = src.slice(src.indexOf("exportViewThumb: async"), src.indexOf("exportVizPng:"));
+    expect(view).toContain("exportSceneFrameBlob(api, ops, crop, 1, pageExportLayers(), true)");
+    expect(view).not.toMatch(/\(\) => exportRegionBlob/);
+    const crop = src.slice(src.indexOf("async function exportSceneFrameBlob"), src.indexOf("function newImageFileId"));
+    expect(crop).toContain("paintSceneToExport(ctx, all");
+    expect(crop).not.toContain("await exportToCanvas");
+  });
+
+  it("retains native mouse text selection and filtered nested-scroll observation", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    expect(src).toMatch(/event\.pointerType === "mouse" &&\s*!onPdfDoc &&\s*pointerOnSelectableText/);
+    expect(src).toContain("if (!mutationAffectsScrollHosts(records)) return");
+    expect(src).not.toContain("measuredAnnotatePageHeight");
+    const heightObserver = src.slice(src.indexOf("Ask the document how tall it is"), src.indexOf("const syncDocumentScrollBounds"));
+    expect(heightObserver).toContain("new ResizeObserver");
+    expect(heightObserver).not.toContain("MutationObserver");
+  });
   it("does not import or mount Excalidraw", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     expect(src).not.toMatch(/from\s+["']@excalidraw\/excalidraw["']/);
