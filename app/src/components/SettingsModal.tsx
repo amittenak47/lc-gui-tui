@@ -152,6 +152,7 @@ import {
 } from "../util/devicePrefs";
 import { FEATURE_LEETCODE } from "../featureFlags";
 import { loadUiHandedness, saveUiHandedness, type UiHandedness } from "../util/uiHandedness";
+import { loadAgentDisplayPrefs, saveAgentDisplayPrefs, type AgentDisplayPrefs } from "../util/agentDisplayPrefs";
 import { PAD_HUB_EVENT, loadSavedPadHub, savePadHub } from "../util/padHub";
 import { compareIndexFacts, indexFacts } from "../util/indexReport";
 import type { SettingsFact } from "../util/settingsFacts";
@@ -420,6 +421,7 @@ function emptyConfig(): LcConfig {
 
 /** Device-only prefs edited in Personalise — deferred until Save like config.toml. */
 interface DevicePrefs {
+  agentDisplay: AgentDisplayPrefs;
   uiHandedness: UiHandedness;
   handedness: InkHandedness;
   /**
@@ -484,6 +486,7 @@ interface DevicePrefs {
 
 function loadDevicePrefs(): DevicePrefs {
   return {
+    agentDisplay: loadAgentDisplayPrefs(),
     uiHandedness: loadUiHandedness(),
     handedness: loadInkHandedness(),
     testForward: loadTestForwardMode(),
@@ -521,6 +524,9 @@ function loadDevicePrefs(): DevicePrefs {
 
 function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
   return (
+    a.agentDisplay.autoCollapseThinking === b.agentDisplay.autoCollapseThinking &&
+    a.agentDisplay.collapseThinkingSteps === b.agentDisplay.collapseThinkingSteps &&
+    a.agentDisplay.colorThinkingSteps === b.agentDisplay.colorThinkingSteps &&
     a.uiHandedness === b.uiHandedness &&
     a.handedness === b.handedness &&
     a.testForward === b.testForward &&
@@ -852,6 +858,7 @@ export function SettingsModal({
   const [bootNotice, setBootNotice] = useState<string | null>(null);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [uiHandedness, setUiHandedness] = useState<UiHandedness>(loadUiHandedness);
+  const [agentDisplay, setAgentDisplay] = useState(loadAgentDisplayPrefs);
   const [colorWheelOnToolbar, setColorWheelOnToolbar] = useState(
     () => loadInkToolPresets().colorWheelOnToolbar,
   );
@@ -1077,6 +1084,7 @@ export function SettingsModal({
     const prefs = loadDevicePrefs();
     setHandedness(prefs.handedness);
     setUiHandedness(prefs.uiHandedness);
+    setAgentDisplay(prefs.agentDisplay);
     setTestForward(prefs.testForward);
     setCaptureMode(prefs.captureMode);
     setCaptureDestination(prefs.captureDestination);
@@ -1178,6 +1186,7 @@ export function SettingsModal({
   if (!open) return null;
 
   const draftPrefs: DevicePrefs = {
+    agentDisplay,
     uiHandedness,
     handedness,
     testForward,
@@ -1250,6 +1259,7 @@ export function SettingsModal({
       if (prefsDirty) {
         saveInkHandedness(handedness);
         saveUiHandedness(uiHandedness);
+        saveAgentDisplayPrefs(agentDisplay);
         saveTestForwardMode(testForward);
         saveCaptureMode(captureMode);
         saveCaptureDestination(captureDestination);
@@ -2611,6 +2621,17 @@ export function SettingsModal({
                     onClick={() => setUiHandedness(hand)}><strong>{hand === "right" ? "Right hand" : "Left hand"}</strong></button>)}
                 </div>
                 <div className="lc-settings-subhead">Agent behavior</div>
+                <div className="lc-settings-choice" aria-label="Thinking display">
+                  {([
+                    ["autoCollapseThinking", "Auto-collapse Thinking when the answer arrives", "Off keeps Thinking open so you can continue reading."],
+                    ["collapseThinkingSteps", "Start Thinking steps collapsed", "Off shows full bullet text. Each bullet opens independently; several can stay open."],
+                    ["colorThinkingSteps", "Color-code Thinking bullets", "Stable accents for each step; turn off for neutral markers."],
+                  ] as const).map(([key, label, hint]) => <button key={key} type="button" role="switch"
+                    aria-checked={agentDisplay[key]} className={agentDisplay[key] ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                    onClick={() => setAgentDisplay(prefs => ({ ...prefs, [key]: !prefs[key] }))}>
+                    <strong>{label}</strong><span className="lc-muted">{hint}</span>
+                  </button>)}
+                </div>
                 <p className="lc-settings-hint">Shared by document, whiteboard and problem chats. Model reasoning effort stays in the chat composer.</p>
                 <div className="lc-settings-choice lc-settings-coach-flags">
                   {SHARED_AGENT_FLAGS.map(([key, label, hint]) => (

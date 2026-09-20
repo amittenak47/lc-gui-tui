@@ -3,6 +3,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AgentTurnResponse } from "./AgentTurnResponse";
+import { DEFAULT_AGENT_DISPLAY_PREFS } from "../util/agentDisplayPrefs";
 
 // Control the actual disclosure-completion boundary, not a guessed timeout.
 vi.mock("../components/AnimatedDisclosure", () => ({ AnimatedDisclosure: ({open,children,onExitComplete}: {
@@ -15,8 +16,21 @@ beforeEach(()=>{
   host=document.createElement("div");document.body.append(host);root=createRoot(host);
 });
 afterEach(()=>{act(()=>root.unmount());host.remove();vi.useRealTimers();vi.unstubAllGlobals();});
-const render=(pending:boolean,text="",withSteps=true)=>act(()=>root.render(<AgentTurnResponse
-  pending={pending} text={text} assistant events={withSteps?events:[]} reasoning="Provider reasoning." />));
+const render=(pending:boolean,text="",withSteps=true,autoCollapseThinking=true,showProcess=true)=>act(()=>root.render(<AgentTurnResponse
+  pending={pending} text={text} assistant events={withSteps?events:[]} reasoning="Provider reasoning."
+  showProcess={showProcess} displayPrefs={{...DEFAULT_AGENT_DISPLAY_PREFS,autoCollapseThinking}} />));
+
+it("keeps full Thinking open by default as the answer arrives",()=>{
+  render(true,"",true,false); render(false,"Answer",true,false);
+  expect(host.querySelector('.lc-agent-process-toggle')?.getAttribute('aria-expanded')).toBe('true');
+  expect(host.querySelector('.lc-agent-process-step-toggle')?.getAttribute('aria-expanded')).toBe('true');
+  expect(host.querySelector('.lc-agent-turn-body')).not.toBeNull();
+});
+it("never waits for a hidden progress section to fold",()=>{
+  render(true,"",true,true,false); render(false,"Answer",true,true,false);
+  expect(host.querySelector('.lc-agent-process')).toBeNull();
+  expect(host.querySelector('.lc-agent-turn-body')).not.toBeNull();
+});
 
 it("places full live steps above dots, folds, then reveals the answer",()=>{
   render(true);

@@ -19469,6 +19469,13 @@ button.lc-row-selected:hover:not(:disabled) {
   display: block; width: 11px; height: 11px; border-radius: 50%; background: #cf4c4c;
 }
 .lc-agent-tray-dot[data-online="true"] > span { background: #39a86b; }
+/* Each thought has one body and an independent, keyboard-operable disclosure. */
+.lc-agent-process-steps .lc-agent-process-step { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; }
+.lc-agent-process-step-toggle { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 2px; min-height: 28px; }
+.lc-agent-process-step-content { min-width: 0; cursor: pointer; }
+.lc-agent-process-step-content a { cursor: pointer; }
+.lc-agent-process-step-content pre, .lc-agent-process-step-content code { cursor: text; }
+.lc-agent-process-step-excerpt { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* UI hand moves app chrome; writing hand remains independent. */
 [data-ui-handedness="left"] .lc-header,
 [data-ui-handedness="left"] .lc-mobile.lc-app-problem .lc-header {

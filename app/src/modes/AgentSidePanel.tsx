@@ -21,6 +21,8 @@ import { useAgentSheet } from "./useAgentSheet";
 import { useWordReveal } from "./AgentRichText";
 import { AgentTurnResponse } from "./AgentTurnResponse";
 import { useChatFollow } from "./useChatFollow";
+import { useAgentDisplayPrefs } from "../util/agentDisplayPrefs";
+import { newThinkingDisclosure, type ThinkingDisclosureState } from "./thinkingDisplay";
 import { AgentMessageBubble } from "./AgentMessageBubble";
 import {
   cycleAgentReasoning,
@@ -607,6 +609,17 @@ export function AgentSidePanel({
   children,
 
 }: AgentSidePanelProps) {
+  const displayPrefs = useAgentDisplayPrefs();
+  const thinkingDisclosures = useRef(new Map<string, ThinkingDisclosureState>());
+  useEffect(() => {
+    const ids = new Set(messages.map(message => message.id));
+    for (const id of thinkingDisclosures.current.keys()) if (!ids.has(id)) thinkingDisclosures.current.delete(id);
+  }, [messages]);
+  const disclosureFor = (id: string) => {
+    let state = thinkingDisclosures.current.get(id);
+    if (!state) { state = newThinkingDisclosure(); thinkingDisclosures.current.set(id, state); }
+    return state;
+  };
   const mobile = useIsMobile();
   const setOpen = useCallback(
     (next: boolean) => {
@@ -1474,6 +1487,7 @@ export function AgentSidePanel({
               )}
               <AgentTurnResponse pending={Boolean(message.pending)} events={message.processEvents}
                 showProcess={showProcess}
+                displayPrefs={displayPrefs} disclosure={disclosureFor(message.id)}
                 reasoning={message.reasoning} text={message.content} assistant={message.role === "assistant"}>
               {showsReplyStub(message, openThreadId) && (
                 /*

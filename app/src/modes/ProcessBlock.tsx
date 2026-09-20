@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useId, useReducer, useRef } from "react";
 
 import { STAGE_LABELS, type CoachProcessEvent } from "../api/types";
 import { AgentRichText } from "./AgentRichText";
 import { AnimatedDisclosure } from "../components/AnimatedDisclosure";
+import { DEFAULT_AGENT_DISPLAY_PREFS, type AgentDisplayPrefs } from "../util/agentDisplayPrefs";
+import { newThinkingDisclosure, thinkingStepKey, type ThinkingDisclosureState } from "./thinkingDisplay";
 
 export const DOC_TOOL_LABELS: Record<string, string> = {
   query_document_vectors: "searching the book",
@@ -75,10 +77,6 @@ export function processLine(event: CoachProcessEvent | undefined): string {
   return STAGE_LABELS[event.label] ?? event.detail ?? event.label;
 }
 
-function eventKey(event: CoachProcessEvent, index: number): string {
-  return event.updateId ?? `${event.ts}-${index}-${event.label}`;
-}
-
 /**
  * What the coach did, one line per stage or tool call.
  *
@@ -89,21 +87,25 @@ export function ProcessBlock({
   events,
   running,
   onCollapsed,
+  displayPrefs = DEFAULT_AGENT_DISPLAY_PREFS,
+  disclosure,
+  collapse = false,
 }: {
   events: CoachProcessEvent[];
   running: boolean;
   onCollapsed?: () => void;
+  displayPrefs?: AgentDisplayPrefs;
+  disclosure?: ThinkingDisclosureState;
+  collapse?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const [openKey, setOpenKey] = useState<string | null>(null);
+  const localState = useRef(newThinkingDisclosure());
+  const state = disclosure ?? localState.current;
+  const [, redraw] = useReducer(value => value + 1, 0);
+  const regionId = useId();
   const shown = events.filter(
     (event) => event.label !== "done" && !isReasoningEvent(event),
   );
-  const expanded = running || open;
-  useEffect(() => {
-    // A completed live turn always folds first. Restored history starts folded.
-    setOpen(false); setOpenKey(null);
-  }, [running]);
+  const expanded = state.sectionOpen ?? !(collapse || (!running && displayPrefs.autoCollapseThinking));
   const visible = shown;
   if (shown.length === 0) return null;
 
@@ -113,8 +115,12 @@ export function ProcessBlock({
         type="button"
         className="lc-agent-process-toggle"
         aria-expanded={expanded}
-        disabled={running}
-        onClick={() => setOpen((current) => !current)}
+        aria-controls={regionId}
+        onClick={() => {
+          state.sectionOpen = !expanded; redraw();
+          // Manual expansion must not strand an answer waiting for an exit.
+          if (!expanded) onCollapsed?.();
+        }}
       >
         {running && <span className="lc-agent-spinner" aria-hidden />}
         <span className="lc-agent-process-chevron" aria-hidden />
@@ -123,11 +129,13 @@ export function ProcessBlock({
         </span>
       </button>
       <AnimatedDisclosure open={expanded} onExitComplete={onCollapsed} animateInitial={running}>
-        <ol className="lc-agent-process-steps">
+        <ol id={regionId} className="lc-agent-process-steps">
             {visible.map((event, index) => {
-              const key = eventKey(event, index);
+              const key = thinkingStepKey(event, index);
               const body = event.detail?.trim() ?? "";
-              const canOpen = body.length > 0 && body !== processLine(event);
+              const stepOpen = state.steps[key] ?? !displayPrefs.collapseThinkingSteps;
+              const toggle = () => { state.steps[key] = !stepOpen; redraw(); };
+              const contentId = `${regionId}-step-${index}`;
               // Provider deltas already arrive incrementally. Do not delay
               // them with a reveal timer that each incoming delta resets.
               const revealBufferedStep = !event.updateId;
@@ -138,26 +146,28 @@ export function ProcessBlock({
                     "lc-agent-process-step",
                     event.status === "rejected" ? "lc-agent-process-step-rejected" : "",
                     running && index === visible.length - 1 ? "lc-agent-process-step-current" : "",
-                    openKey === key ? "is-open" : "",
+                    stepOpen ? "is-open" : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
+                  onClick={event => {
+                    const target = event.target as HTMLElement;
+                    if (target.closest("button, a, input, textarea, select, [contenteditable]")) return;
+                    if (window.getSelection()?.toString()) return;
+                    toggle();
+                  }}
                 >
-                  {running ? <AgentRichText text={body || processLine(event)}
-                    animate={revealBufferedStep} animateInitial={revealBufferedStep}
-                    className="lc-agent-process-step-body" /> : <><button
+                  <button
                     type="button"
-                    className="lc-agent-process-step-btn"
-                    aria-expanded={openKey === key}
-                    disabled={!canOpen}
-                    onClick={() => setOpenKey((current) => (current === key ? null : key))}
-                  >
-                    {processLine(event)}
-                  </button>
-                  {canOpen && openKey === key ? (
-                    <AgentRichText text={body} animate animateInitial={running}
-                      className="lc-agent-process-step-body" />
-                  ) : null}</>}
+                    className="lc-agent-process-step-toggle"
+                    aria-label={`${stepOpen ? "Collapse" : "Expand"} thought ${index + 1}`}
+                    aria-expanded={stepOpen} aria-controls={contentId} onClick={toggle}
+                  ><span aria-hidden>{stepOpen ? "▾" : "▸"}</span></button>
+                  <div id={contentId} className="lc-agent-process-step-content">
+                    {stepOpen ? <AgentRichText text={body || processLine(event)}
+                      animate={running && revealBufferedStep} animateInitial={running && revealBufferedStep && !(key in state.steps)}
+                      className="lc-agent-process-step-body" /> : <span className="lc-agent-process-step-excerpt">{processLine(event)}</span>}
+                  </div>
                 </li>
               );
             })}
