@@ -1,83 +1,18 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Tip } from "../components/Tip";
-import { artifactRefKey, type ArtifactKind, type ArtifactRef } from "../util/padArtifacts";
+import { artifactRefKey, type ArtifactRef } from "../util/padArtifacts";
 import { ARTIFACTS_CHANGED, readArtifact } from "../util/artifactRepository";
+import { ArtifactKindIcon, artifactKindLabel } from "./ArtifactKindIcon";
 import "./artifacts.css";
-
-function KindGlyph({ children }: { children: ReactNode }) {
-  return (
-    <svg className="lc-artifact-line-glyph" viewBox="0 0 16 16" aria-hidden>
-      {children}
-    </svg>
-  );
-}
-
-function BoardGlyph() {
-  return (
-    <KindGlyph>
-      <rect x="2.6" y="3.5" width="10.8" height="9" rx="1.3" fill="none" stroke="currentColor" strokeWidth="1.35" />
-      <path
-        d="M5.1 9.3c.7-1.5 1.7-2.3 2.6-1.2.9 1.1 1.6.2 2.5-1.4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        strokeLinecap="round"
-      />
-    </KindGlyph>
-  );
-}
-
-function NoteGlyph() {
-  return (
-    <KindGlyph>
-      <path d="M4.2 2.8h5.3L11.8 5.2v8H4.2V2.8Z" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinejoin="round" />
-      <path
-        d="M9.5 2.9v2.4h2.2M6 8.3h4M6 10.5h2.7"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </KindGlyph>
-  );
-}
-
-function CodeGlyph() {
-  return (
-    <KindGlyph>
-      <path
-        d="M6.2 4.5 2.9 8l3.3 3.5M9.8 4.5 13.1 8l-3.3 3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </KindGlyph>
-  );
-}
 
 function FailGlyph() {
   return (
-    <KindGlyph>
+    <svg className="lc-artifact-line-glyph" viewBox="0 0 16 16" aria-hidden>
       <circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
       <path d="M8 4.7v4.1" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" />
       <circle cx="8" cy="11.15" r="0.85" fill="currentColor" />
-    </KindGlyph>
+    </svg>
   );
-}
-
-function kindGlyph(kind: ArtifactKind) {
-  if (kind === "whiteboard") return <BoardGlyph />;
-  if (kind === "code") return <CodeGlyph />;
-  return <NoteGlyph />;
-}
-
-function kindLabel(kind: ArtifactKind) {
-  if (kind === "whiteboard") return "Board";
-  if (kind === "code") return "Code";
-  return "Note";
 }
 
 function readError(cause: unknown) {
@@ -132,8 +67,8 @@ function ArtifactCard({ reference, onOpen }: { reference: ArtifactRef; onOpen: (
 
   const failed = Boolean(error);
   const label = failed
-    ? `${kindLabel(reference.kind)} attachment error`
-    : `Open ${kindLabel(reference.kind).toLowerCase()}`;
+    ? `${artifactKindLabel(reference.kind)} attachment error`
+    : `Open ${artifactKindLabel(reference.kind).toLowerCase()}`;
   const icon = (
     <button
       ref={anchor}
@@ -147,7 +82,7 @@ function ArtifactCard({ reference, onOpen }: { reference: ArtifactRef; onOpen: (
         onOpen(reference);
       }}
     >
-      {failed ? <FailGlyph /> : kindGlyph(reference.kind)}
+      {failed ? <FailGlyph /> : <ArtifactKindIcon kind={reference.kind} className="lc-artifact-line-glyph" />}
     </button>
   );
 

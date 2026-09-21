@@ -1,10 +1,124 @@
-.lc-artifact-workspace { display: flex; flex-direction: column; background: var(--lc-bg, #252a32); min-height: 0; }
-.lc-artifact-overlay { position: fixed; inset: max(70px, env(safe-area-inset-top)) 2vw 2vh; z-index: 1500; border: 1px solid #7d899b; border-radius: 12px; box-shadow: 0 12px 60px #0009; overflow: hidden; }
-.lc-artifact-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; align-items: center; }
-.lc-artifact-actions input { flex: 1; min-width: 120px; }
-.lc-artifact-actions button { min-height: 40px; }
-.lc-artifact-canvas { flex: 1; position: relative; min-height: 180px; overflow: hidden; }
-.lc-artifact-workspace > small, .lc-artifact-workspace > p { padding: 4px 12px; margin: 0; }
+.lc-artifact-workspace {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.lc-settings-backdrop.lc-artifact-editor-backdrop {
+  z-index: 11000;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: max(12px, env(safe-area-inset-top)) 12px 12px;
+}
+
+.lc-artifact-overlay {
+  position: relative;
+  width: min(1100px, 100%);
+  height: 100%;
+  max-height: 100%;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 28%);
+  overflow: hidden;
+  animation: lc-board-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lc-artifact-chrome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--chrome-edge);
+  background: var(--panel);
+}
+
+.lc-artifact-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--hint);
+  flex-shrink: 0;
+}
+
+.lc-artifact-kind-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.lc-artifact-title {
+  flex: 1;
+  min-width: 120px;
+  min-height: 28px;
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 7px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}
+
+.lc-artifact-title:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.lc-artifact-pages {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.lc-artifact-chrome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.lc-artifact-chrome button,
+.lc-artifact-pages button {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.lc-artifact-pages button {
+  min-width: 28px;
+  padding: 0;
+}
+
+.lc-artifact-canvas {
+  flex: 1;
+  position: relative;
+  min-height: 180px;
+  overflow: hidden;
+}
+
+.lc-artifact-status {
+  margin: 0;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.lc-artifact-workspace > .lc-warning {
+  margin: 0;
+  padding: 6px 12px;
+}
 .lc-artifact-cards { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 0; }
 .lc-artifact-save-notice {
   align-self: flex-end;
@@ -293,20 +407,31 @@
 
 .lc-artifact-picker-row {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 0;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
 }
 
 .lc-artifact-picker-row-main {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   min-width: 0;
+  flex: 1;
 }
 
-.lc-artifact-picker-kind,
+.lc-artifact-picker-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--hint);
+  flex-shrink: 0;
+}
+
 .lc-artifact-picker-status {
   font-size: 10px;
   letter-spacing: 0.04em;

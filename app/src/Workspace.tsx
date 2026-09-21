@@ -435,6 +435,7 @@ interface CoachSendQueueItem {
   origin?: { surface: "whiteboard" | "annotate" | "problem"; task_id: string; dataset: string };
   text: string;
   flags: AgentSendFlags;
+  flagBits?: string[];
   userMessageId: string;
   prompt: string;
   attachments?: AgentChatMessage["attachments"];
@@ -7013,7 +7014,8 @@ export function Workspace({
 
   const enqueueCoachSend = useCallback(async (text: string, flags: AgentSendFlags) => {
     const id = pushCoachMessage("user", text || flags.pageQuote || "Question", {
-      queued: true, requestState: "preparing", ...(flags.replyTo ? { replyTo: flags.replyTo } : {}),
+      queued: true, requestState: "preparing", flags: flagBitsFor(flags),
+      ...(flags.replyTo ? { replyTo: flags.replyTo } : {}),
     });
     const coordinator = coachCoordinatorRef.current!;
     coordinator.reserve(id);
@@ -7084,7 +7086,10 @@ export function Workspace({
     try {
       const item = coachCoordinatorRef.current?.tickets.get(id)?.value ?? await loadCoachRequest<CoachSendQueueItem>(id);
       if (!item) throw new Error("Original request is unavailable. Send a new question with the document open.");
-      const nextId = pushCoachMessage("user", item.text, { queued: true, requestState: "preparing", retryOf: id, attachments: item.attachments });
+      const nextId = pushCoachMessage("user", item.text, {
+        queued: true, requestState: "preparing", retryOf: id, attachments: item.attachments,
+        flags: item.flagBits,
+      });
       coachCoordinatorRef.current!.reserve(nextId); reservedId = nextId;
       const next = { ...item, userMessageId: nextId };
       await saveCoachRequest(nextId, next);

@@ -9,9 +9,25 @@ import { ProcessBlock, isReasoningEvent, presentProcessStep, processLine, reason
 import type { CoachProcessEvent } from "../api/types";
 
 describe("reasonTitle", () => {
-  it("uses the first clause", () => {
-    expect(reasonTitle("SGD is a minibatch estimate. More.")).toBe(
-      "SGD is a minibatch estimate",
+  it("summarizes a long thought instead of taking the first clause", () => {
+    expect(reasonTitle("The student is asking whether the algorithm I described. More.")).toBe(
+      "What they're asking",
+    );
+  });
+
+  it("keeps a short complete thought as the chip", () => {
+    expect(reasonTitle("SGD is a minibatch estimate.")).toBe("SGD is a minibatch estimate");
+  });
+
+  it("uses a short first sentence as the chip and keeps the whole thought underneath", () => {
+    const detail = "First inspect every cell in the array. Then compare the pointer.";
+    expect(reasonTitle(detail)).toBe("First inspect every cell in the array");
+    expect(presentProcessStep({ kind: "stage", label: "reason", detail, ts: 1 }).body).toBe(detail);
+  });
+
+  it("uses a heading line as the summary", () => {
+    expect(reasonTitle("The DP recurrence\ndp[i][j] = min(delete, insert, substitute)")).toBe(
+      "The recurrence",
     );
   });
 });
@@ -35,19 +51,19 @@ describe("presentProcessStep", () => {
     })).toEqual({ title: "Looking up earlier pages", body: "" });
   });
 
-  it("keeps a reason title and puts only the rest of the thought underneath", () => {
+  it("puts the entire thought under a summary chip", () => {
+    const detail = "The student is asking whether the algorithm I described. Full walkthrough lives here.";
     const shown = presentProcessStep({
       kind: "stage",
       label: "reason",
-      detail: "The student is asking whether the algorithm I described. Full walkthrough lives here.",
+      detail,
       ts: 1,
     });
-    expect(shown.title).toBe("The student is asking whether the algorithm I described");
-    expect(shown.body).toBe("Full walkthrough lives here.");
-    expect(shown.body).not.toContain("The student is asking");
+    expect(shown.title).toBe("What they're asking");
+    expect(shown.body).toBe(detail);
   });
 
-  it("keeps the rest of a sentence when the title is truncated", () => {
+  it("does not split a long first sentence across title and body", () => {
     const detail = "The student is asking whether the algorithm I described (the DP table with dp[i][j] = min) is the algorithm for the suboptimal cost shown in the document.";
     const shown = presentProcessStep({
       kind: "stage",
@@ -55,10 +71,9 @@ describe("presentProcessStep", () => {
       detail,
       ts: 1,
     });
-    expect(shown.title.endsWith("…")).toBe(true);
-    expect(shown.body.length).toBeGreaterThan(20);
-    expect(shown.body).not.toContain(shown.title);
-    expect(detail.endsWith(shown.body)).toBe(true);
+    expect(shown.title.endsWith("…")).toBe(false);
+    expect(shown.title).toBe("What they're asking");
+    expect(shown.body).toBe(detail);
   });
 });
 
@@ -193,15 +208,14 @@ describe("ProcessBlock", () => {
     expect(toggle.textContent).toBe("");
     expect(toggle.querySelector(".lc-agent-process-step-dot")).toBeTruthy();
     expect(row?.querySelector(".lc-agent-process-step-excerpt")?.textContent).toBe(
-      "The student is asking whether the algorithm I described",
+      "What they're asking",
     );
-    expect(row?.querySelector(".lc-agent-process-step-body")?.textContent).toContain("Full walkthrough lives here");
-    expect(row?.querySelector(".lc-agent-process-step-body")?.textContent).not.toContain(
-      "The student is asking whether the algorithm I described.",
+    expect(row?.querySelector(".lc-agent-process-step-body")?.textContent).toBe(
+      "The student is asking whether the algorithm I described. Full walkthrough lives here.",
     );
     await act(async () => { toggle.click(); });
     expect(row?.querySelector(".lc-agent-process-step-excerpt")?.textContent).toBe(
-      "The student is asking whether the algorithm I described",
+      "What they're asking",
     );
     expect(row?.querySelector(".lc-agent-process-step-body")).toBeNull();
     root.unmount();
@@ -243,6 +257,24 @@ describe("ProcessBlock", () => {
     expect(host.textContent).toContain("Answering from the document");
     expect(host.textContent).toContain("Looking up earlier pages");
     expect(host.textContent?.toLowerCase().split("looking up earlier pages").length).toBe(2);
+    root.unmount();
+    host.remove();
+  });
+
+  it("renders the thought verbatim instead of markdown blocks", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const detail = `So the document describes:
+1. The concept of alignment
+2. The cost of an alignment`;
+    await act(async () => {
+      root.render(<ProcessBlock events={[{ kind: "stage", label: "reason", detail, ts: 1 }]} running={false} />);
+    });
+    const body = host.querySelector(".lc-agent-process-step-body");
+    expect(host.querySelector(".lc-agent-process-step-excerpt")?.textContent).toBe("What the text says");
+    expect(body?.querySelector("ol, ul, blockquote, pre")).toBeNull();
+    expect(body?.textContent).toBe(detail);
     root.unmount();
     host.remove();
   });

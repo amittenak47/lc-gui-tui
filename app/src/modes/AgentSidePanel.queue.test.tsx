@@ -33,15 +33,26 @@ it("offers Retry only after terminal state and selection seeds a draft without s
     quoteSeed={{ token: 1, text: "Selected passage", attachment: { label: "Selection", png: "test", thumb: "thumb" } }} />));
   expect(send).not.toHaveBeenCalled(); expect(host.textContent).toContain("Selected passage");
   expect(host.querySelector(".lc-agent-turn-failed")).toBeTruthy();
-  const flags = host.querySelector(".lc-agent-turn-header-flags.is-failed");
+  const flags = host.querySelector(".lc-agent-turn-footnotes.is-failed");
   expect(flags).toBeTruthy();
+  expect(flags!.classList.contains("lc-agent-turn-header-flags")).toBe(false);
   expect(flags!.querySelector(".lc-agent-turn-fail")?.getAttribute("aria-label")).toBe("Failed");
   expect(flags!.textContent).toMatch(/Ask/);
   expect(flags!.textContent).toMatch(/Annotations/);
+  expect(host.querySelector(".lc-agent-turn-header-flags")).toBeNull();
   expect(host.querySelector(".lc-agent-turn-role-group .lc-agent-turn-fail")).toBeNull();
   expect(host.querySelector(".lc-agent-turn-user small")?.textContent).not.toBe("failed");
   menu(); expect(button("Abort")).toBeUndefined(); act(() => button("Retry").click());
   expect(retry).toHaveBeenCalledWith("question");
+});
+it("keeps the fail mark on the YOU flags footer when send bits never landed", () => {
+  act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy={false} messages={[message("failed")]} onSend={() => {}} />));
+  const flags = host.querySelector(".lc-agent-turn-footnotes.is-failed");
+  expect(flags).toBeTruthy();
+  expect(flags!.classList.contains("lc-agent-turn-header-flags")).toBe(false);
+  expect(flags!.querySelector(".lc-agent-turn-fail")?.getAttribute("aria-label")).toBe("Failed");
+  expect(host.querySelector(".lc-agent-turn-header-flags")).toBeNull();
+  expect(host.querySelector(".lc-agent-turn-role")?.textContent).toBe("You");
 });
 
 it("text-only selection keeps a typed draft and sends the frozen quote only on Send", () => {

@@ -1,7 +1,7 @@
 import { useId, useReducer, useRef } from "react";
 
 import { STAGE_LABELS, type CoachProcessEvent } from "../api/types";
-import { AgentRichText } from "./AgentRichText";
+import { useWordReveal } from "./AgentRichText";
 import { AnimatedDisclosure } from "../components/AnimatedDisclosure";
 import { DEFAULT_AGENT_DISPLAY_PREFS, type AgentDisplayPrefs } from "../util/agentDisplayPrefs";
 import { newThinkingDisclosure, thinkingStepKey, thinkingStepColor, type ThinkingDisclosureState } from "./thinkingDisplay";
@@ -41,36 +41,80 @@ function titlesMatch(a: string, b: string): boolean {
   return Boolean(left) && left === right;
 }
 
+function headingLine(text: string): string {
+  return oneLine(text).replace(/^#+\s*/, "").replace(/^\d+[.)]\s*/, "").replace(/:+$/u, "").trim();
+}
+
+function isShortCompleteThought(text: string): boolean {
+  if (text.includes("\n") || text.length > 72) return false;
+  return text.split(/(?<=[.!?])\s+/).filter(Boolean).length <= 1;
+}
+
+function toGerund(verb: string): string {
+  const v = verb.toLowerCase();
+  if (v === "see") return "Seeing";
+  if (v.endsWith("ie")) return sentenceCase(`${v.slice(0, -2)}ying`);
+  if (v.endsWith("e") && !v.endsWith("ee")) return sentenceCase(`${v.slice(0, -1)}ing`);
+  return sentenceCase(`${v}ing`);
+}
+
+const REASON_SUMMARY: Array<[RegExp, string]> = [
+  [/\bthe student is asking\b|\bthey(?:'re| are) asking\b|\basking about\b/, "What they're asking"],
+  [/\blet me re-?read\b|\bre-?read the\b/, "Re-reading"],
+  [/\blet me explain\b/, "Explaining"],
+  [/\blet me write\b/, "Writing it up"],
+  [/\blet me look\b|\blet me check\b|\blet me see\b/, "Checking"],
+  [/^wait\b/, "Reconsidering"],
+  [/\bkey insight\b/, "Key insight"],
+  [/^actually\b/, "Correction"],
+  [/\bso the answer\b|^the answer is\b/, "The answer"],
+  [/\bfrom the (retrieved|document|context|text|book)\b/, "From the document"],
+  [/\bdoesn(?:'t|’t) actually\b/, "What's missing"],
+  [/\bretrieved (chunk|context|passage)\b/, "Retrieved context"],
+  [/\bthe (document|text|book) (says|mentions|describes|doesn't|doesn’t)\b/, "What the text says"],
+  [/\brecurrence\b/, "The recurrence"],
+  [/\bbase cases?\b/, "Base cases"],
+  [/\bdecision\b.*\b(insert|substitut|delet)/, "Choosing the edit"],
+  [/\bstandard (formulation|algorithm|approach)\b/, "The standard approach"],
+  [/\bworked example\b|\bwith the \S+ example\b/, "Example"],
+];
+
+function summarizeReason(text: string): string | null {
+  const head = text.replace(/\s+/g, " ").trim().slice(0, 220).toLowerCase();
+  for (const [pattern, label] of REASON_SUMMARY) {
+    if (pattern.test(head)) return label;
+  }
+  const letMe = text.trim().match(/^Let me (\w+)/i);
+  if (letMe) return toGerund(letMe[1]!);
+  return null;
+}
+
+/** Short label for a thought — never a truncated prefix of the body. */
 export function reasonTitle(detail: string | undefined): string {
-  const line = oneLine(detail ?? "");
-  const stripped = line.replace(/^#+\s*/, "").replace(/^\d+[.)]\s*/, "").trim();
-  const clause = stripped.split(/[.!?:]/)[0]?.trim() || stripped;
-  const base = clause.length >= 8 ? clause : stripped;
-  if (!base) return "Thinking";
-  if (base.length <= 72) return sentenceCase(base);
-  const slice = base.slice(0, 71);
-  const sp = slice.lastIndexOf(" ");
-  return `${sentenceCase(sp > 24 ? slice.slice(0, sp) : slice)}…`;
+  const text = (detail ?? "").trim();
+  if (!text) return "Thinking";
+  const summary = summarizeReason(text);
+  if (summary) return summary;
+  const heading = headingLine(text);
+  if (
+    heading.length >= 8
+    && heading.length <= 48
+    && !/[.!?]$/.test(heading)
+    && text.length > heading.length + 8
+  ) {
+    return sentenceCase(heading);
+  }
+  if (isShortCompleteThought(text) && heading) {
+    return sentenceCase(heading.replace(/[.!?]+$/u, ""));
+  }
+  const firstSentence = text.split(/(?<=[.!?])(?:\s+|$)/)[0]?.trim() ?? "";
+  if (firstSentence.length >= 8 && firstSentence.length <= 48 && /[.!?]$/.test(firstSentence)) {
+    return sentenceCase(firstSentence.replace(/[.!?]+$/u, ""));
+  }
+  return "Thinking";
 }
 
-function remainderAfterTitle(detail: string, title: string): string {
-  const text = detail.trim();
-  if (!text) return "";
-  if (titlesMatch(title, text) && !text.includes("\n")) return "";
-  const stem = title.replace(/…$/, "").trim();
-  if (title.endsWith("…") && stem.length >= 8 && text.startsWith(stem)) {
-    return text.slice(stem.length).replace(/^[\s.!?:;…-]+/, "").trim();
-  }
-  const firstLine = oneLine(text);
-  const clause = firstLine.split(/[.!?:]/)[0]?.trim() || firstLine;
-  if (clause.length >= 8 && text.startsWith(clause)) {
-    const rest = text.slice(clause.length).replace(/^[\s.!?:;…-]+/, "").trim();
-    if (rest && !titlesMatch(title, rest)) return rest;
-  }
-  return "";
-}
-
-/** Visible chip + optional body. Body never restates the chip. */
+/** Chip is a summary. Reason bodies are the whole thought, not the leftover. */
 export function presentProcessStep(event: CoachProcessEvent): { title: string; body: string } {
   if (event.kind === "tool") {
     const title = sentenceCase(processLine(event));
@@ -79,8 +123,7 @@ export function presentProcessStep(event: CoachProcessEvent): { title: string; b
   }
   if (event.label === "reason") {
     const detail = event.detail?.trim() ?? "";
-    const title = reasonTitle(detail);
-    return { title, body: remainderAfterTitle(detail, title) };
+    return { title: reasonTitle(detail), body: detail };
   }
   const labeled = STAGE_LABELS[event.label];
   const detail = event.detail?.trim() ?? "";
@@ -153,11 +196,28 @@ export function processLine(event: CoachProcessEvent | undefined): string {
   return fallback ? sentenceCase(oneLine(fallback)) : event.label;
 }
 
+function ProcessStepBody({
+  text,
+  animate,
+  animateInitial,
+}: {
+  text: string;
+  animate: boolean;
+  animateInitial: boolean;
+}) {
+  const shown = useWordReveal(text, animate, animateInitial);
+  return (
+    <div className="lc-agent-process-step-body" aria-busy={shown !== text}>
+      {shown}
+    </div>
+  );
+}
+
 /**
  * What the coach did, one line per stage or tool call.
  *
- * Each step is tappable: the step's `detail` opens inline. `reason` stages
- * stay here as Thinking. The uncut chain-of-thought is the Reasoning fold.
+ * Each step is tappable. Reason chips are short summaries; the body is the
+ * thought verbatim. The uncut chain-of-thought is the Reasoning fold.
  */
 export function ProcessBlock({
   events,
@@ -242,9 +302,13 @@ export function ProcessBlock({
                   ><span className="lc-agent-process-step-dot" aria-hidden /></button>
                   <div id={contentId} className="lc-agent-process-step-content">
                     <span className="lc-agent-process-step-excerpt">{title}</span>
-                    {stepOpen && body ? <AgentRichText text={body}
-                      animate={running && revealBufferedStep} animateInitial={running && revealBufferedStep && !(key in state.steps)}
-                      className="lc-agent-process-step-body" /> : null}
+                    {stepOpen && body ? (
+                      <ProcessStepBody
+                        text={body}
+                        animate={running && revealBufferedStep}
+                        animateInitial={running && revealBufferedStep && !(key in state.steps)}
+                      />
+                    ) : null}
                   </div>
                 </li>
               );

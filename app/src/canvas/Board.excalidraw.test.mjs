@@ -325,6 +325,8 @@ describe("Board", () => {
   it("announces split settle so both boards remesh once", () => {
     const src = readFileSync(join(here, "../App.tsx"), "utf8");
     expect(src).toMatch(/announceSplitResize\("settle"\)/);
+    expect(src).toContain("const desktopAgentOpen = !mobile && chrome.agentOpen");
+    expect(src).toContain("[activeGroup, desktopAgentOpen]");
   });
 
   it("arms PDF pan immediately and still lets hold-to-marquee fire", () => {

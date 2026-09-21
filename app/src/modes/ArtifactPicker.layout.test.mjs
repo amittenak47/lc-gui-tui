@@ -23,9 +23,11 @@ describe("attachment picker chrome", () => {
     expect(picker).toContain("lc-artifact-picker-compose");
     expect(picker).toContain("lc-artifact-picker-adorn-start");
     expect(picker).toContain("lc-artifact-picker-adorn");
-    expect(picker).toContain("function BoardIcon");
-    expect(picker).toContain("function NoteIcon");
-    expect(picker).toContain("function CodeIcon");
+    expect(picker).toContain("ArtifactKindIcon");
+    expect(picker).toContain("artifactKindLabel");
+    expect(picker).not.toContain("function BoardIcon");
+    expect(picker).not.toContain("function NoteIcon");
+    expect(picker).not.toContain("function CodeIcon");
     expect(picker).toContain("function FootnotesIcon");
     expect(picker).toContain('aria-label="Create attachment"');
     expect(picker).toContain("CreateIcon");
@@ -51,5 +53,28 @@ describe("attachment picker chrome", () => {
     expect(css).toContain("line-height: 0");
     expect(css).not.toContain("var(--border");
     expect(css).not.toContain(".lc-artifact-picker button { min-height: 40px }");
+  });
+});
+
+describe("Board / Note / Code editor chrome", () => {
+  it("uses themed overlay chrome instead of the dark 40px sheet", () => {
+    const workspace = readFileSync(new URL("./ArtifactWorkspace.tsx", import.meta.url), "utf8");
+    expect(workspace).toContain("lc-artifact-chrome");
+    expect(workspace).toContain("lc-artifact-editor-backdrop");
+    expect(workspace).toContain("data-artifact-kind");
+    expect(workspace).toContain("ArtifactKindIcon");
+    expect(workspace).toContain("kindName} attachment");
+    expect(workspace).toContain("lc-artifact-title");
+    expect(workspace).not.toContain("lc-artifact-actions");
+    expect(workspace).not.toContain(">Save a copy<");
+    expect(workspace).not.toContain(">Previous page<");
+    expect(css).toContain(".lc-artifact-chrome");
+    expect(css).toContain("background: var(--bg)");
+    expect(css).toContain("background: var(--panel)");
+    expect(css).not.toContain("#252a32");
+    expect(css).not.toContain("#7d899b");
+    expect(css).not.toContain("min-height: 40px");
+    expect(css).toContain(".lc-artifact-chrome button");
+    expect(css).toContain("min-height: 28px");
   });
 });

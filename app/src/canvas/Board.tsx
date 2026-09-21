@@ -9624,11 +9624,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
              * strip has to be this element's real height — see `liveDockStrip`.
              */
             ref={trackDockStrip}
-            inert={agentOpen}
-            aria-hidden={agentOpen || undefined}
+            /*
+             * The mobile sheet sits on the board, so covered chrome must go
+             * inert. Desktop already insets `.lc-main` beside the panel — hide
+             * the dock there and the ink tools only come back after close.
+             */
+            inert={agentOpen && mobile}
+            aria-hidden={(agentOpen && mobile) || undefined}
             className={[
               "lc-map-controls lc-map-controls-paged",
-              agentOpen ? "is-agent-covered" : "",
+              agentOpen && mobile ? "is-agent-covered" : "",
               mapChromeHidden ? "lc-map-controls-collapsed" : "",
             ]
               .filter(Boolean)

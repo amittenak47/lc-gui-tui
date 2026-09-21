@@ -115,9 +115,11 @@ describe("agent panel chrome", () => {
     expect(panel).toContain("function FailIcon");
     expect(panel).toContain("lc-agent-turn-fail");
     expect(panel).toContain('aria-label="Failed"');
-    expect(panel).toContain('message.requestState !== "failed"');
-    expect(panel).toContain("header-flags");
-    expect(css).toContain(".lc-agent-turn-header-flags.is-failed");
+    expect(panel).toContain('{message.role === "assistant" ? (');
+    expect(panel).toContain("{message.role !== \"assistant\" && (");
+    expect(panel).not.toContain('message.role === "assistant" || message.requestState === "failed"');
+    expect(panel).not.toContain('message.role !== "assistant" && message.requestState !== "failed"');
+    expect(css).toContain(".lc-agent-turn-footnotes.is-failed");
     expect(css).toContain(".lc-agent-turn-failed .lc-agent-turn-body");
   });
 
@@ -165,5 +167,14 @@ describe("agent panel chrome", () => {
     expect(sheet).toContain("AGENT_SHEET_MIN_PX = 400");
     expect(css).toContain("--lc-agent-sheet-min: 400px");
     expect(css).toContain("var(--lc-agent-sheet-min)");
+  });
+
+  it("fades sibling actions after Copy, then dismisses the Copied chip", () => {
+    expect(panel).toContain("COPY_ACK_MS = 700");
+    expect(panel).toContain("setMenuFading(true)");
+    expect(panel).toContain('data-copy=""');
+    expect(css).toContain(".lc-agent-message-menu.is-copied > button:not([data-copy])");
+    expect(css).toContain(".lc-agent-message-menu.is-closing");
+    expect(css).toContain("lc-agent-menu-unpop");
   });
 });

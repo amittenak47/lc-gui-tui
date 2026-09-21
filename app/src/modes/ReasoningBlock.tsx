@@ -4,7 +4,7 @@ import { AgentRichText } from "./AgentRichText";
 /**
  * Full model thinking, separate from the process step list.
  *
- * Steps stay chopped titles. This fold is the uncut chain-of-thought.
+ * Steps use a short summary chip; this fold is the uncut chain-of-thought.
  * No MorphBar: measuring `scrollHeight` against a max-height body left a
  * tall empty shell between the toggle and the answer.
  */

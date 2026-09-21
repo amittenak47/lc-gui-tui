@@ -10241,18 +10241,21 @@ body[data-lc-sash-drag="horizontal"] {
   margin-bottom: 8px;
 }
 
-.lc-agent-turn-header-flags.is-failed {
+.lc-agent-turn-footnotes.is-failed {
   flex-direction: row;
   align-items: center;
   gap: 6px;
+}
+
+.lc-agent-turn-header-flags.is-failed {
   margin-bottom: 6px;
 }
 
-.lc-agent-turn-header-flags.is-failed .lc-agent-turn-flag-rule {
+.lc-agent-turn-footnotes.is-failed .lc-agent-turn-flag-rule {
   display: none;
 }
 
-.lc-agent-turn-failed .lc-agent-turn-header-flags .lc-agent-turn-flag {
+.lc-agent-turn-failed .lc-agent-turn-flag {
   color: color-mix(in srgb, var(--bad) 72%, var(--ink));
 }
 
@@ -10329,9 +10332,40 @@ body[data-lc-sash-drag="horizontal"] {
   }
 }
 
+@keyframes lc-agent-menu-unpop {
+  from {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -6px) scale(0.96);
+  }
+}
+
+.lc-agent-message-menu.is-copied > button:not([data-copy]) {
+  opacity: 0;
+  max-width: 0;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    max-width 160ms ease,
+    padding 160ms ease;
+}
+
+.lc-agent-message-menu.is-closing {
+  pointer-events: none;
+  animation: lc-agent-menu-unpop 180ms cubic-bezier(0.64, 0, 0.78, 0) both;
+}
+
 .lc-agent-message-menu button {
   min-height: 28px;
   min-width: 0;
+  max-width: 8rem;
   padding: 4px 8px;
   border: 0;
   border-radius: 7px;
@@ -10342,6 +10376,10 @@ body[data-lc-sash-drag="horizontal"] {
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
+  transition:
+    opacity 160ms ease,
+    max-width 160ms ease,
+    padding 160ms ease;
 }
 
 .lc-agent-message-menu button:hover:not(:disabled),
@@ -10352,6 +10390,17 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-agent-message-menu button:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-agent-message-menu,
+  .lc-agent-message-menu.is-closing {
+    animation: none;
+  }
+  .lc-agent-message-menu button,
+  .lc-agent-message-menu.is-copied > button:not([data-copy]) {
+    transition: none;
+  }
 }
 
 /* What the agent did on the way to an answer. Quiet by default — it is
@@ -10410,13 +10459,12 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-agent-process-steps {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin: 2px 0 0;
-  padding: 4px 8px;
+  gap: 12px;
+  margin: 8px 0 0;
+  padding: 0;
   list-style: none;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--ink) 5.5%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--ink) 8%, var(--chrome-edge));
+  background: transparent;
+  border: 0;
 }
 
 .lc-agent-process-step {
@@ -10445,10 +10493,13 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-agent-process-step-body {
-  margin: 2px 0 0;
-  padding: 2px 0 4px;
+  margin: 5px 0 0;
+  padding: 0;
   white-space: pre-wrap;
-  opacity: 0.92;
+  overflow-wrap: anywhere;
+  font-size: 12.5px;
+  line-height: 1.5;
+  opacity: 1;
   color: var(--ink);
 }
 
@@ -19749,7 +19800,15 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-agent-process-step-content { min-width: 0; cursor: pointer; }
 .lc-agent-process-step-content a { cursor: pointer; }
 .lc-agent-process-step-content pre, .lc-agent-process-step-content code { cursor: text; }
-.lc-agent-process-step-excerpt { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lc-agent-process-step-excerpt {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: color-mix(in srgb, var(--lc-thought-accent, var(--muted-ink, var(--muted))) 72%, var(--ink));
+}
 .lc-agent-process-step[data-thinking-color="0"] { --lc-thought-accent: #648ed5; }
 .lc-agent-process-step[data-thinking-color="1"] { --lc-thought-accent: #9d79c5; }
 .lc-agent-process-step[data-thinking-color="2"] { --lc-thought-accent: #4f9d9a; }

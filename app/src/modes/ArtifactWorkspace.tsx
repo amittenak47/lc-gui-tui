@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useShell, NO_CHROME } from "../shellContext";
 import { loadBoardComponent, type BoardComponent } from "../canvas/boardChunk";
 import type { BoardHandle } from "../canvas/BoardHandle";
@@ -12,9 +13,11 @@ import { getArtifactDraft, putArtifactDraft, deleteArtifactDraft } from "../util
 import { artifactRefKey, type PadArtifact } from "../util/padArtifacts";
 import { artifactTab } from "../util/artifactTabs";
 import { syncArtifactParent } from "../util/artifactSync";
+import { shouldDismissBackdrop } from "../util/backdropDismiss";
 import { applyViz } from "../viz/apply";
 import { Timeline } from "../viz/Timeline";
 import type { TabRecord } from "../util/tabs";
+import { ArtifactKindIcon, artifactKindLabel } from "./ArtifactKindIcon";
 import "./artifacts.css";
 
 const MonacoBlock = lazy(() => import("./MonacoBlock"));
@@ -49,6 +52,7 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
   const generation = useRef(0);
   const live = useRef({ item, snapshot, title, dirty });
   live.current = { item, snapshot, title, dirty };
+  const backdropDown = useRef(false);
   const restore = useCallback(async (next: ArtifactSnapshot) => {
     const canvas = board.current;
     if (!canvas) return;
@@ -164,30 +168,127 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
     setSnapshot(current => current && current.kind !== "whiteboard" ? { ...current, value: { ...current.value, source } } : current);
     setDirty(true);
   };
-  return <section className={[onClose ? "lc-artifact-overlay" : "lc-canvas-wrap", "lc-artifact-workspace", !showing && "lc-canvas-parked", splitRole && `is-split-${splitRole}`].filter(Boolean).join(" ")} aria-label="Attachment editor">
-    <header className="lc-artifact-actions">
-      <input aria-label="Attachment title" value={title} disabled={pending} onChange={event => { setTitle(event.target.value); setDirty(true); }} />
-      <button disabled={!item || pending} onClick={() => void save().catch(() => {})}>Save</button>
-      <button disabled={!item || pending} onClick={() => void save(true).catch(() => {})}>Save a copy</button>
-      <button disabled={!item || pending || !dirty} onClick={() => { if (window.confirm("Discard this local draft and reopen the saved attachment?")) void deleteArtifactDraft(ref).then(() => reload(false)).catch(cause => setError(String(cause))); }}>Discard draft</button>
-      {onClose && <><button disabled={pending} onClick={() => void persistDraft().then(() => { openWorkspace(artifactTab(ref, title)); onClose(); }).catch(cause => setError(String(cause)))}>Open tab</button>
-        <button disabled={pending} onClick={() => void close().catch(cause => setError(String(cause)))}>Close</button></>}
-    </header>
-    {error && <p role="alert" className="lc-warning">{error} {!item && <button onClick={() => void reload()}>Retry</button>}</p>}
-    <small role="status">{status || "Opening attachment…"}</small>
-    {snapshot?.kind === "whiteboard" && <nav aria-label="Attachment pages">
-      <button disabled={pending || page === 0} onClick={() => { setPage(page - 1); board.current?.fitRegion(`pad-${page - 1}`); }}>Previous page</button>
-      <span>Page {page + 1} / {snapshot.value.pageCount}</span>
-      <button disabled={pending || page + 1 >= snapshot.value.pageCount} onClick={() => { setPage(page + 1); board.current?.fitRegion(`pad-${page + 1}`); }}>Next page</button>
-      <button disabled={pending || snapshot.value.pageCount >= WHITEBOARD_PAGE_LIMIT} onClick={() => {
-        const canvas = board.current; if (!canvas || !hydrated.current) return;
-        const index = snapshot.value.pageCount;
-        canvas.appendScratchPage(buildScratchPageSkeletons(index, isDarkTheme(themeId)));
-        setSnapshot({ ...snapshot, value: { ...snapshot.value, pageCount: index + 1 } });
-        setPage(index); setDirty(true); canvas.fitRegion(`pad-${index}`);
-      }}>Add page</button>
-    </nav>}
-    <div className="lc-artifact-canvas">
+  const kind = snapshot?.kind ?? ref.kind;
+  const kindName = artifactKindLabel(kind);
+  const editor = (
+    <section
+      className={[
+        onClose ? "lc-artifact-overlay" : "lc-canvas-wrap",
+        "lc-artifact-workspace",
+        !showing && "lc-canvas-parked",
+        splitRole && `is-split-${splitRole}`,
+      ].filter(Boolean).join(" ")}
+      data-artifact-kind={kind}
+      aria-label={`${kindName} attachment`}
+      onPointerDown={onClose ? (event) => event.stopPropagation() : undefined}
+    >
+      <header className="lc-artifact-chrome">
+        <span className="lc-artifact-kind" aria-hidden>
+          <ArtifactKindIcon kind={kind} />
+        </span>
+        <input
+          className="lc-artifact-title"
+          aria-label={`${kindName} title`}
+          value={title}
+          disabled={pending}
+          onChange={(event) => {
+            setTitle(event.target.value);
+            setDirty(true);
+          }}
+        />
+        {snapshot?.kind === "whiteboard" && (
+          <nav className="lc-artifact-pages" aria-label="Attachment pages">
+            <button
+              type="button"
+              className="lc-secondary"
+              disabled={pending || page === 0}
+              aria-label="Previous page"
+              onClick={() => {
+                setPage(page - 1);
+                board.current?.fitRegion(`pad-${page - 1}`);
+              }}
+            >
+              ‹
+            </button>
+            <span aria-live="polite">{page + 1} / {snapshot.value.pageCount}</span>
+            <button
+              type="button"
+              className="lc-secondary"
+              disabled={pending || page + 1 >= snapshot.value.pageCount}
+              aria-label="Next page"
+              onClick={() => {
+                setPage(page + 1);
+                board.current?.fitRegion(`pad-${page + 1}`);
+              }}
+            >
+              ›
+            </button>
+            <button
+              type="button"
+              className="lc-secondary"
+              disabled={pending || snapshot.value.pageCount >= WHITEBOARD_PAGE_LIMIT}
+              aria-label="Add page"
+              onClick={() => {
+                const canvas = board.current;
+                if (!canvas || !hydrated.current) return;
+                const index = snapshot.value.pageCount;
+                canvas.appendScratchPage(buildScratchPageSkeletons(index, isDarkTheme(themeId)));
+                setSnapshot({ ...snapshot, value: { ...snapshot.value, pageCount: index + 1 } });
+                setPage(index);
+                setDirty(true);
+                canvas.fitRegion(`pad-${index}`);
+              }}
+            >
+              +
+            </button>
+          </nav>
+        )}
+        <div className="lc-artifact-chrome-actions">
+          <button type="button" className="lc-secondary" disabled={!item || pending} onClick={() => void save().catch(() => {})}>
+            Save
+          </button>
+          <button type="button" className="lc-secondary" disabled={!item || pending} onClick={() => void save(true).catch(() => {})}>
+            Copy
+          </button>
+          <button
+            type="button"
+            className="lc-secondary"
+            disabled={!item || pending || !dirty}
+            onClick={() => {
+              if (window.confirm("Discard this local draft and reopen the saved attachment?")) {
+                void deleteArtifactDraft(ref).then(() => reload(false)).catch((cause) => setError(String(cause)));
+              }
+            }}
+          >
+            Discard
+          </button>
+          {onClose && (
+            <>
+              <button
+                type="button"
+                className="lc-secondary"
+                disabled={pending}
+                onClick={() => void persistDraft().then(() => {
+                  openWorkspace(artifactTab(ref, title));
+                  onClose();
+                }).catch((cause) => setError(String(cause)))}
+              >
+                Open tab
+              </button>
+              <button type="button" className="lc-secondary" disabled={pending} onClick={() => void close().catch((cause) => setError(String(cause)))}>
+                Close
+              </button>
+            </>
+          )}
+        </div>
+      </header>
+      {error && (
+        <p role="alert" className="lc-warning">
+          {error} {!item && <button type="button" className="lc-secondary" onClick={() => void reload()}>Retry</button>}
+        </p>
+      )}
+      <p className="lc-artifact-status" role="status">{status || `Opening ${kindName.toLowerCase()}…`}</p>
+      <div className="lc-artifact-canvas">
       {Board && snapshot && <Board ref={board} filmScope={`artifact:${tab.id}`} themeId={themeId} readingSize={readingSize}
         onChange={changed} interactive={!pending} chromeEnabled={active} splitPaused={!showing} annotateToggle docPaper
         focusRegion={doc ? ANNOTATE_REGION : `pad-${page}`} mobileRegion={doc ? ANNOTATE_REGION : `pad-${page}`}
@@ -196,10 +297,29 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
         pageContent={doc ? editing ? doc.docType === "code" ? <Suspense fallback={<p>Opening code editor…</p>}><MonacoBlock value={doc.source} language={title.endsWith(".js") ? "javascript" : title.endsWith(".ts") ? "typescript" : "python"} themeId={themeId} onChange={updateSource} onReady={() => {}} onContentHeight={setHeight} height={`${height}px`} /></Suspense>
           : <AnnotateMarkdownEditor value={doc.source} onChange={updateSource} onMeasure={setHeight} />
           : <AnnotateDocument source={doc.docType === "code" ? `\`\`\`\n${doc.source}\n\`\`\`` : doc.source} onMeasure={setHeight} /> : undefined} />}
-    </div>
-    {snapshot?.kind === "whiteboard" && snapshot.value.programs.map(program => <Timeline key={program.id} program={program} onFrame={frame => {
-      const canvas = board.current; if (!canvas || !hydrated.current) return;
-      applyViz({ getSceneElements: () => canvas.getElements(), updateScene: ({ elements }) => canvas.setElements(elements), getViewportBounds: () => canvas.getViewportBounds() }, skeletons => canvas.convert(skeletons), program, frame);
-    }} />)}
-  </section>;
+      </div>
+      {snapshot?.kind === "whiteboard" && snapshot.value.programs.map(program => <Timeline key={program.id} program={program} onFrame={frame => {
+        const canvas = board.current; if (!canvas || !hydrated.current) return;
+        applyViz({ getSceneElements: () => canvas.getElements(), updateScene: ({ elements }) => canvas.setElements(elements), getViewportBounds: () => canvas.getViewportBounds() }, skeletons => canvas.convert(skeletons), program, frame);
+      }} />)}
+    </section>
+  );
+  if (!onClose) return editor;
+  return createPortal(
+    <div
+      className="lc-settings-backdrop lc-artifact-editor-backdrop lc-server-gate-enter"
+      role="presentation"
+      onPointerDown={(event) => {
+        backdropDown.current = event.target === event.currentTarget;
+      }}
+      onClick={(event) => {
+        const started = backdropDown.current;
+        backdropDown.current = false;
+        if (shouldDismissBackdrop(started, event.target, event.currentTarget)) void close().catch((cause) => setError(String(cause)));
+      }}
+    >
+      {editor}
+    </div>,
+    document.body,
+  );
 }

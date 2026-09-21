@@ -822,7 +822,16 @@ export function App() {
    * Writing them from render fights the sash: every App paint (ink, Excalidraw)
    * stamped the stored 0.5 back over the drag. Sync from state only while the
    * pointer is up; while it is down the sash owns the variables.
+   *
+   * The coach column is the same class of change. `.lc-main` is inset while
+   * the panel is open, both halves shrink, and the focused board keepY-fits.
+   * Switching to the partner hides the panel (chrome comes from the active
+   * workspace) but leaves the original pane `splitPaused` — its ResizeObserver
+   * fires and is ignored, so the page stays fitted to the 520px hole. Settle
+   * is what the sash uses to remesh a paused partner; the column must too.
+   * Mobile sheets overlay the board and must not remesh as if the hole moved.
    */
+  const desktopAgentOpen = !mobile && chrome.agentOpen;
   useLayoutEffect(() => {
     const main = mainRef.current;
     if (!main) return;
@@ -844,7 +853,7 @@ export function App() {
     main.style.setProperty("--lc-split-b", String(1 - activeGroup.split.ratio));
     // The panes and their CSS widths now reflect React's committed layout.
     announceSplitResize("settle");
-  }, [activeGroup]);
+  }, [activeGroup, desktopAgentOpen]);
 
   /*
    * Split panes occupy the live slots first. Without that, one half falls off

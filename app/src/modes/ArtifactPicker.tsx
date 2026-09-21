@@ -13,6 +13,7 @@ import { syncArtifactParent } from "../util/artifactSync";
 import { shouldDismissBackdrop } from "../util/backdropDismiss";
 import { footnoteChipLabel } from "../util/docFootnotes";
 import { footnoteThemeVars } from "../util/footnoteTheme";
+import { ArtifactKindIcon, artifactKindLabel } from "./ArtifactKindIcon";
 import "./artifacts.css";
 
 export type ArtifactPickerScope = "catalog" | "message" | "footnote";
@@ -69,72 +70,7 @@ function FootnotesIcon() {
   );
 }
 
-function BoardIcon() {
-  return (
-    <AdornIcon>
-      <rect
-        x="2.6"
-        y="3.5"
-        width="10.8"
-        height="9"
-        rx="1.3"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.35"
-      />
-      <path
-        d="M5.1 9.3c.7-1.5 1.7-2.3 2.6-1.2.9 1.1 1.6.2 2.5-1.4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        strokeLinecap="round"
-      />
-    </AdornIcon>
-  );
-}
-
-function NoteIcon() {
-  return (
-    <AdornIcon>
-      <path
-        d="M4.2 2.8h5.3L11.8 5.2v8H4.2V2.8Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M9.5 2.9v2.4h2.2M6 8.3h4M6 10.5h2.7"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </AdornIcon>
-  );
-}
-
-function CodeIcon() {
-  return (
-    <AdornIcon>
-      <path
-        d="M6.2 4.5 2.9 8l3.3 3.5M9.8 4.5 13.1 8l-3.3 3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </AdornIcon>
-  );
-}
-
-const CREATE_KINDS: Array<{ kind: ArtifactKind; label: string; Icon: () => ReactNode }> = [
-  { kind: "whiteboard", label: "Board", Icon: BoardIcon },
-  { kind: "markdown", label: "Note", Icon: NoteIcon },
-  { kind: "code", label: "Code", Icon: CodeIcon },
-];
+const CREATE_KINDS: ArtifactKind[] = ["whiteboard", "markdown", "code"];
 
 function associationKey(entry: ArtifactAssociation): string {
   return JSON.stringify(entry);
@@ -156,7 +92,7 @@ function pickerCopy(scope: ArtifactPickerScope): string {
 }
 
 function kindLabel(kind: ArtifactKind): string {
-  return CREATE_KINDS.find((entry) => entry.kind === kind)?.label ?? kind;
+  return artifactKindLabel(kind);
 }
 
 function statusLabel(item: PadArtifact, attached: boolean, scope: ArtifactPickerScope): string {
@@ -398,7 +334,9 @@ export function ArtifactPicker({
                   </Tip>
                 )}
                 <div className="lc-artifact-picker-kinds" role="group" aria-label="Attachment kind">
-                  {CREATE_KINDS.map(({ kind: next, label, Icon }) => (
+                  {CREATE_KINDS.map((next) => {
+                    const label = artifactKindLabel(next);
+                    return (
                     <Tip key={next} tip={`${label} — tap to create, hold to filter`} placement="top">
                       <HoldButton
                         label={label}
@@ -409,10 +347,11 @@ export function ArtifactPicker({
                         onTap={() => setCreateKind((current) => (current === next ? null : next))}
                         onConfirm={() => setFilterKind((current) => (current === next ? null : next))}
                       >
-                        <Icon />
+                        <ArtifactKindIcon kind={next} className="lc-artifact-picker-adorn-icon" />
                       </HoldButton>
                     </Tip>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
               <input
@@ -444,7 +383,9 @@ export function ArtifactPicker({
                   return (
                     <div className="lc-artifact-picker-row" key={item.id}>
                       <div className="lc-artifact-picker-row-main">
-                        <span className="lc-artifact-picker-kind">{kindLabel(item.content.kind)}</span>
+                        <span className="lc-artifact-picker-kind" aria-label={kindLabel(item.content.kind)} title={kindLabel(item.content.kind)}>
+                          <ArtifactKindIcon kind={item.content.kind} className="lc-artifact-picker-adorn-icon" />
+                        </span>
                         <span className="lc-artifact-picker-row-title">{item.title}</span>
                         {status ? <span className="lc-artifact-picker-status">{status}</span> : null}
                       </div>

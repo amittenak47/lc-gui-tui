@@ -421,6 +421,9 @@ function saveTurnLabel(message: AgentChatMessage): string {
   return message.role === "assistant" ? "Save answer" : "Save note";
 }
 
+const COPY_ACK_MS = 700;
+const COPY_FADE_MS = 180;
+
 interface MessageMenuState {
   messageId: string;
   top: number;
@@ -798,6 +801,8 @@ export function AgentSidePanel({
   const annotateBtnRef = useRef<HTMLButtonElement>(null);
   const markMenuRef = useRef<HTMLDivElement>(null);
   const [copyFlash, setCopyFlash] = useState(false);
+  const [menuFading, setMenuFading] = useState(false);
+  const copyAckTimerRef = useRef<number | null>(null);
   /** Swallow the click that follows a successful long-press (process toggle etc.). */
   const suppressClickRef = useRef(false);
   /** The turn the next send is answering, if the writer quoted one. */
@@ -1017,6 +1022,13 @@ export function AgentSidePanel({
     [clearLongPress],
   );
 
+  const clearCopyAckTimer = useCallback(() => {
+    if (copyAckTimerRef.current != null) {
+      window.clearTimeout(copyAckTimerRef.current);
+      copyAckTimerRef.current = null;
+    }
+  }, []);
+
   const openMessageMenu = useCallback(
     (messageId: string, anchor: HTMLElement) => {
       const rect = anchor.getBoundingClientRect();
@@ -1039,17 +1051,21 @@ export function AgentSidePanel({
       }
       const chatH = chat?.height ?? Math.max(200, window.innerHeight * 0.4);
       const tall = rect.height > chatH * 0.85;
+      clearCopyAckTimer();
       setMessageMenu({ messageId, top, left, tall });
       setCopyFlash(false);
+      setMenuFading(false);
     },
-    [],
+    [clearCopyAckTimer],
   );
 
   const closeMessageMenu = useCallback(() => {
+    clearCopyAckTimer();
     setMessageMenu(null);
     setCopyFlash(false);
+    setMenuFading(false);
     clearLongPress();
-  }, [clearLongPress]);
+  }, [clearLongPress, clearCopyAckTimer]);
 
   const finishMarkMenuClose = useCallback(() => {
     setMarkMenuOpen(false);
@@ -1284,10 +1300,22 @@ export function AgentSidePanel({
       const ok = await copyToClipboard(message.content);
       if (!ok) return;
       setCopyFlash(true);
-      window.setTimeout(() => setCopyFlash(false), 1200);
+      setMenuFading(false);
+      clearCopyAckTimer();
+      copyAckTimerRef.current = window.setTimeout(() => {
+        setMenuFading(true);
+        copyAckTimerRef.current = window.setTimeout(() => {
+          copyAckTimerRef.current = null;
+          closeMessageMenu();
+        }, COPY_FADE_MS);
+      }, COPY_ACK_MS);
     },
-    [],
+    [clearCopyAckTimer, closeMessageMenu],
   );
+
+  useEffect(() => () => {
+    if (copyAckTimerRef.current != null) window.clearTimeout(copyAckTimerRef.current);
+  }, []);
 
   useEffect(() => {
     const node = listRef.current;
@@ -1575,7 +1603,7 @@ export function AgentSidePanel({
                 event.stopPropagation();
               }}
             >
-              {message.role === "assistant" || message.requestState === "failed" ? (
+              {message.role === "assistant" ? (
                 <MessageFlags message={message} header />
               ) : null}
               <div className="lc-agent-turn-head">
@@ -1751,7 +1779,7 @@ export function AgentSidePanel({
                   ))}
                 </div>
               )}
-              {message.role !== "assistant" && message.requestState !== "failed" && (
+              {message.role !== "assistant" && (
                 <MessageFlags message={message} />
               )}
             </AgentMessageBubble>
@@ -2064,7 +2092,7 @@ export function AgentSidePanel({
               onClick={closeMessageMenu}
             />
             <div
-              className="lc-agent-message-menu"
+              className={`lc-agent-message-menu${copyFlash ? " is-copied" : ""}${menuFading ? " is-closing" : ""}`}
               role="menu"
               style={{ top: messageMenu.top, left: messageMenu.left }}
               onClick={(event) => event.stopPropagation()}
@@ -2080,6 +2108,7 @@ export function AgentSidePanel({
               <button
                 type="button"
                 role="menuitem"
+                data-copy=""
                 disabled={!menuHasText}
                 onClick={() => void copyMessage(menuMessage)}
               >

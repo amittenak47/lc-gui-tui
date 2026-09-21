@@ -292,6 +292,8 @@ it("lists catalog rows without preview cards", async () => {
   };
   await mount();
   expect(document.querySelector(".lc-artifact-card")).toBeNull();
+  expect(document.querySelector(".lc-artifact-picker-kind svg")).toBeTruthy();
+  expect(document.querySelector(".lc-artifact-picker-kind")?.getAttribute("aria-label")).toBe("Note");
   expect(backdrop().textContent).toContain("Plan.md");
   expect(backdrop().textContent).toContain("On this thread");
   expect(button("Pin to chat")).toBeUndefined();
