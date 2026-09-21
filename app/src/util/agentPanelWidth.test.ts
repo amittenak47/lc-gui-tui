@@ -30,8 +30,9 @@ describe("agentPanelWidth", () => {
   it("clamps to a desktop range that leaves room for the document", () => {
     expect(clampAgentPanelWidth(200, 1600)).toBe(AGENT_PANEL_WIDTH_MIN);
     expect(clampAgentPanelWidth(2000, 1600)).toBe(maxAgentPanelWidth(1600));
-    expect(maxAgentPanelWidth(1600)).toBeLessThanOrEqual(960);
-    expect(maxAgentPanelWidth(850)).toBe(AGENT_PANEL_WIDTH_MIN);
+    expect(maxAgentPanelWidth(1600)).toBe(1200);
+    expect(maxAgentPanelWidth(2560)).toBe(1280);
+    expect(maxAgentPanelWidth(799)).toBe(AGENT_PANEL_WIDTH_MIN);
   });
 
   it("persists a clamped width and writes the CSS variable", () => {

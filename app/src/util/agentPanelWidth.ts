@@ -4,9 +4,9 @@ const KEY = "whiteboard.agent.panelWidth.v1";
 
 export const AGENT_PANEL_WIDTH_DEFAULT = 520;
 export const AGENT_PANEL_WIDTH_MIN = 400;
-export const AGENT_PANEL_WIDTH_MAX = 960;
+export const AGENT_PANEL_WIDTH_MAX = 1280;
 /** Leave at least this many CSS pixels for the document. */
-const DOCUMENT_MIN = 480;
+const DOCUMENT_MIN = 400;
 
 export function maxAgentPanelWidth(viewportWidth = typeof window === "undefined" ? 1280 : window.innerWidth): number {
   return Math.min(
