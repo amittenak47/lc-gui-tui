@@ -369,14 +369,16 @@ describe("padSync pull", () => {
   });
 
   it("restores corrupt local content from the server fixture", async () => {
-    getWhiteboardNotebook.mockResolvedValueOnce({
+    const corrupt = {
       id: "w1",
       title: "broken",
       updatedAt: 1,
       pageCount: 1,
       board: { v: 99, elements: null } as never,
       agent: [],
-    });
+    };
+    // The download guard rereads the row before applying the hub copy.
+    getWhiteboardNotebook.mockResolvedValueOnce(corrupt).mockResolvedValueOnce(corrupt);
     const server = {
       id: "w1",
       title: "One",
@@ -396,6 +398,20 @@ describe("padSync pull", () => {
         board: server.board,
       }),
     );
+  });
+});
+
+describe("padSync download deletion guard", () => {
+  it("does not resurrect a corrupt row removed during the download window", async () => {
+    getWhiteboardNotebook.mockResolvedValueOnce({
+      id: "w1", title: "broken", updatedAt: 1, pageCount: 1,
+      board: { v: 99, elements: null } as never, agent: [],
+    }).mockResolvedValueOnce(null);
+    await pullPads(fakeClient({ listWhiteboardPads: vi.fn(async () => [{
+      id: "w1", title: "One", updated_at: 9, page_count: 1,
+      board: { v: 1, elements: [] }, agent: [],
+    }]) }));
+    expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
   });
 });
 

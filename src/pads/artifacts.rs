@@ -156,6 +156,15 @@ pub(super) fn validate(
     for (index, old) in before.artifacts.iter().enumerate() {
         let (new_index, new) = next_by_id.get(old.id.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing artifact deletion record: {}", old.id))?;
+        let identity = |content: &Content| -> (u8, String) {
+            match content {
+                Content::Whiteboard { board_id, .. } => (0, board_id.clone()),
+                Content::Code { document_id, .. } => (1, document_id.clone()),
+                Content::Markdown { document_id, .. } => (2, document_id.clone()),
+            }
+        };
+        ensure!(old.created_at == new.created_at && identity(&old.content) == identity(&new.content),
+            "artifact identity cannot change; create an explicit copy");
         if new.revision == old.revision {
             ensure!(incoming["artifacts"][*new_index] == previous["artifacts"][index],
                 "artifact revision reused for different content");
@@ -262,6 +271,19 @@ mod tests {
         incoming["artifacts"][0]["revision"] = json!("r2");
         incoming["artifacts"][0]["deletedAt"] = json!(2);
         assert!(validate(Some(&incoming), Some(&saved), "annotate", "a1").is_ok());
+    }
+
+    #[test]
+    fn stable_artifact_identity_requires_explicit_copy() {
+        let saved = catalog();
+        let mut changed = saved.clone();
+        changed["revision"] = json!("c2");
+        changed["artifacts"][0]["revision"] = json!("r2");
+        changed["artifacts"][0]["content"]["boardId"] = json!("different-board");
+        assert!(validate(Some(&changed), Some(&saved), "annotate", "a1").is_err());
+        changed["artifacts"][0]["content"]["boardId"] = json!("board-1");
+        changed["artifacts"][0]["createdAt"] = json!(0);
+        assert!(validate(Some(&changed), Some(&saved), "annotate", "a1").is_err());
     }
 
     #[test]
