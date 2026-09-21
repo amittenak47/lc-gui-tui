@@ -3,7 +3,8 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
-import { deleteContent, getContent, putContent } from "./contentStore";
+import { deleteContent, getContent, putParentContent, editParentContentArtifacts } from "./contentStore";
+import type { ArtifactCatalogEdit } from "./artifactCatalogEdits";
 import { deletePadSnapshots } from "./padSnapshotStore";
 import { deleteInkPages, whiteboardDocKey } from "./inkPageStore";
 import { setStorageItem } from "./storageQuota";
@@ -188,12 +189,23 @@ export function whiteboardLibraryCount(): number {
 }
 
 export async function getWhiteboardNotebook(id: string): Promise<WhiteboardNotebook | null> {
-  const meta = readIndex().find((entry) => entry.id === id);
+  let meta = readIndex().find((entry) => entry.id === id);
   if (!meta) return null;
   const content = await getContent<WhiteboardContent>(id);
   if (content?.board) {
+    const fields = artifactCatalogFields(content.artifacts, { kind: "whiteboard", id });
+    if (fields.artifacts && meta.artifactRevision !== fields.artifacts.revision) {
+      const index = readIndex();
+      const latest = index.find((entry) => entry.id === id);
+      // Recover an interrupted content->index update, but never downgrade an
+      // index changed by another window after this content read began.
+      if (latest && latest.artifactRevision === meta.artifactRevision) {
+        meta = { ...latest, artifactRevision: fields.artifacts.revision, updatedAt: Math.max(Date.now(), latest.updatedAt + 1) };
+        writeIndex([meta, ...index.filter((entry) => entry.id !== id)]);
+      }
+    }
     return { ...meta, board: content.board, agent: Array.isArray(content.agent) ? content.agent : [],
-      ...artifactCatalogFields(content.artifacts, { kind: "whiteboard", id }) };
+      ...fields };
   }
   const legacy = legacyLibrary().find((entry) => entry.id === id);
   if (!legacy) return null;
@@ -258,9 +270,37 @@ export async function saveWhiteboardNotebook(input: {
     lastTouch: now,
     ...(existing?.hubAckUpdatedAt != null ? { hubAckUpdatedAt: existing.hubAckUpdatedAt } : {}),
   };
-  writeIndex([meta, ...library.filter((entry) => entry.id !== id)]);
-  await putContent(id, { board: input.board, agent, ...artifactFields } satisfies WhiteboardContent);
-  return { ...meta, board: input.board, agent, ...artifactFields };
+  const saved = await putParentContent({ kind: "whiteboard", id }, {
+    board: input.board, agent, artifacts: input.artifacts,
+  } satisfies WhiteboardContent);
+  if (saved.artifacts) meta.artifactRevision = saved.artifacts.revision;
+  const latest = readIndex().find((entry) => entry.id === id);
+  if (existing && (!latest || latest.deletedAt !== undefined)) throw new Error("Notebook was removed during save; it was not restored.");
+  if (latest) {
+    meta.updatedAt = Math.max(meta.updatedAt, latest.updatedAt + 1);
+    meta.syncSeq = latest.syncSeq;
+    meta.hubAckUpdatedAt = latest.hubAckUpdatedAt;
+    if (latest.locked) meta.locked = true; else delete meta.locked;
+  }
+  writeIndex([meta, ...readIndex().filter((entry) => entry.id !== id)]);
+  return { ...meta, ...saved };
+}
+
+/** Update only attachment metadata; never write an old scene back after preflight. */
+export async function editWhiteboardArtifacts(
+  id: string, expectedCatalogRevision: string | null, edit: ArtifactCatalogEdit,
+): Promise<ArtifactCatalog> {
+  const assertLive = () => {
+    const meta = readIndex().find((row) => row.id === id);
+    if (!meta || meta.deletedAt !== undefined) throw new Error("Notebook was removed; attachment was not published.");
+  };
+  const artifacts = await editParentContentArtifacts({ kind: "whiteboard", id }, expectedCatalogRevision, edit, assertLive);
+  assertLive();
+  const index = readIndex();
+  const meta = index.find((row) => row.id === id)!;
+  writeIndex([{ ...meta, artifactRevision: artifacts.revision, updatedAt: Math.max(Date.now(), meta.updatedAt + 1) },
+    ...index.filter((row) => row.id !== id)]);
+  return artifacts;
 }
 
 export function markWhiteboardHubAck(id: string, updatedAt: number): void {
@@ -382,8 +422,11 @@ export async function restoreWhiteboardNotebook(entry: WhiteboardNotebook): Prom
   );
   delete meta.artifactRevision;
   if (artifactFields.artifacts) meta.artifactRevision = artifactFields.artifacts.revision;
+  const saved = await putParentContent({ kind: "whiteboard", id: entry.id }, {
+    board, agent: agent ?? [], artifacts,
+  } satisfies WhiteboardContent, { allowCatalogReplacement: true });
+  if (saved.artifacts) meta.artifactRevision = saved.artifacts.revision;
   writeIndex([meta, ...readIndex().filter((existing) => existing.id !== entry.id)]);
-  await putContent(entry.id, { board, agent: agent ?? [], ...artifactFields } satisfies WhiteboardContent);
 }
 
 /** Migrate the pre-library single-slot keys if present. */

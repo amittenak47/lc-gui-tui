@@ -31,6 +31,8 @@
 
 import { run, withStore, STORE_CONTENT } from "./idb";
 import { setStorageItem } from "./storageQuota";
+import { artifactCatalogFields, type ArtifactCatalog, type ArtifactParent } from "./padArtifacts";
+import { ArtifactEditConflict, editArtifactCatalog, requireArtifactCatalogTransition, type ArtifactCatalogEdit } from "./artifactCatalogEdits";
 
 /** Per-entry spill key. Per-entry, not per-library, so a fallback save is still small. */
 function spillKey(id: string): string {
@@ -198,6 +200,86 @@ export async function putContent(id: string, content: unknown): Promise<void> {
   // difference between a reader who frees space and one who finds out when
   // the fallback fills up too.
   noteSpillOnly(true);
+}
+
+/**
+ * Parent saves preserve an omitted catalog INSIDE the content transaction.
+ * A cached index hint or a prior async read is not sufficient: another editor
+ * can attach content between that read and this write.
+ */
+export async function putParentContent<T extends { artifacts?: ArtifactCatalog }>(
+  parent: ArtifactParent, content: T,
+  opts: { expectedCatalogRevision?: string | null; catalogOnly?: boolean; assertLive?: () => void; allowCatalogReplacement?: boolean } = {},
+): Promise<T> {
+  artifactCatalogFields(content.artifacts, parent);
+  const guarded = opts.expectedCatalogRevision !== undefined;
+  // Guarded edits require one durable store. Never pretend localStorage and
+  // IndexedDB are a shared transaction while the content is spilled.
+  if (guarded && contentSpillOnly()) throw new Error("Repair local storage before editing attachments.");
+  const readSpill = (): T | undefined => {
+    let raw: string | null;
+    try { raw = typeof localStorage === "undefined" ? null : localStorage.getItem(spillKey(parent.id)); }
+    catch { return undefined; }
+    return raw === null ? undefined : JSON.parse(raw) as T;
+  };
+  const merge = (previous: T | undefined): T => {
+    if (guarded && (previous?.artifacts?.revision ?? null) !== opts.expectedCatalogRevision) throw new ArtifactEditConflict();
+    if (!guarded && !opts.allowCatalogReplacement && content.artifacts && previous?.artifacts &&
+        content.artifacts.revision !== previous.artifacts.revision) throw new ArtifactEditConflict();
+    if (opts.catalogOnly && !previous) throw new Error("Parent content is missing; attachment was not published.");
+    const artifacts = requireArtifactCatalogTransition(previous?.artifacts, content.artifacts, parent);
+    return { ...(opts.catalogOnly ? previous : content), ...(artifacts ? { artifacts } : {}) } as T;
+  };
+  let result: T;
+  let validationFailure: unknown;
+  try {
+    await withStore(STORE_CONTENT, "readwrite", (store) => {
+      const request = store.get(parent.id);
+      request.onsuccess = () => {
+        try {
+          opts.assertLive?.();
+          // The spill, when present, is newer than the IndexedDB row. Check it
+          // at commit time, not before an asynchronous open/upgrade wait.
+          const spill = readSpill();
+          if (guarded && spill) throw new Error("Repair local storage before editing attachments.");
+          result = merge(spill ?? request.result as T | undefined);
+          store.put(result, parent.id);
+        } catch (cause) { validationFailure = cause; store.transaction.abort(); }
+      };
+    });
+  } catch (cause) {
+    if (validationFailure) throw validationFailure;
+    if (guarded || opts.catalogOnly) throw cause;
+    // Ordinary legacy saves retain private-WebView fallback support. Revision-
+    // guarded attachment edits never enter this nontransactional fallback.
+    const previous = await getContent<T>(parent.id);
+    opts.assertLive?.();
+    result = merge(readSpill() ?? previous ?? undefined);
+    setStorageItem(spillKey(parent.id), JSON.stringify(result));
+    spilled = true;
+    noteSpillOnly(true);
+    return result;
+  }
+  try { localStorage.removeItem(spillKey(parent.id)); } catch { /* best effort */ }
+  if (spilled || contentSpillOnly()) await promoteSpilled();
+  return result!;
+}
+
+/** Dependency preflight + atomic catalog-only CAS; caller updates its tiny index. */
+export async function editParentContentArtifacts(
+  parent: ArtifactParent, expectedCatalogRevision: string | null,
+  edit: ArtifactCatalogEdit, assertLive: () => void,
+): Promise<ArtifactCatalog> {
+  assertLive();
+  const previous = await getContent<{ artifacts?: ArtifactCatalog }>(parent.id);
+  if (!previous) throw new Error("Save the parent before attaching content.");
+  const next = editArtifactCatalog(previous.artifacts, parent, expectedCatalogRevision, edit);
+  const { downloadArtifactAssets } = await import("./artifactAssetSync");
+  await downloadArtifactAssets(undefined, next);
+  const stored = await putParentContent(parent, { artifacts: next }, {
+    expectedCatalogRevision, catalogOnly: true, assertLive,
+  });
+  return stored.artifacts!;
 }
 
 /** Read one entry's content back, from wherever it ended up. */

@@ -28,7 +28,8 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
-import { deleteContent, putContent, getContent } from "./contentStore";
+import { deleteContent, getContent, putParentContent, editParentContentArtifacts } from "./contentStore";
+import type { ArtifactCatalogEdit } from "./artifactCatalogEdits";
 import type { WebCapture, WebPadKind } from "./webCaptures";
 import { deleteDocBytes } from "./docBytes";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
@@ -432,13 +433,22 @@ export function getAnnotateDocMeta(id: string): AnnotateDocMeta | null {
 async function readContent(meta: AnnotateDocMeta): Promise<AnnotateDoc | null> {
   const content = await getContent<AnnotateContent>(meta.id);
   if (content?.board) {
+    const fields = artifactCatalogFields(content.artifacts, { kind: "annotate", id: meta.id });
+    if (fields.artifacts && meta.artifactRevision !== fields.artifacts.revision) {
+      const index = readIndex();
+      const latest = index.find((entry) => entry.id === meta.id);
+      if (latest && latest.artifactRevision === meta.artifactRevision) {
+        meta = { ...latest, artifactRevision: fields.artifacts.revision, updatedAt: Math.max(Date.now(), latest.updatedAt + 1) };
+        writeIndex([meta, ...index.filter((entry) => entry.id !== meta.id)]);
+      }
+    }
     return {
       ...meta,
       source: typeof content.source === "string" ? content.source : "",
       board: content.board,
       footnotes: sanitizeFootnotes(content.footnotes),
       agent: Array.isArray(content.agent) ? content.agent : [],
-      ...artifactCatalogFields(content.artifacts, { kind: "annotate", id: meta.id }),
+      ...fields,
       ...(Array.isArray(content.captures) ? { captures: content.captures } : {}),
       ...(content.padKind ? { padKind: content.padKind } : {}),
     };
@@ -698,9 +708,8 @@ export async function saveAnnotateDoc(input: {
     lastTouch: now,
     ...(existing?.hubAckUpdatedAt != null ? { hubAckUpdatedAt: existing.hubAckUpdatedAt } : {}),
   };
-  writeIndex([meta, ...index.filter((entry) => entry.id !== id)]);
-  await putContent(id, {
-    ...artifactFields,
+  const saved = await putParentContent({ kind: "annotate", id }, {
+    artifacts: input.artifacts,
     source: input.source,
     board: input.board,
     footnotes,
@@ -708,16 +717,33 @@ export async function saveAnnotateDoc(input: {
     ...(captures && captures.length > 0 ? { captures } : {}),
     ...(padKind ? { padKind } : {}),
   } satisfies AnnotateContent);
-  return {
-    ...meta,
-    ...artifactFields,
-    source: input.source,
-    board: input.board,
-    footnotes,
-    agent,
-    ...(captures && captures.length > 0 ? { captures } : {}),
-    ...(padKind ? { padKind } : {}),
+  if (saved.artifacts) meta.artifactRevision = saved.artifacts.revision;
+  const latest = getAnnotateDocMeta(id);
+  if (existing && (!latest || latest.deletedAt !== undefined)) throw new Error("Document was removed during save; it was not restored.");
+  if (latest) {
+    meta.updatedAt = Math.max(meta.updatedAt, latest.updatedAt + 1);
+    meta.syncSeq = latest.syncSeq;
+    meta.hubAckUpdatedAt = latest.hubAckUpdatedAt;
+    if (latest.locked) meta.locked = true; else delete meta.locked;
+  }
+  writeIndex([meta, ...readIndex().filter((entry) => entry.id !== id)]);
+  return { ...meta, ...saved };
+}
+
+export async function editAnnotateArtifacts(
+  id: string, expectedCatalogRevision: string | null, edit: ArtifactCatalogEdit,
+): Promise<ArtifactCatalog> {
+  const assertLive = () => {
+    const meta = getAnnotateDocMeta(id);
+    if (!meta || meta.deletedAt !== undefined) throw new Error("Document was removed; attachment was not published.");
   };
+  const artifacts = await editParentContentArtifacts({ kind: "annotate", id }, expectedCatalogRevision, edit, assertLive);
+  assertLive();
+  const index = readIndex();
+  const meta = index.find((row) => row.id === id)!;
+  writeIndex([{ ...meta, artifactRevision: artifacts.revision, updatedAt: Math.max(Date.now(), meta.updatedAt + 1) },
+    ...index.filter((row) => row.id !== id)]);
+  return artifacts;
 }
 
 export function markAnnotateHubAck(id: string, updatedAt: number): void {
@@ -852,12 +878,13 @@ export async function restoreAnnotateDoc(entry: AnnotateDoc): Promise<void> {
   );
   delete meta.artifactRevision;
   if (artifactFields.artifacts) meta.artifactRevision = artifactFields.artifacts.revision;
-  writeIndex([meta, ...readIndex().filter((existing) => existing.id !== entry.id)]);
-  await putContent(entry.id, {
-    ...artifactFields,
+  const saved = await putParentContent({ kind: "annotate", id: entry.id }, {
+    artifacts,
     source,
     board,
     footnotes: footnotes ?? [],
     agent: Array.isArray(agent) ? agent : [],
-  } satisfies AnnotateContent);
+  } satisfies AnnotateContent, { allowCatalogReplacement: true });
+  if (saved.artifacts) meta.artifactRevision = saved.artifacts.revision;
+  writeIndex([meta, ...readIndex().filter((existing) => existing.id !== entry.id)]);
 }
