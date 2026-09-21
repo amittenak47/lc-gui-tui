@@ -182,6 +182,10 @@
   z-index: 11000;
 }
 
+.lc-artifact-picker-backdrop .lc-modal-backdrop {
+  z-index: 1;
+}
+
 .lc-artifact-picker-modal {
   width: min(420px, 100%);
   max-height: min(70vh, 480px);
@@ -452,7 +456,8 @@
 
 .lc-artifact-picker-row-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: 4px;
   justify-content: flex-end;
 }
@@ -461,6 +466,76 @@
   min-height: 28px;
   padding: 0 8px;
   font-size: 12px;
+}
+
+.lc-artifact-picker-row.is-trashed .lc-artifact-picker-row-title,
+.lc-artifact-picker-row.is-trashed .lc-artifact-picker-status {
+  color: var(--muted);
+}
+
+.lc-artifact-picker-modal .lc-scratch-load-lock.lc-artifact-picker-lock,
+.lc-artifact-picker-modal .lc-hold-reveal.lc-artifact-picker-trash,
+.lc-artifact-picker-modal .lc-hold-reveal.lc-artifact-picker-restore {
+  flex: none;
+  align-self: auto;
+  width: 26px;
+  min-width: 26px;
+  min-height: 0;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--hint);
+  box-shadow: none;
+  font-weight: inherit;
+}
+
+.lc-artifact-picker-lock svg,
+.lc-artifact-picker-trash svg,
+.lc-artifact-picker-restore svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+
+.lc-artifact-picker-lock:hover:not(:disabled),
+.lc-artifact-picker-restore:hover:not(:disabled) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+.lc-artifact-picker-lock.is-locked {
+  color: var(--accent);
+}
+
+.lc-artifact-picker-trash:hover:not(:disabled) {
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+}
+
+.lc-artifact-picker-trash .lc-hold-reveal-label,
+.lc-artifact-picker-restore .lc-hold-reveal-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.lc-artifact-picker-trash .lc-hold-reveal-fill {
+  background: linear-gradient(
+    180deg,
+    var(--lc-hold-danger-wash-top) 0%,
+    var(--lc-hold-danger-wash-bottom) 100%
+  );
+}
+
+.lc-artifact-picker-restore .lc-hold-reveal-fill {
+  background: linear-gradient(
+    180deg,
+    var(--lc-hold-wash-top) 0%,
+    var(--lc-hold-wash-bottom) 100%
+  );
 }
 
 .lc-artifact-picker-empty {

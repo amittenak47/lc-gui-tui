@@ -46,6 +46,12 @@ describe("attachment picker chrome", () => {
     expect(picker).toContain("HoldButton");
     expect(picker).toContain("is-filter");
     expect(picker).toContain("tap to create, hold to filter");
+    expect(picker).toContain("ConfirmDialog");
+    expect(picker).toContain("LibraryPadlock");
+    expect(picker).toContain("useLibraryDeleteArm");
+    expect(picker).not.toContain("window.confirm");
+    expect(picker).not.toContain("window.alert");
+    expect(picker).not.toContain("Trash on this device");
     expect(css).toContain("button.lc-artifact-picker-adorn");
     expect(css).toContain("color: var(--hint)");
     expect(css).toContain("border: 1px solid var(--chrome-edge)");

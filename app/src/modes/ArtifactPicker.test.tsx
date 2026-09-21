@@ -32,6 +32,8 @@ vi.mock("../util/artifactRepository", () => ({
 
 import { ArtifactPicker } from "./ArtifactPicker";
 import { HOLD_MS } from "../util/gesture";
+import { resetLibraryDeleteArmForTests } from "../util/armedDelete";
+import { resetArtifactLocksForTests } from "../util/artifactLocks";
 
 const parent = { kind: "whiteboard" as const, id: "nb1" };
 const thread = { kind: "thread" as const, rootId: "t1" };
@@ -82,6 +84,8 @@ beforeEach(() => {
   catalog.current = { v: 1, parent, revision: "cat1", artifacts: [] };
   repo.createArtifact.mockReset();
   repo.mutateArtifacts.mockReset();
+  resetLibraryDeleteArmForTests();
+  resetArtifactLocksForTests();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -154,6 +158,60 @@ async function holdKind(label: string) {
   });
   await act(async () => {
     pointer(node, "pointerup");
+  });
+}
+
+function control(aria: string) {
+  return [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+    (node) => node.getAttribute("aria-label") === aria,
+  );
+}
+
+async function holdControl(aria: string) {
+  const node = control(aria)!;
+  await act(async () => {
+    pointer(node, "pointerdown");
+  });
+  await act(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, HOLD_MS + 50));
+  });
+  await act(async () => {
+    pointer(node, "pointerup");
+  });
+}
+
+async function tapControl(aria: string) {
+  const node = control(aria)!;
+  await act(async () => {
+    pointer(node, "pointerdown");
+    pointer(node, "pointerup");
+  });
+}
+
+function mockLifecycle() {
+  repo.mutateArtifacts.mockImplementation(async (_parent, _rev, edit: { type: string; id: string }) => {
+    const current = catalog.current!;
+    if (edit.type === "delete") {
+      catalog.current = {
+        ...current,
+        revision: "after-delete",
+        artifacts: current.artifacts.map((item) =>
+          item.id === edit.id ? { ...item, deletedAt: 9, revision: "r-del", updatedAt: 9 } : item,
+        ),
+      };
+    }
+    if (edit.type === "restore") {
+      catalog.current = {
+        ...current,
+        revision: "after-restore",
+        artifacts: current.artifacts.map((item) => {
+          if (item.id !== edit.id) return item;
+          const { deletedAt: _deletedAt, ...rest } = item;
+          return { ...rest, revision: "r-res", restoredFrom: item.revision, updatedAt: 10 };
+        }),
+      };
+    }
+    return catalog.current;
   });
 }
 
@@ -343,4 +401,52 @@ it("skips the leave animation when motion is reduced", async () => {
   const { onClose } = await mount();
   act(() => button("Close")!.click());
   expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+it("trashes through hold + in-app confirm, then restores from the same row", async () => {
+  catalog.current = {
+    v: 1, parent, revision: "cat1",
+    artifacts: [note({ id: "a1", title: "Plan.md" })],
+  };
+  mockLifecycle();
+  const confirm = vi.spyOn(window, "confirm");
+  await mount();
+  expect(control("Delete Plan.md — hold to delete")).toBeTruthy();
+  await holdControl("Delete Plan.md — hold to delete");
+  expect(confirm).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain("Remove this attachment?");
+  expect(repo.mutateArtifacts).not.toHaveBeenCalled();
+  await holdControl("Hold to confirm: Delete");
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(repo.mutateArtifacts).toHaveBeenCalledWith(
+    parent,
+    "cat1",
+    expect.objectContaining({ type: "delete", id: "a1" }),
+  );
+  expect(document.body.textContent).not.toContain("Remove this attachment?");
+  expect(backdrop().textContent).toContain("Trash");
+  expect(button("Open")).toBeUndefined();
+  expect(control("Restore Plan.md — tap to restore")).toBeTruthy();
+  await tapControl("Restore Plan.md — tap to restore");
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(repo.mutateArtifacts).toHaveBeenCalledWith(
+    parent,
+    "after-delete",
+    expect.objectContaining({ type: "restore", id: "a1" }),
+  );
+  expect(button("Open")).toBeTruthy();
+  expect(control("Delete Plan.md — tap to delete")).toBeTruthy();
+  confirm.mockRestore();
+});
+
+it("hides trash while the compact padlock is on", async () => {
+  catalog.current = {
+    v: 1, parent, revision: "cat1",
+    artifacts: [note({ id: "a1", title: "Plan.md" })],
+  };
+  await mount();
+  expect(control("Delete Plan.md — hold to delete")).toBeTruthy();
+  act(() => control("Lock Plan.md")!.click());
+  expect(control("Unlock Plan.md")).toBeTruthy();
+  expect(control("Delete Plan.md — hold to delete")).toBeUndefined();
 });

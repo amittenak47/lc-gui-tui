@@ -6,17 +6,19 @@ export function LibraryPadlock({
   name,
   locked = false,
   disabled = false,
+  className,
   onToggle,
 }: {
   name: string;
   locked?: boolean;
   disabled?: boolean;
+  className?: string;
   onToggle: () => void;
 }) {
   return (
     <button
       type="button"
-      className={["lc-scratch-load-lock", locked && "is-locked"].filter(Boolean).join(" ")}
+      className={["lc-scratch-load-lock", locked && "is-locked", className].filter(Boolean).join(" ")}
       disabled={disabled}
       aria-pressed={locked}
       aria-label={locked ? `Unlock ${name}` : `Lock ${name}`}
