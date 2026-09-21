@@ -823,6 +823,7 @@ export class LcClient {
     reply: string;
     reasoning?: string;
     proposed_annotations?: ProposedAnnotation[];
+    artifacts?: import("../util/agentArtifacts").AgentArtifactProposal[];
     programs?: unknown[];
     process_events?: Array<{
       kind: string;

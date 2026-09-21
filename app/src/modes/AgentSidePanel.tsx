@@ -35,6 +35,7 @@ import { useIsMobile } from "../util/mobile";
 import { PHOTO_ATTACH_LIMIT, pickPhotos } from "../util/photoAttach";
 import type { MessageDrawing } from "../viz/drawingState";
 import type { ArtifactRef } from "../util/padArtifacts";
+import { ArtifactCards } from "./ArtifactCards";
 import { Timeline } from "../viz/Timeline";
 import { BridgePanel } from "./RevealDialog";
 import { ReviewPanel } from "./ReviewPanel";
@@ -436,6 +437,8 @@ export interface CoachAttachment {
 }
 
 export interface AgentChatMessage {
+  artifactProposals?: import("../util/agentArtifacts").AgentArtifactProposal[];
+  artifactFootnoteIds?: string[];
   id: string;
   /**
    * `app` is the harness talking, not the student and not the coach — test
@@ -492,6 +495,9 @@ export interface AgentChatMessage {
 }
 
 export interface AgentSidePanelProps {
+  onSaveArtifact?: (message: AgentChatMessage, proposal: import("../util/agentArtifacts").AgentArtifactProposal, index?: number) => void;
+  onOpenArtifact?: (ref: ArtifactRef) => void;
+  onManageArtifacts?: (message?: AgentChatMessage) => void;
   showProcess?: boolean;
   open: boolean;
   mode: CoachMode;
@@ -580,6 +586,9 @@ export interface AgentSidePanelProps {
 }
 
 export function AgentSidePanel({
+  onSaveArtifact,
+  onOpenArtifact,
+  onManageArtifacts,
   showProcess = true,
   open,
   mode,
@@ -1611,6 +1620,12 @@ export function AgentSidePanel({
                   }
                 />
               )}
+              {onOpenArtifact && <ArtifactCards references={message.artifacts} onOpen={onOpenArtifact} />}
+              {onSaveArtifact && message.artifactProposals?.map((proposal, index) => <button type="button" key={index} onClick={() => onSaveArtifact(message, proposal, index)}>Save {proposal.title}</button>)}
+              {onSaveArtifact && !message.pending && message.role === "assistant" && <button type="button" onClick={() => onSaveArtifact(message, message.drawing
+                ? { kind: "whiteboard", title: message.drawing.program.title || "Diagram", programs: [message.drawing.program] }
+                : { kind: "markdown", title: "Answer.md", source: message.content })}>Save {message.drawing ? "drawing" : "answer"}</button>}
+              {onManageArtifacts && !message.pending && !message.queued && <button type="button" onClick={() => onManageArtifacts(message)}>Attachments</button>}
               {message.role !== "assistant" && <MessageFlags message={message} />}
             </AgentMessageBubble>
             );
@@ -1642,6 +1657,7 @@ export function AgentSidePanel({
           <button type="button" onClick={() => { onCancelEdit?.(editingQueued.id); setEditingQueued(null); }}>Cancel edit</button>
         </div>}
         <form className="lc-agent-composer" onSubmit={(event) => submit("queue", event)}>
+          {onManageArtifacts && <button type="button" onClick={() => onManageArtifacts()}>Whiteboards & files</button>}
           <div className="lc-agent-composer-body">
           {allowAnnotations && attachedMarks.length > 0 && (
             <>

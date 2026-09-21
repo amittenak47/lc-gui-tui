@@ -1099,6 +1099,7 @@ export function HubConflictSplit({
     >
       <header className="lc-hub-conflict-head">
         <strong>Both copies changed — {nameOf(conflict)}</strong>
+        {(conflict.local?.artifacts || conflict.server?.artifacts) && <span>Attachments keep both authored versions when they differ. The other version becomes a “conflict copy”; deletion records are retained.</span>}
         <span>
           {conflict.detail}. Local is this device; {otherLabel} is the other. No choice has
           been saved yet.

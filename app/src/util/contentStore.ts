@@ -227,7 +227,20 @@ export async function putParentContent<T extends { artifacts?: ArtifactCatalog }
     if (!guarded && !opts.allowCatalogReplacement && content.artifacts && previous?.artifacts &&
         content.artifacts.revision !== previous.artifacts.revision) throw new ArtifactEditConflict();
     if (opts.catalogOnly && !previous) throw new Error("Parent content is missing; attachment was not published.");
-    const artifacts = requireArtifactCatalogTransition(previous?.artifacts, content.artifacts, parent);
+    let artifacts = requireArtifactCatalogTransition(previous?.artifacts, content.artifacts, parent);
+    if (!opts.catalogOnly && !opts.allowCatalogReplacement && artifacts) {
+      const oldRecord = previous as Record<string, unknown> | undefined;
+      const newRecord = content as Record<string, unknown>;
+      for (const [field, kind] of [["footnotes", "footnote"], ["agent", "thread"]] as const) {
+        const oldRows = oldRecord?.[field], newRows = newRecord[field];
+        if (!Array.isArray(oldRows) || !Array.isArray(newRows)) continue;
+        const kept = new Set(newRows.map(row => row?.id));
+        for (const row of oldRows) if (typeof row?.id === "string" && !kept.has(row.id)) {
+          artifacts = editArtifactCatalog(artifacts, parent, artifacts.revision, { type: "detach",
+            association: kind === "footnote" ? { kind, footnoteId: row.id } : { kind, rootId: row.id } });
+        }
+      }
+    }
     return { ...(opts.catalogOnly ? previous : content), ...(artifacts ? { artifacts } : {}) } as T;
   };
   let result: T;

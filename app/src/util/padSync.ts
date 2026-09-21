@@ -371,6 +371,10 @@ async function applyLivePutFailure(
     return true;
   }
   const body = errorJson(cause);
+  const localProblem = await getProblemBoard(padId);
+  if (localProblem?.artifacts || (body && typeof body === "object" && "artifacts" in body && body.artifacts)) {
+    throw new Error("Problem attachment sync conflict. Local work was kept; resolve both versions before syncing again.");
+  }
   await applyHubProblem(body, { emitReload: true, client });
   await dropPadPayloadJobs(kind, padId);
   return true;

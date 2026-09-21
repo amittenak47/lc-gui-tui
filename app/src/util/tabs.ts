@@ -19,6 +19,7 @@
  */
 
 import type { DocType } from "./annotateStore";
+import { artifactRefKey, type ArtifactRef } from "./padArtifacts";
 import { hostLabelFromUrl } from "./webPage";
 import { type WebHistory, type WebPadEntry, currentEntry, pushWeb, stepWeb } from "./webPadSession";
 
@@ -60,6 +61,8 @@ export const PRACTICE_TAB_LIMIT = 1;
 export const EXPLORE_TAB_LIMIT = 1;
 
 interface TabBase {
+  /** Parent-owned attachment; rendered by ArtifactWorkspace, never a library pad. */
+  artifact?: ArtifactRef;
   id: string;
   title: string;
   /** Unsaved work; parking the tab is what clears it. */
@@ -422,6 +425,7 @@ export function webTabTitle(entry: WebPadEntry | undefined): string {
  * are asking for another page, not for the one already open.
  */
 export function sameEntity(a: TabRecord, b: TabRecord): boolean {
+  if (a.artifact || b.artifact) return Boolean(a.artifact && b.artifact && artifactRefKey(a.artifact) === artifactRefKey(b.artifact));
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case "home":

@@ -10,6 +10,8 @@ import {
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import type { AgentChatMessage } from "./AgentSidePanel";
+import type { ArtifactRef } from "../util/padArtifacts";
+import { ArtifactCards } from "./ArtifactCards";
 import {
   freshNoteId,
   type DocFootnote,
@@ -40,6 +42,8 @@ import {
 } from "./sheetAnchor";
 import { HOLD_SENSITIVE_MS } from "../util/gesture";
 export interface FootnoteOverviewProps {
+  onOpenArtifact?: (ref: ArtifactRef) => void;
+  onManageArtifacts?: () => void;
   footnote: DocFootnote;
   number?: number;
   /** The turns of one saved thread — the card asks per thread, as it opens them. */
@@ -350,6 +354,8 @@ function MarkTitle({
  * {@link onOpenCoachThread} / {@link onAttachCoach} and this card closes.
  */
 export function FootnoteOverview({
+  onOpenArtifact,
+  onManageArtifacts,
   footnote,
   number: footnoteNumber,
   threadMessages,
@@ -1044,6 +1050,9 @@ export function FootnoteOverview({
                   </HubSection>
                 ) : null
               ) : (
+              <><HubSection title="Attachments" onAdd={onManageArtifacts}>
+                {onOpenArtifact && <ArtifactCards references={footnote.artifacts} onOpen={onOpenArtifact} />}
+              </HubSection>
               <HubSection title="Whiteboards" onAdd={onCreateWhiteboard}>
                 {whiteboards.length > 0 && (
                   <ul className={listClass(whiteboards.length)}>
@@ -1066,7 +1075,7 @@ export function FootnoteOverview({
                     ))}
                   </ul>
                 )}
-              </HubSection>
+              </HubSection></>
               )}
               <HubSection title="Threads">
                 {threads.length > 0 && (

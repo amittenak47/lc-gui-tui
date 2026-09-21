@@ -1,0 +1,16 @@
+.lc-artifact-workspace { display: flex; flex-direction: column; background: var(--lc-bg, #252a32); min-height: 0; }
+.lc-artifact-overlay { position: fixed; inset: max(70px, env(safe-area-inset-top)) 2vw 2vh; z-index: 1500; border: 1px solid #7d899b; border-radius: 12px; box-shadow: 0 12px 60px #0009; overflow: hidden; }
+.lc-artifact-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; align-items: center; }
+.lc-artifact-actions input { flex: 1; min-width: 120px; }
+.lc-artifact-actions button, .lc-artifact-picker button { min-height: 40px; }
+.lc-artifact-canvas { flex: 1; position: relative; min-height: 180px; overflow: hidden; }
+.lc-artifact-workspace > small, .lc-artifact-workspace > p { padding: 4px 12px; margin: 0; }
+.lc-artifact-cards { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.lc-artifact-card { display: flex; flex-direction: column; width: 180px; max-width: 100%; padding: 8px; border: 1px solid #7d899b66; border-radius: 10px; text-align: start; gap: 4px; overflow: hidden; }
+.lc-artifact-card pre { height: 64px; overflow: hidden; white-space: pre-wrap; margin: 0; font-size: 11px; opacity: .8; }
+.lc-artifact-card svg { width: 100%; height: 64px; }
+.lc-artifact-card small { opacity: .7; }
+.lc-artifact-picker { position: fixed; inset: 12vh max(3vw, calc((100vw - 660px)/2)); z-index: 1600; background: var(--lc-bg, #252a32); color: inherit; padding: 18px; overflow: auto; border: 1px solid #7d899b; border-radius: 14px; box-shadow: 0 12px 60px #0009; }
+.lc-artifact-picker header, .lc-artifact-picker nav, .lc-artifact-picker-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lc-artifact-picker header strong, .lc-artifact-picker-row > span { flex: 1; }
+.lc-artifact-picker-row { padding: 8px 0; border-bottom: 1px solid #7d899b44; }

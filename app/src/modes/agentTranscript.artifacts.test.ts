@@ -8,6 +8,13 @@ const artifact: ArtifactRef = {
 };
 
 describe("artifact links in transcripts", () => {
+  it("keeps unsaved generated files recoverable across relaunch", () => {
+    const proposals = [{ kind: "code", title: "solution.py", source: "print(1)" }];
+    const [restored] = restoreAgentMessages([{ id: "generated", role: "assistant", content: "", at: 1,
+      artifactProposals: proposals, artifactFootnoteIds: ["mark"] }]);
+    expect(restored.artifactProposals).toEqual(proposals);
+    expect(restored.artifactFootnoteIds).toEqual(["mark"]);
+  });
   it("retains an artifact-only assistant turn on reload without a thumbnail", () => {
     const message: AgentChatMessage = {
       id: "turn-1", role: "assistant", content: "", at: 1, artifacts: [artifact],

@@ -97,6 +97,13 @@ import {
 import { assembleAskPrompt, packFootnoteContext, PAD_ASK_CLIP_CHARS, PROBLEM_ASK_CLIP_CHARS } from "./modes/coachMarkContext";
 import { AttemptDialog } from "./modes/AttemptDialog";
 import { WhiteboardDialog } from "./modes/WhiteboardDialog";
+import { ArtifactPicker } from "./modes/ArtifactPicker";
+import { ArtifactWorkspace } from "./modes/ArtifactWorkspace";
+import { artifactTab } from "./util/artifactTabs";
+import { saveAgentArtifacts, sanitizeArtifactProposals, type AgentArtifactProposal } from "./util/agentArtifacts";
+import { syncArtifactParent } from "./util/artifactSync";
+import { reconcileArtifactConflict } from "./util/artifactConflict";
+import { artifactCreationAssociations, artifactRefKey, type ArtifactParent, type ArtifactRef, type ArtifactAssociation } from "./util/padArtifacts";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { groupThreads, threadAnchorRef, visibleThreadMessages } from "./modes/coachThreads";
 import {
@@ -975,6 +982,12 @@ export function Workspace({
         );
       }
       if (c.stage === "pad") {
+        if (c.server?.artifacts) {
+          const artifacts = await reconcileArtifactConflict(client, { kind: c.kind, id: c.id }, c.server.artifacts, resolution.pick === "server" ? "server" : "local");
+          // Use the merged catalog even when the user chooses the hub's canvas.
+          // Losing authored attachment content remains as explicit copies.
+          c.server = { ...c.server, artifacts };
+        }
         if (resolution.pick === "server" && c.server) {
           if (c.kind === "annotate") {
             await applyHubAnnotate(c.server, { emitReload: false, client });
@@ -1092,6 +1105,10 @@ export function Workspace({
         op: "reload",
       });
       syncPreparedRevisionRef.current = syncWorkingRevisionRef.current();
+      if (c.stage === "pad" && c.server?.artifacts) {
+        const synced = await syncArtifactParent(client, { kind: c.kind, id: c.id });
+        if (!synced) throw new Error("Attachments are kept locally, but the merged parent is not acknowledged yet. Retry Sync.");
+      }
       hubConflictAskRef.current = null;
       setHubConflictAsk(null);
       ask.resolve(resolution);
@@ -2052,6 +2069,8 @@ export function Workspace({
 
   const [nudges, setNudges] = useState<AmbientEntry[]>([]);
   const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
+  const [artifactPreview, setArtifactPreview] = useState<TabRecord | null>(null);
+  const [artifactPicker, setArtifactPicker] = useState<{ parent: ArtifactParent; associations: ArtifactAssociation[]; messageId?: string; footnoteId?: string } | null>(null);
   /**
    * The thread read from the hot paths.
    *
@@ -6360,6 +6379,7 @@ export function Workspace({
       if (!suppressCoachPanelOpenRef.current) openCoachPanel();
       setCoachPhase("Thinking…");
       const turnId = beginCoachTurn(threadAnchor ?? undefined, pendingAck);
+      const artifactFootnoteIds = [...attachedFootnoteIdsRef.current];
       let finished = false;
       let failText: string | null = null;
       try {
@@ -6428,6 +6448,7 @@ export function Workspace({
               }, saveCoachRequest);
         const result = await runCoachJob<{
           reply: string;
+          artifacts?: AgentArtifactProposal[];
           reasoning?: string;
           proposed_annotations?: ProposedAnnotation[];
           programs?: unknown[];
@@ -6485,6 +6506,8 @@ export function Workspace({
                 : "The model returned an empty reply."),
             ...(result.reasoning?.trim() ? { reasoning: result.reasoning.trim() } : {}),
             ...(firstDrawing ? { drawing: withNewDrawing(firstDrawing) } : {}),
+            artifactProposals: sanitizeArtifactProposals(result.artifacts),
+            artifactFootnoteIds,
           },
           ...moreDrawings.map((drawable, index) => ({
             content: `Drew diagram ${index + 2} of ${drawables.length} on the board.`,
@@ -8169,6 +8192,73 @@ export function Workspace({
   const onOpenFootnote = useCallback((footnote: DocFootnote, anchorRect: DOMRect | null) => {
     openFootnoteOverview(footnote.id, anchorRect);
   }, [openFootnoteOverview]);
+
+  const prepareArtifactContext = async (message?: AgentChatMessage, footnoteId?: string) => {
+    if (!problem || footnoteBoardRef.current) return;
+    const board = boardRef.current;
+    if (!board) return;
+    try {
+      let parent: ArtifactParent;
+      if (isAnnotate(problem)) {
+        const saved = await saveAnnotateSession();
+        if (!saved) throw new Error("Save this document before adding attachments.");
+        parent = { kind: "annotate", id: saved.id };
+      } else if (isWhiteboard(problem)) {
+        await saveWhiteboardNow(undefined, { quiet: true });
+        const id = whiteboardNotebookIdRef.current ?? (tabsRef.current.tabs.find(entry => entry.id === tab.id) as { notebookId?: string } | undefined)?.notebookId;
+        if (!id) throw new Error("Save the notebook first, then open Attachments.");
+        parent = { kind: "whiteboard", id };
+      } else {
+        const id = problemPadId(problem.dataset, problem.task_id);
+        const previous = await getProblemBoard(id);
+        await putProblemBoard({ ...previous, id, dataset: problem.dataset, taskId: problem.task_id,
+          updatedAt: Date.now(), board: board.saveBoard(), agent: persistableAgentMessages(agentMessagesRef.current) });
+        parent = { kind: "problem", id };
+      }
+      return { parent, messageId: message?.id, footnoteId,
+        associations: artifactCreationAssociations({ activeFootnoteId: footnoteId, attachedFootnoteIds: message?.artifactFootnoteIds ?? attachedFootnoteIds,
+          threadRootId: threadRootIdRef.current ?? message?.replyTo?.id ?? message?.id }) };
+    } catch (cause) { setError(messageOf(cause)); }
+  };
+  const manageArtifacts = async (message?: AgentChatMessage, footnoteId?: string) => {
+    const context = await prepareArtifactContext(message, footnoteId);
+    if (context) setArtifactPicker(context);
+  };
+  const savingAgentArtifactRef = useRef(false);
+  const saveAgentArtifact = async (message: AgentChatMessage, proposal: AgentArtifactProposal, index?: number) => {
+    if (savingAgentArtifactRef.current) return;
+    savingAgentArtifactRef.current = true;
+    try {
+      const context = await prepareArtifactContext(message);
+      if (!context) return;
+      await saveAgentArtifacts(context.parent, [proposal], context.associations, isDarkTheme(themeId), reference => {
+        setAgentMessages(current => current.map(turn => turn.id === message.id ? { ...turn,
+          artifacts: [...(turn.artifacts ?? []), reference],
+          artifactProposals: index === undefined ? turn.artifactProposals : turn.artifactProposals?.filter((_, i) => i !== index),
+        } : turn));
+        const marks = context.associations.flatMap(association => association.kind === "footnote" ? [association.footnoteId] : []);
+        if (marks.length) setAnnotateFootnotes(current => current.map(note => marks.includes(note.id) ? { ...note, artifacts: [...(note.artifacts ?? []), reference] } : note));
+        markPadDirty();
+      });
+      await syncArtifactParent(client, context.parent);
+      setNotice("Attachment saved. Open its card to edit or animate it.");
+    } catch (cause) { setError(messageOf(cause)); }
+    finally { savingAgentArtifactRef.current = false; }
+  };
+  const openArtifactPreview = (reference: ArtifactRef) => {
+    const existing = tabsRef.current.tabs.find(entry => entry.artifact && artifactRefKey(entry.artifact) === artifactRefKey(reference));
+    if (existing) { focusTab(existing.id); return; }
+    setArtifactPreview(artifactTab(reference, `${reference.kind} attachment`));
+  };
+  const attachArtifactHere = (reference: ArtifactRef) => {
+    const context = artifactPicker; if (!context) return;
+    const append = (refs: ArtifactRef[] = []) => refs.some(ref => artifactRefKey(ref) === artifactRefKey(reference)) ? refs : [...refs, reference];
+    const marks = context.associations.flatMap(association => association.kind === "footnote" ? [association.footnoteId] : []);
+    if (marks.length) setAnnotateFootnotes(current => current.map(note => marks.includes(note.id) ? { ...note, artifacts: append(note.artifacts) } : note));
+    if (context.messageId) setAgentMessages(current => current.map(turn => turn.id === context.messageId ? { ...turn, artifacts: append(turn.artifacts) } : turn));
+    else if (!marks.length) setAgentMessages(current => [...current, { id: crypto.randomUUID(), role: "app", content: "Saved attachment", artifacts: [reference], at: Date.now() }]);
+    markPadDirty();
+  };
 
   const onFootnoteChange = useCallback((next: DocFootnote) => {
     setAnnotateFootnotes((current) => current.map((entry) => (entry.id === next.id ? next : entry)));
@@ -10736,9 +10826,17 @@ export function Workspace({
           onResolve={(resolution) => void handleHubConflictResolve(resolution)}
         />
       ) : null}
+      {active && artifactPicker && <ArtifactPicker parent={artifactPicker.parent} associations={artifactPicker.associations}
+        markChoices={annotateFootnotes.map(note => ({ id: note.id, title: note.title || `Mark ${footnoteNumbers.get(note.id) ?? ""}`, selected: attachedFootnoteIds.includes(note.id) }))}
+        onToggleMark={id => setAttachedFootnoteIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id])}
+        onAttach={attachArtifactHere} onOpen={reference => { setArtifactPicker(null); openArtifactPreview(reference); }} onClose={() => setArtifactPicker(null)} />}
+      {active && artifactPreview && <ArtifactWorkspace key={artifactPreview.id} tab={artifactPreview} active showing onClose={() => setArtifactPreview(null)} />}
       {active && headerSlots.agentPanel && !hubConflictAsk ? createPortal(<>
         {problem && !canvasLoading && (
           <AgentSidePanel
+            onSaveArtifact={footnoteBoardRef.current ? undefined : (message, proposal, index) => { void saveAgentArtifact(message, proposal, index); }}
+            onOpenArtifact={openArtifactPreview}
+            onManageArtifacts={footnoteBoardRef.current ? undefined : message => { void manageArtifacts(message); }}
             showProcess={coachFlags.process_events_ui}
             open={coachOpen}
             mode={mode}
@@ -10835,6 +10933,8 @@ export function Workspace({
         <>
         {openFootnote && (
           <FootnoteOverview
+            onOpenArtifact={openArtifactPreview}
+            onManageArtifacts={() => { void manageArtifacts(undefined, openFootnote.id); }}
             workspaceLinks={workspaceLinkRows}
             onAddWorkspaceLink={hereNode ? () => setLinkPickerOpen(true) : undefined}
             onOpenWorkspaceLink={(id) => {

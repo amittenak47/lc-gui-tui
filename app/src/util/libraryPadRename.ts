@@ -18,6 +18,7 @@ import {
 } from "./whiteboardStore";
 
 export function tabAllowsRename(tab: TabRecord): boolean {
+  if (tab.artifact) return false; // Rename inside the revision-checked attachment editor.
   if (
     tab.kind === "home" ||
     tab.kind === "practice" ||

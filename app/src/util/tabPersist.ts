@@ -9,6 +9,7 @@
  */
 
 import { setStorageItem } from "./storageQuota";
+import { sanitizeArtifactRefs } from "./padArtifacts";
 import {
   HOME_TAB_ID,
   clampSplitRatio,
@@ -50,6 +51,7 @@ function parseFootnoteBoard(raw: unknown): { docId: string; wbId: string } | und
 }
 
 function persistable(tab: TabRecord): TabRecord | null {
+  if (tab.artifact) return { ...tab, dirty: false };
   switch (tab.kind) {
     case "home":
       return { ...homeTab(tab.lastActive), lastActive: tab.lastActive };
@@ -104,6 +106,13 @@ function parseTab(raw: unknown): TabRecord | null {
   const dirty = false;
   const kind = raw.kind;
   if (!id) return null;
+  if (raw.artifact !== undefined) {
+    const artifact = sanitizeArtifactRefs([raw.artifact])?.[0];
+    if (!artifact) return null;
+    return artifact.kind === "whiteboard"
+      ? { id, kind: "whiteboard", title, dirty, lastActive, group, artifact, notebookId: null }
+      : { id, kind: "annotate", title, dirty, lastActive, group, artifact, docId: null, hash: null, source: null, docType: artifact.kind, indexed: "idle" };
+  }
   if (kind === "home") return persistable({ id: HOME_TAB_ID, kind: "home", title: "Home", dirty, lastActive, group });
   if (kind === "practice") {
     const dataset = asString(raw.dataset);

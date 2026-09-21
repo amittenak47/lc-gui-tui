@@ -989,6 +989,21 @@ describe("live PUT CAS and gone", () => {
     expect(peekPadSyncQueueForTests()).toHaveLength(0);
   });
 
+  it("does not replace problem attachments with a conflicting server board", async () => {
+    const id = "leetcode/two-sum";
+    getProblemBoard.mockResolvedValue({ artifacts: {
+      v: 1, parent: { kind: "problem", id }, revision: "local", artifacts: [],
+    } });
+    const hub = { id, board: emptyBoard, updated_at: 40 };
+    const client = fakeClient({ putProblemPad: vi.fn(async () => {
+      throw new LcApiError("conflict", 409, JSON.stringify(hub), hub);
+    }) });
+    await expect(pushProblemPad(client, { id, dataset: "leetcode", taskId: "two-sum",
+      updatedAt: 999, hubAckUpdatedAt: 1, board: emptyBoard, agent: [],
+    })).rejects.toThrow("Local work was kept");
+    expect(putProblemBoard).not.toHaveBeenCalled();
+  });
+
   it("applies a problem 409 body and does not queue", async () => {
     const hub = {
       id: "leetcode/two-sum",

@@ -94,6 +94,7 @@ import { singleFlight } from "./util/singleFlight";
 import { bumpRetry, planWorkspaceMounts, workspaceMountKey } from "./util/workspaceMounts";
 import type { WebPadEntry } from "./util/webPadSession";
 import { Workspace } from "./Workspace";
+import { ArtifactWorkspace } from "./modes/ArtifactWorkspace";
 import {
   chromeLooksSame,
   NO_CHROME,
@@ -882,10 +883,15 @@ export function App() {
     if (doomed.length === 0) return;
     let cancelled = false;
     void (async () => {
+      const parkedIds: string[] = [];
       for (const id of doomed) {
-        await apisRef.current.get(id)?.park().catch(() => {});
+        try { await apisRef.current.get(id)?.park(); parkedIds.push(id); }
+        catch (cause) {
+          if (tabsRef.current.tabs.find(tab => tab.id === id)?.artifact) setError(String(cause));
+          else parkedIds.push(id);
+        }
       }
-      if (!cancelled) setLiveIds((current) => current.filter((x) => !doomed.includes(x)));
+      if (!cancelled) setLiveIds((current) => current.filter((x) => !parkedIds.includes(x)));
     })();
     return () => {
       cancelled = true;
@@ -963,7 +969,7 @@ export function App() {
         return;
       }
       if (parked) {
-        void parked.leave().then(() => drop(false));
+        void parked.leave().then((left) => { if (left) drop(false); }).catch((cause) => setError(String(cause)));
         return;
       }
       // A record and nothing else; dropping it is the whole of closing it, and
@@ -1352,7 +1358,7 @@ export function App() {
             never between workspaces.
           */}
           {workspaceMounts.map(({ tab, active, showing, splitRole }) => (
-            <Workspace
+            tab.artifact ? <ArtifactWorkspace key={workspaceMountKey(tab.id, retryByTab)} tab={tab} active={active} showing={showing} splitRole={splitRole} /> : <Workspace
               key={workspaceMountKey(tab.id, retryByTab)}
               tab={tab}
               active={active}

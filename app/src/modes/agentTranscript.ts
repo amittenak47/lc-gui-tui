@@ -1,6 +1,7 @@
 import type { AgentChatMessage } from "./AgentSidePanel";
 import { restoreMessageDrawing } from "../viz/drawingState";
 import { sanitizeArtifactRefs } from "../util/padArtifacts";
+import { sanitizeArtifactProposals } from "../util/agentArtifacts";
 
 export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
   if (!Array.isArray(stored)) return [];
@@ -13,6 +14,7 @@ export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
     if (message.pending) return [];
     const drawing = restoreMessageDrawing(message.drawing);
     const artifacts = sanitizeArtifactRefs(message.artifacts);
+    const artifactProposals = sanitizeArtifactProposals(message.artifactProposals);
     const content = typeof message.content === "string" ? message.content : "";
     const processEvents = Array.isArray(message.processEvents)
       ? message.processEvents
@@ -43,6 +45,7 @@ export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
       !message.bridge &&
       !message.attachments?.length &&
       !artifacts?.length &&
+      !artifactProposals?.length &&
       !drawing &&
       !processEvents?.length &&
       !reasoning
@@ -62,6 +65,8 @@ export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
         bridge: message.bridge,
         attachments: message.attachments,
         ...(artifacts ? { artifacts } : {}),
+        ...(artifactProposals ? { artifactProposals } : {}),
+        ...(Array.isArray(message.artifactFootnoteIds) ? { artifactFootnoteIds: message.artifactFootnoteIds.filter(id => typeof id === "string") } : {}),
         ...(flags && flags.length > 0 ? { flags } : {}),
         ...(processEvents ? { processEvents } : {}),
         ...(reasoning ? { reasoning } : {}),
