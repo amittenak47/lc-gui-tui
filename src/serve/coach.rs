@@ -834,11 +834,11 @@ pub async fn run_ask(
         events.stage(
             "ask",
             if document_ask {
-                "answering from the document"
+                "Answering from the document"
             } else if local_pad {
-                "answering from the pad"
+                "Answering from the pad"
             } else {
-                "answering from the problem statement and your code"
+                "Answering from the problem statement and your code"
             },
         );
         let mut prompt = build_ask_prompt(&meta, description.as_deref(), &question, &ctx);
@@ -855,7 +855,7 @@ pub async fn run_ask(
             } else {
                 highlight.as_str()
             };
-            events.stage("prefetch", "looking up earlier pages");
+            events.stage("prefetch", "Looking up earlier pages");
             let retrieved = match crate::docs_index::db_path()
                 .and_then(|path| crate::docs_index::open(&path))
                 .and_then(|conn| {

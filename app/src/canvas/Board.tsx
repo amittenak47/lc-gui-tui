@@ -5878,37 +5878,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (activeToolRef.current !== "text") return;
 
       if (!drag) {
-        if (textEditRef.current || root.querySelector(".lc-scene-text-edit")) {
-          hideGhost();
-          return;
-        }
-        const target = event.target;
-        if (
-          target instanceof Element &&
-          target.closest(".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-scene-text-edit")
-        ) {
-          hideGhost();
-          return;
-        }
-        const boardRect = root.getBoundingClientRect();
-        if (
-          event.clientX < boardRect.left ||
-          event.clientX > boardRect.right ||
-          event.clientY < boardRect.top ||
-          event.clientY > boardRect.bottom
-        ) {
-          hideGhost();
-          return;
-        }
-        const viewport = readViewport();
-        brushZoomRef.current = viewport.zoom;
-        const ghost = textPlaceGhostRef.current;
-        if (!ghost) return;
-        const min = minTextBox(fontSizeRef.current, viewport.zoom);
-        const p = boardPoint(event.clientX, event.clientY);
-        ghost.setSize(min.width * viewport.zoom, min.height * viewport.zoom);
-        ghost.move(p.x, p.y);
-        ghost.setVisible(true);
+        // Drag-to-draw: no hover preview chasing the pointer.
+        hideGhost();
         return;
       }
 

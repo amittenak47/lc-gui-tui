@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeProcessEvent } from "./processEvents";
+import { mergeProcessEvent, coalesceReasonListItems } from "./processEvents";
 import type { CoachProcessEvent } from "../api/types";
 
 const step = (detail: string, updateId = "reason-1-0"): CoachProcessEvent => ({
@@ -17,5 +17,25 @@ describe("streaming process updates", () => {
     const ordinary = { ...step("Reading"), updateId: undefined };
     expect(mergeProcessEvent([ordinary], ordinary)).toHaveLength(2);
     expect(mergeProcessEvent([step("First"), ordinary], step(""))).toEqual([ordinary]);
+  });
+});
+
+describe("coalesceReasonListItems", () => {
+  it("keeps numbered document points inside the thought that introduced them", () => {
+    const intro: CoachProcessEvent = {
+      kind: "stage", label: "reason", ts: 1,
+      detail: "So the document describes:",
+    };
+    const items = [1, 2, 3, 4].map((n) => ({
+      kind: "stage" as const, label: "reason", ts: n + 1,
+      detail: `${n}. Point ${n}`,
+    }));
+    const merged = coalesceReasonListItems([intro, ...items, {
+      kind: "stage", label: "prefetch", ts: 9, detail: "Looking up earlier pages",
+    }]);
+    expect(merged).toHaveLength(2);
+    expect(merged[0]?.detail).toContain("1. Point 1");
+    expect(merged[0]?.detail).toContain("4. Point 4");
+    expect(merged[1]?.label).toBe("prefetch");
   });
 });

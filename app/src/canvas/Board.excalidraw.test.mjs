@@ -670,6 +670,49 @@ describe("reading pan compositor", () => {
     expect(annotate).toMatch(/onPointerUp=/);
   });
 
+  it("sizes the annotate / link pair like the folded eye island and centres the wake", () => {
+    const css = readFileSync(join(here, "../styles.css"), "utf8");
+    const row = css.slice(
+      css.indexOf(".lc-map-chrome-row {"),
+      css.indexOf(".lc-zoom-row {"),
+    );
+    expect(row).toContain("width: 44px");
+    expect(row).toContain("height: 44px");
+    expect(row).toContain("min-height: 44px");
+    const wake = css.slice(
+      css.indexOf(".lc-map-chrome-left.has-wake > .lc-chrome-wake {"),
+      css.indexOf(".lc-map-chrome-stack.has-wake.is-open > .lc-chrome-wake {"),
+    );
+    expect(wake).toContain("left: 50%");
+    expect(wake).toContain("translateX(-50%)");
+    expect(css).toMatch(
+      /\.lc-map-chrome-left\.has-wake\.is-open > \.lc-chrome-wake \{\s*z-index: 3;\s*transform: translateX\(-50%\) translateY\(calc\(100% \+ 4px\)\);/,
+    );
+  });
+
+  it("places a text box on drag, without a hover ghost following the pointer", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    expect(src).toContain("Drag-to-draw: no hover preview chasing the pointer");
+    expect(src).not.toMatch(/ghost\.move\(p\.x, p\.y\)/);
+    const start = src.indexOf("Drag-to-draw: no hover preview chasing the pointer");
+    const end = src.indexOf("const onPointerUp", start);
+    const move = src.slice(start, end);
+    expect(move).toContain("hideGhost()");
+    expect(move).not.toContain("ghost.setVisible(true)");
+  });
+
+  it("tapping the lit shapes hex drops the equipped shape tool", () => {
+    const toolbar = readFileSync(join(here, "BoardToolbar.tsx"), "utf8");
+    expect(toolbar).toContain("Lit hex: tap again to drop the shape tool, same as Select");
+    expect(toolbar).toContain("if (shapesUiActive)");
+    const tap = toolbar.slice(
+      toolbar.indexOf("Lit hex: tap again to drop the shape tool"),
+      toolbar.indexOf("openShapeFlyout(\"shapes\")"),
+    );
+    expect(tap).toContain('onPick("freedraw")');
+    expect(tap).toContain('active === "text"');
+  });
+
   it("does not toggle a document-wide camera-live class on html", () => {
     const src = readFileSync(join(here, "docSelectionGesture.ts"), "utf8");
     expect(src).not.toMatch(/documentElement\.classList\.toggle\(DOC_CAMERA_LIVE_CLASS/);

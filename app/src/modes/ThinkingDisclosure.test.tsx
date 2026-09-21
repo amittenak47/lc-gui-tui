@@ -26,7 +26,9 @@ it("keeps several steps open and preserves individual choices through completion
   act(() => root.render(null)); render(false);
   expect(buttons().map(b => b.getAttribute("aria-expanded"))).toEqual(["true","false","true"]);
   act(() => buttons()[1]!.click());
-  expect(host.textContent).toContain("Thought 1. Full text.");
+  expect(host.textContent).toContain("Thought 1");
+  expect(host.textContent).toContain("Full text.");
+  expect(host.querySelector(".lc-agent-process-step-body")?.textContent).not.toContain("Thought 1");
 });
 it.each([false, true])("step defaults are independent with section auto-collapse=%s", autoCollapseThinking => {
   const state = newThinkingDisclosure();

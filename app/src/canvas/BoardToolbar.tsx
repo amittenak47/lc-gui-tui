@@ -1070,9 +1070,19 @@ export function BoardToolbar({
                 openShapeFlyout("capture");
                 return;
               }
-              if (shapesOpen) onToggleShapes();
-              if (shapeMenuOpen && shapeFlyout === "shapes") {
-                setShapeMenuOpen(false);
+              // Lit hex: tap again to drop the shape tool, same as Select.
+              if (shapesUiActive) {
+                closeShapeMenus();
+                if (
+                  active === "rectangle" ||
+                  active === "ellipse" ||
+                  active === "diamond" ||
+                  active === "line" ||
+                  active === "arrow" ||
+                  active === "text"
+                ) {
+                  onPick("freedraw");
+                }
                 return;
               }
               openShapeFlyout("shapes");

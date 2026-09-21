@@ -5,6 +5,8 @@ import { AgentRichText } from "./AgentRichText";
 import { AnimatedDisclosure } from "../components/AnimatedDisclosure";
 import { DEFAULT_AGENT_DISPLAY_PREFS, type AgentDisplayPrefs } from "../util/agentDisplayPrefs";
 import { newThinkingDisclosure, thinkingStepKey, thinkingStepColor, type ThinkingDisclosureState } from "./thinkingDisplay";
+import { coalesceReasonListItems } from "./processEvents";
+import { chunkReasonEvents } from "./reasonChunks";
 
 export const DOC_TOOL_LABELS: Record<string, string> = {
   query_document_vectors: "searching the book",
@@ -17,12 +19,80 @@ export const DOC_TOOL_LABELS: Record<string, string> = {
   search_web: "searching the web",
 };
 
+const GENERIC_STAGE_TITLES = new Set(["Thinking…", "Thinking", "Working…"]);
+
+export function sentenceCase(text: string): string {
+  const match = text.match(/^(\s*)(\S)([\s\S]*)$/);
+  if (!match) return text;
+  return `${match[1]}${match[2]!.toLocaleUpperCase()}${match[3]}`;
+}
+
+function oneLine(text: string): string {
+  return text.split("\n")[0]?.trim() ?? "";
+}
+
+function normalizeTitle(text: string): string {
+  return text.replace(/[.…]+$/u, "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function titlesMatch(a: string, b: string): boolean {
+  const left = normalizeTitle(a);
+  const right = normalizeTitle(b);
+  return Boolean(left) && left === right;
+}
+
 export function reasonTitle(detail: string | undefined): string {
-  const line = (detail ?? "").split("\n")[0]?.trim() ?? "";
+  const line = oneLine(detail ?? "");
   const stripped = line.replace(/^#+\s*/, "").replace(/^\d+[.)]\s*/, "").trim();
   const clause = stripped.split(/[.!?:]/)[0]?.trim() || stripped;
-  if (!clause) return "Thinking";
-  return clause.length > 72 ? `${clause.slice(0, 71)}…` : clause;
+  const base = clause.length >= 8 ? clause : stripped;
+  if (!base) return "Thinking";
+  if (base.length <= 72) return sentenceCase(base);
+  const slice = base.slice(0, 71);
+  const sp = slice.lastIndexOf(" ");
+  return `${sentenceCase(sp > 24 ? slice.slice(0, sp) : slice)}…`;
+}
+
+function remainderAfterTitle(detail: string, title: string): string {
+  const text = detail.trim();
+  if (!text) return "";
+  if (titlesMatch(title, text) && !text.includes("\n")) return "";
+  const stem = title.replace(/…$/, "").trim();
+  if (title.endsWith("…") && stem.length >= 8 && text.startsWith(stem)) {
+    return text.slice(stem.length).replace(/^[\s.!?:;…-]+/, "").trim();
+  }
+  const firstLine = oneLine(text);
+  const clause = firstLine.split(/[.!?:]/)[0]?.trim() || firstLine;
+  if (clause.length >= 8 && text.startsWith(clause)) {
+    const rest = text.slice(clause.length).replace(/^[\s.!?:;…-]+/, "").trim();
+    if (rest && !titlesMatch(title, rest)) return rest;
+  }
+  return "";
+}
+
+/** Visible chip + optional body. Body never restates the chip. */
+export function presentProcessStep(event: CoachProcessEvent): { title: string; body: string } {
+  if (event.kind === "tool") {
+    const title = sentenceCase(processLine(event));
+    const extra = event.detail?.trim() ?? "";
+    return { title, body: extra && !titlesMatch(title, extra) ? extra : "" };
+  }
+  if (event.label === "reason") {
+    const detail = event.detail?.trim() ?? "";
+    const title = reasonTitle(detail);
+    return { title, body: remainderAfterTitle(detail, title) };
+  }
+  const labeled = STAGE_LABELS[event.label];
+  const detail = event.detail?.trim() ?? "";
+  const title =
+    labeled && !GENERIC_STAGE_TITLES.has(labeled)
+      ? labeled
+      : detail
+        ? sentenceCase(oneLine(detail))
+        : labeled ?? sentenceCase(event.label);
+  const body =
+    detail && !titlesMatch(title, detail) && detail.includes("\n") ? detail : "";
+  return { title, body };
 }
 
 /** CoT chunks — full fold text, not the process step list. */
@@ -74,7 +144,13 @@ export function processLine(event: CoachProcessEvent | undefined): string {
   }
   if (event.label === "reason") return reasonTitle(event.detail);
   if (event.label === "prefetch") return STAGE_LABELS.prefetch ?? "Looking up earlier pages";
-  return STAGE_LABELS[event.label] ?? event.detail ?? event.label;
+  const named = STAGE_LABELS[event.label];
+  if (named && GENERIC_STAGE_TITLES.has(named) && event.detail?.trim()) {
+    return sentenceCase(oneLine(event.detail));
+  }
+  if (named) return named;
+  const fallback = event.detail ?? event.label;
+  return fallback ? sentenceCase(oneLine(fallback)) : event.label;
 }
 
 /**
@@ -102,9 +178,9 @@ export function ProcessBlock({
   const state = disclosure ?? localState.current;
   const [, redraw] = useReducer(value => value + 1, 0);
   const regionId = useId();
-  const shown = events.filter(
+  const shown = chunkReasonEvents(coalesceReasonListItems(events.filter(
     (event) => event.label !== "done" && !isReasoningEvent(event),
-  );
+  )));
   const expanded = state.sectionOpen ?? !(collapse || (!running && displayPrefs.autoCollapseThinking));
   const visible = shown;
   if (shown.length === 0) return null;
@@ -132,7 +208,7 @@ export function ProcessBlock({
         <ol id={regionId} className="lc-agent-process-steps">
             {visible.map((event, index) => {
               const key = thinkingStepKey(event, index);
-              const body = event.detail?.trim() ?? "";
+              const { title, body } = presentProcessStep(event);
               const stepOpen = state.steps[key] ?? !displayPrefs.collapseThinkingSteps;
               const toggle = () => { state.steps[key] = !stepOpen; redraw(); };
               const contentId = `${regionId}-step-${index}`;
@@ -163,11 +239,12 @@ export function ProcessBlock({
                     className="lc-agent-process-step-toggle"
                     aria-label={`${stepOpen ? "Collapse" : "Expand"} thought ${index + 1}`}
                     aria-expanded={stepOpen} aria-controls={contentId} onClick={toggle}
-                  ><span aria-hidden>{stepOpen ? "▾" : "▸"}</span></button>
+                  ><span className="lc-agent-process-step-dot" aria-hidden /></button>
                   <div id={contentId} className="lc-agent-process-step-content">
-                    {stepOpen ? <AgentRichText text={body || processLine(event)}
+                    <span className="lc-agent-process-step-excerpt">{title}</span>
+                    {stepOpen && body ? <AgentRichText text={body}
                       animate={running && revealBufferedStep} animateInitial={running && revealBufferedStep && !(key in state.steps)}
-                      className="lc-agent-process-step-body" /> : <span className="lc-agent-process-step-excerpt">{processLine(event)}</span>}
+                      className="lc-agent-process-step-body" /> : null}
                   </div>
                 </li>
               );

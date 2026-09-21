@@ -7731,6 +7731,24 @@ body[data-lc-sash-drag="horizontal"] {
   gap: 4px;
 }
 
+/*
+ * Same outer footprint as the folded eye island on the right (36px tool plus
+ * tray chrome). The pair used to be 36×28, so they read as a smaller cousin
+ * of that chevron.
+ */
+.lc-map-chrome-row > .lc-lined-toggle {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  border-radius: 10px;
+}
+
+.lc-map-chrome-row > .lc-lined-toggle svg {
+  width: 20px;
+  height: 20px;
+}
+
 .lc-zoom-row {
   display: flex;
   flex-direction: row;
@@ -7930,13 +7948,13 @@ body[data-lc-sash-drag="horizontal"] {
   position: absolute;
   inset: auto;
   z-index: 1;
-  left: 0;
+  left: 50%;
   bottom: 0;
   width: 36px;
   height: 36px;
   min-width: 36px;
   min-height: 36px;
-  transform: none;
+  transform: translateX(-50%);
   transition: transform var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1);
   transition-delay: var(--lc-chrome-morph);
 }
@@ -7949,7 +7967,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake {
   z-index: 3;
-  transform: translateY(calc(100% + 4px));
+  transform: translateX(-50%) translateY(calc(100% + 4px));
   transition-delay: 0ms;
 }
 
@@ -9866,6 +9884,7 @@ body[data-lc-sash-drag="horizontal"] {
   .lc-server-gate-boot-exit,
   .lc-leave-dialog-exit,
   .lc-leave-dialog-exit .lc-settings-modal,
+  .lc-artifact-picker-modal,
   .lc-offline-chip-enter,
   .lc-banner-slot,
   .lc-banner,
@@ -9993,7 +10012,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-agent-turn {
   border: 1px solid var(--chrome-edge);
-  border-radius: 10px;
+  border-radius: 18px;
   padding: 8px 10px;
   background: var(--surface);
   min-width: 0;
@@ -10003,6 +10022,9 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-agent-turn-user {
   align-self: flex-end;
+  /* Hug the text between a floor (YOU + tools + a short word) and 92%. */
+  width: fit-content;
+  min-width: 13rem;
   max-width: 92%;
   background: color-mix(in srgb, var(--accent) 16%, var(--surface));
   border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
@@ -10010,7 +10032,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 @keyframes lc-agent-bubble-enter {
   from { opacity: 0; transform: scale(0.24, 0.4); border-radius: 24px; }
-  to { opacity: 1; transform: scale(1); border-radius: 10px; }
+  to { opacity: 1; transform: scale(1); border-radius: 18px; }
 }
 
 .lc-agent-turn-enter {
@@ -10066,6 +10088,107 @@ body[data-lc-sash-drag="horizontal"] {
   margin-bottom: 4px;
 }
 
+.lc-agent-turn-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 20px;
+  margin-bottom: 4px;
+}
+
+.lc-agent-turn-head .lc-agent-turn-role {
+  margin-bottom: 0;
+  line-height: 20px;
+}
+
+.lc-agent-turn-role-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.lc-agent-turn-fail {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--bad);
+  flex-shrink: 0;
+}
+
+.lc-agent-turn-fail-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.lc-agent-turn-failed .lc-agent-turn-body {
+  color: var(--bad);
+}
+
+.lc-agent-turn-failed {
+  background: color-mix(in srgb, var(--bad) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--bad) 42%, var(--line));
+}
+
+.lc-agent-turn-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.lc-agent-turn-head .lc-tip-target {
+  display: inline-flex;
+}
+
+.lc-agent-turn-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.lc-agent-turn-tool:hover,
+.lc-agent-turn-tool:focus-visible {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+}
+
+.lc-agent-turn-tool .lc-agent-composer-icon {
+  width: 11px;
+  height: 11px;
+}
+
+.lc-agent-proposal-saves {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.lc-agent-proposal-save {
+  min-height: 20px;
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 5px;
+}
+
 .lc-agent-turn-body {
   font-size: 13px;
   line-height: 1.45;
@@ -10116,6 +10239,21 @@ body[data-lc-sash-drag="horizontal"] {
   flex-direction: column-reverse;
   margin-top: 0;
   margin-bottom: 8px;
+}
+
+.lc-agent-turn-header-flags.is-failed {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.lc-agent-turn-header-flags.is-failed .lc-agent-turn-flag-rule {
+  display: none;
+}
+
+.lc-agent-turn-failed .lc-agent-turn-header-flags .lc-agent-turn-flag {
+  color: color-mix(in srgb, var(--bad) 72%, var(--ink));
 }
 
 .lc-agent-reasoning-toggle[aria-expanded="false"] .lc-agent-process-label {
@@ -10274,7 +10412,7 @@ body[data-lc-sash-drag="horizontal"] {
   flex-direction: column;
   gap: 2px;
   margin: 2px 0 0;
-  padding: 4px 8px 4px 18px;
+  padding: 4px 8px;
   list-style: none;
   border-radius: 6px;
   background: color-mix(in srgb, var(--ink) 5.5%, var(--surface));
@@ -10353,24 +10491,9 @@ body[data-lc-sash-drag="horizontal"] {
   }
 }
 
-.lc-agent-process-step::before {
-  content: "";
-  position: absolute;
-  left: -12px;
-  top: 0.45em;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--muted, currentColor) 70%, transparent);
-}
-
 .lc-agent-process-step-current {
   opacity: 1;
   color: var(--ink);
-}
-
-.lc-agent-process-step-current::before {
-  background: var(--accent);
 }
 
 .lc-agent-process-step-rejected {
@@ -10678,6 +10801,22 @@ body[data-lc-sash-drag="horizontal"] {
   min-width: 0;
 }
 
+/* Ask field + action row share one --bg / --chrome-edge chrome box. */
+.lc-agent-composer-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.lc-agent-composer-field:focus-within {
+  border-color: var(--accent);
+}
+
 .lc-agent-presets {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -10733,8 +10872,8 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-agent-pane-expand-icon,
 .lc-agent-composer-icon {
-  width: 11px;
-  height: 11px;
+  width: 13px;
+  height: 13px;
   display: block;
   flex-shrink: 0;
 }
@@ -10823,6 +10962,11 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 0;
 }
 
+.lc-agent-chat.is-focus-composer .lc-agent-composer-field {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .lc-agent-chat.is-focus-composer .lc-agent-composer textarea {
   flex: 1 1 auto;
   min-height: 20rem;
@@ -10875,13 +11019,14 @@ body[data-lc-sash-drag="horizontal"] {
   width: 100%;
   min-height: 10.8rem;
   resize: none;
-  border-radius: 8px;
-  border: 1px solid var(--chrome-edge);
-  background: var(--bg);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--ink);
   font: inherit;
   font-size: 13px;
-  padding: 6px 8px;
+  padding: 6px 8px 4px;
+  outline: none;
 }
 
 .lc-agent-composer-bar {
@@ -10896,6 +11041,7 @@ body[data-lc-sash-drag="horizontal"] {
    * right cluster. One row, leftover sits between cadence and Send. */
   flex-wrap: nowrap;
   min-width: 0;
+  padding: 0 6px 6px;
 }
 
 /* Cadence (Failures / On ask / Every 2m) — hard left. */
@@ -10926,11 +11072,75 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-agent-annotate,
-.lc-agent-send {
+.lc-agent-send,
+.lc-agent-catalog,
+.lc-agent-attach {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0 4px;
+  line-height: 0;
+}
+
+.lc-agent-composer-field .lc-flag,
+.lc-agent-composer-field .lc-mode,
+.lc-agent-composer-field .lc-agent-send {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--hint);
+}
+
+.lc-agent-composer-field .lc-flag:hover:not(:disabled),
+.lc-agent-composer-field .lc-mode:hover:not(:disabled),
+.lc-agent-composer-field .lc-agent-send:hover:not(:disabled),
+.lc-agent-composer-field .lc-flag:focus-visible,
+.lc-agent-composer-field .lc-mode:focus-visible,
+.lc-agent-composer-field .lc-agent-send:focus-visible {
+  color: var(--accent);
+  background: transparent;
+}
+
+.lc-agent-composer-field .lc-flag-active,
+.lc-agent-composer-field .lc-mode-active {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+}
+
+.lc-agent-composer-field .lc-flag.lc-agent-pane-expand,
+.lc-agent-composer-field .lc-flag.lc-agent-pane-expand:hover,
+.lc-agent-composer-field .lc-flag.lc-agent-pane-expand:focus-visible,
+.lc-agent-composer-field .lc-flag.lc-agent-pane-expand.is-expanded,
+.lc-agent-composer-field .lc-flag.lc-agent-pane-expand.lc-flag-active {
+  border: 0;
+  background: transparent;
+  margin-left: 0;
+}
+
+.lc-agent-composer-field .lc-flag:disabled,
+.lc-agent-composer-field .lc-mode:disabled,
+.lc-agent-composer-field .lc-agent-send:disabled {
+  background: transparent;
+  border: 0;
+  color: var(--hint);
+}
+
+.lc-agent-composer-field .lc-flag:focus-visible,
+.lc-agent-composer-field .lc-mode:focus-visible,
+.lc-agent-composer-field .lc-agent-send:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.lc-agent-composer-mid button.lc-agent-annotate,
+.lc-agent-composer-mid button.lc-agent-catalog {
+  width: 20px;
+  min-width: 20px;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 /* Handwriting / Annotations — between cadence and the right cluster. */
@@ -13970,7 +14180,8 @@ button.lc-row-selected:hover:not(:disabled) {
   position: fixed;
   left: 0;
   top: 0;
-  z-index: 10000;
+  /* Above the attachments picker (11000); below the lightbox (12000). */
+  z-index: 11500;
   width: max-content;
   max-width: min(220px, calc(100vw - 16px));
   padding: 4px 8px;
@@ -14171,6 +14382,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-agent-composer-bar .lc-agent-annotate,
+.lc-mobile .lc-agent-composer-bar .lc-agent-catalog,
 .lc-mobile .lc-agent-composer-actions button {
   width: 20px;
   min-width: 20px;
@@ -15950,13 +16162,14 @@ button.lc-row-selected:hover:not(:disabled) {
  */
 .lc-agent-thread-open {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   width: 100%;
   margin-top: 6px;
-  padding: 6px 8px;
+  padding: 6px 8px 5px;
   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-radius: 999px;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: inherit;
   font: inherit;
@@ -15969,28 +16182,27 @@ button.lc-row-selected:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-.lc-agent-thread-open-count {
-  flex: 0 0 auto;
-  font-size: 11.5px;
-  font-weight: 650;
-  color: color-mix(in srgb, var(--accent) 85%, var(--ink));
-}
-
 .lc-agent-thread-open-peek {
-  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   font-size: 12px;
-  color: color-mix(in srgb, var(--ink) 62%, transparent);
+  color: color-mix(in srgb, var(--ink) 72%, transparent);
 }
 
-.lc-agent-thread-open-chevron {
-  flex: 0 0 auto;
-  font-size: 15px;
-  line-height: 1;
-  color: color-mix(in srgb, var(--accent) 80%, var(--ink));
+.lc-agent-thread-open-count {
+  align-self: flex-end;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.2;
+  color: color-mix(in srgb, var(--ink) 48%, transparent);
+}
+
+.lc-agent-turn-user .lc-agent-thread-open-count {
+  color: color-mix(in srgb, var(--accent) 55%, var(--ink));
 }
 
 .lc-agent-thread-bar {
@@ -16555,13 +16767,12 @@ button.lc-row-selected:hover:not(:disabled) {
   color: #fff;
 }
 
-/* + matches the composer expand square. */
-.lc-agent-attach {
+/* + matches the composer expand square; padding:0 must beat the bar's 0 6px. */
+.lc-agent-composer-bar .lc-agent-attach {
   width: 20px;
   min-width: 20px;
   padding: 0;
-  font-size: 13px;
-  font-weight: 600;
+  line-height: 0;
 }
 
 
@@ -18103,6 +18314,8 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-footnote-overview-thread .lc-agent-turn-user {
+  width: fit-content;
+  min-width: 13rem;
   max-width: 92%;
 }
 
@@ -18124,19 +18337,23 @@ button.lc-row-selected:hover:not(:disabled) {
   flex-shrink: 0;
 }
 
+.lc-footnote-overview-composer .lc-agent-composer-field {
+  border-radius: 6px;
+}
+
 .lc-footnote-overview-composer textarea {
   min-height: 52px;
   max-height: 132px;
   resize: none;
   overflow-y: hidden;
   font-size: 11px;
-  padding: 6px 8px;
-  border-radius: 6px;
+  padding: 6px 8px 2px;
   line-height: 1.35;
 }
 
 .lc-footnote-overview-composer .lc-agent-composer-bar {
   gap: 4px;
+  padding: 0 4px 4px;
 }
 
 .lc-footnote-overview-composer .lc-agent-composer-actions button {
@@ -19408,12 +19625,31 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-agent-markdown :is(h1,h2,h3,h4) { font-size: 1.08em; line-height: 1.3; margin: .9em 0 .4em; }
 .lc-agent-markdown :is(ul,ol) { padding-left: 1.5em; margin: .6em 0; }
 .lc-agent-markdown pre { max-width: 100%; overflow-x: auto; padding: 10px; border-radius: 8px; background: color-mix(in srgb,var(--ink) 6%,transparent); }
-.lc-agent-markdown code { font-size: .9em; }
+.lc-agent-markdown code { font-size: .9em; background: color-mix(in srgb,var(--ink) 8%,transparent); }
+.lc-agent-markdown pre code { background: none; padding: 0; }
 .lc-agent-markdown blockquote { margin: .5em 0; padding-left: 10px; border-left: 2px solid var(--chrome-edge); }
 .lc-agent-markdown .katex-display { overflow-x: auto; overflow-y: hidden; padding: .25em 0; }
 .lc-agent-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 .lc-agent-markdown :is(th,td) { padding: 4px 8px; border: 1px solid var(--chrome-edge); }
 .lc-agent-markdown img { max-width: 100%; }
+/*
+ * `--panel` is darker than `--surface` on every black board, so the global
+ * `code` chip (and the fence's inner `<code>`) painted a cave under the
+ * bubble. Light papers still want a chip; dark palettes keep monospace and
+ * table rules, no extra well.
+ */
+[data-theme="dark"] .lc-agent-markdown pre,
+[data-theme="dark"] .lc-agent-markdown table,
+[data-theme="dark"] .lc-agent-markdown :is(th, td),
+[data-theme="dark"] .lc-agent-markdown :not(pre) > code {
+  background: transparent;
+}
+[data-theme="dark"] .lc-agent-markdown :not(pre) > code {
+  padding: 0;
+}
+[data-theme="dark"] .lc-agent-markdown pre code {
+  background: none;
+}
 .lc-agent-drawing-visibility { margin-left: auto; flex-shrink: 0; padding: 2px 6px; border-radius: 6px; font-size: 10px; background: color-mix(in srgb,var(--ink) 6%,transparent); color: var(--hint); }
 .lc-mobile .lc-side { max-height: max(52px, calc(var(--lc-viewport-height, 100dvh) - var(--lc-header-height) - var(--lc-safe-top))); }
 
@@ -19480,9 +19716,36 @@ button.lc-row-selected:hover:not(:disabled) {
   display: block; width: 11px; height: 11px; border-radius: 50%; background: #cf4c4c;
 }
 .lc-agent-tray-dot[data-online="true"] > span { background: #39a86b; }
-/* Each thought has one body and an independent, keyboard-operable disclosure. */
+/* Color dots are the step toggle. Expanding keeps the bullet title and opens the body under it. */
 .lc-agent-process-steps .lc-agent-process-step { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: start; }
-.lc-agent-process-step-toggle { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 2px; min-height: 28px; }
+.lc-agent-process-steps .lc-agent-process-step::before { content: none; }
+.lc-agent-process-step-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  min-width: 24px;
+  height: 1.35em;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  box-shadow: none;
+}
+.lc-agent-process-step-dot {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--lc-thought-accent, var(--muted)) 80%, var(--ink));
+  flex-shrink: 0;
+}
+.lc-agent-process-step-rejected .lc-agent-process-step-dot {
+  background: color-mix(in srgb, var(--muted, currentColor) 70%, transparent);
+}
 .lc-agent-process-step-content { min-width: 0; cursor: pointer; }
 .lc-agent-process-step-content a { cursor: pointer; }
 .lc-agent-process-step-content pre, .lc-agent-process-step-content code { cursor: text; }
@@ -19492,14 +19755,10 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-agent-process-step[data-thinking-color="2"] { --lc-thought-accent: #4f9d9a; }
 .lc-agent-process-step[data-thinking-color="3"] { --lc-thought-accent: #be8d4b; }
 .lc-agent-process-step[data-thinking-color="4"] { --lc-thought-accent: #c477a0; }
-.lc-agent-process-step[data-thinking-color]:not(.lc-agent-process-step-rejected)::before {
-  background: color-mix(in srgb, var(--lc-thought-accent) 80%, var(--ink));
-  width: 7px; height: 7px;
-}
 .lc-agent-process-steps .lc-agent-process-step,
 .lc-agent-process-steps .lc-agent-process-step-body { opacity: 1; animation: none; }
 @media (forced-colors: active) {
-  .lc-agent-process-step[data-thinking-color]:not(.lc-agent-process-step-rejected)::before { background: CanvasText; }
+  .lc-agent-process-step-dot { background: CanvasText; }
 }
 /* UI hand moves app chrome; writing hand remains independent. */
 [data-ui-handedness="left"] .lc-header,

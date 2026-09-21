@@ -114,7 +114,8 @@ function AgentReview() {
       <DocumentDrawingPanel messages={messages} onFrame={onFrame} onHide={onToggle}/>
     </main>
     <AgentSidePanel open={open} onOpenChange={setOpen} mode="review" onModeChange={()=>{}} busy={false}
-      messages={messages} agentSurface="pad" onSend={()=>{}} onDrawingFrame={onFrame} onToggleDrawing={onToggle}/>
+      messages={messages} agentSurface="pad" onSend={()=>{}} onDrawingFrame={onFrame} onToggleDrawing={onToggle}
+      onSaveArtifact={()=>{}} onManageArtifacts={()=>{}}/>
   </div>;
 }
 const style=document.createElement("style");

@@ -2625,7 +2625,7 @@ export function SettingsModal({
                   {([
                     ["autoCollapseThinking", "Auto-collapse Thinking when the answer arrives", "Off keeps Thinking open so you can continue reading."],
                     ["collapseThinkingSteps", "Start Thinking steps collapsed", "Off shows full bullet text. Each bullet opens independently; several can stay open."],
-                    ["colorThinkingSteps", "Color-code Thinking bullets", "Stable accents for each step; turn off for neutral markers."],
+                    ["colorThinkingSteps", "Color-code Thinking bullets", "Colors do not mean status — they only distinguish adjacent steps. Turn off for one color."],
                   ] as const).map(([key, label, hint]) => <button key={key} type="button" role="switch"
                     aria-checked={agentDisplay[key]} className={agentDisplay[key] ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
                     onClick={() => setAgentDisplay(prefs => ({ ...prefs, [key]: !prefs[key] }))}>

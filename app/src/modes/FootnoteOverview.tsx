@@ -777,6 +777,7 @@ export function FootnoteOverview({
                   send();
                 }}
               >
+                <div className="lc-agent-composer-field">
                 <textarea
                   ref={replyRef}
                   value={draft}
@@ -800,6 +801,7 @@ export function FootnoteOverview({
                       </span>
                     </button>
                   </div>
+                </div>
                 </div>
               </form>
             </motion.div>

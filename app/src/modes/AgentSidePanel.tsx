@@ -35,6 +35,7 @@ import { useIsMobile } from "../util/mobile";
 import { PHOTO_ATTACH_LIMIT, pickPhotos } from "../util/photoAttach";
 import type { MessageDrawing } from "../viz/drawingState";
 import type { ArtifactRef } from "../util/padArtifacts";
+import type { AgentArtifactProposal } from "../util/agentArtifacts";
 import { ArtifactCards } from "./ArtifactCards";
 import { Timeline } from "../viz/Timeline";
 import { BridgePanel } from "./RevealDialog";
@@ -69,6 +70,15 @@ function turnKind(role: AgentChatMessage["role"]): string {
   return role === "user" || role === "system" || role === "app" ? role : "assistant";
 }
 
+/** Catalog pins in the thread — a status line, not a Tests bubble. */
+function isSavedAttachmentNotice(message: AgentChatMessage) {
+  return (
+    message.role === "app" &&
+    Boolean(message.artifacts?.length) &&
+    (!message.content.trim() || message.content === "Saved attachment")
+  );
+}
+
 /**
  * Controls that must stay tappable — do not start a message hold on these.
  * Process toggles are fine to hold through; thread open and reply stubs
@@ -78,7 +88,7 @@ function isLongPressBlocked(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(
     target.closest(
-      "a, input, textarea, select, .lc-agent-thread-open, .lc-agent-reply-stub",
+      "a, input, textarea, select, .lc-agent-thread-open, .lc-agent-reply-stub, .lc-agent-turn-tool, .lc-agent-proposal-save, .lc-artifact-line-icon",
     ),
   );
 }
@@ -331,6 +341,86 @@ function SendIcon() {
   );
 }
 
+function PlusIcon() {
+  return (
+    <svg className="lc-agent-composer-icon" viewBox="0 0 16 16" aria-hidden>
+      <path
+        d="M8 3.2v9.6M3.2 8h9.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function SaveIcon() {
+  return (
+    <svg className="lc-agent-composer-icon" viewBox="0 0 16 16" aria-hidden>
+      <path
+        d="M3.2 2.4h7.1L13.6 5.7v7.9H3.2V2.4Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M5 2.4v3.2h5.2V2.4M5.2 13.6v-3.6h5.6v3.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function PaperclipIcon() {
+  return (
+    <svg className="lc-agent-composer-icon" viewBox="0 0 16 16" aria-hidden>
+      <path
+        d="M5.4 8.1 8.8 4.7a2.35 2.35 0 0 1 3.3 3.3l-4.6 4.6a3.2 3.2 0 0 1-4.5-4.5l4.4-4.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function FailIcon() {
+  return (
+    <svg className="lc-agent-turn-fail-icon" viewBox="0 0 16 16" aria-hidden>
+      <circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8 4.7v4.1" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" />
+      <circle cx="8" cy="11.15" r="0.85" fill="currentColor" />
+    </svg>
+  );
+}
+
+function turnArtifactProposal(message: AgentChatMessage): AgentArtifactProposal {
+  if (message.drawing) {
+    return {
+      kind: "whiteboard",
+      title: message.drawing.program.title || "Diagram",
+      programs: [message.drawing.program],
+    };
+  }
+  return {
+    kind: "markdown",
+    title: message.role === "assistant" ? "Answer.md" : "Note.md",
+    source: message.content,
+  };
+}
+
+function saveTurnLabel(message: AgentChatMessage): string {
+  if (message.drawing) return "Save drawing";
+  return message.role === "assistant" ? "Save answer" : "Save note";
+}
+
 interface MessageMenuState {
   messageId: string;
   top: number;
@@ -437,7 +527,7 @@ export interface CoachAttachment {
 }
 
 export interface AgentChatMessage {
-  artifactProposals?: import("../util/agentArtifacts").AgentArtifactProposal[];
+  artifactProposals?: AgentArtifactProposal[];
   artifactFootnoteIds?: string[];
   id: string;
   /**
@@ -495,7 +585,7 @@ export interface AgentChatMessage {
 }
 
 export interface AgentSidePanelProps {
-  onSaveArtifact?: (message: AgentChatMessage, proposal: import("../util/agentArtifacts").AgentArtifactProposal, index?: number) => void;
+  onSaveArtifact?: (message: AgentChatMessage, proposal: AgentArtifactProposal, index?: number) => void;
   onOpenArtifact?: (ref: ArtifactRef) => void;
   onManageArtifacts?: (message?: AgentChatMessage) => void;
   showProcess?: boolean;
@@ -1436,6 +1526,13 @@ export function AgentSidePanel({
             </p>
           )}
           {visibleMessages.map((message) => {
+            if (isSavedAttachmentNotice(message)) {
+              return (
+                <span key={message.id} className="lc-artifact-save-notice" data-coach-message={message.id}>
+                  {onOpenArtifact ? <ArtifactCards references={message.artifacts} onOpen={onOpenArtifact} /> : null}
+                </span>
+              );
+            }
             const replyStub = message.replyTo;
             const replyCount = threadReplies.get(message.id)?.length ?? 0;
             return (
@@ -1444,6 +1541,8 @@ export function AgentSidePanel({
               enter={!seenMessages.current.has(message.id) && (message.role === "user" || message.role === "assistant")}
               data-coach-message={message.id}
               className={`lc-agent-turn lc-agent-turn-selectable lc-agent-turn-${turnKind(message.role)}${
+                message.requestState === "failed" ? " lc-agent-turn-failed" : ""
+              }${
                 messageMenu?.messageId === message.id
                   ? messageMenu.tall
                     ? " lc-agent-turn-selected lc-agent-turn-selected-tall"
@@ -1476,7 +1575,11 @@ export function AgentSidePanel({
                 event.stopPropagation();
               }}
             >
-              {message.role === "assistant" && <MessageFlags message={message} header />}
+              {message.role === "assistant" || message.requestState === "failed" ? (
+                <MessageFlags message={message} header />
+              ) : null}
+              <div className="lc-agent-turn-head">
+              <div className="lc-agent-turn-role-group">
               <div
                 className={
                   message.role === "assistant" && message.review?.provider
@@ -1492,7 +1595,16 @@ export function AgentSidePanel({
               >
                 {ROLE_LABEL[message.role]}
               </div>
-              {message.requestState && !message.queued && <small>{message.requestState}</small>}
+              </div>
+              <MessageArtifactTools
+                message={message}
+                onSave={onSaveArtifact}
+                onManage={onManageArtifacts}
+              />
+              </div>
+              {message.requestState && !message.queued && message.requestState !== "failed" && message.requestState !== "completed" && (
+                <small>{message.requestState}</small>
+              )}
               {message.retryOf && <small>Retry · previous attempt retained above</small>}
               {message.queued && (
                 <span className="lc-agent-queued" aria-label="Queued message">Queued</span>
@@ -1500,7 +1612,9 @@ export function AgentSidePanel({
               <AgentTurnResponse pending={Boolean(message.pending)} events={message.processEvents}
                 showProcess={showProcess}
                 displayPrefs={displayPrefs} disclosure={disclosureFor(message.id)}
-                reasoning={message.reasoning} text={message.content} assistant={message.role === "assistant"}>
+                reasoning={message.reasoning}
+                text={message.content}
+                assistant={message.role === "assistant"}>
               {showsReplyStub(message, openThreadId) && (
                 /*
                  * The quoted turn, above the reply that answers it.
@@ -1540,22 +1654,20 @@ export function AgentSidePanel({
                 <button
                   type="button"
                   className="lc-agent-thread-open"
+                  aria-label={`Open thread, ${replyCount} ${replyCount === 1 ? "reply" : "replies"}`}
                   onClick={(event) => {
                     event.stopPropagation();
                     enterThread(message.id);
                   }}
                 >
-                  <span className="lc-agent-thread-open-count">
-                    {replyCount} {replyCount === 1 ? "reply" : "replies"}
-                  </span>
                   <span className="lc-agent-thread-open-peek">
                     {threadReplies.get(message.id)!.at(-1)?.content.slice(0, 60) ||
                       (threadReplies.get(message.id)!.at(-1)?.pending
                         ? "Working…"
                         : "")}
                   </span>
-                  <span className="lc-agent-thread-open-chevron" aria-hidden>
-                    ›
+                  <span className="lc-agent-thread-open-count">
+                    {replyCount} {replyCount === 1 ? "reply" : "replies"}
                   </span>
                 </button>
               )}
@@ -1621,12 +1733,27 @@ export function AgentSidePanel({
                 />
               )}
               {onOpenArtifact && <ArtifactCards references={message.artifacts} onOpen={onOpenArtifact} />}
-              {onSaveArtifact && message.artifactProposals?.map((proposal, index) => <button type="button" key={index} onClick={() => onSaveArtifact(message, proposal, index)}>Save {proposal.title}</button>)}
-              {onSaveArtifact && !message.pending && message.role === "assistant" && <button type="button" onClick={() => onSaveArtifact(message, message.drawing
-                ? { kind: "whiteboard", title: message.drawing.program.title || "Diagram", programs: [message.drawing.program] }
-                : { kind: "markdown", title: "Answer.md", source: message.content })}>Save {message.drawing ? "drawing" : "answer"}</button>}
-              {onManageArtifacts && !message.pending && !message.queued && <button type="button" onClick={() => onManageArtifacts(message)}>Attachments</button>}
-              {message.role !== "assistant" && <MessageFlags message={message} />}
+              {onSaveArtifact && message.artifactProposals && message.artifactProposals.length > 0 && (
+                <div className="lc-agent-proposal-saves">
+                  {message.artifactProposals.map((proposal, index) => (
+                    <button
+                      type="button"
+                      className="lc-secondary lc-agent-proposal-save"
+                      key={`${proposal.title}-${index}`}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSaveArtifact(message, proposal, index);
+                      }}
+                    >
+                      Save {proposal.title}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {message.role !== "assistant" && message.requestState !== "failed" && (
+                <MessageFlags message={message} />
+              )}
             </AgentMessageBubble>
             );
           })}
@@ -1657,7 +1784,6 @@ export function AgentSidePanel({
           <button type="button" onClick={() => { onCancelEdit?.(editingQueued.id); setEditingQueued(null); }}>Cancel edit</button>
         </div>}
         <form className="lc-agent-composer" onSubmit={(event) => submit("queue", event)}>
-          {onManageArtifacts && <button type="button" onClick={() => onManageArtifacts()}>Whiteboards & files</button>}
           <div className="lc-agent-composer-body">
           {allowAnnotations && attachedMarks.length > 0 && (
             <>
@@ -1773,6 +1899,7 @@ export function AgentSidePanel({
             </div>
           )}
           {photoError && <p className="lc-warning">{photoError}</p>}
+          <div className="lc-agent-composer-field">
           <textarea
             ref={composerRef}
             value={draft}
@@ -1787,7 +1914,6 @@ export function AgentSidePanel({
               else submit("queue");
             }}
           />
-          </div>
           <div className="lc-agent-composer-bar">
             {/* Ambient stays greyed until AMBIENT_ENABLED is flipped. The
                 socket + 120s loop are already wired in App / coachSocket. */}
@@ -1858,6 +1984,18 @@ export function AgentSidePanel({
                   </button>
                 </Tip>
               </span>
+              {onManageArtifacts && (
+                <Tip tip="Whiteboards and files" placement="top">
+                  <button
+                    type="button"
+                    className="lc-flag lc-agent-catalog"
+                    aria-label="Whiteboards and files"
+                    onClick={() => onManageArtifacts()}
+                  >
+                    C
+                  </button>
+                </Tip>
+              )}
             </div>
             <div className="lc-agent-composer-actions">
               <Tip
@@ -1902,13 +2040,15 @@ export function AgentSidePanel({
                       .finally(() => setPicking(false));
                   }}
                 >
-                  +
+                  <PlusIcon />
                 </button>
               </Tip>
               <button type="submit" className="lc-agent-send" disabled={!canSend} aria-label="Send">
                 <SendIcon />
               </button>
             </div>
+          </div>
+          </div>
           </div>
         </form>
       </div>
@@ -2149,18 +2289,89 @@ export function pendingAckLine(message: AgentChatMessage): string {
   return inputPart;
 }
 
+function MessageArtifactTools({
+  message,
+  onSave,
+  onManage,
+}: {
+  message: AgentChatMessage;
+  onSave?: AgentSidePanelProps["onSaveArtifact"];
+  onManage?: AgentSidePanelProps["onManageArtifacts"];
+}) {
+  const show =
+    (message.role === "user" || message.role === "assistant") &&
+    !message.pending &&
+    !message.queued;
+  if (!show || (!onSave && !onManage)) return null;
+  const saveLabel = saveTurnLabel(message);
+  return (
+    <div className="lc-agent-turn-tools">
+      {onSave && (
+        <Tip tip={saveLabel} placement="top">
+          <button
+            type="button"
+            className="lc-agent-turn-tool"
+            aria-label={saveLabel}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSave(message, turnArtifactProposal(message));
+            }}
+          >
+            <SaveIcon />
+          </button>
+        </Tip>
+      )}
+      {onManage && (
+        <Tip tip="Attachments" placement="top">
+          <button
+            type="button"
+            className="lc-agent-turn-tool"
+            aria-label="Attachments"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onManage(message);
+            }}
+          >
+            <PaperclipIcon />
+          </button>
+        </Tip>
+      )}
+    </div>
+  );
+}
+
 function MessageFlags({ message, header = false }: { message: AgentChatMessage; header?: boolean }) {
   const pending = Boolean(message.pending);
+  const failed = message.requestState === "failed";
   const flags = pending ? message.pendingAck?.flags ?? message.flags : message.flags;
   const text = flags?.join(" · ") || (pending ? "Working…" : "");
   const shown = useWordReveal(text, pending, pending);
-  if (!text) return null;
-  return <div className={`lc-agent-turn-footnotes${header ? " lc-agent-turn-header-flags" : ""}`} role={pending ? "status" : undefined}>
-    <span className="lc-agent-turn-flag-rule" aria-hidden />
-    <div className="lc-agent-turn-flags" aria-label={pending ? "Agent request" : "Send flags"} aria-busy={shown !== text}>
-      <span className="lc-agent-turn-flag lc-agent-turn-flag-stream">{shown}</span>
+  if (!text && !failed) return null;
+  return (
+    <div
+      className={`lc-agent-turn-footnotes${header ? " lc-agent-turn-header-flags" : ""}${failed ? " is-failed" : ""}`}
+      role={pending ? "status" : undefined}
+    >
+      {failed ? (
+        <span className="lc-agent-turn-fail" aria-label="Failed" title="Failed">
+          <FailIcon />
+        </span>
+      ) : (
+        <span className="lc-agent-turn-flag-rule" aria-hidden />
+      )}
+      {text ? (
+        <div
+          className="lc-agent-turn-flags"
+          aria-label={pending ? "Agent request" : "Send flags"}
+          aria-busy={shown !== text}
+        >
+          <span className="lc-agent-turn-flag lc-agent-turn-flag-stream">{shown}</span>
+        </div>
+      ) : null}
     </div>
-  </div>;
+  );
 }
 
 function DrawingSection({

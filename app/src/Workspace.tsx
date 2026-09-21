@@ -10827,9 +10827,13 @@ export function Workspace({
         />
       ) : null}
       {active && artifactPicker && <ArtifactPicker parent={artifactPicker.parent} associations={artifactPicker.associations}
-        markChoices={annotateFootnotes.map(note => ({ id: note.id, title: note.title || `Mark ${footnoteNumbers.get(note.id) ?? ""}`, selected: attachedFootnoteIds.includes(note.id) }))}
-        onToggleMark={id => setAttachedFootnoteIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id])}
-        onAttach={attachArtifactHere} onOpen={reference => { setArtifactPicker(null); openArtifactPreview(reference); }} onClose={() => setArtifactPicker(null)} />}
+        scope={artifactPicker.messageId ? "message" : artifactPicker.footnoteId ? "footnote" : "catalog"}
+        footnoteChoices={annotateFootnotes.map(note => ({
+          id: note.id, title: note.title ?? "", number: footnoteNumbers.get(note.id),
+          color: note.color, palette: note.palette, selected: attachedFootnoteIds.includes(note.id),
+        }))}
+        onToggleFootnote={id => setAttachedFootnoteIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id])}
+        onAttach={attachArtifactHere} onOpen={openArtifactPreview} onClose={() => setArtifactPicker(null)} />}
       {active && artifactPreview && <ArtifactWorkspace key={artifactPreview.id} tab={artifactPreview} active showing onClose={() => setArtifactPreview(null)} />}
       {active && headerSlots.agentPanel && !hubConflictAsk ? createPortal(<>
         {problem && !canvasLoading && (

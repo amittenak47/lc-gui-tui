@@ -2,15 +2,344 @@
 .lc-artifact-overlay { position: fixed; inset: max(70px, env(safe-area-inset-top)) 2vw 2vh; z-index: 1500; border: 1px solid #7d899b; border-radius: 12px; box-shadow: 0 12px 60px #0009; overflow: hidden; }
 .lc-artifact-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; align-items: center; }
 .lc-artifact-actions input { flex: 1; min-width: 120px; }
-.lc-artifact-actions button, .lc-artifact-picker button { min-height: 40px; }
+.lc-artifact-actions button { min-height: 40px; }
 .lc-artifact-canvas { flex: 1; position: relative; min-height: 180px; overflow: hidden; }
 .lc-artifact-workspace > small, .lc-artifact-workspace > p { padding: 4px 12px; margin: 0; }
-.lc-artifact-cards { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
-.lc-artifact-card { display: flex; flex-direction: column; width: 180px; max-width: 100%; padding: 8px; border: 1px solid #7d899b66; border-radius: 10px; text-align: start; gap: 4px; overflow: hidden; }
-.lc-artifact-card pre { height: 64px; overflow: hidden; white-space: pre-wrap; margin: 0; font-size: 11px; opacity: .8; }
-.lc-artifact-card svg { width: 100%; height: 64px; }
-.lc-artifact-card small { opacity: .7; }
-.lc-artifact-picker { position: fixed; inset: 12vh max(3vw, calc((100vw - 660px)/2)); z-index: 1600; background: var(--lc-bg, #252a32); color: inherit; padding: 18px; overflow: auto; border: 1px solid #7d899b; border-radius: 14px; box-shadow: 0 12px 60px #0009; }
-.lc-artifact-picker header, .lc-artifact-picker nav, .lc-artifact-picker-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.lc-artifact-picker header strong, .lc-artifact-picker-row > span { flex: 1; }
-.lc-artifact-picker-row { padding: 8px 0; border-bottom: 1px solid #7d899b44; }
+.lc-artifact-cards { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 0; }
+.lc-artifact-save-notice {
+  align-self: flex-end;
+  max-width: 100%;
+  text-align: right;
+}
+.lc-artifact-save-notice .lc-artifact-cards {
+  margin: 0;
+  align-items: flex-end;
+}
+.lc-artifact-save-notice + .lc-artifact-save-notice { margin-top: -6px; }
+.lc-artifact-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 18px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--muted);
+}
+.lc-artifact-line-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lc-artifact-line.is-ok { color: var(--ok); }
+.lc-artifact-line.is-bad { color: var(--bad); }
+.lc-artifact-line .lc-tip-target { display: inline-flex; }
+.lc-artifact-cards .lc-artifact-line-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  min-width: 16px;
+  min-height: 0;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  line-height: 0;
+  box-shadow: none;
+}
+.lc-artifact-line-icon:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: 1px;
+}
+.lc-artifact-line-glyph {
+  display: block;
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.lc-settings-backdrop.lc-artifact-picker-backdrop {
+  /* Above agent chrome and smart tips (10000); below the lightbox (12000). */
+  z-index: 11000;
+}
+
+.lc-artifact-picker-modal {
+  width: min(420px, 100%);
+  max-height: min(70vh, 480px);
+  animation: lc-board-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.lc-artifact-picker-modal .lc-settings-head {
+  padding: 14px 16px 6px;
+}
+
+.lc-artifact-picker-modal .lc-settings-head h2 {
+  font-size: 16px;
+}
+
+.lc-artifact-picker-modal .lc-settings-head .lc-muted {
+  margin: 6px 0 0;
+  line-height: 1.4;
+}
+
+.lc-artifact-picker-modal .lc-settings-body {
+  padding: 8px 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lc-artifact-picker-modal .lc-settings-foot {
+  padding: 10px 16px 14px;
+}
+
+.lc-artifact-picker-modal button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+/*
+ * One field: ghost kind/footnote icons, a query that both filters the catalog
+ * and names a new item, plus-in-circle to create. Matches list under it.
+ */
+.lc-artifact-picker-compose {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 32px;
+  padding: 2px 3px 2px 4px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.lc-artifact-picker-compose:focus-within {
+  border-color: var(--accent);
+}
+
+.lc-artifact-picker-adorn-start {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.lc-artifact-picker-kinds {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.lc-artifact-picker-compose .lc-tip-target {
+  display: inline-flex;
+}
+
+.lc-artifact-picker-compose button.lc-artifact-picker-adorn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 22px;
+  min-width: 22px;
+  min-height: 0;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--hint);
+  line-height: 0;
+  box-shadow: none;
+  text-decoration: none;
+}
+
+.lc-artifact-picker-compose button.lc-artifact-picker-fn {
+  width: auto;
+  padding: 0 3px 0 2px;
+}
+
+.lc-artifact-picker-compose button.lc-artifact-picker-adorn:hover,
+.lc-artifact-picker-compose button.lc-artifact-picker-adorn:focus-visible {
+  color: var(--ink);
+  background: transparent;
+}
+
+.lc-artifact-picker-compose button.lc-artifact-picker-adorn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.lc-artifact-picker-compose button.lc-artifact-picker-adorn.is-active,
+.lc-artifact-picker-compose button.lc-artifact-picker-adorn.is-filter {
+  color: var(--accent);
+  background: transparent;
+}
+
+.lc-artifact-picker-compose button.lc-artifact-picker-adorn.is-filter {
+  box-shadow: inset 0 -2px 0 currentColor;
+}
+
+.lc-artifact-picker-compose button.lc-artifact-picker-adorn .lc-hold-reveal-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.lc-artifact-picker-compose button.lc-artifact-picker-adorn .lc-hold-reveal-fill {
+  background: linear-gradient(
+    180deg,
+    var(--lc-hold-wash-top) 0%,
+    var(--lc-hold-wash-bottom) 100%
+  );
+}
+
+/* clip-path at --lc-hold: 0 still paints a 1px accent hairline. */
+.lc-artifact-picker-compose button.lc-artifact-picker-adorn:not([data-filling]) .lc-hold-reveal-fill {
+  visibility: hidden;
+  opacity: 0;
+}
+
+.lc-artifact-picker-adorn-icon {
+  display: block;
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.lc-artifact-picker-adorn-count {
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  color: inherit;
+}
+
+.lc-artifact-picker-compose input {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.lc-artifact-picker-compose .lc-artifact-picker-submit {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  line-height: 0;
+  background: transparent;
+  color: var(--hint);
+}
+
+.lc-artifact-picker-compose .lc-artifact-picker-submit:hover:not(:disabled),
+.lc-artifact-picker-compose .lc-artifact-picker-submit:focus-visible {
+  color: var(--accent);
+  background: transparent;
+}
+
+.lc-artifact-picker-compose .lc-artifact-picker-submit:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.lc-artifact-picker-submit-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.lc-artifact-picker-fn-menu.lc-agent-footnote-menu {
+  z-index: 11001;
+}
+
+.lc-artifact-picker-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  flex: 1;
+}
+
+.lc-artifact-picker-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+
+.lc-artifact-picker-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.lc-artifact-picker-row-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lc-artifact-picker-kind,
+.lc-artifact-picker-status {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.lc-artifact-picker-row-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lc-artifact-picker-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.lc-artifact-picker-row-actions button {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.lc-artifact-picker-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
