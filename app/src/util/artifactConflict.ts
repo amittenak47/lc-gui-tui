@@ -9,6 +9,15 @@ import { mutateArtifacts, readArtifactCatalog } from "./artifactRepository";
 
 export async function reconcileArtifactConflict(client: LcClient, parent: ArtifactParent, rawRemote: unknown, preference: "local" | "server"): Promise<ArtifactCatalog | undefined> {
   const local = await readArtifactCatalog(parent);
+  const catalog = await prepareArtifactConflict(client, parent, local, rawRemote, preference);
+  if (!catalog || catalog === local) return local;
+  const saved = await mutateArtifacts(parent, local?.revision ?? null, { type: "snapshot", catalog });
+  requireArtifactCatalogTransition(rawRemote, saved, parent);
+  return saved;
+}
+
+/** Stage copies without publishing: callers can commit a whole parent atomically. */
+export async function prepareArtifactConflict(client: LcClient, parent: ArtifactParent, local: ArtifactCatalog | undefined, rawRemote: unknown, preference: "local" | "server"): Promise<ArtifactCatalog | undefined> {
   const remote = artifactCatalogFields(rawRemote, parent).artifacts;
   if (!remote) return local;
   if (local?.revision === remote.revision && JSON.stringify(local) === JSON.stringify(remote)) return local;
@@ -47,8 +56,5 @@ export async function reconcileArtifactConflict(client: LcClient, parent: Artifa
   const catalog: ArtifactCatalog = { v: 1, parent, revision: crypto.randomUUID(), artifacts: [...entries.values(), ...copies] };
   requireArtifactCatalogTransition(local, catalog, parent);
   requireArtifactCatalogTransition(remote, catalog, parent);
-  // Snapshot edit already implements guarded, dependency-checked bulk mutation.
-  const saved = await mutateArtifacts(parent, local?.revision ?? null, { type: "snapshot", catalog });
-  requireArtifactCatalogTransition(remote, saved, parent);
-  return saved;
+  return catalog;
 }

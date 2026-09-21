@@ -19,6 +19,8 @@ import { footnoteThemeVars } from "../util/footnoteTheme";
 import { ArtifactKindIcon, artifactKindLabel } from "./ArtifactKindIcon";
 import { LibraryPadlock } from "./LibraryPadlock";
 import "./artifacts.css";
+import { listAnnotateDocs, annotateDocLabel } from "../util/annotateStore";
+import { captureLibraryReference, referenceSnapshot, type ArtifactReferenceCapture } from "../util/artifactReferenceSources";
 
 export type ArtifactPickerScope = "catalog" | "message" | "footnote";
 
@@ -32,11 +34,13 @@ export interface ArtifactPickerFootnote {
 }
 
 export interface ArtifactPickerProps {
+  pageChoices?: Array<{ id: string; title: string; pages?: number; kind: "code" | "markdown" }>;
+  capturePage?: (id: string, page: number) => Promise<ArtifactReferenceCapture>;
   parent: ArtifactParent;
   associations: ArtifactAssociation[];
   /** Paperclip on a turn, C on the composer, or a footnote's catalog. */
   scope?: ArtifactPickerScope;
-  onAttach: (ref: ArtifactRef) => void;
+  onAttach: (ref: ArtifactRef, associations: ArtifactAssociation[]) => void | Promise<void>;
   onOpen: (ref: ArtifactRef) => void;
   onClose: () => void;
   footnoteChoices?: ArtifactPickerFootnote[];
@@ -178,9 +182,13 @@ export function ArtifactPicker({
   onClose,
   footnoteChoices = [],
   onToggleFootnote,
+  pageChoices = [],
+  capturePage,
 }: ArtifactPickerProps) {
   const { themeId, client } = useShell();
   const [catalog, setCatalog] = useState<ArtifactCatalog>();
+  const [source, setSource] = useState<"saved" | "files" | "pages">("saved");
+  const [sourcePages, setSourcePages] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
@@ -310,7 +318,7 @@ export function ArtifactPicker({
       const ref = await createArtifact(parent, name, filing(), nextKind === "whiteboard"
         ? { kind: nextKind, value: { board, pageCount: 1, programs: [], ink: new Map() } }
         : { kind: nextKind, value: { owned: true, docType: nextKind, name, source: nextKind === "markdown" ? `# ${name.replace(/\.md$/i, "")}\n` : "", board, footnotes: [], agent: [], ink: new Map() } });
-      onAttach(ref);
+      await onAttach(ref, filing());
       requestClose(() => onOpen(ref));
     });
   };
@@ -322,6 +330,21 @@ export function ArtifactPicker({
   const attachLabel = scope === "catalog" ? "Pin to chat" : "Attach";
   const pickedFootnotes = footnoteChoices.filter((entry) => entry.selected).length;
   const filingNow = filing();
+  const referenceRows = source === "files" ? listAnnotateDocs().map(doc => ({ id: doc.id, title: annotateDocLabel(doc),
+    kind: doc.docType === "code" ? "code" as const : "markdown" as const,
+    unit: doc.docType === "pdf" ? "Page" : doc.docType === "epub" ? "Chapter" : "Section", pages: undefined as number | undefined }))
+    : pageChoices.map(choice => ({ ...choice, unit: "Page" }));
+  const visibleReferences = referenceRows.filter(row => (!filterKind || row.kind === filterKind) && row.title.toLowerCase().includes(query.trim().toLowerCase()));
+  const attachReference = (id: string) => run(async () => {
+    const page = sourcePages[id] ?? 1;
+    const captured = source === "files" ? await captureLibraryReference(id, page) : await capturePage?.(id, page);
+    if (!captured) throw new Error("The selected page is no longer available.");
+    const board = { v: 1 as const, elements: convertToExcalidrawElements(buildAnnotateTemplate(1600, isDarkTheme(themeId))),
+      appState: { scrollX: 0, scrollY: 0, zoom: 1 } };
+    const ref = await createArtifact(parent, captured.title, filing(), { kind: captured.kind, value: referenceSnapshot(captured, board) });
+    await onAttach(ref, filing());
+    requestClose();
+  });
 
   const applyLifecycle = (item: PadArtifact, type: "delete" | "restore") =>
     run(async () => {
@@ -371,7 +394,7 @@ export function ArtifactPicker({
               className="lc-artifact-picker-compose"
               onSubmit={(event) => {
                 event.preventDefault();
-                void create();
+                if (source === "saved") void create();
               }}
             >
               <div className="lc-artifact-picker-adorn-start">
@@ -426,20 +449,41 @@ export function ArtifactPicker({
               <button
                 type="submit"
                 className="lc-artifact-picker-submit"
-                disabled={busy || !createKind}
+                disabled={busy || !createKind || source !== "saved"}
                 aria-label="Create attachment"
               >
                 <CreateIcon />
               </button>
             </form>
+            <div className="lc-artifact-picker-kinds" role="group" aria-label="Attachment source">
+              {(["saved", "files", ...(pageChoices.length ? ["pages"] : [])] as const).map(value => (
+                <button key={value} type="button" className="lc-secondary" aria-pressed={source === value} disabled={busy}
+                  onClick={() => setSource(value as typeof source)}>{value === "saved" ? "Saved" : value === "files" ? "Files" : "Pages & regions"}</button>
+              ))}
+            </div>
             <div className="lc-artifact-picker-catalog">
               {error && <p role="alert">{error}</p>}
-              {loaded && !catalog?.artifacts.length && <p className="lc-artifact-picker-empty">No saved attachments yet.</p>}
-              {loaded && (catalog?.artifacts.length ?? 0) > 0 && !visible.length && (
+              {source !== "saved" && <p className="lc-artifact-picker-empty">Attach a read-only excerpt. The source stays unchanged.</p>}
+              {source === "saved" && loaded && !catalog?.artifacts.length && <p className="lc-artifact-picker-empty">No saved attachments yet.</p>}
+              {source === "saved" && loaded && (catalog?.artifacts.length ?? 0) > 0 && !visible.length && (
                 <p className="lc-artifact-picker-empty">No matching attachments.</p>
               )}
               <div className="lc-artifact-picker-list">
-                {visible.map((item) => {
+                {source !== "saved" && visibleReferences.map(row => <div className="lc-artifact-picker-row lc-artifact-picker-reference-row" key={row.id}>
+                  <div className="lc-artifact-picker-row-main">
+                    <span className="lc-artifact-picker-kind"><ArtifactKindIcon kind={row.kind} className="lc-artifact-picker-adorn-icon" /></span>
+                    <span className="lc-artifact-picker-row-title">{row.title}</span>
+                    <span className="lc-artifact-picker-status">Read-only</span>
+                  </div>
+                  <div className="lc-artifact-picker-row-actions">
+                    <label className="lc-artifact-picker-status">{row.unit}<input type="number" min={1} max={row.pages} disabled={busy}
+                      className="lc-artifact-picker-page" aria-label={`${row.title} ${row.unit.toLowerCase()}`}
+                      value={sourcePages[row.id] ?? 1} onChange={event => setSourcePages(current => ({ ...current, [row.id]: Number(event.target.value) }))} /></label>
+                    <button type="button" disabled={busy} onClick={() => void attachReference(row.id)}>Attach excerpt</button>
+                  </div>
+                </div>)}
+                {source !== "saved" && !visibleReferences.length && <p className="lc-artifact-picker-empty">No matching sources.</p>}
+                {source === "saved" && visible.map((item) => {
                   const ref = artifactRef(parent, item);
                   const attached = coversAssociations(item, filingNow);
                   const status = statusLabel(item, attached, scope);
@@ -474,7 +518,7 @@ export function ArtifactPicker({
                                   expectedRevision: item.revision,
                                   patch: { associations: next },
                                 });
-                                onAttach(ref);
+                                await onAttach(ref, filing());
                                 requestClose();
                               })}
                             >

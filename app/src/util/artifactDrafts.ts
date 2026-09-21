@@ -17,7 +17,7 @@ function ordered(id: string, write: () => Promise<void>): Promise<void> {
 // putContent's private-WebView JSON fallback cannot round-trip a Map. Keep an
 // explicit entry list there, rather than silently losing draft strokes.
 export async function putArtifactDraft(ref: ArtifactRef, draft: ArtifactDraft) {
-  const payload = { ...draft, snapshot: { ...draft.snapshot,
+  const payload = { ...draft, parent: ref.parent, snapshot: { ...draft.snapshot,
     value: { ...draft.snapshot.value, ink: [...draft.snapshot.value.ink].map(([id, ink]) => [id, bytesToB64(packEncodedInk(ink))]) } } };
   await ordered(key(ref), () => putContent(key(ref), payload));
 }
@@ -32,6 +32,6 @@ export async function getArtifactDraft(ref: ArtifactRef): Promise<ArtifactDraft 
     if (!ink) throw new Error("Local attachment draft ink is damaged; the draft was kept.");
     return [id, ink];
   }));
-  return raw;
+  return { v: raw.v, item: raw.item, title: raw.title, snapshot: raw.snapshot };
 }
 export const deleteArtifactDraft = (ref: ArtifactRef) => ordered(key(ref), () => deleteContent(key(ref)));

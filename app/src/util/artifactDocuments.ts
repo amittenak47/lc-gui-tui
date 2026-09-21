@@ -6,9 +6,11 @@ import type { DocFootnote } from "./docFootnotes";
 import type { ArtifactContent, ArtifactParent } from "./padArtifacts";
 import { getArtifactAsset, putArtifactAsset } from "./artifactAssetStore";
 import { parseArtifactAsset } from "./artifactAssets";
+import { parseArtifactSourceReference, type ArtifactSourceReference } from "./artifactReference";
 
 type DocumentContent = Extract<ArtifactContent, { kind: "code" | "markdown" }>;
 export interface ArtifactDocumentSnapshot {
+  sourceReference?: ArtifactSourceReference;
   owned: true;
   docType: "code" | "markdown";
   name: string;
@@ -44,6 +46,7 @@ export async function stageOwnedDocumentSnapshot(
       v: 1, owned: snapshot.owned, docType: snapshot.docType, name: snapshot.name,
       source: snapshot.source, board: snapshot.board, footnotes: snapshot.footnotes,
       agent: snapshot.agent, ink,
+      ...(snapshot.sourceReference ? { sourceReference: parseArtifactSourceReference(snapshot.sourceReference) } : {}),
     }),
   });
   await putArtifactAsset(asset);
@@ -69,5 +72,6 @@ export async function loadOwnedDocumentSnapshot(
     ink.set(page.pageId, encoded);
   }
   return { owned: true, docType: payload.docType, name: payload.name, source: payload.source,
-    board: payload.board, footnotes: payload.footnotes, agent: payload.agent, ink };
+    board: payload.board, footnotes: payload.footnotes, agent: payload.agent, ink,
+    ...(payload.sourceReference ? { sourceReference: parseArtifactSourceReference(payload.sourceReference) } : {}) };
 }

@@ -11,10 +11,16 @@ import { parseSnapshotInk, snapshotInkToBytes } from "./padSnapshotPayload";
 import type { PadSnapshot } from "./padSnapshotStore";
 import type { ArtifactCatalog, ArtifactParent } from "./padArtifacts";
 import { ARTIFACTS_CHANGED } from "./artifactRepository";
+import { bytesFromMaybeGzip } from "./gzip";
+import { parseArtifactAsset } from "./artifactAssets";
+import { bytesToB64 } from "../api/nativeHttp";
 
 /** Catalog, scene/source, scratch scenes and ink commit together, or not at all. */
 export async function restoreArtifactSnapshot(parent: ArtifactParent & { kind: "annotate" | "whiteboard" }, snap: Partial<PadSnapshot>, bundle: ArtifactSnapshotBundle) {
   if (contentSpillOnly()) throw new Error("Repair local storage before restoring attachments.");
+  if (!snap.board || snap.board.v !== 1 || !Array.isArray(snap.board.elements) || !snap.board.appState) {
+    throw new Error("Snapshot board is invalid; current work was kept.");
+  }
   const assertLive = () => {
     const meta = parent.kind === "annotate" ? getAnnotateDocMeta(parent.id) : listWhiteboardNotebooks().find(row => row.id === parent.id);
     if (!meta || meta.deletedAt) throw new Error("The snapshot's parent is unavailable or in Trash.");
@@ -44,6 +50,18 @@ export async function restoreArtifactSnapshot(parent: ArtifactParent & { kind: "
   for (const id of new Set([...Object.keys(snap.footnoteBoards ?? {}), ...Object.keys(snap.footnoteInk ?? {})])) {
     addInk(footnoteWhiteboardDocKey(parent.id, id), snap.footnoteInk?.[id]);
   }
+  // Validate every shard before the destructive transaction. A valid base64
+  // string alone says nothing about whether the saved handwriting can reopen.
+  for (const pages of rows.values()) for (const page of pages) {
+    parseArtifactAsset({ parent, dependency: { kind: "ink", id: parent.id, revision: "snapshot", pageId: page.pageId },
+      payload: JSON.stringify({ v: 1, packed: bytesToB64(await bytesFromMaybeGzip(page.gz!)) }) });
+  }
+  const requireInk = (key: string, board: PadSnapshot["board"]) => {
+    const available = new Set((rows.get(key) ?? []).map(page => page.pageId));
+    if (board.inkPages?.pageIds.some(id => !available.has(id))) throw new Error("Snapshot handwriting is incomplete; current work was kept.");
+  };
+  requireInk(parent.kind === "annotate" ? annotateDocKey(parent.id) : whiteboardDocKey(parent.id), snap.board);
+  for (const [id, scene] of Object.entries(snap.footnoteBoards ?? {})) requireInk(footnoteWhiteboardDocKey(parent.id, id), scene.board);
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction([STORE_CONTENT, STORE_INK_PAGES], "readwrite");

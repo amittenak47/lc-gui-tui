@@ -103,6 +103,11 @@ import { artifactTab } from "./util/artifactTabs";
 import { saveAgentArtifacts, sanitizeArtifactProposals, type AgentArtifactProposal } from "./util/agentArtifacts";
 import { syncArtifactParent } from "./util/artifactSync";
 import { reconcileArtifactConflict } from "./util/artifactConflict";
+import { artifactContextImages, buildArtifactContext, selectedArtifactRefs } from "./util/artifactContext";
+import { captureLibraryReference, type ArtifactReferenceCapture } from "./util/artifactReferenceSources";
+import { REFERENCE_TEXT_LIMIT } from "./util/artifactReference";
+import { problemArtifactConflict, problemConflictPreview, resolveProblemArtifactConflict, stashProblemArtifactConflict, subscribeProblemArtifactConflict, type ProblemArtifactConflict } from "./util/problemArtifactConflict";
+import { applyHubProblem } from "./util/padSync";
 import { artifactCreationAssociations, artifactRefKey, type ArtifactParent, type ArtifactRef, type ArtifactAssociation } from "./util/padArtifacts";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { groupThreads, threadAnchorRef, visibleThreadMessages } from "./modes/coachThreads";
@@ -432,6 +437,7 @@ interface CoachSendQueueItem {
   askPayload?: CoachAskPayload;
   runInputs?: Partial<Record<RunAction, Array<Record<string, unknown>>>>;
   promptInput?: { quote?: string; marks: DocFootnote[]; numbers: Array<[string, number]>; budget: number };
+  artifactContext?: string;
   view?: DocumentViewContext;
   origin?: { surface: "whiteboard" | "annotate" | "problem"; task_id: string; dataset: string };
   text: string;
@@ -936,6 +942,7 @@ export function Workspace({
    */
   const [hubConflictAsk, setHubConflictAsk] = useState<{
     conflict: HubPadConflict;
+    problemConflict?: ProblemArtifactConflict;
     resolve(resolution: HubConflictResolution): void;
   } | null>(null);
   const hubConflictAskRef = useRef<typeof hubConflictAsk>(null);
@@ -976,6 +983,31 @@ export function Workspace({
     hubConflictBusyRef.current = true;
     setHubConflictBusy(true);
     try {
+      if (ask.problemConflict) {
+        const live = boardRef.current?.saveBoard();
+        const old = ask.problemConflict.local;
+        const authored = (blob: typeof old.board) => JSON.stringify({ elements: blob.elements, ink: inkOpsFrom(blob), files: blob.files });
+        const agent = persistableAgentMessages(agentMessagesRef.current);
+        if (live && (authored(live) !== authored(old.board) || JSON.stringify(agent) !== JSON.stringify(old.agent ?? []))) {
+          const current = await getProblemBoard(old.id);
+          if (!current) throw new Error("The problem is no longer available.");
+          await putProblemBoard({ ...current, board: live, agent, updatedAt: Math.max(Date.now(), current.updatedAt + 1) });
+          stashProblemArtifactConflict((await getProblemBoard(old.id))!, ask.problemConflict.server);
+          setNotice("The comparison now includes your latest local edits. Choose the copy to keep.");
+          return;
+        }
+        const row = await resolveProblemArtifactConflict(client, ask.problemConflict, resolution.pick, resolution.ink);
+        const board = boardRef.current;
+        if (board) board.restoreBoard(row.board.elements, row.board.appState, {
+          ink: inkOpsFrom(row.board), files: row.board.files, inkPalettes: row.board.inkPalettes,
+        });
+        agentMessagesRef.current = restoreAgentMessages(row.agent ?? []);
+        setAgentMessages(agentMessagesRef.current);
+        hubConflictAskRef.current = null;
+        setHubConflictAsk(null);
+        if (!await pushProblemPad(client, row)) setNotice("The resolved problem is saved locally. Sync will retry when the hub is available.");
+        return;
+      }
       const liveBoard = boardRef.current;
       if (liveBoard) {
         await flushDirtyInk(
@@ -1832,6 +1864,27 @@ export function Workspace({
   const [practiceOpen, setPracticeOpen] = useState(false);
   const [problem, setProblem] = useState<ProblemDetail | null>(null);
   const problemRef = useRef<ProblemDetail | null>(null);
+  useEffect(() => {
+    const id = problem && !isLocalPad(problem) ? problemPadId(problem.dataset, problem.task_id) : null;
+    if (hubConflictAskRef.current?.problemConflict && hubConflictAskRef.current.problemConflict.local.id !== id) {
+      hubConflictAskRef.current = null;
+      setHubConflictAsk(null);
+    }
+    if (!active || !problem || isLocalPad(problem)) return;
+    const refresh = () => {
+      const conflict = problemArtifactConflict(problemPadId(problem.dataset, problem.task_id));
+      if (!conflict) {
+        if (hubConflictAskRef.current?.problemConflict) { hubConflictAskRef.current = null; setHubConflictAsk(null); }
+        return;
+      }
+      if (hubConflictAskRef.current && !hubConflictAskRef.current.problemConflict) return;
+      const ask = { conflict: problemConflictPreview(conflict), problemConflict: conflict, resolve: () => {} };
+      hubConflictAskRef.current = ask;
+      setHubConflictAsk(ask);
+    };
+    refresh();
+    return subscribeProblemArtifactConflict(refresh);
+  }, [active, problem]);
   problemRef.current = problem;
   const [mode, setMode] = useState<Mode>("review");
   const [busy, setBusy] = useState<string | null>(null);
@@ -2405,6 +2458,7 @@ export function Workspace({
    */
   const autosaveTick = useCallback(() => {
     if (!problem) return;
+    if (hubConflictAskRef.current?.problemConflict) return;
     const board = boardRef.current;
     if (!board || boardSaveSuspendedRef.current || padHubApplyRef.current) return;
     // Serialising the scene under the nib is felt as the stroke stopping.
@@ -2830,11 +2884,16 @@ export function Workspace({
         }
         const padId = problemPadId(datasetId, taskId);
         let livePad = await getProblemBoard(padId);
-        try {
-          const remote = await client.getProblemPad(datasetId, taskId);
+        {
+          const remote = await client.getProblemPad(datasetId, taskId).catch(() => null);
           if (remote?.board) {
             const newer = !livePad || remote.updated_at > livePad.updatedAt;
-            if (newer) {
+            if (livePad && (livePad.artifacts || remote.artifacts) && livePad.updatedAt !== livePad.hubAckUpdatedAt) {
+              if (remote.updated_at !== livePad.hubAckUpdatedAt) stashProblemArtifactConflict(livePad, remote);
+            } else if (newer && (remote.artifacts || livePad?.artifacts)) {
+              await applyHubProblem(remote, { emitReload: false, client });
+              livePad = await getProblemBoard(padId);
+            } else if (newer) {
               livePad = {
                 id: remote.id || padId,
                 dataset: remote.dataset || datasetId,
@@ -2848,8 +2907,6 @@ export function Workspace({
               await putProblemBoard(livePad);
             }
           }
-        } catch {
-          /* first visit has no hub row yet */
         }
         // A saved coach thread comes back with drawings attached to turns.
         const liveAgent =
@@ -4524,6 +4581,9 @@ export function Workspace({
         const current = problemRef.current;
         if (!current || isLocalPad(current)) return;
         if (problemPadId(current.dataset, current.task_id) !== detail.id) return;
+        const board = boardRef.current;
+        if (dirtyRef.current || (board && lastEditSeqHashRef.current !==
+            sceneFingerprint(board.getElements(), boardInkMix(board)))) return;
         padHubApplyRef.current = true;
         void loadProblem(current.task_id, { dataset: current.dataset }, {
           tabId: tab.id,
@@ -6623,6 +6683,7 @@ export function Workspace({
             .map((id) => annotateFootnotesRef.current.find((entry) => entry.id === id))
             .filter((entry): entry is DocFootnote => Boolean(entry))
         : [];
+      const artifactRefs = selectedArtifactRefs(agentMessagesRef.current, anchorId, marks);
 
       const codeShot = (() => {
         const board = boardRef.current;
@@ -6733,11 +6794,19 @@ export function Workspace({
           : photos.length > 0
             ? "What am I looking at?"
             : "What should I focus on next?");
+      const fullBudget = isLocalPad(problem) ? PAD_ASK_CLIP_CHARS : PROBLEM_ASK_CLIP_CHARS;
+      const artifactContext = await buildArtifactContext(
+        artifactRefs,
+        Math.max(0, Math.min(3000, Math.floor(fullBudget / 3), fullBudget - asked.length - 500)),
+      );
+      if (modeHasVision("ask")) {
+        attachments = [...(attachments ?? []), ...await artifactContextImages(artifactRefs, Math.max(0, 3 - (attachments?.length ?? 0)))];
+      }
       const promptInput = { quote: quotedPassage, marks: structuredClone(marks),
         numbers: [...numberFootnotes(annotateFootnotesRef.current).entries()],
-        budget: isLocalPad(problem) ? PAD_ASK_CLIP_CHARS : PROBLEM_ASK_CLIP_CHARS };
+        budget: fullBudget - artifactContext.length - (artifactContext ? 2 : 0) };
       const assembled = assembleAskPrompt({ ...promptInput, question: asked, numbers: new Map(promptInput.numbers) });
-      const prompt = assembled.prompt;
+      const prompt = [assembled.prompt, artifactContext].filter(Boolean).join("\n\n");
 
       // One Send seeds one thread on the marks the model actually received.
       const attachedFootnoteIds =
@@ -6765,6 +6834,7 @@ export function Workspace({
         quotedPassage,
         prompt,
         promptInput,
+        artifactContext,
         anchorId,
         attachedFootnoteIds,
         omittedMarkCount: assembled.omittedMarkIds.length,
@@ -6772,7 +6842,7 @@ export function Workspace({
         questionTruncated: assembled.questionTruncated,
       };
     },
-    [readingSize, themeId, problem],
+    [readingSize, themeId, problem, modeHasVision],
   );
 
   const applyCoachFootnote = useCallback(
@@ -7119,7 +7189,7 @@ export function Workspace({
       const question = previous.flags.replyTo ? `Replying to your earlier message: “${previous.flags.replyTo.excerpt}”\n\n${text}` : text;
       const assembled = assembleAskPrompt({ ...(previous.promptInput ?? { quote: previous.quotedPassage, budget: PAD_ASK_CLIP_CHARS }),
         question, numbers: new Map(previous.promptInput?.numbers) });
-      const next = { ...previous, text, prompt: assembled.prompt, askPayload: undefined, runInputs: undefined, questionTruncated: assembled.questionTruncated };
+      const next = { ...previous, text, prompt: [assembled.prompt, previous.artifactContext].filter(Boolean).join("\n\n"), askPayload: undefined, runInputs: undefined, questionTruncated: assembled.questionTruncated };
       void saveCoachRequest(id, next).then(() => {
         setAgentMessages(current => current.map(m => m.id === id ? { ...m, content: text } : m));
         coordinator.endEdit(id, next);
@@ -7611,7 +7681,7 @@ export function Workspace({
   }, [patchTab, setNotice, tab.id, whiteboardPageCount]);
 
   const saveWhiteboardNow = useCallback(
-    async (onFull?: () => void, opts?: { quiet?: boolean; title?: string }) => {
+    async (onFull?: () => void, opts?: { quiet?: boolean; title?: string; throwOnError?: boolean }) => {
       const board = boardRef.current;
       if (!board || !problem || !isWhiteboard(problem)) return;
       if (footnoteBoardRef.current) {
@@ -7630,9 +7700,10 @@ export function Workspace({
           id: whiteboardNotebookId ?? undefined,
           ...(namedTitle ? { title: namedTitle } : {}),
           board: liveBoard,
-          agent: persistableAgentMessages(agentMessages),
+          agent: persistableAgentMessages(agentMessagesRef.current),
           pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
         });
+        whiteboardNotebookIdRef.current = saved.id;
         setWhiteboardNotebookId(saved.id);
         patchTab(tab.id, { title: saved.title, notebookId: saved.id });
         await flushDirtyInk(board, whiteboardDocKey(saved.id));
@@ -7650,6 +7721,7 @@ export function Workspace({
           }).then((written) => void pushRolledSnapshots(client, written));
         });
       } catch (cause) {
+        if (opts?.throwOnError) throw cause;
         if (cause instanceof WhiteboardLibraryFullError) {
           whiteboardLibResumeRef.current = onFull ?? null;
           setWhiteboardLibOpen(true);
@@ -7848,9 +7920,10 @@ export function Workspace({
         docType: source.docType,
         ...(namedLabel ? { label: namedLabel } : {}),
         board: blob,
-        footnotes: annotateFootnotes,
-        agent: persistableAgentMessages(agentMessages),
+        footnotes: annotateFootnotesRef.current,
+        agent: persistableAgentMessages(agentMessagesRef.current),
       });
+      annotateDocIdRef.current = saved.id;
       setAnnotateDocId(saved.id);
       const tabTitle = saved.label?.trim()
         ? saved.label.trim()
@@ -8227,7 +8300,7 @@ export function Workspace({
         if (!saved) throw new Error("Save this document before adding attachments.");
         parent = { kind: "annotate", id: saved.id };
       } else if (isWhiteboard(problem)) {
-        await saveWhiteboardNow(undefined, { quiet: true });
+        await saveWhiteboardNow(undefined, { quiet: true, throwOnError: true });
         const id = whiteboardNotebookIdRef.current ?? (tabsRef.current.tabs.find(entry => entry.id === tab.id) as { notebookId?: string } | undefined)?.notebookId;
         if (!id) throw new Error("Save the notebook first, then open Attachments.");
         parent = { kind: "whiteboard", id };
@@ -8238,6 +8311,7 @@ export function Workspace({
           updatedAt: Date.now(), board: board.saveBoard(), agent: persistableAgentMessages(agentMessagesRef.current) });
         parent = { kind: "problem", id };
       }
+      if (problemRef.current !== problem || boardRef.current !== board) throw new Error("The workspace changed. Reopen Attachments.");
       return { parent, messageId: message?.id, footnoteId,
         associations: artifactCreationAssociations({ activeFootnoteId: footnoteId, attachedFootnoteIds: message?.artifactFootnoteIds ?? attachedFootnoteIds,
           threadRootId: threadRootIdRef.current ?? message?.replyTo?.id ?? message?.id }) };
@@ -8248,6 +8322,13 @@ export function Workspace({
     if (context) setArtifactPicker(context);
   };
   const savingAgentArtifactRef = useRef(false);
+  const assertArtifactParentActive = (parent: ArtifactParent) => {
+    const current = problemRef.current;
+    const actual = !current ? null : isAnnotate(current) ? { kind: "annotate", id: annotateDocIdRef.current } :
+      isWhiteboard(current) ? { kind: "whiteboard", id: whiteboardNotebookIdRef.current } :
+      { kind: "problem", id: problemPadId(current.dataset, current.task_id) };
+    if (!actual || actual.kind !== parent.kind || actual.id !== parent.id) throw new Error("The attachment was saved to its original pad. Reopen that pad to link it.");
+  };
   const saveAgentArtifact = async (message: AgentChatMessage, proposal: AgentArtifactProposal, index?: number) => {
     if (savingAgentArtifactRef.current) return;
     savingAgentArtifactRef.current = true;
@@ -8255,14 +8336,21 @@ export function Workspace({
       const context = await prepareArtifactContext(message);
       if (!context) return;
       await saveAgentArtifacts(context.parent, [proposal], context.associations, isDarkTheme(themeId), reference => {
-        setAgentMessages(current => current.map(turn => turn.id === message.id ? { ...turn,
+        assertArtifactParentActive(context.parent);
+        agentMessagesRef.current = agentMessagesRef.current.map(turn => turn.id === message.id ? { ...turn,
           artifacts: [...(turn.artifacts ?? []), reference],
           artifactProposals: index === undefined ? turn.artifactProposals : turn.artifactProposals?.filter((_, i) => i !== index),
-        } : turn));
+        } : turn);
+        setAgentMessages(agentMessagesRef.current);
         const marks = context.associations.flatMap(association => association.kind === "footnote" ? [association.footnoteId] : []);
-        if (marks.length) setAnnotateFootnotes(current => current.map(note => marks.includes(note.id) ? { ...note, artifacts: [...(note.artifacts ?? []), reference] } : note));
+        if (marks.length) {
+          annotateFootnotesRef.current = annotateFootnotesRef.current.map(note => marks.includes(note.id) ? { ...note, artifacts: [...(note.artifacts ?? []), reference] } : note);
+          setAnnotateFootnotes(annotateFootnotesRef.current);
+        }
         markPadDirty();
       });
+      const saved = await prepareArtifactContext();
+      if (!saved || saved.parent.id !== context.parent.id || saved.parent.kind !== context.parent.kind) throw new Error("The attachment is saved, but its chat link still needs saving.");
       await syncArtifactParent(client, context.parent);
       setNotice("Attachment saved. Open its card to edit or animate it.");
     } catch (cause) { setError(messageOf(cause)); }
@@ -8273,14 +8361,59 @@ export function Workspace({
     if (existing) { focusTab(existing.id); return; }
     setArtifactPreview(artifactTab(reference, `${reference.kind} attachment`));
   };
-  const attachArtifactHere = (reference: ArtifactRef) => {
+  const attachArtifactHere = async (reference: ArtifactRef, associations: ArtifactAssociation[]) => {
     const context = artifactPicker; if (!context) return;
+    assertArtifactParentActive(context.parent);
     const append = (refs: ArtifactRef[] = []) => refs.some(ref => artifactRefKey(ref) === artifactRefKey(reference)) ? refs : [...refs, reference];
-    const marks = context.associations.flatMap(association => association.kind === "footnote" ? [association.footnoteId] : []);
-    if (marks.length) setAnnotateFootnotes(current => current.map(note => marks.includes(note.id) ? { ...note, artifacts: append(note.artifacts) } : note));
-    if (context.messageId) setAgentMessages(current => current.map(turn => turn.id === context.messageId ? { ...turn, artifacts: append(turn.artifacts) } : turn));
-    else if (!marks.length) setAgentMessages(current => [...current, { id: crypto.randomUUID(), role: "app", content: "Saved attachment", artifacts: [reference], at: Date.now() }]);
+    const marks = associations.flatMap(association => association.kind === "footnote" ? [association.footnoteId] : []);
+    if (marks.length) {
+      annotateFootnotesRef.current = annotateFootnotesRef.current.map(note => marks.includes(note.id) ? { ...note, artifacts: append(note.artifacts) } : note);
+      setAnnotateFootnotes(annotateFootnotesRef.current);
+    }
+    if (context.messageId) agentMessagesRef.current = agentMessagesRef.current.map(turn => turn.id === context.messageId ? { ...turn, artifacts: append(turn.artifacts) } : turn);
+    else if (!marks.length) {
+      const thread = associations.find(association => association.kind === "thread");
+      agentMessagesRef.current = [...agentMessagesRef.current, { id: crypto.randomUUID(), role: "app", content: "Saved attachment", artifacts: [reference], at: Date.now(),
+        ...(thread?.kind === "thread" ? { replyTo: { id: thread.rootId,
+          role: agentMessagesRef.current.find(turn => turn.id === thread.rootId)?.role ?? "app", excerpt: "Attached reference" } } : {}) }];
+    }
+    setAgentMessages(agentMessagesRef.current);
     markPadDirty();
+    const saved = await prepareArtifactContext();
+    if (!saved || saved.parent.id !== context.parent.id || saved.parent.kind !== context.parent.kind) throw new Error("The attachment is saved, but its chat link still needs saving. Retry before leaving.");
+  };
+
+  const artifactPageChoices = !artifactPicker || !problem ? [] : isAnnotate(problem)
+    ? [{ id: "document", title: annotateSource?.name ?? "Current document", kind: annotateSource?.docType === "code" ? "code" as const : "markdown" as const,
+      pages: annotateSource?.docType === "pdf" ? pdfNav?.count : undefined }]
+    : (boardRef.current?.getElements() ?? []).flatMap(value => {
+      const frame = value as { width: number; height: number; isDeleted?: boolean; customData?: { lcRegionFrame?: boolean; lcRegion?: string } };
+      const region = frame.customData?.lcRegion;
+      if (frame.isDeleted || !frame.customData?.lcRegionFrame || !region || !(frame.width > 0) || !(frame.height > 0)) return [];
+      return [{ id: region, title: REGIONS[region as RegionId]?.label ?? `Page ${Number(region.replace("pad-", "")) + 1}`,
+        kind: region === "code" ? "code" as const : "markdown" as const, pages: region === "code" ? Math.max(1, Math.ceil(pseudocodeRef.current.split("\n").length / 120)) : Math.max(1, Math.ceil(frame.height / (frame.width * 1.4))) }];
+    });
+  const captureArtifactPage = async (region: string, page: number): Promise<ArtifactReferenceCapture> => {
+    const context = artifactPicker;
+    const current = problemRef.current;
+    const canvas = boardRef.current;
+    if (!context || !current || !canvas) throw new Error("Reopen Attachments on the page you want to capture.");
+    if (!Number.isSafeInteger(page) || page < 1) throw new Error("Choose a page starting at 1.");
+    if (region === "document") return captureLibraryReference(context.parent.id, page);
+    const choice = artifactPageChoices.find(choice => choice.id === region);
+    if (!choice || choice.pages !== undefined && page > choice.pages) throw new Error("The selected region page is unavailable.");
+    let text: string, image: string | undefined;
+    if (region === "code") text = pseudocodeRef.current.split("\n").slice((page - 1) * 120, page * 120).join("\n");
+    else {
+      image = await canvas.exportAttachmentRegion(region, page);
+      text = "Captured page image. Handwriting is not transcribed; use the image when vision is available.";
+    }
+    if (problemRef.current !== current || boardRef.current !== canvas) throw new Error("The workspace changed during capture. Reopen Attachments.");
+    const locator = `${choice.title} · Page ${page}`;
+    return { title: `${current.task_id} · ${locator}`, kind: choice.kind, text: text.slice(0, REFERENCE_TEXT_LIMIT), reference: {
+      v: 1, parent: context.parent, revision: crypto.randomUUID(), label: current.task_id.slice(0, 512), locator,
+      capturedAt: Date.now(), truncated: text.length > REFERENCE_TEXT_LIMIT, ...(image ? { image } : {}),
+    } };
   };
 
   const onFootnoteChange = useCallback((next: DocFootnote) => {
@@ -10852,11 +10985,12 @@ export function Workspace({
                 })()
               : peekPdfReadingFrames(tab.id)
           }
-          client={client}
+          client={hubConflictAsk.problemConflict ? undefined : client}
           onResolve={(resolution) => void handleHubConflictResolve(resolution)}
         />
       ) : null}
       {active && artifactPicker && <ArtifactPicker parent={artifactPicker.parent} associations={artifactPicker.associations}
+        pageChoices={artifactPageChoices} capturePage={captureArtifactPage}
         scope={artifactPicker.messageId ? "message" : artifactPicker.footnoteId ? "footnote" : "catalog"}
         footnoteChoices={annotateFootnotes.map(note => ({
           id: note.id, title: note.title ?? "", number: footnoteNumbers.get(note.id),

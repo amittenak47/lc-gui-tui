@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { editProblemArtifacts, getProblemBoard, markProblemHubAck, putProblemBoard, type ProblemBoardRecord } from "./problemBoardStore";
+import { editProblemArtifacts, getProblemBoard, markProblemHubAck, putProblemBoard, replaceProblemBoard, type ProblemBoardRecord } from "./problemBoardStore";
 import type { ArtifactCatalogEdit } from "./artifactCatalogEdits";
 
 const state = vi.hoisted(() => ({
@@ -43,6 +43,12 @@ beforeEach(() => {
 });
 
 describe("atomic problem attachment catalog edits", () => {
+  it("a conflict/download replacement cannot overwrite a newer board", async () => {
+    const old = structuredClone(state.rows.get(id)!);
+    state.preflight = () => state.rows.set(id, { ...old, updatedAt: 20, agent: ["new local work"] });
+    await expect(replaceProblemBoard(old, { ...old, updatedAt: 30, agent: ["remote"] })).rejects.toThrow("changed since");
+    expect(state.rows.get(id)?.agent).toEqual(["new local work"]);
+  });
   it("preserves newer board/chat writes made during dependency preflight", async () => {
     state.preflight = () => {
       const row = state.rows.get(id)!;
@@ -78,6 +84,14 @@ describe("atomic problem attachment catalog edits", () => {
     expect(state.rows.get(id)?.artifacts).toEqual(deleted);
     await expect(putProblemBoard({ ...state.rows.get(id)!, artifacts: first })).rejects.toThrow("Restoring");
     expect(state.rows.get(id)?.artifacts).toEqual(deleted);
+  });
+
+  it("an ordinary board save cannot roll back a newer live catalog", async () => {
+    const first = await editProblemArtifacts(id, null, create);
+    const second = await editProblemArtifacts(id, first.revision, { type: "update", id: "a1", expectedRevision: first.artifacts[0].revision,
+      patch: { title: "New title" } });
+    await expect(putProblemBoard({ ...state.rows.get(id)!, artifacts: first })).rejects.toThrow("changed since");
+    expect(state.rows.get(id)?.artifacts).toEqual(second);
   });
 
   it("acknowledgement updates only the ack and never lowers it", async () => {

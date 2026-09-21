@@ -88,7 +88,9 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
       setPage(0);
       setLoadVersion(version => version + 1);
       setDirty(Boolean(draft));
-      setStatus(draft ? "Recovered local draft. Save publishes it to the parent." : "Saved with parent");
+      const sourceReference = saved?.snapshot.kind !== "whiteboard" ? saved?.snapshot.value.sourceReference : undefined;
+      setStatus(sourceReference ? `Read-only capture · ${sourceReference.label} · ${sourceReference.locator}${sourceReference.truncated ? " · excerpt truncated" : ""}` :
+        draft ? "Recovered local draft. Save publishes it to the parent." : "Saved with parent");
       if (savedResult.error) setError(`Saved version unavailable. Recovered your local draft: ${String(savedResult.error)}`);
       setBoard(() => component);
     } catch (cause) { if (generation.current === token) setError(String(cause)); }
@@ -101,6 +103,7 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
   };
   const capture = (): ArtifactSnapshot => {
     const current = live.current.snapshot;
+    if (current && current.kind !== "whiteboard" && current.value.sourceReference) return current;
     const canvas = board.current;
     if (!current || !canvas || !hydrated.current) throw new Error("Wait for the attachment to finish opening.");
     if (canvas.isInking()) throw new Error("Lift the pen before saving.");
@@ -125,9 +128,16 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
     if (!live.current.item) return;
     changing.current = true; setPending(true); setError(null);
     try {
-      const next = capture();
-      await putArtifactDraft(ref, { v: 1, item: live.current.item, title: live.current.title, snapshot: next });
+      let next = capture();
+      if (next.kind === "whiteboard" || !next.value.sourceReference) {
+        await putArtifactDraft(ref, { v: 1, item: live.current.item, title: live.current.title, snapshot: next });
+      }
       if (copy) {
+        if (next.kind !== "whiteboard" && next.value.sourceReference) {
+          // Explicit Copy creates an editable document with a new identity.
+          const { sourceReference, ...value } = next.value;
+          next = { ...next, value: { ...value, source: value.source + (sourceReference.image ? `\n\n![Captured page](${sourceReference.image})` : "") } };
+        }
         const created = await createArtifact(ref.parent, `${live.current.title} (copy)`, live.current.item.associations, next);
         // The original draft stays recoverable until explicitly discarded.
         openWorkspace(artifactTab(created, `${live.current.title} (copy)`));
@@ -164,6 +174,7 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
   }, [dirty]);
   const close = async () => { await persistDraft(); onClose?.(); };
   const doc = snapshot && snapshot.kind !== "whiteboard" ? snapshot.value : null;
+  const readOnly = Boolean(doc?.sourceReference);
   const updateSource = (source: string) => {
     setSnapshot(current => current && current.kind !== "whiteboard" ? { ...current, value: { ...current.value, source } } : current);
     setDirty(true);
@@ -190,7 +201,7 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
           className="lc-artifact-title"
           aria-label={`${kindName} title`}
           value={title}
-          disabled={pending}
+          disabled={pending || readOnly}
           onChange={(event) => {
             setTitle(event.target.value);
             setDirty(true);
@@ -244,7 +255,7 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
           </nav>
         )}
         <div className="lc-artifact-chrome-actions">
-          <button type="button" className="lc-secondary" disabled={!item || pending} onClick={() => void save().catch(() => {})}>
+          <button type="button" className="lc-secondary" disabled={!item || pending || readOnly} onClick={() => void save().catch(() => {})}>
             Save
           </button>
           <button type="button" className="lc-secondary" disabled={!item || pending} onClick={() => void save(true).catch(() => {})}>
@@ -288,8 +299,12 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
         </p>
       )}
       <p className="lc-artifact-status" role="status">{status || `Opening ${kindName.toLowerCase()}…`}</p>
-      <div className="lc-artifact-canvas">
-      {Board && snapshot && <Board ref={board} filmScope={`artifact:${tab.id}`} themeId={themeId} readingSize={readingSize}
+      <div className={`lc-artifact-canvas${readOnly ? " lc-artifact-reference" : ""}`}>
+      {readOnly && doc && <>
+        {doc.sourceReference?.image && <img src={doc.sourceReference.image} alt={`${doc.sourceReference.label} · ${doc.sourceReference.locator}`} />}
+        <AnnotateDocument source={doc.docType === "code" ? `\`\`\`\n${doc.source}\n\`\`\`` : doc.source} selectable />
+      </>}
+      {!readOnly && Board && snapshot && <Board ref={board} filmScope={`artifact:${tab.id}`} themeId={themeId} readingSize={readingSize}
         onChange={changed} interactive={!pending} chromeEnabled={active} splitPaused={!showing} annotateToggle docPaper
         focusRegion={doc ? ANNOTATE_REGION : `pad-${page}`} mobileRegion={doc ? ANNOTATE_REGION : `pad-${page}`}
         editToggle={Boolean(doc)} editing={editing} onToggleEdit={() => setEditing(value => !value)}

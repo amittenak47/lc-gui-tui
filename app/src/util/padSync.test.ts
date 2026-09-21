@@ -991,7 +991,8 @@ describe("live PUT CAS and gone", () => {
 
   it("does not replace problem attachments with a conflicting server board", async () => {
     const id = "leetcode/two-sum";
-    getProblemBoard.mockResolvedValue({ artifacts: {
+    getProblemBoard.mockResolvedValue({ id, dataset: "leetcode", taskId: "two-sum", updatedAt: 999,
+      hubAckUpdatedAt: 1, board: emptyBoard, agent: [], artifacts: {
       v: 1, parent: { kind: "problem", id }, revision: "local", artifacts: [],
     } });
     const hub = { id, board: emptyBoard, updated_at: 40 };
@@ -1000,7 +1001,8 @@ describe("live PUT CAS and gone", () => {
     }) });
     await expect(pushProblemPad(client, { id, dataset: "leetcode", taskId: "two-sum",
       updatedAt: 999, hubAckUpdatedAt: 1, board: emptyBoard, agent: [],
-    })).rejects.toThrow("Local work was kept");
+    })).resolves.toBe(false);
+    expect(client.putProblemPad).toHaveBeenCalledWith("leetcode", "two-sum", expect.objectContaining({ artifacts: expect.objectContaining({ revision: "local" }) }));
     expect(putProblemBoard).not.toHaveBeenCalled();
   });
 
@@ -1034,6 +1036,33 @@ describe("live PUT CAS and gone", () => {
         hubAckUpdatedAt: 40,
       }),
     );
+    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+  });
+
+  it("serializes overlapping problem saves", async () => {
+    const row = { id: "d/1", dataset: "d", taskId: "1", updatedAt: 10, board: emptyBoard, agent: [] };
+    getProblemBoard.mockResolvedValue(row);
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const put = vi.fn(async () => { await blocked; return { updated_at: 10 }; });
+    const client = fakeClient({ putProblemPad: put as never });
+    const first = pushProblemPad(client, row);
+    await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+    const second = pushProblemPad(client, row);
+    await Promise.resolve();
+    expect(put).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all([first, second]);
+    expect(put).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries the current problem catalog instead of an obsolete queued version", async () => {
+    const artifacts = { v: 1, parent: { kind: "problem", id: "d/1" }, revision: "new", artifacts: [] };
+    getProblemBoard.mockResolvedValue({ id: "d/1", dataset: "d", taskId: "1", updatedAt: 20, board: emptyBoard, artifacts });
+    await enqueuePadSync({ op: "putProblem", body: { id: "d/1", dataset: "d", task_id: "1", updated_at: 10, board: emptyBoard, agent: [] } });
+    const client = fakeClient();
+    await flushPadSyncQueue(client);
+    expect(client.putProblemPad).toHaveBeenCalledWith("d", "1", expect.objectContaining({ updated_at: 20, artifacts }));
     expect(peekPadSyncQueueForTests()).toHaveLength(0);
   });
 

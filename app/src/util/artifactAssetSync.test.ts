@@ -5,6 +5,7 @@ import { downloadArtifactAssets, uploadArtifactAssets, type ArtifactAssetTranspo
 
 const cache = vi.hoisted(() => new Map<string, ArtifactAsset>());
 vi.mock("./artifactAssetStore", () => ({
+  markArtifactAssetTransferred: vi.fn(async () => {}),
   getArtifactAsset: async (locator: ArtifactAsset) => cache.get(artifactAssetKey(locator)) ?? null,
   putArtifactAsset: async (asset: ArtifactAsset) => { cache.set(artifactAssetKey(asset), parseArtifactAsset(asset)); },
 }));

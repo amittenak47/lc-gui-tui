@@ -2,7 +2,7 @@ import {
   artifactDependencies, artifactCatalogFields, artifactDependencyKey,
   type ArtifactCatalog,
 } from "./padArtifacts";
-import { getArtifactAsset, putArtifactAsset } from "./artifactAssetStore";
+import { getArtifactAsset, putArtifactAsset, markArtifactAssetTransferred } from "./artifactAssetStore";
 import { requireArtifactAssetAck, type ArtifactAsset, type ArtifactAssetLocator } from "./artifactAssets";
 
 export interface ArtifactAssetTransport {
@@ -51,6 +51,7 @@ export async function uploadArtifactAssets(
     const asset = await getArtifactAsset(locator);
     if (!asset) throw new Error(`Attachment content is missing (${locator.dependency.id}). Parent sync was not published.`);
     requireArtifactAssetAck(asset, await client.putArtifactAsset(asset));
+    await markArtifactAssetTransferred(asset);
     // Keep long catalogs cooperative between assets, not midway through a write.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
@@ -71,6 +72,7 @@ export async function downloadArtifactAssets(
       throw new Error("Hub returned a different attachment revision; local content was kept.");
     }
     await putArtifactAsset(asset);
+    await markArtifactAssetTransferred(asset);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
   await requireConsistentAssets(catalog);

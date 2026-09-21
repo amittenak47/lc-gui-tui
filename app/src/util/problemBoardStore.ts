@@ -44,9 +44,13 @@ export async function putProblemBoard(row: ProblemBoardRecord): Promise<void> {
       const request = store.get(row.id);
       request.onsuccess = () => {
         try {
+          const current = request.result as ProblemBoardRecord | undefined;
           const artifacts = requireArtifactCatalogTransition(
-            (request.result as ProblemBoardRecord | undefined)?.artifacts,
+            current?.artifacts,
             supplied.artifacts, { kind: "problem", id: row.id });
+          if (current?.artifacts && supplied.artifacts && current.artifacts.revision !== supplied.artifacts.revision) {
+            throw new ArtifactEditConflict();
+          }
           const fields = artifacts ? { artifacts } : {};
           store.put({ ...row, ...fields }, row.id);
         } catch (cause) {
@@ -62,6 +66,25 @@ export async function putProblemBoard(row: ProblemBoardRecord): Promise<void> {
 
 export async function deleteProblemBoard(id: string): Promise<void> {
   await run(STORE_PROBLEM_BOARDS, "readwrite", (store) => store.delete(id));
+}
+
+/** A download/conflict choice may only replace the exact version it examined. */
+export async function replaceProblemBoard(expected: ProblemBoardRecord | null, row: ProblemBoardRecord): Promise<void> {
+  await downloadArtifactAssets(undefined, row.artifacts);
+  let failure: unknown;
+  try {
+    await withStore(STORE_PROBLEM_BOARDS, "readwrite", store => {
+      const request = store.get(row.id);
+      request.onsuccess = () => {
+        try {
+          const current = request.result as ProblemBoardRecord | undefined;
+          if (JSON.stringify(current ?? null) !== JSON.stringify(expected)) throw new ArtifactEditConflict();
+          const artifacts = requireArtifactCatalogTransition(current?.artifacts, row.artifacts, { kind: "problem", id: row.id });
+          store.put({ ...row, ...(artifacts ? { artifacts } : {}) }, row.id);
+        } catch (cause) { failure = cause; store.transaction.abort(); }
+      };
+    });
+  } catch (cause) { throw failure ?? cause; }
 }
 
 export function markProblemHubAck(id: string, updatedAt: number): void {

@@ -8856,6 +8856,21 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           exportBoardBlob(api, rasterInkRef.current?.getOps() ?? [], 1, pageExportLayers()),
         );
       },
+      exportAttachmentRegion: async (region, page) => {
+        const api = apiRef.current;
+        if (!api || !Number.isSafeInteger(page) || page < 1) throw new Error("The selected page is unavailable.");
+        const all = api.getSceneElements() as SceneElementLike[];
+        const frame = all.find(el => !el.isDeleted && el.customData?.lcRegionFrame && el.customData?.lcRegion === region);
+        if (!frame) throw new Error("The selected region is unavailable.");
+        const sliceHeight = Math.min(frame.height, frame.width * 1.4);
+        const y = frame.y + (page - 1) * sliceHeight;
+        if (y >= frame.y + frame.height) throw new Error("The selected page is outside this region.");
+        const crop = { x: frame.x, y, width: frame.width, height: Math.min(sliceHeight, frame.y + frame.height - y) };
+        const image = await captureImage(() => exportSceneFrameBlob(api, rasterInkRef.current?.getOps() ?? [], crop,
+          Math.min(1, 1000 / Math.max(crop.width, crop.height)), pageExportLayers()), { maxEdge: 1000, maxBase64: 1400000 });
+        if (!image) throw new Error("The selected region could not be captured.");
+        return `data:image/png;base64,${image}`;
+      },
       exportRegionThumbs: async () => {
         const api = apiRef.current;
         if (!api) return [];

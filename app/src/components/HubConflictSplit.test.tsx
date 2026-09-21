@@ -118,6 +118,20 @@ function inkRow(side: 0 | 1): HTMLElement {
 }
 
 describe("HubConflictSplit", () => {
+  it("offers a whole problem-canvas choice even when both sides have identical ink", async () => {
+    const { problemConflictPreview } = await import("../util/problemArtifactConflict");
+    const board = { v: 1 as const, elements: [], appState: { scrollX: 0, scrollY: 0, zoom: 1 } };
+    const conflict = problemConflictPreview({
+      local: { id: "d/1", dataset: "d", taskId: "1", updatedAt: 1, board, agent: [] },
+      server: { id: "d/1", dataset: "d", task_id: "1", updated_at: 2, board, agent: [] },
+    });
+    const { root, onResolve } = mount(conflict);
+    await act(async () => { await Promise.resolve(); });
+    act(() => paneButton(1, "keep").click());
+    act(() => resolveButton().click());
+    expect(onResolve).toHaveBeenCalledWith(expect.objectContaining({ pick: "server" }));
+    act(() => root.unmount());
+  });
   afterEach(() => {
     document.body.textContent = "";
     resetPdfThumbs();

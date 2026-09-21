@@ -226,6 +226,8 @@ export interface BoardHandle {
   fitCodeToSource(source: string): void;
   /** Small PNGs of student template boxes that have content (for chat attachments). */
   exportRegionThumbs(): Promise<Array<{ region: RegionId; label: string; png: string }>>;
+  /** One selected page-sized slice; attachment capture does not move the camera. */
+  exportAttachmentRegion(region: string, page: number): Promise<string>;
   /**
    * One PNG of what the reader is looking at right now.
    *

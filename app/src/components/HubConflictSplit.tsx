@@ -376,12 +376,12 @@ export function HubConflictSplit({
     [previewFrames, conflict, inkHits.maxY],
   );
   const basePadInkRows = useMemo(
-    () => (conflict ? padInkDiffRows(conflict) : []),
+    () => (conflict?.wholeCanvas ? [{ pageId: 1, hasLocal: true, hasServer: true }] : conflict ? padInkDiffRows(conflict) : []),
     [conflict],
   );
   const padInkRows = useMemo(
     () =>
-      conflict?.kind === "whiteboard"
+      conflict?.wholeCanvas ? basePadInkRows : conflict?.kind === "whiteboard"
         ? whiteboardInkMergeRows(
             basePadInkRows,
             listFrames,

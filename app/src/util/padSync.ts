@@ -15,6 +15,7 @@ import { LcApiError as ApiError } from "../api/client";
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { artifactCatalogFields } from "./padArtifacts";
 import { downloadArtifactAssets } from "./artifactAssetSync";
+import { clearProblemArtifactConflict, stashProblemArtifactConflict } from "./problemArtifactConflict";
 import { parseArtifactSnapshotBundle, stageArtifactSnapshot } from "./artifactSnapshot";
 import {
   deleteAnnotateDoc,
@@ -68,6 +69,7 @@ import {
   getProblemBoard,
   markProblemHubAck,
   putProblemBoard,
+  replaceProblemBoard,
   type ProblemBoardRecord,
 } from "./problemBoardStore";
 import {
@@ -373,7 +375,10 @@ async function applyLivePutFailure(
   const body = errorJson(cause);
   const localProblem = await getProblemBoard(padId);
   if (localProblem?.artifacts || (body && typeof body === "object" && "artifacts" in body && body.artifacts)) {
-    throw new Error("Problem attachment sync conflict. Local work was kept; resolve both versions before syncing again.");
+    if (!localProblem || !body || typeof body !== "object") throw new Error("Problem attachment conflict could not be read. Local work was kept.");
+    stashProblemArtifactConflict(localProblem, body as ProblemPadDto);
+    await dropPadPayloadJobs(kind, padId);
+    return true;
   }
   await applyHubProblem(body, { emitReload: true, client });
   await dropPadPayloadJobs(kind, padId);
@@ -465,23 +470,23 @@ export async function applyHubAnnotate(
   return true;
 }
 
-async function applyHubProblem(
+export async function applyHubProblem(
   raw: unknown,
   opts: { emitReload: boolean; client?: LcClient },
 ): Promise<boolean> {
   if (!raw || typeof raw !== "object") return false;
   const row = raw as ProblemPadDto;
   if (typeof row.id !== "string" || !row.board) return false;
+  const before = await getProblemBoard(row.id);
   const artifactFields = artifactCatalogFields(row.artifacts, { kind: "problem", id: row.id });
   if (artifactFields.artifacts) {
-    const before = await getProblemBoard(row.id);
     await downloadArtifactAssets(opts.client, artifactFields.artifacts);
     const after = await getProblemBoard(row.id);
     if (after?.updatedAt !== before?.updatedAt || after?.syncSeq !== before?.syncSeq) {
       throw new Error("The problem board changed during attachment download. Local work was kept; retry sync.");
     }
   }
-  await putProblemBoard({
+  const replacement: ProblemBoardRecord = {
     ...artifactFields,
     id: row.id,
     dataset: row.dataset,
@@ -491,7 +496,9 @@ async function applyHubProblem(
     hubAckUpdatedAt: row.updated_at,
     board: row.board as BoardBlob,
     agent: Array.isArray(row.agent) ? row.agent : [],
-  });
+  };
+  if (before?.artifacts || artifactFields.artifacts) await replaceProblemBoard(before, replacement);
+  else await putProblemBoard(replacement);
   markProblemHubAck(row.id, row.updated_at);
   if (opts.emitReload) emitPadHub({ kind: "problem", id: row.id, op: "reload" });
   return true;
@@ -610,10 +617,18 @@ async function pushAnnotatePadNow(client: LcClient, doc: AnnotateDoc): Promise<b
   }
 }
 
-export async function pushProblemPad(
+export function pushProblemPad(client: LcClient, row: ProblemBoardRecord): Promise<boolean> {
+  const previous = [...(pendingPadPushes.get(`problem:${row.id}`) ?? [])];
+  return trackPadPush("problem", row.id, Promise.allSettled(previous).then(() => pushProblemPadNow(client, row)));
+}
+
+async function pushProblemPadNow(
   client: LcClient,
   row: ProblemBoardRecord,
 ): Promise<boolean> {
+  // Autosave intentionally omits catalogs; putProblemBoard preserves them.
+  // Publish that persisted row, never the pre-write autosave object.
+  row = await getProblemBoard(row.id) ?? row;
   const body: ProblemPadDto = {
     ...artifactCatalogFields(row.artifacts, { kind: "problem", id: row.id }),
     id: row.id,
@@ -628,6 +643,9 @@ export async function pushProblemPad(
   try {
     const written = await client.putProblemPad(row.dataset, row.taskId, body);
     markProblemHubAck(row.id, written.updated_at ?? row.updatedAt);
+    await dropMatching(job => job.op === "putProblem" && job.body.id === row.id && job.body.updated_at <= row.updatedAt);
+    const current = await getProblemBoard(row.id);
+    if (current?.updatedAt === row.updatedAt && current.artifacts?.revision === row.artifacts?.revision) clearProblemArtifactConflict(row.id);
     return true;
   } catch (cause) {
     if (await applyLivePutFailure("problem", row.id, cause, client)) return false;
@@ -943,8 +961,14 @@ export async function flushPadSyncQueue(client: LcClient): Promise<void> {
         const written = await client.putAnnotatePad(job.body.id, job.body);
         markAnnotateHubAck(job.body.id, written.updated_at ?? job.body.updated_at);
       } else if (job.op === "putProblem") {
-        const written = await client.putProblemPad(job.body.dataset, job.body.task_id, job.body);
-        markProblemHubAck(job.body.id, written.updated_at ?? job.body.updated_at);
+        const local = await getProblemBoard(job.body.id);
+        if (local) {
+          // Retry the current catalog and serialize with foreground saves.
+          if (!await pushProblemPad(client, local)) continue;
+        } else if (!job.body.artifacts) {
+          const written = await client.putProblemPad(job.body.dataset, job.body.task_id, job.body);
+          markProblemHubAck(job.body.id, written.updated_at ?? job.body.updated_at);
+        }
       } else if (job.op === "putSnapshot") {
         if (!liveAckMatchesStore(kindOfSnap(job.body.kind), job.body.key)) {
           await dropJob(job.id);
@@ -1412,7 +1436,19 @@ async function applyPadSyncPingBody(
   for (const row of ping.problem ?? []) {
     if (isCameraBusy()) return;
     if (pendingDelete.has(`problem:${row.id}`)) continue;
+    if (pendingPadPushes.get(`problem:${row.id}`)?.size) {
+      conflictedPads.add(`problem:${row.id}`);
+      continue;
+    }
     const local = await getProblemBoard(row.id);
+    if (local && (local.artifacts || row.artifacts) && local.updatedAt !== local.hubAckUpdatedAt) {
+      if (row.updated_at !== local.hubAckUpdatedAt) {
+        stashProblemArtifactConflict(local, row);
+        conflictedPads.add(`problem:${row.id}`);
+      }
+      // Neither replacement nor ACK is authorized for unsent local work.
+      continue;
+    }
     const stale =
       !local ||
       boardLooksCorrupt(local.board) ||
@@ -1446,6 +1482,8 @@ export async function sweepPadTrash(now = Date.now()): Promise<void> {
   const { sweepAnnotateTrash } = await import("./annotateStore");
   await sweepWhiteboardTrash(now);
   await sweepAnnotateTrash(now);
+  const { collectArtifactCache } = await import("./artifactCacheGc");
+  await collectArtifactCache(now, [...memoryQueue]).catch(() => {});
 }
 
 async function fillMissingSnapshots(

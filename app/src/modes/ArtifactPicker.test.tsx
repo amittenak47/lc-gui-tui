@@ -11,6 +11,11 @@ const repo = vi.hoisted(() => ({
   createArtifact: vi.fn(),
   mutateArtifacts: vi.fn(),
 }));
+const sources = vi.hoisted(() => ({ capture: vi.fn() }));
+vi.mock("../util/annotateStore", () => ({ listAnnotateDocs: () => [{ id: "book", name: "Book.pdf", docType: "pdf" }], annotateDocLabel: () => "Book.pdf" }));
+vi.mock("../util/artifactReferenceSources", async importOriginal => ({
+  ...await importOriginal<typeof import("../util/artifactReferenceSources")>(), captureLibraryReference: sources.capture,
+}));
 
 vi.mock("../shellContext", () => ({
   useShell: () => ({ themeId: "graphite", client: {} }),
@@ -84,6 +89,7 @@ beforeEach(() => {
   catalog.current = { v: 1, parent, revision: "cat1", artifacts: [] };
   repo.createArtifact.mockReset();
   repo.mutateArtifacts.mockReset();
+  sources.capture.mockReset();
   resetLibraryDeleteArmForTests();
   resetArtifactLocksForTests();
   host = document.createElement("div");
@@ -215,6 +221,36 @@ function mockLifecycle() {
   });
 }
 
+it("attaches a selected library page with read-only provenance and selected filing", async () => {
+  const capture = { title: "Book page 2", kind: "markdown", text: "excerpt", reference: { v: 1,
+    parent: { kind: "annotate", id: "book" }, revision: "r", label: "Book", locator: "Page 2", capturedAt: 1, truncated: false } };
+  sources.capture.mockResolvedValue(capture);
+  const reference = { parent, artifactId: "captured", kind: "markdown" };
+  repo.createArtifact.mockResolvedValue(reference);
+  const { onAttach } = await mount({ footnoteChoices: [{ id: "mark", title: "Mark", selected: true }] });
+  await act(async () => { button("Files")!.click(); });
+  expect(backdrop().textContent).toContain("Read-only");
+  await act(async () => { fill(document.querySelector<HTMLInputElement>('[aria-label="Book.pdf page"]')!, "2"); });
+  await act(async () => { button("Attach excerpt")!.click(); });
+  expect(sources.capture).toHaveBeenCalledWith("book", 2);
+  expect(repo.createArtifact).toHaveBeenCalledWith(parent, capture.title, [{ kind: "footnote", footnoteId: "mark" }],
+    expect.objectContaining({ value: expect.objectContaining({ source: "excerpt", sourceReference: capture.reference }) }));
+  expect(onAttach).toHaveBeenCalledWith(reference, [{ kind: "footnote", footnoteId: "mark" }]);
+});
+
+it("captures a chosen problem-region page and keeps failures retryable", async () => {
+  const capturePage = vi.fn().mockRejectedValue(new Error("The page changed. Retry."));
+  const { onAttach } = await mount({ pageChoices: [{ id: "scratch", title: "Scratch", kind: "markdown", pages: 4 }], capturePage });
+  await act(async () => { button("Pages & regions")!.click(); });
+  await act(async () => { fill(document.querySelector<HTMLInputElement>('[aria-label="Scratch page"]')!, "3"); });
+  await act(async () => { button("Attach excerpt")!.click(); });
+  expect(capturePage).toHaveBeenCalledWith("scratch", 3);
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("Retry");
+  expect(onAttach).not.toHaveBeenCalled();
+  expect(button("Attach excerpt")!.disabled).toBe(false);
+  expect(repo.createArtifact).not.toHaveBeenCalled();
+});
+
 it("opens as a compact Settings card with enter motion, not a full-bleed sheet", async () => {
   await mount();
   const sheet = backdrop();
@@ -261,7 +297,7 @@ it("creates from the selected kind via the end adornment", async () => {
     [thread],
     expect.objectContaining({ kind: "code" }),
   );
-  expect(onAttach).toHaveBeenCalledWith({ parent, artifactId: "n1", kind: "code" });
+  expect(onAttach).toHaveBeenCalledWith({ parent, artifactId: "n1", kind: "code" }, [thread]);
 });
 
 it("toggles create off on a second tap and keeps only one kind armed", async () => {
@@ -340,7 +376,7 @@ it("filters the catalog and names a create from the same field", async () => {
     [thread],
     expect.objectContaining({ kind: "markdown" }),
   );
-  expect(onAttach).toHaveBeenCalledWith({ parent, artifactId: "n2", kind: "markdown" });
+  expect(onAttach).toHaveBeenCalledWith({ parent, artifactId: "n2", kind: "markdown" }, [thread]);
 });
 
 it("lists catalog rows without preview cards", async () => {
@@ -372,7 +408,7 @@ it("pins a catalog item onto chat and starts the leave animation", async () => {
     await Promise.resolve();
   });
   expect(repo.mutateArtifacts).toHaveBeenCalled();
-  expect(onAttach).toHaveBeenCalledWith({ parent, artifactId: "a2", kind: "markdown" });
+  expect(onAttach).toHaveBeenCalledWith({ parent, artifactId: "a2", kind: "markdown" }, [thread]);
   expect(backdrop().className).toContain("lc-leave-dialog-exit");
   expect(onClose).not.toHaveBeenCalled();
 });

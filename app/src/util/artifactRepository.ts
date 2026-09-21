@@ -61,6 +61,9 @@ export async function saveArtifact(ref: ArtifactRef, expectedRevision: string, t
   const item = before?.artifacts.find(entry => entry.id === ref.artifactId);
   if (!item || item.deletedAt !== undefined || item.revision !== expectedRevision) throw new ArtifactEditConflict();
   if (snapshot.kind !== item.content.kind) throw new Error("Use Save a copy to change attachment kind.");
+  if (item.content.kind !== "whiteboard" && (await loadOwnedDocumentSnapshot(ref.parent, item.content)).sourceReference) {
+    throw new Error("This is a read-only source capture. Save a copy to edit it.");
+  }
   const content = await stage(ref.parent, item.content.kind === "whiteboard" ? item.content.boardId : item.content.documentId, snapshot);
   const catalog = await mutateArtifacts(ref.parent, before!.revision, { type: "update", id: item.id,
     expectedRevision, patch: { title, content } });

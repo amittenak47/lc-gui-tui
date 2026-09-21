@@ -28,6 +28,8 @@ import { freshWhiteboardId } from "./docFootnotes";
 export type HubPadKind = "annotate" | "whiteboard";
 
 export interface HubPadConflict {
+  /** Problem canvases use one whole-canvas choice in the existing split. */
+  wholeCanvas?: boolean;
   kind: HubPadKind;
   id: string;
   /** Which stage parked: the pad-JSON push (E) or the ink sync (F). */

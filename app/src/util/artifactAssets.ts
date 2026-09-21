@@ -3,6 +3,7 @@ import type { BoardBlob } from "../canvas/BoardHandle";
 import { unpackEncodedInk } from "../canvas/inkCodec";
 import { b64ToBytes } from "../api/nativeHttp";
 import { parseVizProgram } from "../viz/schema";
+import { parseArtifactSourceReference, REFERENCE_TEXT_LIMIT } from "./artifactReference";
 import {
   artifactIdentity, parseArtifactParent, artifactDependencyKey,
   type ArtifactDependency, type ArtifactParent,
@@ -99,6 +100,8 @@ export function parseArtifactAsset(raw: unknown): ArtifactAsset {
       validatePackedInk(payload.packed);
       break;
     case "document": {
+      const reference = parseArtifactSourceReference(payload.sourceReference);
+      if (reference && (typeof payload.source !== "string" || payload.source.length > REFERENCE_TEXT_LIMIT)) return invalid();
       if (payload.owned !== true || (payload.docType !== "code" && payload.docType !== "markdown") ||
           typeof payload.name !== "string" || !payload.name.trim() || typeof payload.source !== "string" ||
           !Array.isArray(payload.footnotes) || !Array.isArray(payload.agent) || !Array.isArray(payload.ink)) return invalid();

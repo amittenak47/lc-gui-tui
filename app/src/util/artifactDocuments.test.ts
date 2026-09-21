@@ -24,6 +24,15 @@ function snapshot(docType: "code" | "markdown" = "code"): ArtifactDocumentSnapsh
 beforeEach(() => { state.cache.clear(); state.fail = false; });
 
 describe("owned document attachment snapshots", () => {
+  it("preserves source capture provenance and rejects oversized excerpts", async () => {
+    const saved = snapshot("markdown");
+    saved.sourceReference = { v: 1, parent: { kind: "annotate", id: "library-source" }, revision: "r", label: "Book",
+      locator: "Page 2", capturedAt: 1, truncated: false, image: "data:image/png;base64,YQ==" };
+    const pointer = await stageOwnedDocumentSnapshot(parent, "capture", saved);
+    expect(await loadOwnedDocumentSnapshot(parent, pointer)).toEqual(saved);
+    saved.source = "x".repeat(12001);
+    await expect(stageOwnedDocumentSnapshot(parent, "capture", saved)).rejects.toThrow();
+  });
   it.each(["code", "markdown"] as const)("round trips %s source and annotations together", async (kind) => {
     const saved = snapshot(kind);
     const pointer = await stageOwnedDocumentSnapshot(parent, "owned-1", saved);
