@@ -12,6 +12,7 @@ import { run, STORE_SNAPSHOTS } from "./idb";
 import type { DocFootnote } from "./docFootnotes";
 import type { Edge } from "./noteLinks";
 import type { SnapshotInkPage } from "./padSnapshotPayload";
+import { parseArtifactSnapshotBundle, type ArtifactSnapshotBundle } from "./artifactSnapshot";
 
 export type PadSnapshotKind = "annotate" | "whiteboard";
 export type PadSnapshotTier = "2h" | "24h" | "7d";
@@ -27,6 +28,7 @@ export const PAD_SNAPSHOT_TIERS: ReadonlyArray<{
 ];
 
 export interface PadSnapshot {
+  artifactBundle?: ArtifactSnapshotBundle;
   kind: PadSnapshotKind;
   key: string;
   tier: PadSnapshotTier;
@@ -57,7 +59,7 @@ export interface PadSnapshot {
 
 export type PadSnapshotExtras = Pick<
   PadSnapshot,
-  "ink" | "edges" | "source" | "footnoteBoards" | "footnoteInk"
+  "ink" | "edges" | "source" | "footnoteBoards" | "footnoteInk" | "artifactBundle"
 >;
 
 function boardWithoutInk(board: BoardBlob): BoardBlob {
@@ -134,7 +136,7 @@ export async function recordRollingSnapshots(input: {
     due.push(tier.id);
   }
   if (due.length === 0) return [];
-  const extra = input.extras
+  const extra: PadSnapshotExtras = input.extras
     ? await input.extras()
     : {
         ...(input.ink && input.ink.length > 0 ? { ink: input.ink } : {}),
@@ -142,6 +144,7 @@ export async function recordRollingSnapshots(input: {
         ...(typeof input.source === "string" ? { source: input.source } : {}),
       };
   const board = boardWithoutInk(input.board);
+  const artifactBundle = parseArtifactSnapshotBundle(extra.artifactBundle, { kind: input.kind, id: key });
   const written: PadSnapshot[] = [];
   for (const tierId of due) {
     const id = recordKey(input.kind, key, tierId);
@@ -152,6 +155,7 @@ export async function recordRollingSnapshots(input: {
       writtenAt: now,
       name: input.name,
       board,
+      ...(artifactBundle ? { artifactBundle } : {}),
       ...(input.footnotes ? { footnotes: input.footnotes } : {}),
       ...(input.agent ? { agent: input.agent } : {}),
       ...(input.pageCount != null ? { pageCount: input.pageCount } : {}),

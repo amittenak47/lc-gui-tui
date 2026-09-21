@@ -15,6 +15,7 @@ import { LcApiError as ApiError } from "../api/client";
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { artifactCatalogFields } from "./padArtifacts";
 import { downloadArtifactAssets } from "./artifactAssetSync";
+import { parseArtifactSnapshotBundle, stageArtifactSnapshot } from "./artifactSnapshot";
 import {
   deleteAnnotateDoc,
   getAnnotateDoc,
@@ -659,6 +660,7 @@ export async function pushRecentSnapshots(
 }
 
 export async function pushPadSnapshot(client: LcClient, snap: PadSnapshot): Promise<void> {
+  const artifactBundle = parseArtifactSnapshotBundle(snap.artifactBundle, { kind: snap.kind, id: snap.key });
   const body: PadSnapshotDto = {
     kind: snap.kind,
     key: snap.key,
@@ -670,6 +672,9 @@ export async function pushPadSnapshot(client: LcClient, snap: PadSnapshot): Prom
       footnotes: snap.footnotes,
       agent: snap.agent,
       pageCount: snap.pageCount,
+      ...(artifactBundle ? { artifactBundle } : {}),
+      ...(snap.footnoteBoards ? { footnoteBoards: snap.footnoteBoards } : {}),
+      ...(snap.footnoteInk ? { footnoteInk: snap.footnoteInk } : {}),
       ...(snap.ink && snap.ink.length > 0 ? { ink: snap.ink } : {}),
       ...(snap.edges && snap.edges.length > 0 ? { edges: snap.edges } : {}),
       ...(typeof snap.source === "string" ? { source: snap.source } : {}),
@@ -1042,6 +1047,12 @@ async function pushRestoreAllFour(
         footnotes: row.footnotes,
         agent: row.agent,
         pageCount: row.pageCount,
+        ...(row.artifactBundle ? { artifactBundle: parseArtifactSnapshotBundle(row.artifactBundle, { kind, id: padId }) } : {}),
+        ...(row.ink ? { ink: row.ink } : {}),
+        ...(row.edges ? { edges: row.edges } : {}),
+        ...(typeof row.source === "string" ? { source: row.source } : {}),
+        ...(row.footnoteBoards ? { footnoteBoards: row.footnoteBoards } : {}),
+        ...(row.footnoteInk ? { footnoteInk: row.footnoteInk } : {}),
       },
     });
   }
@@ -1468,6 +1479,9 @@ async function writeSnapshotIfNewer(
     source?: unknown;
   };
   const snap: PadSnapshot = {
+    ...(payload.artifactBundle !== undefined ? {
+      artifactBundle: await stageArtifactSnapshot(payload.artifactBundle, { kind, id: key }),
+    } : {}),
     kind,
     key,
     tier,
@@ -1477,6 +1491,8 @@ async function writeSnapshotIfNewer(
     footnotes: payload.footnotes,
     agent: payload.agent,
     pageCount: payload.pageCount,
+    ...(payload.footnoteBoards ? { footnoteBoards: payload.footnoteBoards } : {}),
+    ...(payload.footnoteInk ? { footnoteInk: payload.footnoteInk } : {}),
     ...(Array.isArray(payload.ink) ? { ink: payload.ink as PadSnapshot["ink"] } : {}),
     ...(Array.isArray(payload.edges) ? { edges: payload.edges as PadSnapshot["edges"] } : {}),
     ...(typeof payload.source === "string" ? { source: payload.source } : {}),
@@ -1486,8 +1502,9 @@ async function writeSnapshotIfNewer(
     await idbRun(STORE_SNAPSHOTS, "readwrite", (store) =>
       store.put(snap, `${kind}:${key}:${row.tier}`),
     );
-  } catch {
-    /* ignore */
+  } catch (cause) {
+    if (snap.artifactBundle) throw cause;
+    /* legacy best-effort snapshot cache */
   }
 }
 

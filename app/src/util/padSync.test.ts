@@ -781,6 +781,9 @@ describe("live PUT coalesce and 24h compact", () => {
 
   it("ships ink, edges and source on the snapshot payload", async () => {
     const client = fakeClient();
+    const artifactBundle = {
+      v: 1 as const, catalog: { v: 1 as const, parent: { kind: "annotate" as const, id: "a1" }, revision: "c1", artifacts: [] }, assets: [],
+    };
     await pushPadSnapshot(client, {
       kind: "annotate",
       key: "a1",
@@ -789,6 +792,9 @@ describe("live PUT coalesce and 24h compact", () => {
       name: "notes.md",
       board: emptyBoard,
       source: "# hi",
+      artifactBundle,
+      footnoteBoards: { scratch1: { board: emptyBoard, pageCount: 1 } },
+      footnoteInk: { scratch1: [{ pageId: 0, updatedAt: 9, gz: "YQ==" }] },
       ink: [{ pageId: 3, updatedAt: 9, gz: "YQ==" }],
       edges: [
         {
@@ -804,6 +810,9 @@ describe("live PUT coalesce and 24h compact", () => {
       expect.objectContaining({
         payload: expect.objectContaining({
           source: "# hi",
+          artifactBundle,
+          footnoteBoards: { scratch1: { board: emptyBoard, pageCount: 1 } },
+          footnoteInk: { scratch1: [{ pageId: 0, updatedAt: 9, gz: "YQ==" }] },
           ink: [{ pageId: 3, updatedAt: 9, gz: "YQ==" }],
           edges: [expect.objectContaining({ id: "picker|annotate:a1|annotate:a2" })],
         }),

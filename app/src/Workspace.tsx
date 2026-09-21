@@ -4623,7 +4623,12 @@ export function Workspace({
         setError("That snapshot is no longer on this device.");
         return;
       }
-      await applyPadSnapshotExtras(kind, key, snap);
+      try {
+        await applyPadSnapshotExtras(kind, key, snap);
+      } catch (cause) {
+        setError(messageOf(cause));
+        return;
+      }
       const board = boardRef.current;
       if (!board) return;
       const docKey = kind === "annotate" ? annotateDocKey(key) : whiteboardDocKey(key);

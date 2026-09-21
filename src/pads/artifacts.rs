@@ -218,6 +218,55 @@ pub(super) fn require_assets(conn: &Connection, value: Option<&Value>, kind: &st
     Ok(())
 }
 
+/// A backup is self-contained; do not rely on the hub's current asset cache.
+pub(super) fn validate_snapshot_bundle(value: Option<&Value>, kind: &str, id: &str) -> Result<()> {
+    let Some(bundle) = value else { return Ok(()) };
+    ensure!(bundle["v"] == 1, "invalid attachment backup version");
+    let catalog = parse(&bundle["catalog"], kind, id)?;
+    let raw_assets = bundle["assets"].as_array().ok_or_else(|| anyhow::anyhow!("missing backup assets"))?;
+    let mut assets = HashMap::new();
+    for raw in raw_assets {
+        let asset: artifact_assets::ArtifactAsset = serde_json::from_value(raw.clone())?;
+        artifact_assets::validate(&asset)?;
+        ensure!(asset.locator.parent.kind == kind && asset.locator.parent.id == id, "foreign backup asset");
+        let key = asset.locator.key()?;
+        ensure!(!assets.contains_key(&key), "duplicate backup asset");
+        assets.insert(key, serde_json::from_str::<Value>(&asset.payload)?);
+    }
+    let mut required = HashSet::new();
+    let mut read = |dependency| -> Result<Value> {
+        let key = AssetLocator { parent: AssetParent { kind: kind.into(), id: id.into() }, dependency }.key()?;
+        required.insert(key.clone());
+        assets.get(&key).cloned().ok_or_else(|| anyhow::anyhow!("incomplete attachment backup"))
+    };
+    for artifact in catalog.artifacts {
+        if artifact.deleted_at.is_some() { continue; }
+        match artifact.content {
+            Content::Whiteboard { board_id, scene_revision, ink } => {
+                let scene = read(AssetDependency::Scene { id: board_id.clone(), revision: scene_revision })?;
+                let pages: HashSet<_> = ink.iter().map(|page| page.page_id).collect();
+                let manifest = scene["board"]["inkPages"]["pageIds"].as_array();
+                ensure!(manifest.map_or(0, Vec::len) == pages.len()
+                    && manifest.is_none_or(|ids| ids.iter().all(|page| page.as_u64().is_some_and(|id| pages.contains(&id)))),
+                    "backup scene and ink manifests differ");
+                for page in ink {
+                    read(AssetDependency::Ink { id: board_id.clone(), revision: page.revision, page_id: page.page_id })?;
+                }
+            }
+            Content::Code { document_id, source_revision } => {
+                ensure!(read(AssetDependency::Document { id: document_id, revision: source_revision })?["docType"] == "code",
+                    "backup document kind mismatch");
+            }
+            Content::Markdown { document_id, source_revision } => {
+                ensure!(read(AssetDependency::Document { id: document_id, revision: source_revision })?["docType"] == "markdown",
+                    "backup document kind mismatch");
+            }
+        }
+    }
+    ensure!(required.len() == assets.len(), "unreferenced backup assets");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

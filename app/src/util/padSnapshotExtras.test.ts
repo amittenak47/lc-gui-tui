@@ -60,6 +60,16 @@ beforeEach(() => {
 });
 
 describe("applyPadSnapshotExtras", () => {
+  it("refuses attachment-aware restore before deleting any live ink or source", async () => {
+    await expect(applyPadSnapshotExtras("annotate", "a1", {
+      name: "old", board, source: "older text", artifactBundle: {
+        v: 1, catalog: { v: 1, parent: { kind: "annotate", id: "a1" }, revision: "c1", artifacts: [] }, assets: [],
+      },
+    })).rejects.toThrow("Attachment-aware restore");
+    expect(deleteInkPages).not.toHaveBeenCalled();
+    expect(saveAnnotateDoc).not.toHaveBeenCalled();
+    expect(applyFootnoteBoards).not.toHaveBeenCalled();
+  });
   it("replaces the document's ink rather than merging into it", async () => {
     // Restoring to before a page existed has to take that page's strokes with
     // it. A `put` of only the pages the snapshot names leaves the rest standing.

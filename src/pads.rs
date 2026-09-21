@@ -1144,6 +1144,7 @@ pub fn put_snapshot(conn: &Connection, row: &SnapshotRow) -> Result<ApplyAck> {
         _ => anyhow::bail!("unknown snapshot kind"),
     };
     validate_snapshot_payload(&row.payload)?;
+    artifacts::validate_snapshot_bundle(row.payload.get("artifactBundle"), kind.as_str(), &row.key)?;
     let gone = gone_seq(conn, kind, &row.key)?;
     let live = pad_is_live(conn, kind.as_str(), &row.key)?;
     if !live {
@@ -2730,6 +2731,33 @@ mod tests {
             .unwrap();
         assert_eq!(version, 0, "no schema change yet, so nothing to pin");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn snapshot_attachment_bundle_is_self_contained_and_parent_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open(&dir.path().join("pads.db")).unwrap();
+        put_annotate(&conn, &an("a1", 1)).unwrap();
+        let parent = json!({"kind": "annotate", "id": "a1"});
+        let bundle = json!({"v": 1, "catalog": {"v": 1, "parent": parent, "revision": "c1",
+            "artifacts": [{"id": "f1", "title": "Note.md", "revision": "r1", "createdAt": 1, "updatedAt": 1,
+                "associations": [{"kind": "file"}],
+                "content": {"kind": "markdown", "documentId": "doc1", "sourceRevision": "s1"}}]},
+            "assets": [{"parent": parent, "dependency": {"kind": "document", "id": "doc1", "revision": "s1"},
+                "payload": json!({"v": 1, "owned": true, "docType": "markdown", "name": "Note.md", "source": "# Note",
+                    "board": {"v": 1, "elements": [], "appState": {"scrollX": 0, "scrollY": 0, "zoom": 1}},
+                    "footnotes": [], "agent": [], "ink": []}).to_string()}]});
+        let row = SnapshotRow { kind: "annotate".into(), key: "a1".into(), tier: "24h".into(),
+            written_at: 10, payload: json!({"artifactBundle": bundle}) };
+        assert!(put_snapshot(&conn, &row).unwrap().applied);
+        assert_eq!(get_snapshots(&conn, "annotate", "a1").unwrap()[0].payload, row.payload);
+        let mut broken = row.clone();
+        broken.payload["artifactBundle"]["assets"] = json!([]);
+        assert!(put_snapshot(&conn, &broken).is_err());
+        broken = row.clone();
+        broken.payload["artifactBundle"]["assets"][0]["parent"]["id"] = json!("another");
+        assert!(put_snapshot(&conn, &broken).is_err());
+        assert_eq!(get_snapshots(&conn, "annotate", "a1").unwrap()[0].payload, row.payload);
     }
 
     #[test]

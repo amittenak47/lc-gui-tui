@@ -1451,12 +1451,29 @@ export class LcClient {
   }
 
   async putPadSnapshot(body: PadSnapshotDto): Promise<void> {
+    const payload = body.payload as { artifactBundle?: unknown } | undefined;
+    if (payload?.artifactBundle !== undefined) {
+      if (body.kind !== "annotate" && body.kind !== "whiteboard") throw new Error("Invalid snapshot owner.");
+      const { parseArtifactSnapshotBundle } = await import("../util/artifactSnapshot");
+      parseArtifactSnapshotBundle(payload.artifactBundle, { kind: body.kind, id: body.key });
+    }
     await padInvokeOrHub(
       () => this.cmd("lc_put_snapshot", { body }),
       "PUT",
       "/pads/snapshots",
       body,
     );
+    if (payload?.artifactBundle !== undefined) {
+      // Old hubs accepted unknown fields without preserving them. A generic
+      // applied:true response is insufficient proof that the backup survived.
+      const rows = await this.getPadSnapshots(body.kind, body.key);
+      const stored = rows.find((row) => row.tier === body.tier && row.written_at === body.written_at);
+      const { parseArtifactSnapshotBundle } = await import("../util/artifactSnapshot");
+      const owner = { kind: body.kind as "annotate" | "whiteboard", id: body.key };
+      const expected = parseArtifactSnapshotBundle(payload.artifactBundle, owner);
+      const actual = parseArtifactSnapshotBundle((stored?.payload as { artifactBundle?: unknown } | undefined)?.artifactBundle, owner);
+      if (!actual || JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("Attachment backup was not acknowledged; retry snapshot sync.");
+    }
   }
 
   async getPadSnapshots(kind: string, key: string): Promise<PadSnapshotDto[]> {

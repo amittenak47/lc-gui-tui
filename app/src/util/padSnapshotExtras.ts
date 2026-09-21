@@ -35,8 +35,10 @@ import {
 } from "./padSnapshotPayload";
 import type { PadSnapshot, PadSnapshotKind } from "./padSnapshotStore";
 import { recordRollingSnapshots } from "./padSnapshotStore";
+import { captureArtifactSnapshot, parseArtifactSnapshotBundle } from "./artifactSnapshot";
 
 export interface PadSnapshotExtras {
+  artifactBundle?: PadSnapshot["artifactBundle"];
   ink?: SnapshotInkPage[];
   edges?: PadSnapshot["edges"];
   source?: string;
@@ -77,6 +79,8 @@ export async function gatherPadSnapshotExtras(
   const docKey = kind === "whiteboard" ? whiteboardDocKey(key) : annotateDocKey(key);
   const ink = await inkPagesForSnapshot(docKey);
   const annotate = kind === "annotate" ? await getAnnotateDoc(key) : null;
+  const notebook = kind === "whiteboard" ? await (await import("./whiteboardStore")).getWhiteboardNotebook(key) : null;
+  const artifactBundle = await captureArtifactSnapshot((annotate ?? notebook)?.artifacts);
   const docType = opts?.docType ?? annotate?.docType;
   const node = padNodeRef(kind, key, docType);
   const edges = await edgesFor(node);
@@ -102,6 +106,7 @@ export async function gatherPadSnapshotExtras(
     }
   }
   return {
+    ...(artifactBundle ? { artifactBundle } : {}),
     ...(ink.length > 0 ? { ink } : {}),
     ...(edges.length > 0 ? { edges } : {}),
     ...(typeof source === "string" && source.length > 0 ? { source } : {}),
@@ -143,8 +148,13 @@ export async function applyPadSnapshotExtras(
     | "name"
     | "footnoteBoards"
     | "footnoteInk"
+    | "artifactBundle"
   >,
 ): Promise<void> {
+  const bundle = parseArtifactSnapshotBundle(snap.artifactBundle, { kind, id: key });
+  // Capture/transport precedes restore UI. Never delete live ink and only
+  // then discover this snapshot needs the explicit artifact restore workflow.
+  if (bundle) throw new Error("This snapshot contains attachments. Attachment-aware restore is not available yet; current work was kept.");
   const docKey = kind === "whiteboard" ? whiteboardDocKey(key) : annotateDocKey(key);
   /*
    * A restore replaces the document's ink. It does not merge into it.
