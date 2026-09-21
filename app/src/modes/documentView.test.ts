@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { documentAskFields, documentImageContext, hasDocumentCapture, sameDocumentIdentity, sameDocumentView, type DocumentViewContext } from "./documentView";
+import { documentAskFields, documentImageContext, hasDocumentCapture, livePadStillOpen, sameDocumentIdentity, sameDocumentView, type DocumentViewContext } from "./documentView";
 const view: DocumentViewContext = { document_hash: "book", title: "Book", format: "pdf", pages: [3, 4], text: "visible words", revision: "ink1", viewport: { x: 0, y: 10, width: 800, height: 600 } };
 describe("frozen document context", () => {
   it("retains the explicit text-only selection limitation when no image is attached", () => {
@@ -37,6 +37,17 @@ describe("frozen document context", () => {
     expect(sameDocumentView(seed, scrolled)).toBe(false);
     expect(sameDocumentIdentity(seed, { ...seed, document_hash: "other-book" })).toBe(false);
     expect(sameDocumentIdentity(seed, { ...seed, paneId: "right" })).toBe(false);
+  });
+  it("treats a replaced handle and source record as the same pad", () => {
+    const boardId = {};
+    const started = { sourceHash: "book", boardId, paneId: "left" };
+    const liveBoard = { instanceId: boardId, captureDocumentView: () => ({ paneId: "left" as const }) };
+    expect(livePadStillOpen(started, { hash: "book" }, liveBoard)).toBe(true);
+    expect(livePadStillOpen(started, { hash: "book" }, { ...liveBoard })).toBe(true);
+    expect(livePadStillOpen(started, { hash: "other-book" }, liveBoard)).toBe(false);
+    expect(livePadStillOpen(started, { hash: "book" }, { instanceId: {}, captureDocumentView: liveBoard.captureDocumentView })).toBe(false);
+    expect(livePadStillOpen(started, { hash: "book" }, { instanceId: boardId, captureDocumentView: () => ({ paneId: "right" }) })).toBe(false);
+    expect(livePadStillOpen(started, null, liveBoard)).toBe(false);
   });
   it("requires the selection's own PNG, not an unrelated photo or a removed capture", () => {
     const seed = { ...view, documentCaptureId: "selection-1" };

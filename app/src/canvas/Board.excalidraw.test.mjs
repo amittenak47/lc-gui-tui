@@ -597,6 +597,15 @@ describe("Workspace pane switch", () => {
     expect(copy).not.toMatch(/getImageData/);
   });
 
+  it("identifies the live pad by instance and hash after a send await", () => {
+    const src = readFileSync(join(here, "../Workspace.tsx"), "utf8");
+    expect(src).toContain("livePadStillOpen");
+    expect(src).not.toMatch(/boardRef\.current === board/);
+    expect(src).not.toMatch(/boardRef\.current !== board/);
+    expect(src).not.toMatch(/annotateSourceRef\.current === source/);
+    expect(src).not.toMatch(/annotateSourceRef\.current !== source/);
+  });
+
   it("does not tear the PDF down when switching to the other pane", () => {
     const src = readFileSync(join(here, "../Workspace.tsx"), "utf8");
     expect(src).toMatch(/paused=\{Boolean\(hubConflictAsk\)\}/);

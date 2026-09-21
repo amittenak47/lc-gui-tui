@@ -29,6 +29,24 @@ export function sameDocumentIdentity(
 ): boolean {
   return a.document_hash === b.document_hash && a.paneId === b.paneId;
 }
+
+/**
+ * The pad still open after an await — not the React wrapper objects.
+ *
+ * `Board`'s `useImperativeHandle` replaces `boardRef.current` on every
+ * render, and `setAnnotateSource` mints a new source record for the same
+ * file. `===` on those objects treats a queued send as "the pane changed".
+ */
+export function livePadStillOpen(
+  started: { sourceHash: string; boardId: object; paneId?: string },
+  liveSource: { hash: string } | null | undefined,
+  liveBoard: { instanceId: object; captureDocumentView: () => { paneId?: string } } | null | undefined,
+): boolean {
+  if (!liveSource || !liveBoard) return false;
+  if (liveBoard.instanceId !== started.boardId) return false;
+  if (liveSource.hash !== started.sourceHash) return false;
+  return liveBoard.captureDocumentView().paneId === started.paneId;
+}
 export function documentImageContext(view: DocumentViewContext, hasImage: boolean): DocumentViewContext {
   if (hasImage) return view;
   return { ...view, limitation: view.limitation ?? (view.text.trim()

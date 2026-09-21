@@ -419,7 +419,7 @@ import { loadChromeFate, mayClearParkedPreparing, BOOT_DONE_HOLD_MS, LOAD_FADE_M
 import { saveCaptureToDevice, describeCaptureResult } from "./util/capturePrefs";
 import { photoFromFile } from "./util/photoAttach";
 import { thumbnailFromPng } from "./util/photoAttach";
-import { documentAskFields, documentImageContext, hasDocumentCapture, sameDocumentIdentity, sameDocumentView, type DocumentViewContext } from "./modes/documentView";
+import { documentAskFields, documentImageContext, hasDocumentCapture, livePadStillOpen, sameDocumentView, type DocumentViewContext } from "./modes/documentView";
 import { selectionCaptureFailure, type SelectionActionContext, type SelectionActionResult } from "./modes/selectionAction";
 import { freezeCoachAsk, askImages, type CoachAskPayload } from "./modes/coachAskPayload";
 import { CoachSendCoordinator } from "./modes/coachSendCoordinator";
@@ -7028,25 +7028,32 @@ export function Workspace({
         ...snapshot, text: snapshot.text.trim() || snapshot.pages.map(page => pageTextForAsk(source.hash, page)).filter(Boolean).join("\n\n"),
         document_hash: source.hash, title: source.name, format: source.docType,
       } : undefined);
-      const seedMatchesSource = () => !flags.documentView || Boolean(source && board && view &&
-        annotateSourceRef.current === source && boardRef.current === board &&
-        sameDocumentIdentity(view, { document_hash: source.hash, paneId: board.captureDocumentView().paneId }));
+      const padAtStart = source && board
+        ? { sourceHash: view?.document_hash ?? source.hash, boardId: board.instanceId, paneId: view?.paneId ?? snapshot?.paneId }
+        : null;
+      const seedMatchesSource = () => !flags.documentView || Boolean(
+        padAtStart && view && livePadStillOpen(padAtStart, annotateSourceRef.current, boardRef.current),
+      );
       if (!seedMatchesSource()) throw new Error("The selected document or pane changed. Select the area again before sending.");
-      const [viewImage, prepared] = await Promise.all([
+      const [capturedView, prepared] = await Promise.all([
         snapshot && board && modeHasVision("ask")
           ? withTimeout(board.exportViewThumb(), THUMB_EXPORT_TIMEOUT_MS, "Current-view capture timed out") : Promise.resolve(null),
         prepareCoachSend(text, flags),
       ]);
-      if (snapshot && (annotateSourceRef.current !== source || boardRef.current !== board ||
-          !sameDocumentView(snapshot, board!.captureDocumentView()))) {
+      let viewImage = capturedView;
+      if (snapshot && padAtStart && !livePadStillOpen(padAtStart, annotateSourceRef.current, boardRef.current)) {
         throw new Error("The document changed during capture. Please retry your question from the intended view.");
       }
       if (!seedMatchesSource()) throw new Error("The selected document or pane changed while preparing this question. Select the area again.");
+      if (snapshot && viewImage && boardRef.current && !sameDocumentView(snapshot, boardRef.current.captureDocumentView())) {
+        // Camera moved while the PNG was exporting — keep the frozen text, drop the mismatched pixels.
+        viewImage = null;
+      }
       if (view) view = documentImageContext(view, modeHasVision("ask") && (
         flags.documentView ? hasDocumentCapture(view, prepared.attachments ?? []) : Boolean(viewImage?.png)
       ));
       if (coordinator.tickets.get(id)?.controller.signal.aborted) return true;
-      if (snapshot && (annotateSourceRef.current !== source || boardRef.current !== board || !sameDocumentView(snapshot, board!.captureDocumentView()))) {
+      if (snapshot && padAtStart && !livePadStillOpen(padAtStart, annotateSourceRef.current, boardRef.current)) {
         throw new Error("The document changed while preparing this question. Please send again from the intended view.");
       }
       const item: CoachSendQueueItem = { ...prepared, view, origin, userMessageId: id, threadAnchor: sendThreadAnchor(prepared, id),
@@ -8109,8 +8116,11 @@ export function Workspace({
     const selected = structuredClone(selection);
     let frozenView: DocumentViewContext | undefined;
     const validateSource = () => {
-      if (!board || !source || !frozenView || boardRef.current !== board || annotateSourceRef.current !== source ||
-          !sameDocumentIdentity(frozenView, { document_hash: source.hash, paneId: board.captureDocumentView().paneId })) {
+      if (!board || !source || !frozenView || !livePadStillOpen(
+        { sourceHash: frozenView.document_hash, boardId: board.instanceId, paneId: frozenView.paneId },
+        annotateSourceRef.current,
+        boardRef.current,
+      )) {
         throw new Error("The selected document or pane changed. Select the area again.");
       }
     };
@@ -8130,7 +8140,9 @@ export function Workspace({
       if (!rect) throw new Error("Selection image has no visible capture bounds.");
       const blob = await withTimeout(board.exportSelectionCapture(rect), THUMB_EXPORT_TIMEOUT_MS, "Selection capture timed out");
       if (!context.isCurrent()) return false;
-      if (boardRef.current !== board || annotateSourceRef.current !== source || !sameDocumentView(snapshot, board.captureDocumentView())) {
+      const liveBoard = boardRef.current;
+      if (!liveBoard || liveBoard.instanceId !== board.instanceId || annotateSourceRef.current?.hash !== source.hash ||
+          !sameDocumentView(snapshot, liveBoard.captureDocumentView())) {
         throw new Error("The view changed during capture. Select the area again.");
       }
       if (!ask) { const saved = await saveCaptureToDevice(blob, "lc-selection"); setNotice(describeCaptureResult(saved)); return saved.outcome !== "failed"; }
