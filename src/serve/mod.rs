@@ -198,6 +198,8 @@ pub fn router(state: Shared) -> Router {
         .route("/pads/snapshots/:kind/:key", get(routes::get_snapshots))
         .route("/pads/sync", get(routes::sync_pads))
         .route("/pads/ink", put(routes::put_ink_page))
+        .route("/pads/artifact-assets", put(routes::put_artifact_asset))
+        .route("/pads/artifact-assets/lookup", post(routes::get_artifact_asset))
         .route("/pads/ink/:kind/:key", get(routes::get_ink_pages))
         .route(
             "/pads/ink/:kind/:key/:page_id",

@@ -131,6 +131,8 @@ pub fn run() {
         lc_routes::lc_get_ink_pages,
         lc_routes::lc_get_ink_page,
         lc_routes::lc_put_ink_page,
+        lc_routes::lc_put_artifact_asset,
+        lc_routes::lc_get_artifact_asset,
         lc_routes::lc_put_edges,
         lc_routes::lc_tombstone_edge,
         lc_routes::lc_docs_retrieve_library,

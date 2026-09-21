@@ -977,9 +977,9 @@ export function Workspace({
       if (c.stage === "pad") {
         if (resolution.pick === "server" && c.server) {
           if (c.kind === "annotate") {
-            await applyHubAnnotate(c.server, { emitReload: false });
+            await applyHubAnnotate(c.server, { emitReload: false, client });
           } else {
-            await applyHubWhiteboard(c.server, { emitReload: false });
+            await applyHubWhiteboard(c.server, { emitReload: false, client });
           }
         } else {
           if (c.kind === "annotate" && resolution.pick === "merged" && resolution.footnotes) {

@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use crate::config::config_dir;
 
 mod artifacts;
+pub mod artifact_assets;
 
 /// Same cap as `serve::MAX_BODY_BYTES` — kept here so this module does not
 /// import the HTTP layer.
@@ -145,6 +146,10 @@ pub fn open(path: &Path) -> Result<Connection> {
     for table in ["whiteboard", "annotate", "problem"] {
         ensure_column(&conn, table, "artifacts_json", "TEXT")?;
     }
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS artifact_assets (
+        asset_key TEXT PRIMARY KEY, parent_kind TEXT NOT NULL, parent_id TEXT NOT NULL,
+        payload TEXT NOT NULL, staged_at INTEGER NOT NULL
+    ); CREATE INDEX IF NOT EXISTS idx_artifact_asset_parent ON artifact_assets(parent_kind, parent_id);")?;
     migrate_tombstones_to_gone(&conn)?;
     Ok(conn)
 }
@@ -671,6 +676,7 @@ pub fn get_annotate(conn: &Connection, id: &str) -> Result<Option<AnnotatePad>> 
 
 pub fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutcome<WhiteboardPad>> {
     artifacts::validate(pad.artifacts.as_ref(), None, "whiteboard", &pad.id)?;
+    artifacts::require_assets(conn, pad.artifacts.as_ref(), "whiteboard", &pad.id)?;
     let existing = read_whiteboard(conn, &pad.id)?;
     let gone = gone_seq(conn, PadKind::Whiteboard, &pad.id)?;
     if gone > 0 && pad.sync_seq <= gone {
@@ -745,6 +751,7 @@ pub fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutco
 
 pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<AnnotatePad>> {
     artifacts::validate(pad.artifacts.as_ref(), None, "annotate", &pad.id)?;
+    artifacts::require_assets(conn, pad.artifacts.as_ref(), "annotate", &pad.id)?;
     let existing = read_annotate(conn, &pad.id)?;
     let gone = gone_seq(conn, PadKind::Annotate, &pad.id)?;
     if gone > 0 && pad.sync_seq <= gone {
@@ -841,6 +848,7 @@ pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<Pro
     let mut pad = pad.clone();
     pad.id = id;
     artifacts::validate(pad.artifacts.as_ref(), None, "problem", &pad.id)?;
+    artifacts::require_assets(conn, pad.artifacts.as_ref(), "problem", &pad.id)?;
     if pad.dataset.is_empty() || pad.task_id.is_empty() {
         if let Some((dataset, task_id)) = pad.id.split_once('/') {
             if pad.dataset.is_empty() {
@@ -1716,6 +1724,18 @@ mod tests {
                 "content": {"kind": "markdown", "documentId": "owned-1", "sourceRevision": "source-1"}
             }]
         });
+        for (kind, id) in [("whiteboard", "w1"), ("annotate", "a1"), ("problem", "leetcode/1")] {
+            artifact_assets::put(&conn, &artifact_assets::ArtifactAsset {
+                locator: artifact_assets::AssetLocator {
+                    parent: artifact_assets::AssetParent { kind: kind.into(), id: id.into() },
+                    dependency: artifact_assets::AssetDependency::Document { id: "owned-1".into(), revision: "source-1".into() },
+                },
+                payload: json!({"v": 1, "owned": true, "docType": "markdown", "name": "Explanation.md",
+                    "source": "Explanation", "board": {"v": 1, "elements": [],
+                        "appState": {"scrollX": 0, "scrollY": 0, "zoom": 1}},
+                    "footnotes": [], "agent": [], "ink": []}).to_string(),
+            }).unwrap();
+        }
         let mut whiteboard = wb("w1", 10);
         whiteboard.artifacts = Some(catalog("whiteboard", "w1"));
         put_whiteboard(&conn, &whiteboard).unwrap();

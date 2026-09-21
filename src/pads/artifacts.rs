@@ -3,6 +3,8 @@ use anyhow::{ensure, Result};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use rusqlite::Connection;
+use super::artifact_assets::{self, AssetDependency, AssetLocator, AssetParent};
 
 #[derive(Debug, Deserialize)]
 struct Parent {
@@ -161,6 +163,47 @@ pub(super) fn validate(
         if old.deleted_at.is_some() && new.deleted_at.is_none() {
             ensure!(new.revision != old.revision && new.restored_from.as_deref() == Some(old.revision.as_str()),
                 "artifact restore must name the tombstone revision");
+        }
+    }
+    Ok(())
+}
+
+/// Dependencies are immutable and never removed during staging/publication.
+/// A parent PUT cannot advertise missing scene/source/ink revisions as usable.
+pub(super) fn require_assets(conn: &Connection, value: Option<&Value>, kind: &str, id: &str) -> Result<()> {
+    let Some(value) = value else { return Ok(()) };
+    let catalog = parse(value, kind, id)?;
+    let read = |dependency| -> Result<Value> {
+        let locator = AssetLocator {
+            parent: AssetParent { kind: kind.to_string(), id: id.to_string() }, dependency,
+        };
+        let asset = artifact_assets::get(conn, &locator)?
+            .ok_or_else(|| anyhow::anyhow!("attachment dependency not staged; parent was not published"))?;
+        artifact_assets::validate(&asset)?;
+        Ok(serde_json::from_str(&asset.payload)?)
+    };
+    for artifact in catalog.artifacts {
+        if artifact.deleted_at.is_some() { continue; }
+        match artifact.content {
+            Content::Whiteboard { board_id, scene_revision, ink } => {
+                let scene = read(AssetDependency::Scene { id: board_id.clone(), revision: scene_revision })?;
+                let pages: HashSet<_> = ink.iter().map(|page| page.page_id).collect();
+                let manifest = scene["board"]["inkPages"]["pageIds"].as_array();
+                ensure!(manifest.map_or(0, Vec::len) == pages.len()
+                    && manifest.is_none_or(|ids| ids.iter().all(|id| id.as_u64().is_some_and(|id| pages.contains(&id)))),
+                    "scratch scene and catalog ink manifests differ");
+                for page in ink {
+                    read(AssetDependency::Ink { id: board_id.clone(), revision: page.revision, page_id: page.page_id })?;
+                }
+            }
+            Content::Code { document_id, source_revision } => {
+                let document = read(AssetDependency::Document { id: document_id, revision: source_revision })?;
+                ensure!(document["docType"] == "code", "code attachment kind mismatch");
+            }
+            Content::Markdown { document_id, source_revision } => {
+                let document = read(AssetDependency::Document { id: document_id, revision: source_revision })?;
+                ensure!(document["docType"] == "markdown", "markdown attachment kind mismatch");
+            }
         }
     }
     Ok(())

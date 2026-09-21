@@ -4,7 +4,11 @@
 
 import { b64ToBytes, bytesToB64, loadInvoke, readInvokeResult } from "./nativeHttp";
 import { loadPadHub, type PadHub } from "../util/padHub";
-import { requireArtifactCatalogAck, type ArtifactCatalog } from "../util/padArtifacts";
+import { artifactCatalogFields, requireArtifactCatalogAck, type ArtifactCatalog } from "../util/padArtifacts";
+import {
+  parseArtifactAsset, parseArtifactAssetLocator, requireArtifactAssetAck,
+  type ArtifactAsset, type ArtifactAssetLocator,
+} from "../util/artifactAssets";
 import type {
   AdjacentProblems,
   AttemptOutcome,
@@ -1326,6 +1330,11 @@ export class LcClient {
   }
 
   async putWhiteboardPad(id: string, body: WhiteboardPadDto): Promise<WhiteboardPadDto> {
+    artifactCatalogFields(body.artifacts, { kind: "whiteboard", id });
+    if (body.artifacts) {
+      const { uploadArtifactAssets } = await import("../util/artifactAssetSync");
+      await uploadArtifactAssets(this, body.artifacts);
+    }
     const written = await padInvokeOrHub<WhiteboardPadDto>(
       () => this.cmd("lc_put_whiteboard", { id, body }),
       "PUT",
@@ -1370,6 +1379,11 @@ export class LcClient {
   }
 
   async putAnnotatePad(id: string, body: AnnotatePadDto): Promise<AnnotatePadDto> {
+    artifactCatalogFields(body.artifacts, { kind: "annotate", id });
+    if (body.artifacts) {
+      const { uploadArtifactAssets } = await import("../util/artifactAssetSync");
+      await uploadArtifactAssets(this, body.artifacts);
+    }
     const written = await padInvokeOrHub<AnnotatePadDto>(
       () => this.cmd("lc_put_annotate", { id, body }),
       "PUT",
@@ -1411,6 +1425,11 @@ export class LcClient {
   }
 
   async putProblemPad(dataset: string, taskId: string, body: ProblemPadDto): Promise<ProblemPadDto> {
+    artifactCatalogFields(body.artifacts, { kind: "problem", id: `${dataset.trim()}/${taskId.trim()}` });
+    if (body.artifacts) {
+      const { uploadArtifactAssets } = await import("../util/artifactAssetSync");
+      await uploadArtifactAssets(this, body.artifacts);
+    }
     const written = await padInvokeOrHub<ProblemPadDto>(
       () => this.cmd("lc_put_problem", { dataset, task_id: taskId, body }),
       "PUT",
@@ -1446,6 +1465,27 @@ export class LcClient {
       "GET",
       `/pads/snapshots/${encodeURIComponent(kind)}/${encodeURIComponent(key)}`,
     );
+  }
+
+  async putArtifactAsset(input: ArtifactAsset): Promise<ArtifactAsset> {
+    const body = parseArtifactAsset(input);
+    const written = await padInvokeOrHub<ArtifactAsset>(
+      () => this.cmd("lc_put_artifact_asset", { body }), "PUT", "/pads/artifact-assets", body,
+    );
+    requireArtifactAssetAck(body, written);
+    return written;
+  }
+
+  async getArtifactAsset(input: ArtifactAssetLocator): Promise<ArtifactAsset | null> {
+    const body = parseArtifactAssetLocator(input);
+    try {
+      return parseArtifactAsset(await padInvokeOrHub<ArtifactAsset>(
+        () => this.cmd("lc_get_artifact_asset", { body }), "POST", "/pads/artifact-assets/lookup", body,
+      ));
+    } catch (cause) {
+      if (cause instanceof LcApiError && cause.status === 404) return null;
+      throw cause;
+    }
   }
 
   /*

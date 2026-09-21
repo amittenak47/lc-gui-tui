@@ -630,6 +630,20 @@ pub async fn lc_put_ink_page(
 }
 
 #[tauri::command]
+pub async fn lc_put_artifact_asset(
+    state: State<'_, Shared>, body: serde_json::Value,
+) -> Result<LcResponse, String> {
+    go(state, "PUT", "/pads/artifact-assets".into(), Some(body)).await
+}
+
+#[tauri::command]
+pub async fn lc_get_artifact_asset(
+    state: State<'_, Shared>, body: serde_json::Value,
+) -> Result<LcResponse, String> {
+    go(state, "POST", "/pads/artifact-assets/lookup".into(), Some(body)).await
+}
+
+#[tauri::command]
 pub async fn lc_put_edges(
     state: State<'_, Shared>,
     body: serde_json::Value,

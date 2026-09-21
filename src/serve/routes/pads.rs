@@ -15,6 +15,31 @@ use crate::pads::{
 };
 use crate::serve::MAX_BODY_BYTES;
 
+pub async fn put_artifact_asset(
+    Json(asset): Json<pads::artifact_assets::ArtifactAsset>,
+) -> Result<Json<pads::artifact_assets::ArtifactAsset>, AppError> {
+    pads::artifact_assets::validate(&asset)
+        .map_err(|error| AppError::status(StatusCode::BAD_REQUEST, error))?;
+    let written = blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        pads::artifact_assets::put(&conn, &asset)?;
+        Ok(asset)
+    }).await?;
+    Ok(Json(written))
+}
+
+pub async fn get_artifact_asset(
+    Json(locator): Json<pads::artifact_assets::AssetLocator>,
+) -> Result<Json<pads::artifact_assets::ArtifactAsset>, AppError> {
+    locator.key().map_err(|error| AppError::status(StatusCode::BAD_REQUEST, error))?;
+    let found = blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        pads::artifact_assets::get(&conn, &locator)
+    }).await?;
+    found.map(Json).ok_or_else(|| AppError::status(StatusCode::NOT_FOUND,
+        anyhow::anyhow!("attachment revision is not available")))
+}
+
 fn map_put<T: serde::Serialize>(outcome: PutOutcome<T>) -> Result<Response, AppError> {
     match outcome {
         PutOutcome::Written(row) => Ok((StatusCode::OK, Json(row)).into_response()),

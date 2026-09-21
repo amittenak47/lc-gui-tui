@@ -14,6 +14,7 @@ import type {
 import { LcApiError as ApiError } from "../api/client";
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { artifactCatalogFields } from "./padArtifacts";
+import { downloadArtifactAssets } from "./artifactAssetSync";
 import {
   deleteAnnotateDoc,
   getAnnotateDoc,
@@ -353,6 +354,7 @@ async function applyLivePutFailure(
   kind: PadKindSync,
   padId: string,
   cause: unknown,
+  client: LcClient,
 ): Promise<boolean> {
   if (isGoneStatus(cause)) {
     await dropPadPayloadJobs(kind, padId);
@@ -368,7 +370,7 @@ async function applyLivePutFailure(
     return true;
   }
   const body = errorJson(cause);
-  await applyHubProblem(body, { emitReload: true });
+  await applyHubProblem(body, { emitReload: true, client });
   await dropPadPayloadJobs(kind, padId);
   return true;
 }
@@ -379,13 +381,20 @@ async function applyLivePutFailure(
  */
 export async function applyHubWhiteboard(
   raw: unknown,
-  opts: { emitReload: boolean },
+  opts: { emitReload: boolean; client?: LcClient },
 ): Promise<boolean> {
   if (!raw || typeof raw !== "object") return false;
   const row = raw as WhiteboardPadDto;
   if (typeof row.id !== "string" || !row.board) return false;
   const artifactFields = artifactCatalogFields(row.artifacts, { kind: "whiteboard", id: row.id });
   const local = await getWhiteboardNotebook(row.id);
+  await downloadArtifactAssets(opts.client, artifactFields.artifacts);
+  if (artifactFields.artifacts) {
+    const after = await getWhiteboardNotebook(row.id);
+    if (after?.updatedAt !== local?.updatedAt || after?.syncSeq !== local?.syncSeq || after?.deletedAt !== local?.deletedAt) {
+      throw new Error("The notebook changed during attachment download. Local work was kept; retry sync.");
+    }
+  }
   await restoreWhiteboardNotebook({
     ...artifactFields,
     id: row.id,
@@ -405,13 +414,20 @@ export async function applyHubWhiteboard(
 
 export async function applyHubAnnotate(
   raw: unknown,
-  opts: { emitReload: boolean },
+  opts: { emitReload: boolean; client?: LcClient },
 ): Promise<boolean> {
   if (!raw || typeof raw !== "object") return false;
   const row = raw as AnnotatePadDto;
   if (typeof row.id !== "string" || !row.board) return false;
   const artifactFields = artifactCatalogFields(row.artifacts, { kind: "annotate", id: row.id });
   const local = await getAnnotateDoc(row.id);
+  await downloadArtifactAssets(opts.client, artifactFields.artifacts);
+  if (artifactFields.artifacts) {
+    const after = await getAnnotateDoc(row.id);
+    if (after?.updatedAt !== local?.updatedAt || after?.syncSeq !== local?.syncSeq || after?.deletedAt !== local?.deletedAt) {
+      throw new Error("The document changed during attachment download. Local work was kept; retry sync.");
+    }
+  }
   await restoreAnnotateDoc({
     ...artifactFields,
     id: row.id,
@@ -446,13 +462,22 @@ export async function applyHubAnnotate(
 
 async function applyHubProblem(
   raw: unknown,
-  opts: { emitReload: boolean },
+  opts: { emitReload: boolean; client?: LcClient },
 ): Promise<boolean> {
   if (!raw || typeof raw !== "object") return false;
   const row = raw as ProblemPadDto;
   if (typeof row.id !== "string" || !row.board) return false;
+  const artifactFields = artifactCatalogFields(row.artifacts, { kind: "problem", id: row.id });
+  if (artifactFields.artifacts) {
+    const before = await getProblemBoard(row.id);
+    await downloadArtifactAssets(opts.client, artifactFields.artifacts);
+    const after = await getProblemBoard(row.id);
+    if (after?.updatedAt !== before?.updatedAt || after?.syncSeq !== before?.syncSeq) {
+      throw new Error("The problem board changed during attachment download. Local work was kept; retry sync.");
+    }
+  }
   await putProblemBoard({
-    ...artifactCatalogFields(row.artifacts, { kind: "problem", id: row.id }),
+    ...artifactFields,
     id: row.id,
     dataset: row.dataset,
     taskId: row.task_id,
@@ -504,7 +529,7 @@ async function pushWhiteboardPadNow(
     markWhiteboardHubAck(notebook.id, written.updated_at ?? notebook.updatedAt);
     return true;
   } catch (cause) {
-    if (await applyLivePutFailure("whiteboard", notebook.id, cause)) return false;
+    if (await applyLivePutFailure("whiteboard", notebook.id, cause, client)) return false;
     await enqueuePadSync({ op: "putWhiteboard", body });
     return false;
   }
@@ -574,7 +599,7 @@ async function pushAnnotatePadNow(client: LcClient, doc: AnnotateDoc): Promise<b
     markAnnotateHubAck(doc.id, written.updated_at ?? doc.updatedAt);
     return true;
   } catch (cause) {
-    if (await applyLivePutFailure("annotate", doc.id, cause)) return false;
+    if (await applyLivePutFailure("annotate", doc.id, cause, client)) return false;
     await enqueuePadSync({ op: "putAnnotate", body });
     return false;
   }
@@ -600,7 +625,7 @@ export async function pushProblemPad(
     markProblemHubAck(row.id, written.updated_at ?? row.updatedAt);
     return true;
   } catch (cause) {
-    if (await applyLivePutFailure("problem", row.id, cause)) return false;
+    if (await applyLivePutFailure("problem", row.id, cause, client)) return false;
     await enqueuePadSync({ op: "putProblem", body });
     return false;
   }
@@ -942,17 +967,17 @@ export async function flushPadSyncQueue(client: LcClient): Promise<void> {
       await dropJob(job.id);
     } catch (cause) {
       if (job.op === "putWhiteboard") {
-        if (await applyLivePutFailure("whiteboard", job.body.id, cause)) {
+        if (await applyLivePutFailure("whiteboard", job.body.id, cause, client)) {
           await dropJob(job.id);
           continue;
         }
       } else if (job.op === "putAnnotate") {
-        if (await applyLivePutFailure("annotate", job.body.id, cause)) {
+        if (await applyLivePutFailure("annotate", job.body.id, cause, client)) {
           await dropJob(job.id);
           continue;
         }
       } else if (job.op === "putProblem") {
-        if (await applyLivePutFailure("problem", job.body.id, cause)) {
+        if (await applyLivePutFailure("problem", job.body.id, cause, client)) {
           await dropJob(job.id);
           continue;
         }
@@ -1048,7 +1073,7 @@ export async function discoverHubPads(client: LcClient): Promise<number> {
       await pullInkPagesOverLocal(client, "whiteboard", row.id, board.inkPages?.pageIds);
       // Dependencies first; do not offer a notebook that downloaded only its name.
       if (await getWhiteboardNotebook(row.id) || listWhiteboardTrash().some((entry) => entry.id === row.id)) continue;
-      await applyHubWhiteboard(row, { emitReload: false });
+      await applyHubWhiteboard(row, { emitReload: false, client });
       imported++;
     } catch (cause) {
       failures.push(`“${row.title}”: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -1072,7 +1097,7 @@ export async function discoverHubPads(client: LcClient): Promise<number> {
         await pullInkPagesOverLocal(client, "annotate", footnoteInkHubKey(row.id, wbId), scratch.board.inkPages?.pageIds);
       }
       if (await getAnnotateDoc(row.id) || listAnnotateTrash().some((entry) => entry.id === row.id)) continue;
-      await applyHubAnnotate(row, { emitReload: false });
+      await applyHubAnnotate(row, { emitReload: false, client });
       imported++;
     } catch (cause) {
       failures.push(`“${row.name}”: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -1100,6 +1125,10 @@ export async function pullPads(client: LcClient): Promise<void> {
     const local = await getWhiteboardNotebook(row.id);
     const missing = !local || boardLooksCorrupt(local.board);
     if (!missing) continue;
+    await downloadArtifactAssets(client, artifactCatalogFields(row.artifacts, { kind: "whiteboard", id: row.id }).artifacts);
+    const after = await getWhiteboardNotebook(row.id);
+    if (after?.updatedAt !== local?.updatedAt || after?.syncSeq !== local?.syncSeq ||
+        (after && !boardLooksCorrupt(after.board)) || listWhiteboardTrash().some((entry) => entry.id === row.id)) continue;
     await restoreWhiteboardNotebook({
       ...artifactCatalogFields(row.artifacts, { kind: "whiteboard", id: row.id }),
       id: row.id,
@@ -1120,6 +1149,10 @@ export async function pullPads(client: LcClient): Promise<void> {
     const local = await getAnnotateDoc(row.id);
     const missing = !local || boardLooksCorrupt(local.board);
     if (!missing) continue;
+    await downloadArtifactAssets(client, artifactCatalogFields(row.artifacts, { kind: "annotate", id: row.id }).artifacts);
+    const after = await getAnnotateDoc(row.id);
+    if (after?.updatedAt !== local?.updatedAt || after?.syncSeq !== local?.syncSeq ||
+        (after && !boardLooksCorrupt(after.board)) || listAnnotateTrash().some((entry) => entry.id === row.id)) continue;
     await restoreAnnotateDoc({
       ...artifactCatalogFields(row.artifacts, { kind: "annotate", id: row.id }),
       id: row.id,
@@ -1316,11 +1349,12 @@ async function applyPadSyncPingBody(
       boardLooksCorrupt(local.board) ||
       row.updated_at > local.updatedAt;
     if (!stale) {
+      await downloadArtifactAssets(client, artifactCatalogFields(row.artifacts, { kind: "whiteboard", id: row.id }).artifacts);
       markWhiteboardHubAck(row.id, row.updated_at);
       continue;
     }
     await dropPadPayloadJobs("whiteboard", row.id);
-    await applyHubWhiteboard(row, { emitReload: emit });
+    await applyHubWhiteboard(row, { emitReload: emit, client });
   }
 
   for (const row of ping.annotate) {
@@ -1335,11 +1369,12 @@ async function applyPadSyncPingBody(
       boardLooksCorrupt(local.board) ||
       row.updated_at > local.updatedAt;
     if (!stale) {
+      await downloadArtifactAssets(client, artifactCatalogFields(row.artifacts, { kind: "annotate", id: row.id }).artifacts);
       markAnnotateHubAck(row.id, row.updated_at);
       continue;
     }
     await dropPadPayloadJobs("annotate", row.id);
-    await applyHubAnnotate(row, { emitReload: emit });
+    await applyHubAnnotate(row, { emitReload: emit, client });
     if (row.hash) {
       const have = await getDocBytes(row.hash);
       if (!have) await pullDocBytesFromHub(client, row.hash);
@@ -1368,11 +1403,12 @@ async function applyPadSyncPingBody(
       boardLooksCorrupt(local.board) ||
       row.updated_at > local.updatedAt;
     if (!stale) {
+      await downloadArtifactAssets(client, artifactCatalogFields(row.artifacts, { kind: "problem", id: row.id }).artifacts);
       markProblemHubAck(row.id, row.updated_at);
       continue;
     }
     await dropPadPayloadJobs("problem", row.id);
-    await applyHubProblem(row, { emitReload: emit });
+    await applyHubProblem(row, { emitReload: emit, client });
   }
 
   for (const row of ping.snapshots) {

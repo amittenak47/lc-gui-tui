@@ -60,10 +60,11 @@ function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function identity(value: unknown): value is string {
+export function artifactIdentity(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 1024 &&
     value.trim() === value && !/[\u0000-\u001f\u007f]/.test(value);
 }
+const identity = artifactIdentity;
 
 function timestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -73,11 +74,12 @@ function artifactKind(value: unknown): value is ArtifactKind {
   return value === "whiteboard" || value === "code" || value === "markdown";
 }
 
-function parseParent(value: unknown): ArtifactParent | undefined {
+export function parseArtifactParent(value: unknown): ArtifactParent | undefined {
   if (!record(value) || !identity(value.id)) return undefined;
   if (value.kind !== "annotate" && value.kind !== "whiteboard" && value.kind !== "problem") return undefined;
   return { kind: value.kind, id: value.id };
 }
+const parseParent = parseArtifactParent;
 
 export function artifactRefKey(ref: ArtifactRef): string {
   // A tuple avoids collisions between IDs containing ':' or '/'.

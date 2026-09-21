@@ -32,6 +32,7 @@ pub use docs::{
     put_index as put_docs_index, retrieve as retrieve_docs, retrieve_library as retrieve_library_docs,
 };
 pub use pads::{
+    get_artifact_asset, put_artifact_asset,
     archive_annotate, archive_whiteboard, clone_device_prefs, get_device_prefs, get_doc_bytes,
     get_ink_page, get_ink_pages, put_edges, put_ink_page, tombstone_edge,
     get_annotate, get_snapshots, get_whiteboard, list_annotate, list_devices, list_whiteboard,
