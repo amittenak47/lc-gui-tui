@@ -102,6 +102,10 @@ export function parseArtifactAsset(raw: unknown): ArtifactAsset {
       if (payload.owned !== true || (payload.docType !== "code" && payload.docType !== "markdown") ||
           typeof payload.name !== "string" || !payload.name.trim() || typeof payload.source !== "string" ||
           !Array.isArray(payload.footnotes) || !Array.isArray(payload.agent) || !Array.isArray(payload.ink)) return invalid();
+      // Legacy mutable fnwb pointers require their own dependency transfer.
+      // Until that migration exists, do not accept a deceptively complete file.
+      if (payload.footnotes.some((note) => !object(note) ||
+          (note.whiteboards !== undefined && (!Array.isArray(note.whiteboards) || note.whiteboards.length > 0)))) return invalid();
       validateBoard(payload.board);
       const pages = new Set<number>();
       for (const ink of payload.ink) {

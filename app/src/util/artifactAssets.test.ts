@@ -49,5 +49,8 @@ describe("attachment transfer payloads", () => {
     expect(parseArtifactAsset(doc)).toEqual(doc);
     expect(() => parseArtifactAsset({ ...doc, payload: JSON.stringify({ ...payload, ink: [] }) })).toThrow();
     expect(() => parseArtifactAsset({ ...doc, payload: JSON.stringify({ ...payload, owned: false }) })).toThrow();
+    expect(() => parseArtifactAsset({ ...doc, payload: JSON.stringify({
+      ...payload, footnotes: [{ id: "mark", whiteboards: [{ id: "missing-nested-board" }] }],
+    }) })).toThrow();
   });
 });

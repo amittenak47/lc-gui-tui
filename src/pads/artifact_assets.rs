@@ -107,6 +107,11 @@ pub fn validate(asset: &ArtifactAsset) -> Result<()> {
                 && value["name"].as_str().is_some_and(|s| !s.trim().is_empty())
                 && value["source"].is_string() && value["footnotes"].is_array()
                 && value["agent"].is_array(), "invalid owned document attachment");
+            for note in value["footnotes"].as_array().unwrap() {
+                ensure!(note.is_object() && note.get("whiteboards").is_none_or(|boards|
+                    boards.as_array().is_some_and(Vec::is_empty)),
+                    "legacy nested scratch boards require a separate dependency migration");
+            }
             validate_board(&value["board"])?;
             let ink = value["ink"].as_array().ok_or_else(|| anyhow::anyhow!("missing document ink"))?;
             let mut pages = std::collections::HashSet::new();
@@ -202,6 +207,21 @@ mod tests {
         ]);
         assert!(pads::put_whiteboard(&conn, &mismatch).is_err());
         assert_eq!(pads::get_whiteboard(&conn, "w1").unwrap().unwrap().artifacts, pad.artifacts);
+    }
+
+    #[test]
+    fn owned_documents_reject_unbundled_nested_scratch_boards() {
+        let mut asset = scene();
+        asset.locator.dependency = AssetDependency::Document { id: "doc1".into(), revision: "r1".into() };
+        let mut payload = json!({"v": 1, "owned": true, "docType": "markdown", "name": "Note.md",
+            "source": "# Note", "board": {"v": 1, "elements": [],
+                "appState": {"scrollX": 0, "scrollY": 0, "zoom": 1}},
+            "footnotes": [], "agent": [], "ink": []});
+        asset.payload = payload.to_string();
+        assert!(validate(&asset).is_ok());
+        payload["footnotes"] = json!([{"id": "mark1", "whiteboards": [{"id": "missing"}]}]);
+        asset.payload = payload.to_string();
+        assert!(validate(&asset).is_err());
     }
 
     #[test]
