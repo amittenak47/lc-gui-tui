@@ -28,7 +28,7 @@ it("keeps several steps open and preserves individual choices through completion
   act(() => buttons()[1]!.click());
   expect(host.textContent).toContain("Thought 1");
   expect(host.textContent).toContain("Full text.");
-  expect(host.querySelectorAll(".lc-agent-process-step")[1]?.querySelector(".lc-agent-process-step-body")?.textContent).toBe(
+  expect(host.querySelectorAll(".lc-agent-process-step")[1]?.querySelector(".lc-agent-process-step-body")?.textContent?.trim()).toBe(
     "Thought 1. Full text.",
   );
 });

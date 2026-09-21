@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
@@ -129,7 +129,6 @@ describe("processLine", () => {
 
 describe("ProcessBlock", () => {
   it("reveals full live step details automatically without tapping titles", async () => {
-    vi.useFakeTimers();
     const host = document.createElement("div");
     document.body.appendChild(host);
     const root = createRoot(host);
@@ -148,13 +147,11 @@ describe("ProcessBlock", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(host.querySelector(".lc-agent-process-step-btn")).toBeNull();
     const body = host.querySelector(".lc-agent-process-step-body");
-    expect(body?.getAttribute("aria-busy")).toBe("true");
-    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(body?.getAttribute("aria-busy")).toBe("false");
     expect(body?.textContent).toContain("Extra prose");
     expect(body?.closest("[data-active='true']") || body).toBeTruthy();
     root.unmount();
     host.remove();
-    vi.useRealTimers();
   });
 
   it("keeps reason stages in Thinking and leaves the CoT blob for Reasoning", async () => {
@@ -210,8 +207,11 @@ describe("ProcessBlock", () => {
     expect(row?.querySelector(".lc-agent-process-step-excerpt")?.textContent).toBe(
       "What they're asking",
     );
-    expect(row?.querySelector(".lc-agent-process-step-body")?.textContent).toBe(
-      "The student is asking whether the algorithm I described. Full walkthrough lives here.",
+    expect(row?.querySelector(".lc-agent-process-step-body")?.textContent).toContain(
+      "The student is asking whether the algorithm I described.",
+    );
+    expect(row?.querySelector(".lc-agent-process-step-body")?.textContent).toContain(
+      "Full walkthrough lives here.",
     );
     await act(async () => { toggle.click(); });
     expect(row?.querySelector(".lc-agent-process-step-excerpt")?.textContent).toBe(
@@ -242,39 +242,40 @@ describe("ProcessBlock", () => {
     host.remove();
   });
 
-  it("does not render a duplicate body for pipeline stages", async () => {
+  it("keeps pipeline stages in the header, not as thought chips", async () => {
     const host = document.createElement("div");
     document.body.appendChild(host);
     const root = createRoot(host);
+    const events: CoachProcessEvent[] = [
+      { kind: "stage", label: "ask", detail: "answering from the document", ts: 1 },
+      { kind: "stage", label: "prefetch", detail: "looking up earlier pages", ts: 2 },
+    ];
     await act(async () => {
-      root.render(<ProcessBlock events={[
-        { kind: "stage", label: "ask", detail: "answering from the document", ts: 1 },
-        { kind: "stage", label: "prefetch", detail: "looking up earlier pages", ts: 2 },
-      ]} running={false} />);
+      root.render(<ProcessBlock events={events} running={false} />);
     });
-    expect(host.querySelectorAll(".lc-agent-process-step")).toHaveLength(2);
-    expect(host.querySelectorAll(".lc-agent-process-step-body")).toHaveLength(0);
-    expect(host.textContent).toContain("Answering from the document");
-    expect(host.textContent).toContain("Looking up earlier pages");
-    expect(host.textContent?.toLowerCase().split("looking up earlier pages").length).toBe(2);
+    expect(host.querySelector(".lc-agent-process")).toBeNull();
+    await act(async () => {
+      root.render(<ProcessBlock events={events} running />);
+    });
+    expect(host.querySelectorAll(".lc-agent-process-step")).toHaveLength(0);
+    expect(host.querySelector(".lc-agent-process-label")?.textContent).toBe("Looking up earlier pages");
     root.unmount();
     host.remove();
   });
 
-  it("renders the thought verbatim instead of markdown blocks", async () => {
+  it("typesets thinking math and markdown lists", async () => {
     const host = document.createElement("div");
     document.body.appendChild(host);
     const root = createRoot(host);
-    const detail = `So the document describes:
-1. The concept of alignment
-2. The cost of an alignment`;
+    const detail = "The student is asking about Euler: $e^{i\\pi} + 1 = 0$.\n\n1. Leaves dominate\n2. Balanced";
     await act(async () => {
-      root.render(<ProcessBlock events={[{ kind: "stage", label: "reason", detail, ts: 1 }]} running={false} />);
+      root.render(<ProcessBlock events={[{ kind: "stage", label: "reason", detail, ts: 1, updateId: "r-math" }]} running={false} />);
     });
     const body = host.querySelector(".lc-agent-process-step-body");
-    expect(host.querySelector(".lc-agent-process-step-excerpt")?.textContent).toBe("What the text says");
-    expect(body?.querySelector("ol, ul, blockquote, pre")).toBeNull();
-    expect(body?.textContent).toBe(detail);
+    expect(host.querySelector(".lc-agent-process-step-excerpt")?.textContent).toBe("What they're asking");
+    expect(body?.querySelector(".katex")).not.toBeNull();
+    expect(body?.querySelector("ol, ul")).not.toBeNull();
+    expect(body?.textContent).toContain("Leaves dominate");
     root.unmount();
     host.remove();
   });

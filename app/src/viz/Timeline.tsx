@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { AgentRichText } from "../modes/AgentRichText";
 import type { VizProgram } from "./schema";
+import { formatVizProse } from "./vizProse";
 
 export interface TimelineProps {
   program: VizProgram;
@@ -95,8 +97,8 @@ export function Timeline({ program, onFrame, initialFrame = 0, playbackMs = 1200
         onChange={(event) => step(Number(event.target.value))} />
     </>}
     {current && <div className="lc-timeline-frame" aria-live={playing ? "off" : "polite"} aria-atomic="true">
-      {current.label && <div className="lc-timeline-label">{current.label}</div>}
-      {current.note && <p className="lc-timeline-note">{current.note}</p>}
+      {current.label && <AgentRichText text={formatVizProse(current.label)} className="lc-timeline-label" />}
+      {current.note && <AgentRichText text={formatVizProse(current.note)} className="lc-timeline-note" />}
     </div>}
   </section>;
 }

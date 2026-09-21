@@ -48,16 +48,25 @@ The document does not actually show a suboptimal algorithm.`;
 });
 
 describe("chunkReasonEvents", () => {
+  it("does not re-chunk a live streamed reason row", () => {
+    const shown = chunkReasonEvents([
+      { kind: "stage", label: "reason", detail: COT, ts: 3, updateId: "reason-1-0" },
+    ]);
+    expect(shown).toHaveLength(1);
+    expect(shown[0]?.updateId).toBe("reason-1-0");
+    expect(shown[0]?.detail).toBe(COT);
+  });
+
   it("leaves pipeline stages alone and splits a stored reason blob", () => {
     const events: CoachProcessEvent[] = [
       { kind: "stage", label: "ask", detail: "answering from the document", ts: 1 },
       { kind: "stage", label: "prefetch", detail: "looking up earlier pages", ts: 2 },
-      { kind: "stage", label: "reason", detail: COT, ts: 3, updateId: "reason-1-0" },
+      { kind: "stage", label: "reason", detail: COT, ts: 3 },
     ];
     const shown = chunkReasonEvents(events);
     expect(shown[0]?.label).toBe("ask");
     expect(shown[1]?.label).toBe("prefetch");
     expect(shown.length).toBeGreaterThan(4);
-    expect(shown.every((event, index) => index < 2 || event.updateId?.startsWith("reason-1-0:"))).toBe(true);
+    expect(shown.slice(2).every((event) => event.label === "reason" && !event.updateId)).toBe(true);
   });
 });

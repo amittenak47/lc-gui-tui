@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { formatAgentProse } from "./agentProse";
 import { renderMarkdown } from "./AnnotateDocument";
 
 /** Presentation only: the complete response stays in the transcript and sync. */
@@ -34,9 +35,10 @@ export function useWordReveal(text: string, animate = true, animateInitial = fal
 export const AgentRichText = memo(function AgentRichText({
   text, animate = false, animateInitial = false, className = "",
 }: { text: string; animate?: boolean; animateInitial?: boolean; className?: string }) {
-  const shown = useWordReveal(text, animate, animateInitial);
+  const prepared = useMemo(() => formatAgentProse(text), [text]);
+  const shown = useWordReveal(prepared, animate, animateInitial);
   const html = useMemo(() => renderMarkdown(shown), [shown]);
-  return <div className={`lc-agent-markdown ${className}`} aria-busy={shown !== text}
+  return <div className={`lc-agent-markdown ${className}`} aria-busy={shown !== prepared}
     // renderMarkdown shares the document renderer's Markdown/KaTeX sanitization.
     dangerouslySetInnerHTML={{ __html: html }} />;
 });

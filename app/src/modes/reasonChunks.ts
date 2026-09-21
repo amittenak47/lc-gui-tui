@@ -27,7 +27,14 @@ export function splitReasonSteps(text: string): string[] {
 export function chunkReasonEvents(events: CoachProcessEvent[]): CoachProcessEvent[] {
   const out: CoachProcessEvent[] = [];
   for (const event of events) {
-    if (event.kind !== "stage" || event.label !== "reason" || !event.detail?.trim()) {
+    // Live `updateId` rows are already one thought from the stream splitter.
+    // Re-chunking them as they grow remounts chips and dumps the rest at once.
+    if (
+      event.kind !== "stage"
+      || event.label !== "reason"
+      || !event.detail?.trim()
+      || event.updateId
+    ) {
       out.push(event);
       continue;
     }

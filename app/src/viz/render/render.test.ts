@@ -368,3 +368,34 @@ describe("merging", () => {
     expect(merged.map((element) => element.id)).toEqual(["b", "a2"]);
   });
 });
+
+describe("recursion tree", () => {
+  it("uses parent-child entries so a ternary tree is not forced binary", () => {
+    const sample = parseVizProgram({
+      viz: "tree",
+      id: "master",
+      title: "master-tree",
+      frames: [{
+        label: "Recursion tree",
+        cells: ["T(n)", "T(n/2)", "T(n/2)", "T(n/2)"],
+        entries: [[0, 1], [0, 2], [0, 3]],
+      }],
+    })!;
+    const elements = renderViz(sample, 0, ORIGIN);
+    const node = (slot: string) => elements.find((el) => el.id?.endsWith(slot));
+    expect(node("node-1")!.y).toBe(node("node-2")!.y);
+    expect(node("node-2")!.y).toBe(node("node-3")!.y);
+    expect(node("node-1")!.y).toBeGreaterThan(node("node-0")!.y);
+  });
+
+  it("omits title and note from a preview raster", () => {
+    const sample = parseVizProgram({
+      viz: "tree",
+      id: "preview",
+      title: "preview",
+      frames: [{ cells: [1, 2, 3], note: "A long explanation that must not shrink the tree." }],
+    })!;
+    const preview = renderViz(sample, 0, { x: 0, y: 0 }, { bare: true });
+    expect(preview.some((el) => el.id?.endsWith("title") || el.id?.endsWith("note"))).toBe(false);
+  });
+});

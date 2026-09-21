@@ -27,6 +27,14 @@ describe("chat Markdown and progressive reveal", () => {
     expect(host.querySelector("code")?.textContent).toBe("$literal$");
     expect(host.querySelector("script")).toBeNull();
   });
+  it("wraps bare thinking math as inline and a lone equation as display", async () => {
+    await render("The recurrence is T(n) = aT(n/b) + f(n) for some a ≥ 1.", false);
+    expect(host.querySelector(".katex-display")).toBeNull();
+    expect(host.querySelectorAll(".katex").length).toBeGreaterThanOrEqual(2);
+    expect(host.textContent).toContain("The recurrence is");
+    await render("For a recurrence of the form\n\nT(n) = aT(n/b)+f(n), a ≥ 1, b > 1\n\ncompare f(n).", false);
+    expect(host.querySelector(".katex-display")).not.toBeNull();
+  });
   it("reveals a completed response by words without replaying saved history", async () => {
     await render(""); await render("One two three four.");
     expect(host.textContent).toBe("");

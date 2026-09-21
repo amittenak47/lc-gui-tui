@@ -6,6 +6,9 @@
  * a model can produce reliably without doing geometry, and it is exactly how
  * LeetCode serializes trees, so it needs no translation.
  *
+ * Recursion trees often send parent→child `entries` instead (branching factor
+ * is not 2). Those use the same forest layout as the call tree.
+ *
  * The heap adds the backing array underneath, because the whole point of a heap
  * is that the tree and the array are the same thing.
  */
@@ -21,12 +24,25 @@ import {
   footer,
   header,
   isHighlighted,
+  layoutForest,
+  linkArrow,
   type RenderContext,
 } from "../layout";
-import { cellText } from "../schema";
+import { cellText, parentChildEdges } from "../schema";
 
-const NODE = 44;
-const LEVEL_H = 78;
+function nodeMetrics(ctx: RenderContext): { w: number; h: number; fontSize: number; levelH: number } {
+  let longest = 1;
+  for (const frame of ctx.program.frames) {
+    for (const value of frame.cells) {
+      if (value === null || value === undefined) continue;
+      longest = Math.max(longest, cellText(value).length);
+    }
+  }
+  const w = Math.max(52, Math.min(128, longest * 8 + 22));
+  const h = longest > 6 ? 38 : 44;
+  const fontSize = longest > 8 ? 13 : longest > 4 ? 14 : 16;
+  return { w, h, fontSize, levelH: h + 42 };
+}
 
 /** Depth of a level-order index: 0, 1..2, 3..6, ... */
 function depthOf(index: number): number {
@@ -41,6 +57,7 @@ function nodeCentre(
   index: number,
   origin: { x: number; y: number },
   width: number,
+  levelH: number,
 ): { x: number; y: number } {
   const depth = depthOf(index);
   const slotsAtDepth = 2 ** depth;
@@ -48,7 +65,7 @@ function nodeCentre(
   const slotWidth = width / slotsAtDepth;
   return {
     x: origin.x + slotWidth * (positionInLevel + 0.5),
-    y: origin.y + depth * LEVEL_H,
+    y: origin.y + depth * levelH,
   };
 }
 
@@ -61,46 +78,80 @@ function renderTreeInner(ctx: RenderContext, options: TreeOptions): Skeleton[] {
   const { frame, origin } = ctx;
   const out = header(ctx);
   const top = origin.y + headerOffset(ctx);
-  const levels = frame.cells.length > 0 ? depthOf(frame.cells.length - 1) + 1 : 0;
-  const width = Math.max(2 ** Math.max(levels - 1, 0) * (NODE + CELL_GAP), NODE * 4);
+  const metrics = nodeMetrics(ctx);
+  const count = frame.cells.length;
+  const edges = parentChildEdges(frame.entries, count);
+  const useForest = edges.length > 0 && !options.showBackingArray;
 
-  // Edges first, so nodes paint over the arrow ends.
+  let centres: Array<{ x: number; y: number } | undefined>;
+  if (useForest) {
+    centres = layoutForest(count, edges, { x: origin.x, y: top }, {
+      node: metrics.w,
+      nodeHeight: metrics.h,
+      gap: 18,
+      levelH: metrics.levelH,
+    });
+  } else {
+    const levels = count > 0 ? depthOf(count - 1) + 1 : 0;
+    const width = Math.max(2 ** Math.max(levels - 1, 0) * (metrics.w + CELL_GAP), metrics.w * 4);
+    centres = frame.cells.map((value, index) => {
+      if (value === null || value === undefined) return undefined;
+      return nodeCentre(index, { x: origin.x, y: top }, width, metrics.levelH);
+    });
+    frame.cells.forEach((value, index) => {
+      if (value === null || value === undefined) return;
+      for (const child of [2 * index + 1, 2 * index + 2]) {
+        const childValue = frame.cells[child];
+        if (childValue === null || childValue === undefined) continue;
+        const from = centres[index];
+        const to = centres[child];
+        if (!from || !to) continue;
+        out.push(
+          arrow(
+            ctx,
+            `edge-${index}-${child}`,
+            { x: from.x, y: from.y + metrics.h / 2 },
+            { x: to.x, y: to.y - metrics.h / 2 },
+          ),
+        );
+      }
+    });
+  }
+
+  if (useForest) {
+    edges.forEach(([parent, child], edgeIndex) => {
+      const from = centres[parent];
+      const to = centres[child];
+      if (!from || !to) return;
+      out.push(linkArrow(ctx, `edge-${edgeIndex}`, from, to, metrics.h));
+    });
+  }
+
   frame.cells.forEach((value, index) => {
     if (value === null || value === undefined) return;
-    for (const child of [2 * index + 1, 2 * index + 2]) {
-      const childValue = frame.cells[child];
-      if (childValue === null || childValue === undefined) continue;
-      const from = nodeCentre(index, { x: origin.x, y: top }, width);
-      const to = nodeCentre(child, { x: origin.x, y: top }, width);
-      out.push(
-        arrow(
-          ctx,
-          `edge-${index}-${child}`,
-          { x: from.x, y: from.y + NODE / 2 },
-          { x: to.x, y: to.y - NODE / 2 },
-        ),
-      );
-    }
-  });
-
-  frame.cells.forEach((value, index) => {
-    if (value === null || value === undefined) return;
-    const centre = nodeCentre(index, { x: origin.x, y: top }, width);
+    const centre = centres[index];
+    if (!centre) return;
     out.push(
       ...cellBox(
         ctx,
         `node-${index}`,
-        centre.x - NODE / 2,
-        centre.y - NODE / 2,
+        centre.x - metrics.w / 2,
+        centre.y - metrics.h / 2,
         cellText(value),
-        { highlighted: isHighlighted(frame, index), width: NODE, height: NODE },
+        {
+          highlighted: isHighlighted(frame, index),
+          width: metrics.w,
+          height: metrics.h,
+          fontSize: metrics.fontSize,
+        },
       ),
     );
   });
 
-  let bottom = top + Math.max(levels, 1) * LEVEL_H;
+  let bottom =
+    centres.reduce((max, point) => Math.max(max, point ? point.y + metrics.h / 2 : 0), top) + 8;
 
-  if (options.showBackingArray && frame.cells.length > 0) {
+  if (options.showBackingArray && count > 0) {
     out.push(caption(ctx, "arraylabel", origin.x, bottom + 4, "backing array"));
     const arrayTop = bottom + 24;
     frame.cells.forEach((value, index) => {
@@ -116,8 +167,9 @@ function renderTreeInner(ctx: RenderContext, options: TreeOptions): Skeleton[] {
     bottom = arrayTop + 58;
   }
 
-  if (frame.cells.length === 0) {
+  if (count === 0) {
     out.push(caption(ctx, "empty", origin.x, top, "(empty tree)"));
+    bottom = top + 24;
   }
   return [...out, ...footer(ctx, bottom)];
 }

@@ -403,6 +403,7 @@ import {
 } from "./viz/drawingState";
 import { persistableAgentMessages, restoreAgentMessages } from "./modes/agentTranscript";
 import { DocumentDrawingPanel } from "./viz/DocumentDrawingPanel";
+import { pageForNewDrawing } from "./viz/drawingPage";
 import {
   applyAnnotation,
   applyHighlight,
@@ -6498,6 +6499,11 @@ export function Workspace({
           if (mobile && !isLocalPad(problem)) setActiveRegion("agent");
         }
         const [firstDrawing, ...moreDrawings] = drawables;
+        const drawingPage = pageForNewDrawing(
+          artifactFootnoteIds,
+          annotateFootnotesRef.current,
+          pdfNavRef.current?.current,
+        );
         finishCoachTurn(turnId, [
           {
             content:
@@ -6506,13 +6512,13 @@ export function Workspace({
                 ? "Drew a diagram on the board."
                 : "The model returned an empty reply."),
             ...(result.reasoning?.trim() ? { reasoning: result.reasoning.trim() } : {}),
-            ...(firstDrawing ? { drawing: withNewDrawing(firstDrawing) } : {}),
+            ...(firstDrawing ? { drawing: withNewDrawing(firstDrawing, drawingPage) } : {}),
             artifactProposals: sanitizeArtifactProposals(result.artifacts),
             artifactFootnoteIds,
           },
           ...moreDrawings.map((drawable, index) => ({
             content: `Drew diagram ${index + 2} of ${drawables.length} on the board.`,
-            drawing: withNewDrawing(drawable),
+            drawing: withNewDrawing(drawable, drawingPage),
           })),
         ]);
         const sourceStillOpen = !docAsk?.view || annotateSourceRef.current?.hash === docAsk.view.document_hash;
@@ -10274,7 +10280,14 @@ export function Workspace({
           }}
         >
           {problem && isAnnotate(problem) && !canvasLoading && (
-            <DocumentDrawingPanel messages={agentMessages} onHide={toggleDrawing} onFrame={showDrawingFrame} />
+            <DocumentDrawingPanel
+              messages={agentMessages}
+              onHide={toggleDrawing}
+              onFrame={showDrawingFrame}
+              filmScope={tab.id}
+              footnotes={annotateFootnotes}
+              pageCount={pdfNav?.count ?? 0}
+            />
           )}
           {/*
             The live page sits in front of the board, not instead of it.

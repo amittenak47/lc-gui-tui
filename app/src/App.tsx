@@ -55,6 +55,7 @@ import { AGENT_SHEET_LOCK_EVENT, loadAgentSheetLock } from "./util/agentSheetLoc
 import { loadTestForwardMode, type TestForwardMode } from "./util/agentPrefs";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { installUiHandednessAttr } from "./util/uiHandedness";
+import { installAgentPanelWidth } from "./util/agentPanelWidth";
 import {
   BOOT_DONE_HOLD_MS,
   BOOT_EXIT_MS,
@@ -160,6 +161,7 @@ export function App() {
   // Writing hand mirrors the chrome across the Y-axis — see inkHandedness.
   useEffect(() => installHandednessAttr(), []);
   useEffect(() => installUiHandednessAttr(), []);
+  useLayoutEffect(() => installAgentPanelWidth(), []);
 
   /** In-process daemon is assumed up; this flag still gates pad sync / tests. */
   const [serverLink] = useState<"checking" | "online" | "offline">("online");

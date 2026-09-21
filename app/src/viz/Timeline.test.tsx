@@ -75,4 +75,24 @@ describe("Timeline", () => {
     await tick(5000);
     expect(onFrame).not.toHaveBeenCalled();
   });
+  it("typesets $ math in the frame note", async () => {
+    const withMath = {
+      ...program,
+      frames: [{ ...program.frames[0]!, note: "Work is $a^{k}$ per level." }],
+    };
+    await act(async () => {
+      root.render(<StrictMode><Timeline program={withMath} onFrame={onFrame} /></StrictMode>);
+    });
+    expect(host.querySelector(".lc-timeline-note .katex")).not.toBeNull();
+  });
+  it("typesets ASCII coach notes", async () => {
+    const withAscii = {
+      ...program,
+      frames: [{ ...program.frames[0]!, note: "Work per level is a^k subproblems of size n/b^k." }],
+    };
+    await act(async () => {
+      root.render(<StrictMode><Timeline program={withAscii} onFrame={onFrame} /></StrictMode>);
+    });
+    expect(host.querySelector(".lc-timeline-note .katex")).not.toBeNull();
+  });
 });

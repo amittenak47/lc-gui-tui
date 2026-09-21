@@ -1,7 +1,7 @@
 import { useId, useReducer, useRef } from "react";
 
 import { STAGE_LABELS, type CoachProcessEvent } from "../api/types";
-import { useWordReveal } from "./AgentRichText";
+import { AgentRichText } from "./AgentRichText";
 import { AnimatedDisclosure } from "../components/AnimatedDisclosure";
 import { DEFAULT_AGENT_DISPLAY_PREFS, type AgentDisplayPrefs } from "../util/agentDisplayPrefs";
 import { newThinkingDisclosure, thinkingStepKey, thinkingStepColor, type ThinkingDisclosureState } from "./thinkingDisplay";
@@ -196,28 +196,30 @@ export function processLine(event: CoachProcessEvent | undefined): string {
   return fallback ? sentenceCase(oneLine(fallback)) : event.label;
 }
 
-function ProcessStepBody({
-  text,
-  animate,
-  animateInitial,
-}: {
-  text: string;
-  animate: boolean;
-  animateInitial: boolean;
-}) {
-  const shown = useWordReveal(text, animate, animateInitial);
-  return (
-    <div className="lc-agent-process-step-body" aria-busy={shown !== text}>
-      {shown}
-    </div>
+const PIPELINE_STAGE_LABELS = new Set(["received", "ask", "prefetch"]);
+
+/** Handshake / retrieve stages — not model thoughts. */
+export function isPipelineStage(event: CoachProcessEvent): boolean {
+  return event.kind === "stage" && PIPELINE_STAGE_LABELS.has(event.label);
+}
+
+/** Chips the student should see: thoughts and tools, not "Got it". */
+export function isThoughtProcessEvent(event: CoachProcessEvent): boolean {
+  return event.label !== "done" && !isReasoningEvent(event) && !isPipelineStage(event);
+}
+
+function latestPipelineLine(events: readonly CoachProcessEvent[]): string | null {
+  const latest = [...events].reverse().find(
+    (event) => event.label !== "done" && !isReasoningEvent(event) && isPipelineStage(event),
   );
+  return latest ? processLine(latest) : null;
 }
 
 /**
  * What the coach did, one line per stage or tool call.
  *
  * Each step is tappable. Reason chips are short summaries; the body is the
- * thought verbatim. The uncut chain-of-thought is the Reasoning fold.
+ * thought with Markdown / KaTeX. Pipeline stages stay in the header.
  */
 export function ProcessBlock({
   events,
@@ -238,12 +240,15 @@ export function ProcessBlock({
   const state = disclosure ?? localState.current;
   const [, redraw] = useReducer(value => value + 1, 0);
   const regionId = useId();
-  const shown = chunkReasonEvents(coalesceReasonListItems(events.filter(
-    (event) => event.label !== "done" && !isReasoningEvent(event),
-  )));
+  const shown = chunkReasonEvents(coalesceReasonListItems(events.filter(isThoughtProcessEvent)));
+  const waiting = running && shown.length === 0;
   const expanded = state.sectionOpen ?? !(collapse || (!running && displayPrefs.autoCollapseThinking));
-  const visible = shown;
-  if (shown.length === 0) return null;
+  if (shown.length === 0 && !waiting) return null;
+  const header = waiting
+    ? latestPipelineLine(events) ?? "Thinking…"
+    : running
+      ? "Thinking…"
+      : `Thinking · ${shown.length} step${shown.length === 1 ? "" : "s"}`;
 
   return (
     <div className={running ? "lc-agent-process lc-agent-process-running" : "lc-agent-process"}>
@@ -260,21 +265,16 @@ export function ProcessBlock({
       >
         {running && <span className="lc-agent-spinner" aria-hidden />}
         <span className="lc-agent-process-chevron" aria-hidden />
-        <span className="lc-agent-process-label">
-          {running ? "Thinking…" : `Thinking · ${shown.length} step${shown.length === 1 ? "" : "s"}`}
-        </span>
+        <span className="lc-agent-process-label">{header}</span>
       </button>
-      <AnimatedDisclosure open={expanded} onExitComplete={onCollapsed} animateInitial={running}>
+      <AnimatedDisclosure open={expanded && shown.length > 0} onExitComplete={onCollapsed} animateInitial={running}>
         <ol id={regionId} className="lc-agent-process-steps">
-            {visible.map((event, index) => {
+            {shown.map((event, index) => {
               const key = thinkingStepKey(event, index);
               const { title, body } = presentProcessStep(event);
               const stepOpen = state.steps[key] ?? !displayPrefs.collapseThinkingSteps;
               const toggle = () => { state.steps[key] = !stepOpen; redraw(); };
               const contentId = `${regionId}-step-${index}`;
-              // Provider deltas already arrive incrementally. Do not delay
-              // them with a reveal timer that each incoming delta resets.
-              const revealBufferedStep = !event.updateId;
               return (
                 <li
                   key={key}
@@ -282,7 +282,7 @@ export function ProcessBlock({
                   className={[
                     "lc-agent-process-step",
                     event.status === "rejected" ? "lc-agent-process-step-rejected" : "",
-                    running && index === visible.length - 1 ? "lc-agent-process-step-current" : "",
+                    running && index === shown.length - 1 ? "lc-agent-process-step-current" : "",
                     stepOpen ? "is-open" : "",
                   ]
                     .filter(Boolean)
@@ -303,11 +303,7 @@ export function ProcessBlock({
                   <div id={contentId} className="lc-agent-process-step-content">
                     <span className="lc-agent-process-step-excerpt">{title}</span>
                     {stepOpen && body ? (
-                      <ProcessStepBody
-                        text={body}
-                        animate={running && revealBufferedStep}
-                        animateInitial={running && revealBufferedStep && !(key in state.steps)}
-                      />
+                      <AgentRichText text={body} className="lc-agent-process-step-body" />
                     ) : null}
                   </div>
                 </li>

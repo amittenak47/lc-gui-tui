@@ -5,13 +5,35 @@ const panel = readFileSync(new URL("./AgentSidePanel.tsx", import.meta.url), "ut
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
 describe("agent panel chrome", () => {
-  it("parks the conversation expand at the panel's top-right with the composer control", () => {
+  it("shares the header's 1px edge instead of stacking a second top border", () => {
+    const desktop = css.slice(
+      css.indexOf("/* Header already paints the 1px seam"),
+      css.indexOf("/* ---------------------------------------------------------------- header --- */"),
+    );
+    expect(desktop).toContain(".lc-app:not(.lc-mobile) .lc-side {");
+    expect(desktop).toContain("border-top: none");
+    const sideStart = css.indexOf("/* ------------------------------------------------------------ side panel --- */");
+    const side = css.slice(sideStart, css.indexOf(".lc-app-agent-open .lc-side {", sideStart));
+    expect(side).not.toContain("border-top:");
+    const headerStart = css.indexOf("/* ---------------------------------------------------------------- header --- */");
+    const header = css.slice(headerStart, css.indexOf(".lc-header button"));
+    expect(header).toContain("border-bottom: 1px solid var(--chrome-edge)");
+  });
+
+  it("parks the conversation expand on the grab/fade strip, not over the transcript", () => {
     expect(panel).toContain('className="lc-agent-pane-expand-row lc-agent-pane-expand-panel"');
     const start = css.indexOf(".lc-agent-pane-expand-panel {");
     const row = css.slice(start, css.indexOf("}", start));
     expect(row).toContain("position: absolute");
     expect(row).toContain("top: 8px");
     expect(row).toContain("right: 12px");
+    const desktop = css.slice(
+      css.indexOf(".lc-app:not(.lc-mobile) .lc-agent-sheet-handle {"),
+      css.indexOf(".lc-app:not(.lc-mobile) .lc-agent-sheet-handle .lc-agent-fold-bar {"),
+    );
+    expect(desktop).toContain("backdrop-filter: blur(6px)");
+    expect(desktop).toContain("pointer-events: none");
+    expect(desktop).not.toContain("display: none");
     expect(css).toContain("padding: 4px 12px 8px");
   });
 
@@ -115,16 +137,59 @@ describe("agent panel chrome", () => {
     expect(panel).toContain("function FailIcon");
     expect(panel).toContain("lc-agent-turn-fail");
     expect(panel).toContain('aria-label="Failed"');
-    expect(panel).toContain('{message.role === "assistant" ? (');
-    expect(panel).toContain("{message.role !== \"assistant\" && (");
-    expect(panel).not.toContain('message.role === "assistant" || message.requestState === "failed"');
-    expect(panel).not.toContain('message.role !== "assistant" && message.requestState !== "failed"');
+    expect(panel).toContain("<MessageFlags message={message} />");
+    expect(panel).not.toContain("MessageFlags message={message} header");
+    expect(panel).not.toContain("lc-agent-turn-header-flags");
     expect(css).toContain(".lc-agent-turn-footnotes.is-failed");
     expect(css).toContain(".lc-agent-turn-failed .lc-agent-turn-body");
   });
 
+  it("puts AGENT send flags under the turn with the same rule as YOU", () => {
+    const flagsCall = panel.indexOf("<MessageFlags message={message} />");
+    expect(flagsCall).toBeGreaterThan(panel.indexOf("lc-agent-proposal-saves"));
+    expect(panel.indexOf("{message.role === \"assistant\" ? (")).toBe(-1);
+    expect(css).toContain(".lc-agent-turn-flag-rule");
+    expect(css).not.toContain(".lc-agent-turn-header-flags");
+  });
+
+  it("lets desktop drag-resize the agent column and hides the sash on mobile", () => {
+    expect(panel).toContain("{!mobile && open ? <AgentPanelSash /> : null}");
+    expect(css).toContain(".lc-agent-sash");
+    expect(css).toContain(".lc-mobile .lc-agent-sash");
+    const sash = css.slice(css.indexOf(".lc-mobile .lc-agent-sash {"), css.indexOf(".lc-app-agent-open .lc-side {"));
+    expect(sash).toContain("display: none");
+  });
+
+  it("lets reasoning grow with the transcript instead of a nested scrollbar", () => {
+    const body = css.slice(
+      css.indexOf(".lc-agent-reasoning-body {"),
+      css.indexOf(".lc-agent-drawing {"),
+    );
+    expect(body).toContain("overflow: visible");
+    expect(body).toContain("white-space: normal");
+    expect(body).not.toContain("max-height");
+    expect(body).not.toContain("overflow: auto");
+    expect(css).not.toContain(".lc-agent-reasoning-body::-webkit-scrollbar");
+  });
+
+  it("keeps table headers on one line and does not wrap Case letter-by-letter", () => {
+    const md = css.slice(
+      css.indexOf("/* Chat shares the document"),
+      css.indexOf(".lc-agent-drawing-visibility"),
+    );
+    expect(md).toContain("overflow-wrap: break-word");
+    expect(md).not.toContain("overflow-wrap: anywhere");
+    expect(md).toContain(".lc-agent-markdown th {");
+    expect(md).toContain("white-space: nowrap");
+    expect(md).toContain(":is(th, td):first-child");
+    expect(md).toContain("font-size: 1.1em");
+  });
+
   it("drops the panel-chip well under chat code on dark palettes", () => {
-    const md = css.slice(css.indexOf(".lc-agent-markdown {"), css.indexOf(".lc-agent-drawing-visibility"));
+    const md = css.slice(
+      css.indexOf("/* Chat shares the document"),
+      css.indexOf(".lc-agent-drawing-visibility"),
+    );
     expect(md).toContain("[data-theme=\"dark\"] .lc-agent-markdown pre");
     expect(md).toContain("[data-theme=\"dark\"] .lc-agent-markdown :not(pre) > code");
     expect(md).toContain("background: transparent");

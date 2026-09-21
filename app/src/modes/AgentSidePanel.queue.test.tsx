@@ -55,6 +55,21 @@ it("keeps the fail mark on the YOU flags footer when send bits never landed", ()
   expect(host.querySelector(".lc-agent-turn-role")?.textContent).toBe("You");
 });
 
+it("puts AGENT send flags under the message with the same rule as YOU", () => {
+  act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy={false} messages={[
+    { id: "a1", role: "assistant", content: "Three cases.", at: 2, flags: ["Ask", "Reasoning · high"] },
+  ]} onSend={() => {}} />));
+  const turn = host.querySelector(".lc-agent-turn-assistant")!;
+  const flags = turn.querySelector(".lc-agent-turn-footnotes")!;
+  expect(flags.classList.contains("lc-agent-turn-header-flags")).toBe(false);
+  expect(flags.querySelector(".lc-agent-turn-flag-rule")).toBeTruthy();
+  expect(flags.textContent).toMatch(/Ask/);
+  expect(flags.textContent).toMatch(/Reasoning/);
+  const body = turn.querySelector(".lc-agent-turn-body");
+  expect(body).toBeTruthy();
+  expect(body!.compareDocumentPosition(flags) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 it("text-only selection keeps a typed draft and sends the frozen quote only on Send", () => {
   const send = vi.fn();
   const props = { open: true, mode: "review" as const, onModeChange: () => {}, busy: false, messages: [], onSend: send };

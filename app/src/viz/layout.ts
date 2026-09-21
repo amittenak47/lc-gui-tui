@@ -46,7 +46,17 @@ export interface RenderContext {
 export type Renderer = (ctx: RenderContext) => Skeleton[];
 
 export function headerOffset(ctx: RenderContext): number {
-  return ctx.bare ? 0 : HEADER_H;
+  if (ctx.bare) return 0;
+  const step = frameStep(ctx);
+  const lines = step.trim() ? wrap(step.trim(), 44).split("\n").length : 0;
+  return Math.max(HEADER_H, 28 + lines * 20);
+}
+
+function frameStep(ctx: RenderContext): string {
+  const { program, frame, frameIndex } = ctx;
+  return program.frames.length > 1
+    ? `[${frameIndex + 1}/${program.frames.length}] ${frame.label}`
+    : frame.label;
 }
 
 function strokeOf(ctx: RenderContext, accent = false): string {
@@ -78,7 +88,7 @@ export function cellBox(
   x: number,
   y: number,
   text: string,
-  options: { highlighted?: boolean; width?: number; height?: number } = {},
+  options: { highlighted?: boolean; width?: number; height?: number; fontSize?: number } = {},
 ): Skeleton[] {
   const highlighted = options.highlighted ?? false;
   // Long values (e.g. 1800) need a wider box than the default digit cell.
@@ -101,7 +111,7 @@ export function cellBox(
       roundness: { type: 3 },
       label: {
         text,
-        fontSize: 16,
+        fontSize: options.fontSize ?? 16,
         strokeColor: ink,
         textAlign: "center",
         verticalAlign: "middle",
@@ -159,18 +169,18 @@ export function arrow(
  */
 export function header(ctx: RenderContext): Skeleton[] {
   if (ctx.bare) return [];
-  const { origin, program, frame, frameIndex } = ctx;
+  const { origin, program } = ctx;
   const out: Skeleton[] = [
     caption(ctx, "title", origin.x, origin.y, program.title || program.id, {
-      fontSize: 18,
+      fontSize: 16,
     }),
   ];
-  const step =
-    program.frames.length > 1
-      ? `[${frameIndex + 1}/${program.frames.length}] ${frame.label}`
-      : frame.label;
+  const step = frameStep(ctx);
   if (step.trim().length > 0) {
-    out.push(caption(ctx, "framelabel", origin.x, origin.y + 26, step, { accent: true }));
+    out.push(caption(ctx, "framelabel", origin.x, origin.y + 24, wrap(step.trim(), 44), {
+      accent: true,
+      fontSize: 14,
+    }));
   }
   return out;
 }
@@ -178,7 +188,7 @@ export function header(ctx: RenderContext): Skeleton[] {
 /** The frame's note, placed under a structure of the given height. */
 export function footer(ctx: RenderContext, belowY: number): Skeleton[] {
   if (ctx.bare || !ctx.frame.note.trim()) return [];
-  return [caption(ctx, "note", ctx.origin.x, belowY + 12, wrap(ctx.frame.note, 52))];
+  return [caption(ctx, "note", ctx.origin.x, belowY + 16, wrap(ctx.frame.note, 46), { fontSize: 14 })];
 }
 
 /** Hard-wrap a note so it stays inside the agent lane. */

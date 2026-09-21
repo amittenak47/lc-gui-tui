@@ -88,7 +88,7 @@ function AgentReview() {
     {id:"first",role:"user",content:"Explain this formula"},
     ...Array.from({length:18},(_,i)=>({id:`m${i}`,role:"assistant" as const,content:`**Step ${i}** uses $x^2$ and a clear paragraph.\n\n$$\\sum_{i=1}^n i$$`})),
     {id:"reply",role:"assistant",content:"A threaded answer.",replyTo:{id:"first",role:"user",excerpt:"Explain this formula"}},
-    {id:"draw",role:"assistant",content:"Walk along the array.",drawing:{program:parseVizProgram({id:"walk",viz:"array",title:"A small array walk",frames:[{label:"Start",cells:[1,2,3],pointers:{i:0}},{label:"Next",cells:[1,2,3],pointers:{i:1}}]})!,expanded:true,frameIndex:0}},
+    {id:"draw",role:"assistant",content:"Walk along the array.",drawing:{program:parseVizProgram({id:"walk",viz:"array",title:"A small array walk",frames:[{label:"Start",cells:[1,2,3],pointers:{i:0},note:"Each level: a^k subproblems of size n/b^k. Work per level = a^k · (n/b^k)^d."},{label:"Next",cells:[1,2,3],pointers:{i:1}}]})!,expanded:true,frameIndex:0}},
   ]);
   const onFrame=(id:string,frame:number)=>setMessages(current=>current.map(m=>m.drawing?.program.id===id?{...m,drawing:{...m.drawing,frameIndex:frame}}:m));
   const onToggle=(id:string,expanded:boolean)=>setMessages(current=>current.map(m=>m.id===id&&m.drawing?{...m,drawing:{...m.drawing,expanded}}:m));

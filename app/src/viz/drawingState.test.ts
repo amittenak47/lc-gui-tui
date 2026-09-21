@@ -20,8 +20,9 @@ function program(id: string): VizProgram {
 
 describe("drawingState", () => {
   it("marks new drawings expanded", () => {
-    const drawing = withNewDrawing(program("a"));
+    const drawing = withNewDrawing(program("a"), 47);
     expect(drawing.expanded).toBe(true);
+    expect(drawing.page).toBe(47);
     expect(drawing.redacted).toBeUndefined();
   });
 
@@ -60,9 +61,11 @@ describe("drawingState", () => {
       expanded: true,
       redacted: false,
       frameIndex: 2,
+      page: 12,
     });
     expect(restored?.program.id).toBe("nums");
     expect(restored?.frameIndex).toBe(2);
+    expect(restored?.page).toBe(12);
     expect(restoreMessageDrawing({ program: { viz: "nope" } })).toBeUndefined();
   });
 });

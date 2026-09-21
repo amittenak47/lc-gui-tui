@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { CoachProcessEvent } from "../api/types";
-import { ProcessBlock, isReasoningEvent, reasoningBodyForTurn } from "./ProcessBlock";
+import { ProcessBlock, isReasoningEvent, isThoughtProcessEvent, reasoningBodyForTurn } from "./ProcessBlock";
 import { ReasoningBlock } from "./ReasoningBlock";
 import { AgentRichText } from "./AgentRichText";
 import { ThinkingDots } from "./ThinkingDots";
@@ -19,7 +19,11 @@ export function AgentTurnResponse({ pending, events = [], reasoning, text, assis
   const wasLive = useRef(pending);
   const localDisclosure = useRef(newThinkingDisclosure());
   const displayState = disclosure ?? localDisclosure.current;
-  const hasSteps = showProcess && events.some(event => event.label !== "done" && !isReasoningEvent(event));
+  const hasThoughts = showProcess && events.some(isThoughtProcessEvent);
+  const waitingOnPipeline = pending && showProcess && events.some(
+    (event) => event.label !== "done" && !isReasoningEvent(event),
+  );
+  const hasSteps = hasThoughts || waitingOnPipeline;
   const body = reasoningBodyForTurn(reasoning, events);
   const finishCollapse = useCallback(() => setPhase(current => current === "collapsing" ? "answer" : current), []);
   useEffect(() => {

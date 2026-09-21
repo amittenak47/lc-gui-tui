@@ -12,6 +12,7 @@ import { createPortal } from "react-dom";
 
 import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/types";
 import { HoldButton } from "../components/HoldButton";
+import { AgentPanelSash } from "../components/AgentPanelSash";
 import { AnimatedDisclosure } from "../components/AnimatedDisclosure";
 import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
@@ -33,10 +34,12 @@ import {
 import { footnoteThemeVars } from "../util/footnoteTheme";
 import { useIsMobile } from "../util/mobile";
 import { PHOTO_ATTACH_LIMIT, pickPhotos } from "../util/photoAttach";
+import { drawingHeading } from "../viz/vizProse";
 import type { MessageDrawing } from "../viz/drawingState";
 import type { ArtifactRef } from "../util/padArtifacts";
 import type { AgentArtifactProposal } from "../util/agentArtifacts";
 import { ArtifactCards } from "./ArtifactCards";
+import { DrawingPreview } from "../viz/DrawingPreview";
 import { Timeline } from "../viz/Timeline";
 import { BridgePanel } from "./RevealDialog";
 import { ReviewPanel } from "./ReviewPanel";
@@ -1471,20 +1474,20 @@ export function AgentSidePanel({
       aria-label="Agent"
       aria-hidden={!open}
     >
+      {!mobile && open ? <AgentPanelSash /> : null}
       <div
         className="lc-agent-sheet-handle"
-        role="button"
-        tabIndex={0}
-        aria-expanded={open}
-        aria-label="Drag to resize agent; tap to hide"
-        title="Drag to resize; tap to hide"
+        role={mobile ? "button" : undefined}
+        tabIndex={mobile ? 0 : -1}
+        aria-expanded={mobile ? open : undefined}
+        aria-label={mobile ? "Drag to resize agent; tap to hide" : undefined}
+        title={mobile ? "Drag to resize; tap to hide" : undefined}
         onPointerDown={sheet.down}
         onPointerMove={sheet.move}
         onPointerUp={sheet.end}
         onPointerCancel={sheet.end}
         onLostPointerCapture={sheet.end}
-        onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpen(false); } }}
-        onClick={mobile ? undefined : () => setOpen(false)}
+        onKeyDown={mobile ? (event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpen(false); } }) : undefined}
       >
         <span className="lc-agent-fold-bar" aria-hidden />
       </div>
@@ -1603,9 +1606,6 @@ export function AgentSidePanel({
                 event.stopPropagation();
               }}
             >
-              {message.role === "assistant" ? (
-                <MessageFlags message={message} header />
-              ) : null}
               <div className="lc-agent-turn-head">
               <div className="lc-agent-turn-role-group">
               <div
@@ -1779,9 +1779,7 @@ export function AgentSidePanel({
                   ))}
                 </div>
               )}
-              {message.role !== "assistant" && (
-                <MessageFlags message={message} />
-              )}
+              <MessageFlags message={message} />
             </AgentMessageBubble>
             );
           })}
@@ -2371,7 +2369,7 @@ function MessageArtifactTools({
   );
 }
 
-function MessageFlags({ message, header = false }: { message: AgentChatMessage; header?: boolean }) {
+function MessageFlags({ message }: { message: AgentChatMessage }) {
   const pending = Boolean(message.pending);
   const failed = message.requestState === "failed";
   const flags = pending ? message.pendingAck?.flags ?? message.flags : message.flags;
@@ -2380,7 +2378,7 @@ function MessageFlags({ message, header = false }: { message: AgentChatMessage; 
   if (!text && !failed) return null;
   return (
     <div
-      className={`lc-agent-turn-footnotes${header ? " lc-agent-turn-header-flags" : ""}${failed ? " is-failed" : ""}`}
+      className={`lc-agent-turn-footnotes${failed ? " is-failed" : ""}`}
       role={pending ? "status" : undefined}
     >
       {failed ? (
@@ -2412,7 +2410,7 @@ function DrawingSection({
   onToggle: (expanded: boolean) => void;
   onFrame: (frameIndex: number) => void;
 }) {
-  const title = drawing.program.title || drawing.program.id || "Drawing";
+  const title = drawingHeading(drawing.program, drawing.frameIndex ?? 0);
   const expanded = drawing.expanded && !drawing.redacted;
 
   return (
@@ -2433,6 +2431,11 @@ function DrawingSection({
       </button>
       <AnimatedDisclosure open={expanded}>
         <div className="lc-agent-drawing-body">
+          <DrawingPreview
+            program={drawing.program}
+            frameIndex={drawing.frameIndex ?? 0}
+            title={title}
+          />
           <Timeline
             program={drawing.program}
             initialFrame={drawing.frameIndex ?? 0}

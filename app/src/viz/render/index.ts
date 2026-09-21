@@ -103,12 +103,13 @@ export function renderViz(
   program: VizProgram,
   frameIndex: number,
   origin: { x: number; y: number },
+  options?: { bare?: boolean },
 ): Skeleton[] {
   const index = Math.min(Math.max(frameIndex, 0), program.frames.length - 1);
   const frame = program.frames[index];
   if (!frame) return [];
 
-  const ctx: RenderContext = { program, frame, frameIndex: index, origin };
+  const ctx: RenderContext = { program, frame, frameIndex: index, origin, bare: options?.bare };
   const skeletons = RENDERERS[program.viz](ctx);
   return tagViz(skeletons, program.id);
 }

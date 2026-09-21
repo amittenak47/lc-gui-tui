@@ -312,6 +312,7 @@ import {
   type LinedRuling,
 } from "../util/linedPaperPref";
 import { loadInkHandedness, type InkHandedness } from "../util/inkHandedness";
+import { loadUiHandedness, type UiHandedness } from "../util/uiHandedness";
 import { loadInkPressureClip } from "../util/inkPressureClip";
 import { loadInkSmoothing, loadInkSmoothingMode, loadInkClothoid, loadInkCapillary } from "../util/inkSmoothingPref";
 import {
@@ -1381,6 +1382,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkFullness, setInkFullnessState] = useState(() => inkPrefsRef.current.inkFullness);
   const strokeWidth = activeTool === "eraser" ? eraserStrokeWidth : penStrokeWidth;
   const [inkHandedness, setInkHandedness] = useState<InkHandedness>(() => loadInkHandedness());
+  const [uiHandedness, setUiHandedness] = useState<UiHandedness>(() => loadUiHandedness());
   const [pressureClip, setPressureClip] = useState(() => loadInkPressureClip());
   const [inkSmoothing, setInkSmoothing] = useState(() => loadInkSmoothing());
   const [inkSmoothingMode, setInkSmoothingMode] = useState(() => loadInkSmoothingMode());
@@ -3645,6 +3647,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
     window.addEventListener("lc-ink-handedness", onHand);
     return () => window.removeEventListener("lc-ink-handedness", onHand);
+  }, []);
+
+  useEffect(() => {
+    const onUi = (event: Event) => {
+      const detail = (event as CustomEvent<UiHandedness>).detail;
+      setUiHandedness(detail === "left" || detail === "right" ? detail : loadUiHandedness());
+    };
+    window.addEventListener("lc-ui-handedness", onUi);
+    return () => window.removeEventListener("lc-ui-handedness", onUi);
   }, []);
 
   useEffect(() => {
@@ -9635,6 +9646,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               "lc-map-controls lc-map-controls-paged",
               agentOpen && mobile ? "is-agent-covered" : "",
               mapChromeHidden ? "lc-map-controls-collapsed" : "",
+              uiHandedness !== inkHandedness ? "is-mixed-hands" : "",
             ]
               .filter(Boolean)
               .join(" ")}

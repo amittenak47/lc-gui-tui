@@ -9,6 +9,8 @@ export const MAX_VISIBLE_DRAWINGS = 4;
 
 export interface MessageDrawing {
   program: VizProgram;
+  /** 1-based PDF page this diagram belongs to, when the ask had one. */
+  page?: number;
   /** When true, the diagram is shown in the coach lane. */
   expanded: boolean;
   /**
@@ -108,8 +110,14 @@ export function setDrawingExpanded<T extends { id: string; drawing?: MessageDraw
 /** Attach a freshly drawn program to an assistant message (expanded). */
 export function withNewDrawing(
   program: VizProgram,
+  page?: number,
 ): MessageDrawing {
-  return { program, expanded: true, frameIndex: 0 };
+  return {
+    program,
+    expanded: true,
+    frameIndex: 0,
+    ...(page != null && page >= 1 ? { page: Math.floor(page) } : {}),
+  };
 }
 
 /** Rehydrate a stored drawing blob, or null if unusable. */
@@ -123,5 +131,6 @@ export function restoreMessageDrawing(raw: unknown): MessageDrawing | undefined 
     expanded: record.expanded === true,
     redacted: record.redacted === true,
     frameIndex: typeof record.frameIndex === "number" ? record.frameIndex : 0,
+    ...(typeof record.page === "number" && record.page >= 1 ? { page: Math.floor(record.page) } : {}),
   };
 }

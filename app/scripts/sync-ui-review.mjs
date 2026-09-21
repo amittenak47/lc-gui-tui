@@ -156,10 +156,8 @@ try {
     await shot('pending-footer');
     await evaluate("window.reviewThinkingStep()");
     await sleep(90);
-    const thinkingPartial = await evaluate("document.querySelector('[data-coach-message=motion-agent] .lc-agent-process-step-body').textContent");
-    await sleep(1700);
     const thinkingFull = await evaluate("document.querySelector('[data-coach-message=motion-agent] .lc-agent-process-step-body').textContent");
-    assert(thinkingFull.length>thinkingPartial.length && thinkingFull.includes('counted twice'), 'Live thinking must reveal the full detail');
+    assert(thinkingFull.includes('counted twice'), 'Live thinking must show the full detail');
     await shot('thinking-expanded');
     const thinkingHeight = await evaluate("document.querySelector('[data-coach-message=motion-agent]').getBoundingClientRect().height");
     await evaluate("window.reviewCompleteAgentTurn()");

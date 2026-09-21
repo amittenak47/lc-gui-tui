@@ -701,6 +701,20 @@ describe("reading pan compositor", () => {
     );
   });
 
+  it("stacks mixed-hand checkers instead of overlapping them", () => {
+    const src = readFileSync(join(here, "Board.tsx"), "utf8");
+    const css = readFileSync(join(here, "../styles.css"), "utf8");
+    expect(src).toContain('uiHandedness !== inkHandedness ? "is-mixed-hands"');
+    expect(css).toContain(".lc-map-controls.is-mixed-hands.lc-map-controls-paged .lc-map-chrome-left");
+    expect(css).toContain("bottom: calc(var(--lc-utility-tray-height, 36px) + 12px)");
+    const start = css.indexOf(
+      ".lc-map-controls.is-mixed-hands .lc-map-chrome-stack.has-wake.is-open > .lc-chrome-wake",
+    );
+    const mixed = css.slice(start, start + 900);
+    expect(mixed).toContain("transform: translateX(-50%)");
+    expect(mixed).not.toContain("translateY(calc(100% + 4px))");
+  });
+
   it("places a text box on drag, without a hover ghost following the pointer", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     expect(src).toContain("Drag-to-draw: no hover preview chasing the pointer");
