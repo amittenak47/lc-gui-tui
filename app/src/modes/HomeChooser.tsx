@@ -5,16 +5,16 @@
  * header already says `choose a mode to start`, and the question was asking
  * something the four cards answer by existing.
  *
- * Cards stack in one column so the icon, title and full blurb stay on every
- * device instead of collapsing into a cramped row of tiles. `homeModeColumns`
- * is kept for the older multi-column layout tests.
+ * Cards stack in one column so the icon, colored name and full blurb stay on
+ * every device instead of collapsing into a cramped row of tiles.
+ * `homeModeColumns` is kept for the older multi-column layout tests.
  *
- * Each icon tile runs a small looping scene (type, draw, mark, meteor) so the
- * glyph is never a static stamp. Marks appear one after another and wipe off;
- * they are real SVG/HTML, not a wallpaper that fades in all at once.
+ * Practice, Whiteboard and Annotate play hover-in / hover-out scenes. Browse
+ * and Explore keep a quiet loop. Marks and doodles are real SVG, not a
+ * wallpaper that fades in all at once.
  */
 
-import type { CSSProperties, ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { FEATURE_LEETCODE } from "../featureFlags";
 
@@ -33,7 +33,6 @@ export interface HomeChooserProps {
 interface HomeMode {
   id: string;
   kicker: string;
-  title: string;
   blurb: string;
   icon: ReactNode;
   live?: ReactNode;
@@ -41,6 +40,11 @@ interface HomeMode {
   wip?: boolean;
   onOpen: () => void;
 }
+
+type IconScene = "rest" | "in" | "out";
+
+const HOVER_SCENES = new Set(["practice", "whiteboard", "annotate"]);
+const LEAVE_MS: Record<string, number> = { practice: 1500, whiteboard: 700, annotate: 280 };
 
 /**
  * Columns for the middle tier, where cards are still full but two abreast.
@@ -55,9 +59,10 @@ export function homeModeColumns(count: number): number {
 }
 
 /** Shared geometry for the card glyphs — one stroke weight across all four. */
-function Glyph({ children }: { children: ReactNode }) {
+function Glyph({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <svg
+      className={className}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -198,7 +203,6 @@ export function HomeChooser({
           {
             id: "practice",
             kicker: "LeetCode",
-            title: "Practice",
             blurb: "Browse problems and run tests in this app.",
             live: <PracticeLive />,
             icon: (
@@ -214,58 +218,54 @@ export function HomeChooser({
       : []),
     {
       id: "whiteboard",
-      kicker: "Scratch",
-      title: "Whiteboard",
+      kicker: "Whiteboard",
       blurb: "Freeform pages for sketches, notes, and diagrams.",
       icon: (
-        // Page + nib stay put. The doodles draw, sit, and wipe in sequence on
-        // the page — a stick figure, a scribble that gets erased, a note line.
-        <Glyph>
-          <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h9" />
-          <path d="M13 2v6h6V9" />
+        <Glyph className="lc-home-glyph-sheet">
+          <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <path d="M15 2v6h6" />
           <g className="lc-home-stick" fill="none">
-            <circle className="lc-home-stick-head" cx="7.6" cy="14.4" r="1.05" pathLength={1} />
-            <path d="M7.6 15.5v3.1" pathLength={1} />
-            <path d="M7.6 16.6 6.2 17.8" pathLength={1} />
-            <path d="M7.6 16.6 9.1 17.7" pathLength={1} />
-            <path d="M7.6 18.6 6.4 20.6" pathLength={1} />
-            <path d="M7.6 18.6 8.9 20.6" pathLength={1} />
+            <circle className="lc-home-stick-head" cx="8.2" cy="13.6" r="1.05" pathLength={1} />
+            <path d="M8.2 14.7v3.1" pathLength={1} />
+            <path d="M8.2 15.8 6.8 17" pathLength={1} />
+            <path d="M8.2 15.8 9.7 16.9" pathLength={1} />
+            <path d="M8.2 17.8 7 19.8" pathLength={1} />
+            <path d="M8.2 17.8 9.5 19.8" pathLength={1} />
           </g>
           <path
             className="lc-home-scribble"
-            d="M14.6 8.2c1.1-1.4 2.6.7 3.8-.3 1.1 1.3 2.1-.5 3.3.9"
+            d="M13.4 9.2c1.1-1.4 2.6.7 3.8-.3 1.1 1.3 2.1-.5 3.3.9"
             pathLength={1}
           />
           <path
             className="lc-home-note"
-            d="M13.8 17.4c1.5-.5 2.4 1.1 3.8.2 1.3.9 2.2-.5 3.4.7"
+            d="M12.8 16.6c1.5-.5 2.4 1.1 3.8.2 1.3.9 2.2-.5 3.4.7"
             pathLength={1}
           />
-          <path className="lc-home-nib" d="m20.2 11.3-6.6 6.6-2.8.8.8-2.8 6.6-6.6z" />
+          <path className="lc-home-nib" d="m20.4 10.8-6.4 6.4-2.7.8.8-2.7 6.4-6.4z" />
         </Glyph>
       ),
       onOpen: onWhiteboard,
     },
     {
       id: "annotate",
-      kicker: "Reading",
-      title: "Annotate",
+      kicker: "Annotate",
       blurb: "Mark up PDFs, docs, code, and web pages.",
       icon: (
-        <Glyph>
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-          <path d="M14 2v6h6" />
-          <path className="lc-home-bt-top" d="M8 10.4h8.2" pathLength={1} />
-          <path className="lc-home-bt-mid" d="M8 12.15h8.2" pathLength={1} />
-          <path className="lc-home-rule-1" d="M8 14h8.2" pathLength={1} />
-          <path className="lc-home-rule-2" d="M8 15.85h7.2" pathLength={1} />
-          <path className="lc-home-rule-3" d="M8 17.7h8.2" pathLength={1} />
-          <path className="lc-home-bt-bot" d="M8 19.7h8.2" pathLength={1} />
+        <Glyph className="lc-home-glyph-page">
+          <path d="M15.2 1.4H5.2A2.1 2.1 0 0 0 3.1 3.5v17a2.1 2.1 0 0 0 2.1 2.1h13.6a2.1 2.1 0 0 0 2.1-2.1V7.6z" />
+          <path d="M15.2 1.4v6.2h6.2" />
+          <path className="lc-home-bt-top" d="M6.6 9.6h10.6" pathLength={1} />
+          <path className="lc-home-bt-mid" d="M6.6 11.45h10.6" pathLength={1} />
+          <path className="lc-home-rule-1" d="M6.6 13.4h10.6" pathLength={1} />
+          <path className="lc-home-rule-2" d="M6.6 15.35h9.2" pathLength={1} />
+          <path className="lc-home-rule-3" d="M6.6 17.3h10.6" pathLength={1} />
+          <path className="lc-home-bt-bot" d="M6.6 19.4h10.6" pathLength={1} />
           <rect
             className="lc-home-mark lc-home-mark-hl-a"
-            x="7.7"
-            y="13.35"
-            width="8.6"
+            x="6.3"
+            y="12.7"
+            width="11"
             height="1.55"
             rx="0.25"
             fill="#f5d76e"
@@ -273,29 +273,29 @@ export function HomeChooser({
           />
           <path
             className="lc-home-mark lc-home-mark-ul"
-            d="M8 16.55h6.6"
+            d="M6.6 16.05h8.4"
             stroke="#3b82f6"
             strokeWidth="1.15"
             pathLength={1}
           />
           <path
             className="lc-home-mark lc-home-mark-brace"
-            d="M7.15 13.2v5.1"
+            d="M5.7 12.5v5.4"
             stroke="#22c55e"
             strokeWidth="1.35"
             pathLength={1}
           />
           <path
             className="lc-home-mark lc-home-mark-strike"
-            d="M8.2 18.35h6.4"
+            d="M6.8 18.05h8.2"
             stroke="#f43f5e"
             strokeWidth="1.2"
             pathLength={1}
           />
           <circle
             className="lc-home-mark lc-home-mark-fn"
-            cx="17.55"
-            cy="10.55"
+            cx="18.15"
+            cy="10.15"
             r="1.15"
             fill="none"
             stroke="#a78bfa"
@@ -304,14 +304,22 @@ export function HomeChooser({
           />
           <rect
             className="lc-home-mark lc-home-mark-hl-b"
-            x="7.7"
-            y="17.05"
-            width="8.6"
+            x="6.3"
+            y="16.6"
+            width="11"
             height="1.5"
             rx="0.25"
             fill="#86efac"
             stroke="none"
           />
+          <g className="lc-home-panel lc-home-panel-a">
+            <rect x="14.6" y="11.8" width="6.8" height="4.3" rx="0.7" />
+            <path d="M15.5 13.15h5M15.5 14.45h3.6" />
+          </g>
+          <g className="lc-home-panel lc-home-panel-b">
+            <rect x="2.2" y="15.6" width="6.2" height="3.9" rx="0.65" />
+            <path d="M3.05 16.85h4.4M3.05 18.05h2.9" />
+          </g>
         </Glyph>
       ),
       onOpen: onAnnotate,
@@ -319,7 +327,6 @@ export function HomeChooser({
     {
       id: "browse",
       kicker: "Web",
-      title: "Browse",
       blurb: "Open a page, then write straight onto the snapshot.",
       wip: true,
       live: <BrowseLive />,
@@ -334,8 +341,7 @@ export function HomeChooser({
     },
     {
       id: "explore",
-      kicker: "Notes",
-      title: "Explore",
+      kicker: "Explore",
       blurb: "See how files, notebooks, and problems connect.",
       wip: true,
       live: <ExploreLive />,
@@ -360,36 +366,51 @@ export function HomeChooser({
     <nav className="lc-home-chooser" aria-label="Choose a workspace">
       <div className="lc-home-chooser-grid">
         {modes.map((mode) => (
-          /*
-            The cell, not the card, is the query container.
-            A container's own rules cannot answer its own query — an element is
-            never its own container — so the card would have been able to drop
-            its prose at a width it could not itself lay out differently. One
-            wrapper and the card can read the width it has been given.
-          */
-          <span key={mode.id} className="lc-home-cell">
-            <button
-              type="button"
-              className="lc-home-card"
-              data-mode={mode.id}
-              aria-label={`${mode.title} — ${mode.blurb}${mode.wip ? " (work in progress)" : ""}`}
-              disabled={busy}
-              onClick={mode.onOpen}
-            >
-              {mode.wip ? <span className="lc-home-wip">(WIP)</span> : null}
-              <span className="lc-home-card-icon" aria-hidden>
-                {mode.live}
-                {mode.icon}
-              </span>
-              <span className="lc-home-card-text">
-                <span className="lc-home-card-kicker">{mode.kicker}</span>
-                <strong className="lc-home-card-title">{mode.title}</strong>
-                <span className="lc-home-card-blurb">{mode.blurb}</span>
-              </span>
-            </button>
-          </span>
+          <HomeCard key={mode.id} mode={mode} busy={busy} />
         ))}
       </div>
     </nav>
+  );
+}
+
+function HomeCard({ mode, busy }: { mode: HomeMode; busy: boolean }) {
+  const [scene, setScene] = useState<IconScene>("rest");
+  const leaveTimer = useRef(0);
+  const hoverable = HOVER_SCENES.has(mode.id);
+  useEffect(() => () => window.clearTimeout(leaveTimer.current), []);
+  return (
+    <span className="lc-home-cell">
+      <button
+        type="button"
+        className="lc-home-card"
+        data-mode={mode.id}
+        data-scene={hoverable ? scene : undefined}
+        aria-label={`${mode.kicker} — ${mode.blurb}${mode.wip ? " (work in progress)" : ""}`}
+        disabled={busy}
+        onClick={mode.onOpen}
+        onMouseEnter={hoverable ? () => {
+          window.clearTimeout(leaveTimer.current);
+          setScene("in");
+        } : undefined}
+        onMouseLeave={hoverable ? () => {
+          setScene("out");
+          window.clearTimeout(leaveTimer.current);
+          leaveTimer.current = window.setTimeout(
+            () => setScene("rest"),
+            LEAVE_MS[mode.id] ?? 400,
+          );
+        } : undefined}
+      >
+        {mode.wip ? <span className="lc-home-wip">(WIP)</span> : null}
+        <span className="lc-home-card-icon" aria-hidden>
+          {mode.live}
+          {mode.icon}
+        </span>
+        <span className="lc-home-card-text">
+          <span className="lc-home-card-kicker">{mode.kicker}</span>
+          <span className="lc-home-card-blurb">{mode.blurb}</span>
+        </span>
+      </button>
+    </span>
   );
 }
