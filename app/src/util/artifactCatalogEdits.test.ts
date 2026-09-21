@@ -9,6 +9,17 @@ const create: ArtifactCatalogEdit = { type: "create", id: "file1", title: "Note.
 const initial = () => editArtifactCatalog(undefined, parent, null, create, 1);
 
 describe("revision-checked attachment edits", () => {
+  it("restores snapshots explicitly without losing newer attachments or tombstones", () => {
+    const snapshot = initial();
+    const extra = editArtifactCatalog(snapshot, parent, snapshot.revision, { ...create, id: "new" } as ArtifactCatalogEdit, 2);
+    const deleted = editArtifactCatalog(extra, parent, extra.revision, { type: "delete", id: "file1", expectedRevision: snapshot.artifacts[0].revision }, 3);
+    const restored = editArtifactCatalog(deleted, parent, deleted.revision, { type: "snapshot", catalog: snapshot }, 4);
+    expect(restored.artifacts).toHaveLength(2);
+    expect(restored.artifacts[0]).toMatchObject({ restoredFrom: deleted.artifacts[0].revision });
+    expect(restored.artifacts[0].deletedAt).toBeUndefined();
+    expect(restored.artifacts[1]).toEqual(extra.artifacts[1]);
+    expect(requireArtifactCatalogTransition(deleted, restored, parent)).toEqual(restored);
+  });
   it("creates independent metadata without mutating input and updates against the known base", () => {
     const before = initial();
     const next = editArtifactCatalog(before, parent, before.revision, {

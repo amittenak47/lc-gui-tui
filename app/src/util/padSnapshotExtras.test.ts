@@ -9,6 +9,8 @@ const putEdge = vi.fn(async (_edge?: unknown) => {});
 const getAnnotateDoc = vi.fn(async (_id?: string): Promise<unknown> => null);
 const saveAnnotateDoc = vi.fn(async (_entry?: unknown) => {});
 const applyFootnoteBoards = vi.fn(async (_docId?: string, _boards?: unknown) => {});
+const restoreArtifactSnapshot = vi.fn(async () => {});
+vi.mock("./artifactSnapshotRestore", () => ({ restoreArtifactSnapshot: () => restoreArtifactSnapshot() }));
 
 vi.mock("./inkPageStore", () => ({
   annotateDocKey: (id: string) => `md:${id}`,
@@ -60,12 +62,13 @@ beforeEach(() => {
 });
 
 describe("applyPadSnapshotExtras", () => {
-  it("refuses attachment-aware restore before deleting any live ink or source", async () => {
-    await expect(applyPadSnapshotExtras("annotate", "a1", {
+  it("uses the atomic attachment restore instead of separately deleting ink/source", async () => {
+    await applyPadSnapshotExtras("annotate", "a1", {
       name: "old", board, source: "older text", artifactBundle: {
         v: 1, catalog: { v: 1, parent: { kind: "annotate", id: "a1" }, revision: "c1", artifacts: [] }, assets: [],
       },
-    })).rejects.toThrow("Attachment-aware restore");
+    });
+    expect(restoreArtifactSnapshot).toHaveBeenCalledOnce();
     expect(deleteInkPages).not.toHaveBeenCalled();
     expect(saveAnnotateDoc).not.toHaveBeenCalled();
     expect(applyFootnoteBoards).not.toHaveBeenCalled();

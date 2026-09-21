@@ -152,9 +152,14 @@ export async function applyPadSnapshotExtras(
   >,
 ): Promise<void> {
   const bundle = parseArtifactSnapshotBundle(snap.artifactBundle, { kind, id: key });
-  // Capture/transport precedes restore UI. Never delete live ink and only
-  // then discover this snapshot needs the explicit artifact restore workflow.
-  if (bundle) throw new Error("This snapshot contains attachments. Attachment-aware restore is not available yet; current work was kept.");
+  if (bundle) {
+    const { restoreArtifactSnapshot } = await import("./artifactSnapshotRestore");
+    await restoreArtifactSnapshot({ kind, id: key }, snap, bundle);
+    for (const edge of parseSnapshotEdges(snap.edges)) {
+      if (!await edgeIsGone(edge.id)) await putEdge(edge);
+    }
+    return;
+  }
   const docKey = kind === "whiteboard" ? whiteboardDocKey(key) : annotateDocKey(key);
   /*
    * A restore replaces the document's ink. It does not merge into it.

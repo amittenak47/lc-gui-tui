@@ -9,6 +9,7 @@ export class ArtifactEditConflict extends Error {
 
 type ArtifactPatch = Partial<Pick<PadArtifact, "title" | "associations" | "content">>;
 export type ArtifactCatalogEdit =
+  | { type: "snapshot"; catalog: ArtifactCatalog }
   | { type: "create"; id: string; title: string; content: ArtifactContent; associations: ArtifactAssociation[] }
   | { type: "update"; id: string; expectedRevision: string; patch: ArtifactPatch }
   | { type: "delete" | "restore"; id: string; expectedRevision: string }
@@ -66,7 +67,23 @@ export function editArtifactCatalog(
   const entries = before?.artifacts ?? [];
   let changed = false;
   let artifacts: PadArtifact[];
-  if (edit.type === "create") {
+  if (edit.type === "snapshot") {
+    const snapshot = artifactCatalogFields(edit.catalog, parent).artifacts!;
+    const restored = new Map(snapshot.artifacts.map(item => [item.id, item]));
+    // A snapshot is explicit restoration, not garbage collection. Retain items
+    // made since the snapshot, including tombstones and unfiled work.
+    artifacts = entries.map(item => restored.get(item.id) ?? item);
+    for (const item of snapshot.artifacts) if (!entries.some(old => old.id === item.id)) artifacts.push(item);
+    artifacts = artifacts.map(item => {
+      if (!restored.has(item.id)) return item;
+      const old = entries.find(entry => entry.id === item.id);
+      if (old && JSON.stringify(old) === JSON.stringify(item)) return old;
+      const next = { ...item, revision: crypto.randomUUID(), updatedAt: Math.max(now, (old?.updatedAt ?? 0) + 1) };
+      if (old?.deletedAt !== undefined && next.deletedAt === undefined) next.restoredFrom = old.revision;
+      return next;
+    });
+    changed = true;
+  } else if (edit.type === "create") {
     if (entries.some((item) => item.id === edit.id)) throw new ArtifactEditConflict();
     artifacts = [...entries, { id: edit.id, title: edit.title, content: edit.content,
       associations: edit.associations, revision: crypto.randomUUID(), createdAt: now, updatedAt: now }];
