@@ -185,9 +185,54 @@ pub struct AskContext {
 }
 
 pub struct AskOutcome {
+    pub artifacts: Vec<ArtifactProposal>,
+    pub reasoning: String,
     pub reply: String,
     pub proposed: Vec<ProposedAnnotation>,
     pub programs: Vec<VizProgram>,
+}
+
+/// App-owned output proposals, never filesystem paths or writes on the daemon.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactProposal {
+    pub kind: String,
+    pub title: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub programs: Vec<VizProgram>,
+}
+
+impl ArtifactProposal {
+    fn validate(&self) -> Result<()> {
+        anyhow::ensure!(matches!(self.kind.as_str(), "whiteboard" | "code" | "markdown"), "unsupported attachment kind");
+        anyhow::ensure!(!self.title.trim().is_empty() && self.title.len() <= 256, "attachment title must be 1–256 bytes");
+        anyhow::ensure!(self.source.len() <= 512_000 && self.programs.len() <= 8, "attachment is too large");
+        anyhow::ensure!(self.kind == "whiteboard" || self.programs.is_empty(), "document attachments use source, not diagram programs");
+        anyhow::ensure!(self.kind != "whiteboard" || self.source.is_empty(), "whiteboard attachments use programs, not source");
+        let mut ids = std::collections::HashSet::new();
+        for program in &self.programs {
+            anyhow::ensure!(ids.insert(&program.id), "duplicate diagram ID");
+            if let Some(why) = program.rejection() { anyhow::bail!("{why}"); }
+        }
+        Ok(())
+    }
+}
+
+fn artifact_tools() -> Vec<serde_json::Value> {
+    let program_schemas: Vec<_> = ask_draw_tools().into_iter()
+        .filter(|schema| matches!(schema["function"]["name"].as_str(), Some("draw_structure" | "animate_trace")))
+        .map(|schema| schema["function"]["parameters"].clone()).collect();
+    vec![tool("create_attachment", "Only when the user explicitly asks to create/save a separate whiteboard, code file or Markdown note. Propose app-owned content attached to this chat/marks. The client saves it; never claim a disk file was written. Ordinary Draw uses draw_structure/animate_trace instead.", serde_json::json!({
+        "type":"object", "additionalProperties":false,
+        "properties": {
+            "kind":{"type":"string","enum":["whiteboard","code","markdown"]},
+            "title":{"type":"string","maxLength":256},
+            "source":{"type":"string","description":"Complete code/Markdown source; empty for a whiteboard","maxLength":512000},
+            "programs":{"type":"array","maxItems":8,"items":{"anyOf":program_schemas},"description":"Validated draw_structure/animate_trace programs; empty for text files"}
+        }, "required":["kind","title"]
+    }))]
 }
 
 const MAX_TOOL_ITERS: usize = 3;
@@ -262,15 +307,17 @@ fn run_tooled_ask(
     events: &EventSink,
     reasoning: bool,
     effort: Option<ReasoningEffort>,
-    tools: Vec<serde_json::Value>,
+    mut tools: Vec<serde_json::Value>,
 ) -> Result<AskOutcome> {
+    tools.extend(artifact_tools());
     let system = format!("{system}\nFormat prose with Markdown; use $...$ for inline math and $$...$$ on separate lines for display math.");
     let system = system.as_str();
     let mut messages = vec![
         ChatMessage::system(system),
-        ChatMessage::user(user.clone()).with_images(images),
+        ChatMessage::user(user.clone()).with_images(images.clone()),
     ];
     let mut proposed = Vec::new();
+    let mut artifacts = Vec::new();
     let mut programs = Vec::new();
     let mut reply = match provider.chat_ex_with_events(
         &ChatRequest::new(messages.clone())
@@ -284,7 +331,7 @@ fn run_tooled_ask(
             let fallback = format!("{}\n\n{}", tools_as_prompt(&tools), user);
             let fb_messages = vec![
                 ChatMessage::system(system),
-                ChatMessage::user(fallback),
+                ChatMessage::user(fallback).with_images(images),
             ];
             let mut parsed =
                 provider.chat_ex_with_events(
@@ -298,6 +345,8 @@ fn run_tooled_ask(
             }
             if parsed.tool_calls.is_empty() {
                 return Ok(AskOutcome {
+                    artifacts,
+                    reasoning: parsed.reasoning,
                     reply: parsed.content.trim().to_string(),
                     proposed,
                     programs,
@@ -309,6 +358,7 @@ fn run_tooled_ask(
         Err(err) => return Err(err),
     };
 
+    let mut reasoning_parts = vec![reply.reasoning.clone()];
     for _ in 0..MAX_TOOL_ITERS {
         if reply.tool_calls.is_empty() {
             break;
@@ -317,6 +367,21 @@ fn run_tooled_ask(
         for call in &reply.tool_calls {
             events.tool(call.name.as_str(), ToolStatus::Proposed, tool_summary(&call.name), None);
             match call.name.as_str() {
+                "create_attachment" => {
+                    let result = serde_json::from_value::<ArtifactProposal>(call.arguments.clone()).map_err(anyhow::Error::from)
+                        .and_then(|proposal| { proposal.validate()?; anyhow::ensure!(artifacts.len() < 8, "too many attachments in one answer"); Ok(proposal) });
+                    match result {
+                        Ok(proposal) => {
+                            events.tool(&call.name, ToolStatus::Accepted, format!("Preparing {}", proposal.title), None);
+                            results.push(format!("{}: prepared attachment content for the client to save; persistence is not yet confirmed", call.name));
+                            artifacts.push(proposal);
+                        }
+                        Err(error) => {
+                            events.tool(&call.name, ToolStatus::Rejected, "Invalid attachment", Some(error.to_string()));
+                            results.push(format!("{}: rejected: {error}", call.name));
+                        }
+                    }
+                }
                 "draw_structure" | "animate_trace" => {
                     match serde_json::from_value::<VizProgram>(call.arguments.clone()) {
                         Ok(program) => match program.rejection() {
@@ -421,6 +486,7 @@ fn run_tooled_ask(
         if reply.tool_calls.is_empty() {
             reply.tool_calls = parse_tool_calls(&reply.content);
         }
+        reasoning_parts.push(reply.reasoning.clone());
     }
     if reply.content.trim().is_empty() {
         messages.push(ChatMessage::user(
@@ -432,12 +498,22 @@ fn run_tooled_ask(
                 .with_reasoning_effort(effort),
             events,
         )?;
+        reasoning_parts.push(reply.reasoning.clone());
     }
     Ok(AskOutcome {
+        artifacts,
+        reasoning: reasoning_parts.into_iter().filter(|part| !part.trim().is_empty()).collect::<Vec<_>>().join("\n\n"),
         reply: reply.content.trim().to_string(),
         proposed,
         programs,
     })
+}
+
+/// Problem Ask keeps its existing tutor prompt and only adds explicit file output.
+pub fn run_problem_artifact_ask(provider: &dyn LlmProvider, cfg: &Config, system: &str,
+    user: String, images: Vec<String>, events: &EventSink, reasoning: bool, effort: Option<ReasoningEffort>) -> Result<AskOutcome> {
+    let ctx = AskContext { document_hash: None, page: None, highlight: String::new(), page_text: String::new(), marks_prose: String::new(), retrieved: String::new() };
+    run_tooled_ask(provider, cfg, system, user, images, &ctx, events, reasoning, effort, Vec::new())
 }
 
 fn tool_summary(name: &str) -> &'static str {
@@ -647,6 +723,15 @@ fn search_web_snippets(base: &str, query: &str, n: usize) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn attachment_proposals_are_owned_bounded_and_typed() {
+        let valid = super::ArtifactProposal { kind: "code".into(), title: "answer.py".into(), source: "print(1)".into(), programs: vec![] };
+        assert!(valid.validate().is_ok());
+        let mut invalid = valid.clone(); invalid.kind = "filesystem".into(); assert!(invalid.validate().is_err());
+        invalid = valid.clone(); invalid.kind = "whiteboard".into(); assert!(invalid.validate().is_err());
+        invalid = valid.clone(); invalid.source = "x".repeat(512_001); assert!(invalid.validate().is_err());
+        assert!(serde_json::from_value::<super::ArtifactProposal>(serde_json::json!({"kind":"code","title":"answer.py","path":"/tmp/file"})).is_err());
+    }
     use super::*;
     use std::cell::Cell;
 

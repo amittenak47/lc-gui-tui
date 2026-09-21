@@ -688,6 +688,8 @@ impl From<&crate::llm::coach::CoachEvent> for ProcessEventDto {
 
 #[derive(Debug, Serialize)]
 pub struct AskEnvelope {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<crate::llm::docs::ArtifactProposal>,
     pub task_id: String,
     pub provider: String,
     pub reply: String,
@@ -903,10 +905,11 @@ pub async fn run_ask(
             )?;
             events.stage("done", "");
             return Ok(AskEnvelope {
+                artifacts: outcome.artifacts,
                 task_id: meta.task_id,
                 provider: provider.label(),
                 reply: outcome.reply,
-                reasoning: String::new(),
+                reasoning: outcome.reasoning,
                 proposed_annotations: outcome.proposed,
                 programs: outcome.programs,
                 process_events: Vec::new(),
@@ -925,30 +928,25 @@ pub async fn run_ask(
             )?;
             events.stage("done", "");
             return Ok(AskEnvelope {
+                artifacts: outcome.artifacts,
                 task_id: meta.task_id,
                 provider: provider.label(),
                 reply: outcome.reply,
-                reasoning: String::new(),
+                reasoning: outcome.reasoning,
                 proposed_annotations: outcome.proposed,
                 programs: outcome.programs,
                 process_events: Vec::new(),
             });
         }
-        let reply = provider.chat_ex_with_events(
-            &ChatRequest::new(vec![
-                ChatMessage::system(ASK_SYSTEM_PROMPT),
-                ChatMessage::user(prompt).with_images(images),
-            ])
-            .with_reasoning(want_reasoning)
-            .with_reasoning_effort(effort),
-            &events,
-        )?;
+        let reply = crate::llm::docs::run_problem_artifact_ask(provider.as_ref(), &cfg,
+            ASK_SYSTEM_PROMPT, prompt, images, &events, want_reasoning, effort)?;
         events.stage("done", "");
         Ok(AskEnvelope {
+            artifacts: reply.artifacts,
             task_id: meta.task_id,
             provider: provider.label(),
-            reply: reply.content.trim().to_string(),
-            reasoning: String::new(),
+            reply: reply.reply,
+            reasoning: reply.reasoning,
             proposed_annotations: Vec::new(),
             programs: Vec::new(),
             process_events: Vec::new(),
