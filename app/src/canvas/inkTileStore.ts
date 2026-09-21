@@ -39,9 +39,9 @@ export function inkTilePersistKey(
   ops: readonly InkOp[],
   clip: SceneBounds | null,
 ): string {
-  // Older workers could persist pixels missing newly appended ink under the
-  // new history's key. Rebuild those disposable bitmaps from the saved ops.
-  return `v2:${inkOpsFingerprint(ops, inkClipFingerprint(clip))}`;
+  // Ribbon geometry replaced capsules. Rebuild disposable bitmaps only;
+  // authored stroke data and annotation history are unchanged.
+  return `v3:${inkOpsFingerprint(ops, inkClipFingerprint(clip))}`;
 }
 
 function tileKey(sig: string, level: number, tx: number, ty: number): string {

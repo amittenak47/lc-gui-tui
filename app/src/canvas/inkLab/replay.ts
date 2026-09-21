@@ -4,7 +4,6 @@
  */
 
 import { fillMiterStroke } from "./fallback";
-import { paintSdfSpines } from "./sdfPaint";
 import { labDepositAmt, labDotWashRgb, labMixDepositRgb, labNibRadius } from "./style";
 import type { SpineDot } from "./instance";
 import {
@@ -128,11 +127,9 @@ export function paintLabDrawOps(
     const spine = labSpineFromDrawOp(op);
     if (spine.length > 0) strokes.push(spine);
   }
-  if (!paintSdfSpines(ctx, strokes)) {
-    for (const spine of strokes) {
-      const rgb = spine[0]!.rgb ?? [26, 26, 26];
-      fillMiterStroke(ctx, spine, null, rgb);
-    }
+  for (const spine of strokes) {
+    const rgb = spine[0]!.rgb ?? [26, 26, 26];
+    fillMiterStroke(ctx, spine, null, rgb);
   }
   if (clip) ctx.restore();
 }

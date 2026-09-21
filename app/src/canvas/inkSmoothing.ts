@@ -520,6 +520,8 @@ export interface LiveSmoothCache {
   prefix: ScenePoint[];
 }
 
+const liveOutputBuffers = new WeakMap<LiveSmoothCache, { points: ScenePoint[]; frozen: number }>();
+
 /** Cumulative distance along a polyline. */
 function arcLengths(points: readonly ScenePoint[]): Float64Array {
   const out = new Float64Array(points.length);
@@ -640,7 +642,15 @@ export function smoothLiveInkPoints(
    * points that fall within half a step of the prefix's end keeps every
    * segment a real one.
    */
-  const points = next.prefix.slice();
+  let output = liveOutputBuffers.get(next);
+  if (!output) {
+    output = { points: [], frozen: 0 };
+    liveOutputBuffers.set(next, output);
+  }
+  const points = output.points;
+  for (let i = output.frozen; i < next.prefix.length; i++) points[i] = next.prefix[i];
+  points.length = next.prefix.length;
+  output.frozen = next.prefix.length;
   const joinAt = points[points.length - 1];
   let start = cut;
   while (start + 1 < tail.length) {

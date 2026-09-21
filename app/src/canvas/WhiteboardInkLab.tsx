@@ -2096,8 +2096,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             );
             rememberCommitPatch(baked.undoPatch);
             const committedRevision = bookRef.current.revision();
-            if (baked.bakeOptions.clothoid || baked.bakeOptions.capillary) {
+            const committedView = paintedViewRef.current;
+            const smoothOnLift = smoothingModeRef.current !== "live" && baked.bakeOptions.smoothing > 0;
+            if (smoothOnLift || baked.bakeOptions.clothoid || baked.bakeOptions.capillary) {
               void bakeSpineOffThread(baked.bakeInput, baked.bakeOptions).then((finalBake) => {
+                if (engineRef.current !== engine || !canvasRef.current) return;
                 const final = { ...baked, ...finalBake, undoPatch: null };
                 const finalOp = opFromBake(
                   final,
@@ -2125,7 +2128,30 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
                 if (bookRef.current.revision() === committedRevision) {
                   bakeRef.current = { bakeMs: finalBake.bakeMs, bake: finalBake.bake };
                 }
+                // Keep semantic redo in sync with the worker result, including
+                // an undo that happened while the worker was running.
+                previewSpine.length = 0;
+                for (const dot of finalBake.points) previewSpine.push({ ...dot });
+                const patch = baked.undoPatch;
+                const canReplace = patch && !drawingRef.current &&
+                  !historyPixelsDirtyRef.current &&
+                  engineRef.current === engine &&
+                  paintedViewRef.current === committedView &&
+                  bookRef.current.revision() === committedRevision &&
+                  snapUndoRef.current[snapUndoRef.current.length - 1] === patch;
+                if (canReplace) {
+                  snapUndoRef.current[snapUndoRef.current.length - 1] =
+                    engine.replaceLastStroke(patch, finalBake.points);
+                } else {
+                  // Never repaint under a subsequent nib. Old pixel patches
+                  // contain pre-bake geometry; semantic history remains valid.
+                  historyPixelsDirtyRef.current = true;
+                  replayNeededAfterStrokeRef.current = true;
+                  scheduleIdleRemesh();
+                }
                 onChangeRef.current?.();
+              }).catch(() => {
+                // The already-committed curved preview remains valid ink.
               });
             }
           } else if (!remeshOnHostBoundLift()) {

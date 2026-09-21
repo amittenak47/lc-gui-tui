@@ -1097,6 +1097,7 @@ function recordingContext() {
   const erased: Array<{ x: number; y: number; r: number; composite: string }> = [];
   let pen = { x: 0, y: 0 };
   const path: Array<{ x: number; y: number }> = [];
+  const subpaths: Array<Array<{ x: number; y: number }>> = [];
 
   const map = (x: number, y: number) => ({
     x: transform[0] * x + transform[2] * y + transform[4],
@@ -1126,9 +1127,11 @@ function recordingContext() {
     },
     beginPath() {
       path.length = 0;
+      subpaths.length = 0;
     },
     moveTo(x: number, y: number) {
       pen = map(x, y);
+      if (path.length) subpaths.push([...path]);
       path.length = 0;
       path.push(pen);
     },
@@ -1149,7 +1152,8 @@ function recordingContext() {
     },
     fill() {
       // Miter quads: midpoints of opposite edges recover the spine.
-      if (path.length >= 4) {
+      const filledPaths = [...subpaths, path];
+      for (const path of filledPaths) if (path.length >= 4) {
         const a = {
           x: (path[0]!.x + path[3]!.x) / 2,
           y: (path[0]!.y + path[3]!.y) / 2,
@@ -2384,11 +2388,12 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
     applyInkOp(noHead.ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: true });
     const both = inkDrawContext();
     applyInkOp(both.ctx, draw([0, 0], [50, 0]), 1, { capHead: true, capEnd: true });
-    expect(both.fillCount).toBeGreaterThan(noHead.fillCount);
+    expect(both.arcSweeps).toHaveLength(2);
+    expect(noHead.arcSweeps).toHaveLength(1);
     const none = inkDrawContext();
     applyInkOp(none.ctx, draw([0, 0], [50, 0]), 1, { capHead: false, capEnd: false });
     expect(none.fillCount).toBeGreaterThan(0);
-    expect(none.fillCount).toBeLessThan(both.fillCount);
+    expect(none.arcSweeps).toHaveLength(0);
   });
 
   it("paints constant-width and speed-ink strokes without incremental tail paint", () => {
@@ -2443,7 +2448,8 @@ describe("drawStrokeFrom / applyInkOp live options", () => {
     };
     const drawCtx = inkDrawContext();
     paintLiveOp(drawCtx.ctx, draw([0, 0], [50, 0], [100, 0]), viewport, 1, null);
-    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(2);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.arcSweeps).toHaveLength(2);
     expect(drawCtx.arcSweeps.some((s) => Math.abs(s - Math.PI) < 1e-6)).toBe(false);
   });
 
@@ -2855,7 +2861,8 @@ describe("grain and blot pooling (Phase 2)", () => {
       1,
     );
     expect(drawCtx.strokeCount).toBe(0);
-    expect(drawCtx.fillCount).toBeGreaterThanOrEqual(3);
+    expect(drawCtx.fillCount).toBe(1);
+    expect(drawCtx.arcSweeps).toHaveLength(2);
   });
 
   it("paints drying-only strokes as a washed ribbon with a vertex gradient", () => {

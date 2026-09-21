@@ -13,8 +13,10 @@ describe("ink lab sources", () => {
 
   it("does not call arc at interior joins", () => {
     const src = readFileSync(join(here, "fallback.ts"), "utf8");
-    const loop = src.slice(src.indexOf("for (let i = 1"), src.indexOf("const head"));
-    expect(loop).toContain("fillQuad");
+    const loop = src.slice(src.indexOf("for (let i = from"), src.indexOf("const head"));
+    expect(loop).toContain("ctx.moveTo(a.x + ax, a.y + ay)");
+    expect(loop).toContain("ctx.lineTo(b.x - bx, b.y - by)");
     expect(loop).not.toContain(".arc(");
+    expect(loop).not.toContain("cap(");
   });
 });

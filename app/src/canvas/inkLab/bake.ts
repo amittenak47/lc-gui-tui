@@ -97,7 +97,8 @@ function radiiAlong(
   acc.length = src.length;
   const total = acc[acc.length - 1]! || 1;
   const start = memo ? Math.min(frozen, memo.points.length, baked.length) : 0;
-  const out: SpineDot[] = memo ? memo.points.slice(0, start) : [];
+  const out: SpineDot[] = memo ? memo.points : [];
+  out.length = start;
   let j = start > 0 ? memo!.indices[start - 1]! : 0;
   let walked = start > 0 ? memo!.walked[start - 1]! : 0;
   for (let i = start; i < baked.length; i++) {

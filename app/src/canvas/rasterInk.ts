@@ -19,7 +19,6 @@ import { loadInkSpeedBlotBlend } from "../util/inkSpeedPref";
 import { DEBUG_INK, inkMetrics, type InkStageName } from "./inkMetrics";
 import { fillMiterStroke } from "./inkLab/fallback";
 import type { SpineDot } from "./inkLab/instance";
-import { paintSdfSpine } from "./inkLab/sdfPaint";
 
 function ribbonStage<T>(name: InkStageName, fn: () => T): T {
   if (!DEBUG_INK && !inkMetrics.enabled) return fn();
@@ -5334,8 +5333,8 @@ function labVertexRgb(
 }
 
 /**
- * Default pen: same SDF capsules as the live lab engine.
- * Tests without WebGL2 keep the mitered strip. Highlighter stays on its own
+ * Default pen: same continuous ribbon as the live lab engine.
+ * Export and nested-host replay keep that strip. Highlighter stays on its own
  * path. Never stamp discs or grain-etch here.
  */
 function paintLabDrawOp(
@@ -5368,10 +5367,6 @@ function paintLabDrawOp(
   }
   if (spine.length === 0) return;
   const tip = spine[spine.length - 1] ?? null;
-  if (paintSdfSpine(ctx, spine, tip)) {
-    ctx.globalAlpha = 1;
-    return;
-  }
   fillMiterStroke(ctx, spine, tip, spine[0]!.rgb ?? [0, 0, 0], {
     capHead: capHead && from === 0,
     capEnd,
@@ -5408,10 +5403,10 @@ function drawStrokeFrom(
 
   if (!op.highlight) {
     /*
-     * Default pen is the Ink lab SDF capsules — live and committed.
+     * Default pen is the Ink lab ribbon — live and committed.
      * Taps, dwell clusters, and long strokes all go through the same spine
      * replay. Stamp discs and grain etch stay off this path so lift cannot
-     * change the look. Tests without WebGL2 still mesh a miter strip.
+     * change the look.
      */
     if (points.length === 1 && fromIndex > 0) return;
     paintLabDrawOp(ctx, op, fromIndex, pixelScale, capEnd, capHead);

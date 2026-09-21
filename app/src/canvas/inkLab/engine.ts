@@ -12,17 +12,15 @@ import { seedSpineHop } from "./seedHop";
 import { CLIP_BLIT_PAD, clipBlitRect, intersectPixelRects, type PixelRect } from "./clipBlit";
 import { exposedShiftRects, shiftClearsSnap, spineHitsRects } from "./cameraShift";
 import { createEkf, type EkfFilter } from "./ekf";
-import { createFallbackPainter, fillMiterStroke } from "./fallback";
+import { fillMiterStroke } from "./fallback";
+import { createLiveRibbon } from "./ribbon";
 import {
   emptyAabb,
   expandAabb,
-  INSTANCE_FLOATS,
-  writeInstance,
   type SpineDot,
   type StrokeAabb,
 } from "./instance";
 import { stampLiveSamples } from "./sampleTime";
-import { tryCreateSdfRenderer, type SdfRenderer } from "./sdf";
 import {
   capillaryRelax,
   growTipRadius,
@@ -120,19 +118,19 @@ export type InkLabEngine = {
   paint(): InkLabPaintStats;
   /**
    * Copy the in-DOM host into the committed snap. Call once at pointerdown;
-   * live composite is that snap plus the live SDF until lift.
+   * live composite is that snap plus the live ribbon until lift.
    */
   captureSnap(): void;
   /**
    * Rebuild the committed snap (camera change, undo). Next {@link paint}
-   * presents this plus any live SDF.
+   * presents this plus any live ribbon.
    */
   redrawSnap(paint: (ctx: CanvasRenderingContext2D) => void): void;
   /** Replace and present only a device-pixel region; leave other live pixels alone. */
   redrawSnapRegion(box: { x: number; y: number; w: number; h: number }, paint: (ctx: CanvasRenderingContext2D) => void): void;
   /**
-   * Replace the committed snap with SDF capsules for these overlay-space
-   * spines. Camera / restore. Not the 2D miter strip. No-op while a live
+   * Replace the committed snap with ribbons for these overlay-space
+   * spines. Same strip geometry as live paint. No-op while a live
    * stroke is down — replay belongs to lift / camera, not the nib rAF.
    */
   replaySpines(strokes: readonly SpineDot[][]): void;
@@ -147,6 +145,8 @@ export type InkLabEngine = {
   copySnapPatch(box?: StrokeAabb): InkLabSnapPatch | null;
   /** Put a {@link copySnapPatch} back. Undo of one stroke. */
   restoreSnapPatch(patch: InkLabSnapPatch): void;
+  /** Replace the last idle stroke after a worker bake; caller guards history/camera. */
+  replaceLastStroke(patch: InkLabSnapPatch, points: SpineDot[]): InkLabSnapPatch | null;
   /** Stamp highlighter / eraser onto the committed snap without clearing it. */
   paintOntoSnap(paint: (ctx: CanvasRenderingContext2D) => void): void;
   /** Drop the live stroke. Keep the committed snap. */
@@ -158,7 +158,7 @@ export type InkLabEngine = {
 export type InkLabEngineOpts = {
   clothoid?: boolean;
   capillary?: boolean;
-  /** When false, skip WebGL even if `getContext("webgl2")` works. Tests use this. */
+  /** Legacy caller option. Board ink uses a tail-only Canvas2D ribbon. */
   sdf?: boolean;
 };
 
@@ -181,10 +181,6 @@ function wallNow(): number {
 function holdCapRadius(base: number, blot: number): number {
   const t = Math.max(0, Math.min(1, blot));
   return base * (1 + (TIP_GROW - 1) * t);
-}
-
-function inkOf(d: SpineDot): [number, number, number] {
-  return d.rgb ?? INK_RGB;
 }
 
 function cloneDot(d: SpineDot): SpineDot {
@@ -232,13 +228,6 @@ function peerFactory(
   };
 }
 
-function hopAabb(a: SpineDot, b: SpineDot): StrokeAabb {
-  const box = emptyAabb();
-  expandAabb(box, a);
-  expandAabb(box, b);
-  return box;
-}
-
 function dprOf(canvas: HTMLCanvasElement): number {
   const css = Math.max(1, canvas.clientWidth || canvas.width);
   return Math.max(1, canvas.width / css);
@@ -251,21 +240,14 @@ function nibRadius(vx: number, vy: number, dpr: number, pressure: number): numbe
 export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   const useClothoid = opts.clothoid === true;
   const useCapillary = opts.capillary === true;
-  const allowSdf = opts.sdf !== false;
   let host: HTMLCanvasElement | null = null;
-  let backend: InkLabBackend = "canvas2d";
-  let sdf: SdfRenderer | null = null;
-  let fallback = null as ReturnType<typeof createFallbackPainter>;
+  const backend: InkLabBackend = "canvas2d";
+  let ribbon: ReturnType<typeof createLiveRibbon> | null = null;
   let snap: HTMLCanvasElement | null = null;
   let peer: ReturnType<typeof peerFactory> | null = null;
   let ekf: EkfFilter = createEkf();
   let spine: SpineDot[] = [];
-  let inst = new Float32Array(32 * INSTANCE_FLOATS);
-  let instCap = 32;
   let segs = 0;
-  /** Instances already in the SDF framebuffer this stroke. */
-  let sdfLive = 0;
-  let sdfFull = false;
   let lastSuffix = true;
   let paintedSegs = 0;
   let aabb: StrokeAabb = emptyAabb();
@@ -284,29 +266,17 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   let blotHalts: InkLabHalt[] = [];
   let lastStamp = 0;
   let lastWall = 0;
-  /** Previous smoothed tail in the private SDF surface (never the page snap). */
+  /** Last presented tail bounds; never used to choose a growing live copy. */
   let liveRedrawBox: StrokeAabb | null = null;
   let liveSmoothCache: LiveSmoothCache | null = null;
   const liveSmoothScene: ScenePoint[] = [];
   /** Camera-shift fill: blit only into these destination strips. */
   let blitClip: readonly PixelRect[] | null = null;
 
-  const ensureInst = (n: number) => {
-    if (n <= instCap) return;
-    let cap = instCap;
-    while (cap < n) cap *= 2;
-    const next = new Float32Array(cap * INSTANCE_FLOATS);
-    next.set(inst);
-    inst = next;
-    instCap = cap;
-  };
-
   const resetLive = () => {
     spine = [];
     previousInputDot = null;
     segs = 0;
-    sdfLive = 0;
-    sdfFull = false;
     paintedSegs = 0;
     aabb = emptyAabb();
     drawing = false;
@@ -325,8 +295,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     liveRedrawBox = null;
     liveSmoothCache = null;
     liveSmoothScene.length = 0;
-    sdf?.clear();
-    fallback?.clearLive();
+    ribbon?.clear();
   };
 
   const syncSize = () => {
@@ -344,14 +313,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       snap.width = w;
       snap.height = h;
       if (prev && prev.width > 0) snap.getContext("2d")?.drawImage(prev, 0, 0);
-    }
-    const sdfW = sdf?.canvas.width ?? w;
-    const sdfH = sdf?.canvas.height ?? h;
-    sdf?.resize(w, h);
-    fallback?.resize(w, h);
-    if (drawing && sdf && (sdfW !== w || sdfH !== h)) {
-      sdfFull = true;
-      sdfLive = 0;
     }
   };
 
@@ -453,7 +414,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       last.a = styled.a;
       last.slow = styled.slow;
     }
-    expandAabb(aabb, tip);
+    expandAabb(aabb, { ...tip, r: tip.r * 2 });
     if (grown >= holdCapRadius(holdBase.r, pen.speedBlotBlend) - HOLD_PLATEAU_EPS) {
       endHoldPool();
     }
@@ -462,17 +423,14 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   const appendSpine = (dot: SpineDot) => {
     const prev = spine[spine.length - 1];
     spine.push(dot);
-    expandAabb(aabb, dot);
+    expandAabb(aabb, { ...dot, r: dot.r * 2 });
     tip = dot;
     if (pen && prev) {
       consumed += Math.hypot(dot.x - prev.x, dot.y - prev.y) / labPenNibOverlay(pen);
     }
     holding = false;
     if (!prev) return;
-    ensureInst(segs + 1);
-    writeInstance(inst, segs, prev, dot, inkOf(prev), inkOf(dot));
     segs += 1;
-    fallback?.appendHop(prev, dot, inkOf(dot));
   };
 
   let previousInputDot: SpineDot | null = null;
@@ -483,9 +441,8 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       ekf.reset(s.x, s.y, s.t);
       const first = styledDot(s.x, s.y, 0, 0, dpr, s.p, 0);
       spine.push(first);
-      expandAabb(aabb, first);
+      expandAabb(aabb, { ...first, r: first.r * 2 });
       tip = first;
-      fallback?.beginStroke();
       lastEkfMs = performance.now() - t0;
       return;
     }
@@ -522,7 +479,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
           p: last.p,
           slow: last.slow,
         };
-        expandAabb(aabb, tip);
+        expandAabb(aabb, { ...tip, r: tip.r * 2 });
         if (holdBase && grown >= holdCapRadius(holdBase.r, 1) - HOLD_PLATEAU_EPS) {
           endHoldPool();
         }
@@ -559,7 +516,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
         slow: headed.slow,
       };
     }
-    // SDF capsules follow chords. Plant Catmull samples off a turning hop so
+    // Plant Catmull samples off a turning hop in every smoothing mode so
     // the live stroke is round; a sparse tablet polyline stays a polyline.
     // Control points are accepted input samples, never inserted spline seeds.
     // A seed just behind the tip shortens the incoming tangent to nearly zero.
@@ -601,8 +558,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     liveSmoothScene.length = 0;
     spine = [];
     segs = 0;
-    sdfLive = 0;
-    sdfFull = true;
     paintedSegs = 0;
     aabb = emptyAabb();
     tip = null;
@@ -613,9 +568,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     lastHoldWall = 0;
     holdPlateau = false;
     ekf = createEkf();
-    sdf?.clear();
-    fallback?.clearLive();
-    fallback?.beginStroke();
+    ribbon?.clear();
     blotTipGrow = savedGrow;
     blotHalts = savedHalts;
     const wall = wallNow();
@@ -629,26 +582,26 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     for (const d of kept) appendSpine(d);
     ingest(next);
     unionAabb(aabb, prevBox);
+    if (host) {
+      const ctx = host.getContext("2d");
+      const clip = clipBlitRect(prevBox, host.width, host.height, CLIP_BLIT_PAD);
+      if (ctx && clip) presentHost(ctx, clip, snap);
+    }
   };
 
   const remesh = (points: readonly SpineDot[]) => {
     segs = 0;
     aabb = emptyAabb();
-    fallback?.beginStroke();
     if (points.length === 0) {
       tip = null;
       return;
     }
-    expandAabb(aabb, points[0]!);
+    expandAabb(aabb, { ...points[0]!, r: points[0]!.r * 2 });
     tip = points[points.length - 1]!;
     for (let i = 1; i < points.length; i++) {
-      const a = points[i - 1]!;
       const b = points[i]!;
-      ensureInst(segs + 1);
-      writeInstance(inst, segs, a, b, inkOf(a), inkOf(b));
       segs += 1;
-      fallback?.appendHop(a, b, inkOf(b));
-      expandAabb(aabb, b);
+      expandAabb(aabb, { ...b, r: b.r * 2 });
     }
   };
 
@@ -724,8 +677,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
   const resetAfterBlit = () => {
     spine = [];
     segs = 0;
-    sdfLive = 0;
-    sdfFull = false;
     paintedSegs = 0;
     tip = null;
     aabb = emptyAabb();
@@ -749,8 +700,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       if (blitClip && !spineHitsRects(stroke, blitClip)) continue;
       applyBaked(stroke.map(cloneDot));
       blitLiveToSnap();
-      sdf?.clear();
-      fallback?.clearLive();
+      ribbon?.clear();
     }
     resetAfterBlit();
   };
@@ -800,41 +750,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     const strokeClip = clipBlitRect(aabb, snap.width, snap.height, CLIP_BLIT_PAD);
     const dests = destClipsFor(strokeClip, snap.width, snap.height);
     if (dests.length === 0 && blitClip) return;
-    if (sdf) {
-      ensureInst(segs + 1);
-      let n = segs;
-      if (tip) {
-        writeInstance(inst, n, tip, tip, inkOf(tip), inkOf(tip));
-        n += 1;
-      }
-      sdf.upload(inst, n);
-      if (dests.length > 0) {
-        const drawBox = emptyAabb();
-        for (const dest of dests) {
-          drawBox.minX = Math.min(drawBox.minX, dest.x);
-          drawBox.minY = Math.min(drawBox.minY, dest.y);
-          drawBox.maxX = Math.max(drawBox.maxX, dest.x + dest.w);
-          drawBox.maxY = Math.max(drawBox.maxY, dest.y + dest.h);
-        }
-        sdf.draw(drawBox);
-        for (const clip of dests) {
-          sctx.drawImage(
-            sdf.canvas,
-            clip.x,
-            clip.y,
-            clip.w,
-            clip.h,
-            clip.x,
-            clip.y,
-            clip.w,
-            clip.h,
-          );
-        }
-      } else {
-        sdf.draw(aabb);
-        sctx.drawImage(sdf.canvas, 0, 0);
-      }
-    } else if (dests.length > 0) {
+    if (dests.length > 0) {
       sctx.save();
       sctx.beginPath();
       for (const clip of dests) sctx.rect(clip.x, clip.y, clip.w, clip.h);
@@ -846,91 +762,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     }
   };
 
-  const drawDots = (
-    points: readonly SpineDot[],
-    clip: { x: number; y: number; w: number; h: number } | null = null,
-    from = 0,
-    dirty: StrokeAabb | null = null,
-  ) => {
-    if (!host) return;
-    const ctx = host.getContext("2d");
-    if (!ctx) return;
-    if (points.length === 0) return;
-    const start = Math.max(0, Math.min(from, points.length - 1));
-    const segsOut = Math.max(0, points.length - 1);
-    const box = dirty ?? emptyAabb();
-    if (!dirty) {
-      expandAabb(box, points[start]!);
-      for (let i = start + 1; i < points.length; i++) expandAabb(box, points[i]!);
-    }
-    ensureInst(Math.max(segsOut, 1));
-    for (let hop = start; hop < segsOut; hop++) {
-      const a = points[hop]!;
-      const b = points[hop + 1]!;
-      writeInstance(inst, hop, a, b, inkOf(a), inkOf(b));
-    }
-    const end = points[points.length - 1]!;
-    if (sdf) {
-      const fullBox = () => {
-        const all = emptyAabb();
-        expandAabb(all, points[0]!);
-        for (let i = 1; i < points.length; i++) expandAabb(all, points[i]!);
-        return all;
-      };
-      if (start <= 0) {
-        sdf.clear();
-        sdf.upload(inst, segsOut);
-        sdf.draw(fullBox());
-      } else {
-        const grew = sdf.uploadTail(inst, start, segsOut);
-        if (grew) {
-          sdf.upload(inst, segsOut);
-          sdf.draw(fullBox());
-        } else {
-          sdf.erase(box);
-          // A returning tail can cross an old prefix. Erasing this rectangle
-          // also erases that prefix, so redraw all resident instances in it.
-          sdf.redraw(box, 0);
-        }
-      }
-      if (clip) {
-        ctx.drawImage(
-          sdf.canvas,
-          clip.x,
-          clip.y,
-          clip.w,
-          clip.h,
-          clip.x,
-          clip.y,
-          clip.w,
-          clip.h,
-        );
-      } else {
-        ctx.drawImage(sdf.canvas, 0, 0);
-      }
-    } else {
-      if (clip) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(clip.x, clip.y, clip.w, clip.h);
-        ctx.clip();
-      }
-      fillMiterStroke(
-        ctx,
-        points,
-        end,
-        INK_RGB,
-      );
-      if (clip) ctx.restore();
-    }
-    ctx.globalAlpha = end.a ?? 1;
-    ctx.fillStyle = `rgb(${inkOf(end)[0]}, ${inkOf(end)[1]}, ${inkOf(end)[2]})`;
-    ctx.beginPath();
-    ctx.arc(end.x, end.y, end.r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  };
-
   const lastLiveDirtyAabb = (): StrokeAabb => {
     const box = emptyAabb();
     if (tip) expandAabb(box, tip);
@@ -939,48 +770,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       expandAabb(box, spine[i]!);
     }
     return box;
-  };
-
-  const drawTip = (ctx: CanvasRenderingContext2D) => {
-    if (!tip) return;
-    const rgb = inkOf(tip);
-    ctx.globalAlpha = tip.a ?? 1;
-    ctx.fillStyle = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
-    ctx.beginPath();
-    ctx.arc(tip.x, tip.y, tip.r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  };
-
-  const flushSdfLive = (): boolean => {
-    if (!sdf) return true;
-    if (segs < 1) {
-      if (tip) {
-        ensureInst(1);
-        writeInstance(inst, 0, tip, tip, inkOf(tip), inkOf(tip));
-        sdf.upload(inst, 1);
-        sdf.draw(aabb);
-      }
-      sdfLive = 0;
-      return true;
-    }
-    let suffix = true;
-    if (sdfFull || sdfLive > segs) {
-      sdf.upload(inst, segs);
-      sdf.draw(aabb);
-      sdfLive = segs;
-      sdfFull = false;
-      suffix = false;
-    } else {
-      while (sdfLive < segs) {
-        const a = spine[sdfLive];
-        const b = spine[sdfLive + 1];
-        if (!a || !b) break;
-        sdf.append(inst, sdfLive, hopAabb(a, b));
-        sdfLive += 1;
-      }
-    }
-    return suffix;
   };
 
   const presentHost = (
@@ -1015,90 +804,21 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       presentHost(ctx, null, snap);
       return lastSuffix;
     }
-    // The live preview is curved in both smoothing modes. "On Lift" controls
-    // when the final storage bake lands; it must not make sparse tablet events
-    // appear as a polyline until pointer-up.
-    const liveSmooth =
-      (pen?.smoothing ?? 0) > 0 && spine.length >= 3;
+    // Catmull turn seeds are always present. Chaikin only runs live when asked.
+    const strength = pen?.smoothing ?? 0;
+    const liveSmooth = pen?.smoothingMode === "live" && strength > 0 && spine.length >= 3;
+    let points: readonly SpineDot[] = spine;
+    let stableTo = Math.max(0, spine.length - 3);
     if (liveSmooth) {
-      const reshaped = reshapeLiveSpine(
-        spine,
-        pen!.smoothing ?? 0,
-        liveSmoothCache,
-        liveSmoothScene,
-      );
+      const reshaped = reshapeLiveSpine(spine, strength, liveSmoothCache, liveSmoothScene);
       liveSmoothCache = reshaped.cache;
-      const from = reshaped.from;
-      const start = Math.max(0, Math.min(from, reshaped.points.length - 1));
-      const currentDirty = emptyAabb();
-      if (reshaped.points.length > 0) {
-        expandAabb(currentDirty, reshaped.points[start]!);
-        for (let i = start + 1; i < reshaped.points.length; i++) {
-          expandAabb(currentDirty, reshaped.points[i]!);
-        }
-      }
-      const dirty = { ...currentDirty };
-      const prevBox = liveRedrawBox;
-      if (from > 0 && prevBox) unionAabb(dirty, prevBox);
-      /*
-       * Restore only the live-smooth tail once the prefix is already on the
-       * host. A full-canvas snap blit every paint is the 33–55ms rAF on a
-       * tablet. Restoring a box that covers the frozen prefix was the growing
-       * square: snap has no live ink, so that restore punched a hole the tail
-       * redraw never filled. The first frames still redraw the whole *stroke*
-       * into its AABB so the prefix lands — never the whole canvas (`clip`
-       * null). Print letters never freeze a prefix, so a null clip made every
-       * down a page-sized copy.
-       */
-      const keepPrefix = from > 0 && prevBox != null;
-      const clip = clipBlitRect(dirty, host.width, host.height, CLIP_BLIT_PAD);
-      if (clip) presentHost(ctx, clip, snap);
-      drawDots(reshaped.points, clip, keepPrefix ? from : 0, dirty);
-      liveRedrawBox = from > 0 ? currentDirty : null;
-      lastSuffix = Boolean(clip);
-      return lastSuffix;
+      points = reshaped.points;
+      // Keep a neighbour past the frozen join for its miter normal.
+      stableTo = Math.max(0, reshaped.from - 1);
     }
-    const strokeClip = clipBlitRect(aabb, host.width, host.height, CLIP_BLIT_PAD);
-    if (strokeClip) presentHost(ctx, strokeClip, snap);
-    if (sdf) {
-      lastSuffix = flushSdfLive();
-      if (strokeClip) {
-        ctx.drawImage(
-          sdf.canvas,
-          strokeClip.x,
-          strokeClip.y,
-          strokeClip.w,
-          strokeClip.h,
-          strokeClip.x,
-          strokeClip.y,
-          strokeClip.w,
-          strokeClip.h,
-        );
-      }
-      drawTip(ctx);
-    } else if (fallback) {
-      if (strokeClip) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(strokeClip.x, strokeClip.y, strokeClip.w, strokeClip.h);
-        ctx.clip();
-        fallback.blit(ctx);
-        ctx.restore();
-      }
-      drawTip(ctx);
-      lastSuffix = true;
-    } else {
-      if (strokeClip) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(strokeClip.x, strokeClip.y, strokeClip.w, strokeClip.h);
-        ctx.clip();
-        fillMiterStroke(ctx, spine, tip, INK_RGB);
-        ctx.restore();
-      } else {
-        fillMiterStroke(ctx, spine, tip, INK_RGB);
-      }
-      lastSuffix = false;
+    if (ribbon) {
+      liveRedrawBox = ribbon.paint(host, snap, points, stableTo);
+      unionAabb(aabb, liveRedrawBox);
     }
     return lastSuffix;
   };
@@ -1143,8 +863,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     if (keepLivePixels) {
       // Host already has the live composite after a paint. Re-presenting the
       // empty snap punches the frozen prefix and the tail redraw cannot fill it.
-      if (paintedSegs === 0) composite();
-      else if (liveRedrawBox) unionAabb(aabb, liveRedrawBox);
+      composite();
     } else {
       applyBaked(points);
     }
@@ -1154,8 +873,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     drawing = false;
     holding = false;
     holdPlateau = false;
-    sdf?.clear();
-    fallback?.clearLive();
+    ribbon?.clear();
     resetAfterBlit();
     liveSmoothCache = null;
     liveSmoothScene.length = 0;
@@ -1171,34 +889,16 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
 
   return {
     attach(el) {
-      const sameHost = host === el;
-      const sdfOk = Boolean(sdf && !sdf.isLost());
-      if (sameHost && sdfOk) {
+      if (host === el && ribbon) {
         syncSize();
         return backend;
       }
-      if (sameHost && backend === "canvas2d" && fallback && !sdf) {
-        syncSize();
-        return backend;
-      }
-      sdf?.destroy();
-      fallback?.destroy();
-      sdf = null;
-      fallback = null;
       host = el;
       peer = peerFactory(el);
       const w = Math.max(1, el.width || 1);
       const h = Math.max(1, el.height || 1);
-      if (allowSdf) {
-        sdf = tryCreateSdfRenderer(w, h, peer);
-      }
-      if (sdf) {
-        backend = "webgl2";
-        fallback = null;
-      } else {
-        backend = "canvas2d";
-        fallback = createFallbackPainter(peer, w, h);
-      }
+      const prefix = peer(w, h);
+      ribbon = prefix ? createLiveRibbon(prefix) : null;
       snap = peer(w, h);
       return backend;
     },
@@ -1241,7 +941,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
       // Keep the live-smoothed mesh already on the host. bakeSpine here would
       // sparsify the overlay into polygon vertices after lift.
       const preview =
-        state.options.smoothing > 0 && state.raw.length >= 3
+        pen?.smoothingMode === "live" && state.options.smoothing > 0 && state.raw.length >= 3
           ? reshapeLiveSpine(
               state.raw,
               state.options.smoothing,
@@ -1263,7 +963,6 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     },
     paint() {
       const t0 = performance.now();
-      if (host && sdf?.isLost()) this.attach(host);
       if (drawing && holding && pen) applyHoldGrow(t0);
       syncSize();
       const tDraw = performance.now();
@@ -1335,6 +1034,20 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     shiftSnap,
     copySnapPatch,
     restoreSnapPatch,
+    replaceLastStroke(patch, points) {
+      if (drawing || !host || !snap) return null;
+      restoreSnapPatch(patch);
+      applyBaked(points);
+      unionAabb(aabb, { minX: patch.x, minY: patch.y,
+        maxX: patch.x + patch.w, maxY: patch.y + patch.h });
+      const undo = copySnapPatch(aabb);
+      blitLiveToSnap();
+      const ctx = host.getContext("2d");
+      const clip = clipBlitRect(aabb, host.width, host.height, CLIP_BLIT_PAD);
+      if (ctx && clip) presentHost(ctx, clip, snap);
+      resetAfterBlit();
+      return undo;
+    },
     paintOntoSnap(paint) {
       if (!snap) return;
       const sctx = snap.getContext("2d");
@@ -1357,10 +1070,7 @@ export function createInkLabEngine(opts: InkLabEngineOpts = {}): InkLabEngine {
     },
     destroy() {
       resetLive();
-      sdf?.destroy();
-      fallback?.destroy();
-      sdf = null;
-      fallback = null;
+      ribbon = null;
       snap = null;
       host = null;
       peer = null;

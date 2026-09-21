@@ -10,7 +10,7 @@ import {
   type SceneBounds,
 } from "../rasterInk";
 import { isInkLabPenOp, labSpineFromDrawOp } from "./replay";
-import { paintSdfSpines } from "./sdfPaint";
+import { fillMiterStroke } from "./fallback";
 import { noteInkTileRaster } from "../inkTileMetrics";
 import { TILE_OVERLAP_PX, TILE_PX, inkTileCanvasPx, levelScale, tileSceneSize } from "../inkTileGrid";
 
@@ -209,12 +209,19 @@ export function paintInkTile(
   }
 
   let labRuns: InkDrawOp[] = [];
+  const sourceOps = new Map(job.ops.map(op => [op.id, op]));
   const flushLab = () => {
     if (labRuns.length === 0) return;
     const spines = labRuns.map(labSpineFromDrawOp);
     const sdf0 = performance.now();
-    if (!paintSdfSpines(ctx, spines)) {
-      for (const run of labRuns) applyInkOp(ctx, run, scale);
+    for (let i = 0; i < spines.length; i++) {
+      const spine = spines[i]!;
+      const run = labRuns[i]!;
+      const source = sourceOps.get(run.id);
+      fillMiterStroke(ctx, spine, null, [26, 26, 26], {
+        capHead: !source || source.points[0] === run.points[0],
+        capEnd: !source || source.points[source.points.length - 1] === run.points[run.points.length - 1],
+      });
     }
     sdfMs += performance.now() - sdf0;
     labRuns = [];
