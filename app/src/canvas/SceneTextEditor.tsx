@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { ViewportTransform } from "./rasterInk";
 import { layoutSceneText, sceneTextFont } from "./sceneTextLayout";
 import { TextFontSizeControl } from "./TextFontSizeControl";
+import { holdSceneTextViewport } from "../util/safeArea";
 
 export interface SceneTextEdit {
   id: string;
@@ -44,6 +45,7 @@ export function SceneTextEditor({ edit, getViewport, onFontSize, onCommit, onCan
   const top = (edit.y + (view?.scrollY ?? 0)) * zoom;
 
   useLayoutEffect(() => {
+    const releaseViewport = holdSceneTextViewport();
     areaRef.current?.focus({ preventScroll: true });
     const len = areaRef.current?.value.length ?? 0;
     areaRef.current?.setSelectionRange(len, len);
@@ -56,7 +58,7 @@ export function SceneTextEditor({ edit, getViewport, onFontSize, onCommit, onCan
       frame = requestAnimationFrame(follow);
     };
     frame = requestAnimationFrame(follow);
-    return () => cancelAnimationFrame(frame);
+    return () => { cancelAnimationFrame(frame); releaseViewport(); };
   }, [getViewport]);
 
   const finish = (commit: boolean) => {

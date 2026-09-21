@@ -5987,8 +5987,19 @@ body[data-lc-sash-drag="horizontal"] {
   transform: rotate(32deg) scale(0.9);
 }
 
-.lc-color-wheel-morph .lc-morph-panel.is-active {
+.lc-color-wheel .lc-color-wheel-morph .lc-morph-panel.is-active {
   transform: none;
+}
+
+/* Keep canvas text placement owned by our drag, not browser touch scrolling. */
+.lc-board-shape-tool, .lc-board-text-tool { touch-action: none; }
+/* Ink chrome stays behind the IME. Only the text editor needs input now. */
+.lc-scene-text-keyboard .lc-toolbar,
+.lc-scene-text-keyboard .lc-map-controls,
+.lc-scene-text-keyboard .lc-ink-wheel,
+.lc-scene-text-keyboard .lc-color-wheel {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .lc-color-wheel-morph[data-axis="height"] .lc-morph-panel:not(.is-active) {

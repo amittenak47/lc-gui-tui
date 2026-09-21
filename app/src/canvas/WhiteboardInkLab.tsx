@@ -1673,6 +1673,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         });
       };
 
+      let lastEraseSample: { x: number; y: number } | null = null;
+      const scheduleErasePaint = () => {
+        if (rafRef.current != null) return;
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = null;
+          engine.paint();
+        });
+      };
       const stampEraser = (event: PointerEvent) => {
         const s = sampleOf(canvas, event);
         const { paintView } = readViews();
@@ -1686,9 +1694,19 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           ctx.beginPath();
           ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
           ctx.fill();
+          if (lastEraseSample) {
+            ctx.lineWidth = r * 2;
+            ctx.lineCap = "round";
+            ctx.strokeStyle = "#000";
+            ctx.beginPath();
+            ctx.moveTo(lastEraseSample.x, lastEraseSample.y);
+            ctx.lineTo(s.x, s.y);
+            ctx.stroke();
+          }
           ctx.restore();
         });
-        engine.paint();
+        lastEraseSample = s;
+        scheduleErasePaint();
         const live = erasePtsRef.current;
         if (live) {
           appendErasePathPoint(
@@ -1792,6 +1810,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           engine.captureSnap();
           pendingStampPatchRef.current = engine.copySnapPatch();
           erasePtsRef.current = [];
+          lastEraseSample = null;
           stampEraser(event);
           return;
         }
@@ -1904,8 +1923,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         }
         if (!drawingRef.current) return;
         holdNestedScroll();
+        if (toolRef.current === "eraser") stampEraser(event);
         drawingRef.current = false;
         stopPaintPump();
+        if (toolRef.current === "eraser") engine.paint();
         lastStrokeAtRef.current = performance.now();
         scheduleIdleRemesh();
         if (toolRef.current === "highlighter") {

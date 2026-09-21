@@ -103,6 +103,24 @@ export function shellViewport(
 
 let nativeInsets: SystemInsets | null = null;
 let nativeKnown = false;
+let sceneTextViewport: { height: number; width: number } | null = null;
+let sceneTextLeases = 0;
+
+/** Text drawn on the canvas must not resize/refit the canvas for the IME. */
+export function holdSceneTextViewport(): () => void {
+  if (sceneTextLeases++ === 0) sceneTextViewport = { height: window.innerHeight, width: window.innerWidth };
+  document.documentElement.classList.add("lc-scene-text-keyboard");
+  publishInsets();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (--sceneTextLeases > 0) return;
+    sceneTextViewport = null;
+    document.documentElement.classList.remove("lc-scene-text-keyboard");
+    publishInsets();
+  };
+}
 
 function publishInsets(): void {
   const root = document.documentElement;
@@ -124,6 +142,13 @@ function publishInsets(): void {
   root.style.setProperty("--lc-safe-bottom", `${safeBottom}px`);
   root.style.setProperty("--lc-keyboard-inset", `${keyboardInset}px`);
   const viewport = shellViewport(window.innerHeight, window.visualViewport);
+  if (sceneTextViewport) {
+    // A real orientation change is not a keyboard resize.
+    if (Math.abs(window.innerWidth - sceneTextViewport.width) > 100) {
+      sceneTextViewport = { height: window.innerHeight, width: window.innerWidth };
+    }
+    viewport.height = sceneTextViewport.height;
+  }
   root.style.setProperty("--lc-viewport-top", `${viewport.top}px`);
   root.style.setProperty("--lc-viewport-height", `${viewport.height}px`);
 }

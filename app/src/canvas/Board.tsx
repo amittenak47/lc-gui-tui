@@ -1863,6 +1863,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const sceneOverlayRef = useRef<SceneOverlayHandle>(null);
   const shapeSelectRef = useRef<SceneSelectionOverlayHandle>(null);
   const shapeDraftRef = useRef<unknown | null>(null);
+  const stampPlacementRef = useRef<((box: { minX: number; minY: number; maxX: number; maxY: number }) => PaintSceneElement[]) | null>(null);
   const [textEdit, setTextEdit] = useState<SceneTextEdit | null>(null);
   const textEditRef = useRef<SceneTextEdit | null>(null);
   textEditRef.current = textEdit;
@@ -3417,6 +3418,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const setActiveToolRef = useRef<(tool: ToolName) => void>(() => {});
   const setTool = useCallback((tool: ToolName) => {
+    stampPlacementRef.current = null;
     // One tool at a time: picking a drawing / select tool drops Ask-area (🔍).
     // `hand` is the parked tool while 🔍 owns the page — do not clear it here.
     if (tool !== "hand") setHighlighting(false);
@@ -5021,6 +5023,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     let drag: DrawDrag | MoveDrag | MarqueeDrag | null = null;
 
     const paintDraft = (d: DrawDrag) => {
+      if (stampPlacementRef.current) {
+        shapeDraftRef.current = stampPlacementRef.current({ minX: Math.min(d.x0, d.x1), minY: Math.min(d.y0, d.y1), maxX: Math.max(d.x0, d.x1), maxY: Math.max(d.y0, d.y1) });
+        sceneOverlayRef.current?.redraw();
+        return;
+      }
       const skeleton = skeletonFromDrag(d.type, d.x0, d.y0, d.x1, d.y1, {
         stroke: inkColorRef.current,
         fill: "transparent",
@@ -5209,6 +5216,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       if (finished.kind === "draw") {
         clearDraft();
+        const end = clientToScene(event.clientX, event.clientY);
+        finished.x1 = end.x;
+        finished.y1 = end.y;
         if (shapeSpan(finished.x0, finished.y0, finished.x1, finished.y1) < MIN_SHAPE_SPAN) {
           return;
         }
@@ -5219,13 +5229,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           fill: "transparent",
           width: strokeWidthRef.current,
         });
-        const created = convertToExcalidrawElements([skeleton]) as PaintSceneElement[];
+        const stampFactory = stampPlacementRef.current;
+        const created = stampFactory ? stampFactory({ minX: Math.min(finished.x0, finished.x1), minY: Math.min(finished.y0, finished.y1), maxX: Math.max(finished.x0, finished.x1), maxY: Math.max(finished.y0, finished.y1) }) : convertToExcalidrawElements([skeleton]) as PaintSceneElement[];
         const id = created[0]?.id;
         if (!id) return;
         api.updateScene({
           elements: [...(api.getSceneElements() as unknown[]), ...created],
           appState: {
-            selectedElementIds: { [id]: true },
+            selectedElementIds: Object.fromEntries(created.filter(el => el.id).map(el => [el.id!, true])),
             selectedGroupIds: {},
             selectedLinearElement: isLinearElementType(finished.type)
               ? linearEditorState({ id, elbowed: false })
@@ -5235,6 +5246,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           },
           captureUpdate: CaptureUpdateAction.IMMEDIATELY,
         });
+        if (stampFactory) { stampPlacementRef.current = null; setTool("selection"); }
         api.setActiveTool({ type: finished.type, locked: true });
         sceneOverlayRef.current?.redraw();
         shapeSelectRef.current?.redraw();
@@ -5817,6 +5829,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (event.button !== 0 && event.pointerType === "mouse") return;
       const target = event.target;
       if (!(target instanceof Element)) return;
+      if (!root.contains(target)) return;
       if (
         target.closest(
           ".lc-toolbar, .lc-map-controls, .lc-code-dock, .lc-pager, .lc-stamp-trash, .lc-capture-overlay, .lc-scene-select, .lc-scene-text-edit",
@@ -7437,7 +7450,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     })();
   }, [refitToViewport, reportContentSlot]);
 
-  /** Drop a configured stamp near the middle of what's currently on screen. */
+  /** Arm a configured stamp; the next canvas drag defines its bounds. */
   const stamp = useCallback(
     (shape: ShapeStamp, mods: Record<string, ShapeModValue>, moveAsOne: boolean) => {
       const api = apiRef.current;
@@ -7446,15 +7459,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!view) return;
       const resolved = resolveShapeMods(shape, mods);
       // Fixed sketch palette — stamps do not follow Appearance.
+      const factory = (box: { minX: number; minY: number; maxX: number; maxY: number }) => {
       let pieces = convert(shape.build(0, 0, resolved, DEFAULT_SHAPE_PALETTE)) as Array<PaintSceneElement & {
         id: string;
         groupIds?: string[];
       }>;
       const [minX, minY, maxX, maxY] = getCommonBounds(pieces);
       const width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
-      const scale = Math.min(1 / view.zoom, view.width * 0.7 / (view.zoom * width), view.height * 0.6 / (view.zoom * height));
-      const x = -view.scrollX + (view.width / view.zoom - width * scale) / 2;
-      const y = -view.scrollY + (view.height / view.zoom - height * scale) / 2;
+      const scale = Math.min(Math.max(4, box.maxX - box.minX) / width, Math.max(4, box.maxY - box.minY) / height);
+      const x = box.minX;
+      const y = box.minY;
       pieces = pieces.map(element => ({ ...scaleAbout(element,
         { minX, minY, maxX, maxY }, { minX: x, minY: y, maxX: x + width * scale, maxY: y + height * scale }),
         ...(element.strokeWidth ? { strokeWidth: element.strokeWidth * scale } : {}),
@@ -7483,15 +7497,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }));
       }
 
-      // IMMEDIATELY so Undo/Redo include library stamps (Server, Array, …).
-      setTool("selection");
-      api.updateScene({
-        elements: [...(api.getSceneElements() as unknown[]), ...pieces],
-        appState: { selectedElementIds: Object.fromEntries(pieces.map(element => [element.id, true])) },
-        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
-      });
-      sceneOverlayRef.current?.redraw();
-      shapeSelectRef.current?.redraw();
+      return pieces;
+      };
+      setTool("rectangle");
+      stampPlacementRef.current = factory;
     },
     [convert, getViewport, setTool],
   );
@@ -9546,6 +9555,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         interactive && annotateCode && "lc-board-annotating",
         interactive && annotateCode && inkToolActive && "lc-board-ink-lab",
         interactive && annotateCode && isShapeDrawTool(activeTool) && "lc-board-shape-tool",
+        interactive && activeTool === "text" && "lc-board-text-tool",
         transparentCanvas && "lc-board-paper",
         docPaper && "lc-board-doc-paper",
         // Highlighting / text-mark tools hand the surface back to the document
@@ -10332,7 +10342,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           const els = (apiRef.current?.getSceneElements() ?? []).filter(
             (raw) => (raw as PaintSceneElement).id !== textEditRef.current?.id,
           );
-          if (shapeDraftRef.current) els.push(shapeDraftRef.current);
+          if (shapeDraftRef.current) els.push(...(Array.isArray(shapeDraftRef.current) ? shapeDraftRef.current : [shapeDraftRef.current]));
           return els;
         }}
         getFiles={() =>
