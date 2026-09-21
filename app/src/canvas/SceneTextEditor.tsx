@@ -37,12 +37,18 @@ export function SceneTextEditor({ edit, getViewport, onFontSize, onCommit, onCan
   const [autoResize, setAutoResize] = useState(edit.autoResize !== false);
   const dragRef = useRef<{ x: number; y: number; width: number; autoResize: boolean } | null>(null);
   const [view, setView] = useState(getViewport);
+  const [visibleBottom, setVisibleBottom] = useState(Infinity);
   const zoom = view?.zoom ?? 1;
   const layout = layoutSceneText({ ...edit, text, width: boxWidth, autoResize });
   const width = Math.max(48 / zoom, autoResize ? Math.max(edit.width, layout.width + 2) : layout.width);
   const height = Math.max(edit.fontSize * layout.lineHeight, layout.height);
   const left = (edit.x + (view?.scrollX ?? 0)) * zoom;
-  const top = (edit.y + (view?.scrollY ?? 0)) * zoom;
+  const sceneTop = (edit.y + (view?.scrollY ?? 0)) * zoom;
+  // Lift only the transient editor if the IME covers it. The scene, header
+  // and ink controls retain their geometry; committing keeps edit.x/edit.y.
+  const top = sceneTop + Math.min(height * zoom, 180) > visibleBottom
+    ? Math.max(4, Math.min(sceneTop, visibleBottom - Math.min(height * zoom, 180)))
+    : sceneTop;
 
   useLayoutEffect(() => {
     const releaseViewport = holdSceneTextViewport();
@@ -53,6 +59,10 @@ export function SceneTextEditor({ edit, getViewport, onFontSize, onCommit, onCan
     let frame = 0;
     const follow = () => {
       const next = getViewport();
+      const boardRect = areaRef.current?.closest(".lc-board")?.getBoundingClientRect();
+      const viewport = window.visualViewport;
+      const bottom = boardRect && viewport ? viewport.offsetTop + viewport.height - boardRect.top - 12 : Infinity;
+      setVisibleBottom(previous => previous === bottom ? previous : bottom);
       setView((old) => old?.zoom === next?.zoom && old?.scrollX === next?.scrollX &&
         old?.scrollY === next?.scrollY && old?.width === next?.width && old?.height === next?.height ? old : next);
       frame = requestAnimationFrame(follow);
@@ -92,7 +102,7 @@ export function SceneTextEditor({ edit, getViewport, onFontSize, onCommit, onCan
         transform: edit.angle ? `rotate(${edit.angle}rad)` : undefined }}>
         <textarea ref={areaRef} className="lc-scene-text-editor" value={text} aria-label="Text box"
           spellCheck={false} wrap={autoResize ? "off" : "soft"}
-          style={{ width: "100%", height: "100%", fontSize: `${edit.fontSize * zoom}px`,
+          style={{ width: "100%", height: "100%", maxHeight: Number.isFinite(visibleBottom) ? Math.max(40, visibleBottom - top) : undefined, fontSize: `${edit.fontSize * zoom}px`,
             lineHeight: layout.lineHeight, color: edit.color, fontFamily: sceneTextFont(edit.fontFamily) }}
           onChange={(event) => setText(event.currentTarget.value)} />
         <button type="button" className="lc-scene-text-width" aria-label="Resize text width"
