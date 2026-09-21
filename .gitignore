@@ -107,3 +107,7 @@ docs/**/*.md
 docs/fix-log/
 docs/plans/
 docs/backup-*/
+AI_ENHANCEMENT_HANDOFF.md
+ASTRA_LAST_STATUS.txt
+ASTRA_PHASE3_WIP.md
+.cursor/plans/
