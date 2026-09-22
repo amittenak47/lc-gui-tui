@@ -4924,7 +4924,7 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 [data-lc-chrome-narrow] .lc-map-controls .lc-map-chrome-stack.has-wake:not(.is-open) {
-  width: 36px;
+  width: max-content;
   min-width: 36px;
   min-height: 36px;
   max-height: 36px;
@@ -5033,6 +5033,10 @@ body[data-lc-sash-drag="horizontal"] {
     overflow-x: visible;
     overflow-y: visible;
     align-items: center;
+  }
+
+  .lc-board-dock .lc-toolbar:not(.lc-toolbar-floating) .lc-history-pair {
+    flex-direction: column;
   }
 
   .lc-board-dock .lc-toolbar:not(.lc-toolbar-floating) .lc-tool-sep {
@@ -7726,11 +7730,13 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-map-chrome-left.has-wake {
   position: relative;
   overflow: visible;
+  flex-direction: column;
+  align-items: center;
   --lc-chrome-morph: 220ms;
 }
 
 .lc-map-chrome-left.has-wake:not(.is-open) {
-  width: 36px;
+  width: max-content;
   min-width: 36px;
   min-height: 36px;
   max-height: 36px;
@@ -7783,7 +7789,7 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-map-chrome-stack.has-wake:not(.is-open) {
-  width: 36px;
+  width: max-content;
   min-width: 36px;
   min-height: 36px;
   max-height: 36px;
@@ -7795,8 +7801,9 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 /*
- * Grouping only. Closed: no reserved hole (flex min-size is zeroed). Open and
- * close run in sequence — wake slides first on open, tray morphs first on close.
+ * Grouping only. Closed keeps the tray's width so the checker is already on
+ * the toolbar center. Open and close run in sequence — wake slides first on
+ * open, tray morphs first on close.
  * Right-stack card chrome lives on the tray so an empty card cannot flash.
  */
 .lc-chrome-stack-tray {
@@ -7819,6 +7826,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-map-chrome-stack.has-wake .lc-chrome-stack-tray,
 .lc-map-chrome-left.has-wake .lc-chrome-stack-tray {
+  width: max-content;
   transition:
     opacity var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
     transform var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
@@ -7835,9 +7843,8 @@ body[data-lc-sash-drag="horizontal"] {
   max-height: 0;
   height: 0;
   min-height: 0;
-  min-width: 0;
-  flex: 0 0 0;
-  padding: 0;
+  flex: 0 0 auto;
+  padding-block: 0;
   border-color: transparent;
   box-shadow: none;
   transform: scaleY(0);
@@ -7905,7 +7912,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-map-chrome-row {
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   align-items: center;
   gap: 4px;
 }
@@ -8134,19 +8141,21 @@ body[data-lc-sash-drag="horizontal"] {
   min-width: 36px;
   min-height: 36px;
   transform: translateX(-50%);
-  transition: transform var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1);
+  transition:
+    transform var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
+    bottom var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1);
   transition-delay: var(--lc-chrome-morph);
 }
 
 .lc-map-chrome-stack.has-wake.is-open > .lc-chrome-wake {
   z-index: 3;
-  transform: translateX(-50%) translateY(calc(100% + 4px));
+  transform: translateX(-50%) translateY(calc(100% + 16px));
   transition-delay: 0ms;
 }
 
 .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake {
   z-index: 3;
-  transform: translateX(-50%) translateY(calc(100% + 4px));
+  transform: translateX(-50%) translateY(calc(100% + 16px));
   transition-delay: 0ms;
 }
 
@@ -19893,6 +19902,15 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 .lc-notification button:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
 .lc-library-refresh { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; font-size: 12px; }
+/* Handedness mirrors the toolbar row. Undo stays left of Redo inside this pair. */
+.lc-history-pair {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 3px;
+}
+.lc-toolbar.is-column .lc-history-pair { flex-direction: column; }
+
 .lc-history-tool, .lc-history-tool:hover, .lc-history-tool:active {
   background: transparent !important;
   color: var(--ink);
@@ -20180,22 +20198,24 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 /* Narrow rails use equal flexible columns so each hand can select its own edge. */
 [data-lc-chrome-narrow] .lc-map-controls.lc-map-controls-paged { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-/* Opposite hands put annotate + view chrome on the same edge.
-   Sit the annotate cluster on a row above the view tray, and keep each
-   checker inside its own island — the usual open-wake slide (down 100%+4px)
-   lands on the other hand's checker. */
+/*
+ * Opposite hands share an edge. The annotate checker sits just above the
+ * menu tray. The menu checker still drops below its own toolbar.
+ */
 .lc-map-controls.is-mixed-hands.lc-map-controls-paged .lc-map-chrome-left,
 [data-ui-handedness="left"]:not([data-handedness="left"]) .lc-map-controls-paged .lc-map-chrome-left,
 [data-handedness="left"]:not([data-ui-handedness="left"]) .lc-map-controls-paged .lc-map-chrome-left {
-  bottom: calc(var(--lc-utility-tray-height, 36px) + 12px);
+  bottom: calc(var(--lc-utility-tray-height, 36px) + 10px);
 }
-.lc-map-controls.is-mixed-hands .lc-map-chrome-stack.has-wake.is-open > .lc-chrome-wake,
 .lc-map-controls.is-mixed-hands .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake,
-[data-ui-handedness="left"]:not([data-handedness="left"]) .lc-map-chrome-stack.has-wake.is-open > .lc-chrome-wake,
 [data-ui-handedness="left"]:not([data-handedness="left"]) .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake,
-[data-handedness="left"]:not([data-ui-handedness="left"]) .lc-map-chrome-stack.has-wake.is-open > .lc-chrome-wake,
-[data-handedness="left"]:not([data-handedness="left"]) .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake {
+[data-handedness="left"]:not([data-ui-handedness="left"]) .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake {
+  bottom: calc(100% + 10px);
   transform: translateX(-50%);
+  transition:
+    transform var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
+    bottom var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: 0ms;
 }
 @media (prefers-reduced-motion: reduce) {
   .lc-side-sheet,

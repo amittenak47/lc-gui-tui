@@ -1170,26 +1170,28 @@ export function BoardToolbar({
 
         <div className="lc-tool-sep" />
 
-        <button
-          type="button"
-          className="lc-tool lc-tip-target lc-history-tool"
-          aria-label="Undo"
-          data-tip="Undo"
-          data-tip-placement="bottom"
-          onClick={(event) => { animateHistoryArrow(event.currentTarget, -1); onUndo(); }}
-        >
-          <UndoIcon />
-        </button>
-        <button
-          type="button"
-          className="lc-tool lc-tip-target lc-history-tool"
-          aria-label="Redo"
-          data-tip="Redo"
-          data-tip-placement="bottom"
-          onClick={(event) => { animateHistoryArrow(event.currentTarget, 1); onRedo(); }}
-        >
-          <RedoIcon />
-        </button>
+        <div className="lc-history-pair">
+          <button
+            type="button"
+            className="lc-tool lc-tip-target lc-history-tool"
+            aria-label="Undo"
+            data-tip="Undo"
+            data-tip-placement="bottom"
+            onClick={(event) => { animateHistoryArrow(event.currentTarget, -1); onUndo(); }}
+          >
+            <UndoIcon />
+          </button>
+          <button
+            type="button"
+            className="lc-tool lc-tip-target lc-history-tool"
+            aria-label="Redo"
+            data-tip="Redo"
+            data-tip-placement="bottom"
+            onClick={(event) => { animateHistoryArrow(event.currentTarget, 1); onRedo(); }}
+          >
+            <RedoIcon />
+          </button>
+        </div>
         <HoldButton
           label="Reset board"
           tapFeedback={!resetLocked}

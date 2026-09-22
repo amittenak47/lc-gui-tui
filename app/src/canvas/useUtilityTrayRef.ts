@@ -1,13 +1,12 @@
 import { useCallback } from "react";
 
-/** Height of the view tray, including a wake that hangs below it. */
+/**
+ * Height of the view tray box. A wake that hangs past the tray is on the
+ * other side of the ink checker, so counting it only opens a hole.
+ */
 export function trayVisualHeight(node: HTMLElement): number {
   const box = node.getBoundingClientRect();
-  let bottom = box.bottom;
-  for (const wake of node.querySelectorAll(".lc-chrome-wake")) {
-    bottom = Math.max(bottom, wake.getBoundingClientRect().bottom);
-  }
-  return Math.max(node.offsetHeight, Math.max(0, bottom - box.top));
+  return Math.max(node.offsetHeight, Math.max(0, box.height));
 }
 
 /** CSS clearance for opposite ink/UI hands; no React updates during tray motion. */

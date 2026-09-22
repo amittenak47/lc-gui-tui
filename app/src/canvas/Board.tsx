@@ -1691,7 +1691,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     .filter(Boolean)
     .join(" ");
   const chromeTraySleeps = chromeMode === "fade" || chromeMode === "hidden";
-  const chromeStackOpen = chromeShown.eye;
   // The corner always restores the complete menu, including in hidden mode.
   // Keep its contents mounted so the wake animation can close and reopen it.
   const mountStackTools = chromeEnabled;
@@ -1734,7 +1733,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     setAnnotatePeek(true);
     setAnnotatePeekGen((n) => n + 1);
   }, []);
-  const leftChromeOpen = chromeShown.chrome || annotatePeek;
+  /*
+   * Stacked hands share an edge, so each checker opens only its own tray.
+   * Matching hands sit on opposite edges, and the menu checker opens both.
+   */
+  const handsStacked = uiHandedness !== inkHandedness;
+  const [menuPeek, setMenuPeek] = useState(false);
+  const [menuPeekGen, setMenuPeekGen] = useState(0);
+  const peekMenu = useCallback(() => {
+    setMenuPeek(true);
+    setMenuPeekGen((n) => n + 1);
+  }, []);
+  /*
+   * A hide tap wins over an active ink toolbar. Annotate mode stays on; the
+   * writer already chose it, so the tray can leave without flipping the mode.
+   */
+  const [annotateTrayHidden, setAnnotateTrayHidden] = useState(false);
+  const leftChromeOpen =
+    !annotateTrayHidden &&
+    (handsStacked ? annotatePeek || annotateCode : chromeShown.chrome || annotatePeek);
+  const chromeStackOpen = handsStacked ? menuPeek : chromeShown.eye;
   const rightWakePointerRef = useRef<number | null>(null);
   const leftWakePointerRef = useRef<number | null>(null);
   const rightWakeGestureRef = useRef<"open" | "close" | null>(null);
@@ -1757,8 +1775,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (!open) {
       gestureRef.current = "open";
       quietRef.current = performance.now() + CHROME_MORPH_MS * 2 + 120;
-      if (slot === "right") wakeChrome();
-      else peekAnnotate();
+      if (slot === "right") {
+        if (handsStacked) peekMenu();
+        else {
+          setAnnotateTrayHidden(false);
+          wakeChrome();
+        }
+      } else {
+        setAnnotateTrayHidden(false);
+        peekAnnotate();
+      }
       return;
     }
     gestureRef.current = "close";
@@ -1791,8 +1817,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => window.clearTimeout(timer);
   }, [annotatePeek, annotatePeekGen]);
   useEffect(() => {
+    if (!menuPeek) return;
+    const timer = window.setTimeout(() => setMenuPeek(false), CHROME_IDLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [menuPeek, menuPeekGen]);
+  useEffect(() => {
     if (chromeShown.chrome) setAnnotatePeek(false);
   }, [chromeShown.chrome]);
+  useEffect(() => {
+    if (!annotateCode) setAnnotateTrayHidden(false);
+  }, [annotateCode]);
   useEffect(() => {
     if (chromeMode === "visible" || !chromeAwake) return;
     const timer = window.setTimeout(() => setChromeAwake(false), CHROME_IDLE_MS);
@@ -9681,7 +9715,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 .join(" ")}
             >
               <div className="lc-chrome-stack-tray">
-              {annotateToggle && (leftChromeOpen || chromeTraySleeps) && (
+              {/*
+                Fade and hidden keep this mounted for the checker. Visible has
+                no checker, so the scroll/annotate control stays with the menu.
+              */}
+              {annotateToggle && (chromeMode === "visible" || leftChromeOpen || chromeTraySleeps) && (
                 <div className="lc-map-chrome-row">
                   <button
                     type="button"
@@ -9768,8 +9806,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   }}
                   onPointerUp={(event) => {
                     endWakeGesture("left", event, () => {
+                      setAnnotatePeek(false);
+                      if (annotateCode) {
+                        setAnnotateTrayHidden(true);
+                        return;
+                      }
                       if (chromeShown.chrome) sleepChrome();
-                      else setAnnotatePeek(false);
                     });
                   }}
                   onPointerCancel={(event) => {
@@ -9956,6 +9998,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   .join(" ")}
                 role="toolbar"
                 aria-label="Board view"
+                onPointerDown={() => {
+                  if (handsStacked && menuPeek) peekMenu();
+                }}
               >
                 <div className={`lc-chrome-stack-tray${trayFolded ? " is-folded" : ""}`}>
                   <button
@@ -10179,7 +10224,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       beginWakeGesture("right", event, chromeStackOpen);
                     }}
                     onPointerUp={(event) => {
-                      endWakeGesture("right", event, sleepChrome);
+                      endWakeGesture("right", event, () => {
+                        if (handsStacked) setMenuPeek(false);
+                        else sleepChrome();
+                      });
                     }}
                     onPointerCancel={(event) => {
                       cancelWakeGesture("right", event.pointerId);

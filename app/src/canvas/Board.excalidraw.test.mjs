@@ -687,6 +687,7 @@ describe("reading pan compositor", () => {
       css.indexOf(".lc-map-chrome-row {"),
       css.indexOf(".lc-zoom-row {"),
     );
+    expect(row).toContain("flex-direction: column");
     expect(row).toContain("width: 44px");
     expect(row).toContain("height: 44px");
     expect(row).toContain("min-height: 44px");
@@ -697,7 +698,10 @@ describe("reading pan compositor", () => {
     expect(wake).toContain("left: 50%");
     expect(wake).toContain("translateX(-50%)");
     expect(css).toMatch(
-      /\.lc-map-chrome-left\.has-wake\.is-open > \.lc-chrome-wake \{\s*z-index: 3;\s*transform: translateX\(-50%\) translateY\(calc\(100% \+ 4px\)\);/,
+      /\.lc-map-chrome-left\.has-wake\.is-open > \.lc-chrome-wake \{\s*z-index: 3;\s*transform: translateX\(-50%\) translateY\(calc\(100% \+ 16px\)\);/,
+    );
+    expect(css).toMatch(
+      /\.lc-map-chrome-stack\.has-wake\.is-open > \.lc-chrome-wake \{\s*z-index: 3;\s*transform: translateX\(-50%\) translateY\(calc\(100% \+ 16px\)\);/,
     );
   });
 
@@ -705,14 +709,20 @@ describe("reading pan compositor", () => {
     const src = readFileSync(join(here, "Board.tsx"), "utf8");
     const css = readFileSync(join(here, "../styles.css"), "utf8");
     expect(src).toContain('uiHandedness !== inkHandedness ? "is-mixed-hands"');
+    expect(src).toContain("useUtilityTrayRef");
     expect(css).toContain(".lc-map-controls.is-mixed-hands.lc-map-controls-paged .lc-map-chrome-left");
-    expect(css).toContain("bottom: calc(var(--lc-utility-tray-height, 36px) + 12px)");
-    const start = css.indexOf(
-      ".lc-map-controls.is-mixed-hands .lc-map-chrome-stack.has-wake.is-open > .lc-chrome-wake",
+    expect(css).toContain("bottom: calc(var(--lc-utility-tray-height, 36px) + 10px)");
+    const mixedWake = css.slice(
+      css.indexOf(".lc-map-controls.is-mixed-hands .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake"),
+      css.indexOf(".lc-map-controls.is-mixed-hands .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake") + 500,
     );
-    const mixed = css.slice(start, start + 900);
-    expect(mixed).toContain("transform: translateX(-50%)");
-    expect(mixed).not.toContain("translateY(calc(100% + 4px))");
+    expect(mixedWake).toContain("bottom: calc(100% + 10px)");
+    expect(mixedWake).not.toContain("translateY(calc(100% + 16px))");
+    expect(src).toContain("handsStacked ? menuPeek : chromeShown.eye");
+    expect(src).toContain("annotatePeek || annotateCode");
+    expect(src).toContain('chromeMode === "visible" || leftChromeOpen || chromeTraySleeps');
+    expect(src).toContain("setAnnotateTrayHidden(true)");
+    expect(src).toContain("if (handsStacked) peekMenu()");
   });
 
   it("places a text box on drag, without a hover ghost following the pointer", () => {
