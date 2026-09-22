@@ -543,22 +543,117 @@
   font-size: 13px;
   color: var(--muted);
 }
+.lc-artifact-picker-sources {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.lc-artifact-picker-modal button.lc-artifact-picker-source {
+  min-height: 26px;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--hint);
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.lc-artifact-picker-modal button.lc-artifact-picker-source:hover:not(:disabled),
+.lc-artifact-picker-modal button.lc-artifact-picker-source:focus-visible {
+  color: var(--ink);
+  background: transparent;
+}
+
+.lc-artifact-picker-modal button.lc-artifact-picker-source:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.lc-artifact-picker-modal button.lc-artifact-picker-source.is-active {
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 currentColor;
+}
+
 .lc-artifact-picker-reference-row {
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 72px auto;
+  align-items: center;
+  column-gap: 8px;
 }
-.lc-artifact-picker-reference-row .lc-artifact-picker-row-main {
-  flex-basis: 180px;
+
+.lc-artifact-picker-reference-row .lc-artifact-picker-status {
+  justify-self: center;
+  text-align: center;
 }
-.lc-artifact-picker-reference-row .lc-artifact-picker-row-actions {
-  margin-inline-start: auto;
+
+.lc-artifact-picker-reference-end {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
 }
-.lc-artifact-picker-modal .lc-artifact-picker-page {
-  width: 4.5em;
+
+.lc-artifact-picker-reference-end .lc-artifact-picker-attach {
+  margin-inline-start: -2px;
+}
+
+.lc-artifact-picker-unit {
+  flex: 0 0 3.7em;
+  width: 3.7em;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.lc-artifact-picker-reference-row .lc-number-wheel {
+  width: 26px;
+  height: 20px;
+  border-radius: 4px;
+}
+
+.lc-artifact-picker-reference-row .lc-number-wheel-item,
+.lc-artifact-picker-reference-row .lc-number-wheel-item-active {
+  flex: 0 0 20px;
+  height: 20px;
+  line-height: 20px;
+  font-size: 12px;
+}
+
+.lc-artifact-picker-modal button.lc-artifact-picker-attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
   min-height: 28px;
-  padding: 4px 6px;
-  margin-inline-start: 6px;
-  color: inherit;
-  font: inherit;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  line-height: 0;
+  background: transparent;
+  color: var(--hint);
+  box-shadow: none;
+}
+
+.lc-artifact-picker-modal button.lc-artifact-picker-attach:hover:not(:disabled),
+.lc-artifact-picker-modal button.lc-artifact-picker-attach:focus-visible {
+  color: var(--accent);
+  background: transparent;
+}
+
+.lc-artifact-picker-modal button.lc-artifact-picker-attach:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.lc-artifact-picker-reference-row .lc-number-wheel-selection,
+.lc-artifact-picker-reference-row .lc-number-wheel-fade {
+  display: none;
 }
 
 .lc-artifact-reference {

@@ -100,7 +100,7 @@ try {
       await sleep(200);
       const layout = await a.evaluate(`(() => {
         const modal = document.querySelector('.lc-artifact-picker-modal');
-        const buttons = [...modal.querySelectorAll('button')].filter(b => b.textContent === 'Attach excerpt');
+        const buttons = [...modal.querySelectorAll('button.lc-artifact-picker-attach')];
         return { overflow: modal.scrollWidth > modal.clientWidth + 1, rows: buttons.length,
           visible: buttons.every(b => { const r = b.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; }) };
       })()`);

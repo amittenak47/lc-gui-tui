@@ -132,10 +132,25 @@ function button(label: string) {
   return [...document.querySelectorAll<HTMLButtonElement>(".lc-artifact-picker-backdrop button")].find((node) => node.textContent === label);
 }
 
+function attachPlus() {
+  return document.querySelector<HTMLButtonElement>(".lc-artifact-picker-attach");
+}
+
 function fill(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   setter?.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+async function choosePage(label: string, page: number) {
+  const wheel = document.querySelector<HTMLElement>(`[role="slider"][aria-label="${label}"]`);
+  expect(wheel).toBeTruthy();
+  for (let current = Number(wheel!.getAttribute("aria-valuenow")); current < page; current += 1) {
+    await act(async () => {
+      wheel!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    });
+  }
+  expect(wheel!.getAttribute("aria-valuenow")).toBe(String(page));
 }
 
 function adornment(label: string) {
@@ -230,8 +245,12 @@ it("attaches a selected library page with read-only provenance and selected fili
   const { onAttach } = await mount({ footnoteChoices: [{ id: "mark", title: "Mark", selected: true }] });
   await act(async () => { button("Files")!.click(); });
   expect(backdrop().textContent).toContain("Read-only");
-  await act(async () => { fill(document.querySelector<HTMLInputElement>('[aria-label="Book.pdf page"]')!, "2"); });
-  await act(async () => { button("Attach excerpt")!.click(); });
+  await choosePage("Book.pdf page", 2);
+  const plus = attachPlus();
+  expect(plus?.getAttribute("aria-label")).toBe("Pin to chat");
+  expect(plus?.textContent).toBe("");
+  expect(document.querySelector(".lc-artifact-picker-reference-row .lc-number-wheel-fine")).toBeNull();
+  await act(async () => { plus!.click(); });
   expect(sources.capture).toHaveBeenCalledWith("book", 2);
   expect(repo.createArtifact).toHaveBeenCalledWith(parent, capture.title, [{ kind: "footnote", footnoteId: "mark" }],
     expect.objectContaining({ value: expect.objectContaining({ source: "excerpt", sourceReference: capture.reference }) }));
@@ -242,12 +261,12 @@ it("captures a chosen problem-region page and keeps failures retryable", async (
   const capturePage = vi.fn().mockRejectedValue(new Error("The page changed. Retry."));
   const { onAttach } = await mount({ pageChoices: [{ id: "scratch", title: "Scratch", kind: "markdown", pages: 4 }], capturePage });
   await act(async () => { button("Pages & regions")!.click(); });
-  await act(async () => { fill(document.querySelector<HTMLInputElement>('[aria-label="Scratch page"]')!, "3"); });
-  await act(async () => { button("Attach excerpt")!.click(); });
+  await choosePage("Scratch page", 3);
+  await act(async () => { attachPlus()!.click(); });
   expect(capturePage).toHaveBeenCalledWith("scratch", 3);
   expect(document.querySelector('[role="alert"]')?.textContent).toContain("Retry");
   expect(onAttach).not.toHaveBeenCalled();
-  expect(button("Attach excerpt")!.disabled).toBe(false);
+  expect(attachPlus()!.disabled).toBe(false);
   expect(repo.createArtifact).not.toHaveBeenCalled();
 });
 

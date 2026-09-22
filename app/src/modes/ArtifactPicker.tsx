@@ -19,6 +19,7 @@ import { footnoteThemeVars } from "../util/footnoteTheme";
 import { ArtifactKindIcon, artifactKindLabel } from "./ArtifactKindIcon";
 import { LibraryPadlock } from "./LibraryPadlock";
 import "./artifacts.css";
+import { NumberWheel } from "../canvas/NumberWheel";
 import { listAnnotateDocs, annotateDocLabel } from "../util/annotateStore";
 import { captureLibraryReference, referenceSnapshot, type ArtifactReferenceCapture } from "../util/artifactReferenceSources";
 
@@ -79,6 +80,14 @@ function FootnotesIcon() {
 }
 
 const CREATE_KINDS: ArtifactKind[] = ["whiteboard", "markdown", "code"];
+/** Wheel range when a library file's length is not known until capture. */
+const UNKNOWN_SOURCE_PAGES = 240;
+
+function sourceLabel(value: "saved" | "files" | "pages"): string {
+  if (value === "saved") return "Saved";
+  if (value === "files") return "Files";
+  return "Pages & regions";
+}
 
 function associationKey(entry: ArtifactAssociation): string {
   return JSON.stringify(entry);
@@ -455,10 +464,18 @@ export function ArtifactPicker({
                 <CreateIcon />
               </button>
             </form>
-            <div className="lc-artifact-picker-kinds" role="group" aria-label="Attachment source">
-              {(["saved", "files", ...(pageChoices.length ? ["pages"] : [])] as const).map(value => (
-                <button key={value} type="button" className="lc-secondary" aria-pressed={source === value} disabled={busy}
-                  onClick={() => setSource(value as typeof source)}>{value === "saved" ? "Saved" : value === "files" ? "Files" : "Pages & regions"}</button>
+            <div className="lc-artifact-picker-sources" role="group" aria-label="Attachment source">
+              {(["saved", "files", ...(pageChoices.length ? ["pages"] as const : [])] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`lc-artifact-picker-source${source === value ? " is-active" : ""}`}
+                  aria-pressed={source === value}
+                  disabled={busy}
+                  onClick={() => setSource(value)}
+                >
+                  {sourceLabel(value)}
+                </button>
               ))}
             </div>
             <div className="lc-artifact-picker-catalog">
@@ -469,19 +486,46 @@ export function ArtifactPicker({
                 <p className="lc-artifact-picker-empty">No matching attachments.</p>
               )}
               <div className="lc-artifact-picker-list">
-                {source !== "saved" && visibleReferences.map(row => <div className="lc-artifact-picker-row lc-artifact-picker-reference-row" key={row.id}>
-                  <div className="lc-artifact-picker-row-main">
-                    <span className="lc-artifact-picker-kind"><ArtifactKindIcon kind={row.kind} className="lc-artifact-picker-adorn-icon" /></span>
-                    <span className="lc-artifact-picker-row-title">{row.title}</span>
-                    <span className="lc-artifact-picker-status">Read-only</span>
-                  </div>
-                  <div className="lc-artifact-picker-row-actions">
-                    <label className="lc-artifact-picker-status">{row.unit}<input type="number" min={1} max={row.pages} disabled={busy}
-                      className="lc-artifact-picker-page" aria-label={`${row.title} ${row.unit.toLowerCase()}`}
-                      value={sourcePages[row.id] ?? 1} onChange={event => setSourcePages(current => ({ ...current, [row.id]: Number(event.target.value) }))} /></label>
-                    <button type="button" disabled={busy} onClick={() => void attachReference(row.id)}>Attach excerpt</button>
-                  </div>
-                </div>)}
+                {source !== "saved" && visibleReferences.map((row) => {
+                  const pageMax = row.pages && row.pages >= 1 ? row.pages : UNKNOWN_SOURCE_PAGES;
+                  const page = Math.min(pageMax, Math.max(1, sourcePages[row.id] ?? 1));
+                  const pageLabel = `${row.title} ${row.unit.toLowerCase()}`;
+                  return (
+                    <div className="lc-artifact-picker-row lc-artifact-picker-reference-row" key={row.id}>
+                      <span className="lc-artifact-picker-kind">
+                        <ArtifactKindIcon kind={row.kind} className="lc-artifact-picker-adorn-icon" />
+                      </span>
+                      <span className="lc-artifact-picker-row-title">{row.title}</span>
+                      <span className="lc-artifact-picker-status">Read-only</span>
+                      <div className="lc-artifact-picker-reference-end">
+                        <span className="lc-artifact-picker-unit">{row.unit}</span>
+                        <NumberWheel
+                          value={page}
+                          min={1}
+                          max={pageMax}
+                          step={1}
+                          allowFineScrub={false}
+                          enabled={!busy}
+                          label={pageLabel}
+                          format={(size) => String(Math.round(size))}
+                          onChange={(next) => {
+                            const chosen = Math.min(pageMax, Math.max(1, Math.round(next)));
+                            setSourcePages((current) => ({ ...current, [row.id]: chosen }));
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="lc-artifact-picker-attach"
+                          disabled={busy}
+                          aria-label={attachLabel}
+                          onClick={() => void attachReference(row.id)}
+                        >
+                          <CreateIcon />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
                 {source !== "saved" && !visibleReferences.length && <p className="lc-artifact-picker-empty">No matching sources.</p>}
                 {source === "saved" && visible.map((item) => {
                   const ref = artifactRef(parent, item);
