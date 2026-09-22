@@ -2163,6 +2163,7 @@ export function Workspace({
     },
     ticket => setAgentMessages(current => current.map(m => m.id === ticket.id ? {
       ...m, requestState: ticket.state,
+      requestNote: ticket.state === "failed" || ticket.state === "cancelled" ? ticket.error : undefined,
       queued: ticket.state === "queued" || ticket.state === "preparing",
     } : m)),
   );
@@ -7159,7 +7160,13 @@ export function Workspace({
       coachRunGenRef.current += 1;
       const turn = activeCoachTurnIdRef.current;
       if (turn) setAgentMessages(current => current.map(m => m.id === turn
-        ? { ...m, pending: false, content: m.content || "Cancelled", requestState: "cancelled" } : m));
+        ? {
+            ...m,
+            pending: false,
+            content: m.content.trim().toLowerCase() === "cancelled" ? "" : m.content,
+            requestState: "cancelled",
+            requestNote: "You stopped this reply.",
+          } : m));
       setCoachPhase(null);
       setBusy(null);
     }

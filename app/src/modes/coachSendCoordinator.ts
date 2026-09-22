@@ -1,3 +1,5 @@
+import { messageOf } from "../util/messageOf";
+
 export type SendState = "preparing" | "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
 export interface SendTicket<T> {
   id: string;
@@ -32,11 +34,14 @@ export class CoachSendCoordinator<T> {
   fail(id: string, error: unknown): void {
     const t = this.tickets.get(id);
     if (!t || t.state === "cancelled") return;
-    t.state = "failed"; t.error = String(error); this.changed(t); this.drain();
+    t.state = "failed"; t.error = messageOf(error); this.changed(t); this.drain();
   }
   abort(id: string): void {
     const t = this.tickets.get(id);
     if (!t || !["preparing", "queued", "running"].includes(t.state)) return;
+    t.error = t.state === "running"
+      ? "Stopped while the agent was replying."
+      : "Stopped before this was sent.";
     t.state = "cancelled"; t.controller.abort();
     if (this.edit === id) this.edit = null;
     this.changed(t); this.drain();
@@ -70,7 +75,7 @@ export class CoachSendCoordinator<T> {
         await this.execute(t.value!, t.controller.signal);
         if (!t.controller.signal.aborted) t.state = "completed";
       } catch (error) {
-        if (!t.controller.signal.aborted) { t.state = "failed"; t.error = String(error); }
+        if (!t.controller.signal.aborted) { t.state = "failed"; t.error = messageOf(error); }
       } finally {
         this.active = null; this.changed(t); this.drain();
       }

@@ -28,6 +28,7 @@ it("offers Retry only after terminal state and selection seeds a draft without s
   const retry = vi.fn(), send = vi.fn();
   act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy={false} messages={[{
     ...message("failed"),
+    requestNote: "The document changed during capture.",
     flags: ["Ask", "Annotations", "Reasoning · high"],
   }]} onSend={send} onRetryMessage={retry}
     quoteSeed={{ token: 1, text: "Selected passage", attachment: { label: "Selection", png: "test", thumb: "thumb" } }} />));
@@ -36,7 +37,8 @@ it("offers Retry only after terminal state and selection seeds a draft without s
   const flags = host.querySelector(".lc-agent-turn-footnotes.is-failed");
   expect(flags).toBeTruthy();
   expect(flags!.classList.contains("lc-agent-turn-header-flags")).toBe(false);
-  expect(flags!.querySelector(".lc-agent-turn-fail")?.getAttribute("aria-label")).toBe("Failed");
+  expect(flags!.querySelector(".lc-agent-turn-fail")?.getAttribute("aria-label")).toBe("The document changed during capture.");
+  expect(flags!.querySelector(".lc-agent-turn-fail")?.getAttribute("data-tip")).toBe("The document changed during capture.");
   expect(flags!.textContent).toMatch(/Ask/);
   expect(flags!.textContent).toMatch(/Annotations/);
   expect(host.querySelector(".lc-agent-turn-header-flags")).toBeNull();
@@ -50,9 +52,26 @@ it("keeps the fail mark on the YOU flags footer when send bits never landed", ()
   const flags = host.querySelector(".lc-agent-turn-footnotes.is-failed");
   expect(flags).toBeTruthy();
   expect(flags!.classList.contains("lc-agent-turn-header-flags")).toBe(false);
-  expect(flags!.querySelector(".lc-agent-turn-fail")?.getAttribute("aria-label")).toBe("Failed");
+  expect(flags!.querySelector(".lc-agent-turn-fail")?.getAttribute("aria-label")).toBe("This message was not sent.");
+  expect(flags!.querySelector(".lc-agent-turn-fail")?.getAttribute("data-tip")).toBe("This message was not sent.");
   expect(host.querySelector(".lc-agent-turn-header-flags")).toBeNull();
   expect(host.querySelector(".lc-agent-turn-role")?.textContent).toBe("You");
+});
+
+it("marks a stopped message in amber with a stop icon and no cancelled label", () => {
+  act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy={false} messages={[
+    { ...message("cancelled"), content: "can u explain", requestNote: "Stopped before this was sent.", flags: ["Ask"] },
+    { id: "a1", role: "assistant", content: "Cancelled", at: 2, requestState: "cancelled", requestNote: "You stopped this reply.", processEvents: [] },
+  ]} onSend={() => {}} />));
+  const user = host.querySelector(".lc-agent-turn-user")!;
+  const agent = host.querySelector(".lc-agent-turn-assistant")!;
+  expect(user.classList.contains("lc-agent-turn-cancelled")).toBe(true);
+  expect(user.textContent?.toLowerCase()).not.toContain("cancelled");
+  expect(user.textContent).toContain("can u explain");
+  expect(user.querySelector(".lc-agent-turn-fail")?.getAttribute("data-tip")).toBe("Stopped before this was sent.");
+  expect(user.querySelector(".lc-agent-turn-fail svg rect")).toBeTruthy();
+  expect(agent.textContent?.toLowerCase()).not.toContain("cancelled");
+  expect(agent.querySelector(".lc-agent-turn-fail")?.getAttribute("data-tip")).toBe("You stopped this reply.");
 });
 
 it("puts AGENT send flags under the message with the same rule as YOU", () => {

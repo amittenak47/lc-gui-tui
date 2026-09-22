@@ -404,6 +404,31 @@ function FailIcon() {
   );
 }
 
+/** Square stop mark, same circle as {@link FailIcon}. */
+function StopIcon() {
+  return (
+    <svg className="lc-agent-turn-fail-icon" viewBox="0 0 16 16" aria-hidden>
+      <circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="5.55" y="5.55" width="4.9" height="4.9" rx="0.7" fill="currentColor" />
+    </svg>
+  );
+}
+
+function turnBody(message: AgentChatMessage): string {
+  if (message.requestState === "cancelled" && message.content.trim().toLowerCase() === "cancelled") return "";
+  return message.content;
+}
+
+function statusTip(message: AgentChatMessage): string | null {
+  if (message.requestState === "failed") {
+    return message.requestNote?.trim() || "This message was not sent.";
+  }
+  if (message.requestState === "cancelled") {
+    return message.requestNote?.trim() || "You stopped this message.";
+  }
+  return null;
+}
+
 function turnArtifactProposal(message: AgentChatMessage): AgentArtifactProposal {
   if (message.drawing) {
     return {
@@ -578,6 +603,8 @@ export interface AgentChatMessage {
   requestId?: string;
   retryOf?: string;
   requestState?: import("./coachSendCoordinator").SendState;
+  /** Why a send failed or was stopped — shown on the status icon, not in the bubble. */
+  requestNote?: string;
   /**
    * The turn this one is answering.
    *
@@ -1574,6 +1601,8 @@ export function AgentSidePanel({
               className={`lc-agent-turn lc-agent-turn-selectable lc-agent-turn-${turnKind(message.role)}${
                 message.requestState === "failed" ? " lc-agent-turn-failed" : ""
               }${
+                message.requestState === "cancelled" ? " lc-agent-turn-cancelled" : ""
+              }${
                 messageMenu?.messageId === message.id
                   ? messageMenu.tall
                     ? " lc-agent-turn-selected lc-agent-turn-selected-tall"
@@ -1630,7 +1659,7 @@ export function AgentSidePanel({
                 onManage={onManageArtifacts}
               />
               </div>
-              {message.requestState && !message.queued && message.requestState !== "failed" && message.requestState !== "completed" && (
+              {message.requestState && !message.queued && message.requestState !== "failed" && message.requestState !== "cancelled" && message.requestState !== "completed" && (
                 <small>{message.requestState}</small>
               )}
               {message.retryOf && <small>Retry · previous attempt retained above</small>}
@@ -1641,7 +1670,7 @@ export function AgentSidePanel({
                 showProcess={showProcess}
                 displayPrefs={displayPrefs} disclosure={disclosureFor(message.id)}
                 reasoning={message.reasoning}
-                text={message.content}
+                text={turnBody(message)}
                 assistant={message.role === "assistant"}>
               {showsReplyStub(message, openThreadId) && (
                 /*
@@ -2372,18 +2401,26 @@ function MessageArtifactTools({
 function MessageFlags({ message }: { message: AgentChatMessage }) {
   const pending = Boolean(message.pending);
   const failed = message.requestState === "failed";
+  const cancelled = message.requestState === "cancelled";
+  const marked = failed || cancelled;
   const flags = pending ? message.pendingAck?.flags ?? message.flags : message.flags;
   const text = flags?.join(" · ") || (pending ? "Working…" : "");
   const shown = useWordReveal(text, pending, pending);
-  if (!text && !failed) return null;
+  const tip = statusTip(message);
+  if (!text && !marked) return null;
   return (
     <div
-      className={`lc-agent-turn-footnotes${failed ? " is-failed" : ""}`}
+      className={`lc-agent-turn-footnotes${failed ? " is-failed" : ""}${cancelled ? " is-cancelled" : ""}`}
       role={pending ? "status" : undefined}
     >
-      {failed ? (
-        <span className="lc-agent-turn-fail" aria-label="Failed" title="Failed">
-          <FailIcon />
+      {marked ? (
+        <span
+          className="lc-agent-turn-fail lc-tip-target"
+          aria-label={tip ?? undefined}
+          data-tip={tip ?? undefined}
+          data-tip-placement="top"
+        >
+          {cancelled ? <StopIcon /> : <FailIcon />}
         </span>
       ) : (
         <span className="lc-agent-turn-flag-rule" aria-hidden />

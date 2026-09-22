@@ -9722,6 +9722,31 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               */}
               {annotateToggle && (chromeMode === "visible" || leftChromeOpen || chromeTraySleeps) && (
                 <div className="lc-map-chrome-row">
+                  {/*
+                    Link sits above the scroll/annotate toggle. The column is
+                    bottom-aligned, so the toggle keeps the slot it has alone.
+                  */}
+                  {linkToggle && annotateCode && (
+                    <button
+                      type="button"
+                      className={
+                        linking
+                          ? "lc-lined-toggle lc-tip-target is-active"
+                          : "lc-lined-toggle lc-tip-target"
+                      }
+                      aria-pressed={linking}
+                      aria-label={linking ? "Stop linking" : "Link two things on the page"}
+                      data-tip={
+                        linking
+                          ? "Circle a mark, image, or drawing — then stroke to connect"
+                          : "Link — circle targets, then connect them"
+                      }
+                      data-tip-placement="bottom"
+                      onClick={() => onToggleLink?.()}
+                    >
+                      <LinkToolIcon on={linking} />
+                    </button>
+                  )}
                   <button
                     type="button"
                     className={
@@ -9763,27 +9788,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   >
                     <AnnotateIcon on={annotateCode} />
                   </button>
-                  {linkToggle && annotateCode && (
-                    <button
-                      type="button"
-                      className={
-                        linking
-                          ? "lc-lined-toggle lc-tip-target is-active"
-                          : "lc-lined-toggle lc-tip-target"
-                      }
-                      aria-pressed={linking}
-                      aria-label={linking ? "Stop linking" : "Link two things on the page"}
-                      data-tip={
-                        linking
-                          ? "Circle a mark, image, or drawing — then stroke to connect"
-                          : "Link — circle targets, then connect them"
-                      }
-                      data-tip-placement="bottom"
-                      onClick={() => onToggleLink?.()}
-                    >
-                      <LinkToolIcon on={linking} />
-                    </button>
-                  )}
                 </div>
               )}
               </div>

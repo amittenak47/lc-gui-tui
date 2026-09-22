@@ -15,7 +15,13 @@ export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
     const drawing = restoreMessageDrawing(message.drawing);
     const artifacts = sanitizeArtifactRefs(message.artifacts);
     const artifactProposals = sanitizeArtifactProposals(message.artifactProposals);
-    const content = typeof message.content === "string" ? message.content : "";
+    const rawContent = typeof message.content === "string" ? message.content : "";
+    const content = message.requestState === "cancelled" && rawContent.trim().toLowerCase() === "cancelled"
+      ? ""
+      : rawContent;
+    const requestNote = typeof message.requestNote === "string" && message.requestNote.trim()
+      ? message.requestNote.trim()
+      : undefined;
     const processEvents = Array.isArray(message.processEvents)
       ? message.processEvents
       : undefined;
@@ -61,6 +67,7 @@ export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
         requestId: message.requestId, retryOf: message.retryOf,
         requestState: message.requestState && ["preparing", "queued", "running"].includes(message.requestState)
           ? "interrupted" : message.requestState,
+        ...(requestNote ? { requestNote } : {}),
         review: message.review,
         bridge: message.bridge,
         attachments: message.attachments,

@@ -35,7 +35,7 @@
   /* Home modes — same five hues at every card size, and the wordmark. */
   --lc-mode-practice: #a78bfa;
   --lc-mode-whiteboard: #60a5fa;
-  --lc-mode-annotate: #f0a33a;
+  --lc-mode-annotate: #ff0000;
   --lc-mode-browse: #34d399;
   --lc-mode-explore: #f472b6;
   --ink: #111827;
@@ -6731,7 +6731,7 @@ body[data-lc-sash-drag="horizontal"] {
   height: 52px;
   border-radius: 14px;
   background: color-mix(in srgb, var(--lc-home-mode, var(--ink)) 14%, transparent);
-  color: var(--lc-home-mode, color-mix(in srgb, var(--ink) 78%, transparent));
+  color: var(--lc-home-ink, var(--lc-home-mode, color-mix(in srgb, var(--ink) 78%, transparent)));
   overflow: hidden;
   isolation: isolate;
   transition:
@@ -6766,7 +6766,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-home-card:hover:not(:disabled) .lc-home-card-icon {
   background: color-mix(in srgb, var(--lc-home-mode, var(--accent)) 22%, transparent);
-  color: var(--lc-home-mode, var(--ink));
+  color: var(--lc-home-ink, var(--lc-home-mode, var(--ink)));
 }
 
 .lc-home-card-text {
@@ -6795,7 +6795,7 @@ body[data-lc-sash-drag="horizontal"] {
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--lc-home-mode, color-mix(in srgb, var(--ink) 55%, transparent));
+  color: var(--lc-home-ink, var(--lc-home-mode, color-mix(in srgb, var(--ink) 55%, transparent)));
 }
 
 .lc-home-card-blurb {
@@ -6815,6 +6815,8 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-home-card[data-mode="annotate"] {
   --lc-home-mode: var(--lc-mode-annotate);
+  /* Tabs stay #ff0000. The icon and label use the same pastel step as the other home items. */
+  --lc-home-ink: #f87171;
 }
 
 .lc-home-card[data-mode="browse"] {
@@ -10283,8 +10285,15 @@ body[data-lc-sash-drag="horizontal"] {
   width: fit-content;
   min-width: 13rem;
   max-width: 92%;
-  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+
+/* iMessage blue stays on the edge. The fill follows the palette so the text stays readable. */
+.lc-agent-turn-user:not(.lc-agent-turn-failed):not(.lc-agent-turn-cancelled) {
+  border: 2px solid #007aff;
+}
+
+[data-theme="dark"] .lc-agent-turn-user:not(.lc-agent-turn-failed):not(.lc-agent-turn-cancelled) {
+  border-color: #0a84ff;
 }
 
 @keyframes lc-agent-bubble-enter {
@@ -10319,6 +10328,15 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-agent-turn-system,
 .lc-agent-turn-app {
   align-self: stretch;
+}
+
+/* iOS green text-message color, on the edge only. */
+.lc-agent-turn-assistant:not(.lc-agent-turn-failed):not(.lc-agent-turn-cancelled) {
+  border: 2px solid #34c759;
+}
+
+[data-theme="dark"] .lc-agent-turn-assistant:not(.lc-agent-turn-failed):not(.lc-agent-turn-cancelled) {
+  border-color: #30d158;
 }
 
 /*
@@ -10389,6 +10407,62 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-agent-turn-failed {
   background: color-mix(in srgb, var(--bad) 12%, var(--surface));
   border-color: color-mix(in srgb, var(--bad) 42%, var(--line));
+}
+
+/*
+ * Stopped turns use a fixed amber. Sent bubbles keep the palette fill, with
+ * a blue or green edge, so this wash stays a third hue.
+ */
+.lc-agent-turn-cancelled {
+  background: color-mix(in srgb, #d97706 18%, var(--surface));
+  border-color: color-mix(in srgb, #d97706 50%, var(--line));
+}
+
+.lc-agent-turn-cancelled .lc-agent-turn-body,
+.lc-agent-turn-cancelled .lc-agent-turn-fail,
+.lc-agent-turn-cancelled .lc-agent-turn-flag {
+  color: color-mix(in srgb, #c2410c 78%, var(--ink));
+}
+
+/*
+ * Light papers (white, blush) swallow a 12% wash. Mix the status hue with
+ * white, not the page, and darken the type so both the bubble and the words
+ * stay readable.
+ */
+[data-theme="light"] .lc-agent-turn-failed {
+  background: color-mix(in srgb, #b91c1c 34%, #fff);
+  border-color: #b91c1c;
+}
+
+[data-theme="light"] .lc-agent-turn-failed :is(
+  .lc-agent-turn-role,
+  .lc-agent-turn-body,
+  .lc-agent-turn-flag,
+  .lc-agent-turn-tool,
+  .lc-agent-turn-fail,
+  .lc-agent-process,
+  .lc-agent-reasoning,
+  .lc-agent-reasoning-toggle
+) {
+  color: #6b1212;
+}
+
+[data-theme="light"] .lc-agent-turn-cancelled {
+  background: color-mix(in srgb, #d97706 42%, #fff);
+  border-color: #c2410c;
+}
+
+[data-theme="light"] .lc-agent-turn-cancelled :is(
+  .lc-agent-turn-role,
+  .lc-agent-turn-body,
+  .lc-agent-turn-flag,
+  .lc-agent-turn-tool,
+  .lc-agent-turn-fail,
+  .lc-agent-process,
+  .lc-agent-reasoning,
+  .lc-agent-reasoning-toggle
+) {
+  color: #6b240c;
 }
 
 .lc-agent-turn-tools {
@@ -10498,8 +10572,15 @@ body[data-lc-sash-drag="horizontal"] {
   gap: 6px;
 }
 
-.lc-agent-turn-footnotes.is-failed .lc-agent-turn-flag-rule {
+.lc-agent-turn-footnotes.is-failed .lc-agent-turn-flag-rule,
+.lc-agent-turn-footnotes.is-cancelled .lc-agent-turn-flag-rule {
   display: none;
+}
+
+.lc-agent-turn-footnotes.is-cancelled {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
 }
 
 .lc-agent-turn-failed .lc-agent-turn-flag {
@@ -10780,6 +10861,11 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-agent-think-stack + .lc-agent-turn-body {
   margin-top: 8px;
+}
+
+.lc-agent-think-stack:has(.lc-agent-reasoning) + .lc-agent-turn-body {
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
 .lc-agent-process-morph,
