@@ -69,8 +69,14 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # The action default still installs the legacy `tools` package. Google
+      # removed it from the SDK repository, so sdkmanager exits with
+      # "Failed to find package 'tools'". This build only needs platform-tools
+      # (adb) here; the NDK is installed in the next step.
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       # CI pins r26d. A local tablet build may be on NDK 29. Both produce
       # equivalent APKs, but if a build fails here and not on your machine, or

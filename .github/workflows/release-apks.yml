@@ -69,8 +69,12 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Same package pin as build-android-apk.yml. The action default still
+      # requests the removed `tools` package and fails sdkmanager.
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       # Same r26d pin as build-android-apk.yml. Keep the two in step: a
       # release built on a different NDK than CI has been testing is a
