@@ -32,6 +32,25 @@ function stroke(y: number, extra: Partial<InkDrawOp> = {}): InkDrawOp {
 }
 
 describe("InkPageBook", () => {
+  it("snapshots clean empty and authored pages even when no dirty shards remain", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(2));
+    book.setVisiblePage(1);
+    book.commit(stroke(40));
+    book.markFlushed(book.pageIds());
+    expect(book.takeDirtyEncoded().size).toBe(0);
+    const saved = book.snapshotEncodedPages();
+    expect([...saved.keys()]).toEqual(book.pageIds());
+    expect([...saved.values()].some(page => page.ops.length === 0)).toBe(true);
+    const restored = new InkPageBook();
+    restored.setFrames(frames(2));
+    restored.ingestEncodedPages(saved);
+    expect(restored.assembleOps()).toEqual(book.assembleOps());
+    book.clear();
+    const blank = new InkPageBook();
+    blank.ingestEncodedPages(book.snapshotEncodedPages());
+    expect(blank.assembleOps()).toEqual([]);
+  });
   it("keeps decoded ops only for the LRU window plus spanning", () => {
     const book = new InkPageBook();
     book.setFrames(frames(20));

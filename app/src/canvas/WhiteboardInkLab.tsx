@@ -149,6 +149,7 @@ export interface RasterInkHandle {
   getRevision(): number;
   dirtyInkPageCount(): number;
   takeDirtyInkPages(): Map<number, import("./inkCodec").EncodedInk>;
+  snapshotInkPages(): Map<number, import("./inkCodec").EncodedInk>;
   markInkPagesFlushed(pageIds: Iterable<number>): void;
   ingestInkPages(
     pages: Map<number, import("./inkCodec").EncodedInk>,
@@ -1331,6 +1332,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         },
         takeDirtyInkPages() {
           return bookRef.current.takeDirtyEncoded();
+        },
+        snapshotInkPages() {
+          return bookRef.current.snapshotEncodedPages();
         },
         markInkPagesFlushed(pageIds) {
           bookRef.current.markFlushed(pageIds);

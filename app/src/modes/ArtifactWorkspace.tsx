@@ -108,10 +108,10 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
     if (!current || !canvas || !hydrated.current) throw new Error("Wait for the attachment to finish opening.");
     if (canvas.isInking()) throw new Error("Lift the pen before saving.");
     const { ink: _ink, inkC: _inkC, ...blob } = canvas.saveBoard({ assembleInk: false });
-    const ink = new Map(current.value.ink);
-    for (const [page, encoded] of canvas.takeDirtyInkPages()) ink.set(page, encoded);
-    const wanted = new Set(blob.inkPages?.pageIds ?? []);
-    for (const page of ink.keys()) if (!wanted.has(page)) ink.delete(page);
+    // The live book may allocate clean empty pages on open, or repartition
+    // restored strokes after layout. Dirty shards alone are not a snapshot.
+    const ink = canvas.snapshotInkPages();
+    blob.inkPages = { v: 1, pageIds: [...ink.keys()].sort((a, b) => a - b) };
     // Keep all scene elements: regular Save deliberately drops temporary coach
     // shapes, but an explicitly saved drawing owns those shapes/programs.
     blob.elements = canvas.getElements();

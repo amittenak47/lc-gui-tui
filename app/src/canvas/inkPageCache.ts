@@ -190,6 +190,11 @@ export class InkPageBook {
     return shards;
   }
 
+  /** Attachment snapshots need clean empty pages as well as authored strokes. */
+  snapshotEncodedPages(): Map<number, EncodedInk> {
+    return new Map(this.pageIds().map(id => [id, this.encodedPage(id)!]));
+  }
+
   encodedPage(pageId: number): EncodedInk | null {
     const hot = this.hot.get(pageId);
     if (hot) return encodeInkOps(hot);

@@ -9,7 +9,7 @@ describe("vertical menu visibility", () => {
     // Main drawing chrome can stay hidden; the corner tray must still provide
     // its theme, page and agent controls, rather than restore only the eye.
     expect(board).toMatch(/const mountStackTools = chromeEnabled;/);
-    expect(board).toMatch(/const chromeStackOpen = chromeShown\.eye;/);
+    expect(board).toMatch(/const chromeStackOpen = handsStacked \? menuPeek : chromeShown\.eye;/);
   });
 
   it("lets the same fold control operate in visible, fade and hidden modes", () => {
@@ -62,7 +62,7 @@ describe("vertical menu visibility", () => {
     expect(hidden).toContain("pointer-events: none");
     expect(css).not.toContain(".lc-mobile.lc-app-agent-open .lc-map-controls {");
     expect(css).not.toContain(".lc-mobile.lc-app-agent-open .lc-board-chrome-slot .lc-map-chrome-right");
-    expect(board).toContain("const chromeStackOpen = chromeShown.eye;");
+    expect(board).toContain("const chromeStackOpen = handsStacked ? menuPeek : chromeShown.eye;");
     expect(board).toContain('trayFolded ? " is-folded" : ""');
   });
 

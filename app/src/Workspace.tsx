@@ -8311,7 +8311,7 @@ export function Workspace({
           updatedAt: Date.now(), board: board.saveBoard(), agent: persistableAgentMessages(agentMessagesRef.current) });
         parent = { kind: "problem", id };
       }
-      if (problemRef.current !== problem || boardRef.current !== board) throw new Error("The workspace changed. Reopen Attachments.");
+      if (problemRef.current !== problem || boardRef.current?.instanceId !== board.instanceId) throw new Error("The workspace changed. Reopen Attachments.");
       return { parent, messageId: message?.id, footnoteId,
         associations: artifactCreationAssociations({ activeFootnoteId: footnoteId, attachedFootnoteIds: message?.artifactFootnoteIds ?? attachedFootnoteIds,
           threadRootId: threadRootIdRef.current ?? message?.replyTo?.id ?? message?.id }) };
@@ -8408,7 +8408,7 @@ export function Workspace({
       image = await canvas.exportAttachmentRegion(region, page);
       text = "Captured page image. Handwriting is not transcribed; use the image when vision is available.";
     }
-    if (problemRef.current !== current || boardRef.current !== canvas) throw new Error("The workspace changed during capture. Reopen Attachments.");
+    if (problemRef.current !== current || boardRef.current?.instanceId !== canvas.instanceId) throw new Error("The workspace changed during capture. Reopen Attachments.");
     const locator = `${choice.title} · Page ${page}`;
     return { title: `${current.task_id} · ${locator}`, kind: choice.kind, text: text.slice(0, REFERENCE_TEXT_LIMIT), reference: {
       v: 1, parent: context.parent, revision: crypto.randomUUID(), label: current.task_id.slice(0, 512), locator,

@@ -9176,6 +9176,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       isInking: () => rasterInkRef.current?.isDrawing() ?? false,
       dirtyInkPageCount: () => rasterInkRef.current?.dirtyInkPageCount() ?? 0,
       takeDirtyInkPages: () => rasterInkRef.current?.takeDirtyInkPages() ?? new Map(),
+      snapshotInkPages: () => rasterInkRef.current?.snapshotInkPages() ?? new Map(),
       markInkPagesFlushed: (pageIds) => {
         rasterInkRef.current?.markInkPagesFlushed(pageIds);
       },

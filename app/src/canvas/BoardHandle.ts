@@ -155,6 +155,8 @@ export interface BoardHandle {
   /** Paint restored ink in slices while the loading overlay is still up. */
   primeInkSnap(): Promise<void>;
   takeDirtyInkPages(): Map<number, EncodedInk>;
+  /** Full in-memory page snapshot, including clean empty pages. */
+  snapshotInkPages(): Map<number, EncodedInk>;
   markInkPagesFlushed(pageIds: Iterable<number>): void;
   dirtyInkPageCount(): number;
   encodedInkShards(): EncodedInk[];

@@ -367,11 +367,11 @@ describe("WhiteboardInkLab", () => {
     expect(boot).not.toMatch(/enabled,/);
   });
 
-  it("replays committed overlay with SDF capsules, not the miter strip", () => {
+  it("replays committed overlay through the shared ribbon spine", () => {
     const src = readFileSync(join(here, "inkLab/replay.ts"), "utf8");
     const paint = src.slice(src.indexOf("export function paintLabDrawOps"));
-    expect(paint).toMatch(/paintSdfSpines/);
-    expect(paint.indexOf("paintSdfSpines")).toBeLessThan(paint.indexOf("fillMiterStroke"));
+    expect(paint).toMatch(/labSpineFromDrawOp\(op\)/);
+    expect(paint).toMatch(/fillMiterStroke\(ctx, spine, null, rgb\)/);
   });
 
   it("does not replay ink with the miter strip", () => {
@@ -425,7 +425,8 @@ describe("WhiteboardInkLab", () => {
       readFileSync(join(here, "inkLab/engine.ts"), "utf8").indexOf("const composite"),
       readFileSync(join(here, "inkLab/engine.ts"), "utf8").indexOf("type LiftState"),
     );
-    expect(composite).toMatch(/clipBlitRect/);
+    expect(composite).toMatch(/presentHost\(ctx, null, snap\)/);
+    expect(composite).toMatch(/ribbon\.paint\(host, snap, points, stableTo\)/);
     expect(src).not.toMatch(/Math\.max\(1, painted\.marginY\)/);
     const tick = src.slice(src.indexOf("const onPaintFrame"), src.indexOf("const schedulePaint"));
     expect(tick.indexOf("keepLivePaintPump")).toBeGreaterThan(-1);

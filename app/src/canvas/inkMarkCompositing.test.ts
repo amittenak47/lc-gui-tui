@@ -30,23 +30,19 @@ function destCalls(points: ScenePoint[]) {
   return calls;
 }
 
-describe("a mark settles its own overlaps before it reaches the page", () => {
+describe("default pen replays taps and strokes through the same ribbon", () => {
   /*
-   * The ribbon has always drawn opaque into a scratch and landed with one
-   * blit, so it does not darken where it crosses itself. Disc marks painted
-   * straight onto the destination, so which path drew a mark decided how it
-   * composited -- and the grain, being destination-out, cut into ink that was
-   * already on the page rather than only into its own disc.
+   * Dwell clusters used to stamp a textured disc. The default pen now uses
+   * the same ribbon replay as a long stroke, without a separate disc/blit.
    */
-  it("puts a dwell blot down as one blit, not as fills on the destination", () => {
+  it("paints a dwell cluster through the ribbon with round caps", () => {
     const dwell: ScenePoint[] = [];
     for (let i = 0; i < 30; i++)
       dwell.push({ x: Math.sin(i) * 0.08, y: Math.cos(i) * 0.08, pressure: 0.6, slowness: 1.9 });
     const calls = destCalls(dwell);
-    expect(calls.filter((c) => c.startsWith("drawImage")).length).toBeGreaterThan(0);
-    // Nothing may be cut out of the page itself.
-    expect(calls.some((c) => c.startsWith("fill("))).toBe(false);
-    expect(calls.some((c) => c.startsWith("arc("))).toBe(false);
+    expect(calls.filter((c) => c.startsWith("fill(")).length).toBeGreaterThan(0);
+    expect(calls.some((c) => c.startsWith("drawImage("))).toBe(false);
+    expect(calls.some((c) => c.startsWith("arc("))).toBe(true);
   });
 
   it("does the same for a stroke long enough to be a ribbon", () => {
