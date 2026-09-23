@@ -44,7 +44,7 @@ import {
   visibleFootnoteDiffRows,
 } from "../util/hubConflictStash";
 import { linedPaperModeFromAppState, linedPitchStateFromAppState } from "../util/linedPaperPref";
-import { mergeConflictPageFrames, expandLumpedInkDiffRows, decodeConflictInkPages, inkPageIdsFromOps, conflictPaperFrames, whiteboardConflictFrames, whiteboardInkMergeRows, pageFramesEqual } from "./conflictInkLayout";
+import { mergeConflictPageFrames, decodeConflictInkPages, inkPageIdsFromOps, conflictPaperFrames, whiteboardConflictFrames, whiteboardInkMergeRows, pageFramesEqual } from "./conflictInkLayout";
 import type { ConflictInkDecodeCache } from "./conflictInkLayout";
 import {
   countWhiteboardPages,
@@ -330,6 +330,10 @@ export function HubConflictSplit({
   const overlayInkRef = useRef(overlayInk);
   overlayInkRef.current = overlayInk;
   const overlayTriedRef = useRef<Set<number>>(new Set());
+  const [visiblePreviewPages, setVisiblePreviewPages] = useState<{local: readonly number[]; server: readonly number[]}>({local:[],server:[]});
+  const observePreviewPages = (side: Side, pages: readonly number[]) => {
+    setVisiblePreviewPages(current => current[side].join(",") === pages.join(",") ? current : {...current,[side]:pages});
+  };
   const [inkHits, setInkHits] = useState<{
     local: number[];
     server: number[];
@@ -393,7 +397,10 @@ export function HubConflictSplit({
             inkHits.localOps,
             inkHits.serverOps,
           )
-        : expandLumpedInkDiffRows(basePadInkRows, listFrames, inkHits.local, inkHits.server),
+        // Annotate resolves stored shards, including page 0 spanning ink.
+        // Only whiteboards have a resolver for virtual sheet choices. Turning
+        // PDF page 0/1 into virtual IDs asks the hub for pages it never stored.
+        : basePadInkRows,
     [conflict, basePadInkRows, listFrames, inkHits],
   );
   const fnInkRows = useMemo(
@@ -712,6 +719,7 @@ export function HubConflictSplit({
     overlayTriedRef.current = new Set();
   }, [conflict?.id]);
 
+  const previewPageKey = [...new Set([focusPage, ...visiblePreviewPages.local, ...visiblePreviewPages.server])].sort((a,b)=>a-b).join(",");
   useEffect(() => {
     if (!conflict || focusPage < 1) return;
     if (!fetchPreviewInk && !client) return;
@@ -731,35 +739,40 @@ export function HubConflictSplit({
       (lumpedWhiteboard &&
         pageId >= 1 &&
         pages.some((page) => page.page_id === 1 && Boolean(page.gz)));
-    if (covers(localPages, focusPage) && covers(serverPages, focusPage)) {
-      return;
-    }
-    if (overlayTriedRef.current.has(focusPage)) return;
-    overlayTriedRef.current.add(focusPage);
+    const wanted = previewPageKey.split(",").map(Number).filter(pageId =>
+      pageId >= 1 && !overlayTriedRef.current.has(pageId) && !(covers(localPages, pageId) && covers(serverPages, pageId)));
+    if (!wanted.length) return;
     let gone = false;
-    let finished = false;
+    const pending = new Set<number>();
     const load =
       fetchPreviewInk ??
       ((pageId: number) =>
         loadConflictPreviewInkPage(client, conflict.kind, conflict.id, pageId));
-    void load(focusPage)
-      .then((got) => {
-        finished = true;
+    void (async () => {
+      for (const pageId of wanted) {
         if (gone) return;
-        setOverlayInk((current) => ({
-          local: mergeInkDtos(current.local, overlayInkPages(got.local)),
-          server: mergeInkDtos(current.server, overlayInkPages(got.server)),
-        }));
-      })
-      .catch(() => {
-        finished = true;
-        overlayTriedRef.current.delete(focusPage);
-      });
+        overlayTriedRef.current.add(pageId);
+        pending.add(pageId);
+        try {
+          const got = await load(pageId);
+          if (gone) return;
+          pending.delete(pageId);
+          if (got.server === null) overlayTriedRef.current.delete(pageId);
+          setOverlayInk((current) => ({
+            local: mergeInkDtos(current.local, overlayInkPages(got.local)),
+            server: mergeInkDtos(current.server, overlayInkPages(got.server)),
+          }));
+        } catch {
+          pending.delete(pageId);
+          overlayTriedRef.current.delete(pageId);
+        }
+      }
+    })();
     return () => {
       gone = true;
-      if (!finished) overlayTriedRef.current.delete(focusPage);
+      for (const pageId of pending) overlayTriedRef.current.delete(pageId);
     };
-  }, [client, conflict, fetchPreviewInk, focusPage]);
+  }, [client, conflict, fetchPreviewInk, previewPageKey]);
 
   if (!conflict) return null;
 
@@ -866,7 +879,7 @@ export function HubConflictSplit({
           id,
           has,
           unread,
-          `Handwriting (page ${row.pageId})`,
+          row.pageId === 0 ? "Handwriting across page boundaries" : `Handwriting (page ${row.pageId})`,
         );
       })}
       {fnInkRows.map((row) => {
@@ -1007,6 +1020,7 @@ export function HubConflictSplit({
             focusKey={`${focusedId}:${focusRevision}`}
             decodedInk={side === "local" ? inkHits.localShards : inkHits.serverShards}
             inkLoading={inkLoading}
+            onVisiblePages={pages => observePreviewPages(side, pages)}
           />
           <ol
             className={["lc-hub-conflict-list", pickingStarted && !valid ? "is-picking" : ""]

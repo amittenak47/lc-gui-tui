@@ -497,6 +497,26 @@ describe("fetchHubInkPages", () => {
     gz: "YQ==",
   });
 
+  it("bounds concurrent downloads on long merges", async () => {
+    const { fetchHubInkPages } = await import("./inkSync");
+    let active = 0, peak = 0;
+    const getInkPage = vi.fn(async (_kind: string, _key: string, id: number) => {
+      active++; peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      active--; return page(id);
+    });
+    const ids = Array.from({length:30}, (_,i) => i+1);
+    const rows = await fetchHubInkPages({getInkPage} as never,"annotate","p1",ids);
+    expect(rows?.map(row=>row.page_id)).toEqual(ids);
+    expect(peak).toBe(4);
+  });
+
+  it("preserves the failed page and transport error during resolution", async () => {
+    const { fetchHubInkPages } = await import("./inkSync");
+    const getInkPage = vi.fn(async () => { throw new Error("connection refused"); });
+    await expect(fetchHubInkPages({getInkPage} as never,"annotate","p1",[40],{strict:true})).rejects.toThrow(/page 40.*connection refused/);
+  });
+
   it("asks for the pages it names and nothing else", async () => {
     const { fetchHubInkPages } = await import("./inkSync");
     const getInkPage = vi.fn(async (_k: string, _key: string, id: number) => page(id));

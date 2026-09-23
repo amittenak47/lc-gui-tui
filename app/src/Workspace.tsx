@@ -1086,7 +1086,7 @@ export function Workspace({
           c.serverInk ?? null,
           {
             ...(c.hubInkPageIds ? { hubPageIds: c.hubInkPageIds } : {}),
-            fetchHubPages: (pageIds) => fetchHubInkPages(client, c.kind, c.id, pageIds),
+            fetchHubPages: (pageIds) => fetchHubInkPages(client, c.kind, c.id, pageIds, { strict: true }),
           },
         );
       } else {
@@ -1098,7 +1098,7 @@ export function Workspace({
           c.serverInk ?? null,
           {
             ...(c.hubInkPageIds ? { hubPageIds: c.hubInkPageIds } : {}),
-            fetchHubPages: (pageIds) => fetchHubInkPages(client, c.kind, c.id, pageIds),
+            fetchHubPages: (pageIds) => fetchHubInkPages(client, c.kind, c.id, pageIds, { strict: true }),
             ...(c.kind === "whiteboard"
               ? { pageFrames: whiteboardPageFramesFromPad(c.local ?? c.server) }
               : {}),
@@ -1121,13 +1121,13 @@ export function Workspace({
           c.footnoteInk,
           {
             fetchHubPages: (key, pageIds) =>
-              fetchHubInkPages(client, "annotate", key, pageIds),
+              fetchHubInkPages(client, "annotate", key, pageIds, { strict: true }),
           },
         );
       } else if (c.footnoteInk?.length) {
         await applyFootnoteInkChoice(client, c.id, c.footnoteInk, inkChoice, {
           fetchHubPages: (key, pageIds) =>
-            fetchHubInkPages(client, "annotate", key, pageIds),
+            fetchHubInkPages(client, "annotate", key, pageIds, { strict: true }),
         });
       }
       /*

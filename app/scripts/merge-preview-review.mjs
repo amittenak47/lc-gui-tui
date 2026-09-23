@@ -88,6 +88,13 @@ try {
       const annotations=await evaluate(`Array.from(document.querySelectorAll('.lc-hub-conflict-pane')).map(p=>({marks:p.querySelectorAll('[data-footnote-id]').length,ink:[...p.querySelectorAll('canvas[data-ink-tile]')].some(c=>c.width>0&&c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i)=>i%4===3&&v>0))}))`);
       for(const pane of annotations){assert(pane.marks>0,JSON.stringify({type,annotations}));assert(pane.ink,JSON.stringify({type,annotations}));}
       const jumps=[];
+      if(type==='pdf') {
+        const alignment=await evaluate(`Array.from(document.querySelectorAll('.lc-hub-conflict-preview')).map(p=>{const page=p.querySelector('[data-pdf-page="1"]').getBoundingClientRect(),band=p.querySelector('[data-footnote-id="note-1"] .lc-doc-footnote-band').getBoundingClientRect(),scale=page.width/1100;return {dx:band.left+band.width/2-(page.left+271*scale),dy:band.top+band.height/2-(page.top+131*scale)}})`);
+        assert(alignment.every(a=>Math.abs(a.dx)<1&&Math.abs(a.dy)<1),JSON.stringify(alignment));
+        // Visit a page with no clicked entry: its ink must load from the viewport.
+        await evaluate(`document.querySelectorAll('.lc-hub-conflict-preview').forEach(p=>{const page=p.querySelector('[data-pdf-page="73"]');p.scrollTop+=page.getBoundingClientRect().top-p.getBoundingClientRect().top;})`);
+        await waitFor(`window.reviewFetched.includes(73)&&Array.from(document.querySelectorAll('.lc-hub-conflict-preview')).every(p=>[...p.querySelectorAll('canvas[data-ink-page="73"]')].some(c=>c.width>0))`);
+      }
       if(type==='pdf') for(const page of [25,50,100,1]){
         const at=Date.now();
         await evaluate(`document.querySelector('.lc-hub-conflict-pane [data-note-id="note-${page}"]').click()`);

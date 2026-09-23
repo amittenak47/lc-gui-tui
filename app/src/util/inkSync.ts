@@ -323,15 +323,29 @@ export async function fetchHubInkPages(
   kind: InkPadKind,
   key: string,
   pageIds: readonly number[],
+  opts: { strict?: boolean } = {},
 ): Promise<InkPageDto[] | null> {
   const wanted = [...new Set(pageIds)].filter((id) => id >= 0);
   if (wanted.length === 0) return [];
   try {
-    const rows = await Promise.all(
-      wanted.map((pageId) => client.getInkPage(kind, key, pageId)),
-    );
+    const rows: Array<InkPageDto | null> = new Array(wanted.length);
+    let next = 0;
+    let failed = false;
+    // A long merge must not start hundreds of base64 downloads together.
+    await Promise.all(Array.from({length: Math.min(4, wanted.length)}, async () => {
+      while (!failed && next < wanted.length) {
+        const index = next++;
+        try { rows[index] = await client.getInkPage(kind, key, wanted[index]!); }
+        catch (cause) {
+          failed = true;
+          const detail = cause instanceof Error ? cause.message : String(cause);
+          throw new Error(`The other device's handwriting could not be read (page ${wanted[index]}): ${detail}`);
+        }
+      }
+    }));
     return rows.filter((row): row is InkPageDto => row != null);
-  } catch {
+  } catch (cause) {
+    if (opts.strict) throw cause;
     return null;
   }
 }
@@ -461,7 +475,8 @@ export async function applyInkChoice(
     // no such page" — Keep Server would then delete local ink and write the
     // short remainder. A page the hub genuinely lacks was never in `wanted`.
     const got = new Set(fetched.map((page) => page.page_id));
-    if (wanted.some((id) => !got.has(id))) return null;
+    const missing = wanted.filter(id => !got.has(id));
+    if (missing.length) throw new Error(`The other device's handwriting could not be read: the hub lists page ${missing.join(", ")} but returned no ink for it. Retry Sync to refresh the comparison.`);
     return fetched;
   };
   if (choice === "local") {

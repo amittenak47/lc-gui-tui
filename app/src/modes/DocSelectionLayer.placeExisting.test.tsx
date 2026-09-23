@@ -7,6 +7,7 @@ import { act } from "react";
 
 import { DocSelectionLayer } from "./DocSelectionLayer";
 import type { DocFootnote } from "../util/docFootnotes";
+import type { PageFrame } from "../canvas/inkPageIndex";
 import { publishDocPlacementRev, publishPdfViewPages, resetPdfFilmScopes } from "./pdfFilm";
 import { makeDocFlagHolds, resetDocCameraForTests } from "../canvas/docSelectionGesture";
 
@@ -132,6 +133,7 @@ describe("marks made on a wider copy of the same page", () => {
     paletteScope = "",
     footnotes: readonly DocFootnote[] = [REGION_MARK],
     pdf = paletteScope !== "",
+    markPageFrames?: readonly PageFrame[],
   ) {
     const host = document.createElement("div");
     document.body.append(host);
@@ -147,6 +149,7 @@ describe("marks made on a wider copy of the same page", () => {
         enabled={false}
         placeExisting
         markScale={markScale}
+        markPageFrames={markPageFrames}
         paletteScope={paletteScope}
         footnotes={notes}
       >
@@ -182,6 +185,15 @@ describe("marks made on a wider copy of the same page", () => {
       },
     };
   }
+
+  it("preserves the authored bands relative to their page, excluding earlier page gaps", () => {
+    const {host,root,setFootnotes} = mountScaled(0.5,"",[REGION_MARK],false,[{pageId:6,minY:4000,maxY:5000}]);
+    setFootnotes([{...REGION_MARK}]);
+    const band = host.querySelector<HTMLElement>(".lc-doc-footnote-band")!;
+    expect(parseFloat(band.style.left)+parseFloat(band.style.width)/2).toBeCloseTo((179+117/2)*0.5);
+    expect(parseFloat(band.style.top)+parseFloat(band.style.height)/2).toBeCloseTo(2305+(4313-4000+27/2)*0.5);
+    act(()=>root.unmount());
+  });
 
   it("brings a region anchor across in proportion", () => {
     /*

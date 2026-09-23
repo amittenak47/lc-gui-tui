@@ -62,6 +62,7 @@ import {
   setSubMarkDragLive,
 } from "../canvas/docSelectionGesture";
 import { horizontalScrollHost } from "../canvas/scrollHost";
+import type { PageFrame } from "../canvas/inkPageIndex";
 import {
   MIN_BAND_PX,
   type LocalRect,
@@ -283,14 +284,11 @@ export interface DocSelectionLayerProps {
   /**
    * How much narrower this document is than the one the marks were made on.
    *
-   * Only the conflict panes pass it, and only region anchors need it: a text
-   * anchor re-resolves against this layout's own text and lands wherever the
-   * words are. Recorded band rects are *not* rescued by it — they are
-   * body-local, and page gaps are a constant number of pixels rather than a
-   * share of the page, so the error compounds down the stack. Where this is
-   * set, the anchor is re-resolved instead of trusting them.
+   * Region anchors scale within their page. Recorded bands additionally need
+   * the original page frames because PDF gaps do not scale with page width.
    */
   markScale?: number;
+  markPageFrames?: readonly PageFrame[];
   footnotes?: readonly DocFootnote[];
   onScreenshot?: (selection: DocSelectionResult, anchorRect: DOMRect | null, context: SelectionActionContext) => SelectionActionResult | Promise<SelectionActionResult>;
   onAskAgent?: (selection: DocSelectionResult, anchorRect: DOMRect | null, context: SelectionActionContext) => SelectionActionResult | Promise<SelectionActionResult>;
@@ -395,6 +393,7 @@ export function DocSelectionLayer({
   highlighting = false,
   placeExisting = false,
   markScale = 1,
+  markPageFrames,
   footnotes = [],
   onAnnotate,
   onScreenshot,
@@ -429,6 +428,7 @@ export function DocSelectionLayer({
     highlighting: boolean;
     placeExisting: boolean;
     markScale: number;
+    markPageFrames: readonly PageFrame[] | undefined;
     cameraScope: string | undefined;
   } | null>(null);
   const [rects, setRects] = useState<LocalRect[]>([]);
@@ -1846,9 +1846,23 @@ export function DocSelectionLayer({
          * below the words it belongs to. The anchor still knows the answer.
          */
         const foreignLayout = placeExisting;
-        const usableStored = foreignLayout ? [] : storedBands;
+        const sourceFrame = markPageFrames?.find(frame => frame.pageId === pdfPageFromDocScope(footnote.anchor.scope));
+        const pageBox = sourceFrame ? root.getBoundingClientRect() : null;
+        const mappedBands = foreignLayout && sourceFrame && pageBox
+          ? tightLocalRects(body, (footnote.bands ?? [])
+              .filter(band => band.top >= sourceFrame.minY - 1 && band.top + band.height <= sourceFrame.maxY + 1)
+              .map(band => ({
+                left: band.left * markScale + (pageBox.left - bodyBox.left) / bodyScale,
+                top: (band.top - sourceFrame.minY) * markScale + (pageBox.top - bodyBox.top) / bodyScale,
+                width: band.width * markScale,
+                height: band.height * markScale,
+              })))
+          : [];
+        const usableStored = foreignLayout ? mappedBands : storedBands;
         const bands =
-          live.length > 0
+          foreignLayout && usableStored.length > 0
+            ? usableStored
+            : live.length > 0
             ? live
             : usableStored.length > 0
               ? usableStored
@@ -1927,12 +1941,14 @@ export function DocSelectionLayer({
       prev.highlighting !== highlighting ||
       prev.placeExisting !== placeExisting ||
       prev.markScale !== markScale ||
+      prev.markPageFrames !== markPageFrames ||
       prev.cameraScope !== cameraScope;
     placeGeometryRef.current = {
       footnotes,
       highlighting,
       placeExisting,
       markScale,
+      markPageFrames,
       cameraScope,
     };
     if (geometryChanged) place(placePagesFromFilm(cameraScope));
@@ -2109,7 +2125,7 @@ export function DocSelectionLayer({
     };
     // Intentionally omit `children`: identity churn on every App render re-bound
     // the observer and re-ran place(), which felt like a constant scroll ping.
-  }, [footnotes, enabled, highlighting, placeExisting, markScale, cameraScope]);
+  }, [footnotes, enabled, highlighting, placeExisting, markScale, markPageFrames, cameraScope]);
 
 
 

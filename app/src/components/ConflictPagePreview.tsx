@@ -82,6 +82,7 @@ export function ConflictPagePreview({
   focusKey,
   decodedInk,
   inkLoading = false,
+  onVisiblePages,
 }: {
   hash?: string;
   page: number;
@@ -119,6 +120,7 @@ export function ConflictPagePreview({
    */
   decodedInk?: readonly { pageId: number; ops: InkOp[] }[];
   inkLoading?: boolean;
+  onVisiblePages?: (pages: readonly number[]) => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const docRef = useRef<HTMLDivElement | null>(null);
@@ -132,6 +134,8 @@ export function ConflictPagePreview({
   const [cssWidth, setCssWidth] = useState(0);
   const [scrollRoot, setScrollRoot] = useState<HTMLElement | null>(null);
   const [stackH, setStackH] = useState(0);
+  const onVisiblePagesRef = useRef(onVisiblePages);
+  onVisiblePagesRef.current = onVisiblePages;
   const [localShards, setDecodedShards] = useState<{ pageId: number; ops: InkOp[] }[]>(
     [],
   );
@@ -306,6 +310,7 @@ export function ConflictPagePreview({
       if (spans.length === 0) return;
       const { intersecting, current } = pdfVisibleFromSpans(spans, view.top, view.bottom);
       if (current < 1) return;
+      onVisiblePagesRef.current?.(intersecting.length ? intersecting : [current]);
       publishPdfFilmCurrent(filmScope, current);
       publishPdfViewPages(
         filmScope,
@@ -534,6 +539,7 @@ export function ConflictPagePreview({
              * proportion, and it is the transform the ink already uses.
              */
             markScale={sceneWidth && sceneWidth > 0 ? cssWidth / sceneWidth : 1}
+            markPageFrames={stablePageFrames}
             footnotes={keptNotes}
           >
             <PdfDocument
