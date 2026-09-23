@@ -52,7 +52,6 @@ import {
   resetClearModeLabel,
   type ResetClearMode,
 } from "./resetClearMode";
-import { FontSizeSlider } from "./FontSizeSlider";
 import { ShapePreview } from "./ShapePreview";
 import { inkSwatches } from "./inkColors";
 import { InkFullnessSlider } from "./InkFullnessSlider";
@@ -178,8 +177,6 @@ export interface BoardToolbarProps {
   onInkFullness: (fullness: number) => void;
   pressureSensitive: boolean;
   onPressureSensitive: (enabled: boolean) => void;
-  fontSize: number;
-  onFontSize: (size: number) => void;
   /** Plain text vs monospace code note (Text tool long-press). */
   textMode: "plain" | "code";
   onTextMode: (mode: "plain" | "code") => void;
@@ -286,8 +283,6 @@ export function BoardToolbar({
   onInkFullness,
   pressureSensitive,
   onPressureSensitive,
-  fontSize,
-  onFontSize,
   textMode: _textMode,
   onTextMode,
   shapesOpen,
@@ -1276,11 +1271,6 @@ export function BoardToolbar({
           </div>
         )}
 
-        {active === "text" && (
-          <div className="lc-stroke-controls">
-            <FontSizeSlider value={fontSize} onChange={onFontSize} />
-          </div>
-        )}
         </>
         )}
       </div>

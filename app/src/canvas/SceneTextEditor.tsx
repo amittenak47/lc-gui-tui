@@ -97,8 +97,13 @@ export function SceneTextEditor({ edit, getViewport, onFontSize, onCommit, onCan
       <div className="lc-scene-text-controls" role="toolbar" aria-label="Text editing"
         style={{ left: Math.max(8, Math.min(view.width - 236, left)), top: Math.max(4, controlsTop) }}>
         <TextFontSizeControl value={edit.fontSize} onChange={onFontSize} label="Text font size" />
-        <button type="button" aria-label="Finish editing text" title="Done (Ctrl+Enter)"
-          onPointerDown={(event) => event.preventDefault()} onClick={() => finish(true)}>Done</button>
+        <button type="button" className="lc-scene-text-submit" aria-label="Finish editing text" title="Done (Ctrl+Enter)"
+          onPointerDown={(event) => event.preventDefault()} onClick={() => finish(true)}>
+          <svg className="lc-scene-text-submit-icon" viewBox="0 0 16 16" aria-hidden>
+            <path d="M2.2 2.8 13.7 8 2.2 13.2 4.4 8Z" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinejoin="round" strokeLinecap="round" />
+            <path d="M4.4 8h9.3" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
+          </svg>
+        </button>
       </div>
       <div className="lc-scene-text-frame" style={{ left, top, width: width * zoom, height: height * zoom,
         transform: edit.angle ? `rotate(${edit.angle}rad)` : undefined }}>

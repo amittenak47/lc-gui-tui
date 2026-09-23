@@ -3695,16 +3695,32 @@ body[data-lc-sash-drag="horizontal"] {
   margin: 0;
 }
 
-.lc-scene-text-controls button {
-  min-height: 36px;
-  padding: 4px 14px;
-  color: var(--ink);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+.lc-scene-text-controls button.lc-scene-text-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  color: var(--hint);
+  background: transparent;
   border: 0;
-  border-radius: 11px;
-  font-size: 12px;
-  font-weight: 600;
+  border-radius: 6px;
   cursor: pointer;
+}
+
+.lc-scene-text-controls button.lc-scene-text-submit:hover,
+.lc-scene-text-controls button.lc-scene-text-submit:focus-visible {
+  color: var(--accent);
+  background: transparent;
+}
+
+.lc-scene-text-submit-icon {
+  width: 13px;
+  height: 13px;
+  display: block;
 }
 
 .lc-morph-bar.lc-scene-text-menu {
