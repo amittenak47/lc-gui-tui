@@ -2142,6 +2142,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const next =
         dx === 0 && dy === 0 ? "" : `translate3d(${dx}px, ${dy}px, 0)`;
       for (const node of ensurePanRideNodes()) {
+        // Ink owns its painted camera, which can advance during an async
+        // rebase before the other overlays land. Never overwrite its delta.
+        if (node.classList.contains("lc-ink-lab-canvas")) continue;
         if (node.style.transform !== next) node.style.transform = next;
       }
       const lined = linedSlotNodeRef.current;

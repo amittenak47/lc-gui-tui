@@ -107,6 +107,55 @@ afterEach(async () => {
 });
 
 describe("annotation camera presentation", () => {
+  it("reuses the painted camera when a same-size parked tab returns", async () => {
+    await ready([stroke(100)]);
+    const draw = vi.spyOn(InkTileCache.prototype, "draw");
+    const render = (splitPaused: boolean) => <WhiteboardInkLab ref={ref} enabled splitPaused={splitPaused} tool={null}
+      strokeWidth={3} inkColor="#ff0000" pressureClip={1} pressureSensitive={false} getViewport={() => view} />;
+    await act(async () => root.render(render(true)));
+    await frames(10);
+    await act(async () => root.render(render(false)));
+    await frames(10);
+    expect(draw).not.toHaveBeenCalled();
+    expect(alpha(100, 280)).toBeGreaterThan(0);
+    expect(surface().style.visibility).toBe("");
+  });
+
+  it("hides an unsafe old camera until interrupted loading lands at the latest page", async () => {
+    await ready([stroke(100), stroke(850)]);
+    worker.blocked = true;
+    view = { ...view, scrollY: -400 };
+    expect(ref.current!.setPanOffset(view)).toBe(false);
+    expect(surface().style.visibility).toBe("hidden");
+    const pending = ref.current!.syncCamera();
+    await frames(3);
+    view = { ...view, scrollY: -800 };
+    ref.current!.setPanOffset(view);
+    expect(surface().style.visibility).toBe("hidden");
+    worker.blocked = false; worker.release.splice(0).forEach(resolve => resolve());
+    await frames(80); await pending;
+    expect(surface().style.visibility).toBe("");
+    expect(surface().style.transform).toBe("");
+    expect(alpha(100, 230)).toBeGreaterThan(0);
+    view = { ...view, scrollY: -820 };
+    expect(ref.current!.setPanOffset(view)).toBe(true);
+    expect(surface().style.transform).toBe("translate3d(0px, -20px, 0)");
+    // Board landing an older request must not clear this newer translation.
+    ref.current!.setPanOffset(null);
+    expect(surface().style.transform).toBe("translate3d(0px, -20px, 0)");
+  });
+
+  it("hides a stale zoom until an aligned replacement is presented", async () => {
+    await ready([stroke(100)]);
+    view = { ...view, zoom: 2 };
+    ref.current!.setPanOffset(view);
+    expect(surface().style.visibility).toBe("hidden");
+    const pending = ref.current!.syncCamera();
+    await frames(); await pending;
+    expect(surface().style.visibility).toBe("");
+    expect(alpha(200, 380)).toBeGreaterThan(0);
+  });
+
   it("applies 55 rapid undos and redos while coalescing cache work beyond pixel history", async () => {
     await ready([], "pen");
     const event = (type: string, y: number) => {

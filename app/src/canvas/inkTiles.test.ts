@@ -771,6 +771,25 @@ describe("InkTileCache", () => {
     }
   });
 
+  it("stops persistence timers while parked and restarts them on return", async () => {
+    vi.useFakeTimers();
+    const encode = vi.spyOn(tileStore, "blobFromTileSource").mockResolvedValue(null);
+    const { cache } = makeCache({ persist: true });
+    try {
+      cache.syncOpsDeferred([draw([10, 10], [20, 20])]);
+      cache.draw(destinationContext().ctx, screen(1), 1);
+      cache.setSuspended(true);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(encode).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      cache.setSuspended(false);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(encode).toHaveBeenCalledOnce();
+    } finally {
+      cache.dispose(); encode.mockRestore(); vi.useRealTimers();
+    }
+  });
+
   it("rejects stale worker pixels and sends new ink in the next history snapshot", async () => {
     const jobs: Array<{ resolve: (bitmap: ImageBitmap) => void; ops: readonly InkOp[] }> = [];
     vi.mocked(rasterInkTileOffThread).mockImplementation((job) =>
@@ -799,12 +818,14 @@ describe("InkTileCache", () => {
     await vi.waitFor(() => expect(jobs).toHaveLength(2));
     expect(jobs[1]!.ops).toEqual([first, fresh]);
     expect(jobs[1]!.ops).not.toBe(jobs[0]!.ops);
-    jobs[1]!.resolve({ close: vi.fn() } as unknown as ImageBitmap);
+    const closeCurrent = vi.fn();
+    jobs[1]!.resolve({ close: closeCurrent } as unknown as ImageBitmap);
     await vi.waitFor(() => expect(cache.size).toBe(1));
     expect(cache.covered).toBe(false); // Installed pixels have not been blitted yet.
     cache.draw(ctx, view, 1);
     expect(cache.covered).toBe(true);
     cache.dispose();
+    expect(closeCurrent).toHaveBeenCalledOnce();
   });
 
   it("waits for writing idle before falling back from a failed tile worker", async () => {

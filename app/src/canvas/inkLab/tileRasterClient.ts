@@ -7,10 +7,14 @@ type Pending = {
 };
 
 let worker: Worker | null | undefined;
+let starting: Promise<Worker | null> | null = null;
 let nextId = 1;
 const pending = new Map<number, Pending>();
-let lastOps: readonly InkOp[] | null = null;
-let lastClip: SceneBounds | null = null;
+// Two recently used histories avoid cloning a dense book on every tile when
+// two panes alternate. Weak keys do not retain closed notebooks on the UI side.
+let histories = new WeakMap<readonly InkOp[], { id: number; clip: string; tilePx?: number }>();
+const resident = new Set<number>();
+let nextHistoryId = 1;
 
 function failWorker(error: unknown): void {
   worker?.terminate();
@@ -22,6 +26,12 @@ function failWorker(error: unknown): void {
 
 async function getWorker(): Promise<Worker | null> {
   if (worker !== undefined) return worker;
+  if (starting) return starting;
+  starting = startWorker();
+  return starting;
+}
+
+async function startWorker(): Promise<Worker | null> {
   if (typeof Worker === "undefined") {
     worker = null;
     return null;
@@ -31,7 +41,7 @@ async function getWorker(): Promise<Worker | null> {
     const next = new InkTileRasterWorker();
     next.onmessage = (event: MessageEvent<InkTileRasterResponse>) => {
       const request = pending.get(event.data.id);
-      if (!request) return;
+      if (!request) { event.data.bitmap?.close(); return; }
       noteInkTileRaster(event.data.renderMs, event.data.sdfMs);
       request.resolve(event.data.bitmap);
     };
@@ -58,42 +68,58 @@ export async function rasterInkTileOffThread(
 ): Promise<ImageBitmap | null> {
   const target = await getWorker();
   if (!target) return null;
-  if (job.ops !== lastOps || job.clip !== lastClip) {
-    lastOps = job.ops;
-    lastClip = job.clip;
+  const clipKey = JSON.stringify(job.clip);
+  let history = histories.get(job.ops);
+  if (!history || history.clip !== clipKey || history.tilePx !== job.tilePx) {
+    history = { id: nextHistoryId++, clip: clipKey, tilePx: job.tilePx };
+    histories.set(job.ops, history);
+  }
+  if (!resident.has(history.id)) {
     const opsMsg: InkTileRasterRequest = {
       type: "ops",
+      historyId: history.id,
       ops: job.ops as InkOp[],
       clip: job.clip,
       tilePx: job.tilePx,
     };
-    target.postMessage(opsMsg);
+    try { target.postMessage(opsMsg); }
+    catch (error) { failWorker(error); return null; }
   }
+  resident.delete(history.id);
+  resident.add(history.id);
+  if (resident.size > 2) resident.delete(resident.values().next().value!);
   const id = nextId++;
   return new Promise<ImageBitmap | null>((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (bitmap: ImageBitmap | null) => {
       if (!pending.has(id)) return;
       pending.delete(id);
+      if (timer !== undefined) clearTimeout(timer);
       resolve(bitmap);
     };
     pending.set(id, { resolve: finish });
     const payload: InkTileRasterRequest = {
       type: "render",
+      historyId: history.id,
       id,
       level: job.level,
       tx: job.tx,
       ty: job.ty,
     };
-    target.postMessage(payload);
-    setTimeout(() => finish(null), 4000);
+    timer = setTimeout(() => finish(null), 4000);
+    try { target.postMessage(payload); }
+    catch (error) { failWorker(error); }
   }).catch(() => null);
 }
 
 export function resetInkTileRasterWorkerForTests(): void {
   worker?.terminate();
   worker = undefined;
+  starting = null;
+  for (const request of pending.values()) request.resolve(null);
   pending.clear();
   nextId = 1;
-  lastOps = null;
-  lastClip = null;
+  histories = new WeakMap();
+  resident.clear();
+  nextHistoryId = 1;
 }

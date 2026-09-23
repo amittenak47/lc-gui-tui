@@ -337,6 +337,11 @@ export class InkTileCache {
   /** Stop the unfocused split's pump without polling every animation frame. */
   setSuspended(on: boolean): void {
     this.suspended = on;
+    if (on && this.persistTimer != null) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    if (!on) this.schedulePersistIdle();
     if (on && this.idleHandle) {
       this.cancel(this.idleHandle);
       this.idleHandle = 0;
@@ -487,7 +492,7 @@ export class InkTileCache {
 
     for (const [key, tile] of [...this.tiles]) {
       const box = this.tileBounds(tile.level, tile.tx, tile.ty);
-      if (boundsOverlap(dirty, box)) this.tiles.delete(key);
+      if (boundsOverlap(dirty, box)) this.dropTile(key);
     }
   }
 
@@ -613,7 +618,7 @@ export class InkTileCache {
     if (!dirty) return;
     for (const [key, tile] of this.tiles) {
       const bounds = this.paddedTileBounds(this.tileBounds(tile.level, tile.tx, tile.ty), levelScale(tile.level));
-      if (boundsOverlap(dirty, bounds)) this.tiles.delete(key);
+      if (boundsOverlap(dirty, bounds)) this.dropTile(key);
     }
   }
 
@@ -630,7 +635,7 @@ export class InkTileCache {
     const bounds = this.boundsOf(op);
     for (const [key, tile] of [...this.tiles]) {
       const box = this.tileBounds(tile.level, tile.tx, tile.ty);
-      if (boundsOverlap(bounds, this.paddedTileBounds(box, levelScale(tile.level)))) this.tiles.delete(key);
+      if (boundsOverlap(bounds, this.paddedTileBounds(box, levelScale(tile.level)))) this.dropTile(key);
     }
   }
 
@@ -667,14 +672,14 @@ export class InkTileCache {
   private paintOpIntoTile(tile: Tile, op: InkOp, bounds: SceneBounds): void {
     const canvas = tile.canvas as HTMLCanvasElement;
     if (typeof canvas.getContext !== "function") {
-      this.tiles.delete(tile.key);
+      this.dropTile(tile.key);
       return;
     }
     const ctx = canvas.getContext("2d");
     if (!ctx) {
       // Nothing sane to composite onto — fall back to the old behaviour and
       // let the tile rasterise from scratch next time it is asked for.
-      this.tiles.delete(tile.key);
+      this.dropTile(tile.key);
       return;
     }
     const paintable = this.clip ? intersectBounds(bounds, this.clip) : bounds;
@@ -697,6 +702,15 @@ export class InkTileCache {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
+  private dropTile(key: string): void {
+    const tile = this.tiles.get(key);
+    if (!tile) return;
+    this.tiles.delete(key);
+    this.persistQueue.delete(key);
+    const source = tile.canvas as CanvasImageSource & { close?: () => void };
+    source.close?.();
+  }
+
   /** Page turn — the clip box is baked into the tiles, so they all go. */
   setClip(clip: SceneBounds | null): void {
     const same =
@@ -715,7 +729,7 @@ export class InkTileCache {
 
   invalidate(): void {
     this.invalidateWorkerHistory();
-    this.tiles.clear();
+    for (const key of this.tiles.keys()) this.dropTile(key);
     this.opBounds = new WeakMap<InkOp, SceneBounds>();
     this.pending = [];
     this.inflight.clear();
@@ -734,7 +748,7 @@ export class InkTileCache {
     for (const [key, tile] of [...this.tiles]) {
       const tileBounds = this.tileBounds(tile.level, tile.tx, tile.ty);
       const padded = this.paddedTileBounds(tileBounds, levelScale(tile.level));
-      if (boundsOverlap(bounds, padded)) this.tiles.delete(key);
+      if (boundsOverlap(bounds, padded)) this.dropTile(key);
     }
   }
 
@@ -764,13 +778,18 @@ export class InkTileCache {
           const key = tileKey(row.level, row.tx, row.ty);
           if (this.tiles.has(key)) continue;
           if (typeof createImageBitmap !== "function") continue;
-          let source: CanvasImageSource;
+          let source: ImageBitmap;
           try {
             source = await createImageBitmap(row.blob);
           } catch {
             continue;
           }
-          if (gen !== this.hydrateGen || this.sig !== sig) return;
+          if (gen !== this.hydrateGen || this.sig !== sig) {
+            source.close();
+            return;
+          }
+          // A worker may have filled this square while decoding its disk copy.
+          if (this.tiles.has(key)) { source.close(); continue; }
           this.tiles.set(key, {
             key,
             level: row.level,
@@ -798,7 +817,10 @@ export class InkTileCache {
     source: CanvasImageSource,
   ): void {
     const key = tileKey(level, tx, ty);
-    if (this.tiles.has(key)) return;
+    if (this.tiles.has(key)) {
+      (source as CanvasImageSource & { close?: () => void }).close?.();
+      return;
+    }
     const canvasPx = this.tileCanvasPx();
     const tile: Tile = {
       key,
@@ -822,6 +844,7 @@ export class InkTileCache {
   }
 
   private schedulePersistIdle(delay = 500): void {
+    if (this.suspended) return;
     if (this.persistTimer != null || this.persistInFlight || this.persistQueue.size === 0) return;
     // Hashing the book and GPU readback/PNG encoding must not run on a pen
     // lift or a camera present. Drain one bitmap at a time after reading and
@@ -1040,7 +1063,7 @@ export class InkTileCache {
     const bySeen = [...this.tiles.values()].sort((a, b) => a.usedAt - b.usedAt);
     const drop = this.tiles.size - this.budget;
     for (let i = 0; i < drop; i++) {
-      this.tiles.delete(bySeen[i].key);
+      this.dropTile(bySeen[i].key);
       this.persistQueue.delete(bySeen[i].key);
     }
   }

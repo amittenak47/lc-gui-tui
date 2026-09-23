@@ -5,12 +5,14 @@ import { paintInkTile } from "./tilePaint";
 export type InkTileRasterRequest =
   | {
       type: "ops";
+      historyId: number;
       ops: InkOp[];
       clip: SceneBounds | null;
       tilePx?: number;
     }
   | {
       type: "render";
+      historyId: number;
       id: number;
       level: number;
       tx: number;
@@ -24,11 +26,11 @@ export type InkTileRasterResponse = {
   sdfMs: number;
 };
 
-let ops: InkOp[] = [];
-let clip: SceneBounds | null = null;
-let tilePx = TILE_PX;
+type History = { ops: InkOp[]; clip: SceneBounds | null; tilePx: number };
+const histories = new Map<number, History>();
 
-function paintOne(id: number, level: number, tx: number, ty: number): void {
+function paintOne(id: number, level: number, tx: number, ty: number, history: History): void {
+  const { ops, clip, tilePx } = history;
   const started = performance.now();
   const px = inkTileCanvasPx(tilePx);
   const fail = () => {
@@ -72,10 +74,16 @@ function paintOne(id: number, level: number, tx: number, ty: number): void {
 self.onmessage = (event: MessageEvent<InkTileRasterRequest>) => {
   const msg = event.data;
   if (msg.type === "ops") {
-    ops = msg.ops;
-    clip = msg.clip;
-    if (msg.tilePx) tilePx = msg.tilePx;
+    histories.set(msg.historyId, { ops: msg.ops, clip: msg.clip, tilePx: msg.tilePx ?? TILE_PX });
+    if (histories.size > 2) histories.delete(histories.keys().next().value!);
     return;
   }
-  paintOne(msg.id, msg.level, msg.tx, msg.ty);
+  const history = histories.get(msg.historyId);
+  if (!history) {
+    (self as unknown as Worker).postMessage({ id: msg.id, bitmap: null, renderMs: 0, sdfMs: 0 } satisfies InkTileRasterResponse);
+    return;
+  }
+  histories.delete(msg.historyId);
+  histories.set(msg.historyId, history);
+  paintOne(msg.id, msg.level, msg.tx, msg.ty, history);
 };

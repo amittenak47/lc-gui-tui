@@ -573,6 +573,30 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       };
     }, []);
 
+    // Pixels and paper may have different origins while a tile job is pending.
+    // Translate from the pixels' own camera, and hide them when a translate
+    // cannot represent the page (zoom, resize, or exhausted overdraw).
+    const alignPresentedInk = useCallback((live: PanCamera | null): boolean => {
+      const canvas = canvasRef.current;
+      if (!canvas || drawingRef.current) return true;
+      const painted = paintedViewRef.current;
+      const camera = live ?? getViewportRef.current();
+      if (!painted || !camera) {
+        canvas.style.visibility = "hidden";
+        return false;
+      }
+      const delta = painted.marginY > 0
+        ? panDelta(camera, painted, painted, PAN_REBASE_FRACTION, {
+            y: painted.marginY * OVERDRAW_REBASE_HEADROOM,
+          })
+        : panDelta(camera, painted, painted);
+      const next = delta.dx === 0 && delta.dy === 0
+        ? "" : `translate3d(${delta.dx}px, ${delta.dy}px, 0)`;
+      if (canvas.style.transform !== next) canvas.style.transform = next;
+      canvas.style.visibility = delta.rebase ? "hidden" : "";
+      return !delta.rebase;
+    }, []);
+
     const boardRoot = useCallback((): Element | null => {
       return (
         canvasRef.current?.closest(".lc-board") ??
@@ -887,6 +911,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             height: liveView.height,
             marginY: liveMargin,
           };
+          canvas.style.visibility = "";
           committedBuildRef.current = false;
           historyPixelsDirtyRef.current = false;
           replayAllowPausedRef.current = false;
@@ -1039,6 +1064,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       // each fit into a full dense-page remesh before the spinner can paint.
       if (preparingRef.current) return Promise.resolve();
       const { view, marginY } = readViews();
+      alignPresentedInk(view);
       const windowed = applyPageWindow(view);
       if (committedBuildRef.current) {
         if (allowPaused && !replayAllowPausedRef.current) {
@@ -1082,7 +1108,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       // Pan and zoom both compose a new frame from cached scene bitmaps. The
       // current camera keeps riding until that complete frame is swapped in.
       return rebuildAndReplay(false, instantReplayOnCameraRebase(), false, allowPaused);
-    }, [applyPageWindow, readViews, rebuildAndReplay]);
+    }, [alignPresentedInk, applyPageWindow, readViews, rebuildAndReplay]);
 
     useEffect(() => {
       const { view } = readViews();
@@ -1253,29 +1279,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return presentIfCameraMoved(true, allowPaused);
         },
         setPanOffset(live) {
-          const canvas = canvasRef.current;
-          if (!canvas) return true;
-          if (!live) {
-            if (canvas.style.transform) canvas.style.transform = "";
-            return true;
-          }
-          // Board already translates `.lc-ink-lab-canvas`. We only veto when
-          // the overdraw margin is spent so a rebase can replay at the live camera.
-          if (drawingRef.current) return true;
-          const painted = paintedViewRef.current;
-          if (!painted) return false;
-          const marginY = painted.marginY;
-          const delta =
-            marginY > 0
-              ? panDelta(
-                  live,
-                  painted,
-                  { width: painted.width, height: painted.height },
-                  PAN_REBASE_FRACTION,
-                  { y: marginY * OVERDRAW_REBASE_HEADROOM },
-                )
-              : panDelta(live, painted, painted);
-          return !delta.rebase;
+          return alignPresentedInk(live);
         },
         commitCamera() {
           if (drawingRef.current) return;
@@ -1368,6 +1372,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         },
       }),
       [
+        alignPresentedInk,
         applyPageWindow,
         ensureTiles,
         forgetPixelHistory,

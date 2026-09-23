@@ -9433,7 +9433,7 @@ export function Workspace({
     // zeros the last box and keepY-fits — that is an open, not a tab return.
     const ids = [window.setTimeout(() => {
       boardRef.current?.syncDocumentScrollBounds();
-      if (problem && isWhiteboard(problem)) {
+      if (!returning && problem && isWhiteboard(problem)) {
         boardRef.current?.remeshLayout();
       } else {
         boardRef.current?.syncLiveBox();
