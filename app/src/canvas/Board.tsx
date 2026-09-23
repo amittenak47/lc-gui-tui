@@ -174,7 +174,8 @@ import { pdfLandingHoldClear, pdfPreloadPages, pdfRestPages } from "../modes/pdf
 import { remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
 import { eraserPageWidth, eraserScreenRadius } from "./rasterInk";
 import { applyLinedSlotStyle, linedOverlayViewport, linedSlotCanSkip } from "./linedSlot";
-import { SPLIT_RESIZE_EVENT, boardResizeDeferred, sashDragActive, splitResizePhase } from "../util/splitResize";
+import { PANEL_RESIZE_EVENT, SPLIT_RESIZE_EVENT, boardResizeDeferred, sashDragActive, splitResizePhase } from "../util/splitResize";
+import { PanelResizeMotion } from "./panelResizeMotion";
 import { reanchorInkOps } from "./reanchorInk";
 import { shouldSeedInkFromBlob } from "./inkRestore";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
@@ -7433,11 +7434,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      */
     const onSplitResize = (event: Event) => {
       if (splitResizePhase(event) !== "settle") return;
+      panelMotion.finish();
       splitFitRef.current = true;
       try { onOrient(); } finally { splitFitRef.current = false; }
     };
+    const panelMotion = new PanelResizeMotion();
+    const onPanelResize = (event: Event) => {
+      const bounds = pageBoundsRef.current, camera = liveCameraRef.current;
+      if (!bounds || !camera || !board.offsetWidth || !board.offsetHeight) return;
+      const measured = measureChromeInsets(board, toolbarHeightRef.current, mapChromeHiddenRef.current, false);
+      const inset = { top: measured.top + safeCssPx("--lc-safe-top"), bottom: measured.bottom + safeCssPx("--lc-safe-bottom"),
+        left: measured.left + safeCssPx("--lc-safe-left"), right: measured.right + safeCssPx("--lc-safe-right") };
+      const input = { box: bounds, inset, viewWidth: board.clientWidth,
+        prevZoom: camera.zoom, prevScrollX: camera.scrollX, prevScrollY: camera.scrollY, zoomMin: FIT_ZOOM_MIN, zoomMax: ZOOM_MAX };
+      const target = isDrawPageRegion(mobileRegionRef.current)
+        ? drawPageRecentreCamera(input) : documentCameraAfterViewportChange(input);
+      panelMotion.start(board, camera, target, camera.offsetLeft, (event as CustomEvent<{ duration: number }>).detail.duration);
+    };
+    window.addEventListener(PANEL_RESIZE_EVENT, onPanelResize);
     window.addEventListener(SPLIT_RESIZE_EVENT, onSplitResize);
     return () => {
+      panelMotion.finish();
+      window.removeEventListener(PANEL_RESIZE_EVENT, onPanelResize);
       observer.disconnect();
       window.removeEventListener("resize", scheduleLiveViewportFit);
       window.visualViewport?.removeEventListener("resize", scheduleLiveViewportFit);

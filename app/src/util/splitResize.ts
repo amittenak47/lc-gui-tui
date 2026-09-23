@@ -16,6 +16,7 @@
  */
 
 export const SPLIT_RESIZE_EVENT = "lc-split-resize";
+export const PANEL_RESIZE_EVENT = "lc-panel-resize";
 
 export type SplitResizePhase = "move" | "settle";
 
@@ -51,10 +52,12 @@ export function boardResizeDeferred(): boolean {
 /** Cancelled on a rapid toggle or unmount; only the final geometry is fitted. */
 export function deferPanelRefit(): () => void {
   document.body.dataset.lcPanelMotion = "true";
+  const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 240;
+  window.dispatchEvent(new CustomEvent(PANEL_RESIZE_EVENT, { detail: { duration } }));
   const timer = window.setTimeout(() => {
     delete document.body.dataset.lcPanelMotion;
     announceSplitResize("settle");
-  }, window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 260);
+  }, duration ? duration + 20 : 0);
   return () => {
     window.clearTimeout(timer);
     delete document.body.dataset.lcPanelMotion;
