@@ -9988,10 +9988,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 }}
                 onOpenInkWheel={() => setInkWheel("canvas")}
                 quickKind={kindFromTool(activeTool) ?? kindFromTool(lastInkToolRef.current) ?? "pen"}
-                onQuickInk={(kind, color) => {
+                onQuickInk={(kind, color, eraserWidth) => {
                   setTool(toolFromKind(kind));
                   applyInkWedge(kind, quickWedgeIndex(presetStoreRef.current, kind));
                   if (color) setInk(color);
+                  if (eraserWidth != null) {
+                    setEraserStrokeWidth(eraserWidth);
+                    persistInkPrefs({ eraserWidth });
+                    apiRef.current?.setCursor?.(eraserCanvasCursorCss());
+                  }
                 }}
               />
               </div>

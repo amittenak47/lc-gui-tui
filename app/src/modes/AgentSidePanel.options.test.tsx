@@ -153,3 +153,29 @@ it("snapshots the next queued message's options while an earlier request is busy
   expect(button("Reasoning: low")).toBeTruthy();
   expect(document.querySelector('[aria-label="Ask presets"] [aria-checked="true"]')).toBeNull();
 });
+
+it("keeps the options menu and footnotes panel on the button after the window resizes", () => {
+  let buttonBox = new DOMRect(400, 700, 32, 32);
+  const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    if (this.getAttribute("aria-label") === "Annotations") return buttonBox;
+    if (this.classList.contains("lc-agent-mark-menu")) {
+      return new DOMRect(buttonBox.left, buttonBox.top - 220, 216, 200);
+    }
+    return new DOMRect(0, 0, 0, 0);
+  });
+  try {
+    mount({ annotationChoices: [{ id: "fn", number: 1, title: "Note" }] });
+    openOptions();
+    tap(button("Footnotes"));
+    const menu = document.querySelector<HTMLElement>(".lc-agent-mark-menu")!;
+    const notes = document.querySelector<HTMLElement>(".lc-agent-footnote-menu")!;
+    expect(menu.style.left).toBe("400px");
+    const notesBefore = notes.style.left;
+    buttonBox = new DOMRect(120, 640, 32, 32);
+    act(() => window.dispatchEvent(new Event("resize")));
+    expect(menu.style.left).toBe("120px");
+    expect(notes.style.left).not.toBe(notesBefore);
+  } finally {
+    spy.mockRestore();
+  }
+});

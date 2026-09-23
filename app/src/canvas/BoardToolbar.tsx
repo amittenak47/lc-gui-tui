@@ -209,7 +209,7 @@ export interface BoardToolbarProps {
   onToggleWheelLock?: () => void;
   onOpenInkWheel?: () => void;
   quickKind?: InkPresetKind;
-  onQuickInk?: (kind: InkPresetKind, color?: string) => void;
+  onQuickInk?: (kind: InkPresetKind, color?: string, eraserWidth?: number) => void;
   /**
    * Markdown mode: the same island, a different set of tools in it.
    *
@@ -1019,7 +1019,9 @@ export function BoardToolbar({
           </MorphBar>
         </HoldButton>
 
-        {onQuickInk && <QuickInkControl kind={quickKind} color={inkColor} onPick={onQuickInk} />}
+        {onQuickInk && (
+          <QuickInkControl kind={quickKind} color={inkColor} eraserWidth={strokeWidth} onPick={onQuickInk} />
+        )}
 
         {onStraightInk && (
           <button

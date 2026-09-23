@@ -5188,31 +5188,57 @@ body[data-lc-sash-drag="horizontal"] {
   border-radius: 50%;
   box-shadow: 0 0 0 1px var(--panel);
 }
+/*
+ * Same chrome as the footnotes menu (overlay, 10px radius, tight padding),
+ * laid out as one row of squares instead of that menu's vertical list.
+ */
 .lc-quick-ink-colors {
   position: fixed;
   z-index: 240;
   display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: 6px;
+  width: max-content;
   max-width: calc(100vw - 16px);
   box-sizing: border-box;
   overflow-x: auto;
-  padding: 9px;
-  border: 1px solid var(--chrome-edge);
-  border-radius: 12px;
-  background: var(--panel);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  overflow-y: hidden;
+  padding: 6px;
+  border: 1px solid var(--chrome-edge, var(--line));
+  border-radius: 10px;
+  background: var(--overlay-bg, var(--panel));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
   animation: lc-quick-colors-in 160ms ease-out;
 }
 .lc-quick-ink-swatch {
-  flex: 0 0 26px;
-  min-width: 26px;
-  min-height: 26px;
-  width: 26px;
-  height: 26px;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  /* Beat global `button { min-height: var(--touch) }` so these stay square. */
+  min-height: 22px !important;
+  max-height: 22px;
   padding: 0;
-  border: 1px solid rgb(0 0 0 / 18%);
-  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, #000 28%, transparent);
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 18%);
   cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.lc-quick-ink-swatch.is-size {
+  background: color-mix(in srgb, var(--ink) 6%, var(--panel));
+  border-color: var(--chrome-edge, var(--line));
+}
+.lc-quick-ink-eraser {
+  display: block;
+  border-radius: 50%;
+  background: #f9a8d4;
+  box-shadow: inset 0 0 0 1px #be185d;
+  pointer-events: none;
 }
 .lc-quick-ink-swatch[aria-pressed="true"], .lc-quick-ink-swatch:focus-visible {
   outline: 2px solid var(--ink);

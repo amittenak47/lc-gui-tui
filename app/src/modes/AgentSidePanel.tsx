@@ -247,6 +247,13 @@ export function markMenuClickShouldKeepOpen(target: EventTarget | null): boolean
 /** Fixed so cycling Reasoning Low → Medium does not grow the panel. */
 const MARK_MENU_WIDTH_PX = 216;
 
+function markMenuPosition(rect: Pick<DOMRect, "left" | "top">): { left: number; bottom: number } {
+  return {
+    left: Math.max(12, Math.min(rect.left, window.innerWidth - MARK_MENU_WIDTH_PX - 12)),
+    bottom: window.innerHeight - rect.top + 6,
+  };
+}
+
 function PaneExpandButton({
   pane,
   focus,
@@ -1170,16 +1177,7 @@ export function AgentSidePanel({
       return;
     }
     const node = annotateBtnRef.current;
-    if (node) {
-      const rect = node.getBoundingClientRect();
-      setMarkMenuPos({
-        left: Math.max(
-          12,
-          Math.min(rect.left, window.innerWidth - MARK_MENU_WIDTH_PX - 12),
-        ),
-        bottom: window.innerHeight - rect.top + 6,
-      });
-    }
+    if (node) setMarkMenuPos(markMenuPosition(node.getBoundingClientRect()));
     setMarkMenuClosing(false);
     setFootnoteMenuOpen(false);
     setFootnoteMenuClosing(false);
@@ -1197,6 +1195,42 @@ export function AgentSidePanel({
   }, [footnoteMenuOpen, footnoteMenuClosing, closeFootnoteMenu]);
 
   useLayoutEffect(() => {
+    if (!markMenuOpen || markMenuClosing) return;
+    let frame = 0;
+    const place = () => {
+      const node = annotateBtnRef.current;
+      if (!node) return;
+      const rect = node.getBoundingClientRect();
+      if (rect.width < 1 && rect.height < 1) return;
+      const next = markMenuPosition(rect);
+      setMarkMenuPos((current) =>
+        current && current.left === next.left && current.bottom === next.bottom ? current : next,
+      );
+    };
+    place();
+    const kick = () => {
+      place();
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        place();
+      });
+    };
+    window.addEventListener("resize", kick);
+    window.addEventListener("scroll", kick, true);
+    const view = window.visualViewport;
+    view?.addEventListener("resize", kick);
+    view?.addEventListener("scroll", kick);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", kick);
+      window.removeEventListener("scroll", kick, true);
+      view?.removeEventListener("resize", kick);
+      view?.removeEventListener("scroll", kick);
+    };
+  }, [markMenuOpen, markMenuClosing]);
+
+  useLayoutEffect(() => {
     if (!footnoteMenuOpen || markMenuClosing || !markMenuRef.current) return;
     const r = markMenuRef.current.getBoundingClientRect();
     const width = r.width || MARK_MENU_WIDTH_PX;
@@ -1212,7 +1246,7 @@ export function AgentSidePanel({
       left: side === "right" ? r.right + gap : r.left - width - gap,
       side,
     });
-  }, [footnoteMenuOpen, markMenuClosing, annotationChoices.length]);
+  }, [footnoteMenuOpen, markMenuClosing, annotationChoices.length, markMenuPos?.left, markMenuPos?.bottom]);
 
   /**
    * Scroll a quoted turn back into view and flash it.
