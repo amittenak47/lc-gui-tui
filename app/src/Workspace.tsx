@@ -407,6 +407,7 @@ import {
   MAX_VISIBLE_DRAWINGS,
 } from "./viz/drawingState";
 import { persistableAgentMessages, restoreAgentMessages } from "./modes/agentTranscript";
+import { organizeIntoSessions } from "./modes/coachSessions";
 import { DocumentDrawingPanel } from "./viz/DocumentDrawingPanel";
 import { pageForNewDrawing } from "./viz/drawingPage";
 import {
@@ -427,7 +428,7 @@ import { photoFromFile } from "./util/photoAttach";
 import { thumbnailFromPng } from "./util/photoAttach";
 import { documentAskFields, documentImageContext, hasDocumentCapture, livePadStillOpen, sameDocumentView, type DocumentViewContext } from "./modes/documentView";
 import { selectionCaptureFailure, type SelectionActionContext, type SelectionActionResult } from "./modes/selectionAction";
-import { freezeCoachAsk, askImages, type CoachAskPayload } from "./modes/coachAskPayload";
+import { freezeCoachAsk, askImages, selectionImageForModel, type CoachAskPayload } from "./modes/coachAskPayload";
 import { CoachSendCoordinator } from "./modes/coachSendCoordinator";
 import { saveCoachRequest, loadCoachRequest } from "./modes/coachRequestStore";
 type Mode = "review" | "ambient";
@@ -2168,6 +2169,10 @@ export function Workspace({
     } : m)),
   );
   useEffect(() => () => coachCoordinatorRef.current?.dispose(), []);
+  useEffect(() => {
+    const next = organizeIntoSessions(agentMessages);
+    if (next !== agentMessages) setAgentMessages(next);
+  }, [agentMessages]);
   /** Bumped on interrupt/merge so late HTTP/WS results are ignored. */
   const coachRunGenRef = useRef(0);
   /** Pending assistant placeholder for the active coach run. */
@@ -2317,7 +2322,7 @@ export function Workspace({
         if (kept.length !== elements.length) board.setElements(kept);
         return;
       }
-      const visible = visibleDrawings(messages);
+      const visible = visibleDrawings(messages.filter((message) => !message.deletedAt));
       const visibleIds = new Set(visible.map((drawing) => drawing.program.id));
       for (const id of Array.from(
         new Set(
@@ -5832,6 +5837,7 @@ export function Workspace({
         const index = current.findIndex((message) => message.id === messageId);
         if (index < 0) return current;
         const placeholder = current[index];
+        if (placeholder.deletedAt) return current;
         const rest = [...current.slice(0, index), ...current.slice(index + 1)];
         if (!produced || produced.length === 0) return rest;
 
@@ -5840,6 +5846,7 @@ export function Workspace({
           role: "assistant",
           at: Date.now(),
           ...(placeholder.replyTo ? { replyTo: placeholder.replyTo } : {}),
+          ...(placeholder.sessionId ? { sessionId: placeholder.sessionId } : {}),
           ...(offset === 0
             ? {
                 processEvents: placeholder.processEvents,
@@ -6648,8 +6655,9 @@ export function Workspace({
     [problem],
   );
 
-  const flagBitsFor = (flags: AgentSendFlags): string[] =>
-    [
+  const flagBitsFor = (flags: AgentSendFlags): string[] => {
+    const photos = flags.photos?.filter((photo) => photo.sendToModel !== false).length ?? 0;
+    return [
       flags.ask ? "Ask" : null,
       flags.handwriting ? "Handwriting" : null,
       flags.annotations ? "Annotations" : null,
@@ -6657,10 +6665,9 @@ export function Workspace({
       flags.reviewBoard ? "Review" : null,
       flags.draw ? "Draw" : null,
       flags.lazy ? "Lazy" : null,
-      flags.photos?.length
-        ? `${flags.photos.length} photo${flags.photos.length === 1 ? "" : "s"}`
-        : null,
+      photos > 0 ? `${photos} photo${photos === 1 ? "" : "s"}` : null,
     ].filter((bit): bit is string => Boolean(bit));
+  };
 
   const prepareCoachSend = useCallback(
     async (text: string, flags: AgentSendFlags) => {
@@ -7170,6 +7177,39 @@ export function Workspace({
       setCoachPhase(null);
       setBusy(null);
     }
+  };
+  const deleteCoachMessage = (id: string) => {
+    const coordinator = coachCoordinatorRef.current;
+    const ticket = coordinator?.tickets.get(id);
+    const runningUser = coordinator?.runningId === id;
+    const runningAssistant = activeCoachTurnIdRef.current === id;
+    if (ticket && coordinator && ["preparing", "queued", "running"].includes(ticket.state)) coordinator.abort(id);
+    if (runningUser || runningAssistant) {
+      coachRunGenRef.current += 1;
+      setCoachPhase(null);
+      setBusy(null);
+    }
+    const linkedTurn = runningUser ? activeCoachTurnIdRef.current : null;
+    if (runningUser || runningAssistant) activeCoachTurnIdRef.current = null;
+    const now = Date.now();
+    setAgentMessages((current) => {
+      const drop = new Set<string>([id]);
+      if (linkedTurn) drop.add(linkedTurn);
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const message of current) {
+          if (message.replyTo && drop.has(message.replyTo.id) && !drop.has(message.id)) {
+            drop.add(message.id);
+            grew = true;
+          }
+        }
+      }
+      if (![...drop].some((dropped) => current.some((message) => message.id === dropped && !message.deletedAt))) return current;
+      return current.map((message) => drop.has(message.id) && !message.deletedAt
+        ? { ...message, deletedAt: now, pending: false, queued: undefined }
+        : message);
+    });
   };
   const retryCoachMessage = async (id: string) => {
     let reservedId: string | null = null;
@@ -8238,7 +8278,10 @@ export function Workspace({
       pendingQuoteRef.current = selected;
       const documentCaptureId = globalThis.crypto?.randomUUID?.() ?? `selection-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       setCoachQuoteSeed({ token: Date.now(), text: selected.text || selected.excerpt,
-        attachment: { label: photo.name, png: photo.png, thumb: photo.thumb, documentCaptureId },
+        attachment: {
+          label: photo.name, png: photo.png, thumb: photo.thumb, documentCaptureId,
+          ...(selectionImageForModel(selected) ? {} : { sendToModel: false }),
+        },
         view: { ...frozenView, text: selected.text || snapshot.text, documentCaptureId },
       });
       openCoachPanel();
@@ -11074,6 +11117,7 @@ export function Workspace({
             onRetryMessage={retryCoachMessage}
             onEditMessage={editCoachMessage}
             onCancelEdit={id => coachCoordinatorRef.current?.endEdit(id)}
+            onDeleteMessage={deleteCoachMessage}
             onRequestBridge={(messageId) => {
               revealForMessageIdRef.current = messageId;
               setRevealError(null);

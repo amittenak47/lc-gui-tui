@@ -48,7 +48,7 @@ describe("presentProcessStep", () => {
       label: "prefetch",
       detail: "looking up earlier pages",
       ts: 1,
-    })).toEqual({ title: "Looking up earlier pages", body: "" });
+    })).toEqual({ title: "Searching this document", body: "" });
   });
 
   it("puts the entire thought under a summary chip", () => {
@@ -248,7 +248,7 @@ describe("ProcessBlock", () => {
     const root = createRoot(host);
     const events: CoachProcessEvent[] = [
       { kind: "stage", label: "ask", detail: "answering from the document", ts: 1 },
-      { kind: "stage", label: "prefetch", detail: "looking up earlier pages", ts: 2 },
+      { kind: "stage", label: "prefetch", detail: "Pages 4 and 5 on screen. Also reading page 3.", ts: 2 },
     ];
     await act(async () => {
       root.render(<ProcessBlock events={events} running={false} />);
@@ -258,7 +258,38 @@ describe("ProcessBlock", () => {
       root.render(<ProcessBlock events={events} running />);
     });
     expect(host.querySelectorAll(".lc-agent-process-step")).toHaveLength(0);
-    expect(host.querySelector(".lc-agent-process-label")?.textContent).toBe("Looking up earlier pages");
+    expect(host.querySelector(".lc-agent-process-label")?.textContent).toBe("Pages 4 and 5 on screen. Also reading page 3.");
+    root.unmount();
+    host.remove();
+  });
+
+  it("shows a prefix and stats for each passage under the thinking header", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const detail = [
+      "Pages 4 and 5 on screen. Also reading pages 1 and 3.",
+      "p3 · above · 40 chars · the paragraph just above the viewport",
+      "p1 · 2 shared · 32 chars · unique zebra theorem lives here",
+    ].join("\n");
+    const events: CoachProcessEvent[] = [
+      { kind: "stage", label: "prefetch", detail, ts: 1 },
+      { kind: "stage", label: "reason", detail: "The student is asking about the theorem.", ts: 2 },
+    ];
+    await act(async () => {
+      root.render(<ProcessBlock events={events} running />);
+    });
+    expect(host.querySelector(".lc-agent-process-label")?.textContent).toBe("Thinking…");
+    const lines = [...host.querySelectorAll(".lc-agent-passage")].map((node) => node.textContent);
+    expect(lines).toEqual([
+      "p3 · above · 40 chars · the paragraph just above the viewport",
+      "p1 · 2 shared · 32 chars · unique zebra theorem lives here",
+    ]);
+    expect(host.querySelectorAll(".lc-agent-process-step")).toHaveLength(1);
+    await act(async () => {
+      root.render(<ProcessBlock events={events} running={false} />);
+    });
+    expect(host.querySelector(".lc-agent-process-label")?.textContent).toBe("Thinking · 1 step · 2 passages");
     root.unmount();
     host.remove();
   });

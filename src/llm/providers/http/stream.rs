@@ -125,6 +125,9 @@ struct Progress {
     id: u64,
     last: Option<Instant>,
     steps: Vec<String>,
+    answer_len: usize,
+    tool_len: usize,
+    reason_len: usize,
 }
 
 impl Progress {
@@ -137,15 +140,31 @@ impl Progress {
             return;
         }
         let steps = crate::llm::reasoning::split_steps(&completion.split().reasoning);
+        let mut stepped = false;
         for (index, step) in steps.iter().enumerate() {
             if self.steps.get(index) != Some(step) {
                 events.reasoning_step(format!("reason-{}-{index}", self.id), step.clone());
+                stepped = true;
             }
         }
         for index in steps.len()..self.steps.len() {
             events.reasoning_step(format!("reason-{}-{index}", self.id), String::new());
+            stepped = true;
         }
         self.steps = steps;
+        let answer_len = completion.split().content.len();
+        let tool_len: usize = completion.tools.values().map(|(_, args)| args.len()).sum();
+        let reason_len = completion.reasoning.len();
+        // A thought chip already proves the run is alive. Answer text and a
+        // draw-tool argument do not change those chips, and that silence is
+        // what the client was cancelling.
+        let quiet = answer_len != self.answer_len || tool_len != self.tool_len || reason_len != self.reason_len;
+        self.answer_len = answer_len;
+        self.tool_len = tool_len;
+        self.reason_len = reason_len;
+        if quiet && !stepped {
+            events.writing(format!("draft-{}", self.id));
+        }
         self.last = Some(Instant::now());
     }
 }
@@ -157,6 +176,9 @@ pub(super) fn read(reader: impl Read, events: &EventSink) -> Result<ChatReply> {
         id: NEXT_STREAM.fetch_add(1, Ordering::Relaxed),
         last: None,
         steps: Vec::new(),
+        answer_len: 0,
+        tool_len: 0,
+        reason_len: 0,
     };
     let mut event = String::new();
     let mut total = 0usize;

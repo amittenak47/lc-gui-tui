@@ -5,6 +5,7 @@ import { getProblemBoard, replaceProblemBoard, type ProblemBoardRecord } from ".
 import { prepareArtifactConflict } from "./artifactConflict";
 import { editArtifactCatalog } from "./artifactCatalogEdits";
 import { stageWhiteboardArtifactSnapshot } from "./artifactWhiteboards";
+import { mergeAgentMessages } from "../modes/coachSessions";
 import { encodeInkOps, inkOpsFrom, packEncodedInk } from "../canvas/inkCodec";
 import { bytesToB64 } from "../api/nativeHttp";
 import { convertToExcalidrawElements } from "../canvas/convertSkeletons";
@@ -103,13 +104,5 @@ export async function resolveProblemArtifactConflict(client: LcClient, conflict:
 }
 
 function mergeProblemAgent(local: unknown[], remote: unknown[]): unknown[] {
-  const result = structuredClone(local);
-  const ids = new Set(local.map(value => (value as { id?: string })?.id));
-  const exact = new Set(local.map(value => JSON.stringify(value)));
-  for (const value of remote) {
-    if (exact.has(JSON.stringify(value))) continue;
-    if (value && typeof value === "object" && "id" in value && ids.has(value.id as string)) result.push({ ...value, id: crypto.randomUUID() });
-    else result.push(structuredClone(value));
-  }
-  return result;
+  return mergeAgentMessages(local, remote);
 }

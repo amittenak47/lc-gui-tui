@@ -133,6 +133,20 @@ impl EventSink {
         }
     }
 
+    /// Proof the answer is still being written. One row, replaced in place.
+    ///
+    /// Reasoning steps stop changing once the model starts the reply. Without
+    /// this, a slow decode looks like silence and the client cancels it.
+    pub fn writing(&self, id: String) {
+        if !self.is_cancelled() {
+            self.emit(CoachEvent::Stage {
+                stage: "writing".into(),
+                detail: "Writing the answer".into(),
+                update_id: Some(id),
+            });
+        }
+    }
+
     pub fn tool(
         &self,
         name: &str,

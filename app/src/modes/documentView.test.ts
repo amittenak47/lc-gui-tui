@@ -8,7 +8,7 @@ describe("frozen document context", () => {
   });
   it("retains visible pages and text independently of later navigation", () => {
     const stored = structuredClone(view);
-    expect(documentAskFields(stored)).toMatchObject({ document_hash: "book", page: 3 });
+    expect(documentAskFields(stored)).toMatchObject({ document_hash: "book", page: 3, pages: [3, 4] });
     expect(documentAskFields(stored).page_text).toContain("3, 4");
     expect(sameDocumentView(view, { ...view, viewport: { ...view.viewport, y: 20 } })).toBe(false);
     expect(sameDocumentView(view, { ...view, revision: "ink2" })).toBe(false);
@@ -56,6 +56,7 @@ describe("frozen document context", () => {
     expect(hasDocumentCapture(seed, [{ png: "unrelated-photo" }])).toBe(false);
     expect(hasDocumentCapture(seed, [{ ...capture, documentCaptureId: "selection-2" }])).toBe(false);
     expect(hasDocumentCapture(seed, [{ ...capture, png: "" }])).toBe(false);
+    expect(hasDocumentCapture(seed, [{ ...capture, sendToModel: false }])).toBe(false);
     expect(hasDocumentCapture(view, [capture])).toBe(false);
     const available = documentImageContext(seed, hasDocumentCapture(seed, [capture]));
     expect(documentAskFields(available).page_text).not.toContain("Image unavailable");

@@ -11,7 +11,7 @@ export function formatAgentProse(text: string): string {
   if (!text.trim()) return text;
   const fences = hold(text, /```[\s\S]*?```/g, "F");
   const ticks = hold(fences.text, /`[^`]+`/g, "T");
-  const normalized = normalizeDelimiters(ticks.text);
+  const normalized = normalizeDelimiters(tightenMathDelimiters(ticks.text));
   const display = hold(normalized, /\$\$[\s\S]+?\$\$/g, "D");
   const inline = hold(display.text, /\$[^$\n]+\$/g, "I");
   const wrapped = wrapBareMath(inline.text);
@@ -31,6 +31,18 @@ function hold(text: string, pattern: RegExp, tag: string): { text: string; held:
 function restore(text: string, held: string[], tag: string): string {
   if (!held.length) return text;
   return text.replace(new RegExp(`${SLOT}${tag}(\\d+)${SLOT}`, "g"), (_, index) => held[Number(index)] ?? "");
+}
+
+/**
+ * Models wrap math as `\(...\)`, `\[...\]`, or `$ ... $` with spaces inside.
+ * The dollar tokenizer only accepts a tight `$...$`.
+ */
+function tightenMathDelimiters(text: string): string {
+  return text
+    .replace(/\\\[([\s\S]+?)\\\]/g, (_full, tex: string) => `\n$$\n${tex.trim()}\n$$\n`)
+    .replace(/\\\(([\s\S]+?)\\\)/g, (_full, tex: string) => `$${tex.trim()}$`)
+    .replace(/\$[ \t]+([^$\n]+?)\$/g, (_full, tex: string) => `$${tex.trim()}$`)
+    .replace(/\$([^$\n]+?)[ \t]+\$/g, (_full, tex: string) => `$${tex.trim()}$`);
 }
 
 /** `$eq$` on its own line becomes display; `$$eq$$` inside a sentence becomes inline. */

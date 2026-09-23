@@ -43,6 +43,23 @@ export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
       typeof raw.excerpt === "string"
         ? { id: raw.id, role: raw.role as AgentChatMessage["role"], excerpt: raw.excerpt }
         : undefined;
+    const sessionId = typeof message.sessionId === "string" && message.sessionId ? message.sessionId : undefined;
+    const deletedAt = typeof message.deletedAt === "number" && message.deletedAt > 0 ? message.deletedAt : undefined;
+    // A removed turn stays in the stored transcript so another device can
+    // learn that it is gone. Dropping it here would bring the bubble back
+    // the next time this replica saved.
+    if (deletedAt) {
+      const tombstone: AgentChatMessage = {
+        id: message.id,
+        role: message.role as AgentChatMessage["role"],
+        content,
+        at: typeof message.at === "number" ? message.at : Date.now(),
+        deletedAt,
+        ...(sessionId ? { sessionId } : {}),
+        ...(replyTo ? { replyTo } : {}),
+      };
+      return [tombstone];
+    }
     // Empty assistant shells left after stripping `pending` are noise.
     if (
       message.role === "assistant" &&
@@ -79,6 +96,7 @@ export function restoreAgentMessages(stored: unknown[]): AgentChatMessage[] {
         ...(reasoning ? { reasoning } : {}),
         ...(drawing ? { drawing } : {}),
         ...(replyTo ? { replyTo } : {}),
+        ...(sessionId ? { sessionId } : {}),
       },
     ];
   });

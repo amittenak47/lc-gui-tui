@@ -809,6 +809,7 @@ export class LcClient {
       timeoutMs?: number;
       document_hash?: string;
       page?: number;
+      pages?: number[];
       highlight?: string;
       page_text?: string;
       marks_prose?: string;
@@ -843,6 +844,7 @@ export class LcClient {
     if (surface === "problem") body.dataset = dataset;
     if (opts.document_hash) body.document_hash = opts.document_hash;
     if (opts.page != null) body.page = opts.page;
+    if (opts.pages && opts.pages.length > 0) body.pages = opts.pages;
     if (opts.highlight) body.highlight = opts.highlight;
     if (opts.page_text) body.page_text = opts.page_text;
     if (opts.marks_prose) body.marks_prose = opts.marks_prose;

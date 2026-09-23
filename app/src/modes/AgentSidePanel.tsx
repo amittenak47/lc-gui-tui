@@ -18,10 +18,10 @@ import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
 import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
-import { useAgentSheet } from "./useAgentSheet";
 import { useWordReveal } from "./AgentRichText";
 import { AgentTurnResponse } from "./AgentTurnResponse";
 import { useChatFollow } from "./useChatFollow";
+import { useAgentSheet } from "./useAgentSheet";
 import { useAgentDisplayPrefs } from "../util/agentDisplayPrefs";
 import { newThinkingDisclosure, type ThinkingDisclosureState } from "./thinkingDisplay";
 import { AgentMessageBubble } from "./AgentMessageBubble";
@@ -50,6 +50,7 @@ import {
   showsReplyStub,
   visibleThreadMessages,
 } from "./coachThreads";
+import { listSessions, organizeIntoSessions } from "./coachSessions";
 
 export type CoachMode = "review" | "ambient";
 
@@ -118,6 +119,21 @@ export function replyExcerpt(content: string): string {
   return flat.length > REPLY_EXCERPT_MAX
     ? `${flat.slice(0, REPLY_EXCERPT_MAX - 1).trimEnd()}…`
     : flat;
+}
+
+/** Ask answered in prose. Draw was not requested, so the turn can offer one. */
+export function offerDrawFor(message: AgentChatMessage, messages: readonly AgentChatMessage[]): boolean {
+  if (message.role !== "assistant" || message.pending || message.drawing) return false;
+  if (message.requestState && message.requestState !== "completed") return false;
+  if (!message.content.trim()) return false;
+  const index = messages.findIndex((item) => item.id === message.id);
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const previous = messages[i];
+    if (!previous || previous.deletedAt || previous.role !== "user") continue;
+    const flags = previous.flags ?? [];
+    return flags.includes("Ask") && !flags.includes("Draw");
+  }
+  return false;
 }
 
 function replyRefFor(message: AgentChatMessage): CoachReplyRef {
@@ -433,7 +449,60 @@ function statusTip(message: AgentChatMessage): string | null {
   if (message.requestState === "cancelled") {
     return message.requestNote?.trim() || "You stopped this message.";
   }
+  if (message.requestState === "interrupted") {
+    return message.requestNote?.trim() || "This request was interrupted.";
+  }
+  if (message.requestState === "running") return "The agent is replying.";
+  if (message.requestState === "completed") return "Sent.";
   return null;
+}
+
+/** Check mark, same circle as {@link FailIcon}. */
+function CheckIcon({ settled }: { settled?: boolean }) {
+  return (
+    <svg
+      className={`lc-agent-turn-fail-icon${settled ? " is-settled" : ""}`}
+      viewBox="0 0 16 16"
+      aria-hidden
+    >
+      <circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M5.1 8.15 7.05 10.15 10.95 5.85"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.45"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * The in-flight mark and the success mark share one box, so a finish replaces
+ * the spinner instead of jumping to a new spot.
+ */
+function RunMark({ done }: { done: boolean }) {
+  const sawRun = useRef(false);
+  const settled = done && sawRun.current;
+  useEffect(() => {
+    if (!done) sawRun.current = true;
+  }, [done]);
+  if (!done) {
+    return (
+      <svg className="lc-agent-turn-fail-icon lc-agent-turn-run" viewBox="0 0 16 16" aria-hidden>
+        <circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" strokeWidth="1.4" opacity="0.28" />
+        <path
+          d="M8 1.8A6.2 6.2 0 0 1 14.2 8"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  return <CheckIcon settled={settled} />;
 }
 
 function turnArtifactProposal(message: AgentChatMessage): AgentArtifactProposal {
@@ -554,6 +623,12 @@ export interface CoachAttachment {
   /** Raw base64 PNG (no data: prefix). */
   png: string;
   /**
+   * When false, the bubble still shows the picture but Ask does not send it.
+   * A text highlight already has the words. A boxed region still sends its
+   * PNG, including when the box also contains labels or a caption.
+   */
+  sendToModel?: boolean;
+  /**
    * A small copy of the same image, when one exists.
    *
    * Present on photos the writer attached, where `png` is sized for a vision
@@ -612,6 +687,20 @@ export interface AgentChatMessage {
   requestState?: import("./coachSendCoordinator").SendState;
   /** Why a send failed or was stopped — shown on the status icon, not in the bubble. */
   requestNote?: string;
+  /**
+   * The question-sized conversation this turn belongs to.
+   *
+   * Assigned on the client (`session-` plus the question's id) and stored on
+   * the message so a reload and a sync replica keep the same grouping.
+   */
+  sessionId?: string;
+  /**
+   * Hidden from the chat, kept in the transcript.
+   *
+   * A removed turn stays in the saved array so another device can see that it
+   * was deleted. Absent on a live turn.
+   */
+  deletedAt?: number;
   /**
    * The turn this one is answering.
    *
@@ -701,6 +790,8 @@ export interface AgentSidePanelProps {
   onRetryMessage?: (id: string) => void;
   onEditMessage?: (id: string, text?: string) => boolean;
   onCancelEdit?: (id: string) => void;
+  /** Hide this turn, and replies that hang off it, from the chat. */
+  onDeleteMessage?: (id: string) => void;
   /** The open thread, so the caller can narrow what the coach is told. */
   onThreadChange?: (rootId: string | null) => void;
   /** Opens the hold-to-reveal dialog for the review on this message. */
@@ -743,7 +834,7 @@ export function AgentSidePanel({
   annotationChoices = [],
   onToggleAttached,
   onSend,
-  onAbortMessage, onRetryMessage, onEditMessage, onCancelEdit,
+  onAbortMessage, onRetryMessage, onEditMessage, onCancelEdit, onDeleteMessage,
   onThreadChange,
   onRequestBridge,
   onToggleDrawing,
@@ -895,15 +986,31 @@ export function AgentSidePanel({
   const motionTimerRef = useRef<number | null>(null);
   const threadMotionRef = useRef<ThreadMotion>("idle");
 
-  const { threadReplies, rootMessages } = useMemo(() => groupThreads(messages), [messages]);
+  const organized = useMemo(() => organizeIntoSessions(messages), [messages]);
+  const sessions = useMemo(() => listSessions(organized), [organized]);
+  const newestSessionId = sessions.at(-1)?.id ?? null;
+  const [pickedSessionId, setPickedSessionId] = useState<string | null>(null);
+  const [seenNewestSession, setSeenNewestSession] = useState<string | null>(null);
+  const pickedIsLive = pickedSessionId != null && sessions.some((session) => session.id === pickedSessionId);
+  if (newestSessionId !== seenNewestSession || (pickedSessionId != null && !pickedIsLive)) {
+    setSeenNewestSession(newestSessionId);
+    setPickedSessionId(newestSessionId);
+  }
+  const activeSessionId = pickedIsLive ? pickedSessionId : newestSessionId;
+  const sessionMessages = useMemo(
+    () => organized.filter((message) => !message.deletedAt && (!activeSessionId || message.sessionId === activeSessionId)),
+    [organized, activeSessionId],
+  );
+
+  const { threadReplies, rootMessages } = useMemo(() => groupThreads(sessionMessages), [sessionMessages]);
   const seenMessages = useRef(new Set(messages.map(message => message.id)));
   useEffect(() => {
     for (const message of messages) seenMessages.current.add(message.id);
   }, [messages]);
 
   const visibleMessages = useMemo(
-    () => visibleThreadMessages(messages, openThreadId, { threadReplies, rootMessages }),
-    [messages, openThreadId, threadReplies, rootMessages],
+    () => visibleThreadMessages(sessionMessages, openThreadId, { threadReplies, rootMessages }),
+    [sessionMessages, openThreadId, threadReplies, rootMessages],
   );
 
   useEffect(() => {
@@ -913,7 +1020,7 @@ export function AgentSidePanel({
   // A thread whose root has gone (cleared history, a trimmed session) must not
   // strand the panel in a view of nothing.
   useEffect(() => {
-    if (openThreadId && !messages.some((message) => message.id === openThreadId)) {
+    if (openThreadId && !sessionMessages.some((message) => message.id === openThreadId)) {
       setOpenThreadId(null);
       setThreadMotion("idle");
       exitedRootRef.current = null;
@@ -922,7 +1029,7 @@ export function AgentSidePanel({
         motionTimerRef.current = null;
       }
     }
-  }, [messages, openThreadId]);
+  }, [sessionMessages, openThreadId]);
 
   /*
    * A quote pushed in from the page.
@@ -971,6 +1078,7 @@ export function AgentSidePanel({
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
   const sheet = useAgentSheet(panelRef, mobile, open, () => setOpen(false));
+  const [sessionsHidden, setSessionsHidden] = useState(false);
   const longPressRef = useRef<{
     timer: ReturnType<typeof setTimeout> | null;
     armTimer: ReturnType<typeof setTimeout> | null;
@@ -1332,6 +1440,28 @@ export function AgentSidePanel({
     requestAnimationFrame(() => jumpToMessage(returning));
   }, [openThreadId, jumpToMessage]);
 
+  /**
+   * Stop an in-flight send and put its text back in the composer.
+   *
+   * Abort leaves the turn where it is, marked stopped. Edit does that and
+   * also hands the words back, so the next Send is a revised copy rather
+   * than a retry of the same request.
+   */
+  const editRunningMessage = (message: AgentChatMessage) => {
+    onAbortMessage?.(message.id);
+    setDraft(message.content);
+    setReplyTo(message.replyTo ?? null);
+    setChatFocus((current) => (current === "messages" ? "split" : current));
+    closeMessageMenu();
+    requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      const end = el.value.length;
+      el.setSelectionRange(end, end);
+    });
+  };
+
   const quoteMessage = useCallback(
     (message: AgentChatMessage) => {
       const ref = replyRefFor(message);
@@ -1527,7 +1657,6 @@ export function AgentSidePanel({
         "lc-side",
         "lc-side-open",
         mobile ? "lc-side-sheet" : "",
-
       ]
         .filter(Boolean)
         .join(" ")}
@@ -1553,6 +1682,35 @@ export function AgentSidePanel({
         <span className="lc-agent-fold-bar" aria-hidden />
       </div>
       <div className="lc-agent-pane-expand-row lc-agent-pane-expand-panel">
+        {sessions.length > 0 ? (
+          <button
+            type="button"
+            className="lc-flag lc-agent-pane-expand lc-agent-panel-toggle"
+            aria-pressed={!sessionsHidden}
+            aria-label={sessionsHidden ? "Show sessions" : "Hide sessions"}
+            title={sessionsHidden ? "Show sessions" : "Hide sessions"}
+            onClick={() => setSessionsHidden((hidden) => !hidden)}
+          >
+            <svg className="lc-agent-pane-expand-icon" viewBox="0 0 16 16" aria-hidden>
+              <rect
+                x="2.25"
+                y="2.75"
+                width="11.5"
+                height="10.5"
+                rx="1.2"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.35"
+              />
+              <path
+                d="M6.25 2.75v10.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.35"
+              />
+            </svg>
+          </button>
+        ) : null}
         <PaneExpandButton
           pane="messages"
           focus={chatFocus}
@@ -1584,7 +1742,23 @@ export function AgentSidePanel({
             </span>
           </div>
         ) : null}
-        <div className="lc-agent-messages-host">
+        <div className={`lc-agent-messages-host${sessions.length > 0 && !sessionsHidden ? " has-sessions" : ""}`}>
+        {sessions.length > 0 && !sessionsHidden ? (
+          <nav className="lc-agent-sessions" aria-label="Sessions">
+            {sessions.map((session) => (
+              <button
+                type="button"
+                key={session.id}
+                className={`lc-agent-session${session.id === activeSessionId ? " is-active" : ""}`}
+                aria-current={session.id === activeSessionId ? "true" : undefined}
+                title={session.title}
+                onClick={() => setPickedSessionId(session.id)}
+              >
+                {session.title}
+              </button>
+            ))}
+          </nav>
+        ) : null}
         <div
           className="lc-agent-messages lc-scroll-pane"
           ref={listRef}
@@ -1596,7 +1770,7 @@ export function AgentSidePanel({
           }}
         >
           <div className="lc-agent-messages-anchor" aria-hidden />
-          {messages.length === 0 && !children && !thinking && (
+          {sessions.length === 0 && !children && !thinking && (
             <p className="lc-muted lc-agent-empty">
               {padSurface && !allowAnnotations ? (
                 <>
@@ -1635,7 +1809,9 @@ export function AgentSidePanel({
               className={`lc-agent-turn lc-agent-turn-selectable lc-agent-turn-${turnKind(message.role)}${
                 message.requestState === "failed" ? " lc-agent-turn-failed" : ""
               }${
-                message.requestState === "cancelled" ? " lc-agent-turn-cancelled" : ""
+                message.requestState === "cancelled" || message.requestState === "interrupted"
+                  ? " lc-agent-turn-cancelled"
+                  : ""
               }${
                 messageMenu?.messageId === message.id
                   ? messageMenu.tall
@@ -1693,9 +1869,6 @@ export function AgentSidePanel({
                 onManage={onManageArtifacts}
               />
               </div>
-              {message.requestState && !message.queued && message.requestState !== "failed" && message.requestState !== "cancelled" && message.requestState !== "completed" && (
-                <small>{message.requestState}</small>
-              )}
               {message.retryOf && <small>Retry · previous attempt retained above</small>}
               {message.queued && (
                 <span className="lc-agent-queued" aria-label="Queued message">Queued</span>
@@ -1728,6 +1901,27 @@ export function AgentSidePanel({
                     {ROLE_LABEL[replyStub!.role]}
                   </span>
                   <span className="lc-agent-reply-stub-text">{replyStub!.excerpt}</span>
+                </button>
+              )}
+              {offerDrawFor(message, visibleMessages) && (
+                <button
+                  type="button"
+                  className="lc-agent-draw-offer"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSend("Draw a diagram of what you just explained.", {
+                      ask: true,
+                      draw: true,
+                      reviewBoard: false,
+                      lazy: false,
+                      handwriting: false,
+                      annotations: false,
+                      reasoning,
+                      replyTo: { id: message.id, role: "assistant", excerpt: replyExcerpt(message.content) },
+                    });
+                  }}
+                >
+                  Draw this
                 </button>
               )}
               </AgentTurnResponse>
@@ -2162,8 +2356,12 @@ export function AgentSidePanel({
                 {["preparing", "queued", "running"].includes(menuMessage.requestState) ?
                   <button role="menuitem" onClick={() => { onAbortMessage?.(menuMessage.id); closeMessageMenu(); }}>Abort</button> :
                   <button role="menuitem" onClick={() => { onRetryMessage?.(menuMessage.requestId ?? menuMessage.id); closeMessageMenu(); }}>Retry</button>}
-                {menuMessage.requestState === "queued" && <button role="menuitem" onClick={() => {
-                  if (onEditMessage?.(menuMessage.id)) { setEditingQueued(menuMessage); setQueueEditText(menuMessage.content); closeMessageMenu(); }
+                {["preparing", "queued", "running"].includes(menuMessage.requestState) && <button role="menuitem" onClick={() => {
+                  if (menuMessage.requestState === "queued") {
+                    if (onEditMessage?.(menuMessage.id)) { setEditingQueued(menuMessage); setQueueEditText(menuMessage.content); closeMessageMenu(); }
+                    return;
+                  }
+                  editRunningMessage(menuMessage);
                 }}>Edit</button>}
               </>}
               <button
@@ -2182,6 +2380,13 @@ export function AgentSidePanel({
                 onClick={() => quoteMessage(menuMessage)}
               >
                 Quote
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => { onDeleteMessage?.(menuMessage.id); closeMessageMenu(); }}
+              >
+                Delete
               </button>
             </div>
           </>,
@@ -2435,8 +2640,10 @@ function MessageArtifactTools({
 function MessageFlags({ message }: { message: AgentChatMessage }) {
   const pending = Boolean(message.pending);
   const failed = message.requestState === "failed";
-  const cancelled = message.requestState === "cancelled";
-  const marked = failed || cancelled;
+  const cancelled = message.requestState === "cancelled" || message.requestState === "interrupted";
+  const running = message.requestState === "running";
+  const completed = message.requestState === "completed";
+  const marked = failed || cancelled || running || completed;
   const flags = pending ? message.pendingAck?.flags ?? message.flags : message.flags;
   const text = flags?.join(" · ") || (pending ? "Working…" : "");
   const shown = useWordReveal(text, pending, pending);
@@ -2444,8 +2651,8 @@ function MessageFlags({ message }: { message: AgentChatMessage }) {
   if (!text && !marked) return null;
   return (
     <div
-      className={`lc-agent-turn-footnotes${failed ? " is-failed" : ""}${cancelled ? " is-cancelled" : ""}`}
-      role={pending ? "status" : undefined}
+      className={`lc-agent-turn-footnotes${failed ? " is-failed" : ""}${cancelled ? " is-cancelled" : ""}${running ? " is-running" : ""}${completed ? " is-completed" : ""}`}
+      role={pending || running ? "status" : undefined}
     >
       {marked ? (
         <span
@@ -2454,7 +2661,7 @@ function MessageFlags({ message }: { message: AgentChatMessage }) {
           data-tip={tip ?? undefined}
           data-tip-placement="top"
         >
-          {cancelled ? <StopIcon /> : <FailIcon />}
+          {running || completed ? <RunMark done={completed} /> : cancelled ? <StopIcon /> : <FailIcon />}
         </span>
       ) : (
         <span className="lc-agent-turn-flag-rule" aria-hidden />

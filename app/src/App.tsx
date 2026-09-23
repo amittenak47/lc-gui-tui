@@ -829,7 +829,7 @@ export function App() {
    * the panel is open, both halves shrink, and the focused board keepY-fits.
    * Switching to the partner hides the panel (chrome comes from the active
    * workspace) but leaves the original pane `splitPaused` — its ResizeObserver
-   * fires and is ignored, so the page stays fitted to the 520px hole. Settle
+   * fires and is ignored, so the page stays fitted to the column hole. Settle
    * is what the sash uses to remesh a paused partner; the column must too.
    * Mobile sheets overlay the board and must not remesh as if the hole moved.
    */

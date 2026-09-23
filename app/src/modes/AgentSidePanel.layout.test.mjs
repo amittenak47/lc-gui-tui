@@ -35,6 +35,9 @@ describe("agent panel chrome", () => {
     expect(desktop).toContain("pointer-events: none");
     expect(desktop).not.toContain("display: none");
     expect(css).toContain("padding: 4px 12px 8px");
+    expect(panel).toContain('aria-label={sessionsHidden ? "Show sessions" : "Hide sessions"}');
+    expect(panel).toContain("lc-agent-panel-toggle");
+    expect(panel).toContain("setSessionsHidden");
   });
 
   it("puts the chat-box expand on the composer bar before Annotations", () => {
@@ -138,7 +141,7 @@ describe("agent panel chrome", () => {
     expect(panel).toContain("lc-agent-turn-fail");
     expect(panel).toContain("const tip = statusTip(message)");
     expect(panel).toContain("aria-label={tip ?? undefined}");
-    expect(panel).toContain("{cancelled ? <StopIcon /> : <FailIcon />}");
+    expect(panel).toContain("{running || completed ? <RunMark done={completed} /> : cancelled ? <StopIcon /> : <FailIcon />}");
     expect(panel).toContain("<MessageFlags message={message} />");
     expect(panel).not.toContain("MessageFlags message={message} header");
     expect(panel).not.toContain("lc-agent-turn-header-flags");

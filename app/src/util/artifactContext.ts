@@ -4,7 +4,8 @@ import { artifactRefKey, type ArtifactRef } from "./padArtifacts";
 import { readArtifact } from "./artifactRepository";
 
 export function selectedArtifactRefs(messages: readonly AgentChatMessage[], threadRootId: string | null, marks: ReadonlyArray<{ artifacts?: ArtifactRef[] }>): ArtifactRef[] {
-  const turns = threadRootId ? threadTurns(messages, threadRootId) : messages.slice(-8);
+  const live = messages.filter((message) => !message.deletedAt);
+  const turns = threadRootId ? threadTurns(live, threadRootId) : live.slice(-8);
   const refs = [...marks.flatMap(mark => mark.artifacts ?? []), ...turns.slice().reverse().flatMap(turn => turn.artifacts ?? [])];
   return [...new Map(refs.map(ref => [artifactRefKey(ref), ref])).values()].slice(0, 8);
 }

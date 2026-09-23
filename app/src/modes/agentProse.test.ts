@@ -30,6 +30,14 @@ describe("formatAgentProse", () => {
     expect(out.split("$$").length).toBeGreaterThan(2);
   });
 
+  it("keeps a tight dollar and also accepts spaced dollars and \\(...\\)", () => {
+    expect(formatAgentProse("Euler: $e^{i\\pi}+1=0$.")).toContain("$e^{i\\pi}+1=0$");
+    expect(formatAgentProse("The cost is $ O(n) $ here.")).toContain("$O(n)$");
+    expect(formatAgentProse("Inline \\( \\alpha + \\beta \\) stays inline.")).toContain("$\\alpha + \\beta$");
+    expect(formatAgentProse("Display \\[ x = 1 \\] here.")).toContain("$$");
+    expect(formatAgentProse("Display \\[ x = 1 \\] here.")).toContain("x = 1");
+  });
+
   it("keeps existing delimiters but demotes mid-sentence display math", () => {
     expect(formatAgentProse("Euler: $e^{i\\pi}+1=0$.")).toContain("$e^{i\\pi}+1=0$");
     expect(formatAgentProse("The sum is $$x+y$$ in the line.")).toContain("$x+y$");

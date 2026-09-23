@@ -653,7 +653,13 @@ function stallReason(run: PendingRun): string {
   if (run.tool?.failed) {
     return `the agent stopped answering ${where}, after ${run.tool.name} failed`;
   }
-  return `the agent stopped answering ${where} — nothing came back for two minutes`;
+  return `the agent stopped answering ${where} — nothing came back for ${silencePhrase(RUN_STAGE_TIMEOUT_MS)}`;
+}
+
+function silencePhrase(ms: number): string {
+  const minutes = ms / 60_000;
+  const shown = Number.isInteger(minutes) ? String(minutes) : minutes.toFixed(1);
+  return `${shown} minute${minutes === 1 ? "" : "s"}`;
 }
 
 /** Older daemons reject `run`/`cancel` with a serde unknown-variant parse error. */

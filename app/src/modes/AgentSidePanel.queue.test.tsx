@@ -15,6 +15,22 @@ afterEach(() => { act(() => root.unmount()); document.body.textContent = ""; vi.
 const message = (state: AgentChatMessage["requestState"]): AgentChatMessage => ({ id: "question", role: "user", content: "Why?", at: 1, requestState: state });
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === text)!;
 function menu() { act(() => host.querySelector(".lc-agent-turn-user")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }))); }
+it("offers Draw this after an Ask that did not draw", () => {
+  const send = vi.fn();
+  act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy={false} messages={[
+    { id: "q", role: "user", content: "What is SGD?", at: 1, flags: ["Ask"], requestState: "completed" },
+    { id: "a", role: "assistant", content: "SGD updates the weights.", at: 2, requestState: "completed" },
+  ]} onSend={send} />));
+  const offer = button("Draw this");
+  expect(offer).toBeTruthy();
+  act(() => offer.click());
+  expect(send).toHaveBeenCalledWith("Draw a diagram of what you just explained.", expect.objectContaining({ ask: true, draw: true }));
+  act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy={false} messages={[
+    { id: "q2", role: "user", content: "Draw SGD", at: 1, flags: ["Ask", "Draw"], requestState: "completed" },
+    { id: "a2", role: "assistant", content: "Drawn.", at: 2, requestState: "completed" },
+  ]} onSend={send} />));
+  expect(button("Draw this")).toBeUndefined();
+});
 it("offers Abort/Edit but not Retry for queued messages and releases Cancel edit", () => {
   const edit = vi.fn(() => true), cancel = vi.fn(), abort = vi.fn();
   act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy messages={[message("queued")]} onSend={() => {}} onEditMessage={edit} onCancelEdit={cancel} onAbortMessage={abort} />));
@@ -72,6 +88,73 @@ it("marks a stopped message in amber with a stop icon and no cancelled label", (
   expect(user.querySelector(".lc-agent-turn-fail svg rect")).toBeTruthy();
   expect(agent.textContent?.toLowerCase()).not.toContain("cancelled");
   expect(agent.querySelector(".lc-agent-turn-fail")?.getAttribute("data-tip")).toBe("You stopped this reply.");
+});
+
+it("Edit on a running message aborts it and restores the text to the composer", () => {
+  const abort = vi.fn();
+  act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy messages={[message("running")]} onSend={() => {}} onAbortMessage={abort} />));
+  const turn = host.querySelector(".lc-agent-turn-user")!;
+  expect(turn.textContent?.toLowerCase()).not.toContain("running");
+  const mark = turn.querySelector(".lc-agent-turn-fail")!;
+  expect(mark.querySelector(".lc-agent-turn-run")).toBeTruthy();
+  expect(mark.getAttribute("aria-label")).toBe("The agent is replying.");
+  menu();
+  expect(button("Retry")).toBeUndefined();
+  expect(button("Abort")).toBeTruthy();
+  act(() => button("Edit").click());
+  expect(abort).toHaveBeenCalledWith("question");
+  expect(host.querySelector("textarea")!.value).toBe("Why?");
+  expect(document.querySelector('[aria-label="Edit queued message"]')).toBeNull();
+});
+
+it("replaces the running spinner with a check of the same mark once the send completes", () => {
+  const props = { open: true, mode: "review" as const, onModeChange: () => {}, busy: false, onSend: () => {} };
+  const sent = { ...message("running"), flags: ["Ask"] };
+  act(() => root.render(<AgentSidePanel {...props} messages={[sent]} />));
+  const before = host.querySelector(".lc-agent-turn-fail")!;
+  expect(before.querySelector(".lc-agent-turn-run")).toBeTruthy();
+  act(() => root.render(<AgentSidePanel {...props} messages={[{ ...sent, requestState: "completed" }]} />));
+  const turn = host.querySelector(".lc-agent-turn-user")!;
+  expect(turn.textContent?.toLowerCase()).not.toContain("running");
+  expect(turn.textContent?.toLowerCase()).not.toContain("completed");
+  const mark = turn.querySelector(".lc-agent-turn-footnotes.is-completed .lc-agent-turn-fail")!;
+  expect(mark.querySelector(".lc-agent-turn-run")).toBeNull();
+  expect(mark.querySelector("svg.lc-agent-turn-fail-icon.is-settled")).toBeTruthy();
+  expect(mark.getAttribute("aria-label")).toBe("Sent.");
+  expect(turn.textContent).toMatch(/Ask/);
+});
+
+it("marks an interrupted request with the stop icon and does not print the state", () => {
+  act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy={false} messages={[message("interrupted")]} onSend={() => {}} />));
+  const turn = host.querySelector(".lc-agent-turn-user")!;
+  expect(turn.textContent?.toLowerCase()).not.toContain("interrupted");
+  expect(turn.classList.contains("lc-agent-turn-cancelled")).toBe(true);
+  expect(turn.querySelector(".lc-agent-turn-fail svg rect")).toBeTruthy();
+  expect(turn.querySelector(".lc-agent-turn-fail")?.getAttribute("data-tip")).toBe("This request was interrupted.");
+});
+
+it("lists each question as a session and shows only the selected one", () => {
+  const messages: AgentChatMessage[] = [
+    { id: "q1", role: "user", content: "Why is this slow?", at: 1 },
+    { id: "a1", role: "assistant", content: "It scans twice.", at: 2 },
+    { id: "q2", role: "user", content: "Draw the array", at: 3 },
+  ];
+  act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy={false} messages={messages} onSend={() => {}} />));
+  const thread = () => host.querySelector(".lc-agent-messages")!;
+  expect(host.querySelector(".lc-agent-session.is-active")?.textContent).toBe("Draw the array");
+  expect(thread().textContent).toContain("Draw the array");
+  expect(thread().textContent).not.toContain("Why is this slow?");
+  act(() => button("Why is this slow?").click());
+  expect(thread().textContent).toContain("It scans twice.");
+  expect(thread().textContent).not.toContain("Draw the array");
+});
+
+it("offers Delete for a message", () => {
+  const remove = vi.fn();
+  act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy={false} messages={[message("completed")]} onSend={() => {}} onDeleteMessage={remove} />));
+  menu();
+  act(() => button("Delete").click());
+  expect(remove).toHaveBeenCalledWith("question");
 });
 
 it("puts AGENT send flags under the message with the same rule as YOU", () => {

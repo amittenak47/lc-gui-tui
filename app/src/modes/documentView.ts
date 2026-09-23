@@ -55,15 +55,18 @@ export function documentImageContext(view: DocumentViewContext, hasImage: boolea
 }
 export function hasDocumentCapture(
   view: DocumentViewContext,
-  attachments: readonly { png: string; documentCaptureId?: string }[],
+  attachments: readonly { png: string; documentCaptureId?: string; sendToModel?: boolean }[],
 ): boolean {
   return Boolean(view.documentCaptureId && attachments.some(attachment =>
-    attachment.documentCaptureId === view.documentCaptureId && attachment.png.length > 0));
+    attachment.documentCaptureId === view.documentCaptureId &&
+    attachment.png.length > 0 &&
+    attachment.sendToModel !== false));
 }
 export function documentAskFields(view: DocumentViewContext) {
   return {
     document_hash: view.document_hash,
     page: view.pages[0] ?? 1,
+    pages: view.pages.filter((page) => page >= 1),
     page_text: [`Document: ${view.title}`, `Visible pages: ${view.pages.join(", ") || "continuous document"}`,
       view.text.slice(0, 12000), view.text.length > 12000 ? "[Visible text truncated]" : "", view.limitation ?? ""].filter(Boolean).join("\n"),
   };

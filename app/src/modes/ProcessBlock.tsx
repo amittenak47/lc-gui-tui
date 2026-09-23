@@ -186,7 +186,10 @@ export function processLine(event: CoachProcessEvent | undefined): string {
     return [`${verb} ${event.label}`, event.detail].filter(Boolean).join(" — ");
   }
   if (event.label === "reason") return reasonTitle(event.detail);
-  if (event.label === "prefetch") return STAGE_LABELS.prefetch ?? "Looking up earlier pages";
+  if (event.label === "prefetch") {
+    const detail = oneLine(event.detail ?? "");
+    return detail ? sentenceCase(detail) : (STAGE_LABELS.prefetch ?? "Searching this document");
+  }
   const named = STAGE_LABELS[event.label];
   if (named && GENERIC_STAGE_TITLES.has(named) && event.detail?.trim()) {
     return sentenceCase(oneLine(event.detail));
@@ -196,7 +199,7 @@ export function processLine(event: CoachProcessEvent | undefined): string {
   return fallback ? sentenceCase(oneLine(fallback)) : event.label;
 }
 
-const PIPELINE_STAGE_LABELS = new Set(["received", "ask", "prefetch"]);
+const PIPELINE_STAGE_LABELS = new Set(["received", "ask", "prefetch", "writing"]);
 
 /** Handshake / retrieve stages — not model thoughts. */
 export function isPipelineStage(event: CoachProcessEvent): boolean {
@@ -213,6 +216,13 @@ function latestPipelineLine(events: readonly CoachProcessEvent[]): string | null
     (event) => event.label !== "done" && !isReasoningEvent(event) && isPipelineStage(event),
   );
   return latest ? processLine(latest) : null;
+}
+
+/** Lines after the prefetch summary: page, why it was kept, length, prefix. */
+export function prefetchPassageLines(events: readonly CoachProcessEvent[]): string[] {
+  const latest = [...events].reverse().find((event) => event.label === "prefetch" && event.detail?.includes("\n"));
+  if (!latest?.detail) return [];
+  return latest.detail.split("\n").slice(1).map((line) => line.trim()).filter(Boolean);
 }
 
 /**
@@ -241,14 +251,18 @@ export function ProcessBlock({
   const [, redraw] = useReducer(value => value + 1, 0);
   const regionId = useId();
   const shown = chunkReasonEvents(coalesceReasonListItems(events.filter(isThoughtProcessEvent)));
+  const passages = prefetchPassageLines(events);
   const waiting = running && shown.length === 0;
   const expanded = state.sectionOpen ?? !(collapse || (!running && displayPrefs.autoCollapseThinking));
   if (shown.length === 0 && !waiting) return null;
+  const passageNote = passages.length
+    ? ` · ${passages.length} passage${passages.length === 1 ? "" : "s"}`
+    : "";
   const header = waiting
     ? latestPipelineLine(events) ?? "Thinking…"
     : running
       ? "Thinking…"
-      : `Thinking · ${shown.length} step${shown.length === 1 ? "" : "s"}`;
+      : `Thinking · ${shown.length} step${shown.length === 1 ? "" : "s"}${passageNote}`;
 
   return (
     <div className={running ? "lc-agent-process lc-agent-process-running" : "lc-agent-process"}>
@@ -267,6 +281,11 @@ export function ProcessBlock({
         <span className="lc-agent-process-chevron" aria-hidden />
         <span className="lc-agent-process-label">{header}</span>
       </button>
+      {(expanded) && passages.length > 0 ? (
+        <ul className="lc-agent-passages">
+          {passages.map((line, index) => <li key={`${index}-${line}`} className="lc-agent-passage">{line}</li>)}
+        </ul>
+      ) : null}
       <AnimatedDisclosure open={expanded && shown.length > 0} onExitComplete={onCollapsed} animateInitial={running}>
         <ol id={regionId} className="lc-agent-process-steps">
             {shown.map((event, index) => {

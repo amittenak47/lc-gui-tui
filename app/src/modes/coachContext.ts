@@ -77,7 +77,7 @@ export function threadTurns(
       // Replies to replies stay in the same thread rather than starting a new
       // one — the writer sees one back-and-forth, so the model should too.
       ids.add(message.id);
-      out.push(message);
+      if (!message.deletedAt) out.push(message);
     }
   }
   return out;
@@ -100,7 +100,7 @@ export function buildConversationContext(
     : messages;
 
   const usable = source.filter(
-    (message) => !message.pending && !message.queued && (!message.requestState || message.requestState === "completed") && message.content.trim().length > 0,
+    (message) => !message.deletedAt && !message.pending && !message.queued && (!message.requestState || message.requestState === "completed") && message.content.trim().length > 0,
   );
   if (usable.length === 0) return "";
 

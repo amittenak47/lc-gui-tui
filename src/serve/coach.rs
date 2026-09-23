@@ -602,9 +602,12 @@ pub struct AskRequest {
     /// prefetch RAG chunks and offer document tools.
     #[serde(default)]
     pub document_hash: Option<String>,
-    /// 1-based page the reader is on.
+    /// 1-based page the reader is on. Older clients send only this.
     #[serde(default)]
     pub page: Option<u32>,
+    /// 1-based pages intersecting the reader's view. Empty on older clients.
+    #[serde(default)]
+    pub pages: Vec<u32>,
     /// Exact highlighted string, if any.
     #[serde(default)]
     pub highlight: String,
@@ -753,6 +756,20 @@ fn split_process_and_reasoning(
     (process, reasoning)
 }
 
+/// Pages the reader can see. An explicit list wins; older clients only send
+/// the first page.
+fn open_view_pages(pages: &[u32], page: Option<u32>) -> Vec<u32> {
+    let mut pages: Vec<u32> = pages.iter().copied().filter(|page| *page >= 1).collect();
+    if pages.is_empty() {
+        if let Some(page) = page.filter(|page| *page >= 1) {
+            pages.push(page);
+        }
+    }
+    pages.sort_unstable();
+    pages.dedup();
+    pages
+}
+
 /// Ask without the HTTP wrapper — see [`run_review`] for why.
 pub async fn run_ask(
     state: &Shared,
@@ -779,6 +796,7 @@ pub async fn run_ask(
         .map(str::to_string);
     let document_ask = matches!(surface, AgentSurface::Annotate) && document_hash.is_some();
     let page = request.page;
+    let open_pages = open_view_pages(&request.pages, request.page);
     let highlight = request.highlight.clone();
     let page_text = request.page_text.clone();
     let marks_prose = request.marks_prose.clone();
@@ -855,21 +873,35 @@ pub async fn run_ask(
             } else {
                 highlight.as_str()
             };
-            events.stage("prefetch", "Looking up earlier pages");
-            let retrieved = match crate::docs_index::db_path()
+            events.stage("prefetch", "Searching this document");
+            let (detail, retrieved) = match crate::docs_index::db_path()
                 .and_then(|path| crate::docs_index::open(&path))
                 .and_then(|conn| {
-                    crate::docs_index::retrieve(
+                    crate::docs_index::passages_outside(
                         &conn,
                         hash,
                         query,
                         crate::docs_index::prefetch_k(),
                         &cfg,
+                        &open_pages,
+                        page_text.as_str(),
                     )
                 }) {
-                Ok(chunks) => crate::docs_index::format_retrieval(&chunks),
-                Err(_) => String::new(),
+                Ok((chunks, lexical)) => (
+                    crate::docs_index::prefetch_detail(&open_pages, &chunks, lexical),
+                    crate::docs_index::format_retrieval(&chunks),
+                ),
+                Err(_) => (
+                    match crate::docs_index::pages_label(&open_pages) {
+                        Some(open) => format!(
+                            "{open} on screen. The rest of the document could not be searched."
+                        ),
+                        None => "The document could not be searched.".into(),
+                    },
+                    String::new(),
+                ),
             };
+            events.stage("prefetch", &detail);
             if !retrieved.is_empty() {
                 prompt.push('\n');
                 prompt.push_str(&retrieved);
@@ -880,8 +912,18 @@ pub async fn run_ask(
                 prompt.push('\n');
             }
             if !page_text.trim().is_empty() {
-                prompt.push_str("\n## Current page\n\n");
-                prompt.push_str(&clip(page_text.trim(), 2000));
+                let section = if open_pages.len() > 1 {
+                    "\n## Open pages\n\n"
+                } else {
+                    "\n## Current page\n\n"
+                };
+                // One visible page is already a few thousand characters. A view
+                // that straddles a page boundary sends every intersecting page,
+                // so the cap grows with the view instead of cutting the second
+                // page off at 2000 characters.
+                let cap = 4000usize.saturating_mul(open_pages.len().clamp(1, 3));
+                prompt.push_str(section);
+                prompt.push_str(&clip(page_text.trim(), cap));
                 prompt.push('\n');
             }
             let ask_ctx = AskContext {
@@ -902,6 +944,7 @@ pub async fn run_ask(
                 &events,
                 want_reasoning,
                 effort,
+                want_draw,
             )?;
             events.stage("done", "");
             return Ok(AskEnvelope {
@@ -925,6 +968,7 @@ pub async fn run_ask(
                 &events,
                 want_reasoning,
                 effort,
+                want_draw,
             )?;
             events.stage("done", "");
             return Ok(AskEnvelope {

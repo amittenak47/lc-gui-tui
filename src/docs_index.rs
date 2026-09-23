@@ -645,7 +645,158 @@ pub fn embed_pending(
 }
 
 pub fn retrieve(conn: &Connection, hash: &str, query: &str, k: usize, cfg: &Config) -> Result<Vec<RetrievedChunk>> {
+    let (mut scored, _) = rank_chunks(conn, hash, query, cfg)?;
+    scored.truncate(k.clamp(1, 8));
+    Ok(scored)
+}
+
+/// Passages the open view does not already contain.
+///
+/// On a multi-page document the named open pages are skipped — their text is
+/// already in the prompt — and the page immediately above the view is included
+/// so a question about what just scrolled off still has that passage. The
+/// other slots are the best matches elsewhere. A one-page document is not
+/// stripped by page number; only text already inside `open_text` is dropped.
+///
+/// The bool is true when the ranking was word overlap rather than embeddings.
+pub fn passages_outside(
+    conn: &Connection,
+    hash: &str,
+    query: &str,
+    k: usize,
+    cfg: &Config,
+    open_pages: &[u32],
+    open_text: &str,
+) -> Result<(Vec<RetrievedChunk>, bool)> {
     let k = k.clamp(1, 8);
+    let (mut scored, lexical) = rank_chunks(conn, hash, query, cfg)?;
+    let distinct: std::collections::HashSet<u32> = scored.iter().map(|chunk| chunk.page).collect();
+    let multi_page = distinct.len() > 1;
+    let open: std::collections::HashSet<u32> = open_pages.iter().copied().filter(|page| *page >= 1).collect();
+    scored.retain(|chunk| {
+        if multi_page && open.contains(&chunk.page) {
+            return false;
+        }
+        let text = chunk.text.trim();
+        !text.is_empty() && (open_text.is_empty() || !open_text.contains(text))
+    });
+    let mut chosen = Vec::new();
+    if multi_page {
+        if let Some(prev) = open.iter().copied().min().filter(|page| *page > 1).map(|page| page - 1) {
+            if !open.contains(&prev) {
+            if let Some(tail) = page_tail(conn, hash, prev)? {
+                let text = tail.text.trim();
+                if !text.is_empty() && (open_text.is_empty() || !open_text.contains(text)) {
+                    chosen.push(tail);
+                }
+            }
+            }
+        }
+    }
+    for chunk in scored {
+        if chosen.len() >= k {
+            break;
+        }
+        // A zero score shares no words with the question. Keep the page just
+        // above the view anyway; do not fill the other slots with it.
+        if chunk.score <= 0.0 {
+            break;
+        }
+        if chosen.iter().any(|kept| kept.page == chunk.page && kept.text == chunk.text) {
+            continue;
+        }
+        chosen.push(chunk);
+    }
+    Ok((chosen, lexical))
+}
+
+fn page_tail(conn: &Connection, hash: &str, page: u32) -> Result<Option<RetrievedChunk>> {
+    let row = conn
+        .query_row(
+            "SELECT heading, text FROM chunks WHERE hash = ?1 AND page = ?2
+             ORDER BY ordinal DESC, id DESC LIMIT 1",
+            params![hash, page as i64],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, String>(1)?,
+                ))
+            },
+        )
+        .optional()?;
+    Ok(row.map(|(heading, text)| {
+        let note = match heading.filter(|heading| !heading.is_empty()) {
+            Some(heading) => format!("just above the open pages — {heading}"),
+            None => "just above the open pages".into(),
+        };
+        RetrievedChunk {
+            page,
+            heading: Some(note),
+            text,
+            score: 0.0,
+        }
+    }))
+}
+
+/// "Page 4" or "Pages 4 and 5". Empty when there is nothing to name.
+pub fn pages_label(pages: &[u32]) -> Option<String> {
+    let mut pages: Vec<u32> = pages.iter().copied().filter(|page| *page >= 1).collect();
+    pages.sort_unstable();
+    pages.dedup();
+    if pages.is_empty() {
+        return None;
+    }
+    let listed = match pages.as_slice() {
+        [one] => one.to_string(),
+        [a, b] => format!("{a} and {b}"),
+        _ => {
+            let last = pages.len() - 1;
+            let head = pages[..last]
+                .iter()
+                .map(|page| page.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{head}, and {}", pages[last])
+        }
+    };
+    Some(if pages.len() == 1 {
+        format!("Page {listed}")
+    } else {
+        format!("Pages {listed}")
+    })
+}
+
+/// What the prefetch line should say once the search has finished.
+pub fn lookup_status(open_pages: &[u32], chunks: &[RetrievedChunk]) -> String {
+    let open = pages_label(open_pages);
+    let named: std::collections::HashSet<u32> = open_pages.iter().copied().collect();
+    let extra: Vec<u32> = chunks
+        .iter()
+        .map(|chunk| chunk.page)
+        .filter(|page| !named.contains(page))
+        .collect();
+    let extra = pages_label(&extra).map(|label| {
+        let mut chars = label.chars();
+        match chars.next() {
+            Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        }
+    });
+    match (open, extra) {
+        (Some(open), Some(extra)) => format!("{open} on screen. Also reading {extra}."),
+        (Some(open), None) => {
+            if chunks.is_empty() {
+                format!("{open} on screen. Nothing else in the document matched.")
+            } else {
+                format!("{open} on screen. Also reading other passages on this page.")
+            }
+        }
+        (None, Some(extra)) => format!("Reading {extra}."),
+        (None, None) => "Nothing in this document matched.".into(),
+    }
+}
+
+fn rank_chunks(conn: &Connection, hash: &str, query: &str, cfg: &Config) -> Result<(Vec<RetrievedChunk>, bool)> {
     let mut stmt = conn.prepare(
         "SELECT page, heading, text, embedding, embedded FROM chunks WHERE hash = ?1
          ORDER BY page, ordinal, id",
@@ -717,8 +868,7 @@ pub fn retrieve(conn: &Connection, hash: &str, query: &str, k: usize, cfg: &Conf
         });
     }
     scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    scored.truncate(k);
-    Ok(scored)
+    Ok((scored, !comparable))
 }
 
 /// A chunk, plus which book it came from.
@@ -985,12 +1135,7 @@ pub fn format_retrieval(chunks: &[RetrievedChunk]) -> String {
     let mut out = String::from("## Retrieved from this document\n\n");
     let mut used = out.len();
     for chunk in chunks {
-        let heading = chunk
-            .heading
-            .as_deref()
-            .filter(|h| !h.is_empty())
-            .unwrap_or("(untitled)");
-        let block = format!("### Page {} — {}\n\n{}\n\n", chunk.page, heading, chunk.text.trim());
+        let block = retrieval_block(chunk);
         if used + block.len() > RETRIEVAL_CHAR_CAP {
             break;
         }
@@ -998,6 +1143,66 @@ pub fn format_retrieval(chunks: &[RetrievedChunk]) -> String {
         used += block.len();
     }
     out
+}
+
+fn retrieval_block(chunk: &RetrievedChunk) -> String {
+    let heading = chunk
+        .heading
+        .as_deref()
+        .filter(|h| !h.is_empty())
+        .unwrap_or("(untitled)");
+    format!("### Page {} — {}\n\n{}\n\n", chunk.page, heading, chunk.text.trim())
+}
+
+/// Chunks `format_retrieval` actually appends, in the same order.
+fn sent_chunks(chunks: &[RetrievedChunk]) -> &[RetrievedChunk] {
+    let mut used = "## Retrieved from this document\n\n".len();
+    let mut count = 0;
+    for chunk in chunks {
+        let len = retrieval_block(chunk).len();
+        if used + len > RETRIEVAL_CHAR_CAP {
+            break;
+        }
+        used += len;
+        count += 1;
+    }
+    &chunks[..count]
+}
+
+/// Status line, then one line per passage the model received.
+///
+/// `p3 · above · 48 chars · the paragraph just above`
+/// `p12 · 0.81 · 400 chars · stochastic gradient`
+/// `p1 · 2 shared · 36 chars · unique zebra theorem`
+pub fn prefetch_detail(open_pages: &[u32], chunks: &[RetrievedChunk], lexical: bool) -> String {
+    let sent = sent_chunks(chunks);
+    let mut lines = vec![lookup_status(open_pages, sent)];
+    for chunk in sent {
+        lines.push(chunk_line(chunk, lexical));
+    }
+    lines.join("\n")
+}
+
+fn chunk_line(chunk: &RetrievedChunk, lexical: bool) -> String {
+    let above = chunk
+        .heading
+        .as_deref()
+        .unwrap_or("")
+        .contains("just above");
+    let how = if above {
+        "above".to_string()
+    } else if lexical {
+        format!("{} shared", chunk.score.round().max(0.0) as u32)
+    } else {
+        format!("{:.2}", chunk.score)
+    };
+    let flat = chunk.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let count = flat.chars().count();
+    let mut prefix: String = flat.chars().take(56).collect();
+    if count > 56 {
+        prefix.push('…');
+    }
+    format!("p{} · {} · {count} chars · {prefix}", chunk.page, how)
 }
 
 pub fn section_text(conn: &Connection, hash: &str, section_name: &str) -> Result<String> {
@@ -2469,6 +2674,84 @@ mod tests {
         let formatted = format_retrieval(&chunks);
         assert!(formatted.len() <= RETRIEVAL_CHAR_CAP + 80);
         assert!(formatted.starts_with("## Retrieved from this document"));
+    }
+
+    #[test]
+    fn lookup_names_the_open_pages_and_what_else_was_read() {
+        assert_eq!(
+            lookup_status(&[4, 5], &[]),
+            "Pages 4 and 5 on screen. Nothing else in the document matched."
+        );
+        assert_eq!(
+            lookup_status(
+                &[4],
+                &[RetrievedChunk {
+                    page: 4,
+                    heading: None,
+                    text: "another section".into(),
+                    score: 1.0,
+                }],
+            ),
+            "Page 4 on screen. Also reading other passages on this page."
+        );
+        assert_eq!(pages_label(&[12, 3, 3, 40]), Some("Pages 3, 12, and 40".into()));
+    }
+
+    #[test]
+    fn passages_outside_skip_the_open_pages_and_keep_the_page_above() {
+        let path = tmp();
+        let mut conn = open(&path).unwrap();
+        upsert(
+            &mut conn,
+            "book",
+            &IndexBody {
+                name: "book.pdf".into(),
+                doc_type: "pdf".into(),
+                pages: vec![
+                    IndexPage { page: 1, text: "unique zebra theorem lives here".into(), heading: None },
+                    IndexPage { page: 2, text: "unrelated kitchen plumbing".into(), heading: None },
+                    IndexPage {
+                        page: 3,
+                        text: "the paragraph just above the viewport".into(),
+                        heading: Some("Lead".into()),
+                    },
+                    IndexPage { page: 4, text: "unique zebra theorem repeated on the open page".into(), heading: None },
+                    IndexPage { page: 5, text: "more of the open view".into(), heading: None },
+                ],
+            },
+            &cfg(),
+            false,
+        )
+        .unwrap();
+        let (hits, lexical) = passages_outside(
+            &conn,
+            "book",
+            "zebra theorem",
+            prefetch_k(),
+            &cfg(),
+            &[4, 5],
+            "unique zebra theorem repeated on the open page\nmore of the open view",
+        )
+        .unwrap();
+        assert_eq!(hits[0].page, 3);
+        assert!(hits[0].heading.as_deref().unwrap_or("").contains("just above"));
+        assert!(hits.iter().any(|chunk| chunk.page == 1));
+        assert!(hits.iter().all(|chunk| chunk.page != 4 && chunk.page != 5));
+        let status = lookup_status(&[4, 5], &hits);
+        assert!(status.contains("Pages 4 and 5 on screen"));
+        assert!(status.contains("pages 1 and 3"));
+        assert!(lexical);
+        let detail = prefetch_detail(&[4, 5], &hits, lexical);
+        let mut lines = detail.lines();
+        assert_eq!(lines.next(), Some(status.as_str()));
+        let above = lines.next().unwrap();
+        assert!(above.starts_with("p3 · above · "));
+        assert!(above.contains("just above the viewport"));
+        let matched = lines.next().unwrap();
+        assert!(matched.starts_with("p1 · "));
+        assert!(matched.contains("shared"));
+        assert!(matched.contains("unique zebra theorem"));
+        let _ = std::fs::remove_file(path);
     }
 
     fn sample_pages(n: u32) -> Vec<IndexPage> {

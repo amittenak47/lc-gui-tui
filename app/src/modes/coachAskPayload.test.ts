@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { askImages, freezeCoachAsk, type FrozenAsk } from "./coachAskPayload";
+import { askImages, freezeCoachAsk, selectionImageForModel, type FrozenAsk } from "./coachAskPayload";
 import { documentAskFields, documentImageContext, hasDocumentCapture, type DocumentViewContext } from "./documentView";
 it("sends identical stored document fields/images on retry after navigation", async () => {
   const item: FrozenAsk = { userMessageId: "a" }; const save = vi.fn(async () => {});
@@ -12,6 +12,10 @@ it("sends identical stored document fields/images on retry after navigation", as
 it("omits images for text-only models and sends duplicate attachments only once", () => {
   expect(askImages([{ png: "photo" }, { png: "photo" }, { png: "view" }], true)).toEqual(["photo", "view"]);
   expect(askImages([{ png: "photo" }], false)).toEqual([]);
+  expect(askImages([{ png: "selection", sendToModel: false }, { png: "figure" }], true)).toEqual(["figure"]);
+  expect(selectionImageForModel({ text: "", excerpt: "", anchor: { kind: "region" } })).toBe(true);
+  expect(selectionImageForModel({ text: "Fig. 1", excerpt: "Fig. 1", anchor: { kind: "region" } })).toBe(true);
+  expect(selectionImageForModel({ text: "the recurrence", excerpt: "the recurrence", anchor: { kind: "text" } })).toBe(false);
 });
 it("isolates stored payloads from callers mutating the first send or a retry", async () => {
   const item: FrozenAsk = { userMessageId: "immutable" };

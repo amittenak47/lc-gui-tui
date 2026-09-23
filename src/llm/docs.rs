@@ -247,13 +247,24 @@ pub fn run_document_ask(
     events: &EventSink,
     reasoning: bool,
     effort: Option<ReasoningEffort>,
+    draw: bool,
 ) -> Result<AskOutcome> {
     let mut tools = document_tools(cfg);
-    tools.extend(ask_draw_tools());
+    if draw {
+        tools.extend(ask_draw_tools());
+    }
+    let system = if draw {
+        system.to_string()
+    } else {
+        format!(
+            "{system}\n\nDo not draw and do not call a draw tool. Answer in prose. \
+             The student can ask for a diagram afterwards."
+        )
+    };
     run_tooled_ask(
         provider,
         cfg,
-        system,
+        &system,
         user,
         images,
         ctx,
@@ -274,6 +285,7 @@ pub fn run_pad_ask(
     events: &EventSink,
     reasoning: bool,
     effort: Option<ReasoningEffort>,
+    draw: bool,
 ) -> Result<AskOutcome> {
     let ctx = AskContext {
         document_hash: None,
@@ -283,17 +295,30 @@ pub fn run_pad_ask(
         marks_prose: String::new(),
         retrieved: String::new(),
     };
+    let system = if draw {
+        system.to_string()
+    } else {
+        format!(
+            "{system}\n\nDo not draw and do not call a draw tool. Answer in prose. \
+             The student can ask for a diagram afterwards."
+        )
+    };
+    let tools = if draw {
+        ask_draw_tools()
+    } else {
+        Vec::new()
+    };
     run_tooled_ask(
         provider,
         cfg,
-        system,
+        &system,
         user,
         images,
         &ctx,
         events,
         reasoning,
         effort,
-        ask_draw_tools(),
+        tools,
     )
 }
 
@@ -831,6 +856,7 @@ mod tests {
             &EventSink::none(),
             false,
             None,
+            true,
         )
         .unwrap();
         assert!(outcome.reply.contains("SGD"));
@@ -856,6 +882,7 @@ mod tests {
             &EventSink::none(),
             false,
             None,
+            true,
         )
         .unwrap();
         assert!(outcome.reply.contains("SGD"));
@@ -940,6 +967,7 @@ mod tests {
             &events,
             true,
             None,
+            true,
         )
         .unwrap();
         let lines = log.lock().unwrap().clone();
@@ -1016,7 +1044,7 @@ mod tests {
             }
         }
         let outcome = run_pad_ask(&Repair(Cell::new(0)), &Config::default(), "Tutor",
-            "Walk [1,2]".into(), vec![], &EventSink::none(), true, None).unwrap();
+            "Walk [1,2]".into(), vec![], &EventSink::none(), true, None, true).unwrap();
         assert_eq!(outcome.programs.len(), 1);
         assert_eq!(outcome.programs[0].frames[0].cells, vec![serde_json::json!(1), serde_json::json!(2)]);
         assert_eq!(outcome.reply, "Here is the walk.");
