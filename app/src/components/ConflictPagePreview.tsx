@@ -16,7 +16,7 @@ import { DocSelectionLayer } from "../modes/DocSelectionLayer";
 import { PdfDocument } from "../modes/PdfDocument";
 import { publishPdfFilmCurrent, publishPdfViewPages } from "../modes/pdfFilm";
 import { borrowPdfDocument } from "../modes/pdfOpenDocs";
-import { pdfRestPages, pdfVisibleFromSpans } from "../modes/pdfPaintWindow";
+import { pdfVisibleFromSpans } from "../modes/pdfPaintWindow";
 import { cameraPulseSettleMs } from "../util/cameraBusy";
 import type { PageFrame } from "../canvas/inkPageIndex";
 import type { DocFootnote } from "../util/docFootnotes";
@@ -39,6 +39,7 @@ import {
   decodeConflictInkPages,
   inkSlotsEqual,
   inkedPageIds,
+  inkPageIdsFromOps,
   pageFramesEqual,
   type ConflictInkSlot,
 } from "./conflictInkLayout";
@@ -296,11 +297,9 @@ export function ConflictPagePreview({
       frame = 0;
       const view = root.getBoundingClientRect();
       const spans: Array<{ page: number; top: number; bottom: number }> = [];
-      let lastPage = 1;
       for (const el of root.querySelectorAll<HTMLElement>("[data-pdf-page]")) {
         const n = Number(el.dataset.pdfPage);
         if (!Number.isFinite(n) || n < 1) continue;
-        lastPage = Math.max(lastPage, n);
         const box = el.getBoundingClientRect();
         spans.push({ page: n, top: box.top, bottom: box.bottom });
       }
@@ -311,7 +310,7 @@ export function ConflictPagePreview({
       publishPdfViewPages(
         filmScope,
         intersecting,
-        pdfRestPages(current, lastPage, intersecting),
+        intersecting.length ? intersecting : [current],
       );
     };
 
@@ -369,15 +368,17 @@ export function ConflictPagePreview({
   const [inkSlots, setInkSlots] = useState<ConflictInkSlot[]>([]);
   const inkedPages = useMemo(() => {
     if (usePaper && decodedOps.length > 0) {
-      const ids = paperFrames
-        .filter(
-          (frame) => conflictOpsForPage(decodedOps, frame.pageId, paperFrames).length > 0,
-        )
-        .map((frame) => frame.pageId);
+      const ids = inkPageIdsFromOps(decodedOps, paperFrames);
       if (ids.length > 0) return ids;
     }
-    return inkedPageIds(inkPages);
-  }, [usePaper, decodedOps, paperFrames, inkPages]);
+    if (useMarkdown) return decodedOps.length ? [1] : [];
+    const ids = new Set(inkedPageIds(inkPages));
+    for (const shard of decodedShards) {
+      if (shard.pageId > 0) ids.add(shard.pageId);
+      else for (const pageId of inkPageIdsFromOps(shard.ops, stablePageFrames ?? [])) ids.add(pageId);
+    }
+    return [...ids].sort((a, b) => a - b);
+  }, [usePaper, useMarkdown, decodedOps, decodedShards, stablePageFrames, paperFrames, inkPages]);
   const inkX = useMemo(
     () => (usePaper ? conflictInkXBounds(decodedOps) : null),
     [usePaper, decodedOps],
@@ -398,7 +399,7 @@ export function ConflictPagePreview({
 
   useLayoutEffect(() => {
     const doc = docRef.current;
-    if (!showInk || !doc || inkedPages.length === 0) {
+    if (!showInk || !cssWidth || !doc || inkedPages.length === 0) {
       setInkSlots((current) => (current.length === 0 ? current : []));
       return;
     }
@@ -418,9 +419,9 @@ export function ConflictPagePreview({
       });
     }
     setInkSlots((current) => (inkSlotsEqual(current, next) ? current : next));
-    // Measure after the stack has a width and the paper pages exist. Do not
-    // re-run on scrollHeight — that rebuilt canvases while the finger moved.
-  }, [showInk, inkedPages, cssWidth, paperFrames, decodedOps]);
+    // PDF slots arrive asynchronously. Retry when the document reports its
+    // measured height; scrolling alone does not change this value.
+  }, [showInk, inkedPages, cssWidth, paperFrames, decodedOps, stackH, usePdf, useMarkdown]);
 
   const [paintWindow, setPaintWindow] = useState({ top: 0, height: 800 });
   useEffect(() => {
@@ -437,21 +438,26 @@ export function ConflictPagePreview({
   }, [scrollRoot, cssWidth]);
   const paintTiles = conflictVisibleInkTiles(inkSlots, paintWindow.top, paintWindow.height);
   const tileKeys = paintTiles.map(tile => tile.key).sort().join("|");
+  const paintPageKey = [...new Set(paintTiles.map(tile => tile.page))].sort((a, b) => a - b).join(",");
   const tilesRef = useRef(paintTiles);
   tilesRef.current = paintTiles;
   const painterRef = useRef<ConflictInkPainter | null>(null);
   useEffect(() => {
     const frames = usePaper ? paperFrames : stablePageFrames;
-    const painter = new ConflictInkPainter(inkSlots.map(slot => ({
+    const visiblePages = new Set(tilesRef.current.map(tile => tile.page));
+    const painter = new ConflictInkPainter(inkSlots.filter(slot => visiblePages.has(slot.page)).map(slot => ({
       page: slot.page,
       ...conflictInkPlacement(slot, frames?.find(frame => frame.pageId === slot.page), sceneWidth, usePaper ? inkX : null),
-      ops: usePaper ? conflictOpsForPage(decodedOps, slot.page, paperFrames)
-        : decodedShards.filter(shard => shard.pageId === slot.page || (slot.page === 1 && shard.pageId === 0)).flatMap(shard => shard.ops),
+      ops: useMarkdown ? decodedOps : usePaper ? conflictOpsForPage(decodedOps, slot.page, paperFrames)
+        : decodedShards.flatMap(shard => shard.pageId === slot.page ? shard.ops
+          : shard.pageId === 0 ? (stablePageFrames?.length
+            ? conflictOpsForPage(shard.ops, slot.page, stablePageFrames)
+            : slot.page === 1 ? shard.ops : []) : []),
     })));
     painterRef.current = painter;
     setPaintedInk(null);
     return () => { painter.dispose(); painterRef.current = null; };
-  }, [inkSlots, decodedOps, decodedShards, sceneWidth, stablePageFrames, paperFrames, usePaper, inkX]);
+  }, [inkSlots, decodedOps, decodedShards, sceneWidth, stablePageFrames, paperFrames, usePaper, useMarkdown, inkX, paintPageKey]);
 
   useEffect(() => {
     const painter = painterRef.current;
@@ -478,11 +484,11 @@ export function ConflictPagePreview({
     }
     if (!tiles.length) setPaintedInk({ ops: decodedOps, slots: inkSlots });
     return () => controller.abort();
-  }, [tileKeys, showInk, inkSlots, decodedOps, decodedShards, sceneWidth, stablePageFrames, paperFrames, usePaper, inkX]);
+  }, [tileKeys, showInk, inkSlots, decodedOps, decodedShards, sceneWidth, stablePageFrames, paperFrames, usePaper, useMarkdown, inkX, paintPageKey]);
 
   const inkPainted = paintedInk?.ops === decodedOps && paintedInk?.slots === inkSlots;
   const paperReady = cssWidth > 0 && !inkLoading && !(showInk && !decodeDone) &&
-    !(showInk && !useMarkdown && inkedPages.length > 0 && (inkSlots.length === 0 || !inkPainted));
+    !(showInk && inkedPages.length > 0 && (inkSlots.length === 0 || !inkPainted));
 
   useEffect(() => {
     if (loadPhase !== "busy") return;
@@ -549,6 +555,7 @@ export function ConflictPagePreview({
             ? paintTiles.map((slot) => (
                 <canvas
                   key={slot.key}
+                  width={0} height={0}
                   data-ink-page={slot.page}
                   data-ink-tile={slot.key}
                   className="lc-hub-conflict-ink-layer"
@@ -565,10 +572,19 @@ export function ConflictPagePreview({
             : null}
         </div>
       ) : useMarkdown && sourceText ? (
-        <div className="lc-hub-conflict-doc">
-          <DocSelectionLayer enabled={false} placeExisting paletteScope={filmScope} footnotes={keptNotes}>
-            <AnnotateDocument source={sourceText} selectable={false} />
-          </DocSelectionLayer>
+        <div className="lc-hub-conflict-doc" ref={docRef}>
+          <div data-pdf-page="1" style={{ position: "relative", height: stackH * cssWidth / (sceneWidth || cssWidth || 1) }}>
+            <div style={{ width: sceneWidth || cssWidth, transformOrigin: "top left", transform: `scale(${cssWidth / (sceneWidth || cssWidth || 1)})` }}>
+              <DocSelectionLayer enabled={false} placeExisting paletteScope={filmScope} footnotes={keptNotes}>
+                <AnnotateDocument source={sourceText} selectable={false} onMeasure={setStackH} />
+              </DocSelectionLayer>
+            </div>
+          </div>
+          {showInk ? paintTiles.map(slot => (
+            <canvas key={slot.key} width={0} height={0} data-ink-page={slot.page} data-ink-tile={slot.key}
+              className="lc-hub-conflict-ink-layer" aria-hidden
+              style={{ left: slot.left, top: slot.top, width: slot.width, height: slot.height, opacity: droppedPages?.includes(slot.page) ? 0.38 : 1 }} />
+          )) : null}
         </div>
       ) : (
         <div className="lc-hub-conflict-doc" ref={docRef}>
@@ -601,6 +617,7 @@ export function ConflictPagePreview({
             ? paintTiles.map((slot) => (
                 <canvas
                   key={slot.key}
+                  width={0} height={0}
                   data-ink-page={slot.page}
                   data-ink-tile={slot.key}
                   className="lc-hub-conflict-ink-layer"

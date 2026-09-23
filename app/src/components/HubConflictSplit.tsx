@@ -45,6 +45,7 @@ import {
 } from "../util/hubConflictStash";
 import { linedPaperModeFromAppState, linedPitchStateFromAppState } from "../util/linedPaperPref";
 import { mergeConflictPageFrames, expandLumpedInkDiffRows, decodeConflictInkPages, inkPageIdsFromOps, conflictPaperFrames, whiteboardConflictFrames, whiteboardInkMergeRows, pageFramesEqual } from "./conflictInkLayout";
+import type { ConflictInkDecodeCache } from "./conflictInkLayout";
 import {
   countWhiteboardPages,
   whiteboardPageFramesFromPad,
@@ -320,6 +321,7 @@ export function HubConflictSplit({
   const [focusRevision, setFocusRevision] = useState(0);
   const focusRow = (id: string) => { setFocusedId(id); setFocusRevision(value => value + 1); };
   const [inkLoading, setInkLoading] = useState(false);
+  const inkDecodeCache = useRef<ConflictInkDecodeCache>(new Map());
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [overlayInk, setOverlayInk] = useState<{
     local: InkPageDto[];
@@ -561,11 +563,16 @@ export function HubConflictSplit({
       return;
     }
     let gone = false;
+    const controller = new AbortController();
+    const retained = new Set([...localInkPages, ...serverInkPages].map(row => row.gz));
+    for (const key of inkDecodeCache.current.keys()) {
+      if (!retained.has(key)) inkDecodeCache.current.delete(key);
+    }
     setInkLoading(true);
     void (async () => {
       const [localShards, serverShards] = await Promise.all([
-        decodeConflictInkPages(mergeInkDtos(conflict.localInk, overlayInk.local)),
-        decodeConflictInkPages(mergeInkDtos(conflict.serverInk, overlayInk.server)),
+        decodeConflictInkPages(localInkPages, inkDecodeCache.current, controller.signal),
+        decodeConflictInkPages(serverInkPages, inkDecodeCache.current, controller.signal),
       ]);
       if (gone) return;
       const localOps = localShards.flatMap((shard) => shard.ops);
@@ -595,8 +602,9 @@ export function HubConflictSplit({
     })();
     return () => {
       gone = true;
+      controller.abort();
     };
-  }, [conflict, previewFrames, overlayInk]);
+  }, [conflict, previewFrames, localInkPages, serverInkPages]);
   const choiceIds = useMemo(() => {
     if (!conflict) return [];
     return [...new Set([...idsOnSide("local"), ...idsOnSide("server")])];
@@ -911,15 +919,12 @@ export function HubConflictSplit({
      * The page shows this side's copy until you drop it.
      *
      * ✓ on a side keeps drawing that copy; ✕ hides it. Undecided still shows
-     * the page, so a whiteboard is not a blank pane while you decide. Marks
-     * wait for a tick — they are a choice, not the paper.
+     * the page and its marks while you decide.
      *
      * Tapping a row scrolls that page in. A column ✓ at the top is the same
      * keep-this-drop-the-other rule applied to every row at once.
      */
-    const keptNotes = rows
-      .map((row) => (pickOf(picks, row.id, side) === true ? (side === "local" ? row.local : row.server) : null))
-      .filter((note): note is DocFootnote => Boolean(note));
+    const keptNotes = notesOf(body).filter((note) => pickOf(picks, note.id, side) !== false);
     return (
       <section className="lc-hub-conflict-pane" data-side={side} data-verdict={verdict}>
         <header className="lc-hub-conflict-pane-head">

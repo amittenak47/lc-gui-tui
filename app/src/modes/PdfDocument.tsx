@@ -609,7 +609,7 @@ export function PdfDocument({
   const paintedRef = useRef<Map<number, { release: () => void; scale: number }>>(
     new Map(),
   );
-  const sheetLruRef = useRef(new PdfSheetLru(PDF_REST_CACHE));
+  const sheetLruRef = useRef(new PdfSheetLru(PDF_REST_CACHE, standalone ? 8 : undefined));
   const sessionRef = useRef(new PdfPageSession());
   const lastSettledPageRef = useRef(Math.max(1, initialPage));
   const pathFillRef = useRef<number[]>([]);
@@ -966,7 +966,7 @@ export function PdfDocument({
       const from = lastSettledPageRef.current;
       if (current === from) return;
       lastSettledPageRef.current = current;
-      if (!PDF_PATH_FILL) return;
+      if (!PDF_PATH_FILL || standaloneRef.current) return;
       pathFillRef.current = sessionPathPages(from, current, last, PDF_SESSION_CAP).filter(
         (n) => !wantedRef.current.has(n) && !sessionRef.current.has(n),
       );
@@ -1405,7 +1405,7 @@ export function PdfDocument({
           paintedRef.current.delete(item.page);
         }
         void (async () => {
-          if (!PDF_PAGEFILE || isDocCameraLive(filmScope)) {
+          if (!PDF_PAGEFILE || standaloneRef.current || isDocCameraLive(filmScope)) {
             releaseSheet(item.sheet);
             return;
           }
@@ -1467,6 +1467,7 @@ export function PdfDocument({
       }
       const prev = paintedRef.current.get(n);
       let paint: { cancel: () => void; promise: Promise<void> } | null = null;
+      let scratch: HTMLCanvasElement | null = null;
       let done = false;
       let aborted = false;
       inFlightPaintRef.current = {
@@ -1510,7 +1511,7 @@ export function PdfDocument({
       };
       const rememberScratch = async (src: HTMLCanvasElement, pixelScale: number) => {
         const sheet = await snapshotSheet(src, pixelScale);
-        if (disposedRef.current) return sheet;
+        if (disposedRef.current) { releaseSheet(sheet); return sheet; }
         sessionRef.current.delete(n);
         const dropped = sheetLruRef.current.put(n, sheet, C, paintScale);
         archiveDropped(dropped);
@@ -1583,7 +1584,7 @@ export function PdfDocument({
         if (disposedRef.current || aborted) return;
         if (isDocCameraLive(filmScope) && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
         const viewport = pdfPage.getViewport({ scale: entry.fit * paintScale });
-        const scratch = document.createElement("canvas");
+        scratch = document.createElement("canvas");
         scratch.width = Math.round(viewport.width);
         scratch.height = Math.round(viewport.height);
         const scratchCtx = scratch.getContext("2d");
@@ -1611,6 +1612,7 @@ export function PdfDocument({
           onErrorRef.current?.(message);
         }
       } finally {
+        if (scratch) { scratch.width = 0; scratch.height = 0; }
         closeJob();
         stopLive();
         if (inFlightPaintRef.current?.page === n) inFlightPaintRef.current = null;
@@ -1966,7 +1968,7 @@ export function PdfDocument({
               } as CSSProperties
             }
           >
-            <canvas className="lc-pdf-canvas" />
+            <canvas className="lc-pdf-canvas" width={0} height={0} />
             {/*
               Each page's text layer is its own block, which is what puts a break
               between page one's last word and page two's first in the character

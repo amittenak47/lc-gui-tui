@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
@@ -9,6 +9,8 @@ import { HubConflictSplit } from "./HubConflictSplit";
 import type { AnnotatePadDto, WhiteboardPadDto } from "../api/client";
 import type { HubPadConflict } from "../util/hubConflictStash";
 import { rememberPdfThumb, resetPdfThumbs } from "../modes/pdfFilm";
+
+beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); });
 
 function annotateBody(name: string, updated: number, notes: unknown[]): AnnotatePadDto {
   return {
@@ -850,58 +852,54 @@ describe("what the panes are asked to draw", () => {
   const keptPagesOn = (side: 0 | 1) =>
     (panes()[side]!.dataset.kept ?? "").split(",").filter(Boolean);
 
-  it("draws nothing for a mark nobody has answered for", async () => {
-    /*
-     * Both sides start untoggled, and that is the honest picture for marks: a
-     * change with no decision yet is not something either pane is showing you.
-     * Handwriting is different — the page itself has to be visible.
-     */
+  it("shows both original annotation sets before choices are made", async () => {
     await mountSpied();
-    expect(notesOn(0)).toEqual([]);
-    expect(notesOn(1)).toEqual([]);
+    expect(notesOn(0)).toEqual(["n1", "same"]);
+    expect(notesOn(1)).toEqual(["srv", "same"]);
     expect(inkOn(0)).toBe(false);
     expect(inkOn(1)).toBe(false);
   });
 
-  it("does not draw a mark merely because its row was tapped", async () => {
-    // Tapping is asking to see the row, not answering for it. A page that
-    // disagrees with the ticks beside it is the one thing this must not do.
+  it("keeps marks visible when jumping to their row", async () => {
     await mountSpied();
     act(() => noteByText("kept here with new words").click());
-    expect(notesOn(0)).toEqual([]);
-    expect(notesOn(1)).toEqual([]);
+    expect(notesOn(0)).toEqual(["n1", "same"]);
+    expect(notesOn(1)).toEqual(["srv", "same"]);
   });
 
-  it("draws the side you kept, and only that side", async () => {
+  it("hides only the dropped copy when keeping the other side", async () => {
     await mountSpied();
-
     tick(0, SAME, "keep");
-    expect(notesOn(0)).toEqual(["same"]);
-    expect(notesOn(1)).toEqual([]);
-
+    expect(notesOn(0)).toEqual(["n1", "same"]);
+    expect(notesOn(1)).toEqual(["srv"]);
     tick(1, SAME, "keep");
-    expect(notesOn(0)).toEqual(["same"]);
-    expect(notesOn(1)).toEqual(["same"]);
+    expect(notesOn(0)).toEqual(["n1", "same"]);
+    expect(notesOn(1)).toEqual(["srv", "same"]);
   });
 
-  it("stops drawing a side once its ✓ is taken back", async () => {
+  it("shows an undecided mark again but hides an explicitly dropped one", async () => {
     await mountSpied();
     tick(0, SAME, "keep");
     tick(1, SAME, "keep");
-    expect(notesOn(0)).toEqual(["same"]);
-
-    // Tapping ✓ again clears it; ✕ drops the other outright.
     tick(0, SAME, "keep");
     tick(1, SAME, "drop");
-    expect(notesOn(0)).toEqual([]);
-    expect(notesOn(1)).toEqual([]);
+    expect(notesOn(0)).toEqual(["n1", "same"]);
+    expect(notesOn(1)).toEqual(["srv"]);
   });
 
   it("draws a side-only mark on the side that has it", async () => {
     await mountSpied();
     tick(1, HUB_ONLY, "keep");
-    expect(notesOn(1)).toEqual(["srv"]);
-    expect(notesOn(0)).toEqual([]);
+    expect(notesOn(1)).toEqual(["srv", "same"]);
+    expect(notesOn(0)).toEqual(["n1", "same"]);
+  });
+
+  it("also shows identical marks omitted from the choice list", async () => {
+    const common = {id:"identical",kind:"note",anchor:{kind:"text",start:0,end:4,scope:"p1"},excerpt:"same mark",createdAt:1};
+    await mountSpied({...CONFLICT,local:annotateBody("book",900,[common]),server:annotateBody("book",500,[common])});
+    expect(notesOn(0)).toEqual(["identical"]);
+    expect(notesOn(1)).toEqual(["identical"]);
+    expect(document.querySelector('[data-note-id="identical"]')).toBeNull();
   });
 
   it("answers for handwriting the same way", async () => {
@@ -934,11 +932,11 @@ describe("what the panes are asked to draw", () => {
     // Deciding the ink does not un-draw the mark you already kept.
     await mountSpied(WITH_INK);
     tick(0, SAME, "keep");
-    expect(notesOn(0)).toEqual(["same"]);
+    expect(notesOn(0)).toEqual(["n1", "same"]);
 
     act(() => inkRow(0).click());
     tickInk(0, "keep");
-    expect(notesOn(0)).toEqual(["same"]);
+    expect(notesOn(0)).toEqual(["n1", "same"]);
     expect(inkOn(0)).toBe(true);
   });
 

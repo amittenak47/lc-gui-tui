@@ -33,6 +33,18 @@ describe("merge ink raster budget", () => {
     expect(vi.mocked(paintInkAtScale).mock.calls).toHaveLength(calls);
     expect(paintInkAtScale).toHaveBeenLastCalledWith(context, ops, { x: 10, y: 1044 }, 1);
     painter.dispose();
+    expect(first?.width).toBe(0);
+    expect(first?.height).toBe(0);
+  });
+  it("releases evicted fallback canvases while jumping between strips", async () => {
+    vi.stubGlobal("Worker", undefined);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({} as CanvasRenderingContext2D);
+    const painter = new ConflictInkPainter([{page:1, ops:[], scale:1, originX:0, originY:0}]);
+    const canvases = [];
+    for (let i = 0; i < 20; i++) canvases.push(await painter.paint({key:String(i),page:1,width:400,height:512,offsetY:i*512,dpr:2}, new AbortController().signal));
+    expect(canvases.reduce((bytes, canvas) => bytes + (canvas ? canvas.width * canvas.height * 4 : 0), 0)).toBeLessThanOrEqual(8 * 1024 * 1024);
+    painter.dispose();
+    expect(canvases.every(canvas => canvas?.width === 0)).toBe(true);
   });
   it("skips cancelled requests before rasterizing them", async () => {
     const painter = new ConflictInkPainter([]);

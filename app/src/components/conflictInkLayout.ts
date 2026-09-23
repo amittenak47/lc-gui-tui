@@ -144,9 +144,10 @@ export function inkPageIdsFromOps(
     return only != null && only >= 1 ? [only] : [1];
   }
   const ids: number[] = [];
+  const bounds = ops.map(inkOpBounds);
   for (const frame of frames) {
     if (frame.pageId < 1) continue;
-    if (conflictOpsForPage(ops, frame.pageId, frames).length > 0) ids.push(frame.pageId);
+    if (bounds.some(box => box.maxY >= frame.minY && box.minY <= frame.maxY)) ids.push(frame.pageId);
   }
   return ids;
 }
@@ -293,6 +294,7 @@ export function whiteboardConflictFrames(
 }
 
 export type ConflictInkShard = { pageId: number; ops: InkOp[] };
+export type ConflictInkDecodeCache = Map<string, Promise<InkOp[] | null>>;
 
 /**
  * Inflate conflict preview blobs once.
@@ -302,16 +304,26 @@ export type ConflictInkShard = { pageId: number; ops: InkOp[] };
  */
 export async function decodeConflictInkPages(
   pages: readonly InkPageDto[] | undefined,
+  cache?: ConflictInkDecodeCache,
+  signal?: AbortSignal,
 ): Promise<ConflictInkShard[]> {
   const out: ConflictInkShard[] = [];
   const seenGz = new Set<string>();
   for (const row of pages ?? []) {
+    if (signal?.aborted) return [];
     if (!row.gz || seenGz.has(row.gz)) continue;
     seenGz.add(row.gz);
     try {
-      const encoded = await gunzipUnpackInk(b64ToBytes(row.gz));
-      if (!encoded) continue;
-      const ops = await decodeInkOpsAsync(encoded);
+      let pending = cache?.get(row.gz);
+      if (!pending) {
+        pending = (async () => {
+          const encoded = await gunzipUnpackInk(b64ToBytes(row.gz));
+          return encoded ? await decodeInkOpsAsync(encoded) : null;
+        })().catch(() => null);
+        cache?.set(row.gz, pending);
+      }
+      const ops = await pending;
+      if (signal?.aborted) return [];
       if (!ops || ops.length === 0) continue;
       const pageId =
         row.kind === "whiteboard" && row.page_id <= 1 ? 1 : row.page_id;

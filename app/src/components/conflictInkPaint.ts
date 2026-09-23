@@ -5,6 +5,10 @@ import { conflictInkBackingSize, type ConflictPaintPage, type ConflictPaintJob, 
 export { conflictInkBackingSize, conflictVisibleInkTiles } from './conflictInkPaintPlan';
 
 type Bitmap = ImageBitmap | HTMLCanvasElement;
+function releaseBitmap(bitmap: Bitmap): void {
+  if ("close" in bitmap) bitmap.close();
+  else { bitmap.width = 0; bitmap.height = 0; }
+}
 type Job = { job: ConflictPaintJob; signal: AbortSignal; resolve(value: Bitmap | null): void };
 
 /** One worker per pane. Only one outstanding raster, and obsolete queued work is skipped. */
@@ -80,19 +84,19 @@ export class ConflictInkPainter {
     const size = conflictInkBackingSize(current.job.width, current.job.height, current.job.dpr);
     canvas.width = size.width; canvas.height = size.height;
     const ctx = canvas.getContext("2d");
-    if (!page || !ctx) { this.finish(null); return; }
+    if (!page || !ctx) { releaseBitmap(canvas); this.finish(null); return; }
     const origin = { x: page.originX, y: page.originY + current.job.offsetY / page.scale };
     let started = performance.now();
     try {
       for (const op of page.ops) {
-        if (this.gone || current.signal.aborted) { this.finish(null); return; }
+        if (this.gone || current.signal.aborted) { releaseBitmap(canvas); this.finish(null); return; }
         paintInkAtScale(ctx, [op], origin, page.scale * size.dpr);
         if (performance.now() - started > 5) {
           await new Promise(resolve => window.setTimeout(resolve, 0));
           started = performance.now();
         }
       }
-    } catch { this.finish(null); return; }
+    } catch { releaseBitmap(canvas); this.finish(null); return; }
     this.finish(canvas);
   }
   private finish(bitmap: Bitmap | null) {
@@ -100,16 +104,21 @@ export class ConflictInkPainter {
     window.clearTimeout(this.timer);
     const current = this.current;
     this.current = null;
-    if (!current || this.gone) { if (bitmap && "close" in bitmap) bitmap.close(); return; }
+    if (!current || this.gone || current.signal.aborted) {
+      if (bitmap) releaseBitmap(bitmap);
+      current?.resolve(null);
+      void this.pump();
+      return;
+    }
     if (bitmap) {
       this.cache.set(current.job.key, bitmap);
       this.cacheBytes += bitmap.width * bitmap.height * 4;
       // Two panes share a tablet GPU: bound memory as well as the entry count.
-      while (this.cache.size > 1 && (this.cache.size > 24 || this.cacheBytes > 32 * 1024 * 1024)) {
+      while (this.cache.size > 1 && (this.cache.size > 8 || this.cacheBytes > 8 * 1024 * 1024)) {
         const [key, old] = this.cache.entries().next().value!;
         this.cache.delete(key);
         this.cacheBytes -= old.width * old.height * 4;
-        if ("close" in old) old.close();
+        releaseBitmap(old);
       }
     }
     current.resolve(bitmap);
@@ -123,8 +132,9 @@ export class ConflictInkPainter {
     this.current = null;
     for (const request of this.queue) request.resolve(null);
     this.queue = [];
-    for (const bitmap of this.cache.values()) if ("close" in bitmap) bitmap.close();
+    for (const bitmap of this.cache.values()) releaseBitmap(bitmap);
     this.cache.clear();
     this.cacheBytes = 0;
+    this.pages = [];
   }
 }

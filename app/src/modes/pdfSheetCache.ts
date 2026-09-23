@@ -274,6 +274,9 @@ function closeSheet(sheet: SheetBitmap): void {
     } catch {
       /* already closed */
     }
+  } else if (typeof HTMLCanvasElement !== "undefined" && sheet.bitmap instanceof HTMLCanvasElement) {
+    sheet.bitmap.width = 0;
+    sheet.bitmap.height = 0;
   }
 }
 
