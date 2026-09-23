@@ -16,6 +16,8 @@ import {
   liveDrawSnapshot,
   liveEraserSnapshot,
   loadInkToolPresets,
+  quickWedgeIndex,
+  setQuickWedge,
   saveWedge,
   specCardSide,
   wedgeAt,
@@ -67,6 +69,26 @@ const eraser: InkEraserSnapshot = {
 };
 
 describe("inkToolPresets", () => {
+  it("replaces only the designated quick preset for that tool and persists it", () => {
+    let store = loadInkToolPresets();
+    store = saveWedge(store, "pen", 1, draw);
+    store = saveWedge(store, "pen", 2, { ...draw, name: "Second" });
+    store = setQuickWedge(store, "pen", 1);
+    store = setQuickWedge(store, "pen", 2);
+    expect(loadInkToolPresets().quickWedge).toEqual({ pen: 2, highlighter: 0, eraser: 0 });
+    expect(quickWedgeIndex(store, "pen")).toBe(2);
+    store = setQuickWedge(store, "pen", null);
+    expect(loadInkToolPresets().quickWedge.pen).toBeNull();
+    expect(quickWedgeIndex(store, "pen")).toBe(0);
+  });
+
+  it("falls back to Global for absent, invalid, or empty quick preset slots", () => {
+    const store = loadInkToolPresets();
+    expect(setQuickWedge(store, "pen", 3)).toBe(store);
+    localStorage.setItem("whiteboard.inkToolPresets.v2", JSON.stringify({ ...store,
+      quickWedge: { pen: 3, highlighter: 1.5, eraser: -1 } }));
+    expect(loadInkToolPresets().quickWedge).toEqual({ pen: 0, highlighter: 0, eraser: 0 });
+  });
 
   it("defaults Global to live prefs and locks the wheel", () => {
     const store = loadInkToolPresets();

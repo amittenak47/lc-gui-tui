@@ -269,7 +269,8 @@ export interface InkPresetEditorProps {
   onClose: (reason: "back" | "dismiss") => void;
   /** Wheel remounts under the sheet so the morph-out lands on the wedge. */
   onBackReveal?: () => void;
-  onSave: (snap: InkWedgeSnapshot) => void;
+  quickPreset?: boolean;
+  onSave: (snap: InkWedgeSnapshot, quickPreset: boolean) => void;
   onDuplicate: (snap: InkWedgeSnapshot) => void;
 }
 
@@ -287,6 +288,7 @@ export function InkPresetEditor({
   onCyclePrev,
   onClose,
   onBackReveal,
+  quickPreset = false,
   onSave,
   onDuplicate,
 }: InkPresetEditorProps) {
@@ -297,6 +299,8 @@ export function InkPresetEditor({
   }, [fallback, initial, kind]);
   const [draft, setDraft] = useState<InkWedgeSnapshot>(seed);
   const [name, setName] = useState(seed.name);
+  const [quick, setQuick] = useState(quickPreset);
+  useEffect(() => setQuick(quickPreset), [kind, index, quickPreset]);
   const [livePreview, setLivePreview] = useState(false);
   const [livePadGen, setLivePadGen] = useState(0);
   const [closing, setClosing] = useState(false);
@@ -408,7 +412,7 @@ export function InkPresetEditor({
             <HoldButton
               label="Save"
               className="lc-preset-sheet-save"
-              onConfirm={() => onSave(named)}
+              onConfirm={() => onSave(named, quick)}
             />
           </div>
         </header>
@@ -477,6 +481,10 @@ export function InkPresetEditor({
 
             <div className={physics ? "lc-preset-sheet-cols" : "lc-preset-sheet-cols is-single"}>
               <div className="lc-preset-sheet-side">
+                <SettingsBlock title="Quick tool" hint={`Use this preset from the toolbar's quick tool button. Saving replaces the previous quick ${kind} preset.`}>
+                  <SettingsChoice label="Use as quick preset" value={quick}
+                    options={[[false, "Off"], [true, "On"]]} onChange={setQuick} />
+                </SettingsBlock>
                 {kind === "eraser" && isEraserWedge(named) ? (
                   <SettingsBlock
                     title="Eraser"

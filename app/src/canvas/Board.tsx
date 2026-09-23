@@ -363,6 +363,8 @@ import {
   isEraserWedge,
   kindFromTool,
   loadInkToolPresets,
+  quickWedgeIndex,
+  setQuickWedge,
   saveInkToolPresets,
   saveWedge,
   toolFromKind,
@@ -9985,6 +9987,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   saveInkToolPresets(next);
                 }}
                 onOpenInkWheel={() => setInkWheel("canvas")}
+                quickKind={kindFromTool(activeTool) ?? kindFromTool(lastInkToolRef.current) ?? "pen"}
+                onQuickInk={(kind, color) => {
+                  setTool(toolFromKind(kind));
+                  applyInkWedge(kind, quickWedgeIndex(presetStoreRef.current, kind));
+                  if (color) setInk(color);
+                }}
               />
               </div>
               )}
@@ -10297,6 +10305,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           index={presetEditor.index}
           initial={wedgeAt(presetStore, presetEditor.kind, presetEditor.index)}
           fallback={wedgeAt(presetStore, presetEditor.kind, 0)}
+          quickPreset={presetStore.quickWedge[presetEditor.kind] === presetEditor.index}
           from={presetEditor.from}
           inkPalette={inkPalette}
           inkColor={inkColor}
@@ -10314,13 +10323,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             if (reason !== "back") setInkWheel(null);
           }}
           onBackReveal={() => setWheelPeek(true)}
-          onSave={(snap) => {
+          onSave={(snap, quick) => {
             let next = saveWedge(
               presetStoreRef.current,
               presetEditor.kind,
               presetEditor.index,
               snap,
             );
+            if (quick) next = setQuickWedge(next, presetEditor.kind, presetEditor.index);
+            else if (next.quickWedge[presetEditor.kind] === presetEditor.index) next = setQuickWedge(next, presetEditor.kind, null);
             next = applyWedge(next, presetEditor.kind, presetEditor.index);
             setPresetStore(next);
             syncInkFromPrefs();

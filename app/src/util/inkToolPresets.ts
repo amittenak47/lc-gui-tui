@@ -132,6 +132,8 @@ export interface InkToolPresetStore {
    */
   tapOk: boolean;
   lastWedge: Record<InkPresetKind, number>;
+  /** One quick-toolbar preset per tool. Null leaves Global as the fallback. */
+  quickWedge: Record<InkPresetKind, number | null>;
   globalDraw: InkDrawSnapshot;
   globalEraser: InkEraserSnapshot;
   custom: Record<InkPresetKind, Array<InkWedgeSnapshot | null>>;
@@ -219,6 +221,7 @@ function defaultStore(): InkToolPresetStore {
     colorWheelOnToolbar: false,
     tapOk: true,
     lastWedge: { pen: 0, highlighter: 0, eraser: 0 },
+    quickWedge: { pen: 0, highlighter: 0, eraser: 0 },
     globalDraw: liveDrawSnapshot(),
     globalEraser: liveEraserSnapshot(),
     custom: {
@@ -297,10 +300,11 @@ export function loadInkToolPresets(): InkToolPresetStore {
     if (!raw) return fallback;
     const parsed = JSON.parse(raw) as Partial<InkToolPresetStore>;
     const last = parsed.lastWedge ?? fallback.lastWedge;
-    return {
+    const store: InkToolPresetStore = {
       wheelLocked: parsed.wheelLocked !== false,
       colorWheelOnToolbar: parsed.colorWheelOnToolbar === true,
       tapOk: parsed.tapOk !== false,
+      quickWedge: { ...fallback.quickWedge },
       lastWedge: {
         pen: clamp(typeof last.pen === "number" ? last.pen : 0, 0, CUSTOM_WEDGE_COUNT),
         highlighter: clamp(
@@ -322,6 +326,14 @@ export function loadInkToolPresets(): InkToolPresetStore {
         eraser: parseCustom("eraser", parsed.custom?.eraser),
       },
     };
+    for (const kind of ["pen", "highlighter", "eraser"] as const) {
+      const index = parsed.quickWedge?.[kind];
+      if (index === null) store.quickWedge[kind] = null;
+      else if (typeof index === "number" && Number.isInteger(index) && index >= 0 && index < WEDGE_COUNT && wedgeAt(store, kind, index)) {
+        store.quickWedge[kind] = index;
+      }
+    }
+    return store;
   } catch {
     return fallback;
   }
@@ -336,6 +348,18 @@ export function saveInkToolPresets(store: InkToolPresetStore): void {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("lc-ink-presets"));
   }
+}
+
+export function quickWedgeIndex(store: InkToolPresetStore, kind: InkPresetKind): number {
+  const index = store.quickWedge[kind];
+  return index != null && wedgeAt(store, kind, index) ? index : 0;
+}
+
+export function setQuickWedge(store: InkToolPresetStore, kind: InkPresetKind, index: number | null): InkToolPresetStore {
+  if (index !== null && (!Number.isInteger(index) || index < 0 || index >= WEDGE_COUNT || !wedgeAt(store, kind, index))) return store;
+  const next = { ...store, quickWedge: { ...store.quickWedge, [kind]: index } };
+  saveInkToolPresets(next);
+  return next;
 }
 
 export function wedgeAt(

@@ -627,6 +627,10 @@ export function InkToolWheel({
                     startHold(useIndex);
                   }}
                 />
+                {snap && store.quickWedge[kind] === index && <path
+                  d={donutSlice(WHEEL_R, WHEEL_R, INNER_INNER, INNER_OUTER, slice.start, slice.end)}
+                  className="lc-ink-wheel-quick" style={{ color: wedgeFill(kind, snap) }}
+                  pointerEvents="none" aria-label={`Quick ${kind} preset`} />}
                 <path
                   d={donutSlice(
                     WHEEL_R,

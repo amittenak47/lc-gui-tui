@@ -45,6 +45,8 @@ import {
 import type { MdFormatKind } from "../modes/AnnotateMarkdownEditor";
 import type { ToolName } from "./BoardHandle";
 import { ColorRadial } from "./ColorRadial";
+import { QuickInkControl } from "./QuickInkControl";
+import type { InkPresetKind } from "../util/inkToolPresets";
 import {
   cycleResetClearMode,
   resetClearModeLabel,
@@ -206,6 +208,8 @@ export interface BoardToolbarProps {
   wheelLocked?: boolean;
   onToggleWheelLock?: () => void;
   onOpenInkWheel?: () => void;
+  quickKind?: InkPresetKind;
+  onQuickInk?: (kind: InkPresetKind, color?: string) => void;
   /**
    * Markdown mode: the same island, a different set of tools in it.
    *
@@ -307,6 +311,8 @@ export function BoardToolbar({
   wheelLocked = true,
   onToggleWheelLock,
   onOpenInkWheel,
+  quickKind = "pen",
+  onQuickInk,
   markdown = false,
   onMdFormat,
 }: BoardToolbarProps) {
@@ -1012,6 +1018,8 @@ export function BoardToolbar({
             </div>
           </MorphBar>
         </HoldButton>
+
+        {onQuickInk && <QuickInkControl kind={quickKind} color={inkColor} onPick={onQuickInk} />}
 
         {onStraightInk && (
           <button

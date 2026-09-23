@@ -48,13 +48,38 @@ export function palettesFromFeed(body: unknown): InkPalette[] {
   } else if (Array.isArray(body)) {
     rows = body as ColorHuntRow[];
   }
+  if (!Array.isArray(rows)) return [];
   const out: InkPalette[] = [];
   for (const row of rows) {
-    if (!row?.code) continue;
+    if (typeof row?.code !== "string") continue;
     const palette = paletteFromColorHuntCode(row.code);
     if (palette) out.push(palette);
   }
   return out;
+}
+
+/** Bright, saturated ink as opposed to a dark hue or a near-white pastel. */
+export function hasVividInk(palette: InkPalette): boolean {
+  return palette.some(hex => {
+    const rgb = hex.slice(1).match(/.{2}/g)?.map(channel => parseInt(channel, 16) / 255);
+    if (!rgb || rgb.length !== 3) return false;
+    const max = Math.max(...rgb), min = Math.min(...rgb);
+    return max >= 0.72 && max - min >= 0.5;
+  });
+}
+
+export function chooseFeedPalette(history: InkPaletteHistory, palettes: InkPalette[], balance: boolean): InkPalette | null {
+  if (palettes.length === 0) return null;
+  const seen = new Set(history.items.map(p => p.join(",").toLowerCase()));
+  const fresh = palettes.filter(p => !seen.has(p.join(",").toLowerCase()));
+  let choices = fresh.length ? fresh : palettes;
+  // "Any" should include vivid ink, too. Break runs of muted palettes without
+  // changing feed colors or overriding an explicitly chosen pastel/dark tag.
+  if (balance && !hasVividInk(history.items[history.index] ?? [])) {
+    const vivid = choices.filter(hasVividInk);
+    if (vivid.length) choices = vivid;
+  }
+  return choices[Math.floor(Math.random() * choices.length)]!;
 }
 
 async function fetchViaTauri(tags: string): Promise<InkPalette[]> {
@@ -105,11 +130,7 @@ export async function fetchNextColorHuntPalette(
 ): Promise<InkPalette> {
   const tags = paletteTagQuery(tag);
   const live = isTauriRuntime() ? await fetchViaTauri(tags) : await fetchViaBrowser(tags);
-  if (live.length > 0) {
-    const seen = new Set(history.items.map((p) => p.join(",").toLowerCase()));
-    const fresh = live.find((p) => !seen.has(p.join(",").toLowerCase()));
-    if (fresh) return fresh;
-    return live[Math.floor(Math.random() * live.length)];
-  }
+  const selected = chooseFeedPalette(history, live, tag === "any");
+  if (selected) return selected;
   return pickFallbackPalette(history);
 }
