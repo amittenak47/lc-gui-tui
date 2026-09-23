@@ -124,6 +124,8 @@ export function HoldButton({
   onConfirmRef.current = onConfirm;
   const onTapRef = useRef(onTap);
   onTapRef.current = onTap;
+  /** Pointer and keyboard already fired onTap; the click that follows must not. */
+  const tapConsumedRef = useRef(false);
   /** True between setPointerCapture and the matching up/cancel. */
   const capturingRef = useRef(false);
 
@@ -148,6 +150,7 @@ export function HoldButton({
       confirmedRef.current = true;
       onConfirmRef.current();
     } else if (opts.release && wasHolding && !filled && onTapRef.current) {
+      tapConsumedRef.current = true;
       onTapRef.current();
       if (tapFeedback && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
         fillRef.current?.getAnimations?.().forEach((animation) => animation.cancel());
@@ -298,6 +301,14 @@ export function HoldButton({
         stopHold({ reset: true, release: true });
       }}
       onBlur={() => stopHold({ reset: true })}
+      onClick={() => {
+        if (tapConsumedRef.current) {
+          tapConsumedRef.current = false;
+          return;
+        }
+        if (confirmedRef.current || holdingRef.current) return;
+        onTapRef.current?.();
+      }}
     >
       <span ref={fillRef} className="lc-hold-reveal-fill" aria-hidden />
       <span className="lc-hold-reveal-label">{children ?? label}</span>

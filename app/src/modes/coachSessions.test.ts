@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentChatMessage } from "./AgentSidePanel";
 import { restoreAgentMessages } from "./agentTranscript";
-import { listSessions, mergeAgentMessages, organizeIntoSessions, sessionIdFor } from "./coachSessions";
+import { listSessions, mergeAgentMessages, orderSessions, organizeIntoSessions, sessionIdFor } from "./coachSessions";
 
 function msg(id: string, overrides: Partial<AgentChatMessage> = {}): AgentChatMessage {
   return { id, role: "user", content: id, at: 0, ...overrides };
@@ -27,6 +27,24 @@ describe("organizeIntoSessions", () => {
     ]);
   });
 
+  it("colors a session from its latest settled turn", () => {
+    const next = organizeIntoSessions([
+      msg("q1", { content: "Failed ask", requestState: "completed" }),
+      msg("a1", { role: "assistant", content: "No", requestState: "failed" }),
+      msg("q2", { content: "Stopped", requestState: "completed" }),
+      msg("a2", { role: "assistant", content: "", requestState: "cancelled" }),
+      msg("q3", { content: "Done", requestState: "completed" }),
+      msg("a3", { role: "assistant", content: "Yes", requestState: "completed" }),
+      msg("q4", { content: "Still going", requestState: "running" }),
+    ]);
+    expect(listSessions(next).map((session) => session.status)).toEqual([
+      "failed",
+      "aborted",
+      "succeeded",
+      undefined,
+    ]);
+  });
+
   it("leaves an assigned transcript alone", () => {
     const messages = [msg("q1", { sessionId: "session-q1" })];
     expect(organizeIntoSessions(messages)).toBe(messages);
@@ -41,6 +59,13 @@ describe("organizeIntoSessions", () => {
     expect(restored.map((message) => message.id)).toEqual(["q1", "q2"]);
     expect(restored[1]?.deletedAt).toBe(5);
     expect(listSessions(restored).map((session) => session.title)).toEqual(["Keep"]);
+  });
+});
+
+describe("orderSessions", () => {
+  it("keeps pinned sessions at the top and leaves the rest in place", () => {
+    const sessions = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }];
+    expect(orderSessions(sessions, ["c", "a"]).map((session) => session.id)).toEqual(["c", "a", "b", "d"]);
   });
 });
 

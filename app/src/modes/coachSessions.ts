@@ -1,10 +1,14 @@
 import type { AgentChatMessage } from "./AgentSidePanel";
 
+export type SessionStatus = "failed" | "aborted" | "succeeded";
+
 export interface CoachSessionSummary {
   id: string;
   /** First line of the question, clipped for the rail. */
   title: string;
   at: number;
+  /** Latest settled turn. A send still in flight has none. */
+  status?: SessionStatus;
 }
 
 /** Stable id: the same question always opens the same session. */
@@ -62,6 +66,33 @@ function sessionTitle(group: readonly AgentChatMessage[]): string {
   return line.length > 80 ? `${line.slice(0, 80)}…` : line;
 }
 
+function sessionStatus(group: readonly AgentChatMessage[]): SessionStatus | undefined {
+  for (let index = group.length - 1; index >= 0; index -= 1) {
+    const state = group[index]?.requestState;
+    if (state === "failed") return "failed";
+    if (state === "cancelled" || state === "interrupted") return "aborted";
+    if (state === "completed") return "succeeded";
+    if (state === "running" || state === "preparing" || state === "queued") return undefined;
+  }
+  return undefined;
+}
+
+/** Pinned sessions stay at the top, in pin order. The rest keep transcript order. */
+export function orderSessions<T extends { id: string }>(
+  sessions: readonly T[],
+  pinnedIds: readonly string[],
+): T[] {
+  const rank = new Map(pinnedIds.map((id, index) => [id, index]));
+  return [...sessions].sort((a, b) => {
+    const aRank = rank.get(a.id);
+    const bRank = rank.get(b.id);
+    if (aRank == null && bRank == null) return 0;
+    if (aRank == null) return 1;
+    if (bRank == null) return -1;
+    return aRank - bRank;
+  });
+}
+
 /** Sessions that still have something to show, in transcript order. */
 export function listSessions(messages: readonly AgentChatMessage[]): CoachSessionSummary[] {
   const groups = new Map<string, AgentChatMessage[]>();
@@ -75,6 +106,7 @@ export function listSessions(messages: readonly AgentChatMessage[]): CoachSessio
     id,
     title: sessionTitle(group),
     at: group[0]?.at ?? 0,
+    status: sessionStatus(group),
   }));
 }
 

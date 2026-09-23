@@ -50,7 +50,7 @@ import {
   showsReplyStub,
   visibleThreadMessages,
 } from "./coachThreads";
-import { listSessions, organizeIntoSessions } from "./coachSessions";
+import { listSessions, orderSessions, organizeIntoSessions } from "./coachSessions";
 
 export type CoachMode = "review" | "ambient";
 
@@ -306,25 +306,10 @@ function PaneExpandButton({
       onClick={() => onToggle(pane)}
     >
       <svg className="lc-agent-pane-expand-icon" viewBox="0 0 16 16" aria-hidden>
-        {expanded ? (
-          <path
-            d="M6 3.5H3.5V6M10 12.5h2.5V10M3.5 3.5l4 4M12.5 12.5l-4-4"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.35"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        ) : (
-          <path
-            d="M12.5 6.5V3.5H9.5M3.5 9.5v3h3M12.5 3.5l-4 4M3.5 12.5l4-4"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.35"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        )}
+        <g fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round">
+          <path className="lc-pane-arrow lc-pane-arrow-ne" d="M12.5 6.5v-3h-3M12.5 3.5l-4 4" />
+          <path className="lc-pane-arrow lc-pane-arrow-sw" d="M3.5 9.5v3h3M3.5 12.5l4-4" />
+        </g>
       </svg>
     </button>
   );
@@ -806,6 +791,21 @@ export interface AgentSidePanelProps {
   sheetDragLocked?: boolean;
 }
 
+const SESSION_PINS_KEY = "whiteboard.agent.sessionPins.v1";
+
+function loadSessionPins(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SESSION_PINS_KEY) ?? "[]") as unknown;
+    return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string" && id.length > 0) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSessionPins(ids: readonly string[]) {
+  localStorage.setItem(SESSION_PINS_KEY, JSON.stringify(ids));
+}
+
 export function AgentSidePanel({
   onSaveArtifact,
   onOpenArtifact,
@@ -988,6 +988,31 @@ export function AgentSidePanel({
 
   const organized = useMemo(() => organizeIntoSessions(messages), [messages]);
   const sessions = useMemo(() => listSessions(organized), [organized]);
+  const [pinnedSessionIds, setPinnedSessionIds] = useState(loadSessionPins);
+  const orderedSessions = useMemo(
+    () => orderSessions(sessions, pinnedSessionIds),
+    [sessions, pinnedSessionIds],
+  );
+  const toggleSessionPin = (sessionId: string) => {
+    setPinnedSessionIds((current) => {
+      const next = current.includes(sessionId)
+        ? current.filter((id) => id !== sessionId)
+        : [sessionId, ...current];
+      saveSessionPins(next);
+      return next;
+    });
+  };
+  const deleteSession = (sessionId: string) => {
+    for (const message of organized) {
+      if (!message.deletedAt && message.sessionId === sessionId) onDeleteMessage?.(message.id);
+    }
+    setPinnedSessionIds((current) => {
+      if (!current.includes(sessionId)) return current;
+      const next = current.filter((id) => id !== sessionId);
+      saveSessionPins(next);
+      return next;
+    });
+  };
   const newestSessionId = sessions.at(-1)?.id ?? null;
   const [pickedSessionId, setPickedSessionId] = useState<string | null>(null);
   const [seenNewestSession, setSeenNewestSession] = useState<string | null>(null);
@@ -1079,6 +1104,15 @@ export function AgentSidePanel({
   const panelRef = useRef<HTMLElement | null>(null);
   const sheet = useAgentSheet(panelRef, mobile, open, () => setOpen(false));
   const [sessionsHidden, setSessionsHidden] = useState(false);
+  const [keepPanel, setKeepPanel] = useState(open || mobile);
+  useEffect(() => {
+    if (open || mobile) {
+      setKeepPanel(true);
+      return;
+    }
+    // Keep mounted after the first open: reopening must not rebuild a long
+    // transcript before the panel can start moving. The closed shell is inert.
+  }, [open, mobile]);
   const longPressRef = useRef<{
     timer: ReturnType<typeof setTimeout> | null;
     armTimer: ReturnType<typeof setTimeout> | null;
@@ -1542,7 +1576,9 @@ export function AgentSidePanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [messageMenu, closeMessageMenu]);
 
-  if (!open && !mobile) return null;
+  if (!open && !mobile && !keepPanel) {
+    return <aside ref={panelRef} className="lc-side" id="lc-agent-panel" aria-label="Agent" aria-hidden="true" />;
+  }
 
   const canSend =
     draft.trim().length > 0 ||
@@ -1682,35 +1718,33 @@ export function AgentSidePanel({
         <span className="lc-agent-fold-bar" aria-hidden />
       </div>
       <div className="lc-agent-pane-expand-row lc-agent-pane-expand-panel">
-        {sessions.length > 0 ? (
-          <button
-            type="button"
-            className="lc-flag lc-agent-pane-expand lc-agent-panel-toggle"
-            aria-pressed={!sessionsHidden}
-            aria-label={sessionsHidden ? "Show sessions" : "Hide sessions"}
-            title={sessionsHidden ? "Show sessions" : "Hide sessions"}
-            onClick={() => setSessionsHidden((hidden) => !hidden)}
-          >
-            <svg className="lc-agent-pane-expand-icon" viewBox="0 0 16 16" aria-hidden>
-              <rect
-                x="2.25"
-                y="2.75"
-                width="11.5"
-                height="10.5"
-                rx="1.2"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.35"
-              />
-              <path
-                d="M6.25 2.75v10.5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.35"
-              />
-            </svg>
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className="lc-flag lc-agent-pane-expand lc-agent-panel-toggle"
+          aria-pressed={!sessionsHidden}
+          aria-label={sessionsHidden ? "Show sessions" : "Hide sessions"}
+          title={sessionsHidden ? "Show sessions" : "Hide sessions"}
+          onClick={() => setSessionsHidden((hidden) => !hidden)}
+        >
+          <svg className="lc-agent-pane-expand-icon" viewBox="0 0 16 16" aria-hidden>
+            <rect
+              x="2.25"
+              y="2.75"
+              width="11.5"
+              height="10.5"
+              rx="1.2"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.35"
+            />
+            <path
+              d="M6.25 2.75v10.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.35"
+            />
+          </svg>
+        </button>
         <PaneExpandButton
           pane="messages"
           focus={chatFocus}
@@ -1742,23 +1776,57 @@ export function AgentSidePanel({
             </span>
           </div>
         ) : null}
-        <div className={`lc-agent-messages-host${sessions.length > 0 && !sessionsHidden ? " has-sessions" : ""}`}>
-        {sessions.length > 0 && !sessionsHidden ? (
-          <nav className="lc-agent-sessions" aria-label="Sessions">
-            {sessions.map((session) => (
-              <button
-                type="button"
-                key={session.id}
-                className={`lc-agent-session${session.id === activeSessionId ? " is-active" : ""}`}
-                aria-current={session.id === activeSessionId ? "true" : undefined}
-                title={session.title}
-                onClick={() => setPickedSessionId(session.id)}
-              >
-                {session.title}
-              </button>
-            ))}
-          </nav>
-        ) : null}
+        <div className="lc-agent-messages-host has-sessions">
+          <div className={`lc-agent-sessions-col${sessionsHidden ? " is-closed" : ""}`}>
+            <div className="lc-agent-sessions-fade" aria-hidden />
+            <nav className="lc-agent-sessions" aria-label="Sessions" aria-hidden={sessionsHidden || undefined}>
+              {orderedSessions.length === 0 ? (
+                <p className="lc-agent-sessions-empty">No sessions</p>
+              ) : orderedSessions.map((session) => {
+                const pinned = pinnedSessionIds.includes(session.id);
+                return (
+                <div
+                  key={session.id}
+                  data-status={session.status}
+                  className={`lc-agent-session-row${session.id === activeSessionId ? " is-active" : ""}${pinned ? " is-pinned" : ""}`}
+                >
+                  <HoldButton
+                    className={`lc-agent-session lc-hold-danger${session.id === activeSessionId ? " is-active" : ""}`}
+                    label={session.title}
+                    ariaLabel={`${session.title}. Tap to open, hold to delete`}
+                    dataTip="Hold to delete"
+                    dataTipPlacement="right"
+                    holdMs={1200}
+                    disabled={sessionsHidden}
+                    onTap={() => setPickedSessionId(session.id)}
+                    onConfirm={() => deleteSession(session.id)}
+                  >
+                    <span className="lc-agent-session-name">{session.title}</span>
+                  </HoldButton>
+                  <button
+                    type="button"
+                    className={`lc-agent-session-pin${pinned ? " is-pinned" : ""}`}
+                    aria-pressed={pinned}
+                    aria-label={pinned ? "Unpin session" : "Pin session"}
+                    title={pinned ? "Unpin session" : "Pin session"}
+                    tabIndex={sessionsHidden ? -1 : undefined}
+                    onClick={() => toggleSessionPin(session.id)}
+                  >
+                    <svg className="lc-agent-session-pin-icon" viewBox="0 0 16 16" aria-hidden>
+                      <path
+                        d="M6.1 1.6h3.8v2.8l1.5 1.5v1.3H9.2V14L8 12.7 6.8 14V7.2H4.6V5.9l1.5-1.5V1.6z"
+                        fill={pinned ? "currentColor" : "none"}
+                        stroke="currentColor"
+                        strokeWidth="1.2"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                </div>
+                );
+              })}
+            </nav>
+          </div>
         <div
           className="lc-agent-messages lc-scroll-pane"
           ref={listRef}
@@ -2066,7 +2134,8 @@ export function AgentSidePanel({
           }}>Save queued question</button>
           <button type="button" onClick={() => { onCancelEdit?.(editingQueued.id); setEditingQueued(null); }}>Cancel edit</button>
         </div>}
-        <form className="lc-agent-composer" onSubmit={(event) => submit("queue", event)}>
+        <form className="lc-agent-composer" inert={chatFocus === "messages"} aria-hidden={chatFocus === "messages" || undefined} onSubmit={(event) => submit("queue", event)}>
+          <div className="lc-agent-composer-clip">
           <div className="lc-agent-composer-body">
           {allowAnnotations && attachedMarks.length > 0 && (
             <>
@@ -2330,6 +2399,7 @@ export function AgentSidePanel({
                 <SendIcon />
               </button>
             </div>
+          </div>
           </div>
           </div>
           </div>

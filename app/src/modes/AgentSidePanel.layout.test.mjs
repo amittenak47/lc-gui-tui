@@ -38,6 +38,21 @@ describe("agent panel chrome", () => {
     expect(panel).toContain('aria-label={sessionsHidden ? "Show sessions" : "Hide sessions"}');
     expect(panel).toContain("lc-agent-panel-toggle");
     expect(panel).toContain("setSessionsHidden");
+    expect(panel).toContain("lc-agent-sessions-empty");
+    expect(panel).toContain("data-status={session.status}");
+    expect(panel).not.toContain("lc-agent-session-dot");
+    expect(panel).toContain("lc-agent-sessions-col");
+    expect(panel).toContain("is-closed");
+    expect(css).toContain(".lc-agent-session-row[data-status=\"failed\"]");
+    expect(css).toContain(".lc-agent-session-row[data-status=\"aborted\"]");
+    expect(css).toContain(".lc-agent-session-row[data-status=\"succeeded\"]");
+    expect(css).toContain(".lc-app:not(.lc-mobile):not(.lc-app-agent-open) .lc-side");
+    expect(panel).toContain("lc-agent-sessions-fade");
+    expect(css).toContain(".lc-agent-sessions-fade");
+    expect(css).toContain("backdrop-filter: blur(6px)");
+    expect(panel).not.toContain("sessions.length > 0 ? (");
+    expect(css).toContain(".lc-agent-pane-expand-panel > .lc-agent-pane-expand:not(.lc-agent-panel-toggle)");
+    expect(css).toContain("margin-left: auto");
   });
 
   it("puts the chat-box expand on the composer bar before Annotations", () => {
