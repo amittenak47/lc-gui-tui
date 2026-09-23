@@ -4,6 +4,7 @@ use super::{ChatMessage, ChatReply, ChatRequest, ToolCall};
 use crate::llm::coach::EventSink;
 
 mod stream;
+mod cancellable;
 
 /// Shared OpenAI-compatible /chat/completions call (Groq, Ollama, vLLM, LM Studio).
 pub(crate) fn chat_completions(
@@ -54,9 +55,6 @@ pub(crate) fn chat_completions_stream(
 fn chat_completions_inner(
     base_url: &str, api_key: Option<&str>, model: &str, req: &ChatRequest, events: Option<&EventSink>,
 ) -> Result<ChatReply> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
-        .build()?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
     let messages: Vec<serde_json::Value> = req.messages.iter().map(ChatMessage::to_json).collect();
@@ -91,19 +89,27 @@ fn chat_completions_inner(
     if let Some(events) = events {
         if let Some(err) = events.cancelled_error() { return Err(err); }
         body["stream"] = serde_json::json!(true);
-        let response = send_chat(&client, &url, api_key, &body)?;
-        let content_type = response.headers().get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok()).unwrap_or("");
-        if content_type.contains("text/event-stream") {
+        use std::io::Read;
+        let mut response = cancellable::ResponseReader::post(&url, api_key, &body, events)?;
+        let status = response.status();
+        if !status.is_success() {
+            let mut snippet = String::new();
+            response.take(600).read_to_string(&mut snippet)?;
+            bail!("LLM request to {url} failed ({status}): {snippet}");
+        }
+        if response.is_stream() {
             return stream::read(response, events);
         }
         // Some compatible servers ignore stream=true and return normal JSON.
         // Consume that same response: never retry a partially generated request.
-        let reply = parse_reply(&response.json().context("non-JSON chat response")?)?;
+        let reply = parse_reply(&serde_json::from_reader(&mut response).context("non-JSON chat response")?)?;
         if let Some(err) = events.cancelled_error() { return Err(err); }
         events.emit_reasoning(&reply.reasoning);
         return Ok(reply);
     }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()?;
     parse_reply(&post_chat(&client, &url, api_key, &body)?)
 }
 

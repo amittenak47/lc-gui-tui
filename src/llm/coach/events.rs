@@ -102,8 +102,8 @@ impl EventSink {
     }
 
     /// Bail out of a stage sequence once the client stopped caring. Callers use
-    /// this at stage boundaries and streamed reads. A blocked network read is
-    /// still bounded by the provider timeout, not interrupted by this flag.
+    /// this at stage boundaries and streamed reads. The HTTP provider also
+    /// observes it while awaiting response headers and token chunks.
     pub fn cancelled_error(&self) -> Option<anyhow::Error> {
         self.is_cancelled()
             .then(|| anyhow::anyhow!("the coach run was cancelled"))
