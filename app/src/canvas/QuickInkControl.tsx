@@ -4,10 +4,11 @@ import { HoldButton } from "../components/HoldButton";
 import { HighlighterIcon, PenToolIcon, PinkEraserIcon } from "../components/MarkToolIcons";
 import type { InkPresetKind } from "../util/inkToolPresets";
 
+/** Bright Pilot G2 gel inks — black and white, then the vivid barrel colors. */
 export const QUICK_INK_COLORS = [
-  ["Graphite", "#242424"], ["White", "#ffffff"], ["Red", "#ef3340"],
-  ["Orange", "#ff861c"], ["Yellow", "#ffd60a"], ["Green", "#18bd66"],
-  ["Cyan", "#00bde3"], ["Blue", "#2979ff"], ["Violet", "#8b4dff"], ["Pink", "#f52b91"],
+  ["Black", "#1a1a1a"], ["White", "#ffffff"], ["Red", "#ff2d2d"],
+  ["Orange", "#ff6a00"], ["Yellow", "#ffe500"], ["Green", "#00d65a"],
+  ["Turquoise", "#00d4ff"], ["Blue", "#1a4dff"], ["Purple", "#7a2bff"], ["Pink", "#ff2d9a"],
 ] as const;
 
 /** Nib widths for the eraser row. Geometric so each step is a different brush. */

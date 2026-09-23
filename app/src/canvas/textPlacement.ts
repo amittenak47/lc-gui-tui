@@ -1,7 +1,7 @@
 /**
  * Geometry for the Text tool's placement gesture.
  *
- * A tap drops a default-width box; a drag chooses its wrap width.
+ * A tap drops a default-width box. A drag keeps the box you drew, however small.
  * Kept apart from the DOM plumbing in `Board` so the "is this a tap?" slop and
  * the minimum readable box can be pinned down in tests.
  */
@@ -100,10 +100,8 @@ export function textPlaceRect(
   return {
     x: Math.min(a.x, b.x),
     y: Math.min(a.y, b.y),
-    // A deliberate drag may be narrower than the tap default, but not so narrow
-    // that a single word cannot fit — that wraps into a column of letters.
-    width: Math.max(Math.abs(b.x - a.x), min.width * 0.35),
-    height: Math.max(Math.abs(b.y - a.y), min.height),
+    width: Math.max(Math.abs(b.x - a.x), 1),
+    height: Math.max(Math.abs(b.y - a.y), 1),
     autoResize: false,
   };
 }

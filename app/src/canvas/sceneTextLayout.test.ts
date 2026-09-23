@@ -21,6 +21,10 @@ describe("scene text layout", () => {
     expect(wide.text).toBe(originalText);
     expect(wide.lines).toHaveLength(4);
   });
+  it("keeps a dragged box narrower than the font", () => {
+    const layout = layoutSceneText({ text: "Hi", width: 8, fontSize: 20, autoResize: false }, ctx);
+    expect(layout.width).toBe(8);
+  });
   it("wraps a long URL without dropping characters", () => {
     const text = "https://example.com/averylongpathwithnospaces";
     const result = layoutSceneText({ text, fontSize: 20, width: 100, autoResize: false }, ctx);

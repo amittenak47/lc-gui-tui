@@ -5222,7 +5222,7 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 22px !important;
   max-height: 22px;
   padding: 0;
-  border: 1px solid color-mix(in srgb, #000 28%, transparent);
+  border: 1px solid color-mix(in srgb, #000 14%, transparent);
   border-radius: 4px;
   box-shadow: 0 1px 2px rgb(0 0 0 / 18%);
   cursor: pointer;
@@ -6099,11 +6099,11 @@ body[data-lc-sash-drag="horizontal"] {
 
 /* Keep canvas text placement owned by our drag, not browser touch scrolling. */
 .lc-board-shape-tool, .lc-board-text-tool { touch-action: none; }
-/* Ink chrome stays behind the IME. Only the text editor needs input now. */
-.lc-scene-text-keyboard .lc-toolbar,
-.lc-scene-text-keyboard .lc-map-controls,
-.lc-scene-text-keyboard .lc-ink-wheel,
-.lc-scene-text-keyboard .lc-color-wheel {
+/* Ink chrome stays behind a real on-screen keyboard, not merely an open text box. */
+.lc-scene-text-keyboard.lc-ime-open .lc-toolbar,
+.lc-scene-text-keyboard.lc-ime-open .lc-map-controls,
+.lc-scene-text-keyboard.lc-ime-open .lc-ink-wheel,
+.lc-scene-text-keyboard.lc-ime-open .lc-color-wheel {
   visibility: hidden;
   pointer-events: none;
 }

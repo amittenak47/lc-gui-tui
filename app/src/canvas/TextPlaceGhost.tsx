@@ -37,8 +37,8 @@ export const TextPlaceGhost = forwardRef<TextPlaceGhostHandle, TextPlaceGhostPro
         setSize(width, height) {
           const node = nodeRef.current;
           if (!node) return;
-          const w = `${Math.max(24, Math.round(width))}px`;
-          const h = `${Math.max(16, Math.round(height))}px`;
+          const w = `${Math.max(0, Math.round(width))}px`;
+          const h = `${Math.max(0, Math.round(height))}px`;
           if (node.style.width === w && node.style.height === h) return;
           node.style.width = w;
           node.style.height = h;

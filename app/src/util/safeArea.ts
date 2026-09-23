@@ -141,6 +141,7 @@ function publishInsets(): void {
   root.style.setProperty("--lc-safe-right", `${Math.round(right)}px`);
   root.style.setProperty("--lc-safe-bottom", `${safeBottom}px`);
   root.style.setProperty("--lc-keyboard-inset", `${keyboardInset}px`);
+  root.classList.toggle("lc-ime-open", keyboardInset > 0);
   const viewport = shellViewport(window.innerHeight, window.visualViewport);
   if (sceneTextViewport) {
     // A real orientation change is not a keyboard resize.
@@ -215,6 +216,7 @@ export function installSafeAreaInsets(): () => void {
     root.style.removeProperty("--lc-safe-right");
     root.style.removeProperty("--lc-safe-bottom");
     root.style.removeProperty("--lc-keyboard-inset");
+    root.classList.remove("lc-ime-open");
     root.style.removeProperty("--lc-viewport-top");
     root.style.removeProperty("--lc-viewport-height");
   };

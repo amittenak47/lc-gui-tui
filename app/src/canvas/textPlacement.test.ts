@@ -85,16 +85,17 @@ describe("textPlaceRect", () => {
     expect(rect.height).toBe(200);
   });
 
-  it("refuses a box too narrow to fit a word", () => {
-    const rect = textPlaceRect({ x: 100, y: 100 }, { x: 118, y: 400 }, flat, 20);
-    const min = minTextBox(20, 1);
+  it("keeps a small drag at the size you drew", () => {
+    const rect = textPlaceRect({ x: 100, y: 100 }, { x: 118, y: 140 }, flat, 20);
     expect(rect.autoResize).toBe(false);
-    expect(rect.width).toBeCloseTo(min.width * 0.35);
+    expect(rect.width).toBe(18);
+    expect(rect.height).toBe(40);
   });
 
-  it("gives a dragged box at least one line of height", () => {
-    const rect = textPlaceRect({ x: 100, y: 100 }, { x: 400, y: 104 }, flat, 20);
-    expect(rect.height).toBe(minTextBox(20, 1).height);
+  it("keeps a short drag at the height you drew", () => {
+    const rect = textPlaceRect({ x: 100, y: 100 }, { x: 400, y: 112 }, flat, 20);
+    expect(rect.height).toBe(12);
+    expect(rect.width).toBe(300);
   });
 
   it("places in scene units under zoom and scroll", () => {

@@ -193,7 +193,6 @@ import {
 } from "./flickPredict";
 import { TextPlaceGhost, type TextPlaceGhostHandle } from "./TextPlaceGhost";
 import {
-  minTextBox,
   textPlaceRect,
   TEXT_TAP_SLOP_PX,
   type TextPlaceViewport,
@@ -3870,11 +3869,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }
       const live = api.getSceneElements() as PaintSceneElement[];
       const original = live.find((el) => el.id === edit.id);
-      const next = original && fitSceneText({ ...original,
+      const fixed = (draft?.autoResize ?? edit.autoResize) === false;
+      const boxWidth = draft?.width ?? edit.width;
+      const boxHeight = draft?.height ?? edit.height;
+      const fitted = original && fitSceneText({ ...original,
         text, originalText: text, fontSize: draft?.fontSize ?? edit.fontSize,
-        width: draft?.width ?? edit.width, autoResize: draft?.autoResize ?? edit.autoResize,
+        width: boxWidth, autoResize: draft?.autoResize ?? edit.autoResize,
         lineHeight: edit.lineHeight, isDeleted: empty,
       });
+      const next = fitted && fixed
+        ? { ...fitted, width: boxWidth, height: Math.max(boxHeight, fitted.height) }
+        : fitted;
       const changed = JSON.stringify(next) !== JSON.stringify(original);
       api.updateScene({
         elements: live.map((el) =>
@@ -3894,9 +3899,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   const beginTextEdit = useCallback((hit: PaintSceneElement) => {
     if (!hit.id || hit.type !== "text" || textEditRef.current) return;
+    const fixed = hit.autoResize === false;
     const fitted = fitSceneText({ ...hit, autoResize: hit.autoResize === true });
     const edit: SceneTextEdit = {
-      id: hit.id, x: hit.x, y: hit.y, width: fitted.width, height: fitted.height,
+      id: hit.id, x: hit.x, y: hit.y,
+      width: fixed ? (hit.width ?? fitted.width) : fitted.width,
+      height: fixed ? Math.max(hit.height ?? 0, fitted.height) : fitted.height,
       text: String(hit.originalText ?? hit.text ?? ""),
       fontSize: hit.fontSize ?? 20, fontFamily: hit.fontFamily,
       lineHeight: hit.lineHeight, autoResize: hit.autoResize === true, angle: hit.angle,
@@ -5073,8 +5081,31 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     let drag: DrawDrag | MoveDrag | MarqueeDrag | null = null;
 
     const paintDraft = (d: DrawDrag) => {
+      const minX = Math.min(d.x0, d.x1);
+      const minY = Math.min(d.y0, d.y1);
+      const maxX = Math.max(d.x0, d.x1);
+      const maxY = Math.max(d.y0, d.y1);
+      const spanW = maxX - minX;
+      const spanH = maxY - minY;
+      // A press with no travel is not a shape yet. Painting it here used to
+      // flash a minimum-sized stamp before the drag existed.
+      const started = d.type === "line" || d.type === "arrow"
+        ? shapeSpan(d.x0, d.y0, d.x1, d.y1) > 0
+        : spanW > 0 || spanH > 0;
+      if (!started) {
+        if (shapeDraftRef.current) {
+          shapeDraftRef.current = null;
+          sceneOverlayRef.current?.redraw();
+        }
+        return;
+      }
       if (stampPlacementRef.current) {
-        shapeDraftRef.current = stampPlacementRef.current({ minX: Math.min(d.x0, d.x1), minY: Math.min(d.y0, d.y1), maxX: Math.max(d.x0, d.x1), maxY: Math.max(d.y0, d.y1) });
+        if (spanW <= 0 || spanH <= 0) {
+          shapeDraftRef.current = null;
+          sceneOverlayRef.current?.redraw();
+          return;
+        }
+        shapeDraftRef.current = stampPlacementRef.current({ minX, minY, maxX, maxY });
         sceneOverlayRef.current?.redraw();
         return;
       }
@@ -5789,21 +5820,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const paintGhost = (d: Drag) => {
       const ghost = textPlaceGhostRef.current;
       if (!ghost) return;
-      const a = boardPoint(d.origin.x, d.origin.y);
-      const b = boardPoint(d.current.x, d.current.y);
-      const viewport = readViewport();
-      const min = minTextBox(fontSizeRef.current, viewport.zoom);
       const dragged =
         Math.abs(d.current.x - d.origin.x) > TEXT_TAP_SLOP_PX ||
         Math.abs(d.current.y - d.origin.y) > TEXT_TAP_SLOP_PX;
-      if (dragged) {
-        ghost.setSize(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
-        ghost.move(Math.min(a.x, b.x), Math.min(a.y, b.y));
-      } else {
-        // Preview the box a release would actually drop, not a dot.
-        ghost.setSize(min.width * viewport.zoom, min.height * viewport.zoom);
-        ghost.move(a.x, a.y);
+      if (!dragged) {
+        ghost.setVisible(false);
+        return;
       }
+      const a = boardPoint(d.origin.x, d.origin.y);
+      const b = boardPoint(d.current.x, d.current.y);
+      ghost.setSize(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+      ghost.move(Math.min(a.x, b.x), Math.min(a.y, b.y));
       ghost.setVisible(true);
     };
 
@@ -7487,7 +7514,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       }>;
       const [minX, minY, maxX, maxY] = getCommonBounds(pieces);
       const width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
-      const scale = Math.min(Math.max(4, box.maxX - box.minX) / width, Math.max(4, box.maxY - box.minY) / height);
+      const dragW = Math.max(0, box.maxX - box.minX);
+      const dragH = Math.max(0, box.maxY - box.minY);
+      if (dragW <= 0 || dragH <= 0) return [];
+      const scale = Math.min(dragW / width, dragH / height);
       const x = box.minX;
       const y = box.minY;
       pieces = pieces.map(element => ({ ...scaleAbout(element,

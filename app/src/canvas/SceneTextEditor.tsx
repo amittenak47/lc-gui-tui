@@ -40,8 +40,10 @@ export function SceneTextEditor({ edit, getViewport, onFontSize, onCommit, onCan
   const [visibleBottom, setVisibleBottom] = useState(Infinity);
   const zoom = view?.zoom ?? 1;
   const layout = layoutSceneText({ ...edit, text, width: boxWidth, autoResize });
-  const width = Math.max(48 / zoom, autoResize ? Math.max(edit.width, layout.width + 2) : layout.width);
-  const height = Math.max(edit.fontSize * layout.lineHeight, layout.height);
+  const width = autoResize ? Math.max(edit.width, layout.width + 2) : boxWidth;
+  const height = autoResize
+    ? Math.max(edit.fontSize * layout.lineHeight, layout.height)
+    : Math.max(edit.height, text.trim() ? layout.height : 0);
   const left = (edit.x + (view?.scrollX ?? 0)) * zoom;
   const sceneTop = (edit.y + (view?.scrollY ?? 0)) * zoom;
   // Lift only the transient editor if the IME covers it. The scene, header

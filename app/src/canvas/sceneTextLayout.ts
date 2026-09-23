@@ -30,7 +30,10 @@ export function layoutSceneText(style: SceneTextStyle, context?: CanvasRendering
   if (ctx) ctx.font = `${fontSize}px ${sceneTextFont(style.fontFamily)}`;
   const measure = (text: string) => ctx?.measureText(text).width ?? Array.from(text).length * fontSize * 0.6;
   const fixed = style.autoResize === false;
-  const wrapWidth = Math.max(fontSize, style.width ?? fontSize * 8);
+  // A dragged box keeps the width you drew, even when that is narrower than the font.
+  const wrapWidth = fixed
+    ? Math.max(1, style.width ?? fontSize)
+    : Math.max(fontSize, style.width ?? fontSize * 8);
   const lines: string[] = [];
   for (const paragraph of originalText.split("\n")) {
     if (!fixed || measure(paragraph) <= wrapWidth) {

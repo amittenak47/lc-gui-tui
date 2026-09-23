@@ -47,13 +47,13 @@ it("cycles pen, highlighter, eraser on hold without opening the colors", async (
 
 it("opens a row of color squares and keeps the current tool", async () => {
   const pick = vi.fn();
-  await act(async () => root.render(<QuickInkControl kind="highlighter" color="#2979ff" onPick={pick} />));
+  await act(async () => root.render(<QuickInkControl kind="highlighter" color="#1a4dff" onPick={pick} />));
   await press();
   const panel = document.querySelector('[aria-label="Quick ink colors"]')!;
   expect(panel.querySelectorAll("button")).toHaveLength(QUICK_INK_COLORS.length);
   expect(panel.querySelector('[aria-label="Blue"]')?.getAttribute("aria-pressed")).toBe("true");
   await act(async () => (panel.querySelector('[aria-label="Red"]') as HTMLButtonElement).click());
-  expect(pick).toHaveBeenCalledWith("highlighter", "#ef3340");
+  expect(pick).toHaveBeenCalledWith("highlighter", "#ff2d2d");
   expect(document.querySelector('[aria-label="Quick ink colors"]')).toBeNull();
 });
 
