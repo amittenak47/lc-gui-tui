@@ -33,7 +33,7 @@
  * pagefile clears the spans (the bitmap is gone, so they would be a lie).
  */
 
-import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { isDocCameraLive, isDocCameraPulsing, subscribeDocCameraLive, subscribeDocCameraPulse } from "../canvas/docSelectionGesture";
 import type { PageFrame } from "../canvas/inkPageIndex";
@@ -1935,14 +1935,10 @@ export function PdfDocument({
     return () => observer.disconnect();
   }, [pages]);
 
-  return (
-    <div
-      ref={hostRef}
-      className="lc-pdf-doc"
-      aria-hidden={selectable ? undefined : true}
-      style={{ gap: PAGE_GAP }}
-    >
-      {pages.flatMap((page) =>
+  // Focus and paint-pump ticks do not change the page skeleton. Reusing its
+  // elements lets React skip hundreds of slots (and their pdf.js-owned DOM)
+  // when a mounted book returns to the screen.
+  const pageSlots = useMemo(() => pages.flatMap((page) =>
         pdfReadingSlots(page, spread).map((slot) => (
           <div
             key={slot.key}
@@ -1991,7 +1987,16 @@ export function PdfDocument({
             </div>
           </div>
         )),
-      )}
+      ), [pages, spread]);
+
+  return (
+    <div
+      ref={hostRef}
+      className="lc-pdf-doc"
+      aria-hidden={selectable ? undefined : true}
+      style={{ gap: PAGE_GAP }}
+    >
+      {pageSlots}
       {pages.length === 0 && <p className="lc-pdf-loading">Opening…</p>}
     </div>
   );

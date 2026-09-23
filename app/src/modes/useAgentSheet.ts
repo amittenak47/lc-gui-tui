@@ -26,6 +26,16 @@ export function useAgentSheet(panel: RefObject<HTMLElement | null>, mobile: bool
     if (!node) return;
     node.inert = !open;
     if (!mobile) { node.style.cssText = ""; return; }
+    // Closed sheets need no viewport measurement or resize subscription.
+    // Mounting the inactive panel on a tab switch otherwise forces layout of
+    // the entire PDF before the new tab can paint.
+    if (!open) {
+      node.style.transform = "translate3d(0,110%,0)";
+      node.style.visibility = "hidden";
+      node.style.pointerEvents = "none";
+      document.documentElement.style.setProperty("--lc-agent-open", "0");
+      return;
+    }
     const resize = () => {
       const vv = window.visualViewport;
       const bottom = (vv?.offsetTop ?? 0) + (vv?.height ?? window.innerHeight);

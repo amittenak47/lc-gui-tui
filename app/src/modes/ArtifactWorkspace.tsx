@@ -72,6 +72,7 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
       getViewportBounds: () => canvas.getViewportBounds(),
     }, skeletons => canvas.convert(skeletons), program, 0);
     await canvas.primeInkSnap();
+    if (next.kind === "whiteboard") canvas.fitRegion("pad-0");
     hydrated.current = true;
   }, [themeId]);
   const reload = useCallback(async (drafts = true) => {
@@ -97,6 +98,14 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
   }, [identity]);
   useEffect(() => { void reload(); return () => { generation.current++; }; }, [reload]);
   useEffect(() => { if (Board && snapshot) void restore(snapshot).catch(cause => setError(String(cause))); }, [Board, loadVersion]);
+  useEffect(() => {
+    // Board must receive the new focus/clip before fitting. Fitting inside
+    // the click handler used the previous page's bounds and clamped the
+    // camera back there, even though the page counter had already advanced.
+    if (hydrated.current && live.current.snapshot?.kind === "whiteboard") {
+      board.current?.fitRegion(`pad-${page}`);
+    }
+  }, [page]);
   const changed = () => {
     if (!hydrated.current || changing.current) return;
     setDirty(true);
@@ -216,7 +225,6 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
               aria-label="Previous page"
               onClick={() => {
                 setPage(page - 1);
-                board.current?.fitRegion(`pad-${page - 1}`);
               }}
             >
               ‹
@@ -229,7 +237,6 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
               aria-label="Next page"
               onClick={() => {
                 setPage(page + 1);
-                board.current?.fitRegion(`pad-${page + 1}`);
               }}
             >
               ›
@@ -247,7 +254,6 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
                 setSnapshot({ ...snapshot, value: { ...snapshot.value, pageCount: index + 1 } });
                 setPage(index);
                 setDirty(true);
-                canvas.fitRegion(`pad-${index}`);
               }}
             >
               +

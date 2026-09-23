@@ -136,7 +136,9 @@ describe("agent panel chrome", () => {
   it("marks a failed turn with an icon on the send-flags row instead of the word failed", () => {
     expect(panel).toContain("function FailIcon");
     expect(panel).toContain("lc-agent-turn-fail");
-    expect(panel).toContain('aria-label="Failed"');
+    expect(panel).toContain("const tip = statusTip(message)");
+    expect(panel).toContain("aria-label={tip ?? undefined}");
+    expect(panel).toContain("{cancelled ? <StopIcon /> : <FailIcon />}");
     expect(panel).toContain("<MessageFlags message={message} />");
     expect(panel).not.toContain("MessageFlags message={message} header");
     expect(panel).not.toContain("lc-agent-turn-header-flags");

@@ -9233,7 +9233,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       fitFrame,
       refitToViewport,
       fitRegion: (regionId: RegionId | string) => {
-        refitToViewport(regionId);
+        // Explicit page navigation starts at that page. The resize fit keeps
+        // Y, which can leave the camera on the previous overlapping sheet.
+        fitView(regionId);
+        void rasterInkRef.current?.syncCamera();
       },
       scrollToPdfPage: (pageId: number, opts?: { hold?: boolean }) =>
         jumpToPdfPage(pageId, opts),

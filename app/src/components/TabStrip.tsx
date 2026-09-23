@@ -303,16 +303,33 @@ export function TabStrip({
   // A tab focused from anywhere other than the strip — an icon spawning one,
   // a close landing on its neighbour — can be scrolled out of sight.
   useEffect(() => {
-    const active = stripRef.current?.querySelector<HTMLElement>('[data-tab-active="true"]');
-    if (!active) return;
-    const snap = () => active.scrollIntoView({ block: "nearest", inline: "nearest" });
-    snap();
-    const first = window.requestAnimationFrame(() => {
-      snap();
-      window.requestAnimationFrame(snap);
-    });
-    return () => window.cancelAnimationFrame(first);
-  }, [activeId, tabs.length, busy, activeIndexChip]);
+    const strip = stripRef.current;
+    const active = strip?.querySelector<HTMLElement>('[data-tab-active="true"]');
+    if (!strip || !active) return;
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        if (strip.scrollWidth <= strip.clientWidth) return;
+        const bounds = strip.getBoundingClientRect();
+        const chip = active.getBoundingClientRect();
+        // Scroll only this strip, and only when the chip is clipped. Repeated
+        // scrollIntoView calls forced layout of the newly visible PDF as well.
+        const delta = chip.left < bounds.left ? chip.left - bounds.left
+          : chip.right > bounds.right ? Math.min(chip.left - bounds.left, chip.right - bounds.right) : 0;
+        if (delta) strip.scrollLeft += delta;
+      });
+    };
+    schedule();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+    observer?.observe(strip);
+    observer?.observe(active);
+    return () => {
+      observer?.disconnect();
+      window.cancelAnimationFrame(frame);
+    };
+  }, [activeId, tabs.length]);
 
   /*
    * A split's two halves are drawn side by side, in the group's own order.

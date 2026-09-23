@@ -23,6 +23,27 @@ it("leaves the first open height to CSS until the handle is dragged", () => {
   expect(host.querySelector("aside")!.style.height).toBe("");
   act(() => root.unmount());
 });
+it("does not measure or observe the header until the sheet opens", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const header = document.createElement("header"); header.className = "lc-header"; document.body.append(header);
+  const measure = vi.spyOn(header, "getBoundingClientRect");
+  const observe = vi.fn(); const disconnect = vi.fn();
+  vi.stubGlobal("ResizeObserver", class { observe = observe; disconnect = disconnect; });
+  function Panel({ open }: { open: boolean }) {
+    const ref = useRef<HTMLElement>(null); useAgentSheet(ref, true, open, () => {});
+    return <aside ref={ref} />;
+  }
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  act(() => root.render(<Panel open={false} />));
+  window.dispatchEvent(new Event("resize"));
+  expect(measure).not.toHaveBeenCalled(); expect(observe).not.toHaveBeenCalled();
+  act(() => root.render(<Panel open />));
+  expect(measure).toHaveBeenCalledOnce(); expect(observe).toHaveBeenCalledWith(header);
+  act(() => root.render(<Panel open={false} />));
+  measure.mockClear(); window.dispatchEvent(new Event("resize"));
+  expect(measure).not.toHaveBeenCalled(); expect(disconnect).toHaveBeenCalledOnce();
+  act(() => root.unmount());
+});
 it("drags without rendering transcript, preserves height across hiding, and cancels safely", () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.useFakeTimers();
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16));

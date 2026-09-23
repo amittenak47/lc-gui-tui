@@ -34,6 +34,28 @@ beforeAll(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+it("scrolls only clipped tabs and cancels pending measurements on unmount", () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16));
+  vi.stubGlobal("cancelAnimationFrame", clearTimeout);
+  const view = mount({ tabs: [board("one", "One")], activeId: "one" });
+  const strip = view.host.querySelector<HTMLElement>(".lc-tab-strip")!;
+  const chip = view.host.querySelector<HTMLElement>('[data-tab-active="true"]')!;
+  Object.defineProperties(strip, { clientWidth: { value: 300 }, scrollWidth: { value: 600 } });
+  strip.getBoundingClientRect = () => ({ left: 0, right: 300 } as DOMRect);
+  const measure = vi.spyOn(chip, "getBoundingClientRect").mockReturnValue({ left: 250, right: 400 } as DOMRect);
+  act(() => vi.advanceTimersByTime(17));
+  expect(strip.scrollLeft).toBe(100);
+  const reads = measure.mock.calls.length;
+  view.rerender({ tabs: [board("one", "One")], activeIndexChip: <span>Updated sync status</span> });
+  act(() => vi.advanceTimersByTime(50));
+  expect(measure).toHaveBeenCalledTimes(reads);
+  view.rerender({ tabs: [board("one", "One"), board("two", "Two")], activeId: "two" });
+  view.unmount();
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 /** A pointer event jsdom will carry — it has no PointerEvent of its own. */
