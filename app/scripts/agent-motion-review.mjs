@@ -69,7 +69,7 @@ try {
   for(const width of [1280,800]) {
     await send("Emulation.setDeviceMetricsOverride",{width,height:900,deviceScaleFactor:1,mobile:false});
     await send("Page.navigate",{url:"http://127.0.0.1:1452/scripts/agent-motion-review.html"});
-    await waitFor('Boolean(window.setReviewOpen)');
+    await waitFor('Boolean(window.reviewReady)');
     const mainBefore=await evaluate("document.querySelector('.lc-main').getBoundingClientRect().height");
     await evaluate('window.setReviewOpen(true)');await sleep(450);
     const split=await sizes();
@@ -89,7 +89,21 @@ try {
     assert(await evaluate("document.querySelector('.lc-side').inert"),'Closed panel is focusable');
     await evaluate('window.setReviewOpen(true)');await sleep(350);
     assert.equal(await evaluate("document.querySelector('textarea').value"),'Keep draft');
-    await shot(`panel-${width}`);results.push({width,split,conversation,composer,restored});
+    const motion=await evaluate(`(async()=>{
+      const results=[];
+      for(const open of [false,true,false,true]){
+        const frames=[], settled=[];const start=performance.now();
+        const listener=()=>settled.push(performance.now()-start);
+        addEventListener('lc-split-resize',listener);
+        window.setReviewOpen(open);
+        await new Promise(resolve=>{const tick=()=>{frames.push({at:performance.now()-start,transform:getComputedStyle(document.querySelector('.lc-side')).transform});if(performance.now()-start<400)requestAnimationFrame(tick);else resolve()};requestAnimationFrame(tick)});
+        removeEventListener('lc-split-resize',listener);
+        results.push({open,firstFrame:frames[0].at,maxFrameGap:Math.max(...frames.slice(1).map((f,i)=>f.at-frames[i].at)),settled,movingFrames:new Set(frames.map(f=>f.transform)).size});
+      }
+      return results;
+    })()`);
+    if(width===1280)for(const sample of motion){assert(sample.settled.length===1 && sample.settled[0]>=240,JSON.stringify(sample));assert(sample.movingFrames>2,JSON.stringify(sample));}
+    await shot(`panel-${width}`);results.push({width,split,conversation,composer,restored,motion});
   }
   await writeFile(resolve(out,'results.json'),JSON.stringify({results,errors},null,2));
   assert.equal(errors.length,0,JSON.stringify(errors));console.log(JSON.stringify(results));

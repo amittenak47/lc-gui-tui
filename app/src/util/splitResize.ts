@@ -42,3 +42,21 @@ export function sashDragActive(): boolean {
   if (typeof document === "undefined") return false;
   return Boolean(document.body?.dataset?.lcSashDrag);
 }
+
+/** Board fitting can wait until the panel's compositor animation finishes. */
+export function boardResizeDeferred(): boolean {
+  return sashDragActive() || (typeof document !== "undefined" && Boolean(document.body?.dataset.lcPanelMotion));
+}
+
+/** Cancelled on a rapid toggle or unmount; only the final geometry is fitted. */
+export function deferPanelRefit(): () => void {
+  document.body.dataset.lcPanelMotion = "true";
+  const timer = window.setTimeout(() => {
+    delete document.body.dataset.lcPanelMotion;
+    announceSplitResize("settle");
+  }, window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 260);
+  return () => {
+    window.clearTimeout(timer);
+    delete document.body.dataset.lcPanelMotion;
+  };
+}

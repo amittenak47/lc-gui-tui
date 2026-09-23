@@ -174,7 +174,7 @@ import { pdfLandingHoldClear, pdfPreloadPages, pdfRestPages } from "../modes/pdf
 import { remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
 import { eraserPageWidth, eraserScreenRadius } from "./rasterInk";
 import { applyLinedSlotStyle, linedOverlayViewport, linedSlotCanSkip } from "./linedSlot";
-import { SPLIT_RESIZE_EVENT, sashDragActive, splitResizePhase } from "../util/splitResize";
+import { SPLIT_RESIZE_EVENT, boardResizeDeferred, sashDragActive, splitResizePhase } from "../util/splitResize";
 import { reanchorInkOps } from "./reanchorInk";
 import { shouldSeedInkFromBlob } from "./inkRestore";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
@@ -7158,7 +7158,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     (force: boolean, remeshInk = true, keepY = false): boolean => {
       if (splitPausedRef.current && !splitFitRef.current) return true;
       // Guard before measuring: sash layout already owns this frame.
-      if (sashDragActive()) return true;
+      if (boardResizeDeferred()) return true;
       if (rasterInkRef.current?.isDrawing()) {
         inkDeferredFitRef.current = true;
         return true;
@@ -7273,7 +7273,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const viewportFitKeepYRef = useRef(false);
 
   const scheduleLiveViewportFit = useCallback(() => {
-    if (sashDragActive() || splitPausedRef.current) return;
+    if (boardResizeDeferred() || splitPausedRef.current) return;
     window.clearTimeout(viewportFitSettleRef.current);
     viewportFitSettleRef.current = window.setTimeout(() => {
       const keepY = viewportFitKeepYRef.current;
@@ -7388,6 +7388,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const late: number[] = [];
     let apiWaits = 0;
     const run = (force: boolean, remeshInk = true) => {
+      if (boardResizeDeferred()) return;
       const box = boardRef.current?.getBoundingClientRect();
       const w = Math.round(box?.width ?? 0);
       const h = Math.round(box?.height ?? 0);

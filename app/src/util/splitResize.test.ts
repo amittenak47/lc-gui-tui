@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   announceSplitResize,
+  boardResizeDeferred,
+  deferPanelRefit,
   sashDragActive,
   SPLIT_RESIZE_EVENT,
   splitResizePhase,
@@ -13,6 +15,30 @@ import {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  delete document.body.dataset.lcPanelMotion;
+});
+
+it("defers board fitting through panel motion and cancels superseded toggles", () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("matchMedia", () => ({ matches: false }));
+  const settle = vi.fn();
+  window.addEventListener(SPLIT_RESIZE_EVENT, settle);
+  const cancel = deferPanelRefit();
+  expect(boardResizeDeferred()).toBe(true);
+  vi.advanceTimersByTime(100);
+  expect(settle).not.toHaveBeenCalled();
+  cancel();
+  const finish = deferPanelRefit();
+  vi.advanceTimersByTime(200);
+  expect(boardResizeDeferred()).toBe(true);
+  expect(settle).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(60);
+  expect(boardResizeDeferred()).toBe(false);
+  expect(settle).toHaveBeenCalledTimes(1);
+  finish();
+  window.removeEventListener(SPLIT_RESIZE_EVENT, settle);
 });
 
 describe("announceSplitResize", () => {

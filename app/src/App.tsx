@@ -79,7 +79,7 @@ import {
   type TabRecord,
 } from "./util/tabs";
 import { loadTabState, saveTabState } from "./util/tabPersist";
-import { announceSplitResize } from "./util/splitResize";
+import { announceSplitResize, deferPanelRefit } from "./util/splitResize";
 import { isCameraBusy } from "./util/cameraBusy";
 import { ensureDevicePrefs } from "./util/devicePrefs";
 import {
@@ -834,7 +834,10 @@ export function App() {
    * Mobile sheets overlay the board and must not remesh as if the hole moved.
    */
   const desktopAgentOpen = !mobile && chrome.agentOpen;
+  const previousDesktopAgentOpen = useRef(desktopAgentOpen);
   useLayoutEffect(() => {
+    const panelChanged = previousDesktopAgentOpen.current !== desktopAgentOpen;
+    previousDesktopAgentOpen.current = desktopAgentOpen;
     const main = mainRef.current;
     if (!main) return;
     /*
@@ -848,11 +851,13 @@ export function App() {
     if (!activeGroup) {
       main.style.removeProperty("--lc-split-a");
       main.style.removeProperty("--lc-split-b");
+      if (panelChanged) return deferPanelRefit();
       announceSplitResize("settle");
       return;
     }
     main.style.setProperty("--lc-split-a", String(activeGroup.split.ratio));
     main.style.setProperty("--lc-split-b", String(1 - activeGroup.split.ratio));
+    if (panelChanged) return deferPanelRefit();
     // The panes and their CSS widths now reflect React's committed layout.
     announceSplitResize("settle");
   }, [activeGroup, desktopAgentOpen]);
