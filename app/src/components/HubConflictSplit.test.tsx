@@ -77,7 +77,7 @@ const EMPTY_INK = { inkPages: [] as const, footnoteInkPages: [] as const };
 function mount(
   conflict: HubPadConflict | null = CONFLICT,
   busy = false,
-  extra: { docHash?: string; otherLabel?: string } = {},
+  extra: { docHash?: string; otherLabel?: string; error?: string } = {},
 ) {
   const host = document.createElement("div");
   document.body.append(host);
@@ -90,6 +90,7 @@ function mount(
         busy={busy}
         otherLabel={extra.otherLabel}
         docHash={extra.docHash}
+        error={extra.error}
         onResolve={onResolve}
       />,
     ),
@@ -303,6 +304,12 @@ describe("HubConflictSplit ink and labels", () => {
     expect(previews).toHaveLength(2);
     expect(previews[0]!.dataset.page).toBe("2");
     expect(previews[1]!.dataset.page).toBe("2");
+  });
+
+  it("shows a failed Keep on the merge page", () => {
+    mount(CONFLICT, false, { error: "Could not reach the hub at http://127.0.0.1:7878. Failed to fetch" });
+    const line = document.querySelector(".lc-hub-conflict-error");
+    expect(line?.textContent).toContain("Could not reach the hub");
   });
 
   it("Keep selection enables after every row is settled without the pane header", () => {

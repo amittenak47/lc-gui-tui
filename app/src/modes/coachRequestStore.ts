@@ -22,3 +22,9 @@ export async function loadCoachRequest<T>(id: string): Promise<T | undefined> {
     request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
   }); } finally { db.close(); }
 }
+
+export async function requireCoachRequest<T>(id: string): Promise<T> {
+  const request = await loadCoachRequest<T>(id);
+  if (request === undefined) throw new Error("Original request is unavailable. Send a new question with the document open.");
+  return request;
+}

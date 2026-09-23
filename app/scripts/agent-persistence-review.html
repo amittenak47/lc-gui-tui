@@ -1,0 +1,9 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="icon" href="data:,"><title>Agent persistence check</title></head>
+<body><script type="module">
+import * as requests from "/src/modes/coachRequestStore.ts";
+import * as transcript from "/src/modes/agentTranscript.ts";
+import * as content from "/src/util/contentStore.ts";
+import * as sessions from "/src/modes/coachSessions.ts";
+window.persistenceReview = { ...requests, ...transcript, ...content, ...sessions };
+</script></body></html>

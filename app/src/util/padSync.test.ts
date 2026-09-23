@@ -69,6 +69,23 @@ const emptyBoard = {
   appState: { scrollX: 0, scrollY: 0, zoom: 1 },
 };
 
+it.each(["annotate", "whiteboard"])("keeps local tombstones when applying a stale %s transcript", async kind => {
+  const local = { agent: [{ id: "q", role: "user", content: "gone", deletedAt: 40, future: { keep: true } }] };
+  const getter = kind === "annotate" ? getAnnotateDoc : getWhiteboardNotebook;
+  const restore = kind === "annotate" ? restoreAnnotateDoc : restoreWhiteboardNotebook;
+  getter.mockResolvedValue(local);
+  const apply = kind === "annotate" ? applyHubAnnotate : applyHubWhiteboard;
+  await apply({ id: "sync-chat", board: emptyBoard, agent: [
+    { id: "q", role: "user", content: "gone" },
+    { id: "reply", role: "assistant", content: "offline", replyTo: { id: "q" } },
+  ] }, { emitReload: false });
+  const saved = restore.mock.calls.at(-1)![0] as { agent: unknown[] };
+  expect(saved.agent).toEqual([
+    expect.objectContaining({ id: "q", deletedAt: 40, future: { keep: true } }),
+    expect.objectContaining({ id: "reply", deletedAt: 40 }),
+  ]);
+});
+
 vi.mock("./whiteboardStore", () => ({
   listWhiteboardNotebooks: () => listWhiteboardNotebooks(),
   listWhiteboardTrash: () => listWhiteboardTrash(),
@@ -99,6 +116,7 @@ const putProblemBoard = vi.fn(async (_row?: unknown) => {});
 const getProblemBoard = vi.fn(async (_id?: string): Promise<unknown> => null);
 
 vi.mock("./problemBoardStore", () => ({
+  acceptProblemHubAgent: async () => {},
   deleteProblemBoard: (id: string) => deleteProblemBoard(id),
   getProblemBoard: (id: string) => getProblemBoard(id),
   putProblemBoard: (row: unknown) => putProblemBoard(row),
@@ -280,7 +298,7 @@ describe("padSync pull", () => {
     for (const restore of [restoreWhiteboardNotebook, restoreAnnotateDoc]) {
       const saved = restore.mock.calls[0]![0] as { agent: unknown[] };
       const reopened = restoreAgentMessages(saved.agent);
-      expect(reopened).toEqual(messages.slice(0, 2));
+      expect(reopened).toEqual(messages.slice(0, 2).map(message => ({ ...message, sessionId: "session-question" })));
       expect(visibleDrawings(reopened)).toHaveLength(expanded ? 1 : 0);
     }
   });

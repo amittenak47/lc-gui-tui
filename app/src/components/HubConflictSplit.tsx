@@ -73,6 +73,8 @@ export interface HubConflictSplitProps {
    */
   pageFrames?: readonly PageFrame[];
   onResolve(resolution: HubConflictResolution): void;
+  /** Why the last Keep selection did not leave this page. */
+  error?: string | null;
   /** Hub client — used to GET one more ink page when a row is off the freeze preview. */
   client?: LcClient | null;
   /**
@@ -309,6 +311,7 @@ export function HubConflictSplit({
   sceneWidth,
   pageFrames,
   onResolve,
+  error = null,
   client = null,
   fetchPreviewInk,
 }: HubConflictSplitProps) {
@@ -1111,10 +1114,12 @@ export function HubConflictSplit({
         {renderPane("server")}
       </div>
       <footer className="lc-hub-conflict-actions">
-        <span className="lc-muted">
+        <span className={error && !busy ? "lc-hub-conflict-error" : "lc-muted"}>
           {busy
             ? "Writing your choice…"
-            : valid
+            : error
+              ? error
+              : valid
               ? inkChoice() === "none"
                 ? "Ready — the file stays, with no handwriting."
                 : "Ready — Keep writes this mix to the hub. Sync on the other device to match."

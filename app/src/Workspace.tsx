@@ -407,7 +407,8 @@ import {
   MAX_VISIBLE_DRAWINGS,
 } from "./viz/drawingState";
 import { persistableAgentMessages, restoreAgentMessages } from "./modes/agentTranscript";
-import { organizeIntoSessions } from "./modes/coachSessions";
+import { mergeAgentMessages, organizeIntoSessions, replyChainIds, sessionIdFor } from "./modes/coachSessions";
+import { acceptHubAgent } from "./util/padSync";
 import { DocumentDrawingPanel } from "./viz/DocumentDrawingPanel";
 import { pageForNewDrawing } from "./viz/drawingPage";
 import {
@@ -430,7 +431,7 @@ import { documentAskFields, documentImageContext, hasDocumentCapture, livePadSti
 import { selectionCaptureFailure, type SelectionActionContext, type SelectionActionResult } from "./modes/selectionAction";
 import { freezeCoachAsk, askImages, selectionImageForModel, type CoachAskPayload } from "./modes/coachAskPayload";
 import { CoachSendCoordinator } from "./modes/coachSendCoordinator";
-import { saveCoachRequest, loadCoachRequest } from "./modes/coachRequestStore";
+import { saveCoachRequest, requireCoachRequest } from "./modes/coachRequestStore";
 type Mode = "review" | "ambient";
 
 /** One coach composer send, prepared and waiting in the FIFO queue. */
@@ -951,6 +952,8 @@ export function Workspace({
   /** A resolve is writing. Locks the split, and the handler behind it. */
   const hubConflictBusyRef = useRef(false);
   const [hubConflictBusy, setHubConflictBusy] = useState(false);
+  /** Shown on the split. The header banner sits under that page. */
+  const [hubConflictError, setHubConflictError] = useState<string | null>(null);
 
   /** Apply a conflict choice locally; the walk does any following PUT. */
   const handleHubConflictResolve = useCallback(async (resolution: HubConflictResolution) => {
@@ -978,11 +981,14 @@ export function Workspace({
      * honoured rather than resolving the walk on a lie.
      */
     if (c.stage === "pad" && resolution.pick === "server" && !c.server) {
-      setError("The hub's copy could not be read, so it cannot be kept. Keep this device's copy instead.");
+      const message = "The hub's copy could not be read, so it cannot be kept. Keep this device's copy instead.";
+      setHubConflictError(message);
+      setError(message);
       return;
     }
     hubConflictBusyRef.current = true;
     setHubConflictBusy(true);
+    setHubConflictError(null);
     try {
       if (ask.problemConflict) {
         const live = boardRef.current?.saveBoard();
@@ -1006,6 +1012,7 @@ export function Workspace({
         setAgentMessages(agentMessagesRef.current);
         hubConflictAskRef.current = null;
         setHubConflictAsk(null);
+        setHubConflictError(null);
         if (!await pushProblemPad(client, row)) setNotice("The resolved problem is saved locally. Sync will retry when the hub is available.");
         return;
       }
@@ -1030,6 +1037,7 @@ export function Workspace({
             await applyHubWhiteboard(c.server, { emitReload: false, client });
           }
         } else {
+          await acceptHubAgent(c.kind, c.id, c.server?.agent);
           if (c.kind === "annotate" && resolution.pick === "merged" && resolution.footnotes) {
             const doc = await getAnnotateDoc(c.id);
             if (doc) {
@@ -1054,7 +1062,7 @@ export function Workspace({
                 source: doc.source,
                 board: doc.board,
                 footnotes,
-                agent: doc.agent,
+                agent: mergeAgentMessages(doc.agent ?? [], Array.isArray(c.server?.agent) ? c.server.agent : []),
               });
             }
           }
@@ -1146,9 +1154,12 @@ export function Workspace({
       }
       hubConflictAskRef.current = null;
       setHubConflictAsk(null);
+      setHubConflictError(null);
       ask.resolve(resolution);
     } catch (cause) {
-      setError(messageOf(cause));
+      const message = messageOf(cause);
+      setHubConflictError(message);
+      setError(message);
     } finally {
       hubConflictBusyRef.current = false;
       setHubConflictBusy(false);
@@ -1307,6 +1318,7 @@ export function Workspace({
        */
       onConflict: (conflict) =>
         new Promise<HubConflictResolution>((resolve) => {
+          setHubConflictError(null);
           hubConflictAskRef.current = { conflict, resolve };
           setHubConflictAsk({ conflict, resolve });
         }),
@@ -5762,6 +5774,8 @@ export function Workspace({
   const beginCoachTurn = useCallback(
     (replyTo?: CoachReplyRef, pendingAck?: CoachPendingAck): string => {
     const id = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const requestId = coachRequestRef.current?.userMessageId;
+    const parent = requestId ? agentMessagesRef.current.find(message => message.id === requestId) : undefined;
     activeCoachTurnIdRef.current = id;
     markPadDirty();
     setAgentMessages((current) => [
@@ -5772,9 +5786,11 @@ export function Workspace({
         content: "",
         at: Date.now(),
         pending: true,
+        requestState: "running",
+        ...(requestId ? { requestId, sessionId: parent?.sessionId ?? sessionIdFor(requestId) } : {}),
         processEvents: [],
         ...(pendingAck ? { pendingAck } : {}),
-        ...(replyTo ? { replyTo } : {}),
+        ...(replyTo ? { replyTo } : parent ? { replyTo: { id: parent.id, role: parent.role, excerpt: parent.content.slice(0, 160) } } : {}),
       },
     ]);
     return id;
@@ -5824,13 +5840,17 @@ export function Workspace({
         const index = current.findIndex((message) => message.id === messageId);
         if (index < 0) return current;
         const placeholder = current[index];
-        if (placeholder.deletedAt) return current;
+        if (placeholder.deletedAt || placeholder.requestState === "cancelled") return current;
         const rest = [...current.slice(0, index), ...current.slice(index + 1)];
         if (!produced || produced.length === 0) return rest;
 
         const built: AgentChatMessage[] = produced.map((part, offset) => ({
+          ...(offset === 0 ? placeholder : {}),
           id: offset === 0 ? placeholder.id : `${placeholder.id}-${offset}`,
           role: "assistant",
+          pending: false,
+          requestState: "completed",
+          ...(placeholder.requestId ? { requestId: placeholder.requestId } : {}),
           at: Date.now(),
           ...(placeholder.replyTo ? { replyTo: placeholder.replyTo } : {}),
           ...(placeholder.sessionId ? { sessionId: placeholder.sessionId } : {}),
@@ -7167,21 +7187,24 @@ export function Workspace({
   };
   const deleteCoachMessage = (id: string) => {
     const coordinator = coachCoordinatorRef.current;
-    const ticket = coordinator?.tickets.get(id);
-    const runningUser = coordinator?.runningId === id;
-    const runningAssistant = activeCoachTurnIdRef.current === id;
-    if (ticket && coordinator && ["preparing", "queued", "running"].includes(ticket.state)) coordinator.abort(id);
+    const drop = replyChainIds(agentMessagesRef.current, id);
+    const runningUser = Boolean(coordinator?.runningId && drop.has(coordinator.runningId));
+    const runningAssistant = Boolean(activeCoachTurnIdRef.current && drop.has(activeCoachTurnIdRef.current));
+    if (runningUser && activeCoachTurnIdRef.current) drop.add(activeCoachTurnIdRef.current);
+    if (runningAssistant && coordinator?.runningId) coordinator.abort(coordinator.runningId);
+    for (const deletedId of drop) {
+      const ticket = coordinator?.tickets.get(deletedId);
+      if (ticket && ["preparing", "queued", "running"].includes(ticket.state)) coordinator?.abort(deletedId);
+    }
     if (runningUser || runningAssistant) {
       coachRunGenRef.current += 1;
       setCoachPhase(null);
       setBusy(null);
     }
-    const linkedTurn = runningUser ? activeCoachTurnIdRef.current : null;
     if (runningUser || runningAssistant) activeCoachTurnIdRef.current = null;
     const now = Date.now();
     setAgentMessages((current) => {
-      const drop = new Set<string>([id]);
-      if (linkedTurn) drop.add(linkedTurn);
+      // Include replies committed since the event read the current transcript.
       let grew = true;
       while (grew) {
         grew = false;
@@ -7201,8 +7224,7 @@ export function Workspace({
   const retryCoachMessage = async (id: string) => {
     let reservedId: string | null = null;
     try {
-      const item = coachCoordinatorRef.current?.tickets.get(id)?.value ?? await loadCoachRequest<CoachSendQueueItem>(id);
-      if (!item) throw new Error("Original request is unavailable. Send a new question with the document open.");
+      const item = coachCoordinatorRef.current?.tickets.get(id)?.value ?? await requireCoachRequest<CoachSendQueueItem>(id);
       const nextId = pushCoachMessage("user", item.text, {
         queued: true, requestState: "preparing", retryOf: id, attachments: item.attachments,
         flags: item.flagBits,
@@ -11023,6 +11045,7 @@ export function Workspace({
               : peekPdfReadingFrames(tab.id)
           }
           client={hubConflictAsk.problemConflict ? undefined : client}
+          error={hubConflictError}
           onResolve={(resolution) => void handleHubConflictResolve(resolution)}
         />
       ) : null}
@@ -11711,8 +11734,8 @@ class AnnotateOpenCancelled extends Error {
 
 function coachFailureTurns(
   failText: string | null,
-): Array<{ content: string }> | null {
-  return failText ? [{ content: failText }] : null;
+): Array<Partial<AgentChatMessage> & { content: string }> | null {
+  return failText ? [{ content: failText, requestState: "failed", pending: false }] : null;
 }
 
 /**

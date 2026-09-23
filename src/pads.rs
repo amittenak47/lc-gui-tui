@@ -739,7 +739,7 @@ pub fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutco
             pad.updated_at,
             pad.page_count,
             json_text(&pad.board),
-            json_text(&pad.agent),
+            json_text(&crate::agent_transcript::update(&existing.as_ref().map(|row| row.agent.clone()).unwrap_or_default(), &pad.agent)),
             next_seq,
             pad.artifacts.as_ref().map(json_text),
         ],
@@ -823,7 +823,7 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
             pad.source,
             json_text(&pad.footnotes),
             json_text(&pad.board),
-            json_text(&pad.agent),
+            json_text(&crate::agent_transcript::update(&existing.as_ref().map(|row| row.agent.clone()).unwrap_or_default(), &pad.agent)),
             next_seq,
             json_text(&pad.footnote_boards),
             pad.label.trim(),
@@ -915,7 +915,7 @@ pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<Pro
             pad.task_id,
             pad.updated_at,
             json_text(&pad.board),
-            json_text(&pad.agent),
+            json_text(&crate::agent_transcript::update(&existing.as_ref().map(|row| row.agent.clone()).unwrap_or_default(), &pad.agent)),
             next_seq,
             pad.artifacts.as_ref().map(json_text),
         ],
@@ -1710,6 +1710,25 @@ mod tests {
             board: json!({"v": 1, "elements": [{"id": "ink"}]}),
             agent: json!([]),
             artifacts: None,
+        }
+    }
+
+    #[test]
+    fn agent_deletes_survive_stale_writes_for_every_pad_kind() {
+        let conn = open(&tmp()).unwrap();
+        let deleted = json!([{"id":"q","role":"user","content":"gone","deletedAt":8,"sessionId":"session-q","future":{"v":1}}]);
+        let stale = json!([{"id":"q","role":"user","content":"gone"},{"id":"reply","replyTo":{"id":"q"}}]);
+        let mut w = wb("w-chat",10); w.agent=deleted.clone(); put_whiteboard(&conn,&w).unwrap();
+        let mut a = an("a-chat",10); a.agent=deleted.clone(); put_annotate(&conn,&a).unwrap();
+        let mut p = pb("leetcode/chat",10); p.agent=deleted; put_problem(&conn,&p).unwrap();
+        w.updated_at=20; w.agent=stale.clone(); put_whiteboard(&conn,&w).unwrap();
+        a.updated_at=20; a.agent=stale.clone(); put_annotate(&conn,&a).unwrap();
+        p.updated_at=20; p.agent=stale; put_problem(&conn,&p).unwrap();
+        for agent in [get_whiteboard(&conn,&w.id).unwrap().unwrap().agent,
+            get_annotate(&conn,&a.id).unwrap().unwrap().agent,
+            get_problem(&conn,&p.id).unwrap().unwrap().agent] {
+            assert_eq!(agent[0]["deletedAt"],8); assert_eq!(agent[1]["deletedAt"],8);
+            assert_eq!(agent[0]["future"]["v"],1); assert_eq!(agent[0]["sessionId"],"session-q");
         }
     }
 

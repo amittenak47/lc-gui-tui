@@ -87,7 +87,13 @@ pub fn read_agent(workspace: &Path) -> Result<AgentSession> {
 }
 
 pub fn write_agent(workspace: &Path, messages: Vec<serde_json::Value>) -> Result<AgentSession> {
-    write_agent_at(&agent_path(workspace), messages)
+    // Serialize read/merge/write so two stale PUTs cannot lose a tombstone.
+    static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = WRITES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = read_agent(workspace)?;
+    let merged = crate::agent_transcript::update(&serde_json::Value::Array(previous.messages),
+        &serde_json::Value::Array(messages));
+    write_agent_at(&agent_path(workspace), merged.as_array().cloned().unwrap_or_default())
 }
 
 /// TUI coach transcript (never mixed with the GUI `.lc/agent.json`).
@@ -300,6 +306,20 @@ mod tests {
     }
 
     const STARTER: &str = "class Solution:\n    def solve(self):\n        pass\n";
+
+    #[test]
+    fn agent_file_retains_deletions_and_cancelled_turns_after_reload() {
+        let ws = Workspace::new("chat-tombstones");
+        write_agent(ws.path(), vec![serde_json::json!({"id":"q","deletedAt":8,"future":true}),
+            serde_json::json!({"id":"a","content":"partial","requestState":"cancelled"})]).unwrap();
+        write_agent(ws.path(), vec![serde_json::json!({"id":"q","content":"stale"}),
+            serde_json::json!({"id":"a","content":"late","requestState":"completed"})]).unwrap();
+        let saved = read_agent(ws.path()).unwrap();
+        let q = saved.messages.iter().find(|row| row["id"] == "q").unwrap();
+        let a = saved.messages.iter().find(|row| row["id"] == "a").unwrap();
+        assert_eq!(q["deletedAt"],8); assert_eq!(q["future"],true);
+        assert_eq!(a["requestState"],"cancelled"); assert_eq!(a["content"],"partial");
+    }
 
     #[test]
     fn an_unsolved_save_resumes_layout_code_and_transcript() {

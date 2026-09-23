@@ -31,6 +31,7 @@
 
 import { run, withStore, STORE_CONTENT } from "./idb";
 import { setStorageItem } from "./storageQuota";
+import { mergeAgentMessages } from "../modes/coachSessions";
 import { artifactCatalogFields, type ArtifactCatalog, type ArtifactParent } from "./padArtifacts";
 import { ArtifactEditConflict, editArtifactCatalog, requireArtifactCatalogTransition, type ArtifactCatalogEdit } from "./artifactCatalogEdits";
 
@@ -209,7 +210,7 @@ export async function putContent(id: string, content: unknown): Promise<void> {
  */
 export async function putParentContent<T extends { artifacts?: ArtifactCatalog }>(
   parent: ArtifactParent, content: T,
-  opts: { expectedCatalogRevision?: string | null; catalogOnly?: boolean; assertLive?: () => void; allowCatalogReplacement?: boolean } = {},
+  opts: { expectedCatalogRevision?: string | null; catalogOnly?: boolean; agentOnly?: boolean; assertLive?: () => void; allowCatalogReplacement?: boolean } = {},
 ): Promise<T> {
   artifactCatalogFields(content.artifacts, parent);
   const guarded = opts.expectedCatalogRevision !== undefined;
@@ -223,6 +224,12 @@ export async function putParentContent<T extends { artifacts?: ArtifactCatalog }
     return raw === null ? undefined : JSON.parse(raw) as T;
   };
   const merge = (previous: T | undefined): T => {
+    if (opts.agentOnly) {
+      if (!previous) throw new Error("The chat's parent was closed or removed during sync.");
+      const prior = previous as Record<string, unknown>, incoming = content as Record<string, unknown>;
+      return { ...previous, agent: mergeAgentMessages(Array.isArray(prior.agent) ? prior.agent : [],
+        Array.isArray(incoming.agent) ? incoming.agent : []) };
+    }
     if (guarded && (previous?.artifacts?.revision ?? null) !== opts.expectedCatalogRevision) throw new ArtifactEditConflict();
     if (!guarded && !opts.allowCatalogReplacement && content.artifacts && previous?.artifacts &&
         content.artifacts.revision !== previous.artifacts.revision) throw new ArtifactEditConflict();
@@ -241,7 +248,13 @@ export async function putParentContent<T extends { artifacts?: ArtifactCatalog }
         }
       }
     }
-    return { ...(opts.catalogOnly ? previous : content), ...(artifacts ? { artifacts } : {}) } as T;
+    const result = { ...(opts.catalogOnly ? previous : content), ...(artifacts ? { artifacts } : {}) } as T;
+    const oldRows = (previous as Record<string, unknown> | undefined)?.agent;
+    const nextRows = (result as Record<string, unknown>).agent;
+    if (!opts.catalogOnly && Array.isArray(oldRows)) {
+      (result as Record<string, unknown>).agent = mergeAgentMessages(oldRows, Array.isArray(nextRows) ? nextRows : [], false);
+    }
+    return result;
   };
   let result: T;
   let validationFailure: unknown;

@@ -89,8 +89,8 @@ export async function resolveProblemArtifactConflict(client: LcClient, conflict:
       title: `${local.taskId} (conflict copy)`, content, associations: [{ kind: "file" }] });
   }
   const row: ProblemBoardRecord = { ...local, artifacts,
-    ...(preference === "server" ? { board: server.board as BoardBlob, agent: Array.isArray(server.agent) ? server.agent : [] } : {}),
-    ...(preference === "merged" ? { agent: mergeProblemAgent(local.agent ?? [], Array.isArray(server.agent) ? server.agent : []) } : {}),
+    ...(preference === "server" ? { board: server.board as BoardBlob } : {}),
+    agent: mergeProblemAgent(local.agent ?? [], Array.isArray(server.agent) ? server.agent : []),
     updatedAt: Math.max(Date.now(), local.updatedAt + 1, server.updated_at + 1),
     hubAckUpdatedAt: server.updated_at, syncSeq: server.sync_seq,
   };

@@ -8,6 +8,7 @@ import { run, withStore, STORE_PROBLEM_BOARDS } from "./idb";
 import { artifactCatalogFields, type ArtifactCatalog } from "./padArtifacts";
 import { ArtifactEditConflict, editArtifactCatalog, requireArtifactCatalogTransition, type ArtifactCatalogEdit } from "./artifactCatalogEdits";
 import { downloadArtifactAssets } from "./artifactAssetSync";
+import { mergeAgentMessages } from "../modes/coachSessions";
 
 export function problemPadId(dataset: string, taskId: string): string {
   return `${dataset.trim()}/${taskId.trim()}`;
@@ -52,7 +53,7 @@ export async function putProblemBoard(row: ProblemBoardRecord): Promise<void> {
             throw new ArtifactEditConflict();
           }
           const fields = artifacts ? { artifacts } : {};
-          store.put({ ...row, ...fields }, row.id);
+          store.put({ ...row, ...fields, agent: mergeAgentMessages(current?.agent ?? [], row.agent ?? [], false) }, row.id);
         } catch (cause) {
           invalidCatalog = cause;
           store.transaction.abort();
@@ -80,7 +81,7 @@ export async function replaceProblemBoard(expected: ProblemBoardRecord | null, r
           const current = request.result as ProblemBoardRecord | undefined;
           if (JSON.stringify(current ?? null) !== JSON.stringify(expected)) throw new ArtifactEditConflict();
           const artifacts = requireArtifactCatalogTransition(current?.artifacts, row.artifacts, { kind: "problem", id: row.id });
-          store.put({ ...row, ...(artifacts ? { artifacts } : {}) }, row.id);
+          store.put({ ...row, ...(artifacts ? { artifacts } : {}), agent: mergeAgentMessages(current?.agent ?? [], row.agent ?? []) }, row.id);
         } catch (cause) { failure = cause; store.transaction.abort(); }
       };
     });
@@ -96,6 +97,18 @@ export function markProblemHubAck(id: string, updatedAt: number): void {
       if (row) store.put({ ...row, hubAckUpdatedAt: Math.max(row.hubAckUpdatedAt ?? 0, updatedAt) }, id);
     };
   }).catch(() => {});
+}
+
+/** Merge the acknowledged transcript without replaying an earlier board snapshot. */
+export async function acceptProblemHubAgent(id: string, agent: unknown): Promise<void> {
+  if (!Array.isArray(agent)) return;
+  await withStore(STORE_PROBLEM_BOARDS, "readwrite", store => {
+    const request = store.get(id);
+    request.onsuccess = () => {
+      const row = request.result as ProblemBoardRecord | undefined;
+      if (row) store.put({ ...row, agent: mergeAgentMessages(row.agent ?? [], agent) }, id);
+    };
+  });
 }
 
 /** Dependencies first, then CAS the catalog while preserving the latest board/chat. */

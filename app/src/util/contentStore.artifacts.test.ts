@@ -56,6 +56,14 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("transactional parent attachment preservation", () => {
+  it("keeps sync tombstones through a stale local save and merges acknowledgements without replacing newer ink", async () => {
+    state.db.set("a1", { board, source: "newer source", agent: [{ id: "q", content: "question", deletedAt: 8 }] });
+    await putParentContent(parent, { artifacts: undefined, agent: [{ id: "q", content: "question" }, { id: "remote" }] }, { agentOnly: true });
+    expect(state.db.get("a1")).toMatchObject({ source: "newer source", board,
+      agent: [expect.objectContaining({ id: "q", deletedAt: 8 }), { id: "remote" }] });
+    await putParentContent(parent, { artifacts: undefined, board, agent: [{ id: "q", content: "question" }] });
+    expect(state.db.get("a1").agent).toEqual([expect.objectContaining({ id: "q", deletedAt: 8 }), { id: "remote" }]);
+  });
   it("preserves a catalog added after an ordinary save began", async () => {
     const artifacts = catalog();
     state.beforeWrite = () => state.db.set("a1", { board, source: "old", artifacts });

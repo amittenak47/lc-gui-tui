@@ -47,7 +47,7 @@ interface DocumentDrawingPanelProps {
 }
 
 export function DocumentDrawingPanel(props: DocumentDrawingPanelProps) {
-  const visible = props.messages.some((message) => isDrawingVisible(message.drawing));
+  const visible = props.messages.some((message) => !message.deletedAt && isDrawingVisible(message.drawing));
   return (
     <div className="lc-document-drawing-host" aria-hidden={!visible || undefined}>
       <AnimatePresence>
@@ -176,7 +176,7 @@ function DrawingPanelContent({
     intersecting.length > 0 ||
     Boolean(filmScope && peekPdfReadingFrames(filmScope).length > 0);
   const boundPages = useRef(new Map<string, number>());
-  const visible = messages.filter((message) => isDrawingVisible(message.drawing));
+  const visible = messages.filter((message) => !message.deletedAt && isDrawingVisible(message.drawing));
   const pageOf = (message: AgentChatMessage) => {
     const resolved = resolveDrawingPage(
       message.drawing?.page,

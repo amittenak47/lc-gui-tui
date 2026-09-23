@@ -68,4 +68,7 @@ describe("drawingState", () => {
     expect(restored?.page).toBe(12);
     expect(restoreMessageDrawing({ program: { viz: "nope" } })).toBeUndefined();
   });
+  it("never paints a drawing whose message was deleted", () => {
+    expect(visibleDrawings([{ deletedAt: 7, drawing: withNewDrawing(program("gone")) }])).toEqual([]);
+  });
 });

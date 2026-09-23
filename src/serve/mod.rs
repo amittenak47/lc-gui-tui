@@ -75,7 +75,10 @@ pub async fn listen_lan(state: Shared, port: u16) -> Result<()> {
     use tokio::net::TcpListener;
     use tower_http::cors::CorsLayer;
 
-    let app = router(state).layer(CorsLayer::permissive());
+    // The dev app on localhost fetches this listener at 127.0.0.1 or a LAN
+    // address. Chrome treats that as a private-network request and drops it
+    // with "Failed to fetch" unless the preflight allows it.
+    let app = router(state).layer(CorsLayer::permissive().allow_private_network(true));
     let listener = TcpListener::bind(("0.0.0.0", port))
         .await
         .with_context(|| format!("cannot bind pad-sync listener on 0.0.0.0:{port}"))?;

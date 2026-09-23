@@ -19,6 +19,7 @@ import {
   syncInkPages,
 } from "./inkSync";
 import { localFootnoteBoardIds } from "./annotateStore";
+import { acceptHubAgent } from "./padSync";
 
 export type HubPadKind = "annotate" | "whiteboard";
 
@@ -120,6 +121,7 @@ export async function walkPushPad(
         ? await client.putAnnotatePad(pad.id, body as AnnotatePadDto)
         : await client.putWhiteboardPad(pad.id, body as WhiteboardPadDto);
     const hubUpdatedAt = written.updated_at ?? Date.now();
+    await acceptHubAgent(pad.kind, pad.id, written.agent);
     // Acked here rather than at the call site, so no path can push and forget.
     await pad.markHubAck?.(hubUpdatedAt);
     return { outcome: "ok", hubUpdatedAt };

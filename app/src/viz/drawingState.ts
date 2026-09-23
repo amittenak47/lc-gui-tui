@@ -28,9 +28,9 @@ export function isDrawingVisible(drawing: MessageDrawing | undefined): boolean {
 
 /** Programs currently meant to be on the coach lane, in message order. */
 export function visibleDrawings(
-  messages: ReadonlyArray<{ drawing?: MessageDrawing }>,
+    messages: ReadonlyArray<{ drawing?: MessageDrawing; deletedAt?: number }>,
 ): MessageDrawing[] {
-  return messages.map((message) => message.drawing).filter(isDrawingVisible) as MessageDrawing[];
+    return messages.filter(message => !message.deletedAt).map((message) => message.drawing).filter(isDrawingVisible) as MessageDrawing[];
 }
 
 /**

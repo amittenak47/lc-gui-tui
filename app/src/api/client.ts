@@ -179,7 +179,7 @@ async function hubFetch(
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     announceUnreachable(message);
-    throw new LcApiError(message, 0);
+    throw new LcApiError(`Could not reach the hub at ${hub.url}. ${message}`, 0);
   }
   const bytes = await res.arrayBuffer();
   let json: unknown = null;

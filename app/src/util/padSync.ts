@@ -12,6 +12,8 @@ import type {
   WhiteboardPadDto,
 } from "../api/client";
 import { LcApiError as ApiError } from "../api/client";
+import { mergeAgentMessages } from "../modes/coachSessions";
+import { putParentContent } from "./contentStore";
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { artifactCatalogFields } from "./padArtifacts";
 import { downloadArtifactAssets } from "./artifactAssetSync";
@@ -65,6 +67,7 @@ import {
   type PadSnapshotKind,
 } from "./padSnapshotStore";
 import {
+  acceptProblemHubAgent,
   deleteProblemBoard,
   getProblemBoard,
   markProblemHubAck,
@@ -412,7 +415,7 @@ export async function applyHubWhiteboard(
     updatedAt: row.updated_at,
     pageCount: row.page_count,
     board: row.board as BoardBlob,
-    agent: Array.isArray(row.agent) ? row.agent : [],
+    agent: mergeAgentMessages(local?.agent ?? [], Array.isArray(row.agent) ? row.agent : []),
     syncSeq: row.sync_seq,
     hubAckUpdatedAt: row.updated_at,
     ...(local?.locked ? { locked: true } : {}),
@@ -448,7 +451,7 @@ export async function applyHubAnnotate(
     source: row.source ?? "",
     board: row.board as BoardBlob,
     footnotes: Array.isArray(row.footnotes) ? (row.footnotes as DocFootnote[]) : [],
-    agent: Array.isArray(row.agent) ? row.agent : [],
+    agent: mergeAgentMessages(local?.agent ?? [], Array.isArray(row.agent) ? row.agent : []),
     syncSeq: row.sync_seq,
     hubAckUpdatedAt: row.updated_at,
     ...(typeof row.label === "string" && row.label.trim()
@@ -495,7 +498,7 @@ export async function applyHubProblem(
     syncSeq: row.sync_seq,
     hubAckUpdatedAt: row.updated_at,
     board: row.board as BoardBlob,
-    agent: Array.isArray(row.agent) ? row.agent : [],
+    agent: mergeAgentMessages(before?.agent ?? [], Array.isArray(row.agent) ? row.agent : []),
   };
   if (before?.artifacts || artifactFields.artifacts) await replaceProblemBoard(before, replacement);
   else await putProblemBoard(replacement);
@@ -527,6 +530,12 @@ export async function waitForPadPushes(kind: string, id: string): Promise<void> 
   }
 }
 
+/** Apply the hub's transcript union without replacing a live board or saved baseline. */
+export async function acceptHubAgent(kind: "annotate" | "whiteboard", id: string, agent: unknown): Promise<void> {
+  if (!Array.isArray(agent)) return;
+  await putParentContent({ kind, id }, { artifacts: undefined, agent }, { agentOnly: true });
+}
+
 export function pushWhiteboardPad(client: LcClient, notebook: WhiteboardNotebook): Promise<boolean> {
   return trackPadPush("whiteboard", notebook.id, pushWhiteboardPadNow(client, notebook));
 }
@@ -538,6 +547,7 @@ async function pushWhiteboardPadNow(
   const body = whiteboardPadBody(notebook);
   try {
     const written = await client.putWhiteboardPad(notebook.id, body);
+    await acceptHubAgent("whiteboard", notebook.id, written.agent);
     markWhiteboardHubAck(notebook.id, written.updated_at ?? notebook.updatedAt);
     return true;
   } catch (cause) {
@@ -608,6 +618,7 @@ async function pushAnnotatePadNow(client: LcClient, doc: AnnotateDoc): Promise<b
   }
   try {
     const written = await client.putAnnotatePad(doc.id, body);
+    await acceptHubAgent("annotate", doc.id, written.agent);
     markAnnotateHubAck(doc.id, written.updated_at ?? doc.updatedAt);
     return true;
   } catch (cause) {
@@ -642,6 +653,7 @@ async function pushProblemPadNow(
   };
   try {
     const written = await client.putProblemPad(row.dataset, row.taskId, body);
+    await acceptProblemHubAgent(row.id, written.agent);
     markProblemHubAck(row.id, written.updated_at ?? row.updatedAt);
     await dropMatching(job => job.op === "putProblem" && job.body.id === row.id && job.body.updated_at <= row.updatedAt);
     const current = await getProblemBoard(row.id);
@@ -952,6 +964,7 @@ export async function flushPadSyncQueue(client: LcClient): Promise<void> {
     try {
       if (job.op === "putWhiteboard") {
         const written = await client.putWhiteboardPad(job.body.id, job.body);
+        await acceptHubAgent("whiteboard", job.body.id, written.agent);
         markWhiteboardHubAck(job.body.id, written.updated_at ?? job.body.updated_at);
       } else if (job.op === "putAnnotate") {
         if (exceedsHubBodyCap(job.body)) {
@@ -959,6 +972,7 @@ export async function flushPadSyncQueue(client: LcClient): Promise<void> {
           continue;
         }
         const written = await client.putAnnotatePad(job.body.id, job.body);
+        await acceptHubAgent("annotate", job.body.id, written.agent);
         markAnnotateHubAck(job.body.id, written.updated_at ?? job.body.updated_at);
       } else if (job.op === "putProblem") {
         const local = await getProblemBoard(job.body.id);
@@ -1034,7 +1048,7 @@ async function pushRestoreAllFour(
   if (kind === "whiteboard") {
     const notebook = await getWhiteboardNotebook(padId);
     if (!notebook) return;
-    await client.putWhiteboardPad(padId, {
+    const written = await client.putWhiteboardPad(padId, {
       ...artifactCatalogFields(notebook.artifacts, { kind: "whiteboard", id: notebook.id }),
       id: notebook.id,
       title: notebook.title,
@@ -1044,10 +1058,11 @@ async function pushRestoreAllFour(
       board: notebook.board,
       agent: notebook.agent ?? [],
     });
+    await acceptHubAgent("whiteboard", padId, written.agent);
   } else {
     const doc = await getAnnotateDoc(padId);
     if (!doc) return;
-    await client.putAnnotatePad(padId, {
+    const written = await client.putAnnotatePad(padId, {
       ...artifactCatalogFields(doc.artifacts, { kind: "annotate", id: doc.id }),
       id: doc.id,
       name: doc.name,
@@ -1061,6 +1076,7 @@ async function pushRestoreAllFour(
       board: doc.board,
       agent: doc.agent ?? [],
     });
+    await acceptHubAgent("annotate", padId, written.agent);
   }
   for (const tier of PAD_SNAPSHOT_TIERS) {
     const row = await getPadSnapshot(kind, padId, tier.id);
@@ -1175,7 +1191,7 @@ export async function pullPads(client: LcClient): Promise<void> {
       updatedAt: row.updated_at,
       pageCount: row.page_count,
       board: row.board as BoardBlob,
-      agent: Array.isArray(row.agent) ? row.agent : [],
+      agent: mergeAgentMessages(local?.agent ?? [], Array.isArray(row.agent) ? row.agent : []),
       syncSeq: row.sync_seq,
       hubAckUpdatedAt: row.updated_at,
     });
@@ -1202,7 +1218,7 @@ export async function pullPads(client: LcClient): Promise<void> {
       source: row.source ?? "",
       board: row.board as BoardBlob,
       footnotes: Array.isArray(row.footnotes) ? (row.footnotes as DocFootnote[]) : [],
-      agent: Array.isArray(row.agent) ? row.agent : [],
+      agent: mergeAgentMessages(local?.agent ?? [], Array.isArray(row.agent) ? row.agent : []),
       syncSeq: row.sync_seq,
       hubAckUpdatedAt: row.updated_at,
     });

@@ -19,6 +19,7 @@
 //! no adapter reads one.
 
 pub mod config;
+pub mod agent_transcript;
 pub mod corpus;
 pub mod datasets;
 pub mod design;

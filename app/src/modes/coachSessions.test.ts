@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentChatMessage } from "./AgentSidePanel";
-import { restoreAgentMessages } from "./agentTranscript";
-import { listSessions, mergeAgentMessages, orderSessions, organizeIntoSessions, sessionIdFor } from "./coachSessions";
+import { persistableAgentMessages, restoreAgentMessages } from "./agentTranscript";
+import { listSessions, mergeAgentMessages, orderSessions, organizeIntoSessions, replyChainIds, sessionIdFor } from "./coachSessions";
 
 function msg(id: string, overrides: Partial<AgentChatMessage> = {}): AgentChatMessage {
   return { id, role: "user", content: id, at: 0, ...overrides };
@@ -70,6 +70,44 @@ describe("orderSessions", () => {
 });
 
 describe("mergeAgentMessages", () => {
+  it("converges deletes and offline reply chains through repeated round trips", () => {
+    const a = [msg("q", { deletedAt: 30 }), msg("keep", { at: 2 })];
+    const b = [msg("q"), msg("r", { replyTo: { id: "q", role: "user", excerpt: "q" } }),
+      msg("rr", { replyTo: { id: "r", role: "user", excerpt: "r" } }), msg("other", { at: 1 })];
+    const left = restoreAgentMessages(mergeAgentMessages(a, b));
+    const right = restoreAgentMessages(mergeAgentMessages(b, a));
+    expect(left.filter(m => m.deletedAt).map(m => m.id)).toEqual(["q", "r", "rr"]);
+    expect(listSessions(left)).toEqual(listSessions(right));
+    expect(mergeAgentMessages(left, b)).toHaveLength(5);
+    expect([...replyChainIds(b, "q")]).toEqual(["q", "r", "rr"]);
+  });
+
+  it("retains unknown data on reload, cancellation and tombstone merges", () => {
+    const stored = [{ ...msg("q"), requestState: "cancelled", pending: true, future: { nested: [1,2] } },
+      { ...msg("a", { role: "assistant", content: "" }), requestState: "running", pending: true }];
+    const saved = JSON.parse(JSON.stringify(persistableAgentMessages(stored as AgentChatMessage[])));
+    const reloaded = restoreAgentMessages(saved);
+    expect(reloaded[0]).toMatchObject({ future: { nested: [1,2] }, requestState: "cancelled", pending: false });
+    expect(reloaded[1]).toMatchObject({ requestState: "interrupted", pending: false });
+    const merged = mergeAgentMessages(reloaded, [{ ...msg("q"), content: "late completed answer", requestState: "completed" }]);
+    expect(merged[0]).toMatchObject({ content: "q", requestState: "cancelled", future: { nested: [1,2] } });
+  });
+
+  it("does not keep forking the same conflicting incoming message", () => {
+    const a = [msg("q", { content: "local" })], b = [msg("q", { content: "remote" })];
+    const once = mergeAgentMessages(a,b);
+    expect(once).toHaveLength(2);
+    expect(mergeAgentMessages(once,b)).toEqual(once);
+    expect((once[1] as AgentChatMessage).id).not.toBe("q");
+  });
+
+  it("updates a local queued edit without erasing prior tombstones or future fields", () => {
+    const saved = [{ ...msg("q"), requestState: "queued", future: true }, msg("deleted", { deletedAt: 2 })];
+    const next = mergeAgentMessages(saved, [msg("q", { content: "edited", requestState: "queued" })], false);
+    expect(next).toHaveLength(2);
+    expect(next[0]).toMatchObject({ content: "edited", future: true });
+    expect(next[1]).toMatchObject({ deletedAt: 2 });
+  });
   it("lets a tombstone win over a live copy and keeps a session id that only one side has", () => {
     const local = [{ id: "q1", content: "Why?", sessionId: "session-q1" }, { id: "q2", content: "Draw" }];
     const remote = [{ id: "q1", content: "Why?", deletedAt: 8 }, { id: "q2", content: "Draw", sessionId: "session-q2" }];

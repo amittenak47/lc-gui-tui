@@ -27,7 +27,7 @@ export function sessionIdFor(messageId: string): string {
  * Returns the same array when nothing needs assigning.
  */
 export function organizeIntoSessions(messages: readonly AgentChatMessage[]): AgentChatMessage[] {
-  if (!messages.some((message) => !message.deletedAt && !message.sessionId)) return messages as AgentChatMessage[];
+  if (!messages.some((message) => !message.sessionId)) return messages as AgentChatMessage[];
 
   const sessionOf = new Map<string, string>();
   for (const message of messages) {
@@ -36,7 +36,6 @@ export function organizeIntoSessions(messages: readonly AgentChatMessage[]): Age
   let current: string | null = null;
   let changed = false;
   const next = messages.map((message) => {
-    if (message.deletedAt) return message;
     if (message.sessionId) {
       current = message.sessionId;
       sessionOf.set(message.id, message.sessionId);
@@ -93,7 +92,7 @@ export function orderSessions<T extends { id: string }>(
   });
 }
 
-/** Sessions that still have something to show, in transcript order. */
+/** A stable rail even when replicas appended offline questions in different orders. */
 export function listSessions(messages: readonly AgentChatMessage[]): CoachSessionSummary[] {
   const groups = new Map<string, AgentChatMessage[]>();
   for (const message of messages) {
@@ -107,7 +106,22 @@ export function listSessions(messages: readonly AgentChatMessage[]): CoachSessio
     title: sessionTitle(group),
     at: group[0]?.at ?? 0,
     status: sessionStatus(group),
-  }));
+  })).sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+}
+
+export function replyChainIds(messages: readonly AgentChatMessage[], root: string): Set<string> {
+  const ids = new Set([root]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const message of messages) {
+      if (message.replyTo && ids.has(message.replyTo.id) && !ids.has(message.id)) {
+        ids.add(message.id);
+        changed = true;
+      }
+    }
+  }
+  return ids;
 }
 
 function messageId(value: unknown): string | null {
@@ -132,7 +146,23 @@ function withoutSessionId(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   const copy = { ...(value as Record<string, unknown>) };
   delete copy.sessionId;
+  if (copy.pending === false) delete copy.pending;
+  if (copy.queued === false) delete copy.queued;
   return copy;
+}
+
+/** Object key order is not authored content. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
+}
+
+function conflictId(id: string, value: unknown): string {
+  let hash = 2166136261;
+  for (const byte of new TextEncoder().encode(canonical(withoutSessionId(value)))) {
+    hash = Math.imul(hash ^ byte, 16777619) >>> 0;
+  }
+  return `${id}-conflict-${hash.toString(16).padStart(8, "0")}`;
 }
 
 /**
@@ -144,7 +174,7 @@ function withoutSessionId(value: unknown): unknown {
  * with the incoming copy under a fresh id — the same rule the problem-pad
  * merge used before tombstones existed.
  */
-export function mergeAgentMessages(local: unknown[], remote: unknown[]): unknown[] {
+export function mergeAgentMessages(local: unknown[], remote: unknown[], preserveConflicts = true): unknown[] {
   const rows = local.map((value) => structuredClone(value));
   const indexOf = new Map<string, number>();
   rows.forEach((value, index) => {
@@ -167,19 +197,47 @@ export function mergeAgentMessages(local: unknown[], remote: unknown[]): unknown
     const localDeleted = deletedAtOf(current);
     const remoteDeleted = deletedAtOf(value);
     if (localDeleted || remoteDeleted) {
-      rows[at] = structuredClone(remoteDeleted >= localDeleted ? value : current);
+      const winner = remoteDeleted >= localDeleted ? value : current;
+      rows[at] = { ...(current as object), ...(value as object), ...(structuredClone(winner) as object), pending: false };
       continue;
     }
-    if (JSON.stringify(withoutSessionId(current)) === JSON.stringify(withoutSessionId(value))) {
+    const here = current as Record<string, unknown>, there = value as Record<string, unknown>;
+    if (here.requestState === "cancelled" || there.requestState === "cancelled") {
+      const stopped = there.requestState === "cancelled" ? there : here;
+      rows[at] = { ...here, ...there, ...structuredClone(stopped), pending: false };
+      continue;
+    }
+    if (canonical(withoutSessionId(current)) === canonical(withoutSessionId(value))) {
       const sessionId = sessionIdOf(current) || sessionIdOf(value);
       const base = structuredClone(sessionIdOf(current) ? current : value);
       if (sessionId && base && typeof base === "object") (base as { sessionId?: string }).sessionId = sessionId;
       rows[at] = base;
       continue;
     }
+    if (!preserveConflicts) {
+      rows[at] = { ...here, ...structuredClone(there) };
+      continue;
+    }
     const extra = structuredClone(value) as { id?: string };
-    extra.id = crypto.randomUUID();
-    rows.push(extra);
+    extra.id = conflictId(id, value);
+    if (!rows.some(row => messageId(row) === extra.id)) rows.push(extra);
+  }
+  // A replica may have authored a reply before it learned its parent was deleted.
+  // Propagate the tombstone after union, including chains arriving out of order.
+  const deleted = new Map(rows.map(row => [messageId(row), deletedAtOf(row)]));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index] as { id?: string; replyTo?: { id?: string }; deletedAt?: number } | null;
+      if (!row || typeof row !== "object") continue;
+      const parent = row.replyTo?.id ? deleted.get(row.replyTo.id) ?? 0 : 0;
+      if (parent > deletedAtOf(row)) {
+        rows[index] = { ...row, deletedAt: parent, pending: false };
+        deleted.set(messageId(row), parent);
+        changed = true;
+      }
+    }
   }
   return rows;
 }
