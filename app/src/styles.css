@@ -10267,7 +10267,8 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-app:not(.lc-mobile):not(.lc-app-agent-open) .lc-side {
-  transform: translateX(102%);
+  transform: translateY(-8px) scale(.98);
+  clip-path: inset(0 0 calc(100% - 28px) calc(100% - 44px) round 14px);
   visibility: hidden;
   border-left-color: transparent;
   box-shadow: none;
@@ -10275,12 +10276,17 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-app:not(.lc-mobile) .lc-side {
-  transform: translateX(0);
-  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), visibility 240ms;
+  transform: translateY(0) scale(1);
+  transform-origin: top right;
+  clip-path: inset(0 0 0 0 round 0px);
+  transition: clip-path 240ms cubic-bezier(0.22, 1, 0.36, 1), transform 240ms cubic-bezier(0.22, 1, 0.36, 1), visibility 240ms;
 }
 
 [data-ui-handedness="left"] .lc-app:not(.lc-mobile):not(.lc-app-agent-open) .lc-side {
-  transform: translateX(-102%);
+  clip-path: inset(0 calc(100% - 44px) calc(100% - 28px) 0 round 14px);
+}
+[data-ui-handedness="left"] .lc-app:not(.lc-mobile) .lc-side {
+  transform-origin: top left;
 }
 
 .lc-pane-arrow {
@@ -10304,8 +10310,7 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-app:not(.lc-mobile) .lc-side > .lc-agent-chat {
-  /* The shell width is what animates. This box stays 520px, so opening
-     does not reflow the transcript on every frame. */
+  /* Morph the clip, keeping transcript layout fixed throughout the motion. */
   contain: layout;
 }
 
@@ -15179,7 +15184,9 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile .lc-side,
 .lc-mobile.lc-app-problem .lc-side {
-  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), visibility 240ms;
+  transition: clip-path 240ms cubic-bezier(0.22, 1, 0.36, 1), transform 240ms cubic-bezier(0.22, 1, 0.36, 1), visibility 240ms;
+  clip-path: inset(calc(100% - 24px) 40% 0 40% round 12px);
+  transform-origin: bottom center;
   top: auto;
   left: 0;
   right: 0;
@@ -15204,6 +15211,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile.lc-app-agent-open .lc-side,
 .lc-mobile .lc-side-sheet-dragging {
+  clip-path: inset(0 0 0 0 round 12px 12px 0 0);
   bottom: var(--lc-keyboard-inset, 0px);
   /* Above board chrome (95–98). Those controls fade as the sheet opens but
      used to keep pointer-events, so a tap on the composer hit the toolbar

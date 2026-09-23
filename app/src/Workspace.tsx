@@ -2275,21 +2275,8 @@ export function Workspace({
   const pseudocodeRef = useRef(pseudocode);
   pseudocodeRef.current = pseudocode;
 
-  /**
-   * Coach open/close changes the canvas box (side panel or bottom sheet).
-   * Nudge Excalidraw + our fit so the board fills the freed space.
-   */
-  // Desktop whiteboard: coach docks beside the board — refit to the new hole.
-  // Pads + mobile: coach overlays; refitting would reflow the reading column
-  // into a thin strip the width of whatever is left beside the panel.
-  useEffect(() => {
-    if (!problem || mobile) return;
-    const timer = window.setTimeout(() => {
-      window.dispatchEvent(new Event("resize"));
-      boardRef.current?.refitToViewport();
-    }, 40);
-    return () => window.clearTimeout(timer);
-  }, [coachOpen, mobile, problem]);
+  // App owns panel geometry and announces one resize settle after motion.
+  // A second refit here bypassed the board's guard and reset PDF zoom mid-open.
 
   // Keep the dashed code frame tall enough for the Monaco solution.
   useEffect(() => {

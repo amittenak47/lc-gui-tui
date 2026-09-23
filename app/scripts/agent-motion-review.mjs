@@ -66,9 +66,9 @@ try {
   const click = async (label) => { await evaluate(`document.querySelector('[aria-label="${label}"]').click()`); await sleep(350); };
   const sizes = () => evaluate(`(()=>{const r=s=>document.querySelector(s).getBoundingClientRect();return {composer:r('.lc-agent-composer').height,input:r('textarea').height,messages:r('.lc-agent-messages-host').height,main:r('.lc-main').height,side:r('.lc-side').height,scroll:document.querySelector('.lc-agent-messages').scrollTop}})()`);
   const results=[];
-  for(const width of [1280,800]) {
+  for(const [width,documentType] of [[1280,"markdown"],[800,"markdown"],[1280,"pdf"]]) {
     await send("Emulation.setDeviceMetricsOverride",{width,height:900,deviceScaleFactor:1,mobile:false});
-    await send("Page.navigate",{url:"http://127.0.0.1:1452/scripts/agent-motion-review.html"});
+    await send("Page.navigate",{url:`http://127.0.0.1:1452/scripts/agent-motion-review.html${documentType==="pdf"?"?pdf":""}`});
     await waitFor('Boolean(window.reviewReady)');
     const mainBefore=await evaluate("document.querySelector('.lc-main').getBoundingClientRect().height");
     await evaluate('window.setReviewOpen(true)');await sleep(450);
@@ -96,14 +96,14 @@ try {
         const listener=()=>settled.push(performance.now()-start);
         addEventListener('lc-split-resize',listener);
         window.setReviewOpen(open);
-        await new Promise(resolve=>{const tick=()=>{frames.push({at:performance.now()-start,transform:getComputedStyle(document.querySelector('.lc-side')).transform});if(performance.now()-start<400)requestAnimationFrame(tick);else resolve()};requestAnimationFrame(tick)});
+        await new Promise(resolve=>{const tick=()=>{const style=getComputedStyle(document.querySelector('.lc-side'));frames.push({at:performance.now()-start,transform:style.transform,clip:style.clipPath});if(performance.now()-start<400)requestAnimationFrame(tick);else resolve()};requestAnimationFrame(tick)});
         removeEventListener('lc-split-resize',listener);
-        results.push({open,firstFrame:frames[0].at,maxFrameGap:Math.max(...frames.slice(1).map((f,i)=>f.at-frames[i].at)),settled,movingFrames:new Set(frames.map(f=>f.transform)).size});
+        results.push({open,firstFrame:frames[0].at,maxFrameGap:Math.max(...frames.slice(1).map((f,i)=>f.at-frames[i].at)),settled,movingFrames:new Set(frames.map(f=>f.clip)).size});
       }
       return results;
     })()`);
     if(width===1280)for(const sample of motion){assert(sample.settled.length===1 && sample.settled[0]>=240,JSON.stringify(sample));assert(sample.movingFrames>2,JSON.stringify(sample));}
-    await shot(`panel-${width}`);results.push({width,split,conversation,composer,restored,motion});
+    await shot(`panel-${width}-${documentType}`);results.push({width,documentType,split,conversation,composer,restored,motion});
   }
   await writeFile(resolve(out,'results.json'),JSON.stringify({results,errors},null,2));
   assert.equal(errors.length,0,JSON.stringify(errors));console.log(JSON.stringify(results));

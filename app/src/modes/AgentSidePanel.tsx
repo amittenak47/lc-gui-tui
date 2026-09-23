@@ -1110,9 +1110,16 @@ export function AgentSidePanel({
       setKeepPanel(true);
       return;
     }
-    // Keep mounted after the first open: reopening must not rebuild a long
-    // transcript before the panel can start moving. The closed shell is inert.
-  }, [open, mobile]);
+    // Prepare a saved transcript while idle, before the first click. Once
+    // prepared it stays mounted and inert while closed, retaining draft/scroll.
+    if (keepPanel) return;
+    if (typeof window.requestIdleCallback === "function") {
+      const idle = window.requestIdleCallback(() => setKeepPanel(true));
+      return () => window.cancelIdleCallback(idle);
+    }
+    const timer = window.setTimeout(() => setKeepPanel(true), 1000);
+    return () => window.clearTimeout(timer);
+  }, [open, mobile, keepPanel]);
   const longPressRef = useRef<{
     timer: ReturnType<typeof setTimeout> | null;
     armTimer: ReturnType<typeof setTimeout> | null;

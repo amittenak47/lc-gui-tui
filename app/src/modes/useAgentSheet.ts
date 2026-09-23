@@ -30,7 +30,7 @@ export function useAgentSheet(panel: RefObject<HTMLElement | null>, mobile: bool
     // Mounting the inactive panel on a tab switch otherwise forces layout of
     // the entire PDF before the new tab can paint.
     if (!open) {
-      node.style.transform = "translate3d(0,110%,0)";
+      node.style.transform = "translate3d(0,12px,0) scale(.98)";
       node.style.visibility = "hidden";
       node.style.pointerEvents = "none";
       document.documentElement.style.setProperty("--lc-agent-open", "0");
@@ -51,7 +51,7 @@ export function useAgentSheet(panel: RefObject<HTMLElement | null>, mobile: bool
       }
       node.style.bottom = "0px";
       node.style.maxHeight = `${available.current}px`;
-      node.style.transform = open ? "translate3d(0,0,0)" : "translate3d(0,110%,0)";
+      node.style.transform = "translate3d(0,0,0) scale(1)";
       node.style.visibility = open ? "visible" : "hidden";
       node.style.pointerEvents = open ? "auto" : "none";
       node.inert = !open;
