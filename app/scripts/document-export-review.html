@@ -1,0 +1,115 @@
+<!doctype html><html><head><meta charset="utf-8"/><title>Isolated document export checks</title></head>
+<body><div id="fixture" style="position:absolute;left:50px;top:25px;transform:scale(1.25);transform-origin:top left"></div>
+<script type="module">
+import { PDFDocument, PDFName, PDFArray, degrees } from 'pdf-lib';
+import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
+import { exportAnnotatedDocument } from '/src/util/documentExport.ts';
+import { snapshotDocumentExport } from '/src/util/documentExportSnapshot.ts';
+import { encodeInkOps } from '/src/canvas/inkCodec.ts';
+import { putInkPages, annotateDocKey } from '/src/util/inkPageStore.ts';
+import { anchorFromRange } from '/src/util/docAnchors.ts';
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
+import { createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { DocumentExportDialog } from '/src/modes/DocumentExportDialog.tsx';
+import '/src/styles.css';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+GlobalWorkerOptions.workerSrc=pdfWorker;
+const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+const root=document.querySelector('#fixture');
+const controller=new AbortController();
+const boardBlob={v:1,elements:[],appState:{scrollX:0,scrollY:0,zoom:1.25}};
+const draw=(x,y,more={})=>({kind:'draw',color:'#ff0000',baseWidth:5,points:[{x,y,pressure:.5},{x:x+60,y:y+20,pressure:.5}],...more});
+function board(pages) {return {
+  getDocumentExportRoot:()=>root,sceneToClient:(x,y)=>({x:50+x*1.25,y:25+y*1.25}),
+  saveBoard:()=>({...boardBlob,inkPages:{v:1,pageIds:[...pages.keys()]}}),snapshotInkPages:()=>pages,getInkRevision:()=>1,isInking:()=>false,
+};}
+function mark(body,id,scope) {
+  const range=document.createRange();const text=body.querySelector('p').firstChild;range.setStart(text,0);range.setEnd(text,5);
+  return {id,kind:'note',createdAt:1,anchor:anchorFromRange(body,range,scope),excerpt:'First',notes:[{id:'note',text:'A full footnote — 中文',createdAt:1,updatedAt:1}]};
+}
+const options={ink:true,footnotes:true,threads:false};
+window.runExports=async()=>{
+  const checks=[];
+  root.innerHTML='<div class="lc-md-ink-doc" style="width:400px;height:600px"><p>First paragraph.</p><p>Second paragraph.</p></div>';
+  const mdBody=root.firstElementChild;
+  const note=mark(mdBody,'md-note');
+  const pages=new Map([[1,encodeInkOps([draw(20,45),draw(40,90,{hostKey:0,scrollLeftAtDraw:700,scrollTopAtDraw:0})])]]);
+  const snap=await snapshotDocumentExport(board(pages),{name:'notes.md',text:'# Notes\n\nFirst paragraph.\n\nSecond paragraph.',hash:'md',docType:'markdown'},'export-review', [note],[]);
+  const output=await exportAnnotatedDocument(snap,'export-review',options,()=>{},controller.signal);
+  const zip=unzipSync(new Uint8Array(await output.blob.arrayBuffer()));
+  const md=strFromU8(zip['notes.md']);
+  assert(md.includes('# Notes') && md.includes('A full footnote — 中文'),'Markdown text or footnote lost');
+  assert(md.includes('[^lc-note-1]'),'Markdown footnote reference missing');
+  const pngs=Object.entries(zip).filter(([name])=>name.endsWith('.png'));
+  assert(pngs.length===2,'Normal or hidden scroll-host ink is missing');
+  for(const [name,bytes] of pngs){const bitmap=await createImageBitmap(new Blob([bytes]));assert(bitmap.width>20 && bitmap.height>5,`Empty ink image ${name}`);bitmap.close();}
+  checks.push('Markdown keeps source, Unicode footnote, normal ink and hidden code-box ink');
+
+  const chapter='<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter</title></head><body><p>First paragraph.</p><p>Second paragraph.</p></body></html>';
+  const epub=zipSync({mimetype:[strToU8('application/epub+zip'),{level:0}],
+    'META-INF/container.xml':strToU8('<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>'),
+    'OPS/book.opf':strToU8('<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="c" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>'),
+    'OPS/chapter.xhtml':strToU8(chapter)});
+  root.innerHTML='<section data-doc-scope="OPS/chapter.xhtml" style="width:400px;height:600px"><p>First paragraph.</p><p>Second paragraph.</p></section>';
+  const en=mark(root.firstElementChild,'epub-note','OPS/chapter.xhtml');
+  const es=await snapshotDocumentExport(board(new Map([[1,encodeInkOps([draw(20,45)])]])),{name:'book.epub',text:'',hash:'epub',docType:'epub',bytes:epub.buffer},'export-review',[en],[]);
+  const eo=await exportAnnotatedDocument(es,'export-review',options,()=>{},controller.signal);
+  const eb=new Uint8Array(await eo.blob.arrayBuffer()),ef=unzipSync(eb);
+  assert(strFromU8(eb.slice(30,38))==='mimetype' && eb[8]===0 && eb[9]===0,'EPUB mimetype must be first and uncompressed');
+  const chapterDoc=new DOMParser().parseFromString(strFromU8(ef['OPS/chapter.xhtml']),'application/xhtml+xml');
+  assert(!chapterDoc.querySelector('parsererror'),'Exported chapter is invalid XML');
+  assert(chapterDoc.querySelector('p a')?.previousSibling?.textContent==='First','Footnote anchor moved after inserting ink');
+  const manifest=new DOMParser().parseFromString(strFromU8(ef['OPS/book.opf']),'application/xml');
+  assert(manifest.querySelectorAll('manifest item').length===2,'EPUB image not registered');
+  assert(chapterDoc.querySelector('aside').textContent.includes('中文'),'EPUB Unicode note missing');
+  assert(chapterDoc.querySelector('img').getAttribute('src').startsWith('../lc-annotations-'),'EPUB image path is wrong');
+  checks.push('EPUB reopens with registered images, original text and correctly anchored footnotes');
+
+  const pdf=await PDFDocument.create();
+  const p1=pdf.addPage([500,500]);p1.setCropBox(25,30,300,400);p1.setRotation(degrees(90));p1.drawText('Original selectable text',{x:60,y:120,size:16});
+  pdf.addPage([400,300]).drawText('Page two',{x:30,y:150});
+  const source=await pdf.save();
+  root.innerHTML='<div data-doc-scope="p1" data-pdf-page="1" style="width:400px;height:300px"></div><div data-doc-scope="p2" data-pdf-page="2" style="width:400px;height:300px"></div>';
+  const pn={id:'pdf-note',kind:'note',createdAt:1,anchor:{kind:'text',scope:'p2',start:0,end:4,exact:'Page'},excerpt:'Page',bands:[{left:20,top:340,width:80,height:18}],notes:note.notes};
+  const ps=await snapshotDocumentExport(board(new Map([[1,encodeInkOps([draw(40,50)])],[2,encodeInkOps([draw(50,360)])]])),{name:'book.pdf',text:'',hash:'pdf',docType:'pdf',bytes:source.buffer},'export-review',[pn],[]);
+  assert(ps.marks[0].rects[0].minY===340,'Unrendered PDF footnote bands are misplaced');
+  const po=await exportAnnotatedDocument(ps,'export-review',options,()=>{},controller.signal);
+  const bytes=new Uint8Array(await po.blob.arrayBuffer());window.exportReviewPdf=Array.from(bytes);
+  const reopened=await PDFDocument.load(bytes);
+  assert(reopened.getPageCount()===3,'PDF lost pages or footnote appendix');
+  assert(reopened.getPage(1).node.lookup(PDFName.of('Annots'),PDFArray).size()===1,'PDF comment missing on unrendered page');
+  const loading=getDocument({data:bytes.slice()});const reader=await loading.promise;
+  const text=await (await reader.getPage(1)).getTextContent();assert(text.items.some(item=>item.str.includes('Original selectable text')),'PDF text is no longer selectable');
+  for(let number=1;number<=2;number++) {
+    const page=await reader.getPage(number),viewport=page.getViewport({scale:1});
+    const canvas=document.createElement('canvas');canvas.width=viewport.width;canvas.height=viewport.height;
+    await page.render({canvas,viewport}).promise;
+    const ctx=canvas.getContext('2d');const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+    let red=0;for(let i=0;i<pixels.length;i+=4)if(pixels[i]>180 && pixels[i+1]<100 && pixels[i+2]<100)red++;
+    assert(red>40,`PDF page ${number} lost its handwriting`);
+    const expected=number===1?[60,57]:[70,67];let nearby=0;
+    for(let y=expected[1]-6;y<=expected[1]+6;y++)for(let x=expected[0]-6;x<=expected[0]+6;x++){const i=(y*canvas.width+x)*4;if(pixels[i]>180 && pixels[i+1]<100 && pixels[i+2]<100)nearby++;}
+    assert(nearby>15,`PDF page ${number} handwriting is shifted`);
+    canvas.style.cssText=`position:absolute;left:600px;top:${(number-1)*310}px;border:1px solid #ddd`;document.body.append(canvas);
+  }
+  await loading.destroy();checks.push('PDF retains selectable text, rotated crop alignment, unread-page ink and footnote appendix');
+
+  // An absent manifest page must fail, never produce a misleading ink-less copy.
+  const missing=board(new Map());missing.saveBoard=()=>({...boardBlob,inkPages:{v:1,pageIds:[19]}});
+  const ms=await snapshotDocumentExport(missing,{name:'missing.md',text:'Text',hash:'missing',docType:'markdown'},'missing-export-review',[],[]);
+  let failed=false;try{await exportAnnotatedDocument(ms,'missing-export-review',options,()=>{},controller.signal);}catch{failed=true;}
+  assert(failed,'Missing handwriting was silently exported');
+  await putInkPages(annotateDocKey('export-review-cold'),new Map([[2,encodeInkOps([draw(10,350)])]]));
+  const cold=board(new Map());cold.saveBoard=()=>({...boardBlob,inkPages:{v:1,pageIds:[2]}});
+  const cs=await snapshotDocumentExport(cold,{name:'cold.md',text:'Text',hash:'cold',docType:'markdown'},'export-review-cold',[],[]);
+  assert((await cs.readInk(2)).length===1,'Unloaded IndexedDB handwriting was omitted');
+  checks.push('Cold IndexedDB ink loads; missing manifest ink stops export');
+  return checks;
+};
+window.showExportDialog=()=>{
+  document.documentElement.style.setProperty('--bg','#ffffff');document.documentElement.style.setProperty('--ink','#202020');
+  const host=document.createElement('div');document.body.append(host);
+  createRoot(host).render(createElement(DocumentExportDialog,{name:'Kleinberg — Algorithm Design.pdf',docType:'pdf',onClose:()=>{},onExport:async()=>{throw new Error('Review only');}}));
+};
+</script></body></html>

@@ -66,6 +66,8 @@ afterEach(() => {
 });
 
 function mount(props: {
+  allowSave?: boolean;
+  snapshotKey?: string;
   onDelete?: (id: string) => void | Promise<void>;
   kind?: "document" | "web";
   onRestoreTrash?: (id: string) => void | Promise<void>;
@@ -92,6 +94,12 @@ function fill(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   setter?.call(input, value);
   input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+async function click(label: string, host: HTMLElement) {
+  const button=Array.from(host.querySelectorAll("button")).find(node=>node.textContent?.startsWith(label));
+  expect(button, `missing button ${label}`).toBeTruthy();
+  await act(async()=>button!.click());
 }
 
 async function hold(label: string, host: HTMLElement) {
@@ -121,6 +129,18 @@ async function tap(label: string, host: HTMLElement) {
 }
 
 describe("AnnotateDialog", () => {
+  it("keeps exports distinct from backups and filters annotation sets to this file", async () => {
+    live.rows.push({id:"d2",name:"note.md",hash:"h1",docType:"markdown",updatedAt:2,label:"Second set"});
+    live.rows.push({id:"other",name:"other.pdf",hash:"other",docType:"pdf",updatedAt:3});
+    const view=mount({allowSave:true,snapshotKey:"d1"});
+    expect(view.host.textContent).not.toContain("Import annotation backup");
+    await click("Export",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-document");
+    await click("Annotation sets",view.host);
+    expect(view.host.textContent).toContain("Second set");expect(view.host.textContent).not.toContain("other.pdf");
+    await click("Back",view.host);await click("More",view.host);await click("Annotation backup",view.host);
+    expect(view.onChoose).toHaveBeenLastCalledWith("export");
+    view.unmount();
+  });
   it("closes confirmation and updates live/Trash as soon as local deletion commits", async () => {
     let finish!: () => void;
     const syncing = new Promise<void>((resolve) => { finish = resolve; });
@@ -132,7 +152,8 @@ describe("AnnotateDialog", () => {
       await syncing;
     });
     const view = mount({ onDelete });
-    await hold("Recent", view.host);
+    await click("Open / Recent", view.host);
+    await click("Recent documents", view.host);
     const remove = view.host.querySelector<HTMLButtonElement>(".lc-scratch-load-trash")!;
     expect(remove).toBeTruthy();
     await act(async () => {
@@ -152,7 +173,8 @@ describe("AnnotateDialog", () => {
 
   it("keeps web pads out of the document Recent list", async () => {
     const view = mount({ kind: "document" });
-    await hold("Recent", view.host);
+    await click("Open / Recent", view.host);
+    await click("Recent documents", view.host);
     expect(view.host.textContent).toContain("note.md");
     expect(view.host.textContent).not.toContain("Example");
     expect(view.host.textContent).not.toContain("https://example.com/");
@@ -161,7 +183,8 @@ describe("AnnotateDialog", () => {
 
   it("lists only web pads in the Pages Recent list", async () => {
     const view = mount({ kind: "web" });
-    await hold("Recent", view.host);
+    await click("Open / Recent", view.host);
+    await click("Recent documents", view.host);
     expect(view.host.textContent).toContain("Example");
     expect(view.host.textContent).not.toContain("note.md");
     view.unmount();
@@ -181,7 +204,8 @@ describe("AnnotateDialog", () => {
       }
     });
     const view = mount({ kind: "document", onRestoreTrash });
-    await hold("Recent", view.host);
+    await click("Open / Recent", view.host);
+    await click("Recent documents", view.host);
     expect(view.host.textContent).toContain("Restore · note.md");
     await hold("Restore note.md", view.host);
     expect(onRestoreTrash).toHaveBeenCalledWith("d1");
@@ -195,7 +219,8 @@ describe("AnnotateDialog", () => {
       live.rows = live.rows.map((row) => (row.id === id ? { ...row, label: title } : row));
     });
     const view = mount({ kind: "document", onRename });
-    await hold("Recent", view.host);
+    await click("Open / Recent", view.host);
+    await click("Recent documents", view.host);
     await tap("Open note.md", view.host);
     await tap("Open note.md", view.host);
     const input = view.host.querySelector<HTMLInputElement>(".lc-md-new-title input");

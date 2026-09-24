@@ -226,6 +226,7 @@ import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocu
 import { PdfPageRail } from "./modes/PdfPageRail";
 import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, clearPdfFilmScope, publishPdfFilmCurrent, peekPdfFilmCurrent, peekPdfReadingFrames, pdfSpreadSlotCountChanged, resetPdfFilmPredicted, publishPdfLayoutBusy, subscribePdfLayoutBusy } from "./modes/pdfFilm";
 import { AnnotateDialog, type AnnotateDialogKind } from "./modes/AnnotateDialog";
+import { DocumentExportDialog } from "./modes/DocumentExportDialog";
 import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
 import { AnnotateDocument } from "./modes/AnnotateDocument";
 import { AnnotateMarkdownEditor, isFreshOwnedNote, type AnnotateMarkdownEditorHandle } from "./modes/AnnotateMarkdownEditor";
@@ -908,6 +909,7 @@ export function Workspace({
    */
   const [linkMode, setLinkMode] = useState(false);
   const [annotateEntryOpen, setAnnotateEntryOpen] = useState(false);
+  const [documentExportOpen, setDocumentExportOpen] = useState(false);
   /*
    * Which library the entry dialog is about.
    *
@@ -11370,6 +11372,22 @@ export function Workspace({
         />
       )}
 
+      {documentExportOpen && annotateSource && annotateDocId && (
+        <DocumentExportDialog name={annotateSource.name} docType={annotateSource.docType}
+          onClose={() => setDocumentExportOpen(false)}
+          onExport={async (options, progress, signal) => {
+            const id = annotateDocId;
+            const source = annotateSource;
+            const board = boardRef.current;
+            if (!board || boardPreparing) throw new Error("Wait for the document to finish opening.");
+            const { snapshotDocumentExport } = await import("./util/documentExportSnapshot");
+            const { exportAnnotatedDocument } = await import("./util/documentExport");
+            if (annotateDocIdRef.current !== id) throw new Error("The open document changed. Reopen Export and try again.");
+            const snapshot = await snapshotDocumentExport(board, source, id, annotateFootnotesRef.current, agentMessagesRef.current);
+            signal.throwIfAborted();
+            return exportAnnotatedDocument(snapshot, id, options, progress, signal);
+          }} />
+      )}
       {annotateEntryOpen && (
         <AnnotateDialog
           mode="entry"
@@ -11391,6 +11409,11 @@ export function Workspace({
               void saveAnnotateSession(docId?.trim() ? { label: docId.trim() } : undefined).then((saved) => {
                 if (saved) setNotice(`Annotations saved for “${annotateDocLabel(saved)}”.`);
               });
+              return;
+            }
+            if (choice === "export-document") {
+              setAnnotateEntryOpen(false);
+              setDocumentExportOpen(true);
               return;
             }
             if (choice === "export") {

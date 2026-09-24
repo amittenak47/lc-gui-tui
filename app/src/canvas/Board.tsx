@@ -9127,6 +9127,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
         return thumbs;
       },
+      getDocumentExportRoot: () => contentSlotNodeRef.current,
       captureDocumentView: () => {
         const state = apiRef.current?.getAppState() as { width?: number; height?: number } | undefined;
         const cam = readScrollRef.current();

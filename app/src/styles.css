@@ -20795,6 +20795,16 @@ button.lc-row-selected:hover:not(:disabled) {
   color: color-mix(in srgb, var(--lc-thought-accent, var(--muted-ink, var(--muted))) 72%, var(--ink));
 }
 
+.lc-document-menu { display: grid; gap: 6px; }
+.lc-document-export-options { display: grid; gap: 14px; margin: 20px 0; }
+.lc-document-export-options label { display: flex; align-items: center; gap: 8px; }
+.lc-document-export .lc-settings-head p { overflow-wrap: anywhere; }
+.lc-document-menu > button { display: grid; gap: 3px; text-align: left; padding: 10px 12px; border: 0; border-radius: 8px; color: var(--ink); background: transparent; font: inherit; cursor: pointer; }
+.lc-document-menu > button:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.lc-document-menu > button:focus-visible { outline: 2px solid var(--accent); }
+.lc-document-menu > button:disabled { opacity: .45; cursor: default; }
+.lc-document-menu > button > span { font-size: 12px; color: var(--muted-ink, var(--muted)); }
+.lc-document-menu > .lc-document-menu-save { justify-self: end; font-size: 12px; color: var(--accent); }
 .lc-agent-answer-with-action {
   white-space: normal;
   line-height: 1.7;

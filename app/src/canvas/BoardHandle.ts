@@ -241,6 +241,8 @@ export interface BoardHandle {
    * when they asked. Null when there is no camera to read.
    */
   captureDocumentView(): import("../modes/documentView").DocumentViewSnapshot;
+  /** The laid-out document slot, used to snapshot export geometry without moving the camera. */
+  getDocumentExportRoot(): HTMLElement | null;
   exportSelectionCapture(bounds: { left: number; top: number; width: number; height: number }): Promise<Blob>;
   exportViewThumb(): Promise<{ label: string; png: string } | null>;
   /**
