@@ -56,6 +56,14 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("transactional parent attachment preservation", () => {
+  it("removes tombstoned thread links on inactive documents and rejects their resurrection by a stale save", async () => {
+    const note = {id:"mark",threads:[{rootId:"q"},{rootId:"unloaded"}],threadRootId:"q",bands:[{left:91}],future:{kept:true}};
+    state.db.set("a1",{board,footnotes:[note],agent:[{id:"q"}]});
+    await putParentContent(parent,{artifacts:undefined,agent:[{id:"q",deletedAt:12}]},{agentOnly:true});
+    expect(state.db.get("a1").footnotes[0]).toEqual({...note,threads:[{rootId:"unloaded"}],threadRootId:"unloaded"});
+    await putParentContent(parent,{artifacts:undefined,board,footnotes:[note],agent:[{id:"q"}]});
+    expect(state.db.get("a1").footnotes[0]).toEqual({...note,threads:[{rootId:"unloaded"}],threadRootId:"unloaded"});
+  });
   it("keeps sync tombstones through a stale local save and merges acknowledgements without replacing newer ink", async () => {
     state.db.set("a1", { board, source: "newer source", agent: [{ id: "q", content: "question", deletedAt: 8 }] });
     await putParentContent(parent, { artifacts: undefined, agent: [{ id: "q", content: "question" }, { id: "remote" }] }, { agentOnly: true });

@@ -32,6 +32,8 @@
 import { run, withStore, STORE_CONTENT } from "./idb";
 import { setStorageItem } from "./storageQuota";
 import { mergeAgentMessages } from "../modes/coachSessions";
+import { pruneDeletedThreadLinks } from "./threadLinks";
+import type { DocFootnote } from "./docFootnotes";
 import { artifactCatalogFields, type ArtifactCatalog, type ArtifactParent } from "./padArtifacts";
 import { ArtifactEditConflict, editArtifactCatalog, requireArtifactCatalogTransition, type ArtifactCatalogEdit } from "./artifactCatalogEdits";
 
@@ -227,8 +229,10 @@ export async function putParentContent<T extends { artifacts?: ArtifactCatalog }
     if (opts.agentOnly) {
       if (!previous) throw new Error("The chat's parent was closed or removed during sync.");
       const prior = previous as Record<string, unknown>, incoming = content as Record<string, unknown>;
-      return { ...previous, agent: mergeAgentMessages(Array.isArray(prior.agent) ? prior.agent : [],
-        Array.isArray(incoming.agent) ? incoming.agent : []) };
+      const agent = mergeAgentMessages(Array.isArray(prior.agent) ? prior.agent : [],
+        Array.isArray(incoming.agent) ? incoming.agent : []);
+      return { ...previous, agent, ...(Array.isArray(prior.footnotes)
+        ? {footnotes: pruneDeletedThreadLinks(prior.footnotes as DocFootnote[], agent)} : {}) };
     }
     if (guarded && (previous?.artifacts?.revision ?? null) !== opts.expectedCatalogRevision) throw new ArtifactEditConflict();
     if (!guarded && !opts.allowCatalogReplacement && content.artifacts && previous?.artifacts &&
@@ -253,6 +257,10 @@ export async function putParentContent<T extends { artifacts?: ArtifactCatalog }
     const nextRows = (result as Record<string, unknown>).agent;
     if (!opts.catalogOnly && Array.isArray(oldRows)) {
       (result as Record<string, unknown>).agent = mergeAgentMessages(oldRows, Array.isArray(nextRows) ? nextRows : [], false);
+    }
+    const record = result as Record<string, unknown>;
+    if (Array.isArray(record.footnotes) && Array.isArray(record.agent)) {
+      record.footnotes = pruneDeletedThreadLinks(record.footnotes as DocFootnote[], record.agent);
     }
     return result;
   };

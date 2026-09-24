@@ -43,9 +43,39 @@ pub fn update(stored: &Value, incoming: &Value) -> Value {
     Value::Array(rows)
 }
 
+/// Keep annotation references consistent even when the deleting replica did
+/// not have the document open. Unloaded/missing messages are not deletions.
+pub fn prune_footnote_links(footnotes: &Value, messages: &Value) -> Value {
+    let deleted_ids: std::collections::HashSet<&str> = messages.as_array().into_iter().flatten()
+        .filter(|row| deleted(row) > 0).filter_map(id).collect();
+    let mut result = footnotes.clone();
+    for note in result.as_array_mut().into_iter().flatten() {
+        if let Some(threads) = note.get_mut("threads").and_then(Value::as_array_mut) {
+            threads.retain(|link| !link.get("rootId").and_then(Value::as_str).is_some_and(|root| deleted_ids.contains(root)));
+        }
+        if note.get("threadRootId").and_then(Value::as_str).is_some_and(|root| deleted_ids.contains(root)) {
+            let replacement = note.pointer("/threads/0/rootId").cloned();
+            if let Some(fields) = note.as_object_mut() {
+                fields.remove("threadRootId");
+                if let Some(root) = replacement { fields.insert("threadRootId".into(), root); }
+            }
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deleted_thread_links_prune_without_losing_annotation_fields() {
+        let notes = json!([{"threads":[{"rootId":"q"},{"rootId":"unloaded"}],"threadRootId":"q","bands":[{"left":91}],"future":{"v":2}}]);
+        let result = prune_footnote_links(&notes, &json!([{"id":"q","deletedAt":12}]));
+        assert_eq!(result[0]["threads"],json!([{"rootId":"unloaded"}]));
+        assert_eq!(result[0]["threadRootId"],"unloaded");
+        assert_eq!(result[0]["bands"],notes[0]["bands"]);
+        assert_eq!(result[0]["future"],notes[0]["future"]);
+    }
     #[test]
     fn stale_updates_cannot_resurrect_deleted_turns_or_offline_replies() {
         let old = json!([{"id":"q","deletedAt":30,"sessionId":"session-q","future":{"v":2}}]);

@@ -111,6 +111,7 @@ import { applyHubProblem } from "./util/padSync";
 import { artifactCreationAssociations, artifactRefKey, type ArtifactParent, type ArtifactRef, type ArtifactAssociation } from "./util/padArtifacts";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { groupThreads, threadAnchorRef, visibleThreadMessages, sendConversationContext, conversationMessages, conversationMarkdown, messageThreadRoot } from "./modes/coachThreads";
+import { pruneDeletedThreadLinks } from "./util/threadLinks";
 import {
   loadAgentReasoningLevel,
   loadTestForwardMode,
@@ -2186,18 +2187,7 @@ export function Workspace({
     if (next !== agentMessages) setAgentMessages(next);
   }, [agentMessages]);
   useEffect(() => {
-    const deleted = new Set(agentMessages.filter(message => message.deletedAt).map(message => message.id));
-    if (!deleted.size) return;
-    setAnnotateFootnotes(current => {
-      let changed = false;
-      const next = current.map(note => {
-        if (!note.threads?.some(thread => deleted.has(thread.rootId)) && !(note.threadRootId && deleted.has(note.threadRootId))) return note;
-        changed = true;
-        const threads = note.threads?.filter(thread => !deleted.has(thread.rootId));
-        return {...note,threads,threadRootId: note.threadRootId && deleted.has(note.threadRootId) ? threads?.[0]?.rootId : note.threadRootId};
-      });
-      return changed ? next : current;
-    });
+    setAnnotateFootnotes(current => pruneDeletedThreadLinks(current, agentMessages));
   }, [agentMessages]);
   /** Bumped on interrupt/merge so late HTTP/WS results are ignored. */
   const coachRunGenRef = useRef(0);

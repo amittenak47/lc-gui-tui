@@ -796,6 +796,9 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
         clear_gone(conn, PadKind::Annotate, &pad.id)?;
     }
 
+    let agent = crate::agent_transcript::update(&existing.as_ref().map(|row| row.agent.clone()).unwrap_or_default(), &pad.agent);
+    let footnotes = crate::agent_transcript::prune_footnote_links(&pad.footnotes, &agent);
+
     conn.execute(
         "INSERT INTO annotate (id, name, hash, doc_type, updated_at, deleted_at, source_text,
                                footnotes_json, board_json, agent_json, sync_seq, footnote_boards_json, label, artifacts_json)
@@ -821,9 +824,9 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
             pad.doc_type,
             pad.updated_at,
             pad.source,
-            json_text(&pad.footnotes),
+            json_text(&footnotes),
             json_text(&pad.board),
-            json_text(&crate::agent_transcript::update(&existing.as_ref().map(|row| row.agent.clone()).unwrap_or_default(), &pad.agent)),
+            json_text(&agent),
             next_seq,
             json_text(&pad.footnote_boards),
             pad.label.trim(),
