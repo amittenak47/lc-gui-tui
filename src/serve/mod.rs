@@ -117,7 +117,12 @@ pub async fn dispatch(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let body = axum::body::to_bytes(response.into_body(), MAX_BODY_BYTES)
+    let response_limit = if content_type == "application/octet-stream" {
+        crate::pads::MAX_BLOB_BYTES
+    } else {
+        MAX_BODY_BYTES
+    };
+    let body = axum::body::to_bytes(response.into_body(), response_limit)
         .await
         .context("cannot read the in-process response body")?;
     Ok((status, body.to_vec(), content_type))
@@ -162,7 +167,7 @@ pub fn router(state: Shared) -> Router {
         )
         .route(
             "/docs/:hash/bytes",
-            get(routes::get_doc_bytes).put(routes::put_doc_bytes),
+            get(routes::get_doc_bytes).head(routes::head_doc_bytes).put(routes::put_doc_bytes),
         )
         .route("/pads/whiteboard", get(routes::list_whiteboard))
         .route("/pads/whiteboard/archive", get(routes::archive_whiteboard))
@@ -246,8 +251,8 @@ pub fn router(state: Shared) -> Router {
 /// a stray upload cannot exhaust memory.
 ///
 /// Mirrored by `HUB_MAX_BODY_BYTES` in `app/src/util/padHub.ts`, so the client
-/// refuses a document it could never upload instead of finding out on the wire
-/// and then queueing it to fail again. Change both together.
+/// bounds buffered JSON uploads. Document bytes use a separate streaming
+/// handler and `pads::MAX_BLOB_BYTES` instead. Change both JSON limits together.
 pub const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 async fn health(State(state): State<Shared>) -> Json<serde_json::Value> {

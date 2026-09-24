@@ -17,9 +17,9 @@ use crate::config::config_dir;
 mod artifacts;
 pub mod artifact_assets;
 
-/// Same cap as `serve::MAX_BODY_BYTES` — kept here so this module does not
-/// import the HTTP layer.
-const MAX_BLOB_BYTES: usize = 32 * 1024 * 1024;
+/// Document files stream separately from buffered JSON sync requests.
+/// Mirrored by HUB_MAX_DOCUMENT_BYTES in the client.
+pub const MAX_BLOB_BYTES: usize = 512 * 1024 * 1024;
 
 pub const WHITEBOARD_LIVE_CAP: usize = 50;
 pub const ANNOTATE_LIVE_CAP: usize = 30;

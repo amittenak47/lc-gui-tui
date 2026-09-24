@@ -1,8 +1,7 @@
 //! Pad library, snapshots, document bytes, and per-device prefs.
 
-use axum::body::Bytes;
 use axum::extract::Path as UrlPath;
-use axum::http::{header, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use axum::extract::Query;
@@ -13,7 +12,6 @@ use crate::pads::{
     self, AnnotatePad, ApplyAck, DevicePrefs, GoneRow, PadKind, ProblemPad, PutOutcome, SnapshotRow,
     WhiteboardPad,
 };
-use crate::serve::MAX_BODY_BYTES;
 
 pub async fn put_artifact_asset(
     Json(asset): Json<pads::artifact_assets::ArtifactAsset>,
@@ -447,43 +445,6 @@ pub async fn get_snapshots(
     })
     .await?;
     Ok(Json(rows))
-}
-
-pub async fn put_doc_bytes(
-    UrlPath(hash): UrlPath<String>,
-    body: Bytes,
-) -> Result<StatusCode, AppError> {
-    if body.len() > MAX_BODY_BYTES {
-        return Err(AppError::status(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            anyhow::anyhow!("document exceeds {MAX_BODY_BYTES} bytes"),
-        ));
-    }
-    let bytes = body.to_vec();
-    blocking(move || {
-        let dir = pads::blobs_dir()?;
-        pads::put_blob(&dir, &hash, &bytes)
-    })
-    .await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn get_doc_bytes(UrlPath(hash): UrlPath<String>) -> Result<Response, AppError> {
-    let bytes = blocking(move || {
-        let dir = pads::blobs_dir()?;
-        pads::get_blob(&dir, &hash)
-    })
-    .await?;
-    match bytes {
-        Some(bytes) => Ok((
-            [(header::CONTENT_TYPE, "application/octet-stream")],
-            bytes,
-        )
-            .into_response()),
-        None => Err(AppError::not_found(anyhow::anyhow!(
-            "no bytes stored for this document (the text index may still exist)"
-        ))),
-    }
 }
 
 pub async fn list_devices() -> Result<Json<Vec<DevicePrefs>>, AppError> {

@@ -45,6 +45,7 @@ import {
 import { run, STORE_SYNC_QUEUE } from "./idb";
 import {
   HUB_MAX_BODY_BYTES,
+  HUB_MAX_DOCUMENT_BYTES,
   loadPadHub,
   loadPadSyncSince,
   savePadSyncSince,
@@ -820,16 +821,16 @@ export async function pushDocBytes(client: LcClient, hash: string, bytes: ArrayB
   /*
    * Refused here, not on the wire.
    *
-   * The hub caps a request body at {@link HUB_MAX_BODY_BYTES} and the picker
+   * The hub caps document files at {@link HUB_MAX_DOCUMENT_BYTES} and the picker
    * has no matching limit, so a large enough document could never upload — and
    * every attempt queued another full copy of it to retry with, forever. Say
    * so once instead. The document is still open and still local; it is the
    * hub copy that is not happening.
    */
-  if (loadPadHub() && bytes.byteLength > HUB_MAX_BODY_BYTES) {
+  if (loadPadHub() && bytes.byteLength > HUB_MAX_DOCUMENT_BYTES) {
     throw new Error(
-      `this file is ${Math.round(bytes.byteLength / (1024 * 1024))} MB, and the hub ` +
-        `takes at most ${Math.round(HUB_MAX_BODY_BYTES / (1024 * 1024))} MB — ` +
+      `this file is ${Math.round(bytes.byteLength / (1024 * 1024))} MiB, and the hub ` +
+        `takes at most ${Math.round(HUB_MAX_DOCUMENT_BYTES / (1024 * 1024))} MiB — ` +
         `it stays on this device`,
     );
   }

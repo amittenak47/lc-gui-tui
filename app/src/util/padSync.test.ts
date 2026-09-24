@@ -715,7 +715,7 @@ describe("live PUT coalesce and 24h compact", () => {
       token: "t",
     });
     const client = fakeClient();
-    const tooBig = new ArrayBuffer(padHub.HUB_MAX_BODY_BYTES + 1);
+    const tooBig = { byteLength: padHub.HUB_MAX_DOCUMENT_BYTES + 1 } as ArrayBuffer;
 
     await expect(pushDocBytes(client, "big:1", tooBig)).rejects.toThrow(/at most/);
     expect(peekPadSyncQueueForTests().filter((job) => job.op === "putBytes")).toHaveLength(0);

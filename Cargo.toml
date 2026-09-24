@@ -35,7 +35,7 @@ comfy-table = "7"
 rand = "0.8"
 walkdir = "2"
 axum = { version = "0.7", features = ["ws", "macros"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal", "fs", "io-util"] }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors"] }
 futures-util = "0.3"
@@ -47,6 +47,7 @@ base64 = "0.22"
 malachite-bigint = { version = "=0.9.2", optional = true }
 rustpython = { version = "0.5.0", optional = true, default-features = false, features = ["stdlib", "freeze-stdlib", "importlib", "stdio", "host_env", "threading"] }
 pdf-extract = "0.12.0"
+tempfile = "3.27.0"
 
 [profile.release]
 lto = true
@@ -58,9 +59,6 @@ strip = true
 arboard = "3"
 ratatui = "0.29"
 crossterm = "0.28"
-
-[dev-dependencies]
-tempfile = "3.27.0"
 
 # rustpython-vm enables libffi `system` on Android. Upstream forwards that to
 # libffi-sys, which then links the NDK's missing -lffi. This patch no-ops

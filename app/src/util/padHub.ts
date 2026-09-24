@@ -20,16 +20,16 @@ export interface PadHub {
 }
 
 /**
- * The largest request body the hub will accept.
+ * The largest buffered JSON request body the hub will accept.
  *
  * Must match `MAX_BODY_BYTES` in `src/serve/mod.rs`; the hub sets the same
  * number as an axum `DefaultBodyLimit` and rejects anything past it. Known
- * here so a document that can never be uploaded is refused where it is picked
- * up, rather than failing on the wire and then being queued to fail again.
- *
- * Only the hub is capped. A larger PDF still opens locally.
+ * here so oversized pad metadata is not repeatedly queued for upload.
  */
 export const HUB_MAX_BODY_BYTES = 32 * 1024 * 1024;
+
+/** Streamed document files have their own cap; matches pads::MAX_BLOB_BYTES. */
+export const HUB_MAX_DOCUMENT_BYTES = 512 * 1024 * 1024;
 
 /**
  * A hub address with no scheme is a relative URL, not a host.

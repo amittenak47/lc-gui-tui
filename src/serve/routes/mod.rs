@@ -10,6 +10,7 @@ mod attempt;
 mod config;
 mod corpus;
 mod docs;
+mod doc_bytes;
 mod pads;
 mod practice;
 mod workspace;
@@ -31,13 +32,14 @@ pub use docs::{
     list_chunk_digests as list_doc_chunk_digests, put_chunks as put_doc_chunks,
     put_index as put_docs_index, retrieve as retrieve_docs, retrieve_library as retrieve_library_docs,
 };
+pub use doc_bytes::{get_doc_bytes, head_doc_bytes, put_doc_bytes};
 pub use pads::{
     get_artifact_asset, put_artifact_asset,
-    archive_annotate, archive_whiteboard, clone_device_prefs, get_device_prefs, get_doc_bytes,
+    archive_annotate, archive_whiteboard, clone_device_prefs, get_device_prefs,
     get_ink_page, get_ink_pages, put_edges, put_ink_page, tombstone_edge,
     get_annotate, get_snapshots, get_whiteboard, list_annotate, list_devices, list_whiteboard,
     put_annotate, put_device_prefs,
-    put_doc_bytes, put_problem, put_snapshot, put_whiteboard, restore_annotate,
+    put_problem, put_snapshot, put_whiteboard, restore_annotate,
     restore_whiteboard,
     sync_pads, tombstone_annotate, tombstone_problem, tombstone_whiteboard,
     get_problem as get_problem_pad,

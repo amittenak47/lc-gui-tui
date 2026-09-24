@@ -3,7 +3,7 @@
  */
 
 import { b64ToBytes, bytesToB64, loadInvoke, readInvokeResult } from "./nativeHttp";
-import { loadPadHub, type PadHub } from "../util/padHub";
+import { HUB_MAX_DOCUMENT_BYTES, loadPadHub, type PadHub } from "../util/padHub";
 import { artifactCatalogFields, requireArtifactCatalogAck, type ArtifactCatalog } from "../util/padArtifacts";
 import {
   parseArtifactAsset, parseArtifactAssetLocator, requireArtifactAssetAck,
@@ -1106,9 +1106,19 @@ export class LcClient {
   }
 
   async putDocBytes(hash: string, bytes: ArrayBuffer): Promise<void> {
+    if (bytes.byteLength > HUB_MAX_DOCUMENT_BYTES) {
+      throw new LcApiError(`This document exceeds the sync limit of ${HUB_MAX_DOCUMENT_BYTES / (1024 * 1024)} MiB.`, 413);
+    }
     const hub = loadPadHub();
     if (hub) {
-      await hubFetch(hub, "PUT", `/docs/${encodeURIComponent(hash)}/bytes`, { bytes });
+      try {
+        await hubFetch(hub, "PUT", `/docs/${encodeURIComponent(hash)}/bytes`, { bytes });
+      } catch (cause) {
+        if (cause instanceof LcApiError && cause.status === 413) {
+          throw new LcApiError(`The sync server rejected this ${(bytes.byteLength / (1024 * 1024)).toFixed(1)} MiB document as too large. Update and restart the desktop app to enable large-document sync, then retry.`, 413);
+        }
+        throw cause;
+      }
       return;
     }
     await this.cmd("lc_docs_put_bytes", {
