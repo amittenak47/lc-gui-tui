@@ -20793,15 +20793,25 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-agent-draw-offer {
   display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin-top: 8px;
-  border: 0;
-  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
   color: var(--accent);
   font: inherit;
   font-size: 13px;
-  padding: 0;
+  padding: 5px 9px;
   cursor: pointer;
 }
+.lc-agent-draw-offer:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.lc-agent-draw-offer:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lc-agent-messages { overflow-anchor: none; }
+.lc-agent-word-reveal { animation: lc-agent-word-in 180ms ease-out both; }
+@keyframes lc-agent-word-in { from { opacity: 0; } to { opacity: 1; } }
+.lc-saved-conversation { position: absolute; inset: 0; padding: 20px; overflow: auto; }
+@media (prefers-reduced-motion: reduce) { .lc-agent-word-reveal { animation: none; } }
 .lc-agent-process-step[data-thinking-color="0"] { --lc-thought-accent: #648ed5; }
 .lc-agent-process-step[data-thinking-color="1"] { --lc-thought-accent: #9d79c5; }
 .lc-agent-process-step[data-thinking-color="2"] { --lc-thought-accent: #4f9d9a; }

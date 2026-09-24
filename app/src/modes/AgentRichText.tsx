@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatAgentProse } from "./agentProse";
 import { renderMarkdown } from "./AnnotateDocument";
 
@@ -36,9 +36,37 @@ export const AgentRichText = memo(function AgentRichText({
   text, animate = false, animateInitial = false, className = "",
 }: { text: string; animate?: boolean; animateInitial?: boolean; className?: string }) {
   const prepared = useMemo(() => formatAgentProse(text), [text]);
-  const shown = useWordReveal(prepared, animate, animateInitial);
-  const html = useMemo(() => renderMarkdown(shown), [shown]);
-  return <div className={`lc-agent-markdown ${className}`} aria-busy={shown !== prepared}
+  const html = useMemo(() => renderMarkdown(prepared), [prepared]);
+  const host = useRef<HTMLDivElement>(null);
+  const previous = useRef(animateInitial ? "" : html);
+  useLayoutEffect(() => {
+    const node = host.current;
+    const changed = previous.current !== html;
+    previous.current = html;
+    if (!node || !animate || !changed || document.hidden || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    // Parse the complete Markdown once. Revealing partial Markdown repeatedly
+    // opens/closes lists, math and code blocks, making the bubble shrink/grow.
+    // Opacity animation leaves line wrapping and scroll height unchanged.
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
+    while (walker.nextNode()) if (walker.currentNode.textContent?.trim() &&
+      !(walker.currentNode.parentElement?.closest(".katex, svg, pre, code"))) nodes.push(walker.currentNode as Text);
+    let word = 0;
+    for (const textNode of nodes) {
+      const fragment = document.createDocumentFragment();
+      for (const token of (textNode.textContent ?? "").match(/\S+|\s+/gu) ?? []) {
+        if (!token.trim()) fragment.append(document.createTextNode(token));
+        else {
+          const span = document.createElement("span"); span.textContent = token;
+          span.className = "lc-agent-word-reveal";
+          span.style.animationDelay = `${Math.min(word++ * 12, 1600)}ms`;
+          fragment.append(span);
+        }
+      }
+      textNode.replaceWith(fragment);
+    }
+  }, [html, animate]);
+  return <div ref={host} className={`lc-agent-markdown ${className}`}
     // renderMarkdown shares the document renderer's Markdown/KaTeX sanitization.
     dangerouslySetInnerHTML={{ __html: html }} />;
 });

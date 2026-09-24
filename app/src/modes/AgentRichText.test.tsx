@@ -35,14 +35,18 @@ describe("chat Markdown and progressive reveal", () => {
     await render("For a recurrence of the form\n\nT(n) = aT(n/b)+f(n), a ≥ 1, b > 1\n\ncompare f(n).", false);
     expect(host.querySelector(".katex-display")).not.toBeNull();
   });
-  it("reveals a completed response by words without replaying saved history", async () => {
-    await render(""); await render("One two three four.");
-    expect(host.textContent).toBe("");
-    await act(async () => vi.advanceTimersByTime(50));
-    expect(host.textContent?.trim()).toBe("One");
-    await act(async () => vi.advanceTimersByTime(200));
-    expect(host.textContent?.trim()).toBe("One two three four.");
-    expect(host.firstElementChild?.getAttribute("aria-busy")).toBe("false");
+  it("reserves the complete Markdown layout while words fade in", async () => {
+    await render("Saved history");
+    expect(host.querySelector(".lc-agent-word-reveal")).toBeNull();
+    await render("One **two** three four.\n\n- first\n- second\n\n```js\nconst a = 1;\n```");
+    expect(host.querySelectorAll("li")).toHaveLength(2);
+    expect(host.querySelector("strong")?.textContent).toBe("two");
+    expect(host.querySelector("pre code")?.textContent).toContain("const a = 1;");
+    expect(host.querySelectorAll(".lc-agent-word-reveal").length).toBeGreaterThan(0);
+    const complete = host.innerHTML;
+    await act(async () => vi.advanceTimersByTime(2000));
+    expect(host.innerHTML).toBe(complete);
+    expect(vi.getTimerCount()).toBe(0);
   });
   it("cleans up pending reveal when the reader leaves and honours reduced motion", async () => {
     await render(""); await render("One two three four.");
