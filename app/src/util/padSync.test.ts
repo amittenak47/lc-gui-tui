@@ -350,6 +350,34 @@ describe("padSync pull", () => {
     expect(restoreAnnotateDoc).not.toHaveBeenCalled();
   });
 
+  it("accepts a legacy whiteboard's page-1 ink without requiring an empty page-0 slot", async () => {
+    const pull=vi.spyOn(inkSync,"pullInkPagesOverLocal").mockResolvedValue(1);
+    const ink=[{kind:"whiteboard" as const,key:"w1",page_id:1,updated_at:100}];
+    const client=fakeClient({
+      listWhiteboardPads:vi.fn(async()=>[{id:"w1",title:"Tablet notebook",updated_at:100,page_count:1,
+        board:{...emptyBoard,inkPages:{v:1,pageIds:[0,1]}},agent:[]}]),
+      listAnnotatePads:vi.fn(async()=>[]),
+      pingPadSync:vi.fn(async()=>({now:100,whiteboard:[],annotate:[],snapshots:[],ink})),
+    });
+    expect(await discoverHubPads(client)).toBe(1);
+    expect(pull).toHaveBeenCalledWith(client,"whiteboard","w1",[1],ink);
+    expect(restoreWhiteboardNotebook).toHaveBeenCalledWith(expect.objectContaining({
+      board:expect.objectContaining({inkPages:{v:1,pageIds:[1]}}),
+    }));
+  });
+
+  it("still requires uploaded page-0 ink when the hub advertises it", async () => {
+    const pull=vi.spyOn(inkSync,"pullInkPagesOverLocal").mockResolvedValue(2);
+    const ink=[0,1].map(page_id=>({kind:"whiteboard" as const,key:"w1",page_id,updated_at:100}));
+    const client=fakeClient({
+      listWhiteboardPads:vi.fn(async()=>[{id:"w1",title:"Tablet notebook",updated_at:100,page_count:1,
+        board:{...emptyBoard,inkPages:{v:1,pageIds:[0,1]}},agent:[]}]),
+      listAnnotatePads:vi.fn(async()=>[]),pingPadSync:vi.fn(async()=>({now:100,whiteboard:[],annotate:[],snapshots:[],ink})),
+    });
+    expect(await discoverHubPads(client)).toBe(1);
+    expect(pull).toHaveBeenCalledWith(client,"whiteboard","w1",[0,1],ink);
+  });
+
   it("does not expose a new notebook when its ink download is incomplete", async () => {
     setHostLoopback({ url: "http://fixture", token: "test" });
     const client = fakeClient({

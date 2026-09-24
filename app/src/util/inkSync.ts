@@ -1197,7 +1197,7 @@ export async function pullInkPagesOverLocal(
   const byId = new Map(digests.map((page) => [page.page_id, page]));
   for (const pageId of expectedPageIds) {
     if (!byId.has(pageId)) {
-      throw new Error(`Ink page ${pageId} was missing from the hub download`);
+      throw new Error("The hub has this file's saved entry, but some handwriting is missing. Open it on the device with the original notes, sync there, then pull again.");
     }
   }
   if (!byId.size) return 0;

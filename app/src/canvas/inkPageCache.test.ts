@@ -32,8 +32,24 @@ function stroke(y: number, extra: Partial<InkDrawOp> = {}): InkDrawOp {
 }
 
 describe("InkPageBook", () => {
+  it("omits untouched viewport slots but retains erased stored pages", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(8));
+    book.setVisiblePage(1);
+    book.setVisiblePage(7);
+    expect(book.pageIds()).toEqual([]);
+    book.commit(stroke(20));
+    expect(book.pageIds()).toEqual([1]);
+    book.undoOnce();
+    expect(book.pageIds()).toEqual([1]);
+    expect(book.takeDirtyEncoded().get(1)?.ops).toEqual([]);
+    book.markFlushed([1]);
+    expect(book.pageIds()).toEqual([1]);
+    expect(book.snapshotEncodedPages().get(1)?.ops).toEqual([]);
+  });
   it("snapshots clean empty and authored pages even when no dirty shards remain", () => {
     const book = new InkPageBook();
+    book.ingestEncodedPages(new Map([[0,{v:2,ops:[]}]]));
     book.setFrames(frames(2));
     book.setVisiblePage(1);
     book.commit(stroke(40));

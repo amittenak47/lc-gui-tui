@@ -69,9 +69,12 @@ export class InkPageBook {
   redo: InkUndoEntry[] = [];
 
   pageIds(): number[] {
-    const ids = new Set<number>();
-    for (const id of this.hot.keys()) ids.add(id);
-    for (const id of this.cold.keys()) ids.add(id);
+    // Hydration creates empty paint slots for the viewport and spanning ink.
+    // They are not stored pages. Keep dirty/persisted empty shards, however:
+    // those carry erasures and must still sync.
+    const ids = new Set<number>([...this.onDisk, ...this.dirty]);
+    for (const [id, ops] of this.hot) if (ops.length) ids.add(id);
+    for (const [id, ink] of this.cold) if (ink.ops.length || ink.raw?.length) ids.add(id);
     return [...ids].sort((a, b) => a - b);
   }
 
@@ -192,7 +195,7 @@ export class InkPageBook {
 
   /** Attachment snapshots need clean empty pages as well as authored strokes. */
   snapshotEncodedPages(): Map<number, EncodedInk> {
-    return new Map(this.pageIds().map(id => [id, this.encodedPage(id)!]));
+    return new Map(this.pageIds().map(id => [id, this.encodedPage(id) ?? {v:2,ops:[]}]));
   }
 
   encodedPage(pageId: number): EncodedInk | null {

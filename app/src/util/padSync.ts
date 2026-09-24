@@ -1142,12 +1142,21 @@ export async function discoverHubPads(client: LcClient, report:HubLibraryPullRep
       continue;
     }
     try {
-      const board = row.board as BoardBlob;
+      let board = row.board as BoardBlob;
       if (boardLooksCorrupt(board)) throw new Error(`“${row.title}” has an unreadable board on the hub.`);
+      // Older whiteboards advertised the empty viewport slots [0,1]. Their
+      // single frame stores all actual strokes on 1; 0 is only a placeholder.
+      // Narrow compatibility to that exact shape and a confirmed page-1 upload.
+      const ids = board.inkPages?.pageIds;
+      const pages = digest.ink?.filter(page => page.kind === "whiteboard" && page.key === row.id) ?? [];
+      if (ids?.length === 2 && ids.includes(0) && ids.includes(1) &&
+          pages.some(page => page.page_id === 1) && !pages.some(page => page.page_id === 0)) {
+        board = {...board, inkPages:{v:1,pageIds:[1]}};
+      }
       await pullInkPagesOverLocal(client, "whiteboard", row.id, board.inkPages?.pageIds, digest.ink);
       // Dependencies first; do not offer a notebook that downloaded only its name.
       if (await getWhiteboardNotebook(row.id) || listWhiteboardTrash().some((entry) => entry.id === row.id)) continue;
-      await applyHubWhiteboard(row, { emitReload: false, client });
+      await applyHubWhiteboard({...row, board}, { emitReload: false, client });
       imported++;
       report.added.push(row.title);
     } catch (cause) {
