@@ -2144,6 +2144,13 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   pointer-events: none;
 }
 
+/* PDF text is on a separate white-paper layer. Canvas multiply alone only
+ * blends marker strokes with other ink; blend the overlay with the PDF too. */
+.lc-hub-conflict-preview:has(.lc-pdf-doc) .lc-hub-conflict-ink-layer,
+.lc-board-doc-paper:has(.lc-pdf-doc) .lc-board-ink-lab-host {
+  mix-blend-mode: multiply;
+}
+
 .lc-hub-conflict-load {
   position: absolute;
   inset: 0;
@@ -20212,11 +20219,8 @@ button.lc-row-selected:hover:not(:disabled) {
 
 :root .lc-doc-footnote-band[style*="--lc-fn-color"] {
   --lc-fn-edge: var(--lc-fn-color);
-  background: color-mix(
-    in srgb,
-    var(--lc-fn-color) 20%,
-    color-mix(in srgb, var(--lc-fn-light, transparent) 28%, transparent)
-  );
+  /* One wash. Mixing in a second tinted wash raised opacity to 42.4%. */
+  background: color-mix(in srgb, var(--lc-fn-color) 20%, transparent);
   border-color: color-mix(in srgb, var(--lc-fn-color) 68%, var(--lc-fn-deep, #000));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lc-fn-mid, transparent) 35%, transparent);
 }
