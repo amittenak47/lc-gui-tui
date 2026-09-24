@@ -187,7 +187,7 @@ export async function getInkPages(docKey: string): Promise<Map<number, EncodedIn
   return out;
 }
 
-export async function getInkPageRecords(docKey: string): Promise<InkPageRecord[]> {
+export async function getInkPageRecords(docKey: string, opts: { metadataOnly?: boolean; strict?: boolean } = {}): Promise<InkPageRecord[]> {
   const rows: InkPageRecord[] = [];
   try {
     await withStore(STORE_INK_PAGES, "readonly", (store) => {
@@ -195,11 +195,20 @@ export async function getInkPageRecords(docKey: string): Promise<InkPageRecord[]
       request.onsuccess = () => {
         const cursor = request.result;
         if (!cursor) return;
-        if (isRecord(cursor.value)) rows.push(cursor.value);
+        const value = cursor.value;
+        if (isRecord(value)) {
+          // Sync compares clocks. Retaining every compressed/WAL payload here
+          // makes even a one-page update hold an entire handwritten book.
+          rows.push(opts.metadataOnly ? {
+            v: value.v, docKey: value.docKey, pageId: value.pageId,
+            dirty: value.dirty, updatedAt: value.updatedAt, syncedUpdatedAt: value.syncedUpdatedAt,
+          } : value);
+        }
         cursor.continue();
       };
     });
-  } catch {
+  } catch (cause) {
+    if (opts.strict) throw cause;
     return [];
   }
   return rows;

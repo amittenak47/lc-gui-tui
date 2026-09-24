@@ -837,7 +837,7 @@ describe("syncInkPages strict pull", () => {
   it("throws in strict mode when a digest page has no payload", async () => {
     const { syncInkPages } = await loadSync({ hub: true });
     const client = {
-      getInkPages: vi.fn().mockResolvedValue([]),
+      getInkPage: vi.fn().mockResolvedValue(null),
       putInkPage: vi.fn(),
     };
     await expect(
@@ -854,7 +854,7 @@ describe("syncInkPages strict pull", () => {
   it("swallows a missing page when the background ping is not strict", async () => {
     const { syncInkPages } = await loadSync({ hub: true });
     const client = {
-      getInkPages: vi.fn().mockResolvedValue([]),
+      getInkPage: vi.fn().mockResolvedValue(null),
       putInkPage: vi.fn(),
     };
     await expect(

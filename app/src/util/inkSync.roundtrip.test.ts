@@ -10,6 +10,7 @@ vi.mock("./padHub", () => ({ loadPadHub: () => ({ url: "http://fixture", token: 
 vi.mock("./inkPageStore", async (original) => ({
   ...await original<typeof import("./inkPageStore")>(),
   getInkPageRecords: async (docKey: string) => [...state.local.values()].filter((row) => row.docKey === docKey),
+  getInkPageRecord: async (docKey: string, pageId: number) => state.local.get(`${docKey}\u001f${pageId}`) ?? null,
 }));
 vi.mock("./idb", async (original) => ({
   ...await original<typeof import("./idb")>(),
@@ -46,6 +47,7 @@ const sync = () => walkSyncInk(client, pad, snapshot(), 0);
 beforeEach(() => {
   state.local = new Map(); hub.clear(); vi.clearAllMocks();
   vi.mocked(client.getInkPages).mockImplementation(async () => [...hub.values()]);
+  vi.mocked(client.getInkPage).mockImplementation(async (_kind, _key, pageId) => hub.get(pageId) ?? null);
   vi.mocked(client.putInkPage).mockImplementation(async (page) => {
     hub.set(page.page_id, page);
     return { applied: true, seq: 0 };
@@ -53,6 +55,18 @@ beforeEach(() => {
 });
 
 describe("two-device ink sync", () => {
+  it("downloads only the changed page in a large book", async () => {
+    await putInkPages("wb:w", Array.from({length:100}, (_,i) => [i+1,ink] as const), {now:100});
+    await sync();
+    const before = hub.get(73)!;
+    hub.set(73,{...before,updated_at:200});
+    vi.mocked(client.getInkPage).mockClear();
+    expect(await sync()).toEqual({outcome:"ok"});
+    expect(client.getInkPage).toHaveBeenCalledTimes(1);
+    expect(client.getInkPage).toHaveBeenCalledWith("whiteboard","w",73);
+    expect(client.getInkPages).not.toHaveBeenCalled();
+    expect(state.local.get(inkPageKey("wb:w",73))?.syncedUpdatedAt).toBe(200);
+  });
   it("does not acknowledge a refused write that lost a race on the hub", async () => {
     await putInkPages("wb:w", [[1, ink]], { now: 100 });
     vi.mocked(client.putInkPage).mockImplementationOnce(async (page) => {
@@ -126,7 +140,7 @@ describe("two-device ink sync", () => {
     await putInkPages("wb:w", [[1, ink]], { now: 100 });
     await sync();
     state.local = new Map();
-    vi.mocked(client.getInkPages).mockResolvedValueOnce([]);
+    vi.mocked(client.getInkPage).mockResolvedValueOnce(null);
     await expect(sync()).rejects.toThrow("missing");
     expect(state.local.size).toBe(0);
     expect(await sync()).toEqual({ outcome: "ok" });
@@ -136,9 +150,9 @@ describe("two-device ink sync", () => {
     await putInkPages("wb:w", [[1, ink]], { now: 100 });
     await sync();
     hub.set(1, { ...hub.get(1)!, updated_at: 200 });
-    vi.mocked(client.getInkPages).mockImplementationOnce(async () => {
+    vi.mocked(client.getInkPage).mockImplementationOnce(async () => {
       await putInkPages("wb:w", [[1, ink]], { now: 300 });
-      return [...hub.values()];
+      return hub.get(1)!;
     });
     await expect(sync()).rejects.toThrow("changed during download");
     expect(state.local.get(key)).toMatchObject({ updatedAt: 300, syncedUpdatedAt: 100, dirty: true });

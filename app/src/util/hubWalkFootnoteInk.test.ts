@@ -39,6 +39,10 @@ vi.mock("./inkPageStore", async (importOriginal) => {
   return {
     ...real,
     markInkPageSynced: vi.fn(async () => {}),
+    getInkPageRecord: async (docKey: string, pageId: number) => {
+      const row = localPages[docKey]?.find(page => page.pageId === pageId);
+      return row ? {v:1,docKey,...row,gz:new Uint8Array([1,2,3]),dirty:false} : null;
+    },
     listInkDocKeys: async (prefix: string) =>
       Object.keys(localPages).filter((key) => key.startsWith(prefix)),
     getInkPageRecords: async (docKey: string) =>
@@ -134,10 +138,10 @@ describe("walkSyncInk with scratch boards", () => {
     pointers = new Set(["wb9"]);
     const gz = bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps([]))));
     const client = fakeClient({
-      getInkPages: vi.fn(async (_kind: string, key: string) =>
+      getInkPage: vi.fn(async (_kind: string, key: string) =>
         key === "pad-1/fn/wb9"
-          ? [{ kind: "annotate", key, page_id: 1, updated_at: 900, gz }]
-          : [],
+          ? { kind: "annotate", key, page_id: 1, updated_at: 900, gz }
+          : null,
       ),
     });
     const result = await walkSyncInk(
@@ -147,7 +151,7 @@ describe("walkSyncInk with scratch boards", () => {
       100,
     );
     expect(result.outcome).toBe("ok");
-    expect(client.getInkPages).toHaveBeenCalledWith("annotate", "pad-1/fn/wb9");
+    expect(client.getInkPage).toHaveBeenCalledWith("annotate", "pad-1/fn/wb9", 1);
   });
 
   it("keeps a board's pages apart from the document's own", async () => {

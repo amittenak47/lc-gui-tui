@@ -25,6 +25,7 @@ import {
   encodedFromRecord,
   footnoteWhiteboardDocKey,
   getInkPageRecords,
+  getInkPageRecord,
   inkPageKey,
   listInkDocKeys,
   markInkPageSynced,
@@ -251,7 +252,7 @@ export async function localInkPageStamps(
   kind: InkPadKind,
   key: string,
 ): Promise<InkPageStamp[]> {
-  const rows = await getInkPageRecords(inkDocKey(kind, key));
+  const rows = await getInkPageRecords(inkDocKey(kind, key), { metadataOnly: true });
   return rows
     .map((row) => ({ pageId: row.pageId, updatedAt: row.updatedAt }))
     .sort((a, b) => a.pageId - b.pageId);
@@ -1203,8 +1204,8 @@ export async function pushInkPagesToHub(
  * Pull the pages a digest says are newer, and push the ones that are newer here.
  *
  * The digest is on the ping and carries no strokes, so a quiet fifteen seconds
- * costs one request and moves nothing. Bytes are fetched per pad, and only for
- * pads that actually have a page to move.
+ * costs one request and moves nothing. Only changed pages are fetched, one at
+ * a time; neither remote bytes nor local WALs accumulate for the entire book.
  *
  * `strict` decides what a failed transfer means. The background ping runs every
  * fifteen seconds and swallows them: a page that did not move this time moves
@@ -1243,7 +1244,7 @@ export async function syncInkPages(
 
   for (const [id, pad] of wanted) {
     const docKey = inkDocKey(pad.kind, pad.key);
-    const localRows = await getInkPageRecords(docKey);
+    const localRows = await getInkPageRecords(docKey, { metadataOnly: true, strict });
     const localBy = new Map(localRows.map((row) => [row.pageId, row]));
     const remoteDigests = byPad.get(id) ?? [];
     const remoteBy = new Map(remoteDigests.map((row) => [row.page_id, row]));
@@ -1266,12 +1267,10 @@ export async function syncInkPages(
     });
 
     if (toPull.length > 0) {
-      const bytes = strict
-        ? await client.getInkPages(pad.kind, pad.key)
-        : await client.getInkPages(pad.kind, pad.key).catch(() => [] as InkPageDto[]);
-      const bytesBy = new Map(bytes.map((row) => [row.page_id, row]));
       for (const digest of toPull) {
-        const full = bytesBy.get(digest.page_id);
+        const full = strict
+          ? await client.getInkPage(pad.kind, pad.key, digest.page_id)
+          : await client.getInkPage(pad.kind, pad.key, digest.page_id).catch(() => null);
         if (!full?.gz) {
           // A truncated GET used to `continue` here, so the walk could still
           // reach Synced with strokes named by the digest but never written.
@@ -1282,7 +1281,7 @@ export async function syncInkPages(
           }
           continue;
         }
-        if (full.updated_at !== digest.updated_at) {
+        if (full.kind !== pad.kind || full.key !== pad.key || full.page_id !== digest.page_id || full.updated_at !== digest.updated_at) {
           if (strict) throw new Error(`Ink page ${digest.page_id} changed on the hub. Sync again.`);
           continue;
         }
@@ -1298,12 +1297,17 @@ export async function syncInkPages(
       if (conflicted.has(row.pageId)) continue;
       const remote = remoteBy.get(row.pageId);
       if (remote && remote.updated_at >= row.updatedAt) {
-        if (remote.updated_at === row.updatedAt) {
+        if (remote.updated_at === row.updatedAt && row.syncedUpdatedAt !== row.updatedAt) {
           await markInkPageSynced(docKey, row.pageId, row.updatedAt);
         }
         continue;
       }
-      const gz = await gzOf(row);
+      const current = await getInkPageRecord(docKey, row.pageId);
+      if (!current || current.updatedAt !== row.updatedAt) {
+        if (strict) throw new Error(`Ink page ${row.pageId} changed before upload. Sync again.`);
+        continue;
+      }
+      const gz = await gzOf(current);
       if (!gz) {
         if (strict) throw new Error(`Ink page ${row.pageId} could not be encoded`);
         continue;

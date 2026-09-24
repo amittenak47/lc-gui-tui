@@ -175,7 +175,7 @@ export async function walkSyncInk(
     const { getInkPageRecords } = await import("./inkPageStore");
     const localByKey = new Map<string, Map<number, { updatedAt: number }>>();
     for (const key of inkKeys) {
-      const rows = await getInkPageRecords(inkDocKey(pad.kind, key));
+      const rows = await getInkPageRecords(inkDocKey(pad.kind, key), { metadataOnly: true, strict: true });
       localByKey.set(key, new Map(rows.map((row) => [row.pageId, row])));
     }
     for (const digest of digests) {
