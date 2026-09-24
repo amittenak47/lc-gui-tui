@@ -6,18 +6,21 @@ export function HubLibraryRefresh({ onRefresh }: { onRefresh: HubLibraryRefreshA
   const running = useRef(false);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
+  const [failed,setFailed]=useState(false);
   const [report,setReport]=useState<HubLibraryPullReport|null>(null);
   const refresh = async () => {
     if (running.current) return;
     running.current = true;
     setPending(true);
     setMessage("");
+    setFailed(false);
     setReport(null);
     try {
       const result = await onRefresh();
       if(typeof result === "number")setMessage(result ? `Added ${result} files.` : "All hub files are already on this device.");
       else setReport(result);
     } catch (cause) {
+      setFailed(true);
       setMessage(cause instanceof Error ? cause.message : String(cause));
     } finally {
       running.current = false;
@@ -29,7 +32,7 @@ export function HubLibraryRefresh({ onRefresh }: { onRefresh: HubLibraryRefreshA
       {pending ? "Pulling files…" : "Pull missing files from hub"}
     </button>
     {(pending || report || message) && <section className="lc-hub-pull-status" aria-live="polite" role="status">
-      <strong>{pending ? "Downloading your library" : report?.failures.length ? "Some files need attention" : "Library up to date"}</strong>
+      <strong>{pending ? "Downloading your library" : failed ? "Could not pull files" : report?.failures.length ? "Some files need attention" : "Library up to date"}</strong>
       {pending && <span>Files, handwriting and attached notes are being downloaded.</span>}
       {message && <span>{message}</span>}
       {report && <>
