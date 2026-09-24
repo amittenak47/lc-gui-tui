@@ -40,6 +40,9 @@ struct ShareArgs {
     filename: String,
 }
 
+#[derive(Debug, Serialize)]
+struct DocumentArgs { path: String, filename: String, mime: String }
+
 #[derive(Debug, Deserialize)]
 struct SaveResponse {
     uri: String,
@@ -48,6 +51,12 @@ struct SaveResponse {
 pub struct GallerySave<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> GallerySave<R> {
+    pub fn save_document(&self, path: &str, filename: &str, mime: &str) -> Result<String> {
+        let response = self.0.run_mobile_plugin::<SaveResponse>("save_document", DocumentArgs {
+            path: path.into(), filename: filename.into(), mime: mime.into(),
+        })?;
+        Ok(response.uri)
+    }
     pub fn save_png(&self, png_bytes: &[u8], filename: &str, destination: &str, directory: Option<String>) -> Result<String> {
         use base64::Engine;
         let png_base64 = base64::engine::general_purpose::STANDARD.encode(png_bytes);

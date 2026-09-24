@@ -2,6 +2,7 @@
 //! app; the harness router runs in-process — no loopback TCP server.
 
 pub mod capture_save;
+pub mod document_export;
 pub mod colorhunt;
 pub mod dlc;
 pub mod lc_client;
@@ -167,6 +168,10 @@ pub fn run() {
         capture_save::save_png_bytes,
         capture_save::pick_capture_folder,
         capture_save::share_png_bytes,
+        document_export::begin_document_export,
+        document_export::append_document_export,
+        document_export::cancel_document_export,
+        document_export::finish_document_export,
         ink_available,
         boot_notice,
         lan_base_url,

@@ -34,6 +34,58 @@ import java.io.IOException
 class GallerySavePlugin(private val activity: Activity) : Plugin(activity) {
 
     @InvokeArg
+    class DocumentArgs {
+        var path: String = ""
+        var filename: String = "document.pdf"
+        var mime: String = "application/pdf"
+    }
+
+    private fun exportFile(args: DocumentArgs): File {
+        val file = File(args.path).canonicalFile
+        val root = File(activity.cacheDir, "document-exports").canonicalFile
+        if (file.parentFile != root || !file.isFile) throw IOException("Export file is unavailable")
+        if (args.mime !in listOf("application/pdf", "application/epub+zip", "application/zip")) throw IOException("Unsupported export format")
+        return file
+    }
+
+    @Command
+    fun save_document(invoke: Invoke) {
+        try {
+            val args = invoke.parseArgs(DocumentArgs::class.java)
+            exportFile(args)
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = args.mime
+                putExtra(Intent.EXTRA_TITLE, args.filename)
+            }
+            startActivityForResult(invoke, intent, "documentResult")
+        } catch (error: Exception) { invoke.reject(error.message ?: "Cannot save document") }
+    }
+
+    @ActivityCallback
+    fun documentResult(invoke: Invoke, result: ActivityResult) {
+        if (result.resultCode == Activity.RESULT_CANCELED) {
+            invoke.resolve(JSObject().apply { put("uri", "") }); return
+        }
+        val uri = result.data?.data
+        if (uri == null) { invoke.reject("No save location returned"); return }
+        // File-to-file copy: no whole-document base64 or byte array on the Java heap.
+        Thread {
+            try {
+                val file = exportFile(invoke.parseArgs(DocumentArgs::class.java))
+                activity.contentResolver.openOutputStream(uri, "w").use { output ->
+                    if (output == null) throw IOException("Cannot write to selected location")
+                    file.inputStream().use { input -> input.copyTo(output, 65536) }
+                }
+                invoke.resolve(JSObject().apply { put("uri", uri.toString()) })
+            } catch (error: Exception) {
+                runCatching { DocumentsContract.deleteDocument(activity.contentResolver, uri) }
+                invoke.reject(error.message ?: "Document save failed")
+            }
+        }.start()
+    }
+
+    @InvokeArg
     class SaveArgs {
         var png_base64: String = ""
         var filename: String = "lc-capture.png"
