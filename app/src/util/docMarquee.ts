@@ -80,7 +80,17 @@ export function marqueeHitNodes(searchRoot: HTMLElement): HTMLElement[] {
 }
 
 export function scaleOf(node: HTMLElement): number {
-  const width = node.offsetWidth;
+  // offsetWidth rounds to whole pixels. A 309.5px merge pane becomes 310,
+  // inventing camera zoom and moving marks ~35px by page 50. Compare the
+  // rendered border box with its fractional, untransformed CSS border box.
+  const style = getComputedStyle(node);
+  let width = parseFloat(style.width);
+  if (Number.isFinite(width) && style.boxSizing !== "border-box") {
+    for (const value of [style.paddingLeft, style.paddingRight, style.borderLeftWidth, style.borderRightWidth]) {
+      width += parseFloat(value) || 0;
+    }
+  }
+  if (!(width > 0)) width = node.offsetWidth;
   if (width <= 0) return 1;
   const rendered = node.getBoundingClientRect().width;
   return rendered > 0 ? rendered / width : 1;

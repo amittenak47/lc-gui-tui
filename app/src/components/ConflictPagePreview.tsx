@@ -13,7 +13,8 @@ import { inkOpsBounds, type InkOp } from "../canvas/rasterInk";
 import { makeDocFlagHolds, type DocFlagHolds } from "../canvas/docSelectionGesture";
 import { AnnotateDocument } from "../modes/AnnotateDocument";
 import { DocSelectionLayer } from "../modes/DocSelectionLayer";
-import { PdfDocument } from "../modes/PdfDocument";
+import { PdfDocument, type PdfPageNatural } from "../modes/PdfDocument";
+import { conflictPdfFrames } from "./conflictDocumentLayout";
 import { publishPdfFilmCurrent, publishPdfViewPages } from "../modes/pdfFilm";
 import { borrowPdfDocument } from "../modes/pdfOpenDocs";
 import { pdfVisibleFromSpans } from "../modes/pdfPaintWindow";
@@ -161,7 +162,12 @@ export function ConflictPagePreview({
   if (!pageFramesEqual(pageFramesRef.current, pageFrames)) {
     pageFramesRef.current = pageFrames;
   }
-  const stablePageFrames = pageFramesRef.current;
+  const [pdfPageSizes, setPdfPageSizes] = useState<readonly PdfPageNatural[]>([]);
+  // The live reader's frames can belong to another replica/width. Use the
+  // same MediaBoxes as this preview, laid out at this copy's saved scene width.
+  const sourcePdfFrames = useMemo(() => pdfPageSizes.length && sceneWidth && sceneWidth > 0
+    ? conflictPdfFrames(pdfPageSizes, sceneWidth) : undefined, [pdfPageSizes, sceneWidth]);
+  const stablePageFrames = sourcePdfFrames ?? pageFramesRef.current;
   const decodedOps = useMemo(
     () => decodedShards.flatMap((shard) => shard.ops),
     [decodedShards],
@@ -190,6 +196,8 @@ export function ConflictPagePreview({
   useEffect(() => {
     const root = hostRef.current;
     if (!root || page < 1) return;
+    // An explicit row jump supersedes a resize still waiting on PDF layout.
+    resizeAnchorRef.current = null;
     let gone = false;
     const jump = () => {
       if (gone) return true;
@@ -599,6 +607,7 @@ export function ConflictPagePreview({
               selectable={false}
               spread={false}
               onMeasure={setStackH}
+              onPageSizes={setPdfPageSizes}
             />
           </DocSelectionLayer>
           {showInk

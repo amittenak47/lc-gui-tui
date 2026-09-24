@@ -87,6 +87,38 @@ try {
       if(width===1920)await shot(`resize-${type}`);
     }
   }
+  await send("Page.navigate",{url:'http://127.0.0.1:1452/scripts/merge-preview-review.html?replicas'});
+  await waitFor('Boolean(window.reviewReady)');await evaluate('window.setReviewMerge(true)');
+  await waitFor(`document.querySelectorAll('.lc-hub-conflict-preview[aria-busy="false"]').length===2`);
+  for(const width of [650,1920,1000]) {
+    await send("Emulation.setDeviceMetricsOverride",{width,height:900,deviceScaleFactor:1,mobile:false});
+    for(const page of [1,50,100]) {
+      await evaluate(`document.querySelector('.lc-hub-conflict-pane [data-note-id="note-${page}"]').click()`);
+      await waitFor(`Array.from(document.querySelectorAll('.lc-hub-conflict-preview')).every(p=>p.querySelector('[data-footnote-id="note-${page}"]'))`);
+      await sleep(1000);
+      const positions=await evaluate(`Array.from(document.querySelectorAll('.lc-hub-conflict-pane')).map(p=>{
+        const page=p.querySelector('[data-pdf-page="${page}"]').getBoundingClientRect();
+        const band=p.querySelector('[data-footnote-id="note-${page}"] .lc-doc-footnote-band')?.getBoundingClientRect();
+        const pixels=[];
+        for(const c of p.querySelectorAll('canvas[data-ink-page="${page}"]')) {
+          if(!c.width)continue;const b=c.getBoundingClientRect(),d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;
+          for(let y=0;y<c.height;y++)for(let x=0;x<c.width;x++)if(d[(y*c.width+x)*4+3]>100)pixels.push(b.top+y*b.height/c.height-page.top);
+        }
+        return {side:p.dataset.side,width:page.width,height:page.height,band:band&&{left:band.left-page.left,top:band.top-page.top,width:band.width,height:band.height},inkY:pixels.length?pixels.reduce((a,b)=>a+b,0)/pixels.length:null};
+      })`);
+      for(const p of positions) {
+        assert(p.band,`Missing ${p.side} footnote on page ${page}`);
+        // The visible wash adds symmetric breathing room around the stored band.
+        const padY=Math.min(Math.max(Math.min(p.height*.03,64)*.18,2),10),padX=Math.min(Math.max(padY*.6,1.5),6);
+        assert(Math.abs(p.band.left+padX-p.width*.16)<1,`Footnote X drift: ${JSON.stringify(p)}`);
+        assert(Math.abs(p.band.top+padY-p.height*.2)<1,`Footnote Y drift: ${JSON.stringify(p)}`);
+        assert(Math.abs(p.band.width-2*padX-p.width*.3)<1,`Footnote width drift: ${JSON.stringify(p)}`);
+        assert(p.inkY!==null && Math.abs(p.inkY-p.height*.3)<3,`Ink drift on page ${page}: ${JSON.stringify(p)}`);
+      }
+      console.log(JSON.stringify({alignment:true,width,page,positions}));
+    }
+    if(width===1920)await shot('merge-replica-alignment');
+  }
   await send("Emulation.setDeviceMetricsOverride",{width:650,height:900,deviceScaleFactor:1,mobile:false});
   await send("Page.navigate",{url:'http://127.0.0.1:1452/scripts/annotation-resize-review.html'});
   await waitFor('Boolean(window.reviewReady)');await sleep(1000);

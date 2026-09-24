@@ -27,6 +27,19 @@ import {
 } from "./docMarquee";
 
 describe("docMarquee", () => {
+  it("does not mistake fractional layout width for camera zoom on a long document", () => {
+    for (const boxSizing of ["border-box", "content-box"]) {
+      const body = document.createElement("div");
+      body.style.cssText = `width:${boxSizing === "border-box" ? 309.5 : 297.5}px;box-sizing:${boxSizing};padding:0 5px;border:1px solid`;
+      Object.defineProperty(body, "offsetWidth", {value:310});
+      for (const zoom of [1, .75, 1.5]) {
+        body.getBoundingClientRect = () => ({width:309.5*zoom}) as DOMRect;
+        expect(scaleOf(body)).toBeCloseTo(zoom, 10);
+        expect(22000*zoom/scaleOf(body)).toBeCloseTo(22000, 8);
+      }
+    }
+  });
+
   it("bandFromLocalPoints floors height in screen pixels", () => {
     const body = document.createElement("div");
     Object.defineProperty(body, "offsetWidth", { value: 100 });

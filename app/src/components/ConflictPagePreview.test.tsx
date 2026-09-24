@@ -10,7 +10,7 @@ vi.mock('./conflictInkPaint', async () => ({
   ...await vi.importActual('./conflictInkPaintPlan'),
   ConflictInkPainter: class { constructor(pages: unknown) { raster.pages(pages); } paint = raster.paint; dispose = raster.dispose; },
 }));
-vi.mock('../modes/PdfDocument', () => ({ PdfDocument: ({onMeasure}: {onMeasure: (height: number) => void}) => {
+vi.mock('../modes/PdfDocument', async () => ({ ...await vi.importActual('../modes/PdfDocument'), PdfDocument: ({onMeasure}: {onMeasure: (height: number) => void}) => {
   const [loaded, setLoaded] = useState(false);
   raster.loadPdf = () => setLoaded(true);
   useLayoutEffect(() => { if (loaded) onMeasure(1200); }, [loaded, onMeasure]);

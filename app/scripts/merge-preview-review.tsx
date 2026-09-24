@@ -12,6 +12,7 @@ import { reviewPdf } from "./reviewPdf";
 import "../src/styles.css";
 
 const markdown = new URLSearchParams(location.search).has("markdown");
+const replicas = new URLSearchParams(location.search).has("replicas");
 const bytes = reviewPdf();
 const width = 1100, height = Math.round(width * 800 / 600);
 const frames = Array.from({length:100}, (_, i) => ({pageId:i+1,minY:18+i*(height+18),maxY:18+i*(height+18)+height}));
@@ -33,13 +34,37 @@ const conflict: HubPadConflict = {kind:"annotate",id:body.id,stage:"ink",detail:
   local:body,server:{...body,updated_at:2,footnotes:notes.map(note=>({...note,excerpt:`Tablet ${note.excerpt}`}))},
   localInk:markdown?ink:ink.slice(0,1),serverInk:(markdown?ink:ink.slice(0,1)).map(row=>({...row,updated_at:2})),localInkPageIds:frames.map(f=>f.pageId),hubInkPageIds:frames.map(f=>f.pageId),
   localInkStamps:frames.map(f=>({pageId:f.pageId,updatedAt:1})),hubInkStamps:frames.map(f=>({pageId:f.pageId,updatedAt:2}))};
+// Same passages annotated independently at desktop/tablet scene widths.
+let serverInk = ink.map(row=>({...row,updated_at:2}));
+if (replicas) {
+  for (const [side, sceneWidth] of [["local",1100],["server",780]] as const) {
+    const pageHeight = Math.round(sceneWidth * 800 / 600);
+    const replica = {...body, updated_at:side === "local" ? 1 : 2,
+      board:{elements:[{width:sceneWidth,customData:{lcMdInkFrame:true}}]},
+      footnotes:notes.map(note=>({...note, excerpt:`${side} ${note.excerpt}`,
+        // Deliberately different from bands: verifies the stored bands are mapped,
+        // rather than silently falling back to the region anchor.
+        anchor:{...note.anchor,x:sceneWidth*.6,y:pageHeight*.6,w:sceneWidth*.1,h:30},
+        bands:[{left:sceneWidth*.16,top:18+(note.createdAt-1)*(pageHeight+18)+pageHeight*.2,width:sceneWidth*.3,height:pageHeight*.03}]}))};
+    conflict[side] = replica;
+    const rows: InkPageDto[] = [];
+    for (const frame of frames) {
+      const y = 18+(frame.pageId-1)*(pageHeight+18)+pageHeight*.3;
+      const ops: InkOp[] = [{kind:"draw",color:"#e32838",baseWidth:4,maxFullness:1,pressureClip:1,pressureSensitive:false,
+        points:[{x:sceneWidth*.2,y,pressure:-1},{x:sceneWidth*.5,y,pressure:-1}]}];
+      rows.push({kind:"annotate",key:body.id,page_id:frame.pageId,updated_at:replica.updated_at,gz:bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps(ops))))});
+    }
+    if(side==="local") {ink.splice(0,ink.length,...rows);conflict.localInk=rows.slice(0,1);}
+    else {serverInk=rows;conflict.serverInk=rows.slice(0,1);}
+  }
+}
 const fetched: number[] = [];
 Object.assign(window,{reviewFetched:fetched});
 const fetchPreviewInk = async (pageId: number) => {
   fetched.push(pageId);
   await new Promise(resolve=>setTimeout(resolve,100));
   const local=ink.filter(row=>row.page_id===pageId);
-  return {local,server:local.map(row=>({...row,updated_at:2}))};
+  return {local,server:serverInk.filter(row=>row.page_id===pageId)};
 };
 
 function Review() {

@@ -22,6 +22,7 @@ import { conflictFocusPage, inkDtosHavePage, mergeInkDtos } from "../util/confli
 import { loadConflictPreviewInkPage } from "../util/inkSync";
 import { Tip } from "./Tip";
 import { ConflictPagePreview } from "./ConflictPagePreview";
+import { conflictDocumentWidth } from "./conflictDocumentLayout";
 import {
   INK_ROW_ID,
   type FootnoteDiffRow,
@@ -1007,7 +1008,7 @@ export function HubConflictSplit({
                 ? (body as AnnotatePadDto).source
                 : undefined
             }
-            sceneWidth={sceneWidth}
+            sceneWidth={conflict.kind === "annotate" ? conflictDocumentWidth(body, sceneWidth) : sceneWidth}
             pageFrames={listFrames.length > 0 ? listFrames : pageFrames}
             pageCount={
               conflict.kind === "whiteboard"

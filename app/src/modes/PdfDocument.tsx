@@ -238,6 +238,8 @@ export interface PdfDocumentProps {
   frameWidth: number;
   /** Reported whenever the rendered stack height changes, in scene units. */
   onMeasure?: (height: number) => void;
+  /** MediaBoxes already read for layout; previews use these at the saved ink width. */
+  onPageSizes?: (pages: readonly PdfPageNatural[]) => void;
   /** Page count and the page filling most of the viewport — for the filmstrip. */
   onNav?: (nav: PdfNav | null) => void;
   /**
@@ -542,6 +544,7 @@ export function PdfDocument({
   docHash = null,
   frameWidth,
   onMeasure,
+  onPageSizes,
   onNav,
   onThumbRenderer,
   spread = false,
@@ -560,6 +563,8 @@ export function PdfDocument({
   const [pages, setPages] = useState<RenderedPage[]>([]);
   const onMeasureRef = useRef(onMeasure);
   onMeasureRef.current = onMeasure;
+  const onPageSizesRef = useRef(onPageSizes);
+  onPageSizesRef.current = onPageSizes;
   const onNavRef = useRef(onNav);
   onNavRef.current = onNav;
   const onThumbRendererRef = useRef(onThumbRenderer);
@@ -761,6 +766,7 @@ export function PdfDocument({
       };
     }
     naturalsRef.current = [];
+    onPageSizesRef.current?.([]);
     setPages([]);
     dropPaintedSession();
     lastSettledPageRef.current =
@@ -825,6 +831,7 @@ export function PdfDocument({
             });
           }
           naturalsRef.current = naturals.slice();
+          onPageSizesRef.current?.(naturalsRef.current);
           // First batch is enough for the open gate to see a real stack height.
           // Waiting for every getPage used to throw "did not finish opening"
           // while PdfDocument still said Opening… — Kleinberg is 432 dictionary
