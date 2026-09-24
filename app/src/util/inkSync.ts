@@ -73,6 +73,8 @@ export interface InkPageDiffRow {
   pageId: number;
   hasLocal: boolean;
   hasServer: boolean;
+  /** Set when an all-entries comparison includes a matching page. */
+  same?: boolean;
 }
 
 /**
@@ -85,6 +87,7 @@ export interface InkPageDiffRow {
 export function inkPageDiffRows(
   local: readonly InkPageStamp[],
   hub: readonly InkPageStamp[],
+  includeSame = false,
 ): InkPageDiffRow[] {
   const localBy = new Map<number, InkPageStamp>();
   for (const stamp of local) localBy.set(stamp.pageId, stamp);
@@ -95,10 +98,11 @@ export function inkPageDiffRows(
   for (const pageId of ids) {
     const here = localBy.get(pageId);
     const there = hubBy.get(pageId);
-    if (here && there && here.updatedAt === there.updatedAt) {
-      if (here.gz == null || there.gz == null || here.gz === there.gz) continue;
-    }
-    out.push({ pageId, hasLocal: Boolean(here), hasServer: Boolean(there) });
+    const same = Boolean(here && there &&
+      ((here.updatedAt === there.updatedAt && (!includeSame || here.updatedAt > 0) && (here.gz == null || there.gz == null || here.gz === there.gz)) ||
+        (includeSame && here.gz && here.gz === there.gz)));
+    if (same && !includeSame) continue;
+    out.push({ pageId, hasLocal: Boolean(here), hasServer: Boolean(there), ...(includeSame ? {same} : {}) });
   }
   return out;
 }

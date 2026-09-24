@@ -232,7 +232,8 @@ export function whiteboardInkMergeRows(
   frames: readonly PageFrame[],
   localOps: readonly InkOp[],
   serverOps: readonly InkOp[],
-): { pageId: number; hasLocal: boolean; hasServer: boolean }[] {
+  includeSame = false,
+): { pageId: number; hasLocal: boolean; hasServer: boolean; same?: boolean }[] {
   const lumped = rows.length > 0 && rows.every((row) => row.pageId <= 1);
   if (!lumped) {
     return collapseSpanningInkRows(
@@ -245,17 +246,19 @@ export function whiteboardInkMergeRows(
     );
   }
   if (frames.length <= 1) return collapseSpanningInkRows(rows);
-  const out: { pageId: number; hasLocal: boolean; hasServer: boolean }[] = [];
+  const out: { pageId: number; hasLocal: boolean; hasServer: boolean; same?: boolean }[] = [];
   for (const frame of frames) {
     if (frame.pageId < 1) continue;
     const local = whiteboardMergeOpsForPage(localOps, frame.pageId, frames);
     const server = whiteboardMergeOpsForPage(serverOps, frame.pageId, frames);
     if (local.length === 0 && server.length === 0) continue;
-    if (inkOpsEqual(local, server)) continue;
+    const same = inkOpsEqual(local, server);
+    if (same && !includeSame) continue;
     out.push({
       pageId: frame.pageId,
       hasLocal: local.length > 0,
       hasServer: server.length > 0,
+      ...(includeSame ? {same} : {}),
     });
   }
   return out.length > 0 ? out : collapseSpanningInkRows(rows);
@@ -267,18 +270,19 @@ export function whiteboardInkMergeRows(
  * not asked to Keep a page that does not exist.
  */
 export function collapseSpanningInkRows(
-  rows: readonly { pageId: number; hasLocal: boolean; hasServer: boolean }[],
-): { pageId: number; hasLocal: boolean; hasServer: boolean }[] {
-  const byId = new Map<number, { pageId: number; hasLocal: boolean; hasServer: boolean }>();
+  rows: readonly { pageId: number; hasLocal: boolean; hasServer: boolean; same?: boolean }[],
+): { pageId: number; hasLocal: boolean; hasServer: boolean; same?: boolean }[] {
+  const byId = new Map<number, { pageId: number; hasLocal: boolean; hasServer: boolean; same?: boolean }>();
   for (const row of rows) {
     const pageId = row.pageId < 1 ? 1 : row.pageId;
     const prev = byId.get(pageId);
     if (!prev) {
-      byId.set(pageId, { pageId, hasLocal: row.hasLocal, hasServer: row.hasServer });
+      byId.set(pageId, { ...row, pageId });
       continue;
     }
     prev.hasLocal = prev.hasLocal || row.hasLocal;
     prev.hasServer = prev.hasServer || row.hasServer;
+    if (prev.same !== undefined || row.same !== undefined) prev.same = prev.same === true && row.same === true;
   }
   return [...byId.values()].sort((a, b) => a.pageId - b.pageId);
 }

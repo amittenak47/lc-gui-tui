@@ -236,6 +236,58 @@ describe("HubConflictSplit guards", () => {
   });
 });
 
+describe("merge comparison filter", () => {
+  const common = {id:"common",kind:"note",anchor:{kind:"region",x:10,y:10,w:30,h:20},excerpt:"Unchanged note",createdAt:1};
+  const conflict: HubPadConflict = {...CONFLICT,
+    local:annotateBody("book",900,[common,{...common,id:"local-only",excerpt:"New local note"}]),
+    server:annotateBody("book",500,[common])};
+  const toggle = () => act(() => (document.querySelector('.lc-hub-conflict-filter input') as HTMLInputElement).click());
+  afterEach(() => { document.body.textContent=""; });
+
+  it("keeps equal notes automatically and aligns one-sided entries with placeholders", () => {
+    const {root,onResolve}=mount(conflict);
+    expect(document.querySelector('[data-note-id="common"]')).toBeNull();
+    const panes=[...document.querySelectorAll('.lc-hub-conflict-pane')];
+    const keys=panes.map(p=>[...p.querySelectorAll<HTMLElement>('[data-row-key]')].map(r=>r.dataset.rowKey));
+    expect(keys[0]).toEqual(keys[1]);
+    expect(panes[0].textContent).toContain("Only here");
+    expect(panes[1].querySelector('[data-row-key="local-only"]')?.className).toContain("is-missing");
+    act(()=>paneButton(0,"drop").click());
+    act(()=>resolveButton().click());
+    expect(onResolve.mock.calls[0][0].footnotes.map((n:{id:string})=>n.id)).toEqual(["common"]);
+    act(()=>root.unmount());
+  });
+
+  it("allows an equal note to be discarded in Show all and preserves that choice through filtering", () => {
+    const {root,onResolve}=mount(conflict);
+    act(()=>paneButton(0,"keep").click());
+    toggle();
+    const rows=[...document.querySelectorAll('[data-note-id="common"]')];
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain("Same");
+    for(const row of rows) act(()=>(row.querySelector('[data-action="drop"]') as HTMLButtonElement).click());
+    toggle();
+    expect(document.querySelectorAll('[data-note-id="common"]')).toHaveLength(2);
+    act(()=>resolveButton().click());
+    expect(onResolve.mock.calls[0][0].footnotes.map((n:{id:string})=>n.id)).toEqual(["local-only"]);
+    act(()=>root.unmount());
+  });
+
+  it("leaves equal ink untouched unless explicitly dropped on both sides", () => {
+    const {root,onResolve}=mount({...conflict,local:annotateBody("book",900,[]),server:annotateBody("book",500,[]),
+      localInkStamps:[{pageId:1,updatedAt:10},{pageId:2,updatedAt:20}],hubInkStamps:[{pageId:1,updatedAt:10}]});
+    expect(document.querySelector('[data-note-id="__ink__:1"]')).toBeNull();
+    act(()=>paneButton(0,"keep").click());
+    act(()=>resolveButton().click());
+    expect(onResolve.mock.calls[0][0].inkPages).toEqual([{pageId:2,choice:"local"}]);
+    toggle();
+    for(const row of document.querySelectorAll('[data-note-id="__ink__:1"]')) act(()=>(row.querySelector('[data-action="drop"]') as HTMLButtonElement).click());
+    toggle();act(()=>resolveButton().click());
+    expect(onResolve.mock.calls[1][0].inkPages).toEqual([{pageId:1,choice:"none"},{pageId:2,choice:"local"}]);
+    act(()=>root.unmount());
+  });
+});
+
 describe("HubConflictSplit ink and labels", () => {
   afterEach(() => {
     document.body.textContent = "";

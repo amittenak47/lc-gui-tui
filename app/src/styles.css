@@ -1952,6 +1952,16 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   font-size: 14px;
 }
 
+.lc-hub-conflict-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.lc-hub-conflict-filter-help { font-size: 11px; color: var(--muted); }
+
 .lc-hub-conflict-split {
   flex: 1;
   min-height: 0;
@@ -2256,6 +2266,11 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 
 .lc-hub-conflict-note {
   display: flex;
+  /* Matching entries and their placeholders share a row height in both panes. */
+  box-sizing: border-box;
+  flex-shrink: 0;
+  height: 52px;
+  min-height: 52px;
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
@@ -2265,6 +2280,9 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   background: var(--surface);
   cursor: pointer;
 }
+
+.lc-hub-conflict-note.is-missing { opacity: .55; border-style: dashed; cursor: default; }
+.lc-hub-conflict-note.is-missing .lc-hub-conflict-note-actions { visibility: hidden; }
 
 .lc-hub-conflict-note.is-focused {
   border-color: var(--accent, var(--ink));

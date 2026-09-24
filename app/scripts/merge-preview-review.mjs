@@ -69,7 +69,7 @@ try {
   const results=[];
   await send("Emulation.setDeviceMetricsOverride",{width:1280,height:900,deviceScaleFactor:2,mobile:false});
   await send("Performance.enable");
-  for (const type of ["pdf", "markdown"]) {
+  for (const type of process.argv.includes('--filter-only') ? [] : ["pdf", "markdown"]) {
     await send("Page.navigate",{url:`http://127.0.0.1:1452/scripts/merge-preview-review.html${type==="markdown"?"?markdown":""}`});
     await waitFor('Boolean(window.reviewReady)');
     await evaluate(`window.reviewLongTasks=[];new PerformanceObserver(list=>window.reviewLongTasks.push(...list.getEntries().map(e=>({start:e.startTime,duration:e.duration})))).observe({type:'longtask'})`);
@@ -114,6 +114,22 @@ try {
       assert(opened.mergeCanvasBytes<64*1024*1024,JSON.stringify({type,opened}));
     }
     results.push({type,baseline,cycles,longTasks:await evaluate('window.reviewLongTasks')});
+  }
+  await send("Page.navigate",{url:'http://127.0.0.1:1452/scripts/merge-preview-review.html?filter'});
+  await waitFor('Boolean(window.reviewReady)');await evaluate('window.setReviewMerge(true)');
+  await waitFor(`document.querySelectorAll('.lc-hub-conflict-preview[aria-busy="false"]').length===2`);
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-note-id="common"]'))`),false);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-row-key="local-only"]').length`),2);
+  await evaluate(`document.querySelector('.lc-hub-conflict-filter input').click()`);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-note-id="common"]').length`),2);
+  for(const width of [1280,650]) {
+    await send("Emulation.setDeviceMetricsOverride",{width,height:900,deviceScaleFactor:1,mobile:false});await sleep(400);
+    await evaluate(`(()=>{const list=document.querySelector('.lc-hub-conflict-list');list.scrollTop=140;list.dispatchEvent(new Event('scroll',{bubbles:true}))})()`);
+    await sleep(100);
+    const aligned=await evaluate(`(()=>{const panes=[...document.querySelectorAll('.lc-hub-conflict-pane')];const rows=panes.map(p=>[...p.querySelectorAll('[data-row-key]')].map(r=>({id:r.dataset.rowKey,top:r.getBoundingClientRect().top,height:r.getBoundingClientRect().height})));return {rows,scroll:panes.map(p=>p.querySelector('.lc-hub-conflict-list').scrollTop)}})()`);
+    assert.deepEqual(aligned.rows[0],aligned.rows[1],`Row alignment at ${width}px`);
+    assert.equal(aligned.scroll[0],aligned.scroll[1]);
+    await shot(`merge-filter-${width}`);
   }
   await writeFile(resolve(out,'merge-results.json'),JSON.stringify({results,errors},null,2));
   assert.equal(errors.length,0,JSON.stringify(errors));console.log(JSON.stringify(results));

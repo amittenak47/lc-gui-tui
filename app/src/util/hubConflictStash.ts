@@ -179,7 +179,7 @@ function stampsFrom(
  * row; this is that row split so a textbook with one contested margin still
  * keeps the rest.
  */
-export function padInkDiffRows(conflict: HubPadConflict): InkPageDiffRow[] {
+export function padInkDiffRows(conflict: HubPadConflict, includeSame = false): InkPageDiffRow[] {
   const local = stampsFrom(
     conflict.localInkStamps,
     conflict.localInkPageIds,
@@ -190,7 +190,7 @@ export function padInkDiffRows(conflict: HubPadConflict): InkPageDiffRow[] {
     conflict.hubInkPageIds,
     conflict.serverInk ?? undefined,
   );
-  const rows = inkPageDiffRows(local, hub);
+  const rows = inkPageDiffRows(local, hub, includeSame);
   const colliding = conflict.inkPageId;
   if (colliding == null || rows.some((row) => row.pageId === colliding)) return rows;
   const hasLocal =
@@ -213,14 +213,14 @@ export function padInkDiffRows(conflict: HubPadConflict): InkPageDiffRow[] {
 export type FootnoteInkDiffRow = InkPageDiffRow & { wbId: string };
 
 /** Scratch-board pages that disagree, one row per board+page. */
-export function footnoteInkDiffRows(conflict: HubPadConflict): FootnoteInkDiffRow[] {
+export function footnoteInkDiffRows(conflict: HubPadConflict, includeSame = false): FootnoteInkDiffRow[] {
   const out: FootnoteInkDiffRow[] = [];
   for (const board of conflict.footnoteInk ?? []) {
     const local =
       board.localPages ?? board.localPageIds.map((pageId) => ({ pageId, updatedAt: 0 }));
     const hub =
       board.hubPages ?? board.hubPageIds.map((pageId) => ({ pageId, updatedAt: 0 }));
-    for (const row of inkPageDiffRows(local, hub)) {
+    for (const row of inkPageDiffRows(local, hub, includeSame)) {
       out.push({ wbId: board.wbId, ...row });
     }
   }
@@ -804,7 +804,8 @@ export function mergeFootnotes(
   const out: DocFootnote[] = [];
   for (const row of footnoteDiffRows(localNotes, serverNotes)) {
     if (row.sameId && !row.differs && row.local) {
-      out.push(row.local);
+      const pick = picks[row.id];
+      if (!pick || pick.local === true || pick.server === true) out.push(row.local);
       continue;
     }
     const pick = picks[row.id];

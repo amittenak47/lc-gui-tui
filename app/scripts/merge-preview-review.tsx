@@ -13,6 +13,7 @@ import "../src/styles.css";
 
 const markdown = new URLSearchParams(location.search).has("markdown");
 const replicas = new URLSearchParams(location.search).has("replicas");
+const filterReview = new URLSearchParams(location.search).has("filter");
 const bytes = reviewPdf();
 const width = 1100, height = Math.round(width * 800 / 600);
 const frames = Array.from({length:100}, (_, i) => ({pageId:i+1,minY:18+i*(height+18),maxY:18+i*(height+18)+height}));
@@ -59,6 +60,11 @@ if (replicas) {
   }
 }
 const fetched: number[] = [];
+if (filterReview) {
+  const common = {...notes[0],id:"common",excerpt:"Matching footnote"};
+  (conflict.local as AnnotatePadDto).footnotes = [...notes,common,{...common,id:"local-only",excerpt:"Only on Local"}];
+  (conflict.server as AnnotatePadDto).footnotes = [...(conflict.server as AnnotatePadDto).footnotes as typeof notes,common,{...common,id:"server-only",excerpt:"Only on Tablet"}];
+}
 Object.assign(window,{reviewFetched:fetched});
 const fetchPreviewInk = async (pageId: number) => {
   fetched.push(pageId);
