@@ -910,6 +910,7 @@ export function Workspace({
   const [linkMode, setLinkMode] = useState(false);
   const [annotateEntryOpen, setAnnotateEntryOpen] = useState(false);
   const [documentExportOpen, setDocumentExportOpen] = useState(false);
+  const [documentExportFormat, setDocumentExportFormat] = useState<"source"|"pdf">("source");
   /*
    * Which library the entry dialog is about.
    *
@@ -11373,7 +11374,7 @@ export function Workspace({
       )}
 
       {documentExportOpen && annotateSource && annotateDocId && (
-        <DocumentExportDialog name={annotateSource.name} docType={annotateSource.docType}
+        <DocumentExportDialog name={annotateSource.name} docType={annotateSource.docType} format={documentExportFormat}
           onClose={() => setDocumentExportOpen(false)}
           onExport={async (options, progress, signal) => {
             const id = annotateDocId;
@@ -11396,6 +11397,7 @@ export function Workspace({
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isAnnotate(problem))}
           snapshotKey={annotateDocId}
+          docType={annotateSource?.docType}
           needsName={padNeedsName}
           defaultName={padDefaultName}
           onRestoreTrash={(id) => handleRestoreTrash("annotate", id)}
@@ -11411,7 +11413,8 @@ export function Workspace({
               });
               return;
             }
-            if (choice === "export-document") {
+            if (choice === "export-document" || choice === "export-pdf") {
+              setDocumentExportFormat(choice === "export-pdf" ? "pdf" : "source");
               setAnnotateEntryOpen(false);
               setDocumentExportOpen(true);
               return;

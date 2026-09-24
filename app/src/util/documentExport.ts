@@ -5,7 +5,7 @@ import { rangeFromAnchor } from "./docAnchors";
 import { canvasPng, rasterAnnotation, sceneBounds, type ExportSnapshot } from "./documentExportSnapshot";
 import { noteText, noteAttachments } from "./documentExportNotes";
 
-export interface DocumentExportOptions { ink:boolean; footnotes:boolean; threads:boolean }
+export interface DocumentExportOptions { ink:boolean; footnotes:boolean; threads:boolean; format?:"source"|"pdf" }
 export interface ExportFile { name:string; blob:Blob }
 type Progress=(message:string)=>void;
 const tick=()=>new Promise<void>(resolve=>setTimeout(resolve,0));
@@ -15,15 +15,16 @@ const htmlEscape=(text:string)=>text.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&l
 
 export async function exportAnnotatedDocument(snapshot:ExportSnapshot,docId:string,options:DocumentExportOptions,progress:Progress,signal:AbortSignal):Promise<ExportFile> {
   signal.throwIfAborted();
-  return snapshot.source.docType==="pdf" ? exportPdf(snapshot,docId,options,progress,signal)
+  return snapshot.source.docType==="pdf" || options.format==="pdf" ? exportPdf(snapshot,docId,options,progress,signal)
     : exportReflow(snapshot,docId,options,progress,signal);
 }
 
 async function exportPdf(s:ExportSnapshot,docId:string,o:DocumentExportOptions,progress:Progress,signal:AbortSignal):Promise<ExportFile> {
-  if(!s.source.bytes)throw new Error("The PDF source is unavailable");
-  if(!s.scopes.length || s.scopes.some(scope=>!scope.page))throw new Error("Wait for all PDF page sizes to load before exporting.");
+  const originalPdf=s.source.docType==="pdf";
+  if(originalPdf && !s.source.bytes)throw new Error("The PDF source is unavailable");
+  if(!s.scopes.length || (originalPdf && s.scopes.some(scope=>!scope.page)))throw new Error("Wait for the document layout to finish loading before exporting.");
   const pages=[...new Set(s.scopes.map(scope=>scope.page!))].sort((a,b)=>a-b);
-  if(o.ink && s.pageIds.some(id=>id>0 && !pages.includes(id)))throw new Error("Some handwriting pages have no matching PDF page. Export stopped to avoid omitting them.");
+  if(originalPdf && o.ink && s.pageIds.some(id=>id>0 && !pages.includes(id)))throw new Error("Some handwriting pages have no matching PDF page. Export stopped to avoid omitting them.");
   const worker=new Worker(new URL("./documentExport.worker.ts",import.meta.url),{type:"module"});
   let seq=0;
   const pending=new Map<number,{resolve:(bytes?:Uint8Array<ArrayBuffer>)=>void;reject:(error:Error)=>void}>();
@@ -35,11 +36,16 @@ async function exportPdf(s:ExportSnapshot,docId:string,o:DocumentExportOptions,p
     signal.throwIfAborted();const id=++seq;pending.set(id,{resolve,reject});worker.postMessage({id,op,...extra,bytes},bytes ? [bytes.buffer]:[]);
   });
   try {
-    progress("Opening PDF for export…");await send("open",{pages},new Uint8Array(s.source.bytes.slice(0)));
-    const shared=o.ink && s.pageIds.includes(0) ? await s.readInk(0):[];
-    const legacy=o.ink && !s.pageIds.some(id=>id>1) && s.pageIds.includes(1) ? await s.readInk(1):null;
+    progress("Preparing PDF…");
+    if(originalPdf) await send("open",{pages},new Uint8Array(s.source.bytes!.slice(0)));
+    else {
+      await send("create");
+      await exportRenderedPages(s,o,progress,signal,png=>send("appendix",{},png).then(()=>{}));
+    }
+    const shared=originalPdf && o.ink && s.pageIds.includes(0) ? await s.readInk(0):[];
+    const legacy=originalPdf && o.ink && !s.pageIds.some(id=>id>1) && s.pageIds.includes(1) ? await s.readInk(1):null;
     const shapes=o.ink ? sceneBounds(s.board.elements):null;
-    for(let i=0;i<s.scopes.length;i++) {
+    for(let i=0;originalPdf && i<s.scopes.length;i++) {
       signal.throwIfAborted();const scope=s.scopes[i];if(!scope.page)continue;
       progress(`Exporting page ${scope.page}…`);
       const ops:InkOp[]=o.ink ? [...shared,...(legacy ?? (s.pageIds.includes(scope.page) ? await s.readInk(scope.page):[]))]:[];
@@ -60,7 +66,7 @@ async function exportPdf(s:ExportSnapshot,docId:string,o:DocumentExportOptions,p
           const attachments=await noteAttachments(docId,mark,signal,o.threads);
           const text=[noteText(mark,s,o.threads),...attachments.text].join("\n\n");
           const scope=s.scopes.find(scope=>scope.id===mark.scope);
-          if(scope?.page) {
+          if(originalPdf && scope?.page) {
             const r=mark.rects[0];
             await send("note",{note:{page:scope.page,right:scope.right,spread:scope.spread,number:mark.number,text,
               x:r ? Math.max(0,Math.min(.97,(r.maxX-scope.bounds.minX)/(scope.bounds.maxX-scope.bounds.minX))):.97,
@@ -75,6 +81,39 @@ async function exportPdf(s:ExportSnapshot,docId:string,o:DocumentExportOptions,p
     progress("Finishing PDF…");const bytes=await send("finish");if(!bytes)throw new Error("The PDF export returned no file");
     return {name:`${baseName(s.source.name)}.annotated.pdf`,blob:new Blob([bytes],{type:"application/pdf"})};
   }finally{signal.removeEventListener("abort",abort);worker.terminate();}
+}
+
+/** Paginate the frozen reading layout, keeping canvas memory bounded to one sheet. */
+async function exportRenderedPages(s:ExportSnapshot,o:DocumentExportOptions,progress:Progress,signal:AbortSignal,write:(png:Uint8Array<ArrayBuffer>)=>Promise<void>) {
+  if(!s.renderContent)throw new Error("The document preview is unavailable. Reopen the document before exporting.");
+  let number=0;
+  for(const scope of s.scopes) {
+    const width=scope.bounds.maxX-scope.bounds.minX,scale=1080/width,height=1440/scale;
+    for(let top=scope.bounds.minY;top<scope.bounds.maxY;top+=height) {
+      signal.throwIfAborted();progress(`Exporting page ${++number}…`);
+      const bounds={...scope.bounds,minY:top,maxY:Math.min(top+height,scope.bounds.maxY)};
+      const canvas=document.createElement("canvas");canvas.width=1224;canvas.height=1584;
+      const ctx=canvas.getContext("2d");if(!ctx)throw new Error("Could not create PDF page canvas");
+      try {
+        ctx.fillStyle="white";ctx.fillRect(0,0,1224,1584);ctx.translate(72,72);
+        await s.renderContent(ctx,bounds,scale);
+        const layer=async(ops:InkOp[],scene:ExportSnapshot["board"],marks:ExportSnapshot["marks"])=>{
+          const bytes=await rasterAnnotation(bounds,ops,scene,s,marks);
+          const image=await createImageBitmap(new Blob([bytes],{type:"image/png"}));
+          try{ctx.drawImage(image,0,0,width*scale,(bounds.maxY-bounds.minY)*scale);}finally{image.close();}
+        };
+        const empty={...s.board,elements:[],files:{}};
+        // Read one shard at a time; never assemble a large document's ink blob.
+        if(o.ink)for(const id of s.pageIds) {
+          signal.throwIfAborted();const ops=await s.readInk(id);
+          if(intersects(inkOpsBounds(ops),bounds))await layer(ops,empty,[]);
+        }
+        if(o.ink || o.footnotes)await layer([],o.ink?s.board:empty,o.footnotes?s.marks.filter(mark=>mark.scope===scope.id):[]);
+        await write(await canvasPng(canvas));
+      }finally{canvas.width=0;canvas.height=0;}
+      await tick();
+    }
+  }
 }
 
 /** Page-sized canvas only; footnote text also lives in Unicode PDF comments. */

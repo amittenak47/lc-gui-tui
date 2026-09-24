@@ -8,6 +8,7 @@ self.onmessage=async ({data}:{data:{id:number;op:string;bytes?:Uint8Array;pages?
         throw new Error("The PDF layout is incomplete. Wait for the document to finish opening before exporting.");
       }
     }
+    else if(data.op==="create")pdf=await AnnotatedPdf.create();
     else if(!pdf)throw new Error("PDF export was not initialized");
     else if(data.op==="overlay")await pdf.overlay({...data.placement!,png:data.bytes!});
     else if(data.op==="note")pdf.note(data.note!);

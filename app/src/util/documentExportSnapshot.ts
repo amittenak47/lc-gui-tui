@@ -8,6 +8,7 @@ import { rangeFromAnchor, textOf } from "./docAnchors";
 import type { DocFootnote } from "./docFootnotes";
 import type { DocType } from "./annotateStore";
 import type { AgentChatMessage } from "../modes/AgentSidePanel";
+import { compositePageLayers } from "../canvas/exportPageComposite";
 
 export interface ExportSource { name: string; text: string; hash: string; docType: DocType; bytes?: ArrayBuffer | null }
 export interface ExportScope { id: string; bounds: SceneBounds; page?: number; right?: boolean; spread?: boolean; blocks: {text: string; y: number}[] }
@@ -17,6 +18,7 @@ export interface ExportSnapshot {
   messages: AgentChatMessage[]; pageIds: number[];
   readInk(pageId: number): Promise<InkOp[]>;
   hosts: ReturnType<typeof scrollHostLookupFromSlot>; zoom: number;
+  renderContent?(ctx: CanvasRenderingContext2D, bounds: SceneBounds, scale: number): Promise<void>;
 }
 
 /** Capture current layout and dirty ink without changing the reader's scroll position. */
@@ -38,7 +40,7 @@ export async function snapshotDocumentExport(board: BoardHandle, source: ExportS
   const scopes = nodes.map(node => ({
     id:node.dataset.docScope ?? "", bounds:bounds(node.getBoundingClientRect()),
     page:node.dataset.pdfPage ? Number(node.dataset.pdfPage) : undefined,
-    right:node.dataset.pdfHalf === "right", spread:node.dataset.pdfHalf === "left" || node.dataset.pdfHalf === "right",
+    right:node.dataset.pdfHalf === "right", spread:!!node.dataset.pdfPage && nodes.some(other => other.dataset.pdfPage === node.dataset.pdfPage && other.dataset.pdfHalf === "right"),
     blocks:[...node.querySelectorAll<HTMLElement>("p,li,pre,h1,h2,h3,blockquote")]
       .map(el => ({text:textOf(el).trim(),y:bounds(el.getBoundingClientRect()).minY})).filter(row=>row.text),
   }));
@@ -76,8 +78,22 @@ export async function snapshotDocumentExport(board: BoardHandle, source: ExportS
   const pageIds=[...new Set([...clocks.keys(),...live.keys(),...(scene.inkPages?.pageIds ?? [])])];
   const fallback=pageIds.length ? [] : inkOpsFrom(scene);
   if (fallback.length) pageIds.push(1);
+  // Freeze the readable DOM before exporting, so navigation cannot change later pages.
+  const content = source.docType === "pdf" ? [] : nodes.map((node, index) => {
+    const clone = node.cloneNode(true) as HTMLElement;
+    const style = getComputedStyle(node);
+    clone.style.width = `${scopes[index].bounds.maxX - scopes[index].bounds.minX}px`;
+    clone.style.boxSizing = "border-box";
+    clone.style.font = style.font;
+    clone.style.color = style.color;
+    clone.style.backgroundColor = style.backgroundColor;
+    return {clone, bounds:scopes[index].bounds};
+  });
   return {source,board:structuredClone(scene),scopes,marks,messages:structuredClone([...messages]),pageIds,
     hosts:scrollHostLookupFromSlot(root,bounds(root.getBoundingClientRect())),zoom,
+    async renderContent(ctx, bounds, scale) {
+      for(const item of content) await compositePageLayers(ctx,bounds,scale,{contentSlot:item.clone,marksSlot:null,pageBounds:item.bounds,paperColor:"#ffffff"});
+    },
     async readInk(pageId) {
       if (live.has(pageId)) return decodeInkOps(live.get(pageId)!);
       if (fallback.length) return fallback;

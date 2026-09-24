@@ -14,6 +14,7 @@ export function pdfDisplayTransform(box:{x:number;y:number;width:number;height:n
 export class AnnotatedPdf {
   private constructor(private pdf:PDFDocument) {}
   static async open(bytes:Uint8Array) { return new AnnotatedPdf(await PDFDocument.load(bytes)); }
+  static async create() { return new AnnotatedPdf(await PDFDocument.create()); }
   pageCount() { return this.pdf.getPageCount(); }
   async overlay(input:PdfPlacement & {png:Uint8Array}) {
     const page=this.pdf.getPage(input.page-1);

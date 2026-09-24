@@ -46,6 +46,18 @@ window.runExports=async()=>{
   for(const [name,bytes] of pngs){const bitmap=await createImageBitmap(new Blob([bytes]));assert(bitmap.width>20 && bitmap.height>5,`Empty ink image ${name}`);bitmap.close();}
   checks.push('Markdown keeps source, Unicode footnote, normal ink and hidden code-box ink');
 
+  const mdPdf=await exportAnnotatedDocument(snap,'export-review',{...options,format:'pdf'},()=>{},controller.signal);
+  const mdLoading=getDocument({data:new Uint8Array(await mdPdf.blob.arrayBuffer())});
+  const mdReader=await mdLoading.promise;assert(mdReader.numPages===3,'Markdown PDF lost content or appendix');
+  const mdPage=await mdReader.getPage(1),mdViewport=mdPage.getViewport({scale:1});
+  const mdCanvas=document.createElement('canvas');mdCanvas.width=mdViewport.width;mdCanvas.height=mdViewport.height;
+  await mdPage.render({canvas:mdCanvas,viewport:mdViewport}).promise;
+  const mdPixels=mdCanvas.getContext('2d').getImageData(0,0,mdCanvas.width,mdCanvas.height).data;
+  let mdRed=0,mdDark=0;for(let i=0;i<mdPixels.length;i+=4){if(mdPixels[i]>180 && mdPixels[i+1]<100 && mdPixels[i+2]<100)mdRed++;if(mdPixels[i]<100 && mdPixels[i+1]<100 && mdPixels[i+2]<100)mdDark++;}
+  assert(mdRed>40 && mdDark>50,'Markdown PDF lost ink or readable text');
+  mdCanvas.width=0;mdCanvas.height=0;await mdLoading.destroy();
+  checks.push('Markdown also exports paginated PDF with visible text, ink and footnotes');
+
   const chapter='<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter</title></head><body><p>First paragraph.</p><p>Second paragraph.</p></body></html>';
   const epub=zipSync({mimetype:[strToU8('application/epub+zip'),{level:0}],
     'META-INF/container.xml':strToU8('<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>'),
@@ -54,6 +66,9 @@ window.runExports=async()=>{
   root.innerHTML='<section data-doc-scope="OPS/chapter.xhtml" style="width:400px;height:600px"><p>First paragraph.</p><p>Second paragraph.</p></section>';
   const en=mark(root.firstElementChild,'epub-note','OPS/chapter.xhtml');
   const es=await snapshotDocumentExport(board(new Map([[1,encodeInkOps([draw(20,45)])]])),{name:'book.epub',text:'',hash:'epub',docType:'epub',bytes:epub.buffer},'export-review',[en],[]);
+  const epubPdf=await exportAnnotatedDocument(es,'export-review',{...options,format:'pdf'},()=>{},controller.signal);
+  assert((await PDFDocument.load(await epubPdf.blob.arrayBuffer())).getPageCount()===3,'EPUB PDF lost content or appendix');
+  checks.push('EPUB also exports paginated PDF with a footnote appendix');
   const eo=await exportAnnotatedDocument(es,'export-review',options,()=>{},controller.signal);
   const eb=new Uint8Array(await eo.blob.arrayBuffer()),ef=unzipSync(eb);
   assert(strFromU8(eb.slice(30,38))==='mimetype' && eb[8]===0 && eb[9]===0,'EPUB mimetype must be first and uncompressed');
@@ -70,9 +85,10 @@ window.runExports=async()=>{
   const p1=pdf.addPage([500,500]);p1.setCropBox(25,30,300,400);p1.setRotation(degrees(90));p1.drawText('Original selectable text',{x:60,y:120,size:16});
   pdf.addPage([400,300]).drawText('Page two',{x:30,y:150});
   const source=await pdf.save();
-  root.innerHTML='<div data-doc-scope="p1" data-pdf-page="1" style="width:400px;height:300px"></div><div data-doc-scope="p2" data-pdf-page="2" style="width:400px;height:300px"></div>';
+  root.innerHTML='<div data-doc-scope="p1" data-pdf-page="1" data-pdf-half="left" style="width:400px;height:300px"></div><div data-doc-scope="p2" data-pdf-page="2" data-pdf-half="left" style="width:400px;height:300px"></div>';
   const pn={id:'pdf-note',kind:'note',createdAt:1,anchor:{kind:'text',scope:'p2',start:0,end:4,exact:'Page'},excerpt:'Page',bands:[{left:20,top:340,width:80,height:18}],notes:note.notes};
   const ps=await snapshotDocumentExport(board(new Map([[1,encodeInkOps([draw(40,50)])],[2,encodeInkOps([draw(50,360)])]])),{name:'book.pdf',text:'',hash:'pdf',docType:'pdf',bytes:source.buffer},'export-review',[pn],[]);
+  assert(ps.scopes.every(scope=>!scope.spread),'Unsplit left pages were mistaken for half spreads');
   assert(ps.marks[0].rects[0].minY===340,'Unrendered PDF footnote bands are misplaced');
   const po=await exportAnnotatedDocument(ps,'export-review',options,()=>{},controller.signal);
   const bytes=new Uint8Array(await po.blob.arrayBuffer());window.exportReviewPdf=Array.from(bytes);

@@ -134,10 +134,12 @@ describe("AnnotateDialog", () => {
     live.rows.push({id:"other",name:"other.pdf",hash:"other",docType:"pdf",updatedAt:3});
     const view=mount({allowSave:true,snapshotKey:"d1"});
     expect(view.host.textContent).not.toContain("Import annotation backup");
-    await click("Export",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-document");
-    await click("Annotation sets",view.host);
+    await click("Export",view.host);await click("PDF",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-pdf");
+    await click("Markdown + images",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-document");
+    await click("Back",view.host);
+    await click("Annotation sets",view.host);await click("Saved annotation sets",view.host);
     expect(view.host.textContent).toContain("Second set");expect(view.host.textContent).not.toContain("other.pdf");
-    await click("Back",view.host);await click("More",view.host);await click("Annotation backup",view.host);
+    await click("Back",view.host);await click("Export",view.host);
     expect(view.onChoose).toHaveBeenLastCalledWith("export");
     view.unmount();
   });
@@ -152,7 +154,7 @@ describe("AnnotateDialog", () => {
       await syncing;
     });
     const view = mount({ onDelete });
-    await click("Open / Recent", view.host);
+    await click("Open", view.host);
     await click("Recent documents", view.host);
     const remove = view.host.querySelector<HTMLButtonElement>(".lc-scratch-load-trash")!;
     expect(remove).toBeTruthy();
@@ -173,7 +175,7 @@ describe("AnnotateDialog", () => {
 
   it("keeps web pads out of the document Recent list", async () => {
     const view = mount({ kind: "document" });
-    await click("Open / Recent", view.host);
+    await click("Open", view.host);
     await click("Recent documents", view.host);
     expect(view.host.textContent).toContain("note.md");
     expect(view.host.textContent).not.toContain("Example");
@@ -183,7 +185,7 @@ describe("AnnotateDialog", () => {
 
   it("lists only web pads in the Pages Recent list", async () => {
     const view = mount({ kind: "web" });
-    await click("Open / Recent", view.host);
+    await click("Open", view.host);
     await click("Recent documents", view.host);
     expect(view.host.textContent).toContain("Example");
     expect(view.host.textContent).not.toContain("note.md");
@@ -204,7 +206,7 @@ describe("AnnotateDialog", () => {
       }
     });
     const view = mount({ kind: "document", onRestoreTrash });
-    await click("Open / Recent", view.host);
+    await click("Open", view.host);
     await click("Recent documents", view.host);
     expect(view.host.textContent).toContain("Restore · note.md");
     await hold("Restore note.md", view.host);
@@ -219,7 +221,7 @@ describe("AnnotateDialog", () => {
       live.rows = live.rows.map((row) => (row.id === id ? { ...row, label: title } : row));
     });
     const view = mount({ kind: "document", onRename });
-    await click("Open / Recent", view.host);
+    await click("Open", view.host);
     await click("Recent documents", view.host);
     await tap("Open note.md", view.host);
     await tap("Open note.md", view.host);

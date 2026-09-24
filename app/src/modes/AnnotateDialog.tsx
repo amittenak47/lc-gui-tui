@@ -42,6 +42,7 @@ export type MdInkEntryChoice =
   | "save"
   | "export"
   | "export-document"
+  | "export-pdf"
   | "import"
   | "snapshot"
   /** Start a second set of annotations on the file already open. */
@@ -96,6 +97,7 @@ interface EntryProps {
   allowSave?: boolean;
   /** Pad id of the open document — used to list rolling snapshots. */
   snapshotKey?: string | null;
+  docType?: string;
   needsName?: boolean;
   defaultName?: string;
   onChoose: (choice: MdInkEntryChoice, docId?: string) => void;
@@ -112,7 +114,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   const [trash, setTrash] = useState<AnnotateDocMeta[]>(() => listAnnotateTrash());
   const [pickingRecent, setPickingRecent] = useState(false);
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
-  const [section, setSection] = useState<"main" | "open" | "sets" | "more">("main");
+  const [section, setSection] = useState<"main" | "new" | "open" | "sets" | "export" | "more">("main");
   const backdropDown = useRef(false);
   /** Naming a new note. Null when the dialog is not on that step. */
   const [newTitle, setNewTitle] = useState<string | null>(null);
@@ -289,7 +291,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
         aria-label={isLeave ? "Leave document?" : isWeb ? "Web pad" : "Document pad"}
       >
         <div className="lc-settings-head">
-          <h2>{isLeave ? "Leave document?" : section === "more" ? "More options" : section === "sets" ? "Annotation sets" : section === "open" ? "Open document" : isWeb ? "Pages" : "Document"}</h2>
+          <h2>{isLeave ? "Leave document?" : section === "new" ? "New" : section === "export" ? "Export" : section === "more" ? "History" : section === "sets" ? "Annotation sets" : section === "open" ? "Open" : isWeb ? "Pages" : "Document"}</h2>
           <p className="lc-muted">
             {saveTitle !== null
               ? "Name this pad. Hold Save to keep the suggested name."
@@ -419,7 +421,8 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                     onConfirm={() => entry.onChoose("recent", doc.id)}
                     resetKey={error}
                   >
-                    <strong>{title}</strong>
+                    <strong>{doc.name}</strong>
+                    {doc.label && <span className="lc-muted">{doc.label}</span>}
                     <LibraryTimes {...doc}/>
                   </HoldButton>
                   )}
@@ -534,22 +537,30 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                 <div className="lc-document-menu">
                   {section === "main" && <>
                     {allowSave && <button type="button" className="lc-secondary lc-document-menu-save" disabled={locked} onClick={beginSave}>Save annotations</button>}
-                    <button type="button" disabled={locked} onClick={() => setSection("open")}><strong>Open / Recent</strong><span>Files and saved documents</span></button>
-                    {allowSave && <button type="button" disabled={locked} onClick={() => { setSection("sets"); setPickingRecent(true); }}><strong>Annotation sets</strong><span>Switch sets or start a new one</span></button>}
-                    {allowSave && <button type="button" disabled={locked} onClick={() => props.onChoose("export-document")}><strong>Export…</strong><span>A readable copy with your annotations</span></button>}
-                    <button type="button" disabled={locked} onClick={() => setSection("more")}><strong>More…</strong><span>History, import and backups</span></button>
+                    <button type="button" disabled={locked} onClick={() => setSection("new")}><strong>New</strong><span>{isWeb ? "Web page" : "Markdown file"}</span></button>
+                    <button type="button" disabled={locked} onClick={() => setSection("open")}><strong>Open</strong><span>Load files and recent annotation sets</span></button>
+                    {allowSave && <button type="button" disabled={locked} onClick={() => setSection("sets")}><strong>Annotation sets</strong><span>Switch, import or export editable notes</span></button>}
+                    {allowSave && <button type="button" disabled={locked} onClick={() => setSection("export")}><strong>Export</strong><span>A readable copy with your annotations</span></button>}
+                    {allowSave && <button type="button" disabled={locked} onClick={() => setSection("more")}><strong>History</strong></button>}
                   </>}
+                  {section === "new" && <button type="button" disabled={locked} onClick={() => isWeb ? props.onChoose("page") : setNewTitle("")}><strong>{isWeb ? "Web page" : "Markdown file"}</strong></button>}
                   {section === "open" && <>
-                    {isWeb ? <button type="button" disabled={locked} onClick={() => props.onChoose("page")}><strong>New page</strong></button> : <>
-                      <button type="button" disabled={locked} onClick={() => props.onChoose("open")}><strong>Open document…</strong><span>PDF, EPUB, Markdown or source code</span></button>
-                      <button type="button" disabled={locked} onClick={() => setNewTitle("")}><strong>New note</strong></button>
-                    </>}
+                    {!isWeb && <button type="button" disabled={locked} onClick={() => props.onChoose("open")}><strong>Load file…</strong><span>PDF, EPUB, Markdown or source code</span></button>}
                     <button type="button" disabled={locked || (!visibleDocs.length && !archived.length)} onClick={() => setPickingRecent(true)}><strong>Recent documents</strong></button>
+                    <button type="button" disabled={locked} onClick={() => props.onChoose("import")}><strong>Import annotation set…</strong></button>
+                  </>}
+                  {section === "sets" && <>
+                    <button type="button" disabled={locked} onClick={() => setPickingRecent(true)}><strong>Saved annotation sets</strong><span>Sets for the open file</span></button>
+                    <button type="button" disabled={locked} onClick={() => props.onChoose("fork")}><strong>New annotation set</strong></button>
+                    <button type="button" disabled={locked} onClick={() => props.onChoose("import")}><strong>Import</strong><span>Editable annotation set</span></button>
+                    <button type="button" disabled={locked} onClick={() => props.onChoose("export")}><strong>Export</strong><span>Editable annotation set</span></button>
+                  </>}
+                  {section === "export" && <>
+                    <button type="button" disabled={locked} onClick={() => props.onChoose("export-pdf")}><strong>PDF</strong><span>Document with ink and footnotes</span></button>
+                    {entry?.docType !== "pdf" && <button type="button" disabled={locked} onClick={() => props.onChoose("export-document")}><strong>{entry?.docType === "epub" ? "EPUB" : "Markdown + images"}</strong><span>Readable, reflowable text</span></button>}
                   </>}
                   {section === "more" && <>
                     {allowSave && <button type="button" disabled={locked || !snapshotKey} onClick={openSnapshots}><strong>Restore snapshot…</strong><span>Earlier copies of these annotations</span></button>}
-                    {allowSave && <button type="button" disabled={locked} onClick={() => props.onChoose("export")}><strong>Annotation backup</strong><span>An editable backup for this app</span></button>}
-                    <button type="button" disabled={locked} onClick={() => props.onChoose("import")}><strong>Import annotation backup…</strong></button>
                   </>}
                 </div>
               )}
@@ -564,7 +575,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
               className="lc-secondary"
               disabled={locked}
               onClick={() => {
-                if ((!pickingRecent && !pickingSnapshots && newTitle === null && saveTitle === null) || section === "sets") setSection("main");
+                if (!pickingRecent && !pickingSnapshots && newTitle === null && saveTitle === null) setSection("main");
                 setPickingRecent(false);
                 setPickingSnapshots(false);
                 setNewTitle(null);
