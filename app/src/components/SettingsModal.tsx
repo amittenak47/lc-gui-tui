@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 
 import { checkPadHub, type PadHubCheck } from "../api/client";
 import type { DevicePrefsDto, DlcStatus, LcClient } from "../api/client";
+import {dlcProgressLabel, mergeDlcStatus} from "../util/dlcProgress";
 import type {
   CoachFlags,
   DatasetInfo,
@@ -986,9 +987,9 @@ export function SettingsModal({
   const refreshDlc = useCallback(async () => {
     try {
       const rows = await client.dlcStatus();
-      setDlcRows(Array.isArray(rows) ? rows : []);
+      if (Array.isArray(rows)) setDlcRows(current => mergeDlcStatus(current, rows));
     } catch {
-      setDlcRows([]);
+      // Retain the last known status during a transient request failure.
     }
     try {
       setDatasets(await client.datasets());
@@ -1016,7 +1017,7 @@ export function SettingsModal({
       .then(({ listen }) =>
         listen<DlcStatus[]>("lc-dlc-status", (event) => {
           if (!Array.isArray(event.payload)) return;
-          setDlcRows(event.payload);
+          setDlcRows(current => mergeDlcStatus(current, event.payload));
           setDatasets((current) =>
             current.map((entry) => {
               const row = event.payload.find((item) => item.slug === entry.id);
@@ -1046,15 +1047,14 @@ export function SettingsModal({
 
   const onDlcInstall = useCallback(
     (slug: string) => {
+      setDlcRows(current => current.map(row => row.slug === slug
+        ? {...row,phase:"starting",progress:-1,error:null,downloaded:0,total:0} : row));
       void client.dlcInstall(slug).then((row) => {
         if (!row?.slug) return;
-        setDlcRows((current) =>
-          (Array.isArray(current) ? current : []).map((entry) =>
-            entry.slug === slug ? row : entry,
-          ),
-        );
+        setDlcRows(current => mergeDlcStatus(current, [row]));
       }).catch((cause) => {
-        setError(cause instanceof Error ? cause.message : String(cause));
+        const error = cause instanceof Error ? cause.message : String(cause);
+        setDlcRows(current => current.map(row => row.slug === slug ? {...row,phase:"error",error} : row));
       });
     },
     [client],
@@ -1064,11 +1064,7 @@ export function SettingsModal({
     (slug: string) => {
       void client.dlcRemove(slug).then((row) => {
         if (!row?.slug) return;
-        setDlcRows((current) =>
-          (Array.isArray(current) ? current : []).map((entry) =>
-            entry.slug === slug ? row : entry,
-          ),
-        );
+        setDlcRows(current => mergeDlcStatus(current, [row]));
       }).catch((cause) => {
         setError(cause instanceof Error ? cause.message : String(cause));
       });
@@ -1528,21 +1524,17 @@ export function SettingsModal({
                 in <code>session.json</code> if you Remove and later reinstall.
               </p>
               {(Array.isArray(dlcRows) ? dlcRows : []).map((row) => {
-                const working = ["downloading", "unpacking", "indexing"].includes(row.phase);
+                const working = ["starting", "downloading", "unpacking", "indexing"].includes(row.phase);
                 const pct = row.progress >= 0 ? Math.round(row.progress * 100) : null;
-                const downloaded = row.downloaded ?? 0;
-                const total = row.total ?? 0;
                 const label = working
                   ? row.phase === "downloading" && pct != null
                     ? `${pct}%`
                     : "…"
+                  : row.phase === "error" ? "Retry"
                   : row.installed
                     ? "Remove"
                     : "Install";
-                const countLabel =
-                  row.phase === "downloading" && total > 0
-                    ? `${formatDlcBytes(downloaded)} / ${formatDlcBytes(total)}`
-                    : `${row.count.toLocaleString()} indexed`;
+                const countLabel = dlcProgressLabel(row, formatDlcBytes);
                 const fillPct =
                   working && pct != null ? `${pct}%` : working ? "40%" : "0%";
                 return (
@@ -1553,7 +1545,7 @@ export function SettingsModal({
                       type="button"
                       className={[
                         "lc-settings-dlc-action",
-                        row.installed && !working ? "is-remove" : "",
+                        row.installed && !working && row.phase !== "error" ? "is-remove" : "",
                         working ? "is-busy" : "",
                         working && pct == null ? "is-indeterminate" : "",
                       ]
@@ -1562,7 +1554,7 @@ export function SettingsModal({
                       style={{ "--dlc-progress": fillPct } as CSSProperties}
                       disabled={Boolean(busy) || working}
                       onClick={() =>
-                        row.installed && !working
+                        row.installed && !working && row.phase !== "error"
                           ? onDlcRemove(row.slug)
                           : onDlcInstall(row.slug)
                       }

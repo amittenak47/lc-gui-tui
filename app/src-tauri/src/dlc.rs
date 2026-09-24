@@ -56,6 +56,7 @@ pub struct DlcStatus {
     pub downloaded: u64,
     pub total: u64,
     pub error: Option<String>,
+    pub revision: u64,
 }
 
 pub struct DlcHub {
@@ -79,6 +80,7 @@ impl DlcHub {
                     downloaded: 0,
                     total: 0,
                     error: None,
+                    revision: 0,
                 },
             );
         }
@@ -101,6 +103,8 @@ fn set_phase(hub: &DlcHub, slug: &str, phase: &str, progress: f32, error: Option
         row.phase = phase.into();
         row.progress = progress;
         row.error = error;
+        row.revision += 1;
+        if phase == "indexing" { row.count = 0; }
     }
 }
 
@@ -110,6 +114,7 @@ fn set_index_count(hub: &DlcHub, slug: &str, count: u32) {
         row.phase = "indexing".into();
         row.count = count;
         row.error = None;
+        row.revision += 1;
     }
 }
 
@@ -125,6 +130,7 @@ fn set_download(hub: &DlcHub, slug: &str, written: u64, total: Option<u64>) {
         row.downloaded = written;
         row.total = total.unwrap_or(0);
         row.error = None;
+        row.revision += 1;
     }
 }
 
@@ -137,9 +143,12 @@ fn refresh_installed(hub: &DlcHub, slug: &str, cfg: &harness::config::Config) {
         .as_ref()
         .is_some_and(|dir| dataset::dir_has_own_corpus_files(dir, dataset));
     let count = dataset_row_count(dataset).unwrap_or(0) as u32;
+    update_installed(hub, slug, installed, count);
+}
+
+fn update_installed(hub: &DlcHub, slug: &str, installed: bool, count: u32) {
     let mut map = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(row) = map.get_mut(slug) {
-        row.installed = installed;
         // Status is polled while DLC indexes. COUNT(*) on another connection
         // does not see the open transaction, and the default corpus walk used
         // to spend that time inside sibling folders — live `set_index_count`
@@ -149,9 +158,15 @@ fn refresh_installed(hub: &DlcHub, slug: &str, cfg: &harness::config::Config) {
             && row.phase != "unpacking"
             && row.phase != "indexing"
         {
+            let ready = installed && count > 0;
+            if row.count != count || row.installed != ready { row.revision += 1; }
             row.count = count;
-            row.phase = "idle".into();
-            row.progress = if installed { 1.0 } else { 0.0 };
+            row.installed = ready;
+            // A poll must not erase a failed installation's retry state.
+            if row.phase != "error" {
+                row.phase = "idle".into();
+                row.progress = if ready { 1.0 } else { 0.0 };
+            }
         }
     }
 }
@@ -204,14 +219,20 @@ pub async fn lc_dataset_dlc_install(
         ));
     }
     {
-        let map = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(row) = map.get(&slug) {
+        let mut map = hub.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(row) = map.get_mut(&slug) {
             if matches!(row.phase.as_str(), "downloading" | "unpacking" | "indexing") {
                 return ok_json(row.clone());
             }
+            row.phase = "downloading".into();
+            row.progress = -1.0;
+            row.count = 0;
+            row.downloaded = 0;
+            row.total = 0;
+            row.error = None;
+            row.revision += 1;
         }
     }
-    set_phase(&hub, &slug, "downloading", -1.0, None);
     emit(&app);
     let handle = app.clone();
     let slug_task = slug.clone();
@@ -292,6 +313,10 @@ async fn install_one(app: &AppHandle, slug: &str) -> Result<(), String> {
     })
     .await
     .map_err(|err| err.to_string())??;
+
+    if dataset_row_count(dataset)? == 0 {
+        return Err("The downloaded files contained no readable problems. Retry the installation.".into());
+    }
 
     set_phase(&hub, slug, "idle", 1.0, None);
     refresh_installed(&hub, slug, &state.cfg_snapshot());
@@ -383,8 +408,32 @@ fn sanitize_zip_name(name: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_zip_name;
+    use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn status_poll_keeps_live_count_and_failed_installation() {
+        let hub = DlcHub::new();
+        let slug = dataset::default().id;
+        set_phase(&hub, slug, "indexing", -1.0, None);
+        set_index_count(&hub, slug, 12);
+        let version = snapshot(&hub).into_iter().find(|r| r.slug == slug).unwrap().revision;
+        update_installed(&hub, slug, true, 0);
+        let live = snapshot(&hub).into_iter().find(|r| r.slug == slug).unwrap();
+        assert_eq!(live.count, 12);
+        assert_eq!(live.revision, version);
+        set_phase(&hub, slug, "error", 0.0, Some("failed".into()));
+        update_installed(&hub, slug, true, 0);
+        let failed = snapshot(&hub).into_iter().find(|r| r.slug == slug).unwrap();
+        assert_eq!(failed.phase, "error");
+        assert!(!failed.installed);
+        assert!(failed.revision > version);
+        set_phase(&hub, slug, "idle", 1.0, None);
+        update_installed(&hub, slug, true, 2869);
+        let ready = snapshot(&hub).into_iter().find(|r| r.slug == slug).unwrap();
+        assert!(ready.installed);
+        assert_eq!(ready.count, 2869);
+    }
 
     #[test]
     fn zip_names_drop_traversal() {

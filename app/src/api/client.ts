@@ -493,6 +493,7 @@ export interface DevicePrefsDto {
 }
 
 export interface DlcStatus {
+  revision?: number;
   slug: string;
   label: string;
   installed: boolean;
