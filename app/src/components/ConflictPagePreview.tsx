@@ -45,6 +45,7 @@ import {
 } from "./conflictInkLayout";
 import { attachOverflowFlick } from "./conflictPreviewFlick";
 import { ConflictInkPainter, conflictInkBackingSize, conflictVisibleInkTiles } from "./conflictInkPaint";
+import { previewScrollAnchor, previewScrollTop, type PreviewPageBox, type PreviewScrollAnchor } from "./conflictScrollAnchor";
 
 const EMPTY_PDF_BYTES = new ArrayBuffer(0);
 
@@ -132,6 +133,10 @@ export function ConflictPagePreview({
   if (!holdsRef.current) holdsRef.current = makeDocFlagHolds(filmScope);
   const holds = holdsRef.current;
   const [cssWidth, setCssWidth] = useState(0);
+  const layoutWidthRef = useRef(0);
+  const pageBoxesRef = useRef<PreviewPageBox[]>([]);
+  const resizeAnchorRef = useRef<PreviewScrollAnchor | null>(null);
+  const scrollTopRef = useRef(0);
   const [scrollRoot, setScrollRoot] = useState<HTMLElement | null>(null);
   const [stackH, setStackH] = useState(0);
   const onVisiblePagesRef = useRef(onVisiblePages);
@@ -167,7 +172,13 @@ export function ConflictPagePreview({
     if (!node) return;
     const apply = () => {
       const width = Math.round(node.clientWidth);
-      if (width > 0) setCssWidth(width);
+      if (width > 0 && width !== layoutWidthRef.current) {
+        // The old DOM geometry has already changed when ResizeObserver runs.
+        // Use the last measured page boxes and the last user scroll position.
+        resizeAnchorRef.current ??= previewScrollAnchor(pageBoxesRef.current, scrollTopRef.current);
+        layoutWidthRef.current = width;
+        setCssWidth(width);
+      }
     };
     apply();
     if (typeof ResizeObserver === "undefined") return;
@@ -217,6 +228,39 @@ export function ConflictPagePreview({
     (Boolean(bytes && bytes.byteLength > 0) || Boolean(borrowed));
   const useMarkdown = !usePdf && Boolean(sourceText);
   const usePaper = !usePdf && !useMarkdown;
+
+  useLayoutEffect(() => {
+    const host=hostRef.current,doc=docRef.current;
+    if(!host || !doc)return;
+    const base=host.getBoundingClientRect();
+    const boxes=[...doc.querySelectorAll<HTMLElement>("[data-pdf-page]")].map(el=>{
+      const box=el.getBoundingClientRect();
+      return {page:Number(el.dataset.pdfPage),top:box.top-base.top+host.scrollTop,height:box.height};
+    }).filter(box=>box.height>0);
+    if(!boxes.length)return;
+    // PDF updates page sizes asynchronously; don't consume the anchor against
+    // the old-width slots on the first render of a resize.
+    const first=doc.querySelector<HTMLElement>("[data-pdf-page]");
+    if(usePdf && first && Math.abs(first.getBoundingClientRect().width-cssWidth)>2)return;
+    const anchor=resizeAnchorRef.current;
+    if(anchor) {
+      const next=previewScrollTop(boxes,anchor);
+      if(next!==null)host.scrollTop=next;
+      resizeAnchorRef.current=null;
+    }
+    pageBoxesRef.current=boxes;
+    scrollTopRef.current=host.scrollTop;
+    // Trigger viewport/ink sampling even if the browser suppressed a scroll
+    // event because the resulting scrollTop happened to be unchanged.
+    if(anchor)host.dispatchEvent(new Event("scroll"));
+  },[cssWidth,stackH,usePdf,useMarkdown]);
+
+  useEffect(()=>{
+    const host=scrollRoot;if(!host)return;
+    const remember=()=>{if(!resizeAnchorRef.current)scrollTopRef.current=host.scrollTop;};
+    host.addEventListener("scroll",remember,{passive:true});
+    return()=>host.removeEventListener("scroll",remember);
+  },[scrollRoot]);
   const inkMaxY = useMemo(() => {
     if (decodedOps.length === 0) return 0;
     const bounds = inkOpsBounds(decodedOps);
