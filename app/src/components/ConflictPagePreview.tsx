@@ -85,6 +85,8 @@ export function ConflictPagePreview({
   decodedInk,
   inkLoading = false,
   onVisiblePages,
+  selectedPageOnly = false,
+  revealInk = false,
 }: {
   hash?: string;
   page: number;
@@ -123,6 +125,8 @@ export function ConflictPagePreview({
   decodedInk?: readonly { pageId: number; ops: InkOp[] }[];
   inkLoading?: boolean;
   onVisiblePages?: (pages: readonly number[]) => void;
+  selectedPageOnly?: boolean;
+  revealInk?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const docRef = useRef<HTMLDivElement | null>(null);
@@ -275,10 +279,11 @@ export function ConflictPagePreview({
     return bounds?.maxY ?? 0;
   }, [decodedOps]);
   const paperPageCount = pageCount ?? page;
-  const paperFrames = useMemo(
+  const allPaperFrames = useMemo(
     () => conflictPaperFrames(stablePageFrames, paperPageCount, usePaper ? inkMaxY : 0),
     [stablePageFrames, paperPageCount, usePaper, inkMaxY],
   );
+  const paperFrames = useMemo(() => selectedPageOnly ? allPaperFrames.filter(frame => frame.pageId === page) : allPaperFrames, [allPaperFrames, selectedPageOnly, page]);
 
   const keptNotes = notes ?? [];
 
@@ -419,7 +424,7 @@ export function ConflictPagePreview({
     };
     // `stackH` re-runs this once the stack has a height, so the first sample
     // measures real slots rather than an empty host.
-  }, [scrollRoot, filmScope, usePdf, stackH]);
+  }, [scrollRoot, filmScope, usePdf, stackH, page, selectedPageOnly]);
 
   // Measure page placement once; only nearby 512px strips receive backing stores.
   const [inkSlots, setInkSlots] = useState<ConflictInkSlot[]>([]);
@@ -478,7 +483,7 @@ export function ConflictPagePreview({
     setInkSlots((current) => (inkSlotsEqual(current, next) ? current : next));
     // PDF slots arrive asynchronously. Retry when the document reports its
     // measured height; scrolling alone does not change this value.
-  }, [showInk, inkedPages, cssWidth, paperFrames, decodedOps, stackH, usePdf, useMarkdown]);
+  }, [showInk, inkedPages, cssWidth, paperFrames, decodedOps, stackH, usePdf, useMarkdown, page, selectedPageOnly]);
 
   const [paintWindow, setPaintWindow] = useState({ top: 0, height: 800 });
   useEffect(() => {
@@ -492,7 +497,7 @@ export function ConflictPagePreview({
     sample();
     scrollRoot.addEventListener("scroll", onScroll, { passive: true });
     return () => { cancelAnimationFrame(raf); scrollRoot.removeEventListener("scroll", onScroll); };
-  }, [scrollRoot, cssWidth]);
+  }, [scrollRoot, cssWidth, page, stackH]);
   const paintTiles = conflictVisibleInkTiles(inkSlots, paintWindow.top, paintWindow.height);
   const tileKeys = paintTiles.map(tile => tile.key).sort().join("|");
   const paintPageKey = [...new Set(paintTiles.map(tile => tile.page))].sort((a, b) => a - b).join(",");
@@ -510,11 +515,13 @@ export function ConflictPagePreview({
           : shard.pageId === 0 ? (stablePageFrames?.length
             ? conflictOpsForPage(shard.ops, slot.page, stablePageFrames)
             : slot.page === 1 ? shard.ops : []) : []),
-    })));
+    })).map(entry => revealInk ? {...entry,ops:entry.ops.map(op => op.kind === "draw"
+      ? {...op,color:"#00e5ff",maxFullness:1,pressureSensitive:false,highlight:false,speedInk:0,speedFade:0,grain:0,baseWidth:Math.max(op.baseWidth,3 / Math.max(.01,entry.scale))}
+      : op)} : entry));
     painterRef.current = painter;
     setPaintedInk(null);
     return () => { painter.dispose(); painterRef.current = null; };
-  }, [inkSlots, decodedOps, decodedShards, sceneWidth, stablePageFrames, paperFrames, usePaper, useMarkdown, inkX, paintPageKey]);
+  }, [inkSlots, decodedOps, decodedShards, sceneWidth, stablePageFrames, paperFrames, usePaper, useMarkdown, inkX, paintPageKey, revealInk]);
 
   useEffect(() => {
     const painter = painterRef.current;
@@ -541,7 +548,7 @@ export function ConflictPagePreview({
     }
     if (!tiles.length) setPaintedInk({ ops: decodedOps, slots: inkSlots });
     return () => controller.abort();
-  }, [tileKeys, showInk, inkSlots, decodedOps, decodedShards, sceneWidth, stablePageFrames, paperFrames, usePaper, useMarkdown, inkX, paintPageKey]);
+  }, [tileKeys, showInk, inkSlots, decodedOps, decodedShards, sceneWidth, stablePageFrames, paperFrames, usePaper, useMarkdown, inkX, paintPageKey, revealInk]);
 
   const inkPainted = paintedInk?.ops === decodedOps && paintedInk?.slots === inkSlots;
   const paperReady = cssWidth > 0 && !inkLoading && !(showInk && !decodeDone) &&
@@ -577,6 +584,7 @@ export function ConflictPagePreview({
           : "lc-hub-conflict-preview"
       }
       data-page={String(page)}
+      data-reveal-ink={revealInk || undefined}
       aria-busy={loadPhase !== "idle"}
     >
       {usePdf && filmScope ? (
@@ -602,7 +610,8 @@ export function ConflictPagePreview({
               initialPage={page}
               standalone
               scrollRoot={scrollRoot}
-              paintRadius={CONFLICT_PAINT_RADIUS}
+              paintRadius={selectedPageOnly ? 0 : CONFLICT_PAINT_RADIUS}
+              previewPage={selectedPageOnly ? page : undefined}
               idleThumbs={false}
               selectable={false}
               spread={false}

@@ -387,6 +387,7 @@ export interface FootnotePartDiff {
   label: string;
   hasLocal: boolean;
   hasServer: boolean;
+  same?: boolean;
 }
 
 export function footnotePartRowId(
@@ -456,6 +457,7 @@ function collectPartDiffs<T>(
   serverItems: readonly T[],
   keyOf: (item: T) => string,
   labelOf: (item: T) => string,
+  includeSame = false,
 ): FootnotePartDiff[] {
   const localBy = new Map(localItems.map((item) => [keyOf(item), item]));
   const serverBy = new Map(serverItems.map((item) => [keyOf(item), item]));
@@ -471,7 +473,8 @@ function collectPartDiffs<T>(
   for (const itemId of ids) {
     const local = localBy.get(itemId);
     const server = serverBy.get(itemId);
-    if (local != null && server != null && jsonEqual(local, server)) continue;
+    const same = local != null && server != null && jsonEqual(local, server);
+    if (same && !includeSame) continue;
     out.push({
       id: footnotePartRowId(noteId, kind, itemId),
       noteId,
@@ -480,6 +483,7 @@ function collectPartDiffs<T>(
       label: labelOf((local ?? server)!),
       hasLocal: local != null,
       hasServer: server != null,
+      ...(includeSame ? {same} : {}),
     });
   }
   return out;
@@ -500,6 +504,7 @@ function collectPartDiffs<T>(
 export function footnotePartDiffs(
   local: DocFootnote | null,
   server: DocFootnote | null,
+  includeSame = false,
 ): FootnotePartDiff[] {
   if (!local || !server) return [];
   return [
@@ -510,6 +515,7 @@ export function footnotePartDiffs(
       server.notes ?? [],
       (note: DocFootnoteNote) => note.id,
       (note) => previewOf(note.text, "Note"),
+      includeSame,
     ),
     ...collectPartDiffs(
       local.id,
@@ -518,6 +524,7 @@ export function footnotePartDiffs(
       threadList(server),
       (thread) => thread.rootId,
       (thread) => previewOf(thread.title, "Coach chat"),
+      includeSame,
     ),
     ...collectPartDiffs(
       local.id,
@@ -526,6 +533,7 @@ export function footnotePartDiffs(
       server.whiteboards ?? [],
       (board: DocFootnoteWhiteboard) => board.id,
       (board) => previewOf(board.title, "Scratch board"),
+      includeSame,
     ),
     ...collectPartDiffs(
       local.id,
@@ -534,6 +542,7 @@ export function footnotePartDiffs(
       server.subMarks ?? [],
       (mark: DocFootnoteSubMark) => mark.id,
       (mark) => previewOf(mark.excerpt, mark.kind),
+      includeSame,
     ),
   ];
 }
@@ -803,7 +812,7 @@ export function mergeFootnotes(
 ): DocFootnote[] {
   const out: DocFootnote[] = [];
   for (const row of footnoteDiffRows(localNotes, serverNotes)) {
-    if (row.sameId && !row.differs && row.local) {
+    if (row.sameId && !row.differs && row.local && !footnotePartDiffs(row.local,row.server,true).some(part => picks[part.id])) {
       const pick = picks[row.id];
       if (!pick || pick.local === true || pick.server === true) out.push(row.local);
       continue;

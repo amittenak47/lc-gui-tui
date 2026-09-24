@@ -66,6 +66,14 @@ it('paints Markdown ink over the authored document width', async () => {
   expect(host.querySelector('[aria-label="Preview ready"]')).not.toBeNull();
 });
 
+it('reveals faint ink without modifying stored strokes', () => {
+  const faint = [{pageId:1,ops:ops.map(op=>({...op,color:'#fff',maxFullness:.01,baseWidth:.2}))}];
+  act(()=>root.render(<ConflictPagePreview {...props} decodedInk={faint} revealInk />));
+  const sent=raster.pages.mock.calls.at(-1)![0][0].ops[0];
+  expect(sent.color).toBe('#00e5ff');expect(sent.maxFullness).toBe(1);expect(sent.baseWidth).toBeGreaterThanOrEqual(3);
+  expect(faint[0].ops[0].baseWidth).toBe(.2);
+});
+
 it('sends only nearby pages to the ink worker on a long notebook', () => {
   const pages = Array.from({length: 100}, (_, i) => ({pageId: i + 1, minY: i * 1200, maxY: (i + 1) * 1200}));
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {

@@ -240,6 +240,8 @@ export interface PdfDocumentProps {
   onMeasure?: (height: number) => void;
   /** MediaBoxes already read for layout; previews use these at the saved ink width. */
   onPageSizes?: (pages: readonly PdfPageNatural[]) => void;
+  /** Merge inspection mounts one sheet, retaining full source layout metadata. */
+  previewPage?: number;
   /** Page count and the page filling most of the viewport — for the filmstrip. */
   onNav?: (nav: PdfNav | null) => void;
   /**
@@ -545,6 +547,7 @@ export function PdfDocument({
   frameWidth,
   onMeasure,
   onPageSizes,
+  previewPage,
   onNav,
   onThumbRenderer,
   spread = false,
@@ -561,6 +564,8 @@ export function PdfDocument({
 }: PdfDocumentProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [pages, setPages] = useState<RenderedPage[]>([]);
+  const previewPageRef = useRef(previewPage);
+  previewPageRef.current = previewPage;
   const onMeasureRef = useRef(onMeasure);
   onMeasureRef.current = onMeasure;
   const onPageSizesRef = useRef(onPageSizes);
@@ -1115,7 +1120,7 @@ export function PdfDocument({
       unsubLive();
       observer.disconnect();
     };
-  }, [pages, paused, standalone, scrollRoot, filmScope]);
+  }, [pages, paused, standalone, scrollRoot, filmScope, previewPage]);
 
   /*
    * Hide only the text layers in the viewport hole while the camera pulses.
@@ -1644,6 +1649,7 @@ export function PdfDocument({
       const scaleOf = (n: number) => sheetLruRef.current.lod(n);
       const preload = holdDecodeRef.current ? [] : peekPdfPreloadPages(filmScope);
       let queue = pdfDecodeQueue(C, last, rest, outer, visible, scaleOf, fitOf, preload);
+      if (previewPageRef.current != null) queue = queue.filter(item => item.page === previewPageRef.current);
       if (holdDecodeRef.current) {
         queue = pdfQueueForHoldDecode(queue, visible);
       } else if (isDocCameraLive(filmScope)) {
@@ -1795,7 +1801,7 @@ export function PdfDocument({
         }
       }
     })();
-  }, [pages, windowTick, paused, offscreen]);
+  }, [pages, windowTick, paused, offscreen, previewPage]);
 
   /**
    * Filmstrip JPEGs: copy LRU first, else a ~48px pdf.js render. Only after
@@ -1947,7 +1953,7 @@ export function PdfDocument({
   // Focus and paint-pump ticks do not change the page skeleton. Reusing its
   // elements lets React skip hundreds of slots (and their pdf.js-owned DOM)
   // when a mounted book returns to the screen.
-  const pageSlots = useMemo(() => pages.flatMap((page) =>
+  const pageSlots = useMemo(() => pages.filter(page => previewPage == null || page.pageNumber === previewPage).flatMap((page) =>
         pdfReadingSlots(page, spread).map((slot) => (
           <div
             key={slot.key}
@@ -1996,7 +2002,7 @@ export function PdfDocument({
             </div>
           </div>
         )),
-      ), [pages, spread]);
+      ), [pages, spread, previewPage]);
 
   return (
     <div

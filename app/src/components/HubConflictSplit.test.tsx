@@ -537,7 +537,7 @@ describe("HubConflictSplit ink and labels", () => {
     expect(document.body.textContent).toMatch(/Handwriting \(page 1\)/);
     expect(document.body.textContent).not.toMatch(/Handwriting \(page 2\)/);
     expect(document.querySelectorAll('[data-pdf-page="1"]').length).toBeGreaterThan(0);
-    expect(document.querySelectorAll('[data-pdf-page="2"]').length).toBeGreaterThan(0);
+    expect(document.querySelectorAll('[data-pdf-page="2"]').length).toBe(0);
   });
 
   it("lists each notebook page after a lumped page-1 blob decodes", async () => {

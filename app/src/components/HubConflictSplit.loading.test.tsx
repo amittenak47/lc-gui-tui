@@ -12,19 +12,19 @@ vi.mock('./conflictInkLayout', async () => ({
 }));
 vi.mock('./ConflictPagePreview', () => ({ConflictPagePreview: (props: {onVisiblePages: typeof preview.observe}) => { preview.observe = props.onVisiblePages; return null; }}));
 
-it('loads newly visible PDF ink without requiring a row click', async () => {
+it('loads only the selected PDF entry and refetches an evicted page', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
-  const body={id:'pdf',name:'Book',hash:'h',doc_type:'pdf',updated_at:1,board:null,agent:[],footnotes:[]};
-  const conflict={kind:'annotate',id:'pdf',stage:'ink',detail:'both changed',local:body,server:body} as HubPadConflict;
+  const body={id:'pdf',name:'Book',hash:'h',doc_type:'pdf',source:'',updated_at:1,board:null,agent:[],footnotes:[]};
+  const conflict={kind:'annotate',id:'pdf',stage:'ink',detail:'both changed',local:body,server:body,localInkPageIds:[1,40,41],hubInkPageIds:[]} as HubPadConflict;
   const fetchPreviewInk=vi.fn(async (_pageId: number) => ({local:[],server:[]}));
   try {
     await act(async()=>root.render(<HubConflictSplit conflict={conflict} onResolve={()=>{}} fetchPreviewInk={fetchPreviewInk}/>));
     fetchPreviewInk.mockClear();
-    await act(async()=>preview.observe([40,41]));
-    expect(fetchPreviewInk.mock.calls.map(call=>call[0])).toEqual([40,41]);
-    await act(async()=>preview.observe([40,41]));
-    expect(fetchPreviewInk).toHaveBeenCalledTimes(2);
+    await act(async()=>(host.querySelector('[data-note-id="__ink__:40"]') as HTMLElement).click());
+    expect(fetchPreviewInk.mock.calls.map(call=>call[0])).toEqual([40]);
+    await act(async()=>(host.querySelector('[data-note-id="__ink__:40"]') as HTMLElement).click());
+    expect(fetchPreviewInk).toHaveBeenCalledTimes(1);
   } finally {act(()=>root.unmount());host.remove();vi.unstubAllGlobals();}
 });
 

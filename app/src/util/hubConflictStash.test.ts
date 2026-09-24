@@ -175,6 +175,15 @@ describe("mergeFootnotes (the plan's ✓ rules)", () => {
     );
     expect(merged.map((row) => row.id)).toEqual(["a"]);
   });
+
+  it("can show and exclude an otherwise identical linked chat", () => {
+    const common=note("a","same",{threads:[{rootId:"q",title:"Chat",createdAt:1}]});
+    expect(footnotePartDiffs(common,common)).toEqual([]);
+    const [part]=footnotePartDiffs(common,common,true);
+    expect(part.same).toBe(true);
+    const merged=mergeFootnotes([common],[common],{local:false,server:false},{a:{local:true,server:true},[part.id]:{local:false,server:false}});
+    expect(merged[0].threads ?? []).toEqual([]);
+  });
 });
 
 describe("combineFootnotePair", () => {

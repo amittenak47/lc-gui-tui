@@ -24,6 +24,7 @@ import { Tip } from "./Tip";
 import { ConflictPagePreview } from "./ConflictPagePreview";
 import { conflictDocumentWidth } from "./conflictDocumentLayout";
 import { compareConflictInk } from "./conflictInkCompare";
+import { inkOpsFrom } from "../canvas/inkCodec";
 import {
   INK_ROW_ID,
   type FootnoteDiffRow,
@@ -328,6 +329,7 @@ export function HubConflictSplit({
 }: HubConflictSplitProps) {
   const [manualPicks, setManualPicks] = useState<Record<string, SidePick>>({});
   const [differencesOnly, setDifferencesOnly] = useState(true);
+  const [revealInk, setRevealInk] = useState(false);
   const [inkComparisons, setInkComparisons] = useState<Record<number, boolean | null>>({});
   const listRefs = useRef<Partial<Record<Side, HTMLOListElement>>>({});
   const [focusedId, setFocusedId] = useState<string>(INK_ROW_ID);
@@ -343,10 +345,6 @@ export function HubConflictSplit({
   const overlayInkRef = useRef(overlayInk);
   overlayInkRef.current = overlayInk;
   const overlayTriedRef = useRef<Set<number>>(new Set());
-  const [visiblePreviewPages, setVisiblePreviewPages] = useState<{local: readonly number[]; server: readonly number[]}>({local:[],server:[]});
-  const observePreviewPages = (side: Side, pages: readonly number[]) => {
-    setVisiblePreviewPages(current => current[side].join(",") === pages.join(",") ? current : {...current,[side]:pages});
-  };
   const [inkHits, setInkHits] = useState<{
     local: number[];
     server: number[];
@@ -424,9 +422,11 @@ export function HubConflictSplit({
 
   const serverMissing = Boolean(conflict) && conflict!.server == null;
   const serverInkUnread = Boolean(conflict) && conflict!.serverInk === null;
+  const partsByNote = useMemo(() => new Map(rows.map(row => [row.id,footnotePartDiffs(row.local,row.server,true)])),[rows]);
 
   const sameIds = new Set([
     ...rows.filter(row => row.sameId && !row.differs).map(row => row.id),
+    ...[...partsByNote.values()].flat().filter(part => part.same).map(part => part.id),
     ...padInkRows.filter(row => !serverInkUnread && (row.same || inkComparisons[row.pageId] === true)).map(row => inkPageRowId(row.pageId)),
     ...fnInkRows.filter(row => row.same).map(row => footnoteInkPageRowId(row.wbId, row.pageId)),
   ]);
@@ -669,6 +669,20 @@ export function HubConflictSplit({
         decodeConflictInkPages(localInkPages, inkDecodeCache.current, controller.signal),
         decodeConflictInkPages(serverInkPages, inkDecodeCache.current, controller.signal),
       ]);
+      // Older annotation sets carry their full ink in the board JSON. Only
+      // use that fallback when no page record exists (an empty shard is a deletion).
+      for (const [body, pages, shards, ids] of [[conflict.local,localInkPages,localShards,conflict.localInkPageIds],[conflict.server,serverInkPages,serverShards,conflict.hubInkPageIds]] as const) {
+        const board = body?.board;
+        if (!pages.length && board && typeof board === "object") {
+          const ops = inkOpsFrom(board);
+          if (ops.length) shards.push({pageId:conflict.kind === "annotate" ? 0 : 1,ops});
+        }
+        const manifest = (board as {inkPages?:{pageIds?:number[]}} | null)?.inkPages?.pageIds;
+        const declared = ids ?? manifest;
+        if (conflict.kind === "annotate" && declared?.length && !declared.some(id => id > 1)) {
+          for (const shard of shards) if (shard.pageId === 1) shard.pageId = 0;
+        }
+      }
       if (gone) return;
       const localOps = localShards.flatMap((shard) => shard.ops);
       const serverOps = serverShards.flatMap((shard) => shard.ops);
@@ -726,6 +740,7 @@ export function HubConflictSplit({
     });
 
   const overallPick = (): HubConflictResolution["pick"] => {
+    if (conflict?.kind === "annotate" && Object.keys(manualPicks).some(id => parseFootnotePartRowId(id))) return "merged";
     const ink = inkChoice();
     if (conflict?.kind !== "annotate") {
       if (ink === "server") return "server";
@@ -806,7 +821,7 @@ export function HubConflictSplit({
     overlayTriedRef.current = new Set();
   }, [conflict?.id]);
 
-  const previewPageKey = [...new Set([focusPage, ...visiblePreviewPages.local, ...visiblePreviewPages.server])].sort((a,b)=>a-b).join(",");
+  const previewPageKey = String(focusPage);
   useEffect(() => {
     if (!conflict || focusPage < 1) return;
     if (!fetchPreviewInk && !client) return;
@@ -846,8 +861,8 @@ export function HubConflictSplit({
           pending.delete(pageId);
           if (got.server === null) overlayTriedRef.current.delete(pageId);
           setOverlayInk((current) => ({
-            local: mergeInkDtos(current.local, overlayInkPages(got.local)),
-            server: mergeInkDtos(current.server, overlayInkPages(got.server)),
+            local: mergeInkDtos(current.local, overlayInkPages(got.local)).filter(row => row.page_id === 0 || previewPageKey.split(",").map(Number).includes(row.page_id)),
+            server: mergeInkDtos(current.server, overlayInkPages(got.server)).filter(row => row.page_id === 0 || previewPageKey.split(",").map(Number).includes(row.page_id)),
           }));
         } catch {
           pending.delete(pageId);
@@ -858,6 +873,8 @@ export function HubConflictSplit({
     return () => {
       gone = true;
       for (const pageId of pending) overlayTriedRef.current.delete(pageId);
+      // Evicted previews can be loaded again after the next row jump.
+      for (const pageId of overlayTriedRef.current) if (!previewPageKey.split(",").map(Number).includes(pageId)) overlayTriedRef.current.delete(pageId);
     };
   }, [client, conflict, fetchPreviewInk, previewPageKey]);
 
@@ -995,6 +1012,7 @@ export function HubConflictSplit({
   );
 
   const showInkOn = (side: Side): boolean => {
+    if ((side === "local" ? inkHits.localOps : inkHits.serverOps).length > 0) return true;
     if (padInkRows.length === 0) {
       return (
         inkCount(
@@ -1117,7 +1135,8 @@ export function HubConflictSplit({
             focusKey={`${focusedId}:${focusRevision}`}
             decodedInk={side === "local" ? inkHits.localShards : inkHits.serverShards}
             inkLoading={inkLoading}
-            onVisiblePages={pages => observePreviewPages(side, pages)}
+            selectedPageOnly
+            revealInk={revealInk}
           />
           <ol
             ref={node => { if (node) listRefs.current[side] = node; else delete listRefs.current[side]; }}
@@ -1134,10 +1153,10 @@ export function HubConflictSplit({
               const own = side === "local" ? row.local : row.server;
               const note = own ?? row.local ?? row.server;
               if (!note) return null;
-              const parts = footnotePartDiffs(row.local, row.server);
+              const parts = (partsByNote.get(row.id) ?? []).filter(part => rowVisible(part.id));
               const nestedInk = fnInkRows.filter((ink) => footnoteOwnsBoard(row, ink.wbId));
               const visibleNestedInk = nestedInk.filter(ink => rowVisible(footnoteInkPageRowId(ink.wbId, ink.pageId)));
-              if (!rowVisible(row.id) && !visibleNestedInk.length) return null;
+              if (!rowVisible(row.id) && !visibleNestedInk.length && !parts.length) return null;
               const childCount = parts.length + visibleNestedInk.length;
               const expanded = collapsed[row.id] !== true;
               return (
@@ -1185,6 +1204,7 @@ export function HubConflictSplit({
                               focused={focusedId === part.id}
                               sideLabel={label}
                               missing={!has}
+                              status={statusFor(part.id,part.hasLocal,part.hasServer)}
                               part
                               onKeep={toggleKeep}
                               onDrop={toggleDrop}
@@ -1218,6 +1238,9 @@ export function HubConflictSplit({
     );
   };
 
+  const navigationIds = choiceIds.filter(rowVisible);
+  const navigationIndex = navigationIds.indexOf(focusedId);
+
   return (
     <div
       className={["lc-hub-conflict", pickingStarted && !valid ? "is-picking" : ""]
@@ -1228,19 +1251,20 @@ export function HubConflictSplit({
       aria-label="Sync conflict"
     >
       <header className="lc-hub-conflict-head">
-        <strong>Both copies changed — {nameOf(conflict)}</strong>
-        {(conflict.local?.artifacts || conflict.server?.artifacts) && <span>Attachments keep both authored versions when they differ. The other version becomes a “conflict copy”; deletion records are retained.</span>}
-        <span>
-          {conflict.detail}. Local is this device; {otherLabel} is the other. No choice has
-          been saved yet.
-        </span>
+        <strong>Compare changes · {nameOf(conflict)}</strong>
         <label className="lc-hub-conflict-filter">
           <input type="checkbox" checked={differencesOnly} onChange={event => setDifferencesOnly(event.target.checked)} />
           Differences only
         </label>
         <span className="lc-hub-conflict-filter-help">
-          {Array.from(sameIds).filter(id => picks[id]?.local && picks[id]?.server).length} matching entries kept automatically. Uncheck to show all.
+          {Array.from(sameIds).filter(id => picks[id]?.local && picks[id]?.server).length} matching · kept
         </span>
+        <label className="lc-hub-conflict-filter"><input type="checkbox" checked={revealInk} onChange={event => setRevealInk(event.target.checked)}/> Reveal ink</label>
+        <span className="lc-hub-conflict-filter-help">Page {focusPage}</span>
+        <nav className="lc-hub-conflict-navigation" aria-label="Merge entries">
+          <button type="button" className="lc-secondary" disabled={navigationIndex <= 0} onClick={() => focusRow(navigationIds[navigationIndex-1])}>Previous</button>
+          <button type="button" className="lc-secondary" disabled={!navigationIds.length || navigationIndex >= navigationIds.length-1} onClick={() => focusRow(navigationIds[navigationIndex+1])}>Next</button>
+        </nav>
       </header>
       <div className="lc-hub-conflict-split">
         {renderPane("local")}

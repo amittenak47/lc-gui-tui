@@ -13,7 +13,7 @@ export function pageFromScope(scope?: string | null): number | null {
   if (!scope) return null;
   const trimmed = scope.trim();
   if (!trimmed) return null;
-  const prefixed = /^(?:page[-_]?|p)(\d+)$/i.exec(trimmed);
+  const prefixed = /^(?:page[-_]?|p)(\d+)r?$/i.exec(trimmed);
   if (prefixed) return Math.max(1, Number(prefixed[1]));
   if (/^\d+$/.test(trimmed)) return Math.max(1, Number(trimmed));
   return null;

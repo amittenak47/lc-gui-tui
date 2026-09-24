@@ -1961,6 +1961,11 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 }
 
 .lc-hub-conflict-filter-help { font-size: 11px; color: var(--muted); }
+.lc-hub-conflict-navigation { display: flex; gap: 6px; margin-left: auto; }
+.lc-hub-conflict-navigation button { min-height: 28px; padding: 2px 10px; font-size: 12px; }
+.lc-hub-conflict-preview[data-reveal-ink] { background: #071422; }
+.lc-hub-conflict-preview[data-reveal-ink] .lc-doc-selectable-body { opacity: .22; }
+.lc-hub-conflict-preview[data-reveal-ink] .lc-hub-conflict-ink-layer { mix-blend-mode: normal; filter: drop-shadow(0 0 2px #00e5ff); }
 
 .lc-hub-conflict-split {
   flex: 1;
