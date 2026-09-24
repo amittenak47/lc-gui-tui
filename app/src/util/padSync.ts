@@ -1113,16 +1113,34 @@ function boardLooksCorrupt(board: unknown): boolean {
   return blob.v !== 1 || !Array.isArray(blob.elements);
 }
 
-/** Explicit library discovery. Existing local entries (including dirty ones) are untouched. */
-export async function discoverHubPads(client: LcClient): Promise<number> {
-  if (!loadPadHub()) throw new Error("The hub is not connected yet. Try again when it is available.");
+export interface HubLibraryPullReport {
+  added: string[];
+  repaired: string[];
+  failures: {name:string;message:string}[];
+}
+export class HubLibraryPullError extends Error {
+  constructor(message:string, readonly report:HubLibraryPullReport) { super(message); }
+}
+
+/** Explicit discovery also repairs missing source bytes, without replacing local edits. */
+export async function discoverHubPads(client: LcClient, report:HubLibraryPullReport = {added:[],repaired:[],failures:[]}): Promise<number> {
+  if (!loadPadHub() && isAndroidDevice()) throw new Error("Connect to your hub before pulling files.");
   const [whiteboards, documents, digest] = await Promise.all([
     client.listWhiteboardPads(), client.listAnnotatePads(), client.pingPadSync(0),
   ]);
   let imported = 0;
   const failures: string[] = [];
   for (const row of whiteboards) {
-    if (listWhiteboardTrash().some((entry) => entry.id === row.id) || await getWhiteboardNotebook(row.id)) continue;
+    if (listWhiteboardTrash().some((entry) => entry.id === row.id)) continue;
+    const existing = await getWhiteboardNotebook(row.id);
+    if (existing) {
+      if (digest.ink?.some(page => page.kind === "whiteboard" && page.key === row.id)) {
+        try {
+          if (await pullInkPagesOverLocal(client,"whiteboard",row.id,[],digest.ink,true)) report.repaired.push(row.title);
+        } catch(cause) { report.failures.push({name:row.title,message:String(cause)});failures.push(`${row.title}: ${String(cause)}`); }
+      }
+      continue;
+    }
     try {
       const board = row.board as BoardBlob;
       if (boardLooksCorrupt(board)) throw new Error(`“${row.title}” has an unreadable board on the hub.`);
@@ -1131,22 +1149,35 @@ export async function discoverHubPads(client: LcClient): Promise<number> {
       if (await getWhiteboardNotebook(row.id) || listWhiteboardTrash().some((entry) => entry.id === row.id)) continue;
       await applyHubWhiteboard(row, { emitReload: false, client });
       imported++;
+      report.added.push(row.title);
     } catch (cause) {
       failures.push(`“${row.title}”: ${cause instanceof Error ? cause.message : String(cause)}`);
+      report.failures.push({name:row.title,message:cause instanceof Error ? cause.message : String(cause)});
     }
   }
   for (const row of documents) {
-    if (listAnnotateTrash().some((entry) => entry.id === row.id) || await getAnnotateDoc(row.id)) continue;
+    if (listAnnotateTrash().some((entry) => entry.id === row.id)) continue;
+    const existing = await getAnnotateDoc(row.id);
     try {
       const board = row.board as BoardBlob;
-      if (boardLooksCorrupt(board)) throw new Error(`“${row.name}” has an unreadable board on the hub.`);
-      if ((row.doc_type === "pdf" || row.doc_type === "epub") && !(await getDocBytes(row.hash))) {
-        const bytes = await client.getDocBytes(row.hash);
-        if (!bytes?.byteLength || !bytesMatchDocHash(row.hash, bytes)) {
+      const hash = existing?.hash ?? row.hash;
+      const type = existing?.docType ?? row.doc_type;
+      if ((type === "pdf" || type === "epub") && !(await getDocBytes(hash))) {
+        const bytes = await client.getDocBytes(hash);
+        if (!bytes?.byteLength || !bytesMatchDocHash(hash, bytes)) {
           throw new Error(`The source file for “${row.name}” is not available on the hub yet.`);
         }
-        await putDocBytes(row.hash, bytes);
+        await putDocBytes(hash, bytes);
+        if (existing) report.repaired.push(existing.name);
       }
+      if (existing) {
+        if (digest.ink?.some(page => page.kind === "annotate" && page.key === row.id) &&
+            await pullInkPagesOverLocal(client,"annotate",row.id,[],digest.ink,true)) {
+          if (!report.repaired.includes(existing.name)) report.repaired.push(existing.name);
+        }
+        continue;
+      }
+      if (boardLooksCorrupt(board)) throw new Error(`“${row.name}” has an unreadable board on the hub.`);
       await pullInkPagesOverLocal(client, "annotate", row.id, board.inkPages?.pageIds, digest.ink);
       const boards = row.footnote_boards as Record<string, { board: BoardBlob }> | undefined;
       for (const [wbId, scratch] of Object.entries(boards ?? {})) {
@@ -1155,17 +1186,26 @@ export async function discoverHubPads(client: LcClient): Promise<number> {
       if (await getAnnotateDoc(row.id) || listAnnotateTrash().some((entry) => entry.id === row.id)) continue;
       await applyHubAnnotate(row, { emitReload: false, client });
       imported++;
+      report.added.push(row.name);
     } catch (cause) {
       failures.push(`“${row.name}”: ${cause instanceof Error ? cause.message : String(cause)}`);
+      report.failures.push({name:row.name,message:cause instanceof Error ? cause.message : String(cause)});
     }
   }
   if (failures.length) {
     // An incomplete older upload must not hide unrelated, complete pads.
     // Keep reporting the failures; never publish a pad without its ink/source.
     const added = imported ? `Added ${imported} ${imported === 1 ? "pad" : "pads"}. ` : "";
-    throw new Error(`${added}Could not download ${failures.length} ${failures.length === 1 ? "pad" : "pads"}: ${failures.join("; ")}`);
+    throw new HubLibraryPullError(`${added}Could not download ${failures.length} ${failures.length === 1 ? "pad" : "pads"}: ${failures.join("; ")}`,report);
   }
   return imported;
+}
+
+export async function pullMissingHubFiles(client:LcClient):Promise<HubLibraryPullReport> {
+  const report:HubLibraryPullReport={added:[],repaired:[],failures:[]};
+  try { await discoverHubPads(client,report); }
+  catch (error) { if (!(error instanceof HubLibraryPullError)) throw error; }
+  return report;
 }
 
 export async function pullPads(client: LcClient): Promise<void> {

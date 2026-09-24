@@ -115,6 +115,8 @@ export interface AnnotateDocMeta {
   deleteAcked?: boolean;
   lastTouch?: number;
   hubAckUpdatedAt?: number;
+  /** Wall-clock time of the last successful exchange, distinct from content time. */
+  lastSyncedAt?: number;
 }
 
 /**
@@ -706,6 +708,7 @@ export async function saveAnnotateDoc(input: {
     ...(existing?.locked ? { locked: true } : {}),
     syncSeq: existing?.syncSeq ?? 0,
     lastTouch: now,
+    lastSyncedAt: existing?.lastSyncedAt,
     ...(existing?.hubAckUpdatedAt != null ? { hubAckUpdatedAt: existing.hubAckUpdatedAt } : {}),
   };
   const saved = await putParentContent({ kind: "annotate", id }, {
@@ -724,6 +727,7 @@ export async function saveAnnotateDoc(input: {
     meta.updatedAt = Math.max(meta.updatedAt, latest.updatedAt + 1);
     meta.syncSeq = latest.syncSeq;
     meta.hubAckUpdatedAt = latest.hubAckUpdatedAt;
+    meta.lastSyncedAt = latest.lastSyncedAt;
     if (latest.locked) meta.locked = true; else delete meta.locked;
   }
   writeIndex([meta, ...readIndex().filter((entry) => entry.id !== id)]);
@@ -750,7 +754,7 @@ export function markAnnotateHubAck(id: string, updatedAt: number): void {
   const existing = readIndex().find((entry) => entry.id === id);
   if (!existing) return;
   writeIndex([
-    { ...existing, hubAckUpdatedAt: updatedAt },
+    { ...existing, hubAckUpdatedAt: updatedAt, lastSyncedAt: Date.now() },
     ...readIndex().filter((entry) => entry.id !== id),
   ]);
 }

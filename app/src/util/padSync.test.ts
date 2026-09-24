@@ -124,7 +124,8 @@ vi.mock("./problemBoardStore", () => ({
   problemPadId: (dataset: string, taskId: string) => `${dataset}/${taskId}`,
 }));
 
-vi.mock("./docBytes", () => ({
+vi.mock("./docBytes", async () => ({
+  ...await vi.importActual("./docBytes"),
   getDocBytes: (hash: string) => getDocBytes(hash),
   putDocBytes: (hash: string, bytes: ArrayBuffer) => putDocBytes(hash, bytes),
   deleteDocBytes: (hash: string) => deleteDocBytes(hash),
@@ -333,6 +334,20 @@ describe("padSync pull", () => {
     expect(await discoverHubPads(client)).toBe(0);
     expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
     expect(client.getInkPages).not.toHaveBeenCalled();
+  });
+
+  it("repairs a missing PDF source even when the annotation set is already local", async () => {
+    const {hashBytes}=await vi.importActual<typeof import("./docBytes")>("./docBytes");
+    const bytes=new TextEncoder().encode("%PDF-1.4\nfixture").buffer;
+    const hash=hashBytes(bytes);
+    getDocBytes.mockResolvedValue(null);
+    getAnnotateDoc.mockResolvedValue({id:"pdf",name:"Tablet notes.pdf",hash,docType:"pdf",updatedAt:200,board:emptyBoard});
+    const client=fakeClient({listWhiteboardPads:vi.fn(async()=>[]),listAnnotatePads:vi.fn(async()=>[{id:"pdf",name:"Tablet notes.pdf",hash,doc_type:"pdf",updated_at:100,board:emptyBoard,agent:[],footnotes:[],source:""}]),getDocBytes:vi.fn(async()=>bytes)});
+    const report={added:[] as string[],repaired:[] as string[],failures:[] as {name:string;message:string}[]};
+    await discoverHubPads(client,report);
+    expect(putDocBytes).toHaveBeenCalledWith(hash,bytes);
+    expect(report.repaired).toEqual(["Tablet notes.pdf"]);
+    expect(restoreAnnotateDoc).not.toHaveBeenCalled();
   });
 
   it("does not expose a new notebook when its ink download is incomplete", async () => {

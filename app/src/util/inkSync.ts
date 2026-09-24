@@ -1190,6 +1190,7 @@ export async function pullInkPagesOverLocal(
   key: string,
   expectedPageIds: readonly number[] = [],
   knownDigests?: readonly InkPageDigestDto[],
+  missingOnly = false,
 ): Promise<number> {
   const digests = (knownDigests ?? (await client.pingPadSync(0)).ink ?? [])
     .filter((page) => page.kind === kind && page.key === key);
@@ -1205,6 +1206,7 @@ export async function pullInkPagesOverLocal(
     .map((row) => [row.pageId, row]));
   let written = 0;
   for (const digest of byId.values()) {
+    if (missingOnly && localBy.has(digest.page_id)) continue;
     const full = await client.getInkPage(kind, key, digest.page_id);
     if (!full?.gz) throw new Error(`Ink page ${digest.page_id} was missing from the hub download`);
     if (full.kind !== kind || full.key !== key || full.page_id !== digest.page_id || full.updated_at !== digest.updated_at) {

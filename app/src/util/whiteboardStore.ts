@@ -46,6 +46,7 @@ export interface WhiteboardNotebookMeta {
   lastTouch?: number;
   /** Last hub `updated_at` this device ACK'd. CAS base for the next live PUT. */
   hubAckUpdatedAt?: number;
+  lastSyncedAt?: number;
 }
 
 export interface WhiteboardNotebook extends WhiteboardNotebookMeta {
@@ -268,6 +269,7 @@ export async function saveWhiteboardNotebook(input: {
     ...(named ? { named: true } : {}),
     syncSeq: existing?.syncSeq ?? 0,
     lastTouch: now,
+    lastSyncedAt: existing?.lastSyncedAt,
     ...(existing?.hubAckUpdatedAt != null ? { hubAckUpdatedAt: existing.hubAckUpdatedAt } : {}),
   };
   const saved = await putParentContent({ kind: "whiteboard", id }, {
@@ -280,6 +282,7 @@ export async function saveWhiteboardNotebook(input: {
     meta.updatedAt = Math.max(meta.updatedAt, latest.updatedAt + 1);
     meta.syncSeq = latest.syncSeq;
     meta.hubAckUpdatedAt = latest.hubAckUpdatedAt;
+    meta.lastSyncedAt = latest.lastSyncedAt;
     if (latest.locked) meta.locked = true; else delete meta.locked;
   }
   writeIndex([meta, ...readIndex().filter((entry) => entry.id !== id)]);
@@ -307,7 +310,7 @@ export function markWhiteboardHubAck(id: string, updatedAt: number): void {
   const existing = readIndex().find((entry) => entry.id === id);
   if (!existing) return;
   writeIndex([
-    { ...existing, hubAckUpdatedAt: updatedAt },
+    { ...existing, hubAckUpdatedAt: updatedAt, lastSyncedAt: Date.now() },
     ...readIndex().filter((entry) => entry.id !== id),
   ]);
 }

@@ -332,7 +332,7 @@ import {
 import { annotatePadBody, whiteboardPadBody } from "./util/padSync";
 import { renameLibraryPad } from "./util/libraryPadRename";
 import { loadPadHub, loadPadSyncSince } from "./util/padHub";
-import { discoverHubPads, waitForPadPushes } from "./util/padSync";
+import { pullMissingHubFiles, waitForPadPushes } from "./util/padSync";
 import { hubReloadAppState, hubReloadDocumentElements } from "./util/boardHubReload";
 import {
   applyConflictFootnoteBoards,
@@ -11391,7 +11391,7 @@ export function Workspace({
       {annotateEntryOpen && (
         <AnnotateDialog
           mode="entry"
-          onRefreshHub={() => discoverHubPads(client)}
+          onRefreshHub={() => pullMissingHubFiles(client)}
           kind={entryKind}
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isAnnotate(problem))}
@@ -11523,7 +11523,7 @@ export function Workspace({
       {whiteboardEntryOpen && (
         <WhiteboardDialog
           mode="entry"
-          onRefreshHub={() => discoverHubPads(client)}
+          onRefreshHub={() => pullMissingHubFiles(client)}
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isWhiteboard(problem))}
           snapshotKey={whiteboardNotebookId}

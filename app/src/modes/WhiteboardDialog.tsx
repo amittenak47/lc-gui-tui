@@ -6,7 +6,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { HubLibraryRefresh } from "../components/HubLibraryRefresh";
+import { HubLibraryRefresh, type HubLibraryRefreshAction } from "../components/HubLibraryRefresh";
+import { LibraryTimes } from "./LibraryTimes";
 import { useLibraryDeleteArm } from "../util/armedDelete";
 import { DOUBLE_TAP_MS } from "../util/gesture";
 import { shouldDismissBackdrop } from "../util/backdropDismiss";
@@ -50,7 +51,7 @@ interface LeaveProps {
 }
 
 interface EntryProps {
-  onRefreshHub?: () => Promise<number>;
+  onRefreshHub?: HubLibraryRefreshAction;
   mode: "entry";
   pending?: boolean;
   exiting?: boolean;
@@ -326,9 +327,9 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                   >
                     <strong>{entry.title}</strong>
                     <span className="lc-muted">
-                      {entry.pageCount} page{entry.pageCount === 1 ? "" : "s"} ·{" "}
-                      {new Date(entry.updatedAt).toLocaleString()}
+                      {entry.pageCount} page{entry.pageCount === 1 ? "" : "s"}
                     </span>
+                    <LibraryTimes {...entry}/>
                   </HoldButton>
                   )}
                   {renamingId !== entry.id && (

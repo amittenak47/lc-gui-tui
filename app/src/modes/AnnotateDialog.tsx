@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { HubLibraryRefresh } from "../components/HubLibraryRefresh";
+import { HubLibraryRefresh, type HubLibraryRefreshAction } from "../components/HubLibraryRefresh";
 import { useLibraryDeleteArm } from "../util/armedDelete";
 import { DOUBLE_TAP_MS } from "../util/gesture";
 import { shouldDismissBackdrop } from "../util/backdropDismiss";
@@ -27,6 +27,7 @@ import {
 } from "../util/annotateStore";
 import { LibraryPadlock } from "./LibraryPadlock";
 import { PadNameField } from "./PadNameField";
+import { LibraryTimes } from "./LibraryTimes";
 import { TOMBSTONE_COPY } from "../util/padSync";
 import {
   listPadSnapshots,
@@ -84,7 +85,7 @@ interface LeaveProps {
 }
 
 interface EntryProps {
-  onRefreshHub?: () => Promise<number>;
+  onRefreshHub?: HubLibraryRefreshAction;
   mode: "entry";
   /** Wording and choices. Defaults to the document library. */
   kind?: AnnotateDialogKind;
@@ -419,9 +420,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                     resetKey={error}
                   >
                     <strong>{title}</strong>
-                    <span className="lc-muted">
-                      Annotated {new Date(doc.updatedAt).toLocaleString()}
-                    </span>
+                    <LibraryTimes {...doc}/>
                   </HoldButton>
                   )}
                   {renamingId !== doc.id && (
