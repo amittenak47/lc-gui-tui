@@ -48,6 +48,7 @@ export interface FootnoteOverviewProps {
   number?: number;
   /** The turns of one saved thread — the card asks per thread, as it opens them. */
   threadMessages: (rootId: string) => AgentChatMessage[];
+  availableThreads?: readonly {rootId: string; title: string}[];
   onClose: () => void;
   onChange: (next: DocFootnote) => void;
   /** `null` starts a new thread; a rootId continues that one. */
@@ -359,6 +360,7 @@ export function FootnoteOverview({
   footnote,
   number: footnoteNumber,
   threadMessages,
+  availableThreads = [],
   onClose,
   onChange,
   onSendCoach,
@@ -745,14 +747,9 @@ export function FootnoteOverview({
                     : "Thread"}
                 </span>
                 {task.rootId && (
-                  <button
-                    type="button"
-                    className="lc-secondary"
-                    aria-label="Forget thread"
-                    onClick={() => removeThread(task.rootId!)}
-                  >
-                    ✕
-                  </button>
+                  <HoldButton className="lc-secondary lc-hold-danger" label="Unlink thread"
+                    ariaLabel="Hold to unlink thread. Conversation stays saved" holdMs={HOLD_SENSITIVE_MS}
+                    onConfirm={() => removeThread(task.rootId!)} />
                 )}
               </div>
               <div className="lc-agent-messages lc-footnote-overview-thread" ref={transcriptRef}>
@@ -1080,15 +1077,27 @@ export function FootnoteOverview({
               </HubSection></>
               )}
               <HubSection title="Threads">
+                {!readOnly && availableThreads.some(thread => !threads.some(link => link.rootId === thread.rootId)) &&
+                  <select aria-label="Link an existing thread" value="" onChange={event => {
+                    const thread = availableThreads.find(entry => entry.rootId === event.target.value);
+                    if (thread) onChange({...footnote,threads:[...threads,{...thread,createdAt:Date.now()}]});
+                  }}>
+                    <option value="">+ Link existing thread</option>
+                    {availableThreads.filter(thread => !threads.some(link => link.rootId === thread.rootId)).map(thread =>
+                      <option key={thread.rootId} value={thread.rootId}>{thread.title}</option>)}
+                  </select>}
                 {threads.length > 0 && (
                   <ul className={listClass(threads.length)}>
                     {threads.map((thread) => (
                       <li key={thread.rootId}>
-                        <button
-                          type="button"
+                        <HoldButton
+                          label={thread.title}
+                          ariaLabel={`${thread.title}. Tap to open, hold to unlink. Conversation stays saved`}
+                          holdMs={HOLD_SENSITIVE_MS}
                           className="lc-agent-scope-option"
                           disabled={readOnly}
-                          onClick={() => {
+                          onConfirm={() => removeThread(thread.rootId)}
+                          onTap={() => {
                             if (onOpenCoachThread) {
                               onOpenCoachThread(thread.rootId);
                               return;
@@ -1097,7 +1106,7 @@ export function FootnoteOverview({
                           }}
                         >
                           <strong className="lc-footnote-overview-entry-text">{thread.title}</strong>
-                        </button>
+                        </HoldButton>
                       </li>
                     ))}
                   </ul>

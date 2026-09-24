@@ -1,5 +1,26 @@
-import type { AgentChatMessage, CoachReplyRef } from "./AgentSidePanel";
+import type { AgentChatMessage, AgentSendFlags, CoachReplyRef } from "./AgentSidePanel";
 import { replyExcerpt } from "./AgentSidePanel";
+import { organizeIntoSessions, replyChainIds } from "./coachSessions";
+
+/** Resolve room/session and thread membership before reserving a queued turn. */
+export function sendConversationContext(messages: readonly AgentChatMessage[], flags: Pick<AgentSendFlags, "replyTo" | "threadRootId" | "sessionId">) {
+  const organized = organizeIntoSessions(messages);
+  const replyTo = flags.replyTo ?? (flags.threadRootId ? threadAnchorRef(organized, flags.threadRootId) ?? undefined : undefined);
+  const parent = replyTo ? organized.find(message => message.id === replyTo.id && !message.deletedAt) : undefined;
+  return { ...(replyTo ? {replyTo} : {}), ...(parent?.sessionId || flags.sessionId ? {sessionId: parent?.sessionId ?? flags.sessionId!} : {}) };
+}
+
+/** A linked thread is a root and its descendants, never its entire session. */
+export function conversationMessages(messages: readonly AgentChatMessage[], id: string): AgentChatMessage[] {
+  const message = messages.find(row => row.id === id && !row.deletedAt);
+  if (!message) return [];
+  const ids = replyChainIds(messages, messageThreadRoot(messages, message));
+  return messages.filter(row => ids.has(row.id) && !row.deletedAt);
+}
+
+export function conversationMarkdown(messages: readonly AgentChatMessage[]): string {
+  return messages.map(message => `### ${message.role === "user" ? "You" : message.role === "assistant" ? "Agent" : "App"}\n\n${message.content || message.review?.understood_approach || (message.drawing ? "[Drawing]" : "")}`).join("\n\n---\n\n");
+}
 
 export interface GroupedThreads {
   threadReplies: Map<string, AgentChatMessage[]>;

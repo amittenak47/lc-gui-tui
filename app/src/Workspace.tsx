@@ -110,7 +110,7 @@ import { problemArtifactConflict, problemConflictPreview, resolveProblemArtifact
 import { applyHubProblem } from "./util/padSync";
 import { artifactCreationAssociations, artifactRefKey, type ArtifactParent, type ArtifactRef, type ArtifactAssociation } from "./util/padArtifacts";
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
-import { groupThreads, threadAnchorRef, visibleThreadMessages } from "./modes/coachThreads";
+import { groupThreads, threadAnchorRef, visibleThreadMessages, sendConversationContext, conversationMessages, conversationMarkdown, messageThreadRoot } from "./modes/coachThreads";
 import {
   loadAgentReasoningLevel,
   loadTestForwardMode,
@@ -2184,6 +2184,20 @@ export function Workspace({
   useEffect(() => {
     const next = organizeIntoSessions(agentMessages);
     if (next !== agentMessages) setAgentMessages(next);
+  }, [agentMessages]);
+  useEffect(() => {
+    const deleted = new Set(agentMessages.filter(message => message.deletedAt).map(message => message.id));
+    if (!deleted.size) return;
+    setAnnotateFootnotes(current => {
+      let changed = false;
+      const next = current.map(note => {
+        if (!note.threads?.some(thread => deleted.has(thread.rootId)) && !(note.threadRootId && deleted.has(note.threadRootId))) return note;
+        changed = true;
+        const threads = note.threads?.filter(thread => !deleted.has(thread.rootId));
+        return {...note,threads,threadRootId: note.threadRootId && deleted.has(note.threadRootId) ? threads?.[0]?.rootId : note.threadRootId};
+      });
+      return changed ? next : current;
+    });
   }, [agentMessages]);
   /** Bumped on interrupt/merge so late HTTP/WS results are ignored. */
   const coachRunGenRef = useRef(0);
@@ -5939,6 +5953,7 @@ export function Workspace({
         | "queued"
         | "requestState"
         | "retryOf"
+        | "sessionId"
       >,
     ) => {
       markPadDirty();
@@ -7104,9 +7119,11 @@ export function Workspace({
   );
 
   const enqueueCoachSend = useCallback(async (text: string, flags: AgentSendFlags) => {
+    const context = sendConversationContext(agentMessagesRef.current, flags);
+    flags = {...flags, ...context};
     const id = pushCoachMessage("user", text || flags.pageQuote || "Question", {
       queued: true, requestState: "preparing", flags: flagBitsFor(flags),
-      ...(flags.replyTo ? { replyTo: flags.replyTo } : {}),
+      ...context,
     });
     const coordinator = coachCoordinatorRef.current!;
     coordinator.reserve(id);
@@ -7228,6 +7245,7 @@ export function Workspace({
       const nextId = pushCoachMessage("user", item.text, {
         queued: true, requestState: "preparing", retryOf: id, attachments: item.attachments,
         flags: item.flagBits,
+        ...sendConversationContext(agentMessagesRef.current, item.flags),
       });
       coachCoordinatorRef.current!.reserve(nextId); reservedId = nextId;
       const next = { ...item, userMessageId: nextId };
@@ -8394,6 +8412,10 @@ export function Workspace({
     try {
       const context = await prepareArtifactContext(message);
       if (!context) return;
+      if (index === undefined && proposal.kind === "markdown") {
+        const thread = conversationMessages(agentMessagesRef.current, message.id);
+        if (thread.length > 1) proposal = {...proposal, title:"Conversation.md", source:conversationMarkdown(thread), messages:persistableAgentMessages(thread)};
+      }
       await saveAgentArtifacts(context.parent, [proposal], context.associations, isDarkTheme(themeId), reference => {
         assertArtifactParentActive(context.parent);
         agentMessagesRef.current = agentMessagesRef.current.map(turn => turn.id === message.id ? { ...turn,
@@ -11176,6 +11198,9 @@ export function Workspace({
             footnote={openFootnote}
             number={footnoteNumbers.get(openFootnote.id)}
             threadMessages={footnoteThreadMessages}
+            availableThreads={groupThreads(agentMessages.filter(message => !message.deletedAt)).rootMessages
+              .filter(message => message.role === "user" || agentMessages.some(reply => reply.replyTo?.id === message.id && !reply.deletedAt))
+              .map(message => ({rootId:messageThreadRoot(agentMessages,message),title:replyExcerpt(message.content) || "Conversation"}))}
             anchorRect={footnoteAnchorRect}
             subMarkMode={subMarkMode}
             onSubMarkModeChange={setSubMarkMode}

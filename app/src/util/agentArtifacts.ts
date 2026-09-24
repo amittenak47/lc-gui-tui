@@ -6,7 +6,7 @@ import { convertToExcalidrawElements } from "../canvas/convertSkeletons";
 import { applyViz, type VizSceneElement } from "../viz/apply";
 import { parseVizProgram } from "../viz/schema";
 
-export interface AgentArtifactProposal { kind: "whiteboard" | "code" | "markdown"; title: string; source?: string; programs?: unknown[] }
+export interface AgentArtifactProposal { kind: "whiteboard" | "code" | "markdown"; title: string; source?: string; programs?: unknown[]; messages?: unknown[] }
 
 export function sanitizeArtifactProposals(raw: unknown): AgentArtifactProposal[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -25,7 +25,7 @@ export function artifactProposalSnapshot(proposal: AgentArtifactProposal, dark: 
   if (proposal.kind !== "whiteboard" && rawPrograms.length || proposal.kind === "whiteboard" && source.length) throw new Error("Attachment content does not match its kind.");
   const board = { v: 1 as const, elements: convertToExcalidrawElements(proposal.kind === "whiteboard" ? buildWhiteboardTemplate(1, dark) : buildAnnotateTemplate(1600, dark)) as unknown[], appState: { scrollX: 0, scrollY: 0, zoom: 1 } };
   if (proposal.kind !== "whiteboard") return { kind: proposal.kind, value: { owned: true, docType: proposal.kind,
-    name: proposal.title, source, board, footnotes: [], agent: [], ink: new Map() } };
+    name: proposal.title, source, board, footnotes: [], agent: proposal.messages ?? [], ink: new Map() } };
   const programs = rawPrograms.map(program => { const parsed = parseVizProgram(program); if (!parsed) throw new Error("Invalid attachment drawing."); return parsed; });
   if (new Set(programs.map(program => program.id)).size !== programs.length) throw new Error("Duplicate drawing identity.");
   for (const program of programs) applyViz({ getSceneElements: () => board.elements as VizSceneElement[], updateScene: ({ elements }) => { board.elements = elements; },

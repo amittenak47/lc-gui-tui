@@ -589,6 +589,8 @@ export interface AgentSendFlags {
   replyTo?: CoachReplyRef;
   /** The thread this send belongs to, or null when it is addressed to the room. */
   threadRootId?: string | null;
+  /** Selected activity group. Multiple independent threads can share it. */
+  sessionId?: string;
   /** Document Ask slash preset — swaps the daemon system prompt. */
   askPreset?: AskPresetId | null;
 }
@@ -1015,13 +1017,19 @@ export function AgentSidePanel({
   };
   const newestSessionId = sessions.at(-1)?.id ?? null;
   const [pickedSessionId, setPickedSessionId] = useState<string | null>(null);
+  const [newSessionId, setNewSessionId] = useState<string | null>(null);
   const [seenNewestSession, setSeenNewestSession] = useState<string | null>(null);
   const pickedIsLive = pickedSessionId != null && sessions.some((session) => session.id === pickedSessionId);
   if (newestSessionId !== seenNewestSession || (pickedSessionId != null && !pickedIsLive)) {
     setSeenNewestSession(newestSessionId);
     setPickedSessionId(newestSessionId);
   }
-  const activeSessionId = pickedIsLive ? pickedSessionId : newestSessionId;
+  const activeSessionId = newSessionId ?? (pickedIsLive ? pickedSessionId : newestSessionId);
+  useEffect(() => {
+    if (newSessionId && sessions.some(session => session.id === newSessionId)) {
+      setPickedSessionId(newSessionId); setNewSessionId(null);
+    }
+  }, [newSessionId, sessions]);
   const sessionMessages = useMemo(
     () => organized.filter((message) => !message.deletedAt && (!activeSessionId || message.sessionId === activeSessionId)),
     [organized, activeSessionId],
@@ -1092,14 +1100,16 @@ export function AgentSidePanel({
   useEffect(() => {
     if (!focusThread || focusThread.token === lastFocusTokenRef.current) return;
     lastFocusTokenRef.current = focusThread.token;
+    const owner = organized.find(message => message.id === focusThread.rootId);
+    if (owner?.sessionId) { setNewSessionId(null); setPickedSessionId(owner.sessionId); }
     setOpenThreadId(focusThread.rootId);
-  }, [focusThread]);
+  }, [focusThread, organized]);
 
   useEffect(() => {
     threadMotionRef.current = threadMotion;
   }, [threadMotion]);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const chatPinned = useChatFollow(listRef, openThreadId ?? "__room__", open);
+  const chatPinned = useChatFollow(listRef, openThreadId ?? activeSessionId ?? "__room__", open);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
   const sheet = useAgentSheet(panelRef, mobile, open, () => setOpen(false));
@@ -1656,6 +1666,7 @@ export function AgentSidePanel({
         ...(photos.length > 0 ? { photos } : {}),
         ...(pageQuote ? { pageQuote: pageQuote.text, documentView: quoteSeed?.view } : {}),
         threadRootId: openThreadId,
+        ...(activeSessionId ? {sessionId: activeSessionId} : {}),
         ...(replyTo ? { replyTo } : {}),
         ...(documentPresets && askPreset ? { askPreset } : {}),
       },
@@ -1787,6 +1798,10 @@ export function AgentSidePanel({
           <div className={`lc-agent-sessions-col${sessionsHidden ? " is-closed" : ""}`}>
             <div className="lc-agent-sessions-fade" aria-hidden />
             <nav className="lc-agent-sessions" aria-label="Sessions" aria-hidden={sessionsHidden || undefined}>
+              <button type="button" className="lc-agent-session" disabled={sessionsHidden}
+                onClick={() => { setNewSessionId(`session-${crypto.randomUUID()}`); setOpenThreadId(null); setReplyTo(null); }}>
+                + New session
+              </button>
               {orderedSessions.length === 0 ? (
                 <p className="lc-agent-sessions-empty">No sessions</p>
               ) : orderedSessions.map((session) => {
@@ -1805,7 +1820,7 @@ export function AgentSidePanel({
                     dataTipPlacement="right"
                     holdMs={1200}
                     disabled={sessionsHidden}
-                    onTap={() => setPickedSessionId(session.id)}
+                    onTap={() => { setNewSessionId(null); setPickedSessionId(session.id); setOpenThreadId(null); setReplyTo(null); }}
                     onConfirm={() => deleteSession(session.id)}
                   >
                     <span className="lc-agent-session-name">{session.title}</span>
@@ -1940,6 +1955,7 @@ export function AgentSidePanel({
               </div>
               <MessageArtifactTools
                 message={message}
+                conversation={Boolean(message.replyTo || threadReplies.get(message.id)?.length)}
                 onSave={onSaveArtifact}
                 onManage={onManageArtifacts}
               />
@@ -1992,11 +2008,13 @@ export function AgentSidePanel({
                       handwriting: false,
                       annotations: false,
                       reasoning,
+                      ...(activeSessionId ? {sessionId:activeSessionId} : {}),
                       replyTo: { id: message.id, role: "assistant", excerpt: replyExcerpt(message.content) },
                     });
                   }}
                 >
-                  Draw this
+                  <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="13" y="13" width="5" height="5" rx="1"/><path d="M7 4.5h8.5V11m-3-3 3 3 3-3M4.5 7v8.5H11"/></svg>
+                  <span>Draw this</span>
                 </button>
               )}
               </AgentTurnResponse>
@@ -2663,10 +2681,12 @@ export function pendingAckLine(message: AgentChatMessage): string {
 
 function MessageArtifactTools({
   message,
+  conversation = false,
   onSave,
   onManage,
 }: {
   message: AgentChatMessage;
+  conversation?: boolean;
   onSave?: AgentSidePanelProps["onSaveArtifact"];
   onManage?: AgentSidePanelProps["onManageArtifacts"];
 }) {
@@ -2675,7 +2695,7 @@ function MessageArtifactTools({
     !message.pending &&
     !message.queued;
   if (!show || (!onSave && !onManage)) return null;
-  const saveLabel = saveTurnLabel(message);
+  const saveLabel = conversation && !message.drawing ? "Save conversation" : saveTurnLabel(message);
   return (
     <div className="lc-agent-turn-tools">
       {onSave && (

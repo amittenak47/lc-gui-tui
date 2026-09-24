@@ -14,6 +14,30 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); document.body.textContent = ""; vi.unstubAllGlobals(); });
 const message = (state: AgentChatMessage["requestState"]): AgentChatMessage => ({ id: "question", role: "user", content: "Why?", at: 1, requestState: state });
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === text)!;
+it("sends unquoted replies inside their thread and keeps independent questions in the selected session", () => {
+  const send = vi.fn();
+  const messages: AgentChatMessage[] = [{id: "q", role: "user", content: "Question", at: 1, sessionId: "activity"}];
+  act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy={false}
+    messages={messages} onSend={send} focusThread={{rootId: "q", token: 1}} />));
+  const submit = () => {
+    const textarea = host.querySelector("textarea")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "Follow up");
+      textarea.dispatchEvent(new Event("input", {bubbles: true}));
+    });
+    act(() => host.querySelector("form")!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
+  };
+  submit();
+  expect(send).toHaveBeenLastCalledWith("Follow up", expect.objectContaining({threadRootId: "q", sessionId: "activity"}), "queue");
+  act(() => button("Question").click());
+  submit();
+  expect(send).toHaveBeenLastCalledWith("Follow up", expect.objectContaining({threadRootId: null, sessionId: "activity"}), "queue");
+  act(() => button("+ New session").click());
+  submit();
+  const flags = send.mock.lastCall![1];
+  expect(flags.sessionId).not.toBe("activity");
+  expect(flags.threadRootId).toBeNull();
+});
 function menu() { act(() => host.querySelector(".lc-agent-turn-user")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }))); }
 it("offers Draw this after an Ask that did not draw", () => {
   const send = vi.fn();

@@ -2,12 +2,36 @@ import { describe, expect, it } from "vitest";
 
 import type { AgentChatMessage } from "./AgentSidePanel";
 import {
+  sendConversationContext,
+  conversationMessages,
+  conversationMarkdown,
   groupThreads,
   messageThreadRoot,
   showsReplyStub,
   threadAnchorRef,
   visibleThreadMessages,
 } from "./coachThreads";
+
+describe("conversation identity", () => {
+  it("anchors an unquoted reply before its queued bubble is created", () => {
+    const root = msg("question", {sessionId: "activity"});
+    expect(sendConversationContext([root], {threadRootId: root.id, sessionId: "other"})).toMatchObject({
+      replyTo: {id: root.id}, sessionId: "activity",
+    });
+    expect(sendConversationContext([root], {sessionId: "activity"})).toEqual({sessionId: "activity"});
+  });
+  it("saves the complete thread from any turn without its session's other threads", () => {
+    const root = msg("question", {sessionId: "activity"});
+    const answer = msg("answer", {role: "assistant", replyTo: {id: root.id, role: "user", excerpt: "Question"}});
+    const followup = msg("followup", {replyTo: {id: answer.id, role: "assistant", excerpt: "Answer"}});
+    const other = msg("other", {sessionId: "activity"});
+    const deleted = msg("deleted", {deletedAt: 100, replyTo: answer.replyTo});
+    const saved = conversationMessages([root, answer, other, followup, deleted], answer.id);
+    expect(saved).toEqual([root, answer, followup]);
+    expect(conversationMarkdown(saved)).toContain("### Agent\n\nmessage answer");
+    expect(conversationMarkdown(saved)).not.toContain("message other");
+  });
+});
 
 function msg(
   id: string,

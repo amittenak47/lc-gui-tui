@@ -7,6 +7,9 @@ import { buildWhiteboardTemplate, buildScratchPageSkeletons, WHITEBOARD_PAGE_LIM
 import { buildAnnotateTemplate, ANNOTATE_REGION } from "../templates/annotate";
 import { isDarkTheme } from "../theme/appThemes";
 import { AnnotateDocument } from "./AnnotateDocument";
+import { restoreAgentMessages } from "./agentTranscript";
+import { AgentTurnResponse } from "./AgentTurnResponse";
+import { DrawingPreview } from "../viz/DrawingPreview";
 import { AnnotateMarkdownEditor } from "./AnnotateMarkdownEditor";
 import { readArtifact, saveArtifact, createArtifact, type ArtifactSnapshot } from "../util/artifactRepository";
 import { getArtifactDraft, putArtifactDraft, deleteArtifactDraft } from "../util/artifactDrafts";
@@ -39,6 +42,7 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
   const [snapshot, setSnapshot] = useState<ArtifactSnapshot | null>(null);
   const [title, setTitle] = useState(tab.title);
   const [editing, setEditing] = useState(false);
+  const [showConversation, setShowConversation] = useState(true);
   const [height, setHeight] = useState(1600);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState("");
@@ -184,6 +188,7 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
   const close = async () => { await persistDraft(); onClose?.(); };
   const doc = snapshot && snapshot.kind !== "whiteboard" ? snapshot.value : null;
   const readOnly = Boolean(doc?.sourceReference);
+  const conversation = doc ? restoreAgentMessages(doc.agent).filter(message => !message.deletedAt) : [];
   const updateSource = (source: string) => {
     setSnapshot(current => current && current.kind !== "whiteboard" ? { ...current, value: { ...current.value, source } } : current);
     setDirty(true);
@@ -261,6 +266,8 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
           </nav>
         )}
         <div className="lc-artifact-chrome-actions">
+          {conversation.length > 0 && <button type="button" className="lc-secondary" aria-pressed={showConversation}
+            onClick={() => setShowConversation(value => !value)}>{showConversation ? "Show Markdown" : "Show conversation"}</button>}
           <button type="button" className="lc-secondary" disabled={!item || pending || readOnly} onClick={() => void save().catch(() => {})}>
             Save
           </button>
@@ -306,10 +313,18 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
       )}
       <p className="lc-artifact-status" role="status">{status || `Opening ${kindName.toLowerCase()}…`}</p>
       <div className={`lc-artifact-canvas${readOnly ? " lc-artifact-reference" : ""}`}>
+      {showConversation && conversation.length > 0 && <div className="lc-saved-conversation lc-agent-messages" aria-label="Saved conversation">
+        {conversation.map(message => <article key={message.id} className={`lc-agent-turn lc-agent-turn-${message.role}`}>
+          <strong>{message.role === "user" ? "You" : message.role === "assistant" ? "Agent" : "App"}</strong>
+          <AgentTurnResponse pending={false} text={message.content || message.review?.understood_approach || ""} assistant={false} reasoning={message.reasoning} events={message.processEvents}/>
+          {message.drawing && <DrawingPreview program={message.drawing.program} />}
+        </article>)}
+      </div>}
       {readOnly && doc && <>
         {doc.sourceReference?.image && <img src={doc.sourceReference.image} alt={`${doc.sourceReference.label} · ${doc.sourceReference.locator}`} />}
         <AnnotateDocument source={doc.docType === "code" ? `\`\`\`\n${doc.source}\n\`\`\`` : doc.source} selectable />
       </>}
+      <div inert={showConversation && conversation.length > 0} style={{display: "contents", visibility: showConversation && conversation.length > 0 ? "hidden" : undefined}}>
       {!readOnly && Board && snapshot && <Board ref={board} filmScope={`artifact:${tab.id}`} themeId={themeId} readingSize={readingSize}
         onChange={changed} interactive={!pending} chromeEnabled={active} splitPaused={!showing} annotateToggle docPaper
         focusRegion={doc ? ANNOTATE_REGION : `pad-${page}`} mobileRegion={doc ? ANNOTATE_REGION : `pad-${page}`}
@@ -318,6 +333,7 @@ export function ArtifactWorkspace({ tab, active, showing, splitRole, onClose }: 
         pageContent={doc ? editing ? doc.docType === "code" ? <Suspense fallback={<p>Opening code editor…</p>}><MonacoBlock value={doc.source} language={title.endsWith(".js") ? "javascript" : title.endsWith(".ts") ? "typescript" : "python"} themeId={themeId} onChange={updateSource} onReady={() => {}} onContentHeight={setHeight} height={`${height}px`} /></Suspense>
           : <AnnotateMarkdownEditor value={doc.source} onChange={updateSource} onMeasure={setHeight} />
           : <AnnotateDocument source={doc.docType === "code" ? `\`\`\`\n${doc.source}\n\`\`\`` : doc.source} onMeasure={setHeight} /> : undefined} />}
+      </div>
       </div>
       {snapshot?.kind === "whiteboard" && snapshot.value.programs.map(program => <Timeline key={program.id} program={program} onFrame={frame => {
         const canvas = board.current; if (!canvas || !hydrated.current) return;

@@ -19,10 +19,10 @@ export function sessionIdFor(messageId: string): string {
 /**
  * Put every live turn in a session.
  *
- * A session is one question. A user message that is not answering something
- * already in the transcript starts one; the answer, notes, and replies that
- * follow stay with it until the next question. Turns that already carry a
- * session id keep it, so a later edit cannot reshuffle history.
+ * Sessions are activity groups and can contain multiple independent threads.
+ * New sends carry the selected session id; replies inherit their parent's.
+ * Legacy messages without ids retain the old question-based grouping below.
+ * Stored ids always win, so migration and edits cannot reshuffle history.
  *
  * Returns the same array when nothing needs assigning.
  */
