@@ -108,6 +108,12 @@ try {
     if(width===1280)for(const sample of motion){assert(sample.settled.length===1 && sample.settled[0]>=240,JSON.stringify(sample));assert(sample.movingFrames>2,JSON.stringify(sample));assert(sample.canvasFrames>3,JSON.stringify(sample));const end=sample.canvasEnd.map(f=>f.width);assert(Math.max(...end)-Math.min(...end)<5,JSON.stringify(sample));}
     await shot(`panel-${width}-${documentType}`);results.push({width,documentType,split,conversation,composer,restored,motion});
   }
+  await send('Page.navigate',{url:'http://127.0.0.1:1452/scripts/agent-rich-layout-review.html'});
+  await waitFor('Boolean(window.checkAnswerLayout)');
+  const reveal = await evaluate('window.checkAnswerLayout()');
+  assert(reveal.words > 100 && reveal.samples > 20, JSON.stringify(reveal));
+  assert.equal(reveal.min, reveal.max, 'Answer reveal changed scroll height');
+  results.push({reveal});
   await send('Page.navigate',{url:'http://127.0.0.1:1452/scripts/agent-persistence-review.html'});
   await waitFor('Boolean(window.persistenceReview)');
   await evaluate(`(async()=>{
@@ -122,6 +128,9 @@ try {
     ])});
     await p.putParentContent(parent,{artifacts:undefined,agent:[{id:'deleted',role:'user',content:'gone',at:2}]},{agentOnly:true});
   })()`);
+  // Invalidate the old document's ready flag before CDP acknowledges reload;
+  // otherwise the first poll can pass before navigation has even started.
+  await evaluate('delete window.persistenceReview');
   await send('Page.reload');await waitFor('Boolean(window.persistenceReview)');
   const persisted=await evaluate(`(async()=>{const p=window.persistenceReview;const saved=await p.getContent('review-chat');return {saved,request:await p.requireCoachRequest('queued'),messages:p.restoreAgentMessages(saved.agent)}})()`);
   assert.equal(persisted.request.text,'edited');assert.equal(persisted.request.prompt,'edited prompt');

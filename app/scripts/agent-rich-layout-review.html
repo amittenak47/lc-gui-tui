@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><link rel="icon" href="data:,"><title>Answer reveal layout check</title></head>
+<body><div id="answer" style="width:360px;max-height:600px;overflow:auto"></div><script type="module">
+import React from "react";
+import {createRoot} from "react-dom/client";
+import {AgentRichText} from "/src/modes/AgentRichText.tsx";
+import "/src/styles.css";
+const host = document.getElementById("answer");
+const text = Array.from({length:8}, (_,i) => `## Step ${i+1}\n\nThe **complete answer** keeps its layout while words appear. Inline math $x^2$ is stable.\n\n- First item\n- Second item\n\n\`\`\`js\nconst answer = 42;\n\`\`\``).join("\n\n");
+createRoot(host).render(React.createElement(AgentRichText, {text, animate:true, animateInitial:true}));
+window.checkAnswerLayout = async () => {
+  while (!host.querySelector(".lc-agent-word-reveal")) await new Promise(requestAnimationFrame);
+  await document.fonts.ready;
+  const heights=[]; const start=performance.now();
+  while (performance.now()-start < 2100) {
+    heights.push(host.scrollHeight);
+    await new Promise(requestAnimationFrame);
+  }
+  return {min:Math.min(...heights),max:Math.max(...heights),samples:heights.length,words:host.querySelectorAll(".lc-agent-word-reveal").length};
+};
+</script></body></html>
