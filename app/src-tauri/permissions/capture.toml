@@ -1,4 +1,8 @@
 [[permission]]
 identifier = "allow-capture-export"
 description = "Save or share user-requested PNG captures and choose their destination folder"
-commands.allow = ["save_png_bytes", "share_png_bytes", "pick_capture_folder"]
+commands.allow = [
+  "save_png_bytes", "share_png_bytes", "pick_capture_folder",
+  "begin_document_export", "append_document_export",
+  "finish_document_export", "cancel_document_export",
+]
