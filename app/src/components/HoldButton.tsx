@@ -148,6 +148,7 @@ export function HoldButton({
     }
     if (opts.release && wasHolding && filled && !wasConfirmed) {
       confirmedRef.current = true;
+      tapConsumedRef.current = true;
       onConfirmRef.current();
     } else if (opts.release && wasHolding && !filled && onTapRef.current) {
       tapConsumedRef.current = true;
@@ -189,6 +190,7 @@ export function HoldButton({
     if (elapsed >= holdMs || next >= 1) {
       holdingRef.current = false;
       confirmedRef.current = true;
+      tapConsumedRef.current = true;
       setHoldProgress(1);
       onConfirmRef.current();
       // Clear the filled look once the confirm action has run (dialog open, etc.).
@@ -203,6 +205,7 @@ export function HoldButton({
 
   const startHold = useCallback(() => {
     if (disabled) return;
+    tapConsumedRef.current = false;
     confirmedRef.current = false;
     holdingRef.current = true;
     startRef.current = performance.now();
@@ -301,7 +304,8 @@ export function HoldButton({
         stopHold({ reset: true, release: true });
       }}
       onBlur={() => stopHold({ reset: true })}
-      onClick={() => {
+      onClick={(event) => {
+        event.stopPropagation();
         if (tapConsumedRef.current) {
           tapConsumedRef.current = false;
           return;

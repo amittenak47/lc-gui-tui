@@ -33,6 +33,27 @@ beforeAll(() => {
 });
 
 describe("HoldButton", () => {
+  it("does not fire a tap or dismiss an overlay on the click following a completed hold", async () => {
+    vi.useFakeTimers();
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const tap=vi.fn(), confirm=vi.fn(), outside=vi.fn();
+    const host=document.createElement("div");document.body.append(host);const root=createRoot(host);
+    try {
+      await act(async()=>root.render(<div onClick={outside}><HoldButton label="Menu" holdMs={200} onTap={tap} onConfirm={confirm}/></div>));
+      const button=host.querySelector("button")!;
+      await act(async()=>button.dispatchEvent(new PointerEvent("pointerdown",{bubbles:true,pointerId:1})));
+      now = 300;
+      await act(async()=>vi.advanceTimersByTime(300));
+      expect(confirm).toHaveBeenCalledTimes(1);
+      await act(async()=>{
+        button.dispatchEvent(new PointerEvent("pointerup",{bubbles:true,pointerId:1}));
+        button.click();
+      });
+      expect(tap).not.toHaveBeenCalled();
+      expect(outside).not.toHaveBeenCalled();
+    } finally {await act(async()=>root.unmount());host.remove();clock.mockRestore();vi.useRealTimers();}
+  });
   it("fires onTap after leave-then-up while the pointer is captured", async () => {
     const onTap = vi.fn();
     const onConfirm = vi.fn();
