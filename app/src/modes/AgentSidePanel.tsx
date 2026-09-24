@@ -1969,7 +1969,30 @@ export function AgentSidePanel({
                 displayPrefs={displayPrefs} disclosure={disclosureFor(message.id)}
                 reasoning={message.reasoning}
                 text={turnBody(message)}
-                assistant={message.role === "assistant"}>
+                assistant={message.role === "assistant"}
+                afterText={offerDrawFor(message, visibleMessages) && (
+                <button
+                  type="button"
+                  className="lc-agent-draw-offer"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSend("Draw a diagram of what you just explained.", {
+                      ask: true,
+                      draw: true,
+                      reviewBoard: false,
+                      lazy: false,
+                      handwriting: false,
+                      annotations: false,
+                      reasoning,
+                      ...(activeSessionId ? {sessionId:activeSessionId} : {}),
+                      replyTo: { id: message.id, role: "assistant", excerpt: replyExcerpt(message.content) },
+                    });
+                  }}
+                >
+                  <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="13" y="13" width="5" height="5" rx="1"/><path d="M7 4.5h8.5V11m-3-3 3 3 3-3M4.5 7v8.5H11"/></svg>
+                  <span>Draw this</span>
+                </button>
+              )}>
               {showsReplyStub(message, openThreadId) && (
                 /*
                  * The quoted turn, above the reply that answers it.
@@ -1992,29 +2015,6 @@ export function AgentSidePanel({
                     {ROLE_LABEL[replyStub!.role]}
                   </span>
                   <span className="lc-agent-reply-stub-text">{replyStub!.excerpt}</span>
-                </button>
-              )}
-              {offerDrawFor(message, visibleMessages) && (
-                <button
-                  type="button"
-                  className="lc-agent-draw-offer"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onSend("Draw a diagram of what you just explained.", {
-                      ask: true,
-                      draw: true,
-                      reviewBoard: false,
-                      lazy: false,
-                      handwriting: false,
-                      annotations: false,
-                      reasoning,
-                      ...(activeSessionId ? {sessionId:activeSessionId} : {}),
-                      replyTo: { id: message.id, role: "assistant", excerpt: replyExcerpt(message.content) },
-                    });
-                  }}
-                >
-                  <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="13" y="13" width="5" height="5" rx="1"/><path d="M7 4.5h8.5V11m-3-3 3 3 3-3M4.5 7v8.5H11"/></svg>
-                  <span>Draw this</span>
                 </button>
               )}
               </AgentTurnResponse>

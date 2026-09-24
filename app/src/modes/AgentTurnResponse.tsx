@@ -8,12 +8,12 @@ import { DEFAULT_AGENT_DISPLAY_PREFS, type AgentDisplayPrefs } from "../util/age
 import { newThinkingDisclosure, type ThinkingDisclosureState } from "./thinkingDisplay";
 
 /** Presentation state only. The canonical reply/events remain in the transcript. */
-export function AgentTurnResponse({ pending, events = [], reasoning, text, assistant, children, showProcess = true,
+export function AgentTurnResponse({ pending, events = [], reasoning, text, assistant, children, afterText, showProcess = true,
   displayPrefs = DEFAULT_AGENT_DISPLAY_PREFS, disclosure }: {
   displayPrefs?: AgentDisplayPrefs; disclosure?: ThinkingDisclosureState;
   showProcess?: boolean;
   pending: boolean; events?: CoachProcessEvent[]; reasoning?: string;
-  text: string; assistant: boolean; children?: ReactNode;
+  text: string; assistant: boolean; children?: ReactNode; afterText?: ReactNode;
 }) {
   const [phase, setPhase] = useState<"working" | "collapsing" | "answer">(pending ? "working" : "answer");
   const wasLive = useRef(pending);
@@ -51,7 +51,10 @@ export function AgentTurnResponse({ pending, events = [], reasoning, text, assis
     </div>}
     {pending && <ThinkingDots />}
     {children}
-    {showAnswer && <AgentRichText text={text} animate={assistant}
-      animateInitial={assistant && wasLive.current} className="lc-agent-turn-body" />}
+    {showAnswer && (afterText ? <div className="lc-agent-turn-body lc-agent-answer-with-action">
+      <AgentRichText text={text} animate={assistant} animateInitial={assistant && wasLive.current} />
+      {afterText}
+    </div> : <AgentRichText text={text} animate={assistant}
+      animateInitial={assistant && wasLive.current} className="lc-agent-turn-body" />)}
   </>;
 }

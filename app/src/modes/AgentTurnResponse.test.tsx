@@ -46,9 +46,9 @@ it("places full live steps above dots, folds, then reveals the answer",()=>{
   act(()=>host.querySelector<HTMLButtonElement>('[data-collapse-end]')!.click());
   expect(host.querySelector('.lc-agent-reasoning-toggle')?.getAttribute('aria-expanded')).toBe('false');
   expect(host.querySelector('.lc-agent-process-toggle')?.getAttribute('aria-expanded')).toBe('false');
-  expect(host.querySelector('.lc-agent-turn-body')?.textContent).toBe('');
-  act(()=>vi.advanceTimersByTime(50));
-  expect(host.querySelector('.lc-agent-turn-body')?.textContent?.trim()).toBe('Answer');
+  // Reveal animates opacity on complete text so the answer never reflows.
+  expect(host.querySelector('.lc-agent-turn-body')?.textContent?.trim()).toBe('Answer one two.');
+  expect(host.querySelectorAll('.lc-agent-word-reveal')).toHaveLength(3);
   act(()=>vi.advanceTimersByTime(200));
   expect(host.querySelector('.lc-agent-turn-body')?.textContent?.trim()).toBe('Answer one two.');
 });

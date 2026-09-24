@@ -20791,20 +20791,31 @@ button.lc-row-selected:hover:not(:disabled) {
   color: color-mix(in srgb, var(--lc-thought-accent, var(--muted-ink, var(--muted))) 72%, var(--ink));
 }
 
+.lc-agent-answer-with-action {
+  white-space: normal;
+  line-height: 1.7;
+}
+.lc-agent-answer-with-action > .lc-agent-markdown { display: contents; }
+.lc-agent-answer-with-action > .lc-agent-markdown > p:last-child { display: inline; }
 .lc-agent-draw-offer {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  align-items: baseline;
+  vertical-align: baseline;
+  gap: 4px;
+  margin: 0 0 0 .4em;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
   color: var(--accent);
   font: inherit;
-  font-size: 13px;
-  padding: 5px 9px;
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 1px 3px;
+  min-height: 0;
+  white-space: nowrap;
   cursor: pointer;
 }
+.lc-agent-draw-offer svg { width: 11px; height: 11px; align-self: center; }
 .lc-agent-draw-offer:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .lc-agent-draw-offer:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .lc-agent-messages { overflow-anchor: none; }
