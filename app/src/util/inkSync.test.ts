@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { decodeInkOps, encodeInkOps } from "../canvas/inkCodec";
+import { decodeInkOps, encodeInkOps, packEncodedInk } from "../canvas/inkCodec";
+import { bytesToB64 } from "../api/nativeHttp";
 import { isInkConflict, mergeEncodedPages, remoteWins } from "./inkSync";
 import {
   clearInkConflicts,
@@ -152,6 +153,7 @@ describe("applyInkChoice", () => {
 
   async function loadApply(localRows: Array<{ pageId: number }>) {
     const deleteInkPages = vi.fn(async () => {});
+    const write = vi.fn();
     vi.resetModules();
     vi.doMock("./idb", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./idb")>()),
@@ -160,7 +162,7 @@ describe("applyInkChoice", () => {
         _mode: string,
         fn: (store: { put: (row: unknown, key: string) => void }) => void,
       ) => {
-        fn({ put: () => {} });
+        fn({ put: write });
       },
     }));
     vi.doMock("./inkPageStore", async (importOriginal) => ({
@@ -172,7 +174,7 @@ describe("applyInkChoice", () => {
             v: 1 as const,
             docKey: "md:p1",
             pageId: row.pageId,
-            gz: new Uint8Array([1, 2, 3]),
+            gz: packEncodedInk(encodeInkOps([])),
             dirty: true,
             updatedAt: 10,
           })),
@@ -180,7 +182,7 @@ describe("applyInkChoice", () => {
       deleteInkPages,
     }));
     const mod = await import("./inkSync");
-    return { applyInkChoice: mod.applyInkChoice, applyInkChoicesByPage: mod.applyInkChoicesByPage, deleteInkPages };
+    return { applyInkChoice: mod.applyInkChoice, applyInkChoicesByPage: mod.applyInkChoicesByPage, deleteInkPages, write };
   }
 
   const page = (pageId: number) => ({
@@ -188,7 +190,7 @@ describe("applyInkChoice", () => {
     key: "p1",
     page_id: pageId,
     updated_at: 20,
-    gz: "YQ==",
+    gz: bytesToB64(packEncodedInk(encodeInkOps([]))),
   });
 
   it("does not wipe local pages when the hub download failed", async () => {
@@ -203,6 +205,26 @@ describe("applyInkChoice", () => {
     );
     expect(deleteInkPages).not.toHaveBeenCalled();
     expect(putInkPage).not.toHaveBeenCalled();
+  });
+
+  it.each(["server", "merged"] as const)("rejects corrupt ink before %s can discard a valid local copy", async (choice) => {
+    const { applyInkChoice, deleteInkPages } = await loadApply([{ pageId: 1 }]);
+    const putInkPage = vi.fn();
+    await expect(applyInkChoice({ putInkPage } as never,"annotate","p1",choice,
+      [{...page(1),gz:"YQ=="}])).rejects.toThrow("could not be read");
+    expect(deleteInkPages).not.toHaveBeenCalled();
+    expect(putInkPage).not.toHaveBeenCalled();
+  });
+
+  it.each(["annotate", "whiteboard"] as const)("validates all %s selection pages before any write", async (kind) => {
+    const { applyInkChoicesByPage, deleteInkPages, write } = await loadApply([{ pageId: 1 },{pageId:2}]);
+    const putInkPage = vi.fn();
+    await expect(applyInkChoicesByPage({putInkPage} as never,kind,"p1",
+      [{pageId:1,choice:"server"},{pageId:2,choice:"merged"}],
+      [{...page(1),kind},{...page(2),kind,gz:"YQ=="}])).rejects.toThrow("could not be read");
+    expect(deleteInkPages).not.toHaveBeenCalled();
+    expect(putInkPage).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
   });
 
   it("empty-PUTs hub-only page ids after keep-local", async () => {
@@ -494,7 +516,7 @@ describe("fetchHubInkPages", () => {
     key: "p1",
     page_id: pageId,
     updated_at: 20,
-    gz: "YQ==",
+    gz: bytesToB64(packEncodedInk(encodeInkOps([]))),
   });
 
   it("bounds concurrent downloads on long merges", async () => {
@@ -582,7 +604,7 @@ describe("loadConflictPreviewInkPage", () => {
       key: "p1",
       page_id: id,
       updated_at: 20,
-      gz: "YQ==",
+      gz: bytesToB64(packEncodedInk(encodeInkOps([]))),
     }));
     const got = await loadConflictPreviewInkPage(
       { getInkPage } as never,
@@ -619,7 +641,7 @@ describe("loadConflictPreviewInkPage", () => {
       key: "w1",
       page_id: id,
       updated_at: 20,
-      gz: "YQ==",
+      gz: bytesToB64(packEncodedInk(encodeInkOps([]))),
     }));
     await loadConflictPreviewInkPage({ getInkPage } as never, "whiteboard", "w1", 0);
     expect(getInkPage.mock.calls.map((call) => call[2]).sort()).toEqual([0, 1]);
@@ -676,7 +698,7 @@ describe("applyInkChoice fetches what a choice writes", () => {
     key: "p1",
     page_id: pageId,
     updated_at: 20,
-    gz: "YQ==",
+    gz: bytesToB64(packEncodedInk(encodeInkOps([]))),
   });
 
   it("keep-server writes every hub page, not just the one the split drew", async () => {

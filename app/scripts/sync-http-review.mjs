@@ -118,6 +118,13 @@ try {
   const conflict=await b.call("pull");
   assert.equal(conflict.conflicts.length,1);
   assert.deepEqual(conflict.state.page17,localConflict,"sync overwrote unresolved local strokes");
+  await b.call("corruptPage",17);
+  for(const action of ["keepServer","mergePage"]) {
+    await assert.rejects(()=>b.call(action,17),/could not be read/);
+    assert.deepEqual((await b.call("inspect")).page17,localConflict,"unreadable remote ink replaced local handwriting");
+  }
+  await b.call("corruptPage",null);
+  console.log("PASS Keep selection and Merge preserve local handwriting when remote ink is unreadable");
   const merged=await b.call("mergePage",17);
   assert.equal(merged.page17.ops.length,24);
   assert.deepEqual((await a.call("pull")).state.page17,merged.page17);

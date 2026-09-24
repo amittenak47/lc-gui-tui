@@ -27,12 +27,17 @@ const ink = (page:number,color="#111111") => encodeInkOps(Array.from({length:12}
 const pads = [{kind:"annotate" as const,key:id},{kind:"annotate" as const,key:footnoteInkHubKey(id,scratch)}];
 const nativeFetch = window.fetch.bind(window);
 let failedPage:number|null=null;
+let corruptPage:number|null=null;
 let failAssets=false;
 let requests:string[]=[];
 window.fetch = async (input,init) => {
   const url=String(input); requests.push(url);
   if(failAssets && url.endsWith("/pads/artifact-assets/lookup")) throw new Error("Simulated attachment connection loss");
   if (failedPage != null && url.endsWith(`/pads/ink/annotate/${id}/${failedPage}`)) throw new Error("Simulated connection loss");
+  if (corruptPage != null && url.endsWith(`/pads/ink/annotate/${id}/${corruptPage}`)) {
+    const response=await nativeFetch(input,init);
+    return new Response(JSON.stringify({...await response.json(),gz:"YQ=="}),{headers:{"Content-Type":"application/json"}});
+  }
   return nativeFetch(input,init);
 };
 async function exchangeInk() {
@@ -88,10 +93,19 @@ const api = {
   },
   async editPage(page:number,color:string) {await putInkPages(annotateDocKey(id),[[page,ink(page,color)]],{now:Date.now()});},
   async mergePage(page:number) {
-    await applyInkChoicesByPage(client,"annotate",id,[{pageId:page,choice:"merged"}],null,
-      {hubPageIds:[page],fetchHubPages:ids=>fetchHubInkPages(client,"annotate",id,ids,{strict:true})});
+    const openCursor=IDBObjectStore.prototype.openCursor;
+    IDBObjectStore.prototype.openCursor=()=>{throw new Error("Single-page selection scanned all local handwriting");};
+    try {
+      await applyInkChoicesByPage(client,"annotate",id,[{pageId:page,choice:"merged"}],null,
+        {hubPageIds:[page],fetchHubPages:ids=>fetchHubInkPages(client,"annotate",id,ids,{strict:true})});
+    } finally {IDBObjectStore.prototype.openCursor=openCursor;}
     return api.inspect();
   },
+  async keepServer(page:number) {
+    await applyInkChoicesByPage(client,"annotate",id,[{pageId:page,choice:"server"}],null,
+      {hubPageIds:[page],fetchHubPages:ids=>fetchHubInkPages(client,"annotate",id,ids,{strict:true})});
+  },
+  async corruptPage(page:number|null) {corruptPage=page;},
   async deleteThread() {
     const doc=(await getAnnotateDoc(id))!;
     await saveAnnotateDoc({...doc,agent:(doc.agent as Array<Record<string,unknown>>).map(message=>["q","a"].includes(String(message.id))?{...message,deletedAt:Date.now()}:message)});

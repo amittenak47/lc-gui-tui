@@ -2,14 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InkPageDto, LcClient } from "../api/client";
 import { encodeInkOps } from "../canvas/inkCodec";
 import { inkPageKey, putInkPageArchive, putInkPages, type InkPageRecord } from "./inkPageStore";
-import { syncInkPages, pullInkPagesOverLocal } from "./inkSync";
+import { syncInkPages, pullInkPagesOverLocal, applyInkChoicesByPage } from "./inkSync";
 import { walkSyncInk, type WalkSnapshot } from "./hubWalk";
 
 const state = vi.hoisted(() => ({ local: new Map<string, InkPageRecord>() }));
 vi.mock("./padHub", () => ({ loadPadHub: () => ({ url: "http://fixture", token: "test" }) }));
 vi.mock("./inkPageStore", async (original) => ({
   ...await original<typeof import("./inkPageStore")>(),
-  getInkPageRecords: async (docKey: string) => [...state.local.values()].filter((row) => row.docKey === docKey),
+  getInkPageRecords: vi.fn(async (docKey: string, opts: { pageIds?: readonly number[]; metadataOnly?: boolean } = {}) =>
+    [...state.local.values()].filter((row) => row.docKey === docKey && (!opts.pageIds || opts.pageIds.includes(row.pageId)))
+      .map(row => opts.metadataOnly ? {...row,inkC:undefined,gz:undefined} : row)),
   getInkPageRecord: async (docKey: string, pageId: number) => state.local.get(`${docKey}\u001f${pageId}`) ?? null,
 }));
 vi.mock("./idb", async (original) => ({
@@ -55,6 +57,19 @@ beforeEach(() => {
 });
 
 describe("two-device ink sync", () => {
+  it("reads only the selected page payload in a paged PDF, preserving unrelated pages", async () => {
+    const {getInkPageRecords} = await import("./inkPageStore");
+    await putInkPages("md:pdf",Array.from({length:100},(_,i)=>[i+1,ink] as const),{now:100});
+    const unrelated = state.local.get(inkPageKey("md:pdf",73));
+    await applyInkChoicesByPage(client,"annotate","pdf",[{pageId:1,choice:"local"}],[],{
+      pageFrames:Array.from({length:100},(_,i)=>({pageId:i+1,minY:i*1000,maxY:(i+1)*1000-10})),
+    });
+    const reads = vi.mocked(getInkPageRecords).mock.calls;
+    expect(reads.filter(([,opts])=>!opts?.metadataOnly).map(([,opts])=>opts?.pageIds)).toEqual([[1]]);
+    expect(state.local.get(inkPageKey("md:pdf",73))).toBe(unrelated);
+    expect(client.putInkPage).toHaveBeenCalledTimes(1);
+  });
+
   it("imports a large book by page and refuses changed or corrupt downloads", async () => {
     await putInkPages("wb:w", Array.from({length:100}, (_,i) => [i+1,ink] as const), {now:100});
     await sync();

@@ -422,6 +422,15 @@ async function emptyInkGz(): Promise<string> {
   return bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps([]))));
 }
 
+/** Validate every incoming page before a selection can replace local ink. */
+async function validateHubInkPages(kind: InkPadKind, key: string, pages: readonly InkPageDto[]): Promise<void> {
+  for (const page of pages) {
+    if (page.kind !== kind || page.key !== key || !page.gz || !(await encodedFromGzB64(page.gz))) {
+      throw new Error(`The other device's handwriting on page ${page.page_id} could not be read. Local handwriting was kept.`);
+    }
+  }
+}
+
 export async function applyInkChoice(
   client: LcClient,
   kind: InkPadKind,
@@ -531,6 +540,7 @@ export async function applyInkChoice(
       }
       return;
     }
+    await validateHubInkPages(kind, key, pages);
     await deleteInkPages(docKey);
     for (const page of pages) {
       if (!page.gz) continue;
@@ -562,9 +572,11 @@ export async function applyInkChoice(
     throw new Error("the other device's handwriting could not be read");
   }
   const localMap = new Map<number, EncodedInk>();
-  for (const row of await getInkPageRecords(docKey)) {
+  await validateHubInkPages(kind, key, hubPages ?? []);
+  for (const row of await getInkPageRecords(docKey, { strict: true })) {
     const encoded = await encodedFromRecord(row);
-    if (encoded) localMap.set(row.pageId, encoded);
+    if (!encoded) throw new Error(`Local handwriting on page ${row.pageId} could not be read`);
+    localMap.set(row.pageId, encoded);
   }
   const merged = mergeEncodedPages(localMap, await encodedPagesFromDtos(hubPages ?? []));
   const gzByPage = new Map<number, string>();
@@ -641,7 +653,7 @@ async function decodeOpsFromRecords(
   const out: InkOp[] = [];
   for (const row of rows) {
     const encoded = await encodedFromRecord(row);
-    if (!encoded) continue;
+    if (!encoded) throw new Error(`Local handwriting on page ${row.pageId} could not be read`);
     const ops = decodeInkOps(encoded);
     if (ops && ops.length > 0) out.push(...ops);
   }
@@ -706,8 +718,9 @@ async function applyWhiteboardInkChoicesByPage(
       hubList = serverInk;
     }
   }
+  if (needHub) await validateHubInkPages(kind, key, hubList);
   const localBy = new Map(
-    (await getInkPageRecords(docKey)).map((row) => [row.pageId, row]),
+    (await getInkPageRecords(docKey, { strict: true })).map((row) => [row.pageId, row]),
   );
   const localOps = await decodeOpsFromRecords(localBy.values());
   const hubOps = needHub ? await decodeOpsFromDtos(hubList) : [];
@@ -816,15 +829,29 @@ export async function applyInkChoicesByPage(
       hubList = serverInk;
     }
   }
+  if (needHub.length > 0) await validateHubInkPages(kind, key, hubList);
   if (frames && frames.length > 1) {
     hubList = await splitInkDtosByFrames(hubList, frames);
   }
   const hubBy = new Map(hubList.map((page) => [page.page_id, page]));
+  const selectedIds = [...new Set(choices.map((row) => row.pageId))];
+  // A legacy document may store all pages in shard 0/1. Inspect only clocks
+  // to distinguish it from a paged document; keep unrelated WALs out of heap.
+  const legacy = frames && frames.length > 1 &&
+    !(await getInkPageRecords(docKey, { metadataOnly: true, strict: true })).some((row) => row.pageId >= 2);
   let localBy = new Map(
-    (await getInkPageRecords(docKey)).map((row) => [row.pageId, row]),
+    (await getInkPageRecords(docKey, { pageIds: legacy ? [0, 1] : selectedIds, strict: true }))
+      .map((row) => [row.pageId, row]),
   );
-  if (frames && frames.length > 1) {
+  if (legacy) {
     localBy = await splitLumpedLocalInk(docKey, localBy, frames, now);
+  }
+
+  for (const { pageId, choice } of choices) {
+    const row = localBy.get(pageId);
+    if (row && (choice === "local" || choice === "merged") && !(await encodedFromRecord(row))) {
+      throw new Error(`Local handwriting on page ${pageId} could not be read`);
+    }
   }
 
   for (const { pageId, choice } of choices) {
