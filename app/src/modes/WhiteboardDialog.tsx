@@ -9,6 +9,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { HubLibraryRefresh } from "../components/HubLibraryRefresh";
 import { useLibraryDeleteArm } from "../util/armedDelete";
 import { DOUBLE_TAP_MS } from "../util/gesture";
+import { shouldDismissBackdrop } from "../util/backdropDismiss";
 import {
   deleteWhiteboardNotebook,
   WHITEBOARD_LIBRARY_EVENT,
@@ -84,6 +85,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const lastTapRef = useRef({ id: "", at: 0 });
+  const backdropDown = useRef(false);
   const { tapArmed, arm } = useLibraryDeleteArm();
 
   useEffect(() => {
@@ -198,8 +200,16 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
         .filter(Boolean)
         .join(" ")}
       role="presentation"
+      onPointerDownCapture={(event) => {
+        // The menu can mount while its toolbar icon is still held. Releasing
+        // that gesture onto the new backdrop must not count as dismissal.
+        backdropDown.current = event.target === event.currentTarget;
+      }}
+      onPointerCancel={() => { backdropDown.current = false; }}
       onClick={(event) => {
-        if (event.target === event.currentTarget && !locked) props.onCancel();
+        const startedOnBackdrop = backdropDown.current;
+        backdropDown.current = false;
+        if (!locked && shouldDismissBackdrop(startedOnBackdrop, event.target, event.currentTarget)) props.onCancel();
       }}
     >
       <div

@@ -89,6 +89,7 @@ function mount(props: {
   return {
     host,
     onChoose,
+    onCancel,
     unmount: () => act(() => root.unmount()),
   };
 }
@@ -126,6 +127,47 @@ async function tap(label: string, host: HTMLElement) {
 }
 
 describe("WhiteboardDialog", () => {
+  it("ignores the opening hold's release but allows a fresh backdrop tap", () => {
+    // The toolbar press precedes mounting the dialog. Android can deliver
+    // its release/click to the newly opened backdrop instead of the button.
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1 }));
+    const view = mount();
+    try {
+      const backdrop = view.host.querySelector<HTMLElement>(".lc-settings-backdrop")!;
+      act(() => {
+        backdrop.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1 }));
+        backdrop.click();
+      });
+      expect(view.onCancel).not.toHaveBeenCalled();
+      act(() => {
+        backdrop.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 2 }));
+        backdrop.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 2 }));
+        backdrop.click();
+      });
+      expect(view.onCancel).toHaveBeenCalledTimes(1);
+    } finally { view.unmount(); view.host.remove(); }
+  });
+
+  it("ignores a cancelled backdrop press and a drag starting inside the menu", () => {
+    const view = mount();
+    try {
+      const backdrop = view.host.querySelector<HTMLElement>(".lc-settings-backdrop")!;
+      const panel = view.host.querySelector<HTMLElement>("[role=dialog]")!;
+      act(() => {
+        backdrop.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1 }));
+        backdrop.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: 1 }));
+        backdrop.click();
+      });
+      expect(view.onCancel).not.toHaveBeenCalled();
+      act(() => {
+        panel.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 2 }));
+        backdrop.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 2 }));
+        backdrop.click();
+      });
+      expect(view.onCancel).not.toHaveBeenCalled();
+    } finally { view.unmount(); view.host.remove(); }
+  });
+
   it("moves a restored row from trash to live without remounting", async () => {
     live.rows = [];
     trash.rows = [meta({ id: "w2", title: "Trashed", deletedAt: 2 })];
