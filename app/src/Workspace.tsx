@@ -2813,6 +2813,7 @@ export function Workspace({
     [],
   );
 
+  const problemLoadErrorRef = useRef<string | null>(null);
   const loadProblem = useCallback(
     async (
       taskId: string,
@@ -2827,6 +2828,7 @@ export function Workspace({
       // `opened` is the honest answer to "did a workspace appear?" — the
       // caller turns a false into the missing-content prompt.
       let opened = false;
+      problemLoadErrorRef.current = null;
       const { gen: loadGen } = beginWorkspaceLoad();
       const offline = serverLinkRef.current !== "online";
       const datasetId = bank?.dataset ?? DEFAULT_DATASET;
@@ -3088,6 +3090,7 @@ export function Workspace({
         }, boardFadeMs() || 1);
       } catch (cause) {
         if (workspaceLoadGenRef.current !== loadGen) return true;
+        problemLoadErrorRef.current = messageOf(cause);
         setError(messageOf(cause));
         boardSaveSuspendedRef.current = false;
         agentSaveSuspendedRef.current = false;
@@ -8970,7 +8973,7 @@ export function Workspace({
             { tabId: tab.id, userLoad },
           );
           if (!opened) {
-            reportMissingTab(tab, `“${tab.taskId}” could not be loaded from ${tab.dataset}.`);
+            reportMissingTab(tab, problemLoadErrorRef.current ?? `“${tab.taskId}” could not be loaded from ${tab.dataset}.`);
           }
           return;
         }

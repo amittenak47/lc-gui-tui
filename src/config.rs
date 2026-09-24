@@ -728,6 +728,13 @@ impl Config {
     }
 
     pub fn workspace_dir(&self) -> PathBuf {
+        // Android has no desktop home directory. Corpus downloads already use
+        // app storage, but materializing a problem used ~/lc-workspace relative
+        // to the process root and failed before the problem could open.
+        #[cfg(target_os = "android")]
+        if let Ok(root) = config_dir() {
+            return app_workspace_path(&self.workspace.dir, &root);
+        }
         expand_tilde(&self.workspace.dir)
     }
 
@@ -793,9 +800,37 @@ fn random_token() -> String {
     format!("{n:06}")
 }
 
+#[cfg(any(target_os = "android", test))]
+fn app_workspace_path(raw: &str, app_root: &std::path::Path) -> PathBuf {
+    for prefix in HOME_PREFIXES {
+        if let Some(rest) = strip_home_prefix(raw, prefix) {
+            return app_root.join(rest);
+        }
+    }
+    let path = PathBuf::from(raw);
+    if path.is_absolute() { path } else { app_root.join(path) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn android_workspace_uses_writable_app_storage_without_home() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        for path in ["~/lc-workspace", "$HOME/lc-workspace", "lc-workspace"] {
+            assert_eq!(app_workspace_path(path, root), root.join("lc-workspace"));
+        }
+        let explicit = root.join("custom");
+        assert_eq!(app_workspace_path(explicit.to_str().unwrap(), root), explicit);
+        let mut cfg = Config::default();
+        cfg.workspace.dir = app_workspace_path(&cfg.workspace.dir, root).display().to_string();
+        let problem = serde_json::from_str(r#"{"task_id":"two-sum","input_output":[]}"#).unwrap();
+        let workspace = crate::generator::generate(&cfg, crate::dataset::default(), &problem, &root.join("corpus.jsonl"), false).unwrap();
+        assert!(workspace.join(".lc/meta.json").is_file());
+        assert!(workspace.starts_with(root));
+    }
 
     fn home() -> PathBuf {
         UserDirs::new().expect("a home directory").home_dir().to_path_buf()
