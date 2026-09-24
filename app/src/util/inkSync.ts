@@ -394,7 +394,7 @@ export async function localInkAsDtos(
   pageIds?: readonly number[],
 ): Promise<InkPageDto[]> {
   const wanted = pageIds ? new Set(pageIds) : null;
-  const rows = await getInkPageRecords(inkDocKey(kind, key));
+  const rows = await getInkPageRecords(inkDocKey(kind, key), { pageIds });
   const out: InkPageDto[] = [];
   for (const row of rows) {
     if (wanted && !wanted.has(row.pageId)) continue;

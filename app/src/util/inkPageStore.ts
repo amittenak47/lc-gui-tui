@@ -187,15 +187,11 @@ export async function getInkPages(docKey: string): Promise<Map<number, EncodedIn
   return out;
 }
 
-export async function getInkPageRecords(docKey: string, opts: { metadataOnly?: boolean; strict?: boolean } = {}): Promise<InkPageRecord[]> {
+export async function getInkPageRecords(docKey: string, opts: { metadataOnly?: boolean; strict?: boolean; pageIds?: readonly number[] } = {}): Promise<InkPageRecord[]> {
   const rows: InkPageRecord[] = [];
   try {
     await withStore(STORE_INK_PAGES, "readonly", (store) => {
-      const request = store.openCursor(inkPageKeyRange(docKey));
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) return;
-        const value = cursor.value;
+      const collect = (value: unknown) => {
         if (isRecord(value)) {
           // Sync compares clocks. Retaining every compressed/WAL payload here
           // makes even a one-page update hold an entire handwritten book.
@@ -204,8 +200,22 @@ export async function getInkPageRecords(docKey: string, opts: { metadataOnly?: b
             dirty: value.dirty, updatedAt: value.updatedAt, syncedUpdatedAt: value.syncedUpdatedAt,
           } : value);
         }
-        cursor.continue();
       };
+      if (opts.pageIds) {
+        // Previewing a page must not clone every other page just to filter it.
+        for (const pageId of new Set(opts.pageIds)) {
+          const request = store.get(inkPageKey(docKey, pageId));
+          request.onsuccess = () => collect(request.result);
+        }
+      } else {
+        const request = store.openCursor(inkPageKeyRange(docKey));
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return;
+          collect(cursor.value);
+          cursor.continue();
+        };
+      }
     });
   } catch (cause) {
     if (opts.strict) throw cause;
