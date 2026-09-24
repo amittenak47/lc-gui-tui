@@ -129,6 +129,18 @@ async function tap(label: string, host: HTMLElement) {
 }
 
 describe("AnnotateDialog", () => {
+  it("filters saved files by filename or annotation-set name", async () => {
+    live.rows.push({id:"d2",name:"book.pdf",label:"Exam notes",hash:"h3",docType:"pdf",updatedAt:3});
+    const view=mount();
+    try {
+      await click("Open",view.host);await click("Recent documents",view.host);
+      await act(async()=>fill(view.host.querySelector('input[type="search"]')!,"EXAM"));
+      expect(view.host.querySelectorAll('.lc-scratch-load-entry')).toHaveLength(1);
+      expect(view.host.querySelector('.lc-scratch-load-entry')?.textContent).toContain("book.pdf");
+      await hold("Open Exam notes",view.host);
+      expect(view.onChoose).toHaveBeenLastCalledWith("recent","d2");
+    } finally {view.unmount();}
+  });
   it("keeps exports distinct from backups and filters annotation sets to this file", async () => {
     live.rows.push({id:"d2",name:"note.md",hash:"h1",docType:"markdown",updatedAt:2,label:"Second set"});
     live.rows.push({id:"other",name:"other.pdf",hash:"other",docType:"pdf",updatedAt:3});

@@ -32,7 +32,9 @@ export function HubLibraryRefresh({ onRefresh }: { onRefresh: HubLibraryRefreshA
       {pending ? "Pulling files…" : "Pull missing files from hub"}
     </button>
     {(pending || report || message) && <section className="lc-hub-pull-status" aria-live="polite" role="status">
-      <strong>{pending ? "Downloading your library" : failed ? "Could not pull files" : report?.failures.length ? "Some files need attention" : "Library up to date"}</strong>
+      <div className="lc-hub-pull-title"><strong>{pending ? "Downloading your library" : failed ? "Could not pull files" : report?.failures.length ? "Some files need attention" : "Library up to date"}</strong>
+        {!pending && <button type="button" className="lc-secondary" aria-label="Dismiss pull results" onClick={()=>{setReport(null);setMessage("");}}>Dismiss</button>}
+      </div>
       {pending && <span>Files, handwriting and attached notes are being downloaded.</span>}
       {message && <span>{message}</span>}
       {report && <>

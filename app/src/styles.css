@@ -20547,6 +20547,8 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-notification button:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
 .lc-library-refresh { display: grid; gap: 8px; margin-top: 8px; font-size: 12px; }
 .lc-library-times { display: grid; gap: 3px; margin-top: 5px; font-size: 11px; color: var(--muted); text-align: left; }
+.lc-hub-pull-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.lc-hub-pull-title > button { min-height: 28px; padding: 2px 6px; border: 0; background: transparent; color: var(--muted); font-size: 11px; }
 .lc-library-times > span { display: flex; flex-wrap: wrap; column-gap: 6px; }
 /* Handedness mirrors the toolbar row. Undo stays left of Redo inside this pair. */
 .lc-history-pair {

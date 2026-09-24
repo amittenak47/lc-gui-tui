@@ -2,6 +2,7 @@
  * Free a scratchpad slot when the library is full (hold to delete).
  */
 
+import "./libraryMenu.css";
 import { useEffect, useState } from "react";
 
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -80,7 +81,7 @@ export function WhiteboardLibraryDialog({
       }}
     >
       <div
-        className="lc-settings-modal lc-attempt-modal lc-scratch-lib-modal"
+        className="lc-settings-modal lc-attempt-modal lc-scratch-lib-modal lc-library-menu"
         role="dialog"
         aria-modal="true"
         aria-label="Whiteboard library full"

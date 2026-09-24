@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { HubLibraryRefresh, type HubLibraryRefreshAction } from "../components/HubLibraryRefresh";
+import { LibrarySearch } from "./LibrarySearch";
 import { LibraryTimes } from "./LibraryTimes";
 import { useLibraryDeleteArm } from "../util/armedDelete";
 import { DOUBLE_TAP_MS } from "../util/gesture";
@@ -85,6 +86,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const [saveTitle, setSaveTitle] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [libraryQuery,setLibraryQuery] = useState("");
   const lastTapRef = useRef({ id: "", at: 0 });
   const backdropDown = useRef(false);
   const { tapArmed, arm } = useLibraryDeleteArm();
@@ -109,6 +111,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
     setPickingSnapshots(false);
     setSaveTitle(null);
     setRenamingId(null);
+    setLibraryQuery("");
   }, [props.mode]);
 
   useEffect(() => {
@@ -130,6 +133,8 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const needsName = Boolean(props.needsName);
   const defaultName = props.defaultName?.trim() || "";
   const onRename = props.mode === "entry" ? props.onRename : undefined;
+
+  const matchesQuery = (entry: WhiteboardNotebookMeta) => entry.title.toLocaleLowerCase().includes(libraryQuery.trim().toLocaleLowerCase());
 
   const refreshList = () => {
     setNotebooks(listWhiteboardNotebooks());
@@ -214,7 +219,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
       }}
     >
       <div
-        className="lc-settings-modal lc-attempt-modal"
+        className={`lc-settings-modal lc-attempt-modal${isLeave ? "" : " lc-library-menu"}`}
         role="dialog"
         aria-modal="true"
         aria-label={isLeave ? "Leave whiteboard?" : "Open whiteboard"}
@@ -238,10 +243,12 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                   ? "Save this notebook, load another, or start blank."
                   : "Start blank or load a saved notebook."}
           </p>
-          {props.mode === "entry" && props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} />}
         </div>
 
         <div className="lc-settings-body">
+          {props.mode === "entry" && props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} />}
+          {pickingLoad && <LibrarySearch value={libraryQuery} onChange={setLibraryQuery} label="Search saved whiteboards" disabled={locked}/>}
+          {pickingLoad && libraryQuery.trim() && ![...notebooks,...archived].some(matchesQuery) && <p className="lc-muted">No matching saved items.</p>}
           {error && <div className="lc-warning">{error}</div>}
 
           {saveTitle !== null ? (
@@ -305,7 +312,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                 surface is the row and the hold target fills what the trash
                 leaves.
               */}
-              {notebooks.map((entry) => (
+              {notebooks.filter(matchesQuery).map((entry) => (
                 <div key={entry.id} className="lc-scratch-load-entry">
                   {renamingId === entry.id ? (
                     <PadNameField
@@ -385,7 +392,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
               {archived.length > 0 && (
                 <>
                   <p className="lc-muted">Trash on this device — three days, then gone.</p>
-                  {archived.map((entry) => (
+                  {archived.filter(matchesQuery).map((entry) => (
                     <HoldButton
                       key={`arch-${entry.id}`}
                       label={`Restore ${entry.title}`}

@@ -27,6 +27,7 @@ import {
 } from "../util/annotateStore";
 import { LibraryPadlock } from "./LibraryPadlock";
 import { PadNameField } from "./PadNameField";
+import { LibrarySearch } from "./LibrarySearch";
 import { LibraryTimes } from "./LibraryTimes";
 import { TOMBSTONE_COPY } from "../util/padSync";
 import {
@@ -126,6 +127,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   const removingRef = useRef<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [libraryQuery,setLibraryQuery] = useState("");
   const lastTapRef = useRef({ id: "", at: 0 });
   const { tapArmed, arm } = useLibraryDeleteArm();
 
@@ -154,6 +156,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
     setSection("main");
     setSaveTitle(null);
     setRenamingId(null);
+    setLibraryQuery("");
   }, [props.mode]);
 
   const snapshotKey = props.mode === "entry" ? props.snapshotKey ?? null : null;
@@ -199,6 +202,8 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
     (isWeb ? doc.docType === "web" : doc.docType !== "web") &&
     (section !== "sets" || (currentDoc && doc.hash === currentDoc.hash)),
   );
+
+  const matchesQuery = (doc: AnnotateDocMeta) => `${doc.name} ${doc.label ?? ""}`.toLocaleLowerCase().includes(libraryQuery.trim().toLocaleLowerCase());
 
   const refreshList = () => {
     setDocs(listAnnotateDocs());
@@ -285,7 +290,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
       }}
     >
       <div
-        className="lc-settings-modal lc-attempt-modal"
+        className={`lc-settings-modal lc-attempt-modal${isLeave ? "" : " lc-library-menu"}`}
         role="dialog"
         aria-modal="true"
         aria-label={isLeave ? "Leave document?" : isWeb ? "Web pad" : "Document pad"}
@@ -317,10 +322,12 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                   : section === "more" ? "History and annotation backups."
                   : "Open a file or return to a recent document."}
           </p>
-          {props.mode === "entry" && props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} />}
         </div>
 
         <div className="lc-settings-body">
+          {props.mode === "entry" && props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} />}
+          {pickingRecent && <LibrarySearch value={libraryQuery} onChange={setLibraryQuery} label={isWeb ? "Search saved pages" : "Search saved documents"} disabled={locked}/>}
+          {pickingRecent && libraryQuery.trim() && ![...visibleDocs,...archived].some(matchesQuery) && <p className="lc-muted">No matching saved items.</p>}
           {error && <div className="lc-warning">{error}</div>}
 
           {saveTitle !== null ? (
@@ -399,7 +406,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
               {visibleDocs.length === 0 && (
                 <p className="lc-muted">{isWeb ? "No saved pages yet." : "Nothing annotated yet."}</p>
               )}
-              {visibleDocs.map((doc) => {
+              {visibleDocs.filter(matchesQuery).map((doc) => {
                 const title = annotateDocLabel(doc);
                 return (
                 <div key={doc.id} className="lc-scratch-load-entry">
@@ -480,7 +487,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
               {archived.length > 0 && (
                 <>
                   <p className="lc-muted">Trash on this device — three days, then gone.</p>
-                  {archived.map((doc) => (
+                  {archived.filter(matchesQuery).map((doc) => (
                     <HoldButton
                       key={`arch-${doc.id}`}
                       label={`Restore ${annotateDocLabel(doc)}`}

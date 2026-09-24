@@ -1,0 +1,78 @@
+/* Load menus share the attachment catalog's compact chrome and quiet rows. */
+.lc-settings-modal.lc-library-menu {
+  width: min(420px, 100%);
+  max-height: min(70dvh, 480px);
+}
+.lc-library-menu .lc-settings-head { padding: 14px 16px 6px; }
+.lc-library-menu .lc-settings-head h2 { font-size: 16px; }
+.lc-library-menu .lc-settings-head .lc-muted { margin: 6px 0 0; line-height: 1.4; font-size: 12px; }
+.lc-library-menu .lc-settings-body { padding: 8px 16px 10px; display: flex; flex-direction: column; gap: 10px; }
+.lc-library-menu .lc-settings-body > * { flex-shrink: 0; }
+.lc-library-menu .lc-settings-foot { padding: 10px 16px 14px; }
+.lc-library-menu button { min-height: 32px; font-size: 13px; }
+.lc-library-menu .lc-settings-choice,
+.lc-library-menu .lc-document-menu { gap: 0; }
+.lc-library-menu .lc-scratch-load-entry,
+.lc-library-menu .lc-document-menu > button,
+.lc-library-menu .lc-settings-choice > .lc-hold-choice {
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.lc-library-menu .lc-scratch-load-entry { align-items: center; gap: 4px; padding: 6px 0; }
+.lc-library-menu .lc-scratch-load-entry:hover,
+.lc-library-menu .lc-document-menu > button:hover:not(:disabled),
+.lc-library-menu .lc-settings-choice > .lc-hold-choice:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.lc-library-menu .lc-hold-reveal.lc-scratch-load-hold { padding: 4px 0; }
+.lc-library-menu .lc-scratch-load-hold strong { font-size: 13px; overflow-wrap: anywhere; }
+.lc-library-menu .lc-library-times { font-size: 10px; gap: 2px; }
+.lc-library-menu .lc-scratch-load-lock.is-locked { color: var(--accent); }
+.lc-library-menu .lc-scratch-load-trash:not([data-filling]) .lc-hold-reveal-fill { visibility: hidden; }
+.lc-library-menu .lc-scratch-load-hold .lc-muted { font-size: 11px; }
+.lc-library-menu .lc-scratch-load-lock,
+.lc-library-menu .lc-hold-reveal.lc-scratch-load-trash {
+  width: 30px; min-width: 30px; min-height: 32px; height: 32px;
+  padding: 0; align-self: center; border: 0; border-radius: 6px;
+  background: transparent; color: var(--hint);
+}
+.lc-library-menu .lc-document-menu > button,
+.lc-library-menu .lc-settings-choice > .lc-hold-choice { padding: 10px 4px; }
+.lc-library-menu .lc-document-menu > .lc-document-menu-save { justify-self: stretch; }
+.lc-library-menu .lc-hold-choice strong { font-size: 13px; }
+.lc-library-menu .lc-hold-choice .lc-muted { font-size: 11px; line-height: 1.4; }
+.lc-library-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.lc-library-search {
+  display: flex; align-items: center; gap: 6px; min-height: 32px;
+  padding: 2px 8px; border: 1px solid var(--chrome-edge); border-radius: 8px;
+  background: var(--bg); color: var(--hint);
+}
+.lc-library-search:focus-within { border-color: var(--accent); }
+.lc-library-search > svg { flex-shrink: 0; }
+.lc-library-menu .lc-library-search input {
+  width: 100%; min-width: 0; min-height: 28px; padding: 0; border: 0; outline: 0;
+  background: transparent; color: var(--ink); font: inherit; font-size: 13px;
+}
+.lc-library-menu .lc-library-refresh { margin: 0; }
+.lc-library-menu .lc-library-refresh > button {
+  width: auto; padding: 0 8px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--accent); box-shadow: none; font-size: 12px;
+}
+.lc-library-menu .lc-hub-pull-status { padding: 8px 10px; font-size: 12px; }
+.lc-library-menu .lc-hub-pull-status ul { max-height: 96px; }
+/* The practice catalog keeps its full table and filters, with the same chrome. */
+.lc-library-browser .lc-browser-body { background: var(--bg); border-radius: 14px; padding: 14px 16px; }
+.lc-library-browser .lc-dataset-tab {
+  min-height: 28px; border: 0; border-radius: 6px; padding: 0 8px;
+  background: transparent; color: var(--hint); font-size: 12px; box-shadow: none;
+}
+.lc-library-browser .lc-dataset-tab.is-active { color: var(--accent); background: transparent; box-shadow: inset 0 -2px 0 currentColor; }
+.lc-library-browser .lc-browser-filters input[type="search"] { border: 1px solid var(--chrome-edge); border-radius: 8px; background: var(--bg); font-size: 13px; }
+.lc-library-browser .lc-row { border-bottom-color: color-mix(in srgb, var(--line) 70%, transparent); }
+@media (pointer: coarse) {
+  .lc-library-menu .lc-scratch-load-lock,
+  .lc-library-menu .lc-hold-reveal.lc-scratch-load-trash { width: 40px; min-width: 40px; height: 40px; }
+}

@@ -33,6 +33,7 @@ import {
   type SortKey,
 } from "../util/browseSort";
 import { messageOf } from "../util/messageOf";
+import "./libraryMenu.css";
 
 export const PAGE_SIZE = 15;
 /** Smallest page the phone browser will request — still usable on iPhone SE. */
@@ -514,7 +515,7 @@ export function ProblemBrowser({
   }, [page, pageCount, total, pageSize]);
 
   return (
-    <section className="lc-browser" aria-label="Browse problems">
+    <section className="lc-browser lc-library-browser" aria-label="Browse problems">
       <div className="lc-browser-center">
         {!tableReady ? (
           <div className="lc-browser-loading" role="status" aria-live="polite" aria-label="Loading problems">

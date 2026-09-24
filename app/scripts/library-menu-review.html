@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"/><title>Load menu review</title></head><body><div id="root"></div><script type="module">
+import {createElement} from 'react';
+import {createRoot} from 'react-dom/client';
+import {AnnotateDialog} from '/src/modes/AnnotateDialog.tsx';
+import {ProblemBrowser} from '/src/modes/ProblemBrowser.tsx';
+import {WhiteboardDialog} from '/src/modes/WhiteboardDialog.tsx';
+import '/src/styles.css';
+const now=Date.now();
+localStorage.setItem('whiteboard.annotate.index.v1',JSON.stringify(Array.from({length:14},(_,i)=>({id:`d${i}`,hash:`h${i}`,name:i===0?'Kleinberg, Jon ? Algorithm design (2005).pdf':`Lecture ${i}.md`,label:i===0?'Exam notes':undefined,docType:i===13?'web':i===0?'pdf':'markdown',updatedAt:now-i*10000,lastSyncedAt:now-i*5000}))));
+localStorage.setItem('whiteboard.notebook.index.v1',JSON.stringify(Array.from({length:14},(_,i)=>({id:`w${i}`,title:`Notebook ${i}`,updatedAt:now-i*10000,pageCount:i+1}))));
+const root=createRoot(document.querySelector('#root'));
+window.chosen=[];
+const client={tags:async()=>[],datasets:async()=>[{id:'leetcode',label:'LeetCode',count:20},{id:'kodcode',label:'KodCode',count:20}],searchProblems:async()=>({total:20,items:Array.from({length:6},(_,i)=>({key:`leetcode/${i+1}`,task_id:`${i+1}-two-sum`,question_id:String(i+1),difficulty:'Easy',tags:[],test_count:3}))})};
+window.showPractice=()=>root.render(createElement(ProblemBrowser,{client,onPick:(...args)=>window.chosen.push(args),busy:false,themeId:'paper',onThemePick:()=>{}}));
+window.showMenu=(kind)=>root.render(createElement(kind==='whiteboard'?WhiteboardDialog:AnnotateDialog,{key:kind,mode:'entry',kind:kind==='web'?'web':'document',onChoose:(...args)=>window.chosen.push(args),onCancel:()=>{},onRefreshHub:async()=>({added:['Notes.md'],repaired:['Book.pdf'],failures:[{name:'Older notebook',message:'The hub has the saved entry, but some handwriting is missing. Sync on the original device, then pull again.'}]})}));
+</script></body></html>
