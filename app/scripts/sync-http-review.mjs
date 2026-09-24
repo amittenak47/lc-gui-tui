@@ -77,7 +77,16 @@ try {
   }
   const a=await browser("http-a"),b=await browser("http-b");
   const initial=await a.call("seed");
-  const received=(await b.call("pull")).state;
+  await b.call("failPage",17);
+  await assert.rejects(()=>b.call("discover"),/connection loss/);
+  assert.equal(await b.call("hasDocument"),false,"incomplete import exposed a document without its ink");
+  await b.call("failPage",null);
+  await b.call("traffic",true);
+  const received=await b.call("discover");
+  const importGets=(await b.call("traffic")).filter(url=>url.includes("/pads/ink/"));
+  assert.equal(importGets.length,41);
+  assert(importGets.every(url=>/\/\d+$/.test(url)),"import downloaded a whole pad's ink");
+  console.log("PASS discovery downloads one page at a time; failed import stays hidden until complete retry");
   assert.deepEqual(received,initial);
   assert.equal(received.pages.length,40);
   assert.equal(received.metadataHasPayload,false);

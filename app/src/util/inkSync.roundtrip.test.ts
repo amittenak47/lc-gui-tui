@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InkPageDto, LcClient } from "../api/client";
 import { encodeInkOps } from "../canvas/inkCodec";
 import { inkPageKey, putInkPageArchive, putInkPages, type InkPageRecord } from "./inkPageStore";
-import { syncInkPages } from "./inkSync";
+import { syncInkPages, pullInkPagesOverLocal } from "./inkSync";
 import { walkSyncInk, type WalkSnapshot } from "./hubWalk";
 
 const state = vi.hoisted(() => ({ local: new Map<string, InkPageRecord>() }));
@@ -55,6 +55,34 @@ beforeEach(() => {
 });
 
 describe("two-device ink sync", () => {
+  it("imports a large book by page and refuses changed or corrupt downloads", async () => {
+    await putInkPages("wb:w", Array.from({length:100}, (_,i) => [i+1,ink] as const), {now:100});
+    await sync();
+    state.local = new Map();
+    const digests = snapshot().inkDigests;
+    expect(await pullInkPagesOverLocal(client,"whiteboard","w",[1,100],digests)).toBe(100);
+    expect(client.getInkPages).not.toHaveBeenCalled();
+    expect(state.local.size).toBe(100);
+    const before = state.local.get(key);
+    hub.set(1,{...hub.get(1)!,updated_at:200});
+    await expect(pullInkPagesOverLocal(client,"whiteboard","w",[1],digests)).rejects.toThrow("changed on the hub");
+    expect(state.local.get(key)).toBe(before);
+    hub.set(1,{...hub.get(1)!,gz:"YQ=="});
+    await expect(pullInkPagesOverLocal(client,"whiteboard","w",[1],snapshot().inkDigests)).rejects.toThrow("could not be read");
+    expect(state.local.get(key)).toBe(before);
+  });
+
+  it("preserves ink edited locally while a discovery download is in flight", async () => {
+    await putInkPages("wb:w",[[1,ink]],{now:100});
+    await sync();
+    vi.mocked(client.getInkPage).mockImplementationOnce(async () => {
+      await putInkPages("wb:w",[[1,ink]],{now:200});
+      return hub.get(1)!;
+    });
+    await expect(pullInkPagesOverLocal(client,"whiteboard","w",[1],snapshot().inkDigests)).rejects.toThrow("changed during download");
+    expect(state.local.get(key)?.updatedAt).toBe(200);
+  });
+
   it("downloads only the changed page in a large book", async () => {
     await putInkPages("wb:w", Array.from({length:100}, (_,i) => [i+1,ink] as const), {now:100});
     await sync();

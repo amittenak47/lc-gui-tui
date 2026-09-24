@@ -1,7 +1,7 @@
 import { LcClient } from "../src/api/client";
 import { setHostLoopback } from "../src/util/padHub";
 import { saveAnnotateDoc, getAnnotateDoc } from "../src/util/annotateStore";
-import { applyHubAnnotate, pushAnnotatePad } from "../src/util/padSync";
+import { applyHubAnnotate, pushAnnotatePad, discoverHubPads } from "../src/util/padSync";
 import { putInkPages, getInkPage, getInkPageRecords, annotateDocKey, footnoteWhiteboardDocKey } from "../src/util/inkPageStore";
 import { syncInkPages, footnoteInkHubKey, applyInkChoicesByPage, fetchHubInkPages } from "../src/util/inkSync";
 import { putFootnoteWhiteboard, getFootnoteWhiteboard } from "../src/util/footnoteWhiteboardStore";
@@ -40,6 +40,8 @@ async function exchangeInk() {
   return syncInkPages(client,ping.ink,pads,0,{strict:true});
 }
 const api = {
+  async discover() { await discoverHubPads(client); return api.inspect(); },
+  async hasDocument() { return Boolean(await getAnnotateDoc(id)); },
   async seed() {
     await putFootnoteWhiteboard(id,scratch,{board:{...board,inkPages:{v:1,pageIds:[1]}},pageCount:1});
     await saveAnnotateDoc({id,name:"Sync check.md",hash:"sync-check",docType:"markdown",source:"Selected passage\n\n".repeat(300),board,footnotes:notes,

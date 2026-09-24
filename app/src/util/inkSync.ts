@@ -1148,29 +1148,39 @@ async function writeInkPage(
  * was told "Synced". A walk that cannot move the strokes has to say so.
  */
 
-/** Take the hub's copies: overwrite this device's pages from what it holds. */
+/**
+ * Download ink for a newly discovered pad, one page at a time. The caller must
+ * publish the parent only after this completes. A failed transfer may leave
+ * verified pages for retry, but never exposes a document with missing ink.
+ */
 export async function pullInkPagesOverLocal(
   client: LcClient,
   kind: InkPadKind,
   key: string,
   expectedPageIds: readonly number[] = [],
+  knownDigests?: readonly InkPageDigestDto[],
 ): Promise<number> {
-  const bytes = await client.getInkPages(kind, key);
+  const digests = (knownDigests ?? (await client.pingPadSync(0)).ink ?? [])
+    .filter((page) => page.kind === kind && page.key === key);
+  const byId = new Map(digests.map((page) => [page.page_id, page]));
   for (const pageId of expectedPageIds) {
-    if (!bytes.some((page) => page.page_id === pageId && page.gz)) {
+    if (!byId.has(pageId)) {
       throw new Error(`Ink page ${pageId} was missing from the hub download`);
     }
   }
-  for (const page of bytes) {
-    if (!page.gz || !(await encodedFromGzB64(page.gz))) {
-      throw new Error(`Ink page ${page.page_id} could not be read`);
-    }
-  }
+  if (!byId.size) return 0;
   const docKey = inkDocKey(kind, key);
+  const localBy = new Map((await getInkPageRecords(docKey, { metadataOnly: true, strict: true }))
+    .map((row) => [row.pageId, row]));
   let written = 0;
-  for (const full of bytes) {
-    if (!full.gz) continue;
-    await writeInkPage(docKey, full, undefined, true);
+  for (const digest of byId.values()) {
+    const full = await client.getInkPage(kind, key, digest.page_id);
+    if (!full?.gz) throw new Error(`Ink page ${digest.page_id} was missing from the hub download`);
+    if (full.kind !== kind || full.key !== key || full.page_id !== digest.page_id || full.updated_at !== digest.updated_at) {
+      throw new Error(`Ink page ${digest.page_id} changed on the hub. Sync again.`);
+    }
+    if (!(await encodedFromGzB64(full.gz))) throw new Error(`Ink page ${digest.page_id} could not be read`);
+    await writeInkPage(docKey, full, localBy.get(digest.page_id) ?? null, true);
     written++;
   }
   return written;

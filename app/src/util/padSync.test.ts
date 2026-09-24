@@ -179,6 +179,7 @@ function fakeClient(overrides: Partial<LcClient> = {}): LcClient {
       annotate: [],
       snapshots: [],
       gone: [],
+      ink: [],
     })),
     ...overrides,
   } as unknown as LcClient;

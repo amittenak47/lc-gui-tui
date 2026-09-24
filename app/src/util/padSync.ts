@@ -1115,8 +1115,8 @@ function boardLooksCorrupt(board: unknown): boolean {
 /** Explicit library discovery. Existing local entries (including dirty ones) are untouched. */
 export async function discoverHubPads(client: LcClient): Promise<number> {
   if (!loadPadHub()) throw new Error("The hub is not connected yet. Try again when it is available.");
-  const [whiteboards, documents] = await Promise.all([
-    client.listWhiteboardPads(), client.listAnnotatePads(),
+  const [whiteboards, documents, digest] = await Promise.all([
+    client.listWhiteboardPads(), client.listAnnotatePads(), client.pingPadSync(0),
   ]);
   let imported = 0;
   const failures: string[] = [];
@@ -1125,7 +1125,7 @@ export async function discoverHubPads(client: LcClient): Promise<number> {
     try {
       const board = row.board as BoardBlob;
       if (boardLooksCorrupt(board)) throw new Error(`“${row.title}” has an unreadable board on the hub.`);
-      await pullInkPagesOverLocal(client, "whiteboard", row.id, board.inkPages?.pageIds);
+      await pullInkPagesOverLocal(client, "whiteboard", row.id, board.inkPages?.pageIds, digest.ink);
       // Dependencies first; do not offer a notebook that downloaded only its name.
       if (await getWhiteboardNotebook(row.id) || listWhiteboardTrash().some((entry) => entry.id === row.id)) continue;
       await applyHubWhiteboard(row, { emitReload: false, client });
@@ -1146,10 +1146,10 @@ export async function discoverHubPads(client: LcClient): Promise<number> {
         }
         await putDocBytes(row.hash, bytes);
       }
-      await pullInkPagesOverLocal(client, "annotate", row.id, board.inkPages?.pageIds);
+      await pullInkPagesOverLocal(client, "annotate", row.id, board.inkPages?.pageIds, digest.ink);
       const boards = row.footnote_boards as Record<string, { board: BoardBlob }> | undefined;
       for (const [wbId, scratch] of Object.entries(boards ?? {})) {
-        await pullInkPagesOverLocal(client, "annotate", footnoteInkHubKey(row.id, wbId), scratch.board.inkPages?.pageIds);
+        await pullInkPagesOverLocal(client, "annotate", footnoteInkHubKey(row.id, wbId), scratch.board.inkPages?.pageIds, digest.ink);
       }
       if (await getAnnotateDoc(row.id) || listAnnotateTrash().some((entry) => entry.id === row.id)) continue;
       await applyHubAnnotate(row, { emitReload: false, client });
