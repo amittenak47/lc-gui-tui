@@ -89,7 +89,14 @@ pub async fn webview_capture_png(app: AppHandle, label: String) -> Result<String
         let (tx, rx) = tokio::sync::oneshot::channel();
         webview
             .with_webview(move |platform| {
-                let _ = tx.send(capture_webview_png(&platform));
+                // The preview finishes on this same thread, through the window
+                // loop. Waiting for it here never returns: the completion is
+                // sitting behind the call that is waiting for it.
+                if let Err(err) = begin_webview_capture(&platform, tx) {
+                    // begin_webview_capture sends on failure when it still holds
+                    // the channel. A send error means the listener is already gone.
+                    let _ = err;
+                }
             })
             .map_err(|err| err.to_string())?;
         let png = tokio::time::timeout(std::time::Duration::from_secs(8), rx)
@@ -104,69 +111,73 @@ pub async fn webview_capture_png(app: AppHandle, label: String) -> Result<String
 }
 
 #[cfg(windows)]
-fn capture_webview_png(webview: &tauri::webview::PlatformWebview) -> Result<Vec<u8>, String> {
-    use std::time::{Duration, Instant};
+fn begin_webview_capture(
+    webview: &tauri::webview::PlatformWebview,
+    tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+) -> Result<(), String> {
+    use std::sync::{Arc, Mutex};
 
-    use webview2_com::Microsoft::Web::WebView2::Win32::{
-        COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, ICoreWebView2,
-    };
+    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG;
     use webview2_com::CapturePreviewCompletedHandler;
     use windows::Win32::Foundation::HGLOBAL;
     use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
-    use windows::Win32::System::Com::{STATFLAG, STATSTG, STREAM_SEEK};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageA, PeekMessageA, TranslateMessage, MSG, PM_REMOVE,
-    };
 
-    let core: ICoreWebView2 = unsafe { webview.controller().CoreWebView2() }
-        .map_err(|err| err.to_string())?;
-    let stream = unsafe { CreateStreamOnHGlobal(HGLOBAL::default(), true) }
-        .map_err(|err| err.to_string())?;
-    let (tx, rx) = std::sync::mpsc::channel();
+    let held = Arc::new(Mutex::new(Some(tx)));
+    let fail = |held: &Mutex<Option<tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>>>, err: String| {
+        if let Some(tx) = held.lock().ok().and_then(|mut guard| guard.take()) {
+            let _ = tx.send(Err(err.clone()));
+        }
+        err
+    };
+    let core = match unsafe { webview.controller().CoreWebView2() } {
+        Ok(core) => core,
+        Err(err) => return Err(fail(&held, err.to_string())),
+    };
+    let stream = match unsafe { CreateStreamOnHGlobal(HGLOBAL::default(), true) } {
+        Ok(stream) => stream,
+        Err(err) => return Err(fail(&held, err.to_string())),
+    };
+    let slot = held.clone();
+    let preview = stream.clone();
     let handler = CapturePreviewCompletedHandler::create(Box::new(move |result| {
-        let _ = tx.send(result);
+        let outcome = match result {
+            Ok(()) => read_preview_png(&preview),
+            Err(err) => Err(err.to_string()),
+        };
+        if let Some(tx) = slot.lock().ok().and_then(|mut guard| guard.take()) {
+            let _ = tx.send(outcome);
+        }
         Ok(())
     }));
-    unsafe {
+    if let Err(err) = unsafe {
         core.CapturePreview(
             COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
             &stream,
             &handler,
         )
-        .map_err(|err| err.to_string())?;
+    } {
+        if let Some(tx) = held.lock().ok().and_then(|mut guard| guard.take()) {
+            let _ = tx.send(Err(err.to_string()));
+        }
+        return Err(err.to_string());
     }
+    Ok(())
+}
 
-    let started = Instant::now();
-    loop {
-        if let Ok(result) = rx.try_recv() {
-            result.map_err(|err| err.to_string())?;
-            break;
-        }
-        if started.elapsed() > Duration::from_secs(8) {
-            return Err("the page capture timed out".into());
-        }
-        let mut msg = MSG::default();
-        let pending = unsafe { PeekMessageA(&mut msg, None, 0, 0, PM_REMOVE) };
-        if pending.as_bool() {
-            unsafe {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageA(&msg);
-            }
-        } else {
-            std::thread::sleep(Duration::from_millis(8));
-        }
-    }
+#[cfg(windows)]
+fn read_preview_png(stream: &windows::Win32::System::Com::IStream) -> Result<Vec<u8>, String> {
+    use windows::Win32::System::Com::STREAM_SEEK;
 
-    let mut stat = STATSTG::default();
+    let mut end = 0u64;
     unsafe {
+        stream
+            .Seek(0, STREAM_SEEK(2), Some(&mut end))
+            .map_err(|err| err.to_string())?;
         stream
             .Seek(0, STREAM_SEEK(0), None)
             .map_err(|err| err.to_string())?;
-        stream
-            .Stat(&mut stat, STATFLAG(0))
-            .map_err(|err| err.to_string())?;
     }
-    let size = usize::try_from(stat.cbSize).map_err(|_| "the page capture is too large")?;
+    let size = usize::try_from(end).map_err(|_| "the page capture is too large")?;
     if size == 0 {
         return Err("the page capture was empty".into());
     }
@@ -174,11 +185,7 @@ fn capture_webview_png(webview: &tauri::webview::PlatformWebview) -> Result<Vec<
     let mut read = 0u32;
     unsafe {
         stream
-            .Read(
-                bytes.as_mut_ptr().cast(),
-                size as u32,
-                Some(&mut read),
-            )
+            .Read(bytes.as_mut_ptr().cast(), size as u32, Some(&mut read))
             .ok()
             .map_err(|err| err.to_string())?;
     }
