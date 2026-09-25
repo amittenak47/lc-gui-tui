@@ -189,19 +189,29 @@ impl LlmModes {
     }
 
     /// Provider name + model + vision capability for every coach mode.
+    ///
+    /// `ask` is not a configurable mode. `POST /coach/ask` uses the review
+    /// provider, so the client must see that model's vision flag under `ask`.
     pub fn capabilities(&self, llm: &LlmConfig) -> Result<Vec<ModeCapability>> {
-        let mut out = Vec::with_capacity(COACH_MODES.len());
+        let mut out = Vec::with_capacity(COACH_MODES.len() + 1);
         for mode in COACH_MODES {
-            let provider = self.get(mode)?;
-            let endpoint = llm.endpoint(provider);
-            out.push(ModeCapability {
-                mode: mode.to_string(),
-                provider: provider.to_string(),
-                model: endpoint.model.to_string(),
-                vision: endpoint.vision == Some(true),
-            });
+            out.push(self.capability(llm, mode)?);
         }
+        let mut ask = self.capability(llm, "review")?;
+        ask.mode = "ask".to_string();
+        out.push(ask);
         Ok(out)
+    }
+
+    fn capability(&self, llm: &LlmConfig, mode: &str) -> Result<ModeCapability> {
+        let provider = self.get(mode)?;
+        let endpoint = llm.endpoint(provider);
+        Ok(ModeCapability {
+            mode: mode.to_string(),
+            provider: provider.to_string(),
+            model: endpoint.model.to_string(),
+            vision: endpoint.vision == Some(true),
+        })
     }
 
     fn set(&mut self, mode: &str, provider: &str) -> Result<()> {
@@ -1078,5 +1088,33 @@ mod tests {
         assert!(!viz(&cfg));
         cfg.llm.groq.vision = Some(true);
         assert!(viz(&cfg));
+    }
+
+    #[test]
+    fn ask_reports_the_review_models_vision() {
+        let mut cfg = Config::default();
+        cfg.llm.modes.review = "openai".into();
+        cfg.llm.openai.vision = Some(true);
+        cfg.llm.local.vision = Some(false);
+        let ask = cfg
+            .llm
+            .modes
+            .capabilities(&cfg.llm)
+            .unwrap()
+            .into_iter()
+            .find(|row| row.mode == "ask")
+            .expect("ask");
+        assert_eq!(ask.provider, "openai");
+        assert!(ask.vision);
+        cfg.llm.openai.vision = None;
+        let ask = cfg
+            .llm
+            .modes
+            .capabilities(&cfg.llm)
+            .unwrap()
+            .into_iter()
+            .find(|row| row.mode == "ask")
+            .expect("ask");
+        assert!(!ask.vision, "an unticked review model must not count as vision");
     }
 }

@@ -2793,8 +2793,14 @@ export function Workspace({
 
 
   const modeHasVision = useCallback(
-    (modeName: string) =>
-      capabilities?.modes.find((entry) => entry.mode === modeName)?.vision === true,
+    (modeName: string) => {
+      const modes = capabilities?.modes ?? [];
+      // Older servers omit `ask`. Ask is served by the review provider.
+      const entry =
+        modes.find((row) => row.mode === modeName) ??
+        (modeName === "ask" ? modes.find((row) => row.mode === "review") : undefined);
+      return entry?.vision === true;
+    },
     [capabilities],
   );
 
