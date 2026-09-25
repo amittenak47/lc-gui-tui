@@ -354,7 +354,7 @@ export function footnoteDiffRows(
       server,
       sameId: local !== null && server !== null,
       differs:
-        local !== null && server !== null && JSON.stringify(local) !== JSON.stringify(server),
+        local !== null && server !== null && !jsonEqual(local, server),
     };
   });
 }
@@ -428,7 +428,13 @@ export function footnoteOwnsBoard(row: FootnoteDiffRow, wbId: string): boolean {
 }
 
 function jsonEqual(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  // Hub serialization can reorder object keys without changing a link or note.
+  const stable = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(stable);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable((value as Record<string,unknown>)[key])]));
+  };
+  return JSON.stringify(stable(a ?? null)) === JSON.stringify(stable(b ?? null));
 }
 
 function previewOf(text: string | undefined, fallback: string): string {

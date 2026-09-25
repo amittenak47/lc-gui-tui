@@ -241,7 +241,7 @@ describe("merge comparison filter", () => {
   const conflict: HubPadConflict = {...CONFLICT,
     local:annotateBody("book",900,[common,{...common,id:"local-only",excerpt:"New local note"}]),
     server:annotateBody("book",500,[common])};
-  const toggle = () => act(() => (document.querySelector('.lc-hub-conflict-filter input') as HTMLInputElement).click());
+  const toggle = () => act(() => (document.querySelector('[aria-label="Differences only"]') as HTMLButtonElement).click());
   afterEach(() => { document.body.textContent=""; });
 
   it("keeps equal notes automatically and aligns one-sided entries with placeholders", () => {

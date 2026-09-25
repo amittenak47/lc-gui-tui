@@ -106,10 +106,7 @@ function updatedAtOf(pad: HubPadConflict["local"] | HubPadConflict["server"]): n
   return typeof at === "number" ? at : null;
 }
 
-function nameOf(conflict: HubPadConflict): string {
-  const body = (conflict.local ?? conflict.server) as { name?: string; title?: string } | null;
-  return body?.name ?? body?.title ?? "this pad";
-}
+
 
 function padBoardAppState(
   body: HubPadConflict["local"] | HubPadConflict["server"],
@@ -1251,16 +1248,16 @@ export function HubConflictSplit({
       aria-label="Sync conflict"
     >
       <header className="lc-hub-conflict-head">
-        <strong>Compare changes · {nameOf(conflict)}</strong>
-        <label className="lc-hub-conflict-filter">
-          <input type="checkbox" checked={differencesOnly} onChange={event => setDifferencesOnly(event.target.checked)} />
-          Differences only
-        </label>
-        <span className="lc-hub-conflict-filter-help">
-          {Array.from(sameIds).filter(id => picks[id]?.local && picks[id]?.server).length} matching · kept
-        </span>
-        <label className="lc-hub-conflict-filter"><input type="checkbox" checked={revealInk} onChange={event => setRevealInk(event.target.checked)}/> Reveal ink</label>
-        <span className="lc-hub-conflict-filter-help">Page {focusPage}</span>
+        <Tip tip="Differences only" placement="bottom">
+          <button type="button" className="lc-hub-conflict-filter" aria-label="Differences only" aria-pressed={differencesOnly} onClick={() => setDifferencesOnly(value => !value)}>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4 2v-8Z"/></svg>
+          </button>
+        </Tip>
+        <Tip tip="Reveal faint ink" placement="bottom">
+          <button type="button" className="lc-hub-conflict-filter" aria-label="Reveal ink" aria-pressed={revealInk} onClick={() => setRevealInk(value => !value)}>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </Tip>
         <nav className="lc-hub-conflict-navigation" aria-label="Merge entries">
           <button type="button" className="lc-secondary" disabled={navigationIndex <= 0} onClick={() => focusRow(navigationIds[navigationIndex-1])}>Previous</button>
           <button type="button" className="lc-secondary" disabled={!navigationIds.length || navigationIndex >= navigationIds.length-1} onClick={() => focusRow(navigationIds[navigationIndex+1])}>Next</button>
@@ -1272,17 +1269,9 @@ export function HubConflictSplit({
         {renderPane("server")}
       </div>
       <footer className="lc-hub-conflict-actions">
-        <span className={error && !busy ? "lc-hub-conflict-error" : "lc-muted"}>
-          {busy
-            ? "Writing your choice…"
-            : error
-              ? error
-              : valid
-              ? inkChoice() === "none" && !padInkRows.some(row => picks[inkPageRowId(row.pageId)]?.local || picks[inkPageRowId(row.pageId)]?.server)
-                ? "Ready — the file stays, with no handwriting."
-                : "Ready — Keep writes this mix to the hub. Sync on the other device to match."
-              : whyDisabled}
-        </span>
+        {(busy || error || !valid) && <span role={error ? "alert" : "status"} className={error && !busy ? "lc-hub-conflict-error" : "lc-muted"}>
+          {busy ? "Saving..." : error || (serverMissing || serverInkUnread ? whyDisabled : `${remainingChoices} changes still need a choice`)}
+        </span>}
         <button
           type="button"
           disabled={!valid || busy}

@@ -121,7 +121,7 @@ try {
   await waitFor(`document.querySelectorAll('.lc-hub-conflict-preview[aria-busy="false"]').length===2`);
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-note-id="common"]'))`),false);
   assert.equal(await evaluate(`document.querySelectorAll('[data-row-key="local-only"]').length`),2);
-  await evaluate(`document.querySelector('.lc-hub-conflict-filter input').click()`);
+  await evaluate(`document.querySelector('[aria-label="Differences only"]').click()`);
   assert.equal(await evaluate(`document.querySelectorAll('[data-note-id="common"]').length`),2);
   for(const width of [1280,650]) {
     await send("Emulation.setDeviceMetricsOverride",{width,height:900,deviceScaleFactor:1,mobile:false});await sleep(400);

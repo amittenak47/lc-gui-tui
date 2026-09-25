@@ -467,3 +467,12 @@ describe("footnoteInkDiffRows", () => {
     ]);
   });
 });
+
+it("does not flag unchanged chat links when the hub reorders JSON keys", () => {
+ const local=note("chat", "Question", {kind:"coach",threads:[{rootId:"q1",title:"Agent chat",createdAt:1}]});
+ const server={...local,threads:[{createdAt:1,title:"Agent chat",rootId:"q1"}]};
+ expect(footnoteDiffRows([local],[server])[0].differs).toBe(false);
+ expect(footnotePartDiffs(local,server)).toEqual([]);
+ const changed={...server,threads:[{...server.threads[0],title:"Renamed chat"}]};
+ expect(footnotePartDiffs(local,changed).map(row=>row.kind)).toEqual(["chats"]);
+});
