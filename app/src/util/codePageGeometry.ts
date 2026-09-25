@@ -1,7 +1,9 @@
 /** Editor coordinates stay fixed while the board camera scales the whole page. */
 export const CODE_PAGE_WIDTH = 1200;
 export const CODE_PAGE_INSET = 8;
-export const CODE_PAGE_HEADER = 36;
+/** Page-change title occupies screen space, outside the scaled content. */
+export const PRACTICE_PAGE_TOP = 54;
+export const CODE_PAGE_HEADER = 0;
 export const CODE_TAB_HEIGHT = 32;
 export function codePageGeometry(frameWidth: number) {
   const sceneScale = Math.max(1, frameWidth) / CODE_PAGE_WIDTH;

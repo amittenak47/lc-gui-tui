@@ -21070,3 +21070,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-node-link-detail {font-size:11px;color:var(--muted);text-transform:capitalize;}
 .lc-node-link-chevron {color:var(--muted);margin-left:auto;}
 .lc-node-sheet-link {padding:9px 0;}
+
+/* The page-change title has a fixed screen-space band supplied by the camera.
+   Adding paper padding here would scale that band with the window width. */
+.lc-board-practice-paper .lc-statement-doc { padding-top: 0; }

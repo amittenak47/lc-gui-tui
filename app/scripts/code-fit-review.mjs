@@ -44,7 +44,12 @@ try {
     await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await sleep(1700);
     const data=await evaluate(`(()=>{const dock=document.querySelector('.lc-code-dock'),editor=document.querySelector('.view-lines'),line=editor?.querySelector('.view-line');if(!line)return {missing:true};const d=dock.getBoundingClientRect(),l=line.getBoundingClientRect(),badge=document.querySelector('.lc-page-indicator').getBoundingClientRect();return {left:d.left,right:d.right,top:d.top,lineTop:l.top,rows:editor.children.length,layoutWidth:dock.offsetWidth,badgeBottom:badge.bottom,font:getComputedStyle(line).fontSize};})()`);
     assert(!data.missing && data.left>=0 && data.right<=width+1 && data.lineTop>data.badgeBottom,JSON.stringify({width,height,...data}));
-    results.push({width,height,...data});
+    await evaluate('window.setReviewPage("constraints")');await sleep(700);
+    const problemTop=await evaluate(`document.querySelector('.lc-statement-title').getBoundingClientRect().top`);
+    assert(Math.abs(problemTop-data.top)<1,`Page starts differ at ${width}: problem ${problemTop}, code ${data.top}`);
+    assert(Math.abs(problemTop-54)<1,`Header margin changed at ${width}: ${problemTop}`);
+    await evaluate('window.setReviewPage("code")');await sleep(700);
+    results.push({width,height,...data,problemTop});
     const shot=await send('Page.captureScreenshot',{format:'png'});await writeFile(resolve(profile,`code-${width}-${height}.png`),Buffer.from(shot.data,'base64'));
   }
   assert(results.every(row=>row.layoutWidth===results[0].layoutWidth && row.rows===results[0].rows),'Window resize rewrapped code');

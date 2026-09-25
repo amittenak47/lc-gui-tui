@@ -90,7 +90,7 @@ export function PseudocodeEditor({
           height={dock ? "100%" : "min(42vh, 360px)"}
           onChange={editTab}
           onReady={() => {}}
-          onContentHeight={onCodeHeight ? height => onCodeHeight(height + (hasImports ? 32 : 0) + 44) : undefined}
+          onContentHeight={onCodeHeight ? height => onCodeHeight(height + (hasImports ? 32 : 0) + 8) : undefined}
         />
       </Suspense>
     </ErrorBoundary>

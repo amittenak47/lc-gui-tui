@@ -55,7 +55,7 @@ import {
   type LayoutElement,
 } from "../templates/regionLayout";
 import { READING_COLUMN_MAX } from "../templates/readingColumn";
-import { codePageGeometry } from "../util/codePageGeometry";
+import { codePageGeometry, PRACTICE_PAGE_TOP } from "../util/codePageGeometry";
 import {
   CAMERA_IDLE_TEARDOWN_MS,
   cameraPulseSettleMs,
@@ -958,7 +958,7 @@ function measureChromeInsets(
   mobile: boolean,
 ): { top: number; left: number; right: number; bottom: number } {
   const inset = mobile ? mobilePageInsets(toolbarH, chromeHidden) : desktopPageInsets(toolbarH, chromeHidden);
-  return {...inset, top: _boardEl?.classList.contains("lc-board-code-page") ? 54 : mobile ? 6 : 8};
+  return {...inset, top: _boardEl?.classList.contains("lc-board-practice-paper") ? PRACTICE_PAGE_TOP : mobile ? 6 : 8};
 }
 
 /**
@@ -9621,7 +9621,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         interactive && activeTool === "text" && "lc-board-text-tool",
         transparentCanvas && "lc-board-paper",
         docPaper && "lc-board-doc-paper",
-        mobileRegion === "code" && "lc-board-code-page",
+        (mobileRegion === "code" || mobileRegion === "constraints") && "lc-board-practice-paper",
         // Highlighting / text-mark tools hand the surface back to the document
         // for the length of the gesture — see the rules in styles.css.
         (highlighting || textMarkSelecting) && "lc-board-highlighting",
