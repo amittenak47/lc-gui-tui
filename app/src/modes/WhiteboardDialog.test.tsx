@@ -5,7 +5,7 @@ import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vite
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
-import { HOLD_MS } from "../util/gesture";
+import { LIBRARY_HOLD_MS } from "../util/gesture";
 import type { WhiteboardNotebookMeta } from "../util/whiteboardStore";
 
 const live = vi.hoisted(() => ({ rows: [] as WhiteboardNotebookMeta[] }));
@@ -101,6 +101,7 @@ function fill(input: HTMLInputElement, value: string) {
 }
 
 async function hold(label: string, host: HTMLElement) {
+  if (label === "Load") await act(async()=>[...host.querySelectorAll("button")].find(b=>b.textContent === "Open")!.click());
   const aria = `Hold to confirm: ${label}`;
   const button = Array.from(host.querySelectorAll("button")).find(
     (node) => node.getAttribute("aria-label") === aria,
@@ -110,7 +111,7 @@ async function hold(label: string, host: HTMLElement) {
     button!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, button: 0 }));
   });
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, HOLD_MS + 50));
+    await new Promise((resolve) => setTimeout(resolve, LIBRARY_HOLD_MS + 50));
   });
 }
 
@@ -181,8 +182,10 @@ describe("WhiteboardDialog", () => {
     });
     const view = mount({ onRestoreTrash });
     await hold("Load", view.host);
+    await act(async()=>view.host.querySelector<HTMLButtonElement>('[aria-label="Trash"]')!.click());
     expect(view.host.textContent).toContain("Restore · Trashed");
     await hold("Restore Trashed", view.host);
+    await act(async()=>view.host.querySelector<HTMLButtonElement>('[aria-label="Trash"]')!.click());
     expect(onRestoreTrash).toHaveBeenCalledWith("w2");
     expect(view.host.textContent).toContain("Trashed");
     expect(view.host.textContent).not.toContain("Restore · Trashed");

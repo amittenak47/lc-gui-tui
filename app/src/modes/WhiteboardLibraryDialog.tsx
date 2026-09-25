@@ -6,6 +6,7 @@ import "./libraryMenu.css";
 import { useEffect, useState } from "react";
 
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { LIBRARY_HOLD_MS } from "../util/gesture";
 import { HoldButton } from "../components/HoldButton";
 import { useLibraryDeleteArm } from "../util/armedDelete";
 import {
@@ -81,7 +82,7 @@ export function WhiteboardLibraryDialog({
       }}
     >
       <div
-        className="lc-settings-modal lc-attempt-modal lc-scratch-lib-modal lc-library-menu"
+        className="lc-settings-modal lc-attempt-modal lc-scratch-lib-modal lc-library-menu lc-library-holds"
         role="dialog"
         aria-modal="true"
         aria-label="Whiteboard library full"
@@ -100,7 +101,7 @@ export function WhiteboardLibraryDialog({
           <div className="lc-settings-choice">
             {notebooks.map((entry) => (
               <div key={entry.id} className="lc-scratch-load-entry">
-                <HoldButton
+                <HoldButton holdMs={LIBRARY_HOLD_MS}
                   label={`Delete ${entry.title}`}
                   className="lc-hold-choice lc-hold-danger lc-scratch-load-hold"
                   disabled={Boolean(entry.locked)}

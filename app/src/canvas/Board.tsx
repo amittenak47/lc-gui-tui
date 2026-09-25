@@ -146,7 +146,7 @@ import {
   shouldSkipFrozenContentSlotReport,
   type ContentSlotPlace,
 } from "./contentSlotPlace";
-import { encodeInkOps } from "./inkCodec";
+import { encodeInkOps, inkOpsFrom } from "./inkCodec";
 import {
   lastPageId,
   offsetPageFrames,
@@ -8943,6 +8943,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         return captureImage(() =>
           exportBoardBlob(api, rasterInkRef.current?.getOps() ?? [], 1, pageExportLayers()),
         );
+      },
+      exportNotesPng: async (snapshot) => {
+        const ink = inkOpsFrom(snapshot);
+        const kept = snapshot.elements as SceneElementLike[];
+        const [minX,minY,maxX,maxY] = kept.length ? getCommonBounds(kept as never) : [0,0,1,1];
+        const bounds = unionSceneBounds({minX,minY,maxX,maxY}, inkOpsBounds(ink))!;
+        const frozen = {
+          getSceneElements: () => snapshot.elements,
+          getAppState: () => ({ ...snapshot.appState, zoom: {value: snapshot.appState.zoom}, viewBackgroundColor: "#ffffff" }),
+          getFiles: () => snapshot.files ?? {},
+        } as unknown as ExcalidrawApi;
+        return exportSceneFrameBlob(frozen, ink, {x:bounds.minX-16,y:bounds.minY-16,
+          width:bounds.maxX-bounds.minX+32,height:bounds.maxY-bounds.minY+32}, 2);
       },
       exportAttachmentRegion: async (region, page) => {
         const api = apiRef.current;

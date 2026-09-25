@@ -8,6 +8,9 @@
 /** Default hold-to-confirm fill duration. */
 export const HOLD_MS = 333;
 
+/** Library menu holds leave extra time to cancel. */
+export const LIBRARY_HOLD_MS = HOLD_MS + 500;
+
 /**
  * How long a press with {@link HoldButton} `onTap` stays visually empty.
  *

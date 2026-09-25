@@ -111,6 +111,8 @@ export interface BoardHandle {
    * Export uses scene bounds — viewport zoom does not change what the coach sees.
    */
   exportPng(): Promise<string>;
+  /** User export, bounded in pixels and based on a complete frozen snapshot. */
+  exportNotesPng(snapshot: BoardBlob): Promise<Blob>;
   /**
    * True when the bitmap ink layer holds strokes. Pen ink is pixels, not scene
    * elements, so this is the only way to know handwriting exists on a browser

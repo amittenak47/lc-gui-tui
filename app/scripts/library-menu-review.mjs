@@ -38,21 +38,23 @@ try {
   await send('Page.navigate',{url:`http://127.0.0.1:${port}/scripts/library-menu-review.html`});
   for(let i=0;i<300;i++){if(await evaluate('Boolean(window.showMenu)')){ready=true;break;}if(exceptions.length)throw new Error(JSON.stringify(exceptions));await sleep(100);}
   const click=async label=>{await evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim().startsWith(${JSON.stringify(label)}));if(!b)throw Error('Missing '+${JSON.stringify(label)});b.click();})()`);await sleep(80);};
-  const hold=async label=>{const point=await evaluate(`(()=>{const b=document.querySelector('[aria-label="Hold to confirm: ${label}"]');if(!b)throw Error('Missing hold');const r=b.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);await send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1});await sleep(700);await send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1});await sleep(100);};
+  const hold=async label=>{const point=await evaluate(`(()=>{const b=document.querySelector('[aria-label="Hold to confirm: ${label}"]');if(!b)throw Error('Missing hold');const r=b.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);await send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1});await sleep(950);await send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1});await sleep(100);};
   for(const [width,height] of [[1280,900],[390,760],[760,390]]) {
     await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
     for(const kind of ['document','whiteboard','web']) {
       await evaluate(`window.showMenu(${JSON.stringify(kind)})`);await sleep(350);
-      if(kind==='whiteboard')await hold('Load');else{await click('Open');await click('Recent documents');}
+      await hold('Pull');
+      const foot=await evaluate(`(()=>{const d=document.querySelector('[role="dialog"]'),r=d.querySelector('.lc-settings-foot').getBoundingClientRect();return {bottom:r.bottom,height:r.height,status:!!d.querySelector('[role="status"]')};})()`);
+      assert(foot.bottom<=height+1 && foot.height>=32 && foot.status,'Pull status hid footer');
+      assert(await evaluate(`document.querySelectorAll('[aria-label="Filter pull results"] button').length===4`),'Missing pull filters');
+      for(const label of ['Added','Repaired','Not uploaded','Unavailable'])await click(label);
+      const shot=await send('Page.captureScreenshot',{format:'png'});await writeFile(resolve(profile,`${kind}-${width}.png`),Buffer.from(shot.data,'base64'));
+      if(kind==='whiteboard'){await click('Open');await hold('Load');}else{if(kind!=='web')await click('Open');await click('Recents');}
       const geometry=await evaluate(`(()=>{const d=document.querySelector('[role="dialog"]'),b=d.getBoundingClientRect(),body=d.querySelector('.lc-settings-body');return {left:b.left,right:b.right,top:b.top,bottom:b.bottom,search:!!d.querySelector('input[type="search"]'),rows:d.querySelectorAll('.lc-scratch-load-entry').length,overflow:d.scrollWidth>d.clientWidth+1,scroll:body.scrollHeight>body.clientHeight};})()`);
       assert(geometry.left>=0 && geometry.right<=width+1 && geometry.top>=0 && geometry.bottom<=height+1 && !geometry.overflow && geometry.search && geometry.rows>0,`${kind} menu clipped: ${JSON.stringify(geometry)}`);
       if(kind!=='web')assert(geometry.scroll,'Long library does not scroll');
-      await click('Pull missing files');
-      const foot=await evaluate(`(()=>{const d=document.querySelector('[role="dialog"]'),r=d.querySelector('.lc-settings-foot').getBoundingClientRect();return {bottom:r.bottom,height:r.height,status:!!d.querySelector('[role="status"]')};})()`);
-      assert(foot.bottom<=height+1 && foot.height>=32 && foot.status,'Pull status hid footer');
-      const shot=await send('Page.captureScreenshot',{format:'png'});await writeFile(resolve(profile,`${kind}-${width}.png`),Buffer.from(shot.data,'base64'));
-      await click('Dismiss');
-      assert(!await evaluate(`Boolean(document.querySelector('[role="status"]'))`),'Pull report did not dismiss');
+      const fill=await evaluate(`(()=>{const b=document.querySelector('.lc-scratch-load-hold'),f=b.querySelector('.lc-hold-reveal-fill');f.style.setProperty('--lc-hold','0.5');const t=getComputedStyle(f).transform;return t;})()`);
+      assert(fill==='matrix(0.5, 0, 0, 1, 0, 0)',`Hold fill must go left to right: ${fill}`);
       const listShot=await send('Page.captureScreenshot',{format:'png'});await writeFile(resolve(profile,`${kind}-${width}-list.png`),Buffer.from(listShot.data,'base64'));
       console.log(`PASS ${kind} catalog at ${width}x${height}: list scrolls, pull report and footer fit`);
     }

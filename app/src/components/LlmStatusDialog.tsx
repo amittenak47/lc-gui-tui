@@ -6,6 +6,7 @@
 import { useEffect } from "react";
 
 import { HoldButton } from "./HoldButton";
+import "../modes/libraryMenu.css";
 import { LoadingDoodle } from "./LoadingDoodle";
 
 export interface LlmStatusDialogProps {
@@ -41,7 +42,7 @@ export function LlmStatusDialog({
     >
       <LoadingDoodle />
       <div
-        className="lc-settings-modal lc-attempt-modal lc-server-gate-modal"
+        className="lc-settings-modal lc-attempt-modal lc-server-gate-modal lc-library-holds"
         role="dialog"
         aria-modal="true"
         aria-label="Coach LLM offline"

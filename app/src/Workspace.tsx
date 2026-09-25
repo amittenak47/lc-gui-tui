@@ -11546,6 +11546,35 @@ export function Workspace({
               );
               return;
             }
+            if (choice === "import" || choice === "export" || choice === "export-png") {
+              setWhiteboardEntryOpen(false);
+              const board = boardRef.current;
+              const id = whiteboardNotebookIdRef.current;
+              const title = padDefaultName || "Whiteboard";
+              const messages = persistableAgentMessages(agentMessagesRef.current);
+              void (async () => {
+                try {
+                  const transfer = await import("./util/whiteboardTransfer");
+                  if (choice === "import") {
+                    const picked = await pickSidecarFile();
+                    if (!picked) return;
+                    const saved = await transfer.importWhiteboardBackup(picked.text);
+                    openOrReloadWhiteboard(saved.id);
+                    setNotice(`Imported ${saved.title} as a new whiteboard.`);
+                    return;
+                  }
+                  if (!board) return;
+                  const backup = await transfer.captureWhiteboardBackup(board, id, title, whiteboardPageCount, messages);
+                  const name = backup.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_");
+                  const blob = choice === "export-png" ? await board.exportNotesPng(backup.board)
+                    : new Blob([await (await import("./util/gzip")).gzipText(JSON.stringify(backup))], {type:"application/gzip"});
+                  const {saveDocumentExport} = await import("./util/saveDocumentExport");
+                  const result = await saveDocumentExport({name: name + (choice === "export-png" ? ".png" : ".whiteboard.json.gz"),blob}, new AbortController().signal, setNotice);
+                  if (result) setNotice(result);
+                } catch (cause) { setError(messageOf(cause)); }
+              })();
+              return;
+            }
             if (choice === "load" && notebookId) {
               setWhiteboardEntryOpen(false);
               openOrReloadWhiteboard(notebookId);

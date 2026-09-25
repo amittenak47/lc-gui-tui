@@ -5,7 +5,7 @@ import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vite
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 
-import { HOLD_MS } from "../util/gesture";
+import { LIBRARY_HOLD_MS } from "../util/gesture";
 import type { AnnotateDocMeta } from "../util/annotateStore";
 
 const live = vi.hoisted(() => ({ rows: [] as AnnotateDocMeta[] }));
@@ -97,6 +97,7 @@ function fill(input: HTMLInputElement, value: string) {
 }
 
 async function click(label: string, host: HTMLElement) {
+  if ((label === "Recent" || label === "Load") && [...host.querySelectorAll("button")].some(b=>b.textContent === "Open")) await click("Open", host);
   const button=Array.from(host.querySelectorAll("button")).find(node=>node.textContent?.startsWith(label));
   expect(button, `missing button ${label}`).toBeTruthy();
   await act(async()=>button!.click());
@@ -112,7 +113,7 @@ async function hold(label: string, host: HTMLElement) {
     button!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, button: 0 }));
   });
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, HOLD_MS + 50));
+    await new Promise((resolve) => setTimeout(resolve, LIBRARY_HOLD_MS + 50));
   });
 }
 
@@ -129,11 +130,23 @@ async function tap(label: string, host: HTMLElement) {
 }
 
 describe("AnnotateDialog", () => {
+  it("only offers annotation import for an open file", async () => {
+    const closed=mount();
+    expect(closed.host.textContent).not.toContain("Annotations");
+    expect(closed.host.textContent).not.toContain("Import");
+    await click("Load",closed.host);
+    expect(closed.onChoose).toHaveBeenLastCalledWith("open");
+    closed.unmount();
+    const opened=mount({allowSave:true,snapshotKey:"d1"});
+    await click("Open",opened.host);await click("Annotations",opened.host);await click("Import",opened.host);
+    expect(opened.onChoose).toHaveBeenLastCalledWith("import");
+    opened.unmount();
+  });
   it("filters saved files by filename or annotation-set name", async () => {
     live.rows.push({id:"d2",name:"book.pdf",label:"Exam notes",hash:"h3",docType:"pdf",updatedAt:3});
     const view=mount();
     try {
-      await click("Open",view.host);await click("Recent documents",view.host);
+      await click("Recent",view.host);
       await act(async()=>fill(view.host.querySelector('input[type="search"]')!,"EXAM"));
       expect(view.host.querySelectorAll('.lc-scratch-load-entry')).toHaveLength(1);
       expect(view.host.querySelector('.lc-scratch-load-entry')?.textContent).toContain("book.pdf");
@@ -146,12 +159,12 @@ describe("AnnotateDialog", () => {
     live.rows.push({id:"other",name:"other.pdf",hash:"other",docType:"pdf",updatedAt:3});
     const view=mount({allowSave:true,snapshotKey:"d1"});
     expect(view.host.textContent).not.toContain("Import annotation backup");
-    await click("Export",view.host);await click("PDF",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-pdf");
+    await click("More",view.host);await click("Export",view.host);await click("PDF",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-pdf");
     await click("Markdown + images",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-document");
-    await click("Back",view.host);
-    await click("Annotation sets",view.host);await click("Saved annotation sets",view.host);
+    await click("Back",view.host);await click("Back",view.host);await click("Open",view.host);
+    await click("Annotations",view.host);await click("Saved",view.host);
     expect(view.host.textContent).toContain("Second set");expect(view.host.textContent).not.toContain("other.pdf");
-    await click("Back",view.host);await click("Export",view.host);
+    await click("Back",view.host);await click("Back",view.host);await click("Back",view.host);await click("More",view.host);await click("Export",view.host);await click("Annotations",view.host);
     expect(view.onChoose).toHaveBeenLastCalledWith("export");
     view.unmount();
   });
@@ -166,13 +179,12 @@ describe("AnnotateDialog", () => {
       await syncing;
     });
     const view = mount({ onDelete });
-    await click("Open", view.host);
-    await click("Recent documents", view.host);
+    await click("Recent", view.host);
     const remove = view.host.querySelector<HTMLButtonElement>(".lc-scratch-load-trash")!;
     expect(remove).toBeTruthy();
     await act(async () => {
       remove.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, button: 0 }));
-      await new Promise((resolve) => setTimeout(resolve, HOLD_MS + 50));
+      await new Promise((resolve) => setTimeout(resolve, LIBRARY_HOLD_MS + 50));
       remove.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1, button: 0 }));
     });
     expect(view.host.textContent).toContain("Remove this document?");
@@ -180,6 +192,7 @@ describe("AnnotateDialog", () => {
     expect(onDelete).toHaveBeenCalledWith("d1");
     expect(view.host.textContent).not.toContain("Remove this document?");
     expect(view.host.querySelector('[aria-label="Open note.md: tap to edit, hold to confirm"]')).toBeNull();
+    await act(async()=>view.host.querySelector<HTMLButtonElement>('[aria-label="Trash"]')!.click());
     expect(view.host.textContent).toContain("Restore · note.md");
     await act(async () => { finish(); await syncing; });
     view.unmount();
@@ -187,8 +200,7 @@ describe("AnnotateDialog", () => {
 
   it("keeps web pads out of the document Recent list", async () => {
     const view = mount({ kind: "document" });
-    await click("Open", view.host);
-    await click("Recent documents", view.host);
+    await click("Recent", view.host);
     expect(view.host.textContent).toContain("note.md");
     expect(view.host.textContent).not.toContain("Example");
     expect(view.host.textContent).not.toContain("https://example.com/");
@@ -197,8 +209,7 @@ describe("AnnotateDialog", () => {
 
   it("lists only web pads in the Pages Recent list", async () => {
     const view = mount({ kind: "web" });
-    await click("Open", view.host);
-    await click("Recent documents", view.host);
+    await click("Recent", view.host);
     expect(view.host.textContent).toContain("Example");
     expect(view.host.textContent).not.toContain("note.md");
     view.unmount();
@@ -218,10 +229,11 @@ describe("AnnotateDialog", () => {
       }
     });
     const view = mount({ kind: "document", onRestoreTrash });
-    await click("Open", view.host);
-    await click("Recent documents", view.host);
+    await click("Recent", view.host);
+    await act(async()=>view.host.querySelector<HTMLButtonElement>('[aria-label="Trash"]')!.click());
     expect(view.host.textContent).toContain("Restore · note.md");
     await hold("Restore note.md", view.host);
+    await act(async()=>view.host.querySelector<HTMLButtonElement>('[aria-label="Trash"]')!.click());
     expect(onRestoreTrash).toHaveBeenCalledWith("d1");
     expect(view.host.textContent).toContain("note.md");
     expect(view.host.textContent).not.toContain("Restore · note.md");
@@ -233,8 +245,7 @@ describe("AnnotateDialog", () => {
       live.rows = live.rows.map((row) => (row.id === id ? { ...row, label: title } : row));
     });
     const view = mount({ kind: "document", onRename });
-    await click("Open", view.host);
-    await click("Recent documents", view.host);
+    await click("Recent", view.host);
     await tap("Open note.md", view.host);
     await tap("Open note.md", view.host);
     const input = view.host.querySelector<HTMLInputElement>(".lc-md-new-title input");

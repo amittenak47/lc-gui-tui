@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { LIBRARY_HOLD_MS } from "../util/gesture";
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { HubLibraryRefresh, type HubLibraryRefreshAction } from "../components/HubLibraryRefresh";
@@ -30,7 +31,7 @@ import {
 } from "../util/padSnapshotStore";
 
 export type ScratchLeaveChoice = "save" | "discard" | "load";
-export type ScratchEntryChoice = "new" | "load" | "save" | "snapshot";
+export type ScratchEntryChoice = "new" | "load" | "save" | "snapshot" | "import" | "export" | "export-png";
 
 interface LeaveProps {
   mode: "leave";
@@ -79,6 +80,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
     listWhiteboardNotebooks(),
   );
   const [trash, setTrash] = useState<WhiteboardNotebookMeta[]>(() => listWhiteboardTrash());
+  const [section,setSection] = useState<"main"|"open"|"more"|"export">("main");
   const [pickingLoad, setPickingLoad] = useState(false);
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
@@ -86,6 +88,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const [saveTitle, setSaveTitle] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [showTrash,setShowTrash] = useState(false);
   const [libraryQuery,setLibraryQuery] = useState("");
   const lastTapRef = useRef({ id: "", at: 0 });
   const backdropDown = useRef(false);
@@ -219,14 +222,14 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
       }}
     >
       <div
-        className={`lc-settings-modal lc-attempt-modal${isLeave ? "" : " lc-library-menu"}`}
+        className={`lc-settings-modal lc-attempt-modal lc-library-holds${isLeave ? "" : " lc-library-menu"}`}
         role="dialog"
         aria-modal="true"
         aria-label={isLeave ? "Leave whiteboard?" : "Open whiteboard"}
       >
         <div className="lc-settings-head">
-          <h2>{isLeave ? "Leave whiteboard?" : "Whiteboard"}</h2>
-          <p className="lc-muted">
+          <h2>{isLeave ? "Leave whiteboard?" : pickingLoad ? "Load" : pickingSnapshots ? "Restore" : section === "open" ? "Open" : section === "more" ? "More" : section === "export" ? "Export" : "Whiteboard"}</h2>
+          {(isLeave || saveTitle !== null) && <p className="lc-muted">
             {saveTitle !== null
               ? "Name this notebook. Hold Save to keep the suggested name."
               : pickingSnapshots
@@ -242,13 +245,12 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                 : allowSave
                   ? "Save this notebook, load another, or start blank."
                   : "Start blank or load a saved notebook."}
-          </p>
+          </p>}
         </div>
 
         <div className="lc-settings-body">
-          {props.mode === "entry" && props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} />}
-          {pickingLoad && <LibrarySearch value={libraryQuery} onChange={setLibraryQuery} label="Search saved whiteboards" disabled={locked}/>}
-          {pickingLoad && libraryQuery.trim() && ![...notebooks,...archived].some(matchesQuery) && <p className="lc-muted">No matching saved items.</p>}
+          {pickingLoad && <LibrarySearch value={libraryQuery} onChange={setLibraryQuery} label="Search saved whiteboards" disabled={locked} showTrash={showTrash} onTrashChange={setShowTrash}/>}
+          {pickingLoad && !(showTrash ? archived : notebooks).some(matchesQuery) && <p className="lc-muted">No matching saved items.</p>}
           {error && <div className="lc-warning">{error}</div>}
 
           {saveTitle !== null ? (
@@ -261,7 +263,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                 onChange={setSaveTitle}
                 onSubmit={beginSave}
               />
-              <HoldButton
+              <HoldButton holdMs={LIBRARY_HOLD_MS}
                 label="Save"
                 className="lc-hold-choice"
                 disabled={locked}
@@ -277,7 +279,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
               {PAD_SNAPSHOT_TIERS.map((tier) => {
                 const row = snapshots.find((snap) => snap.tier === tier.id);
                 return (
-                  <HoldButton
+                  <HoldButton holdMs={LIBRARY_HOLD_MS}
                     key={tier.id}
                     label={`Restore ${tier.label} snapshot`}
                     className="lc-hold-choice"
@@ -312,7 +314,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                 surface is the row and the hold target fills what the trash
                 leaves.
               */}
-              {notebooks.filter(matchesQuery).map((entry) => (
+              {(showTrash ? [] : notebooks).filter(matchesQuery).map((entry) => (
                 <div key={entry.id} className="lc-scratch-load-entry">
                   {renamingId === entry.id ? (
                     <PadNameField
@@ -324,7 +326,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                       onBlur={() => void commitRename(entry.id)}
                     />
                   ) : (
-                  <HoldButton
+                  <HoldButton holdMs={LIBRARY_HOLD_MS}
                     label={`Load ${entry.title}`}
                     className="lc-scratch-load-hold"
                     disabled={locked}
@@ -351,7 +353,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                     }}
                   />
                   {!entry.locked && (
-                  <HoldButton
+                  <HoldButton holdMs={LIBRARY_HOLD_MS}
                     label={`Delete ${entry.title}`}
                     className="lc-scratch-load-trash"
                     disabled={locked}
@@ -389,11 +391,10 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                   )}
                 </div>
               ))}
-              {archived.length > 0 && (
+              {showTrash && archived.length > 0 && (
                 <>
-                  <p className="lc-muted">Trash on this device — three days, then gone.</p>
                   {archived.filter(matchesQuery).map((entry) => (
-                    <HoldButton
+                    <HoldButton holdMs={LIBRARY_HOLD_MS}
                       key={`arch-${entry.id}`}
                       label={`Restore ${entry.title}`}
                       className="lc-hold-choice"
@@ -420,16 +421,16 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
             <div className="lc-settings-choice">
               {isLeave ? (
                 <>
-                  <HoldButton
+                  <HoldButton holdMs={LIBRARY_HOLD_MS}
                     label="Load"
                     className="lc-hold-choice"
                     disabled={locked || (notebooks.length === 0 && archived.length === 0)}
                     onConfirm={() => setPickingLoad(true)}
                     resetKey={error}
                   >
-                    Load…
+                    Load
                   </HoldButton>
-                  <HoldButton
+                  <HoldButton holdMs={LIBRARY_HOLD_MS}
                     label="Save"
                     className="lc-hold-choice"
                     disabled={locked}
@@ -448,7 +449,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                     them to hold the red button on the way out, which is a habit
                     that costs them the day they have not saved.
                   */}
-                  <HoldButton
+                  <HoldButton holdMs={LIBRARY_HOLD_MS}
                     label={dirty ? "Discard" : "Exit"}
                     className={
                       dirty ? "lc-hold-choice lc-hold-danger" : "lc-hold-choice"
@@ -462,48 +463,26 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                 </>
               ) : (
                 <>
-                  {allowSave && (
-                    <HoldButton
-                      label="Save"
-                      className="lc-hold-choice"
-                      disabled={locked}
-                      onConfirm={beginSave}
-                    >
-                      <strong>Save</strong>
-                      <span className="lc-muted">Keep this notebook in the library.</span>
-                    </HoldButton>
-                  )}
-                  <HoldButton
-                    label="New notebook"
-                    className="lc-hold-choice"
-                    disabled={locked}
-                    onConfirm={() => props.onChoose("new")}
-                  >
-                    <strong>New notebook</strong>
-                    <span className="lc-muted">Blank first page.</span>
-                  </HoldButton>
-                  <HoldButton
-                    label="Load"
-                    className="lc-hold-choice"
-                    disabled={locked || (notebooks.length === 0 && archived.length === 0)}
-                    onConfirm={() => setPickingLoad(true)}
-                  >
-                    <strong>Load…</strong>
-                    <span className="lc-muted">Open a saved notebook.</span>
-                  </HoldButton>
-                  {allowSave && (
-                    <HoldButton
-                      label="Restore snapshot"
-                      className="lc-hold-choice"
-                      disabled={locked || !snapshotKey}
-                      onConfirm={openSnapshots}
-                    >
-                      <strong>Restore snapshot…</strong>
-                      <span className="lc-muted">
-                        2h / 24h / 7d copies, written while you write.
-                      </span>
-                    </HoldButton>
-                  )}
+                  {section === "main" && <>
+                    {allowSave && <HoldButton holdMs={LIBRARY_HOLD_MS} label="Save" className="lc-hold-choice" disabled={locked} onConfirm={beginSave}><strong>Save</strong></HoldButton>}
+                    {!allowSave && <HoldButton holdMs={LIBRARY_HOLD_MS} label="New" className="lc-hold-choice" disabled={locked} onConfirm={() => props.onChoose("new")}><strong>New</strong></HoldButton>}
+                    <button type="button" className="lc-hold-choice" disabled={locked} onClick={()=>setSection("open")}><strong>Open</strong></button>
+                    {props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} />}
+                    {allowSave && <button type="button" className="lc-hold-choice" disabled={locked} onClick={()=>setSection("more")}><strong>More</strong></button>}
+                  </>}
+                  {section === "open" && <>
+                    <HoldButton holdMs={LIBRARY_HOLD_MS} label="Load" className="lc-hold-choice" disabled={locked || (!notebooks.length && !archived.length)} onConfirm={()=>setPickingLoad(true)}><strong>Load</strong></HoldButton>
+                    <button type="button" className="lc-hold-choice" disabled={locked || (!notebooks.length && !archived.length)} onClick={()=>setPickingLoad(true)}><strong>Recents</strong></button>
+                    <button type="button" className="lc-hold-choice" disabled={locked} onClick={()=>props.onChoose("import")}><strong>Annotations</strong></button>
+                  </>}
+                  {section === "more" && <>
+                    <button type="button" className="lc-hold-choice" disabled={locked} onClick={()=>setSection("export")}><strong>Export</strong></button>
+                    <HoldButton holdMs={LIBRARY_HOLD_MS} label="Restore" className="lc-hold-choice" disabled={locked || !snapshotKey} onConfirm={openSnapshots}><strong>Restore</strong></HoldButton>
+                  </>}
+                  {section === "export" && <>
+                    <button type="button" className="lc-hold-choice" disabled={locked} onClick={()=>props.onChoose("export-png")}><strong>PNG</strong></button>
+                    <button type="button" className="lc-hold-choice" disabled={locked} onClick={()=>props.onChoose("export")}><strong>Annotations</strong></button>
+                  </>}
                 </>
               )}
             </div>
@@ -511,12 +490,13 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
         </div>
 
         <div className="lc-settings-foot">
-          {(pickingLoad || pickingSnapshots || saveTitle !== null) && (
+          {(section !== "main" || pickingLoad || pickingSnapshots || saveTitle !== null) && (
             <button
               type="button"
               className="lc-secondary"
               disabled={locked}
               onClick={() => {
+                if (!pickingLoad && !pickingSnapshots && saveTitle === null) setSection(section === "export" ? "more" : "main");
                 setPickingLoad(false);
                 setPickingSnapshots(false);
                 setSaveTitle(null);
