@@ -113,6 +113,33 @@ it("follows the pen when the window resizes", async () => {
   expect(panel.style.top).toBe("162px");
 });
 
+it("restores the last color and eraser size when the quick tool comes back", async () => {
+  localStorage.removeItem("whiteboard.quickInk.v1");
+  const picked = vi.fn();
+  function Demo() {
+    const [kind, setKind] = useState<InkPresetKind>("pen");
+    return <QuickInkControl kind={kind} color="#1a1a1a" eraserWidth={8} onPick={(next, color, width) => {
+      picked(next, color, width);
+      setKind(next);
+    }} />;
+  }
+  await act(async () => root.render(<Demo />));
+  await press();
+  await act(async () => (document.querySelector('[aria-label="Red"]') as HTMLButtonElement).click());
+  await press(HOLD_MS + 30);
+  await press(HOLD_MS + 30);
+  await press();
+  await act(async () => (document.querySelector('[aria-label="Eraser size 192"]') as HTMLButtonElement).click());
+  await press(HOLD_MS + 30);
+  await press(HOLD_MS + 30);
+  await press(HOLD_MS + 30);
+  const pen = picked.mock.calls.filter(call => call[0] === "pen").at(-1);
+  const eraser = picked.mock.calls.filter(call => call[0] === "eraser").at(-1);
+  expect(pen?.[1]).toBe("#ff2d2d");
+  expect(eraser?.[2]).toBe(192);
+  localStorage.removeItem("whiteboard.quickInk.v1");
+});
+
 it("removes title pixels after fading and protects a newer announcement", async () => {
   const ref = createRef<PadTitleHandle>();
   await act(async () => root.render(<PadTitle ref={ref} />));

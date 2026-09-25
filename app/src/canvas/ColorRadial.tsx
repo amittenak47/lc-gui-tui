@@ -518,9 +518,6 @@ export function ColorRadial({
               ? "Current ink colour — tap to cycle palettes"
               : "Current ink colour"
           }
-          title={
-            onCyclePrev || onCycleNext ? "Tap to cycle palettes" : undefined
-          }
           onClick={() => {
             if (slotEditLock.current) return;
             cancelEditHold();
@@ -573,11 +570,6 @@ export function ColorRadial({
           aria-label="Ink colour"
           aria-haspopup="true"
           aria-expanded={open}
-          title={
-            onCycleNext
-              ? "Tap for next palette · hold to open the wheel"
-              : "Ink colour — hold to open the wheel"
-          }
           onPointerDown={() => {
             draggingRef.current = true;
             clearHold();

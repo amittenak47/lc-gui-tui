@@ -16,6 +16,28 @@ export const QUICK_ERASER_SIZES = [8, 16, 32, 64, 128, 192, 288, 384] as const;
 
 const KINDS: InkPresetKind[] = ["pen", "highlighter", "eraser"];
 const VIEW_PAD = 8;
+const MEMORY_KEY = "whiteboard.quickInk.v1";
+
+type QuickInkMemory = { pen?: string; highlighter?: string; eraser?: number };
+
+function loadQuickInkMemory(): QuickInkMemory {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(MEMORY_KEY) ?? "") as QuickInkMemory;
+    const memory: QuickInkMemory = {};
+    if (typeof parsed.pen === "string") memory.pen = parsed.pen;
+    if (typeof parsed.highlighter === "string") memory.highlighter = parsed.highlighter;
+    if (typeof parsed.eraser === "number" && (QUICK_ERASER_SIZES as readonly number[]).includes(parsed.eraser)) {
+      memory.eraser = parsed.eraser;
+    }
+    return memory;
+  } catch {
+    return {};
+  }
+}
+
+function saveQuickInkMemory(memory: QuickInkMemory) {
+  try { localStorage.setItem(MEMORY_KEY, JSON.stringify(memory)); } catch { /* private browsing */ }
+}
 
 export function nearestQuickEraserSize(width: number): number {
   let best: number = QUICK_ERASER_SIZES[0];
@@ -73,6 +95,17 @@ export function QuickInkControl({ kind, color, eraserWidth = 0, onPick }: {
 }) {
   const sizes = kind === "eraser";
   const [open, setOpen] = useState(false);
+  const [memory, setMemory] = useState(loadQuickInkMemory);
+  const remember = (patch: QuickInkMemory) => {
+    setMemory((current) => {
+      const next = { ...current, ...patch };
+      saveQuickInkMemory(next);
+      return next;
+    });
+  };
+  const savedColor = kind === "pen" ? memory.pen : kind === "highlighter" ? memory.highlighter : undefined;
+  const shownColor = savedColor ?? color;
+  const pickedSize = nearestQuickEraserSize(memory.eraser ?? eraserWidth);
   const anchor = useRef<HTMLButtonElement | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState({ left: VIEW_PAD, top: VIEW_PAD });
@@ -132,22 +165,24 @@ export function QuickInkControl({ kind, color, eraserWidth = 0, onPick }: {
     document.addEventListener("keydown", escape, true);
     return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape, true); };
   }, [open]);
-  const pickedSize = nearestQuickEraserSize(eraserWidth);
   const close = () => { setOpen(false); anchor.current?.focus(); };
+  const cycle = () => {
+    const next = KINDS[(KINDS.indexOf(kind) + 1) % KINDS.length]!;
+    setOpen(false);
+    if (next === "eraser") onPick(next, undefined, memory.eraser);
+    else onPick(next, next === "pen" ? memory.pen : memory.highlighter);
+  };
   return <>
     <HoldButton label={`Quick ${kind}`}
       ariaLabel={sizes
         ? "Quick eraser: tap for sizes, hold for next tool"
         : `Quick ${kind}: tap for colors, hold for next tool`}
       className="lc-tool lc-tip-target lc-hold-icon lc-quick-ink" pressed={open}
-      dataTip={sizes
-        ? "Quick eraser · tap for sizes · hold to cycle pen, highlighter, eraser"
-        : `Quick ${kind} · tap for colors · hold to cycle pen, highlighter, eraser`}
-      dataTipPlacement="bottom" onMeasure={node => { anchor.current = node; }}
+      onMeasure={node => { anchor.current = node; }}
       onTap={() => setOpen(value => !value)}
-      onConfirm={() => { setOpen(false); onPick(KINDS[(KINDS.indexOf(kind) + 1) % KINDS.length]!); }}>
+      onConfirm={cycle}>
       {kind === "pen" ? <PenToolIcon /> : kind === "highlighter" ? <HighlighterIcon /> : <PinkEraserIcon />}
-      <span className="lc-quick-ink-dot" style={{ background: kind === "eraser" ? "#f9a8d4" : color }} aria-hidden />
+      <span className="lc-quick-ink-dot" style={{ background: kind === "eraser" ? "#f9a8d4" : shownColor }} aria-hidden />
     </HoldButton>
     {open && createPortal(
       <div ref={panel} className="lc-quick-ink-colors" style={position}
@@ -158,7 +193,7 @@ export function QuickInkControl({ kind, color, eraserWidth = 0, onPick }: {
             <button key={size} type="button"
               className="lc-quick-ink-swatch is-size" aria-label={`Eraser size ${size}`}
               aria-pressed={size === pickedSize}
-              onClick={() => { onPick("eraser", undefined, size); close(); }}>
+              onClick={() => { remember({ eraser: size }); onPick("eraser", undefined, size); close(); }}>
               <span className="lc-quick-ink-eraser" style={{
                 width: `${quickEraserDotPercent(size)}%`,
                 height: `${quickEraserDotPercent(size)}%`,
@@ -167,8 +202,8 @@ export function QuickInkControl({ kind, color, eraserWidth = 0, onPick }: {
           ))
           : QUICK_INK_COLORS.map(([name, hex]) => <button key={hex} type="button"
             className="lc-quick-ink-swatch" style={{ background: hex }} aria-label={name}
-            aria-pressed={color.toLowerCase() === hex}
-            onClick={() => { onPick(kind, hex); close(); }} />)}
+            aria-pressed={shownColor.toLowerCase() === hex}
+            onClick={() => { remember(kind === "pen" ? { pen: hex } : { highlighter: hex }); onPick(kind, hex); close(); }} />)}
       </div>,
       document.body,
     )}

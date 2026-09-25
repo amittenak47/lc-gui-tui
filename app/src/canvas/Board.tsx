@@ -9809,12 +9809,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       }
                       aria-pressed={linking}
                       aria-label={linking ? "Stop linking" : "Link two things on the page"}
-                      data-tip={
-                        linking
-                          ? "Circle a mark, image, or drawing — then stroke to connect"
-                          : "Link — circle targets, then connect them"
-                      }
-                      data-tip-placement="bottom"
                       onClick={() => onToggleLink?.()}
                     >
                       <LinkToolIcon on={linking} />
@@ -9830,12 +9824,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     aria-pressed={annotateCode}
                     aria-label={editing ? "Annotation requires Preview" : annotateCode ? "Hide toolbar" : "Show toolbar"}
                     aria-disabled={editing || undefined}
-                    data-tip={
-                      editing ? "Switch to Preview to annotate" : annotateCode
-                        ? "Toolbar on — tap to scroll the page"
-                        : "Toolbar — annotate this page"
-                    }
-                    data-tip-placement="bottom"
                     onPointerDown={(event) => {
                       annotateTapPointerRef.current = event.pointerId;
                       annotateSkipClickRef.current = false;
@@ -9871,14 +9859,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   aria-label={
                     leftChromeOpen ? "Hide annotate mode" : "Show annotate mode"
                   }
-                  data-tip={
-                    chromeWakeMarker === "off"
-                      ? undefined
-                      : leftChromeOpen
-                        ? "Hide annotate / scroll"
-                        : "Show annotate / scroll"
-                  }
-                  data-tip-placement="bottom"
                   onPointerDown={(event) => {
                     beginWakeGesture("left", event, leftChromeOpen);
                   }}
@@ -10124,8 +10104,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     }
                     aria-pressed={editing}
                     aria-label={editing ? "Editing — switch to preview" : "Preview — switch to edit"}
-                    data-tip={editing ? "Editing — tap to preview" : "Preview — tap to edit"}
-                    data-tip-placement="bottom"
                     onClick={() => onToggleEdit?.()}
                   >
                     {/*
@@ -10158,8 +10136,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       }
                       aria-pressed={linedPaperMode !== "off"}
                       aria-label={linedPaperLabel(linedPaperMode)}
-                      data-tip={linedPaperLabel(linedPaperMode)}
-                      data-tip-placement="bottom"
                       onClick={() => {
                         const next = nextLinedPaperMode(linedPaperRef.current);
                         linedPaperRef.current = next;
@@ -10203,10 +10179,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     aria-label={
                       pageFilm.open ? "Hide page previews" : "Show page previews"
                     }
-                    data-tip={
-                      pageFilm.open ? "Hide page previews" : "Show page previews"
-                    }
-                    data-tip-placement="bottom"
                     onClick={pageFilm.onToggle}
                   >
                     <PagesFilmIcon />
@@ -10229,12 +10201,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                         ? "Show whole sheet"
                         : "Split two-up sheets into stacked pages"
                     }
-                    data-tip={
-                      pageSpread.on
-                        ? "Spread on — each half fills the column"
-                        : "Spread: stack left then right of a two-up scan"
-                    }
-                    data-tip-placement="bottom"
                     onClick={pageSpread.onToggle}
                   >
                     <SpreadTwoUpIcon />
@@ -10256,8 +10222,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     type="button"
                     className="lc-lined-toggle lc-tip-target"
                     aria-label="Recentre and refresh the view"
-                    data-tip="Recentre and refresh the view"
-                    data-tip-placement="bottom"
                     onClick={() => recentreKeepPlace()}
                   >
                     <RecentreIcon />
@@ -10276,8 +10240,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     }
                     aria-pressed={chromeMode !== "hidden"}
                     aria-label={`Board controls: ${chromeModeLabel(chromeMode)}`}
-                    data-tip={chromeModeLabel(chromeMode)}
-                    data-tip-placement="bottom"
                     onClick={() => {
                       const next = nextChromeMode(chromeMode);
                       setChromeMode(next);
@@ -10297,14 +10259,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     aria-label={
                       chromeStackOpen ? "Hide board controls" : "Show board controls"
                     }
-                    data-tip={
-                      chromeWakeMarker === "off"
-                        ? undefined
-                        : chromeStackOpen
-                          ? "Hide controls"
-                          : "Show controls"
-                    }
-                    data-tip-placement="bottom"
                     onPointerDown={(event) => {
                       beginWakeGesture("right", event, chromeStackOpen);
                     }}

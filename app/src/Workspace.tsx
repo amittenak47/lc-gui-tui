@@ -9990,7 +9990,10 @@ export function Workspace({
                   if (saved) setNotice(`Annotations saved for “${annotateDocLabel(saved)}”.`);
                 });
               }}
-              onConfirm={() => setAnnotateEntryOpen(true)}
+              onConfirm={() => {
+                setEntryKind("document");
+                setAnnotateEntryOpen(true);
+              }}
             >
               <svg
                 className="lc-icon-svg lc-icon-svg-filled"
@@ -10956,7 +10959,10 @@ export function Workspace({
                     busy={busy !== null || boardPreparing || workspaceLoadActive}
                     onPractice={() => setPracticeOpen(true)}
                     onWhiteboard={() => setWhiteboardEntryOpen(true)}
-                    onAnnotate={() => setAnnotateEntryOpen(true)}
+                    onAnnotate={() => {
+                      setEntryKind("document");
+                      setAnnotateEntryOpen(true);
+                    }}
                     onBrowse={() => void openWebPage(WEB_HOME)}
                     onExplore={openExplore}
                   />

@@ -250,8 +250,6 @@ function MarkdownTools({ onFormat }: { onFormat?: (kind: MdFormatKind) => void }
           type="button"
           className="lc-tool lc-tip-target"
           aria-label={tool.label}
-          data-tip={tool.tip}
-          data-tip-placement="bottom"
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => onFormat?.(tool.kind)}
         >
@@ -881,8 +879,6 @@ export function BoardToolbar({
           : "lc-tool lc-tip-target"
       }
       aria-label={hint}
-      data-tip={hint}
-      data-tip-placement="bottom"
       aria-pressed={tool === active && !shapesUiActive}
       onClick={() => pickTool(tool)}
     >
@@ -949,8 +945,6 @@ export function BoardToolbar({
           type="button"
           className="lc-toolbar-grip lc-tip-target"
           aria-label="Hold and drag to move toolbar"
-          data-tip="Hold and drag to move · drop on the dock to pin"
-          data-tip-placement="bottom"
           onPointerDown={onGripPointerDown}
           onPointerMove={onGripPointerMove}
           onPointerUp={onGripPointerUp}
@@ -983,12 +977,6 @@ export function BoardToolbar({
               ? `${presetName} locked — tap to unlock, hold to open presets`
               : `${presetName} unlocked — tap to lock, hold to open presets`
           }
-          dataTip={
-            wheelLocked
-              ? `${presetName} locked — tap to unlock · hold for presets`
-              : `${presetName} unlocked — tap to lock · hold for presets`
-          }
-          dataTipPlacement="bottom"
           className={[
             "lc-preset-chip lc-tip-target",
             wheelLocked ? "is-locked" : "",
@@ -1026,12 +1014,6 @@ export function BoardToolbar({
             }
             aria-label="Straight stroke"
             aria-pressed={straightInk}
-            data-tip={
-              straightInk
-                ? "Straight — line from where you put the nib down"
-                : "Straight — pen and highlighter draw a line from the start"
-            }
-            data-tip-placement="bottom"
             onClick={() => onStraightInk(!straightInk)}
           >
             <StraightIcon />
@@ -1052,8 +1034,6 @@ export function BoardToolbar({
                   : "Screencap"
             }
             ariaLabel={shapeHoldHint}
-            dataTip={shapeHoldHint}
-            dataTipPlacement="bottom"
             className={[
               "lc-tool lc-tip-target lc-hold-icon",
               shapesUiActive ? "lc-tool-active" : "",
@@ -1143,7 +1123,6 @@ export function BoardToolbar({
                 <button
                   type="button"
                   role="menuitem"
-                  title="Shoot the whole board and drop the image on it"
                   onClick={() => {
                     setShapeMenuOpen(false);
                     onCaptureEntire();
@@ -1157,7 +1136,6 @@ export function BoardToolbar({
                 <button
                   type="button"
                   role="menuitem"
-                  title="Drag a rectangle to shoot part of the board"
                   onClick={() => {
                     setShapeMenuOpen(false);
                     onCaptureRegion();
@@ -1180,8 +1158,6 @@ export function BoardToolbar({
             type="button"
             className="lc-tool lc-tip-target lc-history-tool"
             aria-label="Undo"
-            data-tip="Undo"
-            data-tip-placement="bottom"
             onClick={(event) => { animateHistoryArrow(event.currentTarget, -1); onUndo(); }}
           >
             <UndoIcon />
@@ -1190,8 +1166,6 @@ export function BoardToolbar({
             type="button"
             className="lc-tool lc-tip-target lc-history-tool"
             aria-label="Redo"
-            data-tip="Redo"
-            data-tip-placement="bottom"
             onClick={(event) => { animateHistoryArrow(event.currentTarget, 1); onRedo(); }}
           >
             <RedoIcon />
@@ -1205,12 +1179,6 @@ export function BoardToolbar({
               ? `Reset ${resetClearModeLabel(resetMode)} locked — tap to switch mode, hold to unlock`
               : `Reset ${resetClearModeLabel(resetMode)} unlocked — tap to reset, hold to lock`
           }
-          dataTip={
-            resetLocked
-              ? `Reset ${resetClearModeLabel(resetMode)} — tap to switch, hold to unlock`
-              : `Reset ${resetClearModeLabel(resetMode)} — tap to reset, hold to lock`
-          }
-          dataTipPlacement="bottom"
           className={[
             "lc-tool lc-tip-target lc-hold-icon lc-reset-tool",
             resetLocked ? "is-locked" : "lc-hold-danger",

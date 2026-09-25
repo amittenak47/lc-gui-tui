@@ -82,7 +82,7 @@ export function BackgroundPalette({ themeId, onPick, variant = "compact" }: Back
             ? undefined
             : { background: current.background }
         }
-        data-tip="Board and UI theme"
+        data-tip={variant === "map" ? undefined : "Board and UI theme"}
         data-tip-placement={tipPlacement}
         aria-label="Theme"
         aria-expanded={open}
@@ -169,6 +169,7 @@ function ThemeGroup({
             active={theme.id === themeId}
             onPick={onPick}
             tipPlacement={tipPlacement}
+            tips={false}
           />
         ))}
       </div>
@@ -181,11 +182,13 @@ function Swatch({
   active,
   onPick,
   tipPlacement,
+  tips = true,
 }: {
   theme: AppTheme;
   active: boolean;
   onPick: (id: string) => void;
   tipPlacement: "top" | "left" | "bottom" | "right";
+  tips?: boolean;
 }) {
   return (
     <button
@@ -199,7 +202,7 @@ function Swatch({
             : "lc-swatch lc-tip-target"
       }
       style={{ background: theme.background }}
-      data-tip={theme.label}
+      data-tip={tips ? theme.label : undefined}
       data-tip-placement={tipPlacement}
       aria-label={`${theme.label} background`}
       aria-selected={active}

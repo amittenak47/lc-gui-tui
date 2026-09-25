@@ -131,7 +131,6 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const isLeave = props.mode === "leave";
   const allowSave = props.mode === "entry" && Boolean(props.allowSave);
   const snapshotKey = props.mode === "entry" ? props.snapshotKey ?? null : null;
-  const dirty = props.mode !== "leave" || props.dirty !== false;
   const locked = pending || exiting;
   const needsName = Boolean(props.needsName);
   const defaultName = props.defaultName?.trim() || "";
@@ -222,29 +221,15 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
       }}
     >
       <div
-        className={`lc-settings-modal lc-attempt-modal lc-library-holds${isLeave ? "" : " lc-library-menu lc-library-whiteboard"}`}
+        className="lc-settings-modal lc-attempt-modal lc-library-holds lc-library-menu lc-library-whiteboard"
         role="dialog"
         aria-modal="true"
         aria-label={isLeave ? "Leave whiteboard?" : "Open whiteboard"}
       >
         <div className="lc-settings-head">
           <h2>{isLeave ? "Leave whiteboard?" : pickingLoad ? "Load" : pickingSnapshots ? "Restore" : section === "open" ? "Open" : section === "more" ? "More" : section === "export" ? "Export" : "Whiteboard"}</h2>
-          {(isLeave || saveTitle !== null) && <p className="lc-muted">
-            {saveTitle !== null
-              ? "Name this notebook. Hold Save to keep the suggested name."
-              : pickingSnapshots
-              ? "Hold a snapshot to roll this notebook back. Latest autosave is the live library entry."
-              : pickingLoad
-              ? tapArmed
-                ? "Hold an entry to open it. Tap a bin to delete."
-                : "Hold an entry to open it, or hold its bin to delete it."
-              : isLeave
-                ? dirty
-                  ? "Discard undoes everything written since this notebook was opened. Hold to confirm."
-                  : "Nothing written since the last save — leaving changes nothing."
-                : allowSave
-                  ? "Save this notebook, load another, or start blank."
-                  : "Start blank or load a saved notebook."}
+          {saveTitle !== null && <p className="lc-muted">
+            Name this notebook. Hold Save to keep the suggested name.
           </p>}
         </div>
 
@@ -420,47 +405,10 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
           ) : (
             <div className="lc-settings-choice">
               {isLeave ? (
-                <>
-                  <HoldButton holdMs={LIBRARY_HOLD_MS}
-                    label="Load"
-                    className="lc-hold-choice"
-                    disabled={locked || (notebooks.length === 0 && archived.length === 0)}
-                    onConfirm={() => setPickingLoad(true)}
-                    resetKey={error}
-                  >
-                    Load
-                  </HoldButton>
-                  <HoldButton holdMs={LIBRARY_HOLD_MS}
-                    label="Save"
-                    className="lc-hold-choice"
-                    disabled={locked}
-                    onConfirm={beginSave}
-                    resetKey={error}
-                  >
-                    Save
-                  </HoldButton>
-                  {/*
-                    Discard, or Exit when there is nothing to discard.
-                    
-                    They do the same thing — roll back to the baseline — but
-                    when the board already *is* the baseline that rollback is a
-                    no-op, and calling it Discard asks the writer to confirm
-                    throwing away work that is not at risk. Worse, it teaches
-                    them to hold the red button on the way out, which is a habit
-                    that costs them the day they have not saved.
-                  */}
-                  <HoldButton holdMs={LIBRARY_HOLD_MS}
-                    label={dirty ? "Discard" : "Exit"}
-                    className={
-                      dirty ? "lc-hold-choice lc-hold-danger" : "lc-hold-choice"
-                    }
-                    disabled={locked}
-                    onConfirm={() => props.onChoose("discard")}
-                    resetKey={error}
-                  >
-                    {dirty ? "Discard" : "Exit"}
-                  </HoldButton>
-                </>
+                <div className="lc-document-menu">
+                  <LibraryMenuRow label="Save" disabled={locked} onConfirm={beginSave} />
+                  <LibraryMenuRow label="Discard" disabled={locked} onConfirm={() => props.onChoose("discard")} />
+                </div>
               ) : (
                 <>
                   {section === "main" && <>
@@ -507,7 +455,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
             </button>
           )}
           <button type="button" className="lc-secondary" disabled={locked} onClick={props.onCancel}>
-            {isLeave ? "Keep writing" : "Cancel"}
+            Cancel
           </button>
         </div>
       </div>
