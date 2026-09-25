@@ -10,9 +10,16 @@ export function useLibraryMorph(view:string) {
   const to=node.getBoundingClientRect().height;
   previous.current=to;
   if(from===null || !node.animate || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches)return;
+  node.classList.add("is-morphing");
   animation.current=node.animate([{height:`${from}px`},{height:`${to}px`}],{duration:280,easing:"cubic-bezier(.22,1,.36,1)"});
   const current=animation.current;
-  current.onfinish=()=>{if(animation.current===current)animation.current=null;};
+  const settle=()=>{
+    if(animation.current!==current)return;
+    animation.current=null;
+    node.classList.remove("is-morphing");
+  };
+  current.onfinish=settle;
+  current.oncancel=settle;
   node.querySelector<HTMLElement>(".lc-settings-body")?.animate([{opacity:.35,transform:"translateY(6px)"},{opacity:1,transform:"translateY(0)"}],{duration:240,easing:"ease-out"});
  },[view]);
  useLayoutEffect(()=>()=>animation.current?.cancel(),[]);

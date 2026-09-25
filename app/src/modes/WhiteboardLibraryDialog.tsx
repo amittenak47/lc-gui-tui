@@ -97,7 +97,7 @@ export function WhiteboardLibraryDialog({
             Trash on this device lasts three days.
           </p>
         </div>
-        <div className="lc-settings-body">
+        <div className="lc-settings-body lc-scroll-pane">
           <div className="lc-settings-choice">
             {notebooks.map((entry) => (
               <div key={entry.id} className="lc-scratch-load-entry">

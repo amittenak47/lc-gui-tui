@@ -19,6 +19,7 @@
 .lc-library-whiteboard { --lc-menu-line: var(--lc-mode-whiteboard); }
 .lc-library-menu .lc-settings-head .lc-muted { margin: 6px 0 0; line-height: 1.4; font-size: 12px; }
 .lc-library-menu .lc-settings-body { padding: 8px 16px 10px; display: flex; flex-direction: column; gap: 10px; }
+.lc-library-menu.is-morphing .lc-settings-body { overflow: hidden; }
 .lc-library-menu .lc-settings-body > * { flex-shrink: 0; }
 .lc-library-menu .lc-settings-foot { padding: 10px 16px 14px; border-top: 0; }
 .lc-library-menu button { min-height: 32px; font-size: 13px; }

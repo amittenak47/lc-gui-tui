@@ -236,7 +236,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
           </p>}
         </div>
 
-        <div className="lc-settings-body">
+        <div className="lc-settings-body lc-scroll-pane">
           {pickingLoad && <LibrarySearch value={libraryQuery} onChange={setLibraryQuery} label="Search saved whiteboards" disabled={locked} showTrash={showTrash} onTrashChange={setShowTrash}/>}
           {pickingLoad && !(showTrash ? archived : notebooks).some(matchesQuery) && <p className="lc-muted">No matching saved items.</p>}
           {error && <div className="lc-warning">{error}</div>}

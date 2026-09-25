@@ -20,7 +20,13 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 
 import type { CSSProperties } from "react";
 
+import { PAN_FRICTION, PAN_REST_SPEED } from "../canvas/flickPredict";
 import { HOLD_MS, HOLD_TAP_FILL_DELAY_MS } from "../util/gesture";
+
+/** Travel before a library-row press becomes a list flick instead of a hold. */
+const HOLD_SCROLL_SLOP_PX = 8;
+/** px/ms — a slow drag must not coast. */
+const HOLD_SCROLL_FLICK_MIN = 0.12;
 
 /** @deprecated Prefer {@link HOLD_MS} from `util/gesture`. */
 export const DEFAULT_HOLD_MS = HOLD_MS;
@@ -128,6 +134,17 @@ export function HoldButton({
   const tapConsumedRef = useRef(false);
   /** True between setPointerCapture and the matching up/cancel. */
   const capturingRef = useRef(false);
+  const scrollRef = useRef<{
+    scroller: HTMLElement;
+    x: number;
+    y: number;
+    lastY: number;
+    lastT: number;
+    vel: number;
+    armed: boolean;
+    pointerId: number;
+  } | null>(null);
+  const coastRef = useRef(0);
 
   const clearFillDelay = useCallback(() => {
     if (fillDelayRef.current == null) return;
@@ -223,7 +240,30 @@ export function HoldButton({
     rafRef.current = requestAnimationFrame(tick);
   }, [clearFillDelay, disabled, tick]);
 
-  useEffect(() => () => stopHold({ reset: false }), [stopHold]);
+  useEffect(() => () => {
+    if (coastRef.current) cancelAnimationFrame(coastRef.current);
+    stopHold({ reset: false });
+  }, [stopHold]);
+
+  const coastScroll = useCallback((scroller: HTMLElement, velocity: number) => {
+    if (coastRef.current) cancelAnimationFrame(coastRef.current);
+    if (Math.abs(velocity) < HOLD_SCROLL_FLICK_MIN) return;
+    let vel = velocity;
+    let prev = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(34, Math.max(1, now - prev));
+      prev = now;
+      scroller.scrollTop += vel * dt;
+      vel *= Math.exp(-PAN_FRICTION * dt);
+      const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+      if (scroller.scrollTop <= 0 || scroller.scrollTop >= max || Math.abs(vel) < PAN_REST_SPEED) {
+        coastRef.current = 0;
+        return;
+      }
+      coastRef.current = requestAnimationFrame(tick);
+    };
+    coastRef.current = requestAnimationFrame(tick);
+  }, []);
 
   // A rejected confirm (or a re-opened dialog) has to be held again.
   useEffect(() => {
@@ -270,16 +310,55 @@ export function HoldButton({
       onPointerDown={(event) => {
         event.preventDefault();
         event.stopPropagation();
+        const scroller = (event.currentTarget as HTMLElement).closest(".lc-library-menu .lc-settings-body");
+        scrollRef.current = scroller instanceof HTMLElement
+          ? {
+              scroller,
+              x: event.clientX,
+              y: event.clientY,
+              lastY: event.clientY,
+              lastT: event.timeStamp,
+              vel: 0,
+              armed: false,
+              pointerId: event.pointerId,
+            }
+          : null;
         (event.currentTarget as HTMLButtonElement).setPointerCapture(event.pointerId);
         capturingRef.current = true;
         startHold();
       }}
+      onPointerMove={(event) => {
+        const drag = scrollRef.current;
+        if (!drag || event.pointerId !== drag.pointerId) return;
+        if (!drag.armed) {
+          const dx = event.clientX - drag.x;
+          const dy = event.clientY - drag.y;
+          if (Math.hypot(dx, dy) < HOLD_SCROLL_SLOP_PX || Math.abs(dy) <= Math.abs(dx)) return;
+          drag.armed = true;
+          tapConsumedRef.current = true;
+          stopHold({ reset: true });
+        }
+        const dy = drag.lastY - event.clientY;
+        const dt = Math.max(1, event.timeStamp - drag.lastT);
+        drag.lastY = event.clientY;
+        drag.lastT = event.timeStamp;
+        drag.scroller.scrollTop += dy;
+        drag.vel = dy / dt;
+      }}
       onPointerUp={() => {
         capturingRef.current = false;
+        const drag = scrollRef.current;
+        scrollRef.current = null;
+        if (drag?.armed) {
+          coastScroll(drag.scroller, drag.vel);
+          stopHold({ reset: true });
+          return;
+        }
         stopHold({ reset: true, release: true });
       }}
       onPointerCancel={() => {
         capturingRef.current = false;
+        scrollRef.current = null;
         stopHold({ reset: true });
       }}
       onPointerLeave={() => {

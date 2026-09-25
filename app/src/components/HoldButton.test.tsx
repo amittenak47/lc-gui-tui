@@ -196,4 +196,46 @@ describe("HoldButton", () => {
     });
     host.remove();
   });
+
+  it("flicks a library list instead of confirming the row", async () => {
+    const onTap = vi.fn();
+    const onConfirm = vi.fn();
+    const host = document.createElement("div");
+    host.className = "lc-library-menu";
+    const body = document.createElement("div");
+    body.className = "lc-settings-body";
+    Object.defineProperty(body, "clientHeight", { value: 40 });
+    Object.defineProperty(body, "scrollHeight", { value: 400 });
+    host.append(body);
+    document.body.appendChild(host);
+    const root = createRoot(body);
+
+    await act(async () => {
+      root.render(
+        <HoldButton label="Open notes" onConfirm={onConfirm} onTap={onTap} holdMs={10_000} />,
+      );
+    });
+
+    const button = body.querySelector("button")!;
+    await act(async () => {
+      button.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true, pointerId: 1, clientX: 10, clientY: 80,
+      }));
+      button.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true, pointerId: 1, clientX: 12, clientY: 40,
+      }));
+      button.dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true, pointerId: 1, clientX: 12, clientY: 40,
+      }));
+    });
+
+    expect(body.scrollTop).toBeGreaterThan(0);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onTap).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+  });
 });
