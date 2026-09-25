@@ -37,6 +37,13 @@ it("sends unquoted replies inside their thread and keeps independent questions i
   const flags = send.mock.lastCall![1];
   expect(flags.sessionId).not.toBe("activity");
   expect(flags.threadRootId).toBeNull();
+  const created = flags.sessionId as string;
+  act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy={false}
+    messages={[...messages, {id: "new-q", role: "user", content: "test", at: 2, sessionId: "session-new-q", requestState: "preparing"}]}
+    onSend={send} />));
+  expect(host.querySelector('[data-coach-message="new-q"]')).toBeTruthy();
+  expect(host.querySelector(".lc-agent-session-row.is-active .lc-agent-session-name")?.textContent).toBe("test");
+  expect(created).not.toBe("session-new-q");
 });
 function menu() { act(() => host.querySelector(".lc-agent-turn-user")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }))); }
 it("offers Draw this after an Ask that did not draw", () => {

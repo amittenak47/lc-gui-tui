@@ -1033,12 +1033,28 @@ export function AgentSidePanel({
   const motionTimerRef = useRef<number | null>(null);
   const threadMotionRef = useRef<ThreadMotion>("idle");
 
+  const sessionsWhenAsked = useRef<Set<string> | null>(null);
   useEffect(() => {
-    if (newSessionId && sessions.some(session => session.id === newSessionId)) {
-      setArrivingSessionId(newSessionId);
-      setPickedSessionId(newSessionId);
-      setNewSessionId(null);
+    if (!newSessionId) {
+      sessionsWhenAsked.current = null;
+      return;
     }
+    if (!sessionsWhenAsked.current) {
+      sessionsWhenAsked.current = new Set(sessions.map((session) => session.id));
+    }
+    // The send may be stored under this placeholder id, or under the id minted
+    // for the question. Either way the session that just appeared is the one
+    // to open — staying on the placeholder leaves an empty pane after the reply.
+    const arrived = sessions.filter((session) => !sessionsWhenAsked.current!.has(session.id));
+    const match = sessions.some((session) => session.id === newSessionId)
+      ? newSessionId
+      : arrived.length === 1
+        ? arrived[0].id
+        : null;
+    if (!match) return;
+    setArrivingSessionId(match);
+    setPickedSessionId(match);
+    setNewSessionId(null);
   }, [newSessionId, sessions]);
   useEffect(() => {
     if (!arrivingSessionId) return;
