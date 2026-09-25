@@ -6713,7 +6713,7 @@ export function Workspace({
 
       const codeShot = (() => {
         const board = boardRef.current;
-        if (!board || !(problem && !isLocalPad(problem) || flags.handwriting || flags.annotations || flags.reviewBoard || flags.lazy)) return null;
+        if (!board || !(flags.handwriting || flags.annotations || flags.reviewBoard || flags.lazy)) return null;
         const ops = inkOpsFrom(board.saveBoard());
         if (ops.length === 0) return null;
         const frame = board
@@ -6747,9 +6747,7 @@ export function Workspace({
         return png ? { label: "Annotated code", png } : null;
       })();
 
-      const automaticBoard = Boolean(problem && (isWhiteboard(problem) || !isLocalPad(problem)));
       const wantsBoard =
-        automaticBoard ||
         flags.reviewBoard ||
         flags.lazy ||
         flags.handwriting ||
@@ -6765,7 +6763,7 @@ export function Workspace({
            * their marks, backdrop composited under the ink.
            */
           const narrow =
-            !automaticBoard && flags.annotations &&
+            flags.annotations &&
             !flags.handwriting &&
             !flags.reviewBoard &&
             !flags.lazy;
@@ -6780,7 +6778,13 @@ export function Workspace({
            * with no pictures at all and said nothing about it.
            */
           const exported = await withTimeout(
-            narrow
+            flags.handwriting && isWhiteboard(problem)
+              ? (async () => {
+                  const {captureWhiteboardBackup} = await import("./util/whiteboardTransfer");
+                  const snapshot = await captureWhiteboardBackup(board, whiteboardNotebookIdRef.current, "Whiteboard", whiteboardPageCount, [], false);
+                  return board.exportNotesImages(snapshot.board);
+                })()
+              : narrow
               ? board
                   .exportViewThumb()
                   .then((thumb) => (thumb ? [thumb] : []))
@@ -6789,12 +6793,12 @@ export function Workspace({
             "the board export took too long",
           );
           const thumbs: Array<{ label: string; png: string }> = exported;
-          if (automaticBoard && isWhiteboard(problem)) {
+          if (flags.handwriting && isWhiteboard(problem)) {
             const view = await withTimeout(board.exportViewThumb(), THUMB_EXPORT_TIMEOUT_MS, "Current whiteboard capture timed out");
             if (!view?.png) throw new Error("The whiteboard could not be captured. Try sending again when the page is ready.");
             thumbs.unshift(view);
           }
-          if (automaticBoard && !modeHasVision("ask") && (board.hasRasterInk() || thumbs.length)) {
+          if (flags.handwriting && !modeHasVision("ask") && (board.hasRasterInk() || thumbs.length)) {
             throw new Error("The selected Ask model does not support images. Choose a vision-capable model to review your handwriting.");
           }
           if (thumbs.length > 0) {
@@ -6806,7 +6810,7 @@ export function Workspace({
             setNotice("nothing on the board to attach — sending the question on its own");
           }
         } catch (cause) {
-          if (automaticBoard) throw cause;
+          if (flags.handwriting) throw cause;
           // Best-effort still, but not silent: the question goes without the
           // pictures and the writer is told which half arrived.
           setNotice(`could not attach the board (${messageOf(cause)}) — sending the question alone`);
@@ -6814,7 +6818,7 @@ export function Workspace({
       }
       if (
         codeShot &&
-        (automaticBoard || flags.handwriting || flags.annotations || flags.reviewBoard || flags.lazy)
+        (flags.handwriting || flags.annotations || flags.reviewBoard || flags.lazy)
       ) {
         attachments = [...(attachments ?? []), codeShot];
       }
@@ -6879,7 +6883,7 @@ export function Workspace({
         questionTruncated: assembled.questionTruncated,
       };
     },
-    [readingSize, themeId, problem, modeHasVision],
+    [readingSize, themeId, problem, modeHasVision, whiteboardPageCount],
   );
 
   const applyCoachFootnote = useCallback(

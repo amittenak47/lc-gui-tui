@@ -8946,6 +8946,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           exportBoardBlob(api, rasterInkRef.current?.getOps() ?? [], 1, pageExportLayers()),
         );
       },
+      exportNotesImages: async (snapshot) => {
+        const ops = inkOpsFrom(snapshot);
+        const authored = (snapshot.elements as SceneElementLike[]).filter(el => !el.isDeleted && !el.customData?.lcRegionFrame && !el.customData?.lcVizId && !el.id?.startsWith("lcregion-"));
+        const boxes = [...ops.filter(op => op.kind === "draw").map(op => inkOpsBounds([op])).filter((box): box is SceneBounds => Boolean(box)),
+          ...authored.map(el => ({minX:el.x,minY:el.y,maxX:el.x+el.width,maxY:el.y+el.height}))];
+        if (!boxes.length) return [];
+        const frozen = {getSceneElements:()=>snapshot.elements,getAppState:()=>({...snapshot.appState,viewBackgroundColor:"#ffffff"}),getFiles:()=>snapshot.files ?? {}} as unknown as ExcalidrawApi;
+        const minX=Math.min(...boxes.map(b=>b.minX)), minY=Math.min(...boxes.map(b=>b.minY));
+        const maxX=Math.max(...boxes.map(b=>b.maxX)), maxY=Math.max(...boxes.map(b=>b.maxY));
+        const shots:Array<{label:string;png:string}>=[];
+        // Fixed scene scale keeps handwriting readable even on a tall notebook.
+        const tile=1960, overlap=64;
+        for (let y=minY; y<=maxY; y+=tile) for(let x=minX; x<=maxX; x+=tile) {
+          if (!boxes.some(b=>b.maxX>=x && b.minX<=x+tile && b.maxY>=y && b.minY<=y+tile)) continue;
+          const frame={x:x-overlap,y:y-overlap,width:Math.min(tile,maxX-x)+overlap*2,height:Math.min(tile,maxY-y)+overlap*2};
+          const png=await captureImage(()=>exportSceneFrameBlob(frozen,ops,frame,1),{maxEdge:1600,maxBase64:2*1024*1024});
+          if (!png) throw new Error("A handwriting image exceeded the capture limit. Zoom to the relevant notes and send the current view.");
+          shots.push({label:`Whiteboard notes ${shots.length+1}`,png});
+        }
+        return shots;
+      },
       exportNotesPng: async (snapshot) => {
         const ink = inkOpsFrom(snapshot);
         const kept = snapshot.elements as SceneElementLike[];

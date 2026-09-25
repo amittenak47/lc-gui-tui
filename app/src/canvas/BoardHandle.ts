@@ -113,6 +113,7 @@ export interface BoardHandle {
   exportPng(): Promise<string>;
   /** User export, bounded in pixels and based on a complete frozen snapshot. */
   exportNotesPng(snapshot: BoardBlob): Promise<Blob>;
+  exportNotesImages(snapshot: BoardBlob): Promise<Array<{label:string;png:string}>>;
   /**
    * True when the bitmap ink layer holds strokes. Pen ink is pixels, not scene
    * elements, so this is the only way to know handwriting exists on a browser

@@ -16,7 +16,7 @@ export interface WhiteboardBackup {
 }
 
 /** Snapshot live edits first, then include cold pages without decoding all points. */
-export async function captureWhiteboardBackup(board: BoardHandle, id: string | null, title: string, pageCount: number, agent: unknown[]): Promise<WhiteboardBackup> {
+export async function captureWhiteboardBackup(board: BoardHandle, id: string | null, title: string, pageCount: number, agent: unknown[], includeAttachments = true): Promise<WhiteboardBackup> {
   const scene = board.saveBoard({ assembleInk: false });
   const live = board.snapshotInkPages();
   const dirty = board.takeDirtyInkPages();
@@ -35,7 +35,7 @@ export async function captureWhiteboardBackup(board: BoardHandle, id: string | n
   const { inkPages: _manifest, ink: _legacy, ...rest } = scene;
   return { format: "whiteboard-annotations", version: 1, sourceId: id ?? undefined,
     title: saved?.title ?? title, pageCount, board: { ...rest, inkC: concatEncodedInk([...pages.values()]) },
-    agent, attachments: await captureArtifactSnapshot(saved?.artifacts) };
+    agent, attachments: includeAttachments ? await captureArtifactSnapshot(saved?.artifacts) : undefined };
 }
 
 export function readWhiteboardBackup(text: string): WhiteboardBackup {
