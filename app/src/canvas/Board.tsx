@@ -226,6 +226,7 @@ import { loadSceneImages } from "./sceneImages";
 import {
   INK_OVERDRAW_FRACTION,
   OVERDRAW_REBASE_HEADROOM,
+  overdrawMarginPx,
   panDelta,
 } from "./panOffset";
 import {
@@ -346,6 +347,7 @@ import {
   loadInkDisplayHz,
   loadInkMatchDisplay,
 } from "../util/inkDisplayHzPref";
+import { medianMs, resolveDisplayHz, vsyncMsForHz } from "./inkLab/displayHz";
 import {
   captureInserts,
   captureWritesFile,
@@ -1402,6 +1404,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [perfOverlay, setPerfOverlay] = useState(() => loadInkPerfOverlay());
   const [perfBar, setPerfBar] = useState(() => loadInkPerfBar());
   const [displayHz, setDisplayHz] = useState(() => loadInkDisplayHz());
+  const displayHzRef = useRef(displayHz);
+  displayHzRef.current = displayHz;
   const [matchDisplay, setMatchDisplay] = useState(() => loadInkMatchDisplay());
   const [stampTrash, setStampTrash] = useState<{
     ids: string[];
@@ -7372,6 +7376,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      */
     let panelFrame = 0;
     let panelSharpAt = 0;
+    let panelFrameAt = 0;
+    const panelGaps: number[] = [];
     const stopPanelPaint = () => {
       if (panelFrame) cancelAnimationFrame(panelFrame);
       panelFrame = 0;
@@ -7380,9 +7386,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         node.style.width = "";
         node.style.height = "";
         node.style.top = "";
-        delete node.dataset.lcPanelW;
-        delete node.dataset.lcPanelH;
-        delete node.dataset.lcPanelTop;
       });
     };
     const paintPanelFrame = (from: { scrollX: number; scrollY: number; zoom: number }) => {
@@ -7420,34 +7423,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       };
       clearPanOffsetsRef.current();
       placeContentSlotAtRef.current(next.scrollX, next.scrollY, next.zoom);
-      // The bitmap stays. Its CSS box tracks the hole every frame, which is the
-      // smooth scale. A sharp replay is heavier than a frame, so it runs on a
-      // short cadence and must not clear the pixels first.
+      // The bitmap stays. Its box matches the live hole each frame — width and
+      // height apart, the same box a sharp paint uses — so the page aspect
+      // tracks the panel instead of scaling the old bitmap and snapping later.
       const ink = board.querySelector<HTMLCanvasElement>("canvas.lc-ink-lab-canvas");
       const host = ink?.parentElement;
-      if (ink && host && host.clientWidth > 8) {
-        const baseW = Number(ink.dataset.lcPanelW) || ink.clientWidth;
-        const baseH = Number(ink.dataset.lcPanelH) || ink.clientHeight;
-        const baseTop = Number(ink.dataset.lcPanelTop) || Number.parseFloat(ink.style.top) || 0;
-        if (!ink.dataset.lcPanelW) {
-          ink.dataset.lcPanelW = String(baseW);
-          ink.dataset.lcPanelH = String(baseH);
-          ink.dataset.lcPanelTop = String(baseTop);
-        }
-        const factor = host.clientWidth / Math.max(1, baseW);
-        ink.style.width = `${host.clientWidth}px`;
-        ink.style.height = `${baseH * factor}px`;
-        ink.style.top = `${baseTop * factor}px`;
+      if (ink && host && host.clientWidth > 8 && host.clientHeight > 8) {
+        const cssW = host.clientWidth;
+        const cssH = host.clientHeight;
+        const marginY = overdrawMarginPx(cssH, window.devicePixelRatio || 1);
+        ink.style.width = `${cssW}px`;
+        ink.style.height = `${cssH + 2 * marginY}px`;
+        ink.style.top = `${-marginY}px`;
       }
       const now = performance.now();
-      if (!rasterInkRef.current?.isDrawing() && now - panelSharpAt > 70) {
+      const sharpMs = vsyncMsForHz(resolveDisplayHz(displayHzRef.current, medianMs(panelGaps)));
+      if (!rasterInkRef.current?.isDrawing() && now - panelSharpAt >= sharpMs - 1) {
         panelSharpAt = now;
-        void Promise.resolve(rasterInkRef.current?.syncCamera()).then(() => {
-          if (!ink) return;
-          delete ink.dataset.lcPanelW;
-          delete ink.dataset.lcPanelH;
-          delete ink.dataset.lcPanelTop;
-        });
+        void rasterInkRef.current?.syncCamera();
       }
       sceneOverlayRef.current?.redraw();
       shapeSelectRef.current?.redraw();
@@ -7464,6 +7457,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const duration = (event as CustomEvent<{ duration: number }>).detail?.duration ?? 0;
       stopPanelPaint();
       panelSharpAt = 0;
+      panelFrameAt = 0;
+      panelGaps.length = 0;
       if (!duration) return;
       const from = { scrollX: camera.scrollX, scrollY: camera.scrollY, zoom: camera.zoom };
       const tick = () => {
@@ -7471,6 +7466,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           panelFrame = 0;
           return;
         }
+        const now = performance.now();
+        if (panelFrameAt > 0) {
+          panelGaps.push(now - panelFrameAt);
+          if (panelGaps.length > 8) panelGaps.shift();
+        }
+        panelFrameAt = now;
         paintPanelFrame(from);
         panelFrame = requestAnimationFrame(tick);
       };

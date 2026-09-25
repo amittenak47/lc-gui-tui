@@ -582,7 +582,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       const painted = paintedViewRef.current;
       const camera = live ?? getViewportRef.current();
       if (!painted || !camera) {
-        canvas.style.visibility = "hidden";
+        if (!document.body.dataset.lcPanelMotion) canvas.style.visibility = "hidden";
         return false;
       }
       const delta = painted.marginY > 0
@@ -590,6 +590,13 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             y: painted.marginY * OVERDRAW_REBASE_HEADROOM,
           })
         : panDelta(camera, painted, painted);
+      // The panel ease owns the box. A zoom rebase would hide the bitmap and
+      // a pan translate would shove it up until the sharp frame snaps back.
+      if (document.body.dataset.lcPanelMotion) {
+        if (canvas.style.transform) canvas.style.transform = "";
+        canvas.style.visibility = "";
+        return !delta.rebase;
+      }
       const next = delta.dx === 0 && delta.dy === 0
         ? "" : `translate3d(${delta.dx}px, ${delta.dy}px, 0)`;
       if (canvas.style.transform !== next) canvas.style.transform = next;
