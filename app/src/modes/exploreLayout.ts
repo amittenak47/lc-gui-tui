@@ -359,8 +359,8 @@ export function sagOf(dist: number): number {
   const slack = LINK_REST - dist;
   // A little bow even at rest, so a graph sitting still still looks like cable
   // rather than like wireframe.
-  const base = 0.055;
-  return Math.max(0.012, Math.min(0.16, base + slack * 0.85));
+  const base = 0.14;
+  return Math.max(0.04, Math.min(0.34, base + slack * 1.15));
 }
 
 export { LINK_REST };

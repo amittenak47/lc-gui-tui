@@ -8970,112 +8970,129 @@ body[data-lc-sash-drag="horizontal"] {
   top: auto;
 }
 
-.lc-explore-filter {
-  position: relative;
-}
-
-.lc-explore-filter-pop {
+/*
+ * Catalog-style find bar. Same clip-and-slide as the agent panel, turned
+ * vertical so it unfolds into the top of the frame.
+ */
+.lc-explore-find {
   position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-  min-width: 12rem;
-  padding: 10px;
-  border: 1px solid var(--chrome-edge);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--surface) 96%, transparent);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  top: 10px;
+  left: 12px;
+  right: 12px;
   z-index: 6;
-}
-
-.lc-explore-search-morph {
-  position: relative;
-  z-index: 1;
   display: flex;
-  flex-direction: row;
   align-items: center;
-  justify-content: flex-end;
-  width: 36px;
-  min-width: 36px;
-  height: 32px;
-  margin-inline: auto;
-  overflow: visible;
+  gap: 2px;
+  min-height: 32px;
+  padding: 2px 6px 2px 4px;
+  border: 1px solid var(--chrome-edge);
   border-radius: 8px;
-}
-
-.lc-explore-search-morph.is-open {
-  z-index: 8;
-}
-
-.lc-explore-search-morph input {
-  position: absolute;
-  top: 0;
-  right: 100%;
-  box-sizing: border-box;
-  width: 0;
-  height: 32px;
-  margin: 0;
-  padding: 0;
-  opacity: 0;
-  pointer-events: none;
-  border: 1px solid transparent;
-  border-right: 0;
-  border-radius: 8px 0 0 8px;
-  background: var(--surface);
+  background: var(--bg);
   color: var(--ink);
-  font: inherit;
-  font-size: 12px;
-  outline: none;
+  transform: translateY(-8px);
+  clip-path: inset(0 0 100% 0);
+  visibility: hidden;
+  pointer-events: none;
   transition:
-    width 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 180ms ease,
-    padding 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    border-color 180ms ease;
+    clip-path 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 240ms;
 }
 
-.lc-explore-search-morph.is-open input {
-  width: 13.5rem;
-  padding: 0 28px 0 10px;
-  opacity: 1;
+.lc-explore-find.is-open {
+  transform: translateY(0);
+  clip-path: inset(0);
+  visibility: visible;
   pointer-events: auto;
-  border-color: var(--chrome-edge);
 }
 
-.lc-explore-search-morph input::-webkit-search-cancel-button {
+.lc-explore-find:focus-within {
+  border-color: var(--accent);
+}
+
+.lc-explore-find-kinds {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.lc-explore-find-kinds::-webkit-scrollbar {
   display: none;
 }
 
-.lc-explore-search-morph .lc-explore-search-clear {
-  position: absolute;
-  top: 8px;
-  right: calc(100% + 6px);
-  z-index: 1;
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
+.lc-explore-find-kinds button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  min-height: 0;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--hint);
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.lc-explore-find-kinds button:hover,
+.lc-explore-find-kinds button:focus-visible {
+  color: var(--ink);
+  background: transparent;
+}
+
+.lc-explore-find-kinds button.is-filter {
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 currentColor;
+}
+
+.lc-explore-find-field {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  margin-left: 4px;
+  padding-right: 4px;
+  border-left: 1px solid color-mix(in srgb, var(--chrome-edge) 70%, transparent);
+}
+
+.lc-explore-find input {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   margin: 0;
-  opacity: 0;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.lc-explore-find-glass {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  color: var(--hint);
   pointer-events: none;
 }
 
-.lc-explore-search-morph.is-open .lc-explore-search-clear {
-  opacity: 1;
-  pointer-events: auto;
+.lc-explore-find input::-webkit-search-cancel-button {
+  display: none;
 }
 
-.lc-explore-search-morph .lc-lined-toggle {
+.lc-explore-find .lc-explore-search-clear {
   flex: 0 0 auto;
-  width: 36px;
-}
-
-.lc-explore-search-morph.is-open .lc-lined-toggle {
-  border: 1px solid var(--chrome-edge);
-  border-left: 0;
-  border-radius: 0 8px 8px 0;
-  background: var(--surface);
+  width: 16px;
+  height: 16px;
+  margin: 0 4px 0 0;
 }
 
 .lc-explore-empty {
@@ -9139,8 +9156,10 @@ body[data-lc-sash-drag="horizontal"] {
 
 @media (prefers-reduced-motion: reduce) {
   .lc-explore-cluster-label,
-  .lc-explore-search-morph,
-  .lc-explore-search-morph input,
+  .lc-explore-find,
+  .lc-explore-node,
+  .lc-explore-node-dot,
+  .lc-explore-beam,
   .lc-node-sheet.is-open,
   .lc-node-sheet.is-closing {
     animation: none;
@@ -9165,7 +9184,16 @@ body[data-lc-sash-drag="horizontal"] {
   /* Paths, not lines: a curve with a fill is a blob. */
   fill: none;
   stroke-linecap: round;
-  transition: opacity 200ms ease;
+  transition: opacity 180ms ease;
+  animation: lc-explore-beam-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-explore-beam.is-leaving {
+  opacity: 0;
+}
+
+@keyframes lc-explore-beam-in {
+  from { opacity: 0; }
 }
 
 .lc-explore-beam-glow .lc-explore-beam {
@@ -9176,6 +9204,11 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-explore-beam-core .lc-explore-beam {
   stroke-width: 1;
   opacity: 0.95;
+}
+
+.lc-explore-beam-glow .lc-explore-beam.is-leaving,
+.lc-explore-beam-core .lc-explore-beam.is-leaving {
+  opacity: 0;
 }
 
 .lc-explore-beam.is-dim {
@@ -9237,8 +9270,8 @@ body[data-lc-sash-drag="horizontal"] {
   top: 0;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -9249,7 +9282,21 @@ body[data-lc-sash-drag="horizontal"] {
   -webkit-touch-callout: none;
   user-select: none;
   /* The rAF loop owns `transform`; only paint properties transition. */
-  transition: opacity 200ms ease;
+  animation: lc-explore-node-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-explore-node.is-leaving {
+  pointer-events: none;
+  animation: lc-explore-node-out 180ms ease forwards;
+}
+
+@keyframes lc-explore-node-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes lc-explore-node-out {
+  to { opacity: 0; }
 }
 
 .lc-explore-node:active {
@@ -9258,8 +9305,8 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-explore-node-dot {
-  width: 13px;
-  height: 13px;
+  width: var(--lc-node-size, 13px);
+  height: var(--lc-node-size, 13px);
   border-radius: 50%;
   background: var(--lc-node-tint, var(--accent));
   box-shadow:
@@ -9268,13 +9315,27 @@ body[data-lc-sash-drag="horizontal"] {
   transition:
     width 140ms ease,
     height 140ms ease,
+    transform 140ms ease,
     box-shadow 140ms ease;
+  animation: lc-explore-dot-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lc-explore-node.is-leaving .lc-explore-node-dot {
+  animation: lc-explore-dot-out 180ms ease forwards;
+}
+
+@keyframes lc-explore-dot-in {
+  from { opacity: 0; transform: scale(0.2); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes lc-explore-dot-out {
+  to { opacity: 0; transform: scale(0.2); }
 }
 
 .lc-explore-node:hover .lc-explore-node-dot,
 .lc-explore-node:focus-visible .lc-explore-node-dot {
-  width: 16px;
-  height: 16px;
+  transform: scale(1.18);
   box-shadow:
     0 0 0 5px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 22%, transparent),
     0 0 16px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 70%, transparent);
@@ -9285,8 +9346,6 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-explore-node.is-selected .lc-explore-node-dot {
-  width: 17px;
-  height: 17px;
   box-shadow:
     0 0 0 4px color-mix(in srgb, var(--surface) 90%, transparent),
     0 0 0 6px var(--lc-node-tint, var(--accent)),
@@ -9368,8 +9427,9 @@ body[data-lc-sash-drag="horizontal"] {
   left: 0;
   top: 0;
   transform: none;
-  width: min(400px, calc(100vw - 24px));
-  max-height: min(72vh, 520px);
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(48vh, 360px);
+  border-radius: 8px;
 }
 
 .lc-node-sheet.is-open {
@@ -9404,19 +9464,20 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-node-sheet .lc-preset-sheet-head {
   flex-wrap: wrap;
-  row-gap: 4px;
-  padding: 10px 12px;
+  row-gap: 2px;
+  padding: 8px 10px;
 }
 
 .lc-node-sheet .lc-preset-sheet-name {
-  font-size: 17px;
+  font-size: 14px;
   min-width: 0;
-  flex: 1 1 8rem;
+  flex: 1 1 6rem;
 }
 
 .lc-node-sheet .lc-preset-sheet-meta {
   flex: 1 0 100%;
-  padding-left: 0;
+  padding-left: 22px;
+  font-size: 10px;
 }
 
 .lc-node-sheet-tabs {
@@ -9444,7 +9505,7 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-node-sheet-panel {
-  padding: 12px 16px 14px;
+  padding: 4px 10px 8px;
 }
 
 .lc-node-sheet-spec {
@@ -9497,16 +9558,18 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-node-sheet-link {
   display: flex;
   flex: 1 1 auto;
-  flex-direction: column;
-  gap: 1px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  padding: 6px 0;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 0;
+  background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
 }
@@ -9514,8 +9577,8 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-node-sheet-link:hover,
 .lc-node-sheet-link:focus-visible {
   outline: none;
-  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  background: transparent;
 }
 
 .lc-node-sheet-link strong {
@@ -9526,7 +9589,11 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-node-sheet-link .lc-muted {
-  font-size: 11px;
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
 }
 
 /* Removes the link, never the thing on the other end of it. */
@@ -9551,8 +9618,8 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-node-sheet-foot {
   display: flex;
   flex: 0 0 auto;
-  gap: 8px;
-  padding: 10px 16px 14px;
+  gap: 6px;
+  padding: 8px 10px 10px;
   border-top: 1px solid color-mix(in srgb, var(--chrome-edge) 60%, transparent);
 }
 
@@ -9562,13 +9629,14 @@ body[data-lc-sash-drag="horizontal"] {
  */
 .lc-node-btn {
   flex: 1 1 0;
-  padding: 9px 12px;
-  border-radius: 8px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
   border: 1px solid var(--chrome-edge);
   background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 12px;
   cursor: pointer;
   transition:
     background 120ms ease,

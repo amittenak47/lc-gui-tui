@@ -343,8 +343,8 @@ describe("sagOf", () => {
   it("clamps, so a very long or very short link stays drawable", () => {
     for (const d of [0, 0.001, 1, 4, 50]) {
       const sag = sagOf(d);
-      expect(sag).toBeGreaterThanOrEqual(0.012);
-      expect(sag).toBeLessThanOrEqual(0.16);
+      expect(sag).toBeGreaterThanOrEqual(0.04);
+      expect(sag).toBeLessThanOrEqual(0.34);
     }
   });
 });

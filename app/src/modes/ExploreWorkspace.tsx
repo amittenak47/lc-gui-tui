@@ -29,7 +29,6 @@ import { BackgroundPalette } from "../components/BackgroundPalette";
 import { MorphBar } from "../components/MorphBar";
 import { useShell } from "../shellContext";
 import type { LcClient } from "../api/client";
-import { LibraryAsk } from "./LibraryAsk";
 import { NodeSheet, type NodeSheetNeighbour } from "./NodeSheet";
 import {
   CLUSTERS,
@@ -95,12 +94,25 @@ const EDGE_LABEL: Record<EdgeKind, string> = {
 };
 
 const TINT: Record<NodeType, string> = {
-  annotate: "var(--accent)",
-  whiteboard: "color-mix(in srgb, var(--accent) 45%, var(--muted))",
-  practice: "#4aa36a",
-  web: "#d98b3a",
-  thread: "#a78bfa",
+  annotate: "var(--lc-mode-annotate)",
+  whiteboard: "var(--lc-mode-whiteboard)",
+  practice: "var(--lc-mode-practice)",
+  web: "var(--lc-mode-browse)",
+  thread: "var(--lc-mode-explore)",
 };
+
+const KIND_SHORT: Record<NodeType, string> = {
+  annotate: "Notes",
+  whiteboard: "Boards",
+  practice: "Practice",
+  web: "Web",
+  thread: "Threads",
+};
+
+/** Quiet dots stay small; a well-linked node reads larger. */
+function nodeDiameter(links: number): number {
+  return Math.round(11 + Math.min(15, Math.sqrt(Math.max(0, links)) * 4.5));
+}
 
 function prefersReducedMotion(): boolean {
   if (typeof window === "undefined" || !window.matchMedia) return false;
@@ -124,9 +136,8 @@ export function ExploreWorkspace({
   active = true,
   showing = true,
   embedInBoardTray = false,
-  client,
-  onOpenHash,
 }: ExploreWorkspaceProps) {
+  void onUnlink;
   const { headerSlots } = useShell();
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selected, setSelected] = useState<NodeRef | null>(null);
@@ -139,8 +150,9 @@ export function ExploreWorkspace({
   const [frozenLabels, setFrozenLabels] = useState<
     Array<{ type: NodeType; label: string; x: number; y: number }>
   >([]);
-  const [filterOpen, setFilterOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  /** Nodes a filter just hid, kept mounted long enough to fade out. */
+  const [leaving, setLeaving] = useState<Body[]>([]);
   /** Bumped when the loop wants the labels redrawn, which is not every frame. */
   const [labelTick, setLabelTick] = useState(0);
 
@@ -161,6 +173,8 @@ export function ExploreWorkspace({
   clusterReadyRef.current = clusterReady;
   const chromeRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const findRef = useRef<HTMLFormElement | null>(null);
+  const leaveStampRef = useRef(0);
   const [chromeHost, setChromeHost] = useState<HTMLElement | null>(null);
   const [inBoardStack, setInBoardStack] = useState(false);
   /** So the seeding effect can repaint without depending on the painter. */
@@ -220,8 +234,17 @@ export function ExploreWorkspace({
       const kept = existing.get(body.key);
       return kept ? { ...kept, node: body.node } : body;
     });
+    const nextKeys = new Set(next.map((body) => body.key));
+    const departed = bodiesRef.current.filter((body) => !nextKeys.has(body.key));
     const fresh = next.length !== bodiesRef.current.length || bodiesRef.current.length === 0;
     bodiesRef.current = next;
+    const stamp = (leaveStampRef.current += 1);
+    setLeaving(departed);
+    if (departed.length > 0) {
+      window.setTimeout(() => {
+        if (leaveStampRef.current === stamp) setLeaving([]);
+      }, prefersReducedMotion() ? 0 : 200);
+    }
     if (fresh) {
       const box = boxRef.current;
       settle(
@@ -315,9 +338,14 @@ export function ExploreWorkspace({
       // Back into normalized, aspect-corrected units to ask about the spring.
       const normalized = Math.hypot((dx / Math.max(w, 1)) * aspect, dy / Math.max(h, 1));
       const bow = sagOf(normalized) * pixels * sideOf(id);
-      const midX = (from.x + to.x) / 2 - (dy / pixels) * bow;
-      const midY = (from.y + to.y) / 2 + (dx / pixels) * bow;
-      const d = `M${from.x.toFixed(1)} ${from.y.toFixed(1)} Q${midX.toFixed(1)} ${midY.toFixed(1)} ${to.x.toFixed(1)} ${to.y.toFixed(1)}`;
+      const flex = bow * 0.72 * sideOf(`${id}:flex`);
+      const nx = -dy / pixels;
+      const ny = dx / pixels;
+      const c1x = from.x + dx * 0.28 + nx * bow;
+      const c1y = from.y + dy * 0.28 + ny * bow;
+      const c2x = from.x + dx * 0.72 + nx * flex;
+      const c2y = from.y + dy * 0.72 + ny * flex;
+      const d = `M${from.x.toFixed(1)} ${from.y.toFixed(1)} C${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${to.x.toFixed(1)} ${to.y.toFixed(1)}`;
       line.setAttribute("d", d);
       glowElsRef.current.get(id)?.setAttribute("d", d);
     }
@@ -396,14 +424,28 @@ export function ExploreWorkspace({
     return () => cancelAnimationFrame(frame);
   }, [clustered, paint]);
 
+  const degree = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const edge of edges) {
+      const from = nodeKey(edge.from);
+      const to = nodeKey(edge.to);
+      out.set(from, (out.get(from) ?? 0) + 1);
+      out.set(to, (out.get(to) ?? 0) + 1);
+    }
+    return out;
+  }, [edges]);
+
   const drawnEdges = useMemo(() => {
-    const present = new Set(bodiesRef.current.map((body) => body.key));
+    const present = new Set([
+      ...bodiesRef.current.map((body) => body.key),
+      ...leaving.map((body) => body.key),
+    ]);
     // Only edges with both ends on screen. A line to nothing is worse than a
     // missing line, because it looks like the node is somewhere off-view.
     return edges.filter(
       (edge) => present.has(nodeKey(edge.from)) && present.has(nodeKey(edge.to)),
     );
-  }, [edges, labelTick]);
+  }, [edges, labelTick, leaving]);
 
   const neighboursOf = useCallback(
     (node: NodeRef): NodeSheetNeighbour[] =>
@@ -428,16 +470,15 @@ export function ExploreWorkspace({
   }, [clustered]);
 
   useEffect(() => {
-    if (!filterOpen && !searchOpen) return;
+    if (!searchOpen) return;
     const onPointer = (event: PointerEvent) => {
-      if (!chromeRef.current?.contains(event.target as Node)) {
-        setFilterOpen(false);
-        setSearchOpen(false);
-      }
+      const target = event.target as Node;
+      if (chromeRef.current?.contains(target) || findRef.current?.contains(target)) return;
+      setSearchOpen(false);
     };
     document.addEventListener("pointerdown", onPointer);
     return () => document.removeEventListener("pointerdown", onPointer);
-  }, [filterOpen, searchOpen]);
+  }, [searchOpen]);
 
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus();
@@ -445,7 +486,6 @@ export function ExploreWorkspace({
 
   useEffect(() => {
     if (active) return;
-    setFilterOpen(false);
     setSearchOpen(false);
   }, [active]);
 
@@ -496,12 +536,6 @@ export function ExploreWorkspace({
 
   const labels = clustered && clusterReady ? frozenLabels : [];
 
-  const counts = useMemo(() => {
-    const out = new Map<NodeType, number>();
-    for (const node of nodes) out.set(node.type, (out.get(node.type) ?? 0) + 1);
-    return out;
-  }, [nodes]);
-
   const select = (node: NodeRef, el: HTMLElement | null) => {
     setSheetFrom(el?.getBoundingClientRect() ?? null);
     setSelected(node);
@@ -529,107 +563,21 @@ export function ExploreWorkspace({
       <div data-morph-id="idle" />
       <div data-morph-id="tools">
         <div className="lc-explore-chrome-tools" ref={chromeRef}>
-          <form
-            className={searchOpen ? "lc-explore-search-morph is-open" : "lc-explore-search-morph"}
-            onSubmit={(event) => {
-              event.preventDefault();
-              setQuery(queryDraft.trim());
-              setSearchOpen(false);
-            }}
+          <button
+            type="button"
+            className={
+              searchOpen || query.trim() || kinds.length > 0
+                ? "lc-lined-toggle lc-tip-target is-active"
+                : "lc-lined-toggle lc-tip-target"
+            }
+            aria-pressed={searchOpen}
+            aria-label={searchOpen ? "Hide search" : "Find a workspace"}
+            data-tip={searchOpen ? "Hide search" : "Find"}
+            data-tip-placement="top"
+            onClick={() => setSearchOpen((open) => !open)}
           >
-            <input
-              ref={searchInputRef}
-              type="search"
-              value={queryDraft}
-              placeholder="Find by title"
-              aria-label="Find a workspace by title"
-              tabIndex={searchOpen ? 0 : -1}
-              onChange={(event) => {
-                setQueryDraft(event.target.value);
-                setQuery(event.target.value);
-              }}
-            />
-            {queryDraft ? (
-              <button
-                type="button"
-                className="lc-explore-search-clear"
-                aria-label="Clear the search"
-                onClick={() => {
-                  setQueryDraft("");
-                  setQuery("");
-                  searchInputRef.current?.focus();
-                }}
-              >
-                ×
-              </button>
-            ) : null}
-            <button
-              type={searchOpen ? "submit" : "button"}
-              className="lc-lined-toggle lc-tip-target"
-              aria-label={searchOpen ? "Search" : "Find a workspace"}
-              data-tip={searchOpen ? "Search" : "Find"}
-              data-tip-placement="top"
-              onClick={() => {
-                if (searchOpen) return;
-                setFilterOpen(false);
-                setSearchOpen(true);
-              }}
-            >
-              <SearchIcon />
-            </button>
-          </form>
-
-          <div className="lc-explore-filter">
-            <button
-              type="button"
-              className={
-                filterOpen || kinds.length > 0
-                  ? "lc-lined-toggle lc-tip-target is-active"
-                  : "lc-lined-toggle lc-tip-target"
-              }
-              aria-expanded={filterOpen}
-              aria-label="Filter by kind"
-              data-tip="Kinds"
-              data-tip-placement="top"
-              onClick={() => {
-                setSearchOpen(false);
-                setFilterOpen((on) => !on);
-              }}
-            >
-              <FilterIcon />
-            </button>
-            {filterOpen ? (
-              <div className="lc-explore-filter-pop" role="listbox" aria-label="Kinds" aria-multiselectable="true">
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={kinds.length === 0}
-                  className={kinds.length === 0 ? "lc-explore-chip is-active" : "lc-explore-chip"}
-                  onClick={() => setKinds([])}
-                >
-                  All
-                  <span className="lc-explore-chip-count">{nodes.length}</span>
-                </button>
-                {CLUSTERS.filter((cluster) => (counts.get(cluster.type) ?? 0) > 0).map((cluster) => {
-                  const on = kinds.includes(cluster.type);
-                  return (
-                    <button
-                      key={cluster.type}
-                      type="button"
-                      role="option"
-                      aria-selected={on}
-                      className={on ? "lc-explore-chip is-active" : "lc-explore-chip"}
-                      onClick={() => toggleKind(cluster.type)}
-                    >
-                      <span className="lc-explore-chip-dot" style={{ background: TINT[cluster.type] }} />
-                      {cluster.label}
-                      <span className="lc-explore-chip-count">{counts.get(cluster.type)}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
+            <SearchIcon />
+          </button>
 
           <button
             type="button"
@@ -674,13 +622,68 @@ export function ExploreWorkspace({
         note is called gradients" and "which of my books talks about
         gradients" have almost nothing to do with each other.
       */}
-      {client && <LibraryAsk client={client} onOpenHash={onOpenHash} />}
       <div className="lc-explore-stage" ref={hostRef}>
+        <form
+          ref={findRef}
+          className={searchOpen ? "lc-explore-find is-open" : "lc-explore-find"}
+          onSubmit={(event) => event.preventDefault()}
+        >
+          <div className="lc-explore-find-kinds" role="group" aria-label="Filter by kind">
+            {CLUSTERS.map((cluster) => {
+              const on = kinds.includes(cluster.type);
+              return (
+                <button
+                  key={cluster.type}
+                  type="button"
+                  className={on ? "is-filter" : undefined}
+                  aria-pressed={on}
+                  aria-label={cluster.label}
+                  onClick={() => toggleKind(cluster.type)}
+                >
+                  <span className="lc-explore-chip-dot" style={{ background: TINT[cluster.type] }} />
+                  {KIND_SHORT[cluster.type]}
+                </button>
+              );
+            })}
+          </div>
+          <div className="lc-explore-find-field">
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={queryDraft}
+              placeholder="Search catalog"
+              aria-label="Find a workspace by title"
+              tabIndex={searchOpen ? 0 : -1}
+              onChange={(event) => {
+                setQueryDraft(event.target.value);
+                setQuery(event.target.value);
+              }}
+            />
+            {queryDraft ? (
+              <button
+                type="button"
+                className="lc-explore-search-clear"
+                aria-label="Clear the search"
+                tabIndex={searchOpen ? 0 : -1}
+                onClick={() => {
+                  setQueryDraft("");
+                  setQuery("");
+                  searchInputRef.current?.focus();
+                }}
+              >
+                ×
+              </button>
+            ) : null}
+            <span className="lc-explore-find-glass" aria-hidden>
+              <SearchIcon />
+            </span>
+          </div>
+        </form>
         {showing && chromeHost && (active || inBoardStack)
           ? createPortal(exploreChrome, chromeHost)
           : null}
 
-        {bodiesRef.current.length === 0 ? (
+        {bodiesRef.current.length === 0 && leaving.length === 0 ? (
           <p className="lc-explore-empty">
             {nodes.length === 0
               ? "Nothing in the library yet. Write a note, or open a document to annotate."
@@ -711,6 +714,8 @@ export function ExploreWorkspace({
                 {drawnEdges.map((edge) => {
                   const touched =
                     !selected || sameNode(edge.from, selected) || sameNode(edge.to, selected);
+                  const fading =
+                    leaving.some((body) => sameNode(body.node, edge.from) || sameNode(body.node, edge.to));
                   return (
                     <path
                       key={edge.id}
@@ -718,7 +723,7 @@ export function ExploreWorkspace({
                         if (el) glowElsRef.current.set(edge.id, el);
                         else glowElsRef.current.delete(edge.id);
                       }}
-                      className={`lc-explore-beam is-${edge.kind}${touched ? "" : " is-dim"}`}
+                      className={`lc-explore-beam is-${edge.kind}${touched ? "" : " is-dim"}${fading ? " is-leaving" : ""}`}
                     />
                   );
                 })}
@@ -728,6 +733,8 @@ export function ExploreWorkspace({
                 {drawnEdges.map((edge) => {
                   const touched =
                     !selected || sameNode(edge.from, selected) || sameNode(edge.to, selected);
+                  const fading =
+                    leaving.some((body) => sameNode(body.node, edge.from) || sameNode(body.node, edge.to));
                   return (
                     <path
                       key={edge.id}
@@ -735,7 +742,7 @@ export function ExploreWorkspace({
                         if (el) edgeElsRef.current.set(edge.id, el);
                         else edgeElsRef.current.delete(edge.id);
                       }}
-                      className={`lc-explore-beam is-${edge.kind}${touched ? "" : " is-dim"}`}
+                      className={`lc-explore-beam is-${edge.kind}${touched ? "" : " is-dim"}${fading ? " is-leaving" : ""}`}
                     />
                   );
                 })}
@@ -753,7 +760,12 @@ export function ExploreWorkspace({
               ))}
 
             <div className="lc-explore-nodes">
-              {bodiesRef.current.map((body) => {
+              {[
+                ...bodiesRef.current.map((body) => ({ body, fading: false })),
+                ...leaving
+                  .filter((body) => !bodiesRef.current.some((live) => live.key === body.key))
+                  .map((body) => ({ body, fading: true })),
+              ].map(({ body, fading }) => {
                 const key = body.key;
                 const isSelected = selected ? sameNode(body.node, selected) : false;
                 const dim = Boolean(selected) && !isSelected && !neighbourKeys.has(key);
@@ -772,15 +784,19 @@ export function ExploreWorkspace({
                       isSelected ? "is-selected" : "",
                       dim ? "is-dim" : "",
                       live ? "is-here" : "",
+                      fading ? "is-leaving" : "",
                       isUnresolved(body.node) ? "is-missing" : "",
                     ]
                       .filter(Boolean)
                       .join(" ")}
-                    style={{ ["--lc-node-tint" as string]: TINT[body.node.type] }}
+                    style={{
+                      ["--lc-node-tint" as string]: TINT[body.node.type],
+                      ["--lc-node-size" as string]: `${nodeDiameter(degree.get(key) ?? 0)}px`,
+                    }}
                     aria-pressed={isSelected}
                     onContextMenu={(event) => event.preventDefault()}
                     onPointerDown={(event) => {
-                      if (event.button !== 0) return;
+                      if (fading || event.button !== 0) return;
                       dragNodeRef.current = {
                         key,
                         pointerId: event.pointerId,
@@ -819,6 +835,7 @@ export function ExploreWorkspace({
                       skipNodeClickRef.current = false;
                     }}
                     onClick={(event) => {
+                      if (fading) return;
                       if (skipNodeClickRef.current) {
                         skipNodeClickRef.current = false;
                         return;
@@ -843,7 +860,6 @@ export function ExploreWorkspace({
           node={selected}
           from={sheetFrom ?? { left: innerWidthSafe() / 2, top: 120, width: 0, height: 0 }}
           neighbours={neighboursOf(selected)}
-          spec={specOf(selected, neighboursOf(selected).length)}
           tint={TINT[selected.type]}
           canOpenInNewTab={canOpenInNewTab(selected)}
           onOpen={() => {
@@ -860,10 +876,6 @@ export function ExploreWorkspace({
             const el = nodeElsRef.current.get(nodeKey(node));
             setSheetFrom(el?.getBoundingClientRect() ?? sheetFrom);
             setSelected(node);
-          }}
-          onUnlink={(edgeId) => {
-            onUnlink?.(edgeId);
-            setEdges((rows) => rows.filter((row) => row.id !== edgeId));
           }}
           onRename={onRename ? (title) => onRename(selected, title) : undefined}
           onClose={() => setSelected(null)}
@@ -887,40 +899,11 @@ function innerWidthSafe(): number {
   return typeof window === "undefined" ? 1024 : window.innerWidth;
 }
 
-function specOf(node: NodeRef, links: number): Array<[string, string]> {
-  const rows: Array<[string, string]> = [];
-  const kind = CLUSTERS.find((cluster) => cluster.type === node.type)?.label ?? node.type;
-  rows.push(["Kind", kind]);
-  if (node.type === "practice") {
-    const [dataset, ...rest] = node.id.split("/");
-    rows.push(["Dataset", dataset ?? node.id]);
-    rows.push(["Problem", rest.join("/") || node.id]);
-  } else if (node.type === "web") {
-    try {
-      rows.push(["Host", new URL(node.id).host]);
-    } catch {
-      rows.push(["Address", node.id]);
-    }
-  } else if (node.parent) {
-    rows.push(["On", node.parent.id]);
-  }
-  rows.push(["Links", String(links)]);
-  return rows;
-}
-
 function SearchIcon() {
   return (
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden>
       <circle cx="11" cy="11" r="6.5" />
       <path d="m16 16 4.5 4.5" />
-    </svg>
-  );
-}
-
-function FilterIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M4 6h16M7 12h10M10 18h4" />
     </svg>
   );
 }
