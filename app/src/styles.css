@@ -1807,6 +1807,19 @@ input[type="checkbox"] {
   position: relative;
 }
 
+/* Same clock as the agent panel clip, so the hole and the ink move together. */
+.lc-app:not(.lc-mobile) .lc-main {
+  transition:
+    margin-right 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    margin-left 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Closed layout is width:100%. That length cannot ease, so it snapped the
+   page to full size on the way out. Stay on the flex width until the margin lands. */
+body[data-lc-panel-motion] .lc-app:not(.lc-mobile):not(.lc-app-agent-open) .lc-main {
+  width: auto;
+}
+
 .lc-canvas-wrap {
   position: relative;
   flex: 1;

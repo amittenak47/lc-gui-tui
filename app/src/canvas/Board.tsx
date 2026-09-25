@@ -7381,14 +7381,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const onPanelResize = (event: Event) => {
       const bounds = pageBoundsRef.current, camera = liveCameraRef.current;
       if (!bounds || !camera || !board.offsetWidth || !board.offsetHeight) return;
+      const main = board.closest(".lc-main");
+      const app = board.closest(".lc-app");
+      let viewWidth = board.clientWidth;
+      if (main instanceof HTMLElement && app instanceof HTMLElement) {
+        const agent = Number.parseFloat(getComputedStyle(app).getPropertyValue("--lc-agent-width")) || 520;
+        const margins = getComputedStyle(main);
+        const current = (Number.parseFloat(margins.marginLeft) || 0) + (Number.parseFloat(margins.marginRight) || 0);
+        const target = app.classList.contains("lc-app-agent-open") ? agent : 0;
+        viewWidth = Math.max(1, board.clientWidth - (target - current));
+      }
       const measured = measureChromeInsets(board, toolbarHeightRef.current, mapChromeHiddenRef.current, false);
       const inset = { top: measured.top + safeCssPx("--lc-safe-top"), bottom: measured.bottom + safeCssPx("--lc-safe-bottom"),
         left: measured.left + safeCssPx("--lc-safe-left"), right: measured.right + safeCssPx("--lc-safe-right") };
-      const input = { box: bounds, inset, viewWidth: board.clientWidth,
+      const input = { box: bounds, inset, viewWidth,
         prevZoom: camera.zoom, prevScrollX: camera.scrollX, prevScrollY: camera.scrollY, zoomMin: FIT_ZOOM_MIN, zoomMax: ZOOM_MAX };
-      const target = isDrawPageRegion(mobileRegionRef.current)
+      const targetCamera = isDrawPageRegion(mobileRegionRef.current)
         ? drawPageRecentreCamera(input) : documentCameraAfterViewportChange(input);
-      panelMotion.start(board, camera, target, camera.offsetLeft, (event as CustomEvent<{ duration: number }>).detail.duration);
+      panelMotion.start(board, camera, targetCamera, camera.offsetLeft, (event as CustomEvent<{ duration: number }>).detail.duration);
     };
     window.addEventListener(PANEL_RESIZE_EVENT, onPanelResize);
     window.addEventListener(SPLIT_RESIZE_EVENT, onSplitResize);
