@@ -11,13 +11,12 @@ const DEFAULT_BLANK_LINES = 16;
 /** Top padding + language chip breathing room inside the frame. */
 const CODE_CHROME_CANVAS = 40;
 /**
- * Space reserved above the Monaco dock, in scene units.
+ * Space reserved above the Monaco dock, in screen pixels.
  *
- * The statement page starts its title 36px down. The dock already insets
- * about 8, so 28 lands the first code line on that same line and leaves the
- * page-title animation clear of the editor.
+ * Kept off the camera zoom so the gap under the Solution tabs stays the same
+ * when the window changes size. 36 matches the statement page's top padding.
  */
-export const CODE_LABEL_RESERVE = 28;
+export const CODE_LABEL_RESERVE = 36;
 
 /** Trim trailing whitespace, then append blank lines for the implementation. */
 export function ensureCodingRoom(source: string, blankLines = DEFAULT_BLANK_LINES): string {

@@ -185,7 +185,6 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   const exiting = Boolean(props.exiting);
   const error = props.error ?? null;
   const isLeave = props.mode === "leave";
-  const dirty = props.mode !== "leave" || props.dirty !== false;
   // Only the entry dialog lists documents — leaving one is a save/discard
   // decision about the ink in hand, not a moment to go opening another.
   const entry = props.mode === "entry" ? props : null;
@@ -294,37 +293,17 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
       }}
     >
       <div
-        className={`lc-settings-modal lc-attempt-modal lc-library-holds${isLeave ? "" : ` lc-library-menu ${isWeb ? "lc-library-web" : "lc-library-annotate"}`}`}
+        className={`lc-settings-modal lc-attempt-modal lc-library-holds lc-library-menu ${isWeb ? "lc-library-web" : "lc-library-annotate"}`}
         role="dialog"
         aria-modal="true"
         aria-label={isLeave ? "Leave document?" : isWeb ? "Web pad" : "Document pad"}
       >
         <div className="lc-settings-head">
           <h2>{isLeave ? "Leave document?" : section === "open" && !pickingRecent ? "Open" : section === "new" ? "New" : section === "export" ? "Export" : section === "more" ? "More" : section === "sets" ? "Annotations" : pickingRecent ? "Recents" : isWeb ? "Web" : "Annotate"}</h2>
-          {(isLeave || saveTitle !== null || newTitle !== null) && <p className="lc-muted">
+          {(saveTitle !== null || newTitle !== null) && <p className="lc-muted">
             {saveTitle !== null
               ? "Name this pad. Hold Save to keep the suggested name."
-              : newTitle !== null
-              ? "Name the note. It lives in this app — there is no file on disk until you export it."
-              : pickingSnapshots
-              ? "Hold a snapshot to roll this file back. Latest autosave is the live library entry."
-              : pickingRecent
-              ? tapArmed
-                ? "Hold a document to reopen it. Tap a bin to remove its annotations."
-                : "Hold a document to reopen it, or hold its bin to remove its annotations."
-              : isLeave
-                ? dirty
-                  ? "Discard throws away this session's annotations. The file itself is never changed. Hold to confirm."
-                  : "Nothing annotated since the last save — leaving changes nothing."
-                : isWeb
-                  ? allowSave
-                    ? "Save these marks, open another page, or reopen one you kept."
-                    : "Open a page to read and mark up, or reopen one you kept."
-                : section === "main"
-                  ? currentDoc ? annotateDocLabel(currentDoc) : "Open a document or write a new note."
-                  : section === "sets" ? "Keep separate sets of notes on the same file."
-                  : section === "more" ? "History and annotation backups."
-                  : "Open a file or return to a recent document."}
+              : "Name the note. It lives in this app — there is no file on disk until you export it."}
           </p>}
         </div>
 
@@ -509,34 +488,10 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
           ) : (
             <div className="lc-settings-choice">
               {isLeave ? (
-                <>
-                  <HoldButton holdMs={LIBRARY_HOLD_MS}
-                    label="Save"
-                    className="lc-hold-choice"
-                    disabled={locked}
-                    onConfirm={beginSave}
-                    resetKey={error}
-                  >
-                    <strong>Save annotations</strong>
-                    <span className="lc-muted">
-                      Keep this ink with “{(props as LeaveProps).docName}”.
-                    </span>
-                  </HoldButton>
-                  {/* Discard, or Exit when there is nothing to discard — see
-                      WhiteboardDialog for why the label moves. */}
-                  <HoldButton holdMs={LIBRARY_HOLD_MS}
-                    label={dirty ? "Discard" : "Exit"}
-                    className={
-                      dirty ? "lc-hold-choice lc-hold-danger" : "lc-hold-choice"
-                    }
-                    disabled={locked}
-                    onConfirm={() => props.onChoose("discard")}
-                    resetKey={error}
-                  >
-                    <strong>{dirty ? "Discard annotations" : "Exit"}</strong>
-                    <span className="lc-muted">The file on disk is left alone.</span>
-                  </HoldButton>
-                </>
+                <div className="lc-document-menu">
+                  <LibraryMenuRow label="Save" disabled={locked} onConfirm={beginSave} />
+                  <LibraryMenuRow label="Discard" disabled={locked} onConfirm={() => props.onChoose("discard")} />
+                </div>
               ) : (
                 <div className="lc-document-menu">
                   {section === "main" && <>
@@ -593,7 +548,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
             </button>
           )}
           <button type="button" className="lc-secondary" disabled={locked} onClick={props.onCancel}>
-            {isLeave ? "Keep annotating" : "Cancel"}
+            Cancel
           </button>
         </div>
       </div>

@@ -2521,10 +2521,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // Overlay is positioned inside `.lc-canvas-wrap`, which matches the Excalidraw
     // viewport — do not add page offsets (those are for clientX/clientY only).
     const inset = Math.max(6, Math.round(8 * zoom));
-    // Leave room for the CODE label + hint above Monaco (same chrome as Approach).
-    const headerReserve = Math.round(codeLabelReserve(readingSizeRef.current) * zoom);
+    // Screen pixels, not scene units. Width-fit zoom changes with the window,
+    // and scaling this reserve made the gap above the editor grow and shrink.
+    const headerReserve = codeLabelReserve(readingSizeRef.current);
     const rawLeft = (frame.x + scrollX) * zoom + inset;
-    const rawTop = (frame.y + scrollY) * zoom + inset + headerReserve;
+    const rawTop = (frame.y + scrollY) * zoom + headerReserve;
     const rawWidth = Math.max(0, num(frame.width, REGIONS.code.w) * zoom - inset * 2);
     const rawHeight = Math.max(
       0,
