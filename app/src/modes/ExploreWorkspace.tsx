@@ -29,7 +29,7 @@ import { BackgroundPalette } from "../components/BackgroundPalette";
 import { MorphBar } from "../components/MorphBar";
 import { useShell } from "../shellContext";
 import type { LcClient } from "../api/client";
-import {looseEdgePath,edgePhase} from "./exploreEdge";
+import {stepEdgeRope,edgeRopePath,type EdgeRope} from "./exploreEdge";
 import { NodeSheet, type NodeSheetNeighbour } from "./NodeSheet";
 import {
   CLUSTERS,
@@ -159,7 +159,8 @@ export function ExploreWorkspace({
   const hostRef = useRef<HTMLDivElement | null>(null);
   /** Edges by id, for the paint loop, which must not depend on React state. */
   const edgeIndexRef = useRef(new Map<string, Edge>());
-  const edgePhasesRef = useRef(new Map<string,number>());
+  const edgeRopesRef = useRef(new Map<string,EdgeRope>());
+  const edgeBoxRef = useRef("");
   /** The same edges as springs, for the simulation. */
   const linksRef = useRef<Link[]>([]);
   const bodiesRef = useRef<Body[]>([]);
@@ -195,7 +196,7 @@ export function ExploreWorkspace({
 
   useEffect(() => {
     edgeIndexRef.current = new Map(edges.map((edge) => [edge.id, edge]));
-    edgePhasesRef.current = new Map(edges.map(edge=>[edge.id,edgePhase(edge.id)]));
+    for(const id of edgeRopesRef.current.keys())if(!edgeIndexRef.current.has(id))edgeRopesRef.current.delete(id);
     linksRef.current = edges.map((edge) => ({
       a: nodeKey(edge.from),
       b: nodeKey(edge.to),
@@ -325,16 +326,19 @@ export function ExploreWorkspace({
       if (el) el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -50%)`;
     }
     for(const body of leavingRef.current) if(!at.has(body.key)) at.set(body.key,{x:body.x*w,y:body.y*h,vx:0,vy:0});
-    const aspect = h > 0 ? w / h : 1.6;
-    const edgeTime=prefersReducedMotion()?0:performance.now()/1000;
+    const boxKey=`${w}:${h}`;
+    if(edgeBoxRef.current!==boxKey){edgeRopesRef.current.clear();edgeBoxRef.current=boxKey;}
+    const reduced=prefersReducedMotion(),edgeTime=performance.now()/1000;
+    for(const id of edgeRopesRef.current.keys())if(!edgeElsRef.current.has(id))edgeRopesRef.current.delete(id);
     for (const [id, line] of edgeElsRef.current) {
       const edge = edgeIndexRef.current.get(id);
       if (!edge) continue;
       const from = at.get(nodeKey(edge.from));
       const to = at.get(nodeKey(edge.to));
       if (!from || !to) continue;
-      const normalized=Math.hypot((to.x-from.x)/Math.max(w,1)*aspect,(to.y-from.y)/Math.max(h,1));
-      const d=looseEdgePath(from,to,edgePhasesRef.current.get(id)??0,edgeTime,normalized);
+      const rope=stepEdgeRope(from,to,edgeRopesRef.current.get(id),edgeTime,reduced);
+      edgeRopesRef.current.set(id,rope);
+      const d=edgeRopePath(rope);
       line.setAttribute("d", d);
       glowElsRef.current.get(id)?.setAttribute("d", d);
     }

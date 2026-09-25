@@ -45,7 +45,7 @@ try {
   const edgeBefore=await evaluate(`document.querySelector('.lc-explore-beam').getAttribute('d')`);
   await sleep(500);
   const edgeAfter=await evaluate(`document.querySelector('.lc-explore-beam').getAttribute('d')`);
-  assert(edgeBefore!==edgeAfter && (edgeAfter.match(/ C/g)||[]).length===8,'Edges did not ripple through multiple bends');
+  assert(edgeBefore!==edgeAfter && (edgeAfter.match(/ C/g)||[]).length===8,'Moving endpoints did not update the rope');
   const before=await positions();
   await evaluate(`document.querySelector('[aria-label="Find a workspace"]').click()`);await sleep(320);
   await evaluate(`document.querySelector('[aria-label="Whiteboards"]').click()`);await sleep(35);
@@ -58,7 +58,18 @@ try {
   assert(distance(early[key],after[key])>1 && distance(middle[key],after[key])>0.1,'Filter jumped to settled positions');
   await evaluate(`document.querySelector('[aria-label="Whiteboards"]').click()`);await sleep(650);
   assert(await evaluate(`document.querySelectorAll('.lc-explore-node').length`)===12,'Clearing filter lost nodes');
-  await evaluate(`document.querySelector('.lc-explore-node.is-whiteboard').click()`);await sleep(350);
+  const dragStart=await evaluate(`(()=>{const r=document.querySelector('.lc-explore-node.is-whiteboard').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+  await send('Input.dispatchMouseEvent',{type:'mouseMoved',...dragStart});
+  await send('Input.dispatchMouseEvent',{type:'mousePressed',...dragStart,button:'left',clickCount:1});
+  for(let i=1;i<=12;i++){
+    await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:dragStart.x+100*i/12,y:dragStart.y-150*i/12,buttons:1});await sleep(12);
+  }
+  const bend=await evaluate(`Math.max(...[...document.querySelectorAll('.lc-explore-beam')].map(el=>{const n=el.getAttribute('d').match(/-?[0-9.]+/g).map(Number),x=n[0],y=n[1],dx=n.at(-2)-x,dy=n.at(-1)-y,len=Math.hypot(dx,dy)||1;let max=0;for(let i=2;i<n.length;i+=2)max=Math.max(max,Math.abs(dx*(n[i+1]-y)-dy*(n[i]-x))/len);return max;}))`);
+  assert(bend>4,`Drag left the edges rigid: ${bend}`);
+  await send('Input.dispatchMouseEvent',{type:'mouseReleased',x:dragStart.x+100,y:dragStart.y-150,button:'left',clickCount:1});await sleep(1200);
+  // The browser click following a drag is intentionally suppressed.
+  await evaluate(`document.querySelector('.lc-explore-node.is-annotate').click()`);await sleep(350);
+
   assert(await evaluate(`!!document.querySelector('.lc-node-sheet-actions [aria-label="Open"]') && !document.querySelector('.lc-node-sheet-foot') && !!document.querySelector('.lc-node-link-detail')`),'Node sheet did not retain inline navigation and link descriptions');
   const shot=await send('Page.captureScreenshot',{format:'png'});await writeFile(resolve(profile,'explore-panel.png'),Buffer.from(shot.data,'base64'));
   await evaluate(`document.querySelector('.lc-node-sheet-actions [aria-label="Open in new tab"]').click()`);assert(await evaluate('window.openedNew'),'New tab action lost');
@@ -69,6 +80,6 @@ try {
   const reduced=await evaluate(`([...document.querySelectorAll('.lc-explore-node')]).every(n=>n.style.transform.includes('translate3d')) && document.querySelectorAll('.lc-explore-node').length===4`);
   assert(reduced,'Reduced motion nodes were not placed');
   assert(!exceptions.length,JSON.stringify(exceptions));
-  console.log(JSON.stringify({before:before[key],early:early[key],middle:middle[key],after:after[key],reduced,artifacts:profile}));
+  console.log(JSON.stringify({before:before[key],early:early[key],middle:middle[key],after:after[key],dragBend:bend,reduced,artifacts:profile}));
 
 }finally{socket?.close();for(const child of children.reverse())child.kill();}
