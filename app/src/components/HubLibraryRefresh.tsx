@@ -43,8 +43,7 @@ export function HubLibraryRefresh({ onRefresh }: { onRefresh: HubLibraryRefreshA
       <strong>{pending ? "Pulling…" : "Pull"}</strong>
     </HoldButton>
     {(pending || report || message) && <section className="lc-hub-pull-catalog lc-artifact-picker-catalog" aria-label="Hub pull results">
-      <div className="lc-hub-pull-title"><strong role="status">{pending ? "Pulling…" : failed ? "Pull failed" : "Pull results"}</strong>
-      </div>
+      {(pending || failed) && <div className="lc-hub-pull-title"><strong role="status">{pending ? "Pulling…" : "Pull failed"}</strong></div>}
       {message && <span>{message}</span>}
       {report && <>
         <div className="lc-artifact-picker-sources" role="group" aria-label="Filter pull results">

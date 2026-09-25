@@ -1,4 +1,4 @@
-.lc-hub-pull-catalog { padding-top: 8px; border-top: 1px solid var(--chrome-edge); font-size: 12px; }
+.lc-hub-pull-catalog { font-size: 12px; }
 .lc-hub-pull-catalog .lc-artifact-picker-list { max-height: 180px; overscroll-behavior: contain; }
 .lc-hub-pull-catalog .lc-hub-pull-file { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
 .lc-hub-pull-catalog .lc-hub-pull-reason { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
