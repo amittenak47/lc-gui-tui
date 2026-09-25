@@ -6714,9 +6714,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           ensureLinedPair(linedFirstFitZoomRef.current);
         }
 
-        const slackX = drawPage ? 0 : Math.max(0, availWidth - boxWidth * zoom);
+        const problemSheet = page != null && page in REGIONS && page !== "agent";
+        const slackX = drawPage || problemSheet ? 0 : Math.max(0, availWidth - boxWidth * zoom);
         const slackY =
-          isScratchPage || widthOnly
+          isScratchPage || widthOnly || problemSheet
             ? 0
             : Math.max(0, availHeight - boxHeight * zoom);
         fittingCameraRef.current = true;
@@ -6733,7 +6734,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             viewHeight,
             { minX, minY, maxX, maxY },
             inset,
-            drawPage ? (mode === "recentre" ? "keep" : "start") : "center",
+            drawPage ? (mode === "recentre" ? "keep" : "start") : problemSheet ? "start" : "center",
           );
           nextScrollX = clamped.scrollX;
           nextScrollY = clamped.scrollY;

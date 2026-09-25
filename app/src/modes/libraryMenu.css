@@ -46,7 +46,8 @@
 .lc-library-menu .lc-scratch-load-hold strong,
 .lc-library-menu .lc-hold-choice strong,
 .lc-library-menu .lc-library-subtitle { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lc-library-menu .lc-scratch-load-hold .lc-hold-reveal-label > strong { display: inline-block; width: auto; max-width: 20rem; font-size: 13px; }
+.lc-library-menu .lc-scratch-load-hold .lc-hold-reveal-label { align-self: stretch; width: 100%; min-width: 0; }
+.lc-library-menu .lc-scratch-load-hold .lc-hold-reveal-label > strong { display: block; width: auto; max-width: calc(100% - 2.75rem); font-size: 13px; }
 .lc-library-menu .lc-library-times { width: 100%; font-size: 12px; gap: 4px; font-variant-numeric: tabular-nums; }
 .lc-library-menu .lc-library-times > span { display: grid; grid-template-columns: 76px minmax(0, 1fr); column-gap: 10px; }
 .lc-library-menu .lc-scratch-load-lock.is-locked { color: var(--accent); }

@@ -11,13 +11,13 @@ const DEFAULT_BLANK_LINES = 16;
 /** Top padding + language chip breathing room inside the frame. */
 const CODE_CHROME_CANVAS = 40;
 /**
- * Space reserved above the Monaco dock.
+ * Space reserved above the Monaco dock, in scene units.
  *
- * Zero: this used to hold the CODE label and its hint, and with those gone it
- * was pure indent — the code started a hundred units down an otherwise empty
- * page and the first line sat below the fold on a phone.
+ * The statement page starts its title 36px down. The dock already insets
+ * about 8, so 28 lands the first code line on that same line and leaves the
+ * page-title animation clear of the editor.
  */
-export const CODE_LABEL_RESERVE = 0;
+export const CODE_LABEL_RESERVE = 28;
 
 /** Trim trailing whitespace, then append blank lines for the implementation. */
 export function ensureCodingRoom(source: string, blankLines = DEFAULT_BLANK_LINES): string {

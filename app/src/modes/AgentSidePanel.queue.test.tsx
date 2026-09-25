@@ -32,7 +32,7 @@ it("sends unquoted replies inside their thread and keeps independent questions i
   act(() => button("Question").click());
   submit();
   expect(send).toHaveBeenLastCalledWith("Follow up", expect.objectContaining({threadRootId: null, sessionId: "activity"}), "queue");
-  act(() => button("+ New session").click());
+  act(() => button("Ask").click());
   submit();
   const flags = send.mock.lastCall![1];
   expect(flags.sessionId).not.toBe("activity");

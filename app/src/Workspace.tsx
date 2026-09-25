@@ -151,7 +151,7 @@ import {
   whiteboardPageId,
   whiteboardSavedCamera,
 } from "./templates/whiteboard";
-import { MOBILE_REGION_ORDER, REGION_BLURB, REGIONS, type RegionId } from "./templates/regions";
+import { MOBILE_REGION_ORDER, REGIONS, type RegionId } from "./templates/regions";
 import { splitProblemKey } from "./util/datasetKey";
 import {
   addFootnote,
@@ -11711,7 +11711,6 @@ function RegionPager({
       </button>
       <div className="lc-pager-body">
         <span className="lc-pager-label">{REGIONS[active].label}</span>
-        <span className="lc-pager-blurb">{REGION_BLURB[active]}</span>
         <div className="lc-pager-dots" role="tablist" aria-label="Board pages">
           {MOBILE_REGION_ORDER.map((region) => (
             <button

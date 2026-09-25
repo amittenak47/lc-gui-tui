@@ -105,7 +105,7 @@ function pickerCopy(scope: ArtifactPickerScope): string {
   if (scope === "footnote") {
     return "Pin catalog items onto these footnotes. The same item can sit on several without copying it.";
   }
-  return "Owned by this pad. Attach the same item to several footnotes or threads, or pin one onto the chat as a reference.";
+  return "";
 }
 
 function kindLabel(kind: ArtifactKind): string {
@@ -396,7 +396,7 @@ export function ArtifactPicker({
         >
           <div className="lc-settings-head">
             <h2 id="lc-artifact-picker-title">Attachments</h2>
-            <p className="lc-muted">{pickerCopy(scope)}</p>
+            {pickerCopy(scope) ? <p className="lc-muted">{pickerCopy(scope)}</p> : null}
           </div>
           <div className="lc-settings-body">
             <form

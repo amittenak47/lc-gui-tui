@@ -1018,6 +1018,7 @@ export function AgentSidePanel({
   const newestSessionId = sessions.at(-1)?.id ?? null;
   const [pickedSessionId, setPickedSessionId] = useState<string | null>(null);
   const [newSessionId, setNewSessionId] = useState<string | null>(null);
+  const [arrivingSessionId, setArrivingSessionId] = useState<string | null>(null);
   const [seenNewestSession, setSeenNewestSession] = useState<string | null>(null);
   const pickedIsLive = pickedSessionId != null && sessions.some((session) => session.id === pickedSessionId);
   if (newestSessionId !== seenNewestSession || (pickedSessionId != null && !pickedIsLive)) {
@@ -1027,9 +1028,16 @@ export function AgentSidePanel({
   const activeSessionId = newSessionId ?? (pickedIsLive ? pickedSessionId : newestSessionId);
   useEffect(() => {
     if (newSessionId && sessions.some(session => session.id === newSessionId)) {
-      setPickedSessionId(newSessionId); setNewSessionId(null);
+      setArrivingSessionId(newSessionId);
+      setPickedSessionId(newSessionId);
+      setNewSessionId(null);
     }
   }, [newSessionId, sessions]);
+  useEffect(() => {
+    if (!arrivingSessionId) return;
+    const timer = window.setTimeout(() => setArrivingSessionId(null), 380);
+    return () => window.clearTimeout(timer);
+  }, [arrivingSessionId]);
   const sessionMessages = useMemo(
     () => organized.filter((message) => !message.deletedAt && (!activeSessionId || message.sessionId === activeSessionId)),
     [organized, activeSessionId],
@@ -1798,19 +1806,16 @@ export function AgentSidePanel({
           <div className={`lc-agent-sessions-col${sessionsHidden ? " is-closed" : ""}`}>
             <div className="lc-agent-sessions-fade" aria-hidden />
             <nav className="lc-agent-sessions" aria-label="Sessions" aria-hidden={sessionsHidden || undefined}>
-              <button type="button" className="lc-agent-session" disabled={sessionsHidden}
-                onClick={() => { setNewSessionId(`session-${crypto.randomUUID()}`); setOpenThreadId(null); setReplyTo(null); }}>
-                + New session
-              </button>
               {orderedSessions.length === 0 ? (
                 <p className="lc-agent-sessions-empty">No sessions</p>
-              ) : orderedSessions.map((session) => {
+              ) : null}
+              {orderedSessions.map((session) => {
                 const pinned = pinnedSessionIds.includes(session.id);
                 return (
                 <div
                   key={session.id}
                   data-status={session.status}
-                  className={`lc-agent-session-row${session.id === activeSessionId ? " is-active" : ""}${pinned ? " is-pinned" : ""}`}
+                  className={`lc-agent-session-row${session.id === activeSessionId ? " is-active" : ""}${pinned ? " is-pinned" : ""}${session.id === arrivingSessionId ? " is-arriving" : ""}`}
                 >
                   <HoldButton
                     className={`lc-agent-session lc-hold-danger${session.id === activeSessionId ? " is-active" : ""}`}
@@ -1847,6 +1852,17 @@ export function AgentSidePanel({
                 </div>
                 );
               })}
+              <div className={`lc-agent-session-row lc-agent-session-ask${newSessionId ? " is-active" : ""}`}>
+                <button
+                  type="button"
+                  className="lc-agent-session"
+                  disabled={sessionsHidden}
+                  onClick={() => { setNewSessionId(`session-${crypto.randomUUID()}`); setOpenThreadId(null); setReplyTo(null); }}
+                >
+                  <span className="lc-agent-session-name">Ask</span>
+                </button>
+                <span className="lc-agent-session-pin" aria-hidden />
+              </div>
             </nav>
           </div>
         <div

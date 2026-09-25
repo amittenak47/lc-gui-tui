@@ -13,7 +13,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 /** How long the pill lingers after the last page change. */
-const HOLD_MS = 1100;
+const HOLD_MS = 4100;
 
 export interface PageIndicatorHandle {
   /** Name the page just scrolled onto, restarting the fade. */
@@ -39,16 +39,13 @@ export const PageIndicator = forwardRef<PageIndicatorHandle, PageIndicatorProps>
     useImperativeHandle(
       ref,
       (): PageIndicatorHandle => ({
-        show(label, index, total, blurb) {
+        show(label, index, total) {
           const node = nodeRef.current;
           if (!node) return;
           const head = document.createElement("div");
           head.className = "lc-page-indicator-head";
           head.append(titleSpan(label), countSpan(`${index + 1} of ${total}`));
           node.replaceChildren(head);
-          if (blurb) {
-            node.append(blurbSpan(blurb));
-          }
           node.classList.add("is-visible");
           if (timerRef.current) window.clearTimeout(timerRef.current);
           timerRef.current = window.setTimeout(() => {
@@ -79,13 +76,6 @@ function titleSpan(label: string): HTMLSpanElement {
 function countSpan(text: string): HTMLSpanElement {
   const span = document.createElement("span");
   span.className = "lc-page-indicator-count";
-  span.textContent = text;
-  return span;
-}
-
-function blurbSpan(text: string): HTMLSpanElement {
-  const span = document.createElement("span");
-  span.className = "lc-page-indicator-blurb";
   span.textContent = text;
   return span;
 }

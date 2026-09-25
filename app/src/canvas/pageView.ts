@@ -1,7 +1,7 @@
 /**
  * One page at a time, like a PDF.
  *
- * On a tablet the board is paged: Problem & constraints, Code, Approach,
+ * On a tablet the board is paged: Problem, Code, Approach,
  * Complexity, Walkthrough. Fitting the viewport to one dashed frame was not
  * enough — the neighbouring frames still peeked in at the edges, and zooming
  * out put the whole stacked column back on screen. A page has to *be* a page.

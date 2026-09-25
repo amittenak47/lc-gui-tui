@@ -277,8 +277,7 @@ it("opens as a compact Settings card with enter motion, not a full-bleed sheet",
   expect(sheet.className).toContain("lc-server-gate-enter");
   expect(document.querySelector(".lc-artifact-picker-modal")).toBeTruthy();
   expect(document.querySelector(".lc-settings-modal")).toBeTruthy();
-  expect(sheet.textContent).toContain("Owned by this pad");
-  expect(sheet.textContent).toContain("pin one onto the chat as a reference");
+  expect(sheet.textContent).not.toContain("Owned by this pad");
   expect(sheet.textContent).not.toMatch(/\bMarks\b/);
   expect(adornment("Board")).toBeTruthy();
   expect(adornment("Note")).toBeTruthy();

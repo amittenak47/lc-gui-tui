@@ -125,7 +125,7 @@ export const MOBILE_REGION_ORDER: RegionId[] = [...STUDENT_REGION_ORDER, "agent"
 export const REGIONS: Record<RegionId, Region> = {
   constraints: {
     id: "constraints",
-    label: "Problem & constraints",
+    label: "Problem",
     x: 0,
     y: 0,
     // A measure, not a desk — the live frame is sized to the viewport, and this
