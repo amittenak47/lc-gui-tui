@@ -162,6 +162,9 @@ export function ExploreWorkspace({
   /** The same edges as springs, for the simulation. */
   const linksRef = useRef<Link[]>([]);
   const bodiesRef = useRef<Body[]>([]);
+  const filterMotionRef = useRef<{start:number;from:Map<string,Body>;to:Map<string,Body>}|null>(null);
+  const rememberedRef = useRef(new Map<string,Body>());
+  const leavingRef = useRef<Body[]>([]);
   const nodeElsRef = useRef(new Map<string, HTMLElement>());
   const edgeElsRef = useRef(new Map<string, SVGPathElement>());
   /** The blurred copy of each edge, drawn under its core. */
@@ -227,7 +230,10 @@ export function ExploreWorkspace({
    * narrowing the view nudges the map rather than throwing it in the air.
    */
   useEffect(() => {
-    const existing = new Map(bodiesRef.current.map((body) => [body.key, body]));
+    for(const body of bodiesRef.current) rememberedRef.current.set(body.key,{...body});
+    const knownKeys=new Set(nodes.map(nodeKey));
+    for(const key of rememberedRef.current.keys()) if(!knownKeys.has(key)) rememberedRef.current.delete(key);
+    const existing = rememberedRef.current;
     // Seeded as a set, so coverage is even, then survivors keep the position
     // and momentum they already had.
     const next = makeBodies(shown, nodeKey).map((body) => {
@@ -235,28 +241,27 @@ export function ExploreWorkspace({
       return kept ? { ...kept, node: body.node } : body;
     });
     const nextKeys = new Set(next.map((body) => body.key));
-    const departed = bodiesRef.current.filter((body) => !nextKeys.has(body.key));
-    const fresh = next.length !== bodiesRef.current.length || bodiesRef.current.length === 0;
+    const departed = [...new Map([...leavingRef.current,...bodiesRef.current].filter(body=>!nextKeys.has(body.key)).map(body=>[body.key,body])).values()];
+    const first = existing.size === 0;
     bodiesRef.current = next;
     const stamp = (leaveStampRef.current += 1);
+    leavingRef.current=departed;
     setLeaving(departed);
     if (departed.length > 0) {
       window.setTimeout(() => {
-        if (leaveStampRef.current === stamp) setLeaving([]);
-      }, prefersReducedMotion() ? 0 : 200);
+        if (leaveStampRef.current === stamp) {leavingRef.current=[];setLeaving([]);}
+      }, prefersReducedMotion() ? 0 : 340);
     }
-    if (fresh) {
-      const box = boxRef.current;
-      settle(
-        next,
-        clusterCentres(next.map((body) => body.node.type)),
-        clusteredRef.current,
-        box.h > 0 ? box.w / box.h : 1.6,
-        240,
-        linksRef.current,
-      );
-      paintRef.current();
+    const box = boxRef.current;
+    const targets=next.map(body=>({...body}));
+    settle(targets,clusterCentres(targets.map(body=>body.node.type)),clusteredRef.current,
+      box.h>0 ? box.w/box.h : 1.6,Math.max(8,Math.min(240,Math.floor(24000/Math.max(1,targets.length*targets.length)))),linksRef.current);
+    if(first || prefersReducedMotion()) {
+      bodiesRef.current=targets;filterMotionRef.current=null;
+    } else {
+      filterMotionRef.current={start:performance.now(),from:new Map(next.map(body=>[body.key,{...body}])),to:new Map(targets.map(body=>[body.key,body]))};
     }
+    paintRef.current();
     setLabelTick((tick) => tick + 1);
     // `shown` is rebuilt each render; its identity is not the signal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -307,16 +312,17 @@ export function ExploreWorkspace({
   const paint = useCallback(() => {
     const { w, h } = boxRef.current;
     if (w === 0 || h === 0) return;
-    const at = new Map<string, { x: number; y: number }>();
+    const at = new Map<string, { x: number; y: number; vx:number; vy:number }>();
     for (const body of bodiesRef.current) {
       const x = body.x * w;
       const y = body.y * h;
-      at.set(body.key, { x, y });
+      at.set(body.key, { x, y, vx:body.vx*w, vy:body.vy*h });
       const el = nodeElsRef.current.get(body.key);
       // `translate3d` rather than `left`/`top`: this runs every frame for every
       // node, and only the transform stays off the layout path.
       if (el) el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -50%)`;
     }
+    for(const body of leavingRef.current) if(!at.has(body.key)) at.set(body.key,{x:body.x*w,y:body.y*h,vx:0,vy:0});
     const aspect = h > 0 ? w / h : 1.6;
     for (const [id, line] of edgeElsRef.current) {
       const edge = edgeIndexRef.current.get(id);
@@ -338,11 +344,15 @@ export function ExploreWorkspace({
       // Back into normalized, aspect-corrected units to ask about the spring.
       const normalized = Math.hypot((dx / Math.max(w, 1)) * aspect, dy / Math.max(h, 1));
       const bow = sagOf(normalized) * pixels * sideOf(id);
-      const flex = bow * 0.72 * sideOf(`${id}:flex`);
+      // Each end has its own bend. Opposing handles form an S rather than
+      // forcing the whole link to bow to one side; motion pulls on both ends.
+      const velocityBend = (vx:number,vy:number)=>Math.max(-pixels*.28,Math.min(pixels*.28,(-dy*vx+dx*vy)/pixels*.18));
+      const startBend = bow + velocityBend(from.vx,from.vy);
+      const flex = -bow * .72 + velocityBend(to.vx,to.vy);
       const nx = -dy / pixels;
       const ny = dx / pixels;
-      const c1x = from.x + dx * 0.28 + nx * bow;
-      const c1y = from.y + dy * 0.28 + ny * bow;
+      const c1x = from.x + dx * 0.28 + nx * startBend;
+      const c1y = from.y + dy * 0.28 + ny * startBend;
       const c2x = from.x + dx * 0.72 + nx * flex;
       const c2y = from.y + dy * 0.72 + ny * flex;
       const d = `M${from.x.toFixed(1)} ${from.y.toFixed(1)} C${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${to.x.toFixed(1)} ${to.y.toFixed(1)}`;
@@ -396,14 +406,20 @@ export function ExploreWorkspace({
       const box = boxRef.current;
       const centres = clusterCentres(bodiesRef.current.map((body) => body.node.type));
       const aspect = box.h > 0 ? box.w / box.h : 1.6;
-      step(bodiesRef.current, centres, {
-        clustered: clusteredRef.current,
-        dt,
-        time: elapsed,
-        aspect,
-        links: linksRef.current,
-        pinnedKey: pinnedKeyRef.current,
-      });
+      const motion=filterMotionRef.current;
+      if(motion && !pinnedKeyRef.current) {
+        const t=Math.min(1,(now-motion.start)/360), eased=1-Math.pow(1-t,3);
+        for(const body of bodiesRef.current){
+          const from=motion.from.get(body.key),to=motion.to.get(body.key);if(!from||!to)continue;
+          body.x=from.x+(to.x-from.x)*eased;body.y=from.y+(to.y-from.y)*eased;
+          body.vx=to.vx;body.vy=to.vy;
+        }
+        if(t===1)filterMotionRef.current=null;
+      } else {
+        filterMotionRef.current=null;
+        step(bodiesRef.current, centres, {clustered:clusteredRef.current,dt,time:elapsed,aspect,
+          links:linksRef.current,pinnedKey:pinnedKeyRef.current});
+      }
       paint();
       if (clusteredRef.current) {
         const ready = clusterSettled(bodiesRef.current, centres, aspect);
@@ -453,10 +469,10 @@ export function ExploreWorkspace({
         .filter((edge) => sameNode(edge.from, node) || sameNode(edge.to, node))
         .map((edge) => ({
           edgeId: edge.id,
-          node: sameNode(edge.from, node) ? edge.to : edge.from,
+          node: (()=>{const target=sameNode(edge.from,node)?edge.to:edge.from;return nodes.find(candidate=>sameNode(candidate,target))??target;})(),
           kindLabel: EDGE_LABEL[edge.kind],
         })),
-    [edges],
+    [edges,nodes],
   );
 
   const neighbourKeys = useMemo(() => {
@@ -775,7 +791,10 @@ export function ExploreWorkspace({
                     key={key}
                     type="button"
                     ref={(el) => {
-                      if (el) nodeElsRef.current.set(key, el);
+                      if (el) {
+                        nodeElsRef.current.set(key, el);
+                        el.style.transform=`translate3d(${body.x*boxRef.current.w}px, ${body.y*boxRef.current.h}px, 0) translate(-50%, -50%)`;
+                      }
                       else nodeElsRef.current.delete(key);
                     }}
                     className={[

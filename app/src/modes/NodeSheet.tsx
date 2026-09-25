@@ -126,6 +126,10 @@ export function NodeSheet({
             }}
             aria-label="Display name"
           />
+          {!missing && <div className="lc-node-sheet-actions">
+            <button type="button" aria-label="Open" title="Open" onClick={onOpen}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></button>
+            <button type="button" aria-label="Open in new tab" title={canOpenInNewTab ? "Open in new tab" : "Practice is one tab"} disabled={!canOpenInNewTab} onClick={onOpenInNewTab}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6m0-6-9 9M10 4H4v16h16v-6"/></svg></button>
+          </div>}
           <span className="lc-preset-sheet-meta">
             {KIND_LABEL[node.type]}
             {missing ? " · MISSING" : ""} · {neighbours.length}{" "}
@@ -155,8 +159,9 @@ export function NodeSheet({
                         className="lc-explore-chip-dot"
                         style={{ background: KIND_TINT[row.node.type] }}
                       />
-                      <strong>{row.node.title ?? row.node.id}</strong>
-                      <span className="lc-muted">{row.kindLabel}</span>
+                      <span className="lc-node-link-copy"><strong title={row.node.title ?? row.node.id}>{nodeCaption(row.node)}</strong>
+                        <span className="lc-node-link-detail">{KIND_LABEL[row.node.type].toLowerCase()} {"\u00b7"} {row.kindLabel}</span></span>
+                      <span aria-hidden="true" className="lc-node-link-chevron">{"\u203a"}</span>
                     </button>
                   </li>
                 ))}
@@ -165,22 +170,7 @@ export function NodeSheet({
           </section>
         </div>
 
-        {!missing && (
-          <footer className="lc-node-sheet-foot">
-            <button type="button" className="lc-node-btn is-primary" onClick={onOpen}>
-              Open
-            </button>
-            <button
-              type="button"
-              className="lc-node-btn"
-              disabled={!canOpenInNewTab}
-              title={canOpenInNewTab ? undefined : "Practice is one tab"}
-              onClick={onOpenInNewTab}
-            >
-              Open in new tab
-            </button>
-          </footer>
-        )}
+
       </div>
     </div>,
     document.body,
@@ -195,10 +185,18 @@ function sheetPlace(from: { left: number; top: number; width: number; height: nu
 } {
   const viewW = typeof window === "undefined" ? 1024 : window.innerWidth;
   const viewH = typeof window === "undefined" ? 768 : window.innerHeight;
-  const width = Math.min(320, Math.max(240, viewW - 24));
+  const width = Math.min(380, Math.max(200, viewW - 24));
   const pad = 12;
   const left = Math.max(pad, Math.min(from.left + from.width / 2 - width / 2, viewW - width - pad));
   const below = from.top + from.height + 14;
   const top = below + 320 > viewH - pad ? Math.max(pad, from.top - 12 - 280) : below;
   return { left, top, width };
+}
+
+function nodeCaption(node:NodeRef):string {
+  const title=node.title?.trim();
+  if(title && !/^https?:\/\//i.test(title))return title;
+  const raw=title || node.id;
+  if(node.type==="web")try{const url=new URL(raw);const path=decodeURIComponent(url.pathname).split("/").filter(Boolean).slice(-2).join(" / ");return path ? `${url.hostname} / ${path}` : url.hostname;}catch{}
+  return title || (node.type==="practice" ? node.id.replace(/[-_]/g," ") : `Untitled ${KIND_LABEL[node.type].toLowerCase()}`);
 }

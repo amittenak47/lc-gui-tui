@@ -1,0 +1,12 @@
+import {createRoot} from "react-dom/client";
+import {ExploreWorkspace} from "../src/modes/ExploreWorkspace";
+import {ShellContext,type ShellValue} from "../src/shellContext";
+import {putEdge,makeEdge,type NodeRef} from "../src/util/noteLinks";
+import "../src/styles.css";
+const nodes:NodeRef[]=Array.from({length:12},(_,i)=>({id:String(i),type:i%3===0?"whiteboard":i%3===1?"annotate":"web",title:i===2?"https://example.org/algorithms/dynamic-programming":`Notes ${i}`}));
+await Promise.all(nodes.slice(1).map((node,i)=>putEdge(makeEdge(nodes[i],node,"picker"))));
+const chrome=document.createElement("div");document.body.append(chrome);
+const shell={headerSlots:{left:null,right:null,center:null,chrome:null,boardChrome:chrome,agentPanel:null}} as ShellValue;
+const style=document.createElement("style");style.textContent="html,body,#root{margin:0;width:100%;height:100%;overflow:hidden}body{background:#17191e}.lc-explore{width:100%;height:100%}";document.head.append(style);
+createRoot(document.querySelector("#root")!).render(<ShellContext.Provider value={shell}><ExploreWorkspace nodes={nodes} themeId="blue" onThemePick={()=>{}} onOpen={()=>Object.assign(window,{opened:true})} onOpenInNewTab={()=>Object.assign(window,{openedNew:true})} canOpenInNewTab={()=>true}/></ShellContext.Provider>);
+Object.assign(window,{reviewReady:true});

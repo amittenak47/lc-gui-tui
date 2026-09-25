@@ -9282,12 +9282,12 @@ body[data-lc-sash-drag="horizontal"] {
   -webkit-touch-callout: none;
   user-select: none;
   /* The rAF loop owns `transform`; only paint properties transition. */
-  animation: lc-explore-node-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: lc-explore-node-in 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .lc-explore-node.is-leaving {
   pointer-events: none;
-  animation: lc-explore-node-out 180ms ease forwards;
+  animation: lc-explore-node-out 320ms ease forwards;
 }
 
 @keyframes lc-explore-node-in {
@@ -9317,11 +9317,11 @@ body[data-lc-sash-drag="horizontal"] {
     height 140ms ease,
     transform 140ms ease,
     box-shadow 140ms ease;
-  animation: lc-explore-dot-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: lc-explore-dot-in 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .lc-explore-node.is-leaving .lc-explore-node-dot {
-  animation: lc-explore-dot-out 180ms ease forwards;
+  animation: lc-explore-dot-out 320ms ease forwards;
 }
 
 @keyframes lc-explore-dot-in {
@@ -21061,3 +21061,12 @@ button.lc-row-selected:hover:not(:disabled) {
 
 /* Tabs and editor are one authored page, transformed with its ink. */
 .lc-code-dock .lc-code-tabs { height: 32px; flex: 0 0 32px; box-sizing: border-box; }
+
+.lc-node-sheet-actions {display:flex;gap:2px;align-items:center;margin-left:auto;}
+.lc-node-sheet-actions button {width:28px;height:28px;min-height:28px;padding:5px;border:0;background:transparent;color:var(--muted);border-radius:5px;}
+.lc-node-sheet-actions button:hover:not(:disabled),.lc-node-sheet-actions button:focus-visible {background:var(--surface);color:var(--ink);}
+.lc-node-sheet-actions svg {width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;}
+.lc-node-link-copy {display:flex;flex:1;min-width:0;flex-direction:column;gap:3px;}
+.lc-node-link-detail {font-size:11px;color:var(--muted);text-transform:capitalize;}
+.lc-node-link-chevron {color:var(--muted);margin-left:auto;}
+.lc-node-sheet-link {padding:9px 0;}
