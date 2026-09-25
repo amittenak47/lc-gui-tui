@@ -41,6 +41,8 @@ export interface WhiteboardNotebookMeta {
    */
   named?: boolean;
   deletedAt?: number;
+  /** Payload permanently removed; retain tombstone until its hub delete is acknowledged. */
+  purgedAt?: number;
   syncSeq?: number;
   deleteAcked?: boolean;
   lastTouch?: number;
@@ -139,7 +141,7 @@ export function listWhiteboardNotebooks(): WhiteboardNotebookMeta[] {
 
 export function listWhiteboardTrash(): WhiteboardNotebookMeta[] {
   return readIndex()
-    .filter((entry) => entry.deletedAt)
+    .filter((entry) => entry.deletedAt && !entry.purgedAt)
     .sort((a, b) => (b.lastTouch ?? b.deletedAt ?? 0) - (a.lastTouch ?? a.deletedAt ?? 0));
 }
 
@@ -360,7 +362,7 @@ export function bumpWhiteboardSyncSeq(id: string): number {
 
 export async function restoreWhiteboardFromTrash(id: string): Promise<WhiteboardNotebook | null> {
   const existing = readIndex().find((entry) => entry.id === id);
-  if (!existing?.deletedAt) return null;
+  if (!existing?.deletedAt || existing.purgedAt) return null;
   if (liveCount() >= WHITEBOARD_LIBRARY_LIMIT) {
     throw new WhiteboardLibraryFullError(
       `At most ${WHITEBOARD_LIBRARY_LIMIT} whiteboard notebooks — delete one to restore another.`,
@@ -392,10 +394,11 @@ export async function sweepWhiteboardTrash(now = Date.now()): Promise<string[]> 
   return ids;
 }
 
-export async function deleteWhiteboardNotebook(id: string): Promise<void> {
+export async function deleteWhiteboardNotebook(id: string, preserveTombstone = false): Promise<void> {
   const existing = readIndex().find((entry) => entry.id === id);
-  if (existing?.locked) return;
-  writeIndex(readIndex().filter((entry) => entry.id !== id));
+  if (preserveTombstone && !existing?.deletedAt) throw new Error("Only trashed notebooks can be permanently deleted.");
+  if (!preserveTombstone && existing?.locked) return;
+  writeIndex(readIndex().flatMap(entry => entry.id !== id ? [entry] : preserveTombstone ? [{...entry,purgedAt:Date.now(),locked:false}] : []));
   await deleteContent(id);
   void deletePadSnapshots("whiteboard", id).catch(() => {});
   // Its links go too — see `deleteAnnotateDoc` for why both directions.

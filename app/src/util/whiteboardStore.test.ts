@@ -225,3 +225,14 @@ describe("renameWhiteboardNotebook", () => {
     vi.useRealTimers();
   });
 });
+
+it("permanent trash removal keeps sync deletion metadata but cannot restore content", async () => {
+  const saved=await saveWhiteboardNotebook({title:"Purge me",pageCount:1,board:board()});
+  await trashWhiteboardNotebook(saved.id);
+  await deleteWhiteboardNotebook(saved.id,true);
+  expect(listWhiteboardTrash().some(row=>row.id===saved.id)).toBe(false);
+  expect(await getWhiteboardNotebook(saved.id)).toBeNull();
+  expect(await restoreWhiteboardFromTrash(saved.id)).toBeNull();
+  const raw=localStorage.getItem("whiteboard.notebook.index.v1")!;
+  expect(JSON.parse(raw).find((row:{id:string})=>row.id===saved.id)).toMatchObject({deletedAt:expect.any(Number),purgedAt:expect.any(Number)});
+});

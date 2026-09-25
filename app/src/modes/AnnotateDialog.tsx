@@ -1,3 +1,5 @@
+import {LibraryTrashRow} from "./LibraryTrashRow";
+import {useLibraryMorph} from "./useLibraryMorph";
 /**
  * Markdown Ink entry / leave menus.
  *
@@ -21,6 +23,7 @@ import {
   annotateDocLabel,
   ANNOTATE_LIBRARY_EVENT,
   trashAnnotateDoc,
+  deleteAnnotateDoc,
   listAnnotateDocs,
   listAnnotateTrash,
   setAnnotateDocLocked,
@@ -276,6 +279,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
     }
   };
 
+  const morphRef = useLibraryMorph(`${section}:${pickingRecent}:${pickingSnapshots}:${newTitle!==null}:${saveTitle!==null}`);
   const archived = visibleTrash;
 
   return (
@@ -292,7 +296,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
         if (!locked && shouldDismissBackdrop(started, event.target, event.currentTarget)) props.onCancel();
       }}
     >
-      <div
+      <div ref={morphRef}
         className={`lc-settings-modal lc-attempt-modal lc-library-holds lc-library-menu ${isWeb ? "lc-library-web" : "lc-library-annotate"}`}
         role="dialog"
         aria-modal="true"
@@ -464,23 +468,9 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
               {showTrash && archived.length > 0 && (
                 <>
                   {archived.filter(matchesQuery).map((doc) => (
-                    <HoldButton holdMs={LIBRARY_HOLD_MS}
-                      key={`arch-${doc.id}`}
-                      label={`Restore ${annotateDocLabel(doc)}`}
-                      className="lc-hold-choice"
-                      disabled={locked}
-                      onConfirm={() => {
-                        if (props.mode !== "entry") return;
-                        void (async () => {
-                          await props.onRestoreTrash?.(doc.id);
-                          refreshList();
-                        })();
-                      }}
-                      resetKey={error}
-                    >
-                      <strong>Restore · {annotateDocLabel(doc)}</strong>
-                      <span className="lc-muted">{new Date(doc.updatedAt).toLocaleString()}</span>
-                    </HoldButton>
+                    <LibraryTrashRow key={`arch-${doc.id}`} name={annotateDocLabel(doc)} updatedAt={doc.updatedAt} disabled={locked}
+                      onRestore={async()=>{if(props.mode!=="entry")return;await props.onRestoreTrash?.(doc.id);refreshList();}}
+                      onDelete={async()=>{await deleteAnnotateDoc(doc.id,true);refreshList();}}/>
                   ))}
                 </>
               )}

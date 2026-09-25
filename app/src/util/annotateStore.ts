@@ -111,6 +111,8 @@ export interface AnnotateDocMeta {
    */
   locked?: boolean;
   deletedAt?: number;
+  /** Payload permanently removed; retain tombstone until its hub delete is acknowledged. */
+  purgedAt?: number;
   syncSeq?: number;
   deleteAcked?: boolean;
   lastTouch?: number;
@@ -392,7 +394,7 @@ export function uniqueAnnotateName(name: string): string {
 
 export function listAnnotateTrash(): AnnotateDocMeta[] {
   return readIndex()
-    .filter((entry) => entry.deletedAt)
+    .filter((entry) => entry.deletedAt && !entry.purgedAt)
     .sort((a, b) => (b.lastTouch ?? b.deletedAt ?? 0) - (a.lastTouch ?? a.deletedAt ?? 0));
 }
 
@@ -795,7 +797,7 @@ export function markAnnotateDeleteAcked(id: string, acked: boolean): void {
 
 export async function restoreAnnotateFromTrash(id: string): Promise<AnnotateDoc | null> {
   const existing = readIndex().find((entry) => entry.id === id);
-  if (!existing?.deletedAt) return null;
+  if (!existing?.deletedAt || existing.purgedAt) return null;
   if (liveAnnotateCount() >= ANNOTATE_LIBRARY_LIMIT) {
     throw new AnnotateLibraryFullError(
       `At most ${ANNOTATE_LIBRARY_LIMIT} annotated documents — delete one to restore another.`,
@@ -824,12 +826,13 @@ export async function sweepAnnotateTrash(now = Date.now()): Promise<string[]> {
   return ids;
 }
 
-export async function deleteAnnotateDoc(id: string): Promise<void> {
+export async function deleteAnnotateDoc(id: string, preserveTombstone = false): Promise<void> {
   const index = readIndex();
   const going = index.find((entry) => entry.id === id) ?? null;
-  if (going?.locked) return;
+  if (preserveTombstone && !going?.deletedAt) throw new Error("Only trashed documents can be permanently deleted.");
+  if (!preserveTombstone && going?.locked) return;
   const kept = index.filter((entry) => entry.id !== id);
-  writeIndex(kept);
+  writeIndex(preserveTombstone && going ? [{...going,purgedAt:Date.now(),locked:false},...kept] : kept);
   await deleteContent(id);
   if (going) {
     void deletePadSnapshots("annotate", going.id).catch(() => {});

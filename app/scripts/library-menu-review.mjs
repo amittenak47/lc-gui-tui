@@ -37,14 +37,14 @@ try {
   await send('Runtime.enable');await send('Performance.enable');
   await send('Page.navigate',{url:`http://127.0.0.1:${port}/scripts/library-menu-review.html`});
   for(let i=0;i<300;i++){if(await evaluate('Boolean(window.showMenu)')){ready=true;break;}if(exceptions.length)throw new Error(JSON.stringify(exceptions));await sleep(100);}
-  const click=async label=>{await evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim().startsWith(${JSON.stringify(label)}));if(!b)throw Error('Missing '+${JSON.stringify(label)});b.click();})()`);await sleep(80);};
+  const click=async label=>{await evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim().startsWith(${JSON.stringify(label)}));if(!b)throw Error('Missing '+${JSON.stringify(label)});if(b.classList.contains('lc-hold-reveal')){b.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));setTimeout(()=>b.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',bubbles:true})),950);}else b.click();})()`);await sleep(1250);};
   const hold=async label=>{const point=await evaluate(`(()=>{const b=document.querySelector('[aria-label="Hold to confirm: ${label}"]');if(!b)throw Error('Missing hold');const r=b.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);await send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1});await sleep(950);await send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1});await sleep(100);};
   for(const [width,height] of [[1280,900],[390,760],[760,390]]) {
     await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
     for(const kind of ['document','whiteboard','web']) {
       await evaluate(`window.showMenu(${JSON.stringify(kind)})`);await sleep(350);
       await hold('Pull');
-      const foot=await evaluate(`(()=>{const d=document.querySelector('[role="dialog"]'),r=d.querySelector('.lc-settings-foot').getBoundingClientRect();return {bottom:r.bottom,height:r.height,status:!!d.querySelector('[role="status"]')};})()`);
+      const foot=await evaluate(`(()=>{const d=document.querySelector('[role="dialog"]'),r=d.querySelector('.lc-settings-foot').getBoundingClientRect();return {bottom:r.bottom,height:r.height,status:!!d.querySelector('[aria-label="Hub pull results"]')};})()`);
       assert(foot.bottom<=height+1 && foot.height>=32 && foot.status,'Pull status hid footer');
       assert(await evaluate(`document.querySelectorAll('[aria-label="Filter pull results"] button').length===4`),'Missing pull filters');
       for(const label of ['Added','Repaired','Not uploaded','Unavailable'])await click(label);

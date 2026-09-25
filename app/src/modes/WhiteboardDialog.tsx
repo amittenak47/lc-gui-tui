@@ -1,3 +1,5 @@
+import {LibraryTrashRow} from "./LibraryTrashRow";
+import {useLibraryMorph} from "./useLibraryMorph";
 /**
  * Scratchpad leave / entry menus — save, discard, load, or start blank.
  */
@@ -200,6 +202,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
     refreshList();
   };
 
+  const morphRef = useLibraryMorph(`${section}:${pickingLoad}:${pickingSnapshots}:${saveTitle!==null}`);
   const archived = props.mode === "entry" ? trash : [];
 
   return (
@@ -220,7 +223,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
         if (!locked && shouldDismissBackdrop(startedOnBackdrop, event.target, event.currentTarget)) props.onCancel();
       }}
     >
-      <div
+      <div ref={morphRef}
         className="lc-settings-modal lc-attempt-modal lc-library-holds lc-library-menu lc-library-whiteboard"
         role="dialog"
         aria-modal="true"
@@ -379,25 +382,9 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
               {showTrash && archived.length > 0 && (
                 <>
                   {archived.filter(matchesQuery).map((entry) => (
-                    <HoldButton holdMs={LIBRARY_HOLD_MS}
-                      key={`arch-${entry.id}`}
-                      label={`Restore ${entry.title}`}
-                      className="lc-hold-choice"
-                      disabled={locked || !props.mode || props.mode !== "entry"}
-                      onConfirm={() => {
-                        if (props.mode !== "entry") return;
-                        void (async () => {
-                          await props.onRestoreTrash?.(entry.id);
-                          refreshList();
-                        })();
-                      }}
-                      resetKey={error}
-                    >
-                      <strong>Restore · {entry.title}</strong>
-                      <span className="lc-muted">
-                        {new Date(entry.updatedAt).toLocaleString()}
-                      </span>
-                    </HoldButton>
+                    <LibraryTrashRow key={`arch-${entry.id}`} name={entry.title} updatedAt={entry.updatedAt} disabled={locked}
+                      onRestore={async()=>{if(props.mode!=="entry")return;await props.onRestoreTrash?.(entry.id);refreshList();}}
+                      onDelete={async()=>{await deleteWhiteboardNotebook(entry.id,true);refreshList();}}/>
                   ))}
                 </>
               )}

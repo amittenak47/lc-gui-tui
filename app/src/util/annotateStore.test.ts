@@ -661,3 +661,14 @@ describe("uniqueAnnotateName", () => {
     expect(uniqueAnnotateName("Untitled.md")).toBe("Untitled.md");
   });
 });
+
+it("permanent trash removal keeps sync deletion metadata but cannot restore content", async () => {
+  const saved=await saveAnnotateDoc({name:"Purge.md",hash:"purge",docType:"markdown",source:"notes",board:{v:1,elements:[],appState:{scrollX:0,scrollY:0,zoom:1}}});
+  await trashAnnotateDoc(saved.id);
+  await deleteAnnotateDoc(saved.id,true);
+  expect(listAnnotateTrash().some(row=>row.id===saved.id)).toBe(false);
+  expect(await getAnnotateDoc(saved.id)).toBeNull();
+  expect(await restoreAnnotateFromTrash(saved.id)).toBeNull();
+  const raw=localStorage.getItem("whiteboard.annotate.index.v1")!;
+  expect(JSON.parse(raw).find((row:{id:string})=>row.id===saved.id)).toMatchObject({deletedAt:expect.any(Number),purgedAt:expect.any(Number)});
+});
