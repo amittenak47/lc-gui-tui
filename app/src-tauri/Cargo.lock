@@ -7470,7 +7470,9 @@ dependencies = [
  "tauri-plugin-livewebview",
  "tauri-plugin-opener",
  "tokio",
+ "webview2-com",
  "whiteboard",
+ "windows",
  "zip",
 ]
 

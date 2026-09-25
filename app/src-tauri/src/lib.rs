@@ -164,6 +164,7 @@ pub fn run() {
         dlc::lc_dataset_dlc_install,
         dlc::lc_dataset_dlc_remove,
         web_capture::webview_eval_json,
+        web_capture::webview_capture_png,
         colorhunt::colorhunt_random,
         capture_save::save_png_bytes,
         capture_save::pick_capture_folder,

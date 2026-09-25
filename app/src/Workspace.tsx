@@ -791,6 +791,9 @@ export function Workspace({
   } | null>(null);
   /** Address bar for a web snapshot — kept outside the camera-scaled page. */
   const webUrlRef = useRef("");
+  const paneTabRef = useRef(tab);
+  paneTabRef.current = tab;
+  const webLiveRef = useRef(false);
   const [webUrl, setWebUrl] = useState(WEB_HOME);
   webUrlRef.current = webUrl;
   const [webHtmlSource, setWebHtmlSource] = useState<WebHtmlSource | null>(null);
@@ -6676,6 +6679,7 @@ export function Workspace({
             ...(requestedFlags.threadRootId != null
               ? { threadRootId: requestedFlags.threadRootId }
               : {}),
+            ...(requestedFlags.sessionId ? { sessionId: requestedFlags.sessionId } : {}),
             ...(requestedFlags.askPreset ? { askPreset: requestedFlags.askPreset } : {}),
           }
         : requestedFlags,
@@ -6792,7 +6796,13 @@ export function Workspace({
            * And the bare `catch` meant an export that threw sent the question
            * with no pictures at all and said nothing about it.
            */
-          const exported = await withTimeout(
+          // A live web page is a native surface over the board. Region crops of
+          // that board are empty, and a view thumb of it is the dark hole.
+          const livePageCovered =
+            flags.handwriting && webLiveRef.current && paneTabRef.current.kind === "web";
+          const exported = livePageCovered
+            ? []
+            : await withTimeout(
             flags.handwriting && isWhiteboard(problem)
               ? (async () => {
                   const {captureWhiteboardBackup} = await import("./util/whiteboardTransfer");
@@ -6808,6 +6818,21 @@ export function Workspace({
             "the board export took too long",
           );
           const thumbs: Array<{ label: string; png: string }> = exported;
+          // A web page has no problem regions, so Ink would otherwise find
+          // nothing. The frozen page is on the board; send that view.
+          if (
+            flags.handwriting &&
+            !livePageCovered &&
+            paneTabRef.current.kind === "web" &&
+            thumbs.length === 0
+          ) {
+            const view = await withTimeout(
+              board.exportViewThumb(),
+              THUMB_EXPORT_TIMEOUT_MS,
+              "Current page capture timed out",
+            );
+            if (view?.png) thumbs.push(view);
+          }
           if (flags.handwriting && isWhiteboard(problem)) {
             const view = await withTimeout(board.exportViewThumb(), THUMB_EXPORT_TIMEOUT_MS, "Current whiteboard capture timed out");
             if (!view?.png) throw new Error("The whiteboard could not be captured. Try sending again when the page is ready.");
@@ -6821,7 +6846,7 @@ export function Workspace({
               ...(attachments ?? []),
               ...thumbs.map((thumb) => ({ label: thumb.label, png: thumb.png })),
             ];
-          } else {
+          } else if (!livePageCovered) {
             setNotice("nothing on the board to attach — sending the question on its own");
           }
         } catch (cause) {
@@ -7157,8 +7182,28 @@ export function Workspace({
       const source = annotateSourceRef.current;
       const origin = problem ? { surface: askSurface(problem), task_id: problem.task_id, dataset: problem.dataset } : undefined;
       const board = boardRef.current;
-      const snapshot = !flags.documentView && source && board ? board.captureDocumentView() : null;
-      let view: DocumentViewContext | undefined = flags.documentView ? structuredClone(flags.documentView) : (snapshot && source ? {
+      // The live page is a native surface over the board. Capturing the board
+      // hands the model the frozen copy underneath, which is not the page on screen.
+      let liveSeen: { url: string; title: string; text: string } | null = null;
+      if (!flags.documentView && webLiveRef.current && paneTabRef.current.kind === "web") {
+        try {
+          const { liveWebviewLabel, readLiveViewport } = await import("./util/webPageCapture");
+          liveSeen = await readLiveViewport(liveWebviewLabel(paneTabRef.current.id));
+        } catch {
+          liveSeen = null;
+        }
+      }
+      const livePageCovered = webLiveRef.current && paneTabRef.current.kind === "web";
+      const snapshot = !livePageCovered && !liveSeen && !flags.documentView && source && board ? board.captureDocumentView() : null;
+      let view: DocumentViewContext | undefined = flags.documentView ? structuredClone(flags.documentView) : liveSeen ? {
+        viewport: { x: 0, y: 0, width: 0, height: 0 },
+        pages: [],
+        text: [`URL: ${liveSeen.url}`, liveSeen.title ? `Title: ${liveSeen.title}` : "", liveSeen.text].filter(Boolean).join("\n"),
+        revision: liveSeen.url,
+        document_hash: source?.hash ?? liveSeen.url,
+        title: liveSeen.title || liveSeen.url,
+        format: "web",
+      } : (snapshot && source ? {
         ...snapshot, text: snapshot.text.trim() || snapshot.pages.map(page => pageTextForAsk(source.hash, page)).filter(Boolean).join("\n\n"),
         document_hash: source.hash, title: source.name, format: source.docType,
       } : undefined);
@@ -7169,13 +7214,23 @@ export function Workspace({
         padAtStart && view && livePadStillOpen(padAtStart, annotateSourceRef.current, boardRef.current),
       );
       if (!seedMatchesSource()) throw new Error("The selected document or pane changed. Select the area again before sending.");
-      const [capturedView, prepared] = await Promise.all([
+      const [capturedView, prepared, liveShot] = await Promise.all([
         snapshot && board && modeHasVision("ask")
           ? withTimeout(board.exportViewThumb(), THUMB_EXPORT_TIMEOUT_MS, "Current-view capture timed out") : Promise.resolve(null),
         prepareCoachSend(text, flags),
+        livePageCovered && modeHasVision("ask")
+          ? withTimeout((async () => {
+              const { liveWebviewLabel, captureLiveWebview } = await import("./util/webPageCapture");
+              const png = await captureLiveWebview(liveWebviewLabel(paneTabRef.current.id));
+              return png ? { label: "This view", png } : null;
+            })(), THUMB_EXPORT_TIMEOUT_MS, "the live page capture timed out").catch(() => null)
+          : Promise.resolve(null),
       ]);
       if (board && boardRef.current?.instanceId !== board.instanceId) throw new Error("The canvas changed during capture. Send again from the intended page.");
-      let viewImage = capturedView;
+      let viewImage = liveShot ?? capturedView;
+      if (flags.handwriting && livePageCovered && !viewImage?.png) {
+        setNotice("could not capture the live page — sending the question on its own");
+      }
       if (snapshot && padAtStart && !livePadStillOpen(padAtStart, annotateSourceRef.current, boardRef.current)) {
         throw new Error("The document changed during capture. Please retry your question from the intended view.");
       }
@@ -9383,6 +9438,7 @@ export function Workspace({
    * desktop does.
    */
   const [webLive, setWebLive] = useState(false);
+  webLiveRef.current = webLive;
   /**
    * The capture a new mark belongs to (§1m).
    *

@@ -347,6 +347,105 @@ export async function closeLiveWebview(label: string): Promise<void> {
  * The same serialise the read-once capture did, but it leaves the view open —
  * the caller decides whether browsing continues.
  */
+export interface LiveViewport {
+  url: string;
+  title: string;
+  text: string;
+}
+
+/**
+ * What is on the live page right now, not the frozen copy under it.
+ *
+ * The native view paints over the board, so a board screenshot is a different
+ * page than the one the reader is looking at. This reads the view itself:
+ * its address, its title, and the text nodes that actually intersect the window.
+ */
+export async function readLiveViewport(label: string): Promise<LiveViewport> {
+  requireTransport();
+  if (!(await liveWebviewOpen(label))) {
+    throw new Error("the live page has closed");
+  }
+  const value = await evalJson(label, LIVE_VIEWPORT_SCRIPT);
+  const parsed = typeof value === "string" ? JSON.parse(value) as unknown : value;
+  const record = parsed as { url?: string; title?: string; text?: string } | null;
+  const url = typeof record?.url === "string" ? record.url : "";
+  const title = typeof record?.title === "string" ? record.title : "";
+  const text = typeof record?.text === "string" ? record.text : "";
+  if (!url && !text) throw new Error("the live page did not return a view");
+  return { url, title, text };
+}
+
+/**
+ * A picture of the live page, raw base64 PNG.
+ *
+ * The native view paints over the board, so the board's own export is the
+ * hole underneath. This asks the view to photograph itself.
+ */
+export async function captureLiveWebview(label: string): Promise<string> {
+  requireTransport();
+  if (!(await liveWebviewOpen(label))) {
+    throw new Error("the live page has closed");
+  }
+  const invoke = await loadInvoke();
+  if (!invoke) throw new Error("page capture needs the Tauri shell");
+  const png = await invoke<string>("webview_capture_png", { label });
+  if (!png) throw new Error("the live page did not return a picture");
+  return shrinkLivePng(png);
+}
+
+const LIVE_CAPTURE_MAX_EDGE = 1600;
+
+function shrinkLivePng(png: string): Promise<string> {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      const longest = Math.max(image.naturalWidth, image.naturalHeight);
+      if (!longest || longest <= LIVE_CAPTURE_MAX_EDGE) {
+        resolve(png);
+        return;
+      }
+      const scale = LIVE_CAPTURE_MAX_EDGE / longest;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(png);
+        return;
+      }
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const data = canvas.toDataURL("image/png");
+      const comma = data.indexOf(",");
+      resolve(comma < 0 ? png : data.slice(comma + 1));
+    };
+    image.onerror = () => resolve(png);
+    image.src = `data:image/png;base64,${png}`;
+  });
+}
+
+const LIVE_VIEWPORT_SCRIPT = `(() => {
+  const vh = window.innerHeight, vw = window.innerWidth;
+  const out = [];
+  const root = document.body;
+  if (root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const raw = node.textContent ? node.textContent.replace(/\\s+/g, " ").trim() : "";
+      if (!raw) continue;
+      const el = node.parentElement;
+      if (!el) continue;
+      const box = el.getBoundingClientRect();
+      if (box.bottom <= 0 || box.top >= vh || box.right <= 0 || box.left >= vw) continue;
+      const style = getComputedStyle(el);
+      if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) continue;
+      out.push(raw);
+      if (out.join("\\n").length > 8000) break;
+    }
+  }
+  return { url: location.href, title: document.title, text: out.join("\\n") };
+})()`;
+
 export async function serializeLiveWebview(
   label: string,
 ): Promise<{ url: string; html: string }> {
