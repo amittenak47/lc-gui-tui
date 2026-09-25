@@ -8,7 +8,7 @@ import { LIBRARY_HOLD_MS } from "../util/gesture";
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { HubLibraryRefresh, type HubLibraryRefreshAction } from "../components/HubLibraryRefresh";
-import { LibrarySearch } from "./LibrarySearch";
+import { LibraryMenuRow, LibrarySearch } from "./LibrarySearch";
 import { LibraryTimes } from "./LibraryTimes";
 import { useLibraryDeleteArm } from "../util/armedDelete";
 import { DOUBLE_TAP_MS } from "../util/gesture";
@@ -222,7 +222,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
       }}
     >
       <div
-        className={`lc-settings-modal lc-attempt-modal lc-library-holds${isLeave ? "" : " lc-library-menu"}`}
+        className={`lc-settings-modal lc-attempt-modal lc-library-holds${isLeave ? "" : " lc-library-menu lc-library-whiteboard"}`}
         role="dialog"
         aria-modal="true"
         aria-label={isLeave ? "Leave whiteboard?" : "Open whiteboard"}
@@ -464,24 +464,24 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
               ) : (
                 <>
                   {section === "main" && <>
-                    {allowSave && <HoldButton holdMs={LIBRARY_HOLD_MS} label="Save" className="lc-hold-choice" disabled={locked} onConfirm={beginSave}><strong>Save</strong></HoldButton>}
-                    {!allowSave && <HoldButton holdMs={LIBRARY_HOLD_MS} label="New" className="lc-hold-choice" disabled={locked} onConfirm={() => props.onChoose("new")}><strong>New</strong></HoldButton>}
-                    <button type="button" className="lc-hold-choice" disabled={locked} onClick={()=>setSection("open")}><strong>Open</strong></button>
+                    {allowSave && <LibraryMenuRow label="Save" disabled={locked} onConfirm={beginSave} />}
+                    {!allowSave && <LibraryMenuRow label="New" disabled={locked} onConfirm={() => props.onChoose("new")} />}
+                    <LibraryMenuRow label="Open" disabled={locked} onConfirm={() => setSection("open")} />
+                    {allowSave && <LibraryMenuRow label="More" disabled={locked} onConfirm={() => setSection("more")} />}
                     {props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} />}
-                    {allowSave && <button type="button" className="lc-hold-choice" disabled={locked} onClick={()=>setSection("more")}><strong>More</strong></button>}
                   </>}
                   {section === "open" && <>
-                    <HoldButton holdMs={LIBRARY_HOLD_MS} label="Load" className="lc-hold-choice" disabled={locked || (!notebooks.length && !archived.length)} onConfirm={()=>setPickingLoad(true)}><strong>Load</strong></HoldButton>
-                    <button type="button" className="lc-hold-choice" disabled={locked || (!notebooks.length && !archived.length)} onClick={()=>setPickingLoad(true)}><strong>Recents</strong></button>
-                    <button type="button" className="lc-hold-choice" disabled={locked} onClick={()=>props.onChoose("import")}><strong>Annotations</strong></button>
+                    <LibraryMenuRow label="Load" disabled={locked || (!notebooks.length && !archived.length)} onConfirm={() => setPickingLoad(true)} />
+                    <LibraryMenuRow label="Recents" disabled={locked || (!notebooks.length && !archived.length)} onConfirm={() => setPickingLoad(true)} />
+                    <LibraryMenuRow label="Annotations" disabled={locked} onConfirm={() => props.onChoose("import")} />
                   </>}
                   {section === "more" && <>
-                    <button type="button" className="lc-hold-choice" disabled={locked} onClick={()=>setSection("export")}><strong>Export</strong></button>
-                    <HoldButton holdMs={LIBRARY_HOLD_MS} label="Restore" className="lc-hold-choice" disabled={locked || !snapshotKey} onConfirm={openSnapshots}><strong>Restore</strong></HoldButton>
+                    <LibraryMenuRow label="Export" disabled={locked} onConfirm={() => setSection("export")} />
+                    <LibraryMenuRow label="Restore" disabled={locked || !snapshotKey} onConfirm={openSnapshots} />
                   </>}
                   {section === "export" && <>
-                    <button type="button" className="lc-hold-choice" disabled={locked} onClick={()=>props.onChoose("export-png")}><strong>PNG</strong></button>
-                    <button type="button" className="lc-hold-choice" disabled={locked} onClick={()=>props.onChoose("export")}><strong>Annotations</strong></button>
+                    <LibraryMenuRow label="PNG" disabled={locked} onConfirm={() => props.onChoose("export-png")} />
+                    <LibraryMenuRow label="Annotations" disabled={locked} onConfirm={() => props.onChoose("export")} />
                   </>}
                 </>
               )}

@@ -430,7 +430,7 @@ a,
   container-name: lc-header-left;
 }
 
-.lc-header-left > .lc-tip-target {
+.lc-header-left > .lc-brand-home {
   flex-shrink: 0;
 }
 
@@ -851,12 +851,6 @@ a,
 @container lc-tab (max-width: 72px) {
   .lc-tab-title,
   .lc-tab .lc-doc-index-chip {
-    display: none;
-  }
-}
-
-@container lc-header-left (max-width: 220px) {
-  .lc-browse-hint {
     display: none;
   }
 }
@@ -1588,12 +1582,6 @@ html[data-theme="dark"] .lc-web-doc {
   }
 }
 
-@media (max-width: 640px) {
-  .lc-browse-hint {
-    display: none;
-  }
-}
-
 .lc-doc-index-chip {
   margin-left: 8px;
   padding: 0;
@@ -1942,9 +1930,9 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-hub-conflict-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 12px;
-  padding: 10px 14px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
   border-bottom: 1px solid var(--chrome-edge);
 }
 
@@ -16037,13 +16025,6 @@ button.lc-row-selected:hover:not(:disabled) {
 
 /* Theme chip was briefly in header; browse palette now lives on tabs row. */
 
-.lc-mobile .lc-browse-hint {
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* Tablet / landscape Magic Note Pad: room for tags + fuller chrome, still one row. */
 @media (min-width: 601px) {
   .lc-mobile .lc-browser-filters input[type="search"],
@@ -20938,3 +20919,13 @@ button.lc-row-selected:hover:not(:disabled) {
   .lc-chrome-stack-fold,
   .lc-chrome-stack-fold-inner { transition: none; }
 }
+
+/* Quiet merge tools: labels remain available to keyboard and screen readers. */
+.lc-hub-conflict-head button.lc-hub-conflict-filter {
+  justify-content: center; width: 34px; height: 34px; padding: 0;
+  border: 0; border-radius: 6px; background: transparent; color: var(--hint); box-shadow: none;
+}
+.lc-hub-conflict-head button.lc-hub-conflict-filter[aria-pressed="true"] {
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.lc-hub-conflict-head button.lc-hub-conflict-filter:focus-visible { outline: 2px solid var(--accent); }

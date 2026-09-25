@@ -39,7 +39,7 @@ export function HubLibraryRefresh({ onRefresh }: { onRefresh: HubLibraryRefreshA
     unavailable: report?.failures.filter(row=>!isNotUploaded(row.message)) ?? [],
   };
   return <div className="lc-library-refresh">
-    <HoldButton label="Pull" holdMs={LIBRARY_HOLD_MS} className="lc-hub-pull-command" disabled={pending} onConfirm={() => void refresh()} resetKey={pending}>
+    <HoldButton label="Pull" holdMs={LIBRARY_HOLD_MS} className="lc-hold-choice lc-hub-pull-command" disabled={pending} onConfirm={() => void refresh()} resetKey={pending}>
       <strong>{pending ? "Pulling…" : "Pull"}</strong>
     </HoldButton>
     {(pending || report || message) && <section className="lc-hub-pull-catalog lc-artifact-picker-catalog" aria-label="Hub pull results">

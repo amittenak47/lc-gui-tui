@@ -101,7 +101,7 @@ function fill(input: HTMLInputElement, value: string) {
 }
 
 async function hold(label: string, host: HTMLElement) {
-  if (label === "Load") await act(async()=>[...host.querySelectorAll("button")].find(b=>b.textContent === "Open")!.click());
+  if (label === "Load") await hold("Open", host);
   const aria = `Hold to confirm: ${label}`;
   const button = Array.from(host.querySelectorAll("button")).find(
     (node) => node.getAttribute("aria-label") === aria,

@@ -28,7 +28,7 @@ import {
 } from "../util/annotateStore";
 import { LibraryPadlock } from "./LibraryPadlock";
 import { PadNameField } from "./PadNameField";
-import { LibrarySearch } from "./LibrarySearch";
+import { LibraryMenuRow, LibrarySearch } from "./LibrarySearch";
 import { LibraryTimes } from "./LibraryTimes";
 import { TOMBSTONE_COPY } from "../util/padSync";
 import {
@@ -128,7 +128,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   const removingRef = useRef<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [libraryFilter,setLibraryFilter] = useState("all");
+  const [libraryFilters,setLibraryFilters] = useState<string[]>([]);
   const [showTrash,setShowTrash] = useState(false);
   const [libraryQuery,setLibraryQuery] = useState("");
   const lastTapRef = useRef({ id: "", at: 0 });
@@ -206,7 +206,8 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
     (section !== "sets" || (currentDoc && doc.hash === currentDoc.hash)),
   );
 
-  const matchesQuery = (doc: AnnotateDocMeta) => (libraryFilter === "all" || doc.docType === libraryFilter) && `${doc.name} ${doc.label ?? ""}`.toLocaleLowerCase().includes(libraryQuery.trim().toLocaleLowerCase());
+  const toggleFilter = (kind: string) => setLibraryFilters(current => current.includes(kind) ? current.filter(item => item !== kind) : [...current, kind]);
+  const matchesQuery = (doc: AnnotateDocMeta) => (libraryFilters.length === 0 || libraryFilters.includes(doc.docType)) && `${doc.name} ${doc.label ?? ""}`.toLocaleLowerCase().includes(libraryQuery.trim().toLocaleLowerCase());
 
   const refreshList = () => {
     setDocs(listAnnotateDocs());
@@ -293,13 +294,13 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
       }}
     >
       <div
-        className={`lc-settings-modal lc-attempt-modal lc-library-holds${isLeave ? "" : " lc-library-menu"}`}
+        className={`lc-settings-modal lc-attempt-modal lc-library-holds${isLeave ? "" : ` lc-library-menu ${isWeb ? "lc-library-web" : "lc-library-annotate"}`}`}
         role="dialog"
         aria-modal="true"
         aria-label={isLeave ? "Leave document?" : isWeb ? "Web pad" : "Document pad"}
       >
         <div className="lc-settings-head">
-          <h2>{isLeave ? "Leave document?" : section === "open" && !pickingRecent ? "Open" : section === "new" ? "New" : section === "export" ? "Export" : section === "more" ? "More" : section === "sets" ? "Annotations" : pickingRecent ? "Recents" : isWeb ? "Pages" : "Document"}</h2>
+          <h2>{isLeave ? "Leave document?" : section === "open" && !pickingRecent ? "Open" : section === "new" ? "New" : section === "export" ? "Export" : section === "more" ? "More" : section === "sets" ? "Annotations" : pickingRecent ? "Recents" : isWeb ? "Web" : "Annotate"}</h2>
           {(isLeave || saveTitle !== null || newTitle !== null) && <p className="lc-muted">
             {saveTitle !== null
               ? "Name this pad. Hold Save to keep the suggested name."
@@ -328,7 +329,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
         </div>
 
         <div className="lc-settings-body">
-          {pickingRecent && <LibrarySearch value={libraryQuery} onChange={setLibraryQuery} label={isWeb ? "Search saved pages" : "Search saved documents"} disabled={locked} filter={libraryFilter} onFilterChange={setLibraryFilter} kinds={isWeb ? [] : ["pdf","markdown","epub"]} showTrash={showTrash} onTrashChange={setShowTrash}/>}
+          {pickingRecent && <LibrarySearch value={libraryQuery} onChange={setLibraryQuery} label={isWeb ? "Search saved pages" : "Search saved documents"} disabled={locked} filters={libraryFilters} onToggleFilter={toggleFilter} kinds={isWeb ? [] : ["pdf","markdown","epub"]} showTrash={showTrash} onTrashChange={setShowTrash}/>}
           {pickingRecent && !(showTrash ? archived : visibleDocs).some(matchesQuery) && <p className="lc-muted">No matching saved items.</p>}
           {error && <div className="lc-warning">{error}</div>}
 
@@ -403,9 +404,6 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
             </div>
           ) : pickingRecent && entry ? (
             <div className="lc-settings-choice">
-              {section === "sets" && <button type="button" className="lc-secondary" disabled={locked}
-                onClick={() => entry.onChoose("fork")}>New</button>}
-
               {(showTrash ? [] : visibleDocs).filter(matchesQuery).map((doc) => {
                 const title = annotateDocLabel(doc);
                 return (
@@ -542,33 +540,33 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
               ) : (
                 <div className="lc-document-menu">
                   {section === "main" && <>
-                    {allowSave && <button type="button" disabled={locked} onClick={beginSave}><strong>Save</strong></button>}
-                    {(!allowSave || isWeb) && <button type="button" disabled={locked} onClick={() => isWeb ? props.onChoose("page") : setSection("new")}><strong>New</strong></button>}
+                    {allowSave && <LibraryMenuRow label="Save" disabled={locked} onConfirm={beginSave} />}
+                    {(!allowSave || isWeb) && <LibraryMenuRow label="New" disabled={locked} onConfirm={() => isWeb ? props.onChoose("page") : setSection("new")} />}
                     {isWeb
-                      ? <button type="button" disabled={locked || (!visibleDocs.length && !archived.length)} onClick={() => setPickingRecent(true)}><strong>Recents</strong></button>
-                      : <button type="button" disabled={locked} onClick={() => setSection("open")}><strong>Open</strong></button>}
+                      ? <LibraryMenuRow label="Recents" disabled={locked || (!visibleDocs.length && !archived.length)} onConfirm={() => setPickingRecent(true)} />
+                      : <LibraryMenuRow label="Open" disabled={locked} onConfirm={() => setSection("open")} />}
+                    {allowSave && !isWeb && <LibraryMenuRow label="More" disabled={locked} onConfirm={() => setSection("more")} />}
                     {props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} />}
-                    {allowSave && !isWeb && <button type="button" disabled={locked} onClick={() => setSection("more")}><strong>More</strong></button>}
                   </>}
                   {section === "open" && <>
-                    <button type="button" disabled={locked} onClick={() => props.onChoose("open")}><strong>Load</strong></button>
-                    <button type="button" disabled={locked || (!visibleDocs.length && !archived.length)} onClick={() => setPickingRecent(true)}><strong>Recents</strong></button>
-                    {allowSave && <button type="button" disabled={locked} onClick={() => setSection("sets")}><strong>Annotations</strong></button>}
+                    <LibraryMenuRow label="Load" disabled={locked} onConfirm={() => props.onChoose("open")} />
+                    <LibraryMenuRow label="Recents" disabled={locked || (!visibleDocs.length && !archived.length)} onConfirm={() => setPickingRecent(true)} />
+                    {allowSave && <LibraryMenuRow label="Annotations" disabled={locked} onConfirm={() => setSection("sets")} />}
                   </>}
-                  {section === "new" && <button type="button" disabled={locked} onClick={() => setNewTitle("")}><strong>Markdown file</strong></button>}
+                  {section === "new" && <LibraryMenuRow label="Markdown file" disabled={locked} onConfirm={() => setNewTitle("")} />}
                   {section === "sets" && allowSave && <>
-                    <button type="button" disabled={locked} onClick={() => setPickingRecent(true)}><strong>Saved</strong></button>
-                    <button type="button" disabled={locked} onClick={() => props.onChoose("fork")}><strong>New</strong></button>
-                    <button type="button" disabled={locked} onClick={() => props.onChoose("import")}><strong>Import</strong></button>
+                    <LibraryMenuRow label="New" disabled={locked} onConfirm={() => props.onChoose("fork")} />
+                    <LibraryMenuRow label="Saved" disabled={locked} onConfirm={() => setPickingRecent(true)} />
+                    <LibraryMenuRow label="Import" disabled={locked} onConfirm={() => props.onChoose("import")} />
                   </>}
                   {section === "export" && <>
-                    <button type="button" disabled={locked} onClick={() => props.onChoose("export-pdf")}><strong>PDF</strong></button>
-                    <button type="button" disabled={locked} onClick={() => props.onChoose("export")}><strong>Annotations</strong></button>
-                    {entry?.docType !== "pdf" && <button type="button" disabled={locked} onClick={() => props.onChoose("export-document")}><strong>{entry?.docType === "epub" ? "EPUB" : "Markdown + images"}</strong></button>}
+                    <LibraryMenuRow label="PDF" disabled={locked} onConfirm={() => props.onChoose("export-pdf")} />
+                    <LibraryMenuRow label="Annotations" disabled={locked} onConfirm={() => props.onChoose("export")} />
+                    {entry?.docType !== "pdf" && <LibraryMenuRow label={entry?.docType === "epub" ? "EPUB" : "Markdown + images"} disabled={locked} onConfirm={() => props.onChoose("export-document")} />}
                   </>}
                   {section === "more" && allowSave && <>
-                    <button type="button" disabled={locked} onClick={() => setSection("export")}><strong>Export</strong></button>
-                    <button type="button" disabled={locked || !snapshotKey} onClick={openSnapshots}><strong>Restore</strong></button>
+                    <LibraryMenuRow label="Export" disabled={locked} onConfirm={() => setSection("export")} />
+                    <LibraryMenuRow label="Restore" disabled={locked || !snapshotKey} onConfirm={openSnapshots} />
                   </>}
                 </div>
               )}

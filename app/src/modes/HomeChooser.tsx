@@ -1,9 +1,8 @@
 /**
  * Landing screen — Practice, Whiteboard, Annotate, Browse, Explore.
  *
- * There is no longer a "What do you want to do?" banner over the cards. The
- * header already says `choose a mode to start`, and the question was asking
- * something the four cards answer by existing.
+ * There is no longer a "What do you want to do?" banner over the cards.
+ * The four cards answer that question by existing.
  *
  * Cards stack in one column so the icon, colored name and full blurb stay on
  * every device instead of collapsing into a cramped row of tiles.
@@ -416,53 +415,6 @@ export function HomeChooser({
         ]
       : []),
     {
-      id: "whiteboard",
-      kicker: "Whiteboard",
-      blurb: "Freeform pages for sketches, notes, and diagrams.",
-      icon: (
-        <Glyph className="lc-home-glyph-sheet">
-          <defs>
-            <clipPath id="lc-home-wb-clip" clipPathUnits="userSpaceOnUse">
-              <path d={PAGE_PATH} />
-            </clipPath>
-          </defs>
-          <path d={PAGE_PATH} />
-          <path d={PAGE_FOLD} />
-          <g clipPath="url(#lc-home-wb-clip)">
-            <g className="lc-home-wb-scroll">
-              <g className="lc-home-wb-draw-a">
-                <circle className="lc-home-draw" cx="8.2" cy="13.6" r="1.05" pathLength={1} />
-                <path className="lc-home-draw" d="M8.2 14.7v3.1" pathLength={1} />
-                <path className="lc-home-draw" d="M8.2 15.8 6.8 17" pathLength={1} />
-                <path className="lc-home-draw" d="M8.2 15.8 9.7 16.9" pathLength={1} />
-                <path className="lc-home-draw" d="M8.2 17.8 7 19.8" pathLength={1} />
-                <path className="lc-home-draw" d="M8.2 17.8 9.5 19.8" pathLength={1} />
-                <path
-                  className="lc-home-draw"
-                  d="M13.4 9.2c1.1-1.4 2.6.7 3.8-.3 1.1 1.3 2.1-.5 3.3.9"
-                  pathLength={1}
-                />
-              </g>
-              <g className="lc-home-wb-draw-b">
-                <path className="lc-home-draw" d="M7.1 10.2h5.8v4.4H7.1z" pathLength={1} />
-                <path className="lc-home-draw" d="M8 16.8h9.6" pathLength={1} />
-                <path className="lc-home-draw" d="M8.2 16.8 11 12.8 13.3 14.9 17 10.4" pathLength={1} />
-                <path className="lc-home-draw" d="M16.3 10.4h1.5v1.5" pathLength={1} />
-              </g>
-            </g>
-          </g>
-          <g className="lc-home-nib-arm">
-            <path
-              className="lc-home-nib"
-              d="m20.4 10.8-6.4 6.4-2.7.8.8-2.7 6.4-6.4z"
-              transform="translate(-11.3 -18)"
-            />
-          </g>
-        </Glyph>
-      ),
-      onOpen: onWhiteboard,
-    },
-    {
       id: "annotate",
       kicker: "Annotate",
       blurb: "Mark up PDFs, docs, code, and web pages.",
@@ -554,6 +506,53 @@ export function HomeChooser({
         </Glyph>
       ),
       onOpen: onAnnotate,
+    },
+    {
+      id: "whiteboard",
+      kicker: "Whiteboard",
+      blurb: "Freeform pages for sketches, notes, and diagrams.",
+      icon: (
+        <Glyph className="lc-home-glyph-sheet">
+          <defs>
+            <clipPath id="lc-home-wb-clip" clipPathUnits="userSpaceOnUse">
+              <path d={PAGE_PATH} />
+            </clipPath>
+          </defs>
+          <path d={PAGE_PATH} />
+          <path d={PAGE_FOLD} />
+          <g clipPath="url(#lc-home-wb-clip)">
+            <g className="lc-home-wb-scroll">
+              <g className="lc-home-wb-draw-a">
+                <circle className="lc-home-draw" cx="8.2" cy="13.6" r="1.05" pathLength={1} />
+                <path className="lc-home-draw" d="M8.2 14.7v3.1" pathLength={1} />
+                <path className="lc-home-draw" d="M8.2 15.8 6.8 17" pathLength={1} />
+                <path className="lc-home-draw" d="M8.2 15.8 9.7 16.9" pathLength={1} />
+                <path className="lc-home-draw" d="M8.2 17.8 7 19.8" pathLength={1} />
+                <path className="lc-home-draw" d="M8.2 17.8 9.5 19.8" pathLength={1} />
+                <path
+                  className="lc-home-draw"
+                  d="M13.4 9.2c1.1-1.4 2.6.7 3.8-.3 1.1 1.3 2.1-.5 3.3.9"
+                  pathLength={1}
+                />
+              </g>
+              <g className="lc-home-wb-draw-b">
+                <path className="lc-home-draw" d="M7.1 10.2h5.8v4.4H7.1z" pathLength={1} />
+                <path className="lc-home-draw" d="M8 16.8h9.6" pathLength={1} />
+                <path className="lc-home-draw" d="M8.2 16.8 11 12.8 13.3 14.9 17 10.4" pathLength={1} />
+                <path className="lc-home-draw" d="M16.3 10.4h1.5v1.5" pathLength={1} />
+              </g>
+            </g>
+          </g>
+          <g className="lc-home-nib-arm">
+            <path
+              className="lc-home-nib"
+              d="m20.4 10.8-6.4 6.4-2.7.8.8-2.7 6.4-6.4z"
+              transform="translate(-11.3 -18)"
+            />
+          </g>
+        </Glyph>
+      ),
+      onOpen: onWhiteboard,
     },
     {
       id: "browse",

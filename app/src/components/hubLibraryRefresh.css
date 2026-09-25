@@ -12,9 +12,4 @@
 .lc-hub-pull-catalog button.lc-artifact-picker-source:focus-visible { outline: 1px solid var(--accent); }
 .lc-hub-pull-count { font-size: 10px; font-variant-numeric: tabular-nums; opacity: .75; }
 .lc-hub-pull-catalog .lc-artifact-picker-sources { flex-wrap: wrap; }
-.lc-library-menu .lc-library-refresh > .lc-hub-pull-command {
-  display: block; width: 100%; padding: 10px 4px; text-align: left;
-  border: 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-  border-radius: 0; background: transparent; color: var(--ink); font-size: 13px;
-}
 .lc-library-menu .lc-library-refresh > .lc-hub-pull-command:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 4%, transparent); }

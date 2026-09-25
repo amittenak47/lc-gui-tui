@@ -1425,10 +1425,7 @@ export function SettingsModal({
       <div className="lc-settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
         <div className="lc-settings-head">
           {page === "root" ? (
-            <>
-              <h2>Settings</h2>
-              <p className="lc-muted">Synced with TUI via config.toml</p>
-            </>
+            <h2>Settings</h2>
           ) : (
             <div className="lc-settings-head-row">
               <button type="button" className="lc-settings-back" onClick={() => setPage("root")}>

@@ -9763,9 +9763,6 @@ export function Workspace({
         keeps every control wired to this tab's state.
       */}
       {active && headerSlots.left ? createPortal(<>
-          {tabsRef.current.tabs.length === 1 && !practiceOpen && (
-            <span className="lc-muted lc-browse-hint">choose a mode to start</span>
-          )}
           {problem && !isLocalPad(problem) ? (
             <div className="lc-problem-nav" role="group" aria-label="Problem">
               <button
@@ -9879,9 +9876,7 @@ export function Workspace({
             <HoldButton
               label="Web"
               ariaLabel="Web pad: tap for a new page, hold for recent pages"
-              className="lc-icon lc-tip-target lc-hold-icon"
-              dataTip="Web — tap for a new page, hold for recent"
-              dataTipPlacement="bottom"
+              className="lc-icon lc-hold-icon"
               disabled={busy !== null || canvasLoading}
               fillIndeterminate={spawning === "web"}
               onTap={() => {
@@ -9919,9 +9914,7 @@ export function Workspace({
             <HoldButton
               label="Document"
               ariaLabel="Document pad: tap to open a file, hold for recent documents"
-              className="lc-icon lc-tip-target lc-hold-icon"
-              dataTip="Document — tap to open a .md, source file, .pdf or .epub, hold for recent"
-              dataTipPlacement="bottom"
+              className="lc-icon lc-hold-icon"
               disabled={busy !== null || canvasLoading}
               onTap={() => void pickAndOpenAnnotate()}
               onConfirm={() => {
@@ -9953,9 +9946,7 @@ export function Workspace({
             <HoldButton
               label="Web"
               ariaLabel="Web documents: tap to save now, hold for save / open menu"
-              className="lc-icon lc-hold-icon lc-tip-target is-active"
-              dataTip="Web — tap to save, hold for menu"
-              dataTipPlacement="bottom"
+              className="lc-icon lc-hold-icon is-active"
               pressed
               disabled={busy !== null || canvasLoading}
               onTap={() => {
@@ -9991,9 +9982,7 @@ export function Workspace({
             <HoldButton
               label="Markdown"
               ariaLabel="Markdown documents: tap to save now, hold for save / open menu"
-              className="lc-icon lc-hold-icon lc-tip-target is-active"
-              dataTip="Markdown — tap to save, hold for menu"
-              dataTipPlacement="bottom"
+              className="lc-icon lc-hold-icon is-active"
               pressed
               disabled={busy !== null || canvasLoading}
               onTap={() => {
@@ -10029,9 +10018,7 @@ export function Workspace({
             <HoldButton
               label="Whiteboard"
               ariaLabel="Whiteboard: tap for a new notebook, hold to open the library"
-              className="lc-icon lc-tip-target lc-hold-icon"
-              dataTip="Whiteboard — tap for new, hold to load"
-              dataTipPlacement="bottom"
+              className="lc-icon lc-hold-icon"
               disabled={busy !== null || canvasLoading}
               onTap={() => void openWhiteboard({ fresh: true })}
               onConfirm={() => setWhiteboardEntryOpen(true)}
@@ -10066,9 +10053,7 @@ export function Workspace({
             <HoldButton
               label="Whiteboard"
               ariaLabel="Whiteboard: tap to save now, hold for save / load menu"
-              className="lc-icon lc-hold-icon lc-tip-target is-active"
-              dataTip="Whiteboard — tap to save, hold for menu"
-              dataTipPlacement="bottom"
+              className="lc-icon lc-hold-icon is-active"
               pressed
               disabled={busy !== null || canvasLoading}
               onTap={() => void saveWhiteboardNow()}
@@ -10095,10 +10080,8 @@ export function Workspace({
           )}
           <button
             type="button"
-            className="lc-icon lc-tip-target"
+            className="lc-icon"
             aria-label="Settings"
-            data-tip="Settings — paths, LLM, serve"
-            data-tip-placement="bottom"
             onClick={() => setSettingsOpen(true)}
           >
             <svg

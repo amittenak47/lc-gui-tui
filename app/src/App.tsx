@@ -27,7 +27,6 @@ import type { SearchOptions } from "./api/client";
 import type { CoachCapabilities, CoachFlags, SessionSnapshot } from "./api/types";
 import { DEFAULT_COACH_FLAGS } from "./api/types";
 import { BrandHome } from "./components/BrandHome";
-import { Tip } from "./components/Tip";
 import { DocIndexChip } from "./components/DocIndexChip";
 import { LoadingDoodle } from "./components/LoadingDoodle";
 import { LlmStatusDialog } from "./components/LlmStatusDialog";
@@ -1275,21 +1274,19 @@ export function App() {
             application already uses to mean "back to the start", so there is no
             reason to spend a tab slot saying it twice.
           */}
-          <Tip tip="Home">
-            <button
-              type="button"
-              className="lc-brand lc-brand-home"
-              aria-label="Home"
-              onClick={() => {
-                // Going Home also drops whatever was loading, the way the Home
-                // chip used to.
-                if (shellLoadActive) cancelLoad();
-                focusTab(HOME_TAB_ID);
-              }}
-            >
-              <BrandHome />
-            </button>
-          </Tip>
+          <button
+            type="button"
+            className="lc-brand lc-brand-home"
+            aria-label="Home"
+            onClick={() => {
+              // Going Home also drops whatever was loading, the way the Home
+              // chip used to.
+              if (shellLoadActive) cancelLoad();
+              focusTab(HOME_TAB_ID);
+            }}
+          >
+            <BrandHome />
+          </button>
           {/*
             The strip is the title slot. It carries Home, every open workspace
             and the `[indexed]` badge, and it lives in the shell so switching

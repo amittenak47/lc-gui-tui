@@ -9,17 +9,24 @@
   width: min(620px, 100%);
   max-height: min(70dvh, 480px);
 }
-.lc-library-menu .lc-settings-head { padding: 14px 16px 6px; }
-.lc-library-menu .lc-settings-head h2 { font-size: 16px; }
+.lc-library-menu .lc-settings-head {
+  padding: 14px 16px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lc-menu-line, var(--line)) 55%, transparent);
+}
+.lc-library-menu .lc-settings-head h2 { font-size: 16px; color: var(--lc-menu-line, inherit); }
+.lc-library-web { --lc-menu-line: var(--lc-mode-browse); }
+.lc-library-annotate { --lc-menu-line: var(--lc-mode-annotate); }
+.lc-library-whiteboard { --lc-menu-line: var(--lc-mode-whiteboard); }
 .lc-library-menu .lc-settings-head .lc-muted { margin: 6px 0 0; line-height: 1.4; font-size: 12px; }
 .lc-library-menu .lc-settings-body { padding: 8px 16px 10px; display: flex; flex-direction: column; gap: 10px; }
 .lc-library-menu .lc-settings-body > * { flex-shrink: 0; }
-.lc-library-menu .lc-settings-foot { padding: 10px 16px 14px; }
+.lc-library-menu .lc-settings-foot { padding: 10px 16px 14px; border-top: 0; }
 .lc-library-menu button { min-height: 32px; font-size: 13px; }
 .lc-library-menu .lc-settings-choice,
 .lc-library-menu .lc-document-menu { gap: 0; }
 .lc-library-menu .lc-scratch-load-entry,
 .lc-library-menu .lc-document-menu > button,
+.lc-library-menu .lc-document-menu > .lc-hold-choice,
 .lc-library-menu .lc-settings-choice > .lc-hold-choice {
   border: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
@@ -30,6 +37,7 @@
 .lc-library-menu .lc-scratch-load-entry { align-items: center; gap: 4px; padding: 6px 0; }
 .lc-library-menu .lc-scratch-load-entry:hover,
 .lc-library-menu .lc-document-menu > button:hover:not(:disabled),
+.lc-library-menu .lc-document-menu > .lc-hold-choice:hover:not(:disabled),
 .lc-library-menu .lc-settings-choice > .lc-hold-choice:hover:not(:disabled) {
   background: color-mix(in srgb, var(--ink) 4%, transparent);
 }
@@ -38,7 +46,7 @@
 .lc-library-menu .lc-scratch-load-hold strong,
 .lc-library-menu .lc-hold-choice strong,
 .lc-library-menu .lc-library-subtitle { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lc-library-menu .lc-scratch-load-hold strong { font-size: 13px; }
+.lc-library-menu .lc-scratch-load-hold .lc-hold-reveal-label > strong { display: inline-block; width: auto; max-width: 14rem; font-size: 13px; }
 .lc-library-menu .lc-library-times { width: 100%; font-size: 12px; gap: 4px; font-variant-numeric: tabular-nums; }
 .lc-library-menu .lc-library-times > span { display: grid; grid-template-columns: 76px minmax(0, 1fr); column-gap: 10px; }
 .lc-library-menu .lc-scratch-load-lock.is-locked { color: var(--accent); }
@@ -51,7 +59,18 @@
   background: transparent; color: var(--hint);
 }
 .lc-library-menu .lc-document-menu > button,
-.lc-library-menu .lc-settings-choice > .lc-hold-choice { padding: 10px 4px; }
+.lc-library-menu .lc-document-menu > .lc-hold-choice,
+.lc-library-menu .lc-settings-choice > .lc-hold-choice,
+.lc-library-menu .lc-library-refresh > .lc-hub-pull-command {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 32px;
+  height: auto;
+  padding: 10px 4px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.2;
+}
 .lc-library-menu .lc-document-menu > .lc-document-menu-save { justify-self: stretch; }
 .lc-library-menu .lc-hold-choice strong { font-size: 13px; }
 .lc-library-menu .lc-hold-choice .lc-muted { font-size: 11px; line-height: 1.4; }
@@ -68,10 +87,12 @@
   background: transparent; color: var(--ink); font: inherit; font-size: 13px;
 }
 .lc-library-menu .lc-library-refresh { margin: 0; }
-.lc-library-menu .lc-library-refresh > button {
-  width: auto; padding: 0 8px; border: 0; border-radius: 6px;
-  background: transparent; color: var(--accent); box-shadow: none; font-size: 12px;
+.lc-library-menu .lc-library-refresh > .lc-hub-pull-command {
+  display: block; width: 100%; text-align: left;
+  border: 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 0; background: transparent; color: var(--ink); box-shadow: none;
 }
+.lc-library-menu .lc-library-refresh > .lc-hub-pull-command .lc-hold-reveal-label { display: block; }
 .lc-library-menu .lc-hub-pull-status { padding: 8px 10px; font-size: 12px; }
 .lc-library-menu .lc-hub-pull-status ul { max-height: 96px; }
 /* The practice catalog keeps its full table and filters, with the same chrome. */

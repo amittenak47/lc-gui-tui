@@ -97,9 +97,19 @@ function fill(input: HTMLInputElement, value: string) {
 }
 
 async function click(label: string, host: HTMLElement) {
-  if ((label === "Recent" || label === "Load") && [...host.querySelectorAll("button")].some(b=>b.textContent === "Open")) await click("Open", host);
-  const button=Array.from(host.querySelectorAll("button")).find(node=>node.textContent?.startsWith(label));
+  if ((label === "Recent" || label === "Load") && [...host.querySelectorAll("button")].some(b=>b.textContent?.trim() === "Open")) await click("Open", host);
+  const button=Array.from(host.querySelectorAll("button")).find(node=>node.textContent?.trim().startsWith(label));
   expect(button, `missing button ${label}`).toBeTruthy();
+  if (button!.getAttribute("aria-label")?.startsWith("Hold to confirm")) {
+    await act(async () => {
+      button!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, button: 0 }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, LIBRARY_HOLD_MS + 50));
+      button!.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1, button: 0 }));
+    });
+    return;
+  }
   await act(async()=>button!.click());
 }
 
@@ -167,7 +177,7 @@ describe("AnnotateDialog", () => {
     await click("Back",view.host);await click("Back",view.host);await click("Back",view.host);await click("More",view.host);await click("Export",view.host);await click("Annotations",view.host);
     expect(view.onChoose).toHaveBeenLastCalledWith("export");
     view.unmount();
-  });
+  }, 20000);
   it("closes confirmation and updates live/Trash as soon as local deletion commits", async () => {
     let finish!: () => void;
     const syncing = new Promise<void>((resolve) => { finish = resolve; });
