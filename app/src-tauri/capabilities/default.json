@@ -12,6 +12,7 @@
     "allow-capture-export",
     "allow-lc-harness",
     "allow-webview-eval-json",
+    "allow-webview-capture-png",
     "allow-set-gesture-exclusions",
     "allow-set-drawing-immersive",
     "allow-live-webview"

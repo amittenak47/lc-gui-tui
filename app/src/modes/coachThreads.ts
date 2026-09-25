@@ -136,8 +136,12 @@ export function groupThreads(messages: readonly AgentChatMessage[]): GroupedThre
   const engaged = new Set<string>();
   for (const message of messages) {
     // The agent's own answer points at the question. That is not a thread.
-    // A thread starts when you reply — to the agent, or to a message of yours.
+    // Replying to the agent hangs off the question and leaves that question
+    // where it already sits. Quoting your own earlier turn does not: the new
+    // message stays a room turn at the end, and the quoted one stays put.
     if (message.role !== "user" || !message.replyTo) continue;
+    const parent = byId.get(message.replyTo.id);
+    if (message.replyTo.role !== "assistant" && parent?.role !== "assistant") continue;
     engaged.add(topOf(message));
   }
   const replies = new Map<string, AgentChatMessage[]>();

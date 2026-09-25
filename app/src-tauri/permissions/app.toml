@@ -94,3 +94,8 @@ commands.allow = [
 identifier = "allow-webview-eval-json"
 description = "Eval the serializer inside the hidden capture webview"
 commands.allow = ["webview_eval_json"]
+
+[[permission]]
+identifier = "allow-webview-capture-png"
+description = "Photograph the live page and attach that picture to Ask"
+commands.allow = ["webview_capture_png"]

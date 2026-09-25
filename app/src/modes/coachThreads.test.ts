@@ -211,6 +211,48 @@ describe("retrySeries", () => {
   });
 });
 
+describe("quote, retry, and reply placement", () => {
+  it("leaves a quoted message where it was and puts the new quote at the end", () => {
+    const asked = msg("q1", { at: 1, content: "How are you seeing the page?" });
+    const answer = msg("a1", {
+      role: "assistant",
+      at: 2,
+      requestId: "q1",
+      content: "From the text",
+      replyTo: { id: "q1", role: "user", excerpt: "How are you seeing the page?" },
+    });
+    const later = msg("q2", { at: 3, content: "hi" });
+    const quote = msg("q3", {
+      at: 4,
+      content: "How are you seeing the page?",
+      replyTo: { id: "q1", role: "user", excerpt: "How are you seeing the page?" },
+    });
+    const grouped = groupThreads([asked, answer, later, quote]);
+    expect(grouped.rootMessages.map((message) => message.id)).toEqual(["q1", "a1", "q2", "q3"]);
+    expect(grouped.threadReplies.size).toBe(0);
+  });
+
+  it("keeps a reply on the earlier question instead of moving that pair to the end", () => {
+    const asked = msg("q1", { at: 1, content: "Explain" });
+    const answer = msg("a1", {
+      role: "assistant",
+      at: 2,
+      requestId: "q1",
+      content: "First",
+      replyTo: { id: "q1", role: "user", excerpt: "Explain" },
+    });
+    const later = msg("q2", { at: 3, content: "hi" });
+    const reply = msg("q3", {
+      at: 4,
+      content: "And this?",
+      replyTo: { id: "a1", role: "assistant", excerpt: "First" },
+    });
+    const grouped = groupThreads([asked, answer, later, reply]);
+    expect(grouped.rootMessages.map((message) => message.id)).toEqual(["q1", "q2"]);
+    expect(grouped.threadReplies.get("q1")?.map((message) => message.id)).toEqual(["a1", "q3"]);
+  });
+});
+
 describe("placeRetryView", () => {
   it("keeps the latest retry pair at the bottom while stepping", () => {
     const board = msg("q1", { at: 1, content: "Can you see the board?" });

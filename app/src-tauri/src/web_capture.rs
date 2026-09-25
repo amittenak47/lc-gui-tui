@@ -110,10 +110,8 @@ fn start_preview(
     tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
 ) {
     use std::sync::{Arc, Mutex};
-    use webview2_com::CapturePreviewCompletedHandler;
-    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG;
-    use windows::Win32::Foundation::HGLOBAL;
-    use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
+    use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
+    use windows::core::HSTRING;
 
     let slot = Arc::new(Mutex::new(Some(tx)));
     let fail = |slot: &Mutex<Option<tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>>>, err: String| {
@@ -128,16 +126,11 @@ fn start_preview(
         Ok(core) => core,
         Err(err) => return fail(&slot, err.to_string()),
     };
-    let stream = match unsafe { CreateStreamOnHGlobal(HGLOBAL::default(), true) } {
-        Ok(stream) => stream,
-        Err(err) => return fail(&slot, err.to_string()),
-    };
-    let stream_for_cb = stream.clone();
     let slot_cb = slot.clone();
-    let handler = CapturePreviewCompletedHandler::create(Box::new(move |hr| {
+    let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |hr, json| {
         let bytes = (|| {
             hr.map_err(|err| err.to_string())?;
-            read_png_stream(&stream_for_cb)
+            png_from_cdp(&json.to_string())
         })();
         if let Ok(mut guard) = slot_cb.lock() {
             if let Some(sender) = guard.take() {
@@ -146,34 +139,21 @@ fn start_preview(
         }
         Ok(())
     }));
-    if let Err(err) = unsafe {
-        core.CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, &stream, &handler)
-    } {
+    let method = HSTRING::from("Page.captureScreenshot");
+    let params = HSTRING::from("{\"format\":\"png\",\"fromSurface\":true}");
+    if let Err(err) = unsafe { core.CallDevToolsProtocolMethod(&method, &params, &handler) } {
         fail(&slot, err.to_string());
     }
 }
 
 #[cfg(windows)]
-fn read_png_stream(stream: &windows::Win32::System::Com::IStream) -> Result<Vec<u8>, String> {
-    use windows::Win32::System::Com::{STATFLAG_NONAME, STATSTG, STREAM_SEEK_SET};
-    unsafe {
-        let mut stat = STATSTG::default();
-        stream.Stat(&mut stat, STATFLAG_NONAME).map_err(|err| err.to_string())?;
-        let size = usize::try_from(stat.cbSize).map_err(|_| "the live page capture was empty".to_string())?;
-        if size < 8 || size > 20_000_000 {
-            return Err("the live page capture was empty".into());
-        }
-        stream.Seek(0, STREAM_SEEK_SET, None).map_err(|err| err.to_string())?;
-        let mut bytes = vec![0u8; size];
-        let mut read = 0u32;
-        stream
-            .Read(bytes.as_mut_ptr().cast(), size as u32, Some(&mut read))
-            .ok()
-            .map_err(|err| err.to_string())?;
-        bytes.truncate(read as usize);
-        if bytes.len() < 8 || bytes[..8] != [137, 80, 78, 71, 13, 10, 26, 10] {
-            return Err("the live page capture was not a picture".into());
-        }
-        Ok(bytes)
+fn png_from_cdp(json: &str) -> Result<Vec<u8>, String> {
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|_| "the live page capture was not a picture".to_string())?;
+    let data = value.get("data").and_then(|item| item.as_str()).ok_or("the live page capture was empty")?;
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
+        .map_err(|_| "the live page capture was not a picture".to_string())?;
+    if bytes.len() < 8 || bytes[..8] != [137, 80, 78, 71, 13, 10, 26, 10] {
+        return Err("the live page capture was not a picture".into());
     }
+    Ok(bytes)
 }

@@ -1142,6 +1142,7 @@ export function AgentSidePanel({
      * whatever the length of the passage, and a × to take it back off.
      */
     setPageQuote({ text: quoteSeed.text.trim(), excerpt: replyExcerpt(quoteSeed.text) });
+    setNewSessionId(null);
     setOpenThreadId(null); setReplyTo(null);
     if (quoteSeed.attachment) setPhotos(current => [...current, quoteSeed.attachment!]);
     window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
@@ -1597,16 +1598,8 @@ export function AgentSidePanel({
     (message: AgentChatMessage) => {
       const ref = replyRefFor(message);
       setReplyTo(ref);
-      const root = messageThreadRoot(messages, message);
-      let opening = false;
-      setOpenThreadId((current) => {
-        if (!current) opening = true;
-        return current ?? root;
-      });
-      if (opening) {
-        setThreadMotion("enter");
-        armMotionFallback();
-      }
+      setNewSessionId(null);
+      if (message.sessionId) setPickedSessionId(message.sessionId);
       closeMessageMenu();
       onOpenChange?.(true);
       requestAnimationFrame(() => {
@@ -1617,7 +1610,7 @@ export function AgentSidePanel({
         el.setSelectionRange(end, end);
       });
     },
-    [closeMessageMenu, onOpenChange, messages, armMotionFallback],
+    [closeMessageMenu, onOpenChange],
   );
 
   const copyMessage = useCallback(
@@ -2174,8 +2167,8 @@ export function AgentSidePanel({
                   }}
                 >
                   <span className="lc-agent-thread-open-peek">
-                    {threadReplies.get(message.id)!.at(-1)?.content.slice(0, 60) ||
-                      (threadReplies.get(message.id)!.at(-1)?.pending
+                    {threadReplies.get(threadId)!.at(-1)?.content.slice(0, 60) ||
+                      (threadReplies.get(threadId)!.at(-1)?.pending
                         ? "Working…"
                         : "")}
                   </span>
