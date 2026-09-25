@@ -215,3 +215,32 @@ it("text-only selection keeps a typed draft and sends the frozen quote only on S
   expect(send).toHaveBeenCalledWith("Explain this passage", expect.objectContaining({ pageQuote: "Selected passage", documentView: view }), "queue");
   expect(send.mock.calls[0][1].photos).toBeUndefined();
 });
+
+it("keeps a failed send and its draft in the originating session while browsing another", async () => {
+  let finish!: (ok:boolean)=>void;
+  const send=vi.fn((_text:string,_flags:unknown)=>new Promise<boolean>(resolve=>{finish=resolve;}));
+  const messages:AgentChatMessage[]=[
+    {id:"a",role:"user",content:"First",at:1,sessionId:"one"},
+    {id:"b",role:"user",content:"Second",at:2,sessionId:"two"},
+  ];
+  const render=()=>root.render(<AgentSidePanel open mode="review" onModeChange={()=>{}} busy={false} messages={[...messages]} onSend={send}/>);
+  act(render);
+  const choose=(name:string)=>act(()=>host.querySelector<HTMLButtonElement>(`[aria-label="${name}. Tap to open, hold to delete"]`)!.click());
+  choose("First");
+  act(()=>{
+    const textarea=host.querySelector("textarea")!;
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"Check my work");
+    textarea.dispatchEvent(new Event("input",{bubbles:true}));
+  });
+  act(()=>host.querySelector("form")!.dispatchEvent(new Event("submit",{bubbles:true,cancelable:true})));
+  expect(send.mock.calls[0][1]).toMatchObject({sessionId:"one"});
+  choose("Second");
+  messages.push({id:"sent",role:"user",content:"Check my work",at:3,sessionId:"one",requestState:"preparing"});
+  act(render);
+  expect(host.querySelector('[data-coach-message="sent"]')).toBeNull();
+  await act(async()=>finish(false));
+  expect(host.querySelector("textarea")!.value).toBe("");
+  choose("First");
+  expect(host.querySelector('[data-coach-message="sent"]')).toBeTruthy();
+  expect(host.querySelector("textarea")!.value).toBe("Check my work");
+});

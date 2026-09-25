@@ -9,6 +9,7 @@
 
 import { type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { motion, useReducedMotion } from "motion/react";
 
 import type { BridgeResponse, CoachProcessEvent, ReviewResponse } from "../api/types";
 import { HoldButton } from "../components/HoldButton";
@@ -863,7 +864,51 @@ export function AgentSidePanel({
     },
     [onClose, onOpenChange],
   );
-  const [draft, setDraft] = useState("");
+  const organized = useMemo(() => organizeIntoSessions(messages), [messages]);
+  const sessions = useMemo(() => listSessions(organized), [organized]);
+  const [pinnedSessionIds, setPinnedSessionIds] = useState(loadSessionPins);
+  const orderedSessions = useMemo(
+    () => orderSessions(sessions, pinnedSessionIds),
+    [sessions, pinnedSessionIds],
+  );
+  const toggleSessionPin = (sessionId: string) => {
+    setPinnedSessionIds((current) => {
+      const next = current.includes(sessionId)
+        ? current.filter((id) => id !== sessionId)
+        : [sessionId, ...current];
+      saveSessionPins(next);
+      return next;
+    });
+  };
+  const deleteSession = (sessionId: string) => {
+    for (const message of organized) {
+      if (!message.deletedAt && message.sessionId === sessionId) onDeleteMessage?.(message.id);
+    }
+    setPinnedSessionIds((current) => {
+      if (!current.includes(sessionId)) return current;
+      const next = current.filter((id) => id !== sessionId);
+      saveSessionPins(next);
+      return next;
+    });
+  };
+  const newestSessionId = sessions.at(-1)?.id ?? null;
+  const [pickedSessionId, setPickedSessionId] = useState<string | null>(null);
+  const [newSessionId, setNewSessionId] = useState<string | null>(null);
+  const [arrivingSessionId, setArrivingSessionId] = useState<string | null>(null);
+  const [seenNewestSession, setSeenNewestSession] = useState<string | null>(null);
+  const pickedIsLive = pickedSessionId != null && sessions.some((session) => session.id === pickedSessionId);
+  if (newestSessionId !== seenNewestSession || (pickedSessionId != null && !pickedIsLive)) {
+    setSeenNewestSession(newestSessionId);
+    if (!pickedIsLive && !newSessionId) setPickedSessionId(newestSessionId);
+  }
+  const activeSessionId = newSessionId ?? (pickedIsLive ? pickedSessionId : newestSessionId);
+  const reducedMotion = useReducedMotion();
+  const draftKey = activeSessionId ?? "__new__";
+  const [drafts,setDrafts] = useState<Record<string,string>>({});
+  const draft = drafts[draftKey] ?? "";
+  const setDraft = (value: string | ((current:string)=>string)) => setDrafts(current => ({...current,
+    [draftKey]: typeof value === "function" ? value(current[draftKey] ?? "") : value}));
+
   const [chatFocus, setChatFocus] = useState<ChatPaneFocus>("split");
   const toggleChatFocus = useCallback((pane: "messages" | "composer") => {
     setChatFocus((current) => nextChatPaneFocus(current, pane));
@@ -988,44 +1033,6 @@ export function AgentSidePanel({
   const motionTimerRef = useRef<number | null>(null);
   const threadMotionRef = useRef<ThreadMotion>("idle");
 
-  const organized = useMemo(() => organizeIntoSessions(messages), [messages]);
-  const sessions = useMemo(() => listSessions(organized), [organized]);
-  const [pinnedSessionIds, setPinnedSessionIds] = useState(loadSessionPins);
-  const orderedSessions = useMemo(
-    () => orderSessions(sessions, pinnedSessionIds),
-    [sessions, pinnedSessionIds],
-  );
-  const toggleSessionPin = (sessionId: string) => {
-    setPinnedSessionIds((current) => {
-      const next = current.includes(sessionId)
-        ? current.filter((id) => id !== sessionId)
-        : [sessionId, ...current];
-      saveSessionPins(next);
-      return next;
-    });
-  };
-  const deleteSession = (sessionId: string) => {
-    for (const message of organized) {
-      if (!message.deletedAt && message.sessionId === sessionId) onDeleteMessage?.(message.id);
-    }
-    setPinnedSessionIds((current) => {
-      if (!current.includes(sessionId)) return current;
-      const next = current.filter((id) => id !== sessionId);
-      saveSessionPins(next);
-      return next;
-    });
-  };
-  const newestSessionId = sessions.at(-1)?.id ?? null;
-  const [pickedSessionId, setPickedSessionId] = useState<string | null>(null);
-  const [newSessionId, setNewSessionId] = useState<string | null>(null);
-  const [arrivingSessionId, setArrivingSessionId] = useState<string | null>(null);
-  const [seenNewestSession, setSeenNewestSession] = useState<string | null>(null);
-  const pickedIsLive = pickedSessionId != null && sessions.some((session) => session.id === pickedSessionId);
-  if (newestSessionId !== seenNewestSession || (pickedSessionId != null && !pickedIsLive)) {
-    setSeenNewestSession(newestSessionId);
-    setPickedSessionId(newestSessionId);
-  }
-  const activeSessionId = newSessionId ?? (pickedIsLive ? pickedSessionId : newestSessionId);
   useEffect(() => {
     if (newSessionId && sessions.some(session => session.id === newSessionId)) {
       setArrivingSessionId(newSessionId);
@@ -1661,6 +1668,8 @@ export function AgentSidePanel({
     event?.preventDefault();
     if (!canSend) return;
     const sentDraft = draft, sentPhotos = photos, sentQuote = pageQuote;
+    const sendSessionId = activeSessionId ?? `session-${crypto.randomUUID()}`;
+    if (!activeSessionId) setNewSessionId(sendSessionId);
     const sent = onSend(
       draft.trim(),
       {
@@ -1674,7 +1683,7 @@ export function AgentSidePanel({
         ...(photos.length > 0 ? { photos } : {}),
         ...(pageQuote ? { pageQuote: pageQuote.text, documentView: quoteSeed?.view } : {}),
         threadRootId: openThreadId,
-        ...(activeSessionId ? {sessionId: activeSessionId} : {}),
+        sessionId: sendSessionId,
         ...(replyTo ? { replyTo } : {}),
         ...(documentPresets && askPreset ? { askPreset } : {}),
       },
@@ -1812,7 +1821,7 @@ export function AgentSidePanel({
               {orderedSessions.map((session) => {
                 const pinned = pinnedSessionIds.includes(session.id);
                 return (
-                <div
+                <motion.div layout="position" transition={{duration: reducedMotion ? 0 : 0.28}}
                   key={session.id}
                   data-status={session.status}
                   className={`lc-agent-session-row${session.id === activeSessionId ? " is-active" : ""}${pinned ? " is-pinned" : ""}${session.id === arrivingSessionId ? " is-arriving" : ""}`}
@@ -1849,10 +1858,10 @@ export function AgentSidePanel({
                       />
                     </svg>
                   </button>
-                </div>
+                </motion.div>
                 );
               })}
-              <div className={`lc-agent-session-row lc-agent-session-ask${newSessionId ? " is-active" : ""}`}>
+              <motion.div layout="position" transition={{duration: reducedMotion ? 0 : 0.28}} className={`lc-agent-session-row lc-agent-session-ask${newSessionId ? " is-active" : ""}`}>
                 <button
                   type="button"
                   className="lc-agent-session"
@@ -1862,7 +1871,7 @@ export function AgentSidePanel({
                   <span className="lc-agent-session-name">Ask</span>
                 </button>
                 <span className="lc-agent-session-pin" aria-hidden />
-              </div>
+              </motion.div>
             </nav>
           </div>
         <div

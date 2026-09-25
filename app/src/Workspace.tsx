@@ -6713,7 +6713,7 @@ export function Workspace({
 
       const codeShot = (() => {
         const board = boardRef.current;
-        if (!board || !(flags.handwriting || flags.annotations || flags.reviewBoard || flags.lazy)) return null;
+        if (!board || !(problem && !isLocalPad(problem) || flags.handwriting || flags.annotations || flags.reviewBoard || flags.lazy)) return null;
         const ops = inkOpsFrom(board.saveBoard());
         if (ops.length === 0) return null;
         const frame = board
@@ -6747,7 +6747,9 @@ export function Workspace({
         return png ? { label: "Annotated code", png } : null;
       })();
 
+      const automaticBoard = Boolean(problem && (isWhiteboard(problem) || !isLocalPad(problem)));
       const wantsBoard =
+        automaticBoard ||
         flags.reviewBoard ||
         flags.lazy ||
         flags.handwriting ||
@@ -6763,7 +6765,7 @@ export function Workspace({
            * their marks, backdrop composited under the ink.
            */
           const narrow =
-            flags.annotations &&
+            !automaticBoard && flags.annotations &&
             !flags.handwriting &&
             !flags.reviewBoard &&
             !flags.lazy;
@@ -6787,6 +6789,14 @@ export function Workspace({
             "the board export took too long",
           );
           const thumbs: Array<{ label: string; png: string }> = exported;
+          if (automaticBoard && isWhiteboard(problem)) {
+            const view = await withTimeout(board.exportViewThumb(), THUMB_EXPORT_TIMEOUT_MS, "Current whiteboard capture timed out");
+            if (!view?.png) throw new Error("The whiteboard could not be captured. Try sending again when the page is ready.");
+            thumbs.unshift(view);
+          }
+          if (automaticBoard && !modeHasVision("ask") && (board.hasRasterInk() || thumbs.length)) {
+            throw new Error("The selected Ask model does not support images. Choose a vision-capable model to review your handwriting.");
+          }
           if (thumbs.length > 0) {
             attachments = [
               ...(attachments ?? []),
@@ -6796,6 +6806,7 @@ export function Workspace({
             setNotice("nothing on the board to attach — sending the question on its own");
           }
         } catch (cause) {
+          if (automaticBoard) throw cause;
           // Best-effort still, but not silent: the question goes without the
           // pictures and the writer is told which half arrived.
           setNotice(`could not attach the board (${messageOf(cause)}) — sending the question alone`);
@@ -6803,7 +6814,7 @@ export function Workspace({
       }
       if (
         codeShot &&
-        (flags.handwriting || flags.annotations || flags.reviewBoard || flags.lazy)
+        (automaticBoard || flags.handwriting || flags.annotations || flags.reviewBoard || flags.lazy)
       ) {
         attachments = [...(attachments ?? []), codeShot];
       }
@@ -6990,7 +7001,7 @@ export function Workspace({
             threadAnchor,
             pendingAck,
           );
-        } else if (flags.ask || text || photos.length > 0 || quotedPassage) {
+        } else if (flags.ask || flags.draw || text || photos.length > 0 || quotedPassage) {
           /*
            * The board pictures go with the question, not just onto the bubble.
            *
@@ -7144,6 +7155,7 @@ export function Workspace({
           ? withTimeout(board.exportViewThumb(), THUMB_EXPORT_TIMEOUT_MS, "Current-view capture timed out") : Promise.resolve(null),
         prepareCoachSend(text, flags),
       ]);
+      if (board && boardRef.current?.instanceId !== board.instanceId) throw new Error("The canvas changed during capture. Send again from the intended page.");
       let viewImage = capturedView;
       if (snapshot && padAtStart && !livePadStillOpen(padAtStart, annotateSourceRef.current, boardRef.current)) {
         throw new Error("The document changed during capture. Please retry your question from the intended view.");
