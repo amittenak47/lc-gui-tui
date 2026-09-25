@@ -251,3 +251,101 @@ it("keeps a failed send and its draft in the originating session while browsing 
   expect(host.querySelector('[data-coach-message="sent"]')).toBeTruthy();
   expect(host.querySelector("textarea")!.value).toBe("Check my work");
 });
+
+it("restores the draft, thread, and scroll for a pad after reload", () => {
+  const memory = new Map<string, string>();
+  const previous = Object.getOwnPropertyDescriptor(window, "localStorage");
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => memory.get(key) ?? null,
+      setItem: (key: string, value: string) => { memory.set(key, value); },
+      removeItem: (key: string) => { memory.delete(key); },
+    },
+  });
+  try {
+  const messages: AgentChatMessage[] = [
+    { id: "q1", role: "user", content: "First question", at: 1, sessionId: "one" },
+    { id: "a1", role: "assistant", content: "First answer", at: 2, sessionId: "one", replyTo: { id: "q1", role: "user", excerpt: "First" } },
+    { id: "r1", role: "user", content: "First follow up", at: 3, sessionId: "one", replyTo: { id: "a1", role: "assistant", excerpt: "answer" } },
+    { id: "q2", role: "user", content: "Second question", at: 4, sessionId: "two" },
+  ];
+  const props = { open: true, mode: "review" as const, onModeChange: () => {}, busy: false, messages, onSend: () => {}, viewScope: "pad/reload" };
+  act(() => root.render(<AgentSidePanel {...props} />));
+  const choose = (name: string) => act(() => host.querySelector<HTMLButtonElement>(`[aria-label="${name}. Tap to open, hold to delete"]`)!.click());
+  choose("First question");
+  act(() => {
+    const textarea = host.querySelector("textarea")!;
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "alpha");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  act(() => host.querySelector<HTMLButtonElement>(".lc-agent-thread-open")!.click());
+  act(() => {
+    const node = host.querySelector(".lc-agent-messages") as HTMLDivElement;
+    Object.defineProperty(node, "scrollHeight", { configurable: true, get: () => 800 });
+    Object.defineProperty(node, "clientHeight", { configurable: true, value: 200 });
+    node.scrollTop = 120;
+    node.dispatchEvent(new Event("scroll"));
+  });
+  act(() => root.unmount());
+  root = createRoot(host);
+  act(() => root.render(<AgentSidePanel {...props} />));
+  const composer = host.querySelector("textarea")!;
+  expect(host.querySelector(".lc-agent-session.is-active")?.textContent).toBe("First question");
+  expect(composer.value).toBe("alpha");
+  expect(host.querySelector(".lc-agent-thread-back")).toBeTruthy();
+  expect(host.querySelector(".lc-agent-messages")?.textContent).toContain("First follow up");
+  expect((host.querySelector(".lc-agent-messages") as HTMLDivElement).scrollTop).toBe(120);
+  } finally {
+    if (previous) Object.defineProperty(window, "localStorage", previous);
+  }
+});
+
+it("remembers each session's draft, caret, thread, and transcript scroll", () => {
+  const messages: AgentChatMessage[] = [
+    { id: "q1", role: "user", content: "First question", at: 1, sessionId: "one" },
+    { id: "a1", role: "assistant", content: "First answer", at: 2, sessionId: "one", replyTo: { id: "q1", role: "user", excerpt: "First" } },
+    { id: "r1", role: "user", content: "First follow up", at: 3, sessionId: "one", replyTo: { id: "a1", role: "assistant", excerpt: "answer" } },
+    { id: "q2", role: "user", content: "Second question", at: 4, sessionId: "two" },
+    { id: "a2", role: "assistant", content: "Second answer", at: 5, sessionId: "two", replyTo: { id: "q2", role: "user", excerpt: "Second" } },
+    { id: "r2", role: "user", content: "Second follow up", at: 6, sessionId: "two", replyTo: { id: "a2", role: "assistant", excerpt: "answer" } },
+  ];
+  act(() => root.render(<AgentSidePanel open mode="review" onModeChange={() => {}} busy={false} messages={messages} onSend={() => {}} />));
+  const choose = (name: string) => act(() => host.querySelector<HTMLButtonElement>(`[aria-label="${name}. Tap to open, hold to delete"]`)!.click());
+  const type = (value: string) => act(() => {
+    const textarea = host.querySelector("textarea")!;
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, value);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const composer = () => host.querySelector("textarea")!;
+  const list = () => host.querySelector(".lc-agent-messages") as HTMLDivElement;
+  choose("First question");
+  type("alpha");
+  act(() => host.querySelector<HTMLButtonElement>(".lc-agent-thread-open")!.click());
+  act(() => {
+    const node = list();
+    Object.defineProperty(node, "scrollHeight", { configurable: true, get: () => 800 });
+    Object.defineProperty(node, "clientHeight", { configurable: true, value: 200 });
+    node.scrollTop = 120;
+    node.dispatchEvent(new Event("scroll"));
+  });
+  composer().setSelectionRange(2, 2);
+  composer().scrollTop = 18;
+  choose("Second question");
+  expect(host.querySelector(".lc-agent-thread-back")).toBeNull();
+  expect(list().textContent).toContain("Second question");
+  expect(list().textContent).not.toContain("First follow up");
+  type("beta");
+  expect(composer().value).toBe("beta");
+  choose("First question");
+  expect(composer().value).toBe("alpha");
+  expect(composer().selectionStart).toBe(2);
+  expect(composer().selectionEnd).toBe(2);
+  expect(composer().scrollTop).toBe(18);
+  expect(host.querySelector(".lc-agent-thread-back")).toBeTruthy();
+  expect(list().textContent).toContain("First follow up");
+  expect(list().scrollTop).toBe(120);
+  choose("Second question");
+  expect(composer().value).toBe("beta");
+  expect(host.querySelector(".lc-agent-thread-back")).toBeNull();
+});

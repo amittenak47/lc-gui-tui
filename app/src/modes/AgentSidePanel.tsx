@@ -21,6 +21,7 @@ import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
 import { useWordReveal } from "./AgentRichText";
 import { AgentTurnResponse } from "./AgentTurnResponse";
+import { loadCoachSessionView, saveCoachSessionView } from "./coachSessionView";
 import { useChatFollow } from "./useChatFollow";
 import { useAgentSheet } from "./useAgentSheet";
 import { useAgentDisplayPrefs } from "../util/agentDisplayPrefs";
@@ -730,6 +731,13 @@ export interface AgentSidePanelProps {
   thinkingPhase?: string | null;
   messages: AgentChatMessage[];
   /**
+   * Pad identity for the place remembered across reload.
+   *
+   * Empty in tests and anywhere the transcript is not a saved pad. A scratch
+   * board uses its own scope so it does not overwrite the document's place.
+   */
+  viewScope?: string;
+  /**
    * Scratchpad: no solution.py, no review pipeline, no board regions to draw
    * into. Ask is pinned on and the other flags are disabled.
    */
@@ -833,6 +841,7 @@ export function AgentSidePanel({
   thinking = false,
   thinkingPhase = null,
   messages,
+  viewScope = "",
   askOnly = false,
   agentSurface = "problem",
   allowAnnotations = true,
@@ -889,6 +898,7 @@ export function AgentSidePanel({
       return next;
     });
   };
+  const forgetSessionView = useRef<(sessionId: string) => void>(() => {});
   const deleteSession = (sessionId: string) => {
     for (const message of organized) {
       if (!message.deletedAt && message.sessionId === sessionId) onDeleteMessage?.(message.id);
@@ -899,21 +909,41 @@ export function AgentSidePanel({
       saveSessionPins(next);
       return next;
     });
+    forgetSessionView.current(sessionId);
   };
   const newestSessionId = sessions.at(-1)?.id ?? null;
-  const [pickedSessionId, setPickedSessionId] = useState<string | null>(null);
-  const [newSessionId, setNewSessionId] = useState<string | null>(null);
+  const [sessionView] = useState(() => loadCoachSessionView(viewScope));
+  const [pickedSessionId, setPickedSessionId] = useState<string | null>(sessionView.pickedSessionId);
+  const [newSessionId, setNewSessionId] = useState<string | null>(
+    sessionView.newSessionId && sessionView.drafts[sessionView.newSessionId] ? sessionView.newSessionId : null,
+  );
   const [arrivingSessionId, setArrivingSessionId] = useState<string | null>(null);
   const [seenNewestSession, setSeenNewestSession] = useState<string | null>(null);
   const pickedIsLive = pickedSessionId != null && sessions.some((session) => session.id === pickedSessionId);
-  if (newestSessionId !== seenNewestSession || (pickedSessionId != null && !pickedIsLive)) {
+  if (newestSessionId !== seenNewestSession || (pickedSessionId != null && !pickedIsLive && sessions.length > 0)) {
     setSeenNewestSession(newestSessionId);
-    if (!pickedIsLive && !newSessionId) setPickedSessionId(newestSessionId);
+    // An empty transcript on the first frame must not throw away a restored pick.
+    if (!pickedIsLive && !newSessionId && sessions.length > 0) setPickedSessionId(newestSessionId);
   }
   const activeSessionId = newSessionId ?? (pickedIsLive ? pickedSessionId : newestSessionId);
   const reducedMotion = useReducedMotion();
   const draftKey = activeSessionId ?? "__new__";
-  const [drafts,setDrafts] = useState<Record<string,string>>({});
+  const sessionKeyRef = useRef(draftKey);
+  sessionKeyRef.current = draftKey;
+  const viewScopeRef = useRef(viewScope);
+  viewScopeRef.current = viewScope;
+  const persistNowRef = useRef(() => {});
+  const persistTimerRef = useRef(0);
+  const scrollMemory = useRef(new Map(Object.entries(sessionView.scroll)));
+  const onScrollRemember = useCallback(() => {
+    if (!viewScopeRef.current) return;
+    window.clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = window.setTimeout(() => persistNowRef.current(), 150);
+  }, []);
+  /** Where a page quote lands: the blank Ask row is not a session. */
+  const quoteLandingRef = useRef<string | null>(null);
+  quoteLandingRef.current = pickedIsLive ? pickedSessionId : newestSessionId;
+  const [drafts,setDrafts] = useState<Record<string,string>>(sessionView.drafts);
   const draft = drafts[draftKey] ?? "";
   const setDraft = (value: string | ((current:string)=>string)) => setDrafts(current => ({...current,
     [draftKey]: typeof value === "function" ? value(current[draftKey] ?? "") : value}));
@@ -990,8 +1020,18 @@ export function AgentSidePanel({
   const copyAckTimerRef = useRef<number | null>(null);
   /** Swallow the click that follows a successful long-press (process toggle etc.). */
   const suppressClickRef = useRef(false);
-  /** The turn the next send is answering, if the writer quoted one. */
-  const [replyTo, setReplyTo] = useState<CoachReplyRef | null>(null);
+  /** The turn the next send is answering, kept per session while comparing. */
+  const [replyBySession, setReplyBySession] = useState<Record<string, CoachReplyRef | null>>(sessionView.replies);
+  const replyTo = replyBySession[draftKey] ?? null;
+  const setReplyOnSession = useCallback((sessionId: string, reply: CoachReplyRef | null) => {
+    setReplyBySession((current) => {
+      if ((current[sessionId] ?? null) === reply) return current;
+      return { ...current, [sessionId]: reply };
+    });
+  }, []);
+  const setReplyTo = useCallback((reply: CoachReplyRef | null) => {
+    setReplyOnSession(sessionKeyRef.current, reply);
+  }, [setReplyOnSession]);
   /**
    * A passage picked off the page, waiting to be asked about.
    *
@@ -1036,7 +1076,37 @@ export function AgentSidePanel({
    * its own: threads are not created, they are noticed — the second reply to a
    * message is what turns two turns into a conversation about it.
    */
-  const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  const [threadBySession, setThreadBySession] = useState<Record<string, string | null>>(sessionView.threads);
+  const openThreadId = threadBySession[draftKey] ?? null;
+  const setThreadOnSession = useCallback((sessionId: string, threadId: string | null) => {
+    setThreadBySession((current) => {
+      if ((current[sessionId] ?? null) === threadId) return current;
+      return { ...current, [sessionId]: threadId };
+    });
+  }, []);
+  const setOpenThreadId = useCallback((threadId: string | null) => {
+    setThreadOnSession(sessionKeyRef.current, threadId);
+  }, [setThreadOnSession]);
+  forgetSessionView.current = (sessionId: string) => {
+    setDrafts((current) => {
+      if (!(sessionId in current)) return current;
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
+    setThreadBySession((current) => {
+      if (!(sessionId in current)) return current;
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
+    setReplyBySession((current) => {
+      if (!(sessionId in current)) return current;
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
+  };
   const [attemptAt, setAttemptAt] = useState<Record<string, number>>({});
   const [swappedId, setSwappedId] = useState<string | null>(null);
   const [threadMotion, setThreadMotion] = useState<ThreadMotion>("idle");
@@ -1143,10 +1213,17 @@ export function AgentSidePanel({
      */
     setPageQuote({ text: quoteSeed.text.trim(), excerpt: replyExcerpt(quoteSeed.text) });
     setNewSessionId(null);
-    setOpenThreadId(null); setReplyTo(null);
+    const landing = quoteLandingRef.current;
+    if (landing) {
+      setThreadOnSession(landing, null);
+      setReplyOnSession(landing, null);
+    } else {
+      setOpenThreadId(null);
+      setReplyTo(null);
+    }
     if (quoteSeed.attachment) setPhotos(current => [...current, quoteSeed.attachment!]);
     window.setTimeout(() => composerRef.current?.focus({ preventScroll: true }), 0);
-  }, [quoteSeed]);
+  }, [quoteSeed, setOpenThreadId, setReplyOnSession, setReplyTo, setThreadOnSession]);
 
   /** A footnote tapped on the page — jump the panel to the thread it made. */
   const lastFocusTokenRef = useRef<number | null>(null);
@@ -1154,9 +1231,14 @@ export function AgentSidePanel({
     if (!focusThread || focusThread.token === lastFocusTokenRef.current) return;
     lastFocusTokenRef.current = focusThread.token;
     const owner = organized.find(message => message.id === focusThread.rootId);
-    if (owner?.sessionId) { setNewSessionId(null); setPickedSessionId(owner.sessionId); }
-    setOpenThreadId(focusThread.rootId);
-  }, [focusThread, organized]);
+    if (owner?.sessionId) {
+      setNewSessionId(null);
+      setPickedSessionId(owner.sessionId);
+      setThreadOnSession(owner.sessionId, focusThread.rootId);
+    } else {
+      setOpenThreadId(focusThread.rootId);
+    }
+  }, [focusThread, organized, setOpenThreadId, setThreadOnSession]);
 
   useEffect(() => {
     threadMotionRef.current = threadMotion;
@@ -1164,7 +1246,14 @@ export function AgentSidePanel({
   const listRef = useRef<HTMLDivElement | null>(null);
   const retryHold = useRef(false);
   const retryAnchorTop = useRef<number | null>(null);
-  const chatPinned = useChatFollow(listRef, openThreadId ?? activeSessionId ?? "__room__", open, retryHold);
+  const chatPinned = useChatFollow(
+    listRef,
+    openThreadId ? `thread:${openThreadId}` : `session:${draftKey}`,
+    open,
+    retryHold,
+    scrollMemory.current,
+    onScrollRemember,
+  );
   retryHold.current = retryLock;
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -1178,6 +1267,75 @@ export function AgentSidePanel({
     retryAnchorTop.current = head.getBoundingClientRect().top;
   });
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerPlace = useRef(new Map(Object.entries(sessionView.composer)));
+  const composerKeyRef = useRef(draftKey);
+  if (composerKeyRef.current !== draftKey) {
+    const leaving = composerRef.current;
+    if (leaving) {
+      composerPlace.current.set(composerKeyRef.current, {
+        start: leaving.selectionStart ?? leaving.value.length,
+        end: leaving.selectionEnd ?? leaving.value.length,
+        scroll: leaving.scrollTop,
+      });
+    }
+    composerKeyRef.current = draftKey;
+  }
+  const writeComposerPlace = () => {
+    const el = composerRef.current;
+    if (!el) return;
+    composerPlace.current.set(sessionKeyRef.current, {
+      start: el.selectionStart ?? el.value.length,
+      end: el.selectionEnd ?? el.value.length,
+      scroll: el.scrollTop,
+    });
+  };
+  const rememberComposer = () => {
+    writeComposerPlace();
+    onScrollRemember();
+  };
+  persistNowRef.current = () => {
+    writeComposerPlace();
+    const threads: Record<string, string> = {};
+    for (const [id, threadId] of Object.entries(threadBySession)) {
+      if (threadId) threads[id] = threadId;
+    }
+    const replies: Record<string, CoachReplyRef> = {};
+    for (const [id, reply] of Object.entries(replyBySession)) {
+      if (reply) replies[id] = reply;
+    }
+    saveCoachSessionView(viewScopeRef.current, {
+      pickedSessionId,
+      newSessionId,
+      drafts,
+      threads,
+      replies,
+      composer: Object.fromEntries(composerPlace.current),
+      scroll: Object.fromEntries(scrollMemory.current),
+    });
+  };
+  useLayoutEffect(() => {
+    const el = composerRef.current;
+    const place = composerPlace.current.get(draftKey);
+    if (!el || !place) return;
+    el.scrollTop = place.scroll;
+    const max = el.value.length;
+    el.setSelectionRange(Math.min(place.start, max), Math.min(place.end, max));
+  }, [draftKey]);
+  useEffect(() => {
+    if (!viewScope) return;
+    window.clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = window.setTimeout(() => persistNowRef.current(), 150);
+  }, [viewScope, drafts, threadBySession, replyBySession, pickedSessionId, newSessionId]);
+  useEffect(() => {
+    if (!viewScope) return;
+    const onHide = () => persistNowRef.current();
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      window.clearTimeout(persistTimerRef.current);
+      persistNowRef.current();
+    };
+  }, [viewScope]);
   const panelRef = useRef<HTMLElement | null>(null);
   const sheet = useAgentSheet(panelRef, mobile, open, () => setOpen(false));
   const [sessionsHidden, setSessionsHidden] = useState(false);
@@ -1597,9 +1755,13 @@ export function AgentSidePanel({
   const quoteMessage = useCallback(
     (message: AgentChatMessage) => {
       const ref = replyRefFor(message);
-      setReplyTo(ref);
       setNewSessionId(null);
-      if (message.sessionId) setPickedSessionId(message.sessionId);
+      if (message.sessionId) {
+        setPickedSessionId(message.sessionId);
+        setReplyOnSession(message.sessionId, ref);
+      } else {
+        setReplyTo(ref);
+      }
       closeMessageMenu();
       onOpenChange?.(true);
       requestAnimationFrame(() => {
@@ -1610,7 +1772,7 @@ export function AgentSidePanel({
         el.setSelectionRange(end, end);
       });
     },
-    [closeMessageMenu, onOpenChange],
+    [closeMessageMenu, onOpenChange, setReplyOnSession, setReplyTo],
   );
 
   const copyMessage = useCallback(
@@ -1665,6 +1827,27 @@ export function AgentSidePanel({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [messageMenu, closeMessageMenu]);
+
+  const openSession = (sessionId: string) => {
+    clearMotionFallback();
+    threadMotionRef.current = "idle";
+    setThreadMotion("idle");
+    exitedRootRef.current = null;
+    if (newSessionId == null && sessionId === activeSessionId) {
+      setOpenThreadId(null);
+      setReplyTo(null);
+      return;
+    }
+    setNewSessionId(null);
+    setPickedSessionId(sessionId);
+  };
+  const startBlankSession = () => {
+    clearMotionFallback();
+    threadMotionRef.current = "idle";
+    setThreadMotion("idle");
+    exitedRootRef.current = null;
+    setNewSessionId(`session-${crypto.randomUUID()}`);
+  };
 
   if (!open && !mobile && !keepPanel) {
     return <aside ref={panelRef} className="lc-side" id="lc-agent-panel" aria-label="Agent" aria-hidden="true" />;
@@ -1907,7 +2090,7 @@ export function AgentSidePanel({
                     dataTipPlacement="right"
                     holdMs={1200}
                     disabled={sessionsHidden}
-                    onTap={() => { setNewSessionId(null); setPickedSessionId(session.id); setOpenThreadId(null); setReplyTo(null); }}
+                    onTap={() => openSession(session.id)}
                     onConfirm={() => deleteSession(session.id)}
                   >
                     <span className="lc-agent-session-name">{session.title}</span>
@@ -1939,7 +2122,7 @@ export function AgentSidePanel({
                   type="button"
                   className="lc-agent-session"
                   disabled={sessionsHidden}
-                  onClick={() => { setNewSessionId(`session-${crypto.randomUUID()}`); setOpenThreadId(null); setReplyTo(null); }}
+                  onClick={startBlankSession}
                 >
                   <span className="lc-agent-session-name">Ask</span>
                 </button>
@@ -2412,7 +2595,12 @@ export function AgentSidePanel({
             value={draft}
             rows={10}
             placeholder="Ask the agent about your board or code…"
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              rememberComposer();
+            }}
+            onSelect={rememberComposer}
+            onScroll={rememberComposer}
             onKeyDown={(event) => {
               if (event.key !== "Enter") return;
               if (event.shiftKey) return;

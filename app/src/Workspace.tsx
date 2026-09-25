@@ -595,6 +595,11 @@ function askSurface(problem: ProblemDetail): "whiteboard" | "annotate" | "proble
   return "problem";
 }
 
+function coachViewScope(problem: ProblemDetail, footnoteWbId: string | null): string {
+  const pad = problemPadId(problem.dataset, problem.task_id);
+  return footnoteWbId ? `${pad}#${footnoteWbId}` : pad;
+}
+
 /**
  * Both freeform modes, for the many places that treat them alike.
  *
@@ -11208,6 +11213,8 @@ export function Workspace({
       {active && headerSlots.agentPanel && !hubConflictAsk ? createPortal(<>
         {problem && !canvasLoading && (
           <AgentSidePanel
+            key={coachViewScope(problem, footnoteBoardSession?.wbId ?? null)}
+            viewScope={coachViewScope(problem, footnoteBoardSession?.wbId ?? null)}
             onSaveArtifact={footnoteBoardRef.current ? undefined : (message, proposal, index) => { void saveAgentArtifact(message, proposal, index); }}
             onOpenArtifact={openArtifactPreview}
             onManageArtifacts={footnoteBoardRef.current ? undefined : message => { void manageArtifacts(message); }}

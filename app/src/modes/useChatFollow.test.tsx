@@ -66,6 +66,24 @@ it("resets following for a new thread and cancels pending work when closed", () 
   expect(disconnect).toHaveBeenCalled();
 });
 
+it("restores an earlier scope's scroll when the reader returns", () => {
+  act(() => root.render(<Transcript scope="room" />));
+  const list = host.firstElementChild as HTMLDivElement;
+  Object.defineProperties(list, { scrollHeight: { value: 500 }, clientHeight: { value: 100 } });
+  act(() => vi.advanceTimersByTime(16));
+  list.scrollTop = 100; list.dispatchEvent(new Event("scroll"));
+  act(() => root.render(<Transcript scope="thread" />));
+  act(() => vi.advanceTimersByTime(16));
+  expect(list.scrollTop).toBe(500);
+  list.scrollTop = 40; list.dispatchEvent(new Event("scroll"));
+  act(() => root.render(<Transcript scope="room" />));
+  expect(list.scrollTop).toBe(100);
+  act(() => vi.advanceTimersByTime(16));
+  expect(list.scrollTop).toBe(100);
+  act(() => root.render(<Transcript scope="thread" />));
+  expect(list.scrollTop).toBe(40);
+});
+
 it("keeps a reader's position when the panel reopens", () => {
   act(() => root.render(<Transcript />));
   const list = host.firstElementChild as HTMLDivElement;
