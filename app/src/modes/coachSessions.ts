@@ -26,9 +26,24 @@ export function sessionIdFor(messageId: string): string {
  *
  * Returns the same array when nothing needs assigning.
  */
-export function organizeIntoSessions(messages: readonly AgentChatMessage[]): AgentChatMessage[] {
-  if (!messages.some((message) => !message.sessionId)) return messages as AgentChatMessage[];
+function originSessionId(
+  message: AgentChatMessage,
+  byId: ReadonlyMap<string, AgentChatMessage>,
+  sessionOf: ReadonlyMap<string, string>,
+): string | undefined {
+  let current = message;
+  const seen = new Set<string>();
+  while (current.retryOf && !seen.has(current.id)) {
+    seen.add(current.id);
+    const parent = byId.get(current.retryOf);
+    if (!parent) return sessionOf.get(current.retryOf);
+    current = parent;
+  }
+  return sessionOf.get(current.id) ?? current.sessionId;
+}
 
+export function organizeIntoSessions(messages: readonly AgentChatMessage[]): AgentChatMessage[] {
+  const byId = new Map(messages.map((message) => [message.id, message]));
   const sessionOf = new Map<string, string>();
   for (const message of messages) {
     if (message.sessionId) sessionOf.set(message.id, message.sessionId);
@@ -36,22 +51,26 @@ export function organizeIntoSessions(messages: readonly AgentChatMessage[]): Age
   let current: string | null = null;
   let changed = false;
   const next = messages.map((message) => {
-    if (message.sessionId) {
-      current = message.sessionId;
-      sessionOf.set(message.id, message.sessionId);
-      return message;
-    }
-    const parent = message.replyTo ? sessionOf.get(message.replyTo.id) : undefined;
-    let sessionId = parent;
-    if (!sessionId && message.role === "user" && !message.replyTo) {
-      sessionId = sessionIdFor(message.id);
-    }
+    const retrySession = message.role === "user" && message.retryOf
+      ? originSessionId(message, byId, sessionOf)
+      : undefined;
+    const questionSession = message.role === "assistant" && message.requestId
+      ? sessionOf.get(message.requestId)
+      : undefined;
+    let sessionId = retrySession || questionSession || message.sessionId;
     if (!sessionId) {
-      if (!current) current = sessionIdFor(message.id);
-      sessionId = current;
+      const parent = message.replyTo ? sessionOf.get(message.replyTo.id) : undefined;
+      sessionId = parent;
+      if (!sessionId && message.role === "user" && !message.replyTo) sessionId = sessionIdFor(message.id);
+      if (!sessionId && message.requestId) sessionId = sessionIdFor(message.requestId);
+      if (!sessionId) {
+        if (!current) current = sessionIdFor(message.id);
+        sessionId = current;
+      }
     }
     current = sessionId;
     sessionOf.set(message.id, sessionId);
+    if (sessionId === message.sessionId) return message;
     changed = true;
     return { ...message, sessionId };
   });

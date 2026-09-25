@@ -48,8 +48,11 @@ import {
   groupThreads,
   messageReplyExcerpt,
   messageThreadRoot,
+  placeRetryView,
+  retrySeries,
   showsReplyStub,
   visibleThreadMessages,
+  type RetrySeries,
 } from "./coachThreads";
 import { listSessions, orderSessions, organizeIntoSessions } from "./coachSessions";
 
@@ -553,8 +556,14 @@ export interface AgentSendFlags {
    * backdrop composited under them so the strokes mean something.
    *
    * Independent of Review — Ask alone must not sneak the board in.
+   * A live web page paints over that board, so Ink there is the hole underneath.
    */
   handwriting: boolean;
+  /**
+   * One picture of whatever is on screen: the live page, or the current view
+   * of a board or document. Not the ink crops {@link handwriting} sends.
+   */
+  capture: boolean;
   /**
    * The parts that were singled out, rather than everything.
    *
@@ -778,8 +787,8 @@ export interface AgentSidePanelProps {
   onRetryMessage?: (id: string) => void;
   onEditMessage?: (id: string, text?: string) => boolean;
   onCancelEdit?: (id: string) => void;
-  /** Hide this turn, and replies that hang off it, from the chat. */
-  onDeleteMessage?: (id: string) => void;
+  /** Hide these turns, and replies that hang off them, from the chat. */
+  onDeleteMessage?: (ids: string | readonly string[]) => void;
   /** The open thread, so the caller can narrow what the coach is told. */
   onThreadChange?: (rootId: string | null) => void;
   /** Opens the hold-to-reveal dialog for the review on this message. */
@@ -945,6 +954,7 @@ export function AgentSidePanel({
   }, [draw, reviewBoard, lazy, padSurface]);
   const boardLabel = draw ? "Draw" : reviewBoard ? "Review" : lazy ? "Lazy" : "Ask";
   const [handwriting, setHandwriting] = useState(false);
+  const [capture, setCapture] = useState(false);
   const [reasoning, setReasoning] = useState(loadAgentReasoningLevel);
   const [editingQueued, setEditingQueued] = useState<AgentChatMessage | null>(null);
   const [queueEditText, setQueueEditText] = useState("");
@@ -1027,6 +1037,8 @@ export function AgentSidePanel({
    * message is what turns two turns into a conversation about it.
    */
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  const [attemptAt, setAttemptAt] = useState<Record<string, number>>({});
+  const [swappedId, setSwappedId] = useState<string | null>(null);
   const [threadMotion, setThreadMotion] = useState<ThreadMotion>("idle");
   /** The thread we are on our way out of — scrolled back to once the room returns. */
   const exitedRootRef = useRef<string | null>(null);
@@ -1068,14 +1080,23 @@ export function AgentSidePanel({
 
   const { threadReplies, rootMessages } = useMemo(() => groupThreads(sessionMessages), [sessionMessages]);
   const seenMessages = useRef(new Set(messages.map(message => message.id)));
-  useEffect(() => {
-    for (const message of messages) seenMessages.current.add(message.id);
-  }, [messages]);
 
   const visibleMessages = useMemo(
     () => visibleThreadMessages(sessionMessages, openThreadId, { threadReplies, rootMessages }),
     [sessionMessages, openThreadId, threadReplies, rootMessages],
   );
+  const retries = useMemo(() => retrySeries(sessionMessages), [sessionMessages]);
+  const attemptIndex = (series: RetrySeries) => {
+    const last = series.attempts.length - 1;
+    const wanted = attemptAt[series.originId];
+    if (wanted == null) return last;
+    return Math.max(0, Math.min(last, wanted));
+  };
+  const shownMessages = useMemo(
+    () => openThreadId ? visibleMessages : placeRetryView(visibleMessages, retries, attemptIndex),
+    [visibleMessages, retries, attemptAt, openThreadId],
+  );
+  const [retryLock, setRetryLock] = useState(false);
 
   useEffect(() => {
     onThreadChange?.(openThreadId);
@@ -1140,7 +1161,21 @@ export function AgentSidePanel({
     threadMotionRef.current = threadMotion;
   }, [threadMotion]);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const chatPinned = useChatFollow(listRef, openThreadId ?? activeSessionId ?? "__room__", open);
+  const retryHold = useRef(false);
+  const retryAnchorTop = useRef<number | null>(null);
+  const chatPinned = useChatFollow(listRef, openThreadId ?? activeSessionId ?? "__room__", open, retryHold);
+  retryHold.current = retryLock;
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const head = list?.querySelector("[data-retry-anchor]");
+    if (!list || !(head instanceof HTMLElement) || !retryHold.current) {
+      retryAnchorTop.current = null;
+      return;
+    }
+    const top = head.getBoundingClientRect().top;
+    if (retryAnchorTop.current != null) list.scrollTop += top - retryAnchorTop.current;
+    retryAnchorTop.current = head.getBoundingClientRect().top;
+  });
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
   const sheet = useAgentSheet(panelRef, mobile, open, () => setOpen(false));
@@ -1500,6 +1535,20 @@ export function AgentSidePanel({
     [armMotionFallback],
   );
 
+  // Replying to the agent is what starts a thread. The room was the question
+  // and the answer; this slides into that conversation with the reply.
+  useEffect(() => {
+    const fresh = messages.filter((message) => !seenMessages.current.has(message.id));
+    for (const message of messages) seenMessages.current.add(message.id);
+    if (openThreadId || fresh.length === 0) return;
+    const reply = fresh.find((message) => {
+      if (message.role !== "user" || message.deletedAt || !message.replyTo) return false;
+      return messages.find((row) => row.id === message.replyTo!.id)?.role === "assistant";
+    });
+    if (!reply) return;
+    enterThread(messageThreadRoot(messages, reply));
+  }, [messages, openThreadId, enterThread]);
+
   const leaveThread = useCallback(() => {
     if (!openThreadId || threadMotionRef.current === "exit") return;
     exitedRootRef.current = openThreadId;
@@ -1634,6 +1683,7 @@ export function AgentSidePanel({
     reviewBoard ||
     lazy ||
     handwriting ||
+    capture ||
     annotations ||
     photos.length > 0 ||
     // A quote on its own is a question: "what is this?".
@@ -1642,6 +1692,18 @@ export function AgentSidePanel({
     ? messages.find((message) => message.id === messageMenu.messageId)
     : undefined;
   const menuHasText = Boolean(menuMessage?.content.trim());
+  const menuRetry = (() => {
+    if (!menuMessage) return null;
+    for (const series of retries.values()) {
+      const hit = series.attempts.some((attempt) => attempt.question.id === menuMessage.id || attempt.answer?.id === menuMessage.id);
+      if (!hit || series.attempts.length < 2) continue;
+      const current = series.attempts[attemptIndex(series)];
+      const ids = (attempt: { question: { id: string }; answer: { id: string } | null }) =>
+        [attempt.question.id, attempt.answer?.id].filter((id): id is string => Boolean(id));
+      return { current: ids(current), all: series.attempts.flatMap(ids) };
+    }
+    return null;
+  })();
 
   const beginLongPress = (messageId: string, event: ReactPointerEvent<HTMLDivElement>) => {
     if (isLongPressBlocked(event.target)) return;
@@ -1694,6 +1756,7 @@ export function AgentSidePanel({
         reviewBoard,
         lazy,
         handwriting,
+        capture,
         reasoning,
         annotations: allowAnnotations && annotations,
         ...(photos.length > 0 ? { photos } : {}),
@@ -1718,6 +1781,7 @@ export function AgentSidePanel({
     setReviewBoard(false);
     setLazy(false);
     setHandwriting(false);
+    setCapture(false);
     setAnnotations(false);
     setAskPreset(null);
     setPhotos([]);
@@ -1922,7 +1986,7 @@ export function AgentSidePanel({
               )}
             </p>
           )}
-          {visibleMessages.map((message) => {
+          {shownMessages.map((message) => {
             if (isSavedAttachmentNotice(message)) {
               return (
                 <span key={message.id} className="lc-artifact-save-notice" data-coach-message={message.id}>
@@ -1931,11 +1995,34 @@ export function AgentSidePanel({
               );
             }
             const replyStub = message.replyTo;
-            const replyCount = threadReplies.get(message.id)?.length ?? 0;
+            const series = message.role === "user" ? retries.get(message.id) : undefined;
+            const selectedAttempt = series ? series.attempts[attemptIndex(series)] : undefined;
+            const threadId = selectedAttempt ? selectedAttempt.question.id : message.id;
+            const replyCount = threadReplies.get(threadId)?.length ?? 0;
+            let retryOrigin: string | null = null;
+            if (message.role === "assistant") {
+              for (const series of retries.values()) {
+                if (series.attempts.some((attempt) => attempt.answer?.id === message.id)) {
+                  retryOrigin = series.originId;
+                  break;
+                }
+              }
+            }
+            const stepper = stepperFor(message, retries, attemptIndex, (originId, next, questionId) => {
+              setAttemptAt((current) => ({ ...current, [originId]: next }));
+              setSwappedId(retries.get(originId)?.attempts[next]?.answer?.id ?? null);
+              setRetryLock(true);
+              window.setTimeout(() => setRetryLock(false), 240);
+              if (openThreadId && openThreadId !== questionId) {
+                setOpenThreadId(questionId);
+                setThreadMotion("enter");
+                armMotionFallback();
+              }
+            });
             return (
             <AgentMessageBubble
-              key={message.id}
-              enter={!seenMessages.current.has(message.id) && (message.role === "user" || message.role === "assistant")}
+              key={retryOrigin ? `retry:${retryOrigin}` : message.id}
+              enter={!retryOrigin && !seenMessages.current.has(message.id) && (message.role === "user" || message.role === "assistant")}
               data-coach-message={message.id}
               className={`lc-agent-turn lc-agent-turn-selectable lc-agent-turn-${turnKind(message.role)}${
                 message.requestState === "failed" ? " lc-agent-turn-failed" : ""
@@ -1976,7 +2063,7 @@ export function AgentSidePanel({
                 event.stopPropagation();
               }}
             >
-              <div className="lc-agent-turn-head">
+              <div className="lc-agent-turn-head" data-retry-anchor={retryOrigin ? "" : undefined}>
               <div className="lc-agent-turn-role-group">
               <div
                 className={
@@ -1999,9 +2086,15 @@ export function AgentSidePanel({
                 conversation={Boolean(message.replyTo || threadReplies.get(message.id)?.length)}
                 onSave={onSaveArtifact}
                 onManage={onManageArtifacts}
+                stepper={stepper}
               />
               </div>
-              {message.retryOf && <small>Retry · previous attempt retained above</small>}
+              <motion.div
+                className="lc-agent-turn-swap"
+                layout={retryOrigin && !message.pending && !reducedMotion ? "size" : false}
+                transition={{ layout: { duration: 0.22, ease: [0.22, 1, 0.36, 1] } }}
+              >
+              <div key={message.id} className={swappedId === message.id ? "lc-retry-swap" : undefined}>
               {message.queued && (
                 <span className="lc-agent-queued" aria-label="Queued message">Queued</span>
               )}
@@ -2023,6 +2116,7 @@ export function AgentSidePanel({
                       reviewBoard: false,
                       lazy: false,
                       handwriting: false,
+                      capture: false,
                       annotations: false,
                       reasoning,
                       ...(activeSessionId ? {sessionId:activeSessionId} : {}),
@@ -2076,7 +2170,7 @@ export function AgentSidePanel({
                   aria-label={`Open thread, ${replyCount} ${replyCount === 1 ? "reply" : "replies"}`}
                   onClick={(event) => {
                     event.stopPropagation();
-                    enterThread(message.id);
+                    enterThread(threadId);
                   }}
                 >
                   <span className="lc-agent-thread-open-peek">
@@ -2171,6 +2265,8 @@ export function AgentSidePanel({
                 </div>
               )}
               <MessageFlags message={message} />
+              </div>
+              </motion.div>
             </AgentMessageBubble>
             );
           })}
@@ -2392,7 +2488,7 @@ export function AgentSidePanel({
                   <button
                     ref={annotateBtnRef}
                     type="button"
-                    className={`lc-flag lc-agent-annotate${handwriting || annotations ? " lc-flag-active" : ""}`}
+                    className={`lc-flag lc-agent-annotate${handwriting || capture || annotations ? " lc-flag-active" : ""}`}
                     aria-expanded={markMenuOpen && !markMenuClosing}
                     aria-haspopup="menu"
                     onClick={toggleMarkMenu}
@@ -2517,13 +2613,32 @@ export function AgentSidePanel({
               >
                 Quote
               </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => { onDeleteMessage?.(menuMessage.id); closeMessageMenu(); }}
-              >
-                Delete
-              </button>
+              {menuRetry ? (
+                <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => { onDeleteMessage?.(menuRetry.current); closeMessageMenu(); }}
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => { onDeleteMessage?.(menuRetry.all); closeMessageMenu(); }}
+                  >
+                    Delete all
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => { onDeleteMessage?.(menuMessage.id); closeMessageMenu(); }}
+                >
+                  Delete
+                </button>
+              )}
             </div>
           </>,
           document.body,
@@ -2549,6 +2664,17 @@ export function AgentSidePanel({
                 if (markMenuClosing) finishMarkMenuClose();
               }}
             >
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-label="Capture"
+                aria-checked={capture}
+                className={`lc-agent-scope-option lc-agent-option-row${capture ? " is-active" : ""}`}
+                title="Photograph whatever is on screen and attach it"
+                onClick={() => setCapture(current => !current)}
+              >
+                <span>Capture</span><span>{capture ? "Enabled" : "Disabled"}</span>
+              </button>
               <button
                 type="button"
                 role="menuitemcheckbox"
@@ -2720,25 +2846,73 @@ export function pendingAckLine(message: AgentChatMessage): string {
   return inputPart;
 }
 
+function stepperFor(
+  message: AgentChatMessage,
+  seriesByOrigin: Map<string, RetrySeries>,
+  indexOf: (series: RetrySeries) => number,
+  onPick: (originId: string, index: number, questionId: string) => void,
+) {
+  if (message.role !== "assistant") return null;
+  for (const series of seriesByOrigin.values()) {
+    const index = indexOf(series);
+    if (series.attempts.length < 2 || series.attempts[index]?.answer?.id !== message.id) continue;
+    return (
+      <div className="lc-agent-retry-stepper" aria-label={`Retry ${index + 1} of ${series.attempts.length}`}>
+        <button
+          type="button"
+          aria-label="Previous retry"
+          disabled={index === 0}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            const next = index - 1;
+            onPick(series.originId, next, series.attempts[next].question.id);
+          }}
+        >
+          ‹
+        </button>
+        <span>{index + 1}/{series.attempts.length}</span>
+        <button
+          type="button"
+          aria-label="Next retry"
+          disabled={index === series.attempts.length - 1}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            const next = index + 1;
+            onPick(series.originId, next, series.attempts[next].question.id);
+          }}
+        >
+          ›
+        </button>
+      </div>
+    );
+  }
+  return null;
+}
+
 function MessageArtifactTools({
   message,
   conversation = false,
   onSave,
   onManage,
+  stepper,
 }: {
   message: AgentChatMessage;
   conversation?: boolean;
   onSave?: AgentSidePanelProps["onSaveArtifact"];
   onManage?: AgentSidePanelProps["onManageArtifacts"];
+  stepper?: ReactNode;
 }) {
   const show =
     (message.role === "user" || message.role === "assistant") &&
     !message.pending &&
     !message.queued;
-  if (!show || (!onSave && !onManage)) return null;
+  if (!show || (!onSave && !onManage && !stepper)) return null;
   const saveLabel = conversation && !message.drawing ? "Save conversation" : saveTurnLabel(message);
   return (
     <div className="lc-agent-turn-tools">
+      {stepper}
       {onSave && (
         <Tip tip={saveLabel} placement="top">
           <button

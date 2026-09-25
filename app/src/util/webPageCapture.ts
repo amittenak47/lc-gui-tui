@@ -238,19 +238,21 @@ export async function openLiveWebview(
   label: string,
   url: string,
   rect: PaneRect,
+  visible = true,
 ): Promise<void> {
-  return queued(label, () => openLiveWebviewNow(label, url, rect));
+  return queued(label, () => openLiveWebviewNow(label, url, rect, visible));
 }
 
 async function openLiveWebviewNow(
   label: string,
   url: string,
   rect: PaneRect,
+  visible = true,
 ): Promise<void> {
   requireTransport();
   await closeByLabel(label);
   try {
-    await createLiveWebview(label, url, rect);
+    await createLiveWebview(label, url, rect, visible);
   } catch (cause) {
     /*
      * "Already exists" survives the close above when Tauri's registry and the
@@ -265,7 +267,7 @@ async function openLiveWebviewNow(
     }
     await closeByLabel(label);
     await sleep(120);
-    await createLiveWebview(label, url, rect);
+    await createLiveWebview(label, url, rect, visible);
   }
 }
 
@@ -273,6 +275,7 @@ async function createLiveWebview(
   label: string,
   url: string,
   rect: PaneRect,
+  visible = true,
 ): Promise<void> {
   if (requireTransport() === "android") {
     await createAndroidWebview(label, url, rect, { userAgent: CHROME_UA });
@@ -291,7 +294,15 @@ async function createLiveWebview(
     javascriptDisabled: false,
   });
   await new Promise<void>((resolve, reject) => {
-    void webview.once("tauri://created", () => resolve());
+    void webview.once("tauri://created", () => {
+      if (visible) {
+        resolve();
+        return;
+      }
+      // Born showing. Hide before anyone is told it exists, or the first
+      // frame paints over the boot spinner.
+      void webview.hide().then(() => resolve(), reject);
+    });
     void webview.once("tauri://error", (event) => {
       reject(new Error(String(event.payload ?? "could not open a web view")));
     });

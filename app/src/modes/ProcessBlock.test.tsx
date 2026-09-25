@@ -93,6 +93,25 @@ describe("processLine", () => {
     host.remove();
   });
 
+  it("capitalizes tool status lines and calls them annotations", () => {
+    const shown = presentProcessStep({
+      kind: "tool",
+      label: "list_document_marks",
+      status: "accepted",
+      detail: "no marks packed into this Ask",
+      ts: 1,
+    });
+    expect(shown.title).toBe("Listing annotations");
+    expect(shown.body).toBe("No annotations packed into this Ask");
+    expect(presentProcessStep({
+      kind: "tool",
+      label: "get_current_page",
+      status: "proposed",
+      detail: "reading this page",
+      ts: 1,
+    }).body).toBe("Reading this page");
+  });
+
   it("names document tools instead of 'drew'", () => {
     expect(
       processLine({

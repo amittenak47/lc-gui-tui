@@ -5796,8 +5796,10 @@ export function Workspace({
   const beginCoachTurn = useCallback(
     (replyTo?: CoachReplyRef, pendingAck?: CoachPendingAck): string => {
     const id = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const requestId = coachRequestRef.current?.userMessageId;
+    const request = coachRequestRef.current;
+    const requestId = request?.userMessageId;
     const parent = requestId ? agentMessagesRef.current.find(message => message.id === requestId) : undefined;
+    const sessionId = parent?.sessionId ?? request?.flags.sessionId ?? (requestId ? sessionIdFor(requestId) : undefined);
     activeCoachTurnIdRef.current = id;
     markPadDirty();
     setAgentMessages((current) => [
@@ -5809,7 +5811,7 @@ export function Workspace({
         at: Date.now(),
         pending: true,
         requestState: "running",
-        ...(requestId ? { requestId, sessionId: parent?.sessionId ?? sessionIdFor(requestId) } : {}),
+        ...(requestId ? { requestId, ...(sessionId ? { sessionId } : {}) } : {}),
         processEvents: [],
         ...(pendingAck ? { pendingAck } : {}),
         ...(replyTo ? { replyTo } : parent ? { replyTo: { id: parent.id, role: parent.role, excerpt: parent.content.slice(0, 160) } } : {}),
@@ -6670,6 +6672,7 @@ export function Workspace({
             reviewBoard: false,
             lazy: false,
             handwriting: requestedFlags.handwriting,
+            capture: requestedFlags.capture,
             annotations: requestedFlags.annotations,
             reasoning: requestedFlags.reasoning,
             ...(requestedFlags.photos ? { photos: requestedFlags.photos } : {}),
@@ -6691,6 +6694,7 @@ export function Workspace({
     return [
       flags.ask ? "Ask" : null,
       flags.handwriting ? "Handwriting" : null,
+      flags.capture ? "Capture" : null,
       flags.annotations ? "Annotations" : null,
       flags.reasoning !== "off" ? `Reasoning · ${flags.reasoning}` : null,
       flags.reviewBoard ? "Review" : null,
@@ -6854,6 +6858,23 @@ export function Workspace({
           // Best-effort still, but not silent: the question goes without the
           // pictures and the writer is told which half arrived.
           setNotice(`could not attach the board (${messageOf(cause)}) — sending the question alone`);
+        }
+      }
+      const liveWebShowing = Boolean(webLiveRef.current && paneTabRef.current.kind === "web");
+      if (flags.capture && !liveWebShowing && boardRef.current) {
+        try {
+          const view = await withTimeout(
+            boardRef.current.exportViewThumb(),
+            THUMB_EXPORT_TIMEOUT_MS,
+            "Current view capture timed out",
+          );
+          if (view?.png) {
+            attachments = [...(attachments ?? []), { label: "This view", png: view.png }];
+          } else {
+            setNotice("could not capture the current view — sending the question on its own");
+          }
+        } catch (cause) {
+          setNotice(`could not capture the current view (${messageOf(cause)}) — sending the question on its own`);
         }
       }
       if (
@@ -7214,22 +7235,30 @@ export function Workspace({
         padAtStart && view && livePadStillOpen(padAtStart, annotateSourceRef.current, boardRef.current),
       );
       if (!seedMatchesSource()) throw new Error("The selected document or pane changed. Select the area again before sending.");
+      let liveCaptureNote = "";
       const [capturedView, prepared, liveShot] = await Promise.all([
-        snapshot && board && modeHasVision("ask")
+        snapshot && board && modeHasVision("ask") && !flags.capture
           ? withTimeout(board.exportViewThumb(), THUMB_EXPORT_TIMEOUT_MS, "Current-view capture timed out") : Promise.resolve(null),
         prepareCoachSend(text, flags),
-        livePageCovered && modeHasVision("ask")
+        flags.capture && livePageCovered
           ? withTimeout((async () => {
               const { liveWebviewLabel, captureLiveWebview } = await import("./util/webPageCapture");
               const png = await captureLiveWebview(liveWebviewLabel(paneTabRef.current.id));
               return png ? { label: "This view", png } : null;
-            })(), THUMB_EXPORT_TIMEOUT_MS, "the live page capture timed out").catch(() => null)
+            })(), THUMB_EXPORT_TIMEOUT_MS, "the live page capture timed out").catch((error: unknown) => {
+              liveCaptureNote = messageOf(error);
+              return null;
+            })
           : Promise.resolve(null),
       ]);
       if (board && boardRef.current?.instanceId !== board.instanceId) throw new Error("The canvas changed during capture. Send again from the intended page.");
-      let viewImage = liveShot ?? capturedView;
-      if (flags.handwriting && livePageCovered && !viewImage?.png) {
-        setNotice("could not capture the live page — sending the question on its own");
+      let viewImage = liveShot ?? capturedView ?? (
+        flags.capture ? prepared.attachments?.find((att) => att.label === "This view") ?? null : null
+      );
+      if (flags.capture && livePageCovered && !viewImage?.png) {
+        setNotice(liveCaptureNote
+          ? `could not capture the live page (${liveCaptureNote}) — sending the question on its own`
+          : "could not capture the live page — sending the question on its own");
       }
       if (snapshot && padAtStart && !livePadStillOpen(padAtStart, annotateSourceRef.current, boardRef.current)) {
         throw new Error("The document changed during capture. Please retry your question from the intended view.");
@@ -7246,8 +7275,9 @@ export function Workspace({
       if (snapshot && padAtStart && !livePadStillOpen(padAtStart, annotateSourceRef.current, boardRef.current)) {
         throw new Error("The document changed while preparing this question. Please send again from the intended view.");
       }
+      const shotAlreadyPacked = Boolean(viewImage && prepared.attachments?.some((att) => att.png === viewImage.png));
       const item: CoachSendQueueItem = { ...prepared, view, origin, userMessageId: id, threadAnchor: sendThreadAnchor(prepared, id),
-        attachments: [...(prepared.attachments ?? []), ...(viewImage ? [viewImage] : [])] };
+        attachments: [...(prepared.attachments ?? []), ...(viewImage && !shotAlreadyPacked ? [viewImage] : [])] };
       if (item.attachments) item.attachments = await Promise.all(item.attachments.map(async att => ({
         ...att, thumb: att.thumb ?? await thumbnailFromPng(att.png),
       })));
@@ -7284,9 +7314,12 @@ export function Workspace({
       setBusy(null);
     }
   };
-  const deleteCoachMessage = (id: string) => {
+  const deleteCoachMessage = (ids: string | readonly string[]) => {
     const coordinator = coachCoordinatorRef.current;
-    const drop = replyChainIds(agentMessagesRef.current, id);
+    const drop = new Set<string>();
+    for (const id of typeof ids === "string" ? [ids] : ids) {
+      for (const chained of replyChainIds(agentMessagesRef.current, id)) drop.add(chained);
+    }
     const runningUser = Boolean(coordinator?.runningId && drop.has(coordinator.runningId));
     const runningAssistant = Boolean(activeCoachTurnIdRef.current && drop.has(activeCoachTurnIdRef.current));
     if (runningUser && activeCoachTurnIdRef.current) drop.add(activeCoachTurnIdRef.current);
@@ -7324,13 +7357,17 @@ export function Workspace({
     let reservedId: string | null = null;
     try {
       const item = coachCoordinatorRef.current?.tickets.get(id)?.value ?? await requireCoachRequest<CoachSendQueueItem>(id);
+      const origin = agentMessagesRef.current.find((message) => message.id === id);
+      const sessionId = origin?.sessionId ?? item.flags.sessionId;
+      const flags = sessionId ? { ...item.flags, sessionId } : item.flags;
       const nextId = pushCoachMessage("user", item.text, {
         queued: true, requestState: "preparing", retryOf: id, attachments: item.attachments,
         flags: item.flagBits,
-        ...sendConversationContext(agentMessagesRef.current, item.flags),
+        ...sendConversationContext(agentMessagesRef.current, flags),
+        ...(sessionId ? { sessionId } : {}),
       });
       coachCoordinatorRef.current!.reserve(nextId); reservedId = nextId;
-      const next = { ...item, userMessageId: nextId };
+      const next = { ...item, userMessageId: nextId, flags };
       await saveCoachRequest(nextId, next);
       setAgentMessages(current => current.map(m => m.id === nextId ? { ...m, requestId: nextId } : m));
       coachCoordinatorRef.current!.ready(nextId, next);
@@ -7387,6 +7424,7 @@ export function Workspace({
         reviewBoard: false,
         lazy: false,
         handwriting: false,
+        capture: false,
         annotations: false,
         reasoning: loadAgentReasoningLevel(),
         ...(footnote.excerpt ? { pageQuote: footnote.excerpt } : {}),

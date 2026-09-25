@@ -7,6 +7,8 @@ import {
   conversationMarkdown,
   groupThreads,
   messageThreadRoot,
+  placeRetryView,
+  retrySeries,
   showsReplyStub,
   threadAnchorRef,
   visibleThreadMessages,
@@ -62,7 +64,7 @@ describe("visibleThreadMessages", () => {
     expect(visibleThreadMessages(messages, "root", grouped)).toEqual([root, user, assistant]);
   });
 
-  it("keeps threaded replies out of the room", () => {
+  it("keeps the agent's answer in the room beside the question", () => {
     const asked = msg("user-1", { content: "Can you explain this" });
     const pending = msg("asst-1", {
       role: "assistant",
@@ -73,24 +75,26 @@ describe("visibleThreadMessages", () => {
     const hello = msg("user-2", { content: "Hello" });
     const messages = [asked, pending, hello];
     const grouped = groupThreads(messages);
-    expect(visibleThreadMessages(messages, null, grouped)).toEqual([asked, hello]);
+    expect(visibleThreadMessages(messages, null, grouped)).toEqual([asked, pending, hello]);
+    expect(grouped.threadReplies.size).toBe(0);
   });
 
-  it("does not copy the latest thread turn into the room", () => {
+  it("folds the answer into a thread once you reply to the agent", () => {
     const asked = msg("user-1", { content: "Explain" });
     const first = msg("asst-1", {
       role: "assistant",
       content: "First",
       replyTo: { id: "user-1", role: "user", excerpt: "Explain" },
     });
-    const second = msg("asst-2", {
-      role: "assistant",
-      content: "Second",
-      replyTo: { id: "user-1", role: "user", excerpt: "Explain" },
+    const follow = msg("user-2", {
+      content: "And this?",
+      replyTo: { id: "asst-1", role: "assistant", excerpt: "First" },
     });
-    const messages = [asked, first, second];
+    const messages = [asked, first, follow];
     const grouped = groupThreads(messages);
     expect(visibleThreadMessages(messages, null, grouped)).toEqual([asked]);
+    expect(grouped.threadReplies.get("user-1")).toEqual([first, follow]);
+    expect(visibleThreadMessages(messages, "user-1", grouped)).toEqual([asked, first, follow]);
   });
 });
 
@@ -193,6 +197,37 @@ describe("threadAnchorRef", () => {
     });
     const anchor = threadAnchorRef([root], "root");
     expect(anchor?.excerpt).toBe("Review · unclear");
+  });
+});
+
+describe("retrySeries", () => {
+  it("keeps retries of one question together, oldest first", () => {
+    const first = msg("u1", { at: 1, content: "Question" });
+    const answer = msg("a1", { role: "assistant", at: 2, requestId: "u1", content: "First" });
+    const again = msg("u2", { at: 3, content: "Question", retryOf: "u1" });
+    const second = msg("a2", { role: "assistant", at: 4, requestId: "u2", content: "Second" });
+    const series = retrySeries([first, answer, again, second]).get("u1");
+    expect(series?.attempts.map((attempt) => attempt.answer?.content)).toEqual(["First", "Second"]);
+  });
+});
+
+describe("placeRetryView", () => {
+  it("keeps the latest retry pair at the bottom while stepping", () => {
+    const board = msg("q1", { at: 1, content: "Can you see the board?" });
+    const first = msg("a1", { role: "assistant", at: 2, requestId: "q1", content: "First" });
+    const hi = msg("q2", { at: 3, content: "hi" });
+    const hello = msg("a-hi", { role: "assistant", at: 4, requestId: "q2", content: "Hi!" });
+    const again = msg("q3", { at: 5, content: "Can you see the board?", retryOf: "q1" });
+    const latest = msg("a3", { role: "assistant", at: 6, requestId: "q3", content: "Latest" });
+    const messages = [board, first, hi, hello, again, latest];
+    const series = retrySeries(messages);
+    const at = (index: number) => () => index;
+    expect(placeRetryView(messages, series, at(1)).map((message) => message.id)).toEqual([
+      "q2", "a-hi", "q3", "a3",
+    ]);
+    expect(placeRetryView(messages, series, at(0)).map((message) => message.id)).toEqual([
+      "q2", "a-hi", "q3", "a1",
+    ]);
   });
 });
 

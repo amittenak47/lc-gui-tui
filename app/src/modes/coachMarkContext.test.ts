@@ -28,7 +28,7 @@ describe("coachMarkContext", () => {
       threads: [{ rootId: "t1", title: "Earlier ask", createdAt: 1 }],
     });
     const text = formatFootnoteContext(footnote, 3);
-    expect(text).toContain("Mark 3");
+    expect(text).toContain("Annotation 3");
     expect(text).toContain("full block text");
     expect(text).toContain("Example — https://example.com");
     expect(text).toContain("remember this");
@@ -69,9 +69,9 @@ describe("coachMarkContext", () => {
         ["b", 2],
       ]),
     });
-    expect(packed).toContain("Mark 1");
-    expect(packed).toContain("Mark 2");
-    expect(packed).toContain("deduped across marks");
+    expect(packed).toContain("Annotation 1");
+    expect(packed).toContain("Annotation 2");
+    expect(packed).toContain("deduped across annotations");
     expect(packed.match(/\[t1\]/g)?.length).toBe(1);
   });
 });
@@ -120,7 +120,7 @@ describe("assembleAskPrompt", () => {
       ],
       { numbers: new Map([["a", 1], ["b", 2]]), budget: 200, omitOverflow: true },
     );
-    expect(packed).toContain("Mark 1");
+    expect(packed).toContain("Annotation 1");
     expect(packed).not.toContain("Mark 2");
   });
 });

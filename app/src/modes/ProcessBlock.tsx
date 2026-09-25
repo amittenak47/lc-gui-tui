@@ -14,12 +14,22 @@ export const DOC_TOOL_LABELS: Record<string, string> = {
   lookup_reference: "checking a citation",
   get_current_page: "reading this page",
   get_highlight: "re-reading the highlight",
-  list_document_marks: "listing marks",
+  list_document_marks: "listing annotations",
   save_annotation: "pinning a tab",
   search_web: "searching the web",
 };
 
 const GENERIC_STAGE_TITLES = new Set(["Thinking…", "Thinking", "Working…"]);
+
+/** Status lines the daemon still phrases as "marks". The product word is annotation. */
+function toolStatusText(text: string): string {
+  if (!text) return text;
+  return sentenceCase(
+    text
+      .replaceAll("listing marks", "listing annotations")
+      .replaceAll("no marks packed into this Ask", "no annotations packed into this Ask"),
+  );
+}
 
 export function sentenceCase(text: string): string {
   const match = text.match(/^(\s*)(\S)([\s\S]*)$/);
@@ -118,7 +128,7 @@ export function reasonTitle(detail: string | undefined): string {
 export function presentProcessStep(event: CoachProcessEvent): { title: string; body: string } {
   if (event.kind === "tool") {
     const title = sentenceCase(processLine(event));
-    const extra = event.detail?.trim() ?? "";
+    const extra = toolStatusText(event.detail?.trim() ?? "");
     return { title, body: extra && !titlesMatch(title, extra) ? extra : "" };
   }
   if (event.label === "reason") {

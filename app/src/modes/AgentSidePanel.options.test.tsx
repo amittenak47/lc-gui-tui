@@ -139,6 +139,7 @@ it("cycles reasoning Off, Low, Medium, High and back while preserving the prefer
 it("snapshots the next queued message's options while an earlier request is busy", () => {
   const send = mount({ busy: true, documentPresets: true });
   openOptions();
+  tap(button("Capture"));
   tap(button("Ink"));
   tap(button("Action: Ask"));
   tap(button("Reasoning: off"));
@@ -146,10 +147,11 @@ it("snapshots the next queued message's options while an earlier request is busy
   tap(preset);
   expect(preset.getAttribute("aria-checked")).toBe("true");
   tap(button("Send"));
-  expect(send).toHaveBeenCalledWith("", expect.objectContaining({ draw: true, ask: false, handwriting: true, reasoning: "low", askPreset: "de_jargon" }), "queue");
+  expect(send).toHaveBeenCalledWith("", expect.objectContaining({ draw: true, ask: false, handwriting: true, capture: true, reasoning: "low", askPreset: "de_jargon" }), "queue");
   openOptions();
   expect(button("Action: Ask")).toBeTruthy();
   expect(button("Ink").getAttribute("aria-checked")).toBe("false");
+  expect(button("Capture").getAttribute("aria-checked")).toBe("false");
   expect(button("Reasoning: low")).toBeTruthy();
   expect(document.querySelector('[aria-label="Ask presets"] [aria-checked="true"]')).toBeNull();
 });

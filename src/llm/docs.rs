@@ -106,7 +106,7 @@ pub fn document_tools(cfg: &Config) -> Vec<serde_json::Value> {
         ),
         tool(
             "list_document_marks",
-            "List the reader's marks that were packed into this Ask.",
+            "List the reader's annotations packed into this Ask. Annotations are ink and footnotes.",
             serde_json::json!({ "type": "object", "properties": {} }),
         ),
         tool(
@@ -224,7 +224,7 @@ fn artifact_tools() -> Vec<serde_json::Value> {
     let program_schemas: Vec<_> = ask_draw_tools().into_iter()
         .filter(|schema| matches!(schema["function"]["name"].as_str(), Some("draw_structure" | "animate_trace")))
         .map(|schema| schema["function"]["parameters"].clone()).collect();
-    vec![tool("create_attachment", "Only when the user explicitly asks to create/save a separate whiteboard, code file or Markdown note. Propose app-owned content attached to this chat/marks. The client saves it; never claim a disk file was written. Ordinary Draw uses draw_structure/animate_trace instead.", serde_json::json!({
+    vec![tool("create_attachment", "Only when the user explicitly asks to create/save a separate whiteboard, code file or Markdown note. Propose app-owned content attached to this chat or its annotations. The client saves it; never claim a disk file was written. Ordinary Draw uses draw_structure/animate_trace instead.", serde_json::json!({
         "type":"object", "additionalProperties":false,
         "properties": {
             "kind":{"type":"string","enum":["whiteboard","code","markdown"]},
@@ -549,7 +549,7 @@ fn tool_summary(name: &str) -> &'static str {
         "lookup_reference" => "checking a citation",
         "get_current_page" => "reading this page",
         "get_highlight" => "re-reading the highlight",
-        "list_document_marks" => "listing marks",
+        "list_document_marks" => "listing annotations",
         "save_annotation" => "pinning a tab",
         "search_web" => "searching the web",
         "draw_structure" => "drawing a structure",
@@ -653,7 +653,7 @@ fn dispatch_tool(
         }
         "list_document_marks" => {
             if ctx.marks_prose.trim().is_empty() {
-                Ok(("no marks packed into this Ask".into(), None))
+                Ok(("no annotations packed into this Ask".into(), None))
             } else {
                 Ok((ctx.marks_prose.clone(), None))
             }

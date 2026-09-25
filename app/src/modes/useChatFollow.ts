@@ -2,7 +2,12 @@ import { useLayoutEffect, useRef, type RefObject } from "react";
 
 /** Follow local word-reveal/fold layout without rerendering the transcript.
  * Reading older messages opts out until the user returns to the bottom. */
-export function useChatFollow(list: RefObject<HTMLDivElement | null>, scope: string, open: boolean) {
+export function useChatFollow(
+  list: RefObject<HTMLDivElement | null>,
+  scope: string,
+  open: boolean,
+  hold?: RefObject<boolean>,
+) {
   const pinned = useRef(true);
   const positions = useRef(new Map<string, { top: number; pinned: boolean }>());
   useLayoutEffect(() => {
@@ -13,7 +18,7 @@ export function useChatFollow(list: RefObject<HTMLDivElement | null>, scope: str
     if (saved && !saved.pinned) node.scrollTop = saved.top;
     let raf = 0;
     const follow = () => {
-      if (!pinned.current || raf) return;
+      if (!pinned.current || hold?.current || raf) return;
       raf = requestAnimationFrame(() => {
         raf = 0;
         if (pinned.current) node.scrollTop = node.scrollHeight;

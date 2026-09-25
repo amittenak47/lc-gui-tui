@@ -22,6 +22,8 @@ describe("screenOverlayOpen", () => {
     expect(screenOverlayOpen()).toBe(true);
     document.body.innerHTML = '<div class="lc-modal-backdrop"></div>';
     expect(screenOverlayOpen()).toBe(true);
+    document.body.innerHTML = '<div class="lc-server-gate-boot"></div>';
+    expect(screenOverlayOpen()).toBe(true);
   });
 
   it("finds one that is not a child of body", () => {

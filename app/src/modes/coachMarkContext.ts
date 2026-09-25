@@ -95,7 +95,7 @@ export function formatFootnoteContext(
   options?: PackFootnoteContextOptions,
 ): string | null {
   const label =
-    number != null ? `Mark ${number}` : `Mark ${footnote.id.slice(0, 8)}`;
+    number != null ? `Annotation ${number}` : `Annotation ${footnote.id.slice(0, 8)}`;
   const lines: string[] = [`### ${label}`];
 
   const body = (footnote.blockText ?? footnote.excerpt ?? "").trim();
@@ -130,13 +130,13 @@ export function formatFootnoteContext(
     .map((mark) => `${mark.kind}: ${mark.excerpt}`.trim())
     .filter((line) => line.length > 2);
   if (subMarks.length > 0) {
-    lines.push("Sub-marks:");
+    lines.push("Nested annotations:");
     for (const line of subMarks) lines.push(`- ${condense(line, 200)}`);
   }
 
   const threads = dedupeFootnoteThreads([footnote]);
   if (threads.length > 0) {
-    lines.push("Prior chat threads (do not re-list duplicates across marks):");
+    lines.push("Prior chat threads (do not re-list duplicates across annotations):");
     for (const thread of threads) {
       lines.push(`- ${threadLine(thread, options?.threadTitles)}`);
     }
@@ -162,7 +162,7 @@ export function packFootnoteContext(
   const sharedThreads = dedupeFootnoteThreads(footnotes);
   const sharedIds = new Set(sharedThreads.map((thread) => thread.rootId));
 
-  const parts: string[] = ["Attached document marks:"];
+  const parts: string[] = ["Attached annotations (ink and footnotes):"];
   let used = parts[0]!.length;
 
   for (const footnote of footnotes) {
@@ -193,7 +193,7 @@ export function packFootnoteContext(
   }
 
   if (footnotes.length > 1 && sharedThreads.length > 0 && used < budget) {
-    const header = "Prior chat threads (deduped across marks):";
+    const header = "Prior chat threads (deduped across annotations):";
     const lines = sharedThreads.map(
       (thread) => `- ${threadLine(thread, options?.threadTitles)}`,
     );
@@ -246,7 +246,7 @@ function includedIdsFromPack(
   const ids: string[] = [];
   for (const mark of marks) {
     const number = numbers?.get(mark.id);
-    const needle = number != null ? `### Mark ${number}` : `### Mark ${mark.id.slice(0, 8)}`;
+    const needle = number != null ? `### Annotation ${number}` : `### Annotation ${mark.id.slice(0, 8)}`;
     if (packed.includes(needle)) ids.push(mark.id);
   }
   return ids;

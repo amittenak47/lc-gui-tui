@@ -13,10 +13,13 @@
  * Watching the DOM rather than asking each dialog to announce itself is
  * deliberate: there are a dozen of these, they come and go, and the one nobody
  * remembers to wire is the one that opens behind the page. Both class names are
- * already this app's convention for a full-screen backdrop.
+ * already this app's convention for a full-screen backdrop. The boot spinner
+ * is one of them: it is HTML, and a live page composites above it, so the
+ * page has to stay hidden until that overlay is gone.
  */
 
-export const SCREEN_OVERLAY_SELECTOR = ".lc-settings-backdrop, .lc-modal-backdrop";
+export const SCREEN_OVERLAY_SELECTOR =
+  ".lc-settings-backdrop, .lc-modal-backdrop, .lc-server-gate-boot";
 
 export function screenOverlayOpen(root: ParentNode | null = globalThis.document ?? null): boolean {
   if (!root) return false;

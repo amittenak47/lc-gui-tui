@@ -45,6 +45,20 @@ describe("organizeIntoSessions", () => {
     ]);
   });
 
+  it("keeps a retry answer in the question's session", () => {
+    const next = organizeIntoSessions([
+      msg("q1", { content: "See the board?", sessionId: "board" }),
+      msg("a1", { role: "assistant", content: "First", sessionId: "board", requestId: "q1" }),
+      msg("q2", { content: "Other", sessionId: "other" }),
+      msg("retry", { content: "See the board?", sessionId: "session-retry", retryOf: "q1" }),
+      msg("a2", { role: "assistant", content: "Second", sessionId: "session-retry", requestId: "retry" }),
+    ]);
+    expect(next.filter((message) => message.sessionId === "board").map((message) => message.id)).toEqual([
+      "q1", "a1", "retry", "a2",
+    ]);
+    expect(listSessions(next).map((session) => session.id)).toEqual(["board", "other"]);
+  });
+
   it("leaves an assigned transcript alone", () => {
     const messages = [msg("q1", { sessionId: "session-q1" })];
     expect(organizeIntoSessions(messages)).toBe(messages);

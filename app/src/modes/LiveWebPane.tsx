@@ -25,7 +25,7 @@ import {
   onLiveWebviewBack,
   onLiveWebviewNavigated,
 } from "../util/androidLiveWebview";
-import { watchScreenOverlay } from "../util/screenOverlay";
+import { screenOverlayOpen, watchScreenOverlay } from "../util/screenOverlay";
 import {
   closeLiveWebview,
   liveWebviewLabel,
@@ -142,7 +142,7 @@ export function LiveWebPane({
     const node = holeRef.current;
     if (!node) return;
     let cancelled = false;
-    void openLiveWebview(label, url, rectOf(node)).then(
+    void openLiveWebview(label, url, rectOf(node), visible && !screenOverlayOpen()).then(
       () => {
         if (!cancelled) setOpened((n) => n + 1);
       },

@@ -73,7 +73,8 @@ pub async fn webview_eval_json(
 /// PNG of the labeled child webview, base64, no `data:` prefix.
 ///
 /// The page is a native view painted over the board, so a board export is the
-/// hole underneath. WebView2 can photograph itself.
+/// hole underneath. WebView2 photographs itself. The completion is delivered
+/// on the UI thread, so this waits on the async runtime, not inside the call.
 #[tauri::command]
 pub async fn webview_capture_png(app: AppHandle, label: String) -> Result<String, String> {
     #[cfg(not(windows))]
@@ -89,14 +90,7 @@ pub async fn webview_capture_png(app: AppHandle, label: String) -> Result<String
         let (tx, rx) = tokio::sync::oneshot::channel();
         webview
             .with_webview(move |platform| {
-                // The preview finishes on this same thread, through the window
-                // loop. Waiting for it here never returns: the completion is
-                // sitting behind the call that is waiting for it.
-                if let Err(err) = begin_webview_capture(&platform, tx) {
-                    // begin_webview_capture sends on failure when it still holds
-                    // the channel. A send error means the listener is already gone.
-                    let _ = err;
-                }
+                start_preview(&platform, tx);
             })
             .map_err(|err| err.to_string())?;
         let png = tokio::time::timeout(std::time::Duration::from_secs(8), rx)
@@ -111,87 +105,75 @@ pub async fn webview_capture_png(app: AppHandle, label: String) -> Result<String
 }
 
 #[cfg(windows)]
-fn begin_webview_capture(
+fn start_preview(
     webview: &tauri::webview::PlatformWebview,
     tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
-) -> Result<(), String> {
+) {
     use std::sync::{Arc, Mutex};
-
-    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG;
     use webview2_com::CapturePreviewCompletedHandler;
+    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG;
     use windows::Win32::Foundation::HGLOBAL;
     use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
 
-    let held = Arc::new(Mutex::new(Some(tx)));
-    let fail = |held: &Mutex<Option<tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>>>, err: String| {
-        if let Some(tx) = held.lock().ok().and_then(|mut guard| guard.take()) {
-            let _ = tx.send(Err(err.clone()));
+    let slot = Arc::new(Mutex::new(Some(tx)));
+    let fail = |slot: &Mutex<Option<tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>>>, err: String| {
+        if let Ok(mut guard) = slot.lock() {
+            if let Some(sender) = guard.take() {
+                let _ = sender.send(Err(err));
+            }
         }
-        err
     };
-    let core = match unsafe { webview.controller().CoreWebView2() } {
+    let controller = webview.controller();
+    let core = match unsafe { controller.CoreWebView2() } {
         Ok(core) => core,
-        Err(err) => return Err(fail(&held, err.to_string())),
+        Err(err) => return fail(&slot, err.to_string()),
     };
     let stream = match unsafe { CreateStreamOnHGlobal(HGLOBAL::default(), true) } {
         Ok(stream) => stream,
-        Err(err) => return Err(fail(&held, err.to_string())),
+        Err(err) => return fail(&slot, err.to_string()),
     };
-    let slot = held.clone();
-    let preview = stream.clone();
-    let handler = CapturePreviewCompletedHandler::create(Box::new(move |result| {
-        let outcome = match result {
-            Ok(()) => read_preview_png(&preview),
-            Err(err) => Err(err.to_string()),
-        };
-        if let Some(tx) = slot.lock().ok().and_then(|mut guard| guard.take()) {
-            let _ = tx.send(outcome);
+    let stream_for_cb = stream.clone();
+    let slot_cb = slot.clone();
+    let handler = CapturePreviewCompletedHandler::create(Box::new(move |hr| {
+        let bytes = (|| {
+            hr.map_err(|err| err.to_string())?;
+            read_png_stream(&stream_for_cb)
+        })();
+        if let Ok(mut guard) = slot_cb.lock() {
+            if let Some(sender) = guard.take() {
+                let _ = sender.send(bytes);
+            }
         }
         Ok(())
     }));
     if let Err(err) = unsafe {
-        core.CapturePreview(
-            COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
-            &stream,
-            &handler,
-        )
+        core.CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, &stream, &handler)
     } {
-        if let Some(tx) = held.lock().ok().and_then(|mut guard| guard.take()) {
-            let _ = tx.send(Err(err.to_string()));
-        }
-        return Err(err.to_string());
+        fail(&slot, err.to_string());
     }
-    Ok(())
 }
 
 #[cfg(windows)]
-fn read_preview_png(stream: &windows::Win32::System::Com::IStream) -> Result<Vec<u8>, String> {
-    use windows::Win32::System::Com::STREAM_SEEK;
-
-    let mut end = 0u64;
+fn read_png_stream(stream: &windows::Win32::System::Com::IStream) -> Result<Vec<u8>, String> {
+    use windows::Win32::System::Com::{STATFLAG_NONAME, STATSTG, STREAM_SEEK_SET};
     unsafe {
-        stream
-            .Seek(0, STREAM_SEEK(2), Some(&mut end))
-            .map_err(|err| err.to_string())?;
-        stream
-            .Seek(0, STREAM_SEEK(0), None)
-            .map_err(|err| err.to_string())?;
-    }
-    let size = usize::try_from(end).map_err(|_| "the page capture is too large")?;
-    if size == 0 {
-        return Err("the page capture was empty".into());
-    }
-    let mut bytes = vec![0u8; size];
-    let mut read = 0u32;
-    unsafe {
+        let mut stat = STATSTG::default();
+        stream.Stat(&mut stat, STATFLAG_NONAME).map_err(|err| err.to_string())?;
+        let size = usize::try_from(stat.cbSize).map_err(|_| "the live page capture was empty".to_string())?;
+        if size < 8 || size > 20_000_000 {
+            return Err("the live page capture was empty".into());
+        }
+        stream.Seek(0, STREAM_SEEK_SET, None).map_err(|err| err.to_string())?;
+        let mut bytes = vec![0u8; size];
+        let mut read = 0u32;
         stream
             .Read(bytes.as_mut_ptr().cast(), size as u32, Some(&mut read))
             .ok()
             .map_err(|err| err.to_string())?;
+        bytes.truncate(read as usize);
+        if bytes.len() < 8 || bytes[..8] != [137, 80, 78, 71, 13, 10, 26, 10] {
+            return Err("the live page capture was not a picture".into());
+        }
+        Ok(bytes)
     }
-    bytes.truncate(read as usize);
-    if bytes.is_empty() {
-        return Err("the page capture was empty".into());
-    }
-    Ok(bytes)
 }
