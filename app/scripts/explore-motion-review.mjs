@@ -42,6 +42,10 @@ try {
 
   await send('Emulation.setDeviceMetricsOverride',{width:1100,height:800,deviceScaleFactor:1,mobile:false});await sleep(1400);
   const positions=()=>evaluate(`Object.fromEntries([...document.querySelectorAll('.lc-explore-node.is-whiteboard')].map(n=>{const r=n.getBoundingClientRect();return [n.textContent.trim(),{x:r.x,y:r.y}]}))`);
+  const edgeBefore=await evaluate(`document.querySelector('.lc-explore-beam').getAttribute('d')`);
+  await sleep(500);
+  const edgeAfter=await evaluate(`document.querySelector('.lc-explore-beam').getAttribute('d')`);
+  assert(edgeBefore!==edgeAfter && (edgeAfter.match(/ C/g)||[]).length===8,'Edges did not ripple through multiple bends');
   const before=await positions();
   await evaluate(`document.querySelector('[aria-label="Find a workspace"]').click()`);await sleep(320);
   await evaluate(`document.querySelector('[aria-label="Whiteboards"]').click()`);await sleep(35);

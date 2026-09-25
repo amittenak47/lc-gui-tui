@@ -29,6 +29,7 @@ import { BackgroundPalette } from "../components/BackgroundPalette";
 import { MorphBar } from "../components/MorphBar";
 import { useShell } from "../shellContext";
 import type { LcClient } from "../api/client";
+import {looseEdgePath,edgePhase} from "./exploreEdge";
 import { NodeSheet, type NodeSheetNeighbour } from "./NodeSheet";
 import {
   CLUSTERS,
@@ -36,7 +37,6 @@ import {
   clusterLabels,
   clusterSettled,
   makeBodies,
-  sagOf,
   settle,
   step,
   EDGE_PAD,
@@ -159,6 +159,7 @@ export function ExploreWorkspace({
   const hostRef = useRef<HTMLDivElement | null>(null);
   /** Edges by id, for the paint loop, which must not depend on React state. */
   const edgeIndexRef = useRef(new Map<string, Edge>());
+  const edgePhasesRef = useRef(new Map<string,number>());
   /** The same edges as springs, for the simulation. */
   const linksRef = useRef<Link[]>([]);
   const bodiesRef = useRef<Body[]>([]);
@@ -194,6 +195,7 @@ export function ExploreWorkspace({
 
   useEffect(() => {
     edgeIndexRef.current = new Map(edges.map((edge) => [edge.id, edge]));
+    edgePhasesRef.current = new Map(edges.map(edge=>[edge.id,edgePhase(edge.id)]));
     linksRef.current = edges.map((edge) => ({
       a: nodeKey(edge.from),
       b: nodeKey(edge.to),
@@ -324,38 +326,15 @@ export function ExploreWorkspace({
     }
     for(const body of leavingRef.current) if(!at.has(body.key)) at.set(body.key,{x:body.x*w,y:body.y*h,vx:0,vy:0});
     const aspect = h > 0 ? w / h : 1.6;
+    const edgeTime=prefersReducedMotion()?0:performance.now()/1000;
     for (const [id, line] of edgeElsRef.current) {
       const edge = edgeIndexRef.current.get(id);
       if (!edge) continue;
       const from = at.get(nodeKey(edge.from));
       const to = at.get(nodeKey(edge.to));
       if (!from || !to) continue;
-      /*
-       * A quadratic whose control point is pushed off the chord.
-       *
-       * How far is `sagOf`, which reads the spring's extension, so a slack
-       * link hangs and a stretched one pulls straight. The side is seeded from
-       * the edge id, or every link in a bundle would bow the same way and the
-       * whole thing would look combed.
-       */
-      const dx = to.x - from.x;
-      const dy = to.y - from.y;
-      const pixels = Math.hypot(dx, dy) || 1;
-      // Back into normalized, aspect-corrected units to ask about the spring.
-      const normalized = Math.hypot((dx / Math.max(w, 1)) * aspect, dy / Math.max(h, 1));
-      const bow = sagOf(normalized) * pixels * sideOf(id);
-      // Each end has its own bend. Opposing handles form an S rather than
-      // forcing the whole link to bow to one side; motion pulls on both ends.
-      const velocityBend = (vx:number,vy:number)=>Math.max(-pixels*.28,Math.min(pixels*.28,(-dy*vx+dx*vy)/pixels*.18));
-      const startBend = bow + velocityBend(from.vx,from.vy);
-      const flex = -bow * .72 + velocityBend(to.vx,to.vy);
-      const nx = -dy / pixels;
-      const ny = dx / pixels;
-      const c1x = from.x + dx * 0.28 + nx * startBend;
-      const c1y = from.y + dy * 0.28 + ny * startBend;
-      const c2x = from.x + dx * 0.72 + nx * flex;
-      const c2y = from.y + dy * 0.72 + ny * flex;
-      const d = `M${from.x.toFixed(1)} ${from.y.toFixed(1)} C${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${to.x.toFixed(1)} ${to.y.toFixed(1)}`;
+      const normalized=Math.hypot((to.x-from.x)/Math.max(w,1)*aspect,(to.y-from.y)/Math.max(h,1));
+      const d=looseEdgePath(from,to,edgePhasesRef.current.get(id)??0,edgeTime,normalized);
       line.setAttribute("d", d);
       glowElsRef.current.get(id)?.setAttribute("d", d);
     }
@@ -902,16 +881,6 @@ export function ExploreWorkspace({
       )}
     </div>
   );
-}
-
-/** Which way an edge bows. Seeded from its id so a bundle is not combed flat. */
-function sideOf(id: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < id.length; i += 1) {
-    hash ^= id.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return (hash & 1) === 0 ? 1 : -1;
 }
 
 function innerWidthSafe(): number {
