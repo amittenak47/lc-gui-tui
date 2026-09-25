@@ -54,7 +54,8 @@ import {
   syncRegionLayout,
   type LayoutElement,
 } from "../templates/regionLayout";
-import { readingColumnWidth } from "../templates/readingColumn";
+import { READING_COLUMN_MAX } from "../templates/readingColumn";
+import { codePageGeometry } from "../util/codePageGeometry";
 import {
   CAMERA_IDLE_TEARDOWN_MS,
   cameraPulseSettleMs,
@@ -76,7 +77,7 @@ import {
 } from "../templates/drawPageGrowth";
 import { INK_REGION_GAP, INK_REGION_PAD, inkRegionSplit } from "./inkRegionSplit";
 import { recolorTemplateElements } from "../templates/problemBoard";
-import { codeFrameHeightForSource, codeLabelReserve } from "../util/solutionPad";
+import { codeFrameHeightForSource } from "../util/solutionPad";
 import { MOBILE_REGION_ORDER, REGION_GUTTER, REGION_MIN, REGION_BLURB, REGIONS, STUDENT_REGION_ORDER, type RegionId } from "../templates/regions";
 import {
   BOARD_THEMES,
@@ -956,9 +957,8 @@ function measureChromeInsets(
   chromeHidden: boolean,
   mobile: boolean,
 ): { top: number; left: number; right: number; bottom: number } {
-  return mobile
-    ? mobilePageInsets(toolbarH, chromeHidden)
-    : desktopPageInsets(toolbarH, chromeHidden);
+  const inset = mobile ? mobilePageInsets(toolbarH, chromeHidden) : desktopPageInsets(toolbarH, chromeHidden);
+  return {...inset, top: _boardEl?.classList.contains("lc-board-code-page") ? 54 : mobile ? 6 : 8};
 }
 
 /**
@@ -1270,7 +1270,7 @@ function sameCodeSlot(a: ScreenRect | null, b: ScreenRect | null): boolean {
     a.top === b.top &&
     a.width === b.width &&
     a.height === b.height &&
-    a.zoom === b.zoom
+    a.zoom === b.zoom && a.sceneScale === b.sceneScale
   );
 }
 
@@ -2520,74 +2520,19 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const scrollY = state.scrollY ?? 0;
     // Overlay is positioned inside `.lc-canvas-wrap`, which matches the Excalidraw
     // viewport — do not add page offsets (those are for clientX/clientY only).
-    const inset = Math.max(6, Math.round(8 * zoom));
-    // Screen pixels, not scene units. Width-fit zoom changes with the window,
-    // and scaling this reserve made the gap above the editor grow and shrink.
-    const headerReserve = codeLabelReserve(readingSizeRef.current);
-    const rawLeft = (frame.x + scrollX) * zoom + inset;
-    const rawTop = (frame.y + scrollY) * zoom + headerReserve;
-    const rawWidth = Math.max(0, num(frame.width, REGIONS.code.w) * zoom - inset * 2);
-    const rawHeight = Math.max(
-      0,
-      num(frame.height, REGIONS.code.h) * zoom - inset * 2 - headerReserve,
-    );
-
-    /*
-     * On the code page the dock is bounded by the screen, not by the frame.
-     *
-     * Zoom already reaches Monaco as a font size, and word wrap is on, so
-     * zooming in *should* mean bigger code re-flowed to the same column with
-     * the overflow under Monaco's own scrollbar. It did not, because the dock
-     * was sized from the scene rect: the box grew with the zoom too, so the
-     * text re-wrapped to a column that was now wider than the viewport and the
-     * rest of it sat off the right-hand edge — unreachable, because a page
-     * that is one HTML editor has nothing for the hand tool to pan.
-     *
-     * Clamping the box to the visible area fixes both halves at once. The
-     * column stays the width of the screen however far in the zoom goes, the
-     * text re-wraps into it, and what does not fit vertically is a scroll
-     * rather than a pan.
-     */
-    const onCodePage = page === "code";
+    // One authored editor layout. Scale its whole DOM with the scene, including
+    // gutter and padding: font-only zoom rewraps code underneath existing ink.
+    const geometry = codePageGeometry(num(frame.width, REGIONS.code.w));
+    const scale = zoom * geometry.sceneScale;
     const viewWidth = typeof state.width === "number" ? state.width : 0;
     const viewHeight = typeof state.height === "number" ? state.height : 0;
-    const margin = Math.max(8, inset);
-    const clampedLeft = onCodePage ? Math.max(margin, rawLeft) : rawLeft;
-    const clampedTop = onCodePage ? Math.max(margin, rawTop) : rawTop;
     const next: ScreenRect = {
-      left: roundPx(clampedLeft),
-      top: roundPx(clampedTop),
-      width: roundPx(
-        onCodePage && viewWidth > 0
-          ? Math.max(0, Math.min(rawWidth, viewWidth - clampedLeft - margin))
-          : rawWidth,
-      ),
-      /*
-       * Width is bounded by the screen; height is not.
-       *
-       * Clamping the height was what left Monaco with its own scrollbar, and an
-       * editor that scrolls internally slides the code out from under ink that
-       * does not move with it. The dock is now as tall as the page frame, which
-       * is as tall as the code, so there is nothing left for Monaco to scroll —
-       * the board scrolls instead, carrying text and marks on one transform.
-       */
-      height: roundPx(rawHeight),
-      /*
-       * On the code page, zoom is reported *relative to the page fit*.
-       *
-       * Monaco multiplies its base font by this. Absolute board zoom made that
-       * base meaningless: the code region is a wide scene rect, so fitting it
-       * to a tablet lands at a fraction of 1 and the editor rendered at a
-       * fraction of its readable size — the "desktop view squeezed onto a
-       * phone" problem. Measured against the fit instead, the page opens at the
-       * reading size the S/M/L preference actually names, and zooming from
-       * there scales it the way it reads: 2× really is twice the type.
-       */
-      zoom: Math.round(
-        (onCodePage && (fitZoomMinRef.current ?? 0) > 0
-          ? zoom / (fitZoomMinRef.current as number)
-          : zoom) * 1000,
-      ) / 1000,
+      left: (frame.x + scrollX) * zoom + geometry.inset * zoom,
+      top: (frame.y + scrollY) * zoom + geometry.header * zoom,
+      width: geometry.width * zoom,
+      height: Math.max(0, (num(frame.height, REGIONS.code.h) - geometry.header - geometry.inset) * zoom),
+      zoom: scale,
+      sceneScale: geometry.sceneScale,
     };
 
     // Hide the dock when the code frame is fully off-screen — switching to the
@@ -6417,23 +6362,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           const regionKey = primary.customData?.lcRegion;
           const isScratch =
             typeof regionKey === "string" && regionKey.startsWith("pad-");
-          /*
-           * A reading column is re-measured against the screen on every fit.
-           *
-           * Its scene width is what the width-only fit divides by, so it is
-           * also what decides the type size — leaving it at whatever the frame
-           * happened to be is how the statement ended up four screens wide with
-           * 3px text. Re-deriving it here means a board saved under the old
-           * geometry heals the first time it is opened, and a rotate or a coach
-           * panel opening re-flows the column instead of shrinking the words.
-           */
+          // Keep an authored document width across window changes. The camera
+          // scales text and ink together, as it does for Markdown pages.
           const readingColumn = isReadingColumnFrame(primary);
           const frameW = Math.max(
             1,
             isScratch
               ? SCRATCH_PAGE_W
               : readingColumn
-                ? readingColumnWidth(availWidth)
+                ? READING_COLUMN_MAX
                 : num(primary.width, REGIONS.approach.w),
           );
           // Raw ratio — do not floor to ZOOM_MIN or fillHeight collapses.
@@ -9684,6 +9621,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         interactive && activeTool === "text" && "lc-board-text-tool",
         transparentCanvas && "lc-board-paper",
         docPaper && "lc-board-doc-paper",
+        mobileRegion === "code" && "lc-board-code-page",
         // Highlighting / text-mark tools hand the surface back to the document
         // for the length of the gesture — see the rules in styles.css.
         (highlighting || textMarkSelecting) && "lc-board-highlighting",

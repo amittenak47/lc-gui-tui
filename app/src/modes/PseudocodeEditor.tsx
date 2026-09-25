@@ -8,7 +8,7 @@
  * Only Python is wired through the workspace for now — no language picker.
  */
 
-import { Component, Suspense, lazy, type ErrorInfo, type ReactNode, useState } from "react";
+import { Component, Suspense, lazy, type ErrorInfo, type ReactNode, useState, useEffect } from "react";
 
 import { joinSolution, splitSolution } from "../util/solutionSplit";
 import type { BoardReadingSize } from "./codeFontSize";
@@ -31,10 +31,12 @@ export interface PseudocodeEditorProps {
   variant?: "panel" | "dock";
   /** Monaco's full content height, so the board page can grow to it. */
   onCodeHeight?: (height: number) => void;
+  onVisibleCode?: (source: string, hasTabs: boolean) => void;
 }
 
 export function PseudocodeEditor({
   onCodeHeight,
+  onVisibleCode,
   value,
   onChange,
   themeId = "blue",
@@ -55,6 +57,8 @@ export function PseudocodeEditor({
   const hasImports = Boolean(split && split.skeleton.trim().length > 0);
   const active =
     hasImports && tab === "imports" ? split!.skeleton : hasImports ? split!.body : value;
+
+  useEffect(() => { onVisibleCode?.(active, hasImports); }, [active, hasImports, onVisibleCode]);
 
   const editTab = (next: string) => {
     if (!hasImports || !split) return onChange(next);
@@ -86,7 +90,7 @@ export function PseudocodeEditor({
           height={dock ? "100%" : "min(42vh, 360px)"}
           onChange={editTab}
           onReady={() => {}}
-          onContentHeight={onCodeHeight}
+          onContentHeight={onCodeHeight ? height => onCodeHeight(height + (hasImports ? 32 : 0) + 44) : undefined}
         />
       </Suspense>
     </ErrorBoundary>

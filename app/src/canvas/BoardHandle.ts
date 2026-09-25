@@ -89,6 +89,8 @@ export interface ScreenRect {
   height: number;
   /** Excalidraw zoom — Monaco must scale fonts with this (HTML doesn't). */
   zoom: number;
+  /** Scene units per authored editor pixel; independent of viewport zoom. */
+  sceneScale?: number;
 }
 
 export interface BoardHandle {

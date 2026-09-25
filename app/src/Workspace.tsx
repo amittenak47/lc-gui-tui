@@ -80,7 +80,9 @@ import {
 } from "./canvas/snapshot";
 import { hasCodeAnnotations, renderAnnotatedCode } from "./canvas/codeAnnotation";
 import { BOARD_THEMES } from "./templates/skeleton";
-import { statementLinePitch } from "./modes/codeFontSize";
+import { CODE_FONT_PX } from "./modes/codeFontSize";
+import { codePageGeometry, CODE_TAB_HEIGHT } from "./util/codePageGeometry";
+import { splitSolution } from "./util/solutionSplit";
 import { sha256Hex } from "./util/codeHash";
 import { copyTextToClipboard } from "./util/clipboard";
 import { skeletonOf } from "./util/solutionSplit";
@@ -2085,6 +2087,7 @@ export function Workspace({
     dismissFootnoteOverview();
     setCoachOpen(true);
   }, [dismissFootnoteOverview]);
+  const visibleCodeRef = useRef<{taskId:string;source:string;hasTabs:boolean}|null>(null);
   const [codeSlot, setCodeSlot] = useState<ScreenRect | null>(null);
   const deepLinkHandled = useRef(false);
   const lastCodeSlotRef = useRef<ScreenRect | null>(null);
@@ -6736,13 +6739,19 @@ export function Workspace({
         if (!hasCodeAnnotations(ops, box)) return null;
         const theme =
           BOARD_THEMES.find((candidate) => candidate.id === themeId) ?? BOARD_THEMES[0];
+        const geometry = codePageGeometry(frame.width ?? 1200);
+        const split = splitSolution(pseudocodeRef.current);
+        const visibleCode = visibleCodeRef.current?.taskId === problemRef.current?.task_id ? visibleCodeRef.current : null;
+        const hasTabs = visibleCode?.hasTabs ?? Boolean(split?.skeleton.trim());
         const png = renderAnnotatedCode({
-          source: pseudocodeRef.current,
+          source: visibleCode?.source ?? (hasTabs ? split!.body : pseudocodeRef.current),
           ops,
           box,
           background: theme.background,
           textColor: isDarkTheme(themeId) ? "#e6edf3" : "#1b1f24",
-          fontScene: statementLinePitch(readingSize) * 0.55,
+          fontScene: CODE_FONT_PX[readingSize] * geometry.sceneScale,
+          layout: {sceneScale:geometry.sceneScale, inset:geometry.inset,
+            top:geometry.header + (hasTabs ? CODE_TAB_HEIGHT * geometry.sceneScale : 0)},
         });
         return png ? { label: "Annotated code", png } : null;
       })();
@@ -11023,8 +11032,10 @@ export function Workspace({
                 style={{
                   left: slot.left,
                   top: slot.top,
-                  width: slot.width,
-                  height: slot.height,
+                  width: slot.width / slot.zoom,
+                  height: slot.height / slot.zoom,
+                  transform: `scale(${slot.zoom})`,
+                  transformOrigin: "top left",
                   ["--lc-code-zoom" as string]: String(slot.zoom ?? 1),
                 }}
                 // Excalidraw listens for keys on document; keep them in the dock.
@@ -11036,11 +11047,12 @@ export function Workspace({
                   value={pseudocode}
                   onChange={setPseudocode}
                   themeId={themeId}
-                  zoom={slot.zoom ?? 1}
+                  zoom={1}
                   readingSize={readingSize}
                   defaultOpen
                   variant="dock"
-                  onCodeHeight={setCodeContentHeight}
+                  onVisibleCode={(source, hasTabs) => { visibleCodeRef.current = {taskId:problem.task_id,source,hasTabs}; }}
+                  onCodeHeight={height => setCodeContentHeight(height * (slot.sceneScale ?? 1))}
                 />
               </div>
             );

@@ -29,7 +29,7 @@ export interface SceneBox {
 const EXPORT_SCALE = 2;
 /** Monospace advance as a fraction of font size — near enough for any mono face. */
 const ADVANCE_RATIO = 0.6;
-const LINE_HEIGHT_RATIO = 1.5;
+const LINE_HEIGHT_RATIO = 1.55;
 /** Left gutter for line numbers, in characters. */
 const GUTTER_CHARS = 4;
 
@@ -89,6 +89,7 @@ export interface RenderAnnotatedCodeInput {
   textColor: string;
   /** Scene-space font size the code is shown at. */
   fontScene: number;
+  layout?: {sceneScale:number;inset:number;top:number};
 }
 
 /**
@@ -98,9 +99,10 @@ export interface RenderAnnotatedCodeInput {
 export function renderAnnotatedCode(input: RenderAnnotatedCodeInput): string {
   const width = Math.max(1, input.box.maxX - input.box.minX);
   const height = Math.max(1, input.box.maxY - input.box.minY);
+  const scale = Math.min(EXPORT_SCALE, 1600 / width, 4096 / height);
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(width * EXPORT_SCALE));
-  canvas.height = Math.max(1, Math.round(height * EXPORT_SCALE));
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
   const ctx = canvas.getContext("2d");
   if (!ctx) return "";
 
@@ -108,11 +110,12 @@ export function renderAnnotatedCode(input: RenderAnnotatedCodeInput): string {
   ctx.fillStyle = input.background;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  const fontPx = Math.max(6, input.fontScene) * EXPORT_SCALE;
+  const fontPx = Math.max(6, input.fontScene) * scale;
   const advance = fontPx * ADVANCE_RATIO;
-  const lineHeight = fontPx * LINE_HEIGHT_RATIO;
-  const pad = fontPx * 0.6;
-  const gutter = advance * GUTTER_CHARS;
+  const unit = (input.layout?.sceneScale ?? 1) * scale;
+  const lineHeight = input.layout ? Math.round(input.fontScene / input.layout.sceneScale * LINE_HEIGHT_RATIO) * unit : fontPx * LINE_HEIGHT_RATIO;
+  const pad = input.layout ? input.layout.inset * scale : fontPx * 0.6;
+  const gutter = advance * GUTTER_CHARS + (input.layout ? 10 * unit : 0);
   const columns = Math.max(8, Math.floor((canvas.width - pad * 2 - gutter) / advance));
 
   ctx.font = `${fontPx}px Consolas, "Cascadia Code", "Courier New", monospace`;
@@ -120,7 +123,7 @@ export function renderAnnotatedCode(input: RenderAnnotatedCodeInput): string {
 
   // Line numbers track the *source* line, not the wrapped row, so a mark on a
   // continuation still names the line a reader would cite.
-  let y = pad + fontPx;
+  let y = input.layout ? input.layout.top * scale + 8 * unit + (lineHeight - fontPx) / 2 + fontPx * .8 : pad + fontPx;
   let sourceLine = 0;
   for (const raw of input.source.replace(/\t/g, "    ").split("\n")) {
     sourceLine += 1;
@@ -149,12 +152,12 @@ export function renderAnnotatedCode(input: RenderAnnotatedCodeInput): string {
    * the mark is on, and the answer is entirely in the y.
    */
   ctx.setTransform(
-    EXPORT_SCALE,
+    scale,
     0,
     0,
-    EXPORT_SCALE,
-    -input.box.minX * EXPORT_SCALE,
-    -input.box.minY * EXPORT_SCALE,
+    scale,
+    -input.box.minX * scale,
+    -input.box.minY * scale,
   );
   ctx.save();
   ctx.beginPath();
@@ -170,7 +173,7 @@ export function renderAnnotatedCode(input: RenderAnnotatedCodeInput): string {
     ) {
       continue;
     }
-    applyInkOp(ctx, op, EXPORT_SCALE);
+    applyInkOp(ctx, op, scale);
   }
   ctx.restore();
   ctx.setTransform(1, 0, 0, 1, 0, 0);

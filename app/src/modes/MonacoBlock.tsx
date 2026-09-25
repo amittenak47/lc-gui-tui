@@ -249,6 +249,7 @@ export default function MonacoBlock({
         minimap: { enabled: false },
         lineNumbers: "on",
         fontSize,
+        lineHeight: Math.round(fontSize * 1.55),
         fontFamily: "Consolas, 'Cascadia Code', 'Courier New', monospace",
         scrollBeyondLastLine: false,
         wordWrap: "on",
@@ -258,7 +259,10 @@ export default function MonacoBlock({
         overviewRulerBorder: false,
         hideCursorInOverviewRuler: true,
         padding: { top: PAD_TOP },
-        folding: true,
+        folding: false,
+        lineNumbersMinChars: 4,
+        lineDecorationsWidth: 10,
+        wrappingIndent: "none",
         // Chromium EditContext focuses a div Excalidraw does not treat as
         // writable, so board shortcuts (H, ?, tools…) fire while coding.
         editContext: false,

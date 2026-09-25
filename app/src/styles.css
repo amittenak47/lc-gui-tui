@@ -21058,3 +21058,6 @@ button.lc-row-selected:hover:not(:disabled) {
   color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .lc-hub-conflict-head button.lc-hub-conflict-filter:focus-visible { outline: 2px solid var(--accent); }
+
+/* Tabs and editor are one authored page, transformed with its ink. */
+.lc-code-dock .lc-code-tabs { height: 32px; flex: 0 0 32px; box-sizing: border-box; }
