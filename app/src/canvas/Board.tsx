@@ -176,7 +176,6 @@ import { remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
 import { eraserPageWidth, eraserScreenRadius } from "./rasterInk";
 import { applyLinedSlotStyle, linedOverlayViewport, linedSlotCanSkip } from "./linedSlot";
 import { PANEL_RESIZE_EVENT, SPLIT_RESIZE_EVENT, boardResizeDeferred, sashDragActive, splitResizePhase } from "../util/splitResize";
-import { PanelResizeMotion } from "./panelResizeMotion";
 import { reanchorInkOps } from "./reanchorInk";
 import { shouldSeedInkFromBlob } from "./inkRestore";
 import { EraserBrush, type EraserBrushHandle } from "./EraserBrush";
@@ -7371,39 +7370,116 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * last-fitted box so the run cannot early-out on "same size as last time".
      * One remesh — a timeout ladder Recentred the book five times.
      */
-    const onSplitResize = (event: Event) => {
-      if (splitResizePhase(event) !== "settle") return;
-      panelMotion.finish();
-      splitFitRef.current = true;
-      try { onOrient(); } finally { splitFitRef.current = false; }
+    let panelFrame = 0;
+    let panelSharpAt = 0;
+    const stopPanelPaint = () => {
+      if (panelFrame) cancelAnimationFrame(panelFrame);
+      panelFrame = 0;
+      fittingCameraRef.current = false;
+      board.querySelectorAll<HTMLCanvasElement>("canvas.lc-ink-lab-canvas").forEach((node) => {
+        node.style.width = "";
+        node.style.height = "";
+        node.style.top = "";
+        delete node.dataset.lcPanelW;
+        delete node.dataset.lcPanelH;
+        delete node.dataset.lcPanelTop;
+      });
     };
-    const panelMotion = new PanelResizeMotion();
-    const onPanelResize = (event: Event) => {
-      const bounds = pageBoundsRef.current, camera = liveCameraRef.current;
-      if (!bounds || !camera || !board.offsetWidth || !board.offsetHeight) return;
-      const main = board.closest(".lc-main");
-      const app = board.closest(".lc-app");
-      let viewWidth = board.clientWidth;
-      if (main instanceof HTMLElement && app instanceof HTMLElement) {
-        const agent = Number.parseFloat(getComputedStyle(app).getPropertyValue("--lc-agent-width")) || 520;
-        const margins = getComputedStyle(main);
-        const current = (Number.parseFloat(margins.marginLeft) || 0) + (Number.parseFloat(margins.marginRight) || 0);
-        const target = app.classList.contains("lc-app-agent-open") ? agent : 0;
-        viewWidth = Math.max(1, board.clientWidth - (target - current));
-      }
+    const paintPanelFrame = (from: { scrollX: number; scrollY: number; zoom: number }) => {
+      const api = apiRef.current;
+      const bounds = pageBoundsRef.current;
+      if (!api || !bounds || !board.offsetWidth) return;
+      const box = board.getBoundingClientRect();
+      if (box.width < 8 || box.height < 8) return;
       const measured = measureChromeInsets(board, toolbarHeightRef.current, mapChromeHiddenRef.current, false);
       const inset = { top: measured.top + safeCssPx("--lc-safe-top"), bottom: measured.bottom + safeCssPx("--lc-safe-bottom"),
         left: measured.left + safeCssPx("--lc-safe-left"), right: measured.right + safeCssPx("--lc-safe-right") };
-      const input = { box: bounds, inset, viewWidth,
-        prevZoom: camera.zoom, prevScrollX: camera.scrollX, prevScrollY: camera.scrollY, zoomMin: FIT_ZOOM_MIN, zoomMax: ZOOM_MAX };
-      const targetCamera = isDrawPageRegion(mobileRegionRef.current)
+      const input = { box: bounds, inset, viewWidth: box.width,
+        prevZoom: from.zoom, prevScrollX: from.scrollX, prevScrollY: from.scrollY, zoomMin: FIT_ZOOM_MIN, zoomMax: ZOOM_MAX };
+      const next = isDrawPageRegion(mobileRegionRef.current)
         ? drawPageRecentreCamera(input) : documentCameraAfterViewportChange(input);
-      panelMotion.start(board, camera, targetCamera, camera.offsetLeft, (event as CustomEvent<{ duration: number }>).detail.duration);
+      const width = Math.round(box.width);
+      const height = Math.round(box.height);
+      fittingCameraRef.current = true;
+      api.updateScene({
+        appState: {
+          zoom: { value: next.zoom },
+          scrollX: next.scrollX,
+          scrollY: next.scrollY,
+          width,
+          height,
+          offsetLeft: box.left,
+          offsetTop: box.top,
+        },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+      committedPanCameraRef.current = { scrollX: next.scrollX, scrollY: next.scrollY, zoom: next.zoom };
+      liveCameraRef.current = {
+        scrollX: next.scrollX, scrollY: next.scrollY, zoom: next.zoom,
+        width, height, offsetLeft: box.left, offsetTop: box.top, live: false,
+      };
+      clearPanOffsetsRef.current();
+      placeContentSlotAtRef.current(next.scrollX, next.scrollY, next.zoom);
+      // The bitmap stays. Its CSS box tracks the hole every frame, which is the
+      // smooth scale. A sharp replay is heavier than a frame, so it runs on a
+      // short cadence and must not clear the pixels first.
+      const ink = board.querySelector<HTMLCanvasElement>("canvas.lc-ink-lab-canvas");
+      const host = ink?.parentElement;
+      if (ink && host && host.clientWidth > 8) {
+        const baseW = Number(ink.dataset.lcPanelW) || ink.clientWidth;
+        const baseH = Number(ink.dataset.lcPanelH) || ink.clientHeight;
+        const baseTop = Number(ink.dataset.lcPanelTop) || Number.parseFloat(ink.style.top) || 0;
+        if (!ink.dataset.lcPanelW) {
+          ink.dataset.lcPanelW = String(baseW);
+          ink.dataset.lcPanelH = String(baseH);
+          ink.dataset.lcPanelTop = String(baseTop);
+        }
+        const factor = host.clientWidth / Math.max(1, baseW);
+        ink.style.width = `${host.clientWidth}px`;
+        ink.style.height = `${baseH * factor}px`;
+        ink.style.top = `${baseTop * factor}px`;
+      }
+      const now = performance.now();
+      if (!rasterInkRef.current?.isDrawing() && now - panelSharpAt > 70) {
+        panelSharpAt = now;
+        void Promise.resolve(rasterInkRef.current?.syncCamera()).then(() => {
+          if (!ink) return;
+          delete ink.dataset.lcPanelW;
+          delete ink.dataset.lcPanelH;
+          delete ink.dataset.lcPanelTop;
+        });
+      }
+      sceneOverlayRef.current?.redraw();
+      shapeSelectRef.current?.redraw();
+    };
+    const onSplitResize = (event: Event) => {
+      if (splitResizePhase(event) !== "settle") return;
+      stopPanelPaint();
+      splitFitRef.current = true;
+      try { onOrient(); } finally { splitFitRef.current = false; }
+    };
+    const onPanelResize = (event: Event) => {
+      const camera = liveCameraRef.current;
+      if (!camera || !board.offsetWidth || !board.offsetHeight) return;
+      const duration = (event as CustomEvent<{ duration: number }>).detail?.duration ?? 0;
+      stopPanelPaint();
+      panelSharpAt = 0;
+      if (!duration) return;
+      const from = { scrollX: camera.scrollX, scrollY: camera.scrollY, zoom: camera.zoom };
+      const tick = () => {
+        if (!document.body.dataset.lcPanelMotion) {
+          panelFrame = 0;
+          return;
+        }
+        paintPanelFrame(from);
+        panelFrame = requestAnimationFrame(tick);
+      };
+      panelFrame = requestAnimationFrame(tick);
     };
     window.addEventListener(PANEL_RESIZE_EVENT, onPanelResize);
     window.addEventListener(SPLIT_RESIZE_EVENT, onSplitResize);
     return () => {
-      panelMotion.finish();
+      stopPanelPaint();
       window.removeEventListener(PANEL_RESIZE_EVENT, onPanelResize);
       observer.disconnect();
       window.removeEventListener("resize", scheduleLiveViewportFit);

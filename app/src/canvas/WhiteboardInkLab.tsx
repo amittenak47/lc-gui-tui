@@ -862,7 +862,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           const riding = Boolean(canvas.style.transform);
           tiles.setSliceVisible(!riding && preparingRef.current);
           tiles.draw(sctx, livePaint, liveDpr);
-          if (!tiles.covered) return;
+          if (!tiles.covered) {
+            canvas.style.visibility = "";
+            return;
+          }
           tiles.setSliceVisible(false);
           if (drawingRef.current && !finishReplayWhileDrawing()) {
             committedBuildRef.current = false;
@@ -1446,8 +1449,18 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
          * ANR on a dense notebook.
          */
         if (!inkCanvasPixelsChanged(canvas, pixelW, pixelH)) return;
+        // Assigning canvas.width clears the bitmap. Keep the previous frame
+        // stretched into the new box so a resize never paints blank.
+        const kept = document.createElement("canvas");
+        kept.width = canvas.width;
+        kept.height = canvas.height;
+        if (kept.width > 1 && kept.height > 1) kept.getContext("2d")?.drawImage(canvas, 0, 0);
         canvas.width = pixelW;
         canvas.height = pixelH;
+        if (kept.width > 1 && kept.height > 1) {
+          canvas.getContext("2d")?.drawImage(kept, 0, 0, pixelW, pixelH);
+          canvas.style.visibility = "";
+        }
         paintedViewRef.current = null;
         if (engineRef.current) {
           if (!paint || preparingRef.current || splitPausedRef.current) return;
