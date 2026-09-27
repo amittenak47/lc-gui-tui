@@ -11200,34 +11200,39 @@ export const Workspace = memo(function Workspace({
               </div>
             );
           })()}
+          {/*
+            The merge split belongs to this tab's pane: inside the wrap, it
+            covers only this pane in a split, hides with the tab when another
+            is in front, and is still here — choices and all — on return.
+          */}
+        {hubConflictAsk ? (
+          <HubConflictSplit
+            conflict={hubConflictAsk.conflict}
+            busy={hubConflictBusy}
+            otherLabel={otherDeviceLabel()}
+            docHash={annotateSource?.docType === "pdf" ? annotateSource.hash : undefined}
+            bytes={annotateSource?.docType === "pdf" ? annotateSource.bytes ?? undefined : undefined}
+            filmScopeBase={`${tab.id}:conflict`}
+            sceneWidth={isWhiteboard(problem) ? SCRATCH_PAGE_W : annotatePageWidth}
+            pageFrames={
+              isWhiteboard(problem)
+                ? (() => {
+                    const live = whiteboardPageFramesFromElements(
+                      boardRef.current?.getElements() ?? [],
+                    );
+                    return live.length > 0
+                      ? live
+                      : whiteboardPageFrames(whiteboardPageCount);
+                  })()
+                : peekPdfReadingFrames(tab.id)
+            }
+            client={hubConflictAsk.problemConflict ? undefined : client}
+            error={hubConflictError}
+            onResolve={(resolution) => void handleHubConflictResolve(resolution)}
+            onCancel={hubConflictAsk.cancel ? handleHubConflictCancel : undefined}
+          />
+        ) : null}
         </div>
-      {hubConflictAsk ? (
-        <HubConflictSplit
-          conflict={hubConflictAsk.conflict}
-          busy={hubConflictBusy}
-          otherLabel={otherDeviceLabel()}
-          docHash={annotateSource?.docType === "pdf" ? annotateSource.hash : undefined}
-          bytes={annotateSource?.docType === "pdf" ? annotateSource.bytes ?? undefined : undefined}
-          filmScopeBase={`${tab.id}:conflict`}
-          sceneWidth={isWhiteboard(problem) ? SCRATCH_PAGE_W : annotatePageWidth}
-          pageFrames={
-            isWhiteboard(problem)
-              ? (() => {
-                  const live = whiteboardPageFramesFromElements(
-                    boardRef.current?.getElements() ?? [],
-                  );
-                  return live.length > 0
-                    ? live
-                    : whiteboardPageFrames(whiteboardPageCount);
-                })()
-              : peekPdfReadingFrames(tab.id)
-          }
-          client={hubConflictAsk.problemConflict ? undefined : client}
-          error={hubConflictError}
-          onResolve={(resolution) => void handleHubConflictResolve(resolution)}
-          onCancel={hubConflictAsk.cancel ? handleHubConflictCancel : undefined}
-        />
-      ) : null}
       {active && artifactPicker && <ArtifactPicker parent={artifactPicker.parent} associations={artifactPicker.associations}
         pageChoices={artifactPageChoices} capturePage={captureArtifactPage}
         scope={artifactPicker.messageId ? "message" : artifactPicker.footnoteId ? "footnote" : "catalog"}
