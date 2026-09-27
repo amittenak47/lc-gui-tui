@@ -154,6 +154,7 @@ import {
 import { FEATURE_LEETCODE } from "../featureFlags";
 import { loadUiHandedness, saveUiHandedness, type UiHandedness } from "../util/uiHandedness";
 import { loadStartupTabs, saveStartupTabs, type StartupTabs } from "../util/startupTabsPref";
+import { loadReadingMode, saveReadingMode, type ReadingMode } from "../util/readingModePref";
 import { loadAgentDisplayPrefs, saveAgentDisplayPrefs, type AgentDisplayPrefs } from "../util/agentDisplayPrefs";
 import { PAD_HUB_EVENT, loadSavedPadHub, savePadHub } from "../util/padHub";
 import { compareIndexFacts, indexFacts } from "../util/indexReport";
@@ -427,6 +428,8 @@ interface DevicePrefs {
   uiHandedness: UiHandedness;
   /** Which tabs a relaunch opens. Read once, at the next launch. */
   startupTabs: StartupTabs;
+  /** Continuous scroll, or a page at a time with a page turn. */
+  readingMode: ReadingMode;
   handedness: InkHandedness;
   /**
    * Hand a failed run to the coach without being asked.
@@ -493,6 +496,7 @@ function loadDevicePrefs(): DevicePrefs {
     agentDisplay: loadAgentDisplayPrefs(),
     uiHandedness: loadUiHandedness(),
     startupTabs: loadStartupTabs(),
+    readingMode: loadReadingMode(),
     handedness: loadInkHandedness(),
     testForward: loadTestForwardMode(),
     captureMode: loadCaptureMode(),
@@ -534,6 +538,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.agentDisplay.colorThinkingSteps === b.agentDisplay.colorThinkingSteps &&
     a.uiHandedness === b.uiHandedness &&
     a.startupTabs === b.startupTabs &&
+    a.readingMode === b.readingMode &&
     a.handedness === b.handedness &&
     a.testForward === b.testForward &&
     a.captureMode === b.captureMode &&
@@ -865,6 +870,7 @@ export function SettingsModal({
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [uiHandedness, setUiHandedness] = useState<UiHandedness>(loadUiHandedness);
   const [startupTabs, setStartupTabs] = useState<StartupTabs>(loadStartupTabs);
+  const [readingMode, setReadingMode] = useState<ReadingMode>(loadReadingMode);
   const [agentDisplay, setAgentDisplay] = useState(loadAgentDisplayPrefs);
   const [colorWheelOnToolbar, setColorWheelOnToolbar] = useState(
     () => loadInkToolPresets().colorWheelOnToolbar,
@@ -1087,6 +1093,7 @@ export function SettingsModal({
     setHandedness(prefs.handedness);
     setUiHandedness(prefs.uiHandedness);
     setStartupTabs(prefs.startupTabs);
+    setReadingMode(prefs.readingMode);
     setAgentDisplay(prefs.agentDisplay);
     setTestForward(prefs.testForward);
     setCaptureMode(prefs.captureMode);
@@ -1192,6 +1199,7 @@ export function SettingsModal({
     agentDisplay,
     uiHandedness,
     startupTabs,
+    readingMode,
     handedness,
     testForward,
     captureMode,
@@ -1264,6 +1272,7 @@ export function SettingsModal({
         saveInkHandedness(handedness);
         saveUiHandedness(uiHandedness);
         saveStartupTabs(startupTabs);
+        saveReadingMode(readingMode);
         saveAgentDisplayPrefs(agentDisplay);
         saveTestForwardMode(testForward);
         saveCaptureMode(captureMode);
@@ -2631,6 +2640,17 @@ export function SettingsModal({
                   </button>)}
                 </div>
                 <p className="lc-settings-hint">Takes effect the next time the app opens. Saved on this device.</p>
+                <div className="lc-settings-subhead">Reading</div>
+                <div className="lc-settings-choice" role="radiogroup" aria-label="Reading">
+                  {([
+                    ["scroll", "Scroll", "One continuous page stack, as documents have always read."],
+                    ["pages", "Pages", "One page at a time. Drag sideways to turn it; past halfway it turns, short of that it settles back. With the pen out, the page is for writing on."],
+                  ] as const).map(([value, label, hint]) => <button key={value} type="button" role="radio"
+                    aria-checked={readingMode === value} className={readingMode === value ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                    onClick={() => setReadingMode(value)}>
+                    <strong>{label}</strong><span className="lc-muted">{hint}</span>
+                  </button>)}
+                </div>
                 <div className="lc-settings-subhead">Agent behavior</div>
                 <div className="lc-settings-choice" aria-label="Thinking display">
                   {([
