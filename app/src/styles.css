@@ -12250,13 +12250,27 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   order: 2;
   display: flex;
   flex: 1 1 0;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 4px;
   min-width: 0;
-  margin-right: 10px;
+  margin-right: 4px;
   justify-content: flex-start;
   align-items: center;
 }
+
+.lc-agent-composer-mid .lc-agent-inline-option { display: inline-flex; align-items: center; gap: 3px; }
+.lc-agent-composer-mid .lc-agent-inline-option svg { width: 16px; height: 16px; }
+.lc-agent-composer-mid .lc-agent-reasoning { font-variant-numeric: tabular-nums; }
+.lc-agent-reasoning span { display: inline-block; width: 26px; text-align: left; }
+.lc-agent-composer-mid .lc-agent-inline-option.lc-flag-active {
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.lc-agent-inline-presets {
+  font: inherit; font-size: 11px; color: var(--hint); border: 0; border-radius: 5px;
+  background: transparent; width: 58px; min-width: 0; height: 20px; padding: 0;
+}
+.lc-agent-inline-presets:focus-visible { outline: 1px solid var(--accent); }
+.lc-agent-inline-presets option { color: var(--ink); background: var(--surface); }
 
 /* Board menu + Photo + Send — hard right, just after the cadence chips. */
 .lc-agent-composer-actions {

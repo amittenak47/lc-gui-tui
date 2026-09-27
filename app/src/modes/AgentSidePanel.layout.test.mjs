@@ -55,10 +55,10 @@ describe("agent panel chrome", () => {
     expect(css).toContain("margin-left: auto");
   });
 
-  it("puts the chat-box expand on the composer bar before Annotations", () => {
+  it("puts the chat-box expand on the composer bar before Footnotes", () => {
     const bar = panel.slice(panel.indexOf('className="lc-agent-composer-mid"'));
     const expand = bar.indexOf('pane="composer"');
-    const annotations = bar.indexOf('aria-label="Annotations"');
+    const annotations = bar.indexOf('aria-label="Footnotes"');
     const catalog = bar.indexOf('aria-label="Whiteboards and files"');
     expect(expand).toBeGreaterThan(-1);
     expect(annotations).toBeGreaterThan(expand);

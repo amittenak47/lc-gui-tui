@@ -87,7 +87,7 @@ it("opens the catalog from C and from a message paperclip", () => {
   expect(catalog).toBeTruthy();
   expect(catalog!.textContent).toBe("C");
   const mid = host.querySelector(".lc-agent-composer-mid")!;
-  expect(mid.querySelector('[aria-label="Annotations"]')).toBeTruthy();
+  expect(mid.querySelector('[aria-label="Footnotes"]')).toBeTruthy();
   expect(mid.textContent).toContain("C");
   expect(host.textContent).not.toContain("Whiteboards & files");
   act(() => catalog!.click());
@@ -151,8 +151,9 @@ it("puts the reply count under the thread peek without a chevron", () => {
   mount({
     messages: [
       user,
+      { ...agent, replyTo: { id: "u1", role: "user", excerpt: "test" } },
       { id: "r1", role: "user", content: "I know, I want to see the code", at: 3,
-        replyTo: { id: "u1", role: "user", excerpt: "test" } },
+        replyTo: { id: "a1", role: "assistant", excerpt: "Here is a plan." } },
     ],
   });
   const chip = host.querySelector(".lc-agent-thread-open") as HTMLButtonElement;
@@ -162,6 +163,6 @@ it("puts the reply count under the thread peek without a chevron", () => {
   const peek = chip.querySelector(".lc-agent-thread-open-peek")!;
   const count = chip.querySelector(".lc-agent-thread-open-count")!;
   expect(peek.textContent).toContain("I know");
-  expect(count.textContent).toMatch(/1 reply/);
+  expect(count.textContent).toMatch(/2 replies/);
   expect(Boolean(peek.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
 });

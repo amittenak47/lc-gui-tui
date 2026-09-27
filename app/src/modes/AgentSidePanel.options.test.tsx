@@ -41,143 +41,98 @@ function tap(node: HTMLButtonElement) {
   expect(node.disabled).toBe(false);
   act(() => node.click());
 }
-function openOptions() { tap(button("Annotations")); }
 
-it("keeps Ink inside Annotations and separates footnotes, actions, presets and reasoning", () => {
+it("places footnotes, Ink, Capture, reasoning and action directly in the composer", () => {
   mount({ documentPresets: true, annotationChoices: [{ id: "fn", number: 1, title: "Note" }] });
-  expect(button("Whiteboard")).toBeNull();
-  expect(document.querySelector('[aria-label="Ask presets"]')).toBeNull();
-  openOptions();
-  const menu = document.querySelector('[aria-label="Annotations and agent options"]')!;
-  expect(menu.querySelectorAll('[role="separator"]')).toHaveLength(4);
-  expect(menu.querySelector('.lc-hold-reveal')).toBeNull();
-  expect(button("Ink").getAttribute("aria-checked")).toBe("false");
+  const bar = document.querySelector('.lc-agent-composer-mid')!;
+  const labels = [...bar.querySelectorAll('button')].map(node => node.getAttribute('aria-label'));
+  expect(labels.slice(1,6)).toEqual(["Footnotes", "Ink", "Capture", "Reasoning: off", "Action: Ask"]);
+  tap(button("Footnotes"));
+  const menu = document.querySelector('[aria-label="Page footnotes"]')!;
+  expect(menu.querySelectorAll('button')).toHaveLength(1);
+  expect(menu.textContent).toContain("Note");
+  expect(menu.textContent).not.toMatch(/Capture|Reasoning|Action|Ink/);
   tap(button("Ink"));
-  expect(button("Ink").getAttribute("aria-checked")).toBe("true");
-  const text = menu.textContent!;
-  expect(text.indexOf("Ink")).toBeLessThan(text.indexOf("Footnotes"));
-  expect(text.indexOf("Footnotes")).toBeLessThan(text.indexOf("Action"));
-  expect(text.indexOf("Action")).toBeLessThan(text.indexOf("De-jargon"));
-  expect(text.indexOf("De-jargon")).toBeLessThan(text.indexOf("Reasoning"));
+  expect(button("Ink").getAttribute("aria-pressed")).toBe("true");
+  expect(button("Ink").className).toContain("lc-flag-active");
+  expect(button("Capture").getAttribute("aria-pressed")).toBe("false");
 });
 
-it("cycles local pads through Ask, Draw, Ask with a tap, even without footnotes", () => {
+it("cycles local pads through Ask, Draw, Ask even without footnotes", () => {
   mount({ agentSurface: "pad", askOnly: true, allowAnnotations: false });
-  openOptions();
   tap(button("Action: Ask"));
-  expect(button("Action: Draw")).toBeTruthy();
   tap(button("Action: Draw"));
   expect(button("Action: Ask")).toBeTruthy();
-  expect(document.body.textContent).not.toContain("Footnotes");
+  expect(button("Footnotes")).toBeNull();
   expect(button("Ink").disabled).toBe(false);
 });
 
-it("keeps footnote selection live in the submenu and sends attached notes independently of Ink", () => {
+it("keeps footnote selection live and sends attached notes independently of Ink", () => {
   const toggle = vi.fn();
-  const send = mount({
-    busy: true,
-    attachedMarks: [{ id: "fn", number: 1, title: "Note" }],
-    annotationChoices: [{ id: "fn", number: 1, title: "Note" }],
-    onToggleAttached: toggle,
-  });
-  openOptions();
+  const send = mount({busy:true, attachedMarks:[{id:"fn",number:1,title:"Note"}],
+    annotationChoices:[{id:"fn",number:1,title:"Note"}],onToggleAttached:toggle});
   tap(button("Footnotes"));
   const note = document.querySelector<HTMLButtonElement>('.lc-agent-footnote-menu .lc-footnote-chip')!;
   expect(note.getAttribute("aria-checked")).toBe("true");
   tap(note);
   expect(toggle).toHaveBeenCalledWith("fn");
-  expect(button("Annotations").getAttribute("aria-expanded")).toBe("true");
-  tap(button("Send"));
-  expect(send).toHaveBeenCalledWith("", expect.objectContaining({ annotations: true, handwriting: false, ask: true }), "queue");
-});
-
-it("opens footnotes toward the page, marks the row selected, and never shows empty copy", () => {
-  mount({ annotationChoices: [{ id: "fn", number: 1, title: "Note" }] });
-  openOptions();
-  expect(document.body.textContent).not.toContain("No marks on this page");
-  expect(button("Footnotes").className).not.toContain("is-active");
-  tap(button("Footnotes"));
-  expect(button("Footnotes").className).toContain("is-active");
   expect(button("Footnotes").getAttribute("aria-expanded")).toBe("true");
-  expect(document.querySelector('[aria-label="Page footnotes"]')).toBeTruthy();
-  expect(document.querySelector(".lc-agent-footnote-menu .lc-footnote-chip")).toBeTruthy();
+  tap(button("Send"));
+  expect(send).toHaveBeenCalledWith("",expect.objectContaining({annotations:true,handwriting:false,capture:false,ask:true}),"queue");
 });
 
-it("omits the footnotes row when this page has no marks", () => {
-  mount({ annotationChoices: [] });
-  openOptions();
-  expect(button("Footnotes")).toBeNull();
-  expect(document.body.textContent).not.toContain("No marks on this page");
+it("disables the footnotes panel when the page has no marks", () => {
+  mount({annotationChoices:[]});
+  expect(button("Footnotes").disabled).toBe(true);
+  expect(document.querySelector('[aria-label="Page footnotes"]')).toBeNull();
 });
 
-it("cycles problem actions through Draw, Review, Lazy, Ask and gates photos only for Review", () => {
+it("preserves problem actions and gates photos only for Review", () => {
   mount();
-  openOptions();
-  for (const [from, to] of [["Ask", "Draw"], ["Draw", "Review"], ["Review", "Lazy"], ["Lazy", "Ask"]]) {
+  for (const [from,to] of [["Ask","Draw"],["Draw","Review"],["Review","Lazy"],["Lazy","Ask"]]) {
     tap(button(`Action: ${from}`));
     expect(button(`Action: ${to}`)).toBeTruthy();
     expect(button("Add Photo").disabled).toBe(to === "Review");
   }
 });
 
-it("cycles reasoning Off, Low, Medium, High and back while preserving the preference", () => {
+it("cycles and persists reasoning Off, Low, High without turning on Ink or Capture", () => {
   mount();
-  openOptions();
-  expect(button("Reasoning: off").className).not.toContain("is-active");
-  for (const [from, to] of [["off", "low"], ["low", "medium"], ["medium", "high"], ["high", "off"]]) {
+  for (const [from,to] of [["off","low"],["low","high"],["high","off"]]) {
     tap(button(`Reasoning: ${from}`));
     expect(button(`Reasoning: ${to}`)).toBeTruthy();
     expect(localStorage.getItem("whiteboard.agent.reasoningLevel.v1")).toBe(to);
-    if (to === "off") {
-      expect(button(`Reasoning: ${to}`).className).not.toContain("is-active");
-    } else {
-      expect(button(`Reasoning: ${to}`).className).toContain("is-active");
-    }
+    expect(button("Ink").getAttribute("aria-pressed")).toBe("false");
+    expect(button("Capture").getAttribute("aria-pressed")).toBe("false");
   }
 });
 
-it("snapshots the next queued message's options while an earlier request is busy", () => {
-  const send = mount({ busy: true, documentPresets: true });
-  openOptions();
-  tap(button("Capture"));
-  tap(button("Ink"));
-  tap(button("Action: Ask"));
-  tap(button("Reasoning: off"));
-  const preset = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="Ask presets"] button')].find(node => node.textContent === "De-jargon")!;
-  tap(preset);
-  expect(preset.getAttribute("aria-checked")).toBe("true");
+it("snapshots queued options without changing the request already in flight", () => {
+  const send = mount({busy:true,documentPresets:true});
+  tap(button("Capture")); tap(button("Ink")); tap(button("Action: Ask")); tap(button("Reasoning: off"));
+  const preset = document.querySelector<HTMLSelectElement>('[aria-label="Ask presets"]')!;
+  act(() => {preset.value="de_jargon";preset.dispatchEvent(new Event("change",{bubbles:true}));});
   tap(button("Send"));
-  expect(send).toHaveBeenCalledWith("", expect.objectContaining({ draw: true, ask: false, handwriting: true, capture: true, reasoning: "low", askPreset: "de_jargon" }), "queue");
-  openOptions();
+  expect(send).toHaveBeenCalledWith("",expect.objectContaining({draw:true,ask:false,handwriting:true,capture:true,reasoning:"low",askPreset:"de_jargon"}),"queue");
   expect(button("Action: Ask")).toBeTruthy();
-  expect(button("Ink").getAttribute("aria-checked")).toBe("false");
-  expect(button("Capture").getAttribute("aria-checked")).toBe("false");
+  expect(button("Ink").getAttribute("aria-pressed")).toBe("false");
+  expect(button("Capture").getAttribute("aria-pressed")).toBe("false");
   expect(button("Reasoning: low")).toBeTruthy();
-  expect(document.querySelector('[aria-label="Ask presets"] [aria-checked="true"]')).toBeNull();
+  expect(preset.value).toBe("");
 });
 
-it("keeps the options menu and footnotes panel on the button after the window resizes", () => {
-  let buttonBox = new DOMRect(400, 700, 32, 32);
-  const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    if (this.getAttribute("aria-label") === "Annotations") return buttonBox;
-    if (this.classList.contains("lc-agent-mark-menu")) {
-      return new DOMRect(buttonBox.left, buttonBox.top - 220, 216, 200);
-    }
-    return new DOMRect(0, 0, 0, 0);
+it("keeps the footnote panel anchored to its button after resizing", () => {
+  let box = new DOMRect(400,700,32,32);
+  const spy = vi.spyOn(HTMLElement.prototype,"getBoundingClientRect").mockImplementation(function(this:HTMLElement) {
+    return this.getAttribute("aria-label") === "Footnotes" ? box : new DOMRect(0,0,0,0);
   });
   try {
-    mount({ annotationChoices: [{ id: "fn", number: 1, title: "Note" }] });
-    openOptions();
+    mount({annotationChoices:[{id:"fn",number:1,title:"Note"}]});
     tap(button("Footnotes"));
-    const menu = document.querySelector<HTMLElement>(".lc-agent-mark-menu")!;
-    const notes = document.querySelector<HTMLElement>(".lc-agent-footnote-menu")!;
+    const menu = document.querySelector<HTMLElement>('[aria-label="Page footnotes"]')!;
     expect(menu.style.left).toBe("400px");
-    const notesBefore = notes.style.left;
-    buttonBox = new DOMRect(120, 640, 32, 32);
+    box = new DOMRect(120,640,32,32);
     act(() => window.dispatchEvent(new Event("resize")));
     expect(menu.style.left).toBe("120px");
-    expect(notes.style.left).not.toBe(notesBefore);
-  } finally {
-    spy.mockRestore();
-  }
+  } finally {spy.mockRestore();}
 });

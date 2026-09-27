@@ -28,7 +28,6 @@ import { useAgentDisplayPrefs } from "../util/agentDisplayPrefs";
 import { newThinkingDisclosure, type ThinkingDisclosureState } from "./thinkingDisplay";
 import { AgentMessageBubble } from "./AgentMessageBubble";
 import {
-  cycleAgentReasoning,
   loadAgentReasoningLevel,
   saveAgentReasoningLevel,
   type AgentReasoningLevel,
@@ -217,8 +216,8 @@ const REVIEW_DROPS_PHOTOS = "Review sends the board, not attachments";
  * the full flag set means something. `pad` — scratchpad and the document pads —
  * has no Review/Lazy pipeline and no analyse-on-send cadence, so those stay
  * hidden. Draw is available: Ask can emit a viz program onto the open pad.
- * Scratchpad omits footnotes (`allowAnnotations`), but keeps the Annotations
- * menu for Ink and the agent options.
+ * Scratchpad omits footnotes (`allowAnnotations`), but keeps inline Ink,
+ * Capture and agent options.
  */
 export type AgentSurface = "problem" | "pad";
 
@@ -265,7 +264,7 @@ export function markMenuClickShouldKeepOpen(target: EventTarget | null): boolean
   );
 }
 
-/** Fixed so cycling Reasoning Low → Medium does not grow the panel. */
+/** Compact footnote picker anchored to the composer. */
 const MARK_MENU_WIDTH_PX = 216;
 
 function markMenuPosition(rect: Pick<DOMRect, "left" | "top">): { left: number; bottom: number } {
@@ -985,7 +984,10 @@ export function AgentSidePanel({
   const boardLabel = draw ? "Draw" : reviewBoard ? "Review" : lazy ? "Lazy" : "Ask";
   const [handwriting, setHandwriting] = useState(false);
   const [capture, setCapture] = useState(false);
-  const [reasoning, setReasoning] = useState(loadAgentReasoningLevel);
+  const [reasoning, setReasoning] = useState<AgentReasoningLevel>(() => {
+    const saved = loadAgentReasoningLevel();
+    return saved === "medium" ? "high" : saved;
+  });
   const [editingQueued, setEditingQueued] = useState<AgentChatMessage | null>(null);
   const [queueEditText, setQueueEditText] = useState("");
   const [annotations, setAnnotations] = useState(false);
@@ -1004,17 +1006,7 @@ export function AgentSidePanel({
   const [markMenuPos, setMarkMenuPos] = useState<{ left: number; bottom: number } | null>(
     null,
   );
-  const [footnoteMenuOpen, setFootnoteMenuOpen] = useState(false);
-  const [footnoteMenuClosing, setFootnoteMenuClosing] = useState(false);
-  const [footnoteMenuPos, setFootnoteMenuPos] = useState<{
-    left: number;
-    top: number;
-    width: number;
-    height?: number;
-    side: "left" | "right";
-  } | null>(null);
   const annotateBtnRef = useRef<HTMLButtonElement>(null);
-  const markMenuRef = useRef<HTMLDivElement>(null);
   const [copyFlash, setCopyFlash] = useState(false);
   const [menuFading, setMenuFading] = useState(false);
   const copyAckTimerRef = useRef<number | null>(null);
@@ -1492,68 +1484,25 @@ export function AgentSidePanel({
     setMarkMenuOpen(false);
     setMarkMenuClosing(false);
     setMarkMenuPos(null);
-    setFootnoteMenuOpen(false);
-    setFootnoteMenuClosing(false);
-    setFootnoteMenuPos(null);
   }, []);
-
-  const finishFootnoteMenuClose = useCallback(() => {
-    setFootnoteMenuOpen(false);
-    setFootnoteMenuClosing(false);
-    setFootnoteMenuPos(null);
-  }, []);
-
-  const closeFootnoteMenu = useCallback(() => {
-    setFootnoteMenuOpen((open) => {
-      if (open) setFootnoteMenuClosing(true);
-      return open;
-    });
-  }, []);
-
   const closeMarkMenu = useCallback(() => {
-    setMarkMenuOpen((open) => {
-      if (open) setMarkMenuClosing(true);
-      return open;
-    });
-    setFootnoteMenuOpen((open) => {
-      if (open) setFootnoteMenuClosing(true);
-      return open;
-    });
+    setMarkMenuOpen(open => { if (open) setMarkMenuClosing(true); return open; });
   }, []);
-
   useEffect(() => {
     if (!markMenuClosing) return;
-    const id = window.setTimeout(finishMarkMenuClose, 200);
-    return () => window.clearTimeout(id);
+    const timer = window.setTimeout(finishMarkMenuClose, 200);
+    return () => window.clearTimeout(timer);
   }, [markMenuClosing, finishMarkMenuClose]);
-
-  useEffect(() => {
-    if (!footnoteMenuClosing || markMenuClosing) return;
-    const id = window.setTimeout(finishFootnoteMenuClose, 200);
-    return () => window.clearTimeout(id);
-  }, [footnoteMenuClosing, markMenuClosing, finishFootnoteMenuClose]);
-
   useEffect(() => {
     if (!markMenuOpen) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (footnoteMenuOpen && !footnoteMenuClosing) {
-        closeFootnoteMenu();
-        return;
-      }
-      closeMarkMenu();
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") closeMarkMenu(); };
+    const outside = (event: globalThis.PointerEvent) => {
+      if (!markMenuClickShouldKeepOpen(event.target)) closeMarkMenu();
     };
-    const onPointerDown = (event: globalThis.PointerEvent) => {
-      if (markMenuClickShouldKeepOpen(event.target)) return;
-      closeMarkMenu();
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("pointerdown", onPointerDown);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("pointerdown", onPointerDown);
-    };
-  }, [markMenuOpen, footnoteMenuOpen, footnoteMenuClosing, closeMarkMenu, closeFootnoteMenu]);
+    window.addEventListener("keydown", key);
+    window.addEventListener("pointerdown", outside);
+    return () => { window.removeEventListener("keydown", key); window.removeEventListener("pointerdown", outside); };
+  }, [markMenuOpen, closeMarkMenu]);
 
   const toggleMarkMenu = useCallback(() => {
     if (markMenuOpen && !markMenuClosing) {
@@ -1563,20 +1512,8 @@ export function AgentSidePanel({
     const node = annotateBtnRef.current;
     if (node) setMarkMenuPos(markMenuPosition(node.getBoundingClientRect()));
     setMarkMenuClosing(false);
-    setFootnoteMenuOpen(false);
-    setFootnoteMenuClosing(false);
-    setFootnoteMenuPos(null);
     setMarkMenuOpen(true);
   }, [markMenuOpen, markMenuClosing, closeMarkMenu]);
-
-  const toggleFootnoteMenu = useCallback(() => {
-    if (footnoteMenuOpen && !footnoteMenuClosing) {
-      closeFootnoteMenu();
-      return;
-    }
-    setFootnoteMenuClosing(false);
-    setFootnoteMenuOpen(true);
-  }, [footnoteMenuOpen, footnoteMenuClosing, closeFootnoteMenu]);
 
   useLayoutEffect(() => {
     if (!markMenuOpen || markMenuClosing) return;
@@ -1613,24 +1550,6 @@ export function AgentSidePanel({
       view?.removeEventListener("scroll", kick);
     };
   }, [markMenuOpen, markMenuClosing]);
-
-  useLayoutEffect(() => {
-    if (!footnoteMenuOpen || markMenuClosing || !markMenuRef.current) return;
-    const r = markMenuRef.current.getBoundingClientRect();
-    const width = r.width || MARK_MENU_WIDTH_PX;
-    const gap = 6;
-    const menuCenter = r.left + width / 2;
-    let side: "left" | "right" = menuCenter > window.innerWidth / 2 ? "left" : "right";
-    if (side === "left" && r.left < width + gap + 8) side = "right";
-    if (side === "right" && r.right + width + gap > window.innerWidth - 8) side = "left";
-    setFootnoteMenuPos({
-      top: r.top,
-      width,
-      height: r.height > 0 ? r.height : undefined,
-      left: side === "right" ? r.right + gap : r.left - width - gap,
-      side,
-    });
-  }, [footnoteMenuOpen, markMenuClosing, annotationChoices.length, markMenuPos?.left, markMenuPos?.bottom]);
 
   /**
    * Scroll a quoted turn back into view and flash it.
@@ -2145,14 +2064,13 @@ export function AgentSidePanel({
             <p className="lc-muted lc-agent-empty">
               {padSurface && !allowAnnotations ? (
                 <>
-                  Ask about the board. Flag <strong>Handwriting</strong> to send
-                  your ink with the page it was drawn on.
+                  Ask anything. Enable <strong>Ink</strong> to include your handwriting,
+                  or <strong>Capture</strong> to share this view.
                 </>
               ) : padSurface ? (
                 <>
-                  Ask about the page, or hold a passage to quote it. Flag{" "}
-                  <strong>Annotation</strong> to send your marks — hold it to send just
-                  the view you are on.
+                  Ask anything, or hold a passage to quote it. Enable <strong>Ink</strong> for
+                  handwriting or <strong>Capture</strong> for this view.
                 </>
               ) : (
                 <>
@@ -2664,21 +2582,49 @@ export function AgentSidePanel({
                 focus={chatFocus}
                 onToggle={toggleChatFocus}
               />
-              <span className="lc-agent-annotate-wrap">
-                <Tip tip="Choose ink, footnotes and agent options" placement="top">
-                  <button
-                    ref={annotateBtnRef}
-                    type="button"
-                    className={`lc-flag lc-agent-annotate${handwriting || capture || annotations ? " lc-flag-active" : ""}`}
-                    aria-expanded={markMenuOpen && !markMenuClosing}
-                    aria-haspopup="menu"
-                    onClick={toggleMarkMenu}
-                    aria-label="Annotations"
-                  >
-                    <InkScribbleIcon />
+              {allowAnnotations && <span className="lc-agent-annotate-wrap">
+                <Tip tip="Footnotes" placement="top">
+                  <button ref={annotateBtnRef} type="button"
+                    className={`lc-flag lc-agent-annotate${annotations || (markMenuOpen && !markMenuClosing) ? " lc-flag-active" : ""}`}
+                    aria-expanded={markMenuOpen && !markMenuClosing} aria-haspopup="menu"
+                    disabled={annotateUnavailable || annotationChoices.length === 0}
+                    onClick={toggleMarkMenu} aria-label="Footnotes">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                      <rect x="4" y="4" width="16" height="16" rx="3" /><path d="M8 9h8M8 13h5M8 16h3" />
+                    </svg>
                   </button>
                 </Tip>
-              </span>
+              </span>}
+              <Tip tip="Include handwriting" placement="top">
+                <button type="button" aria-label="Ink" aria-pressed={handwriting}
+                  className={`lc-flag lc-agent-inline-option${handwriting ? " lc-flag-active" : ""}`}
+                  disabled={annotateUnavailable} onClick={() => setHandwriting(value => !value)}><InkScribbleIcon /></button>
+              </Tip>
+              <Tip tip="Capture this view" placement="top">
+                <button type="button" aria-label="Capture" aria-pressed={capture}
+                  className={`lc-flag lc-agent-inline-option${capture ? " lc-flag-active" : ""}`}
+                  onClick={() => setCapture(value => !value)}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" />
+                  </svg>
+                </button>
+              </Tip>
+              <button type="button" aria-label={`Reasoning: ${reasoning}`} title="Reasoning: Off, Low, High"
+                className={`lc-flag lc-agent-inline-option lc-agent-reasoning${reasoning !== "off" ? " lc-flag-active" : ""}`}
+                onClick={() => setReasoning(current => {
+                  const next = current === "off" ? "low" : current === "low" ? "high" : "off";
+                  saveAgentReasoningLevel(next); return next;
+                })}>Reasoning <span>{reasoning[0].toUpperCase() + reasoning.slice(1)}</span></button>
+              <button type="button" aria-label={`Action: ${boardLabel}`}
+                className={`lc-flag lc-agent-inline-option${boardLabel !== "Ask" ? " lc-flag-active" : ""}`}
+                title={padSurface ? "Ask or Draw" : "Ask, Draw, Review or Lazy"}
+                disabled={askOnly && !padSurface} onClick={cycleBoard}>{boardLabel}</button>
+              {documentPresets && <select aria-label="Ask presets" title="Prompt preset"
+                className="lc-agent-inline-presets" value={askPreset ?? ""}
+                onChange={event => setAskPreset((event.target.value || null) as AskPresetId | null)}>
+                <option value="">Prompt</option>
+                {ASK_PRESETS.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+              </select>}
               {onManageArtifacts && (
                 <Tip tip="Whiteboards and files" placement="top">
                   <button
@@ -2825,161 +2771,23 @@ export function AgentSidePanel({
           document.body,
         )}
 
-      {(markMenuOpen || markMenuClosing) &&
-        markMenuPos &&
-        createPortal(
-          <>
-            <div
-              ref={markMenuRef}
-              className={`lc-agent-scope-menu lc-agent-mark-menu${markMenuClosing ? " is-closing" : ""}`}
-              role="menu"
-              aria-label="Annotations and agent options"
-              style={{
-                left: markMenuPos.left,
-                bottom: markMenuPos.bottom,
-                width: MARK_MENU_WIDTH_PX,
-                maxHeight: `calc(100dvh - ${markMenuPos.bottom + 12}px)`,
-              }}
-              onAnimationEnd={(event) => {
-                if (event.target !== event.currentTarget) return;
-                if (markMenuClosing) finishMarkMenuClose();
-              }}
-            >
-              <button
-                type="button"
-                role="menuitemcheckbox"
-                aria-label="Capture"
-                aria-checked={capture}
-                className={`lc-agent-scope-option lc-agent-option-row${capture ? " is-active" : ""}`}
-                title="Photograph whatever is on screen and attach it"
-                onClick={() => setCapture(current => !current)}
-              >
-                <span>Capture</span><span>{capture ? "Enabled" : "Disabled"}</span>
-              </button>
-              <button
-                type="button"
-                role="menuitemcheckbox"
-                aria-label="Ink"
-                aria-checked={handwriting}
-                className={`lc-agent-scope-option lc-agent-option-row${handwriting ? " is-active" : ""}`}
-                title="Attach marked-board ink crops with the next message"
-                disabled={annotateUnavailable}
-                onClick={() => setHandwriting(current => !current)}
-              >
-                <span>Ink</span><span>{handwriting ? "Enabled" : "Disabled"}</span>
-              </button>
-              {allowAnnotations && annotationChoices.length > 0 && <>
-              <div role="separator" className="lc-agent-options-divider" />
-              <button
-                type="button"
-                role="menuitem"
-                className={`lc-agent-scope-option lc-agent-option-row${
-                  (footnoteMenuOpen && !footnoteMenuClosing) || attachedMarks.length > 0
-                    ? " is-active"
-                    : ""
-                }`}
-                aria-label="Footnotes"
-                aria-haspopup="menu"
-                aria-expanded={footnoteMenuOpen && !footnoteMenuClosing}
-                disabled={annotateUnavailable}
-                onClick={toggleFootnoteMenu}
-              >
-                <span>Footnotes</span>
-                <span>{attachedMarks.length > 0 ? attachedMarks.length : ""}</span>
-              </button>
-              </>}
-              <div role="separator" className="lc-agent-options-divider" />
-              <button
-                type="button"
-                role="menuitem"
-                className="lc-agent-scope-option lc-agent-option-row"
-                aria-label={`Action: ${boardLabel}`}
-                title={padSurface ? "Tap to cycle Draw, Ask" : "Tap to cycle Draw, Review, Lazy, Ask"}
-                disabled={askOnly && !padSurface}
-                onClick={cycleBoard}
-              >
-                <span>Action</span><span>{boardLabel}</span>
-              </button>
-              {documentPresets && <>
-                <div role="separator" className="lc-agent-options-divider" />
-                <div role="group" aria-label="Ask presets" className="lc-agent-options-presets">
-                  {ASK_PRESETS.map(preset => (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      role="menuitemcheckbox"
-                      aria-checked={askPreset === preset.id}
-                      className={`lc-agent-scope-option${askPreset === preset.id ? " is-active" : ""}`}
-                      onClick={() => setAskPreset(current => current === preset.id ? null : preset.id)}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-              </>}
-              <div role="separator" className="lc-agent-options-divider" />
-              <button
-                type="button"
-                role="menuitem"
-                className={`lc-agent-scope-option lc-agent-option-row${reasoning !== "off" ? " is-active" : ""}`}
-                aria-label={`Reasoning: ${reasoning}`}
-                title="Tap to cycle Off, Low, Medium, High"
-                onClick={() => setReasoning(current => {
-                  const next = cycleAgentReasoning(current);
-                  saveAgentReasoningLevel(next);
-                  return next;
-                })}
-              >
-                <span>Reasoning</span><span>{reasoning[0].toUpperCase() + reasoning.slice(1)}</span>
-              </button>
-            </div>
-            {(footnoteMenuOpen || footnoteMenuClosing) && footnoteMenuPos && (
-              <div
-                className={`lc-agent-scope-menu lc-agent-footnote-menu is-side-${footnoteMenuPos.side}${
-                  footnoteMenuClosing ? " is-closing" : ""
-                }`}
-                role="menu"
-                aria-label="Page footnotes"
-                style={{
-                  left: footnoteMenuPos.left,
-                  top: footnoteMenuPos.top,
-                  width: footnoteMenuPos.width,
-                  height: footnoteMenuPos.height,
-                }}
-                onAnimationEnd={(event) => {
-                  if (event.target !== event.currentTarget) return;
-                  if (footnoteMenuClosing && !markMenuClosing) finishFootnoteMenuClose();
-                }}
-              >
-                {annotationChoices.map((mark) => {
-                  const picked = attachedMarks.some((entry) => entry.id === mark.id);
-                  const chipLabel = footnoteChipLabel(mark.number, mark.title);
-                  return (
-                    <button
-                      key={mark.id}
-                      type="button"
-                      role="menuitemcheckbox"
-                      aria-checked={picked}
-                      aria-label={chipLabel}
-                      disabled={annotateUnavailable}
-                      className={`lc-footnote-chip${picked ? " is-picked" : ""}`}
-                      style={footnoteThemeVars(mark.color, mark.palette ?? [])}
-                      onClick={() => onToggleAttached?.(mark.id)}
-                    >
-                      <span className="lc-fn-badge" aria-hidden>
-                        {mark.number ?? ""}
-                      </span>
-                      {mark.title?.trim() ? (
-                        <span className="lc-footnote-chip-label">{mark.title.trim()}</span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </>,
-          document.body,
-        )}
+      {(markMenuOpen || markMenuClosing) && markMenuPos && createPortal(
+        <div className={`lc-agent-scope-menu lc-agent-mark-menu lc-agent-footnote-menu${markMenuClosing ? " is-closing" : ""}`}
+          role="menu" aria-label="Page footnotes"
+          style={{left:markMenuPos.left,bottom:markMenuPos.bottom,width:MARK_MENU_WIDTH_PX,
+            maxHeight:`min(42dvh, calc(100dvh - ${markMenuPos.bottom + 12}px))`}}
+          onAnimationEnd={event => { if (event.target === event.currentTarget && markMenuClosing) finishMarkMenuClose(); }}>
+          {annotationChoices.map(mark => {
+            const picked = attachedMarks.some(entry => entry.id === mark.id);
+            return <button key={mark.id} type="button" role="menuitemcheckbox" aria-checked={picked}
+              aria-label={footnoteChipLabel(mark.number, mark.title)} disabled={annotateUnavailable}
+              className={`lc-footnote-chip${picked ? " is-picked" : ""}`}
+              style={footnoteThemeVars(mark.color, mark.palette ?? [])} onClick={() => onToggleAttached?.(mark.id)}>
+              <span className="lc-fn-badge" aria-hidden>{mark.number ?? ""}</span>
+              {mark.title?.trim() ? <span className="lc-footnote-chip-label">{mark.title.trim()}</span> : null}
+            </button>;
+          })}
+        </div>, document.body)}
 
       {lightbox && (
         <div
