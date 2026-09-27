@@ -112,14 +112,12 @@ function mapPoint(
   return { ...point, x: placed.x, y: placed.y };
 }
 
-function halfKey(point: ScenePoint, frames: readonly PageFrame[], originX: number, width: number): string {
-  const located = locatePdfInkPoint(point.x, point.y, frames, originX, width);
-  if (!located) return "";
-  return `${located.pageId}:${located.half}`;
-}
-
-function cloneOpWithPoints(op: InkOp, points: ScenePoint[]): InkOp {
-  return { ...op, id: undefined, seq: undefined, points };
+function cloneOpWithPoints(op: InkOp, points: ScenePoint[], scale: number): InkOp {
+  const scaledPoints = points.map(p =>
+    p.radius == null ? p : { ...p, radius: p.radius * scale });
+  return op.kind === "draw"
+    ? { ...op, id:undefined,seq:undefined,points:scaledPoints,baseWidth: op.baseWidth * scale }
+    : { ...op, id:undefined,seq:undefined,points:scaledPoints,radius: op.radius * scale };
 }
 
 /**
@@ -137,6 +135,8 @@ export function remapInkBetweenPdfLayouts(
   if (ops.length === 0) return [];
   if (from.length === 0 || to.length === 0) return ops.slice();
   if (pdfLayoutIsSpread(from) === pdfLayoutIsSpread(to)) return ops.slice();
+  const expanding = !pdfLayoutIsSpread(from);
+  const scale = expanding ? 2 : 0.5;
 
   const out: InkOp[] = [];
   for (const op of ops) {
@@ -146,17 +146,50 @@ export function remapInkBetweenPdfLayouts(
     }
     let chunk: ScenePoint[] = [];
     let key = "";
+    const targetKey = (point: ScenePoint) => {
+      const destination = locatePdfInkPoint(point.x, point.y, to, originX, width);
+      return destination ? `${destination.pageId}:${expanding ? destination.half : "whole"}` : "";
+    };
     const flush = () => {
       if (chunk.length === 0) return;
-      out.push(cloneOpWithPoints(op, chunk));
+      const next = cloneOpWithPoints(op, chunk, scale);
+      if (op.kind === "draw" && op.blotHalts && next.kind === "draw") {
+        next.blotHalts = op.blotHalts.flatMap(halt => {
+          const point = mapPoint({...halt,pressure:halt.pressure ?? .5},from,to,originX,width);
+          return targetKey(point) === key ? [{...halt,x:point.x,y:point.y}] : [];
+        });
+      }
+      out.push(next);
       chunk = [];
     };
+    let previous: ScenePoint | null = null;
     for (const point of op.points) {
       const mapped = mapPoint(point, from, to, originX, width);
-      const nextKey = halfKey(mapped, to, originX, width);
-      if (chunk.length > 0 && nextKey !== key) flush();
+      const nextKey = targetKey(mapped);
+      if (chunk.length > 0 && nextKey !== key) {
+        const a = previous && locatePdfInkPoint(previous.x, previous.y, from, originX, width);
+        const b = locatePdfInkPoint(point.x, point.y, from, originX, width);
+        if (expanding && previous && a && b && a.pageId === b.pageId && a.half !== b.half) {
+          // Sparse pen/highlighter segments still reach the gutter. Simply
+          // splitting the samples turned a two-point highlight into two dots.
+          const t = (originX + width / 2 - previous.x) / (point.x - previous.x);
+          const edge = { ...previous, x: originX + width / 2,
+            y: previous.y + (point.y - previous.y) * t,
+            pressure: previous.pressure + (point.pressure - previous.pressure) * t,
+            ...(previous.radius != null && point.radius != null
+              ? { radius: previous.radius + (point.radius - previous.radius) * t } : {}),
+          };
+          const ny = a.ny + (b.ny - a.ny) * t;
+          const end = placePdfInkPoint({ ...a, nx: a.half === "left" ? 1 : 0, ny }, to, originX, width)!;
+          const start = placePdfInkPoint({ ...b, nx: b.half === "left" ? 1 : 0, ny }, to, originX, width)!;
+          chunk.push({ ...edge, ...end });
+          flush();
+          chunk.push({ ...edge, ...start });
+        } else flush();
+      }
       key = nextKey;
       chunk.push(mapped);
+      previous = point;
     }
     flush();
   }

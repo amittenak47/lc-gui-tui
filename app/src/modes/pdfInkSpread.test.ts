@@ -62,10 +62,14 @@ describe("remapInkBetweenPdfLayouts", () => {
     const ops = [draw([{ x: 40, y: 40 }, { x: 160, y: 40 }])];
     const next = remapInkBetweenPdfLayouts(ops, oneUp, twoUp, 0, 200);
     expect(next).toHaveLength(2);
-    expect(next[0]!.points).toHaveLength(1);
-    expect(next[1]!.points).toHaveLength(1);
+    expect(next[0]!.points).toHaveLength(2);
+    expect(next[1]!.points).toHaveLength(2);
+    expect(next[0]!.points[1]!.x).toBeCloseTo(200);
+    expect(next[1]!.points[0]!.x).toBeCloseTo(0);
     expect(next[0]!.points[0]!.y).toBeLessThan(200);
     expect(next[1]!.points[0]!.y).toBeGreaterThan(200);
+    const back = remapInkBetweenPdfLayouts(next, twoUp, oneUp, 0, 200);
+    expect(back.map(op => op.points.map(p => p.x))).toEqual([[40,100],[100,160]]);
   });
 
   it("round-trips a left-half point back onto the one-up sheet", () => {
@@ -74,6 +78,20 @@ describe("remapInkBetweenPdfLayouts", () => {
     const back = remapInkBetweenPdfLayouts(spread, twoUp, oneUp, 0, 200);
     expect(back[0]!.points[0]!.x).toBeCloseTo(50);
     expect(back[0]!.points[0]!.y).toBeCloseTo(40);
+  });
+
+  it("keeps pen, highlight and eraser thickness proportional to the sheet", () => {
+    const pen = draw([{ x: 40, y: 40 }]);
+    pen.points[0].radius = 3;
+    const ink = [pen, { ...pen, highlight: true } as InkOp,
+      { kind: "erase", radius: 8, points: [{x:40,y:40,pressure:.5}] } as InkOp];
+    const spread = remapInkBetweenPdfLayouts(ink, oneUp, twoUp, 0, 200);
+    expect(spread[0]).toMatchObject({baseWidth:4,points:[{radius:6}]});
+    expect(spread[1]).toMatchObject({baseWidth:4,highlight:true});
+    expect(spread[2]).toMatchObject({radius:16});
+    const back = remapInkBetweenPdfLayouts(spread, twoUp, oneUp, 0, 200);
+    expect(back[0]).toMatchObject({baseWidth:2,points:[{radius:3}]});
+    expect(back[2]).toMatchObject({radius:8});
   });
 
   it("does not rewrite ink when both layouts are one-up", () => {
