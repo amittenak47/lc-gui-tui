@@ -283,6 +283,20 @@ export interface BoardHandle {
    */
   scrollToPdfPage(pageId: number, opts?: { hold?: boolean }): boolean;
   /**
+   * Pages reading. Every reading slot in scene coordinates — one per PDF sheet,
+   * or one per half when the sheet is split — top to bottom.
+   */
+  readingPageFrames(): PageFrame[];
+  /** Hold the camera inside this scene span; null lets it scroll freely again. */
+  setPageLock(span: { minY: number; maxY: number } | null): void;
+  /** Put this slot's top at the top of the view. */
+  jumpToPageFrame(frame: PageFrame): boolean;
+  /** The page, its marks and its ink for a scene rectangle, as pixels. */
+  captureSceneFrame(
+    frame: { x: number; y: number; width: number; height: number },
+    scale: number,
+  ): Promise<HTMLCanvasElement | null>;
+  /**
    * Remember which PDF page to paint/restore before the stack exists.
    * Camera jumps once that page's div is laid out. Prevents decoding page 1
    * on reopen. `hold: false` publishes C without locking pan.

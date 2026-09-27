@@ -700,6 +700,28 @@ async function exportSceneFrameBlob(
   pageLayers: PageExportLayers | null = null,
   excludeCoachViz = false,
 ): Promise<Blob> {
+  const out = await renderSceneFrameCanvas(api, ops, frame, exportScale, pageLayers, excludeCoachViz);
+  if (!out) return new Blob([], { type: "image/png" });
+  const composited = await new Promise<Blob | null>((resolve) =>
+    out.toBlob(resolve, "image/png", 0.85),
+  );
+  return composited ?? new Blob([], { type: "image/png" });
+}
+
+/**
+ * The page, its marks and its ink for one scene rectangle, as a canvas.
+ *
+ * The export above encodes this to PNG; a page turn wants the pixels as they
+ * are, every turn, and encoding would cost more than drawing.
+ */
+async function renderSceneFrameCanvas(
+  api: ExcalidrawApi,
+  ops: readonly InkOp[],
+  frame: { x: number; y: number; width: number; height: number },
+  exportScale = 2,
+  pageLayers: PageExportLayers | null = null,
+  excludeCoachViz = false,
+): Promise<HTMLCanvasElement | null> {
   const appState = { ...(api.getAppState() as object), exportScale } as Record<string, unknown>;
   const files = api.getFiles();
   const all = (api.getSceneElements() as SceneElementLike[]).filter(el =>
@@ -724,9 +746,7 @@ async function exportSceneFrameBlob(
   out.width = width;
   out.height = height;
   const ctx = out.getContext("2d");
-  if (!ctx) {
-    return new Blob([], { type: "image/png" });
-  }
+  if (!ctx) return null;
   ctx.fillStyle = paper;
   ctx.fillRect(0, 0, width, height);
   await compositePageLayers(ctx, bounds, drawScale, pageLayers);
@@ -761,11 +781,7 @@ async function exportSceneFrameBlob(
       ctx.drawImage(inkCanvas, 0, 0);
     }
   }
-
-  const composited = await new Promise<Blob | null>((resolve) =>
-    out.toBlob(resolve, "image/png", 0.85),
-  );
-  return composited ?? new Blob([], { type: "image/png" });
+  return out;
 }
 
 function newImageFileId(): string {
@@ -2067,6 +2083,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   if (!docFlagsRef.current) docFlagsRef.current = makeDocFlagHolds(filmScope || undefined);
   const docFlags = docFlagsRef.current;
   const applyVisualScrollNowRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
+  /** Pages reading: the scene span of the open page, or null when scrolling freely. */
+  const pageLockRef = useRef<{ minY: number; maxY: number } | null>(null);
   const publishPdfFilmFromScrollRef = useRef<
     (scrollX: number, scrollY: number, zoom: number, height: number) => void
   >(() => {});
@@ -3154,6 +3172,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         MD_INK_TAIL_PAD,
       );
     }
+    // Pages reading: the camera may not leave the page that is open.
+    const lock = pageLockRef.current;
+    if (lock) bounds = { ...bounds, minY: Math.max(bounds.minY, lock.minY), maxY: Math.min(bounds.maxY, lock.maxY) };
     /*
      * Mobile paging always clamped. Desktop used to skip clamp entirely, so a
      * reading board could pan into empty beige past the page — Excalidraw then
@@ -9074,7 +9095,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const jumpToPdfPage = useCallback((pageId: number, opts?: { hold?: boolean }) => {
+  const jumpToPdfPage = useCallback((pageId: number, opts?: { hold?: boolean; frameMinY?: number }) => {
     const api = apiRef.current;
     if (!api || pageId < 1) return false;
     const state = api.getAppState() as {
@@ -9119,7 +9140,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       pageBoundsRef.current = { ...boundsNow, maxY: stackEnd };
       applyDocumentFrameHeight(grown);
     }
-    let nextScrollY = scrollYForPage(frames, pageId, zoom, insetTop);
+    // A frame given directly: the right half of a split sheet shares its
+    // page number with the left, so the number alone lands on the left.
+    let nextScrollY =
+      opts?.frameMinY != null ? insetTop / zoom - opts.frameMinY : scrollYForPage(frames, pageId, zoom, insetTop);
     if (nextScrollY == null) {
       const slot = contentSlotNodeRef.current;
       const bounds = pageBoundsRef.current;
@@ -9608,6 +9632,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       },
       scrollToPdfPage: (pageId: number, opts?: { hold?: boolean }) =>
         jumpToPdfPage(pageId, opts),
+      readingPageFrames: () => {
+        const origin = pageBoundsRef.current?.minY ?? 0;
+        return offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
+      },
+      setPageLock: (span) => {
+        pageLockRef.current = span ? { minY: span.minY, maxY: span.maxY } : null;
+      },
+      jumpToPageFrame: (frame) =>
+        jumpToPdfPage(frame.pageId, { hold: false, frameMinY: frame.minY }),
+      captureSceneFrame: async (frame, scale) => {
+        const api = apiRef.current;
+        if (!api || frame.width < 1 || frame.height < 1) return null;
+        return renderSceneFrameCanvas(api, rasterInkRef.current?.getOps() ?? [], frame, scale, pageExportLayers(), true);
+      },
       aimPdfPage: (pageId: number, opts?: { hold?: boolean }) => {
         if (!(pageId >= 1)) {
           pendingPdfPageRef.current = 0;
