@@ -315,7 +315,7 @@ async function drawDomSlot(
  */
 function hollowOutside(slot: HTMLElement, clone: HTMLElement, bandTop: number, bandBottom: number): void {
   const slotRect = slot.getBoundingClientRect();
-  const scale = slot.offsetHeight > 0 ? slotRect.height / slot.offsetHeight : 1;
+  const scale = slot.offsetWidth > 0 ? slotRect.width / slot.offsetWidth : 1;
   if (!(scale > 0)) return;
   const margin = (bandBottom - bandTop) * 0.5;
   const top = bandTop - margin;
@@ -332,7 +332,10 @@ function hollowOutside(slot: HTMLElement, clone: HTMLElement, bandTop: number, b
       const localBottom = (box.bottom - slotRect.top) / scale;
       if (localBottom < top || localTop > bottom) {
         if (from instanceof HTMLElement && from.offsetHeight > 0) {
-          to.style.height = `${from.offsetHeight}px`;
+          // offsetHeight rounds every paragraph to whole CSS pixels. On a
+          // long capture those errors accumulate above the selected passage,
+          // moving the text while ink keeps its exact scene coordinates.
+          to.style.height = `${box.height / scale}px`;
           to.style.boxSizing = "border-box";
           to.style.overflow = "hidden";
           to.replaceChildren();
