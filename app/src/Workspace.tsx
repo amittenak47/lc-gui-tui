@@ -7210,7 +7210,7 @@ export function Workspace({
       // The live page is a native surface over the board. Capturing the board
       // hands the model the frozen copy underneath, which is not the page on screen.
       let liveSeen: { url: string; title: string; text: string } | null = null;
-      if (!flags.documentView && webLiveRef.current && paneTabRef.current.kind === "web") {
+      if (flags.capture && !flags.documentView && webLiveRef.current && paneTabRef.current.kind === "web") {
         try {
           const { liveWebviewLabel, readLiveViewport } = await import("./util/webPageCapture");
           liveSeen = await readLiveViewport(liveWebviewLabel(paneTabRef.current.id));
@@ -7219,7 +7219,7 @@ export function Workspace({
         }
       }
       const livePageCovered = webLiveRef.current && paneTabRef.current.kind === "web";
-      const snapshot = !livePageCovered && !liveSeen && !flags.documentView && source && board ? board.captureDocumentView() : null;
+      const snapshot = flags.capture && !livePageCovered && !liveSeen && !flags.documentView && source && board ? board.captureDocumentView() : null;
       let view: DocumentViewContext | undefined = flags.documentView ? structuredClone(flags.documentView) : liveSeen ? {
         viewport: { x: 0, y: 0, width: 0, height: 0 },
         pages: [],
@@ -7240,9 +7240,7 @@ export function Workspace({
       );
       if (!seedMatchesSource()) throw new Error("The selected document or pane changed. Select the area again before sending.");
       let liveCaptureNote = "";
-      const [capturedView, prepared, liveShot] = await Promise.all([
-        snapshot && board && modeHasVision("ask") && !flags.capture
-          ? withTimeout(board.exportViewThumb(), THUMB_EXPORT_TIMEOUT_MS, "Current-view capture timed out") : Promise.resolve(null),
+      const [prepared, liveShot] = await Promise.all([
         prepareCoachSend(text, flags),
         flags.capture && livePageCovered
           ? withTimeout((async () => {
@@ -7256,7 +7254,7 @@ export function Workspace({
           : Promise.resolve(null),
       ]);
       if (board && boardRef.current?.instanceId !== board.instanceId) throw new Error("The canvas changed during capture. Send again from the intended page.");
-      let viewImage = liveShot ?? capturedView ?? (
+      let viewImage = liveShot ?? (
         flags.capture ? prepared.attachments?.find((att) => att.label === "This view") ?? null : null
       );
       if (flags.capture && livePageCovered && !viewImage?.png) {
