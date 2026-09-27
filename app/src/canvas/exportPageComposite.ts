@@ -63,6 +63,154 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
+/** Marks the stand-in for `<html>` inside a captured SVG. */
+const CAPTURE_ROOT_CLASS = "lc-capture-root";
+
+/**
+ * Layout-neutral inline style for the stand-in ancestors. They exist only so
+ * that descendant selectors (`.lc-canvas-wrap .lc-md-ink-doc …`) and inherited
+ * values still reach the clone; they must not add boxes, offsets or paint.
+ */
+const SHELL_NEUTRAL =
+  "display:block;position:static;transform:none;overflow:visible;" +
+  "width:auto;height:auto;min-width:0;min-height:0;max-width:none;max-height:none;" +
+  "margin:0;padding:0;border:0;background:transparent;box-shadow:none;" +
+  "filter:none;opacity:1;inset:auto;contain:none;";
+
+/**
+ * Theme rules key off `<html data-theme>`. Inside the SVG image `:root` is the
+ * `<svg>` and there is no `<html>`, so point those selectors at the stand-in.
+ */
+function themeScopedCss(css: string): string {
+  return css.replace(/(?::root|\bhtml)(?=\[data-theme)/g, `.${CAPTURE_ROOT_CLASS}`);
+}
+
+/**
+ * Stand-ins for the slot's real ancestors, `<html>` outermost, each carrying
+ * the original's classes and `data-*` attributes so the app's scoped rules
+ * match the clone the way they match the live page. The outermost also takes
+ * every custom property the document root resolves — the theme sets its
+ * palette as inline style on `<html>`, which no stylesheet carries — and the
+ * innermost takes the inherited text settings of the slot's parent.
+ */
+function ancestorShell(slot: HTMLElement): { outer: HTMLElement; inner: HTMLElement } {
+  const chain: Element[] = [];
+  for (let el = slot.parentElement; el; el = el.parentElement) chain.unshift(el);
+  const outer = document.createElement("div");
+  let inner = outer;
+  chain.forEach((source, index) => {
+    const node = index === 0 ? outer : document.createElement("div");
+    const classes = source.getAttribute("class");
+    if (classes) node.setAttribute("class", classes);
+    for (const attr of Array.from(source.attributes)) {
+      if (attr.name.startsWith("data-")) node.setAttribute(attr.name, attr.value);
+    }
+    node.setAttribute("style", SHELL_NEUTRAL);
+    if (index > 0) {
+      inner.appendChild(node);
+      inner = node;
+    }
+  });
+  outer.classList.add(CAPTURE_ROOT_CLASS);
+
+  const rootStyle = getComputedStyle(document.documentElement);
+  const vars: string[] = [];
+  for (let i = 0; i < rootStyle.length; i += 1) {
+    const name = rootStyle.item(i);
+    if (name.startsWith("--")) vars.push(`${name}:${rootStyle.getPropertyValue(name)}`);
+  }
+  outer.setAttribute("style", `${SHELL_NEUTRAL}${vars.join(";")}`);
+
+  const parent = slot.parentElement;
+  if (parent) {
+    const text = getComputedStyle(parent);
+    inner.style.color = text.color;
+    inner.style.fontFamily = text.fontFamily;
+    inner.style.fontSize = text.fontSize;
+    inner.style.lineHeight = text.lineHeight;
+    inner.style.letterSpacing = text.letterSpacing;
+  }
+  return { outer, inner };
+}
+
+const fontDataUrls = new Map<string, Promise<string | null>>();
+
+function fontDataUrl(url: string): Promise<string | null> {
+  let pending = fontDataUrls.get(url);
+  if (!pending) {
+    pending = fetch(url)
+      .then((res) => (res.ok ? res.blob() : null))
+      .then((blob) =>
+        blob
+          ? new Promise<string | null>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+          })
+          : null,
+      )
+      .catch(() => null);
+    fontDataUrls.set(url, pending);
+  }
+  return pending;
+}
+
+let fontCssCache: { key: string; css: Promise<string> } | null = null;
+
+/**
+ * `@font-face` rules for the faces the page has actually loaded, with their
+ * files inlined. An SVG drawn as an image may not fetch anything, so the
+ * stylesheet's `url(./fonts/…)` faces silently fall back to the default serif
+ * — which is what made captured markdown pages look like a different app.
+ */
+function embeddedFontCss(): Promise<string> {
+  const loaded = new Set<string>();
+  document.fonts?.forEach((face) => {
+    if (face.status === "loaded") loaded.add(`${face.family.replace(/["']/g, "")}|${face.weight}|${face.style}`);
+  });
+  const key = Array.from(loaded).sort().join(",");
+  if (fontCssCache?.key === key) return fontCssCache.css;
+
+  const jobs: Promise<string>[] = [];
+  for (const sheet of Array.from(document.styleSheets)) {
+    let rules: CSSRuleList;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      continue;
+    }
+    const base = sheet.href ?? document.baseURI;
+    for (const rule of Array.from(rules)) {
+      if (!(rule instanceof CSSFontFaceRule)) continue;
+      const style = rule.style;
+      const family = style.getPropertyValue("font-family").trim().replace(/["']/g, "");
+      const weight = style.getPropertyValue("font-weight").trim() || "normal";
+      const fontStyle = style.getPropertyValue("font-style").trim() || "normal";
+      const matches = Array.from(loaded).some((entry) => entry.startsWith(`${family}|`));
+      if (!family || !matches) continue;
+      const src = style.getPropertyValue("src").match(/url\((['"]?)([^'")]+)\1\)/);
+      if (!src?.[2] || src[2].startsWith("data:")) continue;
+      let url: string;
+      try {
+        url = new URL(src[2], base).href;
+      } catch {
+        continue;
+      }
+      jobs.push(
+        fontDataUrl(url).then((data) =>
+          data
+            ? `@font-face{font-family:"${family}";font-style:${fontStyle};font-weight:${weight};src:url("${data}");}`
+            : "",
+        ),
+      );
+    }
+  }
+  const css = Promise.all(jobs).then((faces) => faces.filter(Boolean).join("\n"));
+  fontCssCache = { key, css };
+  return css;
+}
+
 /**
  * Rasterize an HTML subtree (slot-local CSS = scene units) into the export
  * canvas for the overlapping scene rect.
@@ -92,7 +240,7 @@ async function drawDomSlot(
   clone.style.margin = "0";
   clone.removeAttribute("aria-hidden");
 
-  const css = collectStylesheetText();
+  const css = themeScopedCss(collectStylesheetText()) + "\n" + (await embeddedFontCss());
   const wrapper = document.createElement("div");
   wrapper.style.width = `${pageBounds.maxX - pageBounds.minX}px`;
   wrapper.style.height = `${pageBounds.maxY - pageBounds.minY}px`;
@@ -100,13 +248,15 @@ async function drawDomSlot(
   wrapper.style.overflow = "hidden";
   wrapper.style.background = "transparent";
   wrapper.appendChild(clone);
+  const shell = ancestorShell(slot);
+  shell.inner.appendChild(wrapper);
 
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${pixelW}" height="${pixelH}" ` +
     `viewBox="${localX} ${localY} ${sceneW} ${sceneH}">` +
     `<style type="text/css"><![CDATA[${css}]]></style>` +
     `<foreignObject x="0" y="0" width="${pageBounds.maxX - pageBounds.minX}" ` +
-    `height="${pageBounds.maxY - pageBounds.minY}">${new XMLSerializer().serializeToString(wrapper)}</foreignObject></svg>`;
+    `height="${pageBounds.maxY - pageBounds.minY}">${new XMLSerializer().serializeToString(shell.outer)}</foreignObject></svg>`;
 
   // Chromium/WebView marks a blob-backed SVG containing foreignObject as
   // origin-unclean even when every node is local. Drawing it succeeds, but the
