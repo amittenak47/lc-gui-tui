@@ -319,6 +319,33 @@ describe("annotation camera presentation", () => {
     expect(alpha(120, 280)).toBeGreaterThan(0);
   });
 
+  it("clears the last undone stroke immediately after a camera rebase", async () => {
+    await ready([], "pen");
+    const event = (type: string, x: number) => {
+      const e = new MouseEvent(type, { button: 0, clientX: x, clientY: 100, bubbles: true });
+      Object.defineProperties(e, { pointerId: { value: 1 }, pointerType: { value: "pen" }, pressure: { value: .5 } });
+      surface().dispatchEvent(e);
+    };
+    await act(async () => {
+      event("pointerdown", 80); event("pointermove", 140); event("pointerup", 140);
+    });
+    view = { ...view, scrollY: -20 };
+    const settled = ref.current!.syncCamera();
+    await frames(80); await settled;
+    expect(alpha(100, 260)).toBeGreaterThan(0);
+    worker.blocked = true;
+    expect(ref.current!.undo()).toBe(true);
+    expect(ref.current!.getOpCount()).toBe(0);
+    // No timer or worker completion should be needed to erase an empty page.
+    expect(alpha(100, 260)).toBe(0);
+    await frames(10);
+    expect(alpha(100, 260)).toBe(0);
+    worker.blocked = false; worker.release.splice(0).forEach(resolve => resolve());
+    expect(ref.current!.redo()).toBe(true);
+    await frames(80);
+    expect(alpha(100, 260)).toBeGreaterThan(0);
+  });
+
   it("does not resurrect undone ink when pinch tiles finish loading", async () => {
     await ready([], "pen");
     const event = (type: string, x: number) => {

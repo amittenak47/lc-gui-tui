@@ -1207,6 +1207,18 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           if (entry.kind === "add" && isInkLabPenOp(entry.op)) {
             undoOverlay(overlayRef.current, overlayRedoRef.current);
           }
+          if (!bookRef.current.hasInk() && engine) {
+            // A camera rebase discards the pixel undo patch. An empty book
+            // needs no tile worker: clear the old picture on this tap, while
+            // retaining semantic history for Redo and deferred cache cleanup.
+            pageStageRef.current = null;
+            hostRasterRef.current.sync([]);
+            engine.clear();
+            engine.paint();
+            scheduleHistoryPaint(true);
+            onChangeRef.current?.();
+            return true;
+          }
           if (pixel && engine && !historyPixelsDirtyRef.current) {
             engine.restoreSnapPatch(pixel);
             engine.paint();
