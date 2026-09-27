@@ -2679,16 +2679,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const mask = pageMaskRef.current;
     if (!mask) return;
     const shown = pageFitRef.current != null ? pageShownRef.current : null;
+    const box = pageLockRef.current ?? shown;
     const bounds = pageBoundsRef.current;
     const hole = mask.firstElementChild as HTMLElement | null;
-    if (!shown || !bounds || !hole) {
+    const blank = hole?.firstElementChild as HTMLElement | null;
+    if (!shown || !box || !bounds || !hole) {
       if (!mask.hidden) mask.hidden = true;
       return;
     }
     if (mask.hidden) mask.hidden = false;
-    hole.style.transform = `translate(${(bounds.minX + scrollX) * zoom}px, ${(shown.minY + scrollY) * zoom}px)`;
+    // The whole page box is the sheet; a text page cut short is blank paper
+    // from its cut down, not the desk.
+    hole.style.transform = `translate(${(bounds.minX + scrollX) * zoom}px, ${(box.minY + scrollY) * zoom}px)`;
     hole.style.width = `${Math.max(0, (bounds.maxX - bounds.minX) * zoom)}px`;
-    hole.style.height = `${Math.max(0, (shown.maxY - shown.minY) * zoom)}px`;
+    hole.style.height = `${Math.max(0, (box.maxY - box.minY) * zoom)}px`;
+    if (blank) {
+      const cut = Math.max(0, (shown.maxY - box.minY) * zoom);
+      blank.style.top = `${cut}px`;
+      blank.style.height = `${Math.max(0, (box.maxY - shown.maxY) * zoom)}px`;
+    }
   };
 
   /**
@@ -11078,7 +11087,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       />
       {pageContent && (
         <div ref={pageMaskRef} className="lc-page-mask" aria-hidden hidden>
-          <div className="lc-page-mask-hole" />
+          <div className="lc-page-mask-hole">
+            <div className="lc-page-mask-blank" />
+          </div>
         </div>
       )}
       <SceneOverlay

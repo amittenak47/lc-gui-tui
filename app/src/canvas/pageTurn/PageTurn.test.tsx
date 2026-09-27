@@ -256,7 +256,7 @@ it("lines up another turn when a key is pressed during one", async () => {
   await settle();
   key();
   for (let i = 0; i < 12; i += 1) await settle();
-  const landed = board.jumpToPageFrame.mock.calls.map((call) => (call[0] as { pageId: number }).pageId);
+  const landed = (board.jumpToPageFrame.mock.calls as unknown as [{ pageId: number }][]).map((call) => call[0].pageId);
   board.jumpToPageFrame.mockImplementation(() => true);
   expect(landed.slice(0, 2)).toEqual([2, 1]);
 });

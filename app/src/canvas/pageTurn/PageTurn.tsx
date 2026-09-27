@@ -21,6 +21,7 @@ import { useEffect, useRef, type RefObject } from "react";
 import type { BoardHandle } from "../BoardHandle";
 import type { PageFrame } from "../inkPageIndex";
 import { peekPdfFilmCurrent, subscribePdfFilmCurrent } from "../../modes/pdfFilm";
+import { isSubMarkDragLive, selectionOwnsGesture } from "../docSelectionGesture";
 import { cornerForDrag, turnCommits, type Point } from "./curl";
 import { paintTurn, type TurnLayout } from "./paintTurn";
 
@@ -52,6 +53,12 @@ const HURRY_MS = 110;
 const QUICK_TURN_MS = 240;
 /** Most turns a held or hammered key may queue ahead. */
 const KEY_QUEUE_MAX = 2;
+/** A finger on the text turns only on a swipe this quick — the selection's hold arms at 260 ms. */
+const BODY_SWIPE_MS = 220;
+/** The page's turning edges: this share of its width, within these bounds (px). Matches the CSS. */
+const EDGE_SHARE = 0.12;
+const EDGE_MIN_PX = 44;
+const EDGE_MAX_PX = 120;
 
 /**
  * Pixels per scene unit for a turn's pictures: the view's own resolution,
@@ -147,13 +154,6 @@ function currentIndex(
 
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
-}
-
-/** What the view shows around a fitted page — see `.lc-page-mask-hole`. */
-function maskColor(): string {
-  if (typeof document === "undefined") return "#ffffff";
-  const root = getComputedStyle(document.documentElement);
-  return root.getPropertyValue("--lc-page-mask").trim() || root.getPropertyValue("--bg").trim() || "#ffffff";
 }
 
 function paperColor(): string {
@@ -326,7 +326,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
           const ctx = canvas.getContext("2d");
           if (!ctx) return canvas;
           const top = Math.max(0, Math.round((cut / scene.height) * canvas.height));
-          ctx.fillStyle = maskColor();
+          ctx.fillStyle = paperColor();
           ctx.fillRect(0, top, canvas.width, canvas.height - top);
           return canvas;
         }).catch(() => null);
@@ -491,6 +491,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
 
     const teardown = (turn: Turn) => {
       turn.done = true;
+      setTurning(false);
       if (turn.frame) cancelAnimationFrame(turn.frame);
       // Two frames: the camera's jump has to reach the screen before the
       // picture of where it was going stops covering it.
@@ -610,7 +611,61 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
 
     /* ---------------------------------------------------------- gesture */
 
-    let pending: { id: number; x: number; y: number; target: EventTarget | null; type: string } | null = null;
+    /*
+     * Where a turn may start, so it is never mistaken for a selection.
+     *
+     *   - The page's outer edges are its turning edges, for a finger or a
+     *     mouse, shown as a faint sheen that brightens under the pointer. A
+     *     press there is the turn's alone: nothing selects from the edge.
+     *   - On the text, a mouse drag is a selection and never turns. A finger
+     *     turns only on a quick swipe; one that rests is the selection's hold.
+     *   - Whatever claims the gesture first keeps it: a selection that has
+     *     taken the finger is not turned over, and a turn clears the selection
+     *     and holds text selection off until it lands.
+     */
+    const host = () => document.querySelector<HTMLElement>(hostSelector);
+    const pageRect = (): DOMRect | null => {
+      const hole = host()?.querySelector<HTMLElement>(".lc-page-mask-hole");
+      if (!hole || (hole.parentElement as HTMLElement | null)?.hidden) return null;
+      const rect = hole.getBoundingClientRect();
+      return rect.width > 8 && rect.height > 8 ? rect : null;
+    };
+    const edgeAt = (x: number, y: number): "left" | "right" | null => {
+      const r = pageRect();
+      if (!r || x < r.left || x > r.right || y < r.top || y > r.bottom) return null;
+      const zone = Math.min(EDGE_MAX_PX, Math.max(EDGE_MIN_PX, r.width * EDGE_SHARE));
+      if (x <= r.left + zone) return "left";
+      if (x >= r.right - zone) return "right";
+      return null;
+    };
+    const setHover = (edge: "left" | "right" | null) => {
+      const el = host();
+      if (!el) return;
+      if (edge) el.dataset.turnHover = edge;
+      else delete el.dataset.turnHover;
+    };
+    const setTurning = (on: boolean) => {
+      const el = host();
+      if (!el) return;
+      if (on) {
+        el.dataset.turnActive = "";
+        window.getSelection()?.removeAllRanges();
+      } else {
+        delete el.dataset.turnActive;
+      }
+    };
+    const edgesHost = host();
+    if (edgesHost) edgesHost.dataset.turnEdges = "";
+
+    let pending: {
+      id: number;
+      x: number;
+      y: number;
+      t: number;
+      target: EventTarget | null;
+      type: string;
+      edge: boolean;
+    } | null = null;
     let active: { id: number; x: number; y: number; turn: Turn; vx: number; lastX: number; lastT: number } | null = null;
     /** The board's cancel is on its way through our own listeners. */
     let handingOff = false;
@@ -618,7 +673,10 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     const inHost = (target: EventTarget | null) =>
       target instanceof Element &&
       Boolean(target.closest(hostSelector)) &&
-      !target.closest("button, a, input, textarea, select, [role='menu'], [role='dialog'], .lc-board-chrome-slot, .lc-map-controls");
+      !target.closest(
+        "button, a, input, textarea, select, [role='menu'], [role='dialog'], .lc-board-chrome-slot, .lc-map-controls," +
+          " .lc-doc-footnote, .lc-doc-footnote-pack, .lc-footnote-bubble, .lc-doc-select-overlay, .lc-doc-sheet, .lc-doc-confirm",
+      );
 
     const onDown = (event: PointerEvent) => {
       if (turnRef.current || active) return;
@@ -627,7 +685,26 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (event.button !== 0 || !event.isPrimary) return;
       if (event.pointerType === "pen") return; // the stylus writes; fingers and mice turn
       if (!inHost(event.target)) return;
-      pending = { id: event.pointerId, x: event.clientX, y: event.clientY, target: event.target, type: event.pointerType };
+      const edgeSide = edgeAt(event.clientX, event.clientY);
+      const edge = edgeSide != null;
+      // The text is the selection's under a mouse.
+      if (!edge && event.pointerType === "mouse") return;
+      pending = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        t: event.timeStamp,
+        target: event.target,
+        type: event.pointerType,
+        edge,
+      };
+      if (edge) {
+        // The edge is the turn's: no text selection, no hold, no pan from it.
+        event.stopImmediatePropagation();
+        event.preventDefault();
+        // A finger has no hover: show the edge it pressed.
+        if (event.pointerType === "touch") setHover(edgeSide);
+      }
     };
 
     const onMove = (event: PointerEvent) => {
@@ -646,14 +723,31 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         draw(turn);
         return;
       }
-      if (!pending || event.pointerId !== pending.id) return;
+      if (!pending) {
+        if (event.pointerType === "mouse" && event.buttons === 0) setHover(edgeAt(event.clientX, event.clientY));
+        return;
+      }
+      if (event.pointerId !== pending.id) return;
+      // A selection that has the finger, or a mouse already selecting, keeps it.
+      if (!pending.edge && (selectionOwnsGesture() || isSubMarkDragLive())) {
+        pending = null;
+        return;
+      }
       const dx = event.clientX - pending.x;
       const dy = event.clientY - pending.y;
       if (Math.abs(dy) > TURN_SLOP_PX && Math.abs(dy) > Math.abs(dx)) {
         pending = null; // a scroll within the page; the board keeps it
         return;
       }
-      if (Math.abs(dx) < TURN_SLOP_PX || Math.abs(dx) < Math.abs(dy) * TURN_AXIS_RATIO) return;
+      if (Math.abs(dx) < TURN_SLOP_PX || Math.abs(dx) < Math.abs(dy) * (pending.edge ? 1 : TURN_AXIS_RATIO)) {
+        // A finger resting on the text is on its way to a selection, not a turn.
+        if (!pending.edge && event.timeStamp - pending.t > BODY_SWIPE_MS) pending = null;
+        return;
+      }
+      if (!pending.edge && event.timeStamp - pending.t > BODY_SWIPE_MS) {
+        pending = null;
+        return;
+      }
       const direction: Direction = dx < 0 ? "next" : "prev";
       const hostRect = (pending.target as Element).closest(hostSelector)?.getBoundingClientRect();
       const bottom = hostRect ? pending.y > hostRect.top + hostRect.height / 2 : true;
@@ -668,6 +762,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const claimed = pending;
       pending = null;
       turnRef.current = turn;
+      setTurning(true);
       active = { id: claimed.id, x: event.clientX - dx, y: event.clientY - dy, turn, vx: 0, lastX: event.clientX, lastT: event.timeStamp };
       if (claimed.target instanceof Element) {
         handingOff = true;
@@ -687,6 +782,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
 
     const onUp = (event: PointerEvent) => {
       if (handingOff) return;
+      if (event.pointerType === "touch") setHover(null);
       if (pending && event.pointerId === pending.id) pending = null;
       if (!active || event.pointerId !== active.id) return;
       event.stopImmediatePropagation();
@@ -746,6 +842,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       window.removeEventListener("keydown", onKey);
       window.clearTimeout(prefetchTimer);
       window.clearInterval(recheck);
+      const el = host();
+      if (el) {
+        delete el.dataset.turnEdges;
+        delete el.dataset.turnHover;
+        delete el.dataset.turnActive;
+      }
       unsubscribeFilm();
       shotsRef.current.clear();
       const turn = turnRef.current;
