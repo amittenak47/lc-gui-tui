@@ -57,6 +57,7 @@ import {
   resetPdfReadingFrames,
   resetPdfViewPages,
   setPdfReadingFrames,
+  setPdfPageSizes,
   subscribePdfFilmCurrent,
   subscribePdfPaintWake,
   subscribePdfPreloadPages,
@@ -827,6 +828,7 @@ export function PdfDocument({
         if (cached) {
           naturalsRef.current = cached;
           onPageSizesRef.current?.(naturalsRef.current);
+          if (!standalone) setPdfPageSizes(filmScope, naturalsRef.current);
           setPages(layoutPdfPages(cached, frameWidthRef.current, spreadRef.current));
           return;
         }
@@ -853,6 +855,7 @@ export function PdfDocument({
           }
           naturalsRef.current = naturals.slice();
           onPageSizesRef.current?.(naturalsRef.current);
+          if (!standalone) setPdfPageSizes(filmScope, naturalsRef.current);
           // First batch is enough for the open gate to see a real stack height.
           // Waiting for every getPage used to throw "did not finish opening"
           // while PdfDocument still said Opening… — Kleinberg is 432 dictionary

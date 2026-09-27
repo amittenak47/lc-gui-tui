@@ -172,7 +172,7 @@ import {
   wakePdfPaintPump,
 } from "../modes/pdfFilm";
 import { pdfLandingHoldClear, pdfPreloadPages, pdfRestPages } from "../modes/pdfPaintWindow";
-import { remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
+import { pdfLayoutIsSpread, remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
 import { eraserPageWidth, eraserScreenRadius } from "./rasterInk";
 import { applyLinedSlotStyle, linedOverlayViewport, linedSlotCanSkip } from "./linedSlot";
 import { PANEL_RESIZE_EVENT, SPLIT_RESIZE_EVENT, boardResizeDeferred, sashDragActive, splitResizePhase } from "../util/splitResize";
@@ -2071,6 +2071,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const pdfFilmPublishRef = useRef(pdfFilmPublish);
   pdfFilmPublishRef.current = pdfFilmPublish;
   const pdfDocumentRef = useRef(pdfDocument);
+  /**
+   * The layout the ink's coordinates are in, when that is known to differ
+   * from — or not yet be checked against — the page layout on screen. Null
+   * means "the layout on screen". Saved as `pdfSpread`, so a save that lands
+   * before a pending remap still says truthfully where the strokes are.
+   */
+  const inkSpreadRef = useRef<boolean | null>(null);
   pdfDocumentRef.current = pdfDocument;
   const pdfPanLogRef = useRef({ n: 0, t: 0 });
   const scheduleVisualScrollRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
@@ -9361,6 +9368,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         pendingPdfPageRef.current = opts?.hold === false ? 0 : pageId;
         publishPdfFilmCurrent(filmScope, pageId);
       },
+      setInkSpread: (spread) => {
+        inkSpreadRef.current = spread;
+      },
       remapPdfInkAcrossPdfLayout: (fromFrames) => {
         const ink = rasterInkRef.current;
         const bounds = pageBoundsRef.current;
@@ -9381,6 +9391,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         // `setOps` bins by the board's current frames: the layout these
         // strokes are now in, not the one they left.
         ink.setOps(next);
+        inkSpreadRef.current = null;
       },
       restoreView: (saved) => {
         const api = apiRef.current;
@@ -9533,6 +9544,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               if (frames.length > 0) return pageIdFromCamera(frames, y, z, h);
               return peekPdfFilmCurrent(filmScope);
             })() } : {}),
+            /*
+             * Which layout the ink's coordinates belong to.
+             *
+             * Split and whole sheets put the same stroke at different scene
+             * points, and the spread setting is per device. Stamped here so
+             * another device (and the merge preview) can tell which it is
+             * reading, and remap it into its own.
+             */
+            ...(pdfDocumentRef.current && (inkSpreadRef.current != null || peekPdfReadingFrames(filmScope).length > 0)
+              ? { pdfSpread: inkSpreadRef.current ?? pdfLayoutIsSpread(peekPdfReadingFrames(filmScope)) }
+              : {}),
           },
           // Encoded, not raw — `ink` stays readable forever but is never
           // written again. See `inkCodec`; read it back with `inkOpsFrom`.

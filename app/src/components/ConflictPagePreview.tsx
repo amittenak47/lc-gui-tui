@@ -17,6 +17,7 @@ import { rangeFromAnchor, scopeRootIn } from "../util/docAnchors";
 import { DocSelectionLayer } from "../modes/DocSelectionLayer";
 import { PdfDocument, type PdfPageNatural } from "../modes/PdfDocument";
 import { conflictPdfFrames } from "./conflictDocumentLayout";
+import { locatePdfInkPoint, placePdfInkPoint, remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
 import { publishPdfFilmCurrent, publishPdfViewPages } from "../modes/pdfFilm";
 import { borrowPdfDocument } from "../modes/pdfOpenDocs";
 import { pdfVisibleFromSpans } from "../modes/pdfPaintWindow";
@@ -89,6 +90,7 @@ export function ConflictPagePreview({
   onVisiblePages,
   selectedPageOnly = false,
   revealInk = false,
+  inkSpread = false,
   documentType,
   focusNote,
   focusY,
@@ -136,6 +138,8 @@ export function ConflictPagePreview({
   onVisiblePages?: (pages: readonly number[]) => void;
   selectedPageOnly?: boolean;
   revealInk?: boolean;
+  /** This copy's PDF ink was written on split sheets; see `decodedShards`. */
+  inkSpread?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const docRef = useRef<HTMLDivElement | null>(null);
@@ -159,7 +163,7 @@ export function ConflictPagePreview({
     [],
   );
   const [decodeGen, setDecodeGen] = useState(0);
-  const decodedShards = decodedInk ?? localShards;
+  const rawShards = decodedInk ?? localShards;
   const [decodeDone, setDecodeDone] = useState(true);
   // Keep a lightweight loading indicator until the first visible ink is ready.
   const [loadPhase, setLoadPhase] = useState<"busy" | "done" | "idle">(
@@ -181,6 +185,22 @@ export function ConflictPagePreview({
   const sourcePdfFrames = useMemo(() => pdfPageSizes.length && sceneWidth && sceneWidth > 0
     ? conflictPdfFrames(pdfPageSizes, sceneWidth) : undefined, [pdfPageSizes, sceneWidth]);
   const stablePageFrames = sourcePdfFrames ?? pageFramesRef.current;
+  /*
+   * The preview always shows whole sheets. Ink written by a device reading
+   * the sheets split sits at the split layout's scene points — twice as far
+   * down the stack, a full width across each half — so it is moved into
+   * whole-sheet coordinates before anything is placed or painted. Without
+   * this, split-sheet ink landed pages away from the page on screen.
+   */
+  const decodedShards = useMemo(() => {
+    if (!inkSpread || !pdfPageSizes.length || !sceneWidth || !(sceneWidth > 0)) return rawShards;
+    const from = conflictPdfFrames(pdfPageSizes, sceneWidth, true);
+    const to = conflictPdfFrames(pdfPageSizes, sceneWidth, false);
+    return rawShards.map((shard) => ({
+      pageId: shard.pageId,
+      ops: remapInkBetweenPdfLayouts(shard.ops, from, to, 0, sceneWidth),
+    }));
+  }, [rawShards, inkSpread, pdfPageSizes, sceneWidth]);
   const decodedOps = useMemo(
     () => decodedShards.flatMap((shard) => shard.ops),
     [decodedShards],
@@ -222,13 +242,21 @@ export function ConflictPagePreview({
   const useEpub = documentType === "epub" && Boolean(bytes?.byteLength);
   const useMarkdown = !usePdf && (useEpub || Boolean(sourceText));
   const usePaper = !usePdf && !useMarkdown;
-  const jumpTarget = useRef({ focusNote, focusY, stablePageFrames });
+  // The focus line is measured on the same split layout as the ink; move it too.
+  const focusSceneY = useMemo(() => {
+    if (focusY == null || !inkSpread || !pdfPageSizes.length || !sceneWidth || !(sceneWidth > 0)) return focusY;
+    const from = conflictPdfFrames(pdfPageSizes, sceneWidth, true);
+    const to = conflictPdfFrames(pdfPageSizes, sceneWidth, false);
+    const located = locatePdfInkPoint(0, focusY, from, 0, sceneWidth);
+    return located ? placePdfInkPoint(located, to, 0, sceneWidth)?.y ?? focusY : focusY;
+  }, [focusY, inkSpread, pdfPageSizes, sceneWidth]);
+  const jumpTarget = useRef({ focusNote, focusY: focusSceneY, stablePageFrames });
   const jumpedTo = useRef<string | undefined>(undefined);
-  jumpTarget.current = { focusNote, focusY, stablePageFrames };
+  jumpTarget.current = { focusNote, focusY: focusSceneY, stablePageFrames };
   useEffect(() => {
     const root = hostRef.current;
     if (!root || page < 1) return;
-    const key = `${page}:${focusKey}:${focusY}:${hash}`;
+    const key = `${page}:${focusKey}:${focusSceneY}:${hash}`;
     if (jumpedTo.current === key) return;
     resizeAnchorRef.current = null;
     const jump = () => {
@@ -267,7 +295,7 @@ export function ConflictPagePreview({
     if (!jump()) observer.observe(root, { childList: true, subtree: true });
     return () => observer.disconnect();
     // Rerun for newly decoded bounds, never for a pick or a scroll event.
-  }, [page, focusKey, focusY, useMarkdown, sceneWidth, stackH, hash]);
+  }, [page, focusKey, focusSceneY, useMarkdown, sceneWidth, stackH, hash]);
 
   useLayoutEffect(() => {
     const host=hostRef.current,doc=docRef.current;

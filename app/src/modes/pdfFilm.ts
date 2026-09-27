@@ -190,6 +190,8 @@ type FilmNav = {
   currentListeners: Set<(page: number) => void>;
   /** Document-local PDF stack frames — camera Y maps to a page without IO. */
   readingFrames: PageFrame[];
+  /** Every page's MediaBox, once measured — enough to lay the book out either way. */
+  pageSizes: { pageNumber: number; width: number; height: number }[];
   /** Lift-off landing guess — HUD / filmstrip ghost. Paint must not read this. */
   predicted: number;
   predictedListeners: Set<(page: number) => void>;
@@ -221,6 +223,7 @@ function nav(scope: string): FilmNav {
       current: 1,
       currentListeners: new Set(),
       readingFrames: [],
+      pageSizes: [],
       predicted: 0,
       predictedListeners: new Set(),
       preloadPages: [],
@@ -271,6 +274,19 @@ export function peekPdfReadingFrames(scope: string): readonly PageFrame[] {
 
 export function resetPdfReadingFrames(scope: string): void {
   nav(scope).readingFrames = [];
+}
+
+export function setPdfPageSizes(
+  scope: string,
+  sizes: readonly { pageNumber: number; width: number; height: number }[],
+): void {
+  nav(scope).pageSizes = sizes.slice();
+}
+
+export function peekPdfPageSizes(
+  scope: string,
+): readonly { pageNumber: number; width: number; height: number }[] {
+  return nav(scope).pageSizes;
 }
 
 /** Spread on/off doubles or halves the slot list. Same count means layout has not published yet. */

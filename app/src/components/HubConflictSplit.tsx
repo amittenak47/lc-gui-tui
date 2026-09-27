@@ -22,7 +22,7 @@ import { conflictFocusPage, inkDtosHavePage, mergeInkDtos } from "../util/confli
 import { loadConflictPreviewInkPage, localInkAsDtos } from "../util/inkSync";
 import { Tip } from "./Tip";
 import { ConflictPagePreview } from "./ConflictPagePreview";
-import { conflictDocumentWidth } from "./conflictDocumentLayout";
+import { conflictDocumentWidth, inkSpreadOf } from "./conflictDocumentLayout";
 import { compareConflictInk, inkPageHasStrokes } from "./conflictInkCompare";
 import { showNotification } from "../util/notifications";
 import { inkOpsFrom } from "../canvas/inkCodec";
@@ -80,6 +80,11 @@ export interface HubConflictSplitProps {
   onResolve(resolution: HubConflictResolution): void;
   /** Close without choosing: the sync stops and nothing is written. */
   onCancel?: () => void;
+  /**
+   * This device reads the PDF as split sheets. A copy that does not stamp its
+   * own ink layout is assumed to share it.
+   */
+  localSpread?: boolean;
   /** Why the last Keep selection did not leave this page. */
   error?: string | null;
   /** Hub client — used to GET one more ink page when a row is off the freeze preview. */
@@ -402,6 +407,7 @@ export function HubConflictSplit({
   pageFrames,
   onResolve,
   onCancel,
+  localSpread = false,
   error = null,
   client = null,
   fetchPreviewInk,
@@ -1010,11 +1016,27 @@ export function HubConflictSplit({
     });
   };
 
+  /*
+   * Where "across page boundaries" ink actually is.
+   *
+   * Strokes that cross a page edge are stored under page 0, which is no page
+   * at all — so the row opened on page 1, the cover, as though something had
+   * been written there. The pages its strokes touch are what to show and name.
+   */
+  const spanningPages = useMemo(() => {
+    const ops = [...inkHits.localShards, ...inkHits.serverShards]
+      .filter((shard) => shard.pageId === 0)
+      .flatMap((shard) => shard.ops);
+    if (ops.length === 0) return [];
+    return inkPageIdsFromOps(ops, previewFrames).filter((page) => page >= 1);
+  }, [inkHits, previewFrames]);
+
   const focusPage = useMemo(() => {
     if (!conflict) return 1;
     const padPage = parseInkPageRowId(focusedId);
     if (padPage != null) {
-      return padPage >= 1 ? padPage : conflictFocusPage({ inkPageId: conflict.inkPageId });
+      if (padPage >= 1) return padPage;
+      return spanningPages[0] ?? conflictFocusPage({ inkPageId: conflict.inkPageId });
     }
     const fnPage = parseFootnoteInkPageRowId(focusedId);
     if (fnPage) {
@@ -1034,7 +1056,7 @@ export function HubConflictSplit({
       inkPageId: conflict.inkPageId,
       ink: conflict.localInk,
     });
-  }, [conflict, focusedId, rows, padInkRows]);
+  }, [conflict, focusedId, rows, padInkRows, spanningPages]);
 
   const focusedNoteId = parseFootnotePartRowId(focusedId)?.noteId ?? focusedId;
   const focusedNoteRow = rows.find(row => row.id === focusedNoteId);
@@ -1255,7 +1277,13 @@ export function HubConflictSplit({
           id,
           has,
           unread,
-          row.pageId === 0 ? "Handwriting across page boundaries" : `Handwriting (page ${row.pageId})`,
+          row.pageId === 0
+            ? spanningPages.length > 1
+              ? `Handwriting across pages ${spanningPages[0]}–${spanningPages[spanningPages.length - 1]}`
+              : spanningPages.length === 1
+                ? `Handwriting across page ${spanningPages[0]}'s edge`
+                : "Handwriting across page boundaries"
+            : `Handwriting (page ${row.pageId})`,
           "",
           statusFor(id, row.hasLocal, row.hasServer) === "Different" && conflict.kind === "annotate" && inkComparisons[row.pageId] !== false
             ? "Not verified" : statusFor(id, row.hasLocal, row.hasServer),
@@ -1411,6 +1439,7 @@ export function HubConflictSplit({
             // side, is most of what made this window slow to open.
             selectedPageOnly
             revealInk={revealInk}
+            inkSpread={conflict.kind === "annotate" ? (inkSpreadOf(body) ?? localSpread) : false}
           />
           <ol
             ref={node => { if (node) listRefs.current[side] = node; else delete listRefs.current[side]; }}

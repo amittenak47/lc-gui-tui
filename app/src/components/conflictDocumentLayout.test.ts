@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { conflictDocumentWidth, conflictPdfFrames } from "./conflictDocumentLayout";
+import { conflictDocumentWidth, conflictPdfFrames, inkSpreadOf } from "./conflictDocumentLayout";
+import { remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
 import { conflictInkPlacement } from "./conflictInkLayout";
 
 describe("replica annotation layout", () => {
@@ -25,5 +26,33 @@ describe("replica annotation layout", () => {
         }
       }
     }
+  });
+
+  it("moves ink written on split sheets onto the same half of the whole sheet", () => {
+    // A two-up scan: every sheet is two book pages side by side.
+    const pages = Array.from({ length: 5 }, (_, i) => ({ pageNumber: i + 1, width: 1200, height: 800 }));
+    const width = 1000;
+    const split = conflictPdfFrames(pages, width, true);
+    const whole = conflictPdfFrames(pages, width, false);
+    expect(split).toHaveLength(10);
+    expect(whole).toHaveLength(5);
+    // Three-quarters across and halfway down the right-hand page of sheet 3.
+    const right = split.filter((f) => f.pageId === 3)[1]!;
+    const y = right.minY + (right.maxY - right.minY) / 2;
+    const [moved] = remapInkBetweenPdfLayouts(
+      [{ kind: "erase", radius: 1, points: [{ x: 750, y, pressure: 1 }] }],
+      split, whole, 0, width,
+    );
+    const sheet = whole.find((f) => f.pageId === 3)!;
+    const pt = moved!.points[0]!;
+    expect(pt.y).toBeCloseTo(sheet.minY + (sheet.maxY - sheet.minY) / 2, 3);
+    expect(pt.x).toBeCloseTo(500 + 0.75 * 500, 3);
+  });
+
+  it("reads which layout a copy stamped, and nothing from an older one", () => {
+    expect(inkSpreadOf({ board: { appState: { pdfSpread: true } } })).toBe(true);
+    expect(inkSpreadOf({ board: { appState: { pdfSpread: false } } })).toBe(false);
+    expect(inkSpreadOf({ board: { appState: {} } })).toBeUndefined();
+    expect(inkSpreadOf(null)).toBeUndefined();
   });
 });

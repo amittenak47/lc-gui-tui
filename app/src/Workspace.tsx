@@ -225,9 +225,18 @@ import {
 } from "./util/noteLinks";
 import { WorkspaceLinkPicker, groupLabel, type LinkTarget } from "./modes/WorkspaceLinkPicker";
 import { resolveWikiLinks } from "./util/wikiLinks";
-import { PdfDocument, type PdfNav, type PdfThumbRenderer } from "./modes/PdfDocument";
+import {
+  PAGE_GAP,
+  PDF_DOC_PAD_TOP,
+  PdfDocument,
+  layoutPdfPages,
+  pdfStackFrames,
+  type PdfNav,
+  type PdfThumbRenderer,
+} from "./modes/PdfDocument";
+import { pdfLayoutIsSpread } from "./modes/pdfInkSpread";
 import { PdfPageRail } from "./modes/PdfPageRail";
-import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, clearPdfFilmScope, publishPdfFilmCurrent, peekPdfFilmCurrent, peekPdfReadingFrames, pdfSpreadSlotCountChanged, resetPdfFilmPredicted, publishPdfLayoutBusy, subscribePdfLayoutBusy } from "./modes/pdfFilm";
+import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, clearPdfFilmScope, peekPdfPageSizes, publishPdfFilmCurrent, peekPdfFilmCurrent, peekPdfReadingFrames, pdfSpreadSlotCountChanged, resetPdfFilmPredicted, publishPdfLayoutBusy, subscribePdfLayoutBusy } from "./modes/pdfFilm";
 import { AnnotateDialog, type AnnotateDialogKind } from "./modes/AnnotateDialog";
 import { DocumentExportDialog } from "./modes/DocumentExportDialog";
 import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
@@ -654,6 +663,12 @@ export interface WorkspaceProps {
   splitKeepChrome?: boolean;
   /** Explore should wait for the board tray slot instead of painting its own. */
   embedInBoardTray?: boolean;
+}
+
+/** The layout a saved board's PDF ink was written in, or null when it does not say. */
+function pdfInkSpreadStamp(board: unknown): boolean | null {
+  const stamp = (board as { appState?: { pdfSpread?: unknown } } | null)?.appState?.pdfSpread;
+  return typeof stamp === "boolean" ? stamp : null;
 }
 
 /*
@@ -1689,6 +1704,42 @@ export const Workspace = memo(function Workspace({
       });
     });
   }, []);
+  /*
+   * Ink written on the other layout, moved onto this one.
+   *
+   * The spread setting is per device, and a stroke's scene point depends on
+   * it — so a copy synced from a tablet reading split sheets carries its ink
+   * in split coordinates, and on a PC showing whole sheets it drew pages away
+   * from where it was written. The copy stamps its layout (`pdfSpread`); once
+   * every page's size is known here, a mismatched copy is remapped the same way
+   * the spread toggle remaps.
+   */
+  const reconcilePdfInkLayout = (stamp: boolean, loadGen: number) => {
+    const started = performance.now();
+    const tick = () => {
+      if (workspaceLoadGenRef.current !== loadGen) return;
+      const board = boardRef.current;
+      const frames = peekPdfReadingFrames(tab.id);
+      const sizes = peekPdfPageSizes(tab.id);
+      const total = pdfNavRef.current?.count ?? 0;
+      if (!board || frames.length === 0 || total === 0 || sizes.length < total) {
+        if (performance.now() - started < 30_000) window.setTimeout(tick, 250);
+        return;
+      }
+      if (pdfLayoutIsSpread(frames) !== stamp) {
+        const from = pdfStackFrames(
+          layoutPdfPages(sizes, annotatePageWidthRef.current, stamp),
+          stamp,
+          PAGE_GAP,
+          PDF_DOC_PAD_TOP,
+        );
+        board.remapPdfInkAcrossPdfLayout(from);
+      }
+      board.setInkSpread(null);
+    };
+    tick();
+  };
+
   /** Scene width of the open markdown page — viewport-sized on fresh opens. */
   const [annotatePageWidth, setAnnotatePageWidth] = useState(ANNOTATE_PAGE_W);
   /** The width marks were placed at — recorded in an exported sidecar. */
@@ -4193,6 +4244,9 @@ export const Workspace = memo(function Workspace({
           if (handle) await restoreInk(handle, annotateDocKey(existing.id), existing.board, {
             paint: false,
           });
+          // Which layout that ink was written in, if the copy says; checked
+          // against this device's once the pages are laid out, below.
+          handle?.setInkSpread(pdfInkSpreadStamp(existing.board));
         }
 
         // Document must finish laying out (measure stable) before reveal.
@@ -4407,6 +4461,8 @@ export const Workspace = memo(function Workspace({
         if (workspaceLoadGenRef.current !== loadGen) return;
         relandPdf();
         scheduleIdlePadSyncPing(client, { emit: false });
+        const stamp = existing ? pdfInkSpreadStamp(existing.board) : null;
+        if (stamp != null && input.docType === "pdf") reconcilePdfInkLayout(stamp, loadGen);
 
         /*
          * Bytes used to be pushed to the hub here, right after open. The
@@ -11230,6 +11286,7 @@ export const Workspace = memo(function Workspace({
             error={hubConflictError}
             onResolve={(resolution) => void handleHubConflictResolve(resolution)}
             onCancel={hubConflictAsk.cancel ? handleHubConflictCancel : undefined}
+          localSpread={pdfSpread}
           />
         ) : null}
         </div>

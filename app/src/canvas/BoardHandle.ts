@@ -294,6 +294,11 @@ export interface BoardHandle {
    */
   remapPdfInkAcrossPdfLayout(fromFrames: readonly PageFrame[]): void;
   /**
+   * The layout restored PDF ink is in, from the copy's `pdfSpread` stamp; null
+   * when it is in the layout on screen. See `inkSpreadRef` in Board.
+   */
+  setInkSpread(spread: boolean | null): void;
+  /**
    * Reopen camera: PDF jumps to the saved page at today's fit zoom;
    * single-page docs restore scroll/zoom as written.
    */
