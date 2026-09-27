@@ -45,6 +45,8 @@ describe("SplitSash", () => {
     </>));
     const board = host.querySelector<HTMLElement>(".lc-board")!;
     const canvas = board.querySelector("canvas")!;
+    canvas.width = 8000;
+    canvas.height = 6000;
     const rect = { left: 0, top: 0, width: 500, height: 800, right: 500, bottom: 800 } as DOMRect;
     host.getBoundingClientRect = board.getBoundingClientRect = canvas.getBoundingClientRect = () => rect;
     canvas.style.setProperty("visibility", "visible", "important");
@@ -53,12 +55,16 @@ describe("SplitSash", () => {
       .mockReturnValue({ drawImage: copy } as unknown as CanvasRenderingContext2D);
     try {
       act(() => host.querySelector("button")!.dispatchEvent(pointer("pointerdown", 250, 100)));
-      expect(copy).toHaveBeenCalledWith(canvas, 0, 0);
-      expect(board.querySelector(".lc-sash-snapshot")).not.toBeNull();
+      const snapshot = board.querySelector<HTMLCanvasElement>(".lc-sash-snapshot")!;
+      expect(snapshot).not.toBeNull();
+      expect(snapshot.width * snapshot.height).toBeLessThanOrEqual(2_000_000);
+      expect(copy).toHaveBeenCalledWith(canvas, 0, 0, snapshot.width, snapshot.height);
+      expect(canvas.width).toBe(8000);
       expect(canvas.style.visibility).toBe("hidden");
       if (end === "unmount") act(() => root.unmount());
       else act(() => window.dispatchEvent(pointer(end, 300, 100)));
       expect(board.querySelector(".lc-sash-snapshot")).toBeNull();
+      expect(snapshot.width * snapshot.height).toBe(0);
       expect(canvas.style.visibility).toBe("visible");
       expect(canvas.style.getPropertyPriority("visibility")).toBe("important");
     } finally {

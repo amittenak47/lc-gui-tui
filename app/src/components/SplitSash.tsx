@@ -150,6 +150,7 @@ export function SplitSash({
   const bindDrag = () => {
     unbindRef.current?.();
     restoreBoardsRef.current?.();
+    document.body.dataset.lcSashDrag = axis;
     const main = sashRef.current?.parentElement;
     dragBoxRef.current = main?.getBoundingClientRect() ?? null;
     // Resize the outer clips during the gesture. Keeping the board layout
