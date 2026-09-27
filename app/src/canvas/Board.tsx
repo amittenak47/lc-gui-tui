@@ -2760,11 +2760,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       rememberedHostScrollRef.current = pendingHostScrollRef.current;
     }
     annotateToolFlipRef.current = true;
-    setAnnotateCode((current) => {
-      const next = !current;
-      modeIndicatorRef.current?.show(next ? "Annotation" : "Scroll mode");
-      return next;
-    });
+    /*
+     * The toast is announced here, not in a `setAnnotateCode` updater. React
+     * may run an updater more than once — Strict Mode does it on purpose, and
+     * a render interrupted by pointer input replays it — and every replay was
+     * another "Scroll mode" queued behind the first, so hovering the toast
+     * looked like it looping.
+     */
+    const next = !annotateCodeRef.current;
+    annotateCodeRef.current = next;
+    setAnnotateCode(next);
+    modeIndicatorRef.current?.show(next ? "Annotation" : "Scroll mode");
   }, [editing]);
 
   /*

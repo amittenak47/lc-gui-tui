@@ -29,7 +29,7 @@ export function NotificationStack() {
   }, []);
   return createPortal(<div ref={ref} className="lc-notification-stack" aria-live="polite" aria-relevant="additions">
 
-      {entries.map((entry) => <motion.div key={entry.id} className="lc-notification"
+      {entries.map((entry) => <motion.div key={entry.id} className="lc-notification" layout={!reduced}
         initial={reduced ? false : { opacity: 0, y: 18, scale: 0.96 }}
         animate={entry.exiting ? { opacity: 0, x: reduced ? 0 : -300, y: 0, scale: 1 } : { opacity: 1, y: 0, x: 0, scale: 1 }}
         transition={{ duration: reduced ? 0 : entry.fast ? .12 : .22 }}>
