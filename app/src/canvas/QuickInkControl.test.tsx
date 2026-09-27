@@ -18,6 +18,9 @@ let root: Root, container: HTMLDivElement;
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame", "performance"] });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) });
   HTMLElement.prototype.setPointerCapture = vi.fn();
   container = document.createElement("div"); document.body.append(container);
   root = createRoot(container);
@@ -118,9 +121,11 @@ it("restores the last color and eraser size when the quick tool comes back", asy
   const picked = vi.fn();
   function Demo() {
     const [kind, setKind] = useState<InkPresetKind>("pen");
-    return <QuickInkControl kind={kind} color="#1a1a1a" eraserWidth={8} onPick={(next, color, width) => {
+    const [ink, setInk] = useState("#1a1a1a");
+    return <QuickInkControl kind={kind} color={ink} eraserWidth={8} onPick={(next, color, width) => {
       picked(next, color, width);
       setKind(next);
+      if (color) setInk(color);
     }} />;
   }
   await act(async () => root.render(<Demo />));
@@ -138,6 +143,15 @@ it("restores the last color and eraser size when the quick tool comes back", asy
   expect(pen?.[1]).toBe("#ff2d2d");
   expect(eraser?.[2]).toBe(192);
   localStorage.removeItem("whiteboard.quickInk.v1");
+});
+
+it("shows and remembers a later wheel color instead of the earlier quick color", async () => {
+  const pick = vi.fn();
+  const render = (color: string) => <QuickInkControl kind="pen" color={color} onPick={pick} />;
+  await act(async () => root.render(render("#ff2d2d")));
+  await act(async () => root.render(render("#7a2bff")));
+  expect(container.querySelector<HTMLElement>(".lc-quick-ink-dot")!.style.background).toBe("rgb(122, 43, 255)");
+  expect(JSON.parse(localStorage.getItem("whiteboard.quickInk.v1")!).pen).toBe("#7a2bff");
 });
 
 it("removes title pixels after fading and protects a newer announcement", async () => {

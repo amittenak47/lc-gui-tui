@@ -103,8 +103,18 @@ export function QuickInkControl({ kind, color, eraserWidth = 0, onPick }: {
       return next;
     });
   };
-  const savedColor = kind === "pen" ? memory.pen : kind === "highlighter" ? memory.highlighter : undefined;
-  const shownColor = savedColor ?? color;
+  // The wheel and quick picker share the selected ink. Remember wheel picks
+  // too, so changing tools cannot resurrect an older quick-pick color.
+  useEffect(() => {
+    if (kind === "eraser") return;
+    setMemory(current => {
+      if (current[kind] === color) return current;
+      const next = { ...current, [kind]: color };
+      saveQuickInkMemory(next);
+      return next;
+    });
+  }, [kind, color]);
+  const shownColor = color;
   const pickedSize = nearestQuickEraserSize(memory.eraser ?? eraserWidth);
   const anchor = useRef<HTMLButtonElement | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);

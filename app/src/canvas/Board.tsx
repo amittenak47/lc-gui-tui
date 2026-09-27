@@ -3325,17 +3325,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       straightInk: boolean;
     }>) => {
       const next = {
-        penWidth: patch.penWidth ?? penStrokeWidth,
-        eraserWidth: patch.eraserWidth ?? eraserStrokeWidth,
-        inkFullness: patch.inkFullness ?? inkFullness,
-        pressureSensitive: patch.pressureSensitive ?? pressureSensitive,
-        inkColor: patch.inkColor ?? inkColor,
-        straightInk: patch.straightInk ?? straightInk,
+        ...inkPrefsRef.current,
+        ...patch,
       };
       inkPrefsRef.current = next;
       saveInkToolPrefs(next);
     },
-    [penStrokeWidth, eraserStrokeWidth, inkFullness, pressureSensitive, inkColor, straightInk],
+    [],
   );
 
   const setStrokeWidth = useCallback((width: number) => {

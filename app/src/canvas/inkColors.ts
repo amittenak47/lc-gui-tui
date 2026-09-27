@@ -31,13 +31,13 @@ export function defaultInk(themeId: string): string {
   return isDarkTheme(themeId) ? INK_COLORS_DARK[0] : INK_COLORS_LIGHT[0];
 }
 
-/** Keep a stored pen colour only if this palette still offers it. */
+/** The selected ink is independent of the wheel's suggested palette. */
 export function resolveInkColor(
   themeId: string,
   preferred: string | null | undefined,
   palette?: readonly string[],
 ): string {
   const swatches = palette && palette.length > 0 ? palette : inkSwatches(themeId);
-  if (preferred && swatches.includes(preferred)) return preferred;
+  if (preferred && (/^#[\da-f]{3,8}$/i.test(preferred) || swatches.includes(preferred))) return preferred;
   return swatches[0] ?? defaultInk(themeId);
 }
