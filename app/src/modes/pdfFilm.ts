@@ -199,6 +199,9 @@ type FilmNav = {
   preloadPages: number[];
   preloadListeners: Set<() => void>;
   paintWakeListeners: Set<() => void>;
+  /** Pages reading's sharp scale for the pages at rest; null is the reading default. */
+  restScale: number | null;
+  restScaleListeners: Set<() => void>;
   layoutBusy: boolean;
   layoutBusySince: number;
   layoutBusyClearTimer: number;
@@ -229,6 +232,8 @@ function nav(scope: string): FilmNav {
       preloadPages: [],
       preloadListeners: new Set(),
       paintWakeListeners: new Set(),
+      restScale: null,
+      restScaleListeners: new Set(),
       layoutBusy: false,
       layoutBusySince: 0,
       layoutBusyClearTimer: 0,
@@ -397,6 +402,34 @@ export function resetPdfPreloadPages(scope: string): void {
 }
 
 /** Wake the paint pump after spread remount when C and the hole did not move. */
+/**
+ * Pages reading shows one page as large as the window allows, well past the
+ * size scroll reading paints its sharp pages at. It raises the scale for the
+ * pages at rest while it holds a fitted page and gives it back (null) after;
+ * scroll reading never sets it, so its pump is exactly what it was.
+ */
+export function setPdfRestScale(scope: string, scale: number | null): void {
+  const state = nav(scope);
+  const next = scale != null && scale > 0 ? scale : null;
+  if (next === state.restScale) return;
+  state.restScale = next;
+  for (const listener of state.restScaleListeners) listener();
+  wakePdfPaintPump(scope);
+}
+
+/** The document repaints its pages at rest when Pages reading changes their scale. */
+export function subscribePdfRestScale(scope: string, listener: () => void): () => void {
+  const state = nav(scope);
+  state.restScaleListeners.add(listener);
+  return () => {
+    state.restScaleListeners.delete(listener);
+  };
+}
+
+export function peekPdfRestScale(scope: string): number | null {
+  return navByScope.get(scope)?.restScale ?? null;
+}
+
 export function wakePdfPaintPump(scope: string): void {
   for (const listener of nav(scope).paintWakeListeners) listener();
 }

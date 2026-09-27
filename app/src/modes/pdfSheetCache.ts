@@ -17,6 +17,12 @@ export interface SheetBitmap {
   width: number;
   height: number;
   pixelScale: number;
+  /**
+   * The level it was painted at (see `lod()`), when stored as a rest sheet.
+   * Scroll reading's rest sheets are all 2; Pages reading paints the page it
+   * holds finer.
+   */
+  lod?: number;
 }
 
 export type DroppedSheet = { page: number; sheet: SheetBitmap };
@@ -123,7 +129,11 @@ export class PdfSheetLru {
    * stored as ~0.1px and `scale()` never reaches 0.25 — rest-2 never starts.
    */
   lod(page: number): number {
-    if (this.rest.has(page)) return PDF_REST_SCALE;
+    // The level a rest sheet was painted at. Reporting every one as 2 made a
+    // finer Pages sheet look short of its target forever, and the pump
+    // repainted it in a loop.
+    const rest = this.rest.get(page);
+    if (rest) return rest.lod ?? PDF_REST_SCALE;
     if (this.preview.has(page)) return PDF_PREVIEW_SCALE;
     return 0;
   }
@@ -162,7 +172,10 @@ export class PdfSheetLru {
     focus = 1,
     targetScale = PDF_PREVIEW_SCALE,
   ): DroppedSheet[] {
-    if (isRestTarget(targetScale)) return this.putRest(page, sheet, focus);
+    if (isRestTarget(targetScale)) {
+      sheet.lod = targetScale;
+      return this.putRest(page, sheet, focus);
+    }
     this.putPreview(page, sheet, focus);
     return [];
   }

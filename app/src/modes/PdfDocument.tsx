@@ -60,6 +60,8 @@ import {
   setPdfPageSizes,
   subscribePdfFilmCurrent,
   subscribePdfPaintWake,
+  peekPdfRestScale,
+  subscribePdfRestScale,
   subscribePdfPreloadPages,
   subscribePdfViewPages,
   wakePdfPaintPump,
@@ -1085,7 +1087,7 @@ export function PdfDocument({
         const sheet = lru.peek(n) ?? lru.get(n);
         const page = pages.find((entry) => entry.pageNumber === n);
         if (!sheet || !page) continue;
-        const target = rest.has(n) ? PDF_REST_SCALE : PDF_PREVIEW_SCALE;
+        const target = rest.has(n) ? (peekPdfRestScale(filmScope) ?? PDF_REST_SCALE) : PDF_PREVIEW_SCALE;
         blitCachedSheet(host, n, page, sheet, target);
         paintedRef.current.set(n, {
           scale: target,
@@ -1117,6 +1119,12 @@ export function PdfDocument({
       preemptPaintIfNeededRef.current();
       if (!pumpRef.current) setWindowTick((tick) => tick + 1);
     });
+    // Pages reading raised or returned the scale of the pages at rest: the
+    // pump may have gone idle with nothing left at the old one.
+    const unsubRestScale = subscribePdfRestScale(filmScope, () => {
+      preemptPaintIfNeededRef.current();
+      if (!pumpRef.current) setWindowTick((tick) => tick + 1);
+    });
     const unsubLive = subscribeDocCameraLive((live) => {
       if (live) {
         if (idlePathTimer) window.clearTimeout(idlePathTimer);
@@ -1137,6 +1145,7 @@ export function PdfDocument({
       unsubFilm();
       unsubView();
       unsubPreload();
+      unsubRestScale();
       unsubLive();
       observer.disconnect();
     };
@@ -1500,7 +1509,7 @@ export function PdfDocument({
       let paintScale =
         targetOverride != null
           ? targetOverride
-          : pdfPageTargetScale(n, rest, outer);
+          : pdfPageTargetScale(n, rest, outer, peekPdfRestScale(filmScope) ?? PDF_REST_SCALE);
       if (!(paintScale > 0)) paintScale = PDF_PREVIEW_SCALE;
       const placeholder = sheetLruRef.current.peek(n);
       if (placeholder) {
@@ -1623,13 +1632,14 @@ export function PdfDocument({
           if (disposedRef.current) return;
           if (restored) {
             sessionRef.current.delete(n);
+            const restScale = peekPdfRestScale(filmScope) ?? PDF_REST_SCALE;
             const restoredTarget = pageNeedsDecode(
               entry.fit,
-              PDF_REST_SCALE,
+              restScale,
               restored.pixelScale,
             )
               ? PDF_PREVIEW_SCALE
-              : PDF_REST_SCALE;
+              : restScale;
             const dropped = sheetLruRef.current.put(n, restored, C, restoredTarget);
             archiveDropped(dropped);
             if (!pageNeedsDecode(entry.fit, paintScale, restored.pixelScale)) {
@@ -1702,7 +1712,10 @@ export function PdfDocument({
         pagesRef.current.find((page) => page.pageNumber === n)?.fit ?? 0;
       const scaleOf = (n: number) => sheetLruRef.current.lod(n);
       const preload = holdDecodeRef.current ? [] : peekPdfPreloadPages(filmScope);
-      let queue = pdfDecodeQueue(C, last, rest, outer, visible, scaleOf, fitOf, preload);
+      let queue = pdfDecodeQueue(
+        C, last, rest, outer, visible, scaleOf, fitOf, preload,
+        peekPdfRestScale(filmScope) ?? PDF_REST_SCALE,
+      );
       if (previewPageRef.current != null) queue = queue.filter(item => item.page === previewPageRef.current);
       if (holdDecodeRef.current) {
         queue = pdfQueueForHoldDecode(queue, visible);
@@ -1741,7 +1754,7 @@ export function PdfDocument({
         const sheet = sheetLruRef.current.get(n);
         const entry = pagesRef.current.find((page) => page.pageNumber === n);
         if (!sheet || !entry) continue;
-        const target = rest.has(n) ? PDF_REST_SCALE : PDF_PREVIEW_SCALE;
+        const target = rest.has(n) ? (peekPdfRestScale(filmScope) ?? PDF_REST_SCALE) : PDF_PREVIEW_SCALE;
         blitCachedSheet(host, n, entry, sheet, target);
         paintedRef.current.set(n, {
           scale: target,

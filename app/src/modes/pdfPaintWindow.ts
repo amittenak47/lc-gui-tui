@@ -276,6 +276,8 @@ export function pdfDecodeQueue(
   scaleOf: (n: number) => number,
   fitOf: (n: number) => number,
   preload: Iterable<number> = [],
+  /** Scale for the pages at rest — raised only by Pages reading. */
+  restScale = PDF_REST_SCALE,
 ): { page: number; target: number }[] {
   const out: { page: number; target: number }[] = [];
   const seen = new Set<string>();
@@ -296,7 +298,7 @@ export function pdfDecodeQueue(
   for (const n of preload) if (n >= 1) previewWanted.add(n);
   for (const n of pdfExpandOrder(C, last)) {
     if (previewWanted.has(n)) take(n, PDF_PREVIEW_SCALE);
-    if (rest.has(n)) take(n, PDF_REST_SCALE);
+    if (rest.has(n)) take(n, restScale);
   }
   for (const n of previewWanted) take(n, PDF_PREVIEW_SCALE);
   return out;
