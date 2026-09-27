@@ -78,6 +78,7 @@ import {
   type TabRecord,
 } from "./util/tabs";
 import { loadTabState, saveTabState } from "./util/tabPersist";
+import { loadStartupTabs, startupTabState } from "./util/startupTabsPref";
 import { announceSplitResize, deferPanelRefit } from "./util/splitResize";
 import { isCameraBusy } from "./util/cameraBusy";
 import { ensureDevicePrefs } from "./util/devicePrefs";
@@ -170,6 +171,8 @@ export function App() {
   /** The boot overlay is still on screen, so nothing else may open in front of it. */
   const bootOverlayPendingRef = useRef(true);
   const bootHoldRef = useRef(false);
+  /** A load was on at some render, even if it ended between two polls. */
+  const bootSawLoadRef = useRef(false);
   const bootIdleShellRef = useRef(true);
   /** The LLM came back offline while the overlay was still up. Ask once it is gone. */
   const llmGateWantedRef = useRef(false);
@@ -346,7 +349,7 @@ export function App() {
         let sawLoad = false;
         while (!cancelled) {
           const loading = bootHoldRef.current;
-          if (loading) sawLoad = true;
+          if (loading || bootSawLoadRef.current) sawLoad = true;
           if (
             bootOverlayMayFinish({
               elapsedMs: performance.now() - started,
@@ -677,7 +680,10 @@ export function App() {
 
   /* ------------------------------------------------------------------ tabs */
 
-  const [tabState, dispatchTabs] = useReducer(tabsReducer, undefined, loadTabState);
+  const [tabState, dispatchTabs] = useReducer(tabsReducer, undefined, () => {
+    const at = Date.now();
+    return startupTabState(loadTabState(at), loadStartupTabs(), at);
+  });
   const tabsRef = useRef(tabState);
   tabsRef.current = tabState;
 
@@ -710,7 +716,12 @@ export function App() {
   }, []);
 
   const [shellLoadActive, setShellLoadActive] = useState(false);
-  bootHoldRef.current = chrome.loading || shellLoadActive;
+  /*
+   * `loadActive` is the one that covers a restore. `loading` and the shell
+   * flag are the theatre of a user-driven open, which a relaunch never is.
+   */
+  bootHoldRef.current = chrome.loading || chrome.loadActive || shellLoadActive;
+  if (bootHoldRef.current) bootSawLoadRef.current = true;
   {
     const kind = activeTabOf(tabState)?.kind;
     bootIdleShellRef.current = kind === "home" || kind === "explore";

@@ -57,6 +57,17 @@ export const BOOT_DONE_HOLD_MS = 180;
 export const BOOT_EXIT_MS = 160;
 /** Home with nothing to restore may finish after this, not the old 1s theatre. */
 export const BOOT_EMPTY_READY_MS = 400;
+/**
+ * A restored tab that has not started loading by now is not going to.
+ *
+ * This used to be the only way out for a restored tab: session restore is not
+ * a user load, so it never raised the shell's loading flag, `sawLoad` stayed
+ * false, and every relaunch onto anything but Home sat behind an opaque splash
+ * for the whole of {@link BOOT_MAX_WAIT_MS} — long after the tab underneath had
+ * finished. The workspace now reports its restore as `loadActive`, so this only
+ * catches a tab kind that reports nothing at all.
+ */
+export const BOOT_NO_LOAD_MS = 1_500;
 /** Dense Exam restore must not hold the splash forever. */
 export const BOOT_MAX_WAIT_MS = 20_000;
 /** Overlay slide away. Match `.lc-slide-in` / `.lc-slide-out`. */
@@ -75,8 +86,9 @@ export function bootOverlayMayFinish(opts: {
   idleShell: boolean;
 }): boolean {
   if (opts.elapsedMs < BOOT_MIN_SHOW_MS) return false;
+  if (opts.elapsedMs >= BOOT_MAX_WAIT_MS) return true;
   if (opts.loading) return false;
   if (opts.sawLoad) return true;
   if (opts.idleShell && opts.elapsedMs >= BOOT_EMPTY_READY_MS) return true;
-  return opts.elapsedMs >= BOOT_MAX_WAIT_MS;
+  return opts.elapsedMs >= BOOT_NO_LOAD_MS;
 }

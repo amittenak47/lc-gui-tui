@@ -4,6 +4,7 @@ import {
   BOOT_EMPTY_READY_MS,
   BOOT_MAX_WAIT_MS,
   BOOT_MIN_SHOW_MS,
+  BOOT_NO_LOAD_MS,
   bootOverlayMayFinish,
   isWorkspaceLoadBusy,
   loadChromeFate,
@@ -113,9 +114,41 @@ describe("bootOverlayMayFinish", () => {
     ).toBe(false);
     expect(
       bootOverlayMayFinish({
-        elapsedMs: BOOT_MAX_WAIT_MS,
+        elapsedMs: BOOT_NO_LOAD_MS - 1,
         loading: false,
         sawLoad: false,
+        idleShell: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("gives up on a restored tab that never reports a load", () => {
+    expect(
+      bootOverlayMayFinish({
+        elapsedMs: BOOT_NO_LOAD_MS,
+        loading: false,
+        sawLoad: false,
+        idleShell: false,
+      }),
+    ).toBe(true);
+    // Well short of the old twenty-second fallback.
+    expect(BOOT_NO_LOAD_MS).toBeLessThan(BOOT_MAX_WAIT_MS / 5);
+  });
+
+  it("does not hold the splash past the ceiling for a load that never ends", () => {
+    expect(
+      bootOverlayMayFinish({
+        elapsedMs: BOOT_MAX_WAIT_MS - 1,
+        loading: true,
+        sawLoad: true,
+        idleShell: false,
+      }),
+    ).toBe(false);
+    expect(
+      bootOverlayMayFinish({
+        elapsedMs: BOOT_MAX_WAIT_MS,
+        loading: true,
+        sawLoad: true,
         idleShell: false,
       }),
     ).toBe(true);

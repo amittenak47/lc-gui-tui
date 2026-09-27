@@ -9662,6 +9662,16 @@ export function Workspace({
    * asked to become something else. Home has nothing to load, and says so.
    */
   const mountedRef = useRef(false);
+  /*
+   * From mount until the open settles, whichever way it goes.
+   *
+   * `workspaceLoadActive` only goes up once a loader starts, and the reads in
+   * front of it — the board chunk, the notebook row, a PDF's bytes — are the
+   * slow part on a phone. The boot splash watches this through `loadActive`,
+   * and it needs to hear about the open from the first frame: a restore is not
+   * a user load, so nothing else it watches ever says one is happening.
+   */
+  const [opening, setOpening] = useState(tab.kind !== "home");
   useEffect(() => {
     if (tab.kind === "home") {
       mountedRef.current = true;
@@ -9670,7 +9680,7 @@ export function Workspace({
     // Wait for the board chunk. The open drives it from its first await.
     if (needsBoard && !BoardView) return;
     mountedRef.current = true;
-    void openTabWorkspace(tab);
+    void openTabWorkspace(tab).finally(() => setOpening(false));
     return () => {
       // Strict Mode runs this cleanup then the effect again. Leaving
       // mountedRef true skipped the second open, so a bailed gen-1 whiteboard
@@ -9805,7 +9815,7 @@ export function Workspace({
       agentOpen: coachOpen && Boolean(problem),
       loading: shellLoading,
       busy: busy !== null,
-      loadActive: workspaceLoadActive,
+      loadActive: workspaceLoadActive || opening,
       docIndex: {
         status: docIndexStatus,
         meta: docIndexMeta,
@@ -9876,6 +9886,7 @@ export function Workspace({
     annotateDocId,
     whiteboardNotebookId,
     workspaceLoadActive,
+    opening,
     boardPreparing,
     tab.kind,
   ]);

@@ -153,6 +153,7 @@ import {
 } from "../util/devicePrefs";
 import { FEATURE_LEETCODE } from "../featureFlags";
 import { loadUiHandedness, saveUiHandedness, type UiHandedness } from "../util/uiHandedness";
+import { loadStartupTabs, saveStartupTabs, type StartupTabs } from "../util/startupTabsPref";
 import { loadAgentDisplayPrefs, saveAgentDisplayPrefs, type AgentDisplayPrefs } from "../util/agentDisplayPrefs";
 import { PAD_HUB_EVENT, loadSavedPadHub, savePadHub } from "../util/padHub";
 import { compareIndexFacts, indexFacts } from "../util/indexReport";
@@ -424,6 +425,8 @@ function emptyConfig(): LcConfig {
 interface DevicePrefs {
   agentDisplay: AgentDisplayPrefs;
   uiHandedness: UiHandedness;
+  /** Which tabs a relaunch opens. Read once, at the next launch. */
+  startupTabs: StartupTabs;
   handedness: InkHandedness;
   /**
    * Hand a failed run to the coach without being asked.
@@ -489,6 +492,7 @@ function loadDevicePrefs(): DevicePrefs {
   return {
     agentDisplay: loadAgentDisplayPrefs(),
     uiHandedness: loadUiHandedness(),
+    startupTabs: loadStartupTabs(),
     handedness: loadInkHandedness(),
     testForward: loadTestForwardMode(),
     captureMode: loadCaptureMode(),
@@ -529,6 +533,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.agentDisplay.collapseThinkingSteps === b.agentDisplay.collapseThinkingSteps &&
     a.agentDisplay.colorThinkingSteps === b.agentDisplay.colorThinkingSteps &&
     a.uiHandedness === b.uiHandedness &&
+    a.startupTabs === b.startupTabs &&
     a.handedness === b.handedness &&
     a.testForward === b.testForward &&
     a.captureMode === b.captureMode &&
@@ -859,6 +864,7 @@ export function SettingsModal({
   const [bootNotice, setBootNotice] = useState<string | null>(null);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [uiHandedness, setUiHandedness] = useState<UiHandedness>(loadUiHandedness);
+  const [startupTabs, setStartupTabs] = useState<StartupTabs>(loadStartupTabs);
   const [agentDisplay, setAgentDisplay] = useState(loadAgentDisplayPrefs);
   const [colorWheelOnToolbar, setColorWheelOnToolbar] = useState(
     () => loadInkToolPresets().colorWheelOnToolbar,
@@ -1080,6 +1086,7 @@ export function SettingsModal({
     const prefs = loadDevicePrefs();
     setHandedness(prefs.handedness);
     setUiHandedness(prefs.uiHandedness);
+    setStartupTabs(prefs.startupTabs);
     setAgentDisplay(prefs.agentDisplay);
     setTestForward(prefs.testForward);
     setCaptureMode(prefs.captureMode);
@@ -1184,6 +1191,7 @@ export function SettingsModal({
   const draftPrefs: DevicePrefs = {
     agentDisplay,
     uiHandedness,
+    startupTabs,
     handedness,
     testForward,
     captureMode,
@@ -1255,6 +1263,7 @@ export function SettingsModal({
       if (prefsDirty) {
         saveInkHandedness(handedness);
         saveUiHandedness(uiHandedness);
+        saveStartupTabs(startupTabs);
         saveAgentDisplayPrefs(agentDisplay);
         saveTestForwardMode(testForward);
         saveCaptureMode(captureMode);
@@ -2609,6 +2618,19 @@ export function SettingsModal({
                     aria-checked={uiHandedness === hand} className={uiHandedness === hand ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
                     onClick={() => setUiHandedness(hand)}><strong>{hand === "right" ? "Right hand" : "Left hand"}</strong></button>)}
                 </div>
+                <div className="lc-settings-subhead">On launch</div>
+                <div className="lc-settings-choice" role="radiogroup" aria-label="Tabs on launch">
+                  {([
+                    ["restore", "Reopen last session", "The tab you were on opens again. The slowest start with a big document or dense board."],
+                    ["home", "Keep tabs, start on Home", "Every tab stays in the strip, but nothing opens until you tap it."],
+                    ["fresh", "Start fresh", "Home only. Last session's tabs are closed; your notebooks and documents stay in the library."],
+                  ] as const).map(([value, label, hint]) => <button key={value} type="button" role="radio"
+                    aria-checked={startupTabs === value} className={startupTabs === value ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                    onClick={() => setStartupTabs(value)}>
+                    <strong>{label}</strong><span className="lc-muted">{hint}</span>
+                  </button>)}
+                </div>
+                <p className="lc-settings-hint">Takes effect the next time the app opens. Saved on this device.</p>
                 <div className="lc-settings-subhead">Agent behavior</div>
                 <div className="lc-settings-choice" aria-label="Thinking display">
                   {([
