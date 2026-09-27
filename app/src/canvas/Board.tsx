@@ -5514,7 +5514,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const node = boardRef.current;
     const writing = interactive && !splitPaused &&
       (activeTool === "freedraw" || activeTool === "highlighter" || activeTool === "eraser");
-    if (writing && node) return protectGestureSurface(node);
+    // Claim the edges before the first stroke: moving a 200px band only
+    // after pointerdown is too late if Android already claimed that gesture.
+    if (writing && node) return protectGestureSurface(node, true);
   }, [interactive, activeTool, splitPaused]);
 
   useEffect(() => {

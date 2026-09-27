@@ -10,12 +10,10 @@ import { isAndroidDevice } from "./androidDevice";
  * with it, because the app never saw a `pointerup`.
  *
  * `setSystemGestureExclusionRects` hands those strips back. It is granted
- * grudgingly: **200dp per edge**, and asking for more is silently trimmed
- * rather than refused, so what is asked for has to be chosen rather than
- * maximised. CSS pixels ≈ dp here, so the strip is {@link EXCLUSION_BUDGET_CSS}
- * tall, centred on the writing hand (or the middle of the board before the
- * first stroke). Page turns request full-height edge strips while sticky
- * immersive lifts that cap; the native wrapper preserves those strips.
+ * grudgingly outside sticky immersive: 200dp per edge. Writing uses full-height
+ * edge strips while sticky immersive lifts that cap, so the first stroke is
+ * protected anywhere along the edge. Page turns supply only their corner
+ * regions. The bounded, hand-following band remains available to other callers.
  *
  * Home has no exclusion API. {@link setDrawingImmersive} hides the navigation
  * bar with swipe-to-show while a drawing tool is up — first swipe reveals
@@ -73,7 +71,7 @@ function loadInvoke() {
  *
  * `focusY` (viewport CSS px) centres the 200px budget on the writing hand.
  * Without it the band sits in the middle of the board. `fullHeight` is for
- * page turns and must be paired with sticky immersive, which lifts the cap.
+ * writing and must be paired with sticky immersive, which lifts the cap.
  */
 export function edgeStrips(
   rect: {
