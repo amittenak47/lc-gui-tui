@@ -273,8 +273,16 @@ export function App() {
     };
   }, [client, serverLink]);
 
+  /*
+   * After the splash, not during it.
+   *
+   * `pullPads` walks every pad, snapshot and chunk in IndexedDB — the same
+   * database the restored tab is reading its document and ink out of at that
+   * moment. Run together, the launch waited on both.
+   */
+  const bootSettled = bootPhase === "gone";
   useEffect(() => {
-    if (serverLink !== "online") return;
+    if (serverLink !== "online" || !bootSettled) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -295,7 +303,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [serverLink, client, hubAutosyncOn, hubRevision]);
+  }, [serverLink, client, hubAutosyncOn, hubRevision, bootSettled]);
 
   useEffect(() => {
     if (serverLink !== "online") return;

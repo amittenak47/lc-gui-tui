@@ -132,6 +132,7 @@ import {
   type PdfDocumentLease,
 } from "./pdfOpenDocs";
 import { alignTextLayerToGlyphs } from "../util/pdfTextFit";
+import { loadPdfPageSizes, savePdfPageSizes } from "./pdfPageSizeCache";
 
 /**
  * Supersampling of the page bitmap relative to its scene size.
@@ -818,6 +819,18 @@ export function PdfDocument({
         docRef.current = doc;
         textLayerRef.current = pdfjs.TextLayer;
 
+        /*
+         * Measured before? Lay the whole book out at once from the cache and
+         * skip the `getPage` storm — see `pdfPageSizeCache`.
+         */
+        const cached = loadPdfPageSizes(docHash, doc.numPages);
+        if (cached) {
+          naturalsRef.current = cached;
+          onPageSizesRef.current?.(naturalsRef.current);
+          setPages(layoutPdfPages(cached, frameWidthRef.current, spreadRef.current));
+          return;
+        }
+
         const naturals: PdfPageNatural[] = [];
         for (let from = 1; from <= doc.numPages; from += LAYOUT_BATCH) {
           if (cancelled) return;
@@ -864,6 +877,7 @@ export function PdfDocument({
             if (cancelled) return;
           }
         }
+        savePdfPageSizes(docHash, naturals);
       } catch (cause: unknown) {
         if (cancelled) return;
         onErrorRef.current?.(

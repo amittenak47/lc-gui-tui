@@ -1110,6 +1110,41 @@ export function HubConflictSplit({
     };
   }, [client, conflict, fetchPreviewInk, previewPageKey]);
 
+  /*
+   * Nothing to choose, so do not ask.
+   *
+   * The walk stops when the hub's copy is newer than this device's last sync,
+   * whether or not anything in it changed — the tablet saving an identical
+   * copy is enough. Once every page has been compared and every row matches,
+   * Keep selection is the only answer there is; give it instead of showing a
+   * window whose Differences only view is empty.
+   */
+  const comparingIds = new Set(
+    conflict?.kind === "annotate" && !conflict.wholeCanvas && !serverInkUnread
+      ? basePadInkRows
+          .filter((row) => !row.same && row.hasLocal && row.hasServer && !(row.pageId in inkComparisons))
+          .map((row) => inkPageRowId(row.pageId))
+      : [],
+  );
+  const knownDifference = choiceIds.some((id) => !sameIds.has(id) && !comparingIds.has(id));
+  const checking = comparingIds.size > 0 && !knownDifference;
+  const nothingToChoose =
+    conflict?.kind === "annotate" &&
+    !conflict.wholeCanvas &&
+    !serverMissing &&
+    !serverInkUnread &&
+    comparingIds.size === 0 &&
+    !knownDifference &&
+    unlistedFieldsMatch(conflict.local, conflict.server);
+  const autoResolvedRef = useRef<HubPadConflict | null>(null);
+  useEffect(() => {
+    if (!conflict || !nothingToChoose || !valid || busy || error) return;
+    if (autoResolvedRef.current === conflict) return;
+    autoResolvedRef.current = conflict;
+    showNotification("No differences — kept this copy");
+    onResolveTap();
+  });
+
   if (!conflict) return null;
 
   const whyDisabled = !conflict
@@ -1473,41 +1508,6 @@ export function HubConflictSplit({
       </section>
     );
   };
-
-  /*
-   * Nothing to choose, so do not ask.
-   *
-   * The walk stops when the hub's copy is newer than this device's last sync,
-   * whether or not anything in it changed — the tablet saving an identical
-   * copy is enough. Once every page has been compared and every row matches,
-   * Keep selection is the only answer there is; give it instead of showing a
-   * window whose Differences only view is empty.
-   */
-  const comparingIds = new Set(
-    conflict?.kind === "annotate" && !conflict.wholeCanvas && !serverInkUnread
-      ? basePadInkRows
-          .filter((row) => !row.same && row.hasLocal && row.hasServer && !(row.pageId in inkComparisons))
-          .map((row) => inkPageRowId(row.pageId))
-      : [],
-  );
-  const knownDifference = choiceIds.some((id) => !sameIds.has(id) && !comparingIds.has(id));
-  const checking = comparingIds.size > 0 && !knownDifference;
-  const nothingToChoose =
-    conflict?.kind === "annotate" &&
-    !conflict.wholeCanvas &&
-    !serverMissing &&
-    !serverInkUnread &&
-    comparingIds.size === 0 &&
-    !knownDifference &&
-    unlistedFieldsMatch(conflict.local, conflict.server);
-  const autoResolvedRef = useRef<HubPadConflict | null>(null);
-  useEffect(() => {
-    if (!conflict || !nothingToChoose || !valid || busy || error) return;
-    if (autoResolvedRef.current === conflict) return;
-    autoResolvedRef.current = conflict;
-    showNotification("No differences — kept this copy");
-    onResolveTap();
-  });
 
   const navigationIds = choiceIds.filter(rowVisible);
   const navigationIndex = navigationIds.indexOf(focusedId);
