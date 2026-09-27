@@ -42,11 +42,15 @@ function tap(node: HTMLButtonElement) {
   act(() => node.click());
 }
 
-it("places footnotes, Ink, Capture, reasoning and action directly in the composer", () => {
-  mount({ documentPresets: true, annotationChoices: [{ id: "fn", number: 1, title: "Note" }] });
+it("places C, footnotes, Ink, Capture, action and reasoning on one row in that order", () => {
+  mount({ documentPresets: true, onManageArtifacts: () => {}, annotationChoices: [{ id: "fn", number: 1, title: "Note" }] });
   const bar = document.querySelector('.lc-agent-composer-mid')!;
   const labels = [...bar.querySelectorAll('button')].map(node => node.getAttribute('aria-label'));
-  expect(labels.slice(1,6)).toEqual(["Footnotes", "Ink", "Capture", "Reasoning: off", "Action: Ask"]);
+  expect(labels).toEqual(["Whiteboards and files", "Footnotes", "Ink", "Capture", "Action: Ask", "Reasoning: off"]);
+  expect(document.querySelector('[aria-label="Ask presets"]')).toBeNull();
+  // The chat-box expand lives in the field's corner, not on the options row.
+  expect(bar.querySelector('[aria-label="Expand chat box"]')).toBeNull();
+  expect(document.querySelector('.lc-agent-composer-expand [aria-label="Expand chat box"]')).toBeTruthy();
   tap(button("Footnotes"));
   const menu = document.querySelector('[aria-label="Page footnotes"]')!;
   expect(menu.querySelectorAll('button')).toHaveLength(1);
@@ -110,15 +114,94 @@ it("cycles and persists reasoning Off, Low, High without turning on Ink or Captu
 it("snapshots queued options without changing the request already in flight", () => {
   const send = mount({busy:true,documentPresets:true});
   tap(button("Capture")); tap(button("Ink")); tap(button("Action: Ask")); tap(button("Reasoning: off"));
-  const preset = document.querySelector<HTMLSelectElement>('[aria-label="Ask presets"]')!;
-  act(() => {preset.value="de_jargon";preset.dispatchEvent(new Event("change",{bubbles:true}));});
+  type("/dej");
+  key("Enter");
+  expect(button("Command: /dejargon")).toBeTruthy();
   tap(button("Send"));
   expect(send).toHaveBeenCalledWith("",expect.objectContaining({draw:true,ask:false,handwriting:true,capture:true,reasoning:"low",askPreset:"de_jargon"}),"queue");
   expect(button("Action: Ask")).toBeTruthy();
   expect(button("Ink").getAttribute("aria-pressed")).toBe("false");
   expect(button("Capture").getAttribute("aria-pressed")).toBe("false");
   expect(button("Reasoning: low")).toBeTruthy();
-  expect(preset.value).toBe("");
+  expect(button("Command: /dejargon")).toBeNull();
+});
+
+function composer() {
+  return document.querySelector<HTMLTextAreaElement>(".lc-agent-composer-field textarea")!;
+}
+function type(text: string) {
+  const el = composer();
+  const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+  act(() => {
+    el.focus();
+    set.call(el, text);
+    el.setSelectionRange(text.length, text.length);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+function key(name: string) {
+  act(() => {
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }));
+  });
+}
+function commandList() {
+  return document.querySelector('[aria-label="Commands"]');
+}
+
+it("opens the command list on a slash and takes the pick as a chip", () => {
+  const send = mount({ documentPresets: true });
+  type("/");
+  expect([...commandList()!.querySelectorAll("button")].map(node => node.textContent)).toEqual([
+    expect.stringContaining("/dejargon"),
+    expect.stringContaining("/math"),
+    expect.stringContaining("/methodology"),
+    expect.stringContaining("/reverse-engineer"),
+  ]);
+  type("/re");
+  const pick = commandList()!.querySelector("button")!;
+  expect(pick.textContent).toContain("/reverse-engineer");
+  act(() => pick.click());
+  expect(composer().value).toBe("");
+  expect(commandList()).toBeNull();
+  // Last on the left side of the bar, not among Photo / Send.
+  const mid = [...document.querySelector(".lc-agent-composer-mid")!.querySelectorAll("button")];
+  expect(mid.at(-1)!.getAttribute("aria-label")).toBe("Command: /reverse-engineer");
+  type("why does this work");
+  tap(button("Send"));
+  expect(send).toHaveBeenCalledWith("why does this work", expect.objectContaining({ askPreset: "reverse_engineer" }), "queue");
+});
+
+it("takes an exact command when a space follows it, and removing the chip drops it", () => {
+  mount({ documentPresets: true });
+  type("/math ");
+  expect(composer().value).toBe("");
+  tap(button("Command: /math"));
+  expect(button("Command: /math")).toBeNull();
+});
+
+it("leaves slashes that are not commands as text", () => {
+  const send = mount({ documentPresets: true });
+  type("and/or");
+  expect(commandList()).toBeNull();
+  type("/zzz");
+  expect(commandList()).toBeNull();
+  key("Enter");
+  expect(send).toHaveBeenCalledWith("/zzz", expect.not.objectContaining({ askPreset: expect.anything() }), "queue");
+});
+
+it("closes the list on Escape and keeps the text", () => {
+  mount({ documentPresets: true });
+  type("/me");
+  expect(commandList()).toBeTruthy();
+  key("Escape");
+  expect(commandList()).toBeNull();
+  expect(composer().value).toBe("/me");
+});
+
+it("offers no commands where there is no document", () => {
+  mount();
+  type("/");
+  expect(commandList()).toBeNull();
 });
 
 it("keeps the footnote panel anchored to its button after resizing", () => {

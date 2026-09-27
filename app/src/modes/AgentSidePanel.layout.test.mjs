@@ -55,14 +55,22 @@ describe("agent panel chrome", () => {
     expect(css).toContain("margin-left: auto");
   });
 
-  it("puts the chat-box expand on the composer bar before Footnotes", () => {
-    const bar = panel.slice(panel.indexOf('className="lc-agent-composer-mid"'));
-    const expand = bar.indexOf('pane="composer"');
-    const annotations = bar.indexOf('aria-label="Footnotes"');
-    const catalog = bar.indexOf('aria-label="Whiteboards and files"');
+  it("puts the chat-box expand in the field's corner and C before Footnotes", () => {
+    const field = panel.slice(panel.indexOf('className="lc-agent-composer-field"'));
+    const expand = field.indexOf('className="lc-agent-composer-expand"');
     expect(expand).toBeGreaterThan(-1);
-    expect(annotations).toBeGreaterThan(expand);
-    expect(catalog).toBeGreaterThan(annotations);
+    expect(field.indexOf('pane="composer"')).toBeGreaterThan(expand);
+    expect(field.indexOf("<textarea")).toBeGreaterThan(expand);
+    const bar = panel.slice(panel.indexOf('className="lc-agent-composer-mid"'));
+    expect(bar.slice(0, bar.indexOf('className="lc-agent-composer-actions"'))).not.toContain('pane="composer"');
+    const catalog = bar.indexOf('aria-label="Whiteboards and files"');
+    const annotations = bar.indexOf('aria-label="Footnotes"');
+    const action = bar.indexOf("aria-label={`Action: ${boardLabel}`}");
+    const reasoning = bar.indexOf("aria-label={`Reasoning: ${reasoning}`}");
+    expect(catalog).toBeGreaterThan(-1);
+    expect(annotations).toBeGreaterThan(catalog);
+    expect(reasoning).toBeGreaterThan(action);
+    expect(css).toMatch(/\.lc-agent-composer-mid \{[^}]*flex-wrap: nowrap;/);
     const composer = panel.slice(panel.indexOf('className="lc-agent-composer"'));
     expect(composer.includes("lc-agent-pane-expand-row")).toBe(false);
     expect(composer.includes("Whiteboards & files")).toBe(false);

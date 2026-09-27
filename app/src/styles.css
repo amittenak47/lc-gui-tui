@@ -11901,6 +11901,7 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
 
 /* Ask field + action row share one --bg / --chrome-edge chrome box. */
 .lc-agent-composer-field {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
@@ -11914,6 +11915,18 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
 
 .lc-agent-composer-field:focus-within {
   border-color: var(--accent);
+}
+
+/* Chat-box expand sits in the field's top-right corner, over the text. */
+.lc-agent-composer-expand {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 1;
+  display: inline-flex;
+}
+.lc-agent-composer-field textarea {
+  padding-right: 30px;
 }
 
 .lc-agent-presets {
@@ -12245,12 +12258,12 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   letter-spacing: 0.04em;
 }
 
-/* Handwriting / Annotations — between cadence and the right cluster. */
+/* C, Footnotes, Ink, Capture, Action, Reasoning, command — one line, always. */
 .lc-agent-composer-mid {
   order: 2;
   display: flex;
   flex: 1 1 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
   min-width: 0;
   margin-right: 4px;
@@ -12262,15 +12275,31 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
 .lc-agent-composer-mid .lc-agent-inline-option svg { width: 16px; height: 16px; }
 .lc-agent-composer-mid .lc-agent-reasoning { font-variant-numeric: tabular-nums; }
 .lc-agent-reasoning span { display: inline-block; width: 26px; text-align: left; }
+.lc-agent-composer-mid .lc-agent-reasoning .lc-agent-reasoning-word { width: auto; }
 .lc-agent-composer-mid .lc-agent-inline-option.lc-flag-active {
   color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
-.lc-agent-inline-presets {
-  font: inherit; font-size: 11px; color: var(--hint); border: 0; border-radius: 5px;
-  background: transparent; width: 58px; min-width: 0; height: 20px; padding: 0;
+/* The slash command a message will carry. Last on the left, tap to drop it. */
+.lc-agent-composer-mid .lc-agent-command-chip { gap: 4px; flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.lc-agent-composer-mid .lc-agent-command-chip span { opacity: 0.7; }
+
+/* Slash picker — fixed over the composer bar, portalled out of its clip. */
+.lc-agent-scope-menu.lc-agent-slash-menu {
+  position: fixed;
+  top: auto;
+  right: auto;
+  min-width: 220px;
+  max-width: 320px;
 }
-.lc-agent-inline-presets:focus-visible { outline: 1px solid var(--accent); }
-.lc-agent-inline-presets option { color: var(--ink); background: var(--surface); }
+.lc-agent-slash-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+}
+.lc-agent-slash-option .lc-agent-slash-name { font-weight: 600; }
+.lc-agent-slash-option .lc-muted { font-size: 11px; }
 
 /* Board menu + Photo + Send — hard right, just after the cadence chips. */
 .lc-agent-composer-actions {
@@ -15596,6 +15625,11 @@ button.lc-row-selected:hover:not(:disabled) {
  * "Whiteboard" / "Send". */
 @container lc-composer (max-width: 420px) {
   .lc-agent-composer-bar .lc-label-long {
+    display: none;
+  }
+
+  /* Keep the options on one line: Reasoning shows just its level. */
+  .lc-agent-composer-mid .lc-agent-reasoning .lc-agent-reasoning-word {
     display: none;
   }
 

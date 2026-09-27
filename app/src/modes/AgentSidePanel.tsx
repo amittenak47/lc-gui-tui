@@ -19,6 +19,16 @@ import { Tip } from "../components/Tip";
 import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
 import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
+import {
+  availableCommands,
+  commandForPreset,
+  matchCommands,
+  removeSlashWord,
+  slashQueryAt,
+  slashWordClosedBySpace,
+  type AgentCommand,
+  type SlashQuery,
+} from "./agentCommands";
 import { useWordReveal } from "./AgentRichText";
 import { AgentTurnResponse } from "./AgentTurnResponse";
 import { loadCoachSessionView, saveCoachSessionView } from "./coachSessionView";
@@ -1285,6 +1295,60 @@ export function AgentSidePanel({
     writeComposerPlace();
     onScrollRemember();
   };
+
+  /*
+   * Slash commands.
+   *
+   * A `/` that begins a word opens the picker over the composer bar; picking
+   * takes the word out of the text and shows the command as a chip at the end
+   * of the options row. A slash word that matches nothing is left as text.
+   */
+  const commands = useMemo(() => availableCommands({ documentPresets }), [documentPresets]);
+  const activeCommand = documentPresets ? commandForPreset(askPreset) : null;
+  const [slash, setSlash] = useState<SlashQuery | null>(null);
+  const [slashPick, setSlashPick] = useState(0);
+  const slashMatches = useMemo(
+    () => (slash ? matchCommands(commands, slash.query) : []),
+    [commands, slash],
+  );
+  const slashOpen = slashMatches.length > 0;
+  const composerBarRef = useRef<HTMLDivElement | null>(null);
+  const [slashPos, setSlashPos] = useState<{ left: number; bottom: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!slashOpen) return;
+    const rect = composerBarRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setSlashPos({ left: rect.left + 6, bottom: window.innerHeight - rect.top + 4 });
+  }, [slashOpen]);
+  /** The slash word Escape waved away. It stays shut until the text changes. */
+  const slashDismissedRef = useRef<SlashQuery | null>(null);
+  const readSlash = (el: HTMLTextAreaElement) => {
+    const caret = el.selectionStart;
+    const found =
+      commands.length > 0 && caret === el.selectionEnd ? slashQueryAt(el.value, caret) : null;
+    const dismissed = slashDismissedRef.current;
+    const next =
+      found && dismissed && found.start === dismissed.start && found.query === dismissed.query
+        ? null
+        : found;
+    setSlash((prev) =>
+      prev && next && prev.start === next.start && prev.end === next.end && prev.query === next.query
+        ? prev
+        : next,
+    );
+  };
+  const takeCommand = (command: AgentCommand, at: SlashQuery, text: string) => {
+    const { text: rest, caret } = removeSlashWord(text, at);
+    setDraft(rest);
+    if (command.kind === "preset") setAskPreset(command.preset);
+    setSlash(null);
+    window.requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(caret, caret);
+    });
+  };
   persistNowRef.current = () => {
     writeComposerPlace();
     const threads: Record<string, string> = {};
@@ -2508,18 +2572,62 @@ export function AgentSidePanel({
           )}
           {photoError && <p className="lc-warning">{photoError}</p>}
           <div className="lc-agent-composer-field">
+          <span className="lc-agent-composer-expand">
+            <PaneExpandButton
+              pane="composer"
+              focus={chatFocus}
+              onToggle={toggleChatFocus}
+            />
+          </span>
           <textarea
             ref={composerRef}
             value={draft}
             rows={10}
-            placeholder="Ask the agent about your board or code…"
+            placeholder={
+              commands.length > 0
+                ? "Ask the agent about your board or code… Type / for commands"
+                : "Ask the agent about your board or code…"
+            }
             onChange={(event) => {
-              setDraft(event.target.value);
+              const el = event.target;
+              const closed = slashWordClosedBySpace(commands, el.value, el.selectionStart);
+              if (closed) takeCommand(closed.command, closed.at, el.value);
+              else {
+                setDraft(el.value);
+                setSlashPick(0);
+                slashDismissedRef.current = null;
+                readSlash(el);
+              }
               rememberComposer();
             }}
-            onSelect={rememberComposer}
+            onSelect={(event) => {
+              rememberComposer();
+              readSlash(event.currentTarget);
+            }}
+            onBlur={() => setSlash(null)}
             onScroll={rememberComposer}
             onKeyDown={(event) => {
+              if (slashOpen && slash) {
+                const count = slashMatches.length;
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  const step = event.key === "ArrowDown" ? 1 : count - 1;
+                  setSlashPick((pick) => (pick + step) % count);
+                  return;
+                }
+                if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+                  event.preventDefault();
+                  takeCommand(slashMatches[Math.min(slashPick, count - 1)]!, slash, event.currentTarget.value);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  slashDismissedRef.current = slash;
+                  setSlash(null);
+                  return;
+                }
+              }
               if (event.key !== "Enter") return;
               if (event.shiftKey) return;
               event.preventDefault();
@@ -2527,7 +2635,7 @@ export function AgentSidePanel({
               else submit("queue");
             }}
           />
-          <div className="lc-agent-composer-bar">
+          <div ref={composerBarRef} className="lc-agent-composer-bar">
             {/* Ambient stays greyed until AMBIENT_ENABLED is flipped. The
                 socket + 120s loop are already wired in App / coachSocket. */}
             {!padSurface && (
@@ -2577,11 +2685,18 @@ export function AgentSidePanel({
             </div>
             )}
             <div className="lc-agent-composer-mid">
-              <PaneExpandButton
-                pane="composer"
-                focus={chatFocus}
-                onToggle={toggleChatFocus}
-              />
+              {onManageArtifacts && (
+                <Tip tip="Whiteboards and files" placement="top">
+                  <button
+                    type="button"
+                    className="lc-flag lc-agent-catalog"
+                    aria-label="Whiteboards and files"
+                    onClick={() => onManageArtifacts()}
+                  >
+                    C
+                  </button>
+                </Tip>
+              )}
               {allowAnnotations && <span className="lc-agent-annotate-wrap">
                 <Tip tip="Footnotes" placement="top">
                   <button ref={annotateBtnRef} type="button"
@@ -2609,31 +2724,22 @@ export function AgentSidePanel({
                   </svg>
                 </button>
               </Tip>
+              <button type="button" aria-label={`Action: ${boardLabel}`}
+                className={`lc-flag lc-agent-inline-option${boardLabel !== "Ask" ? " lc-flag-active" : ""}`}
+                title={padSurface ? "Ask or Draw" : "Ask, Draw, Review or Lazy"}
+                disabled={askOnly && !padSurface} onClick={cycleBoard}>{boardLabel}</button>
               <button type="button" aria-label={`Reasoning: ${reasoning}`} title="Reasoning: Off, Low, High"
                 className={`lc-flag lc-agent-inline-option lc-agent-reasoning${reasoning !== "off" ? " lc-flag-active" : ""}`}
                 onClick={() => setReasoning(current => {
                   const next = current === "off" ? "low" : current === "low" ? "high" : "off";
                   saveAgentReasoningLevel(next); return next;
-                })}>Reasoning <span>{reasoning[0].toUpperCase() + reasoning.slice(1)}</span></button>
-              <button type="button" aria-label={`Action: ${boardLabel}`}
-                className={`lc-flag lc-agent-inline-option${boardLabel !== "Ask" ? " lc-flag-active" : ""}`}
-                title={padSurface ? "Ask or Draw" : "Ask, Draw, Review or Lazy"}
-                disabled={askOnly && !padSurface} onClick={cycleBoard}>{boardLabel}</button>
-              {documentPresets && <select aria-label="Ask presets" title="Prompt preset"
-                className="lc-agent-inline-presets" value={askPreset ?? ""}
-                onChange={event => setAskPreset((event.target.value || null) as AskPresetId | null)}>
-                <option value="">Prompt</option>
-                {ASK_PRESETS.map(preset => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
-              </select>}
-              {onManageArtifacts && (
-                <Tip tip="Whiteboards and files" placement="top">
-                  <button
-                    type="button"
-                    className="lc-flag lc-agent-catalog"
-                    aria-label="Whiteboards and files"
-                    onClick={() => onManageArtifacts()}
-                  >
-                    C
+                })}><span className="lc-agent-reasoning-word">Reasoning</span> <span className="lc-agent-reasoning-level">{reasoning[0].toUpperCase() + reasoning.slice(1)}</span></button>
+              {activeCommand && (
+                <Tip tip={`${activeCommand.hint}. Tap to remove.`} placement="top">
+                  <button type="button" aria-label={`Command: /${activeCommand.name}`}
+                    className="lc-flag lc-agent-inline-option lc-flag-active lc-agent-command-chip"
+                    onClick={() => setAskPreset(null)}>
+                    /{activeCommand.name}<span aria-hidden="true">×</span>
                   </button>
                 </Tip>
               )}
@@ -2694,6 +2800,35 @@ export function AgentSidePanel({
           </div>
         </form>
       </div>
+
+      {slashOpen &&
+        slash &&
+        slashPos &&
+        createPortal(
+          <div
+            className="lc-agent-scope-menu lc-agent-slash-menu"
+            role="listbox"
+            aria-label="Commands"
+            style={{ left: slashPos.left, bottom: slashPos.bottom }}
+          >
+            {slashMatches.map((command, index) => (
+              <button
+                key={command.name}
+                type="button"
+                role="option"
+                aria-selected={index === slashPick}
+                className={`lc-agent-scope-option lc-agent-slash-option${index === slashPick ? " is-active" : ""}`}
+                // Keep focus in the composer so its blur does not close the list first.
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => takeCommand(command, slash, composerRef.current?.value ?? draft)}
+              >
+                <span className="lc-agent-slash-name">/{command.name}</span>
+                <span className="lc-muted">{command.hint}</span>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
 
       {messageMenu &&
         menuMessage &&
