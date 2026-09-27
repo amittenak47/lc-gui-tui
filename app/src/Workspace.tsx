@@ -10579,7 +10579,13 @@ export function Workspace({
        * conflict — do not unmount. Unmount aborts the walk, Keep writes into
        * a dead run, and the next Sync raises the same conflict forever.
        */}
-      {active &&
+      {/*
+       * Nor on leaving the tab. A pending merge used to unmount with the tab's
+       * focus, which aborted the walk behind it; coming back found the choice
+       * gone. Kept mounted while the split waits, pill hidden — the dock
+       * belongs to whichever tab is in front.
+       */}
+      {(active || hubConflictAsk) &&
       tabOffersHubSync(tab.kind) &&
       !isFootnoteBoardTab(tab) ? (
         <HubSyncControl
@@ -10587,7 +10593,7 @@ export function Workspace({
           client={client}
           host={hubSyncHostRef.current}
           editSeq={padEditSeq}
-          showDock={hubSyncWindowPill && !hubConflictAsk}
+          showDock={active && hubSyncWindowPill && !hubConflictAsk}
           dock={headerSlots.boardChrome ?? null}
           tapRef={hubSyncTapRef}
         />
