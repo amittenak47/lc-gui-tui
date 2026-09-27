@@ -6131,6 +6131,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
   }, []);
 
+  const readingZoomGenerationRef = useRef(0);
   const beginReadingZoom = useCallback((anchorY: number) => {
     if (readingZoomRef.current) return;
     const base = getViewport(), bounds = pageBoundsRef.current;
@@ -6151,6 +6152,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const layers = nodes.map(node => ({ node, transform: node.style.transform, origin: node.style.transformOrigin,
       left: node.offsetLeft, top: node.offsetTop, dock: node === dock }));
     readingZoomRef.current = { base, bounds: region, floor, inset, layers };
+    readingZoomGenerationRef.current++;
+    if (boardRef.current) boardRef.current.dataset.lcReadingZoom = "true";
     docFlags.camera(true);
     noteCameraBusy();
     rasterInkRef.current?.setCameraZooming(true);
@@ -6182,7 +6185,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     docFlags.camera(false);
     rasterInkRef.current?.setCameraZooming(false);
     rasterInkRef.current?.setCameraMoving(false);
-    void rasterInkRef.current?.syncCamera();
+    const generation = readingZoomGenerationRef.current;
+    const root = boardRef.current;
+    void Promise.resolve(rasterInkRef.current?.syncCamera()).then(() => {
+      // A prior pinch's tile completion must not reveal a newer gesture.
+      if (root && generation === readingZoomGenerationRef.current && !readingZoomRef.current) {
+        delete root.dataset.lcReadingZoom;
+      }
+    });
     sceneOverlayRef.current?.redraw();
     shapeSelectRef.current?.redraw();
     if (session.layers.some(layer => layer.dock)) reportCodeSlot();
@@ -6193,8 +6203,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (splitPaused) endReadingZoom();
   }, [splitPaused, endReadingZoom]);
 
-  // Pinch samples only move already-painted layers. Commit the scene and
-  // prepare sharp ink once on release, not on every pointer/wheel event.
+  // Pinch samples move the document with annotations hidden. Commit the scene
+  // and prepare sharp ink on release, not on every pointer/wheel event.
   const zoomReadingCamera = useCallback(
     (zoom: number, anchor: { x: number; y: number }, at: { x: number; y: number }) => {
       const session = readingZoomRef.current;

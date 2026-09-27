@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { createPortal } from "react-dom";
 import { AgentSidePanel, type AgentChatMessage } from "../src/modes/AgentSidePanel";
 import { Board } from "../src/canvas/Board";
 import { AnnotateDocument } from "../src/modes/AnnotateDocument";
@@ -22,6 +23,7 @@ const source = Array.from({length:100},(_,i)=>`## Section ${i+1}\n\n` + "Panel m
 import { reviewPdf } from "./reviewPdf";
 const pdfBytes=new URLSearchParams(location.search).has("pdf") ? reviewPdf() : null;
 function Review(){
+  const [marks,setMarks]=useState<HTMLDivElement|null>(null);
   const [open,setOpen]=useState(false), [height,setHeight]=useState(0), [ready,setReady]=useState(false);
   const board=useRef<any>(null), previous=useRef(open);
   Object.assign(window,{setReviewOpen:setOpen});
@@ -57,9 +59,11 @@ function Review(){
   },[]);
   return <div style={{"--lc-agent-width":"1100px"} as any} className={`lc-app ${innerWidth<=900?"lc-mobile":""} ${open?"lc-app-agent-open":""}`}><header className="lc-header">Home</header><main className="lc-main">
     <Board ref={board} filmScope="agent-motion-review" themeId="graphite" mobileRegion={whiteboard ? "pad-0" : ANNOTATE_REGION}
+      onMarksSlot={setMarks}
       focusRegion={whiteboard ? "pad-0" : ANNOTATE_REGION} transparentCanvas docPaper selectableContent
       pageContent={whiteboard ? undefined : pdfBytes ? <PdfDocument filmScope="agent-motion-review" bytes={pdfBytes} frameWidth={1100} onMeasure={setHeight}/> : <AnnotateDocument source={source} onMeasure={setHeight}/>}
       pageContentHeight={whiteboard ? undefined : annotatePageHeight(height)}/>
+      {marks && createPortal(<span data-pinch-footnote style={{position:"absolute",left:80,top:100,visibility:"visible"}}>1</span>,marks)}
       {!whiteboard && !scroll && ready && <PageTurn boardRef={board} filmScope="agent-motion-review" hostSelector=".lc-main" lockActive turnEnabled spread={spread} paged={!!pdfBytes} fit={.94}/>}
     </main><AgentSidePanel open={open} onOpenChange={setOpen} mode="review" onModeChange={()=>{}} busy={false} messages={messages} onSend={()=>{}} /></div>
 }

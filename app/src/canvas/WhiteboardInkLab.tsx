@@ -533,6 +533,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const marginYRef = useRef(0);
     const paintedViewRef = useRef<PaintedLabView | null>(null);
     const cameraPaintPendingRef = useRef(false);
+    // A pinch stays hidden through tile preparation, not just pointer-up.
+    const zoomPaintPendingRef = useRef(false);
     const cameraMovingRef = useRef(false);
     const cameraZoomingRef = useRef(false);
     const lastStrokeAtRef = useRef(-Infinity);
@@ -584,6 +586,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const alignPresentedInk = useCallback((live: PanCamera | null): boolean => {
       const canvas = canvasRef.current;
       if (!canvas || drawingRef.current) return true;
+      if (zoomPaintPendingRef.current) {
+        canvas.style.visibility = "hidden";
+        return false;
+      }
       const painted = paintedViewRef.current;
       const camera = live ?? getViewportRef.current();
       if (!painted || !camera) {
@@ -595,9 +601,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             y: painted.marginY * OVERDRAW_REBASE_HEADROOM,
           })
         : panDelta(camera, painted, painted);
-      // Keep one bitmap during a panel ease or pinch. A uniform scene-camera
+      // Keep one bitmap during a panel ease. A uniform scene-camera
       // transform moves ink exactly with the paper, including vertical overdraw.
-      if (document.body.dataset.lcPanelMotion || cameraZoomingRef.current || cameraPaintPendingRef.current) {
+      if (document.body.dataset.lcPanelMotion || cameraPaintPendingRef.current) {
         cameraPaintPendingRef.current = true;
         const scale = camera.zoom / painted.zoom;
         const dx = (camera.scrollX - painted.scrollX) * camera.zoom;
@@ -932,6 +938,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           };
           canvas.style.visibility = "";
           cameraPaintPendingRef.current = false;
+          zoomPaintPendingRef.current = false;
           committedBuildRef.current = false;
           historyPixelsDirtyRef.current = false;
           replayAllowPausedRef.current = false;
@@ -1312,6 +1319,11 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         },
         setCameraZooming(zooming) {
           cameraZoomingRef.current = zooming;
+          if (zooming) {
+            zoomPaintPendingRef.current = true;
+            cameraPaintPendingRef.current = true;
+            if (canvasRef.current) canvasRef.current.style.visibility = "hidden";
+          }
         },
         setCameraMoving(moving) {
           const wasMoving = cameraMovingRef.current;
@@ -1501,7 +1513,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           } else {
             canvas.getContext("2d")?.drawImage(kept, 0, 0, pixelW, pixelH);
           }
-          canvas.style.visibility = "";
+          canvas.style.visibility = zoomPaintPendingRef.current ? "hidden" : "";
         }
         paintedViewRef.current = painted && camera
           ? { ...camera, width: cssW, height: cssH, marginY } : null;

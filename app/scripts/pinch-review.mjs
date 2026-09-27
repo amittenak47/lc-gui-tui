@@ -50,7 +50,8 @@ try {
     await sleep(1500);
     if(query.includes('boundary')){
       await evaluate(`(()=>{const b=window.reviewBoard,v=b.getViewportBounds(),target=b.readingPageFrames()[2].maxY-250;document.querySelector('.lc-board').dispatchEvent(new WheelEvent('wheel',{deltaY:(target-v.y)*v.zoom/1.55,clientX:500,clientY:460,bubbles:true,cancelable:true}))})()`);
-      await sleep(200);
+      // Let the boundary scroll and its pending page tiles settle before pinching.
+      await sleep(1500);
     }
     const data=await evaluate(`(async()=>{
       const b=window.reviewBoard,root=document.querySelector('.lc-board'),ink=root.querySelector('.lc-ink-lab-canvas');
@@ -62,12 +63,12 @@ try {
         const d=100+i*3;
         fire('pointermove',11,500-d);fire('pointermove',12,500+d);
         await new Promise(r=>requestAnimationFrame(r));
-        samples.push({t:performance.now()-start,view:b.getViewportBounds(),draws:window.pinchStats.draws,visibility:ink.style.visibility,bitmap:[ink.width,ink.height],transform:ink.style.transform,scopeHeight:parseFloat(root.querySelector('.lc-page-mask > div')?.style.height ?? '0')/b.getViewportBounds().zoom});
+        samples.push({t:performance.now()-start,view:b.getViewportBounds(),draws:window.pinchStats.draws,visibility:ink.style.visibility,footnote:root.querySelector("[data-pinch-footnote]") ? getComputedStyle(root.querySelector("[data-pinch-footnote]")).visibility : null,bitmap:[ink.width,ink.height],transform:ink.style.transform,scopeHeight:parseFloat(root.querySelector('.lc-page-mask > div')?.style.height ?? '0')/b.getViewportBounds().zoom});
       }
       const during=b.getViewportBounds();
       fire('pointerup',11,283);fire('pointerup',12,717);
       await new Promise(r=>setTimeout(r,1800));
-      return {before,held,afterHeld:b.readingPageBox(),draws,during,after:b.getViewportBounds(),samples,visibility:ink.style.visibility,transform:ink.style.transform,afterDraws:window.pinchStats.draws};
+      return {before,held,afterHeld:b.readingPageBox(),draws,during,after:b.getViewportBounds(),samples,visibility:ink.style.visibility,transform:ink.style.transform,footnote:root.querySelector("[data-pinch-footnote]") ? getComputedStyle(root.querySelector("[data-pinch-footnote]")).visibility : null,marksTransform:root.querySelector(".lc-page-marks-slot")?.style.transform,contentTransform:root.querySelector(".lc-page-content-slot")?.style.transform,afterDraws:window.pinchStats.draws};
     })()`);
     if(query.includes('boundary'))assert(data.samples[1].scopeHeight>2500 && data.samples[1].scopeHeight<3200,'Boundary pinch did not retain exactly two PDF pages');
     results.push({query,...data});
@@ -81,8 +82,9 @@ try {
     assert(r.during.zoom>r.before.zoom*1.3,`${r.query}: pinch did not zoom`);
     assert(Math.abs(r.during.zoom-r.after.zoom)<.001,`${r.query}: camera snapped on release`);
     assert(r.samples.every(s=>s.draws===r.draws),`${r.query}: pinch redrew ink tiles`);
-    assert(r.samples.every(s=>s.visibility!=="hidden"),`${r.query}: pinch hid ink`);
+    assert(r.samples.every(s=>s.visibility==="hidden"),`${r.query}: pinch exposed ink`);
     assert.equal(r.visibility,'');assert.equal(r.transform,'');
+    if(r.query!=='whiteboard'){assert(r.samples.every(s=>s.footnote==='hidden'),`${r.query}: pinch exposed footnotes`);assert.equal(r.footnote,'visible');assert.equal(r.marksTransform,r.contentTransform);}
     assert.deepEqual(r.held,r.afterHeld,`${r.query}: pinch changed held page`);
   }
   assert.equal(exceptions.length,0,JSON.stringify(exceptions));

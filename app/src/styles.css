@@ -20544,6 +20544,14 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow: visible;
 }
 
+/* Hide page annotations until the pinch's final camera has painted. Scope to
+ * this board so a second reader remains visible. Descendants may explicitly
+ * set visibility, so include them as well. Keep layout and saved geometry. */
+.lc-board[data-lc-reading-zoom] :is(.lc-page-marks-slot, .lc-scene-overlay, .lc-scene-select),
+.lc-board[data-lc-reading-zoom] :is(.lc-page-marks-slot, .lc-scene-overlay, .lc-scene-select) * {
+  visibility: hidden !important;
+}
+
 /*
  * Highlighter: the document takes the pointer back for the length of a sweep.
  *

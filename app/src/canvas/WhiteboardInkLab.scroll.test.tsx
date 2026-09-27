@@ -229,27 +229,86 @@ describe("annotation camera presentation", () => {
     expect(alpha(150, 230)).toBeGreaterThan(0);
   });
 
-  it("does no tile rendering during a pinch and sharpens the final camera once", async () => {
+  it("hides ink during pinch and until the final camera tiles are ready", async () => {
     await ready([stroke(100)]);
     const canvas = surface(), bitmap = [canvas.width, canvas.height];
     const tiles = vi.spyOn(InkTileCache.prototype, "draw");
     ref.current!.setCameraZooming(true);
+    expect(canvas.style.visibility).toBe("hidden");
     ref.current!.setCameraMoving(true);
     for (const zoom of [1.1, 1.4, 1.8, 2]) {
       view = { ...view, zoom, scrollX: -40, scrollY: -50 };
       ref.current!.setPanOffset(view);
       await ref.current!.syncCamera(); await frames(2);
-      expect(canvas.style.visibility).toBe("");
-      expect(canvas.style.transform).toContain(`scale(${zoom})`);
+      expect(canvas.style.visibility).toBe("hidden");
       expect([canvas.width, canvas.height]).toEqual(bitmap);
     }
     expect(tiles).not.toHaveBeenCalled();
+    worker.blocked = true;
     ref.current!.setCameraZooming(false);
     ref.current!.setCameraMoving(false);
-    const settled = ref.current!.syncCamera(); await frames(80); await settled;
+    const settled = ref.current!.syncCamera();
+    await frames(10);
+    expect(canvas.style.visibility).toBe("hidden");
+    worker.blocked = false; worker.release.splice(0).forEach(resolve => resolve());
+    await frames(80); await settled;
+    expect(canvas.style.visibility).toBe("");
     expect(canvas.style.transform).toBe("");
     expect(alpha(120, 280)).toBeGreaterThan(0);
     expect(tiles).toHaveBeenCalled();
+  });
+
+  it("restores ink after a pinch with no camera movement", async () => {
+    await ready([stroke(100)]);
+    ref.current!.setCameraZooming(true);
+    expect(surface().style.visibility).toBe("hidden");
+    ref.current!.setCameraZooming(false);
+    const settled = ref.current!.syncCamera(); await frames(); await settled;
+    expect(surface().style.visibility).toBe("");
+    expect(alpha(100, 280)).toBeGreaterThan(0);
+  });
+
+  it("does not reveal a previous pinch's tiles during a new pinch", async () => {
+    await ready([stroke(100)]);
+    worker.blocked = true;
+    ref.current!.setCameraZooming(true);
+    view = { ...view, zoom: 2 };
+    ref.current!.setCameraZooming(false);
+    const first = ref.current!.syncCamera(); await frames(4);
+    ref.current!.setCameraZooming(true);
+    view = { ...view, zoom: 1.5 };
+    worker.blocked = false; worker.release.splice(0).forEach(resolve => resolve());
+    await frames(20);
+    expect(surface().style.visibility).toBe("hidden");
+    ref.current!.setCameraZooming(false);
+    const second = ref.current!.syncCamera(); await frames(80);
+    await Promise.all([first, second]);
+    expect(surface().style.visibility).toBe("");
+    expect(alpha(150, 330)).toBeGreaterThan(0);
+  });
+
+  it("keeps freshly written unsaved ink at its scene position after pinch", async () => {
+    await ready([], "pen");
+    const event = (type: string, x: number) => {
+      const e = new MouseEvent(type, { button: 0, clientX: x, clientY: 100, bubbles: true });
+      Object.defineProperties(e, { pointerId: { value: 1 }, pointerType: { value: "pen" }, pressure: { value: .5 } });
+      surface().dispatchEvent(e);
+    };
+    await act(async () => {
+      event("pointerdown", 80); event("pointermove", 140); event("pointerup", 140);
+    });
+    const original = structuredClone(ref.current!.getOps());
+    expect(original).toHaveLength(1);
+    ref.current!.setCameraZooming(true);
+    view = { ...view, zoom: 2, scrollX: -40, scrollY: -50 };
+    ref.current!.setPanOffset(view);
+    await frames(2);
+    expect(surface().style.visibility).toBe("hidden");
+    ref.current!.setCameraZooming(false);
+    const settled = ref.current!.syncCamera(); await frames(80); await settled;
+    expect(surface().style.visibility).toBe("");
+    expect(ref.current!.getOps()).toEqual(original);
+    expect(alpha(120, 280)).toBeGreaterThan(0);
   });
 
   it("hides a stale zoom until an aligned replacement is presented", async () => {
