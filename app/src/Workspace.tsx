@@ -26,6 +26,8 @@ import type { DocWorkProgress } from "./components/DocIndexChip";
 import { fetchDocHubHint, type DocHubHint } from "./util/hubHint";
 import type { HubSyncWalkHost, HubWalkReport } from "./components/HubSyncControl";
 import { HubConflictSplit } from "./components/HubConflictSplit";
+import { PageTurn } from "./canvas/pageTurn/PageTurn";
+import { loadReadingMode, READING_MODE_EVENT, type ReadingMode } from "./util/readingModePref";
 import {
   loadWebRenderMode,
   otherWebRenderMode,
@@ -669,6 +671,11 @@ export interface WorkspaceProps {
 function pdfInkSpreadStamp(board: unknown): boolean | null {
   const stamp = (board as { appState?: { pdfSpread?: unknown } } | null)?.appState?.pdfSpread;
   return typeof stamp === "boolean" ? stamp : null;
+}
+
+/** `CSS.escape` where it exists; tab ids are simple, this is belt and braces. */
+function cssEscape(value: string): string {
+  return typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(value) : value.replace(/"/g, '\\"');
 }
 
 /*
@@ -1905,6 +1912,13 @@ export const Workspace = memo(function Workspace({
   /** Boot overlay still waiting for LLM probe → checkmark before dismiss. */
 
   const boardRef = useRef<BoardHandle | null>(null);
+  /** Scroll or a page at a time — Settings › UI › Reading. */
+  const [readingMode, setReadingMode] = useState<ReadingMode>(loadReadingMode);
+  useEffect(() => {
+    const onChange = () => setReadingMode(loadReadingMode());
+    window.addEventListener(READING_MODE_EVENT, onChange);
+    return () => window.removeEventListener(READING_MODE_EVENT, onChange);
+  }, []);
 
   /*
    * The board arrives as its own chunk.
@@ -10692,6 +10706,7 @@ export const Workspace = memo(function Workspace({
           ]
             .filter(Boolean)
             .join(" ")}
+          data-lc-tab={tab.id}
           onPointerDownCapture={(event) => {
             const target = event.target;
             if (target instanceof Element && target.closest(".lc-loading-doodle, .lc-overlay-spinner")) return;
@@ -11290,6 +11305,16 @@ export const Workspace = memo(function Workspace({
           />
         ) : null}
         </div>
+      {annotateSource?.docType === "pdf" ? (
+        <PageTurn
+          boardRef={boardRef}
+          filmScope={tab.id}
+          hostSelector={`[data-lc-tab="${cssEscape(tab.id)}"]`}
+          lockActive={readingMode === "pages" && showing && !hubConflictAsk}
+          turnEnabled={readingMode === "pages" && showing && active && !annotateCode && !hubConflictAsk}
+          spread={pdfSpread}
+        />
+      ) : null}
       {active && artifactPicker && <ArtifactPicker parent={artifactPicker.parent} associations={artifactPicker.associations}
         pageChoices={artifactPageChoices} capturePage={captureArtifactPage}
         scope={artifactPicker.messageId ? "message" : artifactPicker.footnoteId ? "footnote" : "catalog"}
