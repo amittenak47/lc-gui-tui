@@ -105,9 +105,15 @@ export class InkPageBook {
   }
 
   /**
-   * Install PDF (or fallback) frames. Rebins once when a real stack replaces
-   * the single-page fallback so strokes committed during layout land on the
-   * right shard.
+   * Install PDF (or fallback) frames, and rebin when that moves any page.
+   *
+   * Rebins when a real stack replaces the single-page fallback, so strokes
+   * committed during layout land on the right shard — and whenever a page that
+   * was already laid out moves, which is what switching a PDF between split
+   * and whole sheets does. That second case used to keep every stroke in the
+   * bin the old layout chose: a remapped sheet-118 stroke sat in a far-away
+   * page's shard, out of the paint window and stored under the wrong page.
+   * Pages only *appended* (the layout arriving in batches) move nothing.
    */
   setFrames(frames: readonly PageFrame[]): boolean {
     if (frames.length === 0) return false;
@@ -119,10 +125,17 @@ export class InkPageBook {
       });
     if (same) return false;
     const prevCount = this.frames.length;
+    const shared = Math.min(prevCount, frames.length);
+    let moved = false;
+    for (let i = 0; i < shared && !moved; i += 1) {
+      const cur = this.frames[i]!;
+      const next = frames[i]!;
+      moved = cur.pageId !== next.pageId || cur.minY !== next.minY || cur.maxY !== next.maxY;
+    }
     const shouldRebin =
       this.opTotal > 0 &&
       frames.length > 1 &&
-      (this.usedFallback || prevCount <= 1);
+      (this.usedFallback || prevCount <= 1 || moved);
     this.frames = frames.slice();
     this.usedFallback = frames.length <= 1;
     if (shouldRebin) {
@@ -250,7 +263,18 @@ export class InkPageBook {
     }
   }
 
-  replaceAll(ops: readonly InkOp[], opts?: { preserveIds?: boolean }): void {
+  replaceAll(
+    ops: readonly InkOp[],
+    opts?: { preserveIds?: boolean; frames?: readonly PageFrame[] },
+  ): void {
+    // Every page that held ink before, so one left empty is written empty.
+    const before = this.pageIds();
+    // Bin by the layout these strokes are in. A caller replacing ink after a
+    // layout change knows the new frames before the next paint window does.
+    if (opts?.frames && opts.frames.length > 0) {
+      this.frames = opts.frames.slice();
+      this.usedFallback = this.frames.length <= 1;
+    }
     this.hot.clear();
     this.cold.clear();
     this.dirty.clear();
@@ -277,6 +301,18 @@ export class InkPageBook {
     }
     if (!this.hot.has(SPANNING_PAGE_ID) && bins.has(SPANNING_PAGE_ID)) {
       this.hot.set(SPANNING_PAGE_ID, bins.get(SPANNING_PAGE_ID)!);
+    }
+    /*
+     * A page whose strokes all went elsewhere keeps its stored shard unless it
+     * is told otherwise. Marking it dirty with nothing in it writes it empty —
+     * the same path an erasure takes — instead of leaving the old copy on disk
+     * (and on the hub) to come back beside the moved one.
+     */
+    for (const pageId of before) {
+      if (!bins.has(pageId)) {
+        this.dirty.add(pageId);
+        this.onDisk.add(pageId);
+      }
     }
     this.trimCold();
     this.bump();

@@ -9378,6 +9378,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           bounds.minX,
           width,
         );
+        // `setOps` bins by the board's current frames: the layout these
+        // strokes are now in, not the one they left.
         ink.setOps(next);
       },
       restoreView: (saved) => {

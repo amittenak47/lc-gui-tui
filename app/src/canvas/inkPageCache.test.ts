@@ -288,4 +288,49 @@ describe("InkPageBook", () => {
     expect(page1).toHaveLength(1);
     expect(page2).toHaveLength(1);
   });
+
+  it("rebins when a layout change moves pages, and writes the pages it emptied", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(4));
+    book.commit(stroke(3 * 118 + 40)); // page 4
+    book.takeDirtyEncoded();
+    book.markFlushed([4]);
+    // A new layout: every page half as tall, so y=394 now falls on page 4's
+    // successor slot... here, page 2 in a stack of 200-unit pages.
+    const moved: PageFrame[] = [
+      { pageId: 1, minY: 0, maxY: 200 },
+      { pageId: 2, minY: 218, maxY: 418 },
+      { pageId: 3, minY: 436, maxY: 636 },
+      { pageId: 4, minY: 654, maxY: 854 },
+    ];
+    expect(book.setFrames(moved)).toBe(true);
+    const dirty = book.takeDirtyEncoded();
+    expect(decodeInkOps(dirty.get(2)!)).toHaveLength(1);
+    // Page 4's old copy is written empty rather than left on disk.
+    expect(dirty.has(4)).toBe(true);
+    expect(decodeInkOps(dirty.get(4)!)).toHaveLength(0);
+  });
+
+  it("does not rebin when the layout only grows", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(2));
+    book.commit(stroke(40));
+    book.takeDirtyEncoded();
+    book.markFlushed([1]);
+    expect(book.setFrames(frames(5))).toBe(false);
+    expect(book.takeDirtyEncoded().size).toBe(0);
+  });
+
+  it("bins replaced ink by the frames it is given", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(4));
+    const halfTall: PageFrame[] = [
+      { pageId: 1, minY: 0, maxY: 200 },
+      { pageId: 2, minY: 218, maxY: 418 },
+    ];
+    book.replaceAll([stroke(300)], { frames: halfTall });
+    const dirty = book.takeDirtyEncoded();
+    expect(decodeInkOps(dirty.get(2)!)).toHaveLength(1);
+    expect(dirty.has(3)).toBe(false);
+  });
 });

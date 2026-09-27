@@ -1321,7 +1321,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           committedBuildRef.current = false;
           tileReadyRef.current = () => {};
           settleReplayWaiters();
-          bookRef.current.replaceAll(cloneOps(ops));
+          bookRef.current.replaceAll(cloneOps(ops), { frames: getPageFramesRef.current?.() ?? [] });
           ensureTiles().syncOpsDeferred(bookRef.current.paintOps());
           if (drawingRef.current) return;
           if (opts?.paint === false) return;
