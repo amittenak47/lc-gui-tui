@@ -33,8 +33,10 @@ const TURN_AXIS_RATIO = 1.6;
 const AUTO_TURN_MS = 460;
 /** Finishing or settling back from a release, at most, in ms. */
 const SETTLE_MS = 300;
-/** Pictures kept for turns: this page and its two neighbours, and a spare. */
-const SHOT_CACHE = 4;
+/** A text spread's facing picture is taken again once writing has rested this long. */
+const FACING_SETTLE_MS = 1200;
+/** Pictures kept for turns: this page and its neighbours — in a spread, three spreads' worth. */
+const SHOT_CACHE = 8;
 /** How long the view must sit still before the next turn's pictures are taken. */
 const PREFETCH_IDLE_MS = 600;
 /** How often a still page checks whether its pictures went stale (a sharper paint landed). */
@@ -156,6 +158,81 @@ function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
 }
 
+/**
+ * What a PDF page's picture was taken from: the size its bitmap is painted
+ * at now. A picture taken while the page was still a preview goes stale the
+ * moment the sharp paint lands, and is taken again.
+ */
+function pdfPaintSignature(hostSelector: string, pageId: number): string {
+  if (!(pageId >= 1)) return "";
+  const host = document.querySelector(hostSelector);
+  const canvases = host?.querySelectorAll<HTMLCanvasElement>(`[data-pdf-page="${pageId}"] canvas.lc-pdf-canvas`);
+  return canvases ? Array.from(canvases, (c) => c.width).join(",") : "";
+}
+
+type ShotCache = Map<string, Promise<HTMLCanvasElement | null>>;
+
+/**
+ * A picture of part of the document, taken once.
+ *
+ * Keyed on what it shows — where, at what scale, with which ink, from which
+ * paint — so a stroke added since, a zoom or a sharper paint takes a fresh
+ * one. At most a few kept: each is a screenful of pixels.
+ */
+function takeShot(
+  shots: ShotCache,
+  b: BoardHandle,
+  scene: Scene,
+  scale: number,
+  cutY: number,
+  signature: string,
+): Promise<HTMLCanvasElement | null> {
+  const key = [scene.x, scene.y, scene.width, scene.height, scale, b.getInkRevision(), Math.min(cutY, 1e9)]
+    .map((n) => Math.round(n * 100) / 100)
+    .join(":") + `@${signature}`;
+  let taken = shots.get(key);
+  if (!taken) {
+    // Below a text page's cut is the next page's text, which the view
+    // hides; the picture has to hide it too.
+    taken = b.captureSceneFrame(scene, scale).then((canvas) => {
+      const cut = cutY - scene.y;
+      if (!canvas || !(cut < scene.height)) return canvas;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return canvas;
+      const top = Math.max(0, Math.round((cut / scene.height) * canvas.height));
+      ctx.fillStyle = paperColor();
+      ctx.fillRect(0, top, canvas.width, canvas.height - top);
+      return canvas;
+    }).catch(() => null);
+    shots.set(key, taken);
+    while (shots.size > SHOT_CACHE) shots.delete(shots.keys().next().value!);
+  }
+  return taken;
+}
+
+/** A text page's whole box in scene units — its column, one screenful high from its top. */
+function pageBoxScene(b: BoardHandle, frame: PageFrame): Scene | null {
+  const box = b.readingPageBox();
+  if (!box) return null;
+  return { x: box.minX, y: frame.minY, width: box.maxX - box.minX, height: box.maxY - box.minY };
+}
+
+/** Two page pictures side by side, one blank when the spread has only one page. */
+function composeSpread(left: HTMLCanvasElement | null, right: HTMLCanvasElement | null): HTMLCanvasElement | null {
+  const one = left ?? right;
+  if (!one) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = one.width * 2;
+  canvas.height = one.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.fillStyle = paperColor();
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (left) ctx.drawImage(left, 0, 0, one.width, one.height);
+  if (right) ctx.drawImage(right, one.width, 0, one.width, one.height);
+  return canvas;
+}
+
 function paperColor(): string {
   if (typeof document === "undefined") return "#ffffff";
   return getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff";
@@ -192,6 +269,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
   const turnRef = useRef<Turn | null>(null);
   /** The page the camera is held to. */
   const lockedRef = useRef<PageFrame | null>(null);
+  /** Text pages two to a spread. A PDF's spread is its layout, not this. */
+  const textSpread = spread && !paged;
+  const textSpreadRef = useRef(textSpread);
+  textSpreadRef.current = textSpread;
+  const turnEnabledRef = useRef(turnEnabled);
+  turnEnabledRef.current = turnEnabled;
   const spreadRef = useRef(spread);
   spreadRef.current = spread;
   const pagedRef = useRef(paged);
@@ -284,8 +367,108 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     return () => boardRef.current?.setPageFit(null);
   }, [boardRef, lockActive]);
   useEffect(() => {
+    if (!lockActive) return;
+    boardRef.current?.setPageSpread(textSpread);
+    return () => boardRef.current?.setPageSpread(false);
+  }, [boardRef, lockActive, textSpread]);
+  useEffect(() => {
     if (lockActive) boardRef.current?.setPageFit(fit);
   }, [boardRef, lockActive, fit]);
+
+  /*
+   * A text spread's facing page.
+   *
+   * Only one page of the document is on the board at a time — the one held —
+   * so the page facing it is a picture of itself, kept current while the held
+   * page is written on. Touching the facing page makes it the held one, on the
+   * spot where its picture was and before the touch reaches the page, so a
+   * stroke or a selection started there lands on the page itself; the page it
+   * leaves becomes the picture.
+   */
+  useEffect(() => {
+    if (!lockActive || !textSpread) return;
+    const facingEl = () =>
+      document.querySelector(hostSelector)?.querySelector<HTMLElement>(".lc-page-mask-facing") ?? null;
+    const same = (a: PageFrame, b: PageFrame) => Math.abs(a.minY - b.minY) < 0.5 && Math.abs(a.maxY - b.maxY) < 0.5;
+    /** The held page's own picture, for when it becomes the facing one. */
+    let live: { page: PageFrame; canvas: HTMLCanvasElement } | null = null;
+    let lastRevision = -1;
+    let revisionAt = 0;
+    let shows: number | null = null;
+
+    const refresh = () => {
+      const b = boardRef.current;
+      const el = facingEl();
+      const held = lockedRef.current;
+      if (!b || !el || el.hidden || !held || turnRef.current) return;
+      // While a page is being written on, its facing picture waits for a pause.
+      const revision = b.getInkRevision();
+      const now = performance.now();
+      if (revision !== lastRevision) {
+        lastRevision = revision;
+        revisionAt = now;
+      }
+      if (shows != null && now - revisionAt < FACING_SETTLE_MS) return;
+      const frames = b.readingPageFrames();
+      const i = frames.findIndex((f) => same(f, held));
+      if (i < 0) return;
+      const facing = frames[i % 2 === 0 ? i + 1 : i - 1];
+      const hole = el.parentElement?.getBoundingClientRect();
+      const heldScene = pageBoxScene(b, held);
+      if (!hole || !heldScene) return;
+      const scale = shotScale(hole.width / 2, heldScene.width);
+      void takeShot(shotsRef.current, b, heldScene, scale, held.maxY, "").then((canvas) => {
+        if (canvas && lockedRef.current === held) live = { page: held, canvas };
+      });
+      if (!facing) {
+        el.replaceChildren();
+        shows = -1;
+        return;
+      }
+      const scene = pageBoxScene(b, facing);
+      if (!scene) return;
+      void takeShot(shotsRef.current, b, scene, scale, facing.maxY, "").then((canvas) => {
+        if (!canvas || lockedRef.current !== held || el.hidden) return;
+        if (el.firstElementChild !== canvas) el.replaceChildren(canvas);
+        shows = facing.minY;
+      });
+    };
+
+    const onDown = (event: PointerEvent) => {
+      if (!event.isPrimary || event.button !== 0) return;
+      const b = boardRef.current;
+      const el = facingEl();
+      const held = lockedRef.current;
+      if (!b || !el || el.hidden || !held || turnRef.current) return;
+      const r = el.getBoundingClientRect();
+      if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) return;
+      // The outer edge is the turn's, while turning is on.
+      const hole = el.parentElement?.getBoundingClientRect();
+      if (hole && turnEnabledRef.current && event.pointerType !== "pen") {
+        const zone = Math.min(EDGE_MAX_PX, Math.max(EDGE_MIN_PX, hole.width * EDGE_SHARE));
+        if (event.clientX <= hole.left + zone || event.clientX >= hole.right - zone) return;
+      }
+      const frames = b.readingPageFrames();
+      const i = frames.findIndex((f) => same(f, held));
+      const facing = i >= 0 ? frames[i % 2 === 0 ? i + 1 : i - 1] : undefined;
+      if (!facing) return;
+      el.replaceChildren(...(live && same(live.page, held) ? [live.canvas] : []));
+      shows = held.minY;
+      lockedRef.current = facing;
+      b.setPageLock(facing);
+    };
+
+    refresh();
+    const unsubscribe = subscribePdfFilmCurrent(filmScope, () => requestAnimationFrame(refresh));
+    const timer = window.setInterval(refresh, 700);
+    window.addEventListener("pointerdown", onDown, true);
+    return () => {
+      unsubscribe();
+      window.clearInterval(timer);
+      window.removeEventListener("pointerdown", onDown, true);
+      facingEl()?.replaceChildren();
+    };
+  }, [boardRef, filmScope, hostSelector, lockActive, textSpread]);
 
   useEffect(() => {
     if (!turnEnabled) return;
@@ -299,42 +482,8 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
      * stroke added since, or a zoom, takes a fresh one. At most a few kept:
      * each is a screenful of pixels.
      */
-    /**
-     * What a PDF page's picture was taken from: the size its bitmap is painted
-     * at now. A picture taken while the page was still a preview goes stale the
-     * moment the sharp paint lands, and is taken again.
-     */
-    const paintSignature = (pageId: number) => {
-      if (!pagedRef.current || !(pageId >= 1)) return "";
-      const host = document.querySelector(hostSelector);
-      const canvases = host?.querySelectorAll<HTMLCanvasElement>(`[data-pdf-page="${pageId}"] canvas.lc-pdf-canvas`);
-      return canvases ? Array.from(canvases, (c) => c.width).join(",") : "";
-    };
-
-    const shot = (b: BoardHandle, scene: Scene, scale: number, cutY = Infinity, pageId = 0) => {
-      const key = [scene.x, scene.y, scene.width, scene.height, scale, b.getInkRevision(), Math.min(cutY, 1e9)]
-        .map((n) => Math.round(n * 100) / 100)
-        .join(":") + `@${paintSignature(pageId)}`;
-      const shots = shotsRef.current;
-      let taken = shots.get(key);
-      if (!taken) {
-        // Below a text page's cut is the next page's text, which the view
-        // hides; the picture has to hide it too.
-        taken = b.captureSceneFrame(scene, scale).then((canvas) => {
-          const cut = cutY - scene.y;
-          if (!canvas || !(cut < scene.height)) return canvas;
-          const ctx = canvas.getContext("2d");
-          if (!ctx) return canvas;
-          const top = Math.max(0, Math.round((cut / scene.height) * canvas.height));
-          ctx.fillStyle = paperColor();
-          ctx.fillRect(0, top, canvas.width, canvas.height - top);
-          return canvas;
-        }).catch(() => null);
-        shots.set(key, taken);
-        while (shots.size > SHOT_CACHE) shots.delete(shots.keys().next().value!);
-      }
-      return taken;
-    };
+    const shot = (b: BoardHandle, scene: Scene, scale: number, cutY = Infinity, pageId = 0) =>
+      takeShot(shotsRef.current, b, scene, scale, cutY, pagedRef.current ? pdfPaintSignature(hostSelector, pageId) : "");
 
     /**
      * The part of the page at `at` in view, in scene units: its column, and
@@ -367,6 +516,19 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         if (!view || frames.length === 0) return;
         const at = currentIndex(frames, lockedRef.current, view);
         const from = frames[at]!;
+        if (textSpreadRef.current) {
+          // This spread, and the ones either side of it, page by page.
+          const start = at - (at % 2);
+          const pageShot = spreadPageShot(b, frames);
+          if (!pageShot) return;
+          void (async () => {
+            for (const i of [start, start + 1, start + 2, start + 3, start - 2, start - 1]) {
+              if (turnRef.current) return;
+              await pageShot(i);
+            }
+          })();
+          return;
+        }
         const scene = pageScene(b, frames, at);
         if (!scene) return;
         const tl = b.sceneToClient(scene.x, scene.y);
@@ -389,6 +551,88 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (!turnRef.current) prefetch();
     }, PREFETCH_RECHECK_MS);
 
+    /** The open spread on screen: both pages, as the board shows them. */
+    const spreadRect = () => {
+      const hole = document.querySelector(hostSelector)?.querySelector<HTMLElement>(".lc-page-mask-hole");
+      const r = hole?.getBoundingClientRect();
+      return r && r.width > 16 && r.height > 8 ? r : null;
+    };
+
+    /** Take (or find) the picture of page `i` of a text spread, at the size it is shown. */
+    const spreadPageShot = (b: BoardHandle, frames: readonly PageFrame[]) => {
+      const r = spreadRect();
+      const first = frames[0] ? pageBoxScene(b, frames[0]) : null;
+      if (!r || !first) return null;
+      const scale = shotScale(r.width / 2, first.width);
+      return (i: number): Promise<HTMLCanvasElement | null> => {
+        const f = frames[i];
+        const scene = f ? pageBoxScene(b, f) : null;
+        return f && scene ? shot(b, scene, scale, f.maxY, f.pageId) : Promise.resolve(null);
+      };
+    };
+
+    /**
+     * A turn in a text spread: two pages at a time, like a book — the right
+     * page lifts over the spine onto the left, showing the next spread.
+     */
+    const planSpreadTurn = (
+      b: BoardHandle,
+      frames: readonly PageFrame[],
+      at: number,
+      direction: Direction,
+      bottom: boolean,
+    ): Turn | null => {
+      const start = at - (at % 2);
+      const toStart = direction === "next" ? start + 2 : start - 2;
+      const from = frames[start];
+      const to = frames[toStart];
+      const r = spreadRect();
+      const pageShot = spreadPageShot(b, frames);
+      if (!from || !to || !r || !pageShot) return null;
+      const rect = { left: r.left, top: r.top, width: r.width, height: r.height };
+      const canvas = document.createElement("canvas");
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+      canvas.className = "lc-page-turn";
+      Object.assign(canvas.style, {
+        left: `${rect.left}px`,
+        top: `${rect.top}px`,
+        width: `${rect.width}px`,
+        height: `${rect.height}px`,
+      });
+      const w = rect.width / 2;
+      const turn: Turn = {
+        direction,
+        layout: "book",
+        bottom,
+        from,
+        to,
+        offsetInPage: 0,
+        rect,
+        canvas,
+        images: null,
+        corner: { x: direction === "next" ? w : -w, y: bottom ? rect.height : 0 },
+        anim: null,
+        ready: Promise.resolve(false),
+        frame: 0,
+        done: false,
+      };
+      const spreadShot = (s: number) =>
+        Promise.all([pageShot(s), pageShot(s + 1)]).then(([left, right]) => composeSpread(left, right));
+      turn.ready = Promise.all([spreadShot(start), spreadShot(toStart)]).then(
+        ([here, there]) => {
+          if (turnRef.current !== turn || turn.done || !here || !there) return false;
+          turn.images = direction === "next" ? { from: here, to: there } : { from: there, to: here };
+          document.body.append(canvas);
+          draw(turn);
+          return true;
+        },
+        () => false,
+      );
+      return turn;
+    };
+
     const planTurn = (direction: Direction, bottom: boolean): Turn | null => {
       const b = board();
       if (!b) return null;
@@ -396,6 +640,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const frames = b.readingPageFrames();
       if (!view || frames.length === 0) return null;
       const at = currentIndex(frames, lockedRef.current, view);
+      if (textSpreadRef.current) return planSpreadTurn(b, frames, at, direction, bottom);
       const toIndex = direction === "next" ? at + 1 : at - 1;
       const from = frames[at];
       const to = frames[toIndex];

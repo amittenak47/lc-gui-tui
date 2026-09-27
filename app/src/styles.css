@@ -2021,10 +2021,45 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-page-mask-blank {
   position: absolute;
   left: 0;
-  right: 0;
+  width: 100%;
   top: 0;
   height: 0;
   background: var(--bg);
+}
+/* A text spread: the page facing the held one, as a picture of itself. */
+.lc-page-mask-facing {
+  position: absolute;
+  top: 0;
+  width: 50%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+}
+.lc-page-mask-facing[hidden],
+.lc-page-mask-spine[hidden] {
+  display: none;
+}
+.lc-page-mask-facing > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* …and the fold between the two. */
+.lc-page-mask-spine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 36px;
+  transform: translateX(-50%);
+  z-index: 1;
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, #000 16%, transparent) 50%,
+    transparent
+  );
+  pointer-events: none;
 }
 
 /* Pages reading: the page's turning edges. Nothing shows at rest; under the

@@ -1281,7 +1281,11 @@ export interface BoardProps {
    * Two-up / spread: each scanned sheet becomes two stacked reading slots.
    * Shown for any PDF, including one page. Off by default.
    */
-  pageSpread?: { on: boolean; onToggle: () => void; busy?: boolean } | null;
+  /**
+   * The spread toggle. A PDF splits its two-up sheets; text pages in Pages
+   * reading are shown two side by side.
+   */
+  pageSpread?: { on: boolean; onToggle: () => void; busy?: boolean; kind?: "pdf" | "text" } | null;
 }
 
 function roundPx(value: number): number {
@@ -2116,8 +2120,24 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const pageMaskRef = useRef<HTMLDivElement | null>(null);
   /** The zoom the page fit last put the camera at. */
   const pageFitZoomRef = useRef(1);
+  /**
+   * Pages reading, text pages two to a spread: the held page is live on its
+   * side, and the page facing it is a picture of itself on the other.
+   */
+  const pageSpreadRef = useRef(false);
+  /** Which half of the spread the held page is. */
+  const pageSideRef = useRef<"left" | "right">("left");
+  /** The page's column — in a spread, both pages', the held one on its own side. */
+  const spreadColumn = (bounds: SceneBounds): { minX: number; maxX: number } => {
+    if (!pageSpreadRef.current || pageFitRef.current == null) return { minX: bounds.minX, maxX: bounds.maxX };
+    const w = bounds.maxX - bounds.minX;
+    const minX = pageSideRef.current === "right" ? bounds.minX - w : bounds.minX;
+    return { minX, maxX: minX + 2 * w };
+  };
   const applyPageFitRef = useRef<() => void>(() => {});
-  const lockPageSpanRef = useRef<(span: { minY: number; maxY: number } | null) => void>(() => {});
+  const lockPageSpanRef = useRef<
+    (span: { minY: number; maxY: number; pageId?: number } | null, side?: "left" | "right") => void
+  >(() => {});
   const publishPdfFilmFromScrollRef = useRef<
     (scrollX: number, scrollY: number, zoom: number, height: number) => void
   >(() => {});
@@ -2689,15 +2709,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     if (mask.hidden) mask.hidden = false;
     // The whole page box is the sheet; a text page cut short is blank paper
-    // from its cut down, not the desk.
-    hole.style.transform = `translate(${(bounds.minX + scrollX) * zoom}px, ${(box.minY + scrollY) * zoom}px)`;
-    hole.style.width = `${Math.max(0, (bounds.maxX - bounds.minX) * zoom)}px`;
+    // from its cut down, not the desk. In a spread the sheet is both pages.
+    const column = spreadColumn(bounds);
+    hole.style.transform = `translate(${(column.minX + scrollX) * zoom}px, ${(box.minY + scrollY) * zoom}px)`;
+    hole.style.width = `${Math.max(0, (column.maxX - column.minX) * zoom)}px`;
     hole.style.height = `${Math.max(0, (box.maxY - box.minY) * zoom)}px`;
+    const spread = pageSpreadRef.current && column.maxX - column.minX > bounds.maxX - bounds.minX + 0.5;
+    const liveOnRight = spread && pageSideRef.current === "right";
     if (blank) {
       const cut = Math.max(0, (shown.maxY - box.minY) * zoom);
       blank.style.top = `${cut}px`;
       blank.style.height = `${Math.max(0, (box.maxY - shown.maxY) * zoom)}px`;
+      blank.style.left = liveOnRight ? "50%" : "0";
+      blank.style.width = spread ? "50%" : "100%";
     }
+    const facing = hole.children[1] as HTMLElement | undefined;
+    const spine = hole.children[2] as HTMLElement | undefined;
+    if (facing) {
+      if (facing.hidden === spread) facing.hidden = !spread;
+      facing.style.left = liveOnRight ? "0" : "50%";
+    }
+    if (spine && spine.hidden === spread) spine.hidden = !spread;
   };
 
   /**
@@ -3233,7 +3265,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const lockedBounds = (bounds: SceneBounds): SceneBounds => {
     const lock = pageLockRef.current;
     if (!lock) return bounds;
-    if (pageFitRef.current != null) return { ...bounds, minY: lock.minY, maxY: lock.maxY };
+    if (pageFitRef.current != null) return { ...bounds, ...spreadColumn(bounds), minY: lock.minY, maxY: lock.maxY };
     return { ...bounds, minY: Math.max(bounds.minY, lock.minY), maxY: Math.min(bounds.maxY, lock.maxY) };
   };
 
@@ -9265,7 +9297,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     );
     const availW = viewWidth - inset.left - inset.right;
     const availH = viewHeight - inset.top - inset.bottom;
-    const w = bounds.maxX - bounds.minX;
+    const column = spreadColumn(bounds);
+    const w = column.maxX - column.minX;
     const h = lock.maxY - lock.minY;
     if (availW < 8 || availH < 8 || !(w > 0) || !(h > 0)) return;
     // Not the gesture ceiling: a reading column is 300–760 units, so a page
@@ -9282,7 +9315,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const byPixels = Math.sqrt(PAGE_FIT_PAINT_PIXELS / Math.max(1, w * h));
     const paint = Math.min(PAGE_FIT_PAINT_MAX, byPixels, Math.ceil(zoom * dpr * 4) / 4);
     setPdfRestScale(filmScope, Math.max(2, Math.floor(paint * 4) / 4));
-    const scrollX = (inset.left + (availW - w * zoom) / 2) / zoom - bounds.minX;
+    const scrollX = (inset.left + (availW - w * zoom) / 2) / zoom - column.minX;
     const scrollY = (inset.top + (availH - h * zoom) / 2) / zoom - lock.minY;
     const prev = liveCameraRef.current;
     const same = committedPanCameraRef.current;
@@ -9330,7 +9363,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   applyPageFitRef.current = applyPageFit;
 
   /** Pages reading: hold the camera to this page (null frees it), fitted when a fit is on. */
-  const lockPageSpan = (span: { minY: number; maxY: number } | null) => {
+  const lockPageSpan = (
+    span: { minY: number; maxY: number; pageId?: number } | null,
+    side?: "left" | "right",
+  ) => {
     if (!span) {
       pageLockRef.current = null;
       pageShownRef.current = null;
@@ -9344,6 +9380,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * short, the rest of the box is blank; past a screenful, a page only
      * ever runs on with the space before the next block.
      */
+    // A spread opens on an odd page: odd pages sit left, even ones right.
+    pageSideRef.current = side ?? (span.pageId != null && span.pageId % 2 === 0 ? "right" : "left");
     const textH = peekPdfReadingFrames(filmScope).length === 0 ? (textPagesRef.current?.pageH ?? 0) : 0;
     if (textH > 0) {
       pageLockRef.current = { minY: span.minY, maxY: span.minY + textH };
@@ -9917,7 +9955,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const lock = pageLockRef.current;
         return bounds && lock ? { minX: bounds.minX, maxX: bounds.maxX, minY: lock.minY, maxY: lock.maxY } : null;
       },
-      setPageLock: (span) => lockPageSpan(span),
+      setPageLock: (span, side) => lockPageSpan(span, side),
+      setPageSpread: (on) => {
+        if (pageSpreadRef.current === on) return;
+        pageSpreadRef.current = on;
+        if (pageLockRef.current && pageFitRef.current != null) {
+          applyPageFit();
+          return;
+        }
+        const cam = committedPanCameraRef.current;
+        placePageMask(cam.scrollX, cam.scrollY, cam.zoom);
+      },
       setPageFit: (fraction) => {
         const next = fraction != null && fraction > 0 ? Math.min(1, fraction) : null;
         const was = pageFitRef.current;
@@ -10853,9 +10901,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     aria-pressed={pageSpread.on}
                     aria-busy={pageSpread.busy || undefined}
                     aria-label={
-                      pageSpread.on
-                        ? "Show whole sheet"
-                        : "Split two-up sheets into stacked pages"
+                      pageSpread.kind === "text"
+                        ? pageSpread.on
+                          ? "Show one page at a time"
+                          : "Show two pages side by side"
+                        : pageSpread.on
+                          ? "Show whole sheet"
+                          : "Split two-up sheets into stacked pages"
                     }
                     onClick={pageSpread.onToggle}
                   >
@@ -11089,6 +11141,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         <div ref={pageMaskRef} className="lc-page-mask" aria-hidden hidden>
           <div className="lc-page-mask-hole">
             <div className="lc-page-mask-blank" />
+            <div className="lc-page-mask-facing" hidden />
+            <div className="lc-page-mask-spine" hidden />
           </div>
         </div>
       )}

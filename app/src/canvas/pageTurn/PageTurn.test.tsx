@@ -20,6 +20,7 @@ let pageBox: { minX: number; maxX: number; minY: number; maxY: number } | null =
 const board = {
   readingPageBox: vi.fn(() => pageBox),
   setPageFit: vi.fn(),
+  setPageSpread: vi.fn(),
   getViewportBounds: vi.fn(() => view),
   readingPageFrames: vi.fn(() => FRAMES),
   setPageLock: vi.fn(),
@@ -51,6 +52,10 @@ beforeEach(() => {
   view = { x: 0, y: 620, width: 400, height: 600, zoom: 1 };
   pageBox = null;
   for (const fn of Object.values(board)) fn.mockClear();
+  // A test that fails part-way must not leave its board behind for the next.
+  board.readingPageFrames.mockImplementation(() => FRAMES);
+  board.jumpToPageFrame.mockImplementation(() => true);
+  board.captureSceneFrame.mockImplementation(async () => document.createElement("canvas"));
   host = document.createElement("div");
   host.dataset.lcTab = "t1";
   host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 600, right: 400, bottom: 600, x: 0, y: 0, toJSON() {} });
@@ -68,7 +73,7 @@ function mount(turnEnabled = true, fit: number | null = null, paged = true) {
   const ref = { current: board as unknown as BoardHandle };
   act(() =>
     root.render(
-      <PageTurn boardRef={ref} filmScope="t1" hostSelector='[data-lc-tab="t1"]' lockActive turnEnabled={turnEnabled} spread paged={paged} fit={fit} />,
+      <PageTurn boardRef={ref} filmScope="t1" hostSelector='[data-lc-tab="t1"]' lockActive turnEnabled={turnEnabled} spread={paged} paged={paged} fit={fit} />,
     ),
   );
 }
@@ -259,4 +264,39 @@ it("lines up another turn when a key is pressed during one", async () => {
   const landed = (board.jumpToPageFrame.mock.calls as unknown as [{ pageId: number }][]).map((call) => call[0].pageId);
   board.jumpToPageFrame.mockImplementation(() => true);
   expect(landed.slice(0, 2)).toEqual([2, 1]);
+});
+
+it("shows text pages two to a spread, and turns them two at a time", async () => {
+  // Four text pages; the spread (1, 2) is open, drawn in the mask's hole.
+  const textFrames = [
+    { pageId: 1, minY: 0, maxY: 600 },
+    { pageId: 2, minY: 600, maxY: 1200 },
+    { pageId: 3, minY: 1200, maxY: 1800 },
+    { pageId: 4, minY: 1800, maxY: 2400 },
+  ];
+  board.readingPageFrames.mockReturnValue(textFrames);
+  view = { x: 0, y: 0, width: 400, height: 600, zoom: 1 };
+  pageBox = { minX: 0, maxX: 200, minY: 0, maxY: 600 };
+  const hole = document.createElement("div");
+  hole.className = "lc-page-mask-hole";
+  hole.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 600, right: 400, bottom: 600, x: 0, y: 0, toJSON() {} });
+  const mask = document.createElement("div");
+  mask.className = "lc-page-mask";
+  mask.append(hole);
+  const ref = { current: board as unknown as BoardHandle };
+  act(() =>
+    root.render(
+      <PageTurn boardRef={ref} filmScope="t1" hostSelector='[data-lc-tab="t1"]' lockActive turnEnabled spread paged={false} fit={1} />,
+    ),
+  );
+  // After the first render: React empties its container when it mounts.
+  host.append(mask);
+  expect(board.setPageSpread).toHaveBeenLastCalledWith(true);
+  act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+  });
+  for (let i = 0; i < 6; i += 1) await settle();
+  // Past the facing page: the next spread opens on page 3.
+  expect(board.jumpToPageFrame).toHaveBeenCalledWith({ ...textFrames[2], minY: textFrames[2].minY });
+  board.readingPageFrames.mockReturnValue(FRAMES);
 });

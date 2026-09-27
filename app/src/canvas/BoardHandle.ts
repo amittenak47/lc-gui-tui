@@ -292,8 +292,16 @@ export interface BoardHandle {
    * and its span — page-high for a text page cut short. Null when unlocked.
    */
   readingPageBox(): { minX: number; maxX: number; minY: number; maxY: number } | null;
-  /** Hold the camera inside this scene span; null lets it scroll freely again. */
-  setPageLock(span: { minY: number; maxY: number } | null): void;
+  /**
+   * Hold the camera inside this scene span; null lets it scroll freely again.
+   * In a spread, `side` is the half of it the page sits on.
+   */
+  setPageLock(span: { minY: number; maxY: number } | null, side?: "left" | "right"): void;
+  /**
+   * Text pages two to a spread (Pages reading, page fitted): the held page is
+   * live on its side and `.lc-page-mask-facing` holds the other.
+   */
+  setPageSpread(on: boolean): void;
   /**
    * Show the whole locked page, centred, at this share of the view on its
    * limiting side, and hide everything around it. Null goes back to the

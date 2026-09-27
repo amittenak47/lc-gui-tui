@@ -27,7 +27,7 @@ import { fetchDocHubHint, type DocHubHint } from "./util/hubHint";
 import type { HubSyncWalkHost, HubWalkReport } from "./components/HubSyncControl";
 import { HubConflictSplit } from "./components/HubConflictSplit";
 import { PageTurn } from "./canvas/pageTurn/PageTurn";
-import { loadPageFit, loadReadingMode, pageFitShare, READING_MODE_EVENT, type ReadingMode } from "./util/readingModePref";
+import { loadPageFit, loadReadingMode, loadTextSpread, pageFitShare, READING_MODE_EVENT, saveTextSpread, type ReadingMode } from "./util/readingModePref";
 import {
   loadWebRenderMode,
   otherWebRenderMode,
@@ -1915,6 +1915,14 @@ export const Workspace = memo(function Workspace({
   /** Scroll or a page at a time — Settings › UI › Reading. */
   const [readingMode, setReadingMode] = useState<ReadingMode>(loadReadingMode);
   const [pageFit, setPageFit] = useState(loadPageFit);
+  /** Text pages two to a spread — Pages reading only. */
+  const [textSpread, setTextSpread] = useState(loadTextSpread);
+  const toggleTextSpread = useCallback(() => {
+    setTextSpread((on) => {
+      saveTextSpread(!on);
+      return !on;
+    });
+  }, []);
   useEffect(() => {
     const onChange = () => {
       setReadingMode(loadReadingMode());
@@ -11096,7 +11104,9 @@ export const Workspace = memo(function Workspace({
             pageSpread={
               annotateSource?.docType === "pdf"
                 ? { on: pdfSpread, onToggle: togglePdfSpread, busy: pdfLayoutBusy }
-                : null
+                : readingMode === "pages" && annotateSource && annotateSource.docType !== "web"
+                  ? { on: textSpread, onToggle: toggleTextSpread, busy: false, kind: "text" as const }
+                  : null
             }
           />
           ) : null}
@@ -11316,7 +11326,7 @@ export const Workspace = memo(function Workspace({
           hostSelector={`[data-lc-tab="${cssEscape(tab.id)}"]`}
           lockActive={readingMode === "pages" && showing && !hubConflictAsk}
           turnEnabled={readingMode === "pages" && showing && active && !annotateCode && !hubConflictAsk}
-          spread={pdfSpread}
+          spread={annotateSource.docType === "pdf" ? pdfSpread : textSpread}
           paged={annotateSource.docType === "pdf"}
           fit={pageFitShare(pageFit)}
         />

@@ -78,3 +78,26 @@ export function savePageFit(fit: PageFitPref): void {
 export function pageFitShare(fit: PageFitPref): number {
   return fit === "margin" ? 0.9 : 1;
 }
+
+/**
+ * Pages reading for text, code, markdown and EPUB: one page at a time, or two
+ * side by side like an open book. A reading preference, not a layout — the
+ * document is the same either way — so one setting for all of them.
+ */
+const TEXT_SPREAD_KEY = "whiteboard.textSpread.v1";
+
+export function loadTextSpread(): boolean {
+  try {
+    return localStorage.getItem(TEXT_SPREAD_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveTextSpread(on: boolean): void {
+  try {
+    localStorage.setItem(TEXT_SPREAD_KEY, on ? "1" : "0");
+  } catch {
+    /* storage unavailable — single pages next launch */
+  }
+}
