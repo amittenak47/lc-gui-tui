@@ -10855,8 +10855,15 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   color: var(--ok);
 }
 
+/*
+ * The thread's expand lines up with the chat box's, straight below it: same
+ * inset from the panel's edge, and the same bare, borderless look.
+ */
 .lc-agent-pane-expand-panel > .lc-agent-pane-expand:not(.lc-agent-panel-toggle) {
   margin-left: auto;
+  margin-right: 4px;
+  border: 0;
+  background: transparent;
 }
 
 .lc-agent-messages-host::before {
@@ -12329,11 +12336,50 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   align-items: center;
 }
 
-.lc-agent-composer-mid .lc-agent-inline-option { display: inline-flex; align-items: center; gap: 3px; }
-.lc-agent-composer-mid .lc-agent-inline-option svg { width: 16px; height: 16px; }
-.lc-agent-composer-mid .lc-agent-reasoning { font-variant-numeric: tabular-nums; }
-.lc-agent-reasoning span { display: inline-block; width: 26px; text-align: left; }
-.lc-agent-composer-mid .lc-agent-reasoning .lc-agent-reasoning-word { width: auto; }
+/*
+ * One box for every option, so icons and words share a centre line.
+ *
+ * Icon options (C, Footnotes, Ink, Capture) are square; word options (Action,
+ * Reasoning, the command chip) are as wide as their words. Reasoning used to
+ * carry `.lc-agent-reasoning`, the Thinking block's class, and with it that
+ * block's bottom margin, padding and rule — which is what lifted it off the
+ * line Ask / Draw sits on.
+ */
+.lc-agent-composer-mid .lc-agent-inline-option,
+.lc-agent-composer-mid button.lc-agent-annotate,
+.lc-agent-composer-mid button.lc-agent-catalog {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 22px;
+  min-height: 22px;
+  line-height: 1;
+  vertical-align: middle;
+}
+.lc-agent-composer-mid button.lc-agent-annotate,
+.lc-agent-composer-mid button.lc-agent-catalog,
+.lc-agent-composer-mid .lc-agent-inline-option:has(> svg) {
+  width: 22px;
+  min-width: 22px;
+  padding: 0;
+}
+.lc-agent-composer-mid button svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+.lc-agent-composer-mid .lc-agent-reasoning-pick { font-variant-numeric: tabular-nums; }
+.lc-agent-composer-mid .lc-agent-reasoning-pick .lc-agent-reasoning-level { display: inline-block; width: 26px; text-align: left; }
+
+/* Faint rule between options. */
+.lc-agent-option-sep {
+  flex: 0 0 1px;
+  align-self: center;
+  width: 1px;
+  height: 12px;
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+}
 .lc-agent-composer-mid .lc-agent-inline-option.lc-flag-active {
   color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
@@ -15687,7 +15733,7 @@ button.lc-row-selected:hover:not(:disabled) {
   }
 
   /* Keep the options on one line: Reasoning shows just its level. */
-  .lc-agent-composer-mid .lc-agent-reasoning .lc-agent-reasoning-word {
+  .lc-agent-composer-mid .lc-agent-reasoning-pick .lc-agent-reasoning-word {
     display: none;
   }
 
@@ -21178,9 +21224,11 @@ button.lc-row-selected:hover:not(:disabled) {
 [data-ui-handedness="left"] .lc-settings-head-save { margin-left: 0; margin-right: auto; }
 [data-ui-handedness="left"] .lc-agent-pane-expand-panel { flex-direction: row-reverse; }
 [data-ui-handedness="left"] .lc-agent-pane-expand-panel > .lc-agent-pane-expand:not(.lc-agent-panel-toggle) {
-  margin-left: 0;
+  margin-left: 4px;
   margin-right: auto;
 }
+[data-ui-handedness="left"] .lc-agent-composer-expand { right: auto; left: 4px; }
+[data-ui-handedness="left"] .lc-agent-composer-field textarea { padding-right: 8px; padding-left: 30px; }
 [data-handedness="left"] .lc-toolbar:not(.is-column) .lc-toolbar-row { flex-direction: row-reverse; }
 [data-handedness="left"] .lc-preset-sheet-head { flex-direction: row-reverse; }
 [data-handedness="left"] .lc-preset-sheet-actions { margin-left: 0; margin-right: auto; flex-direction: row-reverse; }

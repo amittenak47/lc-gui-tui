@@ -284,6 +284,14 @@ function markMenuPosition(rect: Pick<DOMRect, "left" | "top">): { left: number; 
   };
 }
 
+/** The composer's options with a faint rule between each pair that is shown. */
+function withSeparators(items: ReactNode[]): ReactNode[] {
+  const shown = items.filter((item) => item !== false && item != null);
+  return shown.flatMap((item, index) =>
+    index === 0 ? [item] : [<span key={`sep-${index}`} className="lc-agent-option-sep" aria-hidden="true" />, item],
+  );
+}
+
 function PaneExpandButton({
   pane,
   focus,
@@ -2685,8 +2693,9 @@ export function AgentSidePanel({
             </div>
             )}
             <div className="lc-agent-composer-mid">
-              {onManageArtifacts && (
-                <Tip tip="Whiteboards and files" placement="top">
+              {withSeparators([
+              onManageArtifacts && (
+                <Tip key="catalog" tip="Whiteboards and files" placement="top">
                   <button
                     type="button"
                     className="lc-flag lc-agent-catalog"
@@ -2696,8 +2705,8 @@ export function AgentSidePanel({
                     C
                   </button>
                 </Tip>
-              )}
-              {allowAnnotations && <span className="lc-agent-annotate-wrap">
+              ),
+              allowAnnotations && <span key="footnotes" className="lc-agent-annotate-wrap">
                 <Tip tip="Footnotes" placement="top">
                   <button ref={annotateBtnRef} type="button"
                     className={`lc-flag lc-agent-annotate${annotations || (markMenuOpen && !markMenuClosing) ? " lc-flag-active" : ""}`}
@@ -2709,13 +2718,13 @@ export function AgentSidePanel({
                     </svg>
                   </button>
                 </Tip>
-              </span>}
-              <Tip tip="Include handwriting" placement="top">
+              </span>,
+              <Tip key="ink" tip="Include handwriting" placement="top">
                 <button type="button" aria-label="Ink" aria-pressed={handwriting}
                   className={`lc-flag lc-agent-inline-option${handwriting ? " lc-flag-active" : ""}`}
                   disabled={annotateUnavailable} onClick={() => setHandwriting(value => !value)}><InkScribbleIcon /></button>
-              </Tip>
-              <Tip tip="Capture this view" placement="top">
+              </Tip>,
+              <Tip key="capture" tip="Capture this view" placement="top">
                 <button type="button" aria-label="Capture" aria-pressed={capture}
                   className={`lc-flag lc-agent-inline-option${capture ? " lc-flag-active" : ""}`}
                   onClick={() => setCapture(value => !value)}>
@@ -2723,26 +2732,27 @@ export function AgentSidePanel({
                     <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" />
                   </svg>
                 </button>
-              </Tip>
-              <button type="button" aria-label={`Action: ${boardLabel}`}
+              </Tip>,
+              <button key="action" type="button" aria-label={`Action: ${boardLabel}`}
                 className={`lc-flag lc-agent-inline-option${boardLabel !== "Ask" ? " lc-flag-active" : ""}`}
                 title={padSurface ? "Ask or Draw" : "Ask, Draw, Review or Lazy"}
-                disabled={askOnly && !padSurface} onClick={cycleBoard}>{boardLabel}</button>
-              <button type="button" aria-label={`Reasoning: ${reasoning}`} title="Reasoning: Off, Low, High"
-                className={`lc-flag lc-agent-inline-option lc-agent-reasoning${reasoning !== "off" ? " lc-flag-active" : ""}`}
+                disabled={askOnly && !padSurface} onClick={cycleBoard}>{boardLabel}</button>,
+              <button key="reasoning" type="button" aria-label={`Reasoning: ${reasoning}`} title="Reasoning: Off, Low, High"
+                className={`lc-flag lc-agent-inline-option lc-agent-reasoning-pick${reasoning !== "off" ? " lc-flag-active" : ""}`}
                 onClick={() => setReasoning(current => {
                   const next = current === "off" ? "low" : current === "low" ? "high" : "off";
                   saveAgentReasoningLevel(next); return next;
-                })}><span className="lc-agent-reasoning-word">Reasoning</span> <span className="lc-agent-reasoning-level">{reasoning[0].toUpperCase() + reasoning.slice(1)}</span></button>
-              {activeCommand && (
-                <Tip tip={`${activeCommand.hint}. Tap to remove.`} placement="top">
+                })}><span className="lc-agent-reasoning-word">Reasoning</span> <span className="lc-agent-reasoning-level">{reasoning[0].toUpperCase() + reasoning.slice(1)}</span></button>,
+              activeCommand && (
+                <Tip key="command" tip={`${activeCommand.hint}. Tap to remove.`} placement="top">
                   <button type="button" aria-label={`Command: /${activeCommand.name}`}
                     className="lc-flag lc-agent-inline-option lc-flag-active lc-agent-command-chip"
                     onClick={() => setAskPreset(null)}>
                     /{activeCommand.name}<span aria-hidden="true">×</span>
                   </button>
                 </Tip>
-              )}
+              ),
+              ])}
             </div>
             <div className="lc-agent-composer-actions">
               <Tip
