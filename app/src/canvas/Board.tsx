@@ -7231,6 +7231,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const keepY = viewportFitKeepYRef.current;
       viewportFitKeepYRef.current = false;
       applyLiveBoxFit(false, true, keepY);
+      /*
+       * Whatever the fit decided, the ink is painted for the camera on screen.
+       *
+       * A resize keeps the old ink bitmap stretched into the new canvas so it
+       * never flashes blank, and relies on a later present to replace it. On
+       * the desktop a maximize could end with the fit's camera applied and that
+       * present skipped, leaving the writing stretched with the window while
+       * the pages moved. These are no-ops when the painted view already
+       * matches.
+       */
+      window.requestAnimationFrame(() => void rasterInkRef.current?.syncCamera(true));
+      window.setTimeout(() => void rasterInkRef.current?.syncCamera(true), 400);
     }, 120);
   }, [applyLiveBoxFit]);
 
