@@ -1480,6 +1480,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   };
 
   const [contentSceneWidth, setContentSceneWidth] = useState(1);
+  const contentSceneWidthRef = useRef(contentSceneWidth);
+  contentSceneWidthRef.current = contentSceneWidth;
   const lastContentSlotRef = useRef<ContentSlotPlace | null>(null);
   const placeContentSlotAtRef = useRef<
     (scrollX: number, scrollY: number, zoom: number) => ContentSlotPlace | null
@@ -2658,6 +2660,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     );
     if (!next) return null;
     lastContentSlotRef.current = next;
+    /*
+     * The slot's width has to follow the frame here, not only in
+     * `reportContentSlot`. That one sets the width when the placement it makes
+     * differs from the last one — but a page jump or a scroll sample that
+     * placed the slot first has already recorded the new frame, so the report
+     * saw no change and the slot kept its first width for the whole session.
+     * A PDF is centred in the slot, so a 760 slot on a 640 frame put every
+     * page 60 units right of where the last session drew it, and the writing
+     * with it.
+     */
+    if (Math.abs(contentSceneWidthRef.current - next.sceneWidth) >= 0.01) {
+      contentSceneWidthRef.current = next.sceneWidth;
+      setContentSceneWidth(next.sceneWidth);
+    }
     const node = contentSlotNodeRef.current;
     if (node) {
       node.style.transform = contentSlotCssTransform(next);

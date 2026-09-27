@@ -242,8 +242,12 @@ async function drawDomSlot(
 
   const css = themeScopedCss(collectStylesheetText()) + "\n" + (await embeddedFontCss());
   const wrapper = document.createElement("div");
-  wrapper.style.width = `${pageBounds.maxX - pageBounds.minX}px`;
-  wrapper.style.height = `${pageBounds.maxY - pageBounds.minY}px`;
+  // At least the slot's own layout box: the marks layer runs wider than the
+  // page, and anything past the frame would be clipped off the picture.
+  const boxW = Math.max(pageBounds.maxX - pageBounds.minX, slot.offsetWidth);
+  const boxH = Math.max(pageBounds.maxY - pageBounds.minY, slot.offsetHeight);
+  wrapper.style.width = `${boxW}px`;
+  wrapper.style.height = `${boxH}px`;
   wrapper.style.position = "relative";
   wrapper.style.overflow = "hidden";
   wrapper.style.background = "transparent";
@@ -255,8 +259,8 @@ async function drawDomSlot(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${pixelW}" height="${pixelH}" ` +
     `viewBox="${localX} ${localY} ${sceneW} ${sceneH}">` +
     `<style type="text/css"><![CDATA[${css}]]></style>` +
-    `<foreignObject x="0" y="0" width="${pageBounds.maxX - pageBounds.minX}" ` +
-    `height="${pageBounds.maxY - pageBounds.minY}">${new XMLSerializer().serializeToString(shell.outer)}</foreignObject></svg>`;
+    `<foreignObject x="0" y="0" width="${boxW}" ` +
+    `height="${boxH}">${new XMLSerializer().serializeToString(shell.outer)}</foreignObject></svg>`;
 
   // Chromium/WebView marks a blob-backed SVG containing foreignObject as
   // origin-unclean even when every node is local. Drawing it succeeds, but the
@@ -286,8 +290,10 @@ function drawPdfCanvases(
   if (canvases.length === 0) return false;
 
   const slotRect = slot.getBoundingClientRect();
-  const pageW = Math.max(1, pageBounds.maxX - pageBounds.minX);
-  const zoom = slotRect.width > 0 ? slotRect.width / pageW : 1;
+  // The slot is laid out in scene units and only scaled, so its layout width
+  // against its client width is the zoom — whatever width the frame has.
+  const layoutW = slot.offsetWidth > 0 ? slot.offsetWidth : Math.max(1, pageBounds.maxX - pageBounds.minX);
+  const zoom = slotRect.width > 0 ? slotRect.width / layoutW : 1;
 
   let drew = false;
   for (const canvas of Array.from(canvases)) {
