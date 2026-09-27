@@ -30,7 +30,7 @@ import {
   pageIdForOp,
   type PageFrame,
 } from "./inkPageIndex";
-import { isHostBoundOp, type InkEraseOp, type InkOp } from "./rasterInk";
+import { isHostBoundOp, type InkEraseOp, type InkOp, type SceneBounds } from "./rasterInk";
 import { opsAfterPartialErase, opsAfterStrokeErase, opsWithErasesBaked } from "./strokeEraser";
 
 /** Recently-evicted encoded pages kept in RAM so a short jump back is free. */
@@ -188,6 +188,25 @@ export class InkPageBook {
     }
     out.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
     return out;
+  }
+
+  /** Read a capture's page shards without hydrating or evicting the reading window. */
+  opsInBounds(bounds: SceneBounds): InkOp[] {
+    if (this.usedFallback) return this.assembleOps();
+    const ids = new Set([SPANNING_PAGE_ID]);
+    for (const frame of this.frames) {
+      if (frame.maxY >= bounds.minY && frame.minY <= bounds.maxY) ids.add(frame.pageId);
+    }
+    const out: InkOp[] = [];
+    for (const id of ids) {
+      const hot = this.hot.get(id);
+      if (hot) out.push(...hot);
+      else {
+        const encoded = this.cold.get(id);
+        if (encoded) out.push(...decodeInkOps(encoded));
+      }
+    }
+    return out.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
   }
 
   assembleEncoded(): EncodedInk {

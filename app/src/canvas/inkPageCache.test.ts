@@ -32,6 +32,23 @@ function stroke(y: number, extra: Partial<InkDrawOp> = {}): InkDrawOp {
 }
 
 describe("InkPageBook", () => {
+  it("captures cold page ink without decoding unrelated pages or moving the reading window", () => {
+    const book = new InkPageBook();
+    const layout = frames(20);
+    book.replaceAll(layout.map(f => stroke(f.minY + 40)), { frames: layout });
+    book.setVisiblePage(1);
+    const hot = [...book.hot.keys()];
+    const revision = book.revision();
+    // An unrelated cold page must never be decoded by a page-10 capture.
+    book.cold.set(20, { v: 2, get ops(): never { throw new Error("Decoded page 20"); } });
+    const target = layout[9];
+    const captured = book.opsInBounds({ minX: 0, maxX: 100, minY: target.minY, maxY: target.maxY });
+    expect(captured).toHaveLength(1);
+    expect((captured[0] as InkDrawOp).points[0].y).toBe(target.minY + 40);
+    expect([...book.hot.keys()]).toEqual(hot);
+    expect(book.visiblePage).toBe(1);
+    expect(book.revision()).toBe(revision);
+  });
   it("omits untouched viewport slots but retains erased stored pages", () => {
     const book = new InkPageBook();
     book.setFrames(frames(8));

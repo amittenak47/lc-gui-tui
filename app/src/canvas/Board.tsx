@@ -9989,7 +9989,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       captureSceneFrame: async (frame, scale) => {
         const api = apiRef.current;
         if (!api || frame.width < 1 || frame.height < 1) return null;
-        return renderSceneFrameCanvas(api, rasterInkRef.current?.getOps() ?? [], frame, scale, pageExportLayers(), true);
+        const ops = rasterInkRef.current?.getOpsInBounds({
+          minX: frame.x, minY: frame.y, maxX: frame.x + frame.width, maxY: frame.y + frame.height,
+        }) ?? [];
+        return renderSceneFrameCanvas(api, ops, frame, scale, pageExportLayers(), true);
       },
       aimPdfPage: (pageId: number, opts?: { hold?: boolean }) => {
         if (!(pageId >= 1)) {

@@ -144,6 +144,7 @@ export interface RasterInkHandle {
   /** Tool changes stop pan bookkeeping without pretending to be a camera settle. */
   cancelCameraMotion(): void;
   getOps(): InkOp[];
+  getOpsInBounds(bounds: SceneBounds): InkOp[];
   setOps(ops: readonly InkOp[], opts?: { paint?: boolean }): void;
   getOpCount(): number;
   getRevision(): number;
@@ -1311,6 +1312,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         },
         getOps() {
           return bookRef.current.assembleOps();
+        },
+        getOpsInBounds(bounds) {
+          return bookRef.current.opsInBounds(bounds);
         },
         setOps(ops, opts) {
           replayGenRef.current += 1;

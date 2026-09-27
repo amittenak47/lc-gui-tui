@@ -65,8 +65,27 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  vi.useRealTimers();
   document.body.textContent = "";
   vi.unstubAllGlobals();
+});
+
+it("stops a pending page prefetch when focus leaves the pane", async () => {
+  vi.useFakeTimers();
+  let finish!: (canvas: HTMLCanvasElement) => void;
+  board.captureSceneFrame.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const ref = { current: board as unknown as BoardHandle };
+  const render = (enabled: boolean) => act(() => root.render(
+    <PageTurn boardRef={ref} filmScope="t1" hostSelector='[data-lc-tab="t1"]'
+      lockActive turnEnabled={enabled} spread={false} paged fit={null} />));
+  render(true);
+  await act(async () => vi.advanceTimersByTimeAsync(2200));
+  expect(board.captureSceneFrame).toHaveBeenCalledTimes(1);
+  // Several rechecks must join this job, not start another neighbour chain.
+  await act(async () => vi.advanceTimersByTimeAsync(4500));
+  render(false);
+  await act(async () => { finish(document.createElement("canvas")); await Promise.resolve(); });
+  expect(board.captureSceneFrame).toHaveBeenCalledTimes(1);
 });
 
 function mount(turnEnabled = true, fit: number | null = null, paged = true) {

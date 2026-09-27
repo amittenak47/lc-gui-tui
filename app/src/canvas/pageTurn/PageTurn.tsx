@@ -24,6 +24,7 @@ import { peekPdfFilmCurrent, subscribePdfFilmCurrent } from "../../modes/pdfFilm
 import { isSubMarkDragLive, selectionOwnsGesture } from "../docSelectionGesture";
 import { cornerForDrag, turnCommits, type Point } from "./curl";
 import { paintTurn, type TurnLayout } from "./paintTurn";
+import { boardResizeDeferred } from "../../util/splitResize";
 
 /** Sideways travel before a drag is taken as a page turn, in CSS pixels. */
 const TURN_SLOP_PX = 14;
@@ -281,6 +282,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
   pagedRef.current = paged;
   /** Pictures of pages taken ahead of a turn, keyed by what they show. */
   const shotsRef = useRef(new Map<string, Promise<HTMLCanvasElement | null>>());
+  useEffect(() => () => shotsRef.current.clear(), []);
 
   /* Hold the camera on the page it is on, and follow jumps made elsewhere. */
   useEffect(() => {
@@ -395,8 +397,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     let lastRevision = -1;
     let revisionAt = 0;
     let shows: number | null = null;
+    let disposed = false;
+    let refreshing = false;
+    let refreshFrame = 0;
 
     const refresh = () => {
+      if (disposed || refreshing || boardResizeDeferred()) return;
       const b = boardRef.current;
       const el = facingEl();
       const held = lockedRef.current;
@@ -417,21 +423,24 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const heldScene = pageBoxScene(b, held);
       if (!hole || !heldScene) return;
       const scale = shotScale(hole.width / 2, heldScene.width);
-      void takeShot(shotsRef.current, b, heldScene, scale, held.maxY, "").then((canvas) => {
-        if (canvas && lockedRef.current === held) live = { page: held, canvas };
+      refreshing = true;
+      const liveShot = takeShot(shotsRef.current, b, heldScene, scale, held.maxY, "").then((canvas) => {
+        if (!disposed && canvas && lockedRef.current === held) live = { page: held, canvas };
       });
       if (!facing) {
         el.replaceChildren();
         shows = -1;
+        void liveShot.finally(() => { refreshing = false; });
         return;
       }
       const scene = pageBoxScene(b, facing);
-      if (!scene) return;
-      void takeShot(shotsRef.current, b, scene, scale, facing.maxY, "").then((canvas) => {
-        if (!canvas || lockedRef.current !== held || el.hidden) return;
+      if (!scene) { void liveShot.finally(() => { refreshing = false; }); return; }
+      const facingShot = takeShot(shotsRef.current, b, scene, scale, facing.maxY, "").then((canvas) => {
+        if (disposed || !canvas || lockedRef.current !== held || el.hidden) return;
         if (el.firstElementChild !== canvas) el.replaceChildren(canvas);
         shows = facing.minY;
       });
+      void Promise.all([liveShot, facingShot]).finally(() => { refreshing = false; });
     };
 
     const onDown = (event: PointerEvent) => {
@@ -459,10 +468,15 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     };
 
     refresh();
-    const unsubscribe = subscribePdfFilmCurrent(filmScope, () => requestAnimationFrame(refresh));
+    const unsubscribe = subscribePdfFilmCurrent(filmScope, () => {
+      cancelAnimationFrame(refreshFrame);
+      refreshFrame = requestAnimationFrame(refresh);
+    });
     const timer = window.setInterval(refresh, 700);
     window.addEventListener("pointerdown", onDown, true);
     return () => {
+      disposed = true;
+      cancelAnimationFrame(refreshFrame);
       unsubscribe();
       window.clearInterval(timer);
       window.removeEventListener("pointerdown", onDown, true);
@@ -506,26 +520,33 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
 
     /** Take the pictures a turn from here would need, while nothing is moving. */
     let prefetchTimer = 0;
+    let disposed = false;
+    let prefetching = false;
     const prefetch = () => {
       window.clearTimeout(prefetchTimer);
       prefetchTimer = window.setTimeout(() => {
         const b = board();
-        if (!b || turnRef.current) return;
+        if (!b || disposed || prefetching || turnRef.current || boardResizeDeferred()) return;
         const view = b.getViewportBounds();
         const frames = b.readingPageFrames();
         if (!view || frames.length === 0) return;
         const at = currentIndex(frames, lockedRef.current, view);
         const from = frames[at]!;
+        const current = () => !disposed && !turnRef.current && !boardResizeDeferred() &&
+          board() === b && b.getViewportBounds()?.y === view.y && b.getViewportBounds()?.zoom === view.zoom;
         if (textSpreadRef.current) {
           // This spread, and the ones either side of it, page by page.
           const start = at - (at % 2);
           const pageShot = spreadPageShot(b, frames);
           if (!pageShot) return;
+          prefetching = true;
           void (async () => {
-            for (const i of [start, start + 1, start + 2, start + 3, start - 2, start - 1]) {
-              if (turnRef.current) return;
-              await pageShot(i);
-            }
+            try {
+              for (const i of [start, start + 1, start + 2, start + 3, start - 2, start - 1]) {
+                if (!current()) return;
+                await pageShot(i);
+              }
+            } finally { prefetching = false; }
           })();
           return;
         }
@@ -535,12 +556,16 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         const br = b.sceneToClient(scene.x + scene.width, scene.y + scene.height);
         if (!tl || !br) return;
         const scale = shotScale(br.x - tl.x, scene.width);
+        prefetching = true;
         void (async () => {
-          await shot(b, scene, scale, from.maxY, from.pageId);
-          for (const neighbour of [frames[at + 1], frames[at - 1]]) {
-            if (!neighbour || turnRef.current) continue;
-            await shot(b, { ...scene, y: neighbour.minY + (scene.y - from.minY) }, scale, neighbour.maxY, neighbour.pageId);
-          }
+          try {
+            await shot(b, scene, scale, from.maxY, from.pageId);
+            for (const neighbour of [frames[at + 1], frames[at - 1]]) {
+              if (!current()) return;
+              if (!neighbour) continue;
+              await shot(b, { ...scene, y: neighbour.minY + (scene.y - from.minY) }, scale, neighbour.maxY, neighbour.pageId);
+            }
+          } finally { prefetching = false; }
         })();
       }, PREFETCH_IDLE_MS);
     };
@@ -1085,6 +1110,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       window.removeEventListener("pointercancel", onUp, true);
       window.removeEventListener("click", swallowClick, true);
       window.removeEventListener("keydown", onKey);
+      disposed = true;
       window.clearTimeout(prefetchTimer);
       window.clearInterval(recheck);
       const el = host();
@@ -1094,7 +1120,6 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         delete el.dataset.turnActive;
       }
       unsubscribeFilm();
-      shotsRef.current.clear();
       const turn = turnRef.current;
       if (turn) teardown(turn);
     };
