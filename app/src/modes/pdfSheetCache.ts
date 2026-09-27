@@ -214,6 +214,21 @@ export class PdfSheetLru {
     return [];
   }
 
+  /**
+   * Give back every sharp sheet and keep the previews.
+   *
+   * For a book parked in another tab: the rest tier is the expensive one — a
+   * full page at twice screen resolution each — and the previews are enough
+   * to show the page the moment it comes back while the sharp set re-decodes.
+   */
+  dropRest(): number {
+    const count = this.rest.size;
+    for (const sheet of this.rest.values()) closeSheet(sheet);
+    this.rest.clear();
+    this.restOrder.length = 0;
+    return count;
+  }
+
   clear(): void {
     for (const sheet of this.preview.values()) closeSheet(sheet);
     for (const sheet of this.rest.values()) closeSheet(sheet);

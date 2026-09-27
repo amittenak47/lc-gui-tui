@@ -11,7 +11,7 @@
  * and every request that names a task id names the dataset too.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
 
 import { useShell } from "./shellContext";
@@ -656,7 +656,15 @@ export interface WorkspaceProps {
   embedInBoardTray?: boolean;
 }
 
-export function Workspace({
+/*
+ * Memoised: App re-renders on every chrome update the focused workspace sends
+ * (index progress, walk stage, busy, loading), and without this each one also
+ * re-rendered every other mounted workspace — the split partner and the parked
+ * tab included, each of them the full size of this file. Props are a tab
+ * record that keeps its identity until patched, and flags; context changes
+ * still reach every workspace, which is what they are for.
+ */
+export const Workspace = memo(function Workspace({
   tab,
   active,
   showing,
@@ -11850,7 +11858,7 @@ export function Workspace({
       )}
     </>
   );
-}
+});
 
 /**
  * The mobile page turner: Prev / label / Next plus dots, over the canvas.

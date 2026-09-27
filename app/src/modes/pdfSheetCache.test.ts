@@ -20,6 +20,18 @@ function fakeSheet(pixelScale: number, width = 100, height = 200) {
 }
 
 describe("PdfSheetLru", () => {
+  it("gives back only the sharp tier when a parked book is trimmed", () => {
+    const lru = new PdfSheetLru(5);
+    lru.putRest(1, fakeSheet(PDF_REST_SCALE), 1);
+    lru.putRest(2, fakeSheet(PDF_REST_SCALE), 1);
+    lru.putPreview(1, fakeSheet(PDF_PREVIEW_SCALE), 1);
+    expect(lru.dropRest()).toBe(2);
+    expect(lru.hasRest(1)).toBe(false);
+    expect(lru.hasRest(2)).toBe(false);
+    expect(lru.hasPreview(1)).toBe(true);
+    expect(lru.get(1)?.pixelScale).toBe(PDF_PREVIEW_SCALE);
+  });
+
   it("evicts the rest-2 page farthest from live C, not the oldest", () => {
     const lru = new PdfSheetLru(3);
     lru.put(10, fakeSheet(2), 10, PDF_REST_SCALE);

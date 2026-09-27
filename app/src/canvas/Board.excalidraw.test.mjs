@@ -616,7 +616,9 @@ describe("Workspace pane switch", () => {
 
   it("keeps the Sync walk mounted while the conflict split is up", () => {
     const src = readFileSync(join(here, "../Workspace.tsx"), "utf8");
-    expect(src).toMatch(/showDock=\{hubSyncWindowPill && !hubConflictAsk\}/);
+    expect(src).toMatch(/showDock=\{active && hubSyncWindowPill && !hubConflictAsk\}/);
+    // And across a tab switch: a waiting merge keeps its walk.
+    expect(src).toMatch(/\(active \|\| hubConflictAsk\) &&\s*tabOffersHubSync/);
     expect(src).not.toMatch(/!hubConflictAsk \?\s*\(\s*<HubSyncControl/);
   });
 

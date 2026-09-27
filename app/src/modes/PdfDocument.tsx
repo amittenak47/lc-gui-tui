@@ -540,6 +540,9 @@ function releasePagePixels(
   zeroPageSlots(host, n);
 }
 
+/** How long a parked book keeps its sharp pages before giving them back. */
+export const PARKED_TRIM_MS = 5_000;
+
 export function PdfDocument({
   filmScope,
   bytes,
@@ -1206,6 +1209,40 @@ export function PdfDocument({
   }, [paused]);
 
   useEffect(() => () => onNavRef.current?.(null), []);
+
+  /*
+   * A book parked in another tab lets go of its sharp pages after a moment.
+   *
+   * Parking keeps the whole picture so coming back is instant — but "the whole
+   * picture" is several pages at twice screen resolution, in the LRU and again
+   * in the page canvases, and on a tablet that memory is shared with the tab
+   * being read. Two books open side by side in the strip was enough to take
+   * scrolling in the front one down to 30–40 fps. After a short grace (a quick
+   * look away and back keeps everything), the sharp tier goes and the painted
+   * canvases drop to their preview size; returning shows the page at once and
+   * the pump sharpens it again.
+   */
+  useEffect(() => {
+    if (!offscreen || standalone) return;
+    const timer = window.setTimeout(() => {
+      const host = hostRef.current;
+      const lru = sheetLruRef.current;
+      if (!offscreenRef.current || !host) return;
+      lru.dropRest();
+      for (const [n, painted] of paintedRef.current) {
+        const page = pagesRef.current.find((entry) => entry.pageNumber === n);
+        const stub = lru.peekPreview(n);
+        if (page && stub) {
+          blitCachedSheet(host, n, page, stub, PDF_PREVIEW_SCALE);
+          painted.scale = PDF_PREVIEW_SCALE;
+        } else {
+          zeroPageSlots(host, n);
+          paintedRef.current.delete(n);
+        }
+      }
+    }, PARKED_TRIM_MS);
+    return () => window.clearTimeout(timer);
+  }, [offscreen, standalone]);
 
   useEffect(() => {
     if (paused) return;
