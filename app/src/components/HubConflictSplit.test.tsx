@@ -948,7 +948,8 @@ describe("what the panes are asked to draw", () => {
 
   it("also shows identical marks omitted from the choice list", async () => {
     const common = {id:"identical",kind:"note",anchor:{kind:"text",start:0,end:4,scope:"p1"},excerpt:"same mark",createdAt:1};
-    await mountSpied({...CONFLICT,local:annotateBody("book",900,[common]),server:annotateBody("book",500,[common])});
+    // A chat that differs keeps the window up; with nothing differing at all it resolves itself.
+    await mountSpied({...CONFLICT,local:annotateBody("book",900,[common]),server:{...annotateBody("book",500,[common]),agent:[{id:"hub-turn"}]}});
     expect(notesOn(0)).toEqual(["identical"]);
     expect(notesOn(1)).toEqual(["identical"]);
     expect(document.querySelector('[data-note-id="identical"]')).toBeNull();
@@ -1193,5 +1194,44 @@ describe("footnote rows, without opening the panel", () => {
     expect(serverInk.textContent).toContain("Could not read handwriting");
     const keep = serverInk.querySelector('[data-action="keep"]') as HTMLButtonElement;
     expect(keep.disabled).toBe(true);
+  });
+});
+
+describe("HubConflictSplit with nothing to choose", () => {
+  const common = {id:"common",kind:"note",anchor:{kind:"text",start:0,end:4,scope:"p1"},excerpt:"same mark",createdAt:1};
+  afterEach(() => { document.body.textContent = ""; });
+
+  it("keeps this copy by itself when every row matches", () => {
+    const { root, onResolve } = mount({...CONFLICT,
+      local:annotateBody("book",900,[common]),server:annotateBody("book",500,[common]),
+      localInkStamps:[{pageId:1,updatedAt:10}],hubInkStamps:[{pageId:1,updatedAt:10}]});
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".lc-hub-conflict-pane")).toBeNull();
+    expect(document.querySelector(".lc-hub-conflict-checking")?.textContent).toContain("No differences");
+    act(() => root.unmount());
+  });
+
+  it("still asks when something no row shows has changed", () => {
+    const { root, onResolve } = mount({...CONFLICT,
+      local:annotateBody("book",900,[common]),server:{...annotateBody("book",500,[common]),label:"Renamed on the tablet"}});
+    expect(onResolve).not.toHaveBeenCalled();
+    expect(document.querySelectorAll(".lc-hub-conflict-pane")).toHaveLength(2);
+    act(() => root.unmount());
+  });
+
+  it("lets the column buttons act on every row when Differences only hides them all", () => {
+    const { root, onResolve } = mount({...CONFLICT,
+      local:annotateBody("book",900,[common]),server:{...annotateBody("book",500,[common]),agent:[{id:"hub-turn"}]}});
+    expect(document.querySelector('[data-note-id="common"]')).toBeNull();
+    // Matching rows start kept on both sides, so the ✓ columns read as filled.
+    expect(paneButton(0, "keep").disabled).toBe(false);
+    expect(paneButton(0, "keep").getAttribute("aria-pressed")).toBe("true");
+    const drop = paneButton(1, "drop");
+    expect(drop.disabled).toBe(false);
+    act(() => drop.click());
+    expect(paneButton(1, "drop").getAttribute("aria-pressed")).toBe("true");
+    act(() => resolveButton().click());
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
   });
 });

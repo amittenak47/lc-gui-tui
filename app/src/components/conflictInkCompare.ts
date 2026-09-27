@@ -21,3 +21,26 @@ export async function compareConflictInk(local?: InkPageDto, server?: InkPageDto
     return inkOpsEqual(await decodeInkOpsAsync(left), await decodeInkOpsAsync(right));
   } catch { return null; }
 }
+
+/**
+ * Whether a stored page holds a single pen stroke.
+ *
+ * A page can keep a stored copy after its last stroke was undone, or hold
+ * only eraser passes. Both sides agreeing on nothing is not a choice worth a
+ * row. Null when the page cannot be read — that stays visible.
+ */
+export async function inkPageHasStrokes(page?: InkPageDto, cache?: ConflictInkDecodeCache): Promise<boolean | null> {
+  if (!page?.gz) return null;
+  try {
+    const cached = cache?.get(page.gz);
+    const ops = cached
+      ? await cached
+      : await (async () => {
+          const encoded = await gunzipUnpackInk(b64ToBytes(page.gz));
+          return encoded ? decodeInkOpsAsync(encoded) : null;
+        })();
+    return ops ? ops.some((op) => op.kind === "draw") : null;
+  } catch {
+    return null;
+  }
+}

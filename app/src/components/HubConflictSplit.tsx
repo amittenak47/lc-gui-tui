@@ -23,7 +23,8 @@ import { loadConflictPreviewInkPage, localInkAsDtos } from "../util/inkSync";
 import { Tip } from "./Tip";
 import { ConflictPagePreview } from "./ConflictPagePreview";
 import { conflictDocumentWidth } from "./conflictDocumentLayout";
-import { compareConflictInk } from "./conflictInkCompare";
+import { compareConflictInk, inkPageHasStrokes } from "./conflictInkCompare";
+import { showNotification } from "../util/notifications";
 import { inkOpsFrom } from "../canvas/inkCodec";
 import {
   INK_ROW_ID,
@@ -98,6 +99,32 @@ function overlayInkPages(
 ): InkPageDto[] {
   if (row == null) return [];
   return Array.isArray(row) ? row : [row];
+}
+
+/**
+ * The parts of a document the split has no row for: its name, the chat, the
+ * board state, attached files. Auto-keeping is only safe when these match too —
+ * otherwise a change nobody was shown would be dropped without asking.
+ */
+function unlistedFieldsMatch(
+  local: HubPadConflict["local"],
+  server: HubPadConflict["server"],
+): boolean {
+  if (!local || !server) return false;
+  const a = local as AnnotatePadDto;
+  const b = server as AnnotatePadDto;
+  const same = (x: unknown, y: unknown) => JSON.stringify(x ?? null) === JSON.stringify(y ?? null);
+  return (
+    a.name === b.name &&
+    (a.label ?? null) === (b.label ?? null) &&
+    a.hash === b.hash &&
+    a.doc_type === b.doc_type &&
+    a.source === b.source &&
+    same(a.board, b.board) &&
+    same(a.agent, b.agent) &&
+    same(a.artifacts, b.artifacts) &&
+    same(a.footnote_boards, b.footnote_boards)
+  );
 }
 
 function updatedAtOf(pad: HubPadConflict["local"] | HubPadConflict["server"]): number | null {
@@ -328,6 +355,8 @@ export function HubConflictSplit({
   const [differencesOnly, setDifferencesOnly] = useState(true);
   const [revealInk, setRevealInk] = useState(false);
   const [inkComparisons, setInkComparisons] = useState<Record<number, boolean | null>>({});
+  /** Pages both sides hold with no pen stroke on them. Never a row. */
+  const [inkBlank, setInkBlank] = useState<Record<number, boolean>>({});
   const listRefs = useRef<Partial<Record<Side, HTMLOListElement>>>({});
   const [focusedId, setFocusedId] = useState<string>(INK_ROW_ID);
   const [focusRevision, setFocusRevision] = useState(0);
@@ -436,15 +465,54 @@ export function HubConflictSplit({
   const setPicks = (update: (current: Record<string, SidePick>) => Record<string, SidePick>) =>
     setManualPicks(current => update(withAutomaticPicks(current)));
   // A deliberate discard stays visible even when matching rows are hidden.
-  const rowVisible = (id: string) => !differencesOnly || !sameIds.has(id) || picks[id]?.local === false || picks[id]?.server === false;
+  const rowVisible = (id: string) => {
+    const page = parseInkPageRowId(id);
+    if (page != null && inkBlank[page] && sameIds.has(id)) return false;
+    return !differencesOnly || !sameIds.has(id) || picks[id]?.local === false || picks[id]?.server === false;
+  };
   const statusFor = (id: string, hasLocal: boolean, hasServer: boolean) => sameIds.has(id)
     ? "Same" : !hasLocal || !hasServer ? "Only here" : "Different";
 
   useEffect(() => {
     setManualPicks({});
     setInkComparisons({});
+    setInkBlank({});
     setDifferencesOnly(true);
   }, [conflict]);
+
+  /*
+   * With every row showing, find the matching pages that hold no strokes.
+   *
+   * Only then: under Differences only a matching page is hidden anyway, and
+   * this decodes a page each. One side is enough — they match.
+   */
+  useEffect(() => {
+    if (differencesOnly || !conflict || conflict.kind !== "annotate" || conflict.wholeCanvas) return;
+    let gone = false;
+    const candidates = basePadInkRows.filter(
+      (row) => row.hasLocal && row.hasServer && (row.same || inkComparisons[row.pageId] === true) && !(row.pageId in inkBlank),
+    );
+    if (candidates.length === 0) return;
+    void (async () => {
+      for (const row of candidates) {
+        if (gone) return;
+        let page = conflict.localInk?.find((dto) => dto.page_id === row.pageId);
+        if (!page) {
+          const got = fetchPreviewInk
+            ? (await fetchPreviewInk(row.pageId).catch(() => null))?.local
+            : await localInkAsDtos(conflict.kind, conflict.id, [row.pageId]).catch(() => null);
+          page = overlayInkPages(got ?? []).find((dto) => dto.page_id === row.pageId);
+        }
+        const strokes = await inkPageHasStrokes(page, inkDecodeCache.current);
+        if (gone) return;
+        setInkBlank((current) => ({ ...current, [row.pageId]: strokes === false }));
+        await new Promise((resolve) => window.setTimeout(resolve, 16));
+      }
+    })();
+    return () => { gone = true; };
+    // `inkBlank` is read to skip done pages, not to restart the pass.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conflict, basePadInkRows, differencesOnly, inkComparisons, fetchPreviewInk]);
 
   useEffect(() => {
     // Compare one stored page at a time. Retain only the verdict, never a second
@@ -531,15 +599,25 @@ export function HubConflictSplit({
     return visibleOnly ? ids.filter(rowVisible) : ids;
   };
 
+  /**
+   * What a column ✓ / ✕ acts on: the rows on screen, or — when Differences
+   * only has hidden every one of them because they all match — every row.
+   * An empty filtered list used to leave the column buttons dead.
+   */
+  const columnIds = (side: Side): string[] => {
+    const visible = idsOnSide(side, true);
+    return visible.length > 0 ? visible : idsOnSide(side);
+  };
+
   const paneFilled = (side: Side, value: boolean): boolean => {
-    const ids = idsOnSide(side, true);
+    const ids = columnIds(side);
     if (ids.length === 0) return false;
     return ids.every((id) => pickOf(picks, id, side) === value);
   };
 
   const setSideAll = (side: Side, value: boolean | undefined) => {
     if (side === "server" && serverMissing && value === true) return;
-    const ids = idsOnSide(side, true);
+    const ids = columnIds(side);
     setPicks((current) => {
       const next = { ...current };
       for (const id of ids) {
@@ -556,8 +634,8 @@ export function HubConflictSplit({
     const other: Side = side === "local" ? "server" : "local";
     if (side === "server" && serverMissing) return;
     setPicks((current) => {
-      const ids = idsOnSide(side, true);
-      const otherIds = idsOnSide(other, true);
+      const ids = columnIds(side);
+      const otherIds = columnIds(other);
       if (ids.length === 0) return current;
       const thisFilled = ids.every((id) => current[id]?.[side] === true);
       const next = { ...current };
@@ -1046,7 +1124,7 @@ export function HubConflictSplit({
     const body = side === "local" ? conflict.local : conflict.server;
     const appState = padBoardAppState(body);
     const lined = linedPitchStateFromAppState(appState);
-    const hasChoices = idsOnSide(side, true).length > 0;
+    const hasChoices = columnIds(side).length > 0;
     const at = updatedAtOf(body);
     const verdict = paneVerdict(side);
     const label = sideLabel(side);
@@ -1146,7 +1224,9 @@ export function HubConflictSplit({
             focusY={inkFocusY}
             decodedInk={side === "local" ? inkHits.localShards : inkHits.serverShards}
             inkLoading={inkLoading}
-            selectedPageOnly={conflict.kind === "whiteboard" || differencesOnly}
+            // One page per side. Two whole copies of a book, drawn side by
+            // side, is most of what made this window slow to open.
+            selectedPageOnly
             revealInk={revealInk}
           />
           <ol
@@ -1249,6 +1329,41 @@ export function HubConflictSplit({
     );
   };
 
+  /*
+   * Nothing to choose, so do not ask.
+   *
+   * The walk stops when the hub's copy is newer than this device's last sync,
+   * whether or not anything in it changed — the tablet saving an identical
+   * copy is enough. Once every page has been compared and every row matches,
+   * Keep selection is the only answer there is; give it instead of showing a
+   * window whose Differences only view is empty.
+   */
+  const comparingIds = new Set(
+    conflict?.kind === "annotate" && !conflict.wholeCanvas && !serverInkUnread
+      ? basePadInkRows
+          .filter((row) => !row.same && row.hasLocal && row.hasServer && !(row.pageId in inkComparisons))
+          .map((row) => inkPageRowId(row.pageId))
+      : [],
+  );
+  const knownDifference = choiceIds.some((id) => !sameIds.has(id) && !comparingIds.has(id));
+  const checking = comparingIds.size > 0 && !knownDifference;
+  const nothingToChoose =
+    conflict?.kind === "annotate" &&
+    !conflict.wholeCanvas &&
+    !serverMissing &&
+    !serverInkUnread &&
+    comparingIds.size === 0 &&
+    !knownDifference &&
+    unlistedFieldsMatch(conflict.local, conflict.server);
+  const autoResolvedRef = useRef<HubPadConflict | null>(null);
+  useEffect(() => {
+    if (!conflict || !nothingToChoose || !valid || busy || error) return;
+    if (autoResolvedRef.current === conflict) return;
+    autoResolvedRef.current = conflict;
+    showNotification("No differences — kept this copy");
+    onResolveTap();
+  });
+
   const navigationIds = choiceIds.filter(rowVisible);
   const navigationIndex = navigationIds.indexOf(focusedId);
 
@@ -1277,11 +1392,18 @@ export function HubConflictSplit({
           <button type="button" className="lc-secondary" disabled={!navigationIds.length || navigationIndex >= navigationIds.length-1} onClick={() => focusRow(navigationIds[navigationIndex+1])}>Next</button>
         </nav>
       </header>
-      <div className="lc-hub-conflict-split">
-        {renderPane("local")}
-        <span className="lc-hub-conflict-sash" aria-hidden="true" />
-        {renderPane("server")}
-      </div>
+      {checking || nothingToChoose ? (
+        <div className="lc-hub-conflict-checking" role="status">
+          <div className="lc-spinner" aria-hidden="true" />
+          <span>{nothingToChoose ? "No differences — finishing sync…" : "Checking for differences…"}</span>
+        </div>
+      ) : (
+        <div className="lc-hub-conflict-split">
+          {renderPane("local")}
+          <span className="lc-hub-conflict-sash" aria-hidden="true" />
+          {renderPane("server")}
+        </div>
+      )}
       <footer className="lc-hub-conflict-actions">
         {(busy || error || !valid) && <span role={error ? "alert" : "status"} className={error && !busy ? "lc-hub-conflict-error" : "lc-muted"}>
           {busy ? "Saving..." : error || (serverMissing || serverInkUnread ? whyDisabled : `${remainingChoices} changes still need a choice`)}

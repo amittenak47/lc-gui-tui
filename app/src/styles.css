@@ -1976,6 +1976,20 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-hub-conflict-preview[data-reveal-ink] .lc-doc-selectable-body { opacity: .22; }
 .lc-hub-conflict-preview[data-reveal-ink] .lc-hub-conflict-ink-layer { mix-blend-mode: normal; filter: drop-shadow(0 0 2px #00e5ff); }
 
+/* Shown in place of the panes while pages are compared, or on the way out
+ * when nothing turned out to differ. */
+.lc-hub-conflict-checking {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .lc-hub-conflict-split {
   flex: 1;
   min-height: 0;

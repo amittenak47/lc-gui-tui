@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { compareConflictInk } from "./conflictInkCompare";
+import { compareConflictInk, inkPageHasStrokes } from "./conflictInkCompare";
 import { encodeInkOps, packEncodedInk } from "../canvas/inkCodec";
 import { gzipBytes } from "../util/gzip";
 import { bytesToB64 } from "../api/nativeHttp";
@@ -27,4 +27,13 @@ it("joins the preview's decoded ink without allocating another copy", async () =
   const server = {...local,gz:"already-decoding-server"};
   const cache = new Map([[local.gz,Promise.resolve([])],[server.gz,Promise.resolve([])]]);
   expect(await compareConflictInk(local,server,cache)).toBe(true);
+});
+
+it("calls a page with only eraser passes, or nothing, blank", async () => {
+  expect(await inkPageHasStrokes(await row(20))).toBe(false);
+  const empty = await gzipBytes(packEncodedInk(encodeInkOps([])));
+  expect(await inkPageHasStrokes({...await row(20),gz:bytesToB64(empty)})).toBe(false);
+  expect(await inkPageHasStrokes({...await row(20),gz:"cached"}, new Map([["cached",Promise.resolve([{kind:"draw"} as never])]]))).toBe(true);
+  expect(await inkPageHasStrokes(undefined)).toBeNull();
+  expect(await inkPageHasStrokes({...await row(20),gz:"unreadable"})).toBeNull();
 });
