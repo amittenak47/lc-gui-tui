@@ -309,6 +309,42 @@ describe("annotation camera presentation", () => {
     expect(surface().style.visibility).toBe("");
     expect(ref.current!.getOps()).toEqual(original);
     expect(alpha(120, 280)).toBeGreaterThan(0);
+    expect(ref.current!.undo()).toBe(true);
+    await frames(80);
+    expect(ref.current!.getOpCount()).toBe(0);
+    expect(alpha(120, 280)).toBe(0);
+    expect(ref.current!.redo()).toBe(true);
+    await frames(80);
+    expect(ref.current!.getOps()).toEqual(original);
+    expect(alpha(120, 280)).toBeGreaterThan(0);
+  });
+
+  it("does not resurrect undone ink when pinch tiles finish loading", async () => {
+    await ready([], "pen");
+    const event = (type: string, x: number) => {
+      const e = new MouseEvent(type, { button: 0, clientX: x, clientY: 100, bubbles: true });
+      Object.defineProperties(e, { pointerId: { value: 1 }, pointerType: { value: "pen" }, pressure: { value: .5 } });
+      surface().dispatchEvent(e);
+    };
+    await act(async () => {
+      event("pointerdown", 80); event("pointermove", 140); event("pointerup", 140);
+    });
+    ref.current!.setCameraZooming(true);
+    view = { ...view, zoom: 2, scrollX: -40, scrollY: -50 };
+    worker.blocked = true;
+    ref.current!.setCameraZooming(false);
+    const settled = ref.current!.syncCamera();
+    await frames(4);
+    expect(ref.current!.undo()).toBe(true);
+    await frames(4);
+    worker.blocked = false; worker.release.splice(0).forEach(resolve => resolve());
+    await frames(80); await settled;
+    expect(surface().style.visibility).toBe("");
+    expect(ref.current!.getOpCount()).toBe(0);
+    expect(alpha(120, 280)).toBe(0);
+    expect(ref.current!.redo()).toBe(true);
+    await frames(80);
+    expect(alpha(120, 280)).toBeGreaterThan(0);
   });
 
   it("hides a stale zoom until an aligned replacement is presented", async () => {
