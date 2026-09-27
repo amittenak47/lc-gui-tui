@@ -2065,14 +2065,14 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 /* Pages reading: the page's turning edges. Nothing shows at rest; under the
  * pointer (or a finger pressed there) the edge gets a soft sheen and the
  * pointer becomes a hand — this is where a page is taken from, and text is
- * selected everywhere else. Widths match PageTurn's EDGE_* hit test. */
+ * selected everywhere else. Sizes match the triangular PageTurn corner hit test. */
 [data-turn-edges] .lc-page-mask-hole::before,
 [data-turn-edges] .lc-page-mask-hole::after {
   content: "";
   position: absolute;
   top: 0;
   bottom: 0;
-  width: clamp(44px, 12%, 120px);
+  width: var(--lc-turn-corner, clamp(44px, 12%, 120px));
   /* Over the blank paper below a text page's cut, as over the rest. */
   z-index: 1;
   opacity: 0;
@@ -2081,11 +2081,13 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 }
 [data-turn-edges] .lc-page-mask-hole::before {
   left: 0;
-  background: linear-gradient(to right, color-mix(in srgb, var(--ink) 9%, transparent), transparent);
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  clip-path: polygon(0 0, 100% 0, 0 var(--lc-turn-corner, 44px), 0 calc(100% - var(--lc-turn-corner, 44px)), 100% 100%, 0 100%);
 }
 [data-turn-edges] .lc-page-mask-hole::after {
   right: 0;
-  background: linear-gradient(to left, color-mix(in srgb, var(--ink) 9%, transparent), transparent);
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+  clip-path: polygon(100% 0, 0 0, 100% var(--lc-turn-corner, 44px), 100% calc(100% - var(--lc-turn-corner, 44px)), 0 100%, 100% 100%);
 }
 [data-turn-hover="left"] .lc-page-mask-hole::before,
 [data-turn-hover="right"] .lc-page-mask-hole::after {

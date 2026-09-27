@@ -100,6 +100,12 @@ function mount(turnEnabled = true, fit: number | null = null, paged = true) {
       <PageTurn boardRef={ref} filmScope="t1" hostSelector='[data-lc-tab="t1"]' lockActive turnEnabled={turnEnabled} spread={paged} paged={paged} fit={fit} />,
     ),
   );
+  if (!host.querySelector(".lc-page-mask-hole")) {
+    const mask = document.createElement("div"); mask.className = "lc-page-mask";
+    const hole = document.createElement("div"); hole.className = "lc-page-mask-hole";
+    hole.getBoundingClientRect = host.getBoundingClientRect;
+    mask.append(hole); host.append(mask);
+  }
 }
 
 function pointer(type: string, x: number, y: number, pointerType = "touch") {
@@ -124,12 +130,12 @@ it("turns to the next page when dragged past halfway, and lands on it", async ()
   mount();
   const cancelled = vi.fn();
   host.addEventListener("pointercancel", cancelled);
-  pointer("pointerdown", 380, 500);
-  pointer("pointermove", 340, 505);
+  pointer("pointerdown", 380, 580);
+  pointer("pointermove", 340, 585);
   expect(cancelled).toHaveBeenCalledTimes(1); // the board's pan was handed over
-  pointer("pointermove", 150, 505);
+  pointer("pointermove", 150, 585);
   await settle();
-  pointer("pointerup", 150, 505);
+  pointer("pointerup", 150, 585);
   await settle();
   expect(board.jumpToPageFrame).toHaveBeenCalledWith({ ...FRAMES[2], minY: FRAMES[2].minY });
   expect(board.setPageLock).toHaveBeenLastCalledWith(FRAMES[2]);
@@ -137,15 +143,15 @@ it("turns to the next page when dragged past halfway, and lands on it", async ()
 
 it("settles back without moving when let go short of halfway", async () => {
   mount();
-  pointer("pointerdown", 380, 500);
-  pointer("pointermove", 340, 505);
-  pointer("pointermove", 300, 505);
+  pointer("pointerdown", 380, 580);
+  pointer("pointermove", 340, 585);
+  pointer("pointermove", 300, 585);
   await settle();
   // The hand stops before it lets go: no throw.
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   });
-  pointer("pointerup", 300, 505);
+  pointer("pointerup", 300, 585);
   await settle();
   expect(board.jumpToPageFrame).not.toHaveBeenCalled();
 });
@@ -163,20 +169,20 @@ it("leaves an up-and-down drag to the board", () => {
 
 it("never turns under the stylus, and not with the pen out", () => {
   mount();
-  pointer("pointerdown", 380, 500, "pen");
-  pointer("pointermove", 100, 505, "pen");
+  pointer("pointerdown", 380, 580, "pen");
+  pointer("pointermove", 100, 585, "pen");
   expect(board.captureSceneFrame).not.toHaveBeenCalled();
   mount(false);
-  pointer("pointerdown", 380, 500);
-  pointer("pointermove", 100, 505);
+  pointer("pointerdown", 380, 580);
+  pointer("pointermove", 100, 585);
   expect(board.captureSceneFrame).not.toHaveBeenCalled();
 });
 
 it("has nothing to turn back to on the first page", () => {
   view = { ...view, y: 0 };
   mount();
-  pointer("pointerdown", 20, 500);
-  pointer("pointermove", 200, 505);
+  pointer("pointerdown", 20, 580);
+  pointer("pointermove", 200, 585);
   expect(board.captureSceneFrame).not.toHaveBeenCalled();
 });
 
@@ -204,12 +210,12 @@ it("turns only the page, not the board around it", async () => {
   view = { x: -200, y: 600, width: 800, height: 640, zoom: 1 };
   pageBox = { minX: 0, maxX: 400, minY: 620, maxY: 1220 };
   mount(true, 1);
-  pointer("pointerdown", 380, 500);
-  pointer("pointermove", 340, 505);
+  pointer("pointerdown", 380, 580);
+  pointer("pointermove", 340, 585);
   await settle();
   const scene = (board.captureSceneFrame.mock.calls[0] as unknown[] | undefined)?.[0];
   expect(scene).toEqual({ x: 0, y: 620, width: 400, height: 600 });
-  pointer("pointerup", 340, 505);
+  pointer("pointerup", 340, 585);
   await settle();
 });
 
@@ -235,12 +241,12 @@ it("hides what lies past a text page's cut in the picture of it", async () => {
     return canvas;
   });
   mount(true, 1, false);
-  pointer("pointerdown", 380, 500);
-  pointer("pointermove", 340, 505);
+  pointer("pointerdown", 380, 580);
+  pointer("pointermove", 340, 585);
   await settle();
   // This page: blank from its cut (380 of 600 down) to the bottom.
   expect(fills).toContainEqual([0, 380, 400, 220]);
-  pointer("pointerup", 340, 505);
+  pointer("pointerup", 340, 585);
   await settle();
   board.readingPageFrames.mockReturnValue(FRAMES);
   board.captureSceneFrame.mockImplementation(async () => document.createElement("canvas"));
@@ -248,22 +254,22 @@ it("hides what lies past a text page's cut in the picture of it", async () => {
 
 it("leaves a pinch alone: a second finger calls the turn off", () => {
   mount();
-  pointer("pointerdown", 380, 500);
+  pointer("pointerdown", 380, 580);
   act(() => {
     host.dispatchEvent(new PointerEvent("pointerdown", { clientX: 200, clientY: 500, pointerId: 8, pointerType: "touch", isPrimary: false, button: 0, bubbles: true }));
   });
-  pointer("pointermove", 300, 505);
-  pointer("pointermove", 150, 505);
+  pointer("pointermove", 300, 585);
+  pointer("pointermove", 150, 585);
   expect(board.captureSceneFrame).not.toHaveBeenCalled();
 });
 
 it("turns on a quick flick short of halfway, and still plays the turn", async () => {
   mount();
-  pointer("pointerdown", 380, 500);
-  pointer("pointermove", 340, 505);
+  pointer("pointerdown", 380, 580);
+  pointer("pointermove", 340, 585);
   await settle(); // the pictures are in
-  pointer("pointermove", 300, 505);
-  pointer("pointerup", 300, 505);
+  pointer("pointermove", 300, 585);
+  pointer("pointerup", 300, 585);
   await settle();
   await settle();
   expect(board.jumpToPageFrame).toHaveBeenCalledWith({ ...FRAMES[2], minY: FRAMES[2].minY });
@@ -327,8 +333,21 @@ it("shows text pages two to a spread, and turns them two at a time", async () =>
 
 it("protects page-turn edges only while the reader owns gestures", () => {
   mount(true);
-  expect(gesture.protect).toHaveBeenCalledWith(host, true);
+  expect(gesture.protect).toHaveBeenCalledWith(host, expect.any(Function));
   mount(false);
   expect(gesture.release).toHaveBeenCalledTimes(1);
   expect(gesture.protect).toHaveBeenCalledTimes(1);
+});
+
+
+it("leaves the page body and middle of each edge available to scroll", async () => {
+  mount();
+  for (const x of [20, 200, 380]) {
+    pointer("pointerdown", x, 300);
+    pointer("pointermove", x - 160, 305);
+    pointer("pointerup", x - 160, 305);
+  }
+  await settle();
+  expect(board.captureSceneFrame).not.toHaveBeenCalled();
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
 });

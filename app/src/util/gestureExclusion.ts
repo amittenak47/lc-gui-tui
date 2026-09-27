@@ -167,15 +167,20 @@ function publishClaims(): void {
 }
 
 /** Protect the active surface; release only this owner's claim on cleanup. */
-export function protectGestureSurface(node: HTMLElement, fullHeight = false): () => void {
+export function protectGestureSurface(node: HTMLElement, fullHeight: boolean | (() => ExclusionRect[]) = false): () => void {
   if (!isAndroidDevice()) return () => {};
   const owner = Symbol("gesture-surface");
   let disposed = false;
   let focusY: number | null = null;
   let lastClaimY = Number.NaN;
+  let lastRects = "";
   const claim = () => {
     if (disposed) return;
-    claims.set(owner, edgeStrips(node.getBoundingClientRect(), focusY, fullHeight));
+    const rects = typeof fullHeight === "function" ? fullHeight() : edgeStrips(node.getBoundingClientRect(), focusY, fullHeight);
+    const signature = JSON.stringify(rects);
+    if (signature === lastRects) return;
+    lastRects = signature;
+    claims.set(owner, rects);
     publishClaims();
   };
   const onPointer = (event: PointerEvent) => {
@@ -188,6 +193,10 @@ export function protectGestureSurface(node: HTMLElement, fullHeight = false): ()
   claim();
   const observer = new ResizeObserver(claim);
   observer.observe(node);
+  // A fitted page can move inside an unchanged board (zoom/panel/page turn).
+  const mask = node.querySelector(".lc-page-mask");
+  const mutations = typeof fullHeight === "function" && mask ? new MutationObserver(claim) : null;
+  mutations?.observe(mask!, { attributes: true, subtree: true, attributeFilter: ["style", "hidden"] });
   window.addEventListener("resize", claim);
   window.addEventListener("orientationchange", claim);
   window.visualViewport?.addEventListener("resize", claim);
@@ -197,6 +206,7 @@ export function protectGestureSurface(node: HTMLElement, fullHeight = false): ()
     if (disposed) return;
     disposed = true;
     observer.disconnect();
+    mutations?.disconnect();
     window.removeEventListener("resize", claim);
     window.removeEventListener("orientationchange", claim);
     window.visualViewport?.removeEventListener("resize", claim);
