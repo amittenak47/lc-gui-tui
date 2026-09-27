@@ -434,7 +434,7 @@ import { photoFromFile } from "./util/photoAttach";
 import { thumbnailFromPng } from "./util/photoAttach";
 import { documentAskFields, documentImageContext, hasDocumentCapture, livePadStillOpen, sameDocumentView, type DocumentViewContext } from "./modes/documentView";
 import { selectionCaptureFailure, type SelectionActionContext, type SelectionActionResult } from "./modes/selectionAction";
-import { freezeCoachAsk, askImages, selectionImageForModel, type CoachAskPayload } from "./modes/coachAskPayload";
+import { freezeCoachAsk, askImages, selectionImageForModel, documentContextRequested, type CoachAskPayload } from "./modes/coachAskPayload";
 import { CoachSendCoordinator } from "./modes/coachSendCoordinator";
 import { saveCoachRequest, requireCoachRequest } from "./modes/coachRequestStore";
 type Mode = "review" | "ambient";
@@ -6517,7 +6517,7 @@ export function Workspace({
         const dataset = docAsk?.request?.origin?.dataset ?? problem.dataset;
         const source = annotateSourceRef.current;
         const docExtras = docAsk?.view ? { ...documentAskFields(modeHasVision("ask") ? docAsk.view : { ...docAsk.view, limitation: "This model cannot see images. Answer only from the extracted text/quote; do not infer unseen figures." }), ...(docAsk?.highlight ? { highlight: docAsk.highlight } : {}), ...(docAsk?.preset ? { preset: docAsk.preset } : {}) } :
-          surface === "annotate" && source
+          surface === "annotate" && source && documentContextRequested(docAsk?.request?.flags)
             ? {
                 document_hash: source.hash,
                 page: pdfNavRef.current?.current ?? 1,

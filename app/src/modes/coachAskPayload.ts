@@ -1,6 +1,11 @@
 import type { LcClient } from "../api/client";
 export type CoachAskPayload = Parameters<LcClient["ask"]>[1] & { question: string };
 export interface FrozenAsk { userMessageId: string; askPayload?: CoachAskPayload }
+export function documentContextRequested(flags?: {
+  handwriting?: boolean; capture?: boolean; annotations?: boolean; documentView?: unknown;
+}): boolean {
+  return Boolean(flags && (flags.handwriting || flags.capture || flags.annotations || flags.documentView));
+}
 /** Persist the wire request once. Retry must not repack newer transcript/context. */
 export async function freezeCoachAsk<T extends FrozenAsk>(item: T | undefined, build: () => CoachAskPayload,
   save: (id: string, item: T) => Promise<void>): Promise<CoachAskPayload> {

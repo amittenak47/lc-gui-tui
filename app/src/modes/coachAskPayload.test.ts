@@ -1,6 +1,13 @@
 import { expect, it, vi } from "vitest";
-import { askImages, freezeCoachAsk, selectionImageForModel, type FrozenAsk } from "./coachAskPayload";
+import { askImages, freezeCoachAsk, selectionImageForModel, documentContextRequested, type FrozenAsk } from "./coachAskPayload";
 import { documentAskFields, documentImageContext, hasDocumentCapture, type DocumentViewContext } from "./documentView";
+it("does not attach the open document to plain Ask or reasoning-only requests", () => {
+  expect(documentContextRequested()).toBe(false);
+  expect(documentContextRequested({handwriting:false,capture:false,annotations:false})).toBe(false);
+  for (const flags of [{handwriting:true},{capture:true},{annotations:true},{documentView:{text:"Selected quote"}}]) {
+    expect(documentContextRequested(flags)).toBe(true);
+  }
+});
 it("sends identical stored document fields/images on retry after navigation", async () => {
   const item: FrozenAsk = { userMessageId: "a" }; const save = vi.fn(async () => {});
   const build = vi.fn(() => ({ surface: "annotate" as const, question: "Original history + question", document_hash: "pdf-A", page: 3, page_text: "pages 3, 4", highlight: "quote", images: ["original-png"] }));
