@@ -1930,6 +1930,17 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
  * the quote sheet's confirm buttons (`.lc-doc-confirm-yes` / `-no`), which
  * already carry the app's answer for yes and no.
  */
+/*
+ * The merge split is opaque and covers the whole workspace, so nothing under it
+ * needs painting. Left visible, the board and the document kept rasterising
+ * and compositing behind it, and every frame of scrolling the split's lists
+ * paid for layers nobody could see. `visibility` keeps their layout, so
+ * nothing re-measures or re-fits when the split closes.
+ */
+.lc-canvas-wrap.lc-canvas-merging > :not(.lc-hub-conflict):not(:has(.lc-hub-conflict)) {
+  visibility: hidden;
+}
+
 .lc-hub-conflict {
   position: absolute;
   inset: 0;
@@ -2240,7 +2251,10 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   overflow: auto;
   border-radius: 10px;
   border: 1px solid var(--chrome-edge);
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  /* Opaque and self-contained, so scrolling it repaints only itself and never
+   * blends with the page preview underneath. */
+  background: var(--surface);
+  contain: layout paint style;
   touch-action: manipulation;
 }
 

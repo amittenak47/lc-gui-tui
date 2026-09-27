@@ -10617,6 +10617,8 @@ export function Workspace({
               "lc-has-pdf-film",
             canBrowseLive && webLive && "lc-canvas-live-web",
             liveParked && "lc-canvas-live-parked",
+            // The merge split covers the whole wrap; see the rule in styles.css.
+            hubConflictAsk && "lc-canvas-merging",
           ]
             .filter(Boolean)
             .join(" ")}

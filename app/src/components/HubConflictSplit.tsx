@@ -413,6 +413,39 @@ export function HubConflictSplit({
   /** Pages both sides hold with no pen stroke on them. Never a row. */
   const [inkBlank, setInkBlank] = useState<Record<number, boolean>>({});
   const listRefs = useRef<Partial<Record<Side, HTMLOListElement>>>({});
+  /*
+   * The two lists scroll as one, mirrored once per frame.
+   *
+   * Writing the other list's scrollTop from inside this one's scroll handler
+   * made every scroll event a forced synchronous scroll of the other list,
+   * whose own scroll event then came back through the same handler. Now the
+   * list being scrolled leads, the follower is written on the next frame, and
+   * the echo it causes is ignored.
+   */
+  const mirrorRef = useRef<{ frame: number; lead: Side | null; echo: Side | null }>({ frame: 0, lead: null, echo: null });
+  const mirrorScroll = (side: Side) => {
+    const mirror = mirrorRef.current;
+    if (mirror.echo === side) {
+      mirror.echo = null;
+      return;
+    }
+    mirror.lead = side;
+    if (mirror.frame) return;
+    mirror.frame = window.requestAnimationFrame(() => {
+      mirror.frame = 0;
+      const lead = mirror.lead;
+      if (!lead) return;
+      const from = listRefs.current[lead];
+      const to = listRefs.current[lead === "local" ? "server" : "local"];
+      if (!from || !to || Math.abs(to.scrollTop - from.scrollTop) <= 1) return;
+      mirror.echo = lead === "local" ? "server" : "local";
+      to.scrollTop = from.scrollTop;
+      // Its scroll event lands before the next frame; clear the flag after
+      // it in case the write was clamped and no event came.
+      window.requestAnimationFrame(() => { mirror.echo = null; });
+    });
+  };
+  useEffect(() => () => window.cancelAnimationFrame(mirrorRef.current.frame), []);
   const [focusedId, setFocusedId] = useState<string>(INK_ROW_ID);
   const [focusRevision, setFocusRevision] = useState(0);
   const focusRow = (id: string) => { setFocusedId(id); setFocusRevision(value => value + 1); };
@@ -1346,10 +1379,7 @@ export function HubConflictSplit({
           />
           <ol
             ref={node => { if (node) listRefs.current[side] = node; else delete listRefs.current[side]; }}
-            onScroll={event => {
-              const other = listRefs.current[side === "local" ? "server" : "local"];
-              if (other && Math.abs(other.scrollTop - event.currentTarget.scrollTop) > 1) other.scrollTop = event.currentTarget.scrollTop;
-            }}
+            onScroll={() => mirrorScroll(side)}
             className={["lc-hub-conflict-list", pickingStarted && !valid ? "is-picking" : ""]
               .filter(Boolean)
               .join(" ")}
