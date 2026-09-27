@@ -151,6 +151,27 @@ describe("annotation camera presentation", () => {
     expect(surface().style.visibility).toBe("");
   });
 
+  it("keeps an empty canvas writable after a paused split resize", async () => {
+    await ready([], "pen");
+    const render = (splitPaused: boolean) => <WhiteboardInkLab ref={ref} enabled splitPaused={splitPaused} tool="pen"
+      strokeWidth={3} inkColor="#ff0000" pressureClip={1} pressureSensitive={false} getViewport={() => view} />;
+    await act(async () => root.render(render(true)));
+    surface().parentElement!.style.width = "200px";
+    view = { ...view, width: 200 };
+    await act(async () => root.render(render(false)));
+    await frames();
+    expect(surface().style.visibility).toBe("");
+    expect(surface().width).toBe(200);
+    const event = (type: string, x: number) => {
+      const e = new MouseEvent(type, { button: 0, clientX: x, clientY: 100, bubbles: true });
+      Object.defineProperties(e, { pointerId: { value: 1 }, pointerType: { value: "pen" }, pressure: { value: .5 } });
+      surface().dispatchEvent(e);
+    };
+    await act(async () => { event("pointerdown", 80); event("pointermove", 140); event("pointerup", 140); });
+    expect(ref.current!.getOpCount()).toBe(1);
+    expect(alpha(100, 280)).toBeGreaterThan(0);
+  });
+
   it("hides an unsafe old camera until interrupted loading lands at the latest page", async () => {
     await ready([stroke(100), stroke(850)]);
     worker.blocked = true;

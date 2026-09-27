@@ -1113,14 +1113,14 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         marginY,
       };
       if (!paintedViewRef.current) {
-        if (windowed || bookRef.current.hasInk()) {
-          return rebuildAndReplay(
-            false,
-            cameraSettle ? instantReplayOnCameraRebase() : instantReplayOnFirstPresent(),
-            false, allowPaused,
-          );
-        }
-        return Promise.resolve();
+        // Resizing a paused pane invalidates its painted camera. Even an
+        // empty book must present once to reveal the canvas: visibility:hidden
+        // also removes it from pen hit-testing, leaving a blank board unwritable.
+        return rebuildAndReplay(
+          false,
+          cameraSettle ? instantReplayOnCameraRebase() : instantReplayOnFirstPresent(),
+          false, allowPaused,
+        );
       }
       if (!cameraPaintPendingRef.current && samePaintedView(paintedViewRef.current, next)) {
         if (windowed) {

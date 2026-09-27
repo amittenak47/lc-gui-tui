@@ -4950,6 +4950,9 @@ export const Workspace = memo(function Workspace({
    */
   const openWhiteboard = useCallback(
     (opts?: { notebookId?: string | null; fresh?: boolean }) => {
+      // This picker belongs to the tab doing the opening. The new workspace
+      // cannot close it; otherwise focusing this tab in a split revives it.
+      setWhiteboardEntryOpen(false);
       openWorkspace({
         id: newTabId("whiteboard"),
         kind: "whiteboard",
