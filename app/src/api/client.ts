@@ -157,6 +157,42 @@ function announceUnreachable(message: string): void {
   window.dispatchEvent(new CustomEvent("lc-server-unreachable", { detail: message }));
 }
 
+/**
+ * Pauses before retrying a read whose request never got an answer at all.
+ *
+ * The first Sync after the app opens used to fail at once with the hub
+ * "unreachable", and the very next tap worked. Nothing was wrong with the hub:
+ * on Android the first request after a launch or a resume can go out while the
+ * Wi-Fi binding is still settling, or on a pooled connection the PC closed
+ * while the app was away, and it fails without ever reaching the network. A
+ * fresh attempt a moment later is what the second tap was doing by hand.
+ */
+export const HUB_READ_RETRY_MS = [350, 1000] as const;
+
+/**
+ * `fetch`, again, for a read that failed before any response came back.
+ *
+ * Only for GET and HEAD. A write whose answer was lost may still have landed,
+ * and sending it twice is not the same as sending it once; those fail straight
+ * through as before. An HTTP error is an answer, and is never retried.
+ */
+export async function fetchWithNetworkRetry(
+  url: string,
+  init: RequestInit & { method: string },
+  delays: readonly number[] = HUB_READ_RETRY_MS,
+): Promise<Response> {
+  const retryable = init.method === "GET" || init.method === "HEAD";
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fetch(url, init);
+    } catch (cause) {
+      const aborted = cause instanceof Error && cause.name === "AbortError";
+      if (!retryable || aborted || attempt >= delays.length) throw cause;
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+  }
+}
+
 async function hubFetch(
   hub: PadHub,
   method: string,
@@ -175,7 +211,7 @@ async function hubFetch(
   }
   let res: Response;
   try {
-    res = await fetch(url, { method, headers, body });
+    res = await fetchWithNetworkRetry(url, { method, headers, body });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     announceUnreachable(message);
