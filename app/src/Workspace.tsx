@@ -237,6 +237,7 @@ import {
   type PdfThumbRenderer,
 } from "./modes/PdfDocument";
 import { pdfLayoutIsSpread } from "./modes/pdfInkSpread";
+import { remapPdfFootnotes } from "./modes/pdfFootnoteLayout";
 import { PdfPageRail } from "./modes/PdfPageRail";
 import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, clearPdfFilmScope, peekPdfPageSizes, publishPdfFilmCurrent, peekPdfFilmCurrent, peekPdfReadingFrames, pdfSpreadSlotCountChanged, resetPdfFilmPredicted, publishPdfLayoutBusy, subscribePdfLayoutBusy } from "./modes/pdfFilm";
 import { AnnotateDialog, type AnnotateDialogKind } from "./modes/AnnotateDialog";
@@ -1659,6 +1660,7 @@ export const Workspace = memo(function Workspace({
    */
   useEffect(() => () => clearPdfFilmScope(tab.id), [tab.id]);
   const spreadToggleAtRef = useRef(0);
+  const spreadLayoutRunRef = useRef(0);
   const annotatePdfHash =
     annotateSource?.docType === "pdf" ? annotateSource.hash : null;
   const pdfSpread = annotatePdfHash
@@ -1676,6 +1678,8 @@ export const Workspace = memo(function Workspace({
     if (focused instanceof HTMLElement) focused.blur();
     const page = peekPdfFilmCurrent(tab.id);
     const fromFrames = peekPdfReadingFrames(tab.id);
+    const run = ++spreadLayoutRunRef.current;
+    const loadGen = workspaceLoadGenRef.current;
     setPdfSpreadByHash((prev) => {
       const on = prev[hash] ?? loadPdfSpreadPref(hash);
       const next = !on;
@@ -1685,21 +1689,28 @@ export const Workspace = memo(function Workspace({
     setPdfFilmOpen(false);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        boardRef.current?.remapPdfInkAcrossPdfLayout(fromFrames);
-        if (!(page >= 1)) {
-          publishPdfLayoutBusy(tab.id, false);
-          return;
-        }
-        boardRef.current?.aimPdfPage(page, { hold: false });
         const started = performance.now();
         const fromCount = fromFrames.length;
+        let remapped = false;
         const tick = () => {
-          const nowCount = peekPdfReadingFrames(tab.id).length;
+          if (run !== spreadLayoutRunRef.current || loadGen !== workspaceLoadGenRef.current) return;
+          const toFrames = peekPdfReadingFrames(tab.id);
+          const nowCount = toFrames.length;
           const layoutReady =
-            fromCount < 1 || pdfSpreadSlotCountChanged(fromCount, nowCount);
+            nowCount > 0 && (fromCount < 1 || (pdfSpreadSlotCountChanged(fromCount, nowCount) &&
+              pdfLayoutIsSpread(toFrames) !== pdfLayoutIsSpread(fromFrames) &&
+              nowCount >= (pdfLayoutIsSpread(fromFrames) ? fromCount / 2 : fromCount * 2)));
+          if (layoutReady && !remapped) {
+            boardRef.current?.remapPdfInkAcrossPdfLayout(fromFrames);
+            const marks = remapPdfFootnotes(annotateFootnotesRef.current, fromFrames, toFrames, annotatePageWidthRef.current);
+            annotateFootnotesRef.current = marks;
+            setAnnotateFootnotesRaw(marks);
+            remapped = true;
+            if (page >= 1) boardRef.current?.aimPdfPage(page, { hold: false });
+          }
           const ok =
             layoutReady &&
-            boardRef.current?.scrollToPdfPage(page, { hold: false }) === true;
+            (!(page >= 1) || boardRef.current?.scrollToPdfPage(page, { hold: false }) === true);
           if (ok || performance.now() - started > 8000) {
             if (!ok) boardRef.current?.scrollToPdfPage(page, { hold: false });
             publishPdfLayoutBusy(tab.id, false);
@@ -1741,6 +1752,9 @@ export const Workspace = memo(function Workspace({
           PDF_DOC_PAD_TOP,
         );
         board.remapPdfInkAcrossPdfLayout(from);
+        const marks = remapPdfFootnotes(annotateFootnotesRef.current, from, frames, annotatePageWidthRef.current);
+        annotateFootnotesRef.current = marks;
+        setAnnotateFootnotesRaw(marks);
       }
       board.setInkSpread(null);
     };
