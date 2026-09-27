@@ -39,3 +39,42 @@ export function saveReadingMode(mode: ReadingMode): void {
     window.dispatchEvent(new CustomEvent(READING_MODE_EVENT, { detail: next }));
   }
 }
+
+/**
+ * How much of the view a page fills in Pages reading: the whole page, edge to
+ * edge on its limiting side, or 90% of that with a margin around it. Whatever
+ * is around the page — its neighbours included — is hidden either way.
+ */
+export type PageFitPref = "full" | "margin";
+
+const FIT_KEY = "whiteboard.pageFit.v1";
+
+export function isPageFitPref(value: unknown): value is PageFitPref {
+  return value === "full" || value === "margin";
+}
+
+export function loadPageFit(): PageFitPref {
+  try {
+    const raw = localStorage.getItem(FIT_KEY);
+    return isPageFitPref(raw) ? raw : "full";
+  } catch {
+    return "full";
+  }
+}
+
+export function savePageFit(fit: PageFitPref): void {
+  const next = isPageFitPref(fit) ? fit : "full";
+  try {
+    localStorage.setItem(FIT_KEY, next);
+  } catch {
+    /* storage unavailable — full page next launch */
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(READING_MODE_EVENT, { detail: loadReadingMode() }));
+  }
+}
+
+/** The share of the view the page takes on its limiting side. */
+export function pageFitShare(fit: PageFitPref): number {
+  return fit === "margin" ? 0.9 : 1;
+}

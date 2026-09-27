@@ -16,7 +16,10 @@ const FRAMES = [
 let root: Root;
 let host: HTMLDivElement;
 let view = { x: 0, y: 620, width: 400, height: 600, zoom: 1 };
+let pageBox: { minX: number; maxX: number; minY: number; maxY: number } | null = null;
 const board = {
+  readingPageBox: vi.fn(() => pageBox),
+  setPageFit: vi.fn(),
   getViewportBounds: vi.fn(() => view),
   readingPageFrames: vi.fn(() => FRAMES),
   setPageLock: vi.fn(),
@@ -46,6 +49,7 @@ beforeEach(() => {
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(performance.now() + 1000), 0));
   vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
   view = { x: 0, y: 620, width: 400, height: 600, zoom: 1 };
+  pageBox = null;
   for (const fn of Object.values(board)) fn.mockClear();
   host = document.createElement("div");
   host.dataset.lcTab = "t1";
@@ -60,11 +64,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function mount(turnEnabled = true) {
+function mount(turnEnabled = true, fit: number | null = null, paged = true) {
   const ref = { current: board as unknown as BoardHandle };
   act(() =>
     root.render(
-      <PageTurn boardRef={ref} filmScope="t1" hostSelector='[data-lc-tab="t1"]' lockActive turnEnabled={turnEnabled} spread paged />,
+      <PageTurn boardRef={ref} filmScope="t1" hostSelector='[data-lc-tab="t1"]' lockActive turnEnabled={turnEnabled} spread paged={paged} fit={fit} />,
     ),
   );
 }
@@ -151,4 +155,60 @@ it("turns with the arrow keys", async () => {
   await settle();
   await settle();
   expect(board.jumpToPageFrame).toHaveBeenCalledWith({ ...FRAMES[0], minY: FRAMES[0].minY });
+});
+
+it("fits the page while pages are held, and gives the width back after", () => {
+  mount(true, 0.9);
+  expect(board.setPageFit).toHaveBeenLastCalledWith(0.9);
+  mount(true, 1);
+  expect(board.setPageFit).toHaveBeenLastCalledWith(1);
+  act(() => root.render(<></>));
+  expect(board.setPageFit).toHaveBeenLastCalledWith(null);
+});
+
+it("turns only the page, not the board around it", async () => {
+  // A fitted page in the middle of a wider view.
+  view = { x: -200, y: 600, width: 800, height: 640, zoom: 1 };
+  pageBox = { minX: 0, maxX: 400, minY: 620, maxY: 1220 };
+  mount(true, 1);
+  pointer("pointerdown", 380, 500);
+  pointer("pointermove", 340, 505);
+  await settle();
+  const scene = (board.captureSceneFrame.mock.calls[0] as unknown[] | undefined)?.[0];
+  expect(scene).toEqual({ x: 0, y: 620, width: 400, height: 600 });
+  pointer("pointerup", 340, 505);
+  await settle();
+});
+
+it("hides what lies past a text page's cut in the picture of it", async () => {
+  // A text page cut at 1000 in a box a screenful high: below the cut is the
+  // next page's text, which the view masks and the picture must too.
+  const cutFrames = [
+    { pageId: 1, minY: 0, maxY: 600 },
+    { pageId: 2, minY: 620, maxY: 1000 },
+    { pageId: 3, minY: 1000, maxY: 1600 },
+  ];
+  board.readingPageFrames.mockReturnValue(cutFrames);
+  pageBox = { minX: 0, maxX: 400, minY: 620, maxY: 1220 };
+  const fills: number[][] = [];
+  board.captureSceneFrame.mockImplementation(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 400;
+    canvas.height = 600;
+    (canvas as unknown as { getContext: () => unknown }).getContext = () => ({
+      fillStyle: "",
+      fillRect: (...rect: number[]) => fills.push(rect),
+    });
+    return canvas;
+  });
+  mount(true, 1, false);
+  pointer("pointerdown", 380, 500);
+  pointer("pointermove", 340, 505);
+  await settle();
+  // This page: blank from its cut (380 of 600 down) to the bottom.
+  expect(fills).toContainEqual([0, 380, 400, 220]);
+  pointer("pointerup", 340, 505);
+  await settle();
+  board.readingPageFrames.mockReturnValue(FRAMES);
+  board.captureSceneFrame.mockImplementation(async () => document.createElement("canvas"));
 });

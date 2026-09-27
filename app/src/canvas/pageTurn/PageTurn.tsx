@@ -73,6 +73,11 @@ export interface PageTurnProps {
    * are cut into view-high pages instead, and always turn as single sheets.
    */
   paged: boolean;
+  /**
+   * How much of the view the whole page fills on its limiting side — 1 edge
+   * to edge — with everything around it hidden. Null reads at the width fit.
+   */
+  fit?: number | null;
 }
 
 function frameIndexAt(frames: readonly PageFrame[], y: number): number {
@@ -90,8 +95,37 @@ function frameIndexAt(frames: readonly PageFrame[], y: number): number {
   return best;
 }
 
+/**
+ * Where in the view to look for the page it shows. A quarter down, not the
+ * middle: a fitted text page cut short of the next block can end above the
+ * middle of the view, and the middle would then name the page after it.
+ */
+function probeY(view: { y: number; height: number }): number {
+  return view.y + view.height * 0.25;
+}
+
+/** The frame the lock holds, when it is still one of these; else the one in view. */
+function currentIndex(
+  frames: readonly PageFrame[],
+  locked: PageFrame | null,
+  view: { y: number; height: number },
+): number {
+  if (locked) {
+    const i = frames.findIndex((f) => Math.abs(f.minY - locked.minY) < 0.5 && Math.abs(f.maxY - locked.maxY) < 0.5);
+    if (i >= 0) return i;
+  }
+  return frameIndexAt(frames, probeY(view));
+}
+
 function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3);
+}
+
+/** What the view shows around a fitted page — see `.lc-page-mask-hole`. */
+function maskColor(): string {
+  if (typeof document === "undefined") return "#ffffff";
+  const root = getComputedStyle(document.documentElement);
+  return root.getPropertyValue("--lc-page-mask").trim() || root.getPropertyValue("--bg").trim() || "#ffffff";
 }
 
 function paperColor(): string {
@@ -122,8 +156,10 @@ interface Turn {
   done: boolean;
 }
 
-export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEnabled, spread, paged }: PageTurnProps) {
+export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEnabled, spread, paged, fit = null }: PageTurnProps) {
   const turnRef = useRef<Turn | null>(null);
+  /** The page the camera is held to. */
+  const lockedRef = useRef<PageFrame | null>(null);
   const spreadRef = useRef(spread);
   spreadRef.current = spread;
   const pagedRef = useRef(paged);
@@ -138,7 +174,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       return;
     }
     let lockedCount = -1;
-    let locked: PageFrame | null = null;
+    lockedRef.current = null;
     const relock = () => {
       const board = boardRef.current;
       if (!board || turnRef.current) return;
@@ -146,7 +182,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const frames = board.readingPageFrames();
       if (!view || frames.length === 0) return;
       lockedCount = frames.length;
-      locked = frames[frameIndexAt(frames, view.y + view.height / 2)]!;
+      // A jump made elsewhere moves the view off the held page: follow it.
+      const held = lockedRef.current;
+      const probe = probeY(view);
+      const stays = held && probe >= held.minY && probe < held.maxY;
+      const locked = frames[stays ? currentIndex(frames, held, view) : frameIndexAt(frames, probe)]!;
+      lockedRef.current = locked;
       board.setPageLock(locked);
     };
     const unsubscribe = subscribePdfFilmCurrent(filmScope, relock);
@@ -156,21 +197,42 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
      * through a page turn. Lock again when either happens, or the next pan
      * would drag the view back to the page it left.
      */
+    /*
+     * …and when the pages are cut again: a text document is re-cut to the new
+     * view whenever the window changes size, and the held page with it.
+     */
     const poll = window.setInterval(() => {
       const board = boardRef.current;
       if (!board || turnRef.current) return;
       const frames = board.readingPageFrames();
       const view = board.getViewportBounds();
-      const centre = view ? view.y + view.height / 2 : null;
-      const drifted = locked && centre != null && (centre < locked.minY || centre > locked.maxY);
-      if (frames.length !== lockedCount || drifted) relock();
+      const held = lockedRef.current;
+      const probe = view ? probeY(view) : null;
+      const drifted = held && probe != null && (probe < held.minY || probe > held.maxY);
+      const recut = held != null && frames.length > 0 &&
+        !frames.some((f) => Math.abs(f.minY - held.minY) < 0.5 && Math.abs(f.maxY - held.maxY) < 0.5);
+      if (frames.length !== lockedCount || drifted || recut) {
+        // A re-cut page is found again by its top, not by where the view is.
+        if (recut && held) lockedRef.current = frames[frameIndexAt(frames, held.minY + 1)] ?? null;
+        relock();
+      }
     }, 400);
     return () => {
       unsubscribe();
       window.clearInterval(poll);
+      lockedRef.current = null;
       boardRef.current?.setPageLock(null);
     };
   }, [boardRef, filmScope, lockActive]);
+
+  /* The page fit, for as long as pages are held; the width fit after. */
+  useEffect(() => {
+    if (!lockActive) return;
+    return () => boardRef.current?.setPageFit(null);
+  }, [boardRef, lockActive]);
+  useEffect(() => {
+    if (lockActive) boardRef.current?.setPageFit(fit);
+  }, [boardRef, lockActive, fit]);
 
   useEffect(() => {
     if (!turnEnabled) return;
@@ -184,18 +246,48 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
      * stroke added since, or a zoom, takes a fresh one. At most a few kept:
      * each is a screenful of pixels.
      */
-    const shot = (b: BoardHandle, scene: Scene, scale: number) => {
-      const key = [scene.x, scene.y, scene.width, scene.height, scale, b.getInkRevision()]
+    const shot = (b: BoardHandle, scene: Scene, scale: number, cutY = Infinity) => {
+      const key = [scene.x, scene.y, scene.width, scene.height, scale, b.getInkRevision(), Math.min(cutY, 1e9)]
         .map((n) => Math.round(n * 100) / 100)
         .join(":");
       const shots = shotsRef.current;
       let taken = shots.get(key);
       if (!taken) {
-        taken = b.captureSceneFrame(scene, scale).catch(() => null);
+        // Below a text page's cut is the next page's text, which the view
+        // hides; the picture has to hide it too.
+        taken = b.captureSceneFrame(scene, scale).then((canvas) => {
+          const cut = cutY - scene.y;
+          if (!canvas || !(cut < scene.height)) return canvas;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return canvas;
+          const top = Math.max(0, Math.round((cut / scene.height) * canvas.height));
+          ctx.fillStyle = maskColor();
+          ctx.fillRect(0, top, canvas.width, canvas.height - top);
+          return canvas;
+        }).catch(() => null);
         shots.set(key, taken);
         while (shots.size > SHOT_CACHE) shots.delete(shots.keys().next().value!);
       }
       return taken;
+    };
+
+    /**
+     * The part of the page at `at` in view, in scene units: its column, and
+     * the box the board holds it in — for a text page, one screenful high
+     * whether it was cut short or ran on with the space after it.
+     */
+    const pageScene = (b: BoardHandle, frames: readonly PageFrame[], at: number): Scene | null => {
+      const view = b.getViewportBounds();
+      const from = frames[at];
+      if (!view || !from) return null;
+      const box = b.readingPageBox();
+      const held = box && Math.abs(box.minY - from.minY) < 0.5;
+      const left = Math.max(view.x, box?.minX ?? view.x);
+      const right = Math.min(view.x + view.width, box?.maxX ?? view.x + view.width);
+      const top = Math.max(view.y, from.minY);
+      const bottom = Math.min(view.y + view.height, held ? box.maxY : from.maxY);
+      if (right - left < 8 || bottom - top < 8) return null;
+      return { x: left, y: top, width: right - left, height: bottom - top };
     };
 
     /** Take the pictures a turn from here would need, while nothing is moving. */
@@ -208,21 +300,19 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         const view = b.getViewportBounds();
         const frames = b.readingPageFrames();
         if (!view || frames.length === 0) return;
-        const at = frameIndexAt(frames, view.y + view.height / 2);
+        const at = currentIndex(frames, lockedRef.current, view);
         const from = frames[at]!;
-        const top = Math.max(view.y, from.minY);
-        const height = Math.min(view.y + view.height, from.maxY) - top;
-        if (height < 8) return;
-        const scene: Scene = { x: view.x, y: top, width: view.width, height };
+        const scene = pageScene(b, frames, at);
+        if (!scene) return;
         const tl = b.sceneToClient(scene.x, scene.y);
         const br = b.sceneToClient(scene.x + scene.width, scene.y + scene.height);
         if (!tl || !br) return;
         const scale = shotScale(br.x - tl.x, scene.width);
         void (async () => {
-          await shot(b, scene, scale);
+          await shot(b, scene, scale, from.maxY);
           for (const neighbour of [frames[at + 1], frames[at - 1]]) {
             if (!neighbour || turnRef.current) continue;
-            await shot(b, { ...scene, y: neighbour.minY + (scene.y - from.minY) }, scale);
+            await shot(b, { ...scene, y: neighbour.minY + (scene.y - from.minY) }, scale, neighbour.maxY);
           }
         })();
       }, PREFETCH_IDLE_MS);
@@ -235,23 +325,27 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const view = b.getViewportBounds();
       const frames = b.readingPageFrames();
       if (!view || frames.length === 0) return null;
-      const at = frameIndexAt(frames, view.y + view.height / 2);
+      const at = currentIndex(frames, lockedRef.current, view);
       const toIndex = direction === "next" ? at + 1 : at - 1;
       const from = frames[at];
       const to = frames[toIndex];
       if (!from || !to) return null;
-      // The visible part of this page, and where it is on screen.
-      const top = Math.max(view.y, from.minY);
-      const bottomY = Math.min(view.y + view.height, from.maxY);
-      if (bottomY - top < 8) return null;
-      const scene: Scene = { x: view.x, y: top, width: view.width, height: bottomY - top };
+      // The visible part of this page — the page, not the view around it —
+      // and where it is on screen.
+      const scene = pageScene(b, frames, at);
+      if (!scene) return null;
       const tl = b.sceneToClient(scene.x, scene.y);
       const br = b.sceneToClient(scene.x + scene.width, scene.y + scene.height);
       if (!tl || !br) return null;
       const rect = { left: tl.x, top: tl.y, width: br.x - tl.x, height: br.y - tl.y };
       if (rect.width < 8 || rect.height < 8) return null;
+      // A landscape sheet is two pages side by side: it turns about its spine.
+      const columnWidth = (() => {
+        const box = b.readingPageBox();
+        return box ? box.maxX - box.minX : view.width;
+      })();
       const layout: TurnLayout =
-        pagedRef.current && !spreadRef.current && from.maxY - from.minY < view.width * 0.9 ? "book" : "sheet";
+        pagedRef.current && !spreadRef.current && from.maxY - from.minY < columnWidth * 0.9 ? "book" : "sheet";
       const canvas = document.createElement("canvas");
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       canvas.width = Math.round(rect.width * dpr);
@@ -282,7 +376,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       // is taken at the same place within it the view shows of this one.
       const scale = shotScale(rect.width, scene.width);
       const toScene = { ...scene, y: to.minY + (scene.y - from.minY) };
-      void Promise.all([shot(b, scene, scale), shot(b, toScene, scale)]).then(
+      void Promise.all([shot(b, scene, scale, from.maxY), shot(b, toScene, scale, to.maxY)]).then(
         ([here, there]) => {
           if (turnRef.current !== turn || turn.done || !here || !there) return;
           // Turning back is turning forward from the previous page, reversed.
@@ -329,6 +423,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     const land = (turn: Turn) => {
       const b = board();
       if (!b) return;
+      lockedRef.current = turn.to;
       b.setPageLock(turn.to);
       b.jumpToPageFrame({ ...turn.to, minY: turn.to.minY + turn.offsetInPage });
       prefetch();

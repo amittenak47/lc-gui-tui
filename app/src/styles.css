@@ -1987,6 +1987,28 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-hub-conflict-preview[data-reveal-ink] .lc-doc-selectable-body { opacity: .22; }
 .lc-hub-conflict-preview[data-reveal-ink] .lc-hub-conflict-ink-layer { mix-blend-mode: normal; filter: drop-shadow(0 0 2px #00e5ff); }
 
+/* Pages reading with the page fitted: everything but the open page — its
+ * neighbours, and ink or shapes beside it — under the board's own colour.
+ * Above the page, its ink, marks and shapes (scene overlay 42); below the map
+ * controls. The hole is moved with the camera from Board. */
+.lc-page-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 44;
+  overflow: hidden;
+  pointer-events: none;
+}
+.lc-page-mask[hidden] {
+  display: none;
+}
+.lc-page-mask-hole {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  box-shadow: 0 0 0 200vmax var(--lc-page-mask, var(--bg));
+}
+
 /* Pages reading: the sheet being turned, drawn over the view for the length
  * of the turn only. Above the page, below the board's own chrome. */
 .lc-page-turn {
@@ -3343,7 +3365,8 @@ body[data-lc-sash-drag="horizontal"] {
   position: absolute;
   left: 1.1rem;
   top: calc(1rem + var(--lc-top-banner-h, 0px));
-  z-index: 14;
+  /* Chrome: over the Pages mask (44), which covers the board around a page. */
+  z-index: 45;
   pointer-events: none;
   display: flex;
   flex-direction: column;

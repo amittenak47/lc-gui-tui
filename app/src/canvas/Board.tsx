@@ -2092,7 +2092,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /** Pages reading: the scene span of the open page, or null when scrolling freely. */
   const pageLockRef = useRef<{ minY: number; maxY: number } | null>(null);
   /** Text pages, until the document or the view changes size. */
-  const textPagesRef = useRef<{ key: string; frames: PageFrame[] } | null>(null);
+  const textPagesRef = useRef<{ key: string; frames: PageFrame[]; pageH: number } | null>(null);
+  /**
+   * Pages reading, page fitted: the share of the view the whole page takes on
+   * its limiting side (1 = edge to edge). Null keeps the reading width fit.
+   */
+  const pageFitRef = useRef<number | null>(null);
+  /**
+   * The part of the open page that is shown. A text page is cut before a block
+   * that would not fit, so it can be shorter than the box the camera holds.
+   */
+  const pageShownRef = useRef<{ minY: number; maxY: number } | null>(null);
+  /** Covers the board outside `pageShownRef` while a page is fitted. */
+  const pageMaskRef = useRef<HTMLDivElement | null>(null);
+  const applyPageFitRef = useRef<() => void>(() => {});
   const publishPdfFilmFromScrollRef = useRef<
     (scrollX: number, scrollY: number, zoom: number, height: number) => void
   >(() => {});
@@ -2646,6 +2659,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, []);
 
   /**
+   * Hide everything but the open page — its neighbours above and below, and
+   * whatever ink or shapes sit beside it. Pages reading with a page fit only.
+   * Moved with the camera, one transform per sample, like the file slot.
+   */
+  const placePageMask = (scrollX: number, scrollY: number, zoom: number) => {
+    const mask = pageMaskRef.current;
+    if (!mask) return;
+    const shown = pageFitRef.current != null ? pageShownRef.current : null;
+    const bounds = pageBoundsRef.current;
+    const hole = mask.firstElementChild as HTMLElement | null;
+    if (!shown || !bounds || !hole) {
+      if (!mask.hidden) mask.hidden = true;
+      return;
+    }
+    if (mask.hidden) mask.hidden = false;
+    hole.style.transform = `translate(${(bounds.minX + scrollX) * zoom}px, ${(shown.minY + scrollY) * zoom}px)`;
+    hole.style.width = `${Math.max(0, (bounds.maxX - bounds.minX) * zoom)}px`;
+    hole.style.height = `${Math.max(0, (shown.maxY - shown.minY) * zoom)}px`;
+  };
+
+  /**
    * Write the file slot to this camera.
    *
    * Inner node, not the ride wrapper: the wrapper is grouping only. Live wheel
@@ -2658,6 +2692,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     scrollY: number,
     zoom: number,
   ): ContentSlotPlace | null => {
+    placePageMask(scrollX, scrollY, zoom);
     if (!pageContentRef.current) return null;
     let bounds = pageBoundsRef.current;
     if (!bounds) {
@@ -3169,6 +3204,18 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     [runSlotReports],
   );
 
+  /**
+   * Pages reading: the box the camera is held in. The open page — and with a
+   * page fit exactly its box, even where that runs past the document's first
+   * or last line, or the clamp would pull those pages off centre.
+   */
+  const lockedBounds = (bounds: SceneBounds): SceneBounds => {
+    const lock = pageLockRef.current;
+    if (!lock) return bounds;
+    if (pageFitRef.current != null) return { ...bounds, minY: lock.minY, maxY: lock.maxY };
+    return { ...bounds, minY: Math.max(bounds.minY, lock.minY), maxY: Math.min(bounds.maxY, lock.maxY) };
+  };
+
   const clampPanScroll = useCallback((scrollX: number, scrollY: number, zoom: number) => {
     let bounds = pageBoundsRef.current;
     if (!bounds) return { scrollX, scrollY };
@@ -3181,8 +3228,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       );
     }
     // Pages reading: the camera may not leave the page that is open.
-    const lock = pageLockRef.current;
-    if (lock) bounds = { ...bounds, minY: Math.max(bounds.minY, lock.minY), maxY: Math.min(bounds.maxY, lock.maxY) };
+    bounds = lockedBounds(bounds);
     /*
      * Mobile paging always clamped. Desktop used to skip clamp entirely, so a
      * reading board could pan into empty beige past the page — Excalidraw then
@@ -6998,6 +7044,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // on the first-open box, so the page still scrolled but ink died past
       // that initial view.
       syncPageVisibility();
+      // Pages reading holds a fitted page: whatever this fit did to the camera
+      // (a frame-only resize does nothing to it), the page is fitted again.
+      if (pageFitRef.current != null && pageLockRef.current) applyPageFitRef.current();
     },
     [ensureLinedPair, mobile, reportCodeSlot, reportContentSlot, reportLinedSlot, reportTitleSlot, syncPageVisibility],
   );
@@ -9024,7 +9073,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         state.zoom?.value ?? 1,
         viewWidth || state.width,
         viewHeight || state.height,
-        bounds,
+        lockedBounds(bounds),
         inset,
         isDrawPageRegion(mobileRegionRef.current) ? "keep" : "center",
       );
@@ -9121,13 +9170,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       mapChromeHiddenRef.current,
       mobileRef.current,
     );
-    const pageH = (view.height - inset.top - inset.bottom) / view.zoom;
-    const slotRect = slot.getBoundingClientRect();
-    const sceneH = contentRenderedHeightRef.current > 0 ? contentRenderedHeightRef.current : bounds.maxY - bounds.minY;
-    if (slotRect.height < 1 || !(sceneH > 0) || !(pageH > 0)) return [];
-    const key = `${Math.round(slotRect.height)}:${Math.round(sceneH)}:${Math.round(pageH)}`;
+    /*
+     * A page is a screenful at the reading (width-fit) zoom, whatever the
+     * camera is at now. Measured against the live zoom, a page fit that zooms
+     * out would make every page taller, and the next fit smaller again.
+     */
+    const cutZoom = fitZoomMinRef.current ?? view.zoom;
+    const pageH = (view.height - inset.top - inset.bottom) / cutZoom;
+    /*
+     * The slot is laid out in scene units and only scaled, so its layout box
+     * is the document's scene size — not the client box, which moves with
+     * the camera, and not the frame height, which keeps the largest height
+     * ever measured (a first layout at no width is thousands of pages tall).
+     */
+    const layoutH = slot.offsetHeight;
+    const sceneH = Math.min(layoutH, documentLayerHeight(slot));
+    if (layoutH < 1 || !(sceneH > 0) || !(pageH > 0)) return [];
+    const key = `${Math.round(layoutH)}:${Math.round(sceneH)}:${Math.round(pageH)}`;
     if (textPagesRef.current?.key === key) return textPagesRef.current.frames;
-    const sy = slotRect.height / sceneH;
+    const slotRect = slot.getBoundingClientRect();
+    if (slotRect.height < 1) return [];
+    const sy = slotRect.height / layoutH;
     const blocks: TextBlock[] = [];
     for (const el of slot.querySelectorAll<HTMLElement>(TEXT_PAGE_BLOCKS)) {
       // Innermost only: a list item's paragraph, not the list around it.
@@ -9144,9 +9207,87 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       });
     }
     const frames = sectionPages(blocks, pageH, bounds.minY, bounds.minY + sceneH);
-    textPagesRef.current = { key, frames };
+    textPagesRef.current = { key, frames, pageH };
     return frames;
   };
+
+  /**
+   * Pages reading with a page fit: the whole open page in the middle of the
+   * view, `pageFitRef` of it on the limiting side. `clampPanScroll` holds the
+   * camera to the same box, so a wheel or a drag cannot walk it off centre.
+   */
+  const applyPageFit = () => {
+    const fraction = pageFitRef.current;
+    const lock = pageLockRef.current;
+    const bounds = pageBoundsRef.current;
+    const api = apiRef.current;
+    if (fraction == null || !lock || !bounds || !api) return;
+    const state = api.getAppState() as {
+      width?: number;
+      height?: number;
+      offsetLeft?: number;
+      offsetTop?: number;
+    };
+    // The live box: a resize fits before `lastFittedBoardBoxRef` catches up.
+    const { viewWidth, viewHeight } = liveBoardViewSize(boardRef.current?.getBoundingClientRect(), state);
+    const inset = measureChromeInsets(
+      boardRef.current,
+      toolbarHeightRef.current,
+      mapChromeHiddenRef.current,
+      mobileRef.current,
+    );
+    const availW = viewWidth - inset.left - inset.right;
+    const availH = viewHeight - inset.top - inset.bottom;
+    const w = bounds.maxX - bounds.minX;
+    const h = lock.maxY - lock.minY;
+    if (availW < 8 || availH < 8 || !(w > 0) || !(h > 0)) return;
+    const zoom = clampZoom(Math.min(availW / w, availH / h) * fraction, FIT_ZOOM_MIN);
+    const scrollX = (inset.left + (availW - w * zoom) / 2) / zoom - bounds.minX;
+    const scrollY = (inset.top + (availH - h * zoom) / 2) / zoom - lock.minY;
+    const prev = liveCameraRef.current;
+    const same = committedPanCameraRef.current;
+    if (
+      !prev?.live &&
+      Math.abs(same.zoom - zoom) < 1e-5 &&
+      Math.abs(same.scrollX - scrollX) < 0.01 &&
+      Math.abs(same.scrollY - scrollY) < 0.01
+    ) {
+      placePageMask(scrollX, scrollY, zoom);
+      return;
+    }
+    pendingVisualScrollRef.current = null;
+    if (visualScrollRafRef.current) {
+      cancelAnimationFrame(visualScrollRafRef.current);
+      visualScrollRafRef.current = 0;
+    }
+    committedPanCameraRef.current = { scrollX, scrollY, zoom };
+    liveCameraRef.current = {
+      scrollX,
+      scrollY,
+      zoom,
+      width: viewWidth,
+      height: viewHeight,
+      offsetLeft: prev?.offsetLeft ?? state.offsetLeft ?? 0,
+      offsetTop: prev?.offsetTop ?? state.offsetTop ?? 0,
+      live: false,
+    };
+    if (scrollModeRef.current) lockedScrollXRef.current = scrollX;
+    clearPanOffsetsRef.current();
+    // A fit, not a gesture: no camera-motion pulse, which would hold the ink
+    // off every resize until the reading-idle teardown.
+    fittingCameraRef.current = true;
+    api.updateScene({
+      appState: { zoom: { value: zoom }, scrollX, scrollY },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    });
+    requestAnimationFrame(() => {
+      fittingCameraRef.current = false;
+    });
+    placeContentSlotAtRef.current(scrollX, scrollY, zoom);
+    void rasterInkRef.current?.syncCamera();
+    scheduleSlotReports();
+  };
+  applyPageFitRef.current = applyPageFit;
 
   const jumpToPdfPage = useCallback((pageId: number, opts?: { hold?: boolean; frameMinY?: number }) => {
     const api = apiRef.current;
@@ -9690,11 +9831,54 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const pdf = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
         return pdf.length > 0 ? pdf : textPageFrames();
       },
-      setPageLock: (span) => {
-        pageLockRef.current = span ? { minY: span.minY, maxY: span.maxY } : null;
+      readingPageBox: () => {
+        const bounds = pageBoundsRef.current;
+        const lock = pageLockRef.current;
+        return bounds && lock ? { minX: bounds.minX, maxX: bounds.maxX, minY: lock.minY, maxY: lock.maxY } : null;
       },
-      jumpToPageFrame: (frame) =>
-        jumpToPdfPage(frame.pageId, { hold: false, frameMinY: frame.minY }),
+      setPageLock: (span) => {
+        if (!span) {
+          pageLockRef.current = null;
+          pageShownRef.current = null;
+          const cam = committedPanCameraRef.current;
+          placePageMask(cam.scrollX, cam.scrollY, cam.zoom);
+          return;
+        }
+        /*
+         * A text page sits in a box exactly one screenful high, so every page
+         * is the same size and in the same place, its text at the top. Cut
+         * short, the rest of the box is blank; past a screenful, a page only
+         * ever runs on with the space before the next block.
+         */
+        const textH = peekPdfReadingFrames(filmScope).length === 0 ? (textPagesRef.current?.pageH ?? 0) : 0;
+        if (textH > 0) {
+          pageLockRef.current = { minY: span.minY, maxY: span.minY + textH };
+          pageShownRef.current = { minY: span.minY, maxY: Math.min(span.maxY, span.minY + textH) };
+        } else {
+          pageLockRef.current = { minY: span.minY, maxY: span.maxY };
+          pageShownRef.current = { minY: span.minY, maxY: span.maxY };
+        }
+        if (pageFitRef.current != null) applyPageFit();
+      },
+      setPageFit: (fraction) => {
+        const next = fraction != null && fraction > 0 ? Math.min(1, fraction) : null;
+        const was = pageFitRef.current;
+        if (next === was) return;
+        pageFitRef.current = next;
+        if (next != null) {
+          applyPageFit();
+          return;
+        }
+        const cam = committedPanCameraRef.current;
+        placePageMask(cam.scrollX, cam.scrollY, cam.zoom);
+        // Back to reading width, where the page was.
+        runFit(undefined, "keepY");
+      },
+      jumpToPageFrame: (frame) => {
+        const jumped = jumpToPdfPage(frame.pageId, { hold: false, frameMinY: frame.minY });
+        if (jumped && pageFitRef.current != null) applyPageFit();
+        return jumped;
+      },
       captureSceneFrame: async (frame, scale) => {
         const api = apiRef.current;
         if (!api || frame.width < 1 || frame.height < 1) return null;
@@ -10842,6 +11026,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         displayHz={displayHz}
         matchDisplay={matchDisplay}
       />
+      {pageContent && (
+        <div ref={pageMaskRef} className="lc-page-mask" aria-hidden hidden>
+          <div className="lc-page-mask-hole" />
+        </div>
+      )}
       <SceneOverlay
         ref={sceneOverlayRef}
         getElements={() => {

@@ -287,9 +287,20 @@ export interface BoardHandle {
    * or one per half when the sheet is split — top to bottom.
    */
   readingPageFrames(): PageFrame[];
+  /**
+   * The box the camera is held to while a page is locked: the page's column,
+   * and its span — page-high for a text page cut short. Null when unlocked.
+   */
+  readingPageBox(): { minX: number; maxX: number; minY: number; maxY: number } | null;
   /** Hold the camera inside this scene span; null lets it scroll freely again. */
   setPageLock(span: { minY: number; maxY: number } | null): void;
-  /** Put this slot's top at the top of the view. */
+  /**
+   * Show the whole locked page, centred, at this share of the view on its
+   * limiting side, and hide everything around it. Null goes back to the
+   * reading width.
+   */
+  setPageFit(fraction: number | null): void;
+  /** Put this slot's top at the top of the view — or, with a page fit, the whole slot in the middle of it. */
   jumpToPageFrame(frame: PageFrame): boolean;
   /** The page, its marks and its ink for a scene rectangle, as pixels. */
   captureSceneFrame(

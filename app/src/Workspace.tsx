@@ -27,7 +27,7 @@ import { fetchDocHubHint, type DocHubHint } from "./util/hubHint";
 import type { HubSyncWalkHost, HubWalkReport } from "./components/HubSyncControl";
 import { HubConflictSplit } from "./components/HubConflictSplit";
 import { PageTurn } from "./canvas/pageTurn/PageTurn";
-import { loadReadingMode, READING_MODE_EVENT, type ReadingMode } from "./util/readingModePref";
+import { loadPageFit, loadReadingMode, pageFitShare, READING_MODE_EVENT, type ReadingMode } from "./util/readingModePref";
 import {
   loadWebRenderMode,
   otherWebRenderMode,
@@ -1914,8 +1914,12 @@ export const Workspace = memo(function Workspace({
   const boardRef = useRef<BoardHandle | null>(null);
   /** Scroll or a page at a time — Settings › UI › Reading. */
   const [readingMode, setReadingMode] = useState<ReadingMode>(loadReadingMode);
+  const [pageFit, setPageFit] = useState(loadPageFit);
   useEffect(() => {
-    const onChange = () => setReadingMode(loadReadingMode());
+    const onChange = () => {
+      setReadingMode(loadReadingMode());
+      setPageFit(loadPageFit());
+    };
     window.addEventListener(READING_MODE_EVENT, onChange);
     return () => window.removeEventListener(READING_MODE_EVENT, onChange);
   }, []);
@@ -11314,6 +11318,7 @@ export const Workspace = memo(function Workspace({
           turnEnabled={readingMode === "pages" && showing && active && !annotateCode && !hubConflictAsk}
           spread={pdfSpread}
           paged={annotateSource.docType === "pdf"}
+          fit={pageFitShare(pageFit)}
         />
       ) : null}
       {active && artifactPicker && <ArtifactPicker parent={artifactPicker.parent} associations={artifactPicker.associations}

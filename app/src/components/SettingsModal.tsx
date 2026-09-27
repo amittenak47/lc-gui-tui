@@ -154,7 +154,7 @@ import {
 import { FEATURE_LEETCODE } from "../featureFlags";
 import { loadUiHandedness, saveUiHandedness, type UiHandedness } from "../util/uiHandedness";
 import { loadStartupTabs, saveStartupTabs, type StartupTabs } from "../util/startupTabsPref";
-import { loadReadingMode, saveReadingMode, type ReadingMode } from "../util/readingModePref";
+import { loadPageFit, loadReadingMode, savePageFit, saveReadingMode, type PageFitPref, type ReadingMode } from "../util/readingModePref";
 import { loadAgentDisplayPrefs, saveAgentDisplayPrefs, type AgentDisplayPrefs } from "../util/agentDisplayPrefs";
 import { PAD_HUB_EVENT, loadSavedPadHub, savePadHub } from "../util/padHub";
 import { compareIndexFacts, indexFacts } from "../util/indexReport";
@@ -430,6 +430,8 @@ interface DevicePrefs {
   startupTabs: StartupTabs;
   /** Continuous scroll, or a page at a time with a page turn. */
   readingMode: ReadingMode;
+  /** Pages reading: the whole page edge to edge, or with a margin. */
+  pageFit: PageFitPref;
   handedness: InkHandedness;
   /**
    * Hand a failed run to the coach without being asked.
@@ -497,6 +499,7 @@ function loadDevicePrefs(): DevicePrefs {
     uiHandedness: loadUiHandedness(),
     startupTabs: loadStartupTabs(),
     readingMode: loadReadingMode(),
+    pageFit: loadPageFit(),
     handedness: loadInkHandedness(),
     testForward: loadTestForwardMode(),
     captureMode: loadCaptureMode(),
@@ -539,6 +542,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.uiHandedness === b.uiHandedness &&
     a.startupTabs === b.startupTabs &&
     a.readingMode === b.readingMode &&
+    a.pageFit === b.pageFit &&
     a.handedness === b.handedness &&
     a.testForward === b.testForward &&
     a.captureMode === b.captureMode &&
@@ -871,6 +875,7 @@ export function SettingsModal({
   const [uiHandedness, setUiHandedness] = useState<UiHandedness>(loadUiHandedness);
   const [startupTabs, setStartupTabs] = useState<StartupTabs>(loadStartupTabs);
   const [readingMode, setReadingMode] = useState<ReadingMode>(loadReadingMode);
+  const [pageFit, setPageFit] = useState<PageFitPref>(loadPageFit);
   const [agentDisplay, setAgentDisplay] = useState(loadAgentDisplayPrefs);
   const [colorWheelOnToolbar, setColorWheelOnToolbar] = useState(
     () => loadInkToolPresets().colorWheelOnToolbar,
@@ -1094,6 +1099,7 @@ export function SettingsModal({
     setUiHandedness(prefs.uiHandedness);
     setStartupTabs(prefs.startupTabs);
     setReadingMode(prefs.readingMode);
+    setPageFit(prefs.pageFit);
     setAgentDisplay(prefs.agentDisplay);
     setTestForward(prefs.testForward);
     setCaptureMode(prefs.captureMode);
@@ -1200,6 +1206,7 @@ export function SettingsModal({
     uiHandedness,
     startupTabs,
     readingMode,
+    pageFit,
     handedness,
     testForward,
     captureMode,
@@ -1273,6 +1280,7 @@ export function SettingsModal({
         saveUiHandedness(uiHandedness);
         saveStartupTabs(startupTabs);
         saveReadingMode(readingMode);
+        savePageFit(pageFit);
         saveAgentDisplayPrefs(agentDisplay);
         saveTestForwardMode(testForward);
         saveCaptureMode(captureMode);
@@ -2651,6 +2659,18 @@ export function SettingsModal({
                     <strong>{label}</strong><span className="lc-muted">{hint}</span>
                   </button>)}
                 </div>
+                {readingMode === "pages" && (
+                  <div className="lc-settings-choice" role="radiogroup" aria-label="Page size">
+                    {([
+                      ["full", "Full screen", "The whole page, as large as the window allows. Nothing of the pages before or after it shows."],
+                      ["margin", "90% of the screen", "The same, with a margin of the board around the page."],
+                    ] as const).map(([value, label, hint]) => <button key={value} type="button" role="radio"
+                      aria-checked={pageFit === value} className={pageFit === value ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                      onClick={() => setPageFit(value)}>
+                      <strong>{label}</strong><span className="lc-muted">{hint}</span>
+                    </button>)}
+                  </div>
+                )}
                 <div className="lc-settings-subhead">Agent behavior</div>
                 <div className="lc-settings-choice" aria-label="Thinking display">
                   {([
