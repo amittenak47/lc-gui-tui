@@ -159,6 +159,7 @@ import {
 } from "./inkPageIndex";
 import {
   peekPdfReadingFrames,
+  setPdfRestScale,
   peekPdfIntersectingPages,
   peekPdfFilmCurrent,
   publishPdfFilmCurrent,
@@ -890,6 +891,14 @@ const ZOOM_MIN = 0.15;
  * 768 px and lands at 0.18, which is why the bug only showed up small.
  */
 const FIT_ZOOM_MIN = 0.02;
+/** Ceiling for a Pages-reading page fit. */
+const PAGE_FIT_ZOOM_MAX = 8;
+/** Sharpest a fitted PDF page is painted, in pixels per scene unit. */
+const PAGE_FIT_PAINT_MAX = 4;
+/** …and at most this many pixels per page. */
+const PAGE_FIT_PAINT_PIXELS = 6_000_000;
+/** How far past a fitted page a pinch may go in. */
+const PAGE_PINCH_RANGE = 3;
 const ZOOM_MAX = 1.75;
 const ZOOM_STEP = 1.15;
 /** Button zoom animation — retargets smoothly on repeat / hold. */
@@ -2108,6 +2117,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /** The zoom the page fit last put the camera at. */
   const pageFitZoomRef = useRef(1);
   const applyPageFitRef = useRef<() => void>(() => {});
+  const lockPageSpanRef = useRef<(span: { minY: number; maxY: number } | null) => void>(() => {});
   const publishPdfFilmFromScrollRef = useRef<
     (scrollX: number, scrollY: number, zoom: number, height: number) => void
   >(() => {});
@@ -6151,7 +6161,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // A fitted page is as far out as Pages goes — past it there is only the
       // mask — and it may sit below the reading floor, so it is the floor.
       const floor = pageFitRef.current != null ? pageFitZoomRef.current : getZoomFloor();
-      const z = clampZoom(zoom, floor);
+      // A fitted page can already be past the gesture ceiling; a pinch can
+      // still go in on it.
+      const ceiling = pageFitRef.current != null ? Math.max(ZOOM_MAX, floor * PAGE_PINCH_RANGE) : ZOOM_MAX;
+      const z = Math.min(ceiling, Math.max(floor, zoom));
       const { scrollX, scrollY } = clampPanScroll(
         (at.x - offsetLeft) / z - anchor.x,
         (at.y - offsetTop) / z - anchor.y,
@@ -9246,8 +9259,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const w = bounds.maxX - bounds.minX;
     const h = lock.maxY - lock.minY;
     if (availW < 8 || availH < 8 || !(w > 0) || !(h > 0)) return;
-    const zoom = clampZoom(Math.min(availW / w, availH / h) * fraction, FIT_ZOOM_MIN);
+    // Not the gesture ceiling: a reading column is 300–760 units, so a page
+    // filling a large window needs well past 1.75, and the fit is arithmetic.
+    const zoom = Math.min(PAGE_FIT_ZOOM_MAX, Math.max(FIT_ZOOM_MIN, Math.min(availW / w, availH / h) * fraction));
     pageFitZoomRef.current = zoom;
+    // The page is shown this large now: paint it (and the pages either side,
+    // which a turn shows next) at the device pixels it covers. Pages only —
+    // scroll reading keeps its own scale. Quarter steps, so a resize that
+    // barely moves the zoom does not repaint the book.
+    // Capped by pixels too, so a large page on a dense tablet screen does not
+    // hold a 60 MB bitmap per sheet in the rest cache.
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    const byPixels = Math.sqrt(PAGE_FIT_PAINT_PIXELS / Math.max(1, w * h));
+    const paint = Math.min(PAGE_FIT_PAINT_MAX, byPixels, Math.ceil(zoom * dpr * 4) / 4);
+    setPdfRestScale(filmScope, Math.max(2, Math.floor(paint * 4) / 4));
     const scrollX = (inset.left + (availW - w * zoom) / 2) / zoom - bounds.minX;
     const scrollY = (inset.top + (availH - h * zoom) / 2) / zoom - lock.minY;
     const prev = liveCameraRef.current;
@@ -9294,6 +9319,33 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     scheduleSlotReports();
   };
   applyPageFitRef.current = applyPageFit;
+
+  /** Pages reading: hold the camera to this page (null frees it), fitted when a fit is on. */
+  const lockPageSpan = (span: { minY: number; maxY: number } | null) => {
+    if (!span) {
+      pageLockRef.current = null;
+      pageShownRef.current = null;
+      const cam = committedPanCameraRef.current;
+      placePageMask(cam.scrollX, cam.scrollY, cam.zoom);
+      return;
+    }
+    /*
+     * A text page sits in a box exactly one screenful high, so every page
+     * is the same size and in the same place, its text at the top. Cut
+     * short, the rest of the box is blank; past a screenful, a page only
+     * ever runs on with the space before the next block.
+     */
+    const textH = peekPdfReadingFrames(filmScope).length === 0 ? (textPagesRef.current?.pageH ?? 0) : 0;
+    if (textH > 0) {
+      pageLockRef.current = { minY: span.minY, maxY: span.minY + textH };
+      pageShownRef.current = { minY: span.minY, maxY: Math.min(span.maxY, span.minY + textH) };
+    } else {
+      pageLockRef.current = { minY: span.minY, maxY: span.maxY };
+      pageShownRef.current = { minY: span.minY, maxY: span.maxY };
+    }
+    if (pageFitRef.current != null) applyPageFit();
+  };
+  lockPageSpanRef.current = lockPageSpan;
 
   const jumpToPdfPage = useCallback((pageId: number, opts?: { hold?: boolean; frameMinY?: number }) => {
     const api = apiRef.current;
@@ -9386,6 +9438,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       captureUpdate: CaptureUpdateAction.NEVER,
     });
     placeContentSlotAtRef.current(scrollX, nextScrollY, zoom);
+    /*
+     * Pages reading with the page fitted: a jump from anywhere — a turn, the
+     * filmstrip, a footnote — holds and fits the page it went to, and does so
+     * before the page is announced, so nothing that listens reads the
+     * unfitted camera in between and decides the view is on another page.
+     */
+    if (pageFitRef.current != null && pageLockRef.current) {
+      const pool = frames.length > 0 ? frames : textPageFrames();
+      const at = opts?.frameMinY;
+      const target =
+        (at != null ? pool.find((f) => f.pageId === pageId && at >= f.minY - 0.5 && at < f.maxY) : undefined) ??
+        pool.find((f) => f.pageId === pageId);
+      if (target) lockPageSpanRef.current(target);
+    }
     publishPdfFilmCurrent(filmScope, pageId);
     publishPdfViewPages(
       filmScope,
@@ -9842,30 +9908,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const lock = pageLockRef.current;
         return bounds && lock ? { minX: bounds.minX, maxX: bounds.maxX, minY: lock.minY, maxY: lock.maxY } : null;
       },
-      setPageLock: (span) => {
-        if (!span) {
-          pageLockRef.current = null;
-          pageShownRef.current = null;
-          const cam = committedPanCameraRef.current;
-          placePageMask(cam.scrollX, cam.scrollY, cam.zoom);
-          return;
-        }
-        /*
-         * A text page sits in a box exactly one screenful high, so every page
-         * is the same size and in the same place, its text at the top. Cut
-         * short, the rest of the box is blank; past a screenful, a page only
-         * ever runs on with the space before the next block.
-         */
-        const textH = peekPdfReadingFrames(filmScope).length === 0 ? (textPagesRef.current?.pageH ?? 0) : 0;
-        if (textH > 0) {
-          pageLockRef.current = { minY: span.minY, maxY: span.minY + textH };
-          pageShownRef.current = { minY: span.minY, maxY: Math.min(span.maxY, span.minY + textH) };
-        } else {
-          pageLockRef.current = { minY: span.minY, maxY: span.maxY };
-          pageShownRef.current = { minY: span.minY, maxY: span.maxY };
-        }
-        if (pageFitRef.current != null) applyPageFit();
-      },
+      setPageLock: (span) => lockPageSpan(span),
       setPageFit: (fraction) => {
         const next = fraction != null && fraction > 0 ? Math.min(1, fraction) : null;
         const was = pageFitRef.current;
@@ -9877,6 +9920,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
         const cam = committedPanCameraRef.current;
         placePageMask(cam.scrollX, cam.scrollY, cam.zoom);
+        setPdfRestScale(filmScope, null);
         // Back to reading width, where the page was.
         runFit(undefined, "keepY");
       },

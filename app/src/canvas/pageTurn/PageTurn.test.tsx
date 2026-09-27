@@ -112,6 +112,10 @@ it("settles back without moving when let go short of halfway", async () => {
   pointer("pointermove", 340, 505);
   pointer("pointermove", 300, 505);
   await settle();
+  // The hand stops before it lets go: no throw.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
   pointer("pointerup", 300, 505);
   await settle();
   expect(board.jumpToPageFrame).not.toHaveBeenCalled();
@@ -222,4 +226,37 @@ it("leaves a pinch alone: a second finger calls the turn off", () => {
   pointer("pointermove", 300, 505);
   pointer("pointermove", 150, 505);
   expect(board.captureSceneFrame).not.toHaveBeenCalled();
+});
+
+it("turns on a quick flick short of halfway, and still plays the turn", async () => {
+  mount();
+  pointer("pointerdown", 380, 500);
+  pointer("pointermove", 340, 505);
+  await settle(); // the pictures are in
+  pointer("pointermove", 300, 505);
+  pointer("pointerup", 300, 505);
+  await settle();
+  await settle();
+  expect(board.jumpToPageFrame).toHaveBeenCalledWith({ ...FRAMES[2], minY: FRAMES[2].minY });
+});
+
+it("lines up another turn when a key is pressed during one", async () => {
+  // The board lands where it is told, as the real one does.
+  board.jumpToPageFrame.mockImplementation(((frame: { minY: number }) => {
+    view = { ...view, y: frame.minY };
+    return true;
+  }) as never);
+  const key = () =>
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }));
+    });
+  view = { ...view, y: 1240 }; // on the last page, two to go back
+  mount();
+  key();
+  await settle();
+  key();
+  for (let i = 0; i < 12; i += 1) await settle();
+  const landed = board.jumpToPageFrame.mock.calls.map((call) => (call[0] as { pageId: number }).pageId);
+  board.jumpToPageFrame.mockImplementation(() => true);
+  expect(landed.slice(0, 2)).toEqual([2, 1]);
 });

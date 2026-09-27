@@ -20,7 +20,7 @@ import { useEffect, useRef, type RefObject } from "react";
 
 import type { BoardHandle } from "../BoardHandle";
 import type { PageFrame } from "../inkPageIndex";
-import { subscribePdfFilmCurrent } from "../../modes/pdfFilm";
+import { peekPdfFilmCurrent, subscribePdfFilmCurrent } from "../../modes/pdfFilm";
 import { cornerForDrag, turnCommits, type Point } from "./curl";
 import { paintTurn, type TurnLayout } from "./paintTurn";
 
@@ -36,6 +36,22 @@ const SETTLE_MS = 300;
 const SHOT_CACHE = 4;
 /** How long the view must sit still before the next turn's pictures are taken. */
 const PREFETCH_IDLE_MS = 600;
+/** How often a still page checks whether its pictures went stale (a sharper paint landed). */
+const PREFETCH_RECHECK_MS = 1500;
+/** Fastest a settle plays, in ms: a flick is quick, but still a page turning. */
+const MIN_SETTLE_MS = 70;
+/** Released faster than this toward (or away from) the end, the turn follows the throw: px per ms. */
+const FLICK_PX_PER_MS = 0.45;
+/** A release this soon after the last movement is a throw; later, the hand had stopped. */
+const FLICK_FRESH_MS = 60;
+/** Let go before the pictures were taken: how long to wait for them before simply going. */
+const PICTURE_WAIT_MS = 450;
+/** A key pressed during a turn finishes it this fast… */
+const HURRY_MS = 110;
+/** …and the turns it queued play at this pace. */
+const QUICK_TURN_MS = 240;
+/** Most turns a held or hammered key may queue ahead. */
+const KEY_QUEUE_MAX = 2;
 
 /**
  * Pixels per scene unit for a turn's pictures: the view's own resolution,
@@ -96,12 +112,24 @@ function frameIndexAt(frames: readonly PageFrame[], y: number): number {
 }
 
 /**
- * Where in the view to look for the page it shows. A quarter down, not the
- * middle: a fitted text page cut short of the next block can end above the
- * middle of the view, and the middle would then name the page after it.
+ * Where in the view to look for the page it shows: the middle. A fitted page
+ * sits centred with the board around it, so anywhere nearer an edge can be
+ * off the page — a quarter down landed on the sheet above a wide page, and
+ * every check then "followed" the view there, a page further back each time.
  */
 function probeY(view: { y: number; height: number }): number {
-  return view.y + view.height * 0.25;
+  return view.y + view.height / 2;
+}
+
+/**
+ * The view still shows the held page: its middle is inside the box the board
+ * holds that page in (a text page's box runs past a short cut), or inside the
+ * page itself when there is no box for it.
+ */
+function showsHeld(board: BoardHandle, held: PageFrame, y: number): boolean {
+  const box = board.readingPageBox();
+  const span = box && Math.abs(box.minY - held.minY) < 0.5 ? box : held;
+  return y >= span.minY && y <= span.maxY;
 }
 
 /** The frame the lock holds, when it is still one of these; else the one in view. */
@@ -151,7 +179,11 @@ interface Turn {
   rect: { left: number; top: number; width: number; height: number };
   canvas: HTMLCanvasElement;
   images: { from: HTMLCanvasElement; to: HTMLCanvasElement } | null;
+  /** Settles true once both pictures are in, false if they cannot be had. */
+  ready: Promise<boolean>;
   corner: Point;
+  /** The settle playing now, if any. */
+  anim: { began: number; ms: number; start: Point; goal: Point; commit: boolean } | null;
   frame: number;
   done: boolean;
 }
@@ -185,10 +217,31 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       // A jump made elsewhere moves the view off the held page: follow it.
       const held = lockedRef.current;
       const probe = probeY(view);
-      const stays = held && probe >= held.minY && probe < held.maxY;
-      const locked = frames[stays ? currentIndex(frames, held, view) : frameIndexAt(frames, probe)]!;
+      const stays = held && showsHeld(board, held, probe);
+      const locked = frames[stays ? currentIndex(frames, held, view) : pageInView(frames, view)]!;
       lockedRef.current = locked;
       board.setPageLock(locked);
+    };
+    /*
+     * The page to hold when none is: a PDF's current page — the one its
+     * filmstrip and page count show, which scroll reading puts at the top of
+     * the view — else whichever page is in the middle of it. Of a split sheet's
+     * two halves, the one more on screen.
+     */
+    const pageInView = (frames: readonly PageFrame[], view: { y: number; height: number }) => {
+      const current = pagedRef.current ? peekPdfFilmCurrent(filmScope) : 0;
+      let best = -1;
+      let bestOverlap = -Infinity;
+      frames.forEach((f, i) => {
+        if (f.pageId !== current) return;
+        const overlap = Math.min(f.maxY, view.y + view.height) - Math.max(f.minY, view.y);
+        if (overlap > bestOverlap) {
+          bestOverlap = overlap;
+          best = i;
+        }
+      });
+      // Only while it is on screen: before anything publishes it, it reads 1.
+      return best >= 0 && bestOverlap > 0 ? best : frameIndexAt(frames, probeY(view));
     };
     const unsubscribe = subscribePdfFilmCurrent(filmScope, relock);
     /*
@@ -208,7 +261,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const view = board.getViewportBounds();
       const held = lockedRef.current;
       const probe = view ? probeY(view) : null;
-      const drifted = held && probe != null && (probe < held.minY || probe > held.maxY);
+      const drifted = held && probe != null && !showsHeld(board, held, probe);
       const recut = held != null && frames.length > 0 &&
         !frames.some((f) => Math.abs(f.minY - held.minY) < 0.5 && Math.abs(f.maxY - held.maxY) < 0.5);
       if (frames.length !== lockedCount || drifted || recut) {
@@ -246,10 +299,22 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
      * stroke added since, or a zoom, takes a fresh one. At most a few kept:
      * each is a screenful of pixels.
      */
-    const shot = (b: BoardHandle, scene: Scene, scale: number, cutY = Infinity) => {
+    /**
+     * What a PDF page's picture was taken from: the size its bitmap is painted
+     * at now. A picture taken while the page was still a preview goes stale the
+     * moment the sharp paint lands, and is taken again.
+     */
+    const paintSignature = (pageId: number) => {
+      if (!pagedRef.current || !(pageId >= 1)) return "";
+      const host = document.querySelector(hostSelector);
+      const canvases = host?.querySelectorAll<HTMLCanvasElement>(`[data-pdf-page="${pageId}"] canvas.lc-pdf-canvas`);
+      return canvases ? Array.from(canvases, (c) => c.width).join(",") : "";
+    };
+
+    const shot = (b: BoardHandle, scene: Scene, scale: number, cutY = Infinity, pageId = 0) => {
       const key = [scene.x, scene.y, scene.width, scene.height, scale, b.getInkRevision(), Math.min(cutY, 1e9)]
         .map((n) => Math.round(n * 100) / 100)
-        .join(":");
+        .join(":") + `@${paintSignature(pageId)}`;
       const shots = shotsRef.current;
       let taken = shots.get(key);
       if (!taken) {
@@ -309,15 +374,20 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         if (!tl || !br) return;
         const scale = shotScale(br.x - tl.x, scene.width);
         void (async () => {
-          await shot(b, scene, scale, from.maxY);
+          await shot(b, scene, scale, from.maxY, from.pageId);
           for (const neighbour of [frames[at + 1], frames[at - 1]]) {
             if (!neighbour || turnRef.current) continue;
-            await shot(b, { ...scene, y: neighbour.minY + (scene.y - from.minY) }, scale, neighbour.maxY);
+            await shot(b, { ...scene, y: neighbour.minY + (scene.y - from.minY) }, scale, neighbour.maxY, neighbour.pageId);
           }
         })();
       }, PREFETCH_IDLE_MS);
     };
     const unsubscribeFilm = subscribePdfFilmCurrent(filmScope, prefetch);
+    // Sharp paints land after the first pictures were taken: look again while
+    // the page sits still. Unchanged pictures are kept, not taken twice.
+    const recheck = window.setInterval(() => {
+      if (!turnRef.current) prefetch();
+    }, PREFETCH_RECHECK_MS);
 
     const planTurn = (direction: Direction, bottom: boolean): Turn | null => {
       const b = board();
@@ -364,11 +434,14 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         bottom,
         from,
         to,
-        offsetInPage: view.y - from.minY,
+        // With the page fitted the view starts above it; land on the top.
+        offsetInPage: Math.max(0, view.y - from.minY),
         rect,
         canvas,
         images: null,
         corner: { x: direction === "next" ? w : -w, y: bottom ? rect.height : 0 },
+        anim: null,
+        ready: Promise.resolve(false),
         frame: 0,
         done: false,
       };
@@ -376,14 +449,19 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       // is taken at the same place within it the view shows of this one.
       const scale = shotScale(rect.width, scene.width);
       const toScene = { ...scene, y: to.minY + (scene.y - from.minY) };
-      void Promise.all([shot(b, scene, scale, from.maxY), shot(b, toScene, scale, to.maxY)]).then(
+      turn.ready = Promise.all([
+        shot(b, scene, scale, from.maxY, from.pageId),
+        shot(b, toScene, scale, to.maxY, to.pageId),
+      ]).then(
         ([here, there]) => {
-          if (turnRef.current !== turn || turn.done || !here || !there) return;
+          if (turnRef.current !== turn || turn.done || !here || !there) return false;
           // Turning back is turning forward from the previous page, reversed.
           turn.images = direction === "next" ? { from: here, to: there } : { from: there, to: here };
           document.body.append(canvas);
           draw(turn);
+          return true;
         },
+        () => false,
       );
       return turn;
     };
@@ -429,38 +507,111 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       prefetch();
     };
 
-    /** Play the corner from where it is to fully over, or back to rest. */
-    const settle = (turn: Turn, commit: boolean, fullMs = SETTLE_MS) => {
-      const w = turn.layout === "book" ? turn.rect.width / 2 : turn.rect.width;
-      // Finishing means reaching the end the turn is headed for.
-      const goal = {
-        x: (turn.direction === "next") === commit ? -w : w,
-        y: turn.bottom ? turn.rect.height : 0,
-      };
-      const start = { ...turn.corner };
-      const distance = Math.abs(goal.x - start.x) / (2 * w);
-      const ms = Math.max(80, fullMs * distance);
-      const began = performance.now();
-      const step = (now: number) => {
+    /** Turns queued by a key pressed while one was playing. */
+    let queued: { direction: Direction; count: number } | null = null;
+
+    const step = (turn: Turn) => (now: number) => {
+      const a = turn.anim;
+      if (turn.done || !a) return;
+      const t = Math.min(1, (now - a.began) / a.ms);
+      const k = easeOutCubic(t);
+      turn.corner = { x: a.start.x + (a.goal.x - a.start.x) * k, y: a.start.y + (a.goal.y - a.start.y) * k };
+      draw(turn);
+      if (t < 1) {
+        requestAnimationFrame(step(turn));
+        return;
+      }
+      if (a.commit) land(turn);
+      teardown(turn);
+      nextQueued();
+    };
+
+    /**
+     * Play the corner from where it is to fully over, or back to rest.
+     *
+     * `speed` is how fast the hand was moving when it let go (px/ms): the
+     * sheet leaves at that speed and eases out, so a flick is a quick turn
+     * rather than a slow one or none at all. Without pictures yet, it waits a
+     * moment for them — a fast turn still shows the page turning.
+     */
+    const settle = (turn: Turn, commit: boolean, { fullMs = SETTLE_MS, speed = 0 } = {}) => {
+      const run = () => {
         if (turn.done) return;
-        const t = Math.min(1, (now - began) / ms);
-        const k = easeOutCubic(t);
-        turn.corner = { x: start.x + (goal.x - start.x) * k, y: start.y + (goal.y - start.y) * k };
-        if (turn.images) draw(turn);
-        if (t < 1) {
-          requestAnimationFrame(step);
+        const w = turn.layout === "book" ? turn.rect.width / 2 : turn.rect.width;
+        // Finishing means reaching the end the turn is headed for.
+        const goal = {
+          x: (turn.direction === "next") === commit ? -w : w,
+          y: turn.bottom ? turn.rect.height : 0,
+        };
+        const start = { ...turn.corner };
+        const px = Math.abs(goal.x - start.x);
+        let ms = Math.max(80, fullMs * (px / (2 * w)));
+        // An ease-out cubic starts at three times its average speed.
+        if (speed > 0) ms = Math.max(MIN_SETTLE_MS, Math.min(ms, (3 * px) / speed));
+        turn.anim = { began: performance.now(), ms, start, goal, commit };
+        requestAnimationFrame(step(turn));
+      };
+      if (turn.images) {
+        run();
+        return;
+      }
+      let decided = false;
+      const giveUp = window.setTimeout(() => {
+        if (decided) return;
+        decided = true;
+        if (turn.done) return;
+        if (commit) land(turn);
+        teardown(turn);
+        nextQueued();
+      }, PICTURE_WAIT_MS);
+      void turn.ready.then((ok) => {
+        if (decided) return;
+        decided = true;
+        window.clearTimeout(giveUp);
+        if (turn.done) return;
+        if (ok) {
+          run();
           return;
         }
         if (commit) land(turn);
         teardown(turn);
-      };
-      requestAnimationFrame(step);
+        nextQueued();
+      });
+    };
+
+    /** Finish the turn playing now, quickly: another is waiting behind it. */
+    const hurry = (turn: Turn) => {
+      const a = turn.anim;
+      if (!a || turn.done) return;
+      const left = a.ms - (performance.now() - a.began);
+      if (left <= HURRY_MS) return;
+      turn.anim = { ...a, began: performance.now(), ms: HURRY_MS, start: { ...turn.corner } };
+    };
+
+    const keyTurn = (direction: Direction, ms: number): boolean => {
+      const turn = planTurn(direction, true);
+      if (!turn) return false;
+      turnRef.current = turn;
+      settle(turn, true, { fullMs: ms });
+      return true;
+    };
+
+    const nextQueued = () => {
+      const q = queued;
+      if (!q) return;
+      q.count -= 1;
+      if (q.count <= 0) queued = null;
+      // The next frame: the landing camera has to be in place to plan from.
+      requestAnimationFrame(() => {
+        if (turnRef.current || active) return;
+        if (!keyTurn(q.direction, QUICK_TURN_MS)) queued = null;
+      });
     };
 
     /* ---------------------------------------------------------- gesture */
 
     let pending: { id: number; x: number; y: number; target: EventTarget | null; type: string } | null = null;
-    let active: { id: number; x: number; y: number; turn: Turn } | null = null;
+    let active: { id: number; x: number; y: number; turn: Turn; vx: number; lastX: number; lastT: number } | null = null;
     /** The board's cancel is on its way through our own listeners. */
     let handingOff = false;
 
@@ -483,6 +634,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (active && event.pointerId === active.id) {
         event.stopImmediatePropagation();
         event.preventDefault();
+        const dt = event.timeStamp - active.lastT;
+        if (dt > 0) {
+          active.vx = active.vx * 0.5 + ((event.clientX - active.lastX) / dt) * 0.5;
+          active.lastX = event.clientX;
+          active.lastT = event.timeStamp;
+        }
         const turn = active.turn;
         const w = turn.layout === "book" ? turn.rect.width / 2 : turn.rect.width;
         turn.corner = cornerForDrag(turn.direction, event.clientX - active.x, event.clientY - active.y, w, turn.rect.height, turn.bottom);
@@ -511,7 +668,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const claimed = pending;
       pending = null;
       turnRef.current = turn;
-      active = { id: claimed.id, x: event.clientX - dx, y: event.clientY - dy, turn };
+      active = { id: claimed.id, x: event.clientX - dx, y: event.clientY - dy, turn, vx: 0, lastX: event.clientX, lastT: event.timeStamp };
       if (claimed.target instanceof Element) {
         handingOff = true;
         try {
@@ -534,16 +691,15 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (!active || event.pointerId !== active.id) return;
       event.stopImmediatePropagation();
       event.preventDefault();
-      const turn = active.turn;
+      const { turn, vx, lastT } = active;
       active = null;
-      const commit = event.type !== "pointercancel" && turnCommits(turn.direction, turn.corner.x);
-      if (!turn.images) {
-        // Let go before the pictures were ready: just go, or stay.
-        if (commit) land(turn);
-        teardown(turn);
-        return;
-      }
-      settle(turn, commit);
+      // A throw decides the turn by where it was going; a stop, by where it is.
+      const fresh = event.timeStamp - lastT < FLICK_FRESH_MS;
+      const along = fresh ? (turn.direction === "next" ? -vx : vx) : 0;
+      const commit =
+        event.type !== "pointercancel" &&
+        (along > FLICK_PX_PER_MS ? true : along < -FLICK_PX_PER_MS ? false : turnCommits(turn.direction, turn.corner.x));
+      settle(turn, commit, { speed: fresh ? Math.abs(vx) : 0 });
     };
 
     const swallowClick = (event: MouseEvent) => {
@@ -554,18 +710,25 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     };
 
     const onKey = (event: KeyboardEvent) => {
-      if (turnRef.current || active || event.defaultPrevented || isTypingTarget(event.target)) return;
-      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (active || event.defaultPrevented || isTypingTarget(event.target)) return;
+      // Shift+arrows extend a text selection; the others are shortcuts.
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       const direction: Direction | null =
         event.key === "ArrowRight" || event.key === "PageDown" ? "next"
           : event.key === "ArrowLeft" || event.key === "PageUp" ? "prev"
             : null;
       if (!direction) return;
-      const turn = planTurn(direction, true);
-      if (!turn) return;
-      event.preventDefault();
-      turnRef.current = turn;
-      settle(turn, true, AUTO_TURN_MS);
+      const playing = turnRef.current;
+      if (playing) {
+        // Faster than a turn takes: finish this one now and line up the next.
+        event.preventDefault();
+        if (playing.direction !== direction || !playing.anim?.commit) return;
+        const count = queued?.direction === direction ? queued.count : 0;
+        queued = { direction, count: Math.min(KEY_QUEUE_MAX, count + 1) };
+        hurry(playing);
+        return;
+      }
+      if (keyTurn(direction, queued ? QUICK_TURN_MS : AUTO_TURN_MS)) event.preventDefault();
     };
 
     window.addEventListener("pointerdown", onDown, true);
@@ -582,6 +745,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       window.removeEventListener("click", swallowClick, true);
       window.removeEventListener("keydown", onKey);
       window.clearTimeout(prefetchTimer);
+      window.clearInterval(recheck);
       unsubscribeFilm();
       shotsRef.current.clear();
       const turn = turnRef.current;
