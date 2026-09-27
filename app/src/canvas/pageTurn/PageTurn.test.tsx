@@ -6,6 +6,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { BoardHandle } from "../BoardHandle";
 import { PageTurn } from "./PageTurn";
 
+const gesture = vi.hoisted(() => ({ release: vi.fn(), protect: vi.fn() }));
+vi.mock("../../util/gestureExclusion", () => ({ protectGestureSurface: gesture.protect }));
+
 // Three 600-unit pages stacked; the view shows the middle one at scale 1.
 const FRAMES = [
   { pageId: 1, minY: 0, maxY: 600 },
@@ -45,6 +48,8 @@ class TestPointerEvent extends MouseEvent {
 }
 
 beforeEach(() => {
+  gesture.release.mockClear();
+  gesture.protect.mockReset().mockReturnValue(gesture.release);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("PointerEvent", TestPointerEvent);
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(performance.now() + 1000), 0));
@@ -318,4 +323,12 @@ it("shows text pages two to a spread, and turns them two at a time", async () =>
   // Past the facing page: the next spread opens on page 3.
   expect(board.jumpToPageFrame).toHaveBeenCalledWith({ ...textFrames[2], minY: textFrames[2].minY });
   board.readingPageFrames.mockReturnValue(FRAMES);
+});
+
+it("protects page-turn edges only while the reader owns gestures", () => {
+  mount(true);
+  expect(gesture.protect).toHaveBeenCalledWith(host, true);
+  mount(false);
+  expect(gesture.release).toHaveBeenCalledTimes(1);
+  expect(gesture.protect).toHaveBeenCalledTimes(1);
 });

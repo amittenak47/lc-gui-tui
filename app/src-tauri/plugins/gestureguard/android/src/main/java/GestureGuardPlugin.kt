@@ -27,11 +27,12 @@ import app.tauri.plugin.Plugin
  * is Home. That is fine for a page you are reading and wrong for one you are
  * writing on.
  *
- * Two tools, used together while a drawing tool is up:
+ * Two tools, used together while drawing or turning pages:
  *
  * 1. `setSystemGestureExclusionRects` — documented way to take Back's edge
  *    strips. Android grants 200dp per side and silently keeps only that much.
- *    The budget is enforced here. Rects are CSS viewport-relative (the WebView);
+ *    Sticky immersive lifts that cap, allowing the full page-turn edges.
+ *    Rects are CSS viewport-relative (the WebView);
  *    converting them must *add* the WebView's screen origin, not subtract it,
  *    or the strips land above the view and the framework clips them to nothing.
  *
@@ -41,13 +42,14 @@ import app.tauri.plugin.Plugin
  *    after the bar is showing still goes Home. Back is also consumed while
  *    immersive so a leaked edge swipe cannot pop the activity mid-stroke.
  *
- * Leaving writing mode restores bars, unregisters the back sink, and clears
+ * Leaving all protected surfaces restores bars, unregisters the back sink, and clears
  * the exclusion list.
  */
 @TauriPlugin
 class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
 
     private var backCallback: OnBackInvokedCallback? = null
+    private var immersiveEnabled = false
 
     @InvokeArg
     class ExclusionArgs {
@@ -120,9 +122,16 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
                 val viewWidth =
                     if (target.width > 0) target.width
                     else activity.window?.decorView?.width ?: 0
-                val local = screenRects.map { screenToViewLocal(it, targetLoc) }
+                val viewHeight = if (target.height > 0) target.height else content.height
+                val local = screenRects.mapNotNull {
+                    val rect = screenToViewLocal(it, targetLoc)
+                    if (rect.intersect(0, 0, viewWidth, viewHeight)) rect else null
+                }
                 val (leftRects, rightRects) = partitionByEdge(local, viewWidth)
-                val trimmed = withinBudget(leftRects, budget) + withinBudget(rightRects, budget)
+                // Android lifts its 200dp cap in sticky immersive. Do not
+                // impose that cap ourselves on full-height page-turn edges.
+                val trimmed = if (immersiveEnabled) local
+                    else withinBudget(leftRects, budget) + withinBudget(rightRects, budget)
                 target.systemGestureExclusionRects = trimmed
                 applied = maxOf(applied, trimmed.size)
             }
@@ -147,10 +156,11 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
                 return@runOnUiThread
             }
             val controller = WindowCompat.getInsetsController(window, window.decorView)
+            immersiveEnabled = args.enabled
             if (args.enabled) {
-                controller.hide(WindowInsetsCompat.Type.navigationBars())
                 controller.systemBarsBehavior =
                     WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller.hide(WindowInsetsCompat.Type.navigationBars())
                 registerBackSink()
             } else {
                 controller.show(WindowInsetsCompat.Type.navigationBars())

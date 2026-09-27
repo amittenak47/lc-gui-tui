@@ -25,6 +25,7 @@ import { isSubMarkDragLive, selectionOwnsGesture } from "../docSelectionGesture"
 import { cornerForDrag, turnCommits, type Point } from "./curl";
 import { paintTurn, type TurnLayout } from "./paintTurn";
 import { boardResizeDeferred } from "../../util/splitResize";
+import { protectGestureSurface } from "../../util/gestureExclusion";
 
 /** Sideways travel before a drag is taken as a page turn, in CSS pixels. */
 const TURN_SLOP_PX = 14;
@@ -283,6 +284,15 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
   /** Pictures of pages taken ahead of a turn, keyed by what they show. */
   const shotsRef = useRef(new Map<string, Promise<HTMLCanvasElement | null>>());
   useEffect(() => () => shotsRef.current.clear(), []);
+
+  // Register before the touch starts: claiming a small band on pointerdown
+  // is too late once Android has already claimed an edge swipe as Back.
+  useEffect(() => {
+    if (!lockActive || !turnEnabled) return;
+    const host = document.querySelector<HTMLElement>(hostSelector);
+    const surface = host?.querySelector<HTMLElement>(".lc-board") ?? host;
+    if (surface) return protectGestureSurface(surface, true);
+  }, [hostSelector, lockActive, turnEnabled]);
 
   /* Hold the camera on the page it is on, and follow jumps made elsewhere. */
   useEffect(() => {

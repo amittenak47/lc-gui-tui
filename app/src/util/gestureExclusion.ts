@@ -1,3 +1,5 @@
+import { isAndroidDevice } from "./androidDevice";
+
 /**
  * Ask Android to stop stealing strokes from the edges of the board.
  *
@@ -12,12 +14,12 @@
  * rather than refused, so what is asked for has to be chosen rather than
  * maximised. CSS pixels ≈ dp here, so the strip is {@link EXCLUSION_BUDGET_CSS}
  * tall, centred on the writing hand (or the middle of the board before the
- * first stroke). See the plugin for how leftover height is spent if a caller
- * still sends a taller rect.
+ * first stroke). Page turns request full-height edge strips while sticky
+ * immersive lifts that cap; the native wrapper preserves those strips.
  *
  * Home has no exclusion API. {@link setDrawingImmersive} hides the navigation
  * bar with swipe-to-show while a drawing tool is up — first swipe reveals
- * chrome, second swipe (bar visible) still leaves. Reading mode turns it off.
+ * chrome, second swipe (bar visible) still leaves. Page turns use it too.
  *
  * This module is deliberately quiet everywhere else. On desktop and in a plain
  * browser build the command resolves to zero and nothing has gone wrong.
@@ -70,7 +72,8 @@ function loadInvoke() {
  * margins — two 48px strips on a 100px board is not a margin, it is the page.
  *
  * `focusY` (viewport CSS px) centres the 200px budget on the writing hand.
- * Without it the band sits in the middle of the board.
+ * Without it the band sits in the middle of the board. `fullHeight` is for
+ * page turns and must be paired with sticky immersive, which lifts the cap.
  */
 export function edgeStrips(
   rect: {
@@ -80,9 +83,10 @@ export function edgeStrips(
     height: number;
   },
   focusY?: number | null,
+  fullHeight = false,
 ): ExclusionRect[] {
   if (rect.width < EDGE_STRIP_PX * 4 || rect.height <= 0) return [];
-  const height = Math.min(rect.height, EXCLUSION_BUDGET_CSS);
+  const height = fullHeight ? rect.height : Math.min(rect.height, EXCLUSION_BUDGET_CSS);
   const minTop = rect.top;
   const maxTop = rect.top + rect.height - height;
   let top = rect.top + (rect.height - height) / 2;
@@ -134,4 +138,71 @@ export async function setDrawingImmersive(enabled: boolean): Promise<void> {
   } catch {
     /* desktop, or the plugin is missing from this APK */
   }
+}
+
+// Each visible writing/reading surface owns a claim. A parked Board or a
+// departing tool must not clear another pane's page-turn protection.
+const claims = new Map<symbol, ExclusionRect[]>();
+let guardRevision = 0;
+let guardQueue = Promise.resolve();
+let immersiveActive = false;
+
+function publishClaims(): void {
+  const revision = ++guardRevision;
+  guardQueue = guardQueue.then(async () => {
+    if (revision !== guardRevision) return;
+    const rects = [...claims.values()].flat();
+    const enabled = rects.length > 0;
+    // Serialize native calls: install sticky immersive before full-height
+    // exclusions, and clear exclusions before restoring normal navigation.
+    if (enabled && !immersiveActive) await setDrawingImmersive(true);
+    if (revision !== guardRevision) {
+      if (enabled) immersiveActive = true;
+      return;
+    }
+    await applyGestureExclusions(rects);
+    if (!enabled && immersiveActive) await setDrawingImmersive(false);
+    immersiveActive = enabled;
+  }).catch(() => {});
+}
+
+/** Protect the active surface; release only this owner's claim on cleanup. */
+export function protectGestureSurface(node: HTMLElement, fullHeight = false): () => void {
+  if (!isAndroidDevice()) return () => {};
+  const owner = Symbol("gesture-surface");
+  let disposed = false;
+  let focusY: number | null = null;
+  let lastClaimY = Number.NaN;
+  const claim = () => {
+    if (disposed) return;
+    claims.set(owner, edgeStrips(node.getBoundingClientRect(), focusY, fullHeight));
+    publishClaims();
+  };
+  const onPointer = (event: PointerEvent) => {
+    if (fullHeight || event.pointerType === "mouse") return;
+    focusY = event.clientY;
+    if (Number.isFinite(lastClaimY) && Math.abs(focusY - lastClaimY) < 40) return;
+    lastClaimY = focusY;
+    claim();
+  };
+  claim();
+  const observer = new ResizeObserver(claim);
+  observer.observe(node);
+  window.addEventListener("resize", claim);
+  window.addEventListener("orientationchange", claim);
+  window.visualViewport?.addEventListener("resize", claim);
+  node.addEventListener("pointerdown", onPointer);
+  node.addEventListener("pointermove", onPointer);
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    observer.disconnect();
+    window.removeEventListener("resize", claim);
+    window.removeEventListener("orientationchange", claim);
+    window.visualViewport?.removeEventListener("resize", claim);
+    node.removeEventListener("pointerdown", onPointer);
+    node.removeEventListener("pointermove", onPointer);
+    claims.delete(owner);
+    publishClaims();
+  };
 }

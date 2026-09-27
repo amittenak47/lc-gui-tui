@@ -258,11 +258,7 @@ import {
   activateChromeControl,
   chromeHitAtPoint,
 } from "./chromeHit";
-import {
-  applyGestureExclusions,
-  edgeStrips,
-  setDrawingImmersive,
-} from "../util/gestureExclusion";
+import { protectGestureSurface } from "../util/gestureExclusion";
 import { BoardToolbar } from "./BoardToolbar";
 import type { ResetClearMode } from "./resetClearMode";
 import { InkPresetEditor } from "./InkPresetEditor";
@@ -5501,68 +5497,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
   }, [clientToScene, interactive]);
 
-  /*
-   * Take the screen edges back from Android while writing.
-   *
-   * Back's left/right strips are claimed with exclusion rects (200dp budget,
-   * centred on the hand). Home has no exclusion API — sticky immersive hides
-   * the nav bar so the first swipe reveals chrome instead of leaving. Both
-   * are armed only for pen / highlighter / eraser; reading and select keep
-   * the system gestures. Strips and bars are restored on unmount.
-   */
+  // PageTurn owns its reading claim separately; an inactive board cannot
+  // clear the exclusions or restore system bars underneath that reader.
   useEffect(() => {
     const node = boardRef.current;
-    const writing =
-      interactive &&
+    const writing = interactive && !splitPaused &&
       (activeTool === "freedraw" || activeTool === "highlighter" || activeTool === "eraser");
-    if (!writing || !node) {
-      void applyGestureExclusions([]);
-      void setDrawingImmersive(false);
-      return;
-    }
-
-    let focusY: number | null = null;
-    let lastClaimY = Number.NaN;
-
-    const claim = () => {
-      const box = node.getBoundingClientRect();
-      void applyGestureExclusions(
-        edgeStrips(
-          {
-            left: box.left,
-            top: box.top,
-            width: box.width,
-            height: box.height,
-          },
-          focusY,
-        ),
-      );
-    };
-
-    const onPointer = (event: PointerEvent) => {
-      if (event.pointerType === "mouse") return;
-      focusY = event.clientY;
-      if (!Number.isNaN(lastClaimY) && Math.abs(focusY - lastClaimY) < 40) return;
-      lastClaimY = focusY;
-      claim();
-    };
-
-    void setDrawingImmersive(true);
-    claim();
-    const observer = new ResizeObserver(claim);
-    observer.observe(node);
-    window.addEventListener("orientationchange", claim);
-    node.addEventListener("pointerdown", onPointer);
-    node.addEventListener("pointermove", onPointer);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("orientationchange", claim);
-      node.removeEventListener("pointerdown", onPointer);
-      node.removeEventListener("pointermove", onPointer);
-      void applyGestureExclusions([]);
-      void setDrawingImmersive(false);
-    };
-  }, [interactive, activeTool]);
+    if (writing && node) return protectGestureSurface(node);
+  }, [interactive, activeTool, splitPaused]);
 
   useEffect(() => {
     stopPanInertia();
