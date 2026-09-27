@@ -759,7 +759,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       });
     };
 
-    const presentCommitted = useCallback(async (liveStamp: InkOp | null = null, instant = true, allowPaused = false): Promise<void> => {
+    const presentCommitted = useCallback(async (liveStamp: InkOp | null = null, instant = true, allowPaused = false, stampView?: ViewportTransform): Promise<void> => {
       if (skipCommittedReplay(drawingRef.current, liveStamp)) return Promise.resolve();
       if (splitPausedRef.current && !allowPaused) return;
       // Imperative prime can arrive before the passive attach effect. A
@@ -772,24 +772,16 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       if (!canvas || !engine) throw new Error("Ink canvas detached before first present");
       if (isLoadingDoodleActive()) await yieldToInput();
       if (engineRef.current !== engine) throw new Error("Ink engine detached before present");
-      const { view, paintView, dpr, marginY } = readViews();
-      const recordView = () => {
-        paintedViewRef.current = {
-          scrollX: view.scrollX,
-          scrollY: view.scrollY,
-          zoom: view.zoom,
-          width: view.width,
-          height: view.height,
-          marginY,
-        };
-      };
+      const { paintView: currentPaintView, dpr } = readViews();
+      const paintView = stampView ?? currentPaintView;
       if (usePreStrokeStamp(liveStamp, pendingStampPatchRef.current != null)) {
         engine.restoreSnapPatch(pendingStampPatchRef.current!);
         engine.paintOntoSnap((sctx) => {
           paintInkStamps(sctx, paintView, [liveStamp!], dpr, clipRef.current, scrollHostLookup());
         });
         engine.paint();
-        recordView();
+        // This patch still belongs to the painted camera, including its CSS
+        // scroll translation. A live stamp is not a completed camera rebase.
         return Promise.resolve();
       }
 
@@ -1130,12 +1122,12 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     }, [applyPageWindow, readViews, rebuildAndReplay]);
 
     const stampOpOntoSnap = useCallback(
-      (op: InkOp) => {
+      (op: InkOp, stampView?: ViewportTransform) => {
         const engine = engineRef.current;
         if (!engine) return;
         const { paintView, dpr } = readViews();
         engine.paintOntoSnap((sctx) => {
-          paintInkStamps(sctx, paintView, [op], dpr, clipRef.current, scrollHostLookup());
+          paintInkStamps(sctx, stampView ?? paintView, [op], dpr, clipRef.current, scrollHostLookup());
         });
       },
       [readViews, scrollHostLookup],
@@ -1679,7 +1671,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       const paintLiveHighlight = () => {
         const pts = highlightPtsRef.current;
         if (!pts || pts.length === 0) return;
-        const { paintView } = readViews();
+        const paintView = strokePaintView ?? readViews().paintView;
         presentCommitted(
           bindInkOpToHost(
             highlighterDrawOp(
@@ -1691,6 +1683,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             ),
             strokeHostRef.current,
           ),
+          true, false, paintView,
         );
       };
 
@@ -1712,7 +1705,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       };
       const stampEraser = (event: PointerEvent) => {
         const s = sampleOf(canvas, event);
-        const { paintView } = readViews();
+        const paintView = strokePaintView ?? readViews().paintView;
         const dpr = canvas.width / Math.max(1, canvas.clientWidth || 1);
         const pageW = eraserPageW();
         const r = eraserCanvasRadius(strokeWidthRef.current, paintView.zoom, dpr, pageW);
@@ -1830,7 +1823,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (toolRef.current === "highlighter") {
           engine.captureSnap();
           pendingStampPatchRef.current = engine.copySnapPatch();
-          const { paintView } = readViews();
+          const paintView = strokePaintView ?? readViews().paintView;
           highlightPtsRef.current = [highlightPointOf(canvas, event, paintView)];
           paintLiveHighlight();
           return;
@@ -1908,7 +1901,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (toolRef.current === "highlighter") {
           const live = highlightPtsRef.current;
           if (!live) return;
-          const { paintView } = readViews();
+          const paintView = strokePaintView ?? readViews().paintView;
           const coalesced = event.getCoalescedEvents?.();
           const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
           for (const item of batch) live.push(highlightPointOf(canvas, item, paintView));
@@ -1962,7 +1955,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           const raw = highlightPtsRef.current;
           highlightPtsRef.current = null;
           if (raw && raw.length > 0) {
-            const { paintView } = readViews();
+            const paintView = strokePaintView ?? readViews().paintView;
             const shaped = liveHighlightPoints(raw, straightInkRef.current);
             const op = bindInkOpToHost(
               highlighterDrawOp(
@@ -1986,7 +1979,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
                 presentCommitted();
               } else {
                 engine.restoreSnapPatch(patch);
-                stampOpOntoSnap(op);
+                stampOpOntoSnap(op, paintView);
                 engine.paint();
                 rememberCommitPatch(patch);
               }

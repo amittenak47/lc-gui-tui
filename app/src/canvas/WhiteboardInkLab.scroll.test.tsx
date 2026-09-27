@@ -107,6 +107,28 @@ afterEach(async () => {
 });
 
 describe("annotation camera presentation", () => {
+  it("keeps highlights on their text when writing before a scroll rebase settles", async () => {
+    await ready([stroke(100)]);
+    await act(async () => root.render(<WhiteboardInkLab ref={ref} enabled tool="highlighter"
+      strokeWidth={3} inkColor="#ffe500" pressureClip={1} pressureSensitive={false}
+      getViewport={() => view} />));
+    view = { ...view, scrollY: -60 };
+    expect(ref.current!.setPanOffset(view)).toBe(true);
+    const event = (type: string, x: number, y: number) => {
+      const e = new MouseEvent(type, { button: 0, clientX: x, clientY: y, bubbles: true });
+      Object.defineProperties(e, { pointerId: { value: 1 }, pointerType: { value: "pen" }, pressure: { value: .5 } });
+      surface().dispatchEvent(e);
+    };
+    for (const y of [60, 100, 140]) {
+      await act(async () => { event("pointerdown", 80, y); event("pointermove", 140, y); event("pointerup", 140, y); });
+    }
+    const highlights = ref.current!.getOps().filter(op => op.kind === "draw" && op.highlight);
+    expect(highlights).toHaveLength(3);
+    expect(highlights.map(op => op.points[0].y)).toEqual([120, 160, 200]);
+    const pending = ref.current!.syncCamera();
+    await frames(); await pending;
+    for (const y of [60, 100, 140]) expect(alpha(110, y + 180)).toBeGreaterThan(0);
+  });
   it("reuses the painted camera when a same-size parked tab returns", async () => {
     await ready([stroke(100)]);
     const draw = vi.spyOn(InkTileCache.prototype, "draw");

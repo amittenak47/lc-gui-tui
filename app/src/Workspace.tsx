@@ -114,6 +114,7 @@ import { artifactCreationAssociations, artifactRefKey, type ArtifactParent, type
 import { describeRunFailure, withConversationContext } from "./modes/coachContext";
 import { groupThreads, threadAnchorRef, visibleThreadMessages, sendConversationContext, conversationMessages, conversationMarkdown, messageThreadRoot } from "./modes/coachThreads";
 import { pruneDeletedThreadLinks } from "./util/threadLinks";
+import { flushInkSnapshot } from "./util/flushInkSnapshot";
 import {
   loadAgentReasoningLevel,
   loadTestForwardMode,
@@ -511,11 +512,9 @@ async function flushDirtyInk(
     await new Promise((resolve) => window.setTimeout(resolve, 250));
     return flushDirtyInk(board, docKey, attempt + 1, strict);
   }
-  const dirty = board.takeDirtyInkPages();
-  if (dirty.size === 0) return;
   try {
-    await putInkPages(docKey, dirty, { dirty: true });
-    board.markInkPagesFlushed(dirty.keys());
+    const unchanged = await flushInkSnapshot(board, pages => putInkPages(docKey, pages, { dirty: true }));
+    if (!unchanged && strict) throw new Error("The ink changed while saving. Finish writing, then sync again.");
     // Phase 4: gzip is the worker's job. Do not await it under a save/tick.
     void drainDirtyInkArchives();
   } catch (cause) {
