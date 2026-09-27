@@ -7201,6 +7201,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         panDragRef.current = null;
         cameraMotionActiveRef.current = false;
         rasterInkRef.current?.cancelCameraMotion();
+      } else {
+        /*
+         * Nothing is riding, but the ink may still think the camera is moving:
+         * a page jump (restore, the filmstrip, a page turn) pulses camera
+         * motion, and the ink holds that until the reading-idle teardown, 15 s
+         * on. Every resize in between skipped the ink's own resize, so a
+         * maximize kept the old bitmap stretched across the new window — the
+         * writing slid off its page while the pages moved.
+         */
+        rasterInkRef.current?.cancelCameraMotion();
       }
       if (remeshInk) {
         clearPanOffsets();
