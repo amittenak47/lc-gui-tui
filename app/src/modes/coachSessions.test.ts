@@ -84,6 +84,24 @@ describe("orderSessions", () => {
 });
 
 describe("mergeAgentMessages", () => {
+  it("preserves multiple independent threads and loose messages in one saved session", () => {
+    const stored = [
+      {...msg("first",{sessionId:"study"}), future:{custom:"kept"}},
+      msg("reply",{role:"assistant",sessionId:"study",replyTo:{id:"first",role:"user",excerpt:"first"}}),
+      msg("second",{sessionId:"study"}),
+      msg("loose",{role:"assistant",sessionId:"study"}),
+      msg("other",{sessionId:"tomorrow"}),
+    ];
+    const remote = JSON.parse(JSON.stringify(persistableAgentMessages(stored)));
+    const deleted = stored.map(row => row.id === "first" ? {...row,deletedAt:99} : row);
+    for (const [local, incoming] of [[deleted,remote],[remote,deleted]]) {
+      const reopened = restoreAgentMessages(mergeAgentMessages(local,incoming));
+      expect(reopened.map(row => row.sessionId)).toEqual(["study","study","study","study","tomorrow"]);
+      expect(reopened.filter(row => row.deletedAt).map(row => row.id)).toEqual(["first","reply"]);
+      expect(reopened[0]).toMatchObject({future:{custom:"kept"}});
+      expect(reopened.find(row => row.id === "second")?.replyTo).toBeUndefined();
+    }
+  });
   it("converges deletes and offline reply chains through repeated round trips", () => {
     const a = [msg("q", { deletedAt: 30 }), msg("keep", { at: 2 })];
     const b = [msg("q"), msg("r", { replyTo: { id: "q", role: "user", excerpt: "q" } }),

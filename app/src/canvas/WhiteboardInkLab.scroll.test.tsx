@@ -128,6 +128,13 @@ describe("annotation camera presentation", () => {
     const pending = ref.current!.syncCamera();
     await frames(); await pending;
     for (const y of [60, 100, 140]) expect(alpha(110, y + 180)).toBeGreaterThan(0);
+    const saved = ref.current!.snapshotInkPages();
+    ref.current!.clear();
+    ref.current!.ingestInkPages(saved, {paint:false});
+    const reopened = ref.current!.primeSnap();
+    await frames(); await reopened;
+    expect(ref.current!.getOps().filter(op => op.kind === "draw" && op.highlight)).toHaveLength(3);
+    for (const y of [60, 100, 140]) expect(alpha(110, y + 180)).toBeGreaterThan(0);
   });
   it("reuses the painted camera when a same-size parked tab returns", async () => {
     await ready([stroke(100)]);
