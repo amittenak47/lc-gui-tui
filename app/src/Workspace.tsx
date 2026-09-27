@@ -353,7 +353,7 @@ import type {
   HubConflictResolution,
   HubPadConflict,
 } from "./util/hubConflictStash";
-import { inkChoiceOf } from "./util/hubConflictStash";
+import { HubSyncCancelled, inkChoiceOf } from "./util/hubConflictStash";
 import { otherDeviceLabel } from "./util/devicePrefs";
 import { getParkedDocSource, parkDocSource } from "./util/parkedDocSource";
 import { MAX_SOURCE_CHARS } from "./util/tabPersist";
@@ -959,6 +959,8 @@ export function Workspace({
     conflict: HubPadConflict;
     problemConflict?: ProblemArtifactConflict;
     resolve(resolution: HubConflictResolution): void;
+    /** Stops the walk with nothing applied. Absent where no walk is waiting. */
+    cancel?(): void;
   } | null>(null);
   const hubConflictAskRef = useRef<typeof hubConflictAsk>(null);
 
@@ -967,6 +969,17 @@ export function Workspace({
   const [hubConflictBusy, setHubConflictBusy] = useState(false);
   /** Shown on the split. The header banner sits under that page. */
   const [hubConflictError, setHubConflictError] = useState<string | null>(null);
+
+  /** Close the split and stop the walk. Nothing is written, here or on the hub. */
+  const handleHubConflictCancel = useCallback(() => {
+    if (hubConflictBusyRef.current) return;
+    const ask = hubConflictAskRef.current;
+    if (!ask?.cancel) return;
+    hubConflictAskRef.current = null;
+    setHubConflictAsk(null);
+    setHubConflictError(null);
+    ask.cancel();
+  }, []);
 
   /** Apply a conflict choice locally; the walk does any following PUT. */
   const handleHubConflictResolve = useCallback(async (resolution: HubConflictResolution) => {
@@ -1330,10 +1343,11 @@ export function Workspace({
        * into IDB — the pill resumes from there and owns any hub traffic.
        */
       onConflict: (conflict) =>
-        new Promise<HubConflictResolution>((resolve) => {
+        new Promise<HubConflictResolution>((resolve, reject) => {
           setHubConflictError(null);
-          hubConflictAskRef.current = { conflict, resolve };
-          setHubConflictAsk({ conflict, resolve });
+          const ask = { conflict, resolve, cancel: () => reject(new HubSyncCancelled()) };
+          hubConflictAskRef.current = ask;
+          setHubConflictAsk(ask);
         }),
       onIndexProgress: (progress) => setDocIndexProgress(progress),
       onWalkProgress: (report) => setWalkReport(report),
@@ -11195,6 +11209,7 @@ export function Workspace({
           client={hubConflictAsk.problemConflict ? undefined : client}
           error={hubConflictError}
           onResolve={(resolution) => void handleHubConflictResolve(resolution)}
+          onCancel={hubConflictAsk.cancel ? handleHubConflictCancel : undefined}
         />
       ) : null}
       {active && artifactPicker && <ArtifactPicker parent={artifactPicker.parent} associations={artifactPicker.associations}

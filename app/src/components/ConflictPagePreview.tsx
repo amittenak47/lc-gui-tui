@@ -661,7 +661,6 @@ export function ConflictPagePreview({
                     top: slot.top,
                     width: slot.width,
                     height: slot.height,
-                    opacity: droppedPages?.includes(slot.page) ? 0.38 : 1,
                   }}
                   aria-hidden
                 />
@@ -681,7 +680,7 @@ export function ConflictPagePreview({
           {showInk ? paintTiles.map(slot => (
             <canvas key={slot.key} width={0} height={0} data-ink-page={slot.page} data-ink-tile={slot.key}
               className="lc-hub-conflict-ink-layer" aria-hidden
-              style={{ left: slot.left, top: slot.top, width: slot.width, height: slot.height, opacity: droppedPages?.includes(slot.page) ? 0.38 : 1 }} />
+              style={{ left: slot.left, top: slot.top, width: slot.width, height: slot.height }} />
           )) : null}
         </div>
       ) : (

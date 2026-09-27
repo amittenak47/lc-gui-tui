@@ -2033,8 +2033,15 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   border-color: color-mix(in srgb, var(--bad) 78%, var(--chrome-edge));
 }
 
+/* Undecided is gray: no colour until ✓ or ✕ says which way it goes. */
+.lc-hub-conflict-note[data-pick="undecided"]:not(.is-missing) {
+  background: color-mix(in srgb, var(--muted) 12%, var(--surface));
+  border-color: var(--chrome-edge);
+  color: var(--muted);
+}
+
 .lc-hub-conflict.is-picking .lc-hub-conflict-note[data-pick="undecided"] {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent, var(--ink)) 45%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--muted) 45%, transparent);
 }
 
 .lc-hub-conflict-pane-head [data-action="keep"][aria-pressed="true"],
@@ -2312,9 +2319,11 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 .lc-hub-conflict-note.is-missing { opacity: .55; border-style: dashed; cursor: default; }
 .lc-hub-conflict-note.is-missing .lc-hub-conflict-note-actions { visibility: hidden; }
 
-.lc-hub-conflict-note.is-focused[data-pick="undecided"] {
-  border-color: var(--accent, var(--ink));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent);
+/* Where the page is showing — an outline, never a fill, so it cannot read as
+ * a choice. Tapping a row only visits it; ✓ and ✕ are what decide. */
+.lc-hub-conflict-note.is-focused {
+  outline: 1px dashed var(--muted);
+  outline-offset: 2px;
 }
 
 .lc-hub-conflict-note[data-pick="keep"] { box-shadow: inset 4px 0 #22c55e; }
@@ -2407,6 +2416,27 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 }
 
 .lc-hub-conflict-resolve:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Smaller and quieter than Keep: backing out should not look like the answer. */
+.lc-hub-conflict-cancel {
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--chrome-edge);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.lc-hub-conflict-cancel:hover:not(:disabled) {
+  color: var(--ink);
+}
+
+.lc-hub-conflict-cancel:disabled {
   opacity: 0.45;
   cursor: default;
 }

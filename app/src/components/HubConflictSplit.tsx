@@ -78,6 +78,8 @@ export interface HubConflictSplitProps {
    */
   pageFrames?: readonly PageFrame[];
   onResolve(resolution: HubConflictResolution): void;
+  /** Close without choosing: the sync stops and nothing is written. */
+  onCancel?: () => void;
   /** Why the last Keep selection did not leave this page. */
   error?: string | null;
   /** Hub client — used to GET one more ink page when a row is off the freeze preview. */
@@ -125,6 +127,58 @@ function unlistedFieldsMatch(
     same(a.artifacts, b.artifacts) &&
     same(a.footnote_boards, b.footnote_boards)
   );
+}
+
+type InkShard = { pageId: number; ops: InkOp[] };
+
+/**
+ * The handwriting one pane draws, page by page.
+ *
+ * Same rule as the marks: this side's strokes when kept, the other side's
+ * when only those are kept, this side's in gray while undecided, nothing when
+ * dropped. A page with no choice row is unchanged and drawn as it is.
+ */
+export function paneInkShards(
+  side: Side,
+  ownInk: readonly InkShard[],
+  theirInk: readonly InkShard[],
+  rows: readonly { pageId: number; hasLocal: boolean; hasServer: boolean }[],
+  pickFor: (pageId: number, side: Side) => boolean | undefined,
+): InkShard[] {
+  const other: Side = side === "local" ? "server" : "local";
+  const rowsByPage = new Map(rows.map((row) => [row.pageId, row]));
+  const pages = [...new Set([...ownInk, ...theirInk].map((shard) => shard.pageId))].sort((a, b) => a - b);
+  const ink: InkShard[] = [];
+  for (const pageId of pages) {
+    const mine = ownInk.filter((shard) => shard.pageId === pageId);
+    const row = rowsByPage.get(pageId);
+    if (!row) {
+      ink.push(...mine);
+      continue;
+    }
+    const hasOwn = side === "local" ? row.hasLocal : row.hasServer;
+    const hasTheirs = side === "local" ? row.hasServer : row.hasLocal;
+    const ownPick = hasOwn ? pickFor(pageId, side) : false;
+    const theirPick = hasTheirs ? pickFor(pageId, other) : false;
+    if (ownPick === true) ink.push(...mine);
+    else if (theirPick === true) ink.push(...theirInk.filter((shard) => shard.pageId === pageId));
+    else if (ownPick === undefined) ink.push(...mine.map(grayShard));
+  }
+  return ink;
+}
+
+/** Undecided marks and strokes are drawn in this, so a choice is visible. */
+const UNDECIDED_GRAY = "#9ca3af";
+
+function grayNote(note: DocFootnote): DocFootnote {
+  return { ...note, color: UNDECIDED_GRAY, palette: [UNDECIDED_GRAY] };
+}
+
+function grayShard(shard: InkShard): InkShard {
+  return {
+    pageId: shard.pageId,
+    ops: shard.ops.map((op) => (op.kind === "draw" ? { ...op, color: UNDECIDED_GRAY, highlight: false } : op)),
+  };
 }
 
 function updatedAtOf(pad: HubPadConflict["local"] | HubPadConflict["server"]): number | null {
@@ -347,6 +401,7 @@ export function HubConflictSplit({
   sceneWidth,
   pageFrames,
   onResolve,
+  onCancel,
   error = null,
   client = null,
   fetchPreviewInk,
@@ -710,6 +765,64 @@ export function HubConflictSplit({
       ),
     );
   const valid = Boolean(conflict) && notesHomed && inkHomed;
+
+  /*
+   * What each pane draws, entry by entry.
+   *
+   * Kept on this side: this side's copy. Kept only on the other side: the
+   * other side's copy, so both panes preview what Keep will leave behind.
+   * Undecided: this side's copy in gray, so there is something to judge.
+   * Discarded: nothing. Keyed on the picks that matter, not on the `picks`
+   * object, which is new every render — a new ink list repaints the pane.
+   */
+  const noteShowKey = rows
+    .map((row) => `${row.id}:${pickOf(picks, row.id, "local")}:${pickOf(picks, row.id, "server")}`)
+    .join("|");
+  const inkShowKey = padInkRows
+    .map((row) => {
+      const id = inkPageRowId(row.pageId);
+      return `${row.pageId}:${pickOf(picks, id, "local")}:${pickOf(picks, id, "server")}`;
+    })
+    .join("|");
+  const paneShows = useMemo(() => {
+    const annotateInk = conflict?.kind === "annotate" && !conflict.wholeCanvas;
+    const build = (side: Side) => {
+      const other: Side = side === "local" ? "server" : "local";
+      const notes: DocFootnote[] = [];
+      const rowById = new Map(rows.map((row) => [row.id, row]));
+      // This side's own order first; a kept copy from the other side takes
+      // the place of the one it replaces.
+      for (const own of notesOf(side === "local" ? conflict?.local ?? null : conflict?.server ?? null)) {
+        const row = rowById.get(own.id);
+        if (!row) {
+          notes.push(own);
+          continue;
+        }
+        const theirs = side === "local" ? row.server : row.local;
+        const ownPick = pickOf(picks, row.id, side);
+        const theirPick = theirs ? pickOf(picks, row.id, other) : false;
+        if (ownPick === true) notes.push(own);
+        else if (theirs && theirPick === true) notes.push(theirs);
+        else if (ownPick === undefined) notes.push(grayNote(own));
+      }
+      // Entries only the other side has, once they are kept.
+      for (const row of rows) {
+        const own = side === "local" ? row.local : row.server;
+        const theirs = side === "local" ? row.server : row.local;
+        if (!own && theirs && pickOf(picks, row.id, other) === true) notes.push(theirs);
+      }
+      const ownInk = side === "local" ? inkHits.localShards : inkHits.serverShards;
+      if (!annotateInk) return { notes, ink: ownInk };
+      const theirInk = side === "local" ? inkHits.serverShards : inkHits.localShards;
+      const ink = paneInkShards(side, ownInk, theirInk, padInkRows, (pageId, which) =>
+        pickOf(picks, inkPageRowId(pageId), which),
+      );
+      return { notes, ink };
+    };
+    return { local: build("local"), server: build("server") };
+    // The keys stand in for `picks`; see above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conflict, rows, padInkRows, inkHits, noteShowKey, inkShowKey]);
   const localInkPages = useMemo(
     () => (conflict ? mergeInkDtos(conflict.localInk, overlayInk.local) : []),
     [conflict, overlayInk.local],
@@ -1122,6 +1235,7 @@ export function HubConflictSplit({
 
   const renderPane = (side: Side) => {
     const body = side === "local" ? conflict.local : conflict.server;
+    const shown = paneShows[side];
     const appState = padBoardAppState(body);
     const lined = linedPitchStateFromAppState(appState);
     const hasChoices = columnIds(side).length > 0;
@@ -1138,7 +1252,6 @@ export function HubConflictSplit({
      * Tapping a row scrolls that page in. A column ✓ at the top is the same
      * keep-this-drop-the-other rule applied to every row at once.
      */
-    const keptNotes = notesOf(body).filter((note) => pickOf(picks, note.id, side) !== false);
     return (
       <section className="lc-hub-conflict-pane" data-side={side} data-verdict={verdict}>
         <header className="lc-hub-conflict-pane-head">
@@ -1197,9 +1310,11 @@ export function HubConflictSplit({
             hash={docHash}
             documentType={conflict.kind === "annotate" ? (body as AnnotatePadDto | null)?.doc_type : undefined}
             page={focusPage}
-            notes={keptNotes}
+            notes={shown.notes}
             inkPages={side === "local" ? localInkPages : serverInkPages}
             showInk={showInkOn(side)}
+            // Only for the page frame's red / green edge. Dropped ink is
+            // already left out of `decodedInk`, not faded.
             droppedPages={droppedInkPages(side)}
             keptPages={keptInkPages(side)}
             bytes={bytes}
@@ -1222,7 +1337,7 @@ export function HubConflictSplit({
             focusKey={`${focusedId}:${focusRevision}`}
             focusNote={(side === "local" ? focusedNoteRow?.local ?? focusedNoteRow?.server : focusedNoteRow?.server ?? focusedNoteRow?.local) ?? undefined}
             focusY={inkFocusY}
-            decodedInk={side === "local" ? inkHits.localShards : inkHits.serverShards}
+            decodedInk={shown.ink}
             inkLoading={inkLoading}
             // One page per side. Two whole copies of a book, drawn side by
             // side, is most of what made this window slow to open.
@@ -1408,6 +1523,17 @@ export function HubConflictSplit({
         {(busy || error || !valid) && <span role={error ? "alert" : "status"} className={error && !busy ? "lc-hub-conflict-error" : "lc-muted"}>
           {busy ? "Saving..." : error || (serverMissing || serverInkUnread ? whyDisabled : `${remainingChoices} changes still need a choice`)}
         </span>}
+        {onCancel && (
+          <button
+            type="button"
+            disabled={busy}
+            className="lc-hub-conflict-cancel"
+            title="Stop this sync. Nothing is written here or on the hub."
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+        )}
         <button
           type="button"
           disabled={!valid || busy}
@@ -1419,7 +1545,7 @@ export function HubConflictSplit({
           }
           onClick={onResolveTap}
         >
-          Keep selection
+          Keep
         </button>
       </footer>
     </div>

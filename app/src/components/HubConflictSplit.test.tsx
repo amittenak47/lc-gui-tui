@@ -366,7 +366,7 @@ describe("HubConflictSplit ink and labels", () => {
     expect(line?.textContent).toContain("Could not reach the hub");
   });
 
-  it("Keep selection enables after every row is settled without the pane header", () => {
+  it("Keep enables after every row is settled without the pane header", () => {
     const { onResolve } = mount(WITH_INK);
     expect(resolveButton().disabled).toBe(true);
     act(() => {
@@ -841,8 +841,9 @@ describe("what the panes are asked to draw", () => {
       ConflictPagePreview: (props: {
         page: number;
         focusKey?: string;
-        notes?: readonly { id: string }[];
+        notes?: readonly { id: string; excerpt?: string; color?: string }[];
         showInk?: boolean;
+        decodedInk?: readonly { pageId: number; ops: readonly { kind: string; color?: string }[] }[];
         inkPages?: readonly { page_id: number }[];
         droppedPages?: readonly number[];
         keptPages?: readonly number[];
@@ -852,6 +853,8 @@ describe("what the panes are asked to draw", () => {
           data-page={String(props.page)}
           data-focus={props.focusKey ?? ""}
           data-notes={(props.notes ?? []).map((note) => note.id).join(",")}
+          data-excerpts={(props.notes ?? []).map((note) => note.excerpt ?? "").join("|")}
+          data-gray={(props.notes ?? []).filter((note) => note.color === "#9ca3af").map((note) => note.id).join(",")}
           data-ink={props.showInk ? "on" : "off"}
           data-ink-pages={(props.inkPages ?? []).map((row) => row.page_id).join(",")}
           data-dropped={(props.droppedPages ?? []).join(",")}
@@ -919,11 +922,23 @@ describe("what the panes are asked to draw", () => {
     expect(notesOn(1)).toEqual(["srv", "same"]);
   });
 
-  it("hides only the dropped copy when keeping the other side", async () => {
+  const excerptsOn = (side: 0 | 1) => (panes()[side]!.dataset.excerpts ?? "").split("|").filter(Boolean);
+  const grayOn = (side: 0 | 1) => (panes()[side]!.dataset.gray ?? "").split(",").filter(Boolean);
+
+  it("draws undecided marks in gray and kept ones in colour", async () => {
+    await mountSpied();
+    expect(grayOn(0)).toEqual(["n1", "same"]);
+    tick(0, SAME, "keep");
+    expect(grayOn(0)).toEqual(["n1"]);
+  });
+
+  it("shows the kept copy in both panes once one side is kept", async () => {
     await mountSpied();
     tick(0, SAME, "keep");
     expect(notesOn(0)).toEqual(["n1", "same"]);
-    expect(notesOn(1)).toEqual(["srv"]);
+    // The hub's copy was dropped; its pane previews the local one in its place.
+    expect(notesOn(1)).toEqual(["srv", "same"]);
+    expect(excerptsOn(1)).toEqual(["hub only mark", "kept here with new words"]);
     tick(1, SAME, "keep");
     expect(notesOn(0)).toEqual(["n1", "same"]);
     expect(notesOn(1)).toEqual(["srv", "same"]);
@@ -943,7 +958,8 @@ describe("what the panes are asked to draw", () => {
     await mountSpied();
     tick(1, HUB_ONLY, "keep");
     expect(notesOn(1)).toEqual(["srv", "same"]);
-    expect(notesOn(0)).toEqual(["n1", "same"]);
+    // Kept, so the other pane previews it too.
+    expect(notesOn(0)).toEqual(["n1", "same", "srv"]);
   });
 
   it("also shows identical marks omitted from the choice list", async () => {
@@ -998,7 +1014,9 @@ describe("what the panes are asked to draw", () => {
     act(() => paneButton(0, "keep").click());
     expect(notesOn(0)).toEqual(["n1", "same"]);
     expect(inkOn(0)).toBe(true);
-    expect(notesOn(1)).toEqual([]);
+    // Every hub copy is dropped, so the hub pane previews what Keep leaves.
+    expect(notesOn(1)).toEqual(["same", "n1"]);
+    expect(grayOn(1)).toEqual([]);
     expect(inkOn(1)).toBe(true);
     expect(droppedPagesOn(1)).toEqual(["1"]);
     expect(keptPagesOn(0)).toEqual(["1"]);
@@ -1232,6 +1250,46 @@ describe("HubConflictSplit with nothing to choose", () => {
     expect(paneButton(1, "drop").getAttribute("aria-pressed")).toBe("true");
     act(() => resolveButton().click());
     expect(onResolve).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
+  });
+});
+
+describe("HubConflictSplit rows", () => {
+  afterEach(() => { document.body.textContent = ""; });
+
+  it("visits a gray row on tap without choosing it, and holds Keep until every row is decided", () => {
+    const { root } = mount();
+    const row = noteByText("local only mark");
+    expect(row.dataset.pick).toBe("undecided");
+    act(() => row.click());
+    expect(noteByText("local only mark").dataset.pick).toBe("undecided");
+    expect(noteByText("local only mark").className).toContain("is-focused");
+    expect(resolveButton().disabled).toBe(true);
+    act(() => root.unmount());
+  });
+});
+
+describe("HubConflictSplit cancel", () => {
+  afterEach(() => { document.body.textContent = ""; });
+
+  it("offers Cancel beside Keep and resolves nothing when it is used", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const onResolve = vi.fn();
+    const onCancel = vi.fn();
+    act(() => root.render(<HubConflictSplit conflict={CONFLICT} onResolve={onResolve} onCancel={onCancel} />));
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>(".lc-hub-conflict-actions button")];
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(["Cancel", "Keep"]);
+    act(() => buttons[0]!.click());
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onResolve).not.toHaveBeenCalled();
+    act(() => root.unmount());
+  });
+
+  it("has no Cancel where nothing is waiting on the answer", () => {
+    const { root } = mount();
+    expect(document.querySelector(".lc-hub-conflict-cancel")).toBeNull();
     act(() => root.unmount());
   });
 });

@@ -15,6 +15,7 @@ import type { DocHubHint } from "../util/hubHint";
 import {
   type HubConflictResolution,
   type HubPadConflict,
+  HubSyncCancelled,
   clearHubConflict,
   stashHubConflict,
 } from "../util/hubConflictStash";
@@ -863,6 +864,14 @@ export function HubSyncControl({
     } catch (cause) {
       walkingRef.current = false;
       if (cause instanceof WalkAborted) return;
+      if (cause instanceof HubSyncCancelled) {
+        // Cancel in the merge window: nothing applied, nothing to report.
+        absorbReloadEditsRef.current = false;
+        walkStageRef.current = "idle";
+        setStage("idle");
+        hostRef.current?.onWalkProgress(null);
+        return;
+      }
       const message = cause instanceof Error ? cause.message : String(cause);
       setWalkError(message);
       // Stay parked on the failing stage; the next tap retries from it. The

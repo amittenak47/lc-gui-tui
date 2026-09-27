@@ -27,6 +27,19 @@ import { freshWhiteboardId } from "./docFootnotes";
 
 export type HubPadKind = "annotate" | "whiteboard";
 
+/**
+ * The reader closed the merge window with Cancel.
+ *
+ * Not a failure: the walk stops where it parked, applies nothing, and goes
+ * back to idle so the next tap starts a fresh sync.
+ */
+export class HubSyncCancelled extends Error {
+  constructor() {
+    super("Sync cancelled");
+    this.name = "HubSyncCancelled";
+  }
+}
+
 export interface HubPadConflict {
   /** Problem canvases use one whole-canvas choice in the existing split. */
   wholeCanvas?: boolean;
