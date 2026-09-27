@@ -1121,9 +1121,6 @@ export class InkTileCache {
         this.pinnedLevel = wanted;
       }
     }
-    this.lastLevel = level;
-    const tileScene = tileSceneSize(level, this.tilePx);
-
     const view = viewportSceneBounds(viewport);
     const visible = visibleDrawBounds(view, this.clip);
     if (!visible) {
@@ -1132,7 +1129,20 @@ export class InkTileCache {
       return;
     }
 
-    const range = tileRangeFor(visible, tileScene);
+    let tileScene = tileSceneSize(level, this.tilePx);
+    let range = tileRangeFor(visible, tileScene);
+    // The complete camera (including pan overdraw) must fit at once. A 4K
+    // window can require more than the cache ceiling at native resolution;
+    // evicting its own tiles made coverage impossible and kept ink hidden
+    // forever. Step down raster resolution, never the scene coordinates or
+    // the cache's memory limit, until every required tile can stay resident.
+    while ((range.maxTx - range.minTx + 1) * (range.maxTy - range.minTy + 1) > TILE_BUDGET_MAX) {
+      level -= LEVEL_STEP;
+      tileScene = tileSceneSize(level, this.tilePx);
+      range = tileRangeFor(visible, tileScene);
+    }
+    this.lastLevel = level;
+    if (this.moving) this.pinnedLevel = level;
     const across = range.maxTx - range.minTx + 1;
     const down = range.maxTy - range.minTy + 1;
     this.budget = Math.min(

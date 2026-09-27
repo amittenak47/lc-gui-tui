@@ -19,6 +19,7 @@ import {
   LEVEL_STEP,
   TILE_OVERLAP_PX,
   TILE_PX,
+  TILE_BUDGET_MAX,
 } from "./inkTiles";
 import { NO_PRESSURE, type InkDrawOp, type InkOp, type ViewportTransform } from "./rasterInk";
 
@@ -260,6 +261,25 @@ describe("InkTileCache", () => {
     });
     return { cache, canvases, scheduled };
   }
+
+  it.each([1, 2, 3])("can finish a fullscreen camera with overdraw at DPR %s within the cache ceiling", (dpr) => {
+    const { cache, scheduled } = makeCache();
+    cache.setOps([draw([100, 300], [500, 300])]);
+    const { ctx } = destinationContext();
+    const view = { ...screen(1.369, 852, -72746), width: 3840 / dpr, height: 5280 / dpr };
+    cache.setSuspended(true);
+    cache.draw(ctx, view, dpr);
+    expect(cache.covered).toBe(false);
+    cache.setSuspended(false);
+    for (let i = 0; i < 20 && !cache.settled; i++) scheduled.shift()?.();
+    // A real worker present can only blit cached pixels, not synchronously
+    // rebuild whatever the same viewport just evicted.
+    cache.setSuspended(true);
+    cache.draw(ctx, view, dpr);
+    expect(cache.covered).toBe(true);
+    expect(cache.size).toBeLessThanOrEqual(TILE_BUDGET_MAX);
+    cache.dispose();
+  });
 
   describe("tile overlap", () => {
     it("rasterises each tile with a pad so edge coverage is complete", () => {
