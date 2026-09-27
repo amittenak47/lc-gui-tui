@@ -389,6 +389,12 @@ import {
   resolveExportPaperColor,
   type PageExportLayers,
 } from "./exportPageComposite";
+import type { PageFrame } from "./inkPageIndex";
+import { sectionPages, type TextBlock } from "./pageTurn/sectionPages";
+
+/** What a text page may not be cut through: whole blocks, innermost first. */
+const TEXT_PAGE_BLOCKS =
+  "p, h1, h2, h3, h4, h5, h6, li, pre, blockquote, tr, hr, img, figure, .katex-display, dt, dd";
 
 /** Margin around the composite, so ink at the edge isn't flush with it. */
 const EXPORT_PADDING = 10;
@@ -2085,6 +2091,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const applyVisualScrollNowRef = useRef<(scrollX: number, scrollY: number) => void>(() => {});
   /** Pages reading: the scene span of the open page, or null when scrolling freely. */
   const pageLockRef = useRef<{ minY: number; maxY: number } | null>(null);
+  /** Text pages, until the document or the view changes size. */
+  const textPagesRef = useRef<{ key: string; frames: PageFrame[] } | null>(null);
   const publishPdfFilmFromScrollRef = useRef<
     (scrollX: number, scrollY: number, zoom: number, height: number) => void
   >(() => {});
@@ -9095,6 +9103,51 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * Pages for a document that has none — markdown, code, text, EPUB.
+   *
+   * The rendered blocks are measured once and packed into view-high pages by
+   * `sectionPages`; nothing is measured again until the document or the view
+   * changes size.
+   */
+  const textPageFrames = (): PageFrame[] => {
+    const slot = contentSlotNodeRef.current;
+    const bounds = pageBoundsRef.current;
+    const view = getViewport();
+    if (!slot || !bounds || !view || !(view.zoom > 0)) return [];
+    const inset = measureChromeInsets(
+      boardRef.current,
+      toolbarHeightRef.current,
+      mapChromeHiddenRef.current,
+      mobileRef.current,
+    );
+    const pageH = (view.height - inset.top - inset.bottom) / view.zoom;
+    const slotRect = slot.getBoundingClientRect();
+    const sceneH = contentRenderedHeightRef.current > 0 ? contentRenderedHeightRef.current : bounds.maxY - bounds.minY;
+    if (slotRect.height < 1 || !(sceneH > 0) || !(pageH > 0)) return [];
+    const key = `${Math.round(slotRect.height)}:${Math.round(sceneH)}:${Math.round(pageH)}`;
+    if (textPagesRef.current?.key === key) return textPagesRef.current.frames;
+    const sy = slotRect.height / sceneH;
+    const blocks: TextBlock[] = [];
+    for (const el of slot.querySelectorAll<HTMLElement>(TEXT_PAGE_BLOCKS)) {
+      // Innermost only: a list item's paragraph, not the list around it.
+      if (el.querySelector(TEXT_PAGE_BLOCKS)) continue;
+      const box = el.getBoundingClientRect();
+      if (box.height < 1) continue;
+      const style = getComputedStyle(el);
+      const line = Number.parseFloat(style.lineHeight);
+      const font = Number.parseFloat(style.fontSize);
+      blocks.push({
+        top: bounds.minY + (box.top - slotRect.top) / sy,
+        bottom: bounds.minY + (box.bottom - slotRect.top) / sy,
+        lineHeight: Number.isFinite(line) ? line : Number.isFinite(font) ? font * 1.2 : 0,
+      });
+    }
+    const frames = sectionPages(blocks, pageH, bounds.minY, bounds.minY + sceneH);
+    textPagesRef.current = { key, frames };
+    return frames;
+  };
+
   const jumpToPdfPage = useCallback((pageId: number, opts?: { hold?: boolean; frameMinY?: number }) => {
     const api = apiRef.current;
     if (!api || pageId < 1) return false;
@@ -9634,7 +9687,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         jumpToPdfPage(pageId, opts),
       readingPageFrames: () => {
         const origin = pageBoundsRef.current?.minY ?? 0;
-        return offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
+        const pdf = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
+        return pdf.length > 0 ? pdf : textPageFrames();
       },
       setPageLock: (span) => {
         pageLockRef.current = span ? { minY: span.minY, maxY: span.maxY } : null;

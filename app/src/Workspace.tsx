@@ -11305,7 +11305,7 @@ export const Workspace = memo(function Workspace({
           />
         ) : null}
         </div>
-      {annotateSource?.docType === "pdf" ? (
+      {annotateSource && annotateSource.docType !== "web" ? (
         <PageTurn
           boardRef={boardRef}
           filmScope={tab.id}
@@ -11313,6 +11313,7 @@ export const Workspace = memo(function Workspace({
           lockActive={readingMode === "pages" && showing && !hubConflictAsk}
           turnEnabled={readingMode === "pages" && showing && active && !annotateCode && !hubConflictAsk}
           spread={pdfSpread}
+          paged={annotateSource.docType === "pdf"}
         />
       ) : null}
       {active && artifactPicker && <ArtifactPicker parent={artifactPicker.parent} associations={artifactPicker.associations}

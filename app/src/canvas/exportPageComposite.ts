@@ -38,7 +38,35 @@ function intersectBounds(a: SceneBounds, b: SceneBounds): SceneBounds | null {
   return { minX, minY, maxX, maxY };
 }
 
+/**
+ * The app's CSS, collected once until a stylesheet is added or changes size.
+ *
+ * Every DOM capture embeds all of it; reading tens of thousands of rules back
+ * out of the CSSOM each time cost more than drawing the capture.
+ */
+let stylesheetCache: { key: string; text: string } | null = null;
+
+function stylesheetKey(): string {
+  let rules = 0;
+  for (const sheet of Array.from(document.styleSheets)) {
+    try {
+      rules += sheet.cssRules?.length ?? 0;
+    } catch {
+      /* cross-origin */
+    }
+  }
+  return `${document.styleSheets.length}:${rules}`;
+}
+
 function collectStylesheetText(): string {
+  const key = stylesheetKey();
+  if (stylesheetCache?.key === key) return stylesheetCache.text;
+  const text = readStylesheetText();
+  stylesheetCache = { key, text };
+  return text;
+}
+
+function readStylesheetText(): string {
   const parts: string[] = [];
   for (const sheet of Array.from(document.styleSheets)) {
     try {
@@ -233,6 +261,7 @@ async function drawDomSlot(
   const pixelH = Math.max(1, Math.round(sceneH * drawScale));
 
   const clone = slot.cloneNode(true) as HTMLElement;
+  hollowOutside(slot, clone, overlap.minY - pageBounds.minY, overlap.maxY - pageBounds.minY);
   clone.style.transform = "none";
   clone.style.left = "0";
   clone.style.top = "0";
@@ -273,6 +302,48 @@ async function drawDomSlot(
   ctx.drawImage(img, dx, dy, pixelW, pixelH);
   // Do not turn a failed document layer into a successful blank screenshot.
   return true;
+}
+
+/**
+ * Empty the parts of a cloned document that are nowhere near the capture.
+ *
+ * A capture of one screen of a long document used to serialise the whole
+ * document into the SVG. Blocks entirely outside the band (in the slot's own,
+ * unscaled coordinates) keep their box — same element, same margins, fixed to
+ * the height they had — and lose their contents, so everything inside the
+ * band still lays out exactly where it was.
+ */
+function hollowOutside(slot: HTMLElement, clone: HTMLElement, bandTop: number, bandBottom: number): void {
+  const slotRect = slot.getBoundingClientRect();
+  const scale = slot.offsetHeight > 0 ? slotRect.height / slot.offsetHeight : 1;
+  if (!(scale > 0)) return;
+  const margin = (bandBottom - bandTop) * 0.5;
+  const top = bandTop - margin;
+  const bottom = bandBottom + margin;
+  const walk = (original: Element, copy: Element, depth: number) => {
+    const originals = original.children;
+    const copies = copy.children;
+    if (originals.length !== copies.length) return;
+    for (let i = 0; i < originals.length; i += 1) {
+      const from = originals[i]!;
+      const to = copies[i]! as HTMLElement;
+      const box = from.getBoundingClientRect();
+      const localTop = (box.top - slotRect.top) / scale;
+      const localBottom = (box.bottom - slotRect.top) / scale;
+      if (localBottom < top || localTop > bottom) {
+        if (from instanceof HTMLElement && from.offsetHeight > 0) {
+          to.style.height = `${from.offsetHeight}px`;
+          to.style.boxSizing = "border-box";
+          to.style.overflow = "hidden";
+          to.replaceChildren();
+        }
+        continue;
+      }
+      // Only containers taller than the band are worth opening up.
+      if (depth < 6 && localBottom - localTop > bottom - top) walk(from, to, depth + 1);
+    }
+  };
+  walk(slot, clone, 0);
 }
 
 /**

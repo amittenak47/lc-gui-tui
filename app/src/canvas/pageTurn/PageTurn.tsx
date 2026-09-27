@@ -32,6 +32,20 @@ const TURN_AXIS_RATIO = 1.6;
 const AUTO_TURN_MS = 460;
 /** Finishing or settling back from a release, at most, in ms. */
 const SETTLE_MS = 300;
+/** Pictures kept for turns: this page and its two neighbours, and a spare. */
+const SHOT_CACHE = 4;
+/** How long the view must sit still before the next turn's pictures are taken. */
+const PREFETCH_IDLE_MS = 600;
+
+/**
+ * Pixels per scene unit for a turn's pictures: the view's own resolution,
+ * capped at 1.5 device pixels — the sheet is moving, and four full-resolution
+ * screenfuls held for it would cost more memory than the turn is worth.
+ */
+function shotScale(clientWidth: number, sceneWidth: number): number {
+  const dpr = typeof window !== "undefined" ? Math.min(1.5, window.devicePixelRatio || 1) : 1;
+  return sceneWidth > 0 ? dpr * (clientWidth / sceneWidth) : dpr;
+}
 
 type Direction = "next" | "prev";
 
@@ -54,6 +68,11 @@ export interface PageTurnProps {
   turnEnabled: boolean;
   /** The sheet is split into two reading slots. Off shows whole sheets. */
   spread: boolean;
+  /**
+   * The document brings its own pages (a PDF). Text, code, markdown and EPUB
+   * are cut into view-high pages instead, and always turn as single sheets.
+   */
+  paged: boolean;
 }
 
 function frameIndexAt(frames: readonly PageFrame[], y: number): number {
@@ -103,10 +122,14 @@ interface Turn {
   done: boolean;
 }
 
-export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEnabled, spread }: PageTurnProps) {
+export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEnabled, spread, paged }: PageTurnProps) {
   const turnRef = useRef<Turn | null>(null);
   const spreadRef = useRef(spread);
   spreadRef.current = spread;
+  const pagedRef = useRef(paged);
+  pagedRef.current = paged;
+  /** Pictures of pages taken ahead of a turn, keyed by what they show. */
+  const shotsRef = useRef(new Map<string, Promise<HTMLCanvasElement | null>>());
 
   /* Hold the camera on the page it is on, and follow jumps made elsewhere. */
   useEffect(() => {
@@ -115,6 +138,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       return;
     }
     let lockedCount = -1;
+    let locked: PageFrame | null = null;
     const relock = () => {
       const board = boardRef.current;
       if (!board || turnRef.current) return;
@@ -122,14 +146,25 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const frames = board.readingPageFrames();
       if (!view || frames.length === 0) return;
       lockedCount = frames.length;
-      board.setPageLock(frames[frameIndexAt(frames, view.y + view.height / 2)]!);
+      locked = frames[frameIndexAt(frames, view.y + view.height / 2)]!;
+      board.setPageLock(locked);
     };
     const unsubscribe = subscribePdfFilmCurrent(filmScope, relock);
-    // Layout arrives in batches on a first open; lock again as it grows.
+    /*
+     * Layout arrives in batches on a first open, and some jumps (a footnote,
+     * the filmstrip on a text document) move the camera without passing
+     * through a page turn. Lock again when either happens, or the next pan
+     * would drag the view back to the page it left.
+     */
     const poll = window.setInterval(() => {
-      const count = boardRef.current?.readingPageFrames().length ?? 0;
-      if (count !== lockedCount) relock();
-    }, 500);
+      const board = boardRef.current;
+      if (!board || turnRef.current) return;
+      const frames = board.readingPageFrames();
+      const view = board.getViewportBounds();
+      const centre = view ? view.y + view.height / 2 : null;
+      const drifted = locked && centre != null && (centre < locked.minY || centre > locked.maxY);
+      if (frames.length !== lockedCount || drifted) relock();
+    }, 400);
     return () => {
       unsubscribe();
       window.clearInterval(poll);
@@ -141,6 +176,58 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     if (!turnEnabled) return;
 
     const board = () => boardRef.current;
+
+    /*
+     * A picture of part of the document, taken once.
+     *
+     * Keyed on what it shows — where, at what scale, with which ink — so a
+     * stroke added since, or a zoom, takes a fresh one. At most a few kept:
+     * each is a screenful of pixels.
+     */
+    const shot = (b: BoardHandle, scene: Scene, scale: number) => {
+      const key = [scene.x, scene.y, scene.width, scene.height, scale, b.getInkRevision()]
+        .map((n) => Math.round(n * 100) / 100)
+        .join(":");
+      const shots = shotsRef.current;
+      let taken = shots.get(key);
+      if (!taken) {
+        taken = b.captureSceneFrame(scene, scale).catch(() => null);
+        shots.set(key, taken);
+        while (shots.size > SHOT_CACHE) shots.delete(shots.keys().next().value!);
+      }
+      return taken;
+    };
+
+    /** Take the pictures a turn from here would need, while nothing is moving. */
+    let prefetchTimer = 0;
+    const prefetch = () => {
+      window.clearTimeout(prefetchTimer);
+      prefetchTimer = window.setTimeout(() => {
+        const b = board();
+        if (!b || turnRef.current) return;
+        const view = b.getViewportBounds();
+        const frames = b.readingPageFrames();
+        if (!view || frames.length === 0) return;
+        const at = frameIndexAt(frames, view.y + view.height / 2);
+        const from = frames[at]!;
+        const top = Math.max(view.y, from.minY);
+        const height = Math.min(view.y + view.height, from.maxY) - top;
+        if (height < 8) return;
+        const scene: Scene = { x: view.x, y: top, width: view.width, height };
+        const tl = b.sceneToClient(scene.x, scene.y);
+        const br = b.sceneToClient(scene.x + scene.width, scene.y + scene.height);
+        if (!tl || !br) return;
+        const scale = shotScale(br.x - tl.x, scene.width);
+        void (async () => {
+          await shot(b, scene, scale);
+          for (const neighbour of [frames[at + 1], frames[at - 1]]) {
+            if (!neighbour || turnRef.current) continue;
+            await shot(b, { ...scene, y: neighbour.minY + (scene.y - from.minY) }, scale);
+          }
+        })();
+      }, PREFETCH_IDLE_MS);
+    };
+    const unsubscribeFilm = subscribePdfFilmCurrent(filmScope, prefetch);
 
     const planTurn = (direction: Direction, bottom: boolean): Turn | null => {
       const b = board();
@@ -164,7 +251,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const rect = { left: tl.x, top: tl.y, width: br.x - tl.x, height: br.y - tl.y };
       if (rect.width < 8 || rect.height < 8) return null;
       const layout: TurnLayout =
-        !spreadRef.current && from.maxY - from.minY < view.width * 0.9 ? "book" : "sheet";
+        pagedRef.current && !spreadRef.current && from.maxY - from.minY < view.width * 0.9 ? "book" : "sheet";
       const canvas = document.createElement("canvas");
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       canvas.width = Math.round(rect.width * dpr);
@@ -193,9 +280,9 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       };
       // Capture both pages at the size they are drawn. The page being turned to
       // is taken at the same place within it the view shows of this one.
-      const scale = dpr * (rect.width / scene.width);
+      const scale = shotScale(rect.width, scene.width);
       const toScene = { ...scene, y: to.minY + (scene.y - from.minY) };
-      void Promise.all([b.captureSceneFrame(scene, scale), b.captureSceneFrame(toScene, scale)]).then(
+      void Promise.all([shot(b, scene, scale), shot(b, toScene, scale)]).then(
         ([here, there]) => {
           if (turnRef.current !== turn || turn.done || !here || !there) return;
           // Turning back is turning forward from the previous page, reversed.
@@ -244,6 +331,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (!b) return;
       b.setPageLock(turn.to);
       b.jumpToPageFrame({ ...turn.to, minY: turn.to.minY + turn.offsetInPage });
+      prefetch();
     };
 
     /** Play the corner from where it is to fully over, or back to rest. */
@@ -396,10 +484,13 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       window.removeEventListener("pointercancel", onUp, true);
       window.removeEventListener("click", swallowClick, true);
       window.removeEventListener("keydown", onKey);
+      window.clearTimeout(prefetchTimer);
+      unsubscribeFilm();
+      shotsRef.current.clear();
       const turn = turnRef.current;
       if (turn) teardown(turn);
     };
-  }, [boardRef, hostSelector, turnEnabled]);
+  }, [boardRef, filmScope, hostSelector, turnEnabled]);
 
   return null;
 }

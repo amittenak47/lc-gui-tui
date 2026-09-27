@@ -24,6 +24,7 @@ const board = {
   // Scene y maps straight to client y minus the view's top.
   sceneToClient: vi.fn((x: number, y: number) => ({ x, y: y - view.y })),
   captureSceneFrame: vi.fn(async () => document.createElement("canvas")),
+  getInkRevision: vi.fn(() => 1),
 };
 
 /** jsdom has no PointerEvent. */
@@ -63,7 +64,7 @@ function mount(turnEnabled = true) {
   const ref = { current: board as unknown as BoardHandle };
   act(() =>
     root.render(
-      <PageTurn boardRef={ref} filmScope="t1" hostSelector='[data-lc-tab="t1"]' lockActive turnEnabled={turnEnabled} spread />,
+      <PageTurn boardRef={ref} filmScope="t1" hostSelector='[data-lc-tab="t1"]' lockActive turnEnabled={turnEnabled} spread paged />,
     ),
   );
 }
