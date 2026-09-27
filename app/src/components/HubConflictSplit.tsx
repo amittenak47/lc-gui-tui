@@ -47,7 +47,7 @@ import {
   footnoteDiffRows,
 } from "../util/hubConflictStash";
 import { linedPaperModeFromAppState, linedPitchStateFromAppState } from "../util/linedPaperPref";
-import { mergeConflictPageFrames, decodeConflictInkPages, inkPageIdsFromOps, conflictPaperFrames, whiteboardConflictFrames, whiteboardInkMergeRows, pageFramesEqual } from "./conflictInkLayout";
+import { mergeConflictPageFrames, decodeConflictInkPages, inkPageIdsFromOps, conflictPaperFrames, whiteboardConflictFrames, whiteboardInkMergeRows, pageFramesEqual, conflictInkFocusY, conflictOpsForPage } from "./conflictInkLayout";
 import type { ConflictInkDecodeCache } from "./conflictInkLayout";
 import {
   countWhiteboardPages,
@@ -812,6 +812,17 @@ export function HubConflictSplit({
     });
   }, [conflict, focusedId, rows, padInkRows]);
 
+  const focusedNoteId = parseFootnotePartRowId(focusedId)?.noteId ?? focusedId;
+  const focusedNoteRow = rows.find(row => row.id === focusedNoteId);
+  const inkFocusY = useMemo(() => {
+    if (conflict?.kind !== "annotate" || focusedNoteRow) return undefined;
+    const reflow = (conflict.local as AnnotatePadDto | null)?.doc_type !== "pdf";
+    return conflictInkFocusY(
+      reflow ? inkHits.localOps : conflictOpsForPage(inkHits.localOps, focusPage, listFrames),
+      reflow ? inkHits.serverOps : conflictOpsForPage(inkHits.serverOps, focusPage, listFrames),
+    );
+  }, [conflict, focusedNoteRow, inkHits.localOps, inkHits.serverOps, focusPage, listFrames]);
+
   useEffect(() => {
     setOverlayInk(current => current.local.length || current.server.length
       ? { local: [], server: [] } : current);
@@ -1106,6 +1117,7 @@ export function HubConflictSplit({
           {!hasChoices && !inkLoading && <p className="lc-muted">No differing marks or handwriting on this side.</p>}
           <ConflictPagePreview
             hash={docHash}
+            documentType={conflict.kind === "annotate" ? (body as AnnotatePadDto | null)?.doc_type : undefined}
             page={focusPage}
             notes={keptNotes}
             inkPages={side === "local" ? localInkPages : serverInkPages}
@@ -1130,9 +1142,11 @@ export function HubConflictSplit({
             linedRule={lined.rule}
             linedPaperMode={linedPaperModeFromAppState(appState)}
             focusKey={`${focusedId}:${focusRevision}`}
+            focusNote={(side === "local" ? focusedNoteRow?.local ?? focusedNoteRow?.server : focusedNoteRow?.server ?? focusedNoteRow?.local) ?? undefined}
+            focusY={inkFocusY}
             decodedInk={side === "local" ? inkHits.localShards : inkHits.serverShards}
             inkLoading={inkLoading}
-            selectedPageOnly
+            selectedPageOnly={conflict.kind === "whiteboard" || differencesOnly}
             revealInk={revealInk}
           />
           <ol

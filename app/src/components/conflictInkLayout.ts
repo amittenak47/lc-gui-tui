@@ -182,6 +182,19 @@ export function inkOpsEqual(a: readonly InkOp[], b: readonly InkOp[]): boolean {
   return true;
 }
 
+/** First changed stroke, so a small edit does not land at the top of a book. */
+export function conflictInkFocusY(local: readonly InkOp[], server: readonly InkOp[]): number | undefined {
+  for (let i = 0; i < Math.max(local.length, server.length); i++) {
+    const left = local[i], right = server[i];
+    if (left && right && inkOpsEqual([left], [right])) continue;
+    const ys = [left, right].filter((op): op is InkOp => Boolean(op))
+      .map(op => inkOpBounds(op).minY).filter(Number.isFinite);
+    if (ys.length) return Math.min(...ys);
+  }
+  const first = local[0] ?? server[0];
+  return first ? inkOpBounds(first).minY : undefined;
+}
+
 /**
  * One saved page-1 blob still has to become one row per pad it was written on.
  *

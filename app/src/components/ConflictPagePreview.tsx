@@ -12,6 +12,8 @@ import type { InkPageDto } from "../api/client";
 import { inkOpsBounds, type InkOp } from "../canvas/rasterInk";
 import { makeDocFlagHolds, type DocFlagHolds } from "../canvas/docSelectionGesture";
 import { AnnotateDocument } from "../modes/AnnotateDocument";
+import { EpubDocument } from "../modes/EpubDocument";
+import { rangeFromAnchor, scopeRootIn } from "../util/docAnchors";
 import { DocSelectionLayer } from "../modes/DocSelectionLayer";
 import { PdfDocument, type PdfPageNatural } from "../modes/PdfDocument";
 import { conflictPdfFrames } from "./conflictDocumentLayout";
@@ -87,7 +89,14 @@ export function ConflictPagePreview({
   onVisiblePages,
   selectedPageOnly = false,
   revealInk = false,
+  documentType,
+  focusNote,
+  focusY,
 }: {
+  documentType?: string;
+  focusNote?: DocFootnote;
+  /** Scene Y of the changed ink, shared by both copies. */
+  focusY?: number;
   hash?: string;
   page: number;
   notes?: readonly DocFootnote[];
@@ -198,35 +207,6 @@ export function ConflictPagePreview({
   }, []);
 
   useEffect(() => {
-    const root = hostRef.current;
-    if (!root || page < 1) return;
-    // An explicit row jump supersedes a resize still waiting on PDF layout.
-    resizeAnchorRef.current = null;
-    let gone = false;
-    const jump = () => {
-      if (gone) return true;
-      const node = root.querySelector<HTMLElement>(`[data-pdf-page="${page}"]`);
-      if (!node) return false;
-      const top =
-        node.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop;
-      if (typeof root.scrollTo === "function") root.scrollTo({ top });
-      else root.scrollTop = top;
-      return true;
-    };
-    if (jump()) return;
-    const observer = new MutationObserver(() => {
-      if (jump()) observer.disconnect();
-    });
-    observer.observe(root, { childList: true, subtree: true });
-    return () => {
-      gone = true;
-      observer.disconnect();
-    };
-    // Focused row, not only page number: tapping Handwriting (page 1) again
-    // after a flick must still jump. Stack-height ticks must not.
-  }, [page, focusKey]);
-
-  useEffect(() => {
     const root = scrollRoot;
     if (!root) return;
     return attachOverflowFlick(root);
@@ -234,12 +214,60 @@ export function ConflictPagePreview({
 
   const borrowed = hash ? borrowPdfDocument(hash) : null;
   const usePdf =
+    (!documentType || documentType === "pdf") &&
     Boolean(filmScope) &&
     Boolean(hash) &&
     cssWidth > 0 &&
     (Boolean(bytes && bytes.byteLength > 0) || Boolean(borrowed));
-  const useMarkdown = !usePdf && Boolean(sourceText);
+  const useEpub = documentType === "epub" && Boolean(bytes?.byteLength);
+  const useMarkdown = !usePdf && (useEpub || Boolean(sourceText));
   const usePaper = !usePdf && !useMarkdown;
+  const jumpTarget = useRef({ focusNote, focusY, stablePageFrames });
+  const jumpedTo = useRef<string | undefined>(undefined);
+  jumpTarget.current = { focusNote, focusY, stablePageFrames };
+  useEffect(() => {
+    const root = hostRef.current;
+    if (!root || page < 1) return;
+    const key = `${page}:${focusKey}:${focusY}:${hash}`;
+    if (jumpedTo.current === key) return;
+    resizeAnchorRef.current = null;
+    const jump = () => {
+      const node = root.querySelector<HTMLElement>(`[data-pdf-page="${useMarkdown ? 1 : page}"]`);
+      if (!node || node.getBoundingClientRect().height < 1) return false;
+      const { focusNote: note, focusY: y, stablePageFrames: frames } = jumpTarget.current;
+      const doc = node.querySelector<HTMLElement>(".lc-doc-selectable-body") ?? node;
+      const scope = note ? scopeRootIn(doc, note.anchor.scope) : null;
+      const scale = node.getBoundingClientRect().width / (sceneWidth || node.getBoundingClientRect().width || 1);
+      let targetTop: number | undefined;
+      if (note && scope) {
+        if (note.anchor.kind === "region") targetTop = scope.getBoundingClientRect().top + note.anchor.y * scale;
+        else {
+          const range = rangeFromAnchor(scope, note.anchor);
+          const box = range?.getBoundingClientRect?.();
+          if (box && box.height > 0) targetTop = box.top;
+        }
+      }
+      if (targetTop == null && y != null) {
+        const origin = useMarkdown ? 0 : frames?.find(frame => frame.pageId === page)?.minY ?? 0;
+        targetTop = node.getBoundingClientRect().top + (y - origin) * scale;
+      }
+      if (targetTop == null && note?.bands?.length) {
+        const origin = useMarkdown ? 0 : frames?.find(frame => frame.pageId === page)?.minY ?? 0;
+        targetTop = node.getBoundingClientRect().top + (note.bands[0].top - origin) * scale;
+      }
+      if (targetTop == null && note) return false;
+      const top = Math.max(0, (targetTop ?? node.getBoundingClientRect().top) - root.getBoundingClientRect().top + root.scrollTop - (targetTop == null ? 0 : 48));
+      root.scrollTop = top;
+      jumpedTo.current = key;
+      root.dispatchEvent(new Event("scroll"));
+      return true;
+    };
+    // A PDF text layer or Markdown parse can arrive after its page slot.
+    const observer = new MutationObserver(() => { if (jump()) observer.disconnect(); });
+    if (!jump()) observer.observe(root, { childList: true, subtree: true });
+    return () => observer.disconnect();
+    // Rerun for newly decoded bounds, never for a pick or a scroll event.
+  }, [page, focusKey, focusY, useMarkdown, sceneWidth, stackH, hash]);
 
   useLayoutEffect(() => {
     const host=hostRef.current,doc=docRef.current;
@@ -585,6 +613,7 @@ export function ConflictPagePreview({
       }
       data-page={String(page)}
       data-reveal-ink={revealInk || undefined}
+      data-pick={droppedPages?.includes(page) ? "drop" : keptPages?.includes(page) ? "keep" : undefined}
       aria-busy={loadPhase !== "idle"}
     >
       {usePdf && filmScope ? (
@@ -639,12 +668,13 @@ export function ConflictPagePreview({
               ))
             : null}
         </div>
-      ) : useMarkdown && sourceText ? (
+      ) : useMarkdown ? (
         <div className="lc-hub-conflict-doc" ref={docRef}>
           <div data-pdf-page="1" style={{ position: "relative", height: stackH * cssWidth / (sceneWidth || cssWidth || 1) }}>
             <div style={{ width: sceneWidth || cssWidth, transformOrigin: "top left", transform: `scale(${cssWidth / (sceneWidth || cssWidth || 1)})` }}>
               <DocSelectionLayer enabled={false} placeExisting paletteScope={filmScope} footnotes={keptNotes}>
-                <AnnotateDocument source={sourceText} selectable={false} onMeasure={setStackH} />
+                {useEpub && bytes ? <EpubDocument bytes={bytes} selectable={false} onMeasure={setStackH} />
+                  : <AnnotateDocument source={sourceText ?? ""} selectable={false} onMeasure={setStackH} />}
               </DocSelectionLayer>
             </div>
           </div>

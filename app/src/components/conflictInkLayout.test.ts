@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   conflictFitSpan,
+  conflictInkFocusY,
   conflictInkPlacement,
   conflictInkXBounds,
   conflictOpsForPage,
@@ -26,6 +27,15 @@ const slot = (over: Partial<ConflictInkSlot> = {}): ConflictInkSlot => ({
   width: 270,
   height: 350,
   ...over,
+});
+
+it("focuses the first changed stroke after a long unchanged prefix", () => {
+  const draw = (y: number): InkDrawOp => ({kind:"draw",color:"#111",baseWidth:2,maxFullness:1,pressureClip:1,pressureSensitive:false,points:[{x:20,y,pressure:.5},{x:30,y,pressure:.5}]});
+  const common = [draw(20), draw(200)];
+  const focus = conflictInkFocusY([...common,draw(3200)],common);
+  expect(focus).toBeGreaterThan(3190);
+  expect(focus).toBeLessThanOrEqual(3200);
+  expect(conflictInkFocusY([],[])).toBeUndefined();
 });
 
 describe("inkedPageIds", () => {

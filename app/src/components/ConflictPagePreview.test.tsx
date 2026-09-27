@@ -66,6 +66,30 @@ it('paints Markdown ink over the authored document width', async () => {
   expect(host.querySelector('[aria-label="Preview ready"]')).not.toBeNull();
 });
 
+it('jumps to changed Markdown ink and does not reset a scrolled preview on Keep', () => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+    const top = this.hasAttribute('data-pdf-page') ? -(host.querySelector<HTMLElement>('.lc-hub-conflict-preview')?.scrollTop ?? 0) : 0;
+    return {x:0,y:top,top,left:0,right:400,bottom:top+1200,width:400,height:1200,toJSON(){}};
+  });
+  const render = (focusKey: string, keptPages: number[] = []) => <ConflictPagePreview {...props}
+    sourceText="# Long document" sceneWidth={800} decodedInk={shards} focusY={900} focusKey={focusKey} keptPages={keptPages} />;
+  act(() => root.render(render('ink:1')));
+  const preview = host.querySelector<HTMLElement>('.lc-hub-conflict-preview')!;
+  expect(preview.scrollTop).toBe(402); // 900 * .5 - 48px context
+  preview.scrollTop = 210;
+  act(() => root.render(render('ink:1', [1])));
+  expect(preview.scrollTop).toBe(210);
+  expect(preview.dataset.pick).toBe('keep');
+  act(() => root.render(render('ink:2', [1])));
+  expect(preview.scrollTop).toBe(402);
+});
+
+it('jumps to a footnote region within a long Markdown page', () => {
+  act(() => root.render(<ConflictPagePreview {...props} sourceText="Long document" sceneWidth={800}
+    focusKey="note" focusNote={{id:'note',kind:'note',anchor:{kind:'region',x:20,y:700,w:60,h:30},excerpt:'here',createdAt:1}} />));
+  expect(host.querySelector<HTMLElement>('.lc-hub-conflict-preview')!.scrollTop).toBe(302);
+});
+
 it('reveals faint ink without modifying stored strokes', () => {
   const faint = [{pageId:1,ops:ops.map(op=>({...op,color:'#fff',maxFullness:.01,baseWidth:.2}))}];
   act(()=>root.render(<ConflictPagePreview {...props} decodedInk={faint} revealInk />));
