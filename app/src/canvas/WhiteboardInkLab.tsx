@@ -863,7 +863,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           tiles.setSliceVisible(!riding && preparingRef.current);
           tiles.draw(sctx, livePaint, liveDpr);
           if (!tiles.covered) {
-            canvas.style.visibility = "";
+            // Pending tiles do not make the old page safe to show. In
+            // particular a jump/zoom may have hidden its obsolete bitmap.
+            alignPresentedInk(liveView);
             return;
           }
           tiles.setSliceVisible(false);
@@ -937,7 +939,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         if (instant) step();
         else replayRafRef.current = requestAnimationFrame(step);
       });
-    }, [ensureTiles, readViews, scrollHostLookup]);
+    }, [alignPresentedInk, ensureTiles, readViews, scrollHostLookup]);
 
     const scheduleHistoryPaint = (replay: boolean) => {
       historyPixelsDirtyRef.current ||= replay;

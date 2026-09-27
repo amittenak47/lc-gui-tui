@@ -158,6 +158,7 @@ describe("annotation camera presentation", () => {
     expect(surface().style.visibility).toBe("hidden");
     const pending = ref.current!.syncCamera();
     await frames(3);
+    expect(surface().style.visibility).toBe("hidden");
     view = { ...view, scrollY: -800 };
     ref.current!.setPanOffset(view);
     expect(surface().style.visibility).toBe("hidden");

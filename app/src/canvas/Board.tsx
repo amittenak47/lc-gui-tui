@@ -9505,6 +9505,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       [pageId],
       pdfRestPages(pageId, Math.max(pageId, lastPageId(frames)), [pageId]),
     );
+    // The provisional top-aligned jump can be followed by a centred page fit.
+    // Even an unchanged final fit must reconcile ink after that intermediate
+    // camera; otherwise its CSS translation survives on the next page.
+    void rasterInkRef.current?.syncCamera(splitFitRef.current);
     scheduleSlotReports();
     return true;
   }, [applyDocumentFrameHeight, scheduleSlotReports]);
