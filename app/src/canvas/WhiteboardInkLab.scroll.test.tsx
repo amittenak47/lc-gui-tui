@@ -229,6 +229,29 @@ describe("annotation camera presentation", () => {
     expect(alpha(150, 230)).toBeGreaterThan(0);
   });
 
+  it("does no tile rendering during a pinch and sharpens the final camera once", async () => {
+    await ready([stroke(100)]);
+    const canvas = surface(), bitmap = [canvas.width, canvas.height];
+    const tiles = vi.spyOn(InkTileCache.prototype, "draw");
+    ref.current!.setCameraZooming(true);
+    ref.current!.setCameraMoving(true);
+    for (const zoom of [1.1, 1.4, 1.8, 2]) {
+      view = { ...view, zoom, scrollX: -40, scrollY: -50 };
+      ref.current!.setPanOffset(view);
+      await ref.current!.syncCamera(); await frames(2);
+      expect(canvas.style.visibility).toBe("");
+      expect(canvas.style.transform).toContain(`scale(${zoom})`);
+      expect([canvas.width, canvas.height]).toEqual(bitmap);
+    }
+    expect(tiles).not.toHaveBeenCalled();
+    ref.current!.setCameraZooming(false);
+    ref.current!.setCameraMoving(false);
+    const settled = ref.current!.syncCamera(); await frames(80); await settled;
+    expect(canvas.style.transform).toBe("");
+    expect(alpha(120, 280)).toBeGreaterThan(0);
+    expect(tiles).toHaveBeenCalled();
+  });
+
   it("hides a stale zoom until an aligned replacement is presented", async () => {
     await ready([stroke(100)]);
     view = { ...view, zoom: 2 };

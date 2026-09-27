@@ -258,6 +258,7 @@ import {
   activateChromeControl,
   chromeHitAtPoint,
 } from "./chromeHit";
+import { readingZoomSpan } from "./readingZoom";
 import { protectGestureSurface } from "../util/gestureExclusion";
 import { BoardToolbar } from "./BoardToolbar";
 import type { ResetClearMode } from "./resetClearMode";
@@ -2100,6 +2101,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const pageLockRef = useRef<{ minY: number; maxY: number } | null>(null);
   /** Text pages, until the document or the view changes size. */
   const textPagesRef = useRef<{ key: string; frames: PageFrame[]; pageH: number } | null>(null);
+  const readingFramesRef = useRef<() => PageFrame[]>(() => []);
+  const readingZoomRef = useRef<{
+    base: ViewportTransform; bounds: SceneBounds; floor: number;
+    inset: { top: number; bottom: number; left: number; right: number };
+    layers: { node: HTMLElement; transform: string; origin: string; left: number; top: number; dock: boolean }[];
+  } | null>(null);
+
   /**
    * Pages reading, page fitted: the share of the view the whole page takes on
    * its limiting side (1 = edge to edge). Null keeps the reading width fit.
@@ -2281,7 +2289,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         cancelAnimationFrame(cameraLiveClassRafRef.current);
         cameraLiveClassRafRef.current = 0;
       }
-      docFlags.camera(false);
+      if (!readingZoomRef.current) docFlags.camera(false);
       setPanRideWillChange(false);
     }, cameraPulseSettleMs());
     // Commit / ink moving-mode drop wait for a real reading idle, not the
@@ -2692,7 +2700,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const placePageMask = (scrollX: number, scrollY: number, zoom: number) => {
     const mask = pageMaskRef.current;
     if (!mask) return;
-    const shown = pageFitRef.current != null ? pageShownRef.current : null;
+    const shown = pageFitRef.current != null ? pageShownRef.current : readingZoomRef.current?.bounds ?? null;
     const box = pageLockRef.current ?? shown;
     const bounds = pageBoundsRef.current;
     const hole = mask.firstElementChild as HTMLElement | null;
@@ -3237,6 +3245,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (slotReportFrameRef.current) cancelAnimationFrame(slotReportFrameRef.current);
       slotReportFrameRef.current = requestAnimationFrame(() => {
         slotReportFrameRef.current = 0;
+        if (readingZoomRef.current) { onLanded?.(); return; }
         const live = liveCameraRef.current;
         if (live?.live) {
           placeContentSlotAtRef.current(live.scrollX, live.scrollY, live.zoom);
@@ -4269,6 +4278,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // first shrank the CSS ride while the bitmap was still old — ink lagged
     // the page. Keep the ride up while the snap rebuilds; land after present.
     void Promise.resolve(rasterInkRef.current?.syncCamera()).then(() => {
+      if (readingZoomRef.current) { committingScrollRef.current = false; return; }
       const now = liveCameraRef.current;
       committedPanCameraRef.current = {
         scrollX: now?.scrollX ?? live.scrollX,
@@ -4318,6 +4328,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     // the painted camera only after that present, or leftover CSS undershoots.
     if (liveCameraRef.current === live) live.live = false;
     void Promise.resolve(rasterInkRef.current?.syncCamera()).then(() => {
+      if (readingZoomRef.current) { committingScrollRef.current = false; return; }
       const now = liveCameraRef.current;
       committedPanCameraRef.current = {
         scrollX: now?.scrollX ?? live.scrollX,
@@ -6120,69 +6131,94 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
   }, []);
 
-  /**
-   * Reading zoom: the camera at `zoom`, with the scene point `anchor` held
-   * under the client point `at` — the middle of two fingers, or the cursor on
-   * a trackpad pinch. The camera is written whole (zoom and scroll together)
-   * and every layer placed for it, like a fit: a zoom is not something a pan
-   * translate can ride.
-   */
-  const zoomReadingCamera = useCallback(
-    (zoom: number, anchor: { x: number; y: number }, at: { x: number; y: number }) => {
-      const api = apiRef.current;
-      if (!api || !(zoom > 0)) return;
-      const state = api.getAppState() as {
-        width?: number;
-        height?: number;
-        offsetLeft?: number;
-        offsetTop?: number;
-      };
-      const offsetLeft = state.offsetLeft ?? 0;
-      const offsetTop = state.offsetTop ?? 0;
-      // A fitted page is as far out as Pages goes — past it there is only the
-      // mask — and it may sit below the reading floor, so it is the floor.
-      const floor = pageFitRef.current != null ? pageFitZoomRef.current : getZoomFloor();
-      // A fitted page can already be past the gesture ceiling; a pinch can
-      // still go in on it.
-      const ceiling = pageFitRef.current != null ? Math.max(ZOOM_MAX, floor * PAGE_PINCH_RANGE) : ZOOM_MAX;
-      const z = Math.min(ceiling, Math.max(floor, zoom));
-      const { scrollX, scrollY } = clampPanScroll(
-        (at.x - offsetLeft) / z - anchor.x,
-        (at.y - offsetTop) / z - anchor.y,
-        z,
-      );
-      const prev = liveCameraRef.current;
-      const height = prev?.height ?? state.height ?? 0;
-      committedPanCameraRef.current = { scrollX, scrollY, zoom: z };
-      liveCameraRef.current = {
-        scrollX,
-        scrollY,
-        zoom: z,
-        width: prev?.width ?? state.width ?? 0,
-        height,
-        offsetLeft,
-        offsetTop,
-        live: false,
-      };
-      // The column stays where the pinch put it.
-      if (scrollModeRef.current) lockedScrollXRef.current = scrollX;
-      userAdjustedCameraRef.current = true;
-      clearPanOffsetsRef.current();
+  const beginReadingZoom = useCallback((anchorY: number) => {
+    if (readingZoomRef.current) return;
+    const base = getViewport(), bounds = pageBoundsRef.current;
+    if (!base || !bounds) return;
+    const inset = measureChromeInsets(boardRef.current, toolbarHeightRef.current,
+      mapChromeHiddenRef.current, mobileRef.current);
+    const span = pageLockRef.current ?? readingZoomSpan(readingFramesRef.current(),
+      inset.top / base.zoom - base.scrollY, (base.height - inset.bottom) / base.zoom - base.scrollY, anchorY);
+    const region = { ...bounds, ...(pageLockRef.current ? spreadColumn(bounds) : {}), ...(span ?? {}) };
+    const floor = pageFitRef.current != null ? pageFitZoomRef.current : Math.max(FIT_ZOOM_MIN,
+      Math.min((base.width - inset.left - inset.right) / (region.maxX - region.minX),
+        (base.height - inset.top - inset.bottom) / (region.maxY - region.minY)));
+    refreshPanRideNodes();
+    const nodes = panRideNodesRef.current.filter(node => !node.classList.contains("lc-ink-lab-canvas"));
+    const dock = mobileRegionRef.current === "code"
+      ? boardRef.current?.closest(".lc-canvas-wrap")?.querySelector<HTMLElement>(".lc-code-dock") : null;
+    if (dock) nodes.push(dock);
+    const layers = nodes.map(node => ({ node, transform: node.style.transform, origin: node.style.transformOrigin,
+      left: node.offsetLeft, top: node.offsetTop, dock: node === dock }));
+    readingZoomRef.current = { base, bounds: region, floor, inset, layers };
+    docFlags.camera(true);
+    noteCameraBusy();
+    rasterInkRef.current?.setCameraZooming(true);
+    rasterInkRef.current?.setCameraMoving(true);
+  }, [docFlags, getViewport, refreshPanRideNodes]);
+
+  const endReadingZoom = useCallback(() => {
+    const session = readingZoomRef.current;
+    if (!session) return;
+    readingZoomRef.current = null;
+    const camera = liveCameraRef.current;
+    const api = apiRef.current;
+    if (camera && api) {
+      const { scrollX, scrollY, zoom } = camera;
+      committedPanCameraRef.current = { scrollX, scrollY, zoom };
       const wasFitting = fittingCameraRef.current;
       fittingCameraRef.current = true;
-      api.updateScene({
-        appState: { zoom: { value: z }, scrollX, scrollY },
-        captureUpdate: CaptureUpdateAction.NEVER,
-      });
+      api.updateScene({ appState: { scrollX, scrollY, zoom: { value: zoom } }, captureUpdate: CaptureUpdateAction.NEVER });
       fittingCameraRef.current = wasFitting;
+      camera.live = false;
+      for (const { node, origin, transform, dock } of session.layers) {
+        node.style.transform = dock ? transform : "";
+        node.style.transformOrigin = origin;
+      }
+      clearPanOffsetsRef.current();
+      placeContentSlotAtRef.current(scrollX, scrollY, zoom);
+      publishPdfFilmFromScrollRef.current(scrollX, scrollY, zoom, camera.height);
+    }
+    docFlags.camera(false);
+    rasterInkRef.current?.setCameraZooming(false);
+    rasterInkRef.current?.setCameraMoving(false);
+    void rasterInkRef.current?.syncCamera();
+    sceneOverlayRef.current?.redraw();
+    shapeSelectRef.current?.redraw();
+    if (session.layers.some(layer => layer.dock)) reportCodeSlot();
+    scheduleSlotReports();
+  }, [docFlags, reportCodeSlot, scheduleSlotReports]);
+
+  useEffect(() => {
+    if (splitPaused) endReadingZoom();
+  }, [splitPaused, endReadingZoom]);
+
+  // Pinch samples only move already-painted layers. Commit the scene and
+  // prepare sharp ink once on release, not on every pointer/wheel event.
+  const zoomReadingCamera = useCallback(
+    (zoom: number, anchor: { x: number; y: number }, at: { x: number; y: number }) => {
+      const session = readingZoomRef.current;
+      if (!session || !(zoom > 0)) return;
+      const { base, bounds, inset, floor } = session;
+      const ceiling = Math.max(ZOOM_MAX, floor * PAGE_PINCH_RANGE, base.zoom);
+      const z = Math.min(ceiling, Math.max(floor, zoom));
+      const { scrollX, scrollY } = clampScrollToBounds(
+        (at.x - base.offsetLeft) / z - anchor.x, (at.y - base.offsetTop) / z - anchor.y,
+        z, base.width, base.height, bounds, inset);
+      liveCameraRef.current = { ...base, scrollX, scrollY, zoom: z, live: true };
+      if (scrollModeRef.current) lockedScrollXRef.current = scrollX;
+      userAdjustedCameraRef.current = true;
+      const scale = z / base.zoom;
+      const dx = (scrollX - base.scrollX) * z, dy = (scrollY - base.scrollY) * z;
+      for (const { node, transform: pan, left, top } of session.layers) {
+        const transform = `translate3d(${dx + (scale - 1) * left}px, ${dy + (scale - 1) * top}px, 0) scale(${scale})`;
+        node.style.transformOrigin = "0 0";
+        node.style.transform = pan ? `${transform} ${pan}` : transform;
+      }
       placeContentSlotAtRef.current(scrollX, scrollY, z);
-      publishPdfFilmFromScrollRef.current(scrollX, scrollY, z, height);
-      void rasterInkRef.current?.syncCamera();
-      sceneOverlayRef.current?.redraw();
-      shapeSelectRef.current?.redraw();
-      scheduleSlotReports();
-    },
-    [clampPanScroll, getZoomFloor, scheduleSlotReports],
+      rasterInkRef.current?.setPanOffset({ scrollX, scrollY, zoom: z });
+      noteCameraBusy();
+    }, [],
   );
 
   const applyZoomAtViewport = useCallback(
@@ -6379,14 +6415,20 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         };
         const lines = event.deltaMode === 1 ? 16 : 1;
         const delta = Math.max(-30, Math.min(30, event.deltaY * lines));
-        if (!wheelZoomTimer) rasterInkRef.current?.setCameraMoving(true);
+        if (!wheelZoomTimer) beginReadingZoom(anchor.y);
         zoomReadingCamera(cam.zoom * Math.exp(-delta * 0.01), anchor, { x: event.clientX, y: event.clientY });
         window.clearTimeout(wheelZoomTimer);
         wheelZoomTimer = window.setTimeout(() => {
           wheelZoomTimer = 0;
-          rasterInkRef.current?.setCameraMoving(false);
+          endReadingZoom();
         }, 180);
         return;
+      }
+
+      if (wheelZoomTimer) {
+        window.clearTimeout(wheelZoomTimer);
+        wheelZoomTimer = 0;
+        endReadingZoom();
       }
 
       /*
@@ -6440,10 +6482,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       root.removeEventListener("wheel", onWheel, { capture: true });
       if (wheelZoomTimer) {
         window.clearTimeout(wheelZoomTimer);
-        rasterInkRef.current?.setCameraMoving(false);
+        endReadingZoom();
       }
     };
-  }, [clampPanScroll, interactive, mobile, pulseCameraMotion, reportCodeSlot, zoomReadingCamera]);
+  }, [clampPanScroll, interactive, mobile, pulseCameraMotion, reportCodeSlot, zoomReadingCamera, beginReadingZoom, endReadingZoom]);
 
   /*
    * Pinch to zoom while reading.
@@ -6481,17 +6523,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       // The one-finger pan (armed by whichever finger came first) stops here.
       stopPanInertia();
       flushVisualScrollRef.current();
-      commitVisualScrollRef.current();
       panDragRef.current = null;
       handPanningRef.current = false;
-      const state = api.getAppState() as {
-        scrollX?: number;
-        scrollY?: number;
-        offsetLeft?: number;
-        offsetTop?: number;
-        zoom?: { value?: number };
-      };
-      const z0 = state.zoom?.value ?? 1;
+      const state = getViewport();
+      if (!state) return;
+      const z0 = state.zoom;
       pinch = {
         d0: d,
         z0,
@@ -6501,7 +6537,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         },
         frame: 0,
       };
-      rasterInkRef.current?.setCameraMoving(true);
+      beginReadingZoom(pinch.anchor.y);
     };
 
     const step = () => {
@@ -6519,7 +6555,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         step();
       }
       pinch = null;
-      rasterInkRef.current?.setCameraMoving(false);
+      endReadingZoom();
     };
 
     const onDown = (event: PointerEvent) => {
@@ -6544,25 +6580,32 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     };
 
     const onUp = (event: PointerEvent) => {
-      if (!touches.delete(event.pointerId) || !pinch || touches.size >= 2) return;
+      if (!touches.has(event.pointerId)) return;
+      const ending = pinch != null && touches.size === 2;
+      // Flush the last queued sample while both finger positions still exist.
+      if (ending) end();
+      touches.delete(event.pointerId);
+      if (!ending) return;
       // The finger left behind does not start a pan: it lifts with the pinch.
       event.preventDefault();
       event.stopPropagation();
-      end();
     };
 
+    const cancel = () => { end(); touches.clear(); };
+    window.addEventListener("blur", cancel);
     root.addEventListener("pointerdown", onDown, true);
     root.addEventListener("pointermove", onMove, true);
     root.addEventListener("pointerup", onUp, true);
     root.addEventListener("pointercancel", onUp, true);
     return () => {
+      window.removeEventListener("blur", cancel);
       root.removeEventListener("pointerdown", onDown, true);
       root.removeEventListener("pointermove", onMove, true);
       root.removeEventListener("pointerup", onUp, true);
       root.removeEventListener("pointercancel", onUp, true);
       end();
     };
-  }, [interactive, stopPanInertia, zoomReadingCamera]);
+  }, [interactive, stopPanInertia, zoomReadingCamera, beginReadingZoom, endReadingZoom, getViewport]);
 
   useEffect(() => {
     const root = boardRef.current;
@@ -9155,7 +9198,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const cutZoom = fitZoomMinRef.current ?? view.zoom;
     // A held text page has fixed scene boundaries, like a PDF sheet. Sidebar
     // and window resizes fit that sheet; they must not repack its paragraphs.
-    const pageH = pageLockRef.current && textPagesRef.current
+    const pageH = (pageLockRef.current || readingZoomRef.current) && textPagesRef.current
       ? textPagesRef.current.pageH
       : (view.height - inset.top - inset.bottom) / cutZoom;
     /*
@@ -9190,6 +9233,12 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const frames = sectionPages(blocks, pageH, bounds.minY, bounds.minY + sceneH);
     textPagesRef.current = { key, frames, pageH };
     return frames;
+  };
+
+  readingFramesRef.current = () => {
+    const origin = pageBoundsRef.current?.minY ?? 0;
+    const pdf = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
+    return pdf.length > 0 ? pdf : textPageFrames();
   };
 
   /**
@@ -9871,11 +9920,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       },
       scrollToPdfPage: (pageId: number, opts?: { hold?: boolean }) =>
         jumpToPdfPage(pageId, opts),
-      readingPageFrames: () => {
-        const origin = pageBoundsRef.current?.minY ?? 0;
-        const pdf = offsetPageFrames(peekPdfReadingFrames(filmScope), origin);
-        return pdf.length > 0 ? pdf : textPageFrames();
-      },
+      readingPageFrames: () => readingFramesRef.current(),
       readingPageBox: () => {
         const bounds = pageBoundsRef.current;
         const lock = pageLockRef.current;
