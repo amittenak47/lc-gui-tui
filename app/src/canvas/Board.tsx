@@ -6036,6 +6036,65 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
   }, []);
 
+  /**
+   * Reading zoom: the camera at `zoom`, with the scene point `anchor` held
+   * under the client point `at` — the middle of two fingers, or the cursor on
+   * a trackpad pinch. The camera is written whole (zoom and scroll together)
+   * and every layer placed for it, like a fit: a zoom is not something a pan
+   * translate can ride.
+   */
+  const zoomReadingCamera = useCallback(
+    (zoom: number, anchor: { x: number; y: number }, at: { x: number; y: number }) => {
+      const api = apiRef.current;
+      if (!api || !(zoom > 0)) return;
+      const state = api.getAppState() as {
+        width?: number;
+        height?: number;
+        offsetLeft?: number;
+        offsetTop?: number;
+      };
+      const offsetLeft = state.offsetLeft ?? 0;
+      const offsetTop = state.offsetTop ?? 0;
+      const z = clampZoom(zoom, getZoomFloor());
+      const { scrollX, scrollY } = clampPanScroll(
+        (at.x - offsetLeft) / z - anchor.x,
+        (at.y - offsetTop) / z - anchor.y,
+        z,
+      );
+      const prev = liveCameraRef.current;
+      const height = prev?.height ?? state.height ?? 0;
+      committedPanCameraRef.current = { scrollX, scrollY, zoom: z };
+      liveCameraRef.current = {
+        scrollX,
+        scrollY,
+        zoom: z,
+        width: prev?.width ?? state.width ?? 0,
+        height,
+        offsetLeft,
+        offsetTop,
+        live: false,
+      };
+      // The column stays where the pinch put it.
+      if (scrollModeRef.current) lockedScrollXRef.current = scrollX;
+      userAdjustedCameraRef.current = true;
+      clearPanOffsetsRef.current();
+      const wasFitting = fittingCameraRef.current;
+      fittingCameraRef.current = true;
+      api.updateScene({
+        appState: { zoom: { value: z }, scrollX, scrollY },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+      fittingCameraRef.current = wasFitting;
+      placeContentSlotAtRef.current(scrollX, scrollY, z);
+      publishPdfFilmFromScrollRef.current(scrollX, scrollY, z, height);
+      void rasterInkRef.current?.syncCamera();
+      sceneOverlayRef.current?.redraw();
+      shapeSelectRef.current?.redraw();
+      scheduleSlotReports();
+    },
+    [clampPanScroll, getZoomFloor, scheduleSlotReports],
+  );
+
   const applyZoomAtViewport = useCallback(
     (next: number, viewportX: number, viewportY: number) => {
       userAdjustedCameraRef.current = true;
@@ -6215,6 +6274,32 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!api) return;
 
       /*
+       * A trackpad pinch arrives as a wheel with Ctrl held (and so does
+       * Ctrl/Cmd + mouse wheel): zoom about the cursor.
+       */
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        flushVisualScrollRef.current();
+        const cam = readScrollRef.current();
+        const state = api.getAppState() as { offsetLeft?: number; offsetTop?: number };
+        const anchor = {
+          x: (event.clientX - (state.offsetLeft ?? 0)) / cam.zoom - cam.scrollX,
+          y: (event.clientY - (state.offsetTop ?? 0)) / cam.zoom - cam.scrollY,
+        };
+        const lines = event.deltaMode === 1 ? 16 : 1;
+        const delta = Math.max(-30, Math.min(30, event.deltaY * lines));
+        if (!wheelZoomTimer) rasterInkRef.current?.setCameraMoving(true);
+        zoomReadingCamera(cam.zoom * Math.exp(-delta * 0.01), anchor, { x: event.clientX, y: event.clientY });
+        window.clearTimeout(wheelZoomTimer);
+        wheelZoomTimer = window.setTimeout(() => {
+          wheelZoomTimer = 0;
+          rasterInkRef.current?.setCameraMoving(false);
+        }, 180);
+        return;
+      }
+
+      /*
        * The wheel reads the page. It is the only thing it does now.
        *
        * Zoom-to-wheel and shift-to-pan were both ways of moving a camera that
@@ -6259,9 +6344,135 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     };
 
+    let wheelZoomTimer = 0;
     root.addEventListener("wheel", onWheel, { capture: true, passive: false });
-    return () => root.removeEventListener("wheel", onWheel, { capture: true });
-  }, [clampPanScroll, interactive, mobile, pulseCameraMotion, reportCodeSlot]);
+    return () => {
+      root.removeEventListener("wheel", onWheel, { capture: true });
+      if (wheelZoomTimer) {
+        window.clearTimeout(wheelZoomTimer);
+        rasterInkRef.current?.setCameraMoving(false);
+      }
+    };
+  }, [clampPanScroll, interactive, mobile, pulseCameraMotion, reportCodeSlot, zoomReadingCamera]);
+
+  /*
+   * Pinch to zoom while reading.
+   *
+   * The reading pan owns one finger. A second one turns the gesture into a
+   * pinch: the page scales about the point between the fingers and follows it
+   * as they move, so two fingers also pan sideways across a page zoomed wider
+   * than the view — and the column stays where they leave it. Only while
+   * reading: with a drawing tool up, fingers belong to the page.
+   */
+  useEffect(() => {
+    if (!interactive) return;
+    const root = boardRef.current;
+    if (!root) return;
+    const touches = new Map<number, { x: number; y: number }>();
+    let pinch: { d0: number; z0: number; anchor: { x: number; y: number }; frame: number } | null = null;
+
+    const reading = () =>
+      !rasterInkRef.current?.isDrawing() &&
+      (!annotateCodeRef.current || highlightingRef.current || activeToolRef.current === "hand");
+
+    const spread = () => {
+      const [a, b] = [...touches.values()];
+      return {
+        mid: { x: (a!.x + b!.x) / 2, y: (a!.y + b!.y) / 2 },
+        d: Math.hypot(a!.x - b!.x, a!.y - b!.y),
+      };
+    };
+
+    const begin = () => {
+      const api = apiRef.current;
+      if (!api) return;
+      const { mid, d } = spread();
+      if (d < 8) return;
+      // The one-finger pan (armed by whichever finger came first) stops here.
+      stopPanInertia();
+      flushVisualScrollRef.current();
+      commitVisualScrollRef.current();
+      panDragRef.current = null;
+      handPanningRef.current = false;
+      const state = api.getAppState() as {
+        scrollX?: number;
+        scrollY?: number;
+        offsetLeft?: number;
+        offsetTop?: number;
+        zoom?: { value?: number };
+      };
+      const z0 = state.zoom?.value ?? 1;
+      pinch = {
+        d0: d,
+        z0,
+        anchor: {
+          x: (mid.x - (state.offsetLeft ?? 0)) / z0 - (state.scrollX ?? 0),
+          y: (mid.y - (state.offsetTop ?? 0)) / z0 - (state.scrollY ?? 0),
+        },
+        frame: 0,
+      };
+      rasterInkRef.current?.setCameraMoving(true);
+    };
+
+    const step = () => {
+      if (!pinch) return;
+      pinch.frame = 0;
+      if (touches.size < 2) return;
+      const { mid, d } = spread();
+      zoomReadingCamera(pinch.z0 * (d / pinch.d0), pinch.anchor, mid);
+    };
+
+    const end = () => {
+      if (!pinch) return;
+      if (pinch.frame) {
+        cancelAnimationFrame(pinch.frame);
+        step();
+      }
+      pinch = null;
+      rasterInkRef.current?.setCameraMoving(false);
+    };
+
+    const onDown = (event: PointerEvent) => {
+      if (event.pointerType !== "touch") return;
+      touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (touches.size !== 2 || pinch || !reading()) return;
+      begin();
+      if (!pinch) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const onMove = (event: PointerEvent) => {
+      const at = touches.get(event.pointerId);
+      if (!at) return;
+      at.x = event.clientX;
+      at.y = event.clientY;
+      if (!pinch) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!pinch.frame) pinch.frame = requestAnimationFrame(step);
+    };
+
+    const onUp = (event: PointerEvent) => {
+      if (!touches.delete(event.pointerId) || !pinch || touches.size >= 2) return;
+      // The finger left behind does not start a pan: it lifts with the pinch.
+      event.preventDefault();
+      event.stopPropagation();
+      end();
+    };
+
+    root.addEventListener("pointerdown", onDown, true);
+    root.addEventListener("pointermove", onMove, true);
+    root.addEventListener("pointerup", onUp, true);
+    root.addEventListener("pointercancel", onUp, true);
+    return () => {
+      root.removeEventListener("pointerdown", onDown, true);
+      root.removeEventListener("pointermove", onMove, true);
+      root.removeEventListener("pointerup", onUp, true);
+      root.removeEventListener("pointercancel", onUp, true);
+      end();
+    };
+  }, [interactive, stopPanInertia, zoomReadingCamera]);
 
   useEffect(() => {
     const root = boardRef.current;
