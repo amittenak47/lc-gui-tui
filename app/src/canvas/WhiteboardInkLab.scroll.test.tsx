@@ -103,6 +103,7 @@ beforeEach(() => {
 afterEach(async () => {
   worker.blocked = false; worker.release.splice(0).forEach(resolve => resolve());
   await act(async () => root.unmount());
+  delete document.body.dataset.lcPanelMotion;
   board.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers();
 });
 
@@ -173,6 +174,59 @@ describe("annotation camera presentation", () => {
     // Board landing an older request must not clear this newer translation.
     ref.current!.setPanOffset(null);
     expect(surface().style.transform).toBe("translate3d(0px, -20px, 0)");
+  });
+
+  it("scales both ink axes with the camera during panel motion without reallocating", async () => {
+    await ready([stroke(100)]);
+    const canvas = surface(), width = canvas.width, height = canvas.height;
+    const tiles = vi.spyOn(InkTileCache.prototype, "draw");
+    document.body.dataset.lcPanelMotion = "true";
+    for (const zoom of [.8, .5, .7, 1]) {
+      view = { ...view, zoom, scrollX: 20, scrollY: 40 };
+      canvas.parentElement!.style.width = `${400 * zoom}px`;
+      await ref.current!.syncCamera();
+      await frames(2);
+      expect(canvas.width).toBe(width);
+      expect(canvas.height).toBe(height);
+      expect(tiles).not.toHaveBeenCalled();
+      expect(canvas.style.visibility).toBe("");
+      const parts = /translate3d\(([^p]+)px, ([^p]+)px, 0\) scale\(([^)]+)\)/.exec(canvas.style.transform)!;
+      expect(parts).not.toBeNull();
+      const [, dx, dy, scale] = parts.map(Number);
+      // The original painted point is (100, 100 + overdraw). After CSS
+      // transformation it must match the document's new scene projection.
+      expect(100 * scale + dx).toBeCloseTo((100 + view.scrollX) * zoom);
+      expect((100 + 180) * scale + dy - 180).toBeCloseTo((100 + view.scrollY) * zoom);
+    }
+    delete document.body.dataset.lcPanelMotion;
+    const settled = ref.current!.syncCamera();
+    await frames(); await settled;
+    expect(canvas.style.transform).toBe("");
+    expect(alpha(120, 320)).toBeGreaterThan(0);
+  });
+
+  it("keeps the right-hand ink aligned while panel settle waits for sharp tiles", async () => {
+    const right = stroke(100);
+    right.points = [{ x: 280, y: 100, pressure: .5 }, { x: 340, y: 100, pressure: .5 }];
+    await ready([right]);
+    document.body.dataset.lcPanelMotion = "true";
+    view = { ...view, zoom: .5, width: 200 };
+    surface().parentElement!.style.width = "200px";
+    await ref.current!.syncCamera();
+    worker.blocked = true;
+    delete document.body.dataset.lcPanelMotion;
+    const settled = ref.current!.syncCamera();
+    await frames(3);
+    expect(surface().style.visibility).toBe("");
+    expect(surface().width).toBe(200);
+    // The original x=300 is beyond the new backing width; preserve it at
+    // x=150 rather than clipping it before scaling or stretching just X.
+    expect(alpha(150, 230)).toBeGreaterThan(0);
+    expect(alpha(150, 280)).toBe(0);
+    worker.blocked = false; worker.release.splice(0).forEach(resolve => resolve());
+    await frames(80); await settled;
+    expect(surface().style.transform).toBe("");
+    expect(alpha(150, 230)).toBeGreaterThan(0);
   });
 
   it("hides a stale zoom until an aligned replacement is presented", async () => {

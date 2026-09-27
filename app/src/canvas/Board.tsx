@@ -227,7 +227,6 @@ import { loadSceneImages } from "./sceneImages";
 import {
   INK_OVERDRAW_FRACTION,
   OVERDRAW_REBASE_HEADROOM,
-  overdrawMarginPx,
   panDelta,
 } from "./panOffset";
 import {
@@ -348,7 +347,6 @@ import {
   loadInkDisplayHz,
   loadInkMatchDisplay,
 } from "../util/inkDisplayHzPref";
-import { medianMs, resolveDisplayHz, vsyncMsForHz } from "./inkLab/displayHz";
 import {
   captureInserts,
   captureWritesFile,
@@ -7770,18 +7768,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * One remesh — a timeout ladder Recentred the book five times.
      */
     let panelFrame = 0;
-    let panelSharpAt = 0;
-    let panelFrameAt = 0;
-    const panelGaps: number[] = [];
     const stopPanelPaint = () => {
       if (panelFrame) cancelAnimationFrame(panelFrame);
       panelFrame = 0;
       fittingCameraRef.current = false;
-      board.querySelectorAll<HTMLCanvasElement>("canvas.lc-ink-lab-canvas").forEach((node) => {
-        node.style.width = "";
-        node.style.height = "";
-        node.style.top = "";
-      });
     };
     const paintPanelFrame = (from: { scrollX: number; scrollY: number; zoom: number }) => {
       const api = apiRef.current;
@@ -7789,15 +7779,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!api || !bounds || !board.offsetWidth) return;
       const box = board.getBoundingClientRect();
       if (box.width < 8 || box.height < 8) return;
+      // Pages use the same centred camera throughout the ease and at settle.
+      // A temporary width-fit followed by page-fit moves X and Y in two stages.
+      if (pageFitRef.current != null && pageLockRef.current) {
+        api.updateScene({ appState: { width: Math.round(box.width), height: Math.round(box.height),
+          offsetLeft: box.left, offsetTop: box.top }, captureUpdate: CaptureUpdateAction.NEVER });
+        applyPageFitRef.current();
+        sceneOverlayRef.current?.redraw();
+        shapeSelectRef.current?.redraw();
+        return;
+      }
       const measured = measureChromeInsets(board, toolbarHeightRef.current, mapChromeHiddenRef.current, false);
       const inset = { top: measured.top + safeCssPx("--lc-safe-top"), bottom: measured.bottom + safeCssPx("--lc-safe-bottom"),
         left: measured.left + safeCssPx("--lc-safe-left"), right: measured.right + safeCssPx("--lc-safe-right") };
       const input = { box: bounds, inset, viewWidth: box.width,
         prevZoom: from.zoom, prevScrollX: from.scrollX, prevScrollY: from.scrollY, zoomMin: FIT_ZOOM_MIN, zoomMax: ZOOM_MAX };
-      const next = isDrawPageRegion(mobileRegionRef.current)
-        ? drawPageRecentreCamera(input) : documentCameraAfterViewportChange(input);
+      const drawPage = isDrawPageRegion(mobileRegionRef.current);
+      const fitted = drawPage ? drawPageRecentreCamera(input) : documentCameraAfterViewportChange(input);
       const width = Math.round(box.width);
       const height = Math.round(box.height);
+      const next = { zoom: fitted.zoom, ...clampScrollToBounds(fitted.scrollX, fitted.scrollY,
+        fitted.zoom, width, height, bounds, inset, drawPage ? "keep" : "center") };
       fittingCameraRef.current = true;
       api.updateScene({
         appState: {
@@ -7818,25 +7820,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       };
       clearPanOffsetsRef.current();
       placeContentSlotAtRef.current(next.scrollX, next.scrollY, next.zoom);
-      // The bitmap stays. Its box matches the live hole each frame — width and
-      // height apart, the same box a sharp paint uses — so the page aspect
-      // tracks the panel instead of scaling the old bitmap and snapping later.
-      const ink = board.querySelector<HTMLCanvasElement>("canvas.lc-ink-lab-canvas");
-      const host = ink?.parentElement;
-      if (ink && host && host.clientWidth > 8 && host.clientHeight > 8) {
-        const cssW = host.clientWidth;
-        const cssH = host.clientHeight;
-        const marginY = overdrawMarginPx(cssH, window.devicePixelRatio || 1);
-        ink.style.width = `${cssW}px`;
-        ink.style.height = `${cssH + 2 * marginY}px`;
-        ink.style.top = `${-marginY}px`;
-      }
-      const now = performance.now();
-      const sharpMs = vsyncMsForHz(resolveDisplayHz(displayHzRef.current, medianMs(panelGaps)));
-      if (!rasterInkRef.current?.isDrawing() && now - panelSharpAt >= sharpMs - 1) {
-        panelSharpAt = now;
-        void rasterInkRef.current?.syncCamera();
-      }
+      // setPanOffset (via clearPanOffsets) transforms the existing ink pixels
+      // with this camera. Resize/repaint once at settle, never stretch each axis.
       sceneOverlayRef.current?.redraw();
       shapeSelectRef.current?.redraw();
     };
@@ -7851,9 +7836,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       if (!camera || !board.offsetWidth || !board.offsetHeight) return;
       const duration = (event as CustomEvent<{ duration: number }>).detail?.duration ?? 0;
       stopPanelPaint();
-      panelSharpAt = 0;
-      panelFrameAt = 0;
-      panelGaps.length = 0;
       if (!duration) return;
       const from = { scrollX: camera.scrollX, scrollY: camera.scrollY, zoom: camera.zoom };
       const tick = () => {
@@ -7861,12 +7843,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           panelFrame = 0;
           return;
         }
-        const now = performance.now();
-        if (panelFrameAt > 0) {
-          panelGaps.push(now - panelFrameAt);
-          if (panelGaps.length > 8) panelGaps.shift();
-        }
-        panelFrameAt = now;
         paintPanelFrame(from);
         panelFrame = requestAnimationFrame(tick);
       };
@@ -9235,7 +9211,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * out would make every page taller, and the next fit smaller again.
      */
     const cutZoom = fitZoomMinRef.current ?? view.zoom;
-    const pageH = (view.height - inset.top - inset.bottom) / cutZoom;
+    // A held text page has fixed scene boundaries, like a PDF sheet. Sidebar
+    // and window resizes fit that sheet; they must not repack its paragraphs.
+    const pageH = pageLockRef.current && textPagesRef.current
+      ? textPagesRef.current.pageH
+      : (view.height - inset.top - inset.bottom) / cutZoom;
     /*
      * The slot is laid out in scene units and only scaled, so its layout box
      * is the document's scene size — not the client box, which moves with

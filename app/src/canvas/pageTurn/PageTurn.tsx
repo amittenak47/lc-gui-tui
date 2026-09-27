@@ -294,7 +294,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     lockedRef.current = null;
     const relock = () => {
       const board = boardRef.current;
-      if (!board || turnRef.current) return;
+      if (!board || turnRef.current || boardResizeDeferred()) return;
       const view = board.getViewportBounds();
       const frames = board.readingPageFrames();
       if (!view || frames.length === 0) return;
@@ -336,12 +336,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
      * would drag the view back to the page it left.
      */
     /*
-     * …and when the pages are cut again: a text document is re-cut to the new
-     * view whenever the window changes size, and the held page with it.
+     * …and when the pages are cut again: content changes can re-cut the
+     * document, while resizing fits the held page with its boundaries intact.
      */
     const poll = window.setInterval(() => {
       const board = boardRef.current;
-      if (!board || turnRef.current) return;
+      if (!board || turnRef.current || boardResizeDeferred()) return;
       const frames = board.readingPageFrames();
       const view = board.getViewportBounds();
       const held = lockedRef.current;

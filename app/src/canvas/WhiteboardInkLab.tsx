@@ -530,6 +530,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const backendRef = useRef("none");
     const marginYRef = useRef(0);
     const paintedViewRef = useRef<PaintedLabView | null>(null);
+    const panelPaintPendingRef = useRef(false);
     const cameraMovingRef = useRef(false);
     const lastStrokeAtRef = useRef(-Infinity);
     const sizeToHostRef = useRef<(allowPaused?: boolean, paint?: boolean) => void>(() => {});
@@ -591,12 +592,18 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             y: painted.marginY * OVERDRAW_REBASE_HEADROOM,
           })
         : panDelta(camera, painted, painted);
-      // The panel ease owns the box. A zoom rebase would hide the bitmap and
-      // a pan translate would shove it up until the sharp frame snaps back.
-      if (document.body.dataset.lcPanelMotion) {
-        if (canvas.style.transform) canvas.style.transform = "";
+      // Keep one bitmap during the panel ease. A uniform scene-camera
+      // transform moves ink exactly with the paper, including vertical overdraw.
+      if (document.body.dataset.lcPanelMotion || panelPaintPendingRef.current) {
+        panelPaintPendingRef.current = true;
+        const scale = camera.zoom / painted.zoom;
+        const dx = (camera.scrollX - painted.scrollX) * camera.zoom;
+        const dy = (camera.scrollY - painted.scrollY) * camera.zoom
+          + painted.marginY * (1 - scale);
+        canvas.style.transformOrigin = "0 0";
+        canvas.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(${scale})`;
         canvas.style.visibility = "";
-        return !delta.rebase;
+        return true;
       }
       const next = delta.dx === 0 && delta.dy === 0
         ? "" : `translate3d(${delta.dx}px, ${delta.dy}px, 0)`;
@@ -830,6 +837,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           }
           if (splitPausedRef.current && !allowPaused) return;
           if (sashDragActive()) return;
+          if (document.body.dataset.lcPanelMotion) {
+            alignPresentedInk(null);
+            return;
+          }
 
           const latest = bookRef.current.paintOps();
           if (!replayGeometry.matches(latest)) {
@@ -917,6 +928,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
             marginY: liveMargin,
           };
           canvas.style.visibility = "";
+          panelPaintPendingRef.current = false;
           committedBuildRef.current = false;
           historyPixelsDirtyRef.current = false;
           replayAllowPausedRef.current = false;
@@ -1100,7 +1112,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         }
         return Promise.resolve();
       }
-      if (samePaintedView(paintedViewRef.current, next)) {
+      if (!panelPaintPendingRef.current && samePaintedView(paintedViewRef.current, next)) {
         if (windowed) {
           return rebuildAndReplay(
             false,
@@ -1280,6 +1292,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         },
         syncCamera(allowPaused = false) {
           if (drawingRef.current) return Promise.resolve();
+          if (document.body.dataset.lcPanelMotion) {
+            alignPresentedInk(null);
+            return Promise.resolve();
+          }
           sizeToHostRef.current(allowPaused, false);
           return presentIfCameraMoved(true, allowPaused);
         },
@@ -1425,7 +1441,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         // would remesh the page. Apply it on lift / settle. Overdraw is the
         // pan budget: without it setPanOffset rebases after <1px and every
         // scroll frame remeshes.
-        if (drawingRef.current || cameraMovingRef.current || sashDragActive()) return;
+        if (drawingRef.current || cameraMovingRef.current || sashDragActive() || document.body.dataset.lcPanelMotion) return;
         const dpr = window.devicePixelRatio || 1;
         const cssW = Math.max(1, host.clientWidth);
         const cssH = Math.max(1, host.clientHeight);
@@ -1436,6 +1452,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
          */
         if (host.clientWidth < 8 || host.clientHeight < 8) return;
         const marginY = overdrawMarginPx(cssH, dpr);
+        const oldDpr = canvas.width / Math.max(1, canvas.clientWidth);
+        const painted = panelPaintPendingRef.current ? paintedViewRef.current : null;
+        const camera = painted ? getViewportRef.current() : null;
         marginYRef.current = marginY;
         const canvasCssH = cssH + 2 * marginY;
         const pixelW = Math.max(1, Math.round(cssW * dpr));
@@ -1463,10 +1482,24 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         canvas.width = pixelW;
         canvas.height = pixelH;
         if (kept.width > 1 && kept.height > 1) {
-          canvas.getContext("2d")?.drawImage(kept, 0, 0, pixelW, pixelH);
+          if (painted && camera) {
+            // Bake the same uniform camera transform into the resized backing
+            // while its sharp tiles load. Copying at 1:1 would clip the old
+            // right edge before it could shrink into the narrower viewport.
+            const zoomRatio = camera.zoom / painted.zoom;
+            const ratio = dpr / oldDpr * zoomRatio;
+            const dx = (camera.scrollX - painted.scrollX) * camera.zoom * dpr;
+            const dy = ((camera.scrollY - painted.scrollY) * camera.zoom
+              + marginY - painted.marginY * zoomRatio) * dpr;
+            canvas.getContext("2d")?.drawImage(kept, dx, dy, kept.width * ratio, kept.height * ratio);
+          } else {
+            canvas.getContext("2d")?.drawImage(kept, 0, 0, pixelW, pixelH);
+          }
           canvas.style.visibility = "";
         }
-        paintedViewRef.current = null;
+        paintedViewRef.current = painted && camera
+          ? { ...camera, width: cssW, height: cssH, marginY } : null;
+        if (painted && camera) alignPresentedInk(null);
         if (engineRef.current) {
           if (!paint || preparingRef.current || splitPausedRef.current) return;
           rebuildAndReplay(
@@ -2240,6 +2273,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         tilesRef.current = null;
       };
     }, [
+      alignPresentedInk,
       captureStrokeHost,
       holdNestedScroll,
       presentCommitted,
