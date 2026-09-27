@@ -471,6 +471,8 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
 
     const onDown = (event: PointerEvent) => {
       if (turnRef.current || active) return;
+      // A second finger is a pinch, not a turn: the first one's drag is off.
+      if (!event.isPrimary && event.pointerType === "touch") pending = null;
       if (event.button !== 0 || !event.isPrimary) return;
       if (event.pointerType === "pen") return; // the stylus writes; fingers and mice turn
       if (!inHost(event.target)) return;

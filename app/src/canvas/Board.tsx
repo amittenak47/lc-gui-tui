@@ -2105,6 +2105,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const pageShownRef = useRef<{ minY: number; maxY: number } | null>(null);
   /** Covers the board outside `pageShownRef` while a page is fitted. */
   const pageMaskRef = useRef<HTMLDivElement | null>(null);
+  /** The zoom the page fit last put the camera at. */
+  const pageFitZoomRef = useRef(1);
   const applyPageFitRef = useRef<() => void>(() => {});
   const publishPdfFilmFromScrollRef = useRef<
     (scrollX: number, scrollY: number, zoom: number, height: number) => void
@@ -6146,7 +6148,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       };
       const offsetLeft = state.offsetLeft ?? 0;
       const offsetTop = state.offsetTop ?? 0;
-      const z = clampZoom(zoom, getZoomFloor());
+      // A fitted page is as far out as Pages goes — past it there is only the
+      // mask — and it may sit below the reading floor, so it is the floor.
+      const floor = pageFitRef.current != null ? pageFitZoomRef.current : getZoomFloor();
+      const z = clampZoom(zoom, floor);
       const { scrollX, scrollY } = clampPanScroll(
         (at.x - offsetLeft) / z - anchor.x,
         (at.y - offsetTop) / z - anchor.y,
@@ -9242,6 +9247,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const h = lock.maxY - lock.minY;
     if (availW < 8 || availH < 8 || !(w > 0) || !(h > 0)) return;
     const zoom = clampZoom(Math.min(availW / w, availH / h) * fraction, FIT_ZOOM_MIN);
+    pageFitZoomRef.current = zoom;
     const scrollX = (inset.left + (availW - w * zoom) / 2) / zoom - bounds.minX;
     const scrollY = (inset.top + (availH - h * zoom) / 2) / zoom - lock.minY;
     const prev = liveCameraRef.current;

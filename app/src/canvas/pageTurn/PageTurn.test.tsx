@@ -212,3 +212,14 @@ it("hides what lies past a text page's cut in the picture of it", async () => {
   board.readingPageFrames.mockReturnValue(FRAMES);
   board.captureSceneFrame.mockImplementation(async () => document.createElement("canvas"));
 });
+
+it("leaves a pinch alone: a second finger calls the turn off", () => {
+  mount();
+  pointer("pointerdown", 380, 500);
+  act(() => {
+    host.dispatchEvent(new PointerEvent("pointerdown", { clientX: 200, clientY: 500, pointerId: 8, pointerType: "touch", isPrimary: false, button: 0, bubbles: true }));
+  });
+  pointer("pointermove", 300, 505);
+  pointer("pointermove", 150, 505);
+  expect(board.captureSceneFrame).not.toHaveBeenCalled();
+});
