@@ -108,6 +108,45 @@ afterEach(async () => {
 });
 
 describe("annotation camera presentation", () => {
+  it.each([1, 1.7])("keeps edge strokes under their input coordinates before and after replay at DPR %s", async (dpr) => {
+    vi.stubGlobal("devicePixelRatio", dpr);
+    view = { ...view, zoom: .7, scrollX: -130, scrollY: -450 };
+    await ready([], "pen");
+    const targets = [[6, 120], [380, 120], [180, 6], [180, 234], [180, 120]];
+    const event = (type: string, x: number, y: number) => {
+      const e = new MouseEvent(type, { button: 0, clientX: x, clientY: y, bubbles: true });
+      Object.defineProperties(e, { pointerId: { value: 1 }, pointerType: { value: "pen" }, pressure: { value: .5 } });
+      surface().dispatchEvent(e);
+    };
+    for (const [x, y] of targets) {
+      await act(async () => {
+        event("pointerdown", x, y);
+        event("pointermove", x + 10, y);
+        event("pointerup", x + 10, y);
+      });
+    }
+    const ops = ref.current!.getOps();
+    expect(ops).toHaveLength(targets.length);
+    ops.forEach((op, i) => {
+      const p = op.points[0];
+      expect(Math.abs((p.x + view.scrollX) * view.zoom - targets[i][0])).toBeLessThan(1);
+      expect(Math.abs((p.y + view.scrollY) * view.zoom - targets[i][1])).toBeLessThan(1);
+    });
+    const checkPixels = () => {
+      const margin = -parseFloat(surface().style.top);
+      for (const [x, y] of targets) {
+        expect(alpha(Math.round((x + 5) * dpr), Math.round((y + margin) * dpr))).toBeGreaterThan(0);
+      }
+    };
+    checkPixels();
+    const saved = ref.current!.snapshotInkPages();
+    ref.current!.clear();
+    ref.current!.ingestInkPages(saved, { paint: false });
+    const reopened = ref.current!.primeSnap();
+    await frames(); await reopened;
+    checkPixels();
+  });
+
   it("keeps highlights on their text when writing before a scroll rebase settles", async () => {
     await ready([stroke(100)]);
     await act(async () => root.render(<WhiteboardInkLab ref={ref} enabled tool="highlighter"

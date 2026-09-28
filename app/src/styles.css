@@ -12496,8 +12496,13 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   height: 15px;
   flex: 0 0 auto;
 }
-.lc-agent-composer-mid .lc-agent-reasoning-pick { font-variant-numeric: tabular-nums; }
-.lc-agent-composer-mid .lc-agent-reasoning-pick .lc-agent-reasoning-level { display: inline-block; width: 26px; text-align: left; }
+.lc-agent-composer-mid .lc-agent-reasoning-pick { flex-shrink: 0; }
+.lc-agent-composer-mid .lc-agent-reasoning-pick .lc-agent-reasoning-level {
+  display: inline-block;
+  flex: 0 0 4ch;
+  width: 4ch;
+  text-align: center;
+}
 
 /* Faint rule between options. */
 .lc-agent-option-sep {
