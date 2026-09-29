@@ -2548,7 +2548,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     } else {
       pageBoundsRef.current = null;
     }
-    const ink = inkOpsBounds(rasterInkRef.current?.getOps() ?? []);
+    const ink = rasterInkRef.current?.getInkBounds() ?? null;
     const clip = inkPaintClip(
       unionSceneBounds(bounds, pageBoundsRef.current),
       ink,
@@ -6910,7 +6910,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         if (drawPage || isScratchPage) {
           const fitted = drawPageFitBox(
             { minX, minY, maxX, maxY },
-            inkOpsBounds(rasterInkRef.current?.getOps() ?? []),
+            rasterInkRef.current?.getInkBounds() ?? null,
             SCRATCH_PAGE_W,
           );
           minX = fitted.minX;

@@ -146,6 +146,7 @@ export interface RasterInkHandle {
   /** Tool changes stop pan bookkeeping without pretending to be a camera settle. */
   cancelCameraMotion(): void;
   getOps(): InkOp[];
+  getInkBounds(): SceneBounds | null;
   getOpsInBounds(bounds: SceneBounds): InkOp[];
   setOps(ops: readonly InkOp[], opts?: { paint?: boolean }): void;
   getOpCount(): number;
@@ -531,6 +532,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     const bakeRef = useRef({ bakeMs: 0, bake: "catmull" });
     const backendRef = useRef("none");
     const marginYRef = useRef(0);
+    const canvasMetricsRef = useRef<{ width: number; height: number; dpr: number } | null>(null);
     const paintedViewRef = useRef<PaintedLabView | null>(null);
     const cameraPaintPendingRef = useRef(false);
     // A pinch stays hidden through tile preparation, not just pointer-up.
@@ -555,8 +557,6 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     }, []);
 
     const readViews = useCallback(() => {
-      const canvas = canvasRef.current;
-      const host = hostRef.current;
       const marginY = marginYRef.current;
       const raw = getViewportRef.current();
       /*
@@ -564,14 +564,16 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
        * width/height left a strip of canvas with no tiles — the screen cutting
        * writing at the edge. RasterInkLayer sizes the same way.
        */
-      const width = Math.max(1, host?.clientWidth || raw?.width || 1);
-      const height = Math.max(1, host?.clientHeight || raw?.height || 1);
+      // Camera frames change transforms just before this runs. Reading client
+      // sizes here forces style/layout across the PDF's growing text DOM.
+      // ResizeObserver/sizeToHost owns the host size and backing pixel ratio.
+      const metrics = canvasMetricsRef.current;
+      const width = metrics?.width ?? Math.max(1, raw?.width || 1);
+      const height = metrics?.height ?? Math.max(1, raw?.height || 1);
       const view = raw
         ? { ...raw, width, height }
         : fallbackViewport(width, height);
-      const dpr = canvas
-        ? canvas.width / Math.max(1, canvas.clientWidth || canvas.width)
-        : 1;
+      const dpr = metrics?.dpr ?? 1;
       return {
         view,
         paintView: overdrawnViewport(view, marginY),
@@ -1361,6 +1363,9 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         getOps() {
           return bookRef.current.assembleOps();
         },
+        getInkBounds() {
+          return bookRef.current.inkBounds();
+        },
         getOpsInBounds(bounds) {
           return bookRef.current.opsInBounds(bounds);
         },
@@ -1489,6 +1494,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
         const canvasCssH = cssH + 2 * marginY;
         const pixelW = Math.max(1, Math.round(cssW * dpr));
         const pixelH = Math.max(1, Math.round(canvasCssH * dpr));
+        canvasMetricsRef.current = { width: cssW, height: cssH, dpr: pixelW / cssW };
         const top = `${-marginY}px`;
         if (!inkCanvasCssMatches(canvas, cssW, canvasCssH, top)) {
           canvas.style.width = `${cssW}px`;

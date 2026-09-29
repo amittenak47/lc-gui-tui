@@ -249,7 +249,8 @@ describe("Board", () => {
       src.indexOf("const reportCodeSlot = useCallback"),
     );
     expect(vis).toMatch(/inkPaintClip/);
-    expect(vis).toMatch(/inkOpsBounds/);
+    expect(vis).toMatch(/getInkBounds/);
+    expect(vis).not.toMatch(/getOps\(/);
     expect(vis).not.toMatch(/sameBounds\(current, bounds\)/);
   });
 
@@ -349,9 +350,11 @@ describe("Board", () => {
 describe("WhiteboardInkLab", () => {
   it("covers the ink host, not a stale Excalidraw box", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
-    expect(src).toMatch(/host\?\.clientWidth \|\| raw\?\.width/);
-    expect(src).toMatch(/host\?\.clientHeight \|\| raw\?\.height/);
-    expect(src).not.toMatch(/raw\?\.width \|\| host\?\.clientWidth/);
+    expect(src).toMatch(/const cssW = Math.max\(1, host.clientWidth\)/);
+    expect(src).toMatch(/const cssH = Math.max\(1, host.clientHeight\)/);
+    expect(src).toMatch(/canvasMetricsRef.current = \{ width: cssW, height: cssH/);
+    expect(src).toMatch(/metrics\?\.width \?\? Math.max\(1, raw\?\.width/);
+    expect(src).toMatch(/metrics\?\.height \?\? Math.max\(1, raw\?\.height/);
     expect(src).toMatch(/inkPaintClip\(clipRef\.current, inkOpsBounds\(committed\)\)/);
   });
 

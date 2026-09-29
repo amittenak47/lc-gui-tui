@@ -18,6 +18,7 @@ import {
   concatEncodedInk,
   decodeInkOps,
   encodeInkOps,
+  encodedInkBounds,
   type EncodedInk,
 } from "./inkCodec";
 import {
@@ -30,7 +31,7 @@ import {
   pageIdForOp,
   type PageFrame,
 } from "./inkPageIndex";
-import { isHostBoundOp, type InkEraseOp, type InkOp, type SceneBounds } from "./rasterInk";
+import { isHostBoundOp, inkOpsBounds, unionSceneBounds, type InkEraseOp, type InkOp, type SceneBounds } from "./rasterInk";
 import { opsAfterPartialErase, opsAfterStrokeErase, opsWithErasesBaked } from "./strokeEraser";
 
 /** Recently-evicted encoded pages kept in RAM so a short jump back is free. */
@@ -64,6 +65,7 @@ export class InkPageBook {
   private opTotal = 0;
   /** Bumps on every mutation, including undo/redo that keep the same op count. */
   private generation = 0;
+  private boundsByPage = new Map<number, SceneBounds | null>();
 
   undo: InkUndoEntry[] = [];
   redo: InkUndoEntry[] = [];
@@ -190,6 +192,21 @@ export class InkPageBook {
     return out;
   }
 
+  /** Layout and camera fits must not decode the entire saved notebook. */
+  inkBounds(): SceneBounds | null {
+    let bounds: SceneBounds | null = null;
+    for (const id of new Set([...this.hot.keys(), ...this.cold.keys()])) {
+      if (!this.boundsByPage.has(id)) {
+        const hot = this.hot.get(id);
+        this.boundsByPage.set(id, hot
+          ? inkOpsBounds(hot)
+          : encodedInkBounds(this.cold.get(id)!));
+      }
+      bounds = unionSceneBounds(bounds, this.boundsByPage.get(id) ?? null);
+    }
+    return bounds;
+  }
+
   /** Read a capture's page shards without hydrating or evicting the reading window. */
   opsInBounds(bounds: SceneBounds): InkOp[] {
     if (this.usedFallback) return this.assembleOps();
@@ -253,6 +270,7 @@ export class InkPageBook {
   }
 
   ingestEncodedPages(pages: Map<number, EncodedInk> | Iterable<[number, EncodedInk]>): void {
+    this.boundsByPage.clear();
     this.hot.clear();
     this.cold.clear();
     this.dirty.clear();
@@ -277,6 +295,7 @@ export class InkPageBook {
   seedCold(pages: Iterable<[number, EncodedInk]>): void {
     for (const [pageId, encoded] of pages) {
       if (this.hot.has(pageId) || this.dirty.has(pageId)) continue;
+      this.boundsByPage.delete(pageId);
       this.cold.set(pageId, encoded);
       this.onDisk.add(pageId);
     }
@@ -286,6 +305,7 @@ export class InkPageBook {
     ops: readonly InkOp[],
     opts?: { preserveIds?: boolean; frames?: readonly PageFrame[] },
   ): void {
+    this.boundsByPage.clear();
     // Every page that held ink before, so one left empty is written empty.
     const before = this.pageIds();
     // Bin by the layout these strokes are in. A caller replacing ink after a
@@ -562,6 +582,7 @@ export class InkPageBook {
       return false;
     }
     this.hot.set(pageId, decodeInkOps(encoded));
+    this.boundsByPage.delete(pageId);
     this.cold.delete(pageId);
     this.touchLru(pageId);
     return true;
@@ -571,6 +592,7 @@ export class InkPageBook {
     const list = this.hot.get(pageId);
     if (!list) return;
     this.cold.set(pageId, encodeInkOps(list));
+    this.boundsByPage.delete(pageId);
     this.hot.delete(pageId);
     this.touchLru(pageId);
   }
@@ -593,6 +615,7 @@ export class InkPageBook {
   }
 
   private markDirty(pageId: number): void {
+    this.boundsByPage.delete(pageId);
     this.dirty.add(pageId);
   }
 

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { InkPageBook } from "./inkPageCache";
 import { INK_LRU_RADIUS, SPANNING_PAGE_ID, type PageFrame } from "./inkPageIndex";
-import { decodeInkOps } from "./inkCodec";
-import { NO_PRESSURE, type InkDrawOp, type InkEraseOp } from "./rasterInk";
+import { decodeInkOps, encodeInkOps } from "./inkCodec";
+import { NO_PRESSURE, inkOpsBounds, type InkDrawOp, type InkEraseOp } from "./rasterInk";
 
 function frames(count: number): PageFrame[] {
   const out: PageFrame[] = [];
@@ -32,6 +32,48 @@ function stroke(y: number, extra: Partial<InkDrawOp> = {}): InkDrawOp {
 }
 
 describe("InkPageBook", () => {
+  it("reads and caches cold geometry without decoding strokes or changing the paint window", () => {
+    const book = new InkPageBook();
+    const layout = frames(20);
+    book.replaceAll(layout.map(f => stroke(f.minY + 40)), { frames: layout });
+    const expected = inkOpsBounds(book.assembleOps());
+    const hot = [...book.hot.keys()];
+    const revision = book.revision();
+    const cold = book.cold.get(20)!;
+    Object.defineProperty(cold.ops[0], "pr", { get() { throw new Error("Decoded cold ink"); } });
+    expect(book.inkBounds()).toEqual(expected);
+    Object.defineProperty(cold.ops[0], "xy", { get() { throw new Error("Rescanned cached ink"); } });
+    expect(book.inkBounds()).toEqual(expected);
+    expect([...book.hot.keys()]).toEqual(hot);
+    expect(book.revision()).toBe(revision);
+    book.commit(stroke(50));
+    expect(book.inkBounds()).toEqual(expected);
+  });
+
+  it("updates bounds through edits, undo, clear, restore and page eviction", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(20));
+    const check = () => expect(book.inkBounds()).toEqual(inkOpsBounds(book.assembleOps()));
+    check();
+    book.commit(stroke(40)); check();
+    book.commit(stroke(1100)); check();
+    book.undoOnce(); check();
+    book.redoOnce(); check();
+    book.setVisiblePage(10); check();
+    book.strokeErase({ kind: "erase", radius: 30, points: [{ x: 15, y: 1100, pressure: 1 }] }); check();
+    book.undoOnce(); check();
+    book.partialErase({ kind: "erase", radius: 2, points: [{ x: 15, y: 1100, pressure: 1 }] }); check();
+    book.undoOnce(); check();
+    const saved = book.snapshotEncodedPages();
+    book.clear(); check();
+    book.undoOnce(); check();
+    book.redoOnce(); check();
+    book.ingestEncodedPages(saved); check();
+    book.setVisiblePage(1); check();
+    book.seedCold([[20, encodeInkOps([stroke(2300)])]]); check();
+    book.replaceAll([stroke(55)], { frames: frames(2) }); check();
+  });
+
   it("captures cold page ink without decoding unrelated pages or moving the reading window", () => {
     const book = new InkPageBook();
     const layout = frames(20);

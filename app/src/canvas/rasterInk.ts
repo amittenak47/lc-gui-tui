@@ -5787,45 +5787,35 @@ export function inkPaintClip(
   return unionSceneBounds(page, ink);
 }
 
+/** Radius used to conservatively pad drawn geometry, including saved ink. */
+export function inkBoundsPadding(
+  op: Pick<InkDrawOp, "baseWidth" | "pressureClip" | "pressureSensitive" | "speedInk" | "highlight">,
+): number {
+  // Fullness and boldness affect opacity, not width. In particular, don't
+  // read the device's localStorage preference once per stroke to find a box.
+  return inkStrokeStyle(
+    op.baseWidth, 1, 1, op.pressureClip ?? 1, op.pressureSensitive,
+    0, 1, op.speedInk ?? 0, op.highlight === true,
+  ).lineWidth / 2;
+}
+
 /**
- * Where the drawn ink sits, padded by the widest line it could have been
- * stroked with. Null when nothing has been drawn — the caller's cue that the
- * plain Excalidraw export is already complete.
- *
- * Erase ops do not shrink this: a stroke that was drawn and then rubbed out
- * still costs its area in the exported PNG. That is a few empty pixels, not a
- * correctness problem, and it keeps this cheap enough to call on every submit.
+ * Drawn geometry padded by the widest line it could have been stroked with.
+ * Erase ops do not shrink it: a few empty export pixels are harmless.
  */
 export function inkOpsBounds(ops: readonly InkOp[]): SceneBounds | null {
-  let bounds: SceneBounds | null = null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const op of ops) {
     if (op.kind !== "draw") continue;
-    const maxFullness = op.maxFullness ?? 1;
-    const pressureClip = op.pressureClip ?? 1;
-    const boldness = op.highlight ? 1 : resolveInkBoldness(op);
-    const style = inkStrokeStyle(
-      op.baseWidth,
-      maxFullness,
-      1,
-      pressureClip,
-      op.pressureSensitive,
-      0,
-      1,
-      op.speedInk ?? 0,
-      op.highlight === true,
-      boldness,
-    );
-    const half = style.lineWidth / 2;
+    const half = inkBoundsPadding(op);
     for (const point of op.points) {
-      bounds = unionSceneBounds(bounds, {
-        minX: point.x - half,
-        minY: point.y - half,
-        maxX: point.x + half,
-        maxY: point.y + half,
-      });
+      minX = Math.min(minX, point.x - half);
+      minY = Math.min(minY, point.y - half);
+      maxX = Math.max(maxX, point.x + half);
+      maxY = Math.max(maxY, point.y + half);
     }
   }
-  return bounds;
+  return minX === Infinity ? null : { minX, minY, maxX, maxY };
 }
 
 /**

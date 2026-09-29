@@ -14,6 +14,7 @@ import {
   decodeInkOps,
   decodeInkOpsAsync,
   encodeInkOps,
+  encodedInkBounds,
   inkOpsFrom,
   inkStorageStats,
   packEncodedInk,
@@ -21,7 +22,7 @@ import {
   scaleInkStorage,
   unpackEncodedInk,
 } from "./inkCodec";
-import { NO_PRESSURE, type InkDrawOp, type InkEraseOp, type InkOp } from "./rasterInk";
+import { NO_PRESSURE, inkOpsBounds, type InkDrawOp, type InkEraseOp, type InkOp } from "./rasterInk";
 
 function stroke(points: InkDrawOp["points"], extra: Partial<InkDrawOp> = {}): InkDrawOp {
   return {
@@ -37,6 +38,29 @@ function stroke(points: InkDrawOp["points"], extra: Partial<InkDrawOp> = {}): In
 }
 
 /** A stamp chain the way the renderer lays one down: small, irregular steps. */
+describe("encoded ink bounds", () => {
+  it("matches decoded geometry for styles, quantized deltas, erases and raw overflow", () => {
+    const chain = stampChain(1500);
+    const encoded = encodeInkOps([
+      chain,
+      { ...chain, highlight: true, baseWidth: 17 },
+      { ...chain, speedInk: 1, pressureSensitive: false, boldness: 3 },
+      stroke([{ x: -5000, y: 10, pressure: 1 }, { x: 5000, y: -80, pressure: 1 }]),
+      { kind: "erase", radius: 100, points: [{ x: -9000, y: 9000, pressure: 1 }] },
+      stroke([]),
+    ]);
+    expect(encoded.raw?.length).toBe(2);
+    expect(encodedInkBounds(encoded)).toEqual(inkOpsBounds(decodeInkOps(encoded)));
+  });
+
+  it("returns no drawn bounds for empty or erase-only saved pages", () => {
+    expect(encodedInkBounds({ v: 2, ops: [] })).toBeNull();
+    expect(encodedInkBounds(encodeInkOps([
+      { kind: "erase", radius: 10, points: [{ x: 10, y: 20, pressure: 1 }] },
+    ]))).toBeNull();
+  });
+});
+
 function stampChain(count: number): InkDrawOp {
   const points = [];
   let x = 640.1928100585938;

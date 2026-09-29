@@ -29,7 +29,7 @@
  * between someone and their handwriting is the whole point.
  */
 
-import { NO_PRESSURE, type InkOp, type ScenePoint } from "./rasterInk";
+import { NO_PRESSURE, inkBoundsPadding, inkOpsBounds, unionSceneBounds, type InkOp, type ScenePoint, type SceneBounds } from "./rasterInk";
 
 /**
  * Scene units per stored unit. Tenths.
@@ -467,6 +467,36 @@ export function decodeInkOps(encoded: EncodedInk): InkOp[] {
 
   if (encoded.raw) ops.push(...encoded.raw);
   return ops;
+}
+
+/** Read geometry without allocating decoded points or touching the paint LRU. */
+export function encodedInkBounds(encoded: EncodedInk): SceneBounds | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const record of encoded.ops) {
+    if (record.k !== "d") continue;
+    const half = inkBoundsPadding({
+      baseWidth: record.w ?? 2,
+      pressureClip: record.pc ?? 1,
+      pressureSensitive: record.ps === 1,
+      speedInk: record.si,
+      highlight: record.hl === 1,
+    });
+    let x = record.x0, y = record.y0;
+    for (let i = 0; i < record.n; i += 1) {
+      if (i > 0) {
+        x += record.xy[(i - 1) * 2] / COORD_SCALE;
+        y += record.xy[(i - 1) * 2 + 1] / COORD_SCALE;
+      }
+      minX = Math.min(minX, x - half);
+      minY = Math.min(minY, y - half);
+      maxX = Math.max(maxX, x + half);
+      maxY = Math.max(maxY, y + half);
+    }
+  }
+  return unionSceneBounds(
+    minX === Infinity ? null : { minX, minY, maxX, maxY },
+    inkOpsBounds(encoded.raw ?? []),
+  );
 }
 
 function yieldToUi(): Promise<void> {

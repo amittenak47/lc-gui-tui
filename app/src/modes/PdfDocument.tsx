@@ -487,7 +487,11 @@ export function pdfStackMeasureHeight(
 }
 
 function queryPageSlots(host: HTMLElement, n: number): HTMLElement[] {
-  return [...host.querySelectorAll<HTMLElement>(`[data-pdf-page="${n}"]`)];
+  // Slots are direct children. A descendant selector walks every retained
+  // pdf.js text span each time the preview ring blits during a flick.
+  return Array.from(host.children).filter(
+    (node): node is HTMLElement => node instanceof HTMLElement && node.dataset.pdfPage === String(n),
+  );
 }
 
 function zeroPageSlots(host: HTMLElement, n: number): void {
@@ -1312,9 +1316,7 @@ export function PdfDocument({
     const dropSessionText = (pagesToDrop: number[]) => {
       for (const gone of pagesToDrop) {
         textFilledRef.current.delete(gone);
-        for (const node of host.querySelectorAll<HTMLElement>(
-          `[data-pdf-page="${gone}"]`,
-        )) {
+        for (const node of queryPageSlots(host, gone)) {
           const text = node.querySelector<HTMLElement>(".lc-pdf-text");
           if (text) text.textContent = "";
           node.removeAttribute("data-painted");
@@ -1439,9 +1441,7 @@ export function PdfDocument({
     ): Promise<boolean> => {
       if (isDocCameraLive(filmScope)) return false;
       if (!forceCap && !isCameraIdleForTeardown()) return false;
-      const slots = [
-        ...host.querySelectorAll<HTMLElement>(`[data-pdf-page="${n}"]`),
-      ];
+      const slots = queryPageSlots(host, n);
       if (slots.length === 0) return true;
       for (const slot of slots) {
         const canvas = slot.querySelector("canvas");
