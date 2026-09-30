@@ -63,6 +63,7 @@ import {
   noteCameraIdlePulse,
 } from "../util/cameraBusy";
 import { noteReadingPointerDown } from "../util/inputLatency";
+import { isAndroidDevice } from "../util/androidDevice";
 import { traceOpen } from "../util/messageOf";
 import { ANNOTATE_PAGE_W, ANNOTATE_REGION, MD_INK_MIN_PAGE_H, MD_INK_TAIL_PAD, buildAnnotateTemplate, isAnnotatePageFrame, stampAnnotateFrameMeta } from "../templates/annotate";
 import {
@@ -5026,6 +5027,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       activateChromeControl(pending.el);
     };
 
+    // Android WebView can retain a native fling after our pointer-driven pan,
+    // even with touch-action: none. Its next tap then stops that fling without
+    // producing a click, including taps on the header outside this board.
+    // Cancel the touch gesture only once our pan owns it. Deferred taps, text
+    // selection, drawing, and multi-touch must keep their existing handling.
+    const onTouchMove = (event: TouchEvent) => {
+      const drag = panDragRef.current;
+      if (
+        event.touches.length === 1 &&
+        handPanningRef.current &&
+        drag &&
+        (drag.armed || drag.sideScrollActive) &&
+        canOwnScroll() &&
+        event.cancelable
+      ) {
+        event.preventDefault();
+      }
+    };
+    const android = isAndroidDevice();
+    if (android) root.addEventListener("touchmove", onTouchMove, { passive: false });
     root.addEventListener("pointerdown", onPointerDown, true);
     root.addEventListener("pointermove", onPointerMove, true);
     root.addEventListener("pointerup", onPointerUp, true);
@@ -5045,6 +5066,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       root.removeEventListener("pointerup", onPointerUp, true);
       root.removeEventListener("pointercancel", onPointerUp, true);
       root.removeEventListener("lostpointercapture", onLostCapture);
+      if (android) root.removeEventListener("touchmove", onTouchMove);
       window.removeEventListener("pointerdown", onWindowChromeDown, true);
       window.removeEventListener("pointerup", onWindowChromeUp, true);
       window.removeEventListener("pointercancel", onWindowChromeUp, true);
