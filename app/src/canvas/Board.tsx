@@ -889,6 +889,8 @@ const ZOOM_MIN = 0.15;
 const FIT_ZOOM_MIN = 0.02;
 /** Ceiling for a Pages-reading page fit. */
 const PAGE_FIT_ZOOM_MAX = 8;
+/** Desk left showing either side of a widened text sheet, in CSS px: room for its page stack. */
+const SHEET_DESK_PX = 5;
 /** Sharpest a fitted PDF page is painted, in pixels per scene unit. */
 const PAGE_FIT_PAINT_MAX = 4;
 /** …and at most this many pixels per page. */
@@ -2130,12 +2132,25 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const pageSpreadRef = useRef(false);
   /** Which half of the spread the held page is. */
   const pageSideRef = useRef<"left" | "right">("left");
+  /**
+   * Pages reading, a text page on its own: paper either side of the column,
+   * in scene units, so the sheet reaches the sides of the view. The column
+   * and the words in it stay where they are — only the sheet is wider, which
+   * puts its turning corners under a thumb holding the tablet's edge.
+   */
+  const sheetPadRef = useRef(0);
   /** The page's column — in a spread, both pages', the held one on its own side. */
-  const spreadColumn = (bounds: SceneBounds): { minX: number; maxX: number } => {
+  const pageColumn = (bounds: SceneBounds): { minX: number; maxX: number } => {
     if (!pageSpreadRef.current || pageFitRef.current == null) return { minX: bounds.minX, maxX: bounds.maxX };
     const w = bounds.maxX - bounds.minX;
     const minX = pageSideRef.current === "right" ? bounds.minX - w : bounds.minX;
     return { minX, maxX: minX + 2 * w };
+  };
+  /** The sheet the page is shown on: its column, and the paper beside it. */
+  const spreadColumn = (bounds: SceneBounds): { minX: number; maxX: number } => {
+    const column = pageColumn(bounds);
+    const pad = pageFitRef.current != null && !pageSpreadRef.current ? sheetPadRef.current : 0;
+    return { minX: column.minX - pad, maxX: column.maxX + pad };
   };
   const applyPageFitRef = useRef<() => void>(() => {});
   const lockPageSpanRef = useRef<
@@ -9302,13 +9317,22 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     );
     const availW = viewWidth - inset.left - inset.right;
     const availH = viewHeight - inset.top - inset.bottom;
-    const column = spreadColumn(bounds);
-    const w = column.maxX - column.minX;
+    const bare = pageColumn(bounds);
+    const bareW = bare.maxX - bare.minX;
     const h = lock.maxY - lock.minY;
-    if (availW < 8 || availH < 8 || !(w > 0) || !(h > 0)) return;
+    if (availW < 8 || availH < 8 || !(bareW > 0) || !(h > 0)) return;
     // Not the gesture ceiling: a reading column is 300–760 units, so a page
     // filling a large window needs well past 1.75, and the fit is arithmetic.
-    const zoom = Math.min(PAGE_FIT_ZOOM_MAX, Math.max(FIT_ZOOM_MIN, Math.min(availW / w, availH / h) * fraction));
+    const zoom = Math.min(PAGE_FIT_ZOOM_MAX, Math.max(FIT_ZOOM_MIN, Math.min(availW / bareW, availH / h) * fraction));
+    // A text page is as tall as the view and narrower than it: widen its
+    // paper to the view's sides, less a sliver of desk for the page stack.
+    // A PDF's sheet is its own paper, and a spread's halves are halves.
+    const textSheet = !pageSpreadRef.current && peekPdfReadingFrames(filmScope).length === 0;
+    sheetPadRef.current = textSheet
+      ? Math.max(0, ((availW * fraction - 2 * SHEET_DESK_PX) / zoom - bareW) / 2)
+      : 0;
+    const column = spreadColumn(bounds);
+    const w = column.maxX - column.minX;
     pageFitZoomRef.current = zoom;
     // The page is shown this large now: paint it (and the pages either side,
     // which a turn shows next) at the device pixels it covers. Pages only —
@@ -9958,7 +9982,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       readingPageBox: () => {
         const bounds = pageBoundsRef.current;
         const lock = pageLockRef.current;
-        return bounds && lock ? { minX: bounds.minX, maxX: bounds.maxX, minY: lock.minY, maxY: lock.maxY } : null;
+        if (!bounds || !lock) return null;
+        // The whole sheet, paper beside the column included: that is what turns.
+        const pad = pageFitRef.current != null && !pageSpreadRef.current ? sheetPadRef.current : 0;
+        return { minX: bounds.minX - pad, maxX: bounds.maxX + pad, minY: lock.minY, maxY: lock.maxY };
       },
       setPageLock: (span, side) => lockPageSpan(span, side),
       setPageSpread: (on) => {
