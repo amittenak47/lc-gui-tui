@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { PREPARING_HTML, shouldReportDocumentHeight } from "./AnnotateDocument";
-import { docPreview, parseInline, truncationNoticeHtml } from "./docPreview";
+import { parseInline } from "./docPreview";
 
 export interface CodeDocumentProps {
   source: string;
@@ -48,11 +48,7 @@ export function escapeHtml(text: string): string {
  */
 export function renderCode(source: string, language = "plaintext"): string {
   const lang = language.replace(/[^a-zA-Z0-9_+#-]/g, "") || "plaintext";
-  const { text, hidden } = docPreview(source);
-  return (
-    `<pre class="lc-code-doc-pre"><code class="language-${lang}">${escapeHtml(text)}</code></pre>` +
-    truncationNoticeHtml(hidden)
-  );
+  return `<pre class="lc-code-doc-pre"><code class="language-${lang}">${escapeHtml(source)}</code></pre>`;
 }
 
 export function CodeDocument({
@@ -71,7 +67,7 @@ export function CodeDocument({
    */
   const inline = useMemo(
     () =>
-      parseInline(docPreview(source).text) ? renderCode(source, language) : null,
+      parseInline(source) ? renderCode(source, language) : null,
     [language, source],
   );
   const [parsed, setParsed] = useState<string | null>(inline);

@@ -18,7 +18,7 @@ import { Marked } from "marked";
 import "katex/dist/katex.min.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { docPreview, parseInline, truncationNoticeHtml } from "./docPreview";
+import { parseInline } from "./docPreview";
 import { markedTexmathDollars } from "./mdMath";
 
 const markedMath = new Marked({ gfm: true, breaks: false }).use(markedTexmathDollars());
@@ -54,8 +54,7 @@ export interface AnnotateDocumentProps {
  * of notes actually uses stays.
  */
 export function renderMarkdown(source: string): string {
-  const { text, hidden } = docPreview(source);
-  const html = markedMath.parse(text, { async: false });
+  const html = markedMath.parse(source, { async: false });
   const clean = DOMPurify.sanitize(html, {
     // No `target`/`rel` juggling needed: links are inert here anyway, since
     // the surface never receives a pointer event.
@@ -64,8 +63,7 @@ export function renderMarkdown(source: string): string {
     FORBID_ATTR: ["onerror", "onload", "onclick"],
     ADD_ATTR: ["style"],
   });
-  // Appended after sanitising because it is ours, not the document's.
-  return clean + truncationNoticeHtml(hidden);
+  return clean;
 }
 
 /**
@@ -111,7 +109,7 @@ export function AnnotateDocument({ source, onMeasure, selectable = false }: Anno
    * exactly as it was, with no placeholder frame in between.
    */
   const inline = useMemo(
-    () => (parseInline(docPreview(source).text) ? renderMarkdown(source) : null),
+    () => (parseInline(source) ? renderMarkdown(source) : null),
     [source],
   );
   const [parsed, setParsed] = useState<string | null>(inline);
