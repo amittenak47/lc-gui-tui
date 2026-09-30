@@ -8,6 +8,7 @@ import {
   foldSide,
   sheetPart,
   turnCommits,
+  turnProgress,
 } from "./curl";
 
 const W = 400;
@@ -55,10 +56,28 @@ describe("page curl geometry", () => {
     expect(area(flap) + area(flat)).toBeCloseTo(W * H, 3);
   });
 
-  it("turns at halfway either way", () => {
-    expect(turnCommits("next", cornerForDrag("next", -W / 2 - 1, 0, W, H, true).x)).toBe(true);
-    expect(turnCommits("next", cornerForDrag("next", -W / 2 + 20, 0, W, H, true).x)).toBe(false);
-    expect(turnCommits("prev", cornerForDrag("prev", W / 2 + 1, 0, W, H, true).x)).toBe(true);
-    expect(turnCommits("prev", cornerForDrag("prev", W / 2 - 20, 0, W, H, true).x)).toBe(false);
+  it("goes over past 35% either way, and unravels short of it", () => {
+    const at = (direction: "next" | "prev", dx: number) => cornerForDrag(direction, dx, 0, W, H, true).x;
+    expect(turnProgress("next", at("next", -0.35 * W), W)).toBeCloseTo(0.35, 5);
+    expect(turnCommits("next", at("next", -0.36 * W), W)).toBe(true);
+    expect(turnCommits("next", at("next", -0.3 * W), W)).toBe(false);
+    expect(turnCommits("prev", at("prev", 0.36 * W), W)).toBe(true);
+    expect(turnCommits("prev", at("prev", 0.3 * W), W)).toBe(false);
+  });
+
+  it("lets a throw carry a short turn over, but not a twitch", () => {
+    const corner = cornerForDrag("next", -0.2 * W, 0, W, H, true).x;
+    expect(turnCommits("next", corner, W, 0.2 * W)).toBe(true);
+    // A throw adds at most a quarter of the turn.
+    const twitch = cornerForDrag("next", -0.05 * W, 0, W, H, true).x;
+    expect(turnCommits("next", twitch, W, 5 * W)).toBe(false);
+  });
+
+  it("peels the held corner before the finger moves", () => {
+    const held = cornerForDrag("next", 0, 0, W, H, true, 16);
+    expect(held.x).toBeLessThan(W);
+    expect(held.y).toBeLessThan(H);
+    expect(curlGeometry(held, W, H, true).progress).toBeGreaterThan(0);
+    expect(turnCommits("next", held.x, W)).toBe(false);
   });
 });

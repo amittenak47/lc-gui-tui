@@ -139,32 +139,74 @@ it("holds the camera on the page in view", () => {
   expect(board.setPageLock).toHaveBeenLastCalledWith(FRAMES[1]);
 });
 
-it("turns to the next page when dragged past halfway, and lands on it", async () => {
+it("turns to the next page when dragged past a third of the way, and lands on it", async () => {
   mount();
-  const cancelled = vi.fn();
-  host.addEventListener("pointercancel", cancelled);
+  const boardDown = vi.fn();
+  host.addEventListener("pointerdown", boardDown);
   pointer("pointerdown", 380, 580);
+  expect(boardDown).not.toHaveBeenCalled(); // the corner is the turn's, not the board's
   pointer("pointermove", 340, 585);
-  expect(cancelled).toHaveBeenCalledTimes(1); // the board's pan was handed over
-  pointer("pointermove", 150, 585);
+  pointer("pointermove", 240, 585);
   await settle();
-  pointer("pointerup", 150, 585);
+  // The hand stops before it lets go: decided by where it is, not a throw.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+  pointer("pointerup", 240, 585);
   await settle();
   expect(board.jumpToPageFrame).toHaveBeenCalledWith({ ...FRAMES[2], minY: FRAMES[2].minY });
   expect(board.setPageLock).toHaveBeenLastCalledWith(FRAMES[2]);
 });
 
-it("settles back without moving when let go short of halfway", async () => {
+it("takes hold of the corner on touch, before the finger moves", async () => {
+  const frame = manualFrames();
+  mount();
+  pointer("pointerdown", 380, 580);
+  await act(async () => { await Promise.resolve(); });
+  frame();
+  const held = vi.mocked(paintTurn).mock.calls.at(-1)?.[1];
+  expect(held).toBeDefined();
+  expect(held!.corner.x).toBeLessThan(400);
+  expect(held!.corner.x).toBeGreaterThan(360);
+  pointer("pointerup", 380, 580);
+  for (let i = 0; i < 4; i += 1) frame(1000);
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+});
+
+it("keeps a turn taken at the corner even when the drag starts out steep", async () => {
+  mount();
+  pointer("pointerdown", 380, 580);
+  pointer("pointermove", 376, 540); // mostly upward at first
+  pointer("pointermove", 200, 520);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+  pointer("pointerup", 200, 520);
+  await settle();
+  expect(board.jumpToPageFrame).toHaveBeenCalledWith({ ...FRAMES[2], minY: FRAMES[2].minY });
+});
+
+it("turns on a flick whose moves a busy frame merged away", async () => {
+  mount();
+  pointer("pointerdown", 380, 580);
+  await settle();
+  pointer("pointerup", 200, 580); // no pointermove reached us: only the lift
+  await settle();
+  await settle();
+  expect(board.jumpToPageFrame).toHaveBeenCalledWith({ ...FRAMES[2], minY: FRAMES[2].minY });
+});
+
+it("unravels back without moving when let go short of 35%", async () => {
   mount();
   pointer("pointerdown", 380, 580);
   pointer("pointermove", 340, 585);
-  pointer("pointermove", 300, 585);
+  pointer("pointermove", 270, 585);
   await settle();
   // The hand stops before it lets go: no throw.
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   });
-  pointer("pointerup", 300, 585);
+  pointer("pointerup", 270, 585);
   await settle();
   expect(board.jumpToPageFrame).not.toHaveBeenCalled();
 });
@@ -265,7 +307,7 @@ it("hides what lies past a text page's cut in the picture of it", async () => {
   board.captureSceneFrame.mockImplementation(async () => document.createElement("canvas"));
 });
 
-it("leaves a pinch alone: a second finger calls the turn off", () => {
+it("leaves a pinch alone: a second finger calls the turn off", async () => {
   mount();
   pointer("pointerdown", 380, 580);
   act(() => {
@@ -273,7 +315,31 @@ it("leaves a pinch alone: a second finger calls the turn off", () => {
   });
   pointer("pointermove", 300, 585);
   pointer("pointermove", 150, 585);
-  expect(board.captureSceneFrame).not.toHaveBeenCalled();
+  pointer("pointerup", 150, 585);
+  for (let i = 0; i < 4; i += 1) await settle();
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  expect(document.querySelector(".lc-page-turn")).toBeNull();
+});
+
+it("flicks through pages: a corner touched while one lands takes hold of the next", async () => {
+  const frame = manualFrames();
+  view = { ...view, y: 0 }; // on the first of three pages
+  mount();
+  pointer("pointerdown", 380, 580);
+  pointer("pointermove", 150, 580);
+  await act(async () => { await Promise.resolve(); });
+  frame();
+  pointer("pointerup", 150, 580);
+  // Back at the corner before the first sheet has finished going over.
+  pointer("pointerdown", 380, 580);
+  expect(board.jumpToPageFrame).toHaveBeenCalledTimes(1);
+  pointer("pointermove", 150, 580);
+  await act(async () => { await Promise.resolve(); });
+  frame();
+  pointer("pointerup", 150, 580);
+  for (let i = 0; i < 4; i += 1) frame(1000);
+  const landed = (board.jumpToPageFrame.mock.calls as unknown as [{ pageId: number }][]).map((call) => call[0].pageId);
+  expect(landed).toEqual([2, 3]);
 });
 
 it("turns on a quick flick short of halfway, and still plays the turn", async () => {

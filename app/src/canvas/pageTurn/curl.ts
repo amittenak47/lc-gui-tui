@@ -125,9 +125,12 @@ export function sheetPart(g: CurlGeometry, w: number, h: number, flap: boolean):
 /**
  * Where the corner is for a drag of `dx` pixels.
  *
- * Twice the drag, so pulling across half the sheet turns it all the way, and
- * a turn does not have to start at the very edge. A backward turn is the same
- * sheet coming back from fully over, so it starts at `-w`.
+ * Twice the drag, so the fold moves with the finger — the finger holds the
+ * crease — and pulling across the sheet turns it all the way. A backward turn
+ * is the same sheet coming back from fully over, so it starts at `-w`.
+ *
+ * `lift` peels the corner a little before the finger has moved at all: the
+ * page shows it is held the moment it is touched.
  */
 export function cornerForDrag(
   direction: "next" | "prev",
@@ -136,14 +139,35 @@ export function cornerForDrag(
   w: number,
   h: number,
   bottom: boolean,
+  lift = 0,
 ): Point {
-  const baseX = direction === "next" ? w : -w;
+  const baseX = direction === "next" ? w - lift : -w + lift;
   const x = Math.min(w, Math.max(-w, baseX + 2 * dx));
-  const y = (bottom ? h : 0) + dy * 0.5;
+  const y = (bottom ? h - lift * 0.6 : lift * 0.6) + dy * 0.5;
   return { x, y };
 }
 
-/** Whether letting go here finishes the turn: past halfway, the sheet goes over. */
-export function turnCommits(direction: "next" | "prev", cornerX: number): boolean {
-  return direction === "next" ? cornerX < 0 : cornerX > 0;
+/** How far a let-go sheet must have turned to go over; short of it, it unravels. */
+export const TURN_COMMIT_PROGRESS = 0.35;
+/** Most a throw may add to how far the sheet has turned. */
+const THROW_MAX_PROGRESS = 0.25;
+
+/** How far the sheet is through its turn: 0 where it started, 1 over. */
+export function turnProgress(direction: "next" | "prev", cornerX: number, w: number): number {
+  if (!(w > 0)) return 0;
+  const p = direction === "next" ? (w - cornerX) / (2 * w) : (cornerX + w) / (2 * w);
+  return Math.min(1, Math.max(0, p));
+}
+
+/**
+ * Whether letting go here finishes the turn.
+ *
+ * Past {@link TURN_COMMIT_PROGRESS} the sheet goes over; short of it, it
+ * settles back. `throwPx` is how much further the hand was carrying the
+ * crease along the turn when it let go — a flick counts for where it was
+ * going, up to a limit, so a twitch at the corner is still not a turn.
+ */
+export function turnCommits(direction: "next" | "prev", cornerX: number, w: number, throwPx = 0): boolean {
+  const thrown = w > 0 ? Math.min(THROW_MAX_PROGRESS, Math.max(-1, throwPx / w)) : 0;
+  return turnProgress(direction, cornerX, w) + thrown >= TURN_COMMIT_PROGRESS;
 }
