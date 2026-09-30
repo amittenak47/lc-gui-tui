@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { BoardHandle } from "../BoardHandle";
-import { PageTurn } from "./PageTurn";
+import { glide, PageTurn } from "./PageTurn";
 import { paintTurn } from "./paintTurn";
 
 // Gesture tests inspect the frame submitted to the renderer. Actual canvas
@@ -531,4 +531,21 @@ it("drops queued turns when a caught sheet is cancelled", async () => {
   for (let i = 0; i < 5; i++) frame(1000);
   expect(board.jumpToPageFrame).not.toHaveBeenCalled();
   expect(document.querySelector(".lc-page-turn")).toBeNull();
+});
+
+it("rolls a released sheet smoothly from the hand's pace to rest", () => {
+  for (const launch of [0, 1, 2.5]) {
+    expect(glide(0, launch)).toBe(0);
+    expect(glide(1, launch)).toBeCloseTo(1, 10);
+    let last = 0;
+    for (let t = 0.05; t <= 1; t += 0.05) {
+      const k = glide(t, launch);
+      expect(k).toBeGreaterThanOrEqual(last - 1e-9); // never runs backwards
+      expect(k).toBeLessThanOrEqual(1 + 1e-9); // never overshoots
+      last = k;
+    }
+    // Leaves at the given multiple of its average pace, and arrives at rest.
+    expect(glide(0.001, launch) / 0.001).toBeCloseTo(launch, 1);
+    expect((1 - glide(0.999, launch)) / 0.001).toBeLessThan(0.05);
+  }
 });

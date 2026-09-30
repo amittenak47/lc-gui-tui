@@ -21,18 +21,24 @@ import { useEffect, useRef, type RefObject } from "react";
 import type { BoardHandle } from "../BoardHandle";
 import type { PageFrame } from "../inkPageIndex";
 import { peekPdfFilmCurrent, subscribePdfFilmCurrent } from "../../modes/pdfFilm";
-import { constrainCorner, cornerForDrag, turnCommits, type Point } from "./curl";
+import { constrainCorner, cornerForCrease, cornerForGrip, turnCommits, type Point } from "./curl";
 import { paintTurn, type TurnLayout } from "./paintTurn";
 import { boardResizeDeferred } from "../../util/splitResize";
 import { canvasGestureFrame, protectGestureSurface } from "../../util/gestureExclusion";
 import { turnCornerAt, turnCornerSize } from "./corners";
 
-/** How far a touched corner peels before the finger moves, in CSS pixels. */
-const GRIP_LIFT_PX = 16;
+/** In Pages reading the side stacks sit this much further up, as a share of their gap from the bottom. */
+const CHROME_LIFT = 0.5;
 /** A full turn played without a finger (keys), in ms. */
 const AUTO_TURN_MS = 460;
-/** Finishing or settling back from a release, at most, in ms. */
-const SETTLE_MS = 300;
+/** A released sheet rolls on for at least this long, in ms: long enough to be seen turning… */
+const GLIDE_MIN_MS = 240;
+/** …and at most this long, however far it has to go. */
+const GLIDE_MAX_MS = 520;
+/** The pace a released sheet rolls at when the hand gave it none, in px per ms. */
+const GLIDE_PX_PER_MS = 1.4;
+/** Steepest start a throw may give the roll, as a multiple of its average pace (3 would overshoot). */
+const GLIDE_MAX_LAUNCH = 2.5;
 /** A text spread's facing picture is taken again once writing has rested this long. */
 const FACING_SETTLE_MS = 1200;
 /** Pictures kept for turns: this page and its neighbours — in a spread, three spreads' worth. */
@@ -41,8 +47,6 @@ const SHOT_CACHE = 8;
 const PREFETCH_IDLE_MS = 600;
 /** How often a still page checks whether its pictures went stale (a sharper paint landed). */
 const PREFETCH_RECHECK_MS = 1500;
-/** Fastest a settle plays, in ms: a flick is quick, but still a page turning. */
-const MIN_SETTLE_MS = 70;
 /** Thrown back toward where it started faster than this, the sheet settles back: px per ms. */
 const FLICK_PX_PER_MS = 0.45;
 /** A release this soon after the last movement is a throw; later, the hand had stopped. */
@@ -152,8 +156,17 @@ function currentIndex(
   return frameIndexAt(frames, probeY(view));
 }
 
-function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3);
+/**
+ * How far along a roll is at time `t` (both 0 to 1), leaving at `launch`
+ * times its average pace and coming to rest at the end.
+ *
+ * The cubic with those two slopes: a thrown sheet carries on at the hand's
+ * speed and slows into place; one let go from a stop (`launch` 0) eases away
+ * from rest and into place, with nothing sudden at either end.
+ */
+export function glide(t: number, launch: number): number {
+  const a = Math.min(3, Math.max(0, launch));
+  return a * t + (3 - 2 * a) * t * t + (a - 2) * t * t * t;
 }
 
 /**
@@ -187,7 +200,7 @@ function takeShot(
 ): Promise<HTMLCanvasElement | null> {
   const key = [scene.x, scene.y, scene.width, scene.height, scale, b.getInkRevision(), Math.min(cutY, 1e9)]
     .map((n) => Math.round(n * 100) / 100)
-    .join(":") + `@${signature}`;
+    .join(":") + `@${signature}#${paletteSignature()}`;
   let taken = shots.get(key);
   if (!taken) {
     // Below a text page's cut is the next page's text, which the view
@@ -231,6 +244,20 @@ function composeSpread(left: HTMLCanvasElement | null, right: HTMLCanvasElement 
   return canvas;
 }
 
+/**
+ * The palette a picture was taken in. Switching palettes repaints the page
+ * but not a picture of it, so a turn after the switch showed the old colours
+ * under a flap already in the new ones.
+ */
+function paletteSignature(): string {
+  if (typeof document === "undefined") return "";
+  const root = document.documentElement;
+  const style = getComputedStyle(root);
+  return [root.dataset.theme ?? "", style.getPropertyValue("--bg"), style.getPropertyValue("--ink")]
+    .map((v) => v.trim())
+    .join(",");
+}
+
 function paperColor(): string {
   if (typeof document === "undefined") return "#ffffff";
   return getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff";
@@ -256,13 +283,25 @@ interface Turn {
   scene: Scene | null;
   /** Decided on release: over, or back. Null while a hand holds it. */
   commit: boolean | null;
+  /** The hand holds the crease, not the corner — see `cornerForCrease`. */
+  byFold: boolean;
   canvas: HTMLCanvasElement;
   images: { from: HTMLCanvasElement; to: HTMLCanvasElement } | null;
   /** Settles true once both pictures are in, false if they cannot be had. */
   ready: Promise<boolean>;
   corner: Point;
   /** The settle playing now, if any. */
-  anim: { began: number; ms: number; start: Point; goal: Point; commit: boolean } | null;
+  anim: {
+    began: number;
+    ms: number;
+    start: Point;
+    goal: Point;
+    commit: boolean;
+    /** How steeply the roll starts — see {@link glide}. */
+    launch: number;
+    /** How high the corner rises off the page mid-roll, in CSS px. */
+    lift: number;
+  } | null;
   frame: number;
   done: boolean;
 }
@@ -285,37 +324,51 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
   const shotsRef = useRef(new Map<string, Promise<HTMLCanvasElement | null>>());
   useEffect(() => () => shotsRef.current.clear(), []);
 
-  // Keep side controls clear of the turn corners even while annotation is on.
-  // The centred pen dock keeps its existing position.
+  // Lift the side stacks — the menu toolbar, the mode toggle and their
+  // checkers — clear of the sheet's bottom corners, where a thumb turns
+  // pages, even while annotation is on. The centred pen dock stays put.
   useEffect(() => {
     if (!lockActive) return;
     const host = document.querySelector<HTMLElement>(hostSelector);
     if (!host) return;
     host.dataset.readingPages = "";
-    const controls = host.querySelector<HTMLElement>(".lc-map-controls");
-    const hole = host.querySelector<HTMLElement>(".lc-page-mask-hole");
+    // A focused board paints its chrome into the app's shared slot, outside
+    // this host; an embedded one keeps it inside.
+    const slot = document.querySelector<HTMLElement>(".lc-board-chrome-slot");
+    const findControls = () =>
+      host.querySelector<HTMLElement>(".lc-map-controls") ??
+      slot?.querySelector<HTMLElement>(".lc-map-controls") ??
+      null;
+    let controls: HTMLElement | null = null;
     let frame = 0;
+    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => schedule());
     const position = () => {
       frame = 0;
-      if (!controls || !hole) return;
-      const paper = hole.getBoundingClientRect();
-      if (!paper.width || !paper.height) return;
-      // The fitted page can end well above the canvas baseline. Reserve the
-      // corner plus the checker tray's 52px drop and a 12px touch gap.
-      const lift = Math.max(0, controls.getBoundingClientRect().bottom - paper.bottom
-        + turnCornerSize(paper) + 64);
+      const found = findControls();
+      if (found !== controls) {
+        controls?.style.removeProperty("--lc-page-corner-clearance");
+        if (controls) resize?.unobserve(controls);
+        controls = found;
+        if (controls) resize?.observe(controls);
+      }
+      if (!controls) return;
+      // Half as high again as the stacks' own gap above the screen's foot.
+      const base = controls.getBoundingClientRect().bottom;
+      const lift = Math.max(0, window.innerHeight - base) * CHROME_LIFT;
       controls.style.setProperty("--lc-page-corner-clearance", `${Math.ceil(lift)}px`);
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(position); };
-    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
-    for (const node of [host, controls, hole]) if (node) resize?.observe(node);
-    const movement = new MutationObserver(schedule);
-    if (hole) movement.observe(hole, { attributes: true, attributeFilter: ["style"] });
+    resize?.observe(host);
+    // The chrome mounts, remounts and moves between slots on its own schedule.
+    const mounts = new MutationObserver(schedule);
+    if (slot) mounts.observe(slot, { childList: true, subtree: true });
+    window.addEventListener("resize", schedule);
     position();
     return () => {
       cancelAnimationFrame(frame);
       resize?.disconnect();
-      movement.disconnect();
+      mounts.disconnect();
+      window.removeEventListener("resize", schedule);
       controls?.style.removeProperty("--lc-page-corner-clearance");
       delete host.dataset.readingPages;
     };
@@ -697,6 +750,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         rect,
         scene: null,
         commit: null,
+        byFold: false,
         canvas,
         images: null,
         corner: { x: direction === "next" ? w : -w, y: bottom ? rect.height : 0 },
@@ -785,6 +839,9 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         rect,
         scene,
         commit: null,
+        // One sheet coming back starts off the page, over the binding: the
+        // hand can only hold its crease. Everything else, its corner.
+        byFold: layout === "sheet" && direction === "prev",
         canvas,
         images: null,
         corner: { x: direction === "next" ? w : -w, y: bottom ? rect.height : 0 },
@@ -814,26 +871,32 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       return turn;
     };
 
+    /** Paint the sheet where its corner is now. */
+    const paint = (turn: Turn) => {
+      const ctx = turn.canvas.getContext("2d");
+      if (!ctx || !turn.images) return;
+      const dpr = turn.canvas.width / turn.rect.width;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      paintTurn(ctx, {
+        layout: turn.layout,
+        width: turn.rect.width,
+        height: turn.rect.height,
+        from: turn.images.from,
+        to: turn.images.to,
+        sourceWidth: turn.images.from.width,
+        sourceHeight: turn.images.from.height,
+        corner: turn.corner,
+        bottom: turn.bottom,
+        paper: paperColor(),
+      });
+    };
+
+    /** Paint on the next frame — for a hand, whose moves come between frames. */
     const draw = (turn: Turn) => {
       if (!turn.images || turn.frame) return;
       turn.frame = requestAnimationFrame(() => {
         turn.frame = 0;
-        const ctx = turn.canvas.getContext("2d");
-        if (!ctx || !turn.images) return;
-        const dpr = turn.canvas.width / turn.rect.width;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        paintTurn(ctx, {
-          layout: turn.layout,
-          width: turn.rect.width,
-          height: turn.rect.height,
-          from: turn.images.from,
-          to: turn.images.to,
-          sourceWidth: turn.images.from.width,
-          sourceHeight: turn.images.from.height,
-          corner: turn.corner,
-          bottom: turn.bottom,
-          paper: paperColor(),
-        });
+        paint(turn);
       });
     };
 
@@ -873,10 +936,21 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       // A caught or reversed sheet invalidates the old animation, including a
       // callback already queued before the new finger went down.
       if (turn.done || !a || turn.anim !== a) return;
-      const t = Math.min(1, (now - a.began) / a.ms);
-      const k = easeOutCubic(t);
-      turn.corner = { x: a.start.x + (a.goal.x - a.start.x) * k, y: a.start.y + (a.goal.y - a.start.y) * k };
-      draw(turn);
+      const t = Math.min(1, Math.max(0, (now - a.began) / a.ms));
+      const k = glide(t, a.launch);
+      // The corner rises off the page as it rolls and settles back down onto
+      // it, rather than sliding across in a straight line.
+      const rise = Math.sin(Math.PI * k) * a.lift;
+      turn.corner = {
+        x: a.start.x + (a.goal.x - a.start.x) * k,
+        y: a.start.y + (a.goal.y - a.start.y) * k + (turn.bottom ? -rise : rise),
+      };
+      // Already inside a frame: paint now, not a frame late.
+      if (turn.frame) {
+        cancelAnimationFrame(turn.frame);
+        turn.frame = 0;
+      }
+      paint(turn);
       if (t < 1) {
         requestAnimationFrame(step(turn, a));
         return;
@@ -889,12 +963,14 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     /**
      * Play the corner from where it is to fully over, or back to rest.
      *
-     * `speed` is how fast the hand was moving when it let go (px/ms): the
-     * sheet leaves at that speed and eases out, so a flick is a quick turn
-     * rather than a slow one or none at all. Without pictures yet, it waits a
+     * Let go by a hand (`fullMs` unset), the sheet leaves at the speed the
+     * hand was moving (`speed`, px/ms), then slows into place — a flick rolls
+     * on quickly, a hand that had stopped lets the page ease away from rest.
+     * Either way it takes long enough to be seen rolling. Played for a key,
+     * it takes `fullMs` for a whole turn. Without pictures yet, it waits a
      * moment for them — a fast turn still shows the page turning.
      */
-    const settle = (turn: Turn, commit: boolean, { fullMs = SETTLE_MS, speed = 0 } = {}) => {
+    const settle = (turn: Turn, commit: boolean, { fullMs, speed = 0 }: { fullMs?: number; speed?: number } = {}) => {
       turn.commit = commit;
       const run = () => {
         if (turn.done) return;
@@ -905,11 +981,19 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
           y: turn.bottom ? turn.rect.height : 0,
         };
         const start = { ...turn.corner };
-        const px = Math.abs(goal.x - start.x);
-        let ms = Math.max(80, fullMs * (px / (2 * w)));
-        // An ease-out cubic starts at three times its average speed.
-        if (speed > 0) ms = Math.max(MIN_SETTLE_MS, Math.min(ms, (3 * px) / speed));
-        turn.anim = { began: performance.now(), ms, start, goal, commit };
+        const px = Math.max(1, Math.hypot(goal.x - start.x, goal.y - start.y));
+        let ms: number;
+        let launch = 0;
+        if (fullMs != null) {
+          ms = Math.max(80, fullMs * (Math.abs(goal.x - start.x) / (2 * w)));
+        } else {
+          // Held by the crease, the corner moves twice as fast as the hand.
+          const corner = speed * (turn.byFold ? 2 : 1);
+          ms = Math.min(GLIDE_MAX_MS, Math.max(GLIDE_MIN_MS, px / Math.max(GLIDE_PX_PER_MS, corner * 0.6)));
+          launch = Math.min(GLIDE_MAX_LAUNCH, (corner * ms) / px);
+        }
+        const lift = Math.min(turn.rect.height * 0.06, 44) * Math.min(1, Math.abs(goal.x - start.x) / (2 * w));
+        turn.anim = { began: performance.now(), ms, start, goal, commit, launch, lift };
         requestAnimationFrame(step(turn));
       };
       if (turn.images) {
@@ -946,7 +1030,8 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (!a || turn.done) return;
       const left = a.ms - (performance.now() - a.began);
       if (left <= HURRY_MS) return;
-      turn.anim = { ...a, began: performance.now(), ms: HURRY_MS, start: { ...turn.corner } };
+      // Already moving: carry on at pace rather than starting over from rest.
+      turn.anim = { ...a, began: performance.now(), ms: HURRY_MS, start: { ...turn.corner }, launch: 1.5, lift: 0 };
       requestAnimationFrame(step(turn));
     };
 
@@ -1016,10 +1101,23 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       lastT: number;
       /** Where the hand was last seen, sampled for speed or not. */
       atX: number;
-      /** How far the corner peeled when it was taken hold of. */
-      lift: number;
       caughtCorner?: Point;
     } | null = null;
+
+    /**
+     * Where the sheet's corner is for a hand at this point of the screen.
+     *
+     * Held by its corner, the corner is under the fingertip — touched in
+     * the corner's triangle, it peels to the finger at once, and stays with
+     * it. Held by its crease (one sheet coming back), the crease is.
+     */
+    const cornerAt = (turn: Turn, clientX: number, clientY: number, fromY: number): Point => {
+      const book = turn.layout === "book";
+      const w = book ? turn.rect.width / 2 : turn.rect.width;
+      const x = clientX - turn.rect.left - (book ? w : 0);
+      if (turn.byFold) return cornerForCrease(x, clientY - fromY, w, turn.rect.height, turn.bottom);
+      return cornerForGrip({ x, y: clientY - turn.rect.top }, 0, 0, w, turn.rect.height, turn.bottom);
+    };
 
     const inHost = (target: EventTarget | null) =>
       target instanceof Element &&
@@ -1044,12 +1142,10 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (!turn) return false; // first or last page: nothing to turn to
       turnRef.current = turn;
       setTurning(true);
-      const w = turn.layout === "book" ? turn.rect.width / 2 : turn.rect.width;
-      const lift = Math.min(GRIP_LIFT_PX, w * 0.08);
-      turn.corner = cornerForDrag(direction, 0, 0, w, turn.rect.height, bottom, lift);
+      turn.corner = cornerAt(turn, event.clientX, event.clientY, event.clientY);
       active = {
         id: event.pointerId, x: event.clientX, y: event.clientY, turn,
-        vx: 0, lastX: event.clientX, lastT: event.timeStamp, atX: event.clientX, lift,
+        vx: 0, lastX: event.clientX, lastT: event.timeStamp, atX: event.clientX,
       };
       draw(turn);
       return true;
@@ -1101,7 +1197,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         active = {
           id: event.pointerId, x: event.clientX, y: event.clientY,
           turn: playing, caughtCorner: { ...playing.corner },
-          vx: 0, lastX: event.clientX, lastT: event.timeStamp, atX: event.clientX, lift: 0,
+          vx: 0, lastX: event.clientX, lastT: event.timeStamp, atX: event.clientX,
         };
         setTurning(true);
         return;
@@ -1130,12 +1226,15 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       }
       const turn = active.turn;
       const w = turn.layout === "book" ? turn.rect.width / 2 : turn.rect.width;
+      // A caught sheet moves on from where it was caught, at the hand's pace:
+      // one to one by its corner, twice that by its crease.
+      const pace = turn.byFold ? 2 : 1;
       turn.corner = active.caughtCorner
         ? constrainCorner({
-            x: Math.min(w, Math.max(-w, active.caughtCorner.x + 2 * (event.clientX - active.x))),
-            y: active.caughtCorner.y + (event.clientY - active.y) * 0.5,
+            x: Math.min(w, Math.max(-w, active.caughtCorner.x + pace * (event.clientX - active.x))),
+            y: active.caughtCorner.y + (event.clientY - active.y) * (pace === 1 ? 1 : 0.5),
           }, w, turn.rect.height, turn.bottom)
-        : cornerForDrag(turn.direction, event.clientX - active.x, event.clientY - active.y, w, turn.rect.height, turn.bottom, active.lift);
+        : cornerAt(turn, event.clientX, event.clientY, active.y);
       draw(turn);
     };
 
@@ -1167,7 +1266,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const commit =
         event.type !== "pointercancel" &&
         along > -FLICK_PX_PER_MS &&
-        turnCommits(turn.direction, turn.corner.x, w, along * THROW_MS);
+        turnCommits(turn.direction, turn.corner.x, w, along * THROW_MS, turn.byFold);
       settle(turn, commit, { speed: fresh ? Math.abs(vx) : 0 });
     };
 

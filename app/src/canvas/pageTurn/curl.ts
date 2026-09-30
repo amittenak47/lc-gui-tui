@@ -123,51 +123,59 @@ export function sheetPart(g: CurlGeometry, w: number, h: number, flap: boolean):
 }
 
 /**
- * Where the corner is for a drag of `dx` pixels.
+ * Where the corner is when the finger holds the crease, at `x` across the
+ * sheet and `dy` below where it took hold.
  *
- * Twice the drag, so the fold moves with the finger — the finger holds the
- * crease — and pulling across the sheet turns it all the way. A backward turn
- * is the same sheet coming back from fully over, so it starts at `-w`.
- *
- * `lift` peels the corner a little before the finger has moved at all: the
- * page shows it is held the moment it is touched.
+ * A sheet coming back from fully over has its corner off the page, beyond
+ * the binding, so there is no corner to hold: the fold sits under the finger
+ * instead, which puts the corner twice as far from the binding.
  */
-export function cornerForDrag(
-  direction: "next" | "prev",
-  dx: number,
-  dy: number,
-  w: number,
-  h: number,
-  bottom: boolean,
-  lift = 0,
-): Point {
-  const baseX = direction === "next" ? w - lift : -w + lift;
-  const x = Math.min(w, Math.max(-w, baseX + 2 * dx));
-  const y = (bottom ? h - lift * 0.6 : lift * 0.6) + dy * 0.5;
-  return { x, y };
+export function cornerForCrease(x: number, dy: number, w: number, h: number, bottom: boolean): Point {
+  return { x: Math.min(w, Math.max(-w, 2 * x - w)), y: (bottom ? h : 0) + dy * 0.5 };
 }
 
-/** How far a let-go sheet must have turned to go over; short of it, it unravels. */
+/**
+ * Where the corner is when the finger holds the corner itself.
+ *
+ * The corner goes where the finger goes, from wherever it was taken: grabbed
+ * at the page's corner, it stays under the fingertip for the whole turn.
+ */
+export function cornerForGrip(start: Point, dx: number, dy: number, w: number, h: number, bottom: boolean): Point {
+  return constrainCorner({ x: Math.min(w, Math.max(-w, start.x + dx)), y: start.y + dy }, w, h, bottom);
+}
+
+/** How far across the page a let-go hand must have carried it; short of it, the sheet unravels. */
 export const TURN_COMMIT_PROGRESS = 0.35;
-/** Most a throw may add to how far the sheet has turned. */
+/** Most a throw may add to how far the hand carried the page. */
 const THROW_MAX_PROGRESS = 0.25;
 
-/** How far the sheet is through its turn: 0 where it started, 1 over. */
-export function turnProgress(direction: "next" | "prev", cornerX: number, w: number): number {
+/**
+ * How far the hand has carried the page, as a share of its width.
+ *
+ * Held by its corner the corner moves with the hand; held by its crease
+ * (`byFold`, see {@link cornerForCrease}) the corner moves twice as far.
+ */
+export function turnTravel(direction: "next" | "prev", cornerX: number, w: number, byFold = false): number {
   if (!(w > 0)) return 0;
-  const p = direction === "next" ? (w - cornerX) / (2 * w) : (cornerX + w) / (2 * w);
-  return Math.min(1, Math.max(0, p));
+  const moved = direction === "next" ? w - cornerX : cornerX + w;
+  return Math.max(0, moved / (byFold ? 2 * w : w));
 }
 
 /**
  * Whether letting go here finishes the turn.
  *
- * Past {@link TURN_COMMIT_PROGRESS} the sheet goes over; short of it, it
- * settles back. `throwPx` is how much further the hand was carrying the
- * crease along the turn when it let go — a flick counts for where it was
- * going, up to a limit, so a twitch at the corner is still not a turn.
+ * Carried past {@link TURN_COMMIT_PROGRESS} of the page the sheet goes over;
+ * short of it, it settles back. `throwPx` is how much further the hand was
+ * going when it let go — a flick counts for where it was going, up to a
+ * limit, so a twitch at the corner is still not a turn.
  */
-export function turnCommits(direction: "next" | "prev", cornerX: number, w: number, throwPx = 0): boolean {
+export function turnCommits(
+  direction: "next" | "prev",
+  cornerX: number,
+  w: number,
+  throwPx = 0,
+  byFold = false,
+): boolean {
   const thrown = w > 0 ? Math.min(THROW_MAX_PROGRESS, Math.max(-1, throwPx / w)) : 0;
-  return turnProgress(direction, cornerX, w) + thrown >= TURN_COMMIT_PROGRESS;
+  return turnTravel(direction, cornerX, w, byFold) + thrown >= TURN_COMMIT_PROGRESS;
 }

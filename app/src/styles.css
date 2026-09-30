@@ -2108,16 +2108,20 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 [data-turn-hover="right"] .lc-page-mask-hole::after {
   opacity: 1;
 }
-[data-turn-hover],
-[data-turn-hover] * {
-  cursor: grab !important;
+/*
+ * On the host only, and inherited from there. A `[data-turn-*] *` rule made
+ * every toggle restyle the whole document under it — on a long file a frame
+ * of 80–130ms, right as a page was taken hold of and again as it was let go.
+ * The corner's pointerdown already keeps a selection from starting.
+ */
+[data-turn-hover] {
+  cursor: grab;
 }
 /* While a page turns, nothing on it selects. */
-[data-turn-active],
-[data-turn-active] * {
-  cursor: grabbing !important;
-  user-select: none !important;
-  -webkit-user-select: none !important;
+[data-turn-active] {
+  cursor: grabbing;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Pages reading: the sheet being turned, drawn over the view for the length

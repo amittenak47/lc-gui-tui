@@ -4,7 +4,7 @@
  * Always drawn as a turn *from* one picture *to* another with the lifted corner
  * somewhere between rest (`x = w`, nothing turned) and fully over (`x = -w`).
  * Turning back is the same drawing: from the previous page to this one,
- * starting fully over — see `cornerForDrag`.
+ * starting fully over — see `cornerForCrease`.
  *
  *   - **sheet** — one page fills the view, bound along its left edge. The page
  *     underneath shows through as the sheet lifts away, and the back of the
