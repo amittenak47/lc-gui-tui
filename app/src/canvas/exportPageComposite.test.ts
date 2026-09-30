@@ -82,6 +82,40 @@ describe("compositePageLayers", () => {
     expect(drawImage).toHaveBeenCalledTimes(2);
   });
 
+  it("draws the page even while the app around it is booting or the pane loading", async () => {
+    const sources: string[] = [];
+    vi.stubGlobal("Image", class {
+      onload?: () => void;
+      set src(value: string) { sources.push(value); queueMicrotask(() => this.onload?.()); }
+    });
+    const app = document.createElement("div");
+    app.className = "lc-app lc-app-booting";
+    const wrap = document.createElement("div");
+    wrap.className = "lc-canvas-wrap lc-canvas-loading lc-canvas-preparing";
+    const board = document.createElement("div");
+    board.className = "lc-board";
+    const slot = document.createElement("div");
+    slot.innerHTML = "<p>Page one</p>";
+    board.append(slot);
+    wrap.append(board);
+    app.append(wrap);
+    document.body.append(app);
+    const bounds = { minX: 0, minY: 0, maxX: 200, maxY: 100 };
+    await compositePageLayers({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D, bounds, 1,
+      { contentSlot: slot, marksSlot: null, pageBounds: bounds, paperColor: "#fff" });
+    app.remove();
+    const xml = decodeURIComponent(sources[0]!.slice(sources[0]!.indexOf(",") + 1));
+    const captured = new DOMParser().parseFromString(xml, "image/svg+xml");
+    // The transient classes still reach the picture; every stand-in overrides
+    // what they hide, fade or animate.
+    for (const cls of ["lc-app", "lc-canvas-wrap", "lc-board"]) {
+      const style = captured.querySelector(`.${cls}`)?.getAttribute("style") ?? "";
+      expect(style).toMatch(/visibility:\s*visible/);
+      expect(style).toMatch(/opacity:\s*1/);
+      expect(style).toMatch(/animation:\s*none/);
+    }
+  });
+
   it("reports a failed document raster instead of exporting blank paper", async () => {
     vi.stubGlobal("Image", class {
       onerror?: () => void;

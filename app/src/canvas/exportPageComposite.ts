@@ -98,12 +98,20 @@ const CAPTURE_ROOT_CLASS = "lc-capture-root";
  * Layout-neutral inline style for the stand-in ancestors. They exist only so
  * that descendant selectors (`.lc-canvas-wrap .lc-md-ink-doc …`) and inherited
  * values still reach the clone; they must not add boxes, offsets or paint.
+ *
+ * Nor hide it. The classes copied up the chain include transient ones — the
+ * app booting, a pane loading or preparing — whose rules hide or fade the
+ * board. A picture taken then would be blank, and a page turn keeps its
+ * pictures, so the blank sheet came back on every turn after it. An SVG image
+ * also freezes animations on their first frame, which for a fade-in is
+ * nothing at all.
  */
 const SHELL_NEUTRAL =
   "display:block;position:static;transform:none;overflow:visible;" +
   "width:auto;height:auto;min-width:0;min-height:0;max-width:none;max-height:none;" +
   "margin:0;padding:0;border:0;background:transparent;box-shadow:none;" +
-  "filter:none;opacity:1;inset:auto;contain:none;";
+  "filter:none;opacity:1;visibility:visible;animation:none;transition:none;" +
+  "inset:auto;contain:none;";
 
 /**
  * Theme rules key off `<html data-theme>`. Inside the SVG image `:root` is the
