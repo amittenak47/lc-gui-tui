@@ -101,9 +101,13 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
             val viewportLoc = IntArray(2)
             viewport.getLocationOnScreen(viewportLoc)
 
+            // A margin outside the CSS frame closes fractional-coordinate gaps
+            // at the physical edge where Android could still start Back.
+            val outset = Math.ceil(12.0 * activity.resources.displayMetrics.density).toInt()
             val screenRects = args.rects
                 .map { cssViewportToScreen(it, density, viewportLoc) }
                 .filter { it.width() > 0 && it.height() > 0 }
+                .map { Rect(it).apply { inset(-outset, -outset) } }
 
             val budget =
                 Math.round(MAX_EXCLUSION_DP * activity.resources.displayMetrics.density).toLong()
@@ -112,6 +116,7 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
             // view are what the window actually consults. Same screen rects on both
             // union to one region, so the 200dp budget is not spent twice.
             val targets = LinkedHashSet<View>()
+            webView?.let { targets.add(it) }
             targets.add(content)
             activity.window?.decorView?.let { targets.add(it) }
 

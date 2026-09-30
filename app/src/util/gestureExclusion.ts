@@ -12,8 +12,8 @@ import { isAndroidDevice } from "./androidDevice";
  * `setSystemGestureExclusionRects` hands those strips back. It is granted
  * grudgingly outside sticky immersive: 200dp per edge. Writing uses full-height
  * edge strips while sticky immersive lifts that cap, so the first stroke is
- * protected anywhere along the edge. Page turns supply only their corner
- * regions. The bounded, hand-following band remains available to other callers.
+ * protected anywhere along the edge. Pages mode protects a continuous frame
+ * around the canvas. The bounded, hand-following band remains available to other callers.
  *
  * Home has no exclusion API. {@link setDrawingImmersive} hides the navigation
  * bar with swipe-to-show while a drawing tool is up — first swipe reveals
@@ -38,6 +38,18 @@ export interface ExclusionRect {
  * part of the page a hand writes on near the edge.
  */
 export const EDGE_STRIP_PX = 48;
+
+/** A continuous frame, including the gaps between fitted paper and canvas. */
+export function canvasGestureFrame(rect: { left: number; top: number; width: number; height: number }): ExclusionRect[] {
+  if (!(rect.width > 0 && rect.height > 0)) return [];
+  const edge = Math.min(64, rect.width / 2, rect.height / 2);
+  return [
+    { x: rect.left, y: rect.top, width: edge, height: rect.height },
+    { x: rect.left + rect.width - edge, y: rect.top, width: edge, height: rect.height },
+    { x: rect.left, y: rect.top, width: rect.width, height: edge },
+    { x: rect.left, y: rect.top + rect.height - edge, width: rect.width, height: edge },
+  ];
+}
 
 /**
  * Android's per-edge exclusion budget, in CSS pixels (≈ dp).

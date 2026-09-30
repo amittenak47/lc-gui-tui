@@ -16754,7 +16754,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-map-controls-paged .lc-map-chrome-left,
 .lc-map-controls-paged .lc-map-chrome-right {
   position: absolute;
-  bottom: 0;
+  bottom: var(--lc-page-corner-clearance, 0px);
   z-index: 21;
   overflow: visible;
 }
@@ -16773,6 +16773,25 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-map-controls-paged .lc-map-chrome-right {
   right: 0;
   left: auto;
+}
+
+/* Reserve the final toolbar width immediately; only its pixels move on
+ * entry. Growing the preset chip from zero relaid out the row every frame. */
+.lc-toolbar-enter:not(.lc-toolbar-floating) {
+  animation: lc-toolbar-enter 200ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes lc-toolbar-enter {
+  from { opacity: 0; translate: 0 8px; }
+  to { opacity: calc(1 - var(--lc-agent-open, 0)); translate: 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lc-toolbar-enter:not(.lc-toolbar-floating) { animation: none; }
+}
+
+[data-reading-pages] .lc-map-controls {
+  /* Largest turn triangle (120px), plus the opened checker's 52px drop
+   * and a touch gap. The pen dock is deliberately not moved. */
+  --lc-page-corner-clearance: 180px;
 }
 
 .lc-pager {
@@ -21403,7 +21422,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-map-controls.is-mixed-hands.lc-map-controls-paged .lc-map-chrome-left,
 [data-ui-handedness="left"]:not([data-handedness="left"]) .lc-map-controls-paged .lc-map-chrome-left,
 [data-handedness="left"]:not([data-ui-handedness="left"]) .lc-map-controls-paged .lc-map-chrome-left {
-  bottom: calc(var(--lc-utility-tray-height, 36px) + 10px);
+  bottom: calc(var(--lc-page-corner-clearance, 0px) + var(--lc-utility-tray-height, 36px) + 10px);
 }
 .lc-map-controls.is-mixed-hands .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake,
 [data-ui-handedness="left"]:not([data-handedness="left"]) .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake,

@@ -24,8 +24,8 @@ import { peekPdfFilmCurrent, subscribePdfFilmCurrent } from "../../modes/pdfFilm
 import { constrainCorner, cornerForDrag, turnCommits, type Point } from "./curl";
 import { paintTurn, type TurnLayout } from "./paintTurn";
 import { boardResizeDeferred } from "../../util/splitResize";
-import { protectGestureSurface } from "../../util/gestureExclusion";
-import { turnCornerAt, turnCornerExclusions, turnCornerSize } from "./corners";
+import { canvasGestureFrame, protectGestureSurface } from "../../util/gestureExclusion";
+import { turnCornerAt, turnCornerSize } from "./corners";
 
 /** Sideways travel before a drag is taken as a page turn, in CSS pixels. */
 const TURN_SLOP_PX = 14;
@@ -277,18 +277,50 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
   const shotsRef = useRef(new Map<string, Promise<HTMLCanvasElement | null>>());
   useEffect(() => () => shotsRef.current.clear(), []);
 
+  // Keep side controls clear of the turn corners even while annotation is on.
+  // The centred pen dock keeps its existing position.
+  useEffect(() => {
+    if (!lockActive) return;
+    const host = document.querySelector<HTMLElement>(hostSelector);
+    if (!host) return;
+    host.dataset.readingPages = "";
+    const controls = host.querySelector<HTMLElement>(".lc-map-controls");
+    const hole = host.querySelector<HTMLElement>(".lc-page-mask-hole");
+    let frame = 0;
+    const position = () => {
+      frame = 0;
+      if (!controls || !hole) return;
+      const paper = hole.getBoundingClientRect();
+      if (!paper.width || !paper.height) return;
+      // The fitted page can end well above the canvas baseline. Reserve the
+      // corner plus the checker tray's 52px drop and a 12px touch gap.
+      const lift = Math.max(0, controls.getBoundingClientRect().bottom - paper.bottom
+        + turnCornerSize(paper) + 64);
+      controls.style.setProperty("--lc-page-corner-clearance", `${Math.ceil(lift)}px`);
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(position); };
+    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    for (const node of [host, controls, hole]) if (node) resize?.observe(node);
+    const movement = new MutationObserver(schedule);
+    if (hole) movement.observe(hole, { attributes: true, attributeFilter: ["style"] });
+    position();
+    return () => {
+      cancelAnimationFrame(frame);
+      resize?.disconnect();
+      movement.disconnect();
+      controls?.style.removeProperty("--lc-page-corner-clearance");
+      delete host.dataset.readingPages;
+    };
+  }, [hostSelector, lockActive]);
+
   // Register before the touch starts: claiming a small band on pointerdown
   // is too late once Android has already claimed an edge swipe as Back.
   useEffect(() => {
-    if (!lockActive || !turnEnabled) return;
+    if (!lockActive) return;
     const host = document.querySelector<HTMLElement>(hostSelector);
     const surface = host?.querySelector<HTMLElement>(".lc-board") ?? host;
-    if (surface) return protectGestureSurface(surface, () => {
-      const hole = surface.querySelector<HTMLElement>(".lc-page-mask-hole");
-      if (!hole || hole.parentElement?.hidden) return [];
-      return turnCornerExclusions(hole.getBoundingClientRect(), surface.getBoundingClientRect());
-    });
-  }, [hostSelector, lockActive, turnEnabled]);
+    if (surface) return protectGestureSurface(surface, () => canvasGestureFrame(surface.getBoundingClientRect()));
+  }, [hostSelector, lockActive]);
 
   /* Hold the camera on the page it is on, and follow jumps made elsewhere. */
   useEffect(() => {

@@ -24,7 +24,40 @@ describe("resolveExportPaperColor", () => {
 });
 
 describe("compositePageLayers", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it("preserves WebView text zoom and em spacing in the folded image", async () => {
+    const sources: string[] = [];
+    vi.stubGlobal("Image", class {
+      onload?: () => void;
+      set src(value: string) { sources.push(value); queueMicrotask(() => this.onload?.()); }
+    });
+    const slot = document.createElement("div");
+    slot.innerHTML = '<p style="font-size:17px;margin-bottom:1em">Text<span style="font-size:.7em;position:relative;top:-.5em">2</span></p>';
+    Object.defineProperty(slot, "offsetWidth", { value: 200 });
+    slot.getBoundingClientRect = () => ({ width: 200, top: 0 }) as DOMRect;
+    const original = window.getComputedStyle.bind(window);
+    vi.stubGlobal("getComputedStyle", (element: Element) => {
+      const resolved = original(element);
+      if (element.tagName === "P" || element.tagName === "SPAN") {
+        const values: Record<string, string> = element.tagName === "P"
+          ? { "font-size": "14.45px", "margin-bottom": "17px", "line-height": "23.8425px" }
+          : { "font-size": "10.115px", "top": "-5.95px" };
+        const get = resolved.getPropertyValue.bind(resolved);
+        resolved.getPropertyValue = name => values[name] ?? get(name);
+      }
+      return resolved;
+    });
+    const bounds = { minX: 0, minY: 0, maxX: 200, maxY: 100 };
+    await compositePageLayers({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D, bounds, 1,
+      { contentSlot: slot, marksSlot: null, pageBounds: bounds, paperColor: "#fff" });
+    const xml = decodeURIComponent(sources[0].slice(sources[0].indexOf(",") + 1));
+    const captured = new DOMParser().parseFromString(xml, "image/svg+xml");
+    expect(captured.querySelector("p")?.getAttribute("style")).toContain("font-size: 14.45px");
+    expect(captured.querySelector("p")?.getAttribute("style")).toContain("margin-bottom: 17px");
+    expect(captured.querySelector("span")?.getAttribute("style")).toContain("top: -5.95px");
+    expect(slot.querySelector("p")?.style.fontSize).toBe("17px");
+  });
 
   it("loads DOM layers as self-contained XML data images, not tainting blob URLs", async () => {
     const sources: string[] = [];

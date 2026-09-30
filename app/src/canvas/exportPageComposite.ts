@@ -304,6 +304,25 @@ async function drawDomSlot(
   return true;
 }
 
+const CAPTURE_METRICS = [
+  "font-size", "line-height", "letter-spacing", "word-spacing",
+  "margin-top", "margin-right", "margin-bottom", "margin-left",
+  "padding-top", "padding-right", "padding-bottom", "padding-left",
+  "width", "height", "min-width", "min-height", "max-width", "max-height",
+  "top", "right", "bottom", "left", "vertical-align",
+] as const;
+
+/** SVG images do not inherit Android WebView's system text zoom. Preserve
+ * resolved type AND em-based geometry, or the fold rewraps the live page. */
+function freezeCaptureMetrics(from: Element, to: Element): void {
+  const style = (to as HTMLElement).style;
+  if (!style) return;
+  const resolved = getComputedStyle(from);
+  for (const name of CAPTURE_METRICS) {
+    style.setProperty(name, resolved.getPropertyValue(name));
+  }
+}
+
 /**
  * Empty the parts of a cloned document that are nowhere near the capture.
  *
@@ -321,17 +340,19 @@ function hollowOutside(slot: HTMLElement, clone: HTMLElement, bandTop: number, b
   const top = bandTop - margin;
   const bottom = bandBottom + margin;
   const walk = (original: Element, copy: Element, depth: number) => {
+    freezeCaptureMetrics(original, copy);
     const originals = original.children;
     const copies = copy.children;
     if (originals.length !== copies.length) return;
     for (let i = 0; i < originals.length; i += 1) {
       const from = originals[i]!;
       const to = copies[i]! as HTMLElement;
-      const box = from.getBoundingClientRect();
-      const localTop = (box.top - slotRect.top) / scale;
-      const localBottom = (box.bottom - slotRect.top) / scale;
-      if (localBottom < top || localTop > bottom) {
+      const box = depth < 6 ? from.getBoundingClientRect() : null;
+      const localTop = box ? (box.top - slotRect.top) / scale : top;
+      const localBottom = box ? (box.bottom - slotRect.top) / scale : bottom;
+      if (box && (localBottom < top || localTop > bottom)) {
         if (from instanceof HTMLElement && from.offsetHeight > 0) {
+          freezeCaptureMetrics(from, to);
           // offsetHeight rounds every paragraph to whole CSS pixels. On a
           // long capture those errors accumulate above the selected passage,
           // moving the text while ink keeps its exact scene coordinates.
@@ -342,8 +363,8 @@ function hollowOutside(slot: HTMLElement, clone: HTMLElement, bandTop: number, b
         }
         continue;
       }
-      // Only containers taller than the band are worth opening up.
-      if (depth < 6 && localBottom - localTop > bottom - top) walk(from, to, depth + 1);
+      // Freeze only the retained band, never every glyph in the full document.
+      walk(from, to, depth + 1);
     }
   };
   walk(slot, clone, 0);

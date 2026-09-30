@@ -899,6 +899,7 @@ export function BoardToolbar({
       ref={toolbarRootRef}
       className={[
         "lc-toolbar",
+        !handover ? "lc-toolbar-enter" : "",
         mobile ? "lc-toolbar-compact" : "",
         floating ? "lc-toolbar-floating" : "",
         dragging ? "lc-toolbar-dragging" : "",
@@ -994,7 +995,7 @@ export function BoardToolbar({
             active={presetName}
             axis={axis === "column" ? "height" : "width"}
             className="lc-preset-chip-morph"
-            animateOnMount={!handover}
+            animateOnMount={false}
           >
             <div data-morph-id={presetName}>
               <span className="lc-preset-chip-name">{presetName}</span>

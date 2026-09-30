@@ -1,12 +1,32 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  canvasGestureFrame,
   edgeStrips,
   EDGE_STRIP_PX,
   EXCLUSION_BUDGET_CSS,
 } from "./gestureExclusion";
 
 const board = { left: 0, top: 0, width: 800, height: 1200 };
+
+describe("canvasGestureFrame", () => {
+  it("covers all four corners and every edge of an offset canvas", () => {
+    const frame = canvasGestureFrame({ left: 20, top: 80, width: 700, height: 1000 });
+    const covered = (x: number, y: number) => frame.some(r =>
+      x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height);
+    for (const x of [20, 370, 720]) for (const y of [80, 1080]) expect(covered(x, y)).toBe(true);
+    for (const x of [20, 720]) expect(covered(x, 580)).toBe(true);
+    expect(covered(370, 580)).toBe(false);
+  });
+
+  it("stays inside small canvases and releases hidden canvases", () => {
+    expect(canvasGestureFrame({ ...board, width: 0 })).toEqual([]);
+    for (const r of canvasGestureFrame({ left: 0, top: 0, width: 40, height: 30 })) {
+      expect(r.x + r.width).toBeLessThanOrEqual(40);
+      expect(r.y + r.height).toBeLessThanOrEqual(30);
+    }
+  });
+});
 
 describe("edgeStrips", () => {
   it("claims a 200px-tall band, not the full board height", () => {

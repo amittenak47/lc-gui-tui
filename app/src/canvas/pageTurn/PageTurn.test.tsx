@@ -12,7 +12,10 @@ import { paintTurn } from "./paintTurn";
 vi.mock("./paintTurn", () => ({ paintTurn: vi.fn() }));
 
 const gesture = vi.hoisted(() => ({ release: vi.fn(), protect: vi.fn() }));
-vi.mock("../../util/gestureExclusion", () => ({ protectGestureSurface: gesture.protect }));
+vi.mock("../../util/gestureExclusion", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../util/gestureExclusion")>(),
+  protectGestureSurface: gesture.protect,
+}));
 
 // Three 600-unit pages stacked; the view shows the middle one at scale 1.
 const FRAMES = [
@@ -341,12 +344,14 @@ it("shows text pages two to a spread, and turns them two at a time", async () =>
   board.readingPageFrames.mockReturnValue(FRAMES);
 });
 
-it("protects page-turn edges only while the reader owns gestures", () => {
+it("keeps the canvas frame protected when annotation takes over in Pages mode", () => {
   mount(true);
   expect(gesture.protect).toHaveBeenCalledWith(host, expect.any(Function));
   mount(false);
-  expect(gesture.release).toHaveBeenCalledTimes(1);
+  expect(gesture.release).not.toHaveBeenCalled();
   expect(gesture.protect).toHaveBeenCalledTimes(1);
+  expect(gesture.protect.mock.calls[0][1]()).toHaveLength(4);
+  expect(host.hasAttribute("data-reading-pages")).toBe(true);
 });
 
 
