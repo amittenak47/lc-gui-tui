@@ -21,7 +21,7 @@ import { useEffect, useRef, type RefObject } from "react";
 import type { BoardHandle } from "../BoardHandle";
 import type { PageFrame } from "../inkPageIndex";
 import { peekPdfFilmCurrent, subscribePdfFilmCurrent } from "../../modes/pdfFilm";
-import { cornerForDrag, turnCommits, type Point } from "./curl";
+import { constrainCorner, cornerForDrag, turnCommits, type Point } from "./curl";
 import { paintTurn, type TurnLayout } from "./paintTurn";
 import { boardResizeDeferred } from "../../util/splitResize";
 import { protectGestureSurface } from "../../util/gestureExclusion";
@@ -786,15 +786,17 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     /** Turns queued by a key pressed while one was playing. */
     let queued: { direction: Direction; count: number } | null = null;
 
-    const step = (turn: Turn) => (now: number) => {
-      const a = turn.anim;
-      if (turn.done || !a) return;
+    const step = (turn: Turn, animation = turn.anim) => (now: number) => {
+      const a = animation;
+      // A caught or reversed sheet invalidates the old animation, including a
+      // callback already queued before the new finger went down.
+      if (turn.done || !a || turn.anim !== a) return;
       const t = Math.min(1, (now - a.began) / a.ms);
       const k = easeOutCubic(t);
       turn.corner = { x: a.start.x + (a.goal.x - a.start.x) * k, y: a.start.y + (a.goal.y - a.start.y) * k };
       draw(turn);
       if (t < 1) {
-        requestAnimationFrame(step(turn));
+        requestAnimationFrame(step(turn, a));
         return;
       }
       if (a.commit) land(turn);
@@ -862,6 +864,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const left = a.ms - (performance.now() - a.began);
       if (left <= HURRY_MS) return;
       turn.anim = { ...a, began: performance.now(), ms: HURRY_MS, start: { ...turn.corner } };
+      requestAnimationFrame(step(turn));
     };
 
     const keyTurn = (direction: Direction, ms: number): boolean => {
@@ -928,7 +931,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       target: EventTarget | null;
       type: string;
     } | null = null;
-    let active: { id: number; x: number; y: number; turn: Turn; vx: number; lastX: number; lastT: number } | null = null;
+    let active: { id: number; x: number; y: number; turn: Turn; vx: number; lastX: number; lastT: number; caughtCorner?: Point } | null = null;
     /** The board's cancel is on its way through our own listeners. */
     let handingOff = false;
 
@@ -941,12 +944,35 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       );
 
     const onDown = (event: PointerEvent) => {
-      if (turnRef.current || active) return;
+      if (active) return;
       // A second finger is a pinch, not a turn: the first one's drag is off.
       if (!event.isPrimary && event.pointerType === "touch") pending = null;
       if (event.button !== 0 || !event.isPrimary) return;
       if (event.pointerType === "pen") return; // the stylus writes; fingers and mice turn
       if (!inHost(event.target)) return;
+      const playing = turnRef.current;
+      if (playing) {
+        const r = playing.rect;
+        if (!playing.anim || !playing.images || playing.done ||
+          event.clientX < r.left || event.clientX > r.left + r.width ||
+          event.clientY < r.top || event.clientY > r.top + r.height) return;
+        event.stopImmediatePropagation();
+        event.preventDefault();
+        playing.anim = null;
+        queued = null;
+        pending = null;
+        const w = playing.layout === "book" ? r.width / 2 : r.width;
+        // Anchor at the displayed fold, so catching it never snaps the page
+        // back to its original corner or to the new finger's position.
+        playing.corner = constrainCorner(playing.corner, w, r.height, playing.bottom);
+        active = {
+          id: event.pointerId, x: event.clientX, y: event.clientY,
+          turn: playing, caughtCorner: { ...playing.corner },
+          vx: 0, lastX: event.clientX, lastT: event.timeStamp,
+        };
+        setTurning(true);
+        return;
+      }
       const edgeSide = edgeAt(event.clientX, event.clientY);
       const edge = edgeSide != null;
       // Both touch and mouse start turns only in corner triangles.
@@ -980,7 +1006,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         }
         const turn = active.turn;
         const w = turn.layout === "book" ? turn.rect.width / 2 : turn.rect.width;
-        turn.corner = cornerForDrag(turn.direction, event.clientX - active.x, event.clientY - active.y, w, turn.rect.height, turn.bottom);
+        turn.corner = active.caughtCorner
+          ? constrainCorner({
+              x: Math.min(w, Math.max(-w, active.caughtCorner.x + 2 * (event.clientX - active.x))),
+              y: active.caughtCorner.y + (event.clientY - active.y) * 0.5,
+            }, w, turn.rect.height, turn.bottom)
+          : cornerForDrag(turn.direction, event.clientX - active.x, event.clientY - active.y, w, turn.rect.height, turn.bottom);
         draw(turn);
         return;
       }
@@ -1047,7 +1078,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     };
 
     const swallowClick = (event: MouseEvent) => {
-      if (turnRef.current) {
+      if (turnRef.current && inHost(event.target)) {
         event.stopImmediatePropagation();
         event.preventDefault();
       }
@@ -1066,7 +1097,14 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (playing) {
         // Faster than a turn takes: finish this one now and line up the next.
         event.preventDefault();
-        if (playing.direction !== direction || !playing.anim?.commit) return;
+        if (!playing.anim) return;
+        const commit = playing.direction === direction;
+        if (playing.anim.commit !== commit) {
+          queued = null;
+          settle(playing, commit, { fullMs: QUICK_TURN_MS });
+          return;
+        }
+        if (!commit) return;
         const count = queued?.direction === direction ? queued.count : 0;
         queued = { direction, count: Math.min(KEY_QUEUE_MAX, count + 1) };
         hurry(playing);

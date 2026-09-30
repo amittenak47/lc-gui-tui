@@ -95,7 +95,10 @@ export function paintTurn(ctx: CanvasRenderingContext2D, frame: TurnFrame): numb
   const flap = sheetPart(g, w, H, true);
   const n = g.foldNormal;
   const fp = g.foldPoint;
-  const span = Math.max(24, w * 0.18);
+  // Lift is zero at either resting position. The shadow and bend broaden as
+  // the sheet rises, then soften away as it lands instead of snapping off.
+  const lift = Math.sin(Math.PI * g.progress);
+  const span = Math.max(16, w * (0.035 + 0.085 * lift));
 
   // Shadow the flap casts on the page it is uncovering.
   if (g.progress > 0) {
@@ -103,8 +106,10 @@ export function paintTurn(ctx: CanvasRenderingContext2D, frame: TurnFrame): numb
     ctx.beginPath();
     ctx.rect(0, 0, w, H);
     ctx.clip();
-    const shadow = ctx.createLinearGradient(fp.x, fp.y, fp.x + n.x * span, fp.y + n.y * span);
-    shadow.addColorStop(0, "rgba(0,0,0,0.28)");
+    const shadow = ctx.createLinearGradient(fp.x, fp.y, fp.x + n.x * span * 1.6, fp.y + n.y * span * 1.6);
+    shadow.addColorStop(0, `rgba(0,0,0,${0.23 * lift})`);
+    shadow.addColorStop(0.25, `rgba(0,0,0,${0.12 * lift})`);
+    shadow.addColorStop(0.65, `rgba(0,0,0,${0.035 * lift})`);
     shadow.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = shadow;
     ctx.fillRect(0, 0, w, H);
@@ -120,7 +125,9 @@ export function paintTurn(ctx: CanvasRenderingContext2D, frame: TurnFrame): numb
     // It bends up toward the fold, so it darkens a little there.
     if (g.progress > 0) {
       const bend = ctx.createLinearGradient(fp.x, fp.y, fp.x - n.x * span * 0.6, fp.y - n.y * span * 0.6);
-      bend.addColorStop(0, "rgba(0,0,0,0.14)");
+      bend.addColorStop(0, `rgba(0,0,0,${0.11 * lift})`);
+      bend.addColorStop(0.3, `rgba(0,0,0,${0.035 * lift})`);
+      bend.addColorStop(0.65, `rgba(255,255,255,${0.035 * lift})`);
       bend.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = bend;
       tracePolygon(ctx, flat);
@@ -153,14 +160,21 @@ export function paintTurn(ctx: CanvasRenderingContext2D, frame: TurnFrame): numb
       ctx.globalAlpha = 1;
     }
     // The curve of the paper: light along the fold, falling away from it.
-    const far = { x: fp.x + n.x * span * 2, y: fp.y + n.y * span * 2 };
+    const far = { x: fp.x + n.x * span * 1.4, y: fp.y + n.y * span * 1.4 };
     const curve = ctx.createLinearGradient(fp.x, fp.y, far.x, far.y);
-    curve.addColorStop(0, "rgba(255,255,255,0.22)");
-    curve.addColorStop(0.35, "rgba(255,255,255,0)");
-    curve.addColorStop(1, "rgba(0,0,0,0.12)");
+    curve.addColorStop(0, `rgba(0,0,0,${0.06 * lift})`);
+    curve.addColorStop(0.12, `rgba(255,255,255,${0.28 * lift})`);
+    curve.addColorStop(0.38, `rgba(255,255,255,${0.1 * lift})`);
+    curve.addColorStop(0.72, `rgba(0,0,0,${0.065 * lift})`);
+    curve.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = curve;
     tracePolygon(ctx, flap);
     ctx.fill();
+    // A fine paper edge separates the folded sheet from the page beneath.
+    // Clipping keeps the stroke inside the sheet and out of the text below.
+    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = `rgba(0,0,0,${0.22 * lift})`;
+    ctx.stroke();
     ctx.restore();
   }
 

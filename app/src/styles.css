@@ -2066,6 +2066,21 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
  * pointer (or a finger pressed there) the edge gets a soft sheen and the
  * pointer becomes a hand — this is where a page is taken from, and text is
  * selected everywhere else. Sizes match the triangular PageTurn corner hit test. */
+[data-turn-edges] .lc-page-mask-hole {
+  /* Thin paper layers beneath the current sheet, using the existing paper
+   * and border colours. No extra page bitmaps or layout changes. */
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--line) 85%, transparent),
+    1px 2px 0 0 var(--bg),
+    1px 3px 0 0 color-mix(in srgb, var(--line) 65%, var(--bg)),
+    2px 4px 0 0 var(--bg),
+    2px 5px 0 0 color-mix(in srgb, var(--line) 55%, var(--bg)),
+    3px 6px 0 0 var(--bg),
+    3px 7px 0 0 color-mix(in srgb, var(--line) 45%, var(--bg)),
+    0 12px 28px rgb(0 0 0 / 40%),
+    0 0 0 200vmax var(--lc-page-mask);
+}
+
 [data-turn-edges] .lc-page-mask-hole::before,
 [data-turn-edges] .lc-page-mask-hole::after {
   content: "";

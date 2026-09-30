@@ -5,6 +5,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { BoardHandle } from "../BoardHandle";
 import { PageTurn } from "./PageTurn";
+import { paintTurn } from "./paintTurn";
+
+// Gesture tests inspect the frame submitted to the renderer. Actual canvas
+// shading is checked separately in the browser, not by jsdom's missing canvas.
+vi.mock("./paintTurn", () => ({ paintTurn: vi.fn() }));
 
 const gesture = vi.hoisted(() => ({ release: vi.fn(), protect: vi.fn() }));
 vi.mock("../../util/gestureExclusion", () => ({ protectGestureSurface: gesture.protect }));
@@ -48,6 +53,10 @@ class TestPointerEvent extends MouseEvent {
 }
 
 beforeEach(() => {
+  vi.mocked(paintTurn).mockClear();
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    setTransform: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(),
+  } as unknown as CanvasRenderingContext2D);
   gesture.release.mockClear();
   gesture.protect.mockReset().mockReturnValue(gesture.release);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -72,6 +81,7 @@ afterEach(() => {
   act(() => root.unmount());
   vi.useRealTimers();
   document.body.textContent = "";
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -350,4 +360,104 @@ it("leaves the page body and middle of each edge available to scroll", async () 
   await settle();
   expect(board.captureSceneFrame).not.toHaveBeenCalled();
   expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+});
+
+function manualFrames() {
+  let id = 0;
+  const callbacks = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+    callbacks.set(++id, cb);
+    return id;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (key: number) => callbacks.delete(key));
+  return (ahead = 0) => act(() => {
+    const batch = [...callbacks.values()];
+    callbacks.clear();
+    for (const cb of batch) cb(performance.now() + ahead);
+  });
+}
+
+it.each(["next", "prev"] as const)("catches a settling %s turn without a jump, then pulls it back", async (direction) => {
+  const frame = manualFrames();
+  mount();
+  const start = direction === "next" ? 380 : 20;
+  const dragged = direction === "next" ? 150 : 250;
+  pointer("pointerdown", start, 580);
+  pointer("pointermove", dragged, 580);
+  await act(async () => { await Promise.resolve(); });
+  frame();
+  const before = { ...vi.mocked(paintTurn).mock.calls.at(-1)![1].corner };
+  const captures = board.captureSceneFrame.mock.calls.length;
+  pointer("pointerup", dragged, 580);
+  pointer("pointerdown", 200, 300);
+  // The previous animation callback must not land while the sheet is held.
+  frame(1000);
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  pointer("pointermove", 200, 300);
+  frame();
+  expect(vi.mocked(paintTurn).mock.calls.at(-1)![1].corner).toEqual(before);
+  const back = direction === "next" ? 380 : 20;
+  pointer("pointermove", back, 300);
+  pointer("pointerup", back, 300);
+  frame(1000);
+  frame(1000);
+  frame(1000);
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  expect(board.captureSceneFrame).toHaveBeenCalledTimes(captures);
+  expect(document.querySelector(".lc-page-turn")).toBeNull();
+});
+
+it("reverses the settling direction with the opposite arrow and can finish again", async () => {
+  const frame = manualFrames();
+  mount();
+  const key = (key: string) => act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  });
+  key("ArrowRight");
+  await act(async () => { await Promise.resolve(); });
+  frame(60);
+  key("ArrowLeft");
+  // Both callbacks are pending: only the latest animation may land.
+  frame(20);
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  key("ArrowRight");
+  frame(1000);
+  frame(1000);
+  expect(board.jumpToPageFrame).toHaveBeenCalledTimes(1);
+  expect(board.setPageLock).toHaveBeenLastCalledWith(FRAMES[2]);
+});
+
+it("keeps toolbar clicks and pen input available while a sheet settles", async () => {
+  const frame = manualFrames();
+  mount();
+  pointer("pointerdown", 380, 580);
+  pointer("pointermove", 150, 580);
+  await act(async () => { await Promise.resolve(); });
+  pointer("pointerup", 150, 580);
+  const button = document.createElement("button");
+  const click = vi.fn();
+  button.addEventListener("click", click);
+  host.append(button);
+  button.click();
+  expect(click).toHaveBeenCalledOnce();
+  pointer("pointerdown", 200, 300, "pen");
+  frame(1000);
+  expect(board.jumpToPageFrame).toHaveBeenCalledOnce();
+});
+
+it("drops queued turns when a caught sheet is cancelled", async () => {
+  const frame = manualFrames();
+  mount();
+  const key = () => act(() => window.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+  ));
+  key();
+  await act(async () => { await Promise.resolve(); });
+  frame(60);
+  key(); // another turn waiting behind the one being caught
+  pointer("pointerdown", 200, 300);
+  pointer("pointercancel", 200, 300);
+  for (let i = 0; i < 5; i++) frame(1000);
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  expect(document.querySelector(".lc-page-turn")).toBeNull();
 });
