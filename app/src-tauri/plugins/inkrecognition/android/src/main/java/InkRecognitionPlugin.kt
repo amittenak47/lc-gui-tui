@@ -1,6 +1,8 @@
 package dev.lc.whiteboard.inkrecognition
 
 import android.app.Activity
+import android.os.Handler
+import android.os.Looper
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
@@ -60,9 +62,18 @@ class InkRecognitionPlugin(private val activity: Activity) : Plugin(activity) {
 
     override fun load(webView: android.webkit.WebView) {
         super.load(webView)
-        // Start the download at startup so the first glance isn't the one that
-        // waits for it.
-        ensureModel()
+        // Start the download early so the first glance isn't the one that waits
+        // for it — but not now. `load` runs on the UI thread while the WebView is
+        // being set up, and building the model identifier parses ML Kit's
+        // manifest (~800 entries): about a second of a launch, with the UI
+        // thread blocked for most of it. Build it off that thread once the app
+        // is up; a recognition asked for before then still starts it itself.
+        Handler(Looper.getMainLooper()).postDelayed({
+            Thread {
+                model
+                activity.runOnUiThread { ensureModel() }
+            }.start()
+        }, WARM_UP_DELAY_MS)
     }
 
     @Command
@@ -191,5 +202,7 @@ class InkRecognitionPlugin(private val activity: Activity) : Plugin(activity) {
         /** ~60 points/second, a plausible handwriting cadence. */
         const val POINT_INTERVAL_MS = 16L
         const val STROKE_GAP_MS = 120L
+        /** After launch, before the model is looked up and its download begun. */
+        const val WARM_UP_DELAY_MS = 4000L
     }
 }
