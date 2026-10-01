@@ -240,7 +240,8 @@ import {
 import { pdfLayoutIsSpread } from "./modes/pdfInkSpread";
 import { remapPdfFootnotes } from "./modes/pdfFootnoteLayout";
 import { PdfPageRail } from "./modes/PdfPageRail";
-import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, clearPdfFilmScope, peekPdfPageSizes, publishPdfFilmCurrent, peekPdfFilmCurrent, peekPdfReadingFrames, pdfSpreadSlotCountChanged, resetPdfFilmPredicted, publishPdfLayoutBusy, subscribePdfLayoutBusy } from "./modes/pdfFilm";
+import { loadReadingPage, saveReadingPage } from "./util/readingPosition";
+import { savePdfFilmPref, loadPdfSpreadPref, savePdfSpreadPref, clearPdfFilmScope, peekPdfPageSizes, publishPdfFilmCurrent, peekPdfFilmCurrent, subscribePdfFilmCurrent, peekPdfReadingFrames, pdfSpreadSlotCountChanged, resetPdfFilmPredicted, publishPdfLayoutBusy, subscribePdfLayoutBusy } from "./modes/pdfFilm";
 import { AnnotateDialog, type AnnotateDialogKind } from "./modes/AnnotateDialog";
 import { DocumentExportDialog } from "./modes/DocumentExportDialog";
 import { SidecarChooser, type SidecarChoice } from "./modes/SidecarChooser";
@@ -4052,8 +4053,10 @@ export const Workspace = memo(function Workspace({
         const savedPdfPage = Math.floor(
           Number((existing?.board.appState as { pdfPage?: number } | undefined)?.pdfPage),
         );
+        // Where it was last read, if a page turn since the last save says so.
+        const readPage = docType === "pdf" ? loadReadingPage(sessionDocId) : 0;
         const sessionPage =
-          Number.isFinite(savedPdfPage) && savedPdfPage >= 1 ? savedPdfPage : 0;
+          readPage >= 1 ? readPage : Number.isFinite(savedPdfPage) && savedPdfPage >= 1 ? savedPdfPage : 0;
         setPdfSessionPage(sessionPage);
         if (sessionPage >= 1) {
           publishPdfFilmCurrent(tab.id, sessionPage);
@@ -4351,7 +4354,8 @@ export const Workspace = memo(function Workspace({
           publishPdfFilmCurrent(tab.id, landPage);
           boardRef.current?.aimPdfPage(landPage);
           if (existing?.board.appState) {
-            boardRef.current?.restoreView(existing.board.appState);
+            // The saved camera, on the page read to since it was saved.
+            boardRef.current?.restoreView({ ...existing.board.appState, pdfPage: landPage });
             const filmed = peekPdfFilmCurrent(tab.id);
             if (filmed >= 2) landPage = filmed;
           }
@@ -9744,6 +9748,27 @@ export const Workspace = memo(function Workspace({
   const docPadLive = Boolean(problem && isAnnotate(problem) && annotateSource?.docType !== "web" && tab.kind !== "web");
   const boardPadLive = Boolean(problem && isWhiteboard(problem));
 
+
+  /*
+   * The reading place, saved as the reader turns: a session is saved when its
+   * content changes, not when a page is turned. Not while the document is
+   * opening — it passes through page 1 on its way to the saved page.
+   */
+  const pdfReading = annotateSource?.docType === "pdf" && !boardPreparing && switchMotion === "idle";
+  useEffect(() => {
+    if (!pdfReading) return;
+    let timer = 0;
+    const unsubscribe = subscribePdfFilmCurrent(tab.id, () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        saveReadingPage(annotateDocIdRef.current, peekPdfFilmCurrent(tab.id));
+      }, 700);
+    });
+    return () => {
+      window.clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [pdfReading, tab.id]);
 
   const canvasLoading =
     boardPreparing ||
