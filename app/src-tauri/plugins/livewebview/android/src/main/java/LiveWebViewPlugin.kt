@@ -161,6 +161,7 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
                 inFront.remove(args.label)
                 (view.parent as? ViewGroup)?.removeView(view)
                 view.destroy()
+                refreshAppRenderingPreferences()
                 invoke.reject(err.message ?: "could not open a web view")
             }
         }
@@ -382,6 +383,29 @@ class LiveWebViewPlugin(private val activity: Activity) : Plugin(activity) {
         }
         (view.parent as? ViewGroup)?.removeView(view)
         view.destroy()
+        refreshAppRenderingPreferences()
+    }
+
+    /**
+     * Detaching a child disables its accelerated Canvas2D preference. Chromium
+     * applies that preference to a renderer-wide flag, so it also slows NEW
+     * canvases in the app after the child is destroyed. Reapply the attached
+     * app's preferences last; invalidating the view or replacing a canvas does
+     * not reset that flag.
+     */
+    private fun refreshAppRenderingPreferences() {
+        val view = appWebView ?: return
+        if (!view.isAttachedToWindow || !view.isHardwareAccelerated) return
+        val settings = view.settings
+        val multipleWindows = settings.supportMultipleWindows()
+        // A same-value setter is ignored. This preference refreshes WebKit
+        // settings without changing page layout, zoom or the drawing surface.
+        // Restore it immediately on this UI-thread turn, before handling input.
+        try {
+            settings.setSupportMultipleWindows(!multipleWindows)
+        } finally {
+            settings.setSupportMultipleWindows(multipleWindows)
+        }
     }
 
     /** The app's own WebView, cached before any of ours joins the tree. */
