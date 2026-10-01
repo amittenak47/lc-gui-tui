@@ -130,6 +130,11 @@ function pointer(type: string, x: number, y: number, pointerType = "touch") {
   });
 }
 
+/** Let a turn's pictures land: a few promise turns, not a frame. */
+async function pictures() {
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+}
+
 async function settle() {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -329,16 +334,17 @@ it("flicks through pages: a corner touched while one lands takes hold of the nex
   mount();
   pointer("pointerdown", 380, 580);
   pointer("pointermove", 150, 580);
-  await act(async () => { await Promise.resolve(); });
+  await pictures();
   frame();
   pointer("pointerup", 150, 580);
   // Back at the corner before the first sheet has finished going over.
   pointer("pointerdown", 380, 580);
   expect(board.jumpToPageFrame).toHaveBeenCalledTimes(1);
   pointer("pointermove", 150, 580);
-  await act(async () => { await Promise.resolve(); });
+  await pictures();
   frame();
   pointer("pointerup", 150, 580);
+  await pictures();
   for (let i = 0; i < 4; i += 1) frame(1000);
   const landed = (board.jumpToPageFrame.mock.calls as unknown as [{ pageId: number }][]).map((call) => call[0].pageId);
   expect(landed).toEqual([2, 3]);
@@ -350,7 +356,7 @@ it("flicks through pages: a sheet caught going over and pushed on lands, and the
   mount();
   pointer("pointerdown", 380, 580);
   pointer("pointermove", 150, 580);
-  await act(async () => { await Promise.resolve(); });
+  await pictures();
   frame();
   pointer("pointerup", 150, 580);
   // The thumb comes back inside the page, onto the rolling sheet, not the strip.
@@ -359,11 +365,12 @@ it("flicks through pages: a sheet caught going over and pushed on lands, and the
   pointer("pointermove", 280, 400);
   expect(board.jumpToPageFrame).toHaveBeenCalledTimes(1);
   pointer("pointermove", 60, 400);
-  await act(async () => { await Promise.resolve(); });
+  await pictures();
   frame();
   // The new sheet starts from rest and moves with the hand: no jump to the finger.
   expect(vi.mocked(paintTurn).mock.calls.at(-1)![1].corner.x).toBeCloseTo(400 - 220, 5);
   pointer("pointerup", 60, 400);
+  await pictures();
   for (let i = 0; i < 4; i += 1) frame(1000);
   const landed = (board.jumpToPageFrame.mock.calls as unknown as [{ pageId: number }][]).map((call) => call[0].pageId);
   expect(landed).toEqual([2, 3]);
@@ -493,6 +500,55 @@ it("holds a sheet taken by its side where the finger took it, and a corner by it
   await settle();
   expect(vi.mocked(paintTurn).mock.calls.at(-1)![1].restY).toBe(600);
   pointer("pointerup", 392, 592);
+  await settle();
+});
+
+it("keeps a sheet held by its side from tilting with every wobble of the hand", async () => {
+  mount();
+  pointer("pointerdown", 380, 300);
+  pointer("pointermove", 200, 360);
+  await settle();
+  const frame = vi.mocked(paintTurn).mock.calls.at(-1)![1];
+  // 60 px of drift moves the held point 12: the fold stays near upright.
+  expect(frame.corner.y).toBeCloseTo(312, 5);
+  pointer("pointerup", 200, 360);
+  await settle();
+});
+
+it("turns over plain paper while the next page is still being pictured, then shows it", async () => {
+  let finish!: (canvas: HTMLCanvasElement) => void;
+  const late = document.createElement("canvas");
+  board.captureSceneFrame
+    .mockImplementationOnce(async () => document.createElement("canvas"))
+    .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  mount();
+  pointer("pointerdown", 380, 300);
+  pointer("pointermove", 300, 300);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
+  const first = vi.mocked(paintTurn).mock.calls.at(-1)![1];
+  expect(first.to).not.toBe(late);
+  await act(async () => { finish(late); await new Promise((resolve) => setTimeout(resolve, 30)); });
+  expect(vi.mocked(paintTurn).mock.calls.at(-1)![1].to).toBe(late);
+  pointer("pointerup", 380, 300);
+  await settle();
+});
+
+it("turns at once with the live page showing through while its picture is still being taken", async () => {
+  let finish!: (canvas: HTMLCanvasElement) => void;
+  const here = document.createElement("canvas");
+  board.captureSceneFrame
+    .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }))
+    .mockImplementationOnce(async () => document.createElement("canvas"));
+  mount();
+  pointer("pointerdown", 380, 300);
+  pointer("pointermove", 300, 300);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
+  const first = vi.mocked(paintTurn).mock.calls.at(-1)![1];
+  expect(first.from).toBeNull();
+  expect(first.to).toBeInstanceOf(HTMLCanvasElement);
+  await act(async () => { finish(here); await new Promise((resolve) => setTimeout(resolve, 30)); });
+  expect(vi.mocked(paintTurn).mock.calls.at(-1)![1].from).toBe(here);
+  pointer("pointerup", 380, 300);
   await settle();
 });
 

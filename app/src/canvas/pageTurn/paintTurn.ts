@@ -24,9 +24,15 @@ export interface TurnFrame {
   /** View size in CSS pixels. */
   width: number;
   height: number;
-  /** The picture being turned away from, and the one being turned to. */
-  from: CanvasImageSource;
-  to: CanvasImageSource;
+  /**
+   * The picture being turned away from, and the one being turned to.
+   *
+   * On a single sheet either may be null: the live page under the canvas is
+   * that page, so its part of the drawing is left clear and the page itself
+   * shows through. A book spread needs both.
+   */
+  from: CanvasImageSource | null;
+  to: CanvasImageSource | null;
   /** Pixel size of the pictures, which may be at a different scale to the view. */
   sourceWidth: number;
   sourceHeight: number;
@@ -53,12 +59,13 @@ function tracePolygon(ctx: CanvasRenderingContext2D, poly: readonly Point[]): vo
 function drawSlice(
   ctx: CanvasRenderingContext2D,
   frame: TurnFrame,
-  image: CanvasImageSource,
+  image: CanvasImageSource | null,
   sx: number,
   sw: number,
   dx: number,
   dw: number,
 ): void {
+  if (!image) return;
   ctx.drawImage(
     image,
     sx * frame.sourceWidth,
@@ -80,21 +87,30 @@ export function paintTurn(ctx: CanvasRenderingContext2D, frame: TurnFrame): numb
   const g = curlGeometry(frame.corner, w, H, frame.bottom, frame.restY);
 
   ctx.clearRect(0, 0, W, H);
+  const flat = sheetPart(g, w, H, false);
+  const flap = sheetPart(g, w, H, true);
 
   // What lies still: the page being turned to underneath, and in a book the
   // left page of the spread being left, until the flap covers it.
   if (book) {
     drawSlice(ctx, frame, frame.from, 0, 0.5, 0, spine);
     drawSlice(ctx, frame, frame.to, 0.5, 0.5, spine, w);
+  } else if (!frame.from && flat.length >= 3) {
+    // The sheet still lying flat is the live page itself: leave it clear.
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, W, H);
+    flat.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+    ctx.closePath();
+    ctx.clip("evenodd");
+    drawSlice(ctx, frame, frame.to, 0, 1, 0, W);
+    ctx.restore();
   } else {
     drawSlice(ctx, frame, frame.to, 0, 1, 0, W);
   }
 
   ctx.save();
   ctx.translate(spine, 0);
-
-  const flat = sheetPart(g, w, H, false);
-  const flap = sheetPart(g, w, H, true);
   const n = g.foldNormal;
   const fp = g.foldPoint;
   // Lift is zero at either resting position. The shadow and bend broaden as
