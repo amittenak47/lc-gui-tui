@@ -3294,6 +3294,8 @@ body[data-lc-sash-drag="horizontal"] {
   top: 0;
   left: 0;
   right: 0;
+  /* Over the desk mask around the page (44) and a turning sheet (45). */
+  z-index: 46;
 }
 
 .lc-board {
