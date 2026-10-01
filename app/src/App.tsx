@@ -116,12 +116,27 @@ import { messageOf } from "./util/messageOf";
  * Excalidraw, pdf.js and Monaco cannot all stay up for ten tabs, so most
  * parked tabs are records and nothing else. Two is the floor worth paying
  * for: the one being looked at, and the one just left — which is the switch
- * people actually repeat, and the one that used to cost a full reload. Split
+ * people actually repeat, and the one that used to cost a full reload — and a
+ * third where the device has the memory (see `liveLimitForDevice`). Split
  * panes raise it, because both halves are being looked at. Home is outside
  * this budget: it is cheap to keep and expensive to remount, so it stays
  * mounted and never counts against the two.
  */
-const LIVE_LIMIT = 2;
+const LIVE_LIMIT = liveLimitForDevice();
+
+/**
+ * Three where there is memory for it. Two workspaces hold ~600 MB on a 6 GB
+ * tablet, and every switch past the budget is a full reopen of seconds; a
+ * reader moving between a book, its notes and a second file kept paying it.
+ * `deviceMemory` is coarse (and capped at 8): 4 or more is "a tablet", below
+ * is a phone that cannot spare it.
+ */
+function liveLimitForDevice(): number {
+  const memory = typeof navigator !== "undefined"
+    ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory
+    : undefined;
+  return memory != null && memory >= 4 ? 3 : 2;
+}
 
 const LLM_ONLINE_POLL_MS = 20_000;
 const LLM_OFFLINE_POLL_MS = 60_000;
