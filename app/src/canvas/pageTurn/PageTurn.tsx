@@ -25,6 +25,7 @@ import { constrainCorner, cornerForCrease, cornerForGrip, turnCommits, type Poin
 import { paintTurn, type TurnLayout } from "./paintTurn";
 import { boardResizeDeferred } from "../../util/splitResize";
 import { afterBootSettled, isBootSettled } from "../../util/bootSettled";
+import { isCameraBusy } from "../../util/cameraBusy";
 import { canvasGestureFrame, protectGestureSurface } from "../../util/gestureExclusion";
 import { turnCornerAt, turnEdgeAt, turnCornerSize } from "./corners";
 import { cssColorLuminance } from "../../util/webPagePaper";
@@ -688,6 +689,16 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
           void afterBootSettled().then(() => { if (!disposed) prefetch(); });
           return;
         }
+        /*
+         * Each picture is a few hundred milliseconds of the main thread — the
+         * page cloned, its styles inlined, serialized — and a zoom makes every
+         * one stale. Taken while a hand is still pinching or panning, they were
+         * the frames a pinch dropped. Wait for the camera to rest.
+         */
+        if (isCameraBusy()) {
+          prefetch(delay);
+          return;
+        }
         const b = board();
         if (!b || disposed || prefetching || turnRef.current || boardResizeDeferred()) return;
         const view = b.getViewportBounds();
@@ -695,7 +706,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         if (!view || frames.length === 0) return;
         const at = currentIndex(frames, lockedRef.current, view);
         const from = frames[at]!;
-        const current = () => !disposed && !turnRef.current && !boardResizeDeferred() &&
+        const current = () => !disposed && !turnRef.current && !boardResizeDeferred() && !isCameraBusy() &&
           board() === b && b.getViewportBounds()?.y === view.y && b.getViewportBounds()?.zoom === view.zoom;
         if (textSpreadRef.current) {
           // This spread, and the ones either side of it, page by page.
