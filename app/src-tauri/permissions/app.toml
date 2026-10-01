@@ -99,3 +99,26 @@ commands.allow = ["webview_eval_json"]
 identifier = "allow-webview-capture-png"
 description = "Photograph the live page and attach that picture to Ask"
 commands.allow = ["webview_capture_png"]
+
+# App commands the page calls that had no permission: every call failed as
+# "not allowed. Command not found", and each caller swallowed it.
+
+[[permission]]
+identifier = "allow-lan-base-url"
+description = "The address a tablet should type to reach this PC"
+commands.allow = ["lan_base_url"]
+
+[[permission]]
+identifier = "allow-get-system-insets"
+description = "How far Android's status and nav bars cover the app"
+commands.allow = ["get_system_insets"]
+
+[[permission]]
+identifier = "allow-boot-notice"
+description = "Why the embedded router started on defaults"
+commands.allow = ["boot_notice"]
+
+[[permission]]
+identifier = "allow-colorhunt-random"
+description = "A random palette from Color Hunt"
+commands.allow = ["colorhunt_random"]
