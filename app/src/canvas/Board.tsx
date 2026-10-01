@@ -1970,6 +1970,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const [inkClip, setInkClip] = useState<SceneBounds | null>(null);
   /** Floor zoom for the open mobile page (fit-to-chrome); null on desktop. */
   const fitZoomMinRef = useRef<number | null>(null);
+  /**
+   * The width-fit zoom of the last fit, whichever camera path it took. A fit
+   * that keeps the reader's place carries the previous camera's zoom into
+   * `fitZoomMinRef`; text pages cut by that came out a different height on
+   * different launches of the same note.
+   */
+  const readingFitZoomRef = useRef<number | null>(null);
   /** Live page bounds for scroll clamping (same box as inkClip). */
   const pageBoundsRef = useRef<SceneBounds | null>(null);
   /**
@@ -2103,7 +2110,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   /** Pages reading: the scene span of the open page, or null when scrolling freely. */
   const pageLockRef = useRef<{ minY: number; maxY: number } | null>(null);
   /** Text pages, until the document or the view changes size. */
-  const textPagesRef = useRef<{ key: string; frames: PageFrame[]; pageH: number } | null>(null);
+  /** `fitted`: the page height came from a real reading fit, not a camera before any fit. */
+  const textPagesRef = useRef<{ key: string; frames: PageFrame[]; pageH: number; fitted: boolean } | null>(null);
   const readingFramesRef = useRef<() => PageFrame[]>(() => []);
   const readingZoomRef = useRef<{
     base: ViewportTransform; bounds: SceneBounds; floor: number;
@@ -7044,15 +7052,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             : documentCameraAfterViewportChange(keepYInput)
           : null;
         const fitWidth = availWidth;
-        const zoom =
-          rotated?.zoom ??
-          clampZoom(
-            widthOnly
-              ? fitWidth / boxWidth
-              : Math.min(fitWidth / boxWidth, availHeight / boxHeight),
-            FIT_ZOOM_MIN,
-          );
+        const readingFit = clampZoom(
+          widthOnly
+            ? fitWidth / boxWidth
+            : Math.min(fitWidth / boxWidth, availHeight / boxHeight),
+          FIT_ZOOM_MIN,
+        );
+        const zoom = rotated?.zoom ?? readingFit;
         fitZoomMinRef.current = zoom;
+        readingFitZoomRef.current = readingFit;
         // Notebooks lock zoom-out at the page fit on every device.
         setZoomFloorPct(
           Math.round(
@@ -9270,10 +9278,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
      * camera is at now. Measured against the live zoom, a page fit that zooms
      * out would make every page taller, and the next fit smaller again.
      */
-    const cutZoom = fitZoomMinRef.current ?? view.zoom;
+    const cutZoom = readingFitZoomRef.current ?? fitZoomMinRef.current ?? view.zoom;
     // A held text page has fixed scene boundaries, like a PDF sheet. Sidebar
     // and window resizes fit that sheet; they must not repack its paragraphs.
-    const pageH = (pageLockRef.current || readingZoomRef.current) && textPagesRef.current
+    const fitted = readingFitZoomRef.current != null;
+    // A held page keeps its cut — unless that cut predates the first fit.
+    const pageH = (pageLockRef.current || readingZoomRef.current) && textPagesRef.current &&
+        (textPagesRef.current.fitted || !fitted)
       ? textPagesRef.current.pageH
       : (view.height - inset.top - inset.bottom) / cutZoom;
     /*
@@ -9306,7 +9317,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       });
     }
     const frames = sectionPages(blocks, pageH, bounds.minY, bounds.minY + sceneH);
-    textPagesRef.current = { key, frames, pageH };
+    textPagesRef.current = { key, frames, pageH, fitted };
     return frames;
   };
 
