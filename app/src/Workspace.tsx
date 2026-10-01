@@ -4391,6 +4391,7 @@ export const Workspace = memo(function Workspace({
           );
         } else {
           await boardRef.current?.settleFitView();
+          const heightAtFit = annotateHeightRef.current;
           traceOpen("fit settled", { ms: openMs() });
           if (workspaceLoadGenRef.current !== loadGen) return;
           let laidOut = await waitForAnnotateLaidOut(
@@ -4431,7 +4432,13 @@ export const Workspace = memo(function Workspace({
               ms: openMs(),
             });
           }
-          await boardRef.current?.settleFitView();
+          // Fit again only if the page grew after the first fit. A note laid
+          // out from its record is its final height from the start, and the
+          // second pass was a quarter second of fitting the same page again.
+          const grown = annotateHeightRef.current;
+          if (!(typeof heightAtFit === "number" && typeof grown === "number" && Math.abs(grown - heightAtFit) < 1)) {
+            await boardRef.current?.settleFitView();
+          }
           if (existing?.board.appState) {
             boardRef.current?.restoreView(existing.board.appState);
           }
