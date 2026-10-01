@@ -10,11 +10,8 @@
  * live saves prefer these keys and keep a manifest on the blob.
  */
 
-import {
-  unpackEncodedInk,
-  type EncodedInk,
-} from "../canvas/inkCodec";
-import { bytesFromMaybeGzip } from "./gzip";
+import { gunzipUnpackInk } from "../canvas/inkArchiveClient";
+import { type EncodedInk } from "../canvas/inkCodec";
 import { run, STORE_INK_PAGES, withStore } from "./idb";
 
 const KEY_SEP = "\u001f";
@@ -75,8 +72,9 @@ export async function encodedFromRecord(row: InkPageRecord): Promise<EncodedInk 
   if (row.inkC) return row.inkC;
   if (!row.gz) return null;
   try {
-    const raw = await bytesFromMaybeGzip(row.gz);
-    return unpackEncodedInk(raw);
+    // In the archive worker: on the main thread, every page of a written-in
+    // book was a half second of the open.
+    return await gunzipUnpackInk(row.gz);
   } catch {
     return null;
   }
@@ -180,10 +178,12 @@ export async function markInkPageSynced(
 export async function getInkPages(docKey: string): Promise<Map<number, EncodedInk>> {
   const rows = await getInkPageRecords(docKey);
   const out = new Map<number, EncodedInk>();
-  for (const row of rows) {
-    const encoded = await encodedFromRecord(row);
+  // All at once: the worker unpacks one while the next is on its way.
+  const decoded = await Promise.all(rows.map((row) => encodedFromRecord(row)));
+  rows.forEach((row, i) => {
+    const encoded = decoded[i];
     if (encoded) out.set(row.pageId, encoded);
-  }
+  });
   return out;
 }
 
