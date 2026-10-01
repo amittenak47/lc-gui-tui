@@ -480,7 +480,9 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
      */
     const poll = window.setInterval(() => {
       const board = boardRef.current;
-      if (!board || turnRef.current || boardResizeDeferred()) return;
+      // Mid-pinch every read of the page frames is a fresh layout of the
+      // document; the hold is checked again once the camera rests.
+      if (!board || turnRef.current || boardResizeDeferred() || isCameraBusy()) return;
       const frames = board.readingPageFrames();
       const view = board.getViewportBounds();
       const held = lockedRef.current;
