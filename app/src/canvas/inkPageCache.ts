@@ -50,6 +50,11 @@ export type InkUndoEntry =
 export class InkPageBook {
   frames: PageFrame[] = fallbackPageFrames(null);
   private usedFallback = true;
+  /**
+   * Everything held came back from storage, filed by page as it was saved,
+   * and nothing has been written or binned since. See `setFrames`.
+   */
+  private storeOnly = false;
   visiblePage = 1;
   radius = INK_LRU_RADIUS;
 
@@ -138,14 +143,53 @@ export class InkPageBook {
       this.opTotal > 0 &&
       frames.length > 1 &&
       (this.usedFallback || prevCount <= 1 || moved);
+    /*
+     * Ink read back from storage is already filed under the pages of the
+     * layout it was saved in. A PDF's layout arrives after the ink does, so
+     * every open replaced the stand-in frames and rebinned the whole book —
+     * every page decoded, sorted and encoded again, two seconds of a tablet
+     * before the splash could go. When each stored page's ink lies on that
+     * page in the layout arriving, there is nothing to move.
+     */
+    const fromStandIn = this.usedFallback || prevCount <= 1;
+    const misfiled = shouldRebin && fromStandIn && this.storeOnly ? this.shardsFit(frames) : "not as stored";
+    const filed = shouldRebin && misfiled === null;
+    if (shouldRebin && !filed) {
+      // eslint-disable-next-line no-console
+      console.info("[lc:open] ink rebinned for layout", JSON.stringify({ moved, fromStandIn, why: misfiled }));
+    }
     this.frames = frames.slice();
     this.usedFallback = frames.length <= 1;
-    if (shouldRebin) {
+    if (shouldRebin && !filed) {
       const all = this.assembleOps();
       this.replaceAll(all, { preserveIds: true });
       return true;
     }
     return false;
+  }
+
+  /**
+   * Whether every page's ink is where `frames` would file it — see
+   * `setFrames`. As `pageIdForOp` files a stroke: on its page, touching no
+   * other (the gap below a page is still that page's).
+   */
+  private shardsFit(frames: readonly PageFrame[]): string | null {
+    const pageIds = new Set(frames.map((f) => f.pageId));
+    for (const id of new Set([...this.hot.keys(), ...this.cold.keys()])) {
+      if (id === SPANNING_PAGE_ID) continue;
+      if (!this.boundsByPage.has(id)) {
+        const hot = this.hot.get(id);
+        this.boundsByPage.set(id, hot ? inkOpsBounds(hot) : encodedInkBounds(this.cold.get(id)!));
+      }
+      const bounds = this.boundsByPage.get(id);
+      if (!bounds) continue;
+      if (!pageIds.has(id)) return `page ${id} not in layout`;
+      for (const f of frames) {
+        if (f.pageId === id || f.maxY < bounds.minY || f.minY > bounds.maxY) continue;
+        return `page ${id} ink reaches page ${f.pageId}`;
+      }
+    }
+    return null;
   }
 
   /** Hydrate the LRU around `page`, evict the rest to encoded cold. */
@@ -289,6 +333,7 @@ export class InkPageBook {
     this.usedFallback = this.frames.length <= 1;
     this.setVisiblePage(this.visiblePage);
     this.bump();
+    this.storeOnly = true;
   }
 
   /** Cold fill from IDB without marking dirty. */
@@ -305,6 +350,7 @@ export class InkPageBook {
     ops: readonly InkOp[],
     opts?: { preserveIds?: boolean; frames?: readonly PageFrame[] },
   ): void {
+    this.storeOnly = false;
     this.boundsByPage.clear();
     // Every page that held ink before, so one left empty is written empty.
     const before = this.pageIds();
@@ -615,6 +661,7 @@ export class InkPageBook {
   }
 
   private markDirty(pageId: number): void {
+    this.storeOnly = false;
     this.boundsByPage.delete(pageId);
     this.dirty.add(pageId);
   }

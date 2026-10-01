@@ -32,6 +32,30 @@ function stroke(y: number, extra: Partial<InkDrawOp> = {}): InkDrawOp {
 }
 
 describe("InkPageBook", () => {
+  it("keeps ink read back from storage filed as it was when the layout arrives", () => {
+    const layout = frames(20);
+    const saved = new InkPageBook();
+    saved.replaceAll(layout.map(f => stroke(f.minY + 40)), { frames: layout });
+    const pages = saved.snapshotEncodedPages();
+    const book = new InkPageBook();
+    book.ingestEncodedPages(pages);
+    // Far pages stay encoded: a rebin would have decoded and rewritten them.
+    const far = book.cold.get(20)!;
+    Object.defineProperty(far.ops[0], "pr", { get() { throw new Error("Decoded cold ink on layout"); } });
+    expect(book.setFrames(layout)).toBe(false);
+    expect(book.cold.get(20)).toBe(far);
+    expect(book.takeDirtyEncoded().size).toBe(0);
+  });
+
+  it("rebins stored ink that does not sit on the page it was filed under", () => {
+    const layout = frames(3);
+    const book = new InkPageBook();
+    // Filed on page 1 while the layout was unknown, but drawn on page 3.
+    book.ingestEncodedPages(new Map([[1, encodeInkOps([stroke(layout[2]!.minY + 40)])]]));
+    expect(book.setFrames(layout)).toBe(true);
+    expect(book.pageIds()).toContain(3);
+  });
+
   it("reads and caches cold geometry without decoding strokes or changing the paint window", () => {
     const book = new InkPageBook();
     const layout = frames(20);
