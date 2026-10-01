@@ -570,12 +570,28 @@ export function snapshotListedHostScroll(hosts: readonly NestedScrollHost[]): Ho
 }
 
 /** Toolbar/HUD mutations must not invalidate the document host index. */
+/** A page turn's own layers: the sheet, and the live copy of the page under it. */
+const PAGE_TURN_LAYER = ".lc-page-turn, .lc-page-turn-under";
+
+/** Whether these mutations only put a page turn's layers up or took them down. */
+export function mutationIsPageTurnLayer(records: readonly MutationRecord[]): boolean {
+  const layer = (node: Node) => node.nodeType === 1 && (node as Element).matches(PAGE_TURN_LAYER);
+  return records.length > 0 && records.every((record) => {
+    const target = record.target.nodeType === 1 ? record.target as Element : record.target.parentElement;
+    if (target?.closest(".lc-page-turn-under")) return true;
+    const nodes = [...record.addedNodes, ...record.removedNodes];
+    return nodes.length > 0 && nodes.every(layer);
+  });
+}
+
 export function mutationAffectsScrollHosts(records: readonly MutationRecord[]): boolean {
   const inDocument = (node: Node): boolean => {
     const el = node.nodeType === 1 ? node as Element : node.parentElement;
-    return Boolean(el?.closest(DOC_PAGE_SELECTOR));
+    return Boolean(el?.closest(DOC_PAGE_SELECTOR)) && !el?.closest(".lc-page-turn-under");
   };
+  // A page turn's live copy of the page is not the page: no hosts to find in it.
   const containsDocument = (node: Node): boolean => node.nodeType === 1 &&
+    !(node as Element).matches(PAGE_TURN_LAYER) &&
     Boolean((node as Element).matches(DOC_PAGE_SELECTOR) || (node as Element).querySelector(DOC_PAGE_SELECTOR));
   return records.some(record => inDocument(record.target) ||
     [...record.addedNodes, ...record.removedNodes].some(containsDocument));

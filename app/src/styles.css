@@ -2066,7 +2066,7 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
  * pointer (or a finger pressed there) the edge gets a soft sheen and the
  * pointer becomes a hand — this is where a page is taken from, and text is
  * selected everywhere else. Sizes match the triangular PageTurn corner hit test. */
-[data-turn-edges] .lc-page-mask-hole {
+.lc-page-mask-hole[data-turn-edges] {
   /* Thin paper layers beneath the current sheet, using the existing paper
    * and border colours. No extra page bitmaps or layout changes. */
   box-shadow:
@@ -2081,8 +2081,8 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
     0 0 0 200vmax var(--lc-page-mask);
 }
 
-[data-turn-edges] .lc-page-mask-hole::before,
-[data-turn-edges] .lc-page-mask-hole::after {
+.lc-page-mask-hole[data-turn-edges]::before,
+.lc-page-mask-hole[data-turn-edges]::after {
   content: "";
   position: absolute;
   top: 0;
@@ -2094,34 +2094,26 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   transition: opacity 160ms ease;
   pointer-events: none;
 }
-[data-turn-edges] .lc-page-mask-hole::before {
+.lc-page-mask-hole[data-turn-edges]::before {
   left: 0;
   background: color-mix(in srgb, var(--ink) 12%, transparent);
   clip-path: polygon(0 0, 100% 0, 0 var(--lc-turn-corner, 44px), 0 calc(100% - var(--lc-turn-corner, 44px)), 100% 100%, 0 100%);
 }
-[data-turn-edges] .lc-page-mask-hole::after {
+.lc-page-mask-hole[data-turn-edges]::after {
   right: 0;
   background: color-mix(in srgb, var(--ink) 12%, transparent);
   clip-path: polygon(100% 0, 0 0, 100% var(--lc-turn-corner, 44px), 100% calc(100% - var(--lc-turn-corner, 44px)), 0 100%, 100% 100%);
 }
-[data-turn-hover="left"] .lc-page-mask-hole::before,
-[data-turn-hover="right"] .lc-page-mask-hole::after {
-  opacity: 1;
-}
 /*
- * On the host only, and inherited from there. A `[data-turn-*] *` rule made
- * every toggle restyle the whole document under it — on a long file a frame
- * of 80–130ms, right as a page was taken hold of and again as it was let go.
- * The corner's pointerdown already keeps a selection from starting.
+ * On the page's hole, the only thing these style. Set on the tab's host,
+ * even inherited-only rules (a grab cursor, no selecting) restyled every
+ * element under it on each toggle: 300-500 ms on a long PDF, as a page was
+ * taken hold of and again as it was let go. PageTurn keeps selections from
+ * starting itself, and gives a mouse its cursor.
  */
-[data-turn-hover] {
-  cursor: grab;
-}
-/* While a page turns, nothing on it selects. */
-[data-turn-active] {
-  cursor: grabbing;
-  user-select: none;
-  -webkit-user-select: none;
+.lc-page-mask-hole[data-turn-hover="left"]::before,
+.lc-page-mask-hole[data-turn-hover="right"]::after {
+  opacity: 1;
 }
 
 /* Pages reading: the sheet being turned, drawn over the view for the length
@@ -3283,6 +3275,25 @@ body[data-lc-sash-drag="horizontal"] {
   flex: 1 1 auto;
   min-height: 0;
   height: auto;
+}
+
+/*
+ * Pages reading: the strip lies over the board, in the desk above the page,
+ * instead of shrinking the board under it — which re-centred the page and
+ * pushed it down by half the strip each time it opened. The page fit moves
+ * the page only if the strip would cover it (see `applyPageFit`).
+ */
+.lc-canvas-wrap.lc-has-pdf-film.lc-pdf-film-over:not(.lc-canvas-parked) {
+  display: block;
+}
+.lc-canvas-wrap.lc-has-pdf-film.lc-pdf-film-over > .lc-board {
+  height: 100%;
+}
+.lc-canvas-wrap.lc-pdf-film-over > .lc-pdf-rail {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
 }
 
 .lc-board {
@@ -21497,3 +21508,12 @@ button.lc-row-selected:hover:not(:disabled) {
 /* The page-change title has a fixed screen-space band supplied by the camera.
    Adding paper padding here would scale that band with the window width. */
 .lc-board-practice-paper .lc-statement-doc { padding-top: 0; }
+
+/* Pages reading: the page being turned to, live, under the turning sheet
+ * while it has no picture. Just below the sheet. */
+.lc-page-turn-under {
+  position: absolute;
+  z-index: 44;
+  overflow: hidden;
+  pointer-events: none;
+}

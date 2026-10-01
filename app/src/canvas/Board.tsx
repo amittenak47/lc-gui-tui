@@ -169,6 +169,7 @@ import {
   publishPdfFilmPredicted,
   publishPdfPreloadPages,
   publishPdfViewPages,
+  peekPdfReadAhead,
   resetPdfFilmPredicted,
   resetPdfPreloadPages,
   resetPdfViewPages,
@@ -384,6 +385,7 @@ import {
 } from "./rasterInk";
 import {
   compositePageLayers,
+  livePageCopy,
   resolveExportPaperColor,
   type PageExportLayers,
 } from "./exportPageComposite";
@@ -725,6 +727,12 @@ async function renderSceneFrameCanvas(
   exportScale = 2,
   pageLayers: PageExportLayers | null = null,
   excludeCoachViz = false,
+  /**
+   * Which of the page's layers to draw: all of them; none, for the ink and
+   * shapes alone on a clear canvas; or a PDF's page bitmaps alone, without
+   * its HTML marks layer (a few ms instead of a few hundred).
+   */
+  layers: "all" | "none" | "pdf" = "all",
 ): Promise<HTMLCanvasElement | null> {
   const appState = { ...(api.getAppState() as object), exportScale } as Record<string, unknown>;
   const files = api.getFiles();
@@ -751,9 +759,11 @@ async function renderSceneFrameCanvas(
   out.height = height;
   const ctx = out.getContext("2d");
   if (!ctx) return null;
-  ctx.fillStyle = paper;
-  ctx.fillRect(0, 0, width, height);
-  await compositePageLayers(ctx, bounds, drawScale, pageLayers);
+  if (layers !== "none") {
+    ctx.fillStyle = paper;
+    ctx.fillRect(0, 0, width, height);
+    await compositePageLayers(ctx, bounds, drawScale, pageLayers, { pdfOnly: layers === "pdf" });
+  }
 
   if (all.length > 0) {
     // Paint directly into the bounded crop. An intermediate full-book canvas
@@ -3355,6 +3365,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     );
   }, []);
 
+  /** The way pages are being turned, while one is held for Pages reading; see `publishPdfReadAhead`. */
+  const readAhead = () => (pageLockRef.current ? peekPdfReadAhead(filmScope) : 0);
+
   publishPdfFilmFromScrollRef.current = (scrollX, scrollY, zoom, height) => {
     if (!pdfFilmPublishRef.current) return;
     const local = peekPdfReadingFrames(filmScope);
@@ -3366,7 +3379,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       publishPdfViewPages(
         filmScope,
         [pending],
-        pdfRestPages(pending, Math.max(pending, lastPageId(frames)), [pending]),
+        pdfRestPages(pending, Math.max(pending, lastPageId(frames)), [pending], undefined, readAhead()),
       );
       if (!frames.some((frame) => frame.pageId === pending)) return;
       const at = pageIdFromCamera(frames, scrollY, zoom, height);
@@ -3392,7 +3405,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     publishPdfViewPages(
       filmScope,
       intersecting,
-      pdfRestPages(live, last, intersecting),
+      pdfRestPages(live, last, intersecting, undefined, readAhead()),
     );
     let pred: number;
     if (pdfCoastRef.current && flickPredFrozenRef.current != null) {
@@ -6814,9 +6827,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             typeof regionKey === "string" && regionKey in REGION_MIN
               ? REGION_MIN[regionKey as RegionId].minH
               : 800;
-          const ops = rasterInkRef.current?.getOps() ?? [];
           let nextH: number;
           if (isDrawPageRegion(typeof regionKey === "string" ? regionKey : null)) {
+            // Only a draw page grows with its ink: a document's fit must not
+            // decode every stroke in the book (a third of a second here).
+            const ops = rasterInkRef.current?.getOps() ?? [];
             const contentBottomRel = contentBottomInFrame(
               live,
               ops,
@@ -9361,7 +9376,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (availW < 8 || availH < 8 || !(bareW > 0) || !(h > 0)) return;
     // Not the gesture ceiling: a reading column is 300–760 units, so a page
     // filling a large window needs well past 1.75, and the fit is arithmetic.
-    const zoom = Math.min(PAGE_FIT_ZOOM_MAX, Math.max(FIT_ZOOM_MIN, Math.min(availW / bareW, availH / h) * fraction));
+    let zoom = Math.min(PAGE_FIT_ZOOM_MAX, Math.max(FIT_ZOOM_MIN, Math.min(availW / bareW, availH / h) * fraction));
+    /*
+     * A filmstrip lying over the board (Pages reading) covers its top. The
+     * page stays centred if it clears the strip; if not it moves down just
+     * clear of it, and shrinks only when the space below cannot hold it.
+     */
+    const boardEl = boardRef.current;
+    const wrap = boardEl?.parentElement;
+    const strip = wrap?.classList.contains("lc-pdf-film-over")
+      ? wrap.querySelector<HTMLElement>(":scope > .lc-pdf-rail")
+      : null;
+    const stripBottom = strip && boardEl
+      ? Math.max(0, strip.getBoundingClientRect().bottom - boardEl.getBoundingClientRect().top)
+      : 0;
+    let pageTop = inset.top + (availH - h * zoom) / 2;
+    if (stripBottom > 0 && pageTop < stripBottom + inset.top) {
+      const room = viewHeight - stripBottom - inset.top - inset.bottom;
+      if (h * zoom > room && room > 8) {
+        zoom = Math.max(FIT_ZOOM_MIN, Math.min(availW / bareW, room / h) * fraction);
+      }
+      pageTop = Math.max(stripBottom + inset.top, inset.top + (availH - h * zoom) / 2);
+    }
     // A text page is as tall as the view and narrower than it: widen its
     // paper to the view's sides, less a sliver of desk for the page stack.
     // A PDF's sheet is its own paper, and a spread's halves are halves.
@@ -9383,7 +9419,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const paint = Math.min(PAGE_FIT_PAINT_MAX, byPixels, Math.ceil(zoom * dpr * 4) / 4);
     setPdfRestScale(filmScope, Math.max(2, Math.floor(paint * 4) / 4));
     const scrollX = (inset.left + (availW - w * zoom) / 2) / zoom - column.minX;
-    const scrollY = (inset.top + (availH - h * zoom) / 2) / zoom - lock.minY;
+    const scrollY = pageTop / zoom - lock.minY;
     const prev = liveCameraRef.current;
     const same = committedPanCameraRef.current;
     if (
@@ -9428,6 +9464,27 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     scheduleSlotReports();
   };
   applyPageFitRef.current = applyPageFit;
+
+  // A filmstrip opened or closed over the board (Pages reading) leaves its
+  // size alone, so no resize refits the page: refit when it comes and goes.
+  useEffect(() => {
+    const wrap = boardRef.current?.parentElement;
+    if (!wrap || typeof MutationObserver !== "function") return;
+    let had = wrap.classList.contains("lc-has-pdf-film");
+    let frame = 0;
+    const observer = new MutationObserver(() => {
+      const has = wrap.classList.contains("lc-has-pdf-film");
+      if (has === had) return;
+      had = has;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => applyPageFitRef.current());
+    });
+    observer.observe(wrap, { attributes: true, attributeFilter: ["class"] });
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, []);
 
   /** Pages reading: hold the camera to this page (null frees it), fitted when a fit is on. */
   const lockPageSpan = (
@@ -9570,7 +9627,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     publishPdfViewPages(
       filmScope,
       [pageId],
-      pdfRestPages(pageId, Math.max(pageId, lastPageId(frames)), [pageId]),
+      pdfRestPages(pageId, Math.max(pageId, lastPageId(frames)), [pageId], undefined, readAhead()),
     );
     // The provisional top-aligned jump can be followed by a centred page fit.
     // Even an unchanged final fit must reconcile ink after that intermediate
@@ -9999,6 +10056,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         syncPageVisibility();
       },
       setTool,
+      getActiveTool: () => activeToolRef.current,
       undo: () => {
         undoBoard();
       },
@@ -10063,6 +10121,26 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           minX: frame.x, minY: frame.y, maxX: frame.x + frame.width, maxY: frame.y + frame.height,
         }) ?? [];
         return renderSceneFrameCanvas(api, ops, frame, scale, pageExportLayers(), true);
+      },
+      captureSceneMarks: async (frame, scale) => {
+        const api = apiRef.current;
+        if (!api || frame.width < 1 || frame.height < 1) return null;
+        const ops = rasterInkRef.current?.getOpsInBounds({
+          minX: frame.x, minY: frame.y, maxX: frame.x + frame.width, maxY: frame.y + frame.height,
+        }) ?? [];
+        return renderSceneFrameCanvas(api, ops, frame, scale, pageExportLayers(), true, "none");
+      },
+      captureSceneQuick: async (frame, scale) => {
+        const api = apiRef.current;
+        if (!api || frame.width < 1 || frame.height < 1) return null;
+        const ops = rasterInkRef.current?.getOpsInBounds({
+          minX: frame.x, minY: frame.y, maxX: frame.x + frame.width, maxY: frame.y + frame.height,
+        }) ?? [];
+        return renderSceneFrameCanvas(api, ops, frame, scale, pageExportLayers(), true, "pdf");
+      },
+      livePageCopy: (frame, host) => {
+        const layers = pageExportLayers();
+        return layers ? livePageCopy(layers, frame, host) : null;
       },
       aimPdfPage: (pageId: number, opts?: { hold?: boolean }) => {
         if (!(pageId >= 1)) {

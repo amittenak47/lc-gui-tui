@@ -506,6 +506,8 @@ export async function compositePageLayers(
   exportBounds: SceneBounds,
   drawScale: number,
   layers: PageExportLayers | null | undefined,
+  /** A PDF's page bitmaps only: no HTML layer pictured, which is most of the cost. */
+  { pdfOnly = false }: { pdfOnly?: boolean } = {},
 ): Promise<void> {
   if (!layers?.pageBounds) return;
   const { pageBounds, contentSlot, marksSlot } = layers;
@@ -515,13 +517,137 @@ export async function compositePageLayers(
     const drewPdf = drawPdfCanvases(ctx, contentSlot, pageBounds, exportBounds, drawScale);
     // Markdown / statement: foreignObject. Also retry when PDF canvases were
     // blank or only partially drew — ink-only exports used to skip the DOM path.
-    if (!drewPdf) {
+    if (!drewPdf && !pdfOnly) {
       await drawDomSlot(ctx, contentSlot, pageBounds, exportBounds, drawScale);
     }
   }
+  if (pdfOnly) return;
 
   // Marks / highlights / footnotes always attempt independently of content path.
   if (marksSlot && marksSlot.childElementCount > 0) {
     await drawDomSlot(ctx, marksSlot, pageBounds, exportBounds, drawScale);
   }
+}
+
+/**
+ * A live copy of one band of the page's HTML, for showing a part of the
+ * document the board is not on — the page underneath a turning sheet —
+ * without picturing it. Picturing a text page is most of a second on a
+ * tablet; this is a few milliseconds of copying, and the browser draws it
+ * like the page itself, fonts and all.
+ *
+ * Laid out in scene units with `frame`'s corner at its own (0, 0), clipped
+ * to `frame`. Only the band is copied: everything else keeps its box, empty,
+ * so the band lays out exactly where it does on the board. `host` is where
+ * it is mounted: stand-ins for the ancestors between it and each layer carry
+ * their classes, so the app's rules reach the copy as they reach the page.
+ * Not a PDF page: its canvases copy blank.
+ */
+export function livePageCopy(
+  layers: PageExportLayers,
+  frame: { x: number; y: number; width: number; height: number },
+  host: Element,
+): HTMLElement | null {
+  const bounds = layers.pageBounds;
+  if (!bounds) return null;
+  const root = document.createElement("div");
+  root.setAttribute("aria-hidden", "true");
+  root.inert = true;
+  root.style.cssText =
+    `position:absolute;left:0;top:0;width:${frame.width}px;height:${frame.height}px;` +
+    "overflow:hidden;pointer-events:none;";
+  const top = frame.y - bounds.minY;
+  const bottom = top + frame.height;
+  for (const slot of [layers.contentSlot, layers.marksSlot]) {
+    if (!slot || !host.contains(slot) || slot.querySelector("canvas.lc-pdf-canvas")) continue;
+    const layer = copyBand(slot, host, top, bottom);
+    if (!layer) continue;
+    layer.style.position = "absolute";
+    layer.style.left = `${bounds.minX - frame.x}px`;
+    layer.style.top = `${-top}px`;
+    root.appendChild(layer);
+  }
+  if (!root.firstChild) return null;
+  // Footnote and heading anchors stay unique to the page.
+  root.querySelectorAll("[id]").forEach((el) => el.removeAttribute("id"));
+  return root;
+}
+
+/** `slot` inside stand-ins for its ancestors up to `host`, with only `top`–`bottom` (slot units) filled in. */
+function copyBand(slot: HTMLElement, host: Element, top: number, bottom: number): HTMLElement | null {
+  const slotRect = slot.getBoundingClientRect();
+  const layoutW = slot.offsetWidth;
+  const scale = layoutW > 0 ? slotRect.width / layoutW : 0;
+  if (!(scale > 0)) return null;
+
+  const chain: Element[] = [];
+  for (let el = slot.parentElement; el && el !== host; el = el.parentElement) chain.unshift(el);
+  const outer = document.createElement("div");
+  outer.setAttribute("style", SHELL_NEUTRAL);
+  let inner = outer;
+  for (const source of chain) {
+    const node = document.createElement("div");
+    const classes = source.getAttribute("class");
+    if (classes) node.setAttribute("class", classes);
+    for (const attr of Array.from(source.attributes)) {
+      if (attr.name.startsWith("data-")) node.setAttribute(attr.name, attr.value);
+    }
+    node.setAttribute("style", SHELL_NEUTRAL);
+    inner.appendChild(node);
+    inner = node;
+  }
+  const parent = slot.parentElement;
+  if (parent) {
+    const text = getComputedStyle(parent);
+    inner.style.color = text.color;
+    inner.style.fontFamily = text.fontFamily;
+    inner.style.fontSize = text.fontSize;
+    inner.style.lineHeight = text.lineHeight;
+    inner.style.letterSpacing = text.letterSpacing;
+  }
+
+  const copy = slot.cloneNode(false) as HTMLElement;
+  copy.style.transform = "none";
+  copy.style.position = "static";
+  copy.style.left = "0";
+  copy.style.top = "0";
+  copy.style.margin = "0";
+  copy.style.width = `${slotRect.width / scale}px`;
+  copy.style.pointerEvents = "none";
+  inner.appendChild(copy);
+
+  const span = bottom - top;
+  const fill = (original: Element, into: Element, depth: number) => {
+    for (const child of Array.from(original.childNodes)) {
+      if (!(child instanceof Element)) {
+        into.appendChild(child.cloneNode(true));
+        continue;
+      }
+      const box = child.getBoundingClientRect();
+      const childTop = (box.top - slotRect.top) / scale;
+      const childBottom = (box.bottom - slotRect.top) / scale;
+      if (childBottom < top || childTop > bottom) {
+        // Keeps its box, empty, so what follows stays where it is.
+        const shell = child.cloneNode(false) as Element;
+        if (shell instanceof HTMLElement && box.height > 0) {
+          shell.style.height = `${box.height / scale}px`;
+          shell.style.boxSizing = "border-box";
+          shell.style.overflow = "hidden";
+        }
+        into.appendChild(shell);
+        continue;
+      }
+      // Small, or all inside the band: as it is. A long list or table
+      // across the band: only its rows near the band.
+      if (depth >= 4 || childBottom - childTop <= span || (childTop >= top && childBottom <= bottom)) {
+        into.appendChild(child.cloneNode(true));
+        continue;
+      }
+      const shallow = child.cloneNode(false);
+      into.appendChild(shallow);
+      fill(child, shallow as Element, depth + 1);
+    }
+  };
+  fill(slot, copy, 0);
+  return outer;
 }

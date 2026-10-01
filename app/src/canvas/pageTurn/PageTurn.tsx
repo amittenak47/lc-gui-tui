@@ -20,15 +20,17 @@ import { useEffect, useRef, type RefObject } from "react";
 
 import type { BoardHandle } from "../BoardHandle";
 import type { PageFrame } from "../inkPageIndex";
-import { peekPdfFilmCurrent, subscribePdfFilmCurrent } from "../../modes/pdfFilm";
+import { peekPdfFilmCurrent, publishPdfReadAhead, subscribePdfFilmCurrent } from "../../modes/pdfFilm";
 import { constrainCorner, cornerForCrease, cornerForGrip, turnCommits, type Point } from "./curl";
-import { paintTurn, type TurnLayout } from "./paintTurn";
+import { flatSheet, paintTurn, type TurnLayout } from "./paintTurn";
 import { boardResizeDeferred } from "../../util/splitResize";
 import { afterBootSettled, isBootSettled } from "../../util/bootSettled";
 import { isCameraBusy } from "../../util/cameraBusy";
+import { notePageTurn } from "../../util/pageTurnBusy";
 import { canvasGestureFrame, protectGestureSurface } from "../../util/gestureExclusion";
 import { turnCornerAt, turnEdgeAt, turnCornerSize } from "./corners";
 import { cssColorLuminance } from "../../util/webPagePaper";
+import { scrollHostAtPoint } from "../scrollHost";
 
 /** In Pages reading the side stacks sit this much further up, as a share of their gap from the bottom. */
 const CHROME_LIFT = 0.5;
@@ -62,8 +64,12 @@ const PREFETCH_IDLE_MS = 600;
 const PREFETCH_RECHECK_MS = 1500;
 /** Thrown back toward where it started faster than this, the sheet settles back: px per ms. */
 const FLICK_PX_PER_MS = 0.45;
-/** A release this soon after the last movement is a throw; later, the hand had stopped. */
-const FLICK_FRESH_MS = 60;
+/**
+ * A release this soon after the last movement is a throw; later, the hand
+ * had stopped. A hand that stops to let go pauses well past this; a busy
+ * frame can hold a flick's lift back nearly 100 ms.
+ */
+const FLICK_FRESH_MS = 100;
 /** A throw carries the crease on for this long at the speed it left the hand. */
 const THROW_MS = 120;
 /** After landing, how soon the next page's pictures are taken: the camera's jump first. */
@@ -76,6 +82,27 @@ const FLICK_THROUGH_MS = 800;
 const TO_PICTURE_GRACE_MS = 80;
 /** Let go before the pictures were taken: how long to wait for them before simply going. */
 const PICTURE_WAIT_MS = 1200;
+/**
+ * A flick commits on its pace alone: let go at least this fast (px per ms)
+ * along the turn, having carried the sheet at least `FLICK_COMMIT_MIN_PX`.
+ * A short quick flick used to fall short of the distance a slow drag needs
+ * and settle back, so a hand flicking through had to try twice.
+ */
+const FLICK_COMMIT_PX_PER_MS = 0.5;
+const FLICK_COMMIT_MIN_PX = 24;
+/** The hand's pace at release is measured over about this long. */
+const RELEASE_SPEED_MS = 60;
+/**
+ * A swipe from the body of the page, not its edge, turns it when it is
+ * plainly a flick: this far sideways (px)…
+ */
+const BODY_FLICK_PX = 28;
+/** …at least this fast on average (px per ms)… */
+const BODY_FLICK_PX_PER_MS = 0.35;
+/** …within this long of touching down… */
+const BODY_FLICK_WINDOW_MS = 280;
+/** …and mostly sideways: at least this many times its rise or fall. */
+const BODY_FLICK_SLOPE = 1.8;
 /** A key pressed during a turn finishes it this fast… */
 const HURRY_MS = 110;
 /** …and the turns it queued play at this pace. */
@@ -243,16 +270,18 @@ function takeShot(
   cutY: number,
   signature: string,
   onlyIfTaken = false,
+  /** A PDF's quick picture, `captureSceneQuick`: kept apart from the full one. */
+  quick = false,
 ): Promise<HTMLCanvasElement | null> {
   const key = [scene.x, scene.y, scene.width, scene.height, scale, b.getInkRevision(), Math.min(cutY, 1e9)]
     .map((n) => Math.round(n * 100) / 100)
-    .join(":") + `@${signature}#${paletteSignature()}`;
+    .join(":") + `@${signature}#${paletteSignature()}${quick ? "~quick" : ""}`;
   let taken = shots.get(key);
   if (!taken && onlyIfTaken) return Promise.resolve(null);
   if (!taken) {
     // Below a text page's cut is the next page's text, which the view
     // hides; the picture has to hide it too.
-    taken = b.captureSceneFrame(scene, scale).then((canvas) => {
+    taken = (quick ? b.captureSceneQuick(scene, scale) : b.captureSceneFrame(scene, scale)).then((canvas) => {
       const cut = cutY - scene.y;
       if (!canvas || !(cut < scene.height)) return canvas;
       const ctx = canvas.getContext("2d");
@@ -358,6 +387,8 @@ interface Turn {
   canvas: HTMLCanvasElement;
   /** Null on one side of a single sheet: that page is the live one under the canvas. */
   images: { from: HTMLCanvasElement | null; to: HTMLCanvasElement | null } | null;
+  /** The page being turned to as live HTML under the canvas, when it had no picture — see `liveUnder`. */
+  under: HTMLElement | null;
   /** Settles true once both pictures are in, false if they cannot be had. */
   ready: Promise<boolean>;
   corner: Point;
@@ -675,8 +706,14 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
      * stroke added since, or a zoom, takes a fresh one. At most a few kept:
      * each is a screenful of pixels.
      */
-    const shot = (b: BoardHandle, scene: Scene, scale: number, cutY = Infinity, pageId = 0, onlyIfTaken = false) =>
-      takeShot(shotsRef.current, b, scene, scale, cutY, pagedRef.current ? pdfPaintSignature(hostSelector, pageId) : "", onlyIfTaken);
+    const shot = (b: BoardHandle, scene: Scene, scale: number, cutY = Infinity, pageId = 0, onlyIfTaken = false) => {
+      const signature = pagedRef.current ? pdfPaintSignature(hostSelector, pageId) : "";
+      const taken = takeShot(shotsRef.current, b, scene, scale, cutY, signature, onlyIfTaken);
+      if (!onlyIfTaken || !pagedRef.current) return taken;
+      // A PDF page is a bitmap already: copying it is a few ms, so a page
+      // flicked to always has a picture, however blurry its paint still is.
+      return taken.then((full) => full ?? takeShot(shotsRef.current, b, scene, scale, cutY, signature, false, true));
+    };
 
     /*
      * Flicking through: a turn taken soon after the last one landed.
@@ -698,9 +735,71 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (!pane) return;
       const surface = pane.querySelector<HTMLElement>(".lc-board") ?? pane;
       const origin = surface.getBoundingClientRect();
-      turn.canvas.style.left = `${turn.rect.left - origin.left + surface.scrollLeft - surface.clientLeft}px`;
-      turn.canvas.style.top = `${turn.rect.top - origin.top + surface.scrollTop - surface.clientTop}px`;
-      surface.append(turn.canvas);
+      const left = `${turn.rect.left - origin.left + surface.scrollLeft - surface.clientLeft}px`;
+      const top = `${turn.rect.top - origin.top + surface.scrollTop - surface.clientTop}px`;
+      for (const layer of turn.under ? [turn.under, turn.canvas] : [turn.canvas]) {
+        layer.style.left = left;
+        layer.style.top = top;
+        surface.append(layer);
+      }
+    };
+
+    /*
+     * The page being turned to, as live HTML under the canvas, when it has no
+     * picture yet. A text page's picture is most of a second of a tablet's
+     * main thread, and a hand flicking through outruns it: without one the
+     * page underneath turned over blank. A copy of the page's own HTML is a
+     * few milliseconds and shows its text at once; the canvas leaves clear the
+     * part of the turn where that page shows. Its ink follows a moment later.
+     */
+    const liveUnder = (b: BoardHandle, turn: Turn, scene: Scene, scale: number, page: PageFrame): HTMLElement | null => {
+      const pane = document.querySelector<HTMLElement>(hostSelector);
+      const surface = pane?.querySelector<HTMLElement>(".lc-board") ?? pane;
+      if (!surface || !(scene.width > 0)) return null;
+      const copy = b.livePageCopy(scene, surface);
+      if (!copy) return null;
+      const k = turn.rect.width / scene.width;
+      const paper = turnPaperColor(paperColor(), false);
+      const under = document.createElement("div");
+      under.className = "lc-page-turn-under";
+      under.setAttribute("aria-hidden", "true");
+      Object.assign(under.style, {
+        width: `${turn.rect.width}px`,
+        height: `${turn.rect.height}px`,
+        background: paper,
+        clipPath: "inset(100%)",
+      });
+      copy.style.transformOrigin = "0 0";
+      copy.style.transform = `scale(${k})`;
+      under.appendChild(copy);
+      // A text page cut short is blank paper below its cut.
+      const cut = (page.maxY - scene.y) * k;
+      const blank = cut < turn.rect.height ? document.createElement("div") : null;
+      if (blank) {
+        Object.assign(blank.style, { position: "absolute", left: "0", right: "0", top: `${Math.max(0, cut)}px`, bottom: "0", background: paper });
+        under.appendChild(blank);
+      }
+      void b.captureSceneMarks(scene, scale).then((marks) => {
+        if (!marks || turn.done) return;
+        Object.assign(marks.style, { position: "absolute", left: "0", top: "0", width: "100%", height: "100%" });
+        under.insertBefore(marks, blank);
+      }, () => {});
+      return under;
+    };
+
+    /** Show the live page underneath only where that page shows: uncovered going on, laid down coming back. */
+    const clipUnder = (turn: Turn) => {
+      if (!turn.under) return;
+      const { width: W, height: H } = turn.rect;
+      const flat = flatSheet({ layout: turn.layout, width: W, height: H, corner: turn.corner, bottom: turn.bottom, restY: turn.restY });
+      const sheet = flat.length >= 3
+        ? `M${flat.map((p) => `${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join("L")}Z`
+        : "";
+      if (turn.direction === "next") {
+        turn.under.style.clipPath = sheet ? `path(evenodd, "M0 0H${W}V${H}H0Z${sheet}")` : "none";
+      } else {
+        turn.under.style.clipPath = sheet ? `path("${sheet}")` : "inset(100%)";
+      }
     };
 
     /**
@@ -885,6 +984,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         byFold: false,
         canvas,
         images: null,
+        under: null,
         corner: { x: direction === "next" ? w : -w, y: restY },
         anim: null,
         ready: Promise.resolve(false),
@@ -978,6 +1078,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         byFold: layout === "sheet" && direction === "prev",
         canvas,
         images: null,
+        under: null,
         corner: { x: direction === "next" ? w : -w, y: restY },
         anim: null,
         ready: Promise.resolve(false),
@@ -992,7 +1093,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const hereShot = shot(b, scene, scale, from.maxY, from.pageId, fast);
       const thereShot = shot(b, toScene, scale, to.maxY, to.pageId, fast);
       // Turning back is turning forward from the previous page, reversed.
-      const place = (here: HTMLCanvasElement | null, there: HTMLCanvasElement) => {
+      const place = (here: HTMLCanvasElement | null, there: HTMLCanvasElement | null) => {
         turn.images = direction === "next" ? { from: here, to: there } : { from: there, to: here };
       };
       /*
@@ -1023,10 +1124,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         if (turnRef.current !== turn || turn.done || (!here && layout === "book")) return false;
         let there = await Promise.race([thereShot, grace()]);
         if (turnRef.current !== turn || turn.done) return false;
-        const blank = there
+        // No picture of a text page in time: the page itself, live.
+        if (!there && !pagedRef.current && layout === "sheet") turn.under = liveUnder(b, turn, toScene, scale, to);
+        const blank = there || turn.under
           ? null
           : blankSheet(here ?? { width: Math.max(1, Math.round(scene.width * scale)), height: Math.max(1, Math.round(scene.height * scale)) });
-        place(here, there ?? blank!);
+        place(here, there ?? blank);
         // Whichever picture arrives late takes its place, even mid-turn.
         const arrive = (which: "here" | "there") => (picture: HTMLCanvasElement | null) => {
           if (!picture || turnRef.current !== turn || turn.done) return;
@@ -1037,11 +1140,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
             if (picture === there) return;
             there = picture;
           }
-          place(here, there ?? blank!);
+          place(here, there ?? blank);
           draw(turn);
         };
         void hereShot.then(arrive("here"));
-        if (!there) void thereShot.then(arrive("there"));
+        // The live page is the page itself: nothing to swap in.
+        if (!there && !turn.under) void thereShot.then(arrive("there"));
         mountTurnCanvas(turn);
         draw(turn);
         return true;
@@ -1061,13 +1165,14 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         height: turn.rect.height,
         from: turn.images.from,
         to: turn.images.to,
-        sourceWidth: (turn.images.from ?? turn.images.to)!.width,
-        sourceHeight: (turn.images.from ?? turn.images.to)!.height,
+        sourceWidth: (turn.images.from ?? turn.images.to)?.width ?? 1,
+        sourceHeight: (turn.images.from ?? turn.images.to)?.height ?? 1,
         corner: turn.corner,
         bottom: turn.bottom,
         restY: turn.restY,
         paper: turnPaperColor(paperColor(), pagedRef.current),
       });
+      clipUnder(turn);
     };
 
     /** Paint on the next frame — for a hand, whose moves come between frames. */
@@ -1085,13 +1190,18 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (turn.frame) cancelAnimationFrame(turn.frame);
       // Two frames: the camera's jump has to reach the screen before the
       // picture of where it was going stops covering it.
-      requestAnimationFrame(() => requestAnimationFrame(() => turn.canvas.remove()));
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        turn.canvas.remove();
+        turn.under?.remove();
+      }));
       if (turnRef.current === turn) turnRef.current = null;
     };
 
     const land = (turn: Turn) => {
       const b = board();
       if (!b) return;
+      notePageTurn();
+      if (pagedRef.current) publishPdfReadAhead(filmScope, turn.direction === "next" ? 1 : -1);
       lockedRef.current = turn.to;
       restZoomRef.current = null;
       b.setPageLock(turn.to);
@@ -1247,9 +1357,11 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     // Side strips and corner triangles own turning. The body keeps scrolling
     // and selection; a stylus always belongs to the ink layer.
     const host = () => document.querySelector<HTMLElement>(hostSelector);
+    const holeEl = () => host()?.querySelector<HTMLElement>(".lc-page-mask-hole") ?? null;
     const pageRect = (): DOMRect | null => {
-      const hole = host()?.querySelector<HTMLElement>(".lc-page-mask-hole");
+      const hole = holeEl();
       if (!hole || (hole.parentElement as HTMLElement | null)?.hidden) return null;
+      if (hole.dataset.turnEdges == null) hole.dataset.turnEdges = "";
       const rect = hole.getBoundingClientRect();
       hole.style.setProperty("--lc-turn-corner", `${turnCornerSize(rect)}px`);
       return rect.width > 8 && rect.height > 8 ? rect : null;
@@ -1259,24 +1371,33 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (!r || x < r.left || x > r.right || y < r.top || y > r.bottom) return null;
       return turnEdgeAt(r, x, y);
     };
+    /*
+     * Marks go on the page's hole, never the tab's host: a toggle there
+     * restyled the whole document under it, 300-500 ms on a long PDF. A
+     * mouse's cursor is set on the host; a finger has none to change.
+     */
+    let mouse = false;
     const setHover = (edge: "left" | "right" | null) => {
+      const hole = holeEl();
+      if (hole) {
+        if (edge) hole.dataset.turnHover = edge;
+        else delete hole.dataset.turnHover;
+      }
       const el = host();
-      if (!el) return;
-      if (edge) el.dataset.turnHover = edge;
-      else delete el.dataset.turnHover;
+      if (el && mouse && !turnRef.current) el.style.cursor = edge ? "grab" : "";
     };
     const setTurning = (on: boolean) => {
+      if (on) window.getSelection()?.removeAllRanges();
       const el = host();
-      if (!el) return;
-      if (on) {
-        el.dataset.turnActive = "";
-        window.getSelection()?.removeAllRanges();
-      } else {
-        delete el.dataset.turnActive;
-      }
+      if (el && mouse) el.style.cursor = on ? "grabbing" : "";
     };
-    const edgesHost = host();
-    if (edgesHost) edgesHost.dataset.turnEdges = "";
+    // While a page turns, nothing on it selects.
+    const noSelect = (event: Event) => {
+      if (turnRef.current || active) event.preventDefault();
+    };
+    document.addEventListener("selectstart", noSelect, true);
+    const edgesHole = holeEl();
+    if (edgesHole) edgesHole.dataset.turnEdges = "";
 
     let active: {
       id: number;
@@ -1288,6 +1409,10 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       lastT: number;
       /** Where the hand was last seen, sampled for speed or not. */
       atX: number;
+      /** Where the hand has been lately, for its pace at release — see `releaseSpeed`. */
+      trail: { x: number; t: number }[];
+      /** Where along x the hand first took hold, for how far it carried the sheet. */
+      fromX: number;
       caughtCorner?: Point;
       /**
        * Caught while going over. Pushed on its way it is put down and the
@@ -1337,14 +1462,87 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const byCorner = turnCornerAt(r, event.clientX, event.clientY) !== null;
       const turn = planTurn(direction, bottom, after, byCorner ? undefined : event.clientY);
       if (!turn) return false; // first or last page: nothing to turn to
+      notePageTurn();
       turnRef.current = turn;
       setTurning(true);
       turn.corner = cornerAt(turn, event.clientX, event.clientY, event.clientY);
       active = {
         id: event.pointerId, x: event.clientX, y: event.clientY, turn,
         vx: 0, lastX: event.clientX, lastT: event.timeStamp, atX: event.clientX,
+        trail: [{ x: event.clientX, t: event.timeStamp }], fromX: event.clientX,
       };
       draw(turn);
+      return true;
+    };
+
+    /**
+     * The hand's pace when it let go, px per ms: how far it went over about
+     * the last `RELEASE_SPEED_MS`. A running average lags behind a quick
+     * flick's first moves, and a short flick is nothing but first moves.
+     */
+    const releaseSpeed = (trail: readonly { x: number; t: number }[]): number => {
+      const last = trail[trail.length - 1];
+      if (!last) return 0;
+      let first = last;
+      for (let i = trail.length - 2; i >= 0; i -= 1) {
+        first = trail[i]!;
+        if (last.t - first.t >= RELEASE_SPEED_MS) break;
+      }
+      const dt = last.t - first.t;
+      return dt > 0 ? (last.x - first.x) / dt : 0;
+    };
+
+    /** A stylus turns pages while no drawing tool is up; with one, it writes. */
+    const penTurns = () => {
+      const tool = board()?.getActiveTool?.();
+      return tool === "hand" || tool === "selection";
+    };
+
+    /*
+     * A flick that starts on the body of the page, not at its edge.
+     *
+     * The edge strips are where a page is taken hold of; a hand flicking
+     * through does not aim for them, and the left one is where Android's own
+     * Back swipe lives. A swipe from anywhere on the page that is quick and
+     * mostly sideways turns it too: forward going left, back going right.
+     * Until it is plainly that, the touch is the page's: scrolling, selecting,
+     * a code block's own sideways scroll.
+     */
+    let pending: { id: number; x: number; y: number; t: number; target: EventTarget | null } | null = null;
+    /** True while `startFlick` cancels the page's own handling of a touch it took. */
+    let cancelling = false;
+
+    /** Turn the page for a body flick that has just shown itself, from where it started. */
+    const startFlick = (event: PointerEvent, start: NonNullable<typeof pending>): boolean => {
+      const r = pageRect();
+      if (!r) return false;
+      // A code block or a wide equation scrolls sideways itself.
+      const scroller = scrollHostAtPoint(start.x, start.y);
+      if (scroller && scroller.scrollWidth > scroller.clientWidth + 1) return false;
+      const direction: Direction = event.clientX < start.x ? "next" : "prev";
+      const heldY = Math.min(r.bottom - 1, Math.max(r.top + 1, start.y));
+      const turn = planTurn(direction, heldY > r.top + r.height / 2, undefined, heldY);
+      if (!turn) return false;
+      turnRef.current = turn;
+      setTurning(true);
+      const w = turn.layout === "book" ? turn.rect.width / 2 : turn.rect.width;
+      const rest = { x: direction === "next" ? w : -w, y: turn.restY };
+      turn.corner = rest;
+      active = {
+        id: event.pointerId, x: start.x, y: start.y, turn, caughtCorner: rest,
+        vx: 0, lastX: start.x, lastT: start.t, atX: start.x,
+        trail: [{ x: start.x, t: start.t }], fromX: start.x,
+      };
+      // Whatever the page started for this touch (a selection, a press) ends.
+      cancelling = true;
+      try {
+        start.target?.dispatchEvent(new PointerEvent("pointercancel", {
+          pointerId: event.pointerId, pointerType: event.pointerType, isPrimary: true, bubbles: true,
+        }));
+      } finally {
+        cancelling = false;
+      }
+      follow(event);
       return true;
     };
 
@@ -1360,7 +1558,8 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       }
       if (active) return;
       if (event.button !== 0 || !event.isPrimary) return;
-      if (event.pointerType === "pen") return; // the stylus writes; fingers and mice turn
+      mouse = event.pointerType === "mouse";
+      if (event.pointerType === "pen" && !penTurns()) return; // with a pen up, the stylus writes
       if (!inHost(event.target)) return;
       // Touch and mouse can grip the side strips as well as the corner peels.
       const side = edgeAt(event.clientX, event.clientY);
@@ -1396,11 +1595,18 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
           id: event.pointerId, x: event.clientX, y: event.clientY,
           turn: playing, caughtCorner: { ...playing.corner }, goingOver,
           vx: 0, lastX: event.clientX, lastT: event.timeStamp, atX: event.clientX,
+          trail: [{ x: event.clientX, t: event.timeStamp }], fromX: event.clientX,
         };
         setTurning(true);
         return;
       }
-      if (!side || !grip(event, side)) return;
+      if (!side) {
+        if (event.pointerType !== "mouse") {
+          pending = { id: event.pointerId, x: event.clientX, y: event.clientY, t: event.timeStamp, target: event.target };
+        }
+        return;
+      }
+      if (!grip(event, side)) return;
       // The corner is the turn's: no text selection, no hold, no pan from it.
       event.stopImmediatePropagation();
       event.preventDefault();
@@ -1421,6 +1627,8 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         active.vx = active.vx * 0.5 + ((event.clientX - active.lastX) / dt) * 0.5;
         active.lastX = event.clientX;
         active.lastT = event.timeStamp;
+        active.trail.push({ x: event.clientX, t: event.timeStamp });
+        if (active.trail.length > 12) active.trail.shift();
       }
       const turn = active.turn;
       const w = turn.layout === "book" ? turn.rect.width / 2 : turn.rect.width;
@@ -1455,11 +1663,29 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       active = {
         id, x: event.clientX, y: event.clientY, turn, caughtCorner: rest,
         vx: 0, lastX: event.clientX, lastT: event.timeStamp, atX: event.clientX,
+        trail: [{ x: event.clientX, t: event.timeStamp }], fromX: event.clientX,
       };
       draw(turn);
     };
 
     const onMove = (event: PointerEvent) => {
+      if (pending && !active && event.pointerId === pending.id) {
+        const start = pending;
+        const dx = event.clientX - start.x;
+        const dy = event.clientY - start.y;
+        const dt = event.timeStamp - start.t;
+        if (dt > BODY_FLICK_WINDOW_MS || Math.abs(dy) > BODY_FLICK_PX) {
+          pending = null;
+        } else if (Math.abs(dx) >= BODY_FLICK_PX && Math.abs(dx) >= BODY_FLICK_SLOPE * Math.abs(dy) &&
+          Math.abs(dx) / Math.max(1, dt) >= BODY_FLICK_PX_PER_MS) {
+          pending = null;
+          if (!turnRef.current && startFlick(event, start)) {
+            event.stopImmediatePropagation();
+            event.preventDefault();
+            return;
+          }
+        }
+      }
       if (active && event.pointerId === active.id) {
         event.stopImmediatePropagation();
         event.preventDefault();
@@ -1476,10 +1702,15 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         follow(event);
         return;
       }
-      if (!active && event.pointerType === "mouse" && event.buttons === 0) setHover(edgeAt(event.clientX, event.clientY));
+      if (!active && event.pointerType === "mouse" && event.buttons === 0) {
+        mouse = true;
+        setHover(edgeAt(event.clientX, event.clientY));
+      }
     };
 
     const onUp = (event: PointerEvent) => {
+      if (cancelling) return;
+      if (pending?.id === event.pointerId) pending = null;
       if (event.pointerType === "touch") setHover(null);
       if (!active || event.pointerId !== active.id) return;
       event.stopImmediatePropagation();
@@ -1487,18 +1718,23 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       // Where the hand let go is where the sheet is. A busy frame can merge a
       // flick's moves away, leaving only the lift to say how far it went.
       if (event.type === "pointerup") follow(event, true);
-      const { turn, vx, lastT } = active;
+      const { turn, lastT, trail, fromX } = active;
       active = null;
       // Short of a proper turn the sheet unravels back. A throw counts for a
-      // little of where it was going; thrown back, it always goes back.
+      // little of where it was going; thrown back, it always goes back. A
+      // flick goes over on its pace, however short it was.
       const fresh = event.timeStamp - lastT < FLICK_FRESH_MS;
-      const along = fresh ? (turn.direction === "next" ? -vx : vx) : 0;
+      const vx = fresh ? releaseSpeed(trail) : 0;
+      const sign = turn.direction === "next" ? -1 : 1;
+      const along = sign * vx;
+      const carried = sign * (event.clientX - fromX);
       const w = turn.layout === "book" ? turn.rect.width / 2 : turn.rect.width;
+      const flicked = along >= FLICK_COMMIT_PX_PER_MS && carried >= FLICK_COMMIT_MIN_PX;
       const commit =
         event.type !== "pointercancel" &&
         along > -FLICK_PX_PER_MS &&
-        turnCommits(turn.direction, turn.corner.x, w, along * THROW_MS, turn.byFold);
-      settle(turn, commit, { speed: fresh ? Math.abs(vx) : 0 });
+        (flicked || turnCommits(turn.direction, turn.corner.x, w, along * THROW_MS, turn.byFold));
+      settle(turn, commit, { speed: Math.abs(vx) });
     };
 
     const swallowClick = (event: MouseEvent) => {
@@ -1553,12 +1789,14 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       disposed = true;
       window.clearTimeout(prefetchTimer);
       window.clearInterval(recheck);
-      const el = host();
-      if (el) {
-        delete el.dataset.turnEdges;
-        delete el.dataset.turnHover;
-        delete el.dataset.turnActive;
+      document.removeEventListener("selectstart", noSelect, true);
+      const hole = holeEl();
+      if (hole) {
+        delete hole.dataset.turnEdges;
+        delete hole.dataset.turnHover;
       }
+      const el = host();
+      if (el && mouse) el.style.cursor = "";
       unsubscribeFilm();
       const turn = turnRef.current;
       if (turn) teardown(turn);

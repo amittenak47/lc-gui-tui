@@ -6,11 +6,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { BoardHandle } from "../BoardHandle";
 import { markBootSettled } from "../../util/bootSettled";
 import { glide, PageTurn, rollMs, turnPaperColor } from "./PageTurn";
-import { paintTurn } from "./paintTurn";
+import { flatSheet, paintTurn } from "./paintTurn";
 
 // Gesture tests inspect the frame submitted to the renderer. Actual canvas
 // shading is checked separately in the browser, not by jsdom's missing canvas.
-vi.mock("./paintTurn", () => ({ paintTurn: vi.fn() }));
+vi.mock("./paintTurn", () => ({
+  paintTurn: vi.fn(),
+  flatSheet: vi.fn(() => [{ x: 0, y: 0 }, { x: 300, y: 0 }, { x: 300, y: 600 }, { x: 0, y: 600 }]),
+}));
 
 const gesture = vi.hoisted(() => ({ release: vi.fn(), protect: vi.fn() }));
 vi.mock("../../util/gestureExclusion", async (importOriginal) => ({
@@ -40,7 +43,11 @@ const board = {
   // Scene y maps straight to client y minus the view's top.
   sceneToClient: vi.fn((x: number, y: number) => ({ x, y: y - view.y })),
   captureSceneFrame: vi.fn(async () => document.createElement("canvas")),
+  captureSceneMarks: vi.fn(async (): Promise<HTMLCanvasElement | null> => null),
+  captureSceneQuick: vi.fn(async () => document.createElement("canvas")),
+  livePageCopy: vi.fn((): HTMLElement | null => null),
   getInkRevision: vi.fn(() => 1),
+  getActiveTool: vi.fn((): string => "hand"),
 };
 
 /** jsdom has no PointerEvent. */
@@ -71,6 +78,7 @@ beforeEach(() => {
   view = { x: 0, y: 620, width: 400, height: 600, zoom: 1 };
   pageBox = null;
   for (const fn of Object.values(board)) fn.mockClear();
+  board.getActiveTool.mockReturnValue("hand");
   // A test that fails part-way must not leave its board behind for the next.
   board.readingPageFrames.mockImplementation(() => FRAMES);
   board.jumpToPageFrame.mockImplementation(() => true);
@@ -123,8 +131,9 @@ function mount(turnEnabled = true, fit: number | null = null, paged = true) {
   }
 }
 
-function pointer(type: string, x: number, y: number, pointerType = "touch") {
+function pointer(type: string, x: number, y: number, pointerType = "touch", timeStamp?: number) {
   const event = new PointerEvent(type, { clientX: x, clientY: y, pointerId: 7, pointerType, isPrimary: true, button: 0, bubbles: true, cancelable: true });
+  if (timeStamp != null) Object.defineProperty(event, "timeStamp", { value: timeStamp });
   act(() => {
     host.dispatchEvent(event);
   });
@@ -229,7 +238,8 @@ it("leaves an up-and-down drag to the board", () => {
   expect(board.captureSceneFrame).not.toHaveBeenCalled();
 });
 
-it("never turns under the stylus, and not with the pen out", () => {
+it("never turns under the stylus with a pen up, nor with turning off", () => {
+  board.getActiveTool.mockReturnValue("freedraw");
   mount();
   pointer("pointerdown", 380, 580, "pen");
   pointer("pointermove", 100, 585, "pen");
@@ -552,16 +562,96 @@ it("turns at once with the live page showing through while its picture is still 
   await settle();
 });
 
-it("leaves the page body available to scroll", async () => {
+it("turns a text page over its live copy while the next page has no picture", async () => {
+  const copy = document.createElement("div");
+  const marks = document.createElement("canvas");
+  board.livePageCopy.mockReturnValueOnce(copy);
+  board.captureSceneMarks.mockResolvedValueOnce(marks);
+  board.captureSceneFrame
+    .mockImplementationOnce(async () => document.createElement("canvas"))
+    .mockImplementationOnce(() => new Promise(() => {}));
+  mount(true, null, false);
+  pointer("pointerdown", 380, 300);
+  pointer("pointermove", 300, 300);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
+  const under = host.querySelector<HTMLElement>(".lc-page-turn-under");
+  expect(under?.contains(copy)).toBe(true);
+  expect(under?.contains(marks)).toBe(true);
+  // Nothing painted where the next page shows: the live copy is that page.
+  expect(vi.mocked(paintTurn).mock.calls.at(-1)![1].to).toBeNull();
+  expect(vi.mocked(flatSheet)).toHaveBeenCalled();
+  pointer("pointerup", 300, 300);
+  for (let i = 0; i < 4; i += 1) await settle();
+  expect(document.querySelector(".lc-page-turn")).toBeNull();
+  expect(host.querySelector(".lc-page-turn-under")).toBeNull();
+});
+
+it("leaves the page body to a slow drag and to a swipe up or down", async () => {
   mount();
-  for (const x of [100, 200, 300]) {
-    pointer("pointerdown", x, 300);
-    pointer("pointermove", x - 160, 305);
-    pointer("pointerup", x - 160, 305);
-  }
+  // Sideways, but slowly: a selection or a pan.
+  pointer("pointerdown", 300, 300, "touch", 1000);
+  pointer("pointermove", 140, 305, "touch", 1600);
+  pointer("pointerup", 140, 305, "touch", 1650);
+  // Quick, but mostly up the page.
+  pointer("pointerdown", 200, 400, "touch", 3000);
+  pointer("pointermove", 170, 300, "touch", 3060);
+  pointer("pointerup", 170, 300, "touch", 3080);
   await settle();
   expect(board.captureSceneFrame).not.toHaveBeenCalled();
   expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+});
+
+it("turns the page for a quick sideways flick from anywhere on it", async () => {
+  mount();
+  pointer("pointerdown", 220, 300, "touch", 1000);
+  pointer("pointermove", 180, 302, "touch", 1030);
+  pointer("pointermove", 120, 304, "touch", 1060);
+  pointer("pointerup", 120, 304, "touch", 1070);
+  for (let i = 0; i < 4; i += 1) await settle();
+  expect(board.jumpToPageFrame).toHaveBeenCalledWith(expect.objectContaining({ pageId: 3 }));
+});
+
+it("turns back for a quick flick to the right from the middle of the page", async () => {
+  mount();
+  pointer("pointerdown", 160, 300, "touch", 1000);
+  pointer("pointermove", 200, 302, "touch", 1030);
+  pointer("pointermove", 260, 304, "touch", 1060);
+  pointer("pointerup", 260, 304, "touch", 1070);
+  for (let i = 0; i < 4; i += 1) await settle();
+  expect(board.jumpToPageFrame).toHaveBeenCalledWith(expect.objectContaining({ pageId: 1 }));
+});
+
+it("goes over for a short quick flick at the edge, and back for the same distance slowly", async () => {
+  mount();
+  pointer("pointerdown", 390, 300, "touch", 1000);
+  pointer("pointermove", 370, 300, "touch", 1020);
+  pointer("pointermove", 350, 300, "touch", 1040);
+  pointer("pointerup", 350, 300, "touch", 1045);
+  for (let i = 0; i < 4; i += 1) await settle();
+  expect(board.jumpToPageFrame).toHaveBeenCalledTimes(1);
+  board.jumpToPageFrame.mockClear();
+  pointer("pointerdown", 390, 300, "touch", 5000);
+  pointer("pointermove", 370, 300, "touch", 5200);
+  pointer("pointermove", 350, 300, "touch", 5400);
+  pointer("pointerup", 350, 300, "touch", 5600);
+  for (let i = 0; i < 4; i += 1) await settle();
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+});
+
+it("turns with a stylus while no pen is up, and leaves it to write with one", async () => {
+  mount();
+  board.getActiveTool.mockReturnValue("freedraw");
+  pointer("pointerdown", 390, 300, "pen");
+  pointer("pointermove", 100, 300, "pen");
+  pointer("pointerup", 100, 300, "pen");
+  for (let i = 0; i < 4; i += 1) await settle();
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  board.getActiveTool.mockReturnValue("hand");
+  pointer("pointerdown", 390, 300, "pen");
+  pointer("pointermove", 100, 300, "pen");
+  pointer("pointerup", 100, 300, "pen");
+  for (let i = 0; i < 4; i += 1) await settle();
+  expect(board.jumpToPageFrame).toHaveBeenCalledTimes(1);
 });
 
 function manualFrames() {
@@ -631,6 +721,7 @@ it("reverses the settling direction with the opposite arrow and can finish again
 
 it("keeps toolbar clicks and pen input available while a sheet settles", async () => {
   const frame = manualFrames();
+  board.getActiveTool.mockReturnValue("freedraw");
   mount();
   pointer("pointerdown", 380, 580);
   pointer("pointermove", 150, 580);

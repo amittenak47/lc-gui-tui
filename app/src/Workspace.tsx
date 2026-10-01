@@ -10806,6 +10806,7 @@ export const Workspace = memo(function Workspace({
               pdfNav &&
               pdfNav.count >= 2 &&
               "lc-has-pdf-film",
+            readingMode === "pages" && "lc-pdf-film-over",
             canBrowseLive && webLive && "lc-canvas-live-web",
             liveParked && "lc-canvas-live-parked",
             // The merge split covers the whole wrap; see the rule in styles.css.

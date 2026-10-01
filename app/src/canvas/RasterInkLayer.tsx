@@ -36,6 +36,7 @@ import {
   docForScrollHost,
   hostKeyInDoc,
   hostSceneBounds,
+  mutationIsPageTurnLayer,
   scrollHostAtPoint,
   scrollHostsIn,
 } from "./scrollHost";
@@ -1500,7 +1501,11 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
       board.addEventListener("scroll", onScroll, { capture: true, passive: true });
       const mo =
         typeof MutationObserver === "function"
-          ? new MutationObserver(() => rescanHosts())
+          ? new MutationObserver((records) => {
+              // A page turn putting its sheet up or down adds no scroller.
+              if (mutationIsPageTurnLayer(records)) return;
+              rescanHosts();
+            })
           : null;
       mo?.observe(board, { childList: true, subtree: true });
       const ro =

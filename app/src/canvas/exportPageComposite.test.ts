@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { compositePageLayers, resolveExportPaperColor } from "./exportPageComposite";
+import { compositePageLayers, livePageCopy, resolveExportPaperColor } from "./exportPageComposite";
 
 describe("resolveExportPaperColor", () => {
   it("replaces transparent with paper", () => {
@@ -193,5 +193,50 @@ describe("compositePageLayers", () => {
 
   it("keeps opaque theme fills and rejects empty paper fallback", () => {
     expect(resolveExportPaperColor("#abc", "")).toBe("#abc");
+  });
+});
+
+describe("livePageCopy", () => {
+  const rect = (top: number, height: number, width = 400) =>
+    () => ({ top, bottom: top + height, left: 0, right: width, width, height, x: 0, y: top, toJSON() {} }) as DOMRect;
+
+  it("copies only the band, keeping every other block's box, under stand-ins for its ancestors", () => {
+    const host = document.createElement("div");
+    const wrap = document.createElement("div");
+    wrap.className = "lc-md-ink-doc";
+    const slot = document.createElement("div");
+    slot.className = "lc-page-content-slot";
+    Object.defineProperty(slot, "offsetWidth", { value: 200 });
+    // Shown at twice its layout size.
+    slot.getBoundingClientRect = rect(0, 2000);
+    const blocks = [0, 1, 2].map((i) => {
+      const p = document.createElement("p");
+      p.id = `b${i}`;
+      p.innerHTML = `<span>block ${i}</span>`;
+      p.getBoundingClientRect = rect(i * 400, 300);
+      slot.append(p);
+      return p;
+    });
+    wrap.append(slot);
+    host.append(wrap);
+    document.body.append(host);
+
+    const copy = livePageCopy(
+      { contentSlot: slot, marksSlot: null, pageBounds: { minX: 10, minY: 100, maxX: 210, maxY: 1100 }, paperColor: "#fff" },
+      { x: 10, y: 300, width: 200, height: 150 },
+      host,
+    )!;
+    host.remove();
+
+    expect(copy).not.toBeNull();
+    const layer = copy.firstElementChild as HTMLElement;
+    // Slot units: the band is 200–350, so the copy's layer starts 200 above it.
+    expect(layer.style.top).toBe("-200px");
+    expect(layer.querySelector(".lc-md-ink-doc .lc-page-content-slot")).not.toBeNull();
+    const ps = Array.from(copy.querySelectorAll("p"));
+    expect(ps.map((p) => p.textContent)).toEqual(["", "block 1", ""]);
+    expect(ps[0]!.style.height).toBe("150px");
+    expect(copy.querySelector("[id]")).toBeNull();
+    expect(blocks[1]!.id).toBe("b1");
   });
 });

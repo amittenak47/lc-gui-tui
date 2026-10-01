@@ -179,6 +179,8 @@ export interface BoardHandle {
    */
   showPadTitle(label: string): void;
   setTool(tool: ToolName): void;
+  /** The tool in hand now. */
+  getActiveTool(): ToolName;
   undo(): void;
   scrollToContent(): void;
   zoomIn(): void;
@@ -315,6 +317,27 @@ export interface BoardHandle {
     frame: { x: number; y: number; width: number; height: number },
     scale: number,
   ): Promise<HTMLCanvasElement | null>;
+  /**
+   * A PDF's page bitmaps, its ink and shapes for a scene rectangle: what
+   * `captureSceneFrame` draws less the HTML marks layer, in a few ms.
+   */
+  captureSceneQuick(
+    frame: { x: number; y: number; width: number; height: number },
+    scale: number,
+  ): Promise<HTMLCanvasElement | null>;
+  /** Only the ink and shapes over a scene rectangle, on a clear canvas. */
+  captureSceneMarks(
+    frame: { x: number; y: number; width: number; height: number },
+    scale: number,
+  ): Promise<HTMLCanvasElement | null>;
+  /**
+   * A live copy of the page's text over a scene rectangle, laid out in scene
+   * units, to mount inside `host` (see `livePageCopy`). Null for a PDF.
+   */
+  livePageCopy(
+    frame: { x: number; y: number; width: number; height: number },
+    host: Element,
+  ): HTMLElement | null;
   /**
    * Remember which PDF page to paint/restore before the stack exists.
    * Camera jumps once that page's div is laid out. Prevents decoding page 1
