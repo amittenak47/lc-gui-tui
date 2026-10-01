@@ -21,6 +21,12 @@ import {
 } from "./pdfPaintWindow";
 
 describe("pdfRestPages", () => {
+  it("sharpens the page after next in the way pages are being turned", () => {
+    expect(pdfRestPages(50, 200, [50], undefined, 1)).toEqual([49, 50, 51, 52]);
+    expect(pdfRestPages(50, 200, [50], undefined, -1)).toEqual([48, 49, 50, 51]);
+    expect(pdfRestPages(200, 200, [200], undefined, 1)).toEqual([199, 200]);
+  });
+
   it("is C±1 union the hole list, not C+1…C+5", () => {
     expect(pdfRestPages(50, 200, [50])).toEqual([49, 50, 51]);
     expect(pdfRestPages(50, 200, [50, 51])).toEqual([49, 50, 51]);

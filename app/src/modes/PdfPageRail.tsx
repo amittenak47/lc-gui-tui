@@ -226,11 +226,12 @@ export function PdfPageRail({
         }
         if (isFocus && inflightRef.current.has(page)) continue;
         const live =
-          grabLivePdfThumb(
+          (await grabLivePdfThumb(
             page,
             px,
             stripRef.current?.closest(".lc-canvas-wrap"),
-          ) ?? grabLruPdfThumb(hash, page, px);
+          )) ?? (await grabLruPdfThumb(hash, page, px));
+        if (cancelled) return;
         if (live) {
           keep(page, live);
           continue;

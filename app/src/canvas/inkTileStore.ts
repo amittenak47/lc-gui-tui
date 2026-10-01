@@ -6,6 +6,7 @@
  * page is a hydrate + blit, not another SDF walk of every stroke.
  */
 
+import { encodeImageBlob } from "../util/imageEncode";
 import { inkClipFingerprint, inkOpsFingerprint } from "./inkOpsFingerprint";
 import type { InkOp, SceneBounds } from "./rasterInk";
 
@@ -182,6 +183,9 @@ export async function blobFromTileSource(
   height: number,
 ): Promise<Blob | null> {
   try {
+    // Off the main thread where it can be: ~100 ms a tile here, after every landing.
+    const encoded = await encodeImageBlob(source, { width, height });
+    if (encoded !== undefined) return encoded;
     if (typeof OffscreenCanvas === "function") {
       const canvas = new OffscreenCanvas(width, height);
       const ctx = canvas.getContext("2d");

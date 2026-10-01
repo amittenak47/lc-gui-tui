@@ -86,12 +86,17 @@ export function pdfVisibleFromSpans(
 /**
  * Pages that should be rest 2: C±1 plus anyone whose frame is in the hole.
  * Live vs settled does not belong here.
+ *
+ * `ahead` (+1 or -1) is the way pages are being turned: the page after the
+ * next one that way is sharpened too, so a reader turning on finds it ready
+ * rather than its quarter-size preview.
  */
 export function pdfRestPages(
   C: number,
   lastPage: number,
   intersecting: Iterable<number>,
   neighbor = PDF_REST_NEIGHBOR,
+  ahead: -1 | 0 | 1 = 0,
 ): number[] {
   const ids = new Set(pdfInnerPages(intersecting));
   const last = Math.max(1, lastPage);
@@ -100,6 +105,8 @@ export function pdfRestPages(
     const n = focus + d;
     if (n >= 1 && n <= last) ids.add(n);
   }
+  const far = focus + ahead * (neighbor + 1);
+  if (ahead !== 0 && far >= 1 && far <= last) ids.add(far);
   return [...ids].sort((a, b) => a - b);
 }
 

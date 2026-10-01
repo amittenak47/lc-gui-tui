@@ -1933,7 +1933,7 @@ export function PdfDocument({
       // on every camera settle, so a reader who moves gets the new window.
       const pageNumber = nextMissingPdfThumb(hash, last, prefer, thumbFailed, false);
       if (pageNumber == null) return;
-      capturePdfThumbIfNew(hash, pageNumber);
+      await capturePdfThumbIfNew(hash, pageNumber);
       if (peekPdfThumb(hash, pageNumber)) {
         timer = window.setTimeout(() => {
           void fillOne();

@@ -41,6 +41,7 @@ import {
   type ViewportTransform,
 } from "./rasterInk";
 import { paintInkTile } from "./inkLab/tilePaint";
+import { isPageTurnBusy } from "../util/pageTurnBusy";
 import { isBootSettled } from "../util/bootSettled";
 import {
   LEVEL_STEP,
@@ -899,7 +900,7 @@ export class InkTileCache {
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null;
       // The launch's restore owns the main thread until the splash goes.
-      if (this.moving || this.suspended || this.pause() || !isBootSettled()) {
+      if (this.moving || this.suspended || this.pause() || !isBootSettled() || isPageTurnBusy()) {
         this.schedulePersistIdle();
         return;
       }

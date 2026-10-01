@@ -14,6 +14,7 @@
  * out.
  */
 
+import { encodeImageBlob } from "../util/imageEncode";
 import { PDF_SESSION_CAP as SESSION_CAP_DEFAULT } from "../perfPreset";
 
 export { PDF_SESSION_CAP } from "../perfPreset";
@@ -121,6 +122,13 @@ export async function captureSheetPng(
   if (shouldAbort?.()) return null;
   await yieldMacrotask();
   if (shouldAbort?.()) return null;
+  // Off the main thread where it can be: a full sheet is hundreds of ms here.
+  const encoded = await encodeImageBlob(sheet.bitmap, { width: sheet.width, height: sheet.height });
+  if (encoded !== undefined) {
+    return encoded && !shouldAbort?.()
+      ? { blob: encoded, width: sheet.width, height: sheet.height, pixelScale: sheet.pixelScale }
+      : null;
+  }
   const off = document.createElement("canvas");
   off.width = sheet.width;
   off.height = sheet.height;

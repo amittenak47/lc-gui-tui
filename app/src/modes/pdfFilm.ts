@@ -11,6 +11,8 @@
  * the filmstrip open — never from the reading paint pump.
  */
 
+import { encodeImageDataUrl } from "../util/imageEncode";
+import { isPageTurnBusy } from "../util/pageTurnBusy";
 import { pageIdFromCamera, type PageFrame } from "../canvas/inkPageIndex";
 import { peekActiveSheet } from "./pdfSheetCache";
 import { persistPdfThumb } from "./pdfThumbStore";
@@ -210,6 +212,8 @@ type FilmNav = {
   /** Camera-hole pages (overlap) and rest-2 set. Not the flick-end guess. */
   intersectingPages: number[];
   restPages: number[];
+  /** Which way pages are being turned: +1 forward, -1 back, 0 not turning. See `publishPdfReadAhead`. */
+  readAhead: -1 | 0 | 1;
   viewPageListeners: Set<() => void>;
   /** Text fill / spread — annotation placement remasures these pages. */
   placementRevListeners: Set<(pages: DocPlacementRev) => void>;
@@ -241,6 +245,7 @@ function nav(scope: string): FilmNav {
       layoutBusyListeners: new Set(),
       intersectingPages: [],
       restPages: [],
+      readAhead: 0,
       viewPageListeners: new Set(),
       placementRevListeners: new Set(),
       thumbWanted: [],
@@ -549,6 +554,18 @@ export function peekPdfIntersectingPages(scope: string): readonly number[] {
 
 export function peekPdfRestPages(scope: string): readonly number[] {
   return nav(scope).restPages;
+}
+
+/**
+ * The way a reader turning pages is going, so the page after next can be
+ * made sharp before it is reached. Pages reading only; 0 otherwise.
+ */
+export function publishPdfReadAhead(scope: string, ahead: -1 | 0 | 1): void {
+  nav(scope).readAhead = ahead;
+}
+
+export function peekPdfReadAhead(scope: string): -1 | 0 | 1 {
+  return nav(scope).readAhead;
 }
 
 export function resetPdfViewPages(scope: string): void {
@@ -862,21 +879,21 @@ export function nextMissingPdfThumb(
 }
 
 /** 48 CSS px JPEG of an LRU sheet, once per page per document. Not a decode. */
-export function capturePdfThumbIfNew(hash: string | null | undefined, page: number): void {
+export async function capturePdfThumbIfNew(hash: string | null | undefined, page: number): Promise<void> {
   if (!hash || !(page >= 1) || peekPdfThumb(hash, page)) return;
   const dpr =
     typeof window !== "undefined"
       ? Math.min(window.devicePixelRatio || 1, 2)
       : 1;
-  const url = grabLruPdfThumb(hash, page, Math.round(PDF_FILM_THUMB_CSS * dpr));
+  const url = await grabLruPdfThumb(hash, page, Math.round(PDF_FILM_THUMB_CSS * dpr));
   if (url) rememberPdfThumb(hash, page, url);
 }
 
-export function grabLivePdfThumb(
+export async function grabLivePdfThumb(
   page: number,
   maxWidth: number,
   root: ParentNode | Document | null = typeof document !== "undefined" ? document : null,
-): string | null {
+): Promise<string | null> {
   if (!root) return null;
   const slot = root.querySelector<HTMLElement>(
     `.lc-pdf-page[data-pdf-page="${page}"][data-painted]`,
@@ -887,21 +904,31 @@ export function grabLivePdfThumb(
 }
 
 /** Filmstrip copy from the sheet LRU when the live canvas is empty. */
-export function grabLruPdfThumb(hash: string, page: number, maxWidth: number): string | null {
+export async function grabLruPdfThumb(hash: string, page: number, maxWidth: number): Promise<string | null> {
   const sheet = peekActiveSheet(hash, page);
   if (!sheet || sheet.width < 8 || sheet.height < 8) return null;
   return snapshotThumb(sheet.bitmap, sheet.width, sheet.height, maxWidth);
 }
 
-function snapshotThumb(
+/**
+ * A small JPEG of a painted page, as a data: URL.
+ *
+ * Scaled down and encoded in a worker, and not while pages are being turned:
+ * drawn here, the page's full-size canvas was read back to the main thread
+ * to be shrunk — ~200 ms a thumbnail, on every page a hand flicked to.
+ */
+async function snapshotThumb(
   src: CanvasImageSource,
   srcW: number,
   srcH: number,
   maxWidth: number,
-): string | null {
-  const out = document.createElement("canvas");
+): Promise<string | null> {
   const w = Math.max(1, Math.round(maxWidth));
   const h = Math.max(1, Math.round(w * (srcH / srcW)));
+  while (isPageTurnBusy()) await new Promise((resolve) => setTimeout(resolve, 250));
+  const encoded = await encodeImageDataUrl(src, { width: w, height: h, type: "image/jpeg", quality: 0.7 });
+  if (encoded !== undefined) return encoded;
+  const out = document.createElement("canvas");
   out.width = w;
   out.height = h;
   const ctx = out.getContext("2d");
