@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { BoardHandle } from "../BoardHandle";
-import { glide, PageTurn, turnPaperColor } from "./PageTurn";
+import { glide, PageTurn, rollMs, turnPaperColor } from "./PageTurn";
 import { paintTurn } from "./paintTurn";
 
 // Gesture tests inspect the frame submitted to the renderer. Actual canvas
@@ -340,6 +340,44 @@ it("flicks through pages: a corner touched while one lands takes hold of the nex
   for (let i = 0; i < 4; i += 1) frame(1000);
   const landed = (board.jumpToPageFrame.mock.calls as unknown as [{ pageId: number }][]).map((call) => call[0].pageId);
   expect(landed).toEqual([2, 3]);
+});
+
+it("flicks through pages: a sheet caught going over and pushed on lands, and the next one turns", async () => {
+  const frame = manualFrames();
+  view = { ...view, y: 0 }; // on the first of three pages
+  mount();
+  pointer("pointerdown", 380, 580);
+  pointer("pointermove", 150, 580);
+  await act(async () => { await Promise.resolve(); });
+  frame();
+  pointer("pointerup", 150, 580);
+  // The thumb comes back inside the page, onto the rolling sheet, not the strip.
+  pointer("pointerdown", 300, 400);
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  pointer("pointermove", 280, 400);
+  expect(board.jumpToPageFrame).toHaveBeenCalledTimes(1);
+  pointer("pointermove", 60, 400);
+  await act(async () => { await Promise.resolve(); });
+  frame();
+  // The new sheet starts from rest and moves with the hand: no jump to the finger.
+  expect(vi.mocked(paintTurn).mock.calls.at(-1)![1].corner.x).toBeCloseTo(400 - 220, 5);
+  pointer("pointerup", 60, 400);
+  for (let i = 0; i < 4; i += 1) frame(1000);
+  const landed = (board.jumpToPageFrame.mock.calls as unknown as [{ pageId: number }][]).map((call) => call[0].pageId);
+  expect(landed).toEqual([2, 3]);
+});
+
+it("rolls a flicked sheet over quickly, and a let-go one at an easy pace", () => {
+  expect(rollMs(560, 0)).toBe(400); // 1.4 px/ms, as before
+  expect(rollMs(100, 0)).toBe(240); // still seen going over
+  expect(rollMs(2000, 0)).toBe(520);
+  // A flick keeps its pace: far quicker than a sheet let go from a stop.
+  expect(rollMs(880, 3.6)).toBeCloseTo(880 / (3.6 * 1.2), 5);
+  expect(rollMs(100, 6)).toBe(120);
+  for (let speed = 0; speed < 8; speed += 0.25) {
+    // Faster hands never roll slower.
+    expect(rollMs(600, speed + 0.25)).toBeLessThanOrEqual(rollMs(600, speed));
+  }
 });
 
 it("turns on a quick flick short of halfway, and still plays the turn", async () => {

@@ -38,6 +38,10 @@ const GLIDE_MIN_MS = 240;
 const GLIDE_MAX_MS = 520;
 /** The pace a released sheet rolls at when the hand gave it none, in px per ms. */
 const GLIDE_PX_PER_MS = 1.4;
+/** A flick this fast (px per ms) or faster rolls the sheet on at full pace… */
+const GLIDE_FLICK_PX_PER_MS = 3;
+/** …in as little as this: quick, and still seen going over. */
+const GLIDE_FLICK_MIN_MS = 120;
 /** Steepest start a throw may give the roll, as a multiple of its average pace (3 would overshoot). */
 const GLIDE_MAX_LAUNCH = 2.5;
 /** A text spread's facing picture is taken again once writing has rested this long. */
@@ -56,6 +60,8 @@ const FLICK_FRESH_MS = 60;
 const THROW_MS = 120;
 /** After landing, how soon the next page's pictures are taken: the camera's jump first. */
 const LANDED_PREFETCH_MS = 90;
+/** A sheet caught while going over, pushed on its way this far (px): put it down and turn the next. */
+const FLICK_ON_PX = 12;
 /** Let go before the pictures were taken: how long to wait for them before simply going. */
 const PICTURE_WAIT_MS = 450;
 /** A key pressed during a turn finishes it this fast… */
@@ -175,6 +181,21 @@ export function glide(t: number, launch: number): number {
  * at now. A picture taken while the page was still a preview goes stale the
  * moment the sharp paint lands, and is taken again.
  */
+/**
+ * How long a sheet let go by a hand rolls for, `px` from where it is going,
+ * its corner last moving at `cornerSpeed` px per ms.
+ *
+ * A hand that had stopped lets it ease away at an unhurried pace. The faster
+ * the flick, the more of the hand's pace the sheet keeps, and the shorter the
+ * least it may take: a flick through the pages sends each one over quickly.
+ */
+export function rollMs(px: number, cornerSpeed: number): number {
+  const flick = Math.min(1, Math.max(0, (cornerSpeed - GLIDE_PX_PER_MS) / (GLIDE_FLICK_PX_PER_MS - GLIDE_PX_PER_MS)));
+  const least = GLIDE_MIN_MS - (GLIDE_MIN_MS - GLIDE_FLICK_MIN_MS) * flick;
+  const pace = Math.max(GLIDE_PX_PER_MS, cornerSpeed * (0.6 + 0.6 * flick));
+  return Math.min(GLIDE_MAX_MS, Math.max(least, px / pace));
+}
+
 function pdfPaintSignature(hostSelector: string, pageId: number): string {
   if (!(pageId >= 1)) return "";
   const host = document.querySelector(hostSelector);
@@ -1006,7 +1027,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         } else {
           // Held by the crease, the corner moves twice as fast as the hand.
           const corner = speed * (turn.byFold ? 2 : 1);
-          ms = Math.min(GLIDE_MAX_MS, Math.max(GLIDE_MIN_MS, px / Math.max(GLIDE_PX_PER_MS, corner * 0.6)));
+          ms = rollMs(px, corner);
           launch = Math.min(GLIDE_MAX_LAUNCH, (corner * ms) / px);
         }
         const lift = Math.min(turn.rect.height * 0.06, 44) * Math.min(1, Math.abs(goal.x - start.x) / (2 * w));
@@ -1119,6 +1140,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       /** Where the hand was last seen, sampled for speed or not. */
       atX: number;
       caughtCorner?: Point;
+      /**
+       * Caught while going over. Pushed on its way it is put down and the
+       * next page taken; a thumb flicking through lands on the rolling sheet
+       * as often as on the strip, and that swipe must not just finish it.
+       */
+      goingOver?: boolean;
     } | null = null;
 
     /**
@@ -1204,6 +1231,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         if (!catchable) return;
         event.stopImmediatePropagation();
         event.preventDefault();
+        const goingOver = playing.anim?.commit === true;
         playing.anim = null;
         playing.commit = null;
         queued = null;
@@ -1213,7 +1241,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         playing.corner = constrainCorner(playing.corner, w, r.height, playing.bottom);
         active = {
           id: event.pointerId, x: event.clientX, y: event.clientY,
-          turn: playing, caughtCorner: { ...playing.corner },
+          turn: playing, caughtCorner: { ...playing.corner }, goingOver,
           vx: 0, lastX: event.clientX, lastT: event.timeStamp, atX: event.clientX,
         };
         setTurning(true);
@@ -1255,10 +1283,41 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       draw(turn);
     };
 
+    /** Land a caught sheet that was going over, and take hold of the next one from rest. */
+    const flickOn = (event: PointerEvent) => {
+      if (!active) return;
+      const { id, turn: caught } = active;
+      active = null;
+      caught.commit = true;
+      finishNow(caught);
+      const turn = planTurn(caught.direction, caught.bottom, caught);
+      if (!turn) return; // landed on the last page
+      turnRef.current = turn;
+      setTurning(true);
+      const w = turn.layout === "book" ? turn.rect.width / 2 : turn.rect.width;
+      const rest = { x: turn.direction === "next" ? w : -w, y: turn.bottom ? turn.rect.height : 0 };
+      turn.corner = rest;
+      active = {
+        id, x: event.clientX, y: event.clientY, turn, caughtCorner: rest,
+        vx: 0, lastX: event.clientX, lastT: event.timeStamp, atX: event.clientX,
+      };
+      draw(turn);
+    };
+
     const onMove = (event: PointerEvent) => {
       if (active && event.pointerId === active.id) {
         event.stopImmediatePropagation();
         event.preventDefault();
+        if (active.goingOver) {
+          const dx = event.clientX - active.x;
+          const along = active.turn.direction === "next" ? -dx : dx;
+          if (along > FLICK_ON_PX) {
+            flickOn(event);
+            return;
+          }
+          // Pulled back first: it stays caught, to be turned back or let go.
+          if (along < -FLICK_ON_PX) active.goingOver = false;
+        }
         follow(event);
         return;
       }
