@@ -7,3 +7,8 @@ commands.allow = ["set_gesture_exclusions"]
 identifier = "allow-set-drawing-immersive"
 description = "Sticky-immersive nav bar while a drawing tool is up"
 commands.allow = ["set_drawing_immersive"]
+
+[[permission]]
+identifier = "allow-set-display-refresh"
+description = "Ask for the panel's fastest refresh when Match display is on"
+commands.allow = ["set_display_refresh"]

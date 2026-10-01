@@ -65,6 +65,7 @@ import {
 import { noteReadingPointerDown } from "../util/inputLatency";
 import { isAndroidDevice } from "../util/androidDevice";
 import { traceOpen } from "../util/messageOf";
+import { wrapForDebug } from "../util/debugLog";
 import { ANNOTATE_PAGE_W, ANNOTATE_REGION, MD_INK_MIN_PAGE_H, MD_INK_TAIL_PAD, buildAnnotateTemplate, isAnnotatePageFrame, stampAnnotateFrameMeta } from "../templates/annotate";
 import {
   contentAABBsInFrame,
@@ -9582,7 +9583,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
   useImperativeHandle(
     ref,
-    (): BoardHandle => ({
+    (): BoardHandle => wrapForDebug<BoardHandle>("board", {
       instanceId,
       getElements: elements,
       getViewportBounds: () => {

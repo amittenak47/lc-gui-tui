@@ -8,6 +8,10 @@ import {
   storageMigrationPending,
 } from "./util/storageMigration";
 import "./styles.css";
+import { debugLogEnabled, installDebugLog } from "./util/debugLog";
+
+// Off unless switched on in Settings → Diagnostics; first, so the boot is in it too.
+if (debugLogEnabled()) installDebugLog();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("index.html is missing #root");

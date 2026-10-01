@@ -139,6 +139,13 @@ function webFetchProxy(): Plugin {
 // relative base so the same bundle works from a file:// origin on Android.
 export default defineConfig({
   plugins: [react(), pdfjsAssets(), webFetchProxy()],
+  resolve: {
+    // `invoke` with a debug-log hook; the rest is the real module. See
+    // tauriCore.ts. Builds only: tests mock `@tauri-apps/api/core` themselves.
+    alias: process.env.VITEST
+      ? []
+      : [{ find: /^@tauri-apps\/api\/core$/, replacement: join(rootDir, "src/util/tauriCore.ts") }],
+  },
   base: "./",
   clearScreen: false,
   server: {

@@ -154,6 +154,7 @@ import {
 import { FEATURE_LEETCODE } from "../featureFlags";
 import { loadUiHandedness, saveUiHandedness, type UiHandedness } from "../util/uiHandedness";
 import { loadStartupTabs, saveStartupTabs, type StartupTabs } from "../util/startupTabsPref";
+import { clearDebugLog, debugLogCount, debugLogEnabled, exportDebugLog, setDebugLogEnabled } from "../util/debugLog";
 import { loadPageFit, loadReadingMode, savePageFit, saveReadingMode, type PageFitPref, type ReadingMode } from "../util/readingModePref";
 import { loadAgentDisplayPrefs, saveAgentDisplayPrefs, type AgentDisplayPrefs } from "../util/agentDisplayPrefs";
 import { PAD_HUB_EVENT, loadSavedPadHub, savePadHub } from "../util/padHub";
@@ -2084,9 +2085,10 @@ export function SettingsModal({
               </div>
               <div className="lc-settings-subhead">Match display</div>
               <p className="lc-settings-hint">
-                Present live ink on every dirty vsync. Off keeps the 60 fps cap
-                on 90 Hz and faster panels. Does not change the panel or the
-                HUD ruler. Saved on this device only.
+                Run at the panel's full refresh. On a 90 Hz tablet the app asks
+                Android for 90 Hz (it otherwise holds the app at 60), and live ink
+                presents on every vsync. Off leaves the rate to Android and keeps
+                ink at 60 fps. Costs a little battery. Saved on this device only.
               </p>
               <div
                 className="lc-settings-choice lc-settings-choice-compact"
@@ -2696,6 +2698,9 @@ export function SettingsModal({
                   ))}
                 </div>
               </SettingsFold>
+              <SettingsFold id="diagnostics" title="Diagnostics">
+                <DebugLogSettings />
+              </SettingsFold>
             </div>
           )}
 
@@ -3185,5 +3190,62 @@ export function SettingsModal({
         </SettingsPageCtx.Provider>
       </div>
     </div>
+  );
+}
+
+/**
+ * Settings → Diagnostics: the debug log. Applies at once, outside Save — a
+ * switch for finding out what happened should not wait on a form.
+ */
+function DebugLogSettings() {
+  const [on, setOn] = useState(debugLogEnabled);
+  const [count, setCount] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void debugLogCount().then((n) => live && setCount(n));
+    return () => {
+      live = false;
+    };
+  }, [on]);
+  const toggle = (next: boolean) => {
+    setDebugLogEnabled(next);
+    setOn(next);
+  };
+  return (
+    <>
+      <div className="lc-settings-subhead">Debug log</div>
+      <p className="lc-settings-hint">
+        Records taps and keys (by name, never what you type), native and network calls,
+        board and client calls with their results, console lines, errors and main-thread
+        stalls, all truncated, on this device. Off records nothing and costs nothing.
+        Board and client calls start being recorded after the next launch.
+      </p>
+      <div className="lc-settings-choice lc-settings-choice-compact" role="radiogroup" aria-label="Debug log">
+        {([false, true] as const).map((value) => (
+          <button key={String(value)} type="button" role="radio" aria-checked={on === value}
+            className={on === value ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+            onClick={() => toggle(value)}>
+            <strong>{value ? "On" : "Off"}</strong>
+          </button>
+        ))}
+      </div>
+      <div className="lc-settings-actions-row">
+        <button type="button" className="lc-secondary" disabled={busy || !count}
+          onClick={() => {
+            setBusy(true);
+            void exportDebugLog().finally(() => setBusy(false));
+          }}>
+          Export log{count ? ` (${count.toLocaleString()})` : ""}
+        </button>
+        <button type="button" className="lc-secondary" disabled={busy || !count}
+          onClick={() => {
+            setBusy(true);
+            void clearDebugLog().then(() => setCount(0)).finally(() => setBusy(false));
+          }}>
+          Clear log
+        </button>
+      </div>
+    </>
   );
 }

@@ -15,6 +15,7 @@
     "allow-webview-capture-png",
     "allow-set-gesture-exclusions",
     "allow-set-drawing-immersive",
+    "allow-set-display-refresh",
     "allow-live-webview"
   ]
 }

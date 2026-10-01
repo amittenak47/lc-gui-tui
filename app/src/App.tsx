@@ -106,6 +106,8 @@ import {
   type WorkspaceChrome,
 } from "./shellContext";
 import { markBootSettled } from "./util/bootSettled";
+import { wrapForDebug } from "./util/debugLog";
+import { followMatchDisplay } from "./util/displayRefresh";
 import { messageOf } from "./util/messageOf";
 
 /**
@@ -158,6 +160,8 @@ export function App() {
   const android = isAndroidDevice();
 
   useEffect(() => installSafeAreaInsets(), []);
+  // Settings → Match display also sets the panel's refresh rate.
+  useEffect(() => followMatchDisplay(), []);
 
   // Writing hand mirrors the chrome across the Y-axis — see inkHandedness.
   useEffect(() => installHandednessAttr(), []);
@@ -189,7 +193,7 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  const client = useMemo(() => new LcClient(), []);
+  const client = useMemo(() => wrapForDebug("client", new LcClient()), []);
 
   /*
    * Pad auto-sync, once for the app.

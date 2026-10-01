@@ -64,6 +64,16 @@ struct ImmersiveResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct RefreshArgs {
+    high: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct RefreshResponse {
+    hz: f64,
+}
+
+#[derive(Debug, Serialize)]
 struct InsetsArgs {
     density: f64,
 }
@@ -99,6 +109,15 @@ impl<R: Runtime> GestureGuard<R> {
             .0
             .run_mobile_plugin::<ImmersiveResponse>("set_immersive", ImmersiveArgs { enabled })?;
         Ok(response.ok)
+    }
+
+    /// Ask for the panel's fastest refresh (`high`), or give the choice back.
+    /// Returns the rate asked for, 0 when none.
+    pub fn set_high_refresh(&self, high: bool) -> Result<f64> {
+        let response = self
+            .0
+            .run_mobile_plugin::<RefreshResponse>("set_high_refresh", RefreshArgs { high })?;
+        Ok(response.hz)
     }
 
     /// Status / caption / nav overlap on the WebView, in CSS pixels.

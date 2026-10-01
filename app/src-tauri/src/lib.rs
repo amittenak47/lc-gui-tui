@@ -178,6 +178,7 @@ pub fn run() {
         lan_base_url,
         set_gesture_exclusions,
         set_drawing_immersive,
+        set_display_refresh,
         get_system_insets,
         live_webview_create,
         live_webview_place,
@@ -289,6 +290,25 @@ fn set_drawing_immersive(
     #[cfg(not(target_os = "android"))]
     {
         Ok(false)
+    }
+}
+
+/// Follow Settings → Match display: the panel's fastest refresh, or Android's
+/// own choice. Answers the rate asked for (0 when none, or off Android).
+#[tauri::command]
+fn set_display_refresh(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    #[allow(unused_variables)] high: bool,
+) -> std::result::Result<f64, String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_gestureguard::GestureGuardExt;
+        let guard = app.gesture_guard().ok_or("gesture guard unavailable")?;
+        return guard.set_high_refresh(high).map_err(|e| e.to_string());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(0.0)
     }
 }
 

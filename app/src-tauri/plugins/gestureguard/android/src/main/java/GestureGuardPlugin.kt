@@ -74,9 +74,48 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @InvokeArg
+    class RefreshArgs {
+        var high: Boolean = false
+    }
+
+    @InvokeArg
     class InsetsArgs {
         /** CSS px → device px (`window.devicePixelRatio`). */
         var density: Double = 1.0
+    }
+
+    /**
+     * Run the panel at its fastest refresh, or hand the choice back to Android.
+     *
+     * A WebView window does not ask for a refresh rate, and on this kind of
+     * tablet the system then holds it at 60 Hz on a 90 Hz panel: every other
+     * app scrolls at 90 and this one visibly does not. Asking is the window's
+     * preferred display mode — the fastest one at the current resolution.
+     * Answers the rate it asked for, or 0 when it handed the choice back.
+     */
+    @Command
+    fun set_high_refresh(invoke: Invoke) {
+        val args = invoke.parseArgs(RefreshArgs::class.java)
+        activity.runOnUiThread {
+            val window = activity.window
+            if (window == null) {
+                invoke.reject("no window")
+                return@runOnUiThread
+            }
+            @Suppress("DEPRECATION")
+            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) activity.display
+                else activity.windowManager.defaultDisplay
+            val current = display?.mode
+            val fastest = if (args.high && display != null && current != null) {
+                display.supportedModes
+                    .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+                    .maxByOrNull { it.refreshRate }
+            } else null
+            val attrs = window.attributes
+            attrs.preferredDisplayModeId = fastest?.modeId ?: 0
+            window.attributes = attrs
+            invoke.resolve(JSObject().apply { put("hz", (fastest?.refreshRate ?: 0f).toDouble()) })
+        }
     }
 
     @Command
