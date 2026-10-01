@@ -5,7 +5,7 @@ import { b64ToBytes } from "../api/nativeHttp";
 import { parseVizProgram } from "../viz/schema";
 import { parseArtifactSourceReference, REFERENCE_TEXT_LIMIT } from "./artifactReference";
 import {
-  artifactIdentity, parseArtifactParent, artifactDependencyKey,
+  artifactIdentity, parseArtifactParent, artifactAssetStoreKey,
   type ArtifactDependency, type ArtifactParent,
 } from "./padArtifacts";
 
@@ -125,7 +125,7 @@ export function parseArtifactAsset(raw: unknown): ArtifactAsset {
 }
 
 export function artifactAssetKey(asset: ArtifactAssetLocator): string {
-  return `artifact-asset:v1:${artifactDependencyKey(asset.parent, asset.dependency)}`;
+  return artifactAssetStoreKey(asset.parent, asset.dependency);
 }
 
 export function requireArtifactAssetAck(sent: ArtifactAsset, received: unknown): void {

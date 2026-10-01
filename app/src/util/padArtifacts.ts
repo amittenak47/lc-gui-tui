@@ -215,6 +215,14 @@ export function artifactDependencyKey(parent: ArtifactParent, dependency: Artifa
     dependency.kind === "ink" ? dependency.pageId : null, dependency.revision]);
 }
 
+/** Content-store keys of cached attachment copies start with this. */
+export const ARTIFACT_ASSET_KEY_PREFIX = "artifact-asset:v1:";
+
+/** Where the cached copy of one dependency lives in the content store. */
+export function artifactAssetStoreKey(parent: ArtifactParent, dependency: ArtifactDependency): string {
+  return `${ARTIFACT_ASSET_KEY_PREFIX}${artifactDependencyKey(parent, dependency)}`;
+}
+
 /** Deleted artifacts remain in the catalog but do not block a deletion transfer. */
 export function artifactDependencies(artifact: PadArtifact): ArtifactDependency[] {
   if (artifact.deletedAt !== undefined) return [];

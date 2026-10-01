@@ -1,5 +1,6 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { artifactCachePins } from "./artifactCacheGc";
+import { artifactCopyExpired } from "./artifactCachePins";
 import { artifactAssetKey } from "./artifactAssets";
 import type { ArtifactCatalog } from "./padArtifacts";
 const parent = { kind: "problem" as const, id: "d/1" };
@@ -17,4 +18,20 @@ it("pins a draft's original revision after the current catalog changes", () => {
 it("fails closed for legacy drafts and damaged catalog roots", () => {
   expect(() => artifactCachePins([{ item: catalog.artifacts[0], snapshot: {} }])).toThrow("legacy");
   expect(() => artifactCachePins([{ ...catalog, revision: "" }])).toThrow();
+});
+
+describe("which cached copies may go", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = 100 * DAY;
+  const key = "artifact-asset:v1:x";
+  it("keeps anything referenced, unsent or recently used", () => {
+    const old = { transferredAt: now - 10 * DAY, lastUsedAt: now - 10 * DAY };
+    expect(artifactCopyExpired(key, old, new Set([key]), now)).toBe(false);
+    expect(artifactCopyExpired(key, { lastUsedAt: now - 10 * DAY }, new Set(), now)).toBe(false);
+    expect(artifactCopyExpired(key, { ...old, lastUsedAt: now - DAY }, new Set(), now)).toBe(false);
+    expect(artifactCopyExpired(key, undefined, new Set(), now)).toBe(false);
+  });
+  it("lets go of an old, acknowledged, unreferenced copy", () => {
+    expect(artifactCopyExpired(key, { transferredAt: now - 4 * DAY, lastUsedAt: now - 5 * DAY }, new Set(), now)).toBe(true);
+  });
 });
