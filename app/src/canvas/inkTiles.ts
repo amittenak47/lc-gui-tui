@@ -375,6 +375,14 @@ export class InkTileCache {
   private readonly persist: boolean;
   private sig = "";
   private hydrating = false;
+  /**
+   * Squares a draw wanted while their stored copies were still being decoded.
+   * Decoding takes these first and says so as each lands, so the view in
+   * front of the reader is ink before the rest of the book has come back.
+   */
+  private wantedFromStore = new Set<string>();
+  /** Every square a draw has asked for during this hydrate, decoded or not. */
+  private wantedSeen = new Set<string>();
   private sliceVisible = false;
   private hydrateGen = 0;
   private inflight = new Set<string>();
@@ -775,20 +783,44 @@ export class InkTileCache {
     const sig = this.sig;
     const gen = this.hydrateGen;
     this.hydrating = true;
+    this.wantedSeen.clear();
+    this.wantedFromStore.clear();
     void loadPersistedInkTiles(sig)
       .then(async (rows) => {
         if (gen !== this.hydrateGen || this.sig !== sig) return;
         if (typeof createImageBitmap !== "function") return;
         /*
-         * Several decodes in flight. Each is a few milliseconds on a decoder
-         * thread, but awaited one by one a page's hundred-odd squares were
-         * two seconds of a launch spent waiting, with cores idle.
+         * Several decodes in flight, wanted squares first. Each decode is a few
+         * milliseconds on a decoder thread (one at a time on some WebViews),
+         * and the reader is waiting only on the squares in front of them.
          */
-        let next = 0;
+        const remaining = new Map(rows.map((row) => [tileKey(row.level, row.tx, row.ty), row]));
+        let notifyQueued = false;
+        const notifyWanted = () => {
+          if (notifyQueued) return;
+          notifyQueued = true;
+          setTimeout(() => {
+            notifyQueued = false;
+            if (gen === this.hydrateGen) this.onTilesReady?.();
+          }, 0);
+        };
+        const takeNext = (): [string, (typeof rows)[number]] | null => {
+          for (const key of this.wantedFromStore) {
+            this.wantedFromStore.delete(key);
+            const row = remaining.get(key);
+            if (row) {
+              remaining.delete(key);
+              return [key, row];
+            }
+          }
+          const first = remaining.entries().next();
+          if (first.done) return null;
+          remaining.delete(first.value[0]);
+          return first.value;
+        };
         const decodeNext = async (): Promise<void> => {
-          while (next < rows.length) {
-            const row = rows[next++]!;
-            const key = tileKey(row.level, row.tx, row.ty);
+          for (let next = takeNext(); next; next = takeNext()) {
+            const [key, row] = next;
             if (this.tiles.has(key)) continue;
             let source: ImageBitmap;
             try {
@@ -813,6 +845,7 @@ export class InkTileCache {
               usedAt: this.drawCount,
               painted: true,
             });
+            if (this.wantedSeen.has(key)) notifyWanted();
           }
         };
         await Promise.all(Array.from({ length: Math.min(HYDRATE_DECODES_IN_FLIGHT, rows.length) }, decodeNext));
@@ -1194,6 +1227,10 @@ export class InkTileCache {
         tile = this.renderTile(level, tx, ty) ?? undefined;
       }
       if (!tile) {
+        if (this.hydrating && !this.wantedSeen.has(key)) {
+          this.wantedSeen.add(key);
+          this.wantedFromStore.add(key);
+        }
         missed.push({ level, tx, ty });
         if (fallbacks === null) fallbacks = this.fallbackLevels(level);
         this.blitFallback(ctx, bounds, toDeviceX, toDeviceY, fallbacks);

@@ -245,6 +245,8 @@ function screen(zoom: number, scrollX = 0, scrollY = 0): ViewportTransform {
   return { zoom, scrollX, scrollY, offsetLeft: 0, offsetTop: 0, width: 800, height: 600 };
 }
 
+const HYDRATE_IN_FLIGHT_FOR_TEST = 6;
+
 describe("InkTileCache", () => {
   beforeEach(() => markBootSettled());
 
@@ -738,6 +740,38 @@ describe("InkTileCache", () => {
       while (waiting.length) { waiting.shift()!(); await Promise.resolve(); await Promise.resolve(); }
       await vi.waitFor(() => expect(ready).toHaveBeenCalled());
       expect(cache.size).toBe(10);
+    } finally {
+      cache.dispose(); load.mockRestore(); vi.unstubAllGlobals();
+    }
+  });
+
+  it("decodes the stored squares the view is waiting on before the rest", async () => {
+    let deliver!: (rows: unknown[]) => void;
+    const load = vi.spyOn(tileStore, "loadPersistedInkTiles")
+      .mockImplementation(() => new Promise((resolve) => { deliver = resolve as (rows: unknown[]) => void; }));
+    const order: number[] = [];
+    vi.stubGlobal("createImageBitmap", vi.fn(async (blob: Blob & { tag?: number }) => {
+      order.push(blob.tag!);
+      return { close: vi.fn(), width: 256, height: 256 };
+    }));
+    const ready = vi.fn();
+    const { cache } = makeCache({ persist: true, useWorker: true, onTilesReady: ready });
+    try {
+      cache.syncOpsDeferred([draw([0, 0], [40, 0])]);
+      // The view asks for its squares while the stored ones are still being read.
+      cache.draw(destinationContext().ctx, screen(1), 1);
+      const internals = cache as unknown as { wantedSeen: Set<string>; lastLevel: number };
+      const [visibleKey] = [...internals.wantedSeen];
+      expect(visibleKey).toBeDefined();
+      const [level, tx, ty] = visibleKey!.split(/[^0-9-]+/).filter(Boolean).map(Number);
+      const row = (tag: number, at: { level: number; tx: number; ty: number }) =>
+        ({ ...at, blob: Object.assign(new Blob(), { tag }), width: 256, height: 256 });
+      const far = Array.from({ length: 8 }, (_, i) => row(i, { level: level!, tx: 500 + i, ty: 500 }));
+      deliver([...far, row(99, { level: level!, tx: tx!, ty: ty! })]);
+      await vi.waitFor(() => expect(order.length).toBe(9));
+      expect(order.slice(0, HYDRATE_IN_FLIGHT_FOR_TEST)).toContain(99);
+      expect(order[0]).toBe(99);
+      await vi.waitFor(() => expect(ready).toHaveBeenCalled());
     } finally {
       cache.dispose(); load.mockRestore(); vi.unstubAllGlobals();
     }
