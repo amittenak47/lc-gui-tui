@@ -33,6 +33,8 @@ export interface TurnFrame {
   /** The lifted corner, in the turning sheet's own coordinates. */
   corner: Point;
   bottom: boolean;
+  /** Where on its free edge the sheet is held: a corner (0 or the height) unless taken by the side. */
+  restY?: number;
   paper: string;
 }
 
@@ -75,7 +77,7 @@ export function paintTurn(ctx: CanvasRenderingContext2D, frame: TurnFrame): numb
   const book = frame.layout === "book";
   const spine = book ? W / 2 : 0;
   const w = book ? W / 2 : W;
-  const g = curlGeometry(frame.corner, w, H, frame.bottom);
+  const g = curlGeometry(frame.corner, w, H, frame.bottom, frame.restY);
 
   ctx.clearRect(0, 0, W, H);
 

@@ -26,7 +26,7 @@ import { paintTurn, type TurnLayout } from "./paintTurn";
 import { boardResizeDeferred } from "../../util/splitResize";
 import { afterBootSettled, isBootSettled } from "../../util/bootSettled";
 import { canvasGestureFrame, protectGestureSurface } from "../../util/gestureExclusion";
-import { turnEdgeAt, turnCornerSize } from "./corners";
+import { turnCornerAt, turnEdgeAt, turnCornerSize } from "./corners";
 import { cssColorLuminance } from "../../util/webPagePaper";
 
 /** In Pages reading the side stacks sit this much further up, as a share of their gap from the bottom. */
@@ -197,6 +197,12 @@ export function rollMs(px: number, cornerSpeed: number): number {
   return Math.min(GLIDE_MAX_MS, Math.max(least, px / pace));
 }
 
+/** Where a sheet in `rect` is held: its corner, or the finger's height when taken by the side. */
+function heldAt(rect: { top: number; height: number }, bottom: boolean, edgeClientY?: number): number {
+  if (edgeClientY == null) return bottom ? rect.height : 0;
+  return Math.min(rect.height, Math.max(0, edgeClientY - rect.top));
+}
+
 function pdfPaintSignature(hostSelector: string, pageId: number): string {
   if (!(pageId >= 1)) return "";
   const host = document.querySelector(hostSelector);
@@ -300,6 +306,12 @@ interface Turn {
   direction: Direction;
   layout: TurnLayout;
   bottom: boolean;
+  /**
+   * Where on its free edge the sheet is held, from the top of `rect`: a
+   * corner (0 or the height) for a corner peel or a key, and the finger's
+   * height when it was taken by the side, so the fold starts there.
+   */
+  restY: number;
   from: PageFrame;
   to: PageFrame;
   /** Where the view sits relative to the page top, kept across the turn. */
@@ -764,6 +776,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       at: number,
       direction: Direction,
       bottom: boolean,
+      edgeClientY?: number,
     ): Turn | null => {
       const start = at - (at % 2);
       const toStart = direction === "next" ? start + 2 : start - 2;
@@ -785,10 +798,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         height: `${rect.height}px`,
       });
       const w = rect.width / 2;
+      const restY = heldAt(rect, bottom, edgeClientY);
       const turn: Turn = {
         direction,
         layout: "book",
         bottom,
+        restY,
         from,
         to,
         offsetInPage: 0,
@@ -798,7 +813,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         byFold: false,
         canvas,
         images: null,
-        corner: { x: direction === "next" ? w : -w, y: bottom ? rect.height : 0 },
+        corner: { x: direction === "next" ? w : -w, y: restY },
         anim: null,
         ready: Promise.resolve(false),
         frame: 0,
@@ -825,7 +840,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
      * was, on the same spot of the screen, even before the camera's jump has
      * reached the board's reported view.
      */
-    const planTurn = (direction: Direction, bottom: boolean, after?: Turn): Turn | null => {
+    const planTurn = (direction: Direction, bottom: boolean, after?: Turn, edgeClientY?: number): Turn | null => {
       const b = board();
       if (!b) return null;
       const view = b.getViewportBounds();
@@ -833,7 +848,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (!view || frames.length === 0) return null;
       const landed = after ? frames.findIndex((f) => Math.abs(f.minY - after.to.minY) < 0.5) : -1;
       const at = landed >= 0 ? landed : currentIndex(frames, lockedRef.current, view);
-      if (textSpreadRef.current) return planSpreadTurn(b, frames, at, direction, bottom);
+      if (textSpreadRef.current) return planSpreadTurn(b, frames, at, direction, bottom, edgeClientY);
       const toIndex = direction === "next" ? at + 1 : at - 1;
       const from = frames[at];
       const to = frames[toIndex];
@@ -873,10 +888,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         height: `${rect.height}px`,
       });
       const w = layout === "book" ? rect.width / 2 : rect.width;
+      const restY = heldAt(rect, bottom, edgeClientY);
       const turn: Turn = {
         direction,
         layout,
         bottom,
+        restY,
         from,
         to,
         // With the page fitted the view starts above it; land on the top.
@@ -889,7 +906,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         byFold: layout === "sheet" && direction === "prev",
         canvas,
         images: null,
-        corner: { x: direction === "next" ? w : -w, y: bottom ? rect.height : 0 },
+        corner: { x: direction === "next" ? w : -w, y: restY },
         anim: null,
         ready: Promise.resolve(false),
         frame: 0,
@@ -932,6 +949,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         sourceHeight: turn.images.from.height,
         corner: turn.corner,
         bottom: turn.bottom,
+        restY: turn.restY,
         paper: turnPaperColor(paperColor(), pagedRef.current),
       });
     };
@@ -985,7 +1003,11 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const k = glide(t, a.launch);
       // The corner rises off the page as it rolls and settles back down onto
       // it, rather than sliding across in a straight line.
-      const rise = Math.sin(Math.PI * k) * a.lift;
+      // A corner rises off the page as it rolls; a sheet held mid-side does
+      // not lift its middle, so the rise fades toward the middle of the edge.
+      const half = turn.rect.height / 2;
+      const edge = half > 0 ? Math.min(1, Math.abs(turn.restY - half) / half) : 1;
+      const rise = Math.sin(Math.PI * k) * a.lift * edge;
       turn.corner = {
         x: a.start.x + (a.goal.x - a.start.x) * k,
         y: a.start.y + (a.goal.y - a.start.y) * k + (turn.bottom ? -rise : rise),
@@ -1023,7 +1045,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         // Finishing means reaching the end the turn is headed for.
         const goal = {
           x: (turn.direction === "next") === commit ? -w : w,
-          y: turn.bottom ? turn.rect.height : 0,
+          y: turn.restY,
         };
         const start = { ...turn.corner };
         const px = Math.max(1, Math.hypot(goal.x - start.x, goal.y - start.y));
@@ -1166,8 +1188,8 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const book = turn.layout === "book";
       const w = book ? turn.rect.width / 2 : turn.rect.width;
       const x = clientX - turn.rect.left - (book ? w : 0);
-      if (turn.byFold) return cornerForCrease(x, clientY - fromY, w, turn.rect.height, turn.bottom);
-      return cornerForGrip({ x, y: clientY - turn.rect.top }, 0, 0, w, turn.rect.height, turn.bottom);
+      if (turn.byFold) return cornerForCrease(x, clientY - fromY, w, turn.rect.height, turn.bottom, turn.restY);
+      return cornerForGrip({ x, y: clientY - turn.rect.top }, 0, 0, w, turn.rect.height, turn.bottom, turn.restY);
     };
 
     const inHost = (target: EventTarget | null) =>
@@ -1189,7 +1211,9 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (!r) return false;
       const direction: Direction = side === "right" ? "next" : "prev";
       const bottom = event.clientY > r.top + r.height / 2;
-      const turn = planTurn(direction, bottom, after);
+      // A corner peels from its corner; the side strip is held where it was taken.
+      const byCorner = turnCornerAt(r, event.clientX, event.clientY) !== null;
+      const turn = planTurn(direction, bottom, after, byCorner ? undefined : event.clientY);
       if (!turn) return false; // first or last page: nothing to turn to
       turnRef.current = turn;
       setTurning(true);
@@ -1245,7 +1269,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         const w = playing.layout === "book" ? r.width / 2 : r.width;
         // Anchor at the displayed fold, so catching it never snaps the page
         // back to its original corner or to the new finger's position.
-        playing.corner = constrainCorner(playing.corner, w, r.height, playing.bottom);
+        playing.corner = constrainCorner(playing.corner, w, r.height, playing.bottom, playing.restY);
         active = {
           id: event.pointerId, x: event.clientX, y: event.clientY,
           turn: playing, caughtCorner: { ...playing.corner }, goingOver,
@@ -1285,7 +1309,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         ? constrainCorner({
             x: Math.min(w, Math.max(-w, active.caughtCorner.x + pace * (event.clientX - active.x))),
             y: active.caughtCorner.y + (event.clientY - active.y) * (pace === 1 ? 1 : 0.5),
-          }, w, turn.rect.height, turn.bottom)
+          }, w, turn.rect.height, turn.bottom, turn.restY)
         : cornerAt(turn, event.clientX, event.clientY, active.y);
       draw(turn);
     };
@@ -1297,12 +1321,14 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       active = null;
       caught.commit = true;
       finishNow(caught);
-      const turn = planTurn(caught.direction, caught.bottom, caught);
+      // Held by the side, the next sheet is taken where the hand is now.
+      const bySide = caught.restY > 0 && caught.restY < caught.rect.height;
+      const turn = planTurn(caught.direction, caught.bottom, caught, bySide ? event.clientY : undefined);
       if (!turn) return; // landed on the last page
       turnRef.current = turn;
       setTurning(true);
       const w = turn.layout === "book" ? turn.rect.width / 2 : turn.rect.width;
-      const rest = { x: turn.direction === "next" ? w : -w, y: turn.bottom ? turn.rect.height : 0 };
+      const rest = { x: turn.direction === "next" ? w : -w, y: turn.restY };
       turn.corner = rest;
       active = {
         id, x: event.clientX, y: event.clientY, turn, caughtCorner: rest,

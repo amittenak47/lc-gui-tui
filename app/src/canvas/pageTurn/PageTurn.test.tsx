@@ -477,6 +477,25 @@ it("turns from the middle of either side strip", async () => {
   expect(board.jumpToPageFrame).toHaveBeenCalled();
 });
 
+it("holds a sheet taken by its side where the finger took it, and a corner by its corner", async () => {
+  mount();
+  pointer("pointerdown", 380, 300);
+  pointer("pointermove", 300, 300);
+  await settle();
+  const side = vi.mocked(paintTurn).mock.calls.at(-1)![1];
+  expect(side.restY).toBe(300);
+  expect(side.corner.y).toBeCloseTo(300, 5);
+  pointer("pointerup", 380, 300);
+  await settle();
+  vi.mocked(paintTurn).mockClear();
+  pointer("pointerdown", 392, 592);
+  pointer("pointermove", 300, 592);
+  await settle();
+  expect(vi.mocked(paintTurn).mock.calls.at(-1)![1].restY).toBe(600);
+  pointer("pointerup", 392, 592);
+  await settle();
+});
+
 it("leaves the page body available to scroll", async () => {
   mount();
   for (const x of [100, 200, 300]) {

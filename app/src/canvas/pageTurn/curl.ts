@@ -39,8 +39,20 @@ export interface CurlGeometry {
  * The lifted corner stays within a sheet's width of the spine corner on its
  * own edge, and within the diagonal of the other spine corner. Without this
  * the flap stretches and tears away from the binding.
+ *
+ * A sheet held part way down its free edge (`restY` between 0 and `h`) is
+ * held to the same rule from where it was taken: within a sheet's width of
+ * the spine at that height, and no further from either spine corner than it
+ * started.
  */
-export function constrainCorner(corner: Point, w: number, h: number, bottom: boolean): Point {
+export function constrainCorner(
+  corner: Point,
+  w: number,
+  h: number,
+  bottom: boolean,
+  restY: number = bottom ? h : 0,
+): Point {
+  if (restY > 0 && restY < h) return constrainEdgePoint(corner, w, h, restY);
   let p = { ...corner };
   const near = { x: 0, y: bottom ? h : 0 };
   const far = { x: 0, y: bottom ? 0 : h };
@@ -56,9 +68,35 @@ export function constrainCorner(corner: Point, w: number, h: number, bottom: boo
   return p;
 }
 
-export function curlGeometry(corner: Point, w: number, h: number, bottom: boolean): CurlGeometry {
-  const rest = { x: w, y: bottom ? h : 0 };
-  const p = constrainCorner(corner, w, h, bottom);
+function constrainEdgePoint(point: Point, w: number, h: number, restY: number): Point {
+  let p = { ...point };
+  const within = (anchor: Point, radius: number) => {
+    const dist = Math.hypot(p.x - anchor.x, p.y - anchor.y);
+    if (dist > radius) {
+      p = { x: anchor.x + ((p.x - anchor.x) / dist) * radius, y: anchor.y + ((p.y - anchor.y) / dist) * radius };
+    }
+  };
+  within({ x: 0, y: restY }, w);
+  within({ x: 0, y: 0 }, Math.hypot(w, restY));
+  within({ x: 0, y: h }, Math.hypot(w, h - restY));
+  return p;
+}
+
+/**
+ * The fold for a sheet whose held point rests at (`w`, `restY`) and has been
+ * carried to `corner`. `restY` is a corner — 0 or `h` — unless the sheet was
+ * taken by its side, where the fold then runs from the finger: dragged
+ * straight across, the crease is upright, the whole height of the page.
+ */
+export function curlGeometry(
+  corner: Point,
+  w: number,
+  h: number,
+  bottom: boolean,
+  restY: number = bottom ? h : 0,
+): CurlGeometry {
+  const rest = { x: w, y: restY };
+  const p = constrainCorner(corner, w, h, bottom, restY);
   const dx = rest.x - p.x;
   const dy = rest.y - p.y;
   const len = Math.hypot(dx, dy);
@@ -130,8 +168,15 @@ export function sheetPart(g: CurlGeometry, w: number, h: number, flap: boolean):
  * the binding, so there is no corner to hold: the fold sits under the finger
  * instead, which puts the corner twice as far from the binding.
  */
-export function cornerForCrease(x: number, dy: number, w: number, h: number, bottom: boolean): Point {
-  return { x: Math.min(w, Math.max(-w, 2 * x - w)), y: (bottom ? h : 0) + dy * 0.5 };
+export function cornerForCrease(
+  x: number,
+  dy: number,
+  w: number,
+  h: number,
+  bottom: boolean,
+  restY: number = bottom ? h : 0,
+): Point {
+  return { x: Math.min(w, Math.max(-w, 2 * x - w)), y: restY + dy * 0.5 };
 }
 
 /**
@@ -140,8 +185,16 @@ export function cornerForCrease(x: number, dy: number, w: number, h: number, bot
  * The corner goes where the finger goes, from wherever it was taken: grabbed
  * at the page's corner, it stays under the fingertip for the whole turn.
  */
-export function cornerForGrip(start: Point, dx: number, dy: number, w: number, h: number, bottom: boolean): Point {
-  return constrainCorner({ x: Math.min(w, Math.max(-w, start.x + dx)), y: start.y + dy }, w, h, bottom);
+export function cornerForGrip(
+  start: Point,
+  dx: number,
+  dy: number,
+  w: number,
+  h: number,
+  bottom: boolean,
+  restY: number = bottom ? h : 0,
+): Point {
+  return constrainCorner({ x: Math.min(w, Math.max(-w, start.x + dx)), y: start.y + dy }, w, h, bottom, restY);
 }
 
 /** How far across the page a let-go hand must have carried it; short of it, the sheet unravels. */

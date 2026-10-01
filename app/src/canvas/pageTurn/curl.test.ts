@@ -82,3 +82,25 @@ describe("page curl geometry", () => {
     expect(at).toEqual({ x: 220, y: 520 });
   });
 });
+
+describe("a sheet held by its side", () => {
+  it("folds upright from the finger when drawn straight across", () => {
+    // Held halfway down a 400 x 600 sheet and carried 200 px left.
+    const g = curlGeometry({ x: 200, y: 300 }, 400, 600, false, 300);
+    expect(g.rest).toEqual({ x: 400, y: 300 });
+    expect(g.foldNormal.x).toBeCloseTo(1, 10);
+    expect(g.foldNormal.y).toBeCloseTo(0, 10);
+    expect(g.foldPoint.x).toBeCloseTo(300, 10);
+    expect(g.progress).toBeCloseTo(0.25, 10);
+  });
+
+  it("stays within the paper's reach of the spine from where it was taken", () => {
+    const p = constrainCorner({ x: -900, y: 300 }, 400, 600, false, 300);
+    expect(Math.hypot(p.x, p.y - 300)).toBeLessThanOrEqual(400 + 1e-9);
+  });
+
+  it("is a corner peel exactly as before when held at a corner", () => {
+    const corner = { x: 120, y: 520 };
+    expect(curlGeometry(corner, 400, 600, true, 600)).toEqual(curlGeometry(corner, 400, 600, true));
+  });
+});
