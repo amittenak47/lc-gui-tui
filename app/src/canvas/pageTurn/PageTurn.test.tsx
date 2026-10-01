@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { BoardHandle } from "../BoardHandle";
-import { glide, PageTurn } from "./PageTurn";
+import { glide, PageTurn, turnPaperColor } from "./PageTurn";
 import { paintTurn } from "./paintTurn";
 
 // Gesture tests inspect the frame submitted to the renderer. Actual canvas
@@ -421,9 +421,25 @@ it("keeps the canvas frame protected when annotation takes over in Pages mode", 
 });
 
 
-it("leaves the page body and middle of each edge available to scroll", async () => {
+it("keeps PDF backs light in dark palettes, preserving text and light palettes", () => {
+  expect(turnPaperColor("#101820", true)).toBe("#ffffff");
+  expect(turnPaperColor("rgb(32, 36, 40)", true)).toBe("#ffffff");
+  expect(turnPaperColor("#f5f0e8", true)).toBe("#f5f0e8");
+  expect(turnPaperColor("#101820", false)).toBe("#101820");
+});
+
+it("turns from the middle of either side strip", async () => {
   mount();
-  for (const x of [20, 200, 380]) {
+  pointer("pointerdown", 380, 300);
+  pointer("pointermove", 160, 300);
+  pointer("pointerup", 160, 300);
+  await settle();
+  expect(board.jumpToPageFrame).toHaveBeenCalled();
+});
+
+it("leaves the page body available to scroll", async () => {
+  mount();
+  for (const x of [100, 200, 300]) {
     pointer("pointerdown", x, 300);
     pointer("pointermove", x - 160, 305);
     pointer("pointerup", x - 160, 305);

@@ -25,7 +25,8 @@ import { constrainCorner, cornerForCrease, cornerForGrip, turnCommits, type Poin
 import { paintTurn, type TurnLayout } from "./paintTurn";
 import { boardResizeDeferred } from "../../util/splitResize";
 import { canvasGestureFrame, protectGestureSurface } from "../../util/gestureExclusion";
-import { turnCornerAt, turnCornerSize } from "./corners";
+import { turnEdgeAt, turnCornerSize } from "./corners";
+import { cssColorLuminance } from "../../util/webPagePaper";
 
 /** In Pages reading the side stacks sit this much further up, as a share of their gap from the bottom. */
 const CHROME_LIFT = 0.5;
@@ -261,6 +262,10 @@ function paletteSignature(): string {
 function paperColor(): string {
   if (typeof document === "undefined") return "#ffffff";
   return getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff";
+}
+
+export function turnPaperColor(paper: string, pdf: boolean): string {
+  return pdf && (cssColorLuminance(paper) ?? 1) < 0.5 ? "#ffffff" : paper;
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -553,7 +558,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       // The outer edge is the turn's, while turning is on.
       const hole = el.parentElement?.getBoundingClientRect();
       if (hole && turnEnabledRef.current && event.pointerType !== "pen") {
-        if (turnCornerAt(hole, event.clientX, event.clientY)) return;
+        if (turnEdgeAt(hole, event.clientX, event.clientY)) return;
       }
       const frames = b.readingPageFrames();
       const i = frames.findIndex((f) => same(f, held));
@@ -596,6 +601,18 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
      */
     const shot = (b: BoardHandle, scene: Scene, scale: number, cutY = Infinity, pageId = 0) =>
       takeShot(shotsRef.current, b, scene, scale, cutY, pagedRef.current ? pdfPaintSignature(hostSelector, pageId) : "");
+
+    // Keep the fold inside its board's stacking context. A body-level overlay
+    // can cover inline PDF controls even though shared/portalled controls win.
+    const mountTurnCanvas = (turn: Turn) => {
+      const pane = document.querySelector<HTMLElement>(hostSelector);
+      if (!pane) return;
+      const surface = pane.querySelector<HTMLElement>(".lc-board") ?? pane;
+      const origin = surface.getBoundingClientRect();
+      turn.canvas.style.left = `${turn.rect.left - origin.left + surface.scrollLeft - surface.clientLeft}px`;
+      turn.canvas.style.top = `${turn.rect.top - origin.top + surface.scrollTop - surface.clientTop}px`;
+      surface.append(turn.canvas);
+    };
 
     /**
      * The part of the page at `at` in view, in scene units: its column, and
@@ -765,7 +782,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         ([here, there]) => {
           if (turnRef.current !== turn || turn.done || !here || !there) return false;
           turn.images = direction === "next" ? { from: here, to: there } : { from: there, to: here };
-          document.body.append(canvas);
+          mountTurnCanvas(turn);
           draw(turn);
           return true;
         },
@@ -862,7 +879,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
           if (turnRef.current !== turn || turn.done || !here || !there) return false;
           // Turning back is turning forward from the previous page, reversed.
           turn.images = direction === "next" ? { from: here, to: there } : { from: there, to: here };
-          document.body.append(canvas);
+          mountTurnCanvas(turn);
           draw(turn);
           return true;
         },
@@ -887,7 +904,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         sourceHeight: turn.images.from.height,
         corner: turn.corner,
         bottom: turn.bottom,
-        paper: paperColor(),
+        paper: turnPaperColor(paperColor(), pagedRef.current),
       });
     };
 
@@ -1057,8 +1074,8 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
 
     /* ---------------------------------------------------------- gesture */
 
-    // Corner triangles own turning; the body and middle edges keep scrolling,
-    // selection, and writing. A stylus always belongs to the ink layer.
+    // Side strips and corner triangles own turning. The body keeps scrolling
+    // and selection; a stylus always belongs to the ink layer.
     const host = () => document.querySelector<HTMLElement>(hostSelector);
     const pageRect = (): DOMRect | null => {
       const hole = host()?.querySelector<HTMLElement>(".lc-page-mask-hole");
@@ -1070,7 +1087,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     const edgeAt = (x: number, y: number): "left" | "right" | null => {
       const r = pageRect();
       if (!r || x < r.left || x > r.right || y < r.top || y > r.bottom) return null;
-      return turnCornerAt(r, x, y);
+      return turnEdgeAt(r, x, y);
     };
     const setHover = (edge: "left" | "right" | null) => {
       const el = host();
@@ -1165,7 +1182,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (event.button !== 0 || !event.isPrimary) return;
       if (event.pointerType === "pen") return; // the stylus writes; fingers and mice turn
       if (!inHost(event.target)) return;
-      // Both touch and mouse start turns only in corner triangles.
+      // Touch and mouse can grip the side strips as well as the corner peels.
       const side = edgeAt(event.clientX, event.clientY);
       const playing = turnRef.current;
       if (playing) {

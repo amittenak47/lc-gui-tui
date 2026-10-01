@@ -27,6 +27,7 @@ describe("compositePageLayers", () => {
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
   it("preserves WebView text zoom and em spacing in the folded image", async () => {
+    vi.stubGlobal("devicePixelRatio", 1.7);
     const sources: string[] = [];
     vi.stubGlobal("Image", class {
       onload?: () => void;
@@ -53,6 +54,8 @@ describe("compositePageLayers", () => {
       { contentSlot: slot, marksSlot: null, pageBounds: bounds, paperColor: "#fff" });
     const xml = decodeURIComponent(sources[0].slice(sources[0].indexOf(",") + 1));
     const captured = new DOMParser().parseFromString(xml, "image/svg+xml");
+    expect(captured.querySelector("foreignObject")?.getAttribute("transform")).toBe(`scale(${1 / 1.7})`);
+    expect(captured.querySelector("foreignObject")?.getAttribute("width")).toBe("340");
     expect(captured.querySelector("p")?.getAttribute("style")).toContain("font-size: 14.45px");
     expect(captured.querySelector("p")?.getAttribute("style")).toContain("margin-bottom: 17px");
     expect(captured.querySelector("span")?.getAttribute("style")).toContain("top: -5.95px");

@@ -283,8 +283,14 @@ async function drawDomSlot(
   // page, and anything past the frame would be clipped off the picture.
   const boxW = Math.max(pageBounds.maxX - pageBounds.minX, slot.offsetWidth);
   const boxH = Math.max(pageBounds.maxY - pageBounds.minY, slot.offsetHeight);
+  // SVG images lay out on a 1x pixel grid. A tablet's fractional DPR rounds
+  // borders and line boxes differently, accumulating a visible shift down
+  // tables even with frozen CSS metrics. Match its layout grid, then undo
+  // that zoom geometrically so the captured scene stays the same size.
+  const layoutDpr = window.devicePixelRatio || 1;
   wrapper.style.width = `${boxW}px`;
   wrapper.style.height = `${boxH}px`;
+  wrapper.style.zoom = String(layoutDpr);
   wrapper.style.position = "relative";
   wrapper.style.overflow = "hidden";
   wrapper.style.background = "transparent";
@@ -296,8 +302,8 @@ async function drawDomSlot(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${pixelW}" height="${pixelH}" ` +
     `viewBox="${localX} ${localY} ${sceneW} ${sceneH}">` +
     `<style type="text/css"><![CDATA[${css}]]></style>` +
-    `<foreignObject x="0" y="0" width="${boxW}" ` +
-    `height="${boxH}">${new XMLSerializer().serializeToString(shell.outer)}</foreignObject></svg>`;
+    `<foreignObject x="0" y="0" transform="scale(${1 / layoutDpr})" width="${boxW * layoutDpr}" ` +
+    `height="${boxH * layoutDpr}">${new XMLSerializer().serializeToString(shell.outer)}</foreignObject></svg>`;
 
   // Chromium/WebView marks a blob-backed SVG containing foreignObject as
   // origin-unclean even when every node is local. Drawing it succeeds, but the

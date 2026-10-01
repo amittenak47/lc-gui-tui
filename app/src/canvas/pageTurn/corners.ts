@@ -16,6 +16,16 @@ export function turnCornerAt(rect: Box, x: number, y: number): "left" | "right" 
   return null;
 }
 
+/** About 1.5 cm at Android's CSS/dp scale; peels keep their corner shape. */
+export function turnEdgeAt(rect: Box, x: number, y: number): "left" | "right" | null {
+  const corner = turnCornerAt(rect, x, y);
+  if (corner) return corner;
+  const dx = x - rect.left, dy = y - rect.top;
+  if (dx < 0 || dy < 0 || dx > rect.width || dy > rect.height) return null;
+  const strip = Math.min(64, rect.width / 4);
+  return dx <= strip ? "left" : rect.width - dx <= strip ? "right" : null;
+}
+
 /** Android accepts rectangles: short bands approximate each corner triangle. */
 export function turnCornerExclusions(rect: Box, viewport: Box): ExclusionRect[] {
   const size = turnCornerSize(rect), bands = 6, step = size / bands;

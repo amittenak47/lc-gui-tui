@@ -2127,8 +2127,8 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
 /* Pages reading: the sheet being turned, drawn over the view for the length
  * of the turn only. Above the page, below the board's own chrome. */
 .lc-page-turn {
-  position: fixed;
-  z-index: 80;
+  position: absolute;
+  z-index: 45;
   pointer-events: none;
 }
 
@@ -21421,8 +21421,10 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-map-controls.is-mixed-hands .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake,
 [data-ui-handedness="left"]:not([data-handedness="left"]) .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake,
 [data-handedness="left"]:not([data-ui-handedness="left"]) .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake {
-  bottom: calc(100% + 10px);
-  transform: translateX(-50%);
+  /* Move clear before the delayed tray expands. Its collapsed height is zero,
+   * so using 100% here made the checker move a second time with the tray. */
+  bottom: 0;
+  transform: translateX(-50%) translateY(calc(-100% - 16px));
   transition:
     transform var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
     bottom var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1);
