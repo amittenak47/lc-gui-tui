@@ -360,6 +360,13 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
   spreadRef.current = spread;
   const pagedRef = useRef(paged);
   pagedRef.current = paged;
+  /**
+   * The zoom a page rests at once landed or held, taken at the first prefetch
+   * after. Pictures are for turning from there; zoomed away (a pinch) they
+   * would be stale the moment the hand moves again, and taking them is what
+   * made a following pinch stall.
+   */
+  const restZoomRef = useRef<number | null>(null);
   /** Pictures of pages taken ahead of a turn, keyed by what they show. */
   const shotsRef = useRef(new Map<string, Promise<HTMLCanvasElement | null>>());
   useEffect(() => () => shotsRef.current.clear(), []);
@@ -444,6 +451,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const stays = held && showsHeld(board, held, probe);
       const locked = frames[stays ? currentIndex(frames, held, view) : pageInView(frames, view)]!;
       lockedRef.current = locked;
+      restZoomRef.current = null;
       board.setPageLock(locked);
     };
     /*
@@ -704,8 +712,13 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         const b = board();
         if (!b || disposed || prefetching || turnRef.current || boardResizeDeferred()) return;
         const view = b.getViewportBounds();
+        if (!view) return;
+        // Zoomed away from where the page rests: a turn from here takes its own.
+        const zoom = view.zoom ?? 1;
+        const rest = restZoomRef.current ?? (restZoomRef.current = zoom);
+        if (Math.abs(zoom / rest - 1) > 0.02) return;
         const frames = b.readingPageFrames();
-        if (!view || frames.length === 0) return;
+        if (frames.length === 0) return;
         const at = currentIndex(frames, lockedRef.current, view);
         const from = frames[at]!;
         const current = () => !disposed && !turnRef.current && !boardResizeDeferred() && !isCameraBusy() &&
@@ -990,6 +1003,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const b = board();
       if (!b) return;
       lockedRef.current = turn.to;
+      restZoomRef.current = null;
       b.setPageLock(turn.to);
       b.jumpToPageFrame({ ...turn.to, minY: turn.to.minY + turn.offsetInPage });
       heading = turn.direction;
