@@ -57,6 +57,9 @@ import {
   persistInkTile,
 } from "./inkTileStore";
 
+/** Persisted squares decoded at once on open: enough to keep the decoder threads busy. */
+const HYDRATE_DECODES_IN_FLIGHT = 6;
+
 export {
   LEVEL_STEP,
   TILE_OVERLAP_PX,
@@ -775,34 +778,44 @@ export class InkTileCache {
     void loadPersistedInkTiles(sig)
       .then(async (rows) => {
         if (gen !== this.hydrateGen || this.sig !== sig) return;
-        for (const row of rows) {
-          const key = tileKey(row.level, row.tx, row.ty);
-          if (this.tiles.has(key)) continue;
-          if (typeof createImageBitmap !== "function") continue;
-          let source: ImageBitmap;
-          try {
-            source = await createImageBitmap(row.blob);
-          } catch {
-            continue;
+        if (typeof createImageBitmap !== "function") return;
+        /*
+         * Several decodes in flight. Each is a few milliseconds on a decoder
+         * thread, but awaited one by one a page's hundred-odd squares were
+         * two seconds of a launch spent waiting, with cores idle.
+         */
+        let next = 0;
+        const decodeNext = async (): Promise<void> => {
+          while (next < rows.length) {
+            const row = rows[next++]!;
+            const key = tileKey(row.level, row.tx, row.ty);
+            if (this.tiles.has(key)) continue;
+            let source: ImageBitmap;
+            try {
+              source = await createImageBitmap(row.blob);
+            } catch {
+              continue;
+            }
+            if (gen !== this.hydrateGen || this.sig !== sig) {
+              source.close();
+              return;
+            }
+            // A worker may have filled this square while decoding its disk copy.
+            if (this.tiles.has(key)) { source.close(); continue; }
+            this.tiles.set(key, {
+              key,
+              level: row.level,
+              tx: row.tx,
+              ty: row.ty,
+              canvas: source,
+              width: row.width,
+              height: row.height,
+              usedAt: this.drawCount,
+              painted: true,
+            });
           }
-          if (gen !== this.hydrateGen || this.sig !== sig) {
-            source.close();
-            return;
-          }
-          // A worker may have filled this square while decoding its disk copy.
-          if (this.tiles.has(key)) { source.close(); continue; }
-          this.tiles.set(key, {
-            key,
-            level: row.level,
-            tx: row.tx,
-            ty: row.ty,
-            canvas: source,
-            width: row.width,
-            height: row.height,
-            usedAt: this.drawCount,
-            painted: true,
-          });
-        }
+        };
+        await Promise.all(Array.from({ length: Math.min(HYDRATE_DECODES_IN_FLIGHT, rows.length) }, decodeNext));
       })
       .catch(() => {})
       .finally(() => {

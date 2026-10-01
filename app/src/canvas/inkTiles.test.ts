@@ -710,6 +710,39 @@ describe("InkTileCache", () => {
     expect(cache.covered).toBe(true);
   });
 
+  it("decodes several stored squares at once on open, and reports once they are in", async () => {
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      level: 0, tx: i, ty: 0, blob: new Blob(), width: 256, height: 256,
+    }));
+    const load = vi.spyOn(tileStore, "loadPersistedInkTiles").mockResolvedValue(rows as never);
+    let inFlight = 0;
+    let most = 0;
+    const waiting: Array<() => void> = [];
+    vi.stubGlobal("createImageBitmap", vi.fn(() => {
+      inFlight++;
+      most = Math.max(most, inFlight);
+      return new Promise((resolve) => waiting.push(() => {
+        inFlight--;
+        resolve({ close: vi.fn(), width: 256, height: 256 });
+      }));
+    }));
+    const ready = vi.fn();
+    const { cache } = makeCache({ persist: true, onTilesReady: ready });
+    try {
+      cache.syncOpsDeferred([draw([0, 0], [40, 0])]);
+      await vi.waitFor(() => expect(load).toHaveBeenCalled());
+      await vi.waitFor(() => expect(waiting.length).toBeGreaterThan(1));
+      expect(most).toBeGreaterThan(1);
+      expect(most).toBeLessThanOrEqual(6);
+      expect(ready).not.toHaveBeenCalled();
+      while (waiting.length) { waiting.shift()!(); await Promise.resolve(); await Promise.resolve(); }
+      await vi.waitFor(() => expect(ready).toHaveBeenCalled());
+      expect(cache.size).toBe(10);
+    } finally {
+      cache.dispose(); load.mockRestore(); vi.unstubAllGlobals();
+    }
+  });
+
   it("queues visible misses while persist hydrate is still running", () => {
     const { cache, scheduled } = makeCache({ persist: true, useWorker: true });
     cache.setOps([draw([0, 0], [40, 0])]);
