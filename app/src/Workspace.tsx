@@ -285,10 +285,14 @@ import {
   languageForName,
   exportMarkdownNote,
   missingAppFileCopy,
+  folderPickSupported,
   pickDocumentFile,
+  pickFolderFiles,
   pickSidecarFile,
   readAnnotateSidecar,
+  type OpenedDocument,
 } from "./util/annotateFs";
+import { inlineMarkdownImages, localImageRefs } from "./util/markdownImages";
 import {
   deleteAnnotateDoc,
   annotateDocLabel,
@@ -5461,6 +5465,9 @@ export const Workspace = memo(function Workspace({
     };
   }, [exploreNodes, tab.kind]);
 
+  /** A picked note whose pictures sit beside it on disk, waiting on whether to bring them. */
+  const [figurePrompt, setFigurePrompt] = useState<{ picked: OpenedDocument; refs: string[] } | null>(null);
+
   const pickAndOpenAnnotate = useCallback(async () => {
     if (busy !== null) return;
     beginPadOpen();
@@ -5477,6 +5484,14 @@ export const Workspace = memo(function Workspace({
     try {
       const picked = await pickDocumentFile();
       if (!picked) return;
+      // Figures beside the note can come with it, where a folder can be picked.
+      if (picked.docType === "markdown" && picked.text && folderPickSupported()) {
+        const refs = localImageRefs(picked.text);
+        if (refs.length > 0) {
+          setFigurePrompt({ picked, refs });
+          return;
+        }
+      }
       handedOff = true;
       setShellLoadActive(true);
       setWorkspaceLoadActive(true);
@@ -5509,6 +5524,49 @@ export const Workspace = memo(function Workspace({
       }
     }
   }, [beginPadOpen, busy, endPadOpen, openAnnotate, problem, setBrowseMotion, setHoldBrowseOverlay, setShellLoadActive]);
+
+  /**
+   * Open the note the figure question was about, with its folder's pictures
+   * written into it or without them. A folder pick that comes back empty
+   * leaves the question up rather than opening the note bare.
+   */
+  const openPromptedNote = useCallback(async (withFolder: boolean) => {
+    const prompt = figurePrompt;
+    if (!prompt) return;
+    let picked = prompt.picked;
+    if (withFolder) {
+      const files = await pickFolderFiles().catch(() => null);
+      if (!files || files.length === 0) return;
+      const out = await inlineMarkdownImages(picked.text ?? "", picked.name, files);
+      picked = { ...picked, text: out.text };
+      if (out.missing.length > 0) {
+        setNotice(
+          `${out.missing.length} picture${out.missing.length === 1 ? " was" : "s were"} not in that folder: ` +
+            out.missing.slice(0, 3).join(", ") + (out.missing.length > 3 ? "…" : ""),
+        );
+      }
+    }
+    setFigurePrompt(null);
+    const fromBrowse = !problem;
+    beginPadOpen();
+    try {
+      setShellLoadActive(true);
+      setWorkspaceLoadActive(true);
+      await openAnnotate({ name: picked.name, docType: picked.docType, text: picked.text, bytes: picked.bytes });
+    } catch (cause) {
+      setError(messageOf(cause));
+      setShellLoadActive(false);
+      if (fromBrowse) {
+        setBrowseMotion("idle");
+        setHoldBrowseOverlay(false);
+      }
+    } finally {
+      endPadOpen();
+      setBusy(null);
+      setWorkspaceLoadActive(false);
+      setBoardPreparing(false);
+    }
+  }, [beginPadOpen, endPadOpen, figurePrompt, openAnnotate, problem, setBrowseMotion, setHoldBrowseOverlay, setShellLoadActive]);
 
   const showWebEntry = useCallback(
     async (tab: WebTab, userLoad = false) => {
@@ -11538,6 +11596,21 @@ export const Workspace = memo(function Workspace({
           />
         )}
 
+      {figurePrompt && (
+        <ConfirmDialog
+          title="Include this note's images?"
+          message={figurePrompt
+            ? `It uses ${figurePrompt.refs.length} picture${figurePrompt.refs.length === 1 ? "" : "s"} from beside it (` +
+              figurePrompt.refs.slice(0, 2).join(", ") + (figurePrompt.refs.length > 2 ? ", …" : "") +
+              "). Pick the note's folder to bring them in: they are kept inside the note, so they reach the tablet with it."
+            : ""}
+          detail="Without them the note opens with those pictures missing."
+          confirmLabel="Pick folder"
+          cancelLabel="Open without images"
+          onConfirm={() => void openPromptedNote(true)}
+          onCancel={() => void openPromptedNote(false)}
+        />
+      )}
       {resetOpen && (
         <ConfirmDialog
           title="Reset the practice session?"

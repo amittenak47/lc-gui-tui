@@ -138,7 +138,8 @@ export function shouldReportDocumentHeight(clientWidth: number, hasText: boolean
  * below it sits where it always did.
  */
 const SKIPPABLE_BLOCKS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6"]);
-const HOLDS_SCROLL_HOST = 'pre, .katex-display, [style*="overflow" i]';
+/** Scroll hosts must stay measurable; a picture settles its height only once decoded. */
+const HOLDS_SCROLL_HOST = 'pre, .katex-display, [style*="overflow" i], img';
 
 /** What a note's layout depends on besides its text. */
 export function markdownLayoutShape(node: HTMLElement): string {

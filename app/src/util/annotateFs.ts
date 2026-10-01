@@ -201,7 +201,8 @@ export const FILE_PICKER_GIVE_UP_MS = 20_000;
 
 function pickFromHiddenInput<T>(
   accept: string,
-  read: (file: File) => Promise<T>,
+  read: (file: File, all: File[]) => Promise<T>,
+  configure?: (input: HTMLInputElement) => void,
 ): Promise<T | null> {
   return new Promise((resolve, reject) => {
     if (typeof document === "undefined") {
@@ -216,6 +217,7 @@ function pickFromHiddenInput<T>(
     input.style.position = "fixed";
     input.style.left = "-10000px";
     input.style.opacity = "0";
+    configure?.(input);
 
     let settled = false;
     let chosen = false;
@@ -331,7 +333,7 @@ function pickFromHiddenInput<T>(
       chosen = true;
       window.clearTimeout(resumeTimer);
       traceOpen("picker: file chosen", { name: file.name, size: file.size });
-      read(file).then(
+      read(file, Array.from(input.files ?? [])).then(
         (value) => {
           traceOpen("picker: file read", { name: file.name });
           settle(value);
@@ -539,4 +541,28 @@ export function pickDocumentFile(): Promise<OpenedDocument | null> {
     }
     return { name, docType, bytes };
   });
+}
+
+/** Whether this device can hand over a whole folder: the desktop shell, not a tablet's picker. */
+export function folderPickSupported(): boolean {
+  if (typeof document === "undefined") return false;
+  if (/android/i.test(navigator.userAgent)) return false;
+  return "webkitdirectory" in document.createElement("input");
+}
+
+/**
+ * Ask for a folder and hand back every file in it with its path inside it.
+ *
+ * For a note's pictures: see `markdownImages`. Read lazily — the files are
+ * handles, and only the ones the note refers to are ever read.
+ */
+export function pickFolderFiles(): Promise<Array<{ path: string; file: File }> | null> {
+  return pickFromHiddenInput(
+    "",
+    async (_first, all) => all.map((file) => ({ path: file.webkitRelativePath || file.name, file })),
+    (input) => {
+      input.webkitdirectory = true;
+      input.multiple = true;
+    },
+  );
 }
