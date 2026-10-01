@@ -24,6 +24,7 @@ import { peekPdfFilmCurrent, subscribePdfFilmCurrent } from "../../modes/pdfFilm
 import { constrainCorner, cornerForCrease, cornerForGrip, turnCommits, type Point } from "./curl";
 import { paintTurn, type TurnLayout } from "./paintTurn";
 import { boardResizeDeferred } from "../../util/splitResize";
+import { afterBootSettled, isBootSettled } from "../../util/bootSettled";
 import { canvasGestureFrame, protectGestureSurface } from "../../util/gestureExclusion";
 import { turnEdgeAt, turnCornerSize } from "./corners";
 import { cssColorLuminance } from "../../util/webPagePaper";
@@ -669,6 +670,12 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const quick = delay < PREFETCH_IDLE_MS;
       window.clearTimeout(prefetchTimer);
       prefetchTimer = window.setTimeout(() => {
+        // Each picture holds the main thread, and the launch is still opening
+        // the page: pictures wait for it, and a turn before then takes its own.
+        if (!isBootSettled()) {
+          void afterBootSettled().then(() => { if (!disposed) prefetch(); });
+          return;
+        }
         const b = board();
         if (!b || disposed || prefetching || turnRef.current || boardResizeDeferred()) return;
         const view = b.getViewportBounds();

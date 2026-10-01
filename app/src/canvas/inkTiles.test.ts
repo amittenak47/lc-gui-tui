@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./inkLab/tileRasterClient", () => ({ rasterInkTileOffThread: vi.fn() }));
 import { rasterInkTileOffThread } from "./inkLab/tileRasterClient";
 import * as tileStore from "./inkTileStore";
+import { markBootSettled, resetBootSettledForTests } from "../util/bootSettled";
 
 import {
   boundsOverlap,
@@ -245,6 +246,8 @@ function screen(zoom: number, scrollX = 0, scrollY = 0): ViewportTransform {
 }
 
 describe("InkTileCache", () => {
+  beforeEach(() => markBootSettled());
+
   function makeCache(overrides = {}) {
     const canvases = fakeCanvasFactory();
     const scheduled: Array<() => void> = [];
@@ -788,6 +791,24 @@ describe("InkTileCache", () => {
       expect(persist).not.toHaveBeenCalled();
     } finally {
       cache.dispose(); encode.mockRestore(); persist.mockRestore(); vi.useRealTimers();
+    }
+  });
+
+  it("leaves bitmap encoding until the launch has settled", async () => {
+    resetBootSettledForTests();
+    vi.useFakeTimers();
+    const encode = vi.spyOn(tileStore, "blobFromTileSource").mockResolvedValue(null);
+    const { cache } = makeCache({ persist: true });
+    try {
+      cache.syncOpsDeferred([draw([10, 10], [20, 20])]);
+      cache.draw(destinationContext().ctx, screen(1), 1);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(encode).not.toHaveBeenCalled();
+      markBootSettled();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(encode).toHaveBeenCalled();
+    } finally {
+      cache.dispose(); encode.mockRestore(); vi.useRealTimers();
     }
   });
 

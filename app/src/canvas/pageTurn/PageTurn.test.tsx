@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import type { BoardHandle } from "../BoardHandle";
+import { markBootSettled } from "../../util/bootSettled";
 import { glide, PageTurn, rollMs, turnPaperColor } from "./PageTurn";
 import { paintTurn } from "./paintTurn";
 
@@ -56,6 +57,7 @@ class TestPointerEvent extends MouseEvent {
 }
 
 beforeEach(() => {
+  markBootSettled();
   vi.mocked(paintTurn).mockClear();
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
     setTransform: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(),

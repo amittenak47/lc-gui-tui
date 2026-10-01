@@ -18,6 +18,7 @@ import { Marked } from "marked";
 import "katex/dist/katex.min.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { traceOpen } from "../util/messageOf";
 import { parseInline } from "./docPreview";
 import { markedTexmathDollars } from "./mdMath";
 
@@ -54,7 +55,9 @@ export interface AnnotateDocumentProps {
  * of notes actually uses stays.
  */
 export function renderMarkdown(source: string): string {
+  const t0 = performance.now();
   const html = markedMath.parse(source, { async: false });
+  const t1 = performance.now();
   const clean = DOMPurify.sanitize(html, {
     // No `target`/`rel` juggling needed: links are inert here anyway, since
     // the surface never receives a pointer event.
@@ -63,6 +66,13 @@ export function renderMarkdown(source: string): string {
     FORBID_ATTR: ["onerror", "onload", "onclick"],
     ADD_ATTR: ["style"],
   });
+  if (source.length > 20_000) {
+    traceOpen("markdown rendered", {
+      chars: source.length,
+      parseMs: Math.round(t1 - t0),
+      sanitizeMs: Math.round(performance.now() - t1),
+    });
+  }
   return clean;
 }
 

@@ -21,6 +21,7 @@ import { AmbientCoach, defaultCoachSocketFactory, type AmbientProbe } from "./ap
 import { mergeProcessEvent } from "./modes/processEvents";
 import { isTauriRuntime } from "./api/nativeHttp";
 import { liveWebviewSupported } from "./util/liveWebviewSupport";
+import { afterBootSettled } from "./util/bootSettled";
 import { etaLabel, etaMs, newEta, recordBatch } from "./util/embedEta";
 import type { DocWorkProgress } from "./components/DocIndexChip";
 import { fetchDocHubHint, type DocHubHint } from "./util/hubHint";
@@ -1854,7 +1855,8 @@ export const Workspace = memo(function Workspace({
         }
       })
       .catch(() => {});
-    void sweepPadTrash().catch(() => {});
+    // Housekeeping walks the library; the launch's restore goes first.
+    void afterBootSettled().then(() => sweepPadTrash()).catch(() => {});
     void drainDirtyInkArchives();
     /*
      * Bring hash-keyed ink and snapshots onto the sidecar id.
@@ -4277,6 +4279,7 @@ export const Workspace = memo(function Workspace({
         boardRef.current?.stripCoachViz();
         lastIdsRef.current = new Set();
         await boardRef.current?.waitForTemplate();
+        traceOpen("template ready", { ms: openMs() });
         // Ink first — see `openWhiteboard`. A saved PDF page restores the
         // camera after that page exists; do not fit to the stack top first.
         if (existing) {
@@ -4287,6 +4290,7 @@ export const Workspace = memo(function Workspace({
           // Which layout that ink was written in, if the copy says; checked
           // against this device's once the pages are laid out, below.
           handle?.setInkSpread(pdfInkSpreadStamp(existing.board));
+          traceOpen("ink restored", { ms: openMs() });
         }
 
         // Document must finish laying out (measure stable) before reveal.
@@ -4383,6 +4387,7 @@ export const Workspace = memo(function Workspace({
           );
         } else {
           await boardRef.current?.settleFitView();
+          traceOpen("fit settled", { ms: openMs() });
           if (workspaceLoadGenRef.current !== loadGen) return;
           let laidOut = await waitForAnnotateLaidOut(
             () => annotateHeightRef.current,
@@ -4391,6 +4396,7 @@ export const Workspace = memo(function Workspace({
             pdfFailed,
             loadSignal,
           );
+          traceOpen(laidOut ? "laid out" : "layout gate missed", { height: annotateHeightRef.current, ms: openMs() });
           if (workspaceLoadGenRef.current !== loadGen) return;
           if (!laidOut && pdfFailed()) {
             throw new Error(pdfFailed()!);
@@ -4425,8 +4431,10 @@ export const Workspace = memo(function Workspace({
           if (existing?.board.appState) {
             boardRef.current?.restoreView(existing.board.appState);
           }
+          traceOpen("view restored", { ms: openMs() });
         }
         await boardRef.current?.primeInkSnap();
+        traceOpen("ink snap primed", { ms: openMs() });
 
         {
           const board = boardRef.current;
@@ -4445,6 +4453,7 @@ export const Workspace = memo(function Workspace({
         }
 
         await waitForLoadingDoodleIdle();
+        traceOpen("doodle idle", { ms: openMs() });
         if (workspaceLoadGenRef.current !== loadGen) return;
         setBrowseMotion("idle");
         setSwitchMotion("idle");
@@ -4454,6 +4463,10 @@ export const Workspace = memo(function Workspace({
         agentSaveSuspendedRef.current = false;
         setWorkspaceLoadActive(false);
         setShellLoadActive(false);
+        // The page is on screen: the launch splash may go. What follows —
+        // re-landing a PDF's page over the next ¾ s, the hub hint — is upkeep
+        // behind a readable page, and the splash used to wait it out too.
+        setOpening(false);
         if (cold) {
           setEntering(true);
           window.setTimeout(() => setEntering(false), boardFadeMs() || 1);

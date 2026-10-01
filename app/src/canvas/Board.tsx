@@ -5602,12 +5602,28 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       rememberOrRestore();
     };
     slot.addEventListener("scroll", onScroll, true);
+    /*
+     * Only a frozen fence has to be put back on the very swap that reset it.
+     * Otherwise this just remembers places, and a document mounting in
+     * batches would re-list every fence — a forced layout each — per batch:
+     * a second of a tablet's launch. Remember once the batches stop.
+     */
+    let relistTimer = 0;
+    const relist = () => {
+      relistTimer = 0;
+      listed = listScrollHostsInBoard(slot);
+      rememberOrRestore();
+    };
     const mo =
       typeof MutationObserver === "function"
         ? new MutationObserver(records => {
             if (!mutationAffectsScrollHosts(records)) return;
-            listed = listScrollHostsInBoard(slot);
-            rememberOrRestore();
+            if (freeze) {
+              relist();
+              return;
+            }
+            window.clearTimeout(relistTimer);
+            relistTimer = window.setTimeout(relist, 200);
           })
         : null;
     mo?.observe(slot, { childList: true, subtree: true });
@@ -5615,6 +5631,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     return () => {
       slot.removeEventListener("scroll", onScroll, true);
       mo?.disconnect();
+      window.clearTimeout(relistTimer);
     };
   }, [annotateCode, inkToolActive]);
 
@@ -8432,54 +8449,63 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const fontsReady = waitForFontsReady();
 
     return (async () => {
+      const t0 = performance.now();
       await fontsReady;
-      if (pageContentRef.current) {
-        for (let attempt = 0; attempt < 45; attempt++) {
+      const neededRegions = new Set(
+        Object.keys(REGIONS).map((id) => `lcregion-${id}-frame`),
+      );
+      /*
+       * Which kind of page this is, asked again on every attempt.
+       *
+       * An open sets the document and calls this in the same turn, before
+       * React has committed the page that sets `pageContentRef`. Deciding once
+       * up front sent every document open down the practice branch, polling
+       * for region frames a document never has until all 45 attempts ran
+       * out — five seconds of a tablet's launch while the parse held frames.
+       */
+      for (let attempt = 0; attempt < 45; attempt++) {
+        if (pageContentRef.current) {
           if (ensureDocumentPageInScene()) {
             await waitFrame();
             await waitFrame();
             syncPageVisibility();
+            traceOpen("template: document page in scene", { attempt, ms: Math.round(performance.now() - t0) });
             return;
           }
-          await waitFrame();
-          await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
-        }
-        ensureDocumentPageInScene();
-        syncPageVisibility();
-        return;
-      }
-      const neededRegions = new Set(
-        Object.keys(REGIONS).map((id) => `lcregion-${id}-frame`),
-      );
-      for (let attempt = 0; attempt < 45; attempt++) {
-        const scene = apiRef.current?.getSceneElements() ?? [];
-        const ids = new Set(
-          scene.map((el) => (el as { id?: string }).id ?? ""),
-        );
-        const hasScratch = scene.some((el) => {
-          const meta = (el as { customData?: { lcScratchFrame?: boolean } }).customData;
-          return Boolean(meta?.lcScratchFrame);
-        });
-        if (hasScratch) {
-          await waitFrame();
-          await waitFrame();
-          return;
-        }
-        let ready = true;
-        for (const id of neededRegions) {
-          if (!ids.has(id)) {
-            ready = false;
-            break;
+        } else {
+          const scene = apiRef.current?.getSceneElements() ?? [];
+          const hasScratch = scene.some((el) => {
+            const meta = (el as { customData?: { lcScratchFrame?: boolean } }).customData;
+            return Boolean(meta?.lcScratchFrame);
+          });
+          if (hasScratch) {
+            await waitFrame();
+            await waitFrame();
+            return;
           }
-        }
-        if (ready) {
-          applyRegionLayout();
-          await waitFrame();
-          await waitFrame();
-          return;
+          const ids = new Set(scene.map((el) => (el as { id?: string }).id ?? ""));
+          let ready = true;
+          for (const id of neededRegions) {
+            if (!ids.has(id)) {
+              ready = false;
+              break;
+            }
+          }
+          if (ready) {
+            applyRegionLayout();
+            await waitFrame();
+            await waitFrame();
+            return;
+          }
         }
         await waitFrame();
         await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+      }
+      traceOpen("template: gave up waiting", { document: Boolean(pageContentRef.current), ms: Math.round(performance.now() - t0) });
+      if (pageContentRef.current) {
+        ensureDocumentPageInScene();
+        syncPageVisibility();
+        return;
       }
       applyRegionLayout();
     })();

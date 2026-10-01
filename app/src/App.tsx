@@ -105,6 +105,7 @@ import {
   type WorkspaceApi,
   type WorkspaceChrome,
 } from "./shellContext";
+import { markBootSettled } from "./util/bootSettled";
 import { messageOf } from "./util/messageOf";
 
 /**
@@ -379,6 +380,7 @@ export function App() {
           if (cancelled) return;
           setBootPhase("gone");
           bootOverlayPendingRef.current = false;
+          markBootSettled();
           if (llmGateWantedRef.current && !llmPromptedRef.current) {
             llmPromptedRef.current = true;
             openLlmGateRef.current();

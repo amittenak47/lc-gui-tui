@@ -1543,13 +1543,37 @@ async function applyPadSyncPingBody(
   if (conflictedPads.size === 0) savePadSyncSince(ping.now);
 }
 
-export async function sweepPadTrash(now = Date.now()): Promise<void> {
-  const { sweepWhiteboardTrash } = await import("./whiteboardStore");
-  const { sweepAnnotateTrash } = await import("./annotateStore");
-  await sweepWhiteboardTrash(now);
-  await sweepAnnotateTrash(now);
-  const { collectArtifactCache } = await import("./artifactCacheGc");
-  await collectArtifactCache(now, [...memoryQueue]).catch(() => {});
+/** When the attachment cache was last collected, in `localStorage`. */
+const ARTIFACT_GC_AT_KEY = "lc-artifact-cache-gc-at";
+/** Its copies are kept three days, so once a day is plenty. */
+export const ARTIFACT_GC_EVERY_MS = 24 * 60 * 60 * 1000;
+
+let sweeping: Promise<void> | null = null;
+
+/**
+ * Empty old trash and collect the attachment cache.
+ *
+ * One at a time: every mounted workspace asks, and each run walks the
+ * library. The cache collection reads every content, board, snapshot and
+ * queue row — seconds on a tablet, holding those stores the while — so it
+ * runs at most once a day rather than on every launch.
+ */
+export function sweepPadTrash(now = Date.now()): Promise<void> {
+  sweeping ??= (async () => {
+    const { sweepWhiteboardTrash } = await import("./whiteboardStore");
+    const { sweepAnnotateTrash } = await import("./annotateStore");
+    await sweepWhiteboardTrash(now);
+    await sweepAnnotateTrash(now);
+    let last = 0;
+    try { last = Number(localStorage.getItem(ARTIFACT_GC_AT_KEY)) || 0; } catch { /* no storage: collect */ }
+    if (now - last < ARTIFACT_GC_EVERY_MS) return;
+    const { collectArtifactCache } = await import("./artifactCacheGc");
+    await collectArtifactCache(now, [...memoryQueue]).then(
+      () => { try { localStorage.setItem(ARTIFACT_GC_AT_KEY, String(now)); } catch { /* next launch tries again */ } },
+      () => {},
+    );
+  })().finally(() => { sweeping = null; });
+  return sweeping;
 }
 
 async function fillMissingSnapshots(
