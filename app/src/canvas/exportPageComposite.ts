@@ -247,6 +247,58 @@ function embeddedFontCss(): Promise<string> {
   return css;
 }
 
+/** Longest a capture waits for its fonts before drawing anyway. */
+const FONT_SETTLE_MAX_MS = 800;
+/**
+ * How long after its first paint a capture must look the same before its
+ * fonts count as landed. They have been seen landing ~60 ms after it.
+ */
+const FONT_SETTLE_MS = 150;
+const FONT_SETTLE_STEP_MS = 40;
+
+/** A checksum of a small paint of the image; painting it is also what loads its fonts. */
+function paintedSum(img: HTMLImageElement, width: number, height: number): number | null {
+  const scale = Math.min(1, 256 / Math.max(1, width));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  let sum = 0;
+  for (let i = 0; i < data.length; i += 4) sum = (sum * 31 + data[i] + data[i + 1] * 7 + data[i + 2] * 13) | 0;
+  return sum;
+}
+
+/**
+ * Wait for the fonts inlined in a captured page to land.
+ *
+ * An SVG image fires `load` before its fonts have loaded: they load when it
+ * is first painted, and land a few frames later. Drawn at once, a capture
+ * went out with KaTeX's italic letters missing and its lines set in the
+ * fallback's metrics, and a turned page then landed with its math popping
+ * in and its text moving a few millimetres. Paint it small until it stops
+ * changing.
+ */
+async function settleImageFonts(img: HTMLImageElement, width: number, height: number): Promise<void> {
+  if (typeof document === "undefined") return;
+  const start = performance.now();
+  let last = paintedSum(img, width, height);
+  if (last === null) return;
+  let changedAt = start;
+  while (performance.now() - start < FONT_SETTLE_MAX_MS) {
+    await new Promise((resolve) => window.setTimeout(resolve, FONT_SETTLE_STEP_MS));
+    const sum = paintedSum(img, width, height);
+    if (sum !== last) {
+      last = sum;
+      changedAt = performance.now();
+    } else if (performance.now() - changedAt >= FONT_SETTLE_MS) {
+      return;
+    }
+  }
+}
+
 /**
  * Rasterize an HTML subtree (slot-local CSS = scene units) into the export
  * canvas for the overlapping scene rect.
@@ -311,6 +363,7 @@ async function drawDomSlot(
   // captures with a marks layer). A self-contained data SVG stays exportable.
   // XML serialization also closes HTML void elements for the SVG image parser.
   const img = await loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+  if (css.includes("@font-face")) await settleImageFonts(img, pixelW, pixelH);
   const dx = (overlap.minX - exportBounds.minX) * drawScale;
   const dy = (overlap.minY - exportBounds.minY) * drawScale;
   ctx.drawImage(img, dx, dy, pixelW, pixelH);
