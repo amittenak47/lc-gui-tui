@@ -51,9 +51,18 @@ export interface DocFootnoteUserLink {
 export interface DocFootnoteNote {
   id: string;
   text: string;
+  /**
+   * Pictures on the note, as raw base64 PNG (no `data:` prefix), clamped to
+   * the reading size. Kept in the footnote itself so they sync with it.
+   */
+  images?: string[];
   createdAt: number;
   updatedAt: number;
 }
+
+/** Most pictures one note keeps. */
+export const NOTE_IMAGE_LIMIT = 8;
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /**
  * A scratch board this mark owns — pointer only.
@@ -556,10 +565,16 @@ function sanitizeNotes(value: unknown, legacy: unknown, now: number): DocFootnot
         if (typeof candidate.id !== "string" || !candidate.id) return [];
         if (typeof candidate.text !== "string") return [];
         const createdAt = typeof candidate.createdAt === "number" ? candidate.createdAt : now;
+        const images = Array.isArray(candidate.images)
+          ? candidate.images
+              .filter((image): image is string => typeof image === "string" && BASE64.test(image))
+              .slice(0, NOTE_IMAGE_LIMIT)
+          : [];
         return [
           {
             id: candidate.id,
             text: candidate.text,
+            ...(images.length > 0 ? { images } : {}),
             createdAt,
             updatedAt: typeof candidate.updatedAt === "number" ? candidate.updatedAt : createdAt,
           },

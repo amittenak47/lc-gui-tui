@@ -106,6 +106,22 @@ describe("sanitizeFootnotes", () => {
     expect(kept.map((entry) => entry.id)).toEqual(["fn-1"]);
   });
 
+  it("keeps the pictures on a note, and only pictures", () => {
+    const png = "iVBORw0KGgo=";
+    const [kept] = sanitizeFootnotes([
+      footnote({
+        notes: [
+          { id: "n1", text: "", images: [png, "not base64!", 7 as unknown as string], createdAt: 1, updatedAt: 1 },
+          { id: "n2", text: "many", images: Array(12).fill(png), createdAt: 1, updatedAt: 1 },
+          { id: "n3", text: "plain", createdAt: 1, updatedAt: 1 },
+        ],
+      }),
+    ]);
+    expect(kept.notes![0]!.images).toEqual([png]);
+    expect(kept.notes![1]!.images).toHaveLength(8);
+    expect(kept.notes![2]!.images).toBeUndefined();
+  });
+
   it("keeps AI book-tab footnotes", () => {
     const [kept] = sanitizeFootnotes([
       footnote({ id: "tab", kind: "ai", excerpt: "SGD" }),

@@ -41,6 +41,8 @@ import {
   viewportBoxesOverlap,
 } from "./sheetAnchor";
 import { HOLD_SENSITIVE_MS } from "../util/gesture";
+import { pickPhotos } from "../util/photoAttach";
+import { NOTE_IMAGE_LIMIT } from "../util/docFootnotes";
 export interface FootnoteOverviewProps {
   onOpenArtifact?: (ref: ArtifactRef) => void;
   onManageArtifacts?: () => void;
@@ -579,21 +581,28 @@ export function FootnoteOverview({
     updateWhiteboards(whiteboards.filter((entry) => entry.id !== id));
     onDeleteWhiteboard?.(id);
   };
-  const saveNote = (text: string) => {
+  const saveNote = (text: string, images: string[]) => {
     if (task?.kind !== "note") return;
     const body = text.trim();
     const now = Date.now();
-    if (!body) {
+    // A note may be words, pictures or both; with neither it is gone.
+    if (!body && images.length === 0) {
       if (task.id) updateNotes(notes.filter((note) => note.id !== task.id));
       setTask(null);
       return;
     }
+    const pictures = images.length > 0 ? images : undefined;
     if (task.id) {
       updateNotes(
-        notes.map((note) => (note.id === task.id ? { ...note, text: body, updatedAt: now } : note)),
+        notes.map((note) =>
+          note.id === task.id ? { ...note, text: body, images: pictures, updatedAt: now } : note,
+        ),
       );
     } else {
-      updateNotes([...notes, { id: freshNoteId(notes, now), text: body, createdAt: now, updatedAt: now }]);
+      updateNotes([
+        ...notes,
+        { id: freshNoteId(notes, now), text: body, images: pictures, createdAt: now, updatedAt: now },
+      ]);
     }
     setTask(null);
   };
@@ -706,6 +715,7 @@ export function FootnoteOverview({
               <NoteTask
                 key={editingNote?.id ?? "new"}
                 initial={editingNote?.text ?? ""}
+                initialImages={editingNote?.images ?? []}
                 onSave={saveNote}
                 onBack={() => setTask(null)}
               />
@@ -1000,7 +1010,8 @@ export function FootnoteOverview({
                       {notes.map((note) => (
                         <li key={note.id}>
                           <span className="lc-agent-scope-option">
-                            <strong className="lc-footnote-overview-entry-text">{note.text}</strong>
+                            {note.text && <strong className="lc-footnote-overview-entry-text">{note.text}</strong>}
+                            <NoteImages images={note.images} />
                           </span>
                         </li>
                       ))}
@@ -1014,9 +1025,9 @@ export function FootnoteOverview({
                     {notes.map((note) => (
                       <li key={note.id}>
                         <HoldButton
-                          label={note.text}
+                          label={note.text || "Picture"}
                           className="lc-agent-scope-option lc-footnote-overview-entry-hold lc-hold-danger"
-                          ariaLabel={`${note.text} — tap to edit, hold to delete`}
+                          ariaLabel={`${note.text || "Picture note"} — tap to edit, hold to delete`}
                           holdMs={HOLD_SENSITIVE_MS}
                           holdThrough
                           onTap={() => openTask({ kind: "note", id: note.id })}
@@ -1024,7 +1035,8 @@ export function FootnoteOverview({
                             updateNotes(notes.filter((entry) => entry.id !== note.id))
                           }
                         >
-                          <strong className="lc-footnote-overview-entry-text">{note.text}</strong>
+                          {note.text && <strong className="lc-footnote-overview-entry-text">{note.text}</strong>}
+                          <NoteImages images={note.images} />
                         </HoldButton>
                       </li>
                     ))}
@@ -1163,16 +1175,37 @@ function HubSection({
     </section>
   );
 }
+/** A note's pictures, small, under its words. */
+function NoteImages({ images }: { images?: string[] }) {
+  if (!images?.length) return null;
+  return (
+    <span className="lc-footnote-note-images">
+      {images.map((image, i) => (
+        <img key={i} src={`data:image/png;base64,${image}`} alt="" />
+      ))}
+    </span>
+  );
+}
+
 function NoteTask({
   initial,
+  initialImages,
   onSave,
   onBack,
 }: {
   initial: string;
-  onSave: (text: string) => void;
+  initialImages: string[];
+  onSave: (text: string, images: string[]) => void;
   onBack: () => void;
 }) {
   const [text, setText] = useState(initial);
+  const [images, setImages] = useState<string[]>(initialImages);
+  const addImages = async () => {
+    const room = NOTE_IMAGE_LIMIT - images.length;
+    if (room <= 0) return;
+    const picked = await pickPhotos(room).catch(() => []);
+    if (picked.length > 0) setImages((now) => [...now, ...picked.map((photo) => photo.png)].slice(0, NOTE_IMAGE_LIMIT));
+  };
   const ref = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
     ref.current?.focus();
@@ -1194,14 +1227,35 @@ function NoteTask({
           }
           if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
           event.preventDefault();
-          onSave(text);
+          onSave(text, images);
         }}
       />
+      {images.length > 0 && (
+        <div className="lc-footnote-note-images lc-footnote-note-images-edit">
+          {images.map((image, i) => (
+            <span key={i} className="lc-footnote-note-image">
+              <img src={`data:image/png;base64,${image}`} alt={`Picture ${i + 1}`} />
+              <button
+                type="button"
+                aria-label={`Remove picture ${i + 1}`}
+                onClick={() => setImages((now) => now.filter((_, j) => j !== i))}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="lc-footnote-bubble-actions">
         <button type="button" className="lc-footnote-task-back" onClick={onBack}>
           Back
         </button>
-        <button type="button" onClick={() => onSave(text)}>
+        {images.length < NOTE_IMAGE_LIMIT && (
+          <button type="button" onClick={() => void addImages()}>
+            Add image
+          </button>
+        )}
+        <button type="button" onClick={() => onSave(text, images)}>
           Save
         </button>
       </div>
