@@ -1625,6 +1625,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * margin the moment they scroll down.
    */
   const lockedScrollXRef = useRef<number | null>(null);
+  /** Pages reading, zoomed in past the page fit (or mid-pinch) — see `zoomedIntoPage`. */
+  const zoomedIntoPageNowRef = useRef<() => boolean>(() => false);
   const utilityTrayRef = useUtilityTrayRef();
   /** Pen goes to the code page instead of the editor. */
   const [annotateCode, setAnnotateCode] = useState(false);
@@ -2107,6 +2109,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     startClientX: number;
     startClientY: number;
     startScrollY: number;
+    /**
+     * A page zoomed into (Pages reading): the finger moves it both ways, not
+     * only down the column. See `zoomedIntoPage`.
+     */
+    free: boolean;
+    startScrollX: number;
+    /** Where along x the pan took hold, for {@link startScrollX}. */
+    anchorClientX: number;
     lastClientY: number;
     lastT: number;
     armed: boolean;
@@ -4187,6 +4197,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       height: state.height,
     };
   }, []);
+  zoomedIntoPageNowRef.current = () => {
+    if (pageFitRef.current == null || !pageLockRef.current) return false;
+    if (readingZoomRef.current) return true;
+    const live = liveCameraRef.current;
+    const zoom = live?.live ? live.zoom : getViewport()?.zoom;
+    return zoom != null && zoom > pageFitZoomRef.current * PAGE_ZOOMED_IN;
+  };
 
   const getInkPageFrames = useCallback(() => {
     const origin = pageBoundsRef.current?.minY ?? 0;
@@ -4851,7 +4868,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       panPeakVelYRef.current = 0;
       const now = performance.now();
       const cam = readScroll();
-      lockedScrollXRef.current = scrollModeRef.current ? cam.scrollX : null;
+      const free = zoomedIntoPageNowRef.current();
+      lockedScrollXRef.current = scrollModeRef.current && !free ? cam.scrollX : null;
       lastPanScrollRef.current = { x: cam.scrollX, y: cam.scrollY, t: now };
       // Touch/pen: arm immediately except on code dock (tap-to-edit).
       const touchLike = event.pointerType === "touch" || event.pointerType === "pen";
@@ -4860,6 +4878,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         startClientX: event.clientX,
         startClientY: event.clientY,
         startScrollY: cam.scrollY,
+        free,
+        startScrollX: cam.scrollX,
+        anchorClientX: event.clientX,
         lastClientY: event.clientY,
         lastT: now,
         armed: deferred ? false : touchLike,
@@ -4972,6 +4993,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           const cam = readScroll();
           drag.startScrollY = cam.scrollY;
           drag.startClientY = event.clientY;
+          drag.startScrollX = cam.scrollX;
+          drag.anchorClientX = event.clientX;
           drag.zoom = cam.zoom;
         }
         drag.lastClientY = event.clientY;
@@ -4997,8 +5020,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const nextY =
         drag.startScrollY +
         ((event.clientY - drag.startClientY) / zoom) * SCROLL_TOUCH_GAIN;
-      const clamped = clampPanScroll(lockX ?? 0, nextY, zoom);
-      const scrollX = lockX ?? clamped.scrollX;
+      const nextX = drag.free
+        ? drag.startScrollX + (event.clientX - drag.anchorClientX) / zoom
+        : lockX ?? 0;
+      const clamped = clampPanScroll(nextX, nextY, zoom);
+      const scrollX = drag.free ? clamped.scrollX : lockX ?? clamped.scrollX;
       const scrollY = clamped.scrollY;
 
       const now = performance.now();
@@ -10199,13 +10225,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const cam = committedPanCameraRef.current;
         placePageMask(cam.scrollX, cam.scrollY, cam.zoom);
       },
-      zoomedIntoPage: () => {
-        if (pageFitRef.current == null || !pageLockRef.current) return false;
-        if (readingZoomRef.current) return true;
-        const live = liveCameraRef.current;
-        const zoom = live?.live ? live.zoom : getViewport()?.zoom;
-        return zoom != null && zoom > pageFitZoomRef.current * PAGE_ZOOMED_IN;
-      },
+      zoomedIntoPage: () => zoomedIntoPageNowRef.current(),
       setPageFit: (fraction) => {
         const next = fraction != null && fraction > 0 ? Math.min(1, fraction) : null;
         const was = pageFitRef.current;
