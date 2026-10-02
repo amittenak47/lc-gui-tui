@@ -144,13 +144,14 @@ describe("agent panel chrome", () => {
 
   it("squares the outer turn and thread chip with a footnote reply count", () => {
     const turn = css.slice(css.indexOf(".lc-agent-turn {"), css.indexOf(".lc-agent-turn-user {"));
-    expect(turn).toContain("border-radius: 2px");
+    expect(turn).toContain("border-radius: var(--lc-r-block)");
+    expect(css).toContain("--lc-r-block: 2px");
     const thread = css.slice(
       css.indexOf(".lc-agent-thread-open {"),
       css.indexOf(".lc-agent-thread-open:hover {"),
     );
     expect(thread).toContain("flex-direction: column");
-    expect(thread).toContain("border-radius: 6px");
+    expect(thread).toContain("border-radius: var(--lc-r-block)");
     expect(thread).not.toContain("999px");
     expect(css).toContain("align-self: flex-end");
     expect(panel).not.toContain("lc-agent-thread-open-chevron");

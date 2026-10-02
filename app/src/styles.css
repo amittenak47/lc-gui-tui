@@ -25,6 +25,8 @@
 }
 
 :root {
+  /* One shape for the blocky chrome: Agent panel, its sessions and turns, Home tiles. */
+  --lc-r-block: 2px;
   --lc-sans: "Helvetica Neue", Helvetica, Arial, "DINish", ui-sans-serif, system-ui, sans-serif;
   /* GTA IV subtitle recipe: fill changes, black edge stays opaque. */
   --lc-sub-edge: #000;
@@ -1746,7 +1748,7 @@ html[data-theme="dark"] .lc-web-doc {
 }
 
 .lc-header .lc-agent-toggle {
-  border-radius: 2px;
+  border-radius: var(--lc-r-block);
 }
 
 .lc-action-group + .lc-action-group {
@@ -10823,7 +10825,7 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   display: flex;
   overflow: hidden;
   background: var(--panel);
-  border-right: 1px solid var(--line);
+  border-right: 2px solid var(--line);
   transform-origin: left center;
   transition:
     flex-basis 280ms cubic-bezier(0.22, 1, 0.36, 1),
@@ -10883,8 +10885,9 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  gap: 2px;
-  padding: 2px;
+  /* Blocky: square rows with room to read as separate blocks. */
+  gap: 6px;
+  padding: 10px 8px;
   background: transparent;
   scrollbar-width: none;
 }
@@ -10901,27 +10904,30 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   display: flex;
   align-items: stretch;
   min-width: 0;
-  min-height: 30px;
-  border-radius: 4px;
+  min-height: 38px;
+  border-radius: var(--lc-r-block);
   overflow: hidden;
   color: var(--muted);
-  background: color-mix(in srgb, var(--ink) 6%, var(--panel));
+  background: color-mix(in srgb, var(--ink) 7%, var(--panel));
 }
 
+/* Selection is a shape, not just a shade: the open session gets an edge. */
 .lc-agent-session-row.is-active {
   color: var(--ink);
   background: color-mix(in srgb, var(--ink) 12%, var(--panel));
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .lc-agent-session-ask {
   color: var(--accent);
   background: transparent;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
 .lc-agent-session-ask.is-active {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .lc-agent-sessions .lc-agent-session-ask > .lc-agent-session {
@@ -10930,11 +10936,11 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   justify-content: center;
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 30px;
+  min-height: 38px;
   margin: 0;
   padding: 6px 0 6px 22px;
   border: 0;
-  border-radius: 4px 0 0 4px;
+  border-radius: var(--lc-r-block) 0 0 var(--lc-r-block);
   background: transparent;
   color: inherit;
   font-size: 12px;
@@ -10961,8 +10967,8 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   }
   to {
     opacity: 1;
-    max-height: 40px;
-    min-height: 30px;
+    max-height: 48px;
+    min-height: 38px;
   }
 }
 
@@ -10980,9 +10986,9 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   min-width: 0;
   min-height: 0;
   margin: 0;
-  padding: 6px 2px 6px 8px;
+  padding: 6px 2px 6px 10px;
   border: none;
-  border-radius: 4px 0 0 4px;
+  border-radius: var(--lc-r-block) 0 0 var(--lc-r-block);
   background: transparent;
   color: inherit;
   font-size: 12px;
@@ -11021,7 +11027,7 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   margin: 0;
   padding: 0;
   border: none;
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 var(--lc-r-block) var(--lc-r-block) 0;
   background: transparent;
   color: inherit;
   box-shadow: none;
@@ -11166,7 +11172,7 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
 
 .lc-agent-turn {
   border: 1px solid var(--chrome-edge);
-  border-radius: 2px;
+  border-radius: var(--lc-r-block);
   padding: 8px 10px;
   background: var(--surface);
   min-width: 0;
@@ -15793,7 +15799,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-side,
 .lc-mobile.lc-app-problem .lc-side {
   transition: clip-path 240ms cubic-bezier(0.22, 1, 0.36, 1), transform 240ms cubic-bezier(0.22, 1, 0.36, 1), visibility 240ms;
-  clip-path: inset(calc(100% - 24px) 40% 0 40% round 2px);
+  clip-path: inset(calc(100% - 24px) 40% 0 40% round var(--lc-r-block));
   transform-origin: bottom center;
   top: auto;
   left: 0;
@@ -15819,7 +15825,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile.lc-app-agent-open .lc-side,
 .lc-mobile .lc-side-sheet-dragging {
-  clip-path: inset(0 0 0 0 round 2px 2px 0 0);
+  clip-path: inset(0 0 0 0 round var(--lc-r-block) var(--lc-r-block) 0 0);
   bottom: var(--lc-keyboard-inset, 0px);
   /* Above board chrome (95–98). Those controls fade as the sheet opens but
      used to keep pointer-events, so a tap on the composer hit the toolbar
@@ -15897,7 +15903,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-agent-toggle-open {
-  border-radius: 2px;
+  border-radius: var(--lc-r-block);
   border-color: var(--accent);
   background: var(--accent);
   color: #fff;
@@ -17713,7 +17719,7 @@ button.lc-row-selected:hover:not(:disabled) {
   margin-top: 6px;
   padding: 6px 8px 5px;
   border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-radius: 6px;
+  border-radius: var(--lc-r-block);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: inherit;
   font: inherit;

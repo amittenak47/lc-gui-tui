@@ -21,8 +21,27 @@ it('opens a recent item through its callback, and removes it when it becomes an 
   await act(async()=>recent.click());expect(p.onOpenRecent).toHaveBeenCalledWith(expect.objectContaining({hash:'earlier',title:'Earlier PDF'}));
   p.tabsRef!.current.tabs.push({...entry,id:'new-tab'});
   await act(async()=>window.dispatchEvent(new Event(RECENT_WORKSPACES_EVENT)));
-  expect(host.querySelector('.lc-home-recents')).not.toBeNull();
+  expect(host.querySelector('.lc-home-recents')).toBeNull();
   expect(host.querySelectorAll('.lc-home-recent')).toHaveLength(0);
+});
+it('leaves no Recently opened section, and gives Start the full height, when nothing was opened',async()=>{
+  const p=props();await act(async()=>root.render(<HomeChooser {...p}/>));
+  expect(host.querySelector('.lc-home-recents')).toBeNull();
+  expect(host.querySelector('nav')?.getAttribute('data-recents')).toBe('none');
+  expect(host.textContent).not.toContain('Recently opened');
+});
+it('folds Recently opened to its heading, and remembers the choice',async()=>{
+  rememberRecentWorkspace(entry);const p=props();await act(async()=>root.render(<HomeChooser {...p}/>));
+  const toggle=host.querySelector<HTMLButtonElement>('.lc-home-recents-toggle')!;
+  expect(toggle.getAttribute('aria-expanded')).toBe('true');expect(toggle.textContent).toContain('1');
+  expect(host.querySelectorAll('.lc-home-recent')).toHaveLength(1);
+  await act(async()=>toggle.click());
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  expect(host.querySelectorAll('.lc-home-recent')).toHaveLength(0);
+  expect(host.querySelector('nav')?.getAttribute('data-recents')).toBe('collapsed');
+  await act(async()=>root.unmount());root=createRoot(host);
+  await act(async()=>root.render(<HomeChooser {...props()}/>));
+  expect(host.querySelector('.lc-home-recents-toggle')?.getAttribute('aria-expanded')).toBe('false');
 });
 it('preserves all entry callbacks, including active WIP cards',async()=>{
   const p=props();await act(async()=>root.render(<HomeChooser {...p}/>));
