@@ -1745,6 +1745,10 @@ html[data-theme="dark"] .lc-web-doc {
   flex-shrink: 0;
 }
 
+.lc-header .lc-agent-toggle {
+  border-radius: 2px;
+}
+
 .lc-action-group + .lc-action-group {
   padding-left: 14px;
   border-left: 1px solid var(--line);
@@ -11162,7 +11166,7 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
 
 .lc-agent-turn {
   border: 1px solid var(--chrome-edge);
-  border-radius: 18px;
+  border-radius: 2px;
   padding: 8px 10px;
   background: var(--surface);
   min-width: 0;
@@ -11188,8 +11192,8 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
 }
 
 @keyframes lc-agent-bubble-enter {
-  from { opacity: 0; transform: scale(0.24, 0.4); border-radius: 24px; }
-  to { opacity: 1; transform: scale(1); border-radius: 18px; }
+  from { opacity: 0; transform: scale(0.24, 0.4); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .lc-agent-turn-enter {
@@ -12216,7 +12220,7 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   min-width: 0;
   min-height: 0;
   border: 1px solid var(--chrome-edge);
-  border-radius: 8px;
+  border-radius: 2px;
   background: var(--bg);
   color: var(--ink);
 }
@@ -12269,7 +12273,7 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   padding: 0;
   margin-left: auto;
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: 2px;
   background: transparent;
   color: color-mix(in srgb, var(--accent) 55%, var(--ink));
   cursor: pointer;
@@ -15789,7 +15793,7 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-mobile .lc-side,
 .lc-mobile.lc-app-problem .lc-side {
   transition: clip-path 240ms cubic-bezier(0.22, 1, 0.36, 1), transform 240ms cubic-bezier(0.22, 1, 0.36, 1), visibility 240ms;
-  clip-path: inset(calc(100% - 24px) 40% 0 40% round 12px);
+  clip-path: inset(calc(100% - 24px) 40% 0 40% round 2px);
   transform-origin: bottom center;
   top: auto;
   left: 0;
@@ -15815,7 +15819,7 @@ button.lc-row-selected:hover:not(:disabled) {
 
 .lc-mobile.lc-app-agent-open .lc-side,
 .lc-mobile .lc-side-sheet-dragging {
-  clip-path: inset(0 0 0 0 round 12px 12px 0 0);
+  clip-path: inset(0 0 0 0 round 2px 2px 0 0);
   bottom: var(--lc-keyboard-inset, 0px);
   /* Above board chrome (95–98). Those controls fade as the sheet opens but
      used to keep pointer-events, so a tap on the composer hit the toolbar
@@ -15893,7 +15897,7 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 .lc-mobile .lc-agent-toggle-open {
-  border-radius: 6px;
+  border-radius: 2px;
   border-color: var(--accent);
   background: var(--accent);
   color: #fff;

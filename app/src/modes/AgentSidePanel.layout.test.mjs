@@ -142,9 +142,9 @@ describe("agent panel chrome", () => {
     expect(user).not.toContain("min-width: 72%");
   });
 
-  it("rounds the outer turn and squares the thread chip with a footnote reply count", () => {
+  it("squares the outer turn and thread chip with a footnote reply count", () => {
     const turn = css.slice(css.indexOf(".lc-agent-turn {"), css.indexOf(".lc-agent-turn-user {"));
-    expect(turn).toContain("border-radius: 18px");
+    expect(turn).toContain("border-radius: 2px");
     const thread = css.slice(
       css.indexOf(".lc-agent-thread-open {"),
       css.indexOf(".lc-agent-thread-open:hover {"),
