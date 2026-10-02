@@ -74,6 +74,14 @@ struct RefreshResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct NoArgs {}
+
+#[derive(Debug, Deserialize)]
+struct OkResponse {
+    ok: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct InsetsArgs {
     density: f64,
 }
@@ -118,6 +126,12 @@ impl<R: Runtime> GestureGuard<R> {
             .0
             .run_mobile_plugin::<RefreshResponse>("set_high_refresh", RefreshArgs { high })?;
         Ok(response.hz)
+    }
+
+    /// Open the loading doodle's pen channel; see `DoodleRelay.kt`.
+    pub fn connect_doodle(&self) -> Result<bool> {
+        let response = self.0.run_mobile_plugin::<OkResponse>("connect_doodle", NoArgs {})?;
+        Ok(response.ok)
     }
 
     /// Status / caption / nav overlap on the WebView, in CSS pixels.

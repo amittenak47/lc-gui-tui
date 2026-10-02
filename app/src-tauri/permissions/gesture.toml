@@ -12,3 +12,8 @@ commands.allow = ["set_drawing_immersive"]
 identifier = "allow-set-display-refresh"
 description = "Ask for the panel's fastest refresh when Match display is on"
 commands.allow = ["set_display_refresh"]
+
+[[permission]]
+identifier = "allow-connect-native-doodle"
+description = "Open the channel the loading doodle's pen samples come down on Android"
+commands.allow = ["connect_native_doodle"]

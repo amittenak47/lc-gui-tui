@@ -23,5 +23,7 @@ android {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
+    // Message channels to the page, for the loading doodle's pen samples.
+    implementation("androidx.webkit:webkit:1.14.0")
     implementation(project(":tauri-android"))
 }

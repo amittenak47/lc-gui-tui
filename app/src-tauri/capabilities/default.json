@@ -16,6 +16,7 @@
     "allow-set-gesture-exclusions",
     "allow-set-drawing-immersive",
     "allow-set-display-refresh",
+    "allow-connect-native-doodle",
     "allow-lan-base-url",
     "allow-get-system-insets",
     "allow-boot-notice",

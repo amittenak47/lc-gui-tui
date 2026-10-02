@@ -51,6 +51,11 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
     private var backCallback: OnBackInvokedCallback? = null
     private var immersiveEnabled = false
 
+    /** The loading doodle's pen path — see `DoodleRelay`. */
+    private val doodle by lazy {
+        DoodleRelay(activity) { activity.window?.decorView?.let { findWebView(it) as? WebView } }
+    }
+
     @InvokeArg
     class ExclusionArgs {
         /** Rects in CSS pixels, relative to the browser viewport (`getBoundingClientRect`). */
@@ -115,6 +120,19 @@ class GestureGuardPlugin(private val activity: Activity) : Plugin(activity) {
             attrs.preferredDisplayModeId = fastest?.modeId ?: 0
             window.attributes = attrs
             invoke.resolve(JSObject().apply { put("hz", (fastest?.refreshRate ?: 0f).toDouble()) })
+        }
+    }
+
+    /** Open the loading doodle's pen channel. Answers whether this WebView can carry it. */
+    @Command
+    fun connect_doodle(invoke: Invoke) {
+        activity.runOnUiThread {
+            val ok = try {
+                doodle.connect()
+            } catch (_: Throwable) {
+                false
+            }
+            invoke.resolve(JSObject().apply { put("ok", ok) })
         }
     }
 

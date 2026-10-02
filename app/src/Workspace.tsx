@@ -12393,7 +12393,7 @@ function WorkspaceLoadStatus({ done, themeId }: { done: boolean; themeId: string
       aria-live="polite"
       aria-label={done ? "Workspace ready" : "Loading workspace"}
     >
-      <LoadingDoodle themeId={themeId} />
+      <LoadingDoodle themeId={themeId} nativeInput />
       {done ? (
         <div className="lc-spinner-check" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="22" height="22">

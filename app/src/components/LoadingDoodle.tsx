@@ -4,34 +4,21 @@
  * Same global ink prefs Board/Scratchpad use (tool prefs + Settings events)
  * and the same RasterInk draw path (`applyInkOp` / ribbon), at zoom = 1.
  * Plain canvas only — not RasterInkLayer / tile cache — so a waiting gate
- * cannot tax tablet scroll.
+ * cannot tax tablet scroll. The strokes themselves are `loadingDoodleEngine`.
  *
  * Color: {@link resolveInkColor} with the app theme (same as Board), not the
  * veil's muted overlay color.
  *
- * Committed strokes are cached in a backing bitmap. The old implementation
- * replayed every point of every retained stroke on every rAF, so the doodle
- * consumed progressively more of the UI thread while somebody wrote. That
- * starved both pointer delivery and the loading spinner.
+ * `nativeInput`: on Android a second canvas over this one is drawn by a worker
+ * from the pen's samples as the system reports them (`util/nativeDoodle`), so
+ * a page busy starting up cannot hold the pen back. Only where nothing else
+ * takes touches over the doodle — the start-up and loading screens.
  */
 
 import { useEffect, useRef, useState } from "react";
-import { trailDistances, trailingPoints } from "./loadingDoodleTrail";
 
 import { resolveInkColor } from "../canvas/inkColors";
-import { smoothInkPoints } from "../canvas/inkSmoothing";
-import {
-  applyInkOp,
-  applyInkOpFrom,
-  inkBaseWidthForZoom,
-  inkLineWidth,
-  inkSlowness,
-  pointerPressure,
-  smoothPressure,
-  smoothSpeed,
-  type InkDrawOp,
-  type ScenePoint,
-} from "../canvas/rasterInk";
+import { inkBaseWidthForZoom } from "../canvas/rasterInk";
 import { loadThemeId } from "../theme/appThemes";
 import { INK_BOLDNESS_EVENT, loadInkBoldness } from "../util/inkBoldnessPref";
 import { loadInkPressureClip } from "../util/inkPressureClip";
@@ -50,32 +37,26 @@ import {
   beginLoadingDoodle,
   endLoadingDoodle,
 } from "../util/loadingDoodleActivity";
+import { nativeDoodleHost } from "../util/nativeDoodle";
+import { createDoodleEngine, type DoodleInk, type DoodleSample } from "./loadingDoodleEngine";
 
-const DOODLE_TTL_MS = 6_666;
-const ERASE_MS = 1_800;
+const INK_EVENTS = [
+  "lc-ink-smoothing",
+  "lc-ink-pressure-clip",
+  "lc-ink-speed",
+  INK_SPEED_BLOT_BLEND_EVENT,
+  INK_GRAIN_EVENT,
+  INK_SPEED_FADE_EVENT,
+  INK_BOLDNESS_EVENT,
+  INK_TOOL_PREFS_EVENT,
+];
 
-interface Stroke {
-  op: InkDrawOp;
-  at: number;
-  distances: number[];
-}
+/** How often a native doodle's place on screen is checked. */
+const NATIVE_PLACE_MS = 400;
 
-interface InkLive {
-  penWidth: number;
-  baseWidth: number;
-  maxFullness: number;
-  pressureSensitive: boolean;
-  inkColor: string;
-  pressureClip: number;
-  boldness: number;
-  speedInk: number;
-  speedBlotBlend: number;
-  grain: number;
-  speedFade: number;
-  smoothing: number;
-}
+let nextNativeId = 1;
 
-function loadLiveInk(themeId: string): InkLive {
+function loadLiveInk(themeId: string): DoodleInk {
   const prefs = loadInkToolPrefs();
   const pressureSensitive = prefs.pressureSensitive;
   return {
@@ -94,235 +75,67 @@ function loadLiveInk(themeId: string): InkLive {
   };
 }
 
-function makeDrawOp(live: InkLive, points: ScenePoint[]): InkDrawOp {
-  const speed = live.speedInk;
-  return {
-    kind: "draw",
-    color: live.inkColor,
-    baseWidth: live.baseWidth,
-    maxFullness: live.maxFullness,
-    pressureClip: live.pressureClip,
-    pressureSensitive: live.pressureSensitive,
-    speedInk: speed,
-    ...(speed > 0 || live.speedBlotBlend > 0 || live.speedFade > 0
-      ? {
-          speedBlotBlend: live.speedBlotBlend,
-          speedFade: live.speedFade,
-        }
-      : {}),
-    ...(live.grain > 0 ? { grain: live.grain } : {}),
-    boldness: live.boldness,
-    points,
-  };
-}
+const bitmapScale = () => Math.min(window.devicePixelRatio || 1, 2);
 
 export function LoadingDoodle({
   className,
   themeId,
+  nativeInput = false,
 }: {
   className?: string;
   /** App theme — defaults to stored theme when omitted (status dialogs). */
   themeId?: string;
+  /** Draw from the system's pen samples where the platform allows — see above. */
+  nativeInput?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const strokeRef = useRef<ScenePoint[] | null>(null);
-  const pressureEmaRef = useRef(0);
-  const speedEmaRef = useRef(0);
-  const lastSampleRef = useRef<{ x: number; y: number; t: number } | null>(null);
-  const strokesRef = useRef<Stroke[]>([]);
-  const rafRef = useRef<number | null>(null);
-  const expiryTimerRef = useRef<number | null>(null);
-  const liveFromRef = useRef(0);
-  const pointerIdRef = useRef<number | null>(null);
-  const pointerBoundsRef = useRef<DOMRect | null>(null);
+  const nativeRef = useRef<HTMLCanvasElement | null>(null);
   const doodleTokenRef = useRef<object>({});
   const themeIdRef = useRef(themeId ?? loadThemeId());
   themeIdRef.current = themeId ?? loadThemeId();
-  const [initialInk] = useState(() => loadLiveInk(themeIdRef.current));
-  const inkRef = useRef<InkLive>(initialInk);
-  const dprRef = useRef(1);
+  const reloadRef = useRef<() => void>(() => {});
+  const nativeInkRef = useRef<() => void>(() => {});
+  const [native, setNative] = useState(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const backing = document.createElement("canvas");
-    const backingCtx = backing.getContext("2d");
-    if (!backingCtx) return;
-    const liveCanvas = document.createElement("canvas");
-    const liveCtx = liveCanvas.getContext("2d");
-    if (!liveCtx) return;
-    let eraseRaf: number | null = null;
-    let stableCount = 0;
+    const token = doodleTokenRef.current;
+    const engine = createDoodleEngine(
+      canvas,
+      () => document.createElement("canvas"),
+      loadLiveInk(themeIdRef.current),
+      (active) => (active ? beginLoadingDoodle(token) : endLoadingDoodle(token)),
+    );
+    if (!engine) return;
+    const reloadInk = () => engine.setInk(loadLiveInk(themeIdRef.current));
+    reloadRef.current = reloadInk;
+    for (const name of INK_EVENTS) window.addEventListener(name, reloadInk);
 
-    inkRef.current = loadLiveInk(themeIdRef.current);
+    let pointerId: number | null = null;
+    let bounds: DOMRect | null = null;
 
-    const reloadInk = () => {
-      inkRef.current = loadLiveInk(themeIdRef.current);
-    };
-    window.addEventListener("lc-ink-smoothing", reloadInk);
-    window.addEventListener("lc-ink-pressure-clip", reloadInk);
-    window.addEventListener("lc-ink-speed", reloadInk);
-    window.addEventListener(INK_SPEED_BLOT_BLEND_EVENT, reloadInk);
-    window.addEventListener(INK_GRAIN_EVENT, reloadInk);
-    window.addEventListener(INK_SPEED_FADE_EVENT, reloadInk);
-    window.addEventListener(INK_BOLDNESS_EVENT, reloadInk);
-    window.addEventListener(INK_TOOL_PREFS_EVENT, reloadInk);
-
-    const drawCommitted = (op: InkDrawOp) => {
-      backingCtx.setTransform(dprRef.current, 0, 0, dprRef.current, 0, 0);
-      applyInkOp(backingCtx, op, dprRef.current);
-    };
-
-    const rebuildBacking = () => {
-      backingCtx.setTransform(1, 0, 0, 1, 0, 0);
-      backingCtx.clearRect(0, 0, backing.width, backing.height);
-      const now = performance.now();
-      const stable = strokesRef.current.filter((stroke) => now < stroke.at + DOODLE_TTL_MS);
-      for (const stroke of stable) drawCommitted(stroke.op);
-      stableCount = stable.length;
-    };
-
-    let resizePending = false;
     const resize = () => {
-      if (strokeRef.current) {
-        resizePending = true;
-        return;
-      }
-      resizePending = false;
       const parent = canvas.parentElement;
       if (!parent) return;
       const rect = parent.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      dprRef.current = dpr;
-      const nextW = Math.max(1, Math.floor(rect.width * dpr));
-      const nextH = Math.max(1, Math.floor(rect.height * dpr));
-      if (canvas.width !== nextW || canvas.height !== nextH) {
-        canvas.width = nextW;
-        canvas.height = nextH;
+      engine.resize(rect.width, rect.height, bitmapScale());
+      if (!engine.drawing()) {
+        canvas.style.width = `${rect.width}px`;
+        canvas.style.height = `${rect.height}px`;
       }
-      // Effects can restart while the visible canvas keeps its dimensions
-      // (StrictMode, hot reload). The new live bitmap still starts at 300x150.
-      if (liveCanvas.width !== nextW || liveCanvas.height !== nextH) {
-        liveCanvas.width = nextW;
-        liveCanvas.height = nextH;
-      }
-      if (backing.width !== nextW || backing.height !== nextH) {
-        backing.width = nextW;
-        backing.height = nextH;
-        rebuildBacking();
-      }
-      canvas.style.width = `${rect.width}px`;
-      canvas.style.height = `${rect.height}px`;
     };
 
-    const presentBacking = () => {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(backing, 0, 0);
-      const now = performance.now();
-      ctx.setTransform(dprRef.current, 0, 0, dprRef.current, 0, 0);
-      for (const stroke of strokesRef.current) {
-        const progress = (now - stroke.at - DOODLE_TTL_MS) / ERASE_MS;
-        if (progress < 0 || progress >= 1) continue;
-        applyInkOp(ctx, {
-          ...stroke.op,
-          points: trailingPoints(stroke.op.points, stroke.distances, progress),
-        }, dprRef.current);
-      }
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(liveCanvas, 0, 0);
-    };
-
-    const paintTail = () => {
-      const points = strokeRef.current;
-      if (!points || points.length === 0) return;
-      const dpr = dprRef.current;
-      liveCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      // Keep the live path O(new points). Reshaping and repainting the growing
-      // polyline here made every later frame more expensive than the prior one.
-      // Shape the final ephemeral stroke once on lift instead.
-      liveFromRef.current = applyInkOpFrom(
-        liveCtx,
-        makeDrawOp(inkRef.current, points),
-        liveFromRef.current,
-        dpr,
-      );
-      presentBacking();
-    };
-
-    const schedulePaint = () => {
-      if (rafRef.current != null) return;
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
-        paintTail();
-      });
-    };
-
-    const scheduleExpiry = () => {
-      if (expiryTimerRef.current != null) window.clearTimeout(expiryTimerRef.current);
-      expiryTimerRef.current = null;
-      if (eraseRaf != null) return;
-      const first = strokesRef.current[0];
-      if (!first) return;
-      const due = first.at + DOODLE_TTL_MS;
-      expiryTimerRef.current = window.setTimeout(() => {
-        expiryTimerRef.current = null;
-        const sweep = () => {
-          eraseRaf = null;
-          const now = performance.now();
-          strokesRef.current = strokesRef.current.filter(
-            (stroke) => stroke.at + DOODLE_TTL_MS + ERASE_MS > now,
-          );
-          const stable = strokesRef.current.filter((stroke) => now < stroke.at + DOODLE_TTL_MS).length;
-          if (stable !== stableCount) rebuildBacking();
-          presentBacking();
-          if (strokesRef.current.some((stroke) => now >= stroke.at + DOODLE_TTL_MS)) {
-            eraseRaf = requestAnimationFrame(sweep);
-          } else scheduleExpiry();
-        };
-        sweep();
-      }, Math.max(0, due - performance.now()));
-    };
-
-    const pointFrom = (event: PointerEvent, rect: DOMRect): ScenePoint => {
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
-      const t = event.timeStamp || performance.now();
-      const raw = pointerPressure(event.pressure, event.pointerType);
-      const prev = pressureEmaRef.current;
-      const pressure = raw < 0 ? raw : smoothPressure(prev || raw, raw);
-      if (raw >= 0) pressureEmaRef.current = pressure;
-
-      let slowness: number | undefined;
-      if (
-        inkRef.current.speedInk > 0 ||
-        inkRef.current.speedFade > 0 ||
-        inkRef.current.speedBlotBlend > 0
-      ) {
-        const last = lastSampleRef.current;
-        if (last && t > last.t) {
-          const dist = Math.hypot(x - last.x, y - last.y);
-          const pxPerMs = dist / (t - last.t);
-          speedEmaRef.current = smoothSpeed(speedEmaRef.current, pxPerMs);
-        } else {
-          speedEmaRef.current = smoothSpeed(speedEmaRef.current, 0);
-        }
-        slowness = inkSlowness(speedEmaRef.current);
-      }
-      lastSampleRef.current = { x, y, t };
-
-      return {
-        x,
-        y,
-        pressure,
-        ...(slowness != null ? { slowness } : {}),
-      };
-    };
+    const sample = (event: PointerEvent, rect: DOMRect): DoodleSample => ({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+      t: event.timeStamp || performance.now(),
+      pressure: event.pressure,
+      pointerType: event.pointerType,
+    });
 
     const onDown = (event: PointerEvent) => {
-      if (pointerIdRef.current != null) return;
+      if (pointerId != null) return;
       if (event.button !== 0 && event.pointerType !== "pen") return;
       event.preventDefault();
       try {
@@ -330,77 +143,33 @@ export function LoadingDoodle({
       } catch {
         /* capture is best-effort */
       }
-      pressureEmaRef.current = 0;
-      speedEmaRef.current = 0;
-      lastSampleRef.current = null;
-      pointerIdRef.current = event.pointerId;
-      pointerBoundsRef.current = canvas.getBoundingClientRect();
-      beginLoadingDoodle(doodleTokenRef.current);
-      liveFromRef.current = 0;
-      strokeRef.current = [pointFrom(event, pointerBoundsRef.current)];
-      paintTail();
+      pointerId = event.pointerId;
+      bounds = canvas.getBoundingClientRect();
+      engine.begin(sample(event, bounds));
     };
     const onMove = (event: PointerEvent) => {
-      if (!strokeRef.current || event.pointerId !== pointerIdRef.current) return;
-      const rect = pointerBoundsRef.current ?? canvas.getBoundingClientRect();
+      if (pointerId == null || event.pointerId !== pointerId) return;
+      const rect = bounds ?? canvas.getBoundingClientRect();
       const coalesced = event.getCoalescedEvents?.();
       const batch = coalesced && coalesced.length > 0 ? coalesced : [event];
-      for (const sample of batch) strokeRef.current.push(pointFrom(sample, rect));
-      schedulePaint();
+      engine.move(batch.map((e) => sample(e, rect)));
     };
     const onUp = (event: PointerEvent) => {
-      if (!strokeRef.current || event.pointerId !== pointerIdRef.current) return;
-      pointerIdRef.current = null;
+      if (pointerId == null || event.pointerId !== pointerId) return;
+      pointerId = null;
       try {
         canvas.releasePointerCapture(event.pointerId);
       } catch {
         /* already released */
       }
-      const live = inkRef.current;
-      let points = strokeRef.current;
-      const rect = pointerBoundsRef.current ?? canvas.getBoundingClientRect();
-      const last = points[points.length - 1];
-      const lifted = pointFrom(event, rect);
-      if (event.type === "pointerup" && (!last || Math.hypot(lifted.x - last.x, lifted.y - last.y) > 0.25)) {
-        points = [...points, lifted];
-      }
-      if (points.length > 1 && live.smoothing > 0) {
-        points = smoothInkPoints(
-          points,
-          live.smoothing,
-          inkLineWidth(live.baseWidth, 0, false),
-        );
-      }
-      if (points.length > 0) {
-        const op = makeDrawOp(live, points);
-        strokesRef.current.push({
-          op,
-          at: performance.now(),
-          distances: trailDistances(points),
-        });
-        drawCommitted(op);
-        stableCount += 1;
-        scheduleExpiry();
-      }
-      strokeRef.current = null;
-      liveCtx.setTransform(1, 0, 0, 1, 0, 0);
-      liveCtx.clearRect(0, 0, liveCanvas.width, liveCanvas.height);
-      pointerIdRef.current = null;
-      pointerBoundsRef.current = null;
-      liveFromRef.current = 0;
-      endLoadingDoodle(doodleTokenRef.current);
-      lastSampleRef.current = null;
-      if (resizePending) resize();
-      presentBacking();
-      scheduleExpiry();
+      const rect = bounds ?? canvas.getBoundingClientRect();
+      bounds = null;
+      engine.end(event.type === "pointerup" ? sample(event, rect) : null);
+      resize();
     };
 
     resize();
-    presentBacking();
-    const ro = new ResizeObserver(() => {
-      resize();
-      if (!strokeRef.current) presentBacking();
-    });
+    const ro = new ResizeObserver(resize);
     if (canvas.parentElement) ro.observe(canvas.parentElement);
     canvas.addEventListener("pointerdown", onDown);
     canvas.addEventListener("pointermove", onMove);
@@ -408,24 +177,14 @@ export function LoadingDoodle({
     canvas.addEventListener("pointercancel", onUp);
     canvas.addEventListener("lostpointercapture", onUp);
     return () => {
-      if (pointerIdRef.current != null) {
-        try { canvas.releasePointerCapture(pointerIdRef.current); } catch { /* detached */ }
+      if (pointerId != null) {
+        try { canvas.releasePointerCapture(pointerId); } catch { /* detached */ }
       }
-      pointerIdRef.current = null;
-      strokeRef.current = null;
-      endLoadingDoodle(doodleTokenRef.current);
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-      if (eraseRaf != null) cancelAnimationFrame(eraseRaf);
-      if (expiryTimerRef.current != null) window.clearTimeout(expiryTimerRef.current);
+      engine.dispose();
+      endLoadingDoodle(token);
+      reloadRef.current = () => {};
       ro.disconnect();
-      window.removeEventListener("lc-ink-smoothing", reloadInk);
-      window.removeEventListener("lc-ink-pressure-clip", reloadInk);
-      window.removeEventListener("lc-ink-speed", reloadInk);
-      window.removeEventListener(INK_SPEED_BLOT_BLEND_EVENT, reloadInk);
-      window.removeEventListener(INK_GRAIN_EVENT, reloadInk);
-      window.removeEventListener(INK_SPEED_FADE_EVENT, reloadInk);
-      window.removeEventListener(INK_BOLDNESS_EVENT, reloadInk);
-      window.removeEventListener(INK_TOOL_PREFS_EVENT, reloadInk);
+      for (const name of INK_EVENTS) window.removeEventListener(name, reloadInk);
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerup", onUp);
@@ -434,15 +193,105 @@ export function LoadingDoodle({
     };
   }, []);
 
+  // A theme change recolours both doodles' next strokes.
   useEffect(() => {
-    inkRef.current = loadLiveInk(themeIdRef.current);
+    reloadRef.current();
+    nativeInkRef.current();
   }, [themeId]);
 
+  // Whether this platform has the native pen path; the canvas for it mounts once it does.
+  useEffect(() => {
+    if (!nativeInput) return;
+    let live = true;
+    void nativeDoodleHost().then((worker) => {
+      if (live && worker) setNative(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, [nativeInput]);
+
+  useEffect(() => {
+    const canvas = nativeRef.current;
+    if (!native || !canvas) return;
+    let worker: Worker | null = null;
+    let disposed = false;
+    const id = nextNativeId++;
+    const token = {};
+    let timer = 0;
+    let last = "";
+
+    const place = () => {
+      const rect = canvas.getBoundingClientRect();
+      // A dialog over the doodle takes its own touches: let them through.
+      const enabled = rect.width > 1 && rect.height > 1 && !document.querySelector('[aria-modal="true"]');
+      return {
+        rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+        dpr: window.devicePixelRatio || 1,
+        scale: bitmapScale(),
+        enabled,
+      };
+    };
+    const sendPlace = () => {
+      if (!worker) return;
+      const next = place();
+      const key = JSON.stringify(next);
+      if (key === last) return;
+      last = key;
+      worker.postMessage({ type: "place", id, ...next });
+    };
+    const onWorker = (event: MessageEvent) => {
+      const msg = event.data as { type?: string; id?: number; active?: boolean };
+      if (msg.type !== "stroke" || msg.id !== id) return;
+      if (msg.active) beginLoadingDoodle(token);
+      else endLoadingDoodle(token);
+    };
+    const sendInk = () => worker?.postMessage({ type: "ink", id, ink: loadLiveInk(themeIdRef.current) });
+
+    void nativeDoodleHost().then((host) => {
+      if (disposed || !host) return;
+      worker = host;
+      let offscreen: OffscreenCanvas;
+      try {
+        offscreen = canvas.transferControlToOffscreen();
+      } catch {
+        return;
+      }
+      const first = place();
+      last = JSON.stringify(first);
+      host.addEventListener("message", onWorker);
+      host.postMessage({ type: "attach", id, canvas: offscreen, ink: loadLiveInk(themeIdRef.current), ...first }, [offscreen]);
+      timer = window.setInterval(sendPlace, NATIVE_PLACE_MS);
+      nativeInkRef.current = sendInk;
+      for (const name of INK_EVENTS) window.addEventListener(name, sendInk);
+    });
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      nativeInkRef.current = () => {};
+      for (const name of INK_EVENTS) window.removeEventListener(name, sendInk);
+      if (worker) {
+        worker.postMessage({ type: "detach", id });
+        worker.removeEventListener("message", onWorker);
+      }
+      endLoadingDoodle(token);
+    };
+  }, [native]);
+
   return (
-    <canvas
-      ref={canvasRef}
-      className={["lc-loading-doodle", className].filter(Boolean).join(" ")}
-      aria-hidden="true"
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        className={["lc-loading-doodle", className].filter(Boolean).join(" ")}
+        aria-hidden="true"
+      />
+      {native && (
+        <canvas
+          ref={nativeRef}
+          className={["lc-loading-doodle", "lc-loading-doodle-native", className].filter(Boolean).join(" ")}
+          aria-hidden="true"
+        />
+      )}
+    </>
   );
 }

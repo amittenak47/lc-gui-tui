@@ -14913,6 +14913,12 @@ button.lc-row-selected:hover:not(:disabled) {
   color: inherit;
 }
 
+/* Drawn by a worker from Android's own touches (`nativeDoodle`); the page's
+ * touches, when Android passes them on, belong to the doodle beneath. */
+.lc-loading-doodle-native {
+  pointer-events: none;
+}
+
 .lc-server-gate-boot > .lc-spinner,
 .lc-server-gate-boot > .lc-spinner-check,
 .lc-overlay-spinner > .lc-spinner,

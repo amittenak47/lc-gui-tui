@@ -179,6 +179,7 @@ pub fn run() {
         set_gesture_exclusions,
         set_drawing_immersive,
         set_display_refresh,
+        connect_native_doodle,
         get_system_insets,
         live_webview_create,
         live_webview_place,
@@ -309,6 +310,23 @@ fn set_display_refresh(
     #[cfg(not(target_os = "android"))]
     {
         Ok(0.0)
+    }
+}
+
+/// Open the channel the loading doodle's pen samples come down: Android posts
+/// its far end to the page as a window message (see `util/nativeDoodle.ts`).
+/// Answers whether it did — never off Android, where the page draws the pen.
+#[tauri::command]
+fn connect_native_doodle(#[allow(unused_variables)] app: tauri::AppHandle) -> std::result::Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_gestureguard::GestureGuardExt;
+        let guard = app.gesture_guard().ok_or("gesture guard unavailable")?;
+        return guard.connect_doodle().map_err(|e| e.to_string());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(false)
     }
 }
 
