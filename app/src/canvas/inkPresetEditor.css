@@ -1,0 +1,47 @@
+/* Preset sheet keeps its canvas, pointer math and existing morph lifecycle. */
+.lc-preset-sheet.lc-ink-preset-dialog {
+  width: min(800px, calc((100vw - 24px) / var(--lc-chrome-scale, 1)));
+  max-height: min(calc(84dvh / var(--lc-chrome-scale, 1)), 900px);
+  top: 6%; border: 2px solid var(--ink); border-radius: 2px;
+  background: var(--surface); box-shadow: 6px 6px 0 color-mix(in srgb, var(--ink) 32%, transparent);
+}
+.lc-ink-preset-dialog .lc-preset-sheet-head { gap: 12px; padding: 18px 20px; border-bottom: 2px solid var(--lc-mode-annotate); flex-wrap: wrap; }
+.lc-ink-preset-dialog .lc-preset-sheet-heading { display: flex; flex: 1; align-items: baseline; gap: 12px; min-width: 0; }
+.lc-ink-preset-dialog .lc-preset-sheet-name { width: 160px; flex: 0 1 160px; min-width: 0; font: 600 18px/1.3 var(--lc-sans); }
+.lc-ink-preset-dialog .lc-preset-sheet-meta { color: var(--muted); opacity: 1; font-weight: 600; letter-spacing: .1em; }
+.lc-ink-preset-dialog .lc-preset-sheet-swatch { flex: 0 0 32px; width: 32px; height: 32px; border-radius: 2px; }
+.lc-ink-preset-dialog .lc-preset-sheet-back,
+.lc-ink-preset-dialog .lc-preset-sheet-head .lc-hold-reveal { height: 36px; min-height: 36px; border: 2px solid var(--lc-dialog-line, var(--line)); border-radius: 2px; font-size: 12px; }
+.lc-ink-preset-dialog .lc-preset-sheet-strip { padding: 20px 24px 8px; }
+.lc-ink-preset-dialog .lc-preset-sheet-strip > .lc-preset-sheet-field { display: grid; grid-template-columns: minmax(160px, 240px) minmax(0, 1fr); gap: 12px 16px; align-items: center; }
+.lc-ink-preset-dialog .lc-preset-sheet-strip .lc-settings-hint { margin: 0; }
+.lc-ink-preset-dialog .lc-preset-preview-stage { grid-column: 1 / -1; min-width: 0; }
+.lc-ink-preset-dialog .lc-preset-preview-toggle { width: 100%; border-radius: 2px; padding: 4px; }
+.lc-ink-preset-dialog .lc-preset-preview-toggle > button { height: 36px; border-radius: 2px; }
+.lc-ink-preset-dialog .lc-preset-preview-toggle > button.is-active { background: transparent; outline: 2px solid var(--accent); outline-offset: -2px; }
+.lc-ink-preset-dialog .lc-preset-strip-canvas { height: 110px; border-radius: 2px; }
+.lc-ink-preset-dialog .lc-preset-sheet-cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; padding: 8px 24px 24px; }
+.lc-ink-preset-dialog .lc-preset-sheet-cols.is-single { grid-template-columns: minmax(0, 1fr); }
+.lc-ink-preset-dialog .lc-preset-sheet-cols .lc-preset-sheet-field { padding: 16px 0; border-bottom: 2px solid var(--lc-dialog-line, var(--line)); }
+.lc-ink-preset-dialog .lc-settings-subhead { margin: 0; font: 600 10px/1.4 var(--lc-sans); text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+.lc-ink-preset-dialog .lc-settings-hint { font-size: 12px; line-height: 1.5; }
+.lc-ink-preset-dialog :is(.lc-settings-choice-option, .lc-settings-slider, .lc-preset-preview-erase, .lc-tool-mini) { border-radius: 2px; }
+.lc-ink-preset-dialog .lc-settings-choice-option { background: transparent; border: 2px solid transparent; }
+.lc-ink-preset-dialog .lc-settings-choice-option.is-active { border-color: var(--accent); }
+.lc-ink-preset-dialog .lc-preset-more > summary { cursor: pointer; padding: 14px 0; color: var(--muted); font: 600 11px/1.4 var(--lc-sans); text-transform: uppercase; letter-spacing: .1em; }
+@media (max-width: 680px) {
+  .lc-ink-preset-dialog .lc-preset-sheet-heading { flex-direction: column; gap: 4px; }
+  .lc-ink-preset-dialog .lc-preset-sheet-name { width: 100%; flex: none; }
+}
+@media (min-width: 561px) {
+  [data-handedness="left"] .lc-ink-preset-dialog .lc-preset-sheet-cols:not(.is-single) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .lc-ink-preset-dialog .lc-preset-sheet-cols { grid-template-columns: minmax(0, 1fr); }
+  .lc-ink-preset-dialog .lc-preset-sheet-head { gap: 8px; padding: 12px; }
+  .lc-ink-preset-dialog .lc-preset-sheet-actions { width: 100%; justify-content: flex-end; }
+  .lc-ink-preset-dialog .lc-preset-sheet-strip > .lc-preset-sheet-field { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lc-preset-sheet.lc-ink-preset-dialog { animation: none; }
+}

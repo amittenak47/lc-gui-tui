@@ -6,6 +6,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { HoldButton } from "../components/HoldButton";
+import "../components/dialogFrame.css";
+import "./inkPresetEditor.css";
 import { MorphBar } from "../components/MorphBar";
 import { SettingsSlider } from "../components/SettingsSlider";
 import { PinkEraserIcon, StraightIcon } from "../components/MarkToolIcons";
@@ -354,12 +356,14 @@ export function InkPresetEditor({
   return createPortal(
     <div className="lc-preset-sheet-layer" onPointerDown={() => close("dismiss")}>
       <div
-        className={closing ? "lc-preset-sheet is-closing" : "lc-preset-sheet is-open"}
+        className={`lc-preset-sheet lc-dialog-frame lc-ink-preset-dialog ${closing ? "is-closing" : "is-open"}`}
+        data-dialog-shape="blocky"
         style={{
           ["--lc-morph-x" as string]: `${from.left + from.width / 2}px`,
           ["--lc-morph-y" as string]: `${from.top + from.height / 2}px`,
         }}
         role="dialog"
+        aria-modal="true"
         aria-label="Preset editor"
         onPointerDown={(event) => event.stopPropagation()}
       >
@@ -382,6 +386,7 @@ export function InkPresetEditor({
                     : inkColor,
             }}
           />
+          <div className="lc-preset-sheet-heading">
           <input
             className="lc-preset-sheet-name"
             value={name}
@@ -391,6 +396,7 @@ export function InkPresetEditor({
           <span className="lc-preset-sheet-meta">
             {kind.toUpperCase()} WHEEL · SLOT {index + 1}
           </span>
+          </div>
           <div className="lc-preset-sheet-actions">
             <HoldButton
               label="Reset"
@@ -454,9 +460,9 @@ export function InkPresetEditor({
                         ? "Draw here with this highlighter before you Save. A translucent chisel — writing stays readable underneath. Switching Live off, or Erase, clears the pad."
                         : "Draw here with this preset before you Save. Switching Live off, or Erase, clears the pad."
                     : kind === "pen"
-                      ? "How the Ink lab pen draws. Updates as you change the knobs. Each size step eases. Past 8 the camera zooms out, then the stroke morphs to fill the strip again."
+                      ? "How the Ink lab pen draws. Updates as you change the knobs."
                       : kind === "highlighter"
-                        ? "How the highlighter marks. A translucent chisel, not the Ink lab nib. Each size step eases; past 8 the camera zooms, then the mark morphs to fit."
+                        ? "How the highlighter marks. Updates as you change the knobs."
                         : "How this preset draws. Updates as you change the knobs."}
                 </p>
                 <div className="lc-preset-preview-stage">
@@ -525,7 +531,7 @@ export function InkPresetEditor({
                     hint={
                       <>
                         Tap a wedge to pick it. Tap the hub to cycle palettes. Hold a wedge
-                        to edit that slot. Saved on this device only.
+                        to edit that slot.
                       </>
                     }
                   >
@@ -550,6 +556,10 @@ export function InkPresetEditor({
               {physics && (
                 <div className="lc-preset-sheet-physics">
                   <PhysicsKnobs kind={kind} snap={named} onChange={setDraft} />
+                  <details className="lc-preset-more">
+                    <summary>More</summary>
+                    <PhysicsKnobs kind={kind} snap={named} onChange={setDraft} advancedOnly />
+                  </details>
                 </div>
               )}
             </div>
@@ -1253,20 +1263,7 @@ function DrawKnobs({
             lock draws a chord. Saved on this device only.
           </>
         ) : lab ? (
-          snap.pressureSensitive ? (
-            <>
-              Ink lab nib. Size is the capsule radius on the pad. Stylus
-              pressure changes darkness, not width — a light touch is paler, a
-              firm press is solid. Straight lock draws a chord. Saved on this
-              device only.
-            </>
-          ) : (
-            <>
-              Ink lab nib and a straight-stroke lock. The starburst turns on
-              stylus pressure: how hard you press then changes darkness, not
-              width. Saved on this device only.
-            </>
-          )
+          <>Ink lab nib and a straight-stroke lock. Pressure changes darkness, not width.</>
         ) : snap.pressureSensitive ? (
           <>
             Pressure is on: how hard you press changes how dark the ink is, not
@@ -1353,10 +1350,12 @@ function PhysicsKnobs({
   kind,
   snap,
   onChange,
+  advancedOnly = false,
 }: {
   kind: InkPresetKind;
   snap: InkDrawSnapshot;
   onChange: (next: InkDrawSnapshot) => void;
+  advancedOnly?: boolean;
 }) {
   const lab = kind === "pen";
   const speedPct = speedInkToPercent(snap.speed);
@@ -1364,7 +1363,7 @@ function PhysicsKnobs({
   const clipPct = pressureClipToPercent(snap.pressureClip);
   return (
     <>
-      {snap.pressureSensitive && (
+      {advancedOnly && snap.pressureSensitive && (
         <SettingsBlock
           title="Pressure clip"
           hint={
@@ -1397,14 +1396,13 @@ function PhysicsKnobs({
         </SettingsBlock>
       )}
 
+      {!advancedOnly && <>
       <SettingsBlock
         title="Speed ink"
         hint={
           lab ? (
             <>
-              Same nib as Off at a normal writing pace: slow down and the
-              capsule fattens, speed up and it thins. Ink fade and Ink blot are
-              separate and work when this is Off. Saved on this device only.
+              Off is a steady nib. Turn it up and slow strokes fatten, fast ones thin.
             </>
           ) : (
             <>
@@ -1431,9 +1429,7 @@ function PhysicsKnobs({
         hint={
           lab ? (
             <>
-              Hold the nib still and the tip grows a richer pool. Slow writing
-              lays a darker colour; Off stays nib-sized. Saved on this device
-              only.
+              Hold the nib still and the tip grows a richer pool. Off keeps it nib-sized.
             </>
           ) : (
             <>
@@ -1463,8 +1459,7 @@ function PhysicsKnobs({
           lab ? (
             <>
               A pace wash toward paper: slow writing stays full, fast writing
-              goes faint — the Ink lab pad look. Off keeps the colour solid.
-              Saved on this device only.
+              goes faint.
             </>
           ) : (
             <>
@@ -1487,8 +1482,8 @@ function PhysicsKnobs({
         />
       </SettingsBlock>
 
-      {!lab && (
-      <SettingsBlock
+      </>}
+      {advancedOnly && !lab && <SettingsBlock
         title="Ink boldness"
         hint={
           <>
@@ -1507,9 +1502,9 @@ function PhysicsKnobs({
           value={inkBoldnessToPercent(snap.boldness)}
           onChange={(n) => onChange({ ...snap, boldness: inkBoldnessFromPercent(n) })}
         />
-      </SettingsBlock>
-      )}
+      </SettingsBlock>}
 
+      {!advancedOnly && <>
       <SettingsBlock
         title="Stroke smoothing"
         hint={
@@ -1517,8 +1512,7 @@ function PhysicsKnobs({
             <>
               How much of the shake to take out. <strong>On Lift</strong> tidies
               once you finish; <strong>While Writing</strong> tidies behind the
-              nib as you go. Off keeps every kink you actually drew. Saved on
-              this device only.
+              nib as you go.
             </>
           ) : (
             <>
@@ -1563,7 +1557,8 @@ function PhysicsKnobs({
         </>
       )}
 
-      {lab && (
+      </>}
+      {advancedOnly && lab && (
         <SettingsBlock
           title="Lift finish"
           hint={
