@@ -3,8 +3,7 @@
  * Backdrop blurs the board the same way problem-load transitions do.
  */
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { Children, isValidElement, createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { checkPadHub, type PadHubCheck } from "../api/client";
 import type { DevicePrefsDto, DlcStatus, LcClient } from "../api/client";
@@ -21,7 +20,11 @@ import type {
 } from "../api/types";
 import { DEFAULT_COACH_FLAGS } from "../api/types";
 import { shouldDismissBackdrop } from "../util/backdropDismiss";
-import { MorphBar } from "./MorphBar";
+import { DialogFrame } from "./DialogFrame";
+import { DialogBackdrop, DialogPresence } from "./DialogMotion";
+import { AnimatedDisclosure } from "./AnimatedDisclosure";
+import { countSettingsChanges } from "../util/settingsChanges";
+import "./settingsDialog.css";
 import { SettingsSlider } from "./SettingsSlider";
 import { loadTestForwardMode, saveTestForwardMode, type TestForwardMode } from "../util/agentPrefs";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
@@ -171,53 +174,46 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "llm", label: "LLM" },
 ];
 
-const SETTINGS_PAGE_TITLES: Record<string, string> = {
-  paths: "Paths",
-  datasets: "Datasets",
-  writing: "Annotate",
-  reading: "Scroll",
-  storage: "Storage",
-  ui: "UI",
-  tests: "Test Cases",
-  llm: "LLM",
-};
-
 const SettingsPageCtx = createContext<{
-  page: string;
-  open: (id: string) => void;
-  host: HTMLElement | null;
-}>({ page: "root", open: () => {}, host: null });
+  page: string; open: (id: string) => void; query: string; summaries: Record<string, string>;
+}>({ page: "root", open: () => {}, query: "", summaries: {} });
 
-/**
- * A settings topic on the root list. Click morphs the window into that page;
- * Back on the header returns. Children portal into the morph sub-panel so the
- * accordion never grows in place.
- */
-function SettingsFold({
-  id,
-  title,
-  children,
-}: {
-  id: string;
-  title: string;
-  children: ReactNode;
-}) {
-  const { page, open, host } = useContext(SettingsPageCtx);
-  return (
-    <>
-      <div className="lc-settings-fold">
-        <button
-          type="button"
-          className="lc-settings-fold-summary"
-          onClick={() => open(id)}
-        >
-          <span className="lc-settings-fold-chevron" aria-hidden />
-          <span className="lc-settings-fold-title">{title}</span>
-        </button>
-      </div>
-      {page === id && host ? createPortal(children, host) : null}
-    </>
-  );
+function SettingsIcon({id}: {id: string}) {
+  const paths: Record<string,string> = {
+    writing:"M4 17 16 5l3 3L7 20H4v-3Z", reading:"M8 3h8v18H8V3Zm4 3v5",
+    storage:"M4 5h16v14H4V5Zm0 5h16m-12 5h8", ui:"M3 4h18v16H3V4Zm0 5h18M9 9v11",
+    diagnostics:"M4 18V6m5 12V3m6 15V9m5 9V5", paths:"M3 6h7l2 3h9v11H3V6Z",
+    datasets:"M4 4h16v16H4V4Zm0 6h16m-10 0v10", llm:"M4 4h16v13H9l-5 4V4Zm4 5h8m-8 4h5",
+  };
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[id] ?? "M5 4h14v16H5V4Zm4 5h6m-6 5h6"}/></svg>;
+}
+
+/** Search existing labels without mounting the settings controls. */
+function settingsText(children: ReactNode): string {
+  return Children.toArray(children).map(child => {
+    if (typeof child === "string" || typeof child === "number") return String(child);
+    if (!isValidElement<{children?:ReactNode; label?:string; title?:string; "aria-label"?:string}>(child)) return "";
+    return [child.props.label, child.props.title, child.props["aria-label"], settingsText(child.props.children)].filter(Boolean).join(" ");
+  }).join(" ");
+}
+
+function SettingsFold({id,title,children}: {id:string;title:string;children:ReactNode}) {
+  const {page,open,query,summaries}=useContext(SettingsPageCtx);
+  const terms=query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length) {
+    const text=`${title} ${id === "diagnostics" ? "Debug log Export log Clear log" : ""} ${settingsText(children)}`.toLocaleLowerCase();
+    if (terms.some(term=>!text.includes(term))) return null;
+  }
+  const expanded=page===id;
+  return <section className={`lc-settings-fold${expanded ? " is-expanded" : ""}`}>
+    <button type="button" className="lc-settings-fold-summary" aria-expanded={expanded} aria-controls={`lc-settings-group-${id}`} onClick={()=>open(expanded ? "root" : id)}>
+      <span className="lc-settings-group-icon"><SettingsIcon id={id}/></span>
+      <span className="lc-settings-fold-title">{title}</span>
+      <span className="lc-settings-fold-value">{summaries[id]}</span>
+      <span className="lc-settings-fold-chevron" aria-hidden/>
+    </button>
+    <AnimatedDisclosure open={expanded}><div id={`lc-settings-group-${id}`} className="lc-settings-fold-body" inert={!expanded}>{children}</div></AnimatedDisclosure>
+  </section>;
 }
 
 const PROVIDERS = ["local", "ollama", "openai", "groq"] as const;
@@ -621,7 +617,7 @@ export function SettingsModal({
   const backdropDown = useRef(false);
   const [tab, setTab] = useState<TabId>(initialTab ?? "personalise");
   const [page, setPage] = useState("root");
-  const [subHost, setSubHost] = useState<HTMLDivElement | null>(null);
+  const [settingsQuery, setSettingsQuery] = useState("");
   const [draft, setDraft] = useState<LcConfig>(emptyConfig);
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
@@ -979,11 +975,12 @@ export function SettingsModal({
 
   // The list is per provider, so a tab switch invalidates it. Clearing first
   // stops the previous provider's models being offered for this one.
+  const showingLlm = open && (tab === "llm" || page === "llm");
   useEffect(() => {
-    if (tab !== "llm") return;
+    if (!showingLlm) return;
     setCatalog(null);
     void refreshCatalog(providerFocus);
-  }, [tab, providerFocus, refreshCatalog]);
+  }, [showingLlm, providerFocus, refreshCatalog]);
 
   /** Re-read on each visit to Personalise, so it reflects the session just saved. */
   useEffect(() => {
@@ -1145,7 +1142,8 @@ export function SettingsModal({
     setBaselineHubToken(hub?.token ?? "");
     setHubCheck({ kind: "idle" });
     if (initialTab) setTab(initialTab);
-    setPage("root");
+    setPage("writing");
+    setSettingsQuery("");
     void (async () => {
       try {
         const cfg = await client.getConfig();
@@ -1194,16 +1192,15 @@ export function SettingsModal({
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || saving) return;
       event.preventDefault();
       if (page !== "root") setPage("root");
       else onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, page, onClose]);
+  }, [open, page, onClose, saving]);
 
-  if (!open) return null;
 
   const draftPrefs: DevicePrefs = {
     agentDisplay,
@@ -1256,11 +1253,29 @@ export function SettingsModal({
     hubToken.trim() !== baselineHubToken ||
     debugLog !== baselineDebugLog;
 
+  const changeCount = countSettingsChanges(draftPrefs, baselinePrefs)
+    + countSettingsChanges({...draft, coach: {...DEFAULT_COACH_FLAGS, ...draft.coach}}, {...baselineConfig, coach: {...DEFAULT_COACH_FLAGS, ...baselineConfig.coach}})
+    + Number(Boolean(openaiKeyDraft.trim()) || clearOpenaiKey)
+    + Number(Boolean(groqKeyDraft.trim()) || clearGroqKey)
+    + Number(hubUrl.trim() !== baselineHubUrl) + Number(hubToken.trim() !== baselineHubToken)
+    + Number(debugLog !== baselineDebugLog);
+  const summaries: Record<string,string> = {
+    writing: `${handedness === "left" ? "Left hand" : "Right hand"} / smoothing ${Math.round(inkSmoothing*100)}%`,
+    reading: `${readingMode === "pages" ? "Pages" : "Scroll"} / momentum ${pdfFlickMomentum}%`,
+    storage: `${autosaveMs ? `Autosave ${autosaveMs/1000}s` : "Autosave off"} / ${hubAutoSync === "off" ? "Manual sync" : "Auto sync"}`,
+    ui: `${uiHandedness === "left" ? "Left-hand UI" : "Right-hand UI"} / ${startupTabs === "fresh" ? "Start fresh" : startupTabs === "home" ? "Start at home" : "Restore tabs"}`,
+    diagnostics: debugLog ? "On" : "Off", paths: draft.workspace_dir,
+    datasets: `${datasets.length} datasets`, tests: draft.stop_on_first_failure ? "Stop at first failure" : "Run all cases",
+    llm: `${draft.default_provider} / ${draft[draft.default_provider as keyof Pick<LcConfig,"local"|"ollama"|"openai"|"groq">]?.model || "No model selected"}`,
+    ...Object.fromEntries(COACH_FLAG_GROUPS.map(group=>[group.id, `${group.flags.filter(([key])=>(draft.coach ?? DEFAULT_COACH_FLAGS)[key]).length} of ${group.flags.length} on`])),
+  };
+
   const patchProvider = (key: "local" | "ollama" | "openai" | "groq", patch: Partial<ProviderConfig>) => {
     setDraft((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
   };
 
   const cancel = () => {
+    if (saving) return;
     // Nothing persisted mid-edit — closing drops the draft. Baseline stays on disk.
     onClose();
   };
@@ -1437,55 +1452,19 @@ export function SettingsModal({
   const selectedModel = catalog?.models.find((entry) => entry.id === provider.model.trim());
   const modelListHint = modelHint(catalog, catalogBusy, provider.model.trim(), selectedModel);
   const visionHint = visionEvidence(catalog, selectedModel, provider.vision === true);
-  const pageTitle =
-    page === "root"
-      ? "Settings"
-      : (COACH_FLAG_GROUPS.find((group) => group.id === page)?.title ??
-        SETTINGS_PAGE_TITLES[page] ??
-        "Settings");
-
-  return (
-    <div
-      className="lc-settings-backdrop"
-      role="presentation"
-      onPointerDown={(e) => {
-        backdropDown.current = e.target === e.currentTarget;
-      }}
-      onClick={(e) => {
-        const startedOnBackdrop = backdropDown.current;
-        backdropDown.current = false;
-        if (shouldDismissBackdrop(startedOnBackdrop, e.target, e.currentTarget)) cancel();
-      }}
-    >
-      <div className="lc-settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
-        <div className="lc-settings-head">
-          {page === "root" ? (
-            <h2>Settings</h2>
-          ) : (
-            <div className="lc-settings-head-row">
-              <button type="button" className="lc-settings-back" onClick={() => setPage("root")}>
-                Back
-              </button>
-              <h2>{pageTitle}</h2>
-              <button
-                type="button"
-                className="lc-primary lc-settings-head-save"
-                disabled={!dirty || saving}
-                onClick={() => void save({ close: false })}
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-            </div>
-          )}
-        </div>
-
-        <SettingsPageCtx.Provider value={{ page, open: setPage, host: subHost }}>
-        <MorphBar
-          active={page === "root" ? "root" : "sub"}
-          axis="height"
-          className="lc-settings-morph"
-        >
-        <div data-morph-id="root">
+  const searching = Boolean(settingsQuery.trim());
+  return <DialogPresence>{open && (
+    <DialogBackdrop className="lc-settings-backdrop" role="presentation"
+      onPointerDown={e=>{backdropDown.current=e.target===e.currentTarget;}}
+      onPointerCancel={()=>{backdropDown.current=false;}}
+      onClick={e=>{const started=backdropDown.current;backdropDown.current=false;if(shouldDismissBackdrop(started,e.target,e.currentTarget))cancel();}}>
+      <DialogFrame className="lc-settings-dialog" titleId="lc-settings-dialog-title" title="Settings" subtitle="Every tab · Every workspace" shape="blocky" onClose={cancel} closeDisabled={saving}
+        icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true"><path d="M5 3v18M12 3v18M19 3v18M2 8h6m1 8h6m1-8h6"/></svg>}>
+        <div className="lc-dialog-context"><label className="lc-settings-command">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></svg>
+          <input type="search" aria-label="Search settings" placeholder="Search settings..." value={settingsQuery} onChange={event=>setSettingsQuery(event.target.value)}/>
+        </label></div>
+        <SettingsPageCtx.Provider value={{page,open:setPage,query:settingsQuery,summaries}}>
         <div className="lc-settings-tabs" role="tablist">
           {TABS.map((entry) => (
             <button
@@ -1494,14 +1473,15 @@ export function SettingsModal({
               role="tab"
               aria-selected={tab === entry.id}
               className={tab === entry.id ? "lc-settings-tab is-active" : "lc-settings-tab"}
-              onClick={() => setTab(entry.id)}
+              onClick={() => { setTab(entry.id); setPage("root"); setSettingsQuery(""); }}
             >
+              <SettingsIcon id={entry.id === "personalise" ? "diagnostics" : entry.id === "workspace" ? "paths" : entry.id}/>
               {entry.label}
             </button>
           ))}
         </div>
 
-        <div className="lc-settings-body lc-scroll-pane">
+        <div className="lc-settings-body lc-dialog-body lc-scroll-pane">
           {bootNotice && (
             <div className="lc-warning">
               Running on built-in defaults — this device’s config file did not
@@ -1511,7 +1491,7 @@ export function SettingsModal({
           {error && <div className="lc-warning">{error}</div>}
           {busy && <div className="lc-muted">{busy}</div>}
 
-          {tab === "workspace" && (
+          {(tab === "workspace" || searching) && FEATURE_LEETCODE && (
             <div className="lc-settings-fields">
               <SettingsFold id="paths" title="Paths">
               <label>
@@ -1632,7 +1612,7 @@ export function SettingsModal({
             </div>
           )}
 
-          {tab === "personalise" && (
+          {(tab === "personalise" || searching) && (
             <div className="lc-settings-fields">
               <SettingsFold id="writing" title="Annotate">
               <div className="lc-settings-subhead">Writing hand</div>
@@ -2712,7 +2692,7 @@ export function SettingsModal({
             </div>
           )}
 
-          {tab === "ai" && FEATURE_LEETCODE && (
+          {(tab === "ai" || searching) && FEATURE_LEETCODE && (
             <div className="lc-settings-fields">
               {FEATURE_LEETCODE && (
               <SettingsFold id="tests" title="Test Cases">
@@ -2860,9 +2840,9 @@ export function SettingsModal({
             </div>
           )}
 
-          {tab === "llm" && (
+          {(tab === "llm" || searching) && (
             <div className="lc-settings-fields">
-              <div className="lc-settings-callout" role="note">
+              {!searching && <div className="lc-settings-callout" role="note">
                 <strong>localhost means this machine</strong>
                 <p>
                   The in-process daemon calls the LLM URL below.{" "}
@@ -2870,7 +2850,7 @@ export function SettingsModal({
                   <strong>this app&apos;s machine</strong>
                   {mobile ? ", not a remote tablet" : ""}.
                 </p>
-              </div>
+              </div>}
 
               <SettingsFold id="llm" title="LLM">
               <div className="lc-settings-subhead">Agent status</div>
@@ -3172,33 +3152,19 @@ export function SettingsModal({
               </SettingsFold>
             </div>
           )}
+          {searching && <p className="lc-muted lc-settings-search-empty">No matching settings.</p>}
         </div>
 
-        <div className="lc-settings-foot">
-          <button type="button" className="lc-secondary" onClick={cancel}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="lc-primary"
-            disabled={!dirty || saving}
-            onClick={() => void save({ close: true })}
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
+        <div className="lc-settings-foot lc-dialog-foot">
+          <span className="lc-settings-change-count" role="status" aria-live="polite" data-changed={changeCount > 0}>{changeCount ? `${changeCount} ${changeCount === 1 ? "change" : "changes"}` : "No changes"}</span>
+          {page !== "root" && <button type="button" className="lc-secondary lc-dialog-action" disabled={saving} onClick={()=>setPage("root")}>Back</button>}
+          <button type="button" className="lc-secondary lc-dialog-action" disabled={saving} onClick={cancel}>Cancel</button>
+          <button type="button" className="lc-primary lc-dialog-action" disabled={!dirty || saving} onClick={()=>void save({close:true})}>{saving ? "Saving..." : "Save"}</button>
         </div>
-        </div>
-        <div data-morph-id="sub">
-          {error && (
-            <div className="lc-warning lc-settings-sub-error">{error}</div>
-          )}
-          <div className="lc-settings-page lc-settings-fields" ref={setSubHost} />
-        </div>
-        </MorphBar>
         </SettingsPageCtx.Provider>
-      </div>
-    </div>
-  );
+      </DialogFrame>
+    </DialogBackdrop>
+  )}</DialogPresence>;
 }
 
 /**

@@ -1,0 +1,33 @@
+.lc-settings-modal.lc-settings-dialog { width: min(760px, 100%); max-height: min(90dvh, 950px); }
+.lc-settings-dialog .lc-dialog-context { padding-bottom: 12px; }
+.lc-settings-command { display: flex; align-items: center; gap: 10px; padding: 0 12px; min-height: 42px; border: 2px solid var(--lc-dialog-line); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.lc-settings-command svg { flex: 0 0 18px; color: var(--muted); }
+.lc-settings-command input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: 13px var(--lc-sans); }
+.lc-settings-command:focus-within { border-color: var(--accent); }
+.lc-settings-dialog .lc-settings-tabs { padding: 0 20px; flex-shrink: 0; border-color: var(--lc-dialog-line); }
+.lc-settings-dialog .lc-settings-tab { color: var(--muted); display: inline-flex; align-items: center; gap: 7px; }
+.lc-settings-dialog .lc-settings-tab.is-active { color: var(--accent); }
+.lc-settings-dialog .lc-settings-tab svg { width: 16px; height: 16px; }
+.lc-settings-dialog .lc-dialog-body { gap: 10px; }
+.lc-settings-dialog .lc-settings-fields { gap: 10px; }
+.lc-settings-dialog .lc-settings-fold { border: 2px solid var(--lc-dialog-line); border-radius: 2px; background: transparent; }
+.lc-settings-dialog .lc-settings-fold-summary { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 54px; padding: 10px 12px; }
+.lc-settings-group-icon { display: grid; place-items: center; flex: 0 0 30px; width: 30px; height: 30px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.lc-settings-group-icon svg { width: 18px; height: 18px; }
+.lc-settings-dialog .lc-settings-fold-title { flex: 0 1 auto; font-size: 13px; }
+.lc-settings-fold-value { flex: 1; min-width: 0; text-align: left; font-size: 12px; font-weight: 400; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lc-settings-dialog .lc-settings-fold-chevron { flex: 0 0 7px; margin-left: auto; transition: transform 180ms ease-out; }
+.lc-settings-dialog .is-expanded .lc-settings-fold-chevron { transform: rotate(45deg); }
+.lc-settings-dialog .lc-settings-fold-body { padding: 16px; gap: 12px; border-top: 2px solid var(--lc-dialog-line); background: transparent; }
+.lc-settings-dialog .lc-animated-disclosure { overflow: hidden; }
+.lc-settings-dialog .lc-settings-subhead { font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+.lc-settings-dialog :is(.lc-settings-choice-option, .lc-settings-slider, .lc-settings-provider-tabs, .lc-settings-subtab, .lc-settings-actions-row button, .lc-settings-fields input, .lc-settings-fields select) { border-radius: 2px; }
+.lc-settings-dialog :is(input,select) { max-width: 100%; min-width: 0; color: var(--ink); }
+.lc-settings-dialog .lc-settings-foot { display: flex; gap: 8px; }
+.lc-settings-change-count { display: flex; align-items: center; gap: 8px; margin-right: auto; color: var(--muted); font: 600 10px/1.4 var(--lc-sans); letter-spacing: .1em; text-transform: uppercase; }
+.lc-settings-change-count::before { content: ""; width: 6px; height: 6px; background: var(--lc-dialog-line); }
+.lc-settings-change-count[data-changed="true"]::before { background: var(--accent); }
+[data-ui-handedness="left"] .lc-settings-change-count { margin-right: 0; margin-left: auto; }
+.lc-settings-dialog .lc-dialog-body:has(.lc-settings-fold) .lc-settings-search-empty { display: none; }
+@media (max-width: 480px) { .lc-settings-dialog .lc-settings-fold-summary { flex-wrap: wrap; gap: 8px; } .lc-settings-fold-value { flex-basis: calc(100% - 48px); order: 4; padding-left: 38px; } }
+@media (prefers-reduced-motion: reduce) { .lc-settings-dialog .lc-settings-fold-chevron { transition: none; } }
