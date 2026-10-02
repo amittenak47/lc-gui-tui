@@ -60,6 +60,23 @@ const FACING_SETTLE_MS = 1200;
 const SHOT_CACHE = 8;
 /** How long the view must sit still before the next turn's pictures are taken. */
 const PREFETCH_IDLE_MS = 600;
+/**
+ * And how long the hand must have been off the screen. Pictures are a few
+ * hundred ms of the main thread each; taken while the reader was opening
+ * the toolbar or a menu just after launch, they were why the first taps of
+ * a session answered slowly. A turn does not need them to start.
+ */
+const PREFETCH_QUIET_MS = 1200;
+
+/** When the reader last touched or typed — see `PREFETCH_QUIET_MS`. */
+let lastInputAt = -Infinity;
+if (typeof window !== "undefined") {
+  const note = () => { lastInputAt = performance.now(); };
+  for (const type of ["pointerdown", "pointermove", "keydown", "wheel"]) {
+    window.addEventListener(type, note, { capture: true, passive: true });
+  }
+}
+const inputQuiet = () => performance.now() - lastInputAt >= PREFETCH_QUIET_MS;
 /** How often a still page checks whether its pictures went stale (a sharper paint landed). */
 const PREFETCH_RECHECK_MS = 1500;
 /** Thrown back toward where it started faster than this, the sheet settles back: px per ms. */
@@ -862,7 +879,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
          */
         // A landing moves the camera too: the quick picture after one is the
         // page the hand is coming back for, so it does not wait for that.
-        if (isCameraBusy() && !quick) {
+        if ((isCameraBusy() || !inputQuiet()) && !quick) {
           prefetch(delay);
           return;
         }
@@ -878,7 +895,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         if (frames.length === 0) return;
         const at = currentIndex(frames, lockedRef.current, view);
         const from = frames[at]!;
-        const current = () => !disposed && !turnRef.current && !boardResizeDeferred() && (quick || !isCameraBusy()) &&
+        const current = () => !disposed && !turnRef.current && !boardResizeDeferred() && (quick || (!isCameraBusy() && inputQuiet())) &&
           board() === b && b.getViewportBounds()?.y === view.y && b.getViewportBounds()?.zoom === view.zoom;
         if (textSpreadRef.current) {
           // This spread, and the ones either side of it, page by page.
