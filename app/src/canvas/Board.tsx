@@ -1780,7 +1780,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * `awake` is what a tap in the corner turns on and the idle timer turns off
    * again; it means nothing in `visible`, and is the whole of the other two.
    */
-  const [trayFolded, setTrayFolded] = useState(false);
+  // A document opens with the corner tray folded: the page first, the tools
+  // a tap on the fold away.
+  const [trayFolded, setTrayFolded] = useState(true);
   const reducedChromeMotion = useReducedMotion();
   const [chromeMode, setChromeMode] = useState<ChromeMode>(loadChromeMode);
   const [chromeWakeMarker, setChromeWakeMarker] =
