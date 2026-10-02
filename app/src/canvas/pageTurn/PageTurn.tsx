@@ -28,6 +28,7 @@ import { boardResizeDeferred } from "../../util/splitResize";
 import { afterBootSettled, isBootSettled } from "../../util/bootSettled";
 import { isCameraBusy } from "../../util/cameraBusy";
 import { notePageTurn } from "../../util/pageTurnBusy";
+import { keepResumePicture } from "../../util/resumePicture";
 import { canvasGestureFrame, protectGestureSurface } from "../../util/gestureExclusion";
 import { turnCornerAt, turnEdgeAt, turnCornerSize } from "./corners";
 import { cssColorLuminance } from "../../util/webPagePaper";
@@ -941,7 +942,22 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         prefetching = true;
         void (async () => {
           try {
-            await shot(b, scene, scale, from.maxY, from.pageId);
+            const here = await shot(b, scene, scale, from.maxY, from.pageId);
+            // The page as it rests, for this tab to show at once if it is
+            // reopened — see `resumePicture`.
+            const tab = document.querySelector<HTMLElement>(hostSelector)?.getBoundingClientRect();
+            if (here && tab && tab.width > 0 && current()) {
+              keepResumePicture(filmScope, {
+                canvas: here,
+                left: tl.x - tab.left,
+                top: tl.y - tab.top,
+                width: br.x - tl.x,
+                height: br.y - tl.y,
+                tabWidth: tab.width,
+                tabHeight: tab.height,
+                paper: turnPaperColor(paperColor(), pagedRef.current),
+              });
+            }
             // Pages flicked through quickly: the next turn's picture, and the
             // one after it, are ready before the hand comes back for them.
             const ahead = heading === "next" ? 1 : -1;

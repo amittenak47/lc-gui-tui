@@ -11,8 +11,9 @@
  * and every request that names a task id names the dataset too.
  */
 
+import { resumePictureFor, type ResumePicture } from "./util/resumePicture";
 import type { EncodedInk } from "./canvas/inkCodec";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
 
 import { useShell } from "./shellContext";
@@ -10855,6 +10856,7 @@ export const Workspace = memo(function Workspace({
             if (!active && showing) focusTab(tab.id);
           }}
         >
+          <ResumePictureLayer tabId={tab.id} loading={boardPreparing || canvasLoading} />
           {problem && isAnnotate(problem) && !canvasLoading && (
             <DocumentDrawingPanel
               messages={agentMessages}
@@ -12298,6 +12300,68 @@ function isLlmTimeoutError(cause: unknown): boolean {
     message.includes("timed out") ||
     message.includes("timeout") ||
     message.includes("operation timed out")
+  );
+}
+
+/** Longest a tab's picture stands in for it, should its load never report done. */
+const RESUME_PICTURE_MAX_MS = 15_000;
+
+/**
+ * The page this tab was showing, at once, while it reopens — see
+ * `resumePicture`. Fades out once the tab has loaded behind it.
+ */
+function ResumePictureLayer({ tabId, loading }: { tabId: string; loading: boolean }) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const [picture, setPicture] = useState<ResumePicture | null>(null);
+  const [leaving, setLeaving] = useState(false);
+  const sawLoading = useRef(false);
+  if (loading) sawLoading.current = true;
+
+  // Only as the tab mounts: coming back to it is what this is for.
+  useLayoutEffect(() => {
+    const wrap = hostRef.current?.parentElement;
+    if (!wrap) return;
+    const box = wrap.getBoundingClientRect();
+    setPicture(resumePictureFor(tabId, box.width, box.height));
+  }, [tabId]);
+
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    if (!host || !picture) return;
+    const canvas = picture.canvas;
+    Object.assign(canvas.style, {
+      position: "absolute",
+      left: `${picture.left}px`,
+      top: `${picture.top}px`,
+      width: `${picture.width}px`,
+      height: `${picture.height}px`,
+    });
+    host.appendChild(canvas);
+    return () => {
+      canvas.remove();
+    };
+  }, [picture]);
+
+  useEffect(() => {
+    if (!picture) return;
+    const done = sawLoading.current && !loading;
+    const timer = window.setTimeout(() => setLeaving(true), done ? 0 : RESUME_PICTURE_MAX_MS);
+    return () => window.clearTimeout(timer);
+  }, [picture, loading]);
+
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = window.setTimeout(() => setPicture(null), 240);
+    return () => window.clearTimeout(timer);
+  }, [leaving]);
+
+  return (
+    <div
+      ref={hostRef}
+      className={`lc-resume-picture${leaving ? " is-leaving" : ""}`}
+      aria-hidden
+      hidden={!picture}
+    />
   );
 }
 

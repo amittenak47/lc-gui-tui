@@ -21542,3 +21542,23 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow: hidden;
   pointer-events: none;
 }
+
+/*
+ * A reopening tab's page, shown at once until the tab behind it is ready.
+ * Over the board and its loading doodle, under the tab's own chrome.
+ */
+.lc-resume-picture {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 62%, #000);
+  opacity: 1;
+  transition: opacity 220ms ease;
+}
+.lc-resume-picture.is-leaving {
+  opacity: 0;
+}
+.lc-resume-picture[hidden] {
+  display: none;
+}
