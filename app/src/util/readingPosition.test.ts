@@ -19,6 +19,12 @@ describe("readingPosition", () => {
     expect(loadReadingPage("doc-2")).toBe(3);
   });
 
+  it("leaves the page to a session saved after the reading", () => {
+    saveReadingPage("doc-1", 67);
+    expect(loadReadingPage("doc-1", Date.now() - 60_000)).toBe(67);
+    expect(loadReadingPage("doc-1", Date.now() + 60_000)).toBe(0);
+  });
+
   it("ignores a missing document or a page before the first", () => {
     saveReadingPage(null, 5);
     saveReadingPage("doc-1", 0);

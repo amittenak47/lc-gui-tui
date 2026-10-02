@@ -4053,8 +4053,9 @@ export const Workspace = memo(function Workspace({
         const savedPdfPage = Math.floor(
           Number((existing?.board.appState as { pdfPage?: number } | undefined)?.pdfPage),
         );
-        // Where it was last read, if a page turn since the last save says so.
-        const readPage = docType === "pdf" ? loadReadingPage(sessionDocId) : 0;
+        // Where it was last read, if that was after its last save: a session
+        // saved since keeps the page it was saved at.
+        const readPage = docType === "pdf" ? loadReadingPage(sessionDocId, existing?.updatedAt ?? 0) : 0;
         const sessionPage =
           readPage >= 1 ? readPage : Number.isFinite(savedPdfPage) && savedPdfPage >= 1 ? savedPdfPage : 0;
         setPdfSessionPage(sessionPage);

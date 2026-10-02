@@ -25,11 +25,17 @@ function load(): Places {
   }
 }
 
-/** The page this document was last read at here, or 0. */
-export function loadReadingPage(docId: string | null | undefined): number {
+/**
+ * The page this document was last read at here, or 0 — when that reading is
+ * newer than `savedAt` (the session's own last save, which keeps its page
+ * when it was saved after the reading).
+ */
+export function loadReadingPage(docId: string | null | undefined, savedAt = 0): number {
   if (!docId) return 0;
-  const page = Math.floor(Number(load()[docId]?.page));
-  return Number.isFinite(page) && page >= 1 ? page : 0;
+  const place = load()[docId];
+  const page = Math.floor(Number(place?.page));
+  if (!Number.isFinite(page) || page < 1) return 0;
+  return Number(place?.at) > savedAt ? page : 0;
 }
 
 export function saveReadingPage(docId: string | null | undefined, page: number): void {
