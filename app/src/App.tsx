@@ -72,6 +72,7 @@ import {
   pinLive,
   promoteLive,
   tabsReducer,
+  tabUsesPdfWorker,
   visibleTabIds,
   type SplitEdge,
   type TabPatch,
@@ -715,6 +716,16 @@ export function App() {
   });
   const tabsRef = useRef(tabState);
   tabsRef.current = tabState;
+
+  /*
+   * A PDF among the restored tabs: start pdf.js and its worker now. The
+   * worker's script is a second of a tablet to load and run, on its own
+   * thread; started when the PDF mounted, it was the open's longest wait.
+   */
+  useEffect(() => {
+    if (!tabsRef.current.tabs.some(tabUsesPdfWorker)) return;
+    void import("./modes/PdfDocument").then((pdf) => pdf.loadPdfJs()).catch(() => {});
+  }, []);
 
   const announceAutosave = useCallback((tabId: string, title: string) => {
     if (loadAutosaveBanner() === "off") return;

@@ -33,6 +33,7 @@
  * pagefile clears the spans (the bitmap is gone, so they would be a lie).
  */
 
+import { traceOpen } from "../util/messageOf";
 import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { isDocCameraLive, isDocCameraPulsing, subscribeDocCameraLive, subscribeDocCameraPulse } from "../canvas/docSelectionGesture";
@@ -802,7 +803,9 @@ export function PdfDocument({
 
     void (async () => {
       try {
+        traceOpen("pdf: mounted");
         const pdfjs = await loadPdfJs();
+        traceOpen("pdf: pdf.js loaded");
         /*
          * One open per file, joined rather than repeated.
          *
@@ -823,6 +826,7 @@ export function PdfDocument({
           return { promise: task.promise, task };
         });
         const doc = await lease.promise;
+        traceOpen("pdf: document parsed", { pages: doc.numPages });
         if (cancelled) return;
         docRef.current = doc;
         textLayerRef.current = pdfjs.TextLayer;

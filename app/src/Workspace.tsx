@@ -3903,6 +3903,8 @@ export const Workspace = memo(function Workspace({
       const { gen: loadGen, signal: loadSignal } = beginWorkspaceLoad();
       annotatePdfErrorRef.current = null;
       traceOpen("start", { name: input.name, docType: input.docType, loadGen, tabId: input.tabId });
+      // pdf.js's worker takes a second to start: begin it before the page is set up.
+      if (input.docType === "pdf") void import("./modes/PdfDocument").then((pdf) => pdf.loadPdfJs()).catch(() => {});
       /*
        * Same loading transition as pickProblem — do not invent a parallel path.
        * fromBrowse: browser overlay spinner → slide → checkmark → board under
@@ -4297,16 +4299,31 @@ export const Workspace = memo(function Workspace({
         traceOpen("template ready", { ms: openMs() });
         // Ink first — see `openWhiteboard`. A saved PDF page restores the
         // camera after that page exists; do not fit to the stack top first.
+        /*
+         * A PDF's page lands and paints without its ink, so the ink comes in
+         * alongside and is waited for only before it is drawn: waiting first
+         * held the page back a second on a written-in book.
+         */
+        let inkRestored: Promise<void> | null = null;
         if (existing) {
           const handle = boardRef.current;
-          if (handle) await restoreInk(handle, annotateDocKey(existing.id), existing.board, {
-            paint: false,
-            shards: inkShards,
-          });
-          // Which layout that ink was written in, if the copy says; checked
-          // against this device's once the pages are laid out, below.
-          handle?.setInkSpread(pdfInkSpreadStamp(existing.board));
-          traceOpen("ink restored", { ms: openMs() });
+          const restore = async () => {
+            if (handle) await restoreInk(handle, annotateDocKey(existing.id), existing.board, {
+              paint: false,
+              shards: inkShards,
+            });
+            // Which layout that ink was written in, if the copy says; checked
+            // against this device's once the pages are laid out, below.
+            handle?.setInkSpread(pdfInkSpreadStamp(existing.board));
+            traceOpen("ink restored", { ms: openMs() });
+          };
+          if (docType === "pdf") {
+            inkRestored = restore();
+            // Awaited below; a failure surfaces there, not as unhandled.
+            inkRestored.catch(() => {});
+          } else {
+            await restore();
+          }
         }
 
         // Document must finish laying out (measure stable) before reveal.
@@ -4457,6 +4474,8 @@ export const Workspace = memo(function Workspace({
           }
           traceOpen("view restored", { ms: openMs() });
         }
+        if (inkRestored) await inkRestored;
+        if (workspaceLoadGenRef.current !== loadGen) return;
         await boardRef.current?.primeInkSnap();
         traceOpen("ink snap primed", { ms: openMs() });
 

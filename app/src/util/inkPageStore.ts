@@ -176,15 +176,35 @@ export async function markInkPageSynced(
   });
 }
 
+/** Let the main thread's queued work run before going on. */
+function yieldToMain(): Promise<void> {
+  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (typeof scheduler?.yield === "function") return scheduler.yield();
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 export async function getInkPages(docKey: string): Promise<Map<number, EncodedInk>> {
   const rows = await getInkPageRecords(docKey);
   const out = new Map<number, EncodedInk>();
-  // All at once: the worker unpacks one while the next is on its way.
-  const decoded = await Promise.all(rows.map((row) => encodedFromRecord(row)));
-  rows.forEach((row, i) => {
-    const encoded = decoded[i];
+  // Inflated together (natively, off this thread where the WebView can)…
+  const raws = await Promise.all(rows.map((row) =>
+    row.inkC || !row.gz ? null : bytesFromMaybeGzip(row.gz).catch(() => null)));
+  // …then unpacked a page at a time, letting the rest of the open in between.
+  // In one go, a written-in book held the main thread for a third of a second,
+  // and the PDF's own parse and first page waited behind it.
+  for (let i = 0; i < rows.length; i += 1) {
+    const row = rows[i]!;
+    let encoded: EncodedInk | null = row.inkC ?? null;
+    if (!encoded && raws[i]) {
+      try {
+        encoded = unpackEncodedInk(raws[i]!);
+      } catch {
+        encoded = null;
+      }
+      await yieldToMain();
+    }
     if (encoded) out.set(row.pageId, encoded);
-  });
+  }
   return out;
 }
 
