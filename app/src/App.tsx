@@ -1,3 +1,4 @@
+import { DialogPresence } from "./components/DialogMotion";
 /**
  * The app shell: the part that outlives any one workspace.
  *
@@ -1535,7 +1536,7 @@ export function App() {
         </div>
       )}
 
-      {llmGateOpen && (
+      <DialogPresence>{llmGateOpen && (
         <LlmStatusDialog
           phase={llmGatePhase}
           onOpenSettings={() => {
@@ -1548,7 +1549,7 @@ export function App() {
             setNotice("Agent off — Settings → LLM when you want it back.");
           }}
         />
-      )}
+      )}</DialogPresence>
 
       <SettingsModal
         open={settingsOpen}

@@ -1,3 +1,6 @@
+import { motion, useIsPresent, useReducedMotion } from "motion/react";
+import { DialogBackdrop } from "../components/DialogMotion";
+import { useDialogButtonPress } from "../components/useDialogButtonPress";
 /**
  * 1D preset sheet — morphs out of a held wheel wedge.
  */
@@ -294,6 +297,11 @@ export function InkPresetEditor({
   onSave,
   onDuplicate,
 }: InkPresetEditorProps) {
+  const present = useIsPresent();
+  const reduced = useReducedMotion();
+  const buttonPress = useDialogButtonPress();
+  const closeTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (closeTimer.current !== null) window.clearTimeout(closeTimer.current); }, []);
   const seed = useMemo(() => {
     if (initial) return initial;
     if (fallback) return { ...fallback, name: "Preset" };
@@ -317,11 +325,11 @@ export function InkPresetEditor({
   }, [seed, name]);
 
   const close = (reason: "back" | "dismiss" = "dismiss") => {
-    if (closing) return;
+    if (closing || !present) return;
     closeReasonRef.current = reason;
     if (reason === "back") onBackRevealRef.current?.();
     setClosing(true);
-    window.setTimeout(() => onCloseRef.current(closeReasonRef.current), 220);
+    closeTimer.current = window.setTimeout(() => onCloseRef.current(closeReasonRef.current), reduced ? 0 : 220);
   };
 
   useEffect(() => {
@@ -335,7 +343,7 @@ export function InkPresetEditor({
     return () => window.removeEventListener("keydown", onKey);
     // close is stable enough via closing guard + refs
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [closing]);
+  }, [closing, present, reduced]);
 
   const named = { ...draft, name: name.trim() || seed.name };
   const draw = !isEraserWedge(named);
@@ -354,11 +362,18 @@ export function InkPresetEditor({
   }, [inkColor, inkPalette]);
 
   return createPortal(
-    <div className="lc-preset-sheet-layer" onPointerDown={() => close("dismiss")}>
-      <div
+    <DialogBackdrop exiting={closing} className="lc-preset-sheet-layer" onPointerDown={() => close("dismiss")}>
+      <motion.div
+        {...buttonPress}
+        inert={closing || !present}
+        initial={reduced ? false : { opacity: 0, scale: 0.94, y: 14 }}
+        animate={{ opacity: closing ? 0 : 1, scale: closing ? 0.94 : 1, y: closing ? 14 : 0 }}
+        exit={{ opacity: 0, scale: 0.94, y: 14, transition: { duration: closing || reduced ? 0 : 0.18 } }}
+        transition={{ duration: reduced ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
         className={`lc-preset-sheet lc-dialog-frame lc-ink-preset-dialog ${closing ? "is-closing" : "is-open"}`}
         data-dialog-shape="blocky"
         style={{
+          x: "-50%",
           ["--lc-morph-x" as string]: `${from.left + from.width / 2}px`,
           ["--lc-morph-y" as string]: `${from.top + from.height / 2}px`,
         }}
@@ -566,8 +581,8 @@ export function InkPresetEditor({
           </div>
         </MorphBar>
         </div>
-      </div>
-    </div>,
+      </motion.div>
+    </DialogBackdrop>,
     document.body,
   );
 }

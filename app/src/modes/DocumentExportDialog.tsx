@@ -1,3 +1,5 @@
+import { DialogFrame } from "../components/DialogFrame";
+import { DialogBackdrop } from "../components/DialogMotion";
 import { useEffect, useRef, useState } from "react";
 import type { DocType } from "../util/annotateStore";
 import type { DocumentExportOptions, ExportFile } from "../util/documentExport";
@@ -31,10 +33,10 @@ export function DocumentExportDialog({name,docType,format:requestedFormat="sourc
     }finally{controller.current=null;}
   };
   const format=docType==="pdf" || requestedFormat==="pdf" ? "PDF":docType==="epub" ? "EPUB":"Markdown + images (ZIP)";
-  return <div className="lc-settings-backdrop">
-    <div className="lc-settings-modal lc-attempt-modal lc-document-export" role="dialog" aria-modal="true" aria-labelledby="document-export-title">
-      <div className="lc-settings-head"><h2 id="document-export-title">Export annotated document</h2><p className="lc-muted">{name}</p></div>
-      <div className="lc-settings-body">
+  return <DialogBackdrop className="lc-settings-backdrop">
+    <DialogFrame className="lc-attempt-modal lc-document-export" titleId="document-export-title" title="Export annotated document" subtitle="" description={name} mode="annotate" shape="blocky"
+      icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true"><path d="M12 16V3m-5 5 5-5 5 5M4 15v6h16v-6"/></svg>}>
+      <div className="lc-settings-body lc-dialog-body">
         <p><strong>{format}</strong></p>
         <p className="lc-muted">{docType==="pdf" ? "Original pages with ink and footnote markers. Full footnotes and sketches follow in an appendix.":requestedFormat==="pdf" ? "Images of the reading layout with ink and footnote markers, followed by full footnotes. Choose Markdown or EPUB for reflowable text.":"Readable text with handwriting images near the relevant passages and full footnotes at the end."}</p>
         <div className="lc-document-export-options">
@@ -45,10 +47,10 @@ export function DocumentExportDialog({name,docType,format:requestedFormat="sourc
         {progress && <p role="status" aria-live="polite">{progress}</p>}
         {error && <p className="lc-error" role="alert">{error}</p>}
       </div>
-      <div className="lc-settings-foot">
-        <button type="button" className="lc-secondary" disabled={phase==="saving"} onClick={()=>busy ? controller.current?.abort():onClose()}>{busy ? "Cancel export":"Close"}</button>
-        <button type="button" disabled={busy} onClick={()=>void run()}>{phase==="done" ? "Export again":"Export"}</button>
+      <div className="lc-settings-foot lc-dialog-foot">
+        <button type="button" className="lc-secondary lc-dialog-action" disabled={phase==="saving"} onClick={()=>busy ? controller.current?.abort():onClose()}>{busy ? "Cancel export":"Close"}</button>
+        <button type="button" className="lc-dialog-action" disabled={busy} onClick={()=>void run()}>{phase==="done" ? "Export again":"Export"}</button>
       </div>
-    </div>
-  </div>;
+    </DialogFrame>
+  </DialogBackdrop>;
 }

@@ -4,6 +4,8 @@
   max-height: min(calc(84dvh / var(--lc-chrome-scale, 1)), 900px);
   top: 6%; border: 2px solid var(--ink); border-radius: 2px;
   background: var(--surface); box-shadow: 6px 6px 0 color-mix(in srgb, var(--ink) 32%, transparent);
+  animation: none;
+  transform-origin: 50% 15%;
 }
 .lc-ink-preset-dialog .lc-preset-sheet-head { gap: 12px; padding: 18px 20px; border-bottom: 2px solid var(--lc-mode-annotate); flex-wrap: wrap; }
 .lc-ink-preset-dialog .lc-preset-sheet-heading { display: flex; flex: 1; align-items: baseline; gap: 12px; min-width: 0; }

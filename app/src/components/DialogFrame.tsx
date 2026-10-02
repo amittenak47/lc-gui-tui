@@ -1,4 +1,6 @@
 import type { ReactNode, Ref } from "react";
+import { motion, useIsPresent, useReducedMotion } from "motion/react";
+import { useDialogButtonPress } from "./useDialogButtonPress";
 import "./dialogFrame.css";
 
 export type DialogShape = "soft" | "blocky";
@@ -17,6 +19,7 @@ export function DialogFrame({
   onClose,
   closeDisabled = false,
   inert = false,
+  exiting = false,
   ref,
   ariaLabel,
   children,
@@ -32,12 +35,16 @@ export function DialogFrame({
   onClose?: () => void;
   closeDisabled?: boolean;
   inert?: boolean;
+  exiting?: boolean;
   ref?: Ref<HTMLDivElement>;
   ariaLabel?: string;
   children: ReactNode;
 }) {
+  const present = useIsPresent();
+  const reduced = useReducedMotion();
+  const buttonPress = useDialogButtonPress();
   return (
-    <div
+    <motion.div
       ref={ref}
       className={`lc-settings-modal lc-dialog-frame ${className}`}
       data-dialog-shape={shape}
@@ -47,15 +54,20 @@ export function DialogFrame({
       aria-label={ariaLabel}
       aria-labelledby={titleId}
       aria-describedby={description ? `${titleId}-description` : undefined}
-      inert={inert}
-      aria-hidden={inert || undefined}
+      inert={inert || exiting || !present}
+      aria-hidden={inert || exiting || !present || undefined}
+      initial={reduced ? false : { opacity: 0, y: 12, scale: 0.965 }}
+      animate={{ opacity: exiting ? 0 : 1, y: exiting ? 8 : 0, scale: exiting ? 0.975 : 1 }}
+      exit={{ opacity: 0, y: 8, scale: 0.975, transition: { duration: reduced || exiting ? 0 : 0.18 } }}
+      transition={{ duration: reduced ? 0 : exiting ? 0.18 : 0.24, ease: [0.22, 1, 0.36, 1] }}
+      {...buttonPress}
     >
       <header className="lc-dialog-head">
         <div className="lc-dialog-heading">
           <span className="lc-dialog-chip" aria-hidden="true">{icon}</span>
           <div className="lc-dialog-heading-text">
             <h2 id={titleId}>{title}</h2>
-            <p className="lc-dialog-meta">{subtitle}</p>
+            {subtitle && <p className="lc-dialog-meta">{subtitle}</p>}
           </div>
           {onClose && <button
             type="button"
@@ -72,6 +84,6 @@ export function DialogFrame({
         {description ? <p id={`${titleId}-description`} className="lc-dialog-description">{description}</p> : null}
       </header>
       {children}
-    </div>
+    </motion.div>
   );
 }

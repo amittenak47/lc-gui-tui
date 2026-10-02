@@ -1,12 +1,16 @@
 import { HoldButton } from "./HoldButton";
 import { LIBRARY_HOLD_MS } from "../util/gesture";
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import type { HubLibraryPullReport } from "../util/padSync";
 import "../modes/artifacts.css";
 import "./hubLibraryRefresh.css";
 
 export type HubLibraryRefreshAction = () => Promise<number | HubLibraryPullReport>;
-export function HubLibraryRefresh({ onRefresh, disabled = false, children }: { onRefresh: HubLibraryRefreshAction; disabled?: boolean; children?: ReactNode }) {
+export function HubLibraryRefresh({ onRefresh, disabled = false, children, resultsContainer, className = "" }: {
+  onRefresh: HubLibraryRefreshAction; disabled?: boolean; children?: ReactNode;
+  resultsContainer?: RefObject<HTMLElement | null>; className?: string;
+}) {
   const running = useRef(false);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
@@ -38,11 +42,7 @@ export function HubLibraryRefresh({ onRefresh, disabled = false, children }: { o
     notUploaded: report?.failures.filter(row=>isNotUploaded(row.message)) ?? [],
     unavailable: report?.failures.filter(row=>!isNotUploaded(row.message)) ?? [],
   };
-  return <div className="lc-library-refresh">
-    <HoldButton label="Pull" holdMs={LIBRARY_HOLD_MS} className="lc-hold-choice lc-hub-pull-command" disabled={pending || disabled} onConfirm={() => void refresh()} resetKey={pending}>
-      {children ?? <strong>{pending ? "Pulling…" : "Pull"}</strong>}
-    </HoldButton>
-    {(pending || report || message) && <section className="lc-hub-pull-catalog lc-artifact-picker-catalog" aria-label="Hub pull results">
+  const results = (pending || report || message) && <section className="lc-hub-pull-catalog lc-artifact-picker-catalog" aria-label="Hub pull results">
       {(pending || failed) && <div className="lc-hub-pull-title"><strong role="status">{pending ? "Pulling…" : "Pull failed"}</strong></div>}
       {message && <span>{message}</span>}
       {report && <>
@@ -61,7 +61,12 @@ export function HubLibraryRefresh({ onRefresh, disabled = false, children }: { o
         {filter === "notUploaded" && groups.notUploaded.length>0 && <p className="lc-artifact-picker-empty">Sync on the original device, then pull again.</p>}
         {groups[filter].length===0 && <p className="lc-artifact-picker-empty">{filter==="added" ? "No new files." : filter==="repaired" ? "No repairs needed." : filter==="notUploaded" ? "No incomplete uploads." : "No unavailable files."}</p>}
       </>}
-    </section>}
+    </section>;
+  return <div className={`lc-library-refresh ${className}`}>
+    <HoldButton label="Pull" holdMs={LIBRARY_HOLD_MS} className="lc-hold-choice lc-hub-pull-command" disabled={pending || disabled} onConfirm={() => void refresh()} resetKey={pending}>
+      {children ?? <strong>{pending ? "Pulling…" : "Pull"}</strong>}
+    </HoldButton>
+    {resultsContainer?.current ? createPortal(results, resultsContainer.current) : results}
   </div>;
 }
 

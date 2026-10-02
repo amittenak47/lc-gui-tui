@@ -1,3 +1,5 @@
+import { useIsPresent } from "motion/react";
+import { DialogBackdrop, DialogPresence } from "../components/DialogMotion";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { ArtifactAssociation, ArtifactCatalog, ArtifactKind, ArtifactParent, ArtifactRef, PadArtifact } from "../util/padArtifacts";
@@ -182,7 +184,7 @@ function ArtifactTrashConfirm({ item, shape, pending, error, onConfirm, onCancel
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => { cancel.current?.focus(); }, []);
   return (
-    <div className="lc-settings-backdrop lc-artifact-confirm-backdrop lc-server-gate-enter" role="presentation"
+    <DialogBackdrop className="lc-settings-backdrop lc-artifact-confirm-backdrop" role="presentation"
       onPointerDown={event => { down.current = event.target === event.currentTarget; }}
       onPointerCancel={() => { down.current = false; }}
       onClick={event => {
@@ -202,7 +204,7 @@ function ArtifactTrashConfirm({ item, shape, pending, error, onConfirm, onCancel
             disabled={pending} resetKey={error} onConfirm={onConfirm} />
         </div>
       </DialogFrame>
-    </div>
+    </DialogBackdrop>
   );
 }
 
@@ -219,6 +221,7 @@ export function ArtifactPicker({
   pageChoices = [],
   capturePage,
 }: ArtifactPickerProps) {
+  const present = useIsPresent();
   const { themeId, client } = useShell();
   const [catalog, setCatalog] = useState<ArtifactCatalog>();
   const [source, setSource] = useState<"saved" | "files" | "pages">("saved");
@@ -288,7 +291,7 @@ export function ArtifactPicker({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (busy) return;
+      if (busy || !present) return;
       if (pendingTrash) {
         setPendingTrash(null);
         return;
@@ -301,7 +304,7 @@ export function ArtifactPicker({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [fnOpen, pendingTrash, busy]);
+  }, [fnOpen, pendingTrash, busy, present]);
 
   useEffect(() => {
     if (!fnOpen) return;
@@ -414,11 +417,11 @@ export function ArtifactPicker({
 
   return createPortal(
     <>
-      <div
+      <DialogBackdrop exiting={exiting}
         className={[
           "lc-settings-backdrop",
           "lc-artifact-picker-backdrop",
-          exiting ? "lc-leave-dialog-exit" : "lc-server-gate-enter",
+
         ].join(" ")}
         role="presentation"
         onPointerDown={(event) => {
@@ -431,7 +434,7 @@ export function ArtifactPicker({
           if (!busy && !pendingTrash && shouldDismissBackdrop(startedOnBackdrop, event.target, event.currentTarget)) requestClose();
         }}
       >
-        <DialogFrame
+        <DialogFrame exiting={exiting}
           className="lc-artifact-picker-modal"
           titleId="lc-artifact-picker-title"
           title="Attachments"
@@ -698,9 +701,9 @@ export function ArtifactPicker({
             </button>
           </div>
         </DialogFrame>
-      </div>
-      {pendingTrash && <ArtifactTrashConfirm item={pendingTrash} shape={shape} pending={busy} error={error}
-        onConfirm={() => void confirmTrash(pendingTrash)} onCancel={() => setPendingTrash(null)} />}
+      </DialogBackdrop>
+      <DialogPresence>{pendingTrash && <ArtifactTrashConfirm item={pendingTrash} shape={shape} pending={busy} error={error}
+        onConfirm={() => void confirmTrash(pendingTrash)} onCancel={() => setPendingTrash(null)} />}</DialogPresence>
       {fnOpen && fnPos && (
         <div
           ref={fnMenuRef}

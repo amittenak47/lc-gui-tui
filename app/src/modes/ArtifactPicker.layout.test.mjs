@@ -9,8 +9,8 @@ describe("attachment picker chrome", () => {
   it("uses the Settings backdrop and leave animation instead of a full-bleed sheet", () => {
     expect(picker).toContain("createPortal");
     expect(picker).toContain("lc-settings-backdrop");
-    expect(picker).toContain("lc-server-gate-enter");
-    expect(picker).toContain("lc-leave-dialog-exit");
+    expect(picker).toContain("DialogBackdrop");
+    expect(picker).toContain("DialogBackdrop exiting={exiting}");
     expect(picker).toContain("lc-artifact-picker-modal");
     expect(css).toContain("width: min(560px, 100%)");
     expect(css).toContain("max-height: min(80vh, 560px)");

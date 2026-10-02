@@ -1,4 +1,17 @@
 /* Load menus share the attachment catalog's compact chrome and quiet rows. */
+.lc-library-trash-section { border-top: 2px solid var(--lc-dialog-line, var(--line)); margin-top: 16px; padding-top: 12px; }
+.lc-library-trash-section > h3 { margin: 0; padding: 4px 24px 8px; color: var(--muted); font: 600 11px/1.4 var(--lc-sans); text-transform: uppercase; letter-spacing: .1em; }
+.lc-dialog-foot-spacer { flex: 1; }
+.lc-dialog-frame.lc-library-menu .lc-dialog-foot { gap: 8px; }
+.lc-dialog-frame.lc-library-menu .lc-dialog-foot .lc-library-footer-pull { margin: 0; flex: 0 0 auto; }
+.lc-dialog-frame.lc-library-menu .lc-dialog-foot .lc-library-footer-pull > .lc-hub-pull-command {
+  width: auto; min-width: 0; min-height: 38px; padding: 0 12px;
+  border: var(--lc-dialog-edge) solid var(--lc-dialog-line); border-radius: var(--lc-dialog-control-radius);
+  color: var(--ink); background: transparent; text-align: center;
+}
+.lc-dialog-frame.lc-library-menu .lc-dialog-foot .lc-library-footer-pull .lc-hold-reveal-label { display: block; }
+.lc-library-footer-pull :is(.lc-annotate-menu-label, .lc-whiteboard-menu-label) { gap: 8px; }
+.lc-library-footer-pull :is(.lc-annotate-row-icon, .lc-whiteboard-row-icon) { color: var(--accent); width: 16px; height: 16px; flex-basis: 16px; }
 .lc-settings-modal.lc-library-menu {
   width: min(620px, 100%);
   max-height: min(70dvh, 480px);

@@ -126,32 +126,31 @@ async function tap(label: string, host: HTMLElement) {
 }
 
 describe("WhiteboardDialog", () => {
-  it("uses the PDF's square shell, row subtext and no footer hint, with extra actions under More", async () => {
+  it("uses the PDF's square shell, row subtext and no footer hint, with existing actions at the top level", async () => {
     live.rows[0].hubAckUpdatedAt = 1;
     const view = mount({ allowSave: true, snapshotKey: "w1", defaultName: "One", onRefreshHub: vi.fn() });
     try {
       expect(view.host.querySelector('[role="dialog"]')?.getAttribute("data-dialog-shape")).toBe("blocky");
       expect(view.host.textContent).toContain("Start a blank notebook");
       expect(view.host.textContent).toContain("Pick a notebook from the library");
-      expect(view.host.textContent).toContain("Fetch notebooks from your other devices");
+
       expect(view.host.querySelector(".lc-whiteboard-context-title")?.textContent).toBe("One");
       expect(view.host.querySelector(".lc-whiteboard-context-sync")?.textContent).toBe("synced");
       view.update({ dirty: true });
       expect(view.host.querySelector(".lc-whiteboard-context-sync")?.textContent).toBe("not synced");
-      expect(view.host.querySelector(".lc-dialog-foot")?.textContent).toBe("Cancel");
-      expect(view.host.querySelector('[aria-label="Hold to confirm: Save"]')).toBeNull();
-      await hold("More", view.host);
-      for (const label of ["Save", "Export", "Restore", "Annotations"]) expect(view.host.querySelector(`[aria-label="Hold to confirm: ${label}"]`)).toBeTruthy();
+      expect(view.host.querySelector(".lc-dialog-foot")?.textContent).toBe("PullCancel");
+      expect(view.host.querySelector('[aria-label="Hold to confirm: More"]')).toBeNull();
+      for (const label of ["Save", "Export", "Restore"]) expect(view.host.querySelector(`[aria-label="Hold to confirm: ${label}"]`)).toBeTruthy();
     } finally { view.unmount(); view.host.remove(); }
   });
 
-  it("keeps import accessible through More when opening from outside a notebook", async () => {
+  it("keeps import accessible through Open when opening from outside a notebook", async () => {
     const view = mount({ defaultName: "Unrelated document" });
     try {
       expect(view.host.querySelector(".lc-whiteboard-context")).toBeNull();
-      await hold("More", view.host);
-      expect(view.host.querySelector('[aria-label="Hold to confirm: Save"]')).toBeNull();
-      await hold("Annotations", view.host);
+      expect(view.host.querySelector('[aria-label="Hold to confirm: More"]')).toBeNull();
+      await hold("Open", view.host);
+      await hold("Import backup", view.host);
       expect(view.onChoose).toHaveBeenCalledWith("import");
     } finally { view.unmount(); view.host.remove(); }
   });
@@ -172,10 +171,9 @@ describe("WhiteboardDialog", () => {
     } finally { view.unmount(); view.host.remove(); }
   });
 
-  it("retains the save draft after failure and routes Back to More without saving", async () => {
+  it("retains the save draft after failure and routes Back to Whiteboard without saving", async () => {
     const view = mount({ allowSave: true, needsName: true, defaultName: "Notebook" });
     try {
-      await hold("More", view.host);
       await hold("Save", view.host);
       expect(view.onChoose).not.toHaveBeenCalled();
       const input = view.host.querySelector<HTMLInputElement>(".lc-md-new-title input")!;
@@ -185,20 +183,19 @@ describe("WhiteboardDialog", () => {
       await hold("Save", view.host);
       expect(view.onChoose).toHaveBeenCalledWith("save", "Sketches");
       act(() => [...view.host.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent==="Back")!.click());
-      expect(view.host.querySelector("h2")?.textContent).toBe("More");
+      expect(view.host.querySelector("h2")?.textContent).toBe("Whiteboard");
       expect(view.host.querySelector("input")).toBeNull();
     } finally { view.unmount(); view.host.remove(); }
   });
 
-  it.each([["PNG", "export-png"], ["Annotations", "export"]])("keeps the %s export callback and nested Back path", async (label, choice) => {
+  it.each([["PNG image", "export-png"], ["Whiteboard backup", "export"]])("keeps the %s export callback and nested Back path", async (label, choice) => {
     const view = mount({ allowSave: true });
     try {
-      await hold("More", view.host);
       await hold("Export", view.host);
       await hold(label, view.host);
       expect(view.onChoose).toHaveBeenCalledWith(choice);
       act(() => [...view.host.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent==="Back")!.click());
-      expect(view.host.querySelector("h2")?.textContent).toBe("More");
+      expect(view.host.querySelector("h2")?.textContent).toBe("Whiteboard");
     } finally { view.unmount(); view.host.remove(); }
   });
 
@@ -206,7 +203,6 @@ describe("WhiteboardDialog", () => {
     snapshots.rows = [{ kind:"whiteboard", key:"w1", tier:"2h", writtenAt:1, name:"One" }];
     const view = mount({ allowSave:true, snapshotKey:"w1" });
     try {
-      await hold("More", view.host);
       await hold("Restore", view.host);
       expect(view.host.querySelector<HTMLButtonElement>('[aria-label="Hold to confirm: Restore 24 hours snapshot"]')!.disabled).toBe(true);
       expect(view.host.querySelector<HTMLButtonElement>('[aria-label="Hold to confirm: Restore 7 days snapshot"]')!.disabled).toBe(true);
@@ -304,6 +300,22 @@ describe("WhiteboardDialog", () => {
     expect(view.host.textContent).toContain("Trashed");
     expect(view.host.textContent).not.toContain("Restore · Trashed");
     view.unmount();
+  });
+
+  it("keeps matching trash below live rows without requiring the Trash filter", async () => {
+    live.rows[0].title="Trashed sketch, live copy";
+    const view=mount();
+    try {
+      await hold("Load",view.host);
+      expect(view.host.querySelectorAll('.lc-scratch-load-entry')).toHaveLength(2);
+      await act(async()=>fill(view.host.querySelector('input[type="search"]')!,"trashed"));
+      expect(view.host.querySelectorAll('.lc-scratch-load-entry')).toHaveLength(2);
+      const section=view.host.querySelector('section[aria-label="Trash"]')!;
+      expect(section.querySelectorAll('.lc-scratch-load-entry')).toHaveLength(1);
+      await act(async()=>view.host.querySelector<HTMLButtonElement>('[aria-label="Trash"]')!.click());
+      expect(view.host.querySelectorAll('.lc-scratch-load-entry')).toHaveLength(1);
+      expect(view.host.textContent).not.toContain("live copy");
+    } finally {view.unmount();view.host.remove();}
   });
 
   it("renames a load row on double-tap", async () => {

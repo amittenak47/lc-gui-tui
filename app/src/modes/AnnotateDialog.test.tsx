@@ -134,13 +134,13 @@ async function tap(label: string, host: HTMLElement) {
 }
 
 describe("AnnotateDialog", () => {
-  it("keeps New in More and the existing note naming and creation flow", async () => {
+  it("keeps New and the existing note naming and creation flow", async () => {
     const view = mount();
     try {
       expect(view.host.querySelector('[data-dialog-shape="blocky"]')).toBeTruthy();
-      expect(view.host.querySelector('[aria-label="Hold to confirm: New"]')).toBeNull();
+      expect(view.host.querySelector('[aria-label="Hold to confirm: More"]')).toBeNull();
       expect(view.host.querySelector('.lc-dialog-foot')?.textContent?.trim()).toBe("Cancel");
-      await click("More", view.host);await click("New", view.host);await click("Markdown file", view.host);
+      await click("New", view.host);await click("Markdown file", view.host);
       await act(async () => fill(view.host.querySelector('.lc-md-new-title input')!, "Draft note"));
       await hold("Create note", view.host);
       expect(view.onChoose).toHaveBeenLastCalledWith("new", "Draft note");
@@ -151,21 +151,21 @@ describe("AnnotateDialog", () => {
     const view = mount({allowSave:true, snapshotKey:"d1", docType, docName:"Current file"});
     try {
       await hold("Save", view.host);expect(view.onChoose).toHaveBeenLastCalledWith("save");
-      await click("More", view.host);await click("Export", view.host);
+      await click("Export", view.host);
       await hold("PDF", view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-pdf");
-      await hold("Annotations", view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export");
-      if(docType === "pdf")expect(view.host.querySelector('[aria-label="Hold to confirm: Markdown + images"]')).toBeNull();
-      else {await hold(docType === "epub" ? "EPUB" : "Markdown + images", view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-document");}
+      await hold("Annotation backup", view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export");
+      if(docType === "pdf")expect(view.host.querySelector('[aria-label="Hold to confirm: Markdown + images (ZIP)"]')).toBeNull();
+      else {await hold(docType === "epub" ? "EPUB" : "Markdown + images (ZIP)", view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-document");}
     } finally {view.unmount();}
   }, 10000);
 
-  it("keeps Web Save and its naming step in More", async () => {
+  it("keeps Web Save and its naming step", async () => {
     const view = mount({kind:"web", allowSave:true, snapshotKey:"w1", docType:"web", needsName:true, defaultName:"Page notes"});
     try {
-      expect(view.host.querySelector('[aria-label="Hold to confirm: Save"]')).toBeNull();
+      expect(view.host.querySelector('[aria-label="Hold to confirm: Save"]')).toBeTruthy();
       expect(view.host.textContent).toContain("Start a blank page");
       await hold("New",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("page");
-      await click("More", view.host);await hold("Save", view.host);
+      await hold("Save", view.host);
       await act(async () => fill(view.host.querySelector('.lc-md-new-title input')!, "Named page"));
       await hold("Save", view.host);expect(view.onChoose).toHaveBeenLastCalledWith("save", "Named page");
     } finally {view.unmount();}
@@ -217,12 +217,12 @@ describe("AnnotateDialog", () => {
     live.rows.push({id:"other",name:"other.pdf",hash:"other",docType:"pdf",updatedAt:3});
     const view=mount({allowSave:true,snapshotKey:"d1"});
     expect(view.host.textContent).not.toContain("Import annotation backup");
-    await click("More",view.host);await click("Export",view.host);await click("PDF",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-pdf");
-    await click("Markdown + images",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-document");
-    await click("Back",view.host);await click("Back",view.host);await click("Open",view.host);
+    await click("Export",view.host);await click("PDF",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-pdf");
+    await click("Markdown + images (ZIP)",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-document");
+    await click("Back",view.host);await click("Open",view.host);
     await click("Annotations",view.host);await click("Saved",view.host);
     expect(view.host.textContent).toContain("Second set");expect(view.host.textContent).not.toContain("other.pdf");
-    await click("Back",view.host);await click("Back",view.host);await click("Back",view.host);await click("More",view.host);await click("Export",view.host);await click("Annotations",view.host);
+    await click("Back",view.host);await click("Back",view.host);await click("Back",view.host);await click("Export",view.host);await click("Annotation backup",view.host);
     expect(view.onChoose).toHaveBeenLastCalledWith("export");
     view.unmount();
   }, 20000);
@@ -248,7 +248,7 @@ describe("AnnotateDialog", () => {
     expect(view.host.textContent).toContain("Remove this document?");
     await hold("Delete", view.host);
     expect(onDelete).toHaveBeenCalledWith("d1");
-    expect(view.host.textContent).not.toContain("Remove this document?");
+    expect(view.host.querySelector('[aria-label="Remove this document?"]:not([inert])')).toBeNull();
     expect(view.host.querySelector('[aria-label="Open note.md: tap to edit, hold to confirm"]')).toBeNull();
     await act(async()=>view.host.querySelector<HTMLButtonElement>('[aria-label="Trash"]')!.click());
     expect(view.host.textContent).toContain("Restore · note.md");
@@ -271,6 +271,32 @@ describe("AnnotateDialog", () => {
     expect(view.host.textContent).toContain("Example");
     expect(view.host.textContent).not.toContain("note.md");
     view.unmount();
+  });
+
+  it("searches live and trash together, then intersects Trash with query and type filters", async () => {
+    live.rows.push({id:"d2",name:"exam.md",hash:"h3",docType:"markdown",updatedAt:3});
+    trash.rows = [
+      {id:"t1",name:"exam.pdf",hash:"h4",docType:"pdf",updatedAt:1,deletedAt:2},
+      {id:"t2",name:"exam.md",hash:"h5",docType:"markdown",updatedAt:1,deletedAt:2},
+    ];
+    const view=mount();
+    try {
+      await click("Recent",view.host);
+      const section=view.host.querySelector('section[aria-label="Trash"]')!;
+      expect(section.querySelectorAll('.lc-scratch-load-entry')).toHaveLength(2);
+      await act(async()=>fill(view.host.querySelector('input[type="search"]')!,"exam"));
+      expect(view.host.querySelectorAll('.lc-scratch-load-entry')).toHaveLength(3);
+      await act(async()=>view.host.querySelector<HTMLButtonElement>('[aria-label="Trash"]')!.click());
+      expect(view.host.querySelectorAll('.lc-scratch-load-entry')).toHaveLength(2);
+      await act(async()=>view.host.querySelector<HTMLButtonElement>('[aria-label="Filter pdf"]')!.click());
+      expect(view.host.querySelectorAll('.lc-scratch-load-entry')).toHaveLength(1);
+      expect(section.textContent).toContain("exam.pdf");
+      await act(async()=>view.host.querySelector<HTMLButtonElement>('[aria-label="Filter markdown"]')!.click());
+      expect(view.host.querySelectorAll('.lc-scratch-load-entry')).toHaveLength(2);
+      await act(async()=>fill(view.host.querySelector('input[type="search"]')!,"missing"));
+      expect(view.host.querySelectorAll('.lc-scratch-load-entry')).toHaveLength(0);
+      expect(view.host.textContent).toContain("No matching saved items.");
+    } finally {view.unmount();view.host.remove();}
   });
 
   it("moves a restored row from trash to live without remounting", async () => {

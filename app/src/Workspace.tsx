@@ -1,3 +1,4 @@
+import { DialogPresence } from "./components/DialogMotion";
 /**
  * The whole loop, wired together.
  *
@@ -11486,7 +11487,7 @@ export const Workspace = memo(function Workspace({
           fit={pageFitShare(pageFit)}
         />
       ) : null}
-      {active && artifactPicker && <ArtifactPicker parent={artifactPicker.parent} associations={artifactPicker.associations}
+      <DialogPresence>{active && artifactPicker && <ArtifactPicker parent={artifactPicker.parent} associations={artifactPicker.associations}
         pageChoices={artifactPageChoices} capturePage={captureArtifactPage}
         scope={artifactPicker.messageId ? "message" : artifactPicker.footnoteId ? "footnote" : "catalog"}
         footnoteChoices={annotateFootnotes.map(note => ({
@@ -11494,7 +11495,7 @@ export const Workspace = memo(function Workspace({
           color: note.color, palette: note.palette, selected: attachedFootnoteIds.includes(note.id),
         }))}
         onToggleFootnote={id => setAttachedFootnoteIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id])}
-        onAttach={attachArtifactHere} onOpen={openArtifactPreview} onClose={() => setArtifactPicker(null)} />}
+        onAttach={attachArtifactHere} onOpen={openArtifactPreview} onClose={() => setArtifactPicker(null)} />}</DialogPresence>
       {active && artifactPreview && <ArtifactWorkspace key={artifactPreview.id} tab={artifactPreview} active showing onClose={() => setArtifactPreview(null)} />}
       {active && headerSlots.agentPanel && !hubConflictAsk ? createPortal(<>
         {problem && !canvasLoading && (
@@ -11663,7 +11664,7 @@ export const Workspace = memo(function Workspace({
           />
         )}
 
-      {figurePrompt && (
+      <DialogPresence>{figurePrompt && (
         <ConfirmDialog
           title="Include this note's images?"
           message={figurePrompt
@@ -11677,8 +11678,8 @@ export const Workspace = memo(function Workspace({
           onConfirm={() => void openPromptedNote(true)}
           onCancel={() => void openPromptedNote(false)}
         />
-      )}
-      {resetOpen && (
+      )}</DialogPresence>
+      <DialogPresence>{resetOpen && (
         <ConfirmDialog
           title="Reset the practice session?"
           message="The session queue and its pass / fail progress are cleared. Your saved workspaces and solutions are not touched."
@@ -11698,7 +11699,7 @@ export const Workspace = memo(function Workspace({
             setResetError(null);
           }}
         />
-      )}
+      )}</DialogPresence>
 
       {revealOpen && problem && (
         <RevealDialog
@@ -11809,7 +11810,7 @@ export const Workspace = memo(function Workspace({
         />
       )}
 
-      {documentExportOpen && annotateSource && annotateDocId && (
+      <DialogPresence>{documentExportOpen && annotateSource && annotateDocId && (
         <DocumentExportDialog name={annotateSource.name} docType={annotateSource.docType} format={documentExportFormat}
           onClose={() => setDocumentExportOpen(false)}
           onExport={async (options, progress, signal) => {
@@ -11824,8 +11825,8 @@ export const Workspace = memo(function Workspace({
             signal.throwIfAborted();
             return exportAnnotatedDocument(snapshot, id, options, progress, signal);
           }} />
-      )}
-      {annotateEntryOpen && (
+      )}</DialogPresence>
+      <DialogPresence>{annotateEntryOpen && (
         <AnnotateDialog
           mode="entry"
           onRefreshHub={() => pullMissingHubFiles(client)}
@@ -11958,10 +11959,10 @@ export const Workspace = memo(function Workspace({
           }}
           onCancel={() => setAnnotateEntryOpen(false)}
         />
-      )}
+      )}</DialogPresence>
 
 
-      {whiteboardEntryOpen && (
+      <DialogPresence>{whiteboardEntryOpen && (
         <WhiteboardDialog
           mode="entry"
           onRefreshHub={() => pullMissingHubFiles(client)}
@@ -12032,7 +12033,7 @@ export const Workspace = memo(function Workspace({
           }}
           onCancel={() => setWhiteboardEntryOpen(false)}
         />
-      )}
+      )}</DialogPresence>
 
       {whiteboardLibOpen && (
         <WhiteboardLibraryDialog
@@ -12065,7 +12066,7 @@ export const Workspace = memo(function Workspace({
         another tab; more so, because otherwise the close looks broken rather
         than blocked.
       */}
-      {leaving && problem && isWhiteboard(problem) && (
+      <DialogPresence>{leaving && problem && isWhiteboard(problem) && (
         <WhiteboardDialog
           mode="leave"
           dirty={!whiteboardUntouched()}
@@ -12093,9 +12094,9 @@ export const Workspace = memo(function Workspace({
             setLeavingError(null);
           }}
         />
-      )}
+      )}</DialogPresence>
 
-      {leaving && problem && isAnnotate(problem) && (
+      <DialogPresence>{leaving && problem && isAnnotate(problem) && (
         <AnnotateDialog
           mode="leave"
           kind={annotateDialogKind}
@@ -12117,7 +12118,7 @@ export const Workspace = memo(function Workspace({
             setLeavingError(null);
           }}
         />
-      )}
+      )}</DialogPresence>
 
       {leaving && problem && !isLocalPad(problem) && (
         <AttemptDialog

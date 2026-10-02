@@ -1,3 +1,5 @@
+import { useIsPresent } from "motion/react";
+import { DialogBackdrop } from "./DialogMotion";
 /**
  * LLM unreachable while the in-process daemon is up — Settings → LLM, or continue
  * without coach.
@@ -8,6 +10,8 @@ import { useEffect } from "react";
 import { HoldButton } from "./HoldButton";
 import "../modes/libraryMenu.css";
 import { LoadingDoodle } from "./LoadingDoodle";
+import { DialogFrame } from "./DialogFrame";
+import "./confirmationDialogs.css";
 
 export interface LlmStatusDialogProps {
   phase: "enter" | "open" | "exit";
@@ -20,38 +24,28 @@ export function LlmStatusDialog({
   onOpenSettings,
   onContinueWithout,
 }: LlmStatusDialogProps) {
+  const present = useIsPresent();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onContinueWithout();
+      if (event.key === "Escape" && present && phase !== "exit") onContinueWithout();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onContinueWithout]);
+  }, [onContinueWithout, present, phase]);
 
   return (
-    <div
-      className={[
-        "lc-settings-backdrop",
-        "lc-server-gate",
-        phase === "enter" && "lc-server-gate-enter",
-        phase === "exit" && "lc-server-gate-exit",
-      ]
-        .filter(Boolean)
-        .join(" ")}
+    <DialogBackdrop exiting={phase === "exit"}
+      className="lc-settings-backdrop lc-server-gate"
       role="presentation"
     >
-      <LoadingDoodle nativeInput nativeExclude=".lc-server-gate-modal button, .lc-server-gate-modal .lc-hold-reveal" />
-      <div
-        className="lc-settings-modal lc-attempt-modal lc-server-gate-modal lc-library-holds"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Coach LLM offline"
+      <LoadingDoodle nativeInput={present && phase !== "exit"} nativeExclude=".lc-server-gate-modal button, .lc-server-gate-modal .lc-hold-reveal" />
+      <DialogFrame exiting={phase === "exit"}
+        className="lc-attempt-modal lc-server-gate-modal lc-library-holds lc-llm-status-dialog"
+        titleId="lc-llm-status-title" title="Coach LLM is offline" subtitle=""
+        ariaLabel="Coach LLM offline" shape="blocky"
+        icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true"><path d="M4 3h16v14H8l-4 4V3Z"/><path d="M8 8h8m-8 4h5"/></svg>}
       >
-        <div className="lc-server-gate-head">
-          <h2>Coach LLM is offline</h2>
-        </div>
-
-        <div className="lc-settings-choice">
+        <div className="lc-settings-choice lc-dialog-body">
           <HoldButton
             label="Open Settings"
             className="lc-hold-choice"
@@ -67,7 +61,7 @@ export function LlmStatusDialog({
             Continue without LLM
           </HoldButton>
         </div>
-      </div>
-    </div>
+      </DialogFrame>
+    </DialogBackdrop>
   );
 }

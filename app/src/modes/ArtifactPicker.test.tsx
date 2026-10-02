@@ -186,7 +186,7 @@ async function holdKind(label: string) {
 
 function control(aria: string) {
   return [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (node) => node.getAttribute("aria-label") === aria,
+    (node) => node.getAttribute("aria-label") === aria && !node.closest("[inert]"),
   );
 }
 
@@ -247,7 +247,7 @@ it("unlocks deletion and restoration while parent sync is stalled", async () => 
   await holdControl("Delete Plan.md — hold to delete");
   await holdControl("Hold to confirm: Delete");
   try {
-    expect(document.body.textContent).not.toContain("Remove this attachment?");
+    expect(document.querySelector('.lc-artifact-confirm-modal:not([inert])')).toBeNull();
     expect(control("Restore Plan.md — tap to restore")?.disabled).toBe(false);
     await tapControl("Restore Plan.md — tap to restore");
     expect(repo.mutateArtifacts).toHaveBeenCalledTimes(2);
@@ -268,7 +268,7 @@ it("keeps a failed local deletion open and lets the hold confirmation retry", as
   expect(syncParent).not.toHaveBeenCalled();
   mockLifecycle();
   await holdControl("Hold to confirm: Delete");
-  expect(document.body.textContent).not.toContain("Remove this attachment?");
+  expect(document.querySelector('.lc-artifact-confirm-modal:not([inert])')).toBeNull();
   expect(control("Restore Plan.md — tap to restore")).toBeTruthy();
 });
 
@@ -279,7 +279,7 @@ it("reports a background sync failure without undoing the saved deletion or disa
   await mount();
   await holdControl("Delete Plan.md — hold to delete");
   await holdControl("Hold to confirm: Delete");
-  expect(document.body.textContent).not.toContain("Remove this attachment?");
+  expect(document.querySelector('.lc-artifact-confirm-modal:not([inert])')).toBeNull();
   expect(document.querySelector('[role="alert"]')?.textContent).toContain("Upload could not start");
   expect(catalog.current!.artifacts[0].deletedAt).toBe(9);
   expect(control("Restore Plan.md — tap to restore")?.disabled).toBe(false);
@@ -292,7 +292,7 @@ it("cancels partial and interrupted holds without deleting, and Escape returns t
   catalog.current!.artifacts = [note({ id: "a1", title: "Plan.md" })];
   const { onClose } = await mount();
   await tapControl("Delete Plan.md — hold to delete");
-  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeNull();
+  expect(document.querySelector(".lc-artifact-confirm-modal:not([inert])")).toBeNull();
   await holdControl("Delete Plan.md — hold to delete");
   expect(document.querySelector(".lc-artifact-picker-modal")?.hasAttribute("inert")).toBe(true);
   const confirm = control("Hold to confirm: Delete")!;
@@ -304,7 +304,7 @@ it("cancels partial and interrupted holds without deleting, and Escape returns t
   await act(async () => { pointer(confirm, "pointerdown"); pointer(confirm, "pointerup"); confirm.click(); });
   expect(repo.mutateArtifacts).not.toHaveBeenCalled();
   act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
-  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeNull();
+  expect(document.querySelector(".lc-artifact-confirm-modal:not([inert])")).toBeNull();
   expect(document.querySelector(".lc-artifact-picker-modal")?.hasAttribute("inert")).toBe(false);
   expect(onClose).not.toHaveBeenCalled();
 });
@@ -313,25 +313,25 @@ it("keeps confirmation open during a local save and supports cancel and backdrop
   catalog.current!.artifacts = [note({ id: "a1", title: "Plan.md" })];
   await mount();
   await holdControl("Delete Plan.md — hold to delete");
-  act(() => document.querySelector<HTMLButtonElement>(".lc-artifact-confirm-modal button")!.click());
-  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeNull();
+  act(() => document.querySelector<HTMLButtonElement>(".lc-artifact-confirm-modal:not([inert]) button")!.click());
+  expect(document.querySelector(".lc-artifact-confirm-modal:not([inert])")).toBeNull();
   await holdControl("Delete Plan.md — hold to delete");
-  const overlay = document.querySelector<HTMLElement>(".lc-artifact-confirm-backdrop")!;
-  act(() => { pointer(document.querySelector<HTMLElement>(".lc-artifact-confirm-item")!, "pointerdown"); overlay.click(); });
-  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeTruthy();
+  const overlay = document.querySelector<HTMLElement>(".lc-artifact-confirm-backdrop:not([data-dialog-exiting])")!;
+  act(() => { pointer(document.querySelector<HTMLElement>(".lc-artifact-confirm-modal:not([inert]) .lc-artifact-confirm-item")!, "pointerdown"); overlay.click(); });
+  expect(document.querySelector(".lc-artifact-confirm-modal:not([inert])")).toBeTruthy();
   act(() => { pointer(overlay, "pointerdown"); pointer(overlay, "pointercancel"); overlay.click(); });
-  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeTruthy();
+  expect(document.querySelector(".lc-artifact-confirm-modal:not([inert])")).toBeTruthy();
   act(() => { pointer(overlay, "pointerdown"); overlay.click(); });
-  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeNull();
+  expect(document.querySelector(".lc-artifact-confirm-modal:not([inert])")).toBeNull();
   await holdControl("Delete Plan.md — hold to delete");
   let finish!: () => void;
   repo.mutateArtifacts.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
   await holdControl("Hold to confirm: Delete");
   expect(control("Hold to confirm: Delete")?.disabled).toBe(true);
   act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
-  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeTruthy();
+  expect(document.querySelector(".lc-artifact-confirm-modal:not([inert])")).toBeTruthy();
   await act(async () => { finish(); });
-  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeNull();
+  expect(document.querySelector(".lc-artifact-confirm-modal:not([inert])")).toBeNull();
 });
 
 it("attaches a selected library page with read-only provenance and selected filing", async () => {
@@ -372,7 +372,7 @@ it("opens as a compact Settings card with enter motion, not a full-bleed sheet",
   await mount();
   const sheet = backdrop();
   expect(sheet.className).toContain("lc-settings-backdrop");
-  expect(sheet.className).toContain("lc-server-gate-enter");
+  expect(sheet.hasAttribute("data-dialog-exiting")).toBe(false);
   expect(document.querySelector(".lc-artifact-picker-modal")).toBeTruthy();
   expect(document.querySelector(".lc-settings-modal")).toBeTruthy();
   expect(sheet.textContent).not.toContain("Owned by this pad");
@@ -527,7 +527,7 @@ it("pins a catalog item onto chat and starts the leave animation", async () => {
   });
   expect(repo.mutateArtifacts).toHaveBeenCalled();
   expect(onAttach).toHaveBeenCalledWith({ parent, artifactId: "a2", kind: "markdown" }, [thread]);
-  expect(backdrop().className).toContain("lc-leave-dialog-exit");
+  expect(backdrop().hasAttribute("data-dialog-exiting")).toBe(true);
   expect(onClose).not.toHaveBeenCalled();
 });
 
@@ -535,7 +535,7 @@ it("plays the Settings leave animation before unmounting", async () => {
   const { onClose } = await mount();
   vi.useFakeTimers();
   act(() => button("Close")!.click());
-  expect(backdrop().className).toContain("lc-leave-dialog-exit");
+  expect(backdrop().hasAttribute("data-dialog-exiting")).toBe(true);
   expect(onClose).not.toHaveBeenCalled();
   act(() => { vi.advanceTimersByTime(180); });
   expect(onClose).toHaveBeenCalledTimes(1);
@@ -577,7 +577,7 @@ it("trashes through hold + in-app confirm, then restores from the same row", asy
     "cat1",
     expect.objectContaining({ type: "delete", id: "a1" }),
   );
-  expect(document.body.textContent).not.toContain("Remove this attachment?");
+  expect(document.querySelector('.lc-artifact-confirm-modal:not([inert])')).toBeNull();
   expect(backdrop().textContent).toContain("TRASH");
   expect(button("Open")).toBeUndefined();
   expect(control("Restore Plan.md — tap to restore")).toBeTruthy();
@@ -612,7 +612,7 @@ it("uses only the reference footer close with the existing exit lifecycle", asyn
   vi.useFakeTimers();
   expect(control("Close Attachments")).toBeUndefined();
   act(() => button("Close")!.click());
-  expect(backdrop().className).toContain("lc-leave-dialog-exit");
+  expect(backdrop().hasAttribute("data-dialog-exiting")).toBe(true);
   expect(onClose).not.toHaveBeenCalled();
   act(() => { vi.advanceTimersByTime(180); });
   expect(onClose).toHaveBeenCalledTimes(1);
@@ -643,13 +643,13 @@ it("does not dismiss when a gesture starts inside the new header and ends on the
     pointer(document.querySelector<HTMLElement>(".lc-dialog-head")!, "pointerdown");
     backdrop().click();
   });
-  expect(backdrop().className).not.toContain("lc-leave-dialog-exit");
+  expect(backdrop().hasAttribute("data-dialog-exiting")).toBe(false);
   expect(onClose).not.toHaveBeenCalled();
   act(() => {
     pointer(backdrop(), "pointerdown");
     backdrop().click();
   });
-  expect(backdrop().className).toContain("lc-leave-dialog-exit");
+  expect(backdrop().hasAttribute("data-dialog-exiting")).toBe(true);
 });
 
 it("unfiles only the selected associations and retains catalog revision checks", async () => {
@@ -674,7 +674,7 @@ it("blocks dismissal while saving locally and keeps a failed attachment retryabl
   expect(button("Close")!.disabled).toBe(true);
   act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
   act(() => { pointer(backdrop(), "pointerdown"); backdrop().click(); });
-  expect(backdrop().className).not.toContain("lc-leave-dialog-exit");
+  expect(backdrop().hasAttribute("data-dialog-exiting")).toBe(false);
   expect(button("Files")!.disabled).toBe(true);
   expect(document.querySelector(".lc-dialog-hint")).toBeNull();
   await act(async () => { rejectAttach(new Error("Catalog changed. Retry.")); });
@@ -687,7 +687,7 @@ it("blocks dismissal while saving locally and keeps a failed attachment retryabl
   await act(async () => { button("Pin to chat")!.click(); });
   expect(repo.mutateArtifacts).toHaveBeenCalledTimes(2);
   expect(onAttach).toHaveBeenCalledTimes(1);
-  expect(backdrop().className).toContain("lc-leave-dialog-exit");
+  expect(backdrop().hasAttribute("data-dialog-exiting")).toBe(true);
 });
 
 it("opens a catalog entry after exit without modifying it", async () => {

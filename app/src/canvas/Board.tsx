@@ -1,3 +1,4 @@
+import { DialogPresence } from "../components/DialogMotion";
 /**
  * The board surface: Ink lab pad plus Board chrome.
  *
@@ -11334,7 +11335,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           }}
         />
       )}
-      {presetEditor && (
+      <DialogPresence>{presetEditor && (
         <InkPresetEditor
           kind={presetEditor.kind}
           index={presetEditor.index}
@@ -11398,7 +11399,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
             });
           }}
         />
-      )}
+      )}</DialogPresence>
       <WhiteboardInkLab
         ref={attachRasterInk}
         enabled

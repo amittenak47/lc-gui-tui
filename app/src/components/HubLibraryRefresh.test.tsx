@@ -50,6 +50,28 @@ it("separates incomplete uploads from download failures",async()=>{
   } finally {act(()=>root.unmount());vi.unstubAllGlobals();}
 });
 
+it("keeps Pull in its footer while pending, failure and retry results render in the body", async()=>{
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);
+  const host=document.createElement("div"),root=createRoot(host);
+  const body=document.createElement("div");
+  let reject!: (error:Error)=>void;
+  const onRefresh=vi.fn().mockImplementationOnce(()=>new Promise((_resolve,no)=>{reject=no;})).mockResolvedValueOnce(2);
+  try {
+    await act(async()=>root.render(<HubLibraryRefresh resultsContainer={{current:body}} onRefresh={onRefresh}/>));
+    await pull(host);
+    expect(host.querySelector('[aria-label="Hub pull results"]')).toBeNull();
+    expect(body.querySelector('[role="status"]')?.textContent).toContain("Pulling");
+    expect(host.querySelector('button')?.disabled).toBe(true);
+    await act(async()=>reject(new Error("Offline")));
+    expect(body.textContent).toContain("Offline");
+    expect(host.querySelector('button')?.disabled).toBe(false);
+    await pull(host);
+    expect(body.textContent).toContain("Added 2 files.");
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+    expect(host.querySelector('[aria-label="Hub pull results"]')).toBeNull();
+  } finally {act(()=>root.unmount());vi.unstubAllGlobals();}
+});
+
 async function pull(host:HTMLElement) {
   const button=host.querySelector("button")!;
   await act(async()=>button.click());

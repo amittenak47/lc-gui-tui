@@ -1,3 +1,5 @@
+import { useIsPresent } from "motion/react";
+import { DialogBackdrop, DialogPresence } from "../components/DialogMotion";
 import {LibraryTrashRow} from "./LibraryTrashRow";
 import {useLibraryMorph} from "./useLibraryMorph";
 /**
@@ -92,8 +94,8 @@ function NotebookIcon() {
 
 function MenuRowLabel({ label, description }: { label: string; description?: string }) {
   return <span className="lc-whiteboard-menu-label">
-    {["New", "Open", "Pull", "More"].includes(label) && <svg className="lc-whiteboard-row-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {label === "New" ? <path d="M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 14h8M12 10v8" /> : label === "Open" ? <path d="M3 7V4h6l3 3h7v4M3 9h18l-3 11H3L1 9h2Z" /> : label === "More" ? <path d="M5 12h.01M12 12h.01M19 12h.01" strokeWidth="3" /> : <path d="M12 3v13m-5-5 5 5 5-5M3 16v5h18v-5" />}
+    {["New", "Open", "Pull", "Export", "Restore", "Save"].includes(label) && <svg className="lc-whiteboard-row-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {label === "New" ? <path d="M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 14h8M12 10v8" /> : label === "Open" ? <path d="M3 7V4h6l3 3h7v4M3 9h18l-3 11H3L1 9h2Z" /> : label === "Export" ? <path d="M12 16V3m-5 5 5-5 5 5M3 16v5h18v-5" /> : label === "Restore" ? <path d="M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v5l3 2" /> : label === "Save" ? <path d="M4 3h13l3 3v15H4V3Zm3 0v6h9V3M8 21v-8h8v8" /> : <path d="M12 3v13m-5-5 5 5 5-5M3 16v5h18v-5" />}
     </svg>}
     <span className="lc-whiteboard-row-copy"><strong>{label}</strong>{description && <span className="lc-muted">{description}</span>}</span>
   </span>;
@@ -108,11 +110,13 @@ function WhiteboardMenuRow({ label, description, disabled, onConfirm }: {
 }
 
 export function WhiteboardDialog(props: WhiteboardDialogProps) {
+  const present = useIsPresent();
   const [notebooks, setNotebooks] = useState<WhiteboardNotebookMeta[]>(() =>
     listWhiteboardNotebooks(),
   );
   const [trash, setTrash] = useState<WhiteboardNotebookMeta[]>(() => listWhiteboardTrash());
-  const [section,setSection] = useState<"main"|"open"|"more"|"export">("main");
+  const [section,setSection] = useState<"main"|"open"|"export">("main");
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [pickingLoad, setPickingLoad] = useState(false);
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
@@ -151,11 +155,11 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !props.pending && !props.exiting) props.onCancel();
+      if (event.key === "Escape" && present && !props.pending && !props.exiting) props.onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [props]);
+  }, [props, present]);
 
   const pending = Boolean(props.pending);
   const exiting = Boolean(props.exiting);
@@ -163,7 +167,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const isLeave = props.mode === "leave";
   const allowSave = props.mode === "entry" && Boolean(props.allowSave);
   const snapshotKey = props.mode === "entry" ? props.snapshotKey ?? null : null;
-  const locked = pending || exiting;
+  const locked = pending || exiting || !present;
   const needsName = Boolean(props.needsName);
   const defaultName = props.defaultName?.trim() || "";
   const onRename = props.mode === "entry" ? props.onRename : undefined;
@@ -239,8 +243,8 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const archived = props.mode === "entry" ? trash : [];
 
   return (
-    <div
-      className={["lc-settings-backdrop", exiting && "lc-leave-dialog-exit"]
+    <DialogBackdrop exiting={exiting}
+      className={["lc-settings-backdrop"]
         .filter(Boolean)
         .join(" ")}
       role="presentation"
@@ -256,11 +260,11 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
         if (!locked && shouldDismissBackdrop(startedOnBackdrop, event.target, event.currentTarget)) props.onCancel();
       }}
     >
-      <DialogFrame ref={morphRef}
+      <DialogFrame ref={morphRef} exiting={exiting}
         className="lc-attempt-modal lc-library-holds lc-library-menu lc-library-whiteboard lc-whiteboard-dialog"
         ariaLabel={isLeave ? "Leave whiteboard?" : "Open whiteboard"}
         titleId="lc-whiteboard-dialog-title"
-        title={isLeave ? "Leave whiteboard?" : pickingLoad ? "Load" : pickingSnapshots ? "Restore" : section === "open" ? "Open" : section === "more" ? "More" : section === "export" ? "Export" : "Whiteboard"}
+        title={isLeave ? "Leave whiteboard?" : pickingLoad ? "Load" : pickingSnapshots ? "Restore" : section === "open" ? "Open" : section === "export" ? "Export" : "Whiteboard"}
         subtitle="Notebooks"
         icon={<NotebookIcon />}
         mode="whiteboard"
@@ -275,9 +279,9 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
             {syncStatus && <span className="lc-whiteboard-context-sync">{syncStatus}</span>}
           </div>
         </div>}
-        <div className="lc-settings-body lc-dialog-body lc-scroll-pane">
+        <div ref={bodyRef} className="lc-settings-body lc-dialog-body lc-scroll-pane">
           {pickingLoad && <LibrarySearch value={libraryQuery} onChange={setLibraryQuery} label="Search saved whiteboards" disabled={locked} showTrash={showTrash} onTrashChange={setShowTrash}/>}
-          {pickingLoad && !(showTrash ? archived : notebooks).some(matchesQuery) && <p className="lc-muted">No matching saved items.</p>}
+          {pickingLoad && !(showTrash ? [] : notebooks).some(matchesQuery) && !archived.some(matchesQuery) && <p className="lc-muted">No matching saved items.</p>}
           {error && <div className="lc-warning">{error}</div>}
 
           {saveTitle !== null ? (
@@ -419,14 +423,15 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                   )}
                 </div>
               ))}
-              {showTrash && archived.length > 0 && (
-                <>
+              {archived.some(matchesQuery) && (
+                <section className="lc-library-trash-section" aria-label="Trash">
+                  <h3>Trash</h3>
                   {archived.filter(matchesQuery).map((entry) => (
                     <LibraryTrashRow key={`arch-${entry.id}`} name={entry.title} updatedAt={entry.updatedAt} disabled={locked}
                       onRestore={async()=>{if(props.mode!=="entry")return;await props.onRestoreTrash?.(entry.id);refreshList();}}
                       onDelete={async()=>{await deleteWhiteboardNotebook(entry.id,true);refreshList();}}/>
                   ))}
-                </>
+                </section>
               )}
             </div>
           ) : (
@@ -441,26 +446,18 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                   {section === "main" && <>
                     <WhiteboardMenuRow label="New" description="Start a blank notebook" disabled={locked} onConfirm={() => props.onChoose("new")} />
                     <WhiteboardMenuRow label="Open" description="Pick a notebook from the library" disabled={locked} onConfirm={() => setSection("open")} />
-                    {props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} disabled={locked}>
-                      <MenuRowLabel label="Pull" description="Fetch notebooks from your other devices" />
-                    </HubLibraryRefresh>}
-                    <WhiteboardMenuRow label="More" disabled={locked} onConfirm={() => setSection("more")} />
+                    {allowSave && <WhiteboardMenuRow label="Save" disabled={locked} onConfirm={beginSave} />}
+                    <WhiteboardMenuRow label="Export" disabled={locked || !allowSave} onConfirm={() => setSection("export")} />
+                    {allowSave && <WhiteboardMenuRow label="Restore" disabled={locked || !snapshotKey} onConfirm={openSnapshots} />}
                   </>}
                   {section === "open" && <>
                     <WhiteboardMenuRow label="Load" disabled={locked || (!notebooks.length && !archived.length)} onConfirm={() => setPickingLoad(true)} />
                     <WhiteboardMenuRow label="Recents" disabled={locked || (!notebooks.length && !archived.length)} onConfirm={() => setPickingLoad(true)} />
-                  </>}
-                  {section === "more" && <>
-                    {allowSave && <>
-                      <WhiteboardMenuRow label="Save" disabled={locked} onConfirm={beginSave} />
-                      <WhiteboardMenuRow label="Export" disabled={locked} onConfirm={() => setSection("export")} />
-                      <WhiteboardMenuRow label="Restore" disabled={locked || !snapshotKey} onConfirm={openSnapshots} />
-                    </>}
-                    <WhiteboardMenuRow label="Annotations" disabled={locked} onConfirm={() => props.onChoose("import")} />
+                    <WhiteboardMenuRow label="Import backup" disabled={locked} onConfirm={() => props.onChoose("import")} />
                   </>}
                   {section === "export" && <>
-                    <WhiteboardMenuRow label="PNG" disabled={locked} onConfirm={() => props.onChoose("export-png")} />
-                    <WhiteboardMenuRow label="Annotations" disabled={locked} onConfirm={() => props.onChoose("export")} />
+                    <WhiteboardMenuRow label="PNG image" disabled={locked} onConfirm={() => props.onChoose("export-png")} />
+                    <WhiteboardMenuRow label="Whiteboard backup" disabled={locked} onConfirm={() => props.onChoose("export")} />
                   </>}
                 </>
               )}
@@ -469,13 +466,16 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
         </div>
 
         <div className="lc-settings-foot lc-dialog-foot">
+          {!isLeave && props.mode === "entry" && props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} disabled={locked}
+            className="lc-library-footer-pull" resultsContainer={bodyRef}><MenuRowLabel label="Pull" /></HubLibraryRefresh>}
+          <span className="lc-dialog-foot-spacer" aria-hidden="true" />
           {(section !== "main" || pickingLoad || pickingSnapshots || saveTitle !== null) && (
             <button
               type="button"
               className="lc-secondary lc-dialog-action"
               disabled={locked}
               onClick={() => {
-                if (!pickingLoad && !pickingSnapshots && saveTitle === null) setSection(section === "export" ? "more" : "main");
+                if (!pickingLoad && !pickingSnapshots && saveTitle === null) setSection("main");
                 setPickingLoad(false);
                 setPickingSnapshots(false);
                 setSaveTitle(null);
@@ -490,7 +490,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
           </button>
         </div>
       </DialogFrame>
-      {pendingId && (
+      <DialogPresence>{pendingId && (
         <ConfirmDialog
           title="Remove this notebook?"
           message="It leaves the live library."
@@ -499,7 +499,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
           onConfirm={() => void confirmRemove(pendingId)}
           onCancel={() => setPendingId(null)}
         />
-      )}
-    </div>
+      )}</DialogPresence>
+    </DialogBackdrop>
   );
 }
