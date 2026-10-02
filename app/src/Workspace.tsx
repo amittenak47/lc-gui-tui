@@ -389,6 +389,7 @@ import {
   problemPadId,
   putProblemBoard,
 } from "./util/problemBoardStore";
+import { holdPdfExtras } from "./modes/pdfOpenHold";
 import {
   getInkPages,
   annotateDocKey,
@@ -3905,6 +3906,9 @@ export const Workspace = memo(function Workspace({
       traceOpen("start", { name: input.name, docType: input.docType, loadGen, tabId: input.tabId });
       // pdf.js's worker takes a second to start: begin it before the page is set up.
       if (input.docType === "pdf") void import("./modes/PdfDocument").then((pdf) => pdf.loadPdfJs()).catch(() => {});
+      // The page in view and its ink before the PDF's text layer and neighbours
+      // (`pdfOpenHold`); let go once the ink is drawn, or by itself on a failure.
+      const releasePdfExtras = input.docType === "pdf" && input.tabId ? holdPdfExtras(input.tabId) : null;
       /*
        * Same loading transition as pickProblem — do not invent a parallel path.
        * fromBrowse: browser overlay spinner → slide → checkmark → board under
@@ -4478,6 +4482,7 @@ export const Workspace = memo(function Workspace({
         if (workspaceLoadGenRef.current !== loadGen) return;
         await boardRef.current?.primeInkSnap();
         traceOpen("ink snap primed", { ms: openMs() });
+        releasePdfExtras?.();
 
         {
           const board = boardRef.current;

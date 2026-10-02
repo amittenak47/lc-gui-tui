@@ -37,6 +37,7 @@ import { traceOpen } from "../util/messageOf";
 import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { isDocCameraLive, isDocCameraPulsing, subscribeDocCameraLive, subscribeDocCameraPulse } from "../canvas/docSelectionGesture";
+import { pdfExtrasHeld } from "./pdfOpenHold";
 import { isPageTurnBusy, subscribePageTurnBusy } from "../util/pageTurnBusy";
 import type { PageFrame } from "../canvas/inkPageIndex";
 import {
@@ -1613,7 +1614,8 @@ export function PdfDocument({
       const fillTextFromPage = async (pdfPage: PdfPageProxy) => {
         const claim = startPdfTextFillClaim(textFilledRef.current, n);
         try {
-          if (disposedRef.current || renderBusy()) {
+          // Opening: the reader's ink first; the text layer follows (`pdfOpenHold`).
+          if (disposedRef.current || renderBusy() || pdfExtrasHeld(filmScope)) {
             claim.settle(false);
             return;
           }
@@ -1745,6 +1747,11 @@ export function PdfDocument({
         peekPdfRestScale(filmScope) ?? PDF_REST_SCALE,
       );
       if (previewPageRef.current != null) queue = queue.filter(item => item.page === previewPageRef.current);
+      if (pdfExtrasHeld(filmScope)) {
+        // Opening: only the pages in view until the ink is on them.
+        const inView = new Set(visible);
+        queue = queue.filter(item => inView.has(item.page));
+      }
       if (holdDecodeRef.current) {
         queue = pdfQueueForHoldDecode(queue, visible);
       } else if (isPageTurnBusy(filmScope)) {
@@ -1852,7 +1859,7 @@ export function PdfDocument({
 
           if (holdDecodeRef.current) return;
 
-          if (renderBusy()) {
+          if (renderBusy() || pdfExtrasHeld(filmScope)) {
             await waitForPaintSignal(filmScope);
             continue;
           }
