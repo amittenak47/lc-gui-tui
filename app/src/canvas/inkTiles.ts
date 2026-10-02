@@ -284,6 +284,12 @@ interface Tile {
   usedAt: number;
   /** True once anything was rasterised into it. */
   painted: boolean;
+  /**
+   * No stroke reaches it: nothing to draw, nothing to store. Most of a page is
+   * bare paper, and every bare square used to get its own canvas, a raster
+   * pass and a place in the store, a few at a time, before the ink was shown.
+   */
+  empty?: boolean;
 }
 
 function tileKey(level: number, tx: number, ty: number): string {
@@ -412,6 +418,25 @@ export class InkTileCache {
     this.pause = options.pause ?? (() => false);
     this.useWorker = options.useWorker === true;
     this.persist = options.persist === true;
+  }
+
+  /** Whether any stroke this square would paint reaches it — as `paintInkTile` picks them. */
+  private inkReaches(level: number, tx: number, ty: number): boolean {
+    const bounds = this.tileBounds(level, tx, ty);
+    if (this.clip && !intersectBounds(bounds, this.clip)) return false;
+    const padded = this.paddedTileBounds(bounds, levelScale(level));
+    for (const op of this.ops) {
+      if (isHostBoundOp(op)) continue;
+      if (boundsOverlap(this.boundsOf(op), padded)) return true;
+    }
+    return false;
+  }
+
+  private emptyCanvas: CanvasImageSource | null = null;
+  /** One shared stand-in for every bare square; never drawn, never closed. */
+  private emptySource(): CanvasImageSource {
+    this.emptyCanvas ??= this.createCanvas(1, 1);
+    return this.emptyCanvas;
   }
 
   private boundsOf(op: InkOp): SceneBounds {
@@ -683,6 +708,16 @@ export class InkTileCache {
   }
 
   private paintOpIntoTile(tile: Tile, op: InkOp, bounds: SceneBounds): void {
+    // A bare square's first stroke gives it a canvas of its own; compositing
+    // onto transparent is the same as rasterising the one stroke it now holds.
+    if (tile.empty) {
+      const px = this.tileCanvasPx();
+      const fresh = this.createCanvas(px, px);
+      tile.canvas = fresh;
+      tile.width = px;
+      tile.height = px;
+      tile.empty = false;
+    }
     const canvas = tile.canvas as HTMLCanvasElement;
     if (typeof canvas.getContext !== "function") {
       this.dropTile(tile.key);
@@ -720,6 +755,7 @@ export class InkTileCache {
     if (!tile) return;
     this.tiles.delete(key);
     this.persistQueue.delete(key);
+    if (tile.empty) return;
     const source = tile.canvas as CanvasImageSource & { close?: () => void };
     source.close?.();
   }
@@ -886,7 +922,7 @@ export class InkTileCache {
   }
 
   private schedulePersist(tile: Tile): void {
-    if (!this.persist) return;
+    if (!this.persist || tile.empty) return;
     this.persistQueue.set(tile.key, tile);
     this.schedulePersistIdle();
   }
@@ -1073,6 +1109,19 @@ export class InkTileCache {
     const key = tileKey(level, tx, ty);
     const existing = this.tiles.get(key);
     if (existing) return existing;
+    if (!this.inkReaches(level, tx, ty)) {
+      const tile: Tile = {
+        key, level, tx, ty,
+        canvas: this.emptySource(),
+        width: 0,
+        height: 0,
+        usedAt: this.drawCount,
+        painted: true,
+        empty: true,
+      };
+      this.tiles.set(key, tile);
+      return tile;
+    }
 
     const canvasPx = this.tileCanvasPx();
     const canvas = this.createCanvas(canvasPx, canvasPx);
@@ -1238,6 +1287,7 @@ export class InkTileCache {
         continue;
       }
       tile.usedAt = this.drawCount;
+      if (tile.empty) continue;
       /*
        * Snap each square to whole device pixels, taking both edges from the
        * tile's own bounds.
@@ -1364,6 +1414,10 @@ export class InkTileCache {
         const src = this.tileBounds(from, tx, ty);
         const box = intersectBounds(src, bounds);
         if (!box) continue;
+        if (tile.empty) {
+          drew = true;
+          continue;
+        }
         const srcScale = this.tilePx / size;
         const destW = toDeviceX(box.maxX) - toDeviceX(box.minX);
         const destH = toDeviceY(box.maxY) - toDeviceY(box.minY);

@@ -209,9 +209,12 @@ export function paintInkTile(
   }
 
   let labRuns: InkDrawOp[] = [];
-  const sourceOps = new Map(job.ops.map(op => [op.id, op]));
+  // Only lab-pen runs look strokes up by id: built for the tiles that have
+  // one, not for every tile (each a map of every hydrated stroke).
+  let sourceOps: Map<InkOp["id"], InkOp> | null = null;
   const flushLab = () => {
     if (labRuns.length === 0) return;
+    sourceOps ??= new Map(job.ops.map((op) => [op.id, op]));
     const spines = labRuns.map(labSpineFromDrawOp);
     const sdf0 = performance.now();
     for (let i = 0; i < spines.length; i++) {

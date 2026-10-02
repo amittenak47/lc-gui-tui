@@ -402,14 +402,17 @@ describe("InkTileCache", () => {
     });
   });
 
-  it("blits one image per visible tile", () => {
-    const { cache } = makeCache();
+  it("blits one image per visible tile that holds ink", () => {
+    const { cache, canvases } = makeCache();
     cache.setOps([draw([0, 0], [50, 50])]);
     const { ctx, blits } = destinationContext();
     cache.draw(ctx, screen(1), 1);
-    // 800x600 scene units at level 0 (384-unit tiles) is 3 x 2 tiles.
-    expect(blits).toHaveLength(6);
+    // 800x600 scene units at level 0 (384-unit tiles) is 3 x 2 tiles, all
+    // covered; the stroke reaches one of them and the rest are bare paper.
     expect(cache.size).toBe(6);
+    expect(blits).toHaveLength(1);
+    expect(canvases.created.filter((c) => c.width > 1)).toHaveLength(1);
+    expect(cache.covered).toBe(true);
   });
 
   it("reuses tiles when the camera only pans", () => {
@@ -818,7 +821,8 @@ describe("InkTileCache", () => {
     let writing = false;
     const { cache } = makeCache({ persist: true, pause: () => writing });
     try {
-      cache.syncOpsDeferred([draw([10, 10], [20, 20])]);
+      // Across a tile line, so two squares hold ink and there are two to store.
+      cache.syncOpsDeferred([draw([370, 10], [400, 20])]);
       const { ctx } = destinationContext();
       cache.draw(ctx, screen(1), 1);
       expect(encode).not.toHaveBeenCalled();
