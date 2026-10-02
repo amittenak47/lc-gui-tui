@@ -6,6 +6,7 @@ import { buildWhiteboardTemplate } from "../templates/whiteboard";
 import { buildAnnotateTemplate } from "../templates/annotate";
 import { convertToExcalidrawElements } from "../canvas/convertSkeletons";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { DialogFrame, type DialogShape } from "../components/DialogFrame";
 import { HoldButton } from "../components/HoldButton";
 import { Tip } from "../components/Tip";
 import { useShell } from "../shellContext";
@@ -35,6 +36,7 @@ export interface ArtifactPickerFootnote {
 }
 
 export interface ArtifactPickerProps {
+  shape?: DialogShape;
   pageChoices?: Array<{ id: string; title: string; pages?: number; kind: "code" | "markdown" }>;
   capturePage?: (id: string, page: number) => Promise<ArtifactReferenceCapture>;
   parent: ArtifactParent;
@@ -142,6 +144,14 @@ function CreateIcon() {
   );
 }
 
+function AttachmentIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m8 13 7-7a3 3 0 0 1 4.2 4.2l-8.5 8.5a5 5 0 0 1-7.1-7.1l8.5-8.5a3 3 0 0 1 4.2 4.2L8 15.8a1 1 0 0 1-1.4-1.4L14 7" />
+    </svg>
+  );
+}
+
 function TrashGlyph() {
   return (
     <svg
@@ -183,6 +193,7 @@ function RestoreGlyph() {
 }
 
 export function ArtifactPicker({
+  shape,
   parent,
   associations,
   scope = "catalog",
@@ -388,17 +399,19 @@ export function ArtifactPicker({
           if (shouldDismissBackdrop(startedOnBackdrop, event.target, event.currentTarget)) requestClose();
         }}
       >
-        <div
-          className="lc-settings-modal lc-artifact-picker-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="lc-artifact-picker-title"
+        <DialogFrame
+          className="lc-artifact-picker-modal"
+          titleId="lc-artifact-picker-title"
+          title="Attachments"
+          subtitle={scope === "message" ? "Catalog · this turn" : scope === "footnote" ? "Catalog · footnotes" : "Catalog"}
+          description={pickerCopy(scope)}
+          icon={<AttachmentIcon />}
+          mode="explore"
+          shape={shape}
+          onClose={() => requestClose()}
+          closeDisabled={busy && !exiting}
         >
-          <div className="lc-settings-head">
-            <h2 id="lc-artifact-picker-title">Attachments</h2>
-            {pickerCopy(scope) ? <p className="lc-muted">{pickerCopy(scope)}</p> : null}
-          </div>
-          <div className="lc-settings-body">
+          <div className="lc-dialog-context">
             <form
               className="lc-artifact-picker-compose"
               onSubmit={(event) => {
@@ -478,6 +491,8 @@ export function ArtifactPicker({
                 </button>
               ))}
             </div>
+          </div>
+          <div className="lc-dialog-body">
             <div className="lc-artifact-picker-catalog">
               {error && <p role="alert">{error}</p>}
               {source !== "saved" && <p className="lc-artifact-picker-empty">Attach a read-only excerpt. The source stays unchanged.</p>}
@@ -545,11 +560,12 @@ export function ArtifactPicker({
                       <div className="lc-artifact-picker-row-actions">
                         {!trashed && (
                           <>
-                            <button type="button" className="lc-secondary" disabled={busy} onClick={() => requestClose(() => onOpen(ref))}>
+                            <button type="button" className="lc-secondary lc-dialog-action" disabled={busy} onClick={() => requestClose(() => onOpen(ref))}>
                               Open
                             </button>
                             <button
                               type="button"
+                              className="lc-dialog-action"
                               disabled={busy || attached}
                               onClick={() => void run(async () => {
                                 const next = [...item.associations];
@@ -571,7 +587,7 @@ export function ArtifactPicker({
                             {attached && (
                               <button
                                 type="button"
-                                className="lc-secondary"
+                                className="lc-secondary lc-dialog-action"
                                 disabled={busy}
                                 onClick={() => void run(async () => {
                                   const remove = new Set(filingNow.map(associationKey));
@@ -642,12 +658,15 @@ export function ArtifactPicker({
               </div>
             </div>
           </div>
-          <div className="lc-settings-foot">
-            <button type="button" className="lc-secondary" disabled={busy && !exiting} onClick={() => requestClose()}>
+          <div className="lc-settings-foot lc-dialog-foot">
+            <span className="lc-dialog-meta lc-dialog-hint">
+              {busy ? "Working…" : source === "saved" ? "Tap to choose · hold to filter" : "Read-only excerpts"}
+            </span>
+            <button type="button" className="lc-secondary lc-dialog-action" disabled={busy && !exiting} onClick={() => requestClose()}>
               Close
             </button>
           </div>
-        </div>
+        </DialogFrame>
         {pendingTrash && (
           <ConfirmDialog
             title="Remove this attachment?"

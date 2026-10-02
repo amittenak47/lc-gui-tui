@@ -79,7 +79,8 @@ describe("Board / Note / Code editor chrome", () => {
     expect(css).toContain("background: var(--panel)");
     expect(css).not.toContain("#252a32");
     expect(css).not.toContain("#7d899b");
-    expect(css).not.toContain("min-height: 40px");
+    const editorCss = css.slice(0, css.indexOf(".lc-settings-backdrop.lc-artifact-picker-backdrop"));
+    expect(editorCss).not.toContain("min-height: 40px");
     expect(css).toContain(".lc-artifact-chrome button");
     expect(css).toContain("min-height: 28px");
   });

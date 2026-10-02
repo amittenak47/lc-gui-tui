@@ -189,31 +189,8 @@
 .lc-artifact-picker-modal {
   width: min(420px, 100%);
   max-height: min(70vh, 480px);
+  max-height: min(70dvh, 480px);
   animation: lc-board-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.lc-artifact-picker-modal .lc-settings-head {
-  padding: 14px 16px 6px;
-}
-
-.lc-artifact-picker-modal .lc-settings-head h2 {
-  font-size: 16px;
-}
-
-.lc-artifact-picker-modal .lc-settings-head .lc-muted {
-  margin: 6px 0 0;
-  line-height: 1.4;
-}
-
-.lc-artifact-picker-modal .lc-settings-body {
-  padding: 8px 16px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.lc-artifact-picker-modal .lc-settings-foot {
-  padding: 10px 16px 14px;
 }
 
 .lc-artifact-picker-modal button {
@@ -670,4 +647,97 @@
 .lc-artifact-reference .lc-md-ink-doc {
   pointer-events: auto;
   user-select: text;
+}
+
+/* Unified chrome is opt-in; the other artifact surfaces keep their layout. */
+.lc-dialog-frame .lc-artifact-picker-compose {
+  border-width: var(--lc-dialog-edge);
+  border-color: var(--lc-dialog-line);
+  border-radius: var(--lc-dialog-control-radius);
+  background: var(--panel);
+  min-height: 36px;
+}
+
+.lc-dialog-frame .lc-artifact-picker-compose:focus-within { border-color: var(--accent); }
+.lc-dialog-frame .lc-artifact-picker-compose button.lc-artifact-picker-adorn,
+.lc-dialog-frame .lc-artifact-picker-compose .lc-artifact-picker-submit,
+.lc-dialog-frame .lc-scratch-load-lock.lc-artifact-picker-lock,
+.lc-dialog-frame .lc-hold-reveal.lc-artifact-picker-trash,
+.lc-dialog-frame .lc-hold-reveal.lc-artifact-picker-restore,
+.lc-dialog-frame .lc-artifact-picker-attach,
+.lc-dialog-frame .lc-number-wheel {
+  border-radius: var(--lc-dialog-control-radius);
+}
+
+.lc-dialog-frame .lc-artifact-picker-compose button.lc-artifact-picker-adorn.is-active,
+.lc-dialog-frame .lc-artifact-picker-compose button.lc-artifact-picker-adorn.is-filter {
+  box-shadow: none;
+}
+
+.lc-dialog-frame .lc-artifact-picker-compose button.lc-artifact-picker-adorn.is-active::after,
+.lc-dialog-frame .lc-artifact-picker-compose button.lc-artifact-picker-adorn.is-filter::after {
+  content: "";
+  position: absolute;
+  inset: auto 4px 0;
+  height: 2px;
+  background: currentColor;
+  border-radius: 2px;
+}
+
+.lc-dialog-frame button.lc-artifact-picker-source { border-radius: 0; }
+
+.lc-dialog-frame .lc-artifact-picker-sources {
+  flex-wrap: wrap;
+  border-bottom: var(--lc-dialog-edge) solid var(--lc-dialog-line);
+}
+
+.lc-dialog-frame .lc-artifact-picker-catalog { flex: 0 0 auto; }
+.lc-dialog-frame .lc-artifact-picker-list { overflow: visible; }
+.lc-dialog-frame .lc-artifact-picker-row {
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-bottom-color: var(--lc-dialog-line);
+}
+
+.lc-dialog-frame .lc-artifact-picker-row-main {
+  flex: 1 1 160px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 3px;
+}
+
+.lc-dialog-frame .lc-artifact-picker-row-main .lc-artifact-picker-status { grid-column: 2; }
+.lc-dialog-frame .lc-artifact-picker-row-actions { flex-wrap: wrap; margin-inline-start: auto; }
+
+@media (max-width: 480px) {
+  .lc-dialog-frame .lc-artifact-picker-reference-row {
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+  }
+  .lc-dialog-frame .lc-artifact-picker-reference-row .lc-artifact-picker-status {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+  }
+  .lc-dialog-frame .lc-artifact-picker-reference-end { grid-column: 3; grid-row: 1 / span 2; }
+}
+
+@media (pointer: coarse) {
+  .lc-dialog-frame .lc-artifact-picker-compose button.lc-artifact-picker-adorn,
+  .lc-dialog-frame .lc-artifact-picker-compose .lc-artifact-picker-submit,
+  .lc-dialog-frame button.lc-artifact-picker-source,
+  .lc-dialog-frame button.lc-dialog-close,
+  .lc-dialog-frame .lc-scratch-load-lock.lc-artifact-picker-lock,
+  .lc-dialog-frame .lc-hold-reveal.lc-artifact-picker-trash,
+  .lc-dialog-frame .lc-hold-reveal.lc-artifact-picker-restore,
+  .lc-dialog-frame button.lc-artifact-picker-attach {
+    min-width: 32px;
+    min-height: 32px;
+    height: 32px;
+  }
+  .lc-dialog-frame button.lc-dialog-action { min-height: 40px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-settings-backdrop.lc-artifact-picker-backdrop { animation: none; transition: none; }
 }

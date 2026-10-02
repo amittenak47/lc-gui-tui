@@ -504,3 +504,111 @@ it("hides trash while the compact padlock is on", async () => {
   expect(control("Unlock Plan.md")).toBeTruthy();
   expect(control("Delete Plan.md — hold to delete")).toBeUndefined();
 });
+
+it("closes from the new header action using the existing exit lifecycle", async () => {
+  const { onClose, onOpen } = await mount();
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.getAttribute("aria-labelledby")).toBe("lc-artifact-picker-title");
+  vi.useFakeTimers();
+  act(() => control("Close Attachments")!.click());
+  expect(backdrop().className).toContain("lc-leave-dialog-exit");
+  expect(onClose).not.toHaveBeenCalled();
+  act(() => { vi.advanceTimersByTime(180); });
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(repo.mutateArtifacts).not.toHaveBeenCalled();
+});
+
+it("keeps source, query and selected page when the presentation variant changes", async () => {
+  const pageChoices = [{ id: "scratch", title: "Scratch", kind: "markdown" as const, pages: 4 }];
+  await mount({ pageChoices });
+  await act(async () => { button("Pages & regions")!.click(); });
+  await choosePage("Scratch page", 3);
+  const field = document.querySelector<HTMLInputElement>('[aria-label="Search catalog or name a new attachment"]')!;
+  act(() => fill(field, "Scratch"));
+  await mount({ pageChoices, shape: "blocky" });
+  expect(document.querySelector('[role="dialog"]')?.getAttribute("data-dialog-shape")).toBe("blocky");
+  expect(document.querySelector('[aria-label="Search catalog or name a new attachment"]')).toBe(field);
+  expect(field.value).toBe("Scratch");
+  expect(button("Pages & regions")!.getAttribute("aria-pressed")).toBe("true");
+  expect(document.querySelector('[role="slider"]')?.getAttribute("aria-valuenow")).toBe("3");
+  expect(repo.createArtifact).not.toHaveBeenCalled();
+  expect(repo.mutateArtifacts).not.toHaveBeenCalled();
+});
+
+it("does not dismiss when a gesture starts inside the new header and ends on the backdrop", async () => {
+  const { onClose } = await mount();
+  act(() => {
+    pointer(document.querySelector<HTMLElement>(".lc-dialog-head")!, "pointerdown");
+    backdrop().click();
+  });
+  expect(backdrop().className).not.toContain("lc-leave-dialog-exit");
+  expect(onClose).not.toHaveBeenCalled();
+  act(() => {
+    pointer(backdrop(), "pointerdown");
+    backdrop().click();
+  });
+  expect(backdrop().className).toContain("lc-leave-dialog-exit");
+});
+
+it("unfiles only the selected associations and retains catalog revision checks", async () => {
+  const other = { kind: "footnote" as const, footnoteId: "other" };
+  catalog.current!.artifacts = [note({ id: "a1", title: "Plan.md", associations: [thread, other] })];
+  const { onClose, onAttach } = await mount();
+  repo.mutateArtifacts.mockResolvedValue(catalog.current);
+  await act(async () => { button("Unfile")!.click(); });
+  expect(repo.mutateArtifacts).toHaveBeenCalledWith(parent, "cat1", {
+    type: "update", id: "a1", expectedRevision: "r1", patch: { associations: [other] },
+  });
+  expect(onAttach).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it("disables both close actions while attaching and keeps a failed attachment retryable", async () => {
+  catalog.current!.artifacts = [note({ id: "a1", title: "Plan.md", associations: [] })];
+  let rejectAttach!: (reason: Error) => void;
+  repo.mutateArtifacts.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectAttach = reject; }));
+  const { onAttach, onClose } = await mount();
+  await act(async () => { button("Pin to chat")!.click(); });
+  expect(button("Close")!.disabled).toBe(true);
+  expect(control("Close Attachments")!.disabled).toBe(true);
+  expect(button("Files")!.disabled).toBe(true);
+  expect(document.querySelector(".lc-dialog-hint")?.textContent).toBe("Working…");
+  await act(async () => { rejectAttach(new Error("Catalog changed. Retry.")); });
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("Retry");
+  expect(control("Close Attachments")!.disabled).toBe(false);
+  expect(button("Pin to chat")!.disabled).toBe(false);
+  expect(onAttach).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+  repo.mutateArtifacts.mockResolvedValue(catalog.current);
+  await act(async () => { button("Pin to chat")!.click(); });
+  expect(repo.mutateArtifacts).toHaveBeenCalledTimes(2);
+  expect(onAttach).toHaveBeenCalledTimes(1);
+  expect(backdrop().className).toContain("lc-leave-dialog-exit");
+});
+
+it("opens a catalog entry after exit without modifying it", async () => {
+  catalog.current!.artifacts = [note({ id: "a1", title: "Plan.md" })];
+  const { onOpen, onClose } = await mount();
+  vi.useFakeTimers();
+  act(() => button("Open")!.click());
+  expect(onOpen).not.toHaveBeenCalled();
+  act(() => { vi.advanceTimersByTime(180); });
+  expect(onOpen).toHaveBeenCalledWith({ parent, artifactId: "a1", kind: "markdown" });
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(repo.mutateArtifacts).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["Board", "whiteboard", "Whiteboard"],
+  ["Note", "markdown", "Note.md"],
+  ["Code", "code", "Code.py"],
+])("creates a %s attachment with the correct snapshot kind", async (label, kind, title) => {
+  const { onAttach } = await mount();
+  if (label !== "Note") await tapKind(label);
+  const ref = { parent, artifactId: "created", kind };
+  repo.createArtifact.mockResolvedValue(ref);
+  await act(async () => { control("Create attachment")!.click(); });
+  expect(repo.createArtifact).toHaveBeenCalledWith(parent, title, [thread], expect.objectContaining({ kind }));
+  expect(onAttach).toHaveBeenCalledWith(ref, [thread]);
+});
