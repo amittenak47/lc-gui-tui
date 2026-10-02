@@ -5452,6 +5452,10 @@ export const Workspace = memo(function Workspace({
     });
   }, [openWorkspace]);
 
+  const openRecentWorkspace = useCallback((recent: TabRecord) => {
+    openWorkspace({...recent,id:newTabId(recent.kind),dirty:false,group:undefined});
+  }, [openWorkspace]);
+
   /**
    * Every workspace the libraries know about, as graph nodes.
    *
@@ -11365,6 +11369,9 @@ export const Workspace = memo(function Workspace({
                   />
                 ) : tab.kind === "home" && !holdBrowseOverlay ? (
                   <HomeChooser
+                    active={active && showing}
+                    tabsRef={tabsRef}
+                    onOpenRecent={openRecentWorkspace}
                     busy={busy !== null || boardPreparing || workspaceLoadActive}
                     onPractice={() => setPracticeOpen(true)}
                     onWhiteboard={() => setWhiteboardEntryOpen(true)}

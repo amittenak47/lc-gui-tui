@@ -80,6 +80,7 @@ import {
   type TabRecord,
 } from "./util/tabs";
 import { loadTabState, saveTabState } from "./util/tabPersist";
+import { RECENT_WORKSPACES_EVENT, rememberRecentWorkspace } from "./util/recentWorkspaces";
 import { loadStartupTabs, startupTabState } from "./util/startupTabsPref";
 import { announceSplitResize, deferPanelRefit } from "./util/splitResize";
 import { isCameraBusy } from "./util/cameraBusy";
@@ -737,6 +738,8 @@ export function App() {
 
   useEffect(() => {
     saveTabState(tabState);
+    rememberRecentWorkspace(activeTabOf(tabState));
+    if (activeTabOf(tabState).kind === "home") window.dispatchEvent(new Event(RECENT_WORKSPACES_EVENT));
   }, [tabState]);
 
   /**

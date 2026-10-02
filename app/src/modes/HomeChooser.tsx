@@ -4,18 +4,23 @@
  * There is no longer a "What do you want to do?" banner over the cards.
  * The four cards answer that question by existing.
  *
- * Cards stack in one column so the icon, colored name and full blurb stay on
- * every device instead of collapsing into a cramped row of tiles.
- * `homeModeColumns` is kept for the older multi-column layout tests.
+ * Large entry cards above a wide Whiteboard and two compact secondary cards.
+ * Recently opened work is independent of the currently open tab strip.
  *
  * Practice, Whiteboard and Annotate play hover-in / hover-out scenes. Browse
  * and Explore keep a quiet loop. Marks and doodles are real SVG, not a
  * wallpaper that fades in all at once.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MutableRefObject, type ReactNode } from "react";
+import { motion, useReducedMotion } from "motion/react";
 
 import { FEATURE_LEETCODE } from "../featureFlags";
+import { ANNOTATE_LIBRARY_EVENT } from "../util/annotateStore";
+import { WHITEBOARD_LIBRARY_EVENT } from "../util/whiteboardStore";
+import { RECENT_WORKSPACES_EVENT, loadRecentWorkspaces, recentWorkspaceKey, visibleRecentWorkspaces } from "../util/recentWorkspaces";
+import type { TabRecord, TabState } from "../util/tabs";
+import "./homeChooser.css";
 
 export interface HomeChooserProps {
   onPractice: () => void;
@@ -27,6 +32,9 @@ export interface HomeChooserProps {
   onExplore: () => void;
   /** Something is already opening; the cards stop taking taps. */
   busy?: boolean;
+  active?: boolean;
+  tabsRef?: MutableRefObject<TabState>;
+  onOpenRecent?: (tab: TabRecord) => void;
 }
 
 interface HomeMode {
@@ -394,7 +402,21 @@ export function HomeChooser({
   onBrowse,
   onExplore,
   busy = false,
+  active = true,
+  tabsRef,
+  onOpenRecent,
 }: HomeChooserProps) {
+  const [recent, setRecent] = useState<TabRecord[]>([]);
+  const [entrance, setEntrance] = useState(0);
+  useEffect(() => {
+    if (!active || !onOpenRecent) return;
+    const refresh = () => setRecent(visibleRecentWorkspaces(loadRecentWorkspaces(),tabsRef?.current.tabs ?? [])
+      .filter(tab=>FEATURE_LEETCODE || tab.kind !== "practice"));
+    refresh();
+    const events = [RECENT_WORKSPACES_EVENT,ANNOTATE_LIBRARY_EVENT,WHITEBOARD_LIBRARY_EVENT];
+    events.forEach(event=>window.addEventListener(event,refresh));
+    return () => events.forEach(event=>window.removeEventListener(event,refresh));
+  }, [active,tabsRef,onOpenRecent]);
   const modes: HomeMode[] = [
     ...(FEATURE_LEETCODE
       ? [
@@ -521,6 +543,9 @@ export function HomeChooser({
           <path d={PAGE_PATH} />
           <path d={PAGE_FOLD} />
           <g clipPath="url(#lc-home-wb-clip)">
+            <g className="lc-home-wb-rest">
+              <path d="M6.5 15c2-7 4-7 6 0s4 7 6-2M6.5 19h10m1.5 0 1 1 1.5-1.5"/>
+            </g>
             <g className="lc-home-wb-scroll">
               <g className="lc-home-wb-draw-a">
                 <circle className="lc-home-draw" cx="8.2" cy="13.6" r="1.05" pathLength={1} />
@@ -593,12 +618,26 @@ export function HomeChooser({
   ];
 
   return (
-    <nav className="lc-home-chooser" aria-label="Choose a workspace">
-      <div className="lc-home-chooser-grid">
-        {modes.map((mode) => (
-          <HomeCard key={mode.id} mode={mode} busy={busy} />
+    <nav className="lc-home-chooser lc-home-redesign" aria-label="Choose a workspace" data-home-active={active}>
+      {recent.length > 0 && <section className="lc-home-recents" aria-labelledby="lc-home-recents-title">
+        <h2 id="lc-home-recents-title" className="lc-home-section-title">Recently opened</h2>
+        <div className="lc-home-recents-window lc-scroll-pane">
+          {recent.map(tab=><button type="button" key={recentWorkspaceKey(tab)} className="lc-home-recent" data-mode={tab.kind === "web" ? "browse" : tab.kind}
+            disabled={busy} onClick={()=>onOpenRecent?.(tab)} title={tab.title}>
+            <span className="lc-home-recent-preview" aria-hidden="true"><svg viewBox="0 0 40 52" fill="none"><path d="M8 8h24M8 17h24M8 26h24M8 35h24M8 44h18"/><path className="lc-home-recent-mark" d={tab.kind === "whiteboard" ? "M8 31q6-15 12 0t12 0" : "M8 17h18"}/></svg></span>
+            <span className="lc-home-recent-text"><strong>{tab.title}</strong><span>{tab.kind === "practice" ? "LeetCode" : tab.kind === "whiteboard" ? "Whiteboard" : tab.kind === "web" ? "Web" : `Annotate · ${tab.kind === "annotate" ? tab.docType === "markdown" ? "Markdown" : tab.docType.toUpperCase() : ""}`}</span></span>
+          </button>)}
+        </div>
+      </section>}
+      <h2 className="lc-home-section-title">Start</h2>
+      <div className="lc-home-chooser-grid" key={entrance}>
+        {modes.map((mode,index) => (
+          <HomeCard key={mode.id} mode={mode} busy={busy} active={active} delay={index*.045}/>
         ))}
       </div>
+      <button type="button" className="lc-home-replay" disabled={busy} onClick={()=>setEntrance(value=>value+1)}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 8M4 4v6h6"/></svg>Replay entrance
+      </button>
     </nav>
   );
 }
@@ -610,7 +649,8 @@ export function HomeChooser({
  * Whiteboard `rest` → `in` freezes the nib wherever it is, walks it onto the blank
  * page, then starts the draw loop (ink is delayed to match).
  */
-function HomeCard({ mode, busy }: { mode: HomeMode; busy: boolean }) {
+function HomeCard({ mode, busy, active, delay }: { mode: HomeMode; busy: boolean; active: boolean; delay: number }) {
+  const reduced = useReducedMotion();
   const [scene, setScene] = useState<IconScene>("rest");
   const sceneRef = useRef<IconScene>(scene);
   sceneRef.current = scene;
@@ -634,7 +674,9 @@ function HomeCard({ mode, busy }: { mode: HomeMode; busy: boolean }) {
     return () => window.clearTimeout(approachTimer.current);
   }, [scene]);
   return (
-    <span className="lc-home-cell">
+    <motion.span className="lc-home-cell" data-mode={mode.id}
+      initial={reduced ? false : {opacity:0,y:12,scale:.985}} animate={{opacity:1,y:0,scale:1}}
+      transition={{duration:reduced ? 0 : .32,delay:reduced ? 0 : delay,ease:[.22,1,.36,1]}}>
       <button
         ref={cardRef}
         type="button"
@@ -665,7 +707,7 @@ function HomeCard({ mode, busy }: { mode: HomeMode; busy: boolean }) {
       >
         {mode.wip ? <span className="lc-home-wip">(WIP)</span> : null}
         <span className="lc-home-card-icon" aria-hidden>
-          {mode.live}
+          {active && mode.live}
           {mode.icon}
         </span>
         <span className="lc-home-card-text">
@@ -673,6 +715,6 @@ function HomeCard({ mode, busy }: { mode: HomeMode; busy: boolean }) {
           <span className="lc-home-card-blurb">{mode.blurb}</span>
         </span>
       </button>
-    </span>
+    </motion.span>
   );
 }
