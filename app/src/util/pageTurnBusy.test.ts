@@ -12,11 +12,12 @@ it("pauses only the PDF being turned and wakes it after the last input", () => {
   expect(isPageTurnBusy("b")).toBe(false);
   expect(a.mock.calls).toEqual([[true]]);
   expect(b).not.toHaveBeenCalled();
-  vi.advanceTimersByTime(900);
-  notePageTurn("a");
-  vi.advanceTimersByTime(900);
-  expect(isPageTurnBusy("a")).toBe(true);
   vi.advanceTimersByTime(300);
+  notePageTurn("a");
+  vi.advanceTimersByTime(300);
+  expect(isPageTurnBusy("a")).toBe(true);
+  // Still a moment after the last turn, the landed page may be painted sharp.
+  vi.advanceTimersByTime(150);
   expect(a.mock.calls).toEqual([[true], [false]]);
   expect(isPageTurnBusy("a")).toBe(false);
   stopA(); stopB();

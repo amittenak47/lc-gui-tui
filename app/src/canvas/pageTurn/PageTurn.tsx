@@ -1355,11 +1355,24 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     /** Turns queued by a key pressed while one was playing. */
     let queued: { direction: Direction; count: number } | null = null;
 
+    /**
+     * A sheet in motion, held or rolling: the PDF's sharp paint waits until it
+     * has been still a moment (see `pageTurnBusy`). Said at most every 100 ms.
+     */
+    let turningNotedAt = -Infinity;
+    const stillTurning = () => {
+      const now = performance.now();
+      if (now - turningNotedAt < 100) return;
+      turningNotedAt = now;
+      notePageTurn(filmScope);
+    };
+
     const step = (turn: Turn, animation = turn.anim) => (now: number) => {
       const a = animation;
       // A caught or reversed sheet invalidates the old animation, including a
       // callback already queued before the new finger went down.
       if (turn.done || !a || turn.anim !== a) return;
+      stillTurning();
       const t = Math.min(1, Math.max(0, (now - a.began) / a.ms));
       const k = glide(t, a.launch);
       // The corner rises off the page as it rolls and settles back down onto
@@ -1766,6 +1779,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
      */
     const follow = (event: PointerEvent, release = false) => {
       if (!active) return;
+      stillTurning();
       const dt = event.timeStamp - active.lastT;
       const moved = !(release && event.clientX === active.atX);
       active.atX = event.clientX;

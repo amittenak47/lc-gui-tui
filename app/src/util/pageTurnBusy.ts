@@ -7,6 +7,13 @@
 
 /** A hand flicking through comes back within this long of its last turn. */
 const PAGE_TURN_HOLD_MS = 1200;
+/**
+ * The page a turn landed on is painted sharp once the hand has been still
+ * this long. A further flick cancels a sharp paint in flight, so this need
+ * not wait out a whole flick-through as the background work does: waiting
+ * 1.2 s left a landed page on its blurry preview for over a second.
+ */
+const PAGE_TURN_PAINT_HOLD_MS = 400;
 
 let busyUntil = 0;
 const scopes = new Map<string, { until: number; timer: ReturnType<typeof setTimeout> | undefined; listeners: Set<(busy: boolean) => void> }>();
@@ -17,12 +24,12 @@ export function notePageTurn(scope?: string): void {
   const state = scopes.get(scope);
   if (!state) return;
   const wasBusy = performance.now() < state.until;
-  state.until = performance.now() + PAGE_TURN_HOLD_MS;
+  state.until = performance.now() + PAGE_TURN_PAINT_HOLD_MS;
   clearTimeout(state.timer);
   state.timer = setTimeout(() => {
     state.until = 0;
     for (const listener of state.listeners) listener(false);
-  }, PAGE_TURN_HOLD_MS);
+  }, PAGE_TURN_PAINT_HOLD_MS);
   if (!wasBusy) for (const listener of state.listeners) listener(true);
 }
 
