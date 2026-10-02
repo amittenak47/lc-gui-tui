@@ -10,7 +10,7 @@
  *
  * The mechanics live here rather than in each dialog: a rAF loop drives
  * `--lc-hold` from 0 to 1 over {@link HOLD_MS}, and letting go before the end
- * resets it. The wash clips in from the bottom (liquid rise). Optional
+ * resets it. The liquid wash flows from left to right. Optional
  * {@link HoldButtonProps.onTap} fires on a short release before the fill
  * completes. Keyboard holds (Space / Enter) work the same way, so the gesture
  * is not pointer-only.
@@ -173,9 +173,9 @@ export function HoldButton({
       if (tapFeedback && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
         fillRef.current?.getAnimations?.().forEach((animation) => animation.cancel());
         fillRef.current?.animate?.([
-          { transform: "translateY(100%)", opacity: 1 },
-          { transform: "translateY(-8%)", opacity: 1, offset: 0.65 },
-          { transform: "translateY(-8%)", opacity: 0 },
+          { transform: "translateX(calc(-100% - 10px))", opacity: 1 },
+          { transform: "translateX(0)", opacity: 1, offset: 0.65 },
+          { transform: "translateX(0)", opacity: 0 },
         ], { duration: 360, easing: "ease-out" });
       }
     }

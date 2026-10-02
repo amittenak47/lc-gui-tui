@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { act } from "react";
 
 import { HoldButton } from "./HoldButton";
+import { HOLD_MS, LIBRARY_HOLD_MS, HOLD_SENSITIVE_MS, HOLD_TAP_FILL_DELAY_MS, holdDurationMs } from "../util/gesture";
 
 beforeAll(() => {
   if (!Element.prototype.setPointerCapture) {
@@ -33,6 +34,107 @@ beforeAll(() => {
 });
 
 describe("HoldButton", () => {
+  it.each([
+    ["default", undefined, 233],
+    ["library", LIBRARY_HOLD_MS, 583],
+    ["sensitive", HOLD_SENSITIVE_MS, 466],
+    ["preset chip", holdDurationMs(280), 196],
+    ["session delete", holdDurationMs(1200), 840],
+  ])("confirms a %s hold at its shortened duration", async (_name, holdMs, expectedMs) => {
+    vi.useFakeTimers();
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const confirm = vi.fn(), tap = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<HoldButton label="Test" holdMs={holdMs} onTap={tap} onConfirm={confirm} />));
+      const button = host.querySelector("button")!;
+      await act(async () => button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1 })));
+      now = HOLD_TAP_FILL_DELAY_MS - 1;
+      await act(async () => vi.advanceTimersByTime(now));
+      expect(button.style.getPropertyValue("--lc-hold")).toBe("0");
+      now = expectedMs - 24;
+      await act(async () => vi.advanceTimersByTime(expectedMs));
+      expect(Number(button.style.getPropertyValue("--lc-hold"))).toBeGreaterThan(0);
+      expect(confirm).not.toHaveBeenCalled();
+      now = expectedMs;
+      await act(async () => vi.advanceTimersByTime(32));
+      expect(confirm).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        button.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1 }));
+        button.click();
+      });
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(tap).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      clock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["Enter", " "])("preserves keyboard hold and early-release tap for %s", async (key) => {
+    vi.useFakeTimers();
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const confirm = vi.fn(), tap = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<HoldButton label="Test" onTap={tap} onConfirm={confirm} />));
+      const button = host.querySelector("button")!;
+      await act(async () => button.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key })));
+      now = 50;
+      await act(async () => button.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key })));
+      expect(tap).toHaveBeenCalledTimes(1);
+      expect(confirm).not.toHaveBeenCalled();
+      await act(async () => button.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key })));
+      now += HOLD_MS;
+      await act(async () => vi.advanceTimersByTime(HOLD_MS + 32));
+      await act(async () => button.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key })));
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(tap).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      clock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears an interrupted fill without confirming or tapping", async () => {
+    vi.useFakeTimers();
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const confirm = vi.fn(), tap = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<HoldButton label="Test" onTap={tap} onConfirm={confirm} />));
+      const button = host.querySelector("button")!;
+      await act(async () => button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1 })));
+      now = 150;
+      await act(async () => vi.advanceTimersByTime(150));
+      expect(Number(button.style.getPropertyValue("--lc-hold"))).toBeGreaterThan(0);
+      await act(async () => button.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true, pointerId: 1 })));
+      now = 500;
+      await act(async () => vi.advanceTimersByTime(500));
+      expect(button.style.getPropertyValue("--lc-hold")).toBe("0");
+      expect(confirm).not.toHaveBeenCalled();
+      expect(tap).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      clock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not fire a tap or dismiss an overlay on the click following a completed hold", async () => {
     vi.useFakeTimers();
     let now = 0;

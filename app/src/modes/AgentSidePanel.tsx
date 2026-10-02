@@ -16,7 +16,7 @@ import { HoldButton } from "../components/HoldButton";
 import { AgentPanelSash } from "../components/AgentPanelSash";
 import { AnimatedDisclosure } from "../components/AnimatedDisclosure";
 import { Tip } from "../components/Tip";
-import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS } from "../util/gesture";
+import { LONG_PRESS_MS, SELECT_HOLD_ARM_MS, holdDurationMs } from "../util/gesture";
 import { footnoteChipLabel, type DocFootnote } from "../util/docFootnotes";
 import { assembleAskPrompt, PROBLEM_ASK_CLIP_CHARS } from "./coachMarkContext";
 import {
@@ -2079,7 +2079,7 @@ export function AgentSidePanel({
                     ariaLabel={`${session.title}. Tap to open, hold to delete`}
                     dataTip="Hold to delete"
                     dataTipPlacement="right"
-                    holdMs={1200}
+                    holdMs={holdDurationMs(1200)}
                     disabled={sessionsHidden}
                     onTap={() => openSession(session.id)}
                     onConfirm={() => deleteSession(session.id)}

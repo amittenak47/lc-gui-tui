@@ -51,12 +51,6 @@
 .lc-dialog-frame.lc-whiteboard-dialog .lc-whiteboard-row-copy .lc-muted { font-size: 12px; line-height: 1.4; white-space: normal; }
 .lc-dialog-frame.lc-whiteboard-dialog .lc-hold-reveal > .lc-hold-reveal-label { display: block; width: 100%; }
 
-/* Retain the shared liquid animation, overriding the library's lateral fill. */
-.lc-dialog-frame.lc-whiteboard-dialog .lc-hold-reveal:not(.lc-progress-fill) > .lc-hold-reveal-fill {
-  transform: translateY(calc((1 - var(--lc-hold, 0)) * (100% + 8px)));
-  transform-origin: center bottom;
-  border-radius: 0;
-}
 .lc-dialog-frame.lc-whiteboard-dialog .lc-scratch-load-entry { padding: 12px 24px; }
 .lc-whiteboard-name-hint { margin: 8px 24px; font-size: 12px; }
 .lc-dialog-frame.lc-whiteboard-dialog .lc-md-new-title { margin: 8px 24px; min-width: 0; }

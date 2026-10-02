@@ -15325,10 +15325,10 @@ button.lc-row-selected:hover:not(:disabled) {
     var(--lc-hold-pill-mid) 55%,
     var(--lc-hold-pill-bottom) 100%
   );
-  /* Liquid rise — clip from the top so the wash grows bottom → top. */
+  /* Left-to-right baseline; the shared liquid edge below adds the ripple. */
   transform: none;
-  clip-path: inset(calc((1 - var(--lc-hold, 0)) * 100%) 0 0 0);
-  -webkit-clip-path: inset(calc((1 - var(--lc-hold, 0)) * 100%) 0 0 0);
+  clip-path: inset(0 calc((1 - var(--lc-hold, 0)) * 100%) 0 0);
+  -webkit-clip-path: inset(0 calc((1 - var(--lc-hold, 0)) * 100%) 0 0);
   transition: none;
   pointer-events: none;
 }
@@ -21173,52 +21173,43 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-color-slot-stop { border-radius: 8px; }
 .lc-color-slot-channels label { min-width: 0; }
 
-/* The existing hold clock drives the liquid; the confirmation gesture is unchanged. */
+/* Move the liquid layer rather than resizing it, keeping the wash smooth on touch. */
 .lc-hold-reveal:not(.lc-progress-fill) > .lc-hold-reveal-fill {
   inset: 0;
   width: 100%;
   clip-path: none;
   -webkit-clip-path: none;
-  transform: translateY(calc((1 - var(--lc-hold, 0)) * 112%));
+  transform: translateX(calc((var(--lc-hold, 0) - 1) * (100% + 10px)));
   overflow: visible;
 }
 .lc-hold-reveal:not(.lc-progress-fill) > .lc-hold-reveal-fill::before,
 .lc-hold-reveal:not(.lc-progress-fill) > .lc-hold-reveal-fill::after {
   content: "";
   position: absolute;
-  width: 180%;
-  height: 12px;
-  left: -40%;
-  top: -5px;
+  width: 16px;
+  height: 170%;
+  right: -6px;
+  top: -35%;
   border-radius: 50%;
   background: inherit;
 }
-.lc-hold-reveal[data-filling] > .lc-hold-reveal-fill::before { animation: lc-liquid-wave 650ms ease-in-out infinite alternate; }
-.lc-hold-reveal[data-filling] > .lc-hold-reveal-fill::after { opacity: 0.5; animation: lc-liquid-wave 850ms ease-in-out infinite alternate-reverse; }
-@keyframes lc-liquid-wave { from { transform: translateX(-12%) rotate(-3deg); } to { transform: translateX(12%) rotate(3deg); } }
+.lc-hold-reveal:not(.lc-progress-fill)[data-filling] > .lc-hold-reveal-fill::before { animation: lc-liquid-wave 420ms ease-in-out infinite alternate; }
+.lc-hold-reveal:not(.lc-progress-fill)[data-filling] > .lc-hold-reveal-fill::after { opacity: 0.45; animation: lc-liquid-wave 580ms ease-in-out infinite alternate-reverse; }
+@keyframes lc-liquid-wave {
+  from { transform: translateY(-8%) scaleX(0.65) rotate(-4deg); }
+  to { transform: translateY(8%) scaleX(1.1) rotate(4deg); }
+}
 @media (prefers-reduced-motion: reduce) {
   .lc-hold-reveal > .lc-hold-reveal-fill::before, .lc-hold-reveal > .lc-hold-reveal-fill::after { animation: none !important; }
 }
 
-/* Session delete fills across the chip. The shared liquid wash rises upward. */
+/* Session delete keeps its danger palette with the shared liquid motion. */
 .lc-agent-sessions .lc-hold-reveal.lc-agent-session > .lc-hold-reveal-fill {
-  inset: 0 auto 0 0;
-  width: calc(var(--lc-hold, 0) * 100%);
-  height: 100%;
-  transform: none;
-  clip-path: none;
-  -webkit-clip-path: none;
-  overflow: hidden;
   background: linear-gradient(
     90deg,
     var(--lc-hold-danger-wash-top) 0%,
     var(--lc-hold-danger-wash-bottom) 100%
   );
-}
-
-.lc-agent-sessions .lc-hold-reveal.lc-agent-session > .lc-hold-reveal-fill::before,
-.lc-agent-sessions .lc-hold-reveal.lc-agent-session > .lc-hold-reveal-fill::after {
-  content: none;
 }
 
 /* Chat shares the document's Markdown + Math without its page geometry. */

@@ -5,11 +5,14 @@
  * hinted-solution reveal — keep the longer {@link HOLD_SENSITIVE_MS}.
  */
 
+/** Apply the shared 30% reduction to the original UI hold durations. */
+export const holdDurationMs = (originalMs: number): number => Math.round(originalMs * 0.7);
+
 /** Default hold-to-confirm fill duration. */
-export const HOLD_MS = 333;
+export const HOLD_MS = holdDurationMs(333);
 
 /** Library menu holds leave extra time to cancel. */
-export const LIBRARY_HOLD_MS = HOLD_MS + 500;
+export const LIBRARY_HOLD_MS = holdDurationMs(333 + 500);
 
 /**
  * How long a press with {@link HoldButton} `onTap` stays visually empty.
@@ -18,7 +21,7 @@ export const LIBRARY_HOLD_MS = HOLD_MS + 500;
  * this beat so a click never paints `--lc-hold`. Confirm still lands at
  * {@link HOLD_MS} from pointer down.
  */
-export const HOLD_TAP_FILL_DELAY_MS = 140;
+export const HOLD_TAP_FILL_DELAY_MS = holdDurationMs(140);
 
 /**
  * Second-tap window for rename (tab chips and library rows).
@@ -29,7 +32,7 @@ export const HOLD_TAP_FILL_DELAY_MS = 140;
 export const DOUBLE_TAP_MS = 320;
 
 /** Longer hold for offline / reveal-solution consent. */
-export const HOLD_SENSITIVE_MS = 666;
+export const HOLD_SENSITIVE_MS = holdDurationMs(666);
 
 /**
  * Canvas dwell before the ink-tool wheel opens.

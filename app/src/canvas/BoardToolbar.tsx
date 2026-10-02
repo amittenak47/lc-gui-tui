@@ -31,7 +31,7 @@ import {
   type ShapeModValue,
   type ShapeStamp,
 } from "../templates/shapes";
-import { HOLD_MS, LONG_PRESS_MS, WHEEL_OPEN_MS } from "../util/gesture";
+import { HOLD_MS, LONG_PRESS_MS, WHEEL_OPEN_MS, holdDurationMs } from "../util/gesture";
 import type { InkHandedness } from "../util/inkHandedness";
 import {
   clampToBox,
@@ -1023,7 +1023,7 @@ export function BoardToolbar({
             wheelLocked ? "is-locked" : "",
           ].join(" ")}
           pressed={wheelLocked}
-          holdMs={WHEEL_OPEN_MS}
+          holdMs={holdDurationMs(WHEEL_OPEN_MS)}
           onTap={() => onToggleWheelLock?.()}
           onConfirm={() => onOpenInkWheel?.()}
           style={{

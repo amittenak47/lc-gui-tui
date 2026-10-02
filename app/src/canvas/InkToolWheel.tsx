@@ -551,12 +551,12 @@ export function InkToolWheel({
           overflow="visible"
         >
           <defs>
-            <clipPath id="lc-wedge-hold-clip">
+            <clipPath id="lc-wedge-hold-clip" clipPathUnits="objectBoundingBox">
               <rect
                 x={0}
-                y={WHEEL_R * 2 * (1 - (hold?.t ?? 0))}
-                width={WHEEL_R * 2}
-                height={WHEEL_R * 2 * (hold?.t ?? 0)}
+                y={0}
+                width={hold?.t ?? 0}
+                height={1}
               />
             </clipPath>
           </defs>
