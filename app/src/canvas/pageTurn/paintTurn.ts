@@ -44,6 +44,19 @@ export interface TurnFrame {
   paper: string;
   /** Another sheet is turning underneath; paint only this sheet and its shadow. */
   sheetOnly?: boolean;
+  /**
+   * A softened copy of `to`, at any size. The page being turned to shows
+   * through it at first and comes sharp as the sheet goes over — the eye is
+   * on the turn, not the page, and a preview still at low resolution reads
+   * as out of focus rather than pixelated.
+   */
+  toBlur?: CanvasImageSource | null;
+}
+
+/** How much of the softened page shows over the sharp one at this point of the turn. */
+export function underBlur(progress: number): number {
+  const p = Math.min(1, Math.max(0, progress));
+  return Math.pow(1 - p, 1.4);
 }
 
 /** Rows a sheet held by its side is drawn in: its fold is a curve, sampled this finely. */
@@ -109,7 +122,7 @@ function paintSideFold(ctx: CanvasRenderingContext2D, frame: TurnFrame): number 
   ctx.save();
   tracePolygon(ctx, f.open);
   ctx.clip();
-  if (!frame.sheetOnly) drawSlice(ctx, frame, frame.to, 0, 1, 0, W);
+  if (!frame.sheetOnly) drawUnder(ctx, frame, f.progress, 0, 1, 0, W);
   if (f.progress > 0) {
     // The shadow the lifted sheet casts on it, along the fold row by row.
     const shadow = ctx.createLinearGradient(0, 0, span * 1.6, 0);
@@ -235,6 +248,27 @@ function drawSlice(
   );
 }
 
+/** `frame.to` and, over it, its softened copy as far as the turn still blurs it. */
+function drawUnder(
+  ctx: CanvasRenderingContext2D,
+  frame: TurnFrame,
+  progress: number,
+  sx: number,
+  sw: number,
+  dx: number,
+  dw: number,
+): void {
+  drawSlice(ctx, frame, frame.to, sx, sw, dx, dw);
+  const blur = frame.to && frame.toBlur ? underBlur(progress) : 0;
+  if (blur <= 0.01) return;
+  const soft = frame.toBlur as CanvasImageSource & { width: number; height: number };
+  if (!(soft.width > 0) || !(soft.height > 0)) return;
+  const alpha = ctx.globalAlpha;
+  ctx.globalAlpha = alpha * blur;
+  ctx.drawImage(soft, sx * soft.width, 0, sw * soft.width, soft.height, dx, 0, dw, frame.height);
+  ctx.globalAlpha = alpha;
+}
+
 /** The part of a single sheet still lying flat, in view pixels: the page it is turning away from. */
 export function flatSheet(
   frame: Pick<TurnFrame, "layout" | "width" | "height" | "corner" | "bottom" | "restY">,
@@ -262,7 +296,7 @@ export function paintTurn(ctx: CanvasRenderingContext2D, frame: TurnFrame): numb
     // The next turn supplies the backdrop, with its own page pictures.
   } else if (book) {
     drawSlice(ctx, frame, frame.from, 0, 0.5, 0, spine);
-    drawSlice(ctx, frame, frame.to, 0.5, 0.5, spine, w);
+    drawUnder(ctx, frame, g.progress, 0.5, 0.5, spine, w);
   } else if (!frame.from && flat.length >= 3) {
     // The sheet still lying flat is the live page itself: leave it clear.
     ctx.save();
@@ -271,10 +305,10 @@ export function paintTurn(ctx: CanvasRenderingContext2D, frame: TurnFrame): numb
     flat.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
     ctx.closePath();
     ctx.clip("evenodd");
-    drawSlice(ctx, frame, frame.to, 0, 1, 0, W);
+    drawUnder(ctx, frame, g.progress, 0, 1, 0, W);
     ctx.restore();
   } else {
-    drawSlice(ctx, frame, frame.to, 0, 1, 0, W);
+    drawUnder(ctx, frame, g.progress, 0, 1, 0, W);
   }
 
   ctx.save();
@@ -335,7 +369,7 @@ export function paintTurn(ctx: CanvasRenderingContext2D, frame: TurnFrame): numb
       ctx.save();
       ctx.translate(w, 0);
       ctx.scale(-1, 1);
-      drawSlice(ctx, frame, frame.to, 0, 0.5, 0, w);
+      drawUnder(ctx, frame, g.progress, 0, 0.5, 0, w);
       ctx.restore();
     } else {
       ctx.fillStyle = frame.paper;

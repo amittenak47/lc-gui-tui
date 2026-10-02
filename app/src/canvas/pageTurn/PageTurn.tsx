@@ -391,6 +391,35 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 /** A turn in flight: what is being turned, and the picture of it. */
+/** The softened copy is this share of the picture's size: small is cheap, and scaling it back up softens it further. */
+const SOFT_SCALE = 1 / 5;
+/** Its blur, in the small copy's own pixels. */
+const SOFT_RADIUS_PX = 2;
+const softened = new WeakMap<HTMLCanvasElement, HTMLCanvasElement | null>();
+
+/**
+ * A softened copy of a page picture, for the page coming into view on a turn
+ * (`TurnFrame.toBlur`). Made once per picture: a turn's pictures are never
+ * redrawn in place, a sharper one replaces them, and gets its own.
+ */
+function softenedPicture(picture: HTMLCanvasElement | null): HTMLCanvasElement | null {
+  if (!picture || !(picture.width > 1) || !(picture.height > 1)) return null;
+  const known = softened.get(picture);
+  if (known !== undefined) return known;
+  const copy = document.createElement("canvas");
+  copy.width = Math.max(1, Math.round(picture.width * SOFT_SCALE));
+  copy.height = Math.max(1, Math.round(picture.height * SOFT_SCALE));
+  const ctx = copy.getContext("2d");
+  if (!ctx) {
+    softened.set(picture, null);
+    return null;
+  }
+  ctx.filter = `blur(${SOFT_RADIUS_PX}px)`;
+  ctx.drawImage(picture, 0, 0, copy.width, copy.height);
+  softened.set(picture, copy);
+  return copy;
+}
+
 interface Turn {
   direction: Direction;
   layout: TurnLayout;
@@ -1260,6 +1289,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         restY: turn.restY,
         paper: turnPaperColor(paperColor(), pagedRef.current),
         sheetOnly: turn.sheetOnly,
+        toBlur: softenedPicture(turn.images.to),
       });
       clipUnder(turn);
     };
