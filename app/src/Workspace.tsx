@@ -11370,6 +11370,7 @@ export const Workspace = memo(function Workspace({
                 ) : tab.kind === "home" && !holdBrowseOverlay ? (
                   <HomeChooser
                     active={active && showing}
+                    covered={annotateEntryOpen || whiteboardEntryOpen}
                     tabsRef={tabsRef}
                     onOpenRecent={openRecentWorkspace}
                     busy={busy !== null || boardPreparing || workspaceLoadActive}

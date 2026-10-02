@@ -33,6 +33,8 @@ export interface HomeChooserProps {
   /** Something is already opening; the cards stop taking taps. */
   busy?: boolean;
   active?: boolean;
+  /** An entry dialog covers Home; restore its tiles when that dialog closes. */
+  covered?: boolean;
   tabsRef?: MutableRefObject<TabState>;
   onOpenRecent?: (tab: TabRecord) => void;
 }
@@ -403,11 +405,13 @@ export function HomeChooser({
   onExplore,
   busy = false,
   active = true,
+  covered = false,
   tabsRef,
   onOpenRecent,
 }: HomeChooserProps) {
   const [recent, setRecent] = useState<TabRecord[]>([]);
-  const [entrance, setEntrance] = useState(0);
+  const reduced = useReducedMotion();
+  const visible = active && !covered;
   useEffect(() => {
     if (!active || !onOpenRecent) return;
     const refresh = () => setRecent(visibleRecentWorkspaces(loadRecentWorkspaces(),tabsRef?.current.tabs ?? [])
@@ -619,27 +623,33 @@ export function HomeChooser({
 
   return (
     <nav className="lc-home-chooser lc-home-redesign" aria-label="Choose a workspace" data-home-active={active}>
-      {recent.length > 0 && <section className="lc-home-recents" aria-labelledby="lc-home-recents-title">
+      <section className="lc-home-recents" aria-labelledby="lc-home-recents-title">
         <h2 id="lc-home-recents-title" className="lc-home-section-title">Recently opened</h2>
         <div className="lc-home-recents-window lc-scroll-pane">
-          {recent.map(tab=><button type="button" key={recentWorkspaceKey(tab)} className="lc-home-recent" data-mode={tab.kind === "web" ? "browse" : tab.kind}
+          {recent.map((tab,index)=><motion.button type="button" key={recentWorkspaceKey(tab)} className="lc-home-recent" data-mode={tab.kind === "web" ? "browse" : tab.kind}
+            {...homeTileMotion(visible, !!reduced, Math.min(index,5)*.035)}
             disabled={busy} onClick={()=>onOpenRecent?.(tab)} title={tab.title}>
             <span className="lc-home-recent-preview" aria-hidden="true"><svg viewBox="0 0 40 52" fill="none"><path d="M8 8h24M8 17h24M8 26h24M8 35h24M8 44h18"/><path className="lc-home-recent-mark" d={tab.kind === "whiteboard" ? "M8 31q6-15 12 0t12 0" : "M8 17h18"}/></svg></span>
             <span className="lc-home-recent-text"><strong>{tab.title}</strong><span>{tab.kind === "practice" ? "LeetCode" : tab.kind === "whiteboard" ? "Whiteboard" : tab.kind === "web" ? "Web" : `Annotate · ${tab.kind === "annotate" ? tab.docType === "markdown" ? "Markdown" : tab.docType.toUpperCase() : ""}`}</span></span>
-          </button>)}
+          </motion.button>)}
         </div>
-      </section>}
+      </section>
       <h2 className="lc-home-section-title">Start</h2>
-      <div className="lc-home-chooser-grid" key={entrance}>
+      <div className="lc-home-chooser-grid">
         {modes.map((mode,index) => (
-          <HomeCard key={mode.id} mode={mode} busy={busy} active={active} delay={index*.045}/>
+          <HomeCard key={mode.id} mode={mode} busy={busy} active={visible} delay={index*.045}/>
         ))}
       </div>
-      <button type="button" className="lc-home-replay" disabled={busy} onClick={()=>setEntrance(value=>value+1)}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 8M4 4v6h6"/></svg>Replay entrance
-      </button>
     </nav>
   );
+}
+
+function homeTileMotion(visible: boolean, reduced: boolean, delay: number) {
+  return {
+    initial: reduced ? false as const : {opacity:0,y:18,scale:.97},
+    animate: visible ? {opacity:1,y:0,scale:1} : {opacity:0,y:8,scale:.97},
+    transition: {duration:reduced ? 0 : visible ? .36 : .14,delay:reduced || !visible ? 0 : delay,ease:[.22,1,.36,1] as const},
+  };
 }
 
 /**
@@ -675,8 +685,7 @@ function HomeCard({ mode, busy, active, delay }: { mode: HomeMode; busy: boolean
   }, [scene]);
   return (
     <motion.span className="lc-home-cell" data-mode={mode.id}
-      initial={reduced ? false : {opacity:0,y:12,scale:.985}} animate={{opacity:1,y:0,scale:1}}
-      transition={{duration:reduced ? 0 : .32,delay:reduced ? 0 : delay,ease:[.22,1,.36,1]}}>
+      {...homeTileMotion(active, !!reduced, delay)}>
       <button
         ref={cardRef}
         type="button"

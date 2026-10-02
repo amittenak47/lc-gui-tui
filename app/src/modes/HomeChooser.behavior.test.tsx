@@ -21,7 +21,8 @@ it('opens a recent item through its callback, and removes it when it becomes an 
   await act(async()=>recent.click());expect(p.onOpenRecent).toHaveBeenCalledWith(expect.objectContaining({hash:'earlier',title:'Earlier PDF'}));
   p.tabsRef!.current.tabs.push({...entry,id:'new-tab'});
   await act(async()=>window.dispatchEvent(new Event(RECENT_WORKSPACES_EVENT)));
-  expect(host.querySelector('.lc-home-recents')).toBeNull();
+  expect(host.querySelector('.lc-home-recents')).not.toBeNull();
+  expect(host.querySelectorAll('.lc-home-recent')).toHaveLength(0);
 });
 it('preserves all entry callbacks, including active WIP cards',async()=>{
   const p=props();await act(async()=>root.render(<HomeChooser {...p}/>));
@@ -30,12 +31,12 @@ it('preserves all entry callbacks, including active WIP cards',async()=>{
     if(b){await act(async()=>b.click());expect(handler).toHaveBeenCalledOnce();}
   }
 });
-it('locks entry and recent buttons while busy and replays entrance without opening a workspace',async()=>{
+it('locks entry and recent buttons while busy and enables them when ready',async()=>{
   rememberRecentWorkspace(entry);const p=props();await act(async()=>root.render(<HomeChooser {...p} busy/>));
   expect([...host.querySelectorAll('button')].every(b=>b.disabled)).toBe(true);
   await act(async()=>root.render(<HomeChooser {...p}/>));
-  const oldCard=host.querySelector('.lc-home-card');await act(async()=>host.querySelector<HTMLButtonElement>('.lc-home-replay')!.click());
-  expect(host.querySelector('.lc-home-card')).not.toBe(oldCard);expect(p.onAnnotate).not.toHaveBeenCalled();
+  expect([...host.querySelectorAll('button')].every(b=>!b.disabled)).toBe(true);
+  expect(p.onAnnotate).not.toHaveBeenCalled();
   expect(host.querySelector('.lc-home-recent')).not.toBeNull();
 });
 it('stops the live illustration loops while Home is inactive',async()=>{
