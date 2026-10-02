@@ -909,6 +909,34 @@ const SHEET_DESK_PX = 5;
 const PAGE_FIT_PAINT_MAX = 4;
 /** …and at most this many pixels per page. */
 const PAGE_FIT_PAINT_PIXELS = 6_000_000;
+/**
+ * The board's box on screen as laid out, leaving out its own transform.
+ *
+ * A board fades in on open and on a tab switch, scaled from 0.985 to 1
+ * (`lc-board-in`). Measured during those 200 ms, its box was a shade small
+ * and its corner a few pixels in, and the camera kept both: the page fit
+ * was cut for the smaller box, and everything placed from the camera's
+ * offsets — a page turn's picture of the page — sat 7 px right and 11 px
+ * down of the page itself, for as long as the document stayed open.
+ */
+function boardBoxOf(board: HTMLElement): DOMRect;
+function boardBoxOf(board: HTMLElement | null | undefined): DOMRect | undefined;
+function boardBoxOf(board: HTMLElement | null | undefined): DOMRect | undefined {
+  if (!board) return undefined;
+  const rect = board.getBoundingClientRect();
+  const width = board.offsetWidth, height = board.offsetHeight;
+  if (Math.abs(rect.width - width) < 0.5 && Math.abs(rect.height - height) < 0.5) return rect;
+  const parent = board.offsetParent;
+  if (!(parent instanceof HTMLElement)) return rect;
+  const at = parent.getBoundingClientRect();
+  return new DOMRect(
+    at.left + parent.clientLeft - parent.scrollLeft + board.offsetLeft,
+    at.top + parent.clientTop - parent.scrollTop + board.offsetTop,
+    width,
+    height,
+  );
+}
+
 /** What a pinch hides until its final camera has painted — see styles.css. */
 const READING_ZOOM_HIDDEN = ".lc-page-marks-slot, .lc-scene-overlay, .lc-scene-select";
 
@@ -1724,7 +1752,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   const reflowReadingTextRef = useRef<(() => void) | null>(null);
 
   const boardCssWidth = useCallback(() => {
-    const box = boardRef.current?.getBoundingClientRect();
+    const box = boardBoxOf(boardRef.current);
     if (box && box.width > 8) return Math.round(box.width);
     return typeof window !== "undefined" ? window.innerWidth : 0;
   }, []);
@@ -2923,7 +2951,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
        * is right in a split and right after a resize. Scale is 1 while there is
        * no frame to transform against, so its CSS width is its scene width.
        */
-      const box = boardRef.current?.getBoundingClientRect();
+      const box = boardBoxOf(boardRef.current);
       const fallback = box && box.width > 8 ? Math.round(box.width) : 0;
       if (fallback > 0) {
         setContentSceneWidth((current) =>
@@ -3373,7 +3401,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const api = apiRef.current;
       if (!api) return { scrollX, scrollY };
       const state = api.getAppState() as { width?: number; height?: number };
-      const boardBox = boardRef.current?.getBoundingClientRect();
+      const boardBox = boardBoxOf(boardRef.current);
       const size = liveBoardViewSize(boardBox, state);
       viewWidth = size.viewWidth;
       viewHeight = size.viewHeight;
@@ -6239,7 +6267,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
   }, [mobile]);
 
   const getBoardCenter = useCallback((): { x: number; y: number } => {
-    const rect = boardRef.current?.getBoundingClientRect();
+    const rect = boardBoxOf(boardRef.current);
     if (rect && rect.width > 0 && rect.height > 0) {
       return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     }
@@ -6388,7 +6416,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const boardBox =
           fitted.w >= 8 && fitted.h >= 8
             ? { width: fitted.w, height: fitted.h }
-            : boardRef.current?.getBoundingClientRect();
+            : boardBoxOf(boardRef.current);
         const { viewWidth, viewHeight } = liveBoardViewSize(boardBox, state);
         const clampedScroll = clampScrollToBounds(
           appState.scrollX,
@@ -6833,7 +6861,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         height?: number;
       };
       // Live board box first — appState can still be the previous orientation.
-      const boardBox = boardRef.current?.getBoundingClientRect();
+      const boardBox = boardBoxOf(boardRef.current);
       const { viewWidth, viewHeight } = liveBoardViewSize(boardBox, state);
       if (viewWidth < 1 || viewHeight < 1) return;
 
@@ -7620,7 +7648,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const api = apiRef.current;
       if (!board || !api) return false;
       void board.offsetWidth;
-      const box = board.getBoundingClientRect();
+      const box = boardBoxOf(board);
       const live = liveExcalidrawViewport(box);
       if (!live) return false;
       const prev = lastFittedBoardBoxRef.current;
@@ -7768,6 +7796,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     requestAnimationFrame(() => applyLiveBoxFit(false));
   }, [applyLiveBoxFit]);
 
+  // The fade-in over: whatever measured the board during it, measure again.
+  useEffect(() => {
+    const board = boardRef.current;
+    if (!board) return;
+    const onEnd = (event: AnimationEvent) => {
+      if (event.target === board && event.animationName === "lc-board-in") syncLiveBox();
+    };
+    board.addEventListener("animationend", onEnd);
+    return () => board.removeEventListener("animationend", onEnd);
+  }, [syncLiveBox]);
+
   const remeshLayout = useCallback(() => {
     if (!isDrawPageRegion(mobileRegionRef.current)) {
       syncLiveBox();
@@ -7864,7 +7903,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     let apiWaits = 0;
     const run = (force: boolean, remeshInk = true) => {
       if (boardResizeDeferred()) return;
-      const box = boardRef.current?.getBoundingClientRect();
+      const box = boardBoxOf(boardRef.current);
       const w = Math.round(box?.width ?? 0);
       const h = Math.round(box?.height ?? 0);
       if (w < 8 || h < 8) return;
@@ -7916,7 +7955,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const api = apiRef.current;
       const bounds = pageBoundsRef.current;
       if (!api || !bounds || !board.offsetWidth) return;
-      const box = board.getBoundingClientRect();
+      const box = boardBoxOf(board);
       if (box.width < 8 || box.height < 8) return;
       // Pages use the same centred camera throughout the ease and at settle.
       // A temporary width-fit followed by page-fit moves X and Y in two stages.
@@ -9248,7 +9287,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       const boardBox =
         fitted.w >= 8 && fitted.h >= 8
           ? { width: fitted.w, height: fitted.h }
-          : boardRef.current?.getBoundingClientRect();
+          : boardBoxOf(boardRef.current);
       const { viewWidth, viewHeight } = liveBoardViewSize(boardBox, state);
       const next = clampScrollToBounds(
         scrollX,
@@ -9309,7 +9348,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     const board = boardRef.current;
     if (board) {
-      const box = board.getBoundingClientRect();
+      const box = boardBoxOf(board);
       const live = liveExcalidrawViewport(box);
       if (live) {
         api.updateScene({
@@ -9425,7 +9464,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       offsetTop?: number;
     };
     // The live box: a resize fits before `lastFittedBoardBoxRef` catches up.
-    const { viewWidth, viewHeight } = liveBoardViewSize(boardRef.current?.getBoundingClientRect(), state);
+    const { viewWidth, viewHeight } = liveBoardViewSize(boardBoxOf(boardRef.current), state);
     const inset = measureChromeInsets(
       boardRef.current,
       toolbarHeightRef.current,
@@ -9452,7 +9491,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       ? wrap.querySelector<HTMLElement>(":scope > .lc-pdf-rail")
       : null;
     const stripBottom = strip && boardEl
-      ? Math.max(0, strip.getBoundingClientRect().bottom - boardEl.getBoundingClientRect().top)
+      ? Math.max(0, strip.getBoundingClientRect().bottom - boardBoxOf(boardEl).top)
       : 0;
     let pageTop = inset.top + (availH - h * zoom) / 2;
     if (stripBottom > 0 && pageTop < stripBottom + inset.top) {
@@ -9593,7 +9632,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       offsetLeft?: number;
       offsetTop?: number;
     };
-    const boardBox = boardRef.current?.getBoundingClientRect();
+    const boardBox = boardBoxOf(boardRef.current);
     const { viewWidth, viewHeight } = liveBoardViewSize(boardBox, state);
     const prevLive = liveCameraRef.current;
     const riding = Boolean(prevLive?.live);
@@ -9980,7 +10019,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         const cam = readScrollRef.current();
         const viewport = { x: -cam.scrollX, y: -cam.scrollY, width: (state?.width ?? 0) / cam.zoom, height: (state?.height ?? 0) / cam.zoom };
         const root = contentSlotNodeRef.current;
-        const boardBox = boardRef.current?.getBoundingClientRect();
+        const boardBox = boardBoxOf(boardRef.current);
         const pages = [...peekPdfIntersectingPages(filmScope)];
         const blocks = root ? Array.from(root.querySelectorAll<HTMLElement>(
           pdfDocumentRef.current ? ".lc-pdf-text" : "p, pre, li, h1, h2, h3, h4, blockquote, td",
@@ -11556,7 +11595,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         >
           <div className="lc-capture-hint">Drag a rectangle to capture · Esc cancels</div>
           {captureRegion && (() => {
-            const board = boardRef.current?.getBoundingClientRect();
+            const board = boardBoxOf(boardRef.current);
             if (!board) return null;
             const left = Math.min(captureRegion.originX, captureRegion.currentX) - board.left;
             const top = Math.min(captureRegion.originY, captureRegion.currentY) - board.top;
