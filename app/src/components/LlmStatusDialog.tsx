@@ -40,7 +40,7 @@ export function LlmStatusDialog({
         .join(" ")}
       role="presentation"
     >
-      <LoadingDoodle />
+      <LoadingDoodle nativeInput nativeExclude=".lc-server-gate-modal button, .lc-server-gate-modal .lc-hold-reveal" />
       <div
         className="lc-settings-modal lc-attempt-modal lc-server-gate-modal lc-library-holds"
         role="dialog"

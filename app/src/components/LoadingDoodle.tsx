@@ -81,12 +81,18 @@ export function LoadingDoodle({
   className,
   themeId,
   nativeInput = false,
+  nativeExclude,
 }: {
   className?: string;
   /** App theme — defaults to stored theme when omitted (status dialogs). */
   themeId?: string;
   /** Draw from the system's pen samples where the platform allows — see above. */
   nativeInput?: boolean;
+  /**
+   * Controls over the doodle (a selector within its parent): a touch that
+   * starts on one goes to the page as ever, not to the native pen.
+   */
+  nativeExclude?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const nativeRef = useRef<HTMLCanvasElement | null>(null);
@@ -221,12 +227,20 @@ export function LoadingDoodle({
     let timer = 0;
     let last = "";
 
+    const box = (r: DOMRect) => ({ left: r.left, top: r.top, width: r.width, height: r.height });
     const place = () => {
       const rect = canvas.getBoundingClientRect();
-      // A dialog over the doodle takes its own touches: let them through.
-      const enabled = rect.width > 1 && rect.height > 1 && !document.querySelector('[aria-modal="true"]');
+      const host = canvas.parentElement;
+      // A dialog over the doodle takes its own touches: let them through. A
+      // dialog the doodle belongs to is its own, and its controls are holes.
+      const modals = [...document.querySelectorAll('[aria-modal="true"]')];
+      const enabled = rect.width > 1 && rect.height > 1 && modals.every((modal) => host?.contains(modal));
+      const holes = nativeExclude && host
+        ? [...host.querySelectorAll(nativeExclude)].map((el) => box(el.getBoundingClientRect()))
+        : [];
       return {
-        rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+        rect: box(rect),
+        holes,
         dpr: window.devicePixelRatio || 1,
         scale: bitmapScale(),
         enabled,
@@ -276,7 +290,7 @@ export function LoadingDoodle({
       }
       endLoadingDoodle(token);
     };
-  }, [native]);
+  }, [native, nativeExclude]);
 
   return (
     <>

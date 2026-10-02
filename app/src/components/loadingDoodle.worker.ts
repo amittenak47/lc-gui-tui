@@ -26,6 +26,8 @@ interface Doodle {
   id: number;
   engine: DoodleEngine;
   rect: Rect;
+  /** Controls over the doodle, whose touches stay with the page. */
+  holes: Rect[];
   /** CSS px → the device pixels Android reports. */
   dpr: number;
   /** The bitmap's scale, as on the page (the pixel ratio, at most 2). */
@@ -41,12 +43,13 @@ type FromPage =
       canvas: OffscreenCanvas;
       ink: DoodleInk;
       rect: Rect;
+      holes: Rect[];
       dpr: number;
       scale: number;
       enabled: boolean;
     }
   | { type: "ink"; id: number; ink: DoodleInk }
-  | { type: "place"; id: number; rect: Rect; dpr: number; scale: number; enabled: boolean }
+  | { type: "place"; id: number; rect: Rect; holes: Rect[]; dpr: number; scale: number; enabled: boolean }
   | { type: "detach"; id: number };
 
 /** Android forgets the doodles if not told again within this long. */
@@ -60,16 +63,19 @@ let active: Doodle | null = null;
 let activeTool = "touch";
 let refresh: ReturnType<typeof setInterval> | null = null;
 
+const devicePx = ({ left, top, width, height }: Rect, k: number): string =>
+  [left * k, top * k, (left + width) * k, (top + height) * k].map((n) => n.toFixed(1)).join(",");
+
 function sendRegions(): void {
   if (!port) return;
   const rects: string[] = [];
+  const holes: string[] = [];
   for (const doodle of doodles.values()) {
     if (!doodle.enabled) continue;
-    const { left, top, width, height } = doodle.rect;
-    const k = doodle.dpr;
-    rects.push([left * k, top * k, (left + width) * k, (top + height) * k].map((n) => n.toFixed(1)).join(","));
+    rects.push(devicePx(doodle.rect, doodle.dpr));
+    for (const hole of doodle.holes) holes.push(devicePx(hole, doodle.dpr));
   }
-  port.postMessage(`r|${rects.join(";")}|${REGION_TTL_MS}`);
+  port.postMessage(`r|${rects.join(";")}|${REGION_TTL_MS}|${holes.join(";")}`);
   if (rects.length > 0 && refresh == null) refresh = setInterval(sendRegions, REGION_REFRESH_MS);
   if (rects.length === 0 && refresh != null) {
     clearInterval(refresh);
@@ -149,7 +155,7 @@ scope.onmessage = (event: MessageEvent<FromPage>) => {
     );
     if (!engine) return;
     engine.resize(msg.rect.width, msg.rect.height, msg.scale);
-    doodles.set(id, { id, engine, rect: msg.rect, dpr: msg.dpr, scale: msg.scale, enabled: msg.enabled });
+    doodles.set(id, { id, engine, rect: msg.rect, holes: msg.holes, dpr: msg.dpr, scale: msg.scale, enabled: msg.enabled });
     sendRegions();
     return;
   }
@@ -161,12 +167,14 @@ scope.onmessage = (event: MessageEvent<FromPage>) => {
     const moved = msg.rect.width !== doodle.rect.width || msg.rect.height !== doodle.rect.height || msg.scale !== doodle.scale;
     const changed = moved || msg.dpr !== doodle.dpr || msg.rect.left !== doodle.rect.left ||
       msg.rect.top !== doodle.rect.top || msg.enabled !== doodle.enabled;
+    const holesMoved = JSON.stringify(msg.holes) !== JSON.stringify(doodle.holes);
     doodle.rect = msg.rect;
+    doodle.holes = msg.holes;
     doodle.dpr = msg.dpr;
     doodle.scale = msg.scale;
     doodle.enabled = msg.enabled;
     if (moved) doodle.engine.resize(msg.rect.width, msg.rect.height, msg.scale);
-    if (changed) sendRegions();
+    if (changed || holesMoved) sendRegions();
   } else if (msg.type === "detach") {
     if (active === doodle) active = null;
     doodle.engine.dispose();

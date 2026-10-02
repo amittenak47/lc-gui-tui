@@ -40,6 +40,8 @@ internal class DoodleRelay(private val activity: Activity, private val findWebVi
 
     /** l, t, r, b in device px from the WebView's top-left, repeated. */
     private var regions = FloatArray(0)
+    /** Controls over a doodle, in the same form: a touch starting on one is the page's. */
+    private var holes = FloatArray(0)
     private var regionsUntil = 0L
 
     private var capturing = false
@@ -72,14 +74,28 @@ internal class DoodleRelay(private val activity: Activity, private val findWebVi
         return true
     }
 
-    /** `r|l,t,r,b;…|ttl` from the worker. */
+    /** `r|l,t,r,b;…|ttl|l,t,r,b;…` from the worker: doodles, their time to live, their controls. */
     private fun onRegions(text: String) {
         val parts = text.split("|")
         if (parts.size < 3 || parts[0] != "r") return
-        val values = parts[1].split(";").filter { it.isNotEmpty() }
-            .flatMap { rect -> rect.split(",").mapNotNull { it.toFloatOrNull() } }
-        regions = if (values.size % 4 == 0) values.toFloatArray() else FloatArray(0)
+        regions = rects(parts[1])
+        holes = if (parts.size > 3) rects(parts[3]) else FloatArray(0)
         regionsUntil = SystemClock.uptimeMillis() + (parts[2].toLongOrNull() ?: 0L)
+    }
+
+    private fun rects(text: String): FloatArray {
+        val values = text.split(";").filter { it.isNotEmpty() }
+            .flatMap { rect -> rect.split(",").mapNotNull { it.toFloatOrNull() } }
+        return if (values.size % 4 == 0) values.toFloatArray() else FloatArray(0)
+    }
+
+    private fun within(r: FloatArray, x: Float, y: Float): Boolean {
+        var i = 0
+        while (i + 3 < r.size) {
+            if (x >= r[i] && x <= r[i + 2] && y >= r[i + 1] && y <= r[i + 3]) return true
+            i += 4
+        }
+        return false
     }
 
     /** Ahead of everything in the window, so a touch is ours before the WebView's. */
@@ -98,13 +114,7 @@ internal class DoodleRelay(private val activity: Activity, private val findWebVi
 
     private fun inRegion(x: Float, y: Float): Boolean {
         if (SystemClock.uptimeMillis() > regionsUntil) return false
-        val r = regions
-        var i = 0
-        while (i + 3 < r.size) {
-            if (x >= r[i] && x <= r[i + 2] && y >= r[i + 1] && y <= r[i + 3]) return true
-            i += 4
-        }
-        return false
+        return within(regions, x, y) && !within(holes, x, y)
     }
 
     /** Whether the touch is the doodle's; if so it has been sent and the WebView never sees it. */
