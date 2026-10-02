@@ -27,9 +27,24 @@ export function dockStrip(height: number): string {
   return `${Math.ceil(height)}px`;
 }
 
+/** The strip the dock needs now, for a live pane that mounts after it was measured. */
+let current = "";
+
+/** Give a live pane the dock's strip — when it mounts, and whenever the dock changes. */
+export function applyDockStrip(pane: HTMLElement): void {
+  if (current) pane.style.setProperty(DOCK_STRIP_VAR, current);
+  else pane.style.removeProperty(DOCK_STRIP_VAR);
+}
+
 /**
  * Keep {@link DOCK_STRIP_VAR} matched to `node`'s height for as long as it is
  * mounted, and clear it afterwards.
+ *
+ * Written on the live panes that read it, not on the document: a custom
+ * property changed on `<html>` restyles every element in the app, and the
+ * dock changes height each time the pen toolbar opens or closes — half a
+ * second of a tablet on a long PDF, for a variable only a live web page
+ * reads. `root` overrides where it goes (tests).
  *
  * Returns a disposer, so this can be a React 19 callback ref straight from the
  * element that *is* the dock — no second lookup, and no stale value left behind
@@ -40,15 +55,20 @@ export function trackDockStrip(
   root?: HTMLElement,
 ): (() => void) | undefined {
   if (!node) return undefined;
-  const target = root ?? node.ownerDocument.documentElement;
+  const targets = () =>
+    root ? [root] : Array.from(node.ownerDocument.querySelectorAll<HTMLElement>(".lc-live-web-pane"));
   const publish = () => {
-    target.style.setProperty(DOCK_STRIP_VAR, dockStrip(node.getBoundingClientRect().height));
+    const next = dockStrip(node.getBoundingClientRect().height);
+    if (!root && next === current) return;
+    current = next;
+    for (const target of targets()) target.style.setProperty(DOCK_STRIP_VAR, next);
   };
   publish();
   const observer = typeof ResizeObserver === "function" ? new ResizeObserver(publish) : null;
   observer?.observe(node);
   return () => {
     observer?.disconnect();
-    target.style.removeProperty(DOCK_STRIP_VAR);
+    current = "";
+    for (const target of targets()) target.style.removeProperty(DOCK_STRIP_VAR);
   };
 }

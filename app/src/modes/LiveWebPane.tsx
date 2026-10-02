@@ -19,6 +19,7 @@
  * and the two are separate states for exactly this reason.
  */
 
+import { applyDockStrip } from "../canvas/liveDockStrip";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -228,6 +229,11 @@ export function LiveWebPane({
    */
   const [overlay, setOverlay] = useState(false);
   useEffect(() => watchScreenOverlay(setOverlay), []);
+
+  // The strip the board's dock already asked for, if it was measured first.
+  useEffect(() => {
+    if (holeRef.current) applyDockStrip(holeRef.current);
+  }, []);
 
   useEffect(() => {
     void showLiveWebview(label, visible && !overlay);
