@@ -5,7 +5,6 @@ import { ARTIFACTS_CHANGED, artifactRef, createArtifact, mutateArtifacts, readAr
 import { buildWhiteboardTemplate } from "../templates/whiteboard";
 import { buildAnnotateTemplate } from "../templates/annotate";
 import { convertToExcalidrawElements } from "../canvas/convertSkeletons";
-import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DialogFrame, type DialogShape } from "../components/DialogFrame";
 import { HoldButton } from "../components/HoldButton";
 import { Tip } from "../components/Tip";
@@ -100,29 +99,8 @@ function coversAssociations(item: PadArtifact, associations: ArtifactAssociation
   return associations.every((entry) => have.has(associationKey(entry)));
 }
 
-function pickerCopy(scope: ArtifactPickerScope): string {
-  if (scope === "message") {
-    return "Pin a catalog item onto this turn, or create a new whiteboard, note, or code as a reference.";
-  }
-  if (scope === "footnote") {
-    return "Pin catalog items onto these footnotes. The same item can sit on several without copying it.";
-  }
-  return "";
-}
-
 function kindLabel(kind: ArtifactKind): string {
   return artifactKindLabel(kind);
-}
-
-function statusLabel(item: PadArtifact, attached: boolean, scope: ArtifactPickerScope): string {
-  if (item.deletedAt !== undefined) return "Trash";
-  if (attached) {
-    if (scope === "message") return "On this turn";
-    if (scope === "footnote") return "On these footnotes";
-    return "On this thread";
-  }
-  if (!item.associations.length) return "Unfiled";
-  return "";
 }
 
 function reducedMotion(): boolean {
@@ -192,6 +170,42 @@ function RestoreGlyph() {
   );
 }
 
+function ArtifactTrashConfirm({ item, shape, pending, error, onConfirm, onCancel }: {
+  item: PadArtifact;
+  shape?: DialogShape;
+  pending: boolean;
+  error: string | null;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const down = useRef(false);
+  const cancel = useRef<HTMLButtonElement>(null);
+  useEffect(() => { cancel.current?.focus(); }, []);
+  return (
+    <div className="lc-settings-backdrop lc-artifact-confirm-backdrop lc-server-gate-enter" role="presentation"
+      onPointerDown={event => { down.current = event.target === event.currentTarget; }}
+      onPointerCancel={() => { down.current = false; }}
+      onClick={event => {
+        const started = down.current;
+        down.current = false;
+        if (!pending && shouldDismissBackdrop(started, event.target, event.currentTarget)) onCancel();
+      }}>
+      <DialogFrame className="lc-artifact-confirm-modal" titleId="lc-artifact-confirm-title"
+        title="Remove this attachment?" subtitle="Catalog" icon={<AttachmentIcon />} mode="explore" shape={shape}>
+        <div className="lc-dialog-body">
+          <p className="lc-artifact-confirm-item">{item.title}</p>
+          {error && <p role="alert">{error}</p>}
+        </div>
+        <div className="lc-settings-foot lc-dialog-foot">
+          <button ref={cancel} type="button" className="lc-secondary lc-dialog-action" disabled={pending} onClick={onCancel}>Cancel</button>
+          <HoldButton label="Delete" ariaLabel="Hold to confirm: Delete" className="lc-dialog-action lc-artifact-confirm-delete"
+            disabled={pending} resetKey={error} onConfirm={onConfirm} />
+        </div>
+      </DialogFrame>
+    </div>
+  );
+}
+
 export function ArtifactPicker({
   shape,
   parent,
@@ -222,6 +236,8 @@ export function ArtifactPicker({
   const [lockTick, setLockTick] = useState(0);
   const { tapArmed, arm } = useLibraryDeleteArm();
   const running = useRef(false);
+  const mounted = useRef(false);
+  const operation = useRef(0);
   const backdropDown = useRef(false);
   const afterClose = useRef<(() => void) | undefined>(undefined);
   const onCloseRef = useRef(onClose);
@@ -235,12 +251,16 @@ export function ArtifactPicker({
     .catch((cause) => setError(String(cause)))
     .finally(() => setLoaded(true));
   useEffect(() => {
+    mounted.current = true;
     const active = document.activeElement;
     if (active instanceof HTMLElement) active.blur();
     void refresh();
     const listener = () => { void refresh(); };
     window.addEventListener(ARTIFACTS_CHANGED, listener);
-    return () => window.removeEventListener(ARTIFACTS_CHANGED, listener);
+    return () => {
+      mounted.current = false;
+      window.removeEventListener(ARTIFACTS_CHANGED, listener);
+    };
   }, [parent.kind, parent.id]);
 
   const requestClose = (after?: () => void) => {
@@ -268,7 +288,11 @@ export function ArtifactPicker({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (pendingTrash) return;
+      if (busy) return;
+      if (pendingTrash) {
+        setPendingTrash(null);
+        return;
+      }
       if (fnOpen) {
         setFnOpen(false);
         return;
@@ -277,7 +301,7 @@ export function ArtifactPicker({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [fnOpen, pendingTrash]);
+  }, [fnOpen, pendingTrash, busy]);
 
   useEffect(() => {
     if (!fnOpen) return;
@@ -310,16 +334,24 @@ export function ArtifactPicker({
   };
 
   const run = async (action: () => Promise<void>) => {
-    if (running.current) return;
+    if (running.current) return false;
+    const currentOperation = ++operation.current;
     running.current = true;
     setBusy(true);
     setError(null);
     try {
       await action();
-      await refresh();
-      await syncArtifactParent(client, parent);
+      setCatalog(await readArtifactCatalog(parent));
+      setLoaded(true);
+      // Local persistence completes the interaction. The existing sync queue may
+      // wait on a large pad upload or an offline server; it must not lock the UI.
+      void Promise.resolve().then(() => syncArtifactParent(client, parent)).catch(cause => {
+        if (mounted.current && operation.current === currentOperation) setError(String(cause));
+      });
+      return true;
     } catch (cause) {
       setError(String(cause));
+      return false;
     } finally {
       running.current = false;
       setBusy(false);
@@ -377,8 +409,7 @@ export function ArtifactPicker({
     });
 
   const confirmTrash = async (item: PadArtifact) => {
-    await applyLifecycle(item, "delete");
-    setPendingTrash(null);
+    if (await applyLifecycle(item, "delete")) setPendingTrash(null);
   };
 
   return createPortal(
@@ -393,23 +424,22 @@ export function ArtifactPicker({
         onPointerDown={(event) => {
           backdropDown.current = event.target === event.currentTarget;
         }}
+        onPointerCancel={() => { backdropDown.current = false; }}
         onClick={(event) => {
           const startedOnBackdrop = backdropDown.current;
           backdropDown.current = false;
-          if (shouldDismissBackdrop(startedOnBackdrop, event.target, event.currentTarget)) requestClose();
+          if (!busy && !pendingTrash && shouldDismissBackdrop(startedOnBackdrop, event.target, event.currentTarget)) requestClose();
         }}
       >
         <DialogFrame
           className="lc-artifact-picker-modal"
           titleId="lc-artifact-picker-title"
           title="Attachments"
-          subtitle={scope === "message" ? "Catalog · this turn" : scope === "footnote" ? "Catalog · footnotes" : "Catalog"}
-          description={pickerCopy(scope)}
+          subtitle="Catalog"
           icon={<AttachmentIcon />}
           mode="explore"
           shape={shape}
-          onClose={() => requestClose()}
-          closeDisabled={busy && !exiting}
+          inert={!!pendingTrash}
         >
           <div className="lc-dialog-context">
             <form
@@ -432,6 +462,7 @@ export function ArtifactPicker({
                       aria-label="Footnotes"
                       aria-haspopup="menu"
                       aria-expanded={fnOpen}
+                      disabled={busy}
                       onClick={openFootnotes}
                     >
                       <FootnotesIcon />
@@ -451,6 +482,7 @@ export function ArtifactPicker({
                         ariaLabel={label}
                         className={`lc-artifact-picker-adorn lc-hold-icon${createKind === next ? " is-active" : ""}${filterKind === next ? " is-filter" : ""}`}
                         pressed={createKind === next}
+                        disabled={busy}
                         holdThrough
                         onTap={() => setCreateKind((current) => (current === next ? null : next))}
                         onConfirm={() => setFilterKind((current) => (current === next ? null : next))}
@@ -466,6 +498,7 @@ export function ArtifactPicker({
                 aria-label="Search catalog or name a new attachment"
                 placeholder="Search or create…"
                 value={query}
+                disabled={busy}
                 onChange={(event) => setQuery(event.target.value)}
               />
               <button
@@ -495,7 +528,6 @@ export function ArtifactPicker({
           <div className="lc-dialog-body">
             <div className="lc-artifact-picker-catalog">
               {error && <p role="alert">{error}</p>}
-              {source !== "saved" && <p className="lc-artifact-picker-empty">Attach a read-only excerpt. The source stays unchanged.</p>}
               {source === "saved" && loaded && !catalog?.artifacts.length && <p className="lc-artifact-picker-empty">No saved attachments yet.</p>}
               {source === "saved" && loaded && (catalog?.artifacts.length ?? 0) > 0 && !visible.length && (
                 <p className="lc-artifact-picker-empty">No matching attachments.</p>
@@ -511,7 +543,6 @@ export function ArtifactPicker({
                         <ArtifactKindIcon kind={row.kind} className="lc-artifact-picker-adorn-icon" />
                       </span>
                       <span className="lc-artifact-picker-row-title">{row.title}</span>
-                      <span className="lc-artifact-picker-status">Read-only</span>
                       <div className="lc-artifact-picker-reference-end">
                         <span className="lc-artifact-picker-unit">{row.unit}</span>
                         <NumberWheel
@@ -545,7 +576,6 @@ export function ArtifactPicker({
                 {source === "saved" && visible.map((item) => {
                   const ref = artifactRef(parent, item);
                   const attached = coversAssociations(item, filingNow);
-                  const status = statusLabel(item, attached, scope);
                   const trashed = item.deletedAt !== undefined;
                   const locked = lockTick >= 0 && isArtifactLocked(parent, item.id);
                   return (
@@ -555,9 +585,9 @@ export function ArtifactPicker({
                           <ArtifactKindIcon kind={item.content.kind} className="lc-artifact-picker-adorn-icon" />
                         </span>
                         <span className="lc-artifact-picker-row-title">{item.title}</span>
-                        {status ? <span className="lc-artifact-picker-status">{status}</span> : null}
                       </div>
                       <div className="lc-artifact-picker-row-actions">
+                        {trashed && <span className="lc-artifact-picker-status">TRASH</span>}
                         {!trashed && (
                           <>
                             <button type="button" className="lc-secondary lc-dialog-action" disabled={busy} onClick={() => requestClose(() => onOpen(ref))}>
@@ -625,7 +655,11 @@ export function ArtifactPicker({
                                 onTap={tapArmed ? () => void confirmTrash(item) : undefined}
                                 onConfirm={() => {
                                   if (tapArmed) void confirmTrash(item);
-                                  else setPendingTrash(item);
+                                  else {
+                                    setFnOpen(false);
+                                    setError(null);
+                                    setPendingTrash(item);
+                                  }
                                 }}
                                 resetKey={error}
                               >
@@ -659,27 +693,14 @@ export function ArtifactPicker({
             </div>
           </div>
           <div className="lc-settings-foot lc-dialog-foot">
-            <span className="lc-dialog-meta lc-dialog-hint">
-              {busy ? "Working…" : source === "saved" ? "Tap to choose · hold to filter" : "Read-only excerpts"}
-            </span>
             <button type="button" className="lc-secondary lc-dialog-action" disabled={busy && !exiting} onClick={() => requestClose()}>
               Close
             </button>
           </div>
         </DialogFrame>
-        {pendingTrash && (
-          <ConfirmDialog
-            title="Remove this attachment?"
-            message="It leaves the live catalog."
-            detail="Existing cards keep their links. Restore it from this list."
-            confirmLabel="Delete"
-            pending={busy}
-            error={error}
-            onConfirm={() => void confirmTrash(pendingTrash)}
-            onCancel={() => setPendingTrash(null)}
-          />
-        )}
       </div>
+      {pendingTrash && <ArtifactTrashConfirm item={pendingTrash} shape={shape} pending={busy} error={error}
+        onConfirm={() => void confirmTrash(pendingTrash)} onCancel={() => setPendingTrash(null)} />}
       {fnOpen && fnPos && (
         <div
           ref={fnMenuRef}

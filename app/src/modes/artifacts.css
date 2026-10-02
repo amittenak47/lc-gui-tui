@@ -182,14 +182,10 @@
   z-index: 11000;
 }
 
-.lc-artifact-picker-backdrop .lc-modal-backdrop {
-  z-index: 1;
-}
-
-.lc-artifact-picker-modal {
-  width: min(420px, 100%);
-  max-height: min(70vh, 480px);
-  max-height: min(70dvh, 480px);
+.lc-settings-modal.lc-artifact-picker-modal {
+  width: min(560px, 100%);
+  max-height: min(80vh, 560px);
+  max-height: min(80dvh, 560px);
   animation: lc-board-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -445,7 +441,6 @@
   font-size: 12px;
 }
 
-.lc-artifact-picker-row.is-trashed .lc-artifact-picker-row-title,
 .lc-artifact-picker-row.is-trashed .lc-artifact-picker-status {
   color: var(--muted);
 }
@@ -655,7 +650,7 @@
   border-color: var(--lc-dialog-line);
   border-radius: var(--lc-dialog-control-radius);
   background: var(--panel);
-  min-height: 36px;
+  min-height: 42px;
 }
 
 .lc-dialog-frame .lc-artifact-picker-compose:focus-within { border-color: var(--accent); }
@@ -695,31 +690,43 @@
 .lc-dialog-frame .lc-artifact-picker-list { overflow: visible; }
 .lc-dialog-frame .lc-artifact-picker-row {
   flex-wrap: wrap;
-  padding: 10px 0;
+  padding: 14px 0;
   border-bottom-color: var(--lc-dialog-line);
 }
 
 .lc-dialog-frame .lc-artifact-picker-row-main {
   flex: 1 1 160px;
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  column-gap: 8px;
-  row-gap: 3px;
+  display: flex;
+  gap: 12px;
 }
 
-.lc-dialog-frame .lc-artifact-picker-row-main .lc-artifact-picker-status { grid-column: 2; }
 .lc-dialog-frame .lc-artifact-picker-row-actions { flex-wrap: wrap; margin-inline-start: auto; }
+.lc-dialog-frame .lc-artifact-picker-row-title { font-size: 14px; }
+.lc-dialog-frame .lc-artifact-picker-row-actions .lc-artifact-picker-status { margin-inline-end: 12px; }
+.lc-dialog-frame .lc-artifact-picker-reference-row { grid-template-columns: 18px minmax(0, 1fr) auto; }
+.lc-artifact-picker-modal .lc-dialog-foot { justify-content: flex-end; }
+.lc-dialog-frame.lc-artifact-picker-modal .lc-dialog-foot button {
+  border-color: var(--lc-dialog-line);
+  color: var(--ink);
+  min-width: 76px;
+}
+.lc-artifact-picker-modal .lc-artifact-picker-adorn-icon,
+.lc-artifact-picker-modal .lc-artifact-picker-submit-icon,
+.lc-artifact-picker-modal .lc-artifact-picker-restore svg { width: 16px; height: 16px; }
+.lc-dialog-frame.lc-artifact-picker-modal button.lc-artifact-picker-source { height: 36px; min-height: 36px; font-size: 13px; }
+.lc-artifact-confirm-backdrop { z-index: 11002; }
+.lc-settings-modal.lc-artifact-confirm-modal { width: min(420px, 100%); }
+.lc-artifact-confirm-item { margin: 8px 0; overflow-wrap: anywhere; }
+.lc-artifact-confirm-modal .lc-dialog-foot { justify-content: flex-end; }
+.lc-artifact-confirm-delete .lc-hold-reveal-fill {
+  background: linear-gradient(180deg, var(--lc-hold-danger-wash-top), var(--lc-hold-danger-wash-bottom));
+}
 
 @media (max-width: 480px) {
   .lc-dialog-frame .lc-artifact-picker-reference-row {
     grid-template-columns: 18px minmax(0, 1fr) auto;
   }
-  .lc-dialog-frame .lc-artifact-picker-reference-row .lc-artifact-picker-status {
-    grid-column: 2;
-    grid-row: 2;
-    justify-self: start;
-  }
-  .lc-dialog-frame .lc-artifact-picker-reference-end { grid-column: 3; grid-row: 1 / span 2; }
+  .lc-dialog-frame .lc-artifact-picker-reference-end { grid-column: 3; }
 }
 
 @media (pointer: coarse) {
@@ -739,5 +746,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lc-settings-backdrop.lc-artifact-picker-backdrop { animation: none; transition: none; }
+  .lc-settings-backdrop.lc-artifact-picker-backdrop,
+  .lc-settings-backdrop.lc-artifact-confirm-backdrop,
+  .lc-settings-modal.lc-dialog-frame.lc-artifact-picker-modal,
+  .lc-settings-modal.lc-dialog-frame.lc-artifact-confirm-modal { animation: none; transition: none; }
 }

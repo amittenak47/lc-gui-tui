@@ -310,7 +310,7 @@ export function HoldButton({
       onPointerDown={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        const scroller = (event.currentTarget as HTMLElement).closest(".lc-library-menu .lc-settings-body");
+        const scroller = (event.currentTarget as HTMLElement).closest(".lc-library-menu .lc-settings-body, .lc-dialog-frame .lc-dialog-body");
         scrollRef.current = scroller instanceof HTMLElement
           ? {
               scroller,

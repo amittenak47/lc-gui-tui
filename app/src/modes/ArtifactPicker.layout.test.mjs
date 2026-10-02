@@ -12,8 +12,8 @@ describe("attachment picker chrome", () => {
     expect(picker).toContain("lc-server-gate-enter");
     expect(picker).toContain("lc-leave-dialog-exit");
     expect(picker).toContain("lc-artifact-picker-modal");
-    expect(css).toContain("width: min(420px, 100%)");
-    expect(css).toContain("max-height: min(70vh, 480px)");
+    expect(css).toContain("width: min(560px, 100%)");
+    expect(css).toContain("max-height: min(80vh, 560px)");
     expect(css).toContain("animation: lc-board-in");
     expect(css).not.toContain("inset: 12vh");
     expect(styles).toContain(".lc-artifact-picker-modal");
@@ -46,7 +46,7 @@ describe("attachment picker chrome", () => {
     expect(picker).toContain("HoldButton");
     expect(picker).toContain("is-filter");
     expect(picker).toContain("tap to create, hold to filter");
-    expect(picker).toContain("ConfirmDialog");
+    expect(picker).toContain("ArtifactTrashConfirm");
     expect(picker).toContain("LibraryPadlock");
     expect(picker).toContain("useLibraryDeleteArm");
     expect(picker).not.toContain("window.confirm");

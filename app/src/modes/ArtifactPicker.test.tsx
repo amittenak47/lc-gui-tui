@@ -12,6 +12,7 @@ const repo = vi.hoisted(() => ({
   mutateArtifacts: vi.fn(),
 }));
 const sources = vi.hoisted(() => ({ capture: vi.fn() }));
+const syncParent = vi.hoisted(() => vi.fn());
 vi.mock("../util/annotateStore", () => ({ listAnnotateDocs: () => [{ id: "book", name: "Book.pdf", docType: "pdf" }], annotateDocLabel: () => "Book.pdf" }));
 vi.mock("../util/artifactReferenceSources", async importOriginal => ({
   ...await importOriginal<typeof import("../util/artifactReferenceSources")>(), captureLibraryReference: sources.capture,
@@ -24,7 +25,7 @@ vi.mock("../theme/appThemes", () => ({ isDarkTheme: () => true }));
 vi.mock("../templates/whiteboard", () => ({ buildWhiteboardTemplate: () => [] }));
 vi.mock("../templates/annotate", () => ({ buildAnnotateTemplate: () => [] }));
 vi.mock("../canvas/convertSkeletons", () => ({ convertToExcalidrawElements: () => [] }));
-vi.mock("../util/artifactSync", () => ({ syncArtifactParent: async () => {} }));
+vi.mock("../util/artifactSync", () => ({ syncArtifactParent: syncParent }));
 vi.mock("../util/artifactRepository", () => ({
   ARTIFACTS_CHANGED: "lc-artifacts-changed",
   readArtifactCatalog: async () => catalog.current,
@@ -90,6 +91,7 @@ beforeEach(() => {
   repo.createArtifact.mockReset();
   repo.mutateArtifacts.mockReset();
   sources.capture.mockReset();
+  syncParent.mockReset().mockResolvedValue(undefined);
   resetLibraryDeleteArmForTests();
   resetArtifactLocksForTests();
   host = document.createElement("div");
@@ -157,7 +159,7 @@ function adornment(label: string) {
   return document.querySelector<HTMLButtonElement>(`.lc-artifact-picker-compose [aria-label="${label}"]`);
 }
 
-function pointer(node: HTMLElement, type: "pointerdown" | "pointerup") {
+function pointer(node: HTMLElement, type: "pointerdown" | "pointerup" | "pointercancel") {
   node.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, button: 0 }));
 }
 
@@ -236,6 +238,102 @@ function mockLifecycle() {
   });
 }
 
+it("unlocks deletion and restoration while parent sync is stalled", async () => {
+  catalog.current!.artifacts = [note({ id: "a1", title: "Plan.md" })];
+  mockLifecycle();
+  let finish!: () => void;
+  syncParent.mockReturnValue(new Promise<void>(resolve => { finish = resolve; }));
+  await mount();
+  await holdControl("Delete Plan.md — hold to delete");
+  await holdControl("Hold to confirm: Delete");
+  try {
+    expect(document.body.textContent).not.toContain("Remove this attachment?");
+    expect(control("Restore Plan.md — tap to restore")?.disabled).toBe(false);
+    await tapControl("Restore Plan.md — tap to restore");
+    expect(repo.mutateArtifacts).toHaveBeenCalledTimes(2);
+    expect(button("Open")?.disabled).toBe(false);
+  } finally {
+    await act(async () => { finish(); });
+  }
+});
+
+it("keeps a failed local deletion open and lets the hold confirmation retry", async () => {
+  catalog.current!.artifacts = [note({ id: "a1", title: "Plan.md" })];
+  repo.mutateArtifacts.mockRejectedValueOnce(new Error("Local save failed"));
+  await mount();
+  await holdControl("Delete Plan.md — hold to delete");
+  await holdControl("Hold to confirm: Delete");
+  expect(document.body.textContent).toContain("Remove this attachment?");
+  expect(control("Hold to confirm: Delete")?.disabled).toBe(false);
+  expect(syncParent).not.toHaveBeenCalled();
+  mockLifecycle();
+  await holdControl("Hold to confirm: Delete");
+  expect(document.body.textContent).not.toContain("Remove this attachment?");
+  expect(control("Restore Plan.md — tap to restore")).toBeTruthy();
+});
+
+it("reports a background sync failure without undoing the saved deletion or disabling restore", async () => {
+  catalog.current!.artifacts = [note({ id: "a1", title: "Plan.md" })];
+  mockLifecycle();
+  syncParent.mockRejectedValueOnce(new Error("Upload could not start"));
+  await mount();
+  await holdControl("Delete Plan.md — hold to delete");
+  await holdControl("Hold to confirm: Delete");
+  expect(document.body.textContent).not.toContain("Remove this attachment?");
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("Upload could not start");
+  expect(catalog.current!.artifacts[0].deletedAt).toBe(9);
+  expect(control("Restore Plan.md — tap to restore")?.disabled).toBe(false);
+  await tapControl("Restore Plan.md — tap to restore");
+  expect(catalog.current!.artifacts[0].deletedAt).toBeUndefined();
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("cancels partial and interrupted holds without deleting, and Escape returns to the picker", async () => {
+  catalog.current!.artifacts = [note({ id: "a1", title: "Plan.md" })];
+  const { onClose } = await mount();
+  await tapControl("Delete Plan.md — hold to delete");
+  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeNull();
+  await holdControl("Delete Plan.md — hold to delete");
+  expect(document.querySelector(".lc-artifact-picker-modal")?.hasAttribute("inert")).toBe(true);
+  const confirm = control("Hold to confirm: Delete")!;
+  await act(async () => { pointer(confirm, "pointerdown"); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 80)); });
+  expect(Number(confirm.style.getPropertyValue("--lc-hold"))).toBeGreaterThan(0);
+  await act(async () => { pointer(confirm, "pointercancel"); });
+  expect(Number(confirm.style.getPropertyValue("--lc-hold"))).toBe(0);
+  await act(async () => { pointer(confirm, "pointerdown"); pointer(confirm, "pointerup"); confirm.click(); });
+  expect(repo.mutateArtifacts).not.toHaveBeenCalled();
+  act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeNull();
+  expect(document.querySelector(".lc-artifact-picker-modal")?.hasAttribute("inert")).toBe(false);
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+it("keeps confirmation open during a local save and supports cancel and backdrop dismissal before saving", async () => {
+  catalog.current!.artifacts = [note({ id: "a1", title: "Plan.md" })];
+  await mount();
+  await holdControl("Delete Plan.md — hold to delete");
+  act(() => document.querySelector<HTMLButtonElement>(".lc-artifact-confirm-modal button")!.click());
+  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeNull();
+  await holdControl("Delete Plan.md — hold to delete");
+  const overlay = document.querySelector<HTMLElement>(".lc-artifact-confirm-backdrop")!;
+  act(() => { pointer(document.querySelector<HTMLElement>(".lc-artifact-confirm-item")!, "pointerdown"); overlay.click(); });
+  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeTruthy();
+  act(() => { pointer(overlay, "pointerdown"); pointer(overlay, "pointercancel"); overlay.click(); });
+  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeTruthy();
+  act(() => { pointer(overlay, "pointerdown"); overlay.click(); });
+  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeNull();
+  await holdControl("Delete Plan.md — hold to delete");
+  let finish!: () => void;
+  repo.mutateArtifacts.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
+  await holdControl("Hold to confirm: Delete");
+  expect(control("Hold to confirm: Delete")?.disabled).toBe(true);
+  act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeTruthy();
+  await act(async () => { finish(); });
+  expect(document.querySelector(".lc-artifact-confirm-modal")).toBeNull();
+});
+
 it("attaches a selected library page with read-only provenance and selected filing", async () => {
   const capture = { title: "Book page 2", kind: "markdown", text: "excerpt", reference: { v: 1,
     parent: { kind: "annotate", id: "book" }, revision: "r", label: "Book", locator: "Page 2", capturedAt: 1, truncated: false } };
@@ -244,7 +342,7 @@ it("attaches a selected library page with read-only provenance and selected fili
   repo.createArtifact.mockResolvedValue(reference);
   const { onAttach } = await mount({ footnoteChoices: [{ id: "mark", title: "Mark", selected: true }] });
   await act(async () => { button("Files")!.click(); });
-  expect(backdrop().textContent).toContain("Read-only");
+  expect(backdrop().textContent).not.toContain("Read-only");
   await choosePage("Book.pdf page", 2);
   const plus = attachPlus();
   expect(plus?.getAttribute("aria-label")).toBe("Pin to chat");
@@ -293,10 +391,12 @@ it("opens as a compact Settings card with enter motion, not a full-bleed sheet",
   expect(sheet.textContent).toContain("No saved attachments yet.");
 });
 
-it("explains message-scoped attach vs the pad catalog", async () => {
+it("keeps message-scoped actions without adding description text", async () => {
+  catalog.current!.artifacts = [note({ id: "a1", title: "Plan.md", associations: [] })];
   await mount({ scope: "message" });
-  expect(backdrop().textContent).toContain("Pin a catalog item onto this turn");
-  expect(backdrop().textContent).toContain("as a reference");
+  expect(button("Attach")).toBeTruthy();
+  expect(document.querySelector(".lc-dialog-description")).toBeNull();
+  expect(document.querySelector(".lc-dialog-meta")?.textContent).toBe("Catalog");
 });
 
 it("creates from the selected kind via the end adornment", async () => {
@@ -407,7 +507,7 @@ it("lists catalog rows without preview cards", async () => {
   expect(document.querySelector(".lc-artifact-picker-kind svg")).toBeTruthy();
   expect(document.querySelector(".lc-artifact-picker-kind")?.getAttribute("aria-label")).toBe("Note");
   expect(backdrop().textContent).toContain("Plan.md");
-  expect(backdrop().textContent).toContain("On this thread");
+  expect(backdrop().textContent).not.toContain("On this thread");
   expect(button("Pin to chat")).toBeUndefined();
   expect(button("Attached")?.disabled).toBe(true);
   expect(button("Unfile")).toBeTruthy();
@@ -478,7 +578,7 @@ it("trashes through hold + in-app confirm, then restores from the same row", asy
     expect.objectContaining({ type: "delete", id: "a1" }),
   );
   expect(document.body.textContent).not.toContain("Remove this attachment?");
-  expect(backdrop().textContent).toContain("Trash");
+  expect(backdrop().textContent).toContain("TRASH");
   expect(button("Open")).toBeUndefined();
   expect(control("Restore Plan.md — tap to restore")).toBeTruthy();
   await tapControl("Restore Plan.md — tap to restore");
@@ -505,12 +605,13 @@ it("hides trash while the compact padlock is on", async () => {
   expect(control("Delete Plan.md — hold to delete")).toBeUndefined();
 });
 
-it("closes from the new header action using the existing exit lifecycle", async () => {
+it("uses only the reference footer close with the existing exit lifecycle", async () => {
   const { onClose, onOpen } = await mount();
   const dialog = document.querySelector('[role="dialog"]')!;
   expect(dialog.getAttribute("aria-labelledby")).toBe("lc-artifact-picker-title");
   vi.useFakeTimers();
-  act(() => control("Close Attachments")!.click());
+  expect(control("Close Attachments")).toBeUndefined();
+  act(() => button("Close")!.click());
   expect(backdrop().className).toContain("lc-leave-dialog-exit");
   expect(onClose).not.toHaveBeenCalled();
   act(() => { vi.advanceTimersByTime(180); });
@@ -564,19 +665,21 @@ it("unfiles only the selected associations and retains catalog revision checks",
   expect(onClose).not.toHaveBeenCalled();
 });
 
-it("disables both close actions while attaching and keeps a failed attachment retryable", async () => {
+it("blocks dismissal while saving locally and keeps a failed attachment retryable", async () => {
   catalog.current!.artifacts = [note({ id: "a1", title: "Plan.md", associations: [] })];
   let rejectAttach!: (reason: Error) => void;
   repo.mutateArtifacts.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectAttach = reject; }));
   const { onAttach, onClose } = await mount();
   await act(async () => { button("Pin to chat")!.click(); });
   expect(button("Close")!.disabled).toBe(true);
-  expect(control("Close Attachments")!.disabled).toBe(true);
+  act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+  act(() => { pointer(backdrop(), "pointerdown"); backdrop().click(); });
+  expect(backdrop().className).not.toContain("lc-leave-dialog-exit");
   expect(button("Files")!.disabled).toBe(true);
-  expect(document.querySelector(".lc-dialog-hint")?.textContent).toBe("Working…");
+  expect(document.querySelector(".lc-dialog-hint")).toBeNull();
   await act(async () => { rejectAttach(new Error("Catalog changed. Retry.")); });
   expect(document.querySelector('[role="alert"]')?.textContent).toContain("Retry");
-  expect(control("Close Attachments")!.disabled).toBe(false);
+  expect(button("Close")!.disabled).toBe(false);
   expect(button("Pin to chat")!.disabled).toBe(false);
   expect(onAttach).not.toHaveBeenCalled();
   expect(onClose).not.toHaveBeenCalled();

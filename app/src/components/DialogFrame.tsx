@@ -16,6 +16,7 @@ export function DialogFrame({
   className = "",
   onClose,
   closeDisabled = false,
+  inert = false,
   children,
 }: {
   titleId: string;
@@ -26,8 +27,9 @@ export function DialogFrame({
   mode?: DialogMode;
   shape?: DialogShape;
   className?: string;
-  onClose: () => void;
+  onClose?: () => void;
   closeDisabled?: boolean;
+  inert?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -39,6 +41,8 @@ export function DialogFrame({
       aria-modal="true"
       aria-labelledby={titleId}
       aria-describedby={description ? `${titleId}-description` : undefined}
+      inert={inert}
+      aria-hidden={inert || undefined}
     >
       <header className="lc-dialog-head">
         <div className="lc-dialog-heading">
@@ -47,7 +51,7 @@ export function DialogFrame({
             <h2 id={titleId}>{title}</h2>
             <p className="lc-dialog-meta">{subtitle}</p>
           </div>
-          <button
+          {onClose && <button
             type="button"
             className="lc-dialog-close"
             aria-label={`Close ${title}`}
@@ -57,7 +61,7 @@ export function DialogFrame({
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true">
               <path d="m6 6 12 12M18 6 6 18" />
             </svg>
-          </button>
+          </button>}
         </div>
         {description ? <p id={`${titleId}-description`} className="lc-dialog-description">{description}</p> : null}
       </header>

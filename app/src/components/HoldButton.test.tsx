@@ -197,13 +197,16 @@ describe("HoldButton", () => {
     host.remove();
   });
 
-  it("flicks a library list instead of confirming the row", async () => {
+  it.each([
+    ["lc-library-menu", "lc-settings-body"],
+    ["lc-dialog-frame", "lc-dialog-body"],
+  ])("flicks a %s list instead of confirming the row", async (hostClass, bodyClass) => {
     const onTap = vi.fn();
     const onConfirm = vi.fn();
     const host = document.createElement("div");
-    host.className = "lc-library-menu";
+    host.className = hostClass;
     const body = document.createElement("div");
-    body.className = "lc-settings-body";
+    body.className = bodyClass;
     Object.defineProperty(body, "clientHeight", { value: 40 });
     Object.defineProperty(body, "scrollHeight", { value: 400 });
     host.append(body);
