@@ -554,18 +554,21 @@ describe("Workspace pane switch", () => {
     expect(src).not.toMatch(/!done && <LoadingDoodle/);
     const start = src.indexOf("function WorkspaceLoadStatus");
     expect(start).toBeGreaterThan(-1);
-    expect(src.slice(start, start + 900)).toMatch(/<LoadingDoodle themeId=\{themeId\} \/>/);
+    expect(src.slice(start, start + 900)).toMatch(/<LoadingDoodle themeId=\{themeId\}( nativeInput)? \/>/);
   });
 
   it("does not replay accumulated loading doodles every frame", () => {
-    const src = readFileSync(join(here, "../components/LoadingDoodle.tsx"), "utf8");
-    expect(src).toMatch(/const backing = document\.createElement\("canvas"\)/);
-    expect(src).toMatch(/ctx\.drawImage\(backing, 0, 0\)/);
-    expect(src).toMatch(/applyInkOpFrom/);
-    const tail = src.slice(src.indexOf("const paintTail"), src.indexOf("const schedulePaint"));
+    // The strokes live in the doodle's engine, shared by the page and the
+    // native-pen worker; the page component only feeds it pointer events.
+    const engine = readFileSync(join(here, "../components/loadingDoodleEngine.ts"), "utf8");
+    const page = readFileSync(join(here, "../components/LoadingDoodle.tsx"), "utf8");
+    expect(engine).toMatch(/const backing = makeCanvas\(\)/);
+    expect(engine).toMatch(/ctx\.drawImage\(backing, 0, 0\)/);
+    expect(engine).toMatch(/applyInkOpFrom/);
+    const tail = engine.slice(engine.indexOf("const paintTail"), engine.indexOf("const schedulePaint"));
     expect(tail).not.toMatch(/smoothInkPoints/);
-    expect(src).toMatch(/getCoalescedEvents/);
-    expect(src).not.toMatch(/requestAnimationFrame\(loop\)/);
+    expect(page).toMatch(/getCoalescedEvents/);
+    expect(engine + page).not.toMatch(/requestAnimationFrame\(loop\)/);
   });
 
   it("does not pause tile work for the loading doodle", () => {
