@@ -5513,16 +5513,18 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-ink-wheel-quick {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 3;
-  filter: drop-shadow(0 0 3px currentColor);
-  animation: lc-quick-preset-pulse 1800ms ease-in-out infinite;
+  pointer-events: none;
 }
 
-@keyframes lc-quick-preset-pulse {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 1; }
+.lc-ink-wheel-quick-sweep {
+  animation: lc-quick-preset-sweep 2600ms linear infinite;
+}
+@keyframes lc-quick-preset-sweep {
+  from { transform: translateX(0); }
+  to { transform: translateX(384px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lc-ink-wheel-quick-sweep { animation: none; transform: translateX(192px); }
 }
 
 .lc-quick-ink .lc-hold-reveal-label { position: relative; display: flex; align-items: center; }

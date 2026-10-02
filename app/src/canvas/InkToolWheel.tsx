@@ -2,7 +2,7 @@
  * Dual radial at the nib: outer tools, inner preset wedges, hub Confirm.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { MorphBar } from "../components/MorphBar";
@@ -265,6 +265,7 @@ export function InkToolWheel({
   onEdit,
   locked = false,
 }: InkToolWheelProps) {
+  const quickId = useId().replace(/:/g, "");
   const [closing, setClosing] = useState(false);
   const [selectedKind, setSelectedKind] = useState<InkPresetKind | null>(liveKind);
   const [selectedWedge, setSelectedWedge] = useState<number | null>(store.lastWedge[liveKind]);
@@ -551,6 +552,18 @@ export function InkToolWheel({
           overflow="visible"
         >
           <defs>
+            <pattern id={`${quickId}-dots`} width="5" height="5" patternUnits="userSpaceOnUse">
+              <rect x="1.5" y="1.5" width="2" height="2" rx="0.5" fill="#c4b5fd" />
+            </pattern>
+            <linearGradient id={`${quickId}-glow`}>
+              <stop offset="0" stopColor="white" stopOpacity="0" />
+              <stop offset="0.45" stopColor="white" stopOpacity="0.25" />
+              <stop offset="0.7" stopColor="white" />
+              <stop offset="1" stopColor="white" stopOpacity="0" />
+            </linearGradient>
+            <mask id={`${quickId}-sweep`} maskUnits="userSpaceOnUse" x="0" y="0" width="192" height="192">
+              <rect className="lc-ink-wheel-quick-sweep" x="-192" y="0" width="192" height="192" fill={`url(#${quickId}-glow)`} />
+            </mask>
             <clipPath id="lc-wedge-hold-clip" clipPathUnits="objectBoundingBox">
               <rect
                 x={0}
@@ -627,10 +640,10 @@ export function InkToolWheel({
                     startHold(useIndex);
                   }}
                 />
-                {snap && store.quickWedge[kind] === index && <path
-                  d={donutSlice(WHEEL_R, WHEEL_R, INNER_INNER, INNER_OUTER, slice.start, slice.end)}
-                  className="lc-ink-wheel-quick" style={{ color: wedgeFill(kind, snap) }}
-                  pointerEvents="none" aria-label={`Quick ${kind} preset`} />}
+                {snap && store.quickWedge[kind] === index && <g className="lc-ink-wheel-quick" pointerEvents="none" aria-label={`Quick ${kind} preset`}>
+                  <path d={donutSlice(WHEEL_R, WHEEL_R, INNER_INNER, INNER_OUTER, slice.start, slice.end)} fill={`url(#${quickId}-dots)`} opacity="0.25" />
+                  <path d={donutSlice(WHEEL_R, WHEEL_R, INNER_INNER, INNER_OUTER, slice.start, slice.end)} fill={`url(#${quickId}-dots)`} mask={`url(#${quickId}-sweep)`} />
+                </g>}
                 <path
                   d={donutSlice(
                     WHEEL_R,
