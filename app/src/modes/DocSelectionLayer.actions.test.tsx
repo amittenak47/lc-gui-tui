@@ -76,3 +76,39 @@ it("dismissal invalidates a capture before its late failure can offer a fallback
   expect(button("Continue with text only")).toBeUndefined();
   expect(draft).not.toHaveBeenCalled();
 });
+
+function touchDown(target: EventTarget, pointerId: number) {
+  const event = new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 60 });
+  Object.defineProperties(event, { pointerId: { value: pointerId }, pointerType: { value: "touch" } });
+  target.dispatchEvent(event);
+}
+
+it("lets a second finger make a pinch instead of arming a hold", () => {
+  vi.useFakeTimers();
+  try {
+    act(() => root.render(<DocSelectionLayer footnotes={footnotes}><p data-doc-scope="p1">Words to pinch over</p></DocSelectionLayer>));
+    const layer = host.querySelector<HTMLElement>(".lc-doc-selectable")!;
+    // The board takes the pinch at its root: the second finger stops there.
+    const board = host.querySelector("p")!;
+    board.addEventListener("pointerdown", (event) => event.stopPropagation(), true);
+    act(() => touchDown(host.querySelector(".lc-doc-selectable-body")!, 1));
+    act(() => touchDown(board, 2));
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(layer.classList.contains("lc-doc-selecting")).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("still arms a hold left alone", () => {
+  vi.useFakeTimers();
+  try {
+    act(() => root.render(<DocSelectionLayer footnotes={footnotes}><p data-doc-scope="p1">Words to hold</p></DocSelectionLayer>));
+    const layer = host.querySelector<HTMLElement>(".lc-doc-selectable")!;
+    act(() => touchDown(host.querySelector("p")!, 1));
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(layer.classList.contains("lc-doc-selecting")).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
+});

@@ -531,6 +531,8 @@ export function DocSelectionLayer({
    */
   const holdRef = useRef<{
     pointerId: number;
+    /** A finger, which a second finger turns into a pinch. */
+    touch: boolean;
     startX: number;
     startY: number;
     armTimer: number | null;
@@ -989,6 +991,7 @@ export function DocSelectionLayer({
       const startY = event.clientY;
       holdRef.current = {
         pointerId: event.pointerId,
+        touch: event.pointerType === "touch",
         startX,
         startY,
         armTimer: window.setTimeout(() => {
@@ -1095,6 +1098,23 @@ export function DocSelectionLayer({
       });
     };
 
+    /*
+     * A second finger makes it a pinch, not a hold.
+     *
+     * The board takes the pinch at its root and the second finger's down
+     * never reaches the host, so the first finger's arm timer ran on: fired
+     * a quarter second into the pinch, it captured that finger and marked
+     * the whole document selecting — a restyle of every span just as the
+     * zoom was starting, and a box swept by the pinching finger after it.
+     * Seen at the window, before the board can stop it.
+     */
+    const onOtherPointerDown = (event: PointerEvent) => {
+      const hold = holdRef.current;
+      if (!hold || hold.held || hold.pointerId === event.pointerId) return;
+      if (!hold.touch || event.pointerType !== "touch") return;
+      clearGesture();
+    };
+
     const onPointerUp = (event: PointerEvent) => finishHold(event, true);
     const onPointerCancel = (event: PointerEvent) => finishHold(event, false);
     const onSelectStart = (event: Event) => {
@@ -1110,6 +1130,7 @@ export function DocSelectionLayer({
     host.addEventListener("selectstart", onSelectStart);
     host.addEventListener("contextmenu", onContextMenu);
     host.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointerdown", onOtherPointerDown, true);
     window.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
     window.addEventListener("pointerup", onPointerUp, true);
     window.addEventListener("pointercancel", onPointerCancel, true);
@@ -1117,6 +1138,7 @@ export function DocSelectionLayer({
       host.removeEventListener("selectstart", onSelectStart);
       host.removeEventListener("contextmenu", onContextMenu);
       host.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerdown", onOtherPointerDown, true);
       window.removeEventListener("pointermove", onPointerMove, true);
       window.removeEventListener("pointerup", onPointerUp, true);
       window.removeEventListener("pointercancel", onPointerCancel, true);

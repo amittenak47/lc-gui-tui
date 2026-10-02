@@ -909,6 +909,26 @@ const SHEET_DESK_PX = 5;
 const PAGE_FIT_PAINT_MAX = 4;
 /** …and at most this many pixels per page. */
 const PAGE_FIT_PAINT_PIXELS = 6_000_000;
+/** What a pinch hides until its final camera has painted — see styles.css. */
+const READING_ZOOM_HIDDEN = ".lc-page-marks-slot, .lc-scene-overlay, .lc-scene-select";
+
+/**
+ * Hide (or show again) this board's page annotations for a pinch.
+ *
+ * Marked on the annotations themselves. A mark on the board, matched by a
+ * rule reaching every descendant, had the WebView restyle the whole board —
+ * a PDF's thousands of text spans — as the pinch began and again after it,
+ * a third of a second each on a tablet: the stall felt starting a pinch.
+ */
+function hideForReadingZoom(board: HTMLElement, hide: boolean): void {
+  for (const node of board.querySelectorAll<HTMLElement>(READING_ZOOM_HIDDEN)) {
+    // A second reader nested in this board keeps its own.
+    if (node.closest(".lc-board") !== board) continue;
+    if (hide) node.dataset.lcReadingZoomHidden = "";
+    else delete node.dataset.lcReadingZoomHidden;
+  }
+}
+
 /** How far past a fitted page a pinch may go in. */
 const PAGE_PINCH_RANGE = 3;
 const ZOOM_MAX = 1.75;
@@ -6238,7 +6258,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       left: node.offsetLeft, top: node.offsetTop, dock: node === dock }));
     readingZoomRef.current = { base, bounds: region, floor, inset, layers };
     readingZoomGenerationRef.current++;
-    if (boardRef.current) boardRef.current.dataset.lcReadingZoom = "true";
+    if (boardRef.current) hideForReadingZoom(boardRef.current, true);
     rasterInkRef.current?.setCameraZooming(true);
     rasterInkRef.current?.setCameraMoving(true);
   }, [docFlags, getViewport, refreshPanRideNodes]);
@@ -6273,7 +6293,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     void Promise.resolve(rasterInkRef.current?.syncCamera()).then(() => {
       // A prior pinch's tile completion must not reveal a newer gesture.
       if (root && generation === readingZoomGenerationRef.current && !readingZoomRef.current) {
-        delete root.dataset.lcReadingZoom;
+        hideForReadingZoom(root, false);
       }
     });
     sceneOverlayRef.current?.redraw();

@@ -20639,11 +20639,13 @@ button.lc-row-selected:hover:not(:disabled) {
   overflow: visible;
 }
 
-/* Hide page annotations until the pinch's final camera has painted. Scope to
- * this board so a second reader remains visible. Descendants may explicitly
- * set visibility, so include them as well. Keep layout and saved geometry. */
-.lc-board[data-lc-reading-zoom] :is(.lc-page-marks-slot, .lc-scene-overlay, .lc-scene-select),
-.lc-board[data-lc-reading-zoom] :is(.lc-page-marks-slot, .lc-scene-overlay, .lc-scene-select) * {
+/* Hide page annotations until the pinch's final camera has painted. Marked on
+ * the annotations of the pinched board only (`hideForReadingZoom`): a mark on
+ * the board itself, matched down to every descendant, restyled the whole PDF
+ * as a pinch began. Descendants may explicitly set visibility, so include
+ * them as well. Keep layout and saved geometry. */
+[data-lc-reading-zoom-hidden],
+[data-lc-reading-zoom-hidden] * {
   visibility: hidden !important;
 }
 
