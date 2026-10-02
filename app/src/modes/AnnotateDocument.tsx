@@ -218,10 +218,13 @@ export function applySkippableHeights(node: HTMLElement, record: MarkdownLayoutR
   Array.from(node.children).forEach((el, i) => {
     const height = record.heights[i] ?? 0;
     if (!(el instanceof HTMLElement) || !(height > 0) || !SKIPPABLE_BLOCKS.has(el.tagName)) return;
-    el.style.contentVisibility = "auto";
-    // Not `auto`: that prefers the block's last rendered size, and a block
-    // drawn once before the math fonts landed keeps that wrong size for good.
-    el.style.containIntrinsicSize = `${height}px`;
+    // Not `auto` for the size: that prefers the block's last rendered size,
+    // and a block drawn once before the math fonts landed keeps that wrong
+    // size for good. One attribute write, not two property sets: hundreds of
+    // blocks each parsed and invalidated twice was a sizeable part of a launch.
+    const skip = `content-visibility:auto;contain-intrinsic-size:${height}px`;
+    const prior = el.getAttribute("style");
+    el.setAttribute("style", prior ? `${prior};${skip}` : skip);
   });
   return true;
 }

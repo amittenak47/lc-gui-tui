@@ -168,7 +168,31 @@ export function installSafeAreaInsets(): () => void {
     frame = requestAnimationFrame(publishInsets);
   };
 
+  /*
+   * One ask at a time. Start-up resizes the window several times in a row,
+   * and each resize asked again: a burst of native calls, each holding the
+   * page's thread on Android's bridge for tens of milliseconds. Resizes
+   * during an ask are answered by one more ask after it.
+   */
+  let asking = false;
+  let askAgain = false;
   const pullNativeInsets = async () => {
+    if (asking) {
+      askAgain = true;
+      return;
+    }
+    asking = true;
+    try {
+      await askNativeInsets();
+    } finally {
+      asking = false;
+      if (askAgain && !cancelled) {
+        askAgain = false;
+        void pullNativeInsets();
+      }
+    }
+  };
+  const askNativeInsets = async () => {
     const request = ++nativeRequest;
     try {
       const { invoke } = await import("@tauri-apps/api/core");

@@ -133,10 +133,18 @@ export function annotateDocLabel(meta: AnnotateDocMeta): string {
   if (label) return label;
   const when = new Date(meta.updatedAt);
   if (Number.isNaN(when.getTime())) return meta.name;
-  return `${meta.name} — ${when.toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-  })}`;
+  return `${meta.name} — ${labelDate().format(when)}`;
+}
+
+/**
+ * One formatter, kept. `toLocaleDateString` builds a new one on every call,
+ * and every open workspace labels the whole library: a long library was a
+ * noticeable piece of each launch spent setting up the same date format.
+ */
+let labelDateFormat: Intl.DateTimeFormat | null = null;
+function labelDate(): Intl.DateTimeFormat {
+  labelDateFormat ??= new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" });
+  return labelDateFormat;
 }
 
 export interface AnnotateDoc extends AnnotateDocMeta {

@@ -13,6 +13,28 @@ import { debugLogEnabled, installDebugLog } from "./util/debugLog";
 // Off unless switched on in Settings → Diagnostics; first, so the boot is in it too.
 if (debugLogEnabled()) installDebugLog();
 
+/*
+ * The type documents are set in, fetched now rather than when first used.
+ *
+ * A face loads when text first needs it, which for a note is its first
+ * layout: the note was laid out in fallback type, the faces arrived a moment
+ * later, and every table, math span and line was laid out again — a second
+ * whole-note layout in the middle of start-up. They are local files of a few
+ * tens of KB, here long before any document is open.
+ */
+for (const face of [
+  "1em DINish",
+  "bold 1em DINish",
+  "1em KaTeX_Main",
+  "bold 1em KaTeX_Main",
+  "italic 1em KaTeX_Main",
+  "italic 1em KaTeX_Math",
+  "1em KaTeX_Size1",
+  "1em KaTeX_Size3",
+]) {
+  void document.fonts?.load(face).catch(() => {});
+}
+
 const root = document.getElementById("root");
 if (!root) throw new Error("index.html is missing #root");
 
