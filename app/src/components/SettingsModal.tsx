@@ -895,6 +895,9 @@ export function SettingsModal({
   const [hubSyncWindowPill, setHubSyncWindowPill] = useState(() => loadHubSyncWindowPill());
   const [inkDisplayHz, setInkDisplayHz] = useState<InkDisplayHzPref>(() => loadInkDisplayHz());
   const [inkMatchDisplay, setInkMatchDisplay] = useState(() => loadInkMatchDisplay());
+  // The debug log switch waits for Save like every other setting.
+  const [debugLog, setDebugLog] = useState(debugLogEnabled);
+  const [baselineDebugLog, setBaselineDebugLog] = useState(debugLogEnabled);
   const [testForward, setTestForward] = useState<TestForwardMode>(() =>
     loadTestForwardMode(),
   );
@@ -1250,7 +1253,8 @@ export function SettingsModal({
     !prefsEqual(draftPrefs, baselinePrefs) ||
     keysDirty ||
     hubUrl.trim() !== baselineHubUrl ||
-    hubToken.trim() !== baselineHubToken;
+    hubToken.trim() !== baselineHubToken ||
+    debugLog !== baselineDebugLog;
 
   const patchProvider = (key: "local" | "ollama" | "openai" | "groq", patch: Partial<ProviderConfig>) => {
     setDraft((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
@@ -1338,6 +1342,10 @@ export function SettingsModal({
         window.dispatchEvent(new CustomEvent(HUB_AUTOSYNC_EVENT));
         window.dispatchEvent(new CustomEvent(CHROME_WAKE_EVENT));
         window.dispatchEvent(new CustomEvent(PDF_READING_EVENT));
+      }
+      if (debugLog !== baselineDebugLog) {
+        setDebugLogEnabled(debugLog);
+        setBaselineDebugLog(debugLog);
       }
       const hubDirty =
         hubUrl.trim() !== baselineHubUrl || hubToken.trim() !== baselineHubToken;
@@ -2699,7 +2707,7 @@ export function SettingsModal({
                 </div>
               </SettingsFold>
               <SettingsFold id="diagnostics" title="Diagnostics">
-                <DebugLogSettings />
+                <DebugLogSettings on={debugLog} saved={baselineDebugLog} onChange={setDebugLog} />
               </SettingsFold>
             </div>
           )}
@@ -3194,11 +3202,16 @@ export function SettingsModal({
 }
 
 /**
- * Settings → Diagnostics: the debug log. Applies at once, outside Save — a
- * switch for finding out what happened should not wait on a form.
+ * Settings → Diagnostics: the debug log. The switch is part of the form and
+ * takes effect on Save; exporting and clearing what is recorded are actions,
+ * done at once.
  */
-function DebugLogSettings() {
-  const [on, setOn] = useState(debugLogEnabled);
+function DebugLogSettings({ on, saved, onChange }: {
+  on: boolean;
+  /** Whether the log is recording now — the switch as last saved. */
+  saved: boolean;
+  onChange: (on: boolean) => void;
+}) {
   const [count, setCount] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -3207,11 +3220,7 @@ function DebugLogSettings() {
     return () => {
       live = false;
     };
-  }, [on]);
-  const toggle = (next: boolean) => {
-    setDebugLogEnabled(next);
-    setOn(next);
-  };
+  }, [saved]);
   return (
     <>
       <div className="lc-settings-subhead">Debug log</div>
@@ -3225,7 +3234,7 @@ function DebugLogSettings() {
         {([false, true] as const).map((value) => (
           <button key={String(value)} type="button" role="radio" aria-checked={on === value}
             className={on === value ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
-            onClick={() => toggle(value)}>
+            onClick={() => onChange(value)}>
             <strong>{value ? "On" : "Off"}</strong>
           </button>
         ))}
