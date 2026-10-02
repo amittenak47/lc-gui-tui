@@ -14,6 +14,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { LIBRARY_HOLD_MS } from "../util/gesture";
 import { HoldButton } from "../components/HoldButton";
+import { DialogFrame } from "../components/DialogFrame";
+import "./annotateDialog.css";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { HubLibraryRefresh, type HubLibraryRefreshAction } from "../components/HubLibraryRefresh";
 import { useLibraryDeleteArm } from "../util/armedDelete";
@@ -78,6 +80,7 @@ interface LeaveProps {
   dirty?: boolean;
   /** Name of the document being annotated, for the prompt. */
   docName: string;
+  docId?: string | null;
   pending: boolean;
   exiting?: boolean;
   error: string | null;
@@ -100,6 +103,8 @@ interface EntryProps {
   error?: string | null;
   /** When a document is already open, offer Save alongside Open / Recent. */
   allowSave?: boolean;
+  docName?: string;
+  dirty?: boolean;
   /** Pad id of the open document — used to list rolling snapshots. */
   snapshotKey?: string | null;
   docType?: string;
@@ -113,6 +118,29 @@ interface EntryProps {
 }
 
 export type AnnotateDialogProps = LeaveProps | EntryProps;
+
+function DocumentIcon({ web = false }: { web?: boolean }) {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {web ? <><circle cx="12" cy="12" r="9" /><ellipse cx="12" cy="12" rx="4" ry="9" /><path d="M3 12h18" /></> : <path d="M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 12h7M8 16h5" />}
+  </svg>;
+}
+
+function MenuRowLabel({ label, description }: { label: string; description?: string }) {
+  return <span className="lc-annotate-menu-label">
+    <svg className="lc-annotate-row-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {label === "Save" ? <path d="M4 3h13l3 3v15H4V3Zm3 0v6h9V3M8 21v-8h8v8" /> : label === "Open" ? <path d="M3 7V4h6l3 3h7v4M3 9h18l-3 11H3L1 9h2Z" /> : label === "Pull" ? <path d="M12 3v13m-5-5 5 5 5-5M3 16v5h18v-5" /> : label === "New" ? <path d="M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 14h8M12 10v8" /> : label === "Recent" ? <path d="M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v5l3 2" /> : <path d="M5 12h.01M12 12h.01M19 12h.01" strokeWidth="3" />}
+    </svg>
+    <span className="lc-annotate-row-copy"><strong>{label}</strong>{description && <span className="lc-muted">{description}</span>}</span>
+  </span>;
+}
+
+function MainMenuRow({ label, description, disabled, onConfirm }: {
+  label: string; description?: string; disabled?: boolean; onConfirm: () => void;
+}) {
+  return <HoldButton holdMs={LIBRARY_HOLD_MS} label={label} className="lc-hold-choice" disabled={disabled} onConfirm={onConfirm}>
+    <MenuRowLabel label={label} description={description} />
+  </HoldButton>;
+}
 
 export function AnnotateDialog(props: AnnotateDialogProps) {
   const [docs, setDocs] = useState<AnnotateDocMeta[]>(() => listAnnotateDocs());
@@ -199,6 +227,11 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   const onRename = entry?.onRename;
 
   const currentDoc = docs.find((doc) => doc.id === snapshotKey);
+  const contextCandidate = isLeave ? docs.find((doc) => doc.id === props.docId) : currentDoc;
+  const contextDoc = contextCandidate && (contextCandidate.docType === "web") === isWeb ? contextCandidate : undefined;
+  const hasContext = isLeave || (allowSave && ((entry?.docType ?? contextDoc?.docType) === "web") === isWeb);
+  const contextName = hasContext ? props.docName?.trim() || contextDoc?.name || "" : "";
+  const syncStatus = contextDoc ? (contextDoc.hubAckUpdatedAt === contextDoc.updatedAt && !props.dirty ? "synced" : "not synced") : null;
   const visibleDocs = docs.filter((doc) =>
     (isWeb ? doc.docType === "web" : doc.docType !== "web") &&
     (section !== "sets" || (currentDoc && doc.hash === currentDoc.hash)),
@@ -296,22 +329,28 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
         if (!locked && shouldDismissBackdrop(started, event.target, event.currentTarget)) props.onCancel();
       }}
     >
-      <div ref={morphRef}
-        className={`lc-settings-modal lc-attempt-modal lc-library-holds lc-library-menu ${isWeb ? "lc-library-web" : "lc-library-annotate"}`}
-        role="dialog"
-        aria-modal="true"
-        aria-label={isLeave ? "Leave document?" : isWeb ? "Web pad" : "Document pad"}
+      <DialogFrame ref={morphRef}
+        className={`lc-attempt-modal lc-library-holds lc-library-menu lc-annotate-dialog ${isWeb ? "lc-library-web" : "lc-library-annotate"}`}
+        titleId="lc-annotate-dialog-title"
+        title={isLeave ? "Leave document?" : section === "open" && !pickingRecent ? "Open" : section === "new" ? "New" : section === "export" ? "Export" : section === "more" ? "More" : section === "sets" ? "Annotations" : pickingRecent ? "Recents" : isWeb ? "Web" : "Annotate"}
+        subtitle={isWeb ? "Write onto a page snapshot" : "Ink for this document"}
+        icon={<DocumentIcon web={isWeb} />}
+        mode={isWeb ? "browse" : "annotate"}
+        shape="blocky"
+        ariaLabel={isLeave ? "Leave document?" : isWeb ? "Web pad" : "Document pad"}
+        onClose={props.onCancel}
+        closeDisabled={locked}
       >
-        <div className="lc-settings-head">
-          <h2>{isLeave ? "Leave document?" : section === "open" && !pickingRecent ? "Open" : section === "new" ? "New" : section === "export" ? "Export" : section === "more" ? "More" : section === "sets" ? "Annotations" : pickingRecent ? "Recents" : isWeb ? "Web" : "Annotate"}</h2>
+        {contextName && <div className="lc-dialog-context"><div className="lc-annotate-context">
+          <DocumentIcon web={isWeb} /><span className="lc-annotate-context-title" title={contextName}>{contextName}</span>
+          {syncStatus && <span className="lc-annotate-context-sync">{syncStatus}</span>}
+        </div></div>}
+        <div className="lc-settings-body lc-dialog-body lc-scroll-pane">
           {(saveTitle !== null || newTitle !== null) && <p className="lc-muted">
             {saveTitle !== null
               ? "Name this pad. Hold Save to keep the suggested name."
               : "Name the note. It lives in this app — there is no file on disk until you export it."}
           </p>}
-        </div>
-
-        <div className="lc-settings-body lc-scroll-pane">
           {pickingRecent && <LibrarySearch value={libraryQuery} onChange={setLibraryQuery} label={isWeb ? "Search saved pages" : "Search saved documents"} disabled={locked} filters={libraryFilters} onToggleFilter={toggleFilter} kinds={isWeb ? [] : ["pdf","markdown","epub"]} showTrash={showTrash} onTrashChange={setShowTrash}/>}
           {pickingRecent && !(showTrash ? archived : visibleDocs).some(matchesQuery) && <p className="lc-muted">No matching saved items.</p>}
           {error && <div className="lc-warning">{error}</div>}
@@ -485,13 +524,13 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
               ) : (
                 <div className="lc-document-menu">
                   {section === "main" && <>
-                    {allowSave && <LibraryMenuRow label="Save" disabled={locked} onConfirm={beginSave} />}
-                    {(!allowSave || isWeb) && <LibraryMenuRow label="New" disabled={locked} onConfirm={() => isWeb ? props.onChoose("page") : setSection("new")} />}
+                    {allowSave && !isWeb && <MainMenuRow label="Save" description="Save ink to the annotation library" disabled={locked} onConfirm={beginSave} />}
+                    {isWeb && <MainMenuRow label="New" description="Start a blank page" disabled={locked} onConfirm={() => props.onChoose("page")} />}
                     {isWeb
-                      ? <LibraryMenuRow label="Recents" disabled={locked || (!visibleDocs.length && !archived.length)} onConfirm={() => setPickingRecent(true)} />
-                      : <LibraryMenuRow label="Open" disabled={locked} onConfirm={() => setSection("open")} />}
-                    {allowSave && !isWeb && <LibraryMenuRow label="More" disabled={locked} onConfirm={() => setSection("more")} />}
-                    {props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} />}
+                      ? <MainMenuRow label="Recent" description="Reopen a page you were on" disabled={locked || (!visibleDocs.length && !archived.length)} onConfirm={() => setPickingRecent(true)} />
+                      : <MainMenuRow label="Open" description="Load ink from a saved file" disabled={locked} onConfirm={() => setSection("open")} />}
+                    {props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} disabled={locked}><MenuRowLabel label="Pull" description={isWeb ? "Fetch pages from your other devices" : "Fetch the latest ink from your other devices"} /></HubLibraryRefresh>}
+                    {(!isWeb || allowSave) && <MainMenuRow label="More" disabled={locked} onConfirm={() => setSection("more")} />}
                   </>}
                   {section === "open" && <>
                     <LibraryMenuRow label="Load" disabled={locked} onConfirm={() => props.onChoose("open")} />
@@ -509,9 +548,13 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                     <LibraryMenuRow label="Annotations" disabled={locked} onConfirm={() => props.onChoose("export")} />
                     {entry?.docType !== "pdf" && <LibraryMenuRow label={entry?.docType === "epub" ? "EPUB" : "Markdown + images"} disabled={locked} onConfirm={() => props.onChoose("export-document")} />}
                   </>}
-                  {section === "more" && allowSave && <>
-                    <LibraryMenuRow label="Export" disabled={locked} onConfirm={() => setSection("export")} />
-                    <LibraryMenuRow label="Restore" disabled={locked || !snapshotKey} onConfirm={openSnapshots} />
+                  {section === "more" && <>
+                    {!allowSave && !isWeb && <LibraryMenuRow label="New" disabled={locked} onConfirm={() => setSection("new")} />}
+                    {isWeb && allowSave && <LibraryMenuRow label="Save" disabled={locked} onConfirm={beginSave} />}
+                    {allowSave && !isWeb && <>
+                      <LibraryMenuRow label="Export" disabled={locked} onConfirm={() => setSection("export")} />
+                      <LibraryMenuRow label="Restore" disabled={locked || !snapshotKey} onConfirm={openSnapshots} />
+                    </>}
                   </>}
                 </div>
               )}
@@ -519,14 +562,14 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
           )}
         </div>
 
-        <div className="lc-settings-foot">
+        <div className="lc-settings-foot lc-dialog-foot">
           {(section !== "main" || pickingRecent || pickingSnapshots || newTitle !== null || saveTitle !== null) && (
             <button
               type="button"
-              className="lc-secondary"
+              className="lc-secondary lc-dialog-action"
               disabled={locked}
               onClick={() => {
-                if (!pickingRecent && !pickingSnapshots && newTitle === null && saveTitle === null) setSection(section === "sets" ? "open" : section === "export" ? "more" : "main");
+                if (!pickingRecent && !pickingSnapshots && newTitle === null && saveTitle === null) setSection(section === "sets" ? "open" : section === "export" || section === "new" ? "more" : "main");
                 setPickingRecent(false);
                 setPickingSnapshots(false);
                 setNewTitle(null);
@@ -537,11 +580,11 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
               Back
             </button>
           )}
-          <button type="button" className="lc-secondary" disabled={locked} onClick={props.onCancel}>
+          <button type="button" className="lc-secondary lc-dialog-action" disabled={locked} onClick={props.onCancel}>
             Cancel
           </button>
         </div>
-      </div>
+      </DialogFrame>
       {pendingId && (
         <ConfirmDialog
           title="Remove this document?"

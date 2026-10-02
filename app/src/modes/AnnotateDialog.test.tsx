@@ -29,7 +29,7 @@ vi.mock("../util/padSync", () => ({
   TOMBSTONE_COPY: "Trash on this device — three days, then gone.",
 }));
 
-import { AnnotateDialog } from "./AnnotateDialog";
+import { AnnotateDialog, type AnnotateDialogProps } from "./AnnotateDialog";
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -65,14 +65,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function mount(props: {
-  allowSave?: boolean;
-  snapshotKey?: string;
-  onDelete?: (id: string) => void | Promise<void>;
-  kind?: "document" | "web";
-  onRestoreTrash?: (id: string) => void | Promise<void>;
-  onRename?: (id: string, title: string) => void | Promise<void>;
-} = {}) {
+function mount(props: Partial<Extract<AnnotateDialogProps, { mode: "entry" }>> = {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -86,6 +79,7 @@ function mount(props: {
   return {
     host,
     onChoose,
+    onCancel,
     unmount: () => act(() => root.unmount()),
   };
 }
@@ -97,7 +91,7 @@ function fill(input: HTMLInputElement, value: string) {
 }
 
 async function click(label: string, host: HTMLElement) {
-  if ((label === "Recent" || label === "Load") && [...host.querySelectorAll("button")].some(b=>b.textContent?.trim() === "Open")) await click("Open", host);
+  if ((label === "Recent" || label === "Load") && host.querySelector('[aria-label="Hold to confirm: Open"]')) await click("Open", host);
   const button=Array.from(host.querySelectorAll("button")).find(node=>node.textContent?.trim().startsWith(label));
   expect(button, `missing button ${label}`).toBeTruthy();
   if (button!.getAttribute("aria-label")?.startsWith("Hold to confirm")) {
@@ -140,6 +134,60 @@ async function tap(label: string, host: HTMLElement) {
 }
 
 describe("AnnotateDialog", () => {
+  it("keeps New in More and the existing note naming and creation flow", async () => {
+    const view = mount();
+    try {
+      expect(view.host.querySelector('[data-dialog-shape="blocky"]')).toBeTruthy();
+      expect(view.host.querySelector('[aria-label="Hold to confirm: New"]')).toBeNull();
+      expect(view.host.querySelector('.lc-dialog-foot')?.textContent?.trim()).toBe("Cancel");
+      await click("More", view.host);await click("New", view.host);await click("Markdown file", view.host);
+      await act(async () => fill(view.host.querySelector('.lc-md-new-title input')!, "Draft note"));
+      await hold("Create note", view.host);
+      expect(view.onChoose).toHaveBeenLastCalledWith("new", "Draft note");
+    } finally { view.unmount(); }
+  });
+
+  it.each(["pdf", "markdown", "epub"])("preserves the %s export choices and save operation", async (docType) => {
+    const view = mount({allowSave:true, snapshotKey:"d1", docType, docName:"Current file"});
+    try {
+      await hold("Save", view.host);expect(view.onChoose).toHaveBeenLastCalledWith("save");
+      await click("More", view.host);await click("Export", view.host);
+      await hold("PDF", view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-pdf");
+      await hold("Annotations", view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export");
+      if(docType === "pdf")expect(view.host.querySelector('[aria-label="Hold to confirm: Markdown + images"]')).toBeNull();
+      else {await hold(docType === "epub" ? "EPUB" : "Markdown + images", view.host);expect(view.onChoose).toHaveBeenLastCalledWith("export-document");}
+    } finally {view.unmount();}
+  }, 10000);
+
+  it("keeps Web Save and its naming step in More", async () => {
+    const view = mount({kind:"web", allowSave:true, snapshotKey:"w1", docType:"web", needsName:true, defaultName:"Page notes"});
+    try {
+      expect(view.host.querySelector('[aria-label="Hold to confirm: Save"]')).toBeNull();
+      expect(view.host.textContent).toContain("Start a blank page");
+      await hold("New",view.host);expect(view.onChoose).toHaveBeenLastCalledWith("page");
+      await click("More", view.host);await hold("Save", view.host);
+      await act(async () => fill(view.host.querySelector('.lc-md-new-title input')!, "Named page"));
+      await hold("Save", view.host);expect(view.onChoose).toHaveBeenLastCalledWith("save", "Named page");
+    } finally {view.unmount();}
+  });
+
+  it("uses real sync state and omits document context from a Web entry", () => {
+    live.rows[0].hubAckUpdatedAt=live.rows[0].updatedAt;
+    const synced=mount({allowSave:true,snapshotKey:"d1"});
+    expect(synced.host.querySelector('.lc-annotate-context-sync')?.textContent).toBe("synced");synced.unmount();
+    const dirty=mount({allowSave:true,snapshotKey:"d1",dirty:true});
+    expect(dirty.host.querySelector('.lc-annotate-context-sync')?.textContent).toBe("not synced");dirty.unmount();
+    const web=mount({kind:"web",allowSave:true,snapshotKey:"d1",docType:"pdf",docName:"Wrong PDF"});
+    expect(web.host.querySelector('.lc-annotate-context')).toBeNull();web.unmount();
+  });
+
+  it("locks Pull, header close and menu rows during an operation", () => {
+    const onRefreshHub=vi.fn();
+    const view=mount({pending:true,allowSave:true,onRefreshHub});
+    expect([...view.host.querySelectorAll('button')].every(b=>b.disabled)).toBe(true);
+    view.unmount();
+  });
+
   it("only offers annotation import for an open file", async () => {
     const closed=mount();
     expect(closed.host.textContent).not.toContain("Annotations");

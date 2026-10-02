@@ -11834,6 +11834,8 @@ export const Workspace = memo(function Workspace({
           allowSave={Boolean(problem && isAnnotate(problem))}
           snapshotKey={annotateDocId}
           docType={annotateSource?.docType}
+          docName={annotateSource?.name}
+          dirty={Boolean(problem && isAnnotate(problem) && !annotateUntouched())}
           needsName={padNeedsName}
           defaultName={padDefaultName}
           onRestoreTrash={(id) => handleRestoreTrash("annotate", id)}
@@ -12099,6 +12101,7 @@ export const Workspace = memo(function Workspace({
           kind={annotateDialogKind}
           dirty={!annotateUntouched()}
           docName={annotateSource?.name ?? "this document"}
+          docId={annotateDocId}
           pending={leavingPending}
           exiting={leavingPhase === "exit"}
           error={leavingError}
