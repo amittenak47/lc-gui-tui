@@ -12,15 +12,46 @@ it("stacks notices underneath each other, newest last", () => {
   expect(queue.snapshot().every(n => !n.exiting)).toBe(true);
 });
 
-it("lets each notice slide off on its own clock while the rest stay", () => {
+it("holds the deck for the latest notice, then slides every card off together", () => {
   const a = queue.show("a", 1400); const b = queue.show("b", 3000);
   vi.advanceTimersByTime(1400);
-  expect(queue.snapshot().find(n => n.id === a)?.exiting).toBe(true);
-  expect(live()).toEqual([b]);
+  expect(live()).toEqual([a, b]);
+  vi.advanceTimersByTime(1600);
+  expect(queue.snapshot().every(n => n.exiting)).toBe(true);
   vi.advanceTimersByTime(220);
-  expect(ids()).toEqual([b]);
-  vi.advanceTimersByTime(3000);
   expect(ids()).toEqual([]);
+});
+
+it("pauses dismissal while unfolded and gives the folded deck a fresh hold", () => {
+  const a = queue.show("a"); const b = queue.show("b");
+  vi.advanceTimersByTime(2000);
+  queue.setExpanded(true);
+  vi.advanceTimersByTime(10000);
+  expect(live()).toEqual([a, b]);
+  queue.setExpanded(false);
+  vi.advanceTimersByTime(2199);
+  expect(live()).toEqual([a, b]);
+  vi.advanceTimersByTime(1);
+  expect(live()).toEqual([]);
+});
+
+it("keeps unfolded cards readable during a flood and refills a dismissed middle slot", () => {
+  const all = Array.from({ length: 10 }, (_, i) => queue.show(`n${i}`));
+  queue.setExpanded(true);
+  vi.advanceTimersByTime(10000);
+  expect(live()).toEqual(all.slice(0, MAX_VISIBLE));
+  queue.dismiss(all[1]);
+  vi.advanceTimersByTime(220);
+  expect(live()).toEqual([all[0], all[2], all[3], all[4]]);
+});
+
+it("waits for the entire exiting deck before presenting queued cards", () => {
+  const all = Array.from({ length: 6 }, (_, i) => queue.show(`n${i}`));
+  queue.dismissDeck();
+  expect(queue.snapshot().every(n => n.exiting)).toBe(true);
+  expect(ids()).toEqual(all.slice(0, MAX_VISIBLE));
+  vi.advanceTimersByTime(220);
+  expect(live()).toEqual(all.slice(MAX_VISIBLE));
 });
 
 it("keeps duplicates", () => {

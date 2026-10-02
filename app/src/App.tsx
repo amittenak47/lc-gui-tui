@@ -1337,6 +1337,7 @@ export function App() {
             groups={tabState.groups}
             activeId={tabState.activeId}
             busy={chrome.busy || shellLoadActive}
+            loadingId={chrome.loadActive || chrome.loading || shellLoadActive || chrome.docIndex.viewportWait ? tabState.activeId : null}
             onFocus={focusTab}
             onClose={closeTab}
             onCancelLoad={shellLoadActive ? cancelLoad : undefined}

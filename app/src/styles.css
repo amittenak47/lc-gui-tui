@@ -509,6 +509,7 @@ a,
 }
 
 .lc-tab {
+  position: relative;
   display: flex;
   flex: 1 1 0;
   align-items: center;
@@ -525,6 +526,49 @@ a,
 
 .lc-tab:last-child {
   border-right: 0;
+}
+
+/*
+ * A tab loading: a bright arc running round its border.
+ *
+ * Only a transform moves, so the compositor runs it: the tab's own load
+ * holds the main thread for seconds, and an animated stroke (painted on
+ * that thread every frame) stood still for exactly as long as it was
+ * meant to show. A 2 px ring, masked out of the tab's box, shows a
+ * spinning conic sweep behind it.
+ */
+.lc-tab-loading-border {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  overflow: hidden;
+  border-radius: inherit;
+  padding: 2px;
+  color: var(--lc-tab-mode, var(--accent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+.lc-tab-loading-border::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 200vmax;
+  height: 200vmax;
+  max-width: 1200px;
+  max-height: 1200px;
+  translate: -50% -50%;
+  background: conic-gradient(from 0deg, transparent 0 70%, currentColor 88%, transparent 100%);
+  will-change: transform;
+  animation: lc-tab-border-lap 1s linear infinite;
+}
+@keyframes lc-tab-border-lap {
+  to { transform: rotate(1turn); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lc-tab-loading-border::before { animation: none; background: currentColor; }
 }
 
 /*
@@ -8191,15 +8235,9 @@ body[data-lc-sash-drag="horizontal"] {
   max-height: 36px;
 }
 
-.lc-map-chrome-stack:not(.has-wake) > .lc-chrome-stack-tray,
-.lc-map-chrome-left:not(.has-wake) > .lc-chrome-stack-tray {
-  display: contents;
-}
-
 /*
- * Grouping only. Closed keeps the tray's width so the checker is already on
- * the toolbar center. Open and close run in sequence — wake slides first on
- * open, tray morphs first on close.
+ * Motion owns the tray's height, fade and scale. Closed keeps its width so
+ * the checker is already on the toolbar center when the tray wakes.
  * Right-stack card chrome lives on the tray so an empty card cannot flash.
  */
 .lc-chrome-stack-tray {
@@ -8220,44 +8258,18 @@ body[data-lc-sash-drag="horizontal"] {
   box-shadow: 0 2px 10px rgb(0 0 0 / 16%);
 }
 
-.lc-map-chrome-stack.has-wake .lc-chrome-stack-tray,
-.lc-map-chrome-left.has-wake .lc-chrome-stack-tray {
+.lc-chrome-motion {
   width: max-content;
-  transition:
-    opacity var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
-    transform var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
-    max-height var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
-    padding var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
-    border-color var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1),
-    box-shadow var(--lc-chrome-morph) cubic-bezier(0.22, 1, 0.36, 1);
-  transition-delay: 0ms;
+  min-height: 0;
+  transition: none;
 }
 
 .lc-map-chrome-stack.has-wake:not(.is-open) .lc-chrome-stack-tray,
 .lc-map-chrome-left.has-wake:not(.is-open) .lc-chrome-stack-tray {
-  opacity: 0;
-  max-height: 0;
-  height: 0;
-  min-height: 0;
-  flex: 0 0 auto;
   padding-block: 0;
   border-color: transparent;
   box-shadow: none;
-  transform: scaleY(0);
   pointer-events: none;
-  overflow: hidden;
-}
-
-.lc-map-chrome-stack.has-wake.is-open .lc-chrome-stack-tray,
-.lc-map-chrome-left.has-wake.is-open .lc-chrome-stack-tray {
-  opacity: 1;
-  max-height: 32rem;
-  height: auto;
-  flex: 0 1 auto;
-  transform: none;
-  pointer-events: auto;
-  overflow: visible;
-  transition-delay: var(--lc-chrome-morph);
 }
 
 .lc-map-chrome-stack > .lc-lined-toggle,
@@ -8735,8 +8747,20 @@ body[data-lc-sash-drag="horizontal"] {
 :is(.lc-chrome-stack-tray, .lc-chrome-stack-fold-inner) > .lc-chrome-eye,
 :is(.lc-chrome-stack-tray, .lc-chrome-stack-fold-inner) > .lc-lined-toggle,
 .lc-map-chrome-row > .lc-lined-toggle {
-  transition: opacity 220ms ease;
+  transition:
+    opacity 220ms ease,
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
 }
+
+.lc-map-chrome-row > .lc-lined-toggle svg,
+.lc-chrome-stack-fold-inner > :is(.lc-lined-toggle, .lc-chrome-eye) svg {
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.lc-chrome-toggle-glyph { display: inline-flex; }
+.lc-chrome-stack-fold-inner > :is(.lc-lined-toggle, .lc-chrome-eye):active svg { transform: scale(.88); }
 
 .lc-map-chrome-stack.has-wake.is-snap .lc-chrome-stack-tray,
 .lc-map-chrome-left.has-wake.is-snap .lc-chrome-stack-tray,
@@ -16818,19 +16842,6 @@ button.lc-row-selected:hover:not(:disabled) {
   left: auto;
 }
 
-/* Reserve the final toolbar width immediately; only its pixels move on
- * entry. Growing the preset chip from zero relaid out the row every frame. */
-.lc-toolbar-enter:not(.lc-toolbar-floating) {
-  animation: lc-toolbar-enter 200ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
-}
-@keyframes lc-toolbar-enter {
-  from { opacity: 0; translate: 0 8px; }
-  to { opacity: calc(1 - var(--lc-agent-open, 0)); translate: 0 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .lc-toolbar-enter:not(.lc-toolbar-floating) { animation: none; }
-}
-
 [data-reading-pages] .lc-map-controls {
   /* Largest turn triangle (120px), plus the opened checker's 52px drop
    * and a touch gap. The pen dock is deliberately not moved. */
@@ -21059,13 +21070,21 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 6px;
   width: min(270px, calc(100vw - 24px));
   pointer-events: none;
+  max-height: calc(100dvh - var(--lc-safe-top, 0px) - 90px);
+  touch-action: pan-y;
 }
+.lc-notification-stack.is-expanded { width: min(278px, calc(100vw - 16px)); overflow-y: auto; overflow-x: hidden; padding: 4px; margin: -4px; scrollbar-width: none; }
+.lc-notification-stack.is-expanded::-webkit-scrollbar { display: none; }
+.lc-notification-announcer { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.lc-notification-stack.is-folded .lc-notification:not(:nth-child(2)) { overflow: hidden; }
+.lc-notification-stack.is-folded .lc-notification:not(:nth-child(2)) > * { visibility: hidden; }
 .lc-notification {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 10px 9px 12px;
+  gap: 4px;
+  padding: 5px;
+  box-sizing: border-box;
   border: 1px solid var(--chrome-edge);
   border-radius: 9px;
   background: var(--surface, #f8f7f4);
@@ -21075,7 +21094,7 @@ button.lc-row-selected:hover:not(:disabled) {
   pointer-events: auto;
 }
 .lc-notification span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.lc-notification button {
+.lc-notification .lc-notification-dismiss {
   flex: 0 0 28px;
   height: 28px;
   padding: 0;
@@ -21086,7 +21105,36 @@ button.lc-row-selected:hover:not(:disabled) {
   font-size: 18px;
   cursor: pointer;
 }
-.lc-notification button:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.lc-notification-dismiss:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.lc-notification-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 4px 2px 4px 7px;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 6px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.lc-notification-count {
+  flex: 0 0 auto;
+  min-width: 18px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--muted);
+  text-align: center;
+  font-size: 10px;
+}
 .lc-library-refresh { display: grid; gap: 8px; margin-top: 8px; font-size: 12px; }
 .lc-library-times { display: grid; gap: 3px; margin-top: 5px; font-size: 11px; color: var(--muted); text-align: left; }
 .lc-hub-pull-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -21283,47 +21331,22 @@ button.lc-row-selected:hover:not(:disabled) {
   display: flex; flex-direction: column; gap: 2px;
 }
 .lc-chrome-stack-fold {
-  display: grid;
-  grid-template-rows: 1fr;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
-  transition: grid-template-rows 220ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-.lc-chrome-stack-tray.is-folded .lc-chrome-stack-fold {
-  grid-template-rows: 0fr;
 }
 .lc-chrome-stack-fold-inner {
-  overflow: hidden;
   min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: 2px;
-  transform-origin: bottom center;
-  opacity: 1;
-  transform: translateY(0);
-  visibility: visible;
-  transition:
-    opacity 180ms ease,
-    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    visibility 0ms;
 }
-
-/*
- * Fold clips with overflow:hidden. The theme popover is absolute beside the
- * chip, so while it is open the inner must not eat it.
- */
-.lc-chrome-stack-tray:not(.is-folded) .lc-chrome-stack-fold-inner:has(.lc-palette-popover) {
-  overflow: visible;
-}
-.lc-chrome-stack-tray.is-folded .lc-chrome-stack-fold-inner {
-  opacity: 0;
-  transform: translateY(8px);
-  pointer-events: none;
-  visibility: hidden;
-  transition:
-    opacity 180ms ease,
-    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    visibility 0ms 220ms;
+@media (prefers-reduced-motion: reduce) {
+  .lc-map-chrome-row > .lc-lined-toggle svg,
+  .lc-chrome-stack-fold-inner > :is(.lc-lined-toggle, .lc-chrome-eye) svg {
+    transition: none;
+  }
 }
 .lc-agent-tray-dot > span {
   display: block; width: 11px; height: 11px; border-radius: 50%; background: #cf4c4c;

@@ -29,6 +29,8 @@ import {
 } from "react";
 import type { MdFormatKind } from "../modes/AnnotateMarkdownEditor";
 import { createPortal } from "react-dom";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { ChromeMotionPanel } from "./ChromeMotionPanel";
 
 import {
   resolveShapeMods,
@@ -1717,6 +1719,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
    * again; it means nothing in `visible`, and is the whole of the other two.
    */
   const [trayFolded, setTrayFolded] = useState(false);
+  const reducedChromeMotion = useReducedMotion();
   const [chromeMode, setChromeMode] = useState<ChromeMode>(loadChromeMode);
   const [chromeWakeMarker, setChromeWakeMarker] =
     useState<ChromeWakeMarker>(loadChromeWakeMarker);
@@ -10643,7 +10646,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 .filter(Boolean)
                 .join(" ")}
             >
-              <div className="lc-chrome-stack-tray">
+              <ChromeMotionPanel className="lc-chrome-stack-tray"
+                open={annotateToggle && (chromeMode === "visible" || leftChromeOpen)}
+                snap={chromeWakeSnap} delay={chromeTraySleeps ? .16 : 0}>
               {/*
                 Fade and hidden keep this mounted for the checker. Visible has
                 no checker, so the scroll/annotate control stays with the menu.
@@ -10654,8 +10659,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                     Link sits above the scroll/annotate toggle. The column is
                     bottom-aligned, so the toggle keeps the slot it has alone.
                   */}
+                  <AnimatePresence>
                   {linkToggle && annotateCode && (
-                    <button
+                    <motion.button
+                      key="link-toggle"
+                      initial={{ opacity: 0, height: 0, scale: .85 }}
+                      animate={{ opacity: 1, height: 44, scale: 1 }}
+                      exit={{ opacity: 0, height: 0, scale: .85 }}
+                      transition={{ duration: reducedChromeMotion ? 0 : .18 }}
+                      style={{ minHeight: 0, overflow: "hidden" }}
                       type="button"
                       className={
                         linking
@@ -10667,9 +10679,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       onClick={() => onToggleLink?.()}
                     >
                       <LinkToolIcon on={linking} />
-                    </button>
+                    </motion.button>
                   )}
-                  <button
+                  </AnimatePresence>
+                  <motion.button
+                    whileTap={reducedChromeMotion ? undefined : { scale: .92 }}
                     type="button"
                     className={
                       annotateCode
@@ -10702,11 +10716,15 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       toggleAnnotate();
                     }}
                   >
-                    <AnnotateIcon on={annotateCode} />
-                  </button>
+                    <motion.span className="lc-chrome-toggle-glyph"
+                      animate={{ rotate: annotateCode ? -6 : 0, scale: annotateCode ? 1.05 : 1 }}
+                      transition={{ duration: reducedChromeMotion ? 0 : .18 }}>
+                      <AnnotateIcon on={annotateCode} />
+                    </motion.span>
+                  </motion.button>
                 </div>
               )}
-              </div>
+              </ChromeMotionPanel>
               {annotateToggle && chromeTraySleeps && (
                 <button
                   type="button"
@@ -10760,8 +10778,10 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 re-earn all of that and would have drifted from it by the first
                 change to either.
               */}
+              <AnimatePresence>
               {!mapChromeHidden && editing && onMdFormat && (
                 <div
+                  key="markdown-toolbar"
                   className="lc-toolbar-md-dock"
                   onPointerDownCapture={() => {
                     wakeChromeRef.current();
@@ -10801,6 +10821,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               )}
               {!mapChromeHidden && annotateCode && !editing && (
               <div
+                key="ink-toolbar"
                 onPointerDownCapture={() => {
                   wakeChromeRef.current();
                 }}
@@ -10900,6 +10921,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               />
               </div>
               )}
+              </AnimatePresence>
             </div>
             <div className="lc-map-chrome-right" ref={utilityTrayRef}>
               {/*
@@ -10922,7 +10944,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   if (handsStacked && menuPeek) peekMenu();
                 }}
               >
-                <div className={`lc-chrome-stack-tray${trayFolded ? " is-folded" : ""}`}>
+                <ChromeMotionPanel className={`lc-chrome-stack-tray${trayFolded ? " is-folded" : ""}`}
+                  open={chromeEnabled && (!chromeTraySleeps || chromeStackOpen)}
+                  snap={chromeWakeSnap} delay={chromeTraySleeps ? .16 : 0}>
                   <button
                     type="button"
                     className="lc-lined-toggle lc-tray-fold"
@@ -10934,8 +10958,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                       <path d={trayFolded ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"} />
                     </svg>
                   </button>
-                <div className="lc-chrome-stack-fold">
-                <div className="lc-chrome-stack-fold-inner" aria-hidden={trayFolded || undefined}>
+                <ChromeMotionPanel className="lc-chrome-stack-fold" open={!trayFolded}>
+                <div className="lc-chrome-stack-fold-inner">
                 {/*
                   Explore portals search / filter / cluster into this slot so
                   the tray grows in place instead of painting a second island.
@@ -11109,8 +11133,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                   </button>
                 )}
                 </div>
-                </div>
-                </div>
+                </ChromeMotionPanel>
+                </ChromeMotionPanel>
                 {chromeTraySleeps && (
                   <button
                     type="button"

@@ -19,6 +19,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { usePresence, useReducedMotion } from "motion/react";
 
 import { MorphBar } from "../components/MorphBar";
 import { HoldButton } from "../components/HoldButton";
@@ -320,6 +321,9 @@ export function BoardToolbar({
   const [mods, setMods] = useState<Record<string, ShapeModValue>>({});
   const [moveAsOne, setMoveAsOne] = useState(true);
   const toolbarRootRef = useRef<HTMLDivElement | null>(null);
+  const [isPresent, safeToRemove] = usePresence();
+  const reducedMotion = useReducedMotion();
+  const interruptedPose = useRef<{ clipPath: string; opacity: string } | null>(null);
 
   const [layout, setLayout] = useState<ToolbarLayout>(() => loadToolbarLayout());
   const rowRef = useRef<HTMLDivElement | null>(null);
@@ -894,12 +898,48 @@ export function BoardToolbar({
     </button>
   );
 
+  // Animate the actual island: a transformed wrapper would change the fixed
+  // positioning of an undocked toolbar. Clipping unfolds without relaying out
+  // the tools, and releases at the end so flyouts can extend beyond the island.
+  useLayoutEffect(() => {
+    const node = toolbarRootRef.current;
+    if (!node || reducedMotion || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches || typeof node.animate !== "function") {
+      // Presence records departures in its own layout effect. Completing
+      // after that commit also handles a zero-duration exit correctly.
+      let cancelled = false;
+      if (!isPresent) queueMicrotask(() => { if (!cancelled) safeToRemove?.(); });
+      return () => { cancelled = true; };
+    }
+    if (isPresent && handover) return;
+    const folded = axis === "column" ? "inset(48% 0% round 14px)" : "inset(0% 48% round 14px)";
+    const open = "inset(0% 0% round 14px)";
+    const opacity = getComputedStyle(node).opacity;
+    const frames = isPresent
+      ? [{ clipPath: folded, opacity: 0 }, { clipPath: open, opacity }]
+      : [{ clipPath: open, opacity }, { clipPath: folded, opacity: 0 }];
+    if (interruptedPose.current) frames[0] = interruptedPose.current;
+    const animation = node.animate(frames, {
+      duration: isPresent ? 280 : 180,
+      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+      fill: isPresent ? "none" : "forwards",
+    });
+    animation.onfinish = () => { interruptedPose.current = null; if (!isPresent) safeToRemove?.(); };
+    return () => {
+      if (animation.playState === "running") {
+        const painted = getComputedStyle(node);
+        interruptedPose.current = { clipPath: painted.clipPath, opacity: painted.opacity };
+      }
+      animation.cancel();
+    };
+  }, [isPresent, safeToRemove, reducedMotion]);
+
   return (
     <div
       ref={toolbarRootRef}
+      inert={!isPresent || undefined}
+      aria-hidden={!isPresent || undefined}
       className={[
         "lc-toolbar",
-        !handover ? "lc-toolbar-enter" : "",
         mobile ? "lc-toolbar-compact" : "",
         floating ? "lc-toolbar-floating" : "",
         dragging ? "lc-toolbar-dragging" : "",

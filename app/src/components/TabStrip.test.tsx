@@ -170,6 +170,34 @@ describe("distanceOutside", () => {
 });
 
 describe("TabStrip", () => {
+  it("acknowledges a tab tap and keeps its border busy throughout loading", () => {
+    vi.useFakeTimers();
+    const tabs = [board("one", "One"), doc("two", "Two")];
+    const onFocus = vi.fn();
+    const view = mount({ tabs, activeId: "one", onFocus });
+    act(() => grab(view, "Two").click());
+    expect(onFocus).toHaveBeenCalledWith("two");
+    expect(view.chips()[1].getAttribute("aria-busy")).toBe("true");
+    expect(view.chips()[0].querySelector(".lc-tab-loading-border")).toBeNull();
+    view.rerender({ tabs, activeId: "two", loadingId: "two" });
+    act(() => vi.advanceTimersByTime(3000));
+    expect(view.chips()[1].querySelector(".lc-tab-loading-border")).not.toBeNull();
+    view.rerender({ tabs, activeId: "two", loadingId: null });
+    expect(view.chips()[1].hasAttribute("aria-busy")).toBe(false);
+    view.unmount();
+  });
+
+  it("briefly acknowledges an already mounted tab and cleans up on unmount", () => {
+    vi.useFakeTimers();
+    const view = mount({ tabs: [board("one", "One"), board("two", "Two")], activeId: "one" });
+    act(() => grab(view, "Two").click());
+    act(() => vi.advanceTimersByTime(650));
+    expect(view.chips()[1].querySelector(".lc-tab-loading-border")).toBeNull();
+    act(() => grab(view, "Two").click());
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("draws every open document, active one marked", () => {
     const view = mount({ tabs: [homeTab(), board("b1", "doodle")], activeId: "b1" });
     const chips = view.chips();

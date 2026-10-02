@@ -13,7 +13,7 @@
  * the parked ones get the flat word, which is all their record knows.
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useReducedMotion } from "motion/react";
 
@@ -38,6 +38,8 @@ export interface TabStripProps {
   activeId: string;
   /** A workspace is opening; the strip stops taking taps. */
   busy?: boolean;
+  /** The workspace is restoring content or preparing its canvas. */
+  loadingId?: string | null;
   onFocus: (id: string) => void;
   onClose: (id: string) => void;
   /** The live index chip for the active document, if it has one. */
@@ -225,6 +227,7 @@ export function TabStrip({
   groups = [],
   activeId,
   busy = false,
+  loadingId = null,
   onFocus,
   onClose,
   activeIndexChip,
@@ -245,6 +248,13 @@ export function TabStrip({
   const lastTapRef = useRef({ id: "", at: 0 });
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [acknowledgedId, setAcknowledgedId] = useState<string | null>(null);
+  const [switchPending, startSwitch] = useTransition();
+  useEffect(() => {
+    if (!acknowledgedId || switchPending) return;
+    const timer = window.setTimeout(() => setAcknowledgedId(null), 650);
+    return () => window.clearTimeout(timer);
+  }, [acknowledgedId, switchPending]);
 
   /*
    * The chip that is currently being carried, and where.
@@ -457,6 +467,7 @@ export function TabStrip({
           {row.group ? <span className="lc-tab-group-frame" aria-hidden /> : null}
           {row.members.map((tab) => {
         const selected = tab.id === activeId;
+        const loading = tab.id === loadingId || tab.id === acknowledgedId;
         const indexState = indexStateOf(tab);
         // Home abandons an in-flight load, but it never stops saying Home.
         const cancelling = false;
@@ -468,6 +479,7 @@ export function TabStrip({
             key={tab.id}
             role="tab"
             aria-selected={selected}
+            aria-busy={loading || undefined}
             data-tab-active={selected ? "true" : "false"}
             data-tab-kind={cancelling ? "cancel" : tab.kind}
             data-tab-id={tab.id}
@@ -475,6 +487,7 @@ export function TabStrip({
             className={[
               cancelling ? "lc-tab is-cancelling" : selected ? "lc-tab is-active" : "lc-tab",
               grouped ? "is-grouped" : "",
+              loading ? "is-loading" : "",
               carry?.id === tab.id ? "is-carrying" : "",
               dropTargetId === tab.id ? "is-drop-target" : "",
               cancelling && cancelHit ? "is-cancel-hit" : "",
@@ -482,6 +495,7 @@ export function TabStrip({
               .filter(Boolean)
               .join(" ")}
           >
+            {loading && <span className="lc-tab-loading-border" aria-hidden="true" />}
             <button
               type="button"
               className="lc-tab-hit"
@@ -510,7 +524,9 @@ export function TabStrip({
                     }
                     lastTapRef.current = { id: tab.id, at: now };
                   }
-                  onFocus(tab.id);
+                  if (!selected) setAcknowledgedId(tab.id);
+                  // Paint the acknowledgement before rendering the destination.
+                  startSwitch(() => onFocus(tab.id));
                   return;
                 }
                 if (cancelHit || cancelTimerRef.current != null) return;
