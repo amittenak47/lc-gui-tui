@@ -929,6 +929,19 @@ function hideForReadingZoom(board: HTMLElement, hide: boolean): void {
   }
 }
 
+/**
+ * Pages reading counts as zoomed into the page past this much of the fit;
+ * a pinch let go short of it settles back on the fit, so turning comes back.
+ */
+const PAGE_ZOOMED_IN = 1.04;
+
+/**
+ * How far the fingers' spread must change before a two-finger touch zooms.
+ * Short of it the fingers only move the page: two fingers sliding together
+ * never keep the same spread, and every wobble of it was a zoom.
+ */
+const PINCH_ZOOM_DEADBAND = 0.06;
+
 /** How far past a fitted page a pinch may go in. */
 const PAGE_PINCH_RANGE = 3;
 const ZOOM_MAX = 1.75;
@@ -6284,6 +6297,11 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       clearPanOffsetsRef.current();
       placeContentSlotAtRef.current(scrollX, scrollY, zoom);
       publishPdfFilmFromScrollRef.current(scrollX, scrollY, zoom, camera.height);
+      // Let go all but back at the page fit: settle on it, so the page is
+      // whole and centred again and turning comes back.
+      if (pageFitRef.current != null && pageLockRef.current && zoom < session.floor * PAGE_ZOOMED_IN) {
+        applyPageFitRef.current();
+      }
     }
     docFlags.camera(false);
     rasterInkRef.current?.setCameraZooming(false);
@@ -6614,7 +6632,14 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     const root = boardRef.current;
     if (!root) return;
     const touches = new Map<number, { x: number; y: number }>();
-    let pinch: { d0: number; z0: number; anchor: { x: number; y: number }; frame: number } | null = null;
+    let pinch: {
+      d0: number;
+      z0: number;
+      anchor: { x: number; y: number };
+      frame: number;
+      /** The spread has left the dead band: it zooms from here on. */
+      zooming: boolean;
+    } | null = null;
 
     const reading = () =>
       !rasterInkRef.current?.isDrawing() &&
@@ -6649,6 +6674,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
           y: (mid.y - (state.offsetTop ?? 0)) / z0 - (state.scrollY ?? 0),
         },
         frame: 0,
+        zooming: false,
       };
       beginReadingZoom(pinch.anchor.y);
     };
@@ -6658,6 +6684,16 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       pinch.frame = 0;
       if (touches.size < 2) return;
       const { mid, d } = spread();
+      if (!pinch.zooming) {
+        // Moving, not yet zooming: the page follows the fingers at its size.
+        if (Math.abs(d / pinch.d0 - 1) < PINCH_ZOOM_DEADBAND) {
+          zoomReadingCamera(pinch.z0, pinch.anchor, mid);
+          return;
+        }
+        // Zoom from this spread, so leaving the band does not jump.
+        pinch.zooming = true;
+        pinch.d0 = d;
+      }
       zoomReadingCamera(pinch.z0 * (d / pinch.d0), pinch.anchor, mid);
     };
 
@@ -10121,6 +10157,13 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         }
         const cam = committedPanCameraRef.current;
         placePageMask(cam.scrollX, cam.scrollY, cam.zoom);
+      },
+      zoomedIntoPage: () => {
+        if (pageFitRef.current == null || !pageLockRef.current) return false;
+        if (readingZoomRef.current) return true;
+        const live = liveCameraRef.current;
+        const zoom = live?.live ? live.zoom : getViewport()?.zoom;
+        return zoom != null && zoom > pageFitZoomRef.current * PAGE_ZOOMED_IN;
       },
       setPageFit: (fraction) => {
         const next = fraction != null && fraction > 0 ? Math.min(1, fraction) : null;

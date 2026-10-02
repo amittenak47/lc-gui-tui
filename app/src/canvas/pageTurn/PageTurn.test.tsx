@@ -36,6 +36,7 @@ let pageBox: { minX: number; maxX: number; minY: number; maxY: number } | null =
 const board = {
   readingPageBox: vi.fn(() => pageBox),
   setPageFit: vi.fn(),
+  zoomedIntoPage: vi.fn(() => false),
   setPageSpread: vi.fn(),
   getViewportBounds: vi.fn(() => view),
   readingPageFrames: vi.fn(() => FRAMES),
@@ -189,6 +190,25 @@ it("turns to the next page when dragged past a third of the way, and lands on it
   await settle();
   expect(board.jumpToPageFrame).toHaveBeenCalledWith({ ...FRAMES[2], minY: FRAMES[2].minY });
   expect(board.setPageLock).toHaveBeenLastCalledWith(FRAMES[2]);
+});
+
+it("leaves the hand to move about a page zoomed into, turning nothing", async () => {
+  board.zoomedIntoPage.mockReturnValue(true);
+  try {
+    mount();
+    const boardDown = vi.fn();
+    host.addEventListener("pointerdown", boardDown);
+    // At the corner, then a quick sideways throw across the page.
+    pointer("pointerdown", 380, 580);
+    expect(boardDown).toHaveBeenCalled();
+    pointer("pointermove", 300, 582);
+    pointer("pointermove", 150, 584);
+    pointer("pointerup", 150, 584);
+    await settle();
+    expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  } finally {
+    board.zoomedIntoPage.mockReturnValue(false);
+  }
 });
 
 it("takes hold of the corner on touch, before the finger moves", async () => {

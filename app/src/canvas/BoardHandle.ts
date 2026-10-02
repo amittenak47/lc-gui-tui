@@ -310,6 +310,11 @@ export interface BoardHandle {
    * reading width.
    */
   setPageFit(fraction: number | null): void;
+  /**
+   * Pages reading, zoomed in past the page fit (or mid-pinch): the hand is
+   * moving about the page, not turning it.
+   */
+  zoomedIntoPage(): boolean;
   /** Put this slot's top at the top of the view — or, with a page fit, the whole slot in the middle of it. */
   jumpToPageFrame(frame: PageFrame): boolean;
   /** The page, its marks and its ink for a scene rectangle, as pixels. */

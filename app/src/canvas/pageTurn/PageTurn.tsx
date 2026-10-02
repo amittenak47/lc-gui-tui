@@ -1711,6 +1711,9 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       mouse = event.pointerType === "mouse";
       if (event.pointerType === "pen" && !penTurns()) return; // with a pen up, the stylus writes
       if (!inHost(event.target)) return;
+      // Zoomed into the page, the hand moves about it; turning waits for the
+      // zoom back out to the whole page.
+      if (!turnRef.current && boardRef.current?.zoomedIntoPage()) return;
       // Touch and mouse can grip the side strips as well as the corner peels.
       const side = edgeAt(event.clientX, event.clientY);
       const playing = turnRef.current;
@@ -1873,7 +1876,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       }
       if (!active && event.pointerType === "mouse" && event.buttons === 0) {
         mouse = true;
-        setHover(edgeAt(event.clientX, event.clientY));
+        setHover(boardRef.current?.zoomedIntoPage() ? null : edgeAt(event.clientX, event.clientY));
       }
     };
 
