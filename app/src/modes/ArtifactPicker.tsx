@@ -207,7 +207,7 @@ function ArtifactTrashConfirm({ item, shape, pending, error, onConfirm, onCancel
 }
 
 export function ArtifactPicker({
-  shape,
+  shape = "blocky",
   parent,
   associations,
   scope = "catalog",
