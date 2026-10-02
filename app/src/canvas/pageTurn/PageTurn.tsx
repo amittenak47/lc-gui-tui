@@ -253,6 +253,18 @@ function pdfPaintSignature(hostSelector: string, pageId: number): string {
   return canvases ? Array.from(canvases, (c) => c.width).join(",") : "";
 }
 
+/**
+ * Whether a PDF page has pixels to turn to: a bitmap painted, however blurry
+ * its preview. One that has none would turn over as blank paper — black in
+ * a dark theme — so a hand flicking on past the painted pages waits there.
+ */
+function pdfPagePainted(hostSelector: string, pageId: number): boolean {
+  if (!(pageId >= 1)) return false;
+  const host = document.querySelector(hostSelector);
+  const canvases = host?.querySelectorAll<HTMLCanvasElement>(`[data-pdf-page="${pageId}"][data-painted] canvas.lc-pdf-canvas`);
+  return Boolean(canvases && Array.from(canvases).some((c) => c.width > 8 && c.height > 8));
+}
+
 type ShotCache = Map<string, Promise<HTMLCanvasElement | null>>;
 
 /**
@@ -953,6 +965,8 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const toStart = direction === "next" ? start + 2 : start - 2;
       const from = frames[start];
       const to = frames[toStart];
+      // Nothing painted to turn to yet: hold here rather than turn over blank paper.
+      if (to && pagedRef.current && !pdfPagePainted(hostSelector, to.pageId)) return null;
       const r = spreadRect();
       const pageShot = spreadPageShot(b, frames);
       if (!from || !to || !r || !pageShot) return null;
@@ -1025,6 +1039,8 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       const from = frames[at];
       const to = frames[toIndex];
       if (!from || !to) return null;
+      // Nothing painted to turn to yet: hold here rather than turn over blank paper.
+      if (pagedRef.current && !pdfPagePainted(hostSelector, to.pageId)) return null;
       // The visible part of this page — the page, not the view around it —
       // and where it is on screen.
       let scene: Scene | null;

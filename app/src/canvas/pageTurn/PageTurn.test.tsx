@@ -123,6 +123,20 @@ function mount(turnEnabled = true, fit: number | null = null, paged = true) {
       <PageTurn boardRef={ref} filmScope="t1" hostSelector='[data-lc-tab="t1"]' lockActive turnEnabled={turnEnabled} spread={paged} paged={paged} fit={fit} />,
     ),
   );
+  // A PDF's pages, painted: a turn to an unpainted page holds back.
+  if (paged && !host.querySelector("[data-pdf-page]")) {
+    for (const f of FRAMES) {
+      const slot = document.createElement("div");
+      slot.dataset.pdfPage = String(f.pageId);
+      slot.dataset.painted = "";
+      const canvas = document.createElement("canvas");
+      canvas.className = "lc-pdf-canvas";
+      canvas.width = 100;
+      canvas.height = 150;
+      slot.append(canvas);
+      host.append(slot);
+    }
+  }
   if (!host.querySelector(".lc-page-mask-hole")) {
     const mask = document.createElement("div"); mask.className = "lc-page-mask";
     const hole = document.createElement("div"); hole.className = "lc-page-mask-hole";
@@ -584,6 +598,18 @@ it("turns a text page over its live copy while the next page has no picture", as
   for (let i = 0; i < 4; i += 1) await settle();
   expect(document.querySelector(".lc-page-turn")).toBeNull();
   expect(host.querySelector(".lc-page-turn-under")).toBeNull();
+});
+
+it("holds a PDF on its page when the next one has nothing painted yet", async () => {
+  mount();
+  host.querySelector<HTMLElement>('[data-pdf-page="3"]')!.removeAttribute("data-painted");
+  pointer("pointerdown", 390, 300, "touch", 1000);
+  pointer("pointermove", 300, 300, "touch", 1030);
+  pointer("pointermove", 150, 300, "touch", 1060);
+  pointer("pointerup", 150, 300, "touch", 1070);
+  for (let i = 0; i < 4; i += 1) await settle();
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  expect(board.captureSceneFrame).not.toHaveBeenCalled();
 });
 
 it("leaves the page body to a slow drag and to a swipe up or down", async () => {
