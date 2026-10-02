@@ -10,7 +10,13 @@
  * live saves prefer these keys and keep a manifest on the blob.
  */
 
-import { unpackEncodedInk, type EncodedInk } from "../canvas/inkCodec";
+import {
+  lazyEncodedInk,
+  summarizeEncodedInk,
+  unpackEncodedInk,
+  type EncodedInk,
+  type InkPageSummary,
+} from "../canvas/inkCodec";
 import { bytesFromMaybeGzip } from "./gzip";
 import { run, STORE_INK_PAGES, withStore } from "./idb";
 
@@ -28,6 +34,23 @@ export interface InkPageRecord {
   updatedAt: number;
   /** Authored revision last exchanged with the hub (independent of gzip/save). */
   syncedUpdatedAt?: number;
+  /**
+   * The archive's {@link InkPageSummary}, so opening needs to unpack only the
+   * pages read. Stamped with the archive's length: a row whose `gz` was
+   * replaced without it reads as having none.
+   */
+  sum?: StoredInkSummary;
+}
+
+interface StoredInkSummary extends InkPageSummary {
+  v: 1;
+  len: number;
+}
+
+function storedSummary(row: InkPageRecord): InkPageSummary | null {
+  const sum = row.sum;
+  if (!sum || sum.v !== 1 || !row.gz || sum.len !== row.gz.byteLength) return null;
+  return sum;
 }
 
 /**
@@ -189,23 +212,76 @@ export async function getInkPages(docKey: string): Promise<Map<number, EncodedIn
   // Inflated together (natively, off this thread where the WebView can)…
   const raws = await Promise.all(rows.map((row) =>
     row.inkC || !row.gz ? null : bytesFromMaybeGzip(row.gz).catch(() => null)));
-  // …then unpacked a page at a time, letting the rest of the open in between.
-  // In one go, a written-in book held the main thread for a third of a second,
-  // and the PDF's own parse and first page waited behind it.
+  // …and unpacked only when read, for the pages whose row says what is on
+  // them. Unpacking a written-in book whole held the main thread for a third
+  // of a second of every open, for pages nobody had turned to yet.
+  const unsummarized: [InkPageRecord, EncodedInk][] = [];
   for (let i = 0; i < rows.length; i += 1) {
     const row = rows[i]!;
     let encoded: EncodedInk | null = row.inkC ?? null;
-    if (!encoded && raws[i]) {
-      try {
-        encoded = unpackEncodedInk(raws[i]!);
-      } catch {
-        encoded = null;
+    const raw = raws[i];
+    if (!encoded && raw) {
+      const summary = storedSummary(row);
+      if (summary) {
+        encoded = lazyEncodedInk(raw, summary);
+      } else {
+        try {
+          encoded = unpackEncodedInk(raw);
+        } catch {
+          encoded = null;
+        }
+        if (encoded) unsummarized.push([row, encoded]);
+        // A page at a time, letting the rest of the open in between.
+        await yieldToMain();
       }
-      await yieldToMain();
     }
     if (encoded) out.set(row.pageId, encoded);
   }
+  if (unsummarized.length > 0) scheduleSummaryBackfill(docKey, unsummarized);
   return out;
+}
+
+/** Long enough after an open for its own work to be done. */
+const SUMMARY_BACKFILL_DELAY_MS = 8000;
+const backfilling = new Set<string>();
+
+/**
+ * Give archived rows that predate summaries one, once the book is open.
+ *
+ * Opening reads each such page's strokes for its bounds anyway; the summary
+ * worked out then is remembered on the page, so this is mostly writing it
+ * down. A row that changed since it was read is left for the next open.
+ */
+function scheduleSummaryBackfill(docKey: string, pages: [InkPageRecord, EncodedInk][]): void {
+  if (backfilling.has(docKey)) return;
+  backfilling.add(docKey);
+  setTimeout(() => {
+    void (async () => {
+      const sums = new Map<number, { updatedAt: number; sum: StoredInkSummary }>();
+      for (const [row, encoded] of pages) {
+        if (!row.gz) continue;
+        sums.set(row.pageId, {
+          updatedAt: row.updatedAt,
+          sum: { v: 1, len: row.gz.byteLength, ...summarizeEncodedInk(encoded) },
+        });
+        await yieldToMain();
+      }
+      await withStore(STORE_INK_PAGES, "readwrite", (store) => {
+        for (const [pageId, { updatedAt, sum }] of sums) {
+          const key = inkPageKey(docKey, pageId);
+          const request = store.get(key);
+          request.onsuccess = () => {
+            const current = request.result as InkPageRecord | undefined;
+            if (!current || current.inkC || current.updatedAt !== updatedAt) return;
+            if (current.gz?.byteLength !== sum.len) return;
+            store.put({ ...current, sum }, key);
+          };
+        }
+      });
+    })().catch(() => {
+      /* the next open tries again */
+    }).finally(() => backfilling.delete(docKey));
+  }, SUMMARY_BACKFILL_DELAY_MS);
 }
 
 export async function getInkPageRecords(docKey: string, opts: { metadataOnly?: boolean; strict?: boolean; pageIds?: readonly number[] } = {}): Promise<InkPageRecord[]> {

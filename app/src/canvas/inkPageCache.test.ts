@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { InkPageBook } from "./inkPageCache";
 import { INK_LRU_RADIUS, SPANNING_PAGE_ID, type PageFrame } from "./inkPageIndex";
-import { decodeInkOps, encodeInkOps } from "./inkCodec";
+import { decodeInkOps, encodeInkOps, lazyEncodedInk, packEncodedInk, summarizeEncodedInk } from "./inkCodec";
 import { NO_PRESSURE, inkOpsBounds, type InkDrawOp, type InkEraseOp } from "./rasterInk";
 
 function frames(count: number): PageFrame[] {
@@ -415,5 +415,33 @@ describe("InkPageBook", () => {
     const dirty = book.takeDirtyEncoded();
     expect(decodeInkOps(dirty.get(2)!)).toHaveLength(1);
     expect(dirty.has(3)).toBe(false);
+  });
+
+  it("opens stored pages from their summaries, unpacking only the pages read", () => {
+    const layout = frames(20);
+    const saved = new InkPageBook();
+    saved.replaceAll(layout.map((f, i) => stroke(f.minY + 40, { id: 100 + i, seq: 200 + i })), { frames: layout, preserveIds: true });
+    const pages = saved.snapshotEncodedPages();
+    const unpacked = new Set<number>();
+    const lazy = new Map([...pages].map(([id, encoded]) => {
+      const page = lazyEncodedInk(packEncodedInk(encoded), summarizeEncodedInk(encoded));
+      const read = Object.getOwnPropertyDescriptor(page, "ops")!.get!;
+      Object.defineProperty(page, "ops", { enumerable: true, get: () => (unpacked.add(id), read()) });
+      return [id, page] as const;
+    }));
+    const book = new InkPageBook();
+    book.setFrames(layout);
+    book.ingestEncodedPages(lazy);
+    expect(book.opCount()).toBe(20);
+    expect(book.setFrames(layout)).toBe(false);
+    expect(book.inkBounds()).toEqual(saved.inkBounds());
+    expect(book.pageIds()).toEqual(saved.pageIds());
+    // Only the reading window around page 1 was read.
+    expect([...unpacked].every((id) => id <= 1 + INK_LRU_RADIUS)).toBe(true);
+    expect(book.paintOps().map((op) => op.id)).toContain(100);
+    // A new stroke still gets an id and seq past every stored one.
+    const added = book.commit(stroke(layout[0]!.minY + 60));
+    expect(added.id).toBeGreaterThan(119);
+    expect(added.seq).toBeGreaterThan(219);
   });
 });

@@ -18,7 +18,8 @@ import {
   concatEncodedInk,
   decodeInkOps,
   encodeInkOps,
-  encodedInkBounds,
+  knownInkSummary,
+  summarizeEncodedInk,
   type EncodedInk,
 } from "./inkCodec";
 import {
@@ -33,6 +34,11 @@ import {
 } from "./inkPageIndex";
 import { isHostBoundOp, inkOpsBounds, unionSceneBounds, type InkEraseOp, type InkOp, type SceneBounds } from "./rasterInk";
 import { opsAfterPartialErase, opsAfterStrokeErase, opsWithErasesBaked } from "./strokeEraser";
+
+/** Ops on a stored page, without unpacking one that came with its summary. */
+function encodedOpCount(encoded: EncodedInk): number {
+  return knownInkSummary(encoded)?.n ?? encoded.ops.length + (encoded.raw?.length ?? 0);
+}
 
 /** Recently-evicted encoded pages kept in RAM so a short jump back is free. */
 export const INK_COLD_CAP = 32;
@@ -81,7 +87,7 @@ export class InkPageBook {
     // those carry erasures and must still sync.
     const ids = new Set<number>([...this.onDisk, ...this.dirty]);
     for (const [id, ops] of this.hot) if (ops.length) ids.add(id);
-    for (const [id, ink] of this.cold) if (ink.ops.length || ink.raw?.length) ids.add(id);
+    for (const [id, ink] of this.cold) if (encodedOpCount(ink)) ids.add(id);
     return [...ids].sort((a, b) => a - b);
   }
 
@@ -179,7 +185,7 @@ export class InkPageBook {
       if (id === SPANNING_PAGE_ID) continue;
       if (!this.boundsByPage.has(id)) {
         const hot = this.hot.get(id);
-        this.boundsByPage.set(id, hot ? inkOpsBounds(hot) : encodedInkBounds(this.cold.get(id)!));
+        this.boundsByPage.set(id, hot ? inkOpsBounds(hot) : summarizeEncodedInk(this.cold.get(id)!).b);
       }
       const bounds = this.boundsByPage.get(id);
       if (!bounds) continue;
@@ -244,7 +250,7 @@ export class InkPageBook {
         const hot = this.hot.get(id);
         this.boundsByPage.set(id, hot
           ? inkOpsBounds(hot)
-          : encodedInkBounds(this.cold.get(id)!));
+          : summarizeEncodedInk(this.cold.get(id)!).b);
       }
       bounds = unionSceneBounds(bounds, this.boundsByPage.get(id) ?? null);
     }
@@ -327,7 +333,7 @@ export class InkPageBook {
     for (const [pageId, encoded] of pages) {
       this.cold.set(pageId, encoded);
       this.onDisk.add(pageId);
-      this.opTotal += encoded.ops.length + (encoded.raw?.length ?? 0);
+      this.opTotal += encodedOpCount(encoded);
       this.bumpCounters(encoded);
     }
     this.usedFallback = this.frames.length <= 1;
@@ -559,7 +565,7 @@ export class InkPageBook {
     this.opTotal = 0;
     for (const [pageId, encoded] of entry.pages) {
       this.cold.set(pageId, encoded);
-      this.opTotal += encoded.ops.length + (encoded.raw?.length ?? 0);
+      this.opTotal += encodedOpCount(encoded);
     }
     for (const pageId of entry.pages.keys()) this.markDirty(pageId);
     this.setVisiblePage(this.visiblePage);
@@ -680,13 +686,9 @@ export class InkPageBook {
   }
 
   private bumpCounters(encoded: EncodedInk): void {
-    for (const record of encoded.ops) {
-      if (typeof record.i === "number" && record.i >= this.nextId) this.nextId = record.i + 1;
-      if (typeof record.s === "number" && record.s >= this.nextSeq) this.nextSeq = record.s + 1;
-    }
-    for (const op of encoded.raw ?? []) {
-      if (typeof op.id === "number" && op.id >= this.nextId) this.nextId = op.id + 1;
-      if (typeof op.seq === "number" && op.seq >= this.nextSeq) this.nextSeq = op.seq + 1;
-    }
+    // From the stored page's summary where it has one: its strokes stay packed.
+    const { i, s } = summarizeEncodedInk(encoded);
+    if (i >= this.nextId) this.nextId = i + 1;
+    if (s >= this.nextSeq) this.nextSeq = s + 1;
   }
 }

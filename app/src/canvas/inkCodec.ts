@@ -499,6 +499,60 @@ export function encodedInkBounds(encoded: EncodedInk): SceneBounds | null {
   );
 }
 
+/**
+ * What a page's ink cache needs of a stored page without its strokes: how
+ * many ops, the highest id and seq (so new strokes get fresh ones), and where
+ * it reaches. Kept on the stored row, so a written-in book opens without
+ * unpacking every page — only the ones the reader goes to.
+ */
+export interface InkPageSummary {
+  n: number;
+  i: number;
+  s: number;
+  b: SceneBounds | null;
+}
+
+const summaries = new WeakMap<EncodedInk, InkPageSummary>();
+
+/** The summary already known for this page, if any — never computes. */
+export function knownInkSummary(encoded: EncodedInk): InkPageSummary | null {
+  return summaries.get(encoded) ?? null;
+}
+
+/** The page's summary, worked out (and remembered) when not yet known. */
+export function summarizeEncodedInk(encoded: EncodedInk): InkPageSummary {
+  const known = summaries.get(encoded);
+  if (known) return known;
+  let i = 0, s = 0;
+  for (const record of encoded.ops) {
+    if (typeof record.i === "number" && record.i > i) i = record.i;
+    if (typeof record.s === "number" && record.s > s) s = record.s;
+  }
+  for (const op of encoded.raw ?? []) {
+    if (typeof op.id === "number" && op.id > i) i = op.id;
+    if (typeof op.seq === "number" && op.seq > s) s = op.seq;
+  }
+  const summary = { n: encoded.ops.length + (encoded.raw?.length ?? 0), i, s, b: encodedInkBounds(encoded) };
+  summaries.set(encoded, summary);
+  return summary;
+}
+
+/**
+ * A stored page whose strokes are unpacked the first time anything reads
+ * them. Reading `ops` or `raw` — or copying the page, which reads them —
+ * unpacks; the summary answers the rest. Unreadable bytes read as no ink, as
+ * an unreadable page always has.
+ */
+export function lazyEncodedInk(packed: Uint8Array, summary: InkPageSummary): EncodedInk {
+  let unpacked: EncodedInk | undefined;
+  const load = (): EncodedInk => (unpacked ??= unpackEncodedInk(packed) ?? { v: 2, ops: [] });
+  const encoded = { v: 2 } as EncodedInk;
+  Object.defineProperty(encoded, "ops", { enumerable: true, configurable: true, get: () => load().ops });
+  Object.defineProperty(encoded, "raw", { enumerable: true, configurable: true, get: () => load().raw });
+  summaries.set(encoded, summary);
+  return encoded;
+}
+
 function yieldToUi(): Promise<void> {
   const scheduler = (globalThis as unknown as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
   if (scheduler?.yield) return scheduler.yield();
