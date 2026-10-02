@@ -11,6 +11,7 @@
  * and every request that names a task id names the dataset too.
  */
 
+import type { EncodedInk } from "./canvas/inkCodec";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
 
@@ -176,7 +177,7 @@ import {
   type DocFootnoteSubMarkKind,
 } from "./util/docFootnotes";
 import { footnoteThemeSeed } from "./util/inkPaletteHistory";
-import { hashBytesAsync, loadBinaryDocBytesWithRetry, putDocBytesVerified } from "./util/docBytes";
+import { hashBytesAsync, loadBinaryDocBytesWithRetry, bytesCameFromStore, putDocBytesVerified } from "./util/docBytes";
 import { handOffPickedDoc, takePickedDoc } from "./util/pickedDocHandoff";
 import {
   extractDocumentPages,
@@ -545,9 +546,9 @@ async function restoreInk(
   board: BoardHandle,
   docKey: string | null,
   blob: { ink?: unknown; inkC?: unknown },
-  opts?: { paint?: boolean },
+  opts?: { paint?: boolean; shards?: Promise<Map<number, EncodedInk>> | null },
 ): Promise<void> {
-  const shards = docKey ? await getInkPages(docKey) : new Map();
+  const shards = opts?.shards ? await opts.shards : docKey ? await getInkPages(docKey) : new Map();
   if (isLoadingDoodleActive()) await yieldToInput();
   const ops = inkOpsFrom(blob);
   const source = inkRestoreSource(shards.size, ops.length);
@@ -4010,6 +4011,11 @@ export const Workspace = memo(function Workspace({
          * to lay down under an id nothing else knows about.
          */
         const sessionDocId = input.docId ?? existing?.id ?? freshAnnotateId();
+        // The ink, read and unpacked while the page is prepared: it is waited
+        // for only once the template is up, and was a second of the open.
+        const inkShards = existing
+          ? getInkPages(annotateDocKey(existing.id)).catch(() => new Map<number, EncodedInk>())
+          : null;
 
         /*
          * The bytes go in before anything is restored over them.
@@ -4294,6 +4300,7 @@ export const Workspace = memo(function Workspace({
           const handle = boardRef.current;
           if (handle) await restoreInk(handle, annotateDocKey(existing.id), existing.board, {
             paint: false,
+            shards: inkShards,
           });
           // Which layout that ink was written in, if the copy says; checked
           // against this device's once the pages are laid out, below.
@@ -9432,7 +9439,7 @@ export const Workspace = memo(function Workspace({
                 // skips hashing the file again. `bytesStored` is only the
                 // pick hand-off — IDB already holds a verified copy.
                 hash: hash || undefined,
-                bytesStored: Boolean(fresh),
+                bytesStored: Boolean(fresh) || bytesCameFromStore(bytes),
                 docId: restoreDocId,
                 existingDoc,
                 tabId: tab.id,

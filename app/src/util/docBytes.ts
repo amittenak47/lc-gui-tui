@@ -219,6 +219,17 @@ export async function getDocBytes(hash: string): Promise<ArrayBuffer | null> {
  * stored URI — so this is the last place a missing local copy can come back
  * from without asking the reader to pick the file again.
  */
+/** Buffers read back from this device's store, so already saved there. */
+const fromStore = new WeakSet<ArrayBuffer>();
+
+/**
+ * Whether these bytes came out of the local store — a reopen need not write
+ * them back (a 4.7 MB textbook was rewritten on every open).
+ */
+export function bytesCameFromStore(bytes: ArrayBuffer): boolean {
+  return fromStore.has(bytes);
+}
+
 export async function loadBinaryDocBytes(
   hash: string,
   remote?: (hash: string) => Promise<ArrayBuffer | null>,
@@ -243,7 +254,10 @@ export async function loadBinaryDocBytes(
        * a truncated write, a substituted body — changes it.
        */
       const want = lengthFromHash(hash);
-      if (want == null || local.byteLength === want) return local;
+      if (want == null || local.byteLength === want) {
+        fromStore.add(local);
+        return local;
+      }
       // Drop it rather than leaving it to fail the same way next launch.
       await deleteDocBytes(hash).catch(() => {});
     }

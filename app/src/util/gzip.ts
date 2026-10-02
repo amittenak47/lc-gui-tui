@@ -91,12 +91,41 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/**
+ * Whether this device's `DecompressionStream` has been seen to work, or to
+ * hang. Some Android WebViews built the stream and never settled it; current
+ * ones settle a book's ink in ~0.1 s off the main thread, where fflate took
+ * ~0.2 s on it. Tried once, remembered: a device that hung gets fflate from
+ * then on, and pays the stall at most once.
+ */
+const STREAM_VERDICT_KEY = "lc-gzip-stream";
+
+function streamVerdict(): string | null {
+  try {
+    return localStorage.getItem(STREAM_VERDICT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function recordStreamVerdict(verdict: "ok" | "hangs"): void {
+  try {
+    if (streamVerdict() !== verdict) localStorage.setItem(STREAM_VERDICT_KEY, verdict);
+  } catch {
+    /* storage unavailable: try again next launch */
+  }
+}
+
 async function inflateGzip(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
-  // Android: the stream constructor exists and then never settles. Do not wait.
-  if (!isAndroidDevice() && typeof DecompressionStream === "function") {
+  const tryStream = typeof DecompressionStream === "function" &&
+    (!isAndroidDevice() || streamVerdict() !== "hangs");
+  if (tryStream) {
     try {
-      return await withTimeout(inflateGzipViaStream(bytes), STREAM_STALL_MS);
+      const out = await withTimeout(inflateGzipViaStream(bytes), STREAM_STALL_MS);
+      if (isAndroidDevice()) recordStreamVerdict("ok");
+      return out;
     } catch {
+      if (isAndroidDevice()) recordStreamVerdict("hangs");
       /* threw or stalled — fflate next */
     }
   }

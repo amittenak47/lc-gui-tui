@@ -10,8 +10,8 @@
  * live saves prefer these keys and keep a manifest on the blob.
  */
 
-import { gunzipUnpackInk } from "../canvas/inkArchiveClient";
-import { type EncodedInk } from "../canvas/inkCodec";
+import { unpackEncodedInk, type EncodedInk } from "../canvas/inkCodec";
+import { bytesFromMaybeGzip } from "./gzip";
 import { run, STORE_INK_PAGES, withStore } from "./idb";
 
 const KEY_SEP = "\u001f";
@@ -72,9 +72,10 @@ export async function encodedFromRecord(row: InkPageRecord): Promise<EncodedInk 
   if (row.inkC) return row.inkC;
   if (!row.gz) return null;
   try {
-    // In the archive worker: on the main thread, every page of a written-in
-    // book was a half second of the open.
-    return await gunzipUnpackInk(row.gz);
+    // Gunzipped natively (off the main thread where the WebView can), then
+    // unpacked here. The archive worker took longer to start and to hand a
+    // book's 17 MB of points back than the unpacking itself costs.
+    return unpackEncodedInk(await bytesFromMaybeGzip(row.gz));
   } catch {
     return null;
   }

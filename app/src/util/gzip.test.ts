@@ -96,20 +96,28 @@ describe("without CompressionStream", () => {
     expect(await textFromMaybeGzip(compressed)).toBe(text);
   });
 
-  it("does not use DecompressionStream on Android", async () => {
+  it("stops trying DecompressionStream on an Android device once it has failed there", async () => {
     const text = JSON.stringify({ v: 1, points: [1, 2, 3] });
     const compressed = await gzipText(text);
     if (!isGzip(compressed)) return;
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => void storage.set(key, value),
+    });
     vi.stubGlobal("navigator", {
       userAgent:
         "Mozilla/5.0 (Linux; Android 14; SM-X910) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     });
     const ctor = vi.fn(function DecompressionStream() {
-      throw new Error("Android must not wait on this stream");
+      throw new Error("this WebView's stream does not work");
     });
     vi.stubGlobal("DecompressionStream", ctor);
     expect(await textFromMaybeGzip(compressed)).toBe(text);
-    expect(ctor).not.toHaveBeenCalled();
+    expect(ctor).toHaveBeenCalledTimes(1);
+    // Remembered: the next archive goes straight to fflate.
+    expect(await textFromMaybeGzip(compressed)).toBe(text);
+    expect(ctor).toHaveBeenCalledTimes(1);
   });
 
   it("falls back when the stream never finishes", async () => {
