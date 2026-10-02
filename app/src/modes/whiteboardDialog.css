@@ -1,0 +1,82 @@
+/* Whiteboard only: other library dialogs migrate at their own checkpoint. */
+.lc-settings-modal.lc-dialog-frame.lc-whiteboard-dialog {
+  width: min(500px, 100%);
+  max-height: min(80vh, 640px);
+  max-height: min(80dvh, 640px);
+}
+
+.lc-dialog-frame.lc-whiteboard-dialog .lc-dialog-context { padding: 16px 24px 0; }
+.lc-whiteboard-context {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: var(--lc-dialog-edge) solid var(--lc-dialog-line);
+  border-radius: var(--lc-dialog-control-radius);
+  background: var(--panel);
+}
+.lc-whiteboard-context > svg { flex: 0 0 18px; width: 18px; height: 18px; color: var(--lc-dialog-mode); }
+.lc-whiteboard-context-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.lc-whiteboard-context-sync { flex-shrink: 0; color: var(--muted); font-size: 12px; text-decoration: underline dashed; text-underline-offset: 3px; }
+
+.lc-dialog-frame.lc-whiteboard-dialog .lc-settings-body {
+  padding: 12px 0 0;
+  gap: 0;
+}
+.lc-dialog-frame.lc-whiteboard-dialog .lc-settings-body > .lc-library-search,
+.lc-dialog-frame.lc-whiteboard-dialog .lc-settings-body > .lc-warning,
+.lc-dialog-frame.lc-whiteboard-dialog .lc-settings-body > p { margin: 8px 24px; }
+.lc-dialog-frame.lc-whiteboard-dialog .lc-library-search { border-radius: var(--lc-dialog-control-radius); border-width: var(--lc-dialog-edge); }
+.lc-dialog-frame.lc-whiteboard-dialog .lc-settings-choice { gap: 0; }
+.lc-dialog-frame.lc-whiteboard-dialog .lc-settings-choice > .lc-hold-choice,
+.lc-dialog-frame.lc-whiteboard-dialog .lc-document-menu > .lc-hold-choice,
+.lc-dialog-frame.lc-whiteboard-dialog .lc-library-refresh > .lc-hub-pull-command {
+  width: 100%;
+  min-height: 62px;
+  padding: 16px 24px;
+  border: 0;
+  border-bottom: var(--lc-dialog-edge) solid var(--lc-dialog-line);
+  border-radius: 0;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  box-shadow: none;
+}
+.lc-whiteboard-menu-label { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.lc-whiteboard-row-icon { flex: 0 0 20px; width: 20px; height: 20px; color: var(--muted); }
+.lc-whiteboard-row-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.lc-dialog-frame.lc-whiteboard-dialog .lc-hold-choice strong { font-size: 14px; line-height: 1.3; }
+.lc-dialog-frame.lc-whiteboard-dialog .lc-whiteboard-row-copy .lc-muted { font-size: 12px; line-height: 1.4; white-space: normal; }
+.lc-dialog-frame.lc-whiteboard-dialog .lc-hold-reveal > .lc-hold-reveal-label { display: block; width: 100%; }
+
+/* Retain the shared liquid animation, overriding the library's lateral fill. */
+.lc-dialog-frame.lc-whiteboard-dialog .lc-hold-reveal:not(.lc-progress-fill) > .lc-hold-reveal-fill {
+  transform: translateY(calc((1 - var(--lc-hold, 0)) * (100% + 8px)));
+  transform-origin: center bottom;
+  border-radius: 0;
+}
+.lc-dialog-frame.lc-whiteboard-dialog .lc-scratch-load-entry { padding: 12px 24px; }
+.lc-whiteboard-name-hint { margin: 8px 24px; font-size: 12px; }
+.lc-dialog-frame.lc-whiteboard-dialog .lc-md-new-title { margin: 8px 24px; min-width: 0; }
+.lc-dialog-frame.lc-whiteboard-dialog .lc-hub-pull-catalog { margin: 12px 24px; }
+.lc-dialog-frame.lc-whiteboard-dialog .lc-settings-foot {
+  padding: 16px 24px 20px;
+  justify-content: flex-end;
+  border-top: 0;
+}
+.lc-dialog-frame.lc-whiteboard-dialog .lc-settings-foot .lc-dialog-action {
+  min-width: 74px;
+  min-height: 38px;
+  border-color: var(--lc-dialog-line);
+  color: var(--ink);
+}
+
+@media (max-width: 380px) {
+  .lc-whiteboard-context { gap: 8px; padding: 8px; }
+  .lc-whiteboard-context-sync { font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lc-settings-modal.lc-dialog-frame.lc-whiteboard-dialog { animation: none; transition: none; }
+}

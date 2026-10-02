@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import "./dialogFrame.css";
 
 export type DialogShape = "soft" | "blocky";
@@ -17,6 +17,8 @@ export function DialogFrame({
   onClose,
   closeDisabled = false,
   inert = false,
+  ref,
+  ariaLabel,
   children,
 }: {
   titleId: string;
@@ -30,15 +32,19 @@ export function DialogFrame({
   onClose?: () => void;
   closeDisabled?: boolean;
   inert?: boolean;
+  ref?: Ref<HTMLDivElement>;
+  ariaLabel?: string;
   children: ReactNode;
 }) {
   return (
     <div
+      ref={ref}
       className={`lc-settings-modal lc-dialog-frame ${className}`}
       data-dialog-shape={shape}
       data-dialog-mode={mode}
       role="dialog"
       aria-modal="true"
+      aria-label={ariaLabel}
       aria-labelledby={titleId}
       aria-describedby={description ? `${titleId}-description` : undefined}
       inert={inert}

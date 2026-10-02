@@ -11966,6 +11966,7 @@ export const Workspace = memo(function Workspace({
           pending={busy !== null || boardPreparing}
           allowSave={Boolean(problem && isWhiteboard(problem))}
           snapshotKey={whiteboardNotebookId}
+          dirty={Boolean(problem && isWhiteboard(problem) && !whiteboardUntouched())}
           needsName={padNeedsName}
           defaultName={padDefaultName}
           onRestoreTrash={(id) => handleRestoreTrash("whiteboard", id)}
@@ -12066,6 +12067,7 @@ export const Workspace = memo(function Workspace({
         <WhiteboardDialog
           mode="leave"
           dirty={!whiteboardUntouched()}
+          notebookId={whiteboardNotebookId}
           pending={leavingPending}
           exiting={leavingPhase === "exit"}
           error={leavingError}

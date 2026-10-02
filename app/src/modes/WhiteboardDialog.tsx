@@ -9,8 +9,9 @@ import { useEffect, useRef, useState } from "react";
 import { LIBRARY_HOLD_MS } from "../util/gesture";
 import { HoldButton } from "../components/HoldButton";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { DialogFrame } from "../components/DialogFrame";
 import { HubLibraryRefresh, type HubLibraryRefreshAction } from "../components/HubLibraryRefresh";
-import { LibraryMenuRow, LibrarySearch } from "./LibrarySearch";
+import { LibrarySearch } from "./LibrarySearch";
 import { LibraryTimes } from "./LibraryTimes";
 import { useLibraryDeleteArm } from "../util/armedDelete";
 import { DOUBLE_TAP_MS } from "../util/gesture";
@@ -31,11 +32,16 @@ import {
   PAD_SNAPSHOT_TIERS,
   type PadSnapshotMeta,
 } from "../util/padSnapshotStore";
+import "./whiteboardDialog.css";
 
 export type ScratchLeaveChoice = "save" | "discard" | "load";
 export type ScratchEntryChoice = "new" | "load" | "save" | "snapshot" | "import" | "export" | "export-png";
 
-interface LeaveProps {
+interface NotebookContextProps {
+  notebookId?: string | null;
+}
+
+interface LeaveProps extends NotebookContextProps {
   mode: "leave";
   /**
    * Anything has been written since the notebook was opened or last saved.
@@ -54,7 +60,7 @@ interface LeaveProps {
   onDelete?: (id: string) => void | Promise<void>;
 }
 
-interface EntryProps {
+interface EntryProps extends NotebookContextProps {
   onRefreshHub?: HubLibraryRefreshAction;
   mode: "entry";
   pending?: boolean;
@@ -62,6 +68,7 @@ interface EntryProps {
   error?: string | null;
   /** When already inside a notebook, offer Save alongside New / Load. */
   allowSave?: boolean;
+  dirty?: boolean;
   /** Notebook id — used to list rolling snapshots. */
   snapshotKey?: string | null;
   /** First explicit Save still needs a title. */
@@ -76,6 +83,29 @@ interface EntryProps {
 }
 
 export type WhiteboardDialogProps = LeaveProps | EntryProps;
+
+function NotebookIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M13 4H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-8M8 16l1-5L18 2a2 2 0 0 1 3 3l-9 9-4 2Z" />
+  </svg>;
+}
+
+function MenuRowLabel({ label, description }: { label: string; description?: string }) {
+  return <span className="lc-whiteboard-menu-label">
+    {["New", "Open", "Pull", "More"].includes(label) && <svg className="lc-whiteboard-row-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {label === "New" ? <path d="M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 14h8M12 10v8" /> : label === "Open" ? <path d="M3 7V4h6l3 3h7v4M3 9h18l-3 11H3L1 9h2Z" /> : label === "More" ? <path d="M5 12h.01M12 12h.01M19 12h.01" strokeWidth="3" /> : <path d="M12 3v13m-5-5 5 5 5-5M3 16v5h18v-5" />}
+    </svg>}
+    <span className="lc-whiteboard-row-copy"><strong>{label}</strong>{description && <span className="lc-muted">{description}</span>}</span>
+  </span>;
+}
+
+function WhiteboardMenuRow({ label, description, disabled, onConfirm }: {
+  label: string; description?: string; disabled?: boolean; onConfirm: () => void;
+}) {
+  return <HoldButton holdMs={LIBRARY_HOLD_MS} label={label} className="lc-hold-choice" disabled={disabled} onConfirm={onConfirm}>
+    <MenuRowLabel label={label} description={description} />
+  </HoldButton>;
+}
 
 export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const [notebooks, setNotebooks] = useState<WhiteboardNotebookMeta[]>(() =>
@@ -137,6 +167,9 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const needsName = Boolean(props.needsName);
   const defaultName = props.defaultName?.trim() || "";
   const onRename = props.mode === "entry" ? props.onRename : undefined;
+  const notebook = notebooks.find(row => row.id === (props.notebookId ?? snapshotKey));
+  const contextTitle = isLeave || allowSave ? notebook?.title || defaultName : "";
+  const syncStatus = notebook ? (!props.dirty && notebook.hubAckUpdatedAt === notebook.updatedAt ? "synced" : "not synced") : "";
 
   const matchesQuery = (entry: WhiteboardNotebookMeta) => entry.title.toLocaleLowerCase().includes(libraryQuery.trim().toLocaleLowerCase());
 
@@ -223,26 +256,33 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
         if (!locked && shouldDismissBackdrop(startedOnBackdrop, event.target, event.currentTarget)) props.onCancel();
       }}
     >
-      <div ref={morphRef}
-        className="lc-settings-modal lc-attempt-modal lc-library-holds lc-library-menu lc-library-whiteboard"
-        role="dialog"
-        aria-modal="true"
-        aria-label={isLeave ? "Leave whiteboard?" : "Open whiteboard"}
+      <DialogFrame ref={morphRef}
+        className="lc-attempt-modal lc-library-holds lc-library-menu lc-library-whiteboard lc-whiteboard-dialog"
+        ariaLabel={isLeave ? "Leave whiteboard?" : "Open whiteboard"}
+        titleId="lc-whiteboard-dialog-title"
+        title={isLeave ? "Leave whiteboard?" : pickingLoad ? "Load" : pickingSnapshots ? "Restore" : section === "open" ? "Open" : section === "more" ? "More" : section === "export" ? "Export" : "Whiteboard"}
+        subtitle="Notebooks"
+        icon={<NotebookIcon />}
+        mode="whiteboard"
+        shape="blocky"
+        onClose={props.onCancel}
+        closeDisabled={locked}
       >
-        <div className="lc-settings-head">
-          <h2>{isLeave ? "Leave whiteboard?" : pickingLoad ? "Load" : pickingSnapshots ? "Restore" : section === "open" ? "Open" : section === "more" ? "More" : section === "export" ? "Export" : "Whiteboard"}</h2>
-          {saveTitle !== null && <p className="lc-muted">
-            Name this notebook. Hold Save to keep the suggested name.
-          </p>}
-        </div>
-
-        <div className="lc-settings-body lc-scroll-pane">
+        {contextTitle && <div className="lc-dialog-context">
+          <div className="lc-whiteboard-context">
+            <NotebookIcon />
+            <span className="lc-whiteboard-context-title" title={contextTitle}>{contextTitle}</span>
+            {syncStatus && <span className="lc-whiteboard-context-sync">{syncStatus}</span>}
+          </div>
+        </div>}
+        <div className="lc-settings-body lc-dialog-body lc-scroll-pane">
           {pickingLoad && <LibrarySearch value={libraryQuery} onChange={setLibraryQuery} label="Search saved whiteboards" disabled={locked} showTrash={showTrash} onTrashChange={setShowTrash}/>}
           {pickingLoad && !(showTrash ? archived : notebooks).some(matchesQuery) && <p className="lc-muted">No matching saved items.</p>}
           {error && <div className="lc-warning">{error}</div>}
 
           {saveTitle !== null ? (
             <div className="lc-settings-choice">
+              <p className="lc-muted lc-whiteboard-name-hint">Name this notebook. Hold Save to keep the suggested name.</p>
               <PadNameField
                 value={saveTitle}
                 placeholder={defaultName || "Untitled"}
@@ -393,30 +433,34 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
             <div className="lc-settings-choice">
               {isLeave ? (
                 <div className="lc-document-menu">
-                  <LibraryMenuRow label="Save" disabled={locked} onConfirm={beginSave} />
-                  <LibraryMenuRow label="Discard" disabled={locked} onConfirm={() => props.onChoose("discard")} />
+                  <WhiteboardMenuRow label="Save" disabled={locked} onConfirm={beginSave} />
+                  <WhiteboardMenuRow label="Discard" disabled={locked} onConfirm={() => props.onChoose("discard")} />
                 </div>
               ) : (
                 <>
                   {section === "main" && <>
-                    {allowSave && <LibraryMenuRow label="Save" disabled={locked} onConfirm={beginSave} />}
-                    {!allowSave && <LibraryMenuRow label="New" disabled={locked} onConfirm={() => props.onChoose("new")} />}
-                    <LibraryMenuRow label="Open" disabled={locked} onConfirm={() => setSection("open")} />
-                    {allowSave && <LibraryMenuRow label="More" disabled={locked} onConfirm={() => setSection("more")} />}
-                    {props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} />}
+                    <WhiteboardMenuRow label="New" description="Start a blank notebook" disabled={locked} onConfirm={() => props.onChoose("new")} />
+                    <WhiteboardMenuRow label="Open" description="Pick a notebook from the library" disabled={locked} onConfirm={() => setSection("open")} />
+                    {props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} disabled={locked}>
+                      <MenuRowLabel label="Pull" description="Fetch notebooks from your other devices" />
+                    </HubLibraryRefresh>}
+                    <WhiteboardMenuRow label="More" disabled={locked} onConfirm={() => setSection("more")} />
                   </>}
                   {section === "open" && <>
-                    <LibraryMenuRow label="Load" disabled={locked || (!notebooks.length && !archived.length)} onConfirm={() => setPickingLoad(true)} />
-                    <LibraryMenuRow label="Recents" disabled={locked || (!notebooks.length && !archived.length)} onConfirm={() => setPickingLoad(true)} />
-                    <LibraryMenuRow label="Annotations" disabled={locked} onConfirm={() => props.onChoose("import")} />
+                    <WhiteboardMenuRow label="Load" disabled={locked || (!notebooks.length && !archived.length)} onConfirm={() => setPickingLoad(true)} />
+                    <WhiteboardMenuRow label="Recents" disabled={locked || (!notebooks.length && !archived.length)} onConfirm={() => setPickingLoad(true)} />
                   </>}
                   {section === "more" && <>
-                    <LibraryMenuRow label="Export" disabled={locked} onConfirm={() => setSection("export")} />
-                    <LibraryMenuRow label="Restore" disabled={locked || !snapshotKey} onConfirm={openSnapshots} />
+                    {allowSave && <>
+                      <WhiteboardMenuRow label="Save" disabled={locked} onConfirm={beginSave} />
+                      <WhiteboardMenuRow label="Export" disabled={locked} onConfirm={() => setSection("export")} />
+                      <WhiteboardMenuRow label="Restore" disabled={locked || !snapshotKey} onConfirm={openSnapshots} />
+                    </>}
+                    <WhiteboardMenuRow label="Annotations" disabled={locked} onConfirm={() => props.onChoose("import")} />
                   </>}
                   {section === "export" && <>
-                    <LibraryMenuRow label="PNG" disabled={locked} onConfirm={() => props.onChoose("export-png")} />
-                    <LibraryMenuRow label="Annotations" disabled={locked} onConfirm={() => props.onChoose("export")} />
+                    <WhiteboardMenuRow label="PNG" disabled={locked} onConfirm={() => props.onChoose("export-png")} />
+                    <WhiteboardMenuRow label="Annotations" disabled={locked} onConfirm={() => props.onChoose("export")} />
                   </>}
                 </>
               )}
@@ -424,11 +468,11 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
           )}
         </div>
 
-        <div className="lc-settings-foot">
+        <div className="lc-settings-foot lc-dialog-foot">
           {(section !== "main" || pickingLoad || pickingSnapshots || saveTitle !== null) && (
             <button
               type="button"
-              className="lc-secondary"
+              className="lc-secondary lc-dialog-action"
               disabled={locked}
               onClick={() => {
                 if (!pickingLoad && !pickingSnapshots && saveTitle === null) setSection(section === "export" ? "more" : "main");
@@ -441,11 +485,11 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
               Back
             </button>
           )}
-          <button type="button" className="lc-secondary" disabled={locked} onClick={props.onCancel}>
+          <button type="button" className="lc-secondary lc-dialog-action" disabled={locked} onClick={props.onCancel}>
             Cancel
           </button>
         </div>
-      </div>
+      </DialogFrame>
       {pendingId && (
         <ConfirmDialog
           title="Remove this notebook?"
