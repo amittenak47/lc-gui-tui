@@ -11109,6 +11109,25 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
   -webkit-mask-image: linear-gradient(to bottom, #000 0%, transparent 100%);
 }
 
+/*
+ * No scrollbars while the panel is resized. The bar flashed up as the
+ * scrollers' boxes changed under the drag. The tablet's sheet has overlay
+ * bars and drops them; a desktop bar takes width, so it only goes clear
+ * there, or the chat would reflow as each drag started and ended.
+ */
+.lc-agent-dragging .lc-side :is(.lc-agent-messages, .lc-agent-sessions, .lc-scroll-pane) {
+  scrollbar-width: none;
+}
+.lc-agent-dragging .lc-side :is(.lc-agent-messages, .lc-agent-sessions, .lc-scroll-pane)::-webkit-scrollbar {
+  display: none;
+}
+:is(body[data-lc-sash-drag], body[data-lc-panel-motion]) .lc-side :is(.lc-agent-messages, .lc-agent-sessions, .lc-scroll-pane) {
+  scrollbar-color: transparent transparent;
+}
+:is(body[data-lc-sash-drag], body[data-lc-panel-motion]) .lc-side :is(.lc-agent-messages, .lc-agent-sessions, .lc-scroll-pane)::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
 .lc-agent-messages {
   flex: 1;
   min-height: 0;
