@@ -9,11 +9,40 @@
 const PAGE_TURN_HOLD_MS = 1200;
 
 let busyUntil = 0;
+const scopes = new Map<string, { until: number; timer: ReturnType<typeof setTimeout> | undefined; listeners: Set<(busy: boolean) => void> }>();
 
-export function notePageTurn(): void {
+export function notePageTurn(scope?: string): void {
   busyUntil = Math.max(busyUntil, performance.now() + PAGE_TURN_HOLD_MS);
+  if (!scope) return;
+  const state = scopes.get(scope);
+  if (!state) return;
+  const wasBusy = performance.now() < state.until;
+  state.until = performance.now() + PAGE_TURN_HOLD_MS;
+  clearTimeout(state.timer);
+  state.timer = setTimeout(() => {
+    state.until = 0;
+    for (const listener of state.listeners) listener(false);
+  }, PAGE_TURN_HOLD_MS);
+  if (!wasBusy) for (const listener of state.listeners) listener(true);
 }
 
-export function isPageTurnBusy(): boolean {
-  return performance.now() < busyUntil;
+export function isPageTurnBusy(scope?: string): boolean {
+  return performance.now() < (scope ? scopes.get(scope)?.until ?? 0 : busyUntil);
+}
+
+/** Scope the render pause to this PDF; previews remain available during it. */
+export function subscribePageTurnBusy(scope: string, listener: (busy: boolean) => void): () => void {
+  let state = scopes.get(scope);
+  if (!state) {
+    state = { until: 0, timer: undefined, listeners: new Set() };
+    scopes.set(scope, state);
+  }
+  state.listeners.add(listener);
+  return () => {
+    state.listeners.delete(listener);
+    if (!state.listeners.size) {
+      clearTimeout(state.timer);
+      scopes.delete(scope);
+    }
+  };
 }

@@ -7,6 +7,7 @@ import type { BoardHandle } from "../BoardHandle";
 import { markBootSettled } from "../../util/bootSettled";
 import { glide, PageTurn, rollMs, turnPaperColor } from "./PageTurn";
 import { flatSheet, paintTurn } from "./paintTurn";
+import { touchPointersIn } from "../touchPointers";
 
 // Gesture tests inspect the frame submitted to the renderer. Actual canvas
 // shading is checked separately in the browser, not by jsdom's missing canvas.
@@ -39,7 +40,7 @@ const board = {
   getViewportBounds: vi.fn(() => view),
   readingPageFrames: vi.fn(() => FRAMES),
   setPageLock: vi.fn(),
-  jumpToPageFrame: vi.fn(() => true),
+  jumpToPageFrame: vi.fn((_frame: { pageId: number; minY: number; maxY: number }) => true),
   // Scene y maps straight to client y minus the view's top.
   sceneToClient: vi.fn((x: number, y: number) => ({ x, y: y - view.y })),
   captureSceneFrame: vi.fn(async () => document.createElement("canvas")),
@@ -83,6 +84,7 @@ beforeEach(() => {
   board.readingPageFrames.mockImplementation(() => FRAMES);
   board.jumpToPageFrame.mockImplementation(() => true);
   board.captureSceneFrame.mockImplementation(async () => document.createElement("canvas"));
+  board.captureSceneQuick.mockImplementation(async () => document.createElement("canvas"));
   host = document.createElement("div");
   host.dataset.lcTab = "t1";
   host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 600, right: 400, bottom: 600, x: 0, y: 0, toJSON() {} });
@@ -101,19 +103,20 @@ afterEach(() => {
 it("stops a pending page prefetch when focus leaves the pane", async () => {
   vi.useFakeTimers();
   let finish!: (canvas: HTMLCanvasElement) => void;
-  board.captureSceneFrame.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  board.captureSceneQuick.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
   const ref = { current: board as unknown as BoardHandle };
   const render = (enabled: boolean) => act(() => root.render(
     <PageTurn boardRef={ref} filmScope="t1" hostSelector='[data-lc-tab="t1"]'
       lockActive turnEnabled={enabled} spread={false} paged fit={null} />));
   render(true);
   await act(async () => vi.advanceTimersByTimeAsync(2200));
-  expect(board.captureSceneFrame).toHaveBeenCalledTimes(1);
+  expect(board.captureSceneQuick).toHaveBeenCalledTimes(1);
+  expect(board.captureSceneFrame).not.toHaveBeenCalled();
   // Several rechecks must join this job, not start another neighbour chain.
   await act(async () => vi.advanceTimersByTimeAsync(4500));
   render(false);
   await act(async () => { finish(document.createElement("canvas")); await Promise.resolve(); });
-  expect(board.captureSceneFrame).toHaveBeenCalledTimes(1);
+  expect(board.captureSceneQuick).toHaveBeenCalledTimes(1);
 });
 
 function mount(turnEnabled = true, fit: number | null = null, paged = true) {
@@ -299,7 +302,7 @@ it("turns only the page, not the board around it", async () => {
   pointer("pointerdown", 380, 580);
   pointer("pointermove", 340, 585);
   await settle();
-  const scene = (board.captureSceneFrame.mock.calls[0] as unknown[] | undefined)?.[0];
+  const scene = (board.captureSceneQuick.mock.calls[0] as unknown[] | undefined)?.[0];
   expect(scene).toEqual({ x: 0, y: 620, width: 400, height: 600 });
   pointer("pointerup", 340, 585);
   await settle();
@@ -372,6 +375,189 @@ it("flicks through pages: a corner touched while one lands takes hold of the nex
   for (let i = 0; i < 4; i += 1) frame(1000);
   const landed = (board.jumpToPageFrame.mock.calls as unknown as [{ pageId: number }][]).map((call) => call[0].pageId);
   expect(landed).toEqual([2, 3]);
+});
+
+it("keeps each departing page's pictures and animation alive under rapid turns", async () => {
+  const frame = manualFrames();
+  view = { ...view, y: 0 };
+  mount();
+  pointer("pointerdown", 380, 580);
+  pointer("pointermove", 150, 580);
+  await pictures();
+  frame();
+  const first = vi.mocked(paintTurn).mock.calls.at(-1)![1];
+  pointer("pointerup", 150, 580);
+  pointer("pointerdown", 380, 580);
+  pointer("pointermove", 150, 580);
+  await pictures();
+  frame(20);
+  expect(host.querySelectorAll(".lc-page-turn")).toHaveLength(2);
+  const older = vi.mocked(paintTurn).mock.calls.filter(([, f]) => f.from === first.from).at(-1)![1];
+  expect(older.to).toBe(first.to);
+  expect(older.sheetOnly).toBe(true);
+  expect(older.corner.x).toBeLessThan(first.corner.x);
+  const newer = vi.mocked(paintTurn).mock.calls.at(-1)![1];
+  expect(newer.from).toBe(first.to);
+  expect(newer.to).not.toBe(first.to);
+  expect(newer.sheetOnly).toBe(false);
+  expect(board.captureSceneFrame).not.toHaveBeenCalled();
+  pointer("pointerup", 150, 580);
+  for (let i = 0; i < 4; i++) frame(1000);
+  expect(board.jumpToPageFrame.mock.calls.map(([f]) => (f as { pageId: number }).pageId)).toEqual([2, 3]);
+  expect(board.setPageLock).toHaveBeenLastCalledWith(FRAMES[2]);
+  expect(host.querySelectorAll(".lc-page-turn")).toHaveLength(0);
+});
+
+it("retains a released turn and the following swipe until its PDF preview paints", async () => {
+  vi.useFakeTimers();
+  const frame = manualFrames();
+  view = { ...view, y: 0 };
+  mount();
+  const destination = host.querySelector<HTMLElement>('[data-pdf-page="2"]')!;
+  delete destination.dataset.painted;
+  pointer("pointerdown", 380, 580, "touch", 1000);
+  pointer("pointermove", 150, 580, "touch", 1050);
+  pointer("pointerup", 150, 580, "touch", 1060);
+  pointer("pointerdown", 380, 580, "touch", 1100);
+  pointer("pointermove", 150, 580, "touch", 1150);
+  pointer("pointerup", 150, 580, "touch", 1160);
+  await act(async () => vi.advanceTimersByTimeAsync(1500));
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  expect(board.captureSceneFrame).not.toHaveBeenCalled();
+  await act(async () => { destination.dataset.painted = ""; await Promise.resolve(); });
+  for (let i = 0; i < 8; i++) {
+    frame(1000);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+  }
+  expect(board.jumpToPageFrame.mock.calls.map(([f]) => (f as { pageId: number }).pageId)).toEqual([2, 3]);
+});
+
+it("keeps an entire swipe burst while its first preview is pending", async () => {
+  vi.useFakeTimers();
+  const frame = manualFrames();
+  view = { ...view, y: 0 };
+  const frames = [...FRAMES, { pageId: 4, minY: 1860, maxY: 2460 }, { pageId: 5, minY: 2480, maxY: 3080 }];
+  board.readingPageFrames.mockReturnValue(frames);
+  mount();
+  const template = host.querySelector<HTMLElement>('[data-pdf-page="3"]')!;
+  for (const pageId of [4, 5]) {
+    const slot = template.cloneNode(true) as HTMLElement;
+    slot.dataset.pdfPage = String(pageId);
+    host.append(slot);
+  }
+  const destination = host.querySelector<HTMLElement>('[data-pdf-page="2"]')!;
+  delete destination.dataset.painted;
+  for (let i = 0; i < 4; i++) {
+    pointer("pointerdown", 380, 580, "touch", 1000 + i * 100);
+    pointer("pointermove", 150, 580, "touch", 1050 + i * 100);
+    pointer("pointerup", 150, 580, "touch", 1060 + i * 100);
+  }
+  await act(async () => { destination.dataset.painted = ""; await vi.advanceTimersByTimeAsync(1); });
+  for (let i = 0; i < 20; i++) {
+    frame(1000);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+  }
+  expect(board.jumpToPageFrame.mock.calls.map(([f]) => f.pageId)).toEqual([2, 3, 4, 5]);
+});
+
+it("continues backward sheets underneath the next returning sheet", async () => {
+  const frame = manualFrames();
+  view = { ...view, y: 1240 };
+  mount();
+  pointer("pointerdown", 20, 580, "touch", 1000);
+  pointer("pointermove", 250, 580, "touch", 1100);
+  await pictures();
+  frame();
+  const first = vi.mocked(paintTurn).mock.calls.at(-1)![1];
+  const olderCanvas = host.querySelector(".lc-page-turn")!;
+  pointer("pointerup", 250, 580, "touch", 1110);
+  pointer("pointerdown", 20, 580, "touch", 1200);
+  pointer("pointermove", 250, 580, "touch", 1300);
+  await pictures();
+  frame(20);
+  const newer = vi.mocked(paintTurn).mock.calls.at(-1)![1];
+  expect(host.querySelectorAll(".lc-page-turn")[0]).toBe(olderCanvas);
+  expect(newer.to).toBe(first.from);
+  expect(newer.sheetOnly).toBe(true);
+  expect(vi.mocked(paintTurn).mock.calls.some(([, f]) => f.from === first.from && f.corner.x > first.corner.x)).toBe(true);
+  pointer("pointerup", 250, 580, "touch", 1310);
+  for (let i = 0; i < 6; i++) frame(1000);
+  expect(board.jumpToPageFrame.mock.calls.map(([f]) => f.pageId)).toEqual([2, 1]);
+});
+
+it("turns the next sheet for a caught body flick whose move events were merged", async () => {
+  const frame = manualFrames();
+  view = { ...view, y: 0 };
+  mount();
+  pointer("pointerdown", 380, 580, "touch", 1000);
+  pointer("pointermove", 150, 580, "touch", 1080);
+  await pictures();
+  frame();
+  pointer("pointerup", 150, 580, "touch", 1090);
+  pointer("pointerdown", 300, 400, "touch", 1150);
+  pointer("pointerup", 100, 400, "touch", 1230);
+  await pictures();
+  for (let i = 0; i < 6; i++) frame(1000);
+  expect(board.jumpToPageFrame.mock.calls.map(([f]) => f.pageId)).toEqual([2, 3]);
+});
+
+it("cancels a pending preview when the page-turn surface leaves", async () => {
+  mount();
+  const destination = host.querySelector<HTMLElement>('[data-pdf-page="3"]')!;
+  delete destination.dataset.painted;
+  pointer("pointerdown", 380, 580);
+  pointer("pointerup", 150, 580);
+  mount(false);
+  const captures = board.captureSceneQuick.mock.calls.length;
+  await act(async () => { destination.dataset.painted = ""; await Promise.resolve(); });
+  await pictures();
+  expect(board.captureSceneQuick).toHaveBeenCalledTimes(captures);
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  expect(host.querySelector(".lc-page-turn")).toBeNull();
+});
+
+it("recognizes a body flick even when input only delivered its down and up", async () => {
+  mount();
+  pointer("pointerdown", 240, 300, "touch", 1000);
+  pointer("pointerup", 120, 302, "touch", 1080);
+  await settle();
+  expect(board.jumpToPageFrame).toHaveBeenCalledWith(expect.objectContaining({ pageId: 3 }));
+});
+
+it("preserves a consumed first touch for pinch recognition and returns the held sheet", async () => {
+  const frame = manualFrames();
+  mount();
+  const pairs: ReturnType<typeof touchPointersIn>[] = [];
+  host.addEventListener("pointerdown", () => pairs.push(touchPointersIn(host)));
+  pointer("pointerdown", 380, 580);
+  expect(pairs).toHaveLength(0);
+  await pictures();
+  act(() => host.dispatchEvent(new PointerEvent("pointerdown", {
+    pointerId: 8, pointerType: "touch", isPrimary: false, button: 0,
+    clientX: 100, clientY: 300, bubbles: true,
+  })));
+  expect(pairs[0]?.size).toBe(2);
+  expect(pairs[0]?.get(7)).toEqual({ x: 380, y: 580 });
+  expect(host.querySelector(".lc-page-turn")).toBeNull();
+  pointer("pointermove", 100, 580);
+  for (let i = 0; i < 4; i++) frame(1000);
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  act(() => window.dispatchEvent(new Event("blur")));
+});
+
+it("retains the body-flick finger after cancelling one-finger handlers, ready for pinch", async () => {
+  mount();
+  pointer("pointerdown", 240, 300, "touch", 1000);
+  pointer("pointermove", 180, 300, "touch", 1040);
+  expect(touchPointersIn(host).get(7)).toEqual({ x: 180, y: 300 });
+  act(() => host.dispatchEvent(new PointerEvent("pointerdown", {
+    pointerId: 8, pointerType: "touch", isPrimary: false, button: 0,
+    clientX: 100, clientY: 300, bubbles: true,
+  })));
+  expect(touchPointersIn(host).size).toBe(2);
+  await settle();
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  act(() => window.dispatchEvent(new Event("blur")));
 });
 
 it("flicks through pages: a sheet caught going over and pushed on lands, and the next one turns", async () => {
@@ -545,7 +731,7 @@ it("turns over plain paper while the next page is still being pictured, then sho
   board.captureSceneFrame
     .mockImplementationOnce(async () => document.createElement("canvas"))
     .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-  mount();
+  mount(true, null, false);
   pointer("pointerdown", 380, 300);
   pointer("pointermove", 300, 300);
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
@@ -563,7 +749,7 @@ it("turns at once with the live page showing through while its picture is still 
   board.captureSceneFrame
     .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }))
     .mockImplementationOnce(async () => document.createElement("canvas"));
-  mount();
+  mount(true, null, false);
   pointer("pointerdown", 380, 300);
   pointer("pointermove", 300, 300);
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
@@ -764,8 +950,9 @@ it("keeps toolbar clicks and pen input available while a sheet settles", async (
   expect(board.jumpToPageFrame).toHaveBeenCalledOnce();
 });
 
-it("drops queued turns when a caught sheet is cancelled", async () => {
+it("cancels the newest caught sheet while the earlier turn finishes", async () => {
   const frame = manualFrames();
+  view = { ...view, y: 0 };
   mount();
   const key = () => act(() => window.dispatchEvent(
     new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
@@ -773,11 +960,13 @@ it("drops queued turns when a caught sheet is cancelled", async () => {
   key();
   await act(async () => { await Promise.resolve(); });
   frame(60);
-  key(); // another turn waiting behind the one being caught
+  key(); // the first sheet continues while the next becomes catchable
+  await pictures();
   pointer("pointerdown", 200, 300);
   pointer("pointercancel", 200, 300);
   for (let i = 0; i < 5; i++) frame(1000);
-  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+  expect(board.jumpToPageFrame).toHaveBeenCalledTimes(1);
+  expect(board.jumpToPageFrame).toHaveBeenLastCalledWith(FRAMES[1]);
   expect(document.querySelector(".lc-page-turn")).toBeNull();
 });
 

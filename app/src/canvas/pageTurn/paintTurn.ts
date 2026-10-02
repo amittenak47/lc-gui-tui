@@ -42,6 +42,8 @@ export interface TurnFrame {
   /** Where on its free edge the sheet is held: a corner (0 or the height) unless taken by the side. */
   restY?: number;
   paper: string;
+  /** Another sheet is turning underneath; paint only this sheet and its shadow. */
+  sheetOnly?: boolean;
 }
 
 /** Rows a sheet held by its side is drawn in: its fold is a curve, sampled this finely. */
@@ -107,7 +109,7 @@ function paintSideFold(ctx: CanvasRenderingContext2D, frame: TurnFrame): number 
   ctx.save();
   tracePolygon(ctx, f.open);
   ctx.clip();
-  drawSlice(ctx, frame, frame.to, 0, 1, 0, W);
+  if (!frame.sheetOnly) drawSlice(ctx, frame, frame.to, 0, 1, 0, W);
   if (f.progress > 0) {
     // The shadow the lifted sheet casts on it, along the fold row by row.
     const shadow = ctx.createLinearGradient(0, 0, span * 1.6, 0);
@@ -256,7 +258,9 @@ export function paintTurn(ctx: CanvasRenderingContext2D, frame: TurnFrame): numb
 
   // What lies still: the page being turned to underneath, and in a book the
   // left page of the spread being left, until the flap covers it.
-  if (book) {
+  if (frame.sheetOnly) {
+    // The next turn supplies the backdrop, with its own page pictures.
+  } else if (book) {
     drawSlice(ctx, frame, frame.from, 0, 0.5, 0, spine);
     drawSlice(ctx, frame, frame.to, 0.5, 0.5, spine, w);
   } else if (!frame.from && flat.length >= 3) {

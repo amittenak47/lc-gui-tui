@@ -6,6 +6,7 @@
  */
 
 import { selectionCaptureFrame } from "./selectionCapture";
+import { touchPointersIn } from "./touchPointers";
 import {
   CaptureUpdateAction,
   createBoardScene,
@@ -6217,6 +6218,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     if (readingZoomRef.current) return;
     const base = getViewport(), bounds = pageBoundsRef.current;
     if (!base || !bounds) return;
+    // Stop background sharp paint before measuring the document layers.
+    docFlags.camera(true);
+    noteCameraBusy();
     const inset = measureChromeInsets(boardRef.current, toolbarHeightRef.current,
       mapChromeHiddenRef.current, mobileRef.current);
     const span = pageLockRef.current ?? readingZoomSpan(readingFramesRef.current(),
@@ -6235,8 +6239,6 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     readingZoomRef.current = { base, bounds: region, floor, inset, layers };
     readingZoomGenerationRef.current++;
     if (boardRef.current) boardRef.current.dataset.lcReadingZoom = "true";
-    docFlags.camera(true);
-    noteCameraBusy();
     rasterInkRef.current?.setCameraZooming(true);
     rasterInkRef.current?.setCameraMoving(true);
   }, [docFlags, getViewport, refreshPanRideNodes]);
@@ -6651,6 +6653,9 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
 
     const onDown = (event: PointerEvent) => {
       if (event.pointerType !== "touch") return;
+      // A page edge can consume the first finger before it reaches this
+      // root. Seed both fingers from capture so the pinch still starts now.
+      for (const [id, touch] of touchPointersIn(root)) touches.set(id, touch);
       touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (touches.size !== 2 || pinch || !reading()) return;
       begin();

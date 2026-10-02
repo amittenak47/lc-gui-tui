@@ -36,6 +36,7 @@
 import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { isDocCameraLive, isDocCameraPulsing, subscribeDocCameraLive, subscribeDocCameraPulse } from "../canvas/docSelectionGesture";
+import { isPageTurnBusy, subscribePageTurnBusy } from "../util/pageTurnBusy";
 import type { PageFrame } from "../canvas/inkPageIndex";
 import {
   isCameraBusy,
@@ -1144,6 +1145,11 @@ export function PdfDocument({
         notePath();
       }, msUntilCameraIdleTeardown());
     }, filmScope);
+    const unsubTurns = subscribePageTurnBusy(filmScope, () => {
+      preemptPaintIfNeededRef.current();
+      wakePdfPaintPump(filmScope);
+      if (!pumpRef.current) setWindowTick(tick => tick + 1);
+    });
     return () => {
       if (idlePathTimer) window.clearTimeout(idlePathTimer);
       unsubFilm();
@@ -1152,6 +1158,7 @@ export function PdfDocument({
       unsubRestScale();
       unsubLive();
       observer.disconnect();
+      unsubTurns();
     };
   }, [pages, paused, standalone, scrollRoot, filmScope, previewPage]);
 
@@ -1327,6 +1334,7 @@ export function PdfDocument({
 
     type PdfPageProxy = Awaited<ReturnType<typeof doc.getPage>>;
     type PdfTextContent = Awaited<ReturnType<PdfPageProxy["getTextContent"]>>;
+    const renderBusy = () => isDocCameraLive(filmScope) || isPageTurnBusy(filmScope);
 
     /**
      * Lay pdf.js's spans over a page's picture.
@@ -1342,7 +1350,7 @@ export function PdfDocument({
       ignoreLive = false,
     ): Promise<boolean> => {
       const blocked = () =>
-        disposedRef.current || (!ignoreLive && isDocCameraLive(filmScope));
+        disposedRef.current || (!ignoreLive && renderBusy());
       for (const slot of queryPageSlots(host, n)) {
         if (blocked()) return false;
         await yieldToInput();
@@ -1402,22 +1410,22 @@ export function PdfDocument({
     ): Promise<boolean> => {
       const entry = pagesRef.current.find((page) => page.pageNumber === n);
       if (!entry || disposedRef.current) return false;
-      if (!ignoreLive && isDocCameraLive(filmScope)) return false;
+      if (!ignoreLive && renderBusy()) return false;
       const claim = startPdfTextFillClaim(textFilledRef.current, n);
       const closeJob = openBackgroundJob(`pdf-text:${n}`);
       try {
         await yieldToInput();
-        if (disposedRef.current || (!ignoreLive && isDocCameraLive(filmScope))) {
+        if (disposedRef.current || (!ignoreLive && renderBusy())) {
           claim.settle(false);
           return false;
         }
         const pdfPage = await doc.getPage(n);
-        if (disposedRef.current || (!ignoreLive && isDocCameraLive(filmScope))) {
+        if (disposedRef.current || (!ignoreLive && renderBusy())) {
           claim.settle(false);
           return false;
         }
         const content = await pdfPage.getTextContent();
-        if (disposedRef.current || (!ignoreLive && isDocCameraLive(filmScope))) {
+        if (disposedRef.current || (!ignoreLive && renderBusy())) {
           claim.settle(false);
           return false;
         }
@@ -1439,7 +1447,7 @@ export function PdfDocument({
       keepText = true,
       forceCap = false,
     ): Promise<boolean> => {
-      if (isDocCameraLive(filmScope)) return false;
+      if (renderBusy()) return false;
       if (!forceCap && !isCameraIdleForTeardown()) return false;
       const slots = queryPageSlots(host, n);
       if (slots.length === 0) return true;
@@ -1480,13 +1488,13 @@ export function PdfDocument({
           paintedRef.current.delete(item.page);
         }
         void (async () => {
-          if (!PDF_PAGEFILE || standaloneRef.current || isDocCameraLive(filmScope)) {
+          if (!PDF_PAGEFILE || standaloneRef.current || renderBusy()) {
             releaseSheet(item.sheet);
             return;
           }
           const closeJob = openBackgroundJob(`pdf-pagefile:${item.page}`);
           try {
-            const png = await captureSheetPng(item.sheet, () => isDocCameraLive(filmScope));
+            const png = await captureSheetPng(item.sheet, () => renderBusy());
             releaseSheet(item.sheet);
             if (!png || disposedRef.current) return;
             dropSessionText(sessionRef.current.put(item.page, png));
@@ -1523,7 +1531,7 @@ export function PdfDocument({
             : paintScale,
         );
       }
-      const live = isDocCameraLive(filmScope);
+      const live = renderBusy();
       if (live && paintScale > PDF_PREVIEW_SCALE + 1e-9) {
         const cached = sheetLruRef.current.get(n);
         if (cached) {
@@ -1568,6 +1576,12 @@ export function PdfDocument({
           /* already finished */
         }
       }, filmScope);
+      const stopTurns = subscribePageTurnBusy(filmScope, busy => {
+        if (busy && paintScale > PDF_PREVIEW_SCALE + 1e-9) {
+          aborted = true;
+          paint?.cancel();
+        }
+      });
       const commitSheet = (sheet: SheetBitmap, target = paintScale) => {
         const blitScale = target > 0 ? target : PDF_PREVIEW_SCALE;
         blitCachedSheet(host, n, entry, sheet, blitScale);
@@ -1595,12 +1609,12 @@ export function PdfDocument({
       const fillTextFromPage = async (pdfPage: PdfPageProxy) => {
         const claim = startPdfTextFillClaim(textFilledRef.current, n);
         try {
-          if (disposedRef.current || isDocCameraLive(filmScope)) {
+          if (disposedRef.current || renderBusy()) {
             claim.settle(false);
             return;
           }
           const content = await pdfPage.getTextContent();
-          if (disposedRef.current || isDocCameraLive(filmScope)) {
+          if (disposedRef.current || renderBusy()) {
             claim.settle(false);
             return;
           }
@@ -1617,17 +1631,17 @@ export function PdfDocument({
           !pageNeedsDecode(entry.fit, paintScale, sheetLruRef.current.lod(n))
         ) {
           commitSheet(cached);
-          if (isDocCameraLive(filmScope)) return;
+          if (renderBusy()) return;
           const firstText = slots[0]?.querySelector(".lc-pdf-text");
           if (firstText && firstText.childNodes.length > 0) return;
           const pdfPage = await doc.getPage(n);
-          if (disposedRef.current || isDocCameraLive(filmScope)) return;
+          if (disposedRef.current || renderBusy()) return;
           await fillTextFromPage(pdfPage);
           return;
         }
 
         const paged = sessionRef.current.get(n);
-        if (paged && !isDocCameraLive(filmScope)) {
+        if (paged && !renderBusy()) {
           const restored = await restoreSheetPng(paged);
           if (disposedRef.current) return;
           if (restored) {
@@ -1647,18 +1661,18 @@ export function PdfDocument({
               const firstText = slots[0]?.querySelector(".lc-pdf-text");
               if (firstText && firstText.childNodes.length > 0) return;
               const pdfPage = await doc.getPage(n);
-              if (disposedRef.current || isDocCameraLive(filmScope)) return;
+              if (disposedRef.current || renderBusy()) return;
               await fillTextFromPage(pdfPage);
               return;
             }
           }
         }
 
-        if (isDocCameraLive(filmScope) && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
+        if (renderBusy() && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
         if (aborted) return;
         const pdfPage = await doc.getPage(n);
         if (disposedRef.current || aborted) return;
-        if (isDocCameraLive(filmScope) && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
+        if (renderBusy() && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
         const viewport = pdfPage.getViewport({ scale: entry.fit * paintScale });
         scratch = document.createElement("canvas");
         scratch.width = Math.round(viewport.width);
@@ -1667,18 +1681,27 @@ export function PdfDocument({
         if (!scratchCtx) return;
         await yieldToInput();
         if (disposedRef.current || aborted) return;
-        if (isDocCameraLive(filmScope) && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
-        paint = pdfPage.render({
+        if (renderBusy() && paintScale > PDF_PREVIEW_SCALE + 1e-9) return;
+        const task = pdfPage.render({
           canvas: scratch,
           canvasContext: scratchCtx,
           viewport,
         });
+        paint = task;
+        task.onContinue = (resume: () => void) => {
+          void yieldToInput().then(() => {
+            if (disposedRef.current || aborted || (renderBusy() && paintScale > PDF_PREVIEW_SCALE + 1e-9)) {
+              aborted = true;
+              task.cancel();
+            } else resume();
+          });
+        };
         await paint.promise;
         if (disposedRef.current || aborted) return;
         const sheet = await rememberScratch(scratch, entry.fit * paintScale);
         if (disposedRef.current) return;
         commitSheet(sheet);
-        if (!isDocCameraLive(filmScope)) {
+        if (!renderBusy()) {
           await fillTextFromPage(pdfPage);
         }
       } catch (cause: unknown) {
@@ -1691,6 +1714,7 @@ export function PdfDocument({
         if (scratch) { scratch.width = 0; scratch.height = 0; }
         closeJob();
         stopLive();
+        stopTurns();
         if (inFlightPaintRef.current?.page === n) inFlightPaintRef.current = null;
         if (!done) {
           if (prev) paintedRef.current.set(n, prev);
@@ -1719,6 +1743,10 @@ export function PdfDocument({
       if (previewPageRef.current != null) queue = queue.filter(item => item.page === previewPageRef.current);
       if (holdDecodeRef.current) {
         queue = pdfQueueForHoldDecode(queue, visible);
+      } else if (isPageTurnBusy(filmScope)) {
+        // Supply every nearby preview while turning; sharp paint and text
+        // wait for the hand to rest, rather than blocking the next swipe.
+        queue = queue.filter(item => item.target === PDF_PREVIEW_SCALE);
       } else if (isDocCameraLive(filmScope)) {
         const hole = new Set(visible);
         const ahead = new Set(preload);
@@ -1735,6 +1763,10 @@ export function PdfDocument({
       thumbCancelRef.current();
       const flight = inFlightPaintRef.current;
       if (!flight) return;
+      if (isPageTurnBusy(filmScope) && flight.target > PDF_PREVIEW_SCALE + 1e-9) {
+        flight.cancel();
+        return;
+      }
       const { queue, rest } = currentQueue();
       const head = queue[0];
       if (!head) return;
@@ -1798,7 +1830,7 @@ export function PdfDocument({
           if (idle || overCap) {
             for (const n of extrasFarthestFirst()) {
               if (!idle && paintedRef.current.size <= canvasCap) break;
-              if (isDocCameraLive(filmScope)) break;
+              if (renderBusy()) break;
               if (disposedRef.current) return;
               if (wantedRef.current.has(n)) continue;
               if (await pageOut(n, true, overCap && !idle)) {
@@ -1816,7 +1848,7 @@ export function PdfDocument({
 
           if (holdDecodeRef.current) return;
 
-          if (isDocCameraLive(filmScope)) {
+          if (renderBusy()) {
             await waitForPaintSignal(filmScope);
             continue;
           }
@@ -1848,7 +1880,7 @@ export function PdfDocument({
             pathFillRef.current = [];
             return;
           }
-          if (isDocCameraLive(filmScope)) continue;
+          if (renderBusy()) continue;
           if (disposedRef.current) return;
           await paintOne(next, PDF_PREVIEW_SCALE);
           if (disposedRef.current) return;
