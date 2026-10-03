@@ -93,3 +93,10 @@
 .lc-home-recents-toggle[aria-expanded="false"] svg { transform: rotate(0deg); }
 .lc-home-recents-count { padding: 1px 6px; border: 1px solid var(--line); border-radius: var(--lc-r-block); color: var(--muted); font-weight: 600; letter-spacing: 0; }
 @media (prefers-reduced-motion: reduce) { .lc-home-recents-toggle svg { transition: none; } }
+
+/* With motion on, the tile springs own hover and press; the base card's CSS
+   lift and shrink would otherwise stack on top of them. Reduced motion keeps
+   the small CSS feedback, since the springs are off there. */
+@media (prefers-reduced-motion: no-preference) {
+  .lc-home-redesign .lc-home-card:is(:hover, :active):not(:disabled) { transform: none; }
+}

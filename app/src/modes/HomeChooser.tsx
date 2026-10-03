@@ -626,7 +626,7 @@ export function HomeChooser({
     <nav className="lc-home-chooser lc-home-redesign" aria-label="Choose a workspace" data-home-active={active} data-recents={recent.length === 0 ? "none" : recentsOpen ? "open" : "collapsed"}>
       {recent.length > 0 && <section className="lc-home-recents" aria-labelledby="lc-home-recents-title">
         <h2 id="lc-home-recents-title" className="lc-home-section-title lc-home-recents-heading">
-          <button type="button" className="lc-home-recents-toggle" aria-expanded={recentsOpen} aria-controls="lc-home-recents-window" disabled={busy}
+          <button type="button" className="lc-home-recents-toggle" aria-expanded={recentsOpen} aria-controls={recentsOpen ? "lc-home-recents-window" : undefined} disabled={busy}
             onClick={()=>{const next=!recentsOpen;setRecentsOpen(next);saveRecentsOpen(next);}}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
             Recently opened<span className="lc-home-recents-count">{recent.length}</span>
@@ -634,7 +634,7 @@ export function HomeChooser({
         </h2>
         {recentsOpen && <div id="lc-home-recents-window" className="lc-home-recents-window lc-scroll-pane">
           {recent.map((tab,index)=><motion.button type="button" key={recentWorkspaceKey(tab)} className="lc-home-recent" data-mode={tab.kind === "web" ? "browse" : tab.kind}
-            {...homeTileMotion(visible, !!reduced, Math.min(index,5)*.025)}
+            {...homeTileMotion(visible, !!reduced, Math.min(index,5)*.025, !busy)}
             disabled={busy} onClick={()=>onOpenRecent?.(tab)} title={tab.title}>
             <span className="lc-home-recent-preview" aria-hidden="true"><svg viewBox="0 0 40 52" fill="none"><path d="M8 8h24M8 17h24M8 26h24M8 35h24M8 44h18"/><path className="lc-home-recent-mark" d={tab.kind === "whiteboard" ? "M8 31q6-15 12 0t12 0" : "M8 17h18"}/></svg></span>
             <span className="lc-home-recent-text"><strong>{tab.title}</strong><span>{tab.kind === "practice" ? "LeetCode" : tab.kind === "whiteboard" ? "Whiteboard" : tab.kind === "web" ? "Web" : `Annotate · ${tab.kind === "annotate" ? tab.docType === "markdown" ? "Markdown" : tab.docType.toUpperCase() : ""}`}</span></span>
@@ -666,16 +666,16 @@ function saveRecentsOpen(open: boolean): void {
 const TILE_SPRING = {type: "spring" as const, stiffness: 430, damping: 17, mass: 0.85};
 const TILE_GESTURE_SPRING = {type: "spring" as const, stiffness: 520, damping: 15, mass: 0.7};
 
-function homeTileMotion(visible: boolean, reduced: boolean, delay: number) {
+function homeTileMotion(visible: boolean, reduced: boolean, delay: number, interactive = true) {
   return {
     initial: reduced ? false as const : {opacity:0,y:44,scale:.8},
     animate: visible ? {opacity:1,y:0,scale:1} : {opacity:0,y:10,scale:.94},
     transition: reduced ? {duration:0} : visible
       ? {default:{...TILE_SPRING,delay}, opacity:{duration:.14,delay}}
       : {duration:.12},
-    // Gestures only run on a visible, motion-enabled Home.
-    whileHover: reduced || !visible ? undefined : {scale:1.035,y:-3,transition:TILE_GESTURE_SPRING},
-    whileTap: reduced || !visible ? undefined : {scale:.94,transition:TILE_GESTURE_SPRING},
+    // Gestures only run on a visible, motion-enabled Home whose tiles take taps.
+    whileHover: reduced || !visible || !interactive ? undefined : {scale:1.035,y:-3,transition:TILE_GESTURE_SPRING},
+    whileTap: reduced || !visible || !interactive ? undefined : {scale:.94,transition:TILE_GESTURE_SPRING},
   };
 }
 
@@ -712,7 +712,7 @@ function HomeCard({ mode, busy, active, delay }: { mode: HomeMode; busy: boolean
   }, [scene]);
   return (
     <motion.span className="lc-home-cell" data-mode={mode.id}
-      {...homeTileMotion(active, !!reduced, delay)}>
+      {...homeTileMotion(active, !!reduced, delay, !busy)}>
       <button
         ref={cardRef}
         type="button"
