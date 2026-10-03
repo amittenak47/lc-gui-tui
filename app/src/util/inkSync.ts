@@ -45,6 +45,7 @@ import {
   type PdfInkContext,
 } from "./pdfInkLayout";
 import { getAnnotateDoc } from "./annotateStore";
+import { dedupeInkOps } from "../canvas/inkOpsDedupe";
 import {
   decodeInkOps,
   encodeInkOps,
@@ -221,7 +222,8 @@ export function mergeEncodedPages(
     const here = local.get(pageId);
     const there = server.get(pageId);
     if (here && there) {
-      out.set(pageId, encodeInkOps([...decodeInkOps(here), ...decodeInkOps(there)]));
+      // The sides usually share most strokes; a plain concatenation doubled them.
+      out.set(pageId, encodeInkOps(dedupeInkOps([...decodeInkOps(here), ...decodeInkOps(there)])));
     } else if (here) {
       out.set(pageId, here);
     } else if (there) {
@@ -791,7 +793,7 @@ async function applyWhiteboardInkChoicesByPage(
     if (choice === "local") kept.push(...(localBins.get(pageId) ?? []));
     else if (choice === "server") kept.push(...(hubBins.get(pageId) ?? []));
     else if (choice === "merged") {
-      kept.push(...(localBins.get(pageId) ?? []), ...(hubBins.get(pageId) ?? []));
+      kept.push(...dedupeInkOps([...(localBins.get(pageId) ?? []), ...(hubBins.get(pageId) ?? [])]));
     }
   }
   const gz = bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps(kept))));
