@@ -37,6 +37,11 @@ export function isPageTurnBusy(scope?: string): boolean {
   return performance.now() < (scope ? scopes.get(scope)?.until ?? 0 : busyUntil);
 }
 
+/** How long until a hand flicking through has been still for `PAGE_TURN_HOLD_MS`. */
+export function pageTurnHoldLeft(): number {
+  return Math.max(0, busyUntil - performance.now());
+}
+
 /** Scope the render pause to this PDF; previews remain available during it. */
 export function subscribePageTurnBusy(scope: string, listener: (busy: boolean) => void): () => void {
   let state = scopes.get(scope);

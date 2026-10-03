@@ -39,7 +39,7 @@ import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useSta
 
 import { isDocCameraLive, isDocCameraPulsing, subscribeDocCameraLive, subscribeDocCameraPulse } from "../canvas/docSelectionGesture";
 import { pdfExtrasHeld } from "./pdfOpenHold";
-import { isPageTurnBusy, subscribePageTurnBusy } from "../util/pageTurnBusy";
+import { isPageTurnBusy, pageTurnHoldLeft, subscribePageTurnBusy } from "../util/pageTurnBusy";
 import type { PageFrame } from "../canvas/inkPageIndex";
 import {
   isCameraBusy,
@@ -1344,6 +1344,13 @@ export function PdfDocument({
     type PdfPageProxy = Awaited<ReturnType<typeof doc.getPage>>;
     type PdfTextContent = Awaited<ReturnType<PdfPageProxy["getTextContent"]>>;
     const renderBusy = () => isDocCameraLive(filmScope) || isPageTurnBusy(filmScope);
+    /*
+     * The text layer is one freeze that cannot be cut short (0.15–0.4 s a
+     * page on the tablet), so it waits for the hand to rest, not just for the
+     * landed page's sharp paint: started 0.4 s after a turn, it landed under
+     * the next swipe of a reader turning in cadence.
+     */
+    const textBusy = () => renderBusy() || isPageTurnBusy();
 
     /**
      * Lay pdf.js's spans over a page's picture.
@@ -1359,7 +1366,7 @@ export function PdfDocument({
       ignoreLive = false,
     ): Promise<boolean> => {
       const blocked = () =>
-        disposedRef.current || (!ignoreLive && renderBusy());
+        disposedRef.current || (!ignoreLive && textBusy());
       for (const slot of queryPageSlots(host, n)) {
         if (blocked()) return false;
         await yieldToInput();
@@ -1432,7 +1439,7 @@ export function PdfDocument({
     ): Promise<boolean> => {
       const entry = pagesRef.current.find((page) => page.pageNumber === n);
       if (!entry || disposedRef.current) return false;
-      if (!ignoreLive && renderBusy()) return false;
+      if (!ignoreLive && textBusy()) return false;
       const claim = startPdfTextFillClaim(textFilledRef.current, n);
       const closeJob = openBackgroundJob(`pdf-text:${n}`);
       try {
@@ -1441,17 +1448,17 @@ export function PdfDocument({
         // handwriting showed. A selection the reader is making does not wait.
         if (!ignoreLive) await waitForInkSettled(TEXT_AFTER_INK_CAP_MS);
         await yieldToInput();
-        if (disposedRef.current || (!ignoreLive && renderBusy())) {
+        if (disposedRef.current || (!ignoreLive && textBusy())) {
           claim.settle(false);
           return false;
         }
         const pdfPage = await doc.getPage(n);
-        if (disposedRef.current || (!ignoreLive && renderBusy())) {
+        if (disposedRef.current || (!ignoreLive && textBusy())) {
           claim.settle(false);
           return false;
         }
         const content = await pdfPage.getTextContent();
-        if (disposedRef.current || (!ignoreLive && renderBusy())) {
+        if (disposedRef.current || (!ignoreLive && textBusy())) {
           claim.settle(false);
           return false;
         }
@@ -1636,12 +1643,12 @@ export function PdfDocument({
         const claim = startPdfTextFillClaim(textFilledRef.current, n);
         try {
           // Opening: the reader's ink first; the text layer follows (`pdfOpenHold`).
-          if (disposedRef.current || renderBusy() || pdfExtrasHeld(filmScope)) {
+          if (disposedRef.current || textBusy() || pdfExtrasHeld(filmScope)) {
             claim.settle(false);
             return;
           }
           const content = await pdfPage.getTextContent();
-          if (disposedRef.current || renderBusy()) {
+          if (disposedRef.current || textBusy()) {
             claim.settle(false);
             return;
           }
@@ -1894,6 +1901,11 @@ export function PdfDocument({
            */
           const textless = nextPageMissingText();
           if (textless != null) {
+            const rest = pageTurnHoldLeft();
+            if (rest > 0) {
+              await waitForPaintSignal(filmScope, rest);
+              continue;
+            }
             await fillMissingText(textless);
             continue;
           }
@@ -2148,7 +2160,7 @@ export function PdfDocument({
   );
 }
 
-function waitForPaintSignal(filmScope: string): Promise<void> {
+function waitForPaintSignal(filmScope: string, timeoutMs?: number): Promise<void> {
   return new Promise((resolve) => {
     let settled = false;
     let skipView = true;
@@ -2162,8 +2174,10 @@ function waitForPaintSignal(filmScope: string): Promise<void> {
       unsubFilm();
       unsubPreload();
       unsubWake();
+      clearTimeout(timer);
       resolve();
     };
+    const timer = timeoutMs == null ? undefined : setTimeout(finish, timeoutMs);
     const unsubLive = subscribeDocCameraLive(() => finish(), filmScope);
     const unsubView = subscribePdfViewPages(filmScope, () => {
       if (skipView) return;
