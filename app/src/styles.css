@@ -2527,16 +2527,16 @@ body[data-lc-sash-drag] .lc-board-chrome-slot {
   outline-offset: 2px;
 }
 
-.lc-hub-conflict-note[data-pick="keep"] { box-shadow: inset 4px 0 #22c55e; }
-.lc-hub-conflict-note[data-pick="drop"] { box-shadow: inset 4px 0 #ef4444; }
+.lc-hub-conflict-note[data-pick="keep"] { box-shadow: inset 4px 0 var(--ok); }
+.lc-hub-conflict-note[data-pick="drop"] { box-shadow: inset 4px 0 var(--bad); }
 .lc-hub-conflict .lc-doc-confirm-btn[data-action="keep"][aria-pressed="true"] {
   background: #166534; color: #fff; border-color: #4ade80;
 }
 .lc-hub-conflict .lc-doc-confirm-btn[data-action="drop"][aria-pressed="true"] {
   background: #991b1b; color: #fff; border-color: #f87171;
 }
-.lc-hub-conflict-preview[data-pick="keep"] { box-shadow: inset 0 0 0 3px #22c55e; }
-.lc-hub-conflict-preview[data-pick="drop"] { box-shadow: inset 0 0 0 3px #ef4444; }
+.lc-hub-conflict-preview[data-pick="keep"] { box-shadow: inset 0 0 0 3px var(--ok); }
+.lc-hub-conflict-preview[data-pick="drop"] { box-shadow: inset 0 0 0 3px var(--bad); }
 
 .lc-hub-conflict-note-actions {
   display: flex;

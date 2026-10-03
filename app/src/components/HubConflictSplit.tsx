@@ -12,7 +12,7 @@
  * row is settled, then PUT to the hub so the other device matches on Sync.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import type { AnnotatePadDto, InkPageDto, LcClient } from "../api/client";
 import type { PageFrame } from "../canvas/inkPageIndex";
@@ -21,6 +21,7 @@ import type { DocFootnote } from "../util/docFootnotes";
 import { conflictFocusPage, inkDtosHavePage, mergeInkDtos } from "../util/conflictPage";
 import { loadConflictPreviewInkPage, localInkAsDtos } from "../util/inkSync";
 import { Tip } from "./Tip";
+import "./hubConflictSplit.css";
 import { ConflictPagePreview } from "./ConflictPagePreview";
 import { conflictDocumentWidth, inkSpreadOf } from "./conflictDocumentLayout";
 import { compareConflictInk, inkPageHasStrokes } from "./conflictInkCompare";
@@ -341,7 +342,10 @@ function NoteRow({
       ) : null}
       <span className="lc-hub-conflict-note-kind">{kind}</span>
       <span className="lc-hub-conflict-note-excerpt">{missing ? "No entry on this device" : excerpt}</span>
-      {!missing && <span className="lc-hub-conflict-note-flag">{status ?? (sameId ? "Different" : "Only here")}</span>}
+      {!missing && (() => {
+        const flag = status ?? (sameId ? "Different" : "Only here");
+        return <span className="lc-hub-conflict-note-flag" data-status={flag.toLowerCase().replace(/\s+/g, "-")}>{flag}</span>;
+      })()}
       <span className="lc-hub-conflict-note-actions">
         <button
           type="button"
@@ -415,6 +419,9 @@ export function HubConflictSplit({
   const [manualPicks, setManualPicks] = useState<Record<string, SidePick>>({});
   const [differencesOnly, setDifferencesOnly] = useState(true);
   const [revealInk, setRevealInk] = useState(false);
+  /** The change lists sit over the page; folding them away shows the whole page. */
+  const [listOpen, setListOpen] = useState(true);
+  const listScrollMemo = useRef(0);
   const [inkComparisons, setInkComparisons] = useState<Record<number, boolean | null>>({});
   /** Pages both sides hold with no pen stroke on them. Never a row. */
   const [inkBlank, setInkBlank] = useState<Record<number, boolean>>({});
@@ -452,6 +459,18 @@ export function HubConflictSplit({
     });
   };
   useEffect(() => () => window.cancelAnimationFrame(mirrorRef.current.frame), []);
+  // A folded list has no height, which would reset its scroll; put it back.
+  useLayoutEffect(() => {
+    if (!listOpen) return;
+    for (const side of ["local", "server"] as const) {
+      const list = listRefs.current[side];
+      if (list) list.scrollTop = listScrollMemo.current;
+    }
+  }, [listOpen]);
+  const toggleList = () => {
+    if (listOpen) listScrollMemo.current = listRefs.current.local?.scrollTop ?? 0;
+    setListOpen((open) => !open);
+  };
   const [focusedId, setFocusedId] = useState<string>(INK_ROW_ID);
   const [focusRevision, setFocusRevision] = useState(0);
   const focusRow = (id: string) => { setFocusedId(id); setFocusRevision(value => value + 1); };
@@ -544,8 +563,15 @@ export function HubConflictSplit({
   const serverInkUnread = Boolean(conflict) && conflict!.serverInk === null;
   const partsByNote = useMemo(() => new Map(rows.map(row => [row.id,footnotePartDiffs(row.local,row.server,true)])),[rows]);
 
+  /*
+   * A page only one device holds, with no stroke on it: an undo or a rebin
+   * left the record empty. Keeping it and dropping it look the same, so it is
+   * settled like a matching page rather than asked about.
+   */
+  const blankOneSided = padInkRows.filter(row => row.hasLocal !== row.hasServer && inkBlank[row.pageId] === true);
   const sameIds = new Set([
     ...rows.filter(row => row.sameId && !row.differs).map(row => row.id),
+    ...blankOneSided.map(row => inkPageRowId(row.pageId)),
     ...[...partsByNote.values()].flat().filter(part => part.same).map(part => part.id),
     ...padInkRows.filter(row => !serverInkUnread && (row.same || inkComparisons[row.pageId] === true)).map(row => inkPageRowId(row.pageId)),
     ...fnInkRows.filter(row => row.same).map(row => footnoteInkPageRowId(row.wbId, row.pageId)),
@@ -581,21 +607,34 @@ export function HubConflictSplit({
    * this decodes a page each. One side is enough — they match.
    */
   useEffect(() => {
-    if (differencesOnly || !conflict || conflict.kind !== "annotate" || conflict.wholeCanvas) return;
+    if (!conflict || conflict.kind !== "annotate" || conflict.wholeCanvas) return;
     let gone = false;
+    // A one-sided page is checked under Differences only too: it is a row there.
     const candidates = basePadInkRows.filter(
-      (row) => row.hasLocal && row.hasServer && (row.same || inkComparisons[row.pageId] === true) && !(row.pageId in inkBlank),
+      (row) => !(row.pageId in inkBlank) && (row.hasLocal !== row.hasServer ||
+        (!differencesOnly && row.hasLocal && row.hasServer && (row.same || inkComparisons[row.pageId] === true))),
     );
     if (candidates.length === 0) return;
     void (async () => {
       for (const row of candidates) {
         if (gone) return;
-        let page = conflict.localInk?.find((dto) => dto.page_id === row.pageId);
-        if (!page) {
-          const got = fetchPreviewInk
-            ? (await fetchPreviewInk(row.pageId).catch(() => null))?.local
-            : await localInkAsDtos(conflict.kind, conflict.id, [row.pageId]).catch(() => null);
-          page = overlayInkPages(got ?? []).find((dto) => dto.page_id === row.pageId);
+        let page: InkPageDto | undefined;
+        if (row.hasLocal !== row.hasServer) {
+          // Never a hub fetch per page: that is the preview's, for the page in view.
+          // This device's copy is a local read; the hub's only if already here.
+          page = row.hasLocal
+            ? conflict.localInk?.find((dto) => dto.page_id === row.pageId) ??
+              overlayInkPages(await localInkAsDtos(conflict.kind, conflict.id, [row.pageId]).catch(() => null)).find((dto) => dto.page_id === row.pageId)
+            : conflict.serverInk?.find((dto) => dto.page_id === row.pageId);
+          if (!page) continue;
+        } else {
+          page = conflict.localInk?.find((dto) => dto.page_id === row.pageId);
+          if (!page) {
+            const got = fetchPreviewInk
+              ? (await fetchPreviewInk(row.pageId).catch(() => null))?.local
+              : await localInkAsDtos(conflict.kind, conflict.id, [row.pageId]).catch(() => null);
+            page = overlayInkPages(got ?? []).find((dto) => dto.page_id === row.pageId);
+          }
         }
         const strokes = await inkPageHasStrokes(page, inkDecodeCache.current);
         if (gone) return;
@@ -1219,7 +1258,7 @@ export function HubConflictSplit({
         <span className="lc-hub-conflict-note-excerpt">
           {!has ? "No entry on this device" : unread ? "Could not read handwriting" : excerpt}
         </span>
-        {has && <span className="lc-hub-conflict-note-flag">{status}</span>}
+        {has && <span className="lc-hub-conflict-note-flag" data-status={status.toLowerCase().replace(/\s+/g, "-")}>{status}</span>}
         <span className="lc-hub-conflict-note-actions">
           <button
             type="button"
@@ -1441,7 +1480,22 @@ export function HubConflictSplit({
             revealInk={revealInk}
             inkSpread={conflict.kind === "annotate" ? (inkSpreadOf(body) ?? localSpread) : false}
           />
+          <div className="lc-hub-conflict-dock" data-open={listOpen}>
+          <button
+            type="button"
+            className="lc-hub-conflict-dock-bar"
+            aria-expanded={listOpen}
+            aria-controls={`lc-hub-conflict-list-${side}`}
+            onClick={toggleList}
+          >
+            <span className="lc-hub-conflict-dock-title">Changes</span>
+            <span className="lc-hub-conflict-dock-count">{columnIds(side).length}</span>
+            <span className="lc-hub-conflict-dock-hint">{listOpen ? "Fold to see the whole page" : "Show changes"}</span>
+            <svg className="lc-hub-conflict-dock-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+          </button>
+          <div className="lc-hub-conflict-dock-fold">
           <ol
+            id={`lc-hub-conflict-list-${side}`}
             ref={node => { if (node) listRefs.current[side] = node; else delete listRefs.current[side]; }}
             onScroll={() => mirrorScroll(side)}
             className={["lc-hub-conflict-list", pickingStarted && !valid ? "is-picking" : ""]
@@ -1533,6 +1587,8 @@ export function HubConflictSplit({
               );
             })}
           </ol>
+          </div>
+          </div>
         </div>
       </section>
     );
@@ -1561,7 +1617,17 @@ export function HubConflictSplit({
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
         </Tip>
+        <Tip tip={listOpen ? "Fold the change lists" : "Show the change lists"} placement="bottom">
+          <button type="button" className="lc-hub-conflict-filter" aria-label="Change lists" aria-pressed={listOpen} onClick={toggleList}>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+          </button>
+        </Tip>
         <nav className="lc-hub-conflict-navigation" aria-label="Merge entries">
+          {navigationIds.length > 0 && (
+            <span className="lc-hub-conflict-position" aria-live="off">
+              {navigationIndex >= 0 ? navigationIndex + 1 : "–"} / {navigationIds.length}
+            </span>
+          )}
           <button type="button" className="lc-secondary" disabled={navigationIndex <= 0} onClick={() => focusRow(navigationIds[navigationIndex-1])}>Previous</button>
           <button type="button" className="lc-secondary" disabled={!navigationIds.length || navigationIndex >= navigationIds.length-1} onClick={() => focusRow(navigationIds[navigationIndex+1])}>Next</button>
         </nav>
@@ -1579,9 +1645,22 @@ export function HubConflictSplit({
         </div>
       )}
       <footer className="lc-hub-conflict-actions">
-        {(busy || error || !valid) && <span role={error ? "alert" : "status"} className={error && !busy ? "lc-hub-conflict-error" : "lc-muted"}>
-          {busy ? "Saving..." : error || (serverMissing || serverInkUnread ? whyDisabled : `${remainingChoices} changes still need a choice`)}
-        </span>}
+        <div className="lc-hub-conflict-progress">
+          {choiceIds.length > 0 && (
+            <span
+              className="lc-hub-conflict-meter"
+              role="progressbar"
+              aria-label="Changes settled"
+              aria-valuemin={0}
+              aria-valuemax={choiceIds.length}
+              aria-valuenow={choiceIds.length - remainingChoices}
+              style={{ "--settled": (choiceIds.length - remainingChoices) / choiceIds.length } as CSSProperties}
+            />
+          )}
+          {(busy || error || !valid) && <span role={error ? "alert" : "status"} className={error && !busy ? "lc-hub-conflict-error" : "lc-muted"}>
+            {busy ? "Saving..." : error || (serverMissing || serverInkUnread ? whyDisabled : `${remainingChoices} changes still need a choice`)}
+          </span>}
+        </div>
         {onCancel && (
           <button
             type="button"

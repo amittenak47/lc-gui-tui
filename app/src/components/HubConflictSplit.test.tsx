@@ -408,6 +408,23 @@ describe("HubConflictSplit ink and labels", () => {
     expect(list!.compareDocumentPosition(preview!)).toBe(Node.DOCUMENT_POSITION_PRECEDING);
   });
 
+  it("folds both change lists away to show the whole page, and brings them back", () => {
+    const { root } = mount();
+    const bars = [...document.querySelectorAll<HTMLButtonElement>(".lc-hub-conflict-dock-bar")];
+    const docks = [...document.querySelectorAll<HTMLElement>(".lc-hub-conflict-dock")];
+    expect(bars).toHaveLength(2);
+    expect(docks.map((dock) => dock.dataset.open)).toEqual(["true", "true"]);
+    act(() => bars[0]!.click());
+    // One fold serves both panes: their rows are aligned and scroll as one.
+    expect(docks.map((dock) => dock.dataset.open)).toEqual(["false", "false"]);
+    expect(bars.map((bar) => bar.getAttribute("aria-expanded"))).toEqual(["false", "false"]);
+    // The rows stay mounted, so a pick made before folding is still there.
+    expect(document.querySelectorAll(".lc-hub-conflict-note").length).toBeGreaterThan(0);
+    act(() => (document.querySelector('[aria-label="Change lists"]') as HTMLButtonElement).click());
+    expect(docks.map((dock) => dock.dataset.open)).toEqual(["true", "true"]);
+    act(() => root.unmount());
+  });
+
   it("omits a footnote that is already the same on both devices", () => {
     const twin = {
       id: "twin",
@@ -685,6 +702,33 @@ describe("HubConflictSplit ink and labels", () => {
     expect(previews().map((pane) => pane.dataset.page)).toEqual(["2", "2"]);
     act(() => noteByText("Handwriting (page 1)").click());
     expect(previews().map((pane) => pane.dataset.page)).toEqual(["1", "1"]);
+  });
+
+  it("settles a page only this device holds when it has no strokes, and keeps one with a dot", async () => {
+    const { encodeInkOps, packEncodedInk } = await import("../canvas/inkCodec");
+    const { bytesToB64 } = await import("../api/nativeHttp");
+    const { NO_PRESSURE } = await import("../canvas/rasterInk");
+    const dot = { kind: "draw" as const, color: "#d92243", baseWidth: 2, maxFullness: 1, pressureClip: 1,
+      pressureSensitive: false, points: [{ x: -65, y: 468, pressure: NO_PRESSURE }] };
+    const page = (pageId: number, ops: unknown[]) => ({ kind: "annotate" as const, key: "pad-1", page_id: pageId, updated_at: 10,
+      gz: bytesToB64(packEncodedInk(encodeInkOps(ops as Parameters<typeof encodeInkOps>[0]))) });
+    mount({
+      kind: "annotate",
+      id: "pad-1",
+      stage: "ink",
+      detail: "both wrote",
+      local: annotateBody("book", 10, []),
+      server: annotateBody("book", 20, []),
+      localInkStamps: [{ pageId: 1, updatedAt: 10 }, { pageId: 3, updatedAt: 10 }],
+      hubInkStamps: [],
+      localInk: [page(1, [dot]), page(3, [])],
+      serverInk: [],
+    });
+    for (let i = 0; i < 10 && /Handwriting \(page 3\)/.test(document.body.textContent ?? ""); i += 1) {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    }
+    expect(document.body.textContent).not.toMatch(/Handwriting \(page 3\)/);
+    expect(document.body.textContent).toMatch(/Handwriting \(page 1\)/);
   });
 
   it("lists virtual sheets of a grown page-1 whiteboard after the blob decodes", async () => {

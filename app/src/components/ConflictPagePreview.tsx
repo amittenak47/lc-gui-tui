@@ -53,6 +53,9 @@ import { previewScrollAnchor, previewScrollTop, type PreviewPageBox, type Previe
 
 const EMPTY_PDF_BYTES = new ArrayBuffer(0);
 
+/** A mark smaller than this on screen, in CSS px, gets a ring so it can be found. */
+const HIDDEN_MARK_PX = 14;
+
 /**
  * Pages either side of the focused one this pane keeps a bitmap for.
  *
@@ -560,18 +563,48 @@ export function ConflictPagePreview({
   const tilesRef = useRef(paintTiles);
   tilesRef.current = paintTiles;
   const painterRef = useRef<ConflictInkPainter | null>(null);
+  const slotInk = (slot: ConflictInkSlot) => ({
+    page: slot.page,
+    ...conflictInkPlacement(slot, (usePaper ? paperFrames : stablePageFrames)?.find(frame => frame.pageId === slot.page), sceneWidth, usePaper ? inkX : null),
+    ops: useMarkdown ? decodedOps : usePaper ? conflictOpsForPage(decodedOps, slot.page, paperFrames)
+      : decodedShards.flatMap(shard => shard.pageId === slot.page ? shard.ops
+        : shard.pageId === 0 ? (stablePageFrames?.length
+          ? conflictOpsForPage(shard.ops, slot.page, stablePageFrames)
+          : slot.page === 1 ? shard.ops : []) : []),
+  });
+  /*
+   * Marks on this page too small to see, or beside the sheet where the page
+   * clips them: a stray tap is still a row, so show where it is. One ring per
+   * mark, pinned to the sheet's edge when the mark lies off it.
+   */
+  const hiddenMarks = useMemo(() => {
+    const slot = usePdf && showInk ? inkSlots.find(entry => entry.page === page) : undefined;
+    if (!slot) return [];
+    const { ops, originX, originY, scale } = slotInk(slot);
+    const rings: { key: string; left: number; top: number; off: boolean }[] = [];
+    for (const op of ops) {
+      if (op.kind !== "draw" || rings.length >= 40) continue;
+      const box = inkOpsBounds([op]);
+      if (!box) continue;
+      const left = slot.left + (box.minX - originX) * scale, right = slot.left + (box.maxX - originX) * scale;
+      const top = slot.top + (box.minY - originY) * scale, bottom = slot.top + (box.maxY - originY) * scale;
+      const off = right < slot.left || left > slot.left + slot.width || bottom < slot.top || top > slot.top + slot.height;
+      if (!off && right - left >= HIDDEN_MARK_PX && bottom - top >= HIDDEN_MARK_PX) continue;
+      const clamp = (value: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, value));
+      rings.push({
+        key: `${op.id ?? rings.length}:${op.seq ?? ""}`,
+        left: clamp((left + right) / 2, slot.left + HIDDEN_MARK_PX / 2, slot.left + slot.width - HIDDEN_MARK_PX / 2),
+        top: clamp((top + bottom) / 2, slot.top + HIDDEN_MARK_PX / 2, slot.top + slot.height - HIDDEN_MARK_PX / 2),
+        off,
+      });
+    }
+    return rings;
+    // slotInk reads the same inputs listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usePdf, showInk, inkSlots, page, decodedOps, decodedShards, sceneWidth, stablePageFrames, paperFrames, usePaper, useMarkdown, inkX]);
   useEffect(() => {
-    const frames = usePaper ? paperFrames : stablePageFrames;
     const visiblePages = new Set(tilesRef.current.map(tile => tile.page));
-    const painter = new ConflictInkPainter(inkSlots.filter(slot => visiblePages.has(slot.page)).map(slot => ({
-      page: slot.page,
-      ...conflictInkPlacement(slot, frames?.find(frame => frame.pageId === slot.page), sceneWidth, usePaper ? inkX : null),
-      ops: useMarkdown ? decodedOps : usePaper ? conflictOpsForPage(decodedOps, slot.page, paperFrames)
-        : decodedShards.flatMap(shard => shard.pageId === slot.page ? shard.ops
-          : shard.pageId === 0 ? (stablePageFrames?.length
-            ? conflictOpsForPage(shard.ops, slot.page, stablePageFrames)
-            : slot.page === 1 ? shard.ops : []) : []),
-    })).map(entry => revealInk ? {...entry,ops:entry.ops.map(op => op.kind === "draw"
+    const painter = new ConflictInkPainter(inkSlots.filter(slot => visiblePages.has(slot.page)).map(slotInk).map(entry => revealInk ? {...entry,ops:entry.ops.map(op => op.kind === "draw"
       ? {...op,color:"#00e5ff",maxFullness:1,pressureSensitive:false,highlight:false,speedInk:0,speedFade:0,grain:0,baseWidth:Math.max(op.baseWidth,3 / Math.max(.01,entry.scale))}
       : op)} : entry));
     painterRef.current = painter;
@@ -694,6 +727,15 @@ export function ConflictPagePreview({
                 />
               ))
             : null}
+          {hiddenMarks.map((mark) => (
+            <span
+              key={mark.key}
+              className="lc-hub-conflict-mark-ring"
+              data-off-page={mark.off || undefined}
+              style={{ left: mark.left, top: mark.top }}
+              aria-hidden
+            />
+          ))}
         </div>
       ) : useMarkdown ? (
         <div className="lc-hub-conflict-doc" ref={docRef}>
