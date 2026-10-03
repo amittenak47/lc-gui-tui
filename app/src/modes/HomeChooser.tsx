@@ -16,6 +16,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { motion, useReducedMotion } from "motion/react";
 
 import { FEATURE_LEETCODE } from "../featureFlags";
+import { LIBRARY_HOLD_MS } from "../util/gesture";
 import { ANNOTATE_LIBRARY_EVENT } from "../util/annotateStore";
 import { WHITEBOARD_LIBRARY_EVENT } from "../util/whiteboardStore";
 import { RECENT_WORKSPACES_EVENT, forgetRecentWorkspace, loadRecentWorkspaces, recentWorkspaceKey, visibleRecentWorkspaces } from "../util/recentWorkspaces";
@@ -664,7 +665,7 @@ export function HomeChooser({
           {editing && <button type="button" className="lc-home-recents-done" onClick={()=>setEditing(false)}>Done</button>}
         </div>
         {recentsOpen && <div id="lc-home-recents-window" className="lc-home-recents-window lc-scroll-pane">
-          {recent.map((tab,index)=><motion.div key={recentWorkspaceKey(tab)} className="lc-home-recent-item"
+          {recent.map((tab,index)=>{ const key = recentWorkspaceKey(tab) ?? String(index); return <motion.div key={key} className="lc-home-recent-item"
             {...homeTileMotion(visible, !!reduced, Math.min(index,5)*.025, !busy && !editing)}>
             <button type="button" className="lc-home-recent" data-mode={tab.kind === "web" ? "browse" : tab.kind}
               disabled={busy} title={tab.title}
@@ -697,6 +698,10 @@ export function HomeChooser({
                 if (editing) return;
                 onOpenRecent?.(tab);
               }}>
+              {editing && <svg className="lc-home-recent-trace" aria-hidden="true" style={{"--lc-trace-delay":`${-index*0.37}s`} as CSSProperties}>
+                {/* pathLength 100 makes the dash travel at one speed around the whole edge. */}
+                <rect x="1" y="1" pathLength="100" />
+              </svg>}
               <span className="lc-home-recent-preview" aria-hidden="true"><svg viewBox="0 0 40 52" fill="none"><path d="M8 8h24M8 17h24M8 26h24M8 35h24M8 44h18"/><path className="lc-home-recent-mark" d={tab.kind === "whiteboard" ? "M8 31q6-15 12 0t12 0" : "M8 17h18"}/></svg></span>
               <span className="lc-home-recent-text"><strong>{tab.title}</strong><span>{tab.kind === "practice" ? "LeetCode" : tab.kind === "whiteboard" ? "Whiteboard" : tab.kind === "web" ? "Web" : `Annotate · ${tab.kind === "annotate" ? tab.docType === "markdown" ? "Markdown" : tab.docType.toUpperCase() : ""}`}</span></span>
             </button>
@@ -704,7 +709,7 @@ export function HomeChooser({
               onClick={()=>forgetRecentWorkspace(tab)}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
             </button>}
-          </motion.div>)}
+          </motion.div>; })}
         </div>}
       </section>}
       {/* "Start" only separates the tiles from Recently opened; alone it is noise. */}
@@ -719,8 +724,8 @@ export function HomeChooser({
 }
 
 const RECENTS_OPEN_KEY = "whiteboard.homeRecentsOpen";
-/** Long enough not to fire on a tap, short enough to feel like a press. */
-const RECENT_HOLD_MS = 480;
+/** The app's "hold for more" duration (as the Whiteboard button's library hold), so a tap still opens. */
+const RECENT_HOLD_MS = LIBRARY_HOLD_MS;
 /** Travel before a press counts as scrolling the list instead. */
 const RECENT_HOLD_SLOP_PX = 10;
 

@@ -111,12 +111,22 @@
    them from this list. */
 .lc-home-recent-item { position: relative; display: flex; min-width: 0; }
 .lc-home-recent-item > .lc-home-recent { flex: 1 1 auto; width: 100%; -webkit-touch-callout: none; user-select: none; }
+/* Room inside the scrolling list, so a rocking item's corners are never
+   clipped by its edge; the negative margin keeps the layout where it was. */
+.lc-home-recents-window { padding: 6px; margin: -6px; }
 .lc-home-recents[data-editing] .lc-home-recent { padding-right: 46px; animation: lc-home-recent-shake 260ms ease-in-out infinite alternate; }
 .lc-home-recents[data-editing] .lc-home-recent-item:nth-child(even) .lc-home-recent { animation-delay: -130ms; animation-direction: alternate-reverse; }
 @keyframes lc-home-recent-shake {
   from { transform: rotate(-0.9deg) translateY(0.5px); }
   to { transform: rotate(0.9deg) translateY(-0.5px); }
 }
+/* The edge trace sits over the item's content. */
+.lc-home-recent { position: relative; isolation: isolate; }
+.lc-home-recent > :not(.lc-home-recent-trace) { position: relative; z-index: 1; }
+/* A 2px dash in the item's mode colour runs clockwise around the edge. */
+.lc-home-recent-trace { position: absolute; z-index: 2; inset: -1px; width: calc(100% + 2px); height: calc(100% + 2px); overflow: visible; pointer-events: none; }
+.lc-home-recent-trace rect { width: calc(100% - 2px); height: calc(100% - 2px); fill: none; stroke: var(--lc-home-mode); stroke-width: 2px; stroke-linecap: square; stroke-dasharray: 18 82; stroke-dashoffset: 0; rx: var(--lc-r-block); animation: lc-home-recent-trace-dash 1.6s linear infinite; animation-delay: var(--lc-trace-delay, 0s); }
+@keyframes lc-home-recent-trace-dash { to { stroke-dashoffset: -100; } }
 .lc-home-recent-remove { position: absolute; top: 6px; right: 6px; z-index: 1; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: var(--lc-r-block); background: transparent; color: var(--panel); cursor: pointer; }
 .lc-home-recent-remove svg { width: 22px; height: 22px; padding: 4px; box-sizing: border-box; border-radius: var(--lc-r-block); background: var(--ink); }
 .lc-home-recent-remove:hover svg, .lc-home-recent-remove:focus-visible svg { background: var(--bad); }
@@ -124,5 +134,13 @@
 .lc-home-recents-done { min-height: 32px; padding: 0 14px; border: 1px solid var(--accent); border-radius: var(--lc-r-block); background: transparent; color: var(--accent); font: 600 12px/1 var(--lc-sans); letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
 .lc-home-recents-done:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
-  .lc-home-recents[data-editing] .lc-home-recent { animation: none; outline: 1px dashed var(--line); outline-offset: -4px; }
+  .lc-home-recents[data-editing] .lc-home-recent { animation: none; }
+  .lc-home-recent-trace rect { animation: none; stroke-dasharray: none; }
 }
+
+/* Web and Explore (WIP): a square illustration as tall as the card's content,
+   with a glyph about half the Whiteboard one. */
+/* The card is a size container so the box can take the smaller of its width share and its height. */
+.lc-home-chooser.lc-home-redesign .lc-home-card:is([data-mode="browse"],[data-mode="explore"]) { container-type: size; }
+.lc-home-redesign .lc-home-cell:is([data-mode="browse"],[data-mode="explore"]) .lc-home-card-icon { flex: none; align-self: center; width: min(40cqw, 100cqh, 132px); height: auto; aspect-ratio: 1; }
+.lc-home-chooser.lc-home-redesign .lc-home-card:is([data-mode="browse"],[data-mode="explore"]) .lc-home-card-icon > svg { width: 64px; height: 64px; max-width: 62%; max-height: 62%; }

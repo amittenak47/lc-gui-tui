@@ -4,6 +4,7 @@ import {createRoot} from 'react-dom/client';
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {HomeChooser,type HomeChooserProps} from './HomeChooser';
 import {initialTabState,type TabRecord} from '../util/tabs';
+import {LIBRARY_HOLD_MS} from '../util/gesture';
 import {loadRecentWorkspaces,rememberRecentWorkspace,RECENT_WORKSPACES_EVENT} from '../util/recentWorkspaces';
 let root:ReturnType<typeof createRoot>,host:HTMLDivElement;
 beforeEach(()=>{
@@ -77,7 +78,7 @@ describe('hold to edit Recently opened',()=>{
   it('enters edit mode on a hold, and the release that ends it does not open the item',async()=>{
     const p=await mountWithTwo();
     const item=host.querySelector('.lc-home-recent')!;
-    await act(async()=>{press(item,'pointerdown');vi.advanceTimersByTime(500);});
+    await act(async()=>{press(item,'pointerdown');vi.advanceTimersByTime(LIBRARY_HOLD_MS + 20);});
     expect(host.querySelector('.lc-home-recents')?.hasAttribute('data-editing')).toBe(true);
     expect(host.querySelectorAll('.lc-home-recent-remove')).toHaveLength(2);
     await act(async()=>{press(item,'pointerup');(item as HTMLButtonElement).click();});
@@ -88,7 +89,7 @@ describe('hold to edit Recently opened',()=>{
   });
   it('removes only from the list, and leaves the rest',async()=>{
     await mountWithTwo();
-    await act(async()=>{press(host.querySelector('.lc-home-recent')!,'pointerdown');vi.advanceTimersByTime(500);});
+    await act(async()=>{press(host.querySelector('.lc-home-recent')!,'pointerdown');vi.advanceTimersByTime(LIBRARY_HOLD_MS + 20);});
     const remove=host.querySelector<HTMLButtonElement>('.lc-home-recent-remove')!;
     expect(remove.getAttribute('aria-label')).toMatch(/^Remove .+ from Recently opened$/);
     await act(async()=>remove.click());
@@ -109,7 +110,7 @@ describe('hold to edit Recently opened',()=>{
   });
   it('leaves edit mode with Done, Escape, or a tap outside the list',async()=>{
     await mountWithTwo();
-    const hold=async()=>act(async()=>{press(host.querySelector('.lc-home-recent')!,'pointerdown');vi.advanceTimersByTime(500);press(host.querySelector('.lc-home-recent')!,'pointerup');});
+    const hold=async()=>act(async()=>{press(host.querySelector('.lc-home-recent')!,'pointerdown');vi.advanceTimersByTime(LIBRARY_HOLD_MS + 20);press(host.querySelector('.lc-home-recent')!,'pointerup');});
     const editing=()=>host.querySelector('.lc-home-recents')?.hasAttribute('data-editing');
     await hold();expect(editing()).toBe(true);
     await act(async()=>host.querySelector<HTMLButtonElement>('.lc-home-recents-done')!.click());
