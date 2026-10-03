@@ -742,16 +742,25 @@ function saveRecentsOpen(open: boolean): void {
 const TILE_SPRING = {type: "spring" as const, stiffness: 430, damping: 17, mass: 0.85};
 const TILE_GESTURE_SPRING = {type: "spring" as const, stiffness: 520, damping: 15, mass: 0.7};
 
+/*
+ * Whole `transform` strings, not separate y and scale: Motion hands opacity and
+ * transform to the browser's own animations, which the compositor runs, and
+ * turns the spring into the matching easing curve. Separate values are worked
+ * out on the page's thread each frame, and coming Home that thread is still
+ * busy with the tab just left, so the tiles arrived in uneven steps.
+ */
 function homeTileMotion(visible: boolean, reduced: boolean, delay: number, interactive = true) {
   return {
-    initial: reduced ? false as const : {opacity:0,y:44,scale:.8},
-    animate: visible ? {opacity:1,y:0,scale:1} : {opacity:0,y:10,scale:.94},
+    initial: reduced ? false as const : {opacity:0,transform:"translateY(44px) scale(0.8)"},
+    animate: visible
+      ? {opacity:1,transform:"translateY(0px) scale(1)"}
+      : {opacity:0,transform:"translateY(10px) scale(0.94)"},
     transition: reduced ? {duration:0} : visible
       ? {default:{...TILE_SPRING,delay}, opacity:{duration:.14,delay}}
       : {duration:.12},
     // Gestures only run on a visible, motion-enabled Home whose tiles take taps.
-    whileHover: reduced || !visible || !interactive ? undefined : {scale:1.035,y:-3,transition:TILE_GESTURE_SPRING},
-    whileTap: reduced || !visible || !interactive ? undefined : {scale:.94,transition:TILE_GESTURE_SPRING},
+    whileHover: reduced || !visible || !interactive ? undefined : {transform:"translateY(-3px) scale(1.035)",transition:TILE_GESTURE_SPRING},
+    whileTap: reduced || !visible || !interactive ? undefined : {transform:"translateY(0px) scale(0.94)",transition:TILE_GESTURE_SPRING},
   };
 }
 
