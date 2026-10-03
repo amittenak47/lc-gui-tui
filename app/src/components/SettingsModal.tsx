@@ -26,6 +26,8 @@ import { AnimatedDisclosure } from "./AnimatedDisclosure";
 import { countSettingsChanges } from "../util/settingsChanges";
 import "./settingsDialog.css";
 import { SettingsSlider } from "./SettingsSlider";
+import { SettingsChoices } from "./SettingsChoices";
+import { HoldButton } from "./HoldButton";
 import { loadTestForwardMode, saveTestForwardMode, type TestForwardMode } from "../util/agentPrefs";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkToolPresets, saveInkToolPresets } from "../util/inkToolPresets";
@@ -65,8 +67,6 @@ import {
 } from "../util/eraserPartialPref";
 import {
   CHROME_WAKE_EVENT,
-  chromeWakeMarkerLabel,
-  chromeWakeTintLabel,
   loadChromeWakeMarker,
   loadChromeWakeTint,
   saveChromeWakeMarker,
@@ -93,7 +93,6 @@ import {
   INK_BOLDNESS_EVENT,
 } from "../util/inkBoldnessPref";
 import {
-  captureModeLabel,
   captureWritesFile,
   loadCaptureMode,
   CAPTURE_COUNTDOWN_CHOICES,
@@ -109,11 +108,12 @@ import {
   type CaptureMode,
 } from "../util/capturePrefs";
 import {
-  loadPaletteTag,
+  loadPalettePrefs,
   paletteTagLabel,
-  savePaletteTag,
+  savePalettePrefs,
+  togglePaletteTag,
   PALETTE_TAGS,
-  type PaletteTag,
+  type PalettePrefs,
 } from "../util/palettePref";
 import {
   loadOfflineMergePolicy,
@@ -177,7 +177,8 @@ const TABS: { id: TabId; label: string }[] = [
 
 const SettingsPageCtx = createContext<{
   page: string; open: (id: string) => void; query: string; summaries: Record<string, string>;
-}>({ page: "root", open: () => {}, query: "", summaries: {} });
+  changes: Record<string, number>; reset: (id: string) => void; saving: boolean;
+}>({ page: "root", open: () => {}, query: "", summaries: {}, changes: {}, reset: () => {}, saving: false });
 
 function SettingsIcon({id}: {id: string}) {
   const paths: Record<string,string> = {
@@ -185,6 +186,11 @@ function SettingsIcon({id}: {id: string}) {
     storage:"M4 5h16v14H4V5Zm0 5h16m-12 5h8", ui:"M3 4h18v16H3V4Zm0 5h18M9 9v11",
     diagnostics:"M4 18V6m5 12V3m6 15V9m5 9V5", paths:"M3 6h7l2 3h9v11H3V6Z",
     datasets:"M4 4h16v16H4V4Zm0 6h16m-10 0v10", llm:"M4 4h16v13H9l-5 4V4Zm4 5h8m-8 4h5",
+    "ink-tools":"M4 18a8 8 0 1 1 16-6c0 4-4 1-5 4s-4 5-7 2Zm4-10h.01M12 6h.01M16 9h.01",
+    check:"m4 12 5 5L20 6", diagnose:"M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14Zm5 12 6 6",
+    repair:"m4 20 9-9m-3-7a6 6 0 0 0 8 8l-4-4 2-2 4 4a6 6 0 0 0-8-8",
+    delete:"M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7",
+    export:"M12 15V3m-4 4 4-4 4 4M4 14v7h16v-7", reset:"M4 10a8 8 0 1 1 0 5M4 4v6h6",
   };
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[id] ?? "M5 4h14v16H5V4Zm4 5h6m-6 5h6"}/></svg>;
 }
@@ -199,20 +205,25 @@ function settingsText(children: ReactNode): string {
 }
 
 function SettingsFold({id,title,children}: {id:string;title:string;children:ReactNode}) {
-  const {page,open,query,summaries}=useContext(SettingsPageCtx);
+  const {page,open,query,summaries,changes,reset,saving}=useContext(SettingsPageCtx);
   const terms=query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   if (terms.length) {
     const text=`${title} ${id === "diagnostics" ? "Debug log Export log Clear log" : ""} ${settingsText(children)}`.toLocaleLowerCase();
     if (terms.some(term=>!text.includes(term))) return null;
   }
   const expanded=page===id;
+  const changed=changes[id] ?? 0;
   return <section className={`lc-settings-fold${expanded ? " is-expanded" : ""}`}>
+    <div className="lc-settings-fold-header" data-changed={changed > 0}>
     <button type="button" className="lc-settings-fold-summary" aria-expanded={expanded} aria-controls={`lc-settings-group-${id}`} onClick={()=>open(expanded ? "root" : id)}>
       <span className="lc-settings-group-icon"><SettingsIcon id={id}/></span>
       <span className="lc-settings-fold-title">{title}</span>
       <span className="lc-settings-fold-value">{summaries[id]}</span>
+      {changed > 0 && <span className="lc-settings-group-changes">{changed} changed</span>}
       <span className="lc-settings-fold-chevron" aria-hidden/>
     </button>
+    {changed > 0 && <button type="button" className="lc-settings-group-reset" aria-label={`Reset ${title}`} title={`Reset ${title}`} disabled={saving} onClick={()=>reset(id)}><SettingsIcon id="reset"/></button>}
+    </div>
     <AnimatedDisclosure open={expanded}><div id={`lc-settings-group-${id}`} className="lc-settings-fold-body" inert={!expanded}>{children}</div></AnimatedDisclosure>
   </section>;
 }
@@ -467,7 +478,7 @@ interface DevicePrefs {
   /** Whether this device pushes itself to the hub on its own. */
   hubAutoSync: HubAutoSyncPref;
   /** ColourHunt tag the ink wheel asks for. */
-  paletteTag: PaletteTag;
+  palettePrefs: PalettePrefs;
   /** Show ColorRadial on the drawing island (temporary colour until 1D Save). */
   colorWheelOnToolbar: boolean;
   /** Hub tap to apply a wheel pick. Off applies on the inner wedge. */
@@ -519,7 +530,7 @@ function loadDevicePrefs(): DevicePrefs {
     autosaveMs: loadAutosaveInterval(),
     autosaveBanner: loadAutosaveBanner(),
     hubAutoSync: loadHubAutosyncPref(),
-    paletteTag: loadPaletteTag(),
+    palettePrefs: loadPalettePrefs(),
     colorWheelOnToolbar: loadInkToolPresets().colorWheelOnToolbar,
     tapOk: loadInkToolPresets().tapOk,
     chromeWake: loadChromeWakeMarker(),
@@ -563,7 +574,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.autosaveMs === b.autosaveMs &&
     a.autosaveBanner === b.autosaveBanner &&
     a.hubAutoSync === b.hubAutoSync &&
-    a.paletteTag === b.paletteTag &&
+    JSON.stringify(a.palettePrefs) === JSON.stringify(b.palettePrefs) &&
     a.colorWheelOnToolbar === b.colorWheelOnToolbar &&
     a.tapOk === b.tapOk &&
     a.chromeWake === b.chromeWake &&
@@ -658,12 +669,10 @@ export function SettingsModal({
     | { kind: "done"; facts: SettingsFact[] }
     | { kind: "failed"; facts: SettingsFact[] }
   >({ kind: "idle" });
-  const [docCacheArmed, setDocCacheArmed] = useState(false);
 
   const runDocCache = useCallback(
     async (action: "check" | "repair" | "clear" | "inspect") => {
       if (action === "inspect") {
-        setDocCacheArmed(false);
         setDocCache({ kind: "busy" });
         try {
           const report = await inspectDocStore();
@@ -681,17 +690,6 @@ export function SettingsModal({
         }
         return;
       }
-      if (action === "clear" && !docCacheArmed) {
-        setDocCacheArmed(true);
-        setDocCache({
-          kind: "done",
-          facts: factsFromMessage(
-            "This drops every stored copy — each document has to be picked once more. Tap again to confirm.",
-          ),
-        });
-        return;
-      }
-      setDocCacheArmed(false);
       setDocCache({ kind: "busy" });
       try {
         const audit =
@@ -748,7 +746,7 @@ export function SettingsModal({
         });
       }
     },
-    [docCacheArmed],
+    [],
   );
   /*
    * The local search index wipe, and its answer.
@@ -766,10 +764,8 @@ export function SettingsModal({
     | { kind: "done"; facts: SettingsFact[] }
     | { kind: "failed"; facts: SettingsFact[] }
   >({ kind: "idle" });
-  const [indexWipeArmed, setIndexWipeArmed] = useState(false);
   const runIndexInspect = useCallback(
     async (detail: boolean) => {
-      setIndexWipeArmed(false);
       setIndexWipe({ kind: "busy" });
       try {
         const local = await client.listDocChunkDigestsLocal();
@@ -810,17 +806,6 @@ export function SettingsModal({
     [client],
   );
   const runIndexWipe = useCallback(async () => {
-    if (!indexWipeArmed) {
-      setIndexWipeArmed(true);
-      setIndexWipe({
-        kind: "done",
-        facts: factsFromMessage(
-          "This drops every indexed page of text on this device — Ask rebuilds by indexing again. Tap again to confirm.",
-        ),
-      });
-      return;
-    }
-    setIndexWipeArmed(false);
     setIndexWipe({ kind: "busy" });
     try {
       const report = await client.clearLocalDocIndex();
@@ -836,7 +821,7 @@ export function SettingsModal({
         facts: factsFromMessage(cause instanceof Error ? cause.message : String(cause)),
       });
     }
-  }, [client, indexWipeArmed]);
+  }, [client]);
   const [siblingDevices, setSiblingDevices] = useState<DevicePrefsDto[]>([]);
   /*
    * Register, then read back — in that order, and from wherever the device
@@ -932,7 +917,7 @@ export function SettingsModal({
     loadHubAutosyncPref(),
   );
   /* Draft until Save — dirty detection includes this so Save enables. */
-  const [paletteTag, setPaletteTag] = useState<PaletteTag>(() => loadPaletteTag());
+  const [palettePrefs, setPalettePrefs] = useState<PalettePrefs>(loadPalettePrefs);
   /** Last saved config + device prefs — Cancel restores these; Save advances them. */
   const [baselineConfig, setBaselineConfig] = useState<LcConfig>(emptyConfig);
   const [baselinePrefs, setBaselinePrefs] = useState<DevicePrefs>(loadDevicePrefs);
@@ -1095,12 +1080,7 @@ export function SettingsModal({
     [client],
   );
 
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setError(null);
-    setBusy("loading…");
-    const prefs = loadDevicePrefs();
+  const restoreDeviceDraft = (prefs: DevicePrefs) => {
     setHandedness(prefs.handedness);
     setUiHandedness(prefs.uiHandedness);
     setUiCorners(prefs.uiCorners);
@@ -1126,7 +1106,7 @@ export function SettingsModal({
     setAutosaveMs(prefs.autosaveMs);
     setAutosaveBanner(prefs.autosaveBanner);
     setHubAutoSync(prefs.hubAutoSync);
-    setPaletteTag(prefs.paletteTag);
+    setPalettePrefs(prefs.palettePrefs);
     setColorWheelOnToolbar(prefs.colorWheelOnToolbar);
     setTapOk(prefs.tapOk);
     setChromeWake(prefs.chromeWake);
@@ -1138,6 +1118,15 @@ export function SettingsModal({
     setHubSyncWindowPill(prefs.hubSyncWindowPill);
     setInkDisplayHz(prefs.inkDisplayHz);
     setInkMatchDisplay(prefs.inkMatchDisplay);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setError(null);
+    setBusy("loading…");
+    const prefs = loadDevicePrefs();
+    restoreDeviceDraft(prefs);
     setBaselinePrefs(prefs);
     // Saved only: the desktop that *is* the hub runs on a loopback it never
     // typed, and showing that here would read as "connected to some other PC".
@@ -1234,7 +1223,7 @@ export function SettingsModal({
     autosaveMs,
     autosaveBanner,
     hubAutoSync,
-    paletteTag,
+    palettePrefs,
     colorWheelOnToolbar,
     tapOk,
     chromeWake,
@@ -1266,12 +1255,49 @@ export function SettingsModal({
     + Number(Boolean(groqKeyDraft.trim()) || clearGroqKey)
     + Number(hubUrl.trim() !== baselineHubUrl) + Number(hubToken.trim() !== baselineHubToken)
     + Number(debugLog !== baselineDebugLog);
+  const prefGroups: Record<string, (keyof DevicePrefs)[]> = {
+    writing: ["handedness", "chromeWake", "chromeWakeTint", "captureMode", "captureDestination", "captureFolder", "captureCountdown", "inkMatchDisplay", "pressureClip", "inkSmoothing", "inkSmoothingMode", "inkSpeed", "inkSpeedBlotBlend", "inkGrain", "inkSpeedFade", "inkBoldness", "eraserPartial"],
+    "ink-tools": ["tapOk", "colorWheelOnToolbar", "palettePrefs"],
+    reading: ["pdfFlickMomentum"],
+    storage: ["autosaveMs", "autosaveBanner", "hubAutoSync", "offlineMerge"],
+    ui: ["uiHandedness", "uiCorners", "startupTabs", "readingMode", "pageFit", "agentDisplay"],
+    diagnostics: ["inkDisplayHz", "inkPerfOverlay", "inkPerfBar", "pdfFlickHud", "hubSyncWindowPill"],
+    tests: ["testForward"],
+  };
+  const configGroups: Record<string, (keyof LcConfig)[]> = {
+    paths: ["data_json_dir", "workspace_dir"], datasets: ["dataset_dirs"], tests: ["stop_on_first_failure"],
+    llm: ["default_provider", "models_dir", "local", "ollama", "openai", "groq", "modes", "serve_port", "serve_token"],
+  };
+  const select = <T extends object,>(value: T, fields: (keyof T)[]) => Object.fromEntries(fields.map(key => [key, value[key]]));
+  const changes = Object.fromEntries([...new Set([...Object.keys(prefGroups), ...Object.keys(configGroups)])].map(id => [id,
+    countSettingsChanges(select(draftPrefs, prefGroups[id] ?? []), select(baselinePrefs, prefGroups[id] ?? []))
+    + countSettingsChanges(select(draft, configGroups[id] ?? []), select(baselineConfig, configGroups[id] ?? []))
+  ]));
+  const sharedUiFlags: (keyof CoachFlags)[] = ["ws_runs", "process_events_ui"];
+  const coachChanges = (fields: (keyof CoachFlags)[]) => countSettingsChanges(
+    select({...DEFAULT_COACH_FLAGS, ...draft.coach}, fields), select({...DEFAULT_COACH_FLAGS, ...baselineConfig.coach}, fields));
+  changes.ui = (changes.ui ?? 0) + coachChanges(sharedUiFlags);
+  for (const group of COACH_FLAG_GROUPS) changes[group.id] = coachChanges(group.flags.map(([key]) => key));
+  changes.storage = (changes.storage ?? 0) + Number(hubUrl.trim() !== baselineHubUrl) + Number(hubToken.trim() !== baselineHubToken);
+  changes.diagnostics = (changes.diagnostics ?? 0) + Number(debugLog !== baselineDebugLog);
+  changes.llm = (changes.llm ?? 0) + Number(Boolean(openaiKeyDraft.trim()) || clearOpenaiKey) + Number(Boolean(groqKeyDraft.trim()) || clearGroqKey);
+  const resetGroup = (id: string) => {
+    if (saving) return;
+    restoreDeviceDraft({...draftPrefs, ...select(baselinePrefs, prefGroups[id] ?? [])});
+    const coachFields = id === "ui" ? sharedUiFlags : COACH_FLAG_GROUPS.find(group => group.id === id)?.flags.map(([key]) => key) ?? [];
+    setDraft(prev => ({...prev, ...select(baselineConfig, configGroups[id] ?? []),
+      coach: {...DEFAULT_COACH_FLAGS, ...prev.coach, ...select({...DEFAULT_COACH_FLAGS, ...baselineConfig.coach}, coachFields)}}));
+    if (id === "storage") { setHubUrl(baselineHubUrl); setHubToken(baselineHubToken); }
+    if (id === "diagnostics") setDebugLog(baselineDebugLog);
+    if (id === "llm") { setOpenaiKeyDraft(""); setGroqKeyDraft(""); setClearOpenaiKey(false); setClearGroqKey(false); }
+  };
   const summaries: Record<string,string> = {
-    writing: `${handedness === "left" ? "Left hand" : "Right hand"} / smoothing ${Math.round(inkSmoothing*100)}%`,
-    reading: `${readingMode === "pages" ? "Pages" : "Scroll"} / momentum ${pdfFlickMomentum}%`,
+    writing: `${handedness === "left" ? "Left hand" : "Right hand"} · ${chromeWake === "off" ? "No marker" : chromeWake === "pulse" ? "Checkerboard pulse" : "Grey smear"}`,
+    "ink-tools": `${palettePrefs.tags.map(paletteTagLabel).join(", ")}${palettePrefs.mixColours ? " · Mix colours" : ""}`,
+    reading: `Momentum ${pdfFlickMomentum}`,
     storage: `${autosaveMs ? `Autosave ${autosaveMs/1000}s` : "Autosave off"} / ${hubAutoSync === "off" ? "Manual sync" : "Auto sync"}`,
-    ui: `${uiHandedness === "left" ? "Left-hand UI" : "Right-hand UI"} / ${startupTabs === "fresh" ? "Start fresh" : startupTabs === "home" ? "Start at home" : "Restore tabs"}`,
-    diagnostics: debugLog ? "On" : "Off", paths: draft.workspace_dir,
+    ui: `${uiHandedness === "left" ? "Left hand" : "Right hand"} · ${readingMode === "pages" ? "Pages" : "Scroll"}`,
+    diagnostics: [inkPerfOverlay && "Frames", inkPerfBar && "Load bar", pdfFlickHud && "Flick preview", hubSyncWindowPill && "Sync pill", debugLog && "Debug log"].filter(Boolean).join(" · ") || "Off", paths: draft.workspace_dir,
     datasets: `${datasets.length} datasets`, tests: draft.stop_on_first_failure ? "Stop at first failure" : "Run all cases",
     llm: `${draft.default_provider} / ${draft[draft.default_provider as keyof Pick<LcConfig,"local"|"ollama"|"openai"|"groq">]?.model || "No model selected"}`,
     ...Object.fromEntries(COACH_FLAG_GROUPS.map(group=>[group.id, `${group.flags.filter(([key])=>(draft.coach ?? DEFAULT_COACH_FLAGS)[key]).length} of ${group.flags.length} on`])),
@@ -1328,7 +1354,7 @@ export function SettingsModal({
         saveAutosaveInterval(autosaveMs);
         saveAutosaveBanner(autosaveBanner);
         saveHubAutosyncPref(hubAutoSync);
-        savePaletteTag(paletteTag);
+        savePalettePrefs(palettePrefs);
         saveInkToolPresets({
           ...loadInkToolPresets(),
           colorWheelOnToolbar,
@@ -1472,7 +1498,7 @@ export function SettingsModal({
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></svg>
           <input type="search" aria-label="Search settings" placeholder="Search settings..." value={settingsQuery} onChange={event=>setSettingsQuery(event.target.value)}/>
         </label></div>
-        <SettingsPageCtx.Provider value={{page,open:setPage,query:settingsQuery,summaries}}>
+        <SettingsPageCtx.Provider value={{page,open:setPage,query:settingsQuery,summaries,changes,reset:resetGroup,saving}}>
         <div className="lc-settings-tabs" role="tablist">
           {TABS.map((entry) => (
             <button
@@ -1536,13 +1562,9 @@ export function SettingsModal({
                 <code>&lt;problems folder&gt;/&lt;dataset&gt;/</code>; override it below when it
                 lives somewhere else.
               </p>
-              <div className="lc-settings-subhead">Corpora (DLC)</div>
-              <p className="lc-settings-hint">
-                Nothing ships in the APK. Install a set to download its jsonl zip
-                (GitHub release <code>corpora-v1</code>), unpack, and index. Off
-                until you install. KodCode is large (~1 GB). Pass/fail badges stay
-                in <code>session.json</code> if you Remove and later reinstall.
-              </p>
+              <div className="lc-setting-row">
+<div className="lc-settings-subhead">Corpora (DLC)</div>
+              <p className="lc-settings-hint">Install a set to download and index it. KodCode is about 1 GB.</p>
               {(Array.isArray(dlcRows) ? dlcRows : []).map((row) => {
                 const working = ["starting", "downloading", "unpacking", "indexing"].includes(row.phase);
                 const pct = row.progress >= 0 ? Math.round(row.progress * 100) : null;
@@ -1561,7 +1583,10 @@ export function SettingsModal({
                   <div key={row.slug} className="lc-settings-dlc-row">
                     <span className="lc-settings-dlc-name">{row.label}</span>
                     <span className="lc-settings-dlc-count">{countLabel}</span>
-                    <button
+                    {row.installed && !working && row.phase !== "error" ? <HoldButton
+                      label={`Remove ${row.label}`} ariaLabel={`Hold to remove ${row.label}`} dataTip={`Remove ${row.label}`}
+                      className="lc-secondary lc-settings-icon-action lc-hold-danger" disabled={Boolean(busy)}
+                      onConfirm={() => void onDlcRemove(row.slug)}><SettingsIcon id="delete"/></HoldButton> : <button
                       type="button"
                       className={[
                         "lc-settings-dlc-action",
@@ -1573,14 +1598,10 @@ export function SettingsModal({
                         .join(" ")}
                       style={{ "--dlc-progress": fillPct } as CSSProperties}
                       disabled={Boolean(busy) || working}
-                      onClick={() =>
-                        row.installed && !working && row.phase !== "error"
-                          ? onDlcRemove(row.slug)
-                          : onDlcInstall(row.slug)
-                      }
+                      onClick={() => onDlcInstall(row.slug)}
                     >
                       <span>{label}</span>
-                    </button>
+                    </button>}
                     {row.error && <p className="lc-warning lc-settings-dlc-error">{row.error}</p>}
                   </div>
                 );
@@ -1616,19 +1637,18 @@ export function SettingsModal({
                   </p>
                 </label>
               ))}
-              </SettingsFold>
+              </div>
+</SettingsFold>
             </div>
           )}
 
           {(tab === "personalise" || searching) && (
             <div className="lc-settings-fields">
               <SettingsFold id="writing" title="Annotate">
-              <div className="lc-settings-subhead">Writing hand</div>
-              <p className="lc-settings-hint">
-                Positions ink tools, colour wheels and the pen preset editor for your writing hand.
-                The rest of the app has a separate hand setting under UI. Saved on this device.
-              </p>
-              <div className="lc-settings-choice" role="radiogroup" aria-label="Writing hand">
+              <div className="lc-setting-row">
+<div className="lc-settings-subhead">Writing hand</div>
+              <p className="lc-settings-hint">Where ink tools, colour wheels and the preset editor sit. Everything else follows UI hand.</p>
+              <SettingsChoices className="lc-settings-choice" role="radiogroup" aria-label="Writing hand">
                 <button
                   type="button"
                   role="radio"
@@ -1641,7 +1661,6 @@ export function SettingsModal({
                   onClick={() => setHandedness("right")}
                 >
                   <strong>Right hand</strong>
-                  <span className="lc-muted">Ink controls arranged for a right-handed writer.</span>
                 </button>
                 <button
                   type="button"
@@ -1655,16 +1674,14 @@ export function SettingsModal({
                   onClick={() => setHandedness("left")}
                 >
                   <strong>Left hand</strong>
-                  <span className="lc-muted">Ink controls arranged for a left-handed writer.</span>
                 </button>
-              </div>
+              </SettingsChoices>
 
-              <div className="lc-settings-subhead">Hidden-controls marker</div>
-              <p className="lc-settings-hint">
-                When the eye is off screen, a mark can sit in that corner so you can find
-                it again. Saved on this device only.
-              </p>
-              <div
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Hidden-controls marker</div>
+              <p className="lc-settings-hint">Marks the corner where the hidden tools are.</p>
+              <SettingsChoices
                 className="lc-settings-choice"
                 role="radiogroup"
                 aria-label="Hidden-controls marker"
@@ -1673,15 +1690,15 @@ export function SettingsModal({
                   [
                     [
                       "smear",
-                      "A blurred ghost of the eye — the current grey-black smear.",
+                      "A faint ghost of the tool eye.",
                     ],
                     [
                       "pulse",
-                      "The same checkerboard pulse as the tool-menu confirm, on that spot.",
+                      "Pulses like the tool-menu confirm.",
                     ],
                     [
                       "off",
-                      "Nothing on the page. Tap that corner anyway — for drawings the smear would sit on.",
+                      "Nothing drawn; that corner still opens the tools.",
                     ],
                   ] as Array<[ChromeWakeMarker, string]>
                 ).map(([marker, blurb]) => (
@@ -1697,32 +1714,23 @@ export function SettingsModal({
                     }
                     onClick={() => setChromeWake(marker)}
                   >
-                    <strong>{chromeWakeMarkerLabel(marker)}</strong>
-                    <span className="lc-muted">{blurb}</span>
+                    <strong>{marker === "off" ? "None" : marker === "pulse" ? "Checkerboard pulse" : "Grey smear"}</strong>
+                    {blurb && <span className="lc-muted">{blurb}</span>}
                   </button>
                 ))}
-              </div>
+              </SettingsChoices>
 
+              {chromeWake !== "off" && <>
               <div className="lc-settings-subhead">Marker colour</div>
-              <p className="lc-settings-hint">
-                Black and white is the grey smear and checkerboard. Rainbow pulse
-                crawls the full ROYGBIV spectrum across both marks.
-              </p>
-              <div
+              <SettingsChoices
                 className="lc-settings-choice"
                 role="radiogroup"
                 aria-label="Hidden-controls marker colour"
               >
                 {(
                   [
-                    [
-                      "mono",
-                      "Grey smear and black-and-white checkerboard — the current marks.",
-                    ],
-                    [
-                      "color",
-                      "ROYGBIV crawl on the smear and the checkerboard — not black and white.",
-                    ],
+                    ["mono", ""],
+                    ["color", ""],
                   ] as Array<[ChromeWakeTint, string]>
                 ).map(([tint, blurb]) => (
                   <button
@@ -1737,18 +1745,18 @@ export function SettingsModal({
                     }
                     onClick={() => setChromeWakeTint(tint)}
                   >
-                    <strong>{chromeWakeTintLabel(tint)}</strong>
-                    <span className="lc-muted">{blurb}</span>
+                    <strong>{tint === "color" ? "Rainbow" : "Black and white"}</strong>
+                    {blurb && <span className="lc-muted">{blurb}</span>}
                   </button>
                 ))}
-              </div>
+              </SettingsChoices>
 
-              <div className="lc-settings-subhead">Photo settings</div>
-              <p className="lc-settings-hint">
-                What happens when you capture the board — entire or a region. Files are
-                saved on this device only; the default destination is Photos.
-              </p>
-              <div
+              </>}
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">When you capture</div>
+              <p className="lc-settings-hint">Applies to whole-board and region captures.</p>
+              <SettingsChoices
                 className="lc-settings-choice"
                 role="radiogroup"
                 aria-label="What a capture does"
@@ -1757,15 +1765,15 @@ export function SettingsModal({
                   [
                     [
                       "board",
-                      "Place the capture on the board. No file is written.",
+                      "No file is written.",
                     ],
                     [
                       "board-save",
-                      "Place it on the board and save a PNG to this device.",
+                      "Also saves a PNG.",
                     ],
                     [
                       "save",
-                      "Save a PNG only — the board is left as it was.",
+                      "The board is left as it was.",
                     ],
                   ] as Array<[CaptureMode, string]>
                 ).map(([mode, blurb]) => (
@@ -1781,16 +1789,16 @@ export function SettingsModal({
                     }
                     onClick={() => setCaptureMode(mode)}
                   >
-                    <strong>{captureModeLabel(mode)}</strong>
-                    <span className="lc-muted">{blurb}</span>
+                    <strong>{mode === "board" ? "Place on board" : mode === "board-save" ? "Place on board and save" : "Save only"}</strong>
+                    {blurb && <span className="lc-muted">{blurb}</span>}
                   </button>
                 ))}
-              </div>
+              </SettingsChoices>
 
               {captureWritesFile(captureMode) && (
                 <>
-                  <div className="lc-settings-subhead">Capture save location</div>
-                  <div
+                  <div className="lc-settings-subhead">Save to</div>
+                  <SettingsChoices
                     className="lc-settings-choice"
                     role="radiogroup"
                     aria-label="Capture save location"
@@ -1806,9 +1814,9 @@ export function SettingsModal({
                       }
                       onClick={() => setCaptureDestination("photos")}
                     >
-                      <strong>Device photos</strong>
+                      <strong>Photos (default)</strong>
                       <span className="lc-muted">
-                        Pictures library / Photos app (Pictures/lc). Default.
+                        Pictures/lc.
                       </span>
                     </button>
                     <button
@@ -1823,7 +1831,7 @@ export function SettingsModal({
                       onClick={() => setCaptureDestination("downloads")}
                     >
                       <strong>Downloads</strong>
-                      <span className="lc-muted">Write a PNG into the Downloads folder.</span>
+                      <span className="lc-muted"></span>
                     </button>
                     <button
                       type="button"
@@ -1836,9 +1844,9 @@ export function SettingsModal({
                       }
                       onClick={() => setCaptureDestination("folder")}
                     >
-                      <strong>A folder you pick</strong>
+                      <strong>A folder</strong>
                       <span className="lc-muted">
-                        Choose an Android folder, or enter a desktop directory below.
+                        Pick one on Android; type a path on desktop.
                       </span>
                     </button>
                     <button
@@ -1854,11 +1862,10 @@ export function SettingsModal({
                     >
                       <strong>Share sheet</strong>
                       <span className="lc-muted">
-                        Android only — hands the PNG to the system chooser. Elsewhere it
-                        saves to Photos and tells you where.
+                        Android. Elsewhere it saves to Photos.
                       </span>
                     </button>
-                  </div>
+                  </SettingsChoices>
 
                   {captureDestination === "folder" && (
                     <>
@@ -1883,15 +1890,16 @@ export function SettingsModal({
                     </>
                   )}
 
-                  <div className="lc-settings-subhead">Capture countdown</div>
-                  <p className="lc-settings-hint">
-                    Seconds between pressing the shutter and the shot, so you can get out
-                    of your own way. Tapping the countdown shoots immediately.
-                  </p>
-                  <div
+                </>
+              )}
+                  </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Countdown</div>
+              <p className="lc-settings-hint">Tap the countdown to shoot right away.</p>
+                  <SettingsChoices
                     className="lc-settings-choice lc-settings-choice-compact"
                     role="radiogroup"
-                    aria-label="Capture countdown"
+                    aria-label="Countdown"
                   >
                     {CAPTURE_COUNTDOWN_CHOICES.map((seconds) => (
                       <button
@@ -1909,187 +1917,17 @@ export function SettingsModal({
                         <strong>{seconds === 0 ? "Off" : `${seconds}s`}</strong>
                       </button>
                     ))}
-                  </div>
-                </>
-              )}
+                  </SettingsChoices>
 
-              <div className="lc-settings-subhead">Ink presets</div>
-              <p className="lc-settings-hint">
-                Six wedges per tool. Slot 1 is Global. Pen, highlighter and eraser
-                live on the wheel — hold the preset name until it fills (or rest
-                the nib without moving, 280ms when unlocked) to open it. A tap does
-                nothing.
-              </p>
-              <div className="lc-settings-subhead">Tap OK</div>
-              <p className="lc-settings-hint">
-                Confirm the pair at the hub. Off applies when you release the
-                inner wedge — outer tool first, then a colour. Hold until the
-                wedge fills to edit, same as when OK is on. The tool you already
-                have counts as the outer pick. Switching tools clears the colour;
-                switching back is still the outer step. Saved on this device only.
-              </p>
-              <div
-                className="lc-settings-choice lc-settings-choice-compact"
-                role="radiogroup"
-                aria-label="Tap OK"
-              >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={!tapOk}
-                  className={
-                    tapOk
-                      ? "lc-settings-choice-option"
-                      : "lc-settings-choice-option is-active"
-                  }
-                  onClick={() => setTapOk(false)}
-                >
-                  <strong>Off</strong>
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={tapOk}
-                  className={
-                    tapOk
-                      ? "lc-settings-choice-option is-active"
-                      : "lc-settings-choice-option"
-                  }
-                  onClick={() => setTapOk(true)}
-                >
-                  <strong>On</strong>
-                </button>
-              </div>
-              <div className="lc-settings-subhead">Colour wheel on toolbar</div>
-              <p className="lc-settings-hint">
-                Temporary colour — does not rewrite the active wedge until you Save
-                in the preset editor. Saved on this device only.
-              </p>
-              <div
-                className="lc-settings-choice lc-settings-choice-compact"
-                role="radiogroup"
-                aria-label="Colour wheel on toolbar"
-              >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={!colorWheelOnToolbar}
-                  className={
-                    colorWheelOnToolbar
-                      ? "lc-settings-choice-option"
-                      : "lc-settings-choice-option is-active"
-                  }
-                  onClick={() => setColorWheelOnToolbar(false)}
-                >
-                  <strong>Off</strong>
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={colorWheelOnToolbar}
-                  className={
-                    colorWheelOnToolbar
-                      ? "lc-settings-choice-option is-active"
-                      : "lc-settings-choice-option"
-                  }
-                  onClick={() => setColorWheelOnToolbar(true)}
-                >
-                  <strong>On</strong>
-                </button>
-              </div>
 
-              {/*
-                What the ⟳ on the colour wheel asks for.
-                
-                The feed was queried with no tag at all, which is not "no
-                preference" so much as "whatever the site sorts by" — and what
-                came back was pastel after pastel. Any stays the default: a
-                preference nobody asked for should not narrow what they get.
-              */}
-              <div className="lc-settings-subhead">Ink palettes</div>
-              <p className="lc-settings-hint">
-                What kind of colours the wheel pulls from ColorHunt when you ask
-                it for another palette. Offline — or if the feed fails — a local
-                list is used instead, and this tag does not apply.
-              </p>
-              <div
-                className="lc-settings-choice lc-settings-choice-wrap"
-                role="radiogroup"
-                aria-label="Palette colours"
-              >
-                {PALETTE_TAGS.map((tag) => (
-                  <button
-                    key={tag}
-                    type="button"
-                    role="radio"
-                    aria-checked={paletteTag === tag}
-                    className={
-                      paletteTag === tag
-                        ? "lc-settings-choice-option is-active"
-                        : "lc-settings-choice-option"
-                    }
-                    onClick={() => {
-                      setPaletteTag(tag);
-                    }}
-                  >
-                    <strong>{paletteTagLabel(tag)}</strong>
-                  </button>
-                ))}
               </div>
-
-              <div className="lc-settings-subhead">Display refresh</div>
-              <p className="lc-settings-hint">
-                Grades the HUD against this vsync. Auto reads the gap. On 90 Hz
-                and faster, live ink presents at most 60 frames a second unless
-                Match display is on. Canvas size stays 1:1. Saved on this
-                device only.
-              </p>
-              <div
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Full refresh rate</div>
+              <p className="lc-settings-hint">Run at the screen’s full refresh rate. Uses a little more battery.</p>
+              <SettingsChoices
                 className="lc-settings-choice lc-settings-choice-compact"
                 role="radiogroup"
-                aria-label="Display refresh"
-              >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={inkDisplayHz === "auto"}
-                  className={
-                    inkDisplayHz === "auto"
-                      ? "lc-settings-choice-option is-active"
-                      : "lc-settings-choice-option"
-                  }
-                  onClick={() => setInkDisplayHz("auto")}
-                >
-                  <strong>Auto</strong>
-                </button>
-                {INK_DISPLAY_HZ.map((hz) => (
-                  <button
-                    key={hz}
-                    type="button"
-                    role="radio"
-                    aria-checked={inkDisplayHz === hz}
-                    className={
-                      inkDisplayHz === hz
-                        ? "lc-settings-choice-option is-active"
-                        : "lc-settings-choice-option"
-                    }
-                    onClick={() => setInkDisplayHz(hz)}
-                  >
-                    <strong>{hz}</strong>
-                  </button>
-                ))}
-              </div>
-              <div className="lc-settings-subhead">Match display</div>
-              <p className="lc-settings-hint">
-                Run at the panel's full refresh. On a 90 Hz tablet the app asks
-                Android for 90 Hz (it otherwise holds the app at 60), and live ink
-                presents on every vsync. Off leaves the rate to Android and keeps
-                ink at 60 fps. Costs a little battery. Saved on this device only.
-              </p>
-              <div
-                className="lc-settings-choice lc-settings-choice-compact"
-                role="radiogroup"
-                aria-label="Match display"
+                aria-label="Full refresh rate"
               >
                 <button
                   type="button"
@@ -2117,167 +1955,143 @@ export function SettingsModal({
                 >
                   <strong>On</strong>
                 </button>
+              </SettingsChoices>
               </div>
-              <div className="lc-settings-subhead">Performance overlay</div>
-              <p className="lc-settings-hint">
-                Frame HUD on the whiteboard: paint count, frame / rAF / draw
-                times with min–max–avg, and a short frame-time spark. The load
-                bar is a separate toggle. Saved on this device only.
-              </p>
-              <div
+</SettingsFold>
+              <SettingsFold id="ink-tools" title="Ink tools">
+              <div className="lc-setting-row">
+<div className="lc-settings-subhead">Presets</div>
+              <p className="lc-settings-hint">Six presets per tool on the wheel. Hold a preset’s name until it fills to edit it.</p>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Confirm with OK</div>
+              <p className="lc-settings-hint">On: tap OK in the wheel’s centre to apply. Off: applies when you lift from the colour.</p>
+              <SettingsChoices
                 className="lc-settings-choice lc-settings-choice-compact"
                 role="radiogroup"
-                aria-label="Performance overlay"
+                aria-label="Confirm with OK"
               >
                 <button
                   type="button"
                   role="radio"
-                  aria-checked={!inkPerfOverlay}
+                  aria-checked={!tapOk}
                   className={
-                    inkPerfOverlay
+                    tapOk
                       ? "lc-settings-choice-option"
                       : "lc-settings-choice-option is-active"
                   }
-                  onClick={() => setInkPerfOverlay(false)}
+                  onClick={() => setTapOk(false)}
                 >
                   <strong>Off</strong>
                 </button>
                 <button
                   type="button"
                   role="radio"
-                  aria-checked={inkPerfOverlay}
+                  aria-checked={tapOk}
                   className={
-                    inkPerfOverlay
+                    tapOk
                       ? "lc-settings-choice-option is-active"
                       : "lc-settings-choice-option"
                   }
-                  onClick={() => setInkPerfOverlay(true)}
+                  onClick={() => setTapOk(true)}
                 >
                   <strong>On</strong>
                 </button>
+              </SettingsChoices>
               </div>
-              <div className="lc-settings-subhead">Window Sync pill</div>
-              <p className="lc-settings-hint">
-                Off keeps Sync in the tab. On puts the overlay pill back on
-                the board chrome. Saved on this device only.
-              </p>
-              <div
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Colour wheel on the toolbar</div>
+              <p className="lc-settings-hint">A quick colour that leaves your presets alone until you save one.</p>
+              <SettingsChoices
                 className="lc-settings-choice lc-settings-choice-compact"
                 role="radiogroup"
-                aria-label="Window Sync pill"
+                aria-label="Colour wheel on the toolbar"
               >
                 <button
                   type="button"
                   role="radio"
-                  aria-checked={!hubSyncWindowPill}
+                  aria-checked={!colorWheelOnToolbar}
                   className={
-                    hubSyncWindowPill
+                    colorWheelOnToolbar
                       ? "lc-settings-choice-option"
                       : "lc-settings-choice-option is-active"
                   }
-                  onClick={() => setHubSyncWindowPill(false)}
+                  onClick={() => setColorWheelOnToolbar(false)}
                 >
                   <strong>Off</strong>
                 </button>
                 <button
                   type="button"
                   role="radio"
-                  aria-checked={hubSyncWindowPill}
+                  aria-checked={colorWheelOnToolbar}
                   className={
-                    hubSyncWindowPill
+                    colorWheelOnToolbar
                       ? "lc-settings-choice-option is-active"
                       : "lc-settings-choice-option"
                   }
-                  onClick={() => setHubSyncWindowPill(true)}
+                  onClick={() => setColorWheelOnToolbar(true)}
                 >
                   <strong>On</strong>
                 </button>
+              </SettingsChoices>
+
+              {/*
+                What the ⟳ on the colour wheel asks for.
+                
+                The feed was queried with no tag at all, which is not "no
+                preference" so much as "whatever the site sorts by" — and what
+                came back was pastel after pastel. Any stays the default: a
+                preference nobody asked for should not narrow what they get.
+              */}
               </div>
-              <div className="lc-settings-subhead">Performance bar</div>
-              <p className="lc-settings-hint">
-                5px load bar scaled to one display vsync (Auto or the refresh
-                you pick), with a lift hint when the stroke is missing several
-                beats. Off hides the bar only. Saved on this device only.
-              </p>
-              <div
-                className="lc-settings-choice lc-settings-choice-compact"
-                role="radiogroup"
-                aria-label="Performance bar"
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">New palettes</div>
+              <p className="lc-settings-hint">⟳ draws from the selected styles. Offline uses a built-in list.</p>
+              <SettingsChoices
+                className="lc-settings-choice lc-settings-choice-wrap"
+                role="group"
+                aria-label="Palette colours"
               >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={!inkPerfBar}
-                  className={
-                    inkPerfBar
-                      ? "lc-settings-choice-option"
-                      : "lc-settings-choice-option is-active"
-                  }
-                  onClick={() => setInkPerfBar(false)}
-                >
-                  <strong>Off</strong>
+                {PALETTE_TAGS.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    aria-pressed={palettePrefs.tags.includes(tag)}
+                    className={
+                      palettePrefs.tags.includes(tag)
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => {
+                      setPalettePrefs(prefs => togglePaletteTag(prefs, tag));
+                    }}
+                  >
+                    <strong>{paletteTagLabel(tag)}</strong>
+                  </button>
+                ))}
+              </SettingsChoices>
+              <SettingsChoices className="lc-settings-choice lc-settings-palette-options">
+                <button type="button" role="switch" aria-checked={palettePrefs.matchAll}
+                  disabled={palettePrefs.tags.length < 2}
+                  className={palettePrefs.matchAll ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                  onClick={() => setPalettePrefs(prefs => ({ ...prefs, matchAll: !prefs.matchAll }))}>
+                  <strong>Match all tags</strong><span className="lc-muted">Use palettes with every selected tag; an empty result uses the pool.</span>
                 </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={inkPerfBar}
-                  className={
-                    inkPerfBar
-                      ? "lc-settings-choice-option is-active"
-                      : "lc-settings-choice-option"
-                  }
-                  onClick={() => setInkPerfBar(true)}
-                >
-                  <strong>On</strong>
+                <button type="button" role="switch" aria-checked={palettePrefs.mixColours}
+                  className={palettePrefs.mixColours ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                  onClick={() => setPalettePrefs(prefs => ({ ...prefs, mixColours: !prefs.mixColours }))}>
+                  <strong>Mix colours</strong><span className="lc-muted">Build four distinct colours that contrast with the page.</span>
                 </button>
+              </SettingsChoices>
+
               </div>
-              </SettingsFold>
+</SettingsFold>
 
               <SettingsFold id="reading" title="Scroll">
-              <div className="lc-settings-subhead">Flick-end pill</div>
+              <div className="lc-setting-row">
+<div className="lc-settings-subhead">Flick momentum</div>
               <p className="lc-settings-hint">
-                While a PDF is flicked, a small overlay can show the live page, the
-                predicted landing page, and how many pages apart they are. Off hides
-                it. Prediction itself still runs. Saved on this device only.
-              </p>
-              <div
-                className="lc-settings-choice lc-settings-choice-compact"
-                role="radiogroup"
-                aria-label="Flick-end pill"
-              >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={!pdfFlickHud}
-                  className={
-                    pdfFlickHud
-                      ? "lc-settings-choice-option"
-                      : "lc-settings-choice-option is-active"
-                  }
-                  onClick={() => setPdfFlickHud(false)}
-                >
-                  <strong>Off</strong>
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={pdfFlickHud}
-                  className={
-                    pdfFlickHud
-                      ? "lc-settings-choice-option is-active"
-                      : "lc-settings-choice-option"
-                  }
-                  onClick={() => setPdfFlickHud(true)}
-                >
-                  <strong>On</strong>
-                </button>
-              </div>
-
-              <div className="lc-settings-subhead">Flick momentum</div>
-              <p className="lc-settings-hint">
-                How far a page keeps sliding after you lift. 0 stops immediately.
-                50 is the usual coast. 100 glides much further (about twelve times
-                that travel). Saved on this device only.
+                How far a page slides after a flick. 50 is the usual coast.
               </p>
               <SettingsSlider
                 label="Flick momentum"
@@ -2288,13 +2102,14 @@ export function SettingsModal({
                 display={String(pdfFlickMomentum)}
                 onChange={setPdfFlickMomentum}
               />
-              </SettingsFold>
+              </div>
+</SettingsFold>
 
               <SettingsFold id="storage" title="Storage">
-              <div className="lc-settings-subhead">Devices</div>
+              <div className="lc-setting-row">
+<div className="lc-settings-subhead">Devices</div>
               <p className="lc-settings-hint">
-                Personalise is per device. This one is {deviceRole()} ({loadDeviceId().slice(0, 8)}…).
-                Others are listed, not merged.
+                Personalize settings are kept per device.
               </p>
               <ul className="lc-settings-hint">
                 <li>
@@ -2309,11 +2124,11 @@ export function SettingsModal({
                     </li>
                   ))}
               </ul>
-              <div className="lc-settings-subhead">Pad hub</div>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Pad hub</div>
               <p className="lc-settings-hint">
-                A tablet pings this PC on the LAN and pulls every saved file that
-                changed: whiteboards, annotated documents, rolling snapshots, and
-                PDF/EPUB bytes. Ink pages stay on the device that drew them.
+                Sync documents, whiteboards, ink and snapshots with your PC over the local network.
               </p>
               {draft.serve_token ? (
                 <>
@@ -2404,14 +2219,16 @@ export function SettingsModal({
                   <p className="lc-pad-hub-verdict is-bad">{hubCheck.message}</p>
                 )}
               </div>
-              <div className="lc-settings-subhead">Autosave</div>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Autosave</div>
               <p className="lc-settings-hint">
                 How often the board writes itself down, so a crash or a closed lid
                 costs nothing. This is not the same as saving: Discard still rolls
                 back to where the session started, whatever the autosave has
-                written since. Saved on this device.
+                written since.
               </p>
-              <div
+              <SettingsChoices
                 className="lc-settings-choice lc-settings-choice-compact"
                 role="radiogroup"
                 aria-label="Autosave interval"
@@ -2432,12 +2249,12 @@ export function SettingsModal({
                     <strong>{label}</strong>
                   </button>
                 ))}
-              </div>
+              </SettingsChoices>
               <p className="lc-settings-hint">
                 The write is independent of the banner. Parked tabs still save;
                 they just do not flash Saved over the pad you are looking at.
               </p>
-              <div
+              <SettingsChoices
                 className="lc-settings-choice"
                 role="radiogroup"
                 aria-label="Autosave banners"
@@ -2456,12 +2273,14 @@ export function SettingsModal({
                     onClick={() => setAutosaveBanner(id)}
                   >
                     <strong>{label}</strong>
-                    <span className="lc-muted">{hint}</span>
+                    {hint && <span className="lc-muted">{hint}</span>}
                   </button>
                 ))}
-              </div>
+              </SettingsChoices>
 
-              <div className="lc-settings-subhead">Hub auto-sync</div>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Hub auto-sync</div>
               <p className="lc-settings-hint">
                 Whether this device pushes itself to the pad hub on its own: the 15s ping,
                 the idle kick after opening a file, pulling and flushing on connect, and
@@ -2469,7 +2288,7 @@ export function SettingsModal({
                 this device until you sync by hand. Autosave above only controls writing
                 to this device; it does not stop or start hub traffic.
               </p>
-              <div
+              <SettingsChoices
                 className="lc-settings-choice lc-settings-choice-compact"
                 role="radiogroup"
                 aria-label="Hub auto-sync"
@@ -2488,12 +2307,14 @@ export function SettingsModal({
                     onClick={() => setHubAutoSync(id)}
                   >
                     <strong>{label}</strong>
-                    <span className="lc-muted">{hint}</span>
+                    {hint && <span className="lc-muted">{hint}</span>}
                   </button>
                 ))}
-              </div>
+              </SettingsChoices>
 
-              <div className="lc-settings-subhead">Storage on this device</div>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Storage on this device</div>
               <p className="lc-settings-hint">
                 Annotated documents, whiteboard notebooks, board images and any offline
                 problem pack all share one budget. Handwriting is the expensive part — a
@@ -2523,186 +2344,351 @@ export function SettingsModal({
                 <p className="lc-muted">This browser does not report a storage estimate.</p>
               )}
 
-              <div className="lc-settings-subhead">Stored document copies</div>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Stored document copies</div>
               <p className="lc-settings-hint">
-                The app keeps its own copy of every PDF and EPUB you have opened, filed
-                under a fingerprint of the file’s contents. <strong>Check copies</strong>{" "}
-                re-reads each one and reports any that no longer match the file they are
-                filed under — a stale copy is what makes a document that opens fine in
-                Files refuse to open here. Repairing drops only those; the originals in
-                Files are untouched and your annotations stay in the library, so a
-                repaired document just has to be picked once more.
+                Check for copies that no longer match their file. Repair drops those; pick the file again to reopen it.
               </p>
               <div className="lc-pad-hub-check">
-                <button
+                <button aria-label="Check stored copies" title="Check stored copies"
                   type="button"
-                  className="lc-secondary"
+                  className="lc-secondary lc-settings-icon-action"
                   disabled={docCache.kind === "busy"}
                   onClick={() => {
                     void runDocCache("check");
                   }}
-                >
-                  {docCache.kind === "busy" ? "Working…" : "Check copies"}
-                </button>
-                <button
+                ><SettingsIcon id="check"/></button>
+                <button aria-label="Diagnose stored copies" title="Diagnose stored copies"
                   type="button"
-                  className="lc-secondary"
+                  className="lc-secondary lc-settings-icon-action"
                   disabled={docCache.kind === "busy"}
                   onClick={() => {
                     void runDocCache("inspect");
                   }}
-                >
-                  Diagnose
-                </button>
-                <button
+                ><SettingsIcon id="diagnose"/></button>
+                <button aria-label="Repair stored copies" title="Repair stored copies"
                   type="button"
-                  className="lc-secondary"
+                  className="lc-secondary lc-settings-icon-action"
                   disabled={docCache.kind === "busy"}
                   onClick={() => {
                     void runDocCache("repair");
                   }}
-                >
-                  Repair
-                </button>
-                <button
-                  type="button"
-                  className="lc-secondary"
-                  disabled={docCache.kind === "busy"}
-                  onClick={() => {
-                    void runDocCache("clear");
-                  }}
-                >
-                  {docCacheArmed ? "Tap again to clear all" : "Clear all"}
-                </button>
+                ><SettingsIcon id="repair"/></button>
+                <HoldButton label="Clear all stored copies" ariaLabel="Hold to clear all stored copies" dataTip="Clear all stored copies"
+                  className="lc-secondary lc-settings-icon-action lc-hold-danger" disabled={docCache.kind === "busy"}
+                  onConfirm={() => void runDocCache("clear")}><SettingsIcon id="delete"/></HoldButton>
               </div>
               {docCache.kind === "done" && <SettingsFacts facts={docCache.facts} />}
               {docCache.kind === "failed" && <SettingsFacts facts={docCache.facts} error />}
 
-              <div className="lc-settings-subhead">Search index</div>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Search index</div>
               <p className="lc-settings-hint">
-                Opening a document also indexes its text so <strong>Ask</strong> can quote it.
-                If answers drift stale — an old model, files that have since moved on — clear
-                that index here. Check and Diagnose report this device's index; Diagnose also
-                compares to the hub when one is set. Clear wipes this device only; drawings,
-                notes and stored copies are untouched, and the hub keeps its own index.
+                The text Ask quotes from. Clear it if answers go stale; nothing else is touched.
               </p>
               <div className="lc-pad-hub-check">
-                <button
+                <button aria-label="Check search index" title="Check search index"
                   type="button"
-                  className="lc-secondary"
+                  className="lc-secondary lc-settings-icon-action"
                   disabled={indexWipe.kind === "busy"}
                   onClick={() => {
                     void runIndexInspect(false);
                   }}
-                >
-                  {indexWipe.kind === "busy" ? "Working…" : "Check index"}
-                </button>
-                <button
+                ><SettingsIcon id="check"/></button>
+                <button aria-label="Diagnose search index" title="Diagnose search index"
                   type="button"
-                  className="lc-secondary"
+                  className="lc-secondary lc-settings-icon-action"
                   disabled={indexWipe.kind === "busy"}
                   onClick={() => {
                     void runIndexInspect(true);
                   }}
-                >
-                  Diagnose
-                </button>
-                <button
-                  type="button"
-                  className="lc-secondary"
-                  disabled={indexWipe.kind === "busy"}
-                  onClick={() => {
-                    void runIndexWipe();
-                  }}
-                >
-                  {indexWipe.kind === "busy"
-                    ? "Working…"
-                    : indexWipeArmed
-                      ? "Tap again to clear index"
-                      : "Clear local search index"}
-                </button>
+                ><SettingsIcon id="diagnose"/></button>
+                <HoldButton label="Clear local search index" ariaLabel="Hold to clear local search index" dataTip="Clear local search index"
+                  className="lc-secondary lc-settings-icon-action lc-hold-danger" disabled={indexWipe.kind === "busy"}
+                  onConfirm={() => void runIndexWipe()}><SettingsIcon id="delete"/></HoldButton>
               </div>
               {indexWipe.kind === "done" && <SettingsFacts facts={indexWipe.facts} />}
               {indexWipe.kind === "failed" && <SettingsFacts facts={indexWipe.facts} error />}
-              </SettingsFold>
+              </div>
+</SettingsFold>
               <SettingsFold id="ui" title="UI">
-                <div className="lc-settings-subhead">UI hand</div>
-                <p className="lc-settings-hint">Header, agent panel and general menus. Ink tools keep their separate Annotate hand. Saved on this device.</p>
-                <div className="lc-settings-choice" role="radiogroup" aria-label="UI hand">
+                <div className="lc-setting-row">
+<div className="lc-settings-subhead">UI hand</div>
+              <p className="lc-settings-hint">Header, agent panel and menus.</p>
+                <SettingsChoices className="lc-settings-choice" role="radiogroup" aria-label="UI hand">
                   {(["right", "left"] as const).map(hand => <button key={hand} type="button" role="radio"
                     aria-checked={uiHandedness === hand} className={uiHandedness === hand ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
                     onClick={() => setUiHandedness(hand)}><strong>{hand === "right" ? "Right hand" : "Left hand"}</strong></button>)}
+                </SettingsChoices>
                 </div>
-                <div className="lc-settings-subhead">Corners</div>
-                <div className="lc-settings-choice" role="radiogroup" aria-label="Corners">
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Corners</div>
+                <SettingsChoices className="lc-settings-choice" role="radiogroup" aria-label="Corners">
                   {(["blocky", "rounded"] as const).map(style => <button key={style} type="button" role="radio"
                     aria-checked={uiCorners === style} className={uiCorners === style ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
                     onClick={() => setUiCorners(style)}><strong>{style === "blocky" ? "Blocky" : "Rounded"}</strong></button>)}
+                </SettingsChoices>
                 </div>
-                <div className="lc-settings-subhead">On launch</div>
-                <div className="lc-settings-choice" role="radiogroup" aria-label="Tabs on launch">
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">On launch</div>
+                <SettingsChoices className="lc-settings-choice" role="radiogroup" aria-label="Tabs on launch">
                   {([
-                    ["restore", "Reopen last session", "The tab you were on opens again. The slowest start with a big document or dense board."],
-                    ["home", "Keep tabs, start on Home", "Every tab stays in the strip, but nothing opens until you tap it."],
-                    ["fresh", "Start fresh", "Home only. Last session's tabs are closed; your notebooks and documents stay in the library."],
+                    ["restore", "Reopen last session", "Slowest start with a big document open."],
+                    ["home", "Keep tabs, start on Home", "Nothing loads until you tap a tab."],
+                    ["fresh", "Start fresh", "Home only; your library is untouched."],
                   ] as const).map(([value, label, hint]) => <button key={value} type="button" role="radio"
                     aria-checked={startupTabs === value} className={startupTabs === value ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
                     onClick={() => setStartupTabs(value)}>
-                    <strong>{label}</strong><span className="lc-muted">{hint}</span>
+                    <strong>{label}</strong>{hint && <span className="lc-muted">{hint}</span>}
                   </button>)}
+                </SettingsChoices>
+                <p className="lc-settings-hint">Takes effect the next time the app opens.</p>
                 </div>
-                <p className="lc-settings-hint">Takes effect the next time the app opens. Saved on this device.</p>
-                <div className="lc-settings-subhead">Reading</div>
-                <div className="lc-settings-choice" role="radiogroup" aria-label="Reading">
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Reading</div>
+                <SettingsChoices className="lc-settings-choice" role="radiogroup" aria-label="Reading">
                   {([
-                    ["scroll", "Scroll", "One continuous page stack, as documents have always read."],
-                    ["pages", "Pages", "One page at a time. Drag sideways to turn it; past halfway it turns, short of that it settles back. With the pen out, the page is for writing on."],
+                    ["scroll", "Scroll", "One continuous stack."],
+                    ["pages", "Pages", "One page at a time; drag sideways to turn."],
                   ] as const).map(([value, label, hint]) => <button key={value} type="button" role="radio"
                     aria-checked={readingMode === value} className={readingMode === value ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
                     onClick={() => setReadingMode(value)}>
-                    <strong>{label}</strong><span className="lc-muted">{hint}</span>
+                    <strong>{label}</strong>{hint && <span className="lc-muted">{hint}</span>}
                   </button>)}
-                </div>
+                </SettingsChoices>
                 {readingMode === "pages" && (
-                  <div className="lc-settings-choice" role="radiogroup" aria-label="Page size">
+                  <SettingsChoices className="lc-settings-choice" role="radiogroup" aria-label="Page size">
                     {([
-                      ["full", "Full screen", "The whole page, as large as the window allows. Nothing of the pages before or after it shows."],
-                      ["margin", "90% of the screen", "The same, with a margin of the board around the page."],
+                      ["full", "Full screen", ""],
+                      ["margin", "With margin", ""],
                     ] as const).map(([value, label, hint]) => <button key={value} type="button" role="radio"
                       aria-checked={pageFit === value} className={pageFit === value ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
                       onClick={() => setPageFit(value)}>
-                      <strong>{label}</strong><span className="lc-muted">{hint}</span>
+                      <strong>{label}</strong>{hint && <span className="lc-muted">{hint}</span>}
                     </button>)}
-                  </div>
+                  </SettingsChoices>
                 )}
-                <div className="lc-settings-subhead">Agent behavior</div>
-                <div className="lc-settings-choice" aria-label="Thinking display">
+                </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Agent behavior</div>
+                <SettingsChoices className="lc-settings-choice" aria-label="Thinking display">
                   {([
-                    ["autoCollapseThinking", "Auto-collapse Thinking when the answer arrives", "Off keeps Thinking open so you can continue reading."],
-                    ["collapseThinkingSteps", "Start Thinking steps collapsed", "Off shows full bullet text. Each bullet opens independently; several can stay open."],
-                    ["colorThinkingSteps", "Color-code Thinking bullets", "Colors do not mean status — they only distinguish adjacent steps. Turn off for one color."],
+                    ["autoCollapseThinking", "Collapse when the answer arrives", ""],
+                    ["collapseThinkingSteps", "Start steps collapsed", ""],
+                    ["colorThinkingSteps", "Colour steps", "Colours only tell neighbouring steps apart."],
                   ] as const).map(([key, label, hint]) => <button key={key} type="button" role="switch"
                     aria-checked={agentDisplay[key]} className={agentDisplay[key] ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
                     onClick={() => setAgentDisplay(prefs => ({ ...prefs, [key]: !prefs[key] }))}>
-                    <strong>{label}</strong><span className="lc-muted">{hint}</span>
+                    <strong>{label}</strong>{hint && <span className="lc-muted">{hint}</span>}
                   </button>)}
-                </div>
+                </SettingsChoices>
                 <p className="lc-settings-hint">Shared by document, whiteboard and problem chats. Model reasoning effort stays in the chat composer.</p>
-                <div className="lc-settings-choice lc-settings-coach-flags">
+                <SettingsChoices className="lc-settings-choice lc-settings-coach-flags">
                   {SHARED_AGENT_FLAGS.map(([key, label, hint]) => (
                     <button key={key} type="button" role="switch"
                       aria-checked={(draft.coach ?? DEFAULT_COACH_FLAGS)[key]}
                       className={(draft.coach ?? DEFAULT_COACH_FLAGS)[key] ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
                       onClick={() => setDraft(prev => ({ ...prev, coach: { ...DEFAULT_COACH_FLAGS, ...prev.coach,
                         [key]: !(prev.coach ?? DEFAULT_COACH_FLAGS)[key] } }))}>
-                      <strong>{label}</strong><span className="lc-muted">{hint}</span>
+                      <strong>{label}</strong>{hint && <span className="lc-muted">{hint}</span>}
                     </button>
                   ))}
-                </div>
-              </SettingsFold>
+                </SettingsChoices>
+              </div>
+</SettingsFold>
               <SettingsFold id="diagnostics" title="Diagnostics">
+              <div className="lc-setting-row">
+<div className="lc-settings-subhead">HUD refresh</div>
+              <p className="lc-settings-hint">What the performance HUD measures against.</p>
+              <SettingsChoices
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="HUD refresh"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={inkDisplayHz === "auto"}
+                  className={
+                    inkDisplayHz === "auto"
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setInkDisplayHz("auto")}
+                >
+                  <strong>Auto</strong>
+                </button>
+                {INK_DISPLAY_HZ.map((hz) => (
+                  <button
+                    key={hz}
+                    type="button"
+                    role="radio"
+                    aria-checked={inkDisplayHz === hz}
+                    className={
+                      inkDisplayHz === hz
+                        ? "lc-settings-choice-option is-active"
+                        : "lc-settings-choice-option"
+                    }
+                    onClick={() => setInkDisplayHz(hz)}
+                  >
+                    <strong>{hz}</strong>
+                  </button>
+                ))}
+              </SettingsChoices>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Frame overlay</div>
+              <p className="lc-settings-hint">Frame and draw times over the whiteboard.</p>
+              <SettingsChoices
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Frame overlay"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!inkPerfOverlay}
+                  className={
+                    inkPerfOverlay
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() => setInkPerfOverlay(false)}
+                >
+                  <strong>Off</strong>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={inkPerfOverlay}
+                  className={
+                    inkPerfOverlay
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setInkPerfOverlay(true)}
+                >
+                  <strong>On</strong>
+                </button>
+              </SettingsChoices>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Sync pill on the board</div>
+              <p className="lc-settings-hint">Show Sync as a floating pill instead of in the tab.</p>
+              <SettingsChoices
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Sync pill on the board"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!hubSyncWindowPill}
+                  className={
+                    hubSyncWindowPill
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() => setHubSyncWindowPill(false)}
+                >
+                  <strong>Off</strong>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={hubSyncWindowPill}
+                  className={
+                    hubSyncWindowPill
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setHubSyncWindowPill(true)}
+                >
+                  <strong>On</strong>
+                </button>
+              </SettingsChoices>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Load bar</div>
+              <p className="lc-settings-hint">
+                5px load bar scaled to one display vsync (Auto or the refresh
+                you pick), with a lift hint when the stroke is missing several
+                beats. Off hides the bar only.
+              </p>
+              <SettingsChoices
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Load bar"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!inkPerfBar}
+                  className={
+                    inkPerfBar
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() => setInkPerfBar(false)}
+                >
+                  <strong>Off</strong>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={inkPerfBar}
+                  className={
+                    inkPerfBar
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setInkPerfBar(true)}
+                >
+                  <strong>On</strong>
+                </button>
+              </SettingsChoices>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Flick landing preview</div>
+              <p className="lc-settings-hint">While flicking a PDF, show the page you’ll land on.</p>
+              <SettingsChoices
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Flick landing preview"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!pdfFlickHud}
+                  className={
+                    pdfFlickHud
+                      ? "lc-settings-choice-option"
+                      : "lc-settings-choice-option is-active"
+                  }
+                  onClick={() => setPdfFlickHud(false)}
+                >
+                  <strong>Off</strong>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={pdfFlickHud}
+                  className={
+                    pdfFlickHud
+                      ? "lc-settings-choice-option is-active"
+                      : "lc-settings-choice-option"
+                  }
+                  onClick={() => setPdfFlickHud(true)}
+                >
+                  <strong>On</strong>
+                </button>
+              </SettingsChoices>
+
                 <DebugLogSettings on={debugLog} saved={baselineDebugLog} onChange={setDebugLog} />
-              </SettingsFold>
+              </div>
+</SettingsFold>
             </div>
           )}
 
@@ -2710,8 +2696,9 @@ export function SettingsModal({
             <div className="lc-settings-fields">
               {FEATURE_LEETCODE && (
               <SettingsFold id="tests" title="Test Cases">
-              <div className="lc-settings-subhead">When a case fails</div>
-              <div className="lc-settings-choice" role="radiogroup" aria-label="Test run mode">
+              <div className="lc-setting-row">
+<div className="lc-settings-subhead">When a case fails</div>
+              <SettingsChoices className="lc-settings-choice" role="radiogroup" aria-label="Test run mode">
                 <button
                   type="button"
                   role="radio"
@@ -2727,7 +2714,7 @@ export function SettingsModal({
                 >
                   <strong>Run every case</strong>
                   <span className="lc-muted">
-                    Keep going after a failure and report the whole picture — “3/12 passed”.
+                    Lets the agent pick a real counterexample.
                   </span>
                 </button>
                 <button
@@ -2741,18 +2728,15 @@ export function SettingsModal({
                   }
                   onClick={() => setDraft((prev) => ({ ...prev, stop_on_first_failure: true }))}
                 >
-                  <strong>Stop at the first failure</strong>
+                  <strong>Stop at the first</strong>
                   <span className="lc-muted">
-                    Quit as soon as a case fails. Faster on problems with hundreds of cases.
+                    Faster when there are hundreds of cases.
                   </span>
                 </button>
-              </div>
-              <p className="lc-settings-hint">
-                Applies to <strong>Run tests</strong>, <strong>Submit</strong>, and{" "}
-                <code>lc test</code>. Running every case is what lets the agent pick a real
-                counterexample, so leave it on unless a run is slow.
-              </p>
-              <div
+              </SettingsChoices>
+              <div className="lc-settings-subhead">After a failing run</div>
+<p className="lc-settings-hint">The Tests card always posts. Problems only.</p>
+              <SettingsChoices
                 className="lc-settings-choice"
                 role="radiogroup"
                 aria-label="When a failed run should call the agent"
@@ -2784,7 +2768,7 @@ export function SettingsModal({
                   }
                   onClick={() => setTestForward("whole-run")}
                 >
-                  <strong>One request for the whole run</strong>
+                  <strong>One request for the run</strong>
                   <span className="lc-muted">
                     One model call covering every failed case.
                   </span>
@@ -2805,18 +2789,16 @@ export function SettingsModal({
                     Separate model call for each red case.
                   </span>
                 </button>
+              </SettingsChoices>
+
               </div>
-              <p className="lc-settings-hint">
-                Saved on this device only. The Tests card always posts. Problems only —
-                pads have no test run to forward.
-              </p>
-              </SettingsFold>
+</SettingsFold>
               )}
 
               {COACH_FLAG_GROUPS.map((group) => (
                 <SettingsFold key={group.id} id={group.id} title={group.title}>
                   <p className="lc-settings-hint">{group.blurb}</p>
-                  <div className="lc-settings-choice">
+                  <SettingsChoices className="lc-settings-choice">
                     {group.flags.map(([key, label, hint]) => {
                       const on = (draft.coach ?? DEFAULT_COACH_FLAGS)[key];
                       return (
@@ -2844,11 +2826,11 @@ export function SettingsModal({
                           }
                         >
                           <strong>{label}</strong>
-                          <span className="lc-muted">{hint}</span>
+                          {hint && <span className="lc-muted">{hint}</span>}
                         </button>
                       );
                     })}
-                  </div>
+                  </SettingsChoices>
                 </SettingsFold>
               ))}
             </div>
@@ -2867,7 +2849,8 @@ export function SettingsModal({
               </div>}
 
               <SettingsFold id="llm" title="LLM">
-              <div className="lc-settings-subhead">Agent status</div>
+              <div className="lc-setting-row">
+<div className="lc-settings-subhead">Agent status</div>
               <p className="lc-agent-live" data-status={coachStatus}>
                 <span className="lc-agent-live-dot" aria-hidden />
                 <span>
@@ -2880,7 +2863,9 @@ export function SettingsModal({
               </p>
               {coachDetail && <p className="lc-settings-hint">{coachDetail}</p>}
 
-              <div className="lc-settings-subhead">LLM</div>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">LLM</div>
               <label>
                 <span>Default provider</span>
                 <select
@@ -2989,11 +2974,7 @@ export function SettingsModal({
                   }
                   placeholder="(same as chat model)"
                 />
-                <p className="lc-settings-hint">
-                  Optional other model id for PNG requests. Leave empty to reuse the chat model.
-                  Tick Accepts images or Draw will not send pictures — the name is not a
-                  capability check.
-                </p>
+                <p className="lc-settings-hint">For image requests; empty reuses the chat model. Turn on Accepts images too.</p>
               </label>
               {/*
                 Embeddings, for the document index.
@@ -3014,15 +2995,7 @@ export function SettingsModal({
                       list="lc-model-options"
                       placeholder="(none — match on words)"
                     />
-                    <p className="lc-settings-hint">
-                      What Ask searches your documents with. Empty means chunks are
-                      matched on the words they share with your question rather than
-                      what it means — so “which record wins” will not find “the master
-                      data is never copied”. <code>nomic-embed-text</code> is small
-                      enough to sit beside the chat model. Documents already indexed
-                      keep their old vectors until you re-index them from the chip in
-                      the tab strip.
-                    </p>
+                    <p className="lc-settings-hint">Model Ask searches your documents with. Empty matches words only, not meaning.</p>
                   </label>
                   <label>
                     <span>Embedding endpoint</span>
@@ -3041,8 +3014,10 @@ export function SettingsModal({
                 </>
               )}
 
-              <div className="lc-settings-subhead">Accepts images</div>
-              <div
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Accepts images</div>
+              <SettingsChoices
                 className="lc-settings-choice lc-settings-choice-compact"
                 role="radiogroup"
                 aria-label="Accepts images"
@@ -3066,7 +3041,7 @@ export function SettingsModal({
                     <strong>{label}</strong>
                   </button>
                 ))}
-              </div>
+              </SettingsChoices>
               <p className="lc-settings-hint">{visionHint}</p>
 
               {(providerFocus === "openai" || providerFocus === "groq") && (
@@ -3093,16 +3068,11 @@ export function SettingsModal({
                           : "gsk_…"
                     }
                   />
-                  <p className="lc-settings-hint">
-                    Stored in this device&apos;s config.toml. Env{" "}
-                    {providerFocus === "openai" ? "OPENAI_API_KEY" : "GROQ_API_KEY"} wins when
-                    set. GET never returns the secret.
-                  </p>
+                  <p className="lc-settings-hint">Kept in this device&apos;s config.toml. An environment variable wins if set.</p>
                   {(providerFocus === "openai" ? draft.openai_key_set : draft.groq_key_set) && (
-                    <button
-                      type="button"
-                      className="lc-secondary"
-                      onClick={() => {
+                    <HoldButton label="Clear stored key" ariaLabel="Hold to clear stored key" dataTip="Clear stored key"
+                      className="lc-secondary lc-settings-icon-action lc-hold-danger"
+                      onConfirm={() => {
                         if (providerFocus === "openai") {
                           setOpenaiKeyDraft("");
                           setClearOpenaiKey(true);
@@ -3112,8 +3082,8 @@ export function SettingsModal({
                         }
                       }}
                     >
-                      Clear stored key
-                    </button>
+                      <SettingsIcon id="delete"/>
+                    </HoldButton>
                   )}
                   {(providerFocus === "openai" ? clearOpenaiKey : clearGroqKey) && (
                     <p className="lc-muted">Stored key will be cleared on Save.</p>
@@ -3121,7 +3091,9 @@ export function SettingsModal({
                 </label>
               )}
 
-              <div className="lc-settings-subhead">Agent mode providers</div>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Agent mode providers</div>
               {MODES.map((mode) => (
                 <label key={mode}>
                   <span>{mode}</span>
@@ -3144,7 +3116,9 @@ export function SettingsModal({
                 </label>
               ))}
 
-              <div className="lc-settings-subhead">Local LLM process</div>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Local LLM process</div>
               <p className="lc-settings-hint">
                 Starts or stops the bundled local model on this machine.
               </p>
@@ -3163,7 +3137,8 @@ export function SettingsModal({
                   Refresh
                 </button>
               </div>
-              </SettingsFold>
+              </div>
+</SettingsFold>
             </div>
           )}
           {searching && <p className="lc-muted lc-settings-search-empty">No matching settings.</p>}
@@ -3205,12 +3180,9 @@ function DebugLogSettings({ on, saved, onChange }: {
     <>
       <div className="lc-settings-subhead">Debug log</div>
       <p className="lc-settings-hint">
-        Records taps and keys (by name, never what you type), native and network calls,
-        board and client calls with their results, console lines, errors and main-thread
-        stalls, all truncated, on this device. Off records nothing and costs nothing.
-        Board and client calls start being recorded after the next launch.
+        Records taps, native and network calls, errors and stalls on this device. Off records nothing.
       </p>
-      <div className="lc-settings-choice lc-settings-choice-compact" role="radiogroup" aria-label="Debug log">
+      <SettingsChoices className="lc-settings-choice lc-settings-choice-compact" role="radiogroup" aria-label="Debug log">
         {([false, true] as const).map((value) => (
           <button key={String(value)} type="button" role="radio" aria-checked={on === value}
             className={on === value ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
@@ -3218,22 +3190,21 @@ function DebugLogSettings({ on, saved, onChange }: {
             <strong>{value ? "On" : "Off"}</strong>
           </button>
         ))}
-      </div>
+      </SettingsChoices>
+      {on && !saved && <p className="lc-settings-hint">Board and client calls start next launch.</p>}
       <div className="lc-settings-actions-row">
         <button type="button" className="lc-secondary" disabled={busy || !count}
           onClick={() => {
             setBusy(true);
             void exportDebugLog().finally(() => setBusy(false));
           }}>
-          Export log{count ? ` (${count.toLocaleString()})` : ""}
+          <SettingsIcon id="export"/> Export log{count ? ` (${count.toLocaleString()})` : ""}
         </button>
-        <button type="button" className="lc-secondary" disabled={busy || !count}
-          onClick={() => {
-            setBusy(true);
-            void clearDebugLog().then(() => setCount(0)).finally(() => setBusy(false));
-          }}>
-          Clear log
-        </button>
+        <HoldButton label="Clear log" ariaLabel="Hold to clear log" dataTip="Clear log"
+          className="lc-secondary lc-settings-icon-action lc-hold-danger" disabled={busy || !count}
+          onConfirm={() => { setBusy(true); void clearDebugLog().then(() => setCount(0)).finally(() => setBusy(false)); }}>
+          <SettingsIcon id="delete"/>
+        </HoldButton>
       </div>
     </>
   );

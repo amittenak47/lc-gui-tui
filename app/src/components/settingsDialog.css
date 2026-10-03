@@ -12,6 +12,12 @@
 .lc-settings-dialog .lc-settings-fields { gap: 10px; }
 .lc-settings-dialog .lc-settings-fold { border: 2px solid var(--lc-dialog-line); border-radius: var(--lc-r-block); background: transparent; }
 .lc-settings-dialog .lc-settings-fold-summary { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 54px; padding: 10px 12px; }
+.lc-settings-fold-header { display: flex; align-items: center; }
+.lc-settings-fold-header .lc-settings-fold-summary { flex: 1; min-width: 0; }
+.lc-settings-fold-header[data-changed="true"] .lc-settings-fold-title::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; background: var(--accent); }
+.lc-settings-group-changes { color: var(--accent); font-size: 11px; white-space: nowrap; }
+.lc-settings-group-reset { display: grid; place-items: center; flex: 0 0 38px; width: 38px; height: 38px; margin-right: 6px; padding: 8px; border: 0; background: transparent; color: var(--muted); }
+.lc-settings-group-reset svg { width: 18px; height: 18px; }
 .lc-settings-group-icon { display: grid; place-items: center; flex: 0 0 30px; width: 30px; height: 30px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .lc-settings-group-icon svg { width: 18px; height: 18px; }
 .lc-settings-dialog .lc-settings-fold-title { flex: 0 1 auto; font-size: 13px; }
@@ -19,6 +25,40 @@
 .lc-settings-dialog .lc-settings-fold-chevron { flex: 0 0 7px; margin-left: auto; transition: transform 180ms ease-out; }
 .lc-settings-dialog .is-expanded .lc-settings-fold-chevron { transform: rotate(45deg); }
 .lc-settings-dialog .lc-settings-fold-body { padding: 16px; gap: 12px; border-top: 2px solid var(--lc-dialog-line); background: transparent; }
+.lc-settings-dialog .lc-setting-row { display: flex; flex-direction: column; gap: 6px; padding: 12px 0; border-bottom: 1px solid var(--lc-dialog-line); }
+.lc-settings-dialog .lc-setting-row:first-child { padding-top: 0; }
+.lc-settings-dialog .lc-setting-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.lc-settings-dialog .lc-setting-row :is(.lc-settings-hint, .lc-muted) { margin: 0; }
+.lc-settings-dialog .lc-settings-hint { font-size: 12px; line-height: 1.45; }
+.lc-settings-choice-block { display: flex; flex-direction: column; gap: 5px; }
+.lc-settings-dialog .lc-settings-choice.is-segmented { display: flex; flex-wrap: nowrap; gap: 0; width: fit-content; max-width: 100%; border: 1px solid var(--lc-dialog-line); }
+.lc-settings-dialog .is-segmented .lc-settings-choice-option { flex: 1; min-width: 0; padding: 8px 12px; border: 0; border-radius: 0; text-align: center; }
+.lc-settings-choice-caption { font-size: 12px; line-height: 1.4; }
+.lc-settings-dialog .lc-settings-choice.is-radio-list { display: flex; flex-direction: column; gap: 3px; }
+.lc-settings-dialog .is-radio-list .lc-settings-choice-option { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 8px 32px; border: 0; text-align: left; background: transparent; }
+.lc-settings-dialog .is-radio-list .lc-settings-choice-option::before { content: ""; position: absolute; top: 11px; left: 9px; width: 12px; height: 12px; border: 1px solid var(--muted); border-radius: 50%; }
+.lc-settings-dialog .is-radio-list .is-active::before { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--bg); }
+.lc-settings-dialog .is-radio-list .is-active { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.lc-settings-dialog .lc-settings-choice:is(.is-pills, .is-palette-tags) { display: flex; flex-direction: row; flex-wrap: wrap; gap: 6px; }
+.lc-settings-dialog :is(.is-pills, .is-palette-tags) .lc-settings-choice-option { flex: 0 0 auto; width: auto; padding: 7px 11px; border-width: 1px; }
+.lc-settings-dialog .lc-setting-row:has(> .lc-settings-switch-row) { display: grid; grid-template-columns: minmax(0,1fr) 48px; column-gap: 12px; }
+.lc-setting-row:has(> .lc-settings-switch-row) > :not(.lc-settings-switch-row) { grid-column: 1; }
+.lc-setting-row > .lc-settings-switch-row { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.lc-settings-dialog .lc-settings-switch { position: relative; width: 48px; height: 44px; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.lc-settings-switch::before { content: ""; position: absolute; left: 3px; top: 10px; width: 42px; height: 24px; border: 1px solid var(--lc-dialog-line); border-radius: 12px; background: var(--muted); }
+.lc-settings-switch span { position: absolute; left: 7px; top: 14px; display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--bg); transition: transform 120ms ease-out; }
+.lc-settings-switch[aria-checked="true"]::before { background: var(--accent); border-color: var(--accent); }
+.lc-settings-switch[aria-checked="true"] span { transform: translateX(17px); }
+.lc-settings-dialog .lc-settings-choice.is-switch-list { display: flex; flex-direction: column; gap: 4px; }
+.lc-settings-dialog .is-switch-list .lc-settings-choice-option { position: relative; display: flex; flex-direction: column; gap: 3px; padding: 9px 58px 9px 0; border: 0; text-align: left; background: transparent; }
+.lc-settings-dialog .is-switch-list .lc-settings-choice-option::before { content: ""; position: absolute; top: 9px; right: 0; width: 40px; height: 22px; border: 1px solid var(--lc-dialog-line); border-radius: 12px; background: var(--muted); }
+.lc-settings-dialog .is-switch-list .lc-settings-choice-option::after { content: ""; position: absolute; top: 13px; right: 22px; width: 16px; height: 16px; border-radius: 50%; background: var(--bg); transition: transform 120ms ease-out; }
+.lc-settings-dialog .is-switch-list [aria-checked="true"]::before { background: var(--accent); border-color: var(--accent); }
+.lc-settings-dialog .is-switch-list [aria-checked="true"]::after { transform: translateX(17px); }
+.lc-settings-dialog .lc-settings-icon-action { display: inline-grid; place-items: center; width: 38px; height: 38px; padding: 8px; }
+.lc-settings-icon-action svg { width: 18px; height: 18px; }
+.lc-settings-dialog .lc-settings-icon-action.lc-hold-danger { color: var(--danger, #d35454); border-color: currentColor; }
+.lc-settings-dialog button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .lc-settings-dialog .lc-animated-disclosure { overflow: hidden; }
 .lc-settings-dialog .lc-settings-subhead { font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
 .lc-settings-dialog :is(.lc-settings-choice-option, .lc-settings-slider, .lc-settings-provider-tabs, .lc-settings-subtab, .lc-settings-actions-row button, .lc-settings-fields input, .lc-settings-fields select) { border-radius: var(--lc-r-block); }
