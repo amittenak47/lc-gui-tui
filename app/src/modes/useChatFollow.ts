@@ -43,6 +43,7 @@ export function useChatFollow(
     // Content may not be tall enough on the first frame after reload. Keep
     // putting the offset back until the transcript can hold it.
     const placeSaved = () => {
+      if (document.documentElement.classList.contains("lc-agent-dragging")) return;
       const place = positions.get(scope);
       if (!place || place.pinned || pinned.current) return;
       const max = node.scrollHeight - node.clientHeight;
@@ -56,14 +57,14 @@ export function useChatFollow(
     placeSaved();
     let raf = 0;
     const follow = () => {
-      if (!pinned.current || hold?.current || raf) return;
+      if (!pinned.current || hold?.current || raf || document.documentElement.classList.contains("lc-agent-dragging")) return;
       raf = requestAnimationFrame(() => {
         raf = 0;
-        if (pinned.current) node.scrollTop = node.scrollHeight;
+        if (pinned.current && !document.documentElement.classList.contains("lc-agent-dragging")) node.scrollTop = node.scrollHeight;
       });
     };
     const onScroll = () => {
-      if (!acceptScroll.current) return;
+      if (!acceptScroll.current || document.documentElement.classList.contains("lc-agent-dragging")) return;
       // A zero-height frame while the transcript swaps must not pin a restored offset.
       if (node.scrollHeight - node.clientHeight <= 0) return;
       pinned.current = node.scrollHeight - node.clientHeight - node.scrollTop < 32;
@@ -82,12 +83,15 @@ export function useChatFollow(
     const mutation = new MutationObserver(watch);
     mutation.observe(node, { childList: true });
     watch();
+    const settled = () => { placeSaved(); follow(); };
+    document.addEventListener("lc-agent-drag-end", settled);
     return () => {
       if (acceptScroll.current) {
         rememberScroll(positions, scope, node.scrollTop, pinned.current);
         onChange?.();
       }
       cancelAnimationFrame(raf); resize?.disconnect(); mutation.disconnect(); node.removeEventListener("scroll", onScroll);
+      document.removeEventListener("lc-agent-drag-end", settled);
     };
   }, [list, scope, open, memory, onChange]);
   return pinned;

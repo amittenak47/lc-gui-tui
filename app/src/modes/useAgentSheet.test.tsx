@@ -48,9 +48,9 @@ it("drags without rendering transcript, preserves height across hiding, and canc
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.useFakeTimers();
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 16));
   vi.stubGlobal("cancelAnimationFrame", clearTimeout);
-  let renders = 0;
+  let renders = 0; const close = vi.fn();
   function Panel({ open }: { open: boolean }) {
-    renders++; const ref = useRef<HTMLElement>(null); const sheet = useAgentSheet(ref, true, open, () => {});
+    renders++; const ref = useRef<HTMLElement>(null); const sheet = useAgentSheet(ref, true, open, close);
     return <aside ref={ref}><button onPointerDown={sheet.down} onPointerMove={sheet.move} onPointerUp={sheet.end} onPointerCancel={sheet.end}>Resize</button><p>Transcript</p></aside>;
   }
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
@@ -61,7 +61,9 @@ it("drags without rendering transcript, preserves height across hiding, and canc
   const send = (type: string, y: number) => act(() => { const e = new MouseEvent(type, { bubbles: true, clientY: y, button: 0 }); Object.defineProperty(e, "pointerId", { value: 1 }); button.dispatchEvent(e); });
   send("pointerdown", 600); const before = renders;
   for (let y = 599; y > 560; y--) send("pointermove", y);
+  const shell = node.style.height;
   act(() => vi.advanceTimersByTime(17)); expect(renders).toBe(before);
+  expect(node.style.height).toBe(shell); expect(node.style.transform).toContain('translate3d');
   send("pointerup", 550); const height = node.style.height;
   act(() => root.render(<Panel open={false} />)); expect(node.inert).toBe(true); expect(node.style.visibility).toBe("hidden");
   act(() => root.render(<Panel open />)); expect(node.style.height).toBe(height);
@@ -69,6 +71,10 @@ it("drags without rendering transcript, preserves height across hiding, and canc
   expect(node.style.height).toBe("500px");
   send("pointerdown", 400); send("pointermove", 1400);
   act(() => vi.advanceTimersByTime(17));
-  expect(node.style.height).toBe(`${AGENT_SHEET_MIN_PX}px`);
+  expect(node.style.height).toBe(shell);
+  send("pointerup", 1400); expect(node.style.height).toBe(`${AGENT_SHEET_MIN_PX}px`);
+  send("pointerdown", 500); send("pointermove", 300); send("pointerup", 500);
+  expect(close).not.toHaveBeenCalled();
+  send("pointerdown", 500); send("pointerup", 500); expect(close).toHaveBeenCalledOnce();
   act(() => root.unmount());
 });

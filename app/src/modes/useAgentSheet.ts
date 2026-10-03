@@ -18,9 +18,13 @@ export function useAgentSheet(panel: RefObject<HTMLElement | null>, mobile: bool
   const saved = useRef<number | null>(null);
   const available = useRef(0);
   const initial = useRef(0);
-  const drag = useRef<{ id: number; y: number; height: number; next: number } | null>(null);
+  const drag = useRef<{ id: number; y: number; height: number; next: number; shell: number; travel: number } | null>(null);
   const raf = useRef(0);
   const apply = (height: number) => { if (panel.current) panel.current.style.height = `${height}px`; };
+  const translate = () => {
+    const d = drag.current;
+    if (d && panel.current) panel.current.style.transform = `translate3d(0,${d.shell - d.next}px,0)`;
+  };
   useLayoutEffect(() => {
     const node = panel.current;
     if (!node) return;
@@ -44,14 +48,18 @@ export function useAgentSheet(panel: RefObject<HTMLElement | null>, mobile: bool
       const height = drag.current?.next ?? saved.current;
       if (height != null) {
         const next = settleSheetHeight(height, available.current, initial.current || height, false);
-        if (drag.current) drag.current.next = next;
-        apply(next);
+        if (drag.current) {
+          drag.current.next = next;
+          drag.current.shell = available.current;
+          apply(drag.current.shell);
+        } else apply(next);
       } else {
         node.style.removeProperty("height");
       }
       node.style.bottom = "0px";
       node.style.maxHeight = `${available.current}px`;
       node.style.transform = "translate3d(0,0,0) scale(1)";
+      translate();
       node.style.visibility = open ? "visible" : "hidden";
       node.style.pointerEvents = open ? "auto" : "none";
       node.inert = !open;
@@ -66,6 +74,7 @@ export function useAgentSheet(panel: RefObject<HTMLElement | null>, mobile: bool
     return () => {
       cancelAnimationFrame(raf.current); raf.current = 0; drag.current = null;
       node.style.removeProperty("transition");
+      node.style.removeProperty("will-change");
       document.documentElement.style.removeProperty("--lc-agent-peek");
       window.removeEventListener("resize", resize); window.visualViewport?.removeEventListener("resize", resize); observer?.disconnect();
       document.documentElement.style.removeProperty("--lc-agent-open");
@@ -77,15 +86,21 @@ export function useAgentSheet(panel: RefObject<HTMLElement | null>, mobile: bool
     e.preventDefault();
     const height = panel.current.getBoundingClientRect().height;
     initial.current ||= height;
-    drag.current = { id: e.pointerId, y: e.clientY, height, next: height };
+    drag.current = { id: e.pointerId, y: e.clientY, height, next: height, shell: available.current, travel: 0 };
     panel.current.style.transition = "none";
+    panel.current.style.willChange = "transform";
     document.documentElement.classList.add("lc-agent-dragging");
+    // Lay the chat out once at the largest reachable size. Moving that fixed
+    // shell keeps its visible top on the pointer without relaying out every turn.
+    apply(available.current);
+    translate();
     e.currentTarget.setPointerCapture(e.pointerId);
   };
   const move = (e: ReactPointerEvent<HTMLElement>) => {
     const d = drag.current; if (!d || d.id !== e.pointerId) return;
+    d.travel = Math.max(d.travel, Math.abs(d.y - e.clientY));
     d.next = settleSheetHeight(d.height + d.y - e.clientY, available.current, initial.current, false);
-    if (!raf.current) raf.current = requestAnimationFrame(() => { raf.current = 0; if (drag.current) apply(drag.current.next); });
+    if (!raf.current) raf.current = requestAnimationFrame(() => { raf.current = 0; translate(); });
   };
   const end = (e: ReactPointerEvent<HTMLElement>) => {
     const d = drag.current; if (!d || d.id !== e.pointerId) return;
@@ -93,10 +108,15 @@ export function useAgentSheet(panel: RefObject<HTMLElement | null>, mobile: bool
     const cancel = e.type === "pointercancel" || e.type === "lostpointercapture";
     saved.current = cancel ? d.height : settleSheetHeight(d.height + d.y - e.clientY, available.current, initial.current, true);
     apply(saved.current);
-    if (panel.current) panel.current.style.removeProperty("transition");
+    if (panel.current) {
+      panel.current.style.transform = "translate3d(0,0,0)";
+      panel.current.style.removeProperty("transition");
+      panel.current.style.removeProperty("will-change");
+    }
     document.documentElement.classList.remove("lc-agent-dragging");
+    document.dispatchEvent(new Event("lc-agent-drag-end"));
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-    if (!cancel && Math.abs(e.clientY - d.y) < 8) close();
+    if (!cancel && d.travel < 8 && Math.abs(e.clientY - d.y) < 8) close();
   };
   return { down, move, end };
 }
