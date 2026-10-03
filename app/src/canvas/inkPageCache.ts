@@ -40,6 +40,11 @@ function encodedOpCount(encoded: EncodedInk): number {
   return knownInkSummary(encoded)?.n ?? encoded.ops.length + (encoded.raw?.length ?? 0);
 }
 
+/** Which strokes a page holds, by identity. A rebin moves strokes, never edits them. */
+function opIdsKey(ops: readonly InkOp[]): string {
+  return ops.map((op) => `${op.id}:${op.seq}`).sort().join(",");
+}
+
 /** Recently-evicted encoded pages kept in RAM so a short jump back is free. */
 export const INK_COLD_CAP = 32;
 
@@ -134,7 +139,8 @@ export class InkPageBook {
       frames.length === this.frames.length &&
       frames.every((f, i) => {
         const cur = this.frames[i];
-        return cur && cur.pageId === f.pageId && cur.minY === f.minY && cur.maxY === f.maxY;
+        return cur && cur.pageId === f.pageId && cur.minY === f.minY && cur.maxY === f.maxY &&
+          cur.minX === f.minX && cur.maxX === f.maxX;
       });
     if (same) return false;
     const prevCount = this.frames.length;
@@ -167,8 +173,29 @@ export class InkPageBook {
     this.frames = frames.slice();
     this.usedFallback = frames.length <= 1;
     if (shouldRebin && !filed) {
-      const all = this.assembleOps();
+      /*
+       * Rewrite only the pages whose strokes move. One stroke filed on the
+       * stand-in page while the layout was arriving used to mark every page
+       * dirty, so the whole book got a new stamp and the next Sync raised a
+       * conflict for each page the other device had touched.
+       */
+      const held = new Map<number, string>();
+      const all: InkOp[] = [];
+      for (const pageId of new Set([...this.hot.keys(), ...this.cold.keys()])) {
+        const hot = this.hot.get(pageId);
+        const ops = hot ?? decodeInkOps(this.cold.get(pageId)!);
+        all.push(...ops);
+        if (ops.length) held.set(pageId, opIdsKey(ops));
+      }
+      all.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+      const wasDirty = new Set(this.dirty);
+      const wasOnDisk = new Set(this.onDisk);
       this.replaceAll(all, { preserveIds: true });
+      for (const [pageId, ops] of binOpsByPage(all, this.frames)) {
+        if (wasDirty.has(pageId) || !wasOnDisk.has(pageId) || held.get(pageId) !== opIdsKey(ops)) continue;
+        this.dirty.delete(pageId);
+        this.onDisk.add(pageId);
+      }
       return true;
     }
     return false;

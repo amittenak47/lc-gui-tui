@@ -56,6 +56,19 @@ describe("InkPageBook", () => {
     expect(book.pageIds()).toContain(3);
   });
 
+  it("rewrites only the pages a rebin changes", () => {
+    const layout = frames(6);
+    const saved = new InkPageBook();
+    saved.replaceAll(layout.map(f => stroke(f.minY + 40)), { frames: layout });
+    const book = new InkPageBook();
+    book.ingestEncodedPages(saved.snapshotEncodedPages());
+    // Drawn on page 3 while the stand-in layout files everything on page 1.
+    book.commit(stroke(layout[2]!.minY + 60));
+    expect(book.setFrames(layout)).toBe(true);
+    expect([...book.takeDirtyEncoded().keys()].sort()).toEqual([1, 3]);
+    expect(book.pageIds()).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
   it("reads and caches cold geometry without decoding strokes or changing the paint window", () => {
     const book = new InkPageBook();
     const layout = frames(20);
