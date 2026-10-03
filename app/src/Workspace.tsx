@@ -10098,7 +10098,9 @@ export const Workspace = memo(function Workspace({
     setChrome({
       problem: Boolean(problem),
       pad: Boolean(problem && isLocalPad(problem)),
-      agentOpen: coachOpen && Boolean(problem),
+      // The merge split hides the agent panel; its column must go with it, or
+      // the split is squeezed beside an empty space where the panel would be.
+      agentOpen: coachOpen && Boolean(problem) && !hubConflictAsk,
       loading: shellLoading,
       busy: busy !== null,
       loadActive: workspaceLoadActive || opening,
@@ -10152,6 +10154,7 @@ export const Workspace = memo(function Workspace({
     busy,
     shellLoading,
     coachOpen,
+    hubConflictAsk,
     chunkSyncIssue,
     docIndexError,
     docIndexMeta,
@@ -10536,7 +10539,7 @@ export const Workspace = memo(function Workspace({
           <button
             type="button"
             className={[
-              coachOpen
+              coachOpen && !hubConflictAsk
                 ? "lc-secondary lc-agent-toggle lc-agent-toggle-open lc-tip-target"
                 : "lc-secondary lc-agent-toggle lc-tip-target",
               problem ? "" : "is-vacant",
@@ -10545,11 +10548,12 @@ export const Workspace = memo(function Workspace({
             ]
               .filter(Boolean)
               .join(" ")}
-            aria-expanded={problem ? coachOpen : undefined}
+            aria-expanded={problem ? coachOpen && !hubConflictAsk : undefined}
             aria-controls={problem ? "lc-agent-panel" : undefined}
             aria-hidden={problem ? undefined : true}
             tabIndex={problem ? undefined : -1}
-            disabled={!problem}
+            // The panel is not shown while the merge split is open.
+            disabled={!problem || Boolean(hubConflictAsk)}
             data-tip={
               !problem
                 ? undefined
@@ -11270,9 +11274,9 @@ export const Workspace = memo(function Workspace({
               ) : null
             }
             coachFold={null}
-            agentOpen={coachOpen}
+            agentOpen={coachOpen && !hubConflictAsk}
             agentOnline={serverLinkRef.current === "online" && llmLink === "online"}
-            onToggleAgent={() => chooseCoachOpen(!coachOpen)}
+            onToggleAgent={() => { if (!hubConflictAsk) chooseCoachOpen(!coachOpen); }}
             pageFilm={
               pdfNav && pdfNav.count >= 2
                 ? { open: pdfFilmOpen && active, onToggle: togglePdfFilm }
