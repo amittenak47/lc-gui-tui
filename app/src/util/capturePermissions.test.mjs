@@ -11,12 +11,14 @@ describe("installed capture command permissions", () => {
     expect(capability.remote).toBeUndefined();
     expect(capability.permissions).toContain("allow-capture-export");
     expect(permission).toContain('identifier = "allow-capture-export"');
-    const allowed = JSON.parse(permission.match(/commands\.allow\s*=\s*(\[[^\]]*\])/)?.[1] ?? "[]");
-    expect(allowed).toEqual(["save_png_bytes", "share_png_bytes", "pick_capture_folder"]);
-    for (const command of ["save_png_bytes", "share_png_bytes", "pick_capture_folder"]) {
-      expect(permission).toContain(`"${command}"`);
-      expect(handlers).toContain(`capture_save::${command}`);
-    }
+    // TOML arrays may end with a comma; JSON may not.
+    const list = permission.match(/commands\.allow\s*=\s*(\[[^\]]*\])/)?.[1] ?? "[]";
+    const allowed = JSON.parse(list.replace(/,\s*\]$/, "]"));
+    const capture = ["save_png_bytes", "share_png_bytes", "pick_capture_folder"];
+    const documentExport = ["begin_document_export", "append_document_export", "finish_document_export", "cancel_document_export"];
+    expect(allowed).toEqual([...capture, ...documentExport]);
+    for (const command of capture) expect(handlers).toContain(`capture_save::${command}`);
+    for (const command of documentExport) expect(handlers).toContain(`document_export::${command}`);
   });
 
   it("registers the Android folder command and its result callback", () => {

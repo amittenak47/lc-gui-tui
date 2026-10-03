@@ -420,7 +420,7 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/matchDisplayRef/);
     expect(src).toMatch(/overdrawMarginPx/);
     expect(src).not.toMatch(/const marginY = 0/);
-    expect(src).toMatch(/if \(drawingRef\.current \|\| cameraMovingRef\.current \|\| sashDragActive\(\)\) return/);
+    expect(src).toMatch(/if \(drawingRef\.current \|\| cameraMovingRef\.current \|\| sashDragActive\(\)[^)]*\) return/);
     expect(src).toMatch(/instantReplayOnCameraRebase\(\)/);
     expect(src).toMatch(/rebuildAndReplay\(false, instantReplayOnFirstPresent\(\)\)/);
     expect(src).toMatch(/bakeSpineOffThread/);
@@ -442,7 +442,7 @@ describe("WhiteboardInkLab", () => {
     expect(src).toMatch(/replayRafRef\.current != null/);
     expect(src).toMatch(/useWorker: true/);
     expect(src).toMatch(/persist: true/);
-    expect(src).toMatch(/if \(!tiles\.covered\) return/);
+    expect(src).toMatch(/if \(!tiles\.covered\) \{/);
     expect(src).toMatch(/replayGeometry\.matches\(latest\)/);
     expect(src).toMatch(/pageGeometryRef\.current\.matches/);
     expect(src).toMatch(/engine\.redrawSnapRegion/);
@@ -581,8 +581,12 @@ describe("Workspace pane switch", () => {
   it("does not clear the CSS ride before the staged bitmap is ready", () => {
     const src = readFileSync(join(here, "WhiteboardInkLab.tsx"), "utf8");
     const step = src.slice(src.indexOf("const step = async () => {"), src.indexOf("if (instant) step();"));
-    expect(step.indexOf("if (!tiles.covered) return")).toBeGreaterThan(-1);
-    expect(step.indexOf("if (!tiles.covered) return")).toBeLessThan(
+    // Uncovered tiles bail out (after re-aligning the presented ink) before
+    // the snap is replaced.
+    const bail = step.indexOf("if (!tiles.covered) {");
+    expect(bail).toBeGreaterThan(-1);
+    expect(step.indexOf("return;", bail)).toBeLessThan(step.indexOf("engine.redrawSnap"));
+    expect(bail).toBeLessThan(
       step.indexOf("engine.redrawSnap"),
     );
     expect(step.indexOf("engine.redrawSnap")).toBeLessThan(
@@ -720,12 +724,14 @@ describe("reading pan compositor", () => {
     expect(src).toContain('uiHandedness !== inkHandedness ? "is-mixed-hands"');
     expect(src).toContain("useUtilityTrayRef");
     expect(css).toContain(".lc-map-controls.is-mixed-hands.lc-map-controls-paged .lc-map-chrome-left");
-    expect(css).toContain("bottom: calc(var(--lc-utility-tray-height, 36px) + 10px)");
-    const mixedWake = css.slice(
-      css.indexOf(".lc-map-controls.is-mixed-hands .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake"),
-      css.indexOf(".lc-map-controls.is-mixed-hands .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake") + 500,
-    );
-    expect(mixedWake).toContain("bottom: calc(100% + 10px)");
+    // Clears the tray and, since the page-turn corner landed, that corner too.
+    expect(css).toContain("bottom: calc(var(--lc-page-corner-clearance, 0px) + var(--lc-utility-tray-height, 36px) + 10px)");
+    const wakeAt = css.indexOf(".lc-map-controls.is-mixed-hands .lc-map-chrome-left.has-wake.is-open > .lc-chrome-wake");
+    const mixedWake = css.slice(wakeAt, css.indexOf("}", wakeAt));
+    // Lifts above the tray with a transform, so it moves once instead of
+    // again when the delayed tray expands; it never drops below (+100%).
+    expect(mixedWake).toContain("bottom: 0");
+    expect(mixedWake).toContain("translateY(calc(-100% - 16px))");
     expect(mixedWake).not.toContain("translateY(calc(100% + 16px))");
     expect(src).toContain("handsStacked ? menuPeek : chromeShown.eye");
     expect(src).toContain("annotatePeek || annotateCode");
@@ -766,14 +772,14 @@ describe("reading pan compositor", () => {
 describe("lined overlay vs ink", () => {
   it("sits under the ink pad so a rule cannot cut a stroke cap", () => {
     const css = readFileSync(join(here, "../styles.css"), "utf8");
-    const overlay = css.slice(
-      css.indexOf(".lc-board-lined-overlay {"),
-      css.indexOf(".lc-agent-fold {"),
-    );
-    const host = css.slice(
-      css.indexOf(".lc-board-ink-lab-host {"),
-      css.indexOf(".lc-annotating-code .lc-board-ink-lab-host"),
-    );
+    // Anchor to the rule itself: other rules end in the same selector (the
+    // PDF blend rule is `.lc-board-doc-paper:has(.lc-pdf-doc) .lc-board-ink-lab-host`).
+    const rule = (selector) => {
+      const at = css.indexOf(`\n${selector} {`);
+      return at < 0 ? "" : css.slice(at, css.indexOf("}", at));
+    };
+    const overlay = rule(".lc-board-lined-overlay");
+    const host = rule(".lc-board-ink-lab-host");
     const overlayZ = Number(/z-index:\s*(\d+)/.exec(overlay)?.[1]);
     const hostZ = Number(/z-index:\s*(\d+)/.exec(host)?.[1]);
     expect(overlayZ).toBeGreaterThan(0);

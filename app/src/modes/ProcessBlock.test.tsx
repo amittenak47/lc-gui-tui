@@ -166,7 +166,10 @@ describe("ProcessBlock", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(host.querySelector(".lc-agent-process-step-btn")).toBeNull();
     const body = host.querySelector(".lc-agent-process-step-body");
-    expect(body?.getAttribute("aria-busy")).toBe("false");
+    // Rich text renders complete and only fades words in, so there is no
+    // partial ("busy") state to announce.
+    expect(body).not.toBeNull();
+    expect(body?.hasAttribute("aria-busy")).toBe(false);
     expect(body?.textContent).toContain("Extra prose");
     expect(body?.closest("[data-active='true']") || body).toBeTruthy();
     root.unmount();

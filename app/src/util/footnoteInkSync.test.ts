@@ -9,6 +9,15 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { bytesToB64 } from "../api/nativeHttp";
+import { encodeInkOps, packEncodedInk } from "../canvas/inkCodec";
+import { gzipBytes } from "./gzip";
+
+// Sync refuses to apply pages that do not decode (local or hub), so fixtures
+// carry a real, empty ink page rather than placeholder bytes.
+const EMPTY_INK_GZ = await gzipBytes(packEncodedInk(encodeInkOps([])));
+const EMPTY_INK_GZ_B64 = bytesToB64(EMPTY_INK_GZ);
+
 afterEach(() => {
   vi.doUnmock("./inkPageStore");
   vi.doUnmock("./idb");
@@ -40,7 +49,7 @@ async function loadInkSync(docKeys: Record<string, number[]> = {}) {
           v: 1 as const,
           docKey,
           pageId,
-          gz: new Uint8Array([1, 2, 3]),
+          gz: EMPTY_INK_GZ,
           dirty: false,
           updatedAt: 10,
         })),
@@ -144,7 +153,7 @@ describe("applyFootnoteInkChoice", () => {
     key,
     page_id: pageId,
     updated_at: 20,
-    gz: "YQ==",
+    gz: EMPTY_INK_GZ_B64,
   });
 
   it("keeps this device's boards and clears the hub pages it discarded", async () => {
@@ -235,7 +244,7 @@ describe("remintFootnoteInk", () => {
     key,
     page_id: pageId,
     updated_at: 20,
-    gz: "YQ==",
+    gz: EMPTY_INK_GZ_B64,
   });
 
   it("gives the forked board the strokes of the one it was copied from", async () => {

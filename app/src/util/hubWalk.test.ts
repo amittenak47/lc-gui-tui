@@ -111,6 +111,12 @@ describe("walkSyncInk (stage F)", () => {
           local.map((row) => ({ ...row, gz: new Uint8Array([1, 2, 3]) })),
         );
       },
+      // Upload re-reads each page just before sending it, so an edit made
+      // mid-sync is caught instead of overwritten.
+      getInkPageRecord: (_docKey: string, pageId: number) => {
+        const row = local.find((page) => page.pageId === pageId);
+        return Promise.resolve(row ? { ...row, gz: new Uint8Array([1, 2, 3]) } : null);
+      },
       writeInkPage: () => Promise.resolve(),
       markInkPageSynced: vi.fn(async () => {}),
     }));
@@ -131,6 +137,7 @@ describe("walkSyncInk (stage F)", () => {
 
     const client = {
       getInkPages: vi.fn().mockResolvedValue([]),
+      getInkPage: vi.fn().mockResolvedValue(null),
       putInkPage: vi.fn().mockRejectedValue(new Error("hub went away")),
     } as unknown as LcClient;
 
@@ -153,6 +160,7 @@ describe("walkSyncInk (stage F)", () => {
 
     const client = {
       getInkPages: vi.fn().mockResolvedValue([]),
+      getInkPage: vi.fn().mockResolvedValue(null),
       putInkPage: vi.fn().mockResolvedValue(undefined),
     } as unknown as LcClient;
 
@@ -177,6 +185,7 @@ describe("walkSyncInk (stage F)", () => {
 
     const client = {
       getInkPages: vi.fn().mockResolvedValue([]),
+      getInkPage: vi.fn().mockResolvedValue(null),
       putInkPage: vi.fn(),
     } as unknown as LcClient;
 
@@ -206,6 +215,7 @@ describe("walkSyncInk (stage F)", () => {
     const { walkSyncInk: walk } = await import("./hubWalk");
     const client = {
       getInkPages: vi.fn().mockResolvedValue([]),
+      getInkPage: vi.fn().mockResolvedValue(null),
       putInkPage: vi.fn(),
     } as unknown as LcClient;
 

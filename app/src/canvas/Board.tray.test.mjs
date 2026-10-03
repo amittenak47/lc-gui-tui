@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const board = readFileSync(new URL("./Board.tsx", import.meta.url), "utf8");
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+const motionPanel = readFileSync(new URL("./ChromeMotionPanel.tsx", import.meta.url), "utf8");
 
 describe("vertical menu visibility", () => {
   it("keeps the complete menu available when hidden mode wakes", () => {
@@ -13,7 +14,9 @@ describe("vertical menu visibility", () => {
   });
 
   it("lets the same fold control operate in visible, fade and hidden modes", () => {
-    const start = board.indexOf('<div className={`lc-chrome-stack-tray');
+    // The tray is a ChromeMotionPanel since the tool trays were animated.
+    const start = board.indexOf('<ChromeMotionPanel className={`lc-chrome-stack-tray');
+    expect(start).toBeGreaterThan(-1);
     const end = board.indexOf('data-lc-explore-chrome', start);
     const tray = board.slice(start, end);
     expect(tray).toContain('trayFolded ? " is-folded" : ""');
@@ -27,11 +30,11 @@ describe("vertical menu visibility", () => {
     expect(board).toContain('trayFolded ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"');
     expect(board).toContain('className="lc-chrome-stack-fold"');
     expect(board).toContain('lc-chrome-stack-fold-inner');
-    expect(css).toContain('.lc-chrome-stack-tray.is-folded .lc-chrome-stack-fold');
-    const start = css.indexOf('.lc-chrome-stack-tray.is-folded .lc-chrome-stack-fold {');
-    const folded = css.slice(start, css.indexOf('}', start));
-    expect(folded).toContain('grid-template-rows: 0fr');
-    expect(css).toContain('transform: translateY(8px)');
+    // Folding is a motion height animation now, not a CSS grid 0fr row:
+    // closed collapses to zero and dips 8px toward the bottom anchor.
+    expect(board).toContain('<ChromeMotionPanel className="lc-chrome-stack-fold" open={!trayFolded}>');
+    expect(motionPanel).toMatch(/closed:\s*\{\s*height: 0,[^}]*y: 8/);
+    expect(motionPanel).toContain('transformOrigin: "bottom center"');
   });
 
   it("keeps the agent tray under the open panel instead of punching through it", () => {
@@ -67,14 +70,12 @@ describe("vertical menu visibility", () => {
   });
 
   it("lets the theme popover paint beside the tray and open inward", () => {
-    expect(css).toContain(
-      ".lc-chrome-stack-tray:not(.is-folded) .lc-chrome-stack-fold-inner:has(.lc-palette-popover) {",
-    );
-    const start = css.indexOf(
-      ".lc-chrome-stack-tray:not(.is-folded) .lc-chrome-stack-fold-inner:has(.lc-palette-popover) {",
-    );
-    const open = css.slice(start, css.indexOf("}", start));
-    expect(open).toContain("overflow: visible");
+    // An open motion panel releases its clip once it has grown, and the fold
+    // itself never clips, so the popover can paint outside the tray.
+    expect(motionPanel).toMatch(/open:\s*\{[^}]*transitionEnd: \{ overflow: "visible" \}/);
+    const innerAt = css.indexOf("\n.lc-chrome-stack-fold-inner {");
+    expect(innerAt).toBeGreaterThan(-1);
+    expect(css.slice(innerAt, css.indexOf("}", innerAt))).not.toContain("overflow");
     expect(css).toContain(
       '[data-ui-handedness="left"] .lc-map-chrome-right .lc-palette-map > .lc-palette-popover-map',
     );

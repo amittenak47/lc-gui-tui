@@ -9,6 +9,16 @@ import { HubSyncControl, padTabSync, tabOffersHubSync, type HubSyncWalkHost } fr
 import type { LcClient } from "../api/client";
 import { PAD_HUB_KEY } from "../util/padHub";
 
+// jsdom has no IndexedDB, and the ink stage now refuses to read an unopenable
+// store as "no pages" (that let a walk reach Synced with ink left behind).
+// These walks are about stages A–D, so give them an empty, readable ink store.
+vi.mock("../util/inkPageStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../util/inkPageStore")>()),
+  getInkPageRecords: vi.fn(async () => []),
+  getInkPageRecord: vi.fn(async () => null),
+  listInkDocKeys: vi.fn(async () => []),
+}));
+
 vi.mock("../util/docExtract", () => ({
   extractDocumentPages: vi.fn(
     async (input: { onProgress?: (done: number, total: number) => void }) => {
