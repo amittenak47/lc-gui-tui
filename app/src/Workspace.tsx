@@ -2218,6 +2218,18 @@ export const Workspace = memo(function Workspace({
     dismissFootnoteOverview();
     setCoachOpen(true);
   }, [dismissFootnoteOverview]);
+  /*
+   * The agent panel as the reader last set it while a document was loading,
+   * or null if they did not touch it. A load ends by closing the panel, so a
+   * new document does not inherit the last one's; a reader who opened it
+   * while waiting had it shut again the moment the page arrived.
+   */
+  const coachChoiceDuringLoadRef = useRef<boolean | null>(null);
+  const chooseCoachOpen = useCallback((open: boolean) => {
+    coachChoiceDuringLoadRef.current = open;
+    if (open) openCoachPanel();
+    else setCoachOpen(false);
+  }, [openCoachPanel]);
   const visibleCodeRef = useRef<{taskId:string;source:string;hasTabs:boolean}|null>(null);
   const [codeSlot, setCodeSlot] = useState<ScreenRect | null>(null);
   const deepLinkHandled = useRef(false);
@@ -3316,6 +3328,7 @@ export const Workspace = memo(function Workspace({
       setWhiteboardPageIndex(0);
       setWhiteboardEntryOpen(false);
       setCoachOpen(false);
+      coachChoiceDuringLoadRef.current = null;
       boardSaveSuspendedRef.current = true;
       agentSaveSuspendedRef.current = true;
       if (fromBrowse) {
@@ -3534,7 +3547,8 @@ export const Workspace = memo(function Workspace({
         agentSaveSuspendedRef.current = false;
         setWorkspaceLoadActive(false);
         setShellLoadActive(false);
-        setCoachOpen(false);
+        setCoachOpen(coachChoiceDuringLoadRef.current ?? false);
+        coachChoiceDuringLoadRef.current = null;
         const title = restored && notebook ? notebook.title : "Whiteboard";
         if (cold) {
           setEntering(true);
@@ -3905,6 +3919,7 @@ export const Workspace = memo(function Workspace({
       const { gen: loadGen, signal: loadSignal } = beginWorkspaceLoad();
       annotatePdfErrorRef.current = null;
       traceOpen("start", { name: input.name, docType: input.docType, loadGen, tabId: input.tabId });
+      coachChoiceDuringLoadRef.current = null;
       // pdf.js's worker takes a second to start: begin it before the page is set up.
       if (input.docType === "pdf") void import("./modes/PdfDocument").then((pdf) => pdf.loadPdfJs()).catch(() => {});
       // The page in view and its ink before the PDF's text layer and neighbours
@@ -4520,7 +4535,8 @@ export const Workspace = memo(function Workspace({
           setEntering(true);
           window.setTimeout(() => setEntering(false), boardFadeMs() || 1);
         }
-        setCoachOpen(false);
+        setCoachOpen(coachChoiceDuringLoadRef.current ?? false);
+        coachChoiceDuringLoadRef.current = null;
 
         // Arm AFTER interactive flips true (Excalidraw left view mode).
         // Toggle worked because it ran here; open used to arm during prepare.
@@ -10538,10 +10554,7 @@ export const Workspace = memo(function Workspace({
                     : "Agent"
             }
             data-tip-placement="bottom"
-            onClick={() => {
-              if (coachOpen) setCoachOpen(false);
-              else openCoachPanel();
-            }}
+            onClick={() => chooseCoachOpen(!coachOpen)}
           >
             <span className="lc-agent-live-dot" aria-hidden />
             Agent
@@ -11253,7 +11266,7 @@ export const Workspace = memo(function Workspace({
             coachFold={null}
             agentOpen={coachOpen}
             agentOnline={serverLinkRef.current === "online" && llmLink === "online"}
-            onToggleAgent={() => coachOpen ? setCoachOpen(false) : openCoachPanel()}
+            onToggleAgent={() => chooseCoachOpen(!coachOpen)}
             pageFilm={
               pdfNav && pdfNav.count >= 2
                 ? { open: pdfFilmOpen && active, onToggle: togglePdfFilm }
@@ -11517,10 +11530,7 @@ export const Workspace = memo(function Workspace({
             open={coachOpen}
             mode={mode}
             onModeChange={setMode}
-            onOpenChange={(open) => {
-              if (open) openCoachPanel();
-              else setCoachOpen(false);
-            }}
+            onOpenChange={chooseCoachOpen}
             busy={busy !== null}
             error={error}
             thinking={busy !== null || thinking}
