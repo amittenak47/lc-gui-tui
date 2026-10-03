@@ -9,12 +9,18 @@
 .lc-hub-conflict {
   --hc-r: var(--lc-r-block, 2px);
   --hc-edge: 2px;
-  --hc-line: color-mix(in srgb, var(--ink) 24%, transparent);
-  --hc-line-strong: color-mix(in srgb, var(--ink) 55%, transparent);
+  /* The document's mode colour, as on its tab: Annotate red, Whiteboard blue. */
+  --hc-mode: var(--lc-mode-annotate);
+  --hc-line: color-mix(in srgb, var(--hc-mode) 30%, transparent);
+  --hc-line-strong: color-mix(in srgb, var(--hc-mode) 62%, transparent);
   /* The theme's own pair: each theme sets them bright enough for its ground. */
   --hc-keep: var(--ok);
   --hc-drop: var(--bad);
   --hc-caption: 600 10px/1.4 var(--lc-sans);
+}
+
+.lc-hub-conflict[data-mode="whiteboard"] {
+  --hc-mode: var(--lc-mode-whiteboard);
 }
 
 /* ── Top bar ─────────────────────────────────────────────────────────── */
@@ -23,7 +29,7 @@
   flex-wrap: nowrap;
   gap: 4px;
   padding: 6px 12px;
-  border-bottom: var(--hc-edge) solid var(--ink);
+  border-bottom: var(--hc-edge) solid var(--hc-mode);
 }
 
 .lc-hub-conflict .lc-hub-conflict-head button.lc-hub-conflict-filter {
@@ -40,8 +46,8 @@
 }
 
 .lc-hub-conflict .lc-hub-conflict-head button.lc-hub-conflict-filter[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: var(--hc-mode);
+  background: color-mix(in srgb, var(--hc-mode) 14%, transparent);
   color: var(--ink);
 }
 
@@ -73,8 +79,8 @@
 }
 
 .lc-hub-conflict .lc-hub-conflict-navigation button:hover:not(:disabled) {
-  border-color: var(--ink);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: var(--hc-mode);
+  background: color-mix(in srgb, var(--hc-mode) 10%, transparent);
 }
 
 .lc-hub-conflict .lc-hub-conflict-navigation button:disabled {
@@ -83,7 +89,7 @@
 }
 
 .lc-hub-conflict button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--hc-mode);
   outline-offset: -2px;
 }
 
@@ -91,7 +97,7 @@
 
 .lc-hub-conflict .lc-hub-conflict-sash {
   width: var(--hc-edge);
-  background: var(--ink);
+  background: var(--hc-mode);
 }
 
 /* A verdict is an edge and a caption, not a wash over the whole page. */
@@ -143,7 +149,7 @@
   content: "";
   width: 8px;
   height: 8px;
-  background: var(--accent);
+  background: var(--hc-mode);
 }
 
 /* What the column's ✓ / ✕ currently say, in words. */
@@ -181,8 +187,8 @@
 }
 
 .lc-hub-conflict .lc-doc-confirm-btn:hover:not(:disabled) {
-  border-color: var(--ink);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: var(--hc-mode);
+  background: color-mix(in srgb, var(--hc-mode) 10%, transparent);
 }
 
 .lc-hub-conflict .lc-doc-confirm-btn:disabled {
@@ -229,10 +235,10 @@
   display: flex;
   flex-direction: column;
   max-height: 44%;
-  border: var(--hc-edge) solid var(--ink);
+  border: var(--hc-edge) solid var(--hc-mode);
   border-radius: var(--hc-r);
   background: var(--surface);
-  box-shadow: 4px 4px 0 color-mix(in srgb, var(--ink) 32%, transparent);
+  box-shadow: 4px 4px 0 color-mix(in srgb, var(--hc-mode) 40%, transparent);
   touch-action: manipulation;
 }
 
@@ -258,7 +264,7 @@
 }
 
 .lc-hub-conflict .lc-hub-conflict-dock-bar:hover {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: color-mix(in srgb, var(--hc-mode) 12%, transparent);
 }
 
 .lc-hub-conflict .lc-hub-conflict-dock-count {
@@ -297,7 +303,7 @@
   flex: 0 1 auto;
   min-height: 0;
   overflow: hidden;
-  border-top: var(--hc-edge) solid var(--ink);
+  border-top: var(--hc-edge) solid var(--hc-mode);
   transition: grid-template-rows 200ms cubic-bezier(0.22, 1, 0.36, 1), border-color 200ms;
 }
 
@@ -375,7 +381,7 @@
 }
 
 .lc-hub-conflict.is-picking .lc-hub-conflict-note[data-pick="undecided"]:not(.is-missing) {
-  border-color: var(--hc-line-strong);
+  border-color: color-mix(in srgb, var(--hc-mode) 42%, transparent);
   box-shadow: none;
 }
 
@@ -391,8 +397,9 @@
 }
 
 .lc-hub-conflict .lc-hub-conflict-note > .lc-tab-loading-border {
-  inset: -2px;
-  color: var(--accent);
+  inset: -3px;
+  padding: 3px;
+  color: var(--hc-mode);
 }
 
 /* The other device has nothing here: hatched, so the gap is obvious at a glance. */
@@ -452,8 +459,8 @@
 }
 
 .lc-hub-conflict .lc-hub-conflict-note-flag[data-status="different"]::before,
-.lc-hub-conflict .lc-hub-conflict-note-flag[data-status="not-verified"]::before { background: var(--accent); }
-.lc-hub-conflict .lc-hub-conflict-note-flag[data-status="only-here"]::before { background: var(--ink); }
+.lc-hub-conflict .lc-hub-conflict-note-flag[data-status="not-verified"]::before { background: var(--hc-mode); }
+.lc-hub-conflict .lc-hub-conflict-note-flag[data-status="only-here"]::before { background: var(--hc-mode); }
 .lc-hub-conflict .lc-hub-conflict-note-flag[data-status="same"]::before { background: transparent; border: 1px solid var(--muted); }
 
 .lc-hub-conflict .lc-hub-conflict-note-actions { gap: 4px; }
@@ -465,7 +472,7 @@
   color: var(--ink);
 }
 
-.lc-hub-conflict .lc-hub-conflict-note-twist:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.lc-hub-conflict .lc-hub-conflict-note-twist:hover { background: color-mix(in srgb, var(--hc-mode) 12%, transparent); }
 
 .lc-hub-conflict .lc-hub-conflict-note.is-part::before {
   /* Nested pieces are indented and keep the stripe; no tree connectors. */
@@ -485,7 +492,7 @@
 .lc-hub-conflict .lc-hub-conflict-actions {
   gap: 10px;
   padding: 10px 12px;
-  border-top: var(--hc-edge) solid var(--ink);
+  border-top: var(--hc-edge) solid var(--hc-mode);
 }
 
 .lc-hub-conflict .lc-hub-conflict-progress {
@@ -516,7 +523,7 @@
   position: relative;
   width: 120px;
   height: 10px;
-  border: var(--hc-edge) solid var(--ink);
+  border: var(--hc-edge) solid var(--hc-mode);
   border-radius: var(--hc-r);
   overflow: hidden;
 }
@@ -526,7 +533,7 @@
   position: absolute;
   inset: 0 auto 0 0;
   width: calc(var(--settled) * 100%);
-  background: var(--ink);
+  background: var(--hc-mode);
   transition: width 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -542,7 +549,7 @@
 .lc-hub-conflict .lc-hub-conflict-resolve {
   min-height: 34px;
   padding: 0 16px;
-  border: var(--hc-edge) solid var(--ink);
+  border: var(--hc-edge) solid var(--hc-mode);
   border-radius: var(--hc-r);
   font: 700 11px/1 var(--lc-sans);
   letter-spacing: 0.1em;
@@ -556,14 +563,14 @@
 }
 
 .lc-hub-conflict .lc-hub-conflict-cancel:hover:not(:disabled) {
-  border-color: var(--ink);
+  border-color: var(--hc-mode);
   color: var(--ink);
 }
 
 .lc-hub-conflict .lc-hub-conflict-resolve {
-  background: var(--ink);
+  background: var(--hc-mode);
   color: var(--bg);
-  box-shadow: 3px 3px 0 color-mix(in srgb, var(--ink) 32%, transparent);
+  box-shadow: 3px 3px 0 color-mix(in srgb, var(--hc-mode) 40%, transparent);
   transition: transform 120ms ease-out, box-shadow 120ms ease-out;
 }
 
@@ -602,7 +609,7 @@
   width: 22px;
   height: 22px;
   margin: -11px 0 0 -11px;
-  border: 2px solid var(--accent);
+  border: 2px solid var(--hc-mode);
   border-radius: var(--hc-r);
   box-shadow: 0 0 0 2px var(--bg);
   pointer-events: none;

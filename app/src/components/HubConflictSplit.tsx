@@ -1617,6 +1617,7 @@ export function HubConflictSplit({
       className={["lc-hub-conflict", pickingStarted && !valid ? "is-picking" : ""]
         .filter(Boolean)
         .join(" ")}
+      data-mode={conflict.kind}
       role="dialog"
       aria-modal="true"
       aria-label="Sync conflict"
