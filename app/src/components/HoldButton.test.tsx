@@ -35,11 +35,11 @@ beforeAll(() => {
 
 describe("HoldButton", () => {
   it.each([
-    ["default", undefined, 233],
-    ["library", LIBRARY_HOLD_MS, 583],
-    ["sensitive", HOLD_SENSITIVE_MS, 466],
-    ["preset chip", holdDurationMs(280), 196],
-    ["session delete", holdDurationMs(1200), 840],
+    ["default", undefined, 280],
+    ["library", LIBRARY_HOLD_MS, 700],
+    ["sensitive", HOLD_SENSITIVE_MS, 559],
+    ["preset chip", holdDurationMs(280), 235],
+    ["session delete", holdDurationMs(1200), 1008],
   ])("confirms a %s hold at its shortened duration", async (_name, holdMs, expectedMs) => {
     vi.useFakeTimers();
     let now = 0;

@@ -21234,7 +21234,7 @@ button.lc-row-selected:hover:not(:disabled) {
   content: none;
 }
 .lc-hold-reveal:not(.lc-progress-fill)[data-filling] > .lc-hold-reveal-fill {
-  animation: lc-hold-flow 900ms linear infinite;
+  animation: lc-hold-flow 1080ms linear infinite;
 }
 @keyframes lc-hold-flow {
   from { -webkit-mask-position: left top, right 0; mask-position: left top, right 0; }

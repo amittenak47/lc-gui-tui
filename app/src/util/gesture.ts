@@ -5,8 +5,11 @@
  * hinted-solution reveal — keep the longer {@link HOLD_SENSITIVE_MS}.
  */
 
-/** Apply the shared 30% reduction to the original UI hold durations. */
-export const holdDurationMs = (originalMs: number): number => Math.round(originalMs * 0.7);
+/**
+ * The shared scale on the original UI hold durations: they were cut by 30%,
+ * then that cut was made 20% slower again (0.7 × 1.2), so a fill reads.
+ */
+export const holdDurationMs = (originalMs: number): number => Math.round(originalMs * 0.84);
 
 /** Default hold-to-confirm fill duration. */
 export const HOLD_MS = holdDurationMs(333);
