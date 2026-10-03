@@ -8,8 +8,23 @@
 
 import type { PageFrame } from "../canvas/inkPageIndex";
 import type { InkOp, ScenePoint } from "../canvas/rasterInk";
+import { knownInkSummary, type EncodedInk } from "../canvas/inkCodec";
 
 export type PdfInkHalf = "left" | "right";
+
+/** Per-page tags describe already-localized ink more precisely than an old
+ * board stamp. Only a complete, consistent set overrides that legacy stamp.
+ * A page read lazily is counted from its summary, never unpacked: reading
+ * `ops` here decoded every page of the book at open. Its tag is not read
+ * either, so a lazily read book keeps the board stamp. */
+export function pdfInkRestoreSpread(pages: ReadonlyMap<number, EncodedInk>, boardStamp: boolean | null): boolean | null {
+  const count = (page: EncodedInk) => knownInkSummary(page)?.n ?? page.ops.length + (page.raw?.length ?? 0);
+  const nonempty = [...pages.values()].filter(page => count(page) > 0);
+  if (!nonempty.length || nonempty.some(page => !page.layout)) return boardStamp;
+  const layout = nonempty[0]!.layout!;
+  return nonempty.every(page => page.layout!.w === layout.w && page.layout!.spread === layout.spread)
+    ? layout.spread : boardStamp;
+}
 
 export function pdfLayoutIsSpread(frames: readonly PageFrame[]): boolean {
   const counts = new Map<number, number>();

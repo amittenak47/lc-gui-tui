@@ -148,7 +148,7 @@ export interface RasterInkHandle {
   getOps(): InkOp[];
   getInkBounds(): SceneBounds | null;
   getOpsInBounds(bounds: SceneBounds): InkOp[];
-  setOps(ops: readonly InkOp[], opts?: { paint?: boolean }): void;
+  setOps(ops: readonly InkOp[], opts?: { paint?: boolean; frames?: readonly PageFrame[]; preserveIds?: boolean }): void;
   getOpCount(): number;
   getRevision(): number;
   dirtyInkPageCount(): number;
@@ -188,6 +188,8 @@ export interface WhiteboardInkLabProps {
   clip?: SceneBounds | null;
   /** PDF / notebook page frames in scene Y, or empty → single-page fallback. */
   getPageFrames?: () => readonly PageFrame[];
+  /** Hold the ink's source layout until a PDF coordinate conversion commits. */
+  pageFramesPaused?: () => boolean;
   onChange?: () => void;
   onStylusAccessory?: (event: PointerEvent) => boolean;
   wheelHoldEnabled?: boolean;
@@ -398,6 +400,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
       getViewport,
       clip = null,
       getPageFrames,
+      pageFramesPaused,
       onChange,
       onStylusAccessory,
       wheelHoldEnabled = false,
@@ -503,6 +506,8 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     getViewportRef.current = getViewport;
     const getPageFramesRef = useRef(getPageFrames);
     getPageFramesRef.current = getPageFrames;
+    const pageFramesPausedRef = useRef(pageFramesPaused);
+    pageFramesPausedRef.current = pageFramesPaused;
     const clipRef = useRef(clip);
     clipRef.current = clip;
     const eraserPageW = () =>
@@ -1069,6 +1074,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
     );
 
     const applyPageWindow = useCallback((viewport: ViewportTransform) => {
+      if (pageFramesPausedRef.current?.()) return false;
       const frames = getPageFramesRef.current?.() ?? [];
       const book = bookRef.current;
       const rebin = frames.length > 0 ? book.setFrames(frames) : false;
@@ -1378,7 +1384,10 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           committedBuildRef.current = false;
           tileReadyRef.current = () => {};
           settleReplayWaiters();
-          bookRef.current.replaceAll(cloneOps(ops), { frames: getPageFramesRef.current?.() ?? [] });
+          bookRef.current.replaceAll(cloneOps(ops), {
+            frames: opts?.frames ?? (pageFramesPausedRef.current?.() ? undefined : getPageFramesRef.current?.()),
+            preserveIds: opts?.preserveIds,
+          });
           ensureTiles().syncOpsDeferred(bookRef.current.paintOps());
           if (drawingRef.current) return;
           if (opts?.paint === false) return;
@@ -1394,6 +1403,7 @@ export const WhiteboardInkLab = forwardRef<RasterInkHandle, WhiteboardInkLabProp
           return bookRef.current.dirtyCount();
         },
         takeDirtyInkPages() {
+          if (pageFramesPausedRef.current?.()) return new Map();
           return bookRef.current.takeDirtyEncoded();
         },
         snapshotInkPages() {

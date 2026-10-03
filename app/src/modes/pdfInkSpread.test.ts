@@ -5,7 +5,9 @@ import {
   locatePdfInkPoint,
   pdfLayoutIsSpread,
   remapInkBetweenPdfLayouts,
+  pdfInkRestoreSpread,
 } from "./pdfInkSpread";
+import { encodeInkOps } from "../canvas/inkCodec";
 import type { InkOp } from "../canvas/rasterInk";
 
 function draw(points: { x: number; y: number }[]): InkOp {
@@ -22,6 +24,13 @@ function draw(points: { x: number; y: number }[]): InkOp {
 
 const oneUp = pdfStackFrames([{ pageNumber: 1, height: 100 }], false, 18, 0);
 const twoUp = pdfStackFrames([{ pageNumber: 1, height: 200 }], true, 18, 0);
+
+it("uses localized page tags over a stale board stamp, with a legacy fallback",()=>{
+  const localized={...encodeInkOps([draw([{x:25,y:40}])]),layout:{w:642,spread:false}};
+  expect(pdfInkRestoreSpread(new Map([[1,localized]]),true)).toBe(false);
+  expect(pdfInkRestoreSpread(new Map([[1,encodeInkOps([draw([{x:25,y:40}])])]]),true)).toBe(true);
+  expect(pdfInkRestoreSpread(new Map([[1,localized],[2,encodeInkOps([])]]),true)).toBe(false);
+});
 
 describe("pdfLayoutIsSpread", () => {
   it("is two frames of the same page id", () => {

@@ -1292,9 +1292,9 @@ export function PdfDocument({
       filmScope,
       pages.length === 0
         ? []
-        : pdfStackFrames(pages, spread, PAGE_GAP, PDF_DOC_PAD_TOP),
+        : pdfStackFrames(layoutPdfPages(naturalsRef.current, frameWidth, spread), spread, PAGE_GAP, PDF_DOC_PAD_TOP),
     );
-  }, [pages, spread, paused]);
+  }, [pages, frameWidth, spread, paused]);
 
   useEffect(() => {
     onThumbRendererRef.current?.(null);

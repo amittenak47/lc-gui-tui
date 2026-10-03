@@ -8,6 +8,9 @@ import { WhiteboardInkLab, type RasterInkHandle } from "./WhiteboardInkLab";
 import { paintInkTile } from "./inkLab/tilePaint";
 import { invalidateBoardScrollHostLayout } from "./scrollHost";
 import type { InkDrawOp, ViewportTransform } from "./rasterInk";
+import { layoutPdfPages, pdfStackFrames } from "../modes/PdfDocument";
+import { remapInkBetweenPdfLayouts } from "../modes/pdfInkSpread";
+import { decodeInkOps } from "./inkCodec";
 
 vi.mock("../util/cameraBusy", () => ({ yieldToInput: () => Promise.resolve() }));
 vi.mock("./inkTileStore", () => ({
@@ -108,6 +111,32 @@ afterEach(async () => {
 });
 
 describe("annotation camera presentation", () => {
+  it("keeps split ink on its sheet while the reader relayouts, then commits converted coordinates and frames together", async () => {
+    const sizes=Array.from({length:6},(_,i)=>({pageNumber:i+1,width:200,height:100}));
+    const split=pdfStackFrames(layoutPdfPages(sizes,200,true),true,18,0);
+    const whole=pdfStackFrames(layoutPdfPages(sizes,200,false),false,18,0);
+    let pageFrames=split, paused=false;
+    const render=()=>root.render(<WhiteboardInkLab ref={ref} enabled tool={null}
+      strokeWidth={3} inkColor="#ff0000" pressureClip={1} pressureSensitive={false}
+      getViewport={()=>view} getPageFrames={()=>pageFrames} pageFramesPaused={()=>paused}/>);
+    await act(async()=>render());
+    ref.current!.setOps([{...stroke(480),id:41,seq:41}],{paint:false,frames:split,preserveIds:true});
+    expect(ref.current!.inkPageIds()).toEqual([2]);
+    paused=true; pageFrames=whole; view={...view,scrollY:-50};
+    await act(async()=>{render();await ref.current!.syncCamera();});
+    expect(ref.current!.inkPageIds()).toEqual([2]);
+    expect(ref.current!.takeDirtyInkPages().size).toBe(0);
+    const next=remapInkBetweenPdfLayouts(ref.current!.getOps(),split,whole,0,200,{clamp:false,keepIds:true});
+    ref.current!.setOps(next,{paint:false,frames:whole,preserveIds:true});
+    paused=false;
+    const saved=ref.current!.takeDirtyInkPages();
+    expect([...saved.keys()]).toEqual([2]);
+    const restored=decodeInkOps(saved.get(2)!);
+    expect(restored).toHaveLength(1);expect(restored[0].id).toBe(41);
+    expect(restored[0].points).toHaveLength(2);
+    expect(restored[0].points[0].y).toBeCloseTo(140);
+    expect(restored[0].points[0].x).toBeCloseTo(40);
+  });
   it.each([1, 1.7])("keeps edge strokes under their input coordinates before and after replay at DPR %s", async (dpr) => {
     vi.stubGlobal("devicePixelRatio", dpr);
     view = { ...view, zoom: .7, scrollX: -130, scrollY: -450 };

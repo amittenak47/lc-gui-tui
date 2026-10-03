@@ -10290,27 +10290,30 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
       setInkSpread: (spread) => {
         inkSpreadRef.current = spread;
       },
+      isPdfInkLayoutPending: () => inkSpreadRef.current != null,
       remapPdfInkAcrossPdfLayout: (fromFrames) => {
         const ink = rasterInkRef.current;
         const bounds = pageBoundsRef.current;
         const toLocal = peekPdfReadingFrames(filmScope);
-        if (!ink || !bounds || fromFrames.length === 0 || toLocal.length === 0) return;
+        if (!ink || !bounds || fromFrames.length === 0 || toLocal.length === 0) return false;
         const width = bounds.maxX - bounds.minX;
-        if (!(width > 0)) return;
+        if (!(width > 0)) return false;
         const ops = ink.getOps();
-        if (ops.length === 0) return;
         const origin = bounds.minY;
+        const toFrames = offsetPageFrames(toLocal, origin);
         const next = remapInkBetweenPdfLayouts(
           ops,
           offsetPageFrames(fromFrames, origin),
-          offsetPageFrames(toLocal, origin),
+          toFrames,
           bounds.minX,
           width,
+          { clamp: false, keepIds: true },
         );
         // `setOps` bins by the board's current frames: the layout these
         // strokes are now in, not the one they left.
-        ink.setOps(next);
+        ink.setOps(next, { frames: toFrames, preserveIds: true });
         inkSpreadRef.current = null;
+        return true;
       },
       restoreView: (saved) => {
         const api = apiRef.current;
@@ -11433,6 +11436,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
         partialErase={eraserPartial}
         getViewport={getViewport}
         getPageFrames={getInkPageFrames}
+        pageFramesPaused={() => inkSpreadRef.current != null}
         clip={inkClip}
         onChange={handleInkChange}
         onStylusAccessory={interactive ? handleStylusAccessory : undefined}

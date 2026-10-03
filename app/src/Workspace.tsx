@@ -240,7 +240,7 @@ import {
   type PdfNav,
   type PdfThumbRenderer,
 } from "./modes/PdfDocument";
-import { pdfLayoutIsSpread } from "./modes/pdfInkSpread";
+import { pdfInkRestoreSpread, pdfLayoutIsSpread } from "./modes/pdfInkSpread";
 import { remapPdfFootnotes } from "./modes/pdfFootnoteLayout";
 import { PdfPageRail } from "./modes/PdfPageRail";
 import { loadReadingPage, saveReadingPage } from "./util/readingPosition";
@@ -1679,7 +1679,7 @@ export const Workspace = memo(function Workspace({
     : false;
   const togglePdfSpread = useCallback(() => {
     const hash = annotateSourceRef.current?.hash;
-    if (!hash) return;
+    if (!hash || boardRef.current?.isPdfInkLayoutPending()) return;
     const now = performance.now();
     if (now - spreadToggleAtRef.current < 180) return;
     spreadToggleAtRef.current = now;
@@ -1689,6 +1689,10 @@ export const Workspace = memo(function Workspace({
     if (focused instanceof HTMLElement) focused.blur();
     const page = peekPdfFilmCurrent(tab.id);
     const fromFrames = peekPdfReadingFrames(tab.id);
+    if (!fromFrames.length) { publishPdfLayoutBusy(tab.id, false); return; }
+    // Keep page filing and flushing in the ink's source layout until the
+    // remap installs coordinates and target frames together.
+    boardRef.current?.setInkSpread(pdfLayoutIsSpread(fromFrames));
     const run = ++spreadLayoutRunRef.current;
     const loadGen = workspaceLoadGenRef.current;
     setPdfSpreadByHash((prev) => {
@@ -1712,17 +1716,24 @@ export const Workspace = memo(function Workspace({
               pdfLayoutIsSpread(toFrames) !== pdfLayoutIsSpread(fromFrames) &&
               nowCount >= (pdfLayoutIsSpread(fromFrames) ? fromCount / 2 : fromCount * 2)));
           if (layoutReady && !remapped) {
-            boardRef.current?.remapPdfInkAcrossPdfLayout(fromFrames);
+            remapped = boardRef.current?.remapPdfInkAcrossPdfLayout(fromFrames) === true;
+            if (!remapped) {
+              if (performance.now() - started > 8000) {
+                reconcilePdfInkLayout(pdfLayoutIsSpread(fromFrames), loadGen);
+                publishPdfLayoutBusy(tab.id, false);
+              } else requestAnimationFrame(tick);
+              return;
+            }
             const marks = remapPdfFootnotes(annotateFootnotesRef.current, fromFrames, toFrames, annotatePageWidthRef.current);
             annotateFootnotesRef.current = marks;
             setAnnotateFootnotesRaw(marks);
-            remapped = true;
             if (page >= 1) boardRef.current?.aimPdfPage(page, { hold: false });
           }
           const ok =
-            layoutReady &&
+            layoutReady && remapped &&
             (!(page >= 1) || boardRef.current?.scrollToPdfPage(page, { hold: false }) === true);
           if (ok || performance.now() - started > 8000) {
+            if (!remapped) reconcilePdfInkLayout(pdfLayoutIsSpread(fromFrames), loadGen);
             if (!ok) boardRef.current?.scrollToPdfPage(page, { hold: false });
             publishPdfLayoutBusy(tab.id, false);
             return;
@@ -1743,7 +1754,7 @@ export const Workspace = memo(function Workspace({
    * every page's size is known here, a mismatched copy is remapped the same way
    * the spread toggle remaps.
    */
-  const reconcilePdfInkLayout = (stamp: boolean, loadGen: number) => {
+  const reconcilePdfInkLayout = (stamp: boolean, loadGen: number, marksStamp = stamp) => {
     const started = performance.now();
     const tick = () => {
       if (workspaceLoadGenRef.current !== loadGen) return;
@@ -1762,7 +1773,13 @@ export const Workspace = memo(function Workspace({
           PAGE_GAP,
           PDF_DOC_PAD_TOP,
         );
-        board.remapPdfInkAcrossPdfLayout(from);
+        if (!board.remapPdfInkAcrossPdfLayout(from)) {
+          if (performance.now() - started < 30_000) window.setTimeout(tick, 250);
+          return;
+        }
+      }
+      if (pdfLayoutIsSpread(frames) !== marksStamp) {
+        const from = pdfStackFrames(layoutPdfPages(sizes, annotatePageWidthRef.current, marksStamp), marksStamp, PAGE_GAP, PDF_DOC_PAD_TOP);
         const marks = remapPdfFootnotes(annotateFootnotesRef.current, from, frames, annotatePageWidthRef.current);
         annotateFootnotesRef.current = marks;
         setAnnotateFootnotesRaw(marks);
@@ -4045,6 +4062,7 @@ export const Workspace = memo(function Workspace({
               .then(() => getInkPages(annotateDocKey(existing.id)))
               .catch(() => new Map<number, EncodedInk>())
           : null;
+        let restoredInkSpread = existing ? pdfInkSpreadStamp(existing.board) : null;
 
         /*
          * The bytes go in before anything is restored over them.
@@ -4334,13 +4352,17 @@ export const Workspace = memo(function Workspace({
         if (existing) {
           const handle = boardRef.current;
           const restore = async () => {
+            handle?.setInkSpread(restoredInkSpread);
+            const shards = inkShards ? await inkShards : new Map<number, EncodedInk>();
+            if (workspaceLoadGenRef.current !== loadGen) return;
+            restoredInkSpread = pdfInkRestoreSpread(shards, restoredInkSpread);
+            handle?.setInkSpread(restoredInkSpread);
             if (handle) await restoreInk(handle, annotateDocKey(existing.id), existing.board, {
               paint: false,
-              shards: inkShards,
+              shards: Promise.resolve(shards),
             });
             // Which layout that ink was written in, if the copy says; checked
             // against this device's once the pages are laid out, below.
-            handle?.setInkSpread(pdfInkSpreadStamp(existing.board));
             traceOpen("ink restored", { ms: openMs() });
           };
           if (docType === "pdf") {
@@ -4502,6 +4524,9 @@ export const Workspace = memo(function Workspace({
         }
         if (inkRestored) await inkRestored;
         if (workspaceLoadGenRef.current !== loadGen) return;
+        if (restoredInkSpread != null && docType === "pdf") {
+          reconcilePdfInkLayout(restoredInkSpread, loadGen, pdfInkSpreadStamp(existing?.board) ?? restoredInkSpread);
+        }
         await boardRef.current?.primeInkSnap();
         traceOpen("ink snap primed", { ms: openMs() });
         releasePdfExtras?.();
@@ -4585,8 +4610,6 @@ export const Workspace = memo(function Workspace({
         if (workspaceLoadGenRef.current !== loadGen) return;
         relandPdf();
         scheduleIdlePadSyncPing(client, { emit: false });
-        const stamp = existing ? pdfInkSpreadStamp(existing.board) : null;
-        if (stamp != null && input.docType === "pdf") reconcilePdfInkLayout(stamp, loadGen);
 
         /*
          * Bytes used to be pushed to the hub here, right after open. The

@@ -353,12 +353,13 @@ export interface BoardHandle {
    * Move ink from one-up sheet space onto stacked two-up slots (or back).
    * Call after PdfDocument has published the new reading frames.
    */
-  remapPdfInkAcrossPdfLayout(fromFrames: readonly PageFrame[]): void;
+  remapPdfInkAcrossPdfLayout(fromFrames: readonly PageFrame[]): boolean;
   /**
    * The layout restored PDF ink is in, from the copy's `pdfSpread` stamp; null
    * when it is in the layout on screen. See `inkSpreadRef` in Board.
    */
   setInkSpread(spread: boolean | null): void;
+  isPdfInkLayoutPending(): boolean;
   /**
    * Reopen camera: PDF jumps to the saved page at today's fit zoom;
    * single-page docs restore scroll/zoom as written.
