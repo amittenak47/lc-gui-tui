@@ -20,6 +20,7 @@
  * than "stops responding".
  */
 
+import { registerInkTileWork } from "./inkSettled";
 import { dedupeInkOps } from "./inkOpsDedupe";
 import {
   applyInkOp,
@@ -401,6 +402,13 @@ export class InkTileCache {
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private persistInFlight = false;
 
+  private unregisterWork: () => void = () => {};
+
+  /** Tiles queued, in flight or being hydrated: see `inkSettled`. */
+  get inkBusy(): boolean {
+    return !this.suspended && (this.pending.length > 0 || this.inflight.size > 0 || this.hydrating);
+  }
+
   constructor(options: InkTileCacheOptions = {}) {
     this.tilePx = options.tilePx ?? TILE_PX;
     this.onTilesReady = options.onTilesReady;
@@ -419,6 +427,7 @@ export class InkTileCache {
     this.pause = options.pause ?? (() => false);
     this.useWorker = options.useWorker === true;
     this.persist = options.persist === true;
+    this.unregisterWork = registerInkTileWork(this);
   }
 
   /** Whether any stroke this square would paint reaches it — as `paintInkTile` picks them. */
@@ -803,6 +812,7 @@ export class InkTileCache {
   }
 
   dispose(): void {
+    this.unregisterWork();
     if (this.persistTimer != null) clearTimeout(this.persistTimer);
     this.persistTimer = null;
     this.persistQueue.clear();

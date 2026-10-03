@@ -33,6 +33,7 @@
  * pagefile clears the spans (the bitmap is gone, so they would be a lie).
  */
 
+import { waitForInkSettled } from "../canvas/inkSettled";
 import { traceOpen } from "../util/messageOf";
 import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -553,6 +554,9 @@ function releasePagePixels(
 
 /** How long a parked book keeps its sharp pages before giving them back. */
 export const PARKED_TRIM_MS = 5_000;
+
+/** Longest the text layer waits for ink to finish painting. */
+const TEXT_AFTER_INK_CAP_MS = 3000;
 
 export function PdfDocument({
   filmScope,
@@ -1419,6 +1423,10 @@ export function PdfDocument({
       const claim = startPdfTextFillClaim(textFilledRef.current, n);
       const closeJob = openBackgroundJob(`pdf-text:${n}`);
       try {
+        // Ink first: the text layer measures every word on the UI thread
+        // (seconds on a dense page) and froze the screen before the
+        // handwriting showed. A selection the reader is making does not wait.
+        if (!ignoreLive) await waitForInkSettled(TEXT_AFTER_INK_CAP_MS);
         await yieldToInput();
         if (disposedRef.current || (!ignoreLive && renderBusy())) {
           claim.settle(false);
