@@ -749,7 +749,11 @@ const TILE_GESTURE_SPRING = {type: "spring" as const, stiffness: 520, damping: 1
  * out on the page's thread each frame, and coming Home that thread is still
  * busy with the tab just left, so the tiles arrived in uneven steps.
  */
-function homeTileMotion(visible: boolean, reduced: boolean, delay: number, interactive = true) {
+/**
+ * `hoverScale`: a full-width tile grows by fewer percent, so its lift stays in
+ * Home's side padding instead of being clipped by the scrolling container.
+ */
+function homeTileMotion(visible: boolean, reduced: boolean, delay: number, interactive = true, hoverScale = 1.035) {
   return {
     initial: reduced ? false as const : {opacity:0,transform:"translateY(44px) scale(0.8)"},
     animate: visible
@@ -759,7 +763,7 @@ function homeTileMotion(visible: boolean, reduced: boolean, delay: number, inter
       ? {default:{...TILE_SPRING,delay}, opacity:{duration:.14,delay}}
       : {duration:.12},
     // Gestures only run on a visible, motion-enabled Home whose tiles take taps.
-    whileHover: reduced || !visible || !interactive ? undefined : {transform:"translateY(-3px) scale(1.035)",transition:TILE_GESTURE_SPRING},
+    whileHover: reduced || !visible || !interactive ? undefined : {transform:`translateY(-3px) scale(${hoverScale})`,transition:TILE_GESTURE_SPRING},
     whileTap: reduced || !visible || !interactive ? undefined : {transform:"translateY(0px) scale(0.94)",transition:TILE_GESTURE_SPRING},
   };
 }
@@ -797,7 +801,7 @@ function HomeCard({ mode, busy, active, delay }: { mode: HomeMode; busy: boolean
   }, [scene]);
   return (
     <motion.span className="lc-home-cell" data-mode={mode.id}
-      {...homeTileMotion(active, !!reduced, delay, !busy)}>
+      {...homeTileMotion(active, !!reduced, delay, !busy, mode.id === "whiteboard" ? 1.012 : 1.035)}>
       <button
         ref={cardRef}
         type="button"
