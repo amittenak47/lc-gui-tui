@@ -106,7 +106,10 @@ export async function rasterInkTileOffThread(
       tx: job.tx,
       ty: job.ty,
     };
-    timer = setTimeout(() => finish(null), 4000);
+    // Null makes the caller paint the tile on the UI thread while the worker
+    // may still be painting it: the same tile twice, and a stall. Only give up
+    // on a worker that has stopped answering.
+    timer = setTimeout(() => finish(null), 15_000);
     try { target.postMessage(payload); }
     catch (error) { failWorker(error); }
   }).catch(() => null);

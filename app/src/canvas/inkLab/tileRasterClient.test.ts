@@ -57,7 +57,7 @@ it("reuses two alternating pane histories and resends an evicted history", async
 
 it("closes late bitmaps after timeout instead of retaining GPU resources", async () => {
   const { result } = await send([]);
-  await vi.advanceTimersByTimeAsync(4000);
+  await vi.advanceTimersByTimeAsync(15_000);
   expect(await result).toBeNull();
   const close = vi.fn();
   reply({ close } as unknown as ImageBitmap);

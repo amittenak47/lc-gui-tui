@@ -27,7 +27,18 @@ export type InkTilePaintResult = {
   sdfMs: number;
 };
 
+/** Each op's padded bounds, once: every tile used to rescan every point of every op. */
+const paintBoundsCache = new WeakMap<InkOp, SceneBounds>();
+
 function paintBounds(op: InkOp): SceneBounds {
+  const known = paintBoundsCache.get(op);
+  if (known) return known;
+  const bounds = measurePaintBounds(op);
+  paintBoundsCache.set(op, bounds);
+  return bounds;
+}
+
+function measurePaintBounds(op: InkOp): SceneBounds {
   const pad =
     op.kind === "erase"
       ? op.radius

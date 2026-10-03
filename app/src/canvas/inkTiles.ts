@@ -20,6 +20,7 @@
  * than "stops responding".
  */
 
+import { dedupeInkOps } from "./inkOpsDedupe";
 import {
   applyInkOp,
   applyInkOpInHost,
@@ -980,7 +981,7 @@ export class InkTileCache {
     const generation = this.workerGeneration;
     // The client uses identity to decide whether to send history. Appends and
     // geometry edits must get a fresh snapshot, even if this.ops was mutated.
-    const ops = this.workerOps ?? (this.workerOps = this.ops.slice());
+    const ops = this.paintOpsSnapshot();
     const clip = this.clip;
     void import("./inkLab/tileRasterClient")
       .then((mod) =>
@@ -1018,6 +1019,17 @@ export class InkTileCache {
           this.idleHandle = this.schedule(() => this.runPending());
         }
       });
+  }
+
+  /**
+   * What tiles draw: the ops with exact duplicate strokes dropped. A book
+   * whose merges concatenated both sides held each stroke ~80 times, and
+   * every tile painted all of them. The book still holds every copy, so an
+   * eraser still takes them all. Rebuilt after any change, from cached
+   * fingerprints. Also a fresh snapshot for the worker, as before.
+   */
+  private paintOpsSnapshot(): readonly InkOp[] {
+    return this.workerOps ?? (this.workerOps = dedupeInkOps(this.ops));
   }
 
   private invalidateWorkerHistory(): void {
@@ -1131,7 +1143,7 @@ export class InkTileCache {
     paintInkTile(
       ctx,
       {
-        ops: this.ops,
+        ops: this.paintOpsSnapshot(),
         clip: this.clip,
         level,
         tx,
