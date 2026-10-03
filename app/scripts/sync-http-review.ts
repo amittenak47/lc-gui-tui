@@ -35,6 +35,20 @@ let requests:string[]=[];
 let skewMs=0;
 let useHubSince=false;
 let hubSince=0;
+// Network faults on one ink page's upload: a hub error, a reply lost after
+// the hub saved the page, or a request that never answers.
+type Fault={kind:"error500"|"lostAck"|"hang";page:number};
+let fault:Fault|null=null;
+const hung:Array<()=>void>=[];
+let pending:Promise<string>|null=null;
+function inkPageOf(url:string,init?:RequestInit):number|null {
+  const get=url.match(new RegExp(`/pads/ink/annotate/${id}/(\\d+)$`));
+  if(get) return Number(get[1]);
+  if(url.endsWith("/pads/ink")&&typeof init?.body==="string") {
+    try {const body=JSON.parse(init.body); if(body.key===id) return Number(body.page_id);} catch { /* not ink */ }
+  }
+  return null;
+}
 window.fetch = async (input,init) => {
   const url=String(input); requests.push(url);
   if(failAssets && url.endsWith("/pads/artifact-assets/lookup")) throw new Error("Simulated attachment connection loss");
@@ -42,6 +56,11 @@ window.fetch = async (input,init) => {
   if (corruptPage != null && url.endsWith(`/pads/ink/annotate/${id}/${corruptPage}`)) {
     const response=await nativeFetch(input,init);
     return new Response(JSON.stringify({...await response.json(),gz:"YQ=="}),{headers:{"Content-Type":"application/json"}});
+  }
+  if(fault&&(init?.method??"GET")==="PUT"&&inkPageOf(url,init)===fault.page) {
+    if(fault.kind==="error500") return new Response("Simulated hub error",{status:500});
+    if(fault.kind==="lostAck") {await nativeFetch(input,init); throw new Error("Simulated reply lost after the hub saved the page");}
+    await new Promise<void>(resolve=>hung.push(resolve));
   }
   return nativeFetch(input,init);
 };
@@ -101,6 +120,17 @@ const api = {
   },
   async editPage(page:number,color:string) {await putInkPages(annotateDocKey(id),[[page,ink(page,color)]],{now:Date.now()+skewMs});},
   async setClock(skew:number,hubSinceMode:boolean) {skewMs=skew;useHubSince=hubSinceMode;},
+  async setFault(kind:Fault["kind"]|null,page=0) {fault=kind?{kind,page}:null;},
+  /** Push, but report back after `ms` even if the walk is still waiting. */
+  async pushWithin(ms:number) {
+    pending=api.push().then(()=>"done",(error)=>`error: ${error instanceof Error?error.message:String(error)}`);
+    return Promise.race([pending,new Promise<string>(resolve=>setTimeout(()=>resolve("still waiting"),ms))]);
+  },
+  async releaseHung() {fault=null;const count=hung.length;hung.splice(0).forEach(resolve=>resolve());return {count,result:await pending};},
+  async pageState(page:number) {
+    const row=(await getInkPageRecords(annotateDocKey(id),{metadataOnly:true,strict:true})).find(r=>r.pageId===page);
+    return row?{dirty:Boolean(row.dirty),synced:row.syncedUpdatedAt===row.updatedAt}:null;
+  },
   async pageColor(page:number) {
     const row=await getInkPage(annotateDocKey(id),page);
     // Encoded ops keep their colour under `c`.

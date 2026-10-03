@@ -1,5 +1,5 @@
 // From app/: node scripts/sync-http-review.mjs
-// First compile the isolated hub from the repo root:
+// First compile the isolated hub from the repo root (rebuild after editing examples/sync_review_hub.rs):
 // cargo build --no-default-features --example sync_review_hub
 // Real IndexedDB in two isolated Chrome profiles; never opens the user's app data.
 import { spawn } from "node:child_process";
@@ -63,10 +63,28 @@ async function browser(label) {
     crash: async () => { await send("Page.crash").catch(() => {}); },
     reload: async () => { await evaluate("delete window.artifactChecks"); await send("Page.reload"); await sleep(200); await ready(); } };
 }
-const hub = spawn(resolve("../target/debug/examples/sync_review_hub.exe"), [resolve(`../.tmp-phase3-checks/http-hub-${process.pid}`)],
-  { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-children.push(hub);
-let hubError="";hub.stderr.on("data", data=>{hubError+=data;});
+const hubDir = resolve(`../.tmp-phase3-checks/http-hub-${process.pid}`);
+let hub, hubError = "";
+// Restartable, so a check can take the hub down mid-sync and bring it back on the same data.
+let hubStarts = 0;
+function startHub() {
+  const args = hubStarts++ === 0 ? [hubDir] : [hubDir, "--restart"];
+  hub = spawn(resolve("../target/debug/examples/sync_review_hub.exe"), args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  children.push(hub);
+  hub.stderr.on("data", data => { hubError += data; });
+}
+async function hubReady() {
+  for (let i = 0; i < 150; i++) {
+    if (hub.exitCode !== null) throw new Error(hubError || "Test hub exited");
+    try { await fetch("http://127.0.0.1:1458/health", { signal: AbortSignal.timeout(1000) }); return; } catch { await sleep(100); }
+  }
+  throw new Error("Test hub did not come back");
+}
+async function stopHub() {
+  hub.kill();
+  for (let i = 0; i < 50 && hub.exitCode === null && hub.signalCode === null; i++) await sleep(100);
+}
+startHub();
 try {
   for(let i=0;i<150;i++) {
     if(hub.exitCode!==null)throw new Error(hubError || "Test hub exited");
@@ -193,6 +211,46 @@ try {
   console.log("PASS skew control: with correct clocks the same new-page race is offered as a conflict");
   await b.call("keepServer",51);
   await b.call("setClock",0,false);await a.call("setClock",0,false);
+  // Network faults on uploads from B.
+  await b.call("editPage",22,"#b02222");
+  await b.call("setFault","error500",22);
+  assert.match(await b.call("pushWithin",15000),/^error: /);
+  assert.equal((await b.call("pageState",22)).synced,false,"a failed upload marked the page synced");
+  await b.call("setFault",null);await b.call("push");await a.call("pull");
+  assert.equal(await a.call("pageColor",22),"#b02222");
+  console.log("PASS fault: a hub error on upload keeps the page unsynced, and the retry delivers it");
+  await b.call("editPage",23,"#b02323");
+  await b.call("setFault","lostAck",23);
+  assert.match(await b.call("pushWithin",15000),/^error: .*reply lost/);
+  await b.call("setFault",null);
+  const afterLostAck=await b.call("pushWithin",15000);
+  if(afterLostAck==="done") {
+    assert.equal((await b.call("pageState",23)).synced,true,"retry after a lost reply left the page unsynced");
+    await a.call("pull");
+    assert.equal(await a.call("pageColor",23),"#b02323");
+    console.log("PASS fault: hub saved the page but the reply was lost; the retry recognises its own copy and converges");
+  } else console.log(`FINDING fault: hub saved the page but the reply was lost; the retry fails (${afterLostAck})`);
+  await b.call("editPage",24,"#b02424");
+  await b.call("setFault","hang",24);
+  const hang=await b.call("pushWithin",20000);
+  if(hang==="still waiting") console.log("FINDING fault: an upload the hub never answers keeps the sync waiting with no timeout (still waiting after 20 s)");
+  else console.log(`PASS fault: a hung upload ends the sync (${hang})`);
+  const released=await b.call("releaseHung");
+  assert.equal(released.result,"done",`released upload did not finish: ${released.result}`);
+  await a.call("pull");
+  assert.equal(await a.call("pageColor",24),"#b02424");
+  console.log("PASS fault: once the hung request is answered, the sync completes and converges");
+  await b.call("editPage",26,"#b02626");
+  await b.call("setFault","hang",26);
+  assert.equal(await b.call("pushWithin",2000),"still waiting");
+  await stopHub();
+  const midWalk=await b.call("releaseHung");
+  assert.match(midWalk.result,/^error: /,"an upload to a stopped hub reported success");
+  assert.equal((await b.call("pageState",26)).synced,false,"an upload lost with the hub was marked synced");
+  startHub();await hubReady();
+  await b.call("push");await a.call("pull");
+  assert.equal(await a.call("pageColor",26),"#b02626");
+  console.log("PASS fault: hub restarted mid-sync; the edit stays local and unsynced, then converges after the restart");
   const heaps=[];
   for(let i=0;i<5;i++) {
     await a.call("pull");await b.call("pull");
