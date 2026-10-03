@@ -75,12 +75,14 @@ export function placePdfInkPoint(
   frames: readonly PageFrame[],
   originX: number,
   width: number,
+  /** Off: a point in a margin or gap keeps its distance from the sheet. */
+  clamp = true,
 ): { x: number; y: number } | null {
   if (!(width > 0)) return null;
   const pair = pairForPage(frames, located.pageId);
   if (pair.length === 0) return null;
-  const nx = Math.min(1, Math.max(0, located.nx));
-  const ny = Math.min(1, Math.max(0, located.ny));
+  const nx = clamp ? Math.min(1, Math.max(0, located.nx)) : located.nx;
+  const ny = clamp ? Math.min(1, Math.max(0, located.ny)) : located.ny;
   if (pair.length >= 2) {
     const ordered = [...pair].sort((a, b) => a.minY - b.minY);
     const slot = located.half === "right" ? ordered[1]! : ordered[0]!;
@@ -104,10 +106,12 @@ function mapPoint(
   to: readonly PageFrame[],
   originX: number,
   width: number,
+  toWidth = width,
+  clamp = true,
 ): ScenePoint {
   const located = locatePdfInkPoint(point.x, point.y, from, originX, width);
   if (!located) return point;
-  const placed = placePdfInkPoint(located, to, originX, width);
+  const placed = placePdfInkPoint(located, to, originX, toWidth, clamp);
   if (!placed) return point;
   return { ...point, x: placed.x, y: placed.y };
 }
@@ -122,8 +126,12 @@ function cloneOpWithPoints(op: InkOp, points: ScenePoint[], scale: number): InkO
 
 /**
  * Map ops from one PDF stack onto another. No-op when both layouts are the
- * same mode (one-up vs two-up). A stroke that crossed the sheet gutter becomes
- * two ops so spread-on does not draw a line down the seam.
+ * same mode (one-up vs two-up) at the same width. A stroke that crossed the
+ * sheet gutter becomes two ops so spread-on does not draw a line down the seam.
+ *
+ * `toWidth` lets the two stacks differ in column width too (another device's
+ * layout); `clamp: false` keeps margin and gap ink where it was relative to
+ * its sheet; `keepIds` keeps a stroke's identity when it is not cut in two.
  */
 export function remapInkBetweenPdfLayouts(
   ops: readonly InkOp[],
@@ -131,12 +139,19 @@ export function remapInkBetweenPdfLayouts(
   to: readonly PageFrame[],
   originX: number,
   width: number,
+  opts: { toWidth?: number; clamp?: boolean; keepIds?: boolean } = {},
 ): InkOp[] {
   if (ops.length === 0) return [];
   if (from.length === 0 || to.length === 0) return ops.slice();
-  if (pdfLayoutIsSpread(from) === pdfLayoutIsSpread(to)) return ops.slice();
-  const expanding = !pdfLayoutIsSpread(from);
-  const scale = expanding ? 2 : 0.5;
+  const toWidth = opts.toWidth ?? width;
+  const clamp = opts.clamp ?? true;
+  const fromSpread = pdfLayoutIsSpread(from);
+  const toSpread = pdfLayoutIsSpread(to);
+  if (fromSpread === toSpread && toWidth === width) return ops.slice();
+  // Only going from whole sheets to split ones can cut a stroke at the gutter.
+  const expanding = !fromSpread && toSpread;
+  // A split half is drawn a full column wide: one sheet spans 2w, not w.
+  const scale = ((toSpread ? 2 : 1) * toWidth) / ((fromSpread ? 2 : 1) * width);
 
   const out: InkOp[] = [];
   for (const op of ops) {
@@ -146,8 +161,11 @@ export function remapInkBetweenPdfLayouts(
     }
     let chunk: ScenePoint[] = [];
     let key = "";
+    const firstOut = out.length;
     const targetKey = (point: ScenePoint) => {
-      const destination = locatePdfInkPoint(point.x, point.y, to, originX, width);
+      // Only a change of split mode cuts strokes; a width change moves them whole.
+      if (fromSpread === toSpread) return "";
+      const destination = locatePdfInkPoint(point.x, point.y, to, originX, toWidth);
       return destination ? `${destination.pageId}:${expanding ? destination.half : "whole"}` : "";
     };
     const flush = () => {
@@ -155,7 +173,7 @@ export function remapInkBetweenPdfLayouts(
       const next = cloneOpWithPoints(op, chunk, scale);
       if (op.kind === "draw" && op.blotHalts && next.kind === "draw") {
         next.blotHalts = op.blotHalts.flatMap(halt => {
-          const point = mapPoint({...halt,pressure:halt.pressure ?? .5},from,to,originX,width);
+          const point = mapPoint({...halt,pressure:halt.pressure ?? .5},from,to,originX,width,toWidth,clamp);
           return targetKey(point) === key ? [{...halt,x:point.x,y:point.y}] : [];
         });
       }
@@ -164,7 +182,7 @@ export function remapInkBetweenPdfLayouts(
     };
     let previous: ScenePoint | null = null;
     for (const point of op.points) {
-      const mapped = mapPoint(point, from, to, originX, width);
+      const mapped = mapPoint(point, from, to, originX, width, toWidth, clamp);
       const nextKey = targetKey(mapped);
       if (chunk.length > 0 && nextKey !== key) {
         const a = previous && locatePdfInkPoint(previous.x, previous.y, from, originX, width);
@@ -180,8 +198,8 @@ export function remapInkBetweenPdfLayouts(
               ? { radius: previous.radius + (point.radius - previous.radius) * t } : {}),
           };
           const ny = a.ny + (b.ny - a.ny) * t;
-          const end = placePdfInkPoint({ ...a, nx: a.half === "left" ? 1 : 0, ny }, to, originX, width)!;
-          const start = placePdfInkPoint({ ...b, nx: b.half === "left" ? 1 : 0, ny }, to, originX, width)!;
+          const end = placePdfInkPoint({ ...a, nx: a.half === "left" ? 1 : 0, ny }, to, originX, toWidth, clamp)!;
+          const start = placePdfInkPoint({ ...b, nx: b.half === "left" ? 1 : 0, ny }, to, originX, toWidth, clamp)!;
           chunk.push({ ...edge, ...end });
           flush();
           chunk.push({ ...edge, ...start });
@@ -192,6 +210,7 @@ export function remapInkBetweenPdfLayouts(
       previous = point;
     }
     flush();
+    if (opts.keepIds && out.length === firstOut + 1) out[firstOut] = { ...out[firstOut]!, id: op.id, seq: op.seq } as InkOp;
   }
   return out;
 }

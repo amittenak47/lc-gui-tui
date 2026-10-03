@@ -77,6 +77,17 @@ export function loadPdfPageSizes(hash: string | null | undefined, numPages: numb
   }
 }
 
+/** The sizes cached for this file, however many pages it has. */
+export function cachedPdfPageSizes(hash: string | null | undefined): PdfPageSize[] | null {
+  if (!hash) return null;
+  try {
+    const raw = localStorage.getItem(PREFIX + hash);
+    return raw ? decodePageSizes(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function savePdfPageSizes(hash: string | null | undefined, sizes: readonly PdfPageSize[]): void {
   if (!hash || sizes.length === 0) return;
   try {

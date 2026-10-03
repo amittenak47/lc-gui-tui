@@ -24,6 +24,7 @@ import { Tip } from "./Tip";
 import "./hubConflictSplit.css";
 import { ConflictPagePreview } from "./ConflictPagePreview";
 import { conflictDocumentWidth, inkSpreadOf } from "./conflictDocumentLayout";
+import { localizeHubInkDto } from "../util/pdfInkLayout";
 import { compareConflictInk, inkPageHasStrokes } from "./conflictInkCompare";
 import { showNotification } from "../util/notifications";
 import { inkOpsFrom } from "../canvas/inkCodec";
@@ -671,7 +672,8 @@ export function HubConflictSplit({
     const load = fetchPreviewInk ?? (client ? async (pageId: number) => {
       const [local, server] = await Promise.all([
         localInkAsDtos(conflict.kind, conflict.id, [pageId]),
-        client.getInkPage(conflict.kind, conflict.id, pageId),
+        client.getInkPage(conflict.kind, conflict.id, pageId)
+          .then(row => row ? localizeHubInkDto(client, row) : row),
       ]);
       return {local,server};
     } : null);
@@ -1474,7 +1476,9 @@ export function HubConflictSplit({
                 ? (body as AnnotatePadDto).source
                 : undefined
             }
-            sceneWidth={conflict.kind === "annotate" ? conflictDocumentWidth(body, sceneWidth) : sceneWidth}
+            // Both sides are in this device's layout: hub pages are moved into it
+            // on arrival (util/pdfInkLayout.ts), whatever the other copy's width.
+            sceneWidth={conflict.kind === "annotate" ? conflictDocumentWidth(conflict.local, sceneWidth) : sceneWidth}
             pageFrames={listFrames.length > 0 ? listFrames : pageFrames}
             pageCount={
               conflict.kind === "whiteboard"
@@ -1493,7 +1497,7 @@ export function HubConflictSplit({
             // side, is most of what made this window slow to open.
             selectedPageOnly
             revealInk={revealInk}
-            inkSpread={conflict.kind === "annotate" ? (inkSpreadOf(body) ?? localSpread) : false}
+            inkSpread={conflict.kind === "annotate" ? (inkSpreadOf(conflict.local) ?? localSpread) : false}
           />
           <div className="lc-hub-conflict-dock" data-open={listOpen}>
           <button

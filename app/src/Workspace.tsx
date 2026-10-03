@@ -420,6 +420,7 @@ import {
   applyInkChoice,
   applyInkChoicesByPage,
   fetchHubInkPages,
+  localizePendingPdfInk,
   remintFootnoteInk,
 } from "./util/inkSync";
 import { resolveSolutionSource } from "./util/solutionTemplate";
@@ -4036,8 +4037,13 @@ export const Workspace = memo(function Workspace({
         const sessionDocId = input.docId ?? existing?.id ?? freshAnnotateId();
         // The ink, read and unpacked while the page is prepared: it is waited
         // for only once the template is up, and was a second of the open.
+        // Pages another device sent before this one could place them are moved
+        // into this device's layout first, so the board only reads its own.
         const inkShards = existing
-          ? getInkPages(annotateDocKey(existing.id)).catch(() => new Map<number, EncodedInk>())
+          ? localizePendingPdfInk(existing.id, client)
+              .catch(() => 0)
+              .then(() => getInkPages(annotateDocKey(existing.id)))
+              .catch(() => new Map<number, EncodedInk>())
           : null;
 
         /*

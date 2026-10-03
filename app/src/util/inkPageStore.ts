@@ -35,6 +35,11 @@ export interface InkPageRecord {
   /** Authored revision last exchanged with the hub (independent of gzip/save). */
   syncedUpdatedAt?: number;
   /**
+   * A PDF page that came from the hub before this device could place it in
+   * its own layout (page sizes not known yet). See `localizePendingPdfInk`.
+   */
+  layoutPending?: boolean;
+  /**
    * The archive's {@link InkPageSummary}, so opening needs to unpack only the
    * pages read. Stamped with the archive's length: a row whose `gz` was
    * replaced without it reads as having none.
@@ -295,6 +300,7 @@ export async function getInkPageRecords(docKey: string, opts: { metadataOnly?: b
           rows.push(opts.metadataOnly ? {
             v: value.v, docKey: value.docKey, pageId: value.pageId,
             dirty: value.dirty, updatedAt: value.updatedAt, syncedUpdatedAt: value.syncedUpdatedAt,
+            ...(value.layoutPending ? { layoutPending: true } : {}),
           } : value);
         }
       };

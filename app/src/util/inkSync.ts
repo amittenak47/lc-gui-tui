@@ -35,6 +35,17 @@ import {
 import { STORE_INK_PAGES, withStore } from "./idb";
 import { bytesFromMaybeGzip, gzipBytes } from "./gzip";
 import {
+  convertPdfInkOps,
+  hubPdfWidth,
+  localizeHubInkDto,
+  pdfInkContext,
+  sourcePdfInkLayout,
+  tagOutgoingPdfInk,
+  type LocalizedInkPageDto,
+  type PdfInkContext,
+} from "./pdfInkLayout";
+import { getAnnotateDoc } from "./annotateStore";
+import {
   decodeInkOps,
   encodeInkOps,
   packEncodedInk,
@@ -348,11 +359,38 @@ export async function fetchHubInkPages(
         }
       }
     }));
-    return rows.filter((row): row is InkPageDto => row != null);
+    return await localizeHubRows(client, kind, key, rows.filter((row): row is InkPageDto => row != null));
   } catch (cause) {
     if (opts.strict) throw cause;
     return null;
   }
+}
+
+/**
+ * Hub pages of a PDF, in this device's layout. Sheet pages go first so the
+ * spanning page (0) can borrow the layout they turned out to be in.
+ */
+async function localizeHubRows(
+  client: LcClient,
+  kind: InkPadKind,
+  key: string,
+  rows: InkPageDto[],
+): Promise<LocalizedInkPageDto[]> {
+  const ctx = await padPdfContext(kind, key);
+  if (!ctx) return rows;
+  const out = new Map<InkPageDto, LocalizedInkPageDto>();
+  for (const row of spanningLast(rows)) out.set(row, await localizeHubInkDto(client, row, ctx));
+  return rows.map((row) => out.get(row) ?? row);
+}
+
+/** This device's layout for an annotate pad, when it is a PDF it can place. */
+async function padPdfContext(kind: InkPadKind, key: string): Promise<PdfInkContext | null> {
+  return kind === "annotate" && !splitFootnoteInkHubKey(key) ? pdfInkContext(key) : null;
+}
+
+/** Sheet pages before the spanning page, which places itself by them. */
+function spanningLast<T extends { page_id: number }>(rows: readonly T[]): T[] {
+  return [...rows].sort((a, b) => (a.page_id === 0 ? 1 : 0) - (b.page_id === 0 ? 1 : 0));
 }
 
 /**
@@ -1114,6 +1152,58 @@ async function gzOf(row: InkPageRecord): Promise<Uint8Array<ArrayBuffer> | null>
   }
 }
 
+/**
+ * A page's bytes for the hub, tagged with the layout they are in. A page still
+ * waiting to be placed here goes as it came.
+ */
+async function outgoingGz(row: InkPageRecord, ctx: PdfInkContext | null): Promise<Uint8Array<ArrayBuffer> | null> {
+  const gz = await gzOf(row);
+  if (!gz || row.layoutPending) return gz;
+  return tagOutgoingPdfInk(gz, ctx);
+}
+
+/**
+ * Move a PDF's hub pages that arrived before this device knew its page sizes
+ * into this device's layout. Run as the document opens, before its ink is
+ * read, so the board only ever sees its own layout.
+ */
+export async function localizePendingPdfInk(docId: string, client?: LcClient | null): Promise<number> {
+  const docKey = annotateDocKey(docId);
+  const pending = (await getInkPageRecords(docKey, { metadataOnly: true }).catch(() => []))
+    .filter((row) => row.layoutPending);
+  if (pending.length === 0) return 0;
+  const ctx = await pdfInkContext(docId);
+  const doc = ctx ? null : await Promise.resolve().then(() => getAnnotateDoc(docId)).catch(() => null);
+  // Not a PDF (markdown, EPUB): there is no sheet layout to place, only a flag to drop.
+  const notPdf = !ctx && doc != null && doc.docType !== "pdf";
+  if (!ctx && !notPdf) return 0;
+  let moved = 0;
+  for (const meta of [...pending].sort((a, b) => (a.pageId === 0 ? 1 : 0) - (b.pageId === 0 ? 1 : 0))) {
+    const row = await getInkPageRecord(docKey, meta.pageId);
+    if (!row?.layoutPending) continue;
+    let gz = row.gz;
+    if (ctx) {
+      const encoded = await encodedFromRecord(row);
+      if (!encoded) continue;
+      const ops = decodeInkOps(encoded);
+      const from = await sourcePdfInkLayout(docId, encoded, row.pageId, ops, ctx, await hubPdfWidth(client, docId));
+      gz = await gzipBytes(packEncodedInk(encodeInkOps(convertPdfInkOps(ops, from, ctx.layout, ctx.sizes))));
+    }
+    const next: InkPageRecord = { ...row, gz, inkC: undefined, sum: undefined };
+    delete next.layoutPending;
+    await withStore(STORE_INK_PAGES, "readwrite", (store) => {
+      const key = inkPageKey(docKey, row.pageId);
+      const request = store.get(key);
+      request.onsuccess = () => {
+        const current = request.result as InkPageRecord | undefined;
+        if (current?.updatedAt === row.updatedAt && current.layoutPending) store.put(next, key);
+      };
+    });
+    moved++;
+  }
+  return moved;
+}
+
 /** A refused write is not an acknowledgement; a lost response can be retried safely. */
 async function putConfirmedInkPage(client: LcClient, page: InkPageDto): Promise<void> {
   const ack = await client.putInkPage(page);
@@ -1128,7 +1218,7 @@ async function putConfirmedInkPage(client: LcClient, page: InkPageDto): Promise<
 
 async function writeInkPage(
   docKey: string,
-  page: { page_id: number; updated_at: number; gz: string },
+  page: { page_id: number; updated_at: number; gz: string; localized?: true },
   expected?: InkPageRecord | null,
   acknowledged = false,
 ): Promise<void> {
@@ -1144,6 +1234,8 @@ async function writeInkPage(
     dirty: false,
     updatedAt: page.updated_at,
     syncedUpdatedAt: acknowledged ? page.updated_at : 0,
+    // A document page from the hub that is not yet in this device's layout.
+    ...(acknowledged && !page.localized && docKey.startsWith("md:") ? { layoutPending: true } : {}),
   };
   let changed = false;
   await withStore(STORE_INK_PAGES, "readwrite", (store) => {
@@ -1205,7 +1297,8 @@ export async function pullInkPagesOverLocal(
   const localBy = new Map((await getInkPageRecords(docKey, { metadataOnly: true, strict: true }))
     .map((row) => [row.pageId, row]));
   let written = 0;
-  for (const digest of byId.values()) {
+  const ctx = await padPdfContext(kind, key);
+  for (const digest of spanningLast([...byId.values()])) {
     if (missingOnly && localBy.has(digest.page_id)) continue;
     const full = await client.getInkPage(kind, key, digest.page_id);
     if (!full?.gz) throw new Error(`Ink page ${digest.page_id} was missing from the hub download`);
@@ -1213,7 +1306,7 @@ export async function pullInkPagesOverLocal(
       throw new Error(`Ink page ${digest.page_id} changed on the hub. Sync again.`);
     }
     if (!(await encodedFromGzB64(full.gz))) throw new Error(`Ink page ${digest.page_id} could not be read`);
-    await writeInkPage(docKey, full, localBy.get(digest.page_id) ?? null, true);
+    await writeInkPage(docKey, await localizeHubInkDto(client, full, ctx), localBy.get(digest.page_id) ?? null, true);
     written++;
   }
   return written;
@@ -1226,9 +1319,10 @@ export async function pushInkPagesToHub(
   key: string,
 ): Promise<number> {
   const localRows = await getInkPageRecords(inkDocKey(kind, key));
+  const ctx = await padPdfContext(kind, key);
   let pushed = 0;
   for (const row of localRows) {
-    const gz = await gzOf(row);
+    const gz = await outgoingGz(row, ctx);
     if (!gz) throw new Error(`Ink page ${row.pageId} could not be encoded`);
     await putConfirmedInkPage(client, {
       kind,
@@ -1309,8 +1403,9 @@ export async function syncInkPages(
       return remoteWins(local, row);
     });
 
+    const ctx = await padPdfContext(pad.kind, pad.key);
     if (toPull.length > 0) {
-      for (const digest of toPull) {
+      for (const digest of spanningLast(toPull)) {
         const full = strict
           ? await client.getInkPage(pad.kind, pad.key, digest.page_id)
           : await client.getInkPage(pad.kind, pad.key, digest.page_id).catch(() => null);
@@ -1332,7 +1427,7 @@ export async function syncInkPages(
           if (strict) throw new Error(`Ink page ${digest.page_id} could not be read`);
           continue;
         }
-        await writeInkPage(docKey, full, localBy.get(digest.page_id) ?? null, true);
+        await writeInkPage(docKey, await localizeHubInkDto(client, full, ctx), localBy.get(digest.page_id) ?? null, true);
       }
     }
 
@@ -1350,7 +1445,7 @@ export async function syncInkPages(
         if (strict) throw new Error(`Ink page ${row.pageId} changed before upload. Sync again.`);
         continue;
       }
-      const gz = await gzOf(current);
+      const gz = await outgoingGz(current, ctx);
       if (!gz) {
         if (strict) throw new Error(`Ink page ${row.pageId} could not be encoded`);
         continue;

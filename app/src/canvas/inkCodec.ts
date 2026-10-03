@@ -128,6 +128,18 @@ export interface EncodedInk {
    * than a page in a single step, and there is no such stroke in practice.
    */
   raw?: InkOp[];
+  /**
+   * The PDF layout these scene points were written in, when the page crossed
+   * the hub: the column width and whether sheets were split. Absent on this
+   * device's own pages (they are in its layout). See `util/pdfInkLayout.ts`.
+   */
+  layout?: PdfInkLayout;
+}
+
+/** A PDF reading layout: column width in scene units, and split sheets. */
+export interface PdfInkLayout {
+  w: number;
+  spread: boolean;
 }
 
 /** Real 0..1 → 0..254, with the sentinel kept clear. */
@@ -763,7 +775,7 @@ export function packEncodedInk(encoded: EncodedInk): Uint8Array<ArrayBuffer> {
     ...(op.s != null ? { s: op.s } : {}),
     ...(op.r != null ? { r: op.r } : {}),
   }));
-  const metaBytes = new TextEncoder().encode(JSON.stringify({ meta, raw: encoded.raw }));
+  const metaBytes = new TextEncoder().encode(JSON.stringify({ meta, raw: encoded.raw, ...(encoded.layout ? { layout: encoded.layout } : {}) }));
   let payload = 0;
   for (const op of encoded.ops) {
     payload += op.xy.byteLength + (op.pr?.byteLength ?? 0) + (op.sl?.byteLength ?? 0) + (op.rr?.byteLength ?? 0);
@@ -801,11 +813,12 @@ export function unpackEncodedInk(bytes: Uint8Array): EncodedInk | null {
   if (view.getUint32(4, true) !== 1) return null;
   const metaLen = view.getUint32(8, true);
   if (metaLen < 0 || 12 + metaLen > bytes.length) return null;
-  let parsed: { meta?: PackedOpMeta[]; raw?: InkOp[] };
+  let parsed: { meta?: PackedOpMeta[]; raw?: InkOp[]; layout?: PdfInkLayout };
   try {
     parsed = JSON.parse(new TextDecoder().decode(bytes.subarray(12, 12 + metaLen))) as {
       meta?: PackedOpMeta[];
       raw?: InkOp[];
+      layout?: PdfInkLayout;
     };
   } catch {
     return null;
@@ -866,5 +879,8 @@ export function unpackEncodedInk(bytes: Uint8Array): EncodedInk | null {
     ops.push(record);
   }
   const raw = Array.isArray(parsed.raw) ? parsed.raw : undefined;
-  return raw ? { v: 2, ops, raw } : { v: 2, ops };
+  const out: EncodedInk = raw ? { v: 2, ops, raw } : { v: 2, ops };
+  const tag = parsed.layout;
+  if (tag && Number.isFinite(tag.w) && tag.w > 0 && typeof tag.spread === "boolean") out.layout = { w: tag.w, spread: tag.spread };
+  return out;
 }
