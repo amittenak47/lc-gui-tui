@@ -10,7 +10,7 @@
 .lc-settings-dialog .lc-settings-tab svg { width: 16px; height: 16px; }
 .lc-settings-dialog .lc-dialog-body { gap: 10px; }
 .lc-settings-dialog .lc-settings-fields { gap: 10px; }
-.lc-settings-dialog .lc-settings-fold { border: 2px solid var(--lc-dialog-line); border-radius: 2px; background: transparent; }
+.lc-settings-dialog .lc-settings-fold { border: 2px solid var(--lc-dialog-line); border-radius: var(--lc-r-block); background: transparent; }
 .lc-settings-dialog .lc-settings-fold-summary { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 54px; padding: 10px 12px; }
 .lc-settings-group-icon { display: grid; place-items: center; flex: 0 0 30px; width: 30px; height: 30px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .lc-settings-group-icon svg { width: 18px; height: 18px; }
@@ -21,7 +21,7 @@
 .lc-settings-dialog .lc-settings-fold-body { padding: 16px; gap: 12px; border-top: 2px solid var(--lc-dialog-line); background: transparent; }
 .lc-settings-dialog .lc-animated-disclosure { overflow: hidden; }
 .lc-settings-dialog .lc-settings-subhead { font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
-.lc-settings-dialog :is(.lc-settings-choice-option, .lc-settings-slider, .lc-settings-provider-tabs, .lc-settings-subtab, .lc-settings-actions-row button, .lc-settings-fields input, .lc-settings-fields select) { border-radius: 2px; }
+.lc-settings-dialog :is(.lc-settings-choice-option, .lc-settings-slider, .lc-settings-provider-tabs, .lc-settings-subtab, .lc-settings-actions-row button, .lc-settings-fields input, .lc-settings-fields select) { border-radius: var(--lc-r-block); }
 .lc-settings-dialog :is(input,select) { max-width: 100%; min-width: 0; color: var(--ink); }
 .lc-settings-dialog .lc-settings-foot { display: flex; gap: 8px; }
 .lc-settings-change-count { display: flex; align-items: center; gap: 8px; margin-right: auto; color: var(--muted); font: 600 10px/1.4 var(--lc-sans); letter-spacing: .1em; text-transform: uppercase; }

@@ -21618,3 +21618,8 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-resume-picture[hidden] {
   display: none;
 }
+
+/* Settings → UI → Corners: Rounded. Every blocky corner reads --lc-r-block. */
+html[data-corners="rounded"] {
+  --lc-r-block: 8px;
+}

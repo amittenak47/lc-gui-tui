@@ -175,3 +175,10 @@
 @media (prefers-reduced-motion: reduce) {
   .lc-settings-modal.lc-dialog-frame { animation: none; transition: none; }
 }
+
+/* Settings → UI → Corners: Rounded puts blocky dialogs back to the rounded shape. */
+html[data-corners="rounded"] .lc-dialog-frame[data-dialog-shape="blocky"] {
+  --lc-dialog-radius: 28px;
+  --lc-dialog-control-radius: 999px;
+  --lc-dialog-chip-radius: 12px;
+}

@@ -156,6 +156,7 @@ import {
 } from "../util/devicePrefs";
 import { FEATURE_LEETCODE } from "../featureFlags";
 import { loadUiHandedness, saveUiHandedness, type UiHandedness } from "../util/uiHandedness";
+import { loadUiCorners, saveUiCorners, type UiCorners } from "../util/uiCorners";
 import { loadStartupTabs, saveStartupTabs, type StartupTabs } from "../util/startupTabsPref";
 import { clearDebugLog, debugLogCount, debugLogEnabled, exportDebugLog, setDebugLogEnabled } from "../util/debugLog";
 import { loadPageFit, loadReadingMode, savePageFit, saveReadingMode, type PageFitPref, type ReadingMode } from "../util/readingModePref";
@@ -423,6 +424,7 @@ function emptyConfig(): LcConfig {
 interface DevicePrefs {
   agentDisplay: AgentDisplayPrefs;
   uiHandedness: UiHandedness;
+  uiCorners: UiCorners;
   /** Which tabs a relaunch opens. Read once, at the next launch. */
   startupTabs: StartupTabs;
   /** Continuous scroll, or a page at a time with a page turn. */
@@ -494,6 +496,7 @@ function loadDevicePrefs(): DevicePrefs {
   return {
     agentDisplay: loadAgentDisplayPrefs(),
     uiHandedness: loadUiHandedness(),
+    uiCorners: loadUiCorners(),
     startupTabs: loadStartupTabs(),
     readingMode: loadReadingMode(),
     pageFit: loadPageFit(),
@@ -537,6 +540,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.agentDisplay.collapseThinkingSteps === b.agentDisplay.collapseThinkingSteps &&
     a.agentDisplay.colorThinkingSteps === b.agentDisplay.colorThinkingSteps &&
     a.uiHandedness === b.uiHandedness &&
+    a.uiCorners === b.uiCorners &&
     a.startupTabs === b.startupTabs &&
     a.readingMode === b.readingMode &&
     a.pageFit === b.pageFit &&
@@ -870,6 +874,7 @@ export function SettingsModal({
   const [bootNotice, setBootNotice] = useState<string | null>(null);
   const [handedness, setHandedness] = useState<InkHandedness>(() => loadInkHandedness());
   const [uiHandedness, setUiHandedness] = useState<UiHandedness>(loadUiHandedness);
+  const [uiCorners, setUiCorners] = useState<UiCorners>(loadUiCorners);
   const [startupTabs, setStartupTabs] = useState<StartupTabs>(loadStartupTabs);
   const [readingMode, setReadingMode] = useState<ReadingMode>(loadReadingMode);
   const [pageFit, setPageFit] = useState<PageFitPref>(loadPageFit);
@@ -1098,6 +1103,7 @@ export function SettingsModal({
     const prefs = loadDevicePrefs();
     setHandedness(prefs.handedness);
     setUiHandedness(prefs.uiHandedness);
+    setUiCorners(prefs.uiCorners);
     setStartupTabs(prefs.startupTabs);
     setReadingMode(prefs.readingMode);
     setPageFit(prefs.pageFit);
@@ -1205,6 +1211,7 @@ export function SettingsModal({
   const draftPrefs: DevicePrefs = {
     agentDisplay,
     uiHandedness,
+    uiCorners,
     startupTabs,
     readingMode,
     pageFit,
@@ -1298,6 +1305,7 @@ export function SettingsModal({
       if (prefsDirty) {
         saveInkHandedness(handedness);
         saveUiHandedness(uiHandedness);
+        saveUiCorners(uiCorners);
         saveStartupTabs(startupTabs);
         saveReadingMode(readingMode);
         savePageFit(pageFit);
@@ -2624,6 +2632,12 @@ export function SettingsModal({
                   {(["right", "left"] as const).map(hand => <button key={hand} type="button" role="radio"
                     aria-checked={uiHandedness === hand} className={uiHandedness === hand ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
                     onClick={() => setUiHandedness(hand)}><strong>{hand === "right" ? "Right hand" : "Left hand"}</strong></button>)}
+                </div>
+                <div className="lc-settings-subhead">Corners</div>
+                <div className="lc-settings-choice" role="radiogroup" aria-label="Corners">
+                  {(["blocky", "rounded"] as const).map(style => <button key={style} type="button" role="radio"
+                    aria-checked={uiCorners === style} className={uiCorners === style ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                    onClick={() => setUiCorners(style)}><strong>{style === "blocky" ? "Blocky" : "Rounded"}</strong></button>)}
                 </div>
                 <div className="lc-settings-subhead">On launch</div>
                 <div className="lc-settings-choice" role="radiogroup" aria-label="Tabs on launch">
