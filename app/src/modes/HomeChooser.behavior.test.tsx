@@ -29,12 +29,14 @@ it('leaves no Recently opened section, and gives Start the full height, when not
   expect(host.querySelector('.lc-home-recents')).toBeNull();
   expect(host.querySelector('nav')?.getAttribute('data-recents')).toBe('none');
   expect(host.textContent).not.toContain('Recently opened');
+  expect(host.textContent).not.toContain('Start');
 });
 it('folds Recently opened to its heading, and remembers the choice',async()=>{
   rememberRecentWorkspace(entry);const p=props();await act(async()=>root.render(<HomeChooser {...p}/>));
   const toggle=host.querySelector<HTMLButtonElement>('.lc-home-recents-toggle')!;
   expect(toggle.getAttribute('aria-expanded')).toBe('true');expect(toggle.textContent).toContain('1');
   expect(host.querySelectorAll('.lc-home-recent')).toHaveLength(1);
+  expect([...host.querySelectorAll('h2')].map(h=>h.textContent)).toContain('Start');
   await act(async()=>toggle.click());
   expect(toggle.getAttribute('aria-expanded')).toBe('false');
   expect(host.querySelectorAll('.lc-home-recent')).toHaveLength(0);

@@ -641,7 +641,8 @@ export function HomeChooser({
           </motion.button>)}
         </div>}
       </section>}
-      <h2 className="lc-home-section-title">Start</h2>
+      {/* "Start" only separates the tiles from Recently opened; alone it is noise. */}
+      {recent.length > 0 && <h2 className="lc-home-section-title">Start</h2>}
       <div className="lc-home-chooser-grid">
         {modes.map((mode,index) => (
           <HomeCard key={mode.id} mode={mode} busy={busy} active={visible} delay={index*.035}/>

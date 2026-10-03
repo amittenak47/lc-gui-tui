@@ -6,13 +6,14 @@
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(0, 28fr) auto minmax(0, 72fr);
+  /* Recently opened, the "Start" heading, then the tiles. */
+  grid-template-rows: auto auto minmax(min-content, 1fr);
   gap: 12px;
   overflow: auto;
   scrollbar-width: none;
 }
 .lc-home-section-title { margin: 0 0 12px; color: var(--muted); font: 600 11px/1.4 var(--lc-sans); text-transform: uppercase; letter-spacing: .1em; }
-.lc-home-chooser .lc-home-chooser-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); grid-template-rows: minmax(0,1.45fr) minmax(0,1fr) minmax(0,.72fr); gap: 14px; min-height: 0; }
+.lc-home-chooser .lc-home-chooser-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); grid-template-rows: minmax(var(--lc-home-row-a, 0px),1.45fr) minmax(var(--lc-home-row-b, 0px),1fr) minmax(var(--lc-home-row-c, 0px),.72fr); gap: 14px; min-height: 0; }
 .lc-home-cell[data-mode="whiteboard"] { grid-column: 1 / -1; }
 .lc-home-cell[data-mode="annotate"]:first-child { grid-column: 1 / -1; }
 .lc-home-chooser .lc-home-card { background: color-mix(in srgb, var(--panel) 92%, var(--ink) 8%); padding: 12px; gap: 14px; border-radius: var(--lc-r-block); }
@@ -78,12 +79,12 @@
 }
 
 /* Open: the list takes its content height up to a cap, and Start gets the rest. */
-.lc-home-chooser.lc-home-redesign[data-recents="open"] { grid-template-rows: auto auto minmax(0, 1fr); }
+.lc-home-chooser.lc-home-redesign[data-recents="open"] { grid-template-rows: auto auto minmax(min-content, 1fr); }
 .lc-home-chooser[data-recents="open"] .lc-home-recents-window { flex: 0 1 auto; max-height: clamp(86px, 24vh, 190px); }
 
 /* Recently opened: absent when empty, one slim row when folded, sharing the height when open. */
-.lc-home-chooser.lc-home-redesign[data-recents="none"] { grid-template-rows: auto minmax(0, 1fr); }
-.lc-home-chooser.lc-home-redesign[data-recents="collapsed"] { grid-template-rows: auto auto minmax(0, 1fr); }
+.lc-home-chooser.lc-home-redesign[data-recents="none"] { grid-template-rows: minmax(min-content, 1fr); }
+.lc-home-chooser.lc-home-redesign[data-recents="collapsed"] { grid-template-rows: auto auto minmax(min-content, 1fr); }
 .lc-home-recents-heading { margin: 0 0 12px; }
 .lc-home-recents[data-collapsed] .lc-home-recents-heading, .lc-home-chooser[data-recents="collapsed"] .lc-home-recents-heading { margin-bottom: 0; }
 .lc-home-recents-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; margin: 0 -6px; padding: 0 6px; border: 0; border-radius: var(--lc-r-block); background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
@@ -100,3 +101,7 @@
 @media (prefers-reduced-motion: no-preference) {
   .lc-home-redesign .lc-home-card:is(:hover, :active):not(:disabled) { transform: none; }
 }
+
+/* Floors: below these a tile clips its own text, so Home scrolls instead.
+   Tall canvases (portrait tablet) are well above them and look the same. */
+.lc-home-chooser.lc-home-redesign { --lc-home-row-a: 170px; --lc-home-row-b: 112px; --lc-home-row-c: 96px; }
