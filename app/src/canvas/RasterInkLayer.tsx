@@ -49,6 +49,7 @@ import {
 import {
   INK_PAGE_WINDOW_DEBOUNCE_MS,
   fallbackPageFrames,
+  inkOpOffPages,
   pageIdAtViewport,
   type PageFrame,
 } from "./inkPageIndex";
@@ -1246,6 +1247,18 @@ export const RasterInkLayer = forwardRef<RasterInkHandle, RasterInkLayerProps>(
        * menu already places those.
        */
       const bound = bindStrokeHost(committed);
+      // A mark beside the sheet is a click in the gutter, not a note on the page.
+      if (inkOpOffPages(bound, bookRef.current.frames)) {
+        liveStrokeRef.current = null;
+        liveRef.current = null;
+        liveDrawnIndexRef.current = 0;
+        inkLabCommitRef.current = false;
+        inkLabRef.current?.clear();
+        strokeHostRef.current = null;
+        tilesDirtyRef.current = true;
+        repaint();
+        return;
+      }
       const stamped = bookRef.current.commit(bound);
       opsRef.current = bookRef.current.paintOps();
       liveStrokeRef.current = null;

@@ -33,6 +33,9 @@ export interface PageFrame {
   pageId: number;
   minY: number;
   maxY: number;
+  /** The sheet's left and right edges, where the layout measured them (PDF pages). */
+  minX?: number;
+  maxX?: number;
 }
 
 /** Scene Y → home page. A Y in a gap belongs to the nearer neighbour. */
@@ -90,6 +93,20 @@ export function pageIdForOp(op: InkOp, frames: readonly PageFrame[]): number {
   return SPANNING_PAGE_ID;
 }
 
+/**
+ * A new stroke that touches no sheet: a click in the gutter with the pen up.
+ *
+ * Only for a stroke being drawn, against the layout on screen as it lands.
+ * Never applied to stored ink, so a later resize or relayout cannot drop it.
+ * False unless every frame knows its edges (a measured PDF layout).
+ */
+export function inkOpOffPages(op: InkOp, frames: readonly PageFrame[]): boolean {
+  if (op.kind !== "draw" || frames.length === 0) return false;
+  if (frames.some((f) => f.minX == null || f.maxX == null)) return false;
+  const box = inkOpBounds(op);
+  return !frames.some((f) => box.maxX >= f.minX! && box.minX <= f.maxX! && box.maxY >= f.minY && box.minY <= f.maxY);
+}
+
 export function binOpsByPage(
   ops: readonly InkOp[],
   frames: readonly PageFrame[],
@@ -130,6 +147,7 @@ export function pageFramesFromPdfSlot(
   const slotRect = slot.getBoundingClientRect();
   if (slotRect.width < 1 || slotRect.height < 1) return [];
   const sy = slotRect.height / pageH;
+  const sx = slotRect.width / pageW;
   const nodes = slot.querySelectorAll<HTMLElement>(PDF_PAGE_SELECTOR);
   if (nodes.length === 0) return [];
   const frames: PageFrame[] = [];
@@ -142,6 +160,8 @@ export function pageFramesFromPdfSlot(
       pageId,
       minY: pageBounds.minY + (r.top - slotRect.top) / sy,
       maxY: pageBounds.minY + (r.bottom - slotRect.top) / sy,
+      minX: pageBounds.minX + (r.left - slotRect.left) / sx,
+      maxX: pageBounds.minX + (r.right - slotRect.left) / sx,
     });
   }
   frames.sort((a, b) => a.minY - b.minY || a.pageId - b.pageId);

@@ -5,6 +5,7 @@ import {
   SPANNING_PAGE_ID,
   binOpsByPage,
   fallbackPageFrames,
+  inkOpOffPages,
   lastPageId,
   lruWindow,
   offsetPageFrames,
@@ -191,5 +192,32 @@ describe("pdfPageFromSavedView", () => {
     expect(
       pdfPageFromSavedView({ pdfPage: 1, scrollY: -160, zoom: 1 }, frames(), 80),
     ).toBe(2);
+  });
+});
+
+describe("inkOpOffPages", () => {
+  const dot = (x: number, y: number): InkDrawOp => ({
+    kind: "draw", color: "#d92243", baseWidth: 2, maxFullness: 1, pressureClip: 1, pressureSensitive: false,
+    points: [{ x, y, pressure: NO_PRESSURE }],
+  });
+  const sheets = [
+    { pageId: 1, minY: 0, maxY: 1000, minX: 0, maxX: 760 },
+    { pageId: 2, minY: 1020, maxY: 2000, minX: 0, maxX: 760 },
+  ];
+
+  it("drops a mark in the gutter beside the sheets", () => {
+    expect(inkOpOffPages(dot(-65, 468), sheets)).toBe(true);
+    expect(inkOpOffPages(dot(380, 1010), sheets)).toBe(true);
+  });
+
+  it("keeps a mark on a sheet, or one that reaches onto it", () => {
+    expect(inkOpOffPages(dot(379, 191), sheets)).toBe(false);
+    const reaching = { ...dot(-20, 300), points: [{ x: -20, y: 300, pressure: NO_PRESSURE }, { x: 30, y: 300, pressure: NO_PRESSURE }] };
+    expect(inkOpOffPages(reaching, sheets)).toBe(false);
+  });
+
+  it("never judges against a layout that has no measured edges", () => {
+    expect(inkOpOffPages(dot(-65, 468), fallbackPageFrames(null))).toBe(false);
+    expect(inkOpOffPages(dot(-65, 468), [{ pageId: 1, minY: 0, maxY: 1000 }])).toBe(false);
   });
 });
