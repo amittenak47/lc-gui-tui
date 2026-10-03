@@ -72,6 +72,19 @@ export function rememberRecentWorkspace(tab: TabRecord): void {
   } catch { /* History is optional; quota must never block opening or closing work. */ }
 }
 
+/** Take one entry off Recently opened. Only the history changes; the work itself stays put. */
+export function forgetRecentWorkspace(tab: TabRecord): void {
+  const key = recentWorkspaceKey(tab);
+  if (!key) return;
+  const before = loadRecentWorkspaces();
+  const next = before.filter(row=>recentWorkspaceKey(row) !== key);
+  if (next.length === before.length) return;
+  try {
+    localStorage.setItem(RECENT_WORKSPACES_KEY,JSON.stringify({v:1,tabs:next}));
+    if (typeof window !== "undefined") window.dispatchEvent(new Event(RECENT_WORKSPACES_EVENT));
+  } catch { /* History is optional. */ }
+}
+
 /** Hide current tabs and removed work; labels follow library renames. */
 export function visibleRecentWorkspaces(history: TabRecord[], openTabs: TabRecord[]): TabRecord[] {
   const openKeys = new Set(openTabs.map(recentWorkspaceKey));

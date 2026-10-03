@@ -85,8 +85,9 @@
 /* Recently opened: absent when empty, one slim row when folded, sharing the height when open. */
 .lc-home-chooser.lc-home-redesign[data-recents="none"] { grid-template-rows: minmax(min-content, 1fr); }
 .lc-home-chooser.lc-home-redesign[data-recents="collapsed"] { grid-template-rows: auto auto minmax(min-content, 1fr); }
-.lc-home-recents-heading { margin: 0 0 12px; }
-.lc-home-recents[data-collapsed] .lc-home-recents-heading, .lc-home-chooser[data-recents="collapsed"] .lc-home-recents-heading { margin-bottom: 0; }
+.lc-home-recents-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+.lc-home-recents-heading { margin: 0; }
+.lc-home-chooser[data-recents="collapsed"] .lc-home-recents-head { margin-bottom: 0; }
 .lc-home-recents-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; margin: 0 -6px; padding: 0 6px; border: 0; border-radius: var(--lc-r-block); background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
 .lc-home-recents-toggle:hover { color: var(--ink); }
 .lc-home-recents-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -105,3 +106,23 @@
 /* Floors: below these a tile clips its own text, so Home scrolls instead.
    Tall canvases (portrait tablet) are well above them and look the same. */
 .lc-home-chooser.lc-home-redesign { --lc-home-row-a: 170px; --lc-home-row-b: 112px; --lc-home-row-c: 96px; }
+
+/* Hold to edit Recently opened: items shake and offer an x that only removes
+   them from this list. */
+.lc-home-recent-item { position: relative; display: flex; min-width: 0; }
+.lc-home-recent-item > .lc-home-recent { flex: 1 1 auto; width: 100%; -webkit-touch-callout: none; user-select: none; }
+.lc-home-recents[data-editing] .lc-home-recent { padding-right: 46px; animation: lc-home-recent-shake 260ms ease-in-out infinite alternate; }
+.lc-home-recents[data-editing] .lc-home-recent-item:nth-child(even) .lc-home-recent { animation-delay: -130ms; animation-direction: alternate-reverse; }
+@keyframes lc-home-recent-shake {
+  from { transform: rotate(-0.9deg) translateY(0.5px); }
+  to { transform: rotate(0.9deg) translateY(-0.5px); }
+}
+.lc-home-recent-remove { position: absolute; top: 6px; right: 6px; z-index: 1; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: var(--lc-r-block); background: transparent; color: var(--panel); cursor: pointer; }
+.lc-home-recent-remove svg { width: 22px; height: 22px; padding: 4px; box-sizing: border-box; border-radius: var(--lc-r-block); background: var(--ink); }
+.lc-home-recent-remove:hover svg, .lc-home-recent-remove:focus-visible svg { background: var(--bad); }
+.lc-home-recent-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.lc-home-recents-done { min-height: 32px; padding: 0 14px; border: 1px solid var(--accent); border-radius: var(--lc-r-block); background: transparent; color: var(--accent); font: 600 12px/1 var(--lc-sans); letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
+.lc-home-recents-done:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .lc-home-recents[data-editing] .lc-home-recent { animation: none; outline: 1px dashed var(--line); outline-offset: -4px; }
+}

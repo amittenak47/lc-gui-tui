@@ -18,7 +18,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { FEATURE_LEETCODE } from "../featureFlags";
 import { ANNOTATE_LIBRARY_EVENT } from "../util/annotateStore";
 import { WHITEBOARD_LIBRARY_EVENT } from "../util/whiteboardStore";
-import { RECENT_WORKSPACES_EVENT, loadRecentWorkspaces, recentWorkspaceKey, visibleRecentWorkspaces } from "../util/recentWorkspaces";
+import { RECENT_WORKSPACES_EVENT, forgetRecentWorkspace, loadRecentWorkspaces, recentWorkspaceKey, visibleRecentWorkspaces } from "../util/recentWorkspaces";
 import type { TabRecord, TabState } from "../util/tabs";
 import "./homeChooser.css";
 
@@ -411,6 +411,17 @@ export function HomeChooser({
 }: HomeChooserProps) {
   const [recent, setRecent] = useState<TabRecord[]>([]);
   const [recentsOpen, setRecentsOpen] = useState(loadRecentsOpen);
+  // Hold a recent item to edit the list: items shake and show an x that only
+  // takes them off Recently opened.
+  const [editing, setEditing] = useState(false);
+  const recentsRef = useRef<HTMLElement>(null);
+  const holdTimer = useRef<number | null>(null);
+  const holdFrom = useRef<{ x: number; y: number } | null>(null);
+  const holdFired = useRef(false);
+  const clearHold = () => {
+    if (holdTimer.current != null) window.clearTimeout(holdTimer.current);
+    holdTimer.current = null;
+  };
   const reduced = useReducedMotion();
   const visible = active && !covered;
   useEffect(() => {
@@ -422,6 +433,23 @@ export function HomeChooser({
     events.forEach(event=>window.addEventListener(event,refresh));
     return () => events.forEach(event=>window.removeEventListener(event,refresh));
   }, [active,tabsRef,onOpenRecent]);
+  useEffect(() => {
+    if (recent.length === 0 || !visible || !recentsOpen || busy) setEditing(false);
+  }, [recent.length, visible, recentsOpen, busy]);
+  useEffect(() => {
+    if (!editing) return;
+    const outside = (event: PointerEvent) => {
+      if (!recentsRef.current?.contains(event.target as Node)) setEditing(false);
+    };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setEditing(false); };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [editing]);
+  useEffect(() => clearHold, []);
   const modes: HomeMode[] = [
     ...(FEATURE_LEETCODE
       ? [
@@ -624,21 +652,59 @@ export function HomeChooser({
 
   return (
     <nav className="lc-home-chooser lc-home-redesign" aria-label="Choose a workspace" data-home-active={active} data-recents={recent.length === 0 ? "none" : recentsOpen ? "open" : "collapsed"}>
-      {recent.length > 0 && <section className="lc-home-recents" aria-labelledby="lc-home-recents-title">
-        <h2 id="lc-home-recents-title" className="lc-home-section-title lc-home-recents-heading">
-          <button type="button" className="lc-home-recents-toggle" aria-expanded={recentsOpen} aria-controls={recentsOpen ? "lc-home-recents-window" : undefined} disabled={busy}
-            onClick={()=>{const next=!recentsOpen;setRecentsOpen(next);saveRecentsOpen(next);}}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
-            Recently opened<span className="lc-home-recents-count">{recent.length}</span>
-          </button>
-        </h2>
+      {recent.length > 0 && <section ref={recentsRef} className="lc-home-recents" aria-labelledby="lc-home-recents-title" data-editing={editing || undefined}>
+        <div className="lc-home-recents-head">
+          <h2 id="lc-home-recents-title" className="lc-home-section-title lc-home-recents-heading">
+            <button type="button" className="lc-home-recents-toggle" aria-expanded={recentsOpen} aria-controls={recentsOpen ? "lc-home-recents-window" : undefined} disabled={busy}
+              onClick={()=>{const next=!recentsOpen;setRecentsOpen(next);saveRecentsOpen(next);}}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+              Recently opened<span className="lc-home-recents-count">{recent.length}</span>
+            </button>
+          </h2>
+          {editing && <button type="button" className="lc-home-recents-done" onClick={()=>setEditing(false)}>Done</button>}
+        </div>
         {recentsOpen && <div id="lc-home-recents-window" className="lc-home-recents-window lc-scroll-pane">
-          {recent.map((tab,index)=><motion.button type="button" key={recentWorkspaceKey(tab)} className="lc-home-recent" data-mode={tab.kind === "web" ? "browse" : tab.kind}
-            {...homeTileMotion(visible, !!reduced, Math.min(index,5)*.025, !busy)}
-            disabled={busy} onClick={()=>onOpenRecent?.(tab)} title={tab.title}>
-            <span className="lc-home-recent-preview" aria-hidden="true"><svg viewBox="0 0 40 52" fill="none"><path d="M8 8h24M8 17h24M8 26h24M8 35h24M8 44h18"/><path className="lc-home-recent-mark" d={tab.kind === "whiteboard" ? "M8 31q6-15 12 0t12 0" : "M8 17h18"}/></svg></span>
-            <span className="lc-home-recent-text"><strong>{tab.title}</strong><span>{tab.kind === "practice" ? "LeetCode" : tab.kind === "whiteboard" ? "Whiteboard" : tab.kind === "web" ? "Web" : `Annotate · ${tab.kind === "annotate" ? tab.docType === "markdown" ? "Markdown" : tab.docType.toUpperCase() : ""}`}</span></span>
-          </motion.button>)}
+          {recent.map((tab,index)=><motion.div key={recentWorkspaceKey(tab)} className="lc-home-recent-item"
+            {...homeTileMotion(visible, !!reduced, Math.min(index,5)*.025, !busy && !editing)}>
+            <button type="button" className="lc-home-recent" data-mode={tab.kind === "web" ? "browse" : tab.kind}
+              disabled={busy} title={tab.title}
+              aria-keyshortcuts="Delete"
+              onPointerDown={(event)=>{
+                if (busy || editing) return;
+                clearHold();
+                holdFired.current = false;
+                holdFrom.current = {x:event.clientX, y:event.clientY};
+                holdTimer.current = window.setTimeout(()=>{
+                  holdTimer.current = null;
+                  holdFired.current = true;
+                  setEditing(true);
+                  navigator.vibrate?.(12);
+                }, RECENT_HOLD_MS);
+              }}
+              onPointerMove={(event)=>{
+                const from = holdFrom.current;
+                // A drag is a scroll of the list, not a hold.
+                if (from && Math.hypot(event.clientX-from.x, event.clientY-from.y) > RECENT_HOLD_SLOP_PX) clearHold();
+              }}
+              onPointerUp={clearHold}
+              onPointerCancel={clearHold}
+              onPointerLeave={clearHold}
+              onContextMenu={(event)=>event.preventDefault()}
+              onKeyDown={(event)=>{ if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); setEditing(true); } }}
+              onClick={()=>{
+                // The release that ends a hold is not a tap, and editing never opens.
+                if (holdFired.current) { holdFired.current = false; return; }
+                if (editing) return;
+                onOpenRecent?.(tab);
+              }}>
+              <span className="lc-home-recent-preview" aria-hidden="true"><svg viewBox="0 0 40 52" fill="none"><path d="M8 8h24M8 17h24M8 26h24M8 35h24M8 44h18"/><path className="lc-home-recent-mark" d={tab.kind === "whiteboard" ? "M8 31q6-15 12 0t12 0" : "M8 17h18"}/></svg></span>
+              <span className="lc-home-recent-text"><strong>{tab.title}</strong><span>{tab.kind === "practice" ? "LeetCode" : tab.kind === "whiteboard" ? "Whiteboard" : tab.kind === "web" ? "Web" : `Annotate · ${tab.kind === "annotate" ? tab.docType === "markdown" ? "Markdown" : tab.docType.toUpperCase() : ""}`}</span></span>
+            </button>
+            {editing && <button type="button" className="lc-home-recent-remove" aria-label={`Remove ${tab.title} from Recently opened`}
+              onClick={()=>forgetRecentWorkspace(tab)}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
+            </button>}
+          </motion.div>)}
         </div>}
       </section>}
       {/* "Start" only separates the tiles from Recently opened; alone it is noise. */}
@@ -653,6 +719,10 @@ export function HomeChooser({
 }
 
 const RECENTS_OPEN_KEY = "whiteboard.homeRecentsOpen";
+/** Long enough not to fire on a tap, short enough to feel like a press. */
+const RECENT_HOLD_MS = 480;
+/** Travel before a press counts as scrolling the list instead. */
+const RECENT_HOLD_SLOP_PX = 10;
 
 /** Recently opened starts unfolded; folding it is remembered across launches. */
 function loadRecentsOpen(): boolean {
