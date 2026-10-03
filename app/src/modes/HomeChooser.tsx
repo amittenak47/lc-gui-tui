@@ -40,6 +40,13 @@ export interface HomeChooserProps {
   onOpenRecent?: (tab: TabRecord) => void;
 }
 
+/**
+ * Start, in tiers: the two main tiles, then LeetCode alone, then the two
+ * work-in-progress ones. Each tier is the same shape a size smaller.
+ */
+const HOME_ORDER = ["annotate", "whiteboard", "practice", "browse", "explore"];
+const HOME_TIER: Record<string, number> = { annotate: 1, whiteboard: 1, practice: 2, browse: 3, explore: 3 };
+
 interface HomeMode {
   id: string;
   kicker: string;
@@ -715,7 +722,7 @@ export function HomeChooser({
       {/* "Start" only separates the tiles from Recently opened; alone it is noise. */}
       {recent.length > 0 && <h2 className="lc-home-section-title">Start</h2>}
       <div className="lc-home-chooser-grid">
-        {modes.map((mode,index) => (
+        {[...modes].sort((a,b) => HOME_ORDER.indexOf(a.id) - HOME_ORDER.indexOf(b.id)).map((mode,index) => (
           <HomeCard key={mode.id} mode={mode} busy={busy} active={visible} delay={index*.035}/>
         ))}
       </div>
@@ -800,8 +807,8 @@ function HomeCard({ mode, busy, active, delay }: { mode: HomeMode; busy: boolean
     return () => window.clearTimeout(approachTimer.current);
   }, [scene]);
   return (
-    <motion.span className="lc-home-cell" data-mode={mode.id}
-      {...homeTileMotion(active, !!reduced, delay, !busy, mode.id === "whiteboard" ? 1.012 : 1.035)}>
+    <motion.span className="lc-home-cell" data-mode={mode.id} data-tier={HOME_TIER[mode.id] ?? 3}
+      {...homeTileMotion(active, !!reduced, delay, !busy, HOME_TIER[mode.id] === 2 ? 1.012 : 1.035)}>
       <button
         ref={cardRef}
         type="button"
