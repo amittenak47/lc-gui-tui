@@ -7,12 +7,14 @@
  */
 
 import {
+  COLORHUNT_FALLBACK_CODES,
   paletteFromColorHuntCode,
   pickFallbackPalette,
   type InkPalette,
   type InkPaletteHistory,
 } from "./inkPaletteHistory";
-import { loadPaletteTag, paletteTagQuery } from "./palettePref";
+import { loadPalettePrefs, normalizePalettePrefs, paletteTagQuery, type PalettePrefs, type PaletteTag } from "./palettePref";
+import { mixInkPalette } from "./paletteMix";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -68,7 +70,7 @@ export function hasVividInk(palette: InkPalette): boolean {
   });
 }
 
-export function chooseFeedPalette(history: InkPaletteHistory, palettes: InkPalette[], balance: boolean): InkPalette | null {
+export function chooseFeedPalette(history: InkPaletteHistory, palettes: InkPalette[], balance: boolean, random = Math.random): InkPalette | null {
   if (palettes.length === 0) return null;
   const seen = new Set(history.items.map(p => p.join(",").toLowerCase()));
   const fresh = palettes.filter(p => !seen.has(p.join(",").toLowerCase()));
@@ -79,7 +81,7 @@ export function chooseFeedPalette(history: InkPaletteHistory, palettes: InkPalet
     const vivid = choices.filter(hasVividInk);
     if (vivid.length) choices = vivid;
   }
-  return choices[Math.floor(Math.random() * choices.length)]!;
+  return choices[Math.floor(random() * choices.length)]!;
 }
 
 async function fetchViaTauri(tags: string): Promise<InkPalette[]> {
@@ -106,6 +108,7 @@ async function fetchViaBrowser(tags: string): Promise<InkPalette[]> {
         Accept: "application/json, text/plain, */*",
       },
       body: `step=0&sort=random&tags=${encodeURIComponent(tags)}`,
+      signal: AbortSignal.timeout(12_000),
     });
     if (!response.ok) return [];
     const text = await response.text();
@@ -115,22 +118,113 @@ async function fetchViaBrowser(tags: string): Promise<InkPalette[]> {
   }
 }
 
-/**
- * One new palette for this board's history. Prefers a live ColorHunt hit;
- * otherwise a bundled code the board has not used yet.
- *
- * The tag is the reader's standing answer to "what kind of colours" — see
- * `palettePref`. It only reaches the live feed: the bundled fallback list is a
- * fixed set of codes with no tags of its own, and pretending to filter it would
- * mean returning nothing offline rather than returning something.
- */
+const FEED_CACHE_MS = 3 * 60_000;
+const EMPTY_CACHE_MS = 10_000;
+const FEED_CONCURRENCY = 4;
+const keyOf = (palette: InkPalette) => palette.join(",").toLowerCase();
+
+/** The same feed code can occur under several selected tags. */
+export function poolFeedPalettes(feeds: readonly InkPalette[][]): InkPalette[] {
+  const seen = new Set<string>();
+  return feeds.flat().filter(palette => {
+    const key = keyOf(palette);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Cache and rotation are shared by wheels, while their histories stay per board. */
+export function createColorHuntSource(
+  fetchFeed: (query: string) => Promise<InkPalette[]>,
+  options: { now?: () => number; random?: () => number } = {},
+) {
+  const now = options.now ?? Date.now;
+  const random = options.random ?? (() => Math.random());
+  const cache = new Map<string, { expires: number; value: Promise<InkPalette[]> }>();
+  const cursors = new Map<string, number>();
+  const request = (query: string, refresh = false): Promise<InkPalette[]> => {
+    const hit = cache.get(query);
+    if (!refresh && hit && hit.expires > now()) return hit.value;
+    const entry = { expires: Infinity, value: Promise.resolve([] as InkPalette[]) };
+    entry.value = Promise.resolve().then(() => fetchFeed(query)).catch(() => [])
+      .then(palettes => {
+        entry.expires = now() + (palettes.length ? FEED_CACHE_MS : EMPTY_CACHE_MS);
+        return poolFeedPalettes([palettes]);
+      });
+    cache.set(query, entry);
+    return entry.value;
+  };
+  const fetchPools = async (queries: string[], refresh = false) => {
+    const feeds: InkPalette[][] = new Array(queries.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(FEED_CONCURRENCY, queries.length) }, async () => {
+      while (next < queries.length) {
+        const i = next++;
+        feeds[i] = await request(queries[i]!, refresh);
+      }
+    }));
+    return feeds;
+  };
+  return {
+    async next(history: InkPaletteHistory, input: PalettePrefs | PaletteTag, paper = "#ffffff"): Promise<InkPalette> {
+      const prefs = normalizePalettePrefs(input);
+      const queries = prefs.tags.map(paletteTagQuery);
+      const seen = new Set(history.items.map(keyOf));
+      const fresh = (palettes: InkPalette[]) => palettes.filter(p => !seen.has(keyOf(p)));
+      const balance = prefs.tags.includes("any");
+      let feeds: InkPalette[][] = [];
+      let live: InkPalette[] = [];
+      if (prefs.matchAll && queries.length > 1) {
+        const query = queries.join("-");
+        live = await request(query);
+        if (live.length && !fresh(live).length) live = await request(query, true);
+      }
+      // Hyphens are AND. An empty intersection falls back to the OR pool.
+      if (!live.length) {
+        feeds = await fetchPools(queries);
+        live = poolFeedPalettes(feeds);
+        if (live.length && !fresh(live).length) {
+          feeds = await fetchPools(queries, true);
+          live = poolFeedPalettes(feeds);
+        }
+      }
+      if (prefs.mixColours) {
+        const seed = Math.floor(random() * 4294967296);
+        const mixOptions = { seen, preferVivid: balance && !hasVividInk(history.items[history.index] ?? []) };
+        const mixed = mixInkPalette(live, paper, seed, mixOptions);
+        if (mixed) return mixed;
+        const fallback = COLORHUNT_FALLBACK_CODES.map(paletteFromColorHuntCode).filter((p): p is InkPalette => p !== null);
+        const offlineMix = mixInkPalette(fallback, paper, seed, mixOptions);
+        if (offlineMix) return offlineMix;
+        throw new Error("No distinct, readable ink colours for this paper");
+      }
+      if (feeds.length) {
+        const key = queries.join("|");
+        const start = cursors.get(key) ?? 0;
+        for (let n = 0; n < feeds.length; n++) {
+          const i = (start + n) % feeds.length;
+          const selected = chooseFeedPalette(history, fresh(feeds[i]!), balance, random);
+          if (!selected) continue;
+          cursors.set(key, (i + 1) % feeds.length);
+          return selected;
+        }
+      } else {
+        const selected = chooseFeedPalette(history, fresh(live), balance, random);
+        if (selected) return selected;
+      }
+      return pickFallbackPalette(history);
+    },
+  };
+}
+
+const source = createColorHuntSource(query => isTauriRuntime() ? fetchViaTauri(query) : fetchViaBrowser(query));
+
+/** Live palettes when available; the bundled list remains usable offline. */
 export async function fetchNextColorHuntPalette(
   history: InkPaletteHistory,
-  tag = loadPaletteTag(),
+  prefs: PalettePrefs | PaletteTag = loadPalettePrefs(),
+  paper = "#ffffff",
 ): Promise<InkPalette> {
-  const tags = paletteTagQuery(tag);
-  const live = isTauriRuntime() ? await fetchViaTauri(tags) : await fetchViaBrowser(tags);
-  const selected = chooseFeedPalette(history, live, tag === "any");
-  if (selected) return selected;
-  return pickFallbackPalette(history);
+  return source.next(history, prefs, paper);
 }

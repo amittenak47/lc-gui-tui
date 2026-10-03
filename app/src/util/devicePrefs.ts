@@ -50,7 +50,7 @@ import {
 } from "./inkSpeedPref";
 import { loadInkToolPresets, saveInkToolPresets } from "./inkToolPresets";
 import { loadOfflineMergePolicy, saveOfflineMergePolicy } from "./offlineMerge";
-import { loadPaletteTag, savePaletteTag } from "./palettePref";
+import { loadPalettePrefs, loadPaletteTag, normalizePalettePrefs, savePalettePrefs, savePaletteTag } from "./palettePref";
 import { applyAppTheme, loadThemeId, saveThemeId } from "../theme/appThemes";
 
 const DEVICE_ID_KEY = "whiteboard.deviceId.v1";
@@ -120,6 +120,7 @@ export function collectDevicePrefsBlob(): Record<string, unknown> {
     autosaveMs: loadAutosaveInterval(),
     autosaveBanner: loadAutosaveBanner(),
     paletteTag: loadPaletteTag(),
+    palettePrefs: loadPalettePrefs(),
     colorWheelOnToolbar: tools.colorWheelOnToolbar,
     tapOk: tools.tapOk,
     chromeWake: loadChromeWakeMarker(),
@@ -162,7 +163,9 @@ export function applyDevicePrefsBlob(prefs: Record<string, unknown>): void {
   if (prefs.autosaveBanner === "on" || prefs.autosaveBanner === "off") {
     saveAutosaveBanner(prefs.autosaveBanner);
   }
-  if (typeof prefs.paletteTag === "string") savePaletteTag(prefs.paletteTag as never);
+  if (prefs.palettePrefs && typeof prefs.palettePrefs === "object") {
+    savePalettePrefs(normalizePalettePrefs(prefs.palettePrefs));
+  } else if (typeof prefs.paletteTag === "string") savePaletteTag(prefs.paletteTag as never);
   if (typeof prefs.colorWheelOnToolbar === "boolean" || typeof prefs.tapOk === "boolean") {
     saveInkToolPresets({
       ...loadInkToolPresets(),

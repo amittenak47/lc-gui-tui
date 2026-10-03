@@ -1675,14 +1675,17 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
     }
     if (inkPaletteFetchRef.current) return;
     inkPaletteFetchRef.current = true;
-    void fetchNextColorHuntPalette(inkPaletteHistoryRef.current)
+    const paper = pdfDocumentRef.current ? "#ffffff" : docPaper ? "#0a0a0b"
+      : (BOARD_THEMES.find(theme => theme.id === themeId) ?? BOARD_THEMES[0]).background;
+    void fetchNextColorHuntPalette(inkPaletteHistoryRef.current, undefined, paper)
       .then((palette) => {
         applyInkPaletteHistory(appendInkPalette(inkPaletteHistoryRef.current, palette));
       })
+      .catch(error => console.warn("[lc:palette]", error))
       .finally(() => {
         inkPaletteFetchRef.current = false;
       });
-  }, [applyInkPaletteHistory]);
+  }, [applyInkPaletteHistory, docPaper, themeId]);
   const cycleInkPaletteBackward = useCallback(() => {
     applyInkPaletteHistory(cycleInkPalettePrev(inkPaletteHistoryRef.current));
   }, [applyInkPaletteHistory]);

@@ -27,13 +27,18 @@ const ALLOWED_TAGS: &[&str] = &[
     "sunset", "space",
 ];
 
+fn validate_tags(tags: Option<&str>) -> Result<&str, String> {
+    let tags = tags.unwrap_or("").trim();
+    if tags.is_empty() || tags.split('-').all(|tag| ALLOWED_TAGS.contains(&tag)) {
+        Ok(tags)
+    } else {
+        Err("ColorHunt tags must be allowed palette tags joined with hyphens".into())
+    }
+}
+
 #[tauri::command]
 pub async fn colorhunt_random(tags: Option<String>) -> Result<Vec<ColorHuntRow>, String> {
-    let tag = tags
-        .as_deref()
-        .map(str::trim)
-        .filter(|t| ALLOWED_TAGS.contains(t))
-        .unwrap_or("");
+    let tag = validate_tags(tags.as_deref())?;
     let client = reqwest::Client::builder()
         .timeout(TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
@@ -75,7 +80,7 @@ pub async fn colorhunt_random(tags: Option<String>) -> Result<Vec<ColorHuntRow>,
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        if code.len() != 24 {
+        if code.len() != 24 || !code.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             continue;
         }
         rows.push(ColorHuntRow {
@@ -94,4 +99,19 @@ pub async fn colorhunt_random(tags: Option<String>) -> Result<Vec<ColorHuntRow>,
         return Err("ColorHunt feed had no usable palettes".into());
     }
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_tags;
+
+    #[test]
+    fn validates_single_tags_and_combinations() {
+        for tags in [None, Some(""), Some("neon"), Some("neon-dark"), Some(" pastel-warm ")] {
+            assert!(validate_tags(tags).is_ok());
+        }
+        for tags in ["any", "neon dark", "neon,dark", "neon--dark", "-neon", "neon-", "neon&step=2", "neon-unknown"] {
+            assert!(validate_tags(Some(tags)).is_err(), "accepted {tags}");
+        }
+    }
 }

@@ -11,6 +11,7 @@
  */
 
 const KEY = "whiteboard.palette.tag";
+const PREFS_KEY = "whiteboard.palette.v1";
 
 /**
  * The tags worth offering, in the feed's own vocabulary.
@@ -37,25 +38,62 @@ export const PALETTE_TAGS = [
 
 export type PaletteTag = (typeof PALETTE_TAGS)[number];
 
+export interface PalettePrefs {
+  tags: PaletteTag[];
+  matchAll: boolean;
+  mixColours: boolean;
+}
+
 export function isPaletteTag(value: unknown): value is PaletteTag {
   return typeof value === "string" && (PALETTE_TAGS as readonly string[]).includes(value);
 }
 
 export function loadPaletteTag(): PaletteTag {
+  return loadPalettePrefs().tags[0] ?? "any";
+}
+
+/** Canonical order makes equality, caching and tag rotation independent of clicks. */
+export function normalizePalettePrefs(value: unknown): PalettePrefs {
+  const prefs = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Partial<PalettePrefs> : {};
+  const input = typeof value === "string" ? [value] : Array.isArray(value) ? value : prefs.tags;
+  const chosen = new Set(Array.isArray(input) ? input.filter(isPaletteTag) : []);
+  const tags = chosen.has("any") ? ["any" as const] : PALETTE_TAGS.filter(tag => chosen.has(tag));
+  return { tags: tags.length ? tags : ["any"], matchAll: prefs.matchAll === true, mixColours: prefs.mixColours === true };
+}
+
+export function loadPalettePrefs(): PalettePrefs {
   try {
-    const raw = localStorage.getItem(KEY);
-    return isPaletteTag(raw) ? raw : "any";
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (raw) {
+      try { return normalizePalettePrefs(JSON.parse(raw)); } catch { /* try the old single tag */ }
+    }
+    return normalizePalettePrefs(localStorage.getItem(KEY));
   } catch {
-    return "any";
+    return normalizePalettePrefs(null);
   }
 }
 
 export function savePaletteTag(tag: PaletteTag): void {
+  savePalettePrefs(normalizePalettePrefs(tag));
+}
+
+export function savePalettePrefs(prefs: PalettePrefs): void {
   try {
-    localStorage.setItem(KEY, tag);
+    const next = normalizePalettePrefs(prefs);
+    localStorage.setItem(PREFS_KEY, JSON.stringify(next));
+    // An older build can still use the first selected tag.
+    localStorage.setItem(KEY, next.tags[0]!);
   } catch {
     /* private browsing */
   }
+}
+
+export function togglePaletteTag(prefs: PalettePrefs, tag: PaletteTag): PalettePrefs {
+  const tags = tag === "any" ? [tag] : prefs.tags.includes(tag)
+    ? prefs.tags.filter(value => value !== tag)
+    : [...prefs.tags.filter(value => value !== "any"), tag];
+  return normalizePalettePrefs({ ...prefs, tags });
 }
 
 /** What the feed's `tags` field should carry. `any` means no preference. */
@@ -65,6 +103,6 @@ export function paletteTagQuery(tag: PaletteTag): string {
 
 /** Title case for the picker; "any" reads as a choice, not a missing value. */
 export function paletteTagLabel(tag: PaletteTag): string {
-  if (tag === "any") return "Any";
+  if (tag === "any") return "All";
   return tag.charAt(0).toUpperCase() + tag.slice(1);
 }
