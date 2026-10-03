@@ -83,6 +83,12 @@ export class InkPageBook {
   /** Bumps on every mutation, including undo/redo that keep the same op count. */
   private generation = 0;
   private boundsByPage = new Map<number, SceneBounds | null>();
+  /**
+   * A hot page's encoded copy from when it was decoded, while nothing has
+   * changed it since. Moving off a page gives it back instead of encoding
+   * the page again: ~250 ms on a dense page on the tablet, under a page turn.
+   */
+  private hydratedFrom = new Map<number, { ops: InkOp[]; count: number; encoded: EncodedInk }>();
 
   undo: InkUndoEntry[] = [];
   redo: InkUndoEntry[] = [];
@@ -352,6 +358,7 @@ export class InkPageBook {
   ingestEncodedPages(pages: Map<number, EncodedInk> | Iterable<[number, EncodedInk]>): void {
     this.boundsByPage.clear();
     this.hot.clear();
+    this.hydratedFrom.clear();
     this.cold.clear();
     this.dirty.clear();
     this.onDisk.clear();
@@ -397,6 +404,7 @@ export class InkPageBook {
       this.usedFallback = this.frames.length <= 1;
     }
     this.hot.clear();
+    this.hydratedFrom.clear();
     this.cold.clear();
     this.dirty.clear();
     this.onDisk.clear();
@@ -502,6 +510,7 @@ export class InkPageBook {
       added.push({ pageId: pageIdForOp(stamped, this.frames), op: stamped });
     }
     this.hot.clear();
+    this.hydratedFrom.clear();
     for (const item of added) {
       const list = this.hot.get(item.pageId);
       if (list) list.push(item.op);
@@ -527,6 +536,7 @@ export class InkPageBook {
     this.pushUndo({ kind: "clear", pages });
     this.redo = [];
     this.hot.clear();
+    this.hydratedFrom.clear();
     this.cold.clear();
     this.dirty.clear();
     for (const pageId of pages.keys()) this.dirty.add(pageId);
@@ -591,6 +601,7 @@ export class InkPageBook {
       return;
     }
     this.hot.clear();
+    this.hydratedFrom.clear();
     this.cold.clear();
     this.opTotal = 0;
     for (const [pageId, encoded] of entry.pages) {
@@ -632,6 +643,7 @@ export class InkPageBook {
       return;
     }
     this.hot.clear();
+    this.hydratedFrom.clear();
     this.cold.clear();
     this.opTotal = 0;
     this.dirty.clear();
@@ -663,7 +675,9 @@ export class InkPageBook {
       }
       return false;
     }
-    this.hot.set(pageId, decodeInkOps(encoded));
+    const ops = decodeInkOps(encoded);
+    this.hot.set(pageId, ops);
+    this.hydratedFrom.set(pageId, { ops, count: ops.length, encoded });
     this.boundsByPage.delete(pageId);
     this.cold.delete(pageId);
     this.touchLru(pageId);
@@ -673,7 +687,9 @@ export class InkPageBook {
   private evict(pageId: number): void {
     const list = this.hot.get(pageId);
     if (!list) return;
-    this.cold.set(pageId, encodeInkOps(list));
+    const from = this.hydratedFrom.get(pageId);
+    this.hydratedFrom.delete(pageId);
+    this.cold.set(pageId, from && from.ops === list && from.count === list.length ? from.encoded : encodeInkOps(list));
     this.boundsByPage.delete(pageId);
     this.hot.delete(pageId);
     this.touchLru(pageId);
@@ -697,6 +713,7 @@ export class InkPageBook {
   }
 
   private markDirty(pageId: number): void {
+    this.hydratedFrom.delete(pageId);
     this.storeOnly = false;
     this.boundsByPage.delete(pageId);
     this.dirty.add(pageId);

@@ -192,6 +192,24 @@ describe("InkPageBook", () => {
     expect(book.assembleOps()).toHaveLength(20);
   });
 
+  it("gives back a page's stored copy when moving off it unchanged, and encodes it again once written", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(20));
+    const stored = encodeInkOps([stroke(20 * 118 - 80, { id: 1, seq: 1 })]);
+    book.ingestEncodedPages([[20, stored]]);
+    book.setVisiblePage(20);
+    expect(book.hot.has(20)).toBe(true);
+    book.setVisiblePage(1);
+    expect(book.cold.get(20)).toBe(stored);
+
+    book.setVisiblePage(20);
+    book.commit(stroke(20 * 118 - 60));
+    book.markFlushed([20]);
+    book.setVisiblePage(1);
+    expect(book.cold.get(20)).not.toBe(stored);
+    expect(decodeInkOps(book.cold.get(20)!)).toHaveLength(2);
+  });
+
   it("undoes the last stroke even after scrolling to another page", () => {
     const book = new InkPageBook();
     book.setFrames(frames(10));
