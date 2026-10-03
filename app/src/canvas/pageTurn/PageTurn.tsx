@@ -369,16 +369,22 @@ function blankSheet(like: { width: number; height: number }): HTMLCanvasElement 
  */
 function paletteSignature(): string {
   if (typeof document === "undefined") return "";
-  const root = document.documentElement;
-  const style = getComputedStyle(root);
-  return [root.dataset.theme ?? "", style.getPropertyValue("--bg"), style.getPropertyValue("--ink")]
-    .map((v) => v.trim())
-    .join(",");
+  return [document.documentElement.dataset.theme ?? "", themeToken("--bg"), themeToken("--ink")].join(",");
 }
 
 function paperColor(): string {
   if (typeof document === "undefined") return "#ffffff";
-  return getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff";
+  return themeToken("--bg") || "#ffffff";
+}
+
+/**
+ * A palette colour as the theme set it on the root (`applyAppTheme`).
+ * getComputedStyle restyles the whole document first, text layers and all:
+ * 130–250 ms on the tablet, on every frame of every turn.
+ */
+function themeToken(name: string): string {
+  const root = document.documentElement;
+  return root.style.getPropertyValue(name).trim() || getComputedStyle(root).getPropertyValue(name).trim();
 }
 
 export function turnPaperColor(paper: string, pdf: boolean): string {
