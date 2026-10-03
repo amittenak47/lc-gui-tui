@@ -2,7 +2,7 @@ import {
   artifactDependencies, artifactCatalogFields, artifactDependencyKey,
   type ArtifactCatalog,
 } from "./padArtifacts";
-import { getArtifactAsset, putArtifactAsset, markArtifactAssetTransferred } from "./artifactAssetStore";
+import { artifactAssetTransferred, getArtifactAsset, putArtifactAsset, markArtifactAssetTransferred } from "./artifactAssetStore";
 import { requireArtifactAssetAck, type ArtifactAsset, type ArtifactAssetLocator } from "./artifactAssets";
 
 export interface ArtifactAssetTransport {
@@ -48,6 +48,9 @@ export async function uploadArtifactAssets(
 ): Promise<void> {
   if (!catalog) return;
   for (const locator of dependencies(catalog)) {
+    // Every push used to resend every attachment's files; a revision the hub
+    // already acknowledged is the same bytes it has.
+    if (await artifactAssetTransferred(locator)) continue;
     const asset = await getArtifactAsset(locator);
     if (!asset) throw new Error(`Attachment content is missing (${locator.dependency.id}). Parent sync was not published.`);
     requireArtifactAssetAck(asset, await client.putArtifactAsset(asset));

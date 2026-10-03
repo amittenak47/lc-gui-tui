@@ -4,8 +4,10 @@ import type { ArtifactCatalog } from "./padArtifacts";
 import { downloadArtifactAssets, uploadArtifactAssets, type ArtifactAssetTransport } from "./artifactAssetSync";
 
 const cache = vi.hoisted(() => new Map<string, ArtifactAsset>());
+const transferred = vi.hoisted(() => new Set<string>());
 vi.mock("./artifactAssetStore", () => ({
-  markArtifactAssetTransferred: vi.fn(async () => {}),
+  markArtifactAssetTransferred: vi.fn(async (locator: ArtifactAsset) => { transferred.add(artifactAssetKey(locator)); }),
+  artifactAssetTransferred: async (locator: ArtifactAsset) => transferred.has(artifactAssetKey(locator)),
   getArtifactAsset: async (locator: ArtifactAsset) => cache.get(artifactAssetKey(locator)) ?? null,
   putArtifactAsset: async (asset: ArtifactAsset) => { cache.set(artifactAssetKey(asset), parseArtifactAsset(asset)); },
 }));
@@ -22,7 +24,7 @@ const catalog: ArtifactCatalog = {
 function transport(): ArtifactAssetTransport {
   return { putArtifactAsset: vi.fn(async (asset) => asset), getArtifactAsset: vi.fn(async () => scene) };
 }
-beforeEach(() => cache.clear());
+beforeEach(() => { cache.clear(); transferred.clear(); });
 
 describe("attachment dependency transfer", () => {
   it("blocks upload when content is missing instead of publishing only pointers", async () => {
@@ -36,8 +38,17 @@ describe("attachment dependency transfer", () => {
     const client = transport();
     await uploadArtifactAssets(client, catalog);
     expect(client.putArtifactAsset).toHaveBeenCalledWith(scene);
+    transferred.clear();
     client.putArtifactAsset = vi.fn(async (asset) => ({ ...asset, payload: `${asset.payload} ` }));
     await expect(uploadArtifactAssets(client, catalog)).rejects.toThrow("not acknowledged");
+  });
+
+  it("does not resend a revision the hub already acknowledged", async () => {
+    cache.set(artifactAssetKey(scene), scene);
+    const client = transport();
+    await uploadArtifactAssets(client, catalog);
+    await uploadArtifactAssets(client, catalog);
+    expect(client.putArtifactAsset).toHaveBeenCalledTimes(1);
   });
 
   it("downloads to staging and reuses validated cached revisions on retry", async () => {

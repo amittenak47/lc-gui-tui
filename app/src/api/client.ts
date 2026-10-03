@@ -186,11 +186,19 @@ export async function fetchWithNetworkRetry(
     try {
       return await fetch(url, init);
     } catch (cause) {
-      const aborted = cause instanceof Error && cause.name === "AbortError";
+      const aborted = cause instanceof Error && (cause.name === "AbortError" || cause.name === "TimeoutError");
       if (!retryable || aborted || attempt >= delays.length) throw cause;
       await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
     }
   }
+}
+
+/** Base wait for a hub answer, plus a second per this many body bytes. */
+const HUB_TIMEOUT_MS = 30_000;
+const HUB_TIMEOUT_BYTES_PER_S = 256 * 1024;
+
+function hubTimeout(ms: number): AbortSignal | undefined {
+  return typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(ms) : undefined;
 }
 
 async function hubFetch(
@@ -209,11 +217,18 @@ async function hubFetch(
     headers["content-type"] = "application/octet-stream";
     body = init.bytes;
   }
+  // A hub that accepts the connection and never answers held the Sync walk
+  // and the attachments menu forever. Allow time for the body to move.
+  const size = typeof body === "string" ? body.length : init?.bytes?.byteLength ?? 0;
+  const timeoutMs = HUB_TIMEOUT_MS + Math.ceil(size / HUB_TIMEOUT_BYTES_PER_S) * 1000;
   let res: Response;
   try {
-    res = await fetchWithNetworkRetry(url, { method, headers, body });
+    res = await fetchWithNetworkRetry(url, { method, headers, body, signal: hubTimeout(timeoutMs) });
   } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
+    const timedOut = cause instanceof Error && cause.name === "TimeoutError";
+    const message = timedOut
+      ? `It did not answer within ${Math.round(timeoutMs / 1000)} s.`
+      : cause instanceof Error ? cause.message : String(cause);
     announceUnreachable(message);
     throw new LcApiError(`Could not reach the hub at ${hub.url}. ${message}`, 0);
   }

@@ -43,6 +43,20 @@ export async function getArtifactAsset(locator: ArtifactAssetLocator): Promise<A
   return asset;
 }
 
+/**
+ * Whether the hub has acknowledged this exact revision. A revision never
+ * changes, so an acknowledged one need not be sent again.
+ */
+export async function artifactAssetTransferred(locator: ArtifactAssetLocator): Promise<boolean> {
+  const key = artifactAssetKey(locator);
+  let at: unknown;
+  await withStore(STORE_CONTENT, "readonly", store => {
+    const request = store.get(key);
+    request.onsuccess = () => { at = (request.result as { transferredAt?: unknown } | undefined)?.transferredAt; };
+  });
+  return typeof at === "number" && Number.isFinite(at);
+}
+
 /** Only a verified remote receipt makes a historical cache copy collectable. */
 export async function markArtifactAssetTransferred(locator: ArtifactAssetLocator): Promise<void> {
   const key = artifactAssetKey(locator);
