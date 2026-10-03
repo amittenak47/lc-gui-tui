@@ -603,3 +603,17 @@
 .lc-hub-conflict .lc-hub-conflict-mark-ring[data-off-page] {
   border-style: dashed;
 }
+
+/* Reveal: a box around each cluster of ink, in the reveal colour. */
+.lc-hub-conflict .lc-hub-conflict-reveal-box {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+  border: 1.5px solid #00e5ff;
+  border-radius: var(--hc-r);
+  pointer-events: none;
+}
+
+.lc-hub-conflict .lc-hub-conflict-reveal-box[data-off-page] {
+  border-style: dashed;
+}

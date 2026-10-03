@@ -56,6 +56,29 @@ const EMPTY_PDF_BYTES = new ArrayBuffer(0);
 /** A mark smaller than this on screen, in CSS px, gets a ring so it can be found. */
 const HIDDEN_MARK_PX = 14;
 
+/** Reveal boxes: strokes nearer than this on screen, in CSS px, share one box. */
+const REVEAL_GAP_PX = 18;
+
+type ScreenBox = { l: number; t: number; r: number; b: number };
+
+/** Merge boxes that touch once grown by `gap`, until none do. */
+export function clusterBoxes(boxes: readonly ScreenBox[], gap: number): ScreenBox[] {
+  const out: ScreenBox[] = [];
+  for (const box of boxes) {
+    let next = { ...box };
+    for (let i = out.length - 1; i >= 0; i -= 1) {
+      const other = out[i]!;
+      if (other.l - gap <= next.r && next.l - gap <= other.r && other.t - gap <= next.b && next.t - gap <= other.b) {
+        next = { l: Math.min(next.l, other.l), t: Math.min(next.t, other.t), r: Math.max(next.r, other.r), b: Math.max(next.b, other.b) };
+        out.splice(i, 1);
+        i = out.length;
+      }
+    }
+    out.push(next);
+  }
+  return out;
+}
+
 /**
  * Pages either side of the focused one this pane keeps a bitmap for.
  *
@@ -602,6 +625,47 @@ export function ConflictPagePreview({
     // slotInk reads the same inputs listed here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usePdf, showInk, inkSlots, page, decodedOps, decodedShards, sceneWidth, stablePageFrames, paperFrames, usePaper, useMarkdown, inkX]);
+  /*
+   * Reveal draws a box around each cluster of ink on the pages in view, so
+   * the eye finds handwriting before reading it. Strokes closer than a gap
+   * share a box; a box reaching past the sheet is pinned to its edge.
+   */
+  const revealBoxes = useMemo(() => {
+    if (!revealInk || !usePdf || !showInk) return [];
+    const pages = new Set(paintPageKey.split(",").filter(Boolean).map(Number));
+    const out: { key: string; left: number; top: number; width: number; height: number; off: boolean }[] = [];
+    for (const slot of inkSlots) {
+      if (!pages.has(slot.page)) continue;
+      const { ops, originX, originY, scale } = slotInk(slot);
+      const boxes: { l: number; t: number; r: number; b: number }[] = [];
+      for (const op of ops) {
+        if (op.kind !== "draw") continue;
+        const box = inkOpsBounds([op]);
+        if (!box) continue;
+        boxes.push({
+          l: slot.left + (box.minX - originX) * scale, r: slot.left + (box.maxX - originX) * scale,
+          t: slot.top + (box.minY - originY) * scale, b: slot.top + (box.maxY - originY) * scale,
+        });
+      }
+      for (const cluster of clusterBoxes(boxes, REVEAL_GAP_PX).slice(0, 200)) {
+        const pad = 4;
+        const l = Math.max(slot.left, cluster.l - pad), r = Math.min(slot.left + slot.width, cluster.r + pad);
+        const t = Math.max(slot.top, cluster.t - pad), b = Math.min(slot.top + slot.height, cluster.b + pad);
+        const off = cluster.r < slot.left || cluster.l > slot.left + slot.width || cluster.b < slot.top || cluster.t > slot.top + slot.height;
+        const width = Math.max(HIDDEN_MARK_PX, r - l), height = Math.max(HIDDEN_MARK_PX, b - t);
+        out.push({
+          key: `${slot.page}:${out.length}`,
+          left: Math.min(Math.max(slot.left, l), slot.left + slot.width - width),
+          top: Math.min(Math.max(slot.top, t), slot.top + slot.height - height),
+          width, height,
+          off: off || cluster.l < slot.left || cluster.r > slot.left + slot.width,
+        });
+      }
+    }
+    return out;
+    // slotInk reads the same inputs listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealInk, usePdf, showInk, inkSlots, paintPageKey, decodedOps, decodedShards, sceneWidth, stablePageFrames, paperFrames, usePaper, useMarkdown, inkX]);
   useEffect(() => {
     const visiblePages = new Set(tilesRef.current.map(tile => tile.page));
     const painter = new ConflictInkPainter(inkSlots.filter(slot => visiblePages.has(slot.page)).map(slotInk).map(entry => revealInk ? {...entry,ops:entry.ops.map(op => op.kind === "draw"
@@ -727,7 +791,16 @@ export function ConflictPagePreview({
                 />
               ))
             : null}
-          {hiddenMarks.map((mark) => (
+          {revealBoxes.map((box) => (
+            <span
+              key={box.key}
+              className="lc-hub-conflict-reveal-box"
+              data-off-page={box.off || undefined}
+              style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+              aria-hidden
+            />
+          ))}
+          {!revealInk && hiddenMarks.map((mark) => (
             <span
               key={mark.key}
               className="lc-hub-conflict-mark-ring"
