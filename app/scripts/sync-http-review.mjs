@@ -147,6 +147,52 @@ try {
   assert(!stale.footnotes[0].threads?.some(t=>t.rootId==="q"));
   console.log("PASS stale replica cannot resurrect a deleted conversation or its footnote link on the server");
   await b.reload();assert.deepEqual(await b.call("inspect"),deleted);
+  // Clock skew. Device B runs an hour slow; both sync the way the app does
+  // (since = the hub's last ping time). Pages 18-20 have shared history;
+  // page 50 is new on both devices, so it has no shared sync point.
+  // Expected-safe cases assert; the suspected loss path reports a FINDING so
+  // this check documents today's behaviour until sync stops comparing clocks.
+  const HOUR=3600e3;
+  await a.call("setClock",0,true);await b.call("setClock",-HOUR,true);
+  await a.call("pull");await b.call("pull");
+  await b.call("editPage",18,"#b01818");await b.call("push");
+  await a.call("pull");
+  assert.equal(await a.call("pageColor",18),"#b01818","slow device's edit to a shared page was lost");
+  console.log("PASS skew: a slow device's edit to a page with shared history reaches the other device");
+  await a.call("editPage",19,"#a01919");await a.call("push");
+  await b.call("pull");
+  await b.call("editPage",19,"#b01919");await b.call("push");
+  await a.call("pull");
+  assert.equal(await a.call("pageColor",19),"#b01919","later edit on a slow device lost to an earlier one");
+  console.log("PASS skew: a later edit on the slow device wins over an earlier one on the fast device");
+  await a.call("setClock",HOUR,true);
+  await a.call("editPage",20,"#a02020");await a.call("push");
+  await b.call("pull");await b.call("setClock",0,true);
+  await b.call("editPage",20,"#b02020");await b.call("push");
+  await a.call("pull");
+  assert.equal(await a.call("pageColor",20),"#b02020","a fast device's earlier edit beat a later one");
+  console.log("PASS skew: an edit after a fast device's edit still wins (versions never go backwards)");
+  await a.call("setClock",0,true);await b.call("setClock",-HOUR,true);
+  await a.call("pull");await b.call("pull");
+  await b.call("editPage",50,"#b05050");
+  await a.call("editPage",50,"#a05050");await a.call("push");
+  const newBoth=await b.call("pull");
+  const bColor=await b.call("pageColor",50);
+  if(newBoth.conflicts.length>0) console.log("PASS skew: a page new on both devices is offered as a conflict");
+  else if(bColor==="#a05050") console.log("FINDING skew: page new on both devices; the slow device's strokes were replaced without a conflict (silent ink loss)");
+  else console.log(`FINDING skew: page new on both devices, no conflict, slow device kept ${bColor}; the other device's strokes never arrive`);
+  // Control: the same race with both clocks right is caught as a conflict,
+  // so the loss above is the skew, not new pages as such.
+  await a.call("setClock",0,true);await b.call("setClock",0,true);
+  await a.call("pull");await b.call("pull");
+  await b.call("editPage",51,"#b05151");
+  await a.call("editPage",51,"#a05151");await a.call("push");
+  const control=await b.call("pull");
+  assert.equal(control.conflicts.length,1,"page new on both devices with correct clocks was not offered as a conflict");
+  assert.equal(await b.call("pageColor",51),"#b05151","correct clocks: local strokes replaced before the conflict was resolved");
+  console.log("PASS skew control: with correct clocks the same new-page race is offered as a conflict");
+  await b.call("keepServer",51);
+  await b.call("setClock",0,false);await a.call("setClock",0,false);
   const heaps=[];
   for(let i=0;i<5;i++) {
     await a.call("pull");await b.call("pull");

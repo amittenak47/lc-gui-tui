@@ -30,6 +30,11 @@ let failedPage:number|null=null;
 let corruptPage:number|null=null;
 let failAssets=false;
 let requests:string[]=[];
+// Clock-skew checks: this "device" stamps edits with its own (skewed) clock,
+// and can sync the way the app does, with the hub's last ping time as since.
+let skewMs=0;
+let useHubSince=false;
+let hubSince=0;
 window.fetch = async (input,init) => {
   const url=String(input); requests.push(url);
   if(failAssets && url.endsWith("/pads/artifact-assets/lookup")) throw new Error("Simulated attachment connection loss");
@@ -42,7 +47,10 @@ window.fetch = async (input,init) => {
 };
 async function exchangeInk() {
   const ping=await client.pingPadSync(0);
-  return syncInkPages(client,ping.ink,pads,0,{strict:true});
+  const conflicts=await syncInkPages(client,ping.ink,pads,useHubSince?hubSince:0,{strict:true});
+  // As padSync does: only a conflict-free walk advances since.
+  if(useHubSince&&conflicts.length===0) hubSince=ping.now;
+  return conflicts;
 }
 const api = {
   async discover() { await discoverHubPads(client); return api.inspect(); },
@@ -91,7 +99,13 @@ const api = {
       page17:await getInkPage(annotateDocKey(id),17),scratch:await getFootnoteWhiteboard(id,scratch),
       scratchInk:await getInkPage(footnoteWhiteboardDocKey(id,scratch),1)};
   },
-  async editPage(page:number,color:string) {await putInkPages(annotateDocKey(id),[[page,ink(page,color)]],{now:Date.now()});},
+  async editPage(page:number,color:string) {await putInkPages(annotateDocKey(id),[[page,ink(page,color)]],{now:Date.now()+skewMs});},
+  async setClock(skew:number,hubSinceMode:boolean) {skewMs=skew;useHubSince=hubSinceMode;},
+  async pageColor(page:number) {
+    const row=await getInkPage(annotateDocKey(id),page);
+    // Encoded ops keep their colour under `c`.
+    return row?.ops?.[0]?.c??null;
+  },
   async mergePage(page:number) {
     const openCursor=IDBObjectStore.prototype.openCursor;
     IDBObjectStore.prototype.openCursor=()=>{throw new Error("Single-page selection scanned all local handwriting");};
