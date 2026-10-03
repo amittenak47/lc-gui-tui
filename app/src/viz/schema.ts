@@ -228,6 +228,73 @@ export function callLabel(value: unknown): string {
   return cellText(value);
 }
 
+/**
+ * Edges from `entries`, each endpoint resolved to a node index.
+ *
+ * Models name a node by its value as often as by its position — `[5, 3]` for
+ * "5 → 3" in a tree whose cells are `[5, 3, 8]`, or `["A", "B"]`. Reading
+ * those as indices dropped every edge past the end of `cells` (a tree with no
+ * branches) and wired the ones that happened to be in range to the wrong
+ * nodes. The whole list is read one way — by label, by index, or each
+ * endpoint by label then index — whichever connects the most; a tie goes to
+ * labels, which is what the tool description asks for.
+ */
+export function resolveNodeEdges(cells: unknown[], entries: unknown[]): Array<[number, number]> {
+  const count = cells.length;
+  const labels = cells.map((cell) => (cell === null || cell === undefined ? null : cellText(cell)));
+  const byLabel = new Map<string, number>();
+  const repeated = new Set<string>();
+  labels.forEach((label, index) => {
+    if (label === null) return;
+    if (byLabel.has(label)) repeated.add(label);
+    else byLabel.set(label, index);
+  });
+  const asLabel = (token: string) => (repeated.has(token) ? -1 : byLabel.get(token) ?? -1);
+  const asIndex = (token: string) => {
+    const n = Number(token);
+    return token.trim() !== "" && Number.isInteger(n) && n >= 0 && n < count && labels[n] !== null ? n : -1;
+  };
+  const pairs = entries.map(entryPair).filter((pair): pair is [string, string] => pair !== null);
+  const read = (pick: (token: string) => number) => {
+    const out: Array<[number, number]> = [];
+    const seen = new Set<string>();
+    for (const [a, b] of pairs) {
+      const from = pick(a.trim());
+      const to = pick(b.trim());
+      if (from < 0 || to < 0 || from === to || seen.has(`${from}>${to}`)) continue;
+      seen.add(`${from}>${to}`);
+      out.push([from, to]);
+    }
+    return out;
+  };
+  const readings = [
+    read(asLabel),
+    read(asIndex),
+    read((token) => (asLabel(token) >= 0 ? asLabel(token) : asIndex(token))),
+  ];
+  return readings.reduce((best, next) => (next.length > best.length ? next : best));
+}
+
+/**
+ * Whether undirected `edges` over `count` nodes contain a cycle. Without one
+ * the graph is a forest and draws as layered trees instead of a ring.
+ */
+export function edgesHaveCycle(count: number, edges: ReadonlyArray<readonly [number, number]>): boolean {
+  const parent = Array.from({ length: count }, (_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i]!)));
+  const pairs = new Set<string>();
+  for (const [a, b] of edges) {
+    const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+    // u→v and v→u are one undirected link, not a cycle.
+    if (pairs.has(key)) continue;
+    pairs.add(key);
+    const ra = find(a), rb = find(b);
+    if (ra === rb) return true;
+    parent[ra] = rb;
+  }
+  return false;
+}
+
 /** Integer parent→child edges from `entries`, ignoring anything unreadable. */
 export function parentChildEdges(entries: unknown[], count: number): Array<[number, number]> {
   const out: Array<[number, number]> = [];

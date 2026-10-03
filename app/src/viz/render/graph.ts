@@ -1,9 +1,12 @@
 /**
- * Graph: nodes on a circle, edges from `entries`.
+ * Graph: edges from `entries`, nodes laid out deterministically.
  *
- * A circular layout is the deterministic choice — no force simulation, no
- * randomness, so the same program always draws the same picture and frame
- * stepping only moves the highlights.
+ * A graph with no cycle is a tree or a forest, and a ring hides that shape —
+ * a model asked to draw a tree as a graph got its nodes strung round a circle
+ * with crossing arrows. Those draw as layered trees, rooted at the first node
+ * of each component. A graph with a cycle keeps the ring: no force
+ * simulation, no randomness, so the same program always draws the same
+ * picture and frame stepping only moves the highlights.
  */
 
 import type { Skeleton } from "../../templates/skeleton";
@@ -15,9 +18,11 @@ import {
   footer,
   header,
   isHighlighted,
+  layoutForest,
+  linkArrow,
   type RenderContext,
 } from "../layout";
-import { cellText, entryPair } from "../schema";
+import { cellText, edgesHaveCycle, resolveNodeEdges } from "../schema";
 
 const NODE = 44;
 const RADIUS_PER_NODE = 13;
@@ -37,10 +42,72 @@ function nodeCentre(
   };
 }
 
-export function renderGraph(ctx: RenderContext): Skeleton[] {
+/** Parent→child links that span every node reachable from each root, breadth first. */
+function spanningLinks(count: number, edges: ReadonlyArray<readonly [number, number]>): Array<[number, number]> {
+  const near: number[][] = Array.from({ length: count }, () => []);
+  for (const [a, b] of edges) {
+    near[a]!.push(b);
+    near[b]!.push(a);
+  }
+  const seen = new Set<number>();
+  const links: Array<[number, number]> = [];
+  for (let root = 0; root < count; root++) {
+    if (seen.has(root)) continue;
+    seen.add(root);
+    const queue = [root];
+    while (queue.length) {
+      const at = queue.shift()!;
+      for (const next of near[at]!) {
+        if (seen.has(next)) continue;
+        seen.add(next);
+        links.push([at, next]);
+        queue.push(next);
+      }
+    }
+  }
+  return links;
+}
+
+/** A forest-shaped graph as layered trees; arrows keep each edge's own direction. */
+function renderGraphAsForest(ctx: RenderContext, edges: Array<[number, number]>): Skeleton[] {
   const { frame, origin } = ctx;
   const out = header(ctx);
+  const labels = frame.cells.map(cellText);
+  const longest = labels.reduce((n, label) => Math.max(n, label.length), 1);
+  const w = Math.max(NODE, Math.min(128, longest * 8 + 22));
+  const top = origin.y + headerOffset(ctx);
+  const centres = layoutForest(labels.length, spanningLinks(labels.length, edges), { x: origin.x, y: top }, {
+    node: w,
+    nodeHeight: NODE,
+    gap: 18,
+    levelH: NODE + 42,
+  });
+  edges.forEach(([from, to], edgeIndex) => {
+    const a = centres[from];
+    const b = centres[to];
+    if (a && b) out.push(linkArrow(ctx, `edge-${edgeIndex}`, a, b, NODE));
+  });
+  labels.forEach((label, index) => {
+    const point = centres[index];
+    if (!point) return;
+    out.push(
+      ...cellBox(ctx, `node-${index}`, point.x - w / 2, point.y - NODE / 2, label, {
+        highlighted: isHighlighted(frame, index),
+        width: w,
+        height: NODE,
+      }),
+    );
+  });
+  const bottom = centres.reduce((max, point) => Math.max(max, point.y + NODE / 2), top);
+  return [...out, ...footer(ctx, bottom + 8)];
+}
+
+export function renderGraph(ctx: RenderContext): Skeleton[] {
+  const { frame, origin } = ctx;
   const count = frame.cells.length;
+  const edges = resolveNodeEdges(frame.cells, frame.entries);
+  if (count > 0 && edges.length > 0 && !edgesHaveCycle(count, edges)) return renderGraphAsForest(ctx, edges);
+  const out = header(ctx);
   const radius = Math.max(MIN_RADIUS, count * RADIUS_PER_NODE);
   const centre = {
     x: origin.x + radius + NODE,
@@ -48,21 +115,9 @@ export function renderGraph(ctx: RenderContext): Skeleton[] {
   };
 
   const labels = frame.cells.map(cellText);
-  /** Resolve an edge endpoint by node label first, then by index. */
-  const indexOf = (token: string): number => {
-    const byLabel = labels.indexOf(token);
-    if (byLabel >= 0) return byLabel;
-    const asIndex = Number(token);
-    return Number.isInteger(asIndex) && asIndex >= 0 && asIndex < count ? asIndex : -1;
-  };
 
   // Edges under the nodes.
-  frame.entries.forEach((entry, edgeIndex) => {
-    const pair = entryPair(entry);
-    if (!pair) return;
-    const from = indexOf(pair[0]);
-    const to = indexOf(pair[1]);
-    if (from < 0 || to < 0 || from === to) return;
+  edges.forEach(([from, to], edgeIndex) => {
 
     const a = nodeCentre(from, count, centre, radius);
     const b = nodeCentre(to, count, centre, radius);

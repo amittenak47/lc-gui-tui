@@ -133,7 +133,8 @@ pub(super) fn frame_schema() -> serde_json::Value {
                      dptable, segtree, calltree, composite, and bits — a frame with an empty \
                      `cells` draws an empty box. array: [2,7,11,15] (primitive values, NOT \
                      objects such as {ch,end} or {value}). grid: [[1,0],[0,1]]. \
-                     tree/heap: level-order with nulls, [5,3,8,null,1]. graph: node labels. \
+                     tree/heap: level-order with nulls, [5,3,8,null,1], or (any tree) each node \
+                     once with parent→child `entries`. graph: each node's label once. \
                      trie: nodes {ch, end}. unionfind: parent[]. dplist: dp[]. dptable: rows of \
                      the table. segtree: {lo,hi,val}. calltree: {fn, args}. composite: nested \
                      panels {viz, cells, …}. bits: 0/1 cells.",
@@ -164,7 +165,9 @@ pub(super) fn frame_schema() -> serde_json::Value {
                 "description":
                     "REQUIRED for hashmap: the map's contents as [key, value] pairs, e.g. \
                      [[2,0],[7,1]]. For tree/graph/linkedlist/trie/calltree it holds edges as \
-                     [from, to] (trie/calltree are parent→child, not heap 2i+1). unionfind: \
+                     [from, to], naming each node by its label in `cells` (an index also \
+                     works); an edge to a node missing from `cells` is dropped (trie/calltree \
+                     are parent→child, not heap 2i+1). unionfind: \
                      rank[] when it is a number list. dplist: predecessor indices. dptable: \
                      optional [col labels] then [row labels], then pred arrows. A hashmap \
                      frame with an empty `entries` draws an empty map.",

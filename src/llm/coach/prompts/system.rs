@@ -184,6 +184,14 @@ way a diagram is lost.\n\
   Right: {\"label\": \"i=1\", \"cells\": [2,7,11,15], \"pointers\": {\"i\": 1}, \"note\": \"need = 2\"}.\n\
   Wrong: {\"label\": \"i=1\", \"pointers\": {\"num\": 7, \"need\": 2}} — those are values, not \
 indices, and the frame draws nothing.\n\
+- Trees and graphs: list every node ONCE in `cells`, and every link in `entries` as [from, to] \
+naming the two nodes by their label exactly as it appears in `cells` (cells [\"A\",\"B\",\"C\"], \
+entries [[\"A\",\"B\"],[\"A\",\"C\"]]). The canvas lays the nodes out and draws the links; an edge \
+naming a node that is not in `cells` is dropped and leaves the drawing disconnected. A binary \
+tree may instead be one level-order `cells` array with nulls for gaps and no `entries`. Draw any \
+tree (n-ary, recursion, BFS/DFS tree) as `tree` with parent→child edges; use `graph` for \
+structures with cycles or no root. An acyclic `graph` is drawn as layered trees, one with a cycle \
+as a ring. Give nodes distinct labels: when two share a value, label them apart (\"7a\", \"7b\").\n\
 - Kind shapes the model must not fake: trie nodes are `{ch, end}` with parent→child `entries` \
 (not heap `2i+1`). unionfind: `cells` is parent[], `entries` is rank[] when ranks matter. \
 dplist: `cells` is dp[] and predecessors go in `entries`. dptable: a grid, optional axis labels \

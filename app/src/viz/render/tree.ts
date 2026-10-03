@@ -28,7 +28,7 @@ import {
   linkArrow,
   type RenderContext,
 } from "../layout";
-import { cellText, parentChildEdges } from "../schema";
+import { cellText, resolveNodeEdges } from "../schema";
 
 function nodeMetrics(ctx: RenderContext): { w: number; h: number; fontSize: number; levelH: number } {
   let longest = 1;
@@ -80,7 +80,8 @@ function renderTreeInner(ctx: RenderContext, options: TreeOptions): Skeleton[] {
   const top = origin.y + headerOffset(ctx);
   const metrics = nodeMetrics(ctx);
   const count = frame.cells.length;
-  const edges = parentChildEdges(frame.entries, count);
+  // Edges may name nodes by value or by position; see resolveNodeEdges.
+  const edges = resolveNodeEdges(frame.cells, frame.entries);
   const useForest = edges.length > 0 && !options.showBackingArray;
 
   let centres: Array<{ x: number; y: number } | undefined>;
