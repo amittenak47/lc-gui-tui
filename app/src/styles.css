@@ -21207,34 +21207,41 @@ button.lc-row-selected:hover:not(:disabled) {
 .lc-color-slot-stop { border-radius: 8px; }
 .lc-color-slot-channels label { min-width: 0; }
 
-/* Move the liquid layer rather than resizing it, keeping the wash smooth on touch. */
+/*
+ * The hold fill: one layer that slides in, with a wave cut into its leading
+ * edge by a mask. The wave scrolls down the edge while the hold runs, so the
+ * surface keeps flowing. No shapes are laid over the wash, so it is one even
+ * colour to the very tip; stacked translucent ovals darkened it where they met.
+ * The layer runs a wave's width past the button, so a full fill has no edge.
+ */
 .lc-hold-reveal:not(.lc-progress-fill) > .lc-hold-reveal-fill {
-  inset: 0;
-  width: 100%;
+  --lc-hold-wave: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 24'%3E%3Cpath d='M0 0H6C9 4 9 8 6 12C3 16 3 20 6 24H0Z'/%3E%3C/svg%3E");
+  inset: 0 auto 0 0;
+  width: calc(100% + 12px);
   clip-path: none;
   -webkit-clip-path: none;
-  transform: translateX(calc((var(--lc-hold, 0) - 1) * (100% + 10px)));
-  overflow: visible;
+  transform: translateX(calc((var(--lc-hold, 0) - 1) * 100%));
+  overflow: hidden;
+  -webkit-mask:
+    linear-gradient(#000 0 0) left top / calc(100% - 12px) 100% no-repeat,
+    var(--lc-hold-wave) right 0 / 12px 24px repeat-y;
+  mask:
+    linear-gradient(#000 0 0) left top / calc(100% - 12px) 100% no-repeat,
+    var(--lc-hold-wave) right 0 / 12px 24px repeat-y;
 }
 .lc-hold-reveal:not(.lc-progress-fill) > .lc-hold-reveal-fill::before,
 .lc-hold-reveal:not(.lc-progress-fill) > .lc-hold-reveal-fill::after {
-  content: "";
-  position: absolute;
-  width: 16px;
-  height: 170%;
-  right: -6px;
-  top: -35%;
-  border-radius: 50%;
-  background: inherit;
+  content: none;
 }
-.lc-hold-reveal:not(.lc-progress-fill)[data-filling] > .lc-hold-reveal-fill::before { animation: lc-liquid-wave 420ms ease-in-out infinite alternate; }
-.lc-hold-reveal:not(.lc-progress-fill)[data-filling] > .lc-hold-reveal-fill::after { opacity: 0.45; animation: lc-liquid-wave 580ms ease-in-out infinite alternate-reverse; }
-@keyframes lc-liquid-wave {
-  from { transform: translateY(-8%) scaleX(0.65) rotate(-4deg); }
-  to { transform: translateY(8%) scaleX(1.1) rotate(4deg); }
+.lc-hold-reveal:not(.lc-progress-fill)[data-filling] > .lc-hold-reveal-fill {
+  animation: lc-hold-flow 900ms linear infinite;
+}
+@keyframes lc-hold-flow {
+  from { -webkit-mask-position: left top, right 0; mask-position: left top, right 0; }
+  to { -webkit-mask-position: left top, right 24px; mask-position: left top, right 24px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .lc-hold-reveal > .lc-hold-reveal-fill::before, .lc-hold-reveal > .lc-hold-reveal-fill::after { animation: none !important; }
+  .lc-hold-reveal > .lc-hold-reveal-fill { animation: none !important; }
 }
 
 /* Session delete keeps its danger palette with the shared liquid motion. */
