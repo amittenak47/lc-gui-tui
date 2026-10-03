@@ -6,6 +6,7 @@ import { DialogPresence } from "../components/DialogMotion";
  * There is no Excalidraw canvas.
  */
 
+import { dedupeInkOps } from "./inkOpsDedupe";
 import { selectionCaptureFrame } from "./selectionCapture";
 import { touchPointersIn } from "./touchPointers";
 import {
@@ -443,7 +444,9 @@ function paintExportInk(
 ): void {
   const hosts = scrollHostLookupFromSlot(pageLayers?.contentSlot, pageLayers?.pageBounds);
   const hostZoom = slotCssPerScene(pageLayers?.contentSlot, pageLayers?.pageBounds);
-  paintInkAtScale(inkCtx, ops, origin, drawScale, hosts, hostZoom);
+  // Thumbnails and exports paint on the UI thread: each stroke once, as the
+  // tiles do, not every copy an old merge stored.
+  paintInkAtScale(inkCtx, dedupeInkOps(ops), origin, drawScale, hosts, hostZoom);
 }
 
 async function exportBoardBlob(
