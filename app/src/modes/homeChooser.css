@@ -78,9 +78,15 @@
   .lc-home-chooser.lc-home-redesign .lc-home-card-blurb { font-size: 11px; }
 }
 
-/* Open: the list takes its content height up to a cap, and Start gets the rest. */
-.lc-home-chooser.lc-home-redesign[data-recents="open"] { grid-template-rows: auto auto minmax(min-content, 1fr); }
-.lc-home-chooser[data-recents="open"] .lc-home-recents-window { flex: 0 1 auto; max-height: clamp(86px, 24vh, 190px); }
+/* Open: the list takes its content height up to a cap, and Start gets the rest.
+   It never shrinks below one row of items: on a short screen (a rotated
+   tablet) the section used to collapse to its padding and the list spilled
+   behind the Start tiles. Home scrolls instead when both cannot fit. */
+.lc-home-chooser.lc-home-redesign[data-recents="open"] { grid-template-rows: min-content min-content minmax(min-content, 1fr); }
+.lc-home-chooser[data-recents="open"] .lc-home-recents { min-height: min-content; }
+.lc-home-chooser[data-recents="open"] .lc-home-recents-window { flex: 0 0 auto; min-height: 88px; max-height: clamp(88px, 24vh, 190px); }
+/* Wide screens fit more items to a row rather than two stretched ones. */
+@media (min-width: 900px) { .lc-home-recents-window { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); } }
 
 /* Recently opened: absent when empty, one slim row when folded, sharing the height when open. */
 .lc-home-chooser.lc-home-redesign[data-recents="none"] { grid-template-rows: minmax(min-content, 1fr); }
@@ -144,3 +150,24 @@
 .lc-home-chooser.lc-home-redesign .lc-home-card:is([data-mode="browse"],[data-mode="explore"]) { container-type: size; }
 .lc-home-redesign .lc-home-cell:is([data-mode="browse"],[data-mode="explore"]) .lc-home-card-icon { flex: none; align-self: center; width: min(40cqw, 100cqh, 132px); height: auto; aspect-ratio: 1; }
 .lc-home-chooser.lc-home-redesign .lc-home-card:is([data-mode="browse"],[data-mode="explore"]) .lc-home-card-icon > svg { width: 64px; height: 64px; max-width: 62%; max-height: 62%; }
+
+/* A rotated tablet or short window: the whole of Home fits the height
+   instead of scrolling its last tiles away. */
+@media (orientation: landscape) and (max-height: 820px) and (min-width: 700px) {
+  .lc-home-chooser.lc-home-redesign { --lc-home-row-a: 120px; --lc-home-row-b: 84px; --lc-home-row-c: 64px; padding-top: 12px; gap: 8px; }
+  .lc-home-chooser.lc-home-redesign .lc-home-chooser-grid { gap: 10px; }
+  /* The tiles take what is left of the height, down to their row floors;
+     their fixed-size glyphs no longer set the minimum. */
+  .lc-home-chooser.lc-home-redesign[data-recents="open"],
+  .lc-home-chooser.lc-home-redesign[data-recents="collapsed"] { grid-template-rows: min-content min-content minmax(calc(var(--lc-home-row-a) + var(--lc-home-row-b) + var(--lc-home-row-c) + 20px), 1fr); }
+  .lc-home-chooser.lc-home-redesign[data-recents="none"] { grid-template-rows: minmax(calc(var(--lc-home-row-a) + var(--lc-home-row-b) + var(--lc-home-row-c) + 20px), 1fr); }
+  .lc-home-chooser.lc-home-redesign .lc-home-chooser-grid { grid-template-rows: minmax(var(--lc-home-row-a), 1.45fr) minmax(var(--lc-home-row-b), 1fr) minmax(var(--lc-home-row-c), .72fr); height: 100%; }
+  .lc-home-chooser.lc-home-redesign .lc-home-card[data-mode] .lc-home-card-icon { container-type: size; }
+  .lc-home-chooser.lc-home-redesign .lc-home-card[data-mode] .lc-home-card-icon > svg { width: min(62cqw, 62cqh); height: min(62cqw, 62cqh); max-width: none; max-height: none; }
+  .lc-home-chooser.lc-home-redesign .lc-home-card { padding: 8px; gap: 8px; }
+  .lc-home-chooser.lc-home-redesign .lc-home-card-kicker { font-size: 14px; }
+  .lc-home-chooser.lc-home-redesign .lc-home-card-blurb { font-size: 12px; }
+  .lc-home-redesign .lc-home-cell:is([data-mode="practice"],[data-mode="annotate"]) .lc-home-card { padding-bottom: 10px; }
+  .lc-home-recents-head { margin-bottom: 8px; }
+  .lc-home-recent { min-height: 64px; }
+}
