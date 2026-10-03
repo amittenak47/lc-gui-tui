@@ -15780,6 +15780,17 @@ button.lc-row-selected:hover:not(:disabled) {
   }
 }
 
+/* A rotated tablet: three quarters of a short screen left the board a strip.
+   The sheet opens at about half, and the composer starts at a few lines. */
+@media (orientation: landscape) and (max-height: 820px) and (min-width: 700px) {
+  .lc-mobile {
+    --lc-agent-sheet: max(300px, 55vh);
+  }
+  .lc-mobile .lc-agent-composer textarea {
+    min-height: 4.6rem;
+  }
+}
+
 /* Shell uses the page background edge-to-edge; safe-area fill lives on the coach sheet. */
 .lc-mobile.lc-app {
   position: fixed;
