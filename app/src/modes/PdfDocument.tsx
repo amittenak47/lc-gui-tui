@@ -554,6 +554,9 @@ function releasePagePixels(
 /** How long a parked book keeps its sharp pages before giving them back. */
 export const PARKED_TRIM_MS = 5_000;
 
+/** Text spans laid out per slice when building a page's selectable text. */
+const TEXT_LAYER_CHUNK = 150;
+
 export function PdfDocument({
   filmScope,
   bytes,
@@ -1365,18 +1368,40 @@ export function PdfDocument({
           slot.querySelector<HTMLElement>(".lc-pdf-spread") ?? slot;
         if (!textHost) continue;
         textHost.textContent = "";
-        const layer = new TextLayer({
-          textContentSource: {
-            ...content,
-            items: content.items.slice(),
+        /*
+         * The page's words, a slice at a time. One `render()` over a dense
+         * page measured every span in a single task: 1-3.5 s with the screen
+         * frozen on the tablet. pdf.js reads a stream one chunk per read and
+         * keeps its marked-content state across chunks (it is how its own
+         * worker delivers text), so yielding between slices costs nothing but
+         * the stall. A gesture stops the feed; the layer is then incomplete,
+         * and the caller does not remember the page as done.
+         */
+        let next = 0;
+        let cut = false;
+        const textContentSource = new ReadableStream<PdfTextContent>({
+          async pull(controller) {
+            if (next > 0) await yieldToInput();
+            if (blocked() || next >= content.items.length) {
+              cut = next < content.items.length;
+              if (next === 0) controller.enqueue({ ...content, items: [] });
+              controller.close();
+              return;
+            }
+            const items = content.items.slice(next, next + TEXT_LAYER_CHUNK);
+            controller.enqueue({ ...content, items });
+            next += items.length;
           },
+        });
+        const layer = new TextLayer({
+          textContentSource,
           container: textHost,
           viewport: pdfPage.getViewport({ scale: entry.fit }),
         });
         await yieldToInput();
         if (blocked()) return false;
         await layer.render();
-        if (blocked()) return false;
+        if (cut || blocked()) return false;
         alignTextLayerToGlyphs(
           spreadHost,
           layer.textDivs,
