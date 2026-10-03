@@ -339,6 +339,7 @@ function NoteRow({
       data-pick={kept ? "keep" : dropped ? "drop" : "undecided"}
       onClick={() => onFocus(id)}
     >
+      {focused && <span className="lc-tab-loading-border" aria-hidden />}
       {childCount != null && childCount > 0 && onToggleExpand ? (
         <button
           type="button"
@@ -1267,6 +1268,7 @@ export function HubConflictSplit({
         data-pick={kept ? "keep" : dropped ? "drop" : "undecided"}
         onClick={() => focusRow(id)}
       >
+        {focusedId === id && <span className="lc-tab-loading-border" aria-hidden />}
         <span className="lc-hub-conflict-note-kind">ink</span>
         <span className="lc-hub-conflict-note-excerpt">
           {!has ? "No entry on this device" : unread ? "Could not read handwriting" : excerpt}

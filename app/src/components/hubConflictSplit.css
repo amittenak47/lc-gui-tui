@@ -381,10 +381,18 @@
 
 .lc-hub-conflict .lc-hub-conflict-note.is-same-id { border-style: solid; }
 
-/* The page being shown: a dashed outline, never a fill, so it cannot read as a choice. */
+/*
+ * The page being shown: the tab's loading lap running round the row, never a
+ * fill, so it cannot read as a choice.
+ */
 .lc-hub-conflict .lc-hub-conflict-note.is-focused {
-  outline: var(--hc-edge) dashed var(--ink);
-  outline-offset: 1px;
+  position: relative;
+  outline: none;
+}
+
+.lc-hub-conflict .lc-hub-conflict-note > .lc-tab-loading-border {
+  inset: -2px;
+  color: var(--accent);
 }
 
 /* The other device has nothing here: hatched, so the gap is obvious at a glance. */

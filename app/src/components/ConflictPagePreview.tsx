@@ -510,6 +510,8 @@ export function ConflictPagePreview({
 
   // Measure page placement once; only nearby 512px strips receive backing stores.
   const [inkSlots, setInkSlots] = useState<ConflictInkSlot[]>([]);
+  /** The page in view once its slot is laid out: ink elsewhere cannot hold the spinner. */
+  const [measuredPage, setMeasuredPage] = useState<number | null>(null);
   const inkedPages = useMemo(() => {
     if (usePaper && decodedOps.length > 0) {
       const ids = inkPageIdsFromOps(decodedOps, paperFrames);
@@ -548,6 +550,8 @@ export function ConflictPagePreview({
       return;
     }
     const base = doc.getBoundingClientRect();
+    const shown = doc.querySelector<HTMLElement>(`[data-pdf-page="${page}"]`)?.getBoundingClientRect();
+    setMeasuredPage(shown && shown.width >= 1 && shown.height >= 1 ? page : null);
     const next: ConflictInkSlot[] = [];
     for (const pageId of inkedPages) {
       const slot = doc.querySelector<HTMLElement>(`[data-pdf-page="${pageId}"]`);
@@ -704,8 +708,13 @@ export function ConflictPagePreview({
   }, [tileKeys, showInk, inkSlots, decodedOps, decodedShards, sceneWidth, stablePageFrames, paperFrames, usePaper, useMarkdown, inkX, paintPageKey, revealInk]);
 
   const inkPainted = paintedInk?.ops === decodedOps && paintedInk?.slots === inkSlots;
+  /*
+   * Ready once the page in view is laid out and any ink on screen painted.
+   * Waiting for every inked page's slot held the spinner forever on a page
+   * this side has nothing on, until a visit elsewhere happened to clear it.
+   */
   const paperReady = cssWidth > 0 && !inkLoading && !(showInk && !decodeDone) &&
-    !(showInk && inkedPages.length > 0 && (inkSlots.length === 0 || !inkPainted));
+    !(showInk && inkedPages.length > 0 && (measuredPage !== page || (inkSlots.length > 0 && !inkPainted)));
 
   useEffect(() => {
     if (loadPhase !== "busy") return;
