@@ -4727,7 +4727,7 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 0;
   height: 36px;
   padding: 0 14px;
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
   border: 1px solid color-mix(in srgb, var(--accent, #0d9488) 55%, transparent);
   background: color-mix(in srgb, var(--accent, #0d9488) 14%, var(--panel, #fff));
   color: var(--ink, #1a1a1a);
@@ -4847,7 +4847,7 @@ body[data-lc-sash-drag="horizontal"] {
   );
   padding: 4px 6px;
   border: 1px solid var(--chrome-edge);
-  border-radius: 14px;
+  border-radius: var(--lc-r-block);
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   backdrop-filter: blur(8px);
   box-shadow: 0 6px 22px rgb(0 0 0 / 16%);
@@ -4859,7 +4859,7 @@ body[data-lc-sash-drag="horizontal"] {
   height: 0;
   overflow: hidden;
   pointer-events: none;
-  border-radius: 14px;
+  border-radius: var(--lc-r-block);
   transition:
     width 180ms ease,
     height 180ms ease,
@@ -4921,6 +4921,11 @@ body[data-lc-sash-drag="horizontal"] {
     0 12px 28px rgb(0 0 0 / 24%);
 }
 
+/* Blocky pen island: tool buttons take the block corner, not the global button's. */
+.lc-toolbar :is(button, .lc-hold-reveal) {
+  border-radius: var(--lc-r-block);
+}
+
 .lc-toolbar-grip {
   width: 22px;
   min-height: var(--touch);
@@ -4930,7 +4935,7 @@ body[data-lc-sash-drag="horizontal"] {
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
   background: transparent;
   color: var(--muted);
   cursor: grab;
@@ -5005,7 +5010,7 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 32px;
   padding: 0 10px;
   border: 1px solid var(--chrome-edge);
-  border-radius: 10px;
+  border-radius: var(--lc-r-block);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
@@ -5159,7 +5164,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 [data-lc-chrome-narrow] .lc-map-controls .lc-toolbar {
   padding: 2px 3px;
-  border-radius: 10px;
+  border-radius: var(--lc-r-block);
 }
 
 [data-lc-chrome-narrow] .lc-map-controls .lc-toolbar.is-column {
@@ -5211,7 +5216,7 @@ body[data-lc-sash-drag="horizontal"] {
   width: 26px;
   height: 26px;
   min-height: 26px;
-  border-radius: 6px;
+  border-radius: var(--lc-r-block);
 }
 
 [data-lc-chrome-narrow] .lc-map-controls .lc-toolbar-grip {
@@ -5242,7 +5247,7 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 20px !important;
   padding: 0 5px;
   font-size: 9px;
-  border-radius: 7px;
+  border-radius: var(--lc-r-block);
 }
 
 [data-lc-chrome-narrow] .lc-map-controls .lc-hold-reveal.lc-preset-chip
@@ -5268,7 +5273,7 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 92px;
   padding: 2px;
   gap: 1px;
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
 }
 
 [data-lc-chrome-narrow] .lc-map-controls .lc-map-chrome-stack.has-wake {
@@ -5292,7 +5297,7 @@ body[data-lc-sash-drag="horizontal"] {
 [data-lc-chrome-narrow] .lc-map-controls .lc-map-chrome-stack.has-wake .lc-chrome-stack-tray {
   padding: 2px;
   gap: 1px;
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
 }
 
 /*
@@ -5310,7 +5315,7 @@ body[data-lc-sash-drag="horizontal"] {
   min-width: 26px;
   min-height: 20px;
   font-size: 10px;
-  border-radius: 6px;
+  border-radius: var(--lc-r-block);
 }
 
 [data-lc-chrome-narrow] .lc-map-controls .lc-map-chrome-stack .lc-lined-toggle svg,
@@ -6199,7 +6204,7 @@ body[data-lc-sash-drag="horizontal"] {
   min-width: 148px;
   padding: 6px;
   border: 1px solid var(--chrome-edge);
-  border-radius: 12px;
+  border-radius: var(--lc-r-block);
   background: var(--panel);
   box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
 }
@@ -6213,7 +6218,7 @@ body[data-lc-sash-drag="horizontal"] {
   background: transparent;
   text-align: left;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
   font: inherit;
   font-size: 13px;
   color: var(--ink);
@@ -6254,7 +6259,7 @@ body[data-lc-sash-drag="horizontal"] {
   min-width: 168px;
   padding: 6px;
   border: 1px solid var(--chrome-edge);
-  border-radius: 12px;
+  border-radius: var(--lc-r-block);
   background: var(--panel);
   box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
 }
@@ -6363,7 +6368,7 @@ body[data-lc-sash-drag="horizontal"] {
   background: transparent;
   text-align: left;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
   font: inherit;
   font-size: 13px;
   color: var(--ink);
@@ -6398,7 +6403,7 @@ body[data-lc-sash-drag="horizontal"] {
   align-items: center;
   justify-content: center;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--lc-r-block);
   background: transparent;
   cursor: pointer;
   touch-action: none;
@@ -6743,7 +6748,7 @@ body[data-lc-sash-drag="horizontal"] {
   width: 36px;
   min-height: 30px;
   font-size: 12px;
-  border-radius: 6px;
+  border-radius: var(--lc-r-block);
 }
 
 .lc-tool-sep {
@@ -6791,7 +6796,7 @@ body[data-lc-sash-drag="horizontal"] {
   max-height: 50vh;
   padding: 0;
   border: 1px solid var(--chrome-edge);
-  border-radius: 12px;
+  border-radius: var(--lc-r-block);
   background: var(--panel);
   box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
 }
@@ -6826,7 +6831,7 @@ body[data-lc-sash-drag="horizontal"] {
   max-width: 100%;
   height: 62px;
   object-fit: contain;
-  border-radius: 7px;
+  border-radius: var(--lc-r-block);
   background: #fbfcfd;
 }
 
@@ -6834,7 +6839,7 @@ body[data-lc-sash-drag="horizontal"] {
   width: 100%;
   height: 124px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--lc-r-block);
 }
 
 .lc-shape {
@@ -6931,7 +6936,7 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 36px;
   padding: 0 10px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
   background: var(--surface);
   color: var(--ink);
   font-size: 14px;
@@ -6942,7 +6947,7 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 40px;
   margin-top: 2px;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--lc-r-block);
   background: var(--accent);
   color: #fff;
   font-size: 14px;
@@ -8223,7 +8228,7 @@ body[data-lc-sash-drag="horizontal"] {
   padding: 3px;
   overflow: visible;
   border: 1px solid var(--chrome-edge);
-  border-radius: 10px;
+  border-radius: var(--lc-r-block);
   background: color-mix(in srgb, var(--surface) 96%, transparent);
   box-shadow: 0 2px 10px rgb(0 0 0 / 16%);
 }
@@ -8264,7 +8269,7 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-map-chrome-stack.has-wake .lc-chrome-stack-tray {
   padding: 3px;
   border: 1px solid var(--chrome-edge);
-  border-radius: 10px;
+  border-radius: var(--lc-r-block);
   background: color-mix(in srgb, var(--surface) 96%, transparent);
   box-shadow: 0 2px 10px rgb(0 0 0 / 16%);
 }
@@ -8290,7 +8295,7 @@ body[data-lc-sash-drag="horizontal"] {
   border: none;
   box-shadow: none;
   background: transparent;
-  border-radius: 7px;
+  border-radius: var(--lc-r-block);
   min-height: 32px;
 }
 
@@ -8346,7 +8351,7 @@ body[data-lc-sash-drag="horizontal"] {
   min-width: 44px;
   height: 44px;
   min-height: 44px;
-  border-radius: 10px;
+  border-radius: var(--lc-r-block);
 }
 
 .lc-map-chrome-row > .lc-lined-toggle svg {
@@ -8372,7 +8377,7 @@ body[data-lc-sash-drag="horizontal"] {
   font-size: 15px;
   line-height: 1;
   border: 1px solid var(--chrome-edge);
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
   background: var(--surface);
   box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
   color: var(--ink);
@@ -8487,7 +8492,7 @@ body[data-lc-sash-drag="horizontal"] {
   font-size: 15px;
   line-height: 1;
   border: 1px solid var(--chrome-edge);
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
   background: var(--surface);
   box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
   color: var(--ink);
@@ -9210,7 +9215,7 @@ body[data-lc-sash-drag="horizontal"] {
   border: none;
   box-shadow: none;
   background: transparent;
-  border-radius: 7px;
+  border-radius: var(--lc-r-block);
   min-height: 32px;
 }
 
@@ -10373,7 +10378,7 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-zoom,
 .lc-palette-compact {
   border: 1px solid var(--chrome-edge);
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
   background: var(--surface);
   box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
 }
@@ -10434,7 +10439,7 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-palette-trigger {
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
   border: 1px solid var(--line) !important;
 }
 
@@ -10522,7 +10527,7 @@ body[data-lc-sash-drag="horizontal"] {
   min-height: 28px;
   padding: 0;
   border: none !important;
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
   background: transparent !important;
   overflow: visible;
   line-height: 1;
@@ -10530,7 +10535,7 @@ body[data-lc-sash-drag="horizontal"] {
 
 .lc-palette-map {
   border: 1px solid var(--chrome-edge);
-  border-radius: 8px;
+  border-radius: var(--lc-r-block);
   background: var(--surface);
   box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
   overflow: visible;
@@ -19096,7 +19101,7 @@ button.lc-row-selected:hover:not(:disabled) {
   min-height: 28px !important;
   max-height: 28px;
   padding: 0 !important;
-  border-radius: 6px;
+  border-radius: var(--lc-r-block);
   box-sizing: border-box;
 }
 
