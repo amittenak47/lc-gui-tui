@@ -165,6 +165,7 @@ import { PAD_HUB_EVENT, loadSavedPadHub, savePadHub } from "../util/padHub";
 import { compareIndexFacts, indexFacts } from "../util/indexReport";
 import type { SettingsFact } from "../util/settingsFacts";
 import { SettingsFacts, factsFromMessage } from "./SettingsFacts";
+import { auditInkDuplicates } from "../util/inkDuplicates";
 
 type TabId = "workspace" | "personalise" | "ai" | "llm";
 
@@ -669,6 +670,29 @@ export function SettingsModal({
     | { kind: "done"; facts: SettingsFact[] }
     | { kind: "failed"; facts: SettingsFact[] }
   >({ kind: "idle" });
+
+  /** Duplicate strokes from older merges: counted, or removed on a hold. */
+  const [inkDupes, setInkDupes] = useState<
+    | { kind: "idle" }
+    | { kind: "busy" }
+    | { kind: "done"; facts: SettingsFact[] }
+    | { kind: "failed"; facts: SettingsFact[] }
+  >({ kind: "idle" });
+  const runInkDupes = useCallback(async (remove: boolean) => {
+    setInkDupes({ kind: "busy" });
+    try {
+      const report = await auditInkDuplicates({ remove });
+      const strokes = (n: number) => `${n.toLocaleString()} ${n === 1 ? "stroke" : "strokes"}`;
+      const facts: SettingsFact[] = report.duplicates === 0
+        ? [{ value: "No duplicate strokes.", tone: "ok" }]
+        : remove
+          ? [{ value: `Removed ${strokes(report.duplicates)} from ${report.pages} ${report.pages === 1 ? "page" : "pages"}. The pages look the same; the change syncs.`, tone: "ok" }]
+          : [{ value: `${strokes(report.duplicates)} of ${report.strokes.toLocaleString()} are copies, on ${report.pages} ${report.pages === 1 ? "page" : "pages"} in ${report.books} ${report.books === 1 ? "document" : "documents"}.`, tone: "warn" }];
+      setInkDupes({ kind: "done", facts });
+    } catch (cause) {
+      setInkDupes({ kind: "failed", facts: factsFromMessage(cause instanceof Error ? cause.message : String(cause)) });
+    }
+  }, []);
 
   const runDocCache = useCallback(
     async (action: "check" | "repair" | "clear" | "inspect") => {
@@ -2382,6 +2406,25 @@ export function SettingsModal({
               {docCache.kind === "done" && <SettingsFacts facts={docCache.facts} />}
               {docCache.kind === "failed" && <SettingsFacts facts={docCache.facts} error />}
 
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Duplicate strokes</div>
+              <p className="lc-settings-hint">
+                Strokes older merges stored more than once. Remove keeps one of each; pages look the same.
+              </p>
+              <div className="lc-pad-hub-check">
+                <button aria-label="Check for duplicate strokes" title="Check for duplicate strokes"
+                  type="button"
+                  className="lc-secondary lc-settings-icon-action"
+                  disabled={inkDupes.kind === "busy"}
+                  onClick={() => { void runInkDupes(false); }}
+                ><SettingsIcon id="check"/></button>
+                <HoldButton label="Remove duplicate strokes" ariaLabel="Hold to remove duplicate strokes" dataTip="Remove duplicate strokes"
+                  className="lc-secondary lc-settings-icon-action" disabled={inkDupes.kind === "busy"}
+                  onConfirm={() => void runInkDupes(true)}><SettingsIcon id="repair"/></HoldButton>
+              </div>
+              {inkDupes.kind === "done" && <SettingsFacts facts={inkDupes.facts} />}
+              {inkDupes.kind === "failed" && <SettingsFacts facts={inkDupes.facts} error />}
               </div>
 <div className="lc-setting-row">
 <div className="lc-settings-subhead">Search index</div>
