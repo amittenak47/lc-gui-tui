@@ -34,6 +34,7 @@ import {
 } from "./inkPageIndex";
 import { isHostBoundOp, inkOpsBounds, unionSceneBounds, type InkEraseOp, type InkOp, type SceneBounds } from "./rasterInk";
 import { opsAfterPartialErase, opsAfterStrokeErase, opsWithErasesBaked } from "./strokeEraser";
+import { dedupeInkOps } from "./inkOpsDedupe";
 
 /** Ops on a stored page, without unpacking one that came with its summary. */
 function encodedOpCount(encoded: EncodedInk): number {
@@ -334,7 +335,9 @@ export class InkPageBook {
     const out = new Map<number, EncodedInk>();
     for (const pageId of this.dirty) {
       const raw = this.encodedPage(pageId) ?? { v: 2, ops: [] };
-      out.set(pageId, encodeInkOps(opsWithErasesBaked(decodeInkOps(raw))));
+      // Never store a stroke twice: whatever path put copies in memory (old
+      // merges concatenated both sides), the page written is one of each.
+      out.set(pageId, encodeInkOps(dedupeInkOps(opsWithErasesBaked(decodeInkOps(raw)))));
     }
     return out;
   }

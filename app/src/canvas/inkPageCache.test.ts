@@ -56,6 +56,16 @@ describe("InkPageBook", () => {
     expect(book.pageIds()).toContain(3);
   });
 
+  it("writes each stroke once, whatever copies are in memory", () => {
+    const book = new InkPageBook();
+    book.setFrames(frames(3));
+    const a = stroke(30, { id: 1, seq: 1 });
+    book.replaceAll([a, { ...a }, { ...a, points: a.points.map((p) => ({ ...p })) }, stroke(150)], { preserveIds: true, frames: frames(3) });
+    const written = book.takeDirtyEncoded();
+    expect(decodeInkOps(written.get(1)!)).toHaveLength(1);
+    expect(decodeInkOps(written.get(2)!)).toHaveLength(1);
+  });
+
   it("rewrites only the pages a rebin changes", () => {
     const layout = frames(6);
     const saved = new InkPageBook();
