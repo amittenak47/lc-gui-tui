@@ -1369,10 +1369,23 @@ export function PdfDocument({
           slot.querySelector<HTMLElement>(".lc-pdf-spread") ?? slot;
         if (!textHost) continue;
         textHost.textContent = "";
+        /*
+         * pdf.js sizes each span by setting a canvas font and measuring its
+         * string: thousands of font switches and measurements on the UI thread,
+         * ~4 s on a dense page on the tablet. alignTextLayerToGlyphs below
+         * already measures every span's real width in one batch and scales it
+         * to the PDF's own glyph width, from any starting scale. So pdf.js gets
+         * horizontal items without a width, which skips its measuring; vertical
+         * text, which that fit leaves alone, is measured as before.
+         */
         const layer = new TextLayer({
           textContentSource: {
             ...content,
-            items: content.items.slice(),
+            items: content.items.map((item) =>
+              "str" in item && item.width > 0 && !content.styles[item.fontName]?.vertical
+                ? { ...item, width: 0 }
+                : item,
+            ),
           },
           container: textHost,
           viewport: pdfPage.getViewport({ scale: entry.fit }),
