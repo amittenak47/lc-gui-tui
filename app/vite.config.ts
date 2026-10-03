@@ -224,6 +224,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    // Node 25+ hides jsdom's localStorage behind an undefined global of its own.
+    setupFiles: ["./src/testWebStorage.ts"],
     include: [
       "src/**/*.test.ts",
       "src/**/*.test.tsx",
