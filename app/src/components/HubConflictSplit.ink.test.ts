@@ -11,8 +11,8 @@ const draw = (side: "local" | "server", pick: Pick) =>
   paneInkShards(side, side === "local" ? local : hub, side === "local" ? hub : local, rows, (_, s) => pick[s])
     .map((shard) => `${shard.pageId}:${shard.ops.map((op) => (op as { color: string }).color).join()}`);
 
-it("draws undecided handwriting in gray and leaves pages with no choice alone", () => {
-  expect(draw("local", {})).toEqual(["1:#9ca3af", "2:#0f0"]);
+it("draws undecided handwriting faded in its own colour and leaves pages with no choice alone", () => {
+  expect(draw("local", {})).toEqual(["1:rgba(255, 0, 0, 0.45)", "2:#0f0"]);
 });
 
 it("previews the kept copy in both panes", () => {

@@ -180,11 +180,24 @@ function grayNote(note: DocFootnote): DocFootnote {
   return { ...note, color: UNDECIDED_GRAY, palette: [UNDECIDED_GRAY] };
 }
 
+/**
+ * Undecided ink keeps its own colour, faded: grey hid the very thing being
+ * chosen between. Kept ink is drawn at full strength, dropped ink not at all.
+ */
 function grayShard(shard: InkShard): InkShard {
   return {
     pageId: shard.pageId,
-    ops: shard.ops.map((op) => (op.kind === "draw" ? { ...op, color: UNDECIDED_GRAY, highlight: false } : op)),
+    ops: shard.ops.map((op) => (op.kind === "draw" ? { ...op, color: undecidedInk(op.color) } : op)),
   };
+}
+
+/** `#rgb` / `#rrggbb` at reduced alpha. Anything else falls back to the grey. */
+export function undecidedInk(color: string): string {
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim())?.[1];
+  if (!hex) return UNDECIDED_GRAY;
+  const full = hex.length === 3 ? [...hex].map((c) => c + c).join("") : hex;
+  const [r, g, b] = [0, 2, 4].map((i) => Number.parseInt(full.slice(i, i + 2), 16));
+  return `rgba(${r}, ${g}, ${b}, 0.45)`;
 }
 
 function updatedAtOf(pad: HubPadConflict["local"] | HubPadConflict["server"]): number | null {

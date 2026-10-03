@@ -21,3 +21,12 @@ describe("clusterBoxes", () => {
     expect(clusters).toEqual([{ l: 0, t: 0, r: 110, b: 10 }]);
   });
 });
+
+describe("undecidedInk", () => {
+  it("fades a stroke's own colour instead of greying it", async () => {
+    const { undecidedInk } = await import("./HubConflictSplit");
+    expect(undecidedInk("#d92243")).toBe("rgba(217, 34, 67, 0.45)");
+    expect(undecidedInk("#fff")).toBe("rgba(255, 255, 255, 0.45)");
+    expect(undecidedInk("var(--ink)")).toBe("#9ca3af");
+  });
+});
