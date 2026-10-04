@@ -15218,6 +15218,22 @@ button.lc-row-selected:hover:not(:disabled) {
   gap: 8px;
 }
 
+/* Settings → Licenses: ~700 KB of notices, so it scrolls in place. */
+.lc-settings-licenses {
+  margin: 0;
+  max-height: 50vh;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .lc-settings-foot {
   display: flex;
   justify-content: flex-end;

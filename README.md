@@ -313,7 +313,15 @@ Android keeps both inside the app's private storage.
 
 [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0):
 free for personal, educational and other noncommercial use; commercial use needs
-a separate license. See [LICENSE](LICENSE).
+a separate license. See [LICENSE](LICENSE). Selling Pen Island or a modified copy,
+in an app store or anywhere else, or publishing it with ads or in-app purchases,
+is commercial use.
+
+The license grants no rights to the Pen Island name or icon. A redistributed or
+modified build must use a different name and icon.
+
+Pen Island includes open-source libraries, fonts and data under their own
+licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Problem sets have their own licenses, which differ per dataset.
 [LeetCodeDataset](https://huggingface.co/datasets/newfacade/LeetCodeDataset) is
