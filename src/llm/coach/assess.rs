@@ -36,70 +36,14 @@ pub struct ReviewOutcome {
     pub claim: Option<Claim>,
 }
 
-/// Terminal coach: question + `solution.py` only — no whiteboard layout pass,
-/// no `[layout]` / `[code]` merge prefixes.
-pub fn review_submission_text_only(
-    provider: &dyn LlmProvider,
-    meta: &WorkspaceMeta,
-    description: Option<&str>,
-    question: &str,
-    solution: &str,
-    app_messages: &[String],
-    turn_index: u32,
-) -> Result<ReviewOutcome> {
-    let board = BoardSnapshot {
-        recognized_text: if question.trim().is_empty() {
-            String::new()
-        } else {
-            format!("Student question (terminal):\n{}", question.trim())
-        },
-        pseudocode: Some(solution.to_string()),
-        app_messages: app_messages.to_vec(),
-        turn_index,
-        ..Default::default()
-    };
-
-    let has_approach = !question.trim().is_empty() || solution.trim().len() > 8;
-
-    let (mut review, claim) = if has_approach {
-        if let Ok((claim, review)) = staged_board_review(provider, meta, description, &board) {
-            (review, Some(claim))
-        } else {
-            let prompt = build_review_prompt(meta, description, &board);
-            let reply = provider.chat_ex(
-                &ChatRequest::new(vec![
-                    ChatMessage::system(REVIEW_SYSTEM_PROMPT),
-                    ChatMessage::user(prompt),
-                ])
-                .json(),
-            )?;
-            (parse_review(&reply.content, &meta.cases)?, None)
-        }
-    } else {
-        let prompt = build_review_prompt(meta, description, &board);
-        let reply = provider.chat_ex(
-            &ChatRequest::new(vec![
-                ChatMessage::system(REVIEW_SYSTEM_PROMPT),
-                ChatMessage::user(prompt),
-            ])
-            .json(),
-        )?;
-        (parse_review(&reply.content, &meta.cases)?, None)
-    };
-
-    retrace_counterexample(provider, meta, &board, &mut review);
-    Ok(ReviewOutcome { review, claim })
-}
-
 /// Run Mode A against a board snapshot.
 ///
 /// - With layout/ink/question text: perceive (if PNG) → claim → verdict only
 ///   when the claim is insufficient; optional code pass when `include_code`.
 /// - Otherwise: single-call [`REVIEW_SYSTEM_PROMPT`] fallback.
 ///
-/// GUI callers attach PNG / scene structure on `board`; TUI leaves those unset
-/// and puts the typed question in `recognized_text` plus `solution.py` in
-/// `pseudocode`.
+/// GUI callers attach PNG / scene structure on `board`; text-only callers
+/// can leave those unset and supply `recognized_text` and `pseudocode`.
 pub fn review_submission(
     provider: &dyn LlmProvider,
     meta: &WorkspaceMeta,

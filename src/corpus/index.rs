@@ -10,7 +10,7 @@ use crate::problem::Problem;
 /// Tables that are not per-dataset: named lists and the local submission log.
 ///
 /// Lists stay keyed on `task_id` alone and belong to the default corpus — they
-/// predate datasets and `lc list` is a LeetCode-corpus workflow. The submission
+/// predate datasets and remain stored for compatibility. The submission
 /// log gains a `dataset` column instead, because it is a history and rewriting
 /// it would lose which corpus each row came from.
 const SHARED_SCHEMA: &str = r#"

@@ -2,6 +2,5 @@
 
 pub mod dataset;
 pub mod index;
-pub mod lists;
 pub mod loader;
 pub mod problem;

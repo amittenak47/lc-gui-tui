@@ -115,7 +115,7 @@ pub struct DataConfig {
     pub datasets: BTreeMap<String, String>,
 }
 
-/// How `lc test` and the whiteboard's **Run tests** walk the case list.
+/// How Practice **Run tests** walks the case list.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TestsConfig {

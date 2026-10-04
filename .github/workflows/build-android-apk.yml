@@ -16,8 +16,10 @@
 #
 # Install on tablet: Actions -> this workflow -> latest run -> Artifacts ->
 # download the flavor you want -> open the APK (allow unknown apps). Both
-# flavors share the app id `dev.lc.whiteboard`, so run
-# `adb uninstall dev.lc.whiteboard` before switching from one to the other.
+# flavors share package `dev.lc.whiteboard`. Use `adb install -r` to update or
+# switch when the signing certificate and version code are compatible. A normal
+# uninstall removes local data; choose a fresh install only after verifying an
+# export or backup of the library and configuration you need.
 
 name: Build Android APK
 
@@ -47,10 +49,10 @@ jobs:
         include:
           - flavor: practice
             script: android:apk:practice
-            artifact: whiteboard-practice-debug.apk
+            artifact: pen-island-practice-debug.apk
           - flavor: whiteboard-only
             script: android:apk:whiteboard
-            artifact: whiteboard-only-debug.apk
+            artifact: pen-island-whiteboard-only-debug.apk
 
     steps:
       - name: Checkout
@@ -59,7 +61,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: app/package-lock.json
 
@@ -78,9 +80,9 @@ jobs:
         with:
           packages: platform-tools
 
-      # CI pins r26d. A local tablet build may be on NDK 29. Both produce
-      # equivalent APKs, but if a build fails here and not on your machine, or
-      # the reverse, check the NDK gap first.
+      # CI pins r26d; the author device was tested with NDK 29.0.13846066.
+      # If a build fails here and not locally, or the reverse, check this
+      # toolchain difference first.
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         id: setup-ndk

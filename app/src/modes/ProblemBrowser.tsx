@@ -1,7 +1,7 @@
 /**
- * The problem browser, organized the way the TUI is.
+ * The Practice problem browser.
  *
- * Same table (q#, slug, difficulty, tags, cases), same 15-per-page paging, same
+ * Table (q#, slug, difficulty, tags, cases), 15-per-page paging, and
  * filters, and the same keys — `W`/`S` to move, `A`/`D` to page, `/` to search,
  * `T` tag, `E` difficulty, `O` sort (column headers), `G` dataset, `R` randomize
  * session, `M` select mode, `Space` add to session picks, `X` reset session,
@@ -67,7 +67,7 @@ export interface ProblemBrowserProps {
   onReady?: () => void;
 }
 
-/** Step through a cycle of options, wrapping — the TUI's T/E/O behaviour. */
+/** Step through a cycle of options, wrapping — the browser's T/E/O shortcuts. */
 export function cycle<T>(options: readonly T[], current: T): T {
   const index = options.indexOf(current);
   return options[(index + 1) % options.length];
@@ -201,7 +201,7 @@ export function ProblemBrowser({
     };
   }, [client, offline, seedTick]);
 
-  // Any filter change resets to the first page — as in the TUI.
+  // Any filter change resets to the first page.
   // Skip the first run so a restored browse position keeps its page.
   const skipPageResetRef = useRef(true);
   useEffect(() => {
@@ -393,8 +393,8 @@ export function ProblemBrowser({
     setSelectMode(false);
   }, [onRandomSession, bankFilters]);
 
-  // TUI keybindings. Ignored while typing in the search box, so `/`-then-text
-  // behaves the way it does in the terminal.
+  // Browser keyboard shortcuts. Ignored while typing in the search box, so `/`-then-text
+  // starts search without triggering browser shortcuts.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       // A modal owns the keyboard while it is up — otherwise holding Space on

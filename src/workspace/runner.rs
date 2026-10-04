@@ -1,6 +1,4 @@
 use anyhow::{bail, Context, Result};
-use colored::Colorize;
-use comfy_table::Table;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -65,68 +63,6 @@ pub fn load_last_run() -> Result<Option<LastRun>> {
     Ok(Some(serde_json::from_str(&raw)?))
 }
 
-/// Plain-text report for the coach thread (TUI / daemon), mirroring the GUI
-/// `formatTestReport` helper.
-pub fn format_test_report(results: &[CaseResult], kind: &str) -> String {
-    const MAX_REPORTED_FAILURES: usize = 5;
-    let passed = results.iter().filter(|r| r.pass).count();
-    let total = results.len();
-    let header = format!(
-        "{} - {passed}/{total} passed",
-        if kind == "submit" {
-            "Submit"
-        } else {
-            "Run tests"
-        }
-    );
-    if total > 0 && passed == total {
-        return format!("{header}\nAll cases passed.");
-    }
-
-    let failures: Vec<&CaseResult> = results.iter().filter(|r| !r.pass).collect();
-    let shown: Vec<String> = failures
-        .iter()
-        .take(MAX_REPORTED_FAILURES)
-        .map(|result| {
-            let mut lines = vec![
-                format!(
-                    "{}: {}",
-                    if result.suite {
-                        "suite".to_string()
-                    } else {
-                        format!("case {}", result.case)
-                    },
-                    result.input
-                ),
-                format!("  expected: {}", result.expected),
-            ];
-            if let Some(actual) = &result.actual {
-                lines.push(format!("  got:      {actual}"));
-            }
-            if let Some(error) = &result.error {
-                let last = error
-                    .trim_end()
-                    .lines()
-                    .last()
-                    .unwrap_or("")
-                    .trim();
-                lines.push(format!("  error:    {last}"));
-            }
-            lines.join("\n")
-        })
-        .collect();
-
-    let mut parts = vec![header];
-    parts.push(shown.join("\n\n"));
-    if failures.len() > shown.len() {
-        parts.push(format!(
-            "...and {} more failing cases.",
-            failures.len() - shown.len()
-        ));
-    }
-    parts.join("\n\n")
-}
-
 pub fn read_meta(dir: &Path) -> Result<WorkspaceMeta> {
     let path = dir.join(".lc").join("meta.json");
     let raw = std::fs::read_to_string(&path)
@@ -135,7 +71,7 @@ pub fn read_meta(dir: &Path) -> Result<WorkspaceMeta> {
 }
 
 /// Keep `run_tests.py` on the embedded template so older workspaces pick up
-/// entry-point cleaning without a full `lc load`.
+/// entry-point cleaning without regenerating the workspace.
 fn refresh_runner_script(dir: &Path) -> Result<()> {
     std::fs::write(dir.join("run_tests.py"), crate::generator::RUN_TESTS_PY)
         .with_context(|| format!("cannot refresh run_tests.py in {}", dir.display()))
@@ -178,8 +114,7 @@ pub fn locate_workspace_in(
         let dir = dataset.workspace_dir(cfg, &row.task_id);
         if !dir.join(".lc").join("meta.json").exists() {
             bail!(
-                "no workspace for {} yet — run `lc load {}` first",
-                row.task_id,
+                "no workspace for {} yet — open the problem in Practice first",
                 row.task_id
             );
         }
@@ -206,7 +141,7 @@ pub fn execute_run_tests(dir: &Path, extra_argv: &[&str]) -> Result<(Vec<CaseRes
     #[cfg(not(feature = "leetcode"))]
     {
         let _ = (dir, extra_argv);
-        bail!("this build was compiled without the leetcode feature — no test runner")
+        bail!("this build has no Practice support — tests are unavailable")
     }
     #[cfg(feature = "leetcode")]
     {
@@ -303,38 +238,6 @@ fn execute_run_tests_vm(dir: &Path, extra_argv: &[&str]) -> Result<(Vec<CaseResu
     Ok((results, stdout, stderr))
 }
 
-/// Run the workspace's tests. Returns true when every case passed.
-pub fn cmd_test(
-    cfg: &Config,
-    id: Option<&str>,
-    case: Option<u32>,
-    full: bool,
-    verbose: bool,
-) -> Result<bool> {
-    cmd_test_inner(cfg, dataset::default(), id, case, full, verbose, false)
-}
-
-/// [`cmd_test`] scoped to one dataset.
-pub fn cmd_test_in(
-    cfg: &Config,
-    dataset: &'static Dataset,
-    id: Option<&str>,
-    case: Option<u32>,
-    full: bool,
-    verbose: bool,
-) -> Result<bool> {
-    cmd_test_inner(cfg, dataset, id, case, full, verbose, false)
-}
-
-pub fn cmd_test_quiet(
-    cfg: &Config,
-    id: Option<&str>,
-    case: Option<u32>,
-    full: bool,
-) -> Result<bool> {
-    cmd_test_inner(cfg, dataset::default(), id, case, full, false, true)
-}
-
 pub fn cmd_test_quiet_in(
     cfg: &Config,
     dataset: &'static Dataset,
@@ -342,7 +245,7 @@ pub fn cmd_test_quiet_in(
     case: Option<u32>,
     full: bool,
 ) -> Result<bool> {
-    cmd_test_inner(cfg, dataset, id, case, full, false, true)
+    cmd_test_inner(cfg, dataset, id, case, full)
 }
 
 fn cmd_test_inner(
@@ -351,8 +254,6 @@ fn cmd_test_inner(
     id: Option<&str>,
     case: Option<u32>,
     full: bool,
-    verbose: bool,
-    quiet: bool,
 ) -> Result<bool> {
     let dir = locate_workspace_in(cfg, dataset, id)?;
     let mut meta = read_meta(&dir)?;
@@ -379,9 +280,6 @@ fn cmd_test_inner(
         bail!("the test runner produced no results\nstdout:\n{stdout}\nstderr:\n{stderr}");
     }
 
-    if !quiet {
-        render(&results, verbose);
-    }
     save_last_run(&meta.task_id, &dir, &results)?;
     if let Ok(mut session) = crate::session::Session::load_or_new() {
         let passed = results.iter().filter(|r| r.pass).count() as u32;
@@ -408,88 +306,4 @@ fn save_last_run(task_id: &str, dir: &Path, results: &[CaseResult]) -> Result<()
     }
     std::fs::write(&path, serde_json::to_string_pretty(&run)?)?;
     Ok(())
-}
-
-fn render(results: &[CaseResult], verbose: bool) {
-    let mut table = Table::new();
-    table.load_preset(comfy_table::presets::UTF8_FULL_CONDENSED);
-    table.set_header(["Case", "Result", "Input", "Expected", "Actual"]);
-    for r in results {
-        let status = if r.pass {
-            "PASS".green().to_string()
-        } else {
-            "FAIL".red().to_string()
-        };
-        let actual = match (&r.actual, &r.error) {
-            (_, Some(err)) => format!("error: {}", last_line(err)),
-            (Some(a), None) => a.clone(),
-            (None, None) => String::new(),
-        };
-        let label = if r.suite {
-            "suite".to_string()
-        } else {
-            r.case.to_string()
-        };
-        table.add_row([
-            label,
-            status,
-            trunc(&r.input, 40),
-            trunc(&r.expected, 24),
-            trunc(&actual, 36),
-        ]);
-    }
-    println!("{table}");
-
-    let passed = results.iter().filter(|r| r.pass).count();
-    let total = results.len();
-    let summary = format!("{passed}/{total} passed");
-    println!(
-        "{}",
-        if passed == total {
-            summary.green()
-        } else {
-            summary.red()
-        }
-    );
-
-    let any_failed = passed != total;
-    if verbose {
-        for r in results.iter().filter(|r| !r.pass) {
-            println!("\n{} case {}", "──".dimmed(), r.case);
-            println!("input:    {}", r.input);
-            println!("expected: {}", r.expected);
-            if let Some(a) = &r.actual {
-                println!("actual:   {a}");
-            }
-            if let Some(e) = &r.error {
-                println!("{}", e.trim_end());
-            }
-            if let Some(o) = &r.stdout {
-                if !o.trim().is_empty() {
-                    println!("stdout:\n{o}");
-                }
-            }
-        }
-    } else if any_failed {
-        println!("Re-run with --verbose for tracebacks, or `lc ask --case N` for help.");
-    }
-}
-
-fn last_line(text: &str) -> String {
-    text.lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim()
-        .to_string()
-}
-
-fn trunc(text: &str, max: usize) -> String {
-    let flat = text.replace('\n', " ");
-    if flat.chars().count() <= max {
-        flat
-    } else {
-        let head: String = flat.chars().take(max).collect();
-        format!("{head}…")
-    }
 }

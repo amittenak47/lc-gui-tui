@@ -281,7 +281,7 @@ function saveViaDownloadLink(blob: Blob, filename: string): CaptureSaveResult {
   }
 }
 
-export function captureFilename(basename = "lc-capture"): string {
+export function captureFilename(basename = "pen-island-capture"): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 23);
   return `${basename}-${stamp}-${Math.random().toString(36).slice(2, 8)}.png`;
 }
@@ -292,7 +292,7 @@ export function captureFilename(basename = "lc-capture"): string {
  */
 export async function saveCaptureToDevice(
   blob: Blob,
-  basename = "lc-capture",
+  basename = "pen-island-capture",
 ): Promise<CaptureSaveResult> {
   const filename = captureFilename(basename);
   const destination = loadCaptureDestination();

@@ -370,7 +370,7 @@ export function HoldButton({
       onContextMenu={(event) => event.preventDefault()}
       onKeyDown={(event) => {
         if (event.key !== " " && event.key !== "Enter") return;
-        // Space is also "add to session picks" in the browser's TUI keys —
+        // Space is also "add to session picks" in the browser's keyboard shortcuts —
         // holding a dialog button must not reach it.
         event.preventDefault();
         event.stopPropagation();

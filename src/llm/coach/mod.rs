@@ -5,14 +5,14 @@
 //! that claim decides the answer, and [`build_verdict_prompt`] runs only when it
 //! does not. The gate is [`Claim::decides_the_answer`] inside [`staged_board_review`]
 //! — a [`Claim`] is data Rust inspects, not a step a model talks itself past.
-//! Callers (HTTP `/coach/review`, TUI coach chat) build a [`BoardSnapshot`] and
+//! Callers (the `/coach/review` handler) build a [`BoardSnapshot`] and
 //! run [`review_submission`]; GUI-only fields (PNG, scene layout, lazy flags)
 //! are simply left unset on text-only paths.
 //!
 //! Mirrors the section-heading style of coach prompts and reuses
 //! [`crate::llm::helpers::clip`]. Every prompt here is assembled from
 //! [`WorkspaceMeta`], the problem statement, and what the user wrote on the
-//! board — the same redacted sources `lc ask` uses. The one exception is
+//! board — the redacted sources used by normal Ask/Review. The one exception is
 //! [`build_bridge_prompt`], which takes reference text the caller obtained
 //! through [`crate::reveal`] after an explicit user action; it is never called
 //! from the review or ambient paths.
@@ -54,7 +54,7 @@ pub use actions::{
 };
 pub use assess::{
     perceive_and_claim, perceive_and_claim_with_events, review_submission,
-    review_submission_text_only, review_submission_with_events, staged_board_review,
+    review_submission_with_events, staged_board_review,
     staged_board_review_with_events, ReviewOutcome,
 };
 pub use approach::{
@@ -70,7 +70,7 @@ pub use events::{CoachEvent, EventSink, ToolStatus, STAGE_NAMES};
 pub use crate::llm::helpers::extract_json;
 pub use modes::ambient::{escalation_instruction, parse_ambient, AmbientNudge};
 pub use modes::review::{
-    format_review_card, merge_layout_and_code_reviews, parse_review, validate_counterexample,
+    merge_layout_and_code_reviews, parse_review, validate_counterexample,
     Counterexample, Rating, ReviewResponse, Verdict,
 };
 pub use prompts::{

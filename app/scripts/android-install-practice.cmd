@@ -1,12 +1,13 @@
 @echo off
-REM Windows: build the Practice debug APK and adb install -r. From repo root or app\:
+REM Windows: build the Practice debug APK and adb install -r. From repo root:
 REM   app\scripts\android-install-practice.cmd
 REM   app\scripts\android-install-practice.cmd <your-device-serial>
 REM First run generates src-tauri\gen\android (not in git) if missing.
 REM Linux: app/scripts/android-install-practice.sh — do not run this .cmd there.
-REM Whiteboard-only build: android-install-whiteboard.cmd. Both flavors write the
-REM same APK path and share the app id, so `adb uninstall dev.lc.whiteboard`
-REM before switching between them.
+REM Whiteboard-only build: android-install-whiteboard.cmd. Both share package
+REM dev.lc.whiteboard. This wrapper uses install -r to keep data for an update
+REM with a compatible signing certificate and version code. For a fresh install,
+REM uninstall only after exporting/backing up needed data and verifying the backup.
 setlocal
 cd /d "%~dp0\.."
 

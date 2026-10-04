@@ -2,7 +2,7 @@
 name = "whiteboard-gui"
 version = "0.1.0"
 edition = "2021"
-description = "Handwriting whiteboard for the practice harness"
+description = "Pen Island handwriting and agent app with in-process Practice and a desktop LAN hub"
 license = "PolyForm-Noncommercial-1.0.0"
 
 # `staticlib`/`cdylib` are what the Android and iOS targets link against; `rlib`

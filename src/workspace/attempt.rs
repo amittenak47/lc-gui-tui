@@ -2,12 +2,12 @@
 //!
 //! A workspace holds three things the student built: the **layout**
 //! (`board.json`), the **code** (`solution.py`), and the **agent session**
-//! (`.lc/agent.json`, the coach transcript). The TUI keeps a parallel
-//! transcript in `.lc/agent.tui.json` so GUI and terminal chats never mix.
+//! (`.lc/agent.json`, the coach transcript). Legacy transcripts are copied
+//! when archiving an attempt, but are never loaded into the live agent thread.
 //! When they step away, they choose what to keep, and the rules differ
 //! depending on whether the problem is solved:
 //!
-//! | | layout | code | agent session (GUI + TUI) |
+//! | | layout | code | agent session |
 //! | --- | --- | --- | --- |
 //! | unsolved, **save** | kept | kept | kept |
 //! | unsolved, **discard** | cleared | reset to starter | cleared |
@@ -19,7 +19,7 @@
 //! **The agent session is always saved once a problem is solved** — even when
 //! the attempt is cleared — so the reasoning that got there is never thrown
 //! away. It goes to `.lc/attempts/<timestamp>/agent.json` (and
-//! `agent.tui.json` when present).
+//! legacy `agent.tui.json` when present).
 //!
 //! **Re-attempting a solved problem always starts from a fresh layout and a
 //! fresh agent session**, whatever was chosen. That is why "save" archives
@@ -65,7 +65,8 @@ fn agent_path(workspace: &Path) -> PathBuf {
     lc_dir(workspace).join("agent.json")
 }
 
-fn tui_agent_path(workspace: &Path) -> PathBuf {
+/// Legacy transcript path, used only when archiving or clearing an attempt.
+fn legacy_agent_path(workspace: &Path) -> PathBuf {
     lc_dir(workspace).join("agent.tui.json")
 }
 
@@ -94,15 +95,6 @@ pub fn write_agent(workspace: &Path, messages: Vec<serde_json::Value>) -> Result
     let merged = crate::agent_transcript::update(&serde_json::Value::Array(previous.messages),
         &serde_json::Value::Array(messages));
     write_agent_at(&agent_path(workspace), merged.as_array().cloned().unwrap_or_default())
-}
-
-/// TUI coach transcript (never mixed with the GUI `.lc/agent.json`).
-pub fn read_tui_agent(workspace: &Path) -> Result<AgentSession> {
-    read_agent_at(&tui_agent_path(workspace))
-}
-
-pub fn write_tui_agent(workspace: &Path, messages: Vec<serde_json::Value>) -> Result<AgentSession> {
-    write_agent_at(&tui_agent_path(workspace), messages)
 }
 
 fn read_agent_at(path: &Path) -> Result<AgentSession> {
@@ -174,7 +166,7 @@ pub struct AttemptOutcome {
 /// the table this implements.
 ///
 /// `starter` is the code a discarded attempt resets to — the same stub
-/// `lc load` would have written.
+/// the Practice workspace generator would have written.
 pub fn finish(
     workspace: &Path,
     solved: bool,
@@ -194,7 +186,7 @@ pub fn finish(
         let dir = lc_dir(workspace).join("attempts").join(&stamp);
         std::fs::create_dir_all(&dir)?;
         copy_if_present(&agent_path(workspace), &dir.join("agent.json"))?;
-        copy_if_present(&tui_agent_path(workspace), &dir.join("agent.tui.json"))?;
+        copy_if_present(&legacy_agent_path(workspace), &dir.join("agent.tui.json"))?;
         if save {
             copy_if_present(&board_path(workspace), &dir.join("board.json"))?;
             copy_if_present(&solution_path(workspace), &dir.join("solution.py"))?;
@@ -209,7 +201,7 @@ pub fn finish(
     if !keep_live {
         remove_if_present(&board_path(workspace))?;
         remove_if_present(&agent_path(workspace))?;
-        remove_if_present(&tui_agent_path(workspace))?;
+        remove_if_present(&legacy_agent_path(workspace))?;
     }
 
     // Code is the one thing a saved solved attempt keeps in place — going back
@@ -281,7 +273,9 @@ mod tests {
             std::fs::write(dir.join("board.json"), r#"{"v":1,"elements":[1]}"#).unwrap();
             std::fs::write(dir.join("solution.py"), "def solve():\n    return 42\n").unwrap();
             write_agent(&dir, vec![serde_json::json!({"role": "user"})]).unwrap();
-            write_tui_agent(&dir, vec![serde_json::json!({"role": "user", "content": "tui"})])
+            // Literal legacy fixture: no live reader or writer supports this file.
+            std::fs::write(dir.join(".lc/agent.tui.json"),
+                r#"{"messages":[{"role":"user","content":"legacy"}],"updated_at":1}"#)
                 .unwrap();
             Self(dir)
         }
@@ -306,6 +300,51 @@ mod tests {
     }
 
     const STARTER: &str = "class Solution:\n    def solve(self):\n        pass\n";
+
+    #[test]
+    fn existing_practice_files_load_archive_and_reset_without_moving() {
+        let ws = Workspace::new("existing-practice-files");
+        let meta = r#"{"dataset":"leetcode","task_id":"two-sum","question_id":"1",
+            "difficulty":"Easy","tags":[],"entry_point":"solve","json_path":"problem.json",
+            "cases":[],"test":null}"#;
+        let state = r#"{"solved":true,"saved":true,"archives":["previous"],"updated_at":1}"#;
+        let agent = r#"{"messages":[{"id":"q","role":"user","content":"current thread"}],"updated_at":2}"#;
+        let legacy = std::fs::read(ws.path().join(".lc/agent.tui.json")).unwrap();
+        std::fs::write(ws.path().join(".lc/meta.json"), meta).unwrap();
+        std::fs::write(ws.path().join(".lc/attempt.json"), state).unwrap();
+        std::fs::write(ws.path().join(".lc/agent.json"), agent).unwrap();
+        std::fs::create_dir_all(ws.path().join(".lc/attempts/previous")).unwrap();
+        std::fs::write(ws.path().join(".lc/attempts/previous/agent.json"), agent).unwrap();
+        std::fs::write(ws.path().join(".lc/attempts/previous/board.json"), "{}").unwrap();
+
+        assert_eq!(crate::runner::read_meta(ws.path()).unwrap().task_id, "two-sum");
+        assert_eq!(read_state(ws.path()).unwrap().archives, vec!["previous"]);
+        let thread = read_agent(ws.path()).unwrap();
+        assert_eq!(thread.messages.len(), 1);
+        assert_eq!(thread.messages[0]["content"], "current thread");
+        assert_eq!(thread.updated_at, 2);
+
+        let kept = finish(ws.path(), false, true, Some(STARTER)).unwrap();
+        assert!(kept.kept_layout && kept.kept_code && kept.kept_agent_session);
+        assert_eq!(read_agent(ws.path()).unwrap().messages, thread.messages);
+        let saved = finish(ws.path(), true, true, Some(STARTER)).unwrap();
+        let archive = PathBuf::from(saved.archived_to.unwrap());
+        assert_eq!(std::fs::read_to_string(archive.join("agent.json")).unwrap(), agent);
+        assert_eq!(std::fs::read(archive.join("agent.tui.json")).unwrap(), legacy);
+        assert!(archive.join("board.json").exists());
+        assert!(archive.join("solution.py").exists());
+        assert!(!ws.has("board.json") && !ws.has(".lc/agent.json") && !ws.has(".lc/agent.tui.json"));
+        assert!(read_agent(ws.path()).unwrap().messages.is_empty());
+        assert!(read_state(ws.path()).unwrap().solved);
+        assert_eq!(ws.solution(), "def solve():\n    return 42\n");
+
+        finish(ws.path(), false, false, Some(STARTER)).unwrap();
+        assert_eq!(ws.solution(), STARTER);
+        assert_eq!(std::fs::read_to_string(ws.path().join(".lc/meta.json")).unwrap(), meta);
+        assert_eq!(std::fs::read_to_string(ws.path().join(".lc/attempts/previous/agent.json")).unwrap(), agent);
+        assert!(ws.has(".lc/attempts/previous/board.json"));
+        assert_eq!(read_state(ws.path()).unwrap().archives.len(), 2);
+    }
 
     #[test]
     fn agent_file_retains_deletions_and_cancelled_turns_after_reload() {
@@ -334,11 +373,6 @@ mod tests {
             1,
             "the coach thread continues"
         );
-        assert_eq!(
-            read_tui_agent(ws.path()).unwrap().messages.len(),
-            1,
-            "the TUI coach thread continues"
-        );
         assert!(read_state(ws.path()).unwrap().saved);
     }
 
@@ -351,7 +385,6 @@ mod tests {
         assert!(!ws.has("board.json"), "next attempt starts on a clean board");
         assert_eq!(ws.solution(), STARTER, "code goes back to the starter stub");
         assert!(read_agent(ws.path()).unwrap().messages.is_empty());
-        assert!(read_tui_agent(ws.path()).unwrap().messages.is_empty());
         assert!(!ws.has(".lc/agent.tui.json"));
         assert!(outcome.archived_to.is_none(), "nothing to archive");
     }
@@ -379,7 +412,7 @@ mod tests {
         assert!(archive.join("agent.json").exists());
         assert!(
             archive.join("agent.tui.json").exists(),
-            "the TUI transcript was archived"
+            "the legacy transcript was archived"
         );
         assert!(read_state(ws.path()).unwrap().solved);
     }
@@ -400,7 +433,7 @@ mod tests {
         );
         assert!(
             archive.join("agent.tui.json").exists(),
-            "the TUI transcript survives even a cleared attempt"
+            "the legacy transcript survives even a cleared attempt"
         );
         assert!(
             !archive.join("board.json").exists(),

@@ -15,7 +15,7 @@
 //! asking the model nicely:
 //!
 //! - **No solution.** The planner is built from [`WorkspaceMeta`], the problem
-//!   statement, and the sample cases — the same redacted sources `lc ask` uses.
+//!   statement, and the sample cases — the redacted sources used by normal Ask/Review.
 //!   The corpus's reference answer is unreachable from this module, and a test
 //!   in `serve::coach` asserts it stays that way.
 //! - **Families, not answers.** A catalog entry names an approach and says when

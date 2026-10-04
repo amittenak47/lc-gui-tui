@@ -55,7 +55,7 @@ pub(crate) fn load_meta(cfg: &Config, dataset: &'static Dataset, id: &str) -> Re
 }
 
 /// The problem statement for a workspace, or `None` if the corpus file moved
-/// since `lc load` — the same tolerance `lc ask` has.
+/// since the Practice workspace was generated.
 pub(crate) fn description_for(meta: &WorkspaceMeta) -> Option<String> {
     if crate::pad::is_whiteboard_meta(meta) {
         return Some(crate::pad::WHITEBOARD_DESCRIPTION.to_string());
@@ -110,7 +110,7 @@ mod tests {
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            status_of("no workspace for two-sum yet — run `lc load two-sum` first"),
+            status_of("no workspace for two-sum yet — open the problem in Practice first"),
             StatusCode::NOT_FOUND
         );
     }

@@ -71,7 +71,7 @@ pub trait CoachContext {
 
 /// The LeetCode implementation: ground truth is the problem's sample I/O, and
 /// the deeper form of verification — actually running the tests — is
-/// `runner::cmd_test_quiet`, exposed as `POST /workspace/:id/test`.
+/// `runner::cmd_test_quiet_in`, exposed as `POST /workspace/:id/test`.
 pub struct LeetCodeContext {
     pub meta: WorkspaceMeta,
     pub description: Option<String>,

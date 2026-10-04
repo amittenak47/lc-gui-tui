@@ -30,7 +30,6 @@ commands.allow = [
   "lc_load_problem",
   "lc_workspace_meta",
   "lc_run_tests",
-  "lc_open_workspace",
   "lc_get_solution",
   "lc_put_solution",
   "lc_get_board",

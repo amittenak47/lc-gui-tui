@@ -43,7 +43,7 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
         let review = parse_review(raw, &meta_with_cases(4).cases).unwrap();
         let cited = review.counterexample.expect("kept");
         assert_eq!(cited.case_index, 2);
-        assert_eq!(cited.case_number, 3, "case_number is 1-based for `lc test --case`");
+        assert_eq!(cited.case_number, 3, "displayed case_number is 1-based");
         assert_eq!(cited.input, "nums = [2]", "input came from the corpus, not the model");
         assert_eq!(cited.expected, "[2]");
         assert!(review.counterexample_rejected.is_none());
@@ -245,16 +245,6 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
         assert!(quiet.socratic_question.contains("trailing zeros"));
     }
 
-    #[test]
-    fn format_review_card_is_plain_text_without_json() {
-        let review = on_track_review_from_claim(&sufficient_claim());
-        let text = format_review_card(&review);
-        assert!(text.contains("Verdict: on track"));
-        assert!(text.contains("Approach:"));
-        assert!(text.contains("Next:"));
-        assert!(!text.contains('{'), "no raw JSON for the TUI");
-    }
-
     /// Stage 1 describes; it is given nothing to have an opinion about. No
     /// statement, no sample cases, no code dock — and a system prompt that says
     /// so out loud.
@@ -437,7 +427,7 @@ fn meta_with_cases(n: usize) -> WorkspaceMeta {
             );
         }
 
-        // Nothing committed — a fresh session, the TUI, a caller with no board
+        // Nothing committed — a fresh session or a caller with no board
         // session — reads exactly as it did before any of this existed.
         let bare = build_verdict_prompt(&meta, None, &board, &claim, &CoachContext::default());
         assert!(!bare.contains("committed — work inside it"));

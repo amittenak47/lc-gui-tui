@@ -98,7 +98,7 @@ pub async fn finish_attempt(
     let (outcome, task_id) = blocking(move || {
         let dir = runner::locate_workspace_in(&cfg, dataset, Some(&for_blocking))?;
         let meta = runner::read_meta(&dir)?;
-        // The stub a discarded attempt resets to is the same one `lc load`
+        // The stub a discarded attempt resets to is the same one the Practice workspace generator
         // wrote, rebuilt from the corpus rather than remembered.
         let starter = problem::load_task_for(dataset, Path::new(&meta.json_path), &meta.task_id)
             .ok()

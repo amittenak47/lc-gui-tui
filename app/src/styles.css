@@ -13464,7 +13464,7 @@ code {
 
 /* ---------------------------------------------------------------- browser --- */
 
-/* Laid out as the TUI's table: same columns, same 15-row page. */
+/* Practice browser table with a 15-row page. */
 .lc-browser {
   width: min(1416px, 100%);
   flex: 1;

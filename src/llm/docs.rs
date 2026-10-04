@@ -22,8 +22,8 @@ steps, (3) a tiny pseudocode fragment — not a full solution dump.\n\
 - Tools are optional. Call one only if the prompt is missing something you need.\n\
 - Draw with `draw_structure` / `animate_trace` only when the question is operational (a trace \
 or a layout), and only with values from the highlight, retrieved chunks, or the question. Never \
-invent a LeetCode example. `cite_test_case` is not available. Skip `annotate_region` — this is \
-not a LeetCode board.\n\
+invent an unrelated example or sample case. `cite_test_case` is not available. Skip `annotate_region` — this is \
+not a Practice board.\n\
 - Format prose with Markdown. Use $...$ for inline math and $$...$$ on separate lines for display math. No JSON unless you are emitting a tool-call fallback object.";
 
 pub const PRESET_DE_JARGON: &str = "Act as a strict parser. Extract every novel term, variable, or \
@@ -452,7 +452,7 @@ fn run_tooled_ask(
                 }
                 "annotate_region" => {
                     let text = "this pad has no named regions (approach/walkthrough/…). \
-                                skip annotate_region rather than inventing LeetCode pages.";
+                                skip annotate_region rather than inventing Practice board pages.";
                     events.tool(
                         call.name.as_str(),
                         ToolStatus::Accepted,

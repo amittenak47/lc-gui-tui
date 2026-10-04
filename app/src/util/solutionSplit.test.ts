@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { joinSolution, skeletonOf, splitSolution } from "./solutionSplit";
 
-/** The shape `lc load` writes: header comments, then the corpus's code body. */
+/** The shape the Practice workspace generator writes: header comments, then the corpus's code body. */
 const STARTER = [
-  "# lc workspace — task: two-sum · LeetCode #1 · Easy",
-  "# Entry point: twoSum — keep the name and signature; `lc test` calls it directly.",
+  "# lc workspace — task: two-sum · question #1 · Easy",
+  "# Entry point: twoSum — keep the name and signature; Run tests calls it directly.",
   "",
   "from typing import List",
   "",

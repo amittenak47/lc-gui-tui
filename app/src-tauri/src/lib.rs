@@ -107,7 +107,6 @@ pub fn run() {
         lc_routes::lc_load_problem,
         lc_routes::lc_workspace_meta,
         lc_routes::lc_run_tests,
-        lc_routes::lc_open_workspace,
         lc_routes::lc_get_solution,
         lc_routes::lc_put_solution,
         lc_routes::lc_get_board,
@@ -206,7 +205,7 @@ pub fn run() {
 
     builder
         .run(tauri::generate_context!())
-        .expect("error while running the whiteboard");
+        .expect("error while running Pen Island");
 }
 
 /// Whether on-device handwriting recognition exists on this platform.

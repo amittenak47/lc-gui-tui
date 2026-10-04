@@ -2,8 +2,8 @@
 //!
 //! Each opener used to call `Connection::open` and stop there. SQLite's
 //! default journal is a single-writer lock on the whole file, and there was no
-//! busy handler, so a second process — the TUI, `lc ask`, or the desktop's
-//! own LAN listener next to in-process Ask — failed immediately with
+//! busy handler, so concurrent desktop hub requests
+//! alongside in-process Ask — failed immediately with
 //! "database is locked".
 //!
 //! That is not a product exclusive. The GUI and the agent are meant to share

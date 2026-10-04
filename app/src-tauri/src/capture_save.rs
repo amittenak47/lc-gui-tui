@@ -142,7 +142,7 @@ fn sanitize_filename(filename: &str) -> String {
     if safe.to_ascii_lowercase().ends_with(".png") {
         safe
     } else if safe.is_empty() {
-        "lc-capture.png".into()
+        "pen-island-capture.png".into()
     } else {
         format!("{safe}.png")
     }

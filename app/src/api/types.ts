@@ -347,7 +347,7 @@ export type Verdict = "on_track" | "subtly_wrong" | "wrong_track" | "unclear";
 export interface Counterexample {
   /** 0-based index into `WorkspaceMeta.cases`, validated by the daemon. */
   case_index: number;
-  /** 1-based, matching `lc test --case N`. */
+  /** Displayed sample case numbers are 1-based. */
   case_number: number;
   input: string;
   expected: string;

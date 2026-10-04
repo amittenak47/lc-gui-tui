@@ -1,4 +1,4 @@
-//! Freeform pads — not a SQLite corpus and not `lc load`.
+//! Freeform pads, independent of the SQLite corpus and Practice workspaces.
 //!
 //! Coach Ask (and board sessions) key these by [`AgentSurface`], not by stuffing
 //! a fake slug into `dataset`. `dataset` is a corpus id for [`AgentSurface::Problem`]

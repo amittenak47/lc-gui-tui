@@ -88,7 +88,7 @@ class GallerySavePlugin(private val activity: Activity) : Plugin(activity) {
     @InvokeArg
     class SaveArgs {
         var png_base64: String = ""
-        var filename: String = "lc-capture.png"
+        var filename: String = "pen-island-capture.png"
         var destination: String = "photos"
         var directory: String? = null
     }
@@ -165,7 +165,7 @@ class GallerySavePlugin(private val activity: Activity) : Plugin(activity) {
     @InvokeArg
     class ShareArgs {
         var png_base64: String = ""
-        var filename: String = "lc-capture.png"
+        var filename: String = "pen-island-capture.png"
     }
 
     /**
@@ -217,7 +217,7 @@ class GallerySavePlugin(private val activity: Activity) : Plugin(activity) {
 
     private fun safeName(filename: String): String =
         filename
-            .ifBlank { "lc-capture.png" }
+            .ifBlank { "pen-island-capture.png" }
             .replace(Regex("[^A-Za-z0-9._-]"), "_")
             .let { if (it.lowercase().endsWith(".png")) it else "$it.png" }
 

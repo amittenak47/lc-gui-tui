@@ -3,7 +3,7 @@
 //! Corpus descriptions frequently arrive as a single paragraph with
 //! `Example`/`Input`/`Output` jammed together mid-sentence and exponents
 //! flattened by whatever scraped them (`10^4` → `104`). That is unreadable on
-//! the board, in the TUI pager, in an offline pack, and in a coach prompt.
+//! the board, in an offline pack, and in a coach prompt.
 //!
 //! This is a port of `app/src/util/statementMarkdown.ts`, stage for stage and
 //! in the same order, so the two cannot disagree about what a statement looks

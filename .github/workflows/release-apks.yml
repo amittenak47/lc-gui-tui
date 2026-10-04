@@ -6,8 +6,8 @@
 #
 # Problem corpora are deliberately not here. They live on their own permanent
 # `corpora-v1` tag, which `app/src-tauri/src/dlc.rs` downloads from by name at
-# runtime (Settings -> Datasets -> Install). If corpora were attached to
-# version tags instead, that URL would have to change on every release and
+# runtime (Settings -> Workspace -> Datasets -> Install). If corpora were
+# attached to version tags instead, that URL would have to change on every release and
 # every already-installed tablet would stop finding its datasets. Repack the
 # corpus zips with `python scripts/pack_seed_corpora.py` and upload them to
 # `corpora-v1` by hand when the data changes, which is rare and happens on a
@@ -45,10 +45,10 @@ jobs:
         include:
           - flavor: practice
             script: android:apk:practice
-            artifact: whiteboard-practice-debug.apk
+            artifact: pen-island-practice-debug.apk
           - flavor: whiteboard-only
             script: android:apk:whiteboard
-            artifact: whiteboard-only-debug.apk
+            artifact: pen-island-whiteboard-only-debug.apk
 
     steps:
       - name: Checkout
@@ -59,7 +59,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: app/package-lock.json
 
@@ -167,21 +167,25 @@ jobs:
           # Draft, so a human reads the notes and checks both APKs are present
           # before anyone can download them.
           draft: true
+          name: Pen Island ${{ inputs.tag || github.ref_name }}
           files: |
-            dist/whiteboard-practice-debug.apk
-            dist/whiteboard-only-debug.apk
+            dist/pen-island-practice-debug.apk
+            dist/pen-island-whiteboard-only-debug.apk
           body: |
-            Two debug APKs. Pick one. They share the app id
-            `dev.lc.whiteboard`, so run `adb uninstall dev.lc.whiteboard`
-            before switching from one to the other.
+            Two Pen Island debug APKs. Pick one. They share package `dev.lc.whiteboard`.
+            Use `adb install -r` to update or switch flavors when the signing
+            certificate and version code are compatible. Local and CI debug
+            keys may differ. A normal uninstall removes the local library and
+            configuration; choose a fresh install only after exporting or
+            backing up the data you need and verifying that backup.
 
             | Build | Has | Missing |
             | --- | --- | --- |
-            | `whiteboard-practice-debug.apk` | Whiteboard, Annotate, Browse, Agent, **Practice + tests** | nothing |
-            | `whiteboard-only-debug.apk` | Whiteboard, Annotate, Browse, Agent | Practice, RustPython |
+            | `pen-island-practice-debug.apk` | Whiteboard, Annotate, Browse, Agent, **Practice + tests** | nothing |
+            | `pen-island-whiteboard-only-debug.apk` | Whiteboard, Annotate, Browse, Agent | Practice, RustPython |
 
             Problem corpora are **not** in this release, and not inside the
-            APK. Install them in the app: Settings -> Datasets -> Install,
+            APK. Install them in the app: Settings -> Workspace -> Datasets -> Install,
             which pulls from the separate permanent
             [`corpora-v1`](https://github.com/amittenak47/lc-gui-tui/releases/tag/corpora-v1)
             release.

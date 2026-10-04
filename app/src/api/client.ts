@@ -677,18 +677,6 @@ export class LcClient {
     return this.cmd("lc_llm_stop");
   }
 
-  async openWorkspace(
-    id: string,
-    target: "ide" | "canvas",
-    dataset?: string,
-  ): Promise<{
-    task_id: string;
-    target: string;
-    workspace_dir: string;
-  }> {
-    return this.cmd("lc_open_workspace", { id, target, dataset });
-  }
-
   async adjacentProblems(id: string, options: SearchOptions = {}): Promise<AdjacentProblems> {
     return this.cmd("lc_adjacent_problem", { id, args: options });
   }

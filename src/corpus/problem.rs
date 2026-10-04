@@ -483,7 +483,7 @@ mod tests {
         assert!(text.contains("10<sup>4</sup>"), "{text}");
     }
 
-    /// The point of the whole exercise: the API, the coach, the TUI and an
+    /// The point of the whole exercise: the API, the coach and an
     /// offline pack all read the description off a loaded `Problem`, so it has
     /// to be laid out by the time it leaves the loader — not only once the
     /// board has run its own copy of the normalizer over it.

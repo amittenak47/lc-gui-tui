@@ -172,7 +172,7 @@ type TabId = "workspace" | "personalise" | "ai" | "llm";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "personalise", label: "Personalize" },
-  ...(FEATURE_LEETCODE ? [{ id: "ai" as const, label: "Leetcode Behavior" }] : []),
+  ...(FEATURE_LEETCODE ? [{ id: "ai" as const, label: "Practice" }] : []),
   ...(FEATURE_LEETCODE ? [{ id: "workspace" as const, label: "Workspace" }] : []),
   { id: "llm", label: "LLM" },
 ];
@@ -643,7 +643,7 @@ export interface SettingsModalProps {
  */
 function padHubProblem(result: Extract<PadHubCheck, { ok: false }>): string {
   if (result.reason === "code") {
-    return "The PC refused this code. Read the 6-digit code off Settings → Pad hub on the desktop.";
+    return "The PC refused this code. Read the 6-digit code off Settings → Personalize → Storage → Pad hub on the desktop.";
   }
   return `Nothing answered (${result.detail}). Check the URL, and that both devices are on the same Wi-Fi.`;
 }
@@ -1523,7 +1523,7 @@ export function SettingsModal({
         ? {
             kind: "ok",
             message: result.version
-              ? `Connected — this PC is running whiteboard ${result.version}.`
+              ? `Connected — this PC is running Pen Island ${result.version}.`
               : "Connected.",
           }
         : { kind: "bad", message: padHubProblem(result) },
@@ -1618,13 +1618,13 @@ export function SettingsModal({
                 </p>
               </label>
               <label>
-                <span>IDE workspace</span>
+                <span>Practice workspace</span>
                 <input
                   value={draft.workspace_dir}
                   onChange={(e) => setDraft((prev) => ({ ...prev, workspace_dir: e.target.value }))}
                 />
                 <p className="lc-settings-hint">
-                  Working copy on this machine: <code>solution.py</code>, Open in IDE, board.json.
+                  Local Practice files: <code>solution.py</code> for code, <code>board.json</code> for the board, and attempt history in <code>.lc/</code>.
                 </p>
               </label>
               </SettingsFold>
@@ -1681,7 +1681,7 @@ export function SettingsModal({
               })}
               {datasets.length === 0 && (
                 <p className="lc-muted">
-                  This build does not report datasets — rebuild with the leetcode feature.
+                  This build does not report datasets — rebuild with Practice support (the <code>leetcode</code> Cargo feature).
                 </p>
               )}
               {datasets.map((entry) => (
@@ -2206,7 +2206,7 @@ export function SettingsModal({
               {draft.serve_token ? (
                 <>
                   <p className="lc-settings-hint">
-                    This PC is the hub. Type both of these into Settings → Pad hub
+                    This PC is the hub. Type both of these into Settings → Personalize → Storage → Pad hub
                     on the tablet.
                   </p>
                   <dl className="lc-pad-hub-card">
@@ -3384,7 +3384,7 @@ export function SettingsModal({
                   <textarea
                     rows={3}
                     value={voice.vocabulary}
-                    placeholder="LeetCode, memoization, heapq, BFS, two pointers"
+                    placeholder="memoization, heapq, BFS, two pointers"
                     onChange={(e) => patchVoice({ vocabulary: e.target.value })}
                   />
                   <p className="lc-settings-hint">Comma or newline separated. Sent with each clip so these come out spelled right. Android&apos;s recognizer ignores it.</p>

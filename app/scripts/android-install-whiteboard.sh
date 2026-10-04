@@ -6,9 +6,10 @@
 #
 # Windows: app/scripts/android-install-whiteboard.cmd
 #
-# Practice build: android-install-practice.sh. Both flavors write the same APK
-# path and share the app id, so `adb uninstall dev.lc.whiteboard` before
-# switching between them.
+# Practice build: android-install-practice.sh. Both share package dev.lc.whiteboard.
+# This wrapper uses install -r to keep data for an update with a compatible
+# signing certificate and version code. For a fresh install, uninstall only
+# after exporting/backing up needed data and verifying the backup.
 
 set -euo pipefail
 # shellcheck source=android-linux-env.sh

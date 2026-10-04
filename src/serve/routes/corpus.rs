@@ -130,8 +130,8 @@ pub struct AdjacentResponse {
     pub next: Option<String>,
 }
 
-/// Paginated search, so the client can page through the corpus the way the TUI
-/// does rather than pulling a capped slice and pretending that is everything.
+/// Paginated search, so the Practice browser can page through the corpus
+/// rather than pulling a capped slice and pretending that is everything.
 pub async fn list_problems(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<ProblemPage>, AppError> {
@@ -174,8 +174,7 @@ pub async fn list_problems(
     Ok(Json(page))
 }
 
-/// Every tag in the corpus, for the browser's filter — the same list the TUI
-/// cycles through with `T`.
+/// Every tag in the corpus, for the Practice browser's filter and `T` shortcut.
 pub async fn list_tags(Query(query): Query<DatasetQuery>) -> Result<Json<Vec<String>>, AppError> {
     let dataset = query.resolve()?;
     let tags = blocking(move || {
@@ -199,7 +198,7 @@ pub async fn list_datasets(State(state): State<Shared>) -> Result<Json<Vec<Datas
     Ok(Json(infos))
 }
 
-/// One random problem matching the current filter — the TUI's `R`.
+/// One random problem matching the current Practice browser filter.
 pub async fn random_problem(
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<Option<ProblemSummary>>, AppError> {

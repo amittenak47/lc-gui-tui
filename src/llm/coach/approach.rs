@@ -116,7 +116,7 @@ impl ApproachOutcome {
 ///
 /// Everything on it is optional, and the default — nothing committed, no
 /// catalog — is exactly the behaviour that shipped before any of this existed.
-/// That matters: the TUI, the tests, and any caller that has no board session
+/// That matters: the tests and any caller that has no board session
 /// pass the default and get the old prompts back, unchanged.
 #[derive(Debug, Clone, Default)]
 pub struct CoachContext {

@@ -1384,7 +1384,7 @@ mod tests {
         let viz_handler = include_str!("viz.rs");
         // The planner is the newest way a model could learn the answer, and the
         // one most likely to be pointed at a frontier API. It reads the same
-        // redacted sources `lc ask` does and nothing else.
+        // redacted sources normal Ask uses and nothing else.
         let planner = include_str!("../llm/coach/planner.rs");
         // The draw review is the only path that sends a rendered picture back
         // to a model. It gets the diagram and the problem, never the answer.

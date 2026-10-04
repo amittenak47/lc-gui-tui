@@ -2,7 +2,7 @@
 name = "tauri-plugin-inkrecognition"
 version = "0.1.0"
 edition = "2021"
-description = "On-device handwriting recognition via ML Kit Digital Ink, for the lc whiteboard coach"
+description = "On-device handwriting recognition via ML Kit Digital Ink, for Pen Island"
 license = "PolyForm-Noncommercial-1.0.0"
 links = "tauri-plugin-inkrecognition"
 

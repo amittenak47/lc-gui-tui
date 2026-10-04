@@ -104,7 +104,7 @@ export function ReviewPanel({
           </dl>
           <p>{review.counterexample.why_your_approach_fails}</p>
           <p className="lc-muted">
-            Run it yourself: <code>lc test --case {review.counterexample.case_number}</code>
+            Use <strong>Run tests</strong> in Practice to check your solution against the sample tests.
           </p>
         </div>
       )}

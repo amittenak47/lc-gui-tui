@@ -3,7 +3,7 @@ name = "whiteboard"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.93"
-description = "LeetCode practice harness: index a local JSON corpus, materialize Python workspaces, run tests, ask an LLM tutor"
+description = "Pen Island handwriting and agent app with a coding Practice engine and corpus maintenance tools"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [[bin]]
@@ -13,6 +13,11 @@ path = "src/main.rs"
 [[bin]]
 name = "audit_tests"
 path = "src/bin/audit_tests.rs"
+
+[[test]]
+name = "rustpython_compat"
+path = "tests/rustpython_compat.rs"
+required-features = ["leetcode"]
 
 [features]
 default = ["leetcode"]
@@ -52,13 +57,6 @@ tempfile = "3.27.0"
 [profile.release]
 lto = true
 strip = true
-
-# TUI + clipboard are CLI/desktop only. The Android APK links this crate as a
-# lib (in-process harness) and those crates do not build for Android.
-[target.'cfg(not(target_os = "android"))'.dependencies]
-arboard = "3"
-ratatui = "0.29"
-crossterm = "0.28"
 
 # rustpython-vm enables libffi `system` on Android. Upstream forwards that to
 # libffi-sys, which then links the NDK's missing -lffi. This patch no-ops

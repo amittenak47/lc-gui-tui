@@ -42,7 +42,7 @@ pub fn build_ask_prompt(
             out,
             "\n## Your reply\n\nAnswer the question as a tutor. Call `draw_structure` or \
              `animate_trace` only when the ask is operational (a trace or a layout), and only \
-             with values from this prompt. Do not invent a LeetCode example."
+             with values from this prompt. Do not invent an unrelated example or sample case."
         );
     } else {
         let _ = writeln!(

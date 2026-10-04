@@ -47,7 +47,7 @@ try {
     if(exceptions.length)throw new Error(JSON.stringify(exceptions));
     await sleep(100);
   }
-  assert(loaded,'LeetCode workspace did not finish opening');
+  assert(loaded,'Practice workspace did not finish opening');
   const results=[];
   for(const page of ["Problem","Code"]){
     await evaluate(`document.querySelector('.lc-pager [aria-label="${page}"]').click()`);await sleep(1000);

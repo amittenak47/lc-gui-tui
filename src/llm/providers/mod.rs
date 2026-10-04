@@ -16,7 +16,7 @@ pub trait LlmProvider {
     fn label(&self) -> String;
     fn chat(&self, system: &str, user: &str) -> Result<String>;
     /// Multi-turn call with optional tools, images, and JSON-object output.
-    /// Kept separate from [`LlmProvider::chat`] so `lc ask` is unaffected.
+    /// Kept separate from [`LlmProvider::chat`] for callers that need only text.
     fn chat_ex(&self, req: &ChatRequest) -> Result<ChatReply>;
     /// Providers without streaming support still report their completed reasoning.
     fn chat_ex_with_events(&self, req: &ChatRequest, events: &crate::llm::coach::EventSink) -> Result<ChatReply> {

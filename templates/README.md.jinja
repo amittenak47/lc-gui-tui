@@ -20,11 +20,5 @@ Expected: {{ ex.output }}
 
 {% endfor %}{% endif %}---
 
-Workflow: edit `solution.py`, then
-
-```bash
-lc test              # run every case
-lc test --case 3     # run one case
-lc test --full       # run the original assert suite
-lc ask --case 3      # LLM tutor help on a failure (never reveals solutions)
-```
+Workflow: open the problem in Practice, edit `solution.py` in the app,
+then use **Run tests**. Ask the Agent for help on a failing case.

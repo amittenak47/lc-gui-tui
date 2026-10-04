@@ -213,7 +213,7 @@ export async function exportDebugLog(): Promise<void> {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `lc-debug-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`;
+  link.download = `pen-island-debug-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`;
   document.body.append(link);
   link.click();
   link.remove();

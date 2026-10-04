@@ -104,7 +104,7 @@ pub(crate) fn finish_canonical(problem: &mut Problem) {
 ///
 /// Called wherever a [`Problem`] is built from corpus text — [`normalize`] for
 /// the adapters, [`finish_canonical`] for the canonical serde paths — so the
-/// API, the coach, the TUI, an offline pack and the board all read the same
+/// API, the coach, an offline pack and the board all read the same
 /// cleaned description. Nothing is written back: the index stores only metadata
 /// and a `json_path`, so this needs no re-index and rewrites no corpus file.
 pub(crate) fn finalize_problem_description(problem: &mut Problem) {

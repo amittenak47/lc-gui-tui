@@ -53,9 +53,9 @@ pub use practice::{
     SessionResponse, SessionStats,
 };
 pub use workspace::{
-    get_board, get_solution, load_problem, open_workspace, put_board, put_solution, run_tests,
-    workspace_meta, BoardBlob, BoardResponse, LoadResponse, OpenWorkspaceBody,
-    OpenWorkspaceResponse, ResumeState, SolutionResponse, SolutionUpdate, TestResponse,
+    get_board, get_solution, load_problem, put_board, put_solution, run_tests,
+    workspace_meta, BoardBlob, BoardResponse, LoadResponse,
+    ResumeState, SolutionResponse, SolutionUpdate, TestResponse,
 };
 
 pub use super::common::DatasetQuery;

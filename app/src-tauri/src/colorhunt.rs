@@ -42,7 +42,7 @@ pub async fn colorhunt_random(tags: Option<String>) -> Result<Vec<ColorHuntRow>,
     let client = reqwest::Client::builder()
         .timeout(TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
-        .user_agent("Mozilla/5.0 (compatible; lc-gui/1.0)")
+        .user_agent(concat!("pen-island/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|err| format!("cannot build an HTTP client: {err}"))?;
 

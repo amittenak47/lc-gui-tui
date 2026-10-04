@@ -31,14 +31,11 @@ pub mod sqlite;
 pub mod docs_index;
 pub mod pads;
 pub mod serve;
-#[cfg(not(target_os = "android"))]
-pub mod tui;
 pub mod workspace;
 pub mod voice;
 
 pub use corpus::dataset;
 pub use corpus::index;
-pub use corpus::lists;
 pub use corpus::loader;
 pub use corpus::problem;
 pub use design::context as coach;

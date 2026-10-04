@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -62,19 +62,6 @@ pub struct SolutionUpdate {
     pub source: String,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct OpenWorkspaceBody {
-    /// `"ide"` opens Cursor/VS Code; `"canvas"` is a no-op on the daemon (client navigates).
-    pub target: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct OpenWorkspaceResponse {
-    pub task_id: String,
-    pub target: String,
-    pub workspace_dir: String,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BoardBlob {
     /// Opaque JSON the client owns (`{v, elements, appState}`).
@@ -85,38 +72,6 @@ pub struct BoardBlob {
 pub struct BoardResponse {
     pub task_id: String,
     pub board: Option<serde_json::Value>,
-}
-
-pub async fn open_workspace(
-    State(state): State<Shared>,
-    UrlPath(id): UrlPath<String>,
-    Query(query): Query<DatasetQuery>,
-    Json(body): Json<OpenWorkspaceBody>,
-) -> Result<Json<OpenWorkspaceResponse>, AppError> {
-    let dataset = query.resolve()?;
-    let cfg = state.cfg_snapshot();
-    let target = body.target.to_ascii_lowercase();
-    if target != "ide" && target != "canvas" {
-        return Err(AppError::bad_request(anyhow!(
-            "target must be \"ide\" or \"canvas\", got {:?}",
-            body.target
-        )));
-    }
-    let response = blocking(move || {
-        let dir = runner::locate_workspace_in(&cfg, dataset, Some(&id))?;
-        let meta = runner::read_meta(&dir)?;
-        if target == "ide" {
-            generator::open_in_editor(&dir);
-        }
-        Ok(OpenWorkspaceResponse {
-            task_id: meta.task_id,
-            target,
-            workspace_dir: dir.display().to_string(),
-        })
-    })
-    .await
-    .map_err(not_found_if_unresolved)?;
-    Ok(Json(response))
 }
 
 pub async fn load_problem(
@@ -132,8 +87,7 @@ pub async fn load_problem(
         let json_path = Path::new(&row.json_path);
         let problem = problem::load_task_for(dataset, json_path, &row.task_id)?;
         let dir = generator::generate(&cfg, dataset, &problem, json_path, false)?;
-        // Same bookkeeping `lc load` does, so the tablet and the CLI share one
-        // session history.
+        // Record loaded problems in the local Practice session history.
         Session::load_or_new()?.mark_loaded(&dataset.key(&problem.task_id))?;
         let meta = runner::read_meta(&dir)?;
         // Whatever the last visit chose to keep. `attempt::finish` already

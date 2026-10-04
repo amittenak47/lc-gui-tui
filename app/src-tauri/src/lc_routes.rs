@@ -280,26 +280,6 @@ pub async fn lc_run_tests(
 }
 
 #[tauri::command]
-pub async fn lc_open_workspace(
-    state: State<'_, Shared>,
-    id: String,
-    target: String,
-    dataset: Option<String>,
-) -> Result<LcResponse, String> {
-    go(
-        state,
-        "POST",
-        format!(
-            "/workspace/{}/open{}",
-            enc(&id),
-            qs(&[("dataset", dataset)])
-        ),
-        Some(json!({ "target": target })),
-    )
-    .await
-}
-
-#[tauri::command]
 pub async fn lc_get_solution(
     state: State<'_, Shared>,
     id: String,

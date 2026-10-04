@@ -303,7 +303,7 @@ pub(super) mod tests {
     }
 
     /// The suite is written against `my_solution`, which does not exist inside
-    /// the runner. Without this rewrite `lc test --full` fails on every problem
+    /// the runner. Without this rewrite full-suite execution fails on every problem
     /// in the corpus.
     #[test]
     fn the_suite_is_rewritten_to_the_runners_check_signature() {

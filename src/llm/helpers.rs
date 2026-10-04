@@ -63,7 +63,7 @@ pub fn write_problem_header(out: &mut String, meta: &WorkspaceMeta, description:
     }
     let _ = writeln!(out, "# Problem: {}", meta.task_id);
     if let Some(q) = &meta.question_id {
-        let _ = writeln!(out, "LeetCode question id: {q}");
+        let _ = writeln!(out, "Question ID: {q}");
     }
     if let Some(d) = &meta.difficulty {
         let _ = writeln!(out, "Difficulty: {d}");

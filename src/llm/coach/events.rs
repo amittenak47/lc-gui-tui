@@ -10,7 +10,7 @@
 //! callback, deliberately:
 //!
 //! - it costs nothing when absent ([`EventSink::none`] is what every HTTP
-//!   handler and the TUI pass, and every emit is then a null check);
+//!   handler without streaming passes, and every emit is then a null check);
 //! - it is called from inside `spawn_blocking`, so it must not be async;
 //! - it can be cancelled from outside, which is how a disconnected socket stops
 //!   a run that is between stages.
@@ -77,7 +77,7 @@ impl std::fmt::Debug for EventSink {
 
 impl EventSink {
     /// The sink for every caller that has nowhere to send progress: the HTTP
-    /// handlers, the TUI, and every test that only cares about the answer.
+    /// handlers without streaming and every test that only cares about the answer.
     pub fn none() -> Self {
         Self::default()
     }

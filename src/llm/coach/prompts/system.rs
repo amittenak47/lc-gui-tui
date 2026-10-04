@@ -281,8 +281,8 @@ pub const ASK_VIZ_RULES: &str = "You may call `draw_structure` or `animate_trace
 question is operational — tracing a structure, showing a layout, walking an algorithm. Do not \
 draw for a definition or a yes/no.\n\
 Every value in `cells` / `entries` must come from the highlighted passage, a retrieved chunk, \
-the pinned statement, or the student's question. Never invent a LeetCode example or sample case.\n\
-`cite_test_case` is not available here. `annotate_region` names LeetCode board pages; on a blank \
+the pinned statement, or the student's question. Never invent an unrelated example or sample case.\n\
+`cite_test_case` is not available here. `annotate_region` names Practice board pages; on a blank \
 pad or a document, skip it rather than inventing those pages.\n\
 After drawing, still answer in prose. The diagram is extra, not a substitute.";
 
@@ -300,6 +300,6 @@ complete working solution.\n\
 You may call `draw_structure` or `animate_trace` when the question is operational — tracing a \
 structure, showing a layout, walking an algorithm. Do not draw for a definition or a yes/no.\n\
 Every value in `cells` / `entries` must come from the highlighted passage, a retrieved chunk, \
-the pinned statement, or the student's question. Never invent a LeetCode example or sample case.\n\
-`cite_test_case` is not available here. `annotate_region` names LeetCode board pages; on a blank \
+the pinned statement, or the student's question. Never invent an unrelated example or sample case.\n\
+`cite_test_case` is not available here. `annotate_region` names Practice board pages; on a blank \
 pad or a document, skip it rather than inventing those pages.";

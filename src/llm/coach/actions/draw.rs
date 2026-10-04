@@ -23,7 +23,7 @@ pub struct Annotation {
 #[serde(default)]
 pub struct Citation {
     pub case_index: usize,
-    /// 1-based, matching `lc test --case N`.
+    /// Displayed sample case numbers are 1-based.
     pub case_number: u32,
     pub input: String,
     pub expected: String,

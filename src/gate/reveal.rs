@@ -8,7 +8,7 @@
 //! one place: the `POST /coach/reveal` handler, after the client has set the
 //! confirmation flag its dialog produces.
 //!
-//! Nothing here is reachable from `Problem`, `WorkspaceMeta`, `lc ask`, the
+//! Nothing here is reachable from `Problem`, `WorkspaceMeta`, normal Ask, the
 //! review path, or the ambient path — see the tests at the bottom of this file
 //! and in [`crate::llm::coach`].
 

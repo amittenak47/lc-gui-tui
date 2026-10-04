@@ -50,7 +50,7 @@ export type BrowseMotion = "enter" | "idle" | "busy" | "exit" | "done";
 export interface HeaderSlots {
   /** Beside the strip: the problem stepper, or Home's prompt. */
   left: HTMLElement | null;
-  /** Run / Submit / Open in IDE. */
+  /** Run / Submit. */
   center: HTMLElement | null;
   /** Pad icons, gear and Agent — one slot, so their order is the file's. */
   right: HTMLElement | null;

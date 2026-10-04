@@ -7379,7 +7379,7 @@ export const Workspace = memo(function Workspace({
           const askText =
             prompt.trim() ||
             (padDraw
-              ? "Draw the relevant structure on the board. Use only values already in this prompt or on the board. Do not invent a LeetCode example."
+              ? "Draw the relevant structure on the board. Use only values already in this prompt or on the board. Do not invent an unrelated example or sample case."
               : prompt);
           await askAgent(
             askText,
@@ -7826,18 +7826,8 @@ export const Workspace = memo(function Workspace({
   }, [client]);
 
 
-  const openInIde = useCallback(async () => {
-    if (!problem) return;
-    try {
-      await client.openWorkspace(problem.task_id, "ide", problem.dataset);
-    } catch (cause) {
-      setError(messageOf(cause));
-    }
-  }, [client, problem]);
-
-  // Deep link: ?task=<id>[&dataset=<slug>] loads that problem once. The TUI's
-  // "Open in Canvas" builds this URL, and it names the dataset because the
-  // same slug exists in several of them.
+  // Problem deep link: ?task=<id>[&dataset=<slug>] loads the problem once.
+  // The dataset distinguishes slugs shared by several problem sets.
   useEffect(() => {
     if (deepLinkHandled.current || problem) return;
     const params = new URLSearchParams(window.location.search);
@@ -10272,15 +10262,6 @@ export const Workspace = memo(function Workspace({
                 <span className="lc-label-short" aria-hidden>
                   ✓
                 </span>
-              </button>
-              <button
-                type="button"
-                className="lc-secondary lc-desktop-only"
-                disabled={busy !== null || canvasLoading}
-                onClick={() => void openInIde()}
-                title="Open solution.py in Cursor / VS Code"
-              >
-                Open in IDE
               </button>
             </div>
           )}

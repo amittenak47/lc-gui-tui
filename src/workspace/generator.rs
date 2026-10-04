@@ -1,8 +1,7 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use minijinja::{context, Environment};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
@@ -14,7 +13,7 @@ const SOLUTION_TMPL: &str = include_str!("../../templates/solution.py.jinja");
 /// Embedded test runner — also rewritten into existing workspaces on each run.
 pub const RUN_TESTS_PY: &str = include_str!("../../templates/run_tests.py");
 
-/// Everything the workspace (and later `lc test` / `lc ask`) needs, written to
+/// Everything the Practice workspace, runner and agent need, written to
 /// `<workspace>/<task_id>/.lc/meta.json`. Built from `Problem`, which cannot
 /// carry `completion`/`response`, so no solution text can end up here.
 #[derive(Debug, Serialize, Deserialize)]
@@ -112,7 +111,7 @@ pub fn generate(
     Ok(dir)
 }
 
-/// The `solution.py` a fresh `lc load` writes.
+/// The `solution.py` a fresh Practice workspace writes.
 ///
 /// Public because discarding an attempt resets the file to exactly this — see
 /// [`crate::attempt::finish`]. Rendering it again beats remembering it: the
@@ -614,116 +613,4 @@ mod generate_tests {
         );
         let _ = fs::remove_dir_all(&root);
     }
-}
-
-/// Open `solution.py` in the current Cursor/VS Code window (`-r` / `--reuse-window`).
-pub fn open_in_editor(dir: &Path) {
-    open_in_editor_impl(dir, false);
-}
-
-/// Same as [`open_in_editor`] but without stdout messages (for TUI).
-pub fn open_in_editor_quiet(dir: &Path) {
-    open_in_editor_impl(dir, true);
-}
-
-fn open_in_editor_impl(dir: &Path, quiet: bool) {
-    let target = dir.join("solution.py");
-    let target = if target.is_file() {
-        target
-    } else {
-        dir.to_path_buf()
-    };
-    let path = target.display().to_string();
-
-    let editors = ["cursor", "code"];
-    for editor in editors {
-        if launch_editor(editor, &path) {
-            if !quiet {
-                println!("Opened in {editor} (reuse window).");
-            }
-            return;
-        }
-    }
-
-    if !quiet {
-        let _ = writeln!(
-            std::io::stderr(),
-            "Could not launch cursor/code — open manually: {}",
-            target.display()
-        );
-    }
-}
-
-fn launch_editor(editor: &str, path: &str) -> bool {
-    let status = if cfg!(windows) {
-        std::process::Command::new("cmd")
-            .args(["/C", editor, "-r", path])
-            .status()
-    } else {
-        std::process::Command::new(editor).args(["-r", path]).status()
-    };
-    matches!(status, Ok(s) if s.success())
-}
-
-/// Open a file in a blocking terminal editor (`$VISUAL` / `$EDITOR`, then nvim/vim/vi).
-///
-/// Callers that own a ratatui session must suspend the alternate screen first so
-/// the child inherits a normal tty; see `tui::with_suspended_tui`.
-pub fn open_in_terminal_editor(path: &Path) -> Result<()> {
-    use std::process::{Command, Stdio};
-
-    let path_str = path.display().to_string();
-    let mut candidates: Vec<String> = Vec::new();
-    for key in ["VISUAL", "EDITOR"] {
-        if let Ok(value) = std::env::var(key) {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() {
-                candidates.push(trimmed.to_string());
-            }
-        }
-    }
-    for editor in ["nvim", "vim", "vi"] {
-        candidates.push(editor.to_string());
-    }
-    #[cfg(windows)]
-    candidates.push("notepad".to_string());
-
-    let mut last_err = None;
-    for editor in &candidates {
-        // `$EDITOR` is usually a single binary; ignore args for simplicity.
-        let bin = editor.split_whitespace().next().unwrap_or(editor);
-        let mut cmd = Command::new(bin);
-        cmd.arg(&path_str)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
-        match cmd.status() {
-            Ok(_) => return Ok(()),
-            Err(err) => last_err = Some(format!("{bin}: {err}")),
-        }
-    }
-    bail!(
-        "no terminal editor found (set $EDITOR or install vim/nvim){}",
-        last_err
-            .map(|e| format!(" — last error: {e}"))
-            .unwrap_or_default()
-    );
-}
-
-/// Open the workspace folder in the OS file manager (non-blocking).
-pub fn open_workspace_folder(dir: &Path) {
-    let _ = {
-        #[cfg(windows)]
-        {
-            std::process::Command::new("explorer").arg(dir).spawn()
-        }
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open").arg(dir).spawn()
-        }
-        #[cfg(all(unix, not(target_os = "macos")))]
-        {
-            std::process::Command::new("xdg-open").arg(dir).spawn()
-        }
-    };
 }

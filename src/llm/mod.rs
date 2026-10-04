@@ -1,4 +1,3 @@
-pub mod ask;
 pub mod catalog;
 pub mod coach;
 pub mod docs;

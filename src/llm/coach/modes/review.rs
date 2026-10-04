@@ -1,4 +1,3 @@
-use std::fmt::Write as _;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -79,7 +78,7 @@ impl Rating {
 #[serde(default)]
 pub struct Counterexample {
     pub case_index: usize,
-    /// 1-based, matching `lc test --case N`. Filled in by the daemon.
+    /// Displayed sample case numbers are 1-based. Filled in by the daemon.
     pub case_number: u32,
     pub input: String,
     pub expected: String,
@@ -140,68 +139,6 @@ pub fn validate_counterexample(review: &mut ReviewResponse, cases: &[IoCase]) {
             ));
         }
     }
-}
-
-/// Render a review card as plain text for the TUI (no JSON, no GUI chrome).
-pub fn format_review_card(review: &ReviewResponse) -> String {
-    let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "Verdict: {}\nApproach: {}",
-        verdict_label(review.verdict),
-        review.understood_approach.trim()
-    );
-    let _ = writeln!(
-        out,
-        "Rating: correctness {}/5 · complexity {}/5 · clarity {}/5",
-        review.rating.correctness, review.rating.complexity, review.rating.clarity
-    );
-    if !review.strengths.is_empty() {
-        let _ = writeln!(out, "\nStrengths:");
-        for s in &review.strengths {
-            let _ = writeln!(out, "  - {}", strip_review_tag_prefix(s));
-        }
-    }
-    if !review.gaps.is_empty() {
-        let _ = writeln!(out, "\nGaps:");
-        for g in &review.gaps {
-            let _ = writeln!(out, "  - {}", strip_review_tag_prefix(g));
-        }
-    }
-    if let Some(ce) = &review.counterexample {
-        let _ = writeln!(
-            out,
-            "\nCounterexample (case {}):\n  input: {}\n  expected: {}\n  why: {}",
-            ce.case_number,
-            ce.input.trim(),
-            ce.expected.trim(),
-            ce.why_your_approach_fails.trim()
-        );
-    }
-    if let Some(rej) = &review.counterexample_rejected {
-        let _ = writeln!(out, "\n(Counterexample dropped: {rej})");
-    }
-    if !review.socratic_question.trim().is_empty() {
-        let _ = writeln!(out, "\nNext: {}", review.socratic_question.trim());
-    }
-    out.trim_end().to_string()
-}
-
-pub(super) fn verdict_label(v: Verdict) -> &'static str {
-    match v {
-        Verdict::OnTrack => "on track",
-        Verdict::SubtlyWrong => "subtly wrong",
-        Verdict::WrongTrack => "wrong track",
-        Verdict::Unclear => "unclear",
-    }
-}
-
-pub(super) fn strip_review_tag_prefix(note: &str) -> String {
-    note.trim()
-        .strip_prefix("[layout] ")
-        .or_else(|| note.trim().strip_prefix("[code] "))
-        .map(str::to_string)
-        .unwrap_or_else(|| note.trim().to_string())
 }
 
 /// Merge separate layout and code reviews into one card for the client.
