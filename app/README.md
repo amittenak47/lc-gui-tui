@@ -1,6 +1,6 @@
 # Pen Island client development
 
-**Tested on:** XPPen Magic Note Pad (MNP1095), Android 14 (API 34). APK built with Android NDK **29.0.13846066**. Bugs: [open an issue](https://github.com/amittenak47/lc-gui-tui/issues). I want compatibility reports across devices.
+**Tested on:** XPPen Magic Note Pad (MNP1095), Android 14 (API 34). APK built with Android NDK **29.0.13846066**. Bugs: [open an issue](https://github.com/amittenak47/pen-island/issues). I want compatibility reports across devices.
 
 Pen Island supports coding practice by *whiteboarding*: sketch an approach by hand while an agent
 watches, grills you, and points at the specific test case your approach breaks

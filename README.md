@@ -14,7 +14,7 @@ on your own machine.
 > **Status, from the author.** Tested on an XPPen Magic Note Pad (MNP1095),
 > Android 14 (API 34), with the APK built on Android NDK 29.0.13846066. It's the
 > only Android device I have, so I don't know yet what breaks on others. If you
-> hit a bug, [please open an issue](https://github.com/amittenak47/lc-gui-tui/issues)
+> hit a bug, [please open an issue](https://github.com/amittenak47/pen-island/issues)
 > and I'll fix it as soon as I can.
 >
 > Most of these docs were written with Cursor and Claude, because I spent my time
@@ -87,14 +87,14 @@ deletes the app's local data.
 
 ### Android, no build tools
 
-1. Open [Releases](https://github.com/amittenak47/lc-gui-tui/releases) and pick
+1. Open [Releases](https://github.com/amittenak47/pen-island/releases) and pick
    the newest version.
 2. Download `pen-island-practice-debug.apk` or `pen-island-whiteboard-only-debug.apk`.
 3. Open it on the tablet and allow installs from unknown apps.
 
 For the newest build of `main` instead of the newest release, open the latest
 **Build Android APK** run on the
-[Actions tab](https://github.com/amittenak47/lc-gui-tui/actions) and download
+[Actions tab](https://github.com/amittenak47/pen-island/actions) and download
 the APK from **Artifacts**.
 
 ### Android, building it yourself
@@ -160,7 +160,7 @@ it. That isn't a supported way to run the app.
 The APK ships without problems; it would be several times the size with them.
 Install them from inside the app under **Settings → Workspace → Datasets**. They
 download from the
-[`corpora-v1`](https://github.com/amittenak47/lc-gui-tui/releases/tag/corpora-v1)
+[`corpora-v1`](https://github.com/amittenak47/pen-island/releases/tag/corpora-v1)
 release, which is separate from app releases, so updating the app leaves your
 problem sets alone and the other way round. Your pass/fail marks survive
 removing and reinstalling a set.

@@ -27,7 +27,7 @@ fn ok_json(value: impl Serialize) -> Result<LcResponse, String> {
 }
 
 const DLC_RELEASE: &str =
-    "https://github.com/amittenak47/lc-gui-tui/releases/download/corpora-v1";
+    "https://github.com/amittenak47/pen-island/releases/download/corpora-v1";
 
 fn dlc_slugs() -> impl Iterator<Item = &'static str> {
     dataset::DATASETS.iter().map(|d| d.id)

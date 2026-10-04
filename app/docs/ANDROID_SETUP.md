@@ -2,7 +2,7 @@
 
 Guide for installing the Pen Island APK on an Android tablet and fixing PATH on Windows.
 
-**Author device:** XPPen Magic Note Pad (MNP1095), Android 14 (API 34), NDK 29.0.13846066. If the APK misbehaves on another tablet, [open an issue](https://github.com/amittenak47/lc-gui-tui/issues).
+**Author device:** XPPen Magic Note Pad (MNP1095), Android 14 (API 34), NDK 29.0.13846066. If the APK misbehaves on another tablet, [open an issue](https://github.com/amittenak47/pen-island/issues).
 
 The APK runs its harness in-process through named Tauri invokes and coach events. It works independently of a PC. Desktop also starts a LAN hub listener on `0.0.0.0` at the configured port (default `7878`), serving the shared router for optional tablet sync. Both flavors support the hub's PC URL and six-digit code under **Settings → Personalize → Storage → Pad hub**; no separate `lc serve` daemon is needed.
 
