@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client";
 import { act } from "react";
 
 import { HoldButton } from "./HoldButton";
-import { HOLD_MS, LIBRARY_HOLD_MS, HOLD_SENSITIVE_MS, HOLD_TAP_FILL_DELAY_MS, holdDurationMs } from "../util/gesture";
+import { HOLD_FILL_MS, LIBRARY_HOLD_MS, HOLD_SENSITIVE_MS, HOLD_TAP_FILL_DELAY_MS } from "../util/gesture";
 
 beforeAll(() => {
   if (!Element.prototype.setPointerCapture) {
@@ -35,12 +35,10 @@ beforeAll(() => {
 
 describe("HoldButton", () => {
   it.each([
-    ["default", undefined, 280],
-    ["library", LIBRARY_HOLD_MS, 700],
-    ["sensitive", HOLD_SENSITIVE_MS, 559],
-    ["preset chip", holdDurationMs(280), 235],
-    ["session delete", holdDurationMs(1200), 1008],
-  ])("confirms a %s hold at its shortened duration", async (_name, holdMs, expectedMs) => {
+    ["default", undefined, 600],
+    ["library", LIBRARY_HOLD_MS, 600],
+    ["sensitive", HOLD_SENSITIVE_MS, 600],
+  ])("confirms a %s hold at the shared duration", async (_name, holdMs, expectedMs) => {
     vi.useFakeTimers();
     let now = 0;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -93,8 +91,8 @@ describe("HoldButton", () => {
       expect(tap).toHaveBeenCalledTimes(1);
       expect(confirm).not.toHaveBeenCalled();
       await act(async () => button.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key })));
-      now += HOLD_MS;
-      await act(async () => vi.advanceTimersByTime(HOLD_MS + 32));
+      now += HOLD_FILL_MS;
+      await act(async () => vi.advanceTimersByTime(HOLD_FILL_MS + 32));
       await act(async () => button.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key })));
       expect(confirm).toHaveBeenCalledTimes(1);
       expect(tap).toHaveBeenCalledTimes(1);

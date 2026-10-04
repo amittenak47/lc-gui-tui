@@ -1,8 +1,8 @@
 /**
  * Shared pointer timing for hold-to-confirm and long-press menus.
  *
- * Default holds are short ({@link HOLD_MS}). Sensitive gates — offline mode and
- * hinted-solution reveal — keep the longer {@link HOLD_SENSITIVE_MS}.
+ * Every hold-to-confirm button fills over {@link HOLD_FILL_MS}, whatever it
+ * confirms. {@link HOLD_MS} is the pen's shorter hold on the canvas.
  */
 
 /**
@@ -11,18 +11,24 @@
  */
 export const holdDurationMs = (originalMs: number): number => Math.round(originalMs * 0.84);
 
-/** Default hold-to-confirm fill duration. */
+/** The pen's hold on the canvas: the tool wheel's fill and the colour ring. */
 export const HOLD_MS = holdDurationMs(333);
 
-/** Library menu holds leave extra time to cancel. */
-export const LIBRARY_HOLD_MS = holdDurationMs(333 + 500);
+/**
+ * Every hold-to-confirm button: dialog choices, library rows, deletes and
+ * reveals alike. Different lengths read as some holds being broken.
+ */
+export const HOLD_FILL_MS = 600;
+
+/** Library menu holds; see {@link HOLD_FILL_MS}. */
+export const LIBRARY_HOLD_MS = HOLD_FILL_MS;
 
 /**
  * How long a press with {@link HoldButton} `onTap` stays visually empty.
  *
  * Tap-through (header pads, armed bins) must not wash fill. Fill starts after
  * this beat so a click never paints `--lc-hold`. Confirm still lands at
- * {@link HOLD_MS} from pointer down.
+ * {@link HOLD_FILL_MS} from pointer down.
  */
 export const HOLD_TAP_FILL_DELAY_MS = holdDurationMs(140);
 
@@ -34,8 +40,8 @@ export const HOLD_TAP_FILL_DELAY_MS = holdDurationMs(140);
  */
 export const DOUBLE_TAP_MS = 320;
 
-/** Longer hold for offline / reveal-solution consent. */
-export const HOLD_SENSITIVE_MS = holdDurationMs(666);
+/** Offline / reveal-solution consent; see {@link HOLD_FILL_MS}. */
+export const HOLD_SENSITIVE_MS = HOLD_FILL_MS;
 
 /**
  * Canvas dwell before the ink-tool wheel opens.

@@ -10,7 +10,6 @@
 import { useEffect, useState, type RefObject } from "react";
 
 import { HoldButton } from "../components/HoldButton";
-import { HOLD_MS } from "../util/gesture";
 
 const NATIVE_SEL = ".scroll-back-to-content";
 
@@ -65,7 +64,6 @@ export function ScrollBackHold({
     <HoldButton
       label="Scroll back to content"
       className="lc-scroll-back-hold"
-      holdMs={HOLD_MS}
       onConfirm={onScrollBack}
       ariaLabel="Hold to scroll back to content"
     />

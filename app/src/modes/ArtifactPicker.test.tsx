@@ -37,7 +37,7 @@ vi.mock("../util/artifactRepository", () => ({
 }));
 
 import { ArtifactPicker } from "./ArtifactPicker";
-import { HOLD_MS } from "../util/gesture";
+import { HOLD_FILL_MS } from "../util/gesture";
 import { resetLibraryDeleteArmForTests } from "../util/armedDelete";
 import { resetArtifactLocksForTests } from "../util/artifactLocks";
 
@@ -177,7 +177,7 @@ async function holdKind(label: string) {
     pointer(node, "pointerdown");
   });
   await act(async () => {
-    await new Promise<void>((resolve) => setTimeout(resolve, HOLD_MS + 50));
+    await new Promise<void>((resolve) => setTimeout(resolve, HOLD_FILL_MS + 50));
   });
   await act(async () => {
     pointer(node, "pointerup");
@@ -196,7 +196,7 @@ async function holdControl(aria: string) {
     pointer(node, "pointerdown");
   });
   await act(async () => {
-    await new Promise<void>((resolve) => setTimeout(resolve, HOLD_MS + 50));
+    await new Promise<void>((resolve) => setTimeout(resolve, HOLD_FILL_MS + 50));
   });
   await act(async () => {
     pointer(node, "pointerup");

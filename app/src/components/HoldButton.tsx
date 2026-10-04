@@ -9,7 +9,7 @@
  * a browser `confirm()` box.
  *
  * The mechanics live here rather than in each dialog: a rAF loop drives
- * `--lc-hold` from 0 to 1 over {@link HOLD_MS}, and letting go before the end
+ * `--lc-hold` from 0 to 1 over {@link HOLD_FILL_MS}, and letting go before the end
  * resets it. The liquid wash flows from left to right. Optional
  * {@link HoldButtonProps.onTap} fires on a short release before the fill
  * completes. Keyboard holds (Space / Enter) work the same way, so the gesture
@@ -21,15 +21,15 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import type { CSSProperties } from "react";
 
 import { PAN_FRICTION, PAN_REST_SPEED } from "../canvas/flickPredict";
-import { HOLD_MS, HOLD_TAP_FILL_DELAY_MS } from "../util/gesture";
+import { HOLD_FILL_MS, HOLD_TAP_FILL_DELAY_MS } from "../util/gesture";
 
 /** Travel before a library-row press becomes a list flick instead of a hold. */
 const HOLD_SCROLL_SLOP_PX = 8;
 /** px/ms — a slow drag must not coast. */
 const HOLD_SCROLL_FLICK_MIN = 0.12;
 
-/** @deprecated Prefer {@link HOLD_MS} from `util/gesture`. */
-export const DEFAULT_HOLD_MS = HOLD_MS;
+/** @deprecated Prefer {@link HOLD_FILL_MS} from `util/gesture`. */
+export const DEFAULT_HOLD_MS = HOLD_FILL_MS;
 
 export interface HoldButtonProps {
   /** Text on the button, and what the aria label says you are confirming. */
@@ -43,7 +43,7 @@ export interface HoldButtonProps {
   onTap?: () => void;
   /** A brief liquid wash for a reversible tap action such as clearing ink. */
   tapFeedback?: boolean;
-  /** How long the fill takes. Defaults to the shared {@link HOLD_MS}. */
+  /** How long the fill takes. Defaults to the shared {@link HOLD_FILL_MS}. */
   holdMs?: number;
   disabled?: boolean;
   /** Extra classes — `lc-hold-danger` tints the fill red. */
@@ -103,7 +103,7 @@ export function HoldButton({
   onConfirm,
   onTap,
   tapFeedback = false,
-  holdMs = HOLD_MS,
+  holdMs = HOLD_FILL_MS,
   disabled = false,
   className,
   ariaLabel,

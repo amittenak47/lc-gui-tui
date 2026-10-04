@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { HOLD_MS } from "../util/gesture";
+import { HOLD_FILL_MS } from "../util/gesture";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -22,7 +22,7 @@ it("keeps Delete behind a completed hold, preserves cancellation and blocks inpu
     await act(async () => { remove.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true })); });
     expect(onConfirm).not.toHaveBeenCalled();
     await act(async () => { remove.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, HOLD_MS + 50)); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, HOLD_FILL_MS + 50)); });
     await act(async () => { remove.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true })); });
     expect(onConfirm).toHaveBeenCalledTimes(1);
     render(true);

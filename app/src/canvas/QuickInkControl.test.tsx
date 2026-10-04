@@ -11,7 +11,7 @@ import {
   QuickInkControl,
 } from "./QuickInkControl";
 import { PadTitle, PAD_TITLE_HOLD_MS, type PadTitleHandle } from "./PadTitle";
-import { HOLD_MS } from "../util/gesture";
+import { HOLD_FILL_MS } from "../util/gesture";
 import type { InkPresetKind } from "../util/inkToolPresets";
 
 let root: Root, container: HTMLDivElement;
@@ -43,7 +43,7 @@ it("cycles pen, highlighter, eraser on hold without opening the colors", async (
     return <QuickInkControl kind={kind} color="#2979ff" onPick={next => { picked(next); setKind(next); }} />;
   }
   await act(async () => root.render(<Demo />));
-  await press(HOLD_MS + 30); await press(HOLD_MS + 30); await press(HOLD_MS + 30);
+  await press(HOLD_FILL_MS + 30); await press(HOLD_FILL_MS + 30); await press(HOLD_FILL_MS + 30);
   expect(picked.mock.calls.map(call => call[0])).toEqual(["highlighter", "eraser", "pen"]);
   expect(document.querySelector('[aria-label="Quick ink colors"]')).toBeNull();
 });
@@ -131,13 +131,13 @@ it("restores the last color and eraser size when the quick tool comes back", asy
   await act(async () => root.render(<Demo />));
   await press();
   await act(async () => (document.querySelector('[aria-label="Red"]') as HTMLButtonElement).click());
-  await press(HOLD_MS + 30);
-  await press(HOLD_MS + 30);
+  await press(HOLD_FILL_MS + 30);
+  await press(HOLD_FILL_MS + 30);
   await press();
   await act(async () => (document.querySelector('[aria-label="Eraser size 192"]') as HTMLButtonElement).click());
-  await press(HOLD_MS + 30);
-  await press(HOLD_MS + 30);
-  await press(HOLD_MS + 30);
+  await press(HOLD_FILL_MS + 30);
+  await press(HOLD_FILL_MS + 30);
+  await press(HOLD_FILL_MS + 30);
   const pen = picked.mock.calls.filter(call => call[0] === "pen").at(-1);
   const eraser = picked.mock.calls.filter(call => call[0] === "eraser").at(-1);
   expect(pen?.[1]).toBe("#ff2d2d");

@@ -31,7 +31,7 @@ import {
   type ShapeModValue,
   type ShapeStamp,
 } from "../templates/shapes";
-import { HOLD_MS, LONG_PRESS_MS, WHEEL_OPEN_MS, holdDurationMs } from "../util/gesture";
+import { LONG_PRESS_MS } from "../util/gesture";
 import type { InkHandedness } from "../util/inkHandedness";
 import {
   clampToBox,
@@ -1023,7 +1023,6 @@ export function BoardToolbar({
             wheelLocked ? "is-locked" : "",
           ].join(" ")}
           pressed={wheelLocked}
-          holdMs={holdDurationMs(WHEEL_OPEN_MS)}
           onTap={() => onToggleWheelLock?.()}
           onConfirm={() => onOpenInkWheel?.()}
           style={{
@@ -1080,7 +1079,6 @@ export function BoardToolbar({
               shapesUiActive ? "lc-tool-active" : "",
             ].join(" ")}
             pressed={shapesUiActive}
-            holdMs={HOLD_MS}
             onTap={() => {
               if (shapeSlot === "photos") {
                 closeShapeMenus();
