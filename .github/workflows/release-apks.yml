@@ -116,6 +116,22 @@ jobs:
         working-directory: app
         run: npm run android:init
 
+      # With the ANDROID_DEBUG_KEYSTORE_B64 secret set, every CI build is
+      # signed with that one debug key, so a CI APK installs over the previous
+      # one (and over local builds made with the same keystore) with
+      # `adb install -r`, keeping the app's data. Without the secret (forks,
+      # or a repo that never set it) the runner makes a fresh key per build.
+      - name: Use the shared debug signing key
+        env:
+          ANDROID_DEBUG_KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$ANDROID_DEBUG_KEYSTORE_B64" ]; then
+            mkdir -p ~/.android
+            echo "$ANDROID_DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+          else
+            echo "::warning::ANDROID_DEBUG_KEYSTORE_B64 is not set; this APK gets a one-off debug key."
+          fi
+
       - name: Build APK
         working-directory: app
         run: npm run ${{ matrix.script }}
@@ -187,5 +203,5 @@ jobs:
             Problem corpora are **not** in this release, and not inside the
             APK. Install them in the app: Settings -> Workspace -> Datasets -> Install,
             which pulls from the separate permanent
-            [`corpora-v1`](https://github.com/amittenak47/lc-gui-tui/releases/tag/corpora-v1)
+            [`corpora-v1`](https://github.com/amittenak47/pen-island/releases/tag/corpora-v1)
             release.
