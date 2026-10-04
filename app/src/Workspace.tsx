@@ -350,12 +350,13 @@ import {
   pushWhiteboardPad,
   restoreTrashedPad,
   sweepPadTrash,
-  tombstonePad,
   type PadHubWindowDetail,
 } from "./util/padSync";
 import { annotatePadBody, whiteboardPadBody } from "./util/padSync";
 import { renameLibraryPad } from "./util/libraryPadRename";
 import { loadPadHub, loadPadSyncSince } from "./util/padHub";
+import { resolveProblemLeave } from "./util/problemLeave";
+import { isPadHubOffline } from "./util/padHubStatus";
 import { pullMissingHubFiles, waitForPadPushes } from "./util/padSync";
 import { hubReloadAppState, hubReloadDocumentElements } from "./util/boardHubReload";
 import {
@@ -385,7 +386,6 @@ import {
   repairContentStore,
 } from "./util/contentStore";
 import {
-  deleteProblemBoard,
   getProblemBoard,
   problemPadId,
   putProblemBoard,
@@ -1280,7 +1280,7 @@ export const Workspace = memo(function Workspace({
         const id = notebookId ?? docId;
         if (!id) return;
         const kind = notebookId ? "whiteboard" : "annotate";
-        await waitForPadPushes(kind, id);
+        if (!isPadHubOffline()) await waitForPadPushes(kind, id);
         // A rerender refreshes the handle without replacing the mounted board.
         if (boardRef.current?.instanceId !== board.instanceId || (notebookId ? whiteboardNotebookIdRef.current : annotateDocIdRef.current) !== id) {
           throw new Error("The open pad changed. Sync the current pad again.");
@@ -2448,6 +2448,7 @@ export const Workspace = memo(function Workspace({
    */
   const boardSaveSuspendedRef = useRef(false);
   const agentSaveSuspendedRef = useRef(false);
+  const problemLocalSavesRef = useRef(new Set<Promise<unknown>>());
   const coachRef = useRef<AmbientCoach | null>(null);
   // The recognizer can be swapped after mount; read it through a ref so the
   // ambient loop doesn't need to restart when it lands.
@@ -2892,7 +2893,7 @@ export const Workspace = memo(function Workspace({
       return;
     }
     const blob = board.saveBoard();
-    void (async () => {
+    const localSave = (async () => {
       const padId = problemPadId(problem.dataset, problem.task_id);
       const prev = await getProblemBoard(padId);
       const row = {
@@ -2907,8 +2908,15 @@ export const Workspace = memo(function Workspace({
       };
       await putProblemBoard(row);
       lastSavedHashRef.current = hash;
-      await pushProblemPad(client, row);
-    })().catch(() => {});
+      return row;
+    })();
+    problemLocalSavesRef.current.add(localSave);
+    void localSave.then((row) => {
+      problemLocalSavesRef.current.delete(localSave);
+      return pushProblemPad(client, row);
+    }, () => {
+      problemLocalSavesRef.current.delete(localSave);
+    }).catch(() => {});
   }, [
     announceAutosave,
     autosaveMs,
@@ -8133,12 +8141,12 @@ export const Workspace = memo(function Workspace({
    * `onFull` is how the caller says what to reopen once a full library has been
    * pruned, since that differs between the sheet and the header.
    */
-  const saveFootnoteBoardNow = useCallback(async (opts?: { quiet?: boolean }) => {
+  const saveFootnoteBoardNow = useCallback(async (opts?: { quiet?: boolean; strict?: boolean }) => {
     const bind = footnoteBoardRef.current;
     const board = boardRef.current;
     if (!bind || !board) return;
     const key = footnoteWhiteboardDocKey(bind.docId, bind.wbId);
-    await flushDirtyInk(board, key);
+    await flushDirtyInk(board, key, 0, opts?.strict);
     const liveBoard = board.saveBoard({ assembleInk: false });
     const pageCount = Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements));
     await putFootnoteWhiteboard(bind.docId, bind.wbId, { board: liveBoard, pageCount });
@@ -8322,7 +8330,7 @@ export const Workspace = memo(function Workspace({
     await handle.settleFitView();
   }, [themeId]);
 
-  const closeFootnoteBoardSession = useCallback(async (reopenOverview = true) => {
+  const closeFootnoteBoardSession = useCallback(async (reopenOverview = true, strict = false) => {
     const session = footnoteBoardSessionRef.current;
     const handle = boardRef.current;
     const docId = annotateDocIdRef.current;
@@ -8332,11 +8340,12 @@ export const Workspace = memo(function Workspace({
     }
     boardSaveSuspendedRef.current = true;
     const sessionKey = footnoteWhiteboardDocKey(docId, session.wbId);
-    await flushDirtyInk(handle, sessionKey);
+    await flushDirtyInk(handle, sessionKey, 0, strict);
     const live = handle.saveBoard({ assembleInk: false });
     try {
       await putFootnoteWhiteboard(docId, session.wbId, { board: live, pageCount: 1 });
     } catch (cause: unknown) {
+      if (strict) throw cause;
       noteStorageFull(cause);
     }
     /*
@@ -8367,19 +8376,25 @@ export const Workspace = memo(function Workspace({
   }, [restoreDocumentBoard]);
 
   /** Commit the annotations to the library. Returns the entry, or null on failure. */
-  const saveAnnotateSession = useCallback(async (opts?: { label?: string }): Promise<AnnotateDoc | null> => {
+  const saveAnnotateSession = useCallback(async (opts?: { label?: string; throwOnError?: boolean }): Promise<AnnotateDoc | null> => {
     const board = boardRef.current;
-    const source = annotateSource;
+    let source = annotateSource;
     if (!board || !source) return null;
     if (footnoteBoardSessionRef.current) {
-      await closeFootnoteBoardSession(false);
+      await closeFootnoteBoardSession(false, opts?.throwOnError);
     }
     // Commit the buffer first: the write below sends `source.text`, which is
     // still the pre-edit copy until `saveEditBuffer` has moved it.
     if (annotateOwnedRef.current && editBufferRef.current !== source.text) {
-      await saveEditBuffer();
+      const editedText = editBufferRef.current;
+      if (await saveEditBuffer()) {
+        // React state updates do not replace this callback's captured source.
+        source = { ...source, text: editedText, hash: hashMarkdown(editedText) };
+      } else if (opts?.throwOnError) {
+        throw new Error("Could not save the edited document. Your changes are still open.");
+      }
     }
-    await flushDirtyInk(board, annotateDocId ? annotateDocKey(annotateDocId) : null);
+    await flushDirtyInk(board, annotateDocId ? annotateDocKey(annotateDocId) : null, 0, opts?.throwOnError);
     const blob = board.saveBoard({ assembleInk: false });
     if (!blob) return null;
     try {
@@ -8431,6 +8446,7 @@ export const Workspace = memo(function Workspace({
         .catch((cause: unknown) => setError(messageOf(cause)));
       return saved;
     } catch (cause) {
+      if (opts?.throwOnError) throw cause;
       if (cause instanceof AnnotateLibraryFullError) {
         setError(cause.message);
         return null;
@@ -9043,7 +9059,7 @@ export const Workspace = memo(function Workspace({
         if (isAnnotate(problem)) {
           if (save) {
             const saved = await saveAnnotateSession(
-              name?.trim() ? { label: name.trim() } : undefined,
+              { ...(name?.trim() ? { label: name.trim() } : {}), throwOnError: true },
             );
             if (saved) setNotice(`Annotations saved for “${annotateDocLabel(saved)}”.`);
           } else {
@@ -9057,7 +9073,7 @@ export const Workspace = memo(function Workspace({
         if (isWhiteboard(problem)) {
           if (save) {
             if (footnoteBoardRef.current) {
-              await saveFootnoteBoardNow({ quiet: true });
+              await saveFootnoteBoardNow({ quiet: true, strict: true });
               setNotice("Whiteboard saved.");
             } else {
             const handle = boardRef.current;
@@ -9065,6 +9081,8 @@ export const Workspace = memo(function Workspace({
               await flushDirtyInk(
                 handle,
                 whiteboardNotebookId ? whiteboardDocKey(whiteboardNotebookId) : null,
+                0,
+                true,
               );
               const blob = handle.saveBoard({ assembleInk: false });
               try {
@@ -9077,7 +9095,7 @@ export const Workspace = memo(function Workspace({
                 });
                 setWhiteboardNotebookId(saved.id);
                 patchTab(tab.id, { title: saved.title, notebookId: saved.id });
-                await flushDirtyInk(handle, whiteboardDocKey(saved.id));
+                await flushDirtyInk(handle, whiteboardDocKey(saved.id), 0, true);
                 await rebaselineWhiteboardSession(saved.id);
                 void pushWhiteboardPad(client, saved).then((ok) => {
                   if (!ok) return;
@@ -9118,38 +9136,20 @@ export const Workspace = memo(function Workspace({
           pending.run();
           return;
         }
-        // Flush the thread first, so a "save" keeps the last exchange and an
-        // archive of a solved attempt is complete. Dialog is already fading —
-        // don't wait on the network to start dismissing.
-        const saveWork = (async () => {
-          if (agentMessages.length > 0) {
-            await client
-              .putAgentSession(
-                problem.task_id,
-                persistableAgentMessages(agentMessages),
-                problem.dataset,
-              )
-              .catch(() => {
-                /* best-effort */
-              });
-          }
-          await client.finishAttempt(
-            problem.task_id,
-            { solved: attemptState?.solved ?? tests?.all_passed ?? false, save },
-            problem.dataset,
-          ).then(async (outcome) => {
-            if (outcome.kept_layout) return;
-            const id = problemPadId(problem.dataset, problem.task_id);
-            await tombstonePad(client, "problem", id);
-            await deleteProblemBoard(id).catch(() => {});
-          });
-        })();
-
-        await dismissDialog();
-        await saveWork;
-        setLeavingPending(false);
-        // Keep switchMotion busy — pending.run() (pickProblem / browse) takes over.
-        pending.run();
+        await resolveProblemLeave({
+          client,
+          taskId: problem.task_id,
+          dataset: problem.dataset,
+          agent: persistableAgentMessages(agentMessages),
+          solved: attemptState?.solved ?? tests?.all_passed ?? false,
+          save,
+          localSaves: [...problemLocalSavesRef.current],
+          dismiss: dismissDialog,
+          run: () => {
+            setLeavingPending(false);
+            pending.run();
+          },
+        });
       } catch (cause) {
         // The workspace is untouched on a failure — bring the dialog back.
         await fadeDone;
@@ -9157,6 +9157,7 @@ export const Workspace = memo(function Workspace({
         agentSaveSuspendedRef.current = false;
         setSwitchMotion("idle");
         setLeavingPhase("open");
+        setBoardPreparing(false);
         setLeavingPending(false);
         setLeavingError(messageOf(cause));
         // If we already unmounted during dismiss, remount with the error.

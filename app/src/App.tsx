@@ -20,7 +20,7 @@ import { DialogPresence } from "./components/DialogMotion";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 
-import { LcClient } from "./api/client";
+import { LcClient, probePadHubHealth } from "./api/client";
 import { NotificationStack } from "./components/NotificationStack";
 import { showNotification } from "./util/notifications";
 import { isTauriRuntime } from "./api/nativeHttp";
@@ -89,11 +89,13 @@ import { ensureDevicePrefs } from "./util/devicePrefs";
 import {
   applyPadSyncPing,
   flushPadSyncQueue,
+  startPadSyncRecovery,
   pullPads,
   PAD_SYNC_PING_MS,
 } from "./util/padSync";
 import { HUB_AUTOSYNC_EVENT, loadHubAutosyncPref } from "./util/hubAutoSyncPref";
 import { PAD_HUB_EVENT, setHostLoopback } from "./util/padHub";
+import { startPadHubStatusMonitoring } from "./util/padHubStatus";
 import { deviceRole } from "./util/devicePrefs";
 import { singleFlight } from "./util/singleFlight";
 import { bumpRetry, planWorkspaceMounts, workspaceMountKey } from "./util/workspaceMounts";
@@ -214,6 +216,15 @@ export function App() {
   }, [notice]);
 
   const client = useMemo(() => wrapForDebug("client", new LcClient()), []);
+
+  useEffect(() => {
+    const stopRecovery = startPadSyncRecovery(client);
+    const stopStatus = startPadHubStatusMonitoring(probePadHubHealth);
+    return () => {
+      stopStatus();
+      stopRecovery();
+    };
+  }, [client]);
 
   /*
    * Pad auto-sync, once for the app.

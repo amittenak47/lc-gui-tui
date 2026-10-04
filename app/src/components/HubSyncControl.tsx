@@ -41,6 +41,8 @@ function footnotesOf(
   return Array.isArray(notes) ? (notes as DocFootnote[]) : [];
 }
 import { PAD_HUB_EVENT, loadPadHub } from "../util/padHub";
+import { getPadHubStatus, isPadHubOffline } from "../util/padHubStatus";
+import { enqueuePadSync, flushPadSyncQueue } from "../util/padSync";
 import type { DocWorkProgress } from "./DocIndexChip";
 import {
   snapshotFromPing,
@@ -51,6 +53,7 @@ import {
   type HubPadKind,
 } from "../util/hubWalk";
 import { MorphBar } from "./MorphBar";
+import { HubStatusDot } from "./HubStatusDot";
 
 /**
  * What the walk is doing, for the tab chip beside the document's name.
@@ -448,6 +451,26 @@ export function HubSyncControl({
        */
       await host?.prepare?.();
       throwIfAborted();
+      if (isPadHubOffline()) {
+        const pad = await host!.pad();
+        throwIfAborted();
+        if (pad) {
+          const body = await pad.buildBody();
+          throwIfAborted();
+          goStage("pad");
+          await enqueuePadSync(pad.kind === "annotate"
+            ? { op: "putAnnotate", body: body as AnnotatePadDto }
+            : { op: "putWhiteboard", body: body as WhiteboardPadDto });
+          throwIfAborted();
+          // Recovery may have flushed an empty queue while the body was
+          // being prepared. Drain this explicit action if it missed that beat.
+          if (getPadHubStatus().status === "online") void flushPadSyncQueue(client!).catch(() => {});
+          // Queueing keeps the local copy; only a hub acknowledgement can
+          // finish the explicit walk or advance the tab to Synced.
+          throw new Error("Desktop app is offline — this will sync when it's back.");
+        }
+        throw new Error("Desktop hub offline.");
+      }
       const ping = await client!.pingPadSync(0);
       throwIfAborted();
 
@@ -943,6 +966,7 @@ export function HubSyncControl({
         data-error={walkError ?? undefined}
         title={walkError ?? undefined}
       >
+        <HubStatusDot />
         <MorphBar
           axis="depth"
           active={activeStage}

@@ -14985,16 +14985,30 @@ button.lc-row-selected:hover:not(:disabled) {
   background: var(--muted);
 }
 
+.lc-hub-status-dot[data-status="online"],
 .lc-agent-live[data-status="online"] .lc-agent-live-dot,
 .lc-agent-toggle-llm-on .lc-agent-live-dot {
   background: #16a34a;
   box-shadow: none;
 }
 
+.lc-hub-status-dot[data-status="offline"],
 .lc-agent-live[data-status="offline"] .lc-agent-live-dot,
 .lc-agent-toggle-llm-off .lc-agent-live-dot {
   background: #dc2626;
   box-shadow: none;
+}
+
+.lc-hub-status-dot {
+  display: inline-block;
+  vertical-align: middle;
+  margin-inline-end: 6px;
+}
+
+.lc-hub-pull-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .lc-agent-toggle {

@@ -1,4 +1,5 @@
 import { HoldButton } from "./HoldButton";
+import { HubStatusDot } from "./HubStatusDot";
 import { LIBRARY_HOLD_MS } from "../util/gesture";
 import { useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -64,7 +65,10 @@ export function HubLibraryRefresh({ onRefresh, disabled = false, children, resul
     </section>;
   return <div className={`lc-library-refresh ${className}`}>
     <HoldButton label="Pull" holdMs={LIBRARY_HOLD_MS} className="lc-hold-choice lc-hub-pull-command" disabled={pending || disabled} onConfirm={() => void refresh()} resetKey={pending}>
-      {children ?? <strong>{pending ? "Pulling…" : "Pull"}</strong>}
+      <span className="lc-hub-pull-label">
+        {children ?? <strong>{pending ? "Pulling…" : "Pull"}</strong>}
+        <HubStatusDot />
+      </span>
     </HoldButton>
     {resultsContainer?.current ? createPortal(results, resultsContainer.current) : results}
   </div>;

@@ -12,7 +12,6 @@ import {
   flushPadSyncQueue,
   peekPadSyncQueueForTests,
   pullPads,
-  PAD_TRASH_OP_QUEUE_CAP,
   PAD_SYNC_IDLE_KICK_MS_ANDROID,
   PAD_SYNC_IDLE_KICK_MS_DESKTOP,
   padSyncIdleKickMs,
@@ -26,7 +25,6 @@ import {
   restoreTrashedPad,
   scheduleIdlePadSyncPing,
   setPadSyncBodyCapForTests,
-  TrashQueueFullError,
 } from "./padSync";
 import { noteCameraBusy, resetCameraBusyForTests } from "./cameraBusy";
 import { setHostLoopback } from "./padHub";
@@ -783,7 +781,7 @@ describe("live PUT coalesce and 24h compact", () => {
     expect(peekPadSyncQueueForTests()).toHaveLength(0);
   });
 
-  it("drops an oversized annotate job so a later whiteboard PUT still flushes", async () => {
+  it("keeps an oversized annotate job while a later whiteboard PUT still flushes", async () => {
     setPadSyncBodyCapForTests(80);
     const client = fakeClient();
     await enqueuePadSync({
@@ -814,10 +812,10 @@ describe("live PUT coalesce and 24h compact", () => {
     await flushPadSyncQueue(client);
     expect(client.putAnnotatePad).not.toHaveBeenCalled();
     expect(client.putWhiteboardPad).toHaveBeenCalledTimes(1);
-    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+    expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "putAnnotate" }]);
   });
 
-  it("drops queued live PUTs at or before a 24h ACK", async () => {
+  it("keeps queued live PUTs until the live metadata is acknowledged", async () => {
     const client = fakeClient();
     await enqueuePadSync({
       op: "putWhiteboard",
@@ -838,7 +836,7 @@ describe("live PUT coalesce and 24h compact", () => {
       name: "One",
       board: emptyBoard,
     });
-    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+    expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "putWhiteboard" }]);
   });
 
   it("ships ink, edges and source on the snapshot payload", async () => {
@@ -908,61 +906,31 @@ describe("live PUT coalesce and 24h compact", () => {
 });
 
 describe("delete/restore queue", () => {
-  it("drops a stale delete ACK and does not retry", async () => {
+  it("keeps a rejected delete until the tombstone is acknowledged", async () => {
     const client = fakeClient({
       tombstoneWhiteboardPad: vi.fn(async () => ({ applied: false, seq: 6 })),
     });
     await enqueuePadSync({ op: "deletePad", kind: "whiteboard", padId: "w1", seq: 5 });
     await flushPadSyncQueue(client);
-    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+    expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "deletePad", padId: "w1", seq: 5 }]);
     expect(markWhiteboardDeleteAcked).not.toHaveBeenCalled();
   });
 
-  it("evicts LRU other trash when a ninth delete/restore job would exceed the cap", async () => {
+  it("keeps every pending tombstone beyond the old eight-job cap", async () => {
     const client = fakeClient({
       tombstoneWhiteboardPad: vi.fn(async () => {
         throw new LcApiError("offline", 0);
       }),
     });
-    listWhiteboardTrash.mockReturnValue([]);
-    for (let i = 1; i <= PAD_TRASH_OP_QUEUE_CAP; i += 1) {
-      await deletePadEverywhere(client, "whiteboard", `w${i}`);
-    }
-    expect(peekPadSyncQueueForTests().filter((job) => job.op === "deletePad")).toHaveLength(
-      PAD_TRASH_OP_QUEUE_CAP,
-    );
     listWhiteboardTrash.mockReturnValue(
-      Array.from({ length: PAD_TRASH_OP_QUEUE_CAP }, (_, i) => ({
-        id: `w${i + 1}`,
-        lastTouch: i + 1,
-        deletedAt: 1,
-      })),
+      Array.from({ length: 8 }, (_, i) => ({ id: `w${i + 1}`, lastTouch: i + 1, deletedAt: 1 })),
     );
-    (client.tombstoneWhiteboardPad as ReturnType<typeof vi.fn>).mockClear();
-    await deletePadEverywhere(client, "whiteboard", "w9");
-    expect(deleteWhiteboardNotebook).toHaveBeenCalledWith("w1");
-    expect(client.tombstoneWhiteboardPad).toHaveBeenCalledWith("w9", 1);
-    expect(client.tombstoneWhiteboardPad).not.toHaveBeenCalledWith("w1", expect.anything());
-    expect(peekPadSyncQueueForTests().some((job) => "padId" in job && job.padId === "w1")).toBe(
-      false,
-    );
-  });
-
-  it("refuses a new delete when the queue is full and there is no other trash", async () => {
-    const client = fakeClient({
-      tombstoneWhiteboardPad: vi.fn(async () => {
-        throw new LcApiError("offline", 0);
-      }),
-    });
-    listWhiteboardTrash.mockReturnValue([]);
-    for (let i = 1; i <= PAD_TRASH_OP_QUEUE_CAP; i += 1) {
+    for (let i = 1; i <= 9; i += 1) {
       await deletePadEverywhere(client, "whiteboard", `w${i}`);
     }
-    trashWhiteboardNotebook.mockClear();
-    await expect(deletePadEverywhere(client, "whiteboard", "w9")).rejects.toBeInstanceOf(
-      TrashQueueFullError,
-    );
-    expect(trashWhiteboardNotebook).not.toHaveBeenCalled();
+    expect(peekPadSyncQueueForTests().filter((job) => job.op === "deletePad")).toHaveLength(9);
+    expect(peekPadSyncQueueForTests().some((job) => "padId" in job && job.padId === "w1")).toBe(true);
+    expect(deleteWhiteboardNotebook).not.toHaveBeenCalled();
   });
 
   it("uploads live plus 2h/24h/7d on restore", async () => {
@@ -1174,7 +1142,7 @@ describe("live PUT CAS and gone", () => {
     expect(deleteProblemBoard).toHaveBeenCalledWith("leetcode/two-sum");
   });
 
-  it("drops a queued live PUT when ping applies a newer hub row", async () => {
+  it("keeps a queued live PUT and the local copy when ping sees a newer hub row", async () => {
     await enqueuePadSync({
       op: "putWhiteboard",
       body: {
@@ -1210,7 +1178,8 @@ describe("live PUT CAS and gone", () => {
       })),
     });
     await applyPadSyncPing(client);
-    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+    expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "putWhiteboard" }]);
+    expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
   });
 });
 

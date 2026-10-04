@@ -4,6 +4,9 @@
 
 import { b64ToBytes, bytesToB64, loadInvoke, readInvokeResult } from "./nativeHttp";
 import { HUB_MAX_DOCUMENT_BYTES, loadPadHub, type PadHub } from "../util/padHub";
+import {
+  beginPadHubStatusRequest, isPadHubOffline, PAD_HUB_PROBE_TIMEOUT_MS, reportPadHubStatus,
+} from "../util/padHubStatus";
 import { artifactCatalogFields, requireArtifactCatalogAck, type ArtifactCatalog } from "../util/padArtifacts";
 import {
   parseArtifactAsset, parseArtifactAssetLocator, requireArtifactAssetAck,
@@ -146,6 +149,13 @@ export class LcApiError extends Error {
   }
 }
 
+export class PadHubOfflineError extends LcApiError {
+  constructor(hub: PadHub) {
+    super(`Desktop hub offline (${hub.url}).`, 0);
+    this.name = "PadHubOfflineError";
+  }
+}
+
 let lastUnreachableEventAt = 0;
 const UNREACHABLE_EVENT_COOLDOWN_MS = 4_000;
 
@@ -197,8 +207,22 @@ export async function fetchWithNetworkRetry(
 const HUB_TIMEOUT_MS = 30_000;
 const HUB_TIMEOUT_BYTES_PER_S = 256 * 1024;
 
-function hubTimeout(ms: number): AbortSignal | undefined {
-  return typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(ms) : undefined;
+async function withHubTimeout<T>(ms: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const abort = new AbortController();
+  let timer: ReturnType<typeof setTimeout>;
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      abort.abort();
+      const error = new Error(`No answer within ${ms} ms`);
+      error.name = "TimeoutError";
+      reject(error);
+    }, ms);
+  });
+  try {
+    return await Promise.race([run(abort.signal), timedOut]);
+  } finally {
+    clearTimeout(timer!);
+  }
 }
 
 async function hubFetch(
@@ -207,6 +231,8 @@ async function hubFetch(
   path: string,
   init?: { json?: unknown; bytes?: ArrayBuffer },
 ): Promise<{ json: unknown; bytes: ArrayBuffer }> {
+  if (isPadHubOffline(hub)) throw new PadHubOfflineError(hub);
+  const statusRequest = beginPadHubStatusRequest(hub);
   const url = `${hub.url}${path}`;
   const headers: Record<string, string> = { "x-lc-token": hub.token };
   let body: BodyInit | undefined;
@@ -222,17 +248,23 @@ async function hubFetch(
   const size = typeof body === "string" ? body.length : init?.bytes?.byteLength ?? 0;
   const timeoutMs = HUB_TIMEOUT_MS + Math.ceil(size / HUB_TIMEOUT_BYTES_PER_S) * 1000;
   let res: Response;
+  let bytes: ArrayBuffer;
   try {
-    res = await fetchWithNetworkRetry(url, { method, headers, body, signal: hubTimeout(timeoutMs) });
+    ({ res, bytes } = await withHubTimeout(timeoutMs, async (signal) => {
+      const res = await fetchWithNetworkRetry(url, { method, headers, body, signal });
+      return { res, bytes: await res.arrayBuffer() };
+    }));
+    // HTTP failures prove the hub is reachable too; only transport failures
+    // make it offline. Keep authentication/conflict errors actionable.
+    reportPadHubStatus(statusRequest, "online");
   } catch (cause) {
+    reportPadHubStatus(statusRequest, "offline");
     const timedOut = cause instanceof Error && cause.name === "TimeoutError";
     const message = timedOut
       ? `It did not answer within ${Math.round(timeoutMs / 1000)} s.`
       : cause instanceof Error ? cause.message : String(cause);
-    announceUnreachable(message);
     throw new LcApiError(`Could not reach the hub at ${hub.url}. ${message}`, 0);
   }
-  const bytes = await res.arrayBuffer();
   let json: unknown = null;
   const ct = res.headers.get("content-type") ?? "";
   if (ct.includes("json")) {
@@ -335,24 +367,27 @@ export type PadHubCheck =
   | { ok: true; version: string }
   | { ok: false; reason: "unreachable" | "code"; detail: string };
 
-const PAD_HUB_CHECK_TIMEOUT_MS = 6_000;
-
 async function probe(url: string, headers?: Record<string, string>): Promise<Response> {
-  const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), PAD_HUB_CHECK_TIMEOUT_MS);
+  return withHubTimeout(PAD_HUB_PROBE_TIMEOUT_MS, (signal) => fetch(url, { method: "GET", headers, signal }));
+}
+
+/** A cheap reachability check: one health request, without reading its body. */
+export async function probePadHubHealth(hub: PadHub, signal?: AbortSignal): Promise<boolean> {
   try {
-    return await fetch(url, { method: "GET", headers, signal: abort.signal });
-  } finally {
-    clearTimeout(timer);
+    const url = `${hub.url.replace(/\/+$/, "")}/health`;
+    if (signal) await fetch(url, { method: "GET", signal });
+    else await probe(url);
+    return true;
+  } catch {
+    return false;
   }
 }
 
 /**
  * Ask a pad hub whether this device can actually reach it.
  *
- * Deliberately not routed through {@link hubFetch}: this is a test the reader
- * asked for, so a failure belongs in the answer rather than in the app-wide
- * "server unreachable" banner.
+ * Deliberately not routed through {@link hubFetch}: it must remain usable
+ * while a saved hub is offline, including when checking replacement settings.
  */
 export async function checkPadHub(hub: PadHub): Promise<PadHubCheck> {
   const base = hub.url.replace(/\/+$/, "");
@@ -360,8 +395,8 @@ export async function checkPadHub(hub: PadHub): Promise<PadHubCheck> {
   try {
     health = await probe(`${base}/health`);
   } catch (cause) {
-    const detail = cause instanceof Error && cause.name === "AbortError"
-      ? "no answer within six seconds"
+    const detail = cause instanceof Error && (cause.name === "AbortError" || cause.name === "TimeoutError")
+      ? "no answer within three seconds"
       : cause instanceof Error
         ? cause.message
         : String(cause);

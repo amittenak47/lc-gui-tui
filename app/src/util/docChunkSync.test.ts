@@ -8,7 +8,9 @@ import {
   syncDocChunks,
 } from "./docChunkSync";
 
-const loadPadHub = vi.fn(() => null as { url: string; token: string } | null);
+const { loadPadHub } = vi.hoisted(() => ({
+  loadPadHub: vi.fn(() => null as { url: string; token: string } | null),
+}));
 
 vi.mock("./padHub", () => ({
   loadPadHub: () => loadPadHub(),

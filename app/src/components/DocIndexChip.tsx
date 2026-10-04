@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 
 import type { DocIndexStatus } from "../api/client";
 import { MorphBar } from "./MorphBar";
+import { HubStatusDot } from "./HubStatusDot";
 
 export type DocIndexChipStatus = "idle" | "indexing" | "indexed" | "error";
 
@@ -84,6 +85,7 @@ function ChipSync({
         onSync();
       }}
     >
+      <HubStatusDot />
       Sync
     </button>
   );
@@ -313,6 +315,7 @@ export function DocIndexChip({
           restPad === "synced" ? "lc-doc-index-chip is-ok" : "lc-doc-index-chip is-offer"
         }
       >
+        <HubStatusDot />
         {restPad === "synced" ? "synced" : "not synced"}
       </span>,
       syncBtn,
@@ -391,6 +394,7 @@ export function DocIndexChip({
           setOpen((current) => !current);
         }}
       >
+        {restPad && <HubStatusDot />}
         {restPad === "synced"
           ? "synced"
           : restPad === "not-synced"

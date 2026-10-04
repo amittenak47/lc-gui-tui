@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { LIBRARY_HOLD_MS } from "../util/gesture";
 import { HoldButton } from "../components/HoldButton";
+import { HubStatusDot } from "../components/HubStatusDot";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DialogFrame } from "../components/DialogFrame";
 import { HubLibraryRefresh, type HubLibraryRefreshAction } from "../components/HubLibraryRefresh";
@@ -276,7 +277,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
           <div className="lc-whiteboard-context">
             <NotebookIcon />
             <span className="lc-whiteboard-context-title" title={contextTitle}>{contextTitle}</span>
-            {syncStatus && <span className="lc-whiteboard-context-sync">{syncStatus}</span>}
+            {syncStatus && <span className="lc-whiteboard-context-sync"><HubStatusDot />{syncStatus}</span>}
           </div>
         </div>}
         <div ref={bodyRef} className="lc-settings-body lc-dialog-body lc-scroll-pane">

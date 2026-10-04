@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { LIBRARY_HOLD_MS } from "../util/gesture";
 import { HoldButton } from "../components/HoldButton";
+import { HubStatusDot } from "../components/HubStatusDot";
 import { DialogFrame } from "../components/DialogFrame";
 import "./annotateDialog.css";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -347,7 +348,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
       >
         {contextName && <div className="lc-dialog-context"><div className="lc-annotate-context">
           <DocumentIcon web={isWeb} /><span className="lc-annotate-context-title" title={contextName}>{contextName}</span>
-          {syncStatus && <span className="lc-annotate-context-sync">{syncStatus}</span>}
+          {syncStatus && <span className="lc-annotate-context-sync"><HubStatusDot />{syncStatus}</span>}
         </div></div>}
         <div ref={bodyRef} className="lc-settings-body lc-dialog-body lc-scroll-pane">
           {(saveTitle !== null || newTitle !== null) && <p className="lc-muted">
