@@ -8,6 +8,7 @@ import { DialogBackdrop } from "./DialogMotion";
 import { useEffect } from "react";
 
 import { HoldButton } from "./HoldButton";
+import { LIBRARY_HOLD_MS } from "../util/gesture";
 import "../modes/libraryMenu.css";
 import { LoadingDoodle } from "./LoadingDoodle";
 import { DialogFrame } from "./DialogFrame";
@@ -47,6 +48,7 @@ export function LlmStatusDialog({
       >
         <div className="lc-settings-choice lc-dialog-body">
           <HoldButton
+            holdMs={LIBRARY_HOLD_MS}
             label="Open Settings"
             className="lc-hold-choice"
             onConfirm={onOpenSettings}
@@ -54,6 +56,7 @@ export function LlmStatusDialog({
             Settings → LLM
           </HoldButton>
           <HoldButton
+            holdMs={LIBRARY_HOLD_MS}
             label="Continue without LLM"
             className="lc-hold-choice"
             onConfirm={onContinueWithout}
