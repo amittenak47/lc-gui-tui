@@ -1,10 +1,27 @@
 # Changelog
 
-All notable changes to `lc` are documented here.
+All notable changes to Pen Island are documented here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+
+### Changed — Pen Island and in-app Practice
+
+- Renamed the app to **Pen Island**, including its window/launcher title,
+  header mark, public descriptions and connection message.
+- Removed the terminal UI, the external editor workflow and **Open in IDE**.
+  Removed CLI `tui`, `load`, `test`, `ask`, `search`, `random`, `stats`, `session`,
+  `list` and `submit`. `lc` keeps `index`, `datasets` and `config`; bare `lc`
+  prints help, and `audit_tests` remains available. Practice editing, tests,
+  Agent actions and session progress continue in the app.
+- New capture and diagnostic exports start with `pen-island-capture` and
+  `pen-island-debug`. Release APK assets are now
+  `pen-island-practice-debug.apk` and `pen-island-whiteboard-only-debug.apk`.
+- App data, settings, storage paths/formats and app id `dev.lc.whiteboard`
+  retain their existing identities. Existing libraries carry over with a
+  compatible package/signature/version update; normal uninstall removes local
+  data. Legacy attempt transcripts are still archived when present.
 
 ### Changed — the pen wheel and the preset editor make room in a split
 
