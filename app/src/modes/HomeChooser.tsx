@@ -659,7 +659,7 @@ export function HomeChooser({
   ];
 
   return (
-    <nav className="lc-home-chooser lc-home-redesign" aria-label="Choose a workspace" data-home-active={active} data-recents={recent.length === 0 ? "none" : recentsOpen ? "open" : "collapsed"}>
+    <nav className="lc-home-chooser lc-home-redesign" aria-label="Choose a workspace" data-home-active={active} data-covered={covered || undefined} data-recents={recent.length === 0 ? "none" : recentsOpen ? "open" : "collapsed"}>
       {recent.length > 0 && <section ref={recentsRef} className="lc-home-recents" aria-labelledby="lc-home-recents-title" data-editing={editing || undefined}>
         <div className="lc-home-recents-head">
           <h2 id="lc-home-recents-title" className="lc-home-section-title lc-home-recents-heading">
