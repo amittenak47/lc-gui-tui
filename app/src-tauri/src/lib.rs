@@ -16,6 +16,7 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .manage(VoiceSession(std::sync::Mutex::new(None)))
         // Google Search from a document footnote hands the query to whatever
         // browser the device already uses. Reading is a thing people do with
         // tabs open; an in-app webview would be a worse browser with none of
@@ -180,6 +181,11 @@ pub fn run() {
         set_drawing_immersive,
         set_display_refresh,
         connect_native_doodle,
+        voice_available,
+        voice_start,
+        voice_stop,
+        voice_cancel,
+        voice_cleanup,
         get_system_insets,
         live_webview_create,
         live_webview_place,
@@ -188,14 +194,15 @@ pub fn run() {
         live_webview_exists,
     ]);
 
-    // ML Kit, the MediaStore gallery, the system gesture strips and the child
-    // web view wry declines to make only exist on Android.
+    // ML Kit, the MediaStore gallery, the system gesture strips, the speech
+    // recognizer and the child web view wry declines to make only exist on Android.
     #[cfg(target_os = "android")]
     let builder = builder
         .plugin(tauri_plugin_inkrecognition::init())
         .plugin(tauri_plugin_gallerysave::init())
         .plugin(tauri_plugin_gestureguard::init())
-        .plugin(tauri_plugin_livewebview::init());
+        .plugin(tauri_plugin_livewebview::init())
+        .plugin(tauri_plugin_voicedictation::init());
 
     builder
         .run(tauri::generate_context!())
@@ -328,6 +335,270 @@ fn connect_native_doodle(#[allow(unused_variables)] app: tauri::AppHandle) -> st
     {
         Ok(false)
     }
+}
+
+/// Live is Android's recognizer. Record is a WAV clip the host transcribes.
+#[allow(dead_code)]
+enum VoiceMode {
+    Live,
+    Record,
+}
+
+/// Which dictation path is open, if one is. Set only after the plugin call succeeds.
+#[allow(dead_code)]
+struct VoiceSession(std::sync::Mutex<Option<VoiceMode>>);
+
+/// `voice.engine` from the embedded router, or `"android"` when config never loaded.
+#[allow(dead_code)]
+fn voice_engine(app: &tauri::AppHandle) -> String {
+    app.try_state::<harness::serve::Shared>()
+        .map(|state| state.cfg_snapshot().voice.engine)
+        .unwrap_or_else(|| "android".to_string())
+}
+
+/// Push one `lc-voice` event. The page does not know which engine produced it.
+#[allow(dead_code)]
+fn emit_voice(app: &tauri::AppHandle, detail: serde_json::Value) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let script = format!(
+        "window.dispatchEvent(new CustomEvent(\"lc-voice\",{{detail:{detail}}}))"
+    );
+    let _ = window.eval(script);
+}
+
+#[allow(dead_code)]
+fn take_voice_mode(app: &tauri::AppHandle) -> Option<VoiceMode> {
+    let session = app.state::<VoiceSession>();
+    let mut guard = session.0.lock().unwrap_or_else(|err| err.into_inner());
+    guard.take()
+}
+
+#[allow(dead_code)]
+fn set_voice_mode(app: &tauri::AppHandle, mode: VoiceMode) {
+    let session = app.state::<VoiceSession>();
+    let mut guard = session.0.lock().unwrap_or_else(|err| err.into_inner());
+    *guard = Some(mode);
+}
+
+/// Read the clip, send it to the configured engine, then always close the session.
+#[allow(dead_code)]
+fn transcribe_recorded_clip(app: tauri::AppHandle, path: String) {
+    let read = std::fs::read(&path);
+    let _ = std::fs::remove_file(&path);
+    match read {
+        Ok(bytes) => {
+            let cfg = app
+                .try_state::<harness::serve::Shared>()
+                .map(|state| state.cfg_snapshot())
+                .unwrap_or_default();
+            match harness::voice::transcribe(
+                &cfg,
+                harness::voice::Clip {
+                    bytes,
+                    filename: "dictation.wav".into(),
+                    mime: "audio/wav".into(),
+                },
+            ) {
+                Ok(text) => {
+                    if !text.is_empty() {
+                        emit_voice(&app, serde_json::json!({"type": "final", "text": text}));
+                    }
+                }
+                Err(err) => {
+                    emit_voice(
+                        &app,
+                        serde_json::json!({
+                            "type": "error",
+                            "code": "transcription",
+                            "message": err.to_string(),
+                        }),
+                    );
+                }
+            }
+        }
+        Err(err) => {
+            emit_voice(
+                &app,
+                serde_json::json!({
+                    "type": "error",
+                    "code": "transcription",
+                    "message": err.to_string(),
+                }),
+            );
+        }
+    }
+    emit_voice(&app, serde_json::json!({"type": "state", "listening": false}));
+    emit_voice(&app, serde_json::json!({"type": "end"}));
+}
+
+/// Whether this device can dictate into the agent composer.
+///
+/// True on Android whenever the dictation plugin is registered. A recognizer
+/// is only required for the `android` engine; [`voice_start`] reports that
+/// case. False off Android.
+#[tauri::command]
+async fn voice_available(#[allow(unused_variables)] app: tauri::AppHandle) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_voicedictation::VoiceDictationExt;
+        return app.voice_dictation().is_some();
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        false
+    }
+}
+
+/// Start dictation. Partial and final text are pushed to the page as they arrive.
+///
+/// The `android` engine uses the on-device recognizer. Any other engine records
+/// a clip and the host transcribes it on stop. The page sees the same events
+/// either way.
+///
+/// Async so the wait on the microphone permission dialog runs off the main
+/// thread rather than holding every other command behind it.
+///
+/// An error off Android: nothing there can listen.
+#[tauri::command]
+async fn voice_start(#[allow(unused_variables)] app: tauri::AppHandle) -> std::result::Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_voicedictation::VoiceDictationExt;
+        let voice = app.voice_dictation().ok_or("voice dictation unavailable")?;
+        let mode = if voice_engine(&app) == "android" {
+            voice.start().map_err(|e| e.to_string())?;
+            VoiceMode::Live
+        } else {
+            voice.record_start().map_err(|e| e.to_string())?;
+            VoiceMode::Record
+        };
+        set_voice_mode(&app, mode);
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Err("Voice dictation is only available on Android".into())
+    }
+}
+
+/// Stop dictation. Live mode lets the recognizer deliver the last words.
+/// Record mode returns as soon as transcription is queued.
+///
+/// Success off Android, where there is no session to close.
+#[tauri::command]
+async fn voice_stop(#[allow(unused_variables)] app: tauri::AppHandle) -> std::result::Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_voicedictation::VoiceDictationExt;
+        return match take_voice_mode(&app) {
+            Some(VoiceMode::Live) => {
+                let voice = app.voice_dictation().ok_or("voice dictation unavailable")?;
+                voice.stop().map_err(|e| e.to_string())
+            }
+            Some(VoiceMode::Record) => {
+                let Some(voice) = app.voice_dictation() else {
+                    let message = "voice dictation unavailable".to_string();
+                    emit_voice(
+                        &app,
+                        serde_json::json!({
+                            "type": "error",
+                            "code": "audio",
+                            "message": message,
+                        }),
+                    );
+                    emit_voice(&app, serde_json::json!({"type": "state", "listening": false}));
+                    emit_voice(&app, serde_json::json!({"type": "end"}));
+                    return Err(message);
+                };
+                match voice.record_stop() {
+                    Ok(path) => {
+                        emit_voice(&app, serde_json::json!({"type": "processing"}));
+                        let app = app.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            transcribe_recorded_clip(app, path);
+                        });
+                        Ok(())
+                    }
+                    Err(err) => {
+                        let message = err.to_string();
+                        emit_voice(
+                            &app,
+                            serde_json::json!({
+                                "type": "error",
+                                "code": "audio",
+                                "message": message,
+                            }),
+                        );
+                        emit_voice(&app, serde_json::json!({"type": "state", "listening": false}));
+                        emit_voice(&app, serde_json::json!({"type": "end"}));
+                        Err(message)
+                    }
+                }
+            }
+            // Nothing open yet, but a start may be waiting on the microphone
+            // permission dialog. Cancel clears that, so granting afterwards
+            // does not open the mic behind a stop the page already sent.
+            None => {
+                if let Some(voice) = app.voice_dictation() {
+                    let _ = voice.cancel();
+                }
+                Ok(())
+            }
+        };
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(())
+    }
+}
+
+/// Drop the open session without a transcript. Live audio is discarded; a
+/// clip is deleted. Success off Android, and when nothing is open.
+#[tauri::command]
+async fn voice_cancel(#[allow(unused_variables)] app: tauri::AppHandle) -> std::result::Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_voicedictation::VoiceDictationExt;
+        return match take_voice_mode(&app) {
+            Some(VoiceMode::Live) => {
+                let voice = app.voice_dictation().ok_or("voice dictation unavailable")?;
+                voice.cancel().map_err(|e| e.to_string())
+            }
+            Some(VoiceMode::Record) => {
+                let voice = app.voice_dictation().ok_or("voice dictation unavailable")?;
+                voice.record_cancel().map_err(|e| e.to_string())
+            }
+            // Nothing open yet, but a start may be waiting on the microphone
+            // permission dialog. Cancel clears that, so granting afterwards
+            // does not open the mic behind a stop the page already sent.
+            None => {
+                if let Some(voice) = app.voice_dictation() {
+                    let _ = voice.cancel();
+                }
+                Ok(())
+            }
+        };
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(())
+    }
+}
+
+/// Tidy dictated text with the configured LLM. Missing harness state returns
+/// `text`. Runs on every platform; the recognizer itself does not.
+#[tauri::command]
+async fn voice_cleanup(app: tauri::AppHandle, text: String) -> Result<String, String> {
+    let Some(state) = app.try_state::<harness::serve::Shared>() else {
+        return Ok(text);
+    };
+    let cfg = state.cfg_snapshot();
+    tauri::async_runtime::spawn_blocking(move || harness::voice::cleanup(&cfg, &text))
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(target_os = "android")]

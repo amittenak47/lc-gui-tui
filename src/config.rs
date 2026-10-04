@@ -15,6 +15,7 @@ pub struct Config {
     pub llm: LlmConfig,
     pub serve: ServeConfig,
     pub coach: CoachConfig,
+    pub voice: VoiceConfig,
 }
 
 /// Feature flags for the streaming coach loops.
@@ -48,6 +49,55 @@ impl Default for CoachConfig {
             planner_enabled: false,
             draw_review_enabled: false,
             approach_commitment: true,
+        }
+    }
+}
+
+/// Voice dictation in the agent composer. `android` is the device's own
+/// recognizer; the others send a recorded clip to that provider with the
+/// user's key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceConfig {
+    pub engine: String,          // default "android"
+    pub openai_model: String,    // default "gpt-4o-mini-transcribe"
+    pub groq_model: String,      // default "whisper-large-v3-turbo"
+    pub deepgram_model: String,  // default "nova-3"
+    /// A self-hosted OpenAI-compatible speech server (whisper.cpp server,
+    /// speaches / faster-whisper-server, LocalAI). No key.
+    pub local_base_url: String,  // default "http://localhost:8000/v1"
+    pub local_model: String,     // default "whisper-large-v3-turbo"
+    /// Words the recognizer should expect, comma or newline separated.
+    pub vocabulary: String,      // default ""
+    /// LLM provider that tidies dictated text after the session ends.
+    /// `"off"` skips the pass. Missing keys in older files load as `"off"`.
+    #[serde(default = "default_voice_cleanup")]
+    pub cleanup: String,
+    /// Fallback when `DEEPGRAM_API_KEY` is unset. Never sent on GET /config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepgram_api_key: Option<String>,
+}
+
+pub const VOICE_ENGINES: &[&str] = &["android", "local", "openai", "groq", "deepgram"];
+
+fn default_voice_cleanup() -> String {
+    "off".into()
+}
+
+const VOICE_CLEANUP: &[&str] = &["off", "local", "ollama", "openai", "groq"];
+
+impl Default for VoiceConfig {
+    fn default() -> Self {
+        Self {
+            engine: "android".into(),
+            openai_model: "gpt-4o-mini-transcribe".into(),
+            groq_model: "whisper-large-v3-turbo".into(),
+            deepgram_model: "nova-3".into(),
+            local_base_url: "http://localhost:8000/v1".into(),
+            local_model: "whisper-large-v3-turbo".into(),
+            vocabulary: String::new(),
+            cleanup: default_voice_cleanup(),
+            deepgram_api_key: None,
         }
     }
 }
@@ -248,6 +298,26 @@ fn validate_provider(value: &str) -> Result<()> {
         bail!(
             "provider must be one of {}, got {value:?}",
             LLM_PROVIDERS.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn validate_voice_engine(value: &str) -> Result<()> {
+    if !VOICE_ENGINES.contains(&value) {
+        bail!(
+            "voice.engine must be one of {}, got {value:?}",
+            VOICE_ENGINES.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn validate_voice_cleanup(value: &str) -> Result<()> {
+    if !VOICE_CLEANUP.contains(&value) {
+        bail!(
+            "voice.cleanup must be one of {}, got {value:?}",
+            VOICE_CLEANUP.join(", ")
         );
     }
     Ok(())
@@ -579,6 +649,21 @@ impl Config {
             "coach.planner_enabled" => self.coach.planner_enabled = parse_bool(value)?,
             "coach.draw_review_enabled" => self.coach.draw_review_enabled = parse_bool(value)?,
             "coach.approach_commitment" => self.coach.approach_commitment = parse_bool(value)?,
+            "voice.engine" => {
+                validate_voice_engine(value)?;
+                self.voice.engine = value.to_string();
+            }
+            "voice.openai_model" => self.voice.openai_model = value.to_string(),
+            "voice.groq_model" => self.voice.groq_model = value.to_string(),
+            "voice.deepgram_model" => self.voice.deepgram_model = value.to_string(),
+            "voice.local_base_url" => self.voice.local_base_url = value.to_string(),
+            "voice.local_model" => self.voice.local_model = value.to_string(),
+            "voice.vocabulary" => self.voice.vocabulary = value.to_string(),
+            "voice.cleanup" => {
+                validate_voice_cleanup(value)?;
+                self.voice.cleanup = value.to_string();
+            }
+            "voice.deepgram_api_key" => self.voice.deepgram_api_key = stored_api_key(value),
             _ if key.starts_with("data.datasets.") => {
                 let slug = &key["data.datasets.".len()..];
                 crate::dataset::get(slug)?;
@@ -638,7 +723,8 @@ impl Config {
                  llm.ollama.{{base_url,model,vision_model,vision}}, \
                  llm.openai.{{base_url,model,vision_model,vision,api_key}}, \
                  llm.groq.{{base_url,model,vision_model,vision,api_key}}, llm.modes.<{}>, serve.port, serve.token, serve.searxng_url, \
-                 coach.{{ws_runs,process_events_ui,planner_enabled,draw_review_enabled,approach_commitment}}",
+                 coach.{{ws_runs,process_events_ui,planner_enabled,draw_review_enabled,approach_commitment}}, \
+                 voice.{{engine,openai_model,groq_model,deepgram_model,local_base_url,local_model,vocabulary,deepgram_api_key,cleanup}}",
                 crate::dataset::DATASETS
                     .iter()
                     .map(|d| d.id)
@@ -661,6 +747,20 @@ impl Config {
             "coach.planner_enabled" => self.coach.planner_enabled.to_string(),
             "coach.draw_review_enabled" => self.coach.draw_review_enabled.to_string(),
             "coach.approach_commitment" => self.coach.approach_commitment.to_string(),
+            "voice.engine" => self.voice.engine.clone(),
+            "voice.openai_model" => self.voice.openai_model.clone(),
+            "voice.groq_model" => self.voice.groq_model.clone(),
+            "voice.deepgram_model" => self.voice.deepgram_model.clone(),
+            "voice.local_base_url" => self.voice.local_base_url.clone(),
+            "voice.local_model" => self.voice.local_model.clone(),
+            "voice.vocabulary" => self.voice.vocabulary.clone(),
+            "voice.cleanup" => self.voice.cleanup.clone(),
+            "voice.deepgram_api_key" => self
+                .voice
+                .deepgram_api_key
+                .as_ref()
+                .map(|_| "set".to_string())
+                .unwrap_or_default(),
             _ if key.starts_with("data.datasets.") => {
                 let slug = &key["data.datasets.".len()..];
                 crate::dataset::get(slug)?;
@@ -1041,6 +1141,71 @@ mod tests {
         assert_eq!(cfg.llm.modes.planner, "local");
         assert!(cfg.coach.ws_runs, "a config written before the flags existed gets the defaults");
         assert!(!cfg.coach.planner_enabled);
+        assert_eq!(cfg.voice.engine, "android");
+        assert_eq!(cfg.voice.openai_model, "gpt-4o-mini-transcribe");
+        assert_eq!(cfg.voice.groq_model, "whisper-large-v3-turbo");
+        assert_eq!(cfg.voice.deepgram_model, "nova-3");
+        assert_eq!(cfg.voice.local_base_url, "http://localhost:8000/v1");
+        assert_eq!(cfg.voice.local_model, "whisper-large-v3-turbo");
+        assert_eq!(cfg.voice.vocabulary, "");
+        assert_eq!(cfg.voice.cleanup, "off");
+        assert!(cfg.voice.deepgram_api_key.is_none());
+    }
+
+    #[test]
+    fn voice_defaults_reject_unknown_engines_and_hide_the_deepgram_key() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.get("voice.engine").unwrap(), "android");
+        assert_eq!(cfg.get("voice.openai_model").unwrap(), "gpt-4o-mini-transcribe");
+        assert_eq!(cfg.get("voice.local_base_url").unwrap(), "http://localhost:8000/v1");
+        assert_eq!(cfg.get("voice.vocabulary").unwrap(), "");
+        assert_eq!(cfg.get("voice.cleanup").unwrap(), "off");
+        assert_eq!(cfg.get("voice.deepgram_api_key").unwrap(), "");
+
+        let err = cfg.set("voice.engine", "whisper").unwrap_err().to_string();
+        assert!(err.contains("android"), "{err}");
+        assert!(err.contains("local"), "{err}");
+        assert!(err.contains("openai"), "{err}");
+        assert!(err.contains("groq"), "{err}");
+        assert!(err.contains("deepgram"), "{err}");
+        assert_eq!(cfg.voice.engine, "android");
+
+        cfg.set("voice.engine", "openai").unwrap();
+        cfg.set("voice.vocabulary", "BFS, DFS").unwrap();
+        assert_eq!(cfg.get("voice.engine").unwrap(), "openai");
+        assert_eq!(cfg.get("voice.vocabulary").unwrap(), "BFS, DFS");
+
+        cfg.set("voice.deepgram_api_key", " dg-secret ").unwrap();
+        assert_eq!(cfg.voice.deepgram_api_key.as_deref(), Some("dg-secret"));
+        assert_eq!(cfg.get("voice.deepgram_api_key").unwrap(), "set");
+        cfg.set("voice.deepgram_api_key", "").unwrap();
+        assert!(cfg.voice.deepgram_api_key.is_none());
+        assert_eq!(cfg.get("voice.deepgram_api_key").unwrap(), "");
+
+        cfg.set("voice.cleanup", "local").unwrap();
+        assert_eq!(cfg.get("voice.cleanup").unwrap(), "local");
+        let cleanup_err = cfg.set("voice.cleanup", "whisper").unwrap_err().to_string();
+        assert!(cleanup_err.contains("off"), "{cleanup_err}");
+        assert!(cleanup_err.contains("local"), "{cleanup_err}");
+        assert!(cleanup_err.contains("ollama"), "{cleanup_err}");
+        assert!(cleanup_err.contains("openai"), "{cleanup_err}");
+        assert!(cleanup_err.contains("groq"), "{cleanup_err}");
+        assert_eq!(cfg.voice.cleanup, "local");
+
+        let unknown = cfg.set("voice.nope", "x").unwrap_err().to_string();
+        assert!(
+            unknown.contains("voice.{engine,openai_model,groq_model,deepgram_model,local_base_url,local_model,vocabulary,deepgram_api_key,cleanup}"),
+            "{unknown}"
+        );
+    }
+
+    #[test]
+    fn voice_cleanup_missing_from_an_older_file_is_off() {
+        let older = "[voice]\nengine = \"groq\"\n";
+        let cfg: Config = toml::from_str(older).expect("voice section without cleanup");
+        assert_eq!(cfg.voice.engine, "groq");
+        assert_eq!(cfg.voice.cleanup, "off");
+        assert_eq!(cfg.get("voice.cleanup").unwrap(), "off");
     }
 
     #[test]

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-voice-dictation"
+description = "Dictate into the agent composer with Android's speech recognizer"
+commands.allow = ["voice_available", "voice_start", "voice_stop", "voice_cancel", "voice_cleanup"]

@@ -12512,7 +12512,8 @@ body[data-lc-sash-drag] .lc-app:not(.lc-mobile) .lc-main {
 .lc-agent-annotate,
 .lc-agent-send,
 .lc-agent-catalog,
-.lc-agent-attach {
+.lc-agent-attach,
+.lc-agent-voice {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -18344,12 +18345,27 @@ button.lc-row-selected:hover:not(:disabled) {
   color: #fff;
 }
 
-/* + matches the composer expand square; padding:0 must beat the bar's 0 6px. */
-.lc-agent-composer-bar .lc-agent-attach {
+/* + and the mic match the composer expand square; padding:0 must beat the bar's 0 6px. */
+.lc-agent-composer-bar .lc-agent-attach,
+.lc-agent-composer-bar .lc-agent-voice {
   width: 20px;
   min-width: 20px;
   padding: 0;
   line-height: 0;
+}
+
+/* Listening: the mic breathes so it reads as live without a separate label. */
+.lc-agent-composer-field .lc-agent-voice-on {
+  animation: lc-voice-pulse 1.2s ease-in-out infinite;
+}
+.lc-agent-composer-field .lc-agent-voice-busy { animation: lc-voice-pulse 0.6s ease-in-out infinite; }
+@keyframes lc-voice-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lc-agent-composer-field .lc-agent-voice-on,
+  .lc-agent-composer-field .lc-agent-voice-busy { animation: none; }
 }
 
 

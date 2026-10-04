@@ -21,6 +21,7 @@
     "allow-get-system-insets",
     "allow-boot-notice",
     "allow-colorhunt-random",
-    "allow-live-webview"
+    "allow-live-webview",
+    "allow-voice-dictation"
   ]
 }

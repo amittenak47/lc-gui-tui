@@ -5,7 +5,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use super::{blocking, AppError, Shared};
-use crate::config::Config;
+use crate::config::{Config, VoiceConfig};
 use crate::dataset;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -51,6 +51,20 @@ pub struct CoachFlagsDto {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct VoiceConfigDto {
+    pub engine: String,
+    pub openai_model: String,
+    pub groq_model: String,
+    pub deepgram_model: String,
+    pub local_base_url: String,
+    pub local_model: String,
+    pub vocabulary: String,
+    /// `"off"` or an LLM provider. Missing or blank on PUT becomes `"off"`.
+    #[serde(default)]
+    pub cleanup: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConfigDto {
     pub data_json_dir: Option<String>,
     /// Per-dataset corpus folders, keyed by dataset slug. Only the ones the
@@ -90,6 +104,16 @@ pub struct ConfigDto {
     pub openai_key_set: bool,
     #[serde(default)]
     pub groq_key_set: bool,
+    /// GET always sends the stored voice settings. PUT `None` leaves them
+    /// (older clients); `Some` replaces them.
+    #[serde(default)]
+    pub voice: Option<VoiceConfigDto>,
+    /// Write-only. `None` leaves the stored key. `Some("")` clears it. GET omits this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepgram_api_key: Option<String>,
+    /// Env or stored Deepgram key is present. The secret itself is never returned.
+    #[serde(default)]
+    pub deepgram_key_set: bool,
 }
 
 fn config_dto(cfg: &Config) -> ConfigDto {
@@ -170,6 +194,31 @@ fn config_dto(cfg: &Config) -> ConfigDto {
             cfg.llm.groq.api_key.as_deref(),
         )
         .is_some(),
+        voice: Some(VoiceConfigDto {
+            engine: cfg.voice.engine.clone(),
+            openai_model: cfg.voice.openai_model.clone(),
+            groq_model: cfg.voice.groq_model.clone(),
+            deepgram_model: cfg.voice.deepgram_model.clone(),
+            local_base_url: cfg.voice.local_base_url.clone(),
+            local_model: cfg.voice.local_model.clone(),
+            vocabulary: cfg.voice.vocabulary.clone(),
+            cleanup: cfg.voice.cleanup.clone(),
+        }),
+        deepgram_api_key: None,
+        deepgram_key_set: crate::config::resolve_api_key(
+            "DEEPGRAM_API_KEY",
+            cfg.voice.deepgram_api_key.as_deref(),
+        )
+        .is_some(),
+    }
+}
+
+fn trimmed_or_default(raw: &str, fallback: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -243,6 +292,23 @@ fn apply_config_dto(cfg: &mut Config, dto: &ConfigDto) -> anyhow::Result<()> {
     cfg.coach.planner_enabled = dto.coach.planner_enabled;
     cfg.coach.draw_review_enabled = dto.coach.draw_review_enabled;
     cfg.coach.approach_commitment = dto.coach.approach_commitment;
+    if let Some(voice) = &dto.voice {
+        cfg.set("voice.engine", voice.engine.trim())?;
+        let defaults = VoiceConfig::default();
+        cfg.voice.openai_model = trimmed_or_default(&voice.openai_model, &defaults.openai_model);
+        cfg.voice.groq_model = trimmed_or_default(&voice.groq_model, &defaults.groq_model);
+        cfg.voice.deepgram_model =
+            trimmed_or_default(&voice.deepgram_model, &defaults.deepgram_model);
+        cfg.voice.local_base_url = voice.local_base_url.trim().to_string();
+        cfg.voice.local_model = trimmed_or_default(&voice.local_model, &defaults.local_model);
+        cfg.voice.vocabulary = voice.vocabulary.trim().to_string();
+        let cleanup = voice.cleanup.trim();
+        cfg.set("voice.cleanup", if cleanup.is_empty() { "off" } else { cleanup })?;
+    }
+    apply_stored_key(
+        &mut cfg.voice.deepgram_api_key,
+        dto.deepgram_api_key.as_deref(),
+    );
     Ok(())
 }
 
@@ -407,5 +473,101 @@ mod tests {
         assert_eq!(cfg.llm.openai.vision, Some(true), "omitted flag leaves stored");
         assert_eq!(cfg.llm.ollama.vision, Some(true));
         assert_eq!(cfg.llm.groq.vision, Some(false));
+    }
+
+    #[test]
+    fn voice_settings_round_trip_and_empty_models_fall_back() {
+        let mut cfg = Config::default();
+        let mut dto = config_dto(&cfg);
+        let voice = dto.voice.as_mut().expect("GET always includes voice");
+        voice.engine = "groq".into();
+        voice.openai_model = "  ".into();
+        voice.groq_model = " whisper-large-v3 ".into();
+        voice.deepgram_model = "nova-2".into();
+        voice.local_base_url = " http://127.0.0.1:9000/v1/ ".into();
+        voice.local_model = "".into();
+        voice.vocabulary = "  BFS, DFS \n".into();
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert_eq!(cfg.voice.engine, "groq");
+        assert_eq!(cfg.voice.openai_model, "gpt-4o-mini-transcribe");
+        assert_eq!(cfg.voice.groq_model, "whisper-large-v3");
+        assert_eq!(cfg.voice.deepgram_model, "nova-2");
+        assert_eq!(cfg.voice.local_base_url, "http://127.0.0.1:9000/v1/");
+        assert_eq!(cfg.voice.local_model, "whisper-large-v3-turbo");
+        assert_eq!(cfg.voice.vocabulary, "BFS, DFS");
+
+        let echoed = config_dto(&cfg);
+        assert!(echoed.voice.is_some());
+        apply_config_dto(&mut cfg, &echoed).unwrap();
+        assert_eq!(cfg.voice.engine, "groq");
+        assert_eq!(cfg.voice.groq_model, "whisper-large-v3");
+        assert_eq!(cfg.voice.vocabulary, "BFS, DFS");
+
+        let mut bad = config_dto(&cfg);
+        bad.voice.as_mut().unwrap().engine = "whisper".into();
+        assert!(apply_config_dto(&mut cfg, &bad).is_err());
+        assert_eq!(cfg.voice.engine, "groq");
+    }
+
+    #[test]
+    fn omitted_voice_leaves_stored_voice_settings() {
+        let mut cfg = Config::default();
+        cfg.voice.engine = "openai".into();
+        cfg.voice.openai_model = "whisper-1".into();
+        cfg.voice.vocabulary = "two sum".into();
+        let mut dto = config_dto(&cfg);
+        dto.voice = None;
+        dto.default_provider = "groq".into();
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert_eq!(cfg.llm.default_provider, "groq");
+        assert_eq!(cfg.voice.engine, "openai");
+        assert_eq!(cfg.voice.openai_model, "whisper-1");
+        assert_eq!(cfg.voice.vocabulary, "two sum");
+    }
+
+    #[test]
+    fn deepgram_key_sets_clears_and_keeps() {
+        let mut cfg = Config::default();
+        let mut dto = config_dto(&cfg);
+        assert!(dto.deepgram_api_key.is_none());
+        dto.deepgram_api_key = Some(" dg-test ".into());
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert_eq!(cfg.voice.deepgram_api_key.as_deref(), Some("dg-test"));
+        let echoed = config_dto(&cfg);
+        assert!(echoed.deepgram_api_key.is_none());
+        assert!(echoed.deepgram_key_set);
+        apply_config_dto(&mut cfg, &echoed).unwrap();
+        assert_eq!(cfg.voice.deepgram_api_key.as_deref(), Some("dg-test"));
+        let mut clearing = echoed;
+        clearing.deepgram_api_key = Some(String::new());
+        apply_config_dto(&mut cfg, &clearing).unwrap();
+        assert!(cfg.voice.deepgram_api_key.is_none());
+    }
+
+    #[test]
+    fn voice_cleanup_round_trips_and_blank_means_off() {
+        let mut cfg = Config::default();
+        assert_eq!(config_dto(&cfg).voice.unwrap().cleanup, "off");
+
+        let mut dto = config_dto(&cfg);
+        dto.voice.as_mut().unwrap().cleanup = " local ".into();
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert_eq!(cfg.voice.cleanup, "local");
+        assert_eq!(config_dto(&cfg).voice.unwrap().cleanup, "local");
+
+        dto = config_dto(&cfg);
+        dto.voice.as_mut().unwrap().cleanup = "  ".into();
+        apply_config_dto(&mut cfg, &dto).unwrap();
+        assert_eq!(cfg.voice.cleanup, "off");
+
+        dto = config_dto(&cfg);
+        dto.voice.as_mut().unwrap().cleanup = "whisper".into();
+        let err = apply_config_dto(&mut cfg, &dto).unwrap_err().to_string();
+        assert!(err.contains("off"), "{err}");
+        assert!(err.contains("local"), "{err}");
+        assert!(err.contains("ollama"), "{err}");
+        assert!(err.contains("openai"), "{err}");
+        assert!(err.contains("groq"), "{err}");
+        assert_eq!(cfg.voice.cleanup, "off");
     }
 }

@@ -34,6 +34,7 @@ pub mod serve;
 #[cfg(not(target_os = "android"))]
 pub mod tui;
 pub mod workspace;
+pub mod voice;
 
 pub use corpus::dataset;
 pub use corpus::index;

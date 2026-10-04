@@ -17,8 +17,9 @@ import type {
   ModelCatalog,
   ModelEntry,
   ProviderConfig,
+  VoiceConfig,
 } from "../api/types";
-import { DEFAULT_COACH_FLAGS } from "../api/types";
+import { DEFAULT_COACH_FLAGS, DEFAULT_VOICE_CONFIG } from "../api/types";
 import { shouldDismissBackdrop } from "../util/backdropDismiss";
 import { DialogFrame } from "./DialogFrame";
 import { DialogBackdrop, DialogPresence } from "./DialogMotion";
@@ -187,6 +188,7 @@ function SettingsIcon({id}: {id: string}) {
     storage:"M4 5h16v14H4V5Zm0 5h16m-12 5h8", ui:"M3 4h18v16H3V4Zm0 5h18M9 9v11",
     diagnostics:"M4 18V6m5 12V3m6 15V9m5 9V5", paths:"M3 6h7l2 3h9v11H3V6Z",
     datasets:"M4 4h16v16H4V4Zm0 6h16m-10 0v10", llm:"M4 4h16v13H9l-5 4V4Zm4 5h8m-8 4h5",
+    voice:"M9 3h6v11H9V3Zm-4 8a7 7 0 0 0 14 0M12 18v3",
     "ink-tools":"M4 18a8 8 0 1 1 16-6c0 4-4 1-5 4s-4 5-7 2Zm4-10h.01M12 6h.01M16 9h.01",
     check:"m4 12 5 5L20 6", diagnose:"M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14Zm5 12 6 6",
     repair:"m4 20 9-9m-3-7a6 6 0 0 0 8 8l-4-4 2-2 4 4a6 6 0 0 0-8-8",
@@ -230,6 +232,32 @@ function SettingsFold({id,title,children}: {id:string;title:string;children:Reac
 }
 
 const PROVIDERS = ["local", "ollama", "openai", "groq"] as const;
+
+const VOICE_ENGINES: { id: VoiceConfig["engine"]; label: string; blurb: string }[] = [
+  { id: "android", label: "Android", blurb: "Built in · free" },
+  { id: "local", label: "Local", blurb: "Your own Whisper server" },
+  { id: "openai", label: "OpenAI", blurb: "Your API key" },
+  { id: "groq", label: "Groq", blurb: "Your API key · fastest" },
+  { id: "deepgram", label: "Deepgram", blurb: "Your API key" },
+];
+
+const VOICE_CLEANUP: { id: VoiceConfig["cleanup"]; label: string }[] = [
+  { id: "off", label: "Off" },
+  { id: "local", label: "Local" },
+  { id: "ollama", label: "Ollama" },
+  { id: "openai", label: "OpenAI" },
+  { id: "groq", label: "Groq" },
+];
+
+function voiceClipModel(voice: VoiceConfig): string {
+  switch (voice.engine) {
+    case "local": return voice.local_model;
+    case "openai": return voice.openai_model;
+    case "groq": return voice.groq_model;
+    case "deepgram": return voice.deepgram_model;
+    default: return "";
+  }
+}
 
 /**
  * Fallback poll for DLC status, used only where Tauri events are unavailable.
@@ -647,6 +675,8 @@ export function SettingsModal({
   const [groqKeyDraft, setGroqKeyDraft] = useState("");
   const [clearOpenaiKey, setClearOpenaiKey] = useState(false);
   const [clearGroqKey, setClearGroqKey] = useState(false);
+  const [deepgramKeyDraft, setDeepgramKeyDraft] = useState("");
+  const [clearDeepgramKey, setClearDeepgramKey] = useState(false);
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
   /**
    * What this origin is using, read once when Personalise opens.
@@ -1171,8 +1201,10 @@ export function SettingsModal({
           setBaselineConfig(cfg);
           setOpenaiKeyDraft("");
           setGroqKeyDraft("");
+          setDeepgramKeyDraft("");
           setClearOpenaiKey(false);
           setClearGroqKey(false);
+          setClearDeepgramKey(false);
           setBusy(null);
           const url = await client.lanBaseUrl(cfg.serve_port);
           if (!cancelled) setLanUrl(url);
@@ -1263,8 +1295,10 @@ export function SettingsModal({
   const keysDirty =
     openaiKeyDraft.trim() !== "" ||
     groqKeyDraft.trim() !== "" ||
+    deepgramKeyDraft.trim() !== "" ||
     clearOpenaiKey ||
-    clearGroqKey;
+    clearGroqKey ||
+    clearDeepgramKey;
   const dirty =
     !configEqual(draft, baselineConfig) ||
     !prefsEqual(draftPrefs, baselinePrefs) ||
@@ -1277,6 +1311,7 @@ export function SettingsModal({
     + countSettingsChanges({...draft, coach: {...DEFAULT_COACH_FLAGS, ...draft.coach}}, {...baselineConfig, coach: {...DEFAULT_COACH_FLAGS, ...baselineConfig.coach}})
     + Number(Boolean(openaiKeyDraft.trim()) || clearOpenaiKey)
     + Number(Boolean(groqKeyDraft.trim()) || clearGroqKey)
+    + Number(Boolean(deepgramKeyDraft.trim()) || clearDeepgramKey)
     + Number(hubUrl.trim() !== baselineHubUrl) + Number(hubToken.trim() !== baselineHubToken)
     + Number(debugLog !== baselineDebugLog);
   const prefGroups: Record<string, (keyof DevicePrefs)[]> = {
@@ -1291,6 +1326,7 @@ export function SettingsModal({
   const configGroups: Record<string, (keyof LcConfig)[]> = {
     paths: ["data_json_dir", "workspace_dir"], datasets: ["dataset_dirs"], tests: ["stop_on_first_failure"],
     llm: ["default_provider", "models_dir", "local", "ollama", "openai", "groq", "modes", "serve_port", "serve_token"],
+    voice: ["voice"],
   };
   const select = <T extends object,>(value: T, fields: (keyof T)[]) => Object.fromEntries(fields.map(key => [key, value[key]]));
   const changes = Object.fromEntries([...new Set([...Object.keys(prefGroups), ...Object.keys(configGroups)])].map(id => [id,
@@ -1305,6 +1341,7 @@ export function SettingsModal({
   changes.storage = (changes.storage ?? 0) + Number(hubUrl.trim() !== baselineHubUrl) + Number(hubToken.trim() !== baselineHubToken);
   changes.diagnostics = (changes.diagnostics ?? 0) + Number(debugLog !== baselineDebugLog);
   changes.llm = (changes.llm ?? 0) + Number(Boolean(openaiKeyDraft.trim()) || clearOpenaiKey) + Number(Boolean(groqKeyDraft.trim()) || clearGroqKey);
+  changes.voice = (changes.voice ?? 0) + Number(Boolean(deepgramKeyDraft.trim()) || clearDeepgramKey);
   const resetGroup = (id: string) => {
     if (saving) return;
     restoreDeviceDraft({...draftPrefs, ...select(baselinePrefs, prefGroups[id] ?? [])});
@@ -1314,7 +1351,10 @@ export function SettingsModal({
     if (id === "storage") { setHubUrl(baselineHubUrl); setHubToken(baselineHubToken); }
     if (id === "diagnostics") setDebugLog(baselineDebugLog);
     if (id === "llm") { setOpenaiKeyDraft(""); setGroqKeyDraft(""); setClearOpenaiKey(false); setClearGroqKey(false); }
+    if (id === "voice") { setDeepgramKeyDraft(""); setClearDeepgramKey(false); }
   };
+  const voice = { ...DEFAULT_VOICE_CONFIG, ...draft.voice };
+  const voiceLabel = VOICE_ENGINES.find((engine) => engine.id === voice.engine)?.label ?? "Android";
   const summaries: Record<string,string> = {
     writing: `${handedness === "left" ? "Left hand" : "Right hand"} · ${chromeWake === "off" ? "No marker" : chromeWake === "pulse" ? "Checkerboard pulse" : "Grey smear"}`,
     "ink-tools": `${palettePrefs.tags.map(paletteTagLabel).join(", ")}${palettePrefs.mixColours ? " · Mix colours" : ""}`,
@@ -1324,11 +1364,16 @@ export function SettingsModal({
     diagnostics: [inkPerfOverlay && "Frames", inkPerfBar && "Load bar", pdfFlickHud && "Flick preview", hubSyncWindowPill && "Sync pill", debugLog && "Debug log"].filter(Boolean).join(" · ") || "Off", paths: draft.workspace_dir,
     datasets: `${datasets.length} datasets`, tests: draft.stop_on_first_failure ? "Stop at first failure" : "Run all cases",
     llm: `${draft.default_provider} / ${draft[draft.default_provider as keyof Pick<LcConfig,"local"|"ollama"|"openai"|"groq">]?.model || "No model selected"}`,
+    voice: `${voice.engine === "android" ? voiceLabel : `${voiceLabel} · ${voiceClipModel(voice)}`}${voice.cleanup !== "off" ? ` · tidy: ${voice.cleanup}` : ""}`,
     ...Object.fromEntries(COACH_FLAG_GROUPS.map(group=>[group.id, `${group.flags.filter(([key])=>(draft.coach ?? DEFAULT_COACH_FLAGS)[key]).length} of ${group.flags.length} on`])),
   };
 
   const patchProvider = (key: "local" | "ollama" | "openai" | "groq", patch: Partial<ProviderConfig>) => {
     setDraft((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
+  };
+
+  const patchVoice = (patch: Partial<VoiceConfig>) => {
+    setDraft(prev => ({ ...prev, voice: { ...DEFAULT_VOICE_CONFIG, ...prev.voice, ...patch } }));
   };
 
   const cancel = () => {
@@ -1449,13 +1494,17 @@ export function SettingsModal({
         else if (clearOpenaiKey) payload.openai_api_key = "";
         if (groqKeyDraft.trim()) payload.groq_api_key = groqKeyDraft.trim();
         else if (clearGroqKey) payload.groq_api_key = "";
+        if (deepgramKeyDraft.trim()) payload.deepgram_api_key = deepgramKeyDraft.trim();
+        else if (clearDeepgramKey) payload.deepgram_api_key = "";
         const saved = await client.putConfig(payload, { timeoutMs: CONFIG_SAVE_TIMEOUT_MS });
         setDraft(saved);
         setBaselineConfig(saved);
         setOpenaiKeyDraft("");
         setGroqKeyDraft("");
+        setDeepgramKeyDraft("");
         setClearOpenaiKey(false);
         setClearGroqKey(false);
+        setClearDeepgramKey(false);
       }
       onSaved?.();
       if (shouldClose) onClose();
@@ -3182,6 +3231,166 @@ export function SettingsModal({
               </div>
               </div>
 </SettingsFold>
+              <SettingsFold id="voice" title="Voice dictation">
+              <div className="lc-setting-row">
+                <p className="lc-settings-hint">The mic sits next to + in the agent box on the Android app. Android&apos;s recognizer is free and types as you speak. The others record what you say, then turn it into text — better with technical words.</p>
+                <div className="lc-settings-subhead">Engine</div>
+                <SettingsChoices className="lc-settings-choice" role="radiogroup" aria-label="Dictation engine">
+                  {VOICE_ENGINES.map((engine) => (
+                    <button
+                      key={engine.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={voice.engine === engine.id}
+                      className={voice.engine === engine.id ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                      onClick={() => patchVoice({ engine: engine.id })}
+                    >
+                      <strong>{engine.label}</strong>
+                      <span className="lc-muted">{engine.blurb}</span>
+                    </button>
+                  ))}
+                </SettingsChoices>
+                {voice.engine === "local" && (
+                  <>
+                    <label>
+                      <span>Server URL</span>
+                      <input
+                        value={voice.local_base_url}
+                        onChange={(e) => patchVoice({ local_base_url: e.target.value })}
+                      />
+                      <p className="lc-settings-hint">On the tablet, use this PC&apos;s address, e.g. http://192.168.1.20:8000/v1 — localhost would be the tablet.</p>
+                    </label>
+                    <label>
+                      <span>Model</span>
+                      <input
+                        value={voice.local_model}
+                        onChange={(e) => patchVoice({ local_model: e.target.value })}
+                      />
+                    </label>
+                  </>
+                )}
+                {(voice.engine === "openai" || voice.engine === "groq") && (
+                  <>
+                    <label>
+                      <span>Model</span>
+                      <input
+                        value={voice.engine === "openai" ? voice.openai_model : voice.groq_model}
+                        onChange={(e) => patchVoice(voice.engine === "openai" ? { openai_model: e.target.value } : { groq_model: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>API key</span>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={voice.engine === "openai" ? openaiKeyDraft : groqKeyDraft}
+                        onChange={(e) => {
+                          if (voice.engine === "openai") {
+                            setOpenaiKeyDraft(e.target.value);
+                            setClearOpenaiKey(false);
+                          } else {
+                            setGroqKeyDraft(e.target.value);
+                            setClearGroqKey(false);
+                          }
+                        }}
+                        placeholder={
+                          (voice.engine === "openai" ? draft.openai_key_set : draft.groq_key_set)
+                            ? "leave blank to keep the stored key"
+                            : voice.engine === "openai"
+                              ? "sk-…"
+                              : "gsk_…"
+                        }
+                      />
+                      <p className="lc-settings-hint">Shared with the OpenAI/Groq provider under LLM.</p>
+                      {(voice.engine === "openai" ? draft.openai_key_set : draft.groq_key_set) && (
+                        <HoldButton label="Clear stored key" ariaLabel="Hold to clear stored key" dataTip="Clear stored key"
+                          className="lc-secondary lc-settings-icon-action lc-hold-danger"
+                          onConfirm={() => {
+                            if (voice.engine === "openai") {
+                              setOpenaiKeyDraft("");
+                              setClearOpenaiKey(true);
+                            } else {
+                              setGroqKeyDraft("");
+                              setClearGroqKey(true);
+                            }
+                          }}
+                        >
+                          <SettingsIcon id="delete"/>
+                        </HoldButton>
+                      )}
+                      {(voice.engine === "openai" ? clearOpenaiKey : clearGroqKey) && (
+                        <p className="lc-muted">Stored key will be cleared on Save.</p>
+                      )}
+                    </label>
+                  </>
+                )}
+                {voice.engine === "deepgram" && (
+                  <>
+                    <label>
+                      <span>Model</span>
+                      <input
+                        value={voice.deepgram_model}
+                        onChange={(e) => patchVoice({ deepgram_model: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>API key</span>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={deepgramKeyDraft}
+                        onChange={(e) => {
+                          setDeepgramKeyDraft(e.target.value);
+                          setClearDeepgramKey(false);
+                        }}
+                        placeholder={draft.deepgram_key_set ? "leave blank to keep the stored key" : ""}
+                      />
+                      <p className="lc-settings-hint">Kept in this device&apos;s config.toml. DEEPGRAM_API_KEY wins if set.</p>
+                      {draft.deepgram_key_set && (
+                        <HoldButton label="Clear stored key" ariaLabel="Hold to clear stored key" dataTip="Clear stored key"
+                          className="lc-secondary lc-settings-icon-action lc-hold-danger"
+                          onConfirm={() => {
+                            setDeepgramKeyDraft("");
+                            setClearDeepgramKey(true);
+                          }}
+                        >
+                          <SettingsIcon id="delete"/>
+                        </HoldButton>
+                      )}
+                      {clearDeepgramKey && (
+                        <p className="lc-muted">Stored key will be cleared on Save.</p>
+                      )}
+                    </label>
+                  </>
+                )}
+                <div className="lc-settings-subhead">Clean-up pass</div>
+                <SettingsChoices className="lc-settings-choice" role="radiogroup" aria-label="Clean-up pass">
+                  {VOICE_CLEANUP.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={voice.cleanup === option.id}
+                      className={voice.cleanup === option.id ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                      onClick={() => patchVoice({ cleanup: option.id })}
+                    >
+                      <strong>{option.label}</strong>
+                    </button>
+                  ))}
+                </SettingsChoices>
+                <p className="lc-settings-hint">After you stop talking, one of your LLM providers tidies punctuation and technical words, using the model set under LLM. Your local model keeps it free and private.</p>
+                <label>
+                  <span>Vocabulary</span>
+                  <textarea
+                    rows={3}
+                    value={voice.vocabulary}
+                    placeholder="LeetCode, memoization, heapq, BFS, two pointers"
+                    onChange={(e) => patchVoice({ vocabulary: e.target.value })}
+                  />
+                  <p className="lc-settings-hint">Comma or newline separated. Sent with each clip so these come out spelled right. Android&apos;s recognizer ignores it.</p>
+                </label>
+              </div>
+              </SettingsFold>
             </div>
           )}
           {searching && <p className="lc-muted lc-settings-search-empty">No matching settings.</p>}

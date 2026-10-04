@@ -88,14 +88,17 @@ describe("agent panel chrome", () => {
     expect(css).toContain(".lc-agent-composer-field .lc-flag");
     expect(css).toContain("color: var(--hint)");
     expect(css).not.toContain(".lc-agent-composer-field .lc-agent-send {\n  background: var(--accent)");
-    const attach = css.slice(css.indexOf(".lc-agent-composer-bar .lc-agent-attach {"));
+    const attach = css.slice(css.indexOf(".lc-agent-composer-bar .lc-agent-attach,"));
     expect(attach.slice(0, 180)).toContain("padding: 0");
     expect(attach.slice(0, 180)).toContain("line-height: 0");
   });
 
   it("keeps photo immediately before Send", () => {
     const actions = panel.slice(panel.indexOf('className="lc-agent-composer-actions"'));
+    expect(actions.indexOf('aria-label="Voice"')).toBeGreaterThan(-1);
+    expect(actions.indexOf('aria-label="Voice"')).toBeLessThan(actions.indexOf('aria-label="Add Photo"'));
     expect(actions.indexOf('aria-label="Add Photo"')).toBeLessThan(actions.indexOf('aria-label="Send"'));
+    expect(css).toContain(".lc-agent-composer-bar .lc-agent-voice");
     const hand = css.slice(css.indexOf("[data-ui-handedness=\"left\"] .lc-agent-composer-actions {"));
     expect(hand.slice(0, 180)).not.toContain("row-reverse");
   });

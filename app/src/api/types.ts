@@ -143,6 +143,29 @@ export interface ProviderConfig {
   embed_base_url?: string;
 }
 
+/** Clip or on-device dictation. PUT without `voice` leaves the stored values. */
+export interface VoiceConfig {
+  engine: "android" | "local" | "openai" | "groq" | "deepgram";
+  openai_model: string;
+  groq_model: string;
+  deepgram_model: string;
+  local_base_url: string;
+  local_model: string;
+  vocabulary: string;
+  cleanup: "off" | "local" | "ollama" | "openai" | "groq";
+}
+
+export const DEFAULT_VOICE_CONFIG: VoiceConfig = {
+  engine: "android",
+  openai_model: "gpt-4o-mini-transcribe",
+  groq_model: "whisper-large-v3-turbo",
+  deepgram_model: "nova-3",
+  local_base_url: "http://localhost:8000/v1",
+  local_model: "whisper-large-v3-turbo",
+  vocabulary: "",
+  cleanup: "off",
+};
+
 export interface LcConfig {
   data_json_dir: string | null;
   /** Per-dataset corpus folder overrides, keyed by dataset slug. */
@@ -177,12 +200,19 @@ export interface LcConfig {
   /** Env or a stored Settings key exists. The secret is never returned. */
   openai_key_set?: boolean;
   groq_key_set?: boolean;
+  deepgram_key_set?: boolean;
+  /**
+   * Dictation engine and models. GET sends this on current builds; absent only
+   * from an older daemon. PUT without it leaves the stored values.
+   */
+  voice?: VoiceConfig;
 }
 
 /** PUT /config extras. Omit to leave a stored key; empty string clears it. */
 export type LcConfigPut = LcConfig & {
   openai_api_key?: string;
   groq_api_key?: string;
+  deepgram_api_key?: string;
 };
 
 /** One model a provider could be pointed at. Mirrors `src/llm/catalog.rs`. */

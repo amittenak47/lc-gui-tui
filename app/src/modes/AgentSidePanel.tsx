@@ -34,6 +34,7 @@ import { AgentTurnResponse } from "./AgentTurnResponse";
 import { loadCoachSessionView, saveCoachSessionView } from "./coachSessionView";
 import { useChatFollow } from "./useChatFollow";
 import { useAgentSheet } from "./useAgentSheet";
+import { useVoiceDictation } from "./useVoiceDictation";
 import { useAgentDisplayPrefs } from "../util/agentDisplayPrefs";
 import { newThinkingDisclosure, type ThinkingDisclosureState } from "./thinkingDisplay";
 import { AgentMessageBubble } from "./AgentMessageBubble";
@@ -382,6 +383,31 @@ function PlusIcon() {
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg className="lc-agent-composer-icon" viewBox="0 0 16 16" aria-hidden>
+      <rect
+        x="5.6"
+        y="1.8"
+        width="4.8"
+        height="8"
+        rx="2.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinecap="round"
+      />
+      <path
+        d="M3.4 7.6a4.6 4.6 0 0 0 9.2 0M8 12.2v2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.35"
         strokeLinecap="round"
       />
     </svg>
@@ -1277,6 +1303,10 @@ export function AgentSidePanel({
     retryAnchorTop.current = head.getBoundingClientRect().top;
   });
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const voice = useVoiceDictation({ fieldRef: composerRef, draft, setDraft });
+  // Switching session, or hiding the panel (the composer unmounts), drops dictation.
+  useEffect(() => voice.release(), [draftKey, voice.release]);
+  useEffect(() => { if (!open) voice.release(); }, [open, voice.release]);
   const composerPlace = useRef(new Map(Object.entries(sessionView.composer)));
   const composerKeyRef = useRef(draftKey);
   if (composerKeyRef.current !== draftKey) {
@@ -1912,6 +1942,7 @@ export function AgentSidePanel({
   const submit = (mode: "queue" | "merge" = "queue", event?: FormEvent) => {
     event?.preventDefault();
     if (!canSend) return;
+    voice.release();
     const sentDraft = draft, sentPhotos = photos, sentQuote = pageQuote;
     const sendSessionId = activeSessionId ?? `session-${crypto.randomUUID()}`;
     if (!activeSessionId) setNewSessionId(sendSessionId);
@@ -2578,6 +2609,7 @@ export function AgentSidePanel({
             </div>
           )}
           {photoError && <p className="lc-warning">{photoError}</p>}
+          {voice.error && <p className="lc-warning">{voice.error}</p>}
           <div className="lc-agent-composer-field">
           <span className="lc-agent-composer-expand">
             <PaneExpandButton
@@ -2596,6 +2628,7 @@ export function AgentSidePanel({
                 : "Ask the agent about your board or code…"
             }
             onChange={(event) => {
+              voice.userTyped();
               const el = event.target;
               const closed = slashWordClosedBySpace(commands, el.value, el.selectionStart);
               if (closed) takeCommand(closed.command, closed.at, el.value);
@@ -2754,6 +2787,21 @@ export function AgentSidePanel({
               ])}
             </div>
             <div className="lc-agent-composer-actions">
+              {voice.available && (
+                <Tip tip={voice.phase === "cleaning" ? "Tidying…" : voice.processing ? "Transcribing…" : voice.listening ? "Stop dictation" : "Dictate"} placement="left">
+                  <button
+                    type="button"
+                    className={`lc-flag lc-agent-voice${voice.listening ? " lc-flag-active lc-agent-voice-on" : ""}${voice.processing ? " lc-agent-voice-busy" : ""}`}
+                    aria-label="Voice"
+                    aria-pressed={voice.listening && !voice.processing}
+                    aria-busy={voice.processing || undefined}
+                    disabled={voice.processing}
+                    onClick={voice.toggle}
+                  >
+                    <MicIcon />
+                  </button>
+                </Tip>
+              )}
               <Tip
                 tip={
                   reviewBoard
