@@ -114,8 +114,11 @@ describe("offline hub sync", () => {
     expect(state.annotateAck).not.toHaveBeenCalled();
     expect(state.problemAck).not.toHaveBeenCalled();
     expect(state.persisted.size).toBe(6);
-    expect(state.notify).toHaveBeenCalledTimes(1);
-    expect(state.notify).toHaveBeenCalledWith("Desktop app is offline — this will sync when it's back.");
+    // One request per queued write; the notification queue drops repeats while
+    // the same card is on screen (see notifications.cards.test.ts).
+    expect(state.notify).toHaveBeenCalledTimes(6);
+    for (const call of state.notify.mock.calls) expect(call[2]).toEqual({ dedupe: true });
+    expect(state.notify).toHaveBeenCalledWith("Desktop app is offline — this will sync when it's back.", 2200, { dedupe: true });
   });
 
   it("flushes once when health recovers and ignores repeated online reports", async () => {

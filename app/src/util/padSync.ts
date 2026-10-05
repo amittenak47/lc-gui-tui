@@ -153,8 +153,6 @@ let loadingQueue: Promise<void> | null = null;
 let queueMutation: Promise<unknown> = Promise.resolve();
 let queueSequence = 0;
 let flushingQueue: Promise<void> | null = null;
-let offlineNoticeAt = -Infinity;
-const OFFLINE_NOTICE_COOLDOWN_MS = 30_000;
 
 let hubBodyCapOverride: number | null = null;
 
@@ -186,7 +184,6 @@ export function resetPadSyncQueueForTests(): void {
   queueMutation = Promise.resolve();
   queueSequence = 0;
   flushingQueue = null;
-  offlineNoticeAt = -Infinity;
   hubBackoffUntil = 0;
   hubBackoffMs = HUB_BACKOFF_MIN_MS;
   hubBodyCapOverride = null;
@@ -325,9 +322,10 @@ export function enqueuePadSync(job: PadSyncJobInput, options?: { requirePersiste
       }
     }
     if (job.op === "deletePad" && persisted) await dropPadPayloadJobs(job.kind, job.padId, full.supersededUpdatedAt ?? queuedAt(full));
-    if (isPadHubOffline() && Date.now() - offlineNoticeAt >= OFFLINE_NOTICE_COOLDOWN_MS) {
-      offlineNoticeAt = Date.now();
-      showNotification("Desktop app is offline — this will sync when it's back.");
+    // Every queued change while offline says so, but never stacks copies:
+    // the card is skipped while the same notice is on screen or waiting.
+    if (isPadHubOffline()) {
+      showNotification("Desktop app is offline — this will sync when it's back.", 2200, { dedupe: true });
     }
   });
   queueMutation = pending.catch(() => {});

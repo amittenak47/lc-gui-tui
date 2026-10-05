@@ -131,6 +131,7 @@ import {
   loadHubSyncWindowPill,
   saveHubSyncWindowPill,
 } from "../util/hubSyncWindowPillPref";
+import { loadNotificationCards, saveNotificationCards } from "../util/notificationCardsPref";
 import {
   INK_DISPLAY_HZ,
   loadInkDisplayHz,
@@ -527,6 +528,7 @@ interface DevicePrefs {
   inkPerfBar: boolean;
   /** Floating Hub Sync pill on the board chrome. Off keeps Sync in the tab. */
   hubSyncWindowPill: boolean;
+  notificationCards: boolean;
   /** Display refresh for HUD vsync and live present cap. */
   inkDisplayHz: InkDisplayHzPref;
   /** Present every dirty vsync. Off keeps the 60fps cap on 90Hz+. */
@@ -570,6 +572,7 @@ function loadDevicePrefs(): DevicePrefs {
     inkPerfOverlay: loadInkPerfOverlay(),
     inkPerfBar: loadInkPerfBar(),
     hubSyncWindowPill: loadHubSyncWindowPill(),
+    notificationCards: loadNotificationCards(),
     inkDisplayHz: loadInkDisplayHz(),
     inkMatchDisplay: loadInkMatchDisplay(),
   };
@@ -614,6 +617,7 @@ function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
     a.inkPerfOverlay === b.inkPerfOverlay &&
     a.inkPerfBar === b.inkPerfBar &&
     a.hubSyncWindowPill === b.hubSyncWindowPill &&
+    a.notificationCards === b.notificationCards &&
     a.inkDisplayHz === b.inkDisplayHz &&
     a.inkMatchDisplay === b.inkMatchDisplay
   );
@@ -934,6 +938,7 @@ export function SettingsModal({
   const [inkPerfOverlay, setInkPerfOverlay] = useState(() => loadInkPerfOverlay());
   const [inkPerfBar, setInkPerfBar] = useState(() => loadInkPerfBar());
   const [hubSyncWindowPill, setHubSyncWindowPill] = useState(() => loadHubSyncWindowPill());
+  const [notificationCards, setNotificationCards] = useState(() => loadNotificationCards());
   const [inkDisplayHz, setInkDisplayHz] = useState<InkDisplayHzPref>(() => loadInkDisplayHz());
   const [inkMatchDisplay, setInkMatchDisplay] = useState(() => loadInkMatchDisplay());
   // The debug log switch waits for Save like every other setting.
@@ -1171,6 +1176,7 @@ export function SettingsModal({
     setInkPerfOverlay(prefs.inkPerfOverlay);
     setInkPerfBar(prefs.inkPerfBar);
     setHubSyncWindowPill(prefs.hubSyncWindowPill);
+    setNotificationCards(prefs.notificationCards);
     setInkDisplayHz(prefs.inkDisplayHz);
     setInkMatchDisplay(prefs.inkMatchDisplay);
   };
@@ -1290,6 +1296,7 @@ export function SettingsModal({
     inkPerfOverlay,
     inkPerfBar,
     hubSyncWindowPill,
+    notificationCards,
     inkDisplayHz,
     inkMatchDisplay,
   };
@@ -1320,7 +1327,7 @@ export function SettingsModal({
     "ink-tools": ["tapOk", "colorWheelOnToolbar", "palettePrefs"],
     reading: ["pdfFlickMomentum"],
     storage: ["autosaveMs", "autosaveBanner", "hubAutoSync", "offlineMerge"],
-    ui: ["uiHandedness", "uiCorners", "startupTabs", "readingMode", "pageFit", "agentDisplay"],
+    ui: ["uiHandedness", "uiCorners", "startupTabs", "readingMode", "pageFit", "agentDisplay", "notificationCards"],
     diagnostics: ["inkDisplayHz", "inkPerfOverlay", "inkPerfBar", "pdfFlickHud", "hubSyncWindowPill"],
     tests: ["testForward"],
   };
@@ -1437,6 +1444,7 @@ export function SettingsModal({
         saveInkPerfOverlay(inkPerfOverlay);
         saveInkPerfBar(inkPerfBar);
         saveHubSyncWindowPill(hubSyncWindowPill);
+        saveNotificationCards(notificationCards);
         saveInkDisplayHz(inkDisplayHz);
         saveInkMatchDisplay(inkMatchDisplay);
         setBaselinePrefs(draftPrefs);
@@ -2589,6 +2597,28 @@ export function SettingsModal({
                     </button>
                   ))}
                 </SettingsChoices>
+              </div>
+<div className="lc-setting-row">
+<div className="lc-settings-subhead">Notification cards</div>
+              <p className="lc-settings-hint">The stacked notices in the corner, such as "Linked …" or "Desktop app is offline". Off hides the cards only; the Sync box and dialogs still show status.</p>
+              <SettingsChoices
+                className="lc-settings-choice lc-settings-choice-compact"
+                role="radiogroup"
+                aria-label="Notification cards"
+              >
+                {([[true, "On"], [false, "Off"]] as const).map(([value, label]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    role="radio"
+                    aria-checked={notificationCards === value}
+                    className={notificationCards === value ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                    onClick={() => setNotificationCards(value)}
+                  >
+                    <strong>{label}</strong>
+                  </button>
+                ))}
+              </SettingsChoices>
               </div>
 </SettingsFold>
               <SettingsFold id="diagnostics" title="Diagnostics">

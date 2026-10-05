@@ -30,6 +30,11 @@ export class NotificationQueue {
     this.deckTimer = setTimeout(() => this.dismissDeck(), Math.min(this.hold, cap));
   }
 
+  /** The text is on screen (not leaving) or waiting its turn. */
+  has(text: string): boolean {
+    return this.live().some(entry => entry.text === text) || this.waiting.some(entry => entry.text === text);
+  }
+
   show(text: string, duration = 2200): number {
     const item = { id: ++this.sequence, text, duration: Math.max(1400, duration) };
     if (this.waiting.length === 0 && this.visible.length < MAX_VISIBLE && !this.visible.some(entry => entry.exiting)) {
