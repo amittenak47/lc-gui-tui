@@ -169,7 +169,7 @@ export function ExploreWorkspace({
   const leavingRef = useRef<Body[]>([]);
   const nodeElsRef = useRef(new Map<string, HTMLElement>());
   const edgeElsRef = useRef(new Map<string, SVGPathElement>());
-  /** The blurred copy of each edge, drawn under its core. */
+  /** The wide faint copy of each edge, drawn under its core. */
   const glowElsRef = useRef(new Map<string, SVGPathElement>());
   const boxRef = useRef({ w: 0, h: 0 });
   const clusteredRef = useRef(clustered);
@@ -700,19 +700,12 @@ export function ExploreWorkspace({
               matches the ones the rest of the app already draws.
             */}
             <svg className="lc-explore-beams" aria-hidden>
-              <defs>
-                {/*
-                  The bloom. One blur, applied to a coloured copy of every edge,
-                  with a thinner bright core drawn over it unblurred. Colour
-                  spills a little, the core stays sharp, and the line still
-                  reads as a line rather than as a highlighter stroke.
-                */}
-                <filter id="lc-saber-glow" x="-40%" y="-40%" width="180%" height="180%">
-                  <feGaussianBlur stdDeviation="2.2" />
-                </filter>
-              </defs>
-
-              <g className="lc-explore-beam-glow" filter="url(#lc-saber-glow)">
+              {/*
+                The bloom: a wide, faint coloured copy of every edge, with a
+                thinner bright core drawn over it. No blur filter: the layer
+                redraws every frame, and a blur over all of it is too costly.
+              */}
+              <g className="lc-explore-beam-glow">
                 {drawnEdges.map((edge) => {
                   const touched =
                     !selected || sameNode(edge.from, selected) || sameNode(edge.to, selected);

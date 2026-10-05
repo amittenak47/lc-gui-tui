@@ -9658,9 +9658,10 @@ body[data-lc-sash-drag="horizontal"] {
 /*
  * A link, drawn as a lit filament.
  *
- * Two passes over the same line: a coloured copy through one blur, then a
- * thinner bright core over it, unblurred. Colour spills a little and the core
- * stays sharp, so it reads as a lit wire rather than as a drawn stroke.
+ * Two passes over the same line: a wide, faint coloured copy, then a thinner
+ * bright core over it. Colour spills a little and the core stays sharp, so it
+ * reads as a lit wire rather than as a drawn stroke. The glow is a plain
+ * stroke, not a blur: the beams redraw every frame.
  *
  * Thin on purpose. A wide bloom turns a graph into a bundle of highlighter
  * marks, and the thing being communicated is that two workspaces are
@@ -9683,8 +9684,8 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-explore-beam-glow .lc-explore-beam {
-  stroke-width: 3.2;
-  opacity: 0.6;
+  stroke-width: 5.5;
+  opacity: 0.32;
 }
 
 .lc-explore-beam-core .lc-explore-beam {
