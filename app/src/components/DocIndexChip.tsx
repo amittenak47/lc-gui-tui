@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import type { DocIndexStatus } from "../api/client";
+import { usePadHubStatus } from "../util/padHubStatus";
 import { MorphBar } from "./MorphBar";
 import { HubStatusDot } from "./HubStatusDot";
 
@@ -63,32 +64,24 @@ function WorkRing({ progress }: { progress: DocWorkProgress | null }) {
   );
 }
 
-function ChipSync({
-  onSync,
-  walking,
-  walkError,
-}: {
-  onSync?: (() => void) | null;
-  walking: boolean;
-  walkError?: string | null;
-}) {
-  if (!onSync) return null;
-  return (
-    <button
-      type="button"
-      className="lc-doc-index-sync"
-      aria-label="Hub sync"
-      data-error={walkError ?? undefined}
-      disabled={walking && !walkError}
-      onClick={(event) => {
-        event.stopPropagation();
-        onSync();
-      }}
-    >
-      <HubStatusDot />
-      Sync
-    </button>
-  );
+/** Shared by the Sync overlay and the original no-hub chip. */
+function syncLabel(
+  { walkStage, walkJob, walkError, walkWaiting, padSync }: Pick<
+    DocIndexChipProps, "walkStage" | "walkJob" | "walkError" | "walkWaiting" | "padSync"
+  >,
+  offline = false,
+): string | null {
+  if (offline) return "Desktop app is offline — changes will sync when it's back.";
+  if (walkError) return walkError;
+  if (walkWaiting === "conflict") return "choose copy";
+  if (walkStage != null && walkStage !== "idle" && walkStage !== "synced") {
+    return walkStage === "index"
+      ? walkJob === "embed" ? "embedding…" : "indexing…"
+      : `${walkStage}…`;
+  }
+  if (walkStage === "synced" || padSync === "synced") return "synced";
+  if (padSync === "not-synced") return "not synced";
+  return null;
 }
 
 function withChipSync(node: ReactNode, sync: ReactNode) {
@@ -186,8 +179,14 @@ export function DocIndexChip({
   viewportWait,
 }: DocIndexChipProps) {
   const [open, setOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const { status: hubStatus } = usePadHubStatus();
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
+  const syncPopRef = useRef<HTMLDivElement | null>(null);
+  const syncStartedRef = useRef(false);
+  const syncWalkSeenRef = useRef(false);
+  const syncWasLandedRef = useRef(false);
   const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
 
   /** The two resting states that have a card behind them. */
@@ -197,15 +196,19 @@ export function DocIndexChip({
   }, [canOpen]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open && !syncOpen) return;
     const onPointer = (event: PointerEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      if (buttonRef.current?.contains(target) || popRef.current?.contains(target)) return;
+      if (buttonRef.current?.contains(target) || popRef.current?.contains(target) || syncPopRef.current?.contains(target)) return;
       setOpen(false);
+      setSyncOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") {
+        setOpen(false);
+        setSyncOpen(false);
+      }
     };
     window.addEventListener("pointerdown", onPointer);
     window.addEventListener("keydown", onKey);
@@ -213,7 +216,7 @@ export function DocIndexChip({
       window.removeEventListener("pointerdown", onPointer);
       window.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [open, syncOpen]);
 
   /*
    * The Sync walk, while one is running or after it has landed.
@@ -225,40 +228,97 @@ export function DocIndexChip({
    */
   const walking =
     walkStage != null && walkStage !== "idle" && walkStage !== "synced";
+  const restPad =
+    walkStage === "synced" || padSync === "synced"
+      ? "synced"
+      : padSync === "not-synced"
+        ? "not-synced"
+        : null;
+  const offline = hubStatus === "offline";
+  const syncText = syncLabel({
+    walkStage, walkJob, walkError, walkWaiting, padSync: padSync ?? "not-synced",
+  }, offline);
+
+  useEffect(() => {
+    if (!syncOpen || !syncStartedRef.current) return;
+    if (walking) syncWalkSeenRef.current = true;
+    // Do not mistake a previous walk's resting status for this tap's landing.
+    if (
+      walking || offline || walkError || walkWaiting === "conflict" || restPad !== "synced" ||
+      (syncWasLandedRef.current && !syncWalkSeenRef.current)
+    ) return;
+    const timer = window.setTimeout(() => setSyncOpen(false), 2_500);
+    return () => window.clearTimeout(timer);
+  }, [syncOpen, walking, offline, walkError, walkWaiting, restPad]);
+
+  const indexText = status === "indexing"
+    ? "indexing…"
+    : embedding
+      ? "embedding…"
+      : status === "error"
+        ? "index error"
+        : status === "indexed"
+          ? meta?.embedded === false ? "indexed · words" : "indexed"
+          : onIndex ? "not indexed" : null;
+  const indexRing = status === "indexing" || embedding;
+  const working = walking || indexRing;
+  const workProgress = walking ? walkProgress : status === "indexing" ? indexProgress : embedProgress;
   const syncBtn = onSync ? (
-    <ChipSync onSync={onSync} walking={walking} walkError={walkError} />
+    <button
+      ref={buttonRef}
+      type="button"
+      className={`lc-doc-index-sync${walkError ? " is-bad" : ""}${walkWaiting === "conflict" ? " is-attention" : ""}`}
+      aria-label="Hub sync"
+      aria-expanded={syncOpen || open}
+      aria-haspopup="dialog"
+      data-error={walkError ?? undefined}
+      title={walkError ?? (walkWaiting === "conflict" ? "Both copies changed — pick which stays." : undefined)}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (syncOpen) {
+          setSyncOpen(false);
+          return;
+        }
+        const box = buttonRef.current?.getBoundingClientRect();
+        if (box) setAnchor({ top: box.bottom + 8, left: box.left });
+        setOpen(false);
+        syncStartedRef.current = !offline && !walking;
+        syncWalkSeenRef.current = false;
+        syncWasLandedRef.current = restPad === "synced";
+        setSyncOpen(true);
+        if (syncStartedRef.current) onSync();
+      }}
+    >
+      {working ? <WorkRing progress={workProgress ?? null} /> : <HubStatusDot />}
+      Sync
+    </button>
   ) : null;
-  if (walking && walkError) {
+  if (!onSync && walking && walkError) {
     return withChipSync(
       <span className="lc-doc-index-chip is-bad" title={walkError}>
-        {walkError}
+        {syncLabel({ walkError })}
       </span>,
       syncBtn,
     );
   }
-  if (walking && walkWaiting === "conflict") {
+  if (!onSync && walking && walkWaiting === "conflict") {
     return withChipSync(
       <span
         className="lc-doc-index-chip"
         title="Both copies changed — pick which stays."
       >
-        choose copy
+        {syncLabel({ walkWaiting })}
       </span>,
       syncBtn,
     );
   }
-  if (walking) {
+  if (!onSync && walking) {
     /*
      * Index names the job when one is running (extract vs embed). With neither
      * yet, the pill is still on Index — ping, or the PUT after the last page —
      * and the tab has to keep that word rather than fall through to `indexed`.
      */
-    const label =
-      walkStage === "index"
-        ? walkJob === "embed"
-          ? "embedding…"
-          : "indexing…"
-        : `${walkStage}…`;
+    const label = syncLabel({ walkStage, walkJob });
     if (label) {
       return withChipSync(
         <span className="lc-doc-index-chip is-working">
@@ -270,7 +330,7 @@ export function DocIndexChip({
     }
   }
 
-  if (viewportWait) {
+  if (!onSync && viewportWait) {
     return withChipSync(
       <span className="lc-doc-index-chip is-working" title="Loading ink">
         <WorkRing progress={null} />
@@ -281,7 +341,7 @@ export function DocIndexChip({
 
   // `onIndex` is also the re-index action once a document is already in — the
   // work is identical, `upsert` deletes and rewrites.
-  if (status === "indexing") {
+  if (!onSync && status === "indexing") {
     return withChipSync(
       <span className="lc-doc-index-chip is-working">
         <WorkRing progress={indexProgress ?? null} />
@@ -290,7 +350,7 @@ export function DocIndexChip({
       syncBtn,
     );
   }
-  if (embedding) {
+  if (!onSync && embedding) {
     return withChipSync(
       <span
         className="lc-doc-index-chip is-working"
@@ -302,13 +362,7 @@ export function DocIndexChip({
       syncBtn,
     );
   }
-  const restPad =
-    walkStage === "synced" || padSync === "synced"
-      ? "synced"
-      : padSync === "not-synced"
-        ? "not-synced"
-        : null;
-  if (restPad && !canOpen) {
+  if (!onSync && restPad && !canOpen) {
     return withChipSync(
       <span
         className={
@@ -317,13 +371,13 @@ export function DocIndexChip({
       >
         {/* One status dot per tab: it lives in the Sync box when there is one. */}
         {!syncBtn && <HubStatusDot />}
-        {restPad === "synced" ? "synced" : "not synced"}
+        {syncLabel({ walkStage, padSync })}
       </span>,
       syncBtn,
     );
   }
-  if (status === "idle" && !onIndex && !restPad) return null;
-  if (status === "error") {
+  if (!onSync && status === "idle" && !onIndex && !restPad) return null;
+  if (!onSync && status === "error") {
     return withChipSync(
       <span className="lc-doc-index-chip is-bad" title={error ?? "index error"}>
         {error ?? "index error"}
@@ -369,10 +423,11 @@ export function DocIndexChip({
     meta.embed_model !== meta.configured_model;
   const canEmbed =
     wordsOnly && onEmbed != null && (meta?.configured_model ?? "").length > 0;
+  const IndexRow = canOpen ? "button" : "div";
 
   return (
     <>
-      {withChipSync(
+      {onSync ? withChipSync(null, syncBtn) : withChipSync(
       <button
         ref={buttonRef}
         type="button"
@@ -396,17 +451,39 @@ export function DocIndexChip({
         }}
       >
         {restPad && !syncBtn && <HubStatusDot />}
-        {restPad === "synced"
-          ? "synced"
-          : restPad === "not-synced"
-            ? "not synced"
-            : unindexed
+        {syncLabel({ walkStage, padSync }) ?? (unindexed
             ? "not indexed"
             : wordsOnly
               ? "indexed · words"
-              : "indexed"}
+              : "indexed")}
       </button>,
       syncBtn,
+      )}
+      {onSync && syncOpen && typeof document !== "undefined" && createPortal(
+        <div
+          ref={syncPopRef}
+          className="lc-doc-sync-pop"
+          role="status"
+          aria-live="polite"
+          style={anchor ? { top: anchor.top, left: Math.max(8, anchor.left) } : undefined}
+        >
+          <div className="lc-doc-sync-line">{syncText}</div>
+          {indexText && (
+            <IndexRow
+              className="lc-doc-sync-index"
+              type={canOpen ? "button" : undefined}
+              title={status === "error" ? error ?? "index error" : embedding ? embedEta ?? undefined : undefined}
+              onClick={canOpen ? () => {
+                setSyncOpen(false);
+                setOpen(true);
+              } : undefined}
+            >
+              {indexRing && <WorkRing progress={(status === "indexing" ? indexProgress : embedProgress) ?? null} />}
+              {indexText}
+            </IndexRow>
+          )}
+        </div>,
+        document.body,
       )}
       {typeof document !== "undefined" &&
         createPortal(

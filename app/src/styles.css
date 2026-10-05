@@ -897,6 +897,18 @@ a,
   color: var(--ink);
 }
 
+.lc-doc-index-sync.is-attention,
+.lc-header .lc-doc-index-chip-row > button.lc-doc-index-sync.is-attention {
+  border-color: color-mix(in srgb, var(--lc-tab-mode, var(--accent)) 80%, transparent);
+  background: color-mix(in srgb, var(--lc-tab-mode, var(--accent)) 24%, var(--bg));
+  color: color-mix(in srgb, var(--lc-tab-mode, var(--accent)) 75%, var(--ink));
+}
+
+.lc-doc-index-sync.is-bad,
+.lc-header .lc-doc-index-chip-row > button.lc-doc-index-sync.is-bad {
+  color: var(--bad);
+}
+
 .lc-header .lc-tab-close {
   flex-shrink: 0;
   width: 20px;
@@ -1698,6 +1710,44 @@ html[data-theme="dark"] .lc-web-doc {
 
 .lc-doc-index-pop.is-open {
   pointer-events: auto;
+}
+
+.lc-doc-sync-pop {
+  position: fixed;
+  z-index: 110;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 16px));
+  display: grid;
+  gap: 5px;
+  padding: 8px 10px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 16%);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.lc-doc-sync-index {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--hint);
+  text-align: left;
+}
+
+button.lc-doc-sync-index {
+  cursor: pointer;
+}
+
+button.lc-doc-sync-index:hover,
+button.lc-doc-sync-index:focus-visible {
+  color: var(--ink);
 }
 
 .lc-doc-index-morph {
@@ -15179,7 +15229,9 @@ button.lc-row-selected:hover:not(:disabled) {
  * enough for two legible digits, and a number nobody can read is worse than the
  * ring alone.
  */
-.lc-doc-index-chip.is-working .lc-doc-index-ring-pct {
+.lc-doc-index-chip.is-working .lc-doc-index-ring-pct,
+.lc-doc-index-sync .lc-doc-index-ring-pct,
+.lc-doc-sync-index .lc-doc-index-ring-pct {
   position: static;
   display: inline;
   margin-inline-end: 2px;
@@ -15187,7 +15239,9 @@ button.lc-row-selected:hover:not(:disabled) {
   font-weight: 600;
 }
 
-.lc-doc-index-chip.is-working .lc-doc-index-ring-pct::after {
+.lc-doc-index-chip.is-working .lc-doc-index-ring-pct::after,
+.lc-doc-index-sync .lc-doc-index-ring-pct::after,
+.lc-doc-sync-index .lc-doc-index-ring-pct::after {
   content: "%";
   opacity: 0.7;
 }
