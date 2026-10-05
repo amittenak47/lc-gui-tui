@@ -119,6 +119,21 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/*
+ * When the map is only drifting, the loop drops to about 20 fps.
+ *
+ * Every frame redraws the whole beams layer, and ambient drift moves a node a
+ * pixel or two a second. Idle frames run the simulation in steps the length of
+ * an active frame, because damping is per step: one long step would make the
+ * drift faster, not just choppier.
+ */
+/** Fastest node, in box widths per second, under which the map is only drifting. */
+const IDLE_SPEED = 0.05;
+/** Seconds it has to stay that slow before the loop drops its rate. */
+const IDLE_AFTER = 0.6;
+/** Wait before each idle frame's rAF; with vsync that lands near 20 fps. */
+const IDLE_GAP_MS = 40;
+
 function truncate(text: string, max = 20): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
@@ -187,6 +202,8 @@ export function ExploreWorkspace({
   const pinnedKeyRef = useRef<string | null>(null);
   /** The drift's clock, kept across a pause so it resumes where it left off. */
   const driftTimeRef = useRef(0);
+  /** Back to full rate now, for changes the loop would only notice a frame late. */
+  const wakeRef = useRef<() => void>(() => {});
   const skipNodeClickRef = useRef(false);
   const dragNodeRef = useRef<{
     key: string;
@@ -267,6 +284,7 @@ export function ExploreWorkspace({
       filterMotionRef.current={start:performance.now(),from:new Map(next.map(body=>[body.key,{...body}])),to:new Map(targets.map(body=>[body.key,body]))};
     }
     paintRef.current();
+    wakeRef.current();
     setLabelTick((tick) => tick + 1);
     // `shown` is rebuilt each render; its identity is not the signal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -285,6 +303,7 @@ export function ExploreWorkspace({
       const box = host.getBoundingClientRect();
       const first = boxRef.current.w === 0 || boxRef.current.h === 0;
       boxRef.current = { w: box.width, h: box.height };
+      wakeRef.current();
       /*
        * Re-settle the first time the box is real.
        *
@@ -380,15 +399,22 @@ export function ExploreWorkspace({
       return;
     }
     let frame = 0;
+    let timer = 0;
     let last = performance.now();
     let sinceLabels = 0;
+    let quietFor = 0;
+    let idle = false;
+    let activeDt = 1 / 60;
+    const pressed = new Set<number>();
     const tick = (now: number) => {
+      const gap = (now - last) / 1000;
+      last = now;
       // Clamp, or a backgrounded tab returns with a multi-second step and
       // throws every node into a wall.
-      const dt = Math.min((now - last) / 1000, 1 / 20);
-      last = now;
-      const elapsed = (driftTimeRef.current += dt);
-      sinceLabels += dt;
+      const dt = idle ? activeDt : Math.min(gap, 1 / 20);
+      const steps = idle ? Math.min(6, Math.max(1, Math.round(gap / activeDt))) : 1;
+      if (!idle) activeDt += (dt - activeDt) * 0.1;
+      sinceLabels += dt * steps;
       const box = boxRef.current;
       const centres = clusterCentres(bodiesRef.current.map((body) => body.node.type));
       const aspect = box.h > 0 ? box.w / box.h : 1.6;
@@ -403,8 +429,10 @@ export function ExploreWorkspace({
         if(t===1)filterMotionRef.current=null;
       } else {
         filterMotionRef.current=null;
-        step(bodiesRef.current, centres, {clustered:clusteredRef.current,dt,time:elapsed,aspect,
-          links:linksRef.current,pinnedKey:pinnedKeyRef.current});
+        for (let i = 0; i < steps; i++) {
+          step(bodiesRef.current, centres, {clustered:clusteredRef.current,dt,time:(driftTimeRef.current += dt),aspect,
+            links:linksRef.current,pinnedKey:pinnedKeyRef.current});
+        }
       }
       paint();
       if (clusteredRef.current) {
@@ -420,10 +448,45 @@ export function ExploreWorkspace({
         sinceLabels = 0;
         setLabelTick((value) => value + 1);
       }
+      const busy = pressed.size > 0 || pinnedKeyRef.current !== null || filterMotionRef.current !== null;
+      let fastest = 0;
+      for (const body of bodiesRef.current) fastest = Math.max(fastest, Math.hypot(body.vx, body.vy));
+      quietFor = busy || fastest >= IDLE_SPEED ? 0 : quietFor + dt * steps;
+      idle = quietFor >= IDLE_AFTER;
+      if (idle) {
+        timer = window.setTimeout(() => {
+          timer = 0;
+          frame = requestAnimationFrame(tick);
+        }, IDLE_GAP_MS);
+      } else {
+        frame = requestAnimationFrame(tick);
+      }
+    };
+    wakeRef.current = () => {
+      quietFor = 0;
+      if (!timer) return;
+      window.clearTimeout(timer);
+      timer = 0;
       frame = requestAnimationFrame(tick);
     };
+    const host = hostRef.current;
+    const onDown = (event: PointerEvent) => {
+      pressed.add(event.pointerId);
+      wakeRef.current();
+    };
+    const onUp = (event: PointerEvent) => pressed.delete(event.pointerId);
+    host?.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onUp, true);
     frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+      wakeRef.current = () => {};
+      host?.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onUp, true);
+    };
   }, [clustered, paint, showing]);
 
   const degree = useMemo(() => {
