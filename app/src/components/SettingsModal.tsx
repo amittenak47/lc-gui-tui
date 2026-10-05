@@ -2041,10 +2041,6 @@ export function SettingsModal({
               </div>
 </SettingsFold>
               <SettingsFold id="ink-tools" title="Ink tools">
-              <div className="lc-setting-row">
-<div className="lc-settings-subhead">Presets</div>
-              <p className="lc-settings-hint">Six presets per tool on the wheel. Hold a preset’s name until it fills to edit it.</p>
-              </div>
 <div className="lc-setting-row">
 <div className="lc-settings-subhead">Confirm with OK</div>
               <p className="lc-settings-hint">On: tap OK in the wheel’s centre to apply. Off: applies when you lift from the colour.</p>
