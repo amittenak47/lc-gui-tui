@@ -465,7 +465,8 @@ export function DocIndexChip({
           className="lc-doc-sync-pop"
           role="status"
           aria-live="polite"
-          style={anchor ? { top: anchor.top, left: Math.max(8, anchor.left) } : undefined}
+          // Tabs near the right edge would push the 280px overlay off screen.
+          style={anchor ? { top: anchor.top, left: Math.max(8, Math.min(anchor.left, window.innerWidth - 288)) } : undefined}
         >
           <div className="lc-doc-sync-line">{syncText}</div>
           {indexText && (
