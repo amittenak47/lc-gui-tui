@@ -12,13 +12,13 @@
  *
  * Turning is a finger's (or a mouse's) drag from one of the page's corners,
  * which takes hold of the sheet the moment it touches — the body of the page
- * stays the board's own pan. The stylus always writes; the arrow and Page
- * keys turn too.
+ * stays the board's own pan. With a drawing tool up the stylus writes, and
+ * turns from the corner peels only; the arrow and Page keys turn too.
  */
 
 import { useEffect, useRef, type RefObject } from "react";
 
-import type { BoardHandle } from "../BoardHandle";
+import type { BoardHandle, ToolName } from "../BoardHandle";
 import type { PageFrame } from "../inkPageIndex";
 import { peekPdfFilmCurrent, publishPdfReadAhead, publishPdfPreloadPages, peekPdfPreloadPages, subscribePdfFilmCurrent, wakePdfPaintPump } from "../../modes/pdfFilm";
 import { waitForPdfTurnPreview } from "./pdfTurnPreview";
@@ -58,6 +58,19 @@ const GLIDE_FLICK_MIN_MS = 120;
 const GLIDE_MAX_LAUNCH = 2.5;
 /** A text spread's facing picture is taken again once writing has rested this long. */
 const FACING_SETTLE_MS = 1200;
+
+/**
+ * A stylus with a drawing tool up writes, in the margins as well: only the
+ * corner peels turn under it. With the hand or selection up it turns as a
+ * finger does.
+ */
+const penWrites = (pointerType: string, tool: ToolName | undefined) =>
+  pointerType === "pen" && tool !== "hand" && tool !== "selection";
+
+/** Which side of the page a press here may take hold of, if any. */
+function turnGripAt(rect: DOMRect, x: number, y: number, pointerType: string, tool: ToolName | undefined) {
+  return penWrites(pointerType, tool) ? turnCornerAt(rect, x, y) : turnEdgeAt(rect, x, y);
+}
 /** Pictures kept for turns: this page and its neighbours — in a spread, three spreads' worth. */
 const SHOT_CACHE = 8;
 /** How long the view must sit still before the next turn's pictures are taken. */
@@ -734,9 +747,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) return;
       // The outer edge is the turn's, while turning is on.
       const hole = el.parentElement?.getBoundingClientRect();
-      if (hole && turnEnabledRef.current && event.pointerType !== "pen") {
-        if (turnEdgeAt(hole, event.clientX, event.clientY)) return;
-      }
+      if (hole && turnEnabledRef.current && turnGripAt(hole, event.clientX, event.clientY, event.pointerType, b.getActiveTool?.())) return;
       const frames = b.readingPageFrames();
       const i = frames.findIndex((f) => same(f, held));
       const facing = i >= 0 ? frames[i % 2 === 0 ? i + 1 : i - 1] : undefined;
@@ -1532,7 +1543,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     /* ---------------------------------------------------------- gesture */
 
     // Side strips and corner triangles own turning. The body keeps scrolling
-    // and selection; a stylus always belongs to the ink layer.
+    // and selection; a stylus with a drawing tool up keeps all but the corners.
     const host = () => document.querySelector<HTMLElement>(hostSelector);
     const holeEl = () => host()?.querySelector<HTMLElement>(".lc-page-mask-hole") ?? null;
     const pageRect = (): DOMRect | null => {
@@ -1543,10 +1554,9 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       hole.style.setProperty("--lc-turn-corner", `${turnCornerSize(rect)}px`);
       return rect.width > 8 && rect.height > 8 ? rect : null;
     };
-    const edgeAt = (x: number, y: number): "left" | "right" | null => {
+    const edgeAt = (event: PointerEvent): "left" | "right" | null => {
       const r = pageRect();
-      if (!r || x < r.left || x > r.right || y < r.top || y > r.bottom) return null;
-      return turnEdgeAt(r, x, y);
+      return r ? turnGripAt(r, event.clientX, event.clientY, event.pointerType, board()?.getActiveTool?.()) : null;
     };
     /*
      * Marks go on the page's hole, never the tab's host: a toggle there
@@ -1669,12 +1679,6 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       return dt > 0 ? (last.x - first.x) / dt : 0;
     };
 
-    /** A stylus turns pages while no drawing tool is up; with one, it writes. */
-    const penTurns = () => {
-      const tool = board()?.getActiveTool?.();
-      return tool === "hand" || tool === "selection";
-    };
-
     /*
      * A flick that starts on the body of the page, not at its edge.
      *
@@ -1745,13 +1749,14 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
       if (active) return;
       if (event.button !== 0 || !event.isPrimary) return;
       mouse = event.pointerType === "mouse";
-      if (event.pointerType === "pen" && !penTurns()) return; // with a pen up, the stylus writes
       if (!inHost(event.target)) return;
       // Zoomed into the page, the hand moves about it; turning waits for the
       // zoom back out to the whole page.
       if (!turnRef.current && boardRef.current?.zoomedIntoPage()) return;
       // Touch and mouse can grip the side strips as well as the corner peels.
-      const side = edgeAt(event.clientX, event.clientY);
+      const side = edgeAt(event);
+      // Away from a corner peel, a stylus with a drawing tool up is writing.
+      if (!side && penWrites(event.pointerType, board()?.getActiveTool?.())) return;
       const playing = turnRef.current;
       if (playing) {
         const r = playing.rect;
@@ -1910,10 +1915,16 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
         follow(event);
         return;
       }
-      if (!active && event.pointerType === "mouse" && event.buttons === 0) {
-        mouse = true;
-        setHover(boardRef.current?.zoomedIntoPage() ? null : edgeAt(event.clientX, event.clientY));
+      // A hovering stylus is shown what it can take hold of, as a mouse is.
+      if (!active && (event.pointerType === "mouse" || event.pointerType === "pen") && event.buttons === 0) {
+        if (event.pointerType === "mouse") mouse = true;
+        setHover(boardRef.current?.zoomedIntoPage() ? null : edgeAt(event));
       }
+    };
+
+    // A stylus lifted out of hover range leaves no edge lit behind it.
+    const onOut = (event: PointerEvent) => {
+      if (!active && event.pointerType === "pen" && !event.relatedTarget) setHover(null);
     };
 
     const onUp = (event: PointerEvent) => {
@@ -2014,6 +2025,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
 
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerout", onOut, true);
     window.addEventListener("pointerup", onUp, true);
     window.addEventListener("pointercancel", onUp, true);
     window.addEventListener("click", swallowClick, true);
@@ -2021,6 +2033,7 @@ export function PageTurn({ boardRef, filmScope, hostSelector, lockActive, turnEn
     return () => {
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerout", onOut, true);
       window.removeEventListener("pointerup", onUp, true);
       window.removeEventListener("pointercancel", onUp, true);
       window.removeEventListener("click", swallowClick, true);

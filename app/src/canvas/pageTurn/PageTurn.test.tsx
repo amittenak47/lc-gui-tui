@@ -275,11 +275,11 @@ it("leaves an up-and-down drag to the board", () => {
   expect(board.captureSceneFrame).not.toHaveBeenCalled();
 });
 
-it("never turns under the stylus with a pen up, nor with turning off", () => {
+it("never turns under the stylus with a pen up away from a corner, nor with turning off", () => {
   board.getActiveTool.mockReturnValue("freedraw");
   mount();
-  pointer("pointerdown", 380, 580, "pen");
-  pointer("pointermove", 100, 585, "pen");
+  pointer("pointerdown", 390, 300, "pen");
+  pointer("pointermove", 100, 305, "pen");
   expect(board.captureSceneFrame).not.toHaveBeenCalled();
   mount(false);
   pointer("pointerdown", 380, 580);
@@ -884,6 +884,102 @@ it("turns with a stylus while no pen is up, and leaves it to write with one", as
   pointer("pointerup", 100, 300, "pen");
   for (let i = 0; i < 4; i += 1) await settle();
   expect(board.jumpToPageFrame).toHaveBeenCalledTimes(1);
+});
+
+it.each(["freedraw", "highlighter", "eraser", "rectangle"])("lets the stylus peel a corner with %s up", async (tool) => {
+  board.getActiveTool.mockReturnValue(tool);
+  mount();
+  const boardDown = vi.fn();
+  host.addEventListener("pointerdown", boardDown);
+  pointer("pointerdown", 380, 580, "pen");
+  expect(boardDown).not.toHaveBeenCalled(); // the corner is the turn's, not the ink's
+  pointer("pointermove", 340, 585, "pen");
+  pointer("pointermove", 240, 585, "pen");
+  await settle();
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
+  pointer("pointerup", 240, 585, "pen");
+  await settle();
+  expect(board.jumpToPageFrame).toHaveBeenCalledWith({ ...FRAMES[2], minY: FRAMES[2].minY });
+});
+
+it("leaves the side strip outside the corner and a flick on the body to a stylus writing", async () => {
+  board.getActiveTool.mockReturnValue("freedraw");
+  mount();
+  const boardDown = vi.fn();
+  host.addEventListener("pointerdown", boardDown);
+  // In the right strip, well clear of either corner: a note in the margin.
+  pointer("pointerdown", 390, 300, "pen", 1000);
+  pointer("pointermove", 300, 302, "pen", 1030);
+  pointer("pointermove", 100, 304, "pen", 1060);
+  pointer("pointerup", 100, 304, "pen", 1070);
+  // A quick sideways stroke from the body, which a finger would turn with.
+  pointer("pointerdown", 220, 300, "pen", 3000);
+  pointer("pointermove", 180, 302, "pen", 3030);
+  pointer("pointermove", 120, 304, "pen", 3060);
+  pointer("pointerup", 120, 304, "pen", 3070);
+  for (let i = 0; i < 4; i += 1) await settle();
+  expect(boardDown).toHaveBeenCalledTimes(2);
+  expect(board.captureSceneFrame).not.toHaveBeenCalled();
+  expect(board.jumpToPageFrame).not.toHaveBeenCalled();
+});
+
+it("keeps the stylus turning from the strip and the body with the hand up", async () => {
+  board.getActiveTool.mockReturnValue("hand");
+  mount();
+  pointer("pointerdown", 220, 300, "pen", 1000);
+  pointer("pointermove", 180, 302, "pen", 1030);
+  pointer("pointermove", 120, 304, "pen", 1060);
+  pointer("pointerup", 120, 304, "pen", 1070);
+  for (let i = 0; i < 4; i += 1) await settle();
+  expect(board.jumpToPageFrame).toHaveBeenCalledWith(expect.objectContaining({ pageId: 3 }));
+});
+
+it.each([
+  ["freedraw", 395, 300, true],
+  ["freedraw", 390, 590, false],
+  ["hand", 395, 300, false],
+] as const)("with %s up, a stylus at (%i, %i) on the facing page takes it: %s", (tool, x, y, takes) => {
+  board.getActiveTool.mockReturnValue(tool);
+  const hole = document.createElement("div");
+  hole.className = "lc-page-mask-hole";
+  hole.getBoundingClientRect = host.getBoundingClientRect;
+  const facing = document.createElement("div");
+  facing.className = "lc-page-mask-facing";
+  facing.getBoundingClientRect = () => ({ left: 200, top: 0, width: 200, height: 600, right: 400, bottom: 600, x: 200, y: 0, toJSON() {} });
+  hole.append(facing);
+  const mask = document.createElement("div");
+  mask.className = "lc-page-mask";
+  mask.append(hole);
+  const ref = { current: board as unknown as BoardHandle };
+  act(() => root.render(
+    <PageTurn boardRef={ref} filmScope="t1" hostSelector='[data-lc-tab="t1"]' lockActive turnEnabled spread paged={false} fit={null} />,
+  ));
+  host.append(mask);
+  board.setPageLock.mockClear();
+  pointer("pointerdown", x, y, "pen");
+  if (takes) expect(board.setPageLock).toHaveBeenCalledWith(FRAMES[0]);
+  else expect(board.setPageLock).not.toHaveBeenCalledWith(FRAMES[0]);
+});
+
+it("shows a hovering stylus the edge it can take hold of", () => {
+  const hole = () => host.querySelector<HTMLElement>(".lc-page-mask-hole")!;
+  const hover = (x: number, y: number, pointerType: string) => pointer("pointermove", x, y, pointerType);
+  mount();
+  hover(390, 300, "mouse");
+  expect(hole().dataset.turnHover).toBe("right");
+  hover(200, 300, "pen");
+  expect(hole().dataset.turnHover).toBeUndefined();
+  hover(390, 300, "pen");
+  expect(hole().dataset.turnHover).toBe("right");
+  // With a pen up, the strip is for writing and only the corner lights.
+  board.getActiveTool.mockReturnValue("freedraw");
+  hover(390, 300, "pen");
+  expect(hole().dataset.turnHover).toBeUndefined();
+  hover(10, 590, "pen");
+  expect(hole().dataset.turnHover).toBe("left");
+  // Lifted out of range, nothing stays lit.
+  act(() => { host.dispatchEvent(new PointerEvent("pointerout", { pointerType: "pen", bubbles: true })); });
+  expect(hole().dataset.turnHover).toBeUndefined();
 });
 
 function manualFrames() {
