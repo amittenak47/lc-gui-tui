@@ -869,23 +869,32 @@ a,
 }
 
 /*
- * In a tab, Sync is a control, not a word: a small box like the header's
- * buttons, scaled to the tab, with the hub status dot inside it. The status
- * text beside it can cycle through its stages without Sync moving.
+ * In a tab, Sync is a control, not a word: a small box with the hub status
+ * dot inside it, so the status text beside it can cycle through its stages
+ * without Sync moving. Its colours come from the tab's own mode colour
+ * (`--lc-tab-mode`): a lighter wash than the tab, a stronger edge, and text
+ * pulled toward ink, so it reads on every mode tint and theme. The selector
+ * outranks `.lc-mobile .lc-header button`, which would make it 26px tall.
  */
-.lc-header .lc-doc-index-sync {
+.lc-header .lc-doc-index-chip-row > button.lc-doc-index-sync {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 20px;
-  min-height: 20px;
-  padding: 0 8px;
-  border: 1px solid color-mix(in srgb, var(--chrome-edge) 45%, transparent);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--ink);
-  font-size: 11px;
+  gap: 3px;
+  height: 16px;
+  min-height: 16px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--lc-tab-mode, var(--accent)) 55%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--lc-tab-mode, var(--accent)) 8%, var(--bg));
+  color: color-mix(in srgb, var(--lc-tab-mode, var(--accent)) 45%, var(--ink));
+  font-size: 10.5px;
   line-height: 1;
+}
+
+.lc-header .lc-doc-index-chip-row > button.lc-doc-index-sync:hover,
+.lc-header .lc-doc-index-chip-row > button.lc-doc-index-sync:focus-visible {
+  background: color-mix(in srgb, var(--lc-tab-mode, var(--accent)) 16%, var(--bg));
+  color: var(--ink);
 }
 
 .lc-header .lc-tab-close {
