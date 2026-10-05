@@ -2153,7 +2153,7 @@ export function SettingsModal({
                   disabled={palettePrefs.tags.length < 2}
                   className={palettePrefs.matchAll ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
                   onClick={() => setPalettePrefs(prefs => ({ ...prefs, matchAll: !prefs.matchAll }))}>
-                  <strong>Match all tags</strong><span className="lc-muted">Use palettes with every selected tag; an empty result uses the pool.</span>
+                  <strong>Match every style</strong><span className="lc-muted">Only palettes that have all the selected styles. If none do, any selected style.</span>
                 </button>
                 <button type="button" role="switch" aria-checked={palettePrefs.mixColours}
                   className={palettePrefs.mixColours ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}

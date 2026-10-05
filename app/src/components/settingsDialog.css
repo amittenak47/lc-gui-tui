@@ -29,11 +29,18 @@
 .lc-settings-dialog .lc-setting-row:first-child { padding-top: 0; }
 .lc-settings-dialog .lc-setting-row:last-child { border-bottom: 0; padding-bottom: 0; }
 .lc-settings-dialog .lc-setting-row :is(.lc-settings-hint, .lc-muted) { margin: 0; }
-.lc-settings-dialog .lc-settings-hint { font-size: 12px; line-height: 1.45; }
+/* --hint is under 4.5:1 on most dialog backgrounds; --muted clears it in every theme. */
+.lc-settings-dialog .lc-settings-hint { font-size: 12px; line-height: 1.45; color: var(--muted); }
 .lc-settings-choice-block { display: flex; flex-direction: column; gap: 5px; }
-.lc-settings-dialog .lc-settings-choice.is-segmented { display: flex; flex-wrap: nowrap; gap: 0; width: fit-content; max-width: 100%; border: 1px solid var(--lc-dialog-line); }
-.lc-settings-dialog .is-segmented .lc-settings-choice-option { flex: 1; min-width: 0; padding: 8px 12px; border: 0; border-radius: 0; text-align: center; }
-.lc-settings-choice-caption { font-size: 12px; line-height: 1.4; }
+.lc-settings-dialog .lc-settings-choice.is-segmented { display: flex; flex-direction: row; flex-wrap: nowrap; gap: 0; width: fit-content; max-width: 100%; border: 1px solid var(--lc-dialog-line); }
+.lc-settings-dialog .is-segmented .lc-settings-choice-option { flex: 1 0 auto; min-width: 0; padding: 8px 12px; border: 0; border-radius: 0; text-align: center; white-space: nowrap; }
+.lc-settings-dialog :is(.is-segmented, .is-pills, .is-palette-tags) .lc-settings-choice-option { flex-direction: row; align-items: center; justify-content: center; gap: 6px; background: transparent; }
+.lc-settings-dialog :is(.is-pills, .is-palette-tags) .lc-settings-choice-option:hover:not(:disabled, .is-active, [aria-checked="true"], [aria-pressed="true"]) { border-color: var(--border, rgb(127 127 127 / 25%)); }
+.lc-settings-dialog :is(.is-segmented, .is-pills, .is-palette-tags) .lc-settings-choice-option:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.lc-settings-dialog :is(.is-segmented, .is-pills, .is-palette-tags) .lc-settings-choice-option:is(.is-active, [aria-checked="true"], [aria-pressed="true"]) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.lc-settings-dialog .is-segmented .lc-settings-choice-option:is(.is-active, [aria-checked="true"]) { box-shadow: inset 0 0 0 2px var(--accent); }
+.lc-settings-dialog :is(.is-segmented, .is-pills, .is-palette-tags) .lc-settings-choice-option:is(.is-active, [aria-checked="true"], [aria-pressed="true"])::before { content: "✓"; color: var(--accent); font-weight: 700; }
+.lc-settings-dialog .is-palette-tags .lc-settings-choice-option strong { width: auto; }
 .lc-settings-dialog .lc-settings-choice.is-radio-list { display: flex; flex-direction: column; gap: 3px; }
 .lc-settings-dialog .is-radio-list .lc-settings-choice-option { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 8px 32px; border: 0; text-align: left; background: transparent; }
 .lc-settings-dialog .is-radio-list .lc-settings-choice-option::before { content: ""; position: absolute; top: 11px; left: 9px; width: 12px; height: 12px; border: 1px solid var(--muted); border-radius: 50%; }

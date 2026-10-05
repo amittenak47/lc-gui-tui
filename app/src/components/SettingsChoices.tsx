@@ -27,24 +27,18 @@ export function SettingsChoices({ children, className = "", ...props }: HTMLAttr
     </div>;
   }
   const radio = props.role === "radiogroup";
-  const segmented = radio && choices.length === 2;
+  const described = choices.some(choice => Children.toArray(choice.props.children).some(child =>
+    isValidElement<{ className?: string }>(child) && child.props.className?.includes("lc-muted") && label(child) !== ""));
+  // A few short answers read as one control; a sentence under each needs a list.
+  const segmented = radio && choices.length >= 2 && choices.length <= 4 && !described;
   const pills = radio && !segmented && className.includes("compact");
   const switches = choices.some(choice => choice.props.role === "switch");
   const presentation = radio ? segmented ? "is-segmented" : pills ? "is-pills" : "is-radio-list" : switches ? "is-switch-list" : "is-palette-tags";
   const selected = choices.findIndex(choice => choice.props["aria-checked"] === true);
   const focusable = selected >= 0 ? selected : choices.findIndex(choice => !choice.props.disabled);
-  let caption: ReactNode = null;
-  const rendered = choices.map((choice, index) => {
-    if (!radio) return choice;
-    const contents = Children.toArray(choice.props.children);
-    const description = contents.find(child => isValidElement<{ className?: string }>(child) && child.props.className?.includes("lc-muted"));
-    const checked = choice.props["aria-checked"] === true;
-    if (segmented && checked) caption = description;
-    return cloneElement(choice, {
-      tabIndex: index === focusable ? 0 : -1,
-      ...(segmented ? { children: contents.filter(child => child !== description) } : {}),
-    });
-  });
+  const rendered = radio
+    ? choices.map((choice, index) => cloneElement(choice, { tabIndex: index === focusable ? 0 : -1 }))
+    : choices;
   return <div className="lc-settings-choice-block">
     <div {...props} className={`${className} ${presentation}`} onKeyDown={event => {
       props.onKeyDown?.(event);
@@ -56,6 +50,5 @@ export function SettingsChoices({ children, className = "", ...props }: HTMLAttr
         : (current + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + buttons.length) % buttons.length;
       buttons[index]?.focus(); buttons[index]?.click();
     }}>{rendered}</div>
-    {caption && <div className="lc-settings-choice-caption">{caption}</div>}
   </div>;
 }
