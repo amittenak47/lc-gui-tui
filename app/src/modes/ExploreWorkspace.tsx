@@ -185,6 +185,8 @@ export function ExploreWorkspace({
   /** So the seeding effect can repaint without depending on the painter. */
   const paintRef = useRef<() => void>(() => {});
   const pinnedKeyRef = useRef<string | null>(null);
+  /** The drift's clock, kept across a pause so it resumes where it left off. */
+  const driftTimeRef = useRef(0);
   const skipNodeClickRef = useRef(false);
   const dragNodeRef = useRef<{
     key: string;
@@ -350,9 +352,11 @@ export function ExploreWorkspace({
    * The drift loop.
    *
    * Stops entirely for reduced motion, after one settle, because a page that
-   * never stops moving is exactly what that setting is asking about.
+   * never stops moving is exactly what that setting is asking about. Parked
+   * behind another tab it stays mounted, and nothing it moves is seen.
    */
   useEffect(() => {
+    if (!showing) return;
     if (prefersReducedMotion()) {
       const box = boxRef.current;
       settle(
@@ -377,14 +381,13 @@ export function ExploreWorkspace({
     }
     let frame = 0;
     let last = performance.now();
-    let elapsed = 0;
     let sinceLabels = 0;
     const tick = (now: number) => {
       // Clamp, or a backgrounded tab returns with a multi-second step and
       // throws every node into a wall.
       const dt = Math.min((now - last) / 1000, 1 / 20);
       last = now;
-      elapsed += dt;
+      const elapsed = (driftTimeRef.current += dt);
       sinceLabels += dt;
       const box = boxRef.current;
       const centres = clusterCentres(bodiesRef.current.map((body) => body.node.type));
@@ -421,7 +424,7 @@ export function ExploreWorkspace({
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [clustered, paint]);
+  }, [clustered, paint, showing]);
 
   const degree = useMemo(() => {
     const out = new Map<string, number>();
