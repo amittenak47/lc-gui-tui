@@ -1,4 +1,4 @@
-.lc-settings-modal.lc-settings-dialog { width: min(760px, 100%); max-height: min(90dvh, 950px); }
+.lc-settings-modal.lc-settings-dialog { width: min(760px, 100%); height: min(90dvh, 950px); max-height: none; }
 .lc-settings-dialog .lc-dialog-context { padding-bottom: 12px; }
 .lc-settings-command { display: flex; align-items: center; gap: 10px; padding: 0 12px; min-height: 42px; border: 2px solid var(--lc-dialog-line); background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .lc-settings-command svg { flex: 0 0 18px; color: var(--muted); }
@@ -8,7 +8,7 @@
 .lc-settings-dialog .lc-settings-tab { color: var(--muted); display: inline-flex; align-items: center; gap: 7px; }
 .lc-settings-dialog .lc-settings-tab.is-active { color: var(--accent); }
 .lc-settings-dialog .lc-settings-tab svg { width: 16px; height: 16px; }
-.lc-settings-dialog .lc-dialog-body { gap: 10px; }
+.lc-settings-dialog .lc-dialog-body { gap: 10px; scrollbar-gutter: stable; }
 .lc-settings-dialog .lc-settings-fields { gap: 10px; }
 .lc-settings-dialog .lc-settings-fold { border: 2px solid var(--lc-dialog-line); border-radius: var(--lc-r-block); background: transparent; }
 .lc-settings-dialog .lc-settings-fold-summary { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 54px; padding: 10px 12px; }
