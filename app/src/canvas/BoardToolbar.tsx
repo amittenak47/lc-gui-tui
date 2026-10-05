@@ -168,6 +168,13 @@ export interface BoardToolbarProps {
    */
   highlighting?: boolean;
   onToggleHighlight?: () => void;
+  /**
+   * Link two things on the page. Present only where linking works (a
+   * document or code in annotate mode); it then shows in the Shapes flyout,
+   * next to Arrow, since a link is drawn like one.
+   */
+  linking?: boolean;
+  onToggleLink?: (() => void) | null;
   themeId: string;
   inkColor: string;
   onInk: (color: string) => void;
@@ -268,6 +275,8 @@ export function BoardToolbar({
   onPick,
   highlighting: _highlighting = false,
   onToggleHighlight: _onToggleHighlight,
+  linking = false,
+  onToggleLink,
   themeId,
   inkPalette,
   onEditInkColor,
@@ -823,6 +832,8 @@ export function BoardToolbar({
   const modifierTitle = configuring?.label ?? "";
 
   const pickTool = (tool: ToolName) => {
+    // Linking holds the pointer over the page; any other tool ends it.
+    if (linking) onToggleLink?.();
     if (shapesOpen) onToggleShapes();
     if (captureMenuOpen) onToggleCaptureMenu();
     setShapeMenuOpen(false);
@@ -1147,6 +1158,23 @@ export function BoardToolbar({
                     {label}
                   </button>
                 ))}
+                {onToggleLink && (
+                  <button
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={linking}
+                    className={linking ? "is-active" : undefined}
+                    onClick={() => {
+                      setShapeMenuOpen(false);
+                      onToggleLink();
+                    }}
+                  >
+                    <span className="lc-shape-flyout-glyph" aria-hidden>
+                      ⤳
+                    </span>
+                    {linking ? "Stop linking" : "Link"}
+                  </button>
+                )}
                 <button
                   type="button"
                   role="menuitem"

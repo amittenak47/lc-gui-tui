@@ -10794,33 +10794,7 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
               */}
               {annotateToggle && (chromeMode === "visible" || leftChromeOpen || chromeTraySleeps) && (
                 <div className="lc-map-chrome-row">
-                  {/*
-                    Link sits above the scroll/annotate toggle. The column is
-                    bottom-aligned, so the toggle keeps the slot it has alone.
-                  */}
-                  <AnimatePresence>
-                  {linkToggle && annotateCode && (
-                    <motion.button
-                      key="link-toggle"
-                      initial={{ opacity: 0, height: 0, scale: .85 }}
-                      animate={{ opacity: 1, height: 44, scale: 1 }}
-                      exit={{ opacity: 0, height: 0, scale: .85 }}
-                      transition={{ duration: reducedChromeMotion ? 0 : .18 }}
-                      style={{ minHeight: 0, overflow: "hidden" }}
-                      type="button"
-                      className={
-                        linking
-                          ? "lc-lined-toggle lc-tip-target is-active"
-                          : "lc-lined-toggle lc-tip-target"
-                      }
-                      aria-pressed={linking}
-                      aria-label={linking ? "Stop linking" : "Link two things on the page"}
-                      onClick={() => onToggleLink?.()}
-                    >
-                      <LinkToolIcon on={linking} />
-                    </motion.button>
-                  )}
-                  </AnimatePresence>
+{/* Link lives in the pen toolbar's Shapes flyout, so the toggle stands alone. */}
                   <motion.button
                     whileTap={reducedChromeMotion ? undefined : { scale: .92 }}
                     type="button"
@@ -10966,6 +10940,8 @@ export const Board = forwardRef<BoardHandle, BoardProps>(function Board(
                 }}
               >
               <BoardToolbar
+                linking={linking}
+                onToggleLink={linkToggle && annotateCode ? onToggleLink : undefined}
                 highlighting={highlighting}
                 onToggleHighlight={
                   selectableContent ? () => setHighlighting((on) => !on) : undefined
@@ -11738,27 +11714,6 @@ function SpreadTwoUpIcon() {
 /**
  * A page with a nib on it — the toolbar toggle, same 24-grid as the eye.
  */
-/** Two links of a chain — the gesture, not a URL. */
-function LinkToolIcon({ on = false }: { on?: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      aria-hidden
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M10 13.5a3.5 3.5 0 0 0 5 0l3-3a3.5 3.5 0 0 0-5-5l-1.4 1.4" />
-      <path d="M14 10.5a3.5 3.5 0 0 0-5 0l-3 3a3.5 3.5 0 0 0 5 5l1.4-1.4" />
-      {on && <circle cx="12" cy="12" r="1.2" fill="currentColor" />}
-    </svg>
-  );
-}
-
 function AnnotateIcon({ on = false }: { on?: boolean }) {
   return (
     <svg

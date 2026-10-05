@@ -71,3 +71,48 @@ it("completes a reduced-motion exit after the presence commit", async () => {
   expect(animations).toHaveLength(0);
   expect(toolbar()).toBeNull();
 });
+
+const pen = async (extra: Partial<BoardToolbarProps>) => {
+  await act(async () => root.render(<BoardToolbar {...props} markdown={false} {...extra} />));
+};
+const openShapes = async () => {
+  const hex = [...host.querySelectorAll("button")].find(b => b.textContent?.includes("⬡"));
+  expect(hex).toBeTruthy();
+  await act(async () => hex!.click());
+};
+const linkItem = () =>
+  [...host.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]')].find(b => /Link|Stop linking/.test(b.textContent ?? ""));
+
+it("offers Link in the Shapes flyout only where linking works", async () => {
+  await pen({});
+  await openShapes();
+  expect(host.querySelector('[aria-label="Shapes"]')).not.toBeNull();
+  expect(linkItem()).toBeUndefined();
+
+  // Fresh mount: the flyout is still open from the first render, and a tap
+  // on the hex would close it.
+  act(() => root.unmount());
+  root = createRoot(host);
+  const onToggleLink = vi.fn();
+  await pen({ onToggleLink, linking: false });
+  await openShapes();
+  const item = linkItem()!;
+  expect(item.textContent).toContain("Link");
+  expect(item.getAttribute("aria-checked")).toBe("false");
+  await act(async () => item.click());
+  expect(onToggleLink).toHaveBeenCalledTimes(1);
+});
+
+it("shows Link as on while linking, and any other tool ends it", async () => {
+  const onToggleLink = vi.fn();
+  const onPick = vi.fn();
+  await pen({ onToggleLink, linking: true, onPick });
+  await openShapes();
+  const item = linkItem()!;
+  expect(item.textContent).toContain("Stop linking");
+  expect(item.getAttribute("aria-checked")).toBe("true");
+  const arrow = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(b => b.textContent?.includes("Arrow"))!;
+  await act(async () => arrow.click());
+  expect(onToggleLink).toHaveBeenCalledTimes(1);
+  expect(onPick).toHaveBeenCalledWith("arrow");
+});
