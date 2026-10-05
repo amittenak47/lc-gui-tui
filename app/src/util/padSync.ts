@@ -1052,7 +1052,22 @@ async function flushPadSyncQueueNow(client: LcClient): Promise<void> {
         if (job.kind === "problem") {
           const parts = splitProblemPadId(job.padId);
           if (!parts) continue;
-          const ack = await client.tombstoneProblemPad(parts.dataset, parts.taskId, job.seq);
+          let ack = await client.tombstoneProblemPad(parts.dataset, parts.taskId, job.seq);
+          if (ack?.applied === false && typeof ack.seq === "number" && ack.seq > job.seq) {
+            // The hub holds a newer save of this board. Clearing an attempt is
+            // an explicit choice, so it still wins with the hub's own seq, unless
+            // this device has reopened the problem since: then the newer board
+            // is that new attempt. A refused delete never succeeds later, so it
+            // is dropped rather than retried on every flush.
+            const reopened = (await getProblemBoard(job.padId)) != null || memoryQueue.some(
+              (entry) => entry.id !== job.id && padPayloadMatches(entry, "problem", job.padId),
+            );
+            if (!reopened) ack = await client.tombstoneProblemPad(parts.dataset, parts.taskId, ack.seq);
+            if (reopened || ack?.applied === false) {
+              await dropJob(job.id);
+              continue;
+            }
+          }
           if (ack?.applied !== true) continue;
         } else {
           const ack =

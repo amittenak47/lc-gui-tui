@@ -151,7 +151,7 @@ describe("offline hub sync", () => {
     expect([...state.persisted.values()]).toMatchObject([{ op: "deletePad", padId: "d/1" }]);
   });
 
-  it("retains a rejected tombstone without deleting a newly opened local board", async () => {
+  it("drops a refused tombstone without deleting a newly opened local board", async () => {
     const api = client();
     state.getProblem.mockResolvedValue(problem);
     await tombstonePad(api, "problem", "d/1", 1);
@@ -159,8 +159,23 @@ describe("offline hub sync", () => {
     api.tombstoneProblemPad = vi.fn(async () => ({ applied: false, seq: 2 }));
     status("online");
     await flushPadSyncQueue(api);
-    expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "deletePad", seq: 1 }]);
+    // The reopened attempt is the newer board: no forced delete, no endless retry.
+    expect(api.tombstoneProblemPad).toHaveBeenCalledTimes(1);
+    expect(peekPadSyncQueueForTests()).toEqual([]);
     expect(state.deleteProblem).not.toHaveBeenCalled();
+  });
+
+  it("clears a board another device saved since this one last synced", async () => {
+    const api = client();
+    await tombstonePad(api, "problem", "d/1", 1);
+    state.getProblem.mockResolvedValue(null);
+    api.tombstoneProblemPad = vi.fn(async (_dataset: string, _task: string, seq: number) =>
+      seq >= 3 ? { applied: true, seq } : { applied: false, seq: 3 });
+    status("online");
+    await flushPadSyncQueue(api);
+    expect(api.tombstoneProblemPad).toHaveBeenNthCalledWith(1, "d", "1", 1);
+    expect(api.tombstoneProblemPad).toHaveBeenNthCalledWith(2, "d", "1", 3);
+    expect(peekPadSyncQueueForTests()).toEqual([]);
   });
 
   it("coalesces recovery and a direct tombstone when its response marks the hub online", async () => {
