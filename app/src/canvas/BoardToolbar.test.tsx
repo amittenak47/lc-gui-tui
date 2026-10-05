@@ -81,7 +81,7 @@ const openShapes = async () => {
   await act(async () => hex!.click());
 };
 const linkItem = () =>
-  [...host.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]')].find(b => /Link|Stop linking/.test(b.textContent ?? ""));
+  [...host.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]')].find(b => /Link/.test(b.textContent ?? ""));
 
 it("offers Link in the Shapes flyout only where linking works", async () => {
   await pen({});
@@ -109,7 +109,8 @@ it("shows Link as on while linking, and any other tool ends it", async () => {
   await pen({ onToggleLink, linking: true, onPick });
   await openShapes();
   const item = linkItem()!;
-  expect(item.textContent).toContain("Stop linking");
+  expect(item.textContent).toContain("Link");
+  expect(item.textContent).not.toContain("Stop");
   expect(item.getAttribute("aria-checked")).toBe("true");
   const arrow = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(b => b.textContent?.includes("Arrow"))!;
   await act(async () => arrow.click());

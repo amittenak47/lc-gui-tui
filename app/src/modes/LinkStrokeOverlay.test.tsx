@@ -17,10 +17,17 @@ let overlay: HTMLDivElement;
 let props: LinkStrokeOverlayProps;
 let reducedMotion: boolean;
 let suggest: (chips: LinkChip[]) => void;
+let frames: Map<number, FrameRequestCallback>;
+let frameId = 0;
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  // The preview runs once a frame. Frames queue here and are flushed after
+  // each move, so they never shift the fake clock the feedback timers use.
+  frames = new Map();
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => { const id = ++frameId; frames.set(id, cb); return id; });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
   reducedMotion = false;
   vi.stubGlobal("matchMedia", vi.fn(() => ({
     matches: reducedMotion, addEventListener: vi.fn(), removeEventListener: vi.fn(),
@@ -56,6 +63,7 @@ function pointer(type: string, x: number, y: number) {
   const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 });
   Object.defineProperty(event, "pointerId", { value: 1 });
   act(() => overlay.dispatchEvent(event));
+  if (type === "pointermove") act(() => { const due = [...frames.values()]; frames.clear(); for (const cb of due) cb(0); });
 }
 
 function stroke(path: StrokePoint[]) {
@@ -154,7 +162,8 @@ describe("LinkStrokeOverlay gesture feedback", () => {
     pointer("pointerup", 600, 100);
     advance(1000);
     expect(props.onCommit).not.toHaveBeenCalled();
-    expect(props.onNotice).toHaveBeenCalledWith("Circle two targets, then stroke between them.");
+    expect(host.querySelector(".lc-link-hint")!.textContent).toBe("Circle two targets, then stroke between them.");
+    expect(props.onNotice).not.toHaveBeenCalled();
     stroke([{ x: 100, y: 100 }, { x: 300, y: 100 }]);
     advance(750);
     expect(props.onCommit).toHaveBeenCalledTimes(1);
@@ -199,15 +208,17 @@ describe("LinkStrokeOverlay gesture feedback", () => {
     advance(1000);
     expect(pickIds()).toEqual(["first"]);
     expect(props.onCommit).not.toHaveBeenCalled();
-    expect(props.onNotice).toHaveBeenCalledWith("Start the connecting stroke on the circled target.");
+    expect(host.querySelector(".lc-link-hint")!.textContent).toBe("Start the connecting stroke on the circled target.");
+    expect(props.onNotice).not.toHaveBeenCalled();
   });
 
-  it("preserves snippet fallback when previewing and releasing on empty paper", () => {
+  it("keeps the snippet fallback on release, without a preview on empty paper", () => {
     mount();
     circle(100, 100);
     pointer("pointerdown", 100, 100);
     pointer("pointermove", 800, 100);
-    expect(overlay.classList.contains("is-ready")).toBe(true);
+    // Previewing blank paper would need page hit-testing on every move.
+    expect(overlay.classList.contains("is-ready")).toBe(false);
     pointer("pointerup", 800, 100);
     advance(750);
     expect(props.onCommit).toHaveBeenCalledTimes(1);

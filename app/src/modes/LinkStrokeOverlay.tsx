@@ -50,8 +50,12 @@ export interface LinkStrokeOverlayProps {
   onCommit: (originId: string, target: LinkChip, origin?: LinkChip) => void;
   /** Escape — leave the tool. Missed strokes stay armed. */
   onCancel: () => void;
-  /** Say why a press did not start a link. */
-  onNotice: (message: string) => void;
+  /**
+   * Formerly: say why a press did not start a link. Kept for callers; the
+   * reason now shows in the overlay's hint pill so failed strokes never
+   * stack notification cards.
+   */
+  onNotice?: (message: string) => void;
 }
 
 export { CHIP_HIT_RADIUS, MIN_LINK_SPAN, spanOf };
@@ -168,7 +172,6 @@ export function LinkStrokeOverlay({
   onResolve,
   onCommit,
   onCancel,
-  onNotice,
 }: LinkStrokeOverlayProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   /** A chip for a pick; a plain-text snippet is named by the words it circles. */
@@ -189,6 +192,16 @@ export function LinkStrokeOverlay({
   const drawingRef = useRef(false);
   const lockedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** One preview per frame: a pen sends far more moves than the screen shows. */
+  const frameRef = useRef<number | null>(null);
+  /** Why a stroke did not count, shown in the hint pill instead of stacking notices. */
+  const [hintNote, setHintNote] = useState<string | null>(null);
+  const noteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const note = (message: string) => {
+    if (noteTimerRef.current) clearTimeout(noteTimerRef.current);
+    setHintNote(message);
+    noteTimerRef.current = setTimeout(() => setHintNote(null), 2500);
+  };
   const suggestionGeneration = useRef(0);
   const onCommitRef = useRef(onCommit);
   onCommitRef.current = onCommit;
@@ -210,6 +223,8 @@ export function LinkStrokeOverlay({
   }, []);
 
   useEffect(() => () => {
+    if (frameRef.current != null) cancelAnimationFrame(frameRef.current);
+    if (noteTimerRef.current) clearTimeout(noteTimerRef.current);
     clearTimer();
     suggestionGeneration.current++;
   }, [clearTimer]);
@@ -291,6 +306,36 @@ export function LinkStrokeOverlay({
   };
 
   // The preview and release use exactly the same classification and hit rules.
+  /**
+   * The green "release now" preview, run at most once a frame while drawing.
+   *
+   * Geometry only, against the A/B boxes and the suggestion chips already on
+   * screen. The full `resolveConnector` (page hit-testing, text labels) runs
+   * once on release; running it per pointer move lagged the pen badly.
+   */
+  const previewConnector = (path: readonly StrokePoint[]): ConnectorPair | null => {
+    if (path.length < 2) return null;
+    const start = path[0]!;
+    const end = path[path.length - 1]!;
+    if (Math.hypot(end.x - start.x, end.y - start.y) < MIN_LINK_SPAN) return null;
+    if (picks.length >= 2) {
+      const a = picks[0]!;
+      const b = picks[1]!;
+      const startOnA = pointNearBox(start, chipBox(a));
+      const startOnB = pointNearBox(start, chipBox(b));
+      if (startOnA && pointNearBox(end, chipBox(b))) return { from: a, to: b, targetId: b.id };
+      if (startOnB && pointNearBox(end, chipBox(a))) return { from: a, to: b, targetId: a.id };
+      return null;
+    }
+    if (picks.length === 1) {
+      const origin = picks[0]!;
+      if (!pointNearBox(start, chipBox(origin), 52)) return null;
+      const landed = nearestChip(chips, end.x, end.y);
+      return landed && landed.id !== origin.id ? { from: origin, to: landed, targetId: landed.id } : null;
+    }
+    return null;
+  };
+
   const resolveConnector = (path: readonly StrokePoint[]): { pair: ConnectorPair | null; notice?: string } => {
     if (classifyStroke(path) !== "connector") return { pair: null };
     const start = path[0]!;
@@ -355,10 +400,10 @@ export function LinkStrokeOverlay({
   const displayPair = feedback?.pair ?? readyPair;
   const displayPicks = displayPair && (feedback?.pair || picks.length < 2)
     ? [displayPair.from, displayPair.to] : picks;
-  const hint = picks.length === 0 ? "Circle the first thing"
+  const hint = hintNote ?? (picks.length === 0 ? "Circle the first thing"
     : picks.length === 2 ? "Draw a line from A to B"
     : visibleChips.some((chip) => chip.kind === "suggestion")
-      ? "Circle the second thing — or draw to a suggestion" : "Circle the second thing";
+      ? "Circle the second thing — or draw to a suggestion" : "Circle the second thing");
   const midpoint = feedback?.kind === "confirm" ? pathMidpoint(points) : null;
 
   return (
@@ -382,7 +427,14 @@ export function LinkStrokeOverlay({
         const path = [...pathRef.current, { x: event.clientX, y: event.clientY }];
         pathRef.current = path;
         setPoints(path);
-        setReadyPair(resolveConnector(path).pair);
+        if (frameRef.current == null) {
+          frameRef.current = requestAnimationFrame(() => {
+            frameRef.current = null;
+            const next = previewConnector(pathRef.current);
+            setReadyPair((current) =>
+              current?.from.id === next?.from.id && current?.to.id === next?.to.id ? current : next);
+          });
+        }
       }}
       onPointerUp={(event) => {
         if (!drawingRef.current || lockedRef.current) return;
@@ -398,7 +450,7 @@ export function LinkStrokeOverlay({
           if (!box) return;
           const hit = pickLoopTarget(onResolve(box, hostRef.current), box);
           if (!hit) {
-            onNotice("Circle a mark, image, or drawing.");
+            note("Circle a mark, image, or drawing.");
             finishStroke(path, null);
             return;
           }
@@ -425,14 +477,14 @@ export function LinkStrokeOverlay({
             return;
           }
           if (picks.length === 0) {
-            onNotice("Circle a mark, image, or drawing — then stroke to connect.");
+            note("Circle a mark, image, or drawing — then stroke to connect.");
           }
           finishStroke(path, null);
           return;
         }
 
         const result = resolveConnector(path);
-        if (result.notice) onNotice(result.notice);
+        if (result.notice) note(result.notice);
         finishStroke(path, result.pair);
       }}
       onPointerCancel={() => {

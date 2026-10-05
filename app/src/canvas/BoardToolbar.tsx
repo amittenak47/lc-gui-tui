@@ -1172,7 +1172,7 @@ export function BoardToolbar({
                     <span className="lc-shape-flyout-glyph" aria-hidden>
                       ⤳
                     </span>
-                    {linking ? "Stop linking" : "Link"}
+                    Link
                   </button>
                 )}
                 <button
