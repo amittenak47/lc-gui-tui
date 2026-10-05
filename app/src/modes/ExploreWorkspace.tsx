@@ -406,6 +406,8 @@ export function ExploreWorkspace({
     let idle = false;
     let activeDt = 1 / 60;
     const pressed = new Set<number>();
+    const labelsOf = () => bodiesRef.current.map((body) => `${body.key}\u0000${body.node.title ?? ""}`).join("\u0001");
+    let labelsDrawn = labelsOf();
     const tick = (now: number) => {
       const gap = (now - last) / 1000;
       last = now;
@@ -443,10 +445,15 @@ export function ExploreWorkspace({
           setClusterReady(true);
         }
       }
-      // Edges follow node identity, not every frame. Captions wait on settle.
+      // Edges and captions follow node identity, not position, so React only
+      // hears about it when a body or its title changed.
       if (sinceLabels > 0.25) {
         sinceLabels = 0;
-        setLabelTick((value) => value + 1);
+        const labels = labelsOf();
+        if (labels !== labelsDrawn) {
+          labelsDrawn = labels;
+          setLabelTick((value) => value + 1);
+        }
       }
       const busy = pressed.size > 0 || pinnedKeyRef.current !== null || filterMotionRef.current !== null;
       let fastest = 0;
@@ -511,6 +518,9 @@ export function ExploreWorkspace({
       (edge) => present.has(nodeKey(edge.from)) && present.has(nodeKey(edge.to)),
     );
   }, [edges, labelTick, leaving]);
+
+  const leavingKeys = useMemo(() => new Set(leaving.map((body) => body.key)), [leaving]);
+  const edgeFading = (edge: Edge) => leavingKeys.has(nodeKey(edge.from)) || leavingKeys.has(nodeKey(edge.to));
 
   const neighboursOf = useCallback(
     (node: NodeRef): NodeSheetNeighbour[] =>
@@ -772,8 +782,7 @@ export function ExploreWorkspace({
                 {drawnEdges.map((edge) => {
                   const touched =
                     !selected || sameNode(edge.from, selected) || sameNode(edge.to, selected);
-                  const fading =
-                    leaving.some((body) => sameNode(body.node, edge.from) || sameNode(body.node, edge.to));
+                  const fading = edgeFading(edge);
                   return (
                     <path
                       key={edge.id}
@@ -791,8 +800,7 @@ export function ExploreWorkspace({
                 {drawnEdges.map((edge) => {
                   const touched =
                     !selected || sameNode(edge.from, selected) || sameNode(edge.to, selected);
-                  const fading =
-                    leaving.some((body) => sameNode(body.node, edge.from) || sameNode(body.node, edge.to));
+                  const fading = edgeFading(edge);
                   return (
                     <path
                       key={edge.id}

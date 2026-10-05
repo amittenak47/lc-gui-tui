@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { act } from "react";
+import { act, Profiler } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -67,6 +67,21 @@ it("runs no drift loop while parked behind another tab, and picks it up on retur
   expect(frames.size).toBe(0);
   render(true);
   expect(frames.size).toBe(1);
+});
+
+it("does not re-render while the nodes only drift", async () => {
+  const commits = vi.fn();
+  act(() => root.render(
+    <Profiler id="explore" onRender={commits}>
+      <ExploreWorkspace nodes={NODES} themeId="paper" onThemePick={() => {}} onOpen={() => {}}
+        onOpenInNewTab={() => {}} canOpenInNewTab={() => true} active showing />
+    </Profiler>,
+  ));
+  await act(async () => {});
+  const before = commits.mock.calls.length;
+  let at = performance.now();
+  for (let i = 0; i < 90; i++) frame((at += 16));
+  expect(commits.mock.calls.length).toBe(before);
 });
 
 /** jsdom has no PointerEvent; the loop only reads `pointerId`. */
