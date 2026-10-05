@@ -46,8 +46,8 @@ export interface LinkStrokeOverlayProps {
   onSuggest: (originId: string) => Promise<LinkChip[]>;
   /** Resolve what a loop covers (marks, images, drawings, snippet). */
   onResolve: (box: StrokeBox, overlay: HTMLElement | null) => LinkHit[];
-  /** Pointer-up landed on a target. */
-  onCommit: (originId: string, target: LinkChip) => void;
+  /** Pointer-up landed on a target. `origin` carries the first pick's label. */
+  onCommit: (originId: string, target: LinkChip, origin?: LinkChip) => void;
   /** Escape — leave the tool. Missed strokes stay armed. */
   onCancel: () => void;
   /** Say why a press did not start a link. */
@@ -89,6 +89,35 @@ export function markUnder(x: number, y: number, overlay: HTMLElement | null): st
   if (overlay) overlay.style.pointerEvents = previous;
   const mark = node?.closest?.("[data-lc-id]") as HTMLElement | null;
   return mark?.dataset.lcId ?? null;
+}
+
+/**
+ * The words a loop drew around, for naming a text snippet.
+ *
+ * The hit-test only knows a box, so a circled passage used to be called
+ * "selection" and the notice read `Linked "snippet:10:102" to "selection"`.
+ * Read the text nodes whose boxes sit mostly inside the loop instead.
+ */
+export function textUnder(box: StrokeBox, overlay: HTMLElement | null): string {
+  if (typeof document === "undefined") return "";
+  const words: string[] = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const range = document.createRange();
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (overlay?.contains(node) || !node.textContent?.trim()) continue;
+    range.selectNodeContents(node);
+    for (const rect of Array.from(range.getClientRects())) {
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      if (cx >= box.left && cx <= box.left + box.width && cy >= box.top && cy <= box.top + box.height) {
+        words.push(node.textContent.trim());
+        break;
+      }
+    }
+    if (words.join(" ").length > 60) break;
+  }
+  const text = words.join(" ").replace(/\s+/g, " ").trim();
+  return text.length > 40 ? `${text.slice(0, 39)}…` : text;
 }
 
 function chipBox(chip: LinkChip): StrokeBox {
@@ -142,6 +171,14 @@ export function LinkStrokeOverlay({
   onNotice,
 }: LinkStrokeOverlayProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  /** A chip for a pick; a plain-text snippet is named by the words it circles. */
+  const chipFor = (hit: LinkHit) => {
+    const chip = hitToChip(hit);
+    if (hit.kind === "snippet" && hit.label === "selection") {
+      chip.label = textUnder(hit, hostRef.current) || "a passage";
+    }
+    return chip;
+  };
   const [picks, setPicks] = useState<LinkChip[]>([]);
   const [points, setPoints] = useState<StrokePoint[]>([]);
   const [drawing, setDrawing] = useState(false);
@@ -224,7 +261,7 @@ export function LinkStrokeOverlay({
         suggestionGeneration.current++;
         setPicks([]);
         setChips([]);
-        onCommitRef.current(pair.from.id, pair.to);
+        onCommitRef.current(pair.from.id, pair.to, pair.from);
       }
     };
     timerRef.current = setTimeout(() => {
@@ -294,12 +331,12 @@ export function LinkStrokeOverlay({
       }
       const landed = nearestChip(chips, end.x, end.y) ?? (() => {
         const hit = nearestHit([...pickHits, ...suggestionHits], end);
-        return hit ? hitToChip(hit) : null;
+        return hit ? chipFor(hit) : null;
       })();
       const resolved = landed ?? (() => {
         const box = { left: end.x - 24, top: end.y - 24, width: 48, height: 48 };
         const hit = pickBestHit(onResolve(box, hostRef.current), box);
-        return hit && hit.id !== origin.id ? hitToChip(hit) : null;
+        return hit && hit.id !== origin.id ? chipFor(hit) : null;
       })();
       return resolved
         ? pairOf(origin, resolved)
@@ -309,7 +346,7 @@ export function LinkStrokeOverlay({
     const startHit = nearestHit(onResolve({ left: start.x - 20, top: start.y - 20, width: 40, height: 40 }, hostRef.current), start);
     const endHit = nearestHit(onResolve({ left: end.x - 20, top: end.y - 20, width: 40, height: 40 }, hostRef.current), end);
     if (startHit && endHit && startHit.id !== endHit.id) {
-      return pairOf(hitToChip(startHit), hitToChip(endHit));
+      return pairOf(chipFor(startHit), chipFor(endHit));
     }
     return { pair: null, notice: "Circle two targets, then stroke between them." };
   };
@@ -366,7 +403,7 @@ export function LinkStrokeOverlay({
             return;
           }
           resetStroke();
-          addPick(hitToChip(hit));
+          addPick(chipFor(hit));
           return;
         }
 

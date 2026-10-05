@@ -11786,9 +11786,11 @@ export const Workspace = memo(function Workspace({
           onResolve={resolveLinkHits}
           onNotice={setNotice}
           onCancel={() => setLinkMode(false)}
-          onCommit={(originId, target) => {
+          onCommit={(originId, target, origin) => {
             const here = hereNode;
             const mark = annotateFootnotesRef.current.find((entry) => entry.id === originId);
+            // A mark names itself by its excerpt; a circled passage or image by its pick's label.
+            const originLabel = mark?.excerpt?.slice(0, 40) ?? origin?.label ?? originId;
             /*
              * A suggestion is a passage, not a workspace — it has no node of
              * its own to point at, so the edge lands on this pad's own text
@@ -11798,12 +11800,12 @@ export const Workspace = memo(function Workspace({
              */
             void putEdge(
               makeEdge(
-                { ...here, title: mark?.excerpt?.slice(0, 40) ?? target.label ?? here.title },
+                { ...here, title: originLabel ?? here.title },
                 { ...here, title: target.label },
                 "ink",
               ),
             ).then(refreshHereEdges);
-            setNotice(`Linked “${mark?.excerpt?.slice(0, 40) ?? originId}” to “${target.label}”.`);
+            setNotice(`Linked “${originLabel}” to “${target.label}”.`);
             setLinkMode(false);
           }}
         />

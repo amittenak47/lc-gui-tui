@@ -9044,10 +9044,16 @@ body[data-lc-sash-drag="horizontal"] {
   cursor: crosshair;
 }
 
+/* "Release now" says what the hint would; show one at a time. */
+.lc-link-overlay.is-ready .lc-link-hint {
+  visibility: hidden;
+}
+
 .lc-link-hint,
 .lc-link-ready {
   position: absolute;
-  top: 16px;
+  /* The overlay spans the window; the header is drawn over its top edge. */
+  top: calc(var(--lc-header-height, 38px) + var(--lc-safe-top, 0px) + 12px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 93;

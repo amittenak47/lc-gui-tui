@@ -158,7 +158,7 @@ describe("LinkStrokeOverlay gesture feedback", () => {
     stroke([{ x: 100, y: 100 }, { x: 300, y: 100 }]);
     advance(750);
     expect(props.onCommit).toHaveBeenCalledTimes(1);
-    expect(props.onCommit).toHaveBeenCalledWith("first", expect.objectContaining({ id: "second" }));
+    expect(props.onCommit).toHaveBeenCalledWith("first", expect.objectContaining({ id: "second" }), expect.objectContaining({ id: "first" }));
   });
 
   it("turns the receiving A box green when connecting from B", () => {
@@ -171,7 +171,7 @@ describe("LinkStrokeOverlay gesture feedback", () => {
     pointer("pointerup", 100, 100);
     advance(750);
     expect(props.onCommit).toHaveBeenCalledTimes(1);
-    expect(props.onCommit).toHaveBeenCalledWith("first", expect.objectContaining({ id: "second" }));
+    expect(props.onCommit).toHaveBeenCalledWith("first", expect.objectContaining({ id: "second" }), expect.objectContaining({ id: "first" }));
   });
 
   it.each(["mark", "suggestion"] as const)("previews and commits a one-pick stroke to a %s chip", async (kind) => {
@@ -186,7 +186,7 @@ describe("LinkStrokeOverlay gesture feedback", () => {
     pointer("pointerup", 600, 100);
     advance(750);
     expect(props.onCommit).toHaveBeenCalledTimes(1);
-    expect(props.onCommit).toHaveBeenCalledWith("first", expect.objectContaining({ id: "chip", kind }));
+    expect(props.onCommit).toHaveBeenCalledWith("first", expect.objectContaining({ id: "chip", kind }), expect.objectContaining({ id: "first" }));
   });
 
   it("uses the existing one-pick origin restriction and notice for an invalid start", () => {
@@ -211,7 +211,7 @@ describe("LinkStrokeOverlay gesture feedback", () => {
     pointer("pointerup", 800, 100);
     advance(750);
     expect(props.onCommit).toHaveBeenCalledTimes(1);
-    expect(props.onCommit).toHaveBeenCalledWith("first", expect.objectContaining({ id: "snippet:776:76" }));
+    expect(props.onCommit).toHaveBeenCalledWith("first", expect.objectContaining({ id: "snippet:776:76" }), expect.objectContaining({ id: "first" }));
   });
 
   it("confirms at the path-length midpoint, fades, then commits exactly once while ignoring input", () => {
