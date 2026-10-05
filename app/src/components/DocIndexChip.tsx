@@ -315,7 +315,8 @@ export function DocIndexChip({
           restPad === "synced" ? "lc-doc-index-chip is-ok" : "lc-doc-index-chip is-offer"
         }
       >
-        <HubStatusDot />
+        {/* One status dot per tab: it lives in the Sync box when there is one. */}
+        {!syncBtn && <HubStatusDot />}
         {restPad === "synced" ? "synced" : "not synced"}
       </span>,
       syncBtn,
@@ -394,7 +395,7 @@ export function DocIndexChip({
           setOpen((current) => !current);
         }}
       >
-        {restPad && <HubStatusDot />}
+        {restPad && !syncBtn && <HubStatusDot />}
         {restPad === "synced"
           ? "synced"
           : restPad === "not-synced"

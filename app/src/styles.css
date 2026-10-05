@@ -868,6 +868,24 @@ a,
   cursor: default;
 }
 
+/*
+ * In a tab, Sync is a control, not a word: a small box like the header's
+ * buttons, scaled to the tab, with the hub status dot inside it. The status
+ * text beside it can cycle through its stages without Sync moving.
+ */
+.lc-header .lc-doc-index-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--chrome-edge);
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1;
+}
+
 .lc-header .lc-tab-close {
   flex-shrink: 0;
   width: 20px;

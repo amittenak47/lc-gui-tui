@@ -57,9 +57,13 @@ describe("desktop hub status dot", () => {
       <HubLibraryRefresh onRefresh={async () => 0} />
     </>));
     expect(host.querySelector(".lc-doc-index-chip")?.textContent).toBe("synced");
-    for (const selector of [".lc-doc-index-chip", ".lc-doc-index-sync", ".lc-hub-pull-command"]) {
+    for (const selector of [".lc-doc-index-sync", ".lc-hub-pull-command"]) {
       expect(host.querySelector(`${selector} [aria-label="Desktop hub offline"]`)).not.toBeNull();
     }
+    // One dot per tab: with a Sync button it lives there, not on the status text.
+    expect(host.querySelector('.lc-doc-index-chip [aria-label="Desktop hub offline"]')).toBeNull();
+    act(() => root.render(<DocIndexChip status="idle" meta={null} error={null} padSync="synced" />));
+    expect(host.querySelector('.lc-doc-index-chip [aria-label="Desktop hub offline"]')).not.toBeNull();
     shared.hub = null;
     act(() => root.render(<>
       <DocIndexChip status="idle" meta={null} error={null} padSync="synced" onSync={() => {}} />
