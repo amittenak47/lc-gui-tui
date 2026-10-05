@@ -918,9 +918,12 @@ export function BoardToolbar({
       ? [{ clipPath: folded, opacity: 0 }, { clipPath: open, opacity }]
       : [{ clipPath: open, opacity }, { clipPath: folded, opacity: 0 }];
     if (interruptedPose.current) frames[0] = interruptedPose.current;
+    // The exit is the entrance played backwards: the same length, and the
+    // mirrored curve. Reusing the ease-out made the exit fold most of the way
+    // in its first frames, which after the toggle-off render read as a vanish.
     const animation = node.animate(frames, {
-      duration: isPresent ? 280 : 180,
-      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+      duration: 280,
+      easing: isPresent ? "cubic-bezier(0.22, 1, 0.36, 1)" : "cubic-bezier(0.64, 0, 0.78, 0)",
       fill: isPresent ? "none" : "forwards",
     });
     animation.onfinish = () => { interruptedPose.current = null; if (!isPresent) safeToRemove?.(); };
