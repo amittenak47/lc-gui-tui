@@ -9797,15 +9797,16 @@ body[data-lc-sash-drag="horizontal"] {
   border-radius: 50%;
   position: relative;
   /*
-   * Lit from within: white-hot at the centre, the node's colour toward the
-   * edge, and a little light bleeding past the rim. Static on purpose — an
-   * animation on every node kept the compositor busy every frame.
+   * Rim-lit: a deeper shade of the node's colour at the centre, brightest at
+   * the rim, with a little light bleeding past it (the ring below). Static on
+   * purpose — an animation on every node kept the compositor busy every frame.
    */
   background: radial-gradient(
-    circle,
-    color-mix(in srgb, white 80%, var(--lc-node-tint, var(--accent))) 0%,
-    color-mix(in srgb, white 35%, var(--lc-node-tint, var(--accent))) 38%,
-    var(--lc-node-tint, var(--accent)) 72%,
+    circle closest-side,
+    color-mix(in srgb, var(--lc-node-tint, var(--accent)) 55%, black) 0%,
+    color-mix(in srgb, var(--lc-node-tint, var(--accent)) 80%, black) 40%,
+    var(--lc-node-tint, var(--accent)) 70%,
+    color-mix(in srgb, white 45%, var(--lc-node-tint, var(--accent))) 92%,
     color-mix(in srgb, var(--lc-node-tint, var(--accent)) 80%, transparent) 100%
   );
   transition:
@@ -9864,7 +9865,7 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 /*
- * The node you are on brightens from inside. One node at a time, so a live
+ * The node you are on pulses brighter at the rim. One node at a time, so a live
  * pulse costs nothing; every node pulsing at once is what dragged the frame
  * rate down.
  */
@@ -9873,7 +9874,13 @@ body[data-lc-sash-drag="horizontal"] {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, white 85%, transparent) 0%, transparent 70%);
+  /* Brightens the rim, matching the dot: the centre stays the darker part. */
+  background: radial-gradient(
+    circle closest-side,
+    transparent 55%,
+    color-mix(in srgb, white 85%, transparent) 88%,
+    transparent 100%
+  );
   opacity: 0;
   pointer-events: none;
 }
