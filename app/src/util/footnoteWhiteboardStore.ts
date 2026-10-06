@@ -6,15 +6,17 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
-import { deleteContent, deleteContentByPrefix, getContent, putContent } from "./contentStore";
+import { getContent, putContent } from "./contentStore";
 import type { DocFootnote, DocFootnoteWhiteboard } from "./docFootnotes";
 import { freshWhiteboardId } from "./docFootnotes";
 import {
   copyInkPages,
-  deleteInkPages,
-  deleteInkPagesByPrefix,
   footnoteWhiteboardDocKey,
+  clearInkRowsInTransaction,
+  clearInkPrefixInTransaction,
 } from "./inkPageStore";
+import { mutateLocalBook, listFallbackContentKeys } from "./localBookStore";
+import { STORE_CONTENT, STORE_INK_PAGES } from "./idb";
 
 export interface FootnoteWhiteboardContent {
   board: BoardBlob;
@@ -41,9 +43,10 @@ export async function putFootnoteWhiteboard(
   content: FootnoteWhiteboardContent,
 ): Promise<void> {
   await putContent(footnoteWhiteboardKey(docId, wbId), {
+    ...content,
     board: content.board,
     pageCount: Math.max(1, Math.floor(content.pageCount) || 1),
-  });
+  }, { kind: "annotate", id: docId });
 }
 
 /** Save the dependency before callers publish a footnote/chat pointer to it. */
@@ -87,14 +90,30 @@ export async function requireFootnoteWhiteboard(
 }
 
 export async function deleteFootnoteWhiteboard(docId: string, wbId: string): Promise<void> {
-  await deleteContent(footnoteWhiteboardKey(docId, wbId));
-  await deleteInkPages(footnoteWhiteboardDocKey(docId, wbId));
+  await mutateLocalBook({ kind: "annotate", id: docId }, {
+    contentKey: footnoteWhiteboardKey(docId, wbId), requireIdb: true, extraStores: [STORE_INK_PAGES],
+  }, ctx => {
+    const board = (ctx.content as FootnoteWhiteboardContent | null)?.board;
+    if (!ctx.tx && (board?.inkPages?.pageIds.length || board?.ink?.length || board?.inkC?.ops.length)) {
+      throw new Error("Handwriting could not be cleared safely; current work was kept.");
+    }
+    ctx.setContent(null);
+    if (ctx.tx) clearInkRowsInTransaction(ctx.tx, [footnoteWhiteboardDocKey(docId, wbId)], ctx.seq, Date.now());
+  });
 }
 
 /** Every board this annotation set owns, including orphans with no pointer. */
 export async function sweepFootnoteWhiteboards(docId: string): Promise<void> {
-  await deleteContentByPrefix(footnoteWhiteboardPrefix(docId));
-  await deleteInkPagesByPrefix(footnoteWhiteboardPrefix(docId));
+  const prefix = footnoteWhiteboardPrefix(docId);
+  await mutateLocalBook({ kind: "annotate", id: docId }, { requireIdb: true, extraStores: [STORE_INK_PAGES] }, ctx => {
+    if (!ctx.tx) return;
+    ctx.tx.objectStore(STORE_CONTENT).delete(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+    clearInkPrefixInTransaction(ctx.tx, prefix, ctx.seq, Date.now());
+    ctx.setState({ ...ctx.state, changeSeq: ctx.seq });
+  });
+  for (const key of listFallbackContentKeys().filter(key => key.startsWith(prefix))) {
+    await deleteFootnoteWhiteboard(docId, key.slice(prefix.length));
+  }
 }
 
 export function whiteboardIdsOn(footnotes: readonly DocFootnote[]): string[] {

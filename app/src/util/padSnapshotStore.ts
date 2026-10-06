@@ -8,11 +8,12 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
-import { run, STORE_SNAPSHOTS } from "./idb";
+import { run, STORE_SNAPSHOTS, withStore } from "./idb";
 import type { DocFootnote } from "./docFootnotes";
 import type { Edge } from "./noteLinks";
 import type { SnapshotInkPage } from "./padSnapshotPayload";
 import { parseArtifactSnapshotBundle, type ArtifactSnapshotBundle } from "./artifactSnapshot";
+import { newBookToken } from "./bookCoordinator";
 
 export type PadSnapshotKind = "annotate" | "whiteboard";
 export type PadSnapshotTier = "2h" | "24h" | "7d";
@@ -28,6 +29,8 @@ export const PAD_SNAPSHOT_TIERS: ReadonlyArray<{
 ];
 
 export interface PadSnapshot {
+  /** Stable identity for an additional recovered copy of a rolling tier. */
+  snapshotId?: string;
   artifactBundle?: ArtifactSnapshotBundle;
   kind: PadSnapshotKind;
   key: string;
@@ -63,17 +66,13 @@ export type PadSnapshotExtras = Pick<
 >;
 
 function boardWithoutInk(board: BoardBlob): BoardBlob {
-  return {
-    v: board.v,
-    elements: board.elements,
-    appState: board.appState,
-    ...(board.inkPages ? { inkPages: board.inkPages } : {}),
-    ...(board.files ? { files: board.files } : {}),
-    ...(board.inkPalettes ? { inkPalettes: board.inkPalettes } : {}),
-  };
+  // Inline legacy ink is not redundant until a complete conversion has been
+  // proved. Keep it and any unknown authored board fields in the backup.
+  return { ...board };
 }
 
 export interface PadSnapshotMeta {
+  snapshotId?: string;
   kind: PadSnapshotKind;
   key: string;
   tier: PadSnapshotTier;
@@ -81,8 +80,30 @@ export interface PadSnapshotMeta {
   name: string;
 }
 
-function recordKey(kind: PadSnapshotKind, key: string, tier: PadSnapshotTier): string {
+export function padSnapshotKey(kind: PadSnapshotKind, key: string, tier: PadSnapshotTier): string {
   return `${kind}:${key}:${tier}`;
+}
+const recordKey = padSnapshotKey;
+
+export function recoveredPadSnapshotKey(kind: PadSnapshotKind, key: string, tier: PadSnapshotTier,
+  sourceKind: string, sourceId: string): string {
+  return `recovered:${JSON.stringify([kind, key, tier, sourceKind, sourceId])}`;
+}
+
+async function snapshotRecords(): Promise<Array<{ id: string; row: PadSnapshot }>> {
+  const out: Array<{ id: string; row: PadSnapshot }> = [];
+  await withStore(STORE_SNAPSHOTS, "readonly", store => {
+    const request = store.openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      const row = cursor.value as PadSnapshot;
+      if (row && (row.kind === "annotate" || row.kind === "whiteboard") && typeof row.key === "string"
+        && PAD_SNAPSHOT_TIERS.some(tier => tier.id === row.tier)) out.push({ id: String(cursor.key), row });
+      cursor.continue();
+    };
+  });
+  return out;
 }
 
 /** True when this tier has never been written, or its window has elapsed. */
@@ -183,27 +204,31 @@ export async function listPadSnapshots(
   kind: PadSnapshotKind,
   key: string,
 ): Promise<PadSnapshotMeta[]> {
-  const out: PadSnapshotMeta[] = [];
-  for (const tier of PAD_SNAPSHOT_TIERS) {
-    const row = await getRecord(recordKey(kind, key, tier.id));
-    if (!row) continue;
-    out.push({
-      kind: row.kind,
-      key: row.key,
-      tier: row.tier,
-      writtenAt: row.writtenAt,
-      name: row.name,
-    });
-  }
-  return out;
+  const records = (await snapshotRecords()).filter(({ row }) => row.kind === kind && row.key === key);
+  return records.sort((a, b) => PAD_SNAPSHOT_TIERS.findIndex(tier => tier.id === a.row.tier)
+    - PAD_SNAPSHOT_TIERS.findIndex(tier => tier.id === b.row.tier)
+    || b.row.writtenAt - a.row.writtenAt || a.id.localeCompare(b.id))
+    .map(({ id, row }) => ({ kind: row.kind, key: row.key, tier: row.tier,
+      writtenAt: row.writtenAt, name: row.name, snapshotId: id }));
+}
+
+/** Includes retained backups whose live parent has been removed. */
+export async function listAllPadSnapshots(): Promise<PadSnapshotMeta[]> {
+  return (await snapshotRecords()).map(({ id, row }) => ({ kind: row.kind, key: row.key,
+    tier: row.tier, writtenAt: row.writtenAt, name: row.name, snapshotId: id }));
 }
 
 export async function getPadSnapshot(
   kind: PadSnapshotKind,
   key: string,
   tier: PadSnapshotTier,
+  snapshotId?: string,
 ): Promise<PadSnapshot | null> {
-  return getRecord(recordKey(kind, key, tier));
+  const id = snapshotId ?? recordKey(kind, key, tier);
+  const row = await getRecord(id);
+  // A supplied copy ID is never authority to read a different book/tier.
+  return row?.kind === kind && row.key === key && row.tier === tier
+    ? { ...row, ...(snapshotId ? { snapshotId: id } : {}) } : null;
 }
 
 /**
@@ -219,30 +244,38 @@ export async function renamePadSnapshots(
   fromKey: string,
   toKey: string,
 ): Promise<number> {
+  if (!fromKey || !toKey || fromKey === toKey) return 0;
   let moved = 0;
-  for (const tier of PAD_SNAPSHOT_TIERS) {
-    const row = await getRecord(recordKey(kind, fromKey, tier.id));
-    if (!row) continue;
-    const already = await getRecord(recordKey(kind, toKey, tier.id));
-    if (!already) {
-      try {
-        await run(STORE_SNAPSHOTS, "readwrite", (store) =>
-          store.put({ ...row, key: toKey }, recordKey(kind, toKey, tier.id)),
-        );
-        moved += 1;
-      } catch {
-        // Could not copy — leave the original so a later run can retry.
-        continue;
-      }
-    }
-    try {
-      await run(STORE_SNAPSHOTS, "readwrite", (store) =>
-        store.delete(recordKey(kind, fromKey, tier.id)),
-      );
-    } catch {
-      /* ignore */
-    }
-  }
+  // Resolve source/destination collisions in one transaction. A destination
+  // tier retains its existing copy and receives the source as an extra backup.
+  await withStore(STORE_SNAPSHOTS, "readwrite", store => {
+    const request = store.openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      const row = cursor.value as PadSnapshot;
+      if (!row || row.kind !== kind || row.key !== fromKey) { cursor.continue(); return; }
+      const sourceId = String(cursor.key);
+      const targetId = sourceId === recordKey(kind, fromKey, row.tier)
+        ? recordKey(kind, toKey, row.tier)
+        : recoveredPadSnapshotKey(kind, toKey, row.tier, "lc.docs", `rename:${sourceId}`);
+      const target = store.get(targetId);
+      target.onsuccess = () => {
+        const candidateId = target.result === undefined ? targetId
+          : recoveredPadSnapshotKey(kind, toKey, row.tier, "lc.docs", `rename:${sourceId}`);
+        const candidate = store.get(candidateId);
+        candidate.onsuccess = () => {
+          const id = candidate.result === undefined ? candidateId
+            : recoveredPadSnapshotKey(kind, toKey, row.tier, "lc.docs", `rename:${sourceId}:${newBookToken()}`);
+          store.put({ ...row, key: toKey, ...(id === recordKey(kind, toKey, row.tier)
+            ? { snapshotId: undefined } : { snapshotId: id }) }, id);
+          cursor.delete();
+          moved++;
+          cursor.continue();
+        };
+      };
+    };
+  });
   return moved;
 }
 
@@ -250,9 +283,11 @@ export async function deletePadSnapshot(
   kind: PadSnapshotKind,
   key: string,
   tier: PadSnapshotTier,
+  snapshotId?: string,
 ): Promise<void> {
   try {
-    await run(STORE_SNAPSHOTS, "readwrite", (store) => store.delete(recordKey(kind, key, tier)));
+    const row = await getPadSnapshot(kind, key, tier, snapshotId);
+    if (row) await run(STORE_SNAPSHOTS, "readwrite", (store) => store.delete(snapshotId ?? recordKey(kind, key, tier)));
   } catch {
     /* ignore */
   }

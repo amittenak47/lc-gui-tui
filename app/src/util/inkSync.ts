@@ -20,6 +20,7 @@ import type { EdgeRowDto, InkPageDigestDto, InkPageDto, LcClient } from "../api/
 import { b64ToBytes, bytesToB64 } from "../api/nativeHttp";
 import {
   annotateDocKey,
+  authoredInkRow,
   copyInkPages,
   deleteInkPages,
   encodedFromRecord,
@@ -27,12 +28,16 @@ import {
   getInkPageRecords,
   getInkPageRecord,
   inkPageKey,
+  inkBookOwner,
   listInkDocKeys,
   markInkPageSynced,
   type InkPageRecord,
   whiteboardDocKey,
 } from "./inkPageStore";
-import { STORE_INK_PAGES, withStore } from "./idb";
+import { abortTransaction, STORE_INK_PAGES, STORE_SYNC_STATE, withStore, withTransaction } from "./idb";
+import { allocateChangeSeqRange, markBookAuthored, seedSyncState, syncStateKey } from "./syncState";
+import { withBookWrite } from "./bookCoordinator";
+import { validateInk, wireInkHash } from "./syncContent";
 import { bytesFromMaybeGzip, gzipBytes } from "./gzip";
 import {
   convertPdfInkOps,
@@ -659,7 +664,6 @@ async function splitLumpedLocalInk(
   docKey: string,
   localBy: Map<number, InkPageRecord>,
   frames: readonly PageFrame[],
-  now: number,
 ): Promise<Map<number, InkPageRecord>> {
   if (frames.length <= 1) return localBy;
   if ([...localBy.keys()].some((id) => id >= 2)) return localBy;
@@ -669,11 +673,40 @@ async function splitLumpedLocalInk(
   if (!encoded) return localBy;
   const bins = binOpsByPage(decodeInkOps(encoded), frames);
   if (![...bins.keys()].some((id) => id >= 2)) return localBy;
+  const replacements = new Map<number, InkPageRecord>();
   for (const [pageId, list] of bins) {
     if (pageId < 1) continue;
-    const gz = bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps(list))));
-    await writeInkPage(docKey, { page_id: pageId, updated_at: now, gz });
+    const gz = await gzipBytes(packEncodedInk(encodeInkOps(list)));
+    const previous = localBy.get(pageId);
+    replacements.set(pageId, { ...lump, ...previous, docKey, pageId, gz,
+      inkC: undefined, sum: undefined, dirty: false, updatedAt: lump.updatedAt,
+      changeSeq: lump.changeSeq ?? 1, syncedChangeSeq: previous?.syncedChangeSeq ?? 0,
+      syncedRev: previous?.syncedRev ?? 0, baseWireHash: previous?.baseWireHash ?? null,
+      baseLocalHash: previous?.baseLocalHash ?? null, bootstrap: previous?.bootstrap ?? true });
   }
+  // A former spanning identity remains a readable erasure. The representation
+  // changed, but no stroke was authored and no sequence is invented.
+  for (const [pageId, previous] of localBy) if (!replacements.has(pageId)) {
+    replacements.set(pageId, { ...previous, inkC: encodeInkOps([]), gz: undefined,
+      sum: undefined, dirty: true });
+  }
+  const owner = inkBookOwner(docKey);
+  if (!owner) throw new Error("The saved ink owner could not be read.");
+  await withBookWrite(owner.kind, owner.id, () => withTransaction<void>([STORE_INK_PAGES, STORE_SYNC_STATE], "readwrite", tx => {
+      const store = tx.objectStore(STORE_INK_PAGES);
+      for (const [pageId, next] of replacements) {
+        const request = store.get(inkPageKey(docKey, pageId));
+        request.onsuccess = () => {
+          const previous = localBy.get(pageId), current = request.result as InkPageRecord | undefined;
+          if ((current?.updatedAt ?? null) !== (previous?.updatedAt ?? null)
+            || (current?.changeSeq ?? null) !== (previous?.changeSeq ?? null)) { tx.abort(); return; }
+          store.put(next, inkPageKey(docKey, pageId));
+        };
+      }
+      const stateStore = tx.objectStore(STORE_SYNC_STATE);
+      const key = syncStateKey(owner.kind, owner.id), request = stateStore.get(key);
+      request.onsuccess = () => stateStore.put({ ...(request.result ?? seedSyncState(owner.kind, owner.id)), bootstrap: true }, key);
+  }));
   return new Map((await getInkPageRecords(docKey)).map((row) => [row.pageId, row]));
 }
 
@@ -797,11 +830,10 @@ async function applyWhiteboardInkChoicesByPage(
     }
   }
   const gz = bytesToB64(await gzipBytes(packEncodedInk(encodeInkOps(kept))));
-  await withStore(STORE_INK_PAGES, "readwrite", (store) => {
-    for (const pageId of localBy.keys()) {
-      if (pageId !== 1) store.delete(inkPageKey(docKey, pageId));
-    }
-  });
+  const emptyLocalGz = await emptyInkGz();
+  for (const pageId of localBy.keys()) if (pageId !== 1) {
+    await writeInkPage(docKey, { page_id: pageId, updated_at: now, gz: emptyLocalGz });
+  }
   await writeInkPage(docKey, { page_id: 1, updated_at: now, gz });
   await putConfirmedInkPage(client, { kind, key, page_id: 1, updated_at: now, gz });
   const hubIds = opts.hubPageIds ?? hubList.map((page) => page.page_id);
@@ -888,7 +920,7 @@ export async function applyInkChoicesByPage(
       .map((row) => [row.pageId, row]),
   );
   if (legacy) {
-    localBy = await splitLumpedLocalInk(docKey, localBy, frames, now);
+    localBy = await splitLumpedLocalInk(docKey, localBy, frames);
   }
 
   for (const { pageId, choice } of choices) {
@@ -1192,15 +1224,20 @@ export async function localizePendingPdfInk(docId: string, client?: LcClient | n
       gz = await gzipBytes(packEncodedInk(encodeInkOps(convertPdfInkOps(ops, from, ctx.layout, ctx.sizes))));
     }
     const next: InkPageRecord = { ...row, gz, inkC: undefined, sum: undefined };
+    const previousHash = await wireInkHash((await gzOf(row))!);
+    const convertedHash = await wireInkHash(gz!);
+    if (row.baseLocalHash === previousHash) next.baseLocalHash = convertedHash;
     delete next.layoutPending;
-    await withStore(STORE_INK_PAGES, "readwrite", (store) => {
+    const owner = inkBookOwner(docKey);
+    if (!owner) throw new Error("The saved ink owner could not be read.");
+    await withBookWrite(owner.kind, owner.id, () => withStore(STORE_INK_PAGES, "readwrite", (store) => {
       const key = inkPageKey(docKey, row.pageId);
       const request = store.get(key);
       request.onsuccess = () => {
         const current = request.result as InkPageRecord | undefined;
-        if (current?.updatedAt === row.updatedAt && current.layoutPending) store.put(next, key);
+        if (current?.updatedAt === row.updatedAt && current.changeSeq === row.changeSeq && current.layoutPending) store.put(next, key);
       };
-    });
+    }));
     moved++;
   }
   return moved;
@@ -1220,11 +1257,12 @@ async function putConfirmedInkPage(client: LcClient, page: InkPageDto): Promise<
 
 async function writeInkPage(
   docKey: string,
-  page: { page_id: number; updated_at: number; gz: string; localized?: true },
+  page: { page_id: number; updated_at: number; gz: string; localized?: true; rev?: number; hash?: string },
   expected?: InkPageRecord | null,
   acknowledged = false,
 ): Promise<void> {
   const raw = b64ToBytes(page.gz);
+  const validated = await validateInk(raw);
   const buf = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
   const row: InkPageRecord = {
     v: 1,
@@ -1239,24 +1277,32 @@ async function writeInkPage(
     // A document page from the hub that is not yet in this device's layout.
     ...(acknowledged && !page.localized && docKey.startsWith("md:") ? { layoutPending: true } : {}),
   };
-  let changed = false;
-  await withStore(STORE_INK_PAGES, "readwrite", (store) => {
-    const key = inkPageKey(docKey, row.pageId);
-    if (expected === undefined) {
-      store.put(row, key);
-      return;
-    }
-    const request = store.get(key);
-    request.onsuccess = () => {
-      const current = request.result as InkPageRecord | undefined;
-      if ((current?.updatedAt ?? null) !== (expected?.updatedAt ?? null)) {
-        changed = true;
-        return;
-      }
-      store.put(row, key);
-    };
-  });
-  if (changed) throw new Error(`Ink page ${page.page_id} changed during download. Sync again.`);
+  const owner = inkBookOwner(docKey);
+  if (!owner) throw new Error("The saved ink owner could not be read.");
+  await withBookWrite(owner.kind, owner.id, () => withTransaction<void>([STORE_INK_PAGES, STORE_SYNC_STATE], "readwrite", tx => {
+      allocateChangeSeqRange(tx, 1, seq => {
+        const store = tx.objectStore(STORE_INK_PAGES);
+        const key = inkPageKey(docKey, row.pageId);
+        const request = store.get(key);
+        request.onsuccess = () => {
+          const current = request.result as InkPageRecord | undefined;
+          if (expected !== undefined && ((current?.updatedAt ?? null) !== (expected?.updatedAt ?? null)
+              || (current?.changeSeq ?? null) !== (expected?.changeSeq ?? null))) {
+            abortTransaction(tx, new Error(`Ink page ${page.page_id} changed during download. Sync again.`)); return;
+          }
+          store.put(acknowledged ? { ...row, changeSeq: seq, syncedChangeSeq: seq,
+            syncedRev: page.rev ?? 0, baseWireHash: page.hash ?? validated.wireHash,
+            baseLocalHash: validated.wireHash, bootstrap: page.rev === undefined }
+            : authoredInkRow(row, current, seq), key);
+          if (!acknowledged) markBookAuthored(tx, owner.kind, owner.id, seq);
+        };
+      });
+  }));
+}
+
+async function localizeInkForStore(client: LcClient, page: InkPageDto, ctx: PdfInkContext | null) {
+  const hash = page.hash ?? await wireInkHash(b64ToBytes(page.gz));
+  return localizeHubInkDto(client, { ...page, hash }, ctx);
 }
 
 /**
@@ -1308,7 +1354,7 @@ export async function pullInkPagesOverLocal(
       throw new Error(`Ink page ${digest.page_id} changed on the hub. Sync again.`);
     }
     if (!(await encodedFromGzB64(full.gz))) throw new Error(`Ink page ${digest.page_id} could not be read`);
-    await writeInkPage(docKey, await localizeHubInkDto(client, full, ctx), localBy.get(digest.page_id) ?? null, true);
+    await writeInkPage(docKey, await localizeInkForStore(client, full, ctx), localBy.get(digest.page_id) ?? null, true);
     written++;
   }
   return written;
@@ -1429,7 +1475,7 @@ export async function syncInkPages(
           if (strict) throw new Error(`Ink page ${digest.page_id} could not be read`);
           continue;
         }
-        await writeInkPage(docKey, await localizeHubInkDto(client, full, ctx), localBy.get(digest.page_id) ?? null, true);
+        await writeInkPage(docKey, await localizeInkForStore(client, full, ctx), localBy.get(digest.page_id) ?? null, true);
       }
     }
 

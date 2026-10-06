@@ -49,8 +49,8 @@ describe("artifact catalogs in parent content", () => {
   it("keeps notebook catalogs during autosave, lock changes, trash and restore", async () => {
     const artifacts = catalog({ kind: "whiteboard", id: "w1" });
     await saveWhiteboardNotebook({ id: "w1", board, agent: [], pageCount: 1, artifacts });
-    setWhiteboardNotebookLocked("w1", true);
-    setWhiteboardNotebookLocked("w1", false);
+    await setWhiteboardNotebookLocked("w1", true);
+    await setWhiteboardNotebookLocked("w1", false);
     await saveWhiteboardNotebook({ id: "w1", board, agent: [], pageCount: 2 });
     expect((await getWhiteboardNotebook("w1"))?.artifacts).toEqual(artifacts);
     expect(listWhiteboardNotebooks()[0]).not.toHaveProperty("artifacts");

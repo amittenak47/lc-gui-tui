@@ -7,7 +7,7 @@ import { act } from "react";
 
 import { HubSyncControl, padTabSync, tabOffersHubSync, type HubSyncWalkHost } from "./HubSyncControl";
 import { LcApiError } from "../api/client";
-import { enqueuePadSync, peekPadSyncQueueForTests, resetPadSyncQueueForTests } from "../util/padSync";
+import { listAllPadSnapshots, type PadSnapshot } from "../util/padSnapshotStore";
 import type { ConflictUiLifecycle } from "../util/conflictUiWait";
 import type { LcClient } from "../api/client";
 import { PAD_HUB_KEY } from "../util/padHub";
@@ -31,6 +31,14 @@ vi.mock("../util/docExtract", () => ({
     },
   ),
 }));
+
+const retainedSnapshots = vi.hoisted(() => new Map<string, PadSnapshot>());
+vi.mock("../util/padSnapshotStore", async original => ({
+  ...await original<typeof import("../util/padSnapshotStore")>(),
+  listAllPadSnapshots: vi.fn(async () => [...retainedSnapshots.values()]),
+  getPadSnapshot: vi.fn(async (_kind: string, key: string, tier: string) => retainedSnapshots.get(`${key}:${tier}`) ?? null),
+}));
+afterEach(() => retainedSnapshots.clear());
 
 function mount() {
   const host = document.createElement("div");
@@ -1536,18 +1544,17 @@ describe("HubSyncControl (step-2 stub)", () => {
 
     it("uploads the current book before reporting a refused unrelated backup", async () => {
       vi.useFakeTimers();
-      resetPadSyncQueueForTests();
       const client = fakeClient({ putPadSnapshot: vi.fn().mockRejectedValue(new Error("The backup's book is missing on the hub.")) });
       const { host } = makeHost(null);
       withPad(host);
-      await enqueuePadSync({ op: "putSnapshot", body: { kind: "whiteboard", key: "old-book", tier: "2h", written_at: 1, payload: {} } });
+      const retained: PadSnapshot = { kind: "whiteboard", key: "old-book", tier: "2h", writtenAt: 1, name: "Old book", board: { v: 1, elements: [], appState: { scrollX: 0, scrollY: 0, zoom: 1 } } };
+      retainedSnapshots.set("old-book:2h", retained);
       const button = await mountWalk(client, host);
       await act(async () => { button.click(); await vi.runAllTimersAsync(); });
       expect(client.putAnnotatePad).toHaveBeenCalledOnce();
       expect(button.dataset.stage).toBe("failed");
       expect(button.dataset.error).toContain("book is missing");
-      expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "putSnapshot" }]);
-      resetPadSyncQueueForTests();
+      expect(await listAllPadSnapshots()).toEqual([retained]);
     });
 
     it("fails a 409 with no mounted merge UI and one tap starts a fresh walk", async () => {

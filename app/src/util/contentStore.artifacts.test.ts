@@ -1,3 +1,4 @@
+import { memoryBookTransaction } from "./testBookTransaction";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { editParentContentArtifacts, getContent, putParentContent, resetContentRepairForTests } from "./contentStore";
 import { editAnnotateArtifacts, getAnnotateDoc, getAnnotateDocMeta, saveAnnotateDoc } from "./annotateStore";
@@ -7,7 +8,7 @@ import type { ArtifactCatalog, ArtifactParent } from "./padArtifacts";
 import type { BoardBlob } from "../canvas/BoardHandle";
 
 const state = vi.hoisted(() => ({
-  db: new Map<string, any>(), ls: new Map<string, string>(),
+  db: new Map<string, any>(), meta: new Map<string, any>(), sync: new Map<string, any>(), ls: new Map<string, string>(),
   beforeWrite: undefined as (() => void) | undefined,
   preflight: undefined as (() => void) | undefined,
   failDb: false, failIndex: false,
@@ -15,24 +16,19 @@ const state = vi.hoisted(() => ({
 vi.mock("./artifactAssetSync", () => ({ downloadArtifactAssets: async () => { state.preflight?.(); } }));
 vi.mock("./idb", async (original) => ({
   ...await original<typeof import("./idb")>(),
-  run: async (_name: string, _mode: string, work: (store: any) => any) => {
+  run: async (name: string, _mode: string, work: (store: any) => any) => {
     if (state.failDb) throw new Error("database unavailable");
-    return work({ get: (id: string) => ({ result: structuredClone(state.db.get(id)) }),
-      put: (row: unknown, id: string) => { state.db.set(id, structuredClone(row)); return {}; } }).result;
+    const rows = name === "book_meta" ? state.meta : name === "sync_state" ? state.sync : state.db;
+    return work({ get: (id: string) => ({ result: structuredClone(rows.get(id)) }),
+      getAll: () => ({ result: [...rows.values()] }),
+      put: (row: unknown, id: string) => { rows.set(id, structuredClone(row)); return {}; } }).result;
   },
-  withStore: async (_name: string, _mode: string, work: (store: any) => void) => {
+  withTransaction: async (_names: string[], _mode: string, work: any) => {
     if (state.failDb) throw new Error("database unavailable");
     const hook = state.beforeWrite; state.beforeWrite = undefined; hook?.();
-    const reads: Array<{ result: any; onsuccess?: () => void }> = [];
-    const writes = new Map<string, unknown>();
-    let aborted = false;
-    work({ transaction: { abort: () => { aborted = true; } },
-      get: (id: string) => { const request = { result: structuredClone(state.db.get(id)), onsuccess: undefined }; reads.push(request); return request; },
-      put: (row: unknown, id: string) => writes.set(id, structuredClone(row)),
-    });
-    for (const request of reads) request.onsuccess?.();
-    if (aborted) throw new Error("transaction aborted");
-    for (const [id, row] of writes) state.db.set(id, row);
+    return memoryBookTransaction(new Map([
+      ["content", state.db], ["book_meta", state.meta], ["sync_state", state.sync],
+    ]), work);
   },
 }));
 const board: BoardBlob = { v: 1, elements: [], appState: { scrollX: 0, scrollY: 0, zoom: 1 } };
@@ -41,7 +37,7 @@ const create: ArtifactCatalogEdit = { type: "create", id: "file1", title: "Note.
   content: { kind: "markdown", documentId: "owned1", sourceRevision: "s1" } };
 const catalog = (owner = parent): ArtifactCatalog => editArtifactCatalog(undefined, owner, null, create, 1);
 beforeEach(() => {
-  state.db.clear(); state.ls.clear(); state.beforeWrite = undefined; state.preflight = undefined;
+  state.db.clear(); state.meta.clear(); state.sync.clear(); state.ls.clear(); state.beforeWrite = undefined; state.preflight = undefined;
   state.failDb = false; state.failIndex = false;
   resetContentRepairForTests();
   vi.stubGlobal("localStorage", {
@@ -142,12 +138,12 @@ describe("document/notebook artifact integration", () => {
     expect((await getAnnotateDoc("a1"))?.name).toBe("Main.md");
   });
 
-  it("repairs interrupted content-to-index catalog updates on the next read", async () => {
+  it("keeps committed authoritative metadata visible when the derived index fails", async () => {
     await saveAnnotateDoc({ id: "a1", name: "Main.md", hash: "h1", source: "text", board });
     const before = getAnnotateDocMeta("a1")!;
     state.failIndex = true;
-    await expect(editAnnotateArtifacts("a1", null, create)).rejects.toThrow("index unavailable");
-    expect(getAnnotateDocMeta("a1")?.artifactRevision).toBeUndefined();
+    const accepted = await editAnnotateArtifacts("a1", null, create);
+    expect(getAnnotateDocMeta("a1")?.artifactRevision).toBe(accepted.revision);
     state.failIndex = false;
     const recovered = await getAnnotateDoc("a1");
     expect(getAnnotateDocMeta("a1")?.artifactRevision).toBe(recovered?.artifacts?.revision);
@@ -156,7 +152,7 @@ describe("document/notebook artifact integration", () => {
 
   it("does not publish an attachment after the parent disappears during preflight", async () => {
     await saveAnnotateDoc({ id: "a1", name: "Main.md", hash: "h1", source: "text", board });
-    state.preflight = () => state.ls.set("whiteboard.annotate.index.v1", "[]");
+    state.preflight = () => { state.meta.delete("annotate:a1"); };
     await expect(editAnnotateArtifacts("a1", null, create)).rejects.toThrow("removed");
     expect(state.db.get("a1").artifacts).toBeUndefined();
   });

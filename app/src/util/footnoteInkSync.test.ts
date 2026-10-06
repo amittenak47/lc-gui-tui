@@ -13,12 +13,16 @@ import { bytesToB64 } from "../api/nativeHttp";
 import { encodeInkOps, packEncodedInk } from "../canvas/inkCodec";
 import { gzipBytes } from "./gzip";
 
+import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
+import { closeDbForTests } from "./idb";
+
 // Sync refuses to apply pages that do not decode (local or hub), so fixtures
 // carry a real, empty ink page rather than placeholder bytes.
 const EMPTY_INK_GZ = await gzipBytes(packEncodedInk(encodeInkOps([])));
 const EMPTY_INK_GZ_B64 = bytesToB64(EMPTY_INK_GZ);
 
-afterEach(() => {
+afterEach(async () => {
+  await closeDbForTests(); vi.unstubAllGlobals();
   vi.doUnmock("./inkPageStore");
   vi.doUnmock("./idb");
   vi.resetModules();
@@ -27,15 +31,10 @@ afterEach(() => {
 /** `inkSync` over a fake ink store holding these doc keys. */
 async function loadInkSync(docKeys: Record<string, number[]> = {}) {
   vi.resetModules();
+  vi.stubGlobal("indexedDB", new IDBFactory()); vi.stubGlobal("IDBKeyRange", IDBKeyRange);
   vi.doMock("./idb", async (importOriginal) => ({
     ...(await importOriginal<typeof import("./idb")>()),
-    withStore: async (
-      _store: string,
-      _mode: string,
-      fn: (store: { put: (row: unknown, key: string) => void }) => void,
-    ) => {
-      fn({ put: () => {} });
-    },
+
   }));
   vi.doMock("./inkPageStore", async (importOriginal) => {
     const real = await importOriginal<typeof import("./inkPageStore")>();

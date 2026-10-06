@@ -64,9 +64,6 @@ import {
   loadAutosaveInterval,
 } from "./util/autosavePref";
 import {
-  loadHubAutosync,
-} from "./util/hubAutoSyncPref";
-import {
   HUB_SYNC_WINDOW_PILL_EVENT,
   loadHubSyncWindowPill,
 } from "./util/hubSyncWindowPillPref";
@@ -344,10 +341,7 @@ import {
   PAD_HUB_WINDOW_EVENT,
   applyHubAnnotate,
   applyHubWhiteboard,
-  pushAnnotatePad,
-  pushRolledSnapshots,
   pushProblemPad,
-  pushWhiteboardPad,
   restoreTrashedPad,
   sweepPadTrash,
   type PadHubWindowDetail,
@@ -1137,9 +1131,9 @@ export const Workspace = memo(function Workspace({
             }
           }
           if (c.kind === "annotate") {
-            markAnnotateHubAck(c.id, c.server?.updated_at ?? Date.now());
+            await markAnnotateHubAck(c.id, c.server?.updated_at ?? Date.now());
           } else {
-            markWhiteboardHubAck(c.id, c.server?.updated_at ?? Date.now());
+            await markWhiteboardHubAck(c.id, c.server?.updated_at ?? Date.now());
           }
         }
       }
@@ -2802,23 +2796,14 @@ export const Workspace = memo(function Workspace({
           });
           if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
           announceAutosave(tab.id, saved.name);
-          // The local write already happened; only the hub PUT waits on
-          // Hub auto-sync. Read live so a mid-session Save takes effect.
-          if (loadHubAutosync()) {
-            void pushAnnotatePad(client, saved)
-              .then((ok) => {
-                if (!ok) return;
-                void recordPadSnapshotsWithExtras({
+          await recordPadSnapshotsWithExtras({
                   kind: "annotate",
                   key: saved.id,
                   name: saved.name,
                   board: liveBoard,
                   footnotes: saved.footnotes,
                   agent: saved.agent,
-                }).then((written) => void pushRolledSnapshots(client, written));
-              })
-              .catch((cause: unknown) => setError(messageOf(cause)));
-          }
+          });
         } catch (cause: unknown) {
           noteStorageFull(cause);
         }
@@ -2885,20 +2870,14 @@ export const Workspace = memo(function Workspace({
           if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
           await flushDirtyInk(board, whiteboardDocKey(saved.id));
           announceAutosave(tab.id, saved.title);
-          // Local write first; hub PUT gated like the annotate autosave.
-          if (loadHubAutosync()) {
-            void pushWhiteboardPad(client, saved).then((ok) => {
-              if (!ok) return;
-              void recordPadSnapshotsWithExtras({
+          await recordPadSnapshotsWithExtras({
                 kind: "whiteboard",
                 key: saved.id,
                 name: saved.title,
                 board: liveBoard,
                 agent: saved.agent,
                 pageCount: saved.pageCount,
-              }).then((written) => void pushRolledSnapshots(client, written));
-            });
-          }
+          });
         } catch (cause: unknown) {
           if (cause instanceof WhiteboardLibraryFullError) {
             whiteboardLibResumeRef.current = null;
@@ -2929,9 +2908,8 @@ export const Workspace = memo(function Workspace({
       return row;
     })();
     problemLocalSavesRef.current.add(localSave);
-    void localSave.then((row) => {
+    void localSave.then(() => {
       problemLocalSavesRef.current.delete(localSave);
-      return pushProblemPad(client, row);
     }, () => {
       problemLocalSavesRef.current.delete(localSave);
     }).catch(() => {});
@@ -3252,7 +3230,6 @@ export const Workspace = memo(function Workspace({
             agent: persistableAgentMessages(resumedMessages),
           };
           await putProblemBoard(seed);
-          void pushProblemPad(client, seed);
         }
         await boardRef.current?.settleFitView();
         await boardRef.current?.primeInkSnap();
@@ -4980,8 +4957,8 @@ export const Workspace = memo(function Workspace({
   }, [annotateHeight, themeId]);
 
   const restorePadSnapshot = useCallback(
-    async (kind: "annotate" | "whiteboard", key: string, tier: PadSnapshotTier) => {
-      const snap = await getPadSnapshot(kind, key, tier);
+    async (kind: "annotate" | "whiteboard", key: string, tier: PadSnapshotTier, snapshotId?: string) => {
+      const snap = await getPadSnapshot(kind, key, tier, snapshotId);
       if (!snap) {
         setError("That snapshot is no longer on this device.");
         return;
@@ -5342,9 +5319,6 @@ export const Workspace = memo(function Workspace({
         agent: persistableAgentMessages(agentMessages),
       });
       setAnnotateSource({ ...source, text: next, hash });
-      void pushAnnotatePad(client, saved).catch((cause: unknown) =>
-        setError(messageOf(cause)),
-      );
       /*
        * Re-index under the new hash so Ask answers about what the note says
        * now. The old hash's chunks are left where they are: `docs.db` is
@@ -7908,9 +7882,6 @@ export const Workspace = memo(function Workspace({
               agent,
             });
             if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
-            void pushAnnotatePad(client, saved).catch((cause: unknown) =>
-              setError(messageOf(cause)),
-            );
           } catch (cause: unknown) {
             if (cause instanceof AnnotateLibraryFullError) {
               setError(cause.message);
@@ -7952,7 +7923,6 @@ export const Workspace = memo(function Workspace({
         })
           .then((saved) => {
             if (!whiteboardNotebookId) setWhiteboardNotebookId(saved.id);
-            void pushWhiteboardPad(client, saved);
           })
           .catch((cause: unknown) => {
             if (cause instanceof WhiteboardLibraryFullError) {
@@ -8196,7 +8166,7 @@ export const Workspace = memo(function Workspace({
         const namedTitle = opts?.title?.trim();
         const saved = await saveWhiteboardNotebook({
           id: whiteboardNotebookId ?? undefined,
-          ...(namedTitle ? { title: namedTitle } : {}),
+          ...(namedTitle ? { title: namedTitle, metadataIntent: "rename" as const } : {}),
           board: liveBoard,
           agent: persistableAgentMessages(agentMessagesRef.current),
           pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(liveBoard.elements)),
@@ -8207,16 +8177,13 @@ export const Workspace = memo(function Workspace({
         await flushDirtyInk(board, whiteboardDocKey(saved.id));
         await rebaselineWhiteboardSession(saved.id);
         if (!opts?.quiet) setNotice(`Saved “${saved.title}”.`);
-        void pushWhiteboardPad(client, saved).then((ok) => {
-          if (!ok) return;
-          void recordPadSnapshotsWithExtras({
+        await recordPadSnapshotsWithExtras({
             kind: "whiteboard",
             key: saved.id,
             name: saved.title,
             board: liveBoard,
             agent: saved.agent,
             pageCount: saved.pageCount,
-          }).then((written) => void pushRolledSnapshots(client, written));
         });
       } catch (cause) {
         if (opts?.throwOnError) throw cause;
@@ -8423,7 +8390,7 @@ export const Workspace = memo(function Workspace({
         hash: source.hash,
         source: source.text,
         docType: source.docType,
-        ...(namedLabel ? { label: namedLabel } : {}),
+        ...(namedLabel ? { label: namedLabel, metadataIntent: "rename" as const } : {}),
         board: blob,
         footnotes: annotateFootnotesRef.current,
         agent: persistableAgentMessages(agentMessagesRef.current),
@@ -8449,19 +8416,14 @@ export const Workspace = memo(function Workspace({
       );
       annotatePristineMarksRef.current = footnoteRevision(annotateFootnotes);
       annotatePristineAgentRef.current = JSON.stringify(persistableAgentMessages(agentMessages));
-      void pushAnnotatePad(client, saved)
-        .then((ok) => {
-          if (!ok) return;
-          void recordPadSnapshotsWithExtras({
+      await recordPadSnapshotsWithExtras({
             kind: "annotate",
             key: saved.id,
             name: saved.name,
             board: blob,
             footnotes: saved.footnotes,
             agent: saved.agent,
-          }).then((written) => void pushRolledSnapshots(client, written));
-        })
-        .catch((cause: unknown) => setError(messageOf(cause)));
+      });
       return saved;
     } catch (cause) {
       if (opts?.throwOnError) throw cause;
@@ -9106,7 +9068,7 @@ export const Workspace = memo(function Workspace({
               try {
                 const saved = await saveWhiteboardNotebook({
                   id: whiteboardNotebookId ?? undefined,
-                  ...(name?.trim() ? { title: name.trim() } : {}),
+                  ...(name?.trim() ? { title: name.trim(), metadataIntent: "rename" as const } : {}),
                   board: blob,
                   agent: persistableAgentMessages(agentMessages),
                   pageCount: Math.max(whiteboardPageCount, countWhiteboardPages(blob.elements)),
@@ -9115,16 +9077,13 @@ export const Workspace = memo(function Workspace({
                 patchTab(tab.id, { title: saved.title, notebookId: saved.id });
                 await flushDirtyInk(handle, whiteboardDocKey(saved.id), 0, true);
                 await rebaselineWhiteboardSession(saved.id);
-                void pushWhiteboardPad(client, saved).then((ok) => {
-                  if (!ok) return;
-                  void recordPadSnapshotsWithExtras({
+                await recordPadSnapshotsWithExtras({
                     kind: "whiteboard",
                     key: saved.id,
                     name: saved.title,
                     board: blob,
                     agent: saved.agent,
                     pageCount: saved.pageCount,
-                  }).then((written) => void pushRolledSnapshots(client, written));
                 });
                 setNotice(`Saved “${saved.title}”.`);
               } catch (cause) {
@@ -11899,7 +11858,7 @@ export const Workspace = memo(function Workspace({
           onDelete={(id) =>
             deletePadEverywhere(client, "annotate", id)
           }
-          onChoose={(choice, docId) => {
+          onChoose={(choice, docId, snapshotId) => {
             if (choice === "save") {
               setAnnotateEntryOpen(false);
               void saveAnnotateSession(docId?.trim() ? { label: docId.trim() } : undefined).then((saved) => {
@@ -11928,7 +11887,7 @@ export const Workspace = memo(function Workspace({
               // The open set's id, not the file's hash — two sets on one file
               // each keep their own 2h/24h/7d, and the hash names neither.
               const setId = annotateDocIdRef.current;
-              if (setId) void restorePadSnapshot("annotate", setId, docId as PadSnapshotTier);
+              if (setId) void restorePadSnapshot("annotate", setId, docId as PadSnapshotTier, snapshotId);
               return;
             }
             if (choice === "page") {
@@ -12032,7 +11991,7 @@ export const Workspace = memo(function Workspace({
           onDelete={(id) =>
             deletePadEverywhere(client, "whiteboard", id)
           }
-          onChoose={(choice, notebookId) => {
+          onChoose={(choice, notebookId, snapshotId) => {
             if (choice === "save") {
               setWhiteboardEntryOpen(false);
               void saveWhiteboardNow(
@@ -12081,6 +12040,7 @@ export const Workspace = memo(function Workspace({
                 "whiteboard",
                 whiteboardNotebookId,
                 notebookId as PadSnapshotTier,
+                snapshotId,
               );
               return;
             }

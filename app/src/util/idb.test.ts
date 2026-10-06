@@ -46,7 +46,7 @@ function fakeIndexedDb(after: "commit" | "abort" | "request-error") {
     objectStore: () => store,
   };
 
-  const db = { transaction: () => tx };
+  const db = { transaction: () => tx, objectStoreNames: { contains: () => true }, close: () => {} };
 
   const open = {
     result: db,

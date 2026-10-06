@@ -1,4 +1,4 @@
-import { openDb, STORE_CONTENT, STORE_PROBLEM_BOARDS, STORE_SNAPSHOTS, STORE_SYNC_QUEUE } from "./idb";
+import { openDb, STORE_CONTENT, STORE_PROBLEM_BOARDS, STORE_SNAPSHOTS, STORE_SYNC_RECOVERY } from "./idb";
 import { contentSpillOnly } from "./contentStore";
 import {
   ARTIFACT_CACHE_DELETE_LIMIT,
@@ -74,7 +74,7 @@ function collectWithWorker(request: ArtifactGcRequest): Promise<number> {
 /** One transaction sees all roots and deletes only old, acknowledged cache copies. */
 function collectInThread(now: number, pending: unknown[]): Promise<number> {
   return openDb().then((db) => new Promise((resolve, reject) => {
-    const names = [STORE_CONTENT, STORE_PROBLEM_BOARDS, STORE_SNAPSHOTS, STORE_SYNC_QUEUE];
+    const names = [STORE_CONTENT, STORE_PROBLEM_BOARDS, STORE_SNAPSHOTS, STORE_SYNC_RECOVERY];
     const tx = db.transaction(names, "readwrite");
     const roots: unknown[] = [...pending];
     const assets: Array<{ key: IDBValidKey; row: CachedAssetTimes }> = [];

@@ -7,10 +7,8 @@ import {
   applyHubWhiteboard,
   applyPadSyncPing,
   deletePadEverywhere,
+  tombstonePad,
   discoverHubPads,
-  enqueuePadSync,
-  flushPadSyncQueue,
-  peekPadSyncQueueForTests,
   pullPads,
   PAD_SYNC_IDLE_KICK_MS_ANDROID,
   PAD_SYNC_IDLE_KICK_MS_DESKTOP,
@@ -21,7 +19,7 @@ import {
   pushProblemPad,
   pushWhiteboardPad,
   whiteboardPadBody,
-  resetPadSyncQueueForTests,
+  resetPadSyncForTests,
   restoreTrashedPad,
   scheduleIdlePadSyncPing,
   setPadSyncBodyCapForTests,
@@ -34,6 +32,26 @@ import type { AgentChatMessage } from "../modes/AgentSidePanel";
 import type { ArtifactCatalog } from "./padArtifacts";
 import { parseVizProgram } from "../viz/schema";
 import { visibleDrawings } from "../viz/drawingState";
+
+import { memoryBookTransaction } from "./testBookTransaction";
+import { mutateLocalBook, resetLocalBookStoreForTests } from "./localBookStore";
+import { getBookSyncState } from "./syncState";
+const durable = vi.hoisted(() => new Map<string, Map<IDBValidKey, unknown>>());
+vi.mock("./idb", async original => ({
+  ...await original<typeof import("./idb")>(),
+  run: async (name: string, _mode: string, work: (store: unknown) => { result: unknown }) => work({
+    get: (id: string) => ({ result: durable.get(name)?.get(id) }), getAll: () => ({ result: [...durable.get(name)?.values() ?? []] }),
+  }).result,
+  withTransaction: async (_names: string[], _mode: string, work: Parameters<typeof memoryBookTransaction>[1]) => memoryBookTransaction(durable, work),
+}));
+async function uploadSavedWhiteboard(client: LcClient, row: Parameters<typeof pushWhiteboardPad>[1]) {
+  if (!await getWhiteboardNotebook(row.id)) getWhiteboardNotebook.mockResolvedValue(row);
+  return pushWhiteboardPad(client, row);
+}
+async function uploadSavedAnnotate(client: LcClient, row: Parameters<typeof pushAnnotatePad>[1]) {
+  if (!await getAnnotateDoc(row.id)) getAnnotateDoc.mockResolvedValue(row);
+  return pushAnnotatePad(client, row);
+}
 
 const restoreWhiteboardNotebook = vi.fn(async (_entry?: unknown) => {});
 const restoreWhiteboardFromTrash = vi.fn(
@@ -185,7 +203,8 @@ function fakeClient(overrides: Partial<LcClient> = {}): LcClient {
 }
 
 beforeEach(() => {
-  resetPadSyncQueueForTests();
+  durable.clear(); resetLocalBookStoreForTests();
+  resetPadSyncForTests();
   resetCameraBusyForTests();
   hubAutosyncState.on = true;
   footnoteBoardMocks.applyFootnoteBoards.mockClear();
@@ -225,32 +244,16 @@ afterEach(() => {
   resetCameraBusyForTests();
 });
 
-describe("padSync queue", () => {
-  it("queues while offline and flushes on online", async () => {
-    const client = fakeClient({
-      putWhiteboardPad: vi.fn(async () => {
-        throw new LcApiError("offline", 0);
-      }),
-    });
-    await enqueuePadSync({
-      op: "putWhiteboard",
-      body: {
-        id: "w1",
-        title: "One",
-        updated_at: 1,
-        page_count: 1,
-        board: { v: 1, elements: [] },
-        agent: [],
-      },
-    });
-    expect(peekPadSyncQueueForTests()).toHaveLength(1);
-    await flushPadSyncQueue(client);
-    expect(peekPadSyncQueueForTests()).toHaveLength(1);
-
-    const online = fakeClient();
-    await flushPadSyncQueue(online);
+describe("padSync current-state retry", () => {
+  it("keeps the current record after failure and uploads its newest version on retry", async () => {
+    const row = { id: "w1", title: "One", updatedAt: 1, pageCount: 1, board: emptyBoard, agent: [] };
+    getWhiteboardNotebook.mockResolvedValue(row);
+    const offline = fakeClient({ putWhiteboardPad: vi.fn().mockRejectedValue(new LcApiError("offline", 0)) });
+    expect(await pushWhiteboardPad(offline, row)).toBe(false);
+    getWhiteboardNotebook.mockResolvedValue({ ...row, title: "Newest", updatedAt: 3 });
+    const online = fakeClient(); expect(await pushWhiteboardPad(online, row)).toBe(true);
     expect(online.putWhiteboardPad).toHaveBeenCalledTimes(1);
-    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+    expect(online.putWhiteboardPad).toHaveBeenCalledWith("w1", expect.objectContaining({ title: "Newest", updated_at: 3 }));
   });
 });
 
@@ -279,16 +282,17 @@ describe("padSync pull", () => {
     ];
     const agent = persistableAgentMessages(messages);
     const sender = fakeClient();
-    await pushWhiteboardPad(sender, {
+    await uploadSavedWhiteboard(sender, {
       id: "w1", title: "Notebook", updatedAt: 100, pageCount: 1, board: emptyBoard, agent,
     });
-    await pushAnnotatePad(sender, {
+    await uploadSavedAnnotate(sender, {
       id: "a1", name: "note.md", hash: "hash", docType: "markdown",
       updatedAt: 100, source: "# Note", board: emptyBoard, agent, footnotes: [],
     });
     // Serialize the actual upload bodies before a fresh device discovers them.
     const whiteboard = JSON.parse(JSON.stringify(vi.mocked(sender.putWhiteboardPad).mock.calls[0]![1]));
     const document = JSON.parse(JSON.stringify(vi.mocked(sender.putAnnotatePad).mock.calls[0]![1]));
+    getWhiteboardNotebook.mockResolvedValue(null); getAnnotateDoc.mockResolvedValue(null);
     const receiver = fakeClient({
       listWhiteboardPads: vi.fn(async () => [whiteboard]),
       listAnnotatePads: vi.fn(async () => [document]),
@@ -476,12 +480,20 @@ describe("padSync download deletion guard", () => {
 });
 
 describe("deletePadEverywhere", () => {
-  it("trashes locally and ACKs hub delete with seq", async () => {
+  it("trashes locally and atomically acknowledges the captured deletion", async () => {
+    trashWhiteboardNotebook.mockImplementationOnce(async () => {
+      await mutateLocalBook({ kind: "whiteboard", id: "w1" }, {}, ctx => {
+        ctx.setMetadata({ kind: "whiteboard", id: "w1", deletedAt: 1, syncSeq: 1, deleteAcked: false });
+        ctx.markLifecycle("delete", 1);
+      });
+      return 1;
+    });
     const client = fakeClient();
     await deletePadEverywhere(client, "whiteboard", "w1");
     expect(trashWhiteboardNotebook).toHaveBeenCalledWith("w1");
     expect(client.tombstoneWhiteboardPad).toHaveBeenCalledWith("w1", 1);
-    expect(markWhiteboardDeleteAcked).toHaveBeenCalledWith("w1", true);
+    expect(await getBookSyncState("whiteboard", "w1")).toMatchObject({ lifecycle: null });
+    expect(durable.get("book_meta")?.get("whiteboard:w1")).toMatchObject({ deleteAcked: true });
   });
 });
 
@@ -699,54 +711,27 @@ describe("padSync ping", () => {
   });
 });
 
-describe("live PUT coalesce and 24h compact", () => {
-  it("keeps only the latest live PUT per id", async () => {
-    await enqueuePadSync({
-      op: "putWhiteboard",
-      body: {
-        id: "w1",
-        title: "One",
-        updated_at: 1,
-        page_count: 1,
-        board: { v: 1, elements: [] },
-        agent: [],
-      },
-    });
-    await enqueuePadSync({
-      op: "putWhiteboard",
-      body: {
-        id: "w1",
-        title: "One",
-        updated_at: 3,
-        page_count: 1,
-        board: { v: 1, elements: [] },
-        agent: [],
-      },
-    });
-    const queued = peekPadSyncQueueForTests();
-    expect(queued).toHaveLength(1);
-    expect(queued[0]).toMatchObject({ op: "putWhiteboard", body: { updated_at: 3 } });
+describe("current records and independent backups", () => {
+  it("current-state retry reads only the newest saved book", async () => {
+    const old = { id: "w1", title: "One", updatedAt: 1, pageCount: 1, board: emptyBoard, agent: [] };
+    getWhiteboardNotebook.mockResolvedValue({ ...old, updatedAt: 3, board: { ...emptyBoard, elements: [{ id: "latest" }] } });
+    const client = fakeClient(); await uploadSavedWhiteboard(client, old);
+    expect(client.putWhiteboardPad).toHaveBeenCalledOnce();
+    expect(client.putWhiteboardPad).toHaveBeenCalledWith("w1", expect.objectContaining({ updated_at: 3, board: { ...emptyBoard, elements: [{ id: "latest" }] } }));
   });
 
-  it("keeps one queued upload per document, not one per failed attempt", async () => {
-    // Byte jobs were the one kind that did not coalesce, and they are the ones
-    // carrying a whole PDF: every failed upload added another full copy to
-    // memory and to IndexedDB, so an unreachable hub filled the device with
-    // duplicates of one book.
-    const bytes = () => new ArrayBuffer(1024);
-    await enqueuePadSync({ op: "putBytes", hash: "h1:1024", bytes: bytes() });
-    await enqueuePadSync({ op: "putBytes", hash: "h1:1024", bytes: bytes() });
-    await enqueuePadSync({ op: "putBytes", hash: "h1:1024", bytes: bytes() });
-
-    const queued = peekPadSyncQueueForTests().filter((job) => job.op === "putBytes");
-    expect(queued).toHaveLength(1);
-    expect(queued[0]).toMatchObject({ op: "putBytes", hash: "h1:1024" });
+  it("failed byte attempts keep one durable current copy", async () => {
+    const client = fakeClient({ putDocBytes: vi.fn().mockRejectedValue(new Error("offline")) });
+    for (let attempt = 0; attempt < 3; attempt++) await pushDocBytes(client, "h1:1024", new ArrayBuffer(1024));
+    expect(putDocBytes).toHaveBeenCalledTimes(3);
+    expect(putDocBytes.mock.calls.every(([hash, bytes]) => hash === "h1:1024" && bytes?.byteLength === 1024)).toBe(true);
+    expect(durable.get("sync_state")?.size ?? 0).toBe(0);
   });
 
-  it("keeps a different document's upload", async () => {
-    await enqueuePadSync({ op: "putBytes", hash: "h1:8", bytes: new ArrayBuffer(8) });
-    await enqueuePadSync({ op: "putBytes", hash: "h2:8", bytes: new ArrayBuffer(8) });
-    expect(peekPadSyncQueueForTests().filter((job) => job.op === "putBytes")).toHaveLength(2);
+  it("retains separate source-byte identities after failed uploads", async () => {
+    const client = fakeClient({ putDocBytes: vi.fn().mockRejectedValue(new Error("offline")) });
+    await pushDocBytes(client, "h1:8", new ArrayBuffer(8)); await pushDocBytes(client, "h2:8", new ArrayBuffer(8));
+    expect(putDocBytes.mock.calls.map(([hash]) => hash)).toEqual(["h1:8", "h2:8"]);
   });
 
   it("refuses a document the hub could never accept, instead of queueing it", async () => {
@@ -759,7 +744,7 @@ describe("live PUT coalesce and 24h compact", () => {
     const tooBig = { byteLength: padHub.HUB_MAX_DOCUMENT_BYTES + 1 } as ArrayBuffer;
 
     await expect(pushDocBytes(client, "big:1", tooBig)).rejects.toThrow(/at most/);
-    expect(peekPadSyncQueueForTests().filter((job) => job.op === "putBytes")).toHaveLength(0);
+    expect(client.putDocBytes).not.toHaveBeenCalled();
     hubSpy.mockRestore();
   });
 
@@ -767,7 +752,7 @@ describe("live PUT coalesce and 24h compact", () => {
     setPadSyncBodyCapForTests(80);
     const client = fakeClient();
     await expect(
-      pushAnnotatePad(client, {
+      uploadSavedAnnotate(client, {
         id: "a1",
         name: "book.pdf",
         hash: "h",
@@ -778,65 +763,25 @@ describe("live PUT coalesce and 24h compact", () => {
       }),
     ).rejects.toThrow(/at most/);
     expect(client.putAnnotatePad).not.toHaveBeenCalled();
-    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+    expect(durable.get("sync_state")?.size ?? 0).toBe(0);
   });
 
-  it("keeps an oversized annotate job while a later whiteboard PUT still flushes", async () => {
-    setPadSyncBodyCapForTests(80);
-    const client = fakeClient();
-    await enqueuePadSync({
-      op: "putAnnotate",
-      body: {
-        id: "a1",
-        name: "book.pdf",
-        hash: "h",
-        doc_type: "pdf",
-        updated_at: 1,
-        source: "x".repeat(400),
-        footnotes: [],
-        board: emptyBoard,
-        agent: [],
-      },
-    });
-    await enqueuePadSync({
-      op: "putWhiteboard",
-      body: {
-        id: "w1",
-        title: "One",
-        updated_at: 1,
-        page_count: 1,
-        board: { v: 1, elements: [] },
-        agent: [],
-      },
-    });
-    await flushPadSyncQueue(client);
-    expect(client.putAnnotatePad).not.toHaveBeenCalled();
-    expect(client.putWhiteboardPad).toHaveBeenCalledTimes(1);
-    expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "putAnnotate" }]);
+  it("oversized current annotate fails without blocking a different book", async () => {
+    setPadSyncBodyCapForTests(80); const client = fakeClient();
+    const doc = { id: "a1", name: "book.pdf", hash: "h", docType: "pdf" as const, updatedAt: 1, source: "x".repeat(400), board: emptyBoard };
+    getAnnotateDoc.mockResolvedValue(doc); await expect(pushAnnotatePad(client, doc)).rejects.toThrow(/at most/);
+    const notebook = { id: "w1", title: "One", updatedAt: 1, pageCount: 1, board: emptyBoard, agent: [] }; getWhiteboardNotebook.mockResolvedValue(notebook);
+    expect(await uploadSavedWhiteboard(client, notebook)).toBe(true); expect(client.putAnnotatePad).not.toHaveBeenCalled();
+    expect(client.putWhiteboardPad).toHaveBeenCalledTimes(1); expect(await getAnnotateDoc("a1")).toEqual(doc);
   });
 
-  it("keeps queued live PUTs until the live metadata is acknowledged", async () => {
-    const client = fakeClient();
-    await enqueuePadSync({
-      op: "putWhiteboard",
-      body: {
-        id: "w1",
-        title: "One",
-        updated_at: 2,
-        page_count: 1,
-        board: { v: 1, elements: [] },
-        agent: [],
-      },
-    });
-    await pushPadSnapshot(client, {
-      kind: "whiteboard",
-      key: "w1",
-      tier: "24h",
-      writtenAt: 2,
-      name: "One",
-      board: emptyBoard,
-    });
-    expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "putWhiteboard" }]);
+  it("snapshot upload never acknowledges the saved live record", async () => {
+    const row = { id: "w1", title: "One", updatedAt: 2, pageCount: 1, board: emptyBoard, agent: [] };
+    getWhiteboardNotebook.mockResolvedValue(row);
+    await mutateLocalBook({ kind: "whiteboard", id: "w1" }, {}, ctx => { ctx.setMetadata({ kind: "whiteboard", id: "w1", title: "One" }); ctx.setContent(row); });
+    const before = await getBookSyncState("whiteboard", "w1");
+    await pushPadSnapshot(fakeClient(), { kind: "whiteboard", key: "w1", tier: "24h", writtenAt: 2, name: "One", board: emptyBoard });
+    expect(await getBookSyncState("whiteboard", "w1")).toEqual(before); expect(before?.syncedChangeSeq).toBe(0);
   });
 
   it("ships ink, edges and source on the snapshot payload", async () => {
@@ -880,56 +825,28 @@ describe("live PUT coalesce and 24h compact", () => {
     );
   });
 
-  it("keeps a live PUT newer than the 24h stamp", async () => {
-    const client = fakeClient();
-    await enqueuePadSync({
-      op: "putWhiteboard",
-      body: {
-        id: "w1",
-        title: "One",
-        updated_at: 3,
-        page_count: 1,
-        board: { v: 1, elements: [] },
-        agent: [],
-      },
-    });
-    await pushPadSnapshot(client, {
-      kind: "whiteboard",
-      key: "w1",
-      tier: "24h",
-      writtenAt: 2,
-      name: "One",
-      board: emptyBoard,
-    });
-    expect(peekPadSyncQueueForTests()).toHaveLength(1);
+  it("an older snapshot cannot replace the newest live content or tracking", async () => {
+    const row = { id: "w1", title: "One", updatedAt: 3, pageCount: 1, board: emptyBoard, agent: [] }; getWhiteboardNotebook.mockResolvedValue(row);
+    await mutateLocalBook({ kind: "whiteboard", id: "w1" }, {}, ctx => ctx.setContent(row)); const before = await getBookSyncState("whiteboard", "w1");
+    await pushPadSnapshot(fakeClient(), { kind: "whiteboard", key: "w1", tier: "24h", writtenAt: 2, name: "One", board: emptyBoard });
+    expect(await getWhiteboardNotebook("w1")).toEqual(row); expect(await getBookSyncState("whiteboard", "w1")).toEqual(before);
   });
 });
 
-describe("delete/restore queue", () => {
-  it("keeps a rejected delete until the tombstone is acknowledged", async () => {
-    const client = fakeClient({
-      tombstoneWhiteboardPad: vi.fn(async () => ({ applied: false, seq: 6 })),
-    });
-    await enqueuePadSync({ op: "deletePad", kind: "whiteboard", padId: "w1", seq: 5 });
-    await flushPadSyncQueue(client);
-    expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "deletePad", padId: "w1", seq: 5 }]);
+describe("durable delete/restore intent", () => {
+  it("keeps a rejected current deletion until an applied:true acknowledgement", async () => {
+    const client = fakeClient({ tombstoneWhiteboardPad: vi.fn(async () => ({ applied: false, seq: 6 })) });
+    await tombstonePad(client, "whiteboard", "w1", 5);
+    expect((await getBookSyncState("whiteboard", "w1"))?.lifecycle).toMatchObject({ action: "delete", seq: 5 });
     expect(markWhiteboardDeleteAcked).not.toHaveBeenCalled();
   });
 
-  it("keeps every pending tombstone beyond the old eight-job cap", async () => {
-    const client = fakeClient({
-      tombstoneWhiteboardPad: vi.fn(async () => {
-        throw new LcApiError("offline", 0);
-      }),
-    });
-    listWhiteboardTrash.mockReturnValue(
-      Array.from({ length: 8 }, (_, i) => ({ id: `w${i + 1}`, lastTouch: i + 1, deletedAt: 1 })),
-    );
-    for (let i = 1; i <= 9; i += 1) {
-      await deletePadEverywhere(client, "whiteboard", `w${i}`);
-    }
-    expect(peekPadSyncQueueForTests().filter((job) => job.op === "deletePad")).toHaveLength(9);
-    expect(peekPadSyncQueueForTests().some((job) => "padId" in job && job.padId === "w1")).toBe(true);
+  it("retains more than eight durable current deletions", async () => {
+    const client = fakeClient({ tombstoneWhiteboardPad: vi.fn().mockRejectedValue(new LcApiError("offline", 0)) });
+    for (let index = 1; index <= 9; index++) await tombstonePad(client, "whiteboard", `w${index}`, index);
+    const states = [...durable.get("sync_state")!.values()] as Array<{ lifecycle?: { action: string } }>;
+    expect(states.filter(state => state.lifecycle?.action === "delete")).toHaveLength(9);
+    expect((await getBookSyncState("whiteboard", "w1"))?.lifecycle?.action).toBe("delete");
     expect(deleteWhiteboardNotebook).not.toHaveBeenCalled();
   });
 
@@ -1000,9 +917,9 @@ describe("live PUT CAS and gone", () => {
         throw new LcApiError("conflict", 409, JSON.stringify(hub), hub);
       }),
     });
-    await pushWhiteboardPad(client, notebook);
+    await uploadSavedWhiteboard(client, notebook);
     expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
-    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+    expect(durable.get("sync_state")?.size ?? 0).toBe(0);
   });
 
   it("does not resurrect after 410 gone", async () => {
@@ -1014,9 +931,9 @@ describe("live PUT CAS and gone", () => {
         });
       }),
     });
-    await pushWhiteboardPad(client, notebook);
+    await uploadSavedWhiteboard(client, notebook);
     expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
-    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+    expect(durable.get("sync_state")?.size ?? 0).toBe(0);
   });
 
   it("does not replace problem attachments with a conflicting server board", async () => {
@@ -1036,37 +953,13 @@ describe("live PUT CAS and gone", () => {
     expect(putProblemBoard).not.toHaveBeenCalled();
   });
 
-  it("applies a problem 409 body and does not queue", async () => {
-    const hub = {
-      id: "leetcode/two-sum",
-      dataset: "leetcode",
-      task_id: "two-sum",
-      updated_at: 40,
-      board: { v: 1, elements: [{ id: "hub" }] },
-      agent: [],
-    };
-    const client = fakeClient({
-      putProblemPad: vi.fn(async () => {
-        throw new LcApiError("conflict", 409, JSON.stringify(hub), hub);
-      }),
-    });
-    await pushProblemPad(client, {
-      id: "leetcode/two-sum",
-      dataset: "leetcode",
-      taskId: "two-sum",
-      updatedAt: 999,
-      hubAckUpdatedAt: 1,
-      board: emptyBoard,
-      agent: [],
-    });
-    expect(putProblemBoard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "leetcode/two-sum",
-        updatedAt: 40,
-        hubAckUpdatedAt: 40,
-      }),
-    );
-    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+  it("retains both the current problem and conflict information after a rejected upload", async () => {
+    const local = { id: "leetcode/two-sum", dataset: "leetcode", taskId: "two-sum", updatedAt: 999, hubAckUpdatedAt: 1, board: emptyBoard, agent: [] };
+    getProblemBoard.mockResolvedValue(local);
+    const hub = { id: local.id, dataset: "leetcode", task_id: "two-sum", updated_at: 40, board: { ...emptyBoard, elements: [{ id: "hub" }] }, agent: [] };
+    const client = fakeClient({ putProblemPad: vi.fn().mockRejectedValue(new LcApiError("conflict", 409, JSON.stringify(hub), hub)) });
+    expect(await pushProblemPad(client, local)).toBe(false); expect(putProblemBoard).not.toHaveBeenCalled();
+    expect(await getProblemBoard(local.id)).toEqual(local); expect(client.putProblemPad).toHaveBeenCalledOnce();
   });
 
   it("serializes overlapping problem saves", async () => {
@@ -1086,14 +979,11 @@ describe("live PUT CAS and gone", () => {
     expect(put).toHaveBeenCalledTimes(2);
   });
 
-  it("retries the current problem catalog instead of an obsolete queued version", async () => {
+  it("explicit problem retry uses the current catalog instead of the older caller copy", async () => {
     const artifacts = { v: 1, parent: { kind: "problem", id: "d/1" }, revision: "new", artifacts: [] };
     getProblemBoard.mockResolvedValue({ id: "d/1", dataset: "d", taskId: "1", updatedAt: 20, board: emptyBoard, artifacts });
-    await enqueuePadSync({ op: "putProblem", body: { id: "d/1", dataset: "d", task_id: "1", updated_at: 10, board: emptyBoard, agent: [] } });
-    const client = fakeClient();
-    await flushPadSyncQueue(client);
+    const client = fakeClient(); await pushProblemPad(client, { id: "d/1", dataset: "d", taskId: "1", updatedAt: 10, board: emptyBoard, agent: [] });
     expect(client.putProblemPad).toHaveBeenCalledWith("d", "1", expect.objectContaining({ updated_at: 20, artifacts }));
-    expect(peekPadSyncQueueForTests()).toHaveLength(0);
   });
 
   it("peer ping applies a problem row the other device saved", async () => {
@@ -1142,44 +1032,14 @@ describe("live PUT CAS and gone", () => {
     expect(deleteProblemBoard).toHaveBeenCalledWith("leetcode/two-sum");
   });
 
-  it("keeps a queued live PUT and the local copy when ping sees a newer hub row", async () => {
-    await enqueuePadSync({
-      op: "putWhiteboard",
-      body: {
-        id: "w1",
-        title: "One",
-        updated_at: 999,
-        page_count: 1,
-        board: { v: 1, elements: [] },
-        agent: [],
-      },
-    });
-    getWhiteboardNotebook.mockResolvedValue({
-      id: "w1",
-      updatedAt: 10,
-      board: { v: 1, elements: [] },
-    });
-    const client = fakeClient({
-      pingPadSync: vi.fn(async () => ({
-        now: 100,
-        whiteboard: [
-          {
-            id: "w1",
-            title: "N",
-            updated_at: 40,
-            page_count: 1,
-            board: { v: 1, elements: [{ id: "x" }] },
-            agent: [],
-          },
-        ],
-        annotate: [],
-        snapshots: [],
-        gone: [],
-      })),
-    });
-    await applyPadSyncPing(client);
-    expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "putWhiteboard" }]);
-    expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
+  it("keeps local desired state and content when a ping reports a different hub copy", async () => {
+    const local = { id: "w1", title: "One", updatedAt: 10, hubAckUpdatedAt: 1, board: emptyBoard };
+    getWhiteboardNotebook.mockResolvedValue(local);
+    await mutateLocalBook({ kind: "whiteboard", id: "w1" }, {}, ctx => { ctx.setContent(local); ctx.markLifecycle("restore", 2); });
+    const before = await getBookSyncState("whiteboard", "w1");
+    const client = fakeClient({ pingPadSync: vi.fn(async () => ({ now: 100, whiteboard: [{ id: "w1", title: "N", updated_at: 40, page_count: 1, board: { ...emptyBoard, elements: [{ id: "hub" }] }, agent: [] }], annotate: [], snapshots: [], gone: [] })) });
+    await applyPadSyncPing(client); expect(restoreWhiteboardNotebook).not.toHaveBeenCalled();
+    expect(await getBookSyncState("whiteboard", "w1")).toEqual(before); expect(await getWhiteboardNotebook("w1")).toEqual(local);
   });
 });
 
@@ -1226,12 +1086,12 @@ describe("applyHubAnnotate footnote boards", () => {
     const client = fakeClient();
     const unavailable = new Error("Missing attached whiteboard");
     footnoteBoardMocks.collectFootnoteBoards.mockRejectedValueOnce(unavailable);
-    await expect(pushAnnotatePad(client, {
+    await expect(uploadSavedAnnotate(client, {
       id: "a1", name: "n.md", hash: "h", docType: "markdown", updatedAt: 40,
       source: "#", board: emptyBoard, footnotes: [], agent: [],
     })).rejects.toBe(unavailable);
     expect(client.putAnnotatePad).not.toHaveBeenCalled();
-    expect(peekPadSyncQueueForTests()).toHaveLength(0);
+    expect(durable.get("sync_state")?.size ?? 0).toBe(0);
   });
 
   it("puts collected boards on the annotate PUT body", async () => {
@@ -1306,5 +1166,23 @@ describe("applyHubAnnotate footnote boards", () => {
     );
     expect(restoreAnnotateDoc).toHaveBeenCalled();
     expect(footnoteBoardMocks.applyFootnoteBoards).toHaveBeenCalledWith("a1", boards);
+  });
+});
+
+
+describe("unknown authored wire fields", () => {
+  it("retains root extras through whiteboard download and its next upload", async () => {
+    await applyHubWhiteboard({ id: "w1", title: "Book", updated_at: 3, page_count: 1, board: emptyBoard,
+      future: { hash: "nested authored hash", rev: 9 }, rev: 7 }, { emitReload: false });
+    const restored = restoreWhiteboardNotebook.mock.calls.at(-1)![0] as Parameters<typeof whiteboardPadBody>[0];
+    expect(whiteboardPadBody(restored)).toMatchObject({ future: { hash: "nested authored hash", rev: 9 } });
+    expect(restored.authoredExtras).not.toHaveProperty("rev");
+  });
+  it("retains annotate source identity and unknown root fields through download and upload", async () => {
+    await applyHubAnnotate({ id: "a1", name: "Book", hash: "authored source", doc_type: "markdown", updated_at: 3,
+      source: "saved", board: emptyBoard, future: { source: "nested source" }, record_rev: 7 }, { emitReload: false });
+    const restored = restoreAnnotateDoc.mock.calls.at(-1)![0] as Parameters<typeof annotatePadBody>[0];
+    expect(await annotatePadBody(restored)).toMatchObject({ hash: "authored source", future: { source: "nested source" } });
+    expect(restored.authoredExtras).not.toHaveProperty("record_rev");
   });
 });

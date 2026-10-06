@@ -2,13 +2,13 @@
  * The attachment cache's collection, off the main thread.
  *
  * Finding what is still referenced means reading every document, board,
- * snapshot and queued job — seconds of decoding on a tablet. Here it costs
+ * snapshot and recovery copy — seconds of decoding on a tablet. Here it costs
  * the reader nothing, and it reads in short read-only batches so the app's own
  * saves are never kept waiting behind it. The deletes happen in one short
  * transaction that checks each candidate again, so a copy opened while the
  * scan ran is kept.
  */
-import { openDb, STORE_CONTENT, STORE_PROBLEM_BOARDS, STORE_SNAPSHOTS, STORE_SYNC_QUEUE } from "./idb";
+import { openDb, STORE_CONTENT, STORE_PROBLEM_BOARDS, STORE_SNAPSHOTS, STORE_SYNC_RECOVERY } from "./idb";
 import {
   ARTIFACT_CACHE_DELETE_LIMIT,
   artifactCachePins,
@@ -22,7 +22,7 @@ const BATCH = 25;
 
 export interface ArtifactGcRequest {
   now: number;
-  /** Queued sync jobs still only in memory: they pin too. */
+  /** Additional retained drafts also pin their dependencies. */
   pending: unknown[];
 }
 
@@ -53,7 +53,7 @@ export async function collectInWorker({ now, pending }: ArtifactGcRequest): Prom
   const db = await openDb();
   const roots: unknown[] = [...pending];
   const assets: Array<{ key: IDBValidKey; row: CachedAssetTimes }> = [];
-  for (const name of [STORE_CONTENT, STORE_PROBLEM_BOARDS, STORE_SNAPSHOTS, STORE_SYNC_QUEUE]) {
+  for (const name of [STORE_CONTENT, STORE_PROBLEM_BOARDS, STORE_SNAPSHOTS, STORE_SYNC_RECOVERY]) {
     let after: IDBValidKey | null = null;
     for (;;) {
       const { rows, last } = await readBatch(db, name, after);

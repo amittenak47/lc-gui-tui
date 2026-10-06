@@ -38,6 +38,7 @@ export function WhiteboardLibraryDialog({
     listWhiteboardNotebooks(),
   );
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const { tapArmed, arm } = useLibraryDeleteArm();
 
   useEffect(() => {
@@ -130,9 +131,12 @@ export function WhiteboardLibraryDialog({
                 <LibraryPadlock
                   name={entry.title}
                   locked={Boolean(entry.locked)}
-                  onToggle={() => {
-                    setWhiteboardNotebookLocked(entry.id, !entry.locked);
-                    setNotebooks(listWhiteboardNotebooks());
+                  onToggle={async () => {
+                    try {
+                      await setWhiteboardNotebookLocked(entry.id, !entry.locked);
+                      setNotebooks(listWhiteboardNotebooks());
+                      setError(null);
+                    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
                   }}
                 />
               </div>
@@ -140,6 +144,7 @@ export function WhiteboardLibraryDialog({
           </div>
         </div>
         <div className="lc-settings-foot">
+          {error && <p className="lc-error" role="alert">{error}</p>}
           <button type="button" className="lc-secondary" onClick={onCancel}>
             Cancel
           </button>

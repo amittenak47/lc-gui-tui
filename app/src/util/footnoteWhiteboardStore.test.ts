@@ -1,16 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./idb", () => ({
-  run: async () => {
-    throw new Error("no IndexedDB");
-  },
-  withStore: async () => {
-    throw new Error("no IndexedDB");
-  },
-  STORE_CONTENT: "content",
-  STORE_INK_PAGES: "ink_pages",
-  STORE_SNAPSHOTS: "snapshots",
-}));
+import { IDBFactory, IDBKeyRange as FakeKeyRange } from "fake-indexeddb";
+import { closeDbForTests } from "./idb";
+const databaseFixture = vi.hoisted(() => ({ available: false }));
+vi.mock("./idb", async original => {
+  const actual = await original<typeof import("./idb")>();
+  return {
+    ...actual,
+    run: async (...args: Parameters<typeof actual.run>) => {
+      if (!databaseFixture.available) throw new Error("no IndexedDB");
+      return actual.run(...args);
+    },
+    withStore: async (name: string, mode: IDBTransactionMode, work: (store: IDBObjectStore) => void) => {
+      if (databaseFixture.available) return actual.withStore(name, mode, work);
+      if (mode !== "readonly") throw new Error("no IndexedDB");
+      const reads: Array<{ result: null; onsuccess?: () => void }> = [];
+      work({ openCursor: () => { const request = { result: null }; reads.push(request); return request; } } as unknown as IDBObjectStore);
+      for (const request of reads) request.onsuccess?.();
+    },
+  };
+});
 
 import type { BoardBlob } from "../canvas/BoardHandle";
 import { getContent, putContent } from "./contentStore";
@@ -51,8 +60,10 @@ function mark(id: string, wbIds: string[]): DocFootnote {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await closeDbForTests(); databaseFixture.available = false; vi.stubGlobal("indexedDB", undefined);
   store = new Map<string, string>();
+  vi.stubGlobal("IDBKeyRange", { bound: (lower: string, upper: string) => ({ lower, upper }) });
   vi.stubGlobal("localStorage", {
     get length() {
       return store.size;
@@ -64,7 +75,8 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeDbForTests();
   vi.unstubAllGlobals();
 });
 
@@ -139,6 +151,7 @@ describe("footnoteWhiteboardStore", () => {
         "whiteboard.content.v1.fnwb:doc-1:wb-2",
       ]),
     );
+    databaseFixture.available = true; vi.stubGlobal("indexedDB", new IDBFactory()); vi.stubGlobal("IDBKeyRange", FakeKeyRange);
     await deleteFootnoteWhiteboard("doc-1", "wb-1");
     expect(await getFootnoteWhiteboard("doc-1", "wb-1")).toBeNull();
     expect(await getFootnoteWhiteboard("doc-1", "wb-2")).toEqual({
@@ -151,6 +164,7 @@ describe("footnoteWhiteboardStore", () => {
     await putFootnoteWhiteboard("doc-1", "wb-1", { board: board("a"), pageCount: 1 });
     await putFootnoteWhiteboard("doc-1", "wb-2", { board: board("b"), pageCount: 1 });
     await putFootnoteWhiteboard("doc-2", "wb-1", { board: board("c"), pageCount: 1 });
+    databaseFixture.available = true; vi.stubGlobal("indexedDB", new IDBFactory()); vi.stubGlobal("IDBKeyRange", FakeKeyRange);
     await sweepFootnoteWhiteboards("doc-1");
     expect(await getFootnoteWhiteboard("doc-1", "wb-1")).toBeNull();
     expect(await getFootnoteWhiteboard("doc-1", "wb-2")).toBeNull();

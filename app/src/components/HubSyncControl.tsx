@@ -37,8 +37,8 @@ function footnotesOf(
   return Array.isArray(notes) ? (notes as DocFootnote[]) : [];
 }
 import { PAD_HUB_EVENT, loadPadHub } from "../util/padHub";
-import { getPadHubStatus, isPadHubOffline } from "../util/padHubStatus";
-import { compactManualPadSyncQueue, enqueuePadSync, flushPadSyncQueue, reserveManualPadSync } from "../util/padSync";
+import { isPadHubOffline } from "../util/padHubStatus";
+import { syncLegacySnapshots } from "../util/padSync";
 import type { DocWorkProgress } from "./DocIndexChip";
 import {
   snapshotFromPing,
@@ -404,7 +404,6 @@ export function HubSyncControl({
   const runWalk = async (from: HubSyncStage) => {
     if (walkingRef.current) return;
     walkingRef.current = true;
-    let releaseBook: (() => void) | undefined;
     const abort = new AbortController();
     walkAbortRef.current = abort;
     const throwIfAborted = () => {
@@ -447,31 +446,11 @@ export function HubSyncControl({
        * more correct of the two: every stage of a walk should be looking at
        * the same world.
        */
-      const preparingPad = await host!.pad();
-      if (preparingPad) releaseBook = await reserveManualPadSync(preparingPad.kind, preparingPad.id);
       await host?.prepare?.();
       throwIfAborted();
       if (isPadHubOffline()) {
-        const pad = await host!.pad();
-        throwIfAborted();
-        if (pad) {
-          const body = await pad.buildBody();
-          throwIfAborted();
-          goStage("pad");
-          await enqueuePadSync(pad.kind === "annotate"
-            ? { op: "putAnnotate", body: body as AnnotatePadDto }
-            : { op: "putWhiteboard", body: body as WhiteboardPadDto });
-          throwIfAborted();
-          // Recovery may have flushed an empty queue while the body was
-          // being prepared. Drain this explicit action if it missed that beat.
-          if (getPadHubStatus().status === "online") void flushPadSyncQueue(client!).catch(() => {});
-          // Queueing keeps the local copy; only a hub acknowledgement can
-          // finish the explicit walk or advance the tab to Synced.
-          throw new Error("Desktop app is offline — this will sync when it's back.");
-        }
-        throw new Error("Desktop hub offline.");
+        throw new Error("Can't reach the hub. Your changes are kept on this device.");
       }
-      await compactManualPadSyncQueue();
       const ping = await client!.pingPadSync(0);
       throwIfAborted();
 
@@ -810,9 +789,7 @@ export function HubSyncControl({
         }
       }
 
-      // Upload the current book before draining unrelated historical jobs.
-      // Refused snapshots keep their queued copies and fail this walk.
-      await flushPadSyncQueue(client!, { manual: true });
+      await syncLegacySnapshots(client!);
       throwIfAborted();
 
       /*
@@ -885,7 +862,7 @@ export function HubSyncControl({
         progress: null,
         error: message,
       });
-    } finally { releaseBook?.(); }
+    }
   };
 
   useEffect(() => {

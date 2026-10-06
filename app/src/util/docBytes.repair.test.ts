@@ -2,10 +2,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const store = new Map<string, unknown>();
+const recovery = new Map<string, unknown>();
 
 vi.mock("./idb", () => ({
   STORE_BYTES: "bytes",
+  STORE_SYNC_RECOVERY: "sync_recovery",
   run: async (_store: string, _mode: string, work: (s: unknown) => unknown) => {
+    if(_store==="sync_recovery")return (work({getAll:()=>({result:[...recovery.values()]})}) as {result:unknown}).result;
     const fake = {
       get: (key: string) => ({ result: store.get(key) }),
       put: (value: unknown, key: string) => {
@@ -35,9 +38,16 @@ const HASH = hashBytes(REAL);
 const POISON = Uint8Array.from('{"error":"no bytes"}', (c) => c.charCodeAt(0))
   .buffer as ArrayBuffer;
 
-beforeEach(() => store.clear());
+beforeEach(() => {store.clear();recovery.clear();});
 
 describe("a row that is not the document it is filed under", () => {
+  it("preserves colliding retained copies and refuses to select or fetch a replacement",async()=>{
+    store.set(HASH,REAL);
+    recovery.set("collision",{id:"collision",type:"bytes",claimedHash:HASH,bytes:new Uint8Array(2048).fill(9).buffer,provenance:{source:"legacy"}});
+    const remote=vi.fn(async()=>REAL);
+    await expect(loadBinaryDocBytes(HASH,remote)).rejects.toThrow("Multiple retained byte copies");
+    expect(remote).not.toHaveBeenCalled();expect(store.get(HASH)).toBe(REAL);expect(recovery.size).toBe(1);
+  });
   it("is not handed back as the file", async () => {
     store.set(HASH, POISON);
     expect(await loadBinaryDocBytes(HASH)).toBeNull();

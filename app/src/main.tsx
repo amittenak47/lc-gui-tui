@@ -5,8 +5,9 @@ import { App } from "./App";
 import { applyAppTheme, loadThemeId } from "./theme/appThemes";
 import {
   migrateWhiteboardStorage,
-  storageMigrationPending,
 } from "./util/storageMigration";
+import { StorageUnavailableError } from "./util/idb";
+import { hydrateBookMetadata } from "./util/localBookStore";
 import "./styles.css";
 import { debugLogEnabled, installDebugLog } from "./util/debugLog";
 
@@ -71,14 +72,27 @@ function mountApp() {
   );
 }
 
-if (!storageMigrationPending()) {
-  mountApp();
-} else {
-  reactRoot.render(<UpdatingLibrary />);
-  void (async () => {
+reactRoot.render(<UpdatingLibrary />);
+void (async () => {
+  try {
     await migrateWhiteboardStorage();
+    await hydrateBookMetadata();
     // The theme key is one of the things that moves, so read it again.
     applyAppTheme(loadThemeId());
     mountApp();
-  })();
-}
+  } catch (cause) {
+    if(cause instanceof StorageUnavailableError) {
+      // Ordinary localStorage saving stays available when IDB does not exist.
+      await hydrateBookMetadata();
+      mountApp();
+      return;
+    }
+    reactRoot.render(
+      <div className="lc-server-gate-boot" role="alert">
+        <p className="lc-boot-note">The library could not be updated. Your saved copies have been kept.</p>
+        <p>{cause instanceof Error?cause.message:String(cause)}</p>
+        <button onClick={()=>window.location.reload()}>Retry</button>
+      </div>,
+    );
+  }
+})();

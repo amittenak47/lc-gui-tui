@@ -153,7 +153,7 @@ describe("deleteWhiteboardNotebook", () => {
 
   it("refuses to delete a locked notebook, and a later save keeps the lock", async () => {
     const row = await saveWhiteboardNotebook({ board: board("a"), pageCount: 1, title: "Keep" });
-    setWhiteboardNotebookLocked(row.id, true);
+    await setWhiteboardNotebookLocked(row.id, true);
     await deleteWhiteboardNotebook(row.id);
     expect(listWhiteboardNotebooks()).toHaveLength(1);
     await saveWhiteboardNotebook({ id: row.id, board: board("b"), pageCount: 1 });
@@ -176,7 +176,7 @@ describe("whiteboard trash", () => {
 
   it("is a no-op when locked", async () => {
     const row = await saveWhiteboardNotebook({ board: board("a"), pageCount: 1, title: "Keep" });
-    setWhiteboardNotebookLocked(row.id, true);
+    await setWhiteboardNotebookLocked(row.id, true);
     expect(await trashWhiteboardNotebook(row.id)).toBeNull();
     expect(listWhiteboardNotebooks()).toHaveLength(1);
     expect(listWhiteboardTrash()).toHaveLength(0);
@@ -200,7 +200,7 @@ describe("whiteboard trash", () => {
     expect(await sweepWhiteboardTrash(1 + PAD_TRASH_TTL_MS)).toEqual([]);
     expect(listWhiteboardTrash()).toHaveLength(1);
     const { markWhiteboardDeleteAcked } = await import("./whiteboardStore");
-    markWhiteboardDeleteAcked(row.id, true);
+    await markWhiteboardDeleteAcked(row.id, true);
     expect(await sweepWhiteboardTrash(1 + PAD_TRASH_TTL_MS)).toEqual([row.id]);
     expect(listWhiteboardTrash()).toHaveLength(0);
     expect(await getWhiteboardNotebook(row.id)).toBeNull();
@@ -215,7 +215,7 @@ describe("renameWhiteboardNotebook", () => {
     expect(whiteboardIsNamed(saved.id)).toBe(false);
 
     vi.setSystemTime(new Date(1_700_000_900_000));
-    expect(renameWhiteboardNotebook(saved.id, "Sketchbook")).toBe(true);
+    expect(await renameWhiteboardNotebook(saved.id, "Sketchbook")).toBe(true);
 
     const meta = listWhiteboardNotebooks()[0]!;
     expect(meta.title).toBe("Sketchbook");
@@ -233,6 +233,6 @@ it("permanent trash removal keeps sync deletion metadata but cannot restore cont
   expect(listWhiteboardTrash().some(row=>row.id===saved.id)).toBe(false);
   expect(await getWhiteboardNotebook(saved.id)).toBeNull();
   expect(await restoreWhiteboardFromTrash(saved.id)).toBeNull();
-  const raw=localStorage.getItem("whiteboard.notebook.index.v1")!;
-  expect(JSON.parse(raw).find((row:{id:string})=>row.id===saved.id)).toMatchObject({deletedAt:expect.any(Number),purgedAt:expect.any(Number)});
+  const { getCachedBookMeta } = await import("./localBookStore");
+  expect(getCachedBookMeta("whiteboard", saved.id)).toMatchObject({deletedAt:expect.any(Number),purgedAt:expect.any(Number)});
 });

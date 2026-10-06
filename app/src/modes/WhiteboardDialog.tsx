@@ -1,3 +1,4 @@
+import { RetainedCopies } from "./RetainedCopies";
 import { useIsPresent } from "motion/react";
 import { DialogBackdrop, DialogPresence } from "../components/DialogMotion";
 import {LibraryTrashRow} from "./LibraryTrashRow";
@@ -78,7 +79,7 @@ interface EntryProps extends NotebookContextProps {
   needsName?: boolean;
   /** Prefill / placeholder for that first Save. */
   defaultName?: string;
-  onChoose: (choice: ScratchEntryChoice, notebookId?: string) => void;
+  onChoose: (choice: ScratchEntryChoice, notebookId?: string, snapshotId?: string) => void;
   onCancel: () => void;
   onDelete?: (id: string) => void | Promise<void>;
   onRestoreTrash?: (id: string) => void | Promise<void>;
@@ -120,6 +121,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [pickingLoad, setPickingLoad] = useState(false);
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
+  const [pickingRecovery, setPickingRecovery] = useState(false);
   const [snapshots, setSnapshots] = useState<PadSnapshotMeta[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [saveTitle, setSaveTitle] = useState<string | null>(null);
@@ -149,6 +151,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
     setTrash(listWhiteboardTrash());
     setPickingLoad(false);
     setPickingSnapshots(false);
+    setPickingRecovery(false);
     setSaveTitle(null);
     setRenamingId(null);
     setLibraryQuery("");
@@ -164,7 +167,8 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
 
   const pending = Boolean(props.pending);
   const exiting = Boolean(props.exiting);
-  const error = props.error ?? null;
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const error = storageError ?? props.error ?? null;
   const isLeave = props.mode === "leave";
   const allowSave = props.mode === "entry" && Boolean(props.allowSave);
   const snapshotKey = props.mode === "entry" ? props.snapshotKey ?? null : null;
@@ -307,19 +311,24 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                 <span className="lc-muted">Keep this notebook in the library.</span>
               </HoldButton>
             </div>
+          ) : pickingRecovery ? (
+            <RetainedCopies kind="whiteboard" onRestored={refreshList} />
           ) : pickingSnapshots ? (
             <div className="lc-settings-choice">
-              {PAD_SNAPSHOT_TIERS.map((tier) => {
-                const row = snapshots.find((snap) => snap.tier === tier.id);
+              {PAD_SNAPSHOT_TIERS.flatMap(tier => {
+                const rows = snapshots.filter(snap => snap.tier === tier.id);
+                return (rows.length ? rows : [undefined]).map(row => ({ tier, row }));
+              }).map(({ tier, row }) => {
                 return (
                   <HoldButton holdMs={LIBRARY_HOLD_MS}
-                    key={tier.id}
+                    key={row?.snapshotId ?? tier.id}
                     label={`Restore ${tier.label} snapshot`}
                     className="lc-hold-choice"
                     disabled={locked || !row}
                     onConfirm={() => {
                       if (props.mode !== "entry") return;
-                      props.onChoose("snapshot", tier.id);
+                      if (row?.snapshotId) props.onChoose("snapshot", tier.id, row.snapshotId);
+                      else props.onChoose("snapshot", tier.id);
                     }}
                     resetKey={error}
                   >
@@ -380,9 +389,11 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                     name={entry.title}
                     locked={Boolean(entry.locked)}
                     disabled={locked}
-                    onToggle={() => {
-                      setWhiteboardNotebookLocked(entry.id, !entry.locked);
-                      refreshList();
+                    onToggle={async () => {
+                      try {
+                        await setWhiteboardNotebookLocked(entry.id, !entry.locked);
+                        refreshList();
+                      } catch (cause) { setStorageError(cause instanceof Error ? cause.message : String(cause)); }
                     }}
                   />
                   {!entry.locked && (
@@ -452,6 +463,7 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
                     {allowSave && <WhiteboardMenuRow label="Restore" disabled={locked || !snapshotKey} onConfirm={openSnapshots} />}
                   </>}
                   {section === "open" && <>
+                    <WhiteboardMenuRow label="Retained copies" disabled={locked} onConfirm={() => setPickingRecovery(true)} />
                     <WhiteboardMenuRow label="Load" disabled={locked || (!notebooks.length && !archived.length)} onConfirm={() => setPickingLoad(true)} />
                     <WhiteboardMenuRow label="Recents" disabled={locked || (!notebooks.length && !archived.length)} onConfirm={() => setPickingLoad(true)} />
                     <WhiteboardMenuRow label="Import backup" disabled={locked} onConfirm={() => props.onChoose("import")} />
@@ -470,15 +482,16 @@ export function WhiteboardDialog(props: WhiteboardDialogProps) {
           {!isLeave && props.mode === "entry" && props.onRefreshHub && <HubLibraryRefresh onRefresh={props.onRefreshHub} disabled={locked}
             className="lc-library-footer-pull" resultsContainer={bodyRef}><MenuRowLabel label="Pull" /></HubLibraryRefresh>}
           <span className="lc-dialog-foot-spacer" aria-hidden="true" />
-          {(section !== "main" || pickingLoad || pickingSnapshots || saveTitle !== null) && (
+          {(section !== "main" || pickingLoad || pickingSnapshots || pickingRecovery || saveTitle !== null) && (
             <button
               type="button"
               className="lc-secondary lc-dialog-action"
               disabled={locked}
               onClick={() => {
-                if (!pickingLoad && !pickingSnapshots && saveTitle === null) setSection("main");
+                if (!pickingLoad && !pickingSnapshots && !pickingRecovery && saveTitle === null) setSection("main");
                 setPickingLoad(false);
                 setPickingSnapshots(false);
+                setPickingRecovery(false);
                 setSaveTitle(null);
                 setRenamingId(null);
               }}

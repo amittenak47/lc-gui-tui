@@ -18,7 +18,7 @@ function report(over: Partial<DocStoreReport> = {}): DocStoreReport {
       { name: "content", rows: 5 },
       { name: "ink_pages", rows: 2 },
       { name: "note_links", rows: 3 },
-      { name: "pad_sync_queue", rows: 9 },
+      { name: "sync_recovery", rows: 9 },
       { name: "snapshots", rows: 9 },
     ],
     writeFailure: null,
@@ -40,7 +40,7 @@ describe("formatDocStoreReport", () => {
       [
         "whiteboard.docs v7",
         "Document copies: 0 (0 MB)",
-        "Other stores: content 5, ink_pages 2, note_links 3, pad_sync_queue 9, snapshots 9",
+        "Other stores: content 5, ink_pages 2, note_links 3, sync_recovery 9, snapshots 9",
         "1 of 1 library document has no stored copy.",
         "Industry-Coding-Skills-Evaluation-Framework-CodeSignal-Skills-Evaluation-Lab-Short.pdf",
         "A 64 KB test write saved and read back correctly, so saving works.",

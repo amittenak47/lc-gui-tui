@@ -10,7 +10,9 @@ const getAnnotateDoc = vi.fn(async (_id?: string): Promise<unknown> => null);
 const saveAnnotateDoc = vi.fn(async (_entry?: unknown) => {});
 const applyFootnoteBoards = vi.fn(async (_docId?: string, _boards?: unknown) => {});
 const restoreArtifactSnapshot = vi.fn(async () => {});
-vi.mock("./artifactSnapshotRestore", () => ({ restoreArtifactSnapshot: () => restoreArtifactSnapshot() }));
+const restorePadSnapshotLocally = vi.fn(async (_parent: unknown, _snap: unknown) => {});
+vi.mock("./artifactSnapshotRestore", () => ({ restoreArtifactSnapshot: () => restoreArtifactSnapshot(),
+  restorePadSnapshotLocally: (parent: unknown, snap: unknown) => restorePadSnapshotLocally(parent, snap) }));
 
 vi.mock("./inkPageStore", () => ({
   annotateDocKey: (id: string) => `md:${id}`,
@@ -81,14 +83,14 @@ describe("applyPadSnapshotExtras", () => {
       board,
       ink: [{ pageId: 1, updatedAt: 5, gz: "YQ==" }],
     });
-    expect(deleteInkPages).toHaveBeenCalledWith("wb:w1");
-    expect(putRows).toHaveBeenCalledTimes(1);
-    expect(putRows.mock.calls[0]?.[1]).toBe("wb:w1#1");
+    expect(restorePadSnapshotLocally).toHaveBeenCalledWith({ kind: "whiteboard", id: "w1" },
+      expect.objectContaining({ ink: [{ pageId: 1, updatedAt: 5, gz: "YQ==" }] }));
+    expect(deleteInkPages).not.toHaveBeenCalled();
   });
 
   it("clears the ink for a snapshot taken before anything was drawn", async () => {
     await applyPadSnapshotExtras("whiteboard", "w1", { name: "w1", board });
-    expect(deleteInkPages).toHaveBeenCalledWith("wb:w1");
+    expect(restorePadSnapshotLocally).toHaveBeenCalledWith({ kind: "whiteboard", id: "w1" }, { name: "w1", board });
     expect(putRows).not.toHaveBeenCalled();
   });
 
@@ -104,7 +106,8 @@ describe("applyPadSnapshotExtras", () => {
       name: "a1",
       board: { ...board, inkC: { ops: [1], raw: [] } } as never,
     });
-    expect(deleteInkPages).toHaveBeenCalledWith("md:a1");
+    expect(restorePadSnapshotLocally).toHaveBeenCalledWith({ kind: "annotate", id: "a1" },
+      expect.objectContaining({ board: expect.objectContaining({ inkC: { ops: [1], raw: [] } }) }));
     expect(putRows).not.toHaveBeenCalled();
   });
 
@@ -143,7 +146,9 @@ describe("applyPadSnapshotExtras", () => {
       board,
       footnoteBoards,
     });
-    expect(applyFootnoteBoards).toHaveBeenCalledWith("a1", footnoteBoards);
+    expect(restorePadSnapshotLocally).toHaveBeenCalledWith({ kind: "annotate", id: "a1" },
+      expect.objectContaining({ footnoteBoards }));
+    expect(applyFootnoteBoards).not.toHaveBeenCalled();
     expect(saveAnnotateDoc).not.toHaveBeenCalled();
   });
 });

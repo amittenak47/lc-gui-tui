@@ -2,13 +2,13 @@
  * Local multipage scratchpad notebooks — independent of the harness router.
  */
 
+import { retainRecoveryCopy } from "./syncRecovery";
+import { hashBytes } from "./syncContent";
 import type { BoardBlob } from "../canvas/BoardHandle";
-import { deleteContent, getContent, putParentContent, editParentContentArtifacts } from "./contentStore";
+import { getContent, putParentRecord, editParentContentArtifacts } from "./contentStore";
 import type { ArtifactCatalogEdit } from "./artifactCatalogEdits";
-import { deletePadSnapshots } from "./padSnapshotStore";
-import { deleteInkPages, whiteboardDocKey } from "./inkPageStore";
-import { setStorageItem } from "./storageQuota";
 import { artifactCatalogFields, type ArtifactCatalog } from "./padArtifacts";
+import { getCachedBookMetadata, mutateLocalBook, type LocalBookEdit } from "./localBookStore";
 
 export const WHITEBOARD_LIBRARY_LIMIT = 50;
 export const WHITEBOARD_PAGE_LIMIT = 10;
@@ -25,6 +25,8 @@ export class WhiteboardLibraryFullError extends Error {
 export type WhiteboardBoardBlob = BoardBlob;
 
 export interface WhiteboardNotebookMeta {
+  /** Unknown authored wire fields survive download, editing and re-upload. */
+  authoredExtras?: Record<string, unknown>;
   /** Local presence/revision hint only; never put the catalog in this index. */
   artifactRevision?: string;
   id: string;
@@ -105,7 +107,7 @@ function legacyLibrary(): WhiteboardNotebook[] {
   }
 }
 
-function readIndex(): WhiteboardNotebookMeta[] {
+function legacyIndex(): WhiteboardNotebookMeta[] {
   try {
     const raw = storageGet(LIBRARY_KEY, PRE_RENAME_INDEX);
     if (!raw) {
@@ -124,12 +126,15 @@ function readIndex(): WhiteboardNotebookMeta[] {
   }
 }
 
-/** Throws {@link StorageFullError} when the origin is out of room — see `storageQuota`. */
 export const WHITEBOARD_LIBRARY_EVENT = "lc-whiteboard-library";
 
-function writeIndex(entries: WhiteboardNotebookMeta[]): void {
-  setStorageItem(LIBRARY_KEY, JSON.stringify(entries));
-  if (typeof window !== "undefined") window.dispatchEvent(new Event(WHITEBOARD_LIBRARY_EVENT));
+function readIndex(): WhiteboardNotebookMeta[] {
+  return getCachedBookMetadata<WhiteboardNotebookMeta>("whiteboard", legacyIndex());
+}
+
+async function editMetadata<T>(id: string, edit: (meta: WhiteboardNotebookMeta | null, ctx: LocalBookEdit) => T,
+  authored = true): Promise<T> {
+  return mutateLocalBook({ kind: "whiteboard", id }, { authored }, ctx => edit(ctx.metadata as WhiteboardNotebookMeta | null, ctx));
 }
 
 /** Synchronous on purpose — the library dialog renders names, not boards. */
@@ -167,18 +172,14 @@ export function defaultWhiteboardTitle(now = Date.now()): string {
  * `setAnnotateDocLabel`. Marks the notebook as user-named so the first-Save
  * prompt does not fire again.
  */
-export function renameWhiteboardNotebook(id: string, title: string): boolean {
-  const index = readIndex();
-  const meta = index.find((entry) => entry.id === id);
+export async function renameWhiteboardNotebook(id: string, title: string): Promise<boolean> {
   const trimmed = title.trim();
-  if (!meta || !trimmed) return false;
-  if (meta.title === trimmed && meta.named) return false;
-  writeIndex(
-    index.map((entry) =>
-      entry.id === id ? { ...entry, title: trimmed, named: true } : entry,
-    ),
-  );
-  return true;
+  if (!trimmed) return false;
+  return editMetadata(id, (meta, ctx) => {
+    if (!meta || meta.title === trimmed && meta.named) return false;
+    ctx.setMetadata({ ...meta, kind: "whiteboard", title: trimmed, named: true });
+    return true;
+  });
 }
 
 /** True once the reader has confirmed a title (or renamed). */
@@ -203,8 +204,12 @@ export async function getWhiteboardNotebook(id: string): Promise<WhiteboardNoteb
       // Recover an interrupted content->index update, but never downgrade an
       // index changed by another window after this content read began.
       if (latest && latest.artifactRevision === meta.artifactRevision) {
-        meta = { ...latest, artifactRevision: fields.artifacts.revision, updatedAt: Math.max(Date.now(), latest.updatedAt + 1) };
-        writeIndex([meta, ...index.filter((entry) => entry.id !== id)]);
+        meta = await editMetadata(id, (current, ctx) => {
+          if (!current || current.artifactRevision !== latest.artifactRevision) return current ?? latest;
+          const next = { ...current, artifactRevision: fields.artifacts!.revision };
+          ctx.setMetadata({ ...next, kind: "whiteboard" });
+          return next;
+        }, false);
       }
     }
     return { ...meta, board: content.board, agent: Array.isArray(content.agent) ? content.agent : [],
@@ -237,6 +242,7 @@ export async function saveWhiteboardNotebook(input: {
   artifacts?: ArtifactCatalog;
   id?: string;
   title?: string;
+  metadataIntent?: "rename";
   board: WhiteboardBoardBlob;
   agent?: unknown[];
   pageCount: number;
@@ -256,7 +262,6 @@ export async function saveWhiteboardNotebook(input: {
   // empty" — the board autosave saves without one and must not wipe the chat.
   const prior = !Array.isArray(input.agent) || (existing?.artifactRevision && input.artifacts === undefined)
     ? await getContent<WhiteboardContent>(id) : null;
-  const agent = Array.isArray(input.agent) ? input.agent : prior?.agent ?? [];
   const artifactFields = artifactCatalogFields(
     input.artifacts === undefined ? prior?.artifacts : input.artifacts,
     { kind: "whiteboard", id },
@@ -274,21 +279,22 @@ export async function saveWhiteboardNotebook(input: {
     lastSyncedAt: existing?.lastSyncedAt,
     ...(existing?.hubAckUpdatedAt != null ? { hubAckUpdatedAt: existing.hubAckUpdatedAt } : {}),
   };
-  const saved = await putParentContent({ kind: "whiteboard", id }, {
-    board: input.board, agent, artifacts: input.artifacts,
-  } satisfies WhiteboardContent);
-  if (saved.artifacts) meta.artifactRevision = saved.artifacts.revision;
-  const latest = readIndex().find((entry) => entry.id === id);
-  if (existing && (!latest || latest.deletedAt !== undefined)) throw new Error("Notebook was removed during save; it was not restored.");
-  if (latest) {
-    meta.updatedAt = Math.max(meta.updatedAt, latest.updatedAt + 1);
-    meta.syncSeq = latest.syncSeq;
-    meta.hubAckUpdatedAt = latest.hubAckUpdatedAt;
-    meta.lastSyncedAt = latest.lastSyncedAt;
-    if (latest.locked) meta.locked = true; else delete meta.locked;
-  }
-  writeIndex([meta, ...readIndex().filter((entry) => entry.id !== id)]);
-  return { ...meta, ...saved };
+  const accepted = await putParentRecord<WhiteboardContent, WhiteboardNotebookMeta>({ kind: "whiteboard", id }, {
+    board: input.board, ...(Array.isArray(input.agent) ? { agent: input.agent } : {}), artifacts: input.artifacts,
+  } as WhiteboardContent, { metadata: (current, saved) => {
+    if (existing && (!current || current.deletedAt !== undefined)) throw new Error("Notebook was removed during save; it was not restored.");
+    const next: WhiteboardNotebookMeta = { ...current, ...meta,
+      title: current && current.named && input.metadataIntent !== "rename" ? current.title : title,
+      updatedAt: Math.max(now, (current?.updatedAt ?? now - 1) + 1),
+      syncSeq: current?.syncSeq ?? 0, lastSyncedAt: current?.lastSyncedAt,
+      hubAckUpdatedAt: current?.hubAckUpdatedAt,
+    };
+    if (current?.locked) next.locked = true; else delete next.locked;
+    if (current?.named || named) next.named = true;
+    if (saved.artifacts) next.artifactRevision = saved.artifacts.revision;
+    return next;
+  } });
+  return { ...accepted.metadata!, ...accepted.content };
 }
 
 /** Update only attachment metadata; never write an old scene back after preflight. */
@@ -296,87 +302,67 @@ export async function editWhiteboardArtifacts(
   id: string, expectedCatalogRevision: string | null, edit: ArtifactCatalogEdit,
 ): Promise<ArtifactCatalog> {
   const assertLive = () => {
-    const meta = readIndex().find((row) => row.id === id);
+    const meta = readIndex().find(row => row.id === id);
     if (!meta || meta.deletedAt !== undefined) throw new Error("Notebook was removed; attachment was not published.");
   };
-  const artifacts = await editParentContentArtifacts({ kind: "whiteboard", id }, expectedCatalogRevision, edit, assertLive);
-  assertLive();
-  const index = readIndex();
-  const meta = index.find((row) => row.id === id)!;
-  writeIndex([{ ...meta, artifactRevision: artifacts.revision, updatedAt: Math.max(Date.now(), meta.updatedAt + 1) },
-    ...index.filter((row) => row.id !== id)]);
-  return artifacts;
+  return editParentContentArtifacts({ kind: "whiteboard", id }, expectedCatalogRevision, edit, assertLive);
 }
 
-export function markWhiteboardHubAck(id: string, updatedAt: number): void {
-  const existing = readIndex().find((entry) => entry.id === id);
-  if (!existing) return;
-  writeIndex([
-    { ...existing, hubAckUpdatedAt: updatedAt, lastSyncedAt: Date.now() },
-    ...readIndex().filter((entry) => entry.id !== id),
-  ]);
+export async function markWhiteboardHubAck(id: string, updatedAt: number): Promise<void> {
+  await editMetadata(id, (meta, ctx) => {
+    if (meta) ctx.setMetadata({ ...meta, kind: "whiteboard", hubAckUpdatedAt: Math.max(meta.hubAckUpdatedAt ?? 0, updatedAt), lastSyncedAt: Date.now() });
+  }, false);
 }
 
-export function setWhiteboardNotebookLocked(id: string, locked: boolean): void {
-  const library = readIndex();
-  const existing = library.find((entry) => entry.id === id);
-  if (!existing) return;
-  const next: WhiteboardNotebookMeta = { ...existing };
-  if (locked) next.locked = true;
-  else delete next.locked;
-  writeIndex([next, ...library.filter((entry) => entry.id !== id)]);
+export async function setWhiteboardNotebookLocked(id: string, locked: boolean): Promise<void> {
+  await editMetadata(id, (meta, ctx) => {
+    if (!meta || Boolean(meta.locked) === locked) return;
+    const next = { ...meta, kind: "whiteboard" as const };
+    if (locked) next.locked = true; else delete next.locked;
+    ctx.setMetadata(next);
+  });
 }
 
 export async function trashWhiteboardNotebook(id: string, now = Date.now()): Promise<number | null> {
-  const existing = readIndex().find((entry) => entry.id === id);
-  if (!existing || existing.locked) return null;
-  const seq = (existing.syncSeq ?? 0) + 1;
-  const next: WhiteboardNotebookMeta = {
-    ...existing,
-    deletedAt: now,
-    syncSeq: seq,
-    deleteAcked: false,
-    lastTouch: now,
-  };
-  writeIndex([next, ...readIndex().filter((entry) => entry.id !== id)]);
-  return seq;
+  return editMetadata(id, (meta, ctx) => {
+    if (!meta || meta.locked) return null;
+    const seq = (meta.syncSeq ?? 0) + 1;
+    ctx.setMetadata({ ...meta, kind: "whiteboard", deletedAt: now, syncSeq: seq, deleteAcked: false, lastTouch: now });
+    ctx.markLifecycle("delete", seq, ctx.state.bootstrap ? null : ctx.state.appliedBookRev, ctx.state.lifecycle?.goneSeq ?? null);
+    return seq;
+  });
 }
 
-export function markWhiteboardDeleteAcked(id: string, acked: boolean): void {
-  const existing = readIndex().find((entry) => entry.id === id);
-  if (!existing?.deletedAt) return;
-  writeIndex([
-    { ...existing, deleteAcked: acked },
-    ...readIndex().filter((entry) => entry.id !== id),
-  ]);
+export async function markWhiteboardDeleteAcked(id: string, acked: boolean): Promise<void> {
+  await editMetadata(id, (meta, ctx) => {
+    if (meta?.deletedAt) ctx.setMetadata({ ...meta, kind: "whiteboard", deleteAcked: acked });
+  }, false);
 }
 
-export function bumpWhiteboardSyncSeq(id: string): number {
-  const existing = readIndex().find((entry) => entry.id === id);
-  if (!existing) return 0;
-  const seq = (existing.syncSeq ?? 0) + 1;
-  const next = { ...existing, syncSeq: seq, lastTouch: Date.now() };
-  writeIndex([next, ...readIndex().filter((entry) => entry.id !== id)]);
-  return seq;
+export async function bumpWhiteboardSyncSeq(id: string): Promise<number> {
+  return editMetadata(id, (meta, ctx) => {
+    if (!meta) return 0;
+    const seq = (meta.syncSeq ?? 0) + 1;
+    ctx.setMetadata({ ...meta, kind: "whiteboard", syncSeq: seq, lastTouch: Date.now() });
+    return seq;
+  });
 }
 
 export async function restoreWhiteboardFromTrash(id: string): Promise<WhiteboardNotebook | null> {
-  const existing = readIndex().find((entry) => entry.id === id);
-  if (!existing?.deletedAt || existing.purgedAt) return null;
-  if (liveCount() >= WHITEBOARD_LIBRARY_LIMIT) {
-    throw new WhiteboardLibraryFullError(
-      `At most ${WHITEBOARD_LIBRARY_LIMIT} whiteboard notebooks — delete one to restore another.`,
-    );
-  }
-  const seq = (existing.syncSeq ?? 0) + 1;
-  const next: WhiteboardNotebookMeta = { ...existing, syncSeq: seq, lastTouch: Date.now() };
-  delete next.deletedAt;
-  delete next.deleteAcked;
-  writeIndex([next, ...readIndex().filter((entry) => entry.id !== id)]);
+  const metadata = await editMetadata(id, (meta, ctx) => {
+    if (!meta?.deletedAt || meta.purgedAt || !ctx.content) return null;
+    if (liveCount() >= WHITEBOARD_LIBRARY_LIMIT) throw new WhiteboardLibraryFullError(`At most ${WHITEBOARD_LIBRARY_LIMIT} whiteboard notebooks ? delete one to restore another.`);
+    const seq = Math.max(meta.syncSeq ?? 0, ctx.state.lifecycle?.goneSeq ?? 0) + 1;
+    const next = { ...meta, kind: "whiteboard" as const, syncSeq: seq, lastTouch: Date.now() };
+    delete next.deletedAt; delete next.deleteAcked;
+    ctx.setMetadata(next);
+    ctx.markLifecycle("restore", seq, ctx.state.bootstrap ? null : ctx.state.appliedBookRev, ctx.state.lifecycle?.goneSeq ?? null);
+    return next;
+  });
+  if (!metadata) return null;
   const content = await getContent<WhiteboardContent>(id);
-  if (!content) return null;
-  return { ...next, board: content.board, agent: content.agent,
-    ...artifactCatalogFields(content.artifacts, { kind: "whiteboard", id }) };
+  return content ? { ...metadata, board: content.board, agent: content.agent,
+    ...artifactCatalogFields(content.artifacts, { kind: "whiteboard", id }) } : null;
 }
 
 export async function sweepWhiteboardTrash(now = Date.now()): Promise<string[]> {
@@ -395,17 +381,17 @@ export async function sweepWhiteboardTrash(now = Date.now()): Promise<string[]> 
 }
 
 export async function deleteWhiteboardNotebook(id: string, preserveTombstone = false): Promise<void> {
-  const existing = readIndex().find((entry) => entry.id === id);
-  if (preserveTombstone && !existing?.deletedAt) throw new Error("Only trashed notebooks can be permanently deleted.");
-  if (!preserveTombstone && existing?.locked) return;
-  writeIndex(readIndex().flatMap(entry => entry.id !== id ? [entry] : preserveTombstone ? [{...entry,purgedAt:Date.now(),locked:false}] : []));
-  await deleteContent(id);
-  void deletePadSnapshots("whiteboard", id).catch(() => {});
-  // Its links go too — see `deleteAnnotateDoc` for why both directions.
-  void import("./noteLinks")
-    .then((links) => links.deleteEdgesFor({ type: "whiteboard", id }))
-    .catch(() => {});
-  void deleteInkPages(whiteboardDocKey(id)).catch(() => {});
+  await editMetadata(id, (meta, ctx) => {
+    if (preserveTombstone && !meta?.deletedAt) throw new Error("Only trashed notebooks can be permanently deleted.");
+    if (!preserveTombstone && meta?.locked) return;
+    if (!meta) return;
+    ctx.setMetadata(preserveTombstone ? { ...meta, kind: "whiteboard", purgedAt: Date.now(), locked: false } : null);
+    ctx.setContent(null);
+    if (!ctx.state.lifecycle) ctx.markLifecycle("delete", (meta.syncSeq ?? 0) + 1,
+      ctx.state.bootstrap ? null : ctx.state.appliedBookRev, null);
+  });
+  // Snapshots, source bytes, recovery copies and retained ink survive purge.
+  void import("./noteLinks").then(links => links.deleteEdgesFor({ type: "whiteboard", id })).catch(() => {});
 }
 
 /**
@@ -420,19 +406,15 @@ export async function deleteWhiteboardNotebook(id: string, preserveTombstone = f
  */
 export async function restoreWhiteboardNotebook(entry: WhiteboardNotebook): Promise<void> {
   const { board, agent, artifacts, ...meta } = entry;
-  const prior = artifacts === undefined && readIndex().find((row) => row.id === entry.id)?.artifactRevision
-    ? await getContent<WhiteboardContent>(entry.id) : null;
-  const artifactFields = artifactCatalogFields(
-    artifacts === undefined ? prior?.artifacts : artifacts,
-    { kind: "whiteboard", id: entry.id },
-  );
-  delete meta.artifactRevision;
-  if (artifactFields.artifacts) meta.artifactRevision = artifactFields.artifacts.revision;
-  const saved = await putParentContent({ kind: "whiteboard", id: entry.id }, {
+  const captured = readIndex().find(row => row.id === entry.id) ?? null;
+  await putParentRecord<WhiteboardContent, WhiteboardNotebookMeta>({ kind: "whiteboard", id: entry.id }, {
     board, agent: agent ?? [], artifacts,
-  } satisfies WhiteboardContent, { allowCatalogReplacement: true });
-  if (saved.artifacts) meta.artifactRevision = saved.artifacts.revision;
-  writeIndex([meta, ...readIndex().filter((existing) => existing.id !== entry.id)]);
+  }, { allowCatalogReplacement: true, metadata: (current, saved) => {
+    if (JSON.stringify(current) !== JSON.stringify(captured)) throw new Error("Notebook changed during restore; current work was kept.");
+    const next = { ...current, ...meta };
+    if (saved.artifacts) next.artifactRevision = saved.artifacts.revision;
+    return next;
+  } });
 }
 
 /** Migrate the pre-library single-slot keys if present. */
@@ -443,39 +425,18 @@ export async function migrateLegacyWhiteboard(
   const LEGACY_AGENT = "lc.scratchpad.agent.v1";
   const MIGRATED_BOARD = "whiteboard.notebook.board.v1";
   const MIGRATED_AGENT = "whiteboard.notebook.agent.v1";
-  try {
-    const raw = storageGet(MIGRATED_BOARD, LEGACY_BOARD);
-    if (!raw) return;
-    if (readIndex().length > 0) {
-      localStorage.removeItem(LEGACY_BOARD);
-      localStorage.removeItem(LEGACY_AGENT);
-      localStorage.removeItem(MIGRATED_BOARD);
-      localStorage.removeItem(MIGRATED_AGENT);
-      return;
-    }
-    const board = JSON.parse(raw) as WhiteboardBoardBlob;
-    if (board?.v !== 1 || !Array.isArray(board.elements)) return;
-    let agent: unknown[] = [];
-    try {
-      const agentRaw = storageGet(MIGRATED_AGENT, LEGACY_AGENT);
-      if (agentRaw) {
-        const parsed = JSON.parse(agentRaw);
-        if (Array.isArray(parsed)) agent = parsed;
-      }
-    } catch {
-      /* ignore */
-    }
-    await saveWhiteboardNotebook({
-      title: "Recovered whiteboard",
-      board,
-      agent,
-      pageCount: pageCountFromElements(board.elements),
-    });
-    localStorage.removeItem(LEGACY_BOARD);
-    localStorage.removeItem(LEGACY_AGENT);
-    localStorage.removeItem(MIGRATED_BOARD);
-    localStorage.removeItem(MIGRATED_AGENT);
-  } catch {
-    /* ignore */
-  }
+  const raw = storageGet(MIGRATED_BOARD, LEGACY_BOARD);
+  if (!raw) return;
+  const board = JSON.parse(raw) as WhiteboardBoardBlob;
+  if (board?.v !== 1 || !Array.isArray(board.elements)) throw new Error("The legacy whiteboard is unreadable. Its original copy was kept.");
+  const agentRaw = storageGet(MIGRATED_AGENT, LEGACY_AGENT);
+  const agent: unknown = agentRaw ? JSON.parse(agentRaw) : [];
+  if (!Array.isArray(agent)) throw new Error("The legacy conversation is unreadable. Its original copy was kept.");
+  const identity = await hashBytes(new TextEncoder().encode(JSON.stringify({ raw, agentRaw })));
+  const id = `legacy-whiteboard-${identity}`;
+  const metadata = { kind: "whiteboard" as const, id, title: "Recovered whiteboard", pageCount: pageCountFromElements(board.elements), updatedAt: 0 };
+  await retainRecoveryCopy({ id: `legacy-slot:${identity}`, type: "record", kind: "whiteboard", bookId: id,
+    provenance: { source: "legacy-single-whiteboard" }, record: { meta: metadata, payload: { board, agent } } });
+  if (readIndex().length === 0) await saveWhiteboardNotebook({ ...metadata, board, agent });
+  // The original keys remain readable; durable copy identity makes this restartable.
 }

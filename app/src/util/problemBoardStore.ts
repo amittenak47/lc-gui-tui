@@ -4,17 +4,21 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
-import { run, withStore, STORE_PROBLEM_BOARDS } from "./idb";
+import { run, STORE_PROBLEM_BOARDS, STORE_SYNC_RECOVERY } from "./idb";
+import { newBookToken } from "./bookCoordinator";
 import { artifactCatalogFields, type ArtifactCatalog } from "./padArtifacts";
 import { ArtifactEditConflict, editArtifactCatalog, requireArtifactCatalogTransition, type ArtifactCatalogEdit } from "./artifactCatalogEdits";
 import { downloadArtifactAssets } from "./artifactAssetSync";
 import { mergeAgentMessages } from "../modes/coachSessions";
+import { mutateLocalBook, readFallbackContent, hasFallbackContent } from "./localBookStore";
 
 export function problemPadId(dataset: string, taskId: string): string {
   return `${dataset.trim()}/${taskId.trim()}`;
 }
 
 export interface ProblemBoardRecord {
+  /** Unknown authored wire fields survive download, editing and re-upload. */
+  authoredExtras?: Record<string, unknown>;
   artifacts?: ArtifactCatalog;
   id: string;
   dataset: string;
@@ -27,6 +31,8 @@ export interface ProblemBoardRecord {
 }
 
 export async function getProblemBoard(id: string): Promise<ProblemBoardRecord | null> {
+  const fallback = readFallbackContent<ProblemBoardRecord>(id);
+  if (hasFallbackContent(id)) return fallback ? { ...fallback, ...artifactCatalogFields(fallback.artifacts, { kind: "problem", id }) } : null;
   const row = await run<ProblemBoardRecord | undefined>(
     STORE_PROBLEM_BOARDS,
     "readonly",
@@ -35,106 +41,88 @@ export async function getProblemBoard(id: string): Promise<ProblemBoardRecord | 
   return row ? { ...row, ...artifactCatalogFields(row.artifacts, { kind: "problem", id }) } : null;
 }
 
+function recordMetadata(row: ProblemBoardRecord) {
+  const { board: _board, agent: _agent, artifacts: _artifacts, ...meta } = row;
+  return { ...meta, kind: "problem" as const };
+}
+
 export async function putProblemBoard(row: ProblemBoardRecord): Promise<void> {
   const supplied = artifactCatalogFields(row.artifacts, { kind: "problem", id: row.id });
-  // One transaction: another window cannot insert a catalog between our read
-  // and an ink/chat-only write. Never interpret an omitted field as deletion.
-  let invalidCatalog: unknown;
-  try {
-    await withStore(STORE_PROBLEM_BOARDS, "readwrite", (store) => {
-      const request = store.get(row.id);
-      request.onsuccess = () => {
-        try {
-          const current = request.result as ProblemBoardRecord | undefined;
-          const artifacts = requireArtifactCatalogTransition(
-            current?.artifacts,
-            supplied.artifacts, { kind: "problem", id: row.id });
-          if (current?.artifacts && supplied.artifacts && current.artifacts.revision !== supplied.artifacts.revision) {
-            throw new ArtifactEditConflict();
-          }
-          const fields = artifacts ? { artifacts } : {};
-          store.put({ ...row, ...fields, agent: mergeAgentMessages(current?.agent ?? [], row.agent ?? [], false) }, row.id);
-        } catch (cause) {
-          invalidCatalog = cause;
-          store.transaction.abort();
-        }
-      };
-    });
-  } catch (cause) {
-    throw invalidCatalog ?? cause;
-  }
-}
-
-export async function deleteProblemBoard(id: string): Promise<void> {
-  await run(STORE_PROBLEM_BOARDS, "readwrite", (store) => store.delete(id));
-}
-
-/** A download/conflict choice may only replace the exact version it examined. */
-export async function replaceProblemBoard(expected: ProblemBoardRecord | null, row: ProblemBoardRecord): Promise<void> {
-  await downloadArtifactAssets(undefined, row.artifacts);
-  let failure: unknown;
-  try {
-    await withStore(STORE_PROBLEM_BOARDS, "readwrite", store => {
-      const request = store.get(row.id);
-      request.onsuccess = () => {
-        try {
-          const current = request.result as ProblemBoardRecord | undefined;
-          if (JSON.stringify(current ?? null) !== JSON.stringify(expected)) throw new ArtifactEditConflict();
-          const artifacts = requireArtifactCatalogTransition(current?.artifacts, row.artifacts, { kind: "problem", id: row.id });
-          store.put({ ...row, ...(artifacts ? { artifacts } : {}), agent: mergeAgentMessages(current?.agent ?? [], row.agent ?? []) }, row.id);
-        } catch (cause) { failure = cause; store.transaction.abort(); }
-      };
-    });
-  } catch (cause) { throw failure ?? cause; }
-}
-
-export function markProblemHubAck(id: string, updatedAt: number): void {
-  // An acknowledgement must not write an old board/catalog read before a save.
-  void withStore(STORE_PROBLEM_BOARDS, "readwrite", (store) => {
-    const request = store.get(id);
-    request.onsuccess = () => {
-      const row = request.result as ProblemBoardRecord | undefined;
-      if (row) store.put({ ...row, hubAckUpdatedAt: Math.max(row.hubAckUpdatedAt ?? 0, updatedAt) }, id);
-    };
-  }).catch(() => {});
-}
-
-/** Merge the acknowledged transcript without replaying an earlier board snapshot. */
-export async function acceptProblemHubAgent(id: string, agent: unknown): Promise<void> {
-  if (!Array.isArray(agent)) return;
-  await withStore(STORE_PROBLEM_BOARDS, "readwrite", store => {
-    const request = store.get(id);
-    request.onsuccess = () => {
-      const row = request.result as ProblemBoardRecord | undefined;
-      if (row) store.put({ ...row, agent: mergeAgentMessages(row.agent ?? [], agent) }, id);
-    };
+  await mutateLocalBook({ kind: "problem", id: row.id }, { contentStore: STORE_PROBLEM_BOARDS }, ctx => {
+    const current = ctx.content as ProblemBoardRecord | null;
+    const artifacts = requireArtifactCatalogTransition(current?.artifacts, supplied.artifacts, { kind: "problem", id: row.id });
+    if (current?.artifacts && supplied.artifacts && current.artifacts.revision !== supplied.artifacts.revision) throw new ArtifactEditConflict();
+    const saved = { ...current, ...row, ...(artifacts ? { artifacts } : {}),
+      agent: mergeAgentMessages(current?.agent ?? [], row.agent ?? [], false) };
+    if (!current && ctx.state.lifecycle?.action === "delete") {
+      saved.syncSeq = Math.max(saved.syncSeq ?? 0, ctx.state.lifecycle.seq) + 1;
+      ctx.markLifecycle("restore", saved.syncSeq, ctx.state.bootstrap ? null : ctx.state.appliedBookRev, ctx.state.lifecycle.goneSeq);
+    }
+    ctx.setContent(saved);
+    ctx.setMetadata({ ...ctx.metadata, ...recordMetadata(saved) });
   });
 }
 
-/** Dependencies first, then CAS the catalog while preserving the latest board/chat. */
+export async function deleteProblemBoard(id: string): Promise<void> {
+  await mutateLocalBook({ kind: "problem", id }, { contentStore: STORE_PROBLEM_BOARDS, requireIdb: true, extraStores: [STORE_SYNC_RECOVERY] }, ctx => {
+    const current = ctx.content as ProblemBoardRecord | null;
+    if (!current) return;
+    if (ctx.tx) {
+      const retainedId = `problem-delete:${newBookToken()}`;
+      ctx.tx.objectStore(STORE_SYNC_RECOVERY).add({ id: retainedId, type: "record", kind: "problem", bookId: id,
+        provenance: { source: "problem-delete" }, record: { meta: ctx.metadata ?? recordMetadata(current), payload: current } }, retainedId);
+    }
+    ctx.setContent(null); ctx.setMetadata(null);
+    ctx.markLifecycle("delete", (current.syncSeq ?? 0) + 1, ctx.state.bootstrap ? null : ctx.state.appliedBookRev, null);
+  });
+}
+
+/** A download/conflict choice may replace only the exact version it examined. */
+export async function replaceProblemBoard(expected: ProblemBoardRecord | null, row: ProblemBoardRecord): Promise<void> {
+  await downloadArtifactAssets(undefined, row.artifacts);
+  await mutateLocalBook({ kind: "problem", id: row.id }, { contentStore: STORE_PROBLEM_BOARDS, requireIdb: true }, ctx => {
+    const current = ctx.content as ProblemBoardRecord | null;
+    if (JSON.stringify(current) !== JSON.stringify(expected)) throw new ArtifactEditConflict();
+    const artifacts = requireArtifactCatalogTransition(current?.artifacts, row.artifacts, { kind: "problem", id: row.id });
+    const saved = { ...current, ...row, ...(artifacts ? { artifacts } : {}), agent: mergeAgentMessages(current?.agent ?? [], row.agent ?? []) };
+    ctx.setContent(saved); ctx.setMetadata({ ...ctx.metadata, ...recordMetadata(saved) });
+  });
+}
+
+export async function markProblemHubAck(id: string, updatedAt: number): Promise<void> {
+  await mutateLocalBook({ kind: "problem", id }, { contentStore: STORE_PROBLEM_BOARDS, authored: false }, ctx => {
+    const row = ctx.content as ProblemBoardRecord | null;
+    if (row) {
+      const saved = { ...row, hubAckUpdatedAt: Math.max(row.hubAckUpdatedAt ?? 0, updatedAt) };
+      ctx.setContent(saved); ctx.setMetadata({ ...ctx.metadata, ...recordMetadata(saved) });
+    }
+  });
+}
+
+/** Merge the accepted transcript while preserving the current problem scene. */
+export async function acceptProblemHubAgent(id: string, agent: unknown): Promise<void> {
+  if (!Array.isArray(agent)) return;
+  await mutateLocalBook({ kind: "problem", id }, { contentStore: STORE_PROBLEM_BOARDS, authored: false }, ctx => {
+    const row = ctx.content as ProblemBoardRecord | null;
+    if (row) ctx.setContent({ ...row, agent: mergeAgentMessages(row.agent ?? [], agent) });
+  });
+}
+
 export async function editProblemArtifacts(
   id: string, expectedCatalogRevision: string | null, edit: ArtifactCatalogEdit,
 ): Promise<ArtifactCatalog> {
   const initial = await getProblemBoard(id);
   if (!initial) throw new Error("Save the problem board before attaching content.");
   const next = editArtifactCatalog(initial.artifacts, { kind: "problem", id }, expectedCatalogRevision, edit);
-  // No network: every required immutable revision must already be staged locally.
   await downloadArtifactAssets(undefined, next);
-  let failure: unknown;
-  try {
-    await withStore(STORE_PROBLEM_BOARDS, "readwrite", (store) => {
-      const request = store.get(id);
-      request.onsuccess = () => {
-        try {
-          const current = request.result as ProblemBoardRecord | undefined;
-          const catalog = artifactCatalogFields(current?.artifacts, { kind: "problem", id }).artifacts;
-          if (!current || (catalog?.revision ?? null) !== expectedCatalogRevision) throw new ArtifactEditConflict();
-          const artifacts = requireArtifactCatalogTransition(catalog, next, { kind: "problem", id })!;
-          if (catalog?.revision === artifacts.revision) return;
-          store.put({ ...current, artifacts, updatedAt: Math.max(Date.now(), current.updatedAt + 1) }, id);
-        } catch (cause) { failure = cause; store.transaction.abort(); }
-      };
-    });
-  } catch (cause) { throw failure ?? cause; }
-  return next;
+  return mutateLocalBook({ kind: "problem", id }, { contentStore: STORE_PROBLEM_BOARDS, requireIdb: true }, ctx => {
+    const current = ctx.content as ProblemBoardRecord | null;
+    const catalog = artifactCatalogFields(current?.artifacts, { kind: "problem", id }).artifacts;
+    if (!current || (catalog?.revision ?? null) !== expectedCatalogRevision) throw new ArtifactEditConflict();
+    const artifacts = requireArtifactCatalogTransition(catalog, next, { kind: "problem", id })!;
+    if (catalog?.revision === artifacts.revision) return artifacts;
+    const saved = { ...current, artifacts, updatedAt: Math.max(Date.now(), current.updatedAt + 1) };
+    ctx.setContent(saved); ctx.setMetadata({ ...ctx.metadata, ...recordMetadata(saved) });
+    return artifacts;
+  });
 }

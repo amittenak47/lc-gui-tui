@@ -4,8 +4,9 @@ import { encodeInkOps } from "../canvas/inkCodec";
 import { inkPageKey, putInkPageArchive, putInkPages, type InkPageRecord } from "./inkPageStore";
 import { syncInkPages, pullInkPagesOverLocal, applyInkChoicesByPage } from "./inkSync";
 import { walkSyncInk, type WalkSnapshot } from "./hubWalk";
+import { memoryBookTransaction } from "./testBookTransaction";
 
-const state = vi.hoisted(() => ({ local: new Map<string, InkPageRecord>() }));
+const state = vi.hoisted(() => ({ local: new Map<string, InkPageRecord>(), stores: new Map<string, Map<IDBValidKey, unknown>>() }));
 vi.mock("./padHub", () => ({ loadPadHub: () => ({ url: "http://fixture", token: "test" }) }));
 vi.mock("./inkPageStore", async (original) => ({
   ...await original<typeof import("./inkPageStore")>(),
@@ -17,6 +18,11 @@ vi.mock("./inkPageStore", async (original) => ({
 vi.mock("./idb", async (original) => ({
   ...await original<typeof import("./idb")>(),
   STORE_INK_PAGES: "ink_pages",
+  abortTransaction: (_tx: unknown, cause: unknown) => { throw cause; },
+  withTransaction: async (_names: string[], _mode: string, work: Parameters<typeof memoryBookTransaction>[1]) => {
+    state.stores.set("ink_pages", state.local as Map<IDBValidKey, unknown>);
+    return memoryBookTransaction(state.stores, work);
+  },
   withStore: async (_name: string, _mode: string, work: (store: unknown) => void) => {
     const rows = state.local;
     const requests: Array<() => void> = [];
@@ -47,7 +53,7 @@ const snapshot = (): WalkSnapshot => ({
 });
 const sync = () => walkSyncInk(client, pad, snapshot(), 0);
 beforeEach(() => {
-  state.local = new Map(); hub.clear(); vi.clearAllMocks();
+  state.local = new Map(); state.stores = new Map(); hub.clear(); vi.clearAllMocks();
   vi.mocked(client.getInkPages).mockImplementation(async () => [...hub.values()]);
   vi.mocked(client.getInkPage).mockImplementation(async (_kind, _key, pageId) => hub.get(pageId) ?? null);
   vi.mocked(client.putInkPage).mockImplementation(async (page) => {

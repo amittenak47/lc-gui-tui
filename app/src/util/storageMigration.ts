@@ -1,352 +1,172 @@
-/**
- * One-shot boot copy of pre-rename storage onto `whiteboard.*`.
- *
- * localStorage first (cheap, synchronous), then IndexedDB `lc.docs` →
- * `whiteboard.docs`. The marker is written only after both succeed so a
- * crashed textbook copy retries instead of leaving the writer with an empty
- * library. Failures leave the old database in place.
- *
- * The IndexedDB copy goes a batch at a time, through a cursor. It used to be
- * `getAllKeys()` + `getAll()` per store, which reads every document's bytes
- * and every ink page into memory at once — a whole library, on the launch of
- * an upgrade, on a tablet. That is a peak the device may simply refuse, and
- * refusing it looked like the app dying on startup. Yielding between batches
- * also lets the shell paint, which is the other half of the fix (`main.tsx`).
- *
- * Stores are checkpointed as they finish, so a copy that is killed halfway
- * resumes rather than starting the whole library again on every launch.
- */
-
+/** Restartable, bounded imports. Sources and divergent versions remain retained. */
 import {
-  DB_NAME,
-  DB_VERSION,
-  LEGACY_DB_NAME,
-  STORE_BYTES,
-  STORE_CONTENT,
-  STORE_INK_PAGES,
-  STORE_SNAPSHOTS,
+  BOOK_STORES, LEGACY_DB_NAME, openDb, transactionOn, abortTransaction,
 } from "./idb";
+import {
+  captureLegacyStorage, importLegacyRows, LEGACY_QUEUE_STORE, MigrationError,
+  recognizedLegacyStores, type MigrationRow,
+} from "./queueMigration";
 import { MIGRATED_MARKER, remapLcKey } from "./storageKeys";
+import { canonicalJson, hashBytes } from "./syncContent";
+import { bytesToB64 } from "../api/nativeHttp";
 
-const STORES = [STORE_BYTES, STORE_CONTENT, STORE_SNAPSHOTS, STORE_INK_PAGES] as const;
-
-/** Stores already copied, so a killed migration does not start over. */
 const STORES_DONE_KEY = `${MIGRATED_MARKER}.stores`;
-
-/**
- * How much one batch may carry.
- *
- * Whichever comes first: `STORE_BYTES` rows are whole PDFs, so a handful can
- * be tens of megabytes, while ink pages are small and numerous and would spend
- * the whole migration yielding if the only limit were bytes.
- */
+const COVERAGE_KEY = `${MIGRATED_MARKER}.v8.coverage`;
 const BATCH_ROWS = 64;
 const BATCH_BYTES = 8 * 1024 * 1024;
 
-/** Whether the batch just filled. Exported so the limits can be checked. */
-export function migrationBatchIsFull(rows: number, bytes: number): boolean {
-  return rows >= BATCH_ROWS || bytes >= BATCH_BYTES;
-}
-
-/** Enough to bound a batch. Not an accounting of the heap. */
-export function migrationRowSize(value: unknown): number {
-  if (value instanceof ArrayBuffer) return value.byteLength;
-  if (ArrayBuffer.isView(value)) return value.byteLength;
-  if (typeof Blob !== "undefined" && value instanceof Blob) return value.size;
-  if (typeof value === "string") return value.length * 2;
+export function migrationBatchIsFull(rows:number,bytes:number):boolean {return rows>=BATCH_ROWS || bytes>=BATCH_BYTES;}
+export function migrationRowSize(value:unknown):number {
+  if(value instanceof ArrayBuffer || ArrayBuffer.isView(value))return value.byteLength;
+  if(typeof Blob!=="undefined"&&value instanceof Blob)return value.size;
+  if(typeof value==="string")return value.length*2;
   return 4096;
 }
+function yieldToPaint():Promise<void> {return new Promise(resolve=>setTimeout(resolve,0));}
 
-/** Let the browser paint, and let the transaction that just committed go. */
-function yieldToPaint(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
-}
-
-function doneStores(): Set<string> {
-  try {
-    const raw = localStorage.getItem(STORES_DONE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : null;
-    return new Set(Array.isArray(parsed) ? parsed.filter((n) => typeof n === "string") : []);
-  } catch {
-    return new Set();
+export function migrateLocalStorageKeys(storage:Storage=localStorage):void {
+  const keys=Array.from({length:storage.length},(_,index)=>storage.key(index)).filter((key):key is string=>!!key);
+  for(const key of keys) {
+    const next=remapLcKey(key);if(!next)continue;
+    try {const value=storage.getItem(key);if(value!==null&&storage.getItem(next)===null)storage.setItem(next,value);} catch { /* retain both source and prior destination */ }
   }
 }
-
-function markStoreDone(name: string): void {
-  try {
-    const done = doneStores();
-    done.add(name);
-    localStorage.setItem(STORES_DONE_KEY, JSON.stringify([...done]));
-  } catch {
-    /* private browsing — the copy is idempotent, it just repeats */
+export function remapCoachStorageKeys(storage:Storage=localStorage):void {
+  const keys=Array.from({length:storage.length},(_,index)=>storage.key(index)).filter((key):key is string=>!!key);
+  for(const key of keys) {
+    if(!key.startsWith("whiteboard.coach."))continue;
+    const next=`whiteboard.agent.${key.slice("whiteboard.coach.".length)}`;
+    try {const value=storage.getItem(key);if(value!==null&&storage.getItem(next)===null)storage.setItem(next,value);} catch { /* original remains */ }
   }
 }
 
-function clearStoreProgress(): void {
-  try {
-    localStorage.removeItem(STORES_DONE_KEY);
-  } catch {
-    /* ignore */
+/** Omit a version: an old source must never be upgraded by an importer. */
+export async function openLegacyExisting(name:string=LEGACY_DB_NAME):Promise<IDBDatabase|null> {
+  if(typeof indexedDB==="undefined")return null;
+  if(typeof indexedDB.databases==="function") {
+    const databases=await indexedDB.databases();
+    if(!databases.some(database=>database.name===name))return null;
   }
-}
-
-export function migrateLocalStorageKeys(storage: Storage = localStorage): void {
-  const keys: string[] = [];
-  for (let i = 0; i < storage.length; i += 1) {
-    const key = storage.key(i);
-    if (key) keys.push(key);
-  }
-  for (const key of keys) {
-    const next = remapLcKey(key);
-    if (!next) continue;
-    try {
-      if (storage.getItem(next) == null) {
-        const value = storage.getItem(key);
-        if (value != null) storage.setItem(next, value);
-      }
-    } catch {
-      /* quota — leave the old key; retry next launch */
-    }
-  }
-}
-
-/** Copy `whiteboard.coach.*` onto `whiteboard.agent.*` without clobbering newer dest. */
-export function remapCoachStorageKeys(storage: Storage = localStorage): void {
-  const keys: string[] = [];
-  for (let i = 0; i < storage.length; i += 1) {
-    const key = storage.key(i);
-    if (key) keys.push(key);
-  }
-  for (const key of keys) {
-    if (!key.startsWith("whiteboard.coach.")) continue;
-    const next = `whiteboard.agent.${key.slice("whiteboard.coach.".length)}`;
-    try {
-      if (storage.getItem(next) == null) {
-        const value = storage.getItem(key);
-        if (value != null) storage.setItem(next, value);
-      }
-    } catch {
-      /* quota — leave the old key; retry next launch */
-    }
-  }
-}
-
-function deleteMigratedLocalStorageKeys(): void {
-  if (typeof localStorage === "undefined") return;
-  const keys: string[] = [];
-  for (let i = 0; i < localStorage.length; i += 1) {
-    const key = localStorage.key(i);
-    if (key) keys.push(key);
-  }
-  for (const key of keys) {
-    if (remapLcKey(key)) {
-      try {
-        localStorage.removeItem(key);
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-}
-
-function openVersionedDb(name: string, version: number): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (typeof indexedDB === "undefined") {
-      reject(new Error("this device has no IndexedDB"));
-      return;
-    }
-    const request = indexedDB.open(name, version);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      for (const store of STORES) {
-        if (!db.objectStoreNames.contains(store)) db.createObjectStore(store);
-      }
+  return new Promise((resolve,reject)=>{
+    const request=indexedDB.open(name);
+    let absent=false,settled=false;
+    request.onupgradeneeded=()=>{absent=true;request.transaction?.abort();};
+    request.onerror=()=>{if(settled)return;settled=true;if(absent)resolve(null);else reject(request.error??new MigrationError(`Could not read ${name}`));};
+    request.onblocked=()=>{settled=true;reject(new MigrationError(`Another window is holding ${name}. The source has been retained.`));};
+    request.onsuccess=()=>{
+      if(settled){request.result.close();return;}
+      settled=true;request.result.onversionchange=()=>request.result.close();resolve(request.result);
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () =>
-      reject(request.error ?? new Error(`could not open ${name}`));
-    request.onblocked = () =>
-      reject(new Error(`another tab is holding ${name}`));
   });
 }
 
-function waitTx(tx: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onabort = () => reject(tx.error ?? new Error("indexedDB transaction aborted"));
-    tx.onerror = () => reject(tx.error ?? new Error("indexedDB transaction failed"));
-  });
-}
-
-function rewriteSnapshotKey(key: string): string {
-  return key.startsWith("md-ink:") ? `annotate:${key.slice("md-ink:".length)}` : key;
-}
-
-function rewriteSnapshotRecord(row: unknown): unknown {
-  if (!row || typeof row !== "object") return row;
-  const record = row as { kind?: unknown };
-  if (record.kind === "md-ink") return { ...record, kind: "annotate" };
-  return row;
-}
-
-async function databaseExists(name: string): Promise<boolean> {
-  const list = indexedDB.databases;
-  if (typeof list !== "function") return true;
-  try {
-    const dbs = await list.call(indexedDB);
-    return dbs.some((db) => db.name === name);
-  } catch {
-    return true;
-  }
-}
-
-type Row = { key: IDBValidKey; value: unknown };
-
-/**
- * One batch of rows, from just past `after`.
- *
- * A fresh read transaction per batch on purpose: an IndexedDB transaction
- * commits as soon as the task queue drains without a live request against it,
- * so it cannot be held across the yield between batches.
- */
-async function readBatch(
-  src: IDBDatabase,
-  storeName: string,
-  after: IDBValidKey | undefined,
-): Promise<Row[]> {
-  const tx = src.transaction(storeName, "readonly");
-  const store = tx.objectStore(storeName);
-  const rows: Row[] = [];
-  let bytes = 0;
-  await new Promise<void>((resolve, reject) => {
-    const request =
-      after === undefined
-        ? store.openCursor()
-        : store.openCursor(IDBKeyRange.lowerBound(after, true));
-    request.onerror = () =>
-      reject(request.error ?? new Error(`could not read ${storeName}`));
-    request.onsuccess = () => {
-      const cursor = request.result;
-      if (!cursor) {
-        resolve();
-        return;
-      }
-      rows.push({ key: cursor.key, value: cursor.value });
-      bytes += migrationRowSize(cursor.value);
-      if (migrationBatchIsFull(rows.length, bytes)) {
-        resolve();
-        return;
-      }
+async function readBatch(source:IDBDatabase,name:string,after:IDBValidKey|undefined):Promise<MigrationRow[]> {
+  return transactionOn<MigrationRow[]>(source,[name],"readonly",(tx,setResult)=>{
+    const rows:MigrationRow[]=[];let bytes=0;
+    const request=tx.objectStore(name).openCursor(after===undefined?undefined:IDBKeyRange.lowerBound(after,true));
+    request.onsuccess=()=>{
+      const cursor=request.result;
+      if(!cursor){setResult(rows);return;}
+      rows.push({key:cursor.key,value:cursor.value});bytes+=migrationRowSize(cursor.value);
+      if(migrationBatchIsFull(rows.length,bytes)){setResult(rows);return;}
       cursor.continue();
     };
   });
-  return rows;
 }
 
-async function writeBatch(
-  dst: IDBDatabase,
-  storeName: string,
-  rows: readonly Row[],
-): Promise<void> {
-  const tx = dst.transaction(storeName, "readwrite");
-  const store = tx.objectStore(storeName);
-  for (const row of rows) {
-    const value = storeName === STORE_SNAPSHOTS ? rewriteSnapshotRecord(row.value) : row.value;
-    const destKey =
-      storeName === STORE_SNAPSHOTS && typeof row.key === "string"
-        ? rewriteSnapshotKey(row.key)
-        : row.key;
-    store.put(value, destKey);
-  }
-  await waitTx(tx);
-}
-
-async function migrateDocsDatabase(): Promise<void> {
-  if (typeof indexedDB === "undefined") return;
-  if (!(await databaseExists(LEGACY_DB_NAME))) return;
-
-  const src = await openVersionedDb(LEGACY_DB_NAME, DB_VERSION);
-  let dst: IDBDatabase | null = null;
-  try {
-    dst = await openVersionedDb(DB_NAME, DB_VERSION);
-    const done = doneStores();
-    for (const storeName of STORES) {
-      if (done.has(storeName)) continue;
-      if (!src.objectStoreNames.contains(storeName)) continue;
-      if (!dst.objectStoreNames.contains(storeName)) continue;
-      let after: IDBValidKey | undefined;
-      for (;;) {
-        const rows = await readBatch(src, storeName, after);
-        if (rows.length === 0) break;
-        await writeBatch(dst, storeName, rows);
-        after = rows[rows.length - 1]!.key;
-        // Hand the frame back: this is running while the shell is on screen.
-        await yieldToPaint();
-      }
-      markStoreDone(storeName);
-    }
-  } finally {
-    src.close();
-    dst?.close();
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    const req = indexedDB.deleteDatabase(LEGACY_DB_NAME);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error ?? new Error("could not drop lc.docs"));
-    req.onblocked = () => resolve();
+async function importBatch(target:IDBDatabase,name:string,rows:MigrationRow[]):Promise<void> {
+  const capture=captureLegacyStorage();
+  if(name!==LEGACY_QUEUE_STORE)for(const row of rows)row.fingerprint=await storedFingerprint(row.value);
+  await transactionOn<void>(target,BOOK_STORES,"readwrite",(tx,setResult)=>{
+    importLegacyRows(tx,name,rows,capture,"lc.docs",cause=>abortTransaction(tx,cause));
+    setResult(undefined);
   });
 }
 
-/**
- * Copy `lc.*` / `lc.docs` onto `whiteboard.*`, then `whiteboard.coach.*` onto
- * `whiteboard.agent.*`. Idempotent after the marker reaches `"2"`.
- *
- * Call once before pairing, the library, or IndexedDB reads.
- */
-export async function migrateWhiteboardStorage(): Promise<void> {
-  if (typeof localStorage === "undefined") return;
-  let marker: string | null = null;
-  try {
-    marker = localStorage.getItem(MIGRATED_MARKER);
-  } catch {
-    return;
-  }
-  if (marker === "2") return;
-
-  migrateLocalStorageKeys();
-  if (marker !== "1") {
-    try {
-      await migrateDocsDatabase();
-    } catch {
-      return;
+/** Hashing/Blob reads happen between batches, never in an IDB transaction. */
+async function storedFingerprint(value:unknown):Promise<string> {
+  const normalized=async(value:unknown):Promise<unknown>=>{
+    if(value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+      const bytes=value instanceof ArrayBuffer?new Uint8Array(value):new Uint8Array(value.buffer,value.byteOffset,value.byteLength);
+      return {$bytes:bytesToB64(bytes)};
     }
-  }
-  remapCoachStorageKeys();
-  deleteMigratedLocalStorageKeys();
-  try {
-    localStorage.setItem(MIGRATED_MARKER, "2");
-  } catch {
-    /* private browsing — copy already happened this session */
-  }
-  clearStoreProgress();
+    if(typeof Blob!=="undefined"&&value instanceof Blob) {
+      const bytes=await value.arrayBuffer();
+      if(bytes.byteLength!==value.size)throw new MigrationError("A legacy byte copy could not be read completely; the source has been retained.");
+      return {$bytes:bytesToB64(new Uint8Array(bytes)),$type:value.type};
+    }
+    if(Array.isArray(value))return Promise.all(value.map(normalized));
+    if(value&&typeof value==="object") {
+      const result:Record<string,unknown>={};
+      for(const [key,child]of Object.entries(value)) {
+        if(child===undefined)result[key]={$undefined:true};else result[key]=await normalized(child);
+      }
+      return result;
+    }
+    return value;
+  };
+  const serialized=canonicalJson(await normalized(value));
+  // Local migration remains possible in environments without WebCrypto.
+  if(typeof globalThis.crypto?.subtle?.digest!=="function")return serialized;
+  return hashBytes(new TextEncoder().encode(serialized));
 }
 
-/**
- * Is there anything to do?
- *
- * Read synchronously so the boot path can tell, before it renders anything,
- * whether this launch is an ordinary one or an upgrade — an upgrade gets a
- * splash saying what is happening, and everybody else must not see one flash
- * past for a migration that returns immediately.
- */
-export function storageMigrationPending(): boolean {
-  if (typeof localStorage === "undefined") return false;
+function markVerified(name:string):void {
+  if(typeof localStorage==="undefined")return;
   try {
-    return localStorage.getItem(MIGRATED_MARKER) !== "2";
-  } catch {
-    return false;
+    const existing=JSON.parse(localStorage.getItem(COVERAGE_KEY)??"[]") as unknown;
+    const done=new Set(Array.isArray(existing)?existing.filter((value):value is string=>typeof value==="string"):[]);
+    done.add(name);localStorage.setItem(COVERAGE_KEY,JSON.stringify([...done]));
+    // Retain old crash checkpoints; v8 coverage is an additional stronger claim.
+    const old=JSON.parse(localStorage.getItem(STORES_DONE_KEY)??"[]") as unknown;
+    const prior=new Set(Array.isArray(old)?old.filter((value):value is string=>typeof value==="string"):[]);
+    prior.add(name);localStorage.setItem(STORES_DONE_KEY,JSON.stringify([...prior]));
+  } catch { /* copy remains durable and is idempotent on the next launch */ }
+}
+
+/** Re-reading source rows verifies coverage, even if an old source changed. */
+export async function migrateDocsDatabase():Promise<void> {
+  const source=await openLegacyExisting();if(!source)return;
+  try {
+    const stores=Array.from(source.objectStoreNames);
+    const allowed=recognizedLegacyStores();
+    for(const name of stores)if(!allowed.has(name))throw new MigrationError(`Unknown source store ${name}; lc.docs has been retained.`);
+    const target=await openDb();
+    // Fold all lifecycle predecessors together after payload stores are imported.
+    const ordered=stores.filter(name=>name!==LEGACY_QUEUE_STORE);
+    if(stores.includes(LEGACY_QUEUE_STORE))ordered.push(LEGACY_QUEUE_STORE);
+    for(const name of ordered) {
+      let after:IDBValidKey|undefined;
+      const jobs:MigrationRow[]=[];
+      for(;;) {
+        const rows=await readBatch(source,name,after);if(!rows.length)break;
+        if(name===LEGACY_QUEUE_STORE)jobs.push(...rows);
+        else await importBatch(target,name,rows);
+        after=rows[rows.length-1]!.key;
+        await yieldToPaint();
+      }
+      if(jobs.length)await importBatch(target,name,jobs);
+      // Each represented row committed, or a failure prevented this checkpoint.
+      markVerified(name);
+    }
+    // Keeping the source avoids deleting data written by a still-running old app.
+    // It is never opened at v8 or mutated, even after all target coverage commits.
+  } finally {source.close();}
+}
+
+/** Every boot initializes v8, independent of the old key-rename marker. */
+export async function migrateWhiteboardStorage():Promise<void> {
+  if(typeof localStorage!=="undefined") {
+    migrateLocalStorageKeys();remapCoachStorageKeys();
   }
+  await openDb();
+  await migrateDocsDatabase();
+  if(typeof localStorage!=="undefined") {
+    try {localStorage.setItem(MIGRATED_MARKER,"2");} catch { /* source keys remain */ }
+  }
+}
+
+export function storageMigrationPending():boolean {
+  if(typeof localStorage==="undefined")return true;
+  try {return localStorage.getItem(MIGRATED_MARKER)!=="2";} catch {return true;}
 }

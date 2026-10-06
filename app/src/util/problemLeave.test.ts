@@ -1,17 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LcClient } from "../api/client";
 import { resolveProblemLeave } from "./problemLeave";
-import { enqueuePadSync, flushPadSyncQueue } from "./padSync";
-import { deleteProblemBoard, getProblemBoard } from "./problemBoardStore";
+import { deleteProblemBoard } from "./problemBoardStore";
 import { tabsReducer, HOME_TAB_ID, type TabState } from "./tabs";
 
-vi.mock("./padSync", () => ({
-  enqueuePadSync: vi.fn(async () => {}),
-  flushPadSyncQueue: vi.fn(),
-}));
 vi.mock("./problemBoardStore", () => ({
   problemPadId: (dataset: string, taskId: string) => `${dataset}/${taskId}`,
-  getProblemBoard: vi.fn(async () => ({ syncSeq: 7 })),
   deleteProblemBoard: vi.fn(async () => {}),
 }));
 
@@ -28,7 +22,6 @@ function setup() {
     activeId: "p",
   } as TabState;
   const run = vi.fn(() => { tabs = tabsReducer(tabs, { type: "close", id: "p" }); });
-  vi.mocked(flushPadSyncQueue).mockImplementation(() => client.tombstoneProblemPad("leetcode", "two-sum").then(() => {}));
   return {
     options: { client, dataset: "leetcode", taskId: "two-sum", agent: [{ id: "chat" }],
       solved: true, save: false, localSaves: [] as Promise<unknown>[], dismiss: vi.fn(async () => {}), run },
@@ -43,13 +36,9 @@ describe("resolveLeave's problem work", () => {
     const { options, tabs } = setup();
     await resolveProblemLeave(options);
     expect(tabs().tabs.map(tab => tab.id)).toEqual([HOME_TAB_ID]);
-    expect(options.client.tombstoneProblemPad).toHaveBeenCalledOnce();
-    expect(enqueuePadSync).toHaveBeenCalledWith(
-      { op: "deletePad", kind: "problem", padId: "leetcode/two-sum", seq: 8 },
-      { requirePersistence: true },
-    );
+    expect(options.client.tombstoneProblemPad).not.toHaveBeenCalled();
     expect(deleteProblemBoard).toHaveBeenCalledWith("leetcode/two-sum");
-    expect(vi.mocked(enqueuePadSync).mock.invocationCallOrder[0]).toBeLessThan(options.run.mock.invocationCallOrder[0]);
+    expect(vi.mocked(deleteProblemBoard).mock.invocationCallOrder[0]).toBeLessThan(options.run.mock.invocationCallOrder[0]);
   });
 
   it("keeps the tab and propagates a local finish failure to the dialog", async () => {
@@ -58,7 +47,7 @@ describe("resolveLeave's problem work", () => {
     await expect(resolveProblemLeave(options)).rejects.toThrow("local disk full");
     expect(tabs().activeId).toBe("p");
     expect(options.dismiss).not.toHaveBeenCalled();
-    expect(flushPadSyncQueue).not.toHaveBeenCalled();
+    expect(options.client.tombstoneProblemPad).not.toHaveBeenCalled();
   });
 
   it("waits for only the local part of a pending autosave before clearing", async () => {
@@ -74,11 +63,11 @@ describe("resolveLeave's problem work", () => {
     expect(options.run).toHaveBeenCalledOnce();
   });
 
-  it("keeps the local board and tab when durable queue storage fails", async () => {
+  it("keeps the local board and tab when its durable deletion intent cannot be saved", async () => {
     const { options, tabs } = setup();
-    vi.mocked(enqueuePadSync).mockRejectedValueOnce(new Error("pending sync could not be saved"));
+    vi.mocked(deleteProblemBoard).mockRejectedValueOnce(new Error("pending sync could not be saved"));
     await expect(resolveProblemLeave(options)).rejects.toThrow("pending sync could not be saved");
-    expect(deleteProblemBoard).not.toHaveBeenCalled();
+    expect(deleteProblemBoard).toHaveBeenCalledWith("leetcode/two-sum");
     expect(options.dismiss).not.toHaveBeenCalled();
     expect(tabs().activeId).toBe("p");
   });
@@ -87,8 +76,6 @@ describe("resolveLeave's problem work", () => {
     const { options } = setup();
     vi.mocked(options.client.finishAttempt).mockResolvedValueOnce({ kept_layout: true } as Awaited<ReturnType<LcClient["finishAttempt"]>>);
     await resolveProblemLeave({ ...options, save: true });
-    expect(enqueuePadSync).not.toHaveBeenCalled();
-    expect(getProblemBoard).not.toHaveBeenCalled();
     expect(deleteProblemBoard).not.toHaveBeenCalled();
     expect(options.run).toHaveBeenCalledOnce();
   });

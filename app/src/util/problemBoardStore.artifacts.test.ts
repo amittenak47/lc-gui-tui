@@ -1,9 +1,10 @@
+import { memoryBookTransaction } from "./testBookTransaction";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { editProblemArtifacts, getProblemBoard, markProblemHubAck, putProblemBoard, replaceProblemBoard, type ProblemBoardRecord } from "./problemBoardStore";
 import type { ArtifactCatalogEdit } from "./artifactCatalogEdits";
 
 const state = vi.hoisted(() => ({
-  rows: new Map<string, ProblemBoardRecord>(),
+  rows: new Map<string, ProblemBoardRecord>(), meta: new Map<string, any>(), sync: new Map<string, any>(),
   preflight: undefined as (() => void) | undefined,
   missing: false,
 }));
@@ -11,33 +12,21 @@ vi.mock("./artifactAssetSync", () => ({ downloadArtifactAssets: async () => {
   if (state.missing) throw new Error("missing attachment");
   state.preflight?.();
 } }));
-vi.mock("./idb", () => ({
+vi.mock("./idb", async original => ({
+  ...await original<typeof import("./idb")>(),
   STORE_PROBLEM_BOARDS: "problem_boards",
   run: async (_store: string, _mode: string, work: (store: unknown) => { result: unknown }) => work({
     get: (id: string) => ({ result: structuredClone(state.rows.get(id)) }),
   }).result,
-  withStore: async (_name: string, _mode: string, work: (store: unknown) => void) => {
-    const writes = new Map<string, ProblemBoardRecord>();
-    const reads: Array<{ result: unknown; onsuccess?: () => void }> = [];
-    let aborted = false;
-    work({
-      transaction: { abort: () => { aborted = true; } },
-      get: (id: string) => {
-        const req = { result: structuredClone(state.rows.get(id)), onsuccess: undefined as (() => void) | undefined };
-        reads.push(req); return req;
-      },
-      put: (row: ProblemBoardRecord, id: string) => writes.set(id, structuredClone(row)),
-    });
-    for (const read of reads) read.onsuccess?.();
-    if (aborted) throw new Error("transaction aborted");
-    for (const [id, row] of writes) state.rows.set(id, row);
-  },
+  withTransaction: async (_names: string[], _mode: string, work: any) => memoryBookTransaction(new Map([
+    ["problem_boards", state.rows as Map<string, unknown>], ["book_meta", state.meta], ["sync_state", state.sync],
+  ]), work),
 }));
 const id = "leetcode/1";
 const create: ArtifactCatalogEdit = { type: "create", id: "a1", title: "Note.md", associations: [{ kind: "file" }],
   content: { kind: "markdown", documentId: "doc1", sourceRevision: "s1" } };
 beforeEach(() => {
-  state.rows.clear(); state.preflight = undefined; state.missing = false;
+  state.rows.clear(); state.meta.clear(); state.sync.clear(); state.preflight = undefined; state.missing = false;
   state.rows.set(id, { id, dataset: "leetcode", taskId: "1", updatedAt: 1, syncSeq: 4,
     board: { v: 1, elements: [], appState: { scrollX: 0, scrollY: 0, zoom: 1 } } });
 });
@@ -97,8 +86,8 @@ describe("atomic problem attachment catalog edits", () => {
   it("acknowledgement updates only the ack and never lowers it", async () => {
     await editProblemArtifacts(id, null, create);
     const before = structuredClone(state.rows.get(id)!);
-    markProblemHubAck(id, 20);
-    markProblemHubAck(id, 10);
+    await markProblemHubAck(id, 20);
+    await markProblemHubAck(id, 10);
     expect(state.rows.get(id)).toEqual({ ...before, hubAckUpdatedAt: 20 });
   });
 });

@@ -13,6 +13,7 @@ import type {
 } from "../api/client";
 import { LcApiError as ApiError } from "../api/client";
 import { putPadRecord } from "./padRecordUpload";
+import { recordAuthoredExtras } from "./recordAuthoredExtras";
 import { resetPadWritersForTests, withPadWriter } from "./padWriter";
 import { mergeAgentMessages } from "../modes/coachSessions";
 import { putParentContent } from "./contentStore";
@@ -44,7 +45,9 @@ import {
   applyFootnoteBoards,
   collectFootnoteBoards,
 } from "./footnoteWhiteboardStore";
-import { run, STORE_SYNC_QUEUE } from "./idb";
+import { run, STORE_SYNC_STATE } from "./idb";
+import { getBookSyncState, type SyncState } from "./syncState";
+import { mutateLocalBook } from "./localBookStore";
 import {
   HUB_MAX_BODY_BYTES,
   HUB_MAX_DOCUMENT_BYTES,
@@ -53,8 +56,7 @@ import {
   savePadSyncSince,
 } from "./padHub";
 import { loadHubAutosync } from "./hubAutoSyncPref";
-import { getPadHubStatus, isPadHubOffline, subscribePadHubStatus } from "./padHubStatus";
-import { showNotification } from "./notifications";
+import { isPadHubOffline, subscribePadHubStatus } from "./padHubStatus";
 import { syncDocChunks } from "./docChunkSync";
 import { noteInkConflicts } from "./inkConflicts";
 import {
@@ -137,42 +139,6 @@ function splitProblemPadId(id: string): { dataset: string; taskId: string } | nu
 
 export type PadKindSync = "whiteboard" | "annotate" | "problem";
 
-export type PadSyncJobInput =
-  | { op: "putWhiteboard"; body: WhiteboardPadDto }
-  | { op: "putAnnotate"; body: AnnotatePadDto }
-  | { op: "putProblem"; body: ProblemPadDto }
-  | { op: "putSnapshot"; body: PadSnapshotDto }
-  | { op: "putBytes"; hash: string; bytes: ArrayBuffer }
-  | { op: "tombstone"; kind: PadKindSync; padId: string }
-  | { op: "deletePad"; kind: PadKindSync; padId: string; seq: number }
-  | { op: "restorePad"; kind: PadKindSync; padId: string; seq: number };
-
-export type PadSyncJob = PadSyncJobInput & { id: string; enqueuedAt?: number; supersededUpdatedAt?: number };
-
-const memoryQueue: PadSyncJob[] = [];
-const clearedProblemUpdatedAt = new Map<string, number>();
-let queueLoaded = false;
-let loadingQueue: Promise<void> | null = null;
-let queueMutation: Promise<unknown> = Promise.resolve();
-let queueSequence = 0;
-let flushingQueue: Promise<void> | null = null;
-const manualBooks = new Map<string, number>();
-
-/** Recovery must not drain this book's stale copy while its manual walk runs. */
-export async function reserveManualPadSync(kind: PadKindSync, id: string): Promise<() => void> {
-  const key = `${kind}:${id}`;
-  manualBooks.set(key, (manualBooks.get(key) ?? 0) + 1);
-  const release = () => {
-    const count = (manualBooks.get(key) ?? 1) - 1;
-    if (count) manualBooks.set(key, count);
-    else manualBooks.delete(key);
-  };
-  try {
-    await withPadWriter(kind, id, async () => {});
-    return release;
-  } catch (cause) { release(); throw cause; }
-}
-
 let hubBodyCapOverride: number | null = null;
 
 export function setPadSyncBodyCapForTests(bytes: number | null): void {
@@ -194,24 +160,9 @@ export function exceedsHubBodyCap(
   return hubBodyBytes(body) > cap;
 }
 
-export function resetPadSyncQueueForTests(): void {
-  memoryQueue.length = 0;
-  resetPadWritersForTests();
-  manualBooks.clear();
-  pendingPadPushes.clear();
-  clearedProblemUpdatedAt.clear();
-  queueLoaded = false;
-  loadingQueue = null;
-  queueMutation = Promise.resolve();
-  queueSequence = 0;
-  flushingQueue = null;
-  hubBackoffUntil = 0;
-  hubBackoffMs = HUB_BACKOFF_MIN_MS;
-  hubBodyCapOverride = null;
-}
-
-export function peekPadSyncQueueForTests(): PadSyncJob[] {
-  return [...memoryQueue];
+export function resetPadSyncForTests(): void {
+  resetPadWritersForTests(); pendingPadPushes.clear();
+  hubBackoffUntil = 0; hubBackoffMs = HUB_BACKOFF_MIN_MS; hubBodyCapOverride = null;
 }
 
 function hubBackoffActive(): boolean {
@@ -227,146 +178,6 @@ function noteHubPingFail(): void {
   if (!loadPadHub()) return;
   hubBackoffUntil = Date.now() + hubBackoffMs;
   hubBackoffMs = Math.min(HUB_BACKOFF_MAX_MS, hubBackoffMs * 2);
-}
-
-function jobId(): string {
-  return `q-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-async function loadQueuedJobs(): Promise<void> {
-  if (queueLoaded) return;
-  loadingQueue ??= (async () => {
-    try {
-      const persisted = await run<PadSyncJob[]>(STORE_SYNC_QUEUE, "readonly", (store) => store.getAll());
-      for (const job of persisted) {
-        if (!job || typeof job.id !== "string" || memoryQueue.some((entry) => entry.id === job.id)) continue;
-        memoryQueue.push(job);
-        if (job.op === "deletePad" && job.kind === "problem" && job.supersededUpdatedAt != null) {
-          clearedProblemUpdatedAt.set(job.padId, job.supersededUpdatedAt);
-        }
-        queueSequence = Math.max(queueSequence, queuedAt(job));
-      }
-      memoryQueue.sort((a, b) => queuedAt(a) - queuedAt(b));
-      queueLoaded = true;
-    } catch {
-      /* The in-memory fallback still works when IndexedDB is unavailable. */
-    }
-  })().finally(() => { loadingQueue = null; });
-  await loadingQueue;
-}
-
-function queuedAt(job: PadSyncJob): number {
-  return job.enqueuedAt ?? (Number.parseInt(job.id.split("-")[1] ?? "", 36) || 0);
-}
-
-async function persistJob(job: PadSyncJob): Promise<boolean> {
-  try {
-    await run(STORE_SYNC_QUEUE, "readwrite", (store) => store.put(job, job.id));
-    return true;
-  } catch {
-    /* Keep the previous durable job if its replacement could not be written. */
-    return false;
-  }
-}
-
-async function dropJob(id: string): Promise<void> {
-  const idx = memoryQueue.findIndex((job) => job.id === id);
-  if (idx >= 0) memoryQueue.splice(idx, 1);
-  try {
-    await run(STORE_SYNC_QUEUE, "readwrite", (store) => store.delete(id));
-  } catch {
-    /* ignore */
-  }
-}
-
-function sameQueuedChange(entry: PadSyncJob, job: PadSyncJobInput): boolean {
-  if ((job.op === "deletePad" || job.op === "restorePad") && (entry.op === "deletePad" || entry.op === "restorePad")) {
-    return entry.kind === job.kind && entry.padId === job.padId;
-  }
-  if (entry.op !== job.op) return false;
-  if (job.op === "putWhiteboard" && entry.op === "putWhiteboard") return entry.body.id === job.body.id;
-  if (job.op === "putAnnotate" && entry.op === "putAnnotate") return entry.body.id === job.body.id;
-  if (job.op === "putProblem" && entry.op === "putProblem") return entry.body.id === job.body.id;
-  if (job.op === "putSnapshot" && entry.op === "putSnapshot") {
-    return entry.body.kind === job.body.kind && entry.body.key === job.body.key && entry.body.tier === job.body.tier;
-  }
-  if (job.op === "putBytes" && entry.op === "putBytes") return entry.hash === job.hash;
-  return false;
-}
-
-function changeClock(job: PadSyncJobInput): number {
-  if (job.op === "putWhiteboard" || job.op === "putAnnotate" || job.op === "putProblem") return job.body.updated_at;
-  if (job.op === "putSnapshot") return job.body.written_at;
-  if (job.op === "deletePad" || job.op === "restorePad") return job.seq;
-  return 0;
-}
-
-function pendingDelete(kind: PadKindSync, id: string, updatedAt?: number): boolean {
-  return memoryQueue.some((job) => job.op === "deletePad" && job.kind === kind && job.padId === id &&
-    (updatedAt == null || (job.supersededUpdatedAt != null && updatedAt <= job.supersededUpdatedAt)));
-}
-
-export function enqueuePadSync(job: PadSyncJobInput, options?: { requirePersistence?: boolean }): Promise<void> {
-  const pending = queueMutation.then(async () => {
-    await loadQueuedJobs();
-    // A save which failed after Clear must not republish the cleared attempt.
-    if (job.op === "putWhiteboard" && pendingDelete("whiteboard", job.body.id, job.body.updated_at)) return;
-    if (job.op === "putAnnotate" && pendingDelete("annotate", job.body.id, job.body.updated_at)) return;
-    if (job.op === "putProblem" && pendingDelete("problem", job.body.id, job.body.updated_at)) return;
-    const replaced = memoryQueue.filter((entry) => sameQueuedChange(entry, job));
-    if (replaced.some((entry) => changeClock(entry) > changeClock(job))) return;
-    queueSequence = Math.max(Date.now(), queueSequence + 1);
-    const local = job.op !== "deletePad" ? null : job.kind === "problem" ? await getProblemBoard(job.padId) :
-      job.kind === "whiteboard" ? await getWhiteboardNotebook(job.padId) : await getAnnotateDoc(job.padId);
-    const previousDelete = job.op === "deletePad" ? replaced.find((entry) => entry.op === "deletePad" && entry.seq === job.seq) : undefined;
-    const cutoff = previousDelete?.supersededUpdatedAt ?? local?.updatedAt;
-    const full: PadSyncJob = {
-      ...job, id: jobId(), enqueuedAt: queueSequence,
-      ...(cutoff != null ? { supersededUpdatedAt: cutoff } : {}),
-    };
-    memoryQueue.push(full);
-    if (job.op === "deletePad" && job.kind === "problem" && full.supersededUpdatedAt != null) {
-      clearedProblemUpdatedAt.set(job.padId, full.supersededUpdatedAt);
-    }
-    // Commit the replacement before removing its predecessor: reloads always
-    // find at least one copy, even if the device exits or runs out of storage.
-    const persisted = await persistJob(full);
-    if (!persisted && options?.requirePersistence) {
-      throw new Error("Could not save the pending sync to this device. Your board is still open; free some space and retry.");
-    }
-    for (const entry of replaced) {
-      if (persisted) await dropJob(entry.id);
-      else {
-        // Coalesce memory even without IDB, but keep any old durable copy.
-        const index = memoryQueue.findIndex((queued) => queued.id === entry.id);
-        if (index >= 0) memoryQueue.splice(index, 1);
-      }
-    }
-    if (job.op === "deletePad" && persisted) await dropPadPayloadJobs(job.kind, job.padId, full.supersededUpdatedAt ?? queuedAt(full));
-    // Every queued change while offline says so, but never stacks copies:
-    // the card is skipped while the same notice is on screen or waiting.
-    if (isPadHubOffline()) {
-      showNotification("Desktop app is offline — this will sync when it's back.", 2200, { dedupe: true });
-    }
-  });
-  queueMutation = pending.catch(() => {});
-  return pending;
-}
-
-async function dropMatching(pred: (job: PadSyncJob) => boolean): Promise<void> {
-  const ids = memoryQueue.filter(pred).map((job) => job.id);
-  for (const id of ids) await dropJob(id);
-}
-
-async function dropPadPayloadJobs(kind: PadKindSync, padId: string, until = Infinity): Promise<void> {
-  await dropMatching((job) => padPayloadMatches(job, kind, padId) && changeClock(job) <= until);
-}
-
-function padPayloadMatches(job: PadSyncJob, kind: PadKindSync, padId: string): boolean {
-  if (kind === "whiteboard" && job.op === "putWhiteboard") return job.body.id === padId;
-  if (kind === "annotate" && job.op === "putAnnotate") return job.body.id === padId;
-  if (kind === "problem" && job.op === "putProblem") return job.body.id === padId;
-  return job.op === "putSnapshot" && job.body.key === padId && kindOfSnap(job.body.kind) === kind;
 }
 
 function padIsTrashed(kind: PadKindSync, padId: string): boolean {
@@ -406,42 +217,17 @@ function errorJson(cause: unknown): unknown {
   return null;
 }
 
-async function applyLivePutFailure(
-  kind: PadKindSync,
-  padId: string,
-  cause: unknown,
-  client: LcClient,
-  retainQueued = false,
-): Promise<boolean> {
-  const hasQueuedPayload = memoryQueue.some((job) => padPayloadMatches(job, kind, padId));
+async function applyLivePutFailure(kind: PadKindSync, padId: string, cause: unknown): Promise<boolean> {
   if (isGoneStatus(cause)) {
-    // A remote tombstone is not consent to discard newer unsent work.
-    if (retainQueued || hasQueuedPayload) return true;
-    if (kind === "problem") {
-      const cutoff = clearedProblemUpdatedAt.get(padId);
-      const local = cutoff == null ? null : await getProblemBoard(padId);
-      if (local && local.updatedAt > cutoff!) return false;
-    }
-    await dropPadPayloadJobs(kind, padId);
-    if (kind === "problem") await deleteProblemBoard(padId).catch(() => {});
-    emitPadHub({ kind, id: padId, op: "close" });
+    console.warn(`${kind} ${padId} was deleted on another device. The local copy is kept.`);
     return true;
   }
   if (!isConflict(cause)) return false;
-  // A background Save has no consent to replace the local notebook or chat.
-  // Leave its acknowledgement unchanged so explicit Sync opens the comparison.
-  if (kind === "whiteboard" || kind === "annotate") {
-    return true;
+  // A failed explicit transfer has no consent to replace a local alternative.
+  if (kind === "problem") {
+    const remote = errorJson(cause); const local = await getProblemBoard(padId);
+    if (local && remote && typeof remote === "object" && (local.artifacts || "artifacts" in remote)) stashProblemArtifactConflict(local, remote as ProblemPadDto);
   }
-  const body = errorJson(cause);
-  const localProblem = await getProblemBoard(padId);
-  if (localProblem?.artifacts || (body && typeof body === "object" && "artifacts" in body && body.artifacts)) {
-    if (!localProblem || !body || typeof body !== "object") throw new Error("Problem attachment conflict could not be read. Local work was kept.");
-    stashProblemArtifactConflict(localProblem, body as ProblemPadDto);
-    return true;
-  }
-  if (retainQueued || hasQueuedPayload) return true;
-  await applyHubProblem(body, { emitReload: true, client });
   return true;
 }
 
@@ -467,6 +253,7 @@ export async function applyHubWhiteboard(
   }
   await restoreWhiteboardNotebook({
     ...artifactFields,
+    authoredExtras: recordAuthoredExtras(raw),
     id: row.id,
     title: row.title,
     updatedAt: row.updated_at,
@@ -477,7 +264,7 @@ export async function applyHubWhiteboard(
     hubAckUpdatedAt: row.updated_at,
     ...(local?.locked ? { locked: true } : {}),
   });
-  markWhiteboardHubAck(row.id, row.updated_at);
+  await markWhiteboardHubAck(row.id, row.updated_at);
   if (opts.emitReload) emitPadHub({ kind: "whiteboard", id: row.id, op: "reload" });
   return true;
 }
@@ -500,6 +287,7 @@ export async function applyHubAnnotate(
   }
   await restoreAnnotateDoc({
     ...artifactFields,
+    authoredExtras: recordAuthoredExtras(raw),
     id: row.id,
     name: row.name,
     hash: row.hash,
@@ -519,7 +307,7 @@ export async function applyHubAnnotate(
     ...(local?.locked ? { locked: true } : {}),
     ...(local?.owned ? { owned: true } : {}),
   });
-  markAnnotateHubAck(row.id, row.updated_at);
+  await markAnnotateHubAck(row.id, row.updated_at);
   if (row.footnote_boards && typeof row.footnote_boards === "object") {
     await applyFootnoteBoards(
       row.id,
@@ -548,6 +336,7 @@ export async function applyHubProblem(
   }
   const replacement: ProblemBoardRecord = {
     ...artifactFields,
+    authoredExtras: recordAuthoredExtras(raw),
     id: row.id,
     dataset: row.dataset,
     taskId: row.task_id,
@@ -559,7 +348,7 @@ export async function applyHubProblem(
   };
   if (before?.artifacts || artifactFields.artifacts) await replaceProblemBoard(before, replacement);
   else await putProblemBoard(replacement);
-  markProblemHubAck(row.id, row.updated_at);
+  await markProblemHubAck(row.id, row.updated_at);
   if (opts.emitReload) emitPadHub({ kind: "problem", id: row.id, op: "reload" });
   return true;
 }
@@ -598,7 +387,7 @@ export async function waitForPadPushes(kind: string, id: string): Promise<void> 
 /** Apply the hub's transcript union without replacing a live board or saved baseline. */
 export async function acceptHubAgent(kind: "annotate" | "whiteboard", id: string, agent: unknown): Promise<void> {
   if (!Array.isArray(agent)) return;
-  await putParentContent({ kind, id }, { artifacts: undefined, agent }, { agentOnly: true });
+  await putParentContent({ kind, id }, { artifacts: undefined, agent }, { agentOnly: true, authored: false });
 }
 
 /** All successful record writers acknowledge the returned hub clock here. */
@@ -607,56 +396,9 @@ export async function markHubAck(
   liveAck?: (updatedAt: number) => void | Promise<void>,
 ): Promise<void> {
   if (liveAck) await liveAck(updatedAt);
-  else if (kind === "whiteboard") markWhiteboardHubAck(id, updatedAt);
-  else if (kind === "annotate") markAnnotateHubAck(id, updatedAt);
-  else markProblemHubAck(id, updatedAt);
-}
-
-function recordIdentity(job: PadSyncJob): { kind: PadKindSync; id: string } | null {
-  if (job.op === "putWhiteboard") return { kind: "whiteboard", id: job.body.id };
-  if (job.op === "putAnnotate") return { kind: "annotate", id: job.body.id };
-  if (job.op === "putProblem") return { kind: "problem", id: job.body.id };
-  return null;
-}
-
-/** A confirmed walk supersedes uploads only, never deletes, restores or assets. */
-export async function dropQueuedRecordUploads(kind: PadKindSync, id: string, updatedAt: number): Promise<void> {
-  const pending = queueMutation.then(async () => {
-    await loadQueuedJobs();
-    await dropMatching((job) => {
-      const book = recordIdentity(job);
-      return book?.kind === kind && book.id === id && changeClock(job) <= updatedAt;
-    });
-  });
-  queueMutation = pending.catch(() => {});
-  await pending;
-}
-
-/** Local storage is authoritative; queued PUTs are copies of older saves. */
-export async function compactManualPadSyncQueue(): Promise<void> {
-  const pending = queueMutation.then(async () => {
-    await loadQueuedJobs();
-    const newest = new Map<string, PadSyncJob>();
-    for (const job of memoryQueue) {
-      const book = recordIdentity(job);
-      if (!book) continue;
-      const key = `${book.kind}:${book.id}`;
-      const prior = newest.get(key);
-      if (!prior || changeClock(job) > changeClock(prior) ||
-          (changeClock(job) === changeClock(prior) && queuedAt(job) > queuedAt(prior))) newest.set(key, job);
-    }
-    for (const job of [...memoryQueue]) {
-      const book = recordIdentity(job);
-      if (!book) continue;
-      const local = book.kind === "whiteboard" ? await getWhiteboardNotebook(book.id) :
-        book.kind === "annotate" ? await getAnnotateDoc(book.id) : await getProblemBoard(book.id);
-      if (newest.get(`${book.kind}:${book.id}`) !== job || (local && local.updatedAt > changeClock(job))) {
-        await dropJob(job.id);
-      }
-    }
-  });
-  queueMutation = pending.catch(() => {});
-  await pending;
+  else if (kind === "whiteboard") await markWhiteboardHubAck(id, updatedAt);
+  else if (kind === "annotate") await markAnnotateHubAck(id, updatedAt);
+  else await markProblemHubAck(id, updatedAt);
 }
 
 export function pushWhiteboardPad(client: LcClient, notebook: WhiteboardNotebook): Promise<boolean> {
@@ -668,9 +410,9 @@ async function pushWhiteboardPadNow(
   notebook: WhiteboardNotebook,
 ): Promise<boolean> {
   const saved = await getWhiteboardNotebook(notebook.id);
-  const body = whiteboardPadBody({ ...notebook, hubAckUpdatedAt: saved?.hubAckUpdatedAt ?? notebook.hubAckUpdatedAt });
+  if (!saved || padIsTrashed("whiteboard", notebook.id)) return false;
+  const body = whiteboardPadBody(saved);
   if (isPadHubOffline()) {
-    await enqueuePadSync({ op: "putWhiteboard", body });
     return false;
   }
   try {
@@ -679,8 +421,7 @@ async function pushWhiteboardPadNow(
     await markHubAck("whiteboard", notebook.id, written.updated_at ?? notebook.updatedAt);
     return true;
   } catch (cause) {
-    if (await applyLivePutFailure("whiteboard", notebook.id, cause, client)) return false;
-    await enqueuePadSync({ op: "putWhiteboard", body });
+    if (await applyLivePutFailure("whiteboard", notebook.id, cause)) return false;
     return false;
   }
 }
@@ -688,6 +429,7 @@ async function pushWhiteboardPadNow(
 /** The wire form of a notebook; shared by autosave and the Sync walk. */
 export function whiteboardPadBody(notebook: WhiteboardNotebook): WhiteboardPadDto {
   return {
+    ...notebook.authoredExtras,
     ...artifactCatalogFields(notebook.artifacts, { kind: "whiteboard", id: notebook.id }),
     id: notebook.id,
     title: notebook.title,
@@ -703,6 +445,7 @@ export function whiteboardPadBody(notebook: WhiteboardNotebook): WhiteboardPadDt
 /** The wire form of an annotate doc; shared by autosave and the Sync walk. */
 export async function annotatePadBody(doc: AnnotateDoc): Promise<AnnotatePadDto> {
   return {
+    ...doc.authoredExtras,
     ...artifactCatalogFields(doc.artifacts, { kind: "annotate", id: doc.id }),
     id: doc.id,
     name: doc.name,
@@ -737,7 +480,8 @@ export function pushAnnotatePad(client: LcClient, doc: AnnotateDoc): Promise<boo
 
 async function pushAnnotatePadNow(client: LcClient, doc: AnnotateDoc): Promise<boolean> {
   const saved = await getAnnotateDoc(doc.id);
-  const body = await annotatePadBody({ ...doc, hubAckUpdatedAt: saved?.hubAckUpdatedAt ?? doc.hubAckUpdatedAt });
+  if (!saved || padIsTrashed("annotate", doc.id)) return false;
+  const body = await annotatePadBody(saved);
   if (exceedsHubBodyCap(body)) {
     throw new Error(
       `this pad is ${Math.round(hubBodyBytes(body) / (1024 * 1024))} MB, and the hub ` +
@@ -746,7 +490,6 @@ async function pushAnnotatePadNow(client: LcClient, doc: AnnotateDoc): Promise<b
     );
   }
   if (isPadHubOffline()) {
-    await enqueuePadSync({ op: "putAnnotate", body });
     return false;
   }
   try {
@@ -755,58 +498,36 @@ async function pushAnnotatePadNow(client: LcClient, doc: AnnotateDoc): Promise<b
     await markHubAck("annotate", doc.id, written.updated_at ?? doc.updatedAt);
     return true;
   } catch (cause) {
-    if (await applyLivePutFailure("annotate", doc.id, cause, client)) return false;
-    await enqueuePadSync({ op: "putAnnotate", body });
+    if (await applyLivePutFailure("annotate", doc.id, cause)) return false;
     return false;
   }
 }
 
-export function pushProblemPad(client: LcClient, row: ProblemBoardRecord, opts?: { retainQueued?: boolean }): Promise<boolean> {
-  if (isPadHubOffline()) return trackPadPush("problem", row.id, pushProblemPadNow(client, row, opts?.retainQueued));
-  const previous = [...(pendingPadPushes.get(`problem:${row.id}`) ?? [])];
-  return trackPadPush("problem", row.id, Promise.allSettled(previous).then(() => pushProblemPadNow(client, row, opts?.retainQueued)));
+export function pushProblemPad(client: LcClient, row: ProblemBoardRecord): Promise<boolean> {
+  return trackPadPush("problem", row.id, withPadWriter("problem", row.id, () => pushProblemPadNow(client, row.id)));
 }
 
-async function pushProblemPadNow(
-  client: LcClient,
-  row: ProblemBoardRecord,
-  retainQueued = false,
-): Promise<boolean> {
-  // Autosave intentionally omits catalogs; putProblemBoard preserves them.
-  // Publish that persisted row, never the pre-write autosave object.
-  const requestedUpdatedAt = row.updatedAt;
-  row = await getProblemBoard(row.id) ?? row;
-  if (retainQueued && row.hubAckUpdatedAt === row.updatedAt && row.updatedAt !== requestedUpdatedAt) return false;
+async function pushProblemPadNow(client: LcClient, id: string): Promise<boolean> {
+  const row = await getProblemBoard(id);
+  if (!row || isPadHubOffline()) return false;
   const body: ProblemPadDto = {
+    ...row.authoredExtras,
     ...artifactCatalogFields(row.artifacts, { kind: "problem", id: row.id }),
-    id: row.id,
-    dataset: row.dataset,
-    task_id: row.taskId,
-    updated_at: row.updatedAt,
-    sync_seq: row.syncSeq ?? 0,
-    base_updated_at: row.hubAckUpdatedAt ?? 0,
-    board: row.board,
-    agent: row.agent ?? [],
+    id: row.id, dataset: row.dataset, task_id: row.taskId, updated_at: row.updatedAt,
+    sync_seq: row.syncSeq ?? 0, base_updated_at: row.hubAckUpdatedAt ?? 0,
+    board: row.board, agent: row.agent ?? [],
   };
-  if (isPadHubOffline() || pendingDelete("problem", row.id)) {
-    if (!retainQueued) await enqueuePadSync({ op: "putProblem", body });
-    return false;
-  }
   try {
     const written = await client.putProblemPad(row.dataset, row.taskId, body);
-    const cutoff = clearedProblemUpdatedAt.get(row.id);
-    if (cutoff == null || row.updatedAt > cutoff) {
-      await acceptProblemHubAgent(row.id, written.agent);
-      await markHubAck("problem", row.id, written.updated_at ?? row.updatedAt);
+    const current = await getProblemBoard(id);
+    if (current && current.updatedAt === row.updatedAt && current.artifacts?.revision === row.artifacts?.revision) {
+      await acceptProblemHubAgent(id, written.agent);
+      await markHubAck("problem", id, written.updated_at ?? row.updatedAt);
+      clearProblemArtifactConflict(id);
     }
-    await dropMatching(job => job.op === "putProblem" && job.body.id === row.id && job.body.updated_at <= row.updatedAt);
-    const current = await getProblemBoard(row.id);
-    if (current?.updatedAt === row.updatedAt && current.artifacts?.revision === row.artifacts?.revision) clearProblemArtifactConflict(row.id);
     return true;
   } catch (cause) {
-    if (retainQueued && isConflict(cause)) throw cause;
-    if (await applyLivePutFailure("problem", row.id, cause, client, retainQueued)) return false;
-    if (!retainQueued) await enqueuePadSync({ op: "putProblem", body });
+    await applyLivePutFailure("problem", id, cause);
     return false;
   }
 }
@@ -859,14 +580,17 @@ export async function pushPadSnapshot(client: LcClient, snap: PadSnapshot): Prom
       ...(typeof snap.source === "string" ? { source: snap.source } : {}),
     },
   };
-  if (isPadHubOffline()) {
-    await enqueuePadSync({ op: "putSnapshot", body });
-    return;
-  }
-  try {
-    await client.putPadSnapshot(body);
-  } catch {
-    await enqueuePadSync({ op: "putSnapshot", body });
+  if (isPadHubOffline()) throw new Error("Can't reach the hub. Snapshots are kept on this device.");
+  await client.putPadSnapshot(body);
+}
+
+/** Retry retained current copies, including backups whose parent has been removed. */
+export async function syncLegacySnapshots(client: LcClient): Promise<void> {
+  const { listAllPadSnapshots } = await import("./padSnapshotStore");
+  for (const meta of await listAllPadSnapshots()) {
+    const snapshot = await getPadSnapshot(meta.kind, meta.key, meta.tier, meta.snapshotId);
+    if (!snapshot) throw new Error(`${meta.name}: a retained snapshot could not be read. It was kept.`);
+    await pushPadSnapshot(client, snapshot);
   }
 }
 
@@ -955,7 +679,7 @@ export async function pushDocBytes(client: LcClient, hash: string, bytes: ArrayB
    *
    * The hub caps document files at {@link HUB_MAX_DOCUMENT_BYTES} and the picker
    * has no matching limit, so a large enough document could never upload — and
-   * every attempt queued another full copy of it to retry with, forever. Say
+   * every attempt retained another full upload payload. Say
    * so once instead. The document is still open and still local; it is the
    * hub copy that is not happening.
    */
@@ -966,15 +690,9 @@ export async function pushDocBytes(client: LcClient, hash: string, bytes: ArrayB
         `it stays on this device`,
     );
   }
-  if (isPadHubOffline()) {
-    await enqueuePadSync({ op: "putBytes", hash, bytes });
-    return;
-  }
-  try {
-    await client.putDocBytes(hash, bytes);
-  } catch {
-    await enqueuePadSync({ op: "putBytes", hash, bytes });
-  }
+  await putDocBytes(hash, bytes);
+  if (isPadHubOffline()) return;
+  await client.putDocBytes(hash, bytes).catch(() => {});
 }
 
 export async function deletePadEverywhere(
@@ -984,7 +702,9 @@ export async function deletePadEverywhere(
   _localDelete?: () => Promise<void>,
 ): Promise<void> {
   if (kind === "problem") {
-    await sendDeletePad(client, kind, padId, 0);
+    await deleteProblemBoard(padId);
+    const state = await getBookSyncState(kind, padId);
+    if (state?.lifecycle) await sendDeletePad(client, kind, padId, state.lifecycle.seq);
     return;
   }
   const seq =
@@ -1005,54 +725,41 @@ export async function restoreTrashedPad(
   padId: string,
 ): Promise<RestoreTrashedPadResult> {
   if (kind === "problem") return { ok: false };
-  await queueMutation;
-  await loadQueuedJobs();
   if (kind === "whiteboard") {
     const restored = await restoreWhiteboardFromTrash(padId);
     if (!restored) return { ok: false };
     const seq = restored.syncSeq ?? 0;
-    await enqueuePadSync({ op: "restorePad", kind, padId, seq });
-    await flushPadSyncQueue(client);
+    if (!isPadHubOffline()) await pushRestoreAllFour(client, kind, padId, seq).catch(() => {});
     return { ok: true, title: restored.title };
   }
   const restored = await restoreAnnotateFromTrash(padId);
   if (!restored) return { ok: false };
   const seq = restored.syncSeq ?? 0;
-  await enqueuePadSync({ op: "restorePad", kind, padId, seq });
-  await flushPadSyncQueue(client);
+  if (!isPadHubOffline()) await pushRestoreAllFour(client, kind, padId, seq).catch(() => {});
   return { ok: true, title: annotateDocLabel(restored) };
 }
 
-async function sendDeletePad(
-  client: LcClient,
-  kind: PadKindSync,
-  padId: string,
-  seq: number,
-): Promise<void> {
-  // Persist before sending. A killed app or a lost response must leave a retry.
-  await enqueuePadSync({ op: "deletePad", kind, padId, seq });
+async function sendDeletePad(client: LcClient, kind: PadKindSync, padId: string, seq: number): Promise<void> {
   if (isPadHubOffline()) return;
-  await flushPadSyncQueue(client);
+  const captured = await getBookSyncState(kind, padId);
+  try {
+    const parts = kind === "problem" ? splitProblemPadId(padId) : null;
+    const ack = kind === "whiteboard" ? await client.tombstoneWhiteboardPad(padId, seq) :
+      kind === "annotate" ? await client.tombstoneAnnotatePad(padId, seq) :
+      parts ? await client.tombstoneProblemPad(parts.dataset, parts.taskId, seq) : undefined;
+    if (ack?.applied !== true) return;
+    // A stale deletion reply cannot clear a newer restore/delete intent.
+    if (!captured?.lifecycle) return;
+    await mutateLocalBook({ kind, id: padId }, { authored: false, requireIdb: true }, ctx => {
+      if (ctx.state.lifecycle?.token !== captured.lifecycle!.token) return;
+      ctx.setState({ ...ctx.state, lifecycle: null });
+      if (ctx.metadata) ctx.setMetadata({ ...ctx.metadata, deleteAcked: true });
+    });
+  } catch { /* The durable desired state remains eligible for explicit retry. */ }
 }
 
-function applyDeleteAck(
-  kind: PadKindSync,
-  padId: string,
-  ack: { applied?: boolean } | void,
-): void {
-  if (kind === "problem") return;
-  if (ack?.applied === true) {
-    if (kind === "whiteboard") markWhiteboardDeleteAcked(padId, true);
-    else markAnnotateDeleteAcked(padId, true);
-  }
-}
-
-export async function tombstonePad(
-  client: LcClient,
-  kind: PadKindSync,
-  padId: string,
-  seq = 0,
-): Promise<void> {
+export async function tombstonePad(client: LcClient, kind: PadKindSync, padId: string, seq = 0): Promise<void> {
+  await mutateLocalBook({ kind, id: padId }, { requireIdb: true }, ctx => ctx.markLifecycle("delete", seq));
   await sendDeletePad(client, kind, padId, seq);
 }
 
@@ -1062,175 +769,6 @@ export async function restoreArchivedPad(
   padId: string,
 ): Promise<void> {
   await restoreTrashedPad(client, kind, padId);
-}
-
-/** Start once per mounted app; initial online and every recovery drain once. */
-export function startPadSyncRecovery(client: LcClient): () => void {
-  let previous = getPadHubStatus().status;
-  if (previous === "online") void flushPadSyncQueue(client).catch(() => {});
-  return subscribePadHubStatus(() => {
-    const next = getPadHubStatus().status;
-    if (next === "online" && previous !== "online" && loadHubAutosync()) void flushPadSyncQueue(client).catch(() => {});
-    previous = next;
-  });
-}
-
-type QueueDrainOptions = { manual?: boolean; excludeRecord?: { kind: PadKindSync; id: string } };
-
-export function flushPadSyncQueue(client: LcClient, options: QueueDrainOptions = {}): Promise<void> {
-  if (options.manual && flushingQueue) {
-    return flushingQueue.then(() => flushPadSyncQueue(client, options));
-  }
-  flushingQueue ??= flushPadSyncQueueNow(client, options).finally(() => { flushingQueue = null; });
-  return flushingQueue;
-}
-
-async function flushPadSyncQueueNow(client: LcClient, options: QueueDrainOptions): Promise<void> {
-  await queueMutation;
-  await loadQueuedJobs();
-  if (isPadHubOffline()) return;
-  const attempted = new Set<string>();
-  while (true) {
-    await queueMutation;
-    if (isPadHubOffline()) return;
-    const job = memoryQueue.find((entry) => {
-      const book = recordIdentity(entry);
-      return !attempted.has(entry.id) && !(book && (manualBooks.has(`${book.kind}:${book.id}`) ||
-        (options.excludeRecord?.kind === book.kind && options.excludeRecord.id === book.id)));
-    });
-    if (!job) return;
-    attempted.add(job.id);
-    const book = recordIdentity(job) ?? ((job.op === "deletePad" || job.op === "restorePad" || job.op === "tombstone") ?
-      { kind: job.kind, id: job.padId } : null);
-    const send = () => sendQueuedJob(client, job, options);
-    const outcome = book ? await withPadWriter(book.kind, book.id, send) : await send();
-    if (outcome === "stop") {
-      if (options.manual) {
-        const action = job.op === "deletePad" || job.op === "tombstone" ? "deletion" : job.op === "restorePad" ? "restore" : job.op === "putSnapshot" ? "backup" : "upload";
-        throw new Error(`A queued ${action} could not sync. Retry Sync.`);
-      }
-      return;
-    }
-  }
-}
-
-async function sendQueuedJob(client: LcClient, job: PadSyncJob, options: QueueDrainOptions): Promise<"continue" | "stop"> {
-  // A walk may supersede this job while it waits for the book's writer.
-  if (!memoryQueue.some((entry) => entry.id === job.id)) return "continue";
-  const book = recordIdentity(job);
-  if (book && manualBooks.has(`${book.kind}:${book.id}`)) return "continue";
-  try {
-    if (job.op === "putWhiteboard") {
-      const written = await putPadRecord(client, "whiteboard", job.body);
-      await acceptHubAgent("whiteboard", job.body.id, written.agent);
-      await markHubAck("whiteboard", job.body.id, written.updated_at ?? job.body.updated_at);
-    } else if (job.op === "putAnnotate") {
-      if (exceedsHubBodyCap(job.body)) {
-        // Keep an unacknowledged payload; it may be repaired locally later.
-        return "continue";
-      }
-      const written = await putPadRecord(client, "annotate", job.body);
-      await acceptHubAgent("annotate", job.body.id, written.agent);
-      await markHubAck("annotate", job.body.id, written.updated_at ?? job.body.updated_at);
-    } else if (job.op === "putProblem") {
-      const local = await getProblemBoard(job.body.id);
-      if (local) {
-        // A ping may have replaced the working copy while this queued
-        // payload waited. Publishing that different acknowledged copy
-        // cannot acknowledge the still-unsent queued revision.
-        if (local.hubAckUpdatedAt === local.updatedAt && local.updatedAt !== job.body.updated_at) return "continue";
-        // Retry the current catalog and serialize with foreground saves.
-        if (!await pushProblemPad(client, local, { retainQueued: true })) return "continue";
-      } else if (!job.body.artifacts) {
-        const written = await client.putProblemPad(job.body.dataset, job.body.task_id, job.body);
-        await markHubAck("problem", job.body.id, written.updated_at ?? job.body.updated_at);
-      } else return "continue";
-    } else if (job.op === "putSnapshot") {
-      if (!options.manual && !liveAckMatchesStore(kindOfSnap(job.body.kind), job.body.key)) {
-        // The live PUT must be acknowledged before publishing its snapshot.
-        return "continue";
-      }
-      await client.putPadSnapshot(job.body);
-    } else if (job.op === "putBytes") await client.putDocBytes(job.hash, job.bytes);
-    else if (job.op === "deletePad") {
-      await dropMatching((entry) => (!options.manual || recordIdentity(entry) != null) && padPayloadMatches(entry, job.kind, job.padId) && queuedAt(entry) <= queuedAt(job) &&
-        changeClock(entry) <= (job.supersededUpdatedAt ?? queuedAt(job)));
-      if (job.kind === "problem") {
-        const parts = splitProblemPadId(job.padId);
-        if (!parts) return "continue";
-        let ack = await client.tombstoneProblemPad(parts.dataset, parts.taskId, job.seq);
-        if (ack?.applied === false && typeof ack.seq === "number" && ack.seq > job.seq) {
-          // The hub holds a newer save of this board. Clearing an attempt is
-          // an explicit choice, so it still wins with the hub's own seq, unless
-          // this device has reopened the problem since: then the newer board
-          // is that new attempt. A refused delete never succeeds later, so it
-          // is dropped rather than retried on every flush.
-          const reopened = (await getProblemBoard(job.padId)) != null || memoryQueue.some(
-            (entry) => entry.id !== job.id && padPayloadMatches(entry, "problem", job.padId),
-          );
-          if (!reopened) ack = await client.tombstoneProblemPad(parts.dataset, parts.taskId, ack.seq);
-          if (reopened || ack?.applied === false) {
-            if (options.manual) return "stop";
-            await dropJob(job.id);
-            return "continue";
-          }
-        }
-        if (ack?.applied !== true) return options.manual ? "stop" : "continue";
-      } else {
-        const ack =
-          job.kind === "whiteboard"
-            ? await client.tombstoneWhiteboardPad(job.padId, job.seq)
-            : await client.tombstoneAnnotatePad(job.padId, job.seq);
-        applyDeleteAck(job.kind, job.padId, ack);
-        if (ack?.applied !== true) return options.manual ? "stop" : "continue";
-      }
-    } else if (job.op === "restorePad") {
-      if (!await pushRestoreAllFour(client, job.kind, job.padId, job.seq)) return options.manual ? "stop" : "continue";
-    } else if (job.op === "tombstone") {
-      // Legacy intent had no base sequence. Never delete a copy written after
-      // that intent. Already absent rows can acknowledge the old deletion.
-      if (job.kind === "problem") return "stop";
-      const read = () => job.kind === "whiteboard" ? client.getWhiteboardPad(job.padId) : client.getAnnotatePad(job.padId);
-      const row = await read();
-      if (row && row.updated_at > queuedAt(job)) return "stop";
-      const send = (seq: number) => job.kind === "whiteboard" ? client.tombstoneWhiteboardPad(job.padId, seq) :
-        client.tombstoneAnnotatePad(job.padId, seq);
-      let ack = await send(Math.max(1, row?.sync_seq ?? 0));
-      if (ack?.applied === false && !row && typeof ack.seq === "number" && !await read()) ack = await send(ack.seq);
-      if (ack?.applied !== true) return "stop";
-      applyDeleteAck(job.kind, job.padId, ack);
-    } else {
-      throw new Error(`Unsupported queued sync operation: ${String((job as PadSyncJob).op)}`);
-    }
-    await dropJob(job.id);
-    return "continue";
-  } catch (cause) {
-    if (isConflict(cause) && recordIdentity(job)) {
-      await dropJob(job.id);
-      console.warn("Dropped stale queued record upload", job.op, recordIdentity(job)?.id);
-      return "continue";
-    }
-    if (job.op === "putWhiteboard") {
-      if (await applyLivePutFailure("whiteboard", job.body.id, cause, client, true)) {
-        return "continue";
-      }
-    } else if (job.op === "putAnnotate") {
-      if (await applyLivePutFailure("annotate", job.body.id, cause, client, true)) {
-        return "continue";
-      }
-    } else if (job.op === "putProblem") {
-      if (await applyLivePutFailure("problem", job.body.id, cause, client, true)) {
-        return "continue";
-      }
-    }
-    if (isConflict(cause)) {
-      // Unresolved conflicts have no write acknowledgement. Keep them for
-      // explicit resolution while allowing unrelated jobs to make progress.
-      return options.manual ? "stop" : "continue";
-    }
-    if (options.manual) throw cause;
-    return "stop";
-  }
 }
 
 async function pushRestoreAllFour(
@@ -1244,7 +782,8 @@ async function pushRestoreAllFour(
     const notebook = await getWhiteboardNotebook(padId);
     if (!notebook) return false;
     const written = await putPadRecord(client, "whiteboard", {
-      ...artifactCatalogFields(notebook.artifacts, { kind: "whiteboard", id: notebook.id }),
+      ...notebook.authoredExtras,
+    ...artifactCatalogFields(notebook.artifacts, { kind: "whiteboard", id: notebook.id }),
       id: notebook.id,
       title: notebook.title,
       updated_at: notebook.updatedAt,
@@ -1259,7 +798,8 @@ async function pushRestoreAllFour(
     const doc = await getAnnotateDoc(padId);
     if (!doc) return false;
     const written = await putPadRecord(client, "annotate", {
-      ...artifactCatalogFields(doc.artifacts, { kind: "annotate", id: doc.id }),
+      ...doc.authoredExtras,
+    ...artifactCatalogFields(doc.artifacts, { kind: "annotate", id: doc.id }),
       id: doc.id,
       name: doc.name,
       ...(doc.label?.trim() ? { label: doc.label.trim() } : {}),
@@ -1534,8 +1074,6 @@ async function applyPadSyncPingBody(
   opts?: { emit?: boolean },
 ): Promise<void> {
   const emit = opts?.emit !== false;
-  await queueMutation;
-  await loadQueuedJobs();
   const since = loadPadSyncSince();
   let ping;
   try {
@@ -1545,17 +1083,14 @@ async function applyPadSyncPingBody(
     noteHubPingFail();
     throw cause;
   }
-  const pendingDeletes = new Set(
-    memoryQueue
-      .filter((job) => job.op === "deletePad")
-      .map((job) => `${job.kind}:${job.padId}`),
-  );
+  const states = await run<SyncState[]>(STORE_SYNC_STATE, "readonly", store => store.getAll()).catch(() => []);
+  const pendingDeletes = new Set(states.filter(state => state.lifecycle?.action === "delete").map(state => `${state.kind}:${state.id}`));
+  const pendingDelete = (kind: PadKindSync, id: string) => pendingDeletes.has(`${kind}:${id}`);
   const trashWb = new Set(listWhiteboardTrash().map((row) => row.id));
   const trashAn = new Set(listAnnotateTrash().map((row) => row.id));
   const conflictedPads = new Set<string>();
-  const pendingChange = (kind: PadKindSync, id: string): boolean =>
-    pendingPadPushes.has(`${kind}:${id}`) || memoryQueue.some((job) =>
-      padPayloadMatches(job, kind, id) || job.op === "restorePad" && job.kind === kind && job.padId === id);
+  const pendingChange = (kind: PadKindSync, id: string): boolean => pendingPadPushes.has(`${kind}:${id}`)
+    || states.some(state => state.kind === kind && state.id === id && state.lifecycle !== null);
 
   for (const gone of ping.gone ?? []) {
     if (isCameraBusy()) return;
@@ -1572,14 +1107,14 @@ async function applyPadSyncPingBody(
     if (gone.kind === "whiteboard") {
       if (listWhiteboardNotebooks().find((entry) => entry.id === gone.id)?.locked) continue;
       if (trashWb.has(gone.id)) {
-        markWhiteboardDeleteAcked(gone.id, true);
+        await markWhiteboardDeleteAcked(gone.id, true);
         continue;
       }
       await deleteWhiteboardNotebook(gone.id).catch(() => {});
     } else if (gone.kind === "annotate") {
       if (listAnnotateDocs().find((entry) => entry.id === gone.id)?.locked) continue;
       if (trashAn.has(gone.id)) {
-        markAnnotateDeleteAcked(gone.id, true);
+        await markAnnotateDeleteAcked(gone.id, true);
         continue;
       }
       await deleteAnnotateDoc(gone.id).catch(() => {});
@@ -1667,7 +1202,7 @@ async function applyPadSyncPingBody(
       row.updated_at > local.updatedAt;
     if (!stale) {
       await downloadArtifactAssets(client, artifactCatalogFields(row.artifacts, { kind: "whiteboard", id: row.id }).artifacts);
-      markWhiteboardHubAck(row.id, row.updated_at);
+      await markWhiteboardHubAck(row.id, row.updated_at);
       continue;
     }
     await applyHubWhiteboard(row, { emitReload: emit, client });
@@ -1689,7 +1224,7 @@ async function applyPadSyncPingBody(
       row.updated_at > local.updatedAt;
     if (!stale) {
       await downloadArtifactAssets(client, artifactCatalogFields(row.artifacts, { kind: "annotate", id: row.id }).artifacts);
-      markAnnotateHubAck(row.id, row.updated_at);
+      await markAnnotateHubAck(row.id, row.updated_at);
       continue;
     }
     await applyHubAnnotate(row, { emitReload: emit, client });
@@ -1737,7 +1272,7 @@ async function applyPadSyncPingBody(
       row.updated_at > local.updatedAt;
     if (!stale) {
       await downloadArtifactAssets(client, artifactCatalogFields(row.artifacts, { kind: "problem", id: row.id }).artifacts);
-      markProblemHubAck(row.id, row.updated_at);
+      await markProblemHubAck(row.id, row.updated_at);
       continue;
     }
     await applyHubProblem(row, { emitReload: emit, client });
@@ -1783,7 +1318,7 @@ export function sweepPadTrash(now = Date.now()): Promise<void> {
     try { last = Number(localStorage.getItem(ARTIFACT_GC_AT_KEY)) || 0; } catch { /* no storage: collect */ }
     if (now - last < ARTIFACT_GC_EVERY_MS) return;
     const { collectArtifactCache } = await import("./artifactCacheGc");
-    await collectArtifactCache(now, [...memoryQueue]).then(
+    await collectArtifactCache(now).then(
       () => { try { localStorage.setItem(ARTIFACT_GC_AT_KEY, String(now)); } catch { /* next launch tries again */ } },
       () => {},
     );

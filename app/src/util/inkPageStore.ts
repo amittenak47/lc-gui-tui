@@ -12,13 +12,18 @@
 
 import {
   lazyEncodedInk,
+  encodeInkOps,
+  packEncodedInk,
   summarizeEncodedInk,
   unpackEncodedInk,
   type EncodedInk,
   type InkPageSummary,
 } from "../canvas/inkCodec";
 import { bytesFromMaybeGzip } from "./gzip";
-import { run, STORE_INK_PAGES, withStore } from "./idb";
+import { run, STORE_INK_PAGES, STORE_SYNC_STATE, withStore, withTransaction } from "./idb";
+import { allocateChangeSeqRange, markBookAuthored } from "./syncState";
+import { withBookWrite } from "./bookCoordinator";
+import { validateInk } from "./syncContent";
 
 const KEY_SEP = "\u001f";
 
@@ -34,6 +39,13 @@ export interface InkPageRecord {
   updatedAt: number;
   /** Authored revision last exchanged with the hub (independent of gzip/save). */
   syncedUpdatedAt?: number;
+  /** Clock-free authored version and the exactly covered local version. */
+  changeSeq?: number;
+  syncedChangeSeq?: number;
+  syncedRev?: number;
+  baseWireHash?: string | null;
+  baseLocalHash?: string | null;
+  bootstrap?: boolean;
   /**
    * A PDF page that came from the hub before this device could place it in
    * its own layout (page sizes not known yet). See `localizePendingPdfInk`.
@@ -80,6 +92,67 @@ export function whiteboardDocKey(id: string): string {
 /** Session ink for a footnote-owned scratch board — not the PDF's `md:` pages. */
 export function footnoteWhiteboardDocKey(docId: string, wbId: string): string {
   return `fnwb:${docId}:${wbId}`;
+}
+
+/** An ink row always marks its owning book, including scratch-board rows. */
+export function inkBookOwner(docKey: string): { kind: "annotate" | "whiteboard"; id: string } | null {
+  if (docKey.startsWith("md:") && docKey.length > 3) return { kind: "annotate", id: docKey.slice(3) };
+  if (docKey.startsWith("wb:") && docKey.length > 3) return { kind: "whiteboard", id: docKey.slice(3) };
+  if (docKey.startsWith("fnwb:")) {
+    const suffix = docKey.slice(5);
+    const at = suffix.indexOf(":");
+    if (at > 0) return { kind: "annotate", id: suffix.slice(0, at) };
+  }
+  return null;
+}
+
+function requireOwner(docKey: string) {
+  const owner = inkBookOwner(docKey);
+  if (!owner) throw new Error(`The ink owner could not be read: ${docKey}`);
+  return owner;
+}
+
+/** Preserve the last common base while replacing this authored representation. */
+export function authoredInkRow(row: InkPageRecord, existing: InkPageRecord | undefined, seq: number): InkPageRecord {
+  return { ...row, changeSeq: seq, syncedChangeSeq: existing?.syncedChangeSeq ?? 0,
+    syncedRev: existing?.syncedRev ?? 0, baseWireHash: existing?.baseWireHash ?? null,
+    baseLocalHash: existing?.baseLocalHash ?? null, bootstrap: existing?.bootstrap ?? true,
+    syncedUpdatedAt: existing?.syncedUpdatedAt };
+}
+
+/** Schedule an erasure in the caller's parent/content/ink/tracking transaction. */
+export function clearInkRowsInTransaction(tx: IDBTransaction, docKeys: readonly string[], seq: number, now: number): void {
+  const store = tx.objectStore(STORE_INK_PAGES);
+  for (const docKey of new Set(docKeys)) {
+    const request = store.openCursor(inkPageKeyRange(docKey));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return;
+      const existing = cursor.value as InkPageRecord;
+      if (!isRecord(existing)) { tx.abort(); return; }
+      const row = authoredInkRow({ v: 1, docKey, pageId: existing.pageId,
+        inkC: encodeInkOps([]), dirty: true, updatedAt: Math.max(now, existing.updatedAt + 1) }, existing, seq);
+      cursor.update(row);
+      cursor.continue();
+    };
+  }
+}
+
+/** Prefix erasures are limited to one known scratch-board owner. */
+export function clearInkPrefixInTransaction(tx: IDBTransaction, prefix: string, seq: number, now: number): void {
+  const owner = requireOwner(prefix);
+  const store = tx.objectStore(STORE_INK_PAGES);
+  const request = store.openCursor(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) return;
+    const existing = cursor.value as InkPageRecord;
+    const actual = isRecord(existing) ? inkBookOwner(existing.docKey) : null;
+    if (!actual || actual.kind !== owner.kind || actual.id !== owner.id) { tx.abort(); return; }
+    cursor.update(authoredInkRow({ v: 1, docKey: existing.docKey, pageId: existing.pageId,
+      inkC: encodeInkOps([]), dirty: true, updatedAt: Math.max(now, existing.updatedAt + 1) }, existing, seq));
+    cursor.continue();
+  };
 }
 
 export function inkPageKey(docKey: string, pageId: number): string {
@@ -148,22 +221,25 @@ export async function putInkPages(
   const now = opts?.now ?? Date.now();
   const entries = [...pages];
   if (entries.length === 0) return;
-  await withStore(STORE_INK_PAGES, "readwrite", (store) => {
-    for (const [pageId, inkC] of entries) {
+  const owner = requireOwner(docKey);
+  await withBookWrite(owner.kind, owner.id, () => withTransaction<void>([STORE_INK_PAGES, STORE_SYNC_STATE], "readwrite", tx => {
+    allocateChangeSeqRange(tx, entries.length, (firstSeq) => {
+    const store = tx.objectStore(STORE_INK_PAGES);
+    entries.forEach(([pageId, inkC], index) => {
       const key = inkPageKey(docKey, pageId);
       const request = store.get(key);
       request.onsuccess = () => {
         const existing = request.result as InkPageRecord | undefined;
-        const row: InkPageRecord = {
+        const row = authoredInkRow({
           v: 1, docKey, pageId, inkC, dirty,
           updatedAt: Math.max(now, (existing?.updatedAt ?? 0) + 1),
-          ...(existing?.syncedUpdatedAt != null
-            ? { syncedUpdatedAt: existing.syncedUpdatedAt } : {}),
-        };
+        }, existing, firstSeq + index);
         store.put(row, key);
       };
-    }
-  });
+    });
+    markBookAuthored(tx, owner.kind, owner.id, firstSeq + entries.length - 1);
+    });
+  }));
 }
 
 export async function putInkPageArchive(
@@ -199,7 +275,8 @@ export async function markInkPageSynced(
     request.onsuccess = () => {
       const row = request.result as InkPageRecord | undefined;
       if (!row || row.updatedAt < updatedAt || (row.syncedUpdatedAt ?? 0) > updatedAt) return;
-      store.put({ ...row, syncedUpdatedAt: updatedAt }, key);
+      store.put({ ...row, syncedUpdatedAt: updatedAt,
+        ...(row.updatedAt === updatedAt && row.changeSeq != null ? { syncedChangeSeq: row.changeSeq } : {}) }, key);
     };
   });
 }
@@ -294,12 +371,16 @@ export async function getInkPageRecords(docKey: string, opts: { metadataOnly?: b
   try {
     await withStore(STORE_INK_PAGES, "readonly", (store) => {
       const collect = (value: unknown) => {
+        if (value != null && !isRecord(value) && opts.strict) throw new Error("Saved handwriting metadata could not be read.");
         if (isRecord(value)) {
           // Sync compares clocks. Retaining every compressed/WAL payload here
           // makes even a one-page update hold an entire handwritten book.
           rows.push(opts.metadataOnly ? {
             v: value.v, docKey: value.docKey, pageId: value.pageId,
             dirty: value.dirty, updatedAt: value.updatedAt, syncedUpdatedAt: value.syncedUpdatedAt,
+            changeSeq: value.changeSeq, syncedChangeSeq: value.syncedChangeSeq,
+            syncedRev: value.syncedRev, baseWireHash: value.baseWireHash,
+            baseLocalHash: value.baseLocalHash, bootstrap: value.bootstrap,
             ...(value.layoutPending ? { layoutPending: true } : {}),
           } : value);
         }
@@ -334,37 +415,25 @@ export async function getInkPage(docKey: string, pageId: number): Promise<Encode
 }
 
 export async function deleteInkPages(docKey: string): Promise<void> {
-  try {
-    await withStore(STORE_INK_PAGES, "readwrite", (store) => {
-      const request = store.openCursor(inkPageKeyRange(docKey));
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) return;
-        cursor.delete();
-        cursor.continue();
-      };
+  const owner = requireOwner(docKey);
+  await withBookWrite(owner.kind, owner.id, () => withTransaction<void>([STORE_INK_PAGES, STORE_SYNC_STATE], "readwrite", tx => {
+    allocateChangeSeqRange(tx, 1, (seq) => {
+      clearInkRowsInTransaction(tx, [docKey], seq, Date.now());
+      markBookAuthored(tx, owner.kind, owner.id, seq);
     });
-  } catch {
-    /* private browsing / missing store */
-  }
+  }));
 }
 
 /** Drop every ink shard whose docKey starts with `prefix` (e.g. `fnwb:{docId}:`). */
 export async function deleteInkPagesByPrefix(prefix: string): Promise<void> {
   if (!prefix) return;
-  try {
-    await withStore(STORE_INK_PAGES, "readwrite", (store) => {
-      const request = store.openCursor(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) return;
-        cursor.delete();
-        cursor.continue();
-      };
+  const owner = requireOwner(prefix);
+  await withBookWrite(owner.kind, owner.id, () => withTransaction<void>([STORE_INK_PAGES, STORE_SYNC_STATE], "readwrite", tx => {
+    allocateChangeSeqRange(tx, 1, (seq) => {
+      clearInkPrefixInTransaction(tx, prefix, seq, Date.now());
+      markBookAuthored(tx, owner.kind, owner.id, seq);
     });
-  } catch {
-    /* private browsing / missing store */
-  }
+  }));
 }
 
 /**
@@ -404,19 +473,7 @@ export async function listInkDocKeys(prefix: string): Promise<string[]> {
  * the strokes are no longer inside the blob to be copied with it.
  */
 export async function copyInkPages(fromKey: string, toKey: string): Promise<number> {
-  if (!fromKey || !toKey || fromKey === toKey) return 0;
-  const rows = await getInkPageRecords(fromKey);
-  if (rows.length === 0) return 0;
-  try {
-    await withStore(STORE_INK_PAGES, "readwrite", (store) => {
-      for (const row of rows) {
-        store.put({ ...row, docKey: toKey }, inkPageKey(toKey, row.pageId));
-      }
-    });
-  } catch {
-    return 0;
-  }
-  return rows.length;
+  return transferInkPages(fromKey, toKey, false);
 }
 
 /**
@@ -427,20 +484,64 @@ export async function copyInkPages(fromKey: string, toKey: string): Promise<numb
  * rename that left rows under both keys would restore ink twice.
  */
 export async function renameInkPages(fromKey: string, toKey: string): Promise<number> {
-  const rows = await getInkPageRecords(fromKey);
+  return transferInkPages(fromKey, toKey, true);
+}
+
+function sameStoredInk(left: InkPageRecord | undefined, right: InkPageRecord | undefined): boolean {
+  if (!left || !right) return left === right;
+  if (left.changeSeq !== right.changeSeq || left.updatedAt !== right.updatedAt || left.layoutPending !== right.layoutPending) return false;
+  const bytes = (row: InkPageRecord) => row.inkC ? packEncodedInk(row.inkC) : row.gz;
+  const a = bytes(left), b = bytes(right);
+  return !!a && !!b && a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+async function transferInkPages(fromKey: string, toKey: string, move: boolean): Promise<number> {
+  if (!fromKey || !toKey || fromKey === toKey) return 0;
+  const from = requireOwner(fromKey), to = requireOwner(toKey);
+  const rows = await getInkPageRecords(fromKey, { strict: true });
   if (rows.length === 0) return 0;
-  try {
-    await withStore(STORE_INK_PAGES, "readwrite", (store) => {
-      for (const row of rows) {
-        store.put({ ...row, docKey: toKey }, inkPageKey(toKey, row.pageId));
+  const destination = new Map((await getInkPageRecords(toKey, { strict: true })).map(row => [row.pageId, row]));
+  // Validation and hashing are outside the writer lock/IndexedDB transaction.
+  for (const row of rows) {
+    const encoded = await encodedFromRecord(row);
+    if (!encoded) throw new Error(`Handwriting on page ${row.pageId} could not be read; both copies were kept.`);
+    const sourceHash = (await validateInk(packEncodedInk(encoded))).wireHash;
+    const existing = destination.get(row.pageId);
+    if (existing) {
+      const other = await encodedFromRecord(existing);
+      if (!other || (await validateInk(packEncodedInk(other))).wireHash !== sourceHash) {
+        throw new Error(`The destination has different handwriting on page ${row.pageId}; both copies were kept.`);
       }
-    });
-  } catch {
-    // Nothing was moved, so leave the originals where they are and try again
-    // on the next open rather than deleting ink we failed to copy.
-    return 0;
+    }
   }
-  await deleteInkPages(fromKey);
+  const owners = [...new Map([from, to].map(owner => [`${owner.kind}:${owner.id}`, owner])).values()]
+    .sort((a, b) => `${a.kind}:${a.id}`.localeCompare(`${b.kind}:${b.id}`));
+  const write = (): Promise<void> => withTransaction<void>([STORE_INK_PAGES, STORE_SYNC_STATE], "readwrite", tx => {
+    allocateChangeSeqRange(tx, rows.length, first => {
+      const store = tx.objectStore(STORE_INK_PAGES);
+      rows.forEach((row, index) => {
+        const source = store.get(inkPageKey(fromKey, row.pageId));
+        source.onsuccess = () => {
+          if (!sameStoredInk(source.result, row)) { tx.abort(); return; }
+          const target = store.get(inkPageKey(toKey, row.pageId));
+          target.onsuccess = () => {
+            const existing = target.result as InkPageRecord | undefined;
+            if (!sameStoredInk(existing, destination.get(row.pageId))) { tx.abort(); return; }
+            // A copy is authored in its destination and never inherits the
+            // source book's remote acknowledgement/revision.
+            if (!existing) store.put(authoredInkRow({ ...row, docKey: toKey, dirty: !!row.inkC,
+              updatedAt: Math.max(Date.now(), row.updatedAt + 1) }, undefined, first + index), inkPageKey(toKey, row.pageId));
+            if (move) store.delete(inkPageKey(fromKey, row.pageId));
+          };
+        };
+      });
+      markBookAuthored(tx, to.kind, to.id, first + rows.length - 1);
+      if (move && (from.kind !== to.kind || from.id !== to.id)) markBookAuthored(tx, from.kind, from.id, first + rows.length - 1);
+    });
+  });
+  const locked = (index: number): Promise<void> => index === owners.length ? write()
+    : withBookWrite(owners[index]!.kind, owners[index]!.id, () => locked(index + 1));
+  await locked(0);
   return rows.length;
 }
 

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { decodeInkOps, encodeInkOps, packEncodedInk } from "../canvas/inkCodec";
 import { bytesToB64 } from "../api/nativeHttp";
 import { isInkConflict, mergeEncodedPages, remoteWins } from "./inkSync";
+import { memoryBookTransaction } from "./testBookTransaction";
 import {
   clearInkConflicts,
   inkConflictMessage,
@@ -10,6 +11,17 @@ import {
   noteInkConflicts,
   resetInkConflictsForTests,
 } from "./inkConflicts";
+
+function mockInkTransaction(stores: Map<string, Map<IDBValidKey, unknown>>,
+  work: Parameters<typeof memoryBookTransaction>[1], written: (row: unknown, key: string) => void) {
+  return memoryBookTransaction(stores, (tx, done) => work({ ...tx,
+    objectStore(name: string) {
+      const store = tx.objectStore(name);
+      return name === "ink_pages" ? { ...store, put(value: unknown, key: string) {
+        written(value, key); return store.put(value, key);
+      } } : store;
+    } } as unknown as IDBTransaction, done));
+}
 
 describe("remoteWins", () => {
   it("takes a page this device has never seen", () => {
@@ -154,9 +166,12 @@ describe("applyInkChoice", () => {
   async function loadApply(localRows: Array<{ pageId: number }>) {
     const deleteInkPages = vi.fn(async () => {});
     const write = vi.fn();
+    const stores = new Map<string, Map<IDBValidKey, unknown>>();
     vi.resetModules();
     vi.doMock("./idb", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./idb")>()),
+      abortTransaction: (_tx: unknown, cause: unknown) => { throw cause; },
+      withTransaction: (_names: string[], _mode: string, work: Parameters<typeof memoryBookTransaction>[1]) => mockInkTransaction(stores, work, write),
       withStore: async (
         _store: string,
         _mode: string,
@@ -366,9 +381,12 @@ describe("applyInkChoice", () => {
     const hubOps = [draw(40, "#c00"), draw(y2, "#c00")];
     const hubGz = bytesToB64(packEncodedInk(encodeInkOps(hubOps)));
     const written: Array<{ page_id: number; gz: string }> = [];
+    const stores = new Map<string, Map<IDBValidKey, unknown>>();
     vi.resetModules();
     vi.doMock("./idb", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./idb")>()),
+      abortTransaction: (_tx: unknown, cause: unknown) => { throw cause; },
+      withTransaction: (_names: string[], _mode: string, work: Parameters<typeof memoryBookTransaction>[1]) => mockInkTransaction(stores, work, () => {}),
       withStore: async (
         _store: string,
         _mode: string,
@@ -657,10 +675,14 @@ describe("applyInkChoice fetches what a choice writes", () => {
 
   async function loadApply(localRows: Array<{ pageId: number }>) {
     const written: Array<{ pageId: number }> = [];
+    const stores = new Map<string, Map<IDBValidKey, unknown>>();
     const deleteInkPages = vi.fn(async () => {});
     vi.resetModules();
     vi.doMock("./idb", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./idb")>()),
+      abortTransaction: (_tx: unknown, cause: unknown) => { throw cause; },
+      withTransaction: (_names: string[], _mode: string, work: Parameters<typeof memoryBookTransaction>[1]) => mockInkTransaction(stores, work,
+        row => written.push({ pageId: (row as { pageId: number }).pageId })),
       withStore: async (
         _store: string,
         _mode: string,
@@ -682,7 +704,7 @@ describe("applyInkChoice fetches what a choice writes", () => {
             v: 1 as const,
             docKey: "md:p1",
             pageId: row.pageId,
-            gz: new Uint8Array([1, 2, 3]),
+            gz: packEncodedInk(encodeInkOps([])),
             dirty: true,
             updatedAt: 10,
           })),

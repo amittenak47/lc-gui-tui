@@ -19,7 +19,7 @@ import {
   syncInkPages,
 } from "./inkSync";
 import { localFootnoteBoardIds } from "./annotateStore";
-import { acceptHubAgent, dropQueuedRecordUploads, markHubAck } from "./padSync";
+import { acceptHubAgent, markHubAck } from "./padSync";
 import { withPadWriter } from "./padWriter";
 import { putPadRecord } from "./padRecordUpload";
 
@@ -124,7 +124,6 @@ export async function walkPushPad(
       await acceptHubAgent(pad.kind, pad.id, written.agent);
       // Acked here rather than at the call site, so no path can push and forget.
       await markHubAck(pad.kind, pad.id, hubUpdatedAt, pad.markHubAck);
-      await dropQueuedRecordUploads(pad.kind, pad.id, body.updated_at);
       return { outcome: "ok", hubUpdatedAt };
     } catch (cause) {
       if (cause instanceof LcApiError && cause.status === 409) {

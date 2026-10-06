@@ -1,6 +1,5 @@
 import type { LcClient } from "../api/client";
-import { enqueuePadSync, flushPadSyncQueue } from "./padSync";
-import { deleteProblemBoard, getProblemBoard, problemPadId } from "./problemBoardStore";
+import { deleteProblemBoard, problemPadId } from "./problemBoardStore";
 
 /** Finish local work before closing; a hub outage must never hold the tab open. */
 export async function resolveProblemLeave(options: {
@@ -22,16 +21,9 @@ export async function resolveProblemLeave(options: {
   const outcome = await client.finishAttempt(taskId, { solved, save }, dataset);
   if (!outcome.kept_layout) {
     const id = problemPadId(dataset, taskId);
-    const row = await getProblemBoard(id);
-    // Persist before contacting the hub, including when it never answers.
-    await enqueuePadSync(
-      { op: "deletePad", kind: "problem", padId: id, seq: (row?.syncSeq ?? 0) + 1 },
-      { requirePersistence: true },
-    );
+    // The durable current deletion intent survives closing and a hub outage.
     await deleteProblemBoard(id);
   }
   await dismiss();
   run();
-  // The queue owns retry and acknowledgement. It also survives this workspace.
-  void flushPadSyncQueue(client).catch(() => {});
 }

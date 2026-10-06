@@ -28,18 +28,17 @@
  */
 
 import type { BoardBlob } from "../canvas/BoardHandle";
-import { deleteContent, getContent, putParentContent, editParentContentArtifacts } from "./contentStore";
+import { getContent, putParentRecord, editParentContentArtifacts } from "./contentStore";
 import type { ArtifactCatalogEdit } from "./artifactCatalogEdits";
 import type { WebCapture, WebPadKind } from "./webCaptures";
-import { deleteDocBytes } from "./docBytes";
 import { sanitizeFootnotes, type DocFootnote } from "./docFootnotes";
-import { deletePadSnapshots, renamePadSnapshots } from "./padSnapshotStore";
-import { deleteInkPages, annotateDocKey, renameInkPages } from "./inkPageStore";
-import { sweepFootnoteWhiteboards, whiteboardIdsOn } from "./footnoteWhiteboardStore";
-import { setStorageItem } from "./storageQuota";
+import { renamePadSnapshots } from "./padSnapshotStore";
+import { annotateDocKey, renameInkPages } from "./inkPageStore";
+import { whiteboardIdsOn } from "./footnoteWhiteboardStore";
 import { hashBytes } from "./docBytes";
 import { webIdentityUrl } from "./webIdentity";
 import { artifactCatalogFields, type ArtifactCatalog } from "./padArtifacts";
+import { getCachedBookMetadata, mutateLocalBook, type LocalBookEdit } from "./localBookStore";
 
 export const ANNOTATE_LIBRARY_LIMIT = 30;
 export const ANNOTATE_TRASH_TTL_MS = 3 * 24 * 60 * 60 * 1000;
@@ -73,6 +72,8 @@ export class AnnotateLibraryFullError extends Error {
 }
 
 export interface AnnotateDocMeta {
+  /** Unknown authored wire fields survive download, editing and re-upload. */
+  authoredExtras?: Record<string, unknown>;
   /** Small local index hint; the catalog itself belongs in contentStore. */
   artifactRevision?: string;
   id: string;
@@ -334,7 +335,7 @@ function legacyEntry(id: string): AnnotateDoc | null {
   }
 }
 
-function readIndex(): AnnotateDocMeta[] {
+function legacyIndex(): AnnotateDocMeta[] {
   try {
     const raw = localStorage.getItem(LIBRARY_KEY) ?? localStorage.getItem(PRE_RENAME_INDEX);
     if (!raw) return adoptLegacyLibrary();
@@ -348,12 +349,15 @@ function readIndex(): AnnotateDocMeta[] {
   }
 }
 
-/** Throws {@link StorageFullError} when the origin is out of room — see `storageQuota`. */
 export const ANNOTATE_LIBRARY_EVENT = "lc-annotate-library";
 
-function writeIndex(entries: AnnotateDocMeta[]): void {
-  setStorageItem(LIBRARY_KEY, JSON.stringify(entries));
-  if (typeof window !== "undefined") window.dispatchEvent(new Event(ANNOTATE_LIBRARY_EVENT));
+function readIndex(): AnnotateDocMeta[] {
+  return getCachedBookMetadata<AnnotateDocMeta>("annotate", legacyIndex());
+}
+
+async function editMetadata<T>(id: string, edit: (meta: AnnotateDocMeta | null, ctx: LocalBookEdit) => T,
+  authored = true): Promise<T> {
+  return mutateLocalBook({ kind: "annotate", id }, { authored }, ctx => edit(ctx.metadata as AnnotateDocMeta | null, ctx));
 }
 
 /**
@@ -417,17 +421,16 @@ function liveAnnotateCount(): number {
  * going through the save path would freshen `updatedAt` and move the set to
  * the top of Recent for something the reader did not draw.
  */
-export function setAnnotateDocLabel(id: string, label: string): boolean {
-  const index = readIndex();
-  const meta = index.find((entry) => entry.id === id);
-  if (!meta) return false;
-  const trimmed = label.trim();
-  const current = meta.label?.trim() ?? "";
-  if (trimmed === current) return false;
-  const next: AnnotateDocMeta = trimmed ? { ...meta, label: trimmed } : { ...meta };
-  if (!trimmed) delete next.label;
-  writeIndex(index.map((entry) => (entry.id === id ? next : entry)));
-  return true;
+export async function setAnnotateDocLabel(id: string, label: string): Promise<boolean> {
+  return editMetadata(id, (meta, ctx) => {
+    if (!meta) return false;
+    const trimmed = label.trim();
+    if (trimmed === (meta.label?.trim() ?? "")) return false;
+    const next = { ...meta, kind: "annotate" as const };
+    if (trimmed) next.label = trimmed; else delete next.label;
+    ctx.setMetadata(next);
+    return true;
+  });
 }
 
 /** True once the reader has named this set (owned notes count as named). */
@@ -450,8 +453,12 @@ async function readContent(meta: AnnotateDocMeta): Promise<AnnotateDoc | null> {
       const index = readIndex();
       const latest = index.find((entry) => entry.id === meta.id);
       if (latest && latest.artifactRevision === meta.artifactRevision) {
-        meta = { ...latest, artifactRevision: fields.artifacts.revision, updatedAt: Math.max(Date.now(), latest.updatedAt + 1) };
-        writeIndex([meta, ...index.filter((entry) => entry.id !== meta.id)]);
+        meta = await editMetadata(meta.id, (current, ctx) => {
+          if (!current || current.artifactRevision !== latest.artifactRevision) return current ?? latest;
+          const next = { ...current, artifactRevision: fields.artifacts!.revision };
+          ctx.setMetadata({ ...next, kind: "annotate" });
+          return next;
+        }, false);
       }
     }
     return {
@@ -633,11 +640,8 @@ export async function migrateAnnotateKeysToId(): Promise<number> {
  * now writes *this* entry rather than re-serialising the library, and the
  * expensive half happens off the string path instead of under the nib.
  *
- * The index is written first and awaited last. If the content write fails, the
- * throw propagates and the index has already recorded an entry whose content is
- * missing — which reads back as `null` and is handled everywhere as "no saved
- * board". The other order loses the entry entirely on a failure that only
- * affected its payload.
+ * Content, authoritative metadata and its authored sequence commit together;
+ * an unavailable database uses one payload/metadata/version envelope instead.
  */
 export async function saveAnnotateDoc(input: {
   /** Omitted by ink-only autosave; preserve the existing catalog. */
@@ -645,6 +649,7 @@ export async function saveAnnotateDoc(input: {
   id?: string;
   name: string;
   hash: string;
+  metadataIntent?: "rename";
   docType?: DocType;
   /** Undefined keeps whatever the set is already called. */
   label?: string;
@@ -688,8 +693,6 @@ export async function saveAnnotateDoc(input: {
       !(existing?.artifactRevision && input.artifacts === undefined)
       ? null
       : await getContent<AnnotateContent>(id);
-  const footnotes = input.footnotes ? [...input.footnotes] : prior?.footnotes ?? [];
-  const agent = Array.isArray(input.agent) ? input.agent : prior?.agent ?? [];
   const artifactFields = artifactCatalogFields(
     input.artifacts === undefined ? prior?.artifacts : input.artifacts,
     { kind: "annotate", id },
@@ -699,11 +702,6 @@ export async function saveAnnotateDoc(input: {
    * captures", not "there are none". An autosave that omits them must not drop
    * the older page a stranded mark is still standing on.
    */
-  const history = await (input.captures || input.padKind
-    ? prior ?? getContent<AnnotateContent>(id)
-    : Promise.resolve(prior));
-  const captures = input.captures ? [...input.captures] : history?.captures;
-  const padKind = input.padKind ?? history?.padKind;
   const label = input.label?.trim() || existing?.label;
   const owned = input.owned ?? existing?.owned;
   const meta: AnnotateDocMeta = {
@@ -721,27 +719,29 @@ export async function saveAnnotateDoc(input: {
     lastSyncedAt: existing?.lastSyncedAt,
     ...(existing?.hubAckUpdatedAt != null ? { hubAckUpdatedAt: existing.hubAckUpdatedAt } : {}),
   };
-  const saved = await putParentContent({ kind: "annotate", id }, {
-    artifacts: input.artifacts,
-    source: input.source,
-    board: input.board,
-    footnotes,
-    agent,
-    ...(captures && captures.length > 0 ? { captures } : {}),
-    ...(padKind ? { padKind } : {}),
-  } satisfies AnnotateContent);
-  if (saved.artifacts) meta.artifactRevision = saved.artifacts.revision;
-  const latest = getAnnotateDocMeta(id);
-  if (existing && (!latest || latest.deletedAt !== undefined)) throw new Error("Document was removed during save; it was not restored.");
-  if (latest) {
-    meta.updatedAt = Math.max(meta.updatedAt, latest.updatedAt + 1);
-    meta.syncSeq = latest.syncSeq;
-    meta.hubAckUpdatedAt = latest.hubAckUpdatedAt;
-    meta.lastSyncedAt = latest.lastSyncedAt;
-    if (latest.locked) meta.locked = true; else delete meta.locked;
-  }
-  writeIndex([meta, ...readIndex().filter((entry) => entry.id !== id)]);
-  return { ...meta, ...saved };
+  const accepted = await putParentRecord<AnnotateContent, AnnotateDocMeta>({ kind: "annotate", id }, {
+    artifacts: input.artifacts, source: input.source, board: input.board,
+    ...(input.footnotes !== undefined ? { footnotes: [...input.footnotes] } : {}),
+    ...(Array.isArray(input.agent) ? { agent: input.agent } : {}),
+    ...(input.captures !== undefined ? { captures: [...input.captures] } : {}),
+    ...(input.padKind !== undefined ? { padKind: input.padKind } : {}),
+  } as AnnotateContent, { metadata: (current, saved) => {
+    if (existing && (!current || current.deletedAt !== undefined)) throw new Error("Document was removed during save; it was not restored.");
+    const next: AnnotateDocMeta = { ...current, ...meta,
+      name: current && input.metadataIntent !== "rename" ? current.name : meta.name,
+      updatedAt: Math.max(now, (current?.updatedAt ?? now - 1) + 1),
+      syncSeq: current?.syncSeq ?? 0, lastSyncedAt: current?.lastSyncedAt,
+      hubAckUpdatedAt: current?.hubAckUpdatedAt,
+    };
+    if (current && input.metadataIntent !== "rename") {
+      if (current.label) next.label = current.label; else delete next.label;
+    }
+    if (current?.locked) next.locked = true; else delete next.locked;
+    if (input.owned === undefined && current?.owned) next.owned = true;
+    if (saved.artifacts) next.artifactRevision = saved.artifacts.revision;
+    return next;
+  } });
+  return { ...accepted.metadata!, ...accepted.content };
 }
 
 export async function editAnnotateArtifacts(
@@ -751,72 +751,52 @@ export async function editAnnotateArtifacts(
     const meta = getAnnotateDocMeta(id);
     if (!meta || meta.deletedAt !== undefined) throw new Error("Document was removed; attachment was not published.");
   };
-  const artifacts = await editParentContentArtifacts({ kind: "annotate", id }, expectedCatalogRevision, edit, assertLive);
-  assertLive();
-  const index = readIndex();
-  const meta = index.find((row) => row.id === id)!;
-  writeIndex([{ ...meta, artifactRevision: artifacts.revision, updatedAt: Math.max(Date.now(), meta.updatedAt + 1) },
-    ...index.filter((row) => row.id !== id)]);
-  return artifacts;
+  return editParentContentArtifacts({ kind: "annotate", id }, expectedCatalogRevision, edit, assertLive);
 }
 
-export function markAnnotateHubAck(id: string, updatedAt: number): void {
-  const existing = readIndex().find((entry) => entry.id === id);
-  if (!existing) return;
-  writeIndex([
-    { ...existing, hubAckUpdatedAt: updatedAt, lastSyncedAt: Date.now() },
-    ...readIndex().filter((entry) => entry.id !== id),
-  ]);
+export async function markAnnotateHubAck(id: string, updatedAt: number): Promise<void> {
+  await editMetadata(id, (meta, ctx) => {
+    if (meta) ctx.setMetadata({ ...meta, kind: "annotate", hubAckUpdatedAt: Math.max(meta.hubAckUpdatedAt ?? 0, updatedAt), lastSyncedAt: Date.now() });
+  }, false);
 }
 
-export function setAnnotateDocLocked(id: string, locked: boolean): void {
-  const index = readIndex();
-  const existing = index.find((entry) => entry.id === id);
-  if (!existing) return;
-  const next: AnnotateDocMeta = { ...existing };
-  if (locked) next.locked = true;
-  else delete next.locked;
-  writeIndex([next, ...index.filter((entry) => entry.id !== id)]);
+export async function setAnnotateDocLocked(id: string, locked: boolean): Promise<void> {
+  await editMetadata(id, (meta, ctx) => {
+    if (!meta || Boolean(meta.locked) === locked) return;
+    const next = { ...meta, kind: "annotate" as const };
+    if (locked) next.locked = true; else delete next.locked;
+    ctx.setMetadata(next);
+  });
 }
 
 export async function trashAnnotateDoc(id: string, now = Date.now()): Promise<number | null> {
-  const existing = readIndex().find((entry) => entry.id === id);
-  if (!existing || existing.locked) return null;
-  const seq = (existing.syncSeq ?? 0) + 1;
-  const next: AnnotateDocMeta = {
-    ...existing,
-    deletedAt: now,
-    syncSeq: seq,
-    deleteAcked: false,
-    lastTouch: now,
-  };
-  writeIndex([next, ...readIndex().filter((entry) => entry.id !== id)]);
-  return seq;
+  return editMetadata(id, (meta, ctx) => {
+    if (!meta || meta.locked) return null;
+    const seq = (meta.syncSeq ?? 0) + 1;
+    ctx.setMetadata({ ...meta, kind: "annotate", deletedAt: now, syncSeq: seq, deleteAcked: false, lastTouch: now });
+    ctx.markLifecycle("delete", seq, ctx.state.bootstrap ? null : ctx.state.appliedBookRev, ctx.state.lifecycle?.goneSeq ?? null);
+    return seq;
+  });
 }
 
-export function markAnnotateDeleteAcked(id: string, acked: boolean): void {
-  const existing = readIndex().find((entry) => entry.id === id);
-  if (!existing?.deletedAt) return;
-  writeIndex([
-    { ...existing, deleteAcked: acked },
-    ...readIndex().filter((entry) => entry.id !== id),
-  ]);
+export async function markAnnotateDeleteAcked(id: string, acked: boolean): Promise<void> {
+  await editMetadata(id, (meta, ctx) => {
+    if (meta?.deletedAt) ctx.setMetadata({ ...meta, kind: "annotate", deleteAcked: acked });
+  }, false);
 }
 
 export async function restoreAnnotateFromTrash(id: string): Promise<AnnotateDoc | null> {
-  const existing = readIndex().find((entry) => entry.id === id);
-  if (!existing?.deletedAt || existing.purgedAt) return null;
-  if (liveAnnotateCount() >= ANNOTATE_LIBRARY_LIMIT) {
-    throw new AnnotateLibraryFullError(
-      `At most ${ANNOTATE_LIBRARY_LIMIT} annotated documents — delete one to restore another.`,
-    );
-  }
-  const seq = (existing.syncSeq ?? 0) + 1;
-  const next: AnnotateDocMeta = { ...existing, syncSeq: seq, lastTouch: Date.now() };
-  delete next.deletedAt;
-  delete next.deleteAcked;
-  writeIndex([next, ...readIndex().filter((entry) => entry.id !== id)]);
-  return readContent(next);
+  const metadata = await editMetadata(id, (meta, ctx) => {
+    if (!meta?.deletedAt || meta.purgedAt || !ctx.content) return null;
+    if (liveAnnotateCount() >= ANNOTATE_LIBRARY_LIMIT) throw new AnnotateLibraryFullError(`At most ${ANNOTATE_LIBRARY_LIMIT} annotated documents ? delete one to restore another.`);
+    const seq = Math.max(meta.syncSeq ?? 0, ctx.state.lifecycle?.goneSeq ?? 0) + 1;
+    const next = { ...meta, kind: "annotate" as const, syncSeq: seq, lastTouch: Date.now() };
+    delete next.deletedAt; delete next.deleteAcked;
+    ctx.setMetadata(next);
+    ctx.markLifecycle("restore", seq, ctx.state.bootstrap ? null : ctx.state.appliedBookRev, ctx.state.lifecycle?.goneSeq ?? null);
+    return next;
+  });
+  return metadata ? readContent(metadata) : null;
 }
 
 export async function sweepAnnotateTrash(now = Date.now()): Promise<string[]> {
@@ -835,46 +815,19 @@ export async function sweepAnnotateTrash(now = Date.now()): Promise<string[]> {
 }
 
 export async function deleteAnnotateDoc(id: string, preserveTombstone = false): Promise<void> {
-  const index = readIndex();
-  const going = index.find((entry) => entry.id === id) ?? null;
-  if (preserveTombstone && !going?.deletedAt) throw new Error("Only trashed documents can be permanently deleted.");
-  if (!preserveTombstone && going?.locked) return;
-  const kept = index.filter((entry) => entry.id !== id);
-  writeIndex(preserveTombstone && going ? [{...going,purgedAt:Date.now(),locked:false},...kept] : kept);
-  await deleteContent(id);
-  if (going) {
-    void deletePadSnapshots("annotate", going.id).catch(() => {});
-    void deleteInkPages(annotateDocKey(going.id)).catch(() => {});
-    void sweepFootnoteWhiteboards(going.id).catch(() => {});
-    /*
-     * The graph loses this node's edges with it.
-     *
-     * Both directions: an edge whose *target* is gone would otherwise draw a
-     * line to a node the atlas cannot name, which reads as data loss rather
-     * than as a deletion the reader asked for. Imported dynamically so the
-     * store does not pull the links module into every caller.
-     */
-    void import("./noteLinks")
-      .then((links) =>
-        Promise.all([
-          links.deleteEdgesFor({ type: "annotate", id: going.id }),
-          links.deleteEdgesFor({ type: "web", id: going.id }),
-        ]),
-      )
-      .catch(() => {});
-  }
-  /*
-   * A binary document's bytes outlive its entry unless something removes them.
-   *
-   * They are keyed by content hash, so two entries can legitimately share one
-   * blob — check before dropping it, or deleting one annotation set of a
-   * textbook would take the textbook out from under the other. Best-effort:
-   * a stranded blob is wasted space, not a broken library, and refusing to
-   * delete the entry because IndexedDB was unhappy would be the worse trade.
-   */
-  if (going && isBinaryDocType(going.docType) && !kept.some((e) => e.hash === going.hash)) {
-    void deleteDocBytes(going.hash).catch(() => {});
-  }
+  await editMetadata(id, (meta, ctx) => {
+    if (preserveTombstone && !meta?.deletedAt) throw new Error("Only trashed documents can be permanently deleted.");
+    if (!preserveTombstone && meta?.locked) return;
+    if (!meta) return;
+    ctx.setMetadata(preserveTombstone ? { ...meta, kind: "annotate", purgedAt: Date.now(), locked: false } : null);
+    ctx.setContent(null);
+    if (!ctx.state.lifecycle) ctx.markLifecycle("delete", (meta.syncSeq ?? 0) + 1,
+      ctx.state.bootstrap ? null : ctx.state.appliedBookRev, null);
+  });
+  // Immutable backups, shared source bytes, children and retained ink remain readable.
+  void import("./noteLinks").then(links => Promise.all([
+    links.deleteEdgesFor({ type: "annotate", id }), links.deleteEdgesFor({ type: "web", id }),
+  ])).catch(() => {});
 }
 
 /**
@@ -884,22 +837,15 @@ export async function deleteAnnotateDoc(id: string, preserveTombstone = false): 
  * `restoreWhiteboardNotebook` for why both of those would be wrong here.
  */
 export async function restoreAnnotateDoc(entry: AnnotateDoc): Promise<void> {
-  const { source, board, footnotes, agent, artifacts, ...meta } = entry;
-  const prior = artifacts === undefined && getAnnotateDocMeta(entry.id)?.artifactRevision
-    ? await getContent<AnnotateContent>(entry.id) : null;
-  const artifactFields = artifactCatalogFields(
-    artifacts === undefined ? prior?.artifacts : artifacts,
-    { kind: "annotate", id: entry.id },
-  );
-  delete meta.artifactRevision;
-  if (artifactFields.artifacts) meta.artifactRevision = artifactFields.artifacts.revision;
-  const saved = await putParentContent({ kind: "annotate", id: entry.id }, {
-    artifacts,
-    source,
-    board,
-    footnotes: footnotes ?? [],
-    agent: Array.isArray(agent) ? agent : [],
-  } satisfies AnnotateContent, { allowCatalogReplacement: true });
-  if (saved.artifacts) meta.artifactRevision = saved.artifacts.revision;
-  writeIndex([meta, ...readIndex().filter((existing) => existing.id !== entry.id)]);
+  const { source, board, footnotes, agent, artifacts, captures, padKind, ...meta } = entry;
+  const captured = getAnnotateDocMeta(entry.id);
+  await putParentRecord<AnnotateContent, AnnotateDocMeta>({ kind: "annotate", id: entry.id }, {
+    artifacts, source, board, footnotes: footnotes ?? [], agent: Array.isArray(agent) ? agent : [],
+    ...(captures !== undefined ? { captures } : {}), ...(padKind !== undefined ? { padKind } : {}),
+  }, { allowCatalogReplacement: true, metadata: (current, saved) => {
+    if (JSON.stringify(current) !== JSON.stringify(captured)) throw new Error("Document changed during restore; current work was kept.");
+    const next = { ...current, ...meta };
+    if (saved.artifacts) next.artifactRevision = saved.artifacts.revision;
+    return next;
+  } });
 }

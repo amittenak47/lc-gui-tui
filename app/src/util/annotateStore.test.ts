@@ -45,6 +45,8 @@ beforeEach(() => {
   deleteDocBytes.mockClear();
   const store = new Map<string, string>();
   vi.stubGlobal("localStorage", {
+    get length() { return store.size; },
+    key: (index: number) => [...store.keys()][index] ?? null,
     getItem: (key: string) => store.get(key) ?? null,
     setItem: (key: string, value: string) => void store.set(key, value),
     removeItem: (key: string) => void store.delete(key),
@@ -235,7 +237,7 @@ describe("deleteAnnotateDoc", () => {
 
   it("refuses to delete a locked set, and a later save keeps the lock", async () => {
     const saved = await saveAnnotateDoc({ name: "a.md", hash: "h", source: "# src", board: board() });
-    setAnnotateDocLocked(saved.id, true);
+    await setAnnotateDocLocked(saved.id, true);
     await deleteAnnotateDoc(saved.id);
     expect(listAnnotateDocs()).toHaveLength(1);
     await saveAnnotateDoc({
@@ -375,7 +377,7 @@ describe("setAnnotateDocLabel", () => {
     const saved = await saveAnnotateDoc({ name: "dp.pdf", hash: "h", source: "", board: board() });
 
     vi.setSystemTime(new Date(1_700_000_900_000));
-    setAnnotateDocLabel(saved.id, "Second pass");
+    await setAnnotateDocLabel(saved.id, "Second pass");
 
     const meta = listAnnotateDocs()[0]!;
     expect(meta.label).toBe("Second pass");
@@ -391,7 +393,7 @@ describe("setAnnotateDocLabel", () => {
       source: "",
       board: board(),
     });
-    setAnnotateDocLabel(saved.id, "  ");
+    await setAnnotateDocLabel(saved.id, "  ");
     expect(listAnnotateDocs()[0]!.label).toBeUndefined();
   });
 
@@ -409,8 +411,8 @@ describe("setAnnotateDocLabel", () => {
     expect(listAnnotateDocs()[0]!.label).toBe("Second pass");
   });
 
-  it("does nothing for an id that is not in the library", () => {
-    expect(setAnnotateDocLabel("mdink-nope", "x")).toBe(false);
+  it("does nothing for an id that is not in the library", async () => {
+    expect(await setAnnotateDocLabel("mdink-nope", "x")).toBe(false);
   });
 });
 
@@ -588,7 +590,7 @@ describe("annotate trash", () => {
     expect(listAnnotateDocsByHash(hash)).toHaveLength(2);
   });
 
-  it("GCs the blob only after the last id that shares the hash is gone", async () => {
+  it("retains source bytes after the last book is removed so backups can reopen", async () => {
     const hash = "pdf-shared";
     const first = await saveAnnotateDoc({
       name: "dp.pdf",
@@ -607,7 +609,7 @@ describe("annotate trash", () => {
     await deleteAnnotateDoc(first.id);
     expect(deleteDocBytes).not.toHaveBeenCalled();
     await deleteAnnotateDoc(second.id);
-    expect(deleteDocBytes).toHaveBeenCalledWith(hash);
+    expect(deleteDocBytes).not.toHaveBeenCalled();
   });
 
   it("sweeps only after ACK and TTL", async () => {
@@ -615,7 +617,7 @@ describe("annotate trash", () => {
     await trashAnnotateDoc(saved.id, 1);
     const { markAnnotateDeleteAcked } = await import("./annotateStore");
     expect(await sweepAnnotateTrash(1 + ANNOTATE_TRASH_TTL_MS)).toEqual([]);
-    markAnnotateDeleteAcked(saved.id, true);
+    await markAnnotateDeleteAcked(saved.id, true);
     expect(await sweepAnnotateTrash(1 + ANNOTATE_TRASH_TTL_MS)).toEqual([saved.id]);
     expect(listAnnotateTrash()).toHaveLength(0);
   });
@@ -657,7 +659,7 @@ describe("uniqueAnnotateName", () => {
       source: "",
       board: board("a"),
     });
-    deleteAnnotateDoc(doc.id);
+    await deleteAnnotateDoc(doc.id);
     expect(uniqueAnnotateName("Untitled.md")).toBe("Untitled.md");
   });
 });
@@ -669,6 +671,6 @@ it("permanent trash removal keeps sync deletion metadata but cannot restore cont
   expect(listAnnotateTrash().some(row=>row.id===saved.id)).toBe(false);
   expect(await getAnnotateDoc(saved.id)).toBeNull();
   expect(await restoreAnnotateFromTrash(saved.id)).toBeNull();
-  const raw=localStorage.getItem("whiteboard.annotate.index.v1")!;
-  expect(JSON.parse(raw).find((row:{id:string})=>row.id===saved.id)).toMatchObject({deletedAt:expect.any(Number),purgedAt:expect.any(Number)});
+  const { getAnnotateDocMeta } = await import("./annotateStore");
+  expect(getAnnotateDocMeta(saved.id)).toMatchObject({deletedAt:expect.any(Number),purgedAt:expect.any(Number)});
 });

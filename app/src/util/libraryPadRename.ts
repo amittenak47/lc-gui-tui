@@ -45,12 +45,12 @@ export async function renameLibraryPad(
   const trimmed = title.trim();
   if (!trimmed) return false;
   if (kind === "whiteboard") {
-    if (!renameWhiteboardNotebook(id, trimmed)) return false;
+    if (!await renameWhiteboardNotebook(id, trimmed)) return false;
     const notebook = await getWhiteboardNotebook(id);
     if (notebook) await pushWhiteboardPad(client, notebook);
     return true;
   }
-  if (!setAnnotateDocLabel(id, trimmed)) return false;
+  if (!await setAnnotateDocLabel(id, trimmed)) return false;
   const doc = await getAnnotateDoc(id);
   if (doc) await pushAnnotatePad(client, doc);
   return true;

@@ -14,25 +14,13 @@ import { encodeInkOps, packEncodedInk } from "../canvas/inkCodec";
 import { gzipBytes } from "./gzip";
 import { bytesToB64 } from "../api/nativeHttp";
 
+import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
+import { closeDbForTests } from "./idb";
+
 /** Local ink, keyed the way the ink page store keys it. */
 let localPages: Record<string, Array<{ pageId: number; updatedAt: number }>> = {};
 /** Which scratch boards this device's copy of the pad points at. */
 let pointers: Set<string> | null = null;
-
-vi.mock("./idb", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./idb")>()),
-  withStore: async (
-    _store: string,
-    _mode: string,
-    fn: (store: unknown) => void,
-  ) => {
-    fn({ put: () => {}, get: () => {
-      const request = { result: undefined, onsuccess: null as (() => void) | null };
-      queueMicrotask(() => request.onsuccess?.());
-      return request;
-    } });
-  },
-}));
 
 vi.mock("./inkPageStore", async (importOriginal) => {
   const real = await importOriginal<typeof import("./inkPageStore")>();
@@ -111,11 +99,13 @@ function calls(fn: unknown): Array<Array<Record<string, unknown>>> {
 }
 
 beforeEach(() => {
+  vi.stubGlobal("indexedDB", new IDBFactory()); vi.stubGlobal("IDBKeyRange", IDBKeyRange);
   localPages = {};
   pointers = null;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeDbForTests(); vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 

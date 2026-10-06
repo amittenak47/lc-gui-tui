@@ -1,3 +1,4 @@
+import { RetainedCopies } from "./RetainedCopies";
 import { useIsPresent } from "motion/react";
 import { DialogBackdrop, DialogPresence } from "../components/DialogMotion";
 import {LibraryTrashRow} from "./LibraryTrashRow";
@@ -113,7 +114,7 @@ interface EntryProps {
   docType?: string;
   needsName?: boolean;
   defaultName?: string;
-  onChoose: (choice: MdInkEntryChoice, docId?: string) => void;
+  onChoose: (choice: MdInkEntryChoice, docId?: string, snapshotId?: string) => void;
   onCancel: () => void;
   onDelete?: (id: string) => void | Promise<void>;
   onRestoreTrash?: (id: string) => void | Promise<void>;
@@ -151,6 +152,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
   const [trash, setTrash] = useState<AnnotateDocMeta[]>(() => listAnnotateTrash());
   const [pickingRecent, setPickingRecent] = useState(false);
   const [pickingSnapshots, setPickingSnapshots] = useState(false);
+  const [pickingRecovery, setPickingRecovery] = useState(false);
   const [section, setSection] = useState<"main" | "open" | "new" | "sets" | "export">("main");
   const bodyRef = useRef<HTMLDivElement>(null);
   const backdropDown = useRef(false);
@@ -192,6 +194,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
     setTrash(listAnnotateTrash());
     setPickingRecent(false);
     setPickingSnapshots(false);
+    setPickingRecovery(false);
     setSection("main");
     setSaveTitle(null);
     setRenamingId(null);
@@ -219,7 +222,8 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
 
   const pending = Boolean(props.pending);
   const exiting = Boolean(props.exiting);
-  const error = props.error ?? null;
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const error = storageError ?? props.error ?? null;
   const isLeave = props.mode === "leave";
   // Only the entry dialog lists documents — leaving one is a save/discard
   // decision about the ink in hand, not a moment to go opening another.
@@ -406,17 +410,21 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                 </span>
               </HoldButton>
             </div>
+          ) : pickingRecovery ? (
+            <RetainedCopies kind="annotate" onRestored={refreshList} />
           ) : pickingSnapshots && entry ? (
             <div className="lc-settings-choice">
-              {PAD_SNAPSHOT_TIERS.map((tier) => {
-                const row = snapshots.find((snap) => snap.tier === tier.id);
+              {PAD_SNAPSHOT_TIERS.flatMap(tier => {
+                const rows = snapshots.filter(snap => snap.tier === tier.id);
+                return (rows.length ? rows : [undefined]).map(row => ({ tier, row }));
+              }).map(({ tier, row }) => {
                 return (
                   <HoldButton holdMs={LIBRARY_HOLD_MS}
-                    key={tier.id}
+                    key={row?.snapshotId ?? tier.id}
                     label={`Restore ${tier.label} snapshot`}
                     className="lc-hold-choice"
                     disabled={locked || !row}
-                    onConfirm={() => entry.onChoose("snapshot", tier.id)}
+                    onConfirm={() => row?.snapshotId ? entry.onChoose("snapshot", tier.id, row.snapshotId) : entry.onChoose("snapshot", tier.id)}
                     resetKey={error}
                   >
                     <strong>{tier.label}</strong>
@@ -464,9 +472,11 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                     name={title}
                     locked={Boolean(doc.locked)}
                     disabled={locked}
-                    onToggle={() => {
-                      setAnnotateDocLocked(doc.id, !doc.locked);
-                      refreshList();
+                    onToggle={async () => {
+                      try {
+                        await setAnnotateDocLocked(doc.id, !doc.locked);
+                        refreshList();
+                      } catch (cause) { setStorageError(cause instanceof Error ? cause.message : String(cause)); }
                     }}
                   />
                   {!doc.locked && (
@@ -542,6 +552,7 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
                     </>}
                   </>}
                   {section === "open" && <>
+                    <LibraryMenuRow label="Retained copies" disabled={locked} onConfirm={() => setPickingRecovery(true)} />
                     <LibraryMenuRow label="Load" disabled={locked} onConfirm={() => props.onChoose("open")} />
                     <LibraryMenuRow label="Recents" disabled={locked || (!visibleDocs.length && !archived.length)} onConfirm={() => setPickingRecent(true)} />
                     {allowSave && <LibraryMenuRow label="Annotations" disabled={locked} onConfirm={() => setSection("sets")} />}
@@ -567,15 +578,16 @@ export function AnnotateDialog(props: AnnotateDialogProps) {
           {!isLeave && entry?.onRefreshHub && <HubLibraryRefresh onRefresh={entry.onRefreshHub} disabled={locked}
             className="lc-library-footer-pull" resultsContainer={bodyRef}><MenuRowLabel label="Pull" /></HubLibraryRefresh>}
           <span className="lc-dialog-foot-spacer" aria-hidden="true" />
-          {(section !== "main" || pickingRecent || pickingSnapshots || newTitle !== null || saveTitle !== null) && (
+          {(section !== "main" || pickingRecent || pickingSnapshots || pickingRecovery || newTitle !== null || saveTitle !== null) && (
             <button
               type="button"
               className="lc-secondary lc-dialog-action"
               disabled={locked}
               onClick={() => {
-                if (!pickingRecent && !pickingSnapshots && newTitle === null && saveTitle === null) setSection(section === "sets" ? "open" : "main");
+                if (!pickingRecent && !pickingSnapshots && !pickingRecovery && newTitle === null && saveTitle === null) setSection(section === "sets" ? "open" : "main");
                 setPickingRecent(false);
                 setPickingSnapshots(false);
+                setPickingRecovery(false);
                 setNewTitle(null);
                 setSaveTitle(null);
                 setRenamingId(null);

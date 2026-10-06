@@ -7,35 +7,29 @@
 
 import { gzipBytes } from "./gzip";
 import { packEncodedInk } from "../canvas/inkCodec";
-import { getAnnotateDoc, saveAnnotateDoc } from "./annotateStore";
+import { getAnnotateDoc } from "./annotateStore";
 import {
-  applyFootnoteBoards,
   collectFootnoteBoards,
   whiteboardIdsOn,
 } from "./footnoteWhiteboardStore";
 import {
   annotateDocKey,
-  deleteInkPages,
   footnoteWhiteboardDocKey,
   getInkPageRecords,
-  inkPageKey,
   type InkPageRecord,
   whiteboardDocKey,
 } from "./inkPageStore";
-import { withStore, STORE_INK_PAGES } from "./idb";
 import { edgesFor, edgeIsGone, putEdge } from "./noteLinks";
 import {
   inkPageToSnapshot,
   padNodeRef,
   parseSnapshotEdges,
-  parseSnapshotInk,
-  parseSnapshotSource,
-  snapshotInkToBytes,
   type SnapshotInkPage,
 } from "./padSnapshotPayload";
 import type { PadSnapshot, PadSnapshotKind } from "./padSnapshotStore";
 import { recordRollingSnapshots } from "./padSnapshotStore";
 import { captureArtifactSnapshot, parseArtifactSnapshotBundle } from "./artifactSnapshot";
+import { validateInk } from "./syncContent";
 
 export interface PadSnapshotExtras {
   artifactBundle?: PadSnapshot["artifactBundle"];
@@ -49,9 +43,10 @@ export interface PadSnapshotExtras {
 /** One doc key's pages, gzipped, in the shape a snapshot stores them. */
 async function inkPagesForSnapshot(docKey: string): Promise<SnapshotInkPage[]> {
   const out: SnapshotInkPage[] = [];
-  for (const row of await getInkPageRecords(docKey)) {
+  for (const row of await getInkPageRecords(docKey, { strict: true })) {
     const gz = await gzForRecord(row);
-    if (!gz) continue;
+    if (!gz) throw new Error(`Handwriting on page ${row.pageId} could not be backed up; the previous backup was kept.`);
+    await validateInk(gz);
     out.push(inkPageToSnapshot({ pageId: row.pageId, updatedAt: row.updatedAt, gz }));
   }
   return out;
@@ -96,7 +91,7 @@ export async function gatherPadSnapshotExtras(
    */
   const footnoteBoards =
     kind === "annotate"
-      ? await collectFootnoteBoards(key, annotate?.footnotes ?? [], { slim: true })
+      ? await collectFootnoteBoards(key, annotate?.footnotes ?? [], { slim: false })
       : undefined;
   const footnoteInk: Record<string, SnapshotInkPage[]> = {};
   if (kind === "annotate") {
@@ -152,100 +147,11 @@ export async function applyPadSnapshotExtras(
   >,
 ): Promise<void> {
   const bundle = parseArtifactSnapshotBundle(snap.artifactBundle, { kind, id: key });
-  if (bundle) {
-    const { restoreArtifactSnapshot } = await import("./artifactSnapshotRestore");
-    await restoreArtifactSnapshot({ kind, id: key }, snap, bundle);
-    for (const edge of parseSnapshotEdges(snap.edges)) {
-      if (!await edgeIsGone(edge.id)) await putEdge(edge);
-    }
-    return;
-  }
-  const docKey = kind === "whiteboard" ? whiteboardDocKey(key) : annotateDocKey(key);
-  /*
-   * A restore replaces the document's ink. It does not merge into it.
-   *
-   * Two things went wrong when this only ever `put` the pages the snapshot
-   * named. Anything drawn *after* the snapshot survived on a page the snapshot
-   * had nothing to say about, so restoring to before a page existed left that
-   * page's strokes standing. And a snapshot written before the board blob
-   * stopped carrying `inkC` has no `ink` at all — it took this branch, wrote
-   * nothing, and `restoreInk` then found the live document's pages still in
-   * place and ingested *those*, so the restore quietly returned today's
-   * handwriting instead of the snapshot's.
-   *
-   * Clearing first fixes both, and it is what makes the fallback work: with the
-   * store empty, `restoreInk` falls through to the board blob, which is exactly
-   * where an older snapshot keeps its strokes.
-   */
-  await deleteInkPages(docKey);
-  const rows: InkPageRecord[] = [];
-  for (const page of parseSnapshotInk(snap.ink)) {
-    const decoded = snapshotInkToBytes(page);
-    if (!decoded) continue;
-    rows.push({
-      v: 1,
-      docKey,
-      pageId: decoded.pageId,
-      gz: decoded.gz,
-      dirty: false,
-      updatedAt: decoded.updatedAt,
-    });
-  }
-  if (rows.length > 0) {
-    await withStore(STORE_INK_PAGES, "readwrite", (store) => {
-      for (const row of rows) store.put(row, inkPageKey(docKey, row.pageId));
-    });
-  }
+  const { restoreArtifactSnapshot, restorePadSnapshotLocally } = await import("./artifactSnapshotRestore");
+  if (bundle) await restoreArtifactSnapshot({ kind, id: key }, snap, bundle);
+  else await restorePadSnapshotLocally({ kind, id: key }, snap);
+  // Links are supplemental: restore their union after the book transaction.
   for (const edge of parseSnapshotEdges(snap.edges)) {
-    if (await edgeIsGone(edge.id)) continue;
-    await putEdge(edge);
+    if (!await edgeIsGone(edge.id)) await putEdge(edge);
   }
-  if (kind !== "annotate") return;
-  if (snap.footnoteBoards) await applyFootnoteBoards(key, snap.footnoteBoards);
-  /*
-   * A scratch board's strokes, restored the same way the document's are.
-   *
-   * Cleared first for the same reason: a restore is a replace, and leaving the
-   * live shards in place would let `restoreInk` prefer today's handwriting over
-   * the snapshot's. An older snapshot has no `footnoteInk` at all and its
-   * strokes are still inside its `footnoteBoards` blobs, so it takes no branch
-   * here and `restoreInk` falls through to those.
-   */
-  if (snap.footnoteInk) {
-    for (const [wbId, pages] of Object.entries(snap.footnoteInk)) {
-      const boardKey = footnoteWhiteboardDocKey(key, wbId);
-      await deleteInkPages(boardKey);
-      const boardRows: InkPageRecord[] = [];
-      for (const page of parseSnapshotInk(pages)) {
-        const decoded = snapshotInkToBytes(page);
-        if (!decoded) continue;
-        boardRows.push({
-          v: 1,
-          docKey: boardKey,
-          pageId: decoded.pageId,
-          gz: decoded.gz,
-          dirty: false,
-          updatedAt: decoded.updatedAt,
-        });
-      }
-      if (boardRows.length === 0) continue;
-      await withStore(STORE_INK_PAGES, "readwrite", (store) => {
-        for (const row of boardRows) store.put(row, inkPageKey(boardKey, row.pageId));
-      });
-    }
-  }
-  const source = parseSnapshotSource(snap.source);
-  if (source == null) return;
-  const existing = await getAnnotateDoc(key);
-  if (!existing) return;
-  await saveAnnotateDoc({
-    id: existing.id,
-    name: snap.name || existing.name,
-    hash: existing.hash,
-    docType: existing.docType,
-    source,
-    board: snap.board ?? existing.board,
-    footnotes: snap.footnotes ?? existing.footnotes,
-    agent: Array.isArray(snap.agent) ? snap.agent : existing.agent,
-  });
 }

@@ -19,6 +19,8 @@
  */
 
 import { openDb, run, STORE_BYTES } from "./idb";
+import { assertBytesUnambiguous } from "./syncRecovery";
+import { MigrationError } from "./queueMigration";
 import { isCameraBusy } from "./cameraBusy";
 import { hashBytesDigest } from "./hashBytesDigest";
 import { traceOpen } from "./messageOf";
@@ -207,6 +209,7 @@ export async function putDocBytesVerified(hash: string, bytes: ArrayBuffer): Pro
 }
 
 export async function getDocBytes(hash: string): Promise<ArrayBuffer | null> {
+  await assertBytesUnambiguous(hash);
   const value = await run<unknown>(STORE, "readonly", (store) => store.get(hash));
   return bytesFromStoredValue(value);
 }
@@ -261,7 +264,8 @@ export async function loadBinaryDocBytes(
       // Drop it rather than leaving it to fail the same way next launch.
       await deleteDocBytes(hash).catch(() => {});
     }
-  } catch {
+  } catch (cause) {
+    if(cause instanceof MigrationError)throw cause;
     /* unreadable row — try the hub before giving up */
   }
   if (!remote) return null;

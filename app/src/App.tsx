@@ -89,8 +89,6 @@ import { isCameraBusy } from "./util/cameraBusy";
 import { ensureDevicePrefs } from "./util/devicePrefs";
 import {
   applyPadSyncPing,
-  flushPadSyncQueue,
-  startPadSyncRecovery,
   pullPads,
   PAD_SYNC_PING_MS,
 } from "./util/padSync";
@@ -219,11 +217,9 @@ export function App() {
   const client = useMemo(() => wrapForDebug("client", new LcClient()), []);
 
   useEffect(() => {
-    const stopRecovery = startPadSyncRecovery(client);
     const stopStatus = startPadHubStatusMonitoring(probePadHubHealth);
     return () => {
       stopStatus();
-      stopRecovery();
     };
   }, [client]);
 
@@ -328,8 +324,6 @@ export function App() {
           await applyPadSyncPing(client).catch(() => {});
           if (cancelled || isCameraBusy()) return;
           await pullPads(client);
-          if (cancelled) return;
-          await flushPadSyncQueue(client);
           if (cancelled) return;
         }
         void ensureDevicePrefs(client).catch(() => {});
