@@ -9684,12 +9684,12 @@ body[data-lc-sash-drag="horizontal"] {
 }
 
 .lc-explore-beam-glow .lc-explore-beam {
-  stroke-width: 5.5;
+  stroke-width: 4;
   opacity: 0.32;
 }
 
 .lc-explore-beam-core .lc-explore-beam {
-  stroke-width: 1;
+  stroke-width: 0.8;
   opacity: 0.95;
 }
 
@@ -9795,10 +9795,22 @@ body[data-lc-sash-drag="horizontal"] {
   width: var(--lc-node-size, 13px);
   height: var(--lc-node-size, 13px);
   border-radius: 50%;
-  background: var(--lc-node-tint, var(--accent));
+  position: relative;
+  /*
+   * Lit from within: white-hot at the centre, the node's colour toward the
+   * edge, and a little light bleeding past the rim. Static on purpose — an
+   * animation on every node kept the compositor busy every frame.
+   */
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, white 80%, var(--lc-node-tint, var(--accent))) 0%,
+    color-mix(in srgb, white 35%, var(--lc-node-tint, var(--accent))) 38%,
+    var(--lc-node-tint, var(--accent)) 72%,
+    color-mix(in srgb, var(--lc-node-tint, var(--accent)) 80%, transparent) 100%
+  );
   box-shadow:
-    0 0 0 3.5px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 16%, transparent),
-    0 0 10px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 45%, transparent);
+    inset 0 0 3px color-mix(in srgb, white 40%, transparent),
+    0 0 6px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 55%, transparent);
   transition:
     width 140ms ease,
     height 140ms ease,
@@ -9823,13 +9835,46 @@ body[data-lc-sash-drag="horizontal"] {
 .lc-explore-node:hover .lc-explore-node-dot,
 .lc-explore-node:focus-visible .lc-explore-node-dot {
   transform: scale(1.18);
-  box-shadow:
-    0 0 0 5px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 22%, transparent),
-    0 0 16px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 70%, transparent);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--lc-node-tint, var(--accent)) 80%, transparent);
 }
 
 .lc-explore-node:focus-visible {
   outline: none;
+}
+
+/*
+ * The node you are on brightens from inside. One node at a time, so a live
+ * pulse costs nothing; every node pulsing at once is what dragged the frame
+ * rate down.
+ */
+.lc-explore-node-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, white 85%, transparent) 0%, transparent 70%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.lc-explore-node:is(:hover, :focus-visible, .is-selected) .lc-explore-node-dot::after {
+  opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lc-explore-node:is(:hover, :focus-visible, .is-selected) .lc-explore-node-dot::after {
+    animation: lc-explore-core 2.4s ease-in-out infinite;
+  }
+}
+
+@keyframes lc-explore-core {
+  0%,
+  100% { opacity: 0.2; }
+  50% { opacity: 0.7; }
+}
+
+.lc-explore-node.is-missing .lc-explore-node-dot::after {
+  display: none;
 }
 
 .lc-explore-node.is-selected .lc-explore-node-dot {
