@@ -1,0 +1,56 @@
+{
+  "canonical": [
+    {
+      "name": "ECMAScript numbers and negative zero",
+      "input": "[-0,0.000001,1e-7,1e20,1e21,1e30,5e-324,1.7976931348623157e308,333333333.33333329]",
+      "canonical": "[0,0.000001,1e-7,100000000000000000000,1e+21,1e+30,5e-324,1.7976931348623157e+308,333333333.3333333]",
+      "hash": "ce1bb3c081b93dcf564ea9afa6d403b25364aa67ae49a26a7998777eddfbfb24"
+    },
+    {
+      "name": "nested UTF-16 keys and numeric-looking keys",
+      "input": "{\"�\":\"replacement\",\"😀\":\"astral\",\"€\":\"euro\",\"z\":{\"2\":2,\"10\":10,\"a\":[{\"y\":true,\"x\":null}]}}",
+      "canonical": "{\"z\":{\"10\":10,\"2\":2,\"a\":[{\"x\":null,\"y\":true}]},\"€\":\"euro\",\"😀\":\"astral\",\"�\":\"replacement\"}",
+      "hash": "fd756056c5631ff9aecb8aaa17e2713a798d4d4f279903028bf26be8626196ef"
+    },
+    {
+      "name": "JSON escapes and array order",
+      "input": "{\"s\":\"a\\n\\t\\\"\\\\/ \",\"a\":[3,1,2]}",
+      "canonical": "{\"a\":[3,1,2],\"s\":\"a\\n\\t\\\"\\\\/ \"}",
+      "hash": "ba2639523eed07d5b33b065c79797e588d3cad679d7ba9d4e598222c1c2dbf5d"
+    }
+  ],
+  "records": [
+    {
+      "name": "source hash, unknown nested fields and footnote view state",
+      "input": "{\"id\":\"book\",\"hash\":\"source-sha\",\"updated_at\":99,\"deleted_at\":null,\"sync_seq\":4,\"rev\":6,\"record_rev\":6,\"book_rev\":7,\"record_hash\":\"computed\",\"base_rev\":3,\"base_updated_at\":12,\"upload_id\":\"attempt\",\"request_hash\":\"request\",\"board\":{\"inkPages\":{\"v\":1,\"pageIds\":[113]},\"inkC\":{\"v\":2,\"ops\":[]},\"elements\":[],\"appState\":{\"scrollX\":4,\"scrollY\":5,\"zoom\":2,\"pdfPage\":7,\"pdfSpread\":true,\"linedPaperMode\":\"college\",\"unknown\":{\"rev\":9,\"hash\":\"keep\"}}},\"footnote_boards\":{\"fn1\":{\"pageCount\":2,\"board\":{\"inkPages\":{\"v\":1,\"pageIds\":[1]},\"appState\":{\"scrollX\":1,\"zoom\":3,\"linedPitch\":24}}}},\"custom\":{\"updated_at\":123,\"hash\":\"attachment-sha\",\"rev\":42}}",
+      "canonical": "{\"board\":{\"appState\":{\"linedPaperMode\":\"college\",\"unknown\":{\"hash\":\"keep\",\"rev\":9}},\"elements\":[],\"inkC\":{\"ops\":[],\"v\":2}},\"custom\":{\"hash\":\"attachment-sha\",\"rev\":42,\"updated_at\":123},\"footnote_boards\":{\"fn1\":{\"board\":{\"appState\":{\"linedPitch\":24}},\"pageCount\":2}},\"hash\":\"source-sha\",\"id\":\"book\"}",
+      "hash": "4df5974986cff4c6c882fb9098d0ad322b05c794b82c76077822b12a02d90cbf"
+    },
+    {
+      "name": "nonempty legacy/problem inline ink survives",
+      "input": "{\"id\":\"practice\",\"board\":{\"ink\":[{\"kind\":\"erase\",\"points\":[{\"x\":1.5,\"y\":2}],\"radius\":8}],\"appState\":{\"pdfSpread\":false,\"paperColor\":\"white\"}},\"agent\":[{\"id\":\"a\",\"deleted\":true}]}",
+      "canonical": "{\"agent\":[{\"deleted\":true,\"id\":\"a\"}],\"board\":{\"appState\":{\"paperColor\":\"white\"},\"ink\":[{\"kind\":\"erase\",\"points\":[{\"x\":1.5,\"y\":2}],\"radius\":8}]},\"id\":\"practice\"}",
+      "hash": "cab4b95ec4fddfe17c48a2fe76fc1881c6f9acf66ace8b4b6001039990c76937"
+    }
+  ],
+  "ink": [
+    {
+      "name": "empty erasure page",
+      "base64": "aW5rQwEAAAALAAAAeyJtZXRhIjpbXX0=",
+      "hash": "53f54c30f8eec154de21bfccb305bbb9db64cfd77b15bf1273a208049f3bba68",
+      "isEmpty": true
+    },
+    {
+      "name": "historical optional radius absent",
+      "base64": "aW5rQwEAAACDAAAAeyJtZXRhIjpbeyJrIjoiZCIsIngwIjoxLjI1LCJ5MCI6LTIsIm4iOjIsInh5TiI6MiwicHJOIjoyLCJzbE4iOjAsImMiOiIjMTIzNDU2IiwidyI6MiwiaSI6OSwicyI6MTEsImJoIjpbeyJ4IjoxLCJ5IjoyLCJnIjowLjI1fV19XX0UAPb//v8=",
+      "hash": "583d970f4fb8e1b23c06f339e6f2ea53f63829842b566d093698bc62d9fdf51d",
+      "isEmpty": false
+    },
+    {
+      "name": "raw erase and wire layout",
+      "base64": "aW5rQwEAAABqAAAAeyJtZXRhIjpbXSwicmF3IjpbeyJraW5kIjoiZXJhc2UiLCJyYWRpdXMiOjMsInBvaW50cyI6W3sieCI6MSwieSI6Mn1dfV0sImxheW91dCI6eyJ3Ijo3NjAsInNwcmVhZCI6ZmFsc2V9fQ==",
+      "hash": "a872a266d9738c3c98fd07365fb3831a9350a7227f85437537fefc5b35dfdf80",
+      "isEmpty": true
+    }
+  ]
+}

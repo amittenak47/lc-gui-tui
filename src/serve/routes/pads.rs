@@ -302,6 +302,9 @@ pub struct SyncQuery {
 
 #[derive(Debug, Serialize)]
 pub struct PadSyncPing {
+    /// Capability is advertised only once every modern transport is available.
+    pub features: Vec<String>,
+    pub book_heads: Vec<pads::BookHead>,
     pub now: i64,
     pub whiteboard: Vec<WhiteboardPad>,
     pub annotate: Vec<AnnotatePad>,
@@ -329,32 +332,49 @@ pub async fn sync_pads(Query(query): Query<SyncQuery>) -> Result<Json<PadSyncPin
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    let (whiteboard, annotate, problem, snapshots, gone, ink, edges, gone_edges) =
-        blocking(move || {
-            let conn = pads::open(&pads::db_path()?)?;
-            Ok((
-                pads::list_changed_whiteboard(&conn, since)?,
-                pads::list_changed_annotate(&conn, since)?,
-                pads::list_changed_problem(&conn, since)?,
-                pads::list_changed_snapshots(&conn, since)?,
-                pads::list_changed_gone(&conn, since)?,
-                pads::list_ink_digests(&conn, since)?,
-                pads::list_edges(&conn, since)?,
-                pads::list_gone_edges(&conn, since)?,
-            ))
-        })
-        .await?;
-    Ok(Json(PadSyncPing {
+    blocking(move || {
+        let conn = pads::open(&pads::db_path()?)?;
+        pad_sync_inventory(&conn, since, now)
+    }).await.map(Json)
+}
+
+/// All inventory components must describe the same database snapshot.
+fn pad_sync_inventory(conn: &rusqlite::Connection, since: i64, now: i64) -> anyhow::Result<PadSyncPing> {
+    pads::read_transaction(conn, || Ok(PadSyncPing {
+        features: Vec::new(),
+        book_heads: pads::list_book_heads(conn)?,
         now,
-        whiteboard,
-        annotate,
-        problem,
-        snapshots,
-        gone,
-        ink,
-        edges,
-        gone_edges,
+        whiteboard: pads::list_changed_whiteboard(conn, since)?,
+        annotate: pads::list_changed_annotate(conn, since)?,
+        problem: pads::list_changed_problem(conn, since)?,
+        snapshots: pads::list_changed_snapshots(conn, since)?,
+        gone: pads::list_changed_gone(conn, since)?,
+        ink: pads::list_ink_digests(conn, since)?,
+        edges: pads::list_edges(conn, since)?,
+        gone_edges: pads::list_gone_edges(conn, since)?,
     }))
+}
+
+#[cfg(test)]
+mod inventory_tests {
+    use super::*;
+
+    #[test]
+    fn revisions_without_complete_protocol_do_not_advertise_atomic_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = pads::open(&dir.path().join("pads.db")).unwrap();
+        let record: WhiteboardPad = serde_json::from_value(serde_json::json!({
+            "id": "book", "title": "Notebook", "updated_at": 10,
+            "page_count": 1, "board": {"v": 1, "elements": []}, "agent": []
+        })).unwrap();
+        pads::put_whiteboard(&conn, &record).unwrap();
+        let inventory = pad_sync_inventory(&conn, 0, 100).unwrap();
+        let json = serde_json::to_value(&inventory).unwrap();
+        assert!(inventory.features.is_empty());
+        assert!(json["whiteboard"][0]["rev"].as_i64().unwrap() > 0);
+        assert_eq!(json["book_heads"][0]["id"], "book");
+        assert!(json["book_heads"][0]["rev"].as_i64().unwrap() > 0);
+    }
 }
 
 /// The bytes for one pad's handwriting, fetched only when a digest says so.

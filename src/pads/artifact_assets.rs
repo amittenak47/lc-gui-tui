@@ -70,23 +70,9 @@ fn validate_board(board: &Value) -> Result<()> {
 
 fn validate_packed(value: &Value) -> Result<()> {
     let text = value.as_str().ok_or_else(|| anyhow::anyhow!("missing packed ink"))?;
+    ensure!(text.len() <= MAX_ASSET_BYTES, "packed ink exceeds transfer limit");
     let bytes = STANDARD.decode(text)?;
-    ensure!(bytes.len() >= 12 && &bytes[0..4] == b"inkC"
-        && u32::from_le_bytes(bytes[4..8].try_into()?) == 1, "invalid packed ink header");
-    let meta_len = u32::from_le_bytes(bytes[8..12].try_into()?) as usize;
-    ensure!(meta_len <= bytes.len() - 12, "truncated packed ink metadata");
-    let meta: Value = serde_json::from_slice(&bytes[12..12 + meta_len])?;
-    let ops = meta["meta"].as_array().ok_or_else(|| anyhow::anyhow!("invalid ink operations"))?;
-    let mut length = 12_u64 + meta_len as u64;
-    for op in ops {
-        for (field, width) in [("xyN", 2), ("prN", 1), ("slN", 1), ("rrN", 2)] {
-            let count = op[field].as_u64().ok_or_else(|| anyhow::anyhow!("invalid ink buffer length"))?;
-            length = length.checked_add(count.checked_mul(width).ok_or_else(|| anyhow::anyhow!("ink buffer overflow"))?)
-                .ok_or_else(|| anyhow::anyhow!("ink buffer overflow"))?;
-        }
-    }
-    ensure!(length == bytes.len() as u64, "truncated packed ink buffers");
-    // Client also decodes using the existing ink codec before accepting a download.
+    super::sync_content::validate_packed_ink(&bytes)?;
     Ok(())
 }
 
@@ -136,7 +122,7 @@ pub fn put(conn: &Connection, asset: &ArtifactAsset) -> Result<()> {
     // is required: dependencies must be stageable before the first parent PUT.
     conn.execute("INSERT INTO artifact_assets (asset_key, parent_kind, parent_id, payload, staged_at)
         VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(asset_key) DO NOTHING",
-        params![key, asset.locator.parent.kind, asset.locator.parent.id, asset.payload, super::now_ms()])?;
+        params![key, asset.locator.parent.kind, asset.locator.parent.id, asset.payload, super::now_ms(&super::SystemClock)])?;
     let existing: String = conn.query_row("SELECT payload FROM artifact_assets WHERE asset_key = ?1",
         params![key], |row| row.get(0))?;
     ensure!(existing == asset.payload, "attachment revision already has different content");

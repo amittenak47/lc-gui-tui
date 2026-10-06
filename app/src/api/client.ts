@@ -464,6 +464,8 @@ export interface SearchOptions {
 const COACH_HTTP_TIMEOUT_MS = 180_000;
 
 export interface WhiteboardPadDto {
+  /** Hub-assigned content revision; absent on older hubs. */
+  rev?: number;
   artifacts?: ArtifactCatalog;
   id: string;
   title: string;
@@ -477,6 +479,7 @@ export interface WhiteboardPadDto {
 }
 
 export interface AnnotatePadDto {
+  rev?: number;
   artifacts?: ArtifactCatalog;
   id: string;
   name: string;
@@ -505,6 +508,7 @@ export interface PadSnapshotDto {
 }
 
 export interface PadGoneDto {
+  rev?: number;
   kind: string;
   id: string;
   seq: number;
@@ -517,6 +521,8 @@ export interface ApplyAckDto {
 }
 
 export interface ProblemPadDto {
+  rev?: number;
+  base_rev?: number | null;
   artifacts?: ArtifactCatalog;
   id: string;
   dataset: string;
@@ -530,6 +536,8 @@ export interface ProblemPadDto {
 
 /** One page of handwriting: `gz` is base64 of the bytes `STORE_INK_PAGES` holds. */
 export interface InkPageDto {
+  rev?: number;
+  hash?: string;
   /** Same newer sequence as an explicit parent restore; absent on old uploads. */
   sync_seq?: number;
   kind: "annotate" | "whiteboard";
@@ -555,6 +563,8 @@ export interface EdgeRowDto {
 }
 
 export interface PadSyncPingDto {
+  features?: string[];
+  book_heads?: Array<{ kind: "annotate" | "whiteboard" | "problem"; id: string; rev: number }>;
   now: number;
   whiteboard: WhiteboardPadDto[];
   annotate: AnnotatePadDto[];
@@ -1274,6 +1284,8 @@ export class LcClient {
       `/pads/sync?since=${Math.max(0, Math.floor(since))}`,
     );
     return {
+      ...(Array.isArray(body?.features) ? { features: body.features } : {}),
+      ...(Array.isArray(body?.book_heads) ? { book_heads: body.book_heads } : {}),
       now: typeof body?.now === "number" ? body.now : Date.now(),
       whiteboard: Array.isArray(body?.whiteboard) ? body.whiteboard : [],
       annotate: Array.isArray(body?.annotate) ? body.annotate : [],

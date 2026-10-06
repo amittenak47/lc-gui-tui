@@ -2,7 +2,7 @@
 //!
 //! The tablet IndexedDB is the working copy. This database is append-friendly
 //! history. A missing local row must not delete anything here. Delete with a
-//! seq drops the live row and snapshots; gone-ids tell peers. Local trash is
+//! seq drops the live row and ink; backups/history survive and gone-ids tell peers. Local trash is
 //! not stored here.
 
 use anyhow::{Context, Result};
@@ -16,6 +16,11 @@ use crate::config::config_dir;
 
 mod artifacts;
 pub mod artifact_assets;
+pub mod sync_content;
+mod revisions;
+#[cfg(test)]
+mod foundation_tests;
+pub use revisions::{bump_book_head, list_book_heads, next_rev, read_transaction, write_transaction, BookHead};
 
 /// Document files stream separately from buffered JSON sync requests.
 /// Mirrored by HUB_MAX_DOCUMENT_BYTES in the client.
@@ -36,6 +41,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)
         .with_context(|| format!("cannot open pads database {}", path.display()))?;
     crate::sqlite::configure(&conn)?;
+    write_transaction(&conn, || {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS whiteboard (
@@ -145,12 +151,23 @@ pub fn open(path: &Path) -> Result<Connection> {
     ensure_column(&conn, "annotate", "label", "TEXT NOT NULL DEFAULT ''")?;
     for table in ["whiteboard", "annotate", "problem"] {
         ensure_column(&conn, table, "artifacts_json", "TEXT")?;
+        ensure_column(&conn, table, "extra_json", "TEXT NOT NULL DEFAULT '{}'")?;
+        ensure_column(&conn, table, "rev", "INTEGER NOT NULL DEFAULT 0")?;
     }
+    ensure_column(&conn, "ink_pages", "rev", "INTEGER NOT NULL DEFAULT 0")?;
+    if !has_column(&conn, "ink_pages", "legacy_updated_at")? {
+        ensure_column(&conn, "ink_pages", "legacy_updated_at", "INTEGER NOT NULL DEFAULT 0")?;
+        conn.execute("UPDATE ink_pages SET legacy_updated_at=updated_at", [])?;
+    }
+    ensure_column(&conn, "gone", "rev", "INTEGER NOT NULL DEFAULT 0")?;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS artifact_assets (
         asset_key TEXT PRIMARY KEY, parent_kind TEXT NOT NULL, parent_id TEXT NOT NULL,
         payload TEXT NOT NULL, staged_at INTEGER NOT NULL
     ); CREATE INDEX IF NOT EXISTS idx_artifact_asset_parent ON artifact_assets(parent_kind, parent_id);")?;
     migrate_tombstones_to_gone(&conn)?;
+    revisions::migrate(&conn)?;
+    Ok(())
+    })?;
     Ok(conn)
 }
 
@@ -169,31 +186,40 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Re
     Ok(())
 }
 
-/// Old archive rows become gone-ids. Snapshots for those ids drop with them.
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name=?2",
+        params![table,column], |row| row.get::<_,i64>(0))? > 0)
+}
+
+/// Old archive rows become gone-ids; existing backups and history are retained.
 fn migrate_tombstones_to_gone(conn: &Connection) -> Result<()> {
     for kind in [PadKind::Whiteboard, PadKind::Annotate] {
         let table = kind.as_str();
-        let ids: Vec<(String, i64)> = {
+        let ids: Vec<(String, i64, i64)> = {
             let mut stmt = conn.prepare(&format!(
-                "SELECT id, ifnull(sync_seq, 0) FROM {table} WHERE deleted_at IS NOT NULL"
+                "SELECT id, ifnull(sync_seq, 0), deleted_at FROM {table} WHERE deleted_at IS NOT NULL"
             ))?;
-            let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
             rows.collect::<rusqlite::Result<_>>()?
         };
-        for (id, seq) in ids {
+        for (id, seq, deleted_at) in ids {
+            let archived = match kind {
+                PadKind::Whiteboard => read_whiteboard(conn,&id)?.map(serde_json::to_value).transpose()?,
+                PadKind::Annotate => read_annotate(conn,&id)?.map(serde_json::to_value).transpose()?,
+                PadKind::Problem => None,
+            };
+            if let Some(record) = archived {
+                let updated_at = record.get("updated_at").and_then(serde_json::Value::as_i64).unwrap_or(0);
+                insert_revision(conn,kind.as_str(),&id,updated_at,&record)?;
+            }
             let gone_seq = seq.max(1);
             conn.execute(
                 "INSERT INTO gone (kind, id, seq, gone_at) VALUES (?1, ?2, ?3, ?4)
                  ON CONFLICT(kind, id) DO UPDATE SET
                     seq = MAX(gone.seq, excluded.seq),
                     gone_at = excluded.gone_at",
-                params![kind.as_str(), id, gone_seq, now_ms()],
+                params![kind.as_str(), id, gone_seq, deleted_at],
             )?;
-            conn.execute(
-                "DELETE FROM snapshots WHERE kind = ?1 AND key = ?2",
-                params![kind.as_str(), id],
-            )?;
-            conn.execute("DELETE FROM revisions WHERE kind = ?1 AND pad_id = ?2", params![kind.as_str(), id])?;
             conn.execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![id])?;
         }
     }
@@ -220,6 +246,10 @@ impl PadKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhiteboardPad {
     #[serde(default)]
+    pub rev: i64,
+    #[serde(default, flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
     pub id: String,
     pub title: String,
     pub updated_at: i64,
@@ -240,6 +270,10 @@ pub struct WhiteboardPad {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnnotatePad {
+    #[serde(default)]
+    pub rev: i64,
+    #[serde(default, flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     pub id: String,
     pub name: String,
@@ -273,6 +307,10 @@ pub struct AnnotatePad {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProblemPad {
     #[serde(default)]
+    pub rev: i64,
+    #[serde(default, flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
     pub id: String,
     pub dataset: String,
     pub task_id: String,
@@ -281,6 +319,8 @@ pub struct ProblemPad {
     pub sync_seq: i64,
     #[serde(default, skip_serializing)]
     pub base_updated_at: Option<i64>,
+    #[serde(default, skip_serializing)]
+    pub base_rev: Option<i64>,
     pub board: serde_json::Value,
     #[serde(default)]
     pub agent: serde_json::Value,
@@ -290,6 +330,8 @@ pub struct ProblemPad {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoneRow {
+    #[serde(default)]
+    pub rev: i64,
     pub kind: String,
     pub id: String,
     pub seq: i64,
@@ -346,11 +388,22 @@ fn default_doc_type() -> String {
     "markdown".into()
 }
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
+pub trait Clock {
+    fn now_ms(&self) -> i64;
+}
+
+pub struct SystemClock;
+impl Clock for SystemClock {
+    fn now_ms(&self) -> i64 {
+        std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+    }
+}
+
+pub fn now_ms(clock: &dyn Clock) -> i64 {
+    clock.now_ms()
 }
 
 fn json_text(value: &serde_json::Value) -> String {
@@ -359,6 +412,51 @@ fn json_text(value: &serde_json::Value) -> String {
 
 fn parse_json(text: &str) -> serde_json::Value {
     serde_json::from_str(text).unwrap_or(serde_json::Value::Null)
+}
+
+fn parse_extra(text: &str) -> std::collections::BTreeMap<String, serde_json::Value> {
+    serde_json::from_str(text).unwrap_or_default()
+}
+
+fn without_manifest(board: &serde_json::Value) -> serde_json::Value {
+    let mut board = board.clone();
+    if let Some(object) = board.as_object_mut() { object.remove("inkPages"); }
+    board
+}
+
+fn without_footnote_manifests(boards: &serde_json::Value) -> serde_json::Value {
+    let mut boards = boards.clone();
+    if let Some(entries) = boards.as_object_mut() {
+        for entry in entries.values_mut() {
+            if let Some(board) = entry.get_mut("board") { *board = without_manifest(board); }
+        }
+    }
+    boards
+}
+
+fn derive_manifest(conn: &Connection, kind: &str, key: &str, board: &mut serde_json::Value) -> Result<()> {
+    let mut statement = conn.prepare("SELECT page_id FROM ink_pages WHERE kind=?1 AND key=?2 ORDER BY page_id")?;
+    let ids: Vec<i64> = statement.query_map(params![kind,key], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
+    if let Some(object) = board.as_object_mut() {
+        object.insert("inkPages".into(), serde_json::json!({"v":1,"pageIds":ids}));
+    }
+    Ok(())
+}
+
+fn derive_whiteboard(conn: &Connection, pad: &mut WhiteboardPad) -> Result<()> {
+    derive_manifest(conn,"whiteboard",&pad.id,&mut pad.board)
+}
+
+fn derive_annotate(conn: &Connection, pad: &mut AnnotatePad) -> Result<()> {
+    derive_manifest(conn,"annotate",&pad.id,&mut pad.board)?;
+    if let Some(boards) = pad.footnote_boards.as_object_mut() {
+        for (id,entry) in boards {
+            if let Some(board) = entry.get_mut("board") {
+                derive_manifest(conn,"annotate",&format!("{}/fn/{id}",pad.id),board)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn live_count(conn: &Connection, table: &str) -> Result<usize> {
@@ -380,7 +478,7 @@ fn insert_revision(
     conn.execute(
         "INSERT INTO revisions (kind, pad_id, updated_at, payload_json, written_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![kind, pad_id, updated_at, json_text(payload), now_ms()],
+        params![kind, pad_id, updated_at, json_text(payload), now_ms(&SystemClock)],
     )?;
     Ok(())
 }
@@ -395,10 +493,11 @@ pub fn revision_count(conn: &Connection, kind: &str, pad_id: &str) -> Result<usi
 }
 
 fn read_whiteboard(conn: &Connection, id: &str) -> Result<Option<WhiteboardPad>> {
-    let row = conn
+    read_transaction(conn, || {
+    let mut row = conn
         .query_row(
             "SELECT id, title, updated_at, page_count, deleted_at, board_json, agent_json,
-                    ifnull(sync_seq, 0), artifacts_json
+                    ifnull(sync_seq, 0), artifacts_json, rev, extra_json
              FROM whiteboard WHERE id = ?1",
             params![id],
             |row| {
@@ -412,45 +511,58 @@ fn read_whiteboard(conn: &Connection, id: &str) -> Result<Option<WhiteboardPad>>
                     agent: parse_json(&row.get::<_, String>(6)?),
                     sync_seq: row.get(7)?,
                     artifacts: row.get::<_, Option<String>>(8)?.map(|raw| parse_json(&raw)),
+                    rev: row.get(9)?,
+                    extra: parse_extra(&row.get::<_, String>(10)?),
                     base_updated_at: None,
                 })
             },
         )
         .optional()?;
+    if let Some(pad) = row.as_mut() { derive_whiteboard(conn,pad)?; }
     Ok(row)
+    })
 }
 
 const ANNOTATE_SELECT: &str = "id, name, hash, doc_type, updated_at, deleted_at, source_text,
                 footnotes_json, board_json, agent_json, ifnull(sync_seq, 0),
-                ifnull(footnote_boards_json, '{}'), ifnull(label, ''), artifacts_json";
+                ifnull(footnote_boards_json, '{}'), ifnull(label, ''), artifacts_json, rev, extra_json";
 
 fn read_annotate(conn: &Connection, id: &str) -> Result<Option<AnnotatePad>> {
-    let row = conn
+    read_transaction(conn, || {
+    let mut row = conn
         .query_row(
             &format!("SELECT {ANNOTATE_SELECT} FROM annotate WHERE id = ?1"),
             params![id],
             map_annotate_row,
         )
         .optional()?;
+    if let Some(pad) = row.as_mut() { derive_annotate(conn,pad)?; }
     Ok(row)
+    })
 }
 
 pub fn list_whiteboard(conn: &Connection, archived: bool) -> Result<Vec<WhiteboardPad>> {
+    read_transaction(conn, || {
     let sql = if archived {
         "SELECT id, title, updated_at, page_count, deleted_at, board_json, agent_json,
-                ifnull(sync_seq, 0), artifacts_json
+                ifnull(sync_seq, 0), artifacts_json, rev, extra_json
          FROM whiteboard WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
     } else {
         "SELECT id, title, updated_at, page_count, deleted_at, board_json, agent_json,
-                ifnull(sync_seq, 0), artifacts_json
+                ifnull(sync_seq, 0), artifacts_json, rev, extra_json
          FROM whiteboard WHERE deleted_at IS NULL ORDER BY updated_at DESC"
     };
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map([], map_whiteboard_row)?;
-    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    let mut pads: Vec<_> = rows.collect::<rusqlite::Result<_>>()?;
+    drop(stmt);
+    for pad in &mut pads { derive_whiteboard(conn,pad)?; }
+    Ok(pads)
+    })
 }
 
 pub fn list_annotate(conn: &Connection, archived: bool) -> Result<Vec<AnnotatePad>> {
+    read_transaction(conn, || {
     let sql = if archived {
         format!(
             "SELECT {ANNOTATE_SELECT}
@@ -464,7 +576,11 @@ pub fn list_annotate(conn: &Connection, archived: bool) -> Result<Vec<AnnotatePa
     };
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], map_annotate_row)?;
-    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    let mut pads: Vec<_> = rows.collect::<rusqlite::Result<_>>()?;
+    drop(stmt);
+    for pad in &mut pads { derive_annotate(conn,pad)?; }
+    Ok(pads)
+    })
 }
 
 fn map_whiteboard_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WhiteboardPad> {
@@ -478,6 +594,8 @@ fn map_whiteboard_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WhiteboardPad
         agent: parse_json(&row.get::<_, String>(6)?),
         sync_seq: row.get(7)?,
         artifacts: row.get::<_, Option<String>>(8)?.map(|raw| parse_json(&raw)),
+                    rev: row.get(9)?,
+                    extra: parse_extra(&row.get::<_, String>(10)?),
         base_updated_at: None,
     })
 }
@@ -498,24 +616,32 @@ fn map_annotate_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnnotatePad> {
         footnote_boards: parse_json(&row.get::<_, String>(11)?),
         label: row.get(12)?,
         artifacts: row.get::<_, Option<String>>(13)?.map(|raw| parse_json(&raw)),
+        rev: row.get(14)?,
+        extra: parse_extra(&row.get::<_, String>(15)?),
         base_updated_at: None,
     })
 }
 
 /// Live pads touched after `since`. Gone-ids are a separate ping list.
 pub fn list_changed_whiteboard(conn: &Connection, since: i64) -> Result<Vec<WhiteboardPad>> {
+    read_transaction(conn, || {
     let mut stmt = conn.prepare(
         "SELECT id, title, updated_at, page_count, deleted_at, board_json, agent_json,
-                ifnull(sync_seq, 0), artifacts_json
+                ifnull(sync_seq, 0), artifacts_json, rev, extra_json
          FROM whiteboard
          WHERE deleted_at IS NULL AND updated_at > ?1
          ORDER BY updated_at DESC",
     )?;
     let rows = stmt.query_map(params![since], map_whiteboard_row)?;
-    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    let mut pads: Vec<_> = rows.collect::<rusqlite::Result<_>>()?;
+    drop(stmt);
+    for pad in &mut pads { derive_whiteboard(conn,pad)?; }
+    Ok(pads)
+    })
 }
 
 pub fn list_changed_annotate(conn: &Connection, since: i64) -> Result<Vec<AnnotatePad>> {
+    read_transaction(conn, || {
     let mut stmt = conn.prepare(&format!(
         "SELECT {ANNOTATE_SELECT}
          FROM annotate
@@ -523,12 +649,16 @@ pub fn list_changed_annotate(conn: &Connection, since: i64) -> Result<Vec<Annota
          ORDER BY updated_at DESC"
     ))?;
     let rows = stmt.query_map(params![since], map_annotate_row)?;
-    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    let mut pads: Vec<_> = rows.collect::<rusqlite::Result<_>>()?;
+    drop(stmt);
+    for pad in &mut pads { derive_annotate(conn,pad)?; }
+    Ok(pads)
+    })
 }
 
 pub fn list_changed_gone(conn: &Connection, since: i64) -> Result<Vec<GoneRow>> {
     let mut stmt = conn.prepare(
-        "SELECT kind, id, seq, gone_at FROM gone WHERE gone_at > ?1 ORDER BY gone_at DESC",
+        "SELECT kind, id, seq, gone_at, rev FROM gone WHERE gone_at > ?1 ORDER BY gone_at DESC",
     )?;
     let rows = stmt.query_map(params![since], |row| {
         Ok(GoneRow {
@@ -536,6 +666,7 @@ pub fn list_changed_gone(conn: &Connection, since: i64) -> Result<Vec<GoneRow>> 
             id: row.get(1)?,
             seq: row.get(2)?,
             gone_at: row.get(3)?,
+            rev: row.get(4)?,
         })
     })?;
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
@@ -605,22 +736,9 @@ pub fn compact_revisions(conn: &Connection, kind: &str, pad_id: &str, until_ms: 
     Ok(n)
 }
 
-fn drop_snapshots_and_revisions(conn: &Connection, kind: PadKind, id: &str) -> Result<()> {
-    conn.execute(
-        "DELETE FROM snapshots WHERE kind = ?1 AND key = ?2",
-        params![kind.as_str(), id],
-    )?;
-    conn.execute(
-        "DELETE FROM revisions WHERE kind = ?1 AND pad_id = ?2",
-        params![kind.as_str(), id],
-    )?;
-    Ok(())
-}
-
-/// Seq-gated delete: drop live row + snapshots. Stale seq ACKs as not applied.
+/// Seq-gated delete: drop live row + ink, retaining backups/history. Stale seq ACKs as not applied.
 pub fn delete_pad(conn: &Connection, kind: PadKind, id: &str, seq: i64) -> Result<ApplyAck> {
-    conn.execute("BEGIN IMMEDIATE", [])?;
-    let result = (|| {
+    write_transaction(conn, || {
         let stored = stored_seq(conn, kind, id)?;
         if seq < stored {
             return Ok(ApplyAck {
@@ -628,33 +746,24 @@ pub fn delete_pad(conn: &Connection, kind: PadKind, id: &str, seq: i64) -> Resul
                 seq: stored,
             });
         }
-        drop_snapshots_and_revisions(conn, kind, id)?;
         // Handwriting is pad content, so it goes with the pad. Left behind it
         // would be resurrected by the next device to push a page of it — and
         // that includes the scratch boards hanging off its marks.
         delete_pad_ink(conn, kind.as_str(), id)?;
         let table = kind.as_str();
         conn.execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![id])?;
+        let rev = next_rev(conn)?;
         conn.execute(
-            "INSERT INTO gone (kind, id, seq, gone_at) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(kind, id) DO UPDATE SET seq = excluded.seq, gone_at = excluded.gone_at",
-            params![kind.as_str(), id, seq, now_ms()],
+            "INSERT INTO gone (kind, id, seq, gone_at, rev) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(kind, id) DO UPDATE SET seq = excluded.seq, gone_at = excluded.gone_at, rev=excluded.rev",
+            params![kind.as_str(), id, seq, now_ms(&SystemClock), rev],
         )?;
+        bump_book_head(conn, kind.as_str(), id)?;
         Ok(ApplyAck {
             applied: true,
             seq,
         })
-    })();
-    match result {
-        Ok(ack) => {
-            conn.execute("COMMIT", [])?;
-            Ok(ack)
-        }
-        Err(err) => {
-            let _ = conn.execute("ROLLBACK", []);
-            Err(err)
-        }
-    }
+    })
 }
 
 pub fn annotate_hash_in_use(conn: &Connection, hash: &str) -> Result<bool> {
@@ -675,6 +784,11 @@ pub fn get_annotate(conn: &Connection, id: &str) -> Result<Option<AnnotatePad>> 
 }
 
 pub fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutcome<WhiteboardPad>> {
+    put_whiteboard_with_clock(conn, pad, &SystemClock)
+}
+
+pub fn put_whiteboard_with_clock(conn: &Connection, pad: &WhiteboardPad, clock: &dyn Clock) -> Result<PutOutcome<WhiteboardPad>> {
+    write_transaction(conn, || {
     artifacts::validate(pad.artifacts.as_ref(), None, "whiteboard", &pad.id)?;
     artifacts::require_assets(conn, pad.artifacts.as_ref(), "whiteboard", &pad.id)?;
     let existing = read_whiteboard(conn, &pad.id)?;
@@ -736,20 +850,32 @@ pub fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutco
         params![
             pad.id,
             pad.title,
-            pad.updated_at,
+            now_ms(clock),
             pad.page_count,
-            json_text(&pad.board),
+            json_text(&without_manifest(&pad.board)),
             json_text(&crate::agent_transcript::update(&existing.as_ref().map(|row| row.agent.clone()).unwrap_or_default(), &pad.agent)),
             next_seq,
             pad.artifacts.as_ref().map(json_text),
         ],
     )?;
+    let rev = next_rev(conn)?;
+    let mut extra = existing.as_ref().map(|row| row.extra.clone()).unwrap_or_default();
+    extra.extend(pad.extra.clone());
+    conn.execute("UPDATE whiteboard SET rev=?1,extra_json=?2 WHERE id=?3",
+        params![rev, serde_json::to_string(&extra)?, pad.id])?;
+    bump_book_head(conn,"whiteboard",&pad.id)?;
     Ok(PutOutcome::Written(
         read_whiteboard(conn, &pad.id)?.expect("just wrote"),
     ))
+    })
 }
 
 pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<AnnotatePad>> {
+    put_annotate_with_clock(conn, pad, &SystemClock)
+}
+
+pub fn put_annotate_with_clock(conn: &Connection, pad: &AnnotatePad, clock: &dyn Clock) -> Result<PutOutcome<AnnotatePad>> {
+    write_transaction(conn, || {
     artifacts::validate(pad.artifacts.as_ref(), None, "annotate", &pad.id)?;
     artifacts::require_assets(conn, pad.artifacts.as_ref(), "annotate", &pad.id)?;
     let existing = read_annotate(conn, &pad.id)?;
@@ -822,20 +948,27 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
             pad.name,
             pad.hash,
             pad.doc_type,
-            pad.updated_at,
+            now_ms(clock),
             pad.source,
             json_text(&footnotes),
-            json_text(&pad.board),
+            json_text(&without_manifest(&pad.board)),
             json_text(&agent),
             next_seq,
-            json_text(&pad.footnote_boards),
+            json_text(&without_footnote_manifests(&pad.footnote_boards)),
             pad.label.trim(),
             pad.artifacts.as_ref().map(json_text),
         ],
     )?;
+    let rev = next_rev(conn)?;
+    let mut extra = existing.as_ref().map(|row| row.extra.clone()).unwrap_or_default();
+    extra.extend(pad.extra.clone());
+    conn.execute("UPDATE annotate SET rev=?1,extra_json=?2 WHERE id=?3",
+        params![rev, serde_json::to_string(&extra)?, pad.id])?;
+    bump_book_head(conn,"annotate",&pad.id)?;
     Ok(PutOutcome::Written(
         read_annotate(conn, &pad.id)?.expect("just wrote"),
     ))
+    })
 }
 
 pub fn get_problem(conn: &Connection, id: &str) -> Result<Option<ProblemPad>> {
@@ -843,6 +976,11 @@ pub fn get_problem(conn: &Connection, id: &str) -> Result<Option<ProblemPad>> {
 }
 
 pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<ProblemPad>> {
+    put_problem_with_clock(conn, pad, &SystemClock)
+}
+
+pub fn put_problem_with_clock(conn: &Connection, pad: &ProblemPad, clock: &dyn Clock) -> Result<PutOutcome<ProblemPad>> {
+    write_transaction(conn, || {
     let id = if pad.id.trim().is_empty() {
         format!("{}/{}", pad.dataset.trim(), pad.task_id.trim())
     } else {
@@ -867,6 +1005,11 @@ pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<Pro
     if gone > 0 && pad.sync_seq <= gone {
         return Ok(PutOutcome::Gone { seq: gone });
     }
+    if existing.is_none() && pad.base_rev.is_some_and(|rev| rev != 0) {
+        // The route converts this missing-base conflict to its normal refusal.
+        let mut absent = pad.clone(); absent.rev = 0;
+        return Ok(PutOutcome::Conflict(absent));
+    }
     if pad.sync_seq > 0
         && pad.sync_seq < existing.as_ref().map(|row| row.sync_seq).unwrap_or(0)
     {
@@ -875,7 +1018,9 @@ pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<Pro
         }
     }
     if let Some(stored) = existing.as_ref() {
-        if let Some(base) = pad.base_updated_at {
+        if let Some(base) = pad.base_rev {
+            if base != stored.rev { return Ok(PutOutcome::Conflict(stored.clone())); }
+        } else if let Some(base) = pad.base_updated_at {
             if base != stored.updated_at {
                 return Ok(PutOutcome::Conflict(stored.clone()));
             }
@@ -916,22 +1061,30 @@ pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<Pro
             pad.id,
             pad.dataset,
             pad.task_id,
-            pad.updated_at,
+            now_ms(clock),
             json_text(&pad.board),
             json_text(&crate::agent_transcript::update(&existing.as_ref().map(|row| row.agent.clone()).unwrap_or_default(), &pad.agent)),
             next_seq,
             pad.artifacts.as_ref().map(json_text),
         ],
     )?;
+    let rev = next_rev(conn)?;
+    let mut extra = existing.as_ref().map(|row| row.extra.clone()).unwrap_or_default();
+    extra.extend(pad.extra.clone());
+    conn.execute("UPDATE problem SET rev=?1,extra_json=?2 WHERE id=?3",
+        params![rev, serde_json::to_string(&extra)?, pad.id])?;
+    bump_book_head(conn,"problem",&pad.id)?;
     Ok(PutOutcome::Written(
         read_problem(conn, &pad.id)?.expect("just wrote"),
     ))
+    })
 }
 
 fn read_problem(conn: &Connection, id: &str) -> Result<Option<ProblemPad>> {
+    read_transaction(conn, || {
     let row = conn
         .query_row(
-            "SELECT id, dataset, task_id, updated_at, board_json, agent_json, ifnull(sync_seq, 0), artifacts_json
+            "SELECT id, dataset, task_id, updated_at, board_json, agent_json, ifnull(sync_seq, 0), artifacts_json, rev, extra_json
              FROM problem WHERE id = ?1",
             params![id],
             |row| {
@@ -944,12 +1097,16 @@ fn read_problem(conn: &Connection, id: &str) -> Result<Option<ProblemPad>> {
                     agent: parse_json(&row.get::<_, String>(5)?),
                     sync_seq: row.get(6)?,
                     artifacts: row.get::<_, Option<String>>(7)?.map(|raw| parse_json(&raw)),
+        rev: row.get(8)?,
+        extra: parse_extra(&row.get::<_, String>(9)?),
+        base_rev: None,
                     base_updated_at: None,
                 })
             },
         )
         .optional()?;
     Ok(row)
+    })
 }
 
 fn map_problem_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProblemPad> {
@@ -962,28 +1119,36 @@ fn map_problem_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProblemPad> {
         agent: parse_json(&row.get::<_, String>(5)?),
         sync_seq: row.get(6)?,
         artifacts: row.get::<_, Option<String>>(7)?.map(|raw| parse_json(&raw)),
+        rev: row.get(8)?,
+        extra: parse_extra(&row.get::<_, String>(9)?),
+        base_rev: None,
         base_updated_at: None,
     })
 }
 
 pub fn list_changed_problem(conn: &Connection, since: i64) -> Result<Vec<ProblemPad>> {
+    read_transaction(conn, || {
     let mut stmt = conn.prepare(
-        "SELECT id, dataset, task_id, updated_at, board_json, agent_json, ifnull(sync_seq, 0), artifacts_json
+        "SELECT id, dataset, task_id, updated_at, board_json, agent_json, ifnull(sync_seq, 0), artifacts_json, rev, extra_json
          FROM problem
          WHERE updated_at > ?1
          ORDER BY updated_at DESC",
     )?;
     let rows = stmt.query_map(params![since], map_problem_row)?;
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    })
 }
 
 /// Compat: bump seq and hard-delete. Prefer [`delete_pad`] with an explicit seq.
 pub fn tombstone(conn: &Connection, kind: PadKind, id: &str) -> Result<bool> {
+    write_transaction(conn, || {
     let seq = stored_seq(conn, kind, id)?.saturating_add(1).max(1);
     Ok(delete_pad(conn, kind, id, seq)?.applied)
+    })
 }
 
 pub fn restore(conn: &Connection, kind: PadKind, id: &str) -> Result<PutOutcome<()>> {
+    write_transaction(conn, || {
     if kind == PadKind::Problem {
         anyhow::bail!("problem pads are not archived");
     }
@@ -1019,7 +1184,11 @@ pub fn restore(conn: &Connection, kind: PadKind, id: &str) -> Result<PutOutcome<
         &format!("UPDATE {table} SET deleted_at = NULL WHERE id = ?1"),
         params![id],
     )?;
+    let rev = next_rev(conn)?;
+    conn.execute(&format!("UPDATE {table} SET rev=?1,updated_at=?2 WHERE id=?3"),params![rev,now_ms(&SystemClock),id])?;
+    bump_book_head(conn,kind.as_str(),id)?;
     Ok(PutOutcome::Written(()))
+    })
 }
 
 /// Separates an annotate pad's id from one of its scratch boards.
@@ -1188,6 +1357,10 @@ pub fn put_snapshot(conn: &Connection, row: &SnapshotRow) -> Result<ApplyAck> {
 /// One page of handwriting on the wire. `gz` is base64 of the bytes on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InkPageRow {
+    #[serde(default)]
+    pub rev: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
     pub kind: String,
     pub key: String,
     pub page_id: i64,
@@ -1205,6 +1378,10 @@ pub struct InkPageRow {
 /// has changed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InkPageDigest {
+    #[serde(default)]
+    pub rev: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
     pub kind: String,
     pub key: String,
     pub page_id: i64,
@@ -1221,7 +1398,7 @@ fn ink_kind(kind: &str) -> Result<PadKind> {
 
 pub fn list_ink_digests(conn: &Connection, since: i64) -> Result<Vec<InkPageDigest>> {
     let mut stmt = conn.prepare(
-        "SELECT kind, key, page_id, updated_at FROM ink_pages
+        "SELECT kind, key, page_id, updated_at, rev, gz FROM ink_pages
          WHERE updated_at > ?1 ORDER BY updated_at, kind, key, page_id",
     )?;
     let rows = stmt.query_map(params![since], |row| {
@@ -1230,6 +1407,8 @@ pub fn list_ink_digests(conn: &Connection, since: i64) -> Result<Vec<InkPageDige
             key: row.get(1)?,
             page_id: row.get(2)?,
             updated_at: row.get(3)?,
+            rev: row.get(4)?,
+            hash: sync_content::validate_ink(&row.get::<_,Vec<u8>>(5)?).ok().map(|value| value.wire_hash),
         })
     })?;
     let mut out = Vec::new();
@@ -1242,7 +1421,7 @@ pub fn list_ink_digests(conn: &Connection, since: i64) -> Result<Vec<InkPageDige
 pub fn get_ink_pages(conn: &Connection, kind: &str, key: &str) -> Result<Vec<InkPageRow>> {
     ink_kind(kind)?;
     let mut stmt = conn.prepare(
-        "SELECT kind, key, page_id, updated_at, gz FROM ink_pages
+        "SELECT kind, key, page_id, updated_at, gz, rev FROM ink_pages
          WHERE kind = ?1 AND key = ?2 ORDER BY page_id",
     )?;
     let rows = stmt.query_map(params![kind, key], |row| {
@@ -1252,12 +1431,15 @@ pub fn get_ink_pages(conn: &Connection, kind: &str, key: &str) -> Result<Vec<Ink
             row.get::<_, i64>(2)?,
             row.get::<_, i64>(3)?,
             row.get::<_, Vec<u8>>(4)?,
+            row.get::<_, i64>(5)?,
         ))
     })?;
     let mut out = Vec::new();
     for row in rows {
-        let (kind, key, page_id, updated_at, gz) = row?;
+        let (kind, key, page_id, updated_at, gz, rev) = row?;
         out.push(InkPageRow {
+            rev,
+            hash: sync_content::validate_ink(&gz).ok().map(|value| value.wire_hash),
             kind,
             key,
             page_id,
@@ -1288,7 +1470,7 @@ pub fn get_ink_page(
     ink_kind(kind)?;
     let row = conn
         .query_row(
-            "SELECT kind, key, page_id, updated_at, gz FROM ink_pages
+            "SELECT kind, key, page_id, updated_at, gz, rev FROM ink_pages
              WHERE kind = ?1 AND key = ?2 AND page_id = ?3",
             params![kind, key, page_id],
             |row| {
@@ -1298,11 +1480,14 @@ pub fn get_ink_page(
                     row.get::<_, i64>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, i64>(5)?,
                 ))
             },
         )
         .optional()?;
-    Ok(row.map(|(kind, key, page_id, updated_at, gz)| InkPageRow {
+    Ok(row.map(|(kind, key, page_id, updated_at, gz, rev)| InkPageRow {
+        rev,
+        hash: sync_content::validate_ink(&gz).ok().map(|value| value.wire_hash),
         kind,
         key,
         page_id,
@@ -1319,6 +1504,14 @@ pub fn get_ink_page(
 /// two devices that saved in the same millisecond, and taking the incoming one
 /// would make the result depend on which happened to ping last.
 pub fn put_ink_page(conn: &Connection, row: &InkPageRow) -> Result<ApplyAck> {
+    put_ink_page_with_clock(conn,row,&SystemClock)
+}
+
+pub fn put_ink_page_with_clock(conn: &Connection, row: &InkPageRow, clock: &dyn Clock) -> Result<ApplyAck> {
+    let bytes = BASE64.decode(row.gz.as_bytes()).context("ink page is not base64")?;
+    sync_content::validate_ink(&bytes)?;
+    anyhow::ensure!(row.page_id >= 0 && row.page_id <= 9_007_199_254_740_991, "invalid ink page id");
+    write_transaction(conn, || {
     let kind = ink_kind(&row.kind)?;
     // Seqs belong to the pad, not to the ink key — a scratch board's pages are
     // named after the mark they hang on, and there is no `{id}/fn/{wb}` row in
@@ -1333,15 +1526,9 @@ pub fn put_ink_page(conn: &Connection, row: &InkPageRow) -> Result<ApplyAck> {
     {
         return Ok(ApplyAck { applied: false, seq: gone });
     }
-    let bytes = BASE64
-        .decode(row.gz.as_bytes())
-        .context("ink page is not base64")?;
-    if bytes.is_empty() {
-        anyhow::bail!("ink page is empty");
-    }
     let current: Option<i64> = conn
         .query_row(
-            "SELECT updated_at FROM ink_pages WHERE kind = ?1 AND key = ?2 AND page_id = ?3",
+            "SELECT legacy_updated_at FROM ink_pages WHERE kind = ?1 AND key = ?2 AND page_id = ?3",
             params![row.kind, row.key, row.page_id],
             |r| r.get(0),
         )
@@ -1354,17 +1541,20 @@ pub fn put_ink_page(conn: &Connection, row: &InkPageRow) -> Result<ApplyAck> {
             });
         }
     }
+    let rev = next_rev(conn)?;
     conn.execute(
-        "INSERT INTO ink_pages (kind, key, page_id, updated_at, gz)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO ink_pages (kind, key, page_id, updated_at, gz, rev, legacy_updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(kind, key, page_id) DO UPDATE SET
             updated_at = excluded.updated_at,
-            gz = excluded.gz",
-        params![row.kind, row.key, row.page_id, row.updated_at, bytes],
+            gz = excluded.gz, rev=excluded.rev, legacy_updated_at=excluded.legacy_updated_at",
+        params![row.kind, row.key, row.page_id, now_ms(clock), bytes, rev, row.updated_at],
     )?;
+    bump_book_head(conn,kind.as_str(),&pad_id)?;
     Ok(ApplyAck {
         applied: true,
         seq: stored_seq(conn, kind, &pad_id)?,
+    })
     })
 }
 
@@ -1645,7 +1835,7 @@ pub fn clone_device(
         id: id.to_string(),
         role: role.to_string(),
         prefs: source.prefs.clone(),
-        updated_at: now_ms(),
+        updated_at: now_ms(&SystemClock),
     };
     Ok(Some(put_device(conn, &cloned)?))
 }
@@ -1655,7 +1845,37 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    struct TestClock(i64);
+    impl Clock for TestClock { fn now_ms(&self) -> i64 { self.0 } }
+    thread_local! { static TEST_TIME: std::cell::Cell<i64> = const { std::cell::Cell::new(1) }; }
+    fn set_hub_time(value: i64) { TEST_TIME.with(|time|time.set(value)); }
+    fn test_clock() -> TestClock {
+        TEST_TIME.with(|time| { let current=time.get(); time.set(current+1); TestClock(current) })
+    }
+    fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutcome<WhiteboardPad>> {
+        super::put_whiteboard_with_clock(conn,pad,&test_clock())
+    }
+    fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<AnnotatePad>> {
+        super::put_annotate_with_clock(conn,pad,&test_clock())
+    }
+    fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<ProblemPad>> {
+        super::put_problem_with_clock(conn,pad,&test_clock())
+    }
+    fn put_ink_page(conn: &Connection, row: &InkPageRow) -> Result<ApplyAck> {
+        super::put_ink_page_with_clock(conn,row,&test_clock())
+    }
+
+    fn ink_bytes(body: &str) -> Vec<u8> {
+        let metadata=serde_json::to_vec(&json!({"meta":[],"fixture":body})).unwrap();
+        let mut bytes=b"inkC".to_vec();
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&metadata);
+        bytes
+    }
+
     fn tmp() -> PathBuf {
+        TEST_TIME.with(|time|time.set(1));
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -1675,6 +1895,8 @@ mod tests {
 
     fn wb(id: &str, updated_at: i64) -> WhiteboardPad {
         WhiteboardPad {
+            rev: 0,
+            extra: Default::default(),
             id: id.into(),
             title: format!("n-{id}"),
             updated_at,
@@ -1690,6 +1912,8 @@ mod tests {
 
     fn an(id: &str, updated_at: i64) -> AnnotatePad {
         AnnotatePad {
+            rev: 0,
+            extra: Default::default(),
             id: id.into(),
             name: "notes.md".into(),
             label: String::new(),
@@ -1711,12 +1935,15 @@ mod tests {
     fn pb(id: &str, updated_at: i64) -> ProblemPad {
         let (dataset, task_id) = id.split_once('/').unwrap();
         ProblemPad {
+            rev: 0,
+            extra: Default::default(),
             id: id.into(),
             dataset: dataset.into(),
             task_id: task_id.into(),
             updated_at,
             sync_seq: 0,
             base_updated_at: None,
+            base_rev: None,
             board: json!({"v": 1, "elements": [{"id": "ink"}]}),
             agent: json!([]),
             artifacts: None,
@@ -1793,6 +2020,7 @@ mod tests {
     fn invalid_artifact_parent_does_not_overwrite_the_pad() {
         let path = tmp();
         let conn = open(&path).unwrap();
+        set_hub_time(10);
         put_whiteboard(&conn, &wb("w1", 10)).unwrap();
         let mut bad = wb("w1", 20);
         bad.artifacts = Some(json!({
@@ -1870,6 +2098,7 @@ mod tests {
     fn get_pad_answers_for_live_rows_and_nothing_else() {
         let path = tmp();
         let conn = open(&path).unwrap();
+        set_hub_time(10);
         put_whiteboard(&conn, &wb("w1", 10)).unwrap();
         put_annotate(&conn, &an("a1", 11)).unwrap();
 
@@ -1892,7 +2121,9 @@ mod tests {
     fn older_put_is_conflict_and_keeps_a_revision() {
         let path = tmp();
         let conn = open(&path).unwrap();
+        set_hub_time(20);
         put_whiteboard(&conn, &wb("w1", 20)).unwrap();
+        set_hub_time(30);
         match put_whiteboard(&conn, &wb("w1", 30)).unwrap() {
             PutOutcome::Written(_) => {}
             other => panic!("{other:?}"),
@@ -1906,7 +2137,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_pad_drops_snapshots_seq_restore_wins() {
+    fn delete_pad_retains_snapshots_seq_restore_wins() {
         let path = tmp();
         let conn = open(&path).unwrap();
         put_whiteboard(&conn, &wb("w1", 1)).unwrap();
@@ -1936,7 +2167,10 @@ mod tests {
         assert!(ack.applied);
         assert_eq!(ack.seq, 5);
         assert!(get_whiteboard(&conn, "w1").unwrap().is_none());
-        assert!(get_snapshots(&conn, "whiteboard", "w1").unwrap().is_empty());
+        let retained = get_snapshots(&conn, "whiteboard", "w1").unwrap();
+        assert_eq!(retained.len(),2);
+        assert!(retained.iter().any(|row|row.payload["tier"] == "24h"));
+        assert!(retained.iter().any(|row|row.payload["tier"] == "7d"));
         assert_eq!(list_changed_gone(&conn, 0).unwrap()[0].id, "w1");
 
         let stale = delete_pad(&conn, PadKind::Whiteboard, "w1", 4).unwrap();
@@ -2094,9 +2328,13 @@ mod tests {
     fn ping_lists_whiteboard_annotate_snapshots_and_tombstones() {
         let path = tmp();
         let conn = open(&path).unwrap();
+        set_hub_time(10);
         put_whiteboard(&conn, &wb("w1", 10)).unwrap();
+        set_hub_time(40);
         put_whiteboard(&conn, &wb("w2", 40)).unwrap();
+        set_hub_time(15);
         put_annotate(&conn, &an("a1", 15)).unwrap();
+        set_hub_time(50);
         put_annotate(&conn, &an("a2", 50)).unwrap();
         put_snapshot(
             &conn,
@@ -2183,7 +2421,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(revision_count(&conn, "whiteboard", "w1").unwrap(), 0);
-        assert_eq!(get_whiteboard(&conn, "w1").unwrap().unwrap().updated_at, 12);
+        assert_eq!(get_whiteboard(&conn, "w1").unwrap().unwrap().updated_at, 3);
         let _ = std::fs::remove_file(path);
     }
 
@@ -2267,6 +2505,7 @@ mod tests {
     fn cas_mismatch_keeps_hub_even_when_put_stamp_is_newer() {
         let path = tmp();
         let conn = open(&path).unwrap();
+        set_hub_time(100);
         put_whiteboard(&conn, &wb("w1", 100)).unwrap();
         let mut stale = wb("w1", 999);
         stale.base_updated_at = Some(1);
@@ -2282,6 +2521,7 @@ mod tests {
     fn problem_cas_mismatch_keeps_hub() {
         let path = tmp();
         let conn = open(&path).unwrap();
+        set_hub_time(100);
         let first = pb("leetcode/two-sum", 100);
         match put_problem(&conn, &first).unwrap() {
             PutOutcome::Written(row) => assert_eq!(row.updated_at, 100),
@@ -2295,6 +2535,7 @@ mod tests {
         }
         let mut ok = pb("leetcode/two-sum", 200);
         ok.base_updated_at = Some(100);
+        set_hub_time(200);
         match put_problem(&conn, &ok).unwrap() {
             PutOutcome::Written(row) => assert_eq!(row.updated_at, 200),
             other => panic!("{other:?}"),
@@ -2339,11 +2580,12 @@ mod tests {
     fn cas_match_writes_even_when_wall_clock_is_behind() {
         let path = tmp();
         let conn = open(&path).unwrap();
+        set_hub_time(200);
         put_whiteboard(&conn, &wb("w1", 200)).unwrap();
         let mut behind = wb("w1", 50);
         behind.base_updated_at = Some(200);
         match put_whiteboard(&conn, &behind).unwrap() {
-            PutOutcome::Written(row) => assert_eq!(row.updated_at, 50),
+            PutOutcome::Written(row) => assert_eq!(row.updated_at, 201),
             other => panic!("{other:?}"),
         }
         let _ = std::fs::remove_file(path);
@@ -2387,7 +2629,8 @@ mod tests {
         }
         let mut a2_next = a2.clone();
         a2_next.updated_at = 20;
-        a2_next.base_updated_at = Some(10);
+        a2_next.base_updated_at = Some(get_annotate(&conn,"a2").unwrap().unwrap().updated_at);
+        set_hub_time(20);
         match put_annotate(&conn, &a2_next).unwrap() {
             PutOutcome::Written(row) => assert_eq!(row.updated_at, 20),
             other => panic!("{other:?}"),
@@ -2397,11 +2640,13 @@ mod tests {
 
     fn ink(kind: &str, key: &str, page: i64, at: i64, body: &str) -> InkPageRow {
         InkPageRow {
+            rev: 0,
+            hash: None,
             kind: kind.into(),
             key: key.into(),
             page_id: page,
             updated_at: at,
-            gz: BASE64.encode(body.as_bytes()),
+            gz: BASE64.encode(ink_bytes(body)),
             sync_seq: None,
         }
     }
@@ -2442,6 +2687,8 @@ mod tests {
 
     fn annotate_pad(id: &str, at: i64) -> AnnotatePad {
         AnnotatePad {
+            rev: 0,
+            extra: Default::default(),
             id: id.into(),
             name: format!("{id}.pdf"),
             label: String::new(),
@@ -2474,7 +2721,7 @@ mod tests {
             .applied);
         let pages = get_ink_pages(&conn, "annotate", key).unwrap();
         assert_eq!(pages.len(), 1);
-        assert_eq!(BASE64.decode(pages[0].gz.as_bytes()).unwrap(), b"scratch");
+        assert_eq!(BASE64.decode(pages[0].gz.as_bytes()).unwrap(), ink_bytes("scratch"));
         // And it is its own key: the document's own page ink is untouched.
         assert!(get_ink_pages(&conn, "annotate", "a1").unwrap().is_empty());
         let _ = std::fs::remove_file(path);
@@ -2566,7 +2813,7 @@ mod tests {
             .unwrap()
             .expect("page 40 is there");
         assert_eq!(row.page_id, 40);
-        assert_eq!(BASE64.decode(row.gz.as_bytes()).unwrap(), b"strokes");
+        assert_eq!(BASE64.decode(row.gz.as_bytes()).unwrap(), ink_bytes("strokes"));
         let _ = std::fs::remove_file(path);
     }
 
@@ -2606,7 +2853,7 @@ mod tests {
         let ack = put_ink_page(&conn, &ink("whiteboard", "w1", 1, 5, "older")).unwrap();
         assert!(!ack.applied, "an older page must not overwrite a newer one");
         let pages = get_ink_pages(&conn, "whiteboard", "w1").unwrap();
-        assert_eq!(BASE64.decode(pages[0].gz.as_bytes()).unwrap(), b"newer");
+        assert_eq!(BASE64.decode(pages[0].gz.as_bytes()).unwrap(), ink_bytes("newer"));
         let _ = std::fs::remove_file(path);
     }
 
@@ -2622,7 +2869,7 @@ mod tests {
         let ack = put_ink_page(&conn, &ink("whiteboard", "w1", 1, 7, "second")).unwrap();
         assert!(!ack.applied);
         let pages = get_ink_pages(&conn, "whiteboard", "w1").unwrap();
-        assert_eq!(BASE64.decode(pages[0].gz.as_bytes()).unwrap(), b"first");
+        assert_eq!(BASE64.decode(pages[0].gz.as_bytes()).unwrap(), ink_bytes("first"));
         let _ = std::fs::remove_file(path);
     }
 
@@ -2645,7 +2892,9 @@ mod tests {
         let path = tmp();
         let conn = open(&path).unwrap();
         put_whiteboard(&conn, &wb("w1", 1)).unwrap();
+        set_hub_time(10);
         put_ink_page(&conn, &ink("whiteboard", "w1", 1, 10, "one")).unwrap();
+        set_hub_time(30);
         put_ink_page(&conn, &ink("whiteboard", "w1", 2, 30, "two")).unwrap();
         let all = list_ink_digests(&conn, 0).unwrap();
         assert_eq!(all.len(), 2);
@@ -2750,7 +2999,7 @@ mod tests {
         assert_eq!(ink_pages.len(), 1, "handwriting");
         assert_eq!(
             BASE64.decode(ink_pages[0].gz.as_bytes()).unwrap(),
-            b"strokes"
+            ink_bytes("strokes")
         );
 
         let edges = list_edges(&conn, 0).unwrap();
