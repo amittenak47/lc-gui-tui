@@ -127,8 +127,13 @@ function prefersReducedMotion(): boolean {
  * an active frame, because damping is per step: one long step would make the
  * drift faster, not just choppier.
  */
-/** Fastest node, in box widths per second, under which the map is only drifting. */
-const IDLE_SPEED = 0.05;
+/**
+ * Fastest node, in screen pixels per second, under which the map is only
+ * drifting. In box widths (0.05) this was ~70 px/s on a desktop window, so a
+ * node still settling after a drop ran at 20 fps and visibly juddered; under
+ * 4 px/s, a 20 fps step is a fifth of a pixel and nobody can see it.
+ */
+const IDLE_SPEED_PX = 4;
 /** Seconds it has to stay that slow before the loop drops its rate. */
 const IDLE_AFTER = 0.6;
 /** Wait before each idle frame's rAF; with vsync that lands near 20 fps. */
@@ -457,8 +462,8 @@ export function ExploreWorkspace({
       }
       const busy = pressed.size > 0 || pinnedKeyRef.current !== null || filterMotionRef.current !== null;
       let fastest = 0;
-      for (const body of bodiesRef.current) fastest = Math.max(fastest, Math.hypot(body.vx, body.vy));
-      quietFor = busy || fastest >= IDLE_SPEED ? 0 : quietFor + dt * steps;
+      for (const body of bodiesRef.current) fastest = Math.max(fastest, Math.hypot(body.vx * box.w, body.vy * box.h));
+      quietFor = busy || fastest >= IDLE_SPEED_PX ? 0 : quietFor + dt * steps;
       idle = quietFor >= IDLE_AFTER;
       if (idle) {
         timer = window.setTimeout(() => {
