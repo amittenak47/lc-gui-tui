@@ -4,7 +4,7 @@ export interface EdgeRope {points:RopePoint[];time:number}
 
 // Bend resists kinks, so the rope bows as one arc. Inner damping slows points
 // relative to their neighbours: wiggles die while the bow keeps one bounce.
-const ANCHOR=90,TENSION=260,BEND=300,DAMP=6,INNER_DAMP=30;
+const ANCHOR=160,TENSION=360,BEND=360,DAMP=8,INNER_DAMP=32;
 
 /** Interior points retain momentum; moving an endpoint pulls the curve behind it. */
 export function stepEdgeRope(from:EdgePoint,to:EdgePoint,previous:EdgeRope|undefined,time:number,reduced=false):EdgeRope {

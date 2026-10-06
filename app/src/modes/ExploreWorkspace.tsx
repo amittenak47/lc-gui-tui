@@ -602,6 +602,7 @@ export function ExploreWorkspace({
       for (const body of bodiesRef.current) {
         body.parkedX = body.x;
         body.parkedY = body.y;
+        body.dropped = false;
       }
       setClustered(false);
       return;
@@ -893,6 +894,7 @@ export function ExploreWorkspace({
                       if (body && drag.moved) {
                         body.parkedX = body.x;
                         body.parkedY = body.y;
+                        body.dropped = true;
                       }
                       pinnedKeyRef.current = null;
                       dragNodeRef.current = null;

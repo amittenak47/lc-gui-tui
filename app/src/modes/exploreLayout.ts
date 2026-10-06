@@ -32,6 +32,8 @@ export interface Body {
   /** After a user drag, home pull aims here instead of the seeded R2 spot. */
   parkedX?: number;
   parkedY?: number;
+  /** Parked by a drag rather than by leaving clusters: held there about as hard as its links pull. */
+  dropped?: boolean;
 }
 
 /** Cluster order, and where each one gathers when clustering is on. */
@@ -198,15 +200,32 @@ const REPEL = 0.6;
  * Edges used to exert no force at all, on the reasoning that a reader looking
  * for one note should not have the map rearrange around whatever it links to.
  * That holds for *layout*, and it made the graph inert: nothing connected ever
- * behaved as though it were connected. A soft spring gets the behaviour without
- * the rearrangement, because it is weak against the home anchor at long range
- * and only really speaks up when a link is stretched or crushed.
+ * behaved as though it were connected. The spring outpulls the home anchor, so
+ * linked nodes gather near rest length, while an unlinked node keeps its home;
+ * past {@link LINK_MAX_STRETCH} it stops growing, so a long link cannot drag a
+ * node across the map.
  *
  * Rest length sits above {@link MIN_GAP} so a spring and the spacing that keeps
  * captions apart are not permanently fighting each other.
  */
 const LINK_REST = 0.34;
-const LINK_SPRING = 1.15;
+const LINK_SPRING = 5;
+/**
+ * A well-linked node pulls harder, and gives way less.
+ *
+ * Its links stiffen with the square root of its link count (the same curve
+ * that sizes its dot), and each end of a link moves in proportion to the
+ * *other* end's links, so a hub gathers its leaves instead of being towed.
+ */
+const HUB_PULL = 1.2;
+/**
+ * How hard a dropped node holds its drop spot.
+ *
+ * Near its links' own pull, so a node let go on a stretched link springs back
+ * about half the stretch: a long pull comes back further than a short one, and
+ * neither undoes the drag. Unlinked nodes keep {@link HOME_PULL} and drift on.
+ */
+const DROP_PULL = 8;
 /** Past this the spring stops getting stronger, so one long edge cannot fling a node. */
 const LINK_MAX_STRETCH = 0.45;
 const HOME_PULL = 0.4;
@@ -218,10 +237,10 @@ export const EDGE_PAD = 0.07;
 /**
  * Advance the simulation one frame, in place.
  *
- * Deliberately not a general force-directed layout. Springs are weak against
- * the home anchor at long range. What moves things is: a gentle pull home (or
- * a parked drop), mutual repulsion so labels stay readable, a slow drift, and
- * a finger that pins one node while it is down.
+ * Deliberately not a general force-directed layout. What moves things is: a
+ * gentle pull home (or a parked drop), link springs that gather neighbours
+ * around well-linked nodes, mutual repulsion so labels stay readable, a slow
+ * drift, and a finger that pins one node while it is down.
  */
 export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: number }>, opts: StepOptions): void {
   const { clustered, dt, time, aspect, links, pinnedKey } = opts;
@@ -235,6 +254,11 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
   const gap = clustered ? MIN_GAP * 0.42 : MIN_GAP;
   // One map per frame, not one per body: the ranking is over the whole set.
   const spots = homes(bodies.map((body) => body.key));
+  const degree = new Map<string, number>();
+  for (const link of links ?? []) {
+    degree.set(link.a, (degree.get(link.a) ?? 0) + 1);
+    degree.set(link.b, (degree.get(link.b) ?? 0) + 1);
+  }
   for (const body of bodies) {
     if (pinnedKey && body.key === pinnedKey) {
       body.vx = 0;
@@ -247,7 +271,7 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
         ? { x: body.parkedX, y: body.parkedY }
         : seeded;
     const target = clustered ? centres.get(body.node.type) ?? home : home;
-    const pull = clustered ? CLUSTER_PULL : HOME_PULL;
+    const pull = clustered ? CLUSTER_PULL : body.dropped && degree.has(body.key) ? DROP_PULL : HOME_PULL;
 
     let fx = (target.x - body.x) * pull;
     let fy = (target.y - body.y) * pull;
@@ -306,7 +330,7 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
     }
   }
 
-  if (links && links.length > 0) applySprings(bodies, links, dt, aspect, pinnedKey);
+  if (links && links.length > 0) applySprings(bodies, links, degree, dt, aspect, pinnedKey);
 }
 
 /**
@@ -319,6 +343,7 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
 function applySprings(
   bodies: Body[],
   links: readonly Link[],
+  degree: ReadonlyMap<string, number>,
   dt: number,
   aspect: number,
   pinnedKey?: string | null,
@@ -334,16 +359,20 @@ function applySprings(
     if (dist < 1e-5) continue;
     // Clamped, so one very long edge cannot fling its ends across the canvas.
     const stretch = Math.max(-LINK_MAX_STRETCH, Math.min(LINK_MAX_STRETCH, dist - LINK_REST));
-    const force = LINK_SPRING * stretch * dt * 0.5;
+    const da = degree.get(a.key) ?? 1;
+    const db = degree.get(b.key) ?? 1;
+    const spring = LINK_SPRING * (1 + HUB_PULL * (Math.sqrt(Math.max(da, db)) - 1));
+    const force = spring * stretch * dt;
     const ux = (dx / dist) * force;
     const uy = (dy / dist) * force;
+    const aShare = db / (da + db);
     if (a.key !== pinnedKey) {
-      a.vx += ux / aspect;
-      a.vy += uy;
+      a.vx += (ux / aspect) * aShare;
+      a.vy += uy * aShare;
     }
     if (b.key !== pinnedKey) {
-      b.vx -= ux / aspect;
-      b.vy -= uy;
+      b.vx -= (ux / aspect) * (1 - aShare);
+      b.vy -= uy * (1 - aShare);
     }
   }
 }

@@ -292,6 +292,76 @@ describe("link springs", () => {
     expect(Math.abs(gap(sprung) - LINK_REST)).toBeLessThan(Math.abs(gap(loose) - LINK_REST));
   });
 
+  /** Velocity the links alone add in one step, from the same start with and without them. */
+  function springKick(place: (list: Body[]) => void, nodes: NodeRef[], links: Link[]): Map<string, number> {
+    const run = (withLinks: boolean) => {
+      const list = bodies(nodes);
+      place(list);
+      step(list, clusterCentres(["annotate"]), { clustered: false, dt: 1 / 60, time: 0, aspect: 1, links: withLinks ? links : [] });
+      return list;
+    };
+    const sprung = run(true);
+    const free = run(false);
+    return new Map(sprung.map((body, i) => [body.key, Math.hypot(body.vx - free[i]!.vx, body.vy - free[i]!.vy)]));
+  }
+  const star = [note("hub"), note("l1"), note("l2"), note("l3"), note("l4")];
+  const starLinks = star.slice(1).map((leaf) => ({ a: key(star[0]!), b: key(leaf) }));
+  const placeStar = (stretch: number) => (list: Body[]) => {
+    list[0]!.x = 0.5;
+    list[0]!.y = 0.5;
+    const around = [[1, 0], [0, 1], [-1, 0], [0, -1]];
+    list.slice(1).forEach((leaf, i) => {
+      const reach = LINK_REST + (i === 0 ? stretch : 0);
+      leaf.x = 0.5 + around[i]![0]! * reach;
+      leaf.y = 0.5 + around[i]![1]! * reach;
+    });
+  };
+
+  it("moves a leaf further than the hub it hangs off", () => {
+    const kick = springKick(placeStar(0.08), star, starLinks);
+    expect(kick.get(key(star[1]!))!).toBeGreaterThan(3 * kick.get(key(star[0]!))!);
+  });
+
+  it("pulls harder on a hub's leaf than on a lone pair", () => {
+    const hubLeaf = springKick(placeStar(0.08), star, starLinks).get(key(star[1]!))!;
+    const pair = [note("a"), note("b")];
+    const lone = springKick((list) => {
+      list[0]!.x = 0.5;
+      list[0]!.y = 0.5;
+      list[1]!.x = 0.5 + LINK_REST + 0.08;
+      list[1]!.y = 0.5;
+    }, pair, [{ a: key(pair[0]!), b: key(pair[1]!) }]).get(key(pair[1]!))!;
+    expect(hubLeaf).toBeGreaterThan(1.5 * lone);
+  });
+
+  it("springs a dropped node back part of the way, further for a longer pull", () => {
+    const a = note("a");
+    const b = note("b");
+    const links = [{ a: key(a), b: key(b) }];
+    const returned = (pull: number) => {
+      const list = rest([a, b], false, links);
+      const [from, to] = list as [Body, Body];
+      const dx = (to.x - from.x) * 1.6;
+      const dy = to.y - from.y;
+      const dist = Math.hypot(dx, dy);
+      to.x += (dx / dist) * pull / 1.6;
+      to.y += (dy / dist) * pull;
+      expect(to.x).toBeGreaterThan(0.1);
+      expect(to.x).toBeLessThan(0.9);
+      to.parkedX = to.x;
+      to.parkedY = to.y;
+      to.dropped = true;
+      const drop = { x: to.x, y: to.y };
+      settle(list, clusterCentres(["annotate"]), false, 1.6, 180, links);
+      return Math.hypot((to.x - drop.x) * 1.6, to.y - drop.y);
+    };
+    const short = returned(0.1);
+    const long = returned(0.2);
+    expect(long).toBeGreaterThan(short * 1.5);
+    expect(short).toBeGreaterThan(0.1 * 0.15);
+    expect(long).toBeLessThan(0.2 * 0.8);
+  });
+
   it("stays finite and on the page under a dense mesh", () => {
     // Every node linked to every other is the worst case for a spring network.
     const nodes = Array.from({ length: 7 }, (_, i) => note(`n${i}`));
