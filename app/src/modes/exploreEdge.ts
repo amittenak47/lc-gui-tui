@@ -3,11 +3,12 @@ export interface EdgePoint {x:number;y:number}
 export interface EdgeBow {x:number;y:number;vx:number;vy:number;time:number}
 
 // A taut bow, not a rope: the edge bends as one arc whose peak sits at its
-// middle, however hard an end is dragged. ~2.9 Hz, a little under critical
-// damping, so a release springs past the line once and settles.
-const STIFFNESS=324,DAMPING=19.8;
+// middle, however hard an end is dragged. ~5.7 Hz, a little under critical
+// damping, so a release springs past the line once and settles. The bow while
+// dragging scales with damping/stiffness: this is about half the old 2.9 Hz.
+const STIFFNESS=1296,DAMPING=39.6;
 /** Deepest bow, as a fraction of the edge's length, so it never hangs slack. */
-export const MAX_BOW=0.14;
+export const MAX_BOW=0.08;
 
 /** The control point chases the midpoint; how far it lags is the bow. */
 export function stepEdgeBow(from:EdgePoint,to:EdgePoint,previous:EdgeBow|undefined,time:number,reduced=false):EdgeBow {

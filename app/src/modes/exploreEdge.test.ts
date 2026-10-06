@@ -41,9 +41,9 @@ describe("drag-driven graph edges",()=>{
   expect(deepest).toBeLessThanOrEqual(MAX_BOW+1e-9);
  });
  it("springs back past the line once after a drop, then settles straight",()=>{
-  // Dragged down at a steady pace for half a second, then let go.
-  const bow=stepEdgeBow(a,b,undefined,0),dropped={x:400,y:240};
-  run(bow,(t)=>({x:400,y:480*t}),1,30);
+  // Flung down at a steady pace for half a second, then let go.
+  const bow=stepEdgeBow(a,b,undefined,0),dropped={x:400,y:720};
+  run(bow,(t)=>({x:400,y:1440*t}),1,30);
   const held=edgeBowDepth(a,dropped,bow);
   // Count only swings a person could see (over half a pixel).
   let crossings=0,last=Math.sign(held);
