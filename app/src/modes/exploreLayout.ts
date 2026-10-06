@@ -258,11 +258,12 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
   // One map per frame, not one per body: the ranking is over the whole set.
   const spots = homes(bodies.map((body) => body.key));
   const degree = new Map<string, number>();
-  const linked = new Set<string>();
+  const linked = new Map<string, Set<string>>();
   for (const link of links ?? []) {
     degree.set(link.a, (degree.get(link.a) ?? 0) + 1);
     degree.set(link.b, (degree.get(link.b) ?? 0) + 1);
-    linked.add(`${link.a}\u0000${link.b}`).add(`${link.b}\u0000${link.a}`);
+    (linked.get(link.a) ?? linked.set(link.a, new Set()).get(link.a)!).add(link.b);
+    (linked.get(link.b) ?? linked.set(link.b, new Set()).get(link.b)!).add(link.a);
   }
   for (const body of bodies) {
     if (pinnedKey && body.key === pinnedKey) {
@@ -298,7 +299,8 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
       const dx = (body.x - other.x) * aspect;
       const dy = body.y - other.y;
       let dist = Math.hypot(dx, dy);
-      const room = linked.has(`${body.key}\u0000${other.key}`) ? Math.min(gap, LINKED_GAP) : gap;
+      if (dist > gap) continue;
+      const room = linked.get(body.key)?.has(other.key) ? Math.min(gap, LINKED_GAP) : gap;
       if (dist > room) continue;
       // Two nodes at exactly the same point have no direction to separate in.
       // Nudge along a fixed diagonal rather than picking a random one, which
