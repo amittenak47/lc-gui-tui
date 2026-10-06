@@ -49,6 +49,30 @@ afterEach(() => {
 });
 
 describe("the chip while a Sync walk runs", () => {
+  it("stops the ring, names failure, shows the reason and retries on one tap", () => {
+    const onSync = vi.fn();
+    const { host, rerender } = mount({ onSync, walkStage: "idle" });
+    const button = host.querySelector(".lc-doc-index-sync") as HTMLButtonElement;
+    act(() => button.click());
+    expect(onSync).toHaveBeenCalledOnce();
+    rerender({ walkError: "The hub has a newer copy of Algorithms." });
+    expect(button.textContent).toContain("Sync failed");
+    expect(button.getAttribute("aria-busy")).toBe("false");
+    expect(button.querySelector(".lc-doc-index-ring")).toBeNull();
+    expect(button.querySelector('[aria-label="Sync error"]')).not.toBeNull();
+    expect(document.querySelector(".lc-doc-sync-line")?.textContent).toContain("newer copy of Algorithms");
+    act(() => button.click());
+    expect(onSync).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes the header progress overlay when the merge window takes over", () => {
+    const { host, rerender } = mount({ onSync: vi.fn(), walkStage: "pad" });
+    act(() => (host.querySelector("button") as HTMLButtonElement).click());
+    expect(document.querySelector(".lc-doc-sync-pop")).not.toBeNull();
+    rerender({ walkWaiting: "conflict" });
+    expect(document.querySelector(".lc-doc-sync-pop")).toBeNull();
+    expect(host.querySelector(".lc-doc-index-ring")).toBeNull();
+  });
   it("says which stage, for the stages that name themselves", () => {
     // A tap used to walk the pill through Index → Pad → Ink → Links → Pull
     // while the tab said `indexed` the whole way.
@@ -202,9 +226,9 @@ describe("the in-tab Sync overlay", () => {
     const { host } = mount({ ...state, onSync: vi.fn() });
     expect(chip(host)).toBeNull();
     expect(host.querySelectorAll("button")).toHaveLength(1);
-    expect(syncButton(host).textContent).toBe("Sync");
+    expect(syncButton(host).textContent).toBe(state.walkError ? "!Sync failed" : "Sync");
     expect(syncButton(host).disabled).toBe(false);
-    expect(syncButton(host).getAttribute("aria-label")).toBe("Hub sync");
+    expect(syncButton(host).getAttribute("aria-label")).toBe(state.walkError ? "Sync failed" : "Hub sync");
     expect(syncButton(host).getAttribute("aria-haspopup")).toBe("dialog");
     expect(syncButton(host).getAttribute("aria-expanded")).toBe("false");
   });
@@ -321,7 +345,6 @@ describe("the in-tab Sync overlay", () => {
 
   it.each([
     [{ walkError: "hub unreachable", walkStage: "synced" }, "hub unreachable"],
-    [{ walkWaiting: "conflict", walkStage: "pad" }, "choose copy"],
     [{ walkStage: "idle", padSync: "not-synced" }, "not synced"],
   ] as const)("keeps the overlay open on a parked walk: %j", (state, text) => {
     vi.useFakeTimers();

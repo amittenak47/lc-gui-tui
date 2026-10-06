@@ -10,6 +10,8 @@ import type { AnnotatePadDto, WhiteboardPadDto } from "../api/client";
 import type { HubPadConflict } from "../util/hubConflictStash";
 import { rememberPdfThumb, resetPdfThumbs } from "../modes/pdfFilm";
 
+const roots = new Set<ReturnType<typeof createRoot>>();
+
 beforeEach(() => { vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); });
 
 function annotateBody(name: string, updated: number, notes: unknown[]): AnnotatePadDto {
@@ -79,11 +81,12 @@ const EMPTY_INK = { inkPages: [] as const, footnoteInkPages: [] as const };
 function mount(
   conflict: HubPadConflict | null = CONFLICT,
   busy = false,
-  extra: { docHash?: string; otherLabel?: string; error?: string } = {},
+  extra: { docHash?: string; otherLabel?: string; error?: string; onMounted?: () => void; onUnavailable?: () => void } = {},
 ) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
+  roots.add(root);
   const onResolve = vi.fn();
   act(() =>
     root.render(
@@ -93,6 +96,8 @@ function mount(
         otherLabel={extra.otherLabel}
         docHash={extra.docHash}
         error={extra.error}
+        onMounted={extra.onMounted}
+        onUnavailable={extra.onUnavailable}
         onResolve={onResolve}
       />,
     ),
@@ -121,6 +126,14 @@ function inkRow(side: 0 | 1): HTMLElement {
 }
 
 describe("HubConflictSplit", () => {
+  it("reports mount and disappearance to the waiting walk", () => {
+    const onMounted = vi.fn();
+    const onUnavailable = vi.fn();
+    const { root } = mount(CONFLICT, false, { onMounted, onUnavailable });
+    expect(onMounted).toHaveBeenCalledOnce();
+    act(() => root.unmount());
+    expect(onUnavailable).toHaveBeenCalledOnce();
+  });
   it("offers a whole problem-canvas choice even when both sides have identical ink", async () => {
     const { problemConflictPreview } = await import("../util/problemArtifactConflict");
     const board = { v: 1 as const, elements: [], appState: { scrollX: 0, scrollY: 0, zoom: 1 } };
@@ -136,6 +149,8 @@ describe("HubConflictSplit", () => {
     act(() => root.unmount());
   });
   afterEach(() => {
+    act(() => { roots.forEach(root => root.unmount()); });
+    roots.clear();
     document.body.textContent = "";
     resetPdfThumbs();
   });

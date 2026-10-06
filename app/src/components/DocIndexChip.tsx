@@ -184,6 +184,7 @@ export function DocIndexChip({
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
   const syncPopRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { if (walkWaiting === "conflict") setSyncOpen(false); }, [walkWaiting]);
   const syncStartedRef = useRef(false);
   const syncWalkSeenRef = useRef(false);
   const syncWasLandedRef = useRef(false);
@@ -261,20 +262,28 @@ export function DocIndexChip({
           ? meta?.embedded === false ? "indexed · words" : "indexed"
           : onIndex ? "not indexed" : null;
   const indexRing = status === "indexing" || embedding;
-  const working = walking || indexRing;
+  const working = !walkError && walkWaiting !== "conflict" && (walking || indexRing);
   const workProgress = walking ? walkProgress : status === "indexing" ? indexProgress : embedProgress;
   const syncBtn = onSync ? (
     <button
       ref={buttonRef}
       type="button"
       className={`lc-doc-index-sync${walkError ? " is-bad" : ""}${walkWaiting === "conflict" ? " is-attention" : ""}`}
-      aria-label="Hub sync"
+      aria-label={walkError ? "Sync failed" : "Hub sync"}
+      aria-busy={working}
       aria-expanded={syncOpen || open}
       aria-haspopup="dialog"
       data-error={walkError ?? undefined}
       title={walkError ?? (walkWaiting === "conflict" ? "Both copies changed — pick which stays." : undefined)}
       onClick={(event) => {
         event.stopPropagation();
+        if (walkError) {
+          setSyncOpen(true);
+          const box = buttonRef.current?.getBoundingClientRect();
+          if (box) setAnchor({ top: box.bottom + 8, left: box.left });
+          onSync();
+          return;
+        }
         if (syncOpen) {
           setSyncOpen(false);
           return;
@@ -289,8 +298,8 @@ export function DocIndexChip({
         if (syncStartedRef.current) onSync();
       }}
     >
-      {working ? <WorkRing progress={workProgress ?? null} /> : <HubStatusDot />}
-      Sync
+      {walkError ? <span role="img" aria-label="Sync error">!</span> : working ? <WorkRing progress={workProgress ?? null} /> : <HubStatusDot />}
+      {walkError ? "Sync failed" : "Sync"}
     </button>
   ) : null;
   if (!onSync && walking && walkError) {

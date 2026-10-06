@@ -20,12 +20,8 @@ import {
   stashHubConflict,
 } from "../util/hubConflictStash";
 import {
-  fetchHubInkPages,
   footnoteInkKeys,
-  localInkAsDtos,
   localInkPageStamps,
-  previewInkPages,
-  expandPreviewInkPages,
   splitFootnoteInkHubKey,
   type FootnoteInkBoard,
 } from "../util/inkSync";
@@ -54,6 +50,7 @@ import {
 } from "../util/hubWalk";
 import { MorphBar } from "./MorphBar";
 import { HubStatusDot } from "./HubStatusDot";
+import { prepareConflictUi, waitForConflictUi, type ConflictUiLifecycle } from "../util/conflictUiWait";
 
 /**
  * What the walk is doing, for the tab chip beside the document's name.
@@ -224,7 +221,7 @@ export interface HubSyncWalkHost {
    * device's stores, then resolve with what was kept — the walk owns every
    * bit of hub traffic that follows.
    */
-  onConflict(conflict: HubPadConflict): Promise<HubConflictResolution>;
+  onConflict(conflict: HubPadConflict, lifecycle?: ConflictUiLifecycle): Promise<HubConflictResolution>;
   onIndexProgress(progress: DocWorkProgress | null): void;
   /** How far the Sync walk has got, for the tab chip. Null when idle (not Synced). */
   onWalkProgress(report: HubWalkReport | null): void;
@@ -358,7 +355,7 @@ export function HubSyncControl({
       // Mid-walk unmount: stop claiming work. A landed Synced stays on the tab.
       const at = walkStageRef.current;
       if (at !== "idle" && at !== "synced") {
-        hostRef.current?.onWalkProgress(null);
+        hostRef.current?.onWalkProgress({ stage: at, progress: null, error: "Sync stopped. Tap Sync to retry." });
       }
     };
   }, []);
@@ -638,37 +635,20 @@ export function HubSyncControl({
           .map((row) => ({ pageId: row.page_id, updatedAt: row.updated_at }));
         const hubInkPageIds = hubInkStamps.map((row) => row.pageId);
 
-        /**
-         * Both copies as they stood when the walk stopped.
-         *
-         * Scoped to the one page the split is going to draw, on both sides. An
-         * ink stop names its page; a pad stop opens on the first page either
-         * side has ink for, which is what `previewInkPages` works out from the
-         * two id lists. Freezing the pad meant gzipping a whole read-through
-         * *and* downloading the hub's copy of it — the most expensive thing
-         * the pill did, at the moment it is already parked in front of someone
-         * waiting to answer a question about one page.
-         *
-         * What a resolve writes is a different set, and is fetched then: see
-         * `fetchHubPages` on {@link applyInkChoice}. The ids for it ride on the
-         * ping digest and cost nothing.
-         */
-        const freezeCopies = async (previewPages?: readonly number[]) => {
+        /** Freeze metadata and page clocks; the mounted split loads previews. */
+        const freezeCopies = async () => {
           const localInkStamps = await localInkPageStamps(padInfo.kind, padInfo.id).catch(
             () => [] as { pageId: number; updatedAt: number }[],
           );
           const localInkPages = localInkStamps.map((row) => row.pageId);
-          const preview = expandPreviewInkPages(
-            padInfo.kind,
-            previewPages ??
-              previewInkPages(localInkPages, hubInkPageIds, localInkStamps, hubInkStamps),
-          );
-          const [server, localInk, serverInk, local] = await Promise.all([
-            fetchHubBody(),
-            localInkAsDtos(padInfo.kind, padInfo.id, preview).catch(() => []),
-            fetchHubInkPages(client!, padInfo.kind, padInfo.id, preview),
-            Promise.resolve(padInfo.buildBody()),
+          // Mount using clocks and pad metadata. The split already loads its
+          // visible ink lazily; waiting on preview transfers here hid the UI
+          // behind a pending Android/native HTTP request.
+          const [server, local] = await Promise.all([
+            fetchHubBody(), Promise.resolve(padInfo.buildBody()),
           ]);
+          const localInk: [] = [];
+          const serverInk: [] = [];
           /*
            * Scratch boards belong to the handwriting row too.
            *
@@ -734,23 +714,14 @@ export function HubSyncControl({
             progress: null,
             waiting: "conflict",
           });
-          return new Promise<HubConflictResolution>((resolve, reject) => {
-            const onAbort = () => reject(new WalkAborted());
-            abort.signal.addEventListener("abort", onAbort, { once: true });
-            host!
-              .onConflict(conflict)
-              .then((resolution) => {
-                abort.signal.removeEventListener("abort", onAbort);
-                if (abort.signal.aborted) {
-                  reject(new WalkAborted());
-                  return;
-                }
-                resolve(resolution ?? { pick: "local" });
-              }, (cause) => {
-                abort.signal.removeEventListener("abort", onAbort);
-                reject(cause);
-              });
-          }).finally(() => {
+          const title = (conflict.local as AnnotatePadDto | null)?.label ||
+            (conflict.local as AnnotatePadDto | null)?.name ||
+            (conflict.local as WhiteboardPadDto | null)?.title || "this book";
+          const reason = `The hub has a newer copy of ${title}. The merge window could not open. Tap Sync to retry.`;
+          return waitForConflictUi(
+            typeof host?.onConflict === "function" ? (lifecycle) => host.onConflict(conflict, lifecycle) : undefined,
+            abort.signal, reason,
+          ).finally(() => {
             clearHubConflict();
             if (abort.signal.aborted) return;
             hostRef.current?.onWalkProgress({
@@ -767,7 +738,7 @@ export function HubSyncControl({
           const pushed = await walkPushPad(client!, walkPad, snapshot);
           throwIfAborted();
           if (pushed.outcome === "conflict") {
-            const copies = await freezeCopies();
+            const copies = await prepareConflictUi(freezeCopies(), abort.signal, "The hub has a newer copy. The merge window could not load. Tap Sync to retry.");
             throwIfAborted();
             const resolution = await raiseConflict({
               kind: padInfo.kind,
@@ -818,7 +789,7 @@ export function HubSyncControl({
           const ink = await walkSyncInk(client!, walkPad, snapshot, host!.inkSince());
           if (ink.outcome === "conflict") {
             // The walk already named the page both sides drew on.
-            const copies = await freezeCopies([ink.pageId]);
+            const copies = await prepareConflictUi(freezeCopies(), abort.signal, "This page changed on both devices. The merge window could not load. Tap Sync to retry.");
             await raiseConflict({
               kind: padInfo.kind,
               id: padInfo.id,
@@ -895,7 +866,7 @@ export function HubSyncControl({
       walkingRef.current = false;
     } catch (cause) {
       walkingRef.current = false;
-      if (cause instanceof WalkAborted) return;
+      if (cause instanceof WalkAborted && abort.signal.aborted) return;
       if (cause instanceof HubSyncCancelled) {
         // Cancel in the merge window: nothing applied, nothing to report.
         absorbReloadEditsRef.current = false;
@@ -933,7 +904,7 @@ export function HubSyncControl({
     };
   }, [stage, client, host]);
 
-  const busy = stage !== "idle" && stage !== "synced";
+  const busy = !walkError && stage !== "idle" && stage !== "synced";
   /*
    * Synced, until the reader writes something.
    *
@@ -957,7 +928,7 @@ export function HubSyncControl({
     (needsIndex ? hubHint.indexedOnHub : true);
   const restStage: HubSyncStage = syncedAtRest ? "synced" : "idle";
   const settled = stage === "synced" && !editedSinceSynced ? "synced" : restStage;
-  const activeStage = busy ? stage : settled;
+  const activeStage = walkError ? "failed" : busy ? stage : settled;
 
   if (tapRef) tapRef.current = onTap;
 
@@ -970,18 +941,20 @@ export function HubSyncControl({
         type="button"
         className="lc-hub-sync lc-tip-target"
         onClick={onTap}
-        aria-label={busy ? `Hub sync: ${LABEL[stage]}` : "Hub sync"}
+        aria-label={walkError ? "Sync failed" : busy ? `Hub sync: ${LABEL[stage]}` : "Hub sync"}
+        aria-busy={busy}
         data-stage={busy ? stage : activeStage}
         data-error={walkError ?? undefined}
         title={walkError ?? undefined}
       >
-        <HubStatusDot />
+        {walkError ? <span role="img" aria-label="Sync error">!</span> : <HubStatusDot />}
         <MorphBar
           axis="depth"
           active={activeStage}
           className="lc-hub-sync-morph"
           animateOnMount={false}
         >
+          <span data-morph-id="failed">Sync failed</span>
           {(Object.keys(LABEL) as HubSyncStage[]).map((id) => (
             <span key={id} data-morph-id={id}>
               {LABEL[id]}

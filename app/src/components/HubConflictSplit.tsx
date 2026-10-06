@@ -59,6 +59,8 @@ import {
 
 export interface HubConflictSplitProps {
   conflict: HubPadConflict | null;
+  onMounted?: () => void;
+  onUnavailable?: () => void;
   /** True while the resolve itself (IDB write + hub PUT) is running. */
   busy?: boolean;
   /** Right-pane name: Tablet when this device is the desktop, Desktop on the tablet. */
@@ -417,6 +419,8 @@ function notesOf(body: HubPadConflict["local"] | HubPadConflict["server"]): DocF
 
 export function HubConflictSplit({
   conflict,
+  onMounted,
+  onUnavailable,
   busy = false,
   otherLabel = "Tablet",
   docHash,
@@ -431,6 +435,11 @@ export function HubConflictSplit({
   client = null,
   fetchPreviewInk,
 }: HubConflictSplitProps) {
+  useLayoutEffect(() => {
+    if (!conflict) return;
+    onMounted?.();
+    return () => onUnavailable?.();
+  }, [conflict, onMounted, onUnavailable]);
   const [manualPicks, setManualPicks] = useState<Record<string, SidePick>>({});
   const [differencesOnly, setDifferencesOnly] = useState(true);
   const [revealInk, setRevealInk] = useState(false);

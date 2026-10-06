@@ -1003,6 +1003,8 @@ export const Workspace = memo(function Workspace({
     resolve(resolution: HubConflictResolution): void;
     /** Stops the walk with nothing applied. Absent where no walk is waiting. */
     cancel?(): void;
+    onMounted?(): void;
+    onUnavailable?(): void;
   } | null>(null);
   const hubConflictAskRef = useRef<typeof hubConflictAsk>(null);
 
@@ -1384,10 +1386,26 @@ export const Workspace = memo(function Workspace({
        * hold the walk until the reader has chosen and the choice is written
        * into IDB — the pill resumes from there and owns any hub traffic.
        */
-      onConflict: (conflict) =>
+      onConflict: (conflict, lifecycle) =>
         new Promise<HubConflictResolution>((resolve, reject) => {
+          if (lifecycle?.signal.aborted) { reject(new Error("Sync stopped.")); return; }
           setHubConflictError(null);
-          const ask = { conflict, resolve, cancel: () => reject(new HubSyncCancelled()) };
+          const clear = () => {
+            if (hubConflictAskRef.current !== ask) return;
+            hubConflictAskRef.current = null;
+            setHubConflictAsk(null);
+            setHubConflictError(null);
+          };
+          const finish = (resolution?: HubConflictResolution) => {
+            lifecycle?.signal.removeEventListener("abort", onAbort);
+            clear();
+            if (resolution) resolve(resolution);
+            else reject(new HubSyncCancelled());
+          };
+          const onAbort = () => { clear(); reject(new Error("Sync stopped. Tap Sync to retry.")); };
+          const ask = { conflict, resolve: (value: HubConflictResolution) => finish(value), cancel: () => finish(),
+            onMounted: lifecycle?.onMounted, onUnavailable: lifecycle?.onUnavailable };
+          lifecycle?.signal.addEventListener("abort", onAbort, { once: true });
           hubConflictAskRef.current = ask;
           setHubConflictAsk(ask);
         }),
@@ -11485,6 +11503,8 @@ export const Workspace = memo(function Workspace({
         {hubConflictAsk ? (
           <HubConflictSplit
             conflict={hubConflictAsk.conflict}
+            onMounted={hubConflictAsk.onMounted}
+            onUnavailable={hubConflictAsk.onUnavailable}
             busy={hubConflictBusy}
             otherLabel={otherDeviceLabel()}
             docHash={annotateSource?.docType === "pdf" ? annotateSource.hash : undefined}

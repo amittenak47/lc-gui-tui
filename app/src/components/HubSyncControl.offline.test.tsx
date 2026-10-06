@@ -82,7 +82,7 @@ describe("manual Sync while the desktop is offline", () => {
     expect(markHubAck).not.toHaveBeenCalled();
     expect(host.onIndexDone).not.toHaveBeenCalled();
     expect(reports.some(report => report?.stage === "synced")).toBe(false);
-    expect(element.querySelector("button")?.getAttribute("data-stage")).toBe("pad");
+    expect(element.querySelector("button")?.getAttribute("data-stage")).toBe("failed");
     expect(element.querySelector("button")?.getAttribute("data-error")).toContain("Desktop app is offline");
   });
 
@@ -111,6 +111,6 @@ describe("manual Sync while the desktop is offline", () => {
     expect(network).toHaveBeenCalledOnce();
     expect(network.mock.calls[0]).toEqual([body.id, body]);
     expect(durableQueue.size).toBe(1);
-    expect(element.querySelector("button")?.getAttribute("data-stage")).toBe("pad");
+    expect(element.querySelector("button")?.getAttribute("data-stage")).toBe("failed");
   });
 });

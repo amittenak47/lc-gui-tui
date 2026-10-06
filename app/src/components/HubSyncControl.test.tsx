@@ -6,6 +6,9 @@ import { createRoot } from "react-dom/client";
 import { act } from "react";
 
 import { HubSyncControl, padTabSync, tabOffersHubSync, type HubSyncWalkHost } from "./HubSyncControl";
+import { LcApiError } from "../api/client";
+import { enqueuePadSync, peekPadSyncQueueForTests, resetPadSyncQueueForTests } from "../util/padSync";
+import type { ConflictUiLifecycle } from "../util/conflictUiWait";
 import type { LcClient } from "../api/client";
 import { PAD_HUB_KEY } from "../util/padHub";
 
@@ -319,6 +322,7 @@ describe("HubSyncControl (step-2 stub)", () => {
         putWhiteboardPad:
           overrides.putWhiteboardPad ??
           vi.fn().mockResolvedValue({ id: "w1", updated_at: 900 }),
+        putPadSnapshot: overrides.putPadSnapshot ?? vi.fn().mockResolvedValue(undefined),
         putEdges: overrides.putEdges ?? vi.fn().mockResolvedValue(undefined),
         tombstoneEdge: overrides.tombstoneEdge ?? vi.fn().mockResolvedValue(undefined),
         getInkPages: overrides.getInkPages ?? vi.fn().mockResolvedValue([]),
@@ -490,7 +494,7 @@ describe("HubSyncControl (step-2 stub)", () => {
         await vi.runAllTimersAsync();
       });
 
-      expect(button.dataset.stage).toBe("index");
+      expect(button.dataset.stage).toBe("failed");
       expect(button.dataset.error).toContain("no hub");
       expect(
         (client as unknown as { indexFromBytes: ReturnType<typeof vi.fn> }).indexFromBytes,
@@ -554,9 +558,9 @@ describe("HubSyncControl (step-2 stub)", () => {
         await vi.runAllTimersAsync();
       });
 
-      expect(button.dataset.stage).toBe("pad");
+      expect(button.dataset.stage).toBe("failed");
       expect(button.dataset.error).toContain("unreachable");
-      expect(activeLabel(button)).toBe("Pad");
+      expect(activeLabel(button)).toBe("Sync failed");
       expect(walkReports.at(-1)?.stage).toBe("pad");
       expect(client.getDocIndex).not.toHaveBeenCalled();
     });
@@ -765,7 +769,7 @@ describe("HubSyncControl (step-2 stub)", () => {
         await vi.runAllTimersAsync();
       });
 
-      expect(button.dataset.stage).toBe("index");
+      expect(button.dataset.stage).toBe("failed");
       expect(button.dataset.error).toContain("does not have this file");
       expect(
         (client as unknown as { indexFromBytes: ReturnType<typeof vi.fn> }).indexFromBytes,
@@ -824,9 +828,9 @@ describe("HubSyncControl (step-2 stub)", () => {
         await vi.runAllTimersAsync();
       });
       // Parked on the failing stage's label with the error visible.
-      expect(button.dataset.stage).toBe("index");
+      expect(button.dataset.stage).toBe("failed");
       expect(button.dataset.error).toContain("unreachable");
-      expect(activeLabel(button)).toBe("Index");
+      expect(activeLabel(button)).toBe("Sync failed");
 
       // Next tap retries; this time the hub answers.
       await act(async () => {
@@ -914,7 +918,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       let resolveConflict: ((value: { pick: "local" | "server" }) => void) | undefined;
       const hostMutable = host as unknown as {
         pad(): Promise<unknown>;
-        onConflict(c: unknown): Promise<{ pick: "local" | "server" }>;
+        onConflict(c: unknown, lifecycle?: ConflictUiLifecycle): Promise<{ pick: "local" | "server" }>;
       };
       hostMutable.pad = async () => ({
         kind: "annotate" as const,
@@ -923,8 +927,9 @@ describe("HubSyncControl (step-2 stub)", () => {
         buildBody: () => ({ id: "pad-1", name: "book.pdf", updated_at: 900 }),
         markHubAck: () => {},
       });
-      hostMutable.onConflict = () =>
+      hostMutable.onConflict = (_conflict, lifecycle) =>
         new Promise((resolve) => {
+          lifecycle?.onMounted();
           resolveConflict = resolve;
         });
       const hostEl = document.createElement("div");
@@ -1114,7 +1119,7 @@ describe("HubSyncControl (step-2 stub)", () => {
         button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
         await vi.runAllTimersAsync();
       });
-      expect(button.dataset.stage).toBe("pad");
+      expect(button.dataset.stage).toBe("failed");
       expect(button.dataset.error).toContain("hub went away");
       const indexCallsAfterFirst = getDocIndex.mock.calls.length;
       expect(indexCallsAfterFirst).toBeGreaterThan(0);
@@ -1289,7 +1294,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       reload.mockRejectedValueOnce(new Error("reload failed"));
       const button = await mountWalk(client, withWhiteboardPad(host));
       await act(async () => { button.click(); await vi.runAllTimersAsync(); });
-      expect(button.dataset.stage).toBe("pull");
+      expect(button.dataset.stage).toBe("failed");
       expect(walkReports.at(-1)).toMatchObject({ stage: "pull", error: "reload failed" });
       await act(async () => { button.click(); await vi.runAllTimersAsync(); });
       expect(button.dataset.stage).toBe("synced");
@@ -1442,7 +1447,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       const last = walkReports.at(-1) as { stage: string; error?: string } | null;
       expect(last?.stage).toBe("index");
       expect(last?.error).toContain("unreachable");
-      expect(button.dataset.stage).toBe("index");
+      expect(button.dataset.stage).toBe("failed");
     });
 
     it("records the hub ack after an ordinary push", async () => {
@@ -1481,8 +1486,9 @@ describe("HubSyncControl (step-2 stub)", () => {
       expect(acked).toEqual([777]);
     });
 
-    it("stashes a failed ink download as null, not an empty pad", async () => {
+    it("opens the merge UI before preview downloads, even with prefer-local set", async () => {
       vi.useFakeTimers();
+      localStorage.setItem("whiteboard.offlineMerge.v1", "prefer-local");
       const annotateRow = { id: "pad-1", updated_at: 500, deleted_at: null };
       const client = fakeClient({
         // The digest names a page, so the freeze actually asks for one — an
@@ -1524,7 +1530,49 @@ describe("HubSyncControl (step-2 stub)", () => {
       });
 
       expect(conflicts).toHaveLength(1);
-      expect((conflicts[0] as { serverInk: unknown }).serverInk).toBeNull();
+      expect(client.getInkPage).not.toHaveBeenCalled();
+      expect((conflicts[0] as { hubInkPageIds: number[] }).hubInkPageIds).toContain(3);
+    });
+
+    it("uploads the current book before reporting a refused unrelated backup", async () => {
+      vi.useFakeTimers();
+      resetPadSyncQueueForTests();
+      const client = fakeClient({ putPadSnapshot: vi.fn().mockRejectedValue(new Error("The backup's book is missing on the hub.")) });
+      const { host } = makeHost(null);
+      withPad(host);
+      await enqueuePadSync({ op: "putSnapshot", body: { kind: "whiteboard", key: "old-book", tier: "2h", written_at: 1, payload: {} } });
+      const button = await mountWalk(client, host);
+      await act(async () => { button.click(); await vi.runAllTimersAsync(); });
+      expect(client.putAnnotatePad).toHaveBeenCalledOnce();
+      expect(button.dataset.stage).toBe("failed");
+      expect(button.dataset.error).toContain("book is missing");
+      expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "putSnapshot" }]);
+      resetPadSyncQueueForTests();
+    });
+
+    it("fails a 409 with no mounted merge UI and one tap starts a fresh walk", async () => {
+      vi.useFakeTimers();
+      const client = fakeClient({ putAnnotatePad: vi.fn().mockRejectedValue(new LcApiError("stale", 409)) });
+      const { host, errors } = makeHost(null);
+      withPad(host);
+      let pendingSignal: AbortSignal | undefined;
+      host.onConflict = (_conflict, lifecycle) => {
+        pendingSignal = lifecycle?.signal;
+        return new Promise(() => {});
+      };
+      const button = await mountWalk(client, host);
+      await act(async () => { button.click(); await vi.runAllTimersAsync(); });
+      expect(button.dataset.stage).toBe("failed");
+      expect(activeLabel(button)).toBe("Sync failed");
+      expect(button.getAttribute("aria-busy")).toBe("false");
+      expect(button.querySelector('[aria-label="Sync error"]')).not.toBeNull();
+      expect(errors).toHaveBeenLastCalledWith(expect.stringContaining("newer copy of book.pdf"));
+      expect(pendingSignal?.aborted).toBe(true);
+      vi.mocked(client.putAnnotatePad).mockImplementation(async (_id, body) => ({ ...body, updated_at: 900 }));
+      await act(async () => { button.click(); await vi.runAllTimersAsync(); });
+      expect(button.dataset.stage).toBe("synced");
+      expect(client.putAnnotatePad).toHaveBeenCalledTimes(2);
+      expect(client.pingPadSync).toHaveBeenCalledTimes(2);
     });
 
     it("does not PUT the pad after the workspace unmounts", async () => {
