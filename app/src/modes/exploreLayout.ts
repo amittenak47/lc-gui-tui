@@ -194,6 +194,8 @@ export interface StepOptions {
  */
 const MIN_GAP = 0.26;
 const REPEL = 0.6;
+/** Linked nodes may sit inside each other's caption gap; only this close do they push apart. */
+const LINKED_GAP = 0.16;
 /**
  * How long a link wants to be, and how hard it insists.
  *
@@ -205,10 +207,11 @@ const REPEL = 0.6;
  * past {@link LINK_MAX_STRETCH} it stops growing, so a long link cannot drag a
  * node across the map.
  *
- * Rest length sits above {@link MIN_GAP} so a spring and the spacing that keeps
- * captions apart are not permanently fighting each other.
+ * Rest length sits under {@link MIN_GAP}, so linked nodes gather closer than
+ * strangers, and above {@link LINKED_GAP}, so a spring and the spacing that
+ * keeps their captions apart are not permanently fighting each other.
  */
-const LINK_REST = 0.34;
+const LINK_REST = 0.24;
 const LINK_SPRING = 5;
 /**
  * A well-linked node pulls harder, and gives way less.
@@ -225,7 +228,7 @@ const HUB_PULL = 1.2;
  * about half the stretch: a long pull comes back further than a short one, and
  * neither undoes the drag. Unlinked nodes keep {@link HOME_PULL} and drift on.
  */
-const DROP_PULL = 8;
+const DROP_PULL = 5;
 /** Past this the spring stops getting stronger, so one long edge cannot fling a node. */
 const LINK_MAX_STRETCH = 0.45;
 const HOME_PULL = 0.4;
@@ -255,9 +258,11 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
   // One map per frame, not one per body: the ranking is over the whole set.
   const spots = homes(bodies.map((body) => body.key));
   const degree = new Map<string, number>();
+  const linked = new Set<string>();
   for (const link of links ?? []) {
     degree.set(link.a, (degree.get(link.a) ?? 0) + 1);
     degree.set(link.b, (degree.get(link.b) ?? 0) + 1);
+    linked.add(`${link.a}\u0000${link.b}`).add(`${link.b}\u0000${link.a}`);
   }
   for (const body of bodies) {
     if (pinnedKey && body.key === pinnedKey) {
@@ -293,7 +298,8 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
       const dx = (body.x - other.x) * aspect;
       const dy = body.y - other.y;
       let dist = Math.hypot(dx, dy);
-      if (dist > gap) continue;
+      const room = linked.has(`${body.key}\u0000${other.key}`) ? Math.min(gap, LINKED_GAP) : gap;
+      if (dist > room) continue;
       // Two nodes at exactly the same point have no direction to separate in.
       // Nudge along a fixed diagonal rather than picking a random one, which
       // would make the layout non-deterministic.
@@ -302,7 +308,7 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
       if (dist < 1e-5) dist = 1e-5;
       // Linear falloff to zero at MIN_GAP: strong when overlapping, absent
       // once they are comfortable, so it never fights the pull at long range.
-      const push = REPEL * (1 - dist / gap);
+      const push = REPEL * (1 - dist / room);
       fx += (ux * push) / aspect;
       fy += uy * push;
     }

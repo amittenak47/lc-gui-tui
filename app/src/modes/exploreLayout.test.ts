@@ -317,6 +317,15 @@ describe("link springs", () => {
     });
   };
 
+  it("gathers a linked pair close, not across the map", () => {
+    const a = note("a");
+    const b = note("b");
+    const apart = ([x, y]: Body[]) => Math.hypot((x!.x - y!.x) * 1.6, x!.y - y!.y);
+    const linked = apart(rest([a, b], false, [{ a: key(a), b: key(b) }]));
+    expect(linked).toBeLessThan(0.3);
+    expect(linked).toBeLessThan(0.7 * apart(rest([a, b])));
+  });
+
   it("moves a leaf further than the hub it hangs off", () => {
     const kick = springKick(placeStar(0.08), star, starLinks);
     expect(kick.get(key(star[1]!))!).toBeGreaterThan(3 * kick.get(key(star[0]!))!);
