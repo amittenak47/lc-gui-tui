@@ -3,10 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LcApiError, type LcClient, type ProblemPadDto } from "../api/client";
 import { savePadHub, setHostLoopback } from "./padHub";
 import { beginPadHubStatusRequest, refreshPadHubStatus, reportPadHubStatus } from "./padHubStatus";
+import { walkPushPad } from "./hubWalk";
 import {
-  applyPadSyncPing, enqueuePadSync, flushPadSyncQueue, peekPadSyncQueueForTests, pushAnnotatePad,
+  applyPadSyncPing, compactManualPadSyncQueue, dropQueuedRecordUploads, enqueuePadSync, flushPadSyncQueue, peekPadSyncQueueForTests, pushAnnotatePad,
   pushDocBytes, pushPadSnapshot, pushProblemPad, pushWhiteboardPad,
-  resetPadSyncQueueForTests, restoreTrashedPad, startPadSyncRecovery, tombstonePad, waitForPadPushes,
+  resetPadSyncQueueForTests, reserveManualPadSync, restoreTrashedPad, startPadSyncRecovery, tombstonePad, waitForPadPushes,
 } from "./padSync";
 
 const state = vi.hoisted(() => ({
@@ -68,6 +69,8 @@ function status(value: "online" | "offline"): void {
 
 function client(): LcClient {
   return {
+    getWhiteboardPad: vi.fn(async () => null),
+    getAnnotatePad: vi.fn(async () => null),
     putWhiteboardPad: vi.fn(async () => ({ updated_at: 10 })),
     putAnnotatePad: vi.fn(async () => ({ updated_at: 10 })),
     putProblemPad: vi.fn(async () => ({ updated_at: 10 })),
@@ -258,6 +261,7 @@ describe("offline hub sync", () => {
     status("online");
     api.putWhiteboardPad = vi.fn(() => new Promise<never>(() => {}));
     void pushWhiteboardPad(api, notebook);
+    await vi.waitFor(() => expect(api.putWhiteboardPad).toHaveBeenCalledTimes(1));
     const waiting = waitForPadPushes("whiteboard", "w1");
     status("offline");
     await waiting;
@@ -328,7 +332,7 @@ describe("offline hub sync", () => {
     expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "deletePad", padId: "w1" }]);
   });
 
-  it("preserves queued puts on conflict and remote tombstone while flushing unrelated jobs", async () => {
+  it("keeps remote-tombstone uploads but drops unretryable 409s while flushing unrelated jobs", async () => {
     const api = client();
     await pushWhiteboardPad(api, notebook);
     await pushDocBytes(api, "h", new ArrayBuffer(4));
@@ -339,7 +343,7 @@ describe("offline hub sync", () => {
     expect(api.putDocBytes).toHaveBeenCalledTimes(1);
     api.putWhiteboardPad = vi.fn(async () => { throw new LcApiError("conflict", 409); });
     await flushPadSyncQueue(api);
-    expect(peekPadSyncQueueForTests()).toHaveLength(1);
+    expect(peekPadSyncQueueForTests()).toHaveLength(0);
     expect(state.whiteboardAck).not.toHaveBeenCalled();
   });
 
@@ -397,5 +401,114 @@ describe("offline hub sync", () => {
     await flushPadSyncQueue(api);
     expect(api.putProblemPad).toHaveBeenCalledTimes(1);
     expect(peekPadSyncQueueForTests()).toMatchObject([{ op: "putProblem" }]);
+  });
+
+  it("supersedes a stale queued upload with one manual book PUT and no 409", async () => {
+    const api = client();
+    await pushWhiteboardPad(api, notebook);
+    status("online");
+    api.putWhiteboardPad = vi.fn(async (_id, body) => {
+      if (body.base_updated_at !== 8) throw new LcApiError("stale", 409);
+      return { ...body, updated_at: 10 };
+    });
+    await compactManualPadSyncQueue();
+    await flushPadSyncQueue(api, { manual: true, excludeRecord: { kind: "whiteboard", id: "w1" } });
+    await expect(walkPushPad(api, {
+      kind: "whiteboard", id: "w1", hubAckUpdatedAt: () => 8,
+      buildBody: () => ({ id: "w1", title: "One", updated_at: 10, page_count: 1, board, agent: [], base_updated_at: 8 }),
+    }, { whiteboardRows: [{ id: "w1", updated_at: 8 }], annotateRows: [], inkDigests: [], edges: [], goneEdges: [] }))
+      .resolves.toMatchObject({ outcome: "ok" });
+    await flushPadSyncQueue(api);
+    expect(api.putWhiteboardPad).toHaveBeenCalledOnce();
+    expect(state.whiteboardAck).toHaveBeenCalledWith("w1", 10);
+    expect(state.persisted.size).toBe(0);
+    expect(peekPadSyncQueueForTests()).toEqual([]);
+  });
+
+  it("compacts only record copies and sends legacy deletes, snapshots and bytes in order", async () => {
+    const put = { op: "putWhiteboard", body: { id: "w1", title: "One", updated_at: 5, page_count: 1, board, agent: [] } };
+    const jobs = [
+      { ...put, id: "old", enqueuedAt: 1 },
+      { op: "putBytes", id: "bytes", enqueuedAt: 2, hash: "h", bytes: new ArrayBuffer(4) },
+      { op: "tombstone", id: "legacy", enqueuedAt: 3, kind: "whiteboard", padId: "gone" },
+      { ...put, id: "new", enqueuedAt: 4, body: { ...put.body, updated_at: 6 } },
+      { op: "putSnapshot", id: "snap", enqueuedAt: 5, body: { kind: "whiteboard", key: "w1", tier: "2h", written_at: 5, payload: {} } },
+      { op: "deletePad", id: "delete", enqueuedAt: 6, kind: "whiteboard", padId: "gone2", seq: 2 },
+    ];
+    jobs.forEach((job) => state.persisted.set(job.id, job));
+    state.getWhiteboard.mockResolvedValue({ ...notebook, updatedAt: 10 });
+    await compactManualPadSyncQueue();
+    expect([...state.persisted.keys()]).toEqual(["bytes", "legacy", "snap", "delete"]);
+    const events: string[] = [];
+    const api = client();
+    api.putDocBytes = vi.fn(async () => { events.push("bytes"); });
+    api.putPadSnapshot = vi.fn(async () => { events.push("snapshot"); });
+    api.tombstoneWhiteboardPad = vi.fn(async (id) => { events.push(id); return { applied: true, seq: 2 }; });
+    status("online");
+    await flushPadSyncQueue(api, { manual: true });
+    expect(events).toEqual(["bytes", "gone", "snapshot", "gone2"]);
+    expect(state.persisted.size).toBe(0);
+  });
+
+  it("retains a refused legacy deletion and its successors", async () => {
+    state.persisted.set("legacy", { op: "tombstone", id: "legacy", enqueuedAt: 1, kind: "whiteboard", padId: "gone" });
+    state.persisted.set("bytes", { op: "putBytes", id: "bytes", enqueuedAt: 2, hash: "h", bytes: new ArrayBuffer(4) });
+    const api = client();
+    api.tombstoneWhiteboardPad = vi.fn(async () => ({ applied: false, seq: 2 }));
+    status("online");
+    await expect(flushPadSyncQueue(api, { manual: true })).rejects.toThrow("queued deletion");
+    expect(api.putDocBytes).not.toHaveBeenCalled();
+    expect(state.persisted.size).toBe(2);
+  });
+
+  it("does not replay a legacy deletion over a later hub save", async () => {
+    state.persisted.set("legacy", { op: "tombstone", id: "legacy", enqueuedAt: 1, kind: "whiteboard", padId: "gone" });
+    const api = client();
+    api.getWhiteboardPad = vi.fn(async () => ({ id: "gone", updated_at: 2, sync_seq: 0 } as never));
+    status("online");
+    await expect(flushPadSyncQueue(api, { manual: true })).rejects.toThrow("queued deletion");
+    expect(api.tombstoneWhiteboardPad).not.toHaveBeenCalled();
+    expect(state.persisted.has("legacy")).toBe(true);
+  });
+
+  it("leaves newer queued edits and non-record jobs after a successful book upload", async () => {
+    await pushWhiteboardPad(client(), { ...notebook, updatedAt: 20 });
+    await pushDocBytes(client(), "h", new ArrayBuffer(4));
+    await dropQueuedRecordUploads("whiteboard", "w1", 10);
+    expect(peekPadSyncQueueForTests().map((job) => job.op)).toEqual(["putWhiteboard", "putBytes"]);
+  });
+
+  it("does not drain a backlog on startup/recovery when autosync is off", async () => {
+    const api = client();
+    await pushWhiteboardPad(api, notebook);
+    localStorage.setItem("whiteboard.hubAutoSync.v1", "off");
+    const stop = startPadSyncRecovery(api);
+    status("online");
+    await Promise.resolve();
+    expect(api.putWhiteboardPad).not.toHaveBeenCalled();
+    expect(peekPadSyncQueueForTests()).toHaveLength(1);
+    stop();
+    await flushPadSyncQueue(api, { manual: true });
+    expect(api.putWhiteboardPad).toHaveBeenCalledOnce();
+  });
+
+  it("keeps recovery from sending a book reserved by a manual walk", async () => {
+    const api = client();
+    await pushWhiteboardPad(api, notebook);
+    const release = await reserveManualPadSync("whiteboard", "w1");
+    status("online");
+    await flushPadSyncQueue(api);
+    expect(api.putWhiteboardPad).not.toHaveBeenCalled();
+    expect(peekPadSyncQueueForTests()).toHaveLength(1);
+    release();
+    await flushPadSyncQueue(api);
+    expect(api.putWhiteboardPad).toHaveBeenCalledOnce();
+  });
+
+  it("holds an unsupported operation instead of silently discarding it", async () => {
+    state.persisted.set("unknown", { id: "unknown", op: "renameFuture", enqueuedAt: 1 });
+    status("online");
+    await expect(flushPadSyncQueue(client(), { manual: true })).rejects.toThrow("Unsupported queued sync operation");
+    expect(state.persisted.has("unknown")).toBe(true);
   });
 });

@@ -42,7 +42,7 @@ function footnotesOf(
 }
 import { PAD_HUB_EVENT, loadPadHub } from "../util/padHub";
 import { getPadHubStatus, isPadHubOffline } from "../util/padHubStatus";
-import { enqueuePadSync, flushPadSyncQueue } from "../util/padSync";
+import { compactManualPadSyncQueue, enqueuePadSync, flushPadSyncQueue, reserveManualPadSync } from "../util/padSync";
 import type { DocWorkProgress } from "./DocIndexChip";
 import {
   snapshotFromPing,
@@ -407,6 +407,7 @@ export function HubSyncControl({
   const runWalk = async (from: HubSyncStage) => {
     if (walkingRef.current) return;
     walkingRef.current = true;
+    let releaseBook: (() => void) | undefined;
     const abort = new AbortController();
     walkAbortRef.current = abort;
     const throwIfAborted = () => {
@@ -449,6 +450,8 @@ export function HubSyncControl({
        * more correct of the two: every stage of a walk should be looking at
        * the same world.
        */
+      const preparingPad = await host!.pad();
+      if (preparingPad) releaseBook = await reserveManualPadSync(preparingPad.kind, preparingPad.id);
       await host?.prepare?.();
       throwIfAborted();
       if (isPadHubOffline()) {
@@ -471,6 +474,7 @@ export function HubSyncControl({
         }
         throw new Error("Desktop hub offline.");
       }
+      await compactManualPadSyncQueue();
       const ping = await client!.pingPadSync(0);
       throwIfAborted();
 
@@ -835,6 +839,11 @@ export function HubSyncControl({
         }
       }
 
+      // Upload the current book before draining unrelated historical jobs.
+      // Refused snapshots keep their queued copies and fail this walk.
+      await flushPadSyncQueue(client!, { manual: true });
+      throwIfAborted();
+
       /*
        * — G: links union cleanly; snapshots only fill gaps.
        *
@@ -905,7 +914,7 @@ export function HubSyncControl({
         progress: null,
         error: message,
       });
-    }
+    } finally { releaseBook?.(); }
   };
 
   useEffect(() => {

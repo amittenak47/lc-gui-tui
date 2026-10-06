@@ -1547,12 +1547,13 @@ export class LcClient {
       const { parseArtifactSnapshotBundle } = await import("../util/artifactSnapshot");
       parseArtifactSnapshotBundle(payload.artifactBundle, { kind: body.kind, id: body.key });
     }
-    await padInvokeOrHub(
+    const ack = await padInvokeOrHub<ApplyAckDto>(
       () => this.cmd("lc_put_snapshot", { body }),
       "PUT",
       "/pads/snapshots",
       body,
     );
+    if (ack?.applied === false) throw new Error("The hub refused the snapshot. Its book must be uploaded first.");
     if (payload?.artifactBundle !== undefined) {
       // Old hubs accepted unknown fields without preserving them. A generic
       // applied:true response is insufficient proof that the backup survived.

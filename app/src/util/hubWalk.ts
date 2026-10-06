@@ -19,7 +19,8 @@ import {
   syncInkPages,
 } from "./inkSync";
 import { localFootnoteBoardIds } from "./annotateStore";
-import { acceptHubAgent } from "./padSync";
+import { acceptHubAgent, dropQueuedRecordUploads, markHubAck } from "./padSync";
+import { withPadWriter } from "./padWriter";
 import { putPadRecord } from "./padRecordUpload";
 
 export type HubPadKind = "annotate" | "whiteboard";
@@ -105,34 +106,37 @@ export async function walkPushPad(
   pad: WalkPad,
   snapshot: WalkSnapshot,
 ): Promise<PadStageResult> {
-  const row = rowFor(snapshot, pad);
-  const acked = pad.hubAckUpdatedAt();
-  if (row && row.updated_at > acked) {
-    return {
-      outcome: "conflict",
-      hubUpdatedAt: row.updated_at,
-      detail: `the hub has changes from ${new Date(row.updated_at).toLocaleString()}`,
-    };
-  }
-
-  try {
-    const body = await Promise.resolve(pad.buildBody());
-    const written = await putPadRecord(client, pad.kind, body, snapshot.inkDigests);
-    const hubUpdatedAt = written.updated_at ?? Date.now();
-    await acceptHubAgent(pad.kind, pad.id, written.agent);
-    // Acked here rather than at the call site, so no path can push and forget.
-    await pad.markHubAck?.(hubUpdatedAt);
-    return { outcome: "ok", hubUpdatedAt };
-  } catch (cause) {
-    if (cause instanceof LcApiError && cause.status === 409) {
+  return withPadWriter(pad.kind, pad.id, async () => {
+    const row = rowFor(snapshot, pad);
+    const acked = pad.hubAckUpdatedAt();
+    if (row && row.updated_at > acked) {
       return {
         outcome: "conflict",
-        hubUpdatedAt: null,
-        detail: "the hub rejected this sync because its copy changed first",
+        hubUpdatedAt: row.updated_at,
+        detail: `the hub has changes from ${new Date(row.updated_at).toLocaleString()}`,
       };
     }
-    throw cause;
-  }
+
+    try {
+      const body = await Promise.resolve(pad.buildBody());
+      const written = await putPadRecord(client, pad.kind, body, snapshot.inkDigests);
+      const hubUpdatedAt = written.updated_at ?? Date.now();
+      await acceptHubAgent(pad.kind, pad.id, written.agent);
+      // Acked here rather than at the call site, so no path can push and forget.
+      await markHubAck(pad.kind, pad.id, hubUpdatedAt, pad.markHubAck);
+      await dropQueuedRecordUploads(pad.kind, pad.id, body.updated_at);
+      return { outcome: "ok", hubUpdatedAt };
+    } catch (cause) {
+      if (cause instanceof LcApiError && cause.status === 409) {
+        return {
+          outcome: "conflict",
+          hubUpdatedAt: null,
+          detail: "the hub rejected this sync because its copy changed first",
+        };
+      }
+      throw cause;
+    }
+  });
 }
 
 /**
