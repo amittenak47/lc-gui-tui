@@ -73,6 +73,7 @@ import {
   openedRecord,
   pinLive,
   promoteLive,
+  tabKindLoads,
   tabsReducer,
   tabUsesPdfWorker,
   visibleTabIds,
@@ -781,7 +782,7 @@ export function App() {
   if (bootHoldRef.current) bootSawLoadRef.current = true;
   {
     const kind = activeTabOf(tabState)?.kind;
-    bootIdleShellRef.current = kind === "home" || kind === "explore";
+    bootIdleShellRef.current = kind !== undefined && !tabKindLoads(kind);
   }
   const userLoadIdsRef = useRef(new Set<string>());
   const markUserLoad = useCallback((id: string) => {
@@ -1014,7 +1015,7 @@ export function App() {
       const landed = openedRecord(tabsRef.current, proposed);
       if (landed.id === tabsRef.current.activeId) return landed;
       const existed = tabsRef.current.tabs.some((tab) => tab.id === landed.id);
-      if (!existed) {
+      if (!existed && tabKindLoads(landed.kind)) {
         markUserLoad(landed.id);
         setShellLoadActive(true);
       }

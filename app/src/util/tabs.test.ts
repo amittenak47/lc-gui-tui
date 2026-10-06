@@ -10,6 +10,7 @@ import {
   type WebTab,
   activeTab,
   initialTabState,
+  tabKindLoads,
   liveOverflow,
   pinLive,
   promoteLive,
@@ -571,5 +572,15 @@ describe("pdfHoldDecodeInSplit", () => {
       { type: "open", tab: board("pad", "nb-1"), at: 2 },
     );
     expect(pdfHoldDecodeInSplit(state, "doc", false, false)).toBe(false);
+  });
+});
+
+describe("tabKindLoads", () => {
+  it("is false for the tabs the app draws itself, so no loading lap waits on them", () => {
+    expect(tabKindLoads("home")).toBe(false);
+    expect(tabKindLoads("explore")).toBe(false);
+  });
+  it("is true for tabs that open a document", () => {
+    for (const kind of ["practice", "whiteboard", "annotate", "web"] as const) expect(tabKindLoads(kind)).toBe(true);
   });
 });

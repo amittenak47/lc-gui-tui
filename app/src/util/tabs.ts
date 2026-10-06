@@ -245,6 +245,18 @@ export function newTabId(kind: TabKind): string {
   return `${kind}-${tabSeq}`;
 }
 
+/**
+ * Whether opening this kind of tab runs a document load.
+ *
+ * The shell's loading lap is cleared by the workspace's load when it ends.
+ * Home and Explore draw themselves and never load, so a lap started for them
+ * has nothing to end it: an Explore tab sat "loading" for as long as it was
+ * open.
+ */
+export function tabKindLoads(kind: TabKind): boolean {
+  return kind !== "home" && kind !== "explore";
+}
+
 export function newGroupId(): string {
   groupSeq += 1;
   return `group-${groupSeq}`;
