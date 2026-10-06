@@ -2,7 +2,8 @@
 import { gzipSync } from "fflate";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import golden from "./fixtures/sync-content-golden.json";
-import { canonicalJson, hashBytes, MAX_PACKED_INK_BYTES, normalizeRecord, recordHash, validateInk, validatePackedInk } from "./syncContent";
+import snapshots from "./fixtures/snapshot-copy-golden.json";
+import { canonicalJson, hashBytes, MAX_PACKED_INK_BYTES, normalizeRecord, normalizeSnapshotCopy, recordHash, snapshotCopyHash, validateInk, validatePackedInk } from "./syncContent";
 
 beforeAll(async () => {
   const module = "node:crypto";
@@ -30,6 +31,34 @@ describe("cross-language content contract", () => {
     const input = JSON.parse(fixture.input);
     expect(canonicalJson(normalizeRecord(input))).toBe(fixture.canonical);
     expect(await recordHash(input)).toBe(fixture.hash);
+  });
+  for (const fixture of snapshots.cases) it(`snapshot ${fixture.name}`, async () => {
+    expect(await normalizeSnapshotCopy(fixture.input)).toEqual(fixture.normalized);
+    expect(await snapshotCopyHash(fixture.input)).toBe(fixture.hash);
+  });
+  it("snapshot identity keeps camera, authored source, unknown fields and erasures", async () => {
+    const input = structuredClone(snapshots.cases[0].input);
+    const hash = await snapshotCopyHash(input);
+    input.written_at++;
+    expect(await snapshotCopyHash(input)).toBe(hash);
+    input.payload.board.appState.scrollX++;
+    expect(await snapshotCopyHash(input)).not.toBe(hash);
+    input.payload.board.appState.scrollX--;
+    input.payload.source += " ";
+    expect(await snapshotCopyHash(input)).not.toBe(hash);
+    input.payload.source = snapshots.cases[0].input.payload.source;
+    input.payload.future.updated_at++;
+    expect(await snapshotCopyHash(input)).not.toBe(hash);
+    input.payload.future.updated_at--;
+    input.payload.ink = [];
+    expect(await snapshotCopyHash(input)).not.toBe(hash);
+  });
+  it("snapshot hashing rejects unreadable recognized ink and invalid artifact JSON", async () => {
+    for (const payload of [
+      { ink: "wrong" }, { footnoteInk: [] },
+      { ink: [{ pageId: 1, updatedAt: 1, gz: "AQID" }] },
+      { artifactBundle: { assets: [{ payload: "not JSON" }] } },
+    ]) await expect(snapshotCopyHash({ tier: "24h", payload })).rejects.toThrow();
   });
   it("keeps authored paper/source/nested hashes but excludes device view", async () => {
     const value = { id: "b", hash: "source", unknown: { rev: 7, hash: "nested" },

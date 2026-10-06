@@ -5,6 +5,7 @@
  * A previously rounded JSON literal cannot be reconstructed by this helper.
  */
 import { Gunzip } from "fflate";
+import { b64ToBytes, bytesToB64 } from "../api/nativeHttp";
 
 export const MAX_PACKED_INK_BYTES = 24 * 1024 * 1024;
 export const MAX_INK_TRANSFER_BYTES = 32 * 1024 * 1024;
@@ -74,6 +75,8 @@ export function normalizeRecord(value: unknown): Record<string, unknown> {
     delete row.inkPages;
     if (row.appState != null && typeof row.appState === "object" && !Array.isArray(row.appState)) {
       for (const key of LOCAL_VIEW_KEYS) delete (row.appState as Record<string, unknown>)[key];
+      // A camera-only addition has no shared state after exclusions.
+      if (Object.keys(row.appState).length === 0) delete row.appState;
     }
   };
   board(record.board);
@@ -94,6 +97,49 @@ export async function hashBytes(bytes: Uint8Array): Promise<string> {
 
 export async function recordHash(value: unknown): Promise<string> {
   return hashBytes(new TextEncoder().encode(canonicalJson(normalizeRecord(value))));
+}
+
+/** Immutable backup identity preserves every payload field, including view state.
+ * Only known ink encodings and artifact JSON strings have representational
+ * normalization; authored source strings and unknown fields remain untouched.
+ */
+export async function normalizeSnapshotCopy(value: { tier: string; payload: unknown }): Promise<{ tier: string; payload: unknown }> {
+  check(typeof value.tier === "string", "snapshot tier must be a string");
+  const payload = JSON.parse(canonicalJson(value.payload)) as unknown;
+  check(payload === null || typeof payload === "object" && !Array.isArray(payload), "snapshot payload must be an object");
+  if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
+    const row = payload as Record<string, unknown>;
+    const ink = async (value: unknown) => {
+      check(Array.isArray(value), "snapshot ink must be an array");
+      for (const item of value) {
+        const page = object(item, "snapshot ink page must be an object");
+        check(typeof page.pageId === "number" && Number.isInteger(page.pageId)
+          && typeof page.updatedAt === "number" && Number.isInteger(page.updatedAt), "invalid snapshot ink page metadata");
+        check(typeof page.gz === "string" && page.gz.length > 0, "snapshot ink page needs gz");
+        const bytes = b64ToBytes(page.gz);
+        check(bytesToB64(bytes) === page.gz, "snapshot ink is not canonical base64");
+        page.gz = bytesToB64((await validateInk(bytes)).packed);
+      }
+    };
+    if (Object.hasOwn(row, "ink")) await ink(row.ink);
+    if (Object.hasOwn(row, "footnoteInk")) {
+      for (const pages of Object.values(object(row.footnoteInk, "snapshot footnote ink must be an object"))) await ink(pages);
+    }
+    if (Object.hasOwn(row, "artifactBundle")) {
+      const assets = object(row.artifactBundle, "invalid snapshot artifact bundle").assets;
+      check(Array.isArray(assets), "missing backup assets");
+      for (const value of assets) {
+        const asset = object(value, "invalid backup asset");
+        check(typeof asset.payload === "string", "invalid backup asset payload");
+        asset.payload = canonicalJson(JSON.parse(asset.payload));
+      }
+    }
+  }
+  return { tier: value.tier, payload };
+}
+
+export async function snapshotCopyHash(value: { tier: string; payload: unknown }): Promise<string> {
+  return hashBytes(new TextEncoder().encode(canonicalJson(await normalizeSnapshotCopy(value))));
 }
 
 function object(value: unknown, message: string): Record<string, unknown> {

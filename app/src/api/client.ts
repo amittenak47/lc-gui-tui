@@ -229,7 +229,7 @@ async function hubFetch(
   hub: PadHub,
   method: string,
   path: string,
-  init?: { json?: unknown; bytes?: ArrayBuffer },
+  init?: { json?: unknown; bytes?: ArrayBuffer; timeoutMs?: number; retryReads?: boolean },
 ): Promise<{ json: unknown; bytes: ArrayBuffer }> {
   if (isPadHubOffline(hub)) throw new PadHubOfflineError(hub);
   const statusRequest = beginPadHubStatusRequest(hub);
@@ -246,12 +246,15 @@ async function hubFetch(
   // A hub that accepts the connection and never answers held the Sync walk
   // and the attachments menu forever. Allow time for the body to move.
   const size = typeof body === "string" ? body.length : init?.bytes?.byteLength ?? 0;
-  const timeoutMs = HUB_TIMEOUT_MS + Math.ceil(size / HUB_TIMEOUT_BYTES_PER_S) * 1000;
+  const timeoutMs = init?.timeoutMs ?? HUB_TIMEOUT_MS + Math.ceil(size / HUB_TIMEOUT_BYTES_PER_S) * 1000;
   let res: Response;
   let bytes: ArrayBuffer;
   try {
     ({ res, bytes } = await withHubTimeout(timeoutMs, async (signal) => {
-      const res = await fetchWithNetworkRetry(url, { method, headers, body, signal });
+      const request = { method, headers, body, signal };
+      const res = init?.retryReads === false
+        ? await fetch(url, request)
+        : await fetchWithNetworkRetry(url, request);
       return { res, bytes: await res.arrayBuffer() };
     }));
     // HTTP failures prove the hub is reachable too; only transport failures
@@ -437,6 +440,7 @@ async function padInvokeOrHub<T>(
   method: string,
   path: string,
   json?: unknown,
+  request?: { timeoutMs: number; retryReads: false },
 ): Promise<T> {
   const hub = loadPadHub();
   if (!hub) return invoke();
@@ -444,7 +448,7 @@ async function padInvokeOrHub<T>(
     hub,
     method,
     path,
-    json !== undefined ? { json } : undefined,
+    { ...(json !== undefined ? { json } : {}), ...request },
   );
   return body as T;
 }
@@ -550,6 +554,148 @@ export interface InkPageDto {
 /** The same row without its bytes — what the ping carries. */
 export type InkPageDigestDto = Omit<InkPageDto, "gz">;
 
+export type PadKind = "annotate" | "whiteboard" | "problem";
+export type InkPadKind = Exclude<PadKind, "problem">;
+
+export interface BookPageStateDto {
+  key: string;
+  page_id: number;
+  rev: number;
+  hash: string;
+}
+export type BookPageRevisionDto = BookPageStateDto;
+
+export interface BookStateDto {
+  kind: PadKind;
+  id: string;
+  book_rev: number;
+  state: "live" | "gone" | "absent";
+  gone_seq: number | null;
+  record_rev: number;
+  record_hash: string | null;
+  record: Record<string, unknown> | null;
+  pages: BookPageStateDto[];
+  retained_unpublished?: true;
+  /** Retained bytes of a gone book, available only for explicit restoration. */
+  retained_restore_pages?: BookPageRevisionDto[];
+}
+
+export interface BookInventoryErrorDto {
+  kind: PadKind;
+  id: string;
+  book_rev: number;
+  error: { status: string; message: string };
+}
+
+export interface CommitRequestDto {
+  upload_id: string;
+  kind: PadKind;
+  id: string;
+  action: "upsert" | "delete" | "restore";
+  record: { base_rev: number; value: Record<string, unknown> } | null;
+  pages: Array<{ key: string; page_id: number; base_rev: number; hash: string }>;
+  base_book_rev?: number;
+  seq?: number;
+  gone_seq?: number;
+}
+
+export interface CommitResultDto {
+  status: "committed";
+  upload_id: string;
+  record_rev: number | null;
+  page_revs: BookPageStateDto[];
+  book: BookStateDto;
+}
+
+export interface StagedInkDto {
+  kind: InkPadKind;
+  key: string;
+  page_id: number;
+  hash: string;
+}
+
+export interface SnapshotCopyMetadataDto {
+  content_hash: string;
+  tier: string;
+  written_at: number;
+  name: string;
+}
+
+/** One transport attempt. Retry policy belongs to the book synchronizer. */
+export interface AtomicRequestOptions { timeoutMs?: number }
+export interface InkReadConditions { bookRev: number; pageRev: number }
+
+function atomicRequest(options?: AtomicRequestOptions, binaryBytes = 0): { timeoutMs: number; retryReads: false } {
+  const timeoutMs = options?.timeoutMs ?? HUB_TIMEOUT_MS + Math.ceil(binaryBytes / HUB_TIMEOUT_BYTES_PER_S) * 1000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("Sync request timeout must be finite and positive");
+  return { timeoutMs, retryReads: false };
+}
+
+function dtoObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function requireDto(condition: unknown, operation: string, body: unknown): asserts condition {
+  if (!condition) throw new LcApiError(`Invalid ${operation} response from the hub.`, 502, bodyText(body), body);
+}
+
+function validRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function validPageState(value: unknown): value is BookPageStateDto {
+  return dtoObject(value) && typeof value.key === "string" && validRevision(value.page_id)
+    && validRevision(value.rev) && typeof value.hash === "string";
+}
+
+function requireBookState(body: unknown, kind?: PadKind, id?: string): BookStateDto {
+  requireDto(dtoObject(body) && ["annotate", "whiteboard", "problem"].includes(String(body.kind))
+    && typeof body.id === "string" && (kind === undefined || body.kind === kind)
+    && (id === undefined || body.id === id) && validRevision(body.book_rev)
+    && ["live", "gone", "absent"].includes(String(body.state))
+    && (body.gone_seq === null || validRevision(body.gone_seq)) && validRevision(body.record_rev)
+    && (body.record_hash === null || typeof body.record_hash === "string")
+    && (body.record === null || dtoObject(body.record))
+    && Array.isArray(body.pages) && body.pages.every(validPageState)
+    && (body.retained_restore_pages === undefined || Array.isArray(body.retained_restore_pages)
+      && body.retained_restore_pages.every(validPageState))
+    && (body.retained_unpublished === undefined || body.retained_unpublished === true), "book state", body);
+  const book = body as unknown as BookStateDto;
+  requireDto(book.state === "live"
+    ? book.record !== null && book.record_hash !== null && book.record_hash.length > 0
+      && book.record_rev > 0 && book.gone_seq === null && book.retained_unpublished === undefined
+      && book.retained_restore_pages === undefined
+    : book.record === null && book.record_hash === null && book.record_rev === 0
+      && (book.state === "gone" ? book.gone_seq !== null && book.pages.length === 0
+        && book.retained_unpublished === undefined
+        && (book.retained_restore_pages === undefined || book.gone_seq > 0) : book.gone_seq === null
+          && book.retained_restore_pages === undefined
+          && (book.pages.length === 0 || book.retained_unpublished === true)), "book lifecycle", body);
+  const identities = new Set<string>();
+  requireDto([...book.pages, ...(book.retained_restore_pages ?? [])].every(page => {
+    const identity = `${page.key}\u001f${page.page_id}`;
+    const owned = page.key === book.id || book.kind === "annotate"
+      && page.key.startsWith(`${book.id}/fn/`) && /^[^/]+$/.test(page.key.slice(book.id.length + 4));
+    if (book.kind === "problem" || !owned || identities.has(identity)
+      || page.rev === 0 || page.hash.length === 0) return false;
+    identities.add(identity);
+    return true;
+  }), "book page vector", body);
+  return book;
+}
+
+function requireCommitResult(body: unknown, uploadId: string): CommitResultDto {
+  requireDto(dtoObject(body) && body.status === "committed" && body.upload_id === uploadId
+    && (body.record_rev === null || validRevision(body.record_rev))
+    && Array.isArray(body.page_revs) && body.page_revs.every(validPageState), "commit", body);
+  const book = requireBookState(body.book);
+  requireDto(body.record_rev === (book.state === "live" ? book.record_rev : null)
+    && (body.page_revs as BookPageStateDto[]).every(page => book.pages.some(owned =>
+      owned.key === page.key && owned.page_id === page.page_id && owned.rev === page.rev
+      && owned.hash === page.hash)), "commit revision vector", body);
+  return body as unknown as CommitResultDto;
+}
+
 export interface EdgeRowDto {
   id: string;
   from_type: string;
@@ -565,6 +711,8 @@ export interface EdgeRowDto {
 export interface PadSyncPingDto {
   features?: string[];
   book_heads?: Array<{ kind: "annotate" | "whiteboard" | "problem"; id: string; rev: number }>;
+  books?: Array<BookStateDto | BookInventoryErrorDto>;
+  errors?: BookInventoryErrorDto[];
   now: number;
   whiteboard: WhiteboardPadDto[];
   annotate: AnnotatePadDto[];
@@ -1277,15 +1425,20 @@ export class LcClient {
     }
   }
 
-  async pingPadSync(since: number): Promise<PadSyncPingDto> {
+  async pingPadSync(since: number, options?: AtomicRequestOptions): Promise<PadSyncPingDto> {
+    const request = options ? atomicRequest(options) : undefined;
     const body = await padInvokeOrHub<PadSyncPingDto>(
-      () => this.cmd("lc_pads_sync", { since }),
+      () => this.cmd("lc_pads_sync", { since }, request?.timeoutMs),
       "GET",
       `/pads/sync?since=${Math.max(0, Math.floor(since))}`,
+      undefined,
+      request,
     );
     return {
       ...(Array.isArray(body?.features) ? { features: body.features } : {}),
       ...(Array.isArray(body?.book_heads) ? { book_heads: body.book_heads } : {}),
+      ...(Array.isArray(body?.books) ? { books: body.books } : {}),
+      ...(Array.isArray(body?.errors) ? { errors: body.errors } : {}),
       now: typeof body?.now === "number" ? body.now : Date.now(),
       whiteboard: Array.isArray(body?.whiteboard) ? body.whiteboard : [],
       annotate: Array.isArray(body?.annotate) ? body.annotate : [],
@@ -1323,17 +1476,137 @@ export class LcClient {
     kind: "annotate" | "whiteboard",
     key: string,
     pageId: number,
+    conditions?: InkReadConditions,
+    options?: AtomicRequestOptions,
   ): Promise<InkPageDto | null> {
+    const request = conditions ? atomicRequest(options) : undefined;
     try {
       const row = await padInvokeOrHub<InkPageDto | null>(
-        () => this.cmd("lc_get_ink_page", { kind, key, pageId }),
+        () => this.cmd("lc_get_ink_page", {
+          kind, key, pageId,
+          ...(conditions ? { bookRev: conditions.bookRev, pageRev: conditions.pageRev } : {}),
+        }, request?.timeoutMs),
         "GET",
         `/pads/ink/${encodeURIComponent(kind)}/${encodeURIComponent(key)}/${Math.max(
           0,
           Math.floor(pageId),
-        )}`,
+        )}${conditions ? `?book_rev=${conditions.bookRev}&page_rev=${conditions.pageRev}` : ""}`,
+        undefined,
+        request,
       );
+      if (conditions) requireDto(row && typeof row === "object" && typeof row.gz === "string"
+        && row.kind === kind && row.key === key && row.page_id === pageId
+        && row.rev === conditions.pageRev && typeof row.hash === "string", "pinned ink page", row);
       return row && typeof row === "object" && typeof row.gz === "string" ? row : null;
+    } catch (cause) {
+      if (cause instanceof LcApiError && cause.status === 404) return null;
+      throw cause;
+    }
+  }
+
+  async getBookState(kind: PadKind, id: string, options?: AtomicRequestOptions): Promise<BookStateDto> {
+    const request = atomicRequest(options);
+    const body = await padInvokeOrHub<unknown>(
+      () => this.cmd("lc_get_book_state", { kind, id }, request.timeoutMs),
+      "GET", `/pads/books/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`, undefined, request,
+    );
+    return requireBookState(body, kind, id);
+  }
+
+  async checkBookHead(kind: PadKind, id: string, bookRev: number, options?: AtomicRequestOptions): Promise<{ unchanged: true; book_rev: number }> {
+    const request = atomicRequest(options);
+    const body = await padInvokeOrHub<unknown>(
+      () => this.cmd("lc_check_book_head", { kind, id, bookRev }, request.timeoutMs),
+      "GET", `/pads/books/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/head?book_rev=${bookRev}`, undefined, request,
+    );
+    requireDto(dtoObject(body) && body.unchanged === true && body.book_rev === bookRev, "book head", body);
+    return body as { unchanged: true; book_rev: number };
+  }
+
+  async stageInkPage(uploadId: string, kind: InkPadKind, key: string, pageId: number, gz: string, options?: AtomicRequestOptions): Promise<{ staged: true; hash: string }> {
+    const request = atomicRequest(options, b64ToBytes(gz).byteLength);
+    const body = { gz };
+    const ack = await padInvokeOrHub<unknown>(
+      () => this.cmd("lc_stage_ink_page", { uploadId, kind, key, pageId, body }, request.timeoutMs),
+      "PUT", `/pads/stage/${encodeURIComponent(uploadId)}/${encodeURIComponent(kind)}/${encodeURIComponent(key)}/${pageId}`, body, request,
+    );
+    requireDto(dtoObject(ack) && ack.staged === true && typeof ack.hash === "string", "staging", ack);
+    return ack as { staged: true; hash: string };
+  }
+
+  async listStagedInk(uploadId: string, options?: AtomicRequestOptions): Promise<StagedInkDto[]> {
+    const request = atomicRequest(options);
+    const body = await padInvokeOrHub<unknown>(
+      () => this.cmd("lc_list_staged", { uploadId }, request.timeoutMs),
+      "GET", `/pads/stage/${encodeURIComponent(uploadId)}`, undefined, request,
+    );
+    requireDto(Array.isArray(body) && body.every(row => dtoObject(row)
+      && (row.kind === "annotate" || row.kind === "whiteboard") && typeof row.key === "string"
+      && validRevision(row.page_id) && typeof row.hash === "string"), "staged inventory", body);
+    return body as StagedInkDto[];
+  }
+
+  async commitPad(body: CommitRequestDto, options?: AtomicRequestOptions): Promise<CommitResultDto> {
+    const request = atomicRequest(options);
+    const result = await padInvokeOrHub<unknown>(
+      () => this.cmd("lc_commit_pad", { body }, request.timeoutMs), "POST", "/pads/commit", body, request,
+    );
+    const ack = requireCommitResult(result, body.upload_id);
+    requireDto(ack.book.kind === body.kind && ack.book.id === body.id, "commit identity", result);
+    return ack;
+  }
+
+  /** Null means no retained receipt; it cannot prove that a commit never ran. */
+  async getPadCommit(uploadId: string, options?: AtomicRequestOptions): Promise<CommitResultDto | null> {
+    const request = atomicRequest(options);
+    try {
+      const body = await padInvokeOrHub<unknown>(
+        () => this.cmd("lc_get_pad_commit", { uploadId }, request.timeoutMs),
+        "GET", `/pads/commits/${encodeURIComponent(uploadId)}`, undefined, request,
+      );
+      return requireCommitResult(body, uploadId);
+    } catch (cause) {
+      if (cause instanceof LcApiError && cause.status === 404) return null;
+      throw cause;
+    }
+  }
+
+  async putSnapshotCopy(kind: PadKind, key: string, contentHash: string, body: PadSnapshotDto, options?: AtomicRequestOptions): Promise<SnapshotCopyMetadataDto> {
+    const request = atomicRequest(options);
+    const ack = await padInvokeOrHub<unknown>(
+      () => this.cmd("lc_put_snapshot_copy", { kind, key, contentHash, body }, request.timeoutMs),
+      "PUT", `/pads/snapshot-copies/${encodeURIComponent(kind)}/${encodeURIComponent(key)}/${encodeURIComponent(contentHash)}`, body, request,
+    );
+    requireDto(dtoObject(ack) && ack.content_hash === contentHash && typeof ack.tier === "string"
+      && typeof ack.written_at === "number" && Number.isFinite(ack.written_at)
+      && typeof ack.name === "string", "snapshot copy acknowledgement", ack);
+    return ack as unknown as SnapshotCopyMetadataDto;
+  }
+
+  async listSnapshotCopies(kind: PadKind, key: string, options?: AtomicRequestOptions): Promise<SnapshotCopyMetadataDto[]> {
+    const request = atomicRequest(options);
+    const body = await padInvokeOrHub<unknown>(
+      () => this.cmd("lc_list_snapshot_copies", { kind, key }, request.timeoutMs),
+      "GET", `/pads/snapshot-copies/${encodeURIComponent(kind)}/${encodeURIComponent(key)}`, undefined, request,
+    );
+    requireDto(Array.isArray(body) && body.every(row => dtoObject(row)
+      && typeof row.content_hash === "string" && typeof row.tier === "string"
+      && typeof row.written_at === "number" && Number.isFinite(row.written_at)
+      && typeof row.name === "string"), "snapshot copy inventory", body);
+    return body as SnapshotCopyMetadataDto[];
+  }
+
+  async getSnapshotCopy(kind: PadKind, key: string, contentHash: string, options?: AtomicRequestOptions): Promise<PadSnapshotDto | null> {
+    const request = atomicRequest(options);
+    try {
+      const body = await padInvokeOrHub<unknown>(
+        () => this.cmd("lc_get_snapshot_copy", { kind, key, contentHash }, request.timeoutMs),
+        "GET", `/pads/snapshot-copies/${encodeURIComponent(kind)}/${encodeURIComponent(key)}/${encodeURIComponent(contentHash)}`, undefined, request,
+      );
+      requireDto(dtoObject(body) && body.kind === kind && body.key === key
+        && typeof body.tier === "string" && typeof body.written_at === "number"
+        && Number.isFinite(body.written_at) && Object.hasOwn(body, "payload"), "snapshot copy", body);
+      return body as unknown as PadSnapshotDto;
     } catch (cause) {
       if (cause instanceof LcApiError && cause.status === 404) return null;
       throw cause;
@@ -1669,13 +1942,14 @@ export class LcClient {
 
     const run = invoke<unknown>(command, args ?? {});
     let raw: unknown;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       raw =
         timeoutMs != null && timeoutMs > 0
           ? await Promise.race([
               run,
               new Promise<never>((_, reject) => {
-                window.setTimeout(() => {
+                timer = setTimeout(() => {
                   reject(
                     new LcApiError(
                       `the harness did not answer ${command} within ${Math.round(timeoutMs / 1000)}s`,
@@ -1691,6 +1965,8 @@ export class LcClient {
       const message = cause instanceof Error ? cause.message : String(cause);
       announceUnreachable(message);
       throw new LcApiError(message, 0);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
 
     const result = readInvokeResult<T>(raw);

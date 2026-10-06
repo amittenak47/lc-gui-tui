@@ -17,6 +17,8 @@ use crate::config::config_dir;
 mod artifacts;
 pub mod artifact_assets;
 pub mod sync_content;
+pub mod atomic_sync;
+pub mod snapshot_copies;
 mod revisions;
 #[cfg(test)]
 mod foundation_tests;
@@ -166,6 +168,9 @@ pub fn open(path: &Path) -> Result<Connection> {
     ); CREATE INDEX IF NOT EXISTS idx_artifact_asset_parent ON artifact_assets(parent_kind, parent_id);")?;
     migrate_tombstones_to_gone(&conn)?;
     revisions::migrate(&conn)?;
+    atomic_sync::migrate(&conn)?;
+    snapshot_copies::migrate(&conn)?;
+    atomic_sync::sweep(&conn)?;
     Ok(())
     })?;
     Ok(conn)
@@ -788,6 +793,10 @@ pub fn put_whiteboard(conn: &Connection, pad: &WhiteboardPad) -> Result<PutOutco
 }
 
 pub fn put_whiteboard_with_clock(conn: &Connection, pad: &WhiteboardPad, clock: &dyn Clock) -> Result<PutOutcome<WhiteboardPad>> {
+    write_whiteboard(conn,pad,clock,true)
+}
+
+fn write_whiteboard(conn: &Connection, pad: &WhiteboardPad, clock: &dyn Clock, legacy: bool) -> Result<PutOutcome<WhiteboardPad>> {
     write_transaction(conn, || {
     artifacts::validate(pad.artifacts.as_ref(), None, "whiteboard", &pad.id)?;
     artifacts::require_assets(conn, pad.artifacts.as_ref(), "whiteboard", &pad.id)?;
@@ -804,12 +813,14 @@ pub fn put_whiteboard_with_clock(conn: &Connection, pad: &WhiteboardPad, clock: 
         }
     }
     if let Some(stored) = existing.as_ref() {
+        if legacy {
         if let Some(base) = pad.base_updated_at {
             if base != stored.updated_at {
                 return Ok(PutOutcome::Conflict(stored.clone()));
             }
         } else if pad.updated_at < stored.updated_at {
             return Ok(PutOutcome::Conflict(stored.clone()));
+        }
         }
         artifacts::validate(pad.artifacts.as_ref(), stored.artifacts.as_ref(), "whiteboard", &pad.id)?;
         insert_revision(
@@ -863,7 +874,7 @@ pub fn put_whiteboard_with_clock(conn: &Connection, pad: &WhiteboardPad, clock: 
     extra.extend(pad.extra.clone());
     conn.execute("UPDATE whiteboard SET rev=?1,extra_json=?2 WHERE id=?3",
         params![rev, serde_json::to_string(&extra)?, pad.id])?;
-    bump_book_head(conn,"whiteboard",&pad.id)?;
+    if legacy { bump_book_head(conn,"whiteboard",&pad.id)?; }
     Ok(PutOutcome::Written(
         read_whiteboard(conn, &pad.id)?.expect("just wrote"),
     ))
@@ -875,6 +886,10 @@ pub fn put_annotate(conn: &Connection, pad: &AnnotatePad) -> Result<PutOutcome<A
 }
 
 pub fn put_annotate_with_clock(conn: &Connection, pad: &AnnotatePad, clock: &dyn Clock) -> Result<PutOutcome<AnnotatePad>> {
+    write_annotate(conn,pad,clock,true)
+}
+
+fn write_annotate(conn: &Connection, pad: &AnnotatePad, clock: &dyn Clock, legacy: bool) -> Result<PutOutcome<AnnotatePad>> {
     write_transaction(conn, || {
     artifacts::validate(pad.artifacts.as_ref(), None, "annotate", &pad.id)?;
     artifacts::require_assets(conn, pad.artifacts.as_ref(), "annotate", &pad.id)?;
@@ -891,12 +906,14 @@ pub fn put_annotate_with_clock(conn: &Connection, pad: &AnnotatePad, clock: &dyn
         }
     }
     if let Some(stored) = existing.as_ref() {
+        if legacy {
         if let Some(base) = pad.base_updated_at {
             if base != stored.updated_at {
                 return Ok(PutOutcome::Conflict(stored.clone()));
             }
         } else if pad.updated_at < stored.updated_at {
             return Ok(PutOutcome::Conflict(stored.clone()));
+        }
         }
         artifacts::validate(pad.artifacts.as_ref(), stored.artifacts.as_ref(), "annotate", &pad.id)?;
         insert_revision(
@@ -964,7 +981,7 @@ pub fn put_annotate_with_clock(conn: &Connection, pad: &AnnotatePad, clock: &dyn
     extra.extend(pad.extra.clone());
     conn.execute("UPDATE annotate SET rev=?1,extra_json=?2 WHERE id=?3",
         params![rev, serde_json::to_string(&extra)?, pad.id])?;
-    bump_book_head(conn,"annotate",&pad.id)?;
+    if legacy { bump_book_head(conn,"annotate",&pad.id)?; }
     Ok(PutOutcome::Written(
         read_annotate(conn, &pad.id)?.expect("just wrote"),
     ))
@@ -980,6 +997,10 @@ pub fn put_problem(conn: &Connection, pad: &ProblemPad) -> Result<PutOutcome<Pro
 }
 
 pub fn put_problem_with_clock(conn: &Connection, pad: &ProblemPad, clock: &dyn Clock) -> Result<PutOutcome<ProblemPad>> {
+    write_problem(conn,pad,clock,true)
+}
+
+fn write_problem(conn: &Connection, pad: &ProblemPad, clock: &dyn Clock, legacy: bool) -> Result<PutOutcome<ProblemPad>> {
     write_transaction(conn, || {
     let id = if pad.id.trim().is_empty() {
         format!("{}/{}", pad.dataset.trim(), pad.task_id.trim())
@@ -1005,7 +1026,7 @@ pub fn put_problem_with_clock(conn: &Connection, pad: &ProblemPad, clock: &dyn C
     if gone > 0 && pad.sync_seq <= gone {
         return Ok(PutOutcome::Gone { seq: gone });
     }
-    if existing.is_none() && pad.base_rev.is_some_and(|rev| rev != 0) {
+    if legacy && existing.is_none() && pad.base_rev.is_some_and(|rev| rev != 0) {
         // The route converts this missing-base conflict to its normal refusal.
         let mut absent = pad.clone(); absent.rev = 0;
         return Ok(PutOutcome::Conflict(absent));
@@ -1018,6 +1039,7 @@ pub fn put_problem_with_clock(conn: &Connection, pad: &ProblemPad, clock: &dyn C
         }
     }
     if let Some(stored) = existing.as_ref() {
+        if legacy {
         if let Some(base) = pad.base_rev {
             if base != stored.rev { return Ok(PutOutcome::Conflict(stored.clone())); }
         } else if let Some(base) = pad.base_updated_at {
@@ -1026,6 +1048,7 @@ pub fn put_problem_with_clock(conn: &Connection, pad: &ProblemPad, clock: &dyn C
             }
         } else if pad.updated_at < stored.updated_at {
             return Ok(PutOutcome::Conflict(stored.clone()));
+        }
         }
         artifacts::validate(pad.artifacts.as_ref(), stored.artifacts.as_ref(), "problem", &pad.id)?;
         insert_revision(
@@ -1073,7 +1096,7 @@ pub fn put_problem_with_clock(conn: &Connection, pad: &ProblemPad, clock: &dyn C
     extra.extend(pad.extra.clone());
     conn.execute("UPDATE problem SET rev=?1,extra_json=?2 WHERE id=?3",
         params![rev, serde_json::to_string(&extra)?, pad.id])?;
-    bump_book_head(conn,"problem",&pad.id)?;
+    if legacy { bump_book_head(conn,"problem",&pad.id)?; }
     Ok(PutOutcome::Written(
         read_problem(conn, &pad.id)?.expect("just wrote"),
     ))
@@ -1580,7 +1603,7 @@ pub fn delete_pad_ink(conn: &Connection, kind: &str, pad_id: &str) -> Result<()>
         let prefix = format!("{pad_id}{INK_FOOTNOTE_SEP}");
         conn.execute(
             "DELETE FROM ink_pages WHERE kind = ?1 AND substr(key, 1, ?2) = ?3",
-            params![kind, prefix.len() as i64, prefix],
+            params![kind, prefix.chars().count() as i64, prefix],
         )?;
     }
     Ok(())

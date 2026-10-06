@@ -69,6 +69,8 @@ fn normalize_board(board: &mut Value) {
         object.remove("inkPages");
         if let Some(state) = object.get_mut("appState").and_then(Value::as_object_mut) {
             for key in LOCAL_VIEW_KEYS { state.remove(*key); }
+            // A camera-only addition has no shared state after exclusions.
+            if state.is_empty() { object.remove("appState"); }
         }
     }
 }

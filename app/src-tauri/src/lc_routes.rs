@@ -591,14 +591,63 @@ pub async fn lc_get_ink_page(
     kind: String,
     key: String,
     page_id: i64,
+    book_rev: Option<i64>,
+    page_rev: Option<i64>,
 ) -> Result<LcResponse, String> {
     go(
         state,
         "GET",
-        format!("/pads/ink/{}/{}/{}", enc(&kind), enc(&key), page_id),
+        format!("/pads/ink/{}/{}/{}{}", enc(&kind), enc(&key), page_id,
+            qs(&[("book_rev", book_rev.map(|n| n.to_string())),
+                 ("page_rev", page_rev.map(|n| n.to_string()))])),
         None,
     )
     .await
+}
+
+#[tauri::command]
+pub async fn lc_get_book_state(state: State<'_, Shared>, kind: String, id: String) -> Result<LcResponse, String> {
+    go(state, "GET", format!("/pads/books/{}/{}", enc(&kind), enc(&id)), None).await
+}
+
+#[tauri::command]
+pub async fn lc_check_book_head(state: State<'_, Shared>, kind: String, id: String, book_rev: i64) -> Result<LcResponse, String> {
+    go(state, "GET", format!("/pads/books/{}/{}/head?book_rev={book_rev}", enc(&kind), enc(&id)), None).await
+}
+
+#[tauri::command]
+pub async fn lc_stage_ink_page(state: State<'_, Shared>, upload_id: String, kind: String, key: String, page_id: i64, body: serde_json::Value) -> Result<LcResponse, String> {
+    go(state, "PUT", format!("/pads/stage/{}/{}/{}/{}", enc(&upload_id), enc(&kind), enc(&key), page_id), Some(body)).await
+}
+
+#[tauri::command]
+pub async fn lc_list_staged(state: State<'_, Shared>, upload_id: String) -> Result<LcResponse, String> {
+    go(state, "GET", format!("/pads/stage/{}", enc(&upload_id)), None).await
+}
+
+#[tauri::command]
+pub async fn lc_commit_pad(state: State<'_, Shared>, body: serde_json::Value) -> Result<LcResponse, String> {
+    go(state, "POST", "/pads/commit".into(), Some(body)).await
+}
+
+#[tauri::command]
+pub async fn lc_get_pad_commit(state: State<'_, Shared>, upload_id: String) -> Result<LcResponse, String> {
+    go(state, "GET", format!("/pads/commits/{}", enc(&upload_id)), None).await
+}
+
+#[tauri::command]
+pub async fn lc_put_snapshot_copy(state: State<'_, Shared>, kind: String, key: String, content_hash: String, body: serde_json::Value) -> Result<LcResponse, String> {
+    go(state, "PUT", format!("/pads/snapshot-copies/{}/{}/{}", enc(&kind), enc(&key), enc(&content_hash)), Some(body)).await
+}
+
+#[tauri::command]
+pub async fn lc_list_snapshot_copies(state: State<'_, Shared>, kind: String, key: String) -> Result<LcResponse, String> {
+    go(state, "GET", format!("/pads/snapshot-copies/{}/{}", enc(&kind), enc(&key)), None).await
+}
+
+#[tauri::command]
+pub async fn lc_get_snapshot_copy(state: State<'_, Shared>, kind: String, key: String, content_hash: String) -> Result<LcResponse, String> {
+    go(state, "GET", format!("/pads/snapshot-copies/{}/{}/{}", enc(&kind), enc(&key), enc(&content_hash)), None).await
 }
 
 #[tauri::command]
@@ -920,4 +969,3 @@ pub async fn lc_clone_device_prefs(
     )
     .await
 }
-

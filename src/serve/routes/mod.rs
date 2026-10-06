@@ -12,6 +12,7 @@ mod corpus;
 mod docs;
 mod doc_bytes;
 mod pads;
+mod atomic_pads;
 mod practice;
 mod workspace;
 
@@ -33,6 +34,11 @@ pub use docs::{
     put_index as put_docs_index, retrieve as retrieve_docs, retrieve_library as retrieve_library_docs,
 };
 pub use doc_bytes::{get_doc_bytes, head_doc_bytes, put_doc_bytes};
+pub use atomic_pads::{
+    get_book_state, check_book_head, stage_ink_page, list_staged_ink,
+    commit_pad, get_pad_commit, put_snapshot_copy, list_snapshot_copies,
+    get_snapshot_copy,
+};
 pub use pads::{
     get_artifact_asset, put_artifact_asset,
     archive_annotate, archive_whiteboard, clone_device_prefs, get_device_prefs,

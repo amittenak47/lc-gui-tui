@@ -31,6 +31,18 @@
       "input": "{\"id\":\"practice\",\"board\":{\"ink\":[{\"kind\":\"erase\",\"points\":[{\"x\":1.5,\"y\":2}],\"radius\":8}],\"appState\":{\"pdfSpread\":false,\"paperColor\":\"white\"}},\"agent\":[{\"id\":\"a\",\"deleted\":true}]}",
       "canonical": "{\"agent\":[{\"deleted\":true,\"id\":\"a\"}],\"board\":{\"appState\":{\"paperColor\":\"white\"},\"ink\":[{\"kind\":\"erase\",\"points\":[{\"x\":1.5,\"y\":2}],\"radius\":8}]},\"id\":\"practice\"}",
       "hash": "cab4b95ec4fddfe17c48a2fe76fc1881c6f9acf66ace8b4b6001039990c76937"
+    },
+    {
+      "name": "absent camera containers",
+      "input": "{\"id\":\"book\",\"board\":{\"elements\":[]},\"footnote_boards\":{\"scratch\":{\"board\":{},\"pageCount\":1}}}",
+      "canonical": "{\"board\":{\"elements\":[]},\"footnote_boards\":{\"scratch\":{\"board\":{},\"pageCount\":1}},\"id\":\"book\"}",
+      "hash": "0be5754737d8a8bf6f09492d53b696308850d9f4c3b60c70c7c1e1c7108a800d"
+    },
+    {
+      "name": "camera-only containers remain unshared",
+      "input": "{\"id\":\"book\",\"board\":{\"elements\":[],\"appState\":{\"scrollX\":99,\"scrollY\":12,\"zoom\":3,\"pdfPage\":5,\"pdfSpread\":true}},\"footnote_boards\":{\"scratch\":{\"board\":{\"appState\":{\"scrollX\":-1,\"scrollY\":0,\"zoom\":2}},\"pageCount\":1}}}",
+      "canonical": "{\"board\":{\"elements\":[]},\"footnote_boards\":{\"scratch\":{\"board\":{},\"pageCount\":1}},\"id\":\"book\"}",
+      "hash": "0be5754737d8a8bf6f09492d53b696308850d9f4c3b60c70c7c1e1c7108a800d"
     }
   ],
   "ink": [

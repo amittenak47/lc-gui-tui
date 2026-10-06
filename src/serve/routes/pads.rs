@@ -305,6 +305,7 @@ pub struct PadSyncPing {
     /// Capability is advertised only once every modern transport is available.
     pub features: Vec<String>,
     pub book_heads: Vec<pads::BookHead>,
+    pub books: Vec<serde_json::Value>,
     pub now: i64,
     pub whiteboard: Vec<WhiteboardPad>,
     pub annotate: Vec<AnnotatePad>,
@@ -340,9 +341,11 @@ pub async fn sync_pads(Query(query): Query<SyncQuery>) -> Result<Json<PadSyncPin
 
 /// All inventory components must describe the same database snapshot.
 fn pad_sync_inventory(conn: &rusqlite::Connection, since: i64, now: i64) -> anyhow::Result<PadSyncPing> {
+    pads::atomic_sync::sweep(conn)?;
     pads::read_transaction(conn, || Ok(PadSyncPing {
-        features: Vec::new(),
+        features: vec!["atomic_commit".into(), "atomic_book_sync_v1".into()],
         book_heads: pads::list_book_heads(conn)?,
+        books: pads::atomic_sync::list_book_inventory(conn)?,
         now,
         whiteboard: pads::list_changed_whiteboard(conn, since)?,
         annotate: pads::list_changed_annotate(conn, since)?,
@@ -360,7 +363,7 @@ mod inventory_tests {
     use super::*;
 
     #[test]
-    fn revisions_without_complete_protocol_do_not_advertise_atomic_sync() {
+    fn complete_protocol_inventory_advertises_capability_and_revisions() {
         let dir = tempfile::tempdir().unwrap();
         let conn = pads::open(&dir.path().join("pads.db")).unwrap();
         let record: WhiteboardPad = serde_json::from_value(serde_json::json!({
@@ -370,7 +373,7 @@ mod inventory_tests {
         pads::put_whiteboard(&conn, &record).unwrap();
         let inventory = pad_sync_inventory(&conn, 0, 100).unwrap();
         let json = serde_json::to_value(&inventory).unwrap();
-        assert!(inventory.features.is_empty());
+        assert_eq!(inventory.features, ["atomic_commit", "atomic_book_sync_v1"]);
         assert!(json["whiteboard"][0]["rev"].as_i64().unwrap() > 0);
         assert_eq!(json["book_heads"][0]["id"], "book");
         assert!(json["book_heads"][0]["rev"].as_i64().unwrap() > 0);
@@ -396,16 +399,34 @@ pub async fn get_ink_pages(
 /// only one of those is a reason to clear the page on this device.
 pub async fn get_ink_page(
     UrlPath((kind, key, page_id)): UrlPath<(String, String, i64)>,
-) -> Result<Json<pads::InkPageRow>, AppError> {
+    Query(conditions): Query<InkReadQuery>,
+) -> Result<Response, AppError> {
+    match (conditions.book_rev, conditions.page_rev) {
+        (Some(book_rev), Some(page_rev)) => {
+            let result = blocking(move || {
+                let conn = pads::open(&pads::db_path()?)?;
+                pads::atomic_sync::get_conditional_ink(&conn, &kind, &key, page_id, book_rev, page_rev)
+            }).await?;
+            return Ok(super::atomic_pads::protocol_response(result));
+        }
+        (None, None) => {}
+        _ => return Err(AppError::bad_request(anyhow::anyhow!("book_rev and page_rev must be supplied together"))),
+    }
     let row = blocking(move || {
         let conn = pads::open(&pads::db_path()?)?;
         pads::get_ink_page(&conn, &kind, &key, page_id)
     })
     .await?;
     match row {
-        Some(row) => Ok(Json(row)),
+        Some(row) => Ok(Json(row).into_response()),
         None => Err(AppError::not_found(anyhow::anyhow!("no such ink page"))),
     }
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct InkReadQuery {
+    pub book_rev: Option<i64>,
+    pub page_rev: Option<i64>,
 }
 
 /// One page at a time, so a refused page never holds up the rest of a pad.

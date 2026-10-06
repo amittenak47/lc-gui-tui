@@ -1,0 +1,378 @@
+{
+  "cases": [
+    {
+      "name": "raw immutable snapshot",
+      "input": {
+        "kind": "annotate",
+        "key": "book",
+        "tier": "24h",
+        "written_at": 100,
+        "payload": {
+          "name": "Algorithms",
+          "board": {
+            "v": 1,
+            "elements": [],
+            "appState": {
+              "scrollX": 10,
+              "scrollY": 20,
+              "zoom": 2,
+              "pdfSpread": true,
+              "paperColor": "cream"
+            }
+          },
+          "source": "{\"z\":2, \"a\":1}\nOriginal source formatting is authored.",
+          "ink": [
+            {
+              "pageId": 113,
+              "updatedAt": 17,
+              "gz": "aW5rQwEAAABqAAAAeyJtZXRhIjpbXSwicmF3IjpbeyJraW5kIjoiZXJhc2UiLCJyYWRpdXMiOjMsInBvaW50cyI6W3sieCI6MSwieSI6Mn1dfV0sImxheW91dCI6eyJ3Ijo3NjAsInNwcmVhZCI6ZmFsc2V9fQ==",
+              "future": "keep"
+            }
+          ],
+          "footnoteInk": {
+            "scratch": [
+              {
+                "pageId": 0,
+                "updatedAt": 18,
+                "gz": "aW5rQwEAAABqAAAAeyJtZXRhIjpbXSwicmF3IjpbeyJraW5kIjoiZXJhc2UiLCJyYWRpdXMiOjMsInBvaW50cyI6W3sieCI6MSwieSI6Mn1dfV0sImxheW91dCI6eyJ3Ijo3NjAsInNwcmVhZCI6ZmFsc2V9fQ=="
+              }
+            ]
+          },
+          "agent": [
+            {
+              "id": "turn",
+              "deleted": true
+            }
+          ],
+          "artifactBundle": {
+            "v": 1,
+            "catalog": {
+              "v": 1,
+              "parent": {
+                "kind": "annotate",
+                "id": "book"
+              },
+              "revision": "catalog-1",
+              "artifacts": [
+                {
+                  "id": "attachment",
+                  "title": "Example",
+                  "revision": "r1",
+                  "createdAt": 1,
+                  "updatedAt": 2,
+                  "associations": [
+                    {
+                      "kind": "file"
+                    }
+                  ],
+                  "content": {
+                    "kind": "code",
+                    "documentId": "code-1",
+                    "sourceRevision": "source-1"
+                  }
+                }
+              ]
+            },
+            "assets": [
+              {
+                "parent": {
+                  "kind": "annotate",
+                  "id": "book"
+                },
+                "dependency": {
+                  "kind": "document",
+                  "id": "code-1",
+                  "revision": "source-1"
+                },
+                "payload": "{\n  \"v\": 1,\n  \"owned\": true,\n  \"docType\": \"code\",\n  \"name\": \"Example.py\",\n  \"source\": \"{\\\"z\\\":2, \\\"a\\\":1}\\nOriginal source formatting is authored.\",\n  \"footnotes\": [],\n  \"agent\": [],\n  \"board\": {\n    \"v\": 1,\n    \"elements\": [],\n    \"appState\": {\n      \"scrollX\": 10,\n      \"scrollY\": 20,\n      \"zoom\": 2,\n      \"pdfSpread\": true,\n      \"paperColor\": \"cream\"\n    }\n  },\n  \"ink\": [],\n  \"future\": {\n    \"hash\": \"keep\",\n    \"rev\": 7\n  }\n}"
+              }
+            ]
+          },
+          "future": {
+            "updated_at": 99,
+            "hash": "nested-source",
+            "jsonText": "{ \"x\": 2, \"a\": 1 }"
+          }
+        }
+      },
+      "normalized": {
+        "tier": "24h",
+        "payload": {
+          "name": "Algorithms",
+          "board": {
+            "v": 1,
+            "elements": [],
+            "appState": {
+              "scrollX": 10,
+              "scrollY": 20,
+              "zoom": 2,
+              "pdfSpread": true,
+              "paperColor": "cream"
+            }
+          },
+          "source": "{\"z\":2, \"a\":1}\nOriginal source formatting is authored.",
+          "ink": [
+            {
+              "pageId": 113,
+              "updatedAt": 17,
+              "gz": "aW5rQwEAAABqAAAAeyJtZXRhIjpbXSwicmF3IjpbeyJraW5kIjoiZXJhc2UiLCJyYWRpdXMiOjMsInBvaW50cyI6W3sieCI6MSwieSI6Mn1dfV0sImxheW91dCI6eyJ3Ijo3NjAsInNwcmVhZCI6ZmFsc2V9fQ==",
+              "future": "keep"
+            }
+          ],
+          "footnoteInk": {
+            "scratch": [
+              {
+                "pageId": 0,
+                "updatedAt": 18,
+                "gz": "aW5rQwEAAABqAAAAeyJtZXRhIjpbXSwicmF3IjpbeyJraW5kIjoiZXJhc2UiLCJyYWRpdXMiOjMsInBvaW50cyI6W3sieCI6MSwieSI6Mn1dfV0sImxheW91dCI6eyJ3Ijo3NjAsInNwcmVhZCI6ZmFsc2V9fQ=="
+              }
+            ]
+          },
+          "agent": [
+            {
+              "id": "turn",
+              "deleted": true
+            }
+          ],
+          "artifactBundle": {
+            "v": 1,
+            "catalog": {
+              "v": 1,
+              "parent": {
+                "kind": "annotate",
+                "id": "book"
+              },
+              "revision": "catalog-1",
+              "artifacts": [
+                {
+                  "id": "attachment",
+                  "title": "Example",
+                  "revision": "r1",
+                  "createdAt": 1,
+                  "updatedAt": 2,
+                  "associations": [
+                    {
+                      "kind": "file"
+                    }
+                  ],
+                  "content": {
+                    "kind": "code",
+                    "documentId": "code-1",
+                    "sourceRevision": "source-1"
+                  }
+                }
+              ]
+            },
+            "assets": [
+              {
+                "parent": {
+                  "kind": "annotate",
+                  "id": "book"
+                },
+                "dependency": {
+                  "kind": "document",
+                  "id": "code-1",
+                  "revision": "source-1"
+                },
+                "payload": "{\"agent\":[],\"board\":{\"appState\":{\"paperColor\":\"cream\",\"pdfSpread\":true,\"scrollX\":10,\"scrollY\":20,\"zoom\":2},\"elements\":[],\"v\":1},\"docType\":\"code\",\"footnotes\":[],\"future\":{\"hash\":\"keep\",\"rev\":7},\"ink\":[],\"name\":\"Example.py\",\"owned\":true,\"source\":\"{\\\"z\\\":2, \\\"a\\\":1}\\nOriginal source formatting is authored.\",\"v\":1}"
+              }
+            ]
+          },
+          "future": {
+            "updated_at": 99,
+            "hash": "nested-source",
+            "jsonText": "{ \"x\": 2, \"a\": 1 }"
+          }
+        }
+      },
+      "hash": "c60fdbb8024ff19295944c41565688b67106da871fcd0a629bd239993ed15675"
+    },
+    {
+      "name": "gzip encoding and wrapper timestamp variant",
+      "input": {
+        "kind": "annotate",
+        "key": "book",
+        "tier": "24h",
+        "written_at": 999,
+        "payload": {
+          "name": "Algorithms",
+          "board": {
+            "v": 1,
+            "elements": [],
+            "appState": {
+              "scrollX": 10,
+              "scrollY": 20,
+              "zoom": 2,
+              "pdfSpread": true,
+              "paperColor": "cream"
+            }
+          },
+          "source": "{\"z\":2, \"a\":1}\nOriginal source formatting is authored.",
+          "ink": [
+            {
+              "pageId": 113,
+              "updatedAt": 17,
+              "gz": "H4sIAHsAAAAC/x2MwQqDMBBE46/MOQfbQgt79TOKhwW3kGqjZCNVQv7d1cPAMLx5IY5d45z7Wgp+khn07j0S/60UjCEOIEhiFZzzEFYFPTyWOcSsF7SBbh476F77aueJ93nNoAKTvJ6thy5J2EQfnlRqPQDLuBiJdgAAAA==",
+              "future": "keep"
+            }
+          ],
+          "footnoteInk": {
+            "scratch": [
+              {
+                "pageId": 0,
+                "updatedAt": 18,
+                "gz": "H4sIAHsAAAAC/x2MwQqDMBBE46/MOQfbQgt79TOKhwW3kGqjZCNVQv7d1cPAMLx5IY5d45z7Wgp+khn07j0S/60UjCEOIEhiFZzzEFYFPTyWOcSsF7SBbh476F77aueJ93nNoAKTvJ6thy5J2EQfnlRqPQDLuBiJdgAAAA=="
+              }
+            ]
+          },
+          "agent": [
+            {
+              "id": "turn",
+              "deleted": true
+            }
+          ],
+          "artifactBundle": {
+            "v": 1,
+            "catalog": {
+              "v": 1,
+              "parent": {
+                "kind": "annotate",
+                "id": "book"
+              },
+              "revision": "catalog-1",
+              "artifacts": [
+                {
+                  "id": "attachment",
+                  "title": "Example",
+                  "revision": "r1",
+                  "createdAt": 1,
+                  "updatedAt": 2,
+                  "associations": [
+                    {
+                      "kind": "file"
+                    }
+                  ],
+                  "content": {
+                    "kind": "code",
+                    "documentId": "code-1",
+                    "sourceRevision": "source-1"
+                  }
+                }
+              ]
+            },
+            "assets": [
+              {
+                "parent": {
+                  "kind": "annotate",
+                  "id": "book"
+                },
+                "dependency": {
+                  "kind": "document",
+                  "id": "code-1",
+                  "revision": "source-1"
+                },
+                "payload": "{\"agent\":[],\"board\":{\"appState\":{\"paperColor\":\"cream\",\"pdfSpread\":true,\"scrollX\":10,\"scrollY\":20,\"zoom\":2},\"elements\":[],\"v\":1},\"docType\":\"code\",\"footnotes\":[],\"future\":{\"hash\":\"keep\",\"rev\":7},\"ink\":[],\"name\":\"Example.py\",\"owned\":true,\"source\":\"{\\\"z\\\":2, \\\"a\\\":1}\\nOriginal source formatting is authored.\",\"v\":1}"
+              }
+            ]
+          },
+          "future": {
+            "updated_at": 99,
+            "hash": "nested-source",
+            "jsonText": "{ \"x\": 2, \"a\": 1 }"
+          }
+        }
+      },
+      "normalized": {
+        "tier": "24h",
+        "payload": {
+          "name": "Algorithms",
+          "board": {
+            "v": 1,
+            "elements": [],
+            "appState": {
+              "scrollX": 10,
+              "scrollY": 20,
+              "zoom": 2,
+              "pdfSpread": true,
+              "paperColor": "cream"
+            }
+          },
+          "source": "{\"z\":2, \"a\":1}\nOriginal source formatting is authored.",
+          "ink": [
+            {
+              "pageId": 113,
+              "updatedAt": 17,
+              "gz": "aW5rQwEAAABqAAAAeyJtZXRhIjpbXSwicmF3IjpbeyJraW5kIjoiZXJhc2UiLCJyYWRpdXMiOjMsInBvaW50cyI6W3sieCI6MSwieSI6Mn1dfV0sImxheW91dCI6eyJ3Ijo3NjAsInNwcmVhZCI6ZmFsc2V9fQ==",
+              "future": "keep"
+            }
+          ],
+          "footnoteInk": {
+            "scratch": [
+              {
+                "pageId": 0,
+                "updatedAt": 18,
+                "gz": "aW5rQwEAAABqAAAAeyJtZXRhIjpbXSwicmF3IjpbeyJraW5kIjoiZXJhc2UiLCJyYWRpdXMiOjMsInBvaW50cyI6W3sieCI6MSwieSI6Mn1dfV0sImxheW91dCI6eyJ3Ijo3NjAsInNwcmVhZCI6ZmFsc2V9fQ=="
+              }
+            ]
+          },
+          "agent": [
+            {
+              "id": "turn",
+              "deleted": true
+            }
+          ],
+          "artifactBundle": {
+            "v": 1,
+            "catalog": {
+              "v": 1,
+              "parent": {
+                "kind": "annotate",
+                "id": "book"
+              },
+              "revision": "catalog-1",
+              "artifacts": [
+                {
+                  "id": "attachment",
+                  "title": "Example",
+                  "revision": "r1",
+                  "createdAt": 1,
+                  "updatedAt": 2,
+                  "associations": [
+                    {
+                      "kind": "file"
+                    }
+                  ],
+                  "content": {
+                    "kind": "code",
+                    "documentId": "code-1",
+                    "sourceRevision": "source-1"
+                  }
+                }
+              ]
+            },
+            "assets": [
+              {
+                "parent": {
+                  "kind": "annotate",
+                  "id": "book"
+                },
+                "dependency": {
+                  "kind": "document",
+                  "id": "code-1",
+                  "revision": "source-1"
+                },
+                "payload": "{\"agent\":[],\"board\":{\"appState\":{\"paperColor\":\"cream\",\"pdfSpread\":true,\"scrollX\":10,\"scrollY\":20,\"zoom\":2},\"elements\":[],\"v\":1},\"docType\":\"code\",\"footnotes\":[],\"future\":{\"hash\":\"keep\",\"rev\":7},\"ink\":[],\"name\":\"Example.py\",\"owned\":true,\"source\":\"{\\\"z\\\":2, \\\"a\\\":1}\\nOriginal source formatting is authored.\",\"v\":1}"
+              }
+            ]
+          },
+          "future": {
+            "updated_at": 99,
+            "hash": "nested-source",
+            "jsonText": "{ \"x\": 2, \"a\": 1 }"
+          }
+        }
+      },
+      "hash": "c60fdbb8024ff19295944c41565688b67106da871fcd0a629bd239993ed15675"
+    }
+  ]
+}
