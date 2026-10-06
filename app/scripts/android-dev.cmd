@@ -3,7 +3,7 @@ REM Hot-reload on USB device. First run generates src-tauri\gen\android if missi
 REM   android-dev.cmd
 REM   android-dev.cmd <your-device-serial>
 REM
-REM Do NOT pass the serial as Tauri's DEVICE arg — Tauri matches DEVICE against
+REM Do NOT pass the serial as Tauri's DEVICE arg - Tauri matches DEVICE against
 REM the device name ("Magic Note Pad"), not the USB serial. We only use the
 REM serial to verify adb sees the tablet; Tauri then auto-picks the connected device.
 setlocal
@@ -15,7 +15,7 @@ if not defined ANDROID_NDK_HOME (
   for /d %%D in ("%ANDROID_HOME%\ndk\*") do set "ANDROID_NDK_HOME=%%~fD"
 )
 set "PATH=%PATH%;%ANDROID_HOME%\platform-tools;%ANDROID_HOME%\emulator"
-REM Same Unix tools as android-install.cmd — libffi-sys needs cp/sh/make.
+REM Same Unix tools as android-install.cmd - libffi-sys needs cp/sh/make.
 set "UNIX_ROOT=%~dp0..\..\.tmp-unix"
 if exist "%ProgramFiles%\Git\usr\bin\sh.exe" (
   if not exist "%UNIX_ROOT%\git-usr" (

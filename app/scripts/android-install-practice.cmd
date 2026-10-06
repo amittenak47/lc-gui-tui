@@ -3,7 +3,7 @@ REM Windows: build the Practice debug APK and adb install -r. From repo root:
 REM   app\scripts\android-install-practice.cmd
 REM   app\scripts\android-install-practice.cmd <your-device-serial>
 REM First run generates src-tauri\gen\android (not in git) if missing.
-REM Linux: app/scripts/android-install-practice.sh — do not run this .cmd there.
+REM Linux: app/scripts/android-install-practice.sh - do not run this .cmd there.
 REM Whiteboard-only build: android-install-whiteboard.cmd. Both share package
 REM dev.lc.whiteboard. This wrapper uses install -r to keep data for an update
 REM with a compatible signing certificate and version code. For a fresh install,

@@ -1,2 +1,4 @@
 # Shell scripts must stay LF. CRLF makes bash in WSL reject `set -o pipefail`.
 *.sh text eol=lf
+# Windows batch files need CRLF for cmd.exe.
+*.cmd text eol=crlf
