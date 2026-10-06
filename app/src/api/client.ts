@@ -530,6 +530,8 @@ export interface ProblemPadDto {
 
 /** One page of handwriting: `gz` is base64 of the bytes `STORE_INK_PAGES` holds. */
 export interface InkPageDto {
+  /** Same newer sequence as an explicit parent restore; absent on old uploads. */
+  sync_seq?: number;
   kind: "annotate" | "whiteboard";
   key: string;
   page_id: number;

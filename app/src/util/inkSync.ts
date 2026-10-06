@@ -68,7 +68,7 @@ import {
   putEdge,
   type Edge,
 } from "./noteLinks";
-import { loadPadHub } from "./padHub";
+import { loadPadHub, loadPadSyncSince } from "./padHub";
 
 export type InkPadKind = "annotate" | "whiteboard";
 
@@ -1357,7 +1357,7 @@ export async function syncInkPages(
   digests: InkPageDigestDto[],
   pads: Array<{ kind: InkPadKind; key: string }>,
   since: number,
-  opts: { strict?: boolean } = {},
+  opts: { strict?: boolean; pushOnly?: boolean; parentSyncSeq?: number; onUploaded?: (page: InkPageDto) => void } = {},
 ): Promise<InkConflict[]> {
   const strict = opts.strict === true;
   if (!loadPadHub()) return [];
@@ -1406,7 +1406,7 @@ export async function syncInkPages(
     });
 
     const ctx = await padPdfContext(pad.kind, pad.key);
-    if (toPull.length > 0) {
+    if (!opts.pushOnly && toPull.length > 0) {
       for (const digest of spanningLast(toPull)) {
         const full = strict
           ? await client.getInkPage(pad.kind, pad.key, digest.page_id)
@@ -1453,17 +1453,63 @@ export async function syncInkPages(
         continue;
       }
       const put = putConfirmedInkPage(client, {
+        ...(opts.parentSyncSeq != null ? { sync_seq: opts.parentSyncSeq } : {}),
         kind: pad.kind,
         key: pad.key,
         page_id: row.pageId,
         updated_at: row.updatedAt,
         gz: bytesToB64(gz),
       });
-      if (strict) await put;
-      else await put.catch(() => undefined);
+      if (strict) {
+        await put;
+        opts.onUploaded?.({ kind: pad.kind, key: pad.key, page_id: row.pageId, updated_at: row.updatedAt, gz: bytesToB64(gz) });
+      } else await put.catch(() => undefined);
     }
   }
   return conflicts;
+}
+
+/** Upload before publishing a manifest. A failed page prevents the record PUT. */
+export async function ensureRecordInkOnHub(
+  client: LcClient,
+  kind: InkPadKind,
+  manifests: Array<{ key: string; pageIds: number[] }>,
+  snapshotDigests?: InkPageDigestDto[],
+  parentSyncSeq?: number,
+): Promise<void> {
+  const keys = new Set(manifests.map(({ key }) => key));
+  const digests = (snapshotDigests ?? (await client.pingPadSync(0)).ink ?? [])
+    .filter((row) => row.kind === kind && keys.has(row.key));
+  const present = new Set(digests.map((row) => `${row.key}:${row.page_id}`));
+  // Validate all references before sending any part of this book.
+  for (const manifest of manifests) {
+    const local = new Set((await getInkPageRecords(inkDocKey(kind, manifest.key), {
+      metadataOnly: true, strict: true,
+    })).map((row) => row.pageId));
+    for (const pageId of manifest.pageIds) {
+      if (!present.has(`${manifest.key}:${pageId}`) && !local.has(pageId)) {
+        throw new Error(`Ink page ${pageId} is missing on this device and the hub. The book was not uploaded.`);
+      }
+    }
+  }
+  // A dual edit stays for the merge UI; its existing hub page satisfies the
+  // manifest. Do not pull or overwrite the local copy while publishing JSON.
+  await syncInkPages(client, digests, manifests.map(({ key }) => ({ kind, key })), loadPadSyncSince(), {
+    strict: true, pushOnly: true, parentSyncSeq,
+    onUploaded: (page) => {
+      present.add(`${page.key}:${page.page_id}`);
+      if (snapshotDigests) {
+        const prior = snapshotDigests.find((row) => row.kind === kind && row.key === page.key && row.page_id === page.page_id);
+        if (prior) prior.updated_at = page.updated_at;
+        else snapshotDigests.push({ kind, key: page.key, page_id: page.page_id, updated_at: page.updated_at });
+      }
+    },
+  });
+  for (const { key, pageIds } of manifests) {
+    for (const pageId of pageIds) {
+      if (!present.has(`${key}:${pageId}`)) throw new Error(`Ink page ${pageId} did not reach the hub. The book was not uploaded.`);
+    }
+  }
 }
 
 function edgeToDto(edge: Edge): EdgeRowDto {

@@ -1193,6 +1193,9 @@ pub struct InkPageRow {
     pub page_id: i64,
     pub updated_at: i64,
     pub gz: String,
+    /// A deliberate restore may stage ink using the pad's newer delete sequence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_seq: Option<i64>,
 }
 
 /// What a device needs to decide whether to ask for a page: no bytes.
@@ -1260,6 +1263,7 @@ pub fn get_ink_pages(conn: &Connection, kind: &str, key: &str) -> Result<Vec<Ink
             page_id,
             updated_at,
             gz: BASE64.encode(&gz),
+            sync_seq: None,
         });
     }
     Ok(out)
@@ -1304,6 +1308,7 @@ pub fn get_ink_page(
         page_id,
         updated_at,
         gz: BASE64.encode(&gz),
+        sync_seq: None,
     }))
 }
 
@@ -1320,11 +1325,13 @@ pub fn put_ink_page(conn: &Connection, row: &InkPageRow) -> Result<ApplyAck> {
     // the annotate table to read a seq from.
     let pad_id = ink_pad_id(kind.as_str(), &row.key).to_string();
     let gone = gone_seq(conn, kind, &pad_id)?;
-    if !pad_is_live(conn, kind.as_str(), &row.key)? {
-        return Ok(ApplyAck {
-            applied: false,
-            seq: gone,
-        });
+    // Ink must be staged before a new parent can publish its manifest.
+    // Deleted parents still reject delayed uploads; only an explicit restore
+    // with the same newer sequence its subsequent record will use may stage.
+    if !pad_is_live(conn, kind.as_str(), &row.key)? && gone > 0
+        && row.sync_seq.unwrap_or(0) <= gone
+    {
+        return Ok(ApplyAck { applied: false, seq: gone });
     }
     let bytes = BASE64
         .decode(row.gz.as_bytes())
@@ -2395,6 +2402,7 @@ mod tests {
             page_id: page,
             updated_at: at,
             gz: BASE64.encode(body.as_bytes()),
+            sync_seq: None,
         }
     }
 
@@ -2473,11 +2481,28 @@ mod tests {
     }
 
     #[test]
-    fn scratch_ink_for_a_pad_that_is_not_there_is_refused() {
+    fn scratch_ink_can_stage_before_a_new_parent_record() {
         let path = tmp();
         let conn = open(&path).unwrap();
         let ack = put_ink_page(&conn, &ink("annotate", "ghost/fn/wb1", 1, 10, "scratch")).unwrap();
-        assert!(!ack.applied, "no pad, no scratch ink");
+        assert!(ack.applied, "ink before the parent manifest");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn only_an_explicit_newer_restore_can_stage_ink_after_deletion() {
+        let path = tmp();
+        let conn = open(&path).unwrap();
+        assert!(delete_pad(&conn, PadKind::Annotate, "a1", 5).unwrap().applied);
+        let mut page = ink("annotate", "a1", 113, 10, "empty erasure");
+        assert!(!put_ink_page(&conn, &page).unwrap().applied);
+        page.sync_seq = Some(5);
+        assert!(!put_ink_page(&conn, &page).unwrap().applied);
+        page.sync_seq = Some(6);
+        assert!(put_ink_page(&conn, &page).unwrap().applied);
+        // Staging has not restored the record or changed its deletion base.
+        assert!(read_annotate(&conn, "a1").unwrap().is_none());
+        assert_eq!(gone_seq(&conn, PadKind::Annotate, "a1").unwrap(), 5);
         let _ = std::fs::remove_file(path);
     }
 

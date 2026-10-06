@@ -20,6 +20,7 @@ import {
 } from "./inkSync";
 import { localFootnoteBoardIds } from "./annotateStore";
 import { acceptHubAgent } from "./padSync";
+import { putPadRecord } from "./padRecordUpload";
 
 export type HubPadKind = "annotate" | "whiteboard";
 
@@ -116,10 +117,7 @@ export async function walkPushPad(
 
   try {
     const body = await Promise.resolve(pad.buildBody());
-    const written =
-      pad.kind === "annotate"
-        ? await client.putAnnotatePad(pad.id, body as AnnotatePadDto)
-        : await client.putWhiteboardPad(pad.id, body as WhiteboardPadDto);
+    const written = await putPadRecord(client, pad.kind, body, snapshot.inkDigests);
     const hubUpdatedAt = written.updated_at ?? Date.now();
     await acceptHubAgent(pad.kind, pad.id, written.agent);
     // Acked here rather than at the call site, so no path can push and forget.

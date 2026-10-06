@@ -12,6 +12,7 @@ import type {
   WhiteboardPadDto,
 } from "../api/client";
 import { LcApiError as ApiError } from "../api/client";
+import { putPadRecord } from "./padRecordUpload";
 import { mergeAgentMessages } from "../modes/coachSessions";
 import { putParentContent } from "./contentStore";
 import type { BoardBlob } from "../canvas/BoardHandle";
@@ -594,7 +595,7 @@ async function pushWhiteboardPadNow(
     return false;
   }
   try {
-    const written = await client.putWhiteboardPad(notebook.id, body);
+    const written = await putPadRecord(client, "whiteboard", body);
     await acceptHubAgent("whiteboard", notebook.id, written.agent);
     markWhiteboardHubAck(notebook.id, written.updated_at ?? notebook.updatedAt);
     return true;
@@ -669,7 +670,7 @@ async function pushAnnotatePadNow(client: LcClient, doc: AnnotateDoc): Promise<b
     return false;
   }
   try {
-    const written = await client.putAnnotatePad(doc.id, body);
+    const written = await putPadRecord(client, "annotate", body);
     await acceptHubAgent("annotate", doc.id, written.agent);
     markAnnotateHubAck(doc.id, written.updated_at ?? doc.updatedAt);
     return true;
@@ -1013,7 +1014,7 @@ async function flushPadSyncQueueNow(client: LcClient): Promise<void> {
     attempted.add(job.id);
     try {
       if (job.op === "putWhiteboard") {
-        const written = await client.putWhiteboardPad(job.body.id, job.body);
+        const written = await putPadRecord(client, "whiteboard", job.body);
         await acceptHubAgent("whiteboard", job.body.id, written.agent);
         markWhiteboardHubAck(job.body.id, written.updated_at ?? job.body.updated_at);
       } else if (job.op === "putAnnotate") {
@@ -1021,7 +1022,7 @@ async function flushPadSyncQueueNow(client: LcClient): Promise<void> {
           // Keep an unacknowledged payload; it may be repaired locally later.
           continue;
         }
-        const written = await client.putAnnotatePad(job.body.id, job.body);
+        const written = await putPadRecord(client, "annotate", job.body);
         await acceptHubAgent("annotate", job.body.id, written.agent);
         markAnnotateHubAck(job.body.id, written.updated_at ?? job.body.updated_at);
       } else if (job.op === "putProblem") {
@@ -1113,7 +1114,7 @@ async function pushRestoreAllFour(
   if (kind === "whiteboard") {
     const notebook = await getWhiteboardNotebook(padId);
     if (!notebook) return false;
-    const written = await client.putWhiteboardPad(padId, {
+    const written = await putPadRecord(client, "whiteboard", {
       ...artifactCatalogFields(notebook.artifacts, { kind: "whiteboard", id: notebook.id }),
       id: notebook.id,
       title: notebook.title,
@@ -1127,7 +1128,7 @@ async function pushRestoreAllFour(
   } else {
     const doc = await getAnnotateDoc(padId);
     if (!doc) return false;
-    const written = await client.putAnnotatePad(padId, {
+    const written = await putPadRecord(client, "annotate", {
       ...artifactCatalogFields(doc.artifacts, { kind: "annotate", id: doc.id }),
       id: doc.id,
       name: doc.name,
