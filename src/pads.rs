@@ -29,7 +29,7 @@ pub use revisions::{bump_book_head, list_book_heads, next_rev, read_transaction,
 pub const MAX_BLOB_BYTES: usize = 512 * 1024 * 1024;
 
 pub const WHITEBOARD_LIVE_CAP: usize = 50;
-pub const ANNOTATE_LIVE_CAP: usize = 30;
+pub const ANNOTATE_LIVE_CAP: usize = 200;
 
 pub fn db_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("pads.db"))
