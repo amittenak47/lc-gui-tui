@@ -503,6 +503,9 @@ async function executeBook(client: LcClient, owner: BookIdentity, inventory: Boo
               if (!uploads.includes(mine)) uploads.push(mine);
             }
           }
+          // Inline conversion can republish a downloaded record. Acquire its
+          // remote assets before the outgoing dependency check uses that record.
+          if (uploadRecord && recordClass === "download") await prepareDependencies(client, capture, targetRecord, false, options, signal);
           await prepareDependencies(client, capture, uploadRecord ? targetRecord : remote.record, uploadRecord, options, signal);
           let final = remote;
           let publicationCapture = capture;
