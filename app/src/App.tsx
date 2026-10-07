@@ -91,7 +91,7 @@ import {
   PAD_SYNC_PING_MS,
 } from "./util/padSync";
 import { syncBookPass } from "./util/bookSyncPass";
-import { footnoteInboxNeedsPoll, pollFootnoteInbox } from "./util/footnoteRequests";
+import { pollFootnoteInbox } from "./util/footnoteRequests";
 import { HUB_AUTOSYNC_EVENT, loadHubAutosyncPref } from "./util/hubAutoSyncPref";
 import { PAD_HUB_EVENT, setHostLoopback } from "./util/padHub";
 import { startPadHubStatusMonitoring } from "./util/padHubStatus";
@@ -367,7 +367,6 @@ export function App() {
     let cancelled = false;
     const tick = () => {
       if (cancelled || document.visibilityState === "hidden") return;
-      if (!footnoteInboxNeedsPoll()) return;
       void pollFootnoteInbox(client).catch(() => {});
     };
     const timer = window.setInterval(tick, PAD_SYNC_PING_MS);

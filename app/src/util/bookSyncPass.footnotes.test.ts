@@ -139,7 +139,7 @@ async function markClean(id: string) {
 it("saves a ping answer into a clean book before that pass chooses what to upload", async () => {
   await saveNotes();
   await markClean("notes");
-  enqueueFootnoteRequest({ id: "fr-upload", doc_id: "notes" } as FootnoteRequestDto);
+  await enqueueFootnoteRequest({ id: "fr-upload", doc_id: "notes" } as FootnoteRequestDto);
   const upload = deferred();
   vi.mocked(api.postFootnoteRequest).mockImplementation(() => upload.opened);
   ping.footnote_results = [answer()];
@@ -214,7 +214,7 @@ it("saves a polled answer without uploading, then a later sync sends the book", 
   saveHubAutosyncPref("off");
   await saveNotes();
   await markClean("notes");
-  enqueueFootnoteRequest({ id: "fr-upload", doc_id: "notes" } as FootnoteRequestDto);
+  await enqueueFootnoteRequest({ id: "fr-upload", doc_id: "notes" } as FootnoteRequestDto);
   vi.mocked(api.footnoteResults).mockResolvedValue([answer()]);
   vi.mocked(api.postFootnoteRequest).mockResolvedValue(undefined);
   await import("./footnoteRequests").then((mod) => mod.pollFootnoteInbox(api));

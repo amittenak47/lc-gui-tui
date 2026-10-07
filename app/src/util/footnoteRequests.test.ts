@@ -1,8 +1,13 @@
+import { IDBFactory } from "fake-indexeddb";
+import { readFootnoteOutbox } from "./footnoteOutbox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FootnoteRequestDto, LcClient } from "../api/client";
 import type { DocFootnote } from "./docFootnotes";
 import { applyFootnotePing, applyFootnoteResult, registerOpenAnnotateFootnotes } from "./footnoteRequests";
+
+beforeEach(() => vi.stubGlobal("indexedDB", new IDBFactory()));
+afterEach(() => vi.unstubAllGlobals());
 
 const debugLog = vi.hoisted(() => vi.fn());
 vi.mock("./debugLog", async (importOriginal) => ({
@@ -211,6 +216,7 @@ describe("footnote request queue", () => {
   let restoreStorage: (() => void) | undefined;
 
   beforeEach(() => {
+    vi.stubGlobal("indexedDB", new IDBFactory());
     const prior = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
     const values = new Map<string, string>();
     Object.defineProperty(globalThis, "localStorage", {
@@ -249,6 +255,7 @@ describe("footnote request queue", () => {
 
   afterEach(() => {
     restoreStorage?.();
+    vi.unstubAllGlobals();
   });
 
   function body(id: string, docId = "doc-1"): FootnoteRequestDto {
@@ -267,10 +274,9 @@ describe("footnote request queue", () => {
     };
   }
 
-  function stored(key: string): { id: string; docId?: string }[] {
-    const raw = globalThis.localStorage.getItem(key);
-    if (raw == null) throw new Error(`${key} was not written`);
-    return JSON.parse(raw) as { id: string; docId?: string }[];
+  async function stored(key: string): Promise<{ id: string; docId?: string }[]> {
+    const rows = await readFootnoteOutbox();
+    return key === QUEUE_KEY ? rows.flatMap(row => row.request ? [row.request] : []) : rows.map(({ id, docId }) => ({ id, docId }));
   }
 
   function noteCount(text: string): number {
@@ -316,20 +322,20 @@ describe("footnote request queue", () => {
       ackFootnoteRequest: async () => {},
     } as unknown as LcClient;
 
-    mod.enqueueFootnoteRequest(body("fr-a"));
-    expect(stored(QUEUE_KEY).map((entry) => entry.id)).toEqual(["fr-a"]);
+    await mod.enqueueFootnoteRequest(body("fr-a"));
+    expect((await stored(QUEUE_KEY)).map((entry) => entry.id)).toEqual(["fr-a"]);
     const first = mod.flushFootnoteQueue(client);
     await started.opened;
-    mod.enqueueFootnoteRequest(body("fr-b"));
-    expect(stored(QUEUE_KEY).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
+    await mod.enqueueFootnoteRequest(body("fr-b"));
+    expect((await stored(QUEUE_KEY)).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
     const second = mod.flushFootnoteQueue(client);
     hold.release();
     await first;
     await second;
 
     expect(posted).toEqual(["fr-a", "fr-b"]);
-    expect(stored(QUEUE_KEY)).toEqual([]);
-    expect(stored(AWAITING_KEY).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
+    expect(await stored(QUEUE_KEY)).toEqual([]);
+    expect((await stored(AWAITING_KEY)).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
   });
 
   it("keeps a transient failure and a request enqueued during it, in order", async () => {
@@ -350,24 +356,24 @@ describe("footnote request queue", () => {
       ackFootnoteRequest: async () => {},
     } as unknown as LcClient;
 
-    mod.enqueueFootnoteRequest(body("fr-a"));
+    await mod.enqueueFootnoteRequest(body("fr-a"));
     const first = mod.flushFootnoteQueue(client);
     await started.opened;
-    mod.enqueueFootnoteRequest(body("fr-b"));
+    await mod.enqueueFootnoteRequest(body("fr-b"));
     hold.release();
     await first;
 
     expect(posted).toEqual(["fr-a"]);
-    expect(stored(QUEUE_KEY).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
-    expect(stored(AWAITING_KEY).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
+    expect((await stored(QUEUE_KEY)).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
+    expect((await stored(AWAITING_KEY)).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
 
     failA = false;
     posted.length = 0;
     await mod.flushFootnoteQueue(client);
 
     expect(posted).toEqual(["fr-a", "fr-b"]);
-    expect(stored(QUEUE_KEY)).toEqual([]);
-    expect(stored(AWAITING_KEY).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
+    expect(await stored(QUEUE_KEY)).toEqual([]);
+    expect((await stored(AWAITING_KEY)).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
   });
 
   it("keeps an enqueue that overlaps a ping and applies that answer once", async () => {
@@ -394,10 +400,10 @@ describe("footnote request queue", () => {
       },
     } as unknown as LcClient;
 
-    mod.enqueueFootnoteRequest(body("fr-a"));
+    await mod.enqueueFootnoteRequest(body("fr-a"));
     const flushing = mod.flushFootnoteQueue(client);
     await started.opened;
-    mod.enqueueFootnoteRequest(body("fr-b"));
+    await mod.enqueueFootnoteRequest(body("fr-b"));
     const ping = mod.applyFootnotePing(client, {
       footnote_results: [{ id: "fr-old", doc_id: "doc-1", result: { notes: ["from the hub"] } }],
     });
@@ -406,8 +412,8 @@ describe("footnote request queue", () => {
     await ping;
 
     expect(posted).toEqual(["fr-a", "fr-b"]);
-    expect(stored(QUEUE_KEY)).toEqual([]);
-    expect(stored(AWAITING_KEY).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
+    expect(await stored(QUEUE_KEY)).toEqual([]);
+    expect((await stored(AWAITING_KEY)).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
     expect(acks).toEqual(["fr-old"]);
     expect(noteCount("from the hub")).toBe(1);
     expect(store.saves).toBe(1);
@@ -431,22 +437,22 @@ describe("footnote request queue", () => {
       },
     } as unknown as LcClient;
 
-    mod.enqueueFootnoteRequest(body("fr-a"));
-    expect(stored(QUEUE_KEY).map((entry) => entry.id)).toEqual(["fr-a"]);
-    expect(stored(AWAITING_KEY)).toEqual([{ id: "fr-a", docId: "doc-1" }]);
+    await mod.enqueueFootnoteRequest(body("fr-a"));
+    expect((await stored(QUEUE_KEY)).map((entry) => entry.id)).toEqual(["fr-a"]);
+    expect(await stored(AWAITING_KEY)).toEqual([{ id: "fr-a", docId: "doc-1" }]);
 
     await mod.flushFootnoteQueue(client);
 
     expect(posted).toEqual(["fr-a"]);
-    expect(stored(QUEUE_KEY)).toEqual([]);
-    expect(stored(AWAITING_KEY)).toEqual([{ id: "fr-a", docId: "doc-1" }]);
+    expect(await stored(QUEUE_KEY)).toEqual([]);
+    expect(await stored(AWAITING_KEY)).toEqual([{ id: "fr-a", docId: "doc-1" }]);
 
     await mod.applyFootnotePing(client, {
       footnote_results: [{ id: "fr-a", doc_id: "doc-1", result: { notes: ["the answer"] } }],
     });
 
     expect(acks).toEqual(["fr-a"]);
-    expect(stored(AWAITING_KEY)).toEqual([]);
+    expect(await stored(AWAITING_KEY)).toEqual([]);
     expect(noteCount("the answer")).toBe(1);
     expect(store.saves).toBe(1);
   });
@@ -471,7 +477,7 @@ describe("footnote request queue", () => {
       },
       ackFootnoteRequest: async () => {},
     } as unknown as LcClient;
-    mod.enqueueFootnoteRequest(body("fr-a"));
+    await mod.enqueueFootnoteRequest(body("fr-a"));
     const flushing = mod.flushFootnoteQueue(client);
     await started.opened;
     const pinging = mod.applyFootnotePing(client, {
@@ -504,7 +510,7 @@ describe("footnote request queue", () => {
     }));
     const posted: string[] = [];
     const acks: string[] = [];
-    mod.enqueueFootnoteRequest(body("fr-a"));
+    await mod.enqueueFootnoteRequest(body("fr-a"));
     await mod.pollFootnoteInbox({
       pingPadSync: ping,
       footnoteResults: async () => [{ id: "fr-old", doc_id: "doc-1", result: { notes: ["from results"] } }],
@@ -532,7 +538,7 @@ describe("footnote request queue", () => {
       throw new LcApiError("missing", 404);
     });
     const posted: string[] = [];
-    mod.enqueueFootnoteRequest(body("fr-a"));
+    await mod.enqueueFootnoteRequest(body("fr-a"));
     const client = {
       pingPadSync: ping,
       footnoteResults: results,
@@ -545,8 +551,8 @@ describe("footnote request queue", () => {
     await mod.pollFootnoteInbox(client);
     expect(ping).not.toHaveBeenCalled();
     expect(posted).toEqual([]);
-    expect(stored(QUEUE_KEY).map((entry) => entry.id)).toEqual(["fr-a"]);
-    expect(stored(AWAITING_KEY)).toEqual([{ id: "fr-a", docId: "doc-1" }]);
+    expect((await stored(QUEUE_KEY)).map((entry) => entry.id)).toEqual(["fr-a"]);
+    expect(await stored(AWAITING_KEY)).toEqual([{ id: "fr-a", docId: "doc-1" }]);
     expect(results).toHaveBeenCalledTimes(2);
     expect(debugLog).toHaveBeenCalledTimes(1);
     expect(debugLog).toHaveBeenCalledWith({

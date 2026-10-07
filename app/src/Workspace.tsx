@@ -8899,26 +8899,34 @@ export const Workspace = memo(function Workspace({
       return;
     }
     const footnotes = saved.footnotes ?? [];
-    for (const ask of asks) {
+    for (let index = 0; index < asks.length; index++) {
+      const ask = asks[index]!;
       const mark = footnotes.find((entry) => entry.pending === ask.requestId);
       if (!mark) continue;
       const pages = source.hash ? extractedPagesFor(source.hash) : null;
       const scope = mark.anchor.scope;
       const matched = scope ? pages?.find((entry) => entry.scope === scope) : undefined;
       const pageEntry = matched ?? (pages?.length === 1 ? pages[0] : undefined);
-      enqueueFootnoteRequest(buildFootnoteRequest({
-        id: ask.requestId,
-        deviceId: loadDeviceId(),
-        docId: saved.id,
-        docName: source.name,
-        anchor: mark.anchor,
-        excerpt: mark.excerpt,
-        pageText: pageEntry?.text ?? null,
-        pages,
-        viewerPage: source.docType === "pdf" ? pdfNavRef.current?.current ?? null : null,
-        footnotes,
-        exceptId: mark.id,
-      }));
+      try {
+        await enqueueFootnoteRequest(buildFootnoteRequest({
+          id: ask.requestId,
+          deviceId: loadDeviceId(),
+          docId: saved.id,
+          docName: source.name,
+          anchor: mark.anchor,
+          excerpt: mark.excerpt,
+          pageText: pageEntry?.text ?? null,
+          pages,
+          viewerPage: source.docType === "pdf" ? pdfNavRef.current?.current ?? null : null,
+          footnotes,
+          exceptId: mark.id,
+        }));
+      } catch (cause) {
+        // A durable queue failure must leave every unsent ask held for the
+        // next save. The already saved pending marks remain in the document.
+        heldFootnoteAsksRef.current = [...asks.slice(index), ...heldFootnoteAsksRef.current];
+        throw new Error(`GrokBot request could not be queued. Save again to retry. ${messageOf(cause)}`);
+      }
     }
     // Not awaited: a save can run inside the inbox chain (an answer being
     // applied), and the flush queues behind that same chain.

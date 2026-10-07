@@ -4,6 +4,7 @@
  */
 
 import { LcApiError, type FootnotePingResultDto, type FootnoteRequestDto, type LcClient } from "../api/client";
+import { readFootnoteOutbox, storeFootnoteRequest, markFootnoteRequestSent, forgetFootnoteRequest } from "./footnoteOutbox";
 import { debugLog } from "./debugLog";
 import type { DocAnchor } from "./docAnchors";
 import { getAnnotateDoc, mutateAnnotateFootnotes } from "./annotateStore";
@@ -14,8 +15,6 @@ import {
   type DocFootnoteUserLink,
 } from "./docFootnotes";
 
-const QUEUE_KEY = "whiteboard.footnoteRequests.v1";
-const AWAITING_KEY = "whiteboard.footnoteAwaiting.v1";
 const CONTEXT_RADIUS = 1500;
 const WIDE_RADIUS = 6000;
 const PAGE_FOOTNOTE_CAP = 20;
@@ -32,11 +31,6 @@ export interface OpenAnnotateFootnoteSink {
     docId: string,
     mutate: (footnotes: readonly DocFootnote[]) => DocFootnote[],
   ): Promise<FootnoteWriteResult>;
-}
-
-interface AwaitingRow {
-  id: string;
-  docId: string;
 }
 
 const sinks = new Set<OpenAnnotateFootnoteSink>();
@@ -199,63 +193,12 @@ function mergeLinks(
   return out.length > 0 ? out : undefined;
 }
 
-function readJson(key: string): unknown {
-  try {
-    if (typeof localStorage === "undefined") return null;
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+export async function enqueueFootnoteRequest(body: FootnoteRequestDto): Promise<void> {
+  await storeFootnoteRequest(body);
 }
 
-function writeJson(key: string, value: unknown): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    /* private browsing — the mark stays pending in the open document */
-  }
-}
-
-function loadQueue(): FootnoteRequestDto[] {
-  const parsed = readJson(QUEUE_KEY);
-  if (!Array.isArray(parsed)) return [];
-  return parsed.filter((entry): entry is FootnoteRequestDto => {
-    if (!entry || typeof entry !== "object") return false;
-    const row = entry as Partial<FootnoteRequestDto>;
-    return typeof row.id === "string" && typeof row.doc_id === "string";
-  });
-}
-
-function loadAwaiting(): AwaitingRow[] {
-  const parsed = readJson(AWAITING_KEY);
-  if (!Array.isArray(parsed)) return [];
-  return parsed.filter((entry): entry is AwaitingRow => {
-    if (!entry || typeof entry !== "object") return false;
-    const row = entry as Partial<AwaitingRow>;
-    return typeof row.id === "string" && typeof row.docId === "string";
-  });
-}
-
-export function enqueueFootnoteRequest(body: FootnoteRequestDto): void {
-  const queue = loadQueue().filter((entry) => entry.id !== body.id);
-  queue.push(body);
-  writeJson(QUEUE_KEY, queue);
-  const waiting = loadAwaiting().filter((entry) => entry.id !== body.id);
-  waiting.push({ id: body.id, docId: body.doc_id });
-  writeJson(AWAITING_KEY, waiting);
-}
-
-export function footnoteInboxNeedsPoll(): boolean {
-  return loadQueue().length > 0 || loadAwaiting().length > 0;
-}
-
-function forgetAwaiting(id: string): void {
-  writeJson(AWAITING_KEY, loadAwaiting().filter((entry) => entry.id !== id));
-}
-
-function forgetQueued(id: string): void {
-  writeJson(QUEUE_KEY, loadQueue().filter((entry) => entry.id !== id));
+export async function footnoteInboxNeedsPoll(): Promise<boolean> {
+  return (await readFootnoteOutbox()).length > 0;
 }
 
 function sinksFor(docId: string): OpenAnnotateFootnoteSink[] {
@@ -311,22 +254,21 @@ function isClientError(cause: unknown): boolean {
 }
 
 async function flushBody(client: LcClient): Promise<void> {
-  const queue = loadQueue();
+  const queue = (await readFootnoteOutbox()).flatMap(row => row.request ? [row.request] : []);
   if (queue.length === 0) return;
   for (const item of queue) {
     try {
       await client.postFootnoteRequest(item);
       // Remove this id from the live queue. Writing the snapshot's remainder
       // would erase a request enqueued while the POST was in flight.
-      forgetQueued(item.id);
+      await markFootnoteRequestSent(item.id);
     } catch (cause) {
       if (!isClientError(cause)) continue;
       const cleared = await writeFootnotes(item.doc_id, (footnotes) =>
         applyFootnoteResult(footnotes, { id: item.id, notes: [FOOTNOTE_REJECTED_NOTE] }),
       );
       if (cleared === "failed") continue;
-      forgetQueued(item.id);
-      forgetAwaiting(item.id);
+      await forgetFootnoteRequest(item.id);
     }
   }
 }
@@ -384,7 +326,7 @@ async function ackSaved(client: LcClient, ids: readonly string[]): Promise<void>
   for (const id of ids) {
     try {
       await client.ackFootnoteRequest(id);
-      forgetAwaiting(id);
+      await forgetFootnoteRequest(id);
     } catch {
       /* the next delivery acks again; applying a cleared mark is a no-op */
     }
@@ -427,7 +369,7 @@ export function applyFootnotePing(
 let loggedMissingResultsEndpoint = false;
 
 export async function pollFootnoteInbox(client: LcClient): Promise<void> {
-  if (!footnoteInboxNeedsPoll()) return;
+  if (!await footnoteInboxNeedsPoll()) return;
   let results: FootnotePingResultDto[];
   try {
     results = await client.footnoteResults();
