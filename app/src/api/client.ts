@@ -1509,6 +1509,17 @@ export class LcClient {
     );
   }
 
+  async footnoteResults(): Promise<FootnotePingResultDto[]> {
+    const device = loadDeviceId();
+    const body = await padInvokeOrHub<{ footnote_results?: unknown }>(
+      () => this.cmd("lc_footnote_results", { device }),
+      "GET",
+      `/footnote-results?device=${encodeURIComponent(device)}`,
+    );
+    const rows = body?.footnote_results;
+    return Array.isArray(rows) ? rows as FootnotePingResultDto[] : [];
+  }
+
   async getInkPages(kind: "annotate" | "whiteboard", key: string): Promise<InkPageDto[]> {
     const rows = await padInvokeOrHub<InkPageDto[]>(
       () => this.cmd("lc_get_ink_pages", { kind, key }),

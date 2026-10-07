@@ -952,6 +952,20 @@ pub async fn lc_ack_footnote_request(
 }
 
 #[tauri::command]
+pub async fn lc_footnote_results(
+    state: State<'_, Shared>,
+    device: String,
+) -> Result<LcResponse, String> {
+    go(
+        state,
+        "GET",
+        format!("/footnote-results?device={}", enc(&device)),
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn lc_list_devices(state: State<'_, Shared>) -> Result<LcResponse, String> {
     go(state, "GET", "/devices".into(), None).await
 }

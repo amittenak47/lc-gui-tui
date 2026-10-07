@@ -223,6 +223,7 @@ pub fn router(state: Shared) -> Router {
         )
         .route("/pads/edges", put(routes::put_edges))
         .route("/pads/edges/:id/tombstone", post(routes::tombstone_edge))
+        .route("/footnote-results", get(routes::footnote_results))
         .route("/footnote-requests", post(routes::create_footnote_request).get(routes::list_footnote_requests))
         .route("/footnote-requests/:id", get(routes::get_footnote_request))
         .route("/footnote-requests/:id/result", post(routes::submit_footnote_result))

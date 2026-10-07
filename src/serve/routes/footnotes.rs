@@ -83,6 +83,37 @@ pub async fn ack_footnote_request(UrlPath(id): UrlPath<String>) -> Result<Json<V
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ResultsQuery {
+    #[serde(default)]
+    pub device: Option<String>,
+}
+
+/// `{ "footnote_results": [...] }` for one device. An empty or oversized device
+/// is a 400; `list_results` itself returns nothing for those, which pad sync
+/// still relies on.
+fn footnote_results_on(conn: &rusqlite::Connection, device: &str) -> Result<Value, AppError> {
+    if device.is_empty() || device.chars().count() > 200 {
+        return Err(AppError::bad_request(anyhow::anyhow!("device is required")));
+    }
+    let results = footnotes::list_results(conn, Some(device))
+        .map_err(|err| map_store_error(AppError::from(into_anyhow(err))))?;
+    Ok(serde_json::json!({ "footnote_results": results }))
+}
+
+pub async fn footnote_results(Query(query): Query<ResultsQuery>) -> Result<Json<Value>, AppError> {
+    let device = query.device.unwrap_or_default();
+    // `blocking` flattens every failure to 500. A rejected device has to leave
+    // the worker still marked 400.
+    let value = tokio::task::spawn_blocking(move || -> Result<Value, AppError> {
+        let conn = crate::pads::open(&crate::pads::db_path()?)?;
+        footnote_results_on(&conn, &device)
+    })
+    .await
+    .map_err(|err| AppError::from(anyhow::anyhow!("a background task panicked: {err}")))??;
+    Ok(Json(value))
+}
+
 fn create_on(
     conn: &rusqlite::Connection,
     body: NewFootnoteRequest,
@@ -378,5 +409,71 @@ mod footnote_tests {
             FootnoteFail::Conflict(message) => anyhow::anyhow!("conflict:{message}"),
             FootnoteFail::Other(err) => anyhow::anyhow!("{err:#}"),
         }
+    }
+
+    #[test]
+    fn results_stay_on_the_asking_device_until_a_successful_ack() {
+        let (_dir, conn) = open();
+        footnotes::create_request(&conn, sample("fr-a", "dev-a"), 1).unwrap();
+        footnotes::create_request(&conn, sample("fr-b", "dev-b"), 2).unwrap();
+        footnotes::submit_result(&conn, "fr-a", &["for a".into()], &[], 10).unwrap();
+        footnotes::submit_result(&conn, "fr-b", &["for b".into()], &[], 11).unwrap();
+
+        let for_a = footnote_results_on(&conn, "dev-a").unwrap();
+        assert_eq!(for_a["footnote_results"].as_array().unwrap().len(), 1);
+        assert_eq!(for_a["footnote_results"][0]["id"], "fr-a");
+        assert_eq!(for_a["footnote_results"][0]["doc_id"], "mdink-1");
+        assert_eq!(for_a["footnote_results"][0]["result"]["notes"][0], "for a");
+        let for_b = footnote_results_on(&conn, "dev-b").unwrap();
+        assert_eq!(for_b["footnote_results"][0]["id"], "fr-b");
+        assert!(for_b["footnote_results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["id"] != "fr-a"));
+
+        let missing = None::<String>;
+        let oversized = "d".repeat(201);
+        for device in ["", missing.as_deref().unwrap_or(""), oversized.as_str()] {
+            let err = footnote_results_on(&conn, device).unwrap_err();
+            assert_eq!(err.status_code(), StatusCode::BAD_REQUEST, "{device:?}");
+        }
+        let accepted = footnote_results_on(&conn, &"d".repeat(200)).unwrap();
+        assert!(accepted["footnote_results"].as_array().unwrap().is_empty());
+
+        // A poll that never lands an ack delivers the same result again.
+        assert_eq!(footnote_results_on(&conn, "dev-a").unwrap(), for_a);
+        footnotes::ack_request(&conn, "fr-a", 20).unwrap();
+        assert!(footnote_results_on(&conn, "dev-a").unwrap()["footnote_results"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert_eq!(footnote_results_on(&conn, "dev-b").unwrap()["footnote_results"][0]["id"], "fr-b");
+    }
+
+    #[test]
+    fn results_response_is_only_the_footnote_envelope() {
+        let (_dir, conn) = open();
+        let whiteboard: crate::pads::WhiteboardPad = serde_json::from_value(json!({
+            "id": "book", "title": "Notebook", "updated_at": 10,
+            "page_count": 1, "board": {"v": 1, "elements": []}, "agent": []
+        }))
+        .unwrap();
+        crate::pads::put_whiteboard(&conn, &whiteboard).unwrap();
+        let annotate: crate::pads::AnnotatePad = serde_json::from_value(json!({
+            "id": "doc", "name": "Notes.md", "hash": "abc", "updated_at": 10,
+            "source": "hello", "board": {"v": 1, "elements": []},
+            "footnotes": [], "agent": []
+        }))
+        .unwrap();
+        crate::pads::put_annotate(&conn, &annotate).unwrap();
+        footnotes::create_request(&conn, sample("fr-a", "dev-a"), 1).unwrap();
+        footnotes::submit_result(&conn, "fr-a", &["for a".into()], &[], 10).unwrap();
+
+        let value = footnote_results_on(&conn, "dev-a").unwrap();
+        let json = serde_json::to_value(&value).unwrap();
+        let keys: Vec<_> = json.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(keys, vec!["footnote_results".to_string()]);
+        assert_eq!(json["footnote_results"][0]["id"], "fr-a");
     }
 }

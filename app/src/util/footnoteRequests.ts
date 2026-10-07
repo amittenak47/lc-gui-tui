@@ -4,6 +4,7 @@
  */
 
 import { LcApiError, type FootnotePingResultDto, type FootnoteRequestDto, type LcClient } from "../api/client";
+import { debugLog } from "./debugLog";
 import type { DocAnchor } from "./docAnchors";
 import { getAnnotateDoc, saveAnnotateDoc } from "./annotateStore";
 import {
@@ -397,11 +398,24 @@ export function applyFootnotePing(
   });
 }
 
+let loggedMissingResultsEndpoint = false;
+
 export async function pollFootnoteInbox(client: LcClient): Promise<void> {
   if (!footnoteInboxNeedsPoll()) return;
+  let results: FootnotePingResultDto[];
   try {
-    const ping = await client.pingPadSync(Date.now());
-    await applyFootnotePing(client, ping);
+    results = await client.footnoteResults();
+  } catch (cause) {
+    // An old hub has no /footnote-results. Leave the queue for the next poll
+    // and do not fall back to a full pad sync.
+    if (cause instanceof LcApiError && cause.status === 404 && !loggedMissingResultsEndpoint) {
+      loggedMissingResultsEndpoint = true;
+      debugLog({ k: "error", n: "footnote-results", e: "hub has no /footnote-results" });
+    }
+    return;
+  }
+  try {
+    await applyFootnotePing(client, { footnote_results: results });
   } catch {
     /* a down hub stays queued; a 4xx is handled inside the flush */
   }

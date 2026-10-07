@@ -4,6 +4,12 @@ import type { FootnoteRequestDto, LcClient } from "../api/client";
 import type { DocFootnote } from "./docFootnotes";
 import { applyFootnotePing, applyFootnoteResult, registerOpenAnnotateFootnotes } from "./footnoteRequests";
 
+const debugLog = vi.hoisted(() => vi.fn());
+vi.mock("./debugLog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./debugLog")>()),
+  debugLog,
+}));
+
 const store = vi.hoisted(() => ({
   doc: null as null | { id: string; name: string; footnotes: unknown[] },
   saves: 0,
@@ -429,5 +435,72 @@ describe("footnote request queue", () => {
     expect(stored(AWAITING_KEY)).toEqual([]);
     expect(noteCount("the answer")).toBe(1);
     expect(store.saves).toBe(1);
+  });
+
+  it("polls footnote results without a pad sync and still sends the queue", async () => {
+    debugLog.mockClear();
+    store.doc = {
+      id: "doc-1",
+      name: "Doc",
+      footnotes: [mark({ pending: "fr-old" })],
+    };
+    store.saves = 0;
+    store.saved = [];
+    const mod = await load();
+    const ping = vi.fn(async () => ({
+      footnote_results: [{ id: "fr-old", doc_id: "doc-1", result: { notes: ["from pad sync"] } }],
+    }));
+    const posted: string[] = [];
+    const acks: string[] = [];
+    mod.enqueueFootnoteRequest(body("fr-a"));
+    await mod.pollFootnoteInbox({
+      pingPadSync: ping,
+      footnoteResults: async () => [{ id: "fr-old", doc_id: "doc-1", result: { notes: ["from results"] } }],
+      postFootnoteRequest: async (item: FootnoteRequestDto) => {
+        posted.push(item.id);
+      },
+      ackFootnoteRequest: async (id: string) => {
+        acks.push(id);
+      },
+    } as unknown as LcClient);
+    expect(ping).not.toHaveBeenCalled();
+    expect(posted).toEqual(["fr-a"]);
+    expect(acks).toEqual(["fr-old"]);
+    expect(noteCount("from results")).toBe(1);
+    expect(noteCount("from pad sync")).toBe(0);
+    expect(debugLog).not.toHaveBeenCalled();
+  });
+
+  it("keeps the queue when an old hub has no footnote-results route", async () => {
+    debugLog.mockClear();
+    const mod = await load();
+    const { LcApiError } = await import("../api/client");
+    const ping = vi.fn(async () => ({ footnote_results: [] as { id: string }[] }));
+    const results = vi.fn(async () => {
+      throw new LcApiError("missing", 404);
+    });
+    const posted: string[] = [];
+    mod.enqueueFootnoteRequest(body("fr-a"));
+    const client = {
+      pingPadSync: ping,
+      footnoteResults: results,
+      postFootnoteRequest: async (item: FootnoteRequestDto) => {
+        posted.push(item.id);
+      },
+      ackFootnoteRequest: async () => {},
+    } as unknown as LcClient;
+    await mod.pollFootnoteInbox(client);
+    await mod.pollFootnoteInbox(client);
+    expect(ping).not.toHaveBeenCalled();
+    expect(posted).toEqual([]);
+    expect(stored(QUEUE_KEY).map((entry) => entry.id)).toEqual(["fr-a"]);
+    expect(stored(AWAITING_KEY)).toEqual([{ id: "fr-a", docId: "doc-1" }]);
+    expect(results).toHaveBeenCalledTimes(2);
+    expect(debugLog).toHaveBeenCalledTimes(1);
+    expect(debugLog).toHaveBeenCalledWith({
+      k: "error",
+      n: "footnote-results",
+      e: "hub has no /footnote-results",
+    });
   });
 });

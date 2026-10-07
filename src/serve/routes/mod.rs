@@ -41,8 +41,8 @@ pub use atomic_pads::{
     get_snapshot_copy,
 };
 pub use footnotes::{
-    ack_footnote_request, create_footnote_request, get_footnote_request, list_footnote_requests,
-    submit_footnote_result,
+    ack_footnote_request, create_footnote_request, footnote_results, get_footnote_request,
+    list_footnote_requests, submit_footnote_result,
 };
 pub use pads::{
     get_artifact_asset, put_artifact_asset,
