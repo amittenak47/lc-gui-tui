@@ -262,13 +262,13 @@ describe("the in-tab Sync overlay", () => {
     expect(syncPopover()).not.toBeNull();
   });
 
-  it("shows the offline message without starting a walk and stays open", () => {
+  it("rechecks the offline hub on an explicit tap and keeps the status area open", () => {
     vi.useFakeTimers();
     hub.status = "offline";
     const onSync = vi.fn();
     const { host } = mount({ walkStage: "synced", onSync });
     act(() => syncButton(host).click());
-    expect(onSync).not.toHaveBeenCalled();
+    expect(onSync).toHaveBeenCalledOnce();
     expect(syncPopover()?.querySelector(".lc-doc-sync-line")?.textContent)
       .toBe("Desktop app is offline — changes will sync when it's back.");
     act(() => vi.advanceTimersByTime(10_000));

@@ -914,7 +914,10 @@ export async function discoverHubPads(client: LcClient, report:HubLibraryPullRep
     for (const book of result.books) {
       const remote = digest.books?.find(row => row.kind === book.kind && row.id === book.id);
       const name = String(remote && "record" in remote ? remote.record?.label ?? remote.record?.title ?? remote.record?.name ?? "Book" : "Book");
-      if (book.status === "failed" || book.status === "needs_choice") report.failures.push({ name, message: book.error?.message ?? "Sync failed" });
+      if (book.status === "failed" || book.status === "needs_choice") {
+        const { bookFailureMessage } = await import("./bookSyncMessages");
+        report.failures.push({ name, message: bookFailureMessage(book, true) });
+      }
       else if (book.status === "synced") (before.has(`${book.kind}:${book.id}`) ? report.repaired : report.added).push(name);
     }
     return report.added.length;

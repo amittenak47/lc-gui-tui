@@ -27,17 +27,10 @@ pub async fn get_book_state(
 ) -> Result<Response, AppError> {
     let state = blocking(move || {
         let conn = pads::open(&pads::db_path()?)?;
-        atomic_sync::get_book_state(&conn, &kind, &id)
+        atomic_sync::get_book_state_protocol(&conn, &kind, &id)
     })
-    .await
-    .map_err(|error| {
-        if error.message().contains("unreadable") {
-            error.with_status(StatusCode::UNPROCESSABLE_ENTITY)
-        } else {
-            error
-        }
-    })?;
-    Ok(Json(state).into_response())
+    .await?;
+    Ok(protocol_response(state))
 }
 
 #[derive(Deserialize)]

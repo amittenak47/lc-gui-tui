@@ -3,13 +3,17 @@ import type { LcClient, PadSyncPingDto, BookStateDto, PadSnapshotDto } from "../
 import { run, STORE_BOOK_META, STORE_SYNC_STATE } from "./idb";
 import { syncStateNeedsWork, type BookIdentity, type BookMeta, type SyncState } from "./syncState";
 import { listBookFallbacks, listFallbackContentKeys, fallbackBookIdentity } from "./localBookStore";
-import { syncBook, boundedBookRequest, awaitBookOperation, BookSyncError, type BookResult, type BookSyncOptions } from "./bookSync";
+import { syncBook, boundedBookRequest, awaitBookOperation, BookSyncError, unreadableHubError, type BookResult, type BookSyncOptions } from "./bookSync";
 import { listAllPadSnapshots, getPadSnapshot, type PadSnapshot } from "./padSnapshotStore";
 import { snapshotCopyHash } from "./syncContent";
 import { loadHubAutosync, HUB_AUTOSYNC_EVENT } from "./hubAutoSyncPref";
 import { parseArtifactSnapshotBundle, stageArtifactSnapshot } from "./artifactSnapshot";
 import { syncEdges } from "./inkSync";
 import { HubSyncCancelled } from "./hubConflictStash";
+import { bookDisplay, bookPassSummary, bookFailureMessage, bookNoticeMessage } from "./bookSyncMessages";
+import { debugLog } from "./debugLog";
+
+export const BOOK_PASS_STATUS_EVENT = "lc-book-pass-status";
 
 export interface BookPassNotice { kind: "old_hub" | "backup" | "links"; book?: BookIdentity; title?: string; cause?: unknown }
 export interface BookPassResult { modern: boolean; books: BookResult[]; notices: BookPassNotice[]; cancelled: boolean }
@@ -69,7 +73,7 @@ export async function syncBookPass(client: LcClient, options: BookPassOptions = 
     let joined: BookPassResult;
     try { joined = await awaitBookOperation(active.promise, options.signal); }
     catch (cause) { if (cause instanceof HubSyncCancelled) return { modern: true, books: [], notices: [], cancelled: true }; throw cause; }
-    if (!options.silent && options.selected && joined.books.some(book => identity(book) === identity(options.selected!) && book.status === "needs_choice")) {
+    if (!options.silent && options.selected && !options.signal?.aborted && (joined.cancelled || joined.books.some(book => identity(book) === identity(options.selected!) && ["needs_choice", "cancelled"].includes(book.status)))) {
       return syncBookPass(client, options);
     }
     return joined;
@@ -124,7 +128,8 @@ async function executePass(client: LcClient, options: BookPassOptions): Promise<
       const selected = options.selected && identity(options.selected) === identity(owner);
       const unreadable = broken.get(identity(owner));
       if (unreadable) {
-        result.books.push({ ...owner, status: "failed", committed: false, error: new BookSyncError("hub_page", unreadable.error.message) });
+        result.books.push({ ...owner, display: bookDisplay(owner, present.get(identity(owner)), inventory.get(identity(owner))?.record), status: "failed", committed: false,
+          error: unreadableHubError(unreadable.error) ?? new BookSyncError("invalid", unreadable.error.message) });
         continue;
       }
       result.books.push(await syncBook(client, owner.kind, owner.id, inventory.get(identity(owner)), {
@@ -133,7 +138,8 @@ async function executePass(client: LcClient, options: BookPassOptions): Promise<
       }));
     }
     for (const error of ping.errors ?? []) if (!candidates.has(identity(error)) && (present.has(identity(error)) || options.libraryPull)) result.books.push({ kind: error.kind, id: error.id,
-      status: "failed", committed: false, error: new BookSyncError("invalid", error.error.message) });
+      display: bookDisplay(error, present.get(identity(error))), status: "failed", committed: false,
+      error: unreadableHubError(error.error) ?? new BookSyncError("invalid", error.error.message) });
     result.notices.push(...await syncBookBackups(client, signal, options.timeoutMs));
     try { await boundedBookRequest(() => syncEdges(client, ping.edges ?? [], ping.gone_edges ?? []), signal, options.timeoutMs); }
     catch (cause) { if (signal.aborted) throw new HubSyncCancelled(); result.notices.push({ kind: "links", cause }); }
@@ -145,6 +151,17 @@ async function executePass(client: LcClient, options: BookPassOptions): Promise<
     else throw cause;
     return result;
   } finally {
+    for (const book of result.books) {
+      debugLog({ k: book.error ? "error" : "action", n: "book sync", a: JSON.stringify({kind:book.kind,id:book.id,committed:book.committed}),
+        r: book.status, ...(book.error ? { e: bookFailureMessage(book, options.libraryPull) } : {}) });
+      // Separate diagnostic entries keep every identity even when the reader's
+      // line summarizes a long failed-page list.
+      for (const page of book.error?.pages ?? []) debugLog({k:"error",n:"book sync page",a:JSON.stringify({kind:book.kind,id:book.id,...page}),e:book.error?.kind});
+      if(book.error)debugLog({k:"error",n:"book sync cause",e:book.error.message,a:JSON.stringify({kind:book.error.kind,status:(book.error.cause as {status?:number}|undefined)?.status})});
+    }
+    for (const notice of result.notices) debugLog({k:"error",n:"book sync notice",e:bookNoticeMessage(notice)});
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(BOOK_PASS_STATUS_EVENT,
+      { detail: { passive: options.silent === true || !options.onProgress, result, summary: bookPassSummary(result, options.libraryPull) } }));
     source?.removeEventListener("abort", cancel);
     if (typeof window !== "undefined") window.removeEventListener(HUB_AUTOSYNC_EVENT, preference);
   }

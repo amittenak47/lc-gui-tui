@@ -8,12 +8,15 @@ import { packEncodedInk } from "../canvas/inkCodec";
 import { localPageKey } from "./bookSnapshot";
 import { inkChoiceOf, type HubConflictResolution, type HubPadConflict } from "./hubConflictStash";
 import { mergeAgentMessages } from "../modes/coachSessions";
+import { bookDisplay, bookConflictMessage } from "./bookSyncMessages";
 
 export async function askBookConflict(
   conflict: BookConflict, lifecycle: ConflictUiLifecycle,
   show: (conflict: HubPadConflict, lifecycle: ConflictUiLifecycle) => Promise<HubConflictResolution>,
 ): Promise<BookResolution> {
   const { capture, remote } = conflict;
+  const localDisplay=bookDisplay(capture,capture.metadata,capture.record),hubDisplay=bookDisplay(capture,capture.metadata,remote.record);
+  const display={...localDisplay,scratchTitles:{...hubDisplay.scratchTitles,...localDisplay.scratchTitles}};
   const primary = conflict.pages.filter(page => page.key === capture.id);
   const scratch = conflict.pages.filter(page => page.key !== capture.id);
   const preview = async (pageId: number) => {
@@ -33,9 +36,11 @@ export async function askBookConflict(
     kind: capture.kind === "problem" ? "whiteboard" : capture.kind, id: capture.id,
     ...(capture.kind === "problem" ? { wholeCanvas: true } : {}),
     stage: conflict.record || conflict.lifecycle ? "pad" : "ink",
-    detail: conflict.lifecycle ? "Choose whether to keep your requested deletion or restoration against this hub version." : "Choose the changed record or handwriting pages to keep.",
-    local: capture.record as unknown as AnnotatePadDto | WhiteboardPadDto | null,
-    server: remote.record as unknown as AnnotatePadDto | WhiteboardPadDto | null,
+    detail: conflict.lifecycle ? "Choose whether to keep your requested deletion or restoration against this hub version."
+      : conflict.pages[0] ? bookConflictMessage(capture, {key:conflict.pages[0].key,pageId:conflict.pages[0].page_id}, display)
+        : "Choose the changed record or handwriting pages to keep.",
+    local: (capture.kind==="problem"&&capture.record?{...capture.record,title:display.title}:capture.record) as unknown as AnnotatePadDto | WhiteboardPadDto | null,
+    server: (capture.kind==="problem"&&remote.record?{...remote.record,title:display.title}:remote.record) as unknown as AnnotatePadDto | WhiteboardPadDto | null,
     localInkPageIds: primary.filter(page => capture.pages.some(row => row.docKey === localPageKey(capture, page.key) && row.pageId === page.page_id)).map(page => page.page_id),
     hubInkPageIds: primary.map(page => page.page_id), serverInk: [],
     localInkStamps: primary.flatMap(page => {

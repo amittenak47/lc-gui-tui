@@ -584,7 +584,7 @@ export interface BookInventoryErrorDto {
   kind: PadKind;
   id: string;
   book_rev: number;
-  error: { status: string; message: string };
+  error: { status: string; message: string; pages?: Array<{ key: string; page_id: number }> };
 }
 
 export interface CommitRequestDto {

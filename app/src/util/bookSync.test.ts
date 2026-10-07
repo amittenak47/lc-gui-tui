@@ -17,6 +17,7 @@ import { getBookSyncState } from "./syncState";
 import { encodeInkOps, packEncodedInk, type EncodedInk } from "../canvas/inkCodec";
 import { recordHash, validateInk } from "./syncContent";
 import { b64ToBytes, bytesToB64 } from "../api/nativeHttp";
+import { bookFailureMessage } from "./bookSyncMessages";
 
 const board = { v: 1 as const, elements: [], appState: { scrollX: 0, scrollY: 0, zoom: 1 } };
 const empty = encodeInkOps([]);
@@ -98,6 +99,15 @@ const drawing = (color = "#111111") => encodeInkOps([{ kind: "draw", color, base
   points: [{ x: 1, y: 2, pressure: .5 }, { x: 4, y: 5, pressure: .5 }] }]);
 
 describe("modern current-state book sync", () => {
+  it("names a corrupt hub page from a direct metadata read and keeps the complete local copy", async () => {
+    await initial();const before=await captureBook({kind:"whiteboard",id:"book"});
+    vi.mocked(api.getBookState).mockRejectedValue(new LcApiError("Unreadable bytes",422,undefined,
+      {status:"unreadable_content",message:"Unreadable bytes",pages:[{key:"book",page_id:113}]}));
+    const result=await syncBook(api,"whiteboard","book",undefined,options);
+    expect(result.status).toBe("failed");expect(result.error?.pages).toEqual([{key:"book",pageId:113}]);
+    expect(bookFailureMessage(result)).toBe("Book: page 113 can't be read from the hub.");
+    expect(await captureBook({kind:"whiteboard",id:"book"})).toEqual(before);
+  });
   it("publishes a new record and the valid empty page 113 together", async () => {
     await initial();
     expect(api.commitPad).toHaveBeenCalledOnce();

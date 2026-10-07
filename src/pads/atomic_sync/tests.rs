@@ -135,6 +135,38 @@ fn restore_request(index: u32, gone: &BookState) -> CommitRequest {
 }
 
 #[test]
+fn unreadable_page_contract_names_the_page_without_mutating_its_bytes_or_head() {
+    let f = Fixture::new();
+    let mut input = request(1, "whiteboard", "book");
+    stage(&f, &mut input, "book", 113, 0, "empty", false);
+    f.commit(&input).unwrap();
+    let head = f.book("whiteboard", "book").book_rev;
+    f.conn
+        .execute("UPDATE ink_pages SET gz=X'00' WHERE key='book'", [])
+        .unwrap();
+    let expected = json!([{"key":"book","page_id":113}]);
+    let inventory = list_book_inventory(&f.conn).unwrap();
+    assert_eq!(inventory[0]["error"]["pages"], expected);
+    let direct = get_book_state_protocol(&f.conn, "whiteboard", "book")
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(direct.status, 422);
+    assert_eq!(direct.body["pages"], expected);
+    assert_eq!(
+        check_book_head(&f.conn, "whiteboard", "book", head)
+            .unwrap()
+            .unwrap_err()
+            .body["pages"],
+        expected
+    );
+    let bytes: Vec<u8> = f.conn
+        .query_row("SELECT gz FROM ink_pages WHERE key='book'", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(bytes, [0]);
+    assert_eq!(list_book_heads(&f.conn).unwrap()[0].rev, head);
+}
+
+#[test]
 fn commit_writes_record_pages_head_history_and_receipt_together() {
     let f = Fixture::new();
     let mut input = request(1, "annotate", "book");

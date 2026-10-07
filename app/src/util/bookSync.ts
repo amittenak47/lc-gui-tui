@@ -23,18 +23,32 @@ import { editArtifactCatalog } from "./artifactCatalogEdits";
 import { stageWhiteboardArtifactSnapshot } from "./artifactWhiteboards";
 import { problemCanvasSnapshot } from "./problemArtifactConflict";
 import type { BoardBlob } from "../canvas/BoardHandle";
+import { bookDisplay, type BookDisplay } from "./bookSyncMessages";
 
 export type BookErrorKind = "unreachable" | "storage" | "needs_choice" | "merge_mount" | "local_page" | "hub_page"
   | "stage" | "unconfirmed" | "hub_changed" | "local_changed" | "missing_staging" | "dependency" | "gone" | "cap" | "invalid";
 export class BookSyncError extends Error {
+  missing = false;
   constructor(readonly kind: BookErrorKind, message: string, readonly pages: Array<{ key: string; pageId: number }> = [], readonly cause?: unknown) {
     super(message); this.name = "BookSyncError";
   }
+}
+/** Preserve the hub's structured corrupt-page identity without parsing prose. */
+export function unreadableHubError(body: unknown, cause?: unknown): BookSyncError | null {
+  if (!body || typeof body !== "object") return null;
+  const error = body as { status?: unknown; message?: unknown; pages?: unknown };
+  if (error.status !== "unreadable_content") return null;
+  const pages = (Array.isArray(error.pages) ? error.pages : []).flatMap(page =>
+    page && typeof page.key === "string" && Number.isSafeInteger(page.page_id) && page.page_id >= 0
+      ? [{ key: page.key, pageId: page.page_id as number }] : []);
+  return new BookSyncError(pages.length ? "hub_page" : "invalid",
+    typeof error.message === "string" ? error.message : "Unreadable hub content", pages, cause);
 }
 export interface BookResult extends BookIdentity {
   status: "synced" | "unchanged" | "failed" | "needs_choice" | "cancelled";
   committed: boolean;
   error?: BookSyncError;
+  display?: BookDisplay;
 }
 export type BookChoice = "local" | "server" | "merged" | "none";
 export interface BookResolution {
@@ -134,7 +148,10 @@ async function acquirePage(client: LcClient, capture: BookCapture, remote: BookS
   const docKey = localPageKey(capture, page.key);
   const dto = await boundedBookRequest(() => client.getInkPage(capture.kind as "annotate" | "whiteboard", page.key, page.page_id,
     { bookRev: remote.book_rev, pageRev: page.rev }, { timeoutMs: options.timeoutMs }), signal, options.timeoutMs);
-  if (!dto) throw new BookSyncError("hub_page", "The advertised hub page is missing", [{ key: page.key, pageId: page.page_id }]);
+  if (!dto) {
+    const error = new BookSyncError("hub_page", "The advertised hub page is missing", [{ key: page.key, pageId: page.page_id }]);
+    error.missing = true; throw error;
+  }
   try {
     const validated = await validateInk(b64ToBytes(dto.gz));
     if (validated.wireHash !== page.hash || dto.rev !== page.rev) throw new Error("Pinned handwriting identity does not match");
@@ -279,7 +296,7 @@ export async function syncBook(client: LcClient, kind: BookIdentity["kind"], id:
     let result: BookResult;
     try { result = await awaitBookOperation(existing, options.signal); }
     catch (cause) { if (cause instanceof HubSyncCancelled) return { kind, id, status: "cancelled", committed: false }; throw cause; }
-    if (!options.manual || result.status !== "needs_choice") return result;
+    if (!options.manual || options.signal?.aborted || !["needs_choice", "cancelled"].includes(result.status)) return result;
     return syncBook(client, kind, id, inventory, options);
   }
   const work = executeBook(client, { kind, id }, inventory, options);
@@ -289,8 +306,9 @@ export async function syncBook(client: LcClient, kind: BookIdentity["kind"], id:
 async function executeBook(client: LcClient, owner: BookIdentity, inventory: BookStateDto | undefined, options: BookSyncOptions): Promise<BookResult> {
   const signal = options.signal ?? new AbortController().signal;
   let committed = false, hubRestarts = 0, localRestarts = 0;
+  let display = bookDisplay(owner);
   try {
-    return await withBookSync(owner.kind, owner.id, async () => {
+    const result = await withBookSync<BookResult>(owner.kind, owner.id, async () => {
       try { await ensureBookReadyForAtomicSync(owner); } catch (cause) { throw new BookSyncError("storage", "Local storage is not ready for safe sync", [], cause); }
       let previous = await captureBook(owner);
       if (previous.state.lastAttempt) {
@@ -304,6 +322,7 @@ async function executeBook(client: LcClient, owner: BookIdentity, inventory: Boo
       for (;;) {
         stop(signal);
         const capture = await captureBook(owner);
+        display = bookDisplay(owner, capture.metadata, capture.record);
         const localInline = capture.record ? await convertInlineBook(capture, capture.record, capture.state.changeSeq) : null;
         const effectiveCapture = localInline ? { ...capture, record: localInline.record, pages: [...capture.pages] } : capture;
         if (localInline) for (const row of localInline.rows) {
@@ -332,6 +351,8 @@ async function executeBook(client: LcClient, owner: BookIdentity, inventory: Boo
         }
         const remote = inventory ?? await boundedBookRequest(() => client.getBookState(owner.kind, owner.id, { timeoutMs: options.timeoutMs }), signal, options.timeoutMs);
         inventory = undefined;
+        const hubDisplay = bookDisplay(owner, capture.metadata, remote.record);
+        display = { title: display.title === "Book" ? hubDisplay.title : display.title, scratchTitles: { ...hubDisplay.scratchTitles, ...display.scratchTitles } };
         if (remote.kind !== owner.kind || remote.id !== owner.id) throw new BookSyncError("invalid", "Wrong book identity returned by hub");
         if (remote.record && await recordHash(remote.record) !== remote.record_hash) throw new BookSyncError("invalid", "The hub record doesn't match its advertised content hash");
         const seenPages = new Set<string>();
@@ -579,11 +600,12 @@ async function executeBook(client: LcClient, owner: BookIdentity, inventory: Boo
         }
       }
     }, signal);
+    return { ...result, display };
   } catch (cause) {
     if (cause instanceof HubSyncCancelled || signal.aborted) return { ...owner, status: "cancelled", committed };
     const error = cause instanceof BookSyncError ? cause : cause instanceof LcApiError
-      ? new BookSyncError(cause.status === 410 ? "gone" : cause.status === 403 ? "cap" : cause.status === 0 ? "unreachable" : "invalid", cause.message, [], cause)
+      ? unreadableHubError(cause.json, cause) ?? new BookSyncError(cause.status === 410 ? "gone" : cause.status === 403 ? "cap" : cause.status === 0 ? "unreachable" : "invalid", cause.message, [], cause)
       : new BookSyncError("storage", cause instanceof Error ? cause.message : String(cause), [], cause);
-    return { ...owner, status: error.kind === "needs_choice" ? "needs_choice" : "failed", committed, error };
+    return { ...owner, status: error.kind === "needs_choice" ? "needs_choice" : "failed", committed, error, display };
   }
 }

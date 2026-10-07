@@ -288,4 +288,24 @@ async fn pads_atomic_http_and_native_dispatch_publish_one_version_and_retain_rec
         .unwrap()
         .contains(&json!("atomic_book_sync_v1")));
     assert_eq!(inventory["books"].as_array().unwrap().len(), 2);
+    // Both transports preserve the structured identity of a corrupt page;
+    // the healthy neighbouring book remains available and no bytes are erased.
+    let path = pads::db_path().unwrap();
+    assert!(path.starts_with(directory.path()));
+    let conn = pads::open(&path).unwrap();
+    conn.execute("UPDATE ink_pages SET gz=X'00' WHERE key='transport0'", [])
+        .unwrap();
+    for native in [false, true] {
+        let (status, error) = request(&state, native, "GET", "/pads/books/whiteboard/transport0", None).await;
+        assert_eq!(status, 422);
+        assert_eq!(error["status"], "unreadable_content");
+        assert_eq!(error["pages"], json!([{"key":"transport0","page_id":113}]));
+        let (status, healthy) = request(&state, native, "GET", "/pads/books/whiteboard/transport1", None).await;
+        assert_eq!(status, 200);
+        assert_eq!(healthy["state"], "live");
+    }
+    let bytes: Vec<u8> = conn
+        .query_row("SELECT gz FROM ink_pages WHERE key='transport0'", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(bytes, [0]);
 }

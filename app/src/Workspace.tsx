@@ -59,6 +59,8 @@ import { DEFAULT_DATASET } from "./api/types";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { HoldButton } from "./components/HoldButton";
 import { HubSyncControl, padTabSync, tabOffersHubSync } from "./components/HubSyncControl";
+import { BOOK_PASS_STATUS_EVENT, type BookPassResult } from "./util/bookSyncPass";
+import { bookNoticeMessage } from "./util/bookSyncMessages";
 import { LoadingDoodle } from "./components/LoadingDoodle";
 import { waitForTopBannersIdle } from "./components/StatusBanner";
 import {
@@ -1247,6 +1249,29 @@ export const Workspace = memo(function Workspace({
    */
   /** How far the Sync walk has got, for the chip beside the document name. */
   const [walkReport, setWalkReport] = useState<HubWalkReport | null>(null);
+  const sharedWalkRef = useRef(walkReport);
+  sharedWalkRef.current = walkReport;
+  useEffect(() => {
+    if (!active) return;
+    let disposed=false;
+    const onPass = async (event: Event) => {
+      const detail = (event as CustomEvent<{ passive: boolean; result: BookPassResult; summary: string | null }>).detail;
+      if (!detail?.passive || detail.result.cancelled || !detail.result.books.length && !detail.result.notices.length) return;
+      const current = sharedWalkRef.current;
+      if (current && !current.error && current.stage !== "idle" && current.stage !== "synced") return;
+      const message=detail.result.notices.map(bookNoticeMessage).join(" ")||null;
+      let owner:{kind:string;id:string}|null=null;
+      try{owner=await hubSyncHostRef.current?.book?.()??null;}catch{/* Displaying a notice must not hide a storage failure. */}
+      if(disposed)return;
+      const latest=sharedWalkRef.current;
+      if(latest&&!latest.error&&latest.stage!=="idle"&&latest.stage!=="synced")return;
+      if(detail.summary)setWalkReport({stage:"pad",progress:null,error:detail.summary});
+      else if(owner&&detail.result.books.some(book=>book.kind===owner.kind&&book.id===owner.id&&["synced","unchanged"].includes(book.status)))setWalkReport({stage:"synced",progress:null,message});
+      else if(message)setWalkReport(previous=>({...previous,stage:previous?.stage??"idle",progress:null,message}));
+    };
+    window.addEventListener(BOOK_PASS_STATUS_EVENT, onPass);
+    return () => {disposed=true;window.removeEventListener(BOOK_PASS_STATUS_EVENT, onPass);};
+  }, [active]);
 
   const [padEditSeq, setPadEditSeq] = useState(0);
   const bumpPadEdit = useCallback(() => setPadEditSeq((n) => n + 1), []);
@@ -10151,6 +10176,7 @@ export const Workspace = memo(function Workspace({
         walkJob: walkReport?.job ?? null,
         walkProgress: walkReport?.progress ?? null,
         walkError: walkReport?.error ?? null,
+        walkMessage: walkReport?.message ?? null,
         walkWaiting: walkReport?.waiting ?? null,
         padSync: padTabSync({
           walkStage: walkReport?.stage ?? null,
@@ -10876,6 +10902,7 @@ export const Workspace = memo(function Workspace({
       (tab.kind !== "practice" || !!problem && !isLocalPad(problem)) &&
       !isFootnoteBoardTab(tab) ? (
         <HubSyncControl
+          report={walkReport}
           hubHint={hubHint}
           client={client}
           host={hubSyncHostRef.current}

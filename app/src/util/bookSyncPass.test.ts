@@ -14,6 +14,7 @@ import { putProblemBoard } from "./problemBoardStore";
 import { resetLocalBookStoreForTests, mutateLocalBook } from "./localBookStore";
 import { resetBookCoordinatorForTests } from "./bookCoordinator";
 import { saveHubAutosyncPref } from "./hubAutoSyncPref";
+import { bookFailureMessage } from "./bookSyncMessages";
 
 const board = { v: 1 as const, elements: [], appState: { scrollX: 0, scrollY: 0, zoom: 1 } };
 const inventory = (id: string, rev = 1): BookStateDto => ({ kind: "whiteboard", id, book_rev: rev, record_rev: 1, state: "live", gone_seq: null, record_hash: "record", record: { id, title: id, board }, pages: [] });
@@ -57,6 +58,17 @@ it("isolates a broken inventory book and still attempts its healthy neighbour", 
   const result = await syncBookPass(api);
   expect(result.books.filter(book => book.id === "bad")).toHaveLength(1); expect(result.books.find(book => book.id === "bad")?.status).toBe("failed");
   expect(vi.mocked(syncBook).mock.calls.map(call => call[2])).toEqual(["good"]);
+});
+it("names corrupt inventory pages for dirty candidates and clean books outside the candidate list",async()=>{
+  await save("Algorithms");await save("healthy");
+  ping.errors=[{kind:"whiteboard",id:"Algorithms",book_rev:3,error:{status:"unreadable_content",message:"Unreadable ink",
+    pages:[{key:"Algorithms",page_id:113}]}}];
+  const result=await syncBookPass(api);
+  expect(bookFailureMessage(result.books.find(book=>book.id==="Algorithms")!)).toBe("Algorithms: page 113 can't be read from the hub.");
+  expect(vi.mocked(syncBook).mock.calls.map(call=>call[2])).toEqual(["healthy"]);
+  await mutateLocalBook({kind:"whiteboard",id:"Algorithms"},{authored:false},ctx=>ctx.setState({...ctx.state,bootstrap:false,syncedChangeSeq:ctx.state.changeSeq}));
+  const clean=await syncBookPass(api);
+  expect(bookFailureMessage(clean.books.find(book=>book.id==="Algorithms")!)).toBe("Algorithms: page 113 can't be read from the hub.");
 });
 it("auto-sync off does not prepare, ping or mutate anything in the background", async () => {
   await save("dirty"); const prepare = vi.fn();

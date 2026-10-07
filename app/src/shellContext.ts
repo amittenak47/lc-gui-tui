@@ -118,6 +118,7 @@ export interface WorkspaceChrome {
     walkProgress?: { done: number; total: number } | null;
     /** The walk parked on `walkStage`. */
     walkError?: string | null;
+    walkMessage?: string | null;
     /** The walk is asking which copy to keep, not spinning. */
     walkWaiting?: "conflict" | null;
     padSync?: "synced" | "not-synced" | null;
@@ -168,6 +169,7 @@ export function chromeLooksSame(current: WorkspaceChrome, next: WorkspaceChrome)
     current.docIndex.walkStage === next.docIndex.walkStage &&
     current.docIndex.walkJob === next.docIndex.walkJob &&
     current.docIndex.walkError === next.docIndex.walkError &&
+    current.docIndex.walkMessage === next.docIndex.walkMessage &&
     current.docIndex.walkWaiting === next.docIndex.walkWaiting &&
     current.docIndex.padSync === next.docIndex.padSync &&
     current.docIndex.onSync === next.docIndex.onSync &&

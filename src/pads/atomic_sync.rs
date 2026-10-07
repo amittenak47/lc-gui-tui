@@ -22,12 +22,31 @@ impl std::fmt::Display for ProtocolError {
 impl std::error::Error for ProtocolError {}
 pub type ProtocolResult<T> = Result<std::result::Result<T, ProtocolError>>;
 
+#[derive(Debug)]
+struct UnreadableInkPage {
+    key: String,
+    page_id: i64,
+}
+impl std::fmt::Display for UnreadableInkPage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unreadable ink {} page {}", self.key, self.page_id)
+    }
+}
+impl std::error::Error for UnreadableInkPage {}
+fn unreadable_body(error: &anyhow::Error) -> Value {
+    let mut body = json!({"status":"unreadable_content","message":format!("{error:#}")});
+    if let Some(page) = error.downcast_ref::<UnreadableInkPage>() {
+        body["pages"] = json!([{"key":page.key,"page_id":page.page_id}]);
+    }
+    body
+}
+
 fn protocol<T>(value: Result<T>) -> ProtocolResult<T> {
     match value {
         Ok(value) => Ok(Ok(value)),
         Err(error) if format!("{error:#}").contains("unreadable") => Ok(Err(ProtocolError::new(
             422,
-            json!({"status":"unreadable_content","message":format!("{error:#}")}),
+            unreadable_body(&error),
         ))),
         Err(error) => match error.downcast::<ProtocolError>() {
             Ok(error) => Ok(Err(error)),
@@ -224,9 +243,15 @@ fn owned_pages(conn: &Connection, kind: &str, id: &str) -> Result<Vec<(BookPage,
     let mut pages = Vec::new();
     for row in rows {
         let (key, page_id, rev, bytes) = row?;
-        page_identity(kind, &key, page_id).context("unreadable ink identity")?;
+        page_identity(kind, &key, page_id).with_context(|| UnreadableInkPage {
+            key: key.clone(),
+            page_id,
+        })?;
         let hash = sync_content::validate_ink(&bytes)
-            .with_context(|| format!("unreadable ink {key} page {page_id}"))?
+            .with_context(|| UnreadableInkPage {
+                key: key.clone(),
+                page_id,
+            })?
             .wire_hash;
         pages.push((
             BookPage {
@@ -332,12 +357,16 @@ pub fn get_book_state(conn: &Connection, kind: &str, id: &str) -> Result<BookSta
     })
 }
 
+pub fn get_book_state_protocol(conn: &Connection, kind: &str, id: &str) -> ProtocolResult<BookState> {
+    protocol(get_book_state(conn, kind, id))
+}
+
 pub fn list_book_inventory(conn: &Connection) -> Result<Vec<Value>> {
     read_transaction(conn, || {
         list_book_heads(conn)?.into_iter().map(|head| {
             match get_book_state(conn,&head.kind,&head.id) {
                 Ok(book)=>Ok(serde_json::to_value(book)?),
-                Err(error) if format!("{error:#}").contains("unreadable")=>Ok(json!({"kind":head.kind,"id":head.id,"book_rev":head.rev,"error":{"status":"unreadable_content","message":format!("{error:#}")}})),
+                Err(error) if format!("{error:#}").contains("unreadable")=>Ok(json!({"kind":head.kind,"id":head.id,"book_rev":head.rev,"error":unreadable_body(&error)})),
                 Err(error)=>Err(error),
             }
         }).collect()

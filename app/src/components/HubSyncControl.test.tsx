@@ -567,7 +567,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       });
 
       expect(button.dataset.stage).toBe("failed");
-      expect(button.dataset.error).toContain("unreachable");
+      expect(button.dataset.error).toBe("Can't reach the hub. Is the desktop app open?");
       expect(activeLabel(button)).toBe("Sync failed");
       expect(walkReports.at(-1)?.stage).toBe("pad");
       expect(client.getDocIndex).not.toHaveBeenCalled();
@@ -837,7 +837,7 @@ describe("HubSyncControl (step-2 stub)", () => {
       });
       // Parked on the failing stage's label with the error visible.
       expect(button.dataset.stage).toBe("failed");
-      expect(button.dataset.error).toContain("unreachable");
+      expect(button.dataset.error).toBe("Can't reach the hub. Is the desktop app open?");
       expect(activeLabel(button)).toBe("Sync failed");
 
       // Next tap retries; this time the hub answers.
@@ -1290,7 +1290,11 @@ describe("HubSyncControl (step-2 stub)", () => {
       const button = await mountWalk(client, withWhiteboardPad(host));
       await act(async () => { button.click(); });
       expect(client.pingPadSync).not.toHaveBeenCalled();
-      await act(async () => { release(); await vi.runAllTimersAsync(); });
+      await act(async () => { release(); });
+      await vi.waitFor(async () => {
+        await act(async () => { await vi.runAllTimersAsync(); });
+        expect(button.dataset.stage).toBe("synced");
+      });
       expect(client.pingPadSync).toHaveBeenCalledTimes(1);
       expect(button.dataset.stage).toBe("synced");
     });
@@ -1454,7 +1458,7 @@ describe("HubSyncControl (step-2 stub)", () => {
 
       const last = walkReports.at(-1) as { stage: string; error?: string } | null;
       expect(last?.stage).toBe("index");
-      expect(last?.error).toContain("unreachable");
+      expect(last?.error).toBe("Can't reach the hub. Is the desktop app open?");
       expect(button.dataset.stage).toBe("failed");
     });
 

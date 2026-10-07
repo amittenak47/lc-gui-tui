@@ -54,6 +54,7 @@ import { syncBookPass, isModernBookHub, takeOldBookHubNotice } from "../util/boo
 import { boundedBookRequest } from "../util/bookSync";
 import { askBookConflict } from "../util/bookConflictUi";
 import type { BookIdentity } from "../util/syncState";
+import { bookPassSummary, bookNoticeMessage } from "../util/bookSyncMessages";
 
 /**
  * What the walk is doing, for the tab chip beside the document's name.
@@ -76,6 +77,7 @@ export interface HubWalkReport {
   error?: string | null;
   /** The walk is asking the reader to pick a copy, not doing work. */
   waiting?: "conflict";
+  message?: string | null;
 }
 
 export type HubSyncStage =
@@ -242,6 +244,8 @@ export interface HubSyncWalkHost {
 }
 
 export interface HubSyncControlProps {
+  /** Workspace owns the status used by both the dock and tablet header. */
+  report?: HubWalkReport | null;
   /**
    * What the hub already had when this document was opened — read-only hint
    * only. When the hub row exists and is not older than local-at-open, idle
@@ -279,6 +283,7 @@ export function HubSyncControl({
   showDock = true,
   dock = null,
   tapRef,
+  report,
 }: HubSyncControlProps) {
   /*
    * No hub, no pill.
@@ -300,8 +305,9 @@ export function HubSyncControl({
   /** Wired for the real walk. Without both, this is the label-only stub. */
   const wired = Boolean(client && host);
 
-  const [stage, setStage] = useState<HubSyncStage>("idle");
-  const [walkError, setWalkError] = useState<string | null>(null);
+  const [stage, setStage] = useState<HubSyncStage>(report?.stage ?? "idle");
+  const [ownError, setWalkError] = useState<string | null>(report?.error ?? null);
+  const walkError = report === undefined ? ownError : report?.error ?? null;
   const walkingRef = useRef(false);
   const timerRef = useRef<number | null>(null);
   const walkAbortRef = useRef<AbortController | null>(null);
@@ -311,7 +317,7 @@ export function HubSyncControl({
    * `setStage` is a React update; the extract and embed callbacks fire between
    * renders and need to name the stage they belong to.
    */
-  const walkStageRef = useRef<HubSyncStage>("idle");
+  const walkStageRef = useRef<HubSyncStage>(report?.stage ?? "idle");
   const hostRef = useRef(host);
   hostRef.current = host;
 
@@ -349,6 +355,13 @@ export function HubSyncControl({
    * back to Sync / not-synced on its own.
    */
   const absorbReloadEditsRef = useRef(false);
+  useEffect(() => {
+    if (report?.stage === "synced" && !report.error && !walkingRef.current) {
+      syncedAtSeqRef.current = editSeqRef.current;
+      walkStageRef.current = "synced";
+      setStage("synced");
+    }
+  }, [report]);
 
   // Clearing on unmount keeps the stub walk from writing state into a dead
   // tree; the real walk aborts so it cannot PUT or raise a conflict after the
@@ -453,7 +466,9 @@ export function HubSyncControl({
        */
       await host?.prepare?.();
       throwIfAborted();
-      const ping = await boundedBookRequest(() => client!.pingPadSync(0, {}), abort.signal);
+      let ping;
+      try { ping = await boundedBookRequest(() => client!.pingPadSync(0, {}), abort.signal); }
+      catch (cause) { if (abort.signal.aborted) throw new HubSyncCancelled(); throw new Error("Can't reach the hub. Is the desktop app open?", {cause}); }
       throwIfAborted();
 
       if (isModernBookHub(ping)) {
@@ -461,15 +476,25 @@ export function HubSyncControl({
         goStage("pad");
         const result = await syncBookPass(client!, { ping, signal: abort.signal,
           selected: selected ? { kind: selected.kind, id: selected.id } : undefined,
-          requestChoice: (conflict, lifecycle) => askBookConflict(conflict, lifecycle, (shown, mounted) => host!.onConflict(shown, mounted)),
-          onProgress: (done, total) => goWork(null, { done, total }),
+          requestChoice: async (conflict, lifecycle) => {
+            hostRef.current?.onWalkProgress({stage:"pad",progress:null,waiting:"conflict"});
+            try { return await askBookConflict(conflict, lifecycle, (shown, mounted) => host!.onConflict(shown, mounted)); }
+            finally { if(!abort.signal.aborted) hostRef.current?.onWalkProgress({stage:"pad",progress:null}); }
+          },
+          onProgress: (done, total) => hostRef.current?.onWalkProgress({stage:"pad",progress:{done,total},message:`Syncing ${done} of ${total} books`}),
         });
         if (result.cancelled) throw new HubSyncCancelled();
         const failed = result.books.filter(book => book.status === "failed" || book.status === "needs_choice");
-        if (failed.length) throw failed[0]!.error;
+        if (failed.length) {
+          await host?.emitReload(); throwIfAborted();
+          throw new Error(bookPassSummary(result)!);
+        }
+        if (selected && result.books.some(book => book.kind === selected.kind && book.id === selected.id && book.status === "cancelled")) {
+          await host?.emitReload(); throwIfAborted(); goStage("idle"); walkingRef.current = false; return;
+        }
         // Indexing is supplemental to the live-book transaction. Its failure
         // is retained as a notice and cannot undo a confirmed book commit.
-        let notice = result.notices.map(item => item.kind === "backup" ? `${item.title ?? "Book"}: snapshots didn't sync. They are kept on this device.` : "Links didn't sync.").join(" ");
+        let notice = result.notices.map(bookNoticeMessage).join(" ");
         if (doc && doc.docType !== "web") {
           goStage("index");
           try {
@@ -891,7 +916,7 @@ export function HubSyncControl({
       walkingRef.current = false;
     } catch (cause) {
       walkingRef.current = false;
-      if (cause instanceof WalkAborted && abort.signal.aborted) return;
+      if (abort.signal.aborted) return;
       if (cause instanceof HubSyncCancelled) {
         // Cancel in the merge window: nothing applied, nothing to report.
         absorbReloadEditsRef.current = false;
@@ -929,7 +954,8 @@ export function HubSyncControl({
     };
   }, [stage, client, host]);
 
-  const busy = !walkError && stage !== "idle" && stage !== "synced";
+  const shownStage = report === undefined ? stage : report?.stage ?? "idle";
+  const busy = !walkError && shownStage !== "idle" && shownStage !== "synced";
   /*
    * Synced, until the reader writes something.
    *
@@ -952,8 +978,8 @@ export function HubSyncControl({
     hubHint.padUpToDate !== false &&
     (needsIndex ? hubHint.indexedOnHub : true);
   const restStage: HubSyncStage = syncedAtRest ? "synced" : "idle";
-  const settled = stage === "synced" && !editedSinceSynced ? "synced" : restStage;
-  const activeStage = walkError ? "failed" : busy ? stage : settled;
+  const settled = shownStage === "synced" && !editedSinceSynced ? "synced" : restStage;
+  const activeStage = walkError ? "failed" : busy ? shownStage : settled;
 
   if (tapRef) tapRef.current = onTap;
 
@@ -966,9 +992,9 @@ export function HubSyncControl({
         type="button"
         className="lc-hub-sync lc-tip-target"
         onClick={onTap}
-        aria-label={walkError ? "Sync failed" : busy ? `Hub sync: ${LABEL[stage]}` : "Hub sync"}
+        aria-label={walkError ? "Sync failed" : busy ? `Hub sync: ${LABEL[shownStage]}` : "Hub sync"}
         aria-busy={busy}
-        data-stage={busy ? stage : activeStage}
+        data-stage={busy ? shownStage : activeStage}
         data-error={walkError ?? undefined}
         title={walkError ?? undefined}
       >

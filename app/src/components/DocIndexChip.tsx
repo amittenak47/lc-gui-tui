@@ -66,19 +66,20 @@ function WorkRing({ progress }: { progress: DocWorkProgress | null }) {
 
 /** Shared by the Sync overlay and the original no-hub chip. */
 function syncLabel(
-  { walkStage, walkJob, walkError, walkWaiting, padSync }: Pick<
-    DocIndexChipProps, "walkStage" | "walkJob" | "walkError" | "walkWaiting" | "padSync"
+  { walkStage, walkJob, walkError, walkWaiting, walkMessage, padSync }: Pick<
+    DocIndexChipProps, "walkStage" | "walkJob" | "walkError" | "walkWaiting" | "walkMessage" | "padSync"
   >,
   offline = false,
 ): string | null {
-  if (offline) return "Desktop app is offline — changes will sync when it's back.";
   if (walkError) return walkError;
   if (walkWaiting === "conflict") return "choose copy";
+  if (walkMessage) return walkMessage;
   if (walkStage != null && walkStage !== "idle" && walkStage !== "synced") {
     return walkStage === "index"
       ? walkJob === "embed" ? "embedding…" : "indexing…"
       : `${walkStage}…`;
   }
+  if (offline) return "Desktop app is offline — changes will sync when it's back.";
   if (walkStage === "synced" || padSync === "synced") return "synced";
   if (padSync === "not-synced") return "not synced";
   return null;
@@ -146,6 +147,7 @@ export interface DocIndexChipProps {
   walkError?: string | null;
   /** Asking which copy to keep — not a spinning stage. */
   walkWaiting?: "conflict" | null;
+  walkMessage?: string | null;
   /** Resting pad sync, for tabs the walk is not currently walking. */
   padSync?: "synced" | "not-synced" | null;
   /**
@@ -174,6 +176,7 @@ export function DocIndexChip({
   walkProgress,
   walkError,
   walkWaiting,
+  walkMessage,
   padSync,
   onSync,
   viewportWait,
@@ -237,7 +240,7 @@ export function DocIndexChip({
         : null;
   const offline = hubStatus === "offline";
   const syncText = syncLabel({
-    walkStage, walkJob, walkError, walkWaiting, padSync: padSync ?? "not-synced",
+    walkStage, walkJob, walkError, walkWaiting, walkMessage, padSync: padSync ?? "not-synced",
   }, offline);
 
   useEffect(() => {
@@ -291,7 +294,7 @@ export function DocIndexChip({
         const box = buttonRef.current?.getBoundingClientRect();
         if (box) setAnchor({ top: box.bottom + 8, left: box.left });
         setOpen(false);
-        syncStartedRef.current = !offline && !walking;
+        syncStartedRef.current = !walking;
         syncWalkSeenRef.current = false;
         syncWasLandedRef.current = restPad === "synced";
         setSyncOpen(true);
