@@ -608,10 +608,12 @@ export function HubConflictSplit({
   const picks = withAutomaticPicks(manualPicks);
   const setPicks = (update: (current: Record<string, SidePick>) => Record<string, SidePick>) =>
     setManualPicks(current => update(withAutomaticPicks(current)));
-  // A deliberate discard stays visible even when matching rows are hidden.
+  // Identical chats stay hidden by the filter without forgetting choices.
+  // Other deliberate discards remain visible for review.
   const rowVisible = (id: string) => {
     const page = parseInkPageRowId(id);
     if (page != null && inkBlank[page] && sameIds.has(id)) return false;
+    if (differencesOnly && sameIds.has(id) && parseFootnotePartRowId(id)?.kind === "chats") return false;
     return !differencesOnly || !sameIds.has(id) || picks[id]?.local === false || picks[id]?.server === false;
   };
   const statusFor = (id: string, hasLocal: boolean, hasServer: boolean) => sameIds.has(id)
@@ -1517,7 +1519,7 @@ export function HubConflictSplit({
             onClick={toggleList}
           >
             <span className="lc-hub-conflict-dock-title">Changes</span>
-            <span className="lc-hub-conflict-dock-count">{columnIds(side).length}</span>
+            <span className="lc-hub-conflict-dock-count">{idsOnSide(side, true).length}</span>
             <span className="lc-hub-conflict-dock-hint">{listOpen ? "Fold to see the whole page" : "Show changes"}</span>
             <svg className="lc-hub-conflict-dock-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
           </button>
