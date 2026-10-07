@@ -608,13 +608,11 @@ export function HubConflictSplit({
   const picks = withAutomaticPicks(manualPicks);
   const setPicks = (update: (current: Record<string, SidePick>) => Record<string, SidePick>) =>
     setManualPicks(current => update(withAutomaticPicks(current)));
-  // Identical chats stay hidden by the filter without forgetting choices.
-  // Other deliberate discards remain visible for review.
+  // Filtering changes visibility only; explicit choices remain saved.
   const rowVisible = (id: string) => {
     const page = parseInkPageRowId(id);
     if (page != null && inkBlank[page] && sameIds.has(id)) return false;
-    if (differencesOnly && sameIds.has(id) && parseFootnotePartRowId(id)?.kind === "chats") return false;
-    return !differencesOnly || !sameIds.has(id) || picks[id]?.local === false || picks[id]?.server === false;
+    return !differencesOnly || !sameIds.has(id);
   };
   const statusFor = (id: string, hasLocal: boolean, hasServer: boolean) => sameIds.has(id)
     ? "Same" : !hasLocal || !hasServer ? "Only here" : "Different";

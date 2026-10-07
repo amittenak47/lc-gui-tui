@@ -282,7 +282,7 @@ describe("merge comparison filter", () => {
     expect(rows[0].textContent).toContain("Same");
     for(const row of rows) act(()=>(row.querySelector('[data-action="drop"]') as HTMLButtonElement).click());
     toggle();
-    expect(document.querySelectorAll('[data-note-id="common"]')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-note-id="common"]')).toHaveLength(0);
     act(()=>resolveButton().click());
     expect(onResolve.mock.calls[0][0].footnotes.map((n:{id:string})=>n.id)).toEqual(["local-only"]);
     act(()=>root.unmount());
