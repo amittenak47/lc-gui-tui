@@ -56,8 +56,9 @@ export function ExploreHeaderMenu({ active, disabled, onOpen, onPull, getGraph }
           </HoldButton>
           {message && <p role="status">{message}</p>}{error && <p role="alert">{error}</p>}
         </div>
-        <footer className="lc-dialog-foot"><HubLibraryRefresh onRefresh={pull} disabled={pending} resultsContainer={bodyRef} />
-          <button type="button" className="lc-secondary" disabled={pending} onClick={close}>Cancel</button></footer>
+        <footer className="lc-settings-foot lc-dialog-foot"><HubLibraryRefresh onRefresh={pull} disabled={pending} className="lc-library-footer-pull" resultsContainer={bodyRef} />
+          <span className="lc-dialog-foot-spacer" aria-hidden="true" />
+          <button type="button" className="lc-secondary lc-dialog-action" disabled={pending} onClick={close}>Cancel</button></footer>
       </DialogFrame>
     </DialogBackdrop>}</DialogPresence>, document.body)}
   </>;
