@@ -48,13 +48,12 @@ if (!root) throw new Error("index.html is missing #root");
  * right after an update, which is exactly when people expect it to. The copy
  * yields between batches, so this paints and keeps painting.
  *
- * Only for launches that actually have work to do: `storageMigrationPending`
- * is a synchronous marker read, so an ordinary launch never sees this flash
- * past on its way to the app.
+ * Covers migration checks and metadata hydration before the app mounts, so
+ * every launch can show it briefly even when no library import is needed.
  */
 function UpdatingLibrary() {
   return (
-    <div className="lc-server-gate-boot" role="status" aria-live="polite">
+    <div className="lc-server-gate-boot lc-library-boot" role="status" aria-live="polite">
       <p className="lc-boot-note">Updating your library…</p>
       <div className="lc-spinner" aria-hidden="true" />
     </div>

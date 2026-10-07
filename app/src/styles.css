@@ -15197,11 +15197,6 @@ button.lc-row-selected:hover:not(:disabled) {
 }
 
 /*
- * The one line on the boot overlay that is ever words: the storage migration.
- * Placed above the spinner rather than over it — the overlay is a grid with
- * one centred cell, so both children need somewhere to be.
- */
-/*
  * The stand-in while a large file is being parsed. Ours, not the
  * document's — see `docPreview`.
  */
@@ -15218,6 +15213,22 @@ button.lc-row-selected:hover:not(:disabled) {
   margin: 0 0 4.5rem;
   font-size: 0.95rem;
   color: color-mix(in srgb, var(--ink) 70%, transparent);
+}
+
+/* Keep the spinner at the same centre as the app's following boot overlay. */
+.lc-library-boot {
+  grid-template: 1fr / 1fr;
+}
+
+.lc-library-boot > .lc-spinner,
+.lc-library-boot > .lc-boot-note {
+  grid-area: 1 / 1;
+}
+
+.lc-library-boot > .lc-boot-note {
+  margin: 0 1rem;
+  text-align: center;
+  transform: translateY(-3rem);
 }
 
 .lc-loading-doodle {
