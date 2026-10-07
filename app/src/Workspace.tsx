@@ -194,14 +194,19 @@ import {
 } from "./util/docExtract";
 import { isTextAnchor, type DocAnchor } from "./util/docAnchors";
 import {
-  applyFootnoteResult,
   buildFootnoteRequest,
   enqueueFootnoteRequest,
-  FOOTNOTE_UNSENT_NOTE,
   flushFootnoteQueue,
   freshFootnoteRequestId,
   registerOpenAnnotateFootnotes,
 } from "./util/footnoteRequests";
+import {
+  completeAnnotateSave,
+  footnotesPendingSave,
+  partitionHeldAsks,
+  settleOpenFootnoteWrite,
+  type HeldFootnoteAsk,
+} from "./util/footnoteSaveBaseline";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { installUiHandednessAttr } from "./util/uiHandedness";
 import { openExternalUrl } from "./util/openExternal";
@@ -1917,6 +1922,14 @@ export const Workspace = memo(function Workspace({
   const annotatePristineHashRef = useRef<number | null>(null);
   /** Footnote revision at open / last explicit save — not merely "any footnotes". */
   const annotatePristineMarksRef = useRef("");
+  /** Asks whose pending mark has not yet been stored, so they must not be posted. */
+  const heldFootnoteAsksRef = useRef<HeldFootnoteAsk[]>([]);
+  const deliverHeldFootnoteAsksRef = useRef<
+    (
+      saved: { id: string; footnotes?: readonly DocFootnote[] | null },
+      asks: readonly HeldFootnoteAsk[],
+    ) => Promise<void>
+  >(async () => {});
   /** Persistable coach thread at open / last explicit save. */
   const annotatePristineAgentRef = useRef("");
   annotateSourceRef.current = annotateSource;
@@ -2764,7 +2777,7 @@ export const Workspace = memo(function Workspace({
       const contentHash = padContentFingerprint(elements, inkMix);
       const untouched = isAnnotate(problem)
         ? annotatePristineHashRef.current === contentHash &&
-          footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current
+          footnotesPendingSave(annotateFootnotesRef.current, annotatePristineMarksRef.current) === null
         : whiteboardPristineHashRef.current === contentHash;
       /*
        * The chip says "Unsaved changes". That is last-write, not session open.
@@ -2809,7 +2822,7 @@ export const Workspace = memo(function Workspace({
       // exactly as worth keeping as ink.
       const untouched =
         annotatePristineHashRef.current === padContentFingerprint(elements, inkMix) &&
-        footnoteRevision(annotateFootnotesRef.current) === annotatePristineMarksRef.current;
+        footnotesPendingSave(annotateFootnotesRef.current, annotatePristineMarksRef.current) === null;
       if (untouched) {
         lastSavedHashRef.current = hash;
         lastSavedMarksRef.current = marks;
@@ -2876,6 +2889,13 @@ export const Workspace = memo(function Workspace({
             ...(pendingWrite?.kind ? { padKind: pendingWrite.kind } : {}),
           });
           if (!annotateDocIdRef.current) setAnnotateDocId(saved.id);
+          const delivered = partitionHeldAsks(
+            heldFootnoteAsksRef.current,
+            saved,
+            annotateFootnotesRef.current,
+          );
+          heldFootnoteAsksRef.current = delivered.keep;
+          await deliverHeldFootnoteAsksRef.current(saved, delivered.send);
           announceAutosave(tab.id, saved.name);
           await recordPadSnapshotsWithExtras({
                   kind: "annotate",
@@ -8339,7 +8359,7 @@ export const Workspace = memo(function Workspace({
     if (annotateOwnedRef.current && editBufferRef.current !== (annotateSourceRef.current?.text ?? "")) {
       return false;
     }
-    if (footnoteRevision(annotateFootnotesRef.current) !== annotatePristineMarksRef.current) {
+    if (footnotesPendingSave(annotateFootnotesRef.current, annotatePristineMarksRef.current)) {
       return false;
     }
     if (
@@ -8502,7 +8522,14 @@ export const Workspace = memo(function Workspace({
         board.getElements(),
         boardInkMix(board),
       );
-      annotatePristineMarksRef.current = footnoteRevision(annotateFootnotes);
+      const delivered = completeAnnotateSave({
+        saved,
+        live: annotateFootnotesRef.current,
+        pristine: annotatePristineMarksRef,
+        held: heldFootnoteAsksRef.current,
+      });
+      heldFootnoteAsksRef.current = delivered.keep;
+      await deliverHeldFootnoteAsksRef.current(saved, delivered.send);
       annotatePristineAgentRef.current = JSON.stringify(persistableAgentMessages(agentMessages));
       await recordPadSnapshotsWithExtras({
             kind: "annotate",
@@ -8527,23 +8554,17 @@ export const Workspace = memo(function Workspace({
   useLayoutEffect(() => {
     return registerOpenAnnotateFootnotes({
       docId: () => annotateDocIdRef.current,
-      write: async (docId, mutate) => {
-        if (annotateDocIdRef.current !== docId) return "miss";
-        const current = annotateFootnotesRef.current;
-        const next = mutate(current);
-        if (next === current) return "gone";
-        flushSync(() => setAnnotateFootnotes(next));
-        try {
-          const saved = await saveAnnotateSession();
-          if (saved) {
-            annotatePristineMarksRef.current = footnoteRevision(annotateFootnotesRef.current);
-            return "saved";
-          }
-        } catch {
-          /* saveAnnotateSession already surfaces the error */
-        }
-        return "failed";
-      },
+      write: (docId, mutate) => settleOpenFootnoteWrite({
+        docId,
+        openDocId: annotateDocIdRef.current,
+        live: annotateFootnotesRef,
+        pristine: annotatePristineMarksRef,
+        mutate,
+        publish: (next) => {
+          flushSync(() => setAnnotateFootnotes(next));
+        },
+        save: () => saveAnnotateSession(),
+      }),
     });
   }, [saveAnnotateSession, setAnnotateFootnotes]);
 
@@ -8867,6 +8888,44 @@ export const Workspace = memo(function Workspace({
     [openFootnoteOverview],
   );
 
+  const deliverHeldFootnoteAsks = useCallback(async (
+    saved: { id: string; footnotes?: readonly DocFootnote[] | null },
+    asks: readonly HeldFootnoteAsk[],
+  ) => {
+    if (asks.length === 0) return;
+    const source = annotateSourceRef.current;
+    if (!source) {
+      heldFootnoteAsksRef.current = [...asks, ...heldFootnoteAsksRef.current];
+      return;
+    }
+    const footnotes = saved.footnotes ?? [];
+    for (const ask of asks) {
+      const mark = footnotes.find((entry) => entry.pending === ask.requestId);
+      if (!mark) continue;
+      const pages = source.hash ? extractedPagesFor(source.hash) : null;
+      const scope = mark.anchor.scope;
+      const matched = scope ? pages?.find((entry) => entry.scope === scope) : undefined;
+      const pageEntry = matched ?? (pages?.length === 1 ? pages[0] : undefined);
+      enqueueFootnoteRequest(buildFootnoteRequest({
+        id: ask.requestId,
+        deviceId: loadDeviceId(),
+        docId: saved.id,
+        docName: source.name,
+        anchor: mark.anchor,
+        excerpt: mark.excerpt,
+        pageText: pageEntry?.text ?? null,
+        pages,
+        viewerPage: source.docType === "pdf" ? pdfNavRef.current?.current ?? null : null,
+        footnotes,
+        exceptId: mark.id,
+      }));
+    }
+    // Not awaited: a save can run inside the inbox chain (an answer being
+    // applied), and the flush queues behind that same chain.
+    void flushFootnoteQueue(client).catch(() => {});
+  }, [client]);
+  deliverHeldFootnoteAsksRef.current = deliverHeldFootnoteAsks;
+
   const onAskGrokBot = useCallback(
     (selection: DocSelectionResult) => {
       if (!isTextAnchor(selection.anchor)) return;
@@ -8888,45 +8947,18 @@ export const Workspace = memo(function Workspace({
         ...(selection.hitRects.length > 0 ? { bands: selection.hitRects } : {}),
         ...(selection.text.trim() ? { blockText: selection.text } : {}),
       });
+      heldFootnoteAsksRef.current = [
+        ...heldFootnoteAsksRef.current.filter((ask) => ask.requestId !== requestId),
+        { requestId, footnoteId },
+      ];
       flushSync(() => setAnnotateFootnotes(next));
-      void (async () => {
-        let docId = annotateDocIdRef.current;
-        const saved = await saveAnnotateSession();
-        if (saved) {
-          docId = saved.id;
-          annotatePristineMarksRef.current = footnoteRevision(annotateFootnotesRef.current);
-        } else {
-          docId = docId ?? annotateDocIdRef.current;
-        }
-        const source = annotateSourceRef.current;
-        if (!docId || !source) {
-          setAnnotateFootnotes((current) =>
-            applyFootnoteResult(current, { id: requestId, notes: [FOOTNOTE_UNSENT_NOTE] }),
-          );
-          return;
-        }
-        const pages = source.hash ? extractedPagesFor(source.hash) : null;
-        const scope = anchor.scope;
-        const matched = scope ? pages?.find((entry) => entry.scope === scope) : undefined;
-        const pageEntry = matched ?? (pages?.length === 1 ? pages[0] : undefined);
-        const body = buildFootnoteRequest({
-          id: requestId,
-          deviceId: loadDeviceId(),
-          docId,
-          docName: source.name,
-          anchor,
-          excerpt: excerpt.slice(0, 4000),
-          pageText: pageEntry?.text ?? null,
-          pages,
-          viewerPage: source.docType === "pdf" ? pdfNavRef.current?.current ?? null : null,
-          footnotes: annotateFootnotesRef.current,
-          exceptId: footnoteId,
-        });
-        enqueueFootnoteRequest(body);
-        await flushFootnoteQueue(client);
-      })();
+      // The save posts the ask only when the stored record contains this pending mark.
+      // A failed save leaves the mark and the ask in place for the next one.
+      void saveAnnotateSession().catch(() => {
+        /* saveAnnotateSession already surfaces the error */
+      });
     },
-    [client, saveAnnotateSession, setAnnotateFootnotes],
+    [saveAnnotateSession, setAnnotateFootnotes],
   );
 
   const onOpenFootnote = useCallback((footnote: DocFootnote, anchorRect: DOMRect | null) => {

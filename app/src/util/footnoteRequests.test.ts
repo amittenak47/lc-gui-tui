@@ -12,9 +12,15 @@ const store = vi.hoisted(() => ({
 
 vi.mock("./annotateStore", () => ({
   getAnnotateDoc: async () => store.doc,
-  saveAnnotateDoc: async (doc: { footnotes?: unknown[] }) => {
+  saveAnnotateDoc: async (doc: { id?: string; name?: string; footnotes?: unknown[] }) => {
     store.saves += 1;
-    store.saved.push([...(doc.footnotes ?? [])]);
+    const footnotes = [...(doc.footnotes ?? [])];
+    store.saved.push(footnotes);
+    store.doc = {
+      id: doc.id ?? store.doc?.id ?? "doc",
+      name: doc.name ?? store.doc?.name ?? "Doc",
+      footnotes,
+    };
   },
 }));
 
@@ -134,6 +140,48 @@ describe("applyFootnotePing", () => {
     await applyFootnotePing(client, ping);
     expect(store.saves).toBe(0);
     expect(acks).toEqual(["fr-1"]);
+  });
+
+  it("retries a failed acknowledgement without duplicating notes or links", async () => {
+    store.doc = {
+      id: "doc-1",
+      name: "Doc",
+      footnotes: [mark({ userLinks: [{ url: "https://example.com/kept" }] })],
+    };
+    store.saves = 0;
+    store.saved = [];
+    let failAck = true;
+    const acks: string[] = [];
+    const client = {
+      postFootnoteRequest: async () => {},
+      ackFootnoteRequest: async (id: string) => {
+        acks.push(id);
+        if (failAck) throw new Error("ack failed");
+      },
+    } as unknown as LcClient;
+    const again = {
+      footnote_results: [{
+        id: "fr-1",
+        doc_id: "doc-1",
+        result: {
+          notes: ["answer"],
+          links: [{ url: "https://example.com/a" }, { url: "https://example.com/kept" }],
+        },
+      }],
+    };
+    await applyFootnotePing(client, again);
+    expect(acks).toEqual(["fr-1"]);
+    failAck = false;
+    await applyFootnotePing(client, again);
+    expect(acks).toEqual(["fr-1", "fr-1"]);
+    const saved = store.doc?.footnotes[0] as DocFootnote;
+    expect(saved.notes?.map((note) => note.text)).toEqual(["answer"]);
+    expect(saved.userLinks).toEqual([
+      { url: "https://example.com/kept" },
+      { url: "https://example.com/a" },
+    ]);
+    expect(saved.pending).toBeUndefined();
+    expect(store.saves).toBe(1);
   });
 });
 
