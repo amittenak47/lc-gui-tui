@@ -214,4 +214,22 @@ describe("footnote save baseline", () => {
     expect(noteTexts(live.current)).toEqual(["from GrokBot", "reader note"]);
     expect(footnotesPendingSave(live.current, pristine.current)).not.toBeNull();
   });
+
+  it("does not accept an answer whose save landed in a different document", async () => {
+    const live = { current: [mark()] as DocFootnote[] };
+    const pristine = { current: "clean" };
+    const outcome = await settleOpenFootnoteWrite({
+      docId: "doc-1",
+      openDocId: "doc-1",
+      live,
+      pristine,
+      mutate: (footnotes) => applyFootnoteResult(footnotes, { id: "fr-1", notes: ["from GrokBot"] }, 50),
+      publish: (next) => {
+        live.current = next;
+      },
+      save: async () => ({ id: "doc-2", footnotes: live.current }),
+    });
+    expect(outcome).toBe("failed");
+    expect(pristine.current).toBe("clean");
+  });
 });

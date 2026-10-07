@@ -57,6 +57,10 @@ export function bookConflictMessage(book: BookIdentity, page: { key: string; pag
 }
 export function bookNoticeMessage(notice: BookPassNotice): string {
   if (notice.kind === "old_hub") return "Update the desktop app to sync safely.";
+  if (notice.kind === "footnote") {
+    const name = notice.title ?? (notice.book ? bookDisplay(notice.book).title : "A document");
+    return `${name}: a GrokBot answer was not saved. It will be tried again.`;
+  }
   if (notice.kind === "links") return "Links didn't sync.";
   return `${notice.title ?? (notice.book ? bookDisplay(notice.book).title : "Book")}: snapshots didn't sync. They are kept on this device.`;
 }

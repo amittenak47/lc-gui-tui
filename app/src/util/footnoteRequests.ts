@@ -6,7 +6,7 @@
 import { LcApiError, type FootnotePingResultDto, type FootnoteRequestDto, type LcClient } from "../api/client";
 import { debugLog } from "./debugLog";
 import type { DocAnchor } from "./docAnchors";
-import { getAnnotateDoc, saveAnnotateDoc } from "./annotateStore";
+import { getAnnotateDoc, mutateAnnotateFootnotes } from "./annotateStore";
 import {
   freshNoteId,
   type DocFootnote,
@@ -284,36 +284,23 @@ async function writeFootnotes(
     if (failed) return "failed";
     if (saved) return "saved";
   }
-  let doc;
-  try {
-    doc = await getAnnotateDoc(docId);
-  } catch {
-    return "failed";
-  }
-  if (!doc) return "gone";
-  const current = doc.footnotes ?? [];
-  const next = mutate(current);
-  if (next === current) return "gone";
   // The open editor is still loading, or holds an edit not yet saved; its
   // autosave would overwrite a write here. Ask again on the next ping.
-  if (openWithoutMark) return "failed";
+  if (openWithoutMark) {
+    let doc;
+    try {
+      doc = await getAnnotateDoc(docId);
+    } catch {
+      return "failed";
+    }
+    if (!doc) return "gone";
+    const current = doc.footnotes ?? [];
+    if (mutate(current) !== current) return "failed";
+    return "gone";
+  }
   try {
-    await saveAnnotateDoc({
-      id: doc.id,
-      name: doc.name,
-      hash: doc.hash,
-      docType: doc.docType,
-      label: doc.label,
-      owned: doc.owned,
-      source: doc.source,
-      board: doc.board,
-      footnotes: next,
-      agent: Array.isArray(doc.agent) ? doc.agent : undefined,
-      captures: doc.captures,
-      padKind: doc.padKind,
-      artifacts: doc.artifacts,
-    });
-    return "saved";
+    const outcome = await mutateAnnotateFootnotes(docId, mutate);
+    return outcome === "saved" ? "saved" : "gone";
   } catch {
     return "failed";
   }
@@ -359,28 +346,63 @@ function answerOf(result: FootnotePingResultDto["result"]): { notes: string[]; l
   return { notes, links };
 }
 
-async function applyResults(client: LcClient, results: readonly FootnotePingResultDto[]): Promise<void> {
-  for (const row of results) {
-    if (!row || typeof row.id !== "string" || typeof row.doc_id !== "string") continue;
-    const answer = answerOf(row.result);
-    if (!answer) continue;
-    const outcome = await writeFootnotes(row.doc_id, (footnotes) =>
-      applyFootnoteResult(footnotes, { id: row.id, notes: answer.notes, links: answer.links }),
-    );
-    if (outcome === "failed") continue;
-    try {
-      await client.ackFootnoteRequest(row.id);
-      forgetAwaiting(row.id);
-    } catch {
-      /* the next ping acks again; applying a cleared mark is a no-op */
-    }
-  }
+let applyChain: Promise<unknown> = Promise.resolve();
+
+function enqueueApply<T>(work: () => Promise<T>): Promise<T> {
+  const run = applyChain.then(work, work);
+  applyChain = run.then(() => undefined, () => undefined);
+  return run;
 }
 
 function enqueueWork(work: () => Promise<void>): Promise<void> {
   const run = inboxChain.then(work);
   inboxChain = run.catch(() => {});
   return run;
+}
+
+async function applyAnswersBody(
+  results: readonly FootnotePingResultDto[],
+  signal?: AbortSignal,
+): Promise<{ saved: string[]; failed: string[] }> {
+  const saved: string[] = [];
+  const failed: string[] = [];
+  for (const row of results) {
+    if (signal?.aborted) break;
+    if (!row || typeof row.id !== "string" || typeof row.doc_id !== "string") continue;
+    const answer = answerOf(row.result);
+    if (!answer) continue;
+    const outcome = await writeFootnotes(row.doc_id, (footnotes) =>
+      applyFootnoteResult(footnotes, { id: row.id, notes: answer.notes, links: answer.links }),
+    );
+    if (outcome === "failed") failed.push(row.id);
+    else saved.push(row.id);
+  }
+  return { saved, failed };
+}
+
+async function ackSaved(client: LcClient, ids: readonly string[]): Promise<void> {
+  for (const id of ids) {
+    try {
+      await client.ackFootnoteRequest(id);
+      forgetAwaiting(id);
+    } catch {
+      /* the next delivery acks again; applying a cleared mark is a no-op */
+    }
+  }
+}
+
+export function applyFootnoteAnswers(
+  results: readonly FootnotePingResultDto[],
+  options?: { signal?: AbortSignal },
+): Promise<{ saved: string[]; failed: string[] }> {
+  return enqueueApply(() => applyAnswersBody(results, options?.signal));
+}
+
+export function queueFootnoteDelivery(client: LcClient, savedIds: readonly string[]): void {
+  void enqueueWork(async () => {
+    await flushBody(client);
+    await ackSaved(client, savedIds);
+  }).catch(() => {});
 }
 
 export function flushFootnoteQueue(client: LcClient): Promise<void> {
@@ -392,10 +414,14 @@ export function applyFootnotePing(
   ping: { footnote_results?: readonly FootnotePingResultDto[] | null },
 ): Promise<void> {
   const results = Array.isArray(ping.footnote_results) ? ping.footnote_results : [];
-  return enqueueWork(async () => {
+  // The answer is saved on its own chain. Flushing and acks stay behind it
+  // so a slow upload cannot delay the save, and callers that wait still see
+  // the acknowledgement.
+  const applied = applyFootnoteAnswers(results);
+  return applied.then((outcome) => enqueueWork(async () => {
     await flushBody(client);
-    await applyResults(client, results);
-  });
+    await ackSaved(client, outcome.saved);
+  }));
 }
 
 let loggedMissingResultsEndpoint = false;

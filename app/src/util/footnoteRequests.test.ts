@@ -28,6 +28,20 @@ vi.mock("./annotateStore", () => ({
       footnotes,
     };
   },
+  mutateAnnotateFootnotes: async (
+    id: string,
+    mutate: (footnotes: { id?: string }[]) => { id?: string }[],
+  ) => {
+    if (!store.doc || store.doc.id !== id) return "gone";
+    const current = [...(store.doc.footnotes ?? [])] as { id?: string }[];
+    const next = mutate(current);
+    if (next === current) return "unchanged";
+    store.saves += 1;
+    const footnotes = [...next];
+    store.saved.push(footnotes);
+    store.doc = { ...store.doc, footnotes };
+    return "saved";
+  },
 }));
 
 function mark(patch: Partial<DocFootnote> = {}): DocFootnote {
@@ -435,6 +449,44 @@ describe("footnote request queue", () => {
     expect(stored(AWAITING_KEY)).toEqual([]);
     expect(noteCount("the answer")).toBe(1);
     expect(store.saves).toBe(1);
+  });
+
+  it("applies an answer while a request upload is still in flight", async () => {
+    const mod = await load();
+    store.doc = {
+      id: "doc-1",
+      name: "Doc",
+      footnotes: [mark({ pending: "fr-old" })],
+    };
+    store.saves = 0;
+    store.saved = [];
+    const hold = deferred();
+    const started = deferred();
+    const client = {
+      postFootnoteRequest: async (item: FootnoteRequestDto) => {
+        if (item.id === "fr-a") {
+          started.release();
+          await hold.opened;
+        }
+      },
+      ackFootnoteRequest: async () => {},
+    } as unknown as LcClient;
+    mod.enqueueFootnoteRequest(body("fr-a"));
+    const flushing = mod.flushFootnoteQueue(client);
+    await started.opened;
+    const pinging = mod.applyFootnotePing(client, {
+      footnote_results: [{ id: "fr-old", doc_id: "doc-1", result: { notes: ["from the hub"] } }],
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(store.saves).toBe(1);
+      }, { timeout: 300, interval: 10 });
+    } finally {
+      hold.release();
+      await flushing;
+      await pinging;
+    }
+    expect(noteCount("from the hub")).toBe(1);
   });
 
   it("polls footnote results without a pad sync and still sends the queue", async () => {

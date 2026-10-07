@@ -55,6 +55,7 @@ import {
   loadPadSyncSince,
   savePadSyncSince,
 } from "./padHub";
+import { debugLog } from "./debugLog";
 import { loadHubAutosync } from "./hubAutoSyncPref";
 import { isPadHubOffline, subscribePadHubStatus } from "./padHubStatus";
 import { syncDocChunks } from "./docChunkSync";
@@ -1145,12 +1146,14 @@ async function applyPadSyncPingBody(
   try {
     ping = await client.pingPadSync(since);
     noteHubPingOk();
-    const { applyFootnotePing } = await import("./footnoteRequests");
-    void applyFootnotePing(client, ping).catch(() => {});
   } catch (cause) {
     noteHubPingFail();
     throw cause;
   }
+  const { applyFootnoteAnswers, queueFootnoteDelivery } = await import("./footnoteRequests");
+  const delivered = await applyFootnoteAnswers(ping.footnote_results ?? []);
+  queueFootnoteDelivery(client, delivered.saved);
+  for (const id of delivered.failed) debugLog({ k: "error", n: "footnote answer", e: id });
   const states = await run<SyncState[]>(STORE_SYNC_STATE, "readonly", store => store.getAll()).catch(() => []);
   const pendingDeletes = new Set(states.filter(state => state.lifecycle?.action === "delete").map(state => `${state.kind}:${state.id}`));
   const pendingDelete = (kind: PadKindSync, id: string) => pendingDeletes.has(`${kind}:${id}`);

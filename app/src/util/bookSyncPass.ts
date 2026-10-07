@@ -13,11 +13,11 @@ import { HubSyncCancelled } from "./hubConflictStash";
 import { bookDisplay, bookPassSummary, bookFailureMessage, bookNoticeMessage } from "./bookSyncMessages";
 import { debugLog } from "./debugLog";
 import { bookWireRecord } from "./bookWireRecord";
-import { applyFootnotePing } from "./footnoteRequests";
+import { applyFootnoteAnswers, queueFootnoteDelivery } from "./footnoteRequests";
 
 export const BOOK_PASS_STATUS_EVENT = "lc-book-pass-status";
 
-export interface BookPassNotice { kind: "old_hub" | "backup" | "links"; book?: BookIdentity; title?: string; cause?: unknown }
+export interface BookPassNotice { kind: "old_hub" | "backup" | "links" | "footnote"; book?: BookIdentity; title?: string; cause?: unknown }
 export interface BookPassResult { modern: boolean; books: BookResult[]; notices: BookPassNotice[]; cancelled: boolean }
 export interface BookPassOptions extends BookSyncOptions {
   selected?: BookIdentity;
@@ -97,7 +97,22 @@ async function executePass(client: LcClient, options: BookPassOptions): Promise<
     if (options.silent && !loadHubAutosync()) return result;
     await options.prepare?.();
     const ping = options.ping ?? await boundedBookRequest(() => client.pingPadSync(0, { timeoutMs: options.timeoutMs }), signal, options.timeoutMs);
-    void applyFootnotePing(client, ping).catch(() => {});
+    // Save answers before this pass reads which books are dirty, so a clean
+    // book that just received one is uploaded now. Do not wait for the upload
+    // of requests or for acknowledgements.
+    const rows = ping.footnote_results ?? [];
+    const delivered = signal.aborted ? { saved: [] as string[], failed: [] as string[] } : await applyFootnoteAnswers(rows, { signal });
+    queueFootnoteDelivery(client, delivered.saved);
+    const failed = new Set(delivered.failed);
+    for (const row of rows) {
+      if (!row || typeof row.id !== "string" || !failed.has(row.id)) continue;
+      result.notices.push({
+        kind: "footnote",
+        book: typeof row.doc_id === "string" ? { kind: "annotate", id: row.doc_id } : undefined,
+        cause: new Error(`GrokBot answer ${row.id} was not saved`),
+      });
+    }
+    if (signal.aborted) throw new HubSyncCancelled();
     if (!isModernBookHub(ping)) {
       result.modern = false;
       const notice = takeOldBookHubNotice(); if (notice) result.notices.push(notice);

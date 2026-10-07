@@ -102,7 +102,7 @@ export async function settleOpenFootnoteWrite(input: {
   input.publish(next);
   try {
     const saved = await input.save();
-    if (!saved) return "failed";
+    if (!saved || saved.id !== input.docId) return "failed";
     input.pristine.current = pristineMarksFromSaved(saved);
     return "saved";
   } catch {

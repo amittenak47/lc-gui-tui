@@ -744,6 +744,35 @@ export async function saveAnnotateDoc(input: {
   return { ...accepted.metadata!, ...accepted.content };
 }
 
+/**
+ * Change footnotes inside the book's write gate.
+ *
+ * The latest content is read in that transaction, so a source, thread, or
+ * attachment edit that landed first is what gets written back. A missing or
+ * deleted document is left untouched.
+ */
+export async function mutateAnnotateFootnotes(
+  id: string,
+  mutate: (footnotes: readonly DocFootnote[]) => readonly DocFootnote[],
+): Promise<"saved" | "gone" | "unchanged"> {
+  return mutateLocalBook({ kind: "annotate", id }, { authored: true }, (ctx) => {
+    const meta = ctx.metadata as AnnotateDocMeta | null;
+    if (!meta || meta.deletedAt !== undefined) return "gone" as const;
+    const content = ctx.content as (AnnotateContent & Record<string, unknown>) | null;
+    if (!content?.board) return "gone" as const;
+    const current = sanitizeFootnotes(content.footnotes);
+    const next = mutate(current);
+    if (next === current) return "unchanged" as const;
+    ctx.setContent({ ...content, footnotes: [...next] });
+    ctx.setMetadata({
+      ...meta,
+      kind: "annotate",
+      updatedAt: Math.max(Date.now(), (meta.updatedAt ?? 0) + 1),
+    });
+    return "saved" as const;
+  });
+}
+
 export async function editAnnotateArtifacts(
   id: string, expectedCatalogRevision: string | null, edit: ArtifactCatalogEdit,
 ): Promise<ArtifactCatalog> {

@@ -35,6 +35,7 @@ it("distinguishes missing Library Pull pages, actual cap limits and backup notic
   book.error=new BookSyncError("cap","detail",[],new LcApiError("live library is full (50)",403));expect(bookFailureMessage(book)).toBe("The hub library is full (50).");
   expect(bookNoticeMessage({kind:"backup",title:"Algorithms"})).toBe("Algorithms: snapshots didn't sync. They are kept on this device.");
   expect(bookNoticeMessage({kind:"old_hub"})).toBe("Update the desktop app to sync safely.");expect(bookNoticeMessage({kind:"links"})).toBe("Links didn't sync.");
+  expect(bookNoticeMessage({kind:"footnote",title:"Notes"})).toBe("Notes: a GrokBot answer was not saved. It will be tried again.");
 });
 it("counts the entire pass and never substitutes internal IDs for titles",()=>{
   const book=failure("stage");expect(bookPassSummary({modern:true,cancelled:false,notices:[],books:[{...book,status:"synced",error:undefined},book,{...book,status:"needs_choice"}]}))
