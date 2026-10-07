@@ -29,6 +29,7 @@ import "./settingsDialog.css";
 import { SettingsSlider } from "./SettingsSlider";
 import { SettingsChoices } from "./SettingsChoices";
 import { HoldButton } from "./HoldButton";
+import { HEADER_MODES, loadHeaderModes, saveHeaderModes, type HeaderModes } from "../util/headerModesPref";
 import { loadTestForwardMode, saveTestForwardMode, type TestForwardMode } from "../util/agentPrefs";
 import { loadInkHandedness, saveInkHandedness, type InkHandedness } from "../util/inkHandedness";
 import { loadInkToolPresets, saveInkToolPresets } from "../util/inkToolPresets";
@@ -464,6 +465,7 @@ function emptyConfig(): LcConfig {
 
 /** Device-only prefs edited in Personalise — deferred until Save like config.toml. */
 interface DevicePrefs {
+  headerModes: HeaderModes;
   agentDisplay: AgentDisplayPrefs;
   uiHandedness: UiHandedness;
   uiCorners: UiCorners;
@@ -537,6 +539,7 @@ interface DevicePrefs {
 
 function loadDevicePrefs(): DevicePrefs {
   return {
+    headerModes: loadHeaderModes(),
     agentDisplay: loadAgentDisplayPrefs(),
     uiHandedness: loadUiHandedness(),
     uiCorners: loadUiCorners(),
@@ -580,6 +583,7 @@ function loadDevicePrefs(): DevicePrefs {
 
 function prefsEqual(a: DevicePrefs, b: DevicePrefs): boolean {
   return (
+    HEADER_MODES.every(([mode]) => a.headerModes[mode] === b.headerModes[mode]) &&
     a.agentDisplay.autoCollapseThinking === b.agentDisplay.autoCollapseThinking &&
     a.agentDisplay.collapseThinkingSteps === b.agentDisplay.collapseThinkingSteps &&
     a.agentDisplay.colorThinkingSteps === b.agentDisplay.colorThinkingSteps &&
@@ -920,6 +924,7 @@ export function SettingsModal({
   const [uiHandedness, setUiHandedness] = useState<UiHandedness>(loadUiHandedness);
   const [uiCorners, setUiCorners] = useState<UiCorners>(loadUiCorners);
   const [startupTabs, setStartupTabs] = useState<StartupTabs>(loadStartupTabs);
+  const [headerModes, setHeaderModes] = useState(loadHeaderModes);
   const [readingMode, setReadingMode] = useState<ReadingMode>(loadReadingMode);
   const [pageFit, setPageFit] = useState<PageFitPref>(loadPageFit);
   const [agentDisplay, setAgentDisplay] = useState(loadAgentDisplayPrefs);
@@ -1141,6 +1146,7 @@ export function SettingsModal({
   );
 
   const restoreDeviceDraft = (prefs: DevicePrefs) => {
+    setHeaderModes(prefs.headerModes);
     setHandedness(prefs.handedness);
     setUiHandedness(prefs.uiHandedness);
     setUiCorners(prefs.uiCorners);
@@ -1261,6 +1267,7 @@ export function SettingsModal({
 
 
   const draftPrefs: DevicePrefs = {
+    headerModes,
     agentDisplay,
     uiHandedness,
     uiCorners,
@@ -1327,7 +1334,7 @@ export function SettingsModal({
     "ink-tools": ["tapOk", "colorWheelOnToolbar", "palettePrefs"],
     reading: ["pdfFlickMomentum"],
     storage: ["autosaveMs", "autosaveBanner", "hubAutoSync", "offlineMerge"],
-    ui: ["uiHandedness", "uiCorners", "startupTabs", "readingMode", "pageFit", "agentDisplay", "notificationCards"],
+    ui: ["headerModes", "uiHandedness", "uiCorners", "startupTabs", "readingMode", "pageFit", "agentDisplay", "notificationCards"],
     diagnostics: ["inkDisplayHz", "inkPerfOverlay", "inkPerfBar", "pdfFlickHud", "hubSyncWindowPill"],
     tests: ["testForward"],
   };
@@ -1409,6 +1416,7 @@ export function SettingsModal({
         saveInkHandedness(handedness);
         saveUiHandedness(uiHandedness);
         saveUiCorners(uiCorners);
+        saveHeaderModes(headerModes);
         saveStartupTabs(startupTabs);
         saveReadingMode(readingMode);
         savePageFit(pageFit);
@@ -2511,6 +2519,18 @@ export function SettingsModal({
               </div>
 </SettingsFold>
               <SettingsFold id="ui" title="UI">
+                <div className="lc-setting-row">
+                  <div className="lc-settings-subhead">Header shortcuts</div>
+                  <p className="lc-settings-hint">Show or hide each shortcut in the header. All modes remain available on Home.</p>
+                  <SettingsChoices className="lc-settings-choice" aria-label="Header shortcuts">
+                    {HEADER_MODES.map(([mode, label]) => <button key={mode} type="button" role="switch"
+                      aria-label={`Show ${label} in header`} aria-checked={headerModes[mode]}
+                      className={headerModes[mode] ? "lc-settings-choice-option is-active" : "lc-settings-choice-option"}
+                      onClick={() => setHeaderModes(current => ({ ...current, [mode]: !current[mode] }))}>
+                      <strong>{label}</strong><span className="lc-muted">{headerModes[mode] ? "Shown" : "Hidden"}</span>
+                    </button>)}
+                  </SettingsChoices>
+                </div>
                 <div className="lc-setting-row">
 <div className="lc-settings-subhead">UI hand</div>
               <p className="lc-settings-hint">Header, agent panel and menus.</p>

@@ -59,6 +59,9 @@ import type {
 import { DEFAULT_DATASET } from "./api/types";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { HoldButton } from "./components/HoldButton";
+import { ExploreHeaderMenu } from "./components/ExploreHeaderMenu";
+import { useHeaderModes } from "./util/headerModesPref";
+import { collectExploreGraph } from "./util/exploreGraphExport";
 import { HubSyncControl, padTabSync, tabOffersHubSync } from "./components/HubSyncControl";
 import { BOOK_PASS_STATUS_EVENT, type BookPassResult } from "./util/bookSyncPass";
 import { bookNoticeMessage } from "./util/bookSyncMessages";
@@ -300,6 +303,7 @@ import {
 } from "./util/annotateFs";
 import { inlineMarkdownImages, localImageRefs } from "./util/markdownImages";
 import {
+  ANNOTATE_LIBRARY_EVENT,
   deleteAnnotateDoc,
   annotateDocLabel,
   annotateIsNamed,
@@ -325,6 +329,7 @@ import {
   type AnnotateDocMeta,
 } from "./util/annotateStore";
 import {
+  WHITEBOARD_LIBRARY_EVENT,
   deleteWhiteboardNotebook,
   getWhiteboardNotebook,
   listWhiteboardNotebooks,
@@ -653,6 +658,8 @@ function isLocalPad(problem: ProblemDetail | null | undefined): boolean {
  * than a rewrite of code that did not need to change.
  */
 export interface WorkspaceProps {
+  practiceRequested?: boolean;
+  onPracticeRequestHandled?: () => void;
   /** The record this workspace fills; its key is what gets loaded. */
   tab: TabRecord;
   /** The one on screen: it takes input, and it fills the header slots. */
@@ -704,7 +711,10 @@ export const Workspace = memo(function Workspace({
   splitRole = null,
   splitKeepChrome = false,
   embedInBoardTray = false,
+  practiceRequested = false,
+  onPracticeRequestHandled,
 }: WorkspaceProps) {
+  const headerModes = useHeaderModes();
   const {
     client,
     mobile,
@@ -740,6 +750,7 @@ export const Workspace = memo(function Workspace({
     setBankFilters,
     openWorkspace,
     focusTab,
+    openPracticePicker,
     closeTab,
     splitTabs,
     patchTab,
@@ -5569,6 +5580,13 @@ export const Workspace = memo(function Workspace({
    * minutes ago and linked to nothing still shows up — Explore is the atlas of
    * what exists, not of what happens to be connected.
    */
+  const [exploreRevision, setExploreRevision] = useState(0);
+  useEffect(() => {
+    if (tab.kind !== "explore") return;
+    const changed = () => setExploreRevision(value => value + 1);
+    for (const name of ["lc-explore-graph", ANNOTATE_LIBRARY_EVENT, WHITEBOARD_LIBRARY_EVENT]) window.addEventListener(name, changed);
+    return () => { for (const name of ["lc-explore-graph", ANNOTATE_LIBRARY_EVENT, WHITEBOARD_LIBRARY_EVENT]) window.removeEventListener(name, changed); };
+  }, [tab.kind]);
   const exploreNodes = useMemo((): NodeRef[] => {
     if (tab.kind !== "explore") return [];
     const out: NodeRef[] = [];
@@ -5593,7 +5611,7 @@ export const Workspace = memo(function Workspace({
       });
     }
     return out;
-  }, [tab.kind, tabsRef]);
+  }, [tab.kind, tabsRef, exploreRevision]);
 
   /** Unresolved nodes and linked problems, which no library lists. */
   const [exploreExtra, setExploreExtra] = useState<NodeRef[]>([]);
@@ -10096,6 +10114,13 @@ export const Workspace = memo(function Workspace({
   }, [active, showHomeChooser, tab.kind]);
 
   useEffect(() => {
+    if (active && tab.kind === "home" && practiceRequested) {
+      setPracticeOpen(true);
+      onPracticeRequestHandled?.();
+    }
+  }, [active, tab.kind, practiceRequested, onPracticeRequestHandled]);
+
+  useEffect(() => {
     setWorkspaceApi(tab.id, {
       park: () => new Promise<void>((resolve) => parkWorkspace(() => resolve())),
       leave: () => new Promise<boolean>((resolve) => leaveProblem(() => resolve(true))),
@@ -10341,7 +10366,7 @@ export const Workspace = memo(function Workspace({
             A footnote scratch board is not a library notebook: leave it with
             Back to document, not by opening another pad from this header.
           */}
-          {!hidePadMenu && !webPadLive && (
+          {!hidePadMenu && headerModes.web && !webPadLive && (
             <HoldButton
               label="Web"
               ariaLabel="Web pad: tap for a new page, hold for recent pages"
@@ -10379,7 +10404,7 @@ export const Workspace = memo(function Workspace({
             Document icon, left of the scratchpad's paper: tap picks a file to
             annotate, hold opens the library. Same split as its neighbour.
           */}
-          {!hidePadMenu && !docPadLive && (
+          {!hidePadMenu && headerModes.annotate && !docPadLive && (
             <HoldButton
               label="Document"
               ariaLabel="Document pad: tap to open a file, hold for recent documents"
@@ -10411,7 +10436,7 @@ export const Workspace = memo(function Workspace({
               </svg>
             </HoldButton>
           )}
-          {!hidePadMenu && webPadLive && (
+          {!hidePadMenu && headerModes.web && webPadLive && (
             <HoldButton
               label="Web"
               ariaLabel="Web documents: tap to save now, hold for save / open menu"
@@ -10446,7 +10471,7 @@ export const Workspace = memo(function Workspace({
               </svg>
             </HoldButton>
           )}
-          {!hidePadMenu && docPadLive && (
+          {!hidePadMenu && headerModes.annotate && docPadLive && (
             /* Tap to save now, hold for the sheet. */
             <HoldButton
               label="Markdown"
@@ -10486,7 +10511,7 @@ export const Workspace = memo(function Workspace({
             Starting to write is the common case by a wide margin, and it was
             behind a dialog whose other option nobody wanted most of the time.
           */}
-          {!hidePadMenu && !boardPadLive && (
+          {!hidePadMenu && headerModes.whiteboard && !boardPadLive && (
             <HoldButton
               label="Whiteboard"
               ariaLabel="Whiteboard: tap for a new notebook, hold to open the library"
@@ -10514,7 +10539,7 @@ export const Workspace = memo(function Workspace({
               </svg>
             </HoldButton>
           )}
-          {!hidePadMenu && boardPadLive && (
+          {!hidePadMenu && headerModes.whiteboard && boardPadLive && (
             /*
               Tap to save now, hold for the sheet.
 
@@ -10550,6 +10575,17 @@ export const Workspace = memo(function Workspace({
               </svg>
             </HoldButton>
           )}
+          {!hidePadMenu && headerModes.practice && FEATURE_LEETCODE && <button type="button" className="lc-icon"
+            aria-label="Practice: open the problem library" disabled={busy !== null || canvasLoading} onClick={() => openPracticePicker?.()}>
+            <svg className="lc-icon-svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true">
+              <path d="m8 6-6 6 6 6m8-12 6 6-6 6M14 3l-4 18" />
+            </svg>
+          </button>}
+          {!hidePadMenu && headerModes.explore && <ExploreHeaderMenu active={tab.kind === "explore"} disabled={busy !== null || canvasLoading}
+            onOpen={openExplore} onPull={async () => {
+              try { return await pullMissingHubFiles(client); }
+              finally { window.dispatchEvent(new Event("lc-explore-graph")); }
+            }} getGraph={() => collectExploreGraph(tabsRef.current.tabs)} />}
           <button
             type="button"
             className="lc-icon"
@@ -11408,6 +11444,7 @@ export const Workspace = memo(function Workspace({
                   />
                 ) : tab.kind === "explore" ? (
                   <ExploreWorkspace
+                    refreshKey={exploreRevision}
                     nodes={[...exploreNodes, ...exploreExtra]}
                     here={hereNode}
                     themeId={themeId}

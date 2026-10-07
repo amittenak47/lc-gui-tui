@@ -280,6 +280,7 @@ export interface ShellValue {
   /** Tabs. Opening writes a record; the workspace that mounts for it loads. */
   openWorkspace: (tab: TabRecord) => TabRecord;
   focusTab: (id: string) => void;
+  openPracticePicker?: () => void;
   closeTab: (id: string) => void;
   /** Pair `incoming` with `anchor` as a split. Home cannot be a partner. */
   splitTabs: (anchor: string, incoming: string, edge: import("./util/tabs").SplitEdge) => void;

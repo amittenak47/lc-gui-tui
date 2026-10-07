@@ -56,6 +56,7 @@ import {
 } from "../util/noteLinks";
 
 export interface ExploreWorkspaceProps {
+  refreshKey?: number;
   /** Every node the libraries know about, whether or not it has edges. */
   nodes: readonly NodeRef[];
   /** The node the reader is looking at in another pane, if any. */
@@ -157,6 +158,7 @@ export function ExploreWorkspace({
   active = true,
   showing = true,
   embedInBoardTray = false,
+  refreshKey = 0,
 }: ExploreWorkspaceProps) {
   void onUnlink;
   const { headerSlots } = useShell();
@@ -247,7 +249,7 @@ export function ExploreWorkspace({
     return () => {
       live = false;
     };
-  }, []);
+  }, [refreshKey]);
 
   const shown = useMemo(() => {
     const wanted = query.trim().toLowerCase();

@@ -1237,6 +1237,13 @@ export function App() {
     [activeGroup, activeRecord.id, liveTabs, tabState.tabs, visibleIds],
   );
 
+  const [practiceRequested, setPracticeRequested] = useState(false);
+  const openPracticePicker = useCallback(() => {
+    focusTab(HOME_TAB_ID);
+    setPracticeRequested(true);
+  }, [focusTab]);
+  const practiceRequestHandled = useCallback(() => setPracticeRequested(false), []);
+
   const shell: ShellValue = useMemo(
     () => ({
       client,
@@ -1281,6 +1288,7 @@ export function App() {
       setBankFilters,
       openWorkspace,
       focusTab,
+      openPracticePicker,
       closeTab,
       splitTabs,
       patchTab,
@@ -1298,7 +1306,7 @@ export function App() {
     }),
     [
       autosaveMs, bankFilters, browseMotion, capabilities, client, closeTab, coachFlags, error,
-      focusTab, headerSlots, holdBrowseOverlay, llmLink, mobile, navigateBySession, notice,
+      focusTab, openPracticePicker, headerSlots, holdBrowseOverlay, llmLink, mobile, navigateBySession, notice,
       announceAutosave, onMissingContent, openWorkspace, patchTab, pdfFilmOpen, readingSize, recognizer,
       refreshCoachFlags, refreshSession, serverLink, session, setChrome, setWorkspaceApi,
       settingsOpen, setShellLoadActive, sheetDragLocked, shellLoadActive, markUserLoad, takeUserLoad, testForward, themeId,
@@ -1438,6 +1446,8 @@ export function App() {
               tab={tab}
               active={active}
               showing={showing}
+              practiceRequested={tab.kind === "home" && practiceRequested}
+              onPracticeRequestHandled={practiceRequestHandled}
               splitRole={splitRole}
               splitKeepChrome={Boolean(splitRole && groupHasExplore)}
               embedInBoardTray={Boolean(splitRole && groupHasBoard)}
