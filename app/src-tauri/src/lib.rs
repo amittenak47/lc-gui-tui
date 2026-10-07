@@ -165,6 +165,8 @@ pub fn run() {
         lc_routes::lc_put_snapshot,
         lc_routes::lc_get_snapshots,
         lc_routes::lc_pads_sync,
+        lc_routes::lc_post_footnote_request,
+        lc_routes::lc_ack_footnote_request,
         lc_routes::lc_list_devices,
         lc_routes::lc_get_device_prefs,
         lc_routes::lc_put_device_prefs,

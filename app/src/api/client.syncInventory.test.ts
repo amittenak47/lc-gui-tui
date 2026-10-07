@@ -26,7 +26,10 @@ it("preserves hub capabilities, book heads and item revisions in an inventory", 
   expect(inventory.features).toEqual([]);
   expect(inventory.book_heads).toEqual(heads);
   expect(inventory.ink).toEqual(ink);
-  expect(invoke).toHaveBeenCalledWith("lc_pads_sync", { since: 0 });
+  expect(invoke.mock.calls[0]?.[0]).toBe("lc_pads_sync");
+  const args = invoke.mock.calls[0]?.[1] as { since: number; device: string };
+  expect(args.since).toBe(0);
+  expect(args.device).toMatch(/^[A-Za-z0-9_-]+$/);
 });
 
 it("does not infer atomic capabilities or revisions for an old hub", async () => {

@@ -4,7 +4,7 @@ use colored::Colorize;
 use comfy_table::Table;
 
 // The CLI is a shell over the same library crate the Tauri GUI embeds.
-use whiteboard::{config, dataset, datasets, index};
+use whiteboard::{config, dataset, datasets, index, mcp};
 
 use config::Config;
 #[derive(Parser)]
@@ -42,6 +42,12 @@ enum Cmd {
         /// Inspect one problem set instead of all of them
         #[arg(long)]
         dataset: Option<String>,
+    },
+    /// Answer footnote requests over MCP (stdio JSON-RPC)
+    Mcp {
+        /// Hub base URL. Defaults to http://127.0.0.1:<serve.port> from config.
+        #[arg(long)]
+        hub: Option<String>,
     },
 
 }
@@ -105,6 +111,7 @@ fn run_cmd(cmd: Cmd) -> Result<()> {
             print_datasets(&index::dataset_infos(&conn, &cfg)?);
             Ok(())
         }
+        Cmd::Mcp { hub } => mcp::serve_from_config(hub),
     }
 }
 

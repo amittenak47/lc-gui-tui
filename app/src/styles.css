@@ -18892,6 +18892,23 @@ button.lc-row-selected:hover:not(:disabled) {
   --lc-fn-text: #7c2d12;
 }
 
+.lc-doc-footnote-pending .lc-doc-footnote-spinner {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: lc-spin 0.7s linear infinite;
+  flex: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-doc-footnote-pending .lc-doc-footnote-spinner {
+    animation: none;
+    border-top-color: currentColor;
+  }
+}
+
 @keyframes lc-doc-footnote-pop {
   from {
     opacity: 0;

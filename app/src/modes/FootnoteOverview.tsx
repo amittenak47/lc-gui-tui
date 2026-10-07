@@ -1004,8 +1004,10 @@ export function FootnoteOverview({
                 </HubSection>
               )}
               {rowsAreReadOnly ? (
-                notes.length > 0 ? (
+                notes.length > 0 || footnote.pending ? (
                   <HubSection title="Notes">
+                    {footnote.pending ? <p className="lc-muted">GrokBot is writing...</p> : null}
+                    {notes.length > 0 && (
                     <ul className={listClass(notes.length)}>
                       {notes.map((note) => (
                         <li key={note.id}>
@@ -1016,10 +1018,12 @@ export function FootnoteOverview({
                         </li>
                       ))}
                     </ul>
+                    )}
                   </HubSection>
                 ) : null
               ) : (
               <HubSection title="Notes" onAdd={() => openTask({ kind: "note", id: null })}>
+                {footnote.pending ? <p className="lc-muted">GrokBot is writing...</p> : null}
                 {notes.length > 0 && (
                   <ul className={listClass(notes.length)}>
                     {notes.map((note) => (

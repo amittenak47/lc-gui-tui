@@ -13,6 +13,7 @@ import { HubSyncCancelled } from "./hubConflictStash";
 import { bookDisplay, bookPassSummary, bookFailureMessage, bookNoticeMessage } from "./bookSyncMessages";
 import { debugLog } from "./debugLog";
 import { bookWireRecord } from "./bookWireRecord";
+import { applyFootnotePing } from "./footnoteRequests";
 
 export const BOOK_PASS_STATUS_EVENT = "lc-book-pass-status";
 
@@ -96,6 +97,7 @@ async function executePass(client: LcClient, options: BookPassOptions): Promise<
     if (options.silent && !loadHubAutosync()) return result;
     await options.prepare?.();
     const ping = options.ping ?? await boundedBookRequest(() => client.pingPadSync(0, { timeoutMs: options.timeoutMs }), signal, options.timeoutMs);
+    void applyFootnotePing(client, ping).catch(() => {});
     if (!isModernBookHub(ping)) {
       result.modern = false;
       const notice = takeOldBookHubNotice(); if (notice) result.notices.push(notice);

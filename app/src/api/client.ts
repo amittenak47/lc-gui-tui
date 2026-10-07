@@ -4,6 +4,7 @@
 
 import { b64ToBytes, bytesToB64, loadInvoke, readInvokeResult } from "./nativeHttp";
 import { HUB_MAX_DOCUMENT_BYTES, loadPadHub, type PadHub } from "../util/padHub";
+import { loadDeviceId } from "../util/devicePrefs";
 import {
   beginPadHubStatusRequest, isPadHubOffline, PAD_HUB_PROBE_TIMEOUT_MS, reportPadHubStatus,
 } from "../util/padHubStatus";
@@ -708,6 +709,41 @@ export interface EdgeRowDto {
   updated_at?: number;
 }
 
+export interface FootnotePageNoteDto {
+  excerpt: string;
+  notes: string[];
+}
+
+export interface FootnoteRequestDto {
+  id: string;
+  device_id: string;
+  doc_id: string;
+  doc_name: string;
+  page: number | null;
+  anchor: unknown;
+  excerpt: string;
+  context: string;
+  wide_context: string;
+  page_footnotes: FootnotePageNoteDto[];
+  prompt: string | null;
+}
+
+export interface FootnoteLinkDto {
+  title?: string;
+  url: string;
+}
+
+export interface FootnoteResultDto {
+  notes: string[];
+  links?: FootnoteLinkDto[];
+}
+
+export interface FootnotePingResultDto {
+  id: string;
+  doc_id: string;
+  result: FootnoteResultDto;
+}
+
 export interface PadSyncPingDto {
   features?: string[];
   book_heads?: Array<{ kind: "annotate" | "whiteboard" | "problem"; id: string; rev: number }>;
@@ -729,6 +765,8 @@ export interface PadSyncPingDto {
   ink?: InkPageDigestDto[];
   edges?: EdgeRowDto[];
   gone_edges?: string[];
+  /** Finished footnote answers for this device, still unacked. */
+  footnote_results?: FootnotePingResultDto[];
 }
 
 export interface DevicePrefsDto {
@@ -1427,10 +1465,12 @@ export class LcClient {
 
   async pingPadSync(since: number, options?: AtomicRequestOptions): Promise<PadSyncPingDto> {
     const request = options ? atomicRequest(options) : undefined;
+    const sinceMs = Math.max(0, Math.floor(since));
+    const device = loadDeviceId();
     const body = await padInvokeOrHub<PadSyncPingDto>(
-      () => this.cmd("lc_pads_sync", { since }, request?.timeoutMs),
+      () => this.cmd("lc_pads_sync", { since: sinceMs, device }, request?.timeoutMs),
       "GET",
-      `/pads/sync?since=${Math.max(0, Math.floor(since))}`,
+      `/pads/sync?since=${sinceMs}&device=${encodeURIComponent(device)}`,
       undefined,
       request,
     );
@@ -1448,7 +1488,25 @@ export class LcClient {
       ink: Array.isArray(body?.ink) ? body.ink : [],
       edges: Array.isArray(body?.edges) ? body.edges : [],
       gone_edges: Array.isArray(body?.gone_edges) ? body.gone_edges : [],
+      footnote_results: Array.isArray(body?.footnote_results) ? body.footnote_results : [],
     };
+  }
+
+  async postFootnoteRequest(body: FootnoteRequestDto): Promise<void> {
+    await padInvokeOrHub(
+      () => this.cmd("lc_post_footnote_request", { body }),
+      "POST",
+      "/footnote-requests",
+      body,
+    );
+  }
+
+  async ackFootnoteRequest(id: string): Promise<void> {
+    await padInvokeOrHub(
+      () => this.cmd("lc_ack_footnote_request", { id }),
+      "POST",
+      `/footnote-requests/${encodeURIComponent(id)}/ack`,
+    );
   }
 
   async getInkPages(kind: "annotate" | "whiteboard", key: string): Promise<InkPageDto[]> {

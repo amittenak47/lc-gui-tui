@@ -298,6 +298,9 @@ async fn restore_kind(kind: PadKind, id: String) -> Result<StatusCode, AppError>
 pub struct SyncQuery {
     #[serde(default)]
     pub since: i64,
+    /// Device asking for its own finished footnote answers. Absent yields none.
+    #[serde(default)]
+    pub device: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -323,24 +326,33 @@ pub struct PadSyncPing {
     pub edges: Vec<pads::EdgeRow>,
     #[serde(default)]
     pub gone_edges: Vec<String>,
+    /// Finished footnote answers for `device`, still unacked. Independent of `since`.
+    #[serde(default)]
+    pub footnote_results: Vec<crate::pads::footnotes::FootnotePingResult>,
 }
 
 /// Periodic ping: saved whiteboards, annotated files, problem canvases, and
 /// rolling snapshots whose stamp is newer than `since`.
 pub async fn sync_pads(Query(query): Query<SyncQuery>) -> Result<Json<PadSyncPing>, AppError> {
     let since = query.since;
+    let device = query.device.filter(|value| !value.is_empty());
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     blocking(move || {
         let conn = pads::open(&pads::db_path()?)?;
-        pad_sync_inventory(&conn, since, now)
+        pad_sync_inventory(&conn, since, now, device.as_deref())
     }).await.map(Json)
 }
 
 /// All inventory components must describe the same database snapshot.
-fn pad_sync_inventory(conn: &rusqlite::Connection, since: i64, now: i64) -> anyhow::Result<PadSyncPing> {
+pub(crate) fn pad_sync_inventory(
+    conn: &rusqlite::Connection,
+    since: i64,
+    now: i64,
+    device: Option<&str>,
+) -> anyhow::Result<PadSyncPing> {
     pads::atomic_sync::sweep(conn)?;
     pads::read_transaction(conn, || Ok(PadSyncPing {
         features: vec!["atomic_commit".into(), "atomic_book_sync_v1".into()],
@@ -355,7 +367,17 @@ fn pad_sync_inventory(conn: &rusqlite::Connection, since: i64, now: i64) -> anyh
         ink: pads::list_ink_digests(conn, since)?,
         edges: pads::list_edges(conn, since)?,
         gone_edges: pads::list_gone_edges(conn, since)?,
+        footnote_results: pads::footnotes::list_results(conn, device).map_err(footnote_db)?,
     }))
+}
+
+fn footnote_db(err: pads::footnotes::FootnoteFail) -> anyhow::Error {
+    match err {
+        pads::footnotes::FootnoteFail::Other(err) => err,
+        pads::footnotes::FootnoteFail::Invalid(message)
+        | pads::footnotes::FootnoteFail::Conflict(message) => anyhow::anyhow!(message),
+        pads::footnotes::FootnoteFail::NotFound => anyhow::anyhow!("unknown footnote request"),
+    }
 }
 
 #[cfg(test)]
@@ -371,7 +393,7 @@ mod inventory_tests {
             "page_count": 1, "board": {"v": 1, "elements": []}, "agent": []
         })).unwrap();
         pads::put_whiteboard(&conn, &record).unwrap();
-        let inventory = pad_sync_inventory(&conn, 0, 100).unwrap();
+        let inventory = pad_sync_inventory(&conn, 0, 100, None).unwrap();
         let json = serde_json::to_value(&inventory).unwrap();
         assert_eq!(inventory.features, ["atomic_commit", "atomic_book_sync_v1"]);
         assert!(json["whiteboard"][0]["rev"].as_i64().unwrap() > 0);

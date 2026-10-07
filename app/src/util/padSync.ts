@@ -1145,6 +1145,8 @@ async function applyPadSyncPingBody(
   try {
     ping = await client.pingPadSync(since);
     noteHubPingOk();
+    const { applyFootnotePing } = await import("./footnoteRequests");
+    void applyFootnotePing(client, ping).catch(() => {});
   } catch (cause) {
     noteHubPingFail();
     throw cause;

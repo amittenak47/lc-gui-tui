@@ -298,6 +298,8 @@ export interface DocSelectionLayerProps {
     anchorRect: DOMRect | null,
   ) => void | boolean | Promise<void | boolean>;
   onSearch?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
+  /** Ask GrokBot to write an AI footnote for this text selection. */
+  onAskGrokBot?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
   /** Leave the mark and nothing else — the highlighter's plain outcome. */
   onMark?: (selection: DocSelectionResult, anchorRect: DOMRect | null) => void;
   /** Tap on an existing ribbon — reopen the overview for that mark. */
@@ -400,6 +402,7 @@ export function DocSelectionLayer({
   onAskAgent,
   onCopy,
   onSearch,
+  onAskGrokBot,
   onMark,
   onOpenFootnote,
   onRemoveFootnote,
@@ -2595,7 +2598,7 @@ export function DocSelectionLayer({
                   label={String(number)}
                   className={`lc-doc-footnote lc-doc-footnote-bookmark lc-doc-footnote-${footnote.kind}${
                     isAiTab ? " lc-doc-footnote-tab" : ""
-                  }`}
+                  }${footnote.pending ? " lc-doc-footnote-pending" : ""}`}
                   style={chipStyle}
                   dataId={footnote.id}
                   ariaLabel={`${footnoteTitle(footnote, number)} — tap to open, hold to delete`}
@@ -2633,7 +2636,11 @@ export function DocSelectionLayer({
                     else ribbonRects.current.delete(footnote.id);
                   }}
                 >
-                  <span className="lc-doc-footnote-tag">{number}</span>
+                  {footnote.pending ? (
+                    <span className="lc-doc-footnote-spinner" aria-hidden="true" />
+                  ) : (
+                    <span className="lc-doc-footnote-tag">{number}</span>
+                  )}
                 </HoldButton>
               </span>
             );
@@ -2907,6 +2914,18 @@ export function DocSelectionLayer({
                             <SearchActionIcon />
                             <span>Google</span>
                           </button>
+                          {onAskGrokBot && isTextAnchor(selection.anchor) && (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              className="lc-doc-sheet-action"
+                              aria-label="Ask GrokBot"
+                              onClick={() => act(onAskGrokBot)}
+                            >
+                              <GrokBotActionIcon />
+                              <span>Ask GrokBot</span>
+                            </button>
+                          )}
                         </>
                       )}
                       {/* Annotate = make a mark. Desktop: hold-marquee only.
@@ -2945,7 +2964,9 @@ function footnoteTitle(footnote: DocFootnote, number: number): string {
     case "note":
       return `${head} Highlight — ${what}`;
     case "ai":
-      return `${head} AI tab — ${what}`;
+      return footnote.pending
+        ? `${head} AI tab — ${what}. GrokBot is writing.`
+        : `${head} AI tab — ${what}`;
     default:
       return `${head} Agent — ${what}`;
   }
@@ -2961,6 +2982,20 @@ function CopyActionIcon() {
         stroke="currentColor"
         strokeWidth="1.4"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function GrokBotActionIcon() {
+  return (
+    <svg className="lc-doc-sheet-action-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden>
+      <path
+        d="M8 1.8 9.1 6 13.2 7.1 9.1 8.2 8 12.4 6.9 8.2 2.8 7.1 6.9 6Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
       />
     </svg>
   );

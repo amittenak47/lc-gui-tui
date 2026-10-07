@@ -12,6 +12,7 @@ mod corpus;
 mod docs;
 mod doc_bytes;
 mod pads;
+mod footnotes;
 mod atomic_pads;
 mod practice;
 mod workspace;
@@ -38,6 +39,10 @@ pub use atomic_pads::{
     get_book_state, check_book_head, stage_ink_page, list_staged_ink,
     commit_pad, get_pad_commit, put_snapshot_copy, list_snapshot_copies,
     get_snapshot_copy,
+};
+pub use footnotes::{
+    ack_footnote_request, create_footnote_request, get_footnote_request, list_footnote_requests,
+    submit_footnote_result,
 };
 pub use pads::{
     get_artifact_asset, put_artifact_asset,

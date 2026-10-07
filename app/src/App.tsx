@@ -91,6 +91,7 @@ import {
   PAD_SYNC_PING_MS,
 } from "./util/padSync";
 import { syncBookPass } from "./util/bookSyncPass";
+import { footnoteInboxNeedsPoll, pollFootnoteInbox } from "./util/footnoteRequests";
 import { HUB_AUTOSYNC_EVENT, loadHubAutosyncPref } from "./util/hubAutoSyncPref";
 import { PAD_HUB_EVENT, setHostLoopback } from "./util/padHub";
 import { startPadHubStatusMonitoring } from "./util/padHubStatus";
@@ -345,6 +346,32 @@ export function App() {
       void syncBookPass(client, { silent: true }).catch(() => {});
     };
     const timer = window.setInterval(tick, PAD_SYNC_PING_MS);
+    const onVis = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [serverLink, client, hubAutosyncOn]);
+
+  /*
+   * Autosync's pass already delivers footnote answers. When that pass is off,
+   * a request this device still has open keeps asking: the desktop is the hub,
+   * and nothing else pings it on its behalf.
+   */
+  useEffect(() => {
+    if (serverLink !== "online" || hubAutosyncOn) return;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled || document.visibilityState === "hidden") return;
+      if (!footnoteInboxNeedsPoll()) return;
+      void pollFootnoteInbox(client).catch(() => {});
+    };
+    const timer = window.setInterval(tick, PAD_SYNC_PING_MS);
+    tick();
     const onVis = () => {
       if (document.visibilityState === "visible") tick();
     };

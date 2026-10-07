@@ -145,6 +145,15 @@ describe("sanitizeFootnotes", () => {
     expect(plain.bands).toBeUndefined();
   });
 
+  it("keeps a pending request id only when it is a non-empty string", () => {
+    const [kept] = sanitizeFootnotes([footnote({ pending: "fr-1" })]);
+    expect(kept.pending).toBe("fr-1");
+    const [blank] = sanitizeFootnotes([footnote({ pending: "" })]);
+    expect(blank.pending).toBeUndefined();
+    const [bad] = sanitizeFootnotes([footnote({ pending: 4 as unknown as string })]);
+    expect(bad.pending).toBeUndefined();
+  });
+
   it("round-trips whiteboard pointers and drops corrupt ones", () => {
     const [kept] = sanitizeFootnotes([
       footnote({
@@ -540,6 +549,14 @@ describe("footnoteRevision", () => {
       whiteboards: [{ id: "wb-1", createdAt: 1, updatedAt: 2 }],
     };
     expect(footnoteRevision([withBoard])).not.toBe(footnoteRevision([base]));
+  });
+
+  it("changes when a pending GrokBot request is cleared", () => {
+    const pending = { ...base, pending: "fr-1" };
+    expect(footnoteRevision([pending])).not.toBe(footnoteRevision([base]));
+    const { pending: requestId, ...cleared } = pending;
+    expect(requestId).toBe("fr-1");
+    expect(footnoteRevision([cleared])).toBe(footnoteRevision([base]));
   });
 
   it("changes when a title or palette is edited", () => {

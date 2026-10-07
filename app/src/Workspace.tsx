@@ -192,7 +192,16 @@ import {
   pageTextForAsk,
   rememberExtractedPages,
 } from "./util/docExtract";
-import type { DocAnchor } from "./util/docAnchors";
+import { isTextAnchor, type DocAnchor } from "./util/docAnchors";
+import {
+  applyFootnoteResult,
+  buildFootnoteRequest,
+  enqueueFootnoteRequest,
+  FOOTNOTE_UNSENT_NOTE,
+  flushFootnoteQueue,
+  freshFootnoteRequestId,
+  registerOpenAnnotateFootnotes,
+} from "./util/footnoteRequests";
 import { installHandednessAttr } from "./util/inkHandedness";
 import { installUiHandednessAttr } from "./util/uiHandedness";
 import { openExternalUrl } from "./util/openExternal";
@@ -380,7 +389,7 @@ import type {
   HubPadConflict,
 } from "./util/hubConflictStash";
 import { HubSyncCancelled, inkChoiceOf } from "./util/hubConflictStash";
-import { otherDeviceLabel } from "./util/devicePrefs";
+import { loadDeviceId, otherDeviceLabel } from "./util/devicePrefs";
 import { getParkedDocSource, parkDocSource } from "./util/parkedDocSource";
 import { MAX_SOURCE_CHARS } from "./util/tabPersist";
 import { requestPersistentStorage, StorageFullError } from "./util/storageQuota";
@@ -8515,6 +8524,29 @@ export const Workspace = memo(function Workspace({
     }
   }, [annotateDocId, annotateFootnotes, annotateSource, agentMessages, client, patchTab, saveEditBuffer, closeFootnoteBoardSession, tab.id, tab.kind]);
 
+  useLayoutEffect(() => {
+    return registerOpenAnnotateFootnotes({
+      docId: () => annotateDocIdRef.current,
+      write: async (docId, mutate) => {
+        if (annotateDocIdRef.current !== docId) return "miss";
+        const current = annotateFootnotesRef.current;
+        const next = mutate(current);
+        if (next === current) return "gone";
+        flushSync(() => setAnnotateFootnotes(next));
+        try {
+          const saved = await saveAnnotateSession();
+          if (saved) {
+            annotatePristineMarksRef.current = footnoteRevision(annotateFootnotesRef.current);
+            return "saved";
+          }
+        } catch {
+          /* saveAnnotateSession already surfaces the error */
+        }
+        return "failed";
+      },
+    });
+  }, [saveAnnotateSession, setAnnotateFootnotes]);
+
   /*
    * In-place session: stash the PDF overlay and load scratch on this tab.
    * Kept as a working path. The hub opens a split tab instead
@@ -8833,6 +8865,68 @@ export const Workspace = memo(function Workspace({
       });
     },
     [openFootnoteOverview],
+  );
+
+  const onAskGrokBot = useCallback(
+    (selection: DocSelectionResult) => {
+      if (!isTextAnchor(selection.anchor)) return;
+      const excerpt = (selection.excerpt || selection.text).trim();
+      if (!excerpt) return;
+      const requestId = freshFootnoteRequestId();
+      const existing = annotateFootnotesRef.current;
+      const footnoteId = freshFootnoteId(existing);
+      const anchor = selection.anchor;
+      const next = addFootnote(existing, {
+        id: footnoteId,
+        kind: "ai",
+        anchor,
+        excerpt: excerpt.slice(0, 4000),
+        createdAt: Date.now(),
+        pending: requestId,
+        ...(captureIdRef.current ? { captureId: captureIdRef.current } : {}),
+        ...footnoteThemeSeed(existing.length),
+        ...(selection.hitRects.length > 0 ? { bands: selection.hitRects } : {}),
+        ...(selection.text.trim() ? { blockText: selection.text } : {}),
+      });
+      flushSync(() => setAnnotateFootnotes(next));
+      void (async () => {
+        let docId = annotateDocIdRef.current;
+        const saved = await saveAnnotateSession();
+        if (saved) {
+          docId = saved.id;
+          annotatePristineMarksRef.current = footnoteRevision(annotateFootnotesRef.current);
+        } else {
+          docId = docId ?? annotateDocIdRef.current;
+        }
+        const source = annotateSourceRef.current;
+        if (!docId || !source) {
+          setAnnotateFootnotes((current) =>
+            applyFootnoteResult(current, { id: requestId, notes: [FOOTNOTE_UNSENT_NOTE] }),
+          );
+          return;
+        }
+        const pages = source.hash ? extractedPagesFor(source.hash) : null;
+        const scope = anchor.scope;
+        const matched = scope ? pages?.find((entry) => entry.scope === scope) : undefined;
+        const pageEntry = matched ?? (pages?.length === 1 ? pages[0] : undefined);
+        const body = buildFootnoteRequest({
+          id: requestId,
+          deviceId: loadDeviceId(),
+          docId,
+          docName: source.name,
+          anchor,
+          excerpt: excerpt.slice(0, 4000),
+          pageText: pageEntry?.text ?? null,
+          pages,
+          viewerPage: source.docType === "pdf" ? pdfNavRef.current?.current ?? null : null,
+          footnotes: annotateFootnotesRef.current,
+          exceptId: footnoteId,
+        });
+        enqueueFootnoteRequest(body);
+        await flushFootnoteQueue(client);
+      })();
+    },
+    [client, saveAnnotateSession, setAnnotateFootnotes],
   );
 
   const onOpenFootnote = useCallback((footnote: DocFootnote, anchorRect: DOMRect | null) => {
@@ -11247,6 +11341,7 @@ export const Workspace = memo(function Workspace({
                   onAskAgent={(selection, rect, context) => captureDocSelection(selection, rect, true, context)}
                   onCopy={onDocCopy}
                   onSearch={onDocSearch}
+                  onAskGrokBot={onAskGrokBot}
                   onMark={highlighting ? onDocMark : undefined}
                   onOpenFootnote={onOpenFootnote}
                   onRemoveFootnote={onRemoveFootnote}

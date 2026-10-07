@@ -923,8 +923,32 @@ pub async fn lc_get_snapshots(
 }
 
 #[tauri::command]
-pub async fn lc_pads_sync(state: State<'_, Shared>, since: i64) -> Result<LcResponse, String> {
-    go(state, "GET", format!("/pads/sync?since={since}"), None).await
+pub async fn lc_pads_sync(
+    state: State<'_, Shared>,
+    since: i64,
+    device: Option<String>,
+) -> Result<LcResponse, String> {
+    let device_qs = device
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("&device={}", enc(&value)))
+        .unwrap_or_default();
+    go(state, "GET", format!("/pads/sync?since={since}{device_qs}"), None).await
+}
+
+#[tauri::command]
+pub async fn lc_post_footnote_request(
+    state: State<'_, Shared>,
+    body: serde_json::Value,
+) -> Result<LcResponse, String> {
+    go(state, "POST", "/footnote-requests".into(), Some(body)).await
+}
+
+#[tauri::command]
+pub async fn lc_ack_footnote_request(
+    state: State<'_, Shared>,
+    id: String,
+) -> Result<LcResponse, String> {
+    go(state, "POST", format!("/footnote-requests/{}/ack", enc(&id)), None).await
 }
 
 #[tauri::command]

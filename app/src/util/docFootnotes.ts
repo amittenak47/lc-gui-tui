@@ -198,6 +198,13 @@ export interface DocFootnote {
    * Narrower underline / highlight marks inside {@link blockText}.
    */
   subMarks?: DocFootnoteSubMark[];
+  /**
+   * Request id while GrokBot has not answered.
+   *
+   * Cleared when the answer is written onto this mark. Empty or non-string
+   * values are dropped on read — a spinner with no request is a stuck mark.
+   */
+  pending?: string;
 }
 
 export type DocFootnoteSubMarkKind = "underline" | "highlight";
@@ -666,6 +673,7 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
         updatedAt: rawUpdatedAt,
         whiteboards: rawWhiteboards,
         artifacts: rawArtifacts,
+        pending: rawPending,
         ...rest
       } = candidate as DocFootnote & { userNotes?: unknown };
       // Pulled out of the spread so a stored non-number is dropped rather than
@@ -694,6 +702,7 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
           ? candidate.blockText
           : undefined;
       const subMarks = sanitizeSubMarks(candidate.subMarks);
+      const pending = typeof rawPending === "string" && rawPending.length > 0 ? rawPending : undefined;
       return [
         {
           ...(rest as DocFootnote),
@@ -710,6 +719,7 @@ export function sanitizeFootnotes(value: unknown): DocFootnote[] {
           ...(blockText ? { blockText } : {}),
           ...(subMarks ? { subMarks } : {}),
           ...(updatedAt != null ? { updatedAt } : {}),
+          ...(pending ? { pending } : {}),
         },
       ];
     })
@@ -886,6 +896,7 @@ export function footnoteFieldsRevision(entry: DocFootnote): string {
             ].join(":"),
           )
           .join("\x1f"),
+        entry.pending ?? "",
       ].join("\x1e")
   );
 }

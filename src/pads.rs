@@ -16,6 +16,7 @@ use crate::config::config_dir;
 
 mod artifacts;
 pub mod artifact_assets;
+pub mod footnotes;
 pub mod sync_content;
 pub mod atomic_sync;
 pub mod snapshot_copies;
@@ -166,6 +167,30 @@ pub fn open(path: &Path) -> Result<Connection> {
         asset_key TEXT PRIMARY KEY, parent_kind TEXT NOT NULL, parent_id TEXT NOT NULL,
         payload TEXT NOT NULL, staged_at INTEGER NOT NULL
     ); CREATE INDEX IF NOT EXISTS idx_artifact_asset_parent ON artifact_assets(parent_kind, parent_id);")?;
+    // The model never writes the document. An answer waits here until the
+    // device that asked applies it and acks.
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS footnote_requests (
+        id TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL,
+        doc_id TEXT NOT NULL,
+        doc_name TEXT NOT NULL,
+        page INTEGER,
+        anchor TEXT NOT NULL,
+        excerpt TEXT NOT NULL,
+        context TEXT NOT NULL,
+        wide_context TEXT NOT NULL,
+        page_footnotes TEXT NOT NULL,
+        prompt TEXT,
+        status TEXT NOT NULL,
+        result TEXT,
+        created_at INTEGER NOT NULL,
+        done_at INTEGER,
+        acked_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_footnote_requests_pending
+        ON footnote_requests(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_footnote_requests_device
+        ON footnote_requests(device_id, status, done_at);")?;
     migrate_tombstones_to_gone(&conn)?;
     revisions::migrate(&conn)?;
     atomic_sync::migrate(&conn)?;

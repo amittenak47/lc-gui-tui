@@ -73,6 +73,8 @@ commands.allow = [
   "lc_put_edges",
   "lc_tombstone_edge",
   "lc_pads_sync",
+  "lc_post_footnote_request",
+  "lc_ack_footnote_request",
   "lc_llm_models",
   "lc_list_whiteboard",
   "lc_archive_whiteboard",
