@@ -27,6 +27,7 @@ import { createPortal } from "react-dom";
 
 import { BackgroundPalette } from "../components/BackgroundPalette";
 import { MorphBar } from "../components/MorphBar";
+import { INK_DISPLAY_HZ_EVENT, loadInkMatchDisplay } from "../util/inkDisplayHzPref";
 import { useShell } from "../shellContext";
 import type { LcClient } from "../api/client";
 import {stepEdgeBow,edgeBowPath,type EdgeBow} from "./exploreEdge";
@@ -175,6 +176,13 @@ export function ExploreWorkspace({
   const [leaving, setLeaving] = useState<Body[]>([]);
   /** Bumped when the loop wants the labels redrawn, which is not every frame. */
   const [labelTick, setLabelTick] = useState(0);
+  const [matchDisplay, setMatchDisplay] = useState(loadInkMatchDisplay);
+
+  useEffect(() => {
+    const changed = () => setMatchDisplay(loadInkMatchDisplay());
+    window.addEventListener(INK_DISPLAY_HZ_EVENT, changed);
+    return () => window.removeEventListener(INK_DISPLAY_HZ_EVENT, changed);
+  }, []);
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   /** Edges by id, for the paint loop, which must not depend on React state. */
@@ -188,6 +196,8 @@ export function ExploreWorkspace({
   const rememberedRef = useRef(new Map<string,Body>());
   const leavingRef = useRef<Body[]>([]);
   const nodeElsRef = useRef(new Map<string, HTMLElement>());
+  const nodePositionsRef = useRef(new WeakMap<HTMLElement, string>());
+  const edgePathsRef = useRef(new WeakMap<SVGPathElement, string>());
   const edgeElsRef = useRef(new Map<string, SVGPathElement>());
   /** The wide faint copy of each edge, drawn under its core. */
   const glowElsRef = useRef(new Map<string, SVGPathElement>());
@@ -349,7 +359,11 @@ export function ExploreWorkspace({
       const el = nodeElsRef.current.get(body.key);
       // `translate3d` rather than `left`/`top`: this runs every frame for every
       // node, and only the transform stays off the layout path.
-      if (el) el.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -50%)`;
+      const transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -50%)`;
+      if (el && nodePositionsRef.current.get(el) !== transform) {
+        el.style.transform = transform;
+        nodePositionsRef.current.set(el, transform);
+      }
     }
     for(const body of leavingRef.current) if(!at.has(body.key)) at.set(body.key,{x:body.x*w,y:body.y*h,vx:0,vy:0});
     const boxKey=`${w}:${h}`;
@@ -365,8 +379,12 @@ export function ExploreWorkspace({
       const bow=stepEdgeBow(from,to,edgeBowsRef.current.get(id),edgeTime,reduced);
       edgeBowsRef.current.set(id,bow);
       const d=edgeBowPath(from,to,bow);
-      line.setAttribute("d", d);
-      glowElsRef.current.get(id)?.setAttribute("d", d);
+      for (const path of [line, glowElsRef.current.get(id)]) {
+        if (path && edgePathsRef.current.get(path) !== d) {
+          path.setAttribute("d", d);
+          edgePathsRef.current.set(path, d);
+        }
+      }
     }
   }, []);
 
@@ -465,7 +483,7 @@ export function ExploreWorkspace({
       for (const body of bodiesRef.current) fastest = Math.max(fastest, Math.hypot(body.vx * box.w, body.vy * box.h));
       quietFor = busy || fastest >= IDLE_SPEED_PX ? 0 : quietFor + dt * steps;
       idle = quietFor >= IDLE_AFTER;
-      if (idle) {
+      if (idle && !matchDisplay) {
         timer = window.setTimeout(() => {
           timer = 0;
           frame = requestAnimationFrame(tick);
@@ -499,7 +517,7 @@ export function ExploreWorkspace({
       window.removeEventListener("pointerup", onUp, true);
       window.removeEventListener("pointercancel", onUp, true);
     };
-  }, [clustered, paint, showing]);
+  }, [clustered, paint, showing, matchDisplay]);
 
   const degree = useMemo(() => {
     const out = new Map<string, number>();

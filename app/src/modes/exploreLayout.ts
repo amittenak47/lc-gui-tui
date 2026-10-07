@@ -298,6 +298,9 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
        */
       const dx = (body.x - other.x) * aspect;
       const dy = body.y - other.y;
+      // Most pairs cannot repel each other. Reject them before the distance
+      // calculation; the exact nearby-pair forces and update order stay intact.
+      if (Math.abs(dx) > gap || Math.abs(dy) > gap) continue;
       let dist = Math.hypot(dx, dy);
       if (dist > gap) continue;
       const room = linked.get(body.key)?.has(other.key) ? Math.min(gap, LINKED_GAP) : gap;
