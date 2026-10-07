@@ -178,14 +178,22 @@ function localRecordParts(owner: BookIdentity, record: Record<string, unknown>, 
 }
 
 /** Metadata only: a confirmed response never writes captured content over new work. */
-export async function acknowledgeBook(capture: BookCapture, attempt: NonNullable<SyncState["lastAttempt"]>, result: CommitResultDto): Promise<void> {
+export async function acknowledgeBook(capture: BookCapture, attempt: NonNullable<SyncState["lastAttempt"]>, result: CommitResultDto, submittedRecord: Record<string, unknown> | null = capture.record): Promise<void> {
+  // The hub DTO can omit an empty child map and retain transcript order.
+  // Accept that representation only when localization proves it contains
+  // the submitted content; never use a newer capture as the receipt baseline.
+  const submitted = submittedRecord;
+  const recordMatches = attempt.record && (result.book.record_hash === attempt.record.wireHash
+    || (submitted && result.book.record && await recordHash(result.book.record) === result.book.record_hash
+      && await recordHash(submitted) === attempt.record.localHash
+      && (await localizedRecordHash(result.book.record,
+        { ...capture, record: submitted }, false)).hash === attempt.record.localHash));
   await withBookWrite(capture.kind, capture.id, () => withTransaction<void>([STORE_SYNC_STATE, STORE_INK_PAGES, STORE_BOOK_META], "readwrite", (tx, done) => {
     const request = tx.objectStore(STORE_SYNC_STATE).get(syncStateKey(capture.kind, capture.id));
     request.onsuccess = () => {
       try {
         const current = request.result as SyncState | undefined;
         if (!current) throw new LocalBookConflictError();
-        const recordMatches = attempt.record && result.book.record_hash === attempt.record.wireHash;
         const next = { ...current, observedBookRev: Math.max(current.observedBookRev, result.book.book_rev) };
         if (attempt.record && result.book.record_rev >= current.recordRev && attempt.record.capturedSeq >= current.syncedChangeSeq && recordMatches) Object.assign(next, {
           recordRev: result.book.record_rev, baseRecordWireHash: result.book.record_hash, baseRecordLocalHash: attempt.record.localHash,

@@ -556,7 +556,7 @@ async function executeBook(client: LcClient, owner: BookIdentity, inventory: Boo
             if (result.status !== "committed" || result.upload_id !== uploadId) throw new BookSyncError("invalid", "Invalid commit acknowledgement");
             committed = true;
             if (result.book.kind !== owner.kind || result.book.id !== owner.id) throw new BookSyncError("invalid", "Wrong commit book identity");
-            await acknowledgeBook(capture, attempt, result); final = result.book;
+            await acknowledgeBook(capture, attempt, result, body.record?.value ?? null); final = result.book;
             // Receipt metadata covers submitted versions. Reacquire a complete
             // fresh read set to account for disjoint writers during staging.
             if (final.state === "gone") {
