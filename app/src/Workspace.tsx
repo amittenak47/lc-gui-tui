@@ -1078,7 +1078,7 @@ export const Workspace = memo(function Workspace({
           setNotice("The comparison now includes your latest local edits. Choose the copy to keep.");
           return;
         }
-        const row = await resolveProblemArtifactConflict(client, ask.problemConflict, resolution.pick, resolution.ink);
+        const row = await resolveProblemArtifactConflict(client, ask.problemConflict, resolution.pick, resolution.ink, resolution.artifacts);
         const board = boardRef.current;
         if (board) board.restoreBoard(row.board.elements, row.board.appState, {
           ink: inkOpsFrom(row.board), files: row.board.files, inkPalettes: row.board.inkPalettes,
@@ -1100,7 +1100,7 @@ export const Workspace = memo(function Workspace({
       }
       if (c.stage === "pad") {
         if (c.server?.artifacts) {
-          const artifacts = await reconcileArtifactConflict(client, { kind: c.kind, id: c.id }, c.server.artifacts, resolution.pick === "server" ? "server" : "local");
+          const artifacts = await reconcileArtifactConflict(client, { kind: c.kind, id: c.id }, c.server.artifacts, resolution.artifacts ?? (resolution.pick === "server" ? "server" : "local"));
           // Use the merged catalog even when the user chooses the hub's canvas.
           // Losing authored attachment content remains as explicit copies.
           c.server = { ...c.server, artifacts };

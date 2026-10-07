@@ -255,7 +255,7 @@ export function inkChoiceFromPick(
 }
 
 /** What the reader chose; the caller applies it to stores and the hub. */
-export type HubConflictResolution =
+export type HubConflictResolution = (
   | {
       pick: "local";
       ink?: HubInkChoice;
@@ -284,6 +284,9 @@ export type HubConflictResolution =
        * overwrite, so both boards survive.
        */
       boardRemints?: Record<string, string>;
+    }) & {
+      /** Attachment choice is independent of the canvas/handwriting choice. */
+      artifacts?: "local" | "server";
     };
 
 /** Ink follows the pane when the split did not say. Merged notes still merge ink. */

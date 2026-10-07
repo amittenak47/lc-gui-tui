@@ -54,6 +54,7 @@ export type BookChoice = "local" | "server" | "merged" | "none";
 export interface BookResolution {
   record?: BookChoice;
   recordValue?: Record<string, unknown>;
+  artifacts?: "local" | "server";
   pages?: Array<{ key: string; pageId: number; choice: BookChoice }>;
   lifecycle?: "local" | "server";
   boardRemints?: Record<string, string>;
@@ -203,7 +204,7 @@ async function applyChoices(client: LcClient, conflict: BookConflict, resolution
       const parent = { kind: capture.kind, id: capture.id };
       let artifacts = await boundedBookRequest(() => prepareArtifactConflict(client, parent,
         artifactCatalogFields(capture.record?.artifacts, capture).artifacts, remote.record?.artifacts,
-        resolution.record === "server" ? "server" : "local"), signal, options.timeoutMs);
+        resolution.artifacts ?? (resolution.record === "server" ? "server" : "local")), signal, options.timeoutMs);
       if (capture.kind === "problem" && resolution.record === "merged" && remote.record?.board) {
         const content = await boundedBookRequest(() => stageWhiteboardArtifactSnapshot(parent, newBookToken(),
           problemCanvasSnapshot(remote.record!.board as BoardBlob)), signal, options.timeoutMs);

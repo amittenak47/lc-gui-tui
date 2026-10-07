@@ -21,6 +21,7 @@ import type { DocFootnote } from "../util/docFootnotes";
 import { conflictFocusPage, inkDtosHavePage, mergeInkDtos } from "../util/conflictPage";
 import { loadConflictPreviewInkPage, localInkAsDtos } from "../util/inkSync";
 import { Tip } from "./Tip";
+import { ARTIFACT_CATALOG_ROW_ID, conflictArtifactCatalogs, conflictArtifactCatalogLabel } from "../util/conflictArtifactCatalog";
 import "./hubConflictSplit.css";
 import { ConflictPagePreview } from "./ConflictPagePreview";
 import { conflictDocumentWidth, inkSpreadOf } from "./conflictDocumentLayout";
@@ -133,7 +134,7 @@ function unlistedFieldsMatch(
     a.source === b.source &&
     same(a.board, b.board) &&
     same(a.agent, b.agent) &&
-    same(a.artifacts, b.artifacts) &&
+    conflictArtifactCatalogs(a.artifacts, b.artifacts).same &&
     same(a.footnote_boards, b.footnote_boards)
   );
 }
@@ -302,6 +303,7 @@ function NoteRow({
   onToggleExpand,
   missing = false,
   status,
+  attachments = false,
 }: {
   id: string;
   kind: string;
@@ -322,6 +324,7 @@ function NoteRow({
   onToggleExpand?: () => void;
   missing?: boolean;
   status?: string;
+  attachments?: boolean;
 }) {
   return (
     <li
@@ -369,10 +372,12 @@ function NoteRow({
           data-action="keep"
           disabled={missing}
           aria-pressed={kept}
-          aria-label={`Keep ${sideLabel} copy of ${part ? "piece" : "note"}`}
+          aria-label={attachments ? `Keep ${sideLabel} attachments` : `Keep ${sideLabel} copy of ${part ? "piece" : "note"}`}
           title={
             kept
               ? "This copy is kept — tap to reconsider"
+              : attachments
+                ? "Use these attachment versions. Other authored versions remain as conflict copies."
               : sameId
                 ? `✓ keeps the ${sideLabel} copy. ✓ both combines them into one mark.`
                 : `✓ keeps the ${sideLabel} copy`
@@ -391,9 +396,11 @@ function NoteRow({
           data-action="drop"
           disabled={missing}
           aria-pressed={dropped}
-          aria-label={`Drop ${sideLabel} copy of ${part ? "piece" : "note"}`}
+          aria-label={attachments ? `Drop ${sideLabel} attachment choice` : `Drop ${sideLabel} copy of ${part ? "piece" : "note"}`}
           title={
-            dropped
+            attachments
+              ? "Do not prefer these attachments. Authored versions remain as conflict copies."
+            : dropped
               ? "This copy will be removed — tap to reconsider"
               : `✕ drops the ${sideLabel} copy. ✕ both sides removes this note.`
           }
@@ -532,6 +539,8 @@ export function HubConflictSplit({
     if (!conflict || conflict.kind !== "annotate") return [];
     return footnoteDiffRows(notesOf(conflict.local), notesOf(conflict.server));
   }, [conflict]);
+  const catalogs = useMemo(() => conflictArtifactCatalogs(conflict?.local?.artifacts, conflict?.server?.artifacts), [conflict]);
+  const hasCatalogRow = conflict?.stage === "pad" && Boolean(catalogs.local || catalogs.server);
 
   // Workspace measures fresh arrays on each render. Equal frame values must
   // not cancel decoding and start the entire notebook again on a slow tablet.
@@ -594,6 +603,7 @@ export function HubConflictSplit({
    */
   const blankOneSided = padInkRows.filter(row => row.hasLocal !== row.hasServer && inkBlank[row.pageId] === true);
   const sameIds = new Set([
+    ...(hasCatalogRow && catalogs.same ? [ARTIFACT_CATALOG_ROW_ID] : []),
     ...rows.filter(row => row.sameId && !row.differs).map(row => row.id),
     ...blankOneSided.map(row => inkPageRowId(row.pageId)),
     ...[...partsByNote.values()].flat().filter(part => part.same).map(part => part.id),
@@ -742,6 +752,7 @@ export function HubConflictSplit({
 
   const idsOnSide = (side: Side, visibleOnly = false): string[] => {
     const ids: string[] = [];
+    if (hasCatalogRow) ids.push(ARTIFACT_CATALOG_ROW_ID);
     for (const row of padInkRows) {
       const has = side === "local" ? row.hasLocal : row.hasServer;
       if (has) ids.push(inkPageRowId(row.pageId));
@@ -867,7 +878,10 @@ export function HubConflictSplit({
         picks[footnoteInkPageRowId(row.wbId, row.pageId)],
       ),
     );
-  const valid = Boolean(conflict) && notesHomed && inkHomed;
+  // No attachment choice may remove the only authored version. Reconciliation
+  // retains the other active version as a conflict copy, including tombstones.
+  const catalogHomed = !hasCatalogRow || Boolean(picks[ARTIFACT_CATALOG_ROW_ID]?.local || picks[ARTIFACT_CATALOG_ROW_ID]?.server);
+  const valid = Boolean(conflict) && notesHomed && inkHomed && catalogHomed;
 
   /*
    * What each pane draws, entry by entry.
@@ -1032,7 +1046,8 @@ export function HubConflictSplit({
 
   const overallPick = (): HubConflictResolution["pick"] => {
     if (conflict?.kind === "annotate" && Object.keys(manualPicks).some(id => parseFootnotePartRowId(id))) return "merged";
-    const ink = inkChoice();
+    const choices = [inkChoice(), ...(hasCatalogRow && !catalogs.same ? [inkChoiceFromPick(picks[ARTIFACT_CATALOG_ROW_ID])] : [])].filter(choice => choice !== "none");
+    const ink = choices.length === 0 ? "none" : choices.every(choice => choice === choices[0]) ? choices[0] : "merged";
     if (conflict?.kind !== "annotate") {
       if (ink === "server") return "server";
       if (ink === "merged") return "merged";
@@ -1058,8 +1073,11 @@ export function HubConflictSplit({
     const pick = overallPick();
     const inkPages = inkPageChoices();
     const footnoteInkPages = footnoteInkPageChoices();
+    const artifacts = hasCatalogRow && !catalogs.same
+      ? { artifacts: picks[ARTIFACT_CATALOG_ROW_ID]?.server && !picks[ARTIFACT_CATALOG_ROW_ID]?.local ? "server" as const : "local" as const }
+      : {};
     if (pick !== "merged" || conflict.kind !== "annotate") {
-      onResolve({ pick, ink, inkPages, footnoteInkPages });
+      onResolve({ pick, ink, inkPages, footnoteInkPages, ...artifacts });
       return;
     }
     const boardRemints: Record<string, string> = {};
@@ -1072,6 +1090,7 @@ export function HubConflictSplit({
     );
     onResolve({
       pick: "merged",
+      ...artifacts,
       footnotes: merged,
       ink,
       inkPages,
@@ -1239,6 +1258,8 @@ export function HubConflictSplit({
       ? "The other copy could not be read, so only this device's copy can be kept. ✓ Local (or each of its changes)."
       : serverInkUnread && !valid
         ? "The other device's handwriting could not be read, so it cannot be kept. ✓ Local handwriting, or ✕ both."
+      : !catalogHomed
+        ? "Keep at least one attachment version. Other versions remain as conflict copies."
       : !valid
         ? pickingStarted && remainingChoices > 0
           ? `${remainingChoices} ${
@@ -1466,7 +1487,7 @@ export function HubConflictSplit({
           </Tip>
         </header>
         <div className="lc-hub-conflict-pane-body">
-          {!hasChoices && !inkLoading && <p className="lc-muted">No differing marks or handwriting on this side.</p>}
+          {!hasChoices && !inkLoading && <p className="lc-muted">No differing marks, handwriting or attachments on this side.</p>}
           <ConflictPagePreview
             hash={docHash}
             documentType={conflict.kind === "annotate" ? (body as AnnotatePadDto | null)?.doc_type : undefined}
@@ -1531,6 +1552,25 @@ export function HubConflictSplit({
               .join(" ")}
           >
             {renderInkRows(side)}
+            {hasCatalogRow && rowVisible(ARTIFACT_CATALOG_ROW_ID) && (
+              <NoteRow
+                id={ARTIFACT_CATALOG_ROW_ID}
+                kind="attachments"
+                attachments
+                excerpt={conflictArtifactCatalogLabel(side === "local" ? catalogs.local : catalogs.server)}
+                side={side}
+                sameId
+                differs={!catalogs.same}
+                kept={pickOf(picks, ARTIFACT_CATALOG_ROW_ID, side) === true}
+                dropped={pickOf(picks, ARTIFACT_CATALOG_ROW_ID, side) === false}
+                focused={focusedId === ARTIFACT_CATALOG_ROW_ID}
+                sideLabel={label}
+                status={catalogs.same ? "Same" : "Different"}
+                onKeep={toggleKeep}
+                onDrop={toggleDrop}
+                onFocus={focusRow}
+              />
+            )}
             {rows.map((row) => {
               const own = side === "local" ? row.local : row.server;
               const note = own ?? row.local ?? row.server;
@@ -1687,7 +1727,7 @@ export function HubConflictSplit({
             />
           )}
           {(busy || error || !valid) && <span role={error ? "alert" : "status"} className={error && !busy ? "lc-hub-conflict-error" : "lc-muted"}>
-            {busy ? "Saving..." : error || (serverMissing || serverInkUnread ? whyDisabled : `${remainingChoices} changes still need a choice`)}
+            {busy ? "Saving..." : error || (serverMissing || serverInkUnread || !catalogHomed ? whyDisabled : `${remainingChoices} changes still need a choice`)}
           </span>}
         </div>
         {onCancel && (

@@ -73,7 +73,7 @@ export function problemConflictPreview(conflict: ProblemArtifactConflict): HubPa
   };
 }
 
-export async function resolveProblemArtifactConflict(client: LcClient, conflict: ProblemArtifactConflict, preference: "local" | "server" | "merged", inkChoice?: HubInkChoice) {
+export async function resolveProblemArtifactConflict(client: LcClient, conflict: ProblemArtifactConflict, preference: "local" | "server" | "merged", inkChoice?: HubInkChoice, artifactPreference?: "local" | "server") {
   const { local, server } = conflict;
   const current = await getProblemBoard(local.id);
   if (!current || JSON.stringify(current) !== JSON.stringify(local)) {
@@ -81,7 +81,7 @@ export async function resolveProblemArtifactConflict(client: LcClient, conflict:
     throw new Error("The problem changed while the comparison was open. Review the refreshed copies.");
   }
   const parent = { kind: "problem" as const, id: local.id };
-  let artifacts = await prepareArtifactConflict(client, parent, local.artifacts, server.artifacts, preference === "server" ? "server" : "local");
+  let artifacts = await prepareArtifactConflict(client, parent, local.artifacts, server.artifacts, artifactPreference ?? (preference === "server" ? "server" : "local"));
   if (preference === "merged") {
     // Both canvases remain editable, without layering two independent scenes.
     const content = await stageWhiteboardArtifactSnapshot(parent, crypto.randomUUID(), problemCanvasSnapshot(server.board as BoardBlob));

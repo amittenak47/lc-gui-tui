@@ -74,6 +74,7 @@ export async function askBookConflict(
     const chosenBoard = recordValue.board as Record<string, unknown>; delete chosenBoard.ink; delete chosenBoard.inkPages;
   }
   return { ...(conflict.record ? { record: choice.pick, ...(recordValue ? { recordValue } : {}) } : {}),
+    ...(choice.artifacts ? { artifacts: choice.artifacts } : {}),
     ...(conflict.lifecycle ? { lifecycle: choice.pick === "server" ? "server" : "local" } : {}),
     ...(choice.pick === "merged" && choice.boardRemints ? { boardRemints: choice.boardRemints } : {}),
     pages: conflict.pages.map(page => {
