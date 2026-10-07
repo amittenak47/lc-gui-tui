@@ -74,6 +74,35 @@ it("releases partial allocations when GPU initialization fails", () => {
   for (const handles of Object.values(allocated)) expect(handles.size).toBe(0);
 });
 
+it("breathes idle dots independently without moving captions or uploading artwork, and respects reduced motion", () => {
+  const { gl, texImage2D, drawArraysInstanced } = graphics();
+  const renderer = new ExploreWebGLRenderer(document.createElement("canvas"), gl, 1);
+  renderer.setStyles([node, { ...node, id: "b" }], [], palette, 0, false);
+  const uploads = texImage2D.mock.calls.length;
+  const positions = [{ id: "a", x: 70, y: 80 }, { id: "b", x: 170, y: 180 }];
+  const frame = (now: number) => {
+    renderer.paint(positions, [], 600, 400, 1, now);
+    return Array.from(vi.mocked(gl.bufferSubData).mock.calls.at(-1)![2] as Float32Array);
+  };
+  const first = frame(1000), later = frame(2400);
+  // Each node has a breathing halo, dot and unchanged caption in one batch.
+  expect(first).toHaveLength(6 * 13);
+  expect(first[15]).not.toBe(later[15]);
+  expect(first[15]).not.toBe(first[54]);
+  expect(first.slice(26, 39)).toEqual(later.slice(26, 39));
+  for (const data of [first, later]) {
+    expect(data[13]! + data[15]! / 2).toBeCloseTo(70);
+    expect(data[14]! + data[16]! / 2).toBeCloseTo(80);
+  }
+  expect(drawArraysInstanced).toHaveBeenCalledTimes(2);
+  expect(texImage2D).toHaveBeenCalledTimes(uploads);
+  renderer.setReducedMotion(true, 2500);
+  const reduced = frame(2600);
+  expect(reduced).toHaveLength(4 * 13);
+  expect(frame(4000)).toEqual(reduced);
+  renderer.dispose();
+});
+
 it("keeps overlapping sprites in drawing order across multiple atlas layers", () => {
   const { gl, drawArraysInstanced } = graphics();
   const renderer = new ExploreWebGLRenderer(document.createElement("canvas"), gl, 1);

@@ -67,6 +67,7 @@ interface AtlasPage {
 }
 interface StyledNode {
   style: GraphNodeStyle;
+  idlePhase: number;
   dot: Sprite;
   rim: Sprite | null;
   here: [
@@ -296,6 +297,13 @@ export function beamTemplate(segments = 16): Float32Array {
   }
   return data;
 }
+/** Stable per-node timing, unaffected by filters or library ordering. */
+function idlePhase(id: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < id.length; i++) hash = Math.imul(hash ^ id.charCodeAt(i), 16777619);
+  return (hash >>> 0) / 4294967296 * Math.PI * 2;
+}
+
 export class ExploreWebGLRenderer {
   private flat: WebGLProgram;
   private sprites: WebGLProgram;
@@ -504,7 +512,7 @@ export class ExploreWebGLRenderer {
     this.reduced = reduced;
     const next = new Map<string, StyledNode>();
     for (const style of nodes)
-      next.set(style.id, { style, dot: this.dot(style), rim: style.missing ? null : this.rim(style.diameter), here: style.here && !style.missing ? [this.halo(style, 4, .24, 18, .7), this.halo(style, 9, .06, 22, .4)] : null, hover: style.missing ? null : this.halo(style, 0, 0, 9, .8, style.tint), label: this.label(style), animation: animate(this.nodes.get(style.id)?.animation, style.leaving, now, reduced, 320, 320) });
+      next.set(style.id, { style, idlePhase: idlePhase(style.id), dot: this.dot(style), rim: style.missing ? null : this.rim(style.diameter), here: style.here && !style.missing ? [this.halo(style, 4, .24, 18, .7), this.halo(style, 9, .06, 22, .4)] : null, hover: style.missing ? null : this.halo(style, 0, 0, 9, .8, style.tint), label: this.label(style), animation: animate(this.nodes.get(style.id)?.animation, style.leaving, now, reduced, 320, 320) });
     this.nodes = next;
     const edges = new Map<string, StyledBeam>();
     for (const style of beams)
@@ -581,7 +589,11 @@ export class ExploreWebGLRenderer {
       const alpha = alphaAt(node.animation, now) * (node.style.dim ? .22 : 1);
       if (alpha <= 0)
         continue;
-      const scale = (hovered ? 1.18 : 1) * (.2 + .8 * alphaAt(node.animation, now));
+      const idle = !this.reduced && !hovered && !node.style.selected && !node.style.here && !node.style.missing && !node.style.dim && !node.style.leaving;
+      // Breathe the cached dot and halo, without moving captions or rebuilding
+      // textures. Different phases keep the map from flashing in unison.
+      const breath = idle ? Math.sin(now / 5600 * Math.PI * 2 + node.idlePhase) : 0;
+      const scale = (hovered ? 1.18 : 1 + breath * .05) * (.2 + .8 * alphaAt(node.animation, now));
       const size = node.dot.cssWidth * scale;
       if (node.here) {
         const pulse = this.reduced ? 0 : (1 - Math.cos(now / 2800 * Math.PI * 2)) / 2;
@@ -593,6 +605,10 @@ export class ExploreWebGLRenderer {
       else if (hovered && node.hover && !node.style.selected) {
         const extent = node.hover.cssWidth * scale;
         this.sprite(node.hover, position.x - extent / 2, position.y - extent / 2, extent, extent, white, alpha);
+      }
+      else if (idle && node.hover) {
+        const extent = node.hover.cssWidth * scale;
+        this.sprite(node.hover, position.x - extent / 2, position.y - extent / 2, extent, extent, white, alpha * (.16 + .06 * breath));
       }
       this.sprite(node.dot, position.x - size / 2, position.y - size / 2, size, size, white, alpha);
       if (node.rim && (node.style.selected || hovered)) {
