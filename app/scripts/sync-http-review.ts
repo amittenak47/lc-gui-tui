@@ -18,7 +18,7 @@ import { restoreAgentMessages } from "../src/modes/agentTranscript";
 import { listSessions } from "../src/modes/coachSessions";
 import { withStore, STORE_INK_PAGES } from "../src/util/idb";
 import { inkPageKey } from "../src/util/inkPageStore";
-import { createArtifact, readArtifact, readArtifactCatalog, saveArtifact } from "../src/util/artifactRepository";
+import { createArtifact, readArtifact, readArtifactCatalog, saveArtifact, mutateArtifacts } from "../src/util/artifactRepository";
 import { artifactProposalSnapshot } from "../src/util/agentArtifacts";
 
 setHostLoopback({url:"http://127.0.0.1:1458",token:"sync-review"});
@@ -116,6 +116,8 @@ const api = {
       artifactProposalSnapshot({kind:"markdown",title:"Conversation.md",source:"Question and answer",messages:doc.agent},false));
     await createArtifact({kind:"annotate",id},"Owned drawing",[{kind:"footnote",footnoteId:"mark"}],{
       kind:"whiteboard",value:{board:{...board,inkPages:{v:1,pageIds:[1]}},programs:[],pageCount:1,ink:new Map([[1,ink(0,"#550055")]])}});
+    await createArtifact({kind:"annotate",id},"Owned code.py",[{kind:"thread",rootId:"q"}],
+      artifactProposalSnapshot({kind:"code",title:"Owned code.py",source:"def catalog_check():\n    return 'complete code payload'\n"},false));
     return api.push();
   },
   async push() { const result=await current(); if(result.status==="failed"||result.status==="needs_choice") {
@@ -212,6 +214,29 @@ const api = {
     const saved=await readArtifact(ref);
     if(saved.snapshot.kind==="whiteboard")throw new Error("Wrong saved conversation type");
     await saveArtifact(ref,item.revision,item.title,{...saved.snapshot,value:{...saved.snapshot.value,source}});
+  },
+  async editCatalogAttachment(kind: "code" | "whiteboard", authored: string) {
+    const parent = {kind:"annotate" as const,id};
+    const catalog=(await readArtifactCatalog(parent))!;
+    const item=catalog.artifacts.find(item=>item.title===(kind==="code"?"Owned code.py":"Owned drawing"))!;
+    const ref={parent,artifactId:item.id,kind:item.content.kind};
+    const saved=await readArtifact(ref);
+    if(saved.snapshot.kind==="whiteboard") {
+      await saveArtifact(ref,item.revision,item.title,{kind:"whiteboard",value:{...saved.snapshot.value,ink:new Map([[1,ink(0,authored)]])}});
+    } else {
+      await saveArtifact(ref,item.revision,item.title,{...saved.snapshot,value:{...saved.snapshot.value,source:authored}});
+    }
+  },
+  async catalog() {return readArtifactCatalog({kind:"annotate",id});},
+  async catalogLifecycle(type: "delete" | "restore") {
+    const parent={kind:"annotate" as const,id};
+    let catalog=(await readArtifactCatalog(parent))!;
+    const ids=catalog.artifacts.filter(item=>type==="delete"?item.deletedAt===undefined:item.deletedAt!==undefined).map(item=>item.id);
+    for(const artifactId of ids) {
+      const item=catalog.artifacts.find(item=>item.id===artifactId)!;
+      catalog=await mutateArtifacts(parent,catalog.revision,{type,id:item.id,expectedRevision:item.revision});
+    }
+    return api.push();
   },
   async editConversation() {
     await api.editConversationLocal("Edited saved conversation");return api.push();

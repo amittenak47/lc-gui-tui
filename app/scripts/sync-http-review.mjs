@@ -111,6 +111,11 @@ try {
   assert.equal(received.scratchInk.ops.length,12);
   assert.equal(received.attachments.find(a=>a.title==="Saved conversation").agent[0].future.kept,true);
   assert.equal(received.attachments.find(a=>a.title==="Owned drawing").ink[0][1].ops.length,12);
+  assert.deepEqual(received.attachments.map(a=>a.kind).sort(),["code","markdown","whiteboard"]);
+  assert.equal(received.attachments.find(a=>a.kind==="code").source,"def catalog_check():\n    return 'complete code payload'\n");
+  const catalog=(await b.call("head")).record.artifacts;
+  assert.deepEqual(catalog.artifacts.find(a=>a.content.kind==="code").associations,[{kind:"thread",rootId:"q"}]);
+  assert.deepEqual(catalog.artifacts.find(a=>a.content.kind==="whiteboard").associations,[{kind:"footnote",footnoteId:"mark"}]);
   assert.deepEqual(await b.call("selectedRead"),[17]);
   console.log("PASS atomic HTTP commit + coherent browser IDB import: 40 pages, scratch, unknown transcript fields and attachment assets; failed second download publishes nothing");
   await b.reload();assert.deepEqual(await b.call("inspect"),received);
@@ -212,6 +217,24 @@ try {
   assert.equal((await a.call("modern")).status,"needs_choice");const attachmentsChoice=await a.call("modern","server");assert.equal(attachmentsChoice.status,"synced",JSON.stringify(attachmentsChoice));
   const attachmentsAfter=(await a.call("inspect")).attachments;assert(attachmentsAfter.some(item=>item.source==="Local attachment conflict"));assert(attachmentsAfter.some(item=>item.source==="Hub attachment conflict"));await b.call("pull");
   console.log("PASS explicit attachment conflicts preserve both immutable authored sources and commit the reconciled catalog atomically");
+  for(const [kind,local,server] of [["code","local code conflict","hub code conflict"],["whiteboard","#a00101","#b00202"]]) {
+    await a.call("editCatalogAttachment",kind,local);await b.call("editCatalogAttachment",kind,server);await b.call("push");
+    assert.equal((await a.call("modern")).status,"needs_choice");
+    const chosen=await a.call("modern","server");assert.equal(chosen.status,"synced",JSON.stringify(chosen));
+    const entries=(await a.call("inspect")).attachments.filter(item=>item.kind===kind);
+    const authored=entries.map(item=>kind==="code"?item.source:item.ink[0][1].ops[0].c);
+    assert(authored.includes(local)&&authored.includes(server),JSON.stringify(authored));
+    await b.call("pull");assert.deepEqual((await b.call("inspect")).attachments,(await a.call("inspect")).attachments);
+  }
+  console.log("PASS code and whiteboard attachment conflicts retain both exact authored versions on both browsers");
+  const beforeAttachmentTrash=(await a.call("inspect")).attachments;
+  await a.call("catalogLifecycle","delete");await b.call("pull");
+  assert.deepEqual((await b.call("inspect")).attachments,[]);
+  const tombstones=await b.call("catalog");assert(tombstones.artifacts.every(item=>item.deletedAt!==undefined));
+  await a.call("catalogLifecycle","restore");await b.call("pull");
+  assert.deepEqual((await a.call("inspect")).attachments,beforeAttachmentTrash);
+  assert.deepEqual((await b.call("inspect")).attachments,beforeAttachmentTrash);
+  console.log("PASS attachment trash/restore across browsers preserves every payload, association and explicit restoration revision");
   const beforeDelete=await a.call("inspect");assert(beforeDelete.pages.includes(113));
   assert.equal((await a.call("trash")).status,"synced");const gone=await a.call("head");assert.equal(gone.state,"gone");assert(gone.book_rev>initialHead.book_rev);
   const deletedElsewhere=await b.call("modern");assert.equal(deletedElsewhere.error.kind,"gone");assert.equal(await b.call("hasDocument"),true);
