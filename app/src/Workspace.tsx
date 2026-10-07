@@ -29,6 +29,7 @@ import { etaLabel, etaMs, newEta, recordBatch } from "./util/embedEta";
 import type { DocWorkProgress } from "./components/DocIndexChip";
 import { fetchDocHubHint, type DocHubHint } from "./util/hubHint";
 import { askBookConflict } from "./util/bookConflictUi";
+import { conflictUiSession } from "./util/conflictUiSession";
 import type { BookSyncOptions } from "./util/bookSync";
 import type { HubSyncWalkHost, HubWalkReport } from "./components/HubSyncControl";
 import { HubConflictSplit } from "./components/HubConflictSplit";
@@ -1441,6 +1442,7 @@ export const Workspace = memo(function Workspace({
       onConflict: (conflict, lifecycle) =>
         new Promise<HubConflictResolution>((resolve, reject) => {
           if (lifecycle?.signal.aborted) { reject(new Error("Sync stopped.")); return; }
+          const ui = conflictUiSession(lifecycle);
           setHubConflictError(null);
           const clear = () => {
             if (hubConflictAskRef.current !== ask) return;
@@ -1449,14 +1451,15 @@ export const Workspace = memo(function Workspace({
             setHubConflictError(null);
           };
           const finish = (resolution?: HubConflictResolution) => {
+            ui.complete();
             lifecycle?.signal.removeEventListener("abort", onAbort);
             clear();
             if (resolution) resolve(resolution);
             else reject(new HubSyncCancelled());
           };
-          const onAbort = () => { clear(); reject(new Error("Sync stopped. Tap Sync to retry.")); };
+          const onAbort = () => { ui.complete(); clear(); reject(new Error("Sync stopped. Tap Sync to retry.")); };
           const ask = { conflict, resolve: (value: HubConflictResolution) => finish(value), cancel: () => finish(),
-            onMounted: lifecycle?.onMounted, onUnavailable: lifecycle?.onUnavailable };
+            onMounted: ui.onMounted, onUnavailable: ui.onUnavailable };
           lifecycle?.signal.addEventListener("abort", onAbort, { once: true });
           hubConflictAskRef.current = ask;
           setHubConflictAsk(ask);
