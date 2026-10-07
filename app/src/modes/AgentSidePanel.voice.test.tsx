@@ -107,9 +107,10 @@ function caretAtEnd() {
   });
 }
 
-async function say(detail: VoiceEvent) {
+type TestEvent<T = VoiceEvent> = T extends VoiceEvent ? Omit<T, "sessionId"> & { sessionId?: string } : never;
+async function say(detail: TestEvent) {
   await act(async () => {
-    window.dispatchEvent(new CustomEvent("lc-voice", { detail }));
+    window.dispatchEvent(new CustomEvent("lc-voice", { detail: { sessionId: vi.mocked(startVoiceDictation).mock.calls.at(-1)?.[0], ...detail } }));
   });
   await act(async () => {});
 }
@@ -264,6 +265,7 @@ it("keeps the raw text when the user types during cleaning and ignores the late 
   await say({ type: "final", text: "there" });
   await say({ type: "end" });
   expect(button("Voice").parentElement?.getAttribute("data-tip")).toBe("Tidying…");
+  vi.mocked(cancelVoiceDictation).mockClear();
   type("hello there!");
   expect(cancelVoiceDictation).not.toHaveBeenCalled();
   expect(composer().value).toBe("hello there!");
@@ -279,4 +281,40 @@ it("does not clean up a session that heard nothing", async () => {
   await say({ type: "end" });
   expect(cleanupDictation).not.toHaveBeenCalled();
   expect(button("Voice").getAttribute("aria-pressed")).toBe("false");
+});
+
+
+it("ignores transcripts and closing events from a cancelled clip after a new session starts", async () => {
+  await mount();
+  tap(button("Voice"));
+  const oldId = vi.mocked(startVoiceDictation).mock.calls.at(-1)![0];
+  await say({ type: "processing" });
+  await mount({ open: false });
+  expect(cancelVoiceDictation).toHaveBeenCalledWith(oldId);
+  await mount();
+  type("new chat");
+  tap(button("Voice"));
+  const currentId = vi.mocked(startVoiceDictation).mock.calls.at(-1)![0];
+  expect(currentId).not.toBe(oldId);
+  await say({ sessionId: oldId, type: "final", text: "old clip transcript" });
+  await say({ sessionId: oldId, type: "end" });
+  expect(composer().value).toBe("new chat");
+  expect(button("Voice").getAttribute("aria-pressed")).toBe("true");
+  await say({ sessionId: currentId, type: "final", text: "fresh transcript" });
+  expect(composer().value).toBe("new chat fresh transcript");
+});
+
+it("stops and transcribes once at the recording limit and explains why", async () => {
+  await mount();
+  tap(button("Voice"));
+  const id = vi.mocked(startVoiceDictation).mock.calls.at(-1)![0];
+  await say({ type: "limit" });
+  await say({ type: "limit" });
+  expect(stopVoiceDictation).toHaveBeenCalledTimes(1);
+  expect(stopVoiceDictation).toHaveBeenCalledWith(id);
+  expect(host.textContent).toContain("15-minute limit");
+  await say({ type: "final", text: "recorded words" });
+  await say({ type: "end" });
+  expect(composer().value).toBe("recorded words");
+  expect(button("Voice")).toBeTruthy();
 });

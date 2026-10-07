@@ -13,13 +13,14 @@ import { isAndroidDevice } from "./androidDevice";
 
 export const VOICE_EVENT = "lc-voice";
 
-export type VoiceEvent =
+export type VoiceEvent = { sessionId: string } & (
   | { type: "state"; listening: boolean }
   | { type: "partial"; text: string }
   | { type: "final"; text: string }
   | { type: "processing" }
   | { type: "error"; code: string; message: string }
-  | { type: "end" };
+  | { type: "limit" }
+  | { type: "end" });
 
 // One answer for the life of the page. The shell does not grow a recognizer later.
 let known: Promise<boolean> | null = null;
@@ -47,10 +48,10 @@ async function ask(): Promise<boolean> {
 }
 
 /** Rejects with an Error whose message is the native message (string rejections are wrapped). */
-export async function startVoiceDictation(): Promise<void> {
+export async function startVoiceDictation(sessionId: string): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core");
   try {
-    await invoke("voice_start");
+    await invoke("voice_start", { sessionId });
   } catch (err) {
     if (typeof err === "string") throw new Error(err);
     throw err;
@@ -58,10 +59,10 @@ export async function startVoiceDictation(): Promise<void> {
 }
 
 /** Never rejects. */
-export async function stopVoiceDictation(): Promise<void> {
+export async function stopVoiceDictation(sessionId: string): Promise<void> {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("voice_stop");
+    await invoke("voice_stop", { sessionId });
   } catch {
     // Stopping is best-effort: the recognizer may already be gone.
   }
@@ -78,10 +79,10 @@ export async function cleanupDictation(text: string): Promise<string> {
 }
 
 /** Drop the session without transcribing. Never rejects. */
-export async function cancelVoiceDictation(): Promise<void> {
+export async function cancelVoiceDictation(sessionId: string): Promise<void> {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("voice_cancel");
+    await invoke("voice_cancel", { sessionId });
   } catch {
     // Cancelling is best-effort: the session may already be gone.
   }
@@ -90,12 +91,14 @@ export async function cancelVoiceDictation(): Promise<void> {
 function isVoiceEvent(detail: unknown): detail is VoiceEvent {
   if (!detail || typeof detail !== "object") return false;
   const value = detail as {
+    sessionId?: unknown;
     type?: unknown;
     listening?: unknown;
     text?: unknown;
     code?: unknown;
     message?: unknown;
   };
+  if (typeof value.sessionId !== "string" || !value.sessionId) return false;
   switch (value.type) {
     case "state":
       return typeof value.listening === "boolean";
@@ -104,6 +107,7 @@ function isVoiceEvent(detail: unknown): detail is VoiceEvent {
       return typeof value.text === "string";
     case "error":
       return typeof value.code === "string" && typeof value.message === "string";
+    case "limit":
     case "processing":
     case "end":
       return true;

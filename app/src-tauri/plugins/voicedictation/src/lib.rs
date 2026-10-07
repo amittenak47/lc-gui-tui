@@ -21,7 +21,10 @@ pub enum Error {
 }
 
 impl Serialize for Error {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_string())
     }
 }
@@ -36,6 +39,12 @@ struct PathResponse {
     path: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionArgs<'a> {
+    session_id: &'a str,
+}
+
 pub struct VoiceDictation<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> VoiceDictation<R> {
@@ -44,34 +53,41 @@ impl<R: Runtime> VoiceDictation<R> {
         Ok(response.ok)
     }
 
-    pub fn start(&self) -> Result<()> {
-        self.0.run_mobile_plugin::<OkResponse>("start", ())?;
+    pub fn start(&self, session_id: &str) -> Result<()> {
+        self.0
+            .run_mobile_plugin::<OkResponse>("start", SessionArgs { session_id })?;
         Ok(())
     }
 
-    pub fn stop(&self) -> Result<()> {
-        self.0.run_mobile_plugin::<OkResponse>("stop", ())?;
+    pub fn stop(&self, session_id: &str) -> Result<()> {
+        self.0
+            .run_mobile_plugin::<OkResponse>("stop", SessionArgs { session_id })?;
         Ok(())
     }
 
-    pub fn record_start(&self) -> Result<()> {
-        self.0.run_mobile_plugin::<OkResponse>("record_start", ())?;
+    pub fn record_start(&self, session_id: &str) -> Result<()> {
+        self.0
+            .run_mobile_plugin::<OkResponse>("record_start", SessionArgs { session_id })?;
         Ok(())
     }
 
     /// Absolute path of the finished WAV. The plugin does not emit the closing events.
-    pub fn record_stop(&self) -> Result<String> {
-        let response = self.0.run_mobile_plugin::<PathResponse>("record_stop", ())?;
+    pub fn record_stop(&self, session_id: &str) -> Result<String> {
+        let response = self
+            .0
+            .run_mobile_plugin::<PathResponse>("record_stop", SessionArgs { session_id })?;
         Ok(response.path)
     }
 
-    pub fn record_cancel(&self) -> Result<()> {
-        self.0.run_mobile_plugin::<OkResponse>("record_cancel", ())?;
+    pub fn record_cancel(&self, session_id: &str) -> Result<()> {
+        self.0
+            .run_mobile_plugin::<OkResponse>("record_cancel", SessionArgs { session_id })?;
         Ok(())
     }
 
-    pub fn cancel(&self) -> Result<()> {
-        self.0.run_mobile_plugin::<OkResponse>("cancel", ())?;
+    pub fn cancel(&self, session_id: &str) -> Result<()> {
+        self.0
+            .run_mobile_plugin::<OkResponse>("cancel", SessionArgs { session_id })?;
         Ok(())
     }
 }
@@ -82,7 +98,8 @@ pub trait VoiceDictationExt<R: Runtime> {
 
 impl<R: Runtime, T: Manager<R>> VoiceDictationExt<R> for T {
     fn voice_dictation(&self) -> Option<&VoiceDictation<R>> {
-        self.try_state::<VoiceDictation<R>>().map(|state| state.inner())
+        self.try_state::<VoiceDictation<R>>()
+            .map(|state| state.inner())
     }
 }
 
@@ -91,7 +108,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
         .setup(|app, api| {
             #[cfg(target_os = "android")]
             {
-                let handle = api.register_android_plugin(PLUGIN_IDENTIFIER, "VoiceDictationPlugin")?;
+                let handle =
+                    api.register_android_plugin(PLUGIN_IDENTIFIER, "VoiceDictationPlugin")?;
                 app.manage(VoiceDictation::<R>(handle));
             }
             #[cfg(not(target_os = "android"))]

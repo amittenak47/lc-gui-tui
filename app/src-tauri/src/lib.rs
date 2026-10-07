@@ -16,7 +16,7 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
-        .manage(VoiceSession(std::sync::Mutex::new(None)))
+        .manage(VoiceSession(std::sync::Mutex::new(std::collections::HashMap::new())))
         // Google Search from a document footnote hands the query to whatever
         // browser the device already uses. Reading is a thing people do with
         // tabs open; an in-app webview would be a worse browser with none of
@@ -355,9 +355,9 @@ enum VoiceMode {
     Record,
 }
 
-/// Which dictation path is open, if one is. Set only after the plugin call succeeds.
+/// Current session identity and microphone mode. Retain identity during transcription.
 #[allow(dead_code)]
-struct VoiceSession(std::sync::Mutex<Option<VoiceMode>>);
+struct VoiceSession(std::sync::Mutex<std::collections::HashMap<String, Option<VoiceMode>>>);
 
 /// `voice.engine` from the embedded router, or `"android"` when config never loaded.
 #[allow(dead_code)]
@@ -369,33 +369,44 @@ fn voice_engine(app: &tauri::AppHandle) -> String {
 
 /// Push one `lc-voice` event. The page does not know which engine produced it.
 #[allow(dead_code)]
-fn emit_voice(app: &tauri::AppHandle, detail: serde_json::Value) {
+fn emit_voice(app: &tauri::AppHandle, session_id: &str, mut detail: serde_json::Value) {
+    let session = app.state::<VoiceSession>();
+    let guard = session.0.lock().unwrap_or_else(|err| err.into_inner());
+    if !guard.contains_key(session_id) {
+        return;
+    }
+    detail["sessionId"] = serde_json::json!(session_id);
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    let script = format!(
-        "window.dispatchEvent(new CustomEvent(\"lc-voice\",{{detail:{detail}}}))"
-    );
+    let script = format!("window.dispatchEvent(new CustomEvent(\"lc-voice\",{{detail:{detail}}}))");
     let _ = window.eval(script);
 }
 
 #[allow(dead_code)]
-fn take_voice_mode(app: &tauri::AppHandle) -> Option<VoiceMode> {
+fn take_voice_mode(app: &tauri::AppHandle, session_id: &str) -> Option<VoiceMode> {
     let session = app.state::<VoiceSession>();
     let mut guard = session.0.lock().unwrap_or_else(|err| err.into_inner());
-    guard.take()
+    guard.get_mut(session_id).and_then(Option::take)
 }
 
 #[allow(dead_code)]
-fn set_voice_mode(app: &tauri::AppHandle, mode: VoiceMode) {
+fn set_voice_mode(app: &tauri::AppHandle, session_id: &str, mode: VoiceMode) {
     let session = app.state::<VoiceSession>();
     let mut guard = session.0.lock().unwrap_or_else(|err| err.into_inner());
-    *guard = Some(mode);
+    guard.insert(session_id.to_string(), Some(mode));
+}
+
+#[allow(dead_code)]
+fn clear_voice_session(app: &tauri::AppHandle, session_id: &str) {
+    let session = app.state::<VoiceSession>();
+    let mut guard = session.0.lock().unwrap_or_else(|err| err.into_inner());
+    guard.remove(session_id);
 }
 
 /// Read the clip, send it to the configured engine, then always close the session.
 #[allow(dead_code)]
-fn transcribe_recorded_clip(app: tauri::AppHandle, path: String) {
+fn transcribe_recorded_clip(app: tauri::AppHandle, path: String, session_id: String) {
     let read = std::fs::read(&path);
     let _ = std::fs::remove_file(&path);
     match read {
@@ -414,12 +425,17 @@ fn transcribe_recorded_clip(app: tauri::AppHandle, path: String) {
             ) {
                 Ok(text) => {
                     if !text.is_empty() {
-                        emit_voice(&app, serde_json::json!({"type": "final", "text": text}));
+                        emit_voice(
+                            &app,
+                            &session_id,
+                            serde_json::json!({"type": "final", "text": text}),
+                        );
                     }
                 }
                 Err(err) => {
                     emit_voice(
                         &app,
+                        &session_id,
                         serde_json::json!({
                             "type": "error",
                             "code": "transcription",
@@ -432,6 +448,7 @@ fn transcribe_recorded_clip(app: tauri::AppHandle, path: String) {
         Err(err) => {
             emit_voice(
                 &app,
+                &session_id,
                 serde_json::json!({
                     "type": "error",
                     "code": "transcription",
@@ -440,8 +457,13 @@ fn transcribe_recorded_clip(app: tauri::AppHandle, path: String) {
             );
         }
     }
-    emit_voice(&app, serde_json::json!({"type": "state", "listening": false}));
-    emit_voice(&app, serde_json::json!({"type": "end"}));
+    emit_voice(
+        &app,
+        &session_id,
+        serde_json::json!({"type": "state", "listening": false}),
+    );
+    emit_voice(&app, &session_id, serde_json::json!({"type": "end"}));
+    clear_voice_session(&app, &session_id);
 }
 
 /// Whether this device can dictate into the agent composer.
@@ -473,19 +495,33 @@ async fn voice_available(#[allow(unused_variables)] app: tauri::AppHandle) -> bo
 ///
 /// An error off Android: nothing there can listen.
 #[tauri::command]
-async fn voice_start(#[allow(unused_variables)] app: tauri::AppHandle) -> std::result::Result<(), String> {
+async fn voice_start(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    #[allow(unused_variables)] session_id: String,
+) -> std::result::Result<(), String> {
     #[cfg(target_os = "android")]
     {
         use tauri_plugin_voicedictation::VoiceDictationExt;
         let voice = app.voice_dictation().ok_or("voice dictation unavailable")?;
-        let mode = if voice_engine(&app) == "android" {
-            voice.start().map_err(|e| e.to_string())?;
-            VoiceMode::Live
+        let live = voice_engine(&app) == "android";
+        set_voice_mode(
+            &app,
+            &session_id,
+            if live {
+                VoiceMode::Live
+            } else {
+                VoiceMode::Record
+            },
+        );
+        let result = if live {
+            voice.start(&session_id)
         } else {
-            voice.record_start().map_err(|e| e.to_string())?;
-            VoiceMode::Record
+            voice.record_start(&session_id)
         };
-        set_voice_mode(&app, mode);
+        if let Err(err) = result {
+            clear_voice_session(&app, &session_id);
+            return Err(err.to_string());
+        }
         return Ok(());
     }
     #[cfg(not(target_os = "android"))]
@@ -499,36 +535,44 @@ async fn voice_start(#[allow(unused_variables)] app: tauri::AppHandle) -> std::r
 ///
 /// Success off Android, where there is no session to close.
 #[tauri::command]
-async fn voice_stop(#[allow(unused_variables)] app: tauri::AppHandle) -> std::result::Result<(), String> {
+async fn voice_stop(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    #[allow(unused_variables)] session_id: String,
+) -> std::result::Result<(), String> {
     #[cfg(target_os = "android")]
     {
         use tauri_plugin_voicedictation::VoiceDictationExt;
-        return match take_voice_mode(&app) {
+        return match take_voice_mode(&app, &session_id) {
             Some(VoiceMode::Live) => {
                 let voice = app.voice_dictation().ok_or("voice dictation unavailable")?;
-                voice.stop().map_err(|e| e.to_string())
+                voice.stop(&session_id).map_err(|e| e.to_string())
             }
             Some(VoiceMode::Record) => {
                 let Some(voice) = app.voice_dictation() else {
                     let message = "voice dictation unavailable".to_string();
                     emit_voice(
                         &app,
+                        &session_id,
                         serde_json::json!({
                             "type": "error",
                             "code": "audio",
                             "message": message,
                         }),
                     );
-                    emit_voice(&app, serde_json::json!({"type": "state", "listening": false}));
-                    emit_voice(&app, serde_json::json!({"type": "end"}));
+                    emit_voice(
+                        &app,
+                        &session_id,
+                        serde_json::json!({"type": "state", "listening": false}),
+                    );
+                    emit_voice(&app, &session_id, serde_json::json!({"type": "end"}));
                     return Err(message);
                 };
-                match voice.record_stop() {
+                match voice.record_stop(&session_id) {
                     Ok(path) => {
-                        emit_voice(&app, serde_json::json!({"type": "processing"}));
+                        emit_voice(&app, &session_id, serde_json::json!({"type": "processing"}));
                         let app = app.clone();
                         tauri::async_runtime::spawn_blocking(move || {
-                            transcribe_recorded_clip(app, path);
+                            transcribe_recorded_clip(app, path, session_id);
                         });
                         Ok(())
                     }
@@ -536,14 +580,19 @@ async fn voice_stop(#[allow(unused_variables)] app: tauri::AppHandle) -> std::re
                         let message = err.to_string();
                         emit_voice(
                             &app,
+                            &session_id,
                             serde_json::json!({
                                 "type": "error",
                                 "code": "audio",
                                 "message": message,
                             }),
                         );
-                        emit_voice(&app, serde_json::json!({"type": "state", "listening": false}));
-                        emit_voice(&app, serde_json::json!({"type": "end"}));
+                        emit_voice(
+                            &app,
+                            &session_id,
+                            serde_json::json!({"type": "state", "listening": false}),
+                        );
+                        emit_voice(&app, &session_id, serde_json::json!({"type": "end"}));
                         Err(message)
                     }
                 }
@@ -553,7 +602,7 @@ async fn voice_stop(#[allow(unused_variables)] app: tauri::AppHandle) -> std::re
             // does not open the mic behind a stop the page already sent.
             None => {
                 if let Some(voice) = app.voice_dictation() {
-                    let _ = voice.cancel();
+                    let _ = voice.cancel(&session_id);
                 }
                 Ok(())
             }
@@ -568,25 +617,30 @@ async fn voice_stop(#[allow(unused_variables)] app: tauri::AppHandle) -> std::re
 /// Drop the open session without a transcript. Live audio is discarded; a
 /// clip is deleted. Success off Android, and when nothing is open.
 #[tauri::command]
-async fn voice_cancel(#[allow(unused_variables)] app: tauri::AppHandle) -> std::result::Result<(), String> {
+async fn voice_cancel(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    #[allow(unused_variables)] session_id: String,
+) -> std::result::Result<(), String> {
     #[cfg(target_os = "android")]
     {
         use tauri_plugin_voicedictation::VoiceDictationExt;
-        return match take_voice_mode(&app) {
+        let mode = take_voice_mode(&app, &session_id);
+        clear_voice_session(&app, &session_id);
+        return match mode {
             Some(VoiceMode::Live) => {
                 let voice = app.voice_dictation().ok_or("voice dictation unavailable")?;
-                voice.cancel().map_err(|e| e.to_string())
+                voice.cancel(&session_id).map_err(|e| e.to_string())
             }
             Some(VoiceMode::Record) => {
                 let voice = app.voice_dictation().ok_or("voice dictation unavailable")?;
-                voice.record_cancel().map_err(|e| e.to_string())
+                voice.record_cancel(&session_id).map_err(|e| e.to_string())
             }
             // Nothing open yet, but a start may be waiting on the microphone
             // permission dialog. Cancel clears that, so granting afterwards
             // does not open the mic behind a stop the page already sent.
             None => {
                 if let Some(voice) = app.voice_dictation() {
-                    let _ = voice.cancel();
+                    let _ = voice.cancel(&session_id);
                 }
                 Ok(())
             }

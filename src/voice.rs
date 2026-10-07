@@ -232,11 +232,38 @@ fn tidy_reply(raw: &str, original: &str) -> String {
     if cleaned.is_empty()
         || cleaned_chars > input_chars * 2 + 40
         || cleaned_chars < input_chars / 3
+        || cleanup_tokens(&cleaned) != cleanup_tokens(original)
+        || cleanup_numbers(&cleaned) != cleanup_numbers(original)
     {
         original.to_string()
     } else {
         cleaned
     }
+}
+
+// Only casing, punctuation and hesitation removal may be applied automatically.
+// Never replace a dictated question with a model's answer or paraphrase.
+fn cleanup_tokens(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|ch: char| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    '.' | ',' | ';' | ':' | '!' | '?' | '"' | '\u{201C}' | '\u{201D}'
+                )
+        })
+        .filter(|word| !word.is_empty() && !matches!(*word, "um" | "uh" | "umm" | "uhh"))
+        .map(str::to_string)
+        .collect()
+}
+
+// A decimal point, thousands separator or time separator carries meaning.
+// Do not treat a formatting change that splits a number as punctuation cleanup.
+fn cleanup_numbers(text: &str) -> Vec<String> {
+    text.split(|ch: char| !(ch.is_numeric() || matches!(ch, '.' | ',' | ':')))
+        .filter(|part| part.chars().any(char::is_numeric))
+        .map(|part| part.trim_matches(['.', ',', ':']).to_string())
+        .collect()
 }
 
 fn strip_wrapping_quotes(text: &str) -> String {
@@ -410,7 +437,9 @@ mod tests {
     #[test]
     fn provider_error_detail_prefers_message_fields_and_truncates() {
         assert_eq!(
-            provider_error_detail(r#"{"error":{"message":"bad key"},"err_msg":"nope","message":"also"}"#),
+            provider_error_detail(
+                r#"{"error":{"message":"bad key"},"err_msg":"nope","message":"also"}"#
+            ),
             "bad key"
         );
         assert_eq!(provider_error_detail(r#"{"err_msg":"dg down"}"#), "dg down");
@@ -487,7 +516,10 @@ mod tests {
 
     #[test]
     fn tidy_reply_strips_think_tags_and_wrapping_quotes() {
-        assert_eq!(tidy_reply("<think>plan</think>\n\"Hello.\"", "hello"), "Hello.");
+        assert_eq!(
+            tidy_reply("<think>plan</think>\n\"Hello.\"", "hello"),
+            "Hello."
+        );
         assert_eq!(tidy_reply("\u{201C}Hello.\u{201D}", "hello"), "Hello.");
         assert_eq!(tidy_reply("  Hello.  ", "hello"), "Hello.");
     }
@@ -499,10 +531,25 @@ mod tests {
         assert_eq!(tidy_reply("\"\"", "hello"), "hello");
         let original = "abcdefghi";
         assert_eq!(tidy_reply("ab", original), original);
-        assert_eq!(tidy_reply("abc", original), "abc");
+        assert_eq!(tidy_reply("abc", original), original);
         let short = "hi";
-        assert_eq!(tidy_reply(&"x".repeat(44), short), "x".repeat(44));
+        assert_eq!(tidy_reply(&"x".repeat(44), short), short);
         assert_eq!(tidy_reply(&"x".repeat(45), short), short);
+    }
+
+    #[test]
+    fn cleanup_preserves_questions_negations_numbers_and_operators() {
+        for (original, answer) in [
+            ("what is bfs", "BFS explores graphs level by level."),
+            ("do not delete this", "Delete this."),
+            ("a - b equals 12", "a + b equals 13"),
+            ("what's bfs", "what is bfs"),
+            ("the value is 1.25", "The value is 1 25."),
+            ("at 12:30", "At 12 30."),
+        ] {
+            assert_eq!(tidy_reply(answer, original), original);
+        }
+        assert_eq!(tidy_reply("What is BFS?", "um what is bfs"), "What is BFS?");
     }
 
     #[test]

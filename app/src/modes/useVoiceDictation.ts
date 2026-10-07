@@ -27,6 +27,7 @@ export interface VoiceDictation {
 }
 
 interface DictationSession {
+  id: string;
   anchor: DictationAnchor;
   committed: string;
   partial: string;
@@ -85,7 +86,7 @@ export function useVoiceDictation(options: {
     if (!session) return;
     const cleaning = session.cleaning;
     drop(session);
-    if (!cleaning) void cancelVoiceDictation();
+    if (!cleaning) void cancelVoiceDictation(session.id);
   }, [drop]);
 
   const userTyped = useCallback(() => {
@@ -106,7 +107,7 @@ export function useVoiceDictation(options: {
     const live = sessionRef.current;
     if (live?.processing) return;
     if (live) {
-      void stopVoiceDictation();
+      void stopVoiceDictation(live.id);
       return;
     }
     setError(null);
@@ -115,6 +116,7 @@ export function useVoiceDictation(options: {
     const start = field ? field.selectionStart : draft.length;
     const end = field ? field.selectionEnd : draft.length;
     const session: DictationSession = {
+      id: crypto.randomUUID(),
       anchor: { before: draft.slice(0, start), after: draft.slice(end) },
       committed: "",
       partial: "",
@@ -125,7 +127,7 @@ export function useVoiceDictation(options: {
       written: "",
     };
     const onEvent = (event: VoiceEvent) => {
-      if (sessionRef.current !== session || session.cleaning) return;
+      if (sessionRef.current !== session || event.sessionId !== session.id || session.cleaning) return;
       switch (event.type) {
         case "partial":
           session.partial = event.text;
@@ -149,6 +151,14 @@ export function useVoiceDictation(options: {
           session.partial = "";
           write(session);
           return;
+        case "limit":
+          if (session.processing) return;
+          setError("Recording stopped at the 15-minute limit. Transcribing the recorded clip.");
+          session.processing = true;
+          setProcessing(true);
+          setPhase("transcribing");
+          void stopVoiceDictation(session.id);
+          return;
         case "processing":
           session.processing = true;
           setProcessing(true);
@@ -160,6 +170,8 @@ export function useVoiceDictation(options: {
         case "state":
           return;
         case "end": {
+          // Retire the native session identity; its text is already local.
+          void cancelVoiceDictation(session.id);
           const words = appendSegment(session.committed, session.partial);
           if (!words) {
             drop(session);
@@ -190,7 +202,7 @@ export function useVoiceDictation(options: {
     session.unsubscribe = onVoiceEvent(onEvent);
     setListening(true);
     setPhase("listening");
-    void startVoiceDictation().catch((err: unknown) => {
+    void startVoiceDictation(session.id).catch((err: unknown) => {
       if (sessionRef.current !== session) return;
       drop(session);
       setError(err instanceof Error ? err.message : String(err));

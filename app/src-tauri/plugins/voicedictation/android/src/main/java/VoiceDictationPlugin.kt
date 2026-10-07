@@ -15,6 +15,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.webkit.WebView
 import app.tauri.PermissionState
+import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.Command
 import app.tauri.annotation.Permission
 import app.tauri.annotation.PermissionCallback
@@ -27,6 +28,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Dictate into the agent composer with Android's [SpeechRecognizer].
@@ -50,7 +52,35 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
     /** The app WebView events are evaluated in. Set from [load], before any command. */
     private var appWebView: WebView? = null
 
+    @InvokeArg
+    class SessionArgs { var sessionId: String = "" }
+
+    private var sessionId = ""
+    private val cancelledSessions = LinkedHashSet<String>()
+
+    private fun retire(id: String) {
+        cancelledSessions.add(id)
+        if (cancelledSessions.size > 64) cancelledSessions.remove(cancelledSessions.first())
+    }
+    private var writerRunning: AtomicBoolean? = null
     private var recognizer: SpeechRecognizer? = null
+
+    private fun prepareStart(invoke: Invoke): Boolean {
+        val id = invoke.parseArgs(SessionArgs::class.java).sessionId
+        if (cancelledSessions.contains(id)) { invoke.reject("Dictation was cancelled"); return false }
+        if (id.isBlank()) { invoke.reject("Missing dictation session"); return false }
+        if (id != sessionId) {
+            if (sessionId.isNotEmpty()) retire(sessionId)
+            wantStart = false
+            if (active || recognizer != null) finish()
+            cancelRecording(null)
+            sessionId = id
+        }
+        return true
+    }
+
+    private fun owns(invoke: Invoke): Boolean =
+        invoke.parseArgs(SessionArgs::class.java).sessionId == sessionId
 
     /** The user wants to be listening, across the pauses Android inserts. */
     private var active = false
@@ -218,6 +248,7 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
     fun start(invoke: Invoke) {
         // The permission launcher and the recognizer both require the main thread.
         activity.runOnUiThread {
+            if (!prepareStart(invoke)) return@runOnUiThread
             wantStart = true
             pendingMode = PendingMode.LIVE
             if (getPermissionState("microphone") != PermissionState.GRANTED) {
@@ -231,6 +262,7 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun record_start(invoke: Invoke) {
         activity.runOnUiThread {
+            if (!prepareStart(invoke)) return@runOnUiThread
             wantStart = true
             pendingMode = PendingMode.RECORD
             if (getPermissionState("microphone") != PermissionState.GRANTED) {
@@ -243,6 +275,11 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
 
     @PermissionCallback
     fun micPermissionResult(invoke: Invoke) {
+        val id = invoke.parseArgs(SessionArgs::class.java).sessionId
+        if (id != sessionId || cancelledSessions.contains(id)) {
+            invoke.resolve(JSObject().apply { put("ok", true) })
+            return
+        }
         if (getPermissionState("microphone") != PermissionState.GRANTED) {
             wantStart = false
             invoke.reject("Microphone permission was denied")
@@ -265,10 +302,20 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun stop(invoke: Invoke) {
         activity.runOnUiThread {
+            if (!owns(invoke) || (!active && !recording)) retire(invoke.parseArgs(SessionArgs::class.java).sessionId)
+            if (!owns(invoke)) {
+                invoke.resolve(JSObject().apply { put("ok", true) })
+                return@runOnUiThread
+            }
+            wantStart = false
             // The last words still arrive in onResults; don't wait for them here.
             invoke.resolve(JSObject().apply { put("ok", true) })
             wantStart = false
-            if (!active && recognizer == null) return@runOnUiThread
+            if (!active && recognizer == null) {
+                emit(JSObject().apply { put("type", "state"); put("listening", false) })
+                emit(JSObject().apply { put("type", "end") })
+                return@runOnUiThread
+            }
             active = false
             try {
                 recognizer?.stopListening()
@@ -287,6 +334,11 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun cancel(invoke: Invoke) {
         activity.runOnUiThread {
+            retire(invoke.parseArgs(SessionArgs::class.java).sessionId)
+            if (!owns(invoke)) {
+                invoke.resolve(JSObject().apply { put("ok", true) })
+                return@runOnUiThread
+            }
             wantStart = false
             if (active || recognizer != null) {
                 active = false
@@ -307,6 +359,12 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun record_stop(invoke: Invoke) {
         activity.runOnUiThread {
+            if (!owns(invoke) || (!active && !recording)) retire(invoke.parseArgs(SessionArgs::class.java).sessionId)
+            if (!owns(invoke)) {
+                invoke.resolve(JSObject().apply { put("ok", true) })
+                return@runOnUiThread
+            }
+            wantStart = false
             if (!recording) {
                 invoke.reject("Not recording")
                 return@runOnUiThread
@@ -340,6 +398,12 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun record_cancel(invoke: Invoke) {
         activity.runOnUiThread {
+            retire(invoke.parseArgs(SessionArgs::class.java).sessionId)
+            if (!owns(invoke)) {
+                invoke.resolve(JSObject().apply { put("ok", true) })
+                return@runOnUiThread
+            }
+            wantStart = false
             cancelRecording(invoke)
         }
     }
@@ -537,10 +601,13 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
                 return@runOnUiThread
             }
             recording = true
+            val running = AtomicBoolean(true)
+            writerRunning = running
+            val owner = sessionId
             audioRecord = recorder
             recordFile = file
             val thread = Thread {
-                writePcm(recorder, file, bufferSize)
+                writePcm(recorder, file, bufferSize, running, owner)
             }
             recordThread = thread
             thread.start()
@@ -548,6 +615,8 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
                 recorder.startRecording()
             } catch (t: Throwable) {
                 recording = false
+                running.set(false)
+                writerRunning = null
                 try {
                     thread.join(2000)
                 } catch (_: InterruptedException) {
@@ -572,19 +641,29 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    /** PCM bytes past this are dropped; the thread stays up until stop clears [recording]. */
-    private fun writePcm(recorder: AudioRecord, file: File, bufferSize: Int) {
+    /** Stop the microphone at the cap, then ask the page to transcribe the completed clip. */
+    private fun writePcm(recorder: AudioRecord, file: File, bufferSize: Int, running: AtomicBoolean, owner: String) {
         val buf = ByteArray(bufferSize.coerceAtLeast(1))
         var written = 0
         try {
             BufferedOutputStream(FileOutputStream(file, true)).use { out ->
-                while (recording) {
+                while (running.get()) {
                     val n = recorder.read(buf, 0, buf.size)
                     if (n > 0 && written < MAX_PCM_BYTES) {
                         val count = minOf(n, MAX_PCM_BYTES - written)
                         out.write(buf, 0, count)
                         written += count
-                    } else if (n < 0 && recording) {
+                        if (written == MAX_PCM_BYTES) {
+                            running.set(false)
+                            try { recorder.stop() } catch (_: Throwable) {}
+                            handler.post {
+                                if (sessionId == owner && recording) {
+                                    emit(JSObject().apply { put("type", "limit") }, owner)
+                                }
+                            }
+                            break
+                        }
+                    } else if (n < 0 && running.get()) {
                         // read() before startRecording, or a dead recorder, returns
                         // immediately. Sleep so that wait is not a busy loop.
                         try {
@@ -604,6 +683,7 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
         val record: AudioRecord?,
         val file: File?,
         val wasOpen: Boolean,
+        val owner: String,
     )
 
     /** Detach the live clip. Null when nothing is recording. Does not emit. */
@@ -611,23 +691,25 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
         if (!recording && audioRecord == null && recordThread == null && recordFile == null) {
             return null
         }
-        val taken = TakenRecording(recordThread, audioRecord, recordFile, sessionOpen)
+        val taken = TakenRecording(recordThread, audioRecord, recordFile, sessionOpen, sessionId)
         recording = false
+        writerRunning?.set(false)
+        writerRunning = null
         recordThread = null
         audioRecord = null
         recordFile = null
         return taken
     }
 
-    /** Join the writer (at most 2s), then stop and release the recorder. */
+    /** Stop the recorder to unblock read(), join the writer, then release it. */
     private fun releaseRecording(taken: TakenRecording) {
-        try {
-            taken.thread?.join(2000)
-        } catch (_: InterruptedException) {
-        }
         try {
             taken.record?.stop()
         } catch (_: Throwable) {
+        }
+        try {
+            taken.thread?.join(2000)
+        } catch (_: InterruptedException) {
         }
         try {
             taken.record?.release()
@@ -655,8 +737,8 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
                     emit(JSObject().apply {
                         put("type", "state")
                         put("listening", false)
-                    })
-                    emit(JSObject().apply { put("type", "end") })
+                    }, taken.owner)
+                    emit(JSObject().apply { put("type", "end") }, taken.owner)
                 }
                 invoke?.resolve(JSObject().apply { put("ok", true) })
             }
@@ -723,7 +805,8 @@ class VoiceDictationPlugin(private val activity: Activity) : Plugin(activity) {
         raf.write(value ushr 24 and 0xff)
     }
 
-    private fun emit(detail: JSObject) {
+    private fun emit(detail: JSObject, owner: String = sessionId) {
+        detail.put("sessionId", owner)
         val script =
             "window.dispatchEvent(new CustomEvent(\"lc-voice\",{detail:" +
                 detail.toString() +

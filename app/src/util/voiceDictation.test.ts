@@ -113,20 +113,20 @@ describe("onVoiceEvent", () => {
   it("delivers a valid dispatched lc-voice event", () => {
     const heard: VoiceEvent[] = [];
     const stop = onVoiceEvent((event) => heard.push(event));
-    dispatch({ type: "partial", text: "hi" });
-    dispatch({ type: "state", listening: true });
-    dispatch({ type: "final", text: "hi there" });
-    dispatch({ type: "processing" });
-    dispatch({ type: "error", code: "busy", message: "recognizer busy" });
-    dispatch({ type: "end" });
+    dispatch({ sessionId: "clip-1", type: "partial", text: "hi" });
+    dispatch({ sessionId: "clip-1", type: "state", listening: true });
+    dispatch({ sessionId: "clip-1", type: "final", text: "hi there" });
+    dispatch({ sessionId: "clip-1", type: "processing" });
+    dispatch({ sessionId: "clip-1", type: "error", code: "busy", message: "recognizer busy" });
+    dispatch({ sessionId: "clip-1", type: "end" });
     stop();
     expect(heard).toEqual([
-      { type: "partial", text: "hi" },
-      { type: "state", listening: true },
-      { type: "final", text: "hi there" },
-      { type: "processing" },
-      { type: "error", code: "busy", message: "recognizer busy" },
-      { type: "end" },
+      { sessionId: "clip-1", type: "partial", text: "hi" },
+      { sessionId: "clip-1", type: "state", listening: true },
+      { sessionId: "clip-1", type: "final", text: "hi there" },
+      { sessionId: "clip-1", type: "processing" },
+      { sessionId: "clip-1", type: "error", code: "busy", message: "recognizer busy" },
+      { sessionId: "clip-1", type: "end" },
     ]);
   });
 
@@ -134,8 +134,8 @@ describe("onVoiceEvent", () => {
     const heard: VoiceEvent[] = [];
     const stop = onVoiceEvent((event) => heard.push(event));
     dispatch({ text: "hi" });
-    dispatch({ type: "result", text: "hi" });
-    dispatch({ type: "partial", text: 1 });
+    dispatch({ sessionId: "clip-1", type: "result", text: "hi" });
+    dispatch({ sessionId: "clip-1", type: "partial", text: 1 });
     stop();
     expect(heard).toEqual([]);
   });
@@ -143,10 +143,10 @@ describe("onVoiceEvent", () => {
   it("stops delivery after unsubscribe", () => {
     const heard: VoiceEvent[] = [];
     const stop = onVoiceEvent((event) => heard.push(event));
-    dispatch({ type: "partial", text: "hi" });
+    dispatch({ sessionId: "clip-1", type: "partial", text: "hi" });
     stop();
-    dispatch({ type: "final", text: "hi" });
-    expect(heard).toEqual([{ type: "partial", text: "hi" }]);
+    dispatch({ sessionId: "clip-1", type: "final", text: "hi" });
+    expect(heard).toEqual([{ sessionId: "clip-1", type: "partial", text: "hi" }]);
   });
 });
 
@@ -159,22 +159,22 @@ describe("voice commands", () => {
 
   it("wraps a string rejection from voice_start", async () => {
     invoke.mockRejectedValueOnce("Microphone permission was denied");
-    const caught = await startVoiceDictation().catch((err: unknown) => err);
-    expect(invoke).toHaveBeenCalledWith("voice_start");
+    const caught = await startVoiceDictation("clip-1").catch((err: unknown) => err);
+    expect(invoke).toHaveBeenCalledWith("voice_start", { sessionId: "clip-1" });
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toBe("Microphone permission was denied");
   });
 
   it("swallows a rejection from voice_stop", async () => {
     invoke.mockRejectedValueOnce("already stopped");
-    await expect(stopVoiceDictation()).resolves.toBeUndefined();
-    expect(invoke).toHaveBeenCalledWith("voice_stop");
+    await expect(stopVoiceDictation("clip-1")).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenCalledWith("voice_stop", { sessionId: "clip-1" });
   });
 
   it("swallows a rejection from voice_cancel", async () => {
     invoke.mockRejectedValueOnce("already gone");
-    await expect(cancelVoiceDictation()).resolves.toBeUndefined();
-    expect(invoke).toHaveBeenCalledWith("voice_cancel");
+    await expect(cancelVoiceDictation("clip-1")).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenCalledWith("voice_cancel", { sessionId: "clip-1" });
   });
 });
 
