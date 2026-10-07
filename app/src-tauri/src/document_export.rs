@@ -10,7 +10,7 @@ static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 fn exports() -> &'static Mutex<HashMap<String, Pending>> { EXPORTS.get_or_init(Default::default) }
 
 fn checked_name(name: &str, mime: &str) -> Result<String, String> {
-    let extension = match mime { "application/pdf" => ".pdf", "application/epub+zip" => ".epub", "application/zip" => ".zip", "image/png" => ".png", "application/gzip" => ".gz", _ => return Err("Unsupported export format".into()) };
+    let extension = match mime { "application/pdf" => ".pdf", "application/epub+zip" => ".epub", "application/zip" => ".zip", "application/json" => ".json", "image/png" => ".png", "application/gzip" => ".gz", _ => return Err("Unsupported export format".into()) };
     if !name.to_lowercase().ends_with(extension) { return Err("Export extension does not match its format".into()); }
     let safe: String = name.chars().map(|c| if c.is_control() || "\\/:*?\"<>|".contains(c) { '_' } else { c }).collect();
     if safe.len() > 240 || safe.starts_with('.') { return Err("Choose a shorter document name".into()); }
@@ -91,6 +91,11 @@ mod tests {
         assert!(checked_name("Notes.whiteboard.json.gz", "application/gzip").is_ok());
         assert!(checked_name("Notes.exe", "image/png").is_err());
         assert!(checked_name("Notes.png", "application/gzip").is_err());
+    }
+    #[test] fn graph_json_matches_its_extension() {
+        assert!(checked_name("pen-island-graph-2026-10-07.json", "application/json").is_ok());
+        assert!(checked_name("graph.exe", "application/json").is_err());
+        assert!(checked_name("graph.json", "application/pdf").is_err());
     }
     #[test] fn filenames_cannot_escape_downloads() {
         assert!(checked_name("../../file.pdf", "application/pdf").is_err());

@@ -44,7 +44,7 @@ class GallerySavePlugin(private val activity: Activity) : Plugin(activity) {
         val file = File(args.path).canonicalFile
         val root = File(activity.cacheDir, "document-exports").canonicalFile
         if (file.parentFile != root || !file.isFile) throw IOException("Export file is unavailable")
-        if (args.mime !in listOf("application/pdf", "application/epub+zip", "application/zip")) throw IOException("Unsupported export format")
+        if (args.mime !in listOf("application/pdf", "application/epub+zip", "application/zip", "application/json")) throw IOException("Unsupported export format")
         return file
     }
 
