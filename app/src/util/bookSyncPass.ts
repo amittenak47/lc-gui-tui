@@ -12,6 +12,7 @@ import { syncEdges } from "./inkSync";
 import { HubSyncCancelled } from "./hubConflictStash";
 import { bookDisplay, bookPassSummary, bookFailureMessage, bookNoticeMessage } from "./bookSyncMessages";
 import { debugLog } from "./debugLog";
+import { bookWireRecord } from "./bookWireRecord";
 
 export const BOOK_PASS_STATUS_EVENT = "lc-book-pass-status";
 
@@ -40,7 +41,7 @@ function snapshotBody(snapshot: PadSnapshot): PadSnapshotDto {
   for (const field of ["footnotes", "agent", "pageCount", "source", "ink", "footnoteBoards", "footnoteInk", "edges", "artifactBundle"]) {
     if (payload[field as keyof typeof payload] === undefined) delete payload[field as keyof typeof payload];
   }
-  return { kind, key, tier, written_at: writtenAt, payload };
+  return { kind, key, tier, written_at: writtenAt, payload: bookWireRecord(payload) };
 }
 export async function syncBookBackups(client: LcClient, signal: AbortSignal, timeoutMs?: number): Promise<BookPassNotice[]> {
   const notices: BookPassNotice[] = [], inventories = new Map<string, Set<string>>();
