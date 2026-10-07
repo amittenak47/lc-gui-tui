@@ -9605,6 +9605,36 @@ body[data-lc-sash-drag="horizontal"] {
   pointer-events: none;
 }
 
+.lc-explore-beams.is-rasterized {
+  visibility: hidden;
+}
+
+.lc-explore-webgl {
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.lc-explore.is-webgl .lc-explore-nodes {
+  pointer-events: none;
+}
+
+/* Keep native keyboard/screen-reader buttons, without moving a DOM graph. */
+.lc-explore.is-webgl .lc-explore-node {
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  pointer-events: none;
+  will-change: auto;
+  animation: none;
+  transition: none;
+}
+
+.lc-explore.is-webgl .lc-explore-node-dot,
+.lc-explore.is-webgl .lc-explore-node-dot::after {
+  animation: none;
+}
+
 .lc-explore-nodes {
   position: absolute;
   inset: 0;
@@ -9769,6 +9799,7 @@ body[data-lc-sash-drag="horizontal"] {
   -webkit-touch-callout: none;
   user-select: none;
   /* The rAF loop owns `transform`; only paint properties transition. */
+  will-change: transform;
   animation: lc-explore-node-in 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 

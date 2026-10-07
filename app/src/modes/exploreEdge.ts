@@ -34,10 +34,13 @@ export function edgeBowDepth(from:EdgePoint,to:EdgePoint,bow:EdgeBow):number {
 }
 
 /** A quadratic whose peak is the bow: the control sits at twice the depth. */
-export function edgeBowPath(from:EdgePoint,to:EdgePoint,bow:EdgeBow):string {
-  const fmt=(p:EdgePoint)=>`${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
+export function edgeBowControl(from:EdgePoint,to:EdgePoint,bow:EdgeBow):EdgePoint {
   const dx=to.x-from.x,dy=to.y-from.y,len=Math.hypot(dx,dy);
   const depth=edgeBowDepth(from,to,bow);
-  const control=len<1e-6?from:{x:(from.x+to.x)/2-dy/len*depth*2,y:(from.y+to.y)/2+dx/len*depth*2};
-  return `M${fmt(from)} Q${fmt(control)} ${fmt(to)}`;
+  return len<1e-6?from:{x:(from.x+to.x)/2-dy/len*depth*2,y:(from.y+to.y)/2+dx/len*depth*2};
+}
+
+export function edgeBowPath(from:EdgePoint,to:EdgePoint,bow:EdgeBow):string {
+  const fmt=(p:EdgePoint)=>`${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
+  return `M${fmt(from)} Q${fmt(edgeBowControl(from,to,bow))} ${fmt(to)}`;
 }

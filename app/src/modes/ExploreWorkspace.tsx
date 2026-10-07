@@ -2,8 +2,8 @@
  * The atlas: every workspace, and the links between them.
  *
  * Not a `Board`. No Excalidraw, no ink, no pdf.js. This is a view *of* the
- * other pads, so mounting a canvas engine to draw a few hundred circles would
- * put a third heavy surface into a mount budget that exists for boards.
+ * other pads. One WebGL surface batches the map; React owns the controls and
+ * accessible node buttons, with HTML/SVG as a fallback if GPU drawing is lost.
  *
  * Three things shape the implementation:
  *
@@ -12,17 +12,15 @@
  * ResizeObserver supplies the pixel box at paint time. Nothing recomputes on
  * resize; the same normalized point just lands somewhere else.
  *
- * **Nodes drift.** Positions live in a ref and are written straight to the DOM
- * from a rAF loop. Putting them in React state would re-render the tree sixty
- * times a second to move some circles, which is the wrong tool. React owns what
- * exists; the loop owns where it is.
+ * **Nodes drift.** Positions live in a ref and go straight to the renderer from
+ * a rAF loop. React owns what exists; the loop owns where it is.
  *
  * **Selecting is not opening.** A tap parks a panel that morphs out of the node
  * you tapped, the same panel the ink wheel uses to explain a nib. Opening is an
  * explicit button on it.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { BackgroundPalette } from "../components/BackgroundPalette";
@@ -30,7 +28,8 @@ import { MorphBar } from "../components/MorphBar";
 import { INK_DISPLAY_HZ_EVENT, loadInkMatchDisplay } from "../util/inkDisplayHzPref";
 import { useShell } from "../shellContext";
 import type { LcClient } from "../api/client";
-import {stepEdgeBow,edgeBowPath,type EdgeBow} from "./exploreEdge";
+import {stepEdgeBow,edgeBowControl,edgeBowPath,type EdgeBow} from "./exploreEdge";
+import { createExploreWebGL, type BeamGeometry, type GraphNodePosition, type GraphNodeStyle, type ExploreWebGLRenderer } from "./exploreWebGL";
 import { NodeSheet, type NodeSheetNeighbour } from "./NodeSheet";
 import {
   CLUSTERS,
@@ -122,12 +121,8 @@ function prefersReducedMotion(): boolean {
 }
 
 /*
- * When the map is only drifting, the loop drops to about 20 fps.
- *
- * Every frame redraws the whole beams layer, and ambient drift moves a node a
- * pixel or two a second. Idle frames run the simulation in steps the length of
- * an active frame, because damping is per step: one long step would make the
- * drift faster, not just choppier.
+ * Without Match display, quiet drift saves work at about 20 fps. With it on,
+ * the same simulation and painter follow every display callback.
  */
 /**
  * Fastest node, in screen pixels per second, under which the map is only
@@ -179,6 +174,7 @@ export function ExploreWorkspace({
   /** Bumped when the loop wants the labels redrawn, which is not every frame. */
   const [labelTick, setLabelTick] = useState(0);
   const [matchDisplay, setMatchDisplay] = useState(loadInkMatchDisplay);
+  const [webglGraph, setWebglGraph] = useState(false);
 
   useEffect(() => {
     const changed = () => setMatchDisplay(loadInkMatchDisplay());
@@ -203,6 +199,10 @@ export function ExploreWorkspace({
   const edgeElsRef = useRef(new Map<string, SVGPathElement>());
   /** The wide faint copy of each edge, drawn under its core. */
   const glowElsRef = useRef(new Map<string, SVGPathElement>());
+  const graphCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const graphRendererRef = useRef<ExploreWebGLRenderer | null>(null);
+  const hoveredNodeRef = useRef<string | null>(null);
+  const focusedNodeRef = useRef<string | null>(null);
   const boxRef = useRef({ w: 0, h: 0 });
   const clusteredRef = useRef(clustered);
   clusteredRef.current = clustered;
@@ -350,27 +350,40 @@ export function ExploreWorkspace({
   }, []);
 
   /** Write the current positions to the DOM. Called from rAF and on resize. */
+  const disableWebGL = useCallback(() => {
+    graphRendererRef.current?.dispose();
+    graphRendererRef.current=null;
+    setWebglGraph(false);
+  },[]);
+
   const paint = useCallback(() => {
     const { w, h } = boxRef.current;
     if (w === 0 || h === 0) return;
     const at = new Map<string, { x: number; y: number; vx:number; vy:number }>();
+    const renderer=graphRendererRef.current;
+    const positions:GraphNodePosition[]=[];
     for (const body of bodiesRef.current) {
       const x = body.x * w;
       const y = body.y * h;
       at.set(body.key, { x, y, vx:body.vx*w, vy:body.vy*h });
+      if(renderer){positions.push({id:body.key,x,y});continue;}
       const el = nodeElsRef.current.get(body.key);
       // `translate3d` rather than `left`/`top`: this runs every frame for every
       // node, and only the transform stays off the layout path.
-      const transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -50%)`;
+      const transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) translate(-50%, -50%)`;
       if (el && nodePositionsRef.current.get(el) !== transform) {
         el.style.transform = transform;
         nodePositionsRef.current.set(el, transform);
       }
     }
-    for(const body of leavingRef.current) if(!at.has(body.key)) at.set(body.key,{x:body.x*w,y:body.y*h,vx:0,vy:0});
+    for(const body of leavingRef.current) if(!at.has(body.key)) {
+      at.set(body.key,{x:body.x*w,y:body.y*h,vx:0,vy:0});
+      if(renderer)positions.push({id:body.key,x:body.x*w,y:body.y*h});
+    }
     const boxKey=`${w}:${h}`;
     if(edgeBoxRef.current!==boxKey){edgeBowsRef.current.clear();edgeBoxRef.current=boxKey;}
-    const reduced=prefersReducedMotion(),edgeTime=performance.now()/1000;
+    const reduced=prefersReducedMotion(),now=performance.now(),edgeTime=now/1000;
+    const geometry:BeamGeometry[]=[];
     for(const id of edgeBowsRef.current.keys())if(!edgeElsRef.current.has(id))edgeBowsRef.current.delete(id);
     for (const [id, line] of edgeElsRef.current) {
       const edge = edgeIndexRef.current.get(id);
@@ -380,6 +393,10 @@ export function ExploreWorkspace({
       if (!from || !to) continue;
       const bow=stepEdgeBow(from,to,edgeBowsRef.current.get(id),edgeTime,reduced);
       edgeBowsRef.current.set(id,bow);
+      if(renderer){
+        geometry.push({id,from,to,control:edgeBowControl(from,to,bow)});
+        continue;
+      }
       const d=edgeBowPath(from,to,bow);
       for (const path of [line, glowElsRef.current.get(id)]) {
         if (path && edgePathsRef.current.get(path) !== d) {
@@ -388,7 +405,23 @@ export function ExploreWorkspace({
         }
       }
     }
-  }, []);
+    if(renderer){
+      try {
+        // Match the native button's :active stacking while a node is held.
+        const dragKey=dragNodeRef.current?.key;
+        if(dragKey){
+          const index=positions.findIndex(position=>position.id===dragKey);
+          if(index>=0)positions.push(...positions.splice(index,1));
+        }
+        renderer.setInteraction(hoveredNodeRef.current,focusedNodeRef.current);
+        renderer.setReducedMotion(reduced,now);
+        renderer.paint(positions,geometry,w,h,window.devicePixelRatio,now);
+      }catch(cause){
+        console.warn("Explore GPU drawing failed; using HTML/SVG",cause);
+        disableWebGL();paintRef.current();
+      }
+    }
+  }, [disableWebGL]);
 
   paintRef.current = paint;
 
@@ -438,9 +471,10 @@ export function ExploreWorkspace({
       last = now;
       // Clamp, or a backgrounded tab returns with a multi-second step and
       // throws every node into a wall.
-      const dt = idle ? activeDt : Math.min(gap, 1 / 20);
-      const steps = idle ? Math.min(6, Math.max(1, Math.round(gap / activeDt))) : 1;
-      if (!idle) activeDt += (dt - activeDt) * 0.1;
+      const reducedRate = idle && !matchDisplay;
+      const dt = reducedRate ? activeDt : Math.min(gap, 1 / 20);
+      const steps = reducedRate ? Math.min(6, Math.max(1, Math.round(gap / activeDt))) : 1;
+      if (!reducedRate) activeDt += (dt - activeDt) * 0.1;
       sinceLabels += dt * steps;
       const box = boxRef.current;
       const centres = clusterCentres(bodiesRef.current.map((body) => body.node.type));
@@ -544,9 +578,6 @@ export function ExploreWorkspace({
     );
   }, [edges, labelTick, leaving]);
 
-  const leavingKeys = useMemo(() => new Set(leaving.map((body) => body.key)), [leaving]);
-  const edgeFading = (edge: Edge) => leavingKeys.has(nodeKey(edge.from)) || leavingKeys.has(nodeKey(edge.to));
-
   const neighboursOf = useCallback(
     (node: NodeRef): NodeSheetNeighbour[] =>
       edges
@@ -563,6 +594,69 @@ export function ExploreWorkspace({
     if (!selected) return new Set<string>();
     return new Set(neighboursOf(selected).map((row) => nodeKey(row.node)));
   }, [neighboursOf, selected]);
+
+  const leavingKeys = useMemo(() => new Set(leaving.map((body) => body.key)), [leaving]);
+  const edgeFading = (edge: Edge) => leavingKeys.has(nodeKey(edge.from)) || leavingKeys.has(nodeKey(edge.to));
+  const hasGraph=bodiesRef.current.length>0 || leaving.length>0;
+
+  useLayoutEffect(() => {
+    const canvas=graphCanvasRef.current;
+    if(!canvas){setWebglGraph(false);return;}
+    const restore=()=>{
+      graphRendererRef.current?.dispose();
+      graphRendererRef.current=createExploreWebGL(canvas);
+      setWebglGraph(graphRendererRef.current!==null);
+    };
+    const lost=(event:Event)=>{
+      event.preventDefault();disableWebGL();wakeRef.current();
+    };
+    restore();
+    canvas.addEventListener("webglcontextlost",lost);
+    canvas.addEventListener("webglcontextrestored",restore);
+    return () => {
+      canvas.removeEventListener("webglcontextlost",lost);canvas.removeEventListener("webglcontextrestored",restore);
+      graphRendererRef.current?.dispose();graphRendererRef.current=null;
+    };
+  },[hasGraph,disableWebGL]);
+
+  useLayoutEffect(() => {
+    const renderer=graphRendererRef.current;
+    if(!renderer)return;
+    const styles=drawnEdges.flatMap(edge=>{
+      const glow=glowElsRef.current.get(edge.id),core=edgeElsRef.current.get(edge.id);
+      if(!glow || !core)return [];
+      return [{id:edge.id,glow:getComputedStyle(glow).stroke,core:getComputedStyle(core).stroke,
+        dim:!!selected && !sameNode(edge.from,selected) && !sameNode(edge.to,selected),
+        leaving:leavingKeys.has(nodeKey(edge.from)) || leavingKeys.has(nodeKey(edge.to))}];
+    });
+    // Resolve CSS colours after React commits, never between frame writes.
+    const nodeStyles:GraphNodeStyle[]=[];
+    for(const body of [...bodiesRef.current,...leavingRef.current]){
+      const el=nodeElsRef.current.get(body.key),label=el?.querySelector<HTMLElement>(".lc-explore-node-label");
+      if(!el || !label)continue;
+      const css=getComputedStyle(el),text=getComputedStyle(label);
+      const isSelected=!!selected && sameNode(body.node,selected);
+      nodeStyles.push({id:body.key,tint:css.getPropertyValue("--lc-node-tint").trim(),diameter:nodeDiameter(degree.get(body.key)??0),
+        label:label.textContent??"",font:text.font || `${text.fontSize} ${text.fontFamily}`,lineHeight:parseFloat(text.lineHeight)||14.3,
+        selected:isSelected,here:!!here && sameNode(body.node,here),missing:isUnresolved(body.node),
+        dim:!!selected && !isSelected && !neighbourKeys.has(body.key),leaving:leavingKeys.has(body.key)});
+    }
+    const host=hostRef.current;if(!host)return;
+    const css=getComputedStyle(host),color=(name:string)=>css.getPropertyValue(name).trim();
+    try {
+      renderer.setStyles(nodeStyles,styles,{surface:color("--surface"),accent:color("--accent"),ink:color("--ink"),muted:color("--muted")},performance.now(),prefersReducedMotion());
+      paint();
+    }catch(cause){
+      console.warn("Explore GPU styling failed; using HTML/SVG",cause);
+      disableWebGL();paintRef.current();
+    }
+  },[webglGraph,drawnEdges,selected,leavingKeys,themeId,paint,degree,here,neighbourKeys,disableWebGL]);
+
+  useEffect(()=>{
+    const loaded=()=>{graphRendererRef.current?.invalidateFonts(performance.now());paint();};
+    document.fonts?.addEventListener("loadingdone",loaded);
+    return()=>document.fonts?.removeEventListener("loadingdone",loaded);
+  },[paint]);
 
   useEffect(() => {
     clusterReadyRef.current = false;
@@ -637,9 +731,18 @@ export function ExploreWorkspace({
 
   const labels = clustered && clusterReady ? frozenLabels : [];
 
+  const nodeRect = (key:string):DOMRect|null => {
+    const body=bodiesRef.current.find(body=>body.key===key),box=hostRef.current?.getBoundingClientRect();
+    return body && box ? new DOMRect(box.left+body.x*box.width-20,box.top+body.y*box.height-20,40,40) : null;
+  };
   const select = (node: NodeRef, el: HTMLElement | null) => {
-    setSheetFrom(el?.getBoundingClientRect() ?? null);
+    setSheetFrom(graphRendererRef.current ? nodeRect(nodeKey(node)) : el?.getBoundingClientRect() ?? null);
     setSelected(node);
+  };
+  const hitNode = (clientX:number,clientY:number):Body|undefined => {
+    const box=hostRef.current?.getBoundingClientRect();if(!box)return;
+    const x=clientX-box.left,y=clientY-box.top;
+    return [...bodiesRef.current].reverse().find(body=>Math.abs(body.x*box.width-x)<=20 && Math.abs(body.y*box.height-y)<=20);
   };
 
   const placeDragged = (key: string, clientX: number, clientY: number) => {
@@ -714,7 +817,7 @@ export function ExploreWorkspace({
   );
 
   return (
-    <div className="lc-explore">
+    <div className={webglGraph ? "lc-explore is-webgl" : "lc-explore"}>
       {/*
         Searching inside the documents, above the map of them.
         
@@ -793,12 +896,36 @@ export function ExploreWorkspace({
         ) : (
           <>
             {/*
-              Edges are SVG because they are geometry; nodes are HTML because
-              they are cards. Trying to draw a card in SVG means reinventing
-              border-radius, hairlines and type, and the result never quite
-              matches the ones the rest of the app already draws.
+              GPU drawing uses CSS-derived textures for the existing look.
+              HTML buttons preserve keyboard/screen-reader interaction; SVG
+              and visible HTML take over if WebGL is unavailable or lost.
             */}
-            <svg className="lc-explore-beams" aria-hidden>
+            <canvas className="lc-explore-beams lc-explore-webgl" ref={graphCanvasRef} hidden={!webglGraph} aria-hidden
+              onContextMenu={event=>event.preventDefault()}
+              onPointerDown={event=>{
+                if(event.button!==0)return;
+                const body=hitNode(event.clientX,event.clientY);if(!body)return;
+                dragNodeRef.current={key:body.key,pointerId:event.pointerId,x:event.clientX,y:event.clientY,moved:false};
+                skipNodeClickRef.current=false;event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={event=>{
+                const drag=dragNodeRef.current;
+                if(!drag){hoveredNodeRef.current=event.pointerType==="touch"?null:hitNode(event.clientX,event.clientY)?.key??null;paint();return;}
+                if(drag.pointerId!==event.pointerId)return;
+                const dx=event.clientX-drag.x,dy=event.clientY-drag.y;if(!drag.moved && dx*dx+dy*dy<100)return;
+                drag.moved=true;skipNodeClickRef.current=true;pinnedKeyRef.current=drag.key;
+                placeDragged(drag.key,event.clientX,event.clientY);
+              }}
+              onPointerLeave={()=>{hoveredNodeRef.current=null;paint();}}
+              onPointerUp={event=>{
+                const drag=dragNodeRef.current;if(!drag || drag.pointerId!==event.pointerId)return;
+                const body=bodiesRef.current.find(body=>body.key===drag.key);
+                if(body){if(drag.moved){body.parkedX=body.x;body.parkedY=body.y;body.dropped=true;}else select(body.node,null);}
+                pinnedKeyRef.current=null;dragNodeRef.current=null;skipNodeClickRef.current=false;
+              }}
+              onPointerCancel={()=>{pinnedKeyRef.current=null;dragNodeRef.current=null;skipNodeClickRef.current=false;}}
+            />
+            <svg className={webglGraph ? "lc-explore-beams is-rasterized" : "lc-explore-beams"} aria-hidden>
               {/*
                 The bloom: a wide, faint coloured copy of every edge, with a
                 thinner bright core drawn over it. No blur filter: the layer
@@ -889,6 +1016,9 @@ export function ExploreWorkspace({
                       ["--lc-node-size" as string]: `${nodeDiameter(degree.get(key) ?? 0)}px`,
                     }}
                     aria-pressed={isSelected}
+                    data-node-key={key}
+                    onFocus={()=>{focusedNodeRef.current=key;paint();}}
+                    onBlur={()=>{focusedNodeRef.current=null;paint();}}
                     onContextMenu={(event) => event.preventDefault()}
                     onPointerDown={(event) => {
                       if (fading || event.button !== 0) return;
@@ -970,7 +1100,7 @@ export function ExploreWorkspace({
           }}
           onHop={(node) => {
             const el = nodeElsRef.current.get(nodeKey(node));
-            setSheetFrom(el?.getBoundingClientRect() ?? sheetFrom);
+            setSheetFrom(graphRendererRef.current ? nodeRect(nodeKey(node)) : el?.getBoundingClientRect() ?? sheetFrom);
             setSelected(node);
           }}
           onRename={onRename ? (title) => onRename(selected, title) : undefined}
