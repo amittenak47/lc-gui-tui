@@ -66,7 +66,7 @@ function buildRecord(capture: Omit<BookCapture, "record">): Record<string, unkno
       Object.defineProperty(children, reference.id, { value: capture.children[reference.id], enumerable: true });
     }
   }
-  return { ...common, name: meta.name, hash: meta.hash, doc_type: meta.docType,
+  return { ...common, name: meta.name, hash: meta.hash, doc_type: meta.docType ?? "markdown",
     ...(typeof meta.label === "string" && meta.label.trim() ? { label: meta.label } : {}),
     source: payload.source ?? "", footnotes, footnote_boards: children,
     updated_at: meta.updatedAt ?? 0, sync_seq: meta.syncSeq ?? 0 };
