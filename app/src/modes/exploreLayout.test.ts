@@ -194,6 +194,29 @@ describe("step", () => {
     expect(Math.abs(list[0]!.y - 0.78)).toBeLessThan(0.06);
   });
 
+  it("keeps visibly wandering after settling, at the same pace on 60, 90 and 120 Hz displays", () => {
+    const endings: Array<{ x: number; y: number }> = [];
+    for (const hz of [60, 90, 120]) {
+      const list = bodies([note("idle")]), body = list[0]!;
+      body.x = body.parkedX = 0.5;
+      body.y = body.parkedY = 0.5;
+      const samples: Array<{ x: number; y: number }> = [];
+      for (let frame = 1; frame <= hz * 40; frame++) {
+        step(list, clusterCentres(["annotate"]), {
+          clustered: false, dt: 1 / hz, time: frame / hz, aspect: 1.6,
+        });
+        if (frame > hz * 32) samples.push({ x: body.x, y: body.y });
+      }
+      // Check sustained motion after the initial settling, not its arrival.
+      const xs = samples.map(p => p.x), ys = samples.map(p => p.y);
+      expect(Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))).toBeGreaterThan(0.02);
+      endings.push({ x: body.x, y: body.y });
+    }
+    for (const end of endings.slice(1)) {
+      expect(Math.hypot(end.x - endings[0]!.x, end.y - endings[0]!.y)).toBeLessThan(0.005);
+    }
+  });
+
   it("survives a frame that took far too long", () => {
     // A backgrounded tab comes back with a huge delta. The caller clamps it;
     // this checks the clamp is enough to keep everything finite and on-page.

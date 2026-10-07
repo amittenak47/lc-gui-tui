@@ -234,6 +234,9 @@ const LINK_MAX_STRETCH = 0.45;
 const HOME_PULL = 0.4;
 const CLUSTER_PULL = 10;
 const DRIFT = 0.048;
+/** Enough wander to remain visible once home, repulsion and links balance. */
+const LIVE_DRIFT = 0.16;
+/** Velocity retention at 60 Hz; higher-refresh displays use the same drag. */
 const DAMPING = 0.88;
 export const EDGE_PAD = 0.07;
 
@@ -247,6 +250,10 @@ export const EDGE_PAD = 0.07;
  */
 export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: number }>, opts: StepOptions): void {
   const { clustered, dt, time, aspect, links, pinnedKey } = opts;
+  const damping = Math.pow(DAMPING, dt * 60);
+  // Warm-up uses time=0 to seed a stable layout. Ease in the stronger live
+  // wander over its first second instead of changing that layout or jolting it.
+  const drift = DRIFT + (LIVE_DRIFT - DRIFT) * Math.min(1, Math.max(0, time));
   /*
    * Clustering shrinks the spacing it has to overcome.
    *
@@ -284,8 +291,8 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
 
     // A slow wander, so a static graph still breathes. Two incommensurate
     // frequencies keep it from reading as a loop.
-    fx += Math.sin(time * 0.31 + body.driftX) * DRIFT;
-    fy += Math.cos(time * 0.23 + body.driftY) * DRIFT;
+    fx += Math.sin(time * 0.31 + body.driftX) * drift;
+    fy += Math.cos(time * 0.23 + body.driftY) * drift;
 
     for (const other of bodies) {
       if (other === body) continue;
@@ -318,8 +325,8 @@ export function step(bodies: Body[], centres: Map<NodeType, { x: number; y: numb
       fy += uy * push;
     }
 
-    body.vx = (body.vx + fx * dt) * DAMPING;
-    body.vy = (body.vy + fy * dt) * DAMPING;
+    body.vx = (body.vx + fx * dt) * damping;
+    body.vy = (body.vy + fy * dt) * damping;
     body.x += body.vx * dt;
     body.y += body.vy * dt;
 
