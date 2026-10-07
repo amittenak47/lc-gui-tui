@@ -1,18 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { LcClient } from "../api/client";
+import type { FootnoteRequestDto, LcClient } from "../api/client";
 import type { DocFootnote } from "./docFootnotes";
 import { applyFootnotePing, applyFootnoteResult, registerOpenAnnotateFootnotes } from "./footnoteRequests";
 
 const store = vi.hoisted(() => ({
   doc: null as null | { id: string; name: string; footnotes: unknown[] },
   saves: 0,
+  saved: [] as unknown[][],
 }));
 
 vi.mock("./annotateStore", () => ({
   getAnnotateDoc: async () => store.doc,
-  saveAnnotateDoc: async () => {
+  saveAnnotateDoc: async (doc: { footnotes?: unknown[] }) => {
     store.saves += 1;
+    store.saved.push([...(doc.footnotes ?? [])]);
   },
 }));
 
@@ -132,5 +134,252 @@ describe("applyFootnotePing", () => {
     await applyFootnotePing(client, ping);
     expect(store.saves).toBe(0);
     expect(acks).toEqual(["fr-1"]);
+  });
+});
+
+describe("footnote request queue", () => {
+  const QUEUE_KEY = "whiteboard.footnoteRequests.v1";
+  const AWAITING_KEY = "whiteboard.footnoteAwaiting.v1";
+  let restoreStorage: (() => void) | undefined;
+
+  beforeEach(() => {
+    const prior = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    const values = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: {
+        get length() {
+          return values.size;
+        },
+        clear() {
+          values.clear();
+        },
+        getItem(key: string) {
+          return values.get(key) ?? null;
+        },
+        setItem(key: string, value: string) {
+          values.set(key, value);
+        },
+        removeItem(key: string) {
+          values.delete(key);
+        },
+        key(index: number) {
+          return [...values.keys()][index] ?? null;
+        },
+      },
+    });
+    restoreStorage = () => {
+      if (prior) Object.defineProperty(globalThis, "localStorage", prior);
+      else Reflect.deleteProperty(globalThis, "localStorage");
+    };
+    store.doc = null;
+    store.saves = 0;
+    store.saved = [];
+  });
+
+  afterEach(() => {
+    restoreStorage?.();
+  });
+
+  function body(id: string, docId = "doc-1"): FootnoteRequestDto {
+    return {
+      id,
+      device_id: "device-1",
+      doc_id: docId,
+      doc_name: "Doc",
+      page: 1,
+      anchor: { kind: "text", start: 1, end: 6 },
+      excerpt: id,
+      context: id,
+      wide_context: id,
+      page_footnotes: [],
+      prompt: null,
+    };
+  }
+
+  function stored(key: string): { id: string; docId?: string }[] {
+    const raw = globalThis.localStorage.getItem(key);
+    if (raw == null) throw new Error(`${key} was not written`);
+    return JSON.parse(raw) as { id: string; docId?: string }[];
+  }
+
+  function noteCount(text: string): number {
+    let count = 0;
+    for (const footnotes of store.saved) {
+      for (const entry of footnotes) {
+        const notes = (entry as { notes?: { text?: string }[] } | null)?.notes;
+        if (!Array.isArray(notes)) continue;
+        for (const note of notes) {
+          if (note?.text === text) count += 1;
+        }
+      }
+    }
+    return count;
+  }
+
+  async function load() {
+    vi.resetModules();
+    return import("./footnoteRequests");
+  }
+
+  function deferred() {
+    let release!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { opened, release };
+  }
+
+  it("keeps a request enqueued during a flush for the next flush to send", async () => {
+    const mod = await load();
+    const posted: string[] = [];
+    const hold = deferred();
+    const started = deferred();
+    const client = {
+      postFootnoteRequest: async (item: FootnoteRequestDto) => {
+        posted.push(item.id);
+        if (item.id === "fr-a") {
+          started.release();
+          await hold.opened;
+        }
+      },
+      ackFootnoteRequest: async () => {},
+    } as unknown as LcClient;
+
+    mod.enqueueFootnoteRequest(body("fr-a"));
+    expect(stored(QUEUE_KEY).map((entry) => entry.id)).toEqual(["fr-a"]);
+    const first = mod.flushFootnoteQueue(client);
+    await started.opened;
+    mod.enqueueFootnoteRequest(body("fr-b"));
+    expect(stored(QUEUE_KEY).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
+    const second = mod.flushFootnoteQueue(client);
+    hold.release();
+    await first;
+    await second;
+
+    expect(posted).toEqual(["fr-a", "fr-b"]);
+    expect(stored(QUEUE_KEY)).toEqual([]);
+    expect(stored(AWAITING_KEY).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
+  });
+
+  it("keeps a transient failure and a request enqueued during it, in order", async () => {
+    const mod = await load();
+    const posted: string[] = [];
+    const hold = deferred();
+    const started = deferred();
+    let failA = true;
+    const client = {
+      postFootnoteRequest: async (item: FootnoteRequestDto) => {
+        posted.push(item.id);
+        if (item.id === "fr-a" && failA) {
+          started.release();
+          await hold.opened;
+          throw new TypeError("network down");
+        }
+      },
+      ackFootnoteRequest: async () => {},
+    } as unknown as LcClient;
+
+    mod.enqueueFootnoteRequest(body("fr-a"));
+    const first = mod.flushFootnoteQueue(client);
+    await started.opened;
+    mod.enqueueFootnoteRequest(body("fr-b"));
+    hold.release();
+    await first;
+
+    expect(posted).toEqual(["fr-a"]);
+    expect(stored(QUEUE_KEY).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
+    expect(stored(AWAITING_KEY).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
+
+    failA = false;
+    posted.length = 0;
+    await mod.flushFootnoteQueue(client);
+
+    expect(posted).toEqual(["fr-a", "fr-b"]);
+    expect(stored(QUEUE_KEY)).toEqual([]);
+    expect(stored(AWAITING_KEY).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
+  });
+
+  it("keeps an enqueue that overlaps a ping and applies that answer once", async () => {
+    const mod = await load();
+    store.doc = {
+      id: "doc-1",
+      name: "Doc",
+      footnotes: [mark({ id: "fn-old", pending: "fr-old" })],
+    };
+    const posted: string[] = [];
+    const acks: string[] = [];
+    const hold = deferred();
+    const started = deferred();
+    const client = {
+      postFootnoteRequest: async (item: FootnoteRequestDto) => {
+        posted.push(item.id);
+        if (item.id === "fr-a") {
+          started.release();
+          await hold.opened;
+        }
+      },
+      ackFootnoteRequest: async (id: string) => {
+        acks.push(id);
+      },
+    } as unknown as LcClient;
+
+    mod.enqueueFootnoteRequest(body("fr-a"));
+    const flushing = mod.flushFootnoteQueue(client);
+    await started.opened;
+    mod.enqueueFootnoteRequest(body("fr-b"));
+    const ping = mod.applyFootnotePing(client, {
+      footnote_results: [{ id: "fr-old", doc_id: "doc-1", result: { notes: ["from the hub"] } }],
+    });
+    hold.release();
+    await flushing;
+    await ping;
+
+    expect(posted).toEqual(["fr-a", "fr-b"]);
+    expect(stored(QUEUE_KEY)).toEqual([]);
+    expect(stored(AWAITING_KEY).map((entry) => entry.id)).toEqual(["fr-a", "fr-b"]);
+    expect(acks).toEqual(["fr-old"]);
+    expect(noteCount("from the hub")).toBe(1);
+    expect(store.saves).toBe(1);
+  });
+
+  it("keeps a sent request awaiting until its result is applied and acknowledged", async () => {
+    const mod = await load();
+    store.doc = {
+      id: "doc-1",
+      name: "Doc",
+      footnotes: [mark({ pending: "fr-a" })],
+    };
+    const posted: string[] = [];
+    const acks: string[] = [];
+    const client = {
+      postFootnoteRequest: async (item: FootnoteRequestDto) => {
+        posted.push(item.id);
+      },
+      ackFootnoteRequest: async (id: string) => {
+        acks.push(id);
+      },
+    } as unknown as LcClient;
+
+    mod.enqueueFootnoteRequest(body("fr-a"));
+    expect(stored(QUEUE_KEY).map((entry) => entry.id)).toEqual(["fr-a"]);
+    expect(stored(AWAITING_KEY)).toEqual([{ id: "fr-a", docId: "doc-1" }]);
+
+    await mod.flushFootnoteQueue(client);
+
+    expect(posted).toEqual(["fr-a"]);
+    expect(stored(QUEUE_KEY)).toEqual([]);
+    expect(stored(AWAITING_KEY)).toEqual([{ id: "fr-a", docId: "doc-1" }]);
+
+    await mod.applyFootnotePing(client, {
+      footnote_results: [{ id: "fr-a", doc_id: "doc-1", result: { notes: ["the answer"] } }],
+    });
+
+    expect(acks).toEqual(["fr-a"]);
+    expect(stored(AWAITING_KEY)).toEqual([]);
+    expect(noteCount("the answer")).toBe(1);
+    expect(store.saves).toBe(1);
   });
 });

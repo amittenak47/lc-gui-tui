@@ -253,6 +253,10 @@ function forgetAwaiting(id: string): void {
   writeJson(AWAITING_KEY, loadAwaiting().filter((entry) => entry.id !== id));
 }
 
+function forgetQueued(id: string): void {
+  writeJson(QUEUE_KEY, loadQueue().filter((entry) => entry.id !== id));
+}
+
 function sinksFor(docId: string): OpenAnnotateFootnoteSink[] {
   const matches: OpenAnnotateFootnoteSink[] = [];
   for (const sink of sinks) {
@@ -321,26 +325,22 @@ function isClientError(cause: unknown): boolean {
 async function flushBody(client: LcClient): Promise<void> {
   const queue = loadQueue();
   if (queue.length === 0) return;
-  const remain: FootnoteRequestDto[] = [];
   for (const item of queue) {
     try {
       await client.postFootnoteRequest(item);
+      // Remove this id from the live queue. Writing the snapshot's remainder
+      // would erase a request enqueued while the POST was in flight.
+      forgetQueued(item.id);
     } catch (cause) {
-      if (!isClientError(cause)) {
-        remain.push(item);
-        continue;
-      }
+      if (!isClientError(cause)) continue;
       const cleared = await writeFootnotes(item.doc_id, (footnotes) =>
         applyFootnoteResult(footnotes, { id: item.id, notes: [FOOTNOTE_REJECTED_NOTE] }),
       );
-      if (cleared === "failed") {
-        remain.push(item);
-        continue;
-      }
+      if (cleared === "failed") continue;
+      forgetQueued(item.id);
       forgetAwaiting(item.id);
     }
   }
-  writeJson(QUEUE_KEY, remain);
 }
 
 function answerOf(result: FootnotePingResultDto["result"]): { notes: string[]; links: { title?: string; url: string }[] } | null {
