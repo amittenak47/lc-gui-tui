@@ -37,7 +37,6 @@ function footnotesOf(
   return Array.isArray(notes) ? (notes as DocFootnote[]) : [];
 }
 import { PAD_HUB_EVENT, loadPadHub } from "../util/padHub";
-import { isPadHubOffline } from "../util/padHubStatus";
 import { syncLegacySnapshots } from "../util/padSync";
 import type { DocWorkProgress } from "./DocIndexChip";
 import {
@@ -51,6 +50,10 @@ import {
 import { MorphBar } from "./MorphBar";
 import { HubStatusDot } from "./HubStatusDot";
 import { prepareConflictUi, waitForConflictUi, type ConflictUiLifecycle } from "../util/conflictUiWait";
+import { syncBookPass, isModernBookHub, takeOldBookHubNotice } from "../util/bookSyncPass";
+import { boundedBookRequest } from "../util/bookSync";
+import { askBookConflict } from "../util/bookConflictUi";
+import type { BookIdentity } from "../util/syncState";
 
 /**
  * What the walk is doing, for the tab chip beside the document's name.
@@ -103,7 +106,7 @@ function walkStages(hasDocument: boolean): HubSyncStage[] {
  * nothing (no document) and claimed nothing (no pad).
  */
 export function tabOffersHubSync(kind: string): boolean {
-  return kind === "annotate" || kind === "whiteboard" || kind === "web";
+  return kind === "annotate" || kind === "whiteboard" || kind === "web" || kind === "practice";
 }
 
 /**
@@ -187,6 +190,8 @@ async function pushBytesOnce(client: LcClient, hash: string, bytes: ArrayBuffer)
  * unless the walk reports.
  */
 export interface HubSyncWalkHost {
+  /** All modern book kinds, including the inline problem canvas. */
+  book?(): BookIdentity | null | Promise<BookIdentity | null>;
   /** Flush the live working copy without changing the explicit-Save baseline. */
   prepare?(): Promise<void>;
   doc(): {
@@ -448,11 +453,52 @@ export function HubSyncControl({
        */
       await host?.prepare?.();
       throwIfAborted();
-      if (isPadHubOffline()) {
-        throw new Error("Can't reach the hub. Your changes are kept on this device.");
-      }
-      const ping = await client!.pingPadSync(0);
+      const ping = await boundedBookRequest(() => client!.pingPadSync(0, {}), abort.signal);
       throwIfAborted();
+
+      if (isModernBookHub(ping)) {
+        const selected = await host?.book?.() ?? await host?.pad();
+        goStage("pad");
+        const result = await syncBookPass(client!, { ping, signal: abort.signal,
+          selected: selected ? { kind: selected.kind, id: selected.id } : undefined,
+          requestChoice: (conflict, lifecycle) => askBookConflict(conflict, lifecycle, (shown, mounted) => host!.onConflict(shown, mounted)),
+          onProgress: (done, total) => goWork(null, { done, total }),
+        });
+        if (result.cancelled) throw new HubSyncCancelled();
+        const failed = result.books.filter(book => book.status === "failed" || book.status === "needs_choice");
+        if (failed.length) throw failed[0]!.error;
+        // Indexing is supplemental to the live-book transaction. Its failure
+        // is retained as a notice and cannot undo a confirmed book commit.
+        let notice = result.notices.map(item => item.kind === "backup" ? `${item.title ?? "Book"}: snapshots didn't sync. They are kept on this device.` : "Links didn't sync.").join(" ");
+        if (doc && doc.docType !== "web") {
+          goStage("index");
+          try {
+            const status = await boundedBookRequest(() => client!.getDocIndex(doc.hash), abort.signal);
+            if (!status?.indexed) {
+              await boundedBookRequest(() => client!.indexFromBytes(doc.hash, { name: doc.name, doc_type: doc.docType }), abort.signal);
+            }
+            const fresh = await boundedBookRequest(() => client!.getDocIndex(doc.hash), abort.signal);
+            if (!fresh?.indexed) throw new Error("The hub didn't keep the index.");
+            if (fresh.embed_state !== "full") for (let guard = 0; guard < 500; guard++) {
+              const budget = await boundedBookRequest(() => client!.embedDoc(doc.hash), abort.signal);
+              goWork("embed", { done: budget.done, total: budget.total });
+              if (budget.reason || !budget.total || budget.done >= budget.total) break;
+            }
+            host?.onIndexDone();
+          } catch (cause) {
+            if (abort.signal.aborted) throw new HubSyncCancelled();
+            notice += ` ${cause instanceof Error ? cause.message : String(cause)}`;
+          }
+        }
+        goStage("pull");
+        await host?.emitReload(); throwIfAborted();
+        syncedAtSeqRef.current = editSeqRef.current;
+        goStage(selected ? "synced" : "idle");
+        if (notice.trim()) host?.onIndexError(notice.trim());
+        walkingRef.current = false;
+        return;
+      }
+      const legacyNotice = takeOldBookHubNotice() ? "Update the desktop app to sync safely." : null;
 
       if (runs("index")) {
         if (!doc || doc.docType === "web") {
@@ -818,6 +864,7 @@ export function HubSyncControl({
        */
       if (!padInfo) {
         goStage("idle");
+        if (legacyNotice) host?.onIndexError(legacyNotice);
         walkingRef.current = false;
         return;
       }
@@ -836,6 +883,7 @@ export function HubSyncControl({
       }
       syncedAtSeqRef.current = editSeqRef.current;
       goStage("synced");
+      if (legacyNotice) host?.onIndexError(legacyNotice);
       queueMicrotask(() => {
         syncedAtSeqRef.current = editSeqRef.current;
         absorbReloadEditsRef.current = false;

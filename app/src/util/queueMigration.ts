@@ -25,7 +25,7 @@ export interface LegacyStorageCapture {
 export interface RecoveryCopy {
   id:string; type:"record"|"bytes"|"conflict"; kind?:PadKind; bookId?:string;
   claimedHash?:string; provenance:Record<string,unknown>;
-  record?:{meta:BookMeta;payload:Record<string,unknown>;children?:Record<string,unknown>;wire?:Record<string,unknown>};
+  record?:{meta:BookMeta;payload:Record<string,unknown>;children?:Record<string,unknown>;wire?:Record<string,unknown>;ink?:import("./inkPageStore").InkPageRecord[]};
   bytes?:unknown; dependencies?:unknown; content?:unknown;
 }
 type ObjectValue = Record<string,unknown>;

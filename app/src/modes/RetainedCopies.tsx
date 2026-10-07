@@ -3,6 +3,7 @@ import { listRecoveryCopies, exportRecoveryCopy, type RecoveryCopy } from "../ut
 import { listAllPadSnapshots, getPadSnapshot, type PadSnapshotMeta } from "../util/padSnapshotStore";
 import { restoreRetainedRecord, recoveryExportValue } from "../util/recoveryRestore";
 import { restorePadSnapshotLocally } from "../util/artifactSnapshotRestore";
+import { chooseRetainedFallbackBranch } from "../util/localBookStore";
 
 /** The existing library's backup flow includes removed parents and recovered copies. */
 export function RetainedCopies({ kind, onRestored }: { kind: "annotate" | "whiteboard"; onRestored: () => void }) {
@@ -38,6 +39,10 @@ export function RetainedCopies({ kind, onRestored }: { kind: "annotate" | "white
         if (selected !== copy.id) { setSelected(copy.id); return; }
         void perform(async () => { await restoreRetainedRecord(copy.id); onRestored(); setNotice("The book was restored locally. Sync it when ready."); setSelected(null); });
       }}>{selected === copy.id ? "Confirm restore" : "Restore locally"}</button>}
+      {copy.provenance?.source === "fallback-branch" && <button type="button" disabled={pending} onClick={() => {
+        if (selected !== copy.id) { setSelected(copy.id); return; }
+        void perform(async () => { await chooseRetainedFallbackBranch(copy.id); onRestored(); setNotice("The saved branch was chosen locally. Other copies are retained."); setSelected(null); });
+      }}>{selected === copy.id ? "Confirm saved branch" : "Choose saved branch"}</button>}
     </div>)}
     {snapshots.map(snapshot => <div className="lc-scratch-load-entry" key={snapshot.snapshotId ?? `${snapshot.kind}:${snapshot.key}:${snapshot.tier}`}>
       <strong>{snapshot.name}</strong><span className="lc-muted">{snapshot.tier} · {new Date(snapshot.writtenAt).toLocaleString()}</span>

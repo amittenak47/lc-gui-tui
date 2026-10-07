@@ -41,6 +41,9 @@ export class HubSyncCancelled extends Error {
 }
 
 export interface HubPadConflict {
+  /** Modern split handlers return decisions without writing local or live hub data. */
+  modernChoice?: boolean;
+  fetchPreviewInk?: (pageId: number) => Promise<{ local: InkPageDto | null; server: InkPageDto | null }>;
   /** Problem canvases use one whole-canvas choice in the existing split. */
   wholeCanvas?: boolean;
   kind: HubPadKind;

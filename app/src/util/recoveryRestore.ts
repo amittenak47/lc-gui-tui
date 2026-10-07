@@ -7,7 +7,7 @@ import { newBookToken, hasBookLocks } from "./bookCoordinator";
 import { getDocBytes } from "./docBytes";
 import { artifactCatalogFields } from "./padArtifacts";
 import { downloadArtifactAssets } from "./artifactAssetSync";
-import { encodedFromRecord, getInkPageRecords, type InkPageRecord } from "./inkPageStore";
+import { encodedFromRecord, getInkPageRecords, inkPageKey, type InkPageRecord } from "./inkPageStore";
 import { packEncodedInk } from "../canvas/inkCodec";
 import { validatePackedInk } from "./syncContent";
 import { notifyBookMetadataChanged } from "./localBookStore";
@@ -40,7 +40,8 @@ export async function restoreRetainedRecord(id: string): Promise<BookIdentity> {
       request.onsuccess = () => { const cursor = request.result; if (cursor) { ink.push(cursor.value); cursor.continue(); } };
     });
   }
-  for (const page of ink) {
+  const restoreInk = record.ink ?? ink;
+  for (const page of restoreInk) {
     const encoded = await encodedFromRecord(page);
     if (!encoded) throw new Error("Current handwriting cannot be read. Both copies were kept.");
     validatePackedInk(packEncodedInk(encoded));
@@ -49,7 +50,7 @@ export async function restoreRetainedRecord(id: string): Promise<BookIdentity> {
     if (!board(scene)) throw new Error("A retained scratch board is unreadable. The copy was kept.");
     const manifest = scene.inkPages;
     if (manifest !== undefined && (!object(manifest) || !Array.isArray(manifest.pageIds)
-      || manifest.pageIds.some(pageId => !ink.some(page => page.docKey === docKey && page.pageId === pageId)))) {
+      || manifest.pageIds.some(pageId => !restoreInk.some(page => page.docKey === docKey && page.pageId === pageId)))) {
       throw new Error("This retained copy references missing handwriting. Its original data was kept.");
     }
   };
@@ -90,6 +91,9 @@ export async function restoreRetainedRecord(id: string): Promise<BookIdentity> {
     ctx.setMetadata(metadata);
     ctx.setContent(owner.kind === "problem" ? { ...metadata, ...record.payload } : record.payload);
     for (const [childId, child] of Object.entries(record.children ?? {})) ctx.tx.objectStore(STORE_CONTENT).put(child, `fnwb:${owner.id}:${childId}`);
+    if (record.ink) for (const page of restoreInk) ctx.tx.objectStore(STORE_INK_PAGES).put({ ...page,
+      changeSeq: ctx.seq, syncedChangeSeq: 0, syncedRev: 0, baseWireHash: null, baseLocalHash: null, bootstrap: true, dirty: true },
+      inkPageKey(page.docKey, page.pageId));
     if (ctx.state.lifecycle?.action === "delete" || record.meta.deletedAt !== undefined || record.meta.purgedAt !== undefined) {
       ctx.markLifecycle("restore", Number(metadata.syncSeq), ctx.state.bootstrap ? null : ctx.state.appliedBookRev, ctx.state.lifecycle?.goneSeq ?? null);
     }

@@ -3,7 +3,7 @@
 // cargo build --no-default-features --example sync_review_hub
 // Real IndexedDB in two isolated Chrome profiles; never opens the user's app data.
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import assert from "node:assert/strict";
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -15,22 +15,25 @@ const server = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--host
 children.push(server);
 let serverError = "";
 server.stderr.on("data", data => { serverError += data; });
-async function browser(label) {
+async function browser(label, existingPort, targetId) {
+  let debugPort=existingPort;
+  if(!debugPort) {
   const profile = resolve(`../.tmp-phase3-checks/${process.pid}-${label}`);
   await mkdir(profile, { recursive: true });
   const child = spawn(process.env.CHROME_PATH ?? "C:/Program Files/Google/Chrome/Application/chrome.exe", [
     "--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-background-networking",
+    "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
     "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank",
   ], { windowsHide: true, stdio: "ignore" });
   children.push(child);
-  let debugPort;
   for (let i = 0; i < 100 && !debugPort; i++) {
     try { debugPort = (await readFile(resolve(profile, "DevToolsActivePort"), "utf8")).split("\n")[0]; }
     catch { await sleep(100); }
   }
+  }
   assert(debugPort, "Chrome did not start");
   const tabs = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json();
-  const socket = new WebSocket(tabs.find(tab => tab.type === "page").webSocketDebuggerUrl);
+  const socket = new WebSocket(tabs.find(tab => targetId ? tab.id === targetId : tab.type === "page").webSocketDebuggerUrl);
   sockets.push(socket);
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
   const pending = new Map(); let seq = 0;
@@ -40,7 +43,7 @@ async function browser(label) {
   };
   const send = (method, params = {}) => new Promise((resolve, reject) => {
     const id = ++seq;
-    const timeout = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timeout: ${method}`)); }, 30000);
+    const timeout = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timeout: ${method} ${params.expression ?? ""}`)); }, 30000);
     pending.set(id, { resolve: v => { clearTimeout(timeout); resolve(v); }, reject: e => { clearTimeout(timeout); reject(e); } });
     socket.send(JSON.stringify({ id, method, params }));
   });
@@ -60,6 +63,7 @@ async function browser(label) {
   await ready();
   return { call: (name, ...args) => evaluate(`window.artifactChecks[${JSON.stringify(name)}](...${JSON.stringify(args)})`),
     evaluate, send,
+    newTab: async () => { const target=await send("Target.createTarget",{url:"about:blank"});return browser(label+"-sibling",debugPort,target.targetId); },
     crash: async () => { await send("Page.crash").catch(() => {}); },
     reload: async () => { await evaluate("delete window.artifactChecks"); await send("Page.reload"); await sleep(200); await ready(); } };
 }
@@ -95,170 +99,127 @@ try {
   }
   const a=await browser("http-a"),b=await browser("http-b");
   const initial=await a.call("seed");
+  const initialHead=await a.call("head"); assert.equal(initialHead.state,"live"); assert.equal(initialHead.pages.length,42);
+  assert(initialHead.book_rev>initialHead.record_rev); assert(initialHead.pages.every(page=>page.rev>0&&page.hash));
   await b.call("failPage",17);
-  await assert.rejects(()=>b.call("discover"),/connection loss/);
+  await assert.rejects(()=>b.call("discover"));
   assert.equal(await b.call("hasDocument"),false,"incomplete import exposed a document without its ink");
-  await b.call("failPage",null);
-  await b.call("traffic",true);
-  const received=await b.call("discover");
-  const importGets=(await b.call("traffic")).filter(url=>url.includes("/pads/ink/"));
-  assert.equal(importGets.length,41);
-  assert(importGets.every(url=>/\/\d+$/.test(url)),"import downloaded a whole pad's ink");
-  console.log("PASS discovery downloads one page at a time; failed import stays hidden until complete retry");
-  assert.deepEqual(received,initial);
-  assert.equal(received.pages.length,40);
-  assert.equal(received.metadataHasPayload,false);
-  assert.deepEqual(await b.call("selectedRead"),[17]);
+  await b.call("failPage",null);await b.call("traffic",true);
+  const received=await b.call("discover");assert.deepEqual(received,initial);
+  const imports=(await b.call("traffic")).filter(url=>url.includes("/pads/ink/"));
+  assert.equal(imports.length,42);assert(imports.every(url=>url.includes("book_rev=")&&url.includes("page_rev=")),"reads must pin both revisions");
   assert.equal(received.scratchInk.ops.length,12);
   assert.equal(received.attachments.find(a=>a.title==="Saved conversation").agent[0].future.kept,true);
   assert.equal(received.attachments.find(a=>a.title==="Owned drawing").ink[0][1].ops.length,12);
-  console.log("PASS real HTTP/SQLite + two IndexedDB clients: 40 ink pages, footnotes, scratch board, unknown transcript fields and multi-thread sessions");
+  assert.deepEqual(await b.call("selectedRead"),[17]);
+  console.log("PASS atomic HTTP commit + coherent browser IDB import: 40 pages, scratch, unknown transcript fields and attachment assets; failed second download publishes nothing");
   await b.reload();assert.deepEqual(await b.call("inspect"),received);
   await b.call("editPage",17,"#cc0000");await b.call("push");
-  await a.call("traffic",true);
-  const changed=(await a.call("pull")).state;
-  assert.notDeepEqual(changed.page17,initial.page17);
-  assert.deepEqual(changed,(await b.call("inspect")));
-  const traffic=await a.call("traffic");
-  const inkGets=traffic.filter(url=>url.includes("/pads/ink/"));
-  assert.deepEqual(inkGets,["http://127.0.0.1:1458/pads/ink/annotate/http-sync-document/17"]);
-  console.log("PASS changed-page sync downloads exactly one page and converges in both directions");
-  await b.call("editPage",17,"#0000cc");await b.call("push");
-  await a.call("failPage",17);
-  await assert.rejects(()=>a.call("pull"),/connection loss/);
-  assert.deepEqual((await a.call("inspect")).page17,changed.page17);
-  await a.call("failPage",null);await a.call("pull");
-  assert.deepEqual((await a.call("inspect")).page17,(await b.call("inspect")).page17);
-  console.log("PASS interrupted transfer preserves readable local ink; retry converges");
-  await a.call("editPage",17,"#008800");await b.call("editPage",17,"#885500");
-  const localConflict=(await b.call("inspect")).page17;
-  await a.call("push");
-  const conflict=await b.call("pull");
-  assert.equal(conflict.conflicts.length,1);
-  assert.deepEqual(conflict.state.page17,localConflict,"sync overwrote unresolved local strokes");
-  await b.call("corruptPage",17);
-  for(const action of ["keepServer","mergePage"]) {
-    await assert.rejects(()=>b.call(action,17),/could not be read/);
-    assert.deepEqual((await b.call("inspect")).page17,localConflict,"unreadable remote ink replaced local handwriting");
-  }
-  await b.call("corruptPage",null);
-  console.log("PASS Keep selection and Merge preserve local handwriting when remote ink is unreadable");
-  const merged=await b.call("mergePage",17);
-  assert.equal(merged.page17.ops.length,24);
-  assert.deepEqual((await a.call("pull")).state.page17,merged.page17);
-  console.log("PASS same-page conflict preserves local ink; explicit Merge keeps both sets of strokes and converges");
-  const beforeAttachment=await a.call("inspect");
-  await b.call("editConversation");
-  await a.call("failAttachments",true);
-  await assert.rejects(()=>a.call("pull"),/attachment connection loss/);
-  assert.deepEqual(await a.call("inspect"),beforeAttachment,"failed dependency transfer changed local parent");
-  await a.call("failAttachments",false);await a.call("pull");
+  await a.call("traffic",true);const changed=(await a.call("pull")).state;
+  assert.deepEqual(changed,await b.call("inspect"));
+  const gets=(await a.call("traffic")).filter(url=>url.includes("/pads/ink/"));assert.equal(gets.length,1);assert(gets[0].includes("/17?book_rev="));
+  console.log("PASS unchanged pages never travel; ink-only saves preserve the hub record revision");
+  await b.call("editPage",17,"#0000cc");await b.call("push");const beforeFailed=await a.call("inspect");await a.call("failPage",17);
+  await assert.rejects(()=>a.call("pull"));assert.deepEqual(await a.call("inspect"),beforeFailed);await a.call("failPage",null);await a.call("pull");
+  await a.call("editPage",17,"#008800");await b.call("editPage",17,"#885500");const losing=await b.call("inspect");await a.call("push");
+  const conflict=await b.call("pull");assert.equal(conflict.conflicts.length,1);assert.deepEqual(conflict.state,losing);
+  await b.call("corruptPage",17);for(const action of ["keepServer","mergePage"]) {await assert.rejects(()=>b.call(action,17));assert.deepEqual(await b.call("inspect"),losing);}
+  await b.call("corruptPage",null);const merged=await b.call("mergePage",17);assert.equal(merged.page17.ops.length,24);assert.deepEqual((await a.call("pull")).state.page17,merged.page17);
+  assert((await b.call("retained")).filter(copy=>copy.type==="record").length>=2);assert(!(await b.call("traffic")).some(url=>url.endsWith("/pads/ink")),"modern choices wrote live legacy ink");
+  console.log("PASS same-page choice preserves complete local/hub alternatives, merges locally, stages and commits once; unreadable preview preserves active content");
+  const beforeAttachment=await a.call("inspect");await b.call("editConversation");await a.call("failAttachments",true);
+  await assert.rejects(()=>a.call("pull"));assert.deepEqual(await a.call("inspect"),beforeAttachment);await a.call("failAttachments",false);await a.call("pull");
   assert.deepEqual((await a.call("inspect")).attachments,(await b.call("inspect")).attachments);
-  console.log("PASS saved message snapshots and owned ink attachments cross HTTP; missing revision preserves parent until retry");
-  await a.call("deleteThread");
-  const deleted=(await b.call("pull")).state;
-  assert(deleted.agent.filter(m=>["q","a"].includes(m.id)).every(m=>m.deletedAt>0));
-  assert(!deleted.footnotes[0].threads?.some(t=>t.rootId==="q"),"deleted thread still linked from footnote");
-  console.log("PASS deleted thread stays deleted and footnote reference disappears");
+  await a.call("deleteThread");const deleted=(await b.call("pull")).state;
+  assert(deleted.agent.filter(m=>["q","a"].includes(m.id)).every(m=>m.deletedAt>0));assert(!deleted.footnotes[0].threads?.some(t=>t.rootId==="q"));
   const stale=(await a.call("staleThreadWrite")).state;
-  assert(stale.agent.filter(m=>["q","a"].includes(m.id)).every(m=>m.deletedAt>0));
-  assert(!stale.footnotes[0].threads?.some(t=>t.rootId==="q"));
-  console.log("PASS stale replica cannot resurrect a deleted conversation or its footnote link on the server");
-  await b.reload();assert.deepEqual(await b.call("inspect"),deleted);
-  // Clock skew. Device B runs an hour slow; both sync the way the app does
-  // (since = the hub's last ping time). Pages 18-20 have shared history;
-  // page 50 is new on both devices, so it has no shared sync point.
-  // Expected-safe cases assert; the suspected loss path reports a FINDING so
-  // this check documents today's behaviour until sync stops comparing clocks.
-  const HOUR=3600e3;
-  await a.call("setClock",0,true);await b.call("setClock",-HOUR,true);
-  await a.call("pull");await b.call("pull");
-  await b.call("editPage",18,"#b01818");await b.call("push");
-  await a.call("pull");
-  assert.equal(await a.call("pageColor",18),"#b01818","slow device's edit to a shared page was lost");
-  console.log("PASS skew: a slow device's edit to a page with shared history reaches the other device");
-  await a.call("editPage",19,"#a01919");await a.call("push");
-  await b.call("pull");
-  await b.call("editPage",19,"#b01919");await b.call("push");
-  await a.call("pull");
-  assert.equal(await a.call("pageColor",19),"#b01919","later edit on a slow device lost to an earlier one");
-  console.log("PASS skew: a later edit on the slow device wins over an earlier one on the fast device");
-  await a.call("setClock",HOUR,true);
-  await a.call("editPage",20,"#a02020");await a.call("push");
-  await b.call("pull");await b.call("setClock",0,true);
-  await b.call("editPage",20,"#b02020");await b.call("push");
-  await a.call("pull");
-  assert.equal(await a.call("pageColor",20),"#b02020","a fast device's earlier edit beat a later one");
-  console.log("PASS skew: an edit after a fast device's edit still wins (versions never go backwards)");
-  await a.call("setClock",0,true);await b.call("setClock",-HOUR,true);
-  await a.call("pull");await b.call("pull");
-  await b.call("editPage",50,"#b05050");
-  await a.call("editPage",50,"#a05050");await a.call("push");
-  const newBoth=await b.call("pull");
-  const bColor=await b.call("pageColor",50);
-  if(newBoth.conflicts.length>0) console.log("PASS skew: a page new on both devices is offered as a conflict");
-  else if(bColor==="#a05050") console.log("FINDING skew: page new on both devices; the slow device's strokes were replaced without a conflict (silent ink loss)");
-  else console.log(`FINDING skew: page new on both devices, no conflict, slow device kept ${bColor}; the other device's strokes never arrive`);
-  // Control: the same race with both clocks right is caught as a conflict,
-  // so the loss above is the skew, not new pages as such.
-  await a.call("setClock",0,true);await b.call("setClock",0,true);
-  await a.call("pull");await b.call("pull");
-  await b.call("editPage",51,"#b05151");
-  await a.call("editPage",51,"#a05151");await a.call("push");
-  const control=await b.call("pull");
-  assert.equal(control.conflicts.length,1,"page new on both devices with correct clocks was not offered as a conflict");
-  assert.equal(await b.call("pageColor",51),"#b05151","correct clocks: local strokes replaced before the conflict was resolved");
-  console.log("PASS skew control: with correct clocks the same new-page race is offered as a conflict");
-  await b.call("keepServer",51);
-  await b.call("setClock",0,false);await a.call("setClock",0,false);
-  // Network faults on uploads from B.
-  await b.call("editPage",22,"#b02222");
-  await b.call("setFault","error500",22);
-  assert.match(await b.call("pushWithin",15000),/^error: /);
-  assert.equal((await b.call("pageState",22)).synced,false,"a failed upload marked the page synced");
-  await b.call("setFault",null);await b.call("push");await a.call("pull");
-  assert.equal(await a.call("pageColor",22),"#b02222");
-  console.log("PASS fault: a hub error on upload keeps the page unsynced, and the retry delivers it");
-  await b.call("editPage",23,"#b02323");
-  await b.call("setFault","lostAck",23);
-  assert.match(await b.call("pushWithin",15000),/^error: .*reply lost/);
-  await b.call("setFault",null);
-  const afterLostAck=await b.call("pushWithin",15000);
-  if(afterLostAck==="done") {
-    assert.equal((await b.call("pageState",23)).synced,true,"retry after a lost reply left the page unsynced");
-    await a.call("pull");
-    assert.equal(await a.call("pageColor",23),"#b02323");
-    console.log("PASS fault: hub saved the page but the reply was lost; the retry recognises its own copy and converges");
-  } else console.log(`FINDING fault: hub saved the page but the reply was lost; the retry fails (${afterLostAck})`);
-  await b.call("editPage",24,"#b02424");
-  await b.call("setFault","hang",24);
-  const hang=await b.call("pushWithin",20000);
-  if(hang==="still waiting") console.log("FINDING fault: an upload the hub never answers keeps the sync waiting with no timeout (still waiting after 20 s)");
-  else console.log(`PASS fault: a hung upload ends the sync (${hang})`);
-  const released=await b.call("releaseHung");
-  assert.equal(released.result,"done",`released upload did not finish: ${released.result}`);
-  await a.call("pull");
-  assert.equal(await a.call("pageColor",24),"#b02424");
-  console.log("PASS fault: once the hung request is answered, the sync completes and converges");
-  await b.call("editPage",26,"#b02626");
-  await b.call("setFault","hang",26);
-  assert.equal(await b.call("pushWithin",2000),"still waiting");
-  await stopHub();
-  const midWalk=await b.call("releaseHung");
-  assert.match(midWalk.result,/^error: /,"an upload to a stopped hub reported success");
-  assert.equal((await b.call("pageState",26)).synced,false,"an upload lost with the hub was marked synced");
-  startHub();await hubReady();
-  await b.call("push");await a.call("pull");
-  assert.equal(await a.call("pageColor",26),"#b02626");
-  console.log("PASS fault: hub restarted mid-sync; the edit stays local and unsynced, then converges after the restart");
-  const heaps=[];
-  for(let i=0;i<5;i++) {
-    await a.call("pull");await b.call("pull");
-    await b.send("HeapProfiler.collectGarbage");
-    heaps.push((await b.send("Runtime.getHeapUsage")).usedSize);
-  }
-  assert(Math.max(...heaps)-Math.min(...heaps)<8*1024*1024,JSON.stringify(heaps));
-  console.log("PASS repeated sync heap stays bounded",JSON.stringify(heaps));
+  assert(stale.agent.filter(m=>["q","a"].includes(m.id)).every(m=>m.deletedAt>0));assert(!stale.footnotes[0].threads?.some(t=>t.rootId==="q"));
+  console.log("PASS legacy compatibility: a stale raw record PUT cannot resurrect deleted conversations or their footnote links");
+  console.log("PASS attachment acquisition fails without partial parent publication; conversation tombstones remain deleted");
+  const HOUR=3600e3;await a.call("setClock",0,true);await b.call("setClock",-HOUR,true);await a.call("pull");await b.call("pull");
+  await b.call("editPage",18,"#b01818");await b.call("push");await a.call("pull");assert.equal(await a.call("pageColor",18),"#b01818");
+  await a.call("setClock",HOUR,true);await a.call("editPage",20,"#a02020");await a.call("push");await b.call("pull");
+  await b.call("editPage",20,"#b02020");await b.call("push");await a.call("pull");assert.equal(await a.call("pageColor",20),"#b02020");
+  await a.call("setClock",0,true);await b.call("setClock",-HOUR,true);await a.call("pull");await b.call("pull");
+  await b.call("editPage",50,"#b05050");await a.call("editPage",50,"#a05050");await a.call("push");
+  assert.equal((await b.call("pull")).conflicts.length,1,"hour-slow new page must need an explicit choice");assert.equal(await b.call("pageColor",50),"#b05050","hour-slow authored ink was silently discarded");
+  await b.call("modern","local");await a.call("pull");assert.equal(await a.call("pageColor",50),"#b05050");
+  console.log("PASS hard clock-skew regressions: slow/fast successive edits and a divergent newly created page preserve authored content");
+  // Real simultaneous clients publish independent pages without a record merge.
+  await a.call("editPage",21,"#a02121");await b.call("editPage",22,"#b02222");const recordRev=(await a.call("head")).record_rev;
+  const disjoint=await Promise.all([a.call("modern"),b.call("modern")]);assert(disjoint.every(result=>result.status==="synced"));
+  await a.call("pull");await b.call("pull");assert.equal((await a.call("head")).record_rev,recordRev);assert.equal(await a.call("pageColor",22),"#b02222");assert.equal(await b.call("pageColor",21),"#a02121");
+  console.log("PASS two real browsers concurrently commit different pages; full returned vectors reconcile disjoint heads");
+  await b.call("editPage",23,"#b02323");await b.call("traffic",true);await b.call("setFault","lostAck",23);const lost=await b.call("modern");
+  assert.equal(lost.status,"synced",JSON.stringify(lost));assert.equal(lost.committed,true);assert.equal((await b.call("pageState",23)).synced,true);await b.call("setFault",null);await a.call("pull");assert.equal(await a.call("pageColor",23),"#b02323");
+  const retries=await b.call("commitRequests");assert.equal(retries.length,3);assert.equal(new Set(retries).size,1);
+  console.log("PASS every commit reply dropped after execution: one UUID/body receipt confirms the saved version");
+  await b.call("editPage",29,"#b02929");await b.call("setFault","lostAck",29);await b.call("loseReceipt",true);
+  const unconfirmed=await b.call("modern");assert.equal(unconfirmed.error.kind,"unconfirmed");assert((await b.call("tracking")).lastAttempt);
+  await b.reload();await b.call("editPage",29,"#b02930");const recovered=await b.call("modern");assert.equal(recovered.status,"synced");assert.equal(recovered.committed,true);
+  assert.equal((await b.call("tracking")).lastAttempt,null);await a.call("pull");assert.equal(await a.call("pageColor",29),"#b02930");
+  console.log("PASS restart before acknowledgement recovers the captured receipt and preserves a newer authored edit");
+  await b.call("editPage",25,"#b02525");await b.call("traffic",true);await b.call("setFault","error500",25);
+  const rejected=await b.call("modern");assert.equal(rejected.error.kind,"stage");assert.equal((await b.call("traffic")).filter(url=>/\/pads\/stage\/.+\/25$/.test(url)).length,3);
+  assert.equal((await b.call("pageState",25)).synced,false);assert.equal((await b.call("head")).pages.find(page=>page.page_id===25)?.hash,(await a.call("head")).pages.find(page=>page.page_id===25)?.hash);
+  await b.call("setFault",null);await b.call("push");await a.call("pull");assert.equal(await a.call("pageColor",25),"#b02525");
+  console.log("PASS all three refused stage attempts preserve local content and publish no partial commit");
+  await b.call("editPage",24,"#b02424");await b.call("setFault","hang",24);const start=Date.now();const hang=await b.call("modern",null,50);
+  assert.equal(hang.status,"failed");assert.equal(hang.error.kind,"stage");assert(Date.now()-start<3000,"never-answering requests failed to settle");assert.equal((await b.call("pageState",24)).synced,false);
+  await b.call("releaseHung");await b.call("push");await a.call("pull");assert.equal(await a.call("pageColor",24),"#b02424");
+  console.log("PASS never-answering uploads settle within bounded attempts, remain dirty, and a fresh retry converges");
+  await b.call("editPage",26,"#b02626");await stopHub();const offline=await b.call("modern",null,100);assert.equal(offline.status,"failed");assert.equal((await b.call("pageState",26)).synced,false);
+  startHub();await hubReady();await b.call("push");await a.call("pull");assert.equal(await a.call("pageColor",26),"#b02626");
+  console.log("PASS isolated hub restart retains dirty ink and retry converges");
+  // Same-origin browser tabs use the production Web Locks implementation.
+  const sibling=await a.newTab();await a.call("editPage",34,"#a03434");await a.call("barrier","commit");
+  const held=a.call("modern",null,10000);for(let i=0;i<100&&!(await a.call("barrierState"));i++)await sleep(20);
+  assert.equal(await a.call("barrierState"),true);const attempt=(await a.call("tracking")).lastAttempt.uploadId;
+  const waiting=sibling.call("cancellable");await sleep(50);await sibling.call("cancel");assert.equal((await waiting).status,"cancelled");
+  const second=sibling.call("modern");await sibling.call("editPage",35,"#a03535");
+  await sleep(100);assert.equal((await a.call("tracking")).lastAttempt.uploadId,attempt,"second tab replaced an in-flight attempt");
+  await a.call("releaseBarrier");const heldResult=await held;assert.equal(heldResult.status,"synced",JSON.stringify(heldResult));assert.match((await second).status,/^(synced|unchanged)$/);
+  assert.equal(await a.call("pageColor",35),"#a03535");await b.call("pull");assert.equal(await b.call("pageColor",34),"#a03434");assert.equal(await b.call("pageColor",35),"#a03535");
+  console.log("PASS real same-origin Web Locks serialize attempts while ordinary writes remain available; newer data is recaptured without replacing its payload");
+  // A prepared download is held off the live store, then an authored edit
+  // invalidates the whole CAS rather than being overwritten.
+  await b.call("editPage",36,"#b03636");await b.call("push");await a.call("barrier","publish");
+  const receiving=a.call("modern");for(let i=0;i<100&&!(await a.call("barrierState"));i++)await sleep(20);
+  assert.equal(await a.call("barrierState"),true);await sibling.call("editPage",36,"#a03636");await a.call("releaseBarrier");
+  assert.equal((await receiving).status,"needs_choice");assert.equal(await a.call("pageColor",36),"#a03636");await a.call("modern","local");await b.call("pull");assert.equal(await b.call("pageColor",36),"#a03636");
+  console.log("PASS deterministic publication barrier rejects a changed read set and preserves the intervening authored edit");
+  await b.call("editPage",37,"#b03737");await b.call("push");await a.call("barrier","read");
+  const reading=a.call("modern");for(let i=0;i<100&&!(await a.call("barrierState"));i++)await sleep(20);
+  assert.equal(await a.call("barrierState"),true);await sibling.call("editPage",37,"#a03737");await a.call("releaseBarrier");
+  assert.equal((await reading).status,"needs_choice");assert.equal(await a.call("pageColor",37),"#a03737");await a.call("modern","local");await b.call("pull");
+  console.log("PASS delayed pinned reads preserve intervening local ink; cancellation releases a waiting real Web Lock");
+  const problem=await a.call("problemSeed");assert.equal(problem.kind,"problem");assert.equal(problem.pages.length,0);assert.equal(problem.record.board.inkC.ops.length,12);
+  const receivedProblem=await b.call("problemPull");assert.equal(receivedProblem.board.inkC.ops.length,12);assert.equal(receivedProblem.dataset,"review");
+  console.log("PASS record-only problem canvases preserve inline ink through the same atomic protocol");
+  assert.match((await a.call("referenceScratch")).status,/^(synced|unchanged)$/);await b.call("pull");
+  await a.call("removeScratch");await b.call("scratchPage",2,"#b00202");await b.call("push");
+  assert.equal((await a.call("modern")).status,"needs_choice");const scratchServer=await a.call("modern","server");assert.match(scratchServer.status,/^(synced|unchanged)$/,JSON.stringify(scratchServer));
+  assert.equal((await a.call("scratchState",1)).ink.ops.length,12);assert.equal((await a.call("scratchState",2)).ink.ops[0].c,"#b00202");
+  await b.call("pull");await a.call("removeScratch");await a.call("push");await b.call("scratchPage",3,"#b00303");
+  assert.equal((await b.call("modern")).status,"needs_choice");const scratchLocal=await b.call("modern","local");assert.equal(scratchLocal.status,"synced",JSON.stringify(scratchLocal));
+  assert.equal((await b.call("scratchState",3)).referenced,true);assert.equal((await b.call("scratchState",3)).ink.ops[0].c,"#b00303");const afterScratchPull=await a.call("pull");assert.equal(afterScratchPull.conflicts.length,0,JSON.stringify({result:afterScratchPull.result,capture:await a.call("capture")}));
+  await a.call("removeScratch");await a.call("push");await b.call("scratchPage",4,"#b00404");
+  assert.equal((await b.call("modern")).status,"needs_choice");const scratchRemoved=await b.call("modern","server");assert.match(scratchRemoved.status,/^(synced|unchanged)$/,JSON.stringify(scratchRemoved));
+  assert.equal((await b.call("scratchState",4)).referenced,false);assert.equal((await b.call("scratchState",4)).ink.ops.length,0);
+  assert((await b.call("retained")).some(copy=>copy.pages?.includes(4)));await a.call("pull");
+  console.log("PASS scratch removal/new-shard races in both orders require an explicit choice and retain every losing child page");
+  await a.call("editConversationLocal","Local attachment conflict");await b.call("editConversationLocal","Hub attachment conflict");await b.call("push");
+  assert.equal((await a.call("modern")).status,"needs_choice");const attachmentsChoice=await a.call("modern","server");assert.equal(attachmentsChoice.status,"synced",JSON.stringify(attachmentsChoice));
+  const attachmentsAfter=(await a.call("inspect")).attachments;assert(attachmentsAfter.some(item=>item.source==="Local attachment conflict"));assert(attachmentsAfter.some(item=>item.source==="Hub attachment conflict"));await b.call("pull");
+  console.log("PASS explicit attachment conflicts preserve both immutable authored sources and commit the reconciled catalog atomically");
+  const beforeDelete=await a.call("inspect");assert(beforeDelete.pages.includes(113));
+  assert.equal((await a.call("trash")).status,"synced");const gone=await a.call("head");assert.equal(gone.state,"gone");assert(gone.book_rev>initialHead.book_rev);
+  const deletedElsewhere=await b.call("modern");assert.equal(deletedElsewhere.error.kind,"gone");assert.equal(await b.call("hasDocument"),true);
+  const restored=await a.call("restore");assert.equal(restored.status,"synced",JSON.stringify(restored));const live=await a.call("head");assert.equal(live.state,"live");assert(live.book_rev>gone.book_rev);
+  assert.deepEqual(await a.call("inspect"),beforeDelete);assert(live.pages.some(page=>page.page_id===113));
+  console.log("PASS atomic delete/restore retains the local book, scratch and empty page 113; a remote deletion never silently removes the other browser's library copy");
+  const heaps=[];for(let i=0;i<5;i++){await a.call("pull");await b.call("pull");await b.send("HeapProfiler.collectGarbage");heaps.push((await b.send("Runtime.getHeapUsage")).usedSize);}
+  assert(Math.max(...heaps)-Math.min(...heaps)<8*1024*1024,JSON.stringify(heaps));console.log("PASS repeated modern passes retain bounded heap",JSON.stringify(heaps));
 } finally {
   for(const socket of sockets)socket.close();
   for(const child of children.reverse())child.kill();

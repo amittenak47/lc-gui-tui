@@ -28,6 +28,8 @@ import { afterBootSettled } from "./util/bootSettled";
 import { etaLabel, etaMs, newEta, recordBatch } from "./util/embedEta";
 import type { DocWorkProgress } from "./components/DocIndexChip";
 import { fetchDocHubHint, type DocHubHint } from "./util/hubHint";
+import { askBookConflict } from "./util/bookConflictUi";
+import type { BookSyncOptions } from "./util/bookSync";
 import type { HubSyncWalkHost, HubWalkReport } from "./components/HubSyncControl";
 import { HubConflictSplit } from "./components/HubConflictSplit";
 import { PageTurn } from "./canvas/pageTurn/PageTurn";
@@ -1032,6 +1034,12 @@ export const Workspace = memo(function Workspace({
      */
     if (hubConflictBusyRef.current) return;
     const c = ask.conflict;
+    if (c.modernChoice) {
+      // This window supplies the explicit decision. Atomic sync owns the
+      // guarded local publication and the single following hub commit.
+      ask.resolve(resolution);
+      return;
+    }
     /*
      * Server can only win if there is a server copy.
      *
@@ -1254,6 +1262,10 @@ export const Workspace = memo(function Workspace({
   }, []);
 
   const hubSyncHostRef = useRef<HubSyncWalkHost | null>(null);
+  const lifecycleSyncOptions: BookSyncOptions = {
+    manual: true, requestChoice: (conflict, lifecycle) => askBookConflict(conflict, lifecycle,
+      (shown, mounted) => hubSyncHostRef.current!.onConflict(shown, mounted)),
+  };
   const syncWorkingRevisionRef = useRef<(() => string)>(() => "");
   const syncPreparedRevisionRef = useRef<string | null>(null);
   /**
@@ -1267,12 +1279,29 @@ export const Workspace = memo(function Workspace({
   );
   if (!hubSyncHostRef.current) {
     hubSyncHostRef.current = {
+      book: async () => {
+        if (footnoteBoardRef.current) return null;
+        if (whiteboardNotebookIdRef.current && await getWhiteboardNotebook(whiteboardNotebookIdRef.current)) return { kind: "whiteboard", id: whiteboardNotebookIdRef.current };
+        if (annotateDocIdRef.current && await getAnnotateDoc(annotateDocIdRef.current)) return { kind: "annotate", id: annotateDocIdRef.current };
+        const current = problemRef.current;
+        return current && !isLocalPad(current) ? { kind: "problem", id: problemPadId(current.dataset, current.task_id) } : null;
+      },
       prepare: async () => {
         const board = boardRef.current;
         const notebookId = whiteboardNotebookIdRef.current;
         const docId = annotateDocIdRef.current;
         if (!board || footnoteBoardRef.current) return;
         if (footnoteBoardSessionRef.current) throw new Error("Close the scratch board before syncing the document.");
+        if (!notebookId && !docId) {
+          const current = problemRef.current;
+          if (!current || isLocalPad(current)) return;
+          const id = problemPadId(current.dataset, current.task_id), previous = await getProblemBoard(id);
+          if (!previous) return;
+          const revision = syncWorkingRevisionRef.current();
+          await putProblemBoard({ ...previous, board: board.saveBoard(), agent: persistableAgentMessages(agentMessagesRef.current), updatedAt: Date.now() });
+          if (revision !== syncWorkingRevisionRef.current()) throw new Error("The page changed while preparing sync. Your edits are kept; sync again.");
+          syncPreparedRevisionRef.current = revision; return;
+        }
         const id = notebookId ?? docId;
         if (!id) return;
         const kind = notebookId ? "whiteboard" : "annotate";
@@ -1367,7 +1396,11 @@ export const Workspace = memo(function Workspace({
           });
         }
         const docId = annotateDocIdRef.current;
-        if (!docId) return;
+        if (!docId) {
+          const current = problemRef.current;
+          if (current && !isLocalPad(current)) return loadProblem(current.task_id, { dataset: current.dataset }, { tabId: tab.id, userLoad: false }).then(() => {});
+          return;
+        }
         return applyHubReloadRef.current({
           kind: "annotate",
           id: docId,
@@ -9194,7 +9227,7 @@ export const Workspace = memo(function Workspace({
 
   const handleRestoreTrash = async (kind: "whiteboard" | "annotate", id: string) => {
     try {
-      const result = await restoreTrashedPad(client, kind, id);
+      const result = await restoreTrashedPad(client, kind, id, lifecycleSyncOptions);
       if (result.ok) {
         setNotice(`Restored “${result.title}”.`);
         return;
@@ -10108,7 +10141,7 @@ export const Workspace = memo(function Workspace({
           indexInputsRef.current?.docType === "web" ? indexOpenDocumentByHand : null,
         onEmbed: indexInputsRef.current ? embedOpenDocument : null,
         onSync:
-          tabOffersHubSync(tab.kind) && !isFootnoteBoardTab(tab) ? onHubSync : null,
+          tabOffersHubSync(tab.kind) && (tab.kind !== "practice" || !!problem && !isLocalPad(problem)) && !isFootnoteBoardTab(tab) ? onHubSync : null,
         viewportWait: boardPreparing,
         indexProgress: docIndexProgress,
         embedProgress: docEmbedProgress,
@@ -10840,6 +10873,7 @@ export const Workspace = memo(function Workspace({
        */}
       {(active || hubConflictAsk) &&
       tabOffersHubSync(tab.kind) &&
+      (tab.kind !== "practice" || !!problem && !isLocalPad(problem)) &&
       !isFootnoteBoardTab(tab) ? (
         <HubSyncControl
           hubHint={hubHint}
@@ -11461,6 +11495,7 @@ export const Workspace = memo(function Workspace({
           */}
         {hubConflictAsk ? (
           <HubConflictSplit
+            fetchPreviewInk={hubConflictAsk?.conflict.fetchPreviewInk}
             conflict={hubConflictAsk.conflict}
             onMounted={hubConflictAsk.onMounted}
             onUnavailable={hubConflictAsk.onUnavailable}
@@ -11856,7 +11891,7 @@ export const Workspace = memo(function Workspace({
           onRestoreTrash={(id) => handleRestoreTrash("annotate", id)}
           onRename={(id, title) => handleLibraryRename("annotate", id, title)}
           onDelete={(id) =>
-            deletePadEverywhere(client, "annotate", id)
+            deletePadEverywhere(client, "annotate", id, undefined, lifecycleSyncOptions)
           }
           onChoose={(choice, docId, snapshotId) => {
             if (choice === "save") {
@@ -11989,7 +12024,7 @@ export const Workspace = memo(function Workspace({
           onRestoreTrash={(id) => handleRestoreTrash("whiteboard", id)}
           onRename={(id, title) => handleLibraryRename("whiteboard", id, title)}
           onDelete={(id) =>
-            deletePadEverywhere(client, "whiteboard", id)
+            deletePadEverywhere(client, "whiteboard", id, undefined, lifecycleSyncOptions)
           }
           onChoose={(choice, notebookId, snapshotId) => {
             if (choice === "save") {
@@ -12053,7 +12088,7 @@ export const Workspace = memo(function Workspace({
       {whiteboardLibOpen && (
         <WhiteboardLibraryDialog
           onDelete={(id) =>
-            deletePadEverywhere(client, "whiteboard", id)
+            deletePadEverywhere(client, "whiteboard", id, undefined, lifecycleSyncOptions)
           }
           onFreed={() => {
             setWhiteboardLibOpen(false);
@@ -12092,7 +12127,7 @@ export const Workspace = memo(function Workspace({
           needsName={padNeedsName}
           defaultName={padDefaultName}
           onDelete={(id) =>
-            deletePadEverywhere(client, "whiteboard", id)
+            deletePadEverywhere(client, "whiteboard", id, undefined, lifecycleSyncOptions)
           }
           onChoose={(choice, notebookId) => {
             if (choice === "load" && notebookId) {
@@ -12124,7 +12159,7 @@ export const Workspace = memo(function Workspace({
           needsName={padNeedsName}
           defaultName={padDefaultName}
           onDelete={(id) =>
-            deletePadEverywhere(client, "annotate", id)
+            deletePadEverywhere(client, "annotate", id, undefined, lifecycleSyncOptions)
           }
           onChoose={(choice, name) => void resolveLeave(choice === "save", name)}
           onCancel={() => {

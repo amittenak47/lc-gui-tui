@@ -111,13 +111,13 @@ describe("padTabSync", () => {
 });
 
 describe("tabOffersHubSync", () => {
-  it("is a document or a whiteboard, not Home", () => {
+  it("offers all modern book kinds while keeping Home and Explore out", () => {
     expect(tabOffersHubSync("annotate")).toBe(true);
     expect(tabOffersHubSync("whiteboard")).toBe(true);
     expect(tabOffersHubSync("web")).toBe(true);
     expect(tabOffersHubSync("home")).toBe(false);
     expect(tabOffersHubSync("explore")).toBe(false);
-    expect(tabOffersHubSync("practice")).toBe(false);
+    expect(tabOffersHubSync("practice")).toBe(true);
   });
 });
 

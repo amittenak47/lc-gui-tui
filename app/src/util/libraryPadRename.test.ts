@@ -15,9 +15,9 @@ vi.mock("./padSync", () => ({
 
 import type { LcClient } from "../api/client";
 import type { BoardBlob } from "../canvas/BoardHandle";
-import { saveAnnotateDoc, listAnnotateDocs } from "./annotateStore";
+import { saveAnnotateDoc, listAnnotateDocs, getAnnotateDoc } from "./annotateStore";
 import { renameLibraryPad } from "./libraryPadRename";
-import { listWhiteboardNotebooks, saveWhiteboardNotebook } from "./whiteboardStore";
+import { listWhiteboardNotebooks, saveWhiteboardNotebook, getWhiteboardNotebook } from "./whiteboardStore";
 
 function board(mark = "a"): BoardBlob {
   return {
@@ -50,17 +50,15 @@ afterEach(() => {
 });
 
 describe("renameLibraryPad", () => {
-  it("pushes the whiteboard with the new title", async () => {
+  it("persists the whiteboard rename for the next current-state pass", async () => {
     const saved = await saveWhiteboardNotebook({ board: board(), pageCount: 1, title: "One" });
     await renameLibraryPad(client, "whiteboard", saved.id, "Sketchbook");
     expect(listWhiteboardNotebooks()[0]!.title).toBe("Sketchbook");
-    expect(pushWhiteboardPad).toHaveBeenCalledWith(
-      client,
-      expect.objectContaining({ id: saved.id, title: "Sketchbook" }),
-    );
+    expect(await getWhiteboardNotebook(saved.id)).toMatchObject({ id: saved.id, title: "Sketchbook", updatedAt: saved.updatedAt });
+    expect(pushWhiteboardPad).not.toHaveBeenCalled();
   });
 
-  it("pushes the annotate pad with the new label, leaving the URL name alone", async () => {
+  it("persists the annotate label for sync, leaving the URL name alone", async () => {
     const saved = await saveAnnotateDoc({
       name: "https://example.com/page",
       hash: "h",
@@ -71,13 +69,12 @@ describe("renameLibraryPad", () => {
     await renameLibraryPad(client, "annotate", saved.id, "Reading list");
     expect(listAnnotateDocs()[0]!.label).toBe("Reading list");
     expect(listAnnotateDocs()[0]!.name).toBe("https://example.com/page");
-    expect(pushAnnotatePad).toHaveBeenCalledWith(
-      client,
-      expect.objectContaining({
+    expect(await getAnnotateDoc(saved.id)).toMatchObject({
         id: saved.id,
         label: "Reading list",
         name: "https://example.com/page",
-      }),
-    );
+        updatedAt: saved.updatedAt,
+      });
+    expect(pushAnnotatePad).not.toHaveBeenCalled();
   });
 });

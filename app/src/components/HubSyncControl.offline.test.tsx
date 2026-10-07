@@ -60,7 +60,7 @@ function setup(kind: "annotate" | "whiteboard", hasPad = true) {
     onIndexProgress: vi.fn(), onWalkProgress: report => reports.push(report),
     onIndexError: vi.fn(), onIndexDone: vi.fn(),
   };
-  const network = vi.fn().mockRejectedValue(new Error("The offline walk must not use the hub"));
+  const network = vi.fn().mockRejectedValue(new Error("Can't reach the hub. Is the desktop app open?"));
   const client = new Proxy({}, { get: () => network }) as LcClient;
   const element = document.createElement("div");
   const root = createRoot(element);
@@ -80,7 +80,7 @@ describe("manual Sync while the desktop is offline", () => {
     expect(durable.get("content")!.get("pad")).toEqual(body);
     expect(durable.get("sync_state")!.get(`${kind}:pad`)).toMatchObject({ bootstrap: true, syncedChangeSeq: 0 });
     expect(durable.get("book_meta")!.get(`${kind}:pad`)).toMatchObject({ id: "pad", name: "Saved" });
-    expect(network).not.toHaveBeenCalled();
+    expect(network).toHaveBeenCalledOnce();
     expect(markHubAck).not.toHaveBeenCalled();
     expect(host.onIndexDone).not.toHaveBeenCalled();
     expect(reports.some(report => report?.stage === "synced")).toBe(false);
@@ -88,11 +88,11 @@ describe("manual Sync while the desktop is offline", () => {
     expect(element.querySelector("button")?.getAttribute("data-error")).toContain("Can't reach the hub");
   });
 
-  it("reports offline without making a request when no saved pad exists", async () => {
+  it("rechecks reachability without publishing when no saved pad exists", async () => {
     const { element, reports, network } = setup("annotate", false);
     await act(async () => element.querySelector("button")!.click());
     expect(durable.size).toBe(0);
-    expect(network).not.toHaveBeenCalled();
+    expect(network).toHaveBeenCalledOnce();
     expect(reports.some(report => report?.stage === "synced")).toBe(false);
     expect(element.querySelector("button")?.getAttribute("data-error")).toContain("Can't reach the hub");
   });
@@ -105,7 +105,7 @@ describe("manual Sync while the desktop is offline", () => {
     expect(durable.get("sync_state")!.get("annotate:pad")).toMatchObject({ syncedChangeSeq: 0 });
     reportPadHubStatus(beginPadHubStatusRequest(HUB), "online");
     await Promise.resolve();
-    expect(network).not.toHaveBeenCalled();
+    expect(network).toHaveBeenCalledOnce();
     expect(durable.get("content")!.get("pad")).toMatchObject({ source: "newer edit" });
     expect(element.querySelector("button")?.getAttribute("data-stage")).toBe("failed");
   });

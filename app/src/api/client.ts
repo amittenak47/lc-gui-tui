@@ -229,9 +229,9 @@ async function hubFetch(
   hub: PadHub,
   method: string,
   path: string,
-  init?: { json?: unknown; bytes?: ArrayBuffer; timeoutMs?: number; retryReads?: boolean },
+  init?: { json?: unknown; bytes?: ArrayBuffer; timeoutMs?: number; retryReads?: boolean; allowOffline?: boolean },
 ): Promise<{ json: unknown; bytes: ArrayBuffer }> {
-  if (isPadHubOffline(hub)) throw new PadHubOfflineError(hub);
+  if (isPadHubOffline(hub) && !init?.allowOffline) throw new PadHubOfflineError(hub);
   const statusRequest = beginPadHubStatusRequest(hub);
   const url = `${hub.url}${path}`;
   const headers: Record<string, string> = { "x-lc-token": hub.token };
@@ -440,7 +440,7 @@ async function padInvokeOrHub<T>(
   method: string,
   path: string,
   json?: unknown,
-  request?: { timeoutMs: number; retryReads: false },
+  request?: { timeoutMs: number; retryReads: false; allowOffline: true },
 ): Promise<T> {
   const hub = loadPadHub();
   if (!hub) return invoke();
@@ -625,10 +625,10 @@ export interface SnapshotCopyMetadataDto {
 export interface AtomicRequestOptions { timeoutMs?: number }
 export interface InkReadConditions { bookRev: number; pageRev: number }
 
-function atomicRequest(options?: AtomicRequestOptions, binaryBytes = 0): { timeoutMs: number; retryReads: false } {
+function atomicRequest(options?: AtomicRequestOptions, binaryBytes = 0): { timeoutMs: number; retryReads: false; allowOffline: true } {
   const timeoutMs = options?.timeoutMs ?? HUB_TIMEOUT_MS + Math.ceil(binaryBytes / HUB_TIMEOUT_BYTES_PER_S) * 1000;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("Sync request timeout must be finite and positive");
-  return { timeoutMs, retryReads: false };
+  return { timeoutMs, retryReads: false, allowOffline: true };
 }
 
 function dtoObject(value: unknown): value is Record<string, unknown> {

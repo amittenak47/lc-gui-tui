@@ -61,16 +61,21 @@ export async function pdfInkContext(docId: string): Promise<PdfInkContext | null
 
 async function readPdfInkContext(docId: string): Promise<PdfInkContext | null> {
   const doc = await getAnnotateDoc(docId);
-  if (!doc || doc.docType !== "pdf") return null;
-  const sizes = cachedPdfPageSizes(doc.hash);
+  return doc ? pdfInkContextFromRecord({ doc_type: doc.docType, hash: doc.hash, board: doc.board }) : null;
+}
+
+/** Modern sync derives layout from the captured payload, never a later save. */
+export function pdfInkContextFromRecord(record: Record<string, unknown> | null): PdfInkContext | null {
+  if (!record || record.doc_type !== "pdf" || typeof record.hash !== "string") return null;
+  const sizes = cachedPdfPageSizes(record.hash);
   if (!sizes?.length) return null;
-  const board = doc.board as { elements?: unknown; appState?: { pdfSpread?: unknown } } | null;
+  const board = record.board as { elements?: unknown; appState?: { pdfSpread?: unknown } } | null;
   const elements = Array.isArray(board?.elements) ? board.elements : [];
   const w = annotateFrameWidthFromElements(elements);
   if (!w) return null;
   let spread = board?.appState?.pdfSpread;
   if (typeof spread !== "boolean") {
-    try { spread = localStorage.getItem(`whiteboard.pdfSpread.${doc.hash}`) === "1"; } catch { spread = false; }
+    try { spread = localStorage.getItem(`whiteboard.pdfSpread.${record.hash}`) === "1"; } catch { spread = false; }
   }
   return { layout: { w, spread: Boolean(spread) }, sizes };
 }
@@ -228,6 +233,7 @@ export async function localizeHubInkDto(
   client: LcClient | null | undefined,
   dto: InkPageDto,
   ctxIn?: PdfInkContext | null,
+  capturedHubWidth?: number | null,
 ): Promise<LocalizedInkPageDto> {
   if (dto.kind !== "annotate" || !dto.gz || dto.key.includes("/fn/")) return dto;
   const ctx = ctxIn === undefined ? await pdfInkContext(dto.key) : ctxIn;
@@ -235,10 +241,11 @@ export async function localizeHubInkDto(
   const encoded = await unpackGz(dto.gz);
   if (!encoded) return dto;
   const ops = decodeInkOps(encoded);
-  const from = await sourcePdfInkLayout(dto.key, encoded, dto.page_id, ops, ctx, await hubPdfWidth(client, dto.key));
+  const from = await sourcePdfInkLayout(dto.key, encoded, dto.page_id, ops, ctx,
+    capturedHubWidth === undefined ? await hubPdfWidth(client, dto.key) : capturedHubWidth);
   if (samePdfInkLayout(from, ctx.layout)) return { ...dto, localized: true };
   const moved = convertPdfInkOps(ops, from, ctx.layout, ctx.sizes);
-  return { ...dto, gz: await packGz(encodeInkOps(moved)), localized: true };
+  return { ...dto, gz: await packGz({ ...encodeInkOps(moved), layout: ctx.layout }), localized: true };
 }
 
 /**

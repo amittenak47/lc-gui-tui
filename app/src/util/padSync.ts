@@ -402,7 +402,22 @@ export async function markHubAck(
 }
 
 export function pushWhiteboardPad(client: LcClient, notebook: WhiteboardNotebook): Promise<boolean> {
-  return trackPadPush("whiteboard", notebook.id, withPadWriter("whiteboard", notebook.id, () => pushWhiteboardPadNow(client, notebook)));
+  return trackPadPush("whiteboard", notebook.id, withPadWriter("whiteboard", notebook.id, async () => {
+    const modern = await pushCurrentModernBook(client, "whiteboard", notebook.id);
+    return modern === undefined ? pushWhiteboardPadNow(client, notebook) : modern;
+  }));
+}
+/** Compatibility writers dispatch by capability before sending any live data. */
+async function pushCurrentModernBook(client: LcClient, kind: PadKindSync, id: string): Promise<boolean | undefined> {
+  if (!client.pingPadSync) return undefined; // Explicitly old isolated adapters.
+  try {
+    const { boundedBookRequest, syncBook } = await import("./bookSync");
+    const { isModernBookHub } = await import("./bookSyncPass");
+    const ping = await boundedBookRequest(() => client.pingPadSync(0, {}), new AbortController().signal);
+    if (!isModernBookHub(ping)) return undefined;
+    const result = await syncBook(client, kind, id);
+    return result.status === "synced" || result.status === "unchanged";
+  } catch { return false; }
 }
 
 async function pushWhiteboardPadNow(
@@ -475,7 +490,10 @@ export async function annotatePadBody(doc: AnnotateDoc): Promise<AnnotatePadDto>
 }
 
 export function pushAnnotatePad(client: LcClient, doc: AnnotateDoc): Promise<boolean> {
-  return trackPadPush("annotate", doc.id, withPadWriter("annotate", doc.id, () => pushAnnotatePadNow(client, doc)));
+  return trackPadPush("annotate", doc.id, withPadWriter("annotate", doc.id, async () => {
+    const modern = await pushCurrentModernBook(client, "annotate", doc.id);
+    return modern === undefined ? pushAnnotatePadNow(client, doc) : modern;
+  }));
 }
 
 async function pushAnnotatePadNow(client: LcClient, doc: AnnotateDoc): Promise<boolean> {
@@ -504,7 +522,10 @@ async function pushAnnotatePadNow(client: LcClient, doc: AnnotateDoc): Promise<b
 }
 
 export function pushProblemPad(client: LcClient, row: ProblemBoardRecord): Promise<boolean> {
-  return trackPadPush("problem", row.id, withPadWriter("problem", row.id, () => pushProblemPadNow(client, row.id)));
+  return trackPadPush("problem", row.id, withPadWriter("problem", row.id, async () => {
+    const modern = await pushCurrentModernBook(client, "problem", row.id);
+    return modern === undefined ? pushProblemPadNow(client, row.id) : modern;
+  }));
 }
 
 async function pushProblemPadNow(client: LcClient, id: string): Promise<boolean> {
@@ -652,7 +673,7 @@ async function pullDocBytesFromHub(client: LcClient, hash: string): Promise<void
  */
 export function scheduleIdlePadSyncPing(
   client: LcClient,
-  opts?: { emit?: boolean },
+  _opts?: { emit?: boolean },
 ): void {
   // Gate here, not at callers: one missed call site must not leak a kick.
   if (!loadHubAutosync()) return;
@@ -663,7 +684,7 @@ export function scheduleIdlePadSyncPing(
       // Skip. The 15s tick retries. Do not poll every 200ms while flicking.
       if (isCameraBusy()) return;
       if (hubBackoffActive()) return;
-      void applyPadSyncPing(client, opts).catch(() => {});
+      void import("./bookSyncPass").then(({ syncBookPass }) => syncBookPass(client, { silent: true })).catch(() => {});
     };
     if (typeof requestIdleCallback === "function") {
       requestIdleCallback(() => kick(), { timeout: 2500 });
@@ -700,11 +721,12 @@ export async function deletePadEverywhere(
   kind: PadKindSync,
   padId: string,
   _localDelete?: () => Promise<void>,
+  options?: import("./bookSync").BookSyncOptions,
 ): Promise<void> {
   if (kind === "problem") {
     await deleteProblemBoard(padId);
     const state = await getBookSyncState(kind, padId);
-    if (state?.lifecycle) await sendDeletePad(client, kind, padId, state.lifecycle.seq);
+    if (state?.lifecycle) await sendDeletePad(client, kind, padId, state.lifecycle.seq, options);
     return;
   }
   const seq =
@@ -712,7 +734,7 @@ export async function deletePadEverywhere(
       ? await trashWhiteboardNotebook(padId)
       : await trashAnnotateDoc(padId);
   if (seq == null) return;
-  await sendDeletePad(client, kind, padId, seq);
+  await sendDeletePad(client, kind, padId, seq, options);
 }
 
 export type RestoreTrashedPadResult =
@@ -723,24 +745,33 @@ export async function restoreTrashedPad(
   client: LcClient,
   kind: PadKindSync,
   padId: string,
+  options?: import("./bookSync").BookSyncOptions,
 ): Promise<RestoreTrashedPadResult> {
   if (kind === "problem") return { ok: false };
   if (kind === "whiteboard") {
     const restored = await restoreWhiteboardFromTrash(padId);
     if (!restored) return { ok: false };
     const seq = restored.syncSeq ?? 0;
-    if (!isPadHubOffline()) await pushRestoreAllFour(client, kind, padId, seq).catch(() => {});
+    if (!isPadHubOffline()) await pushRestoreAllFour(client, kind, padId, seq, options).catch(() => {});
     return { ok: true, title: restored.title };
   }
   const restored = await restoreAnnotateFromTrash(padId);
   if (!restored) return { ok: false };
   const seq = restored.syncSeq ?? 0;
-  if (!isPadHubOffline()) await pushRestoreAllFour(client, kind, padId, seq).catch(() => {});
+  if (!isPadHubOffline()) await pushRestoreAllFour(client, kind, padId, seq, options).catch(() => {});
   return { ok: true, title: annotateDocLabel(restored) };
 }
 
-async function sendDeletePad(client: LcClient, kind: PadKindSync, padId: string, seq: number): Promise<void> {
+async function sendDeletePad(client: LcClient, kind: PadKindSync, padId: string, seq: number, options?: import("./bookSync").BookSyncOptions): Promise<void> {
   if (isPadHubOffline()) return;
+  if (client.pingPadSync) {
+    try {
+      const { syncBookPass, isModernBookHub } = await import("./bookSyncPass");
+      const { boundedBookRequest } = await import("./bookSync");
+      const ping = await boundedBookRequest(() => client.pingPadSync(0, {}), new AbortController().signal);
+      if (isModernBookHub(ping)) { await syncBookPass(client, { ...options, ping, selected: { kind, id: padId } }); return; }
+    } catch { return; } // The current durable intent remains pending.
+  }
   const captured = await getBookSyncState(kind, padId);
   try {
     const parts = kind === "problem" ? splitProblemPadId(padId) : null;
@@ -776,7 +807,19 @@ async function pushRestoreAllFour(
   kind: PadKindSync,
   padId: string,
   seq: number,
+  options?: import("./bookSync").BookSyncOptions,
 ): Promise<boolean> {
+  if (client.pingPadSync) {
+    try {
+      const { syncBookPass, isModernBookHub } = await import("./bookSyncPass");
+      const { boundedBookRequest } = await import("./bookSync");
+      const ping = await boundedBookRequest(() => client.pingPadSync(0, {}), new AbortController().signal);
+      if (isModernBookHub(ping)) {
+        const result = await syncBookPass(client, { ...options, ping, selected: { kind, id: padId } });
+        return result.books.some(book => book.kind === kind && book.id === padId && ["synced", "unchanged"].includes(book.status));
+      }
+    } catch { return false; }
+  }
   if (kind === "problem") return false;
   if (kind === "whiteboard") {
     const notebook = await getWhiteboardNotebook(padId);
@@ -862,8 +905,22 @@ export class HubLibraryPullError extends Error {
 /** Explicit discovery also repairs missing source bytes, without replacing local edits. */
 export async function discoverHubPads(client: LcClient, report:HubLibraryPullReport = {added:[],repaired:[],failures:[]}): Promise<number> {
   if (!loadPadHub() && isAndroidDevice()) throw new Error("Connect to your hub before pulling files.");
-  const [whiteboards, documents, digest] = await Promise.all([
-    client.listWhiteboardPads(), client.listAnnotatePads(), client.pingPadSync(0),
+  const { boundedBookRequest } = await import("./bookSync");
+  const { syncBookPass, isModernBookHub } = await import("./bookSyncPass");
+  const digest = await boundedBookRequest(() => client.pingPadSync(0, {}), new AbortController().signal);
+  if (isModernBookHub(digest)) {
+    const before = new Set([...listWhiteboardNotebooks().map(row => `whiteboard:${row.id}`), ...listAnnotateDocs().map(row => `annotate:${row.id}`)]);
+    const result = await syncBookPass(client, { ping: digest, libraryPull: true });
+    for (const book of result.books) {
+      const remote = digest.books?.find(row => row.kind === book.kind && row.id === book.id);
+      const name = String(remote && "record" in remote ? remote.record?.label ?? remote.record?.title ?? remote.record?.name ?? "Book" : "Book");
+      if (book.status === "failed" || book.status === "needs_choice") report.failures.push({ name, message: book.error?.message ?? "Sync failed" });
+      else if (book.status === "synced") (before.has(`${book.kind}:${book.id}`) ? report.repaired : report.added).push(name);
+    }
+    return report.added.length;
+  }
+  const [whiteboards, documents] = await Promise.all([
+    client.listWhiteboardPads(), client.listAnnotatePads(),
   ]);
   let imported = 0;
   const failures: string[] = [];
@@ -955,6 +1012,12 @@ export async function pullMissingHubFiles(client:LcClient):Promise<HubLibraryPul
 }
 
 export async function pullPads(client: LcClient): Promise<void> {
+  if (client.pingPadSync) {
+    const { syncBookPass, isModernBookHub } = await import("./bookSyncPass");
+    const { boundedBookRequest } = await import("./bookSync");
+    const ping = await boundedBookRequest(() => client.pingPadSync(0, {}), new AbortController().signal);
+    if (isModernBookHub(ping)) { await syncBookPass(client, { ping, libraryPull: true }); return; }
+  }
   const [whiteboards, annotate] = await Promise.all([
     client.listWhiteboardPads(),
     client.listAnnotatePads(),

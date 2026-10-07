@@ -88,10 +88,9 @@ import { announceSplitResize, deferPanelRefit } from "./util/splitResize";
 import { isCameraBusy } from "./util/cameraBusy";
 import { ensureDevicePrefs } from "./util/devicePrefs";
 import {
-  applyPadSyncPing,
-  pullPads,
   PAD_SYNC_PING_MS,
 } from "./util/padSync";
+import { syncBookPass } from "./util/bookSyncPass";
 import { HUB_AUTOSYNC_EVENT, loadHubAutosyncPref } from "./util/hubAutoSyncPref";
 import { PAD_HUB_EVENT, setHostLoopback } from "./util/padHub";
 import { startPadHubStatusMonitoring } from "./util/padHubStatus";
@@ -321,9 +320,7 @@ export function App() {
       try {
         if (hubAutosyncOn) {
           if (isCameraBusy()) return;
-          await applyPadSyncPing(client).catch(() => {});
-          if (cancelled || isCameraBusy()) return;
-          await pullPads(client);
+          await syncBookPass(client, { silent: true }).catch(() => {});
           if (cancelled) return;
         }
         void ensureDevicePrefs(client).catch(() => {});
@@ -345,7 +342,7 @@ export function App() {
       if (cancelled) return;
       if (document.visibilityState === "hidden") return;
       if (isCameraBusy()) return;
-      void applyPadSyncPing(client).catch(() => {});
+      void syncBookPass(client, { silent: true }).catch(() => {});
     };
     const timer = window.setInterval(tick, PAD_SYNC_PING_MS);
     const onVis = () => {

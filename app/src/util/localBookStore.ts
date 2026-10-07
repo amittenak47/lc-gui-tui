@@ -422,6 +422,59 @@ export async function promoteBookFallbacks(owner: BookIdentity): Promise<boolean
   return withBookWrite(owner.kind, owner.id, () => promoteCapturedBookFallbacks(owner, entries));
 }
 
+/** An explicit recovery choice can retire captured spills only after all copies
+ * and the chosen editable version are durable. New tokens are never removed. */
+export async function chooseRetainedFallbackBranch(recoveryId: string): Promise<BookIdentity> {
+  const retained = await run<{ content?: { raw?: string; key?: string }; kind?: PadKind; bookId?: string } | undefined>(STORE_SYNC_RECOVERY, "readonly", store => store.get(recoveryId));
+  if (!retained?.content?.raw || !retained.content.key || !retained.kind || !retained.bookId) throw new LocalBookConflictError("This saved branch cannot be read. Its original copy was kept.");
+  const chosen = decodeFallback(`${SPILL_PREFIX}${retained.content.key}`, retained.content.raw);
+  const owner = { kind: retained.kind, id: retained.bookId };
+  if (!chosen.envelope || chosen.envelope.owner.kind !== owner.kind || chosen.envelope.owner.id !== owner.id) throw new LocalBookConflictError();
+  await withBookWrite(owner.kind, owner.id, async () => {
+    const entries = capturedBookFallbacks(owner).filter(entry => entry.key === chosen.key);
+    const contentStore = owner.kind === "problem" ? STORE_PROBLEM_BOARDS : STORE_CONTENT;
+    await withTransaction<void>([contentStore, STORE_BOOK_META, STORE_SYNC_STATE, STORE_SYNC_RECOVERY], "readwrite", (tx, done) => {
+      const meta = tx.objectStore(STORE_BOOK_META).get(bookMetaKey(owner.kind, owner.id));
+      const payload = tx.objectStore(contentStore).get(chosen.key);
+      const tracking = tx.objectStore(STORE_SYNC_STATE).get(syncStateKey(owner.kind, owner.id));
+      let remaining = 3;
+      const loaded = () => {
+        if (--remaining) return;
+        try {
+          for (const entry of entries) if (storage()?.getItem(entry.storageKey) !== entry.raw) throw new LocalBookConflictError("A newer saved branch arrived. All copies were kept.");
+          for (const entry of entries) {
+            const id = `fallback-branch:${entry.envelope?.token ?? entry.storageKey}`;
+            const store = tx.objectStore(STORE_SYNC_RECOVERY), prior = store.get(id);
+            prior.onsuccess = () => { if (prior.result === undefined) store.add({ id, type: "conflict", kind: owner.kind, bookId: owner.id,
+              provenance: { source: "fallback-branch", storageKey: entry.storageKey }, content: { raw: entry.raw, key: entry.key, payload: entry.payload, envelope: entry.envelope } }, id); };
+          }
+          const id = `fallback-choice-alternative:${newBookToken()}`;
+          tx.objectStore(STORE_SYNC_RECOVERY).add({ id, type: "conflict", kind: owner.kind, bookId: owner.id,
+            provenance: { source: "explicit-fallback-choice", recoveryId }, content: { metadata: meta.result, payload: payload.result, key: chosen.key, state: tracking.result } }, id);
+          allocateChangeSeqRange(tx, 1, seq => {
+            try {
+              const state = (tracking.result as SyncState | undefined) ?? seedSyncState(owner.kind, owner.id);
+              if (chosen.envelope!.payloadPresent !== false) tx.objectStore(contentStore).put(chosen.payload, chosen.key);
+              else if (payload.result === undefined) throw new LocalBookConflictError("This branch contains metadata only; a complete book must be recovered first.");
+              let lifecycle = state.lifecycle;
+              if (chosen.key === owner.id) {
+                if (chosen.envelope!.metadata) tx.objectStore(STORE_BOOK_META).put(chosen.envelope!.metadata, bookMetaKey(owner.kind, owner.id));
+                else tx.objectStore(STORE_BOOK_META).delete(bookMetaKey(owner.kind, owner.id));
+                lifecycle = chosen.envelope!.state.lifecycle ? { ...chosen.envelope!.state.lifecycle, token: newBookToken() } : null;
+              }
+              tx.objectStore(STORE_SYNC_STATE).put({ ...state, changeSeq: seq, lifecycle }, syncStateKey(owner.kind, owner.id)); done(undefined);
+            } catch (cause) { abortTransaction(tx, cause); }
+          });
+        } catch (cause) { abortTransaction(tx, cause); }
+      };
+      for (const request of [meta, payload, tracking]) request.onsuccess = loaded;
+    });
+    for (const entry of entries) if (storage()?.getItem(entry.storageKey) === entry.raw) storage()?.removeItem(entry.storageKey);
+    await notifyBookMetadataChanged(owner.kind, owner.id);
+  });
+  return owner;
+}
+
 export async function promoteFallbackContent(key: string): Promise<boolean> {
   if (!selectFallback(key, true)) return false;
   const owner = fallbackBookIdentity(key);

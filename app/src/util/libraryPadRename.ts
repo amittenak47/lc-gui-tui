@@ -6,14 +6,9 @@
  */
 
 import type { LcClient } from "../api/client";
-import {
-  getAnnotateDoc,
-  setAnnotateDocLabel,
-} from "./annotateStore";
-import { pushAnnotatePad, pushWhiteboardPad } from "./padSync";
+import { setAnnotateDocLabel } from "./annotateStore";
 import { isFootnoteBoardTab, type TabRecord } from "./tabs";
 import {
-  getWhiteboardNotebook,
   renameWhiteboardNotebook,
 } from "./whiteboardStore";
 
@@ -37,7 +32,7 @@ export function libraryIdForTab(tab: TabRecord): string | null {
 }
 
 export async function renameLibraryPad(
-  client: LcClient,
+  _client: LcClient,
   kind: "whiteboard" | "annotate",
   id: string,
   title: string,
@@ -46,13 +41,9 @@ export async function renameLibraryPad(
   if (!trimmed) return false;
   if (kind === "whiteboard") {
     if (!await renameWhiteboardNotebook(id, trimmed)) return false;
-    const notebook = await getWhiteboardNotebook(id);
-    if (notebook) await pushWhiteboardPad(client, notebook);
     return true;
   }
   if (!await setAnnotateDocLabel(id, trimmed)) return false;
-  const doc = await getAnnotateDoc(id);
-  if (doc) await pushAnnotatePad(client, doc);
   return true;
 }
 

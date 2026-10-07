@@ -28,9 +28,10 @@ export async function withBookWrite<T>(kind: PadKind, id: string, work: () => Pr
   return result;
 }
 
-export async function withBookSync<T>(kind: PadKind, id: string, work: () => Promise<T>): Promise<T> {
+export async function withBookSync<T>(kind: PadKind, id: string, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!hasBookLocks()) return Promise.reject(new Error("This device cannot coordinate atomic sync. Local work was kept."));
-  return await navigator.locks.request(`book-sync:${kind}:${id}`, work);
+  return signal ? await navigator.locks.request(`book-sync:${kind}:${id}`, { signal }, work)
+    : await navigator.locks.request(`book-sync:${kind}:${id}`, work);
 }
 
 export function inkBookIdentity(docKey: string): BookIdentity | null {
