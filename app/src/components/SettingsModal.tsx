@@ -237,10 +237,10 @@ function SettingsFold({id,title,children}: {id:string;title:string;children:Reac
 const PROVIDERS = ["local", "ollama", "openai", "groq"] as const;
 
 const VOICE_ENGINES: { id: VoiceConfig["engine"]; label: string; blurb: string }[] = [
-  { id: "android", label: "Android", blurb: "Built in · free" },
-  { id: "local", label: "Local", blurb: "Your own Whisper server" },
-  { id: "openai", label: "OpenAI", blurb: "Your API key" },
-  { id: "groq", label: "Groq", blurb: "Your API key · fastest" },
+  { id: "android", label: "Android dictation", blurb: "Built-in recognizer · live text" },
+  { id: "local", label: "Whisper on your PC", blurb: "Your speech server · no cloud key" },
+  { id: "openai", label: "OpenAI", blurb: "Cloud transcription · API key required" },
+  { id: "groq", label: "Whisper via Groq", blurb: "Cloud transcription · API key required" },
   { id: "deepgram", label: "Deepgram", blurb: "Your API key" },
 ];
 
@@ -3285,7 +3285,7 @@ export function SettingsModal({
 </SettingsFold>
               <SettingsFold id="voice" title="Voice dictation">
               <div className="lc-setting-row">
-                <p className="lc-settings-hint">The mic sits next to + in the agent box on the Android app. Android&apos;s recognizer is free and types as you speak. The others record what you say, then turn it into text — better with technical words.</p>
+                <p className="lc-settings-hint">Choose what the microphone in the Android agent composer uses. Android dictation types as you speak. Whisper and the cloud services record a clip and transcribe it when you stop. Whisper on your PC needs a running speech server; selecting it does not install or start one.</p>
                 <div className="lc-settings-subhead">Engine</div>
                 <SettingsChoices className="lc-settings-choice" role="radiogroup" aria-label="Dictation engine">
                   {VOICE_ENGINES.map((engine) => (
@@ -3305,7 +3305,7 @@ export function SettingsModal({
                 {voice.engine === "local" && (
                   <>
                     <label>
-                      <span>Server URL</span>
+                      <span>Whisper server URL</span>
                       <input
                         value={voice.local_base_url}
                         onChange={(e) => patchVoice({ local_base_url: e.target.value })}
@@ -3430,7 +3430,7 @@ export function SettingsModal({
                     </button>
                   ))}
                 </SettingsChoices>
-                <p className="lc-settings-hint">After you stop talking, one of your LLM providers tidies punctuation and technical words, using the model set under LLM. Your local model keeps it free and private.</p>
+                <p className="lc-settings-hint">After you stop talking, an LLM can tidy punctuation, casing and hesitations. Rewrites that change your words are discarded. Vocabulary hints help the transcription engine recognize technical terms.</p>
                 <label>
                   <span>Vocabulary</span>
                   <textarea

@@ -93,9 +93,9 @@ it("shows Voice dictation in the LLM tab, and saving Groq sends the engine and k
   const api = await openVoice();
   const voice = fold("Voice dictation");
   expect(voice).toBeTruthy();
-  expect(radio("Android").getAttribute("aria-checked")).toBe("true");
+  expect(radio("Android dictation").getAttribute("aria-checked")).toBe("true");
   expect(voice.querySelector('input[type="password"]')).toBeNull();
-  await act(async () => radio("Groq").click());
+  await act(async () => radio("Whisper via Groq").click());
   expect(voice.querySelector('input[type="password"]')).not.toBeNull();
   expect([...voice.querySelectorAll("label span")].some((node) => node.textContent === "Model")).toBe(true);
   expect(voice.querySelector(".lc-settings-fold-header")?.getAttribute("data-changed")).toBe("true");
@@ -120,6 +120,20 @@ it("sends deepgram_api_key when Deepgram is picked and a key is typed", async ()
   expect(payload.voice?.engine).toBe("deepgram");
 });
 
+it("offers PC Whisper separately from Android dictation and saves its endpoint and model", async () => {
+  const api = await openVoice();
+  await act(async () => radio("Whisper on your PC").click());
+  const voice = fold("Voice dictation");
+  expect(voice.textContent).toContain("selecting it does not install or start one");
+  const input = (label: string) => [...voice.querySelectorAll("label")].find(l => l.querySelector("span")?.textContent === label)!.querySelector("input")!;
+  await fill(input("Whisper server URL"), "http://192.168.1.20:8000/v1");
+  await fill(input("Model"), "Systran/faster-whisper-small");
+  await act(async () => save().click());
+  expect(api.putConfig).toHaveBeenCalledWith(expect.objectContaining({ voice: expect.objectContaining({
+    engine: "local", local_base_url: "http://192.168.1.20:8000/v1", local_model: "Systran/faster-whisper-small",
+  }) }), { timeoutMs: 30000 });
+});
+
 it("sends voice.cleanup local when Local is picked on the clean-up pass", async () => {
   const api = await openVoice();
   const group = fold("Voice dictation").querySelector<HTMLElement>('[aria-label="Clean-up pass"]')!;
@@ -135,7 +149,7 @@ it("sends voice.cleanup local when Local is picked on the clean-up pass", async 
 
 it("renders Android for an older config and omits voice when that group is left alone", async () => {
   const api = await openVoice();
-  expect(radio("Android").getAttribute("aria-checked")).toBe("true");
+  expect(radio("Android dictation").getAttribute("aria-checked")).toBe("true");
   const llm = fold("LLM").querySelector<HTMLButtonElement>(".lc-settings-fold-summary")!;
   await act(async () => llm.click());
   const select = fold("LLM").querySelector("select")!;
