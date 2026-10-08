@@ -62,7 +62,12 @@
 .lc-settings-dialog .is-switch-list .lc-settings-choice-option::after { content: ""; position: absolute; top: 13px; right: 22px; width: 16px; height: 16px; border-radius: 50%; background: var(--bg); transition: transform 120ms ease-out; }
 .lc-settings-dialog .is-switch-list [aria-checked="true"]::before { background: var(--accent); border-color: var(--accent); }
 .lc-settings-dialog .is-switch-list [aria-checked="true"]::after { transform: translateX(17px); }
-.lc-settings-dialog .lc-settings-icon-action { display: inline-grid; place-items: center; width: 38px; height: 38px; padding: 8px; }
+.lc-settings-dialog .lc-settings-actions-row { align-items: center; }
+.lc-settings-dialog .lc-settings-actions-row button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 12px; }
+.lc-settings-dialog .lc-settings-actions-row svg { flex: 0 0 18px; width: 18px; height: 18px; }
+.lc-settings-dialog .lc-settings-icon-action { display: inline-grid; place-items: center; min-width: 0; width: 38px; height: 38px; padding: 8px; }
+.lc-settings-dialog .lc-settings-actions-row .lc-settings-icon-action { flex: 0 0 44px; width: 44px; height: 44px; padding: 0; }
+.lc-settings-icon-action .lc-hold-reveal-label { display: grid; place-items: center; }
 .lc-settings-icon-action svg { width: 18px; height: 18px; }
 .lc-settings-dialog .lc-settings-icon-action.lc-hold-danger { color: var(--danger, #d35454); border-color: currentColor; }
 .lc-settings-dialog button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
